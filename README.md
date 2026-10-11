@@ -28,8 +28,8 @@ Narwhal keeps document geometry separate from viewport tessellation:
 The public release artifact is `Narwhal_3D-<version>-x86_64.AppImage`. Make it executable and run it directly:
 
 ```bash
-chmod +x Narwhal_3D-0.1.0-x86_64.AppImage
-./Narwhal_3D-0.1.0-x86_64.AppImage
+chmod +x Narwhal_3D-0.2.0-x86_64.AppImage
+./Narwhal_3D-0.2.0-x86_64.AppImage
 ```
 
 The AppImage contains the natively branded runtime, locked Python dependencies, application package, icons, and license notices. It does not install a separate host application.
@@ -74,7 +74,7 @@ REVISION=$(git rev-parse HEAD)
 EPOCH=$(git show -s --format=%ct HEAD)
 
 python3 scripts/assemble_linux_release.py \
-  --version 0.1.0 \
+  --version 0.2.0 \
   --source-revision "$REVISION" \
   --source-date-epoch "$EPOCH" \
   --runtime-dir tools/blender-patched \
@@ -83,8 +83,8 @@ python3 scripts/assemble_linux_release.py \
   --output-dir dist
 
 python3 scripts/verify_linux_release.py \
-  dist/Narwhal_3D-0.1.0-x86_64.AppImage \
-  --expected-version 0.1.0 \
+  dist/Narwhal_3D-0.2.0-x86_64.AppImage \
+  --expected-version 0.2.0 \
   --expected-source-revision "$REVISION" \
   --expected-source-date-epoch "$EPOCH"
 ```
