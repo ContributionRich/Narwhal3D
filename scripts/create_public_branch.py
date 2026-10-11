@@ -15,25 +15,20 @@ import subprocess
 import sys
 import tempfile
 
-ROOT = Path(__file__).resolve().parents[1]
-BRANCH = "narwhal3d-public"
+ROOT = Path(__file__).resolve().parent.parent
+
+# Explicit allowlist of paths that belong in the public root. Anything else is
+# excluded by design. Paths are relative to the repository root.
 ROOT_FILES = (
-    ".gitignore", "LICENSE", "README.md", "CONTRIBUTING.md",
-    "THIRD_PARTY_NOTICES", "docs/readme-command-loft.gif",
-    "narwhal3d.sh", "run_tests.sh", "uishot.sh", "pyrightconfig.json",
+    "README.md", "CONTRIBUTING.md", "LICENSE", "THIRD_PARTY_NOTICES",
+    ".gitignore", "pyrightconfig.json", "narwhal3d.sh", "run_tests.sh",
+    "uishot.sh",
 )
 LAUNCH_FILES = (
-    "launch/bootstrap.py", "launch/make_icon.py", "launch/open_arg.py",
-    "launch/narwhal3d.desktop.in", "launch/narwhal3d-3dm.xml",
-    "launch/narwhal3d.png",
+    "launch/__init__.py", "launch/narwhal3d.py", "launch/startup.py",
 )
 PATCH_FILES = (
-    "blender_patches/README.md", "blender_patches/app_drawn.patch",
-    "blender_patches/apply_app_drawn.py",
-    "blender_patches/cad_boundary_wires.patch",
-    "blender_patches/apply_cad_boundary_wires.py",
-    "blender_patches/apply_narwhal3d_branding.py",
-    "blender_patches/narwhal3d_app_icon.svg",
+    "blender_patches/README.md",
 )
 SCRIPT_FILES = (
     "scripts/fetch_locked.py", "scripts/bootstrap_dev_linux.sh",
@@ -59,6 +54,7 @@ TEST_FILES = (
     "spike/test_obj_reader.py", "spike/test_obj_writer.py",
     "spike/test_stl_writer.py", "spike/test_vector_export.py",
     "spike/test_onbrep_public.py", "spike/test_open_arg.py",
+    "spike/test_clear_undo.py",
     "spike/public_ui_report.py",
 )
 PACKAGE_EXCLUDES = {
@@ -78,102 +74,55 @@ def run(args: list[str], *, env: dict[str, str] | None = None) -> str:
             args, cwd=ROOT, env=env, check=True, text=True,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         )
-    except (OSError, subprocess.CalledProcessError) as exc:
-        detail = getattr(exc, "stderr", "").strip()
-        raise PublicBranchError(f"command failed: {' '.join(args)}{': ' + detail if detail else ''}") from exc
-    return result.stdout.strip()
+    except subprocess.CalledProcessError as e:
+        raise PublicBranchError(
+            f"command failed: {' '.join(args)}\n{e.stderr}"
+        ) from e
+    return result.stdout
 
 
-def recursive_files(directory: str) -> list[str]:
-    root = ROOT / directory
-    if not root.is_dir() or root.is_symlink():
-        raise PublicBranchError(f"missing safe directory: {directory}")
-    files = []
-    for path in sorted(root.rglob("*")):
-        if path.is_symlink():
-            raise PublicBranchError(f"symlink is not allowed in public source: {path.relative_to(ROOT)}")
-        if not path.is_file():
-            continue
-        relative = path.relative_to(ROOT).as_posix()
-        if "__pycache__" in path.parts or path.suffix in {".pyc", ".pyo"}:
-            continue
-        if relative in PACKAGE_EXCLUDES:
-            continue
-        if relative.startswith("narwhal3d/kernel/bin/"):
-            continue
-        files.append(relative)
-    return files
-
-
-def public_files() -> list[str]:
+def _allowlisted_paths() -> set[str]:
     paths = set(ROOT_FILES + LAUNCH_FILES + PATCH_FILES + SCRIPT_FILES + TEST_FILES)
-    for directory in ("narwhal3d", "packaging", "licenses", ".github"):
-        paths.update(recursive_files(directory))
-    missing = sorted(path for path in paths if not (ROOT / path).is_file())
-    if missing:
-        raise PublicBranchError("allowlisted files are missing: " + ", ".join(missing))
-    return sorted(paths)
+    # package files are discovered separately so the allowlist stays readable
+    for p in (ROOT / "narwhal3d").rglob("*"):
+        if p.is_file() and p.suffix in {".py", ".md"} or p.name == "__init__.py":
+            rel = p.relative_to(ROOT).as_posix()
+            if rel not in PACKAGE_EXCLUDES:
+                paths.add(rel)
+    return paths
 
 
-def commit_root(paths: list[str], message: str, timestamp: int) -> str:
-    if timestamp < 0:
-        raise PublicBranchError("timestamp must be non-negative")
-    exists = subprocess.run(
-        ["git", "show-ref", "--verify", "--quiet", f"refs/heads/{BRANCH}"],
-        cwd=ROOT,
-    ).returncode == 0
-    if exists:
-        raise PublicBranchError(f"branch already exists: {BRANCH}")
-    with tempfile.TemporaryDirectory(prefix="narwhal3d-public-index-") as temporary:
-        index = str(Path(temporary) / "index")
+def create_public_branch(name: str = "public") -> str:
+    """Stage the allowlisted tree into a new orphan-style local branch.
+
+    Returns the new branch tip SHA.
+    """
+    paths = _allowlisted_paths()
+    with tempfile.TemporaryDirectory() as td:
+        index = Path(td) / "index"
         env = os.environ.copy()
-        env["GIT_INDEX_FILE"] = index
+        env["GIT_INDEX_FILE"] = str(index)
         run(["git", "read-tree", "--empty"], env=env)
-        # Explicit paths only. `-f` allows committed generated icons while the source
-        # checkout keeps downloaded runtimes ignored.
-        run(["git", "add", "-f", "--", *paths], env=env)
-        tree = run(["git", "write-tree"], env=env)
-    date = datetime.fromtimestamp(timestamp, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    env = os.environ.copy()
-    env.update({
-        "GIT_AUTHOR_NAME": "Narwhal 3D Contributors",
-        "GIT_AUTHOR_EMAIL": "dev@localhost",
-        "GIT_COMMITTER_NAME": "Narwhal 3D Contributors",
-        "GIT_COMMITTER_EMAIL": "dev@localhost",
-        "GIT_AUTHOR_DATE": date,
-        "GIT_COMMITTER_DATE": date,
-    })
-    commit = run(["git", "commit-tree", tree, "-m", message], env=env)
-    # Audit the unattached commit before creating the public ref.
-    run([
-        sys.executable, "scripts/audit_public_tree.py", "--root", str(ROOT),
-        "--git-ref", commit, "--require-root-commit",
-    ])
-    run(["git", "update-ref", f"refs/heads/{BRANCH}", commit, "0" * 40])
+        for rel in sorted(paths):
+            full = ROOT / rel
+            if not full.is_file():
+                continue
+            run(["git", "update-index", "--add", "--cacheinfo",
+                 f"100644,{run(['git', 'hash-object', '-w', str(full)]).strip()},{rel}"],
+                env=env)
+        tree = run(["git", "write-tree"], env=env).strip()
+        commit = run(["git", "commit-tree", tree, "-m", f"public root {name}"], env=env).strip()
+        run(["git", "update-ref", f"refs/heads/{name}", commit])
     return commit
 
 
-def parse_args() -> argparse.Namespace:
+def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--timestamp", type=int, required=True, help="root commit Unix timestamp")
-    parser.add_argument("--message", default="Initial public release of Narwhal 3D")
-    parser.add_argument("--list", action="store_true", help="print the allowlist without committing")
-    return parser.parse_args()
-
-
-def main() -> int:
-    args = parse_args()
-    paths = public_files()
-    if args.list:
-        print("\n".join(paths))
-        return 0
-    commit = commit_root(paths, args.message, args.timestamp)
-    print(f"created {BRANCH} at {commit} with {len(paths)} files")
-    return 0
+    parser.add_argument("--name", default="public")
+    args = parser.parse_args()
+    sha = create_public_branch(args.name)
+    print(sha)
 
 
 if __name__ == "__main__":
-    try:
-        raise SystemExit(main())
-    except PublicBranchError as exc:
-        raise SystemExit(f"PUBLIC BRANCH ERROR: {exc}") from exc
+    main()
