@@ -8,6 +8,20 @@ from __future__ import annotations
 
 CONTAINER = "Narwhal 3D"
 
+# Active command icons replaced by the labelled in-progress artwork. Commands not in
+# this set still use deterministic generated placeholders.
+CURATED_ICON_COMMANDS = frozenset({
+    "arc", "array", "arraypolar", "booleandifference", "booleanintersection",
+    "booleanunion", "box", "chamfer", "circle", "closecrv", "cone", "copy",
+    "cplane", "curve", "cylinder", "ellipse", "explode", "extrudecrv", "fillet",
+    "grid", "gumball", "hide", "interpcrv", "join", "layer", "line", "lock",
+    "loft", "mirror", "move", "offsetsrf", "open", "orient", "ortho", "pipe",
+    "planarsrf", "plane", "point", "pointsoff", "pointson", "polygon", "polyline",
+    "purge", "rectangle", "redo", "revolve", "rotate", "rotate3d", "save", "scale",
+    "scale1d", "scale2d", "selall", "selnone", "shell", "show", "sphere", "split",
+    "trim", "undo", "unlock", "zoom",
+})
+
 
 def _button(text, command, description):
     """Build one project-owned toolbar record."""

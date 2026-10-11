@@ -25,6 +25,7 @@ REQUIRED = {
     "STATUS.md",
     "THIRD_PARTY_NOTICES",
     "docs/readme-command-loft.gif",
+    "artwork/icons/README.md",
     "narwhal3d.sh",
     "run_tests.sh",
     "uishot.sh",
@@ -72,6 +73,7 @@ FORBIDDEN_GLOBS = (
 ALLOWED_IMAGES = (
     "launch/narwhal3d.png",
     "docs/readme-command-loft.gif",
+    "artwork/icons/*.png",
     "narwhal3d/icons/narwhal-*.png",
     "blender_patches/narwhal3d_app_icon.svg",
 )
@@ -136,7 +138,7 @@ REQUIRED_CONTENT = {
     ),
     "scripts/create_public_branch.py": (
         b"BRANCH = \"narwhal3d-public\"",
-        b"for directory in (\"narwhal3d\", \"packaging\", \"licenses\", \".github\")",
+        b"for directory in (\"narwhal3d\", \"packaging\", \"licenses\", \".github\", \"artwork\")",
         b"--require-root-commit",
     ),
 }
@@ -264,7 +266,7 @@ def self_check() -> None:
     safe["scripts/create_public_branch.py"] = (
         "100644",
         b"BRANCH = \"narwhal3d-public\"\n"
-        b"for directory in (\"narwhal3d\", \"packaging\", \"licenses\", \".github\"):\n"
+        b"for directory in (\"narwhal3d\", \"packaging\", \"licenses\", \".github\", \"artwork\"):\n"
         b"    pass\nROOT_GATE = \"--require-root-commit\"\n",
     )
     safe["narwhal3d/icons/narwhal-box.png"] = ("100644", b"\x89PNG\r\n\x1a\n\0")

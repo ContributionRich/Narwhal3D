@@ -38,9 +38,9 @@ They can be selected from:
 
 ## Icons and visual design
 
-All currently shipped Narwhal toolbar and panel icons are **original generated placeholders**. They are redistributable and functional, but they are not the intended final artwork.
+The current icon set uses owner-generated GPL-3.0-or-later source artwork for 62 active toolbar commands. Two active command icons and all four right-panel icons still use generated placeholders. The icon set remains work in progress rather than final visual design.
 
-A future icon set must be original or have clearly documented GPL-compatible redistribution terms. Contributions should include source artwork, licence information, and readable light/dark-theme behavior.
+Artwork published with Narwhal must be original or have clearly documented GPL-compatible redistribution terms. Contributions should include source artwork, licence information, and readable light/dark-theme behavior.
 
 ## Geometry and interchange limitations
 

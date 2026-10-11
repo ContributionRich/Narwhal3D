@@ -40,7 +40,7 @@ SCRIPT_FILES = (
     "scripts/build_blender_linux.sh", "scripts/assemble_linux_release.py",
     "scripts/verify_linux_release.py", "scripts/audit_public_tree.py",
     "scripts/create_public_branch.py", "scripts/capture_readme_demo.py",
-    "scripts/build_readme_demo.sh",
+    "scripts/build_readme_demo.sh", "scripts/build_toolbar_icons.py",
 )
 TEST_FILES = (
     "spike/audit_representation.py", "spike/_roundtrip_reader.py",
@@ -107,7 +107,7 @@ def recursive_files(directory: str) -> list[str]:
 
 def public_files() -> list[str]:
     paths = set(ROOT_FILES + LAUNCH_FILES + PATCH_FILES + SCRIPT_FILES + TEST_FILES)
-    for directory in ("narwhal3d", "packaging", "licenses", ".github"):
+    for directory in ("narwhal3d", "packaging", "licenses", ".github", "artwork"):
         paths.update(recursive_files(directory))
     missing = sorted(path for path in paths if not (ROOT / path).is_file())
     if missing:

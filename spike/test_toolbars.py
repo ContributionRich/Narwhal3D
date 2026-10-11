@@ -34,6 +34,7 @@ def _load(name: str, relpath: str) -> Any:
 data: Any = _load("narwhal3d.toolbar_data", "narwhal3d/toolbar_data.py")
 toolbars: Any = _load("narwhal3d.toolbars", "narwhal3d/toolbars.py")
 generator: Any = _load("narwhal3d.icon_generator", "narwhal3d/icon_generator.py")
+builder: Any = _load("narwhal_icon_builder", "scripts/build_toolbar_icons.py")
 
 checks = 0
 failures: list[str] = []
@@ -167,13 +168,38 @@ for path in resolved:
     png_ok = png_ok and struct.unpack(">II", blob[16:24]) == (24, 24)
 check(png_ok, "every bundled icon is a valid-looking 24x24 PNG")
 
+curated_icons = {f"narwhal-{command}.png" for command in data.CURATED_ICON_COMMANDS}
+check(len(curated_icons) == 62 and curated_icons <= record_icons,
+      "62 active commands use exact or explicitly mapped source artwork")
 with tempfile.TemporaryDirectory() as generated_dir:
     generated = generator.write_icons(generated_dir)
-    reproducible = len(generated) == len(all_icons)
+    placeholders_match = len(generated) == len(all_icons)
+    curated_differ = True
     for path in generated:
         committed = os.path.join(icon_root, os.path.basename(path))
-        reproducible = reproducible and open(path, "rb").read() == open(committed, "rb").read()
-check(reproducible, "bundled PNGs exactly match the stdlib generator")
+        same = open(path, "rb").read() == open(committed, "rb").read()
+        if os.path.basename(path) in curated_icons:
+            curated_differ = curated_differ and not same
+        else:
+            placeholders_match = placeholders_match and same
+check(placeholders_match, "unmatched bundled PNGs exactly match the placeholder generator")
+check(curated_differ, "curated command PNGs replace their generated placeholders")
+source_icons = sorted(builder.SOURCE.glob("*.png"))
+source_dimensions = []
+for path in source_icons:
+    blob = path.read_bytes()[:24]
+    source_dimensions.append(
+        blob[:8] == b"\x89PNG\r\n\x1a\n" and struct.unpack(">II", blob[16:24]) == (96, 96))
+matched_sources, missing_sources = builder.exact_matches()
+check(len(source_icons) == 181 and all(source_dimensions),
+      "181 licensed source icons are preserved as 96x96 PNGs")
+check(set(matched_sources) == data.CURATED_ICON_COMMANDS,
+      "the public source mapping resolves every curated active command")
+check(missing_sources == ["delete", "namedcplane"],
+      "only Delete and NamedCPlane still lack active command artwork", missing_sources)
+license_text = (builder.SOURCE / "README.md").read_text(encoding="utf-8")
+check("GPL-3.0-or-later" in license_text and "ContributionRich" in license_text,
+      "source artwork carries its contributor and GPL licence declaration")
 check(len({open(path, "rb").read() for path in resolved}) == len(resolved),
       "temporary action symbols are visually distinct at the byte level")
 
