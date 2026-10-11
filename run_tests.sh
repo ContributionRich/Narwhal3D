@@ -54,6 +54,7 @@ PURE_SUITES=(
     spike/test_stl_writer.py
     spike/test_vector_export.py
     spike/test_onbrep_public.py
+    spike/test_clear_undo.py
 )
 
 BLENDER_SUITES=(
