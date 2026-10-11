@@ -22,9 +22,14 @@ REQUIRED = {
     "LICENSE",
     "README.md",
     "CONTRIBUTING.md",
+    "STATUS.md",
     "THIRD_PARTY_NOTICES",
     "docs/readme-command-loft.gif",
     "narwhal3d.sh",
+    "run_tests.sh",
+    "uishot.sh",
+    "narwhal3d/commands.py",
+    "scripts/create_public_branch.py",
     "launch/narwhal3d.desktop.in",
     "launch/narwhal3d-3dm.xml",
     "launch/narwhal3d.png",
@@ -115,6 +120,26 @@ SECRET_MARKERS = (
 # These policy files necessarily name exclusions/signatures. They remain subject to path,
 # symlink, Python-compilation, binary and secret checks.
 PROVENANCE_SCAN_EXEMPT = {".gitignore", "scripts/audit_public_tree.py"}
+REQUIRED_EXECUTABLES = {
+    "narwhal3d.sh",
+    "run_tests.sh",
+    "uishot.sh",
+    "scripts/bootstrap_dev_linux.sh",
+    "scripts/build_blender_linux.sh",
+    "scripts/build_readme_demo.sh",
+}
+REQUIRED_CONTENT = {
+    "narwhal3d/commands.py": (
+        b"class Command:",
+        b"def _build_registry",
+        b"COMMANDS: dict[str, Command] = _build_registry()",
+    ),
+    "scripts/create_public_branch.py": (
+        b"BRANCH = \"narwhal3d-public\"",
+        b"for directory in (\"narwhal3d\", \"packaging\", \"licenses\", \".github\")",
+        b"--require-root-commit",
+    ),
+}
 
 
 class AuditError(RuntimeError):
@@ -190,6 +215,11 @@ def audit_entries(entries: dict[str, tuple[str, bytes]], require_manifest: bool 
         if mode == "120000":
             problems.append(f"{path}: symlinks are not permitted in the public source root")
             continue
+        if path in REQUIRED_EXECUTABLES and mode != "100755":
+            problems.append(f"{path}: required launcher or test harness is not executable")
+        for marker in REQUIRED_CONTENT.get(path, ()):
+            if marker not in blob:
+                problems.append(f"{path}: missing required structural marker {marker!r}")
         if PurePosixPath(path).suffix == ".py":
             try:
                 compile(blob, path, "exec")
@@ -224,6 +254,19 @@ def require_root_commit(root: Path, ref: str) -> str | None:
 
 def self_check() -> None:
     safe = {path: ("100644", b"safe\n") for path in REQUIRED}
+    for path in REQUIRED_EXECUTABLES:
+        safe[path] = ("100755", b"#!/bin/sh\nexit 0\n")
+    safe["narwhal3d/commands.py"] = (
+        "100644",
+        b"class Command:\n    pass\n\ndef _build_registry():\n    return {}\n\n"
+        b"COMMANDS: dict[str, Command] = _build_registry()\n",
+    )
+    safe["scripts/create_public_branch.py"] = (
+        "100644",
+        b"BRANCH = \"narwhal3d-public\"\n"
+        b"for directory in (\"narwhal3d\", \"packaging\", \"licenses\", \".github\"):\n"
+        b"    pass\nROOT_GATE = \"--require-root-commit\"\n",
+    )
     safe["narwhal3d/icons/narwhal-box.png"] = ("100644", b"\x89PNG\r\n\x1a\n\0")
     if audit_entries(safe):
         raise AuditError("self-check rejected a safe synthetic manifest")
@@ -237,6 +280,9 @@ def self_check() -> None:
         ("numbered report", {"notes.py": ("100644", b"# bug report " + b"#74\n")}),
         ("handoff lore", {"notes.py": ("100644", b"# frontier hand" + b"off\n")}),
         ("old namespace", {"notes.py": ("100644", b"import rhino" + b"_addon\n")}),
+        ("truncated command registry",
+         {"narwhal3d/commands.py": ("100644", b"PLACEHOLDER_FOR_SIZE\n")}),
+        ("non-executable test harness", {"run_tests.sh": ("100644", b"safe\n")}),
         ("invalid Python", {"broken.py": ("100644", b"def broken(:\n")}),
         ("unexpected image", {"shot.png": ("100644", b"png")}),
         ("commercial miner", {"spike/rhino_" + "help.py": ("100644", b"x")}),

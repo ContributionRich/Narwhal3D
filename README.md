@@ -4,7 +4,7 @@ Narwhal 3D is a free, open-source, command-driven NURBS CAD application. The cur
 
 **Licence:** [GPL-3.0-or-later](LICENSE). Contributions and dependencies must be GPL-compatible; see [CONTRIBUTING.md](CONTRIBUTING.md).
 
-> **Project status:** early public MVP. Save important work often and verify manufacturing output before production use.
+> **Project status:** early public MVP. Save important work often and verify manufacturing output before production use. See [STATUS.md](STATUS.md) for implemented display modes, temporary-icon status, command gaps, and current limitations.
 
 ## Command workflow
 
@@ -114,6 +114,7 @@ Core, self-contained release functionality includes `.3dm`, STEP, DXF, SVG, OBJ,
 - `scripts/` — verified bootstrap, assembly, verification, and native-runtime build tools
 - `blender_patches/` — focused source patches used by the optional native build
 - `spike/` — selected self-contained tests retained on the public branch
+- `STATUS.md` — implemented surfaces, known gaps, temporary assets, and roadmap
 
 Internal names such as `narwhal3d`, `narwhal.*`, `rhino3dm`, and `.3dm` are compatibility or file-format interfaces; they are not product branding.
 

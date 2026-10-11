@@ -167,6 +167,17 @@ def _inspect(layout_was_ready):
     check("right dock has exact tabs and a live-width body", right_ok,
           f"{', '.join(rightpanel.tab_names())}; body={body[2] - body[0]}/{live_body_width}")
 
+    caption_rows = tuple(ui._caption_tree())
+    implemented_modes = tuple(
+        name for name, _key, implemented, _shading in ui.views.DISPLAY_MODES if implemented)
+    mode_slot = any(
+        row[0] == "item" and row[1] == ui.views.DISPLAY_MODE_PLACEHOLDER
+        for row in caption_rows
+    )
+    check("viewport title menu exposes all implemented display modes",
+          mode_slot and implemented_modes == ("Wireframe", "Shaded", "Rendered"),
+          ", ".join(implemented_modes))
+
     registered, operator_total = _registered_operator_state(ui, bpy)
     check("Narwhal operator namespace is registered",
           operator_total > 0 and registered == operator_total,

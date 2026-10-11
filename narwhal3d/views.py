@@ -294,7 +294,7 @@ TAB_ORDER = ("Perspective", "Top", "Front", "Right")
 #: The Add Viewport tab sits immediately after the final viewport tab.
 TAB_ADD = "+"
 
-#: Strip metrics follow the command bar's line height for internal consistency.
+#: OURS: strip metrics follow the command bar's line height for internal consistency.
 TAB_H = 18
 TAB_PAD_X = 10
 TAB_GAP = 1
@@ -561,10 +561,10 @@ OSNAP_PANEL_BG = (0xE9, 0xEB, 0xEF)
 OSNAP_PANEL_BORDER = (0xC0, 0xC0, 0xC0)
 OSNAP_BOX_BG = (0xFF, 0xFF, 0xFF)
 OSNAP_PANEL_TEXT = (0x20, 0x20, 0x20)
-#: Project tick color.
+#: OURS: Project tick color; the reference image does not show a checked box.
 OSNAP_TICK = (0x1B, 0x4D, 0x8F)
 
-#: Logical-pixel metrics; row height follows the command bar rhythm.
+#: OURS: logical-pixel metrics; row height follows the command bar rhythm.
 OSNAP_PANEL_W = 117
 OSNAP_ROW_H = 17
 OSNAP_BOX = 11

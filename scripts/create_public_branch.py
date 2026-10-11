@@ -18,7 +18,7 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 BRANCH = "narwhal3d-public"
 ROOT_FILES = (
-    ".gitignore", "LICENSE", "README.md", "CONTRIBUTING.md",
+    ".gitignore", "LICENSE", "README.md", "CONTRIBUTING.md", "STATUS.md",
     "THIRD_PARTY_NOTICES", "docs/readme-command-loft.gif",
     "narwhal3d.sh", "run_tests.sh", "uishot.sh", "pyrightconfig.json",
 )
