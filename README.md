@@ -2,7 +2,15 @@
 
 Narwhal 3D is a free, open-source, command-driven NURBS CAD application. The current release target is Linux x86_64. It ships as one application bundle: a Narwhal launcher and interface on top of a bundled, open-source viewport runtime.
 
+**Licence:** [GPL-3.0-or-later](LICENSE). Contributions and dependencies must be GPL-compatible; see [CONTRIBUTING.md](CONTRIBUTING.md).
+
 > **Project status:** early public MVP. Save important work often and verify manufacturing output before production use.
+
+## Command workflow
+
+![Typing Loft, choosing two curves, and creating a surface in Narwhal 3D](docs/readme-command-loft.gif)
+
+The command line, viewport picks, menus, and toolbars all enter the same command system. This example creates two exact NURBS circles, starts `Loft`, chooses both curves, and produces a ruled surface.
 
 ## Geometry model
 
@@ -35,6 +43,14 @@ Requirements: Python 3, Bash, HTTPS access, a C/C++ build toolchain, CMake, Ninj
 ```
 
 This development bootstrap downloads only SHA-256-locked artifacts and installs the locked wheels into an official development runtime. That runtime is useful for iteration but is deliberately rejected by release assembly because it is not natively branded.
+
+### Current Python layer and native destination
+
+During the 0.x feature-development phase, command behavior, document orchestration, UI, and most tests live in Python. Exact solid operations already use the compiled Open CASCADE kernel, while a small set of Blender source patches provides native application identity and CAD-specific viewport behavior.
+
+After the command set and interaction behavior are feature-complete and stable, the production application layer is intended to move into the Blender source tree and compile as one native Narwhal 3D application. The final product should not require a separately installed or bootstrapped Python add-on. Python may remain for tests, build tooling, and prototypes. Work contributed now remains durable as the behavioral specification, regression coverage, file-format logic, and geometry contract for that native implementation.
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the architecture boundaries, exact-geometry rules, and one-command contribution workflow.
 
 `scripts/build_blender_linux.sh` builds the publishable runtime from the exact Blender 5.2.2 source commit and applies the Narwhal title, icon, app-drawn-object, and CAD-boundary patches. See `packaging/README.md` for the required arguments and the current native-build provenance limitation. Install the three wheels from the locked cache into the resulting runtime before packaging.
 

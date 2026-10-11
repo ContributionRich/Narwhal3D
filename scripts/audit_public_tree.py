@@ -21,7 +21,9 @@ REQUIRED = {
     ".gitignore",
     "LICENSE",
     "README.md",
+    "CONTRIBUTING.md",
     "THIRD_PARTY_NOTICES",
+    "docs/readme-command-loft.gif",
     "narwhal3d.sh",
     "launch/narwhal3d.desktop.in",
     "launch/narwhal3d-3dm.xml",
@@ -64,6 +66,7 @@ FORBIDDEN_GLOBS = (
 )
 ALLOWED_IMAGES = (
     "launch/narwhal3d.png",
+    "docs/readme-command-loft.gif",
     "narwhal3d/icons/narwhal-*.png",
     "blender_patches/narwhal3d_app_icon.svg",
 )

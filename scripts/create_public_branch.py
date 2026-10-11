@@ -18,7 +18,8 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 BRANCH = "narwhal3d-public"
 ROOT_FILES = (
-    ".gitignore", "LICENSE", "README.md", "THIRD_PARTY_NOTICES",
+    ".gitignore", "LICENSE", "README.md", "CONTRIBUTING.md",
+    "THIRD_PARTY_NOTICES", "docs/readme-command-loft.gif",
     "narwhal3d.sh", "run_tests.sh", "uishot.sh", "pyrightconfig.json",
 )
 LAUNCH_FILES = (
@@ -38,7 +39,8 @@ SCRIPT_FILES = (
     "scripts/fetch_locked.py", "scripts/bootstrap_dev_linux.sh",
     "scripts/build_blender_linux.sh", "scripts/assemble_linux_release.py",
     "scripts/verify_linux_release.py", "scripts/audit_public_tree.py",
-    "scripts/create_public_branch.py",
+    "scripts/create_public_branch.py", "scripts/capture_readme_demo.py",
+    "scripts/build_readme_demo.sh",
 )
 TEST_FILES = (
     "spike/audit_representation.py", "spike/_roundtrip_reader.py",

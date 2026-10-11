@@ -1,0 +1,38 @@
+name: Command implementation
+description: Propose or implement one focused Narwhal 3D command
+title: "[Command] "
+labels:
+  - enhancement
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Keep this issue scoped to one command. Unsupported behavior must be reported explicitly; never substitute a different command or faceted manufacturing geometry.
+  - type: input
+    id: command
+    attributes:
+      label: Command name
+      placeholder: HideSwap
+    validations:
+      required: true
+  - type: textarea
+    id: workflow
+    attributes:
+      label: Expected command-line workflow
+      description: List prompts, selections, options, completion, and cancellation behavior.
+    validations:
+      required: true
+  - type: textarea
+    id: geometry
+    attributes:
+      label: Geometry and document impact
+      description: State whether the command changes selection, view state, document geometry, layers, or Undo history.
+    validations:
+      required: true
+  - type: textarea
+    id: tests
+    attributes:
+      label: Acceptance tests
+      description: Include success, invalid-input, Undo/Redo, and mutation-test cases that apply.
+    validations:
+      required: true
