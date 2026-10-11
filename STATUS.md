@@ -38,7 +38,7 @@ They can be selected from:
 
 ## Icons and visual design
 
-All currently shipped Narwhal toolbar and panel icons are **original generated placeholders**. They replaced non-redistributable development references before the project was published. They are intentionally functional rather than final artwork.
+All currently shipped Narwhal toolbar and panel icons are **original generated placeholders**. They are redistributable and functional, but they are not the intended final artwork.
 
 A future icon set must be original or have clearly documented GPL-compatible redistribution terms. Contributions should include source artwork, licence information, and readable light/dark-theme behavior.
 
