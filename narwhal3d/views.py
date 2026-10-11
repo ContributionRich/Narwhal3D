@@ -479,9 +479,11 @@ def menu_command_key(label):
 ACTION_MAXIMIZE = "__maximize__"
 
 CAPTION_ACTIONS = {
-    # MEASURED (user_interface/rhino_window.htm): "Double-click a viewport title to
-    # maximize the viewport, or restore the multi-viewport layout." We have exactly
-    # that behaviour already (`ui.toggle_maximize`), so this row can do what it says.
+    # Original Narwhal menu entries expose only actions that are already runnable.
+    ((), "Zoom"): "Zoom",
+    ((), "Construction Plane"): "CPlane",
+    ((), "Grid Settings"): "Grid",
+    # Double-clicking the title and this menu row share the same maximize behavior.
     ((), "Maximize Viewport"): ACTION_MAXIMIZE,
 }
 

@@ -11,7 +11,13 @@ MODEL_KIND = "Viewport"
 
 MENUS = {
     MODEL_KIND: (
-        ("item", "display_modes_don't_localize", "", None),
+        ("popup", "Display Mode", "", (
+            ("item", "display_modes_don't_localize", "", None),
+        )),
+        ("sep", "", "", None),
+        ("item", "Zoom", "", None),
+        ("item", "Construction Plane", "", None),
+        ("item", "Grid Settings", "", None),
         ("sep", "", "", None),
         ("item", "Maximize Viewport", "", None),
     ),
@@ -19,6 +25,6 @@ MENUS = {
 
 REPORT = {
     "kinds": len(KINDS),
-    "items_in_model_kind": 2,
+    "items_in_model_kind": 5,
     "source": "original",
 }

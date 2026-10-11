@@ -2,9 +2,9 @@
 
 Narwhal 3D is an early public MVP. This page records what currently works and what remains incomplete so visible UI does not imply unsupported behavior.
 
-## Current command and UI surface
+## Command compatibility
 
-The application currently registers **166 commands**. Registration means a command name is runnable; it does not guarantee that every advanced option or input route is complete.
+Narwhal 3D is **not yet at Rhino command parity**. It has a substantial working command set, but many commands, advanced options, selection routes, dialogs, and viewport tools remain missing or incomplete. A registered command name means that command is runnable; it does not guarantee every advanced option or interaction path is complete.
 
 The issue tracker is the live source for bounded contribution work. Current one-command starter tasks include:
 
@@ -13,7 +13,9 @@ The issue tracker is the live source for bounded contribution work. Current one-
 - [LockSwap](https://github.com/ContributionRich/Narwhal3D/issues/2)
 - [JoinCopy](https://github.com/ContributionRich/Narwhal3D/issues/3)
 
-Major command families still missing or incomplete include advanced curve/surface construction and editing, advanced viewport arrangements, several document/options panels, and many less-common command options. Examples that are not currently implemented include `Bend`, `Twist`, `Taper`, `Flow`, `BlendSrf`, `FilletSrf`, `NetworkSrf`, `Patch`, `MatchSrf`, `Untrim`, and `BooleanSplit`.
+Major missing or incomplete areas include advanced curve and surface construction, deformation tools, some solid-editing operations, advanced viewport arrangements, document/options panels, rendering features, and many less-common command options. Examples that are not currently implemented include `Bend`, `Twist`, `Taper`, `Flow`, `BlendSrf`, `FilletSrf`, `NetworkSrf`, `Patch`, `MatchSrf`, `Untrim`, and `BooleanSplit`.
+
+This status stays intentionally high-level. The public issue tracker contains detailed, bounded work that contributors can act on.
 
 Unsupported behavior must be reported explicitly. Narwhal should never silently run a different command or substitute faceted manufacturing geometry.
 

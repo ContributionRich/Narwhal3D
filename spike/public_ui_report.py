@@ -170,10 +170,16 @@ def _inspect(layout_was_ready):
     caption_rows = tuple(ui._caption_tree())
     implemented_modes = tuple(
         name for name, _key, implemented, _shading in ui.views.DISPLAY_MODES if implemented)
-    mode_slot = any(
-        row[0] == "item" and row[1] == ui.views.DISPLAY_MODE_PLACEHOLDER
-        for row in caption_rows
-    )
+
+    def has_mode_slot(rows):
+        for row in rows:
+            if row[0] == "item" and row[1] == ui.views.DISPLAY_MODE_PLACEHOLDER:
+                return True
+            if row[0] == "popup" and has_mode_slot(row[3]):
+                return True
+        return False
+
+    mode_slot = has_mode_slot(caption_rows)
     check("viewport title menu exposes all implemented display modes",
           mode_slot and implemented_modes == ("Wireframe", "Shaded", "Rendered"),
           ", ".join(implemented_modes))
