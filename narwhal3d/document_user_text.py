@@ -1,4 +1,4 @@
-"""Pure model for Rhino's Document Properties > Document User Text table.
+"""Pure model for the reference CAD application's Document Properties > Document User Text table.
 
 MEASURED from ``documentproperties/usertext``: rows have Key, Value and Type;
 Type is Plain text, Block Attribute Text, or Textfield; period-prefixed keys are
@@ -14,7 +14,7 @@ queries the native document table by exact key, or lists all rows on Enter,
 including period-prefixed hidden keys. A missing explicit key is reported as
 missing; it is not confused with the panel's hidden-row filter.
 
-The Rhino help also names .3dm import, but a pure table has no 3DM reader.  That
+The the reference CAD application help also names .3dm import, but a pure table has no 3DM reader.  That
 route refuses explicitly with ``ThreeDMImportDependencyError`` rather than
 silently accepting or approximating a file.
 """
@@ -145,7 +145,7 @@ class Table:
         suffix = Path(path).suffix.casefold()
         if suffix == ".3dm":
             raise ThreeDMImportDependencyError(
-                "Document User Text .3dm import requires the Rhino 3DM/document backend")
+                "Document User Text .3dm import requires the the reference CAD application 3DM/document backend")
         if suffix not in {".csv", ".txt"}:
             raise ValueError("Document User Text import file must be .csv, .txt, or .3dm")
         return cls.import_text(Path(path).read_text(encoding="utf-8"), suffix[1:],
@@ -154,7 +154,7 @@ class Table:
     def paste(self, clipboard: str, *, overwrite=True) -> Row:
         """Paste one key/value, converting Attribute User Text's clipboard form.
 
-        Rhino's documented object-to-document form is ``<Key>:<Object Name>|<Value>``.
+        the reference CAD application's documented object-to-document form is ``<Key>:<Object Name>|<Value>``.
         The converted document key is the complete ``<Key>:<Object Name>`` prefix;
         this avoids losing object identity.  A plain ``<Key>|<Value>`` is accepted
         for document/layout clipboard content.  A non-overwriting paste refuses an
@@ -166,7 +166,7 @@ class Table:
         return self.set(key, value)
 
     def paste_to_all_layouts(self, clipboard: str, layouts: Iterable["Table"]) -> int:
-        """Paste to layouts using Rhino's documented non-overwrite semantics."""
+        """Paste to layouts using the reference CAD application's documented non-overwrite semantics."""
         key, value = self._parse_clipboard(clipboard)
         changed = 0
         for layout in layouts:

@@ -1,4 +1,4 @@
-"""Rhino's SUB-OBJECT selection. **No `bpy`, no rhino3dm** -- pure, so testable.
+"""the reference CAD application's SUB-OBJECT selection. **No `bpy`, no rhino3dm** -- pure, so testable.
 
 What the help says, verbatim
 ----------------------------
@@ -25,7 +25,7 @@ resolve to REMOVE and a first click could never select anything.
 
 What we can actually select, and what we honestly cannot
 -------------------------------------------------------
-Rhino sub-object selects polysurface faces, surface and mesh edges, mesh faces
+the reference CAD application sub-object selects polysurface faces, surface and mesh edges, mesh faces
 and vertices, and curve segments. Of those, only :data:`SEGMENT` is implemented:
 a polyline's or polycurve's individual span, which is exactly what `Join`
 produces and `Explode` takes apart. :data:`NOT_IMPLEMENTED` names the rest so a
@@ -42,7 +42,7 @@ from __future__ import annotations
 
 import math
 
-#: Sub-object kinds, spelled as Rhino's Selection Filter spells the object types
+#: Sub-object kinds, spelled as the reference CAD application's Selection Filter spells the object types
 #: they belong to (`commands/selectionfilter.htm`).
 SEGMENT = "Segment"
 FACE = "Face"
@@ -101,7 +101,7 @@ def pick_part(faces, edges, vertices, cursor, tolerance, occlude=True,
     corners, `edges` ``[(id, [(x, y, depth), ...])]``, `vertices` ``[(id, (x, y,
     depth))]``; depth grows AWAY from the viewer.
 
-    Rhino documents the selection chord but not overlap priority. A vertex within
+    the reference CAD application documents the selection chord but not overlap priority. A vertex within
     `tolerance` px beats an edge, and an edge beats a face: the smaller target wins, or
     a cube's edges could never be picked off its faces. A face is the FRONT-most one
     under the cursor. With `occlude` (Shaded / Rendered) a vertex or edge hidden behind
@@ -145,7 +145,7 @@ def pick_part(faces, edges, vertices, cursor, tolerance, occlude=True,
 
 
 def is_subobject_chord(shift=False, ctrl=False):
-    """True for the one chord Rhino uses: **Ctrl+Shift**.
+    """True for the one chord the reference CAD application uses: **Ctrl+Shift**.
 
     Deliberately strict. Ctrl alone is REMOVE and Shift alone is ADD for whole
     objects, and both meanings are documented, so neither may be borrowed here.
@@ -205,7 +205,7 @@ def nearest(candidates, cursor, tolerance):
 
     `candidates` is ``[(key, projected_points)]``; `key` is whatever identifies the
     sub-object to the caller. Nothing within `tolerance` pixels returns None --
-    Rhino does not select a thing you did not aim at.
+    the reference CAD application does not select a thing you did not aim at.
 
     Ties go to the EARLIER candidate, so the order the caller supplies is the
     tie-break. That matters for a closed curve, whose first and last segments meet.
@@ -221,7 +221,7 @@ def nearest(candidates, cursor, tolerance):
 
 
 def describe(selection):
-    """A Rhino-style one-line summary of a sub-object selection.
+    """A CAD-style one-line summary of a sub-object selection.
 
     Grouped by object, because "2 segments of Polyline1" is what a user reads,
     not four opaque tuples.

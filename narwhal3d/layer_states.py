@@ -1,9 +1,9 @@
 """Pure Layer State Manager model.
 
-Rhino help (MEASURED, ``commands/layer.htm#LayerStateManager``) says that
+the reference CAD application help (MEASURED, ``commands/layer.htm#LayerStateManager``) says that
 Layer State Manager saves the current layer settings under a typed name.  The
 public document layer-record shape used here is also MEASURED from
-``RhinoModel.layer_records``: every record has ``Id``, ``Name``, ``Color``,
+``NarwhalModel.layer_records``: every record has ``Id``, ``Name``, ``Color``,
 ``Visible``, ``Locked``, ``PlotColor`` and ``PlotWeight``.
 
 This module deliberately stores records; it does not open or import a .3dm.
@@ -176,7 +176,7 @@ def rules():
         "save_current_layer_settings":
             "MEASURED (commands/layer.htm#LayerStateManager)",
         "record_fields":
-            "MEASURED (RhinoModel.layer_records: Id, Name, Color, Visible, "
+            "MEASURED (NarwhalModel.layer_records: Id, Name, Color, Visible, "
             "Locked, PlotColor, PlotWeight)",
         "missing_and_new_layers":
             "OURS (help is silent: match Id; retain new; ignore missing)",

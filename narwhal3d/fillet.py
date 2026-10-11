@@ -1,6 +1,6 @@
 """Fillet and Chamfer between two curves (pure: rhino3dm only, no bpy).
 
-Rhino's Fillet (commands/fillet.htm) options: Radius, Join, Trim, ExtendArcsBy
+the reference CAD application's Fillet (commands/fillet.htm) options: Radius, Join, Trim, ExtendArcsBy
 (Arc|Line), ExtendOtherCurvesBy (Line|Smooth), Dynamic, FilletCorners. Chamfer
 (commands/chamfer.htm): Distances (two), Join, Trim, plus the same Extend
 options. Quoted for whoever wires the commands; only the geometry is built here.

@@ -1,6 +1,6 @@
 """Document model: wraps rhino3dm File3dm as the single source of truth.
 
-Every Rhino object we create is stored in a File3dm (so .3dm save/load is
+Every the reference CAD application object we create is stored in a File3dm (so .3dm save/load is
 native and lossless) AND mirrored to a Blender mesh object for display.
 The registry maps File3dm object ids -> Blender objects.
 """
@@ -11,7 +11,7 @@ import sys
 import rhino3dm as r3
 
 #: The starting layer's name. MEASURED "Default": the status bar's Layer pane
-#: shows it (statusbar.py) and Rhino's factory templates ship one layer named
+#: shows it (statusbar.py) and the reference CAD application's factory templates ship one layer named
 #: "Default", keeping the model, status bar, and live LayerTree consistent.
 STARTING_LAYER = "Default"
 
@@ -40,7 +40,7 @@ class _Snapshot(list):
 
     `by_id` maps object id -> the same entry dicts the list holds, and `names` is the
     id -> display-name map at the time. An entry is never changed after it is made, so
-    two snapshots may SHARE one (copy-on-write, see `RhinoModel.snapshot`) -- and an
+    two snapshots may SHARE one (copy-on-write, see `NarwhalModel.snapshot`) -- and an
     entry shared by two snapshots means the object was identical in both."""
 
     settings = None
@@ -365,7 +365,7 @@ def _install_watch():
         _WATCH["error"] = repr(e)
 
 
-#: While > 0 the table wrappers do not mark each call: `RhinoModel.restore` knows exactly
+#: While > 0 the table wrappers do not mark each call: `NarwhalModel.restore` knows exactly
 #: what it deletes and re-adds and journals it in one batch (`_mark_moved_batch`).
 #: Restoring an early object in a large table can re-add thousands of later objects to
 #: preserve table order. Per-call journal marking dominated that cost, so restore records
@@ -418,10 +418,10 @@ def _wrap_table(func, name):
 _install_watch()
 
 
-class RhinoModel:
+class NarwhalModel:
     def __init__(self):
         self.file = r3.File3dm()
-        # Ensure a default layer exists at index 0. Rhino's factory templates ship a
+        # Ensure a default layer exists at index 0. the reference CAD application's factory templates ship a
         # single layer named "Default", matching the status bar and live layer tree.
         if len(self.file.Layers) == 0:
             layer = r3.Layer()
@@ -432,10 +432,10 @@ class RhinoModel:
         # The layer new objects use when none is supplied. AppState keeps this in step
         # with the live LayerTree's current layer via set_current_layer.
         self.current_layer_index = 0
-        # A new document starts with Rhino's documented default: "The default unit
+        # A new document starts with the reference CAD application's documented default: "The default unit
         # system is millimeters, and the default tolerance is 0.01 millimeters"
         # (documentproperties/units.htm, MEASURED). rhino3dm's bare File3dm says 0.001
-        # (MEASURED), which is not Rhino's default, so it is set here. A LOADED file keeps
+        # (MEASURED), which is not the reference CAD application's default, so it is set here. A LOADED file keeps
         # its own settings: `load` swaps the File3dm in after this.
         u = _units()
         self.file.Settings.ModelUnitSystem = getattr(r3.UnitSystem, u.DEFAULT_UNIT)
@@ -615,7 +615,7 @@ class RhinoModel:
     # ---------------------------------------------------------------- units
 
     def unit_system(self) -> str:
-        """The document's model unit system, as Rhino names it: ``"Millimeters"``,
+        """The document's model unit system, as the reference CAD application names it: ``"Millimeters"``,
         ``"Inches"``... Stored in the .3dm (`File3dm.Settings.ModelUnitSystem`), so it
         survives save and reload across processes."""
         return str(self.file.Settings.ModelUnitSystem).split(".")[-1]
@@ -636,7 +636,7 @@ class RhinoModel:
         (1.0 when `scale` is False or the unit did not change).
 
         MEASURED (documentproperties/units.htm): "When you change from one units system to
-        another, Rhino asks if you want to have the geometry automatically scaled to match
+        another, the reference CAD application asks if you want to have the geometry automatically scaled to match
         the unit change" -- the question is the CALLER's (the `Units` command); this does
         what was answered.
 
@@ -823,7 +823,7 @@ class RhinoModel:
         """Add rhino3dm geometry to the model; returns (object_id, attributes).
 
         ``layer_index`` defaults to the model's current layer when not
-        given, so a new object lands on the current layer -- Rhino's behaviour.
+        given, so a new object lands on the current layer -- the reference CAD application's behaviour.
         Callers that pass an explicit index (e.g. rebuilding from a loaded file)
         are unaffected.
         """
@@ -904,7 +904,7 @@ class RhinoModel:
     def object_id_by_name(self, name: str) -> str | None:
         """Return the str id of the file object with this display name.
 
-        Rhino names are case-insensitive. Returns None if not found.
+        the reference CAD application names are case-insensitive. Returns None if not found.
         """
         for fobj in self.file.Objects:
             if (fobj.Attributes.Name or "").lower() == name.lower():
@@ -1077,11 +1077,11 @@ class RhinoModel:
         caller can update just those display objects. `last_restore` is None when the
         the whole object table was replaced (the layer table changed, or `snap` predates
         copy-on-write): the caller then rebuilds the whole display
-        (`RhinoContext.rebuild_display`).
+        (`NarwhalContext.rebuild_display`).
 
         The document's LOGICAL order (`snapshot().by_id`) is exact at once. The physical
         object TABLE may lag it -- a re-added object lands at the table's end -- until
-        `normalize_order`, which `save` runs, so the FILE keeps Rhino's order (an
+        `normalize_order`, which `save` runs, so the FILE keeps the reference CAD application's order (an
         undeleted object back in its place). Nothing in the app indexes the table by
         position for an object's identity; use `FindId`.
         """
@@ -1174,7 +1174,7 @@ class RhinoModel:
     def normalize_order(self) -> int:
         """Re-order the object table to the document's logical order (the base snapshot's).
         Returns how many objects were re-added. Nothing about any object changes; called
-        by `save` (autosave included), so the FILE keeps Rhino's order -- an undeleted
+        by `save` (autosave included), so the FILE keeps the reference CAD application's order -- an undeleted
         object back in its place. Not in idle time: re-adding a long tail is ~0.25 s, and
         an idle-time pass would land on whatever the user does next."""
         if not self._order_dirty:
@@ -1266,7 +1266,7 @@ class RhinoModel:
         """Write the .3dm. A solid that is analytic in the app but can only be written
         as triangles (no openNURBS brep writer on this machine) is REPORTED on EVERY save --
         in `last_save_warnings` and on the command line -- never silent. MEASURED before:
-        such a save returned True and said nothing; real Rhino then opened facets.
+        such a save returned True and said nothing; real the reference CAD application then opened facets.
 
         Real-file import: the names `assign_app_names` gave objects are written back as
         they were in the file (blank, or the shared name), unless the user renamed them."""
@@ -1303,13 +1303,13 @@ class RhinoModel:
         except Exception:  # noqa: BLE001
             why = None
         names = ", ".join(sorted({n for n, _g in faceted}))
-        return [f"WARNING: {len(faceted)} solid(s) saved FACETED -- real Rhino will open "
+        return [f"WARNING: {len(faceted)} solid(s) saved FACETED -- real the reference CAD application will open "
                 f"triangles, not surfaces ({names}). Reason: "
                 f"{why or 'the openNURBS brep writer is not available'}. "
                 f"STEP export is still exact."]
 
     @classmethod
-    def load(cls, path: str) -> "RhinoModel":
+    def load(cls, path: str) -> "NarwhalModel":
         import functools
         import os
 
@@ -1359,7 +1359,7 @@ class RhinoModel:
                             "meanwhile": [functools.partial(_decode_image, p)
                                           for p in images]})
                 model.rehydrated = (restored, lost)
-                # Polysurfaces from real Rhino (no recipe, no master) are adopted from
+                # Polysurfaces from real the reference CAD application (no recipe, no master) are adopted from
                 # their own faces -- ``(count, [why any were declined])``
                 model.adopted = bridge.last_adoption()
             except Exception:  # noqa: BLE001
@@ -1373,8 +1373,8 @@ class RhinoModel:
 
     def _picture_images(self):
         """The image files the viewport will texture this document's pictures with --
-        ours (a stored frame) and real Rhino's (a textured all-planar brep, see
-        `commands.RhinoContext._texture_frame`) -- when a viewport will draw them, else [].
+        ours (a stored frame) and real the reference CAD application's (a textured all-planar brep, see
+        `commands.NarwhalContext._texture_frame`) -- when a viewport will draw them, else [].
 
         A document can contain many large images; decoding them during the first redraw
         after Open can add substantial latency. `load` decodes them instead while its

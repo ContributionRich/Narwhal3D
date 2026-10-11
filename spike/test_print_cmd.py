@@ -15,7 +15,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
 from narwhal3d import filedialog, print2d, print_commands  # noqa: E402
-from narwhal3d.model import RhinoModel  # noqa: E402
+from narwhal3d.model import NarwhalModel  # noqa: E402
 from narwhal3d.state import app_state  # noqa: E402
 
 results = []
@@ -59,7 +59,7 @@ def pdfinfo(path):
 
 
 def run():
-    app_state.set_model(RhinoModel())
+    app_state.set_model(NarwhalModel())
     app_state.active_command = None
     print_commands.view_provider = lambda: TOP
     for t in ("Circle", "w0,0,0", "20"):

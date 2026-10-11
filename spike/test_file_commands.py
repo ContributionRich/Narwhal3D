@@ -16,7 +16,7 @@ import rhino3dm as r3  # noqa: E402
 
 from narwhal3d import filedialog  # noqa: E402
 from narwhal3d.state import app_state  # noqa: E402
-from narwhal3d.model import RhinoModel  # noqa: E402
+from narwhal3d.model import NarwhalModel  # noqa: E402
 
 results = []
 
@@ -59,7 +59,7 @@ def kinds(fake):
 
 
 def fresh():
-    app_state.set_model(RhinoModel())
+    app_state.set_model(NarwhalModel())
     app_state.doc_path = None
     app_state.mark_saved()
     app_state.active_command = None
@@ -105,7 +105,7 @@ def run():
     app_state.feed_line("Save")
     want = p1 + ".3dm"
     check(os.path.exists(want) and objects_in(want) == 1,
-          "Save writes the model, adding .3dm as Rhino does", f"{last()!r}")
+          "Save writes the model, adding .3dm as the reference CAD application does", f"{last()!r}")
     check(app_state.doc_path == want and not app_state.doc_modified(),
           "the model is now that file, and unmodified", f"{app_state.doc_path}")
     check(not [f for f in os.listdir(TMP) if f.endswith(".tmp")],
@@ -152,7 +152,7 @@ def run():
           "saving as .dwg is refused by name and nothing changes", f"{last()!r}")
 
     # -- 5b. Save As with an EXPORT extension exports the whole model; the
-    # document keeps its own file ("it does not become your active Rhino model")
+    # document keeps its own file ("it does not become your active the reference CAD application model")
     from narwhal3d import print2d, print_commands
     print_commands.view_provider = lambda: print2d.View(
         (1, 0, 0), (0, 1, 0), (0, 0, 0), 100.0, 80.0)
@@ -376,7 +376,7 @@ def run():
         app_state.feed_line("Save")
         starts = [c[1] for c in fake.calls if isinstance(c, tuple) and c[0] == "save-start"]
         check(starts == [p8] and objects_in(p8) == 1,
-              "its first Save suggests the file's own name as .3dm (Rhino's rule)",
+              "its first Save suggests the file's own name as .3dm (the reference CAD application's rule)",
               f"{starts}")
         from narwhal3d import file_commands as _fc
         rec = _fc.recent_items()

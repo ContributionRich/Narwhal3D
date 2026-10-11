@@ -21,15 +21,15 @@ MOVE = "move"
 ROTATE = "rotate"
 SCALE = "scale"
 ORIGIN = "origin"
-#: Move-2D (plane) handles. Rhino's name for these, from
-#: the `Rhino.UI.Gumball.GumballMode` enum, is `TranslateXY` / `TranslateYZ` /
-#: `TranslateZX` (MEASURED -- RhinoCommon.xml). We carry ONE kind plus the index
+#: Move-2D (plane) handles. the reference CAD application's name for these, from
+#: the `the reference CAD application.UI.Gumball.GumballMode` enum, is `TranslateXY` / `TranslateYZ` /
+#: `TranslateZX` (MEASURED -- CAD SDK.xml). We carry ONE kind plus the index
 #: of the axis the plane is NORMAL to, which is the same convention `ROTATE`
 #: already uses (rotate about axis i), so plane "xy" has `axis == 2`.
 PLANE = "plane"
 
 # DRAG MODES. A handle's *kind* is what was grabbed; the *mode* is
-# what the drag does, which depends on the modifier keys held. Rhino overloads
+# what the drag does, which depends on the modifier keys held. the reference CAD application overloads
 # every handle this way (commands/gumball.htm), so the two concepts have to be
 # separate -- the same Move-2D handle is a planar move, a Scale2D or an extrude
 # depending on Shift/Ctrl.
@@ -73,9 +73,9 @@ IMPLEMENTED_MODES = frozenset({MOVE, ROTATE, SCALE, ORIGIN, PLANE,
 #:
 #: `Object` is False and likely to stay so for a while: the help says only "The
 #: default alignment is different for different object types" and never says WHAT
-#: for which type. RhinoCommon has `RhinoObject.TryGetGumballFrame` for exactly
+#: for which type. CAD SDK has `document object.TryGetGumballFrame` for exactly
 #: this, but rhino3dm does not expose it, so there is nothing to measure against.
-#: Guessing per-type frames would be inventing Rhino behaviour.
+#: Guessing per-type frames would be inventing the reference CAD application behaviour.
 ALIGNMENTS = {
     "CPlane": True,
     "Object": False,
@@ -83,7 +83,7 @@ ALIGNMENTS = {
     "View": True,
 }
 
-#: Rhino's default. "Rhino's standard viewports come with construction planes that
+#: the reference CAD application's default. "the reference CAD application's standard viewports come with construction planes that
 #: correspond to the viewport", and the Gumball follows the CPlane unless told
 #: otherwise.
 DEFAULT_ALIGNMENT = "CPlane"
@@ -92,7 +92,7 @@ DEFAULT_ALIGNMENT = "CPlane"
 DEFAULT_SIZE_PX = float(80)
 
 #: How close (in pixels) the cursor must come to a handle to grab it. OURS --
-#: Rhino documents no pick tolerance for the Gumball.
+#: the reference CAD application documents no pick tolerance for the Gumball.
 PICK_TOLERANCE_PX = 11.0
 
 # ---------------------------------------------------------------------------
@@ -122,7 +122,7 @@ SIZES_PX = {
 PLANE_VISIBILITY_ANGLE_DEG = 50.0
 
 #: Line widths, in pixels, straight from :data:`SIZES_PX`. Absolute pixel values in
-#: Rhino, so they are NOT scaled by the widget size.
+#: the reference CAD application, so they are NOT scaled by the widget size.
 AXIS_THICKNESS_PX = float(SIZES_PX["AxisThickness"])
 ARC_THICKNESS_PX = float(SIZES_PX["ArcThickness"])
 
@@ -130,7 +130,7 @@ ARC_THICKNESS_PX = float(SIZES_PX["ArcThickness"])
 def _frac(key):
     """One of :data:`SIZES_PX` as a fraction of the widget `Radius`.
 
-    Rhino stores each size as an INDEPENDENT pixel count; we store the widget size
+    the reference CAD application stores each size as an INDEPENDENT pixel count; we store the widget size
     once and everything else as a fraction of it, so our single `size` argument
     still scales the whole widget. At the default Radius the two models agree
     exactly, which is the case that matters -- they differ only if a user changes
@@ -146,11 +146,11 @@ def _frac(key):
 #: describes those handles' behaviour but never their geometry, and the binary has
 #: no setting for them.
 PROPORTIONS = {
-    # The arrows run to the full radius. Rhino's single `Radius` setting covers
-    # "the size of the arcs and arrows", so in Rhino the arcs run to 1.0 as well --
+    # The arrows run to the full radius. the reference CAD application's single `Radius` setting covers
+    # "the size of the arcs and arrows", so in the reference CAD application the arcs run to 1.0 as well --
     # see `arc_radius` below for why ours do not.
     "arrow_tip": 1.0,
-    # OURS, AND A DELIBERATE DEVIATION FROM RHINO. Rhino's `Radius` governs the
+    # OURS, AND A DELIBERATE DEVIATION FROM THE REFERENCE CAD APPLICATION. the reference CAD application's `Radius` governs the
     # arcs and the arrows together, and McNeel's widget drawing measures the arcs at
     # the full radius, so faithful would be 1.0 -- which is what this was.
     #
@@ -159,14 +159,14 @@ PROPORTIONS = {
     #
     # 0.85 leaves 12 px of arrow beyond the arc at the default size -- just over the
     # 11 px tolerance, so the arrow's last stretch is unambiguously the arrow.
-    # Recorded rather than silently tuned: set this back to 1.0 to match Rhino
+    # Recorded rather than silently tuned: set this back to 1.0 to match the reference CAD application
     # exactly and accept the ambiguity.
     "arc_radius": 0.85,
     "head_len": _frac("TipLength"),     # MEASURED: TipLength = 20 px
     # MEASURED value, DERIVED reading: `TipWidth` = 5 and ours is a HALF-width.
     # McNeel's widget drawing settles which: the red arrowhead there is ~12 px
     # across at a scale where the arcs are 80, i.e. ~5 either side of the shaft,
-    # so Rhino's 5 is the half-width and not the full width.
+    # so the reference CAD application's 5 is the half-width and not the full width.
     "head_half": _frac("TipWidth"),
     # Same shape of reading: `TailSize` = 4 is the HALF-size of the little scale
     # square (the drawing's squares measure ~8 px across at that scale).
@@ -176,20 +176,20 @@ PROPORTIONS = {
     "menu_at": _frac("MenuBallDistance"),   # MEASURED: MenuDistance = 30 px
     "menu_radius": _frac("MenuBallSize"),   # MEASURED: MenuButtonSize = 5 px
     "extrude_radius": _frac("ExtrudeBallSize"),  # MEASURED: 5 px
-    # --- still OURS: no Rhino setting and no measurement exists for these ---
-    # Where along the axis the scale square sits. Rhino has no appearance setting
+    # --- still OURS: no the reference CAD application setting and no measurement exists for these ---
+    # Where along the axis the scale square sits. the reference CAD application has no appearance setting
     # for it (its `X/Y/Z scale handle length` strings are per-object, written by
     # SetScaleHandles, not a default). Both McNeel images put the scale squares
     # BEYOND the arcs at the end of a dotted line, so this is > arc_radius.
     "scale_at": 1.15,
-    # Where the extrude dot sits on each move axis. Rhino exposes its SIZE but not its
+    # Where the extrude dot sits on each move axis. the reference CAD application exposes its SIZE but not its
     # location; 0.62 is OURS, inside the cone and clear of the origin/rotation arc.
     "extrude_at": 0.62,
     "arc_span": 90.0,        # rotate arc sweep, in degrees. OURS.
     "arc_segments": 16,      # OURS: tessellation, not appearance
     "origin_half": 0.045,    # half-width of the origin marker. OURS.
     "menu_segments": 12,     # OURS: tessellation, not appearance
-    # Dash length of the LEADER lines, as a fraction of the widget size. Rhino's
+    # Dash length of the LEADER lines, as a fraction of the widget size. the reference CAD application's
     # help says the Scale and Menu handles each include a "dotted line connecting
     # to the Gumball origin" (MEASURED, see `_dashed_segment`), but never how long
     # the dashes are. OURS. Gap is the same length as the dash.
@@ -225,7 +225,7 @@ def scale_axis_direction(axis_dir):
     return _mul(axis_dir, SCALE_HANDLE_SIGN)
 
 #: Axis colours, RGBA. OURS (red/green/blue is the near-universal axis
-#: convention and Rhino lets the user set these anyway).
+#: convention and the reference CAD application lets the user set these anyway).
 AXIS_COLORS = (
     (0.86, 0.16, 0.16, 1.0),   # x
     (0.16, 0.68, 0.16, 1.0),   # y
@@ -286,7 +286,7 @@ def _unit(v):
 def plane_axes(plane):
     """The widget's three axes: the CPlane's x, y and normal, in that order.
 
-    Rhino: "Gumball widgets align to the construction plane xyz directions."
+    the reference CAD application: "Gumball widgets align to the construction plane xyz directions."
     """
     return (plane.xaxis, plane.yaxis, plane.zaxis)
 
@@ -512,7 +512,7 @@ def _dashed_segment(a, b, dash_len):
       "MenuHandle -- The small circle **and the dotted line connecting to the
        Gumball origin**."
 
-    So the dotted leader is part of the handle in Rhino, not decoration. We drew
+    So the dotted leader is part of the handle in the reference CAD application, not decoration. We drew
     neither. The dash LENGTH is OURS (`PROPORTIONS["leader_dash"]`).
 
     Dashed in WORLD space rather than screen space, which is correct here for a
@@ -596,7 +596,7 @@ def _rotate_arc(origin, size, color, axis, from_dir, to_dir, props=None):
 
 
 def _menu_ball(origin, axes, size, proportions):
-    """The menu ball -- Rhino's "bunny tail" -- on a dotted leader from the origin.
+    """The menu ball -- the reference CAD application's "bunny tail" -- on a dotted leader from the origin.
 
     MEASURED shape (commands/gumball.htm): "MenuHandle -- The small circle **and the
     dotted line connecting to the Gumball origin**." We drew the circle and not the
@@ -606,7 +606,7 @@ def _menu_ball(origin, axes, size, proportions):
     grabbed by accident when aiming at one. Drawn as a closed polyline, like the
     rotate arcs, so the existing 2-D hit test works on it unchanged.
 
-    `menu_at` is Rhino's `MenuBallDistance` (30 px), a RADIAL distance from the
+    `menu_at` is the reference CAD application's `MenuBallDistance` (30 px), a RADIAL distance from the
     origin -- hence the 0.7071 on each of the two axes below.
     """
     at = proportions.get("menu_at", 0.375)
@@ -657,7 +657,7 @@ def _origin_marker(origin, axes, size, props=None):
 def plane_visible(normal, view_dir, angle_deg=PLANE_VISIBILITY_ANGLE_DEG):
     """Is the Move-2D handle of the plane with this `normal` visible?
 
-    Rhino's "Plane visibility angle" rule, quoted in full at
+    the reference CAD application's "Plane visibility angle" rule, quoted in full at
     :data:`PLANE_VISIBILITY_ANGLE_DEG`: 0 degrees shows the plane only when the
     gumball is perfectly aligned to the view, 90 degrees always shows it, and the
     default is 50.
@@ -669,7 +669,7 @@ def plane_visible(normal, view_dir, angle_deg=PLANE_VISIBILITY_ANGLE_DEG):
     is just as face-on -- hence the absolute value.
 
     Returns False when either vector is degenerate: with no view direction there
-    is no honest answer, and guessing "visible" would draw a handle Rhino hides.
+    is no honest answer, and guessing "visible" would draw a handle the reference CAD application hides.
     """
     n = _unit(normal) if normal else None
     v = _unit(view_dir) if view_dir else None
@@ -698,7 +698,7 @@ def _plane_handle(origin, normal_axis, axes, size, color, props=None):
     (Plane)".
 
     We used to draw a right-angled corner BRACKET here. That was a guess made when
-    the only evidence was the two size settings' names, and it is not what Rhino
+    the only evidence was the two size settings' names, and it is not what the reference CAD application
     shows.
 
     Sizes: `PlaneSize` (20 px) is the icon's full extent across, and
@@ -770,7 +770,7 @@ def drag_mode(kind, shift=False, ctrl=False):
     the caller reports it rather than silently performing the plain drag.
 
     Shift on a handle with no documented Shift behaviour returns the plain mode:
-    Rhino does not invent an action there, so neither do we.
+    the reference CAD application does not invent an action there, so neither do we.
     """
     if kind == EXTRUDE_HANDLE:
         if ctrl:
@@ -832,10 +832,10 @@ NUMERIC_FACTOR = "factor"
 
 
 def numeric_kind(mode):
-    """What a typed number MEANS for `mode`, or None if Rhino documents none.
+    """What a typed number MEANS for `mode`, or None if the reference CAD application documents none.
 
     `None` is a real answer, not a gap to paper over. A plain click on a Move-2D
-    handle is the case that matters: Rhino documents Shift+click there (a scale
+    handle is the case that matters: the reference CAD application documents Shift+click there (a scale
     factor) but **not** an unmodified click, and a planar move has no single
     direction a lone number could describe. Inventing one would put geometry
     somewhere the user did not ask for, so the caller must refuse instead.
@@ -856,7 +856,7 @@ def numeric_kind(mode):
 
 
 #: Prompt wording. **OURS** -- the help says a number is typed but never shows
-#: the prompt, so these are our phrasing in Rhino's style, not measured strings.
+#: the prompt, so these are our phrasing in the reference CAD application's style, not measured strings.
 NUMERIC_PROMPTS = {
     NUMERIC_DISTANCE: "Distance",
     NUMERIC_ANGLE: "Angle (deg)",
@@ -974,12 +974,12 @@ def build(origin, plane, size, view_dir=None, proportions=None,
     :data:`DEFAULT_SIZE_PX` at the pane's zoom).
 
     `view_dir` is the pane's view direction, needed ONLY by the Move-2D plane
-    handles: Rhino hides those unless the plane is close to face-on (see
+    handles: the reference CAD application hides those unless the plane is close to face-on (see
     :func:`plane_visible`). Omit it and no plane handles are produced -- without
     knowing where the camera looks there is no honest way to decide, and drawing
-    them unconditionally would show handles Rhino hides.
+    them unconditionally would show handles the reference CAD application hides.
 
-    `proportions` overrides :data:`PROPORTIONS`. Rhino's documented way to hide a
+    `proportions` overrides :data:`PROPORTIONS`. the reference CAD application's documented way to hide a
     handle is to set its size to zero (options/modeling_aids_gumball.htm: "Set
     scale handle size to zero to turn off scale handles", and the same wording for
     axis thickness, arc thickness, plane size and menu ball size), so a zero here
@@ -1000,7 +1000,7 @@ def build(origin, plane, size, view_dir=None, proportions=None,
     if proportions:
         p.update(proportions)
     axes = plane_axes(plane)
-    # Rhino's "zero turns it off" rule, per handle family.
+    # the reference CAD application's "zero turns it off" rule, per handle family.
     want_move = p.get("arrow_tip", 0.0) > 0.0
     want_scale = p.get("scale_half", 0.0) > 0.0
     want_rotate = p.get("arc_radius", 0.0) > 0.0
@@ -1080,7 +1080,7 @@ def polyline_distance_2d(point, polyline):
 #: at nearby arrows.
 #:
 #: So the menu ball is picked against its own radius plus a small margin instead of
-#: the general tolerance. The margin is OURS; the radius it is added to is Rhino's.
+#: the general tolerance. The margin is OURS; the radius it is added to is the reference CAD application's.
 MENU_PICK_MARGIN_PX = 2.0
 
 
@@ -1100,7 +1100,7 @@ def menu_pick_tolerance_px(size_px=None):
     `_gumball_size` converts exactly that many pixels through the pane's zoom to get
     the world size -- so the widget's drawn pixel size is constant by construction.
     The argument exists so the clamp above is testable, and so this stays correct if
-    the size ever becomes a user setting (Rhino's `Radius`, which it is).
+    the size ever becomes a user setting (the reference CAD application's `Radius`, which it is).
     """
     size = DEFAULT_SIZE_PX if size_px is None else float(size_px)
     radius = PROPORTIONS["menu_radius"] * size
@@ -1198,7 +1198,7 @@ def snapped_origin_delta(widget_origin, snap_point):
 def free_translation(start_world, cursor_world):
     """The world delta for an ORIGIN-handle drag.
 
-    Rhino: "Drag the Gumball origin point to move the whole object in any
+    the reference CAD application: "Drag the Gumball origin point to move the whole object in any
     direction." Both points come from the pane's CPlane pick, so the motion is
     free *within that plane* -- which is what "any direction" means for a cursor
     that lives on the construction plane.
@@ -1240,13 +1240,13 @@ def rotate_angle(origin, axis_dir, start_world, cursor_world):
 def scale_factor(origin, axis_dir, start_world, cursor_world, minimum=1e-4):
     """The Scale1D factor for a drag, about the gumball origin.
 
-    Rhino: "Drag a scale handle to scale in one dimension along the arrow. The
+    the reference CAD application: "Drag a scale handle to scale in one dimension along the arrow. The
     Gumball origin is the base point of scaling." So the factor is the ratio of
     the cursor's distance along the axis to where the drag started:
 
         factor = (cursor . axis) / (start . axis)
 
-    Clamped at `minimum` and never negative: dragging past the origin in Rhino
+    Clamped at `minimum` and never negative: dragging past the origin in the reference CAD application
     flattens the object rather than mirroring it ("The object will be made flat
     in the scaling direction"). Returns 1.0 (no change) when the start had no
     extent along the axis, because there is no ratio to take.
@@ -1327,7 +1327,7 @@ def toggle_copy(was_on):
 #: for the right button (click vs drag, decided at release), which is why this lives
 #: next to the toggle rather than being improvised in the modal.
 #:
-#: The THRESHOLD is OURS -- Rhino publishes no number. 250 ms deliberately equals
+#: The THRESHOLD is OURS -- the reference CAD application publishes no number. 250 ms deliberately equals
 #: `navigate.DEFAULT_CONTEXT_MENU_DELAY_MS` so the app has ONE idea of how long a tap
 #: is, rather than two that can drift apart.
 ALT_HOLD_MS = 250
@@ -1409,7 +1409,7 @@ def apply_drag_strength(delta, percent=DEFAULT_DRAG_STRENGTH):
 #
 # So relocation is an OFFSET from the computed default (the bounding-box centre),
 # and it survives until Reset. Keeping it as an offset rather than an absolute point
-# matters: the default moves when the selection changes, and Rhino's relocated
+# matters: the default moves when the selection changes, and the reference CAD application's relocated
 # gumball does not jump back to the box centre on its own.
 # ---------------------------------------------------------------------------
 
@@ -1448,7 +1448,7 @@ def is_relocated(offset):
 #
 # Every entry below is quoted from the help's own "Gumball menu" list, in its order.
 # `implemented` is our honest record; a False entry is SHOWN and reports itself,
-# because a menu that hides what Rhino offers misrepresents the widget.
+# because a menu that hides what the reference CAD application offers misrepresents the widget.
 # ---------------------------------------------------------------------------
 
 #: (label, key, implemented). The order is the help's.
@@ -1519,7 +1519,7 @@ DEFAULT_SNAPPY_DRAGGING = True
 #: The three SCALE modes are deliberately absent, and that is a SCOPE limit stated
 #: out loud rather than an oversight: a scale drag consumes a RATIO and an object
 #: snap supplies a LOCATION, so there is no honest reading of "snap to" for one.
-#: Rhino's option text says nothing about scaling either. Deciding it here, in one
+#: the reference CAD application's option text says nothing about scaling either. Deciding it here, in one
 #: pure place, is what stops the UI from quietly snapping a scale.
 SNAPPY_MODES = (ORIGIN, ROTATE)
 
@@ -1587,7 +1587,7 @@ def relocate_drag_delta(kind, axis_dir, start_world, cursor_world):
 #    can vary based on the selected object type."
 #
 # Each line below is transcribed from that page's per-handle sections. Only actions
-# WE implement are listed as actions; the modifier keys Rhino documents but we do
+# WE implement are listed as actions; the modifier keys the reference CAD application documents but we do
 # not perform are named as not implemented, so the tooltip cannot promise more than
 # the widget does.
 # ---------------------------------------------------------------------------

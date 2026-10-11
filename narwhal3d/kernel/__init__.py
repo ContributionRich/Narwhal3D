@@ -40,13 +40,13 @@ DESIGN CONSTRAINTS
 from __future__ import annotations
 
 #: Geometry whose faces are real surfaces -- planes, cylinders, spheres, NURBS. This is
-#: what Rhino produces and what a STEP export can carry as surfaces. Exportable for
+#: what the reference CAD application produces and what a STEP export can carry as surfaces. Exportable for
 #: manufacture.
 ANALYTIC = "analytic"
 
 #: Geometry derived from a tessellation. Watertight as a MESH, but every curved face is
 #: faceted, so a STEP export carries facets rather than surfaces. Usable for display and
-#: for 3D printing; NOT equivalent to Rhino's output, and must never be presented as if
+#: for 3D printing; NOT equivalent to the reference CAD application's output, and must never be presented as if
 #: it were.
 MESH_DERIVED = "mesh-derived"
 
@@ -59,7 +59,7 @@ REPRESENTATIONS = (ANALYTIC, MESH_DERIVED, UNKNOWN)
 # legitimate value and `all_representations()` is the one place that lists every one.
 
 #: The user-string key. Namespaced because it travels inside the user's `.3dm` and must
-#: not collide with Rhino's own keys or a plug-in's.
+#: not collide with the reference CAD application's own keys or a plug-in's.
 REPRESENTATION_KEY = "Narwhal3D:Representation"
 
 #: Faces at or above this count, with a facet-like FRACTION at or above
@@ -290,7 +290,7 @@ def looks_tessellated(brep, threshold=TESSELLATION_FACE_THRESHOLD,
 #:   * the **master** -- the OCCT shape, which is the geometry: what gets measured,
 #:     booleaned again, and exported to STEP for a machine shop;
 #:   * a **proxy** -- a triangulated `r3.Brep` used ONLY to draw, snap and hit-test, which
-#:     is exactly what Rhino's render mesh is.
+#:     is exactly what the reference CAD application's render mesh is.
 #:
 #: Tagging that proxy `ANALYTIC` would be a lie (it measures as facets) and tagging it
 #: `MESH_DERIVED` would be a different lie (the geometry is not mesh-derived at all). So it
@@ -441,11 +441,11 @@ DOCUMENT_FORM_KEY = "Narwhal3D:DocumentForm"
 
 def faceted_in_file(geom):
     """True when `geom` is a master-backed solid whose DOCUMENT object -- what the .3dm
-    stores and what real Rhino opens -- is triangles, although its geometry is analytic.
+    stores and what real the reference CAD application opens -- is triangles, although its geometry is analytic.
 
     This is the state produced when the openNURBS helper is unavailable. The master still
     measures, booleans and exports STEP exactly, but saving writes facets. It must never be
-    silent, so `describe()` and `RhinoModel.save` both read this.
+    silent, so `describe()` and `NarwhalModel.save` both read this.
 
     The marker decides; a document object with no marker falls back to what it measures as
     (`looks_tessellated`).

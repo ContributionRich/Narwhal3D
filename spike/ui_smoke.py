@@ -80,7 +80,7 @@ check(len(_nav_items) == len(ui.NAV_MODIFIERS),
       f"expected {len(ui.NAV_MODIFIERS)} narwhal.navigate bindings, "
       f"got {len(_nav_items)}")
 check(all(k.type == "RIGHTMOUSE" for k in _nav_items),
-      "narwhal.navigate must be bound to RIGHTMOUSE (Rhino navigates with RMB)")
+      "narwhal.navigate must be bound to RIGHTMOUSE (the reference CAD application navigates with RMB)")
 _nav_mods = {(k.ctrl, k.shift, k.alt) for k in _nav_items}
 check(len(_nav_mods) == len(ui.NAV_MODIFIERS),
       f"the narwhal.navigate bindings share modifier sets {_nav_mods}; each "
@@ -178,7 +178,7 @@ try:
     bpy.ops.narwhal.begin_typing(char="b")
     check(app_state.input_buffer == "b",
           f"begin_typing(char='b') left buffer {app_state.input_buffer!r}, expected 'b'")
-    # a second character appends (typing is cumulative, like Rhino)
+    # a second character appends (typing is cumulative, like the reference CAD application)
     bpy.ops.narwhal.begin_typing(char="o")
     check(app_state.input_buffer == "bo",
           f"second begin_typing should append: {app_state.input_buffer!r}, expected 'bo'")
@@ -305,7 +305,7 @@ class ModalShim:
     def _finish(self):
         pass
 
-    # Esc no longer ends the modal (Rhino's command line keeps focus), so it
+    # Esc no longer ends the modal (the reference CAD application's command line keeps focus), so it
     # calls _clear_transient instead of _finish. The shim needs both or driving
     # modal(ESC) raises AttributeError.
     def _clear_transient(self):
@@ -377,7 +377,7 @@ try:
     _cc.step_index = 1                          # now on the radius (DISTANCE) step
     check(ui._wants_point(_cc) is True,
           "_wants_point(Circle at radius step) should be True "
-          "(Rhino: 'Pick a radius location')")
+          "(the reference CAD application: 'Pick a radius location')")
     # a COUNT is a number and nothing else -- a click must not answer it
     _ac = _copy.deepcopy(COMMANDS["array"])
     check(ui._wants_point(_ac) is False,
@@ -455,7 +455,7 @@ except Exception as exc:  # noqa: BLE001
 # OURS -- so the modal consumes it.
 #
 # This assertion used to require PASS_THROUGH, on the reasoning that Blender's
-# own view3d.select should make the selection. That reasoning was the bug: Rhino's
+# own view3d.select should make the selection. That reasoning was the bug: the reference CAD application's
 # The modal handles selection clicks so Narwhal's Shift=ADD and Ctrl=REMOVE rules
 # take precedence over Blender's default selection modifiers.
 try:
@@ -492,7 +492,7 @@ except Exception as exc:  # noqa: BLE001
     failures.append(f"pass-through raised: {exc!r}")
 
 # --- theme + layout setup must not raise ---------------------------------
-for fn_name in ("setup_layout", "apply_rhino_theme"):
+for fn_name in ("setup_layout", "apply_narwhal_theme"):
     try:
         getattr(ui, fn_name)()
     except Exception as exc:  # noqa: BLE001
@@ -511,7 +511,7 @@ try:
                   f"INFO header shown={sp.show_region_header} but Narwhal's toolbar "
                   f"installed={ours}: the header may only be visible with app content")
     check(ui.toolbar_installed(),
-          "Rhino's toolbar is not installed in the command area's header")
+          "the reference CAD application's toolbar is not installed in the command area's header")
 except Exception as exc:  # noqa: BLE001
     failures.append(f"header check raised: {exc!r}")
 
@@ -526,7 +526,7 @@ try:
     check(_close(tuple(v3d.grid_major), tuple(ui.GRID_MAJOR)),
           f"grid_major theme {tuple(v3d.grid_major)} != expected {ui.GRID_MAJOR}")
     check(_close(tuple(v3d.object_selected)[:3], tuple(ui.SELECT_COLOR)[:3]),
-          f"object_selected {tuple(v3d.object_selected)} not Rhino yellow "
+          f"object_selected {tuple(v3d.object_selected)} not the reference CAD application yellow "
           f"{ui.SELECT_COLOR}")
     check(_close(tuple(v3d.wire), (0.0, 0.0, 0.0)),
           f"wire theme {tuple(v3d.wire)} != black")
@@ -613,7 +613,7 @@ except Exception as exc:  # noqa: BLE001
 # asks "is a Top view somewhere?"), so it cannot catch a vertical flip. This
 # quadrant assertion is what catches it: map each headless pane to a screen
 # quadrant (Blender's y grows UPWARD, so larger y = top row) and require the
-# exact Rhino default view at each corner.
+# exact the reference CAD application default view at each corner.
 try:
     v3d_areas = [a for a in bpy.context.screen.areas if a.type == "VIEW_3D"]
     if len(v3d_areas) == 4:

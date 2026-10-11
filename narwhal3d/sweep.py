@@ -4,7 +4,7 @@ MEASURED (commands/sweep1.htm): a frame is built at stations along the rail and 
 cross-section is oriented into each frame; the surface passes through the swept
 sections. Two frame styles are worth having and are built here:
 
-* **Freeform** (Rhino's default) -- "the cross-section rotates to maintain its angle
+* **Freeform** (the reference CAD application's default) -- "the cross-section rotates to maintain its angle
   to the rail throughout the sweep": a rotation-minimising frame (double-reflection
   RMF, Wang et al.), i.e. parallel transport with no artificial twist.
 * **Roadlike** -- a fixed up-axis. The help's exact construction: ``x = tangent x up``,
@@ -264,7 +264,7 @@ def sweep1(rail, section, style="Freeform", up=None, stations=None):
 
     The stations are still SAMPLES of the rail, so the surface remains an approximation of
     the ideal swept surface -- but a SMOOTH one that passes through its samples, which is
-    what Rhino's own tolerance-fitted sweep is. The approximation's deviation is measured.
+    what the reference CAD application's own tolerance-fitted sweep is. The approximation's deviation is measured.
 
     A CLOSED rail yields a geometrically closed surface automatically: its first and last
     stations coincide, so the first and last sections do too (use `Roadlike` with a
@@ -302,7 +302,7 @@ def _sweep1_occt(rail, section, style, up):
     # ONLY A PLANAR RAIL. For a rectangle swept along a non-planar cubic, OCCT's frames
     # differ: corrected Frenet sits 5.7e-3 off
     # the converged rotation-minimising frame, and its constant-binormal law 2.8e-2 off
-    # Rhino's Roadlike construction. On a planar rail both coincide with the sampled frames to the
+    # the reference CAD application's Roadlike construction. On a planar rail both coincide with the sampled frames to the
     # sweep tolerance (6.7e-8), because the binormal is then the constant plane normal. A
     # non-planar rail keeps the sampled construction (which `loft_brep` gives an exact
     # recipe), rather than silently changing what Freeform/Roadlike mean.
@@ -367,7 +367,7 @@ def pipe(rail, radius, cap="None", style="Freeform", up=None, stations=None):
     planar end into a solid via `bridge.cap_planar_holes` (needs bpy); ``Round``
     (a hemispherical cap) is NOT implemented and raises by name. A `Flat`-capped pipe
     is a closed solid (`IsSolid == True`); `None` is not. Radius is constant (a
-    tapered start/end radius is a separate Rhino option, not built here).
+    tapered start/end radius is a separate the reference CAD application option, not built here).
     """
     # ANALYTIC FIRST. OCCT sweeps a circle along a rail into a single exact surface --
     # MEASURED, a quarter-circle rail gives one TORUS face, and capped its volume matches an

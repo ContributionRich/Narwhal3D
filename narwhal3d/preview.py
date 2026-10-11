@@ -5,7 +5,7 @@ Blender.
 
 Why this exists
 ---------------
-Rhino gives continuous feedback while you work: after the first click of `Line` a
+the reference CAD application gives continuous feedback while you work: after the first click of `Line` a
 line follows the cursor until you click again, `Circle` grows as you move, and so
 on. The help calls it a **dynamic preview** ("Preview -- Displays a dynamic
 preview", `commands/array.htm`; "as you move the cursor ... you will see a dynamic
@@ -123,7 +123,7 @@ def rectangle_polyline(plane, corner, opposite):
 # Both of these are MEASURED to need one:
 #   commands/distance.htm -- "Pick the first point. Pick the second point."
 #   commands/mirror.htm   -- "Pick the start of the mirror plane. Pick the end of
-#                            the mirror plane. AS YOU MOVE THE CURSOR, RHINO
+#                            the mirror plane. AS YOU MOVE THE CURSOR, THE REFERENCE CAD APPLICATION
 #                            PREVIEWS THE LOCATION FOR THE MIRRORED OBJECTS."
 #
 # `Move` and `Copy` use their own translation-vector preview below.
@@ -157,7 +157,7 @@ def preview_mirror(args, cursor, plane):
     CPlane normal, so there is nothing hidden.
 
     WHAT THIS IS NOT, and the gap is deliberate. The same page says "as you move the
-    cursor, Rhino previews the location for the MIRRORED OBJECTS" -- a ghost of the
+    cursor, the reference CAD application previews the location for the MIRRORED OBJECTS" -- a ghost of the
     result, not just the axis. That needs the selected objects' geometry, and
     `segments(name, args, cursor, plane)` is handed no geometry at all. Widening that
     signature would be required to draw that ghost. The axis is the complete portion
@@ -178,7 +178,7 @@ def preview_move(args, cursor, plane):
     axis. The two-point form provides both the "from" point and the cursor position
     needed for this rubber band.
 
-    WHAT THIS IS NOT: the same deliberate gap as `preview_mirror`. Rhino also ghosts
+    WHAT THIS IS NOT: the same deliberate gap as `preview_mirror`. the reference CAD application also ghosts
     the moved objects at the cursor; that needs the selected objects' geometry, which
     `segments()` is not handed. Drawing the vector is the honest part that can be done
     without it.
@@ -286,7 +286,7 @@ def preview_curve(args, cursor, plane):
     """`Curve`/`InterpCrv`: the SMOOTH curve the picks define, not the chain.
 
     The cursor is treated as the next control point, so the curve flexes as you
-    move -- which is what Rhino shows. See `control_point_curve_polyline`.
+    move -- which is what the reference CAD application shows. See `control_point_curve_polyline`.
     """
     pts = points_only(args)
     if not pts:
@@ -298,7 +298,7 @@ def preview_curve(args, cursor, plane):
 def preview_circle(args, cursor, plane):
     """`Circle`: a circle about the picked centre, sized by the cursor.
 
-    Also draws the radius line, which is what Rhino shows while you drag.
+    Also draws the radius line, which is what the reference CAD application shows while you drag.
     """
     pts = points_only(args)
     if not pts:
@@ -406,7 +406,7 @@ def preview_ellipse(args, cursor, plane):
 def polygon_polyline(plane, center, radius, sides, inscribed=True):
     """A regular polygon of `radius` and `sides` about `center`, in `plane`.
 
-    `inscribed` (Rhino's default) means the corners sit on a circle of the given
+    `inscribed` (the reference CAD application's default) means the corners sit on a circle of the given
     radius; `circumscribed` means the side midpoints do (the radius is the
     apothem), so the corner radius is `radius / cos(pi/sides)`. Returns a closed
     polyline, or [] for a degenerate input. This mirrors bridge.make_polygon's
@@ -559,7 +559,7 @@ def _arc_polyline(start, end, through, segments=CIRCLE_SEGMENTS):
     This is pure preview geometry: the committed curve is built by
     bridge.make_arc via rhino3dm. Here we find the circumcircle of the triangle
     (start, through, end) and sample the arc from `start` to `end` that passes
-    through `through` -- which is exactly what Rhino's default three-point arc
+    through `through` -- which is exactly what the reference CAD application's default three-point arc
     is. Returns [] when the points are degenerate (collinear / coincident), in
     which case there is no arc to show.
     """
@@ -871,7 +871,7 @@ def preview_revolve(args, cursor, plane):
     axis points -- and the axis IS the thing the curve revolves about, so a
     segment from point 1 to the cursor is the whole preview.
 
-    WHAT THIS IS NOT, the same deliberate gap as `preview_mirror`: Rhino also
+    WHAT THIS IS NOT, the same deliberate gap as `preview_mirror`: the reference CAD application also
     ghosts the revolved surface as the cursor moves. That needs the curve's
     geometry, which `segments(name, args, cursor, plane)` is not handed; the
     axis is the part that can be drawn without it, and the shortfall is

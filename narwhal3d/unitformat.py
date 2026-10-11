@@ -35,7 +35,7 @@ denominator 16 carries to the whole and prints ``1`` (Fractional) / ``1"``
 
 ``model_unit`` is accepted for API completeness (the value is already in it) but
 does not alter the rendered string; the display mode is independent of the
-underlying unit in Rhino.
+underlying unit in the reference CAD application.
 """
 from __future__ import annotations
 

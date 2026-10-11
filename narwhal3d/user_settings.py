@@ -18,7 +18,7 @@ The contract:
   so a bad settings file cannot stop the app at startup.
 
 The default values below are application choices. In particular, the
-``autosave_minutes`` interval is not documented in Rhino's help.
+``autosave_minutes`` interval is not documented in the reference CAD application's help.
 """
 from __future__ import annotations
 
@@ -28,7 +28,7 @@ import os
 #: The initial preference schema. A new preference is added as a new key here. Types are inferred from these values (int -> int,
 #: str -> str), and that is the type contract for set() and load().
 DEFAULTS = {
-    "autosave_minutes": 20,        # Rhino's default interval is not documented
+    "autosave_minutes": 20,        # the reference CAD application's default interval is not documented
     "recent_limit": 10,
     "default_print_size": "Letter",
 }

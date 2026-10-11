@@ -1,4 +1,4 @@
-"""Rhino's object snaps (Osnap). **No `bpy`, no rhino3dm** -- pure, so testable.
+"""the reference CAD application's object snaps (Osnap). **No `bpy`, no rhino3dm** -- pure, so testable.
 
 Why this module exists
 ---------------------
@@ -29,7 +29,7 @@ The snap radius is in PIXELS
 activation area radius in pixels."* A pure module cannot know about pixels, so
 callers pass a **world-space** radius they derived from the view scale, and
 :data:`DEFAULT_RADIUS_PX` is offered for that conversion. This matters: a snap
-radius in world units would grow and shrink as you zoom, which is not what Rhino
+radius in world units would grow and shrink as you zoom, which is not what the reference CAD application
 does.
 
 What is implemented, and what is honestly not
@@ -54,7 +54,7 @@ displays"* but never gives an explicit priority order for when several snaps are
 in range. `Near` snaps to *any* point along a curve, so it is almost always the
 closest candidate and would drown out `End`/`Mid`/`Cen` entirely if it competed on
 distance. We therefore treat `Near` as a **fallback**: it is only used when no
-discrete snap is within the radius. That matches how Rhino behaves in practice but
+discrete snap is within the radius. That matches how the reference CAD application behaves in practice but
 is **not** quoted from the docs -- see :data:`NEAR_IS_FALLBACK`. If it is ever
 shown to be wrong, this is the one line to change.
 """
@@ -63,7 +63,7 @@ from __future__ import annotations
 import math
 
 # ---------------------------------------------------------------------------
-# the snap modes, named exactly as Rhino's Osnap control names them
+# the snap modes, named exactly as the reference CAD application's Osnap control names them
 # ---------------------------------------------------------------------------
 
 CEN = "Cen"
@@ -100,12 +100,12 @@ NEEDS_PREVIOUS_POINT = (PERP, TAN)
 #: See the module docstring -- this is an inference, not a documented rule.
 NEAR_IS_FALLBACK = True
 
-#: Rhino sets this in Options > Modeling Aids and the help does not state the
+#: the reference CAD application sets this in Options > Modeling Aids and the help does not state the
 #: shipped default, so this value is OURS and is labelled as such rather than
-#: presented as Rhino's.
+#: presented as the reference CAD application's.
 DEFAULT_RADIUS_PX = 10.0
 
-#: Which snaps start enabled. The help does not document Rhino's shipped set, so
+#: Which snaps start enabled. The help does not document the reference CAD application's shipped set, so
 #: this is our choice: every implemented DISCRETE snap, with `Near` off because it
 #: matches anywhere along a curve and is surprising when unrequested.
 DEFAULT_ENABLED = (CEN, END, MID, POINT, QUAD)
@@ -119,7 +119,7 @@ def is_implemented(mode: str) -> bool:
 def normalize(mode: str):
     """Accept any capitalisation of a snap name -> its canonical form, or None.
 
-    Rhino's command line is case-insensitive, so `end`, `END` and `End` are the
+    the reference CAD application's command line is case-insensitive, so `end`, `END` and `End` are the
     same snap.
     """
     if not mode:
@@ -175,7 +175,7 @@ class SnapTarget:
     locked
         Whether this object is locked. A plain bool, the same shape as
         `curve`: the engine excludes locked targets unless `SnapToLocked` is on
-        (`best(..., snap_to_locked=True)`). MEASURED default is False -- Rhino
+        (`best(..., snap_to_locked=True)`). MEASURED default is False -- the reference CAD application
         ships a *setting that turns snapping to locked objects ON*
         (options/modeling_aids.htm), which is proof the default is OFF. Populated
         by `bridge.snap_targets` from the object's Mode; hand-built pure tests
@@ -259,7 +259,7 @@ class Snap:
 # ---------------------------------------------------------------------------
 
 class SnapSettings:
-    """The state of Rhino's Osnap control: which snaps are on, and Disable.
+    """The state of the reference CAD application's Osnap control: which snaps are on, and Disable.
 
     Pure state + the documented rules for reading it, so the "which snaps apply
     right now" question has exactly one answer that tests can pin.
@@ -280,7 +280,7 @@ class SnapSettings:
         self.project = bool(project)
         self.radius_px = float(radius_px)
         #: Whether `SnapToLocked` allows object snaps to use locked objects.
-        #: MEASURED default is OFF -- Rhino ships a setting "Snap to locked
+        #: MEASURED default is OFF -- the reference CAD application ships a setting "Snap to locked
         #: objects" that turns this ON (options/modeling_aids.htm), and a setting
         #: that enables a behaviour is proof the behaviour is off by default. So
         #: today's engine must EXCLUDE locked targets unless this is set.
@@ -675,7 +675,7 @@ def _segments_cross(a1, a2, b1, b2, tol):
     A true crossing has closest points that coincide, so this uses the standard
     closest-points-between-segments test: compute the parameters of the closest
     pair, and accept the pair only when that distance is within `tol`. This is
-    correct for planar crossings (Rhino's `Int` case) and degrades gracefully to
+    correct for planar crossings (the reference CAD application's `Int` case) and degrades gracefully to
     "no crossing" for segments that merely run near each other.
     """
     d1 = (a2[0] - a1[0], a2[1] - a1[1], a2[2] - a1[2])
@@ -718,7 +718,7 @@ def intersection_targets(targets, cursor, tol=1e-6):
     not part of the per-target loop in :func:`candidates`. Each target's
     segments are pre-filtered by bounding box (see :func:`_bbox_overlap`) before
     the exact test, which bounds the O(n^2) cost. Self-intersection of one curve
-    is not attempted: Rhino's `Int` is between objects, and a single straight
+    is not attempted: the reference CAD application's `Int` is between objects, and a single straight
     line correctly yields none.
     """
     found = []
@@ -872,7 +872,7 @@ def best(targets, cursor, modes, plane=None, radius=None, *, base=None,
          snap_to_locked=False):
     """The snap the marker should jump to, or None.
 
-    `radius` is a WORLD distance (the caller converts Rhino's pixel radius -- see
+    `radius` is a WORLD distance (the caller converts the reference CAD application's pixel radius -- see
     the module docstring). None means "no limit", which is only useful in tests.
 
     `base` (keyword-only, default None) is the previously picked point that
@@ -880,7 +880,7 @@ def best(targets, cursor, modes, plane=None, radius=None, *, base=None,
     Every existing caller that omits it keeps its exact behaviour.
 
     `snap_to_locked` (keyword-only, default False) controls `SnapToLocked`.
-    While False -- the MEASURED Rhino default -- targets flagged `locked` are
+    While False -- the MEASURED the reference CAD application default -- targets flagged `locked` are
     dropped BEFORE any snap is computed, so a locked object can never be the
     answer. This is the one place the engine filters targets, the same spot the
     `exclude_names` pre-filter feeds; doing it here rather than in each snap mode
@@ -925,7 +925,7 @@ def best(targets, cursor, modes, plane=None, radius=None, *, base=None,
 # the CPlane -- a box's top, a raised curve -- lay 5 or 10 units "away" and was out of
 # range however close it looked.
 #
-# Rhino's radius is in PIXELS ("Osnap cursor sensitivity ... in pixels",
+# the reference CAD application's radius is in PIXELS ("Osnap cursor sensitivity ... in pixels",
 # options/modeling_aids.htm), i.e. it is measured where the user is looking: on the
 # screen. So the snap distance is the pixel distance between the mouse and each
 # candidate's projection. That is also what makes perspective right: a near and a far
@@ -1276,7 +1276,7 @@ def apply_projection(snap, plane, project):
 
 
 def world_radius(radius_px, pixels_per_unit):
-    """Rhino's pixel snap radius -> a world distance at this zoom level.
+    """the reference CAD application's pixel snap radius -> a world distance at this zoom level.
 
     Kept here, next to the rule it serves, so the conversion is tested rather
     than improvised at the call site. `pixels_per_unit` is how many screen pixels

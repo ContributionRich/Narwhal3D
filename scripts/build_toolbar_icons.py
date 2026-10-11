@@ -46,6 +46,20 @@ def active_commands():
     }
 
 
+def _write_placeholders():
+    path = ROOT / "narwhal3d" / "icon_generator.py"
+    spec = importlib.util.spec_from_file_location("narwhal_icon_generator", path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"cannot load {path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    wanted = set(module.icon_specs())
+    for path in OUTPUT.glob("*.png"):
+        if path.name not in wanted:
+            path.unlink()
+    module.write_icons(str(OUTPUT))
+
+
 def exact_matches():
     available = {path.stem for path in SOURCE.glob("*.png") if path.is_file()}
     active = active_commands()
@@ -67,6 +81,7 @@ def install():
     matched, missing = exact_matches()
     command = converter()
     OUTPUT.mkdir(parents=True, exist_ok=True)
+    _write_placeholders()
     with tempfile.TemporaryDirectory(prefix="narwhal3d-icons-") as temporary:
         temporary = Path(temporary)
         for name in matched:

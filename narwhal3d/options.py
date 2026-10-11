@@ -1,14 +1,14 @@
-"""Rhino command-line option framework. **No `bpy`, no rhino3dm.**
+"""the reference CAD application command-line option framework. **No `bpy`, no rhino3dm.**
 
 Why this module exists
 ---------------------
-Rhino commands are not just a fixed sequence of prompts. Almost every command is
+the reference CAD application commands are not just a fixed sequence of prompts. Almost every command is
 *driven* by options shown in brackets in the prompt::
 
     Corner of base ( Diagonal  Cube  3Point  Vertical  Center ):
     Offset distance <1.0> ( Loose=No  Corner=Sharp  Trim=Yes  BothSides=No ):
 
-Rhino documents hundreds of options across its commonly used commands. Options
+the reference CAD application documents hundreds of options across its commonly used commands. Options
 are central to the command-line workflow, so they need an explicit shared model.
 
 This module is the decidable, testable core of that: what an option *is*, how
@@ -19,7 +19,7 @@ imports, so it can be loaded directly and exercised without launching Blender. T
 (picking math), and for the same reason: logic that lives inside a Blender
 callback is logic no test can reach.
 
-The four kinds of option (taken from the Rhino 8 docs, not invented)
+The four kinds of option (taken from the the reference CAD application 8 docs, not invented)
 -------------------------------------------------------------------
 Verified against `commands/box.htm` and `commands/offset.htm`:
 
@@ -34,7 +34,7 @@ Verified against `commands/box.htm` and `commands/offset.htm`:
 ``VALUE``
     Prompts for a number or string, e.g. Offset's ``Distance``, ``Tolerance``.
 
-How Rhino matches what you type
+How the reference CAD application matches what you type
 -------------------------------
 * **Case-insensitive.**
 * **Unique prefix wins** -- the same rule as command names, so ``Dia`` selects
@@ -64,7 +64,7 @@ KINDS = (MODE, TOGGLE, ENUM, VALUE)
 
 #: the text did not look like any option -- treat it as a normal step argument
 NONE = "none"
-#: a prefix that fits more than one option; Rhino reports rather than guesses
+#: a prefix that fits more than one option; the reference CAD application reports rather than guesses
 AMBIGUOUS = "ambiguous"
 #: matched and a value was applied (inline form, or a toggle flip)
 SET = "set"
@@ -87,7 +87,7 @@ class Option:
     __slots__ = ("name", "kind", "default", "choices", "value_kind", "help")
 
     def __init__(self, name, kind, default=None, choices=(), value_kind="number",
-                 help=""):  # noqa: A002 - "help" mirrors the Rhino docs wording
+                 help=""):  # noqa: A002 - "help" mirrors the the reference CAD application docs wording
         if kind not in KINDS:
             raise ValueError(f"unknown option kind {kind!r} (expected one of {KINDS})")
         if kind == ENUM and not choices:
@@ -133,7 +133,7 @@ _FALSE = ("no", "n", "off", "false", "0")
 
 
 def parse_bool(text):
-    """Rhino accepts Yes/No, On/Off, True/False and 1/0. None if unrecognised."""
+    """the reference CAD application accepts Yes/No, On/Off, True/False and 1/0. None if unrecognised."""
     t = str(text).strip().lower()
     if t in _TRUE:
         return True
@@ -143,7 +143,7 @@ def parse_bool(text):
 
 
 def format_bool(value):
-    """Render a toggle the way Rhino prints it."""
+    """Render a toggle the way the reference CAD application prints it."""
     return "Yes" if value else "No"
 
 
@@ -253,7 +253,7 @@ def format_option(option, values=None):
     """One option as it appears in the prompt.
 
     MODE options print bare (``Diagonal``); the others print ``Name=Value``,
-    which is how Rhino shows their current setting.
+    which is how the reference CAD application shows their current setting.
     """
     if option.kind == MODE:
         return option.name
@@ -268,10 +268,10 @@ def format_option(option, values=None):
 
 
 def format_prompt(base, options, values=None):
-    """Render a Rhino-style prompt: ``Corner 1 ( Diagonal  Cube  Trim=Yes ):``
+    """Render a CAD-style prompt: ``Corner 1 ( Diagonal  Cube  Trim=Yes ):``
 
     The options list goes *inside* brackets before the trailing colon, which is
-    where Rhino puts it. A prompt with no options is returned untouched, so
+    where the reference CAD application puts it. A prompt with no options is returned untouched, so
     adding this framework cannot change how an option-less command looks.
     """
     base = (base or "").strip()
@@ -290,7 +290,7 @@ def prompt_segments(base, options, values=None):
     is a name are the ones the user can **click** in the command bar; the rest is
     surrounding punctuation (``( ``, ``  ``, `` ):``) and the base prompt.
 
-    Why this exists: Rhino's command-line options are buttons, not decoration --
+    Why this exists: the reference CAD application's command-line options are buttons, not decoration --
     you click ``2Point`` instead of typing it. To hit-test a click we need to know
     where each option's text starts and ends, and the only safe way to know that
     is to build the string out of labelled pieces instead of trying to re-parse

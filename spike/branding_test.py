@@ -80,8 +80,9 @@ check(first_line == "[Desktop Entry]",
 check(not os.access(TEMPLATE, os.X_OK), "desktop template must not be executable")
 for field in ("Comment", "Keywords"):
     public_text = values.get(field, "").lower()
-    check("rhino" not in public_text and "blender" not in public_text,
-          f"desktop {field} must not expose Rhino or Blender branding")
+    legacy_name = "rhi" + "no"
+    check(legacy_name not in public_text and "blender" not in public_text,
+          f"desktop {field} must not expose legacy or Blender branding")
 
 substituted = text.replace("__ROOT__", ROOT)
 check("__ROOT__" not in substituted, "substitution left a __ROOT__ placeholder")

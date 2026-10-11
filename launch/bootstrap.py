@@ -46,7 +46,7 @@ def _clear_default_scene():
 
 
 def _configure_units():
-    """Rhino defaults: millimeters, no unit scaling surprises."""
+    """the reference CAD application defaults: millimeters, no unit scaling surprises."""
     try:
         scene = bpy.context.scene
         scene.unit_settings.system = "METRIC"
@@ -63,7 +63,7 @@ def _hide_blender_chrome():
         for space in area.spaces:
             if space.type != "VIEW_3D":
                 continue
-            # Rhino shows a construction plane grid, not Blender's floor+axes combo
+            # the reference CAD application shows a construction plane grid, not Blender's floor+axes combo
             overlay = space.overlay
             overlay.show_cursor = False
             overlay.show_text = False

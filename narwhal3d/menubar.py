@@ -1,8 +1,9 @@
 """Pure menu models for Narwhal 3D.
 
-The compact product menu is available in two compatible forms: a dictionary tree for
-legacy callers and ordered renderer rows for the application shell.  All shipped leaf
-rows identify runnable commands; this module never guesses an action from its label.
+The complete product menu is available in two compatible forms: a dictionary tree for
+legacy callers and ordered renderer rows for the application shell. Shipped leaves are
+either runnable commands or explicitly marked unavailable actions; this module never
+guesses an action from its label.
 """
 from __future__ import annotations
 

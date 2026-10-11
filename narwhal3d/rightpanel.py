@@ -18,7 +18,7 @@ def _display_value(aggregate_value):
 
 
 def property_rows(selection):
-    """Return Rhino-style Object Properties rows for zero or more objects.
+    """Return CAD-style Object Properties rows for zero or more objects.
 
     This is deliberately a pure view adapter: it only aggregates supplied
     :class:`ObjectProperties` values.  Unsupported/non-persistent fields are
@@ -126,7 +126,7 @@ def layout(width, height, title_h=None):
     ``body``
         everything left for the active panel's content.
 
-    `title_h` defaults to the Verified Rhino caption height, but the drawing site
+    `title_h` defaults to the Verified the reference CAD application caption height, but the drawing site
     passes **0**: our band is hosted in a Blender ``INFO`` area, whose own header
     region already sits above the WINDOW region we paint and already carries the
     caption (the left dock band does the same). Drawing a second one inside the
@@ -209,7 +209,7 @@ NAME_COL_W = 79
 #: Width of every compact state column.
 NARROW_COL_W = 20
 
-#: The columns follow Rhino's Layer Properties order: Name, Current, On/Off,
+#: The columns follow the reference CAD application's Layer Properties order: Name, Current, On/Off,
 #: Lock/Unlock, Color, Material, Linetype, Print Color, Print Width, and Section Style.
 #: The compact panel exposes the first six.
 COLUMNS = ("Name", "Current", "On", "Lock", "Color", "Material")
@@ -218,7 +218,7 @@ COLUMNS = ("Name", "Current", "On", "Lock", "Color", "Material")
 def name_column_width(width=None, count=len(COLUMNS)):
     """Responsive Name-column width; measured width at the default panel size.
 
-    Rhino's compact state columns remain fixed while the descriptive Layer/Name
+    the reference CAD application's compact state columns remain fixed while the descriptive Layer/Name
     column consumes additional dock width. ``None`` preserves the measured default.
     """
     if width is None:

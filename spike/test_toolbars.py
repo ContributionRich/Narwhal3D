@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Focused pure tests for Narwhal 3D's original temporary toolbar layer."""
+"""Focused pure tests for Narwhal 3D's complete workflow toolbar layer."""
 from __future__ import annotations
 
-import ast
 from collections.abc import Iterator
+import importlib
 import importlib.util
 import os
 import struct
@@ -50,28 +50,15 @@ def check(condition: object, label: str, detail: object = "") -> None:
         failures.append(label)
 
 
-def core_command_names() -> set[str]:
-    """Read names of classes actually listed in commands._build_registry."""
-    path = os.path.join(PACKAGE_DIR, "commands.py")
-    with open(path, encoding="utf-8") as stream:
-        tree = ast.parse(stream.read(), filename=path)
-    class_commands: dict[str, str] = {}
-    registry_classes: set[str] = set()
-    for node in tree.body:
-        if isinstance(node, ast.ClassDef):
-            for item in node.body:
-                if (isinstance(item, ast.Assign)
-                        and any(isinstance(target, ast.Name) and target.id == "name"
-                                for target in item.targets)
-                        and isinstance(item.value, ast.Constant)
-                        and isinstance(item.value.value, str)):
-                    class_commands[node.name] = item.value.value.lower()
-        if isinstance(node, ast.FunctionDef) and node.name == "_build_registry":
-            for child in ast.walk(node):
-                if isinstance(child, ast.For) and isinstance(child.iter, ast.List):
-                    registry_classes.update(
-                        item.id for item in child.iter.elts if isinstance(item, ast.Name))
-    return {class_commands[name] for name in registry_classes if name in class_commands}
+def live_command_names() -> set[str]:
+    """Load the same command providers as the running application, without bpy."""
+    commands = importlib.import_module("narwhal3d.commands")
+    for provider in (
+        "import_commands", "solid_commands", "file_commands", "print_commands",
+        "export_commands", "display_commands", "layer_commands",
+    ):
+        importlib.import_module(f"narwhal3d.{provider}")
+    return set(commands.COMMANDS)
 
 
 def all_records() -> Iterator[dict[str, object]]:
@@ -80,34 +67,43 @@ def all_records() -> Iterator[dict[str, object]]:
     yield from data.SIDEBAR["buttons"]
 
 
-print("\n1. Original compact content")
+print("\n1. Complete original workflow content")
 names = toolbars.tab_names()
+expected_names = (
+    "Standard", "CPlanes", "Set View", "Display", "Select", "Visibility",
+    "Transform", "Curve Tools", "Surface Tools", "Solid Tools", "SubD Tools",
+    "Mesh Tools", "Drafting", "Analyze", "Render",
+)
 check(toolbars.container_name() == "Narwhal 3D", "container uses the Narwhal 3D identity")
-check(5 <= len(names) <= 8, "the top strip has a compact number of categories", names)
-check({"File", "Draw", "Edit", "Transform", "Solid", "View"}.issubset(names),
-      "categories cover the main modeling workflows", names)
+check(names == expected_names, "the workflow tab sequence is complete and pinned", names)
 check(len(names) == len(set(names)), "category names are unique")
 check(toolbars.default_tab() in names, "the default category is valid")
 check(all(toolbars.tab_rows(name, set()) for name in names), "every category contains actions")
 
 primary = [record for tab in data.TABS for record in tab["buttons"]]
 commands = [record["command"] for record in primary]
-core = core_command_names()
-check(len(primary) < 100, "the temporary toolbar stays deliberately small", len(primary))
+implemented = live_command_names()
+check(len(implemented) == 166, "the app-equivalent registry has 166 commands", len(implemented))
+check(len(primary) == 176, "the fuller toolbar has a pinned, bounded action count", len(primary))
 check(len(commands) == len(set(commands)), "each primary action appears in one category")
-check(set(commands) <= core, "every toolbar action is in the implemented core registry",
-      sorted(set(commands) - core))
+ambiguous = [record for record in primary
+             if (record["command"] in implemented)
+             == str(record["text"]).endswith(data.TODO_SUFFIX)]
+check(not ambiguous, "every toolbar action is runnable or visibly marked not implemented",
+      [record["command"] for record in ambiguous])
 check(not any(not record["text"] or not record["tooltip"] for record in primary),
       "every action has an original label and hover description")
 
 print("\n2. Stable Button API, hover text, right actions, and flyouts")
-implemented = set(commands)
 rows = [button for name in names for button in toolbars.tab_rows(name, implemented)]
 required_attrs = ("text", "tooltip", "left", "right", "right_tooltip", "icon",
                   "link", "enabled", "right_enabled", "label")
 check(rows and all(all(hasattr(button, attr) for attr in required_attrs) for button in rows),
       "Button retains every field consumed by the host UI")
-check(all(button.enabled for button in rows), "all primary category actions are runnable")
+check(sum(button.enabled for button in rows) == 145,
+      "145 implemented toolbar actions are enabled", sum(button.enabled for button in rows))
+check(all((button.enabled or "not implemented yet" in button.hover_text()) for button in rows),
+      "unavailable toolbar actions explain that they are not implemented")
 check(all(button.text.lower() in button.hover_text().lower() for button in rows),
       "hover text identifies every primary action")
 check(all(not button.enabled and "not implemented yet" in button.hover_text()
@@ -116,7 +112,7 @@ check(all(not button.enabled and "not implemented yet" in button.hover_text()
 
 sidebar = toolbars.sidebar_buttons(implemented)
 check(toolbars.sidebar_name() == "Narwhal Tools", "the left sidebar has a project-owned name")
-check(12 <= len(sidebar) <= 24, "the favorites sidebar is compact but useful", len(sidebar))
+check(len(sidebar) == 52, "the favorites sidebar is a dense 52-cell palette", len(sidebar))
 check(all(button.icon and button.left for button in sidebar), "every favorite has an icon and action")
 righties = [button for button in sidebar if button.right]
 check(righties and all(button.right_enabled for button in righties),
@@ -132,7 +128,7 @@ check(toolbars.sidebar_flyout_rows(sidebar[-1], implemented) == [],
       "an unlinked favorite does not invent a flyout")
 
 enabled, total = toolbars.coverage(implemented)
-check((enabled, total) == (len(primary), len(primary)), "coverage reports all compact actions")
+check((enabled, total) == (145, 176), "coverage separates runnable and TODO actions")
 check(toolbars.tab_rows("Not A Category", implemented) == [],
       "an unknown category remains harmless")
 
@@ -168,9 +164,10 @@ for path in resolved:
     png_ok = png_ok and struct.unpack(">II", blob[16:24]) == (24, 24)
 check(png_ok, "every bundled icon is a valid-looking 24x24 PNG")
 
-curated_icons = {f"narwhal-{command}.png" for command in data.CURATED_ICON_COMMANDS}
-check(len(curated_icons) == 62 and curated_icons <= record_icons,
-      "62 active commands use exact or explicitly mapped source artwork")
+matched_sources, missing_sources = builder.exact_matches()
+curated_icons = {f"narwhal-{command}.png" for command in matched_sources}
+check(len(curated_icons) == 93 and curated_icons <= record_icons,
+      "93 toolbar actions use exact or explicitly mapped source artwork")
 with tempfile.TemporaryDirectory() as generated_dir:
     generated = generator.write_icons(generated_dir)
     placeholders_match = len(generated) == len(all_icons)
@@ -190,13 +187,10 @@ for path in source_icons:
     blob = path.read_bytes()[:24]
     source_dimensions.append(
         blob[:8] == b"\x89PNG\r\n\x1a\n" and struct.unpack(">II", blob[16:24]) == (96, 96))
-matched_sources, missing_sources = builder.exact_matches()
 check(len(source_icons) == 181 and all(source_dimensions),
       "181 licensed source icons are preserved as 96x96 PNGs")
-check(set(matched_sources) == data.CURATED_ICON_COMMANDS,
-      "the public source mapping resolves every curated active command")
-check(missing_sources == ["delete", "namedcplane"],
-      "only Delete and NamedCPlane still lack active command artwork", missing_sources)
+check(len(missing_sources) == 83 and {"delete", "namedcplane", "render", "subd", "text"} <= set(missing_sources),
+      "unmatched toolbar actions retain generated placeholders", missing_sources)
 license_text = (builder.SOURCE / "README.md").read_text(encoding="utf-8")
 check("GPL-3.0-or-later" in license_text and "ContributionRich" in license_text,
       "source artwork carries its contributor and GPL licence declaration")
@@ -245,7 +239,9 @@ check(toolbars.hit_tab_row(wide[0][2], mid_y, wide, 100.0) == names[1],
 
 columns = toolbars.sidebar_columns(117)
 cells = toolbars.sidebar_cells(len(sidebar), 0.0, 300.0, columns=columns)
-check(columns == 4 and len(cells) == len(sidebar), "favorites reflow into a four-column grid")
+check(columns == 4 and len(cells) == 52, "favorites reflow into a four-column grid")
+check(toolbars.sidebar_rows(len(sidebar), columns) == 13,
+      "the default sidebar forms thirteen dense rows")
 check(toolbars.sidebar_rows(len(sidebar), columns) * toolbars.SIDEBAR_CELL
       == toolbars.sidebar_height(len(sidebar), columns), "favorites height follows row count")
 linked_index = next(index for index, button in enumerate(sidebar) if button.link)

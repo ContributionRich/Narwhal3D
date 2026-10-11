@@ -74,7 +74,7 @@ TMP = tempfile.mkdtemp(prefix="g89_")
 
 
 def doc(unit="Millimeters"):
-    m = model.RhinoModel()
+    m = model.NarwhalModel()
     m.set_unit_system(unit)
     return m
 
@@ -151,7 +151,7 @@ if ob.available():
     p3 = os.path.join(TMP, "imp.3dm")
     c.model.save(p3)
     kernel.forget_masters()
-    m2 = model.RhinoModel.load(p3)
+    m2 = model.NarwhalModel.load(p3)
     reopened = m2.file.Objects[0].Geometry
     reopened_master = kernel.master_of(reopened)
     reopened_volume = ob.volume(reopened_master) if reopened_master is not None else None
@@ -480,7 +480,7 @@ check(cache_ok and len(cache_model.file.Layers.records) == 3
 
 # The Open route uses the same cache and must have the same bounded table access.
 open_model_module = types.ModuleType("narwhal3d.model")
-open_model_module.RhinoModel = lambda: _CountModel((('Default', (1, 2, 3)),))
+open_model_module.NarwhalModel = lambda: _CountModel((('Default', (1, 2, 3)),))
 prior_model_module = sys.modules.get("narwhal3d.model")
 sys.modules["narwhal3d.model"] = open_model_module
 ic.read_foreign = lambda _path, _model: cache_got

@@ -1,11 +1,11 @@
-"""Rhino's coordinate entry: text -> a world point. **No `bpy`, no rhino3dm.**
+"""the reference CAD application's coordinate entry: text -> a world point. **No `bpy`, no rhino3dm.**
 
 Why this module exists
 ----------------------
-Rhino does **not** read a typed point as world XYZ. From
+the reference CAD application does **not** read a typed point as world XYZ. From
 ``user_interface/accurate_modeling.htm``:
 
-    "When Rhino prompts you for a point, if you type x and y Cartesian
+    "When the reference CAD application prompts you for a point, if you type x and y Cartesian
     coordinates, the point will lie on the construction plane of the current
     viewport." ... "Type ``w`` in front of the coordinates, to use the world
     coordinate system; otherwise the construction plane coordinates of the
@@ -14,7 +14,7 @@ Rhino does **not** read a typed point as world XYZ. From
 So ``1,2`` means *1 along the active CPlane's x axis, 2 along its y axis*. In a
 Front viewport that is world ``(1, 0, 2)`` -- **not** ``(1, 2, 0)``, which is what
 ``commands.parse_point`` produced before this module existed. That single
-difference is why drawing in Front or Right did not behave like Rhino.
+difference is why drawing in Front or Right did not behave like the reference CAD application.
 
 Supported, all documented in that page
 --------------------------------------
@@ -34,7 +34,7 @@ Typed                   Meaning
 ``d<a,z``               polar + elevation (z in the same system)
 ======================  ======================================================
 
-Polar angles: "Vector directions in Rhino start with zero degrees at 3 o'clock
+Polar angles: "Vector directions in the reference CAD application start with zero degrees at 3 o'clock
 ... They change in an anti (counter)-clockwise direction" -- measured in the
 CPlane for the plain/relative forms and in world XY for the ``w`` forms. An angle
 may carry the documented units: ``30``/``30d``/``30degrees``, ``0d20'50"``,
@@ -49,14 +49,14 @@ calculator (``10*sin(30degrees)``). Each returns a clear "not supported yet"
 message, because silently reading ``17<45`` as something else would put geometry
 in the wrong place -- worse than refusing it.
 
-Also note: a **bare number** is a *distance constraint* in Rhino ("Type a number
+Also note: a **bare number** is a *distance constraint* in the reference CAD application ("Type a number
 and press Enter. The marker moves around the last point at the specified
 distance"), not a coordinate -- and so is a bare ``<angle``. Both need the live
 cursor, so they are NOT coordinates and this module still refuses them; the
 constraint itself lives in `pickconstraint` and is applied by the viewport.
 The documented ``0`` / ``w0`` origin shortcuts are the exception. The old
 ``parse_point`` silently turned ``5`` into ``(5, 0, 0)``, which is not a thing
-Rhino does.
+the reference CAD application does.
 """
 from __future__ import annotations
 
@@ -68,7 +68,7 @@ UNSUPPORTED = "not supported yet"
 
 _NUM = r"(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?"
 
-#: MEASURED (accurate_modeling.htm, "Entering numbers"): the angle units Rhino
+#: MEASURED (accurate_modeling.htm, "Entering numbers"): the angle units the reference CAD application
 #: documents by name. Each maps to degrees-per-unit.
 _ANGLE_WORDS = {
     "": 1.0, "d": 1.0, "deg": 1.0, "degree": 1.0, "degrees": 1.0,
@@ -112,7 +112,7 @@ def parse_angle(text):
 # ---------------------------------------------------------------------------
 # Numbers are read by the command-line calculator, which also handles fractions
 # (`5/16`, `1-3/4`) and unit suffixes (`27cm`, `16'5"`) through `numparse`.
-# Rhino's accurate-modeling help states: "Any time
+# the reference CAD application's accurate-modeling help states: "Any time
 # you are entering a number, length, point coordinate, or angle, you can use a math
 # formula" and "The numbers will automatically convert to the model's units".
 # ---------------------------------------------------------------------------
@@ -188,12 +188,12 @@ def parse(text):
     """Split typed text into ``(coords, is_world, is_relative, error)``.
 
     ``coords`` is a 3-tuple of floats in whichever system the flags describe.
-    On failure ``coords`` is None and ``error`` explains why, in Rhino's terms.
+    On failure ``coords`` is None and ``error`` explains why, in the reference CAD application's terms.
     """
     raw = (text or "").strip()
     if not raw:
         return None, False, False, "no coordinate given"
-    # Rhino: "There are no spaces between the coordinate values."
+    # the reference CAD application: "There are no spaces between the coordinate values."
     if any(c.isspace() for c in raw):
         return None, False, False, "a coordinate may not contain spaces"
 
@@ -203,7 +203,7 @@ def parse(text):
     if raw.startswith("<"):
         # a bare `<angle` is an ANGLE CONSTRAINT on the next pick, not a point
         return None, False, False, (
-            f"{raw!r} is an angle constraint in Rhino, not a coordinate")
+            f"{raw!r} is an angle constraint in the reference CAD application, not a coordinate")
 
     # --- prefixes, longest first so `rw` is not eaten by `r` ---------------
     rest = raw
@@ -235,7 +235,7 @@ def parse(text):
         if value == 0.0:
             return (0.0, 0.0, 0.0), is_world, is_relative, None
         return None, False, False, (
-            f"a bare number is a distance constraint in Rhino (it locks the "
+            f"a bare number is a distance constraint in the reference CAD application (it locks the "
             f"next pick's distance from the last point), not a coordinate; "
             f"type x,y or x,y,z for a point")
 
@@ -367,7 +367,7 @@ def format_world(point, precision=None):
     double transform was the identity and the bug was invisible -- which is why it
     only showed up in Front and Right.
 
-    The ``w`` prefix is Rhino's own documented way to say "these are world
+    The ``w`` prefix is the reference CAD application's own documented way to say "these are world
     coordinates" (``user_interface/accurate_modeling.htm``: "Type ``w`` in front of
     the coordinates, to use the world coordinate system"), so this is fidelity,
     not a workaround.

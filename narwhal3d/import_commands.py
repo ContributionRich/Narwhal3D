@@ -650,9 +650,9 @@ def open_foreign(path):
     it cannot be read. The new model has the default units; the file's own units are
     converted into them. `file_commands` uses this for the extensions in `FORMATS`
     and then rebuilds the display."""
-    from .model import RhinoModel
+    from .model import NarwhalModel
 
-    model = RhinoModel()
+    model = NarwhalModel()
     try:
         got = read_foreign(path, model)
     except ValueError as e:

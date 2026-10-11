@@ -1,6 +1,6 @@
 """Autosave + recovery files. **No `bpy`, no rhino3dm.**
 
-Autosave supports safe exit and recovery. The behaviour follows Rhino's options
+Autosave supports safe exit and recovery. The behaviour follows the reference CAD application's options
 help (options/files.htm):
 
     "AutoSave: Save every ___ minutes ... a copy of the model you are working on
@@ -61,7 +61,7 @@ def due(now, last_save_time, minutes):
     """Is an autosave due now?
 
     True when at least ``minutes`` have elapsed since ``last_save_time``.
-    ``minutes <= 0`` means **never** (autosave is switched off in Rhino's
+    ``minutes <= 0`` means **never** (autosave is switched off in the reference CAD application's
     options), so it is always False -- even a very old ``last_save_time``.
     A ``None`` / equal instant is treated as "just saved" (False).
     """

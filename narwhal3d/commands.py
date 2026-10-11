@@ -1,8 +1,8 @@
-"""Rhino commands: prompt-driven state machines + geometry execution.
+"""the reference CAD application commands: prompt-driven state machines + geometry execution.
 
 Each Command walks a sequence of steps (prompt -> parsed arg). Enter with an
 empty input finishes variable-point commands or repeats the command, matching
-Rhino's command-line behavior.
+the reference CAD application's command-line behavior.
 """
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ from . import bridge
 # the Gumball's pure geometry/mode rules. bpy-free and rhino3dm-free, so
 # importing it here is safe everywhere; `GumballNumericCmd` needs its mode table.
 from . import gumball
-# construction planes (a real orthonormal frame) and Rhino's
+# construction planes (a real orthonormal frame) and the reference CAD application's
 # coordinate-entry syntax. Both are pure and bpy-free, so the rules can be
 # exercised without Blender.
 from . import cplane
@@ -71,7 +71,7 @@ from . import grid_settings
 from . import layer_states
 # OptionsImport/OptionsExport expose only the Aliases text
 # interchange.  The table itself is pure and atomic; these commands add
-# file I/O and deliberately do not pretend to cover all Rhino Options.
+# file I/O and deliberately do not pretend to cover all reference application options.
 from . import alias_table
 
 
@@ -82,7 +82,7 @@ from . import alias_table
 def parse_point(text: str, plane=None, last=None):
     """Typed text -> a WORLD point, read in `plane`'s coordinates.
 
-    Rhino reads a typed point in the ACTIVE VIEWPORT'S construction plane, not in
+    the reference CAD application reads a typed point in the ACTIVE VIEWPORT'S construction plane, not in
     world coordinates (the command behavior), so in a Front
     viewport ``1,2`` is world ``(1, 0, 2)``. The syntax (``w`` for world, ``r``/
     ``@`` for relative, the ``0``/``w0`` shortcuts, and which forms are refused)
@@ -90,7 +90,7 @@ def parse_point(text: str, plane=None, last=None):
 
     `plane` defaults to World Top, where CPlane and world coordinates coincide --
     so a caller with no viewport (the headless suites) behaves exactly as before.
-    Raises ValueError with Rhino's own wording when the text is not a coordinate.
+    Raises ValueError with the reference CAD application's own wording when the text is not a coordinate.
     """
     if plane is None:
         plane = cplane.WORLD_TOP
@@ -174,7 +174,7 @@ class Command:
     # each step: (prompt, kind)  kind in point|number|name|text
     steps: list[tuple[str, str]] = []
     variable_points = False  # keep asking points until empty input
-    # Rhino command-line options, as a tuple of options.Option. Empty by
+    # the reference CAD application command-line options, as a tuple of options.Option. Empty by
     # default, so a command that declares none behaves exactly as before.
     options: tuple = ()
     # set True for one feed (by `ui`) when the user holds Alt while
@@ -183,7 +183,7 @@ class Command:
     # autoclose." Default False; a command that does not autoclose never reads it.
     suspend_autoclose = False
     # How many LEADING `name` steps this command will take from the existing
-    # selection instead of prompting for. Rhino's normal shape is "select the
+    # selection instead of prompting for. the reference CAD application's normal shape is "select the
     # objects, then run the command": the command behavior's steps are
     # "Select a curve. Specify a distance." -- there is no curve PROMPT at all.
     #
@@ -244,7 +244,7 @@ class Command:
             base = self.steps[self.step_index][0]
         else:
             return ""
-        # Rhino shows the options in brackets before the colon. With no
+        # the reference CAD application shows the options in brackets before the colon. With no
         # options this returns `base` untouched.
         return opts.format_prompt(base, self.options, self.opt)
 
@@ -266,7 +266,7 @@ class Command:
         return cplane.WORLD_TOP
 
     def _last_point(self):
-        """The previous picked point, for Rhino's relative (``r``/``@``) forms."""
+        """The previous picked point, for the reference CAD application's relative (``r``/``@``) forms."""
         for value in reversed(self.args):
             if isinstance(value, tuple) and len(value) == 3:
                 return value
@@ -281,7 +281,7 @@ class Command:
         lands at z = 0 and a height along Z came out as 0 every time -- `ExtrudeCrv`
         did nothing in Perspective, and `Cylinder`/`Cone` had the same defect.
 
-        This is Rhino's elevator/direction constraint. None means "no constraint", which is
+        This is the reference CAD application's elevator/direction constraint. None means "no constraint", which is
         the right default: only a command that knows it is measuring along a direction can say
         what that direction is.
 
@@ -307,7 +307,7 @@ class Command:
 
     @classmethod
     def radius_from(cls, value, mode):
-        """Convert a typed `value` under `mode` to the radius Rhino would build.
+        """Convert a typed `value` under `mode` to the radius the reference CAD application would build.
 
         The documented size modes are:
 
@@ -339,7 +339,7 @@ class Command:
     def _parse_distance(self, text, ctx):
         """A DISTANCE step: a typed number, or a picked location.
 
-        Rhino accepts both (see:data:`DISTANCE`). A bare number is the distance
+        the reference CAD application accepts both (see:data:`DISTANCE`). A bare number is the distance
         itself; anything else must be a coordinate, and the distance is then how
         far that point lies from:meth:`_distance_base` -- which is exactly what
         "pick a radius location" means.
@@ -359,7 +359,7 @@ class Command:
     def _numeric_input_wins(self, text: str) -> bool:
         """True when `text` is a number the CURRENT step wants, so it beats options.
 
-        Rhino has real options whose names start with a digit -- `2Point` and
+        the reference CAD application has real options whose names start with a digit -- `2Point` and
         `3Point` -- and our unique-prefix matching made the bare token `2` a
         prefix of `2Point`. At Circle's `Radius:` prompt that meant a radius of 2
         or 3 silently branched into an unimplemented option instead of being the
@@ -465,7 +465,7 @@ class Command:
     def _autoclose_tolerance(self, ctx=None):
         """The gap still counted as "the start point".
 
-        Rhino judges coincidence against the document's **absolute tolerance** --
+        the reference CAD application judges coincidence against the document's **absolute tolerance** --
         `ctx.model`'s (DocumentProperties, model units), see
         `_document_tolerance`. It used to be the 0.01 default whatever the document.
         """
@@ -497,7 +497,7 @@ class Command:
             out = self.on_mode(m.option.name, ctx)
             self._note_mode(m.option.name, out)
             return out
-        # AMBIGUOUS / INVALID: report and stay put, as Rhino does
+        # AMBIGUOUS / INVALID: report and stay put, as the reference CAD application does
         return m.message, False
 
     #: MODE options that are one-shot ACTIONS, not states -- never shown as "in use"
@@ -530,7 +530,7 @@ class Command:
         """Called right after the command is named.
 
         Zero-step commands (Help/Zoom) run immediately on the naming Enter,
-        like Rhino. A command whose first step is a set-step (Delete,
+        like the reference CAD application. A command whose first step is a set-step (Delete,
         Hide, Lock, PointsOn, PointsOff) likewise runs immediately when a
         pre-selection is present. Returns (message|None, done:bool).
         """
@@ -542,14 +542,14 @@ class Command:
         self._take_preselection(ctx)
         self._take_objects_selection(ctx)
         if self.step_index >= len(self.steps) and not self.variable_points:
-            # the selection supplied everything; run now, as Rhino does
+            # the selection supplied everything; run now, as the reference CAD application does
             return self._recorded(ctx, lambda: self.execute(ctx))
         return None, False
 
     def _take_preselection(self, ctx):
         """Fill leading name steps from the current selection. Returns how many.
 
-        Rhino's normal flow is to select first and then run the command, so a
+        the reference CAD application's normal flow is to select first and then run the command, so a
         command that opts in (`preselect_names`) must not prompt for what is
         already selected. Only LEADING `name` steps are consumed, and only as many
         as `preselect_names` allows, so a command that also needs points still asks
@@ -638,7 +638,7 @@ class Command:
     def _feed_objects_step(self, text, ctx):
         """answer the current `objects` step.
 
-        The step is satisfied by the SELECTION or by a typed name (Rhino's object
+        The step is satisfied by the SELECTION or by a typed name (the reference CAD application's object
         prompt accepts both), so it gets its own branch (see ``_feed``) instead of
         falling into the load-bearing "empty Enter on a fixed prompt cancels" rule
         that the other step kinds rely on:
@@ -790,7 +790,7 @@ class Command:
         # is this an option rather than a step argument? `match` returns
         # NONE for ordinary input (points, decimals), so steps still work.
         #
-        # except for BARE INTEGERS. Rhino names two real options `2Point`
+        # except for BARE INTEGERS. the reference CAD application names two real options `2Point`
         # and `3Point`, and unique-prefix matching made `2` a prefix of `2Point` --
         # so at Circle's `Radius:` prompt, typing a radius of 2 or 3 silently ran
         # the 2Point/3Point option instead. You could not draw a circle of radius
@@ -799,7 +799,7 @@ class Command:
         # A value prompt takes a VALUE: when the current step wants a number or a
         # distance and the text parses as one, it is that number -- never an
         # option name. An option is still reachable there by its letters
-        # (`2P`, `2Po`, `2Point`), which is how Rhino invokes it.
+        # (`2P`, `2Po`, `2Point`), which is how the reference CAD application invokes it.
         if self.options and text and not self._numeric_input_wins(text):
             m = opts.match(text, self.options, self.opt)
             if m.status != opts.NONE:
@@ -809,7 +809,7 @@ class Command:
             # keep collecting points until an empty Enter finishes the command
             if not text:
                 return self.execute(ctx)
-            # a bad coordinate re-prompts (Rhino does not cancel the
+            # a bad coordinate re-prompts (the reference CAD application does not cancel the
             # command over a typo), so report it and stay on this step.
             try:
                 point = self._parse("point", text, ctx)
@@ -859,7 +859,7 @@ class Command:
             return f"{self.name} cancelled", True
 
         kind = self.steps[self.step_index][1]
-        # invalid input re-prompts instead of cancelling, as Rhino does.
+        # invalid input re-prompts instead of cancelling, as the reference CAD application does.
         try:
             value = self._parse(kind, text, ctx)
         except ValueError as e:
@@ -929,7 +929,7 @@ def _tag_representation(geom):
 def _assign_picture_material(model, obj_id, geom):
     """a Picture object entering the document gets its own Picture material.
 
-    Called by `RhinoContext.add_geometry`, so EVERY route a picture surface takes into the
+    Called by `NarwhalContext.add_geometry`, so EVERY route a picture surface takes into the
     document -- `Picture` itself, Copy, Mirror, a Split piece -- carries one. (the command behavior): "When a Picture plane is split and shrunk, a new material will
     be added for each new Picture plane." Returns the material index, or None.
     """
@@ -953,7 +953,7 @@ def _picture_display_material(image_path):
     import bpy
 
     path = os.path.abspath(image_path)
-    name = f"rhino_picture:{path}"
+    name = f"narwhal_picture:{path}"
     mat = bpy.data.materials.get(name)
     if mat is not None:
         return mat
@@ -992,7 +992,7 @@ def selection_plan(records, names):
     }
 
 
-class RhinoContext:
+class NarwhalContext:
     """Everything a command can touch: model, Blender scene, selection."""
 
     def __init__(self, model):
@@ -1008,7 +1008,7 @@ class RhinoContext:
     # The snapshot is taken at the moment of MUTATION, not when a command
     # starts. Two reasons, both learned from this codebase:
     #   * A command that changes nothing must leave no undo step -- a cancelled
-    #     `Line`, a `Zoom`, an osnap toggle. Rhino behaves that way, and lazy
+    #     `Line`, a `Zoom`, an osnap toggle. the reference CAD application behaves that way, and lazy
     #     capture gets it for free.
     #   * `Boolean` overrides `begin` and can mutate from there, so anything
     #     keyed only on the normal step flow would miss it. Hooking the mutation
@@ -1063,7 +1063,7 @@ class RhinoContext:
         `rebuild_display` deletes every Blender object and recreates it, so the
         selection -- and any reference held to a selected object -- does not
         survive it. Undoing a Gumball drag therefore used to make the widget
-        vanish, because nothing was selected any more. Rhino leaves an object
+        vanish, because nothing was selected any more. the reference CAD application leaves an object
         selected after undoing a change to it, so the names are captured and
         re-selected here.
 
@@ -1167,11 +1167,11 @@ class RhinoContext:
     def active_cplane(self):
         """The ACTIVE viewport's construction plane, or None if there is none.
 
-        Rhino reads a typed point in this plane's coordinates. `ui` is imported
+        the reference CAD application reads a typed point in this plane's coordinates. `ui` is imported
         lazily because `ui` imports this module, so a top-level import would be
         circular; and it imports `bpy`, which does not exist outside Blender.
         Returning None lets `Command._active_cplane` fall back to World Top,
-        which is what the headless suites (and Rhino's default Perspective
+        which is what the headless suites (and the reference CAD application's default Perspective
         viewport) use.
         """
         try:
@@ -1207,7 +1207,7 @@ class RhinoContext:
 
     def object_by_name(self, name: str):
         import bpy
-        # Rhino names are case-insensitive
+        # the reference CAD application names are case-insensitive
         ob = bpy.data.objects.get(name)
         if ob is not None:
             return ob
@@ -1329,9 +1329,9 @@ class RhinoContext:
 
         if 0 <= layer_index < len(layers):
             r, g, b = (c / 255.0 for c in layers[layer_index]["color"][:3])
-            mat = bpy.data.materials.get(f"rhino_layer_{layer_index}")
+            mat = bpy.data.materials.get(f"narwhal_layer_{layer_index}")
             if mat is None:
-                mat = bpy.data.materials.new(f"rhino_layer_{layer_index}")
+                mat = bpy.data.materials.new(f"narwhal_layer_{layer_index}")
                 mat.use_nodes = True
                 bsdf = mat.node_tree.nodes.get("Principled BSDF")
                 if bsdf:
@@ -1340,7 +1340,7 @@ class RhinoContext:
 
     def _make_instance_display(self, fobj, display_name, layer_index, layers,
                                definitions, definition_objects, mesh_cache):
-        """Draw one Rhino block reference as one selectable, shared display object."""
+        """Draw one the reference CAD application block reference as one selectable, shared display object."""
         import bpy
 
         ref = fobj.Geometry
@@ -1356,8 +1356,8 @@ class RhinoContext:
             ob = bpy.data.objects.new(display_name, mesh)
             bpy.context.scene.collection.objects.link(ob)
         ob.matrix_world = self._matrix_from_xform(ref.Xform)
-        ob["rhino_instance_definition"] = definition_key
-        ob["rhino_instance_layer"] = int(layer_index)
+        ob["narwhal_instance_definition"] = definition_key
+        ob["narwhal_instance_layer"] = int(layer_index)
         return ob
 
     def _make_file_object_display(self, fobj, layers, definitions=None,
@@ -1378,8 +1378,8 @@ class RhinoContext:
             if mesh_cache is None:
                 mesh_cache = {}
                 for ob in bpy.data.objects:
-                    definition = ob.get("rhino_instance_definition")
-                    layer = ob.get("rhino_instance_layer")
+                    definition = ob.get("narwhal_instance_definition")
+                    layer = ob.get("narwhal_instance_layer")
                     if definition is not None and layer is not None and ob.data is not None:
                         mesh_cache[(str(definition), int(layer))] = ob.data
             return self._make_instance_display(
@@ -1391,7 +1391,7 @@ class RhinoContext:
         """Tessellate `geom` into a Blender object named `display_name`.
 
         Shared by add_geometry (new geometry) and rebuild_display (after Open). `fobj` (the
-        document object, when known) lets a REAL Rhino picture show its image.
+        document object, when known) lets a REAL the reference CAD application picture show its image.
 
         `layers`: the layer TABLE, pre-read by a caller that makes many objects in a
         loop (rebuild_display reads it ONCE, then passes it in). When None (add_geometry, or
@@ -1421,18 +1421,18 @@ class RhinoContext:
             # viewport layer can skip its edges, and Blender's own wire is off.
             ob.data.materials.append(_picture_display_material(frame["image"]))
             ob.show_wire = False
-            ob["rhino_picture"] = True
+            ob["narwhal_picture"] = True
             return ob
 
-        # color by layer (Rhino colors objects by layer by default)
+        # color by layer (the reference CAD application colors objects by layer by default)
         if layers is None:  # caller did not pre-read the table
             layers = self.model.layers()
         self._apply_layer_material(ob, layer_index, layers)
         return ob
 
     def _texture_frame(self, geom, fobj):
-        """A picture frame for a REAL Rhino picture: an all-planar brep whose render
-        material has a bitmap texture we can find (`model.object_texture_path`). Rhino maps
+        """A picture frame for a REAL the reference CAD application picture: an all-planar brep whose render
+        material has a bitmap texture we can find (`model.object_texture_path`). the reference CAD application maps
         a picture's image by the face's SURFACE PARAMETERS (its default mapping), so the
         frame is the first face's underlying surface: origin at (u0, v0), u and v along its
         domain. Returns None for anything else (it then draws in its layer colour)."""
@@ -1644,7 +1644,7 @@ class SizeStepMixin:
         """ while the size step means a diameter, the options
         offer `Radius` (in place of `Diameter`) so the user can toggle back;
         otherwise they offer `Diameter`. This is ONE option that flips, exactly
-        as Rhino's `Radius/Diameter` ("Toggles between accepting a radius value
+        as the reference CAD application's `Radius/Diameter` ("Toggles between accepting a radius value
         and a diameter value").
 
         Only a `Diameter` **MODE** option is swapped (Sphere / Cylinder / Cone);
@@ -1750,7 +1750,7 @@ class LineCmd(Command):
         if name == "Vertical":
             if self.args:
                 return "Line: Vertical is chosen before the start point", False
-            # Rhino's prompts in the command UI: "Start of line" / "End of line"
+            # the reference CAD application's prompts in the command UI: "Start of line" / "End of line"
             self.steps = [("Start of line:", POINT), ("End of line:", DISTANCE)]
             self._vertical = True
             return "Line: Vertical mode -- pick the start, then the end or a length.", False
@@ -1779,7 +1779,7 @@ class LineCmd(Command):
         n = self._normal(ctx)
         return sum((p[i] - start[i]) * n[i] for i in range(3))
 
-    def execute(self, ctx: RhinoContext):
+    def execute(self, ctx: NarwhalContext):
         p1, p2 = self.args
         if getattr(self, "_vertical", False):
             n = self._normal(ctx)
@@ -1804,7 +1804,7 @@ class PointCmd(Command):
     description = "Draw a single point object at a location."
     steps = [("Location:", POINT)]
 
-    def execute(self, ctx: RhinoContext):
+    def execute(self, ctx: NarwhalContext):
         (location,) = self.args
         geom = bridge.make_point(location)
         _, display_name = ctx.add_geometry(geom, "Point")
@@ -1881,11 +1881,11 @@ def _tangent_solution(cmd, ctx, what):
 class CircleCmd(SizeStepMixin, Command):
     name = "Circle"
     description = "Draw a circle. Pick the center, then a radius location or type a radius."
-    # Rhino: "Pick the center location. Pick a radius location or specify an
+    # the reference CAD application: "Pick the center location. Pick a radius location or specify an
     # option." -- so the radius step takes a CLICK as well as a typed number
     # (the command behavior). See commands.DISTANCE.
     steps = [("Center:", POINT), ("Radius:", DISTANCE)]
-    # the top-level options the Rhino 8 help documents for Circle
+    # the top-level options the the reference CAD application 8 help documents for Circle
     # (the command behavior). Sub-options that only appear *after* a top-level
     # option is chosen (Degree/PointCount under Deformable, FromFirstPoint under
     # Tangent, etc.) are NOT declared here -- they belong to a sub-command we do
@@ -1923,7 +1923,7 @@ class CircleCmd(SizeStepMixin, Command):
     def on_mode(self, name, ctx):
         """`2Point` ("Draws the circle from the two ends of its diameter") and
         `3Point` ("Draws a circle through three points on the circumference") are built;
-        the prompts are Rhino's in the command UI: "Start of diameter" / "End of diameter",
+        the prompts are the reference CAD application's in the command UI: "Start of diameter" / "End of diameter",
         "First point" / "Second point" / "Third point"."""
         if name in ("2Point", "3Point"):
             if self.args:
@@ -1995,7 +1995,7 @@ class CircleCmd(SizeStepMixin, Command):
         y = cplane.normalize(cplane.cross(cplane.normalize(n), x))
         return center, radius, _t.SimpleNamespace(xaxis=x, yaxis=y)
 
-    def execute(self, ctx: RhinoContext):
+    def execute(self, ctx: NarwhalContext):
         if getattr(self, "_tangent", False):
             res = _tangent_solution(self, ctx, "Circle")
             if isinstance(res, str):
@@ -2025,7 +2025,7 @@ class CircleCmd(SizeStepMixin, Command):
         # was chosen first. Convert to a radius, then build as before.
         radius = self.radius_from(typed, self.size_mode)
         # build the circle in the ACTIVE viewport's construction plane.
-        # Rhino: "when you draw a circle, the circle is drawn on the active
+        # the reference CAD application: "when you draw a circle, the circle is drawn on the active
         # construction plane by default" (the command behavior). The
         # centre is already a world point (resolved it); the CPlane supplies
         # the circle's ORIENTATION, which used to be hard-coded to world XY --
@@ -2069,7 +2069,7 @@ class PolylineCmd(Command):
 
     @property
     def prompt(self):
-        # Rhino only OFFERS Close once it is possible, so the prompt must not show
+        # the reference CAD application only OFFERS Close once it is possible, so the prompt must not show
         # it earlier -- an option you cannot use is worse than one that is absent.
         base = super().prompt
         if self._can_close():
@@ -2079,7 +2079,7 @@ class PolylineCmd(Command):
             tuple(o for o in self.options if o.name != "Close"), self.opt)
 
     def _can_close(self):
-        """Rhino: Close "appears only after three points have been placed"."""
+        """the reference CAD application: Close "appears only after three points have been placed"."""
         return len(self.args) >= 3
 
     def on_mode(self, name, ctx):
@@ -2114,7 +2114,7 @@ class PolylineCmd(Command):
             self.args.append(first)
         return self.execute(ctx)
 
-    def execute(self, ctx: RhinoContext):
+    def execute(self, ctx: NarwhalContext):
         if len(self.args) < 2:
             return "Need at least 2 points", True
         geom = bridge.make_polyline(self.args, degree=1)
@@ -2146,7 +2146,7 @@ class LinesCmd(Command):
     variable_points = True
     options = (
         # "Close -- Ends the line segment string at the beginning of
-        # the series." Rhino only offers Close once it is meaningful, so the
+        # the series." the reference CAD application only offers Close once it is meaningful, so the
         # prompt hides it until three points are placed (same as Polyline).
         opts.Option("Close", opts.MODE,
                     help=("Ends the line segment string at the beginning "
@@ -2160,7 +2160,7 @@ class LinesCmd(Command):
 
     @property
     def prompt(self):
-        # Rhino only OFFERS Close once it is possible, so the prompt must not show
+        # the reference CAD application only OFFERS Close once it is possible, so the prompt must not show
         # it earlier -- an option you cannot use is worse than one that is absent.
         base = super().prompt
         if self._can_close():
@@ -2197,7 +2197,7 @@ class LinesCmd(Command):
             return self.execute(ctx)
         return f"Lines: the {name} option is not implemented yet", False
 
-    def execute(self, ctx: RhinoContext):
+    def execute(self, ctx: NarwhalContext):
         # N points -> N-1 line objects. Each is its OWN object (not a polyline),
         # so they can be selected, moved or deleted independently.
         if len(self.args) < 2:
@@ -2239,7 +2239,7 @@ class PointsCmd(Command):
             return f"Points: removed the last point ({len(self.args)} left)", False
         return f"Points: the {name} option is not implemented yet", False
 
-    def execute(self, ctx: RhinoContext):
+    def execute(self, ctx: NarwhalContext):
         if not self.args:
             return "Points: pick at least one location first", True
         for location in self.args:
@@ -2283,7 +2283,7 @@ class CurveCmd(Command):
             return f"Curve: removed the last point ({len(self.args)} left)", False
         return f"Curve: the {name} option is not implemented yet", False
 
-    def execute(self, ctx: RhinoContext):
+    def execute(self, ctx: NarwhalContext):
         if len(self.args) < 2:
             return "Need at least 2 points", True
         if self._autoclosed:
@@ -2308,7 +2308,7 @@ class CurveCmd(Command):
 
 class InterpCrvCmd(Command):
     # `InterpCrv` -- draw a curve THROUGH a set of points (an interpolation
-    # curve). Rhino's `Curve` and `InterpCrv` are the two point-through commands;
+    # curve). the reference CAD application's `Curve` and `InterpCrv` are the two point-through commands;
     # we already had `Curve`, so `InterpCrv` is the named one the autoclose rule
     # also covers.
     #
@@ -2344,7 +2344,7 @@ class InterpCrvCmd(Command):
                     False)
         return f"InterpCrv: the {name} option is not implemented yet", False
 
-    def execute(self, ctx: RhinoContext):
+    def execute(self, ctx: NarwhalContext):
         if len(self.args) < 2:
             return "Need at least 2 points", True
         if self._autoclosed:
@@ -2397,7 +2397,7 @@ class BoxCmd(HeightAxisMixin, Command):
     # the bug the user hit and no longer applies.
     steps = [("Corner 1:", POINT), ("Corner 2:", POINT), ("Height:", DISTANCE)]
 
-    def execute(self, ctx: RhinoContext):
+    def execute(self, ctx: NarwhalContext):
         c1, c2, h = self.args
         if h <= 0:
             return "Height must be positive", True
@@ -2457,7 +2457,7 @@ class SphereCmd(SizeStepMixin, Command):
                           "objects, curve/surface control points, and mesh vertices.")),
     )
 
-    def execute(self, ctx: RhinoContext):
+    def execute(self, ctx: NarwhalContext):
         center, typed = self.args
         if typed <= 0:
             return "Radius must be positive", True
@@ -2517,7 +2517,7 @@ class CylinderCmd(HeightAxisMixin, SizeStepMixin, Command):
                           "control points, or mesh vertices.")),
     )
 
-    def execute(self, ctx: RhinoContext):
+    def execute(self, ctx: NarwhalContext):
         center, typed, height = self.args
         if typed <= 0 or height <= 0:
             return "Radius and height must be positive", True
@@ -2579,7 +2579,7 @@ class ConeCmd(HeightAxisMixin, SizeStepMixin, Command):
                           "control points, or mesh vertices.")),
     )
 
-    def execute(self, ctx: RhinoContext):
+    def execute(self, ctx: NarwhalContext):
         center, typed, h = self.args
         if typed <= 0 or h <= 0:
             return "Radius and height must be positive", True
@@ -2609,7 +2609,7 @@ class RectangleCmd(Command):
     OTHER_PROMPT = "Other corner or length:"
     WIDTH_PROMPT = "Width. Press Enter to use length:"
     steps = [(FIRST_PROMPT, POINT), (OTHER_PROMPT, DISTANCE)]
-    # the top-level options the Rhino 8 help documents for Rectangle
+    # the top-level options the the reference CAD application 8 help documents for Rectangle
     # (the command behavior). They are MODE options -- each branches the
     # command into a different drawing mode. Only the default (two opposite
     # corners) is implemented; the rest report "not implemented yet" through the
@@ -2671,7 +2671,7 @@ class RectangleCmd(Command):
         if name == "Rounded":
             # (the command behavior): "Rounded -- Rounds the corners of
             # the rectangle with arcs... Pick the radius of the rounded corner." A
-            # radius step follows the corners; Rhino's prompt in the command UI is "Radius
+            # radius step follows the corners; the reference CAD application's prompt in the command UI is "Radius
             # or point for rounded corner to pass through". Combines with Center/3Point.
             if not self._rounded:
                 self._rounded = True
@@ -2868,7 +2868,7 @@ class RectangleCmd(Command):
             return "Rectangle: the two corners must differ"
         return bridge.make_rectangle(c1, c2, p)
 
-    def execute(self, ctx: RhinoContext):
+    def execute(self, ctx: NarwhalContext):
         if self._rounded:
             geom = self._plain_rectangle(ctx)
             if isinstance(geom, str):
@@ -2979,7 +2979,7 @@ class PlaneCmd(Command):
         # call it the picked option.
         return f"Plane: the {name} option is not implemented yet", False
 
-    def execute(self, ctx: RhinoContext):
+    def execute(self, ctx: NarwhalContext):
         from . import analysis
 
         # args = [corner1, corner2] (two OPPOSITE corners, the default mode).
@@ -3011,7 +3011,7 @@ class EllipseCmd(Command):
     name = "Ellipse"
     description = ("Draw an ellipse. Pick the center, then the end of the first "
                    "axis, then the end of the second axis.")
-    # The two axis ends are LOCATIONS, not distances: Rhino's "end of the first
+    # The two axis ends are LOCATIONS, not distances: the reference CAD application's "end of the first
     # axis" is a picked point (the command behavior: "Pick the end of the first
     # axis."), and the ellipse's size is the distance from the centre to that
     # location. They are therefore POINT steps, exactly as Line's two ends --
@@ -3019,7 +3019,7 @@ class EllipseCmd(Command):
     # ellipse.
     steps = [("Center:", POINT), ("End of first axis:", POINT),
              ("End of second axis:", POINT)]
-    # the top-level options the Rhino 8 help documents for Ellipse
+    # the top-level options the the reference CAD application 8 help documents for Ellipse
     # (the command behavior). Sub-options that appear only after a top-level
     # option is chosen (PointCount under Deformable, etc.) are NOT declared --
     # they belong to a sub-command we do not implement. Declared-but-unimplemented
@@ -3054,7 +3054,7 @@ class EllipseCmd(Command):
             return "Ellipse: Corner mode -- pick two opposite corners", False
         return super().on_mode(name, ctx)
 
-    def execute(self, ctx: RhinoContext):
+    def execute(self, ctx: NarwhalContext):
         if getattr(self, "_corner", False):
             # the rectangle's sides run along the CPlane axes (as Rectangle's do); the
             # ellipse is inscribed in it: centre the middle, semi-axes half the sides
@@ -3091,7 +3091,7 @@ class PolygonCmd(Command):
     # count is a ratio/count, not a location, so a click must NOT answer it --
     # the same reasoning as Scale.
     steps = [("Center:", POINT), ("Radius:", DISTANCE), ("Sides:", NUMBER)]
-    # the top-level options the Rhino 8 help documents for Polygon
+    # the top-level options the the reference CAD application 8 help documents for Polygon
     # (the command behavior). `NumSides` is a VALUE (a number) -- it sets the
     # side count, which the default flow already collects, so it is redundant in
     # the default path but must be declared for fidelity. The rest are MODE
@@ -3129,7 +3129,7 @@ class PolygonCmd(Command):
     def on_mode(self, name, ctx):
         """`Inscribed` / `Circumscribed` ("Midpoints of the sides touch an imaginary
         circle of a specified radius") and `Edge` ("Draws a polygon by defining one
-        edge") are built. Prompts are Rhino's in the command UI: "Center of inscribed
+        edge") are built. Prompts are the reference CAD application's in the command UI: "Center of inscribed
         polygon", "Center of circumscribed polygon", "Start of edge" / "End of edge"."""
         if name in ("Inscribed", "Circumscribed"):
             self._inscribed = name == "Inscribed"
@@ -3148,7 +3148,7 @@ class PolygonCmd(Command):
 
     def _edge_polygon(self, ctx):
         """Edge mode: a regular polygon with the picked side. it lies on the LEFT
-        of start -> end in the active CPlane (Rhino uses the cursor's side); `Flip`
+        of start -> end in the active CPlane (the reference CAD application uses the cursor's side); `Flip`
         puts it on the right ("Flips the polygon about the edge you are drawing")."""
         a, b, sides = self.args
         n = int(sides)
@@ -3169,7 +3169,7 @@ class PolygonCmd(Command):
             cv += s * math.sin(ang + k * turn)
         return bridge.make_polyline(pts + [pts[0]], degree=1)
 
-    def execute(self, ctx: RhinoContext):
+    def execute(self, ctx: NarwhalContext):
         if self._edge:
             geom = self._edge_polygon(ctx)
             if isinstance(geom, str):
@@ -3189,7 +3189,7 @@ class PolygonCmd(Command):
 
 
 class ArcCmd(Command):
-    # `Arc` -- Rhino's default is Start, End, Point on the arc
+    # `Arc` -- the reference CAD application's default is Start, End, Point on the arc
     # (the command behavior). The three picked points already define the arc's plane
     # (and therefore its CPlane), so the bridge builds a fully 3D arc from them
     # without a separate plane mapping -- see bridge.make_arc.
@@ -3197,7 +3197,7 @@ class ArcCmd(Command):
     description = ("Draw an arc. Pick the start point, the end point, then a "
                    "point on the arc.")
     steps = [("Start point:", POINT), ("End point:", POINT), ("Point on arc:", POINT)]
-    # the top-level options the Rhino 8 help documents for Arc
+    # the top-level options the the reference CAD application 8 help documents for Arc
     # (the command behavior). Sub-options that appear only after a top-level option
     # is chosen (Length/Tilted under Center, Degree/PointCount under Deformable,
     # Extension, etc.) are NOT declared -- they belong to sub-commands we do not
@@ -3229,7 +3229,7 @@ class ArcCmd(Command):
     )
 
     def on_mode(self, name, ctx):
-        """`Center`, `StartPoint` and `Direction` are built, with Rhino's prompts
+        """`Center`, `StartPoint` and `Direction` are built, with the reference CAD application's prompts
         in the command UI: "Center of arc" / "Start of arc" / "End point", "Start of arc"
         / "End of arc" / a through point, "Start of arc" / "Direction at start" / "End of
         arc"."""
@@ -3285,7 +3285,7 @@ class ArcCmd(Command):
         """``(start, on_arc, end, names)`` for Arc Tangent, or a refusal string.
 
         Two curves + radius: the arc between the two tangent points on the tangent circle
-        -- the SHORTER one, which is the fillet arc (Rhino then lets the cursor
+        -- the SHORTER one, which is the fillet arc (the reference CAD application then lets the cursor
         "choose from the suggested possibilities", a pick a typed point cannot make).
         Three lines: from the first tangent point THROUGH the second to the third."""
         res = _tangent_solution(self, ctx, "Arc")
@@ -3315,7 +3315,7 @@ class ArcCmd(Command):
         arc's first endpoint. This point is also the arc's start point. Pick the arc's
         second end point". The end point fixes the END ANGLE (it need not lie on the
         circle). the arc runs COUNTERCLOCKWISE in the active CPlane from start to
-        end -- Rhino follows the direction the cursor swept, which a typed point lacks."""
+        end -- the reference CAD application follows the direction the cursor swept, which a typed point lacks."""
         center, start, end = self.args
         z = tuple(float(c) for c in self._active_cplane(ctx).zaxis)
         d0 = tuple(start[i] - center[i] for i in range(3))
@@ -3354,7 +3354,7 @@ class ArcCmd(Command):
         return (tuple(start), self._sweep(center, u, t, r, theta),
                 self._sweep(center, u, t, r, 2 * theta))
 
-    def execute(self, ctx: RhinoContext):
+    def execute(self, ctx: NarwhalContext):
         flow = getattr(self, "_flow", None)
         if flow == "Tangent":
             res = self._tangent_arc(ctx)
@@ -3385,7 +3385,7 @@ class ArcCmd(Command):
 
 
 class ExtrudeCmd(Command):
-    # Rhino has no `Extrude` -- the real name for extruding a *curve*
+    # the reference CAD application has no `Extrude` -- the real name for extruding a *curve*
     # profile is `ExtrudeCrv` (surfaces use `ExtrudeSrf`). We extrude a closed
     # curve, so the honest name is ExtrudeCrv (confirmed: the command behavior
     # exists, the command behavior does not).
@@ -3403,7 +3403,7 @@ class ExtrudeCmd(Command):
     preselect_names = 1
     # the documented options (the command behavior). Built: Direction, BothSides,
     # Solid, DeleteInput. Declared, reported not implemented: Output=SubD, ToBoundary,
-    # SplitAtTangents, SetBasePoint. Solid defaults Yes -- Rhino's own menu macro is
+    # SplitAtTangents, SetBasePoint. Solid defaults Yes -- the reference CAD application's own menu macro is
     # `!_ExtrudeCrv _Pause _Solid=_Yes` in the command UI and this command always capped.
     options = (
         opts.Option("Output", opts.ENUM, choices=("Surface", "SubD"), default="Surface",
@@ -3551,7 +3551,7 @@ class ExtrudeCmd(Command):
         return sum((point[i] - (start.X, start.Y, start.Z)[i]) * direction[i]
                    for i in range(3))
 
-    def execute(self, ctx: RhinoContext):
+    def execute(self, ctx: NarwhalContext):
         name, height = self.args[0], self.args[-1]
         if not name and ctx.selected_objects():
             name = ctx.selected_objects()[0].name
@@ -3648,7 +3648,7 @@ class PlanarSrfCmd(Command):
     preselect_names = 1
     cancel_on_empty_set = True
 
-    def execute(self, ctx: RhinoContext):
+    def execute(self, ctx: NarwhalContext):
         curves, bad = _curves_named(ctx, self.args[0] if self.args else [])
         if not curves:
             return "PlanarSrf: select planar curves", True
@@ -3677,7 +3677,7 @@ class EdgeSrfCmd(Command):
     preselect_names = 1
     cancel_on_empty_set = True
 
-    def execute(self, ctx: RhinoContext):
+    def execute(self, ctx: NarwhalContext):
         curves, bad = _curves_named(ctx, self.args[0] if self.args else [])
         if bad:
             return f"EdgeSrf: only curves can be edges ({', '.join(bad)})", True
@@ -3766,7 +3766,7 @@ class ExtrudeSrfCmd(Command):
         d = self._direction(ctx, geom)
         return sum((point[i] - (v.X, v.Y, v.Z)[i]) * d[i] for i in range(3))
 
-    def execute(self, ctx: RhinoContext):
+    def execute(self, ctx: NarwhalContext):
         name, geom = self._surface(ctx)
         distance = self.args[1] if len(self.args) > 1 else None
         if not isinstance(geom, (r3.Brep, r3.Extrusion)):
@@ -3838,7 +3838,7 @@ class ShellCmd(Command):
                 return f"{len(self._picks)} face(s) picked -- press Enter when done", False
         return super()._feed(text, ctx)
 
-    def execute(self, ctx: RhinoContext):
+    def execute(self, ctx: NarwhalContext):
         name = self.args[0] if self.args else None
         geom = ctx.geom_by_name(name) if name else None
         if geom is None:
@@ -3899,7 +3899,7 @@ class OffsetSrfCmd(Command):
             return f"OffsetSrf: the {option.name} option is not implemented yet", False
         return super().on_option_set(option, value, ctx)
 
-    def execute(self, ctx: RhinoContext):
+    def execute(self, ctx: NarwhalContext):
         name, distance = self.args[0], float(self.args[1])
         geom = ctx.geom_by_name(name) if name else None
         if not isinstance(geom, r3.Brep):
@@ -3937,12 +3937,12 @@ class RevolveCmd(Command):
     description = "Revolve a curve about an axis. Curve, axis point 1, axis point 2, angle."
     steps = [("Curve:", "name"), ("Axis Point 1:", "point"),
              ("Axis Point 2:", "point"), ("Angle (deg):", "number")]
-    # Rhino selects first, then runs the command; the selection
+    # the reference CAD application selects first, then runs the command; the selection
     # fallback these commands already tried was unreachable, because an
     # empty answer at a fixed prompt CANCELS (see Command.feed).
     preselect_names = 1
 
-    def execute(self, ctx: RhinoContext):
+    def execute(self, ctx: NarwhalContext):
         name, a1, a2, angle = self.args
         if not name and ctx.selected_objects():
             name = ctx.selected_objects()[0].name
@@ -3959,7 +3959,7 @@ class LoftCmd(Command):
     description = "Straight loft between two curves."
     steps = [("Curve 1:", "name"), ("Curve 2:", "name")]
 
-    def execute(self, ctx: RhinoContext):
+    def execute(self, ctx: NarwhalContext):
         n1, n2 = self.args
         g1, g2 = ctx.geom_by_name(n1), ctx.geom_by_name(n2)
         if not isinstance(g1, r3.Curve) or not isinstance(g2, r3.Curve):
@@ -3972,16 +3972,16 @@ class LoftCmd(Command):
 class OffsetCmd(Command):
     name = "Offset"
     description = "Offset a curve by a distance."
-    # the distance takes a typed number OR a picked location (Rhino's
+    # the distance takes a typed number OR a picked location (the reference CAD application's
     # ThroughPoint). the command behavior: "Move the mouse cursor to decide the
     # offset direction, and click." and "ThroughPoint -- Offsets through a
     # picked point instead of at a distance."
     steps = [("Curve:", NAME), ("Distance:", DISTANCE)]
-    # Rhino selects first, then runs the command; the selection
+    # the reference CAD application selects first, then runs the command; the selection
     # fallback these commands already tried was unreachable, because an
     # empty answer at a fixed prompt CANCELS (see Command.feed).
     preselect_names = 1
-    # the top-level options the Rhino 8 help documents for Offset
+    # the top-level options the the reference CAD application 8 help documents for Offset
     # (the command behavior).  Sub-options (Yes/No under Loose, Sharp/Round/
     # Smooth/Chamfer under Corner, Flat/Round under Cap, Current/Input under
     # OutputLayer) are NOT declared separately -- the framework answers them
@@ -4062,7 +4062,7 @@ class OffsetCmd(Command):
             return None
         return list(self._active_cplane(ctx).normal)
 
-    def execute(self, ctx: RhinoContext):
+    def execute(self, ctx: NarwhalContext):
         name, dist = self.args
         if not name and ctx.selected_objects():
             name = ctx.selected_objects()[0].name
@@ -4159,7 +4159,7 @@ def _first_document_object(index, name):
     return rows[0] if rows else None
 
 
-def _apply_transform_to_selection(ctx: RhinoContext, xform: r3.Transform):
+def _apply_transform_to_selection(ctx: NarwhalContext, xform: r3.Transform):
     """Apply a rhino3dm Transform to selected objects, in the document and the view.
 
     The transform is **baked into the stored File3dm geometry**. ``fobj.Geometry``
@@ -4227,7 +4227,7 @@ def _apply_transform_to_selection(ctx: RhinoContext, xform: r3.Transform):
     return moved
 
 
-def apply_transform(ctx: RhinoContext, xform):
+def apply_transform(ctx: NarwhalContext, xform):
     """Public entry point for applying a Transform to the selection.
 
     The Gumball  transforms objects without running a command, so it needs
@@ -4279,9 +4279,9 @@ def _selection_bbox_center(ctx):
 
 
 # ---------------------------------------------------------------------------
-# the transform commands, Rhino's steps, and `live_xform` for the ghost.
+# the transform commands, the reference CAD application's steps, and `live_xform` for the ghost.
 #
-# The live-preview contract mirrors RhinoCommon's
+# The live-preview contract mirrors CAD SDK's
 # GetTransform.CalculateTransform): `live_xform(cursor) -> r3.Transform | None` is the
 # transform the command WOULD apply if the current step were answered with `cursor`, and
 # None while the step does not move anything yet. It is computed by the SAME `_compute`
@@ -4393,7 +4393,7 @@ class _TransformCmd(Command):
             return None
         return res if isinstance(res, r3.Transform) else None
 
-    def execute(self, ctx: RhinoContext):
+    def execute(self, ctx: NarwhalContext):
         res = self._compute(self.args)
         if res is None:
             step = self._next_step(self.args)
@@ -4537,7 +4537,7 @@ class MoveCmd(_FromToTransformCmd):
             pass
         return parse_point(stripped, self._active_cplane(ctx), self._last_point())
 
-    def execute(self, ctx: RhinoContext):
+    def execute(self, ctx: NarwhalContext):
         if not ctx.selected_objects():
             return "Nothing selected", True
         dx, dy, dz = self._delta()
@@ -4549,7 +4549,7 @@ class MoveCmd(_FromToTransformCmd):
 class _AngleCmd(_TransformCmd):
     """Shared by `Rotate` / `Rotate3D`: "Type the angle, or pick two reference points"
     (both help pages). The angle step is a DISTANCE-kind step so it takes a
-    typed number OR a click; a click is the FIRST reference point and adds Rhino's
+    typed number OR a click; a click is the FIRST reference point and adds the reference CAD application's
     "Second reference point" step (prompts from the command UI)."""
 
     verb = "Rotated"
@@ -4667,7 +4667,7 @@ class _ScaleBase(_TransformCmd):
 
     said a click must not answer the factor prompt because "a scale factor is a
     RATIO, not a length". That stays true: a click there is not a factor, it is the
-    first REFERENCE point, and the ratio comes from the second -- Rhino's prompt says
+    first REFERENCE point, and the ratio comes from the second -- the reference CAD application's prompt says
     exactly that ("Scale factor or first reference point").
     """
 
@@ -4761,7 +4761,7 @@ class Scale2DCmd(ScaleCmd):
 class Scale1DCmd(_ScaleBase):
     """`Scale1D`: "Type the scale factor and a direction, or pick two reference points.
     Typing 0 for the scale factor flattens the object in the picked direction.". With reference points the direction is base -> first reference point
-    and the size is the second's distance ALONG it; a typed factor adds Rhino's "Scale
+    and the size is the second's distance ALONG it; a typed factor adds the reference CAD application's "Scale
     direction" step (prompt wording)."""
 
     name = "Scale1D"
@@ -4913,7 +4913,7 @@ class Orient3PtCmd(_TransformCmd):
         return _compose_translation(_affine(m3, r1), _sub3(t1, r1))
 
 
-def _duplicate_with_transform(ctx: RhinoContext, name: str, xform: r3.Transform,
+def _duplicate_with_transform(ctx: NarwhalContext, name: str, xform: r3.Transform,
                               base_name: str):
     """Duplicate the named object's geometry, apply ``xform``, add as a new object.
 
@@ -4962,7 +4962,7 @@ class CopyCmd(_FromToTransformCmd):
                     help="Places the next copy at the same angle from the base point as the last copy."),
     )
 
-    # the to-point is REPEATED. Rhino (the command behavior) documents it as
+    # the to-point is REPEATED. the reference CAD application (the command behavior) documents it as
     # "Pick a point to copy to for each copy. Press Enter to end the command.".
     # The to-points are COLLECTED (no mutation) and the copies are built in one
     # `execute`, so the whole command is a single undo step. This supersedes
@@ -5083,7 +5083,7 @@ class CopyCmd(_FromToTransformCmd):
             try:
                 point = self._parse("point", text, ctx)
             except ValueError as e:
-                return str(e), False          # a typo re-prompts, as Rhino does
+                return str(e), False          # a typo re-prompts, as the reference CAD application does
             self.args.append(self._normalised_destination(point, ctx))
             if self.complete_after_first:
                 # mutation hook: complete after the first destination
@@ -5091,7 +5091,7 @@ class CopyCmd(_FromToTransformCmd):
             return ("pick another point to copy to, or Enter to end", False)
         return super()._feed(text, ctx)
 
-    def execute(self, ctx: RhinoContext):
+    def execute(self, ctx: NarwhalContext):
         if not ctx.selected_objects():
             return "Nothing selected", True
         p_from = self.args[1] if len(self.args) > 1 else (0.0, 0.0, 0.0)
@@ -5121,7 +5121,7 @@ class ArrayLinearCmd(Command):
     preselect_names = 1
     cancel_on_empty_set = True
 
-    def execute(self, ctx: RhinoContext):
+    def execute(self, ctx: NarwhalContext):
         count, direction = self.args[1:]
         if not ctx.selected_objects():
             return "Nothing selected", True
@@ -5131,7 +5131,7 @@ class ArrayLinearCmd(Command):
         dx, dy, dz = direction
         made = []
         for ob in ctx.selected_objects():
-            # Rhino's count INCLUDES the original, so we add count-1 copies
+            # the reference CAD application's count INCLUDES the original, so we add count-1 copies
             for i in range(1, count):
                 xform = r3.Transform.Translation(dx * i, dy * i, dz * i)
                 name = _duplicate_with_transform(ctx, ob.name, xform, "Array")
@@ -5150,7 +5150,7 @@ class ArrayPolarCmd(Command):
     preselect_names = 1
     cancel_on_empty_set = True
 
-    def execute(self, ctx: RhinoContext):
+    def execute(self, ctx: NarwhalContext):
         center, count, axis = self.args[1:]
         if not ctx.selected_objects():
             return "Nothing selected", True
@@ -5164,7 +5164,7 @@ class ArrayPolarCmd(Command):
         step = math.radians(360.0 / count)
         made = []
         for ob in ctx.selected_objects():
-            # Rhino's count INCLUDES the original. Going to range(1, count+1)
+            # the reference CAD application's count INCLUDES the original. Going to range(1, count+1)
             # would end at a full 360 deg turn, i.e. a duplicate sitting exactly
             # on top of the original.
             for i in range(1, count):
@@ -5201,7 +5201,7 @@ def _remove_object_from_scene(ob):
         bpy.data.meshes.remove(me)
 
 
-def _world_geom(ctx: RhinoContext, name: str):
+def _world_geom(ctx: NarwhalContext, name: str):
     """A private copy of the named object's geometry, in world coordinates.
 
     Since stored geometry is already in world coordinates, so this is just a
@@ -5255,7 +5255,7 @@ class _BooleanCmd(Command):
     operation = "UNION"
     steps = [("Select objects to combine:", OBJECTS_MULTI)]
     # opt into the selection fill, so "select the solids, then run the command"
-    # works with ANY count -- which is Rhino's normal flow and what the removed
+    # works with ANY count -- which is the reference CAD application's normal flow and what the removed
     # exactly-two shortcut was trying to approximate. 1 means "fill one SET step";
     # a two-set command still prompts for its second set.
     preselect_names = 1
@@ -5273,10 +5273,10 @@ class _BooleanCmd(Command):
                     out.append(n)
         return out
 
-    def execute(self, ctx: RhinoContext):
+    def execute(self, ctx: NarwhalContext):
         names = self._operand_names()
         if len(names) < 2:
-            # Rhino needs at least two operands. Report the count rather than
+            # the reference CAD application needs at least two operands. Report the count rather than
             # failing obscurely inside the solver.
             return (f"{self.name} needs at least two objects "
                     f"({len(names)} given)"), True
@@ -5327,7 +5327,7 @@ class _BooleanCmd(Command):
         if callable(note_change):
             note_change(self.name)
 
-        # the pre-existing command deleted every operand by default. Rhino's
+        # the pre-existing command deleted every operand by default. the reference CAD application's
         # retained help does not state the default, so DeleteInput defaults to Yes
         # here to preserve that behavior. With DeleteInput=No every input remains.
         delete_input = bool(self.opt.get("DeleteInput", True))
@@ -5375,7 +5375,7 @@ class BooleanUnionCmd(_BooleanCmd):
     description = "Combine solids into one. Select the objects and press Enter."
     operation = "UNION"
     options = (
-        # default: the old command deleted operands, and Rhino help does not
+        # default: the old command deleted operands, and the reference CAD application help does not
         # retain a default value. DeleteInput=No is the keep-input path.
         opts.Option("DeleteInput", opts.TOGGLE, default=True,
                     help="Deletes (Yes) or keeps (No) the input objects."),
@@ -5512,7 +5512,7 @@ class JoinCmd(Command):
         curves that touch end-to-end."... "The order the objects are selected
         determines the layer of the new joined object."
 
-    Only **curves** are joined. Rhino also joins surfaces, polysurfaces, meshes
+    Only **curves** are joined. the reference CAD application also joins surfaces, polysurfaces, meshes
     and SubDs; those need a kernel we do not have, so they are REPORTED as not
     joined rather than quietly ignored (the explicit-refusal policy). The documented options
     (`Undo`, `JoinDisjointMeshes`, `SubDJoinedEdges`, `SelChain`, `JoinCopy`) are
@@ -5535,14 +5535,14 @@ class JoinCmd(Command):
     def _tolerance(self, ctx=None):
         """The gap still counted as touching.
 
-        Rhino judges curve ends against the document's **absolute tolerance** -- `ctx.model`'s (`_document_tolerance`), no longer the 0.01 default.
+        the reference CAD application judges curve ends against the document's **absolute tolerance** -- `ctx.model`'s (`_document_tolerance`), no longer the 0.01 default.
         """
         return _document_tolerance(ctx)
 
     def _ordered_selection(self, ctx):
         """Selected object names, the ACTIVE one first.
 
-        Rhino's rule is selection order, and Blender does not record it -- so the
+        the reference CAD application's rule is selection order, and Blender does not record it -- so the
         active object (the last one clicked) leads, exactly as `_BooleanCmd`
         resolves its A operand. That is an approximation of the documented rule,
         and it only affects which LAYER the result lands on.
@@ -5559,7 +5559,7 @@ class JoinCmd(Command):
             names.insert(0, active)
         return names
 
-    def execute(self, ctx: RhinoContext):
+    def execute(self, ctx: NarwhalContext):
         names = self._ordered_selection(ctx)
         if len(names) < 2:
             return "Join: select at least two objects to join", True
@@ -5661,7 +5661,7 @@ class CloseCrvCmd(Command):
             return float(val)
         return 0.0
 
-    def execute(self, ctx: RhinoContext):
+    def execute(self, ctx: NarwhalContext):
         names = [ob.name for ob in ctx.selected_objects()]
         if not names:
             return "CloseCrv: select at least one open curve", True
@@ -5766,7 +5766,7 @@ class ExplodeCmd(Command):
 
     **Curves and polysurfaces** are exploded. A master-backed solid explodes into its
     analytic kernel faces (each its own master, with a `face` recipe so it survives a
-    reload); a plain brep explodes natively into trimmed faces. Rhino's Explode also handles
+    reload); a plain brep explodes natively into trimmed faces. the reference CAD application's Explode also handles
     blocks, dimensions, groups, hatches, meshes, cage controls and text; we have none of
     that, so such an object is REPORTED as not exploded rather than silently dropped (house
     the explicit-refusal policy). An object already a single segment or surface is reported as such -- that is a
@@ -5783,7 +5783,7 @@ class ExplodeCmd(Command):
     preselect_names = 1
     cancel_on_empty_set = True
 
-    def execute(self, ctx: RhinoContext):
+    def execute(self, ctx: NarwhalContext):
         names = [ob.name for ob in ctx.selected_objects()]
         if not names:
             return "Explode: select objects to explode", True
@@ -5903,11 +5903,11 @@ class ProjectCmd(Command):
     description = ("Project the selected curve or point onto the active "
                    "construction plane (CPlaneZ).")
     # One `objects` step: the curve or point to project. It is the ONLY prompt --
-    # Rhino's "select the target object" step is the active CPlane here (the
+    # the reference CAD application's "select the target object" step is the active CPlane here (the
     # scope for this implementation), so there is no second selection to ask for.
     steps = [("Object:", OBJECTS)]
     # preselect_names=1: if something is already selected, `begin` fills the
-    # `objects` step from it and runs, as Rhino does (select, then run).
+    # `objects` step from it and runs, as the reference CAD application does (select, then run).
     preselect_names = 1
     # the four documented options, declared so the prompt is honest. Only
     # CPlaneZ + DeleteInput are implemented this implementation; the rest REPORT (the explicit-refusal policy).
@@ -5948,7 +5948,7 @@ class ProjectCmd(Command):
                     "the active CPlane on the current layer)", False)
         return None
 
-    def execute(self, ctx: RhinoContext):
+    def execute(self, ctx: NarwhalContext):
         # Guard the not-implemented options here too, so a run that IS reached
         # with one set projects NOTHING rather than the wrong thing (the explicit-refusal policy).
         if (self.opt.get("Direction", "CPlaneZ") or "CPlaneZ") != "CPlaneZ":
@@ -6034,12 +6034,12 @@ class ProjectToCPlaneCmd(Command):
         value = self.args[0]
         return list(dict.fromkeys(value if isinstance(value, (list, tuple)) else [value]))
 
-    def execute(self, ctx: RhinoContext):
+    def execute(self, ctx: NarwhalContext):
         names = self._names()
         if not names:
             return "ProjectToCPlane: select objects to project", True
         # Read the CPlane NOW, not at command start: this is exactly the viewport that is
-        # current when the command ends (Rhino's wording).
+        # current when the command ends (the reference CAD application's wording).
         plane = self._active_cplane(ctx)
         plan = []
         for name in names:
@@ -6098,12 +6098,12 @@ class ExtendCmd(Command):
     message written to be surfaced verbatim -- Smooth is curvature-continuous
     (a fit, not a formula), and `Natural` on a free-form resolves to Smooth by
     the rule ("Other curves are extended smooth"). Silently falling
-    back to a tangent line where Rhino makes a smooth curve would be a lie, so
+    back to a tangent line where the reference CAD application makes a smooth curve would be a lie, so
     the refusal is surfaced, not hidden (the explicit-refusal policy). The same path surfaces
     the kernel's other refusals: `Arc` on a non-arc end, a closed curve, and a
     non-positive length.
 
-    **The `end` is fixed at the curve's End.** Rhino picks the end you clicked
+    **The `end` is fixed at the curve's End.** the reference CAD application picks the end you clicked
     NEAREST ("Select a curve... near the end"); with a typed length and no
     click there is no click to resolve, so this defaults to the End. The
     near-end (Start) selection and the boundary-object form ("Select a boundary
@@ -6112,7 +6112,7 @@ class ExtendCmd(Command):
     sub-options and `Join` (Yes/No) are the pick / non-merge forms and are
     likewise outstanding.
 
-    **Object management (flagged):** Rhino's `Join` default is MERGE --
+    **Object management (flagged):** the reference CAD application's `Join` default is MERGE --
     "the extension is merged into the curve itself rather than added as a
     segment," so the net result is ONE longer curve. We reproduce that net
     effect: the input curve is removed and the extension added as a new object
@@ -6131,7 +6131,7 @@ class ExtendCmd(Command):
     # click to resolve the near-end -- see the class docstring).
     steps = [("Object:", OBJECTS), ("Length:", NUMBER)]
     # preselect_names=1: if the curve is already selected, `begin` fills the
-    # `objects` step from it and moves on to the Length prompt, as Rhino does
+    # `objects` step from it and moves on to the Length prompt, as the reference CAD application does
     # (select, then run). A typed name still works (the selection is a shortcut,
     # not a replacement).
     preselect_names = 1
@@ -6150,7 +6150,7 @@ class ExtendCmd(Command):
                           "implemented yet).")),
     )
 
-    def execute(self, ctx: RhinoContext):
+    def execute(self, ctx: NarwhalContext):
         # scope: a typed length, the End, Type Natural|Line|Arc (Smooth and
         # Natural-on-a-free-form are refused by the kernel and surfaced verbatim).
         name = self.args[0] if self.args else None
@@ -6173,7 +6173,7 @@ class ExtendCmd(Command):
             return (f"Extend: {name!r} is not a curve (Extend works on curves; "
                     "extending a point, surface or edge is not implemented yet)"), True
 
-        # `end` is fixed at the curve's End: Rhino resolves it from the click
+        # `end` is fixed at the curve's End: the reference CAD application resolves it from the click
         # NEAREST the end, and a typed length has no click (the Start / near-end
         # selection is outstanding -- see the docstring). The kernel is the
         # authority on the geometry, and its ValueError messages are written to
@@ -6188,7 +6188,7 @@ class ExtendCmd(Command):
             return str(e), True
 
         # one undo record for the whole change -- the input removal and the
-        # extension add are a SINGLE undo step, the same shape as Project. Rhino's
+        # extension add are a SINGLE undo step, the same shape as Project. the reference CAD application's
         # Join default is MERGE, whose net effect is ONE longer curve, so we
         # remove the input and add the extension (not an in-place merge --
         # keeping the input's name/ID is outstanding, see the docstring/entry).
@@ -6271,7 +6271,7 @@ class DivideCmd(Command):
         # Split / DeleteRemainder / MarkEnds / GroupOutput / SubCrv: honest.
         return super().on_mode(name, ctx)
 
-    def execute(self, ctx: RhinoContext):
+    def execute(self, ctx: NarwhalContext):
         mode = getattr(self, "_divide_mode", None) or "count"
         names = [ob.name for ob in ctx.selected_objects()]
         if not names:
@@ -6292,7 +6292,7 @@ class DivideCmd(Command):
             return "Divide: no value given", True
         raw = self.args[-1]
         if mode == "count":
-            # the count must be a whole number of segments (Rhino expects an int)
+            # the count must be a whole number of segments (the reference CAD application expects an int)
             try:
                 f = float(raw)
             except (TypeError, ValueError):
@@ -6347,7 +6347,7 @@ class DivideCmd(Command):
         return msg, True
 
 
-def _layer_index_of(ctx: RhinoContext, name: str) -> int:
+def _layer_index_of(ctx: NarwhalContext, name: str) -> int:
     """The layer the named document object sits on (0 when it cannot be found)."""
     for fobj in ctx.model.file.Objects:
         if (fobj.Attributes.Name or "").lower() == (name or "").lower():
@@ -6373,7 +6373,7 @@ def _layer_index_of(ctx: RhinoContext, name: str) -> int:
 #                                                    these takes a selection)
 # So Hide/Lock act on the SELECTION and refuse with none; Show/Unlock act on
 # the WHOLE DOCUMENT and report honestly when there is nothing to change.
-# (Rhino's own context-menu rows are `Hide`, `Lock`, `ShowSelected`,
+# (the reference CAD application's own context-menu rows are `Hide`, `Lock`, `ShowSelected`,
 # `UnlockSelected`; the implementation names the command set `Hide`/`Show`/`Lock`/
 # `Unlock`, and the help's all-object Show/Unlock is the form a hidden/locked
 # object -- which cannot be selected -- actually needs.)
@@ -6638,7 +6638,7 @@ class IsolateCmd(Command):
     steps = []
     records_undo = True        # a Mode change is a document change
 
-    def execute(self, ctx: RhinoContext):
+    def execute(self, ctx: NarwhalContext):
         # The set to keep visible: the current selection, plus every locked
         # object (locked objects stay visible per the wording).
         sel = set()
@@ -6689,7 +6689,7 @@ class UnisolateCmd(Command):
     steps = []
     records_undo = True        # a Mode change is a document change
 
-    def execute(self, ctx: RhinoContext):
+    def execute(self, ctx: NarwhalContext):
         names = isolate_state.pop(ctx.model)
         if names is None or not names:
             return "Unisolate: Isolate was not run first (nothing to restore)", True
@@ -6736,7 +6736,7 @@ def _expanded_group_names(model, names):
 def _selection_names(ctx):
     """`{name.lower: display name}` for the current selection (dedup, name order).
 
-    Group / Ungroup are selection-driven (Rhino's "select, then run the command"
+    Group / Ungroup are selection-driven (the reference CAD application's "select, then run the command"
     shape), so they act on exactly the selected set. Headless-safe: a missing
     selector or one that fails yields an empty selection, which both commands
     refuse by name rather than silently doing nothing."""
@@ -6757,7 +6757,7 @@ def _selection_names(ctx):
 def _group_indices_by_name(file, name):
     """Return all exact, case-sensitive matches for a group name.
 
-    Rhino group names are case-sensitive for command lookup.  Normally the native
+    the reference CAD application group names are case-sensitive for command lookup.  Normally the native
     table keeps names unique, but a document can contain duplicate names after an
     import or round-trip, so callers that need one target must reject ambiguity
     rather than silently choosing an index.
@@ -6882,8 +6882,8 @@ class RemoveFromGroupCmd(Command):
     This is deliberately narrower than ``Ungroup``: it removes only the target
     group index and preserves every other membership and every group-table row.
 
-    ``Copy`` is the Rhino top-level option. Its default is explicitly
-    (No): Rhino's persisted ``RememberCopyOptions`` setting is not yet
+    ``Copy`` is the the reference CAD application top-level option. Its default is explicitly
+    (No): the reference CAD application's persisted ``RememberCopyOptions`` setting is not yet
     wired into this command. With ``Copy=Yes``, originals remain in place and
     each duplicate keeps its geometry, object properties, and unrelated group
     memberships while omitting only the target group.
@@ -7003,7 +7003,7 @@ class RemoveFromGroupCmd(Command):
 class SetGroupNameCmd(Command):
     """`SetGroupName` -- rename one selected group or combine selected groups.
 
-    Rhino's shape is selection first, followed by the new exact,
+    the reference CAD application's shape is selection first, followed by the new exact,
     case-sensitive name.  A selection can contain members of several groups;
     those groups are consolidated into one surviving table row.  Group-table
     rows are deliberately retained: deleting a row compacts integer indices in
@@ -7062,7 +7062,7 @@ class SetGroupNameCmd(Command):
             return f"SetGroupName: group is already named {new_name!r}", True
 
         # Include every member of every selected group, not merely the picked
-        # objects: combining groups moves the complete groups as Rhino does.
+        # objects: combining groups moves the complete groups as the reference CAD application does.
         members = []
         for fobj in file.Objects:
             if selected_set.intersection(int(g) for g in
@@ -7102,7 +7102,7 @@ class GroupCmd(Command):
     than answered by silently creating an empty group.
 
     Undoable: the ordered group-table and per-object membership
-    state to `RhinoModel` snapshots, so the normal command record restores both
+    state to `NarwhalModel` snapshots, so the normal command record restores both
     the group identity/name table and every membership on Undo and Redo.
     """
 
@@ -7111,7 +7111,7 @@ class GroupCmd(Command):
     steps = []
     records_undo = True         # snapshots carry table + memberships
 
-    def execute(self, ctx: RhinoContext):
+    def execute(self, ctx: NarwhalContext):
         sel = _selection_names(ctx)
         if not sel:
             return ("Group: select the objects to group first "
@@ -7148,7 +7148,7 @@ class GroupCmd(Command):
 class UngroupAllCmd(Command):
     """`UngroupAll` -- remove selected groups and their nested/overlapping groups.
 
-    Rhino's command removes the selected group and every group nested in
+    the reference CAD application's command removes the selected group and every group nested in
     it in one action. In this document model groups are represented by object
     membership indices, so nesting/overlap is the transitive connected component
     of the selected objects' group memberships. Only components reached from the
@@ -7181,7 +7181,7 @@ class UngroupAllCmd(Command):
                     changed = changed or len(active) != before
         return active
 
-    def execute(self, ctx: RhinoContext):
+    def execute(self, ctx: NarwhalContext):
         sel = _selection_names(ctx)
         if not sel:
             return ("UngroupAll: select the group to ungroup first "
@@ -7248,7 +7248,7 @@ class UngroupCmd(Command):
     remap the integer memberships already stored on objects -- after such a
     delete, a member's stored index points at the wrong group and an out-of-range
     membership can fail. Deleting a group entry is therefore unsafe on
-    this build, and Rhino's own `Ungroup` removes the membership, not the
+    this build, and the reference CAD application's own `Ungroup` removes the membership, not the
     entry, so the faithful action is to detach the objects and leave the (empty)
     group in place. `Purge Groups` (a separate, not-yet-built command) is the
     natural home for removing the now-empty entries, where the shift can be
@@ -7263,7 +7263,7 @@ class UngroupCmd(Command):
     steps = []
     records_undo = True         # snapshots carry table + memberships
 
-    def execute(self, ctx: RhinoContext):
+    def execute(self, ctx: NarwhalContext):
         sel = _selection_names(ctx)
         if not sel:
             return ("Ungroup: select the objects to ungroup first "
@@ -7352,7 +7352,7 @@ class DupEdgeCmd(Command):
     def on_mode(self, name, ctx):
         return f"DupEdge: the {name} option is not implemented yet", False
 
-    def execute(self, ctx: RhinoContext):
+    def execute(self, ctx: NarwhalContext):
         edges = _selected_surface_edges(ctx, only_closed=False)
         if not edges:
             return ("DupEdge: select a surface or polysurface first "
@@ -7398,7 +7398,7 @@ class DupBorderCmd(Command):
     def on_mode(self, name, ctx):
         return f"DupBorder: the {name} option is not implemented yet", False
 
-    def execute(self, ctx: RhinoContext):
+    def execute(self, ctx: NarwhalContext):
         edges = _selected_surface_edges(ctx, only_closed=True)
         if not edges:
             return ("DupBorder: the selected surfaces have no closed boundary "
@@ -7539,13 +7539,13 @@ class RenameCmd(Command):
     name = "Rename"
     description = "Give one selected object a new name."
     steps = [("Select object to rename:", OBJECTS), ("New name:", TEXT)]
-    # Rhino selects first, then runs the command; the selection satisfies the
+    # the reference CAD application selects first, then runs the command; the selection satisfies the
     # object step and the command runs on the typed name (like `Offset`/`Length`,
     # which pair a NAME/objects step with a follow-up prompt).
     preselect_names = 1
     records_undo = True        # a name change is a document change
 
-    def execute(self, ctx: RhinoContext):
+    def execute(self, ctx: NarwhalContext):
         # The OBJECTS step appends the ONE object's name (selection or typed --
         # `_take_objects_selection` / `_feed_objects_step` both give args[0] a name);
         # the TEXT step appends the new name as a raw string (not parsed as a number).
@@ -7588,7 +7588,7 @@ class RenameCmd(Command):
 
 
 # ---------------------------------------------------------------------------
-# analysis commands (report in the command bar, Rhino-style)
+# analysis commands (report in the command bar, CAD-style)
 # ---------------------------------------------------------------------------
 
 # rhino3dm has no mass-properties classes. a solid with an analytic master
@@ -7597,11 +7597,11 @@ class RenameCmd(Command):
 # (box-union-cylinder 1140.845 for a true 1141.372, -4.6e-4, and it was
 # labelled "exact"). Only geometry with no master falls back to grid integration.
 #
-# Output wording is Rhino's (the command behavior, ):
+# Output wording is the reference CAD application's (the command behavior, ):
 #     Area = 60 (+/- 1e-008)
 # "The numbers shown in parenthesis report the accuracy of the computation." The
 # estimate is a CONVERGENCE estimate (the answer at two resolutions), never a
-# constant -- a fixed "+/- 0" or "exact" would be a claim nobody (Rhino's
+# constant -- a fixed "+/- 0" or "exact" would be a claim nobody (the reference CAD application's
 # three-digit exponent is MSVC printf, not a format choice; Python prints 1e-08.)
 
 
@@ -7618,9 +7618,9 @@ def _err_up(err):
 
 
 def _measured(label, value, err):
-    """`label = value (+/- err)`, Rhino's mass-property line.
+    """`label = value (+/- err)`, the reference CAD application's mass-property line.
 
-    The value is printed to ONE decimal place past the error's (Rhino prints
+    The value is printed to ONE decimal place past the error's (the reference CAD application prints
     `5.77350269 (+/- 1e-009)`), and the rounding that printing adds is folded into the
     stated bound -- so the PRINTED value is always within the PRINTED +/- of the truth.
     A fixed `.9g` broke that: `1141.37167 (+/- 2e-09)` is 6e-7 from the true volume.
@@ -7631,7 +7631,7 @@ def _measured(label, value, err):
     decimals = min(15, max(0, 1 - _m.floor(_m.log10(err))))
     shown = _err_up(err + 0.5 * 10.0 ** (-decimals))
     text = f"{value:.{decimals}f}"
-    if "." in text:                   # Rhino prints `Area = 60`, not `60.000000`
+    if "." in text:                   # the reference CAD application prints `Area = 60`, not `60.000000`
         text = text.rstrip("0").rstrip(".")
     return f"{label} = {text} (+/- {shown:.0e})"
 
@@ -7687,11 +7687,11 @@ class LengthCmd(Command):
             return "No curve selected -- select curves, then press Enter", False
         geom = ctx.geom_by_name(text)
         if not isinstance(geom, r3.Curve):
-            # stay at the prompt: Rhino's curve filter would not have picked it either
+            # stay at the prompt: the reference CAD application's curve filter would not have picked it either
             return f"{text} is not a curve -- select curves to measure", False
         return super()._feed_objects_step(text, ctx)
 
-    def execute(self, ctx: RhinoContext):
+    def execute(self, ctx: NarwhalContext):
         name = self.args[0]
         geom = ctx.geom_by_name(name)
         if not isinstance(geom, r3.Curve):
@@ -7796,12 +7796,12 @@ class AreaCmd(Command):
     name = "Area"
     description = "Report the area enclosed by a curve, or the surface area."
     steps = [("Object:", "name")]
-    # Rhino selects first, then runs the command; the selection
+    # the reference CAD application selects first, then runs the command; the selection
     # fallback these commands already tried was unreachable, because an
     # empty answer at a fixed prompt CANCELS (see Command.feed).
     preselect_names = 1
 
-    def execute(self, ctx: RhinoContext):
+    def execute(self, ctx: NarwhalContext):
         from . import analysis
 
         name = self.args[0]
@@ -7836,12 +7836,12 @@ class VolumeCmd(Command):
     name = "Volume"
     description = "Report the volume enclosed by a solid."
     steps = [("Solid:", "name")]
-    # Rhino selects first, then runs the command; the selection
+    # the reference CAD application selects first, then runs the command; the selection
     # fallback these commands already tried was unreachable, because an
     # empty answer at a fixed prompt CANCELS (see Command.feed).
     preselect_names = 1
 
-    def execute(self, ctx: RhinoContext):
+    def execute(self, ctx: NarwhalContext):
         from . import analysis
 
         name = self.args[0]
@@ -7878,7 +7878,7 @@ class DistanceCmd(Command):
     description = "Report the distance between two points."
     steps = [("Point 1:", "point"), ("Point 2:", "point")]
 
-    def execute(self, ctx: RhinoContext):
+    def execute(self, ctx: NarwhalContext):
         import math as _math
 
         p1, p2 = self.args
@@ -7942,7 +7942,7 @@ class BoundingBoxCmd(Command):
             return cplane.CPlane()
         return self._active_cplane(ctx)
 
-    def execute(self, ctx: RhinoContext):
+    def execute(self, ctx: NarwhalContext):
         from . import analysis, bounding_boxes
         from . import bridge
         from . import cplane
@@ -7999,7 +7999,7 @@ class BoundingBoxCmd(Command):
 # ---------------------------------------------------------------------------
 #
 # Steps and options come from each command's help page; prompts and output lines use
-# Rhino's command-UI format strings:
+# the reference CAD application's command-UI format strings:
 #     "Start of first line" / "End of first line" / "Start of second line" /...
 #     "Select two planar surfaces or lines to measure the angle between them"
 #     "Angle = %s"   "Radius = %s"   "Diameter = %s"   "Radius of curvature is infinite."
@@ -8008,7 +8008,7 @@ class BoundingBoxCmd(Command):
 #      objects", and the same for "Volume Centroid" / "for %i solids")
 #     "Point to evaluate. Press Enter when done"
 #     "Point in world coordinates = %s    CPlane coordinates = %s"
-# What fills a `%s` is Rhino's unit-aware number formatter, which we do not have:
+# What fills a `%s` is the reference CAD application's unit-aware number formatter, which we do not have:
 # the value to 10 significant digits with no padding zeros (a 5 prints "5").
 
 
@@ -8021,12 +8021,12 @@ def _num(v):
 
 
 def _xyz_text(p):
-    """Rhino's comma-separated `x,y,z` (as in `Area Centroid = x,y,z`)."""
+    """the reference CAD application's comma-separated `x,y,z` (as in `Area Centroid = x,y,z`)."""
     return ",".join(_num(c) for c in p)
 
 
 def _up2(err):
-    """`err` rounded UP to two significant digits, for Rhino's `%.2g` error slot."""
+    """`err` rounded UP to two significant digits, for the reference CAD application's `%.2g` error slot."""
     import math as _m
 
     if not err > 0.0:
@@ -8036,7 +8036,7 @@ def _up2(err):
 
 
 def _centroid_line(label, c, err, suffix=""):
-    """`label = x,y,z (+/- ex,ey,ez)` -- Rhino's `%.Ng` triple and `%.2g` errors.
+    """`label = x,y,z (+/- ex,ey,ez)` -- the reference CAD application's `%.Ng` triple and `%.2g` errors.
 
     N is chosen as `_measured` chooses decimals: every coordinate printed one digit past
     its own error, and the rounding that printing adds folded into the printed error, so
@@ -8119,7 +8119,7 @@ class AngleCmd(Command):
             return (n.X, n.Y, n.Z)
         return None
 
-    def execute(self, ctx: RhinoContext):
+    def execute(self, ctx: NarwhalContext):
         from . import analysis
 
         if self.steps and self.steps[0][1] == OBJECTS_MULTI:
@@ -8203,14 +8203,14 @@ class FlipCmd(Command):
     name = "Flip"
     description = "Reverse the direction of curves, or the normal direction of surfaces and solids."
     steps = [("Select objects:", OBJECTS_MULTI)]
-    # Rhino selects first, then runs the command; the selection satisfies the step
+    # the reference CAD application selects first, then runs the command; the selection satisfies the step
     # and the command runs on the naming Enter (like `What`). A typed name still
     # works -- the step is answered by the selection OR a name.
     preselect_names = 1
     cancel_on_empty_set = True
     records_undo = True         # a direction change is a document change
 
-    def execute(self, ctx: RhinoContext):
+    def execute(self, ctx: NarwhalContext):
         # The OBJECTS_MULTI step appends a LIST of names; a single typed
         # name arrives the same way (one-element list). Normalise both.
         arg = self.args[0] if self.args else None
@@ -8288,7 +8288,7 @@ class ChangeDegreeCmd(Command):
 
     (`the command reference ChangeDegree`): Steps: "Select the objects. Type a degree
     value. For surfaces type values in the u and v directions." Options: `Deformable`
-    (Yes/No) and `SubCrv`. With `Deformable` OFF (the default), Rhino: if the current
+    (Yes/No) and `SubCrv`. With `Deformable` OFF (the default), the reference CAD application: if the current
     degree is LESS than requested it keeps the SAME geometry and parameterization and
     just adds knot multiplicity (an exact raise); if the current degree is GREATER than
     requested it is an APPROXIMATION. So raising is exact and lowering is not -- which
@@ -8315,7 +8315,7 @@ class ChangeDegreeCmd(Command):
     cancel_on_empty_set = True
     records_undo = True         # a degree change is a document change
 
-    def execute(self, ctx: RhinoContext):
+    def execute(self, ctx: NarwhalContext):
         # The OBJECTS_MULTI step appends a LIST of names; a single typed name
         # arrives the same way (one-element list). Normalise both (as Flip does).
         arg = self.args[0] if self.args else None
@@ -8424,12 +8424,12 @@ class InsertKnotCmd(Command):
     # Step 0: the object (the curve, singular as the help says). Step 1: the pick
     # location, which decides where the knot goes (the closest point on the curve).
     steps = [("Object:", OBJECTS), ("Pick a location for the knot:", POINT)]
-    # preselect_names=1: select the curve first, then run (Rhino's flow); a typed name
+    # preselect_names=1: select the curve first, then run (the reference CAD application's flow); a typed name
     # still works (the selection is a shortcut, not a replacement).
     preselect_names = 1
     records_undo = True         # a knot insertion is a document change
 
-    def execute(self, ctx: RhinoContext):
+    def execute(self, ctx: NarwhalContext):
         name = self.args[0] if self.args else None
         loc = self.args[1] if len(self.args) > 1 else None
         if not name and ctx.selected_objects():
@@ -8495,7 +8495,7 @@ class _CrvEndCmdBase(Command):
     def _endpoint(self, geom):
         return geom.PointAtStart if self.which == "start" else geom.PointAtEnd
 
-    def execute(self, ctx: RhinoContext):
+    def execute(self, ctx: NarwhalContext):
         # The objects_multi step hands the curve names as a list (typed OR from the
         # selection -- `_feed_objects_multi_step` / `_take_objects_selection` both
         # append `[names]`). Read that; if execute was driven straight (no step yet),
@@ -8552,7 +8552,7 @@ class ExtractPtCmd(Command):
     """`ExtractPt` -- the command behavior. a point object per control point.
 
     (`the command reference ExtractPt`): Steps: "Select curves, surfaces, or polygon
-    mesh objects. Rhino creates point objects for every control point in the object."
+    mesh objects. the reference CAD application creates point objects for every control point in the object."
     Options: `OutputLayer` (Current | Input).
 
     This command creates a NEW point object per CONTROL POINT of the selection -- it is
@@ -8627,7 +8627,7 @@ class ExtractPtCmd(Command):
             return [(p.X, p.Y, p.Z) for p in geom.Vertices.ToPoint3dArray()]
         return None
 
-    def execute(self, ctx: RhinoContext):
+    def execute(self, ctx: NarwhalContext):
         # The objects_multi step hands the names as a list (typed OR from the selection);
         # if execute was driven straight (no step yet), fall back to the live selection.
         if self.args and isinstance(self.args[0], (list, tuple)):
@@ -8756,7 +8756,7 @@ class ExtractControlPolygonCmd(Command):
             return out or None
         return None
 
-    def execute(self, ctx: RhinoContext):
+    def execute(self, ctx: NarwhalContext):
         if self.args and isinstance(self.args[0], (list, tuple)):
             names = list(self.args[0])
         elif self.args and isinstance(self.args[0], str):
@@ -8848,7 +8848,7 @@ class SetUserTextCmd(Command):
              ("Value:", TEXT)]
     preselect_names = 1
 
-    def execute(self, ctx: RhinoContext):
+    def execute(self, ctx: NarwhalContext):
         name = self.args[0] if self.args else None
         key = self.args[1] if len(self.args) > 1 else ""
         value = self.args[2] if len(self.args) > 2 else ""
@@ -8885,7 +8885,7 @@ class SetDocumentUserTextCmd(Command):
     description = "Attach or remove a key/value string on the current document."
     steps = [("Key:", TEXT), ("Value:", TEXT)]
 
-    def execute(self, ctx: RhinoContext):
+    def execute(self, ctx: NarwhalContext):
         key = self.args[0] if self.args else ""
         value = self.args[1] if len(self.args) > 1 else ""
         if not key:
@@ -8930,7 +8930,7 @@ class GetUserTextCmd(Command):
             return self.execute(ctx)
         return super()._feed(text, ctx)
 
-    def execute(self, ctx: RhinoContext):
+    def execute(self, ctx: NarwhalContext):
         name = self.args[0] if self.args else None
         key = self.args[1] if len(self.args) > 1 else ""
         obj = _attribute_object(ctx, name)
@@ -8949,7 +8949,7 @@ class GetUserTextCmd(Command):
 class GetDocumentUserTextCmd(Command):
     """`GetDocumentUserText` -- the command behavior.
 
-    from the fixed Rhino help: the command retrieves the key/value
+    from the fixed the reference CAD application help: the command retrieves the key/value
     strings written by ``SetDocumentUserText``.  The native ``File3dm.Strings``
     table is authoritative.  Enter at the key prompt lists every row; a typed
     key queries exactly that row.  Period-prefixed keys are hidden from the
@@ -8970,7 +8970,7 @@ class GetDocumentUserTextCmd(Command):
             return self.execute(ctx)
         return super()._feed(text, ctx)
 
-    def execute(self, ctx: RhinoContext):
+    def execute(self, ctx: NarwhalContext):
         key = self.args[0] if self.args else ""
         rows = list(ctx.model.file.Strings)
         if key:
@@ -9003,14 +9003,14 @@ class WhatCmd(Command):
     name = "What"
     description = "Show the type, geometry and measurements of the selected object(s)."
     steps = [("Select objects:", OBJECTS_MULTI)]
-    # Rhino selects first, then runs the command; the selection satisfies the step
+    # the reference CAD application selects first, then runs the command; the selection satisfies the step
     # and the command runs on the naming Enter (like `Delete`). A typed name still
     # works -- the step is answered by the selection OR a name.
     preselect_names = 1
     cancel_on_empty_set = True
     records_undo = False        # read-only: reports, does not change the document
 
-    def execute(self, ctx: RhinoContext):
+    def execute(self, ctx: NarwhalContext):
         # The OBJECTS_MULTI step appends a LIST of names; a single typed
         # name arrives the same way (one-element list). Normalise both.
         arg = self.args[0] if self.args else None
@@ -9126,7 +9126,7 @@ class _CurvatureRadiusCmd(Command):
         return (info["distance"], info["radius"], info.get("center"), info.get("axis"),
                 info["foot"], info["kind"])
 
-    def execute(self, ctx: RhinoContext):
+    def execute(self, ctx: NarwhalContext):
         import math as _m
 
         from . import analysis
@@ -9148,7 +9148,7 @@ class _CurvatureRadiusCmd(Command):
             lo, hi = analysis.bounding_box(geom)
             size = _m.dist((lo.X, lo.Y, lo.Z), (hi.X, hi.Y, hi.Z))
             # nearest wins; on a TIE a curve beats a surface -- a curve drawn on a face
-            # (a sketch on a box) is what a pick on it means, as Rhino's picker
+            # (a sketch on a box) is what a pick on it means, as the reference CAD application's picker
             # prefers curves (the tie tolerance is the document tolerance)
             tol = self._autoclose_tolerance(ctx)
             if (best is None or m[0] < best[1][0] - tol
@@ -9241,7 +9241,7 @@ class DiameterCmd(_CurvatureRadiusCmd):
 
 class _CentroidCmd(Command):
     """Shared body of `AreaCentroid` / `VolumeCentroid`: measure every selected object,
-    print Rhino's line (single, or `Cumulative... for %i...`), place a point object at
+    print the reference CAD application's line (single, or `Cumulative... for %i...`), place a point object at
     the centroid ("A point object will be placed at the centroid coordinates" --
     the command behavior, )."""
 
@@ -9253,7 +9253,7 @@ class _CentroidCmd(Command):
         """``(mass, mass_err, centroid, centroid_err)`` or a refusal string."""
         raise NotImplementedError
 
-    def execute(self, ctx: RhinoContext):
+    def execute(self, ctx: NarwhalContext):
         names = self.args[0] if self.args else []
         parts, skipped, curves = [], [], 0
         for nm in names:
@@ -9374,7 +9374,7 @@ class EvaluatePtCmd(Command):
             return None, True
         return super()._feed(text, ctx)
 
-    def execute(self, ctx: RhinoContext):
+    def execute(self, ctx: NarwhalContext):
         p = self.args[-1]
         local = self._active_cplane(ctx).from_world(p)
         self.args = []
@@ -9389,7 +9389,7 @@ class EvaluatePtCmd(Command):
 # Trim, Intersect
 # ---------------------------------------------------------------------------
 #
-# Prompts are Rhino's in the command UI: "Select first curve to fillet",
+# Prompts are the reference CAD application's in the command UI: "Select first curve to fillet",
 # "Select second curve to fillet", "Select first curve to chamfer", "First chamfer
 # distance", "Second chamfer distance", "Select objects to split. Press Enter when
 # done", "Select cutting objects. Press Enter when done", "Select object to trim. Press
@@ -9502,7 +9502,7 @@ class _TwoCurveCmd(Command):
     """Shared by `Fillet` / `Chamfer`: two `OBJECTS` steps, answered by two DIFFERENT
     curves.
 
-    NOT filled from a preselection at start (`preselect_names = 0`): Rhino shows these
+    NOT filled from a preselection at start (`preselect_names = 0`): the reference CAD application shows these
     commands' options -- `Radius=1`, `Trim=Yes` -- at the first curve prompt, and running
     straight off a selection would take the radius away before it could be typed. A
     selection still answers each prompt on Enter; the base `OBJECTS` confirm takes
@@ -9556,7 +9556,7 @@ class _TwoCurveCmd(Command):
             if trim:
                 return (f"{self.name}: the {what.split()[0].lower()} did not join to the "
                         f"trimmed curves (nothing changed)")
-            # Join with Trim=No: Rhino joins the arc to UNtrimmed curves only where they
+            # Join with Trim=No: the reference CAD application joins the arc to UNtrimmed curves only where they
             # meet it -- they generally do not, so this is reported, not faked
             return (f"{self.name}: Join needs Trim=Yes (an untrimmed curve does not end at "
                     f"the {what.split()[0].lower()})")
@@ -9610,7 +9610,7 @@ class FilletCmd(_TwoCurveCmd):
                     help="Interactive preview while picking or typing the radius."),
     )
 
-    #: Rhino's own refusal names both causes in the command UI
+    #: the reference CAD application's own refusal names both causes in the command UI
     UNABLE = ("Unable to fillet the curves. The fillet radius may be too big or the curves "
               "may not be on the same plane near the fillet.")
 
@@ -9683,7 +9683,7 @@ class FilletCmd(_TwoCurveCmd):
         return (f"{self.name}: fillet R{_num(radius)} at the corner of segments {i + 1} and "
                 f"{j + 1} of {name} -> {new}")
 
-    def execute(self, ctx: RhinoContext):
+    def execute(self, ctx: NarwhalContext):
         radius = float(self.opt.get("Radius", 1.0))
         trim = bool(self.opt.get("Trim", True))
         names = [a for a in self.args if isinstance(a, str)]
@@ -9719,11 +9719,11 @@ class ChamferCmd(_TwoCurveCmd):
     """`Chamfer` (curves) -- the command behavior.
 
     steps: "Select the first curve near the end for the chamfer. Select the
-    second curve...". Options built: `Distances` (Rhino's two prompts "First chamfer
+    second curve...". Options built: `Distances` (the reference CAD application's two prompts "First chamfer
     distance" / "Second chamfer distance"), `Join`, `Trim`. Declared, not implemented:
     `ExtendArcsBy`, `ExtendOtherCurvesBy`. The kernel is `fillet.chamfer_curves` (exact
     for lines; arc-length walk-back for any other curve).
-    the default distances are 1, 1 (Rhino's are document settings we do not have).
+    the default distances are 1, 1 (the reference CAD application's are document settings we do not have).
     """
 
     name = "Chamfer"
@@ -9773,7 +9773,7 @@ class ChamferCmd(_TwoCurveCmd):
             self.distances[0 if label.startswith("First") else 1] = value
         return out
 
-    def execute(self, ctx: RhinoContext):
+    def execute(self, ctx: NarwhalContext):
         pair = self._curves(ctx)
         if isinstance(pair, str):
             return pair, True
@@ -9788,7 +9788,7 @@ class ChamferCmd(_TwoCurveCmd):
 
 def _cplane_z(cmd, ctx):
     """The active CPlane's Z -- the projection direction for a cutting LINE (a line has no
-    unique plane; in a plan view Rhino projects along the view direction, the command behavior). World Z when no viewport is known."""
+    unique plane; in a plan view the reference CAD application projects along the view direction, the command behavior). World Z when no viewport is known."""
     plane = cmd._active_cplane(ctx)
     z = getattr(plane, "zaxis", None) if plane is not None else None
     return tuple(float(c) for c in z) if z is not None else (0.0, 0.0, 1.0)
@@ -9823,7 +9823,7 @@ class SplitCmd(Command):
                     help="(Surfaces only) Shrink the underlying surface."),
     )
 
-    def execute(self, ctx: RhinoContext):
+    def execute(self, ctx: NarwhalContext):
         targets, cutters = self.args[0], self.args[1]
         surfaces = 0
         cut_geoms = []
@@ -9915,7 +9915,7 @@ class TrimCmd(Command):
             return (f"Trimmed {self._trimmed} time(s)" if self._trimmed else None), True
         return super()._feed(text, ctx)
 
-    def execute(self, ctx: RhinoContext):
+    def execute(self, ctx: NarwhalContext):
         cutters = self.args[0]
         pick = self.args[1]
         self.args = [cutters]                 # ready for the next pick
@@ -9952,7 +9952,7 @@ class TrimCmd(Command):
             return f"Trim: the cutting objects do not cross {name}", False
         pieces = bridge.trim_curve(geom, mine, pick)
         new = _replace_curve(ctx, name, pieces, keep_selection=True)
-        # a trimmed CUTTER keeps cutting (Rhino trims "the cutting objects themselves")
+        # a trimmed CUTTER keeps cutting (the reference CAD application trims "the cutting objects themselves")
         if any(n.lower() == name.lower() for n in cutters):
             self.args = [[n for n in cutters if n.lower() != name.lower()] + new]
         self._trimmed += 1
@@ -9965,7 +9965,7 @@ class IntersectCmd(Command):
     "Select objects. This creates curves or point object at the intersection of
     the two objects." Every pair of selected CURVES is intersected (`intersect.curve_curve`:
     Newton-refined to ~1e-12) and a point object placed at each crossing. Declared, not
-    implemented: an OVERLAP (Rhino makes a curve there -- reported, not built), surfaces
+    implemented: an OVERLAP (the reference CAD application makes a curve there -- reported, not built), surfaces
     (skipped by name), `InfinitePlane`, `SubCrv`.
     """
 
@@ -9980,7 +9980,7 @@ class IntersectCmd(Command):
         opts.Option("SubCrv", opts.MODE, help="Selects part of a curve as input."),
     )
 
-    def execute(self, ctx: RhinoContext):
+    def execute(self, ctx: NarwhalContext):
         from . import intersect
 
         names = self.args[0]
@@ -10034,7 +10034,7 @@ class BlendCrvCmd(Command):
     Options built: `Continuity1` / `Continuity2` (Position, Tangency, Curvature, G3, G4 --
     the command UI's names for the per-end setting), `Flip1` / `Flip2`, `Trim`, `Join`,
     `BlendStart=CurveEnd`. Declared, not implemented: `BlendStart=PickPoint`, `Edges`,
-    `Point`, `SubCrv`, `ShowCurvature`. The INTERACTIVE handle adjustment Rhino offers in
+    `Point`, `SubCrv`, `ShowCurvature`. The INTERACTIVE handle adjustment the reference CAD application offers in
     its preview is not implemented; `blend.py` documents the
     handle length it uses.
 
@@ -10078,7 +10078,7 @@ class BlendCrvCmd(Command):
             return "BlendCrv: BlendStart=PickPoint is not implemented yet", False
         return None
 
-    def execute(self, ctx: RhinoContext):
+    def execute(self, ctx: NarwhalContext):
         from . import blend
 
         picks = []
@@ -10117,14 +10117,14 @@ class BlendCrvCmd(Command):
 class RebuildCmd(Command):
     """`Rebuild` (curves) -- the command behavior (`rebuild.py` holds the fit).
 
-    Rhino's Rebuild is a dialog; this is its command-line form. Prompt and report are
+    the reference CAD application's Rebuild is a dialog; this is its command-line form. Prompt and report are
     the command UI's: "Select curves to rebuild", "Maximum deviation = %g". Options:
     `PointCount`, `Degree` (up to 11; "Point count = Degree + 1" kept automatically --
     whichever was set last wins, as the help describes), `DeleteInput`, `CurrentLayer`,
     `PreserveTangents`. Not filled from a preselection at start, so the options can be set
     at the prompt first; Enter confirms the selection. Surfaces are REFUSED by name.
 
-    flagged: an option left unset takes the curve's OWN value (Rhino's dialog starts
+    flagged: an option left unset takes the curve's OWN value (the reference CAD application's dialog starts
     from its last-used values, which we do not keep); DeleteInput defaults to Yes.
     """
 
@@ -10177,7 +10177,7 @@ class RebuildCmd(Command):
             count -= n.Degree if n.IsPeriodic else 1     # "one less point"
         return count, n.Degree
 
-    def execute(self, ctx: RhinoContext):
+    def execute(self, ctx: NarwhalContext):
         from . import rebuild
 
         names = self.args[0] if self.args else []
@@ -10230,7 +10230,7 @@ class PictureCmd(Command):
 
     steps: "Select one of the supported image file types. Pick the first corner of
     the plane. Pick the other corner, or type the length. The defining rectangle retains
-    the same aspect (length to width) ratio as the image." Prompts are Rhino's
+    the same aspect (length to width) ratio as the image." Prompts are the reference CAD application's
     in the command UI: "Image file name", "First corner of picture", "Other corner or
     length", "Center of picture", "Corner or length".
 
@@ -10240,7 +10240,7 @@ class PictureCmd(Command):
 
     The surface is EXACT (one planar face). The image FRAME is stored on it
     (`picture.KEY`) so the texture stays registered after a trim, and a Picture material
-    (named after the file) is assigned by `RhinoContext.add_geometry`.
+    (named after the file) is assigned by `NarwhalContext.add_geometry`.
 
     flagged: how the aspect lock meets the pick (`picture.fit_size` -- the rectangle
     grows until it reaches the picked corner); a typed length is the WIDTH; 3Point keeps
@@ -10417,7 +10417,7 @@ class PictureCmd(Command):
             self.args = saved
         return None if isinstance(res, str) else (saved[0], res)
 
-    def execute(self, ctx: RhinoContext):
+    def execute(self, ctx: NarwhalContext):
         from . import picture
 
         res = self._frame(ctx)
@@ -10618,7 +10618,7 @@ class UnitsCmd(Command):
             return self._current or ""          # keep the unit
         return "Yes"                            # the scale question
 
-    def execute(self, ctx: RhinoContext):
+    def execute(self, ctx: NarwhalContext):
         from . import units
 
         model = ctx.model
@@ -10699,7 +10699,7 @@ class DeleteCmd(Command):
                 ctx, lambda: (ui.delete_selected_control_points(ctx), True))
         return super().begin(ctx)
 
-    def execute(self, ctx: RhinoContext):
+    def execute(self, ctx: NarwhalContext):
         import bpy
 
         sel = ctx.selected_objects()
@@ -10739,7 +10739,7 @@ class UndoCmd(Command):
     # options for it, so none are declared -- that is the faithful answer, not an
     # oversight (the same call as `Point`).
     #
-    # Rhino's own limit is MEMORY, not a step count: "The number of commands you
+    # the reference CAD application's own limit is MEMORY, not a step count: "The number of commands you
     # can undo depends on the memory size reserved for undo" (the command behavior) and
     # the command behavior exposes exactly one undo setting, "Max memory used
     # (MB)". is a record count -- see undo.DEFAULT_LIMIT, flagged
@@ -10750,7 +10750,7 @@ class UndoCmd(Command):
     #: OUTSIDE a record -- the stack refuses to undo while one is open.
     records_undo = False
 
-    def execute(self, ctx: RhinoContext):
+    def execute(self, ctx: NarwhalContext):
         if not ctx.undo.can_undo:
             return "Nothing to undo", True
         name = ctx.undo_last()
@@ -10770,7 +10770,7 @@ class RedoCmd(Command):
     #: Like Undo, this navigates history and must run outside a record.
     records_undo = False
 
-    def execute(self, ctx: RhinoContext):
+    def execute(self, ctx: NarwhalContext):
         if not ctx.undo.can_redo:
             return "Nothing to redo", True
         name = ctx.redo_last()
@@ -10785,9 +10785,9 @@ class GumballNumericCmd(Command):
     the command behavior, "Common operations": "Numeric input -- Click on any
     handle. Type a number for distance, rotation angle, or scale factor."
 
-    Deliberately **not** in the command registry. It is not a Rhino command name
+    Deliberately **not** in the command registry. It is not a the reference CAD application command name
     the user can type -- it is the prompt a click on a handle raises -- and
-    registering it would make `Gumball...` autocomplete to something Rhino has no
+    registering it would make `Gumball...` autocomplete to something the reference CAD application has no
     command for. `ui` builds an instance, fills in the frame, and installs it as
     the active command so the existing command-bar prompt/input plumbing drives it
     for free.
@@ -10823,7 +10823,7 @@ class GumballNumericCmd(Command):
         self.steps = [(prompt, NUMBER)]
         return self
 
-    def execute(self, ctx: RhinoContext):
+    def execute(self, ctx: NarwhalContext):
         value = self.args[0]
         if self.reverse:
             value = -value
@@ -10873,9 +10873,9 @@ class GumballDragStrengthCmd(Command):
     To fine-tune placing objects (such as with control point editing) set the
     strength lower, so large hand/mouse movements result in smaller gumball changes."
 
-    Rhino puts this on a slider in the Gumball menu. We have no slider, so it is
+    the reference CAD application puts this on a slider in the Gumball menu. We have no slider, so it is
     typed -- which is where every other numeric value in this app is entered. The
-    name is Rhino has no `GumballDragStrength` command, so this is deliberately
+    name is the reference CAD application has no `GumballDragStrength` command, so this is deliberately
     NOT in the registry (see `_build_registry`) and cannot be typed as a command;
     it is only ever raised by the menu, exactly like `GumballNumericCmd`.
     """
@@ -10884,7 +10884,7 @@ class GumballDragStrengthCmd(Command):
     description = "Set the Gumball drag strength, as a percentage of mouse movement."
     steps = [("Drag strength (%):", "number")]
 
-    def execute(self, ctx: RhinoContext):
+    def execute(self, ctx: NarwhalContext):
         from . import gumball as gb
 
         value = gb.clamp_drag_strength(self.args[0])
@@ -10965,7 +10965,7 @@ class PointsOnCmd(Command):
     cancel_on_empty_set = True
     records_undo = False        # a display state, not a document change
 
-    def execute(self, ctx: RhinoContext):
+    def execute(self, ctx: NarwhalContext):
         try:
             from . import ui
         except Exception:  # noqa: BLE001
@@ -11015,7 +11015,7 @@ class PointsOffCmd(Command):
     cancel_on_empty_set = True
     records_undo = False
 
-    def execute(self, ctx: RhinoContext):
+    def execute(self, ctx: NarwhalContext):
         try:
             from . import ui
         except Exception:  # noqa: BLE001
@@ -11045,7 +11045,7 @@ class SelAllCmd(Command):
     records_undo = False        # selection is not a document change
     sel_key = "selall"
 
-    def execute(self, ctx: RhinoContext):
+    def execute(self, ctx: NarwhalContext):
         fn = sel_commands.COMMANDS.get(self.sel_key)
         if fn is None:
             return f"{self.name}: not implemented yet", True
@@ -11143,7 +11143,7 @@ class _SelKindCmd(Command):
             kinds.discard(None)
         return kinds
 
-    def execute(self, ctx: RhinoContext):
+    def execute(self, ctx: NarwhalContext):
         wanted = []
         for fobj in ctx.model.file.Objects:
             name = fobj.Attributes.Name
@@ -11283,7 +11283,7 @@ class SelDupCmd(Command):
     steps = []
     records_undo = False        # selection is not a document change
 
-    def execute(self, ctx: RhinoContext):
+    def execute(self, ctx: NarwhalContext):
         groups = {}
         for fobj in ctx.model.file.Objects:
             name = fobj.Attributes.Name
@@ -11323,7 +11323,7 @@ class SelNameCmd(Command):
     steps = [("Object name:", TEXT)]
     records_undo = False
 
-    def execute(self, ctx: RhinoContext):
+    def execute(self, ctx: NarwhalContext):
         pattern = str(self.args[0]) if self.args else ""
         if pattern == "":
             return "SelName: no object name or pattern given", True
@@ -11343,7 +11343,7 @@ class SetObjectNameCmd(Command):
     selection; `""` removes the name.  The documented `AppendCounter` option
     changes a multi-selection to ``name 1``, ``name 2``,...; its nested `No`
     behavior is the default.  Names are deliberately not treated as unique:
-    RhinoCommon's `ObjectAttributes.Name` documentation says more than one
+    CAD SDK's `ObjectAttributes.Name` documentation says more than one
     object may have the same name.
     """
 
@@ -11357,7 +11357,7 @@ class SetObjectNameCmd(Command):
                     help="Append ` 1`, ` 2`, ... to names in a multi-selection."),
     )
 
-    def execute(self, ctx: RhinoContext):
+    def execute(self, ctx: NarwhalContext):
         if len(self.args) < 2:
             return "SetObjectName: select objects, then type a name", True
         selected = self.args[0]
@@ -11417,7 +11417,7 @@ class SelGroupCmd(Command):
     steps = [("Group name:", TEXT)]
     records_undo = False
 
-    def execute(self, ctx: RhinoContext):
+    def execute(self, ctx: NarwhalContext):
         supplied = str(self.args[0]) if self.args else ""
         if not supplied:
             return "SelGroup: no group name given", True
@@ -11446,7 +11446,7 @@ class _SelUserTextCmd(Command):
     _kind = None
     _value_prompt = None
 
-    def execute(self, ctx: RhinoContext):
+    def execute(self, ctx: NarwhalContext):
         if self._kind == "keyvalue":
             key = str(self.args[0]) if self.args else ""
             value = str(self.args[1]) if len(self.args) > 1 else ""
@@ -11531,7 +11531,7 @@ class SelLayerCmd(Command):
 
     `execute` selects EXACTLY the objects whose `Attributes.LayerIndex` is one
     of the layers whose name matches (case-insensitive; `*`/`?` via `fnmatch`,
-    which is the same two wildcards Rhino's help names). A name that matches NO
+    which is the same two wildcards the reference CAD application's help names). A name that matches NO
     layer is REFUSED by name (the explicit-refusal policy); a matched layer holding no objects
     selects nothing and says so -- it does not look like it selected something
     it did not. Selecting the parent name does not reach a sublayer's objects
@@ -11543,7 +11543,7 @@ class SelLayerCmd(Command):
     steps = [("Layer name:", TEXT)]
     records_undo = False        # selection is not a document change
 
-    def execute(self, ctx: RhinoContext):
+    def execute(self, ctx: NarwhalContext):
         import fnmatch
 
         raw = (self.args[0] if self.args else "").strip()
@@ -11654,7 +11654,7 @@ class SelLastCmd(Command):
         return (f"{self.name}: unknown option {text!r} "
                 f"(option: DeselectOthersBeforeSelect)")
 
-    def execute(self, ctx: RhinoContext):
+    def execute(self, ctx: NarwhalContext):
         created = selection_state.last_created(ctx.model)
         if not created:
             return ("SelLast: nothing has been created this session to select "
@@ -11701,7 +11701,7 @@ class SelPrevCmd(Command):
         return (f"{self.name}: unknown option {text!r} "
                 f"(option: DeselectOthersBeforeSelect)")
 
-    def execute(self, ctx: RhinoContext):
+    def execute(self, ctx: NarwhalContext):
         prev = selection_state.previous_selection(ctx.model)
         if prev is None:
             return ("SelPrev: there is no previous selection to re-select "
@@ -11715,7 +11715,7 @@ class SelectCmd(Command):
     description = "Select all (A), none (N), or a name."
     steps = [("What? (all/none/name):", "text")]
 
-    def execute(self, ctx: RhinoContext):
+    def execute(self, ctx: NarwhalContext):
         import bpy
 
         what = self.args[0]
@@ -11736,10 +11736,10 @@ class SelectCmd(Command):
 
 
 class ZoomCmd(Command):
-    # Rhino has no `ZoomExtents` -- the real command is `Zoom`
+    # the reference CAD application has no `ZoomExtents` -- the real command is `Zoom`
     # (the command behavior) with mode options. `Extents` (frame everything) and
     # `Selected` (frame the selection) are implemented; the remaining documented
-    # modes are declared so the prompt shows what Rhino shows, and `on_mode`
+    # modes are declared so the prompt shows what the reference CAD application shows, and `on_mode`
     # says plainly that they are not implemented rather than silently doing the
     # default and appearing to work.
     name = "Zoom"
@@ -11806,8 +11806,8 @@ class ZoomCmd(Command):
         what = "selection" if selected else "extents"
         return (f"Zoomed all viewports to {what}" if every else f"Zoomed to {what}"), True
 
-    def execute(self, ctx: RhinoContext):
-        # a bare `Zoom` does Extents, which is Rhino's default behaviour
+    def execute(self, ctx: NarwhalContext):
+        # a bare `Zoom` does Extents, which is the reference CAD application's default behaviour
         return self._zoom(selected=False)
 
 
@@ -11822,7 +11822,7 @@ class GumballCmd(Command):
     # handles (Move / Rotate / Scale1D / origin) are implemented; Move-2D, Extrude,
     # Cut, the menu ball, numeric entry and the modifier behaviours are not, and
     # `gumball.ALIGNMENTS` records that only the documented CPlane alignment is
-    # built. `GumballSettings` is a separate Rhino command and is deliberately NOT
+    # built. `GumballSettings` is a separate the reference CAD application command and is deliberately NOT
     # declared here, since declaring a command we do not implement would make it
     # look available (the explicit-refusal policy).
     name = "Gumball"
@@ -11866,7 +11866,7 @@ class GumballCmd(Command):
             return self._set(name)
         return f"Gumball: the {name} option is not implemented yet", True
 
-    def execute(self, ctx: RhinoContext):
+    def execute(self, ctx: NarwhalContext):
         # The help describes the command as toggling visibility, so a bare
         # `Gumball` toggles.
         return self._set("Toggle")
@@ -11874,7 +11874,7 @@ class GumballCmd(Command):
 
 class CPlaneCmd(Command):
     # the `CPlane` command -- set the origin/orientation of the active
-    # viewport's construction plane (the command behavior). Rhino's own words:
+    # viewport's construction plane (the command behavior). the reference CAD application's own words:
     # "Pick a new origin point or choose an option." So the DEFAULT action is a
     # point (the variable-point path), and the documented options are what is in
     # `options`. We implement the parts that reduce to an already-tested
@@ -11931,7 +11931,7 @@ class CPlaneCmd(Command):
         return None          # unimplemented options never reach here
 
     def on_point(self, point, ctx):
-        # Rhino's default action: "Pick a new origin point" -- move the origin
+        # the reference CAD application's default action: "Pick a new origin point" -- move the origin
         # there, keeping orientation, and keep the command running so you can
         # pick again or choose an option.
         plane = self._active_cplane(ctx).moved_to(point)
@@ -11941,14 +11941,14 @@ class CPlaneCmd(Command):
         # Every MODE option we did not implement: say so, change nothing.
         return f"{self.name}: the {name} option is not implemented yet", True
 
-    def execute(self, ctx: RhinoContext):
+    def execute(self, ctx: NarwhalContext):
         # An empty Enter finishes the command (there is nothing more to pick).
         return "CPlane finished", True
 
 
 class NamedCPlaneCmd(Command):
     # the `NamedCPlane` command -- save the active viewport's CPlane
-    # under a name and restore it later (the command behavior). In Rhino
+    # under a name and restore it later (the command behavior). In the reference CAD application
     # this is a PANEL, not a point-driven command, so there is no default
     # point action; the actions are the panel's documented toolbar/context
     # menu items. We implement the parts that reduce to the pure
@@ -12115,7 +12115,7 @@ class NamedCPlaneCmd(Command):
             return self._list_view(ctx)
         return f"{self.name}: the {name} option is not implemented yet", True
 
-    def execute(self, ctx: RhinoContext):
+    def execute(self, ctx: NarwhalContext):
         # The panel's default view: show the list (there is no point action).
         return self._list_view(ctx)
 
@@ -12144,7 +12144,7 @@ def _document_alias_table(ctx):
 
 
 class OptionsImportCmd(Command):
-    """Import aliases from a text file, not the rest of Rhino's Options.
+    """Import aliases from a text file, not the rest of the reference CAD application's Options.
 
     (options/aliases): ``OptionsImport`` restores selected Options
     settings and is the documented way to share aliases.  deliberately
@@ -12153,33 +12153,33 @@ class OptionsImportCmd(Command):
     description = "Import aliases from a text file (Alias scope only)."
     steps = [("Alias file path:", TEXT)]
 
-    def execute(self, ctx: RhinoContext):
+    def execute(self, ctx: NarwhalContext):
         path = os.path.abspath(os.path.expanduser(self.args[0].strip().strip('"')))
         try:
             with open(path, "r", encoding="utf-8") as stream:
                 text = stream.read()
         except (OSError, UnicodeError) as error:
             return (f"Alias scope: could not import {path}: {error}; "
-                    "no aliases changed; other Rhino Options are not imported", True)
+                    "no aliases changed; other reference application options are not imported", True)
 
         table = _document_alias_table(ctx)
         report = table.import_text(text)
         if not report.ok:
             details = "; ".join(report.errors + report.collisions)
             return (f"Alias scope: import refused for {path}: {details}; "
-                    "no aliases changed; other Rhino Options are not imported", True)
+                    "no aliases changed; other reference application options are not imported", True)
         count = len(report.imported)
         return (f"Alias scope: imported {count} alias(es) from {path}; "
-                "other Rhino Options are not imported", True)
+                "other reference application options are not imported", True)
 
 
 class OptionsExportCmd(Command):
-    """Export this document's aliases as text, not all Rhino Options."""
+    """Export this document's aliases as text, not all reference application options."""
     name = "OptionsExport"
     description = "Export aliases to a text file (Alias scope only)."
     steps = [("Alias file path:", TEXT)]
 
-    def execute(self, ctx: RhinoContext):
+    def execute(self, ctx: NarwhalContext):
         path = os.path.abspath(os.path.expanduser(self.args[0].strip().strip('"')))
         table = _document_alias_table(ctx)
         text = table.export_text()
@@ -12188,9 +12188,9 @@ class OptionsExportCmd(Command):
                 stream.write(text)
         except (OSError, UnicodeError) as error:
             return (f"Alias scope: could not export {path}: {error}; "
-                    "other Rhino Options are not exported", True)
+                    "other reference application options are not exported", True)
         return (f"Alias scope: exported {len(table.aliases)} alias(es) to {path}; "
-                "other Rhino Options are not exported", True)
+                "other reference application options are not exported", True)
 
 
 class SaveCmd(Command):
@@ -12198,8 +12198,8 @@ class SaveCmd(Command):
     description = "Save the model as .3dm. Enter a path."
     steps = [("Path:", "text")]
 
-    def execute(self, ctx: RhinoContext):
-        path = self.args[0] or "/tmp/rhino_model.3dm"
+    def execute(self, ctx: NarwhalContext):
+        path = self.args[0] or "/tmp/narwhal_model.3dm"
         if not path.endswith(".3dm"):
             path += ".3dm"
         ok = ctx.model.save(path)
@@ -12211,14 +12211,14 @@ class OpenCmd(Command):
     description = "Open a .3dm file (replaces current model)."
     steps = [("Path:", "text")]
 
-    def execute(self, ctx: RhinoContext):
+    def execute(self, ctx: NarwhalContext):
         from . import state as _state
 
         path = self.args[0]
         if not path.endswith(".3dm"):
             path += ".3dm"
         try:
-            new_model = _state.RhinoModel.load(path)
+            new_model = _state.NarwhalModel.load(path)
         except FileNotFoundError as e:
             return f"Could not open {path}: {e}", True
         _state.set_model(new_model)
@@ -12235,7 +12235,7 @@ class HelpCmd(Command):
     description = "List all commands."
     steps = []
 
-    def execute(self, ctx: RhinoContext):
+    def execute(self, ctx: NarwhalContext):
         lines = ["Commands:"]
         for cmd in COMMANDS.values():
             lines.append(f"  {cmd.name:<12} {cmd.description}")
@@ -12304,7 +12304,7 @@ def _layer_state_note_change(ctx):
 
 
 class LayerStateManagerCmd(Command):
-    """Command-line subset of Rhino's ``LayerStateManager``.
+    """Command-line subset of the reference CAD application's ``LayerStateManager``.
 
     actions are List, Save, Restore, Delete and Rename.  The panel is
     pending UI wiring; Import (the 3dm action) is not
@@ -12372,14 +12372,14 @@ class LayerStateManagerCmd(Command):
 
 
 class LayersCmd(Command):
-    # Rhino has no `NewLayer` -- the real command is `Layer`
+    # the reference CAD application has no `NewLayer` -- the real command is `Layer`
     # (the command behavior). We keep the create-a-layer behaviour; the command
-    # is renamed to the honest Rhino name.
+    # is renamed to the honest the reference CAD application name.
     name = "Layer"
     description = "Create a layer. Enter a name."
     steps = [("Name:", "text")]
 
-    def execute(self, ctx: RhinoContext):
+    def execute(self, ctx: NarwhalContext):
         name = self.args[0] or f"Layer{ctx.model.object_count() + 1}"
         idx = ctx.model.add_layer(name)
         return f"Created layer {name!r} (index {idx})", True
@@ -12393,7 +12393,7 @@ def _snap_settings():
     """The live Osnap settings, or None when there is no UI (headless tests).
 
     `ui` imports `commands`, so importing it at module scope would be circular --
-    the same lazy-import shape `RhinoContext.active_cplane` already uses.
+    the same lazy-import shape `NarwhalContext.active_cplane` already uses.
     """
     try:
         from . import ui
@@ -12423,18 +12423,18 @@ def _snap_state_line(settings):
 class OsnapCmd(Command):
     """Report and change the persistent object snaps.
 
-    ⚠ DEVIATION, recorded rather than hidden: in Rhino the individual snaps are
+    ⚠ DEVIATION, recorded rather than hidden: in the reference CAD application the individual snaps are
     checkboxes on the **Osnap control** (a panel), and the `Osnap` command merely
     "Toggles the Osnap control" -- there is no `Osnap End` command syntax, and the
     help has no per-snap commands (checked: no the command behavior/the command behavior/the command behavior...). We have
     no panel yet, so this command is a **stand-in** that exposes the same state
     through options. When the Osnap panel is built this should become the panel
-    toggle it is in Rhino.
+    toggle it is in the reference CAD application.
     """
 
     name = "Osnap"
     description = ("Show or change the persistent object snaps "
-                   "(stand-in for Rhino's Osnap panel).")
+                   "(stand-in for the reference CAD application's Osnap panel).")
     steps = []
     options = tuple(
         opts.Option(mode, opts.TOGGLE, default=False,
@@ -12473,7 +12473,7 @@ class OsnapCmd(Command):
 
 
 class DisableOsnapCmd(Command):
-    """Rhino's `DisableOsnap`: "manages the state of persistent object snaps".
+    """the reference CAD application's `DisableOsnap`: "manages the state of persistent object snaps".
 
     Options taken from the sibling `ProjectOsnap` topic, which documents exactly
     `Enable` / `Disable` / `Toggle` for this shape of command
@@ -12526,7 +12526,7 @@ def _ui_module():
 
 
 class OrthoCmd(Command):
-    """Rhino's `Ortho`. (the command behavior): "The Ortho command
+    """the reference CAD application's `Ortho`. (the command behavior): "The Ortho command
     restricts the movement of the cursor to multiples of a specified angle from the last
     point created." / "The Ortho command, clicking Ortho in the status bar, and the F8
     key, are all toggles." Holding Shift flips it for a pick (ui.apply_ortho)."""
@@ -12544,7 +12544,7 @@ class OrthoCmd(Command):
 
 
 class SetOrthoCmd(Command):
-    """Rhino's `SetOrtho`: "turns ortho mode on, off, or toggles the current state"
+    """the reference CAD application's `SetOrtho`: "turns ortho mode on, off, or toggles the current state"
     -- options On / Off / Toggle (the command behavior)."""
 
     name = "SetOrtho"
@@ -12580,7 +12580,7 @@ class SetOrthoCmd(Command):
 
 
 class ProjectOsnapCmd(Command):
-    """Rhino's `ProjectOsnap`: project snaps onto the construction plane.
+    """the reference CAD application's `ProjectOsnap`: project snaps onto the construction plane.
 
     "The ProjectOsnap command projects object snaps from the actual snap point to
     the construction plane." Its three documented command-line options are
@@ -12620,7 +12620,7 @@ class ProjectOsnapCmd(Command):
 
 
 class SnapToLockedCmd(Command):
-    """Rhino's `SnapToLocked`: "snaps work on locked objects and on objects on
+    """the reference CAD application's `SnapToLocked`: "snaps work on locked objects and on objects on
     locked layers" (the command behavior).
 
     that the DEFAULT is OFF: the command behavior documents a
@@ -12693,7 +12693,7 @@ class ExtractWireframeCmd(Command):
     def on_mode(self, name, ctx):
         return f"ExtractWireframe: the {name} option is not implemented yet", False
 
-    def execute(self, ctx: RhinoContext):
+    def execute(self, ctx: NarwhalContext):
         names = [ob.name for ob in ctx.selected_objects()]
         if not names:
             return "ExtractWireframe: select surfaces or polysurfaces", True
@@ -12738,7 +12738,7 @@ class PipeCmd(Command):
 
     steps (the command UI / the command UI): "Select curves to pipe", "Start radius",
     "End radius". The end radius defaults to the start radius (Enter accepts it) -- the
-    constant-radius pipe Rhino's default flow produces.
+    constant-radius pipe the reference CAD application's default flow produces.
 
     (the help gives no default for Cap): `Cap` defaults to **Flat** -- a capped pipe
     is airtight and manufacturable, the default a solid-waiting user expects, and it is
@@ -12782,7 +12782,7 @@ class PipeCmd(Command):
             return float(self.args[1])
         return None
 
-    def execute(self, ctx: RhinoContext):
+    def execute(self, ctx: NarwhalContext):
         name = self.args[0] if self.args else None
         rail = ctx.geom_by_name(name) if name else None
         if rail is None:

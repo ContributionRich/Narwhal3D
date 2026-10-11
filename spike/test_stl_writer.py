@@ -29,7 +29,7 @@ def _load(name, filename):
     return mod
 
 
-stl = _load("rhino_stl_writer", "stl_writer.py")
+stl = _load("narwhal_stl_writer", "stl_writer.py")
 
 results = []
 TMP = tempfile.mkdtemp(prefix="stl_")

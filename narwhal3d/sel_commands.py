@@ -1,4 +1,4 @@
-"""Rhino's `SelAll` / `SelNone` / `Invert` selection commands -- the pure LOGIC.
+"""the reference CAD application's `SelAll` / `SelNone` / `Invert` selection commands -- the pure LOGIC.
 
 It has no `bpy` or rhino3dm dependency, so the logic is independent of a viewport.
 

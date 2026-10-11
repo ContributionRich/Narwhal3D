@@ -1,4 +1,4 @@
-"""Spike: verify rhino3dm can do everything we need for Rhino parity on Linux.
+"""Spike: verify rhino3dm can do everything we need for the reference CAD application parity on Linux.
 
 Uses ONLY APIs verified against rhino3dm 8.35.0 (see probe*.py history).
 Run: .venv/bin/python spike/test_geometry.py
@@ -253,7 +253,7 @@ _ROOT = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
 # Load analysis.py directly by path: importing the package would run its
 # __init__, which imports ui -> bpy, and this suite must stay Blender-free.
 _spec = _ilu.spec_from_file_location(
-    "rhino_analysis", _os.path.join(_ROOT, "narwhal3d", "analysis.py"))
+    "narwhal_analysis", _os.path.join(_ROOT, "narwhal3d", "analysis.py"))
 analysis = _ilu.module_from_spec(_spec)
 _spec.loader.exec_module(analysis)
 
@@ -319,7 +319,7 @@ def _():
 # ---------------------------------------------------------------- report
 
 print(f"\n{'=' * 58}")
-print(" rhino3dm spike — Rhino-parity geometry check")
+print(" rhino3dm spike — the reference CAD application-parity geometry check")
 print(f"{'=' * 58}")
 widths = max(len(n) for n, _, _ in results)
 for name, status, detail in results:

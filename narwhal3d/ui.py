@@ -1,17 +1,17 @@
-"""Rhino-style UI for Blender: top command bar + left tool palette.
+"""CAD-style UI for Blender: top command bar + left tool palette.
 
 Layout strategy (verified against Blender 5.2):
-- Rhino's command window sits at the TOP of the window (measured:
+- the reference CAD application's command window sits at the TOP of the window (measured:
   the measured default layout, ~95 px, pure white). In the GUI we carve a full-width
   INFO strip along the top and build the four viewports (2x2) below it.
   Under `blender -b` (where `area_close` hangs) the command bar falls back to
   the default bottom strip converted to INFO -- a documented, test-only
   difference (no headless test asserts the bar's position).
-- Our GPU-drawn Rhino command line (history + prompt + input) is hosted in that INFO area.
+- Our GPU-drawn the reference CAD application command line (history + prompt + input) is hosted in that INFO area.
 - A modal operator captures keyboard input for the command line.
-- The VIEW_3D TOOLS region hosts a Rhino-style tool palette panel.
-- Viewport theme: medium blue-grey background (measured from real Rhino 8),
-  very low-contrast grid, pure-white command area — like Rhino's default.
+- The VIEW_3D TOOLS region hosts a CAD-style tool palette panel.
+- Viewport theme: medium blue-grey background (measured from real the reference CAD application 8),
+  very low-contrast grid, pure-white command area — like the reference CAD application's default.
 """
 from __future__ import annotations
 
@@ -50,7 +50,7 @@ from . import sessionlog
 from . import uiscale
 from . import alias_table
 from . import print2d
-# Rhino's OBJECT SELECTION rules -- Shift adds, Ctrl removes, window vs crossing.
+# the reference CAD application's OBJECT SELECTION rules -- Shift adds, Ctrl removes, window vs crossing.
 # Blender's conventions differ on every one of those, so the semantics are ours
 # and live in a bpy-free module (spike/test_select.py).
 from . import select
@@ -65,11 +65,11 @@ from . import statusbar as sbar
 # not depend on external source bundles at runtime.
 from . import menubar
 from . import toolbars as tbar
-# How Rhino draws POINTS -- point objects and control points. A point has no
+# How the reference CAD application draws POINTS -- point objects and control points. A point has no
 # extent, so it needs a fixed pixel-size marker rather than the line preview; the
 # marker shapes are pure and bpy-free (spike/test_pointdisplay.py).
 from . import pointdisplay
-# Rhino's view-navigation rules (which button/modifier does what, and how
+# the reference CAD application's view-navigation rules (which button/modifier does what, and how
 # that depends on the pane's projection) live in the bpy-free `navigate` module
 # so every row of the table is unit-testable without Blender
 # (spike/test_navigate.py).
@@ -85,7 +85,7 @@ from . import preview
 # these objects/cursor/modes/CPlane) are pure and live in `osnap`, unit-tested by
 # spike/test_osnap.py; `bridge.snap_targets` adapts real rhino3dm geometry into the
 # neutral records it consumes (spike/test_osnap_bridge.py). This module only
-# supplies the cursor, converts Rhino's PIXEL snap radius to world units, and
+# supplies the cursor, converts the reference CAD application's PIXEL snap radius to world units, and
 # draws the marker.
 from . import osnap
 # `bridge.snap_targets` adapts the rhino3dm document into the neutral snap
@@ -117,7 +117,7 @@ LABEL_COLOR = (0.16, 0.16, 0.16, 1.0)
 LABEL_FONT_SIZE = 13.0
 LABEL_PAD = 8
 
-# The dynamic command preview's line colour. Rhino draws the in-progress
+# The dynamic command preview's line colour. the reference CAD application draws the in-progress
 # curve in the layer/draw colour, which on the default layer is black; a slightly
 # lifted near-black reads clearly against the measured viewport grey
 # (157,163,170) without looking like finished geometry. `gpu` draws are NOT
@@ -136,22 +136,22 @@ SNAP_LABEL_FONT_SIZE = 12.0
 
 
 # ---------------------------------------------------------------------------
-# colors + viewport sampling (Rhino 8 light look)
+# colors + viewport sampling (the reference CAD application 8 light look)
 # ---------------------------------------------------------------------------
 
 # Blender was left at its factory 8-sample viewport AA. Curves/Gumball use custom AA,
 # but every shaded solid silhouette still showed stair-steps. Blender 5.2 exposes 32 as
-# its highest multisample mode; use it globally for Rhino's smooth object edges.
+# its highest multisample mode; use it globally for the reference CAD application's smooth object edges.
 VIEWPORT_AA = "32"
 
 CMD_BG = (1.0, 1.0, 1.0, 1.0)            # command area: pure white (measured 255,255,255)
 CMD_TEXT = (0.12, 0.12, 0.12, 1.0)       # current input / prompt (dark, reads on white)
 CMD_HISTORY = (0.35, 0.35, 0.36, 1.0)    # history lines (medium gray on white)
-CMD_CURSOR = (0.85, 0.25, 0.15, 1.0)     # caret (Rhino-ish red)
-# command-line options are clickable buttons in Rhino, so they are drawn in
+CMD_CURSOR = (0.85, 0.25, 0.15, 1.0)     # caret (the reference CAD application-ish red)
+# command-line options are clickable buttons in the reference CAD application, so they are drawn in
 # a link-like blue to say so, and the autocomplete candidate list needs its own
 # colours. The first candidate is the one Enter/Tab completes to, so it is
-# highlighted the way Rhino highlights the selected entry.
+# highlighted the way the reference CAD application highlights the selected entry.
 CMD_OPTION = (0.05, 0.26, 0.63, 1.0)     # option text: clickable (blue)
 CMD_COMPLETION = (0.12, 0.12, 0.12, 1.0)  # candidate command name
 CMD_COMPLETION_SEL = (1.0, 1.0, 1.0, 1.0)  # the selected candidate's text
@@ -178,7 +178,7 @@ CMD_COMPLETION_BG = (0.93, 0.94, 0.96, 1.0)  # the candidate list's backdrop
 VIEWPORT_BG = (0.337, 0.366, 0.402, 1.0) # measured (157,163,170) sRGB, linear
 GRID_COLOR = (0.292, 0.318, 0.352, 1.0)  # measured (147,153,160) sRGB, linear -- subtle
 GRID_MAJOR = (0.220, 0.238, 0.262, 1.0)  # measured (129,134,140) sRGB, linear
-SELECT_COLOR = (1.0, 0.85, 0.0)          # Rhino's yellow selection highlight (RGB)
+SELECT_COLOR = (1.0, 0.85, 0.0)          # the reference CAD application's yellow selection highlight (RGB)
 WIRE_COLOR = (0.0, 0.0, 0.0)             # black wireframes (RGB)
 
 # Reference-only world-axis colours: X is muted red (150,75,75), Y is muted green
@@ -355,8 +355,8 @@ def region_toggle_chips_suppressed():
     return not apps.show_regions_visibility_toggle
 
 
-def apply_rhino_theme():
-    """Make the viewport look like Rhino's default light scene.
+def apply_narwhal_theme():
+    """Make the viewport look like the reference CAD application's default light scene.
 
     Every attribute is set independently and reported on failure, so a missing or
     re-typed attribute on some Blender build can neither break startup nor silently
@@ -371,7 +371,7 @@ def apply_rhino_theme():
     except Exception:  # noqa: BLE001
         return
 
-    # Grid + selection + wireframe colors (the Rhino look).
+    # Grid + selection + wireframe colors (the the reference CAD application look).
     # NOTE the differing arity, verified via bl_rna.array_length:
     #  grid / grid_major -> 4 floats (RGBA)
     #  object_selected / object_active / wire -> 3 floats (RGB)
@@ -384,7 +384,7 @@ def apply_rhino_theme():
     # The 3D view background. Two independent mechanisms have to agree:
     # * the THEME gradient (used when shading.background_type == 'THEME')
     # * the per-space shading colour (used when it is 'VIEWPORT')
-    # Set both so the viewport is the measured Rhino blue-grey no matter which
+    # Set both so the viewport is the measured the reference CAD application blue-grey no matter which
     # path is active.
     try:
         grad = v3d.space.gradients
@@ -406,10 +406,10 @@ def apply_rhino_theme():
         _set_attr(sp.shading, "background_type", "VIEWPORT")
         # 3 floats, NOT 4 -- passing VIEWPORT_BG whole raises ValueError
         _set_attr(sp.shading, "background_color", VIEWPORT_BG[:3])
-        # Rhino shows the ground grid + world axes (X red, Y green) and no
+        # the reference CAD application shows the ground grid + world axes (X red, Y green) and no
         # object-origin clutter. Blender draws those axes in the same red/green
-        # convention as Rhino, so we only toggle them on.
-        # Blender's floor, ortho grid and axis lines are INFINITE. Rhino's
+        # convention as the reference CAD application, so we only toggle them on.
+        # Blender's floor, ortho grid and axis lines are INFINITE. the reference CAD application's
         # grid is finite and lies on each pane's CPlane, so ours (`draw_cplane_grid`,
         # rules in grid.py) replaces all of them.
         _set_attr(sp.overlay, "show_floor", False)
@@ -437,7 +437,7 @@ def _find_bottom_strip():
 # Four-viewport layout + top command bar
 # ---------------------------------------------------------------------------
 #
-# Rhino opens with four equal panes (below a top command bar):
+# the reference CAD application opens with four equal panes (below a top command bar):
 #   Top     Perspective
 #   Front    Right
 #
@@ -492,7 +492,7 @@ def _assign_view(area, quat, perspective, axis=None):
     `view_rotation` only AIMS the camera. Without also setting the zoom
     (`view_distance`) and target (`view_location`) the pane keeps Blender's
     default distance of 18.388 -- roughly 8x too close -- which rendered the
-    Perspective pane as an extreme close-up with the grid filling it. Rhino's
+    Perspective pane as an extreme close-up with the grid filling it. the reference CAD application's
     measured cameras all aim at the origin, at 146.058 (Perspective) and 31.494
     (the three ortho panes). See narwhal3d/views.py.
 
@@ -506,9 +506,9 @@ def _assign_view(area, quat, perspective, axis=None):
         bpy.ops.view3d.view_axis(type="FRONT")  0.039  grid, matching Top's 0.0385
 
     Blender only draws that grid when it believes the view is axis-aligned, and
-    assigning the quaternion directly never sets that internal state. Rhino draws
+    assigning the quaternion directly never sets that internal state. the reference CAD application draws
     a grid in every viewport because the grid IS the construction plane
-    (Rhino documentation), so this is required for fidelity, not polish.
+    (the reference CAD application documentation), so this is required for fidelity, not polish.
 
     The quaternion assignment is KEPT as a fallback: the operator needs a real
     region and can fail under ``blender -b``, where  headless
@@ -537,7 +537,7 @@ def _apply_view_axis(area, quat):
     """Re-set an ortho pane through ``view3d.view_axis`` so its grid draws.
 
     Needs the area AND its WINDOW/NONE region in the override, and re-applies the
-    Rhino target/zoom afterwards because the operator resets them. Any failure is
+    the reference CAD application target/zoom afterwards because the operator resets them. Any failure is
     non-fatal: the quaternion already assigned by the caller stands, which is what
     keeps the headless suites green.
 
@@ -564,7 +564,7 @@ def _apply_view_axis(area, quat):
     try:
         with bpy.context.temp_override(area=area, region=region):
             bpy.ops.view3d.view_axis(type=axis)
-        # the operator resets target and zoom, so restore Rhino's measured values
+        # the operator resets target and zoom, so restore the reference CAD application's measured values
         sp.region_3d.view_location = VIEW_TARGET
         sp.region_3d.view_distance = ORTHO_DISTANCE
     except Exception as e:  # noqa: BLE001
@@ -621,7 +621,7 @@ def _viewport_count():
 
 
 def _assign_four_views(panes):
-    """Assign the Rhino default views to the four panes, by position.
+    """Assign the the reference CAD application default views to the four panes, by position.
 
     Panes are laid out as two columns. We split them into left/right columns by
     x (the two smallest-x panes are the left column, the two largest-x are the
@@ -672,7 +672,7 @@ def _finish_viewports(panes):
         except Exception as e:  # noqa: BLE001
             print(f"[narwhal3d] could not set up {a!r}'s display mode: {e!r}")
     # the panel region is NO LONGER re-opened on the rightmost pane. It used to
-    # be, to host `NARWHAL_PT_layers` -- "which is where Rhino's Right Container lives".
+    # be, to host `NARWHAL_PT_layers` -- "which is where the reference CAD application's Right Container lives".
     # That was an approximation of the Right Container using a Blender N-panel, and it
     # produced unwanted vertical category tabs because Blender draws one for every
     # registered `bl_category`. The right dock is
@@ -680,9 +680,9 @@ def _finish_viewports(panes):
     # this must not re-open an empty sidebar on top of a viewport. `_hide_viewport_chrome`
     # above already turns `show_region_ui` off; re-opening it here undid that for one
     # pane, which is why exactly one pane still showed the chips.
-    # Rhino HAS a status bar -- "located at the bottom of the Rhino window ...
+    # the reference CAD application HAS a status bar -- "located at the bottom of the the reference CAD application window ...
     # displays the current coordinate system, the current location and delta of
-    # the cursor, and the status bar panes" (Rhino documentation). So
+    # the cursor, and the status bar panes" (the reference CAD application documentation). So
     # the strip is kept and its CONTENT replaced (see `_install_statusbar`), which
     # is why this no longer hides it. Blender's own status bar content is gone
     # either way.
@@ -720,9 +720,9 @@ def _build_viewports_headless():
 
 
 def _build_viewports_gui():
-    """Build the Rhino layout in the GUI: a TOP command bar above a balanced 2x2.
+    """Build the the reference CAD application layout in the GUI: a TOP command bar above a balanced 2x2.
 
-    The command area is a full-width strip along the TOP of the window (Rhino's
+    The command area is a full-width strip along the TOP of the window (the reference CAD application's
     layout), so we first close the right sidebar AND the bottom strip to make
     the main viewport full width and height, then carve a thin top strip from it
     and convert that strip to INFO (the command-bar host). Only then do we split
@@ -981,7 +981,7 @@ def _build_viewports_gui():
                 # The top INFO area only exists from this tick on (created at
                 # t == 5), so the command-bar header can only be hidden now --
                 # setup_layout's synchronous call already no-oped (no INFO yet).
-                # hid this header; it now carries Rhino's toolbar, so it is
+                # hid this header; it now carries the reference CAD application's toolbar, so it is
                 # SHOWN with our content instead of hidden with Blender's.
                 _show_cmdbar_header()
                 # report how many extra callbacks were spent WAITING for a
@@ -1016,7 +1016,7 @@ _viewports_in_progress = False
 
 
 def setup_viewports():
-    """Build the four Rhino viewports: Top, Perspective, Front, Right.
+    """Build the four the reference CAD application viewports: Top, Perspective, Front, Right.
 
     Dispatches on mode: the GUI gets a top command bar + balanced 2x2 (multi-tick,
     uses area_close); headless gets a testable four-viewport layout (synchronous, no
@@ -1108,7 +1108,7 @@ def _hide_cmdbar_header():
 
 
 def setup_layout():
-    """Build the full Rhino layout: four viewports + a TOP command bar.
+    """Build the full the reference CAD application layout: four viewports + a TOP command bar.
 
     Idempotent: safe to call repeatedly (the startup timer and the tests both do).
     In the GUI the viewport build carries the top command bar ; the command
@@ -1119,7 +1119,7 @@ def setup_layout():
         return  # headless with no screen: nothing to lay out
     setup_viewports()
     _setup_command_bar()
-    # The command area's header is SHOWN, because it carries Rhino's toolbar strip
+    # The command area's header is SHOWN, because it carries the reference CAD application's toolbar strip
     # now. hid it when it still held Blender's "View | Info" menus.
     _show_cmdbar_header()
 
@@ -1281,7 +1281,7 @@ def _click_command_bar(win_x, win_y):
     go on to try the viewport), ``True`` when it activated an option or a
     candidate, and ``False`` when it landed on the bar but on nothing clickable.
     Both ``True`` and ``False`` are "consume it": a click on blank command-bar
-    space does nothing in Rhino, and letting it through would hand it to
+    space does nothing in the reference CAD application, and letting it through would hand it to
     Blender's own Info editor underneath.
     """
     area = _cmdbar_area()
@@ -1298,7 +1298,7 @@ def _click_command_bar(win_x, win_y):
 
     # 0. the TOOLBAR TAB ROW, across the top of this region. Tested FIRST because it
     #  is chrome sitting on top of the bar: the history lines run underneath it, and
-    #  in Rhino clicking a tab switches toolbars rather than doing whatever the bar
+    #  in the reference CAD application clicking a tab switches toolbars rather than doing whatever the bar
     #  would have done.
     tab = tbar.hit_tab_row(rx, ry, _toolbar_tab_boxes, _toolbar_tab_row_top)
     if tab is not None:
@@ -1391,7 +1391,7 @@ def _completion_names_for(st):
     have = {n.lower() for n in names}
     names = sorted(names + [a.name for a in alias_table.ALIAS_TABLE.values()
                             if a.implemented and a.name.lower() not in have])
-    # Rhino uses fuzzy autocomplete, not a bare prefix match. Its documentation describes
+    # the reference CAD application uses fuzzy autocomplete, not a bare prefix match. Its documentation describes
     # "two command
     # lists divided by a blank line" -- the names that start with what you typed,
     # then everything else whose letters appear in order. `completion_lists` returns
@@ -1412,7 +1412,7 @@ def _completion_is_divider(name):
     """True for the blank-line row that separates the two fuzzy lists.
 
     `cmdbar.completion_lists` marks it with `None`. It is a drawn row (so the
-    layout leaves a gap where Rhino leaves one) but it is NOT a candidate: it must
+    layout leaves a gap where the reference CAD application leaves one) but it is NOT a candidate: it must
     never be highlighted, selected by Enter/Tab, or activated by a click.
     """
     return name is None
@@ -1503,7 +1503,7 @@ def _completion_rows_for(st, height, line_h=None):
 # ['Circle', <divider>, 'Cylinder', 'BooleanIntersection'] and the user saw `Circle`.
 # The fuzzy autocomplete was wired, correct, tested -- and invisible.
 #
-# Rhino's list is not confined to the bar; it floats over the viewport next to the
+# the reference CAD application's list is not confined to the bar; it floats over the viewport next to the
 # command line. Our bar sits at the TOP of the window (the layout map in
 # the live-window layout report shows CMDBAR above the viewport rows), so the list drops
 # DOWNWARD from the bar into the top row of panes, drawn POST_PIXEL exactly like the
@@ -1518,7 +1518,7 @@ def _completion_rows_for(st, height, line_h=None):
 
 #: Application-defined maximum rows for the floating list. `cmdbar.MAX_COMPLETIONS` (5) was
 #: chosen when the bar could show one or two; with the viewport to draw in there is
-#: room for more, and Rhino's own list is longer than five. Kept modest so the list
+#: room for more, and the reference CAD application's own list is longer than five. Kept modest so the list
 #: never swallows the view.
 COMPLETION_OVERLAY_MAX_ROWS = 12
 COMPLETION_OVERLAY_WIDTH = 260
@@ -1771,7 +1771,7 @@ void main()
     c.rgb = mix(s * (1.0 / 12.92), pow((s + 0.055) * (1.0 / 1.055), vec3(2.4)),
                 step(vec3(0.04045), s));
     /* ...and that target BLENDS in linear light, so a part-covered pixel came out far
-     * lighter than the same blend in sRGB (the display the old flat line and Rhino
+     * lighter than the same blend in sRGB (the display the old flat line and the reference CAD application
      * give): MEASURED, a 1 px blue line between two rows was (99,103,228) over
      * (156,162,169) -- 0.4 of the way to blue -- and read as faint. This alpha makes a
      * dark line over a lighter ground blend as it would in sRGB (exact for black;
@@ -1979,7 +1979,7 @@ def draw_command_bar(context=None):
         font_size = _fpx(13.0)        # the interface scale
 
         st = app_state
-        # THE TOOLBAR TAB ROW takes the top of this region. Rhino draws all sixteen
+        # THE TOOLBAR TAB ROW takes the top of this region. the reference CAD application draws all sixteen
         # tab names on their own row with the button row against it. `INFO_HT_tool_header`
         # is None, so Blender will
         # not give this area a second header to put them in. The command bar's own
@@ -2009,7 +2009,7 @@ def draw_command_bar(context=None):
         # ---- autocomplete candidates ---------------------------
         # The list is NO LONGER DRAWN IN THE BAR. Verified: the bar's WINDOW region is
         # 60 px, which fits exactly ONE candidate row, so a fuzzy list of four was
-        # being truncated to its first entry and the feature was invisible. Rhino's
+        # being truncated to its first entry and the feature was invisible. the reference CAD application's
         # list FLOATS over the viewport beside the command line, so ours does too --
         # see `draw_completion_overlay`.
         #
@@ -2030,7 +2030,7 @@ def draw_command_bar(context=None):
             _draw_text(pad_x, line_y, line, font_size, CMD_HISTORY)
 
         # ---- the prompt line, drawn PIECE BY PIECE so options are clickable --
-        # Rhino's bracketed options are buttons. Building the line from labelled
+        # the reference CAD application's bracketed options are buttons. Building the line from labelled
         # segments (options.prompt_segments) means the boxes we hit-test are
         # measured from the very same glyphs we draw -- they cannot drift.
         cmd = st.active_command
@@ -2095,12 +2095,12 @@ def _pane_key(area):
     return (area.x, area.y)
 
 
-#: Which pane is the ACTIVE viewport, as a `_pane_key`. Rhino always has
+#: Which pane is the ACTIVE viewport, as a `_pane_key`. the reference CAD application always has
 #: exactly one, and it decides which CPlane typed input is interpreted in ("If
 #: you type only x and y coordinates, the point will lie on the construction
-#: plane of the active view" -- Rhino documentation).
+#: plane of the active view" -- the reference CAD application documentation).
 #: None means "not chosen yet"; `active_pane_key` then falls back to the
-#: Perspective pane, which is the one Rhino's own screenshot shows active.
+#: Perspective pane, which is the one the reference CAD application's own screenshot shows active.
 _active_pane = None
 
 
@@ -2175,11 +2175,11 @@ def active_pane_area():
     return None
 
 
-#: Per-viewport CPlane OVERRIDES, keyed by `_pane_key`. Rhino keeps a
+#: Per-viewport CPlane OVERRIDES, keyed by `_pane_key`. the reference CAD application keeps a
 #: construction plane per viewport and `CPlane` edits the active one, so a pane
 #: whose plane has been changed can no longer be derived from its orientation.
 #: A pane absent from this dict falls back to the standard plane for its view,
-#: which is what Rhino ships ("Rhino's standard viewports come with construction
+#: which is what the reference CAD application ships ("the reference CAD application's standard viewports come with construction
 #: planes that correspond to the viewport").
 _cplane_overrides = {}
 
@@ -2253,8 +2253,8 @@ def print_view_spec(area=None):
 def active_cplane():
     """The CPlane frame of the ACTIVE viewport.
 
-    This is the plane Rhino interprets a typed point in. Falls back to World Top,
-    which is also what Rhino's default Perspective viewport uses.
+    This is the plane the reference CAD application interprets a typed point in. Falls back to World Top,
+    which is also what the reference CAD application's default Perspective viewport uses.
     """
     area = active_pane_area()
     if area is None:
@@ -2265,7 +2265,7 @@ def active_cplane():
 def draw_viewport_label(context=None):
     """Draw handler for a VIEW_3D pane: the pane's name in its top-left corner.
 
-    Rhino labels each viewport ("Top", "Perspective", "Front", "Right") in the
+    the reference CAD application labels each viewport ("Top", "Perspective", "Front", "Right") in the
     top-left. The label is derived from the region's own orientation every frame
     so it stays correct when the user orbits (see `quat_to_label`). Same
     discipline as `draw_command_bar`: callable with zero args, text via `blf`,
@@ -2301,7 +2301,7 @@ def draw_viewport_label(context=None):
     if sp is None or sp.region_3d is None:
         return
     # (the viewport half): notice this pane's zoom so curves can be
-    # re-tessellated against SCREEN size, the way Rhino does. Hooked into the draw
+    # re-tessellated against SCREEN size, the way the reference CAD application does. Hooked into the draw
     # pass rather than into any one navigation path, so it catches a scroll-wheel
     # zoom, our own navigate.py, a View command, Zoom Extents and a maximize alike.
     # Cheap and write-free: it records a number and arms a one-shot timer, because
@@ -2341,7 +2341,7 @@ def draw_viewport_label(context=None):
         baseline_y = h - LABEL_PAD - text_h
 
         if fill_rgba is not None:
-            # Rhino's active title is a filled chip sized to its text (measured
+            # the reference CAD application's active title is a filled chip sized to its text (measured
             # 156x32 px around Perspective in a 3582-wide screenshot), so size it
             # from the real extent -- a short name gets a short chip rather than a
             # fixed-width block.
@@ -2396,7 +2396,7 @@ def _view3d_areas():
 # two menus; this half is geometry, pixels and clicks.
 #
 # HOW IT IS DRAWN, and why: the strip is not a Blender Area (the Bottom dock site is
-# empty in Rhino's own layout too -- the reference layout). It is drawn as a
+# empty in the reference CAD application's own layout too -- the reference layout). It is drawn as a
 # POST_PIXEL overlay along the bottom edge of the BOTTOM ROW of panes, each pane
 # drawing the slice of the strip that falls inside it. That makes one continuous
 # band across a split layout and the whole width when a pane is maximized, with no
@@ -2416,7 +2416,7 @@ def viewport_tabs_visible():
     """True when the tab strip is showing.
 
     `ViewportTabs` takes Show/Hide/Toggle, and the tab context menu has "Hide Tabs".
-    Rhino also exposes a "Viewport tabs at start" preference; this application starts
+    the reference CAD application also exposes a "Viewport tabs at start" preference; this application starts
     with tabs visible.
     """
     return _tabs_visible
@@ -2620,21 +2620,21 @@ def viewport_tab_wheel(delta):
 # ---------------------------------------------------------------------------
 # THE OSNAP PANEL, BOTTOM-LEFT 
 #
-# Verified: Rhino docks the Osnap control in the LOWER HALF of a 117 px LEFT band
+# Verified: the reference CAD application docks the Osnap control in the LOWER HALF of a 117 px LEFT band
 # (`the reference layout description`), i.e. bottom-left, sharing a container with Selection Filters.
 # Ours used to sit in Blender's right-hand `UI` region, which is the only region that
 # hosts Python Panels -- so it was in the wrong place and said so in its docstring.
 #
 # It is drawn as a POST_PIXEL overlay in the bottom-left pane, the same shape as the
 # viewport tab strip and the autocomplete list. **One honest difference, stated here
-# and not papered over: Rhino DOCKS this band, so its viewports start to the right of
+# and not papered over: the reference CAD application DOCKS this band, so its viewports start to the right of
 # it; ours FLOATS, so it covers the bottom-left corner of that viewport.** Making it a
 # true dock means another Area and therefore the layout state machine, which is the
 # one part of this file that has repeatedly gone wrong -- so it is deliberately not
 # attempted here.
 # ---------------------------------------------------------------------------
 
-#: Verified: Rhino's default layout has the panel visible (`visible="True"` on the
+#: Verified: the reference CAD application's default layout has the panel visible (`visible="True"` on the
 #: OSnap dock bar in the reference layout description, and it is in both screenshots).
 _osnap_panel_visible = True
 
@@ -2662,7 +2662,7 @@ def get_osnap_panel_boxes():
 
 
 def _osnap_panel_row_state():
-    """``[(label, on, implemented)]`` in Rhino's Verified panel order.
+    """``[(label, on, implemented)]`` in the reference CAD application's Verified panel order.
 
     `Project` and `Disable` are panel-wide flags rather than snap modes, so their
     "on" comes from the settings object's own fields; both are implemented.
@@ -2746,7 +2746,7 @@ def left_band_present():
 
 
 # ---------------------------------------------------------------------------
-# THE RIGHT DOCK BAND -- Rhino's tabbed panel container.
+# THE RIGHT DOCK BAND -- the reference CAD application's tabbed panel container.
 #
 # The right dock is one 200-pixel full-height tabbed panel with an icon-only vertical
 # strip on its far-right edge.
@@ -2759,7 +2759,7 @@ def left_band_present():
 #: ``(x, y)`` of the right dock band's area, or None when it was not carved.
 _right_band_key = None
 
-#: Index into `rightpanel.TABS` of the tab currently showing. Starts at Rhino's own
+#: Index into `rightpanel.TABS` of the tab currently showing. Starts at the reference CAD application's own
 #: `selected_item` (Layers).
 _right_tab = rightpanel.DEFAULT_TAB
 
@@ -2800,7 +2800,7 @@ def set_right_tab(index):
     """Show tab `index`. Returns the line to log, or None.
 
     Reports an unbuilt panel BY NAME rather than switching to a blank one, which is
-    rule 4 applied to chrome: the tab really does change (Rhino's would), and the
+    rule 4 applied to chrome: the tab really does change (the reference CAD application's would), and the
     message is how the user learns the body is not there yet.
     """
     global _right_tab
@@ -2869,7 +2869,7 @@ def display_panel_click(kind, value):
 
 
 def _draw_display_panel(shader, region, box):
-    """Draw the working common-mode subset of Rhino's Display panel."""
+    """Draw the working common-mode subset of the reference CAD application's Display panel."""
     global _display_panel_boxes
     rows = display_panel_rows()
     modes = [name for name, _key, implemented, _shading in views.DISPLAY_MODES
@@ -3074,7 +3074,7 @@ def apply_layer_state():
 
     `bridge.apply_document_visibility`  already honours an
     OBJECT's own `Mode` -- Hidden objects are not drawn, Locked ones are drawn but
-    unpickable. Rhino also hides and locks by LAYER (Rhino documentation: "On/Off --
+    unpickable. the reference CAD application also hides and locks by LAYER (the reference CAD application documentation: "On/Off --
     Controls global visibility of a layer"; "Lock/Unlock -- Controls the selectable
     state of the objects on a layer"), and nothing applied that, so toggling a layer
     in the panel would have changed the document and left the screen unchanged.
@@ -3087,7 +3087,7 @@ def apply_layer_state():
 
     Returns ``(hidden, locked)`` counts. `hide_select` is the lock mechanism for the
     same measured reason the object-level lock uses it: it makes the object
-    click-through rather than invisible, which is what Rhino's locked state does.
+    click-through rather than invisible, which is what the reference CAD application's locked state does.
 
     Called from `_tag_redraw_viewports` so the toggle persists across `rebuild_display`,
     which recreates Blender objects and resets their hide flags. Reasserting state on
@@ -3188,7 +3188,7 @@ def apply_layer_state():
         if ob.hide_render != is_hidden:
             ob.hide_render = is_hidden
         # a HIDDEN object must not also be grabbable through its hidden state -- nor stay
-        # SELECTED: Rhino's Hide leaves nothing hidden in the selection, and a selected
+        # SELECTED: the reference CAD application's Hide leaves nothing hidden in the selection, and a selected
         # hidden curve went on drawing its control points
         if is_hidden:
             try:
@@ -3216,7 +3216,7 @@ def apply_layer_state():
 
 # ---------------------------------------------------------------------------
 # Double-clicking a layer name starts in-place rename.
-# Verified (Rhino documentation): the panel edits names in place -- "While editing a layer
+# Verified (the reference CAD application documentation): the panel edits names in place -- "While editing a layer
 # name, pressing Tab or Insert accepts the name editing and creates a new layer" -- and
 # the context menu's "Rename: Edits the name of the selected layer".
 # ---------------------------------------------------------------------------
@@ -3244,7 +3244,7 @@ def layer_rename_editing():
 
 def layer_rename_commit(and_new=False):
     """Accept the edit (an undoable `Layer Rename`). With `and_new` (Tab / Insert) also
-    create a new layer and start editing ITS name, as Rhino does. Returns a message."""
+    create a new layer and start editing ITS name, as the reference CAD application does. Returns a message."""
     global _layer_edit
     from . import layer_commands
 
@@ -3332,7 +3332,7 @@ def layer_panel_press(row_index, column_index, now=None):
 #: the layer a right-click menu was opened on (Blender menus' draw takes no arguments)
 _layer_menu_target = None
 
-#: Verified (Rhino documentation, "Layer context menu options"), in Rhino's order, for a
+#: Verified (the reference CAD application documentation, "Layer context menu options"), in the reference CAD application's order, for a
 #: right-click on a layer's name. (label, action) -- action None = not built yet.
 LAYER_MENU = (
     ("Select Objects", "select"),
@@ -3420,7 +3420,7 @@ def layer_menu_action(action, layer_name=None):
 
 
 def show_layer_menu(layer_name):
-    """Right-click on a layer row: Rhino's layer context menu. True if it opened."""
+    """Right-click on a layer row: the reference CAD application's layer context menu. True if it opened."""
     global _layer_menu_target
     _layer_menu_target = layer_name
     try:
@@ -3434,7 +3434,7 @@ def show_layer_menu(layer_name):
 def layer_panel_click(row_index, column_index):
     """Act on a click in the Layers list. Returns a line to log, or None.
 
-    Verified behaviours (Rhino documentation):
+    Verified behaviours (the reference CAD application documentation):
 
     * **Name / Current** -- "A check and shading indicates current layer." Clicking
       either makes that layer current, which is what a new object then lands on.
@@ -3442,7 +3442,7 @@ def layer_panel_click(row_index, column_index):
     * **Lock / Unlock** -- "Controls the selectable state of the objects on a layer."
 
     `Color` and `Material` report that they are not built rather than doing nothing:
-    Rhino opens a colour picker and a material browser, and we have neither.
+    the reference CAD application opens a colour picker and a material browser, and we have neither.
     """
     if not (0 <= row_index < len(_layer_row_objs)):
         return None
@@ -3471,7 +3471,7 @@ def layer_panel_click(row_index, column_index):
         _sync_layer_to_document(layer)
         msg = f"{layer.name} is {'locked' if want else 'unlocked'}"
     elif name == "Color":
-        # Verified (Rhino documentation): clicking the colour swatch opens a colour
+        # Verified (the reference CAD application documentation): clicking the colour swatch opens a colour
         # picker; the desktop's own (kdialog / zenity), via colordialog.
         from . import colordialog
 
@@ -3524,7 +3524,7 @@ def set_layer_color(layer, rgb):
                 model.file.Layers[index].Color = (r, g, b, 255)
                 break
     if index is not None:
-        mat = bpy.data.materials.get(f"rhino_layer_{index}")
+        mat = bpy.data.materials.get(f"narwhal_layer_{index}")
         if mat is not None:
             mat.diffuse_color = _shaded_rgba((r, g, b))
             try:
@@ -3590,7 +3590,7 @@ def _layer_curve_items():
     # surfaces: each layer material's VIEWPORT colour follows its layer -- also for a
     # file just opened or an undo, where nothing went through `set_layer_color`
     for info in layers:
-        mat = bpy.data.materials.get(f"rhino_layer_{info['index']}")
+        mat = bpy.data.materials.get(f"narwhal_layer_{info['index']}")
         if mat is not None:
             want = _shaded_rgba(info["color"])
             if tuple(round(c, 6) for c in mat.diffuse_color) != tuple(
@@ -3666,7 +3666,7 @@ def _curve_colour_map():
     import rhino3dm as r3
 
     for info in layers:
-        mat = bpy.data.materials.get(f"rhino_layer_{info['index']}")
+        mat = bpy.data.materials.get(f"narwhal_layer_{info['index']}")
         if mat is not None:
             want = _shaded_rgba(info["color"])
             if tuple(round(v, 6) for v in mat.diffuse_color) != tuple(
@@ -3703,7 +3703,7 @@ def _is_rendered_space(space):
     """True for our Rendered mode: SOLID + its white SINGLE-colour marker.
 
     measured 232 ms per four-pane Rendered frame with both Blender's shadows and
-    our Rhino-style ground-shadow pass enabled; the custom pass alone was still 241 ms.
+    our CAD-style ground-shadow pass enabled; the custom pass alone was still 241 ms.
     Blender's duplicate pass is unnecessary, and ``color_type`` is now the cheap stable
     mode discriminator: Rendered is SINGLE white; Shaded is TEXTURE.
     """
@@ -3719,7 +3719,7 @@ def ground_shadow_objects():
     """``(hull, zmin, zmax)`` per visible MESHABLE object (surfaces and solids), in world
     space -- the input `ground_shadow.scene_shadow` takes.
 
-    Verified (Rhino documentation): the automatic ground plane "ignores non-meshable
+    Verified (the reference CAD application documentation): the automatic ground plane "ignores non-meshable
     object types" -- curves and points are edge/vertex-only meshes here, so a mesh with no
     faces casts nothing. Hulls are cached per object on its transform, vertex count, mesh
     and the undo serial, because this runs on every redraw.
@@ -3928,7 +3928,7 @@ def _grid_batches(plane, area=None):
 
 
 def draw_cplane_grid():
-    """POST_VIEW: Rhino's FINITE construction-plane grid on this pane's CPlane.
+    """POST_VIEW: the reference CAD application's FINITE construction-plane grid on this pane's CPlane.
 
     Replaces Blender's floor / ortho grid, which are infinite and screen-aligned (bug
     report #3). The rules and their sources are in `grid.py`.
@@ -3987,8 +3987,8 @@ def draw_cplane_grid():
 
 # ---------------------------------------------------------------------------
 # Blender clips at a fixed clip_start / clip_end (0.01 .. 1000 by default), so zooming
-# out, or modelling anything big, cut objects away. Rhino shows no far clip in normal
-# modelling. application-defined (Rhino's near/far rule is not documented): each pane's range follows
+# out, or modelling anything big, cut objects away. the reference CAD application shows no far clip in normal
+# modelling. application-defined (the reference CAD application's near/far rule is not documented): each pane's range follows
 # its own zoom and the scene's size, re-set from a timer (never inside the draw) and only
 # when it is off by more than a factor of two, so it cannot churn redraws.
 # ---------------------------------------------------------------------------
@@ -4182,7 +4182,7 @@ CURVE_SETTLE_S = 0.3
 CURVE_FOLD_EVERY_S = 1.0
 
 #: How close (pixels) a click must come to a curve's DRAWN polyline to pick it. application-defined:
-#: no source we hold records Rhino's pick-box radius; a few pixels, and tighter than
+#: no source we hold records the reference CAD application's pick-box radius; a few pixels, and tighter than
 #: SUBOBJECT_PICK_PX because a curve within it wins over a surface (`pick_curve_object`).
 CURVE_PICK_PX = 6.0
 
@@ -4573,7 +4573,7 @@ def draw_curves():
         return
     prev_blend = None
     # Shaded and Rendered curves test against scene depth; those behind solids stay hidden.
-    # Wireframe has no faces to hide behind, so it stays see-through, as in Rhino.
+    # Wireframe has no faces to hide behind, so it stays see-through, as in the reference CAD application.
     space = getattr(bpy.context, "space_data", None)
     occlude = getattr(getattr(space, "shading", None), "type", "") == "SOLID"
     if occlude:
@@ -4723,7 +4723,7 @@ def pick_curve_object(area, space, region, rx, ry, tolerance=CURVE_PICK_PX):
     application-defined, curve vs surface: a curve within tolerance WINS over a surface or solid at the
     same pixel -- curves are drawn on top of the faces they lie on, and that is the
     thing under the cursor. (A curve hidden behind a solid in Shaded is still pickable;
-    Rhino also lets you reach objects behind others.)
+    the reference CAD application also lets you reach objects behind others.)
     """
     rv3d = getattr(space, "region_3d", None) if space is not None else None
     if rv3d is None or region is None:
@@ -4874,7 +4874,7 @@ def _draw_layers_panel(shader, region, box):
     import gpu
 
     layers = _document_layers()
-    # a "New Layer" button along the bottom of the panel (Verified, Rhino documentation:
+    # a "New Layer" button along the bottom of the panel (Verified, the reference CAD application documentation:
     # "New Layer: Click to create a new layer"); the list gets the rest of the body
     bx0, by0, bx1, by1 = box["body"]
     bh = 22
@@ -4913,7 +4913,7 @@ def _draw_layers_panel(shader, region, box):
         for row, layer in zip(rows, _layer_row_objs):
             rx0, ry0, rx1, ry1 = row
             # Draw the dotted separator under each row
-            # on the control-point display and Rhino uses it here too (Verified: a
+            # on the control-point display and the reference CAD application uses it here too (Verified: a
             # 1 px line at (222,226,233) covering ~29 % of the width, i.e. dotted)
             for dx in range(int(rx0), int(rx1), 3):
                 lines.append((dx, ry0, dx + 1, ry0 + 1))
@@ -5008,7 +5008,7 @@ def _draw_layers_panel_text(lay, rows, current):
         cx0, cx1 = rightpanel.column_x(i, hx1 - hx0)
         if hx0 + cx0 >= hx1:
             break
-        # Rhino heads the name column "Layer", not "Name" (Verified: the
+        # the reference CAD application heads the name column "Layer", not "Name" (Verified: the
         # screenshot's header reads "Layer"), and abbreviates the narrow ones to
         # whatever fits -- which at 20 px is one letter.
         label = "Layer" if i == 0 else name[0]
@@ -5019,7 +5019,7 @@ def _draw_layers_panel_text(lay, rows, current):
     for row, layer in zip(rows, _layer_row_objs):
         rx0, ry0, rx1, ry1 = row
         is_current = layer is current
-        # NAME. Rhino draws the current layer's name BOLD (Verified: "Default" is
+        # NAME. the reference CAD application draws the current layer's name BOLD (Verified: "Default" is
         # bold in the screenshot). blf has no bold face here, so the current layer
         # is drawn in full ink and the others dimmer -- application-defined, and flagged: it is a
         # weight difference rendered as a contrast difference.
@@ -5044,7 +5044,7 @@ def _draw_layers_panel_text(lay, rows, current):
         # CURRENT: a tick, exactly as the screenshot shows for "Default".
         if is_current:
             _mark("Current", "\u2713", True)
-        # ON / LOCK. Rhino uses a light bulb and a padlock; we have neither glyph
+        # ON / LOCK. the reference CAD application uses a light bulb and a padlock; we have neither glyph
         # nor artwork, so these are application-defined: a filled vs hollow marker, dimmed when
         # off/unlocked. The STATE is real -- it is the document's.
         _mark("On", "\u25cf" if layer.visible else "\u25cb", layer.visible)
@@ -5383,8 +5383,8 @@ def _draw_right_band_text(box):
 
     The CAPTION is not drawn here: the band is an INFO area and its own header
     region already carries one, which is why `rightpanel.layout` is called with
-    `title_h=0`. `_draw_rhino_toolbar` puts the active panel's name there --
-    Verified that Rhino captions the container with the ACTIVE panel's name (the
+    `title_h=0`. `_draw_narwhal_toolbar` puts the active panel's name there --
+    Verified that the reference CAD application captions the container with the ACTIVE panel's name (the
     screenshot's caption reads "Layers", the selected tab, not "Right Container").
     """
     try:
@@ -5787,7 +5787,7 @@ def _draw_left_sidebar(shader, region):
                 ).draw(img_shader)
             except Exception:  # noqa: BLE001
                 pass
-        # The cascade marker. Verified (Rhino documentation): this triangle means a
+        # The cascade marker. Verified (the reference CAD application documentation): this triangle means a
         # LINKED TOOLBAR, not merely a second right-click command. Its selectable box
         # is now visibly distinct on hover and press, using the SAME pure geometry as
         # hit-testing so feedback cannot point at a dead region.
@@ -5819,7 +5819,7 @@ def _draw_left_sidebar(shader, region):
 
 
 def sidebar_hover_update(mouse_x, mouse_y):
-    """Track Rhino-style grey hover feedback for the responsive sidebar.
+    """Track CAD-style grey hover feedback for the responsive sidebar.
 
     Returns True only when the highlighted button OR its selectable part changes,
     allowing viewport mouse motion to avoid unnecessary dock redraws.
@@ -5883,7 +5883,7 @@ def sidebar_button_at(mouse_x, mouse_y):
 def sidebar_click(btn, right=False):
     """Run a sidebar button. Returns a line to log, or None.
 
-    Honours Rhino's documented second command -- "Many icons have a second command
+    Honours the reference CAD application's documented second command -- "Many icons have a second command
     that you can access by clicking the right mouse button" -- and reports an unbuilt
     command by name instead of doing nothing, the same rule the strip and the menus
     follow.
@@ -6018,7 +6018,7 @@ def draw_osnap_panel():
     rows = _osnap_panel_row_state()
     if not rows:
         return
-    # bottom-aligned in the band: Rhino's OSnap bar is the band's LOWER half.
+    # bottom-aligned in the band: the reference CAD application's OSnap bar is the band's LOWER half.
     x0 = region.x
     y_bottom = region.y
     # The Osnap panel uses the dock's live width.
@@ -6069,7 +6069,7 @@ def draw_osnap_panel():
             if on:
                 _draw_rect(shader, cx + 2, cy + 2, cx + views.OSNAP_BOX - 2,
                            cy + views.OSNAP_BOX - 2, tick)
-            # a snap Rhino offers that we do not COMPUTE keeps its row and is marked,
+            # a snap the reference CAD application offers that we do not COMPUTE keeps its row and is marked,
             # rather than being hidden -- the same rule the menus follow
             name = label if implemented else f"{label} *"
             _draw_text(cx + views.OSNAP_BOX + 6, by0 - region.y + 4,
@@ -6094,7 +6094,7 @@ def osnap_panel_click(label):
     """Toggle the row `label`. Returns the line to log, or None.
 
     `Project` and `Disable` are the settings object's own flags; everything else is a
-    persistent snap mode. An unimplemented mode still TOGGLES -- Rhino's checkbox
+    persistent snap mode. An unimplemented mode still TOGGLES -- the reference CAD application's checkbox
     does -- but says that we do not compute it, which is the honest half.
     """
     settings = snap_settings()
@@ -6228,9 +6228,9 @@ def pick_point(area, space, region, region_x: float, region_y: float,
                constraint=None):
     """Convert a click to a world point on THAT pane's own construction plane.
 
-    (replaces the old z=0-only `pick_point_on_ground`): Rhino picks on
+    (replaces the old z=0-only `pick_point_on_ground`): the reference CAD application picks on
     each viewport's own CPlane -- Top->World Top (XY), Front->World Front (XZ),
-    Right->World Right (YZ), Perspective->World Top (Rhino documentation). So a
+    Right->World Right (YZ), Perspective->World Top (the reference CAD application documentation). So a
     Front click yields a real z, and a pane whose view ray is parallel to the
     z=0 plane (Front/Right) no longer returns None.
 
@@ -6292,7 +6292,7 @@ def pick_point(area, space, region, region_x: float, region_y: float,
 
 
 def geom_by_name_in_document(name):
-    """The document geometry called `name`, or None. Mirrors `RhinoContext.geom_by_name`.
+    """The document geometry called `name`, or None. Mirrors `NarwhalContext.geom_by_name`.
 
     Module level because BOTH the preview and the axis-constraint lookup need it; it began as a
     local closure inside the preview draw and was promoted rather than copied.
@@ -6387,7 +6387,7 @@ _last_hover = [None]
 def _wants_point(cmd) -> bool:
     """True if a viewport CLICK can answer the command's current prompt.
 
-    Includes `DISTANCE` steps, not just `POINT` ones: Rhino's radius/height
+    Includes `DISTANCE` steps, not just `POINT` ones: the reference CAD application's radius/height
     prompts accept a picked location as well as a typed number, so a click must
     reach them (see `commands.DISTANCE`). The kind list is imported from
     `commands` so the modal and the commands cannot drift apart.
@@ -6406,7 +6406,7 @@ def _wants_point(cmd) -> bool:
 
 
 class NARWHAL_OT_command_input(Operator):
-    """Capture keyboard for the Rhino-style command line."""
+    """Capture keyboard for the CAD-style command line."""
     bl_idname = "narwhal.command_input"
     bl_label = "Narwhal 3D Command Input"
     bl_description = "Type into the Narwhal 3D command bar (Enter submits, Esc cancels)"
@@ -6586,8 +6586,8 @@ class NARWHAL_OT_command_input(Operator):
                         return {"RUNNING_MODAL"}
         if event.type == "RET" and event.value == "PRESS":
             # The autocomplete list is up? Then Enter ACCEPTS the highlighted
-            # row (Rhino: "Press the Enter key or click the command name on the
-            # auto-complete list" -- Rhino documentation). The arrow
+            # row (the reference CAD application: "Press the Enter key or click the command name on the
+            # auto-complete list" -- the reference CAD application documentation). The arrow
             # keys move that highlight, so Enter must take the row the user
             # pointed at, not always the top one. With no list the buffer is
             # submitted as a line, as before.
@@ -6601,7 +6601,7 @@ class NARWHAL_OT_command_input(Operator):
                     return {"RUNNING_MODAL"}
             line = st.input_buffer
             # Enter on an EMPTY line with no command running repeats the last
-            # command -- Rhino's documented Enter. This used to be the
+            # command -- the reference CAD application's documented Enter. This used to be the
             # `narwhal.repeat_last` keymap item, but now that this modal is always
             # running it consumes RET first, so the behaviour has to live here or
             # it would simply vanish.
@@ -6615,7 +6615,7 @@ class NARWHAL_OT_command_input(Operator):
                 st.history.append("> " + line)
             # "While typing the distance, pressing Shift + /Enter/
             # Space/Tab moves the object in the opposite direction"
-            # (Rhino documentation). Only the Gumball's numeric prompt reads it,
+            # (the reference CAD application documentation). Only the Gumball's numeric prompt reads it,
             # so no other command's Shift+Enter behaviour changes.
             if event.shift and gumball_numeric_active():
                 st.active_command.reverse = True
@@ -6626,15 +6626,15 @@ class NARWHAL_OT_command_input(Operator):
                 return {"RUNNING_MODAL"}
             st.feed_line(line)
             self._redraw()
-            # keep the input open for chained commands (Rhino stays in command mode)
+            # keep the input open for chained commands (the reference CAD application stays in command mode)
             return {"RUNNING_MODAL"}
 
         if event.type == "ESC" and event.value == "PRESS":
-            # Verified (Rhino keyboard documentation) Esc "Cancels a
+            # Verified (the reference CAD application keyboard documentation) Esc "Cancels a
             # command", "Clears the command prompt" and "Deselects all selected
             # objects". It does NOT take keyboard focus away from the command line
-            # -- "When the Rhino window is active, what you type will input to the
-            # command-line" (Rhino documentation) is unconditional.
+            # -- "When the the reference CAD application window is active, what you type will input to the
+            # command-line" (the reference CAD application documentation) is unconditional.
             #
             # So this stays RUNNING_MODAL. Returning FINISHED is what used to make
             # every left-click behaviour dead until the user typed something: ALL
@@ -6649,13 +6649,13 @@ class NARWHAL_OT_command_input(Operator):
             return {"RUNNING_MODAL"}
 
         # Tab completes what you have typed to the best-matching command,
-        # which is how Rhino's autocomplete is accepted from the keyboard.
+        # which is how the reference CAD application's autocomplete is accepted from the keyboard.
         # With the arrow keys in play (this task) Tab completes the HIGHLIGHTED
         # row, so the inline completion matches what the user pointed at; with
         # no list it falls back to the top-ranked match as before.
         if event.type == "TAB" and event.value == "PRESS":
-            # during a point pick with nothing typed, Tab is Rhino's direction
-            # lock (Rhino documentation), not autocomplete
+            # during a point pick with nothing typed, Tab is the reference CAD application's direction
+            # lock (the reference CAD application documentation), not autocomplete
             if st.active_command is not None and not st.input_buffer.strip():
                 if constraint_tab() is not False:
                     self._redraw()
@@ -6726,7 +6726,7 @@ class NARWHAL_OT_command_input(Operator):
                 return {"RUNNING_MODAL"}
 
         # An ARMED RELOCATE owns the mouse too, and for longer than a drag does:
-        # Rhino's gesture deliberately survives the button coming up ("Move the
+        # the reference CAD application's gesture deliberately survives the button coming up ("Move the
         # mouse and click"), so it cannot live inside the drag branch above.
         if _gumball_relocate is not None:
             if event.type == "MOUSEMOVE":
@@ -6838,7 +6838,7 @@ class NARWHAL_OT_command_input(Operator):
             _note_view_wheel(False)
             return {"PASS_THROUGH"}
 
-        # a click on the COMMAND BAR is a click on a button. Rhino's
+        # a click on the COMMAND BAR is a click on a button. the reference CAD application's
         # bracketed options are clickable, and so is its autocomplete list, so
         # this must be tested BEFORE the viewport branch (the bar is not a
         # viewport, so that branch would only pass the click through to Blender).
@@ -6849,7 +6849,7 @@ class NARWHAL_OT_command_input(Operator):
                 return {"RUNNING_MODAL"}
 
         # Left-click in the viewport supplies a point when the command is asking
-        # for one. The two input paths coexist exactly like Rhino: typing
+        # for one. The two input paths coexist exactly like the reference CAD application: typing
         # still works, and clicking feeds the picked coordinate as if typed.
         # find the pane under the mouse from the WINDOW coords, then pick
         # on THAT pane's own construction plane (a Front/Right click now yields
@@ -6897,7 +6897,7 @@ class NARWHAL_OT_command_input(Operator):
             if side_action is not None:
                 side_index, side_btn, part = side_action
                 if part == "flyout":
-                    # Rhino opens a linked toolbar by clicking the black triangle.
+                    # the reference CAD application opens a linked toolbar by clicking the black triangle.
                     # Defer to RELEASE so Blender treats this as a persistent popup,
                     # not a press-drag-release hold menu.
                     sidebar_press_begin(side_index, part)
@@ -6983,10 +6983,10 @@ class NARWHAL_OT_command_input(Operator):
                     pt = pick_point(area, sp, region, rx, ry,
                                     constraint=_command_axis_constraint(cmd, area))
                     if pt is not None:
-                        # if a snap is in range, THAT is the point. Rhino:
+                        # if a snap is in range, THAT is the point. the reference CAD application:
                         # "the object snaps constrain the marker to an exact
                         # location on an object". Alt suspends snapping for this
-                        # pick, per Rhino documentation.
+                        # pick, per the reference CAD application documentation.
                         snapped = snap_at(area, sp, region, pt,
                                           first_point=_snap_base(cmd) is None,
                                           suspend=event.alt,
@@ -7020,7 +7020,7 @@ class NARWHAL_OT_command_input(Operator):
                         self._redraw()
                         return {"RUNNING_MODAL"}
             # THE FLOATING AUTOCOMPLETE LIST wins over everything in the viewport
-            #. It is chrome hanging over the scene, and Rhino's list is
+            #. It is chrome hanging over the scene, and the reference CAD application's list is
             # clickable: "Press the Enter key or click the command name on the
             # auto-complete list." Tested before the tab strip and the pane title
             # because it is drawn on top of both.
@@ -7062,10 +7062,10 @@ class NARWHAL_OT_command_input(Operator):
                     return {"RUNNING_MODAL"}
             # THE PANE TITLE wins over everything below, because it is CHROME
             # sitting on top of the scene: the Gumball or an object can be under
-            # the same pixels, and in Rhino clicking the title does the title's
+            # the same pixels, and in the reference CAD application clicking the title does the title's
             # job. Verified: "Click the title of a viewport to activate the
             # viewport WITHOUT DESELECTING objects" -- so it must never reach
-            # `rhino_click_select`, which deselects by design -- and "Double-click
+            # `narwhal_click_select`, which deselects by design -- and "Double-click
             # a viewport title to maximize the viewport, or restore the
             # multi-viewport layout".
             #
@@ -7141,17 +7141,17 @@ class NARWHAL_OT_command_input(Operator):
                         redraw_cmdbar()
                 _tag_redraw_viewports()
                 return {"RUNNING_MODAL"}
-            # Nothing else wanted the click, so it is a SELECTION click. Rhino's
+            # Nothing else wanted the click, so it is a SELECTION click. the reference CAD application's
             # rules, not Blender's: a plain click selects what it hit and clicking
             # away deselects, Shift ADDS, Ctrl REMOVES
-            # (Rhino documentation). Passing through to Blender used to
+            # (the reference CAD application documentation). Passing through to Blender used to
             # be the behaviour here and it was wrong on all three counts -- Shift
             # toggles in Blender and Ctrl does something else entirely.
             if st.active_command is None and region is not None:
                 rx = event.mouse_x - region.x
                 ry = event.mouse_y - region.y
                 # SUB-OBJECT selection gets first refusal, because its chord is
-                # unambiguous. Verified (Rhino keyboard documentation):
+                # unambiguous. Verified (the reference CAD application keyboard documentation):
                 # "Ctrl (CMD) + Shift + Left mouse click" both selects AND
                 # deselects a sub-object part, so it toggles. It is checked before
                 # anything else so the combination can never fall through to the
@@ -7190,7 +7190,7 @@ class NARWHAL_OT_command_input(Operator):
                 # A click and a window/crossing selection START IDENTICALLY -- you
                 # cannot tell them apart until the button comes up -- so the press
                 # only RECORDS, and the decision is made in _sel_drag_end on
-                # release. That is also why Rhino cannot decide any earlier.
+                # release. That is also why the reference CAD application cannot decide any earlier.
                 _sel_drag_begin(area, region, rx, ry,
                                 shift=event.shift, ctrl=event.ctrl)
                 self._redraw()
@@ -7268,7 +7268,7 @@ class NARWHAL_OT_command_input(Operator):
                     clear_preview_cursor()
                     _tag_redraw_viewports()
                 # with no command running, highlight the Gumball handle
-                # under the cursor. Rhino highlights a handle on hover ("Point the
+                # under the cursor. the reference CAD application highlights a handle on hover ("Point the
                 # mouse cursor to a handle to show the tooltip for actions"), and
                 # it is also the only feedback that a handle is grabbable at all.
                 if _gumball_enabled:
@@ -7294,7 +7294,7 @@ class NARWHAL_OT_command_input(Operator):
                 _set_completion_index(_completion_step(_rows, _here, -1))
                 self._redraw()
                 return {"RUNNING_MODAL"}
-            # no list to navigate: recall last command from history (Rhino)
+            # no list to navigate: recall last command from history (the reference CAD application)
             prev = [l for l in st.history if l.startswith("> ")]
             if prev:
                 st.input_buffer = prev[-1][2:]
@@ -7325,18 +7325,18 @@ class NARWHAL_OT_command_input(Operator):
             self._redraw()
             return {"RUNNING_MODAL"}
 
-        # Rhino's documented undo/redo shortcuts -- Ctrl+Z for Undo and
-        # Ctrl+Y for Redo (Rhino documentation lists "Ctrl (CMD) + Z" and
+        # the reference CAD application's documented undo/redo shortcuts -- Ctrl+Z for Undo and
+        # Ctrl+Y for Redo (the reference CAD application documentation lists "Ctrl (CMD) + Z" and
         # "Ctrl (CMD) + Y" against Edit > Undo / Edit > Redo). Handled here,
         # before the printable-character branch, so the key never reaches
         # Blender's own undo -- which knows nothing about the .3dm document and
         # would desynchronise the two.
         if event.value == "PRESS" and event.ctrl and event.type in ("Z", "Y"):
-            # Shift+Ctrl+Z is Blender's redo; Rhino uses Ctrl+Y, so treat both as
+            # Shift+Ctrl+Z is Blender's redo; the reference CAD application uses Ctrl+Y, so treat both as
             # redo rather than letting the combination fall through.
             want_redo = event.type == "Y" or event.shift
             if st.active_command is not None:
-                # Rhino does not undo the document from inside a running command;
+                # the reference CAD application does not undo the document from inside a running command;
                 # say so rather than silently doing something else.
                 st.log(f"{st.active_command.name} is running -- press Esc first")
             else:
@@ -7366,7 +7366,7 @@ class NARWHAL_OT_command_input(Operator):
 class NARWHAL_OT_begin_typing(Operator):
     """Seed one character into the command buffer and open the command line.
 
-    This is the entry point for "just start typing" — the defining Rhino
+    This is the entry point for "just start typing" — the defining the reference CAD application
     interaction. Each letter key in the 3D View is bound to this
     operator with its character in ``char``. It appends the character to the
     command buffer, then hands off to the command-line modal (``narwhal.command_
@@ -7384,7 +7384,7 @@ class NARWHAL_OT_begin_typing(Operator):
         if not self.char:
             return {"CANCELLED"}
         # The keymap passes the canonical lowercase character, so the buffer
-        # holds lowercase command names (Rhino's lookup is case-insensitive).
+        # holds lowercase command names (the reference CAD application's lookup is case-insensitive).
         app_state.input_buffer += self.char
         typed_changed()
         # A cold-start seed is a new prefix, so the autocomplete highlight
@@ -7457,7 +7457,7 @@ def _ensure_input_open():
 
 
 class NARWHAL_OT_run_command(Operator):
-    """Run a Rhino command by name.
+    """Run a the reference CAD application command by name.
 
     Deliberately uses a ``StringProperty`` rather than the dynamic
     ``EnumProperty`` on ``narwhal.start_command``: keymap items serialize enum
@@ -7472,7 +7472,7 @@ class NARWHAL_OT_run_command(Operator):
     def execute(self, context):
         if not self.command:
             return {"CANCELLED"}
-        # a shortcut may carry its argument, as a Rhino macro does
+        # a shortcut may carry its argument, as a the reference CAD application macro does
         # ("SetDisplayMode Wireframe"): name, then the rest of the line
         head, _sp, rest = self.command.strip().partition(" ")
         app_state.start_command(head, rest or None)
@@ -7482,13 +7482,13 @@ class NARWHAL_OT_run_command(Operator):
 
 
 class NARWHAL_OT_cancel(Operator):
-    """Esc: cancel the running command (Rhino behavior)."""
+    """Esc: cancel the running command (the reference CAD application behavior)."""
     bl_idname = "narwhal.cancel"
     bl_label = "Cancel Command"
     bl_description = "Cancel the current Narwhal 3D command"
 
     def execute(self, context):
-        # Verified (Rhino keyboard documentation), Esc has five jobs and
+        # Verified (the reference CAD application keyboard documentation), Esc has five jobs and
         # these are three of them: "Cancels a command", "Deselects all selected
         # objects", "Turns off control and edit point display". A sub-object
         # selection is invisible to Blender's own deselect, so it is cleared here
@@ -7508,7 +7508,7 @@ class NARWHAL_OT_cancel(Operator):
 
 
 class NARWHAL_OT_repeat_last(Operator):
-    """Enter / Space: re-run the last command (Rhino behavior)."""
+    """Enter / Space: re-run the last command (the reference CAD application behavior)."""
     bl_idname = "narwhal.repeat_last"
     bl_label = "Repeat Last Command"
     bl_description = "Repeat the last Narwhal 3D command"
@@ -7533,23 +7533,23 @@ class NARWHAL_OT_repeat_last(Operator):
 # ---------------------------------------------------------------------------
 
 # ---------------------------------------------------------------------------
-# THE OSNAP PANEL (Rhino documentation: "Osnap panel -- Contains
+# THE OSNAP PANEL (the reference CAD application documentation: "Osnap panel -- Contains
 # object snap toggles. The Selection Filters panel is grouped with the Osnap panel
 # in a container.")
 #
 # The modes, and which of them PERSIST, are already measured in `osnap.py`
-# (`PERSISTENT`, from Rhino documentation). This is the panel that
+# (`PERSISTENT`, from the reference CAD application documentation). This is the panel that
 # toggles them, and it drives the SAME `SnapSettings` object the picking code reads
 # -- so a box ticked here changes what the next click snaps to, immediately.
 #
-# `Disable` and `Project` are Rhino's own two extra controls on this panel:
+# `Disable` and `Project` are the reference CAD application's own two extra controls on this panel:
 #  "When the Osnap panel is off, clicking the Osnap pane brings up the panel. If
-#  the panel is already on, the Disable checkbox is toggled."  (Rhino documentation)
+#  the panel is already on, the Disable checkbox is toggled."  (the reference CAD application documentation)
 #  "Project -- projects any object snap to the current construction plane."
-#                            (Rhino documentation)
+#                            (the reference CAD application documentation)
 #
 # `Vertex` is the one mode we do not compute (it needs mesh/SubD objects, which we
-# do not build). It is SHOWN -- the panel would misrepresent Rhino without it --
+# do not build). It is SHOWN -- the panel would misrepresent the reference CAD application without it --
 # and ticking it reports that it is not implemented, which is what
 # `SnapSettings.unimplemented_enabled` is for.
 # ---------------------------------------------------------------------------
@@ -7571,7 +7571,7 @@ class NARWHAL_OT_osnap_toggle(Operator):
         state = "on" if self.mode in settings.enabled else "off"
         if (self.mode in osnap.NOT_IMPLEMENTED
                 and self.mode in settings.enabled):
-            # Rule 4: it is tickable because Rhino has it, and it says what it is.
+            # Rule 4: it is tickable because the reference CAD application has it, and it says what it is.
             app_state.log(f"{self.mode} snap is not implemented yet "
                           f"(it needs mesh or SubD objects)")
         else:
@@ -7614,7 +7614,7 @@ def osnap_panel_rows():
 
     Kept for the `Osnap` command and for tests. The ORDER here is `osnap.PERSISTENT`,
     the help's prose list; the PANEL draws `views.OSNAP_PANEL_ORDER` instead, which is
-    the order measured from Rhino's own control. Those are different questions and
+    the order measured from the reference CAD application's own control. Those are different questions and
     conflating them previously produced the wrong panel order; see
     `views.OSNAP_PANEL_ORDER`.
     """
@@ -7625,7 +7625,7 @@ def osnap_panel_rows():
 
 
 class NARWHAL_PT_osnap(Panel):
-    """Rhino's Osnap panel.
+    """the reference CAD application's Osnap panel.
 
     In the viewport's **UI** region (Blender's N-panel), not `TOOLS`. Verified the
     hard way: `TOOLS` in a VIEW_3D is Blender's icon-only tool bar, and showing it
@@ -7660,7 +7660,7 @@ class NARWHAL_PT_osnap(Panel):
             op.mode = mode
             if not implemented:
                 # named as unbuilt without being hidden -- the panel has to show
-                # what Rhino's shows
+                # what the reference CAD application's shows
                 row.label(text="", icon="ERROR")
         col.separator()
         flags = col.column(align=True)
@@ -7709,9 +7709,9 @@ class NARWHAL_OT_toggle_layer(Operator):
 
 
 class NARWHAL_PT_layers(Panel):
-    """Rhino's Layers panel -- one of the Right Container's panels.
+    """the reference CAD application's Layers panel -- one of the Right Container's panels.
 
-    Verified (Rhino documentation): "The Right Container has a collection
+    Verified (the reference CAD application documentation): "The Right Container has a collection
     of panels that provide quick access to some global options, document properties,
     or command dialogs." The dedicated right dock hosts these quick-access panels.
 
@@ -7731,12 +7731,12 @@ class NARWHAL_PT_layers(Panel):
                               icon="CHECKMARK" if layer["visible"] else "X")
             op.index = layer["index"]
             row.label(text=layer["name"][:10])
-        # the command was renamed NewLayer -> Layer (real Rhino name), so
+        # the command was renamed NewLayer -> Layer (real the reference CAD application name), so
         # the registry key is now "layer".
         layout.operator("narwhal.start_command", text="New Layer").command = "layer"
 
 
-#: Rhino's "Context menu delay ___ milliseconds" (Rhino documentation). The default
+#: the reference CAD application's "Context menu delay ___ milliseconds" (the reference CAD application documentation). The default
 #: is application-defined -- see `navigate.DEFAULT_CONTEXT_MENU_DELAY_MS`.
 _context_menu_delay_ms = nav.DEFAULT_CONTEXT_MENU_DELAY_MS
 
@@ -7761,9 +7761,9 @@ def set_context_menu_delay_ms(ms):
 
 
 def _right_click_enter():
-    """A right-CLICK, which Rhino treats as Enter. Returns what it did.
+    """A right-CLICK, which the reference CAD application treats as Enter. Returns what it did.
 
-    Verified (Rhino keyboard documentation): "To accept command-line input,
+    Verified (the reference CAD application keyboard documentation): "To accept command-line input,
     do one of the following: Press the Enter key. Press the Spacebar. Click the
     right mouse button." So this must behave exactly as Enter does -- submit what is
     typed, or with nothing typed repeat the last command.
@@ -7789,9 +7789,9 @@ def _right_click_enter():
 
 
 class NARWHAL_OT_navigate(Operator):
-    """Navigate the viewport the way Rhino does.
+    """Navigate the viewport the way the reference CAD application does.
 
-    Rhino drags the view with the **right** button, and what that does depends on
+    the reference CAD application drags the view with the **right** button, and what that does depends on
     the pane's projection: it *rotates* a perspective view but *pans* a parallel
     one (Top/Front/Right). Blender orbits with the middle button and opens a
     context menu with the right, so before this operator existed the app still
@@ -7799,12 +7799,12 @@ class NARWHAL_OT_navigate(Operator):
 
     The decision lives in the pure, bpy-free ``navigate`` module (unit-tested by
     ``spike/test_navigate.py`` against the table in
-    `Rhino documentation`). This operator only does the two things
+    `the reference CAD application documentation`). This operator only does the two things
     that genuinely need Blender: find which pane the pointer is over and read its
     projection, then hand off to the matching Blender navigation modal, which
     takes over the drag until the button is released.
 
-    An action Rhino has but we have not built reports itself in the command bar
+    An action the reference CAD application has but we have not built reports itself in the command bar
     rather than falling back to something that merely looks similar.
     """
     bl_idname = "narwhal.navigate"
@@ -7828,7 +7828,7 @@ class NARWHAL_OT_navigate(Operator):
                 redraw_cmdbar()
             return {"FINISHED"}
 
-        # A right-press on the pane TITLE is Rhino's viewport-caption menu.
+        # A right-press on the pane TITLE is the reference CAD application's viewport-caption menu.
         # Same reasoning as the tab strip: the title is chrome lying inside a viewport
         # region, so it must be claimed before the drag-to-orbit path. Its rows come
         # from the compatibility data; see `_draw_caption_items`.
@@ -7841,7 +7841,7 @@ class NARWHAL_OT_navigate(Operator):
         if set_active_pane(area):
             _tag_redraw_viewports()
 
-        # A right-button press is not yet a navigation: Rhino gives the button
+        # A right-button press is not yet a navigation: the reference CAD application gives the button
         # THREE jobs and which one this is cannot be known until it moves or comes
         # up (see navigate.rmb_release_action). So record and go modal.
         import time
@@ -7871,7 +7871,7 @@ class NARWHAL_OT_navigate(Operator):
                                shift=event.shift, alt=event.alt)
         op_id = nav.blender_op(action)
         if op_id is None:
-            # Rhino does this; we do not. Say so (rule 4) instead of doing
+            # the reference CAD application does this; we do not. Say so (rule 4) instead of doing
             # something else that would look like it worked.
             app_state.log(f"View {action}: not implemented yet")
             redraw_cmdbar()
@@ -7923,7 +7923,7 @@ class NARWHAL_OT_navigate(Operator):
         return {"RUNNING_MODAL"}
 
 
-#: The MMB mode in force. Rhino makes this a preference (Tools > Options > Mouse);
+#: The MMB mode in force. the reference CAD application makes this a preference (Tools > Options > Mouse);
 #: the project default lives in `navigate.DEFAULT_MMB_MODE`.
 _mmb_mode = nav.DEFAULT_MMB_MODE
 
@@ -7936,7 +7936,7 @@ def mmb_mode():
 def set_mmb_mode(mode):
     """Set the MMB mode. Returns the mode in force afterwards, or None if refused.
 
-    A mode Rhino does not offer is REFUSED rather than stored, the same rule
+    A mode the reference CAD application does not offer is REFUSED rather than stored, the same rule
     `set_gumball_alignment` follows: storing it and then behaving like something
     else would leave us claiming a mode we are not in.
     """
@@ -7949,9 +7949,9 @@ def set_mmb_mode(mode):
 
 
 class NARWHAL_OT_navigate_mmb(Operator):
-    """Middle-button view manipulation, as `Rhino documentation documents it.
+    """Middle-button view manipulation, as `the reference CAD application documentation documents it.
 
-    Rhino makes MMB configurable with four settings -- an MRU popup menu, a popup
+    the reference CAD application makes MMB configurable with four settings -- an MRU popup menu, a popup
     toolbar, a macro, or "Manipulate view" -- and under "Manipulate view" three
     sub-modes with their own modifier tables. All of that lives in the pure
     `navigate` module (`mmb_action`), which is where the tables are quoted and
@@ -7999,9 +7999,9 @@ class NARWHAL_OT_navigate_mmb(Operator):
 # ---------------------------------------------------------------------------
 
 # ---------------------------------------------------------------------------
-# THE STATUS BAR (Rhino documentation)
+# THE STATUS BAR (the reference CAD application documentation)
 #
-#  "The status bar is located at the bottom of the Rhino window. It displays the
+#  "The status bar is located at the bottom of the the reference CAD application window. It displays the
 #  current coordinate system, the current location and delta of the cursor, and
 #  the status bar panes."
 #
@@ -8010,7 +8010,7 @@ class NARWHAL_OT_navigate_mmb(Operator):
 #
 # WHY IT IS A HEADER OVERRIDE AND NOT A GPU OVERLAY
 # ------------------------------------------------
-# The command bar is a GPU/blf overlay because it needs Rhino's exact white
+# The command bar is a GPU/blf overlay because it needs the reference CAD application's exact white
 # background and a caret. The status bar needs neither, and Blender already owns a
 # full-window-width strip at the bottom of the window with real, clickable
 # widgets: `STATUSBAR_HT_header`. Replacing its `draw` gets the geometry, the
@@ -8023,7 +8023,7 @@ class NARWHAL_OT_navigate_mmb(Operator):
 # Six panes read live state we actually have: CPlane/World, the cursor readout,
 # units, the layer, Osnap and Gumball. The other eight are modes we have not
 # built (Grid Snap, Ortho, Planar, SmartTrack, Auto CPlane, Record History,
-# Filter, Info). They are DRAWN -- the bar would be a lie about Rhino's shell
+# Filter, Info). They are DRAWN -- the bar would be a lie about the reference CAD application's shell
 # without them -- but clicking one reports that it is not implemented rather than
 # doing nothing or pretending. `STATUSBAR_UNIMPLEMENTED` is the
 # list, and it is asserted against the pure model so a pane cannot quietly become
@@ -8031,9 +8031,9 @@ class NARWHAL_OT_navigate_mmb(Operator):
 # ---------------------------------------------------------------------------
 
 # ---------------------------------------------------------------------------
-# THE MENU BAR (Rhino documentation)
+# THE MENU BAR (the reference CAD application documentation)
 #
-#  "The menu bar groups Rhino commands by functions. Most usually used commands
+#  "The menu bar groups the reference CAD application commands by functions. Most usually used commands
 #  can be found on the menus."
 #
 # Drawn by REPLACING `TOPBAR_HT_upper_bar.draw`, which is what Blender's
@@ -8046,7 +8046,7 @@ class NARWHAL_OT_navigate_mmb(Operator):
 # timer where `_install_statusbar` lives.
 #
 # `Screen.show_topbar` does not exist, so the strip cannot be hidden -- only
-# replaced. Which is exactly where Rhino's menu bar goes.
+# replaced. Which is exactly where the reference CAD application's menu bar goes.
 #
 # EVERY item is drawn, and the ones we cannot run are drawn DISABLED. See
 # `menubar`'s docstring: listing 739 items as if they worked would be the project's
@@ -8073,8 +8073,7 @@ def _implemented_keys():
 def _draw_menu_items(layout, path):
     """Draw the rows at `path`, recursing into submenus.
 
-    Rows come from `menubar.resource_rows` in compatibility order, including separators
-    and accelerator marks.
+    Rows come from `menubar.resource_rows` in authored order, including separators.
 
     `path[0]` is the top-level menu's verbatim label; the rest are popup labels.
     """
@@ -8119,11 +8118,11 @@ def _draw_menu_items(layout, path):
                                      + (menubar.plain_label(label),)), text=text)
             continue
         if command is None and menubar.plain_label(label) == "Recent File":
-            # Rhino's MRU list (the existing RecentFiles)
+            # the reference CAD application's MRU list (the existing RecentFiles)
             layout.menu("NARWHAL_MT_recent_files", text=text)
             continue
         if command is None and menubar.plain_label(label) == "Exit":
-            # the resource row carries no command name; Rhino's is Exit
+            # the resource row carries no command name; the reference CAD application's is Exit
             command = "Exit"
         if command and command.lower() in COMMANDS:
             if option:
@@ -8192,7 +8191,7 @@ def _register_one_menu(path):
 def _register_menu_classes():
     """Pre-register a Menu class for the bar and every submenu. Returns the count.
 
-    the tree is now Rhino's own (resource 128), which has **101 submenus** rather
+    the tree is now the reference CAD application's own (resource 128), which has **101 submenus** rather
     than the help tree's handful. Still done here and not lazily, for the measured
     reason: `bpy.utils.register_class` inside a DRAW callback does not take, and the
     toolbar strip came out blank when it was tried.
@@ -8217,7 +8216,7 @@ def _register_menu_classes():
 # ---------------------------------------------------------------------------
 # THE VIEWPORT-CAPTION MENU 
 #
-# Right-clicking a viewport TITLE raises Rhino's caption menu. Its rows are the
+# Right-clicking a viewport TITLE raises the reference CAD application's caption menu. Its rows are the
 # generated `viewport_menu_data` compatibility module; `views.py` holds the pure model.
 #
 # It reuses the menu bar's dynamic-class machinery rather than inventing a second one,
@@ -8253,7 +8252,7 @@ def _caption_tree():
 def caption_kinds_not_implemented():
     """The caption-menu kinds we cannot show, because we have no such viewport.
 
-    Rule 4: Rhino's resource carries four and we serve one. Naming the other three
+    Rule 4: the reference CAD application's resource carries four and we serve one. Naming the other three
     keeps that a stated limit rather than a silent omission.
     """
     try:
@@ -8267,7 +8266,7 @@ def caption_kinds_not_implemented():
 def _draw_caption_items(layout, path):
     """Draw the caption menu's rows at `path`, recursing into popups.
 
-    Rhino's ORDER and its SEPARATORS are real data here (they came out of the
+    the reference CAD application's ORDER and its SEPARATORS are real data here (they came out of the
     resource), so they are preserved -- unlike the menu bar, which sorts because the
     help gave it no order.
 
@@ -8293,7 +8292,7 @@ def _draw_caption_items(layout, path):
             layout.menu(_ensure_caption_menu(tuple(path) + (label,)), text=text)
             continue
         if label == views.DISPLAY_MODE_PLACEHOLDER:
-            # Rhino fills this slot with its display modes; the current one ticked
+            # the reference CAD application fills this slot with its display modes; the current one ticked
             cur = display_mode_of(active_pane_area()) if active_pane_area() else None
             for name, _key, implemented, _sh in views.DISPLAY_MODES:
                 op = layout.operator("narwhal.set_display_mode",
@@ -8376,7 +8375,7 @@ def _register_caption_menus():
 #: different reason ("Move the mouse and click" -- its gesture outlives the button),
 #: so deferring to the release is an established shape in this file, not a new one.
 #:
-#: RIGHT-click menus are deliberately NOT deferred. Rhino's right-button behaviour is
+#: RIGHT-click menus are deliberately NOT deferred. the reference CAD application's right-button behaviour is
 #: genuinely press-and-hold -- "Right-click and hold on any part of the gumball" is
 #: measured -- so those keep opening on the press.
 _pending_menu = None
@@ -8418,7 +8417,7 @@ def pending_menu_armed():
 def show_caption_menu(area=None):
     """Raise the viewport-caption menu. Returns its class name, or None.
 
-    `area` becomes the active pane first: Rhino's caption menu acts on the viewport
+    `area` becomes the active pane first: the reference CAD application's caption menu acts on the viewport
     whose title you clicked, and "Click the title of a viewport to activate the
     viewport" is measured behaviour anyway.
     """
@@ -8438,11 +8437,11 @@ def show_caption_menu(area=None):
     return name
 
 
-def _draw_rhino_menubar(self, context):
+def _draw_narwhal_menubar(self, context):
     """Replacement body for `TOPBAR_HT_upper_bar.draw`.
 
-    Left-aligned, one menu per entry, in the measured order. Nothing else goes on
-    this strip: Rhino's menu bar carries menus only.
+    Left-aligned, one menu per authored entry. Nothing else goes on this strip so
+    the application menu remains visually distinct from host chrome.
     """
     # Verified: this draw is called once per topbar REGION, and the topbar has two
     # (left and right). Drawing unconditionally rendered the whole menu bar TWICE,
@@ -8450,7 +8449,7 @@ def _draw_rhino_menubar(self, context):
     # noted there as an artifact. Blender's own topbar branches on the same flag.
     region = getattr(context, "region", None)
     if region is not None and region.alignment == "RIGHT":
-        return                       # Rhino puts nothing at the right of the bar
+        return                       # the reference CAD application puts nothing at the right of the bar
     layout = self.layout
     layout.alignment = "LEFT"
     row = layout.row(align=True)
@@ -8463,7 +8462,7 @@ _menubar_original_draw = None
 
 
 def _install_menubar():
-    """Swap Rhino's menus in for Blender's topbar. True if installed.
+    """Swap Narwhal's menus in for the host topbar. True if installed.
 
     Must run BEFORE the topbar is first drawn -- see the block comment above.
     """
@@ -8473,7 +8472,7 @@ def _install_menubar():
     if header is None or _menubar_original_draw is not None:
         return False
     _menubar_original_draw = header.draw
-    header.draw = _draw_rhino_menubar
+    header.draw = _draw_narwhal_menubar
     return True
 
 
@@ -8495,12 +8494,12 @@ def _uninstall_menubar():
 
 
 def menubar_installed():
-    """True when Rhino's menu bar is what the topbar draws."""
+    """True when Narwhal's menu bar is what the topbar draws."""
     return _menubar_original_draw is not None
 
 
 # ---------------------------------------------------------------------------
-# THE TOOLBAR STRIP (Rhino documentation)
+# THE TOOLBAR STRIP (the reference CAD application documentation)
 #
 #  "A toolbar container is a collection of toolbars. Each toolbar in the container
 #  displays as a tab. Click the tabs to switch between toolbars."
@@ -8518,9 +8517,9 @@ def menubar_installed():
 # re-expressed as the invariant it was really about -- no BLENDER chrome above the
 # command bar.
 #
-# THE ICONS ARE McNEEL'S. `toolbars.icon_path` returns None on any machine without
-# the help corpus extracted (it is gitignored), so every button falls back to text.
-# See `toolbars`' docstring.
+# Runtime icons are generated from the licensed Narwhal source-artwork directory;
+# actions without finished artwork receive deterministic placeholders. Missing icon
+# files fall back to readable labels rather than making a command inaccessible.
 # ---------------------------------------------------------------------------
 
 #: The tab whose buttons are showing; the first tab is the default.
@@ -8531,12 +8530,12 @@ _toolbar_icons = None
 #: Icon filenames we failed to load, so a bad file is tried once and not every draw.
 _toolbar_icon_bad = set()
 
-#: application-defined, and flagged: Rhino shows the 16 toolbars as TABS across the strip, and so do
-#: we now -- see `_draw_toolbar_tab_row`. The one thing still unlike Rhino is the
-#: ORDER of the two rows: Rhino puts the tab row above its button row, and ours sits
+#: application-defined, and flagged: the reference CAD application shows the 16 toolbars as TABS across the strip, and so do
+#: we now -- see `_draw_toolbar_tab_row`. The one thing still unlike the reference CAD application is the
+#: ORDER of the two rows: the reference CAD application puts the tab row above its button row, and ours sits
 #: below the buttons, because the buttons live in the area's single header
 #: (`INFO_HT_tool_header` is None -- measured, a focused runtime check) and the
-#: tabs have to come out of the region underneath it. Matching Rhino exactly needs the
+#: tabs have to come out of the region underneath it. Matching the reference CAD application exactly needs the
 #: toolbars in their own dock row, which is the layout state machine.
 TOOLBAR_TABS_AS_DROPDOWN = False
 
@@ -8559,7 +8558,7 @@ def _draw_toolbar_tab_row(shader, w, h, font_size):
     Returns the height it used, so the command bar can lay itself out in what is
     left. Returns 0.0 when there is nothing to draw, so the bar is unaffected.
 
-    Verified (Rhino documentation): "Each toolbar in the container
+    Verified (the reference CAD application documentation): "Each toolbar in the container
     displays as a tab. Click the tabs to switch between toolbars." All sixteen are
     drawn, not just the active one -- which is the whole point of this over the
     dropdown it replaces.
@@ -8587,7 +8586,7 @@ def _draw_toolbar_tab_row(shader, w, h, font_size):
                    TAB_ROW_ACTIVE_TEXT if is_active else TAB_ROW_TEXT)
     # An unimplemented thing must never look implemented: if the window is too
     # narrow for the whole row, say how many tabs are missing rather than letting
-    # them vanish. Rhino scrolls its row; we do not have that yet.
+    # them vanish. the reference CAD application scrolls its row; we do not have that yet.
     hidden = tbar.tabs_hidden(names, boxes)
     if hidden:
         _draw_text(max(0.0, w - 34.0), row_bot + 6.0, f"+{hidden}",
@@ -8732,7 +8731,7 @@ class NARWHAL_OT_toolbar_tab(Operator):
 class NARWHAL_OT_toolbar_button(Operator):
     """A toolbar button.
 
-    Rhino's buttons carry TWO commands -- "Many icons have a second command that you
+    the reference CAD application's buttons carry TWO commands -- "Many icons have a second command that you
     can access by clicking the right mouse button." A Blender layout button has no
     right-click action, so only the LEFT command runs here; the right one is named in
     the tooltip (`toolbars.Button.hover_text`) and is reported when asked for, rather
@@ -8761,24 +8760,24 @@ class NARWHAL_OT_toolbar_button(Operator):
         return {"FINISHED"}
 
 
-def _draw_rhino_toolbar(self, context):
-    """Replacement body for `INFO_HT_header.draw` -- Rhino's toolbar strip.
+def _draw_narwhal_toolbar(self, context):
+    """Replacement body for `INFO_HT_header.draw` -- the reference CAD application's toolbar strip.
 
     BUTTONS ONLY. The tab selector used to live here as a dropdown; the sixteen tabs
     are now a row of their own across the top of the region below
-    (`_draw_toolbar_tab_row`), which is what Rhino shows. Keeping the dropdown as well
+    (`_draw_toolbar_tab_row`), which is what the reference CAD application shows. Keeping the dropdown as well
     would give two ways to do the same thing and imply the row was incomplete.
 
     this header class is shared by EVERY INFO area, and since the left dock band
     is one, the toolbar was being drawn into it too -- clipped to its 114 px, showing
     the first five buttons sideways in the band's top corner. The band gets a caption
-    instead, which is what Rhino puts on a docked panel.
+    instead, which is what the reference CAD application puts on a docked panel.
     """
     layout = self.layout
     area = getattr(context, "area", None)
     side = _band_side(area)
     if side == "right":
-        # the right dock band is a TABBED container, and Rhino captions it with
+        # the right dock band is a TABBED container, and the reference CAD application captions it with
         # the active panel's name rather than the container name.
         layout.label(text=rightpanel.TABS[right_tab_index()].name)
         return
@@ -8807,14 +8806,14 @@ _toolbar_original_draw = None
 
 
 def _install_toolbar():
-    """Put Rhino's toolbar in the command area's header. True if installed."""
+    """Put the reference CAD application's toolbar in the command area's header. True if installed."""
     global _toolbar_original_draw
 
     header = getattr(bpy.types, "INFO_HT_header", None)
     if header is None or _toolbar_original_draw is not None:
         return False
     _toolbar_original_draw = header.draw
-    header.draw = _draw_rhino_toolbar
+    header.draw = _draw_narwhal_toolbar
     return True
 
 
@@ -8839,15 +8838,15 @@ def _uninstall_toolbar():
 
 
 def toolbar_installed():
-    """True when Rhino's toolbar is what the command area's header draws."""
+    """True when the reference CAD application's toolbar is what the command area's header draws."""
     return _toolbar_original_draw is not None
 
 
 def _show_cmdbar_header():
-    """Show the command area's header, which now holds Rhino's toolbar.
+    """Show the command area's header, which now holds the reference CAD application's toolbar.
 
     HID this header because it carried Blender's leftover "View | Info" menus.
-    The content is ours now, so the header is wanted -- see `_draw_rhino_toolbar`.
+    The content is ours now, so the header is wanted -- see `_draw_narwhal_toolbar`.
     """
     info = _cmdbar_area()
     if info is None:
@@ -8860,7 +8859,7 @@ def _show_cmdbar_header():
 
 #: How many of Blender's UI units one character of pane text needs.
 #:
-#: application-defined, and it is a conversion rather than a measurement of Rhino: a UI unit is
+#: application-defined, and it is a conversion rather than a measurement of the reference CAD application: a UI unit is
 #: 20 px at scale 1.0 and the status-bar font averages a little over 8 px per
 #: character at that scale, so 0.42 leaves each cell able to hold its widest text
 #: without padding the bar out. Too small clips text; too large wastes the strip.
@@ -8957,7 +8956,7 @@ def statusbar_state():
 
     A pane we have no state for is left ABSENT rather than given a placeholder:
     the pure model already renders an absent readout as its own label ("x y z",
-    "Units"), which is exactly how an idle Rhino bar reads.
+    "Units"), which is exactly how an idle the reference CAD application bar reads.
     """
     state = {}
 
@@ -8980,7 +8979,7 @@ def statusbar_state():
         state["coordinates"] = point
 
     # "The current units setting." -- the DOCUMENT's: an Inches file opened from real
-    # Rhino showed "Millimeters" here (the app default was read instead).
+    # the reference CAD application showed "Millimeters" here (the app default was read instead).
     try:
         from . import units
 
@@ -8995,7 +8994,7 @@ def statusbar_state():
         state["layer"] = layer
 
     # Osnap: the pane is lit when snapping is in effect. `SnapSettings.disabled`
-    # is Rhino's own Disable checkbox, so "in effect" is "not disabled".
+    # is the reference CAD application's own Disable checkbox, so "in effect" is "not disabled".
     settings = snap_settings()
     if settings is not None:
         state["osnap"] = not settings.disabled
@@ -9034,7 +9033,7 @@ def statusbar_click(pane_id):
         settings = snap_settings()
         if settings is None:
             return "Osnap: no viewport session"
-        # Verified (Rhino documentation, "Osnap pane"): "The Osnap controls
+        # Verified (the reference CAD application documentation, "Osnap pane"): "The Osnap controls
         # let you select which object snaps are currently in effect. When the Osnap
         # PANEL IS OFF, clicking the Osnap pane BRINGS UP THE PANEL. If the panel is
         # already on, the DISABLE checkbox is toggled."
@@ -9054,7 +9053,7 @@ def statusbar_click(pane_id):
         return f"Gumball is {'on' if on else 'off'}"
 
     if pane_id == "ortho":
-        # "clicking Ortho in the status bar ... [is a] toggle" (Rhino documentation)
+        # "clicking Ortho in the status bar ... [is a] toggle" (the reference CAD application documentation)
         return toggle_ortho()
 
     if pane_id == "layer":
@@ -9069,14 +9068,14 @@ def statusbar_click(pane_id):
 
 #: Which status-bar panes answer a RIGHT-click, and with what.
 #:
-#: Verified (Rhino documentation): "Right-click the pane to show the
+#: Verified (the reference CAD application documentation): "Right-click the pane to show the
 #: Gumball menu" for the Gumball pane, and the SmartTrack / Grid Snap / Osnap panes
 #: each document their own right-click menu too. Only the Gumball one is built,
 #: because only the Gumball menu exists -- the rest report themselves.
 #:
 #: This is not a nicety. `Gumball Off` is reached FROM the menu ball, which is part
 #: of the widget, so switching the Gumball off removes the only thing that could
-#: switch it back on. Rhino's answer is this pane: left-click toggles, right-click
+#: switch it back on. the reference CAD application's answer is this pane: left-click toggles, right-click
 #: raises the menu.
 STATUSBAR_RIGHT_CLICK_MENUS = {
     "gumball": "NARWHAL_MT_gumball",
@@ -9104,7 +9103,7 @@ def statusbar_right_click(pane_id):
 
 
 def _statusbar_button_context_menu(self, context):
-    """Appended to Blender's button right-click menu: Rhino's pane menus.
+    """Appended to Blender's button right-click menu: the reference CAD application's pane menus.
 
     Verified: "Right-click the pane to show the Gumball menu." A header button has
     no right-click hook of its own, but Blender routes every button's right-click
@@ -9115,7 +9114,7 @@ def _statusbar_button_context_menu(self, context):
     HONEST LIMIT, stated because it is visible: Blender's own entries (Copy Data
     Path, Add to Quick Favourites, ...) still appear below ours. Replacing the menu
     wholesale would mean overriding `UI_MT_button_context_menu.draw`, which would
-    strip those entries from every button in the application, not just ours. Rhino's
+    strip those entries from every button in the application, not just ours. the reference CAD application's
     pane menu has nothing under it; ours has Blender's tail.
     """
     op = getattr(context, "button_operator", None)
@@ -9133,7 +9132,7 @@ def _statusbar_button_context_menu(self, context):
             row.label(text=f"{sbar.pane(pane_id).label} menu: not implemented yet")
             layout.separator()
         return
-    # Drawn INLINE rather than as a submenu: Rhino's right-click puts you straight
+    # Drawn INLINE rather than as a submenu: the reference CAD application's right-click puts you straight
     # in the Gumball menu, and this is the path back when the widget (and therefore
     # its menu ball) has been switched off.
     _draw_gumball_menu_into(layout)
@@ -9284,11 +9283,11 @@ def _stop_cursor_tracker():
 
 
 class NARWHAL_OT_menu_todo(Operator):
-    """A menu item for a Rhino command we have not built.
+    """A visible menu action for a feature Narwhal has not built.
 
-    Exists so the menus can be complete AND honest at the same time. Rhino has 673
-    runnable menu items; we have 51. Hiding the rest would make the bar look like a
-    different program's menus, drawing them greyed said nothing, so they say this.
+    Keeping compact roadmap families in the authored menus makes the UI complete and
+    honest: the label says the feature is unavailable, and clicking it explains rather
+    than silently doing nothing or dispatching a different command.
     """
     bl_idname = "narwhal.menu_todo"
     bl_label = "Not Implemented"
@@ -9315,7 +9314,7 @@ class NARWHAL_OT_menu_todo(Operator):
 class NARWHAL_OT_run_command_option(Operator):
     """Run a command and immediately choose one of its options.
 
-    Rhino's menus reach a command's VARIANTS through submenu rows -- `Curve >
+    the reference CAD application's menus reach a command's VARIANTS through submenu rows -- `Curve >
     Circle > 2 Points` is the `Circle` command with its `2Point` option. So a menu row
     needs to start the command AND answer its first option, which `narwhal.run_command`
     cannot do.
@@ -9400,7 +9399,7 @@ def set_display_mode(area, name):
             sh.studio_light = "paint.sl" if lit else "studio.sl"
         except Exception:  # noqa: BLE001
             pass
-        # `draw_ground_shadow` already paints Rhino's soft automatic ground
+        # `draw_ground_shadow` already paints the reference CAD application's soft automatic ground
         # shadow. Keep Blender's duplicate pass off; the old combined path was 232 ms/frame
         # on the attached 241-object file and provided no second useful visual effect.
         sh.show_shadows = False
@@ -9409,7 +9408,7 @@ def set_display_mode(area, name):
         sh.show_cavity = False
         sh.background_type = "VIEWPORT"
         if lit:
-            # white object, soft shadow side; Rhino's ground shadow is not built
+            # white object, soft shadow side; the reference CAD application's ground shadow is not built
             sh.color_type = "SINGLE"
             sh.single_color = (1.0, 1.0, 1.0)
             sh.shadow_intensity = 0.25
@@ -9485,7 +9484,7 @@ class NARWHAL_OT_units_dialog(Operator):
     """Show document unit and tolerance settings.
 
     `Units` exposes model units, absolute tolerance, and
-    "When you change from one units system to another, Rhino asks if you want to have
+    "When you change from one units system to another, the reference CAD application asks if you want to have
     the geometry automatically scaled". This window holds those three; OK runs the
     tested command-line `-Units` with them, so both routes share one implementation.
     Not built (and not shown): layout units, angle tolerance, distance display."""
@@ -9550,8 +9549,8 @@ def _open_units_dialog():
 class NARWHAL_OT_maximize_viewport(Operator):
     """The caption menu's `Maximize Viewport` row.
 
-    Not a Rhino COMMAND we have -- it is behaviour we already had, reached from a menu.
-    Verified (Rhino documentation): "Double-click a viewport title to
+    Not a the reference CAD application COMMAND we have -- it is behaviour we already had, reached from a menu.
+    Verified (the reference CAD application documentation): "Double-click a viewport title to
     maximize the viewport, or restore the multi-viewport layout", which is the same
     toggle, so this is the same function rather than a second implementation.
     """
@@ -9590,13 +9589,13 @@ class NARWHAL_OT_statusbar_click(Operator):
         return {"FINISHED"}
 
 
-def _draw_rhino_statusbar(self, context):
+def _draw_narwhal_statusbar(self, context):
     """Replacement body for `STATUSBAR_HT_header.draw`.
 
     Left-to-right in the model's canonical order. A clickable pane is an operator
     button; a lit pane is
     drawn `depress`ed, which is Blender's rendering of "this is on" and the
-    closest thing it has to Rhino's "the pane lights up when the mode is turned
+    closest thing it has to the reference CAD application's "the pane lights up when the mode is turned
     on".
     """
     layout = self.layout
@@ -9635,14 +9634,14 @@ _statusbar_original_draw = None
 
 
 def _install_statusbar():
-    """Swap Rhino's panes in for Blender's status-bar content. True if installed."""
+    """Swap the reference CAD application's panes in for Blender's status-bar content. True if installed."""
     global _statusbar_original_draw
 
     header = getattr(bpy.types, "STATUSBAR_HT_header", None)
     if header is None or _statusbar_original_draw is not None:
         return False
     _statusbar_original_draw = header.draw
-    header.draw = _draw_rhino_statusbar
+    header.draw = _draw_narwhal_statusbar
     return True
 
 
@@ -9659,7 +9658,7 @@ def _uninstall_statusbar():
 
 
 def statusbar_installed():
-    """True when Rhino's status bar is the one being drawn."""
+    """True when the reference CAD application's status bar is the one being drawn."""
     return _statusbar_original_draw is not None
 
 
@@ -9723,10 +9722,10 @@ CLASSES = (
     NARWHAL_OT_track_mouse,
     NARWHAL_OT_osnap_toggle,
     NARWHAL_OT_osnap_flag,
-    # `NARWHAL_PT_osnap` is deliberately NOT registered. Rhino's Osnap control is
+    # `NARWHAL_PT_osnap` is deliberately NOT registered. the reference CAD application's Osnap control is
     # docked bottom-LEFT (the reference layout description), and it is drawn there now by
-    # `draw_osnap_panel`. Rhino's RIGHT container holds Layers / Properties / Display /
-    # Help and no Osnap, so a second copy on the right would be a panel Rhino does not
+    # `draw_osnap_panel`. the reference CAD application's RIGHT container holds Layers / Properties / Display /
+    # Help and no Osnap, so a second copy on the right would be a panel the reference CAD application does not
     # have. The class is kept in the file, unregistered, because its docstring records
     # the measured reason `UI` is the only region that can host a Panel at all -- which
     # is exactly why the overlay had to be built instead.
@@ -9756,7 +9755,7 @@ CLASSES = (
 # (keymap name, space_type, key, modifiers, operator, command property)
 #
 # The keymap NAME matters: addon keymaps are looked up by name against the
-# active keyconfig, so an invented name (e.g. "RHINO Shortcuts") registers
+# active keyconfig, so an invented name (e.g. "THE REFERENCE CAD APPLICATION Shortcuts") registers
 # without error but is never consulted and the shortcuts silently never fire.
 # "3D View" and "Window" both exist in the default keyconfig.
 SHORTCUTS = (
@@ -9766,7 +9765,7 @@ SHORTCUTS = (
     ("3D View", "VIEW_3D", "DEL", {}, "narwhal.run_command", "Delete"),
     ("Window", "EMPTY", "S", {"ctrl": True}, "narwhal.run_command", "Save"),
     ("Window", "EMPTY", "O", {"ctrl": True}, "narwhal.run_command", "Open"),
-    # Verified (Rhino documentation) "New Ctrl (CMD) + N". Claimed here so it
+    # Verified (the reference CAD application documentation) "New Ctrl (CMD) + N". Claimed here so it
     # does not fall through to Blender's own File > New, which would replace the
     # Blender scene behind the document's back.
     ("Window", "EMPTY", "N", {"ctrl": True}, "narwhal.run_command", "New"),
@@ -9785,9 +9784,9 @@ SHORTCUTS = (
      "SetDisplayMode Ghosted"),
     ("Window", "EMPTY", "X", {"ctrl": True, "alt": True}, "narwhal.run_command",
      "SetDisplayMode XRay"),
-    # Verified (Rhino documentation) "Print Ctrl (CMD) + P".
+    # Verified (the reference CAD application documentation) "Print Ctrl (CMD) + P".
     ("Window", "EMPTY", "P", {"ctrl": True}, "narwhal.run_command", "Print"),
-    # Rhino's undo/redo shortcuts. Verified -- Rhino documentation lists
+    # the reference CAD application's undo/redo shortcuts. Verified -- the reference CAD application documentation lists
     # "Ctrl (CMD) + Z" against Edit > Undo and "Ctrl (CMD) + Y" against
     # Edit > Redo.
     #
@@ -9805,13 +9804,13 @@ SHORTCUTS = (
     ("Window", "EMPTY", "Z", {"ctrl": True, "shift": True},
      "narwhal.run_command", "Redo"),
     ("Window", "EMPTY", "F1", {}, "narwhal.run_command", "Help"),
-    # Rhino's CLIPBOARD shortcuts. Verified (Rhino documentation, which carries
+    # the reference CAD application's CLIPBOARD shortcuts. Verified (the reference CAD application documentation, which carries
     # all three): "Cut ... Edit > Cut ... Ctrl (CMD) + X", "CopyToClipboard ...
     # Edit > Copy ... Ctrl (CMD) + C", and Paste on the same page.
     #
     # These are bound to `narwhal.menu_todo` rather than `narwhal.run_command` because we
     # have none of the three commands yet, and the difference matters: an unresolved
-    # command reports "unknown command", which would say a REAL Rhino command does not
+    # command reports "unknown command", which would say a REAL the reference CAD application command does not
     # exist. `menu_todo` says it is not implemented, which is true.
     #
     # Binding them at all is the point. Blender owns Ctrl+C/Ctrl+V as
@@ -9823,18 +9822,18 @@ SHORTCUTS = (
      "CopyToClipboard"),
     ("Window", "EMPTY", "V", {"ctrl": True}, "narwhal.menu_todo", "Paste"),
     ("Window", "EMPTY", "X", {"ctrl": True}, "narwhal.menu_todo", "Cut"),
-    # Join. Verified: Rhino documentation lists "Ctrl (CMD) + J" against
+    # Join. Verified: the reference CAD application documentation lists "Ctrl (CMD) + J" against
     # Edit > Join. Blender's Ctrl+J is `object.join`, which welds Blender MESHES
     # and knows nothing about the .3dm document -- exactly the desynchronisation
     # trap the Ctrl+Z note above describes, so this one is claimed for the same
     # reason.
     ("Window", "EMPTY", "J", {"ctrl": True}, "narwhal.run_command", "Join"),
-    # Control points on/off. Verified: Rhino documentation lists F10 against
+    # Control points on/off. Verified: the reference CAD application documentation lists F10 against
     # Edit > Control Points > Control Points On, and F11 against Control Points
     # Off (whose page is the PointsOff anchor of the same topic).
     ("Window", "EMPTY", "F10", {}, "narwhal.run_command", "PointsOn"),
     ("Window", "EMPTY", "F11", {}, "narwhal.run_command", "PointsOff"),
-    # Ortho. Verified (Rhino documentation): "The Ortho command, clicking Ortho in the
+    # Ortho. Verified (the reference CAD application documentation): "The Ortho command, clicking Ortho in the
     # status bar, and the F8 key, are all toggles."
     ("Window", "EMPTY", "F8", {}, "narwhal.run_command", "Ortho"),
 )
@@ -9842,7 +9841,7 @@ SHORTCUTS = (
 # Characters the user can "just start typing" to begin a command.
 # Letters a-z only: every command in the table starts with a letter, and
 # binding digits would clobber Blender's 1/2/3/7 viewport-navigation shortcuts
-# (worth keeping). Add digits here for full Rhino digit-typing if ever wanted.
+# (worth keeping). Add digits here for full the reference CAD application digit-typing if ever wanted.
 TYPEABLE = [chr(c) for c in range(ord("a"), ord("z") + 1)]
 
 # Blender key types are uppercase ("A".."Z"); TYPEABLE holds the lowercase
@@ -9850,7 +9849,7 @@ TYPEABLE = [chr(c) for c in range(ord("a"), ord("z") + 1)]
 # types, so keep both spellings next to each other.
 TYPEABLE_UPPER = [c.upper() for c in TYPEABLE]
 
-# the modifier combinations Rhino's right-button navigation uses. A Blender
+# the modifier combinations the reference CAD application's right-button navigation uses. A Blender
 # keymap item matches an EXACT modifier set, so a bare RIGHTMOUSE binding does
 # NOT fire for Ctrl+RIGHTMOUSE -- every combination needs its own item. Derived
 # from the table in `navigate.py` so the two cannot drift apart.
@@ -9870,7 +9869,7 @@ _keymap_entries = []  # (keymap, keymap_item) pairs we own
 
 
 def _register_keymaps():
-    """Install Rhino's shortcuts into the addon keyconfig."""
+    """Install the reference CAD application's shortcuts into the addon keyconfig."""
     kc = bpy.context.window_manager.keyconfigs.addon
     if kc is None:  # can happen in some headless configurations
         return
@@ -9899,7 +9898,7 @@ def _register_keymaps():
     # Letters are uppercase keys in Blender (Shift is a modifier); we bind the
     # unshifted key and pass the lowercase character so the buffer holds
     # lowercase command names.
-    # bind the SHIFTED key too, with the same lowercase char. Rhino's
+    # bind the SHIFTED key too, with the same lowercase char. the reference CAD application's
     # command line is case-insensitive (BOX/Box/box), so a capital must do
     # exactly what its lowercase twin does. disabled 14 of Blender's
     # Shift+letter shortcuts (Shift+D duplicate, Shift+X delete, ...), so
@@ -9916,18 +9915,18 @@ def _register_keymaps():
             _add(km_name, space_type, ch.upper(), {"shift": True},
                  "narwhal.begin_typing", "char", ch.lower())
 
-    # Rhino navigates by dragging the RIGHT button. One binding per
+    # the reference CAD application navigates by dragging the RIGHT button. One binding per
     # modifier combination, because a keymap item matches an EXACT modifier set:
     # a bare RIGHTMOUSE item does not fire for Ctrl+RIGHTMOUSE. The operator
     # itself decides what each combination means (and whether the pane is
-    # perspective), so this list only has to cover the combinations Rhino uses.
+    # perspective), so this list only has to cover the combinations the reference CAD application uses.
     for mods in NAV_MODIFIERS:
         _add("3D View", "VIEW_3D", "RIGHTMOUSE", mods, "narwhal.navigate",
              None, None)
 
     # The MIDDLE button, same shape and the same reason: one item per modifier
-    # combination, because a keymap item matches an EXACT modifier set. Rhino's
-    # MMB tables use Ctrl, Shift and Alt (Rhino documentation), and NAV_MODIFIERS
+    # combination, because a keymap item matches an EXACT modifier set. the reference CAD application's
+    # MMB tables use Ctrl, Shift and Alt (the reference CAD application documentation), and NAV_MODIFIERS
     # already enumerates exactly those combinations.
     #
     # These MUST be claimed. Blender's MMB is `view3d.rotate` and its Shift/Ctrl
@@ -9938,7 +9937,7 @@ def _register_keymaps():
              None, None)
 
     # Ctrl+wheel zooms about the VIEW CENTRE (the bare wheel zooms about the
-    # cursor -- `apply_navigation_preferences`). Verified (Rhino documentation, Keys):
+    # cursor -- `apply_navigation_preferences`). Verified (the reference CAD application documentation, Keys):
     # "Ctrl (CMD) + Mouse wheel -- Zoom In and Out (Focus on view center)". Blender's
     # own Ctrl+wheel PANS sideways. `use_cursor_init=False` is what makes Blender's
     # zoom ignore the cursor (view3d_navigate.cc clears ZOOM_TO_MOUSE without it).
@@ -9962,7 +9961,7 @@ ZOOM_TO_MOUSE = True
 
 
 def apply_navigation_preferences():
-    """Set Blender's input preferences the way Rhino navigates. Preferences
+    """Set Blender's input preferences the way the reference CAD application navigates. Preferences
     are session-only in this app (`launch/bootstrap.py`), so nothing is written to the
     user's Blender settings."""
     try:
@@ -10016,17 +10015,17 @@ _suppress_done = False
 
 
 def _is_competing_letter(kmi):
-    """An A-Z key press, with or without Shift, bound to a non-rhino operator.
+    """An A-Z key press, with or without Shift, bound to a non-reference CAD application operator.
 
     `shift` is deliberately NOT excluded: 14 of the 29 competitors are
     Shift+letter (Shift+A add menu, Shift+D duplicate, Shift+X delete,
-    Shift+C view-all, Shift+B zoom-border), and a Rhino clone wants those gone
+    Shift+C view-all, Shift+B zoom-border), and a the reference CAD application clone wants those gone
     too. Ctrl/Alt/OS combos ARE excluded — Ctrl+S/Ctrl+O are ours and the rest
     are harmless.
 
     Consequence to be aware of: with Blender's Shift+letter actions disabled and
     our own bindings being unshifted-only, Shift+letter is currently a dead key.
-    Rhino types a capital letter into the command line instead.
+    the reference CAD application types a capital letter into the command line instead.
     """
     return (kmi.map_type == "KEYBOARD"
             and kmi.type in TYPEABLE_UPPER
@@ -10061,7 +10060,7 @@ def _is_competing_destructive(kmi):
 
 #: Non-letter keys whose Blender bindings would change geometry behind the
 #: document's back. `DEL`/`BACK_SPACE` are Blender's `object.delete`; both are
-#: Rhino's Delete (Rhino documentation: "Press the Delete key").
+#: the reference CAD application's Delete (the reference CAD application documentation: "Press the Delete key").
 DESTRUCTIVE_KEYS = ("DEL", "BACK_SPACE")
 
 #: Blender OPERATORS that add or remove objects without telling the rhino3dm
@@ -10108,7 +10107,7 @@ DOCUMENT_MUTATOR_PREFIXES = (
 
 #: Operators matching :data:`DOCUMENT_MUTATOR_PREFIXES` that are nonetheless SAFE --
 #: they change selection or mode, not geometry. Keeping them live matters: the
-#: selection is how every Rhino command takes its input.
+#: selection is how every the reference CAD application command takes its input.
 DOCUMENT_MUTATOR_SAFE = (
     "object.select", "object.mode_set", "object.hide_view_clear",
     "object.editmode_toggle",
@@ -10172,9 +10171,9 @@ def _is_competing_document_bypass(kmi, keymap_name):
 
 
 def _is_competing_rmb(kmi, keymap_name):
-    """A RIGHTMOUSE binding that would fight Rhino's right-button navigation.
+    """A RIGHTMOUSE binding that would fight the reference CAD application's right-button navigation.
 
-    Rhino drags the view with the right button; Blender uses it for the
+    the reference CAD application drags the view with the right button; Blender uses it for the
     context menu, the 3D cursor, lasso select and -- worst -- a Shift+RMB drag
     bound to ``transform.translate``, which would MOVE geometry in Blender
     without updating the rhino3dm document, so Save would write stale
@@ -10578,10 +10577,10 @@ def _typed_constraint(cmd):
 # path every point pick uses.
 # ---------------------------------------------------------------------------
 
-#: The persistent Ortho mode (status bar / F8 / `Ortho`). Off at start, as Rhino's
+#: The persistent Ortho mode (status bar / F8 / `Ortho`). Off at start, as the reference CAD application's
 #: default status bar shows it.
 _ortho_on = False
-#: The ortho angle in degrees. application-defined until `OrthoAngle` is built: Rhino's documented
+#: The ortho angle in degrees. application-defined until `OrthoAngle` is built: the reference CAD application's documented
 #: default (`ortho.DEFAULT_ANGLE`).
 _ortho_angle = ortho.DEFAULT_ANGLE
 
@@ -10608,8 +10607,8 @@ def apply_ortho(cmd, point, area, shift_held):
     """`point` restricted by Ortho for the running command's NEXT pick, or unchanged.
 
     In effect when the persistent mode XOR Shift is ("Shift ... Toggles Ortho mode",
-    Rhino keyboard documentation), and only once there is a previous point -- Ortho is
-    measured "from the last point created" (Rhino documentation), so a command's first pick is
+    the reference CAD application keyboard documentation), and only once there is a previous point -- Ortho is
+    measured "from the last point created" (the reference CAD application documentation), so a command's first pick is
     never restricted. In the plane of the pane the pick is made in."""
     if point is None or cmd is None or not ortho.effective(_ortho_on, shift_held):
         return point
@@ -10728,7 +10727,7 @@ def handle_constraint_line(line):
     * a bare number -> distance constraint (negative = incremental);
     * ``<angle``     -> angle constraint;
     * an EMPTY line while a constraint is armed -> place the point where the marker
-      is ("Right-click or press Enter", Rhino documentation).
+      is ("Right-click or press Enter", the reference CAD application documentation).
 
     Everything else returns False and goes to the command exactly as before.
     """
@@ -10804,7 +10803,7 @@ def constraint_tab():
 # ---------------------------------------------------------------------------
 
 #: The Osnap control's persistent state (which snaps are on, Disable, Project,
-#: and the pixel radius). One per session, exactly as Rhino's panel is.
+#: and the pixel radius). One per session, exactly as the reference CAD application's panel is.
 _snap_settings = osnap.SnapSettings()
 
 #: The snap the cursor is currently within range of, or None. Set by the command
@@ -11232,7 +11231,7 @@ def _in_progress_snap_targets():
     DOCUMENT, and a command's picked points are not in the document until it
     finishes -- so until then there was nothing to snap to.
 
-    Rhino snaps to the points you have already placed in the current command; that
+    the reference CAD application snaps to the points you have already placed in the current command; that
     is how you close a polyline on its own start point. The picked points are
     vertices of the curve being drawn, so they go in `vertices`, which is exactly
     what `End` snaps to ("the end of a curve ... interior vertices of polylines").
@@ -11795,9 +11794,9 @@ def clear_active_snap():
 def _pixels_per_unit(region, rv3d, depth_point):
     """How many screen pixels one world unit covers, near `depth_point`.
 
-    Rhino's snap radius is in PIXELS (Rhino documentation), so it must be
+    the reference CAD application's snap radius is in PIXELS (the reference CAD application documentation), so it must be
     converted at the current zoom -- a world-unit radius would grow and shrink as
-    you zoom, which is not Rhino's behaviour.
+    you zoom, which is not the reference CAD application's behaviour.
 
     Measured by inverting the projection: ask what world distance spans 100 screen
     pixels at this depth. That works for parallel AND perspective panes without
@@ -11831,7 +11830,7 @@ def _pixels_per_unit(region, rv3d, depth_point):
 #
 # Small curves can still look segmented when zoomed in. A world-space chord tolerance
 # is scale-dependent, so a baked tessellation must be revisited at display scale.
-# This is the OTHER half: our tessellation is baked once in WORLD units, while Rhino
+# This is the OTHER half: our tessellation is baked once in WORLD units, while the reference CAD application
 # re-tessellates against SCREEN size, so zooming far enough into any curve eventually
 # reveals facets however good the baked count was.
 #
@@ -12353,7 +12352,7 @@ def snap_at(area, space, region, cursor_world, first_point=False, suspend=False,
     """The snap for a cursor at `cursor_world` in this pane, or None.
 
     Ties the pieces together: the pane's CPlane decides `Quad` and `Project`, the
-    pane's zoom converts Rhino's pixel radius, and the pure engine picks the snap.
+    pane's zoom converts the reference CAD application's pixel radius, and the pure engine picks the snap.
 
     **A snap with no radius is refused.** `osnap.best` treats ``radius=None`` as
     "no limit", which its own docstring calls useful only in tests -- and without a
@@ -12414,9 +12413,9 @@ def _snap_base(cmd):
 
 
 def draw_snap_marker():
-    """POST_PIXEL draw handler: Rhino's snap marker and its name.
+    """POST_PIXEL draw handler: the reference CAD application's snap marker and its name.
 
-    Rhino shows a small constant-size box at the snap point with the snap's name
+    the reference CAD application shows a small constant-size box at the snap point with the snap's name
     beside it -- that label is how you know WHICH snap you are about to take, so
     it is not decoration. Drawn in POST_PIXEL (not POST_VIEW like the preview)
     precisely because the marker must stay the same size on screen at any zoom, so
@@ -12433,7 +12432,7 @@ def draw_snap_marker():
     if area is None or area.type != "VIEW_3D" or region is None:
         return
     # Unlike the PREVIEW (one world shape, shown in every pane), the snap marker
-    # belongs only to the viewport the cursor is in -- that is where Rhino shows
+    # belongs only to the viewport the cursor is in -- that is where the reference CAD application shows
     # it, and showing four markers for one cursor would be noise.
     if _snap_pane is not None and _pane_key(area) != _snap_pane:
         return
@@ -12463,7 +12462,7 @@ def draw_snap_marker():
     try:
         shader.bind()
         shader.uniform_float("color", SNAP_MARKER_COLOR)
-        # an open box, as Rhino draws it -- four edges, so the snapped geometry
+        # an open box, as the reference CAD application draws it -- four edges, so the snapped geometry
         # stays visible through the middle
         corners = ((x - h, y - h), (x + h, y - h), (x + h, y + h), (x - h, y + h))
         coords = []
@@ -12520,8 +12519,8 @@ def _detach_snap_handler():
 _point_handlers = []
 
 #: PointsOn/PointsOff state: the display NAMES whose control points are shown.
-#: A set of names rather than a flag, because Rhino turns control points on for
-#: the objects you selected, not globally (Rhino documentation: "Select
+#: A set of names rather than a flag, because the reference CAD application turns control points on for
+#: the objects you selected, not globally (the reference CAD application documentation: "Select
 #: objects.").
 _points_on = set()
 
@@ -12531,14 +12530,14 @@ _points_on = set()
 _auto_points_off = set()
 _auto_points_selection = [frozenset()]
 
-#: Colour of a point OBJECT's marker. application-defined -- Rhino colours objects by layer and
+#: Colour of a point OBJECT's marker. application-defined -- the reference CAD application colours objects by layer and
 #: we have no per-object colour plumbing yet, so this is a deliberate stand-in.
 POINT_OBJECT_COLOR = (0.05, 0.05, 0.05, 1.0)
 
 #: Colour of a CONTROL point marker. application-defined.
 CONTROL_POINT_COLOR = (0.10, 0.10, 0.55, 1.0)
 
-#: Colour of a SELECTED control point. application-defined -- Rhino's selection colour is a
+#: Colour of a SELECTED control point. application-defined -- the reference CAD application's selection colour is a
 #: setting we have not plumbed; yellow reads as "selected" the way the Gumball's
 #: grabbed-handle highlight does.
 ACTIVE_CONTROL_POINT_COLOR = (1.0, 0.85, 0.1, 1.0)
@@ -12548,7 +12547,7 @@ ACTIVE_CONTROL_POINT_COLOR = (1.0, 0.85, 0.1, 1.0)
 POINT_WHITE = (1.0, 1.0, 1.0, 1.0)
 
 #: Colour of the CONTROL POLYGON -- the dashed line joining an object's control
-#: points. application-defined. Rhino draws one (see `pointdisplay`'s measured citations for that)
+#: points. application-defined. the reference CAD application draws one (see `pointdisplay`'s measured citations for that)
 #: but the help states neither its colour nor its dash pattern. Deliberately a
 #: a dark neutral line drawn UNDER markers so it reads as structure without competing
 #: with the geometry.
@@ -12568,7 +12567,7 @@ def points_on_names():
 def set_points_on(names, on=True):
     """Turn control points on or off for `names`. Returns how many changed.
 
-    Rhino's `PointsOn` acts on the objects you selected, so this is per-object
+    the reference CAD application's `PointsOn` acts on the objects you selected, so this is per-object
     rather than a global switch. `PointsOff` also suppresses the transient automatic
     grips of the current one-curve selection ; that suppression expires as
     soon as the selection changes, so selecting the curve again restores the default.
@@ -13070,10 +13069,10 @@ def pick_control_point(area, space, region, rx, ry,
 
 
 def select_control_point(hit, shift=False, ctrl=False):
-    """Apply Rhino's selection rules to a picked control point.
+    """Apply the reference CAD application's selection rules to a picked control point.
 
     The SAME rules as objects (`select.py`): Shift adds, Ctrl removes, a plain
-    click replaces, and clicking away clears -- Rhino documents those for "single
+    click replaces, and clicking away clears -- the reference CAD application documents those for "single
     objects or using a window or crossing" and control points are selected the same
     way. Returns the new selection.
     """
@@ -13291,7 +13290,7 @@ def _cp_drag_begin(area, space, region, rx, ry):
     """Start dragging the selected control points. True if a drag started.
 
     Tracked on the active CPlane, like the Gumball's free-move origin handle: that
-    is the surface Rhino drags on ("A construction plane is like a tabletop that
+    is the surface the reference CAD application drags on ("A construction plane is like a tabletop that
     the cursor normally moves on").
     """
     global _cp_drag
@@ -13353,8 +13352,8 @@ def _control_polygons():
     """``{display_name: [world_point, ...]}`` -- each object's control polygon.
 
     The polyline through the object's control points **in index order**, which is
-    what Rhino's control polygon is: "This creates polylines ... that have vertices
-    at the original objects' control points" (Rhino documentation).
+    what the reference CAD application's control polygon is: "This creates polylines ... that have vertices
+    at the original objects' control points" (the reference CAD application documentation).
 
     Built by grouping `_control_point_locations`, so it shows exactly the objects
     whose points are on and it inherits that function's stale-object prune for free.
@@ -13889,9 +13888,9 @@ def draw_point_markers():
         pts = [world for _name, world in doc_pts]
         if pts:
             jobs.append((pts, pointdisplay.DEFAULT_POINT_STYLE, POINT_OBJECT_COLOR))
-        # Control points, split by selection: a SELECTED one is drawn with Rhino's
+        # Control points, split by selection: a SELECTED one is drawn with the reference CAD application's
         # ActivePoint style, which is "like a control point but includes vertical/
-        # horizontal crosshair lines" (Rhino.Display.PointStyle). That is how you can
+        # horizontal crosshair lines" (the reference CAD application.Display.PointStyle). That is how you can
         # see which grips a drag will move.
         plain, active = [], []
         # during a Gumball drag the objects move on screen before the
@@ -13966,7 +13965,7 @@ def draw_point_markers():
                 segs.append(corners[(i + 1) % 4])
             stroke = (CROSSING_RECT_COLOR if mode == select.CROSSING
                       else WINDOW_RECT_COLOR)
-            # the translucent FILL first (Rhino's SelectionWindowFillColor),
+            # the translucent FILL first (the reference CAD application's SelectionWindowFillColor),
             # then a heavier stroke over it
             shader.uniform_float("color", tuple(stroke[:3]) + (SELECTION_RECT_FILL_ALPHA,))
             batch_for_shader(shader, "TRIS", {"pos": [corners[0], corners[1], corners[2],
@@ -13985,7 +13984,7 @@ def draw_point_markers():
 # ---------------------------------------------------------------------------
 # SUB-OBJECT selection (Ctrl+Shift+click)
 #
-# Verified (Rhino keyboard documentation):
+# Verified (the reference CAD application keyboard documentation):
 #  "To select sub-object parts with a mouse ... Ctrl (CMD) + Shift + Left mouse
 #  click, window, or crossing."
 #  "To deselect sub-object parts with a mouse -- Ctrl (CMD) + Shift + Left mouse
@@ -14004,12 +14003,12 @@ def draw_point_markers():
 #: Blender selection and need their own set.
 _selected_subobjects = set()
 
-#: How close (pixels) the cursor must come to a segment to pick it. application-defined -- Rhino
+#: How close (pixels) the cursor must come to a segment to pick it. application-defined -- the reference CAD application
 #: documents the chord but not its pick radius. Wider than CONTROL_POINT_PICK_PX
 #: because a segment is a line you aim at, not a marker you land on.
 SUBOBJECT_PICK_PX = 10.0
 
-#: Rhino draws a selected sub-object in the same yellow it uses for a selected
+#: the reference CAD application draws a selected sub-object in the same yellow it uses for a selected
 #: object (SELECT_COLOR), and this highlight is drawn OVER the wire.
 SUBOBJECT_COLOR = (1.0, 0.85, 0.0, 1.0)
 
@@ -14055,7 +14054,7 @@ def selected_subobjects():
 def clear_subobject_selection():
     """Drop the whole sub-object selection. Returns how many were dropped.
 
-    Verified: Esc "Deselects all selected objects" (Rhino keyboard documentation), so
+    Verified: Esc "Deselects all selected objects" (the reference CAD application keyboard documentation), so
     the cancel path calls this.
     """
     n = len(_selected_subobjects)
@@ -14435,7 +14434,7 @@ def _apply_xform_to_subobjects(xform):
 
 
 def draw_subobject_highlight(region, rv3d, shader, batch_for_shader):
-    """Draw the selected segments over the wire, in Rhino's selection yellow.
+    """Draw the selected segments over the wire, in the reference CAD application's selection yellow.
 
     Drawn as 2-D screen-space lines by the point-marker handler, which already
     runs POST_PIXEL and already has a projection to hand. A 3-D overlay would need
@@ -14641,7 +14640,7 @@ _picture_batch_cache = {}
 def _picture_image(ob):
     for slot in getattr(ob, "material_slots", ()):
         mat = slot.material
-        if mat is None or not mat.name.startswith("rhino_picture:") or not mat.node_tree:
+        if mat is None or not mat.name.startswith("narwhal_picture:") or not mat.node_tree:
             continue
         for node in mat.node_tree.nodes:
             if node.type == "TEX_IMAGE" and node.image is not None:
@@ -14688,7 +14687,7 @@ def rendered_picture_objects(space):
     if display_mode_of_space(space) not in ("Shaded", "Rendered"):
         return []
     return [ob for ob in bpy.data.objects
-            if ob.get("rhino_picture") and ob.type == "MESH" and ob.visible_get()]
+            if ob.get("narwhal_picture") and ob.type == "MESH" and ob.visible_get()]
 
 
 def display_mode_of_space(space):
@@ -14788,7 +14787,7 @@ def _preview_cplane():
     the cursor was actually picked in, not in each pane's own CPlane (that would
     invent a different circle in every pane). It is then drawn from every pane's
     camera, where Blender's view matrices show it full-on or edge-on, exactly as
-    Rhino projects the in-progress geometry into all viewports at once.
+    the reference CAD application projects the in-progress geometry into all viewports at once.
 
     Returns the working pane's CPlane, falling back to the active pane's if the
     recorded pane has disappeared (a layout change).
@@ -14809,7 +14808,7 @@ def _preview_cplane():
 #
 # Move preview draws the selected geometry at its prospective destination, not only the
 # from-to band.
-# selection dragged along; RhinoCommon's GetTransform is built the same way --
+# selection dragged along; CAD SDK's GetTransform is built the same way --
 # `CalculateTransform(viewport, point)` returns the transform for a cursor point, and
 # the objects are redrawn through it on every mouse move.
 #
@@ -14966,7 +14965,7 @@ def _draw_transform_ghost(cmd, shader, gpu, batch_for_shader):
 def draw_command_preview():
     """POST_VIEW draw handler: the running command's dynamic preview.
 
-    Rhino gives continuous feedback while a command runs -- after the first click
+    the reference CAD application gives continuous feedback while a command runs -- after the first click
     of `Line` a band follows the cursor. What to draw is decided by the pure
     `preview` module; this only turns the polylines it returns into GPU batches.
 
@@ -14976,7 +14975,7 @@ def draw_command_preview():
     at any zoom.
 
     Drawn in **every** viewport. The in-progress geometry is one world-space
-    object, and Rhino projects it into all viewports at once -- a circle drawn on
+    object, and the reference CAD application projects it into all viewports at once -- a circle drawn on
     the Front plane reads as a full circle in Front and edge-on in Top/Right.
     So the shape is built once, in the CPlane the cursor is in (see
     :func:`_preview_cplane`), and this handler draws that same world-space
@@ -15000,7 +14999,7 @@ def draw_command_preview():
     # name, else the first selected object), because a preview that resolved the curve
     # differently from `execute` would draw a shape the user does not get.
     def _resolve_preview_geom(name):   # noqa: D401 (thin wrapper over the shared lookup)
-        # Mirrors `RhinoContext.geom_by_name` (a case-insensitive scan of the document)
+        # Mirrors `NarwhalContext.geom_by_name` (a case-insensitive scan of the document)
         # plus the command's selection fallback. Verified: there is no
         # `model.geometry_by_name` -- the document is walked directly, which is what
         # commands.py does too.
@@ -15071,7 +15070,7 @@ def draw_command_preview():
 # layout is built once -- see `printdialog`), so the dialog is drawn by us, in the
 # ACTIVE viewport, from the pure model in `printdialog`.
 #
-# Interaction (application-defined -- Rhino's dropdowns are native widgets): click a value (or turn
+# Interaction (application-defined -- the reference CAD application's dropdowns are native widgets): click a value (or turn
 # the wheel over it) for the next choice, right-click for the previous one; Print asks
 # for the file; Close or Esc closes. The preview is rebuilt from `print2d` after EVERY
 # change, from the very Page the file will be written from.
@@ -15520,7 +15519,7 @@ _autosave_last = [None]
 def _autosave_tick():
     """Check once per minute whether `autosave.due` requires an unsaved-model copy.
 
-    The interval defaults to an application-defined 20 minutes because Rhino's default
+    The interval defaults to an application-defined 20 minutes because the reference CAD application's default
     is not documented.
     """
     import datetime
@@ -15579,7 +15578,7 @@ def _attach_preview_handler():
     """
     if _preview_handlers:
         return True
-    # Rhino's finite CPlane grid. FIRST, because POST_VIEW handlers draw
+    # the reference CAD application's finite CPlane grid. FIRST, because POST_VIEW handlers draw
     # in registration order and the overlays below write no depth: registered later, the
     # grid would paint over a coloured curve lying on the CPlane.
     gr_id = bpy.types.SpaceView3D.draw_handler_add(
@@ -15626,8 +15625,8 @@ def _attach_preview_handler():
 # ---------------------------------------------------------------------------
 # the Gumball transform widget
 #
-# Rhino's AutoGumball is ON by default ("Gumball On -- Turns the gumball widget on
-# any time objects are selected" -- Rhino documentation), so the widget appears
+# the reference CAD application's AutoGumball is ON by default ("Gumball On -- Turns the gumball widget on
+# any time objects are selected" -- the reference CAD application documentation), so the widget appears
 # as soon as something is selected; the `Gumball` command's On/Off/Toggle options
 # drive the flag below.
 #
@@ -15637,11 +15636,11 @@ def _attach_preview_handler():
 # ---------------------------------------------------------------------------
 
 _gumball_enabled = True
-#: The active `GumballAlignment` (Rhino documentation). CPlane is Rhino's default.
+#: The active `GumballAlignment` (the reference CAD application documentation). CPlane is the reference CAD application's default.
 _gumball_alignment = gumball.DEFAULT_ALIGNMENT
 _gumball_handlers = []
 #: the key of the handle under the cursor, so it can highlight BEFORE you grab it
-#: (Rhino: "Point the mouse cursor to a handle to show the tooltip").
+#: (the reference CAD application: "Point the mouse cursor to a handle to show the tooltip").
 _gumball_hover = None
 #: where the cursor was when `_gumball_hover` was last computed, in WINDOW coords,
 #: and which pane it was in. A POST_PIXEL draw handler receives no event, so the
@@ -15661,7 +15660,7 @@ _gumball_drag = None
 
 #: In-progress RELOCATE gesture, or None. See `_gumball_relocate_begin`. Separate
 #: from `_gumball_drag` on purpose: a relocate moves the WIDGET and must never
-#: touch the document, and Rhino's gesture is not a drag at all -- the button is
+#: touch the document, and the reference CAD application's gesture is not a drag at all -- the button is
 #: already up by the time it starts ("Move the mouse and click").
 _gumball_relocate = None
 
@@ -15673,11 +15672,11 @@ _last_gumball_click = (0.0, None)
 
 
 #: Relocation offset from the widget's default (bounding-box) origin, in world
-#: units. Verified (Rhino documentation, Gumball menu): "Relocate Gumball -- Drag
+#: units. Verified (the reference CAD application documentation, Gumball menu): "Relocate Gumball -- Drag
 #: to relocate gumball widget away from its default position." / "Reset Gumball --
 #: Restores the default placement and orientation for the gumball." Kept as an
 #: OFFSET, not an absolute point, because the default moves with the selection and
-#: Rhino's relocated gumball does not snap back to the box centre on its own.
+#: the reference CAD application's relocated gumball does not snap back to the box centre on its own.
 _gumball_offset = gumball.ZERO_OFFSET
 
 #: "Drag Strength -- Sets the amount of the gumball drag as a percentage of mouse
@@ -15820,7 +15819,7 @@ def gumball_hover():
 def _selection_world_points():
     """World points the Gumball should centre itself on.
 
-    When CONTROL POINTS are selected those are what the widget follows -- Rhino
+    When CONTROL POINTS are selected those are what the widget follows -- the reference CAD application
     puts the Gumball on the grips you picked, not on the whole object, and dragging
     it then edits the curve.
 
@@ -15893,7 +15892,7 @@ def _view_frame(area):
 
 
 def gumball_alignment():
-    """The active `GumballAlignment` value (Rhino's default is CPlane)."""
+    """The active `GumballAlignment` value (the reference CAD application's default is CPlane)."""
     return _gumball_alignment
 
 
@@ -15928,7 +15927,7 @@ def gumball_frame():
     (`_preview_cplane`): the widget is a single world-space object that every pane
     looks at from its own camera.
 
-    Which frame depends on `GumballAlignment` (Rhino documentation): the active
+    Which frame depends on `GumballAlignment` (the reference CAD application documentation): the active
     pane's CPlane by default, world xyz, or the pane's view plane. Note that the
     alignment also decides the frame the BOUNDING BOX is measured in -- "The
     Gumball origin will be at the CPlane oriented bounding box center" versus "at
@@ -15941,7 +15940,7 @@ def gumball_frame():
 
     Frozen, but not immobile: a translating drag adds its applied delta to
     ``_gumball_drag["widget_shift"]`` and that shift is applied here, so the widget
-    travels with the object exactly as Rhino's does, without reopening the feedback
+    travels with the object exactly as the reference CAD application's does, without reopening the feedback
     loop the freeze exists to prevent. See `_gumball_begin` for why the shift is kept
     separate from the drag's own ``origin``.
     """
@@ -15984,7 +15983,7 @@ def gumball_frame():
         view_frame=_view_frame(area))
     if plane is None:
         # the alignment could not be honoured -- fall back to the CPlane, which is
-        # Rhino's documented default, rather than drawing nothing
+        # the reference CAD application's documented default, rather than drawing nothing
         plane = cp
     if _selected_subobjects and gumball_targets_brep_part():
         face_plane = _brep_part_frame(plane)    # reopened #29: aligned to the face
@@ -16019,7 +16018,7 @@ def gumball_frame():
 
 
 # ---------------------------------------------------------------------------
-# THE VIEWPORT TITLE (Rhino documentation)
+# THE VIEWPORT TITLE (the reference CAD application documentation)
 #
 # Three behaviours, all Verified on that page, none of them previously implemented:
 #
@@ -16100,7 +16099,7 @@ def pane_title_arrow_at(mouse_x, mouse_y):
 #
 #  * `screen.screen_full_area` is the WRONG lever. It builds a new screen
 #   ("Layout-nonnormal") holding ONE area at 95.4% of the window, so the command
-#   bar disappears -- Rhino keeps it. Restoring also leaves `bpy.context.screen`
+#   bar disappears -- the reference CAD application keeps it. Restoring also leaves `bpy.context.screen`
 #   None for a tick.
 #  * `screen.area_close` is the RIGHT lever: the command bar survives and no new
 #   screen is created.
@@ -16113,7 +16112,7 @@ def pane_title_arrow_at(mouse_x, mouse_y):
 # references go stale, and as the others close the keeper only grows, so a point
 # inside it stays inside it.
 
-#: True while a pane is maximized. Rhino's double-click toggles between the two.
+#: True while a pane is maximized. the reference CAD application's double-click toggles between the two.
 _maximized = False
 #: Saved per-pane camera state, in canonical position order, so restore puts the
 #: views back as they were instead of resetting them to the four defaults.
@@ -16121,7 +16120,7 @@ _saved_pane_views = []
 #: Guard: one maximize/restore sequence at a time.
 _maximize_busy = False
 
-#: Rhino's own double-click interval is not documented. application-defined: 0.5 s is the common
+#: the reference CAD application's own double-click interval is not documented. application-defined: 0.5 s is the common
 #: platform default and is generous enough not to lose a deliberate double-click.
 DOUBLE_CLICK_SECONDS = 0.5
 
@@ -16422,7 +16421,7 @@ def restore_panes():
 
 
 def toggle_maximize(area):
-    """Rhino's double-click: maximize this pane, or restore the layout."""
+    """the reference CAD application's double-click: maximize this pane, or restore the layout."""
     if _maximized:
         return restore_panes()
     return maximize_pane(area)
@@ -16539,7 +16538,7 @@ def _pick_object_at(area, space, region, rx, ry):
     Blender's `view3d.select` is borrowed purely as an occlusion-aware PICKER --
     it knows what is in front of what, which a bounding-box test does not. What it
     must NOT decide is the selection semantics, because Blender's Shift/Ctrl
-    conventions are not Rhino's (see `select.py`). So the current selection is
+    conventions are not the reference CAD application's (see `select.py`). So the current selection is
     saved, the operator is run in EXEC mode at an explicit location to find the
     hit, and the selection is put straight back; `select.apply` then decides.
 
@@ -16643,11 +16642,11 @@ def sync_locked_selectability():
     (`SelSubD`, `SelOpenSubD`, `SelClosedSubD`), and `FindText` cannot reach
     "hidden or locked annotations". Locking is not hiding: a locked object stays
     visible ("Locked objects appear solid / ... appear transparent / Gray locked
-    object displayed behind others" -- Rhino documentation), it
+    object displayed behind others" -- the reference CAD application documentation), it
     just cannot be picked.
 
     Implemented with Blender's own `hide_select` rather than by filtering our pick
-    RESULT, and that choice buys the behaviour Rhino actually has: `view3d.select`
+    RESULT, and that choice buys the behaviour the reference CAD application actually has: `view3d.select`
     skips unselectable objects entirely, so a click on a locked object picks
     whatever is BEHIND it instead of picking nothing. Filtering the result
     afterwards could only ever turn the click into a miss, because the picker
@@ -16685,10 +16684,10 @@ def selection_names():
         return []
 
 
-def rhino_click_select(area, space, region, rx, ry, shift=False, ctrl=False):
-    """One Rhino-style selecting click. Returns the new selection.
+def narwhal_click_select(area, space, region, rx, ry, shift=False, ctrl=False):
+    """One CAD-style selecting click. Returns the new selection.
 
-    Verified (Rhino documentation): a plain click selects what it hit
+    Verified (the reference CAD application documentation): a plain click selects what it hit
     and clicking away deselects; Shift ADDS; Ctrl REMOVES. Blender does none of
     those three the same way, which is why this is ours.
 
@@ -16717,7 +16716,7 @@ def rhino_click_select(area, space, region, rx, ry, shift=False, ctrl=False):
     _last_click_hit = hit
     action = select.modifier_action(shift=shift, ctrl=ctrl)
     hits = [hit] if hit else []
-    # Rhino Group: selecting one member selects the whole group and commands apply to it.
+    # the reference CAD application Group: selecting one member selects the whole group and commands apply to it.
     # Expand the HIT before modifier semantics so Ctrl removes the whole clicked group;
     # expanding only the final selection would immediately re-add the clicked member from
     # its still-selected partners.
@@ -16729,7 +16728,7 @@ def rhino_click_select(area, space, region, rx, ry, shift=False, ctrl=False):
     return wanted
 
 
-#: The object name the last `rhino_click_select` hit, or None.
+#: The object name the last `narwhal_click_select` hit, or None.
 _last_click_hit = None
 
 #: Samples along a curve when finding the point nearest a click. application-defined: enough that
@@ -16741,7 +16740,7 @@ PICK_CURVE_SAMPLES = 400
 def object_pick_location(area, space, region, rx, ry, name):
     """: the WORLD point on object `name` nearest the click at region pixel (rx, ry).
 
-    Rhino's object prompts are position-aware -- Rhino documentation: *"Select the first curve
+    the reference CAD application's object prompts are position-aware -- the reference CAD application documentation: *"Select the first curve
     near the end"* -- so a command needs WHERE its object was picked, not only which.
     A curve is searched on its exact document geometry (sampled in screen space, then
     refined), so the point lies ON the curve and on the segment that was clicked. A
@@ -16796,8 +16795,8 @@ def _answer_objects_step_with_click(area, space, region, rx, ry):
     """: a click that hit an object while a command waits at a single-object step.
 
     Inferred from the help's wording: single-object prompts are answered by the pick
-    itself (Rhino documentation: *"Select the first curve near the end. Select the second curve
-    near the end."* -- no Enter between), while set prompts say so (Rhino documentation:
+    itself (the reference CAD application documentation: *"Select the first curve near the end. Select the second curve
+    near the end."* -- no Enter between), while set prompts say so (the reference CAD application documentation:
     *"Select the objects and press Enter."*). So an `OBJECTS` step takes the clicked
     object at once, and records WHERE in ``cmd.pick_points[step]``; an `OBJECTS_MULTI`
     step keeps the selection and waits for Enter. Returns the command's message or None.
@@ -17223,14 +17222,14 @@ def _object_screen_bboxes(area, space, region, projection=None):
 
 #: An in-progress selection drag, or None. A click and a window selection start
 #: identically -- you cannot tell them apart until the button comes up -- so the
-#: decision is deferred to RELEASE, which is also how Rhino must do it.
+#: decision is deferred to RELEASE, which is also how the reference CAD application must do it.
 _sel_drag = None
 
-#: Rubber-band colours. **application-defined.** Rhino names the settings
+#: Rubber-band colours. **application-defined.** the reference CAD application names the settings
 #: (`SelectionWindowStrokeColor` / `SelectionWindowFillColor`, and the
 #: `...Crossing...` pair, in `Tools > Options > Advanced`) but no file we hold
 #: records their values. Window and crossing are deliberately DIFFERENT colours,
-#: because Rhino gives them separate settings and the whole point is to see which
+#: because the reference CAD application gives them separate settings and the whole point is to see which
 #: one you are making.
 WINDOW_RECT_COLOR = (0.20, 0.45, 0.95, 1.0)
 CROSSING_RECT_COLOR = (0.15, 0.70, 0.30, 1.0)
@@ -17299,7 +17298,7 @@ def _control_points_in_rect(region, rv3d, rect):
 
 
 def _select_control_points_in_rect(region, rv3d, rect, shift=False, ctrl=False):
-    """Apply a window/crossing rectangle to visible grips using Rhino modifiers."""
+    """Apply a window/crossing rectangle to visible grips using the reference CAD application modifiers."""
     hits = _control_points_in_rect(region, rv3d, rect)
     action = select.modifier_action(shift=shift, ctrl=ctrl)
     wanted = select.apply(sorted(_selected_cps), hits, action)
@@ -17330,7 +17329,7 @@ def _sel_drag_end():
     shift, ctrl = st["shift"], st["ctrl"]
 
     if not st.get("active") or select.is_click(x0, y0, x1, y1):
-        wanted = rhino_click_select(area, space, region, x0, y0,
+        wanted = narwhal_click_select(area, space, region, x0, y0,
                                     shift=shift, ctrl=ctrl)
         if app_state.active_command is not None and not (shift or ctrl):
             _answer_objects_step_with_click(area, space, region, x0, y0)
@@ -17365,7 +17364,7 @@ def _sel_drag_end():
 def _gumball_size(region, rv3d, origin):
     """The widget's size in WORLD units, so it looks constant on screen.
 
-    Rhino's gumball keeps its pixel size as you zoom, so the documented pixel size
+    the reference CAD application's gumball keeps its pixel size as you zoom, so the documented pixel size
     is converted at this pane's zoom -- the same conversion the snap radius uses.
     """
     ppu = _pixels_per_unit(region, rv3d, origin)
@@ -17393,7 +17392,7 @@ def _view_direction(rv3d):
 
     Blender's `view_rotation` aims the camera; the camera looks along its own
     local -Z, so rotating (0, 0, -1) by that quaternion gives where the pane is
-    looking. Needed by the Gumball's Move-2D handles, which Rhino hides unless
+    looking. Needed by the Gumball's Move-2D handles, which the reference CAD application hides unless
     the plane is close to face-on (gumball.plane_visible).
     """
     if rv3d is None:
@@ -17485,7 +17484,7 @@ def _gumball_begin(area, space, region, mouse_x, mouse_y, shift=False, ctrl=Fals
 
     `shift`/`ctrl` select what the drag MEANS (gumball.drag_mode): Shift turns a
     Move-2D drag into Scale2D and a scale drag into Scale3D, and Ctrl asks for
-    Rhino's Extrude handle, which we report as unimplemented rather than silently
+    the reference CAD application's Extrude handle, which we report as unimplemented rather than silently
     performing the plain drag.
     """
     global _gumball_drag
@@ -17517,7 +17516,7 @@ def _gumball_begin(area, space, region, mouse_x, mouse_y, shift=False, ctrl=Fals
     # what the drag MEANS, from the handle plus the modifiers.
     mode = gumball.drag_mode(hit.kind, shift=shift, ctrl=ctrl)
     if not gumball.mode_is_implemented(mode):
-        # A real Rhino mode we have not built. Say so and do NOT start a drag --
+        # A real the reference CAD application mode we have not built. Say so and do NOT start a drag --
         # performing the unmodified drag instead would look like Ctrl worked.
         app_state.log(gumball.mode_not_implemented_message(mode, hit.kind))
         redraw_cmdbar()
@@ -17644,7 +17643,7 @@ def _gumball_begin(area, space, region, mouse_x, mouse_y, shift=False, ctrl=Fals
     # offset, read in `gumball_frame` and nowhere else.
     #
     # Only the three TRANSLATING modes (MOVE, PLANE, ORIGIN) touch it. Rotate and
-    # scale must not: Rhino's gumball origin is the rotation centre, and measured,
+    # scale must not: the reference CAD application's gumball origin is the rotation centre, and measured,
     # "The Gumball origin is the base point of scaling" -- both stay put by definition.
     state["widget_shift"] = gumball.ZERO_OFFSET
     note_user_interaction()
@@ -17662,14 +17661,14 @@ def _gumball_begin(area, space, region, mouse_x, mouse_y, shift=False, ctrl=Fals
 # ---------------------------------------------------------------------------
 # RELOCATING THE WIDGET BY DOUBLE-CLICKING A HANDLE
 #
-# Verified (Rhino documentation):
+# Verified (the reference CAD application documentation):
 #  "Move Gumball -- Double-click on an arrow to relocate Gumball along the
 #  direction. Move the mouse and click, or type a distance and press Enter."
 #  "Move gumball planar - Double click -- Double-click on a Move 2D handle to
 #  relocate Gumball on the plane."
 # Both handles use one relocation gesture.
 #
-# Rhino's gesture is NOT a drag: the double-click arms it, the button comes up, you
+# the reference CAD application's gesture is NOT a drag: the double-click arms it, the button comes up, you
 # move, and a CLICK commits. That is why this has its own state rather than reusing
 # `_gumball_drag`, which lives and dies with the button.
 #
@@ -17679,7 +17678,7 @@ def _gumball_begin(area, space, region, mouse_x, mouse_y, shift=False, ctrl=Fals
 # the available gesture rather than faking typed relocation.
 # ---------------------------------------------------------------------------
 
-#: application-defined: the same window as the viewport-title double-click. Rhino's is the system
+#: application-defined: the same window as the viewport-title double-click. the reference CAD application's is the system
 #: double-click speed, which we cannot read; reusing one constant at least keeps the
 #: app internally consistent.
 def _gumball_is_double_click(key, now=None):
@@ -17882,11 +17881,11 @@ def _draw_gumball_menu_into(layout):
 
 
 class NARWHAL_MT_gumball(bpy.types.Menu):
-    """The Gumball menu -- Rhino's "menu ball" / bunny tail popup.
+    """The Gumball menu -- the reference CAD application's "menu ball" / bunny tail popup.
 
     Every entry in `gumball.MENU_ENTRIES` is drawn, in the help's own order. The five
     we have not built are drawn too and report themselves, for the same reason the
-    main menu bar does it: a menu that hides what Rhino offers misrepresents the
+    main menu bar does it: a menu that hides what the reference CAD application offers misrepresents the
     widget.
     """
     bl_idname = "NARWHAL_MT_gumball"
@@ -17917,7 +17916,7 @@ class NARWHAL_OT_gumball_menu(Operator):
 # THE THREE VIEWPORT CONTEXT MENUS
 #
 # Verified: "One of the three context menus appears when you click, hold, and
-# release the right mouse button in a viewport" (Rhino documentation).
+# release the right mouse button in a viewport" (the reference CAD application documentation).
 # Which one, and what is IN it, is decided in `navigate.py` -- see the long
 # compatibility tables there.
 #
@@ -17964,7 +17963,7 @@ def _draw_context_menu(layout, kind):
 
 
 class NARWHAL_MT_context_viewport(bpy.types.Menu):
-    """Rhino's Viewport context menu -- raised when nothing is selected."""
+    """the reference CAD application's Viewport context menu -- raised when nothing is selected."""
     bl_idname = "NARWHAL_MT_context_viewport"
     bl_label = "Viewport"
 
@@ -17973,7 +17972,7 @@ class NARWHAL_MT_context_viewport(bpy.types.Menu):
 
 
 class NARWHAL_MT_context_object(bpy.types.Menu):
-    """Rhino's Object context menu -- raised when objects are selected."""
+    """the reference CAD application's Object context menu -- raised when objects are selected."""
     bl_idname = "NARWHAL_MT_context_object"
     bl_label = "Object"
 
@@ -17982,7 +17981,7 @@ class NARWHAL_MT_context_object(bpy.types.Menu):
 
 
 class NARWHAL_MT_context_control_point(bpy.types.Menu):
-    """Rhino's Control Point context menu -- raised when grips are selected."""
+    """the reference CAD application's Control Point context menu -- raised when grips are selected."""
     bl_idname = "NARWHAL_MT_context_control_point"
     bl_label = "Control Point"
 
@@ -18003,7 +18002,7 @@ def _draw_tab_menu(layout, entries):
 
     We have none of the commands these name, so every row reports itself. Listed
     anyway, for the reason the whole shell is built this way: the menu is measured,
-    and showing an empty one would hide what Rhino offers here.
+    and showing an empty one would hide what the reference CAD application offers here.
     """
     for label, command in entries:
         if command and command.lower() in COMMANDS:
@@ -18084,7 +18083,7 @@ def _gumball_menu_action(key):
     if key == "relocate":
         # "Drag to relocate gumball widget away from its default position." The
         # gesture lives on the HANDLES -- see `_gumball_relocate_begin`: "Double-click
-        # on an arrow to relocate Gumball along the direction." Rhino ALSO has a
+        # on an arrow to relocate Gumball along the direction." the reference CAD application ALSO has a
         # GumballRelocate command that asks for the new location outright; that needs
         # a point-input command; this reports the available handle gesture rather than
         # pretending to start an unsupported command.
@@ -18117,12 +18116,12 @@ def _gumball_menu_action(key):
         set_gumball_snappy(False)
         return "Smooth dragging: object snaps are ignored while dragging"
     if key == "drag_strength":
-        # Rhino opens a slider; we have no dialog, so the command line asks -- which
+        # the reference CAD application opens a slider; we have no dialog, so the command line asks -- which
         # is where every other numeric value in this app is typed.
         #
         # Set as the active command DIRECTLY rather than through `start_command`,
         # because `GumballDragStrengthCmd` is deliberately not in the registry (it is
-        # not a Rhino command name, so it must not be typeable or autocomplete to).
+        # not a the reference CAD application command name, so it must not be typeable or autocomplete to).
         # Same precedent as `GumballNumericCmd`.
         app_state.active_command = commands.GumballDragStrengthCmd()
         _open_command_line()
@@ -18187,7 +18186,7 @@ class NARWHAL_MT_sidebar_flyout(bpy.types.Menu):
 
 
 class NARWHAL_MT_layer_context(bpy.types.Menu):
-    """Right-clicking a layer's name -- Rhino's layer context menu (`LAYER_MENU`)."""
+    """Right-clicking a layer's name -- the reference CAD application's layer context menu (`LAYER_MENU`)."""
     bl_idname = "NARWHAL_MT_layer_context"
     bl_label = "Layer"
 
@@ -18221,12 +18220,12 @@ CLASSES = CLASSES + (NARWHAL_OT_layer_menu_action, NARWHAL_MT_layer_context,
 def _gumball_toggle_copy():
     """Alt tapped during a drag. Returns the message to log, or None.
 
-    Verified (Rhino documentation): "Copy - Tap Alt -- While dragging, tap Alt to
+    Verified (the reference CAD application documentation): "Copy - Tap Alt -- While dragging, tap Alt to
     make a copy of the object. Tap Alt again to leave copy mode."
 
     Turning copy mode ON leaves a copy of the selection at the position the drag
     STARTED from, and the drag carries on with the originals. That is the visible
-    result Rhino gives, and it is why the inverse of the accumulated transform is
+    result the reference CAD application gives, and it is why the inverse of the accumulated transform is
     the thing applied to the copies: the copies have to go back to where the objects
     were when the drag began.
 
@@ -18500,7 +18499,7 @@ def _gumball_defer(st, xform):
     from mathutils import Matrix
     d = st.get("defer")
     if d is None:
-        # A drag has one selection snapshot. Besides matching Rhino's stable
+        # A drag has one selection snapshot. Besides matching the reference CAD application's stable
         # drag semantics, this avoids rebuilding the selection list on every
         # mouse update (large imported documents make that query expensive).
         display_objects = tuple(bridge.selected_display_objects())
@@ -18618,7 +18617,7 @@ def _gumball_flush(st):
 def _extrude_handle_available():
     """Whether the current selection should show 's Extrude dots.
 
-    Rhino shows them for curves, one-face surfaces, and a picked solid face. The exact
+    the reference CAD application shows them for curves, one-face surfaces, and a picked solid face. The exact
     backend makes the final eligibility decision by name; this cheap display predicate
     avoids advertising them on a whole polysurface or a point/mesh."""
     import rhino3dm as r3
@@ -18778,7 +18777,7 @@ def _apply_xform_to_control_points(xform):
 def _gumball_snap_point(st, area, space, region, mouse_x, mouse_y):
     """The object snap under the cursor during this drag, or None.
 
-    Verified (Rhino documentation): "Snappy gumball -- Snaps to
+    Verified (the reference CAD application documentation): "Snappy gumball -- Snaps to
     object snap locations." / "Smooth gumball -- Ignores object snap locations."
 
     Three things keep this honest:
@@ -18816,7 +18815,7 @@ def _gumball_snap_point(st, area, space, region, mouse_x, mouse_y):
 
 #: Shift is read on every update rather than only at mouse-down. Rotate:
 #: Shift is Ortho, so the angle snaps to multiples of the ortho angle. Inferred: "The
-#: default angle is 90 degrees" (Rhino documentation).
+#: default angle is 90 degrees" (the reference CAD application documentation).
 GUMBALL_SHIFT_ROTATE_DEG = 90.0
 
 
@@ -19075,7 +19074,7 @@ def _gumball_end():
         except Exception:  # noqa: BLE001
             pass
         if line is None:
-            # a click, not a drag: Rhino's numeric entry is not built for a part
+            # a click, not a drag: the reference CAD application's numeric entry is not built for a part
             mode = st.get("mode") or st["kind"]
             return (f"Gumball: typing a value for a solid's part is not implemented "
                     f"yet -- drag the {str(mode).replace('_', ' ')} handle instead")
@@ -19105,9 +19104,9 @@ def _gumball_end():
         changed = abs(amount) > 1e-9
     if not changed:
         # a CLICK, not a drag -- the handle was grabbed and released
-        # without moving. Rhino reads that as numeric entry: "Click on any handle.
+        # without moving. the reference CAD application reads that as numeric entry: "Click on any handle.
         # Type a number for distance, rotation angle, or scale factor"
-        # (Rhino documentation). Raise the prompt instead of doing nothing.
+        # (the reference CAD application documentation). Raise the prompt instead of doing nothing.
         _gumball_numeric_begin(st)
         return None
     if mode == gumball.ROTATE and not _gumball_autoreset:
@@ -19126,7 +19125,7 @@ def _gumball_numeric_begin(st):
     Enter) by making `GumballNumericCmd` the active command -- so numeric entry
     behaves exactly like any other prompt, including Esc to cancel.
 
-    Handles Rhino documents no typed value for (a plain Move-2D click, the origin)
+    Handles the reference CAD application documents no typed value for (a plain Move-2D click, the origin)
     report why rather than inventing a direction for the number to mean.
     """
     if st is None:
@@ -19181,7 +19180,7 @@ def _gumball_hover_update(area, space, region, mouse_x, mouse_y):
 def draw_gumball_tooltip():
     """POST_PIXEL draw handler: the hovered handle's tooltip, beside the cursor.
 
-    Verified (Rhino documentation): "To show tooltip for handle actions -- Point
+    Verified (the reference CAD application documentation): "To show tooltip for handle actions -- Point
     the mouse cursor to a handle to show the tooltip for actions and modifier keys."
 
     The lines come from `gumball.TOOLTIPS`, which names the modifier keys we have
@@ -19301,7 +19300,7 @@ def draw_gumball():
     active = _gumball_drag["key"] if _gumball_drag is not None else _gumball_hover
     # the FILLED parts first (cone tips, scale and origin cubes), so the
     # lines draw over them. No depth buffer is used -- the widget stays on top of the
-    # model, as Rhino's does -- so a solid reads as 3-D by drawing only its FRONT faces,
+    # model, as the reference CAD application's does -- so a solid reads as 3-D by drawing only its FRONT faces,
     # each shaded by how squarely it faces the viewer.
     tris = gumball_solid_triangles(handles, getattr(space, "region_3d", None), active)
     if tris[0]:
@@ -19389,7 +19388,7 @@ def _attach_view_labels():
     # the Osnap panel is NO LONGER registered here. It used to be a
     # VIEW_3D handler drawing into the bottom-left pane -- i.e. floating over a
     # viewport -- and it is now drawn inside the LEFT DOCK BAND by `draw_left_band`,
-    # which is where Rhino docks it (the reference layout description, the band's lower bar).
+    # which is where the reference CAD application docks it (the reference layout description, the band's lower bar).
     # the floating autocomplete list. LAST, so it draws ON TOP of the labels and
     # the tab strip -- POST_PIXEL handlers run in registration order.
     comp_id = bpy.types.SpaceView3D.draw_handler_add(
@@ -19409,7 +19408,7 @@ def register():
     #
     # The Menu classes are registered FIRST, for a separate measured reason:
     # `register_class` inside a draw callback does not take, and the strip came out
-    # blank when they were created lazily from `_draw_rhino_menubar`.
+    # blank when they were created lazily from `_draw_narwhal_menubar`.
     _register_menu_classes()
     _install_menubar()
     # The TOOLBAR replaces INFO_HT_header.draw. Installed here for the same reason as
@@ -19418,7 +19417,7 @@ def register():
 
     # Blender's own sidebar panels go here, AFTER ours are registered: the filter is
     # by category and skips `NARWHAL_*`, so the order does not actually matter, but
-    # doing it here means the first draw of the sidebar already shows Rhino's tabs
+    # doing it here means the first draw of the sidebar already shows the reference CAD application's tabs
     # only -- there is no frame in which the user sees `Tool / View / Animation`.
     # One call, at register: panels an addon registers later are not covered, which
     # is the honest limit of this and is why the gate counts what is LIVE.
@@ -19448,7 +19447,7 @@ def register():
                 apply_interface_scale()      # - before the layout
                 start_window_scale_watch()   # -- and again whenever it is resized
             setup_layout()
-            apply_rhino_theme()
+            apply_narwhal_theme()
             # Remove Blender's collapsed-region chevrons after setup, because the chips only
             # exist once the corresponding regions are hidden, and the RNA
             # property carries `rna_userdef_screen_update` so setting it here
@@ -19463,7 +19462,7 @@ def register():
             # `Units` opens its window (`-Units` stays on the command line).
             # Looked up by name at call time, so the harness can stand in for it.
             app_state.dialog_openers["units"] = lambda: globals()["_open_units_dialog"]()
-            # Rhino's status bar replaces Blender's. Done here rather than in
+            # the reference CAD application's status bar replaces Blender's. Done here rather than in
             # register so a failure cannot stop the classes registering.
             _install_statusbar()
             # The pane RIGHT-click menus ride along with the bar, because they are
@@ -19471,8 +19470,8 @@ def register():
             _install_statusbar_context_menu()
             # The readout needs a mouse feed, and a modal is the only source.
             _start_cursor_tracker()
-            # And the command line takes focus immediately. Rhino's does: "When
-            # the Rhino window is active, what you type will input to the
+            # And the command line takes focus immediately. the reference CAD application's does: "When
+            # the the reference CAD application window is active, what you type will input to the
             # command-line". Until this existed, nothing started that modal until
             # the user typed a letter or clicked the bar -- and since EVERY
             # left-click behaviour is handled inside it, none of them worked from a

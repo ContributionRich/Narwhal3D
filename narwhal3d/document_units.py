@@ -8,7 +8,7 @@ until a caller supplies them.
 
 This module is deliberately a settings adapter, not a geometry editor.
 :meth:`DocumentUnits.conversion_plan` reports the physical-unit scale factor;
-the caller owns Rhino's measured scale-model question and any geometry
+the caller owns the reference CAD application's measured scale-model question and any geometry
 transformation.
 """
 from __future__ import annotations

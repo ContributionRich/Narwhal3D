@@ -20,7 +20,7 @@ are oriented so the parameter runs OUT of curve 1 into the blend and on INTO cur
 continuation does.
 
 This implementation chooses lambda so |B'| at each end equals the chord between the two
-ends. Rhino's handle lengths are interactive and adjusted in its preview; that interaction
+ends. the reference CAD application's handle lengths are interactive and adjusted in its preview; that interaction
 is not implemented here.
 """
 from __future__ import annotations

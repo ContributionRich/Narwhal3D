@@ -34,7 +34,7 @@ def _load(name, filename):
     return mod
 
 
-dxf = _load("rhino_dxf_writer", "dxf_writer.py")
+dxf = _load("narwhal_dxf_writer", "dxf_writer.py")
 
 results = []
 TMP = tempfile.mkdtemp(prefix="dxf_")

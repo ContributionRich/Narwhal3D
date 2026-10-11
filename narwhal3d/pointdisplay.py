@@ -1,4 +1,4 @@
-"""How Rhino draws points, as 2-D screen geometry. **No `bpy`, no rhino3dm.**
+"""How the reference CAD application draws points, as 2-D screen geometry. **No `bpy`, no rhino3dm.**
 
 The geometry is pure so every style can be exercised without launching Blender.
 
@@ -14,14 +14,14 @@ A point has no extent, so it cannot be drawn by the line-segment preview path th
 way a circle can -- it needs a marker of a fixed PIXEL size, like the snap marker.
 This module produces that marker in region pixels; `ui` only uploads it.
 
-The styles are Rhino's own (MEASURED)
+The styles are the reference CAD application's own (MEASURED)
 -------------------------------------
 `Tools > Options > View > Display Modes > [Mode] > Objects > Points` offers four
 for point objects, and gives their size "in pixels":
 
     Round with white center / Square with white center / Solid circle / Solid square
 
-`Rhino.Display.PointStyle` in `RhinoCommon.xml` names the same shapes and settles
+`the reference CAD application.Display.PointStyle` in `CAD SDK.xml` names the same shapes and settles
 what they are called internally, with its own one-line descriptions:
 
     Simple ................ "Square"
@@ -51,7 +51,7 @@ from __future__ import annotations
 
 import math
 
-# --- style names, taken from Rhino.Display.PointStyle (MEASURED) -----------
+# --- style names, taken from the reference CAD application.Display.PointStyle (MEASURED) -----------
 
 SIMPLE = "Simple"                            # solid square
 CONTROL_POINT = "ControlPoint"               # square with white centre
@@ -73,7 +73,7 @@ STYLES = (SIMPLE, CONTROL_POINT, ACTIVE_POINT, ROUND_SIMPLE,
 #: but never says which is default, and no file we hold records it.
 DEFAULT_POINT_STYLE = ROUND_CONTROL_POINT
 
-#: Style for a CONTROL point. MEASURED by name: the enum member Rhino uses for
+#: Style for a CONTROL point. MEASURED by name: the enum member the reference CAD application uses for
 #: control points is `ControlPoint`, "Square with white center".
 CONTROL_POINT_STYLE = CONTROL_POINT
 
@@ -103,7 +103,7 @@ def is_round(style):
 
 
 def has_white_center(style):
-    """True for the styles Rhino describes as having a white centre.
+    """True for the styles the reference CAD application describes as having a white centre.
 
     The `ActivePoint` styles count: they are defined as a control point -- which
     is the white-centred one -- plus crosshairs.
@@ -157,7 +157,7 @@ def marker(style, x, y, size_px=DEFAULT_SIZE_PX):
       the caller draws these WHITE; for a solid style, in the object's colour.
     * ``outline`` -- line-segment endpoints to stroke in the object's colour.
 
-    `size_px` is the marker's SIZE, matching Rhino's "size in pixels" setting; the
+    `size_px` is the marker's SIZE, matching the reference CAD application's "size in pixels" setting; the
     marker is drawn within a box of that size, so the half-extent is size/2.
     Returns ``([], [])`` for a non-positive size -- an invisible marker is the
     right answer for a zero size, not a degenerate one.

@@ -1,8 +1,8 @@
-"""Narwhal 3D's compact menu tree.
+"""Narwhal 3D's complete authored menu tree.
 
-This module retains the dictionary-shaped menu API used by older callers.  The
+This module retains the dictionary-shaped menu API used by older callers. The
 renderer-facing rows live in :mod:`menubar_resource_data`; both views describe the
-same original menu design and contain only actions the application implements.
+same original menu design, including explicit unavailable roadmap actions.
 """
 from __future__ import annotations
 

@@ -1,6 +1,6 @@
-"""The Rhino-compatible command-line calculator.
+"""The CAD-compatible command-line calculator.
 
-Pure, standard library only, no bpy. Rhino: "Any time you are entering a
+Pure, standard library only, no bpy. the reference CAD application: "Any time you are entering a
 number, length, point coordinate, or angle, you can use a math formula."
 
 API:
@@ -273,7 +273,7 @@ def _parse_expr(tokens, i, model_unit):
 
 
 def evaluate(text, model_unit="Millimeters"):
-    """Evaluate a Rhino formula. Returns ``(value, error)``."""
+    """Evaluate a the reference CAD application formula. Returns ``(value, error)``."""
     if not isinstance(text, str):
         return None, "expected a string"
     tokens, err = _tokenize(text, model_unit)

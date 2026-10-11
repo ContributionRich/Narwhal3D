@@ -417,7 +417,7 @@ class MoveEdgeCmd(_MoveSubObjectCmd):
     __doc__ = _MoveSubObjectCmd.__doc__ + """
     DirectionConstraint: None and Vertical ("Restricts movement vertical to the
     construction plane") are built. FirstFaceNormal, SecondFaceNormal and
-    AverageFacesNormal are declared and refused: they depend on Rhino's face-pick order.
+    AverageFacesNormal are declared and refused: they depend on the reference CAD application's face-pick order.
     """
     name = "MoveEdge"
     description = "Move an edge of a solid; the faces on either side follow, exactly."
@@ -606,7 +606,7 @@ class _PrimitiveCmd(commands.HeightAxisMixin, Command):
     """Shared body of the primitives. Each builds an EXACT OCCT solid through its
     `bridge.make_*` (master + recipe), in the ACTIVE CPlane at the picked centre, with the
     height along the CPlane normal (`HeightAxisMixin` constrains a height click to that
-    axis). The direction/size options Rhino has beyond the default flow are declared and
+    axis). The direction/size options the reference CAD application has beyond the default flow are declared and
     refused: "not implemented yet", nothing built."""
 
     base_name = ""

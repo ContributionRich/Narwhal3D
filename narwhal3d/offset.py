@@ -1,6 +1,6 @@
 """Curve offset in a plane (pure: rhino3dm only, no bpy).
 
-rhino3dm has no `Curve.Offset`. Rhino's Offset command offers these options; this module
+rhino3dm has no `Curve.Offset`. the reference CAD application's Offset command offers these options; this module
 builds only the geometry:
 
     Distance        the offset distance
@@ -89,7 +89,7 @@ def _offset_circle(curve, circle, distance, n, tolerance):
     if new_r <= tolerance:
         return OffsetResult(None, True, 0.0,
                             f"inward offset {abs(distance)} >= radius {r}; the "
-                            f"offset degenerates (Rhino trims these)")
+                            f"offset degenerates (the reference CAD application trims these)")
     circle.Radius = new_r
     return OffsetResult(r3.NurbsCurve.CreateFromCircle(circle), True, 0.0, "")
 
@@ -183,7 +183,7 @@ def _offset_free_form_approx(curve, distance, n, tolerance, max_samples=512):
 
     The offset is generally not a NURBS curve (the offset of a cubic is not a polynomial
     curve), so no
-    exact route exists in any kernel -- Rhino fits one to a tolerance too. Exact points ON
+    exact route exists in any kernel -- the reference CAD application fits one to a tolerance too. Exact points ON
     the true offset are fitted with a cubic, doubling the sample count until the MEASURED
     max deviation from the true offset locus is within `tolerance`. The result says
     `exact=False` and reports the deviation it achieved."""

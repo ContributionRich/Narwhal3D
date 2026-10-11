@@ -211,7 +211,7 @@ RECIPE_KINDS = {
     # what a Picture is -- recorded as the RESULT's boundary, so it rebuilds exactly.
     "planar_face": ("loops",),
     # A sweep along one rail (`BRepOffsetAPI_MakePipeShell`) -- `binormal` None is
-    # Rhino's Freeform (corrected Frenet), a direction is Roadlike (constant binormal).
+    # the reference CAD application's Freeform (corrected Frenet), a direction is Roadlike (constant binormal).
     "sweep1": ("rail", "section"),
     # A surface/polysurface given by its own exact faces (`brep_data`) -- what a Loft or
     # Sweep2 produces, recorded as the result so it rebuilds bit-for-bit.
@@ -326,7 +326,7 @@ def wire_from_curve(profile):
             f"no OCCT builder for a {ctype!r} profile; supported are "
             f"{', '.join(CURVE_TYPES)}")
     if ctype == "polycurve":
-        # A joined curve is one edge per segment, matching Rhino, rather than one
+        # A joined curve is one edge per segment, matching the reference CAD application, rather than one
         # B-spline with C0 knots inside it (see bridge._polycurve_segment_recipes for what
         # that measured as).
         segs = profile.get("segments")
@@ -402,7 +402,7 @@ def wire_from_curve(profile):
         raise KernelError(f"could not rebuild a {ctype!r} profile: {e}") from e
 
 
-#: Rhino's ExtrudeCrvTapered Corners values map to OCCT transition modes (Smooth = G2
+#: the reference CAD application's ExtrudeCrvTapered Corners values map to OCCT transition modes (Smooth = G2
 #: blends has no OCCT transition and is refused by name).
 DRAFT_CORNERS = ("Sharp", "Round")
 
@@ -420,7 +420,7 @@ def make_extrusion_ex(profile, direction, both=False, solid=True, draft_deg=None
       h=4 at 10 degrees produces a cone frustum exact to 2.1e-16; a square produces a
       six-plane frustum exact to 3.3e-16. Positive means inward for a closed profile;
       `flip` implements FlipAngle.
-      `corners` Sharp / Round (Rhino's Corners; Smooth is refused).
+      `corners` Sharp / Round (the reference CAD application's Corners; Smooth is refused).
     """
     _need()
     from OCP.BRepBuilderAPI import (BRepBuilderAPI_MakeFace, BRepBuilderAPI_Transform,
@@ -511,7 +511,7 @@ def make_prism(shape, direction, both=False, solid=True):
 
     `BRepPrimAPI_MakePrism`: a FACE sweeps into a closed SOLID (its two copies are the
     caps), exact -- a planar face of area A gives volume A |d| with every face analytic.
-    `solid=False` extrudes only the face's BOUNDARY (the side surfaces, open), as Rhino's
+    `solid=False` extrudes only the face's BOUNDARY (the side surfaces, open), as the reference CAD application's
     Solid=No. `both` = BothSides: the result runs from -direction to +direction (twice as
     long, MEASURED: "creating the object twice as long as you indicate").
     """
@@ -807,8 +807,8 @@ def make_sweep1(rail, section, binormal=None):
 
     `BRepOffsetAPI_MakePipeShell`: the section keeps its placement relative to the rail's
     START frame (as `sweep.sweep1_sections` does). `binormal` None = corrected Frenet, a
-    rotation-minimising frame (Rhino's Freeform: "the cross-section rotates to maintain its
-    angle to the rail"); a direction = the constant-binormal trihedron (Rhino's Roadlike:
+    rotation-minimising frame (the reference CAD application's Freeform: "the cross-section rotates to maintain its
+    angle to the rail"); a direction = the constant-binormal trihedron (the reference CAD application's Roadlike:
     x = tangent x up, y = x x tangent). A circle r=1 along a quarter arc R=10 is one
     `TORUS` face, every point 1 from the arc to 3.8e-15 --
     the skinned sweep it replaces missed by 1.7e-5.
@@ -1344,7 +1344,7 @@ def from_recipe(recipe, _depth=0):
 # DISPLAY tessellation -- correct, and explicitly NOT the geometry
 # --------------------------------------------------------------------------
 
-#: Chord deflection for the display mesh, in model units. Rhino calls this the render mesh
+#: Chord deflection for the display mesh, in model units. the reference CAD application calls this the render mesh
 #: and draws one too; exact-geometry checks never read it. A radius-5 cylinder
 #: gives 130 vertices / 124 triangles at a deflection of 0.05.)
 DISPLAY_DEFLECTION = 0.02
@@ -1367,10 +1367,10 @@ def tessellate(shape, deflection=DISPLAY_DEFLECTION, angle=DISPLAY_ANGLE):
 #: silhouettes.
 DISPLAY_EDGE_ANGLE = 0.12
 def _edge_visibility(shape, tangent_angle=None):
-    """OCCT edge map, visible map indices, and Rhino-style category counts.
+    """OCCT edge map, visible map indices, and CAD-style category counts.
 
     Shaded mode keeps naked/non-manifold boundaries and creases. Smooth internal edges and
-    periodic seams are separate Rhino display switches and default off.
+    periodic seams are separate the reference CAD application display switches and default off.
     """
     from OCP.BRep import BRep_Tool
     from OCP.GeomAbs import (GeomAbs_C1, GeomAbs_C2, GeomAbs_C3, GeomAbs_CN,
@@ -1430,7 +1430,7 @@ def tessellate_with_edges(shape, deflection=DISPLAY_DEFLECTION, angle=DISPLAY_ED
     """``(vertices, triangles, edge_pairs)``: `tessellate` plus the vertex pairs lying on
     the shape's REAL edges -- each face's own trim boundary, seams included.
 
-    Rhino draws a solid's B-Rep edges rather than every sharp display-triangle boundary.
+    the reference CAD application draws a solid's B-Rep edges rather than every sharp display-triangle boundary.
     Thin slivers produced by OCCT on curved walls can cross an angle threshold; in a
     representative extrusion, about 4% of the drawn mesh edges were not B-Rep edges.
     Within one face OCCT shares nodes between its triangles -- except along a
@@ -1634,7 +1634,7 @@ def unify(shape):
 
     OCCT booleans do not automatically merge faces lying on the same surface. Without this
     step, unioning two extruded circles leaves the flat top as three coplanar faces with
-    spurious seams, whereas Rhino merges them.
+    spurious seams, whereas the reference CAD application merges them.
 
     The display mesh was measured FIRST and was innocent (336 welded triangles, area 194.38
     against the master's 194.73 -- 0.2 % chord error, no doubling), so this was a TOPOLOGY
@@ -2456,7 +2456,7 @@ def visible_outlines(shapes, normal, xaxis, tangent_edges=True):
     MEASURED: a sphere r=10 from Top is ONE `Circle` outline (plus its seam, see below); a
     cylinder seen from Front is 3 visible sharp edges + 1 outline line = its 2r x h
     rectangle; a box from Top is 4 visible edges (the 4 bottom ones come back HIDDEN). Seam
-    edges (`RgNLine`, a closed face meeting itself) are NOT returned: Rhino's Make2D help
+    edges (`RgNLine`, a closed face meeting itself) are NOT returned: the reference CAD application's Make2D help
     says "a single surface cylinder seam will not display". Tangent edges (`Rg1Line`, e.g. a
     fillet's boundary) are a Make2D option and are included by default here.
     """
@@ -2642,7 +2642,7 @@ PULL_TOLERANCE = 1e-7
 
 
 def curve_tools_on_face(face, curves, tol=1e-7):
-    """Build cutting tools for splitting `face` by serialized curves, following Rhino's
+    """Build cutting tools for splitting `face` by serialized curves, following the reference CAD application's
     documented behavior:
 
     * a curve already ON the face (every sample within `tol`) is used AS IS -- so a ring
@@ -2698,7 +2698,7 @@ def curve_tools_on_face(face, curves, tol=1e-7):
 
             np_ = BRepOffsetAPI_NormalProjection(face)
             np_.Add(w)
-            # a pull is an APPROXIMATION by nature (Rhino's too, to its tolerance); OCCT's
+            # a pull is an APPROXIMATION by nature (the reference CAD application's too, to its tolerance); OCCT's
             # default left the pulled edge 4.6e-7 off the surface; 1e-7 gives 1.7e-9 (1e-9 made
             # the approximation FAIL -- no wire -- MEASURED, so it is not tighter)
             np_.SetParams(PULL_TOLERANCE, PULL_TOLERANCE, GeomAbs_C2, 14, 64)
@@ -2895,7 +2895,7 @@ def brep_description(shape):
 
     The shape is NURBS-converted first (`BRepBuilderAPI_NurbsConvert`): exact for planes,
     cylinders, cones, spheres, tori and B-splines -- openNURBS stores every face as a NURBS
-    surface anyway, which is how a Rhino cylinder is stored. Topology is shared: an edge
+    surface anyway, which is how a the reference CAD application cylinder is stored. Topology is shared: an edge
     used by two faces is ONE openNURBS edge with two trims; a seam edge appears twice in its
     face's loop; a degenerated edge (a sphere's pole) becomes a SINGULAR trim at its vertex.
     Each face is explored FORWARD so its outer wire runs counterclockwise in (u, v); its
@@ -3002,7 +3002,7 @@ def brep_description(shape):
 # --------------------------------------------------------------------------
 
 #: A NURBS face within this distance of a plane / cylinder / cone / sphere / torus is
-#: rebuilt as that surface. Rhino stores every face as rational NURBS -- a Rhino
+#: rebuilt as that surface. the reference CAD application stores every face as rational NURBS -- a the reference CAD application
 #: cylinder IS a degree-2 rational surface -- so this recovers what the surface already
 #: is; it never bends a free-form face (1e-9 is ~6 orders below any manufacturing
 #: tolerance and ~4 above the round-off of a rational circle). MEASURED: the 8-face
@@ -3157,7 +3157,7 @@ def shape_from_brep_data(data, sew_tolerance=1e-6,
         fixed = fixer.Shape()
         if fixed.ShapeType() == TopAbs_FACE and BRepCheck_Analyzer(fixed).IsValid():
             return TopoDS.Face(fixed)
-        # MEASURED: a lone TORUS face (a capped pipe from a Rhino file) is "invalid" until
+        # MEASURED: a lone TORUS face (a capped pipe from a the reference CAD application file) is "invalid" until
         # it is sewn to its caps, and sewing + ShapeFix_Solid make the solid valid -- so
         # the face is left as built; downstream airtightness checks judge the result.
         # Falling back to the B-spline here instead turns that torus into {BSPLINE: 1},
@@ -3375,7 +3375,7 @@ def bevel_edges(shape, size, indices=None, chamfer=False):
 
     `indices=None` means EVERY edge, which is what `fillet_all_edges`/`chamfer_all_edges`
     do. Naming a subset is what lets a user round ONE edge of a solid, which is most of what
-    Rhino's `FilletEdge` is for.
+    the reference CAD application's `FilletEdge` is for.
 
     The indices are positions in OCCT's unique-shape map, carried on each dict from
     `edge_curves` as `"index"`. An index that does not exist is refused BY NAME rather than
@@ -3421,7 +3421,7 @@ def bevel_edges(shape, size, indices=None, chamfer=False):
 def chamfer_all_edges(shape, distance):
     """Flat-cut every edge of `shape` by `distance`. Analytic PLANE faces throughout.
 
-    Rhino's `ChamferEdge`. A chamfer is a planar cut, so unlike a fillet the new faces are
+    the reference CAD application's `ChamferEdge`. A chamfer is a planar cut, so unlike a fillet the new faces are
     PLANES -- the honest answer, not a shortcut: there is no curvature to preserve.
 
     `BRepFilletAPI_MakeChamfer.Add` has a `(Dis, E)` overload, so the adjacent face does
@@ -3470,7 +3470,7 @@ def compound(shapes):
     return out
 
 
-#: OCCT STEP unit names (`write.step.unit` / `xstep.cascade.unit`) for Rhino units.
+#: OCCT STEP unit names (`write.step.unit` / `xstep.cascade.unit`) for the reference CAD application units.
 STEP_UNITS = {"Millimeters": "MM", "Centimeters": "CM", "Meters": "M",
               "Kilometers": "KM", "Inches": "INCH", "Feet": "FT", "Microns": "UM",
               "Miles": "MI", "Mils": "MIL", "Microinches": "UIN"}

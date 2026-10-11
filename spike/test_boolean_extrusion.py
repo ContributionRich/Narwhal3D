@@ -68,14 +68,14 @@ REL_TOL = 1e-6
 
 
 class Ctx:
-    """A minimal document context over a real `RhinoModel` -- no bpy, no viewport.
+    """A minimal document context over a real `NarwhalModel` -- no bpy, no viewport.
 
     `object_by_name` returns None, so the command's `_remove_object_from_scene` is a no-op
     and only document-side removal is exercised.
     """
 
     def __init__(self, named):
-        self.model = model.RhinoModel()
+        self.model = model.NarwhalModel()
         self.added = []
         for nm, g in named:
             self.model.add_object(g, nm, 0)

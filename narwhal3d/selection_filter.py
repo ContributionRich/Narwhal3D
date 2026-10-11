@@ -1,4 +1,4 @@
-"""Rhino's Selection Filter model. Pure Python, no bpy.
+"""the reference CAD application's Selection Filter model. Pure Python, no bpy.
 
 MEASURED (``commands/selectionfilter.htm``):
 

@@ -1,13 +1,13 @@
-"""Pure catalog model for Rhino's New-document templates.
+"""Pure catalog model for the reference CAD application's New-document templates.
 
-MEASURED from the Rhino ``New`` and ``Notes`` help pages: a template is a
+MEASURED from the the reference CAD application ``New`` and ``Notes`` help pages: a template is a
 3DM file; selecting ``No template`` uses internal defaults; and Notes lines
 beginning exactly with ``'``, ``#``, or ``//`` describe a template rather than
 being copied into the new document.
 
 OURS: this module deliberately stops at catalog data. It neither opens a
 model in the application nor displays a file dialog. The 3DM metadata reader
-is injected so discovery remains deterministic and testable without Rhino,
+is injected so discovery remains deterministic and testable without the reference CAD application,
 Blender, or a real document.
 """
 from __future__ import annotations
@@ -42,11 +42,11 @@ class TemplateMetadata:
 
 @dataclass(frozen=True)
 class NoTemplate:
-    """The explicit New-command choice to use Rhino's internal defaults."""
+    """The explicit New-command choice to use the reference CAD application's internal defaults."""
 
     name: str = "No template"
     path: None = None
-    description: str = "Use Rhino's internal defaults."
+    description: str = "Use the reference CAD application's internal defaults."
     units: str = ""
     notes: str = ""
 

@@ -1,4 +1,4 @@
-"""Pure model for Rhino's document Notes and Notes document properties.
+"""Pure model for the reference CAD application's document Notes and Notes document properties.
 
 MEASURED from ``commands/notes`` and ``documentproperties/notes``:
 notes are saved with the document, ``Locked`` prevents text changes, and print
@@ -33,7 +33,7 @@ _TEMPLATE_PREFIXES = ("'", "#", "//")
 def is_template_description_line(line: str) -> bool:
     """Return whether *line* is a template-description line.
 
-    The marker must be the first character(s), as Rhino documents it; leading
+    The marker must be the first character(s), as the reference CAD application documents it; leading
     whitespace does not turn an ordinary note into a template description.
     """
     if not isinstance(line, str):

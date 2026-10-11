@@ -53,7 +53,7 @@ def named_object_names(objects, pattern: str, *, normal_mode=NORMAL_MODE) -> lis
     """Return eligible object names matching ``pattern``, in document order.
 
     Each document row is an object identity.  Names are intentionally not
-    deduplicated: duplicate Rhino display names therefore select every eligible
+    deduplicated: duplicate the reference CAD application display names therefore select every eligible
     object carrying that name, while hidden and locked rows remain ineligible.
     """
     if pattern is None or str(pattern) == "":
@@ -70,7 +70,7 @@ def named_object_names(objects, pattern: str, *, normal_mode=NORMAL_MODE) -> lis
 
 
 def _wildcard_regex(pattern: str):
-    """Compile Rhino's measured text wildcard syntax.
+    """Compile the reference CAD application's measured text wildcard syntax.
 
     MEASURED (`commands/selection_commands.htm`, SelKey/SelValue/
     SelKeyValue): ``?``, ``*`` and ``~`` are listed as wildcard characters.

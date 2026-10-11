@@ -11,18 +11,18 @@ Three modes, all pure functions over a sampled polyline ``[(x, y, z), ...]``
 (no rhino3dm, so they can be used through direct file-path loading):
 
 * ``by_count(points, n)`` — n+1 positions (both ends included), evenly spaced
-  along the ARC length of the curve. n is the number of SEGMENTS (Rhino's
+  along the ARC length of the curve. n is the number of SEGMENTS (the reference CAD application's
   default), so n=1 gives the two ends; n=0 and n<0 are refused.
 * ``by_length(points, length)`` — a point every ``length`` units of ARC length
   from the curve's start. The short tail (remainder < ``length``) is LEFT
   unmarked. **OURS** — the help does not state the point-mode remainder
-  behaviour (``DeleteRemainder`` is Split-only); leaving it matches Rhino's
+  behaviour (``DeleteRemainder`` is Split-only); leaving it matches the reference CAD application's
   Split=No default. ``length`` > total arc length is refused rather than
   producing a single point.
 * ``by_chord(points, chord)`` — a point every ``chord`` units of STRAIGHT-LINE
   (chord) distance from the previously placed point. On a straight line this
   agrees EXACTLY with ``by_length`` (collinear ⇒ chord = arc); on a curved input the chord span is shorter than
-  the arc span, so the positions DIFFER — the whole reason Rhino offers both.
+  the arc span, so the positions DIFFER — the whole reason the reference CAD application offers both.
 
 All three raise ``ValueError`` on invalid input so the command can report a
 clean refusal rather than producing degenerate geometry.
@@ -75,7 +75,7 @@ def _interpolate_arc(points, cum, target):
 def by_count(points, n):
     """n+1 positions along the curve, evenly spaced by ARC length.
 
-    ``n`` is the number of SEGMENTS (Rhino's default Divide mode), so the
+    ``n`` is the number of SEGMENTS (the reference CAD application's default Divide mode), so the
     result has ``n + 1`` points including both ends. ``n=1`` gives the two
     ends; ``n=0`` and ``n<0`` are refused.
     """
@@ -96,7 +96,7 @@ def by_length(points, length):
 
     The short tail (remainder < ``length``) is left unmarked. **OURS** — the
     help's ``DeleteRemainder`` option is Split-only and does not state the
-    point-mode behaviour; leaving the tail matches Rhino's Split=No default.
+    point-mode behaviour; leaving the tail matches the reference CAD application's Split=No default.
 
     ``length`` > total arc length is refused (it would produce a single point
     at the start, which is not a useful divide).
@@ -164,7 +164,7 @@ def by_chord(points, chord):
     one, walking the curve in order. On a straight line this agrees EXACTLY
     with ``by_length`` (collinear ⇒ chord = arc); on a curved input the chord
     span is shorter than the arc span, so the positions DIFFER from
-    ``by_length`` for the same numeric value — the whole reason Rhino offers
+    ``by_length`` for the same numeric value — the whole reason the reference CAD application offers
     both modes.
 
     The curve's end stops the walk (any short tail shorter than ``chord`` is

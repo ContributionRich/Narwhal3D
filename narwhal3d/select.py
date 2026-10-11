@@ -1,4 +1,4 @@
-"""Rhino's object selection rules. **No `bpy`, no rhino3dm.**
+"""the reference CAD application's object selection rules. **No `bpy`, no rhino3dm.**
 
 Pure, so every rule is unit-tested without launching Blender
 (spike/test_select.py) -- the same split as `cplane.py`, `osnap.py` and
@@ -8,7 +8,7 @@ Why this exists
 ---------------
 The owner could not select anything, which blocked testing every Gumball
 feature. Investigating found something worse than a bug: leaning on Blender's
-own `view3d.select` gives **the wrong semantics for a Rhino clone**. Measured
+own `view3d.select` gives **the wrong semantics for a the reference CAD application clone**. Measured
 from `commands/selection_commands.htm`, "Select object basics":
 
     "Click an object to select it. Click away from the objects to deselect."
@@ -32,7 +32,7 @@ decides what to DO with that answer.
 What is deliberately NOT here
 -----------------------------
 The Selection Menu ("If several objects appear to be stacked in the area of the
-cursor and Rhino is not able to tell which one you want to select, the Selection
+cursor and the reference CAD application is not able to tell which one you want to select, the Selection
 Menu appears"), sub-object selection, and the Selection Filters panel. Each is a
 real documented feature and each needs UI we do not have; none is faked here.
 """
@@ -45,7 +45,7 @@ WINDOW = "window"
 #: Right-to-left drag: objects inside OR PARTIALLY inside are selected.
 CROSSING = "crossing"
 
-# --- what the modifiers mean (Rhino's, not Blender's) ----------------------
+# --- what the modifiers mean (the reference CAD application's, not Blender's) ----------------------
 
 #: No modifier: the new selection REPLACES whatever was selected.
 REPLACE = "replace"
@@ -73,7 +73,7 @@ def modifier_action(shift=False, ctrl=False):
 def drag_mode(start_x, end_x):
     """WINDOW for a left-to-right drag, CROSSING for right-to-left.
 
-    Rhino keys this on the drag's horizontal DIRECTION, not on which edge is
+    the reference CAD application keys this on the drag's horizontal DIRECTION, not on which edge is
     which, so a perfectly vertical drag (dx == 0) has no direction to read and is
     treated as a window -- the stricter of the two, so nothing is selected that
     the user did not fully enclose.
@@ -90,7 +90,7 @@ def is_click(x0, y0, x1, y1, tolerance=3.0):
     """True when press and release are close enough to mean a CLICK, not a drag.
 
     Without a tolerance every click registers as a zero-size drag rectangle and
-    selects nothing. 3 px is OURS -- Rhino documents the two interactions but not
+    selects nothing. 3 px is OURS -- the reference CAD application documents the two interactions but not
     where it draws the line between them.
     """
     return abs(x1 - x0) <= tolerance and abs(y1 - y0) <= tolerance

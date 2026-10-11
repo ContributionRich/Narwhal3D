@@ -1,22 +1,44 @@
 #!/usr/bin/env python3
-"""Structural snapshot for Narwhal 3D's renderer-facing menu rows."""
+"""Structural and live-registry checks for the renderer-facing menu rows."""
+import collections
+import importlib
 import importlib.util
 import os
+import re
 import sys
+import types
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+ADDON = os.path.join(ROOT, "narwhal3d")
+
+pkg = types.ModuleType("narwhal3d")
+pkg.__path__ = [ADDON]
+pkg.__package__ = "narwhal3d"
+sys.modules["narwhal3d"] = pkg
 
 
 def _load():
-    path = os.path.join(ROOT, "narwhal3d", "menubar_resource_data.py")
-    spec = importlib.util.spec_from_file_location("narwhal_menu_rows", path)
+    path = os.path.join(ADDON, "menubar_resource_data.py")
+    spec = importlib.util.spec_from_file_location("narwhal3d.menubar_resource_data", path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
 
 
+def _registry():
+    commands = importlib.import_module("narwhal3d.commands")
+    for provider in (
+        "import_commands", "solid_commands", "file_commands", "print_commands",
+        "export_commands", "display_commands", "layer_commands",
+    ):
+        importlib.import_module(f"narwhal3d.{provider}")
+    return frozenset(commands.COMMANDS)
+
+
 data = _load()
+registered = _registry()
 results = []
 
 
@@ -38,31 +60,55 @@ def flat(rows, path=()):
 
 
 EXPECTED_MENUS = [
-    "File", "Edit", "View", "Draw", "Curves", "Surfaces", "Solids",
-    "Transform", "Analyze", "Help",
+    "File", "Edit", "View", "Curve", "Surface", "SubD", "Solid", "Mesh", "Drafting",
+    "Transform", "Analyze", "Render", "Tools", "Window", "Help",
 ]
+EXPECTED_RUNNABLE_COUNTS = {
+    "File": 8,
+    "Edit": 44,
+    "View": 11,
+    "Curve": 35,
+    "Surface": 12,
+    "SubD": 0,
+    "Solid": 18,
+    "Mesh": 0,
+    "Drafting": 1,
+    "Transform": 15,
+    "Analyze": 13,
+    "Render": 0,
+    "Tools": 8,
+    "Window": 0,
+    "Help": 1,
+}
+EXPECTED_TODO_COUNTS = {
+    "File": 0,
+    "Edit": 1,
+    "View": 1,
+    "Curve": 1,
+    "Surface": 1,
+    "SubD": 1,
+    "Solid": 1,
+    "Mesh": 2,
+    "Drafting": 2,
+    "Transform": 1,
+    "Analyze": 1,
+    "Render": 2,
+    "Tools": 1,
+    "Window": 2,
+    "Help": 0,
+}
+EXPECTED_TODOS = {
+    "clipboard", "namedview", "matchcrv", "networksrf", "subd", "solidrepair", "mesh",
+    "repairmesh", "annotation", "layout", "align", "curvaturegraph", "material",
+    "render", "options", "viewportlayout", "workspace",
+}
 
-# Traversal order is part of the authored UI.  This tuple covers every action so a
-# renamed, removed, reordered, or dead payload fails visibly.
-EXPECTED_COMMANDS = (
-    "open", "save",
-    "undo", "redo", "delete", "join", "explode",
-    "zoom", "cplane", "grid", "gumball", "ortho",
-    "point", "points", "line", "polyline", "lines", "circle", "rectangle",
-    "ellipse", "polygon", "arc", "picture",
-    "curve", "interpcrv", "blendcrv", "closecrv", "offset", "extend", "divide",
-    "split", "trim", "fillet", "chamfer", "rebuild", "changedegree",
-    "insertknot", "dupedge", "dupborder", "project", "projecttocplane",
-    "extractwireframe",
-    "plane", "planarsrf", "edgesrf", "loft", "revolve", "extrudesrf", "offsetsrf",
-    "box", "sphere", "cylinder", "cone", "extrudecrv", "pipe", "shell",
-    "booleanunion", "booleandifference", "booleanintersection",
-    "move", "copy", "rotate", "rotate3d", "scale", "scale1d", "scale2d",
-    "mirror", "array", "arraypolar", "orient", "orient3pt",
-    "distance", "angle", "length", "radius", "diameter", "area", "volume",
-    "areacentroid", "volumecentroid", "boundingbox", "evaluatept", "dir", "what",
-    "help",
-)
+
+def leaves():
+    return [(menu, path, row[1], row[3])
+            for menu, rows in data.MENUS
+            for path, row in flat(rows)
+            if row[0] == "item"]
 
 
 @check("top-level menu design is exact")
@@ -88,12 +134,68 @@ def _():
                     assert isinstance(row[3], str) and row[3], row
 
 
-@check("the complete action sequence and mapping are pinned")
+@check("live bare-package registry includes all sibling providers")
 def _():
-    commands = tuple(row[3] for _menu, rows in data.MENUS
-                     for _path, row in flat(rows) if row[0] == "item")
-    assert commands == EXPECTED_COMMANDS, commands
-    assert len(commands) == len(set(commands)), "one command was exposed twice"
+    assert len(registered) == 166, len(registered)
+    assert {
+        "import", "filletedge", "saveas", "print", "export", "setdisplaymode",
+        "changelayer",
+    } <= registered
+
+
+@check("all 166 registered commands appear exactly once")
+def _():
+    runnable = [command for _menu, _path, label, command in leaves()
+                if not label.endswith(data.TODO_SUFFIX)]
+    counts = collections.Counter(runnable)
+    assert set(counts) == registered, {
+        "missing": sorted(registered - set(counts)),
+        "extra": sorted(set(counts) - registered),
+    }
+    assert all(count == 1 for count in counts.values()), counts
+
+
+@check("runnable and TODO leaves form an explicit partition")
+def _():
+    for menu, path, label, command in leaves():
+        marked = label.endswith(data.TODO_SUFFIX)
+        live = command in registered
+        assert marked != live, (menu, path, label, command, live)
+
+
+@check("TODO labels and canonical payloads are exact")
+def _():
+    todos = [(menu, label, command) for menu, _path, label, command in leaves()
+             if label.endswith(data.TODO_SUFFIX)]
+    assert {command for _menu, _label, command in todos} == EXPECTED_TODOS, todos
+    for menu, label, command in todos:
+        assert label.endswith("(Not implemented)"), (menu, label)
+        assert label.count("(Not implemented)") == 1, (menu, label)
+        assert command == command.casefold(), (menu, command)
+        assert re.fullmatch(r"[a-z][a-z0-9]*", command), (menu, command)
+        assert command not in registered, (menu, command)
+
+
+@check("implemented and TODO category counts are pinned")
+def _():
+    runnable = collections.Counter()
+    todos = collections.Counter()
+    for menu, _path, label, command in leaves():
+        if command in registered:
+            runnable[menu] += 1
+        if label.endswith(data.TODO_SUFFIX):
+            todos[menu] += 1
+    assert {menu: runnable[menu] for menu in EXPECTED_MENUS} == EXPECTED_RUNNABLE_COUNTS
+    assert {menu: todos[menu] for menu in EXPECTED_MENUS} == EXPECTED_TODO_COUNTS
+
+
+@check("representative implemented and TODO mappings are pinned")
+def _():
+    indexed = {(menu, path, label): command for menu, path, label, command in leaves()}
+    assert indexed[("File", ("Document",), "New Model")] == "new"
+    assert indexed[("Edit", (), "Clipboard Commands (Not implemented)")] == "clipboard"
+    assert indexed[("Solid", ("Create and Edit",), "Fillet Edges")] == "filletedge"
+    assert indexed[("Window", (), "Workspace Management (Not implemented)")] == "workspace"
 
 
 @check("labels and sibling groups are unambiguous")
@@ -114,7 +216,7 @@ def _():
         for _path, row in flat(rows):
             assert row[2] == "", row
             if row[0] == "item":
-                assert isinstance(row[3], str), row
+                assert isinstance(row[3], str) and row[3], row
                 assert not row[3].isdigit(), row
 
 
@@ -132,8 +234,20 @@ def _():
     }, (data.REPORT, counts)
 
 
+@check("resource source retains original provenance")
+def _():
+    path = os.path.join(ADDON, "menubar_resource_data.py")
+    text = open(path, encoding="utf-8").read().casefold()
+    forbidden = (
+        "the reference CAD application" + "Core", "." + "rui", "vendor/" + "reference CAD application-help",
+        "gen_" + "menubar_resource", "trans" + "cribed",
+    )
+    assert data.REPORT["source"] == "original"
+    assert not [marker for marker in forbidden if marker.casefold() in text]
+
+
 print("\n" + "=" * 62)
-print(" Narwhal 3D menu resource model")
+print(" Narwhal CAD menu resource model")
 print("=" * 62)
 width = max(len(name) for name, _status, _detail in results)
 for name, status, detail in results:

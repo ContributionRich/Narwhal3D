@@ -29,7 +29,7 @@ solve ``N P = Q`` for the control points, where ``N[k][i] = N_{i,p}(u_k)``. The 
 passes through every data point to machine precision — which is what the tests assert,
 rather than merely checking that something smooth came back.
 
-KNOT STYLES follow RhinoCommon's `Rhino.Geometry.CurveKnotStyle` API:
+KNOT STYLES follow CAD SDK's `the reference CAD application.Geometry.CurveKnotStyle` API:
 
     Uniform          "Parameter spacing between consecutive knots is 1.0."
     Chord            "Chord length spacing, requires degree=3 ..."
@@ -46,11 +46,11 @@ from __future__ import annotations
 
 import math
 
-#: Rhino's knot styles, using the names accepted by its command line and mapped to the
-#: corresponding RhinoCommon enumeration values.
+#: the reference CAD application's knot styles, using the names accepted by its command line and mapped to the
+#: corresponding CAD SDK enumeration values.
 KNOT_STYLES = ("Uniform", "Chord", "SqrtChrd")
 
-#: Neither Rhino's command documentation nor RhinoCommon states which style `InterpCrv`
+#: Neither the reference CAD application's command documentation nor CAD SDK states which style `InterpCrv`
 #: starts with, so this is an implementation choice. `Chord` is chosen because the help
 #: says it "makes curves that have widely
 #: varying point spacing behave better than uniform curves", which is the common case for
@@ -80,7 +80,7 @@ def parameters(points, style=DEFAULT_KNOT_STYLE):
     """
     if style not in KNOT_STYLES:
         raise InterpolationError(
-            f"knot style {style!r} not implemented; Rhino's are {', '.join(KNOT_STYLES)}")
+            f"knot style {style!r} not implemented; the reference CAD application's are {', '.join(KNOT_STYLES)}")
     n = len(points)
     if n < 2:
         raise InterpolationError(f"interpolation needs at least 2 points (got {n})")
@@ -251,7 +251,7 @@ def interpolate_points(points, degree=3, style=DEFAULT_KNOT_STYLE):
     Degree is clamped DOWN to what the data can support (a degree-3 curve needs 4 points),
     exactly as `Curve` does, rather than refusing a 2- or 3-point interpolation.
 
-    RhinoCommon's `Curve.CreateInterpolatedCurve` documentation states that the routine
+    CAD SDK's `Curve.CreateInterpolatedCurve` documentation states that the routine
     works best at degree 3, requires degree >= 1, and requires an odd requested degree. An even degree is
     therefore refused BY NAME instead of being quietly rounded, because a caller asking
     for degree 2 has a misconception worth surfacing.
@@ -265,10 +265,10 @@ def interpolate_points(points, degree=3, style=DEFAULT_KNOT_STYLE):
         raise InterpolationError(f"degree must be >= 1 (got {p})")
     if p % 2 == 0:
         raise InterpolationError(
-            f"interpolation degree must be ODD (got {p}); Rhino's own "
+            f"interpolation degree must be ODD (got {p}); the reference CAD application's own "
             f"CreateInterpolatedCurve documents 'Degree must be odd' and works best at 3")
     # clamp DOWN to what the data supports. The clamp deliberately does NOT force an odd
-    # degree: the odd rule above is about the degree a CALLER asks for (RhinoCommon's
+    # degree: the odd rule above is about the degree a CALLER asks for (CAD SDK's
     # constraint on CreateInterpolatedCurve), and forcing it here would drop 3 points to
     # degree 1 -- a POLYLINE through three points, which is precisely the "curves made of
     # line segments. Three points require the degree-2 curve to remain smooth.
@@ -314,7 +314,7 @@ def skin_control_net(sections, degree=3, style=DEFAULT_KNOT_STYLE):
     q = int(degree)
     # As in `interpolate_points`, the clamp does not force an odd degree -- three sections
     # must skin to a smooth degree-2 surface, not to a degree-1 fan of flat strips. The
-    # odd-degree rule is Rhino's constraint on an interpolated CURVE's requested degree,
+    # odd-degree rule is the reference CAD application's constraint on an interpolated CURVE's requested degree,
     # not a property of tensor-product skinning.
     if q > k - 1:
         q = max(1, k - 1)

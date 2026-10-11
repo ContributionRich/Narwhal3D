@@ -110,7 +110,7 @@ def fillet_edges(brep, radius, edge_points=None, chamfer=False, segments=8):
                         segments=segs, profile=0.5, affect="EDGES")
         bridge._weld(bm)
         bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
-        mesh = bridge._bmesh_to_rhino_mesh(bm)
+        mesh = bridge._bmesh_to_narwhal_mesh(bm)
     finally:
         bm.free()
     out = r3.Brep.CreateFromMesh(mesh, False)

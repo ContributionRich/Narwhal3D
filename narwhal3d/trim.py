@@ -9,7 +9,7 @@ straddle the zero contour are cut with marching squares.
 This is a mesh/display trim and therefore an approximation
 at tessellation density -- the trimmed boundary is a refined polyline on the cutter,
 NOT an exact NURBS trim curve, and the kept region is a triangle mesh, not a trimmed
-NURBS face. Rhino's Trim is exact; this is not, and nothing here is named to imply it
+NURBS face. the reference CAD application's Trim is exact; this is not, and nothing here is named to imply it
 is. The crossing points ARE refined onto the field's zero by bisection, so the
 boundary converges to the true intersection curve as the grid density rises.
 

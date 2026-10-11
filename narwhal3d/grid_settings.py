@@ -1,6 +1,6 @@
-"""Pure, immutable model for Rhino Document Properties > Grid.
+"""Pure, immutable model for the reference CAD application Document Properties > Grid.
 
-MEASURED from ``documentproperties/grid`` (Rhino 8 help): the grid covers a
+MEASURED from ``documentproperties/grid`` (the reference CAD application 8 help): the grid covers a
 specified portion of an infinite construction plane; Grid line count is the
 number of minor lines from the CPlane origin to an edge and has a maximum of
 100,000; minor spacing, major interval, snap spacing, Show grid lines, Show

@@ -1,12 +1,12 @@
 """Pure Attribute User Text table rules.
 
-MEASURED from Rhino 8's ``properties/attributeusertext`` page: rows have Key,
+MEASURED from the reference CAD application 8's ``properties/attributeusertext`` page: rows have Key,
 Value and Type; keys beginning ``.`` are hidden from the Properties page; search
 matches key or value; rows can be created/deleted, sorted, imported/exported and
 matched from another object; multi-selection distinguishes keys shared by all
 from keys shared by some. Textfield values are preserved, never evaluated here.
 
-OURS where Rhino's page is silent: search and sorting fold case, import files
+OURS where the reference CAD application's page is silent: search and sorting fold case, import files
 carry a header and use comma for CSV / tab for TXT, and Match overwrites an
 existing key while retaining source order.
 """

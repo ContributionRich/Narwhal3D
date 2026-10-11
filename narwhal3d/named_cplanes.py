@@ -6,7 +6,7 @@ Why this module exists
 ``cplane.py`` holds the CPlane *value* (an orthonormal frame) and the six named
 world planes; ``commands.py`` has a working `CPlane` command that can change the
 active viewport's plane. What is missing is the *named* list: saving the active
-plane under a name and restoring it later -- Rhino's ``NamedCPlane`` (a panel,
+plane under a name and restoring it later -- the reference CAD application's ``NamedCPlane`` (a panel,
 per its help page). This module holds that list as plain Python and stores
 :class:`cplane.CPlane` objects directly rather than introducing a second frame
 representation.
@@ -68,7 +68,7 @@ Implementation rules not stated by the help
   :meth:`returns <NamedCPlanes.get>` ``None`` rather than raising, so the
   caller can report). Never invent a plane and never pretend it was restored.
 * **a name must not be blank** -- A named entry needs a name; a blank one
-  is refused. (The help's "Naming conventions in Rhino" page forbids control
+  is refused. (The help's "Naming conventions in the reference CAD application" page forbids control
   characters and names beginning with ``( ) [ ] { }``; we check the blank case
   here and leave the rest to the caller, matching how ``layers.py`` does not
   police every character.)
@@ -86,7 +86,7 @@ from . import cplane
 class NamedCPlanes:
     """The document's named construction planes: an ordered name -> CPlane map.
 
-    Entries are stored in insertion order, which is Rhino's **Custom Order**
+    Entries are stored in insertion order, which is the reference CAD application's **Custom Order**
     (the panel's default). ``names()`` therefore returns them in the order they
     were saved/renamed in, and ``sorted_names()`` applies the documented
     Name Ascending / Descending sorts.
@@ -195,7 +195,7 @@ class NamedCPlanes:
     # --------------------------------------------------------------- sorting
 
     def sorted_names(self, ascending=True):
-        """The names sorted by name (Rhino's "Name Ascending" / "Name
+        """The names sorted by name (the reference CAD application's "Name Ascending" / "Name
         Descending"). The order returned by ``names()`` (Custom Order) is
         otherwise untouched."""
         return sorted(self._order, key=str.lower, reverse=not ascending)
@@ -211,7 +211,7 @@ class NamedCPlanes:
     def rules():
         """Return each rule with its provenance classification.
 
-        ``MEASURED`` means stated by Rhino help; ``OURS`` marks an application
+        ``MEASURED`` means stated by the reference CAD application help; ``OURS`` marks an application
         choice where the help is silent.
         """
         return {

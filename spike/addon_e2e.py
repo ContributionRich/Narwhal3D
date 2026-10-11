@@ -73,7 +73,7 @@ if model.object_count() < 6:
 # --- extrude the circle we made
 #
 # ExtrudeCrv now takes its curve from the SELECTION when there is one
-# (Command.preselect_names), because Rhino's documented steps are "Select a curve.
+# (Command.preselect_names), because the reference CAD application's documented steps are "Select a curve.
 # Specify a distance." -- there is no curve prompt.  Deselect first so this drives
 # the NAMED path, which must keep working: the selection is a shortcut, not a
 # replacement.
@@ -204,7 +204,7 @@ else:
 
 run_command(st, "ArrayPolar")
 run_command(st, "5,0,0")   # center
-run_command(st, "4")       # count -- Rhino counts the ORIGINAL, so 3 copies
+run_command(st, "4")       # count -- the reference CAD application counts the ORIGINAL, so 3 copies
 run_command(st, "z")
 polars = sorted([o for o in bpy.data.objects if o.name.startswith("Array")], key=lambda o: o.name)
 print("polar array:", len(polars), "elements")
@@ -249,7 +249,7 @@ else:
     if abs(x0 - (-4.0)) > 1e-6 or abs(x1 - (-1.0)) > 1e-6:
         failures.append(f"mirror x-range wrong: [{x0:.3f}, {x1:.3f}], expected [-4,-1]")
 
-# --- linear array: Rhino's count INCLUDES the original, so count=3 -> 2 copies
+# --- linear array: the reference CAD application's count INCLUDES the original, so count=3 -> 2 copies
 run_command(st, "Select")
 run_command(st, "Box1")
 before_arr = {o.name for o in bpy.data.objects if o.name.startswith("Array")}
@@ -635,7 +635,7 @@ for _view, _plane, _typed, _want in (
     else:
         print(f"{_view:<6} typed {_typed} -> world {_got}")
 
-# a bad coordinate must RE-PROMPT, not cancel the command (Rhino's behaviour)
+# a bad coordinate must RE-PROMPT, not cancel the command (the reference CAD application's behaviour)
 _cmd = _cp.deepcopy(_CMDS["line"])
 _msg, _done = _cmd.feed("not-a-point", _StubCtx(_cplane.WORLD_TOP))
 if _done:

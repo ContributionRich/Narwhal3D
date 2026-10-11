@@ -3,9 +3,9 @@
 `Curve.Extend` does not exist in rhino3dm 8.35.0, nor do `ExtendByLine`,
 `ExtendByArc`, or `Append` methods on a curve.
 
-What Rhino's `Extend` actually says
+What the reference CAD application's `Extend` actually says
 -----------------------------------
-Rhino's documented `Type` options are:
+the reference CAD application's documented `Type` options are:
 
     Natural  Lines, polylines, and polycurves with a line at the end to extend
              are extended by line. Arcs and polycurves with arc at the end to
@@ -32,7 +32,7 @@ So for the two types in scope the correct default result is **one curve**, not a
 joined pair: a longer line, or a wider arc on the same circle. That is what this
 module builds, and it is exact in both cases. Where the extension is a different
 kind of geometry from the curve's end (a tangent line off a free-form NURBS) Merge
-is impossible by Rhino's own definition, so the extension is **joined** as a
+is impossible by the reference CAD application's own definition, so the extension is **joined** as a
 `PolyCurve` segment -- which is the documented fallback, not a shortcut.
 
 WHAT IS NOT IMPLEMENTED, and must not look implemented
@@ -45,12 +45,12 @@ WHAT IS NOT IMPLEMENTED, and must not look implemented
   worse than none. :func:`extend_curve` raises with that explanation.
 * **`Natural` on a free-form curve therefore also raises**, because the measured
   rule for that case is "Other curves are extended smooth" -- and falling back to
-  a line would silently give the user a different curve from the one Rhino makes.
+  a line would silently give the user a different curve from the one the reference CAD application makes.
   This is the whole reason `natural_style_for` is a separate, testable function:
   the dispatch is pinned even where the target is not built.
 * **`Arc` on a curve whose end is not already an arc** raises. "Makes an arc
   extension tangent to the original curve" fixes the tangent but not the radius,
-  and Rhino resolves that with the measured sub-options `Center` and `ToPoint` --
+  and the reference CAD application resolves that with the measured sub-options `Center` and `ToPoint` --
   neither of which is a length. Guessing a radius (from the end curvature, say)
   would be `Smooth` wearing `Arc`'s name.
 * `Center`, `ToPoint`, boundary-object extension ("Select a boundary object"),
@@ -78,17 +78,17 @@ except ImportError:                   # supports direct file-path loading
     import units
 
 
-#: The `Type` values documented by Rhino.
+#: The `Type` values documented by the reference CAD application.
 STYLES = ("Natural", "Line", "Arc", "Smooth")
 
-#: Which end to extend. Rhino picks this from where you clicked ("Select a curve
+#: Which end to extend. the reference CAD application picks this from where you clicked ("Select a curve
 #: or an surface edge near the end"); a command must resolve the click to one of
 #: these before calling in.
 ENDS = ("Start", "End")
 
 #: The largest arc extension allowed, as a total angle. An arc whose span
 #: reaches a full turn is a circle, and beyond that it would overlap itself. The
-#: help does not say what Rhino does there, so this is a documented choice and is
+#: help does not say what the reference CAD application does there, so this is a documented choice and is
 #: refused rather than silently clamped.
 MAX_ARC_SPAN = 2.0 * math.pi
 
@@ -104,7 +104,7 @@ _SMOOTH_MESSAGE = (
 def default_tolerance():
     """The document's absolute tolerance, in model units.
 
-    Rhino's default is 0.01 mm. Read through `units.py` rather than written as a literal.
+    the reference CAD application's default is 0.01 mm. Read through `units.py` rather than written as a literal.
     """
     # Use the document's tolerance in model units, not a fixed 0.01 default.
     return units.document_tolerance()
@@ -142,7 +142,7 @@ def natural_style_for(curve, end="End"):
 def extend_curve(curve, end, length, style="Natural", tolerance=None):
     """Extend `curve` at `end` ("Start" or "End") by `length`, using `style`.
 
-    Returns a new curve; the input is never mutated. Where Rhino's default
+    Returns a new curve; the input is never mutated. Where the reference CAD application's default
     ``Join=Merge`` applies -- a line extending a line, a same-radius arc
     extending an arc -- the result is ONE curve (a longer line / polyline, or a
     wider arc on the same circle), exactly as measured. Otherwise the tangent
@@ -159,13 +159,13 @@ def extend_curve(curve, end, length, style="Natural", tolerance=None):
 
     if not length > 0.0:
         raise ValueError(
-            f"Extend needs a positive length; got {length!r}. Rhino asks you to "
+            f"Extend needs a positive length; got {length!r}. the reference CAD application asks you to "
             "\"type a length\" or pick the end of the extension, and neither can "
             "be zero or negative")
 
     if _is_closed(curve):
         raise ValueError(
-            "a closed curve has no end to extend. Rhino's Extend asks you to "
+            "a closed curve has no end to extend. the reference CAD application's Extend asks you to "
             "\"Select a curve ... near the end\"; a closed curve has none. Split "
             "it first if you meant to open it -- this will not open it for you")
 
@@ -222,7 +222,7 @@ def _extend_polyline(verts, which, length):
     else:
         verts[0] = moved
     pts = [r3.Point3d(*v) for v in verts]
-    # two vertices is a LINE; Rhino's Merge makes that "a single, seamless curve
+    # two vertices is a LINE; the reference CAD application's Merge makes that "a single, seamless curve
     # span", and a LineCurve is the honest type for it.
     if len(pts) == 2:
         return r3.LineCurve(pts[0], pts[1])
@@ -271,7 +271,7 @@ def _extend_by_arc(curve, which, length, tol):
     raise ValueError(
         "Extend Type=Arc needs the end being extended to BE an arc. "
         "commands/extend.htm says an arc extension is \"tangent to the original "
-        "curve\", which fixes its direction but not its radius; Rhino resolves "
+        "curve\", which fixes its direction but not its radius; the reference CAD application resolves "
         "that with the Center and ToPoint sub-options, neither of which is a "
         "length. Choosing a radius here (from the end curvature, say) would be "
         "Type=Smooth wearing Type=Arc's name, so it is refused instead")
@@ -294,7 +294,7 @@ def _check_span(span, delta, length, radius):
             f"degrees to a {math.degrees(abs(span)):.3f}-degree arc of radius "
             f"{radius!r}, giving {math.degrees(total):.3f} degrees -- a full turn "
             f"or more. That is a circle or a self-overlapping arc, not an "
-            f"extension; Rhino's help does not say what it does here, so this is "
+            f"extension; the reference CAD application's help does not say what it does here, so this is "
             f"refused rather than silently clamped")
 
 
@@ -367,7 +367,7 @@ def _orient(crv, point, which, tol, what):
 def _joined(curve, which, extension, tol):
     """`PolyCurve` of the curve and its extension, in the right order.
 
-    Rhino joins the extension to the original curve. `PolyCurve.Append` provides that
+    the reference CAD application joins the extension to the original curve. `PolyCurve.Append` provides that
     operation, while `RemoveNesting`
     flattens the result when the input was itself a polycurve, so a curve
     extended twice does not grow a tree of nested polycurves.

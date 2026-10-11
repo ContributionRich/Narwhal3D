@@ -9,18 +9,18 @@ Direct Gumball manipulation requires a way to take a drag back. `Esc` mid-drag c
 document history to revert *to*. Every drag was permanent. That is the gap this
 closes.
 
-How Rhino models undo (MEASURED, not invented)
+How the reference CAD application models undo (MEASURED, not invented)
 ----------------------------------------------
-From `RhinoCommon.xml` and `commands/undo.htm`:
+From `CAD SDK.xml` and `commands/undo.htm`:
 
 * Changes are grouped into **undo records**, and a record has a **name** and a
-  **serial number**: `RhinoDoc.BeginUndoRecord(System.String)` takes a
+  **serial number**: `document API.BeginUndoRecord(System.String)` takes a
   description, and `NextUndoRecordSerialNumber` / `CurrentUndoRecordSerialNumber`
   expose the numbering. `EndUndoRecord(System.UInt32)` closes one by serial.
 * `CurrentUndoRecordSerialNumber` is documented as ">0: undo recording is active
   and being saved on the undo record with the specified serial number. 0: ...",
   so **zero means "no record open"** -- hence :data:`NO_RECORD`.
-* `RhinoDoc.Undo()` "Undo the last action"; `RhinoDoc.Redo()` "Redo the last
+* `document API.Undo()` "Undo the last action"; `document API.Redo()` "Redo the last
   action that was 'undone'".
 * `UndoRecordingEnabled` exists, so recording can be switched off.
 * `UndoMultiple` "displays a list of recent commands to reverse", so records are
@@ -30,8 +30,8 @@ From `RhinoCommon.xml` and `commands/undo.htm`:
   the standard corollary: a fresh change invalidates the redo chain.
 
 **The limit is memory, not steps.** `options/general.htm` gives exactly one undo
-setting: "Max memory used (MB) -- The maximum amount of memory Rhino will attempt
-to use." So Rhino does *not* have a fixed "N levels of undo". We bound by a
+setting: "Max memory used (MB) -- The maximum amount of memory the reference CAD application will attempt
+to use." So the reference CAD application does *not* have a fixed "N levels of undo". We bound by a
 record COUNT instead, because a Python-side byte count of live rhino3dm geometry
 is not something we can measure honestly. :data:`DEFAULT_LIMIT` is therefore an application-defined stand-in.
 
@@ -39,18 +39,18 @@ What a snapshot is
 ------------------
 This module never looks inside one. A "snapshot" is whatever opaque object the
 caller's `snapshot()` produced -- for the real document that is
-`model.RhinoModel.snapshot()`. Keeping it opaque is what lets the whole history
+`model.NarwhalModel.snapshot()`. Keeping it opaque is what lets the whole history
 machine be tested with plain strings.
 """
 from __future__ import annotations
 
-#: Rhino's "no undo record is open" sentinel: `CurrentUndoRecordSerialNumber`
+#: the reference CAD application's "no undo record is open" sentinel: `CurrentUndoRecordSerialNumber`
 #: is documented as ">0: ... active ... 0: [not]". MEASURED.
 NO_RECORD = 0
 
-#: How many records we keep. Rhino bounds undo by memory ("Max
+#: How many records we keep. the reference CAD application bounds undo by memory ("Max
 #: memory used (MB)", options/general.htm), which we cannot measure honestly from
-#: Python, so a count is our stand-in. Not a Rhino number; do not present it as
+#: Python, so a count is our stand-in. Not a the reference CAD application number; do not present it as
 #: one.
 DEFAULT_LIMIT = 100
 
@@ -81,7 +81,7 @@ class UndoStack:
     Recording is **lazy and grouped**. A command opens a record with
     :meth:`begin`, and the snapshot is only taken when something actually calls
     :meth:`capture` -- so a command that changes nothing (a cancelled `Line`, a
-    `Zoom`) leaves no record behind, which is what Rhino does. Nested
+    `Zoom`) leaves no record behind, which is what the reference CAD application does. Nested
     :meth:`begin` calls join the record already open rather than starting a new
     one, so one user action stays one undo step however many layers of code it
     passes through.
@@ -101,14 +101,14 @@ class UndoStack:
 
     @property
     def recording(self):
-        """True while a record is open (Rhino's `UndoRecordingIsActive`)."""
+        """True while a record is open (the reference CAD application's `UndoRecordingIsActive`)."""
         return self._open is not None
 
     @property
     def current_serial(self):
         """Serial of the open record, or :data:`NO_RECORD`.
 
-        Mirrors Rhino's `CurrentUndoRecordSerialNumber`, including that 0 means
+        Mirrors the reference CAD application's `CurrentUndoRecordSerialNumber`, including that 0 means
         nothing is open.
         """
         return self._open.serial if self._open is not None else NO_RECORD
@@ -126,7 +126,7 @@ class UndoStack:
 
     @property
     def next_serial(self):
-        """Serial the next record will get (Rhino's `NextUndoRecordSerialNumber`)."""
+        """Serial the next record will get (the reference CAD application's `NextUndoRecordSerialNumber`)."""
         return self._next_serial
 
     def begin(self, name):
@@ -251,7 +251,7 @@ class UndoStack:
         return record
 
     def clear(self):
-        """Drop all history (Rhino's `ClearUndoRecords`)."""
+        """Drop all history (the reference CAD application's `ClearUndoRecords`)."""
         self._undo.clear()
         self._redo.clear()
         self.abandon()

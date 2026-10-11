@@ -37,7 +37,7 @@ def _load(name, filename):
     return mod
 
 
-ve = _load("rhino_vector_export", "vector_export.py")
+ve = _load("narwhal_vector_export", "vector_export.py")
 MM_TO_PT = ve.MM_TO_PT
 
 results = []

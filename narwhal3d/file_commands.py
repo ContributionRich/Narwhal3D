@@ -33,7 +33,7 @@ def _normalise(path):
         return None, "no file name given"
     root, ext = os.path.splitext(p)
     if not ext:
-        p += EXT                     # Rhino adds the extension for you
+        p += EXT                     # the reference CAD application adds the extension for you
     elif ext.lower() != EXT:
         return None, (f"{os.path.basename(p)!r}: saving as {ext} is not "
                       f"implemented yet -- .3dm, or export to .step .ai .pdf .svg")
@@ -54,7 +54,7 @@ def write_document(path):
     A path with another format's extension (.step, .ai, .pdf, .svg) EXPORTS the
     whole model instead -- MEASURED (commands/save.htm): "To save as a different file
     format, type the file name with the desired extension. See: Export." -- and, as
-    Export says, "it does not become your active Rhino model": the document keeps
+    Export says, "it does not become your active the reference CAD application model": the document keeps
     its file and its modified state.
     """
     app = _app()
@@ -204,15 +204,15 @@ class NewCmd(_FileCommand):
         stop = self._settle_unsaved("New")
         if stop is not None:
             return stop
-        from .model import RhinoModel
+        from .model import NarwhalModel
 
         app = _app()
-        app.set_model(RhinoModel())
+        app.set_model(NarwhalModel())
         app.doc_path = None
         app.mark_saved()
         _rebuild_display()
         return ("New model (Untitled). Templates are not implemented yet -- this is "
-                "Rhino's \"No template\": the internal defaults."), True
+                "the reference CAD application's \"No template\": the internal defaults."), True
 
     def execute(self, ctx):          # pragma: no cover - begin() always finishes
         return self.begin(ctx)
@@ -232,7 +232,7 @@ class OpenCmd(_FileCommand):
 
         filt = (("Supported files", " ".join(
                     ["*.3dm"] + [f"*{e}" for e in import_commands.FORMATS])),
-                ("Rhino 3D Models", "*.3dm"))
+                ("the reference CAD application 3D Models", "*.3dm"))
         status, path = filedialog.ask_open_path(
             self.name, filedialog.start_dir(app.doc_path), filt)
         if status == filedialog.OK:
@@ -249,7 +249,7 @@ class OpenCmd(_FileCommand):
         return self._open(self.args[0])
 
     def _open(self, path):
-        from .state import RhinoModel
+        from .state import NarwhalModel
 
         p = os.path.abspath(os.path.expanduser((path or "").strip().strip('"')))
         root, ext = os.path.splitext(p)
@@ -259,7 +259,7 @@ class OpenCmd(_FileCommand):
         app = _app()
         if ext.lower() != EXT:
             # A STEP / DXF / SVG / OBJ / STL file opens as a NEW Untitled model
-            # (insert.htm#Open: "When Rhino opens a non-3dm file ... When the model is
+            # (insert.htm#Open: "When the reference CAD application opens a non-3dm file ... When the model is
             # saved for the first time, this model name is entered as the file name").
             # The format-specific reader performs the import.
             from . import import_commands
@@ -280,7 +280,7 @@ class OpenCmd(_FileCommand):
             recent_add(p)
             return msg, True
         try:
-            model = RhinoModel.load(p)
+            model = NarwhalModel.load(p)
         except FileNotFoundError as e:
             return f"Could not open {p}: {e}", True
         app.set_model(model)

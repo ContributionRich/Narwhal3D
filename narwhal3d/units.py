@@ -4,15 +4,15 @@ Why this module exists
 ----------------------
 The status bar reads "Millimeters" and every tolerance in the document is
 expressed in the model's unit, but before this there was *no* notion of a unit
-system at all. This holds the decidable part -- the unit systems Rhino
+system at all. This holds the decidable part -- the unit systems the reference CAD application
 documents, their scale factors to millimetres, the tolerance settings, and the
-conversions between systems as plain Python. ``model.RhinoModel`` stores the unit
+conversions between systems as plain Python. ``model.NarwhalModel`` stores the unit
 system and absolute tolerance in the .3dm (``File3dm.Settings``), and the ``Units`` command
 changes them; this module stays pure and supplies the names, scales and parsing.
 
 Where every fact below comes from
 --------------------------------
-* **The member names** -- taken from Rhino's `UnitSystem` enum in RhinoCommon.xml,
+* **The member names** -- taken from the reference CAD application's `UnitSystem` enum in CAD SDK.xml,
   with 27 members in declaration order. These spellings are authoritative, so they are used
   verbatim as the canonical keys.
 * **The default unit system and absolute tolerance** -- MEASURED from
@@ -20,20 +20,20 @@ Where every fact below comes from
   and the default tolerance is 0.01 millimeters."
 * **The scale factors** -- the SI/metre definitions each unit is built from
   (1 inch = 25.4 mm exactly, 1 nautical mile = 1852 m exactly, etc.). These are
-  the standard definitions, not Rhino-specific constants; see the inline note on
+  the standard definitions, not the reference CAD application-specific constants; see the inline note on
   each that is not an exact metre prefix.
 * **The angle-tolerance default is application-defined.** The same help page documents the
   *angle tolerance* setting but states no default value, so the value used here
-  is a documented choice, not a Rhino-measured one -- see
+  is a documented choice, not a the reference CAD application-measured one -- see
   :data:`DEFAULT_ANGLE_TOLERANCE`.
 
 Anything the help does not document is identified as an application choice or
-excluded from conversion rather than presented as a Rhino-defined value.
+excluded from conversion rather than presented as a the reference CAD application-defined value.
 """
 from __future__ import annotations
 
 # ---------------------------------------------------------------------------
-# The 27 Rhino.UnitSystem members from RhinoCommon.xml, in declaration order.
+# The 27 the reference CAD application.UnitSystem members from CAD SDK.xml, in declaration order.
 # ---------------------------------------------------------------------------
 UNIT_MEMBERS = (
     "None", "Angstroms", "Nanometers", "Microns", "Millimeters",
@@ -98,7 +98,7 @@ UNIT_SCALE_MM = {
     "Parsecs":          3.0856775814913673e16, # 1 pc (m) * 1000
 }
 
-#: Angle-unit factors, in RADIANS per one unit. Degrees is the base Rhino
+#: Angle-unit factors, in RADIANS per one unit. Degrees is the base the reference CAD application
 #: assumes when an angle is typed with no unit ("If no units are specified,
 #: then degrees are assumed" -- documentproperties/units.htm). Radians and
 #: gradians are documented on the same page (1πr = 180°, 100g = 90°).
@@ -121,7 +121,7 @@ DEFAULT_ABSOLUTE_TOLERANCE_MM = 0.01
 #: OURS -- the same page documents the *angle tolerance* setting but states no
 #: default value, so there is nothing to measure. This is a chosen default (1
 #: degree, a common CAD value) and is flagged OURS on purpose: do not read it as
-#: a Rhino-measured number.
+#: a the reference CAD application-measured number.
 DEFAULT_ANGLE_TOLERANCE_DEG = 1.0
 
 
@@ -216,7 +216,7 @@ def list_units(include_runtime=True):
     return out
 
 
-#: The typed forms Rhino documents for each unit (documentproperties/units.htm, "Distance
+#: The typed forms the reference CAD application documents for each unit (documentproperties/units.htm, "Distance
 #: units" -- MEASURED: `1.2mic`, `1.2micron(s)`, `1.2mm`, `1.2c`, `1.2cm`, `1.2m`, `1.2km`,
 #: `1.2microinch(es)`, `1.2mil(s)`, `1"`, `1in`, `1inch(es)`, `1'`, `1ft`, `1foot`, `1feet`,
 #: `1mi`, `1mile(s)`). Every other unit is typed by its name.
@@ -265,12 +265,12 @@ def parse_unit(text):
 def scale_factor(from_unit, to_unit):
     """The factor that keeps a model's PHYSICAL size when its unit changes: a length of 1
     `from_unit` becomes this many `to_unit` (mm -> in: 1/25.4). This is the `{2}` of
-    Rhino's "Model units change from {0} to {1}, scale model by {2}?"."""
+    the reference CAD application's "Model units change from {0} to {1}, scale model by {2}?"."""
     return convert(1.0, from_unit, to_unit)
 
 
 def document_tolerance(model=None):
-    """The document's absolute tolerance in model units -- Rhino's
+    """The document's absolute tolerance in model units -- the reference CAD application's
     `ModelAbsoluteTolerance`, which every tolerance consumer reads.
 
     `model` when given, else the app's open document (`narwhal3d.state.app_state.model`,

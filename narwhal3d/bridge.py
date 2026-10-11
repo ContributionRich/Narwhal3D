@@ -1,7 +1,7 @@
 """Geometry bridge: rhino3dm (McNeel's kernel) <-> Blender bmesh.
 
-This is the heart of "same math as Rhino 8". All geometry is authored with
-rhino3dm (identical NURBS math to Rhino), then tessellated by sampling into
+This is the heart of "same math as the reference CAD application 8". All geometry is authored with
+rhino3dm (identical NURBS math to the reference CAD application), then tessellated by sampling into
 Blender meshes for the viewport.
 
 Pure-rhino3dm helpers (sample_*) are testable without Blender; *_to_bmesh need bpy.
@@ -47,7 +47,7 @@ def sample_curve_offset(curve, distance: float, n: int = 64):
     """Offset a curve by `distance` using its frame normals.
 
     rhino3dm has no Curve.Offset, so we offset each sampled point along the
-    frame's Y axis (left of travel). Good enough for Rhino-style Offset MVP.
+    frame's Y axis (left of travel). Good enough for CAD-style Offset MVP.
     """
     d = curve.Domain
     out = []
@@ -565,8 +565,8 @@ def offset_curve(curve, distance, plane_normal=None, corner="Sharp", tolerance=1
       `.exact` is False and `.warning` starts with "approx";
     * the offset lies in the curve's own plane: `plane_normal` defaults to that plane's
       normal, turned to face world +Z (a curve in a vertical plane: +Y, then +X), and to
-      world Z for a non-planar curve. Rhino's InCPlane passes the CPlane normal;
-    * SIDE, (Rhino picks it with the mouse): a positive distance is to the LEFT of
+      world Z for a non-planar curve. the reference CAD application's InCPlane passes the CPlane normal;
+    * SIDE, (the reference CAD application picks it with the mouse): a positive distance is to the LEFT of
       travel seen from +normal. For a CLOSED planar curve it is OUTWARD whichever way the
       curve runs, as the old command treated a circle.
     """
@@ -599,7 +599,7 @@ def offset_curve(curve, distance, plane_normal=None, corner="Sharp", tolerance=1
 
 
 def split_curve(curve, cutters, tol: float = 1e-6):
-    """Thin wrapper over `intersect.split_curve_by` (Rhino's Split).
+    """Thin wrapper over `intersect.split_curve_by` (the reference CAD application's Split).
 
     Splits `curve` where the `cutters` cross it; returns pieces in order (a
     single-element list holding the original when nothing cuts). Closed curves
@@ -610,7 +610,7 @@ def split_curve(curve, cutters, tol: float = 1e-6):
 
 
 def trim_curve(curve, cutters, keep_point, tol: float = 1e-6):
-    """Thin wrapper over `intersect.trim_curve_by` (Rhino's Trim).
+    """Thin wrapper over `intersect.trim_curve_by` (the reference CAD application's Trim).
 
     Splits `curve` by `cutters` and discards the piece nearest `keep_point` (the
     clicked "trim away" part). Returns the remaining pieces.
@@ -689,7 +689,7 @@ def trim_result_to_bmesh(result):
 
 
 def fillet_curves(curve_a, curve_b, radius, trim: bool = True):
-    """Thin wrapper over `fillet.fillet_curves` (Rhino's Fillet).
+    """Thin wrapper over `fillet.fillet_curves` (the reference CAD application's Fillet).
 
     Builds the arc of `radius` tangent to both curves in their corner: closed-form for
     lines and arcs, Newton on the exact distance for free-form curves. Raises ValueError
@@ -702,7 +702,7 @@ def fillet_curves(curve_a, curve_b, radius, trim: bool = True):
 
 
 def chamfer_curves(curve_a, curve_b, dist_a, dist_b, trim: bool = True):
-    """Thin wrapper over `fillet.chamfer_curves` (Rhino's Chamfer): exact for
+    """Thin wrapper over `fillet.chamfer_curves` (the reference CAD application's Chamfer): exact for
     two lines, an arc-length walk-back for any other curve. (was `chamfer_lines`.)"""
     return _fillet().chamfer_curves(curve_a, curve_b, dist_a, dist_b, trim)
 
@@ -1652,7 +1652,7 @@ def geometry_to_bmesh(geom):
 #  * `ob.visible_get` is False for them               -> `display_visible(ob)`.
 # ---------------------------------------------------------------------------
 
-CURVE_COLLECTION = "rhino_curves"
+CURVE_COLLECTION = "narwhal_curves"
 
 #: Listeners told which app-drawn display objects changed (their mesh or matrix), as a
 #: set of names. ui.py's curve pass registers here.
@@ -1865,7 +1865,7 @@ def bmesh_to_object(name: str, bm, collection=None):
 def rebuild_object_mesh(obj_name: str, geom) -> bool:
     """Re-tessellate one existing display object *in place*, from `geom`.
 
-    The full `RhinoContext.rebuild_display` deletes and recreates EVERY Blender
+    The full `NarwhalContext.rebuild_display` deletes and recreates EVERY Blender
     object in the document and re-tessellates the whole model. A control-point
     drag calls it on every frame, so dragging one point would otherwise re-tessellate
     the entire scene on every update.
@@ -1926,7 +1926,7 @@ def remove_display_objects(objects):
 def refresh_display_objects(ctx, changes) -> bool:
     """Bring the display in step with an UNDO / REDO that changed only some objects.
 
-    `changes` is `RhinoModel.last_restore`: ``{"removed": {id: display name},
+    `changes` is `NarwhalModel.last_restore`: ``{"removed": {id: display name},
     "added": [id,...]}``. The display objects of removed (and replaced) objects are
     deleted, the added ones are made exactly as `rebuild_display` makes them
     (`ctx._make_display_object`), and every other display object -- unchanged in the
@@ -2030,9 +2030,9 @@ def retessellate_curve_for_view(obj_name, curve, pixels_per_unit,
 def apply_document_visibility(model):
     """Show/hide each display object from its document `ObjectAttributes.Mode`.
 
-    Rhino's `Hide`/`Show`/`Lock`/`Unlock` write `Mode` on the document object, but
+    the reference CAD application's `Hide`/`Show`/`Lock`/`Unlock` write `Mode` on the document object, but
     the viewport also has to obey it: a **Hidden** object must not be drawn, and a
-    **Locked** one must STAY drawn (locking is not hiding -- Rhino draws locked
+    **Locked** one must STAY drawn (locking is not hiding -- the reference CAD application draws locked
     objects and merely makes them unpickable; the unpickable half is `ui.py`'s and
     is left alone here). `rebuild_display` (commands.py, the command layer's) draws
     every object regardless of Mode, so it should call this once at the end, and
@@ -2044,7 +2044,7 @@ def apply_document_visibility(model):
     view but is NOT deleted, so `Show` restores it instantly with no
     re-tessellation and no stale reference. Returns the number hidden.
 
-    a Locked object is drawn NORMALLY here -- Rhino greys it, but the grey
+    a Locked object is drawn NORMALLY here -- the reference CAD application greys it, but the grey
     is a display-colour setting we have not plumbed, so "drawn, not greyed yet".
     """
     import bpy
@@ -2235,7 +2235,7 @@ def make_box(corner1, corner2, height, plane=None):
     they are first expressed in the plane's own coordinates -- otherwise a box
     drawn on Front would take its extent from world X/Y and collapse. The box is
     built axis-aligned in those local coordinates and then mapped onto the frame,
-    so `height` runs along the CPlane NORMAL, which is what Rhino means by
+    so `height` runs along the CPlane NORMAL, which is what the reference CAD application means by
     height.
 
     With `plane=None` this is the original world-XY behaviour.
@@ -2284,7 +2284,7 @@ def make_cylinder(center, radius, height, plane=None):
     """A cylinder of `radius` and `height` at world `center`, built in `plane`.
 
     The base disc lies in `plane` and the height runs along its normal -- the
-    active CPlane. That is what Rhino means by height (the command behavior:
+    active CPlane. That is what the reference CAD application means by height (the command behavior:
     "The CPlane +Z direction defines the positive direction when you type a
     number to set the height").
 
@@ -2314,9 +2314,9 @@ def make_cone(center, base_radius, height, plane=None, solid=True):
     The old version translated by `(center[0], center[1], 0.0)` only, discarding
     the z of the picked centre and fixing the orientation to world XY.
 
-    `solid` is Rhino's own option (the command behavior: *"Solid --
+    `solid` is the reference CAD application's own option (the command behavior: *"Solid --
     Decides if the bottom will be capped to create a solid or open cone"*),
-    default Yes as in Rhino.
+    default Yes as in the reference CAD application.
 
     CAP ORIENTATION -- this was a real, bug. The profile runs from the
     BASE RIM ``(r,0,0)`` to the APEX ``(0,0,h)``, so in
@@ -2349,7 +2349,7 @@ def make_cone(center, base_radius, height, plane=None, solid=True):
 
 
 # --------------------------------------------------------------------------
-# exact primitives Rhino has and we lacked
+# exact primitives the reference CAD application has and we lacked
 # --------------------------------------------------------------------------
 
 def _occt_primitive(label, recipe):
@@ -2474,7 +2474,7 @@ def make_rectangle(corner1, corner2, plane=None):
 def make_rectangle_3point(corner_a, corner_b, side_point, plane=None):
     """A closed rectangle from two ADJACENT corners + a point on the far side.
 
-    This is Rhino's `Rectangle 3Point` mode. (the command behavior):
+    This is the reference CAD application's `Rectangle 3Point` mode. (the command behavior):
     "3Point -- Draws the rectangle using two adjacent corner locations and a
     location on the opposite side."
 
@@ -2614,7 +2614,7 @@ def make_rounded_rectangle(corners, radius):
 def make_ellipse(center, axis1, axis2, plane=None):
     """An ellipse: `center` + the two ENDPOINTS of its semi-axes.
 
-    `axis1` and `axis2` are world points, each the end of one semi-axis from `center`. Rhino's default flow is "pick the center, pick the end of the
+    `axis1` and `axis2` are world points, each the end of one semi-axis from `center`. the reference CAD application's default flow is "pick the center, pick the end of the
     first axis, pick the end of the second axis" (the command behavior), so this
     is the natural signature.
 
@@ -2647,7 +2647,7 @@ def make_ellipse(center, axis1, axis2, plane=None):
 def make_polygon(center, radius, side_count, inscribed=True, plane=None):
     """A regular polygon of `radius` and `side_count` sides at world `center`.
 
-    `inscribed` (Rhino's default) means the CORNERS touch an imaginary circle of
+    `inscribed` (the reference CAD application's default) means the CORNERS touch an imaginary circle of
     the given radius; `circumscribed` means the MIDPOINTS of the sides do
     (the command behavior: "Inscribed -- the corners of the sides touch an
     imaginary circle of a specified radius"). The two differ by a factor of
@@ -2673,7 +2673,7 @@ def make_polygon(center, radius, side_count, inscribed=True, plane=None):
 def make_arc(start, point_on_arc, end, plane=None):
     """An arc through three points: `start`, `point_on_arc`, `end`.
 
-    This is Rhino's default mode (the command behavior: "Pick the start point. Pick
+    This is the reference CAD application's default mode (the command behavior: "Pick the start point. Pick
     the end point. Pick a point on the arc"), and `r3.Arc` has a matching
     three-point constructor `Arc(startPoint, pointOnInterior, endPoint)`. `NurbsCurve.CreateFromArc` turns it into a curve.
 
@@ -2913,7 +2913,7 @@ def make_revolve(profile_curve, axis_p1, axis_p2, start_deg=0.0, end_deg=360.0):
 
 
 def make_loft(curve_a, curve_b):
-    """Ruled (straight) loft between two curves — Rhino Loft MVP."""
+    """Ruled (straight) loft between two curves — the reference CAD application Loft MVP."""
     return r3.NurbsSurface.CreateRuledSurface(curve_a, curve_b)
 
 
@@ -2947,7 +2947,7 @@ def loft_brep(sections, style="Straight", closed=False):
         raise ValueError(
             f"loft style '{style}' not implemented; buildable styles are 'Straight' "
             f"(ruled), 'Loose' (control-point) and 'Smooth' (interpolating) -- "
-            f"Rhino's 'Normal', 'Tight' and 'Uniform' are described by feel, not "
+            f"the reference CAD application's 'Normal', 'Tight' and 'Uniform' are described by feel, not "
             f"algorithm")
     if closed:
         raise ValueError("closed loft not implemented")
@@ -3070,7 +3070,7 @@ def _skin_surface_from_sections(nurbs, degree_v=3):
 
     The difference from:func:`_loft_surface_from_net` is the whole point: that one puts
     the sections' control points AT the surface's control points, so for degree_v > 1 the
-    surface does NOT pass through the sections (that is Rhino's `Loose`). This one
+    surface does NOT pass through the sections (that is the reference CAD application's `Loose`). This one
     INTERPOLATES across V, so the surface contains every section exactly AND is degree 3
     in the sweep direction.
 
@@ -3392,7 +3392,7 @@ def extract_wireframe(geom):
 
 
 def explode_brep(geom):
-    """Split a polysurface into its SURFACES -- Rhino's `Explode`.
+    """Split a polysurface into its SURFACES -- the reference CAD application's `Explode`.
 
     (the command behavior, results table): *"Polysurface -- Surfaces."* Returns
     ``(pieces, source)`` with `source` ``"master"`` or ``"brep"``, or None when there is
@@ -3577,11 +3577,11 @@ def subobject_parts(geom):
 
 
 def extract_subobject(geom, kind, sub_id):
-    """the EXACT geometry of one part of `geom` -- what Rhino's ExtractSrf / DupEdge
+    """the EXACT geometry of one part of `geom` -- what the reference CAD application's ExtractSrf / DupEdge
     give. `kind` is ``"face"``, ``"edge"`` or ``"vertex"``; `sub_id` an id from
     `subobject_parts(geom)`.
 
-    * ``"edge"``   -> an `r3.NurbsCurve` built from the exact edge (a circle is Rhino's
+    * ``"edge"``   -> an `r3.NurbsCurve` built from the exact edge (a circle is the reference CAD application's
       9-point rational quadratic, a straight edge a degree-1 line).
     * ``"face"``   -> a single-face `r3.Brep`. On the master/recipe route it carries a
       ``face`` recipe (``{"kind": "face", "index": id, "a": parent}``) and its own OCCT
@@ -3781,7 +3781,7 @@ def move_subobject(geom, kind, sub_id, vector):
 
     Returns a NEW proxy, with its master registered and a ``polyhedron`` recipe, so it
     survives save + reload. The caller puts it in place of the old object
-    (`RhinoModel.replace_geometry`) and must re-read the sub-object ids, which change.
+    (`NarwhalModel.replace_geometry`) and must re-read the sub-object ids, which change.
     `geom` is not modified.
 
     BUILT for solids whose faces are all PLANES with straight edges (holes in a face are
@@ -3884,7 +3884,7 @@ def _pt3(p):
 
 
 def _curve_details(geom, measure=True):
-    """Rows for a curve, in the words of Rhino's `What` in the command UI."""
+    """Rows for a curve, in the words of the reference CAD application's `What` in the command UI."""
     rows = []
     closed = bool(geom.IsClosed)
     if isinstance(geom, r3.LineCurve):
@@ -3954,7 +3954,7 @@ def object_details(geom, measure=True):
     ``measure=False`` omits ``MEASURE_ROWS`` so expensive geometric measurements are only
     computed when the Details view requests them.
 
-    Rhino's Object properties page has a Details button, "Details about the
+    the reference CAD application's Object properties page has a Details button, "Details about the
     geometry mathematics, edges, vertices, and meshes". That is the `What` command's text
     (the command behavior, the command behavior). The wording here is taken from
     the command UI's own strings: "Valid polysurface.", "closed solid %s" / "open %s" and
@@ -4175,7 +4175,7 @@ def rehydrate_document(objects, tolerance=None, source=None):
 
     Call this right after reading a file. `objects` is any iterable of geometry.
 
-    a brep with NO recipe -- every polysurface in a file from real Rhino, and our own
+    a brep with NO recipe -- every polysurface in a file from real the reference CAD application, and our own
     recipe-less exact results -- is ADOPTED from its own faces (`adopt_brep`), so it
     measures, booleans, exports and draws like anything we made. `last_adoption` says how
     many were adopted and why any were not. `tolerance` is the file's absolute tolerance.
@@ -4291,7 +4291,7 @@ def brep_data(brep):
 
 
 def adopt_brep(geom, tolerance=None, prebuilt=None):
-    """Give a brep with no recipe and no master -- a polysurface from REAL Rhino -- an OCCT
+    """Give a brep with no recipe and no master -- a polysurface from REAL the reference CAD application -- an OCCT
     master built from its OWN faces. Returns True when adopted.
 
     `prebuilt` is a worker process's outcome of THIS function for the same object
@@ -4401,7 +4401,7 @@ def adoption_outcome(geom, tolerance=None):
 #   `ui._layer_curve_items`; nothing in the app calls that any more -- the curve pass
 #   draws from ``_curve_colour_map``—so the unused overlay payload is omitted.
 #
-# Nothing is deferred: every master is registered before `RhinoModel.load` returns, and
+# Nothing is deferred: every master is registered before `NarwhalModel.load` returns, and
 # every eligibility check of `adopt_brep` still runs in this process. A worker result is
 # used only when the file it read is byte-for-byte the file this document was read from
 # (same inode, size and modification time, before and after both reads) and the object
@@ -5402,7 +5402,7 @@ def _proxy_from_occt(shape):
 
     rhino3dm cannot construct a multi-face brep, so this used to ALWAYS return
     triangles -- and that is what reached the.3dm (box-union-cylinder saved as
-    100 planar triangles; real Rhino opened a faceted polysurface). Now the openNURBS helper
+    100 planar triangles; real the reference CAD application opened a faceted polysurface). Now the openNURBS helper
     (`kernel/onbrep.py`) builds the real polysurface from the master and rhino3dm decodes it,
     so the FILE holds exact NURBS faces with their trims. When the helper is not available
     the triangulated proxy is used as before, and `last_document_form` says so. The
@@ -5428,7 +5428,7 @@ def _proxy_from_occt(shape):
 
 def _triangulated_proxy(shape):
     """A triangulated `r3.Brep` that DRAWS an OCCT shape -- the pre-document form, and
-    still the fallback. The same thing Rhino's render mesh is; never the geometry."""
+    still the fallback. The same thing the reference CAD application's render mesh is; never the geometry."""
     occt = _occt()
     verts, tris = _weld_tessellation(*occt.tessellate(shape))
     mesh = r3.Mesh()
@@ -5573,7 +5573,7 @@ def transform_geometry(geom, xform):
 
     Returns the geometry the document must now hold -- `geom` itself, EXCEPT for a
     non-uniform scale or shear of a surface/solid (below), where it is a NEW object
-    the caller must put in place of the old one (`RhinoModel.replace_geometry`).
+    the caller must put in place of the old one (`NarwhalModel.replace_geometry`).
 
     rhino3dm's ``Brep.Transform`` cannot reliably apply a non-similarity to
     surfaces of revolution -- a cylinder scaled (2,1,1) came back `IsValid False` and still
@@ -5640,7 +5640,7 @@ def transform_geometry(geom, xform):
 def project_to_cplane_geometry(geom, plane):
     """Project supported document geometry orthogonally onto ``plane``.
 
-    (`the command behavior`): Rhino projects every control point and keeps
+    (`the command behavior`): the reference CAD application projects every control point and keeps
     the same control-point structure.  Projection onto a plane is affine, so this is
     exact for points, curves and NURBS surfaces; meshes retain their vertex/face
     topology.  The input is always duplicated.
@@ -5855,7 +5855,7 @@ def _piece_geometry(face, source):
 
 
 def split_planar_surface(geom, cutters):
-    """Rhino's Split on a PLANAR surface: the pieces the `cutters` (curves) make.
+    """the reference CAD application's Split on a PLANAR surface: the pieces the `cutters` (curves) make.
 
     The cutters are projected into the surface's plane and the face is split EXACTLY by
     OCCT (`occt_backend.split_face`). Returns the list of piece geometries -- one piece (the
@@ -5884,7 +5884,7 @@ def split_planar_surface(geom, cutters):
 
 
 def trim_planar_surface(geom, cutters, pick):
-    """Rhino's Trim on a PLANAR surface: split, then DROP the piece nearest `pick`
+    """the reference CAD application's Trim on a PLANAR surface: split, then DROP the piece nearest `pick`
     ("Select the parts... to trim away", ). Returns the pieces kept, or the
     surface unchanged (one-element list) when the cutters do not separate it."""
     pieces = split_planar_surface(geom, cutters)
@@ -5935,7 +5935,7 @@ def surface_face_shape(geom, record=True):
 
 
 def split_surface(geom, cutters, direction=None):
-    """Rhino's Split on ANY single-face surface: the pieces the `cutters` (curves) make,
+    """the reference CAD application's Split on ANY single-face surface: the pieces the `cutters` (curves) make,
     each EXACT (; a planar surface keeps 's route).
 
     How each curve meets the surface follows the command behavior (`occt_backend.curve_tools_on_face`):
@@ -5955,7 +5955,7 @@ def split_surface(geom, cutters, direction=None):
         if d is None:
             raise ValueError("a cutting curve could not be carried to the kernel")
         # a LINE has no unique plane (`profile_normal` still returns one for it),
-        # so it goes along `direction` -- Rhino's plan-view rule
+        # so it goes along `direction` -- the reference CAD application's plan-view rule
         if c.IsLinear():
             n = tuple(float(v) for v in direction) if direction is not None else None
         else:
@@ -5989,7 +5989,7 @@ def _true_plane_normal(c, rel_tol=1e-9):
 
 
 def trim_surface(geom, cutters, pick, direction=None):
-    """Rhino's Trim on any single-face surface: split, then DROP the piece nearest `pick`."""
+    """the reference CAD application's Trim on any single-face surface: split, then DROP the piece nearest `pick`."""
     pieces, report = split_surface(geom, cutters, direction)
     if len(pieces) < 2:
         return pieces, report
@@ -6136,7 +6136,7 @@ def pipe_occt(rail, radius, cap=False):
 def document_object_from_shape(shape):
     """the document object for an IMPORTED OCCT shape (a STEP solid, shell or face):
     its exact polysurface  or the triangulated stand-in, with the shape registered as
-    its master. It has no recipe -- like a polysurface from real Rhino -- and after a save
+    its master. It has no recipe -- like a polysurface from real the reference CAD application -- and after a save
     and reopen it is ADOPTED again from its own exact faces."""
     proxy = _proxy_from_occt(shape)
     _kernel().register_master(proxy, shape)
@@ -6544,7 +6544,7 @@ def bevel_edges_occt(geom, size, chamfer=False, edge_points=None):
         OCCT chamfer      26  {PLANE: 26}, airtight, vol 58.6667
 
     A fillet's blend is a real CYLINDER along each edge and a real SPHERE at each corner,
-    which is what Rhino produces and what `bmesh.ops.bevel` fundamentally cannot. A chamfer
+    which is what the reference CAD application produces and what `bmesh.ops.bevel` fundamentally cannot. A chamfer
     is all PLANEs, which is correct rather than a shortcut: a flat cut has no curvature.
     """
     occt = _occt()
@@ -6629,7 +6629,7 @@ def boolean_occt(geom_a, geom_b, operation):
         return None
     try:
         result = occt.boolean(a, b, op)
-        # A boolean that SPLITS its operand into several pieces is a legitimate Rhino
+        # A boolean that SPLITS its operand into several pieces is a legitimate the reference CAD application
         # outcome (BooleanDifference can cut one object into two) that this document model
         # cannot hold yet. subtracting a sphere of r=2 from a cylinder of r=1.5
         # severs it, giving 2 solids, 14 faces {PLANE:11, SPHERE:2, CYLINDER:1}.
@@ -6688,7 +6688,7 @@ def boolean_brep(geom_a, geom_b, operation: str, nu: int = BOOLEAN_NU) -> r3.Bre
     The returned object is the display PROXY with its analytic master registered
     (`kernel.master_of`), so the viewport, osnaps and hit-tests keep working on a mesh
     while measurement, further booleans and STEP export use the real surfaces. That split
-    is what Rhino does too -- it draws a render mesh over analytic geometry.
+    is what the reference CAD application does too -- it draws a render mesh over analytic geometry.
 
     THE FALLBACK IS AUDIBLE, not silent: if OCCT is unavailable or either operand has no
     recipe (a loft, a sweep, an imported mesh), this drops to the Blender mesh solver and
@@ -6713,15 +6713,15 @@ def boolean_brep(geom_a, geom_b, operation: str, nu: int = BOOLEAN_NU) -> r3.Bre
         # 1. tessellate + weld both inputs, link as scene objects
         for i, geom in enumerate((geom_a, geom_b)):
             bm = _welded_brep_mesh(geom, nu)
-            me = bpy.data.meshes.new(f"rhino_bool_{i}")
+            me = bpy.data.meshes.new(f"narwhal_bool_{i}")
             bm.to_mesh(me)
             bm.free()
-            ob = bpy.data.objects.new(f"rhino_bool_{i}", me)
+            ob = bpy.data.objects.new(f"narwhal_bool_{i}", me)
             bpy.context.scene.collection.objects.link(ob)
             objs.append(ob)
 
         # 2. run the boolean on object A against B, evaluate out of the depsgraph
-        mod = objs[0].modifiers.new("RhinoBool", "BOOLEAN")
+        mod = objs[0].modifiers.new("NarwhalBool", "BOOLEAN")
         mod.operation = operation
         mod.object = objs[1]
         mod.solver = "EXACT"
@@ -6860,7 +6860,7 @@ def cap_planar_holes(geom, tolerance: float = 1e-6):
             raise ValueError(
                 "cap: no PLANAR hole to close (every open loop is non-planar)")
         bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
-        mesh = _bmesh_to_rhino_mesh(bm)
+        mesh = _bmesh_to_narwhal_mesh(bm)
     finally:
         bm.free()
     brep = r3.Brep.CreateFromMesh(mesh, False)
@@ -6948,7 +6948,7 @@ def _loop_coplanar(pts, plane, tolerance):
     return True
 
 
-def _bmesh_to_rhino_mesh(bm):
+def _bmesh_to_narwhal_mesh(bm):
     """A rhino3dm Mesh from a bmesh, fan-triangulating any n-gon (as booleans do)."""
     mesh = r3.Mesh()
     for v in bm.verts:
@@ -7184,7 +7184,7 @@ def _perpendicular(axis):
 def scale_1d_xform(factor, axis, center):
     """Scale by `factor` along `axis` ONLY, anchored at `center`.
 
-    Rhino's Gumball Scale1D: "Drag a scale handle to scale in one dimension along
+    the reference CAD application's Gumball Scale1D: "Drag a scale handle to scale in one dimension along
     the arrow. The Gumball origin is the base point of scaling."
 
     rhino3dm has no one-dimensional scale entry point, but `Transform.Scale` has a
@@ -7203,7 +7203,7 @@ def scale_1d_xform(factor, axis, center):
 def scale_2d_xform(factor, axis_a, axis_b, center):
     """Scale by `factor` in the PLANE spanned by `axis_a`/`axis_b`, anchored at `center`.
 
-    Rhino's Gumball Scale2D, reached by Shift-dragging a Move-2D handle:
+    the reference CAD application's Gumball Scale2D, reached by Shift-dragging a Move-2D handle:
     "Drag with Shift to re-size the object in two axes with the same scale. The
     Gumball origin is the base point of scaling" (the command behavior).
 
@@ -7223,7 +7223,7 @@ def scale_2d_xform(factor, axis_a, axis_b, center):
 def scale_3d_xform(factor, center):
     """Uniform scale by `factor` about `center`.
 
-    Rhino's Gumball Scale3D, reached by Shift-dragging a scale handle: "Drag with
+    the reference CAD application's Gumball Scale3D, reached by Shift-dragging a scale handle: "Drag with
     Shift to scale the object in three dimensions" (the command behavior). The
     Gumball origin is the base point, as it is for Scale1D.
 
@@ -7414,7 +7414,7 @@ def control_point_count(geom):
 def control_points(geom):
     """World control points of `geom`, or [] when it has none we can read.
 
-    Rhino's `PointsOn` "displays control points or grips of objects... used as
+    the reference CAD application's `PointsOn` "displays control points or grips of objects... used as
     'grips' on objects such as curves, surfaces, lights, hatch boundaries and
     dimensions" (the command behavior).
 
@@ -7426,7 +7426,7 @@ def control_points(geom):
 
     Surfaces are still NOT read: their control points form a 2-D grid with a
     different traversal. Nor are lights, hatch boundaries or dimensions, which
-    Rhino also gives grips to and which we do not build. `PointsOn` REPORTS those
+    the reference CAD application also gives grips to and which we do not build. `PointsOn` REPORTS those
     rather than showing an empty set as though the object had no points.
     """
     if isinstance(geom, r3.PolyCurve):
@@ -7880,7 +7880,7 @@ def remove_control_points(geom, indices):
       * A degree-1 NURBS (our `make_line`, `make_polyline(degree=1)`) loses exactly its
         vertices.
     * PolylineCurve: the vertices go, and a closed one stays closed.
-    * LineCurve or any 2-point curve: refused. there is no evidence that Rhino
+    * LineCurve or any 2-point curve: refused. there is no evidence that the reference CAD application
       turns a curve into a point, and a line has only its ends.
     * PolyCurve: only the segment that owns the point changes. A 2-point segment at an
       open END drops off. A JOINT between two STRAIGHT segments goes, and a straight
@@ -8058,7 +8058,7 @@ def transform_point(xform, point):
     `Transform` is row-major with the translation in column 3, the same convention
     `_apply_transform_to_selection` relies on, so the rows multiply through
     directly. The homogeneous w is divided out when it is not 1, which a
-    perspective-like transform would produce; Rhino's gumball never makes one, but
+    perspective-like transform would produce; the reference CAD application's gumball never makes one, but
     silently ignoring it would be a latent bug.
     """
     try:
@@ -8101,7 +8101,7 @@ def curve_ends(geom):
 def _polyline_vertices(geom):
     """`geom`'s vertices in order when it is made only of straight runs, else None.
 
-    This is what decides polyline-vs-polycurve, which is Rhino's own distinction:
+    This is what decides polyline-vs-polycurve, which is the reference CAD application's own distinction:
     *"Join turns lines into polylines, curves into polycurves"*.
 
     The test is `Curve.IsPolyline` rather than the concrete class, because our
@@ -8298,7 +8298,7 @@ def curve_segments(geom, samples=16):
 
 
 def snap_targets(model, samples=SNAP_SAMPLES):
-    """Every snappable target in a `RhinoModel`.
+    """Every snappable target in a `NarwhalModel`.
 
     Walks the File3dm object table, so it sees exactly the geometry the document
     holds -- not the Blender meshes, which are only a tessellation of it.

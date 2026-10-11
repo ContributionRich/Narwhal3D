@@ -1,8 +1,8 @@
 """Project curves and points onto a plane (pure: rhino3dm only, no bpy).
 
-What Rhino's `Project` actually offers
+What the reference CAD application's `Project` actually offers
 -------------------------------------
-Rhino's documented option list is:
+the reference CAD application's documented option list is:
 
     Loose         Projects edit points toward the specified direction onto the
                   surface. Loose projection will fail if the result wraps to the
@@ -94,7 +94,7 @@ MIN_DIRECTION_COSINE = 1e-12
 def default_tolerance():
     """The document's absolute tolerance, in model units.
 
-    Rhino's default is 0.01 mm. Read through `units.py` rather than using a literal so a
+    the reference CAD application's default is 0.01 mm. Read through `units.py` rather than using a literal so a
     document with a different tolerance is honoured.
     """
     # Use the document's tolerance in model units, not a fixed 0.01 default.
@@ -113,9 +113,9 @@ def projection_transform(plane, direction=None):
     has. `cplane.py` is not imported: only the two attributes are read, keeping this module
     independent and avoiding an unnecessary dependency.
 
-    `direction` of ``None`` means the plane's own normal, which is Rhino's
+    `direction` of ``None`` means the plane's own normal, which is the reference CAD application's
     **CPlaneZ** ("Projects objects in the construction plane z direction"). Any
-    other direction is Rhino's **View** case ("Projects objects in the view
+    other direction is the reference CAD application's **View** case ("Projects objects in the view
     direction") and is an oblique projection -- still affine, still exact.
 
     The algebra, for a unit normal ``n``, plane origin ``o`` and direction ``d``

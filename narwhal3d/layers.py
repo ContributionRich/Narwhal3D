@@ -5,13 +5,13 @@ Why this module exists
 ----------------------
 ``model.py`` has ``add_layer`` / ``layers()`` / ``set_layer_visible`` /
 ``set_layer_locked`` and nothing else -- a flat list of layers, no tree, no
-current layer, and none of the safety rules Rhino enforces. This module keeps
+current layer, and none of the safety rules the reference CAD application enforces. This module keeps
 the decidable part of the layer system in plain Python, independently of UI and
 geometry dependencies.
 
 What it models
 --------------
-A TREE of :class:`Layer` nodes (Rhino layers NEST -- sub-layers are real, see
+A TREE of :class:`Layer` nodes (the reference CAD application layers NEST -- sub-layers are real, see
 below), each with a ``name``, ``color``, ``visible`` and ``locked`` flag, plus
 a single CURRENT layer. Operations: ``add``, ``add_child``, ``rename``,
 ``delete``, ``set_current``, ``set_visible``, ``set_locked``.
@@ -33,7 +33,7 @@ Implementation rules not stated by the help
 --------------------------------------------
 * **cannot delete the current layer without choosing another** -- this prevents
   the document from having no valid current layer.
-* **a name must be unique among its siblings** -- this matches standard Rhino
+* **a name must be unique among its siblings** -- this matches standard the reference CAD application
   behaviour but is not stated on the page read above.
 * **hiding a parent hides its children** -- DERIVED. Sub-layers are real
   (MEASURED) and a parent's "On" flag gates what is drawn, so a child is
@@ -271,7 +271,7 @@ class LayerTree:
 def rules():
     """Return each safety rule with its provenance classification.
 
-    ``MEASURED`` means stated by Rhino help, ``DERIVED`` follows from documented
+    ``MEASURED`` means stated by the reference CAD application help, ``DERIVED`` follows from documented
     behavior and standard semantics, and ``OURS`` marks an application choice.
     """
     return {
@@ -287,7 +287,7 @@ def rules():
         "cannot_delete_current_layer":
             "OURS (task-required; the help does not state it)",
         "name_unique_among_siblings":
-            "OURS (task-required; standard Rhino, not stated on the page read)",
+            "OURS (task-required; standard the reference CAD application, not stated on the page read)",
         "hiding_parent_hides_children":
             "DERIVED (sub-layers are real + parent 'On' gates drawing; the "
             "inheritance rule is not stated verbatim)",

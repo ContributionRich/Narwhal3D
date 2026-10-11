@@ -14,7 +14,7 @@ from __future__ import annotations
 VIEW_TOP = (1.0, 0.0, 0.0, 0.0)
 VIEW_FRONT = (0.7071, 0.7071, 0.0, 0.0)
 VIEW_RIGHT = (0.5, 0.5, 0.5, 0.5)
-# The Perspective pane matches Rhino 8's default camera: location
+# The Perspective pane matches the reference CAD application 8's default camera: location
 # (63.244, -109.544, 73.030), direction
 # (-0.4330, +0.7500, -0.5000), up (0,0,1)), not a hand-picked symmetric 3/4
 # view. It is a proper look-at rotation:
@@ -25,16 +25,16 @@ VIEW_RIGHT = (0.5, 0.5, 0.5, 0.5)
 #
 # History (do not regress): this was once byte-for-byte VIEW_RIGHT, so the pane
 # looked straight sideways (-X) and a center click returned None. It was
-# then a symmetric (-0.577,+0.577,-0.577) 3/4 view -- 13.67 deg off Rhino's.
+# then a symmetric (-0.577,+0.577,-0.577) 3/4 view -- 13.67 deg off the reference CAD application's.
 VIEW_PERSP = (0.836518, 0.482962, 0.129406, 0.224139)
 
 # Camera zoom and target. `view_rotation` alone only aims the camera; the
 # pane still inherits Blender's default `view_distance` of 18.388, about 8x too
 # close, which rendered the Perspective pane as an extreme close-up (the grid
-# filled it). Rhino's measured camera distances from the origin:
+# filled it). the reference CAD application's measured camera distances from the origin:
 #   Perspective: |(63.244, -109.544, 73.030)| = 146.058
 #   Top/Front/Right: 31.494 (loc (0,0,31.494) / (0,-31.494,0) / (31.494,0,0))
-# All four Rhino cameras aim at the origin:
+# All four the reference CAD application cameras aim at the origin:
 # loc + dir*distance lands on the origin to 4 decimals), so the view target is
 # the world origin.
 PERSP_DISTANCE = 146.058
@@ -68,7 +68,7 @@ def _quat_close(a, b, tol=1e-3):
 
 
 def quat_to_label(view_rotation, view_perspective, tol=1e-3):
-    """Map a viewport's orientation to its Rhino label.
+    """Map a viewport's orientation to its the reference CAD application label.
 
     `view_perspective == "PERSP"` wins outright -- the Perspective pane uses an
     iso quaternion that collides with Right, so the mode is the discriminator
@@ -88,7 +88,7 @@ def quat_to_label(view_rotation, view_perspective, tol=1e-3):
 # ---------------------------------------------------------------------------
 # The active viewport title and sRGB-to-linear conversion
 #
-# Rhino marks the active viewport by the COLOUR OF ITS TITLE, not with a border
+# the reference CAD application marks the active viewport by the COLOUR OF ITS TITLE, not with a border
 # (options/appearance_colors.htm documents exactly two settings: "Active viewport
 # title -- The color for the title of the current viewport" and "Inactive
 # viewport title -- The color for the titles of the viewports that are not the
@@ -195,7 +195,7 @@ def hit_title(x, y, rect):
     """True when region pixel ``(x, y)`` is inside a :func:`title_rect` box.
 
     Inclusive on both edges: a click exactly on the chip's border is on the chip.
-    Rhino gives no sub-pixel rule here and excluding the edge only ever loses a
+    the reference CAD application gives no sub-pixel rule here and excluding the edge only ever loses a
     click the user meant.
     """
     if rect is None:
@@ -237,7 +237,7 @@ def title_arrow_triangle(rect, half=None, height=None):
     """The down-pointing triangle to draw, as three ``(x, y)`` points, or None.
 
     Centred in :func:`title_arrow_rect`. Points DOWN, the near-universal convention
-    for "a menu drops from here" -- and the direction Rhino's own draws.
+    for "a menu drops from here" -- and the direction the reference CAD application's own draws.
     """
     half = TITLE_ARROW_HALF if half is None else half   # read now: uiscale may have rescaled it
     height = TITLE_ARROW_H if height is None else height   # read now: uiscale may have rescaled it
@@ -256,7 +256,7 @@ def hit_title_arrow(x, y, rect):
     """True when region pixel ``(x, y)`` is on the title's drop-down arrow.
 
     Tested against the arrow's BOX, not the triangle: a triangle is a fiddly target
-    and Rhino's own arrow is clickable across its whole cell. Same inclusive-edge
+    and the reference CAD application's own arrow is clickable across its whole cell. Same inclusive-edge
     rule as :func:`hit_title`.
     """
     return hit_title(x, y, title_arrow_rect(rect))
@@ -277,7 +277,7 @@ def title_style(is_active):
 # ---------------------------------------------------------------------------
 # VIEWPORT TABS
 #
-# MEASURED (user_interface/rhino_window.htm, "Viewport tabs"):
+# MEASURED (user_interface/cad_window.htm, "Viewport tabs"):
 #   "Viewport tabs are located at the bottom of the main viewport frame by default.
 #    Each model and layout viewport has a tab. The tabs allow you to switch between
 #    viewports especially when a viewport is maximized."
@@ -309,7 +309,7 @@ TAB_TEXT_ACTIVE = (0x00, 0x00, 0x00)
 
 
 def tab_labels(present=None, order=TAB_ORDER):
-    """The tab labels, in Rhino's tab order, plus the Add tab last.
+    """The tab labels, in the reference CAD application's tab order, plus the Add tab last.
 
     `present` filters to the viewports that actually exist, so a layout with a pane
     missing does not offer a tab that goes nowhere. Anything present but NOT in
@@ -384,7 +384,7 @@ def cycle_tab(labels, current, delta):
 #: commands/new_viewport_arrangements.htm ("Right-click a tab to display a context
 #: menu for managing viewports", then its "Context menu options" list). The
 #: parenthesised notes are the help's own restrictions.
-#: Each entry is ``(label, rhino_command_or_None)``.
+#: Each entry is ``(label, narwhal_command_or_None)``.
 TAB_MENU = (
     ("New Viewport", "NewViewport"),          # "(Model viewports only)"
     ("New Detail", "Detail"),                 # "(Layout viewports only)"
@@ -401,7 +401,7 @@ TAB_MENU = (
 
 #: The `+` (Add Viewport) menu. MEASURED verbatim from the same page's "Details":
 #: "Click the [+] tab for options: New Layout / Import Layout / New Floating
-#: Viewport / Split Horizontal / Split Vertical". All five name real Rhino commands
+#: Viewport / Split Horizontal / Split Vertical". All five name real the reference CAD application commands
 #: and we have none of them, so every row reports itself.
 TAB_ADD_MENU = (
     ("New Layout", "Layout"),
@@ -420,7 +420,7 @@ TAB_ADD_MENU = (
 # ---------------------------------------------------------------------------
 
 def strip_accel(label):
-    """Rhino's verbatim label without its `&` accelerator marks.
+    """the reference CAD application's verbatim label without its `&` accelerator marks.
 
     Reuses the same rule as the context menus (`navigate.display_label`) rather than
     inventing a second one: `&&` is a literal ampersand, a single `&` marks the next
@@ -474,7 +474,7 @@ def menu_command_key(label):
 #: entry has been read in context -- the key includes the PATH precisely because
 #: `Rotate` means one thing under `Set CPlane` and another on its own.
 #:
-#: Values are either a Rhino command name we can run, or one of the `ACTION_*`
+#: Values are either a the reference CAD application command name we can run, or one of the `ACTION_*`
 #: constants for rows whose behaviour we have but which are not commands.
 ACTION_MAXIMIZE = "__maximize__"
 
@@ -497,7 +497,7 @@ def caption_action(path, label):
 
 
 def viewport_menu_rows(tree, path=()):
-    """The rows at `path` inside a caption-menu `tree`, in RHINO'S OWN ORDER.
+    """The rows at `path` inside a caption-menu `tree`, in THE REFERENCE CAD APPLICATION'S OWN ORDER.
 
     Unlike `menubar.menu_rows`, this preserves source order and separators.
 
@@ -537,7 +537,7 @@ def collapse_menu_separators(rows):
 
 
 # ---------------------------------------------------------------------------
-# THE OSNAP PANEL, WHERE RHINO PUTS IT
+# THE OSNAP PANEL, WHERE THE REFERENCE CAD APPLICATION PUTS IT
 #
 # The Osnap control is docked in the lower half of the left band and shares its
 # container with Selection Filters. Its thirteen rows form one uninterrupted list.
@@ -545,7 +545,7 @@ def collapse_menu_separators(rows):
 # This replaces a real bug. The panel used to draw `osnap.PERSISTENT`, which is the
 # order of a SENTENCE in the help ("Only Cen, End, Int, Knot, Mid, Near, Perp, Point,
 # Quad, Tan, and Vertex object snaps can persist") -- alphabetical, and not the order
-# of any control Rhino ships. The old docstring called it "the help's own list -- not
+# of any control the reference CAD application ships. The old docstring called it "the help's own list -- not
 # a sort we invented", which was true and still wrong: it was the right list for the
 # wrong question.
 # ---------------------------------------------------------------------------
@@ -581,7 +581,7 @@ OSNAP_FONT_SIZE = 11.0
 LAYER_LIST_BG = (0xFF, 0xFF, 0xFF)
 LAYER_GRID = (0xDE, 0xE2, 0xE9)
 #: Application-defined colours for the current-layer tick and a layer that is
-#: switched OFF. Rhino uses a check glyph and a half-lit bulb; we have neither
+#: switched OFF. the reference CAD application uses a check glyph and a half-lit bulb; we have neither
 #: artwork nor a measured value for them.
 LAYER_TICK = (0x20, 0x20, 0x20)
 LAYER_DIM = (0x9A, 0x9A, 0x9A)
@@ -640,7 +640,7 @@ def hit_osnap_panel_row(x, y, boxes):
 # shaded mode", "Rendered Shades the viewport with a simulation of the rendered view",
 # "Ghosted ... translucent", "X-Ray"; SetDisplayMode shortcuts "Ctrl (CMD) + Alt + G
 # Ghosted, R Rendered, S Shaded, W Wireframe, X XRay"; options "Viewport Active / All".
-# Ghosted and X-Ray are listed so the menu reads like Rhino's, and say they are not
+# Ghosted and X-Ray are listed so the menu reads like the reference CAD application's, and say they are not
 # built. The other built-ins (Technical, Artistic, Pen, ...) are not listed at all.
 
 #: (name, Ctrl+Alt shortcut letter, implemented, Blender shading type)
@@ -648,14 +648,14 @@ DISPLAY_MODES = (
     ("Wireframe", "W", True, "WIREFRAME"),
     ("Shaded", "S", True, "SOLID"),
     # OURS, MEASURED: Blender's MATERIAL preview put a dark studio backdrop behind
-    # every viewport and drew an unmaterialled cylinder near-black -- not Rhino's
+    # every viewport and drew an unmaterialled cylinder near-black -- not the reference CAD application's
     # Rendered, which keeps the viewport background. "SOLID_LIT" is Solid shading with
     # studio light, shadows, specular and cavity: lit and shadowed, background intact.
     ("Rendered", "R", True, "SOLID_LIT"),
     ("Ghosted", "G", False, None),
     ("X-Ray", "X", False, None),
 )
-#: the caption-menu placeholder Rhino fills with its display-mode list (MEASURED in the
+#: the caption-menu placeholder the reference CAD application fills with its display-mode list (MEASURED in the
 #: resource tree: the row's label is literally this string)
 DISPLAY_MODE_PLACEHOLDER = "display_modes_don't_localize"
 
@@ -663,7 +663,7 @@ DISPLAY_MODE_PLACEHOLDER = "display_modes_don't_localize"
 def display_mode(text):
     """``(name, implemented, shading)`` for typed text, or ``(None, error)``.
 
-    Case-insensitive; Rhino's `_`/`-` prefixes and a hyphen-less "XRay" accepted; a
+    Case-insensitive; the reference CAD application's `_`/`-` prefixes and a hyphen-less "XRay" accepted; a
     unique prefix is enough (`sh` -> Shaded)."""
     t = (text or "").strip().lstrip("_-").replace("-", "").lower()
     if not t:

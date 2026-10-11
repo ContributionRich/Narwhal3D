@@ -1,8 +1,8 @@
 """The Command History window's model. Pure Python, no bpy.
 
-Rhino's ``CommandHistory`` command (F2, ``commands/commandhistory``) opens a
+the reference CAD application's ``CommandHistory`` command (F2, ``commands/commandhistory``) opens a
 text window that, MEASURED, "lists the last 500 command lines from the current
-Rhino session".  Its right-click menu and command-line options document the
+the reference CAD application session".  Its right-click menu and command-line options document the
 operations this model covers:
 
   * a capped buffer -- the last 500 lines (``Clear`` "Deletes all command line

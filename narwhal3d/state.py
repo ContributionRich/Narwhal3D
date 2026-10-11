@@ -7,19 +7,19 @@ from __future__ import annotations
 
 import rhino3dm as r3  # noqa: F401  (re-exported for convenience)
 
-from .commands import COMMANDS, RhinoContext
-from .model import RhinoModel
+from .commands import COMMANDS, NarwhalContext
+from .model import NarwhalModel
 # The document's live layer tree. `layers` is pure (no bpy, no rhino3dm),
 # so importing it here is safe everywhere; AppState keeps it in step with the
 # model's rhino3dm layers (which objects reference by index).
 from .layers import LayerTree
-# Rhino completes a partly typed command name ("As soon as you have typed
+# the reference CAD application completes a partly typed command name ("As soon as you have typed
 # enough letters to uniquely identify the command, the ... command automatically
-# completes" -- user_interface/rhino_window.htm). `cmdbar` owns that ranking and
+# completes" -- user_interface/cad_window.htm). `cmdbar` owns that ranking and
 # is pure/bpy-free, so resolving here keeps one definition of "best match".
 from . import cmdbar
 
-# Rhino's default command aliases, represented as a pure table. `alias_table` is
+# the reference CAD application's default command aliases, represented as a pure table. `alias_table` is
 # bpy-free (no rhino3dm, no bpy), so importing it here is safe in every
 # environment. The table is consulted LAST -- only when a typed name is not a
 # command AND does not autocomplete to one -- so it can never shadow a real
@@ -35,27 +35,27 @@ except ImportError:  # the module is absent -> no aliases, which is honest
 
 class AppState:
     def __init__(self):
-        self.model = RhinoModel()
-        self.ctx = RhinoContext(self.model)
+        self.model = NarwhalModel()
+        self.ctx = NarwhalContext(self.model)
         self.active_command = None      # Command instance or None
         self.input_buffer = ""          # text typed on the command line
         self.history: list[str] = []    # rendered lines (newest last)
-        self.last_command: str | None = None  # for Enter/Space repeat (Rhino)
+        self.last_command: str | None = None  # for Enter/Space repeat (the reference CAD application)
         # Command key -> callable that opens its window and returns whether it did. Registered by the UI; empty headless, so the command line runs.
         self.dialog_openers = {}
         # The live layer tree mirrors the model's layers. Built last,
         # once the model exists.
         self.layers = LayerTree()
         self._rebuild_layers()
-        # The document's file path. None until it is saved or opened -- Rhino's
+        # The document's file path. None until it is saved or opened -- the reference CAD application's
         # "Untitled". `_saved_serial` is the undo stack's top record when the file
         # was last written; see `doc_modified`.
         self.doc_path: str | None = None
         self._saved_serial = self.ctx.undo.top_serial
 
-    def set_model(self, model: RhinoModel):
+    def set_model(self, model: NarwhalModel):
         self.model = model
-        self.ctx = RhinoContext(model)
+        self.ctx = NarwhalContext(model)
         self.active_command = None
         self.input_buffer = ""
         # A new document gets a fresh tree so layer state cannot leak across documents.
@@ -150,12 +150,12 @@ class AppState:
         return ""
 
     def resolve_command(self, name: str):
-        """A typed command name -> (key, class), in Rhino's priority order.
+        """A typed command name -> (key, class), in the reference CAD application's priority order.
 
-        Rhino: *"As soon as you have typed enough letters to uniquely identify the
+        the reference CAD application: *"As soon as you have typed enough letters to uniquely identify the
         command, the Circle command automatically completes. Press the Enter key
         or click the command name on the auto-complete list."*
-        (user_interface/rhino_window.htm)
+        (user_interface/cad_window.htm)
 
         Resolution is ordered, and fuzzy matching comes last. Try, in this
         order:
@@ -172,7 +172,7 @@ class AppState:
 
         Keeping aliases ahead of prefix matching means `m`
         runs Move (the alias) rather than Mirror (a prefix neighbour), matching
-        real Rhino, where `M` is the alias for `!_Move`.
+        real the reference CAD application, where `M` is the alias for `!_Move`.
         """
         key = (name or "").strip().lower()
         if not key:
@@ -208,7 +208,7 @@ class AppState:
     def alias_inline_options(self, name: str) -> str:
         """The options baked into an alias, as a string to feed the command.
 
-        Rhino aliases are macros that already carry their options:
+        the reference CAD application aliases are macros that already carry their options:
         ``ZE`` is ``' _Zoom _Extents``. When a user types ``ZE``, the command
         must behave as if ``Zoom Extents`` were typed, not run Zoom's default.
         Returns ``""`` when the name is not an implemented alias (or the alias
@@ -232,7 +232,7 @@ class AppState:
         ``Zoom Selected`` would silently perform the default Extents instead
         by the option framework.
         """
-        # Rhino's convention (MEASURED, user_interface: a leading hyphen runs the command-line
+        # the reference CAD application's convention (MEASURED, user_interface: a leading hyphen runs the command-line
         # version of a dialog command): `Units` opens the window, `-Units` the prompts.
         # The UI registers the window in `dialog_openers`; headless there is none, so
         # the command line runs either way.
@@ -255,7 +255,7 @@ class AppState:
         # An alias expands to a command with options already chosen
         # (``ZS`` -> ``Zoom Selected``). Merge those with anything the user also
         # typed inline (``ZS`` -> ``Selected``), so the alias is honoured exactly
-        # as Rhino runs its macro. A plain command name contributes nothing here.
+        # as the reference CAD application runs its macro. A plain command name contributes nothing here.
         rest = (rest or "").strip()
         alias_opts = self.alias_inline_options(name).strip()
         if alias_opts and rest:
@@ -277,7 +277,7 @@ class AppState:
             # options first, then falls through to the ordinary step logic.
             try:
                 # An alias macro is a SEQUENCE of tokens (ZSA = '_Zoom _All _Selected),
-                # each answered in turn as Rhino plays the macro; fed as one line,
+                # each answered in turn as the reference CAD application plays the macro; fed as one line,
                 # "All Selected" matched no option and the alias did nothing.
                 lead = alias_opts.split()[:-1] if alias_opts else []
                 message, done = None, False
@@ -300,7 +300,7 @@ class AppState:
                 self.active_command = None
                 return None
         else:
-            # zero-step commands run immediately on the naming Enter (Rhino style)
+            # zero-step commands run immediately on the naming Enter (the reference CAD application style)
             message, done = cmd.begin(self.ctx)
 
         if message:
@@ -351,7 +351,7 @@ class AppState:
             text = text.strip()
             if not text:
                 return
-            # first word is the command name (Rhino style); the remainder is an
+            # first word is the command name (the reference CAD application style); the remainder is an
             # inline argument or option, applied inside start_command.
             parts = text.split(None, 1)
             self.start_command(parts[0], parts[1] if len(parts) > 1 else None)
@@ -359,8 +359,8 @@ class AppState:
     def _run_nested(self, text: str) -> bool:
         """Run a NESTABLE command inside the active one. True if it did.
 
-        MEASURED (alias_table: Rhino's macro prefix "'" -- "The next command is a
-        nestable command (view / CPlane / osnap ...)"), and Rhino's default aliases
+        MEASURED (alias_table: the reference CAD application's macro prefix "'" -- "The next command is a
+        nestable command (view / CPlane / osnap ...)"), and the reference CAD application's default aliases
         carry it: ZS = '_Zoom _Selected. Without nesting, typing ZS while ExtrudeCrv
         is active would incorrectly feed it to the distance prompt. A line counts as
         nested when it is typed with a leading "'" or is an alias whose macro has the
@@ -449,5 +449,5 @@ from . import display_commands  # noqa: E402,F401
 from . import layer_commands  # noqa: E402,F401
 
 
-def set_model(model: RhinoModel):
+def set_model(model: NarwhalModel):
     app_state.set_model(model)

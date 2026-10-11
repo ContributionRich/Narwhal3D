@@ -42,10 +42,10 @@ License: MIT for the Type-2 runtime, with its statically linked component notice
 --------------------------------------------------------
 
 - The optional openNURBS exact-Brep writer helper is not bundled while its redistribution requirements are under review. Narwhal reports the resulting exact `.3dm` limitation and directs users to STEP for exact solid interchange.
-- Native CorelDRAW import/export code and owner-derived CDR fixtures are excluded.
+- Native CorelDRAW import/export and related fixtures are not included.
 - Inkscape, Poppler, Ghostscript, and LibreOffice are not included in the initial converter pack. Features requiring them must report the missing optional dependency; they must not claim those tools are bundled.
 
 Trademarks
 ----------
 
-Narwhal 3D is an independent project. Blender, Rhinoceros, CorelDRAW, Adobe Illustrator, AutoCAD, Open CASCADE, and other names belong to their respective owners and are used only to identify third-party software or file formats.
+Narwhal 3D is an independent project. Blender, CorelDRAW, Adobe Illustrator, AutoCAD, Open CASCADE, and other names belong to their respective owners and are used only to identify third-party software or file formats.

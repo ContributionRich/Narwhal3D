@@ -27,8 +27,8 @@ def _load(name, filename):
     return mod
 
 
-rdr = _load("rhino_obj_reader", "obj_reader.py")
-wtr = _load("rhino_obj_writer", "obj_writer.py")
+rdr = _load("narwhal_obj_reader", "obj_reader.py")
+wtr = _load("narwhal_obj_writer", "obj_writer.py")
 
 results = []
 TMP = tempfile.mkdtemp(prefix="objreader_")

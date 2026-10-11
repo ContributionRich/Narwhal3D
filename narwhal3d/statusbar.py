@@ -96,7 +96,7 @@ PANES = [
     # brings up the panel. If the panel is already on, the Disable checkbox
     # is toggled." Toggle that also opens a panel.
     Pane("filter", "Filter", KIND_TOGGLE, clickable=True),
-    # "Click the Info pane to display information about the current Rhino
+    # "Click the Info pane to display information about the current the reference CAD application
     # session. The Info pane cycles through the list of specified categories."
     # The reference state uses the "Memory use" category.
     Pane("info", "Info", KIND_READOUT, clickable=True),
@@ -130,7 +130,7 @@ def pane_ids():
 
 
 def is_clickable(pane_id):
-    """Whether clicking this pane does something (per rhino_window.htm).
+    """Whether clicking this pane does something (per cad_window.htm).
 
     The two cursor/unit readouts are the only panes the help documents with no
     click action; everything else toggles a mode, opens a panel, or (Info)
@@ -285,7 +285,7 @@ def render(pane_id, state):
 def is_active(pane_id, state):
     """Whether this pane "lights up" for ``state``.
 
-    Toggles light up when on (rhino_window.htm: "The pane lights up when the
+    Toggles light up when on (cad_window.htm: "The pane lights up when the
     mode is turned on"). Alignment panes light up when the widget is on.
     Readouts are never "lit" -- they display, they do not toggle -- so this
     is always False for them.

@@ -38,7 +38,7 @@ def mode_by_name(text):
     """Find a mode by name.
 
     Case-insensitive, unique-prefix match.  Leading ``_`` / ``-`` characters
-    are stripped (Rhino macro syntax: ``-_SetDisplayMode Mode=_Shaded``).
+    are stripped (the reference CAD application macro syntax: ``-_SetDisplayMode Mode=_Shaded``).
 
     Returns ``(Mode, None)`` on success, ``(None, error_message)`` on failure.
     """

@@ -144,7 +144,7 @@ class AggregateValue:
 
 
 def aggregate_values(values) -> AggregateValue:
-    """Collapse values using Rhino-style same/mixed/unavailable semantics.
+    """Collapse values using CAD-style same/mixed/unavailable semantics.
 
     ``None`` means unavailable.  Equality is deliberately ordinary value
     equality; mappings are normalized to plain dictionaries so viewport maps

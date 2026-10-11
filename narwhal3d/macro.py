@@ -1,8 +1,8 @@
-"""Rhino command-macro tokenizer. Pure Python, no bpy.
+"""the reference CAD application command-macro tokenizer. Pure Python, no bpy.
 
-Rhino's toolbar buttons, command aliases and command files are *macros*: the
+the reference CAD application's toolbar buttons, command aliases and command files are *macros*: the
 command sequence you would type at the command line, written on one or more
-lines.  The documented grammar (``information/rhinoscripting.htm``, "Writing
+lines.  The documented grammar (``information/cad_scripting.htm``, "Writing
 Command Macros") is:
 
   (space)    acts like pressing Enter -- it separates the entries
@@ -48,7 +48,7 @@ one):
   ``pause`` and ``enter``.  So ``MultiPause`` maps to ``pause`` and ``EnterEnd``
   maps to ``enter``.
 * The remaining special commands (``NoEcho``, ``Echo``, ``SetRedrawOff``,
-  ``SetRedrawOn``, ``Run``) are real Rhino commands, so they map to the
+  ``SetRedrawOn``, ``Run``) are real the reference CAD application commands, so they map to the
   ``command`` kind with their name preserved (case as written).
 * The three flags ``dash`` / ``underscore`` / ``transparent`` are ALWAYS present
   on a command step (the contract's shape).  The extra documented prefix flags
@@ -259,7 +259,7 @@ def _with_cancel(flags, steps):
 
 
 def tokenize(macro, *, lossless=False):
-    """Tokenize a Rhino command macro into a list of steps.
+    """Tokenize a the reference CAD application command macro into a list of steps.
 
     ``lossless=True`` retains command prefixes and the original spelling of
     Pause/MultiPause and Enter/EnterEnd for :mod:`macro_plan`.  The default

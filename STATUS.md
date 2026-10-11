@@ -4,7 +4,9 @@ Narwhal 3D is an early public MVP. This page records what currently works and wh
 
 ## Command compatibility
 
-Narwhal 3D is **not yet at Rhino command parity**. It has a substantial working command set, but many commands, advanced options, selection routes, dialogs, and viewport tools remain missing or incomplete. A registered command name means that command is runnable; it does not guarantee every advanced option or interaction path is complete.
+Narwhal 3D is **not yet at full command parity with established NURBS CAD workflows**. It has a substantial working command set, but many commands, advanced options, selection routes, dialogs, and viewport tools remain missing or incomplete. A registered command name means that command is runnable; it does not guarantee every advanced option or interaction path is complete.
+
+The authored menu hierarchy exposes all 166 commands currently registered by Narwhal. Seventeen broader roadmap families remain visible with `(Not implemented)` labels. The workflow toolbar provides 145 runnable actions and 31 explicitly unavailable roadmap actions across fifteen tabs; unavailable buttons identify themselves on hover and explain the gap when clicked.
 
 The issue tracker is the live source for bounded contribution work. Current one-command starter tasks include:
 
@@ -38,7 +40,7 @@ They can be selected from:
 
 ## Icons and visual design
 
-The current icon set uses owner-generated GPL-3.0-or-later source artwork for 62 active toolbar commands. Two active command icons and all four right-panel icons still use generated placeholders. The icon set remains work in progress rather than final visual design.
+The expanded toolbar uses owner-generated GPL-3.0-or-later source artwork for 93 of its 176 command and roadmap actions. The other 83 toolbar actions and all four right-panel icons use generated placeholders. The icon set remains work in progress rather than final visual design.
 
 Artwork published with Narwhal must be original or have clearly documented GPL-compatible redistribution terms. Contributions should include source artwork, licence information, and readable light/dark-theme behavior.
 

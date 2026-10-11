@@ -13,10 +13,14 @@ POLL_SECONDS = 0.25
 MAX_POLLS = 120
 
 EXPECTED_MENUS = (
-    "File", "Edit", "View", "Draw", "Curves", "Surfaces", "Solids",
-    "Transform", "Analyze", "Help",
+    "File", "Edit", "View", "Curve", "Surface", "SubD", "Solid", "Mesh", "Drafting",
+    "Transform", "Analyze", "Render", "Tools", "Window", "Help",
 )
-EXPECTED_TOOLBARS = ("File", "Draw", "Edit", "Transform", "Solid", "View")
+EXPECTED_TOOLBARS = (
+    "Standard", "CPlanes", "Set View", "Display", "Select", "Visibility",
+    "Transform", "Curve Tools", "Surface Tools", "Solid Tools", "SubD Tools",
+    "Mesh Tools", "Drafting", "Analyze", "Render",
+)
 EXPECTED_RIGHT_TABS = ("Layers", "Properties", "Display", "Bug Report")
 EXPECTED_VIEWS = ("Top", "Front", "Perspective", "Right")
 
@@ -46,7 +50,7 @@ def _layout_ready():
         and not getattr(ui, "_viewports_in_progress", False)
         and ui.left_band_area() is not None
         and ui.right_band_area() is not None
-        and len(getattr(ui, "_sidebar_cells", ())) == 20
+        and len(getattr(ui, "_sidebar_cells", ())) == 52
         and bool(ui.get_osnap_panel_boxes())
         and len(getattr(ui, "_right_tab_boxes", ())) == 4
     )
@@ -103,24 +107,26 @@ def _inspect(layout_was_ready):
           ui.menubar_installed() and menu_names == EXPECTED_MENUS,
           f"{len(menu_names)}: {', '.join(menu_names)}")
     menu_enabled, menu_total = menubar.coverage(set(ui.COMMANDS))
-    check("menu actions runnable", (menu_enabled, menu_total) == (85, 85),
-          f"{menu_enabled}/{menu_total}")
+    check("menu actions are runnable or explicitly marked TODO",
+          (menu_enabled, menu_total) == (166, 183), f"{menu_enabled}/{menu_total}")
 
     toolbar_names = toolbars.tab_names()
     check("toolbar installed with exact authored categories",
           ui.toolbar_installed() and toolbar_names == EXPECTED_TOOLBARS,
           f"{len(toolbar_names)}: {', '.join(toolbar_names)}")
     initial_tab = ui.toolbar_tab()
-    switched = (ui.set_toolbar_tab("Draw") == "Draw"
-                and ui.set_toolbar_tab("File") == "File")
-    check("toolbar defaults to File and can switch", initial_tab == "File" and switched,
+    switched = (ui.set_toolbar_tab("Curve Tools") == "Curve Tools"
+                and ui.set_toolbar_tab("Standard") == "Standard")
+    check("toolbar defaults to Standard and can switch",
+          initial_tab == "Standard" and switched,
           f"initial={initial_tab!r}, final={ui.toolbar_tab()!r}")
     toolbar_enabled, toolbar_total = toolbars.coverage(set(ui.COMMANDS))
-    check("toolbar actions runnable", (toolbar_enabled, toolbar_total) == (64, 64),
+    check("toolbar actions are runnable or explicitly unavailable",
+          (toolbar_enabled, toolbar_total) == (145, 176),
           f"{toolbar_enabled}/{toolbar_total}")
 
     sidebar_cells = list(getattr(ui, "_sidebar_cells", ()))
-    check("favorites sidebar has 20 live cells", len(sidebar_cells) == 20,
+    check("favorites sidebar has 52 live cells", len(sidebar_cells) == 52,
           f"{len(sidebar_cells)} cells")
 
     icon_names = set(toolbars.toolbar_data.ICON_NAMES)

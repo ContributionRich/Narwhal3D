@@ -1,9 +1,9 @@
-"""Parsing of Rhino numbers, fractions, and lengths with units.
+"""Parsing of the reference CAD application numbers, fractions, and lengths with units.
 
 Pure, standard library only, no bpy. The rules are measured from
 ``user_interface/accurate_modeling``: "No spaces are permitted in a number",
 and a typed length with a unit suffix is converted to the model units
-("if your model units are meters, and you type 27cm, Rhino automatically
+("if your model units are meters, and you type 27cm, the reference CAD application automatically
 converts your number to 0.27").
 
 API (both return ``(value, error)`` -- ``(float, None)`` on success and
@@ -53,7 +53,7 @@ _MIXED_RE = re.compile(r"^(?P<whole>\d+)-(?P<num>\d+)/(?P<den>\d+)$")
 _FRAC_RE = re.compile(r"^(?P<num>\d+)/(?P<den>\d+)$")
 _DEC_RE = re.compile(r"^(?P<dec>\d+(?:\.\d+)?|\.\d+)(?P<si>[eE][+-]?\d+)?$")
 
-# # OURS: Rhino accepts "any metric or US customary length unit or
+# # OURS: the reference CAD application accepts "any metric or US customary length unit or
 # abbreviation". This is our own table of millimetres-per-unit for the spellings
 # we support; it is flagged OURS because it is our choice, not a measured table.
 _SUFFIX_MM = {
@@ -114,7 +114,7 @@ def _bare_value(bare):
 
 
 def parse_number(text):
-    """Parse a Rhino number (no unit). Returns ``(value, error)``."""
+    """Parse a the reference CAD application number (no unit). Returns ``(value, error)``."""
     if not isinstance(text, str):
         return None, "expected a string"
     if _has_space(text):

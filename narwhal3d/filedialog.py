@@ -1,6 +1,6 @@
 """Native file dialogs and the "save changes?" question. **No `bpy`, no rhino3dm.**
 
-Rhino's Save / Save As / Open / New use the operating system's own dialogs. On
+the reference CAD application's Save / Save As / Open / New use the operating system's own dialogs. On
 Linux there is no single native API, so this asks the desktop's own dialog tool:
 ``kdialog`` for KDE first, then ``zenity`` for GNOME/GTK. Either gives the user the same dialog
 every other application on the desktop shows. If neither exists, every function
@@ -18,7 +18,7 @@ desktop. A backend is any object with ``save(title, start, filters)``,
 ``open(title, start, filters)`` and ``ask(title, text)`` methods returning the tuples
 above.
 
-The calls BLOCK, as a modal dialog does in Rhino: the viewport waits until the user
+The calls BLOCK, as a modal dialog does in the reference CAD application: the viewport waits until the user
 answers.
 """
 from __future__ import annotations
@@ -32,8 +32,8 @@ OK = "ok"
 CANCEL = "cancel"
 UNAVAILABLE = "unavailable"
 
-#: (description, glob) -- what Rhino's own dialog lists for a 3dm file
-NARWHAL_3DM = (("Rhino 3D Models", "*.3dm"),)
+#: (description, glob) -- what the reference CAD application's own dialog lists for a 3dm file
+NARWHAL_3DM = (("the reference CAD application 3D Models", "*.3dm"),)
 
 
 class _Kdialog:
@@ -43,7 +43,7 @@ class _Kdialog:
 
     @staticmethod
     def _filter(filters):
-        # kdialog: "*.3dm|Rhino 3D Models"; several separated by newlines
+        # kdialog: "*.3dm|the reference CAD application 3D Models"; several separated by newlines
         return "\n".join(f"{glob}|{desc} ({glob})" for desc, glob in filters)
 
     def _run(self, args):

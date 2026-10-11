@@ -1,6 +1,6 @@
-"""Rhino's pick constraints: distance, angle, direction lock. **No `bpy`, no rhino3dm.**
+"""the reference CAD application's pick constraints: distance, angle, direction lock. **No `bpy`, no rhino3dm.**
 
-Typed precision constraints are not per-command features in Rhino; they apply to every
+Typed precision constraints are not per-command features in the reference CAD application; they apply to every
 point prompt that has a previous point, so the shared behavior lives here.
 
 MEASURED (``user_interface/accurate_modeling.htm``), quoted where each rule is applied:
@@ -18,7 +18,7 @@ MEASURED (``user_interface/accurate_modeling.htm``), quoted where each rule is a
   first point and the point where the marker was when you tapped the Tab key."
   "Use direction lock constraint combined with the distance constraint to draw a curve
   of a specified length".
-* **Circle lock (second Tab)** -- "Rhino tracks to a circle with the center at the last
+* **Circle lock (second Tab)** -- "the reference CAD application tracks to a circle with the center at the last
   pick point and the radius defined by the Tab tap location."
 
 A constraint applies to the NEXT point only: it is armed against one prompt (the command,

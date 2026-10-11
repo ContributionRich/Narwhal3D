@@ -1,4 +1,4 @@
-"""Construction planes: Rhino's per-viewport coordinate system. **No `bpy`.**
+"""Construction planes: the reference CAD application's per-viewport coordinate system. **No `bpy`.**
 
 No Blender imports: this module must be importable from a plain Python
 interpreter (no `bpy`) so the picking math can run without launching Blender.
@@ -7,7 +7,7 @@ relative (package) imports, exactly like `views.py`.
 
 What a CPlane actually is
 -------------------------
-Rhino's help is explicit that this is not a detail (commands/cplane.htm):
+the reference CAD application's help is explicit that this is not a detail (commands/cplane.htm):
 
     "The CPlane command sets the origin and orientation of the construction
     plane in the active viewport ... A construction plane is like a tabletop
@@ -33,7 +33,7 @@ interprets input. Three consequences that a bare normal cannot express:
 How the standard frames were established (measured, not recalled)
 ----------------------------------------------------------------
 ``rhino3dm`` exposes only three canonical planes (``WorldXY``, ``WorldYZ``,
-``WorldZX``); Rhino's *named* CPlanes are an application concept, and a ``.3dm``
+``WorldZX``); the reference CAD application's *named* CPlanes are an application concept, and a ``.3dm``
 ``ViewportInfo`` does not store the construction plane. The shipped templates do store each
 viewport's camera frame, and the CPlane of a standard view is by definition the
 viewport's own plane, giving::
@@ -48,7 +48,7 @@ exactly -- two independent sources agreeing, which is what validates the rule.
 **Front** then follows from the same validated rule rather than from memory.
 
 ``BOTTOM``/``BACK``/``LEFT`` are derived with that same rule, but their camera
-``up`` could NOT be measured (Rhino's default template stores only the four
+``up`` could NOT be measured (the reference CAD application's default template stores only the four
 standard viewports), so they are marked as derived below. Treat them as the
 weakest claim in this module.
 """
@@ -76,7 +76,7 @@ def normalize(v):
 
 
 class CPlane:
-    """An origin plus an orthonormal x/y frame -- Rhino's construction plane.
+    """An origin plus an orthonormal x/y frame -- the reference CAD application's construction plane.
 
     The z axis (the normal) is derived as ``x X y``, so a CPlane is always
     right-handed and cannot drift out of sync with its own axes.
@@ -104,7 +104,7 @@ class CPlane:
         """The plane normal, always ``x X y`` so the frame stays right-handed."""
         return cross(self.xaxis, self.yaxis)
 
-    #: Rhino's help calls this the plane normal; same thing, kinder name.
+    #: the reference CAD application's help calls this the plane normal; same thing, kinder name.
     normal = zaxis
 
     def as_origin_normal(self):
@@ -114,7 +114,7 @@ class CPlane:
     # -- coordinates ------------------------------------------------------
 
     def to_world(self, u, v, w=0.0):
-        """CPlane coordinates -> world. This is how Rhino reads a typed point.
+        """CPlane coordinates -> world. This is how the reference CAD application reads a typed point.
 
         ``to_world(1, 2, 3)`` is 1 along the x axis, 2 along the y axis and 3
         along the normal, measured from the CPlane origin.
@@ -140,7 +140,7 @@ class CPlane:
     def vector_to_world(self, u, v, w=0.0):
         """A CPlane-space DIRECTION -> world, ignoring the origin.
 
-        Needed by Rhino's relative coordinates: ``r2,3`` means "2 along the
+        Needed by the reference CAD application's relative coordinates: ``r2,3`` means "2 along the
         CPlane x axis and 3 along its y axis **from the previous point**", so the
         offset must be rotated into world space without being translated to the
         CPlane origin.
@@ -159,7 +159,7 @@ class CPlane:
     def elevated(self, distance):
         """Shift the origin along the normal (``CPlane Elevation``).
 
-        Rhino: "Positive numbers move the construction plane up along the
+        the reference CAD application: "Positive numbers move the construction plane up along the
         positive z axis. Negative numbers move the construction plane down."
         """
         z = self.zaxis
@@ -245,14 +245,14 @@ RIGHT = WORLD_RIGHT.as_origin_normal()  # YZ plane, x = 0, normal +X
 # view label -> CPlane. `views.quat_to_label` returns one of these labels
 # ("Top", "Front", "Right", "Perspective", "Custom").
 #
-# Rhino: "Rhino's standard viewports come with construction planes that
+# the reference CAD application: "the reference CAD application's standard viewports come with construction planes that
 # correspond to the viewport. The default Perspective viewport, however, uses
 # the world Top" (commands/cplane.htm).
 CPLANE_BY_LABEL = {
     "Top": TOP,
     "Front": FRONT,
     "Right": RIGHT,
-    "Perspective": TOP,   # Rhino: the default Perspective viewport uses World Top
+    "Perspective": TOP,   # the reference CAD application: the default Perspective viewport uses World Top
     "Custom": TOP,        # unknown orientation -> pick on World Top (the ground)
 }
 
@@ -276,7 +276,7 @@ def ray_axis_point(origin, direction, axis_origin, axis_direction):
     out as 0 every time. `ExtrudeCrv` therefore did nothing in Perspective, and `Cylinder` and
     `Cone` had the same defect for the same reason.
 
-    Rhino constrains such a pick to the AXIS (its elevator / direction constraint), so the
+    the reference CAD application constrains such a pick to the AXIS (its elevator / direction constraint), so the
     answer is the point on the axis closest to the ray -- the standard closest-approach of two
     skew lines. Writing
 

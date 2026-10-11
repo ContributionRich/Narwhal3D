@@ -45,7 +45,7 @@ REQUIRED = {
 FORBIDDEN_EXACT = {
     "AGENTS" + ".md",
     "coco" + "cad.sh",
-    "rhino" + "alt.sh",
+    "rhi" + "no" + "alt.sh",
     "narwhal3d/cdr_reader.py",
     "narwhal3d/cdr_writer.py",
     "narwhal3d/kernel/brep_writer.cpp",
@@ -63,11 +63,11 @@ FORBIDDEN_PREFIXES = (
     "artifacts/",
 )
 FORBIDDEN_GLOBS = (
-    "spike/rhino_*.py",
+    "spike/" + "rhi" + "no_*.py",
     "spike/gen_*.py",
     "spike/probe*.py",
     "spike/ui_probe*.py",
-    "spike/measure_rhino_*.py",
+    "spike/measure_" + "rhi" + "no_*.py",
     "spike/docs_dump.txt",
 )
 ALLOWED_IMAGES = (
@@ -78,15 +78,16 @@ ALLOWED_IMAGES = (
     "blender_patches/narwhal3d_app_icon.svg",
 )
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".tif", ".tiff", ".webp", ".ico", ".svg"}
+LEGACY_PATH_PATTERN = re.compile(r"rhi" + r"no(?!3dm)", re.IGNORECASE)
 # Assemble signatures from fragments so this policy file is subject to its own scan.
 FORBIDDEN_TEXT = (
     b"/home/" + b"nathaniel",
     b"coco " + b"cad",
     b"coco" + b"cad",
-    b"rhino " + b"alternative",
-    b"rhino" + b"alternative",
-    b"rhinocore" + b".dll",
-    b"vendor/rhino" + b"-help",
+    b"rhi" + b"no alternative",
+    b"rhi" + b"noalternative",
+    b"rhi" + b"nocore.dll",
+    b"vendor/rhi" + b"no-help",
     b"owner" + b":",
     b"owner" + b"'s",
     b"owner-" + b"reported",
@@ -99,9 +100,9 @@ FORBIDDEN_TEXT = (
     b"example" + b"photos/",
     b"more_" + b"data/",
     b"bug_" + b"reports/",
-    b"rhino" + b"_addon",
-    b"rhino" + b"alt_",
-    b"rhino" + b"alt-",
+    b"rhi" + b"no_addon",
+    b"rhi" + b"noalt_",
+    b"rhi" + b"noalt-",
     b"whale orn cut" + b"test fix.cdr",
     b"complex setting" + b".3dm",
     b"flow ring" + b".3dm",
@@ -111,7 +112,8 @@ FORBIDDEN_PATTERNS = (
     re.compile(rb"\bbug report\s*#\d+\b"),
     re.compile(rb"\bround\s+\d+\b"),
     re.compile(rb"\b(?:front" + rb"ier|lower tier|geometry agent|hand" + rb"off)\b"),
-    re.compile(rb"spike/(?:probe|rhino_|gen_|measure_)"),
+    re.compile(rb"spike/(?:probe|rhi" + rb"no_|gen_|measure_)"),
+    re.compile(rb"\brhi" + rb"no(?!3dm)"),
 )
 SECRET_MARKERS = (
     b"-----BEGIN PRIVATE " + b"KEY-----",
@@ -191,6 +193,8 @@ def path_problem(path: str) -> str | None:
     posix = PurePosixPath(path)
     if path.startswith("/") or ".." in posix.parts or "\\" in path:
         return "unsafe path spelling"
+    if LEGACY_PATH_PATTERN.search(path):
+        return "legacy product name in public path"
     if path in FORBIDDEN_EXACT:
         return "forbidden private or excluded component"
     if any(path.startswith(prefix) for prefix in FORBIDDEN_PREFIXES):
@@ -270,6 +274,7 @@ def self_check() -> None:
         b"    pass\nROOT_GATE = \"--require-root-commit\"\n",
     )
     safe["narwhal3d/icons/narwhal-box.png"] = ("100644", b"\x89PNG\r\n\x1a\n\0")
+    safe["dependency-name.txt"] = ("100644", b"rhi" + b"no3dm is required\n")
     if audit_entries(safe):
         raise AuditError("self-check rejected a safe synthetic manifest")
     cases = (
@@ -281,13 +286,14 @@ def self_check() -> None:
         ("task identifier", {"notes.py": ("100644", b"# " + b"G-112 implementation\n")}),
         ("numbered report", {"notes.py": ("100644", b"# bug report " + b"#74\n")}),
         ("handoff lore", {"notes.py": ("100644", b"# frontier hand" + b"off\n")}),
-        ("old namespace", {"notes.py": ("100644", b"import rhino" + b"_addon\n")}),
+        ("old namespace", {"notes.py": ("100644", b"import rhi" + b"no_addon\n")}),
+        ("legacy product word", {"notes.py": ("100644", b"# rhi" + b"no behavior\n")}),
         ("truncated command registry",
          {"narwhal3d/commands.py": ("100644", b"PLACEHOLDER_FOR_SIZE\n")}),
         ("non-executable test harness", {"run_tests.sh": ("100644", b"safe\n")}),
         ("invalid Python", {"broken.py": ("100644", b"def broken(:\n")}),
         ("unexpected image", {"shot.png": ("100644", b"png")}),
-        ("commercial miner", {"spike/rhino_" + "help.py": ("100644", b"x")}),
+        ("commercial miner", {"spike/rhi" + "no_help.py": ("100644", b"x")}),
         ("symlink", {"escape": ("120000", b"../private")}),
     )
     for label, addition in cases:

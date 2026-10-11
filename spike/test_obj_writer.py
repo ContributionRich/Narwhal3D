@@ -30,7 +30,7 @@ def _load(name, filename):
     return mod
 
 
-obj = _load("rhino_obj_writer", "obj_writer.py")
+obj = _load("narwhal_obj_writer", "obj_writer.py")
 
 results = []
 TMP = tempfile.mkdtemp(prefix="obj_")

@@ -1,6 +1,6 @@
 """Surveyor bearings.
 
-Pure, standard library only, no bpy. Rhino (user_interface/accurate_modeling,
+Pure, standard library only, no bpy. the reference CAD application (user_interface/accurate_modeling,
 "Other coordinates"): a Surveyor coordinate is ``distance<N/Sangle E/W``, e.g.
 ``11<N30d22'54.43"W``. A bearing names a quadrant: start at North or South,
 then turn the angle toward East or West.
@@ -26,7 +26,7 @@ import re
 __all__ = ["bearing_angle", "parse_surveyor"]
 
 # The angle part: degrees-minutes-seconds like 30d22'54.43" (or 30d22'), or
-# a plain number of degrees (30). _NUM allows a decimal where Rhino does.
+# a plain number of degrees (30). _NUM allows a decimal where the reference CAD application does.
 _NUM = r"(?:\d+(?:\.\d+)?)"
 _ANGLE_RE = re.compile(
     r"^(?:"

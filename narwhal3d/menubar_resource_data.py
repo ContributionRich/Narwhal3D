@@ -1,4 +1,4 @@
-"""Original, compact Narwhal 3D menu definitions.
+"""Original, complete Narwhal CAD menu definitions.
 
 ``MENUS`` keeps the row shape consumed by the application renderer:
 
@@ -6,15 +6,22 @@
 * ``("sep", "", "", None)``
 * ``("popup", label, shortcut, children, command)``
 
-Shortcuts are intentionally empty.  Labels, grouping, and order are maintained here as
-Narwhal 3D product design rather than imported compatibility data.  Every item names a
-command implemented by the application; unavailable placeholders do not belong in this
-menu.
+Every registered command appears exactly once. Future-facing family rows are explicit,
+clickable TODO actions: their labels end in ``(Not implemented)`` and their payloads are
+canonical command keys which are intentionally absent from the live registry. The menu
+renderer sends those leaves to ``narwhal.menu_todo``, which explains the missing feature.
+Labels, grouping, and order are original project-authored information architecture.
 """
+
+TODO_SUFFIX = " (Not implemented)"
 
 
 def _item(label, command):
     return ("item", label, "", command)
+
+
+def _todo(label, command):
+    return _item(label + TODO_SUFFIX, command)
 
 
 def _sep():
@@ -27,109 +34,230 @@ def _popup(label, rows):
 
 MENUS = (
     ("File", (
-        _item("Open Model", "open"),
-        _item("Save Model", "save"),
+        _popup("Document", (
+            _item("New Model", "new"),
+            _item("Open Model", "open"),
+            _item("Import into Model", "import"),
+        )),
+        _popup("Save and Exchange", (
+            _item("Save", "save"),
+            _item("Save As", "saveas"),
+            _item("Export Selected", "export"),
+        )),
+        _item("Print / Vector Output", "print"),
+        _sep(),
+        _item("Exit", "exit"),
     )),
     ("Edit", (
-        _item("Undo", "undo"),
-        _item("Redo", "redo"),
-        _sep(),
+        _popup("History", (
+            _item("Undo", "undo"),
+            _item("Redo", "redo"),
+        )),
         _item("Delete", "delete"),
-        _item("Join", "join"),
-        _item("Explode", "explode"),
+        _popup("Select", (
+            _popup("General", (
+                _item("Selection Command", "select"),
+                _item("Select All", "selall"),
+                _item("Select None", "selnone"),
+                _item("Invert Selection", "invert"),
+                _item("Select Last Created", "sellast"),
+                _item("Restore Previous Selection", "selprev"),
+            )),
+            _popup("By Organization or Identity", (
+                _item("By Object Name", "selname"),
+                _item("By Layer", "sellayer"),
+                _item("By Group", "selgroup"),
+                _item("Duplicate Objects", "seldup"),
+            )),
+            _popup("By Geometry Type", (
+                _item("Points", "selpt"),
+                _item("Curves", "selcrv"),
+                _item("Closed Curves", "selclosedcrv"),
+                _item("Open Curves", "selopencrv"),
+                _item("Surfaces", "selsrf"),
+                _item("Polysurfaces", "selpolysrf"),
+            )),
+            _popup("By Attached Data", (
+                _item("By User-Text Key", "selkey"),
+                _item("By User-Text Value", "selvalue"),
+                _item("By User-Text Key and Value", "selkeyvalue"),
+            )),
+        )),
+        _popup("Visibility and Access", (
+            _item("Hide Selected", "hide"),
+            _item("Show All", "show"),
+            _item("Show Selected Hidden Objects", "showselected"),
+            _item("Isolate Selected", "isolate"),
+            _item("End Isolation", "unisolate"),
+            _sep(),
+            _item("Lock Selected", "lock"),
+            _item("Unlock All", "unlock"),
+            _item("Unlock Selected", "unlockselected"),
+        )),
+        _popup("Groups", (
+            _item("Group", "group"),
+            _item("Ungroup", "ungroup"),
+            _item("Ungroup Including Nested Groups", "ungroupall"),
+            _item("Add to Group", "addtogroup"),
+            _item("Remove from Group", "removefromgroup"),
+            _item("Set Group Name", "setgroupname"),
+        )),
+        _popup("Object Data", (
+            _item("Name Selected Objects", "setobjectname"),
+            _item("Rename One Object", "rename"),
+            _item("Change Object Layer", "changelayer"),
+            _item("Set Object User Text", "setusertext"),
+            _item("Read Object User Text", "getusertext"),
+        )),
+        _popup("Structure and Direction", (
+            _item("Join", "join"),
+            _item("Explode", "explode"),
+            _item("Reverse Geometry Direction", "flip"),
+        )),
+        _todo("Clipboard Commands", "clipboard"),
     )),
     ("View", (
-        _item("Zoom", "zoom"),
-        _item("Construction Plane", "cplane"),
-        _item("Grid Settings", "grid"),
-        _item("Transform Widget", "gumball"),
-        _item("Orthographic Mode", "ortho"),
+        _item("Zoom / Frame", "zoom"),
+        _item("Display Mode", "setdisplaymode"),
+        _popup("Construction Plane and Grid", (
+            _item("Set Construction Plane", "cplane"),
+            _item("Named Construction Planes", "namedcplane"),
+            _item("Grid Settings", "grid"),
+        )),
+        _popup("Modeling Aids", (
+            _item("Object Snaps", "osnap"),
+            _item("Suspend Object Snaps", "disableosnap"),
+            _item("Project Snaps to Construction Plane", "projectosnap"),
+            _item("Snap to Locked Objects", "snaptolocked"),
+            _item("Toggle Orthogonal Constraint", "ortho"),
+            _item("Set Orthogonal Constraint", "setortho"),
+        )),
+        _todo("Named Views and Viewport Layouts", "namedview"),
     )),
-    ("Draw", (
-        _popup("Points", (
+    ("Curve", (
+        _popup("Points and Basic Curves", (
             _item("Point", "point"),
             _item("Multiple Points", "points"),
-        )),
-        _popup("Lines", (
             _item("Line Segment", "line"),
-            _item("Connected Segments", "polyline"),
-            _item("Separate Segments", "lines"),
-        )),
-        _popup("Shapes", (
-            _item("Circle", "circle"),
-            _item("Rectangle", "rectangle"),
-            _item("Ellipse", "ellipse"),
-            _item("Polygon", "polygon"),
-            _item("Arc", "arc"),
-        )),
-        _item("Place Image", "picture"),
-    )),
-    ("Curves", (
-        _popup("Create", (
+            _item("Separate Line Segments", "lines"),
+            _item("Polyline", "polyline"),
             _item("Control-Point Curve", "curve"),
             _item("Interpolated Curve", "interpcrv"),
+            _item("Arc", "arc"),
+            _item("Circle", "circle"),
+            _item("Ellipse", "ellipse"),
+            _item("Rectangle", "rectangle"),
+            _item("Polygon", "polygon"),
+        )),
+        _popup("Transitions", (
             _item("Blend Curves", "blendcrv"),
         )),
-        _popup("Edit", (
+        _popup("Modify", (
             _item("Close Curve", "closecrv"),
             _item("Offset Curve", "offset"),
             _item("Extend Curve", "extend"),
             _item("Divide Curve", "divide"),
-            _item("Split Curve", "split"),
-            _item("Trim Curve", "trim"),
-            _item("Round Corner", "fillet"),
-            _item("Bevel Corner", "chamfer"),
+            _item("Fillet Curves", "fillet"),
+            _item("Chamfer Curves", "chamfer"),
+            _item("Split Curves", "split"),
+            _item("Trim Curves", "trim"),
             _item("Rebuild Curve", "rebuild"),
             _item("Change Degree", "changedegree"),
             _item("Insert Knot", "insertknot"),
         )),
-        _popup("Derive", (
-            _item("Duplicate Edge", "dupedge"),
-            _item("Duplicate Border", "dupborder"),
-            _item("Project", "project"),
-            _item("Project to Construction Plane", "projecttocplane"),
+        _popup("Derive and Extract", (
+            _item("Project Curve or Point", "project"),
+            _item("Duplicate Surface Edge", "dupedge"),
+            _item("Duplicate Surface Border", "dupborder"),
             _item("Extract Wireframe", "extractwireframe"),
+            _item("Extract Curve Start Points", "crvstart"),
+            _item("Extract Curve End Points", "crvend"),
+            _item("Extract Control Points", "extractpt"),
+            _item("Extract Control Polygon", "extractcontrolpolygon"),
+            _item("Curve Intersections", "intersect"),
         )),
+        _popup("Control-Point Display", (
+            _item("Control Points On", "pointson"),
+            _item("Control Points Off", "pointsoff"),
+        )),
+        _todo("Match, Fair, and Simplify Curves", "matchcrv"),
     )),
-    ("Surfaces", (
-        _item("Plane Surface", "plane"),
-        _item("Surface from Planar Curves", "planarsrf"),
-        _item("Surface from Edges", "edgesrf"),
-        _item("Loft", "loft"),
-        _item("Revolve", "revolve"),
-        _item("Extrude Surface", "extrudesrf"),
-        _item("Offset Surface", "offsetsrf"),
+    ("Surface", (
+        _popup("Create Directly or from Curves", (
+            _item("Plane Surface", "plane"),
+            _item("Planar Surface from Boundaries", "planarsrf"),
+            _item("Surface from Edge Curves", "edgesrf"),
+            _item("Loft", "loft"),
+            _item("One-Rail Sweep", "sweep1"),
+            _item("Two-Rail Sweep", "sweep2"),
+            _item("Revolve", "revolve"),
+            _item("Extrude Curve", "extrudecrv"),
+            _item("Tapered Curve Extrusion", "extrudecrvtapered"),
+        )),
+        _popup("Modify and Close", (
+            _item("Extrude Surface", "extrudesrf"),
+            _item("Offset Surface", "offsetsrf"),
+            _item("Cap Planar Openings", "cap"),
+        )),
+        _todo("Advanced Surface Construction and Matching", "networksrf"),
     )),
-    ("Solids", (
+    ("SubD", (
+        _todo("Create, Convert, and Edit SubD", "subd"),
+    )),
+    ("Solid", (
         _popup("Primitives", (
             _item("Box", "box"),
             _item("Sphere", "sphere"),
             _item("Cylinder", "cylinder"),
             _item("Cone", "cone"),
+            _item("Torus", "torus"),
+            _item("Ellipsoid", "ellipsoid"),
+            _item("Truncated Cone", "truncatedcone"),
+            _item("Tube", "tube"),
+            _item("Pyramid", "pyramid"),
         )),
-        _popup("Build", (
-            _item("Extrude Curve", "extrudecrv"),
+        _popup("Create and Edit", (
             _item("Pipe", "pipe"),
             _item("Shell", "shell"),
+            _item("Move Face", "moveface"),
+            _item("Move Edge", "moveedge"),
+            _item("Fillet Edges", "filletedge"),
+            _item("Chamfer Edges", "chamferedge"),
         )),
-        _popup("Combine", (
+        _popup("Boolean", (
             _item("Union", "booleanunion"),
             _item("Difference", "booleandifference"),
             _item("Intersection", "booleanintersection"),
         )),
+        _todo("Solid Repair and Validation", "solidrepair"),
+    )),
+    ("Mesh", (
+        _todo("Create and Convert Meshes", "mesh"),
+        _todo("Edit, Repair, Reduce, and Boolean Meshes", "repairmesh"),
+    )),
+    ("Drafting", (
+        _popup("Reference", (
+            _item("Place Picture", "picture"),
+        )),
+        _todo("Text, Dimensions, and Leaders", "annotation"),
+        _todo("Hatches, Layouts, and Detail Views", "layout"),
     )),
     ("Transform", (
-        _item("Move", "move"),
-        _item("Copy", "copy"),
-        _item("Rotate", "rotate"),
-        _item("Rotate in 3D", "rotate3d"),
+        _popup("Move and Duplicate", (
+            _item("Move", "move"),
+            _item("Copy Objects", "copy"),
+        )),
+        _popup("Rotate", (
+            _item("Rotate in Construction Plane", "rotate"),
+            _item("Rotate Around 3D Axis", "rotate3d"),
+        )),
         _popup("Scale", (
             _item("Uniform Scale", "scale"),
-            _item("Scale Along One Axis", "scale1d"),
-            _item("Scale Along Two Axes", "scale2d"),
+            _item("One-Dimensional Scale", "scale1d"),
+            _item("Two-Dimensional Scale", "scale2d"),
         )),
-        _item("Mirror", "mirror"),
-        _popup("Array", (
+        _popup("Mirror and Array", (
+            _item("Mirror", "mirror"),
             _item("Linear Array", "array"),
             _item("Polar Array", "arraypolar"),
         )),
@@ -137,25 +265,61 @@ MENUS = (
             _item("Orient with Two Points", "orient"),
             _item("Orient with Three Points", "orient3pt"),
         )),
+        _popup("Interactive Manipulator", (
+            _item("Transform Widget On / Off", "gumball"),
+            _item("Transform Widget Alignment", "gumballalignment"),
+        )),
+        _item("Flatten to Construction Plane", "projecttocplane"),
+        _todo("Align, Distribute, and Deform", "align"),
     )),
     ("Analyze", (
         _popup("Measure", (
             _item("Distance", "distance"),
             _item("Angle", "angle"),
-            _item("Length", "length"),
+            _item("Curve Length", "length"),
             _item("Radius", "radius"),
             _item("Diameter", "diameter"),
             _item("Area", "area"),
             _item("Volume", "volume"),
         )),
         _popup("Centers", (
-            _item("Area Center", "areacentroid"),
-            _item("Volume Center", "volumecentroid"),
+            _item("Area Centroid", "areacentroid"),
+            _item("Volume Centroid", "volumecentroid"),
         )),
-        _item("Bounding Box", "boundingbox"),
-        _item("Evaluate Point", "evaluatept"),
-        _item("Direction", "dir"),
-        _item("Object Details", "what"),
+        _popup("Inspect", (
+            _item("Evaluate Point Coordinates", "evaluatept"),
+            _item("Create and Report Bounding Box", "boundingbox"),
+            _item("Object Details", "what"),
+            _item("Direction and Surface Normal", "dir"),
+        )),
+        _todo("Curvature, Continuity, and Edge Diagnostics", "curvaturegraph"),
+    )),
+    ("Render", (
+        _todo("Materials, Textures, Lights, and Environments", "material"),
+        _todo("Render Settings and Output", "render"),
+    )),
+    ("Tools", (
+        _popup("Document Settings and Maintenance", (
+            _item("Units and Tolerance", "units"),
+            _item("Purge Unused Data", "purge"),
+        )),
+        _popup("Layers", (
+            _item("Create or Manage Layer", "layer"),
+            _item("Layer State Manager", "layerstatemanager"),
+        )),
+        _popup("Alias Transfer", (
+            _item("Import Command Aliases", "optionsimport"),
+            _item("Export Command Aliases", "optionsexport"),
+        )),
+        _popup("Document Data", (
+            _item("Set Document User Text", "setdocumentusertext"),
+            _item("Read Document User Text", "getdocumentusertext"),
+        )),
+        _todo("Preferences, Extensions, and Scripting", "options"),
+    )),
+    ("Window", (
+        _todo("Viewport Layouts and Named Views", "viewportlayout"),
+        _todo("Workspace Management", "workspace"),
     )),
     ("Help", (
         _item("Command Guide", "help"),

@@ -458,7 +458,7 @@ def split_curve_at(curve, params):
 
 
 def split_curve_by(curve, cutters, tol=1e-6):
-    """Split `curve` where `cutters` cross it (this is Rhino's Split).
+    """Split `curve` where `cutters` cross it (this is the reference CAD application's Split).
 
     Returns the pieces in order. When nothing cuts the curve it returns a
     single-element list holding the ORIGINAL curve (not an empty list), so the
@@ -494,7 +494,7 @@ def split_curve_by(curve, cutters, tol=1e-6):
 
 
 def trim_curve_by(curve, cutters, keep_point, tol=1e-6):
-    """Rhino's Trim: split by `cutters`, then DISCARD the piece the user clicked.
+    """the reference CAD application's Trim: split by `cutters`, then DISCARD the piece the user clicked.
 
     `keep_point` is the location clicked to "trim away" (commands/trim.htm: "Select
     the parts ... to trim away"), so the piece nearest it is removed and the rest

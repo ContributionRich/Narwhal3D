@@ -114,7 +114,7 @@ check(kernel.ANALYTIC != kernel.MESH_DERIVED != kernel.UNKNOWN,
       "the three representations are distinct")
 check(kernel.REPRESENTATION_KEY.startswith("Narwhal3D:"),
       "the user-string key is NAMESPACED -- it travels inside the user's .3dm and "
-      f"must not collide with Rhino's own keys ({kernel.REPRESENTATION_KEY})")
+      f"must not collide with the reference CAD application's own keys ({kernel.REPRESENTATION_KEY})")
 
 try:
     kernel.tag(object(), "something-else")

@@ -19,7 +19,7 @@ import rhino3dm as r3  # noqa: E402
 
 from narwhal3d import filedialog, kernel, print2d, print_commands  # noqa: E402
 from narwhal3d.kernel import occt_backend as ob  # noqa: E402
-from narwhal3d.model import RhinoModel  # noqa: E402
+from narwhal3d.model import NarwhalModel  # noqa: E402
 from narwhal3d.state import app_state  # noqa: E402
 
 results = []
@@ -57,7 +57,7 @@ def export(names, path):
 def run():
     filedialog.set_backend(None)            # headless -> typed names
     print_commands.view_provider = lambda: TOP
-    app_state.set_model(RhinoModel())
+    app_state.set_model(NarwhalModel())
     app_state.active_command = None
     b = {o.name for o in bpy.data.objects}
     for t in ("Cylinder", "w0,0,0", "5", "10"):
@@ -77,7 +77,7 @@ def run():
     f = r3.File3dm.Read(p) if os.path.exists(p) else None
     check(f is not None and len(f.Objects) == 1, "Export .3dm writes ONLY the "
           "selected object", f"{msg!r}")
-    reopened = RhinoModel.load(p) if f is not None else None
+    reopened = NarwhalModel.load(p) if f is not None else None
     geom = reopened.file.Objects[0].Geometry if reopened else None
     # a primitive carries a RECIPE (not a master -- MEASURED); after the round trip
     # through the exported file it must still rebuild as the exact OCCT solid

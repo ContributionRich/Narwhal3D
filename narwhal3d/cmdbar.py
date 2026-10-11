@@ -32,7 +32,7 @@ def command_bar_layout(height: int, n_history: int,
     (Blender's y grows **upward**, so the bottom of the region is y=0).
 
     The prompt is **pinned to the bottom line** and history scrolls upward above
-    it, which is both what Rhino does and what makes the prompt impossible to
+    it, which is both what the reference CAD application does and what makes the prompt impossible to
     push off-screen.
 
     The bug this replaces: the old code let history take *every* line that fit
@@ -65,13 +65,13 @@ def visible_history(history, max_history: int):
 
 
 def match_commands(prefix: str, names):
-    """Command names matching ``prefix``, Rhino-style (case-insensitive prefix).
+    """Command names matching ``prefix``, CAD-style (case-insensitive prefix).
 
     Ordered so the best candidate is first: exact match, then case-sensitive
     prefix matches, then the rest -- each group alphabetically. Returns [] for an
-    empty prefix (Rhino only autocompletes once you have typed something).
+    empty prefix (the reference CAD application only autocompletes once you have typed something).
 
-    This is Rhino's behaviour with **fuzzy autocomplete turned OFF**
+    This is the reference CAD application's behaviour with **fuzzy autocomplete turned OFF**
     (options/appearance.htm: "When disabled, autocomplete uses the first letters
     of the command name in alphabetical order."). It is left exactly as it was on
     purpose -- fuzzy_matches() builds the fuzzy-ON behaviour on top of it, using
@@ -95,8 +95,8 @@ def match_commands(prefix: str, names):
 # ---------------------------------------------------------------------------
 # fuzzy autocomplete
 #
-# Rhino's fuzzy autocomplete, MEASURED from options/appearance.htm ("Use fuzzy
-# autocomplete") and user_interface/rhino_window.htm:
+# the reference CAD application's fuzzy autocomplete, MEASURED from options/appearance.htm ("Use fuzzy
+# autocomplete") and user_interface/cad_window.htm:
 #
 #   "in-line autocomplete suggests the most used candidate. For example, LI most
 #    likely autocompletes to Line rather than something like LimitReferenceModel,
@@ -139,7 +139,7 @@ def _fuzzy_positions(typed_low, name_low):
 def _fuzzy_score(typed_low, name_low):
     """Closeness of a fuzzy (subsequence) match; **OURS**, smaller is closer.
 
-    Not defined by Rhino ("sorted by how closely they match" -- no algorithm
+    Not defined by the reference CAD application ("sorted by how closely they match" -- no algorithm
     given), so this is our metric, deliberately isolated in one function. A match
     is "closer" when it starts nearer the front of the name and spans fewer
     characters (fewer gaps between the typed letters). Returns ``None`` when
@@ -157,18 +157,18 @@ def _fuzzy_tiebreak(name, usage):
     """Tie-break key for equally-close matches; **OURS**.
 
     When ``usage`` (a name -> count mapping) is given, the most-used command
-    wins -- Rhino's "suggests the most used candidate", the only part of it we
+    wins -- the reference CAD application's "suggests the most used candidate", the only part of it we
     can honour, and only when the caller has usage data. When ``usage`` is
     ``None`` we have no usage data, so we fall back to **shorter name, then
     alphabetical** -- which is why 'LI' prefers 'Line' over 'LimitReferenceModel'
-    among fuzzy matches. Both halves are OURS; neither is claimed as Rhino's.
+    among fuzzy matches. Both halves are OURS; neither is claimed as the reference CAD application's.
     """
     used = usage.get(name, 0) if usage else 0
     return (-used, len(name), name.lower())
 
 
 def fuzzy_matches(typed: str, names, usage=None):
-    """Rhino's two fuzzy lists as a pair ``(exact_prefix, inexact)``.
+    """the reference CAD application's two fuzzy lists as a pair ``(exact_prefix, inexact)``.
 
     ``exact_prefix`` is exactly what match_commands returns -- the names that
     start with ``typed`` (case-insensitive). ``inexact`` is every OTHER name that
@@ -208,7 +208,7 @@ def completion_lists(typed: str, names, usage=None):
 
 
 def autocomplete(prefix: str, names, usage=None):
-    """The single name Rhino would complete ``prefix`` to inline, or ``None``.
+    """The single name the reference CAD application would complete ``prefix`` to inline, or ``None``.
 
     **Prefix-only, deliberately** -- this returns the best exact-prefix match (the
     head of :func:`match_commands`) and does NOT fall back to a fuzzy match.
@@ -225,7 +225,7 @@ def autocomplete(prefix: str, names, usage=None):
 # ---------------------------------------------------------------------------
 # hit-testing: the command bar's options and completions are CLICKABLE
 #
-# Rhino's command-line options are buttons -- you click `2Point` rather than
+# the reference CAD application's command-line options are buttons -- you click `2Point` rather than
 # typing it -- and its autocomplete list is clickable. These hit boxes make the
 # displayed options and candidates interactive rather than inert text.
 #

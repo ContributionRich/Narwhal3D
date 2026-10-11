@@ -75,7 +75,7 @@ Numerical parameters
 --------------------
 The tolerance is the document's absolute tolerance from `units.py`, never a fixed
 literal. The sampling density, Newton iteration cap, and parameter epsilon are internal
-numerical choices because Rhino does not expose corresponding values.
+numerical choices because the reference CAD application does not expose corresponding values.
 """
 from __future__ import annotations
 
@@ -93,7 +93,7 @@ except ImportError:                   # supports direct file-path loading
 #: separate the local minima of a single polynomial span (a span of degree d has
 #: at most d-1 interior extrema of distance, and the curves we build are degree
 #: <= 3), while keeping the cost low enough for an interactive osnap. There is no
-#: Rhino-documented value to measure here.
+#: the reference CAD application-documented value to measure here.
 SAMPLES_PER_SPAN = 6
 
 #: Newton iteration cap. Newton on a well-seeded root converges
@@ -110,7 +110,7 @@ PARAM_EPS = 1e-12
 def default_tolerance():
     """The document's absolute tolerance, in model units.
 
-    Rhino's default is 0.01 mm. Read through `units.py` rather than using a literal so a
+    the reference CAD application's default is 0.01 mm. Read through `units.py` rather than using a literal so a
     document whose tolerance differs is honoured automatically.
     """
     # Use the document's tolerance in model units, not a fixed 0.01 default.

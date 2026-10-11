@@ -400,7 +400,7 @@ crow("make_polyline(closed=True)", True,
 crow("make_interpolated_curve", True,
      lambda: bridge.make_interpolated_curve(
          [(0, 0, 0), (1, 2, 0), (3, -1, 0), (5, 3, 0), (8, 0, 0)]))
-# Rectangle and Polygon ARE straight-sided in Rhino, so degree 1 is the right answer.
+# Rectangle and Polygon ARE straight-sided in the reference CAD application, so degree 1 is the right answer.
 crow("make_rectangle", False, lambda: bridge.make_rectangle((0, 0, 0), (4, 3, 0)))
 crow("make_rectangle_3point", False,
      lambda: bridge.make_rectangle_3point((0, 0, 0), (4, 0, 0), (4, 3, 0)))
@@ -483,7 +483,7 @@ bad.extend(cbad)
 
 print()
 print("NOTE on display: this audit reads DOCUMENT geometry only. Tessellating for the")
-print("VIEWPORT is correct and unavoidable -- Rhino draws a render mesh too. The failure")
+print("VIEWPORT is correct and unavoidable -- the reference CAD application draws a render mesh too. The failure")
 print("is a tessellation becoming the GEOMETRY.")
 print("Boolean results use an ANALYTIC OCCT master")
 print("with a triangulated display proxy over it -- the rows above read the MASTER, which")

@@ -1,4 +1,4 @@
-"""End-to-end chaining for Rhino's `Join`. **No `bpy`, no rhino3dm** -- pure.
+"""End-to-end chaining for the reference CAD application's `Join`. **No `bpy`, no rhino3dm** -- pure.
 
 Why this module exists
 ----------------------
@@ -21,7 +21,7 @@ Append order and reversal must therefore be resolved before constructing the pol
 
 Tolerance
 ---------
-Rhino joins curves whose ends *touch*, judged against the document's **absolute
+the reference CAD application joins curves whose ends *touch*, judged against the document's **absolute
 tolerance** (``units.default_tolerances()``); the help's note about "within 2x
 tolerance" is about surface edges, not curve ends. Callers pass the tolerance in;
 this module never assumes one.

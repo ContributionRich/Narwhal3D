@@ -124,7 +124,7 @@ for fn, args, words in ((bridge.make_torus, (C, 2.0, 2.0), "spindle"),
 
 class Ctx:
     def __init__(self, plane=None):
-        self.model = model.RhinoModel()
+        self.model = model.NarwhalModel()
         self.added = []
         self.plane = plane
 

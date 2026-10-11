@@ -119,7 +119,7 @@ class LayerCmd(commands.Command):
 
 
 def _retint(ob_name, layer_index):
-    """Give a display object its NEW layer's material -- the same `rhino_layer_<i>`
+    """Give a display object its NEW layer's material -- the same `narwhal_layer_<i>`
     material `_make_display_object` assigns (and ui.py keeps in its layer colour)."""
     try:
         import bpy
@@ -127,16 +127,16 @@ def _retint(ob_name, layer_index):
         return
     ob = bpy.data.objects.get(ob_name)
     if ob is None or ob.data is None or not hasattr(ob.data, "materials") \
-            or ob.get("rhino_picture"):
+            or ob.get("narwhal_picture"):
         return
     app = _app()
     layers = app.model.layers()
     if not (0 <= layer_index < len(layers)):
         return
-    mat = bpy.data.materials.get(f"rhino_layer_{layer_index}")
+    mat = bpy.data.materials.get(f"narwhal_layer_{layer_index}")
     if mat is None:
         r, g, b = (c / 255.0 for c in layers[layer_index]["color"][:3])
-        mat = bpy.data.materials.new(f"rhino_layer_{layer_index}")
+        mat = bpy.data.materials.new(f"narwhal_layer_{layer_index}")
         mat.use_nodes = True
         bsdf = mat.node_tree.nodes.get("Principled BSDF")
         if bsdf:

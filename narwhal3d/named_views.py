@@ -100,7 +100,7 @@ class NamedViews:
     """The document's named views: an ordered name -> view-dict map.
 
     Names are unique **case-insensitively** (OURS). Entries are stored in
-    insertion order, which is Rhino's **Custom Order** (the panel's default).
+    insertion order, which is the reference CAD application's **Custom Order** (the panel's default).
     ``names()`` returns them in the order they were saved/renamed in, and
     ``sorted_names()`` applies the documented Name Ascending / Descending sorts.
 
@@ -219,7 +219,7 @@ class NamedViews:
     # --------------------------------------------------------------- sorting
 
     def sorted_names(self, ascending=True):
-        """The names sorted by name (Rhino's "Name Ascending" / "Name
+        """The names sorted by name (the reference CAD application's "Name Ascending" / "Name
         Descending"). The order returned by ``names()`` (Custom Order) is
         otherwise untouched."""
         return sorted(self._order, key=str.lower, reverse=not ascending)
@@ -274,7 +274,7 @@ class NamedViews:
                 "MEASURED (namedview.htm: Custom Order via drag and drop / "
                 "Move up / Move down)",
             "copy_paste_clipboard_not_modelled":
-                "MEASURED (namedview.htm: Copy / Paste -- one Rhino session or "
+                "MEASURED (namedview.htm: Copy / Paste -- one the reference CAD application session or "
                 "between sessions) -- not a model concern; the command "
                 "reports it not implemented",
             "import_3dm_not_modelled":

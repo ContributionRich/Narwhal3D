@@ -1,8 +1,8 @@
-"""Pure, validated execution plans for Rhino command macros.
+"""Pure, validated execution plans for the reference CAD application command macros.
 
 This module deliberately does not execute commands or touch Blender/UI state.  It
 turns :func:`macro.tokenize`'s lossless steps into explicit action dictionaries.
-The apostrophe is a safety boundary: Rhino documents it as nestable only for
+The apostrophe is a safety boundary: the reference CAD application documents it as nestable only for
 view/CPlane/object-snap style commands, never for geometry creation.  A
 transparent command outside the measured allow-list is refused rather than
 silently run as if it were safe.
@@ -25,10 +25,10 @@ class MacroPlanError(ValueError):
 
 
 class NonNestableCommandError(MacroPlanError):
-    """A transparent command is not one Rhino documents as nestable."""
+    """A transparent command is not one the reference CAD application documents as nestable."""
 
 
-# MEASURED from information/rhinoscripting, "Naming conventions in Rhino":
+# MEASURED from information/cad_scripting, "Naming conventions in the reference CAD application":
 # view and construction-plane manipulation and object snaps are nestable;
 # geometry creation is not.  Keep this explicit and conservative: unknown
 # commands must not accidentally become transparent geometry commands.
@@ -98,7 +98,7 @@ def build_plan(tokens):
             if "prefixes" not in step:
                 raise MacroPlanError("command tokens must retain their prefixes")
             if "!" in step["prefixes"]:
-                # ! is both a prefix and an explicit cancel action in Rhino.
+                # ! is both a prefix and an explicit cancel action in the reference CAD application.
                 # The tokenizer has already emitted this cancel; do not lose it.
                 pass
             actions.append(_command_action(step))

@@ -56,13 +56,13 @@ CAPABILITIES = MappingProxyType({
         "rhino3dm File3dmWriteOptions.SaveUserData",
     ),
     "Browse": Capability(
-        "Browse", False, None, "Browse opens Rhino's Save window; it is UI-only",
+        "Browse", False, None, "Browse opens the reference CAD application's Save window; it is UI-only",
     ),
 })
 
 
 class UnsupportedSaveOption(ValueError):
-    """A known Rhino option that this rhino3dm-backed writer cannot perform."""
+    """A known the reference CAD application option that this rhino3dm-backed writer cannot perform."""
 
 
 class InvalidSaveOption(ValueError):
@@ -73,7 +73,7 @@ class InvalidSaveOption(ValueError):
 class SaveOptions:
     """Validated command-line state for Save or SaveAs.
 
-    ``None`` means no target Rhino version was requested.  Boolean options are
+    ``None`` means no target the reference CAD application version was requested.  Boolean options are
     explicit state, not capability claims: a true unsupported option is rejected
     by :func:`validate`, never dropped while writing.
     """

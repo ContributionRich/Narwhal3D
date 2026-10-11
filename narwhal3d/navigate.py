@@ -7,7 +7,7 @@ that mapping testable without launching Blender; `ui.py` maps supported actions
 to Blender operators.
 
 ======================================  ==========================================
-Input                                   Rhino does
+Input                                   the reference CAD application does
 ======================================  ==========================================
 RMB-drag                                **rotate** a perspective view,
                                         **pan** a parallel view
@@ -40,7 +40,7 @@ ROTATE = "rotate"
 PAN = "pan"
 #: zoom in/out
 ZOOM = "zoom"
-#: Rhino calls this "pan the perspective view in/out" -- moving the camera
+#: the reference CAD application calls this "pan the perspective view in/out" -- moving the camera
 #: along its view axis, which is a dolly, not a zoom.
 DOLLY = "dolly"
 #: roll about the view axis
@@ -57,7 +57,7 @@ ACTIONS = (ROTATE, PAN, ZOOM, DOLLY, TILT, LENS, ROTATE_CAMERA, NONE)
 # ---------------------------------------------------------------------------
 # action -> the Blender operator that performs it
 #
-# `None` means Rhino supports the action but no equivalent interaction is implemented.
+# `None` means the reference CAD application supports the action but no equivalent interaction is implemented.
 # Blender 5.2.2 provides view3d.rotate, view3d.move, view3d.zoom, view3d.dolly,
 # and view3d.view_roll.
 # ---------------------------------------------------------------------------
@@ -67,15 +67,15 @@ BLENDER_OP = {
     PAN: "view3d.move",
     ZOOM: "view3d.zoom",
     DOLLY: "view3d.dolly",
-    # Rhino tilts by DRAGGING (with 5-degree snapping when you drag along the
+    # the reference CAD application tilts by DRAGGING (with 5-degree snapping when you drag along the
     # view border). Blender's view3d.view_roll takes a fixed `angle`/`type` and
     # is not a drag-modal: rotate/move/zoom/dolly expose
     # `use_cursor_init` (the signature of a drag-modal), view_roll exposes
     # ('angle', 'type'). Binding a drag to it would roll a fixed step per click
-    # and look implemented while behaving nothing like Rhino, so it stays None
+    # and look implemented while behaving nothing like the reference CAD application, so it stays None
     # until it gets a real modal implementation.
     TILT: None,
-    # Rhino's RotateCamera orbits the camera in place. Blender's view3d.rotate
+    # the reference CAD application's RotateCamera orbits the camera in place. Blender's view3d.rotate
     # orbits about the pivot instead, so it is NOT a substitute -- mapping it
     # here would make the option look implemented while doing something else.
     ROTATE_CAMERA: None,
@@ -133,20 +133,20 @@ def rmb_action(perspective: bool, ctrl: bool = False, shift: bool = False,
         # "Press Shift to pan perspective views". A parallel view already pans
         # on a bare drag, so Shift is a no-change there rather than a conflict.
         return PAN
-    # THE core Rhino rule, and the one users feel immediately.
+    # THE core the reference CAD application rule, and the one users feel immediately.
     return ROTATE if perspective else PAN
 
 
 # ---------------------------------------------------------------------------
 # WHAT A RIGHT-BUTTON PRESS TURNS OUT TO HAVE BEEN
 #
-# The right button has THREE jobs in Rhino, and which one you get is decided by
+# The right button has THREE jobs in the reference CAD application, and which one you get is decided by
 # what happens after the press -- so none of them can be settled at press time.
 #
 # MEASURED (user_interface/keyboard modifiers.htm), under "Enter":
 #     "To accept command-line input, do one of the following: Press the Enter key.
 #      Press the Spacebar. Click the right mouse button."
-#   -> a right-CLICK is Enter. With nothing typed, Rhino's Enter repeats the last
+#   -> a right-CLICK is Enter. With nothing typed, the reference CAD application's Enter repeats the last
 #      command, so a short stationary right-click acts as Enter.
 #
 # MEASURED (options/mouse.htm), under "Right mouse button":
@@ -157,7 +157,7 @@ def rmb_action(perspective: bool, ctrl: bool = False, shift: bool = False,
 #      a right-click immediately display the context menu and stop repeating the
 #      last command."
 #   -> the menu appears on RELEASE, not during the hold. So measuring the elapsed
-#      time at release is not an approximation of Rhino, it is what Rhino does.
+#      time at release is not an approximation of the reference CAD application, it is what the reference CAD application does.
 #      And delay 0 is a documented special case that removes the Enter meaning
 #      entirely ("stop repeating the last command").
 #
@@ -217,7 +217,7 @@ def rmb_release_action(held_ms, moved_px,
     return RMB_ENTER
 
 
-#: The three context menus, MEASURED from user_interface/rhino_window.htm:
+#: The three context menus, MEASURED from user_interface/cad_window.htm:
 #: "One of the three context menus appears when you click, hold, and release the
 #: right mouse button in a viewport." -- and which one depends on the selection.
 MENU_VIEWPORT = "Viewport"
@@ -243,7 +243,7 @@ CONTEXT_MENUS_IMPLEMENTED = CONTEXT_MENUS
 #: trailing separators because the conditional head can otherwise create runs.
 SEPARATOR = None
 
-#: Item actions that are NOT a Rhino command name.
+#: Item actions that are NOT a the reference CAD application command name.
 ACTION_REPEAT = "repeat"        #: the `&Repeat X` / `&Enter` slot
 ACTION_CUSTOMISE = "customise"  #: `Add items to this menu...` -> an Options page
 
@@ -251,7 +251,7 @@ ACTION_CUSTOMISE = "customise"  #: `Add items to this menu...` -> an Options pag
 class ContextItem:
     """One row of a context menu.
 
-    `label` is Rhino's verbatim text, `command` the Rhino command the row runs (or
+    `label` is the reference CAD application's verbatim text, `command` the the reference CAD application command the row runs (or
     None), and `action` marks the two rows that are not commands at all.
     """
 
@@ -317,7 +317,7 @@ _MENU_USER_BLOCK = {
 
 
 def display_label(label):
-    """Rhino's verbatim label with its `&` accelerator marks removed.
+    """the reference CAD application's verbatim label with its `&` accelerator marks removed.
 
     `&&` is a literal ampersand in a Win32 menu string, so it collapses to one --
     no current label needs that, and getting it wrong later would be invisible.
@@ -342,7 +342,7 @@ def display_label(label):
 def collapse_separators(items):
     """`items` with leading, trailing and repeated separators removed.
 
-    Reproduces Rhino's own appender, which refuses to add a separator when the last
+    Reproduces the reference CAD application's own appender, which refuses to add a separator when the last
     item already is one. Needed rather than decorative: the head's first slot is
     conditional, so real runs of separators occur.
     """
@@ -352,7 +352,7 @@ def collapse_separators(items):
             if not out:
                 continue            # nothing to separate yet
             if out[-1] is SEPARATOR:
-                continue            # Rhino's early return
+                continue            # the reference CAD application's early return
             out.append(SEPARATOR)
             continue
         out.append(item)
@@ -362,9 +362,9 @@ def collapse_separators(items):
 
 
 def context_menu_items(kind, last_command=None):
-    """The rows of context menu `kind`, in Rhino's own order. () for an unknown kind.
+    """The rows of context menu `kind`, in the reference CAD application's own order. () for an unknown kind.
 
-    Structure, all MEASURED as code order in `CRhinoView::OnContextMenu`:
+    Structure, all MEASURED as code order in `CAD view::OnContextMenu`:
 
         Repeat/Enter, separator, [user block], separator, Cut/Copy/Paste,
         separator, [the menu's own items]
@@ -388,7 +388,7 @@ def context_menu_items(kind, last_command=None):
 
 
 def context_menu_commands(kind):
-    """Every Rhino command name menu `kind` can run, deduplicated, in order.
+    """Every the reference CAD application command name menu `kind` can run, deduplicated, in order.
 
     For the audit that checks each row either runs or reports -- it must never be
     possible to add a row whose command nobody has checked for.
@@ -405,7 +405,7 @@ def context_menu_commands(kind):
 def context_menu_for(has_selection=False, has_control_points=False):
     """Which of the three context menus a right-click should raise.
 
-    MEASURED (user_interface/rhino_window.htm):
+    MEASURED (user_interface/cad_window.htm):
         "When nothing is in selection, the Viewport Context Menu appears."
         "When objects are in selection, the Object Context Menu appears."
         "When control points are in selection, the Control Point Context menu
@@ -424,7 +424,7 @@ def context_menu_for(has_selection=False, has_control_points=False):
 # ---------------------------------------------------------------------------
 # THE MIDDLE MOUSE BUTTON  (options/mouse.htm, "Middle mouse button")
 #
-# Rhino makes MMB configurable, and the page lists FOUR things it can be set to:
+# the reference CAD application makes MMB configurable, and the page lists FOUR things it can be set to:
 #
 #   * "Most-recently used commands popup menu -- Pops up two-part menu at the
 #      cursor location. You can list your favorite commands in the top section.
@@ -487,7 +487,7 @@ def mmb_action(mode=DEFAULT_MMB_MODE, ctrl: bool = False,
     implemented rather than doing something else.
 
     The three tables are transcribed from `options/mouse.htm` and nothing is
-    inferred; note that Rhino gives `Pan` mode TWO rotate modifiers ("press Alt or
+    inferred; note that the reference CAD application gives `Pan` mode TWO rotate modifiers ("press Alt or
     Shift to rotate"), which is why alt and shift are both tested there.
     """
     if mode not in MMB_VIEW_MODES:
@@ -533,7 +533,7 @@ def mmb_message(mode):
 def scroll_action(ctrl: bool = False, shift: bool = False, alt: bool = False):
     """What the wheel does. Alt+scroll dollies; everything else zooms.
 
-    Blender already binds a bare wheel to ``view3d.zoom``, which matches Rhino,
+    Blender already binds a bare wheel to ``view3d.zoom``, which matches the reference CAD application,
     so this exists for the Alt case and to make the agreement explicit and
     tested rather than accidental.
     """
@@ -543,7 +543,7 @@ def scroll_action(ctrl: bool = False, shift: bool = False, alt: bool = False):
 
 
 # ---------------------------------------------------------------------------
-# Blender bindings we must switch off, or they fight Rhino's right button
+# Blender bindings we must switch off, or they fight the reference CAD application's right button
 #
 # A `blender -b` read is not trustworthy for keymaps because per-mode keymaps
 # materialize lazily; a background read reported zero RIGHTMOUSE and wheel items,
@@ -568,7 +568,7 @@ RMB_COMPETITOR_KEYMAPS = tuple(dict.fromkeys(k[0] for k in RMB_COMPETITORS))
 
 
 def is_rmb_competitor(keymap_name: str, idname: str) -> bool:
-    """True if this keymap item must be disabled for Rhino navigation to work.
+    """True if this keymap item must be disabled for the reference CAD application navigation to work.
 
     Matched on (keymap, operator) rather than on the modifiers: Blender ships
     several items that differ only in modifiers or in ``value``
