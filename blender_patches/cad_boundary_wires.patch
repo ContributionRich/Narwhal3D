@@ -1,0 +1,64 @@
+diff --git a/source/blender/draw/intern/mesh_extractors/extract_mesh_vbo_edge_fac.cc b/source/blender/draw/intern/mesh_extractors/extract_mesh_vbo_edge_fac.cc
+index 893e860e..9814730f 100644
+--- a/source/blender/draw/intern/mesh_extractors/extract_mesh_vbo_edge_fac.cc
++++ b/source/blender/draw/intern/mesh_extractors/extract_mesh_vbo_edge_fac.cc
+@@ -47,6 +47,10 @@ static void extract_edge_factor_mesh(const MeshRenderData &mr, MutableSpan<float
+   const Span<int> corner_edges = mr.corner_edges;
+   const Span<float3> face_normals = mr.face_normals;
+   const BitSpan optimal_display_edges = mr.mesh->runtime->subsurf_optimal_display_edges;
++  /* The mesh shades analytic CAD surfaces. Only non-manifold or split Brep
++   * boundaries are meaningful wires; manifold edges are internal tessellation. */
++  const bool boundary_wires_only =
++      (mr.mesh->flag & ME_NARWHAL_BOUNDARY_WIRES) != 0;
+ 
+   Array<int8_t> edge_face_count(mr.edges_num, 0);
+   Array<MEdgeDataPrev> edge_data(mr.edges_num);
+@@ -72,7 +76,10 @@ static void extract_edge_factor_mesh(const MeshRenderData &mr, MutableSpan<float
+         else if (face_count == 1) {
+           /* Calculate the factor for both corners. */
+           const int other_face = medata->data;
+-          const float factor = edge_factor_calc(face_normals[other_face], face_normals[face]);
++          const float factor = boundary_wires_only ?
++                                   1.0f :
++                                   edge_factor_calc(face_normals[other_face],
++                                                    face_normals[face]);
+           vbo_data[medata->corner_a] = factor;
+           vbo_data[corner] = factor;
+ 
+diff --git a/source/blender/makesdna/DNA_mesh_types.h b/source/blender/makesdna/DNA_mesh_types.h
+index f0d92bd2..f371b08c 100644
+--- a/source/blender/makesdna/DNA_mesh_types.h
++++ b/source/blender/makesdna/DNA_mesh_types.h
+@@ -92,7 +92,10 @@ enum eMesh_Flag : uint16_t {
+   ME_FLAG_UV_SELECT_SYNC_VALID = 1 << 3,
+   ME_FLAG_UNUSED_4 = 1 << 4,     /* cleared */
+   ME_AUTOSMOOTH_LEGACY = 1 << 5, /* deprecated */
+-  ME_FLAG_UNUSED_6 = 1 << 6,     /* cleared */
++  /** CAD viewport mesh: draw split Brep boundaries, not the manifold
++   * triangulation used only to shade surfaces. */
++  ME_NARWHAL_BOUNDARY_WIRES = 1 << 6,
++  ME_FLAG_UNUSED_6 = ME_NARWHAL_BOUNDARY_WIRES, /* versioning compatibility */
+   ME_FLAG_UNUSED_7 = 1 << 7,     /* cleared */
+   ME_REMESH_REPROJECT_ATTRIBUTES = 1 << 8,
+   ME_DS_EXPAND = 1 << 9,
+diff --git a/source/blender/makesrna/intern/rna_mesh.cc b/source/blender/makesrna/intern/rna_mesh.cc
+index 8b42b08e..25d99b85 100644
+--- a/source/blender/makesrna/intern/rna_mesh.cc
++++ b/source/blender/makesrna/intern/rna_mesh.cc
+@@ -3277,6 +3277,16 @@ static void rna_def_mesh(BlenderRNA *brna)
+       prop, "Radial Symmetry Count", "Number of mirrored regions around a central axis");
+   /* End Symmetry */
+ 
++  /* Narwhal 3D analytic CAD objects use a render mesh for fill only. */
++  prop = RNA_def_property(srna, "narwhal_boundary_wires", PROP_BOOLEAN, PROP_NONE);
++  RNA_def_property_boolean_sdna(prop, nullptr, "flag", ME_NARWHAL_BOUNDARY_WIRES);
++  RNA_def_property_clear_flag(prop, PROP_ANIMATABLE);
++  RNA_def_property_ui_text(
++      prop,
++      "Boundary Wires Only (Narwhal 3D)",
++      "Draw split CAD boundaries but hide manifold viewport triangulation");
++  RNA_def_property_update(prop, 0, "rna_Mesh_update_draw");
++
+   RNA_define_verify_sdna(false);
+   prop = RNA_def_property(srna, "has_custom_normals", PROP_BOOLEAN, PROP_NONE);
+   RNA_def_property_boolean_sdna(prop, nullptr, "", 0);

@@ -1,0 +1,84 @@
+{
+  "schema": 1,
+  "product": "Narwhal 3D",
+  "platform": "linux-x86_64",
+  "python": {
+    "implementation": "CPython",
+    "version": "3.13",
+    "abi": "cp313"
+  },
+  "runtime": {
+    "purpose": "development-bootstrap-only",
+    "flavor": "official-blender-runtime",
+    "blender_version": "5.2.2",
+    "bundle_path": "tools/blender-5.2.2-linux-x64"
+  },
+  "artifacts": [
+    {
+      "id": "appimagetool",
+      "kind": "appimage",
+      "version": "1.9.1",
+      "filename": "appimagetool-x86_64.AppImage",
+      "url": "https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-x86_64.AppImage",
+      "sha256": "ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0",
+      "executable": true,
+      "allowed_redirect_hosts": [
+        "release-assets.githubusercontent.com"
+      ]
+    },
+    {
+      "id": "appimage-runtime",
+      "kind": "appimage-runtime",
+      "version": "20251108",
+      "filename": "runtime-x86_64",
+      "url": "https://github.com/AppImage/type2-runtime/releases/download/20251108/runtime-x86_64",
+      "sha256": "2fca8b443c92510f1483a883f60061ad09b46b978b2631c807cd873a47ec260d",
+      "allowed_redirect_hosts": [
+        "release-assets.githubusercontent.com"
+      ]
+    },
+    {
+      "id": "blender-runtime",
+      "kind": "tar.xz",
+      "version": "5.2.2",
+      "filename": "blender-5.2.2-linux-x64.tar.xz",
+      "url": "https://download.blender.org/release/Blender5.2/blender-5.2.2-linux-x64.tar.xz",
+      "sha256": "84098912789dc450e95697c4184fb8a90acbe5111c2ba4aede3fecb57806a168",
+      "archive_root": "blender-5.2.2-linux-x64"
+    },
+    {
+      "id": "rhino3dm",
+      "kind": "wheel",
+      "version": "8.35.0",
+      "filename": "rhino3dm-8.35.0-cp313-cp313-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl",
+      "url": "https://files.pythonhosted.org/packages/68/e4/d2835c98ada8c69e3ec478e7568bd9391df7b677826e5c72b9f648195a3d/rhino3dm-8.35.0-cp313-cp313-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl",
+      "sha256": "783db09d49cbe632b1c26cfc96e5b3910d82a4c9dc07b8d174f212a61229c7a4"
+    },
+    {
+      "id": "cadquery-ocp-novtk",
+      "kind": "wheel",
+      "version": "8.0.1.0.0",
+      "filename": "cadquery_ocp_novtk-8.0.1.0.0-cp313-cp313-manylinux_2_28_x86_64.whl",
+      "url": "https://files.pythonhosted.org/packages/83/a8/752777f38c5bd8cb6e239f4639f3a64a704b5812f3247b0a11f2ecb48900/cadquery_ocp_novtk-8.0.1.0.0-cp313-cp313-manylinux_2_28_x86_64.whl",
+      "sha256": "1702dfc8f5bdcb916ce65ea0c6314fe453cc78a6a3d49a044fb3062d47b0ef9f"
+    },
+    {
+      "id": "cadquery-ocp-proxy",
+      "kind": "wheel",
+      "version": "8.0.1.0.0",
+      "filename": "cadquery_ocp_proxy-8.0.1.0.0-py3-none-any.whl",
+      "url": "https://files.pythonhosted.org/packages/15/36/4a8dbfdf4ab61a7841c36398615c6ab3d3c932d4254b978963690650feea/cadquery_ocp_proxy-8.0.1.0.0-py3-none-any.whl",
+      "sha256": "d6a6909a73d2300ca4581ff762ccf0137993ac75c57a2dc82e12bffa3a12b680"
+    }
+  ],
+  "excluded_components": [
+    {
+      "id": "opennurbs-exact-save-helper",
+      "reason": "Redistribution clearance is unresolved; it must not be bundled."
+    },
+    {
+      "id": "optional-converters",
+      "reason": "Optional converter runtimes are not part of the initial public source release."
+    }
+  ]
+}

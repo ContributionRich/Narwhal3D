@@ -1,0 +1,89 @@
+diff --git a/source/blender/blenkernel/intern/layer.cc b/source/blender/blenkernel/intern/layer.cc
+index 26401ec0..92e671c8 100644
+--- a/source/blender/blenkernel/intern/layer.cc
++++ b/source/blender/blenkernel/intern/layer.cc
+@@ -69,7 +69,8 @@ static const eBase_Flag g_base_collection_flags = (BASE_ENABLED_AND_MAYBE_VISIBL
+                                                    BASE_ENABLED_AND_VISIBLE_IN_DEFAULT_VIEWPORT |
+                                                    BASE_SELECTABLE | BASE_ENABLED_VIEWPORT |
+                                                    BASE_ENABLED_RENDER | BASE_HOLDOUT |
+-                                                   BASE_INDIRECT_ONLY);
++                                                   BASE_INDIRECT_ONLY |
++                                                   BASE_APP_DRAWN /* Narwhal 3D */);
+ 
+ /* prototype */
+ static void object_bases_iterator_next(BLI_Iterator *iter, const int flag);
+@@ -1134,6 +1135,10 @@ static void layer_collection_objects_sync(ViewLayer *view_layer,
+     if ((collection_restrict & COLLECTION_HIDE_RENDER) == 0) {
+       base->flag_from_collection |= BASE_ENABLED_RENDER;
+     }
++    /* Application-drawn object; see BASE_APP_DRAWN. */
++    if (collection_restrict & COLLECTION_APP_DRAWN) {
++      base->flag_from_collection |= BASE_APP_DRAWN;
++    }
+ 
+     /* Holdout and indirect only */
+     if (layer->flag & LAYER_COLLECTION_HOLDOUT) {
+diff --git a/source/blender/depsgraph/intern/builder/deg_builder.cc b/source/blender/depsgraph/intern/builder/deg_builder.cc
+index c46b9144..25ba66aa 100644
+--- a/source/blender/depsgraph/intern/builder/deg_builder.cc
++++ b/source/blender/depsgraph/intern/builder/deg_builder.cc
+@@ -66,6 +66,10 @@ DepsgraphBuilder::DepsgraphBuilder(Main *bmain, Depsgraph *graph, DepsgraphBuild
+ 
+ bool DepsgraphBuilder::need_pull_base_into_graph(const Base *base)
+ {
++  /* Narwhal 3D draws these objects itself, so Blender need not evaluate them. */
++  if (base->flag & BASE_APP_DRAWN) {
++    return false;
++  }
+   /* Simple check: enabled bases are always part of dependency graph. */
+   const int base_flag = (graph_->mode == DAG_EVAL_VIEWPORT) ? BASE_ENABLED_VIEWPORT :
+                                                               BASE_ENABLED_RENDER;
+diff --git a/source/blender/makesdna/DNA_collection_types.h b/source/blender/makesdna/DNA_collection_types.h
+index 3e2a9d45..1fc41ef6 100644
+--- a/source/blender/makesdna/DNA_collection_types.h
++++ b/source/blender/makesdna/DNA_collection_types.h
+@@ -70,6 +70,9 @@ enum eCollection_Flag : uint8_t {
+   COLLECTION_IS_MASTER = (1 << 5),
+   /** for object_cache_instanced. */
+   COLLECTION_HAS_OBJECT_CACHE_INSTANCED = (1 << 6),
++  /** Objects drawn by Narwhal 3D retain selectable bases but stay out of the
++   * dependency graph. See BASE_APP_DRAWN. */
++  COLLECTION_APP_DRAWN = (1 << 7),
+ };
+ ENUM_OPERATORS(eCollection_Flag)
+ 
+diff --git a/source/blender/makesdna/DNA_layer_types.h b/source/blender/makesdna/DNA_layer_types.h
+index 60d4c5ff..3f901a93 100644
+--- a/source/blender/makesdna/DNA_layer_types.h
++++ b/source/blender/makesdna/DNA_layer_types.h
+@@ -134,6 +134,9 @@ enum eBase_Flag : short {
+   BASE_HOLDOUT = (1 << 10),
+   /* Object only contributes indirectly to render */
+   BASE_INDIRECT_ONLY = (1 << 11),
++  /* COLLECTION_APP_DRAWN objects keep selection, active, and hide state without
++   * being pulled into the dependency graph. */
++  BASE_APP_DRAWN = (1 << 12),
+ };
+ ENUM_OPERATORS(eBase_Flag)
+ 
+diff --git a/source/blender/makesrna/intern/rna_collection.cc b/source/blender/makesrna/intern/rna_collection.cc
+index 41a9d5fa..e4443b77 100644
+--- a/source/blender/makesrna/intern/rna_collection.cc
++++ b/source/blender/makesrna/intern/rna_collection.cc
+@@ -974,6 +974,16 @@ void RNA_def_collections(BlenderRNA *brna)
+   RNA_def_property_ui_text(prop, "Disable Selection", "Disable selection in viewport");
+   RNA_def_property_update(prop, NC_SCENE | ND_LAYER_CONTENT, "rna_Collection_flag_update");
+ 
++  /* Narwhal 3D app-drawn collection flag; see COLLECTION_APP_DRAWN. */
++  prop = RNA_def_property(srna, "narwhal_app_drawn", PROP_BOOLEAN, PROP_NONE);
++  RNA_def_property_boolean_sdna(prop, nullptr, "flag", COLLECTION_APP_DRAWN);
++  RNA_def_property_clear_flag(prop, PROP_ANIMATABLE);
++  RNA_def_property_ui_text(prop,
++                           "App Drawn (Narwhal 3D)",
++                           "Objects are drawn by the application and kept out of the "
++                           "dependency graph; they stay selectable");
++  RNA_def_property_update(prop, NC_SCENE | ND_LAYER_CONTENT, "rna_Collection_flag_update");
++
+   prop = RNA_def_property(srna, "hide_viewport", PROP_BOOLEAN, PROP_NONE);
+   RNA_def_property_boolean_sdna(prop, nullptr, "flag", COLLECTION_HIDE_VIEWPORT);
+   RNA_def_property_boolean_funcs(prop, nullptr, "rna_Collection_hide_viewport_set");

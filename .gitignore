@@ -1,0 +1,32 @@
+# Downloaded or built runtimes and dependencies
+/tools/
+/vendor/
+/runtime/*/bin/
+
+# Private development inputs and generated evidence
+/More_Data/
+/ExamplePhotos/
+/rh80-help-en-us.exe
+/bug_reports/
+/artifacts/
+
+# Build and release output
+/dist/
+/build/
+/tmp/
+/.wt_*/
+
+# Python and local environments
+/.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# Application documents and host recovery files
+*.3dm
+*.blend
+*.blend[0-9]
+
+# Native exact-save helper binaries are not part of the initial public release
+/narwhal3d/kernel/bin/*
+!/narwhal3d/kernel/bin/.gitignore

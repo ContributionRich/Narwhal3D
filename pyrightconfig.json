@@ -1,0 +1,11 @@
+{
+  "exclude": [
+    "tools",
+    "vendor",
+    "More_Data",
+    "artifacts",
+    "bug_reports",
+    ".wt_*",
+    "**/__pycache__"
+  ]
+}

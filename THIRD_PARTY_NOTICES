@@ -1,0 +1,51 @@
+THIRD-PARTY NOTICES — Narwhal 3D
+================================
+
+Narwhal 3D project code is licensed under GPL-3.0-or-later. Each bundled third-party component remains under its own license. Exact artifact versions, URLs, and SHA-256 digests are recorded in `packaging/linux-x86_64.lock.json`.
+
+1. Blender 5.2.2
+-----------------
+Use: bundled application, viewport, input, and Python runtime.
+Source: https://projects.blender.org/blender/blender
+License: GNU General Public License. The AppImage contains a Blender 5.2.2 source build with focused Narwhal title, icon, dependency-graph, and CAD-boundary patches, distributed under GPL-compatible terms. The bundled runtime carries its complete component notices in its `license/` directory. The SHA-256-locked official binary in the source lock is for development bootstrap only and is rejected by release assembly.
+
+2. rhino3dm 8.35.0
+------------------
+Use: `.3dm` file and NURBS/Brep data access.
+Source: https://github.com/mcneel/rhino3dm
+License: MIT. See `licenses/rhino3dm-MIT.txt` and the wheel's installed `.dist-info/licenses/` directory.
+
+3. cadquery-ocp-novtk 8.0.1.0.0 and cadquery-ocp-proxy 8.0.1.0.0
+----------------------------------------------------------------------------
+Use: Python bindings and loader for Open CASCADE Technology.
+Source: https://github.com/CadQuery/OCP
+License: Apache License 2.0 for the OCP bindings. See `licenses/OCP-Apache-2.0.txt` and the installed wheel metadata.
+
+4. Open CASCADE Technology 8.0.1
+--------------------------------
+Use: exact solid modeling operations, tessellation for display/export, and STEP I/O. OCCT shared libraries are supplied by the locked cadquery-ocp-novtk wheel and are loaded dynamically.
+Source: https://github.com/Open-Cascade-SAS/OCCT/tree/V8_0_1
+License: GNU Lesser General Public License version 2.1 with the Open CASCADE exception version 1.0. See:
+
+- `licenses/LGPL-2.1-or-later.txt`
+- `licenses/OCCT-exception-1.0.txt`
+
+Prominent notice: Narwhal 3D makes use of facilities provided by Open CASCADE Technology software.
+
+5. AppImage packaging tools
+----------------------------
+Use: appimagetool 1.9.1 assembles the release, and the pinned Type-2 runtime tag 20251108 starts the mounted AppImage.
+Sources: https://github.com/AppImage/appimagetool and https://github.com/AppImage/type2-runtime
+License: MIT for the Type-2 runtime, with its statically linked component notices. See `licenses/AppImage-MIT.txt`. appimagetool is a build-time input and is not embedded as the application runtime.
+
+6. Components not included in the initial public bundle
+--------------------------------------------------------
+
+- The optional openNURBS exact-Brep writer helper is not bundled while its redistribution requirements are under review. Narwhal reports the resulting exact `.3dm` limitation and directs users to STEP for exact solid interchange.
+- Native CorelDRAW import/export code and owner-derived CDR fixtures are excluded.
+- Inkscape, Poppler, Ghostscript, and LibreOffice are not included in the initial converter pack. Features requiring them must report the missing optional dependency; they must not claim those tools are bundled.
+
+Trademarks
+----------
+
+Narwhal 3D is an independent project. Blender, Rhinoceros, CorelDRAW, Adobe Illustrator, AutoCAD, Open CASCADE, and other names belong to their respective owners and are used only to identify third-party software or file formats.

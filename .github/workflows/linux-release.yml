@@ -1,0 +1,60 @@
+name: Linux packaging scaffold validation
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate-scaffold:
+    name: Validate native-runtime packaging scaffold
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out public source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+          submodules: false
+
+      - name: Select scaffold Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+
+      - name: Validate public packaging scaffold without downloads
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m json.tool packaging/linux-x86_64.lock.json >/dev/null
+          test -f licenses/AppImage-MIT.txt
+          python3 -m py_compile \
+            scripts/fetch_locked.py \
+            scripts/assemble_linux_release.py \
+            scripts/verify_linux_release.py
+          bash -n scripts/bootstrap_dev_linux.sh scripts/build_blender_linux.sh
+          python3 scripts/fetch_locked.py --help >/dev/null
+          python3 scripts/assemble_linux_release.py --help >/dev/null
+          python3 scripts/verify_linux_release.py --help >/dev/null
+          scripts/bootstrap_dev_linux.sh --help >/dev/null
+          scripts/build_blender_linux.sh --help >/dev/null
+          python3 scripts/fetch_locked.py --self-check
+          python3 scripts/assemble_linux_release.py --self-check
+          python3 scripts/verify_linux_release.py --self-check
+          scripts/bootstrap_dev_linux.sh --self-check
+          scripts/build_blender_linux.sh --self-check
+
+      - name: Record publishing deferral
+        shell: bash
+        run: |
+          cat >> "$GITHUB_STEP_SUMMARY" <<'EOF'
+          ## AppImage publishing intentionally deferred
+
+          Publishable AppImages require the natively patched Narwhal runtime built from
+          Blender commit `d13f752e3b9c4f8c261cda552b1021f8bcc0382c`. The Blender source,
+          precompiled dependency archives, and complete native toolchain are not yet locked.
+          The scaffold separately pins appimagetool and its type2 runtime and requires the
+          AppImage MIT notice, but this workflow uploads no release artifact.
+          EOF
