@@ -154,7 +154,11 @@ def _inspect(layout_was_ready):
     hovered = (ui.sidebar_action_at(*first_center) if first_sidebar is not None else None)
     hover_lines = (toolbars.sidebar_tooltip_lines(hovered[1], hovered[2])
                    if hovered is not None else ())
-    check("hovering a left icon identifies its action", bool(hover_lines),
+    hover_card = ui.sidebar_tooltip_layout()
+    hover_ok = (hovered is not None and hover_lines == (hovered[1].text,)
+                and hover_card is not None and hover_card["lines"] == hover_lines
+                and hover_card["box"][0] > first_sidebar[3])
+    check("hovering a left icon shows its command name beside the icon", hover_ok,
           hover_lines[0] if hover_lines else "no tooltip")
     linked_button = next((button for button in sidebar_buttons
                           if button.link), None)
@@ -171,12 +175,29 @@ def _inspect(layout_was_ready):
                          (first[2] + first[4]) * 0.5)
         ui.sidebar_flyout_hover_update(*flyout_center)
         flyout_hit = ui.sidebar_flyout_action_at(*flyout_center)
+    flyout_reflowed = False
+    if flyout is not None:
+        original_cells = list(ui._sidebar_cells)
+        ui._sidebar_cells = [(i, x0 + 80.0, y0, x1 + 80.0, y1)
+                             for i, x0, y0, x1, y1 in original_cells]
+        try:
+            moved = ui.sidebar_flyout_reflow()
+            resized = ui.sidebar_flyout_layout()
+            window = bpy.context.window
+            flyout_reflowed = (moved and resized is not None
+                               and resized["panel"][0] > flyout["panel"][0]
+                               and resized["panel"][2] <= window.width
+                               and resized["panel"][3] <= window.height)
+        finally:
+            ui._sidebar_cells = original_cells
+            ui.sidebar_flyout_reflow()
     flyout_ok = (opened == getattr(linked_button, "link", None)
                  and flyout is not None and len(flyout["buttons"]) > 1
                  and len({cell[1] for cell in flyout["cells"][:5]}) == 5
                  and flyout_hit is flyout["buttons"][0]
                  and abs((flyout["cells"][0][3] - flyout["cells"][0][1])
-                         - toolbars.FLYOUT_CELL) < 0.01)
+                         - toolbars.FLYOUT_CELL) < 0.01
+                 and flyout_reflowed)
     flyout_detail = "closed"
     if flyout:
         width = flyout["panel"][2] - flyout["panel"][0]

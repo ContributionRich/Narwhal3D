@@ -5777,6 +5777,7 @@ def _draw_left_sidebar(shader, region):
                        region.x + x1, region.y + y1)
                       for i, x0, y0, x1, y1 in cells]
     _sidebar_buttons = buttons
+    sidebar_flyout_reflow()
     if _sidebar_hover_pos is not None:
         action = tbar.sidebar_action_at(_sidebar_hover_pos[0], _sidebar_hover_pos[1],
                                         _sidebar_cells, _sidebar_buttons)
@@ -5840,7 +5841,6 @@ def _draw_left_sidebar(shader, region):
                        (x1 - pad, y0 + pad + mark),
                        (x1 - pad - mark, y0 + pad)),
                       SIDEBAR_MARK_COLOR)
-    _draw_sidebar_tooltip(shader, region, buttons, columns)
     return tbar.sidebar_height(len(buttons), columns=columns)
 
 
@@ -5862,41 +5862,67 @@ def _sidebar_wrap_line(text, width, font_size):
     return lines
 
 
-def _draw_sidebar_tooltip(shader, region, buttons, columns):
-    """Draw the hovered left-palette action in the blank band below its grid."""
-    if _sidebar_hover_index is None or not (0 <= _sidebar_hover_index < len(buttons)):
+def sidebar_tooltip_layout():
+    """The one-line sidebar hover card in window coordinates, or ``None``."""
+    if (_sidebar_hover_index is None
+            or not (0 <= _sidebar_hover_index < len(_sidebar_buttons))):
+        return None
+    source = next((cell for cell in _sidebar_cells
+                   if cell[0] == _sidebar_hover_index), None)
+    lines = tbar.sidebar_tooltip_lines(
+        _sidebar_buttons[_sidebar_hover_index], _sidebar_hover_part or "command")
+    window = getattr(bpy.context, "window", None)
+    if source is None or not lines or window is None:
+        return None
+    # Always place the card just outside the responsive grid, while retaining the
+    # hovered row's vertical center. A first-column icon therefore gets the same nearby
+    # tooltip as a last-column icon instead of drawing a card inside the dock clipping area.
+    grid_right = max(cell[3] for cell in _sidebar_cells)
+    anchor = (source[0], source[1], source[2], grid_right, source[4])
+    text = lines[0]
+    box = tbar.sidebar_tooltip_layout(
+        anchor, _text_width(text, tbar.SIDEBAR_TOOLTIP_FONT),
+        window.width, window.height)
+    return {"box": box, "lines": lines} if box is not None else None
+
+
+def draw_sidebar_tooltip_overlay():
+    """Draw the compact sidebar command name over the adjacent viewport."""
+    context = bpy.context
+    area = getattr(context, "area", None)
+    region = getattr(context, "region", None)
+    layout = sidebar_tooltip_layout()
+    if layout is None or area is None or region is None or area.type != "VIEW_3D":
         return
-    button = buttons[_sidebar_hover_index]
-    paragraphs = tbar.sidebar_tooltip_lines(button, _sidebar_hover_part or "command")
-    if not paragraphs:
+    box = layout["box"]
+    region_box = (region.x, region.y, region.x + region.width, region.y + region.height)
+    if (box[2] <= region_box[0] or box[0] >= region_box[2]
+            or box[3] <= region_box[1] or box[1] >= region_box[3]):
         return
-    pad = tbar.SIDEBAR_TOOLTIP_PAD
-    gap = tbar.SIDEBAR_TOOLTIP_GAP
-    line_h = tbar.SIDEBAR_TOOLTIP_LINE
-    font = tbar.SIDEBAR_TOOLTIP_FONT
-    x0, x1 = gap, max(gap, float(region.width) - gap)
-    text_width = max(0.0, x1 - x0 - pad * 2.0)
-    lines = []
-    for paragraph in paragraphs:
-        lines.extend(_sidebar_wrap_line(paragraph, text_width, font))
-    lines = lines[:6]
-    if not lines:
+    try:
+        import gpu
+    except Exception:  # noqa: BLE001
         return
-    top = float(region.height) - tbar.sidebar_height(len(buttons), columns=columns) - gap
-    height = pad * 2.0 + line_h * len(lines)
-    bottom = top - height
-    osnap_top = views.osnap_panel_height(len(_osnap_panel_row_state())) + gap
-    if bottom < osnap_top:
+    shader = _uniform_color_shader()
+    if shader is None:
         return
-    shader.bind()
-    _draw_rect(shader, x0, bottom, x1, top, SIDEBAR_TOOLTIP_BG)
-    _draw_rect(shader, x0, bottom, x1, bottom + 1, SIDEBAR_TOOLTIP_BORDER)
-    _draw_rect(shader, x0, top - 1, x1, top, SIDEBAR_TOOLTIP_BORDER)
-    _draw_rect(shader, x0, bottom, x0 + 1, top, SIDEBAR_TOOLTIP_BORDER)
-    _draw_rect(shader, x1 - 1, bottom, x1, top, SIDEBAR_TOOLTIP_BORDER)
-    text_y = top - pad - font
-    for index, line in enumerate(lines):
-        _draw_text(x0 + pad, text_y - index * line_h, line, font, SIDEBAR_TOOLTIP_TEXT)
+    x0, y0, x1, y1 = (box[0] - region.x, box[1] - region.y,
+                      box[2] - region.x, box[3] - region.y)
+    prev = gpu.state.blend_get()
+    gpu.state.blend_set("ALPHA")
+    try:
+        shader.bind()
+        _draw_rect(shader, x0, y0, x1, y1, SIDEBAR_TOOLTIP_BG)
+        _draw_rect(shader, x0, y0, x1, y0 + 1, SIDEBAR_TOOLTIP_BORDER)
+        _draw_rect(shader, x0, y1 - 1, x1, y1, SIDEBAR_TOOLTIP_BORDER)
+        _draw_rect(shader, x0, y0, x0 + 1, y1, SIDEBAR_TOOLTIP_BORDER)
+        _draw_rect(shader, x1 - 1, y0, x1, y1, SIDEBAR_TOOLTIP_BORDER)
+        _draw_text(x0 + tbar.SIDEBAR_TOOLTIP_PAD,
+                   y1 - tbar.SIDEBAR_TOOLTIP_PAD - tbar.SIDEBAR_TOOLTIP_FONT,
+                   layout["lines"][0], tbar.SIDEBAR_TOOLTIP_FONT,
+                   SIDEBAR_TOOLTIP_TEXT)
+    finally:
+        gpu.state.blend_set(prev)
 
 
 def sidebar_hover_update(mouse_x, mouse_y):
@@ -5982,6 +6008,29 @@ def sidebar_click(btn, right=False):
     return None
 
 
+def sidebar_flyout_reflow():
+    """Re-anchor an open flyout to the current responsive sidebar cell."""
+    state = _sidebar_flyout_state
+    window = getattr(bpy.context, "window", None)
+    if state is None or window is None:
+        return False
+    index = tbar.sidebar_button_index(
+        _sidebar_buttons, state.get("button"), state.get("source_index"))
+    source = next((cell for cell in _sidebar_cells if cell[0] == index), None)
+    button = (_sidebar_buttons[index]
+              if index is not None and 0 <= index < len(_sidebar_buttons) else None)
+    rows = tbar.sidebar_flyout_rows(button, set(COMMANDS))
+    if source is None or not getattr(button, "link", None) or not rows:
+        return False
+    layout = tbar.flyout_popup_layout(
+        source[3], source[4], rows, window.width, window.height)
+    changed = layout["panel"] != state["layout"]["panel"]
+    state.update(button=button, source_index=index, layout=layout)
+    if changed:
+        state["hover"] = None
+    return changed
+
+
 def show_sidebar_flyout(button, source_index=None):
     """Open ``button``'s linked tools as a floating five-column icon palette."""
     global _sidebar_flyout_button, _sidebar_flyout_state
@@ -6002,7 +6051,8 @@ def show_sidebar_flyout(button, source_index=None):
     _sidebar_flyout_button = live_button
     layout = tbar.flyout_popup_layout(source[3], source[4], rows,
                                       window.width, window.height)
-    _sidebar_flyout_state = {"button": live_button, "layout": layout, "hover": None}
+    _sidebar_flyout_state = {"button": live_button, "source_index": index,
+                             "layout": layout, "hover": None}
     sidebar_press_clear()
     _tag_redraw_bands()
     _tag_redraw_viewports()
@@ -19707,8 +19757,13 @@ def _attach_view_labels():
     comp_id = bpy.types.SpaceView3D.draw_handler_add(
         draw_completion_overlay, (), "WINDOW", "POST_PIXEL")
     _view_label_handlers.append((bpy.types.SpaceView3D, comp_id))
+    # Sidebar icon names are compact cards beside the dock, drawn in viewport space so
+    # the left INFO region cannot clip them.
+    tooltip_id = bpy.types.SpaceView3D.draw_handler_add(
+        draw_sidebar_tooltip_overlay, (), "WINDOW", "POST_PIXEL")
+    _view_label_handlers.append((bpy.types.SpaceView3D, tooltip_id))
     # The cascade popup must be last so its floating toolbar and hover card stay
-    # above viewport labels and command completion chrome.
+    # above viewport labels, command completion chrome, and the anchor tooltip.
     flyout_id = bpy.types.SpaceView3D.draw_handler_add(
         draw_sidebar_flyout_overlay, (), "WINDOW", "POST_PIXEL")
     _view_label_handlers.append((bpy.types.SpaceView3D, flyout_id))

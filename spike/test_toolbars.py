@@ -144,13 +144,21 @@ check(toolbars.sidebar_flyout_rows(sidebar[0], implemented) == [],
       "an unlinked left cell does not invent a flyout")
 point_button = next(button for button in linked if button.link == "Point")
 point_tip = toolbars.sidebar_tooltip_lines(point_button, "command")
-check(point_tip and point_button.tooltip in point_tip[0]
-      and any(line.startswith("Right-click:") for line in point_tip)
-      and point_tip[-1] == "Arrow: Point tools",
-      "hover text names the primary, alternate, and linked toolbar actions")
+check(point_tip == (point_button.text,),
+      "sidebar hover shows only the primary command name")
 check(toolbars.sidebar_tooltip_lines(point_button, "flyout") ==
-      ("Point tools", "Click the arrow to open"),
-      "hovering the small arrow identifies what clicking it opens")
+      (point_button.text,),
+      "the arrow corner keeps the same compact command-name tooltip")
+tip_box = toolbars.sidebar_tooltip_layout(
+    (0, 20.0, 100.0, 48.0, 128.0), 60.0, 1600.0, 900.0)
+check(tip_box is not None and tip_box[0] == 48.0 + toolbars.SIDEBAR_TOOLTIP_GAP
+      and 100.0 <= tip_box[1] < tip_box[3] <= 128.0,
+      "compact tooltip is placed beside and vertically near its icon")
+clamped_tip = toolbars.sidebar_tooltip_layout(
+    (0, 1580.0, 2.0, 1600.0, 30.0), 120.0, 1600.0, 900.0)
+check(clamped_tip is not None and clamped_tip[0] >= 0.0 and clamped_tip[1] >= 0.0
+      and clamped_tip[2] <= 1600.0 and clamped_tip[3] <= 900.0,
+      "compact tooltip remains inside the application window")
 flyout_buttons = toolbars.sidebar_flyout_rows(point_button, implemented)
 icon_groups = toolbars.flyout_icon_groups(flyout_buttons)
 flattened = [button for group in icon_groups for row in group for button in row]

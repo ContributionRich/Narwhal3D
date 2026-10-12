@@ -248,22 +248,38 @@ def sidebar_button_index(buttons, target, preferred=None):
 
 
 def sidebar_tooltip_lines(button, part="command"):
-    """Return concise tooltip paragraphs for a left-palette cell or its arrow."""
+    """Return only the hovered icon's command name.
+
+    Alternate-click and linked-toolbar details belong to menus, not the transient hover
+    card. Keeping this to one short line lets the card sit beside the icon instead of
+    occupying the dock's blank area. ``part`` remains accepted for caller compatibility.
+    """
     if button is None:
         return ()
-    if part == "flyout" and button.link:
-        return (f"{button.link} tools", "Click the arrow to open")
-    lines = []
-    primary = button.tooltip or button.text or button.left
-    if primary:
-        lines.append(primary if button.enabled else f"{primary} — not implemented")
-    if button.right:
-        alternate = button.right_tooltip or button.right
-        suffix = "" if button.right_enabled else " — not implemented"
-        lines.append(f"Right-click: {alternate}{suffix}")
-    if button.link:
-        lines.append(f"Arrow: {button.link} tools")
-    return tuple(lines)
+    name = button.text or button.left or button.tooltip
+    return (str(name),) if name else ()
+
+
+def sidebar_tooltip_layout(cell, text_width, window_width, window_height,
+                           gap=None, pad=None, line_height=None):
+    """A compact tooltip box beside ``cell``, clamped to the application window."""
+    if cell is None:
+        return None
+    gap = SIDEBAR_TOOLTIP_GAP if gap is None else max(0.0, float(gap))
+    pad = SIDEBAR_TOOLTIP_PAD if pad is None else max(0.0, float(pad))
+    line_height = (SIDEBAR_TOOLTIP_LINE if line_height is None
+                   else max(1.0, float(line_height)))
+    width = max(1.0, float(text_width)) + pad * 2.0
+    height = line_height + pad * 2.0
+    ww, wh = max(0.0, float(window_width)), max(0.0, float(window_height))
+    width, height = min(width, ww), min(height, wh)
+    _index, cx0, cy0, cx1, cy1 = cell
+    x0 = float(cx1) + gap
+    if x0 + width > ww:
+        x0 = max(0.0, float(cx0) - gap - width)
+    center_y = (float(cy0) + float(cy1)) * 0.5
+    y0 = min(max(0.0, center_y - height * 0.5), max(0.0, wh - height))
+    return (x0, y0, x0 + width, y0 + height)
 
 
 def flyout_icon_groups(buttons, columns=FLYOUT_COLUMNS):
