@@ -1,0 +1,46 @@
+name: Bug report
+description: Report incorrect behavior in Narwhal 3D
+title: "[Bug] "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for helping improve Narwhal 3D. Review the report before submitting and remove private file names, paths, or model data. The in-app Report panel copies sanitized Markdown here; screenshots and documents are never uploaded automatically.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What happened?
+      description: Describe the behavior and the command or UI workflow that produced it.
+      placeholder: Paste the report copied by Narwhal, or describe the problem here.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Reproduction steps
+      placeholder: |
+        1. Start command...
+        2. Select...
+        3. Observe...
+    validations:
+      required: true
+  - type: textarea
+    id: attachments
+    attributes:
+      label: Optional attachments
+      description: Drag in a screenshot, session-log excerpt, or minimal model only after reviewing it for private information.
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: Privacy confirmation
+      options:
+        - label: I reviewed this issue and its attachments for private or sensitive information.
+          required: true

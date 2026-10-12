@@ -102,6 +102,16 @@ Fast public model tests can be run with the bundled interpreter after bootstrap.
 
 The public branch intentionally excludes non-public development corpora, resource-mining tools, internal reports, and tests that require them.
 
+## Report a bug
+
+Open the **Bug Report** tab in the right dock, choose a category, and describe what happened. Press **Report** or `Ctrl+Enter`. Narwhal then:
+
+1. saves a local Markdown report and any opted-in attachments;
+2. copies a sanitized report to the clipboard;
+3. opens a prefilled [GitHub issue](https://github.com/ContributionRich/Narwhal3D/issues/new) for review.
+
+Narwhal never uploads a screenshot, log, or model automatically. Review the browser form and attach only files that are safe to share. If the browser cannot open, the local report remains saved and the clipboard contains the text to paste manually.
+
 ## Supported interchange
 
 Core, self-contained release functionality includes `.3dm`, STEP, DXF, SVG, OBJ, and STL paths. PDF and Adobe Illustrator conversion can use an optional converter pack; that pack is not part of the initial release and Narwhal does not claim it is bundled. Native CorelDRAW import/export is intentionally excluded from the public branch.

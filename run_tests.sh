@@ -45,6 +45,7 @@ PURE_SUITES=(
     spike/test_rightpanel.py
     spike/test_aliases.py
     spike/test_sessionlog.py
+    spike/test_bugreport.py
     spike/test_open_arg.py
     spike/test_printdialog.py
     spike/test_dxf_reader.py

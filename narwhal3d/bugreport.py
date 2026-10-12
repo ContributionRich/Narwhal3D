@@ -20,6 +20,8 @@ CATEGORIES = (("bug", "Bug"), ("behavior", "Behavior"), ("idea", "Idea"),
               ("missing", "Missing feature"))
 REPORT_FILE = "BUG_REPORTS.md"
 MAX_CHARS = 8000                       # keep individual reports bounded
+GITHUB_NEW_ISSUE = "https://github.com/ContributionRich/Narwhal3D/issues/new"
+GITHUB_PREFILL_LIMIT = 3500
 
 
 @dataclass
@@ -422,3 +424,53 @@ def count_open(folder):
         return 0
     with open(path, encoding="utf-8") as fh:
         return len(re.findall(r"^\*\*Status:\*\* open\s*$", fh.read(), re.M))
+
+
+def github_title(category, text):
+    """Build a bounded issue title from the selected category and first report line."""
+    label = dict(CATEGORIES).get(category, "Report")
+    first = next((line.strip() for line in (text or "").splitlines() if line.strip()), "Report")
+    prefix = f"[{label}] "
+    return prefix + first[:max(1, 100 - len(prefix))]
+
+
+def github_body(entry, home=None):
+    """Return a privacy-reviewed Markdown body for a user-controlled GitHub submission.
+
+    No attachment is uploaded. Local home paths are shortened, and local screenshot or
+    document references become instructions to attach those files manually after review.
+    """
+    body = str(entry or "")
+    home = os.path.abspath(os.path.expanduser(home or "~"))
+    if home and home != os.path.sep:
+        body = body.replace(home, "~")
+    lines = []
+    for line in body.splitlines():
+        if line.startswith("- Screenshot: `"):
+            lines.append("- Screenshot: saved locally; attach it manually if it is safe to share")
+        elif line.startswith("- Document file: `"):
+            lines.append("- Document file: saved locally; attach it only after reviewing its contents")
+        else:
+            lines.append(line)
+    notice = (
+        "<!-- Review this report and remove private information before submitting. "
+        "Narwhal did not upload any screenshot, log, or document automatically. -->"
+    )
+    return notice + "\n\n" + "\n".join(lines).strip() + "\n"
+
+
+def github_issue_url(category, text, body, limit=GITHUB_PREFILL_LIMIT):
+    """Return a prefilled GitHub issue URL; the complete body is copied separately."""
+    from urllib.parse import urlencode
+
+    body = str(body or "")
+    limit = max(200, int(limit))
+    if len(body) > limit:
+        body = (body[:limit].rstrip()
+                + "\n\n---\nThe full sanitized report is in your clipboard. Paste it here before submitting.\n")
+    query = urlencode({
+        "title": github_title(category, text),
+        "body": body,
+        "labels": "bug",
+    })
+    return f"{GITHUB_NEW_ISSUE}?{query}"

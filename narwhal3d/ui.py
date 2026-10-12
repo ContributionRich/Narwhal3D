@@ -5137,7 +5137,7 @@ def _draw_bug_panel(shader, region, box):
         if not st.text and not st.focus:
             hint = bugreport.wrap("Click here and type what went wrong, what you "
                                   "expected, and how to make it happen. Ctrl+Enter "
-                                  "or Submit saves it for the agents.",
+                                  "or Report saves it, copies it, and opens GitHub.",
                                   view["width"], measure)
             for i, ln in enumerate(hint[:rows]):
                 _draw_text(view["x0"], base - i * lh, ln, fs, (0.55, 0.55, 0.55, 1))
@@ -5183,7 +5183,7 @@ def _draw_bug_panel(shader, region, box):
         for bid, r in lay["buttons"]:
             shader.bind()
             _draw_rect(shader, *r, blue if bid == "submit" else (0.86, 0.86, 0.88, 1))
-            label = {"submit": "Submit", "clear": "Clear"}[bid]
+            label = {"submit": "Report", "clear": "Clear"}[bid]
             _draw_text(r[0] + (r[2] - r[0] - _text_width(label, fs)) / 2,
                        r[1] + 7 * sc, label, fs,
                        (1, 1, 1, 1) if bid == "submit" else ink)
@@ -5277,7 +5277,7 @@ def _bug_save_document(folder, num):
 
 
 def submit_bug_report():
-    """Write the typed report (+ context + a window screenshot). Returns a message."""
+    """Save locally, copy sanitized Markdown, and open a user-reviewed GitHub issue."""
     st = _bug["state"]
     if not st.text.strip():
         st.message = "Type the problem first -- nothing was saved"
@@ -5297,16 +5297,37 @@ def submit_bug_report():
     if st.include_file:                  # optional
         doc_rel, doc_error = _bug_save_document(folder, num)
     ctx, when = _bug_context()
-    path = bugreport.write_report(folder, bugreport.format_report(
+    entry = bugreport.format_report(
         num, when, st.category, st.text, ctx, shot_rel, log_lines=log_lines,
-        doc_rel=doc_rel, doc_error=doc_error))
+        doc_rel=doc_rel, doc_error=doc_error)
+    path = bugreport.write_report(folder, entry)
+    public_body = bugreport.github_body(entry)
+    issue_url = bugreport.github_issue_url(st.category, st.text, public_body)
+    copied = opened = False
+    try:
+        bpy.context.window_manager.clipboard = public_body
+        copied = True
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        import webbrowser
+
+        opened = bool(webbrowser.open(issue_url, new=2))
+    except Exception:  # noqa: BLE001
+        opened = False
+    st.extra["last_report_path"] = path
+    st.extra["last_issue_url"] = issue_url
     st.text, st.focus = "", False
-    st.message = f"Saved as report #{num} -- the agents will read it"
+    if opened and copied:
+        st.message = "Saved locally; GitHub opened. Review the copied report before submitting."
+    elif copied:
+        st.message = "Saved locally and copied. Open the Narwhal GitHub Issues page to submit."
+    else:
+        st.message = f"Saved locally at {path}; GitHub could not be opened automatically."
     if doc_error:
-        st.message += f" (WITHOUT the file: {doc_error})"
-    app_state.log(f"Bug report #{num} saved to {path}"
-                  + (f" with the document copy {doc_rel}" if doc_rel else "")
-                  + (f" -- the document copy failed: {doc_error}" if doc_error else ""))
+        st.message += f" Document copy failed: {doc_error}"
+    app_state.log(f"Report #{num} saved locally to {path}; no attachment was uploaded"
+                  + ("; GitHub issue page opened" if opened else ""))
     redraw_cmdbar()
     return st.message
 

@@ -53,6 +53,7 @@ TEST_FILES = (
     "spike/test_menubar.py", "spike/test_menubar_resource.py",
     "spike/test_rightpanel.py", "spike/test_aliases.py",
     "spike/test_file_commands.py", "spike/test_sessionlog.py",
+    "spike/test_bugreport.py",
     "spike/test_import.py", "spike/test_export_cmd.py",
     "spike/test_print_cmd.py", "spike/test_printdialog.py",
     "spike/test_dxf_reader.py", "spike/test_dxf_writer.py",
