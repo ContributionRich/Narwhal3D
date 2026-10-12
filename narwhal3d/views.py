@@ -213,9 +213,11 @@ def hit_title(x, y, rect):
 # ---------------------------------------------------------------------------
 
 #: Arrow box width, and the triangle's half-width and height, in pixels. OURS.
-TITLE_ARROW_W = 13.0
-TITLE_ARROW_HALF = 3.5
-TITLE_ARROW_H = 3.5
+TITLE_ARROW_W = 15.0
+TITLE_ARROW_HALF = 4.0
+TITLE_ARROW_H = 4.0
+TITLE_ARROW_FILL = (216, 217, 221)
+TITLE_ARROW_BORDER = (160, 162, 166)
 
 
 def title_arrow_rect(rect, width=None):
@@ -231,6 +233,14 @@ def title_arrow_rect(rect, width=None):
         return None
     x0, y0, x1, y1 = rect
     return (x1, y0, x1 + width, y1)
+
+
+def title_menu_rect(rect):
+    """Visual union of the title chip and its adjacent arrow button."""
+    arrow = title_arrow_rect(rect)
+    if rect is None or arrow is None:
+        return None
+    return (rect[0], rect[1], arrow[2], rect[3])
 
 
 def title_arrow_triangle(rect, half=None, height=None):

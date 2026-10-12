@@ -70,10 +70,10 @@ EXPECTED_RUNNABLE_COUNTS = {
     "Window": 0,
     "Help": 1,
 }
-EXPECTED_TODO_PAYLOADS = frozenset({
-    "namedview", "matchcrv", "networksrf", "subd", "solidrepair", "mesh",
-    "repairmesh", "annotation", "layout", "align", "curvaturegraph", "material",
-    "render", "options", "viewportlayout", "workspace",
+EXPECTED_SERVICE_TODOS = frozenset({
+    "recoverysettings", "newfromtemplate", "saveacopy", "documentnotes",
+    "gettingstarted", "inputreference", "onlinedocumentation", "showbugreport",
+    "aboutnarwhal3d",
 })
 SIBLING_PINS = {
     "import", "filletedge", "saveas", "print", "export", "setdisplaymode",
@@ -126,8 +126,10 @@ actions = [(menu, path, row[1], row[3])
 popups = [(menu, path, row) for menu, path, row in all_rows if row[0] == "popup"]
 runnable = [action for action in actions if action[3] in REGISTERED]
 todos = [action for action in actions if action[2].endswith(resource.TODO_SUFFIX)]
+specials = [action for action in actions if action[3] in resource.SPECIAL_COMMANDS]
 ambiguous = [action for action in actions
-             if (action[3] in REGISTERED) == action[2].endswith(resource.TODO_SUFFIX)]
+             if action[3] not in resource.SPECIAL_COMMANDS
+             and (action[3] in REGISTERED) == action[2].endswith(resource.TODO_SUFFIX)]
 
 print("\n-- exact runnable/TODO partition --")
 counts = collections.Counter(command for _menu, _path, _label, command in runnable)
@@ -137,13 +139,23 @@ check(set(counts) == REGISTERED and all(count == 1 for count in counts.values())
             "duplicates": sorted(key for key, value in counts.items() if value != 1)}))
 check(not ambiguous,
       "every leaf is exactly one of runnable or explicit TODO", repr(ambiguous[:5]))
-check(len(runnable) + len(todos) == len(actions),
-      "runnable and TODO leaves partition the complete action set")
-check({command for _menu, _path, _label, command in todos} == EXPECTED_TODO_PAYLOADS,
-      "the compact TODO family set is pinned",
-      repr(sorted({action[3] for action in todos})))
+check(len(runnable) + len(todos) + len(specials) == len(actions)
+      and len(specials) == 1 and specials[0][3] == "__recent_files__",
+      "runnable, TODO, and implemented special leaves partition the action set")
+todo_payloads = {command for _menu, _path, _label, command in todos}
+toolbar_commands = {
+    record.get("command")
+    for tab in resource.toolbar_data.TABS for record in tab["buttons"]
+    if record.get("command")
+}
+check(len(todos) == 362 and EXPECTED_SERVICE_TODOS <= todo_payloads
+      and toolbar_commands - REGISTERED <= todo_payloads,
+      "all public toolbar-only commands and service gaps are explicit menu leaves",
+      repr({"todos": len(todos),
+            "missing_toolbar": sorted((toolbar_commands - REGISTERED) - todo_payloads),
+            "missing_services": sorted(EXPECTED_SERVICE_TODOS - todo_payloads)}))
 check(all(command and command == command.casefold()
-          and re.fullmatch(r"[a-z][a-z0-9]*", command)
+          and re.fullmatch(r"[a-z0-9_]+", command)
           and command not in REGISTERED
           for _menu, _path, _label, command in todos),
       "every TODO has a canonical non-empty unregistered command key")
@@ -191,7 +203,7 @@ for name in menu_data.MENU_BAR:
 check(legacy_actions == [command for _menu, _path, _label, command in actions],
       "the dictionary tree preserves every action and authored order")
 check(menubar.coverage(REGISTERED) == (len(runnable), len(actions)),
-      "registry coverage counts runnable leaves without treating TODOs as live")
+      "registry coverage counts runnable leaves without treating TODOs or specials as live")
 check(menubar.coverage(set()) == (0, len(actions)),
       "an empty registry disables every action")
 

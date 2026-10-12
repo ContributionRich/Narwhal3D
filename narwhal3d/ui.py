@@ -2340,24 +2340,27 @@ def draw_viewport_label(context=None):
         # which cut the top off every pane label.
         baseline_y = h - LABEL_PAD - text_h
 
+        rect = views.title_rect(text_w, text_h, h, label_pad=LABEL_PAD)
+        arrow_box = views.title_arrow_rect(rect)
         if fill_rgba is not None:
-            # the reference CAD application's active title is a filled chip sized to its text (measured
-            # 156x32 px around Perspective in a 3582-wide screenshot), so size it
-            # from the real extent -- a short name gets a short chip rather than a
-            # fixed-width block.
-            #
-            # The rectangle comes from `views.title_rect`, which is ALSO what
-            # `pane_title_at` hit-tests. One function, so the chip you see and the
-            # chip you can click are the same pixels by construction.
-            x0, y0, x1, y1 = views.title_rect(text_w, text_h, h,
-                                              label_pad=LABEL_PAD)
-            _draw_rect(shader, x0, y0, x1, y1, fill_rgba)
+            # Keep the arrow visually attached to the active title instead of leaving
+            # a tiny triangle floating on the viewport background.
+            _draw_rect(shader, *views.title_menu_rect(rect), fill_rgba)
+        elif arrow_box is not None:
+            # Inactive titles have no chip fill, so their menu affordance needs its own
+            # quiet button plate to remain visible.
+            _draw_rect(shader, *arrow_box, views.gpu_rgba(views.TITLE_ARROW_FILL))
+        if arrow_box is not None:
+            border = views.gpu_rgba(views.TITLE_ARROW_BORDER)
+            _draw_rect(shader, arrow_box[0], arrow_box[1], arrow_box[0] + 1,
+                       arrow_box[3], border)
+            _draw_rect(shader, arrow_box[0], arrow_box[1], arrow_box[2],
+                       arrow_box[1] + 1, border)
         _draw_text(LABEL_PAD, baseline_y, label, LABEL_FONT_SIZE, text_rgba)
         # Draw the drop-down arrow for every pane, active or not:
         # it advertises the viewport title menu, which every pane has. Same
         # `views.title_rect` that the chip and the hit-test share, so the arrow, the
         # chip and the clickable box cannot drift apart.
-        rect = views.title_rect(text_w, text_h, h, label_pad=LABEL_PAD)
         tri = views.title_arrow_triangle(rect)
         if tri is not None:
             _draw_tri(shader, tri, text_rgba)
@@ -8471,8 +8474,8 @@ def _draw_menu_items(layout, path):
             layout.menu(_ensure_menu(tuple(path)
                                      + (menubar.plain_label(label),)), text=text)
             continue
-        if command is None and menubar.plain_label(label) == "Recent File":
-            # the reference CAD application's MRU list (the existing RecentFiles)
+        if (command == "__recent_files__"
+                or (command is None and menubar.plain_label(label) == "Recent File")):
             layout.menu("NARWHAL_MT_recent_files", text=text)
             continue
         if command is None and menubar.plain_label(label) == "Exit":
@@ -9638,8 +9641,8 @@ def _stop_cursor_tracker():
 class NARWHAL_OT_menu_todo(Operator):
     """A visible menu action for a feature Narwhal has not built.
 
-    Keeping compact roadmap families in the authored menus makes the UI complete and
-    honest: the label says the feature is unavailable, and clicking it explains rather
+    Keeping individually named unavailable actions in the authored menus makes the UI
+    complete and honest: the label says the feature is unavailable, and clicking it explains rather
     than silently doing nothing or dispatching a different command.
     """
     bl_idname = "narwhal.menu_todo"

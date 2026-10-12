@@ -10,6 +10,7 @@ ARTIFACTS = os.path.join(ROOT, "artifacts")
 IMAGE_PATH = os.path.join(ARTIFACTS, "ui.png")
 SIDEBAR_HOVER_IMAGE = os.path.join(ARTIFACTS, "ui_sidebar_hover.png")
 SIDEBAR_FLYOUT_IMAGE = os.path.join(ARTIFACTS, "ui_sidebar_flyout.png")
+VIEWPORT_ARROW_IMAGE = os.path.join(ARTIFACTS, "ui_viewport_arrow.png")
 REPORT_PATH = os.path.join(ARTIFACTS, "ui_report.txt")
 POLL_SECONDS = 0.25
 MAX_POLLS = 120
@@ -149,7 +150,16 @@ def _inspect(layout_was_ready):
           f"{len(menu_names)}: {', '.join(menu_names)}")
     menu_enabled, menu_total = menubar.coverage(set(ui.COMMANDS))
     check("menu actions are runnable or explicitly marked TODO",
-          (menu_enabled, menu_total) == (169, 185), f"{menu_enabled}/{menu_total}")
+          (menu_enabled, menu_total) == (169, 532), f"{menu_enabled}/{menu_total}")
+    file_groups = {row[1] for row in menubar.resource_rows("File")
+                   if row[0] == "popup"}
+    help_groups = {row[1] for row in menubar.resource_rows("Help")
+                   if row[0] == "popup"}
+    check("File and Help expose the expanded desktop command groups",
+          {"Document", "Save and Exchange", "Recent and Recovery",
+           "Templates and Document", "Document Commands"} <= file_groups
+          and {"Learning and Reference", "Support"} <= help_groups,
+          f"File={len(file_groups)}, Help={len(help_groups)}")
 
     toolbar_names = toolbars.tab_names()
     check("toolbar installed with exact authored categories",
@@ -347,6 +357,32 @@ def _inspect(layout_was_ready):
     check("viewport title menu exposes all implemented display modes",
           mode_slot and implemented_modes == ("Wireframe", "Shaded", "Rendered"),
           ", ".join(implemented_modes))
+
+    active_view = ui.active_pane_area()
+    active_region = _window_region(active_view) if active_view is not None else None
+    arrow_box = None
+    arrow_hit = None
+    arrow_dark = arrow_colors = 0
+    if active_view is not None and active_region is not None:
+        title_box = ui._title_hit_rect(active_view, active_region)
+        local_arrow = ui.views.title_arrow_rect(title_box)
+        if local_arrow is not None:
+            arrow_box = (active_region.x + local_arrow[0],
+                         active_region.y + local_arrow[1],
+                         active_region.x + local_arrow[2],
+                         active_region.y + local_arrow[3])
+            center = ((arrow_box[0] + arrow_box[2]) * 0.5,
+                      (arrow_box[1] + arrow_box[3]) * 0.5)
+            arrow_hit = ui.pane_title_arrow_at(*center)
+            if _capture_path(bpy, VIEWPORT_ARROW_IMAGE):
+                arrow_pixels = _crop_pixels(bpy, VIEWPORT_ARROW_IMAGE, arrow_box)
+                arrow_dark, _unused = _luma_counts(arrow_pixels, dark=0.45)
+                arrow_colors = _distinct_colors(arrow_pixels)
+    check("viewport title arrow is visible and owns its complete button target",
+          arrow_box is not None and arrow_hit is not None
+          and ui._pane_key(arrow_hit[0]) == ui._pane_key(active_view)
+          and arrow_dark > 3 and arrow_colors >= 3,
+          f"box={arrow_box}, dark={arrow_dark}, colors={arrow_colors}")
 
     registered, operator_total = _registered_operator_state(ui, bpy)
     check("Narwhal operator namespace is registered",

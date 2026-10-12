@@ -81,26 +81,26 @@ EXPECTED_RUNNABLE_COUNTS = {
     "Help": 1,
 }
 EXPECTED_TODO_COUNTS = {
-    "File": 0,
-    "Edit": 0,
-    "View": 1,
-    "Curve": 1,
-    "Surface": 1,
-    "SubD": 1,
-    "Solid": 1,
-    "Mesh": 2,
-    "Drafting": 2,
-    "Transform": 1,
+    "File": 5,
+    "Edit": 40,
+    "View": 60,
+    "Curve": 34,
+    "Surface": 35,
+    "SubD": 34,
+    "Solid": 21,
+    "Mesh": 39,
+    "Drafting": 32,
+    "Transform": 18,
     "Analyze": 1,
-    "Render": 2,
-    "Tools": 1,
+    "Render": 33,
+    "Tools": 3,
     "Window": 2,
-    "Help": 0,
+    "Help": 5,
 }
-EXPECTED_TODOS = {
-    "namedview", "matchcrv", "networksrf", "subd", "solidrepair", "mesh",
-    "repairmesh", "annotation", "layout", "align", "curvaturegraph", "material",
-    "render", "options", "viewportlayout", "workspace",
+EXPECTED_SERVICE_TODOS = {
+    "recoverysettings", "newfromtemplate", "saveacopy", "documentnotes",
+    "gettingstarted", "inputreference", "onlinedocumentation", "showbugreport",
+    "aboutnarwhal3d",
 }
 
 
@@ -145,8 +145,8 @@ def _():
 
 @check("all 169 registered commands appear exactly once")
 def _():
-    runnable = [command for _menu, _path, label, command in leaves()
-                if not label.endswith(data.TODO_SUFFIX)]
+    runnable = [command for _menu, _path, _label, command in leaves()
+                if command in registered]
     counts = collections.Counter(runnable)
     assert set(counts) == registered, {
         "missing": sorted(registered - set(counts)),
@@ -157,22 +157,36 @@ def _():
 
 @check("runnable and TODO leaves form an explicit partition")
 def _():
+    specials = []
     for menu, path, label, command in leaves():
         marked = label.endswith(data.TODO_SUFFIX)
         live = command in registered
-        assert marked != live, (menu, path, label, command, live)
+        special = command in data.SPECIAL_COMMANDS
+        assert sum((marked, live, special)) == 1, (menu, path, label, command, live)
+        if special:
+            specials.append((menu, path, label, command))
+    assert specials == [("File", ("Recent and Recovery",),
+                         "Recent Files", "__recent_files__")], specials
 
 
 @check("TODO labels and canonical payloads are exact")
 def _():
     todos = [(menu, label, command) for menu, _path, label, command in leaves()
              if label.endswith(data.TODO_SUFFIX)]
-    assert {command for _menu, _label, command in todos} == EXPECTED_TODOS, todos
+    payloads = {command for _menu, _label, command in todos}
+    toolbar_commands = {
+        record.get("command")
+        for tab in data.toolbar_data.TABS for record in tab["buttons"]
+        if record.get("command")
+    }
+    assert len(todos) == 362, len(todos)
+    assert EXPECTED_SERVICE_TODOS <= payloads
+    assert toolbar_commands - registered <= payloads
     for menu, label, command in todos:
         assert label.endswith("(Not implemented)"), (menu, label)
         assert label.count("(Not implemented)") == 1, (menu, label)
         assert command == command.casefold(), (menu, command)
-        assert re.fullmatch(r"[a-z][a-z0-9]*", command), (menu, command)
+        assert re.fullmatch(r"[a-z0-9_]+", command), (menu, command)
         assert command not in registered, (menu, command)
 
 
@@ -198,6 +212,8 @@ def _():
     assert indexed[("Edit", (), "Paste")] == "paste"
     assert indexed[("Solid", ("Create and Edit",), "Fillet Edges")] == "filletedge"
     assert indexed[("Window", (), "Workspace Management (Not implemented)")] == "workspace"
+    assert indexed[("File", ("Recent and Recovery",), "Recent Files")] == "__recent_files__"
+    assert indexed[("Help", ("Support",), "Report a Bug (Not implemented)")] == "showbugreport"
 
 
 @check("labels and sibling groups are unambiguous")
@@ -222,7 +238,7 @@ def _():
                 assert not row[3].isdigit(), row
 
 
-@check("the compact report recounts the authored tree")
+@check("the expanded report recounts the authored tree")
 def _():
     counts = {"items": 0, "separators": 0, "popups": 0}
     for _menu, rows in data.MENUS:
@@ -234,6 +250,7 @@ def _():
         "menus": len(EXPECTED_MENUS),
         "source": "original",
     }, (data.REPORT, counts)
+    assert counts == {"items": 532, "separators": 16, "popups": 61}, counts
 
 
 @check("resource source retains original provenance")

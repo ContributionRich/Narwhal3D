@@ -6,14 +6,17 @@
 * ``("sep", "", "", None)``
 * ``("popup", label, shortcut, children, command)``
 
-Every registered command appears exactly once. Future-facing family rows are explicit,
+Every registered command appears exactly once. Future-facing command rows are explicit,
 clickable TODO actions: their labels end in ``(Not implemented)`` and their payloads are
 canonical command keys which are intentionally absent from the live registry. The menu
 renderer sends those leaves to ``narwhal.menu_todo``, which explains the missing feature.
 Labels, grouping, and order are original project-authored information architecture.
 """
 
+from . import toolbar_data
+
 TODO_SUFFIX = " (Not implemented)"
+SPECIAL_COMMANDS = frozenset({"__recent_files__"})
 
 
 def _item(label, command):
@@ -32,7 +35,7 @@ def _popup(label, rows):
     return ("popup", label, "", tuple(rows), None)
 
 
-MENUS = (
+_CORE_MENUS = (
     ("File", (
         _popup("Document", (
             _item("New Model", "new"),
@@ -328,6 +331,129 @@ MENUS = (
         _item("Command Guide", "help"),
     )),
 )
+
+
+# These additions are authored for Narwhal itself. They restore the breadth expected
+# from a desktop CAD menu without importing excluded menu resources: the command names
+# come from the public toolbar manifest, and the service gaps come from the public
+# roadmap. Unavailable leaves remain explicit and clickable.
+_SERVICE_GROUPS = {
+    "File": (
+        _popup("Recent and Recovery", (
+            _item("Recent Files", "__recent_files__"),
+            _todo("Recovery Settings", "recoverysettings"),
+        )),
+        _popup("Templates and Document", (
+            _todo("New from Template", "newfromtemplate"),
+            _todo("Save a Copy", "saveacopy"),
+            _todo("Document Notes", "documentnotes"),
+        )),
+    ),
+    "Help": (
+        _popup("Learning and Reference", (
+            _todo("Getting Started", "gettingstarted"),
+            _todo("Keyboard and Mouse Reference", "inputreference"),
+            _todo("Online Documentation", "onlinedocumentation"),
+        )),
+        _popup("Support", (
+            _todo("Report a Bug", "showbugreport"),
+            _todo("About Narwhal 3D", "aboutnarwhal3d"),
+        )),
+    ),
+}
+
+_TAB_MENU_GROUPS = {
+    "CPlanes": ("View", "Construction Plane Commands"),
+    "Set View": ("View", "View Commands"),
+    "Display": ("View", "Display Commands"),
+    "Select": ("Edit", "Selection Commands"),
+    "Viewport Layout": ("View", "Viewport Layout Commands"),
+    "Visibility": ("Edit", "Visibility Commands"),
+    "Transform": ("Transform", "Additional Transform Commands"),
+    "Curve Tools": ("Curve", "Additional Curve Commands"),
+    "Surface Tools": ("Surface", "Additional Surface Commands"),
+    "Solid Tools": ("Solid", "Additional Solid Commands"),
+    "SubD Tools": ("SubD", "SubD Commands"),
+    "Mesh Tools": ("Mesh", "Mesh Commands"),
+    "Render": ("Render", "Render Commands"),
+    "Drafting": ("Drafting", "Drafting Commands"),
+}
+
+_STANDARD_COMMAND_GROUPS = {
+    "4view": ("View", "Standard View Commands"),
+    "setview": ("View", "Standard View Commands"),
+    "pan": ("View", "Standard View Commands"),
+    "rotateview": ("View", "Standard View Commands"),
+    "shade": ("View", "Standard View Commands"),
+    "undoview": ("View", "Standard View Commands"),
+    "showosnap": ("View", "Standard View Commands"),
+    "spotlight": ("Render", "Standard Render Commands"),
+    "dim": ("Drafting", "Standard Drafting Commands"),
+    "documentproperties": ("File", "Document Commands"),
+    "properties": ("Tools", "Interface Commands"),
+    "parametrictools": ("Tools", "Interface Commands"),
+}
+
+
+def _walk_commands(rows):
+    for row in rows:
+        if row[0] == "item" and row[3]:
+            yield row[3]
+        elif row[0] == "popup":
+            yield from _walk_commands(row[3])
+
+
+def _toolbar_groups():
+    used = {command for _menu, rows in _CORE_MENUS
+            for command in _walk_commands(rows)}
+    used.update(command for rows in _SERVICE_GROUPS.values()
+                for command in _walk_commands(rows))
+    grouped = {}
+    labels = {}
+    for tab in toolbar_data.TABS:
+        tab_name = tab["name"]
+        default_group = _TAB_MENU_GROUPS.get(tab_name)
+        for record in tab["buttons"]:
+            command = record.get("command")
+            if not command or command in used:
+                continue
+            group = (_STANDARD_COMMAND_GROUPS.get(command)
+                     if tab_name == "Standard" else default_group)
+            if group is None:
+                continue
+            label = (record.get("tooltip") or record.get("text") or command).strip()
+            if not label:
+                continue
+            target, group_name = group
+            label_key = (target, group_name)
+            seen_labels = labels.setdefault(label_key, set())
+            if label.casefold() in seen_labels:
+                alternate = (record.get("text") or command).strip()
+                label = alternate if alternate.casefold() not in seen_labels \
+                    else f"{label} [{command}]"
+            seen_labels.add(label.casefold())
+            grouped.setdefault((target, group_name), []).append(_todo(label, command))
+            used.add(command)
+    return grouped
+
+
+def _expanded_menus():
+    toolbar_groups = _toolbar_groups()
+    expanded = []
+    for menu, rows in _CORE_MENUS:
+        additions = list(_SERVICE_GROUPS.get(menu, ()))
+        additions.extend(
+            _popup(group_name, tuple(items))
+            for (target, group_name), items in toolbar_groups.items()
+            if target == menu
+        )
+        if additions:
+            rows = tuple(rows) + (_sep(),) + tuple(additions)
+        expanded.append((menu, tuple(rows)))
+    return tuple(expanded)
+
+
+MENUS = _expanded_menus()
 
 
 def _counts():
