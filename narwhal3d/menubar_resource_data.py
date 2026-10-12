@@ -53,6 +53,10 @@ MENUS = (
             _item("Undo", "undo"),
             _item("Redo", "redo"),
         )),
+        _item("Cut", "cut"),
+        _item("Copy", "copytoclipboard"),
+        _item("Paste", "paste"),
+        _sep(),
         _item("Delete", "delete"),
         _popup("Select", (
             _popup("General", (
@@ -114,7 +118,6 @@ MENUS = (
             _item("Explode", "explode"),
             _item("Reverse Geometry Direction", "flip"),
         )),
-        _todo("Clipboard Commands", "clipboard"),
     )),
     ("View", (
         _item("Zoom / Frame", "zoom"),

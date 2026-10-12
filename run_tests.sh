@@ -49,6 +49,7 @@ PURE_SUITES=(
     spike/test_menubar_resource.py
     spike/test_rightpanel.py
     spike/test_aliases.py
+    spike/test_document_clipboard.py
     spike/test_sessionlog.py
     spike/test_bugreport.py
     spike/test_open_arg.py
@@ -70,6 +71,7 @@ BLENDER_SUITES=(
     spike/test_picture.py
     spike/test_picture_display.py
     spike/test_gumball_region_extrude.py
+    spike/test_control_point_osnap.py
     spike/test_sweep.py
     spike/ui_smoke.py
     spike/addon_e2e.py

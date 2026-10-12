@@ -338,14 +338,23 @@ def piece_segments_for(points, tangents, tolerance, max_angle_deg=None,
     return max(1, min(int(maximum), n))
 
 
-def piece_needs(points, tangents, tolerance, max_angle_deg=None):
+def piece_needs(points, tangents, tolerance, max_angle_deg=None,
+                angle_min_chord_factor=None):
     """Per probe interval, the segments THAT interval alone needs (a float; the rule is
-    in `piece_segments_for`). 0 for an interval that does not turn."""
+    in `piece_segments_for`). 0 for an interval that does not turn.
+
+    ``angle_min_chord_factor`` defaults to :data:`CURVE_ANGLE_MIN_CHORD`, preserving
+    the short-chord density cap for ordinary one-span pieces. Pass 0 to keep the angle
+    criterion scale-invariant when a complex piece can hide a tight bend among many
+    spans; the chord criterion is unchanged either way.
+    """
     k = len(points) - 1
     if k < 1:
         return []
     max_angle = math.radians(CURVE_MAX_ANGLE_DEG if max_angle_deg is None
                              else max_angle_deg)
+    min_chord_factor = (CURVE_ANGLE_MIN_CHORD if angle_min_chord_factor is None
+                        else float(angle_min_chord_factor))
     needs = []
     for i in range(k):
         p, q = points[i], points[i + 1]
@@ -357,7 +366,8 @@ def piece_needs(points, tangents, tolerance, max_angle_deg=None):
         angle_need = turn / max_angle if max_angle > 0.0 else 0.0
         if tolerance > 0.0:
             chord_need = math.sqrt(turn * seg / (8.0 * tolerance))
-            angle_need = min(angle_need, seg / (CURVE_ANGLE_MIN_CHORD * tolerance))
+            if min_chord_factor > 0.0:
+                angle_need = min(angle_need, seg / (min_chord_factor * tolerance))
         else:
             chord_need = 0.0
         needs.append(max(chord_need, angle_need))

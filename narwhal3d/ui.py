@@ -10065,20 +10065,14 @@ SHORTCUTS = (
     # all three): "Cut ... Edit > Cut ... Ctrl (CMD) + X", "CopyToClipboard ...
     # Edit > Copy ... Ctrl (CMD) + C", and Paste on the same page.
     #
-    # These are bound to `narwhal.menu_todo` rather than `narwhal.run_command` because we
-    # have none of the three commands yet, and the difference matters: an unresolved
-    # command reports "unknown command", which would say a REAL the reference CAD application command does not
-    # exist. `menu_todo` says it is not implemented, which is true.
-    #
-    # Binding them at all is the point. Blender owns Ctrl+C/Ctrl+V as
-    # `view3d.copybuffer`/`view3d.pastebuffer`, which duplicate the Blender object and
-    # never touch the document. `DOCUMENT_BYPASS_OPERATORS` disables those; these keep the keys
-    # from going silently dead afterwards, and will start working for free the day the
-    # commands are built.
-    ("Window", "EMPTY", "C", {"ctrl": True}, "narwhal.menu_todo",
+    # Blender owns Ctrl+C/Ctrl+V as `view3d.copybuffer`/`view3d.pastebuffer`, which
+    # duplicate only display objects and never touch the document. Those operators remain
+    # suppressed; these bindings run the document-fragment commands instead. Text editors
+    # and the bug/print fields intercept their own clipboard keys earlier in the modal path.
+    ("Window", "EMPTY", "C", {"ctrl": True}, "narwhal.run_command",
      "CopyToClipboard"),
-    ("Window", "EMPTY", "V", {"ctrl": True}, "narwhal.menu_todo", "Paste"),
-    ("Window", "EMPTY", "X", {"ctrl": True}, "narwhal.menu_todo", "Cut"),
+    ("Window", "EMPTY", "V", {"ctrl": True}, "narwhal.run_command", "Paste"),
+    ("Window", "EMPTY", "X", {"ctrl": True}, "narwhal.run_command", "Cut"),
     # Join. Verified: the reference CAD application documentation lists "Ctrl (CMD) + J" against
     # Edit > Join. Blender's Ctrl+J is `object.join`, which welds Blender MESHES
     # and knows nothing about the .3dm document -- exactly the desynchronisation
@@ -11922,6 +11916,30 @@ def _gumball_warm_tick(budget_s=None, panes=None):
     return None
 
 
+_control_point_snap_cache = {"key": None, "by_name": {}}
+
+
+def _control_point_snap_targets(names):
+    """Point-Osnap targets for the control points currently drawn in the viewport.
+
+    Point Osnap includes control points, but invisible control points must not become
+    hidden snap traps. ``_cp_rows`` is already the single source of truth for markers
+    shown by selection/PointsOn. Group them once per control-point cache key so a large
+    selection is not walked again on every mouse move; the normal object-extent cull
+    supplies the small set of nearby ``names`` to read.
+    """
+    showing = frozenset(effective_points_on())
+    key = (showing, _control_point_doc_key())
+    cache = _control_point_snap_cache
+    if cache["key"] != key:
+        by_name = {}
+        for name, _index, point in _cp_rows():
+            by_name.setdefault(name, []).append(
+                osnap.SnapTarget.point(point, name=name))
+        cache["key"], cache["by_name"] = key, by_name
+    return [target for name in names for target in cache["by_name"].get(name, ())]
+
+
 def _snap_targets(exclude_names=(), reach=None):
     """Every snappable target: the document (cached) plus the running command.
 
@@ -11940,6 +11958,7 @@ def _snap_targets(exclude_names=(), reach=None):
     """
     drop = set(exclude_names) if exclude_names else ()
     out = []
+    kept_names = set()
     entries = _snap_index_entries()
     # A pane's reach (`_snap_reach`) is tested for EVERY entry at once with
     # `osnap.boxes_reach` -- the same rule box by box (spike/test_curve_pick.py holds
@@ -11959,7 +11978,9 @@ def _snap_targets(exclude_names=(), reach=None):
                     continue
             elif not reach(e):
                 continue
+        kept_names.add(e[0])
         out.extend(_entry_targets(e))
+    out += _control_point_snap_targets(kept_names)
     out += _in_progress_snap_targets()
     if drop:
         out = [t for t in out if getattr(t, "name", "") not in drop]
@@ -18836,8 +18857,18 @@ def _gumball_flush(st):
     before = _doc_key()
     listeners = list(bridge.DISPLAY_CHANGE_LISTENERS)
     bridge.DISPLAY_CHANGE_LISTENERS[:] = []
+    commit_xform = _r3_from_mm(d["acc"])
+    mode = st.get("mode") or st.get("kind")
+    if mode == gumball.ROTATE and st.get("axis_dir") and st.get("origin"):
+        # `mathutils.Matrix` is float32. Thousands of small preview rotations drift
+        # enough that the exact-geometry classifier sees a non-uniform transform and
+        # routes a pure rotation through OCCT GTransform's NURBS conversion, which can
+        # segfault on trimmed solids. The preview may accumulate incrementally, but the
+        # document commit is one canonical double-precision rotation from drag state.
+        commit_xform = bridge.rotation_xform(
+            st.get("total", 0.0), st["axis_dir"], st["origin"])
     try:
-        commands.apply_transform(app_state.ctx, _r3_from_mm(d["acc"]))
+        commands.apply_transform(app_state.ctx, commit_xform)
     except Exception as e:  # noqa: BLE001
         print(f"[narwhal3d] gumball transform failed: {e!r}")
         invalidate_snap_cache()        # it may have got part way: trust nothing

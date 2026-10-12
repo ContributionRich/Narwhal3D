@@ -73,6 +73,9 @@ from . import layer_states
 # interchange.  The table itself is pure and atomic; these commands add
 # file I/O and deliberately do not pretend to cover all reference application options.
 from . import alias_table
+# Portable document-fragment encoding. Pure (rhino3dm-only): clipboard transport and
+# document/display mutation remain in the three commands below.
+from . import document_clipboard
 
 
 # ---------------------------------------------------------------------------
@@ -10798,6 +10801,334 @@ class UnitsCmd(Command):
         return msg, True
 
 
+def _clipboard_selected_file_objects(ctx):
+    """Resolve the live display selection to exact File3dm objects, once each."""
+    getter = getattr(ctx, "selected_objects", None)
+    try:
+        selected = list(getter() or []) if callable(getter) else []
+    except Exception as exc:  # noqa: BLE001
+        raise document_clipboard.ClipboardFormatError(
+            f"could not read the object selection: {exc}") from exc
+    if not selected:
+        raise document_clipboard.ClipboardFormatError("nothing is selected")
+    by_name = {}
+    for fobj in ctx.model.file.Objects:
+        name = fobj.Attributes.Name or ""
+        if name:
+            by_name.setdefault(name.casefold(), fobj)
+    objects = []
+    seen = set()
+    for display in selected:
+        name = getattr(display, "name", None)
+        fobj = by_name.get(str(name).casefold()) if name else None
+        if fobj is None:
+            raise document_clipboard.ClipboardFormatError(
+                f"selected object {name!r} is not in the document")
+        key = str(fobj.Attributes.Id)
+        if key not in seen:
+            seen.add(key)
+            objects.append(fobj)
+    if not objects:
+        raise document_clipboard.ClipboardFormatError("nothing is selected")
+    return objects
+
+
+def _set_document_clipboard(ctx, text):
+    """Write text through a context hook, Blender, or the headless process fallback.
+
+    An explicit context hook is authoritative: if it fails, Cut must not quietly claim
+    success through a different clipboard and delete the sources.
+    """
+    setter = getattr(ctx, "set_clipboard_text", None)
+    if callable(setter):
+        try:
+            accepted = setter(text)
+        except Exception as exc:  # noqa: BLE001
+            return False, f"clipboard write failed: {exc}"
+        if accepted is False:
+            return False, "clipboard write was refused"
+        document_clipboard.remember_process_text(text)
+        return True, None
+    try:
+        import bpy
+
+        bpy.context.window_manager.clipboard = text
+    except Exception:  # noqa: BLE001 -- no Blender/window manager: use process fallback
+        document_clipboard.remember_process_text(text)
+        return True, None
+    document_clipboard.remember_process_text(text)
+    return True, None
+
+
+def _get_document_clipboard(ctx):
+    """Read current text through a context hook, Blender, or the process fallback."""
+    getter = getattr(ctx, "get_clipboard_text", None)
+    if callable(getter):
+        try:
+            text = getter()
+        except Exception as exc:  # noqa: BLE001
+            raise document_clipboard.ClipboardFormatError(
+                f"clipboard read failed: {exc}") from exc
+        if not isinstance(text, str):
+            raise document_clipboard.ClipboardFormatError(
+                "clipboard does not contain text")
+        return text
+    try:
+        import bpy
+
+        text = bpy.context.window_manager.clipboard
+    except Exception:  # noqa: BLE001 -- no Blender/window manager
+        text = document_clipboard.process_text()
+    if not isinstance(text, str):
+        raise document_clipboard.ClipboardFormatError("clipboard is empty")
+    return text
+
+
+def _unique_clipboard_name(preferred, occupied, fallback):
+    base = str(preferred or fallback)
+    if base.casefold() not in occupied:
+        occupied.add(base.casefold())
+        return base
+    candidate = f"{base} Copy"
+    number = 2
+    while candidate.casefold() in occupied:
+        candidate = f"{base} Copy {number}"
+        number += 1
+    occupied.add(candidate.casefold())
+    return candidate
+
+
+def _rehydrate_clipboard_geometry(geometry):
+    """Give a decoded master/proxy solid a fresh master, never the source's registry key."""
+    from . import kernel
+    import uuid
+
+    if not kernel.master_key_of(geometry):
+        return
+    # CommonObject faithfully preserved the source key. In the same process that key still
+    # resolves to the SOURCE master, so make it deliberately stale before using the normal
+    # save/reload rehydration path. The recipe tree is the self-contained exact geometry.
+    geometry.SetUserString(kernel.MASTER_KEY, f"clipboard-{uuid.uuid4().hex}")
+    if not kernel.recipe_of(geometry):
+        raise document_clipboard.ClipboardFormatError(
+            "an analytic clipboard solid has no construction recipe; faceted paste is refused")
+    if not bridge.rehydrate_master(geometry):
+        raise document_clipboard.ClipboardFormatError(
+            "the analytic clipboard solid could not be rehydrated; faceted paste is refused")
+
+
+def _paste_document_fragment(ctx, fragment):
+    """Apply one validated fragment, returning its fresh display names."""
+    import uuid
+
+    file = ctx.model.file
+    for item in fragment.objects:
+        _rehydrate_clipboard_geometry(item.geometry)
+
+    ctx.note_change("Paste")
+    material_indices = {}
+
+    def material_index(key):
+        if key is None:
+            return -1
+        if key in material_indices:
+            return material_indices[key]
+        material = fragment.materials[key]
+        material.Id = uuid.uuid4()
+        index = int(file.Materials.Add(material))
+        if index < 0:
+            raise RuntimeError(f"Paste: could not add material {material.Name!r}")
+        material_indices[key] = index
+        return index
+
+    layer_indices = {}
+
+    def layer_index(key):
+        if key in layer_indices:
+            return layer_indices[key]
+        source = fragment.layers[key]
+        wanted = (source.layer.Name or "").casefold()
+        for index in range(len(file.Layers)):
+            if (file.Layers[index].Name or "").casefold() == wanted:
+                layer_indices[key] = index
+                return index
+        parent_index = layer_index(source.parent_key) if source.parent_key else None
+        layer = source.layer
+        layer.Id = uuid.uuid4()
+        try:
+            layer.ParentLayerId = (file.Layers[parent_index].Id if parent_index is not None
+                                   else uuid.UUID(int=0))
+        except Exception:  # noqa: BLE001 -- older rhino3dm may not expose the setter
+            pass
+        if source.material_key is not None:
+            try:
+                layer.RenderMaterialIndex = material_index(source.material_key)
+            except Exception:  # noqa: BLE001 -- preserve every available layer field
+                pass
+        index = int(file.Layers.Add(layer))
+        if index < 0:
+            raise RuntimeError(f"Paste: could not create layer {layer.Name!r}")
+        layer_indices[key] = index
+        return index
+
+    for item in fragment.objects:
+        layer_index(item.layer_key)
+
+    occupied_groups = {
+        (file.Groups.FindIndex(index).Name or "").casefold()
+        for index in range(len(file.Groups))
+    }
+    group_indices = {}
+    for key, group in fragment.groups.items():
+        group.Id = uuid.uuid4()
+        group.Name = _unique_clipboard_name(group.Name, occupied_groups, "Group")
+        index = len(file.Groups)
+        file.Groups.Add(group)
+        if len(file.Groups) != index + 1:
+            raise RuntimeError(f"Paste: could not create group {group.Name!r}")
+        group_indices[key] = index
+
+    occupied_objects = {
+        (fobj.Attributes.Name or "").casefold()
+        for fobj in file.Objects if fobj.Attributes.Name
+    }
+    pasted = []
+    for item in fragment.objects:
+        attributes = item.attributes
+        attributes.Id = uuid.uuid4()
+        attributes.Name = _unique_clipboard_name(
+            attributes.Name, occupied_objects, type(item.geometry).__name__)
+        attributes.LayerIndex = layer_indices[item.layer_key]
+        if item.material_key is not None:
+            attributes.MaterialIndex = material_index(item.material_key)
+            attributes.MaterialSource = r3.ObjectMaterialSource.MaterialFromObject
+        attributes.RemoveFromAllGroups()
+        for key in item.group_keys:
+            attributes.AddToGroup(group_indices[key])
+        object_id = file.Objects.Add(item.geometry, attributes)
+        if str(object_id) == str(uuid.UUID(int=0)):
+            raise RuntimeError(f"Paste: could not add object {attributes.Name!r}")
+        pasted.append(attributes.Name)
+
+    for name in pasted:
+        selection_state.record_created(ctx.model, name)
+
+    rebuild = getattr(ctx, "rebuild_display", None)
+    if callable(rebuild):
+        rebuild()
+    selector = getattr(ctx, "select_by_names", None)
+    if callable(selector):
+        try:
+            selector(pasted, already_expanded=True)
+        except TypeError:
+            selector(pasted)
+    return pasted
+
+
+def _apply_document_fragment(ctx, fragment):
+    """Apply a fragment transactionally so an insertion failure leaves no document rows."""
+    before = ctx.model.snapshot()
+    material_ids = {
+        str(ctx.model.file.Materials[index].Id)
+        for index in range(len(ctx.model.file.Materials))
+    }
+    try:
+        return _paste_document_fragment(ctx, fragment)
+    except Exception:
+        ctx.model.restore(before)
+        materials = ctx.model.file.Materials
+        added_ids = [
+            materials[index].Id
+            for index in range(len(materials))
+            if str(materials[index].Id) not in material_ids
+        ]
+        for material_id in added_ids:
+            materials.Delete(material_id)
+        raise
+
+
+def _remove_clipboard_sources(ctx, objects):
+    """Delete captured File3dm objects after and only after a successful clipboard write."""
+    ctx.note_change("Cut")
+    removed = 0
+    for fobj in objects:
+        if ctx.model.remove_object(str(fobj.Attributes.Id)):
+            removed += 1
+    if removed != len(objects):
+        raise RuntimeError(
+            f"Cut: removed only {removed} of {len(objects)} captured object(s)")
+    rebuild = getattr(ctx, "rebuild_display", None)
+    if callable(rebuild):
+        rebuild()
+    return removed
+
+
+class CopyToClipboardCmd(Command):
+    name = "CopyToClipboard"
+    description = "Copy selected document objects to the clipboard."
+    steps = [("Select objects to copy:", OBJECTS_MULTI)]
+    preselect_names = 1
+    cancel_on_empty_set = True
+    records_undo = False
+
+    def execute(self, ctx):
+        try:
+            objects = _clipboard_selected_file_objects(ctx)
+            text = document_clipboard.encode_fragment(ctx.model.file, objects)
+            written, error = _set_document_clipboard(ctx, text)
+            if not written:
+                return f"CopyToClipboard: {error}", True
+        except (document_clipboard.ClipboardFormatError, RuntimeError) as exc:
+            return f"CopyToClipboard: {exc}", True
+        return f"Copied {len(objects)} object(s) to the document clipboard", True
+
+
+class CutCmd(Command):
+    name = "Cut"
+    description = "Copy selected document objects to the clipboard, then delete them."
+    steps = [("Select objects to cut:", OBJECTS_MULTI)]
+    preselect_names = 1
+    cancel_on_empty_set = True
+
+    def execute(self, ctx):
+        try:
+            objects = _clipboard_selected_file_objects(ctx)
+            text = document_clipboard.encode_fragment(ctx.model.file, objects)
+            written, error = _set_document_clipboard(ctx, text)
+            if not written:
+                return f"Cut: {error}; no objects were deleted", True
+            removed = _remove_clipboard_sources(ctx, objects)
+        except (document_clipboard.ClipboardFormatError, RuntimeError) as exc:
+            return f"Cut: {exc}", True
+        return f"Cut {removed} object(s) to the document clipboard", True
+
+
+class PasteCmd(Command):
+    name = "Paste"
+    description = "Paste a Narwhal3D document fragment from the clipboard."
+    steps = []
+
+    def __init__(self):
+        super().__init__()
+        self.pasted_names = ()
+
+    def _execute(self, ctx):
+        text = _get_document_clipboard(ctx)
+        fragment = document_clipboard.decode_fragment(text)
+        pasted = _apply_document_fragment(ctx, fragment)
+        self.pasted_names = tuple(pasted)
+        return f"Pasted {len(pasted)} object(s): {', '.join(pasted)}", True
+
+    def execute(self, ctx):
+        # Keep error handling outside the record. If application fails after its first table
+        # insertion, `_recorded` abandons the undo entry after the transaction rolls back.
+        try:
+            return self._recorded(ctx, lambda: self._execute(ctx))
+        except (document_clipboard.ClipboardFormatError, RuntimeError) as exc:
+            self.pasted_names = ()
+            return f"Paste: {exc}", True
+
+
 class DeleteCmd(Command):
     name = "Delete"
     description = "Delete selected objects."
@@ -12954,6 +13285,7 @@ def _build_registry():
                 ExtrudeCmd, RevolveCmd,
                 LoftCmd, OffsetCmd,
                 MoveCmd, RotateCmd, ScaleCmd, CopyCmd, ArrayLinearCmd,
+                CopyToClipboardCmd, CutCmd, PasteCmd,
                 Rotate3DCmd, Scale1DCmd, Scale2DCmd, OrientCmd, Orient3PtCmd,
                 ArrayPolarCmd, MirrorCmd, DeleteCmd, JoinCmd, ExplodeCmd, CloseCrvCmd,
                 ProjectCmd, ProjectToCPlaneCmd, ExtendCmd, DivideCmd, ExtractWireframeCmd,

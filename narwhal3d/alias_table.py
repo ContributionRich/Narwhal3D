@@ -1,8 +1,8 @@
 """Pure command-alias parsing and editable table support.
 
-The application ships without predefined aliases. Callers can create aliases in an
-:class:`AliasTable`, import them from text, export them, delete them, and restore
-the table to the empty application defaults.
+The application provides a small built-in alias set. Callers can create additional
+aliases in an :class:`AliasTable`, import them from text, export them, delete them,
+and restore the table to the built-in defaults.
 
 This module has no UI or geometry dependencies so it can be used by headless
 command-resolution code and focused tests.
@@ -21,9 +21,33 @@ PREFIX_MEANINGS = {
     "_": "Uses the canonical command and option names.",
 }
 
-# The original application default set is intentionally empty. Editable tables
-# copy this mapping so custom aliases never alter application defaults.
-_MACROS: dict[str, str] = {}
+# Keep the built-in macro text verbatim: prefixes and option order are part of
+# each alias's behavior. Editable tables copy this mapping so custom aliases
+# never alter application defaults.
+_MACROS: dict[str, str] = {
+    "Z": "'_Zoom",
+    "ZE": "'_Zoom _Extents",
+    "ZT": "'_Zoom _Target",
+    "ZEA": "'_Zoom _All _Extents",
+    "ZS": "'_Zoom _Selected",
+    "ZSA": "'_Zoom _All _Selected",
+    "S": "'_Snap",
+    "O": "'_Ortho",
+    "P": "'_Planar",
+    "M": "! _Move",
+    "U": "_Undo",
+    "POn": "! _PointsOn",
+    "POff": "! _PointsOff",
+    "C": "'_SelCrossing",
+    "W": "'_SelWindow",
+    "COn": "'_CurvatureGraph",
+    "COff": "'_CurvatureGraphOff",
+    "Break": "! _DeleteSubCrv",
+    "SelPolysurface": "'_SelPolysrf",
+    "PlugInManager": "! _OptionsPage _PlugIns",
+    "AdvancedDisplay": "! _OptionsPage _DisplayModes",
+    "DisplayAttrsMgr": "! _OptionsPage _DisplayModes",
+}
 
 # Command targets that can currently run. This remains explicit so the module
 # stays independent from the command registry and its heavier dependencies.
@@ -137,8 +161,8 @@ class AliasImportReport:
 class AliasTable:
     """An editable, case-insensitive command-alias table.
 
-    Every instance starts with a copy of the empty application defaults.
-    ``ALIAS_TABLE`` and :func:`resolve_alias` expose the same empty defaults to
+    Every instance starts with a copy of the built-in application defaults.
+    ``ALIAS_TABLE`` and :func:`resolve_alias` expose the same defaults to
     existing command-resolution callers.
     """
 
@@ -186,7 +210,7 @@ class AliasTable:
         return self._aliases.pop(name.strip().casefold(), None) is not None
 
     def restore_defaults(self) -> None:
-        """Discard custom aliases and restore the empty application defaults."""
+        """Discard custom aliases and restore the built-in application defaults."""
         self._aliases = self._make_aliases(DEFAULT_MACROS)
 
     def export_text(self) -> str:

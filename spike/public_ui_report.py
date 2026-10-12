@@ -109,7 +109,7 @@ def _inspect(layout_was_ready):
           f"{len(menu_names)}: {', '.join(menu_names)}")
     menu_enabled, menu_total = menubar.coverage(set(ui.COMMANDS))
     check("menu actions are runnable or explicitly marked TODO",
-          (menu_enabled, menu_total) == (166, 183), f"{menu_enabled}/{menu_total}")
+          (menu_enabled, menu_total) == (169, 185), f"{menu_enabled}/{menu_total}")
 
     toolbar_names = toolbars.tab_names()
     check("toolbar installed with exact authored categories",
@@ -123,7 +123,7 @@ def _inspect(layout_was_ready):
           f"initial={initial_tab!r}, final={ui.toolbar_tab()!r}")
     toolbar_enabled, toolbar_total = toolbars.coverage(set(ui.COMMANDS))
     check("toolbar actions are runnable or explicitly unavailable",
-          (toolbar_enabled, toolbar_total) == (115, 525),
+          (toolbar_enabled, toolbar_total) == (118, 525),
           f"{toolbar_enabled}/{toolbar_total}")
 
     orient = commands.OrientCmd()

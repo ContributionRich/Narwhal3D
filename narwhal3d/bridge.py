@@ -303,11 +303,16 @@ def _need_spaced(curve, a, b, k, pts, tans, tolerance, tess):
     """(params, points) over [a, b] for a MANY-SPAN or HIGH-DEGREE piece: vertices
     spaced evenly in need (`tess.need_positions`), then VERIFIED -- every segment whose
     true midpoint is farther than `tolerance` from its chord is bisected, up to
-    `REFINE_ROUNDS` times. The probe estimates need from a few samples per span; that is
+    `REFINE_ROUNDS` times. Its angle criterion is uncapped: unlike an ordinary one-span
+    fillet, a small many-span curve can hide a tight turn whose short chords satisfy a
+    coarse world tolerance but still meet at a visibly sharp angle. The probe estimates
+    need from a few samples per span; that is
     reliable for one-span degree <= 3 pieces (worst 1.08x tol over 150 random
     curves) but not here (worst observed 2.1x tolerance over random multi-span and
     degree-5 curves), so these pieces pay one evaluation per segment."""
-    us = tess.need_positions(tess.piece_needs(pts, tans, tolerance))
+    needs = tess.piece_needs(
+        pts, tans, tolerance, angle_min_chord_factor=0.0)
+    us = tess.need_positions(needs)
     ts = [a] + [a + (b - a) * u / k for u in us] + [b]
     xs = [pts[0]]
     for t in ts[1:-1]:
@@ -897,9 +902,8 @@ def _surface_turn_params(surface, direction, tolerance, knots, base):
     to meet above Blender's visible-edge threshold. Turn-based placement concentrates
     columns in those regions.
 
-    The angle rule is applied UNCAPPED here (curves cap it below 4x the chord
-    tolerance, `CURVE_ANGLE_MIN_CHORD`, because an over-fine polyline is invisible):
-    on a surface every facet joint over 5.73 deg is drawn, however short.
+    The angle rule is applied UNCAPPED here, as it is for complex many-span display
+    curves: on a surface every facet joint over 5.73 deg is drawn, however short.
     Display only: the geometry is never touched."""
     tess = _tess()
     try:

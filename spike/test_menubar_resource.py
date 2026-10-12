@@ -65,7 +65,7 @@ EXPECTED_MENUS = [
 ]
 EXPECTED_RUNNABLE_COUNTS = {
     "File": 8,
-    "Edit": 44,
+    "Edit": 47,
     "View": 11,
     "Curve": 35,
     "Surface": 12,
@@ -82,7 +82,7 @@ EXPECTED_RUNNABLE_COUNTS = {
 }
 EXPECTED_TODO_COUNTS = {
     "File": 0,
-    "Edit": 1,
+    "Edit": 0,
     "View": 1,
     "Curve": 1,
     "Surface": 1,
@@ -98,7 +98,7 @@ EXPECTED_TODO_COUNTS = {
     "Help": 0,
 }
 EXPECTED_TODOS = {
-    "clipboard", "namedview", "matchcrv", "networksrf", "subd", "solidrepair", "mesh",
+    "namedview", "matchcrv", "networksrf", "subd", "solidrepair", "mesh",
     "repairmesh", "annotation", "layout", "align", "curvaturegraph", "material",
     "render", "options", "viewportlayout", "workspace",
 }
@@ -136,14 +136,14 @@ def _():
 
 @check("live bare-package registry includes all sibling providers")
 def _():
-    assert len(registered) == 166, len(registered)
+    assert len(registered) == 169, len(registered)
     assert {
         "import", "filletedge", "saveas", "print", "export", "setdisplaymode",
         "changelayer",
     } <= registered
 
 
-@check("all 166 registered commands appear exactly once")
+@check("all 169 registered commands appear exactly once")
 def _():
     runnable = [command for _menu, _path, label, command in leaves()
                 if not label.endswith(data.TODO_SUFFIX)]
@@ -193,7 +193,9 @@ def _():
 def _():
     indexed = {(menu, path, label): command for menu, path, label, command in leaves()}
     assert indexed[("File", ("Document",), "New Model")] == "new"
-    assert indexed[("Edit", (), "Clipboard Commands (Not implemented)")] == "clipboard"
+    assert indexed[("Edit", (), "Cut")] == "cut"
+    assert indexed[("Edit", (), "Copy")] == "copytoclipboard"
+    assert indexed[("Edit", (), "Paste")] == "paste"
     assert indexed[("Solid", ("Create and Edit",), "Fillet Edges")] == "filletedge"
     assert indexed[("Window", (), "Workspace Management (Not implemented)")] == "workspace"
 

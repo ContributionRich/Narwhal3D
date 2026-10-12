@@ -55,7 +55,7 @@ EXPECTED_MENUS = (
 )
 EXPECTED_RUNNABLE_COUNTS = {
     "File": 8,
-    "Edit": 44,
+    "Edit": 47,
     "View": 11,
     "Curve": 35,
     "Surface": 12,
@@ -71,7 +71,7 @@ EXPECTED_RUNNABLE_COUNTS = {
     "Help": 1,
 }
 EXPECTED_TODO_PAYLOADS = frozenset({
-    "clipboard", "namedview", "matchcrv", "networksrf", "subd", "solidrepair", "mesh",
+    "namedview", "matchcrv", "networksrf", "subd", "solidrepair", "mesh",
     "repairmesh", "annotation", "layout", "align", "curvaturegraph", "material",
     "render", "options", "viewportlayout", "workspace",
 })
@@ -102,7 +102,7 @@ def walk_rows(rows, path=()):
 
 
 print("\n-- live registry and authored structure --")
-check(len(REGISTERED) == 166, "the bare-package live registry has 166 commands",
+check(len(REGISTERED) == 169, "the bare-package live registry has 169 commands",
       repr(len(REGISTERED)))
 check(SIBLING_PINS <= REGISTERED,
       "commands unique to every sibling provider are present",
