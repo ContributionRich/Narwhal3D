@@ -143,11 +143,11 @@ check(toolbars.sidebar_button_index(rebuilt_sidebar, retained_button, 999)
 check(toolbars.sidebar_flyout_rows(sidebar[0], implemented) == [],
       "an unlinked left cell does not invent a flyout")
 point_button = next(button for button in linked if button.link == "Point")
-point_tip = toolbars.sidebar_tooltip_lines(point_button, "command")
-check(point_tip == (point_button.text,),
-      "sidebar hover shows only the primary command name")
-check(toolbars.sidebar_tooltip_lines(point_button, "flyout") ==
-      (point_button.text,),
+point_tip = toolbars.sidebar_tooltip_lines(point_button, "command", "Point")
+check(point_tip == ("Point",),
+      "sidebar hover shows only the canonical command name")
+check(toolbars.sidebar_tooltip_lines(point_button, "flyout", "Point") ==
+      ("Point",),
       "the arrow corner keeps the same compact command-name tooltip")
 tip_box = toolbars.sidebar_tooltip_layout(
     (0, 20.0, 100.0, 48.0, 128.0), 60.0, 1600.0, 900.0)
@@ -174,11 +174,11 @@ check(len(toolbars.flyout_icon_groups(
           toolbars.sidebar_flyout_rows(separated_button, implemented))) > 1,
       "icon popup preserves authored separator groups")
 popup = toolbars.flyout_popup_layout(117, 700, flyout_buttons, 1600, 900)
-check(toolbars.FLYOUT_COLUMNS == 5
-      and popup["panel"][0] == 117 - toolbars.FLYOUT_OVERLAP
+check(toolbars.FLYOUT_COLUMNS == 5 and toolbars.FLYOUT_OVERLAP == 0.0
+      and popup["panel"][0] == 117
       and popup["panel"][2] - popup["panel"][0]
       == toolbars.FLYOUT_MARGIN * 2 + toolbars.FLYOUT_COLUMNS * toolbars.FLYOUT_CELL,
-      "floating toolbar overlaps the sidebar slightly and is exactly five cells wide")
+      "floating toolbar starts outside the dock and is exactly five cells wide")
 check(len(popup["cells"]) == len(popup["buttons"]) == len(flattened),
       "floating toolbar allocates one hit box for every displayed icon")
 first_cell = popup["cells"][0]

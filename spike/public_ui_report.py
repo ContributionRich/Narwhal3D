@@ -8,6 +8,8 @@ import sys
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ARTIFACTS = os.path.join(ROOT, "artifacts")
 IMAGE_PATH = os.path.join(ARTIFACTS, "ui.png")
+SIDEBAR_HOVER_IMAGE = os.path.join(ARTIFACTS, "ui_sidebar_hover.png")
+SIDEBAR_FLYOUT_IMAGE = os.path.join(ARTIFACTS, "ui_sidebar_flyout.png")
 REPORT_PATH = os.path.join(ARTIFACTS, "ui_report.txt")
 POLL_SECONDS = 0.25
 MAX_POLLS = 120
@@ -69,16 +71,54 @@ def _registered_operator_state(ui, bpy):
     return len(good), len(operators)
 
 
-def _capture(bpy):
+def _capture_path(bpy, path):
     os.makedirs(ARTIFACTS, exist_ok=True)
     try:
         bpy.ops.wm.redraw_timer(type="DRAW_WIN_SWAP", iterations=2)
-        result = bpy.ops.screen.screenshot(filepath=IMAGE_PATH)
-        return ("FINISHED" in result and os.path.isfile(IMAGE_PATH)
-                and os.path.getsize(IMAGE_PATH) > 0)
+        result = bpy.ops.screen.screenshot(filepath=path)
+        return ("FINISHED" in result and os.path.isfile(path)
+                and os.path.getsize(path) > 0)
     except Exception as exc:  # noqa: BLE001
         print(f"[public-ui] screenshot failed: {exc!r}")
         return False
+
+
+def _capture(bpy):
+    return _capture_path(bpy, IMAGE_PATH)
+
+
+def _crop_pixels(bpy, path, box):
+    """Return RGB pixels from a bottom-up window-coordinate crop."""
+    if not os.path.isfile(path):
+        return []
+    image = None
+    try:
+        image = bpy.data.images.load(path, check_existing=False)
+        width, height = (int(value) for value in image.size)
+        x0 = max(0, min(width, int(box[0])))
+        y0 = max(0, min(height, int(box[1])))
+        x1 = max(x0, min(width, int(box[2] + 0.999)))
+        y1 = max(y0, min(height, int(box[3] + 0.999)))
+        rgba = image.pixels[:]
+        return [tuple(rgba[(y * width + x) * 4:(y * width + x) * 4 + 3])
+                for y in range(y0, y1) for x in range(x0, x1)]
+    except Exception as exc:  # noqa: BLE001
+        print(f"[public-ui] screenshot crop failed: {exc!r}")
+        return []
+    finally:
+        if image is not None:
+            bpy.data.images.remove(image)
+
+
+def _luma_counts(pixels, dark=0.35, light=0.65):
+    luminances = [0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2]
+                  for rgb in pixels]
+    return (sum(value <= dark for value in luminances),
+            sum(value >= light for value in luminances))
+
+
+def _distinct_colors(pixels):
+    return len({tuple(round(channel * 255) for channel in rgb) for rgb in pixels})
 
 
 def _inspect(layout_was_ready):
@@ -147,19 +187,39 @@ def _inspect(layout_was_ready):
           f"{len(sidebar_cells)} cells")
     sidebar_buttons = list(getattr(ui, "_sidebar_buttons", ()))
     first_sidebar = sidebar_cells[0] if sidebar_cells else None
+    hover_redraws = []
     if first_sidebar is not None:
         first_center = ((first_sidebar[1] + first_sidebar[3]) * 0.5,
                         (first_sidebar[2] + first_sidebar[4]) * 0.5)
-        ui.sidebar_hover_update(*first_center)
+        ui.sidebar_hover_update(-100.0, -100.0)
+        real_band_redraw = ui._tag_redraw_bands
+        real_view_redraw = ui._tag_redraw_viewports
+        ui._tag_redraw_bands = lambda: hover_redraws.append("band")
+        ui._tag_redraw_viewports = lambda: hover_redraws.append("viewport")
+        try:
+            ui.sidebar_hover_redraw_update(*first_center)
+        finally:
+            ui._tag_redraw_bands = real_band_redraw
+            ui._tag_redraw_viewports = real_view_redraw
     hovered = (ui.sidebar_action_at(*first_center) if first_sidebar is not None else None)
-    hover_lines = (toolbars.sidebar_tooltip_lines(hovered[1], hovered[2])
+    hover_lines = (toolbars.sidebar_tooltip_lines(
+        hovered[1], hovered[2], ui._sidebar_command_name(hovered[1]))
                    if hovered is not None else ())
     hover_card = ui.sidebar_tooltip_layout()
-    hover_ok = (hovered is not None and hover_lines == (hovered[1].text,)
+    hover_ok = (hovered is not None
+                and hover_lines == (ui._sidebar_command_name(hovered[1]),)
                 and hover_card is not None and hover_card["lines"] == hover_lines
-                and hover_card["box"][0] > first_sidebar[3])
+                and hover_card["box"][0] >= ui._sidebar_region_box[2]
+                and hover_redraws == ["band", "viewport"])
     check("hovering a left icon shows its command name beside the icon", hover_ok,
           hover_lines[0] if hover_lines else "no tooltip")
+    hover_dark = hover_light = 0
+    if hover_card is not None and _capture_path(bpy, SIDEBAR_HOVER_IMAGE):
+        hover_dark, hover_light = _luma_counts(
+            _crop_pixels(bpy, SIDEBAR_HOVER_IMAGE, hover_card["box"]))
+    check("sidebar command-name tooltip is visibly rendered",
+          hover_dark > 200 and hover_light > 20,
+          f"dark={hover_dark}, light={hover_light}")
     linked_button = next((button for button in sidebar_buttons
                           if button.link), None)
     linked_index = sidebar_buttons.index(linked_button) if linked_button is not None else None
@@ -169,32 +229,47 @@ def _inspect(layout_was_ready):
               if retained_button is not None else None)
     flyout = ui.sidebar_flyout_layout()
     flyout_hit = None
+    flyout_border_dark = first_icon_colors = 0
     if flyout and flyout["cells"]:
         first = flyout["cells"][0]
         flyout_center = ((first[1] + first[3]) * 0.5,
                          (first[2] + first[4]) * 0.5)
         ui.sidebar_flyout_hover_update(*flyout_center)
         flyout_hit = ui.sidebar_flyout_action_at(*flyout_center)
+        if _capture_path(bpy, SIDEBAR_FLYOUT_IMAGE):
+            panel = flyout["panel"]
+            flyout_border_dark, _unused = _luma_counts(_crop_pixels(
+                bpy, SIDEBAR_FLYOUT_IMAGE,
+                (panel[0] - 2.0, panel[1], panel[0] + 5.0, panel[3])))
+            first_icon_colors = _distinct_colors(
+                _crop_pixels(bpy, SIDEBAR_FLYOUT_IMAGE, first[1:]))
     flyout_reflowed = False
     if flyout is not None:
         original_cells = list(ui._sidebar_cells)
+        original_region = ui._sidebar_region_box
         ui._sidebar_cells = [(i, x0 + 80.0, y0, x1 + 80.0, y1)
                              for i, x0, y0, x1, y1 in original_cells]
+        ui._sidebar_region_box = (original_region[0], original_region[1],
+                                  original_region[2] + 80.0, original_region[3])
         try:
             moved = ui.sidebar_flyout_reflow()
             resized = ui.sidebar_flyout_layout()
             window = bpy.context.window
             flyout_reflowed = (moved and resized is not None
+                               and resized["panel"][0] >= ui._sidebar_region_box[2]
                                and resized["panel"][0] > flyout["panel"][0]
                                and resized["panel"][2] <= window.width
                                and resized["panel"][3] <= window.height)
         finally:
             ui._sidebar_cells = original_cells
+            ui._sidebar_region_box = original_region
             ui.sidebar_flyout_reflow()
     flyout_ok = (opened == getattr(linked_button, "link", None)
                  and flyout is not None and len(flyout["buttons"]) > 1
                  and len({cell[1] for cell in flyout["cells"][:5]}) == 5
                  and flyout_hit is flyout["buttons"][0]
+                 and flyout["panel"][0] >= ui._sidebar_overlay_left()
+                 and flyout_border_dark > 10 and first_icon_colors > 10
                  and abs((flyout["cells"][0][3] - flyout["cells"][0][1])
                          - toolbars.FLYOUT_CELL) < 0.01
                  and flyout_reflowed)
@@ -204,9 +279,13 @@ def _inspect(layout_was_ready):
         cell_width = flyout["cells"][0][3] - flyout["cells"][0][1] if flyout["cells"] else 0
         flyout_detail = (f"{opened}: {len(flyout['buttons'])} icons, "
                           f"panel={width:.1f}, cell={cell_width:.1f}, "
+                          f"border={flyout_border_dark}, colors={first_icon_colors}, "
                           f"constant={toolbars.FLYOUT_CELL:.1f}")
     check("sidebar arrow opens a five-column floating icon toolbar", flyout_ok,
           flyout_detail)
+    ui.sidebar_flyout_close()
+    check("UI report closes its temporary sidebar flyout",
+          ui.sidebar_flyout_layout() is None)
 
     icon_names = set(toolbars.toolbar_data.ICON_NAMES)
     icon_paths = [toolbars.icon_path(name) for name in icon_names]

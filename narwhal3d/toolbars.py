@@ -196,7 +196,7 @@ FLYOUT_COLUMNS = 5
 FLYOUT_CELL = 40.0
 FLYOUT_MARGIN = 5.0
 FLYOUT_TITLE_H = 14.0
-FLYOUT_OVERLAP = 4.0
+FLYOUT_OVERLAP = 0.0
 
 
 def sidebar_name():
@@ -247,7 +247,7 @@ def sidebar_button_index(buttons, target, preferred=None):
     return None
 
 
-def sidebar_tooltip_lines(button, part="command"):
+def sidebar_tooltip_lines(button, part="command", command_name=None):
     """Return only the hovered icon's command name.
 
     Alternate-click and linked-toolbar details belong to menus, not the transient hover
@@ -256,7 +256,7 @@ def sidebar_tooltip_lines(button, part="command"):
     """
     if button is None:
         return ()
-    name = button.text or button.left or button.tooltip
+    name = command_name or button.left or button.text or button.tooltip
     return (str(name),) if name else ()
 
 

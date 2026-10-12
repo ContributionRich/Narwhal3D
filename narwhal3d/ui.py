@@ -5751,6 +5751,7 @@ _sidebar_buttons = []
 _sidebar_hover_index = None
 _sidebar_hover_part = None
 _sidebar_hover_pos = None
+_sidebar_region_box = None
 _sidebar_pressed = None
 _sidebar_flyout_button = None
 _sidebar_flyout_state = None
@@ -5763,7 +5764,10 @@ def _draw_left_sidebar(shader, region):
     to flyout toolbars. The grid is top-aligned above the Osnap panel.
     """
     global _sidebar_cells, _sidebar_buttons, _sidebar_hover_index, _sidebar_hover_part
+    global _sidebar_region_box
 
+    _sidebar_region_box = (region.x, region.y,
+                           region.x + region.width, region.y + region.height)
     buttons = tbar.sidebar_buttons(set(COMMANDS))
     if not buttons:
         _sidebar_cells, _sidebar_buttons = [], []
@@ -5862,6 +5866,37 @@ def _sidebar_wrap_line(text, width, font_size):
     return lines
 
 
+def _sidebar_command_name(button):
+    """Canonical registered command name for a toolbar button."""
+    key = getattr(button, "left", None)
+    command = COMMANDS.get(key)
+    name = getattr(command, "name", None)
+    return name or (str(key).replace("_", " ").title() if key else None)
+
+
+def _sidebar_overlay_left():
+    """First drawable viewport pixel to the right of the sidebar.
+
+    Blender keeps a narrow divider between adjacent areas. The INFO region's right
+    coordinate can therefore be one pixel left of the VIEW_3D region where floating
+    chrome is actually drawn. Anchoring to the viewport boundary keeps the flyout's
+    left border and first icon out from under that divider after any dock resize.
+    """
+    dock_right = (_sidebar_region_box[2] if _sidebar_region_box is not None
+                  else max((cell[3] for cell in _sidebar_cells), default=0.0))
+    screen = getattr(bpy.context, "screen", None)
+    candidates = []
+    if screen is not None:
+        for area in screen.areas:
+            if area.type != "VIEW_3D":
+                continue
+            region = next((item for item in area.regions
+                           if item.type == "WINDOW" and item.width > 1), None)
+            if region is not None and region.x >= dock_right:
+                candidates.append(float(region.x))
+    return max(float(dock_right), min(candidates)) if candidates else float(dock_right)
+
+
 def sidebar_tooltip_layout():
     """The one-line sidebar hover card in window coordinates, or ``None``."""
     if (_sidebar_hover_index is None
@@ -5869,16 +5904,16 @@ def sidebar_tooltip_layout():
         return None
     source = next((cell for cell in _sidebar_cells
                    if cell[0] == _sidebar_hover_index), None)
+    button = _sidebar_buttons[_sidebar_hover_index]
     lines = tbar.sidebar_tooltip_lines(
-        _sidebar_buttons[_sidebar_hover_index], _sidebar_hover_part or "command")
+        button, _sidebar_hover_part or "command", _sidebar_command_name(button))
     window = getattr(bpy.context, "window", None)
     if source is None or not lines or window is None:
         return None
     # Always place the card just outside the responsive grid, while retaining the
     # hovered row's vertical center. A first-column icon therefore gets the same nearby
     # tooltip as a last-column icon instead of drawing a card inside the dock clipping area.
-    grid_right = max(cell[3] for cell in _sidebar_cells)
-    anchor = (source[0], source[1], source[2], grid_right, source[4])
+    anchor = (source[0], source[1], source[2], _sidebar_overlay_left(), source[4])
     text = lines[0]
     box = tbar.sidebar_tooltip_layout(
         anchor, _text_width(text, tbar.SIDEBAR_TOOLTIP_FONT),
@@ -5955,6 +5990,15 @@ def sidebar_action_at(mouse_x, mouse_y):
     return (index, _sidebar_buttons[index], part)
 
 
+def sidebar_hover_redraw_update(mouse_x, mouse_y):
+    """Update sidebar hover and redraw both its cell and viewport tooltip."""
+    changed = sidebar_hover_update(mouse_x, mouse_y)
+    if changed:
+        _tag_redraw_bands()
+        _tag_redraw_viewports()
+    return changed
+
+
 def sidebar_press_begin(index, part):
     """Record visible flyout press feedback. True only when state changes."""
     global _sidebar_pressed
@@ -6022,8 +6066,9 @@ def sidebar_flyout_reflow():
     rows = tbar.sidebar_flyout_rows(button, set(COMMANDS))
     if source is None or not getattr(button, "link", None) or not rows:
         return False
+    anchor_x = _sidebar_overlay_left()
     layout = tbar.flyout_popup_layout(
-        source[3], source[4], rows, window.width, window.height)
+        anchor_x, source[4], rows, window.width, window.height)
     changed = layout["panel"] != state["layout"]["panel"]
     state.update(button=button, source_index=index, layout=layout)
     if changed:
@@ -6049,7 +6094,8 @@ def show_sidebar_flyout(button, source_index=None):
         redraw_cmdbar()
         return None
     _sidebar_flyout_button = live_button
-    layout = tbar.flyout_popup_layout(source[3], source[4], rows,
+    anchor_x = _sidebar_overlay_left()
+    layout = tbar.flyout_popup_layout(anchor_x, source[4], rows,
                                       window.width, window.height)
     _sidebar_flyout_state = {"button": live_button, "source_index": index,
                              "layout": layout, "hover": None}
@@ -6107,7 +6153,8 @@ def _draw_flyout_tooltip(shader, region, state):
     if index is None or not (0 <= index < len(layout["buttons"])):
         return
     button = layout["buttons"][index]
-    paragraphs = tbar.sidebar_tooltip_lines(button, "command")
+    paragraphs = tbar.sidebar_tooltip_lines(
+        button, "command", _sidebar_command_name(button))
     width = 230.0
     pad = tbar.SIDEBAR_TOOLTIP_PAD
     line_h = tbar.SIDEBAR_TOOLTIP_LINE
@@ -7555,8 +7602,7 @@ class NARWHAL_OT_command_input(Operator):
             _track_cursor(event.mouse_x, event.mouse_y)
             # Grey the sidebar button under the
             # pointer, including buttons marked with a flyout/second-command arrow.
-            if sidebar_hover_update(event.mouse_x, event.mouse_y):
-                _tag_redraw_bands()
+            sidebar_hover_redraw_update(event.mouse_x, event.mouse_y)
             if sidebar_flyout_hover_update(event.mouse_x, event.mouse_y):
                 _tag_redraw_viewports()
             # reopened #20: highlight what an object/edge/face pick would take
