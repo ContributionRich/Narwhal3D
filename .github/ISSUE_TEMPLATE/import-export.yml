@@ -1,0 +1,52 @@
+name: Import, export, or save compatibility
+description: Report incorrect geometry, units, layers, names, or representation in a file workflow
+title: "[I/O] "
+labels:
+  - bug
+body:
+  - type: dropdown
+    id: direction
+    attributes:
+      label: Operation
+      options:
+        - Open
+        - Import
+        - Save or Save As
+        - Export
+        - Print or vector output
+    validations:
+      required: true
+  - type: input
+    id: format
+    attributes:
+      label: File format and producing application
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: What changed or failed?
+      description: Include geometry representation, units, layers, names, colors, object counts, or error text.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected result
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Narwhal version, package, and operating system
+    validations:
+      required: true
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: File safety
+      options:
+        - label: The attached file is minimal and I have permission to share it publicly.
+          required: true
+        - label: I kept an independent backup of the original file.
+          required: true

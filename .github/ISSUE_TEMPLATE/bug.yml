@@ -7,6 +7,8 @@ body:
   - type: markdown
     attributes:
       value: |
+        ![Narwhal 3D bug report](https://raw.githubusercontent.com/ContributionRich/Narwhal3D/main/docs/images/bugreport.png)
+
         Thank you for helping improve Narwhal 3D. Review the report before submitting and remove private file names, paths, or model data. The in-app Report panel copies sanitized Markdown here; screenshots and documents are never uploaded automatically.
   - type: textarea
     id: problem
@@ -14,6 +16,20 @@ body:
       label: What happened?
       description: Describe the behavior and the command or UI workflow that produced it.
       placeholder: Paste the report copied by Narwhal, or describe the problem here.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Narwhal version and package
+      placeholder: 0.2.0 AppImage
+    validations:
+      required: true
+  - type: input
+    id: platform
+    attributes:
+      label: Operating system, display server, and graphics hardware
+      placeholder: Linux distribution; Wayland or X11; GPU
     validations:
       required: true
   - type: textarea

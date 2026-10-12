@@ -4,7 +4,9 @@ Narwhal 3D is a free, open-source, command-driven NURBS CAD application. The cur
 
 **Licence:** [GPL-3.0-or-later](LICENSE). Contributions and dependencies must be GPL-compatible; see [CONTRIBUTING.md](CONTRIBUTING.md).
 
-> **Project status:** early public MVP. Save important work often and verify manufacturing output before production use. See [STATUS.md](STATUS.md) for implemented display modes, temporary-icon status, command gaps, and current limitations.
+> **Project status:** early public MVP. Save important work often and verify manufacturing output before production use.
+
+[Current status](STATUS.md) · [Roadmap](ROADMAP.md) · [Feature gaps](docs/gaps.md) · [Compatibility and independence](COMPATIBILITY.md) · [Contributing](CONTRIBUTING.md) · [Support](SUPPORT.md) · [Security](SECURITY.md)
 
 ## Command workflow
 
@@ -28,8 +30,8 @@ Narwhal keeps document geometry separate from viewport tessellation:
 The public release artifact is `Narwhal_3D-<version>-x86_64.AppImage`. Make it executable and run it directly:
 
 ```bash
-chmod +x Narwhal_3D-0.2.0-x86_64.AppImage
-./Narwhal_3D-0.2.0-x86_64.AppImage
+chmod +x Narwhal_3D-0.2.1-x86_64.AppImage
+./Narwhal_3D-0.2.1-x86_64.AppImage
 ```
 
 The AppImage contains the natively branded runtime, locked Python dependencies, application package, icons, and license notices. It does not install a separate host application.
@@ -74,7 +76,7 @@ REVISION=$(git rev-parse HEAD)
 EPOCH=$(git show -s --format=%ct HEAD)
 
 python3 scripts/assemble_linux_release.py \
-  --version 0.2.0 \
+  --version 0.2.1 \
   --source-revision "$REVISION" \
   --source-date-epoch "$EPOCH" \
   --runtime-dir tools/blender-patched \
@@ -83,8 +85,8 @@ python3 scripts/assemble_linux_release.py \
   --output-dir dist
 
 python3 scripts/verify_linux_release.py \
-  dist/Narwhal_3D-0.2.0-x86_64.AppImage \
-  --expected-version 0.2.0 \
+  dist/Narwhal_3D-0.2.1-x86_64.AppImage \
+  --expected-version 0.2.1 \
   --expected-source-revision "$REVISION" \
   --expected-source-date-epoch "$EPOCH"
 ```
@@ -103,6 +105,8 @@ Fast public model tests can be run with the bundled interpreter after bootstrap.
 The public branch intentionally excludes non-public development corpora, resource-mining tools, internal reports, and tests that require them.
 
 ## Report a bug
+
+![Narwhal 3D bug report](docs/images/bugreport.png)
 
 Open the **Bug Report** tab in the right dock, choose a category, and describe what happened. Press **Report** or `Ctrl+Enter`. Narwhal then:
 
@@ -124,7 +128,10 @@ Core, self-contained release functionality includes `.3dm`, STEP, DXF, SVG, OBJ,
 - `scripts/` — verified bootstrap, assembly, verification, and native-runtime build tools
 - `blender_patches/` — focused source patches used by the optional native build
 - `spike/` — selected self-contained tests retained on the public branch
-- `STATUS.md` — implemented surfaces, known gaps, temporary assets, and roadmap
+- `STATUS.md` — what works in the latest release
+- `COMPATIBILITY.md` — narrowly scoped target and independence statement
+- `ROADMAP.md` — outcome-based development phases and release gates
+- `docs/gaps.md` — detailed living inventory of incomplete and missing capabilities
 
 Internal names such as `narwhal3d`, `narwhal.*`, `rhino3dm`, and `.3dm` are compatibility or file-format interfaces; they are not product branding.
 

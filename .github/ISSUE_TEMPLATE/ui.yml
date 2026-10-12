@@ -1,0 +1,53 @@
+name: UI or accessibility problem
+description: Report a layout, interaction, keyboard, scaling, or accessibility issue
+title: "[UI] "
+labels:
+  - bug
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: Describe what is difficult, incorrect, clipped, inaccessible, or inconsistent.
+    validations:
+      required: true
+  - type: textarea
+    id: workflow
+    attributes:
+      label: Exact interaction
+      placeholder: Mouse buttons, keys, command, panel, and sequence
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Version, operating system, display server, scale, and resolution
+    validations:
+      required: true
+  - type: dropdown
+    id: input
+    attributes:
+      label: Input method affected
+      multiple: true
+      options:
+        - Mouse or pointer
+        - Keyboard
+        - Touchpad
+        - Screen reader or assistive technology
+        - High contrast or color vision
+        - Interface scaling
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: Privacy confirmation
+      options:
+        - label: I reviewed all text and attachments for private information.
+          required: true

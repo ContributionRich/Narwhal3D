@@ -19,7 +19,10 @@ ROOT = Path(__file__).resolve().parents[1]
 BRANCH = "narwhal3d-public"
 ROOT_FILES = (
     ".gitignore", "LICENSE", "README.md", "CONTRIBUTING.md", "STATUS.md",
-    "THIRD_PARTY_NOTICES", "docs/readme-command-loft.gif",
+    "COMPATIBILITY.md", "ROADMAP.md", "CHANGELOG.md", "SECURITY.md", "SUPPORT.md", "GOVERNANCE.md",
+    "CODE_OF_CONDUCT.md", "THIRD_PARTY_NOTICES",
+    "docs/readme-command-loft.gif", "docs/images/bugreport.png",
+    "docs/gaps.md", "docs/github-project.md",
     "narwhal3d.sh", "run_tests.sh", "uishot.sh", "pyrightconfig.json",
 )
 LAUNCH_FILES = (
@@ -60,7 +63,7 @@ TEST_FILES = (
     "spike/test_obj_reader.py", "spike/test_obj_writer.py",
     "spike/test_stl_writer.py", "spike/test_vector_export.py",
     "spike/test_onbrep_public.py", "spike/test_open_arg.py",
-    "spike/public_ui_report.py",
+    "spike/test_public_project.py", "spike/public_ui_report.py",
 )
 PACKAGE_EXCLUDES = {
     "narwhal3d/cdr_reader.py",

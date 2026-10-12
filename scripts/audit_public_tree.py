@@ -23,8 +23,18 @@ REQUIRED = {
     "README.md",
     "CONTRIBUTING.md",
     "STATUS.md",
+    "COMPATIBILITY.md",
+    "ROADMAP.md",
+    "CHANGELOG.md",
+    "SECURITY.md",
+    "SUPPORT.md",
+    "GOVERNANCE.md",
+    "CODE_OF_CONDUCT.md",
     "THIRD_PARTY_NOTICES",
     "docs/readme-command-loft.gif",
+    "docs/images/bugreport.png",
+    "docs/gaps.md",
+    "docs/github-project.md",
     "artwork/icons/README.md",
     "narwhal3d.sh",
     "run_tests.sh",
@@ -44,6 +54,7 @@ REQUIRED = {
 }
 FORBIDDEN_EXACT = {
     "AGENTS" + ".md",
+    "POLICY.md",
     "coco" + "cad.sh",
     "rhi" + "no" + "alt.sh",
     "narwhal3d/cdr_reader.py",
@@ -73,12 +84,15 @@ FORBIDDEN_GLOBS = (
 ALLOWED_IMAGES = (
     "launch/narwhal3d.png",
     "docs/readme-command-loft.gif",
+    "docs/images/bugreport.png",
     "artwork/icons/*.png",
     "narwhal3d/icons/narwhal-*.png",
     "blender_patches/narwhal3d_app_icon.svg",
 )
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".tif", ".tiff", ".webp", ".ico", ".svg"}
 LEGACY_PATH_PATTERN = re.compile(r"rhi" + r"no(?!3dm)", re.IGNORECASE)
+LEGACY_TEXT_PATTERN = re.compile(rb"\brhi" + rb"no(?!3dm)")
+LEGACY_TEXT_ALLOWED = {"COMPATIBILITY.md"}
 # Assemble signatures from fragments so this policy file is subject to its own scan.
 FORBIDDEN_TEXT = (
     b"/home/" + b"nathaniel",
@@ -113,7 +127,6 @@ FORBIDDEN_PATTERNS = (
     re.compile(rb"\bround\s+\d+\b"),
     re.compile(rb"\b(?:front" + rb"ier|lower tier|geometry agent|hand" + rb"off)\b"),
     re.compile(rb"spike/(?:probe|rhi" + rb"no_|gen_|measure_)"),
-    re.compile(rb"\brhi" + rb"no(?!3dm)"),
 )
 SECRET_MARKERS = (
     b"-----BEGIN PRIVATE " + b"KEY-----",
@@ -244,6 +257,11 @@ def audit_entries(entries: dict[str, tuple[str, bytes]], require_manifest: bool 
                 if match:
                     problems.append(
                         f"{path}: contains forbidden development marker {match.group(0)!r}")
+            if path not in LEGACY_TEXT_ALLOWED:
+                match = LEGACY_TEXT_PATTERN.search(folded)
+                if match:
+                    problems.append(
+                        f"{path}: contains forbidden legacy product marker {match.group(0)!r}")
         for marker in SECRET_MARKERS:
             if marker.lower() in folded:
                 problems.append(f"{path}: contains possible secret marker {marker!r}")
@@ -275,6 +293,8 @@ def self_check() -> None:
     )
     safe["narwhal3d/icons/narwhal-box.png"] = ("100644", b"\x89PNG\r\n\x1a\n\0")
     safe["dependency-name.txt"] = ("100644", b"rhi" + b"no3dm is required\n")
+    safe["COMPATIBILITY.md"] = (
+        "100644", b"Target: Rhi" + b"noceros 3D\nhttps://www.rhi" + b"no3d.com/\n")
     if audit_entries(safe):
         raise AuditError("self-check rejected a safe synthetic manifest")
     cases = (

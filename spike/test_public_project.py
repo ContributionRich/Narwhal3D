@@ -1,0 +1,104 @@
+#!/usr/bin/env python3
+"""Public repository organization, roadmap, issue forms, and asset policy checks."""
+from __future__ import annotations
+
+import importlib.util
+from pathlib import Path
+import re
+import struct
+import sys
+
+ROOT = Path(__file__).resolve().parents[1]
+
+checks = 0
+failures = []
+
+
+def check(condition, label, detail=""):
+    global checks
+    checks += 1
+    if condition:
+        print(f"  ok   {label}")
+    else:
+        failures.append(label)
+        print(f"  FAIL {label}" + (f" ({detail})" if detail else ""))
+
+
+required_docs = (
+    "README.md", "STATUS.md", "COMPATIBILITY.md", "ROADMAP.md", "CHANGELOG.md", "CONTRIBUTING.md",
+    "SECURITY.md", "SUPPORT.md", "GOVERNANCE.md", "CODE_OF_CONDUCT.md",
+    "docs/gaps.md", "docs/github-project.md",
+)
+check(all((ROOT / path).is_file() for path in required_docs),
+      "the public project and governance document set is complete")
+
+readme = (ROOT / "README.md").read_text(encoding="utf-8")
+for link in ("STATUS.md", "COMPATIBILITY.md", "ROADMAP.md", "docs/gaps.md", "CONTRIBUTING.md",
+             "SUPPORT.md", "SECURITY.md", "docs/images/bugreport.png"):
+    check(link in readme, f"README links {link}")
+
+roadmap = (ROOT / "ROADMAP.md").read_text(encoding="utf-8")
+check(all(f"## Phase {phase} " in roadmap for phase in range(1, 11)),
+      "the outcome roadmap contains all ten ordered phases")
+check("Stable-release gates" in roadmap and "Exact manufacturing geometry" in roadmap,
+      "the roadmap pins release and manufacturing-geometry gates")
+
+gaps = (ROOT / "docs/gaps.md").read_text(encoding="utf-8")
+check(all(term in gaps for term in ("Complete", "Partial", "Missing", "Deferred")),
+      "the gaps inventory defines honest status categories")
+check(all(section in gaps for section in (
+    "Curve creation", "Surface creation and editing", "Solids and B-rep topology",
+    "Mesh domain", "SubD domain", "Drafting and layouts", "UI and accessibility",
+    "Performance and reliability", "Import, export, and print", "Platform and packaging",
+)), "the gaps inventory spans the full product scope")
+
+logo = (ROOT / "docs/images/bugreport.png").read_bytes()
+check(logo[:8] == b"\x89PNG\r\n\x1a\n" and struct.unpack(">II", logo[16:24]) == (96, 96),
+      "the bug-report logo is a 96x96 PNG")
+
+forms = sorted((ROOT / ".github/ISSUE_TEMPLATE").glob("*.yml"))
+form_names = {path.name for path in forms}
+check({"bug.yml", "command.yml", "ui.yml", "performance.yml", "import-export.yml",
+       "feature.yml", "config.yml"} <= form_names,
+      "focused GitHub issue forms and template configuration are present", form_names)
+check(all("\nabout:" not in ("\n" + path.read_text(encoding="utf-8")) for path in forms),
+      "issue forms use the current description schema")
+check((ROOT / ".github/PULL_REQUEST_TEMPLATE.md").is_file()
+      and (ROOT / ".github/CODEOWNERS").is_file(),
+      "pull-request guidance and review ownership are present")
+
+spec = importlib.util.spec_from_file_location(
+    "public_branch", ROOT / "scripts/create_public_branch.py")
+assert spec is not None and spec.loader is not None
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+public = set(module.public_files())
+check(set(required_docs) <= public and "docs/images/bugreport.png" in public,
+      "the public allowlist includes the roadmap, governance docs, and bug logo")
+check("POLICY.md" not in public and not any(path.startswith("artifacts/") for path in public),
+      "instruction inputs and temporary planning artifacts stay outside public source")
+
+legacy = re.compile(r"rhi" + r"no(?!3dm)", re.IGNORECASE)
+compatibility = (ROOT / "COMPATIBILITY.md").read_text(encoding="utf-8")
+target_name = "Rhi" + "noceros 3D"
+target_url = "https://www.rhi" + "no3d.com/"
+check(compatibility.count(target_name) == 1 and target_url in compatibility
+      and "independently developed" in compatibility
+      and "not affiliated" in compatibility,
+      "the compatibility target is identified once in its dedicated independence statement")
+hits = []
+for relative in sorted(public):
+    path = ROOT / relative
+    if legacy.search(relative):
+        hits.append(relative)
+        continue
+    if path.suffix.lower() in {".png", ".gif", ".svg"} or relative == "COMPATIBILITY.md":
+        continue
+    text = path.read_text(encoding="utf-8", errors="ignore")
+    if legacy.search(text):
+        hits.append(relative)
+check(not hits, "legacy target naming is confined to COMPATIBILITY.md", hits[:10])
+
+print(f"\n{checks - len(failures)}/{checks} public-project checks passed")
+if failures:
+    raise SystemExit(1)

@@ -30,6 +30,7 @@ run "packaging: fetch lock" "$PYTHON" scripts/fetch_locked.py --self-check
 run "packaging: assemble release" "$PYTHON" scripts/assemble_linux_release.py --self-check
 run "packaging: verify release" "$PYTHON" scripts/verify_linux_release.py --self-check
 run "packaging: public-tree audit" "$PYTHON" scripts/audit_public_tree.py --self-check
+run "public project organization" "$PYTHON" spike/test_public_project.py
 run "packaging: bootstrap" scripts/bootstrap_dev_linux.sh --self-check
 run "packaging: Blender build" scripts/build_blender_linux.sh --self-check
 
