@@ -5,8 +5,8 @@ Runs under the bpy-free interpreter (everything but the display mesh) AND under
 earlier code: there was no `Picture` command, no image reader, no frame, no Picture
 material (watched: `commands.COMMANDS.get("picture")` is None -> every drive is RED).
 
-Run: tools/blender-5.2.2-linux-x64/5.2/python/bin/python3.13 spike/test_picture.py
-     tools/blender-5.2.2-linux-x64/blender -b --python spike/test_picture.py
+Run: tools/blender-patched/5.2/python/bin/python3.13 spike/test_picture.py
+     tools/blender-patched/blender -b --factory-startup --python spike/test_picture.py
 """
 import importlib.util
 import math
@@ -381,6 +381,118 @@ if HAVE_BMESH:
     check(not trim_done and "Trimmed ImportedPicture" in trim_msg,
           f"production Trim command replaces the imported Picture ({trim_msg!r})")
     check_replacements(trim_ctx, 1, "Trim")
+
+    def display_picture_facts(ctx, fobj, frame):
+        ob = ctx.object_by_name(fobj.Attributes.Name) if fobj is not None else None
+        images = []
+        corners = set()
+        max_error = float("inf")
+        if ob is not None:
+            for material in ob.data.materials:
+                if material is not None and material.node_tree is not None:
+                    images.extend(node.image for node in material.node_tree.nodes
+                                  if node.type == "TEX_IMAGE" and node.image is not None)
+            bm = bmesh.new()
+            bm.from_mesh(ob.data)
+            uv_layer = bm.loops.layers.uv.active
+            if uv_layer is not None and frame is not None:
+                max_error = 0.0
+                for face in bm.faces:
+                    for loop in face.loops:
+                        actual = tuple(loop[uv_layer].uv)
+                        expected = picture.uv_of(frame, tuple(loop.vert.co))
+                        max_error = max(max_error, abs(actual[0] - expected[0]),
+                                        abs(actual[1] - expected[1]))
+                        corners.add(tuple(round(value, 6) for value in actual))
+            bm.free()
+        return ob, images, corners, max_error
+
+    print("\n-- ProjectToCPlane preserves imported Picture display and persistence --")
+    project_ctx, project_input, project_display, _project_cutter = imported_picture_context()
+    project_ctx.active_cplane = lambda: cplane.WORLD_TOP
+    project = commands.ProjectToCPlaneCmd()
+    project.args = [["ImportedPicture"]]
+    project_msg, project_done = project.execute(project_ctx)
+    projected = next((fobj for fobj in project_ctx.model.file.Objects
+                      if (fobj.Attributes.Name or "").startswith("Projection")), None)
+    projected_frame = bridge.picture_frame(projected.Geometry) if projected is not None else None
+    check(project_done and projected is not None and "inputs kept" in project_msg
+          and project_ctx.model.object_id_by_name("ImportedPicture") is not None,
+          f"ProjectToCPlane keeps the imported Picture by default and creates a result "
+          f"({project_msg!r})")
+    check(bridge.picture_frame(project_input.Geometry) is None
+          and projected_frame == IMPORTED_FRAME,
+          "the marker-less input stays untouched while its projection receives the derived frame")
+
+    projected_material = (project_ctx.model.object_material(str(projected.Attributes.Id))
+                          if projected is not None else None)
+    projected_texture = (projected_material.GetBitmapTexture()
+                         if projected_material is not None else None)
+    check(projected is not None and projected_material is not None
+          and projected_texture is not None
+          and os.path.abspath(projected_texture.FileName) == PNG
+          and projected.Attributes.MaterialIndex != project_input.Attributes.MaterialIndex,
+          "the projected Picture receives its own object material and image texture")
+
+    projected_display, projected_images, projected_uvs, projected_uv_error = \
+        display_picture_facts(project_ctx, projected, projected_frame)
+    check(projected_display is not None and projected_display.get("narwhal_picture")
+          and len(projected_images) == 1
+          and os.path.abspath(bpy.path.abspath(projected_images[0].filepath)) == PNG,
+          "the projected Blender object is marked as a Picture and displays the image")
+    check(projected_uv_error < 1e-6
+          and {(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)} <= projected_uvs,
+          f"the projected display mesh has frame-correct 0/1 corner UVs "
+          f"(error {projected_uv_error}, UVs {sorted(projected_uvs)})")
+
+    projected_path = os.path.join(TMP, "projected-imported-picture.3dm")
+    saved = project_ctx.model.save(projected_path)
+    reloaded_model = model.NarwhalModel.load(projected_path) if saved else None
+    reloaded_ctx = commands.NarwhalContext(reloaded_model) if reloaded_model is not None else None
+    if reloaded_ctx is not None:
+        reloaded_ctx.rebuild_display()
+    reloaded = (next((fobj for fobj in reloaded_model.file.Objects
+                      if (fobj.Attributes.Name or "").startswith("Projection")), None)
+                if reloaded_model is not None else None)
+    reloaded_frame = bridge.picture_frame(reloaded.Geometry) if reloaded is not None else None
+    reloaded_material = (reloaded_model.object_material(str(reloaded.Attributes.Id))
+                         if reloaded_model is not None and reloaded is not None else None)
+    reloaded_texture = (reloaded_material.GetBitmapTexture()
+                        if reloaded_material is not None else None)
+    reloaded_display, reloaded_images, reloaded_uvs, reloaded_uv_error = \
+        (display_picture_facts(reloaded_ctx, reloaded, reloaded_frame)
+         if reloaded_ctx is not None else (None, [], set(), float("inf")))
+    check(saved and reloaded_frame == IMPORTED_FRAME and reloaded_texture is not None
+          and os.path.abspath(reloaded_texture.FileName) == PNG,
+          "projected Picture metadata and object material survive save/reload")
+    check(reloaded_display is not None and reloaded_display.get("narwhal_picture")
+          and len(reloaded_images) == 1
+          and os.path.abspath(bpy.path.abspath(reloaded_images[0].filepath)) == PNG
+          and reloaded_uv_error < 1e-6
+          and {(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)} <= reloaded_uvs,
+          f"after reload the projected object is still a textured Picture with correct UVs "
+          f"(error {reloaded_uv_error})")
+
+    delete_ctx, delete_input, _delete_display, _delete_cutter = imported_picture_context()
+    delete_ctx.active_cplane = lambda: cplane.WORLD_TOP
+    project = commands.ProjectToCPlaneCmd()
+    project.args = [["ImportedPicture"]]
+    project.opt["DeleteInput"] = True
+    delete_msg, delete_done = project.execute(delete_ctx)
+    delete_result = next((fobj for fobj in delete_ctx.model.file.Objects
+                          if (fobj.Attributes.Name or "").startswith("Projection")), None)
+    delete_result_display = (delete_ctx.object_by_name(delete_result.Attributes.Name)
+                             if delete_result is not None else None)
+    check(delete_done and "inputs deleted" in delete_msg
+          and delete_ctx.model.object_id_by_name("ImportedPicture") is None
+          and delete_ctx.object_by_name("ImportedPicture") is None
+          and bridge.picture_frame(delete_input.Geometry) is None,
+          f"DeleteInput=Yes removes the imported input without ever marking it "
+          f"({delete_msg!r})")
+    check(delete_result is not None and bridge.picture_frame(delete_result.Geometry) == IMPORTED_FRAME
+          and delete_result_display is not None
+          and delete_result_display.get("narwhal_picture"),
+          "DeleteInput=Yes retains the independently textured projected Picture")
 
     print("\n-- the display mesh carries UVs (blender -b) --")
     ctx, g, msg, done = draw(["2,1,0", "12,1,0"])

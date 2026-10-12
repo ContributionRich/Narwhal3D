@@ -5657,6 +5657,31 @@ def project_to_cplane_geometry(geom, plane):
         if isinstance(geom, r3.Point):
             xyz = project.project_point(geom.Location, plane)
             return r3.Point(r3.Point3d(*xyz)), "Projected point to the construction plane."
+        if isinstance(geom, r3.Brep):
+            frame = picture_frame(geom)
+            if frame is not None:
+                try:
+                    origin, u, v = _picture_frame_components(frame)
+                except ValueError as exc:
+                    return None, f"Picture: invalid stored frame -- {exc}"
+                projected_origin = project.project_point(origin, plane)
+                projected_u_point = project.project_point(
+                    tuple(origin[i] + u[i] for i in range(3)), plane)
+                projected_v_point = project.project_point(
+                    tuple(origin[i] + v[i] for i in range(3)), plane)
+                projected_frame = dict(frame)
+                projected_frame["origin"] = list(projected_origin)
+                projected_frame["u"] = [projected_u_point[i] - projected_origin[i]
+                                          for i in range(3)]
+                projected_frame["v"] = [projected_v_point[i] - projected_origin[i]
+                                          for i in range(3)]
+                try:
+                    _picture_frame_components(projected_frame)
+                except ValueError:
+                    return None, ("Picture: projection is edge-on and collapses its "
+                                  "frame to a line")
+                return make_picture(projected_frame), \
+                    "Projected Picture to the construction plane."
         if isinstance(geom, r3.Point3d):
             xyz = project.project_point(geom, plane)
             return r3.Point3d(*xyz), "Projected point to the construction plane."
@@ -5727,24 +5752,62 @@ def picture_frame(geom):
     return _picture().frame_from_json(text) if text else None
 
 
+def _picture_frame_components(frame):
+    """Validated ``(origin, u, v)`` tuples for an affine Picture frame."""
+    try:
+        values = tuple(tuple(float(c) for c in frame[key])
+                       for key in ("origin", "u", "v"))
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError("Picture: origin, u and v must be numeric 3-D vectors") from exc
+    if any(len(value) != 3 or not all(math.isfinite(c) for c in value)
+           for value in values):
+        raise ValueError("Picture: origin, u and v must be finite 3-D vectors")
+    origin, u, v = values
+    length_u = math.sqrt(sum(c * c for c in u))
+    length_v = math.sqrt(sum(c * c for c in v))
+    if length_u <= 1e-12 or length_v <= 1e-12:
+        raise ValueError("Picture: the rectangle has no size")
+    cross = (u[1] * v[2] - u[2] * v[1],
+             u[2] * v[0] - u[0] * v[2],
+             u[0] * v[1] - u[1] * v[0])
+    area = math.sqrt(sum(c * c for c in cross))
+    if area <= 1e-12 * length_u * length_v:
+        raise ValueError("Picture: the frame vectors are collinear")
+    return origin, u, v
+
+
 def make_picture(frame):
-    """The Picture's EXACT planar surface: a one-face brep spanning the frame's rectangle
+    """The Picture's EXACT planar surface: a one-face brep spanning the affine frame
     (origin, origin + u, origin + u + v, origin + v), with the frame stored on it.
 
-    (the command behavior): "draws a rectangular planar surface". Built from an
-    `r3.PlaneSurface` -- one planar face, degree 1, the exact rectangle; there is nothing to
-    facet. Raises ValueError for a degenerate frame.
+    (`the command behavior`): "draws a rectangular planar surface". A 2x2 degree-1
+    `r3.NurbsSurface` also preserves a frame that an affine operation has sheared; there is
+    nothing to facet. Raises ValueError for a degenerate frame.
     """
-    o, u, v = (tuple(frame[k]) for k in ("origin", "u", "v"))
-    w, h = math.sqrt(sum(c * c for c in u)), math.sqrt(sum(c * c for c in v))
-    if w <= 1e-12 or h <= 1e-12:
-        raise ValueError("Picture: the rectangle has no size")
-    plane = r3.Plane(r3.Point3d(*o), r3.Vector3d(*u), r3.Vector3d(*v))
-    srf = r3.PlaneSurface(plane, r3.Interval(0.0, w), r3.Interval(0.0, h))
-    brep = r3.Brep.CreateFromSurface(srf)
-    if brep is None:
+    origin, u, v = _picture_frame_components(frame)
+    corners = (
+        origin,
+        tuple(origin[i] + u[i] for i in range(3)),
+        tuple(origin[i] + u[i] + v[i] for i in range(3)),
+        tuple(origin[i] + v[i] for i in range(3)),
+    )
+    surface = r3.NurbsSurface.Create(3, False, 2, 2, 2, 2)
+    if surface is None:
+        raise ValueError("Picture: could not allocate the planar surface")
+    surface.KnotsU[0], surface.KnotsU[1] = 0.0, 1.0
+    surface.KnotsV[0], surface.KnotsV[1] = 0.0, 1.0
+    for indices, point in (((0, 0), corners[0]), ((1, 0), corners[1]),
+                           ((1, 1), corners[2]), ((0, 1), corners[3])):
+        surface.Points[indices] = r3.Point4d(*point, 1.0)
+    if not surface.IsValid:
+        raise ValueError("Picture: could not build a valid planar surface")
+    brep = r3.Brep.CreateFromSurface(surface)
+    if brep is None or not brep.IsValid:
         raise ValueError("Picture: could not build the planar surface")
-    brep.SetUserString("Narwhal3D:Picture", _picture().frame_to_json(frame))
+    stored_frame = dict(frame)
+    stored_frame["origin"], stored_frame["u"], stored_frame["v"] = \
+        [list(value) for value in (origin, u, v)]
+    brep.SetUserString(_picture().KEY, _picture().frame_to_json(stored_frame))
     return brep
 
 

@@ -6142,7 +6142,22 @@ class ProjectToCPlaneCmd(Command):
             geom = ctx.geom_by_name(name)
             if geom is None:
                 return f"ProjectToCPlane: no object named {name!r} -- nothing projected", True
-            out, msg = bridge.project_to_cplane_geometry(geom, plane)
+            prepared = geom
+            if isinstance(geom, r3.Brep) and bridge.picture_frame(geom) is None:
+                source = next((fobj for fobj in ctx.model.file.Objects
+                               if (fobj.Attributes.Name or "").lower() == name.lower()), None)
+                derive_frame = getattr(ctx, "_texture_frame", None)
+                frame = (derive_frame(geom, source)
+                         if source is not None and callable(derive_frame) else None)
+                if frame is not None:
+                    prepared = geom.Duplicate()
+                    if prepared is None:
+                        return (f"ProjectToCPlane: {name}: Picture could not be duplicated "
+                                "-- nothing projected"), True
+                    from . import picture
+
+                    prepared.SetUserString("Narwhal3D:Picture", picture.frame_to_json(frame))
+            out, msg = bridge.project_to_cplane_geometry(prepared, plane)
             if out is None:
                 return f"ProjectToCPlane: {name}: {msg} -- nothing projected", True
             plan.append((name, out, _layer_index_of(ctx, name)))
