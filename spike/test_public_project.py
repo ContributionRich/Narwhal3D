@@ -36,6 +36,22 @@ readme = (ROOT / "README.md").read_text(encoding="utf-8")
 for link in ("STATUS.md", "COMPATIBILITY.md", "ROADMAP.md", "docs/gaps.md", "CONTRIBUTING.md",
              "SUPPORT.md", "SECURITY.md", "docs/images/bugreport.png"):
     check(link in readme, f"README links {link}")
+check("Narwhal_3D-0.3.0-x86_64.AppImage" in readme
+      and "--version 0.3.0" in readme
+      and "--expected-version 0.3.0" in readme,
+      "README install and release examples use version 0.3.0")
+
+gif_path = ROOT / "docs/readme-command-loft.gif"
+gif_bytes = gif_path.read_bytes()
+check(gif_bytes.startswith(b"GIF8") and len(gif_bytes) > 100_000,
+      "the README command demo is a non-empty GIF")
+capture = (ROOT / "scripts/capture_readme_demo.py").read_text(encoding="utf-8")
+recorder = (ROOT / "scripts/build_readme_demo.sh").read_text(encoding="utf-8")
+check("CAPTURE.write_text" in capture and "DONE.write_text" in capture
+      and '[[ ! -f "$CAPTURE" ]]' in recorder and '[[ ! -f "$DONE" ]]' in recorder,
+      "README capture starts and stops on explicit in-app markers")
+check("--activewindow" in recorder and "--pointer" in recorder,
+      "README capture records only the active application window with the pointer")
 
 roadmap = (ROOT / "ROADMAP.md").read_text(encoding="utf-8")
 check(all(f"## Phase {phase} " in roadmap for phase in range(1, 11)),

@@ -23,6 +23,7 @@ CATEGORY_COLORS: dict[str, tuple[int, int, int, int]] = {
     "Set View": (66, 119, 70, 255),
     "Display": (74, 132, 92, 255),
     "Select": (172, 126, 45, 255),
+    "Viewport Layout": (58, 112, 150, 255),
     "Visibility": (82, 103, 126, 255),
     "Transform": (125, 82, 181, 255),
     "Curve Tools": (30, 145, 112, 255),
@@ -53,15 +54,19 @@ def _toolbar_data() -> Any:
 
 
 def icon_specs() -> dict[str, str]:
-    """Return ``{filename: category}`` for every toolbar icon."""
-    specs: dict[str, str] = {}
+    """Return ``{filename: category}`` for every manifested runtime icon."""
     data = _toolbar_data()
+    specs: dict[str, str] = {filename: "Panel" for filename in data.ICON_NAMES}
     for tab in data.TABS:
         category = tab["name"]
         for button in tab["buttons"]:
-            specs[button["icon"]] = category
-    for filename in data.PANEL_ICON_NAMES:
-        specs[filename] = "Panel"
+            filename = button.get("icon")
+            if filename:
+                specs[filename] = category
+    for button in data.SIDEBAR["buttons"]:
+        filename = button.get("icon")
+        if filename:
+            specs.setdefault(filename, "Standard")
     return specs
 
 

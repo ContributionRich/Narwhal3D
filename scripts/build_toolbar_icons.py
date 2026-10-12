@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Build active 24px toolbar icons from the licensed source artwork.
+"""Build 24 px runtime icons from contributor-owned Narwhal 3D artwork.
 
-The importer maps exact source stems plus a small reviewed alias table to active command
-keys. It never installs icons for commands that are not currently exposed or guesses
-ambiguous mappings. ImageMagick performs the high-quality RGBA downscale.
+Every manifested toolbar slot first receives a deterministic project placeholder. When
+``toolbar_data.ICON_SOURCES`` names a contributed 96 px PNG, ImageMagick replaces that
+placeholder with a high-quality downscale. The mapping is by visible toolbar symbol—not by
+command—so repeated command variants can retain distinct artwork.
 """
 from __future__ import annotations
 
@@ -17,13 +18,6 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "artwork" / "icons"
 OUTPUT = ROOT / "narwhal3d" / "icons"
-ALIASES = {
-    "grid": "grid_on",
-    "pointsoff": "pointsoff_rt",
-    "rectangle": "rectangle_corner",
-    "redo": "redo_rt",
-    "rotate3d": "rotate3d_rt",
-}
 
 
 def _toolbar_data():
@@ -36,14 +30,21 @@ def _toolbar_data():
     return module
 
 
-def active_commands():
+def source_matches():
+    """Return ``(matched, missing)`` runtime filenames from the authored manifest."""
     data = _toolbar_data()
-    return {
-        button["command"]
-        for tab in data.TABS
-        for button in tab["buttons"]
-        if button.get("command")
+    matched = {
+        runtime: source
+        for runtime, source in data.ICON_SOURCES.items()
+        if source and (SOURCE / source).is_file()
     }
+    missing = sorted(set(data.ICON_NAMES) - set(matched))
+    return dict(sorted(matched.items())), missing
+
+
+def exact_matches():
+    """Compatibility alias retained for focused tests and release tooling."""
+    return source_matches()
 
 
 def _write_placeholders():
@@ -54,20 +55,11 @@ def _write_placeholders():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     wanted = set(module.icon_specs())
+    OUTPUT.mkdir(parents=True, exist_ok=True)
     for path in OUTPUT.glob("*.png"):
         if path.name not in wanted:
             path.unlink()
     module.write_icons(str(OUTPUT))
-
-
-def exact_matches():
-    available = {path.stem for path in SOURCE.glob("*.png") if path.is_file()}
-    active = active_commands()
-    matched = {
-        name for name in active
-        if name in available or ALIASES.get(name) in available
-    }
-    return sorted(matched), sorted(active - matched)
 
 
 def converter():
@@ -78,15 +70,14 @@ def converter():
 
 
 def install():
-    matched, missing = exact_matches()
+    matched, missing = source_matches()
     command = converter()
-    OUTPUT.mkdir(parents=True, exist_ok=True)
     _write_placeholders()
     with tempfile.TemporaryDirectory(prefix="narwhal3d-icons-") as temporary:
         temporary = Path(temporary)
-        for name in matched:
-            source = SOURCE / f"{ALIASES.get(name, name)}.png"
-            target = temporary / f"narwhal-{name}.png"
+        for runtime, source_name in matched.items():
+            source = SOURCE / source_name
+            target = temporary / runtime
             args = [command]
             if Path(command).name == "magick":
                 args.append("convert")
@@ -95,21 +86,19 @@ def install():
                 "-strip", str(target),
             ])
             subprocess.run(args, check=True)
-            shutil.move(str(target), OUTPUT / target.name)
-    return matched, missing
+            shutil.move(str(target), OUTPUT / runtime)
+    return sorted(matched), missing
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--list", action="store_true", help="report exact matches without writing")
+    parser.add_argument("--list", action="store_true", help="report mappings without writing")
     args = parser.parse_args()
-    if args.list:
-        matched, missing = exact_matches()
-    else:
-        matched, missing = install()
-    print(f"installed/exact: {len(matched)}")
-    print("\n".join(f"  {name}" for name in matched))
-    print(f"missing active: {len(missing)}")
+    matched, missing = source_matches() if args.list else install()
+    names = sorted(matched)
+    print(f"installed/exact: {len(names)}")
+    print("\n".join(f"  {name}" for name in names))
+    print(f"generated placeholders: {len(missing)}")
     print("\n".join(f"  {name}" for name in missing))
 
 

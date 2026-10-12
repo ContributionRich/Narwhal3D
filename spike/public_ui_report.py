@@ -17,9 +17,9 @@ EXPECTED_MENUS = (
     "Transform", "Analyze", "Render", "Tools", "Window", "Help",
 )
 EXPECTED_TOOLBARS = (
-    "Standard", "CPlanes", "Set View", "Display", "Select", "Visibility",
-    "Transform", "Curve Tools", "Surface Tools", "Solid Tools", "SubD Tools",
-    "Mesh Tools", "Drafting", "Analyze", "Render",
+    "Standard", "CPlanes", "Set View", "Display", "Select", "Viewport Layout",
+    "Visibility", "Transform", "Curve Tools", "Surface Tools", "Solid Tools",
+    "SubD Tools", "Mesh Tools", "Render", "Drafting",
 )
 EXPECTED_RIGHT_TABS = ("Layers", "Properties", "Display", "Bug Report")
 EXPECTED_VIEWS = ("Top", "Front", "Perspective", "Right")
@@ -50,7 +50,7 @@ def _layout_ready():
         and not getattr(ui, "_viewports_in_progress", False)
         and ui.left_band_area() is not None
         and ui.right_band_area() is not None
-        and len(getattr(ui, "_sidebar_cells", ())) == 52
+        and len(getattr(ui, "_sidebar_cells", ())) == 37
         and bool(ui.get_osnap_panel_boxes())
         and len(getattr(ui, "_right_tab_boxes", ())) == 4
     )
@@ -122,12 +122,53 @@ def _inspect(layout_was_ready):
           f"initial={initial_tab!r}, final={ui.toolbar_tab()!r}")
     toolbar_enabled, toolbar_total = toolbars.coverage(set(ui.COMMANDS))
     check("toolbar actions are runnable or explicitly unavailable",
-          (toolbar_enabled, toolbar_total) == (145, 176),
+          (toolbar_enabled, toolbar_total) == (115, 525),
           f"{toolbar_enabled}/{toolbar_total}")
 
     sidebar_cells = list(getattr(ui, "_sidebar_cells", ()))
-    check("favorites sidebar has 52 live cells", len(sidebar_cells) == 52,
+    check("left tool palette has 37 live cells", len(sidebar_cells) == 37,
           f"{len(sidebar_cells)} cells")
+    sidebar_buttons = list(getattr(ui, "_sidebar_buttons", ()))
+    first_sidebar = sidebar_cells[0] if sidebar_cells else None
+    if first_sidebar is not None:
+        first_center = ((first_sidebar[1] + first_sidebar[3]) * 0.5,
+                        (first_sidebar[2] + first_sidebar[4]) * 0.5)
+        ui.sidebar_hover_update(*first_center)
+    hovered = (ui.sidebar_action_at(*first_center) if first_sidebar is not None else None)
+    hover_lines = (toolbars.sidebar_tooltip_lines(hovered[1], hovered[2])
+                   if hovered is not None else ())
+    check("hovering a left icon identifies its action", bool(hover_lines),
+          hover_lines[0] if hover_lines else "no tooltip")
+    linked_button = next((button for button in sidebar_buttons
+                          if button.link), None)
+    linked_index = sidebar_buttons.index(linked_button) if linked_button is not None else None
+    rebuilt_sidebar = toolbars.sidebar_buttons(set(ui.COMMANDS))
+    retained_button = (rebuilt_sidebar[linked_index] if linked_index is not None else None)
+    opened = (ui.show_sidebar_flyout(retained_button, linked_index)
+              if retained_button is not None else None)
+    flyout = ui.sidebar_flyout_layout()
+    flyout_hit = None
+    if flyout and flyout["cells"]:
+        first = flyout["cells"][0]
+        flyout_center = ((first[1] + first[3]) * 0.5,
+                         (first[2] + first[4]) * 0.5)
+        ui.sidebar_flyout_hover_update(*flyout_center)
+        flyout_hit = ui.sidebar_flyout_action_at(*flyout_center)
+    flyout_ok = (opened == getattr(linked_button, "link", None)
+                 and flyout is not None and len(flyout["buttons"]) > 1
+                 and len({cell[1] for cell in flyout["cells"][:5]}) == 5
+                 and flyout_hit is flyout["buttons"][0]
+                 and abs((flyout["cells"][0][3] - flyout["cells"][0][1])
+                         - toolbars.FLYOUT_CELL) < 0.01)
+    flyout_detail = "closed"
+    if flyout:
+        width = flyout["panel"][2] - flyout["panel"][0]
+        cell_width = flyout["cells"][0][3] - flyout["cells"][0][1] if flyout["cells"] else 0
+        flyout_detail = (f"{opened}: {len(flyout['buttons'])} icons, "
+                          f"panel={width:.1f}, cell={cell_width:.1f}, "
+                          f"constant={toolbars.FLYOUT_CELL:.1f}")
+    check("sidebar arrow opens a five-column floating icon toolbar", flyout_ok,
+          flyout_detail)
 
     icon_names = set(toolbars.toolbar_data.ICON_NAMES)
     icon_paths = [toolbars.icon_path(name) for name in icon_names]

@@ -23,7 +23,7 @@ The current application provides:
 - four model viewports with Wireframe, Shaded, and Rendered modes;
 - a command line with prompts, options, typed coordinates, selection, object snaps, and history;
 - fifteen original menu groups exposing all currently registered commands;
-- fifteen workflow toolbar tabs and a dense favorites palette;
+- fifteen desktop toolbar tabs, a 37-cell left tool palette, and linked command flyouts;
 - layers, object properties inspection, display controls, and local/GitHub bug reporting;
 - exact NURBS curves, analytic primitives, exact solid operations through Open CASCADE, and display-only tessellation;
 - `.3dm`, STEP, DXF, SVG, PDF/AI, OBJ, and STL workflows within documented limits;

@@ -4,6 +4,26 @@ All notable public changes will be recorded here. Narwhal 3D is currently in pre
 
 ## Unreleased
 
+## 0.3.0 — 2026-10-12
+
+### Added
+
+- Complete fifteen-tab toolbar workspace, 37-cell left palette, and 28 linked command flyouts.
+- Five-column floating icon flyouts with command tooltips, implementation status, click-away dismissal, and reliable anchors after redraw.
+- Expanded contributor-authored icon set covering 555 of 561 runtime symbols.
+- Responsive left toolbar and right dock layouts with fixed-size toolbar icons.
+
+### Changed
+
+- Refreshed the README Loft demonstration with the current interface and visible pointer movement.
+- Improved large-selection and grouped-curve Gumball performance while preserving display/document transform coherence.
+- Expanded public contributor guidance, issue organization, roadmap, feature-gap inventory, and privacy-preserving bug reporting.
+- Updated the natively branded Linux x86_64 AppImage build.
+
+### Platform note
+
+- A Windows binary is not included. It requires a native Windows build, packaging, verification, and real Windows GUI/GPU validation before publication.
+
 ## 0.2.1 — 2026-10-11
 
 ### Added

@@ -6,7 +6,7 @@ Narwhal 3D is an early public MVP. This page records what currently works and wh
 
 Narwhal 3D is **not yet at full command parity with established NURBS CAD workflows**. It has a substantial working command set, but many commands, advanced options, selection routes, dialogs, and viewport tools remain missing or incomplete. A registered command name means that command is runnable; it does not guarantee every advanced option or interaction path is complete.
 
-The authored menu hierarchy exposes all 166 commands currently registered by Narwhal. Seventeen broader roadmap families remain visible with `(Not implemented)` labels. The workflow toolbar provides 145 runnable actions and 31 explicitly unavailable roadmap actions across fifteen tabs; unavailable buttons identify themselves on hover and explain the gap when clicked.
+The authored menu hierarchy exposes all 166 commands currently registered by Narwhal. Seventeen broader roadmap families remain visible with `(Not implemented)` labels. The desktop toolbar workspace contains 582 top-strip slots across fifteen tabs plus the 37-cell left tool palette and its 28 linked flyouts. Of the 525 non-separator top slots, 115 currently invoke registered commands; every unavailable action remains visible, identifies itself on hover, and explains the gap when clicked.
 
 The issue tracker is the live source for bounded contribution work. Current one-command starter tasks include:
 
@@ -40,7 +40,7 @@ They can be selected from:
 
 ## Icons and visual design
 
-The expanded toolbar uses owner-generated GPL-3.0-or-later source artwork for 93 of its 176 command and roadmap actions. The other 83 toolbar actions and all four right-panel icons use generated placeholders. The icon set remains work in progress rather than final visual design.
+The expanded workspace manifests 561 distinct runtime symbols. Owner-generated GPL-3.0-or-later source artwork supplies 555 of them, including every left-palette cell and all four right-panel tabs. Six specialized actions still use distinct generated placeholders: Parametric tools, three visibility clusters, Analyze curve deviation, and Update all linked blocks. The icon set remains work in progress rather than final visual design.
 
 Artwork published with Narwhal must be original or have clearly documented GPL-compatible redistribution terms. Contributions should include source artwork, licence information, and readable light/dark-theme behavior.
 
@@ -55,7 +55,7 @@ Artwork published with Narwhal must be original or have clearly documented GPL-c
 
 ## Platform and architecture roadmap
 
-The current supported release target is Linux x86_64 through the AppImage bundle. Other platforms are planned but not currently release targets.
+The current supported release target is Linux x86_64 through the AppImage bundle. Windows and macOS are planned but are not current release targets. A Windows executable is not published yet because it requires a native MSVC/Windows SDK build, Windows resource branding and launcher work, locked Windows dependencies, a platform-specific verifier, and real Windows GUI/GPU validation; a renamed or cross-wrapped Linux binary would not be a valid substitute.
 
 During the 0.x phase, commands, interaction behavior, document orchestration, and much of the UI are implemented in Python for rapid correction and testing. Exact geometry already runs through compiled Open CASCADE code, and the bundled Blender runtime carries native Narwhal patches.
 

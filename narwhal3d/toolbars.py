@@ -100,6 +100,11 @@ class Button:
         """Return non-empty fallback text for renderers without an icon."""
         return self.text or self.tooltip or (self.left or "?")
 
+    @property
+    def is_separator(self):
+        """Return whether this record is an intentional toolbar spacer."""
+        return not any((self.text, self.tooltip, self.left, self.right, self.icon, self.link))
+
     def hover_text(self):
         """Identify the primary action and any alternate right-click action."""
         parts = []
@@ -183,6 +188,15 @@ SIDEBAR_PAD = 2.0
 SIDEBAR_CELL = SIDEBAR_ICON + SIDEBAR_PAD * 2
 SIDEBAR_MARK = 5.0
 SIDEBAR_FLYOUT_HOT = 12.0
+SIDEBAR_TOOLTIP_PAD = 5.0
+SIDEBAR_TOOLTIP_GAP = 4.0
+SIDEBAR_TOOLTIP_LINE = 14.0
+SIDEBAR_TOOLTIP_FONT = 11.0
+FLYOUT_COLUMNS = 5
+FLYOUT_CELL = 40.0
+FLYOUT_MARGIN = 5.0
+FLYOUT_TITLE_H = 14.0
+FLYOUT_OVERLAP = 4.0
 
 
 def sidebar_name():
@@ -208,6 +222,112 @@ def sidebar_flyout_rows(button, implemented=None):
         return []
     implemented = set(implemented or ())
     return [_button(record, implemented) for record in records]
+
+
+def button_key(button):
+    """Return the stable fields identifying a button across sidebar redraws."""
+    if button is None:
+        return None
+    return (button.left, button.right, button.link, button.icon,
+            button.text, button.tooltip)
+
+
+def sidebar_button_index(buttons, target, preferred=None):
+    """Resolve a retained button after redraw rebuilt equivalent button objects."""
+    wanted = button_key(target)
+    if wanted is None:
+        return None
+    if preferred is not None:
+        index = int(preferred)
+        if 0 <= index < len(buttons or ()) and button_key(buttons[index]) == wanted:
+            return index
+    for index, button in enumerate(buttons or ()):
+        if button_key(button) == wanted:
+            return index
+    return None
+
+
+def sidebar_tooltip_lines(button, part="command"):
+    """Return concise tooltip paragraphs for a left-palette cell or its arrow."""
+    if button is None:
+        return ()
+    if part == "flyout" and button.link:
+        return (f"{button.link} tools", "Click the arrow to open")
+    lines = []
+    primary = button.tooltip or button.text or button.left
+    if primary:
+        lines.append(primary if button.enabled else f"{primary} — not implemented")
+    if button.right:
+        alternate = button.right_tooltip or button.right
+        suffix = "" if button.right_enabled else " — not implemented"
+        lines.append(f"Right-click: {alternate}{suffix}")
+    if button.link:
+        lines.append(f"Arrow: {button.link} tools")
+    return tuple(lines)
+
+
+def flyout_icon_groups(buttons, columns=FLYOUT_COLUMNS):
+    """Split flyout buttons into separator-preserving rows of icon cells.
+
+    The return shape is ``groups -> rows -> buttons``. Empty separator runs are
+    discarded, and every non-empty row contains at most ``columns`` buttons.
+    """
+    columns = max(1, int(columns))
+    groups = []
+    group = []
+
+    def finish_group():
+        if not group:
+            return
+        groups.append(tuple(tuple(group[i:i + columns])
+                            for i in range(0, len(group), columns)))
+        group.clear()
+
+    for button in buttons or ():
+        if button.is_separator:
+            finish_group()
+        else:
+            group.append(button)
+    finish_group()
+    return tuple(groups)
+
+
+def flyout_icon_buttons(buttons):
+    """Return drawable flyout actions in order, omitting separator records."""
+    return tuple(button for button in (buttons or ()) if not button.is_separator)
+
+
+def flyout_popup_layout(anchor_x, anchor_y, buttons, window_width, window_height,
+                        columns=None, cell=None):
+    """Lay out the light floating icon toolbar in window coordinates."""
+    items = flyout_icon_buttons(buttons)
+    columns = FLYOUT_COLUMNS if columns is None else columns
+    cell = FLYOUT_CELL if cell is None else cell
+    columns = max(1, int(columns))
+    cell = max(1.0, float(cell))
+    rows = (len(items) + columns - 1) // columns if items else 0
+    panel_w = FLYOUT_MARGIN * 2.0 + columns * cell
+    panel_h = FLYOUT_TITLE_H + FLYOUT_MARGIN * 2.0 + rows * cell
+    max_x = max(0.0, float(window_width) - panel_w)
+    max_top = max(panel_h, float(window_height))
+    x0 = min(max(0.0, float(anchor_x) - FLYOUT_OVERLAP), max_x)
+    top = min(max(panel_h, float(anchor_y)), max_top)
+    panel = (x0, top - panel_h, x0 + panel_w, top)
+    title = (x0, top - FLYOUT_TITLE_H, x0 + panel_w, top)
+    grid_top = title[1] - FLYOUT_MARGIN
+    cells = []
+    for index in range(len(items)):
+        column = index % columns
+        row = index // columns
+        cx0 = x0 + FLYOUT_MARGIN + column * cell
+        cy1 = grid_top - row * cell
+        cells.append((index, cx0, cy1 - cell, cx0 + cell, cy1))
+    return {"panel": panel, "title": title, "cells": tuple(cells), "buttons": items}
+
+
+def hit_flyout(x, y, cells):
+    """Return a floating-toolbar icon index at a window point, or ``None``."""
+    return hit_sidebar(x, y, cells)
 
 
 def sidebar_columns(width, cell=None):

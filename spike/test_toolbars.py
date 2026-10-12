@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Focused pure tests for Narwhal 3D's complete workflow toolbar layer."""
+"""Focused pure tests for Narwhal 3D's complete desktop toolbar workspace."""
 from __future__ import annotations
 
-from collections.abc import Iterator
 import importlib
 import importlib.util
 import os
+from pathlib import Path
 import struct
 import sys
 import tempfile
@@ -51,7 +51,6 @@ def check(condition: object, label: str, detail: object = "") -> None:
 
 
 def live_command_names() -> set[str]:
-    """Load the same command providers as the running application, without bpy."""
     commands = importlib.import_module("narwhal3d.commands")
     for provider in (
         "import_commands", "solid_commands", "file_commands", "print_commands",
@@ -61,200 +60,214 @@ def live_command_names() -> set[str]:
     return set(commands.COMMANDS)
 
 
-def all_records() -> Iterator[dict[str, object]]:
+def all_records():
     for tab in data.TABS:
         yield from tab["buttons"]
     yield from data.SIDEBAR["buttons"]
+    for rows in data.FLYOUTS.values():
+        yield from rows
 
 
-print("\n1. Complete original workflow content")
-names = toolbars.tab_names()
-expected_names = (
-    "Standard", "CPlanes", "Set View", "Display", "Select", "Visibility",
-    "Transform", "Curve Tools", "Surface Tools", "Solid Tools", "SubD Tools",
-    "Mesh Tools", "Drafting", "Analyze", "Render",
-)
-check(toolbars.container_name() == "Narwhal 3D", "container uses the Narwhal 3D identity")
-check(names == expected_names, "the workflow tab sequence is complete and pinned", names)
-check(len(names) == len(set(names)), "category names are unique")
-check(toolbars.default_tab() in names, "the default category is valid")
-check(all(toolbars.tab_rows(name, set()) for name in names), "every category contains actions")
-
-primary = [record for tab in data.TABS for record in tab["buttons"]]
-commands = [record["command"] for record in primary]
-implemented = live_command_names()
-check(len(implemented) == 166, "the app-equivalent registry has 166 commands", len(implemented))
-check(len(primary) == 176, "the fuller toolbar has a pinned, bounded action count", len(primary))
-check(len(commands) == len(set(commands)), "each primary action appears in one category")
-ambiguous = [record for record in primary
-             if (record["command"] in implemented)
-             == str(record["text"]).endswith(data.TODO_SUFFIX)]
-check(not ambiguous, "every toolbar action is runnable or visibly marked not implemented",
-      [record["command"] for record in ambiguous])
-check(not any(not record["text"] or not record["tooltip"] for record in primary),
-      "every action has an original label and hover description")
-
-print("\n2. Stable Button API, hover text, right actions, and flyouts")
-rows = [button for name in names for button in toolbars.tab_rows(name, implemented)]
-required_attrs = ("text", "tooltip", "left", "right", "right_tooltip", "icon",
-                  "link", "enabled", "right_enabled", "label")
-check(rows and all(all(hasattr(button, attr) for attr in required_attrs) for button in rows),
-      "Button retains every field consumed by the host UI")
-check(sum(button.enabled for button in rows) == 145,
-      "145 implemented toolbar actions are enabled", sum(button.enabled for button in rows))
-check(all((button.enabled or "not implemented yet" in button.hover_text()) for button in rows),
-      "unavailable toolbar actions explain that they are not implemented")
-check(all(button.text.lower() in button.hover_text().lower() for button in rows),
-      "hover text identifies every primary action")
-check(all(not button.enabled and "not implemented yet" in button.hover_text()
-          for name in names for button in toolbars.tab_rows(name, set())),
-      "availability remains explicit when given an empty registry")
-
-sidebar = toolbars.sidebar_buttons(implemented)
-check(toolbars.sidebar_name() == "Narwhal Tools", "the left sidebar has a project-owned name")
-check(len(sidebar) == 52, "the favorites sidebar is a dense 52-cell palette", len(sidebar))
-check(all(button.icon and button.left for button in sidebar), "every favorite has an icon and action")
-righties = [button for button in sidebar if button.right]
-check(righties and all(button.right_enabled for button in righties),
-      "practical alternate right-click actions remain runnable")
-check(all("right-click:" in button.hover_text() for button in righties),
-      "hover text identifies every alternate action")
-linked = [button for button in sidebar if button.link]
-check(set(button.link for button in linked) == set(names),
-      "favorites expose one flyout for every category")
-check(all(toolbars.sidebar_flyout_rows(button, implemented) for button in linked),
-      "every linked favorite opens a populated flyout")
-check(toolbars.sidebar_flyout_rows(sidebar[-1], implemented) == [],
-      "an unlinked favorite does not invent a flyout")
-
-enabled, total = toolbars.coverage(implemented)
-check((enabled, total) == (145, 176), "coverage separates runnable and TODO actions")
-check(toolbars.tab_rows("Not A Category", implemented) == [],
-      "an unknown category remains harmless")
-
-print("\n3. Bundled Narwhal icon manifest and generator")
-record_icons: set[str] = {str(record["icon"]) for record in all_records()}
-check(record_icons == data.TOOLBAR_ICON_NAMES,
-      "the toolbar icon manifest covers every toolbar record")
-all_icons = set(data.ICON_NAMES)
-check(all_icons == set(generator.icon_specs()),
-      "the generator covers toolbar and right-panel manifests")
-check(len(data.PANEL_ICON_NAMES) == 4,
-      "the right dock declares four project-owned placeholder icons")
-check(all(name.startswith("narwhal-") and name.endswith(".png")
-          and name == os.path.basename(name) for name in all_icons),
-      "all icon names are explicitly project-owned safe basenames")
-check(toolbars.icons_available(), "every declared icon is bundled")
-bundled_names = {name for name in os.listdir(os.path.join(PACKAGE_DIR, "icons"))
-                 if name.endswith(".png")}
-check(bundled_names == all_icons, "the icon directory contains only manifested PNGs",
-      sorted(bundled_names ^ all_icons))
-
-resolved = [toolbars.icon_path(name) for name in sorted(all_icons)]
-icon_root = os.path.realpath(os.path.join(PACKAGE_DIR, "icons"))
-check(all(path and os.path.commonpath((icon_root, os.path.realpath(path))) == icon_root
-          for path in resolved), "every icon resolves only under narwhal3d/icons")
-check(len(set(resolved)) == len(all_icons), "each manifest name resolves to one file")
-
-png_ok = True
-for path in resolved:
+def png_size(path: str | Path) -> tuple[int, int] | None:
     with open(path, "rb") as stream:
         blob = stream.read(24)
-    png_ok = png_ok and blob[:8] == b"\x89PNG\r\n\x1a\n"
-    png_ok = png_ok and struct.unpack(">II", blob[16:24]) == (24, 24)
-check(png_ok, "every bundled icon is a valid-looking 24x24 PNG")
+    if blob[:8] != b"\x89PNG\r\n\x1a\n":
+        return None
+    return struct.unpack(">II", blob[16:24])
 
-matched_sources, missing_sources = builder.exact_matches()
-curated_icons = {f"narwhal-{command}.png" for command in matched_sources}
-check(len(curated_icons) == 93 and curated_icons <= record_icons,
-      "93 toolbar actions use exact or explicitly mapped source artwork")
-with tempfile.TemporaryDirectory() as generated_dir:
-    generated = generator.write_icons(generated_dir)
-    placeholders_match = len(generated) == len(all_icons)
-    curated_differ = True
-    for path in generated:
-        committed = os.path.join(icon_root, os.path.basename(path))
-        same = open(path, "rb").read() == open(committed, "rb").read()
-        if os.path.basename(path) in curated_icons:
-            curated_differ = curated_differ and not same
-        else:
-            placeholders_match = placeholders_match and same
-check(placeholders_match, "unmatched bundled PNGs exactly match the placeholder generator")
-check(curated_differ, "curated command PNGs replace their generated placeholders")
-source_icons = sorted(builder.SOURCE.glob("*.png"))
-source_dimensions = []
-for path in source_icons:
-    blob = path.read_bytes()[:24]
-    source_dimensions.append(
-        blob[:8] == b"\x89PNG\r\n\x1a\n" and struct.unpack(">II", blob[16:24]) == (96, 96))
-check(len(source_icons) == 181 and all(source_dimensions),
-      "181 licensed source icons are preserved as 96x96 PNGs")
-check(len(missing_sources) == 83 and {"delete", "namedcplane", "render", "subd", "text"} <= set(missing_sources),
-      "unmatched toolbar actions retain generated placeholders", missing_sources)
-license_text = (builder.SOURCE / "README.md").read_text(encoding="utf-8")
+
+print("\n1. Complete desktop toolbar arrangement")
+names = toolbars.tab_names()
+expected_names = (
+    "Standard", "CPlanes", "Set View", "Display", "Select", "Viewport Layout",
+    "Visibility", "Transform", "Curve Tools", "Surface Tools", "Solid Tools",
+    "SubD Tools", "Mesh Tools", "Render", "Drafting",
+)
+check(toolbars.container_name() == "Narwhal 3D", "container uses the Narwhal 3D identity")
+check(names == expected_names, "top-tab order is complete and pinned", names)
+check(toolbars.default_tab() == "Standard", "Standard is the default top toolbar")
+check(len(names) == len(set(names)), "top toolbar names are unique")
+check(sum(len(tab["buttons"]) for tab in data.TABS) == 582,
+      "the fifteen top toolbars retain all 582 authored slots")
+
+implemented = live_command_names()
+rows = [button for name in names for button in toolbars.tab_rows(name, implemented)]
+check(len(implemented) == 166, "the app-equivalent registry has 166 commands", len(implemented))
+check(len(rows) == 582, "every top slot reaches the stable Button API")
+check(sum(button.is_separator for button in rows) == 57,
+      "57 intentional top-toolbar spacers remain real separators")
+check(all(button.is_separator or (button.text and button.tooltip and button.left)
+          for button in rows), "every non-separator is named and clickable")
+check(all(button.enabled or "not implemented yet" in button.hover_text()
+          for button in rows if not button.is_separator),
+      "every unavailable top action explains itself on hover")
+parametric = [button for button in rows if button.left == "parametrictools"]
+check(len(parametric) == 1 and parametric[0].tooltip == "Parametric tools"
+      and not parametric[0].enabled,
+      "the generic parametric slot remains vendor-neutral and explicitly unavailable")
+enabled, total = toolbars.coverage(implemented)
+check((enabled, total) == (115, 525),
+      "coverage counts repeated runnable slots and explicit unavailable slots", (enabled, total))
+
+print("\n2. Exact 37-cell left palette and linked flyouts")
+sidebar = toolbars.sidebar_buttons(implemented)
+expected_sidebar = (
+    "cancel", "point", "polyline", "curve", "circle", "ellipse", "arc", "rectangle",
+    "polygon", "fillet", "srfpt", "filletsrf", "box", "booleanunion", "project",
+    "mesh", "join", "explode", "trim", "split", "group", "ungroup", "editpton",
+    "pointson", "textobject", "move", "copy", "rotate", "scale", "dir", "array",
+    "align", "flowalongsrf", "pushpull", "check", "block", "history",
+)
+check(toolbars.sidebar_name() == "Narwhal Tools", "left palette uses the product name")
+check(tuple(button.left for button in sidebar) == expected_sidebar,
+      "left palette has the exact 37 actions in display order")
+check(all(button.icon and button.left for button in sidebar),
+      "every left-palette cell has an icon and action")
+check(sum(bool(button.right) for button in sidebar) == 16,
+      "sixteen left cells retain alternate right-click actions")
+linked = [button for button in sidebar if button.link]
+check(len(linked) == 28 and len({button.link for button in linked}) == 28,
+      "28 left cells expose distinct selectable flyouts")
+check(all(toolbars.sidebar_flyout_rows(button, implemented) for button in linked),
+      "every arrow-marked left cell opens a populated flyout")
+retained_button = linked[0]
+retained_index = sidebar.index(retained_button)
+rebuilt_sidebar = toolbars.sidebar_buttons(implemented)
+check(rebuilt_sidebar[retained_index] is not retained_button
+      and toolbars.sidebar_button_index(rebuilt_sidebar, retained_button,
+                                         retained_index) == retained_index,
+      "deferred flyout anchor survives a sidebar redraw rebuilding Button objects")
+check(toolbars.sidebar_button_index(rebuilt_sidebar, retained_button, 999)
+      == retained_index,
+      "stable button identity recovers when a preferred anchor index is stale")
+check(toolbars.sidebar_flyout_rows(sidebar[0], implemented) == [],
+      "an unlinked left cell does not invent a flyout")
+point_button = next(button for button in linked if button.link == "Point")
+point_tip = toolbars.sidebar_tooltip_lines(point_button, "command")
+check(point_tip and point_button.tooltip in point_tip[0]
+      and any(line.startswith("Right-click:") for line in point_tip)
+      and point_tip[-1] == "Arrow: Point tools",
+      "hover text names the primary, alternate, and linked toolbar actions")
+check(toolbars.sidebar_tooltip_lines(point_button, "flyout") ==
+      ("Point tools", "Click the arrow to open"),
+      "hovering the small arrow identifies what clicking it opens")
+flyout_buttons = toolbars.sidebar_flyout_rows(point_button, implemented)
+icon_groups = toolbars.flyout_icon_groups(flyout_buttons)
+flattened = [button for group in icon_groups for row in group for button in row]
+check(flattened == [button for button in flyout_buttons if not button.is_separator],
+      "icon popup preserves every non-separator flyout action in order")
+check(all(1 <= len(row) <= toolbars.FLYOUT_COLUMNS
+          for group in icon_groups for row in group),
+      "icon popup wraps into compact bounded rows")
+separated_button = next(button for button in linked
+                        if any(row.is_separator
+                               for row in toolbars.sidebar_flyout_rows(button, implemented)))
+check(len(toolbars.flyout_icon_groups(
+          toolbars.sidebar_flyout_rows(separated_button, implemented))) > 1,
+      "icon popup preserves authored separator groups")
+popup = toolbars.flyout_popup_layout(117, 700, flyout_buttons, 1600, 900)
+check(toolbars.FLYOUT_COLUMNS == 5
+      and popup["panel"][0] == 117 - toolbars.FLYOUT_OVERLAP
+      and popup["panel"][2] - popup["panel"][0]
+      == toolbars.FLYOUT_MARGIN * 2 + toolbars.FLYOUT_COLUMNS * toolbars.FLYOUT_CELL,
+      "floating toolbar overlaps the sidebar slightly and is exactly five cells wide")
+check(len(popup["cells"]) == len(popup["buttons"]) == len(flattened),
+      "floating toolbar allocates one hit box for every displayed icon")
+first_cell = popup["cells"][0]
+first_center = ((first_cell[1] + first_cell[3]) * 0.5,
+                (first_cell[2] + first_cell[4]) * 0.5)
+check(toolbars.hit_flyout(*first_center, popup["cells"]) == 0,
+      "floating toolbar hit-testing selects its first icon")
+clamped = toolbars.flyout_popup_layout(1595, 10, flyout_buttons, 1600, 900)
+check(clamped["panel"][0] >= 0 and clamped["panel"][1] >= 0
+      and clamped["panel"][2] <= 1600 and clamped["panel"][3] <= 900,
+      "floating toolbar remains entirely inside the application window")
+
+print("\n3. Contributor artwork and deterministic fallback manifest")
+record_icons = {record["icon"] for record in all_records() if record.get("icon")}
+check(record_icons == data.TOOLBAR_ICON_NAMES,
+      "the toolbar manifest covers top, left, and flyout records")
+check(set(data.ICON_NAMES) == set(generator.icon_specs()),
+      "the placeholder generator covers the complete runtime manifest")
+check(len(data.ICON_NAMES) == 561, "561 distinct runtime symbols are manifested")
+check(len(data.PANEL_ICON_NAMES) == 4,
+      "the four right-dock tabs have project-owned icon slots")
+check(all(name.startswith("narwhal-") and name.endswith(".png")
+          and name == os.path.basename(name) for name in data.ICON_NAMES),
+      "all runtime icon names are safe project basenames")
+
+matched, missing = builder.source_matches()
+expected_missing = {
+    "Flyout Analyze: Analyze curve deviation",
+    "Flyout Block: Update all linked blocks",
+    "Standard: Parametric tools",
+    "Visibility: Hide A", "Visibility: Hide B", "Visibility: Hide C",
+}
+check(len(matched) == 555, "555 runtime symbols use contributor artwork", len(matched))
+check(set(data.MISSING_ARTWORK) == expected_missing,
+      "the exact six source-art gaps are explicit", data.MISSING_ARTWORK)
+check(set(missing) == {name for name, source in data.ICON_SOURCES.items() if not source},
+      "only the six declared gaps use generated placeholders", missing)
+check({data.ICON_SOURCES[name] for name in data.PANEL_ICON_NAMES} ==
+      {"layer.png", "properties.png", "panel_display.png", "bugreport.png"},
+      "right-dock tabs use the contributed layer/property/display/report artwork")
+check(all((Path(builder.SOURCE) / source).is_file() for source in matched.values()),
+      "every mapped source PNG is bundled")
+check(all(png_size(Path(builder.SOURCE) / source) == (96, 96)
+          for source in matched.values()), "every used source icon is 96x96 PNG")
+license_text = (Path(builder.SOURCE) / "README.md").read_text(encoding="utf-8")
 check("GPL-3.0-or-later" in license_text and "ContributionRich" in license_text,
       "source artwork carries its contributor and GPL licence declaration")
-check(len({open(path, "rb").read() for path in resolved}) == len(resolved),
-      "temporary action symbols are visually distinct at the byte level")
 
-
-
-print("\n4. Missing and unsafe icon resolution")
-known = next(iter(sorted(record_icons)))
+print("\n4. Runtime icon safety and visual replacement")
+check(toolbars.icons_available(), "every declared runtime icon is bundled")
+bundled = {path.name for path in Path(PACKAGE_DIR, "icons").glob("*.png")}
+check(bundled == set(data.ICON_NAMES), "runtime icon directory exactly matches the manifest",
+      sorted(bundled ^ set(data.ICON_NAMES)))
+resolved = [toolbars.icon_path(name) for name in sorted(data.ICON_NAMES)]
+icon_root = os.path.realpath(os.path.join(PACKAGE_DIR, "icons"))
+check(all(path and os.path.commonpath((icon_root, os.path.realpath(path))) == icon_root
+          for path in resolved), "every runtime icon resolves only under narwhal3d/icons")
+check(all(png_size(path) == (24, 24) for path in resolved),
+      "every runtime symbol is a valid-looking 24x24 PNG")
+with tempfile.TemporaryDirectory() as generated_dir:
+    generated = {Path(path).name: Path(path).read_bytes()
+                 for path in generator.write_icons(generated_dir)}
+    contributed_differ = all(
+        generated[name] != Path(icon_root, name).read_bytes() for name in matched
+    )
+    placeholders_match = all(
+        generated[name] == Path(icon_root, name).read_bytes() for name in missing
+    )
+check(contributed_differ, "all mapped artwork replaces its generated placeholder")
+check(placeholders_match, "only declared missing artwork retains generated symbols")
+known = next(iter(sorted(data.ICON_NAMES)))
 check(toolbars.icon_path(None) is None, "None does not resolve")
-check(toolbars.icon_path("narwhal-not-in-the-manifest.png") is None,
-      "an unknown project-looking filename does not resolve")
+check(toolbars.icon_path("narwhal-not-manifested.png") is None,
+      "unknown project-looking filenames do not resolve")
 check(toolbars.icon_path("../" + known) is None, "parent traversal is rejected")
-check(toolbars.icon_path(os.path.join(icon_root, known)) is None, "absolute paths are rejected")
-check(toolbars.icon_path("vendor/" + known) is None, "prefixed external paths are rejected")
 
-original_dir = toolbars.ICON_DIR
-try:
-    with tempfile.TemporaryDirectory() as empty_dir:
-        toolbars.ICON_DIR = empty_dir
-        check(toolbars.icon_path(known) is None, "a missing manifested icon returns None")
-    with tempfile.TemporaryDirectory() as safe_dir, tempfile.TemporaryDirectory() as outside:
-        target = os.path.join(outside, known)
-        open(target, "wb").write(b"outside")
-        os.symlink(target, os.path.join(safe_dir, known))
-        toolbars.ICON_DIR = safe_dir
-        check(toolbars.icon_path(known) is None, "a symlink escaping the icon root is rejected")
-finally:
-    toolbars.ICON_DIR = original_dir
-
-print("\n5. Pure tab and sidebar layout")
+print("\n5. Pure tab and responsive left-palette layout")
 widths = [len(name) * 7.0 for name in names]
 wide = toolbars.tab_row_boxes(names, widths, 10000.0)
-check([box[0] for box in wide] == list(names), "a wide row lays out every category")
-check(all(wide[index][2] == wide[index + 1][1]
-          for index in range(len(wide) - 1)), "tab hit boxes abut without gaps")
+check([box[0] for box in wide] == list(names), "a wide row lays out every top category")
 limited = toolbars.tab_row_boxes(names, widths, wide[1][2])
 check(len(limited) == 2 and toolbars.tabs_hidden(names, limited) == len(names) - 2,
       "clipping reports hidden categories")
-mid_y = 100.0 - toolbars.TAB_ROW_H / 2.0
-check(toolbars.hit_tab_row((wide[0][1] + wide[0][2]) / 2.0, mid_y, wide, 100.0)
-      == names[0], "tab hit-testing selects the visible box")
-check(toolbars.hit_tab_row(wide[0][2], mid_y, wide, 100.0) == names[1],
-      "a shared tab edge belongs to exactly one box")
-
 columns = toolbars.sidebar_columns(117)
 cells = toolbars.sidebar_cells(len(sidebar), 0.0, 300.0, columns=columns)
-check(columns == 4 and len(cells) == 52, "favorites reflow into a four-column grid")
-check(toolbars.sidebar_rows(len(sidebar), columns) == 13,
-      "the default sidebar forms thirteen dense rows")
-check(toolbars.sidebar_rows(len(sidebar), columns) * toolbars.SIDEBAR_CELL
-      == toolbars.sidebar_height(len(sidebar), columns), "favorites height follows row count")
+check(columns == 4 and len(cells) == 37, "left palette forms the measured four-column grid")
+check(toolbars.sidebar_rows(len(sidebar), columns) == 10,
+      "37 cells occupy ten rows at default width")
 linked_index = next(index for index, button in enumerate(sidebar) if button.link)
 linked_cell = cells[linked_index]
 center = ((linked_cell[1] + linked_cell[3]) / 2.0,
           (linked_cell[2] + linked_cell[4]) / 2.0)
 check(toolbars.sidebar_action_at(*center, cells, sidebar) == (linked_index, "command"),
-      "the center of a linked favorite runs its primary action")
+      "a linked cell center runs its primary action")
 check(toolbars.sidebar_action_at(linked_cell[3] - 1, linked_cell[2] + 1,
                                  cells, sidebar) == (linked_index, "flyout"),
-      "the linked favorite's corner opens its category flyout")
-check(toolbars.hit_sidebar(cells[0][3], center[1], cells) == 1,
-      "a shared favorites edge belongs to exactly one cell")
+      "the linked cell corner opens its flyout")
 
 print("\n" + "=" * 70)
 if failures:

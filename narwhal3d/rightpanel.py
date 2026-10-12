@@ -92,7 +92,7 @@ class Tab:
         return f"Tab({self.name!r}, built={self.built})"
 
 
-#: Working panels in product order. Every icon is generated and owned by Narwhal 3D.
+#: Working panels in product order. Every tab uses contributor-owned source artwork.
 TABS = (
     Tab("Layers", "narwhal-panel-layers.png", built=True, reason=""),
     Tab("Properties", "narwhal-panel-properties.png", built=True, reason=""),

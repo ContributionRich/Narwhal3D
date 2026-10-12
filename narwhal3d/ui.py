@@ -2711,6 +2711,9 @@ SIDEBAR_MARK_COLOR = (0.1, 0.1, 0.1, 1.0)
 SIDEBAR_HOVER_COLOR = views.gpu_rgba(views.TAB_BAND_BG)
 SIDEBAR_FLYOUT_HOVER_COLOR = views.gpu_rgba(views.TAB_ACTIVE_BG)
 SIDEBAR_FLYOUT_PRESSED_COLOR = views.gpu_rgba(views.TAB_BORDER)
+SIDEBAR_TOOLTIP_BG = (0.08, 0.08, 0.08, 0.94)
+SIDEBAR_TOOLTIP_BORDER = views.gpu_rgba(views.TAB_BORDER)
+SIDEBAR_TOOLTIP_TEXT = (0.95, 0.95, 0.95, 1.0)
 
 
 def _set_left_band_key(area):
@@ -5750,6 +5753,7 @@ _sidebar_hover_part = None
 _sidebar_hover_pos = None
 _sidebar_pressed = None
 _sidebar_flyout_button = None
+_sidebar_flyout_state = None
 
 
 def _draw_left_sidebar(shader, region):
@@ -5836,7 +5840,63 @@ def _draw_left_sidebar(shader, region):
                        (x1 - pad, y0 + pad + mark),
                        (x1 - pad - mark, y0 + pad)),
                       SIDEBAR_MARK_COLOR)
+    _draw_sidebar_tooltip(shader, region, buttons, columns)
     return tbar.sidebar_height(len(buttons), columns=columns)
+
+
+def _sidebar_wrap_line(text, width, font_size):
+    """Wrap one tooltip paragraph to the left dock's measured pixel width."""
+    words = str(text or "").split()
+    if not words:
+        return []
+    lines = []
+    line = words.pop(0)
+    for word in words:
+        candidate = f"{line} {word}"
+        if _text_width(candidate, font_size) <= width:
+            line = candidate
+        else:
+            lines.append(_clip_text(line, width, font_size))
+            line = word
+    lines.append(_clip_text(line, width, font_size))
+    return lines
+
+
+def _draw_sidebar_tooltip(shader, region, buttons, columns):
+    """Draw the hovered left-palette action in the blank band below its grid."""
+    if _sidebar_hover_index is None or not (0 <= _sidebar_hover_index < len(buttons)):
+        return
+    button = buttons[_sidebar_hover_index]
+    paragraphs = tbar.sidebar_tooltip_lines(button, _sidebar_hover_part or "command")
+    if not paragraphs:
+        return
+    pad = tbar.SIDEBAR_TOOLTIP_PAD
+    gap = tbar.SIDEBAR_TOOLTIP_GAP
+    line_h = tbar.SIDEBAR_TOOLTIP_LINE
+    font = tbar.SIDEBAR_TOOLTIP_FONT
+    x0, x1 = gap, max(gap, float(region.width) - gap)
+    text_width = max(0.0, x1 - x0 - pad * 2.0)
+    lines = []
+    for paragraph in paragraphs:
+        lines.extend(_sidebar_wrap_line(paragraph, text_width, font))
+    lines = lines[:6]
+    if not lines:
+        return
+    top = float(region.height) - tbar.sidebar_height(len(buttons), columns=columns) - gap
+    height = pad * 2.0 + line_h * len(lines)
+    bottom = top - height
+    osnap_top = views.osnap_panel_height(len(_osnap_panel_row_state())) + gap
+    if bottom < osnap_top:
+        return
+    shader.bind()
+    _draw_rect(shader, x0, bottom, x1, top, SIDEBAR_TOOLTIP_BG)
+    _draw_rect(shader, x0, bottom, x1, bottom + 1, SIDEBAR_TOOLTIP_BORDER)
+    _draw_rect(shader, x0, top - 1, x1, top, SIDEBAR_TOOLTIP_BORDER)
+    _draw_rect(shader, x0, bottom, x0 + 1, top, SIDEBAR_TOOLTIP_BORDER)
+    _draw_rect(shader, x1 - 1, bottom, x1, top, SIDEBAR_TOOLTIP_BORDER)
+    text_y = top - pad - font
+    for index, line in enumerate(lines):
+        _draw_text(x0 + pad, text_y - index * line_h, line, font, SIDEBAR_TOOLTIP_TEXT)
 
 
 def sidebar_hover_update(mouse_x, mouse_y):
@@ -5922,26 +5982,181 @@ def sidebar_click(btn, right=False):
     return None
 
 
-def show_sidebar_flyout(button):
-    """Open ``button``'s linked toolbar as a selectable cascade menu.
-
-    Linked toolbars map onto Blender's popup host while retaining compatibility row
-    order and command availability.
-    """
-    global _sidebar_flyout_button
-    rows = tbar.sidebar_flyout_rows(button, set(COMMANDS))
-    if not getattr(button, "link", None) or not rows:
+def show_sidebar_flyout(button, source_index=None):
+    """Open ``button``'s linked tools as a floating five-column icon palette."""
+    global _sidebar_flyout_button, _sidebar_flyout_state
+    index = tbar.sidebar_button_index(_sidebar_buttons, button, source_index)
+    source = next((cell for cell in _sidebar_cells if cell[0] == index), None)
+    live_button = (_sidebar_buttons[index]
+                   if index is not None and 0 <= index < len(_sidebar_buttons) else None)
+    rows = tbar.sidebar_flyout_rows(live_button, set(COMMANDS))
+    if not getattr(live_button, "link", None) or not rows:
         app_state.log(f"{getattr(button, 'link', None) or 'That'} toolbar is unavailable")
         redraw_cmdbar()
         return None
-    _sidebar_flyout_button = button
-    try:
-        bpy.ops.wm.call_menu(name="NARWHAL_MT_sidebar_flyout")
-    except Exception as e:  # noqa: BLE001
-        app_state.log(f"{button.link} toolbar could not open ({e!r})")
+    window = getattr(bpy.context, "window", None)
+    if source is None or window is None:
+        app_state.log(f"{live_button.link} toolbar could not find its screen anchor")
         redraw_cmdbar()
         return None
-    return button.link
+    _sidebar_flyout_button = live_button
+    layout = tbar.flyout_popup_layout(source[3], source[4], rows,
+                                      window.width, window.height)
+    _sidebar_flyout_state = {"button": live_button, "layout": layout, "hover": None}
+    sidebar_press_clear()
+    _tag_redraw_bands()
+    _tag_redraw_viewports()
+    return live_button.link
+
+
+def sidebar_flyout_layout():
+    """Return the currently drawn floating-toolbar layout for tests/introspection."""
+    return None if _sidebar_flyout_state is None else _sidebar_flyout_state["layout"]
+
+
+def sidebar_flyout_close():
+    """Close the floating icon toolbar. Return whether visible state changed."""
+    global _sidebar_flyout_state
+    if _sidebar_flyout_state is None:
+        return False
+    _sidebar_flyout_state = None
+    _tag_redraw_viewports()
+    return True
+
+
+def _inside_box(x, y, box):
+    return box[0] <= x < box[2] and box[1] <= y < box[3]
+
+
+def sidebar_flyout_action_at(mouse_x, mouse_y):
+    """Return the icon action under a window point, or ``None``."""
+    if _sidebar_flyout_state is None:
+        return None
+    layout = _sidebar_flyout_state["layout"]
+    index = tbar.hit_flyout(mouse_x, mouse_y, layout["cells"])
+    if index is None or not (0 <= index < len(layout["buttons"])):
+        return None
+    return layout["buttons"][index]
+
+
+def sidebar_flyout_hover_update(mouse_x, mouse_y):
+    """Update the floating toolbar's highlighted icon from a window point."""
+    if _sidebar_flyout_state is None:
+        return False
+    layout = _sidebar_flyout_state["layout"]
+    index = tbar.hit_flyout(mouse_x, mouse_y, layout["cells"])
+    if index == _sidebar_flyout_state["hover"]:
+        return False
+    _sidebar_flyout_state["hover"] = index
+    return True
+
+
+def _draw_flyout_tooltip(shader, region, state):
+    index = state["hover"]
+    layout = state["layout"]
+    if index is None or not (0 <= index < len(layout["buttons"])):
+        return
+    button = layout["buttons"][index]
+    paragraphs = tbar.sidebar_tooltip_lines(button, "command")
+    width = 230.0
+    pad = tbar.SIDEBAR_TOOLTIP_PAD
+    line_h = tbar.SIDEBAR_TOOLTIP_LINE
+    lines = []
+    for paragraph in paragraphs:
+        lines.extend(_sidebar_wrap_line(paragraph, width - pad * 2.0,
+                                        tbar.SIDEBAR_TOOLTIP_FONT))
+    lines = lines[:6]
+    if not lines:
+        return
+    cell = layout["cells"][index]
+    height = pad * 2.0 + len(lines) * line_h
+    window = bpy.context.window
+    x0 = layout["panel"][2] + 8.0
+    if x0 + width > window.width:
+        x0 = max(0.0, layout["panel"][0] - width - 8.0)
+    top = min(float(window.height), cell[4])
+    y0 = max(0.0, top - height)
+    x0 -= region.x
+    y0 -= region.y
+    x1, y1 = x0 + width, y0 + height
+    shader.bind()
+    _draw_rect(shader, x0, y0, x1, y1, SIDEBAR_TOOLTIP_BG)
+    _draw_rect(shader, x0, y0, x1, y0 + 1, SIDEBAR_TOOLTIP_BORDER)
+    _draw_rect(shader, x0, y1 - 1, x1, y1, SIDEBAR_TOOLTIP_BORDER)
+    _draw_rect(shader, x0, y0, x0 + 1, y1, SIDEBAR_TOOLTIP_BORDER)
+    _draw_rect(shader, x1 - 1, y0, x1, y1, SIDEBAR_TOOLTIP_BORDER)
+    text_y = y1 - pad - tbar.SIDEBAR_TOOLTIP_FONT
+    for line_index, line in enumerate(lines):
+        _draw_text(x0 + pad, text_y - line_index * line_h, line,
+                   tbar.SIDEBAR_TOOLTIP_FONT, SIDEBAR_TOOLTIP_TEXT)
+
+
+def draw_sidebar_flyout_overlay():
+    """POST_PIXEL floating toolbar drawn over whichever viewports it intersects."""
+    state = _sidebar_flyout_state
+    context = bpy.context
+    area = getattr(context, "area", None)
+    region = getattr(context, "region", None)
+    if state is None or area is None or region is None or area.type != "VIEW_3D":
+        return
+    panel = state["layout"]["panel"]
+    region_box = (region.x, region.y, region.x + region.width, region.y + region.height)
+    if (panel[2] <= region_box[0] or panel[0] >= region_box[2]
+            or panel[3] <= region_box[1] or panel[1] >= region_box[3]):
+        return
+    try:
+        import gpu
+        from gpu_extras.batch import batch_for_shader
+    except Exception:  # noqa: BLE001
+        return
+    shader = _uniform_color_shader()
+    image_shader = _image_shader()
+    if shader is None:
+        return
+    layout = state["layout"]
+    px0, py0, px1, py1 = panel
+    local_panel = (px0 - region.x, py0 - region.y, px1 - region.x, py1 - region.y)
+    tx0, ty0, tx1, ty1 = layout["title"]
+    local_title = (tx0 - region.x, ty0 - region.y, tx1 - region.x, ty1 - region.y)
+    prev = gpu.state.blend_get()
+    gpu.state.blend_set("ALPHA")
+    try:
+        shader.bind()
+        _draw_rect(shader, *local_panel, views.gpu_rgba(views.OSNAP_PANEL_BG))
+        _draw_rect(shader, *local_title, views.gpu_rgba(views.TAB_BAND_BG))
+        _draw_rect(shader, local_panel[0], local_panel[1], local_panel[2], local_panel[1] + 1,
+                   SIDEBAR_TOOLTIP_BORDER)
+        _draw_rect(shader, local_panel[0], local_panel[3] - 1, local_panel[2], local_panel[3],
+                   SIDEBAR_TOOLTIP_BORDER)
+        _draw_rect(shader, local_panel[0], local_panel[1], local_panel[0] + 1, local_panel[3],
+                   SIDEBAR_TOOLTIP_BORDER)
+        _draw_rect(shader, local_panel[2] - 1, local_panel[1], local_panel[2], local_panel[3],
+                   SIDEBAR_TOOLTIP_BORDER)
+        for cell, button in zip(layout["cells"], layout["buttons"]):
+            index, x0, y0, x1, y1 = cell
+            x0, x1 = x0 - region.x, x1 - region.x
+            y0, y1 = y0 - region.y, y1 - region.y
+            if index == state["hover"]:
+                shader.bind()
+                _draw_rect(shader, x0, y0, x1, y1, SIDEBAR_HOVER_COLOR)
+            tex = _sidebar_texture(button.icon)
+            if tex is not None and image_shader is not None:
+                inset = max(2.0, (tbar.FLYOUT_CELL - tbar.SIDEBAR_ICON) * 0.5)
+                ix0, iy0, ix1, iy1 = x0 + inset, y0 + inset, x1 - inset, y1 - inset
+                image_shader.bind()
+                image_shader.uniform_sampler("image", tex)
+                batch_for_shader(
+                    image_shader, "TRI_FAN",
+                    {"pos": ((ix0, iy0), (ix1, iy0), (ix1, iy1), (ix0, iy1)),
+                     "texCoord": ((0, 0), (1, 0), (1, 1), (0, 1))},
+                ).draw(image_shader)
+            if button.link:
+                shader.bind()
+                _draw_tri(shader, ((x1 - 3, y0 + 3), (x1 - 3, y0 + 8),
+                                   (x1 - 8, y0 + 3)), SIDEBAR_MARK_COLOR)
+        _draw_flyout_tooltip(shader, region, state)
+    finally:
+        gpu.state.blend_set(prev)
 
 
 def draw_left_band():
@@ -6517,6 +6732,26 @@ class NARWHAL_OT_command_input(Operator):
                 else:
                     show_layer_menu(name_)
                 return {"RUNNING_MODAL"}
+        # The floating sidebar toolbar overlays viewports, so its clicks must be
+        # claimed before viewport selection/navigation sees them.
+        if _sidebar_flyout_state is not None:
+            if event.type in ("ESC", "RIGHTMOUSE") and event.value == "PRESS":
+                sidebar_flyout_close()
+                return {"RUNNING_MODAL"}
+            if event.type == "LEFTMOUSE" and event.value == "PRESS":
+                flyout_item = sidebar_flyout_action_at(event.mouse_x, event.mouse_y)
+                inside = _inside_box(event.mouse_x, event.mouse_y,
+                                     _sidebar_flyout_state["layout"]["panel"])
+                if flyout_item is not None:
+                    sidebar_flyout_close()
+                    msg = sidebar_click(flyout_item)
+                    if msg:
+                        st.log(msg)
+                    self._redraw()
+                    return {"RUNNING_MODAL"}
+                if inside:
+                    return {"RUNNING_MODAL"}
+                sidebar_flyout_close()
         # a drag that began in the report box selects text
         if bug_panel_dragging():
             if event.type == "MOUSEMOVE":
@@ -6923,7 +7158,7 @@ class NARWHAL_OT_command_input(Operator):
                     # not a press-drag-release hold menu.
                     sidebar_press_begin(side_index, part)
                     _tag_redraw_bands()
-                    _defer_menu(lambda b=side_btn: show_sidebar_flyout(b))
+                    _defer_menu(lambda b=side_btn, i=side_index: show_sidebar_flyout(b, i))
                 else:
                     msg = sidebar_click(side_btn)
                     if msg:
@@ -7272,6 +7507,8 @@ class NARWHAL_OT_command_input(Operator):
             # pointer, including buttons marked with a flyout/second-command arrow.
             if sidebar_hover_update(event.mouse_x, event.mouse_y):
                 _tag_redraw_bands()
+            if sidebar_flyout_hover_update(event.mouse_x, event.mouse_y):
+                _tag_redraw_viewports()
             # reopened #20: highlight what an object/edge/face pick would take
             if _update_hover_pick(event.mouse_x, event.mouse_y):
                 _tag_redraw_viewports()
@@ -8682,11 +8919,7 @@ def _tag_redraw_cmdbar_header():
 
 
 def _toolbar_icon_id(icon):
-    """Blender icon id for `icon`, or 0 when it cannot be shown.
-
-    0 means "no icon" to Blender, which is exactly the fallback we want: a fresh
-    clone has none of these PNGs, because they are McNeel's artwork and gitignored.
-    """
+    """Host icon id for a manifested project-owned icon, or 0 when unavailable."""
     global _toolbar_icons
 
     if not icon or icon in _toolbar_icon_bad:
@@ -8809,6 +9042,9 @@ def _draw_narwhal_toolbar(self, context):
     row = layout.row(align=True)
     implemented = set(COMMANDS)
     for button in tbar.tab_rows(toolbar_tab(), implemented):
+        if button.is_separator:
+            row.separator()
+            continue
         icon_id = _toolbar_icon_id(button.icon)
         cell = row.row(align=True)
         # Unbuilt commands stay CLICKABLE and report themselves, the same choice the
@@ -18180,30 +18416,34 @@ class NARWHAL_OT_layer_menu_action(Operator):
 
 
 class NARWHAL_MT_sidebar_flyout(bpy.types.Menu):
-    """The toolbar linked from a sidebar cascade triangle."""
+    """Compact icon toolbar opened from a left-palette cascade arrow."""
     bl_idname = "NARWHAL_MT_sidebar_flyout"
     bl_label = "Toolbar"
 
     def draw(self, context):
         button = _sidebar_flyout_button
-        rows = tbar.sidebar_flyout_rows(button, set(COMMANDS))
-        if not rows:
+        buttons = tbar.sidebar_flyout_rows(button, set(COMMANDS))
+        groups = tbar.flyout_icon_groups(buttons)
+        if not groups:
             self.layout.label(text="(empty)")
             return
         self.layout.label(text=getattr(button, "link", None) or "Toolbar")
         self.layout.separator()
-        for row in rows:
-            if not row.left and not row.text and not row.tooltip:
+        for group_index, group in enumerate(groups):
+            if group_index:
                 self.layout.separator()
-                continue
-            label = row.tooltip or row.text or row.left or "Toolbar item"
-            if row.left and row.left in COMMANDS:
-                op = self.layout.operator("narwhal.run_command", text=label)
-                op.command = COMMANDS[row.left].name
-            else:
-                op = self.layout.operator("narwhal.menu_todo", text=label)
-                op.label = label
-                op.command = row.left or ""
+            for icon_row in group:
+                strip = self.layout.row(align=True)
+                strip.scale_x = 1.15
+                strip.scale_y = 1.15
+                for item in icon_row:
+                    icon_id = _toolbar_icon_id(item.icon)
+                    label = item.hover_text() or item.label
+                    op = (strip.operator("narwhal.toolbar_button", text="", icon_value=icon_id)
+                          if icon_id else
+                          strip.operator("narwhal.toolbar_button", text=item.label[:3]))
+                    op.command = item.left or ""
+                    op.label = label
 
 
 class NARWHAL_MT_layer_context(bpy.types.Menu):
@@ -19415,6 +19655,11 @@ def _attach_view_labels():
     comp_id = bpy.types.SpaceView3D.draw_handler_add(
         draw_completion_overlay, (), "WINDOW", "POST_PIXEL")
     _view_label_handlers.append((bpy.types.SpaceView3D, comp_id))
+    # The cascade popup must be last so its floating toolbar and hover card stay
+    # above viewport labels and command completion chrome.
+    flyout_id = bpy.types.SpaceView3D.draw_handler_add(
+        draw_sidebar_flyout_overlay, (), "WINDOW", "POST_PIXEL")
+    _view_label_handlers.append((bpy.types.SpaceView3D, flyout_id))
     return True
 
 
@@ -19578,7 +19823,10 @@ SCALED_CONSTANTS = {
             "OSNAP_PANEL_W", "OSNAP_ROW_H", "OSNAP_BOX", "OSNAP_PAD", "OSNAP_TITLE_H",
             "OSNAP_FONT_SIZE"),
     tbar: ("TAB_ROW_H", "TAB_PAD_X", "TAB_FONT_SIZE", "SIDEBAR_ICON", "SIDEBAR_PAD",
-           "SIDEBAR_CELL", "SIDEBAR_MARK", "SIDEBAR_FLYOUT_HOT"),
+           "SIDEBAR_CELL", "SIDEBAR_MARK", "SIDEBAR_FLYOUT_HOT",
+           "SIDEBAR_TOOLTIP_PAD", "SIDEBAR_TOOLTIP_GAP", "SIDEBAR_TOOLTIP_LINE",
+           "SIDEBAR_TOOLTIP_FONT", "FLYOUT_CELL", "FLYOUT_MARGIN", "FLYOUT_TITLE_H",
+           "FLYOUT_OVERLAP"),
     gumball: ("DEFAULT_SIZE_PX", "PICK_TOLERANCE_PX", "MENU_PICK_MARGIN_PX"),
     pointdisplay: ("DEFAULT_SIZE_PX", "CONTROL_POLYGON_DASH_PX", "CONTROL_POLYGON_GAP_PX"),
     _sys.modules[__name__]: ("LABEL_FONT_SIZE", "LABEL_PAD", "SNAP_MARKER_PX",
