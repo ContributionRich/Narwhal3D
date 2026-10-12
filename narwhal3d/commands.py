@@ -3384,6 +3384,28 @@ class ArcCmd(Command):
         return f"Created {display_name}", True
 
 
+def extrude_planar_profile_regions(profiles, distance, direction, both=False, solid=True):
+    """Build exact prisms from two or more closed coplanar profile curves.
+
+    This is the shared behavior backend for command and UI extrusion. ``PlanarSrf``
+    validates the curves and classifies nested loops as holes while preserving disjoint
+    outer loops as separate regions; each returned region is then extruded exactly.
+
+    Raises:
+        ValueError: If fewer than two profiles are supplied, the profiles do not define
+            planar regions, or either exact bridge operation refuses the geometry.
+    """
+    profiles = list(profiles)
+    if len(profiles) < 2:
+        raise ValueError("multiple-profile extrusion needs at least two profile curves")
+    faces = bridge.make_planar_srf(profiles)
+    if not faces:
+        raise ValueError("the profiles did not define a planar region")
+    return [bridge.make_extrude_srf(face, distance, direction=direction,
+                                    both=bool(both), solid=bool(solid))
+            for face in faces]
+
+
 class ExtrudeCmd(Command):
     # the reference CAD application has no `Extrude` -- the real name for extruding a *curve*
     # profile is `ExtrudeCrv` (surfaces use `ExtrudeSrf`). We extrude a closed
@@ -3391,14 +3413,18 @@ class ExtrudeCmd(Command):
     # exists, the command behavior does not).
     name = "ExtrudeCrv"
     description = "Extrude a closed curve. Select it, then type a distance or pick a point."
-    # The curve step accepts either the current selection or a typed object name. The
-    # distance accepts a typed number or a picked location. Planar profiles default to
-    # their plane normal; non-planar profiles use the active CPlane Z direction. Picked
-    # distances are signed projections along that extrusion direction.
-    steps = [("Curve:", OBJECTS), ("Distance:", DISTANCE)]
-    # `preselect_names` is the selection-fill count (1: the curve, the first
-    # step, is filled from the selection; the distance is still prompted).
-    # ``Command._take_objects_selection`` fills this leading OBJECTS step from a
+    # The profile step accepts the whole current selection or one or more typed object
+    # names. The distance accepts a typed number or a picked location. Planar profiles
+    # default to their plane normal; non-planar profiles use the active CPlane Z direction.
+    # Picked distances are signed projections along that extrusion direction.
+    #
+    # OURS (owner-required extension to the singular help-page wording): two or more
+    # closed coplanar profiles are treated as planar regions. Nested loops become holes
+    # and disjoint outer loops become separate exact solids.
+    steps = [("Select curves to extrude:", OBJECTS_MULTI), ("Distance:", DISTANCE)]
+    # `preselect_names` is the selection-fill count (1: the whole profile set, the
+    # first step, is filled from the selection; the distance is still prompted).
+    # ``Command._take_objects_selection`` fills this leading OBJECTS_MULTI step from a
     # preselection while leaving the distance step to be prompted normally.
     preselect_names = 1
     # the documented options (the command behavior). Built: Direction, BothSides,
@@ -3425,6 +3451,20 @@ class ExtrudeCmd(Command):
     #: Direction mode uses two points to define the extrusion axis.
     DIRECTION_STEPS = [("Base point for direction:", POINT),
                        ("Second point for direction:", POINT)]
+
+    def _feed_objects_multi_step(self, text, ctx):
+        """Preserve the established typed one-profile flow on the new set step.
+
+        A selected set uses the normal ``OBJECTS_MULTI`` Enter-confirm path. An explicitly
+        typed object name remains the old one-profile shortcut and advances immediately to
+        Distance, so ``ExtrudeCrv`` → ``Profile`` → ``5`` does not gain an extra Enter.
+        Multi-profile regions are selected together, which is the owner-required workflow.
+        """
+        if text and not self._pending_multi:
+            self.args.append([text])
+            self.step_index += 1
+            return None, False
+        return super()._feed_objects_multi_step(text, ctx)
 
     def on_mode(self, name, ctx):
         """`Direction` -- "Pick two points to define the extruding direction", asked
@@ -3459,12 +3499,29 @@ class ExtrudeCmd(Command):
         return (bool(self.opt.get("BothSides")) or not self.opt.get("Solid", True)
                 or getattr(self, "_dir_mode", False) or not geom.IsClosed)
 
+    def _profile_names(self, ctx=None):
+        """The ordered profile names from the set-step, with old one-name args tolerated.
+
+        ``OBJECTS_MULTI`` stores a list in ``args[0]``. Accepting the former scalar shape
+        here keeps direct callers and the one-profile geometry path backward-compatible;
+        normal command input always uses the list shape.
+        """
+        raw = self.args[0] if self.args else None
+        if isinstance(raw, (list, tuple)):
+            names = [str(name) for name in raw if name]
+        else:
+            names = [str(raw)] if raw else []
+        if not names and ctx is not None:
+            try:
+                names = [o.name for o in (ctx.selected_objects() or [])]
+            except Exception:  # noqa: BLE001
+                names = []
+        return names
+
     def _extrude_curve(self, ctx):
-        """The curve this command is extruding, from the typed name or the selection."""
-        name = self.args[0] if self.args else None
-        if not name and ctx.selected_objects():
-            name = ctx.selected_objects()[0].name
-        geom = ctx.geom_by_name(name)
+        """The first curve, used as the common direction/distance reference."""
+        names = self._profile_names(ctx)
+        geom = ctx.geom_by_name(names[0]) if names else None
         return geom if isinstance(geom, r3.Curve) else None
 
     @staticmethod
@@ -3511,7 +3568,8 @@ class ExtrudeCmd(Command):
             return None                     # not the distance step
         geom = None
         if resolve is not None:
-            geom = resolve(self.args[0] if self.args else None)
+            names = self._profile_names()
+            geom = resolve(names[0]) if names else None
         if geom is None:
             return None
         # Direction mode: the axis is the PICKED direction, which is what `_parse_distance`
@@ -3551,44 +3609,82 @@ class ExtrudeCmd(Command):
         return sum((point[i] - (start.X, start.Y, start.Z)[i]) * direction[i]
                    for i in range(3))
 
-    def execute(self, ctx: NarwhalContext):
-        name, height = self.args[0], self.args[-1]
-        if not name and ctx.selected_objects():
-            name = ctx.selected_objects()[0].name
-        geom = ctx.geom_by_name(name)
-        if geom is None or not isinstance(geom, r3.Curve):
-            return f"No curve named {name!r}", True
-        if self._uses_options(geom) or self._draft() is not None:
-            # BothSides / Solid=No / Direction / an open curve / a taper -- exact OCCT
-            try:
-                result = bridge.extrude_curve(
-                    geom, height, direction=self.extrusion_direction(ctx),
-                    both=bool(self.opt.get("BothSides")),
-                    solid=bool(self.opt.get("Solid", True)), draft_deg=self._draft(),
-                    corners=self.opt.get("Corners", "Sharp"),
-                    flip=bool(self.opt.get("FlipAngle")))
-            except ValueError as e:
-                return f"{self.name}: {e}", True
-        else:
-            # `make_extrusion` runs along the curve's OWN normal; a positive
-            # distance runs along `extrusion_direction`, so flip the height when the two
-            # point opposite ways (a clockwise curve)
-            own = bridge.profile_normal(geom)
-            want = self.extrusion_direction(ctx)
-            if own is not None and sum(own[i] * want[i] for i in range(3)) < 0:
-                height_ = -float(height)
-            else:
-                height_ = float(height)
-            result = bridge.make_extrusion(geom, height_)
-        if self.opt.get("DeleteInput"):
+    @staticmethod
+    def _delete_profiles(ctx, names):
+        """Delete every source profile after all outputs have been built successfully."""
+        for name in names:
             ob = ctx.object_by_name(name) if hasattr(ctx, "object_by_name") else None
             if ob is not None:
                 _remove_object_from_scene(ob)
             oid = ctx.model.object_id_by_name(name)
             if oid is not None:
                 ctx.model.remove_object(oid)
-        _, display_name = ctx.add_geometry(result, "Extrusion")
-        return f"Created {display_name} (h={height:g})", True
+
+    def execute(self, ctx: NarwhalContext):
+        names = self._profile_names(ctx)
+        height = self.args[-1]
+        if not names:
+            return f"{self.name}: select curves to extrude", True
+
+        profiles = []
+        invalid = []
+        for name in names:
+            geom = ctx.geom_by_name(name)
+            if isinstance(geom, r3.Curve):
+                profiles.append(geom)
+            else:
+                invalid.append(name)
+        if invalid:
+            if len(names) == 1:
+                return f"No curve named {names[0]!r}", True
+            return (f"{self.name}: multiple-profile regions require only closed coplanar "
+                    f"curves; unsupported or missing: {', '.join(invalid)}"), True
+
+        if len(profiles) == 1:
+            # Preserve the established one-profile behavior exactly: open curves, taper,
+            # BothSides / Solid=No / Direction, and the plain native Extrusion route.
+            geom = profiles[0]
+            if self._uses_options(geom) or self._draft() is not None:
+                # BothSides / Solid=No / Direction / an open curve / a taper -- exact OCCT
+                try:
+                    result = bridge.extrude_curve(
+                        geom, height, direction=self.extrusion_direction(ctx),
+                        both=bool(self.opt.get("BothSides")),
+                        solid=bool(self.opt.get("Solid", True)), draft_deg=self._draft(),
+                        corners=self.opt.get("Corners", "Sharp"),
+                        flip=bool(self.opt.get("FlipAngle")))
+                except ValueError as e:
+                    return f"{self.name}: {e}", True
+            else:
+                # `make_extrusion` runs along the curve's OWN normal; a positive
+                # distance runs along `extrusion_direction`, so flip the height when the two
+                # point opposite ways (a clockwise curve)
+                own = bridge.profile_normal(geom)
+                want = self.extrusion_direction(ctx)
+                if own is not None and sum(own[i] * want[i] for i in range(3)) < 0:
+                    height_ = -float(height)
+                else:
+                    height_ = float(height)
+                result = bridge.make_extrusion(geom, height_)
+            results = [result]
+        else:
+            if self._draft() is not None:
+                return (f"{self.name}: tapered extrusion of multiple profiles is not "
+                        f"implemented yet"), True
+            try:
+                results = extrude_planar_profile_regions(
+                    profiles, height, self.extrusion_direction(ctx),
+                    both=bool(self.opt.get("BothSides")),
+                    solid=bool(self.opt.get("Solid", True)))
+            except ValueError as e:
+                return f"{self.name}: multiple-profile region refused: {e}", True
+
+        if self.opt.get("DeleteInput"):
+            self._delete_profiles(ctx, names)
+        made = [ctx.add_geometry(result, "Extrusion")[1] for result in results]
+        if len(made) == 1:
+            return f"Created {made[0]} (h={height:g})", True
+        return f"Created {len(made)} extrusions: {', '.join(made)} (h={height:g})", True
 
     def _draft(self):
         return None
@@ -9436,6 +9532,18 @@ def _replace_curve(ctx, name, new_curves, base="Curve", keep_selection=False):
     """
     ctx.note_change(base)
     layer_index = _layer_index_of(ctx, name)
+    source = next((fobj for fobj in ctx.model.file.Objects
+                   if (fobj.Attributes.Name or "").lower() == (name or "").lower()), None)
+    source_geom = source.Geometry if source is not None else None
+    picture_frame = bridge.picture_frame(source_geom) if source_geom is not None else None
+    if picture_frame is None and source is not None:
+        derive_frame = getattr(ctx, "_texture_frame", None)
+        picture_frame = derive_frame(source_geom, source) if callable(derive_frame) else None
+    picture_text = None
+    if picture_frame is not None:
+        from . import picture
+
+        picture_text = picture.frame_to_json(picture_frame)
     oid = ctx.model.object_id_by_name(name)
     if oid is not None:
         ctx.model.remove_object(oid)
@@ -9449,6 +9557,8 @@ def _replace_curve(ctx, name, new_curves, base="Curve", keep_selection=False):
         _remove_object_from_scene(ob)
     out = []
     for crv in new_curves:
+        if picture_text is not None and isinstance(crv, r3.Brep):
+            crv.SetUserString("Narwhal3D:Picture", picture_text)
         _n, display = ctx.add_geometry(crv, base, layer_index)
         out.append(display)
         if keep_selection and was_selected:

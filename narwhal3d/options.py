@@ -324,6 +324,25 @@ def value_prompt(option):
     return f"{option.name}:"
 
 
+def value_prompt_segments(option):
+    """Split :func:`value_prompt` into clickable ENUM choice segments.
+
+    Each ENUM choice is labelled with its own value so the command bar can
+    hit-test it. VALUE prompts remain one unlabelled segment. Concatenating the
+    segment text always reconstructs :func:`value_prompt` byte-for-byte.
+    """
+    if option.kind != ENUM:
+        return [(value_prompt(option), None)]
+
+    segments = [(f"{option.name} ( ", None)]
+    for i, choice in enumerate(option.choices):
+        if i:
+            segments.append(("  ", None))
+        segments.append((choice, choice))
+    segments.append((" ):", None))
+    return segments
+
+
 def defaults(options):
     """Starting value dict for a command's options (MODE options hold none)."""
     return {o.name: o.default for o in (options or ()) if o.kind != MODE}

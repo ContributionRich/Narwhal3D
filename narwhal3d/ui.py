@@ -1348,13 +1348,13 @@ def _option_click_line(cmd, opt_name):
 def _prompt_segments_for(cmd):
     """The running command's prompt, split into clickable option segments.
 
-    Mirrors `Command.prompt`: while a bare ENUM/VALUE option is waiting for its
-    value the prompt is that sub-prompt (with no clickable options), otherwise it
-    is the step prompt plus the bracketed option list.
+    Mirrors `Command.prompt`: while a bare ENUM option is waiting for its value,
+    each displayed choice is a clickable segment; a free-form VALUE prompt remains
+    unlabelled. Otherwise this is the step prompt plus the bracketed option list.
     """
     pending = getattr(cmd, "pending_option", None)
     if pending is not None:
-        return [(opts.value_prompt(pending), None)]
+        return opts.value_prompt_segments(pending)
     if getattr(cmd, "variable_points", False):
         base = f"{cmd.name} Point {len(cmd.args) + 1}:"
     else:
@@ -15841,16 +15841,15 @@ def _attach_preview_handler():
     gr_id = bpy.types.SpaceView3D.draw_handler_add(
         draw_cplane_grid, (), "WINDOW", "POST_VIEW")
     _preview_handlers.append((bpy.types.SpaceView3D, gr_id))
-    handler_id = bpy.types.SpaceView3D.draw_handler_add(
-        draw_command_preview, (), "WINDOW", "POST_VIEW")
-    _preview_handlers.append((bpy.types.SpaceView3D, handler_id))
-    # A Picture is an unlit image pass in Shaded/Rendered. Register it BEFORE curves:
-    # POST_VIEW handlers draw in registration order, and a same-plane tracing curve must
-    # be the final ink. The old point-handler registration happened after this whole pass,
-    # so the image repainted every curve laid over it.
+    # A Picture is an unlit image pass in Shaded/Rendered. Register it before BOTH live
+    # previews and completed curves: POST_VIEW handlers draw in registration order, so
+    # reference images remain behind every line the user is drawing or has committed.
     pic_id = bpy.types.SpaceView3D.draw_handler_add(
         draw_rendered_pictures, (), "WINDOW", "POST_VIEW")
     _preview_handlers.append((bpy.types.SpaceView3D, pic_id))
+    handler_id = bpy.types.SpaceView3D.draw_handler_add(
+        draw_command_preview, (), "WINDOW", "POST_VIEW")
+    _preview_handlers.append((bpy.types.SpaceView3D, handler_id))
     # every curve (Blender no longer draws them -- see `draw_curves`), layer
     # colours included
     lc_id = bpy.types.SpaceView3D.draw_handler_add(
@@ -18934,6 +18933,28 @@ def _extrude_compute(st, force=False):
         kind, what = st["extrude"]
         jobs = ([(what[0], ("face", what[1]))] if kind == "part"
                 else [(n, None) for n in what])
+        if kind == "objects" and len(what) > 1:
+            import rhino3dm as r3
+
+            rows = [(name, _document_object(name)) for name in what]
+            if all(fobj is not None and isinstance(fobj.Geometry, r3.Curve)
+                   for name, fobj in rows):
+                try:
+                    regions = commands.extrude_planar_profile_regions(
+                        [fobj.Geometry for _name, fobj in rows], d,
+                        direction=st["axis_dir"])
+                except ValueError as e:
+                    why = f"selected profiles: {e}"
+                    jobs = []
+                else:
+                    jobs = []
+                    for new in regions:
+                        cands.append((tuple(what), None, new))
+                        try:
+                            ghost.extend(pl for _i, pl in (bridge.subobject_parts(new) or {})
+                                         .get("edges", ()))
+                        except Exception:  # noqa: BLE001
+                            pass
         for name, part in jobs:
             fobj = _document_object(name)
             if fobj is None:

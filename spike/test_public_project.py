@@ -91,6 +91,10 @@ spec.loader.exec_module(module)
 public = set(module.public_files())
 check(set(required_docs) <= public and "docs/images/bugreport.png" in public,
       "the public allowlist includes the roadmap, governance docs, and bug logo")
+check({"spike/test_picture.py", "spike/test_cmdbar_hits.py",
+       "spike/test_extrude_distance.py", "spike/test_extrude_options.py",
+       "spike/test_picture_display.py", "spike/test_gumball_region_extrude.py"} <= public,
+      "the public allowlist includes regressions for the post-0.3 interaction fixes")
 check("POLICY.md" not in public and not any(path.startswith("artifacts/") for path in public),
       "instruction inputs and temporary planning artifacts stay outside public source")
 

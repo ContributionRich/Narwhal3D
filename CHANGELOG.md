@@ -4,6 +4,14 @@ All notable public changes will be recorded here. Narwhal 3D is currently in pre
 
 ## Unreleased
 
+### Fixed
+
+- Preserve image textures and original UV registration when imported Picture surfaces are split or trimmed.
+- Make pending command enum values, including Orient scale modes, clickable in the command bar.
+- Extrude selected nested closed planar profiles as exact solids with holes; disjoint regions produce separate solids.
+- Apply the same nested-profile hole behavior to Gumball extrusion.
+- Draw live line and curve previews above reference Picture images.
+
 ## 0.3.0 — 2026-10-12
 
 ### Added

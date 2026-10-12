@@ -84,6 +84,7 @@ def _capture(bpy):
 def _inspect(layout_was_ready):
     import bpy
     import narwhal3d
+    from narwhal3d import commands
     from narwhal3d import menubar
     from narwhal3d import rightpanel
     from narwhal3d import toolbars
@@ -124,6 +125,22 @@ def _inspect(layout_was_ready):
     check("toolbar actions are runnable or explicitly unavailable",
           (toolbar_enabled, toolbar_total) == (115, 525),
           f"{toolbar_enabled}/{toolbar_total}")
+
+    orient = commands.OrientCmd()
+    orient.pending_option = next(option for option in orient.options
+                                 if option.name == "Scale")
+    choice_segments = ui._prompt_segments_for(orient)
+    choice_boxes = ui.cmdbar.option_boxes(choice_segments, lambda text: len(text) * 7,
+                                           x0=0)
+    choice_names = [name for name, _x0, _x1 in choice_boxes]
+    choices_hit = all(
+        ui.cmdbar.hit_option((x0 + x1) * 0.5, choice_boxes) == name
+        and ui._option_click_line(orient, name) == name
+        for name, x0, x1 in choice_boxes
+    )
+    check("Orient Scale values are clickable command-bar choices",
+          choice_names == ["No", "1D", "3D"] and choices_hit,
+          ", ".join(choice_names) if choice_names else "no choice hit boxes")
 
     sidebar_cells = list(getattr(ui, "_sidebar_cells", ()))
     check("left tool palette has 37 live cells", len(sidebar_cells) == 37,

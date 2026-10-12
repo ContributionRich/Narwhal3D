@@ -38,6 +38,10 @@ PURE_SUITES=(
     spike/test_geometry.py
     spike/test_kernel.py
     spike/test_primitives.py
+    spike/test_picture.py
+    spike/test_cmdbar_hits.py
+    spike/test_extrude_distance.py
+    spike/test_extrude_options.py
     spike/test_boolean_extrusion.py
     spike/branding_test.py
     spike/test_toolbars.py
@@ -63,6 +67,9 @@ BLENDER_SUITES=(
     spike/test_boolean.py
     spike/test_tessellate.py
     spike/test_trim.py
+    spike/test_picture.py
+    spike/test_picture_display.py
+    spike/test_gumball_region_extrude.py
     spike/test_sweep.py
     spike/ui_smoke.py
     spike/addon_e2e.py

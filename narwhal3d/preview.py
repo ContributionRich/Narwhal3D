@@ -693,8 +693,9 @@ def preview_extrudecrv(args, cursor, plane, resolve, cmd=None):
     the preview also needs an entry here so geometry is drawn while the mouse moves.
 
     This is the first preview that needs DOCUMENT geometry: the command's first argument is a
-    curve NAME, not a point, so it cannot be drawn from `args` alone. `resolve(name)` hands
-    back the geometry, which is why this lives in `PREVIEWS_WITH_DOC`.
+    list of curve NAMES, not a point, so it cannot be drawn from `args` alone. Every selected
+    profile is resolved and drawn consistently; the former scalar-name shape is still accepted
+    for one-profile callers. This is why the function lives in `PREVIEWS_WITH_DOC`.
 
     The height follows the SAME rule as the committed geometry (MEASURED,
     commands/extrudecrv.htm): the signed projection of the cursor onto the profile plane's
@@ -702,64 +703,83 @@ def preview_extrudecrv(args, cursor, plane, resolve, cmd=None):
     the user will not get -- the exact defect that `preview_curve` was created to fix when a
     cubic was previewed as its control polygon.
     """
-    geom = resolve(args[0] if args else None)
-    if geom is None:
+    raw_names = args[0] if args else None
+    if isinstance(raw_names, (list, tuple)):
+        names = [name for name in raw_names if name]
+    else:
+        names = [raw_names] if raw_names else []
+    if not names:
         return []
     try:
         from . import bridge
     except ImportError:          # loaded standalone (tests / probes)
         import bridge
-    # MEASURED: `bridge.sample_curve` returns rhino3dm `Point3d` objects, which are NOT
-    # subscriptable -- everything else in this module works on plain (x, y, z) tuples, so
-    # they are converted here rather than making the vector helpers polymorphic.
-    sampled = bridge.sample_curve(geom, 96)
-    if not sampled or len(sampled) < 2:
+
+    geoms = []
+    profiles = []
+    for name in names:
+        geom = resolve(name)
+        if geom is None:
+            continue
+        # MEASURED: `bridge.sample_curve` returns rhino3dm `Point3d` objects, which are NOT
+        # subscriptable -- everything else in this module works on plain (x, y, z) tuples, so
+        # they are converted here rather than making the vector helpers polymorphic.
+        sampled = bridge.sample_curve(geom, 96)
+        if sampled and len(sampled) >= 2:
+            geoms.append(geom)
+            profiles.append([(p.X, p.Y, p.Z) for p in sampled])
+    if not profiles:
         return []
-    profile = [(p.X, p.Y, p.Z) for p in sampled]
+
     opt = getattr(cmd, "opt", None) or {}
     if getattr(cmd, "_dir_mode", False):
         if len(args) < 3:
-            # still picking the direction: the profile, plus base -> cursor once the base is in
-            out = [list(profile)]
+            # Still picking the direction: every profile, plus base -> cursor once the base
+            # is in. Do not hide inner/disjoint loops while the option is being picked.
+            out = [list(profile) for profile in profiles]
             if len(args) == 2 and args[1] is not None:
                 out.append([tuple(args[1]), cursor])
             return out
         direction = cmd._picked_direction()
         if direction is None:
-            return [list(profile)]
+            return [list(profile) for profile in profiles]
     elif cmd is not None and hasattr(cmd, "default_direction"):
-        # Use the command's own direction rule so the preview
-        # shows exactly the extrusion a click or a typed distance makes
-        direction = cmd.default_direction(geom, plane)
+        # Use the command's own direction rule so the preview shows exactly the extrusion
+        # a click or a typed distance makes. All profiles share it; unsupported noncoplanar
+        # sets are still shown, then explicitly refused by the command.
+        direction = cmd.default_direction(geoms[0], plane)
     else:
-        direction = bridge.profile_normal(geom)
+        direction = bridge.profile_normal(geoms[0])
     if direction is None:
         # MEASURED fallback: "If the curve is not planar, the default extrusion direction is
         # the z direction of the active CPlane."
         direction = plane.zaxis
-    start = profile[0]
+    start = profiles[0][0]
     height = dot(_sub(cursor, start), direction)
     if abs(height) < 1e-12:
-        return [list(profile)]
+        return [list(profile) for profile in profiles]
 
     def shifted(pts, h):
         return [(p[0] + direction[0] * h, p[1] + direction[1] * h, p[2] + direction[2] * h)
                 for p in pts]
 
     draft = cmd._draft() if cmd is not None and hasattr(cmd, "_draft") else None
-    top_base = profile
-    if draft not in (None, 0, 0.0):
-        top_base = _taper_profile(profile, height, float(draft), bool(opt.get("FlipAngle")))
-    top = shifted(top_base, height)
-    bottom = shifted(profile, -height) if opt.get("BothSides") else None
-    out = [list(profile), top]
-    if bottom is not None:
-        out.append(bottom)
-    # A few side edges rather than one per sample: enough to read as a solid, few enough not
-    # to smother the shape in lines.
-    step = max(1, len(profile) // 8)
-    for i in range(0, len(profile), step):
-        out.append([bottom[i] if bottom is not None else profile[i], top[i]])
+    out = []
+    for profile in profiles:
+        top_base = profile
+        if draft not in (None, 0, 0.0):
+            top_base = _taper_profile(
+                profile, height, float(draft), bool(opt.get("FlipAngle")))
+        top = shifted(top_base, height)
+        bottom = shifted(profile, -height) if opt.get("BothSides") else None
+        out.extend([list(profile), top])
+        if bottom is not None:
+            out.append(bottom)
+        # A few side edges rather than one per sample: enough to read as a solid, few enough
+        # not to smother the shape in lines. Apply the same density to every selected profile.
+        step = max(1, len(profile) // 8)
+        for i in range(0, len(profile), step):
+            out.append([bottom[i] if bottom is not None else profile[i], top[i]])
     return out
 
 
