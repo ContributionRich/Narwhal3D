@@ -1,4 +1,4 @@
-"""Print -- vector output of the active viewport to PDF, AI, or SVG.
+"""Print -- vector output of the active viewport to PDF, AI, SVG, or CDR.
 
 The command supports viewport or extents output, paper-to-model scale, output colour,
 and standard paper sizes. In the app it opens a dialog with a live preview; this module
@@ -22,8 +22,8 @@ from . import print2d
 
 TEXT = commands.TEXT
 
-PRINT_FILTERS = (("PDF", "*.pdf"), ("Adobe Illustrator", "*.ai"),
-                 ("SVG", "*.svg"))
+PRINT_FILTERS = (("PDF", "*.pdf"), ("CorelDRAW 2015/X7", "*.cdr"),
+                 ("Adobe Illustrator", "*.ai"), ("SVG", "*.svg"))
 
 #: set by the app (ui) or a test: a callable returning the ACTIVE viewport as a
 #: `print2d.View`. Left None, the app's own `ui.print_view_spec` is used.
@@ -71,7 +71,7 @@ def _describe_scale(s):
 
 class PrintCmd(commands.Command):
     name = "Print"
-    description = ("Print the active viewport as vectors to PDF, AI, or SVG. "
+    description = ("Print the active viewport as vectors to PDF, AI, SVG, or CDR. "
                    "Press Enter to choose the file.")
     records_undo = False
     variable_points = False
@@ -125,13 +125,13 @@ class PrintCmd(commands.Command):
                 self.args.clear()
                 self.step_index = 0
                 return ("No file dialog is available (kdialog / zenity) -- type the "
-                        "file name (.pdf, .ai or .svg)."), False
+                        "file name (.pdf, .ai, .svg or .cdr)."), False
         path = os.path.abspath(os.path.expanduser(target.strip().strip('"')))
         ext = os.path.splitext(path)[1].lower()
         if not ext:
             path += ".pdf"
-        elif ext not in (".pdf", ".ai", ".svg"):
-            return (f"Print writes .pdf, .ai or .svg -- not {ext}. (Paper printers "
+        elif ext not in (".pdf", ".ai", ".svg", ".cdr"):
+            return (f"Print writes .pdf, .ai, .svg or .cdr -- not {ext}. (Paper printers "
                     f"are not implemented yet.)"), True
         if not os.path.isdir(os.path.dirname(path)):
             return f"the folder {os.path.dirname(path)!r} does not exist", True
@@ -139,6 +139,8 @@ class PrintCmd(commands.Command):
             scale = parse_scale(self.opt.get("Scale"))
         except ValueError as e:
             return f"Scale: {e}", True
+        if ext == ".cdr" and scale == "Fit":
+            scale = 1.0
         setup = print2d.PageSetup(size=self.opt["Size"],
                                   orientation=self.opt["Orientation"],
                                   area=self.opt["View"], scale=scale,
@@ -149,7 +151,10 @@ class PrintCmd(commands.Command):
         except ValueError as e:
             return f"Print: {e}", True
         title = os.path.splitext(os.path.basename(path))[0]
-        print2d.write(path, page, title)
+        try:
+            print2d.write(path, page, title)
+        except ValueError as e:
+            return f"Print: {e}", True
         msg = (f"Printed {len(page.strokes)} curve(s) to {path} -- {setup.size} "
                f"{setup.orientation}, {setup.area}, {_describe_scale(scale)}"
                + (f" (= {page.scale:g} mm per unit)" if scale == "Fit" else ""))

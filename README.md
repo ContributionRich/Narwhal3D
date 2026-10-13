@@ -30,8 +30,8 @@ Narwhal keeps document geometry separate from viewport tessellation:
 The public release artifact is `Narwhal_3D-<version>-x86_64.AppImage`. Make it executable and run it directly:
 
 ```bash
-chmod +x Narwhal_3D-0.3.0-x86_64.AppImage
-./Narwhal_3D-0.3.0-x86_64.AppImage
+chmod +x Narwhal_3D-0.4.0-x86_64.AppImage
+./Narwhal_3D-0.4.0-x86_64.AppImage
 ```
 
 The AppImage contains the natively branded runtime, locked Python dependencies, application package, icons, and license notices. It does not install a separate host application.
@@ -76,7 +76,7 @@ REVISION=$(git rev-parse HEAD)
 EPOCH=$(git show -s --format=%ct HEAD)
 
 python3 scripts/assemble_linux_release.py \
-  --version 0.3.0 \
+  --version 0.4.0 \
   --source-revision "$REVISION" \
   --source-date-epoch "$EPOCH" \
   --runtime-dir tools/blender-patched \
@@ -85,8 +85,8 @@ python3 scripts/assemble_linux_release.py \
   --output-dir dist
 
 python3 scripts/verify_linux_release.py \
-  dist/Narwhal_3D-0.3.0-x86_64.AppImage \
-  --expected-version 0.3.0 \
+  dist/Narwhal_3D-0.4.0-x86_64.AppImage \
+  --expected-version 0.4.0 \
   --expected-source-revision "$REVISION" \
   --expected-source-date-epoch "$EPOCH"
 ```
@@ -118,7 +118,7 @@ Narwhal never uploads a screenshot, log, or model automatically. Review the brow
 
 ## Supported interchange
 
-Core, self-contained release functionality includes `.3dm`, STEP, DXF, SVG, OBJ, and STL paths. PDF and Adobe Illustrator conversion can use an optional converter pack; that pack is not part of the initial release and Narwhal does not claim it is bundled. Native CorelDRAW import/export is intentionally excluded from the public branch.
+Core, self-contained release functionality includes `.3dm`, STEP, DXF, SVG, OBJ, and STL paths. PDF and Adobe Illustrator conversion can use an optional converter pack. CorelDRAW `.cdr` Import, Open, Export, Print, and Print Setup use the independently developed TraceDraw CLI; CDR output defaults to version 17 for CorelDRAW 2015/X7 and is readable by 2016/X8. These converter executables are not bundled in the 0.4.0 AppImage, so commands report the missing dependency unless the corresponding local CLI is installed. No vector import route uploads files or silently rasterizes them.
 
 ## Repository layout
 

@@ -100,7 +100,9 @@ def _pdf_page_to_svg(pdf_path: str, page: int, target: str) -> None:
 def converted_svg_pages(path: str) -> Generator[tuple[list[str], list[str]], None, None]:
     """Yield ``(svg_paths, notes)`` for a PDF or AI file.
 
-    Modern AI files beginning with ``%PDF-`` use the PDF route directly. Legacy
+    CorelDRAW uses the separate structured TraceDraw route in ``import_commands`` so
+    SVG conversion cannot discard CDR objects or layer identity. Modern AI files beginning
+    with ``%PDF-`` use the PDF route directly. Legacy
     PostScript AI is normalized by Ghostscript first. Every PDF page is emitted
     independently so the caller can place pages vertically. Text objects are
     deliberately omitted; text converted to outlines remains a normal path.

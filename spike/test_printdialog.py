@@ -49,10 +49,28 @@ def _():
     assert st.width_mm() == 0.13, st.width_mm()
 
 
-@check("destinations expose only PDF, AI, and SVG")
+@check("destinations expose PDF, CorelDRAW 2015, AI, and SVG")
 def _():
-    assert pd.DESTINATIONS == (("PDF", ".pdf"), ("Adobe Illustrator", ".ai"),
-                               ("SVG", ".svg"))
+    assert pd.DESTINATIONS == (("PDF", ".pdf"), ("CorelDRAW 2015/X7", ".cdr"),
+                               ("Adobe Illustrator", ".ai"), ("SVG", ".svg"))
+
+
+@check("choosing CorelDRAW defaults untouched Fit output to manufacturing 1:1")
+def _():
+    st = pd.DialogState()
+    lay = pd.layout(1600, 900, 1.0, st)
+    destination = next(vr for rid, _label, vr in lay.rows if rid == "destination")
+    pd.click(st, lay, *destination.center)
+    lay = pd.layout(1600, 900, 1.0, st)
+    assert pd.click(st, lay, *dict(lay.dropdown)[1].center) == "chose:destination"
+    assert st.extension() == ".cdr" and st.scale == "1:1"
+    by_key = pd.DialogState()
+    lay = pd.layout(1600, 900, 1.0, by_key)
+    destination = next(vr for rid, _label, vr in lay.rows if rid == "destination")
+    pd.click(by_key, lay, *destination.center)
+    by_key.hover = 1
+    assert pd.key(by_key, "enter") == "chose:destination"
+    assert by_key.extension() == ".cdr" and by_key.scale == "1:1"
 
 
 @check("the width list contains standard numeric drafting widths only")

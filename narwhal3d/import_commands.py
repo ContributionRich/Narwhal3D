@@ -7,6 +7,9 @@ the default 3dm filename." `open_foreign(path)` provides that Open route for
 
 Formats, and how exact each is:
 
+* **.3dm** -- loaded through ``NarwhalModel.load`` so analytic recipes/masters are
+  rehydrated exactly, then merged into the current model on their source layers. Geometry
+  is uniformly scaled when source and destination model units differ.
 * **.step / .stp** -- OCCT's STEP reader -> analytic MASTERS -> the exact polysurface in
   the document. UNIT-AWARE: the reader converts the file's length unit
   into the MODEL's (MEASURED: an inch box reads 1 x 2 x 3 into an inch model, 25.4 x 50.8 x
@@ -25,6 +28,10 @@ Formats, and how exact each is:
   user units are ``width / viewBox width`` when both are present, else CSS px (1/96 in).
   OURS: SVG's y runs DOWN; it is flipped about the page so the drawing reads the right
   way up in Top, with the page's lower-left corner at the origin.
+* **.cdr** -- decoded locally by TraceDraw to its structured ``.tdraw`` JSON, preserving
+  pages, layers, affine transforms, and every disconnected path. Paths become real degree-3
+  NURBS curves without using TraceDraw's lossy SVG exporter. CDR versions 7 through 21 are
+  accepted; unsupported content is reported.
 * **.pdf / .ai** -- converted to SVG painting paths, then through the same exact
   cubic-to-NURBS route above. Modern PDF-compatible AI uses the PDF route; legacy
   PostScript AI is normalized by Ghostscript with `-dSAFER`. Text is omitted unless
@@ -37,9 +44,11 @@ Formats, and how exact each is:
 """
 from __future__ import annotations
 
+import json
 import math
 import os
 import re
+import tempfile
 import xml.etree.ElementTree as ET
 
 import rhino3dm as r3
@@ -49,11 +58,12 @@ from . import filedialog
 
 TEXT = commands.TEXT
 
-IMPORT_FILTERS = (("All supported", "*.step *.stp *.dxf *.svg *.pdf *.ai *.obj *.stl"),
+IMPORT_FILTERS = (("All supported", "*.3dm *.step *.stp *.dxf *.svg *.cdr *.pdf *.ai *.obj *.stl"),
+                  ("3D model", "*.3dm"), ("CorelDRAW", "*.cdr"),
                   ("STEP", "*.step *.stp"), ("AutoCAD DXF", "*.dxf"), ("SVG", "*.svg"),
                   ("PDF / Adobe Illustrator", "*.pdf *.ai"),
                   ("Wavefront OBJ", "*.obj"), ("STL", "*.stl"))
-FORMATS = (".step", ".stp", ".dxf", ".svg", ".pdf", ".ai", ".obj", ".stl")
+FORMATS = (".3dm", ".step", ".stp", ".dxf", ".svg", ".cdr", ".pdf", ".ai", ".obj", ".stl")
 
 #: DXF `$INSUNITS` codes -> document unit names (the AutoCAD table; 0 = unitless).
 DXF_UNITS = {1: "Inches", 2: "Feet", 3: "Miles", 4: "Millimeters", 5: "Centimeters",
@@ -514,6 +524,401 @@ def _read_pdf_ai(path, model):
     return out
 
 
+# --------------------------------------------------------------------------- CorelDRAW
+
+
+def _tdraw_color(value):
+    """A TraceDraw colour record to an 8-bit display RGB layer colour."""
+    if not isinstance(value, dict):
+        return None
+    model = str(value.get("model", "")).lower()
+    try:
+        if model == "rgb":
+            rgb = (float(value["r"]), float(value["g"]), float(value["b"]))
+        elif model == "cmyk":
+            c, m, y, k = (float(value[key]) for key in ("c", "m", "y", "k"))
+            rgb = (1.0 - min(1.0, c + k), 1.0 - min(1.0, m + k),
+                   1.0 - min(1.0, y + k))
+        elif model == "gray":
+            rgb = (float(value["v"]),) * 3
+        elif model == "registration":
+            rgb = (0.0, 0.0, 0.0)
+        else:
+            return None
+    except (KeyError, TypeError, ValueError):
+        return None
+    if not all(math.isfinite(component) for component in rgb):
+        return None
+    return tuple(round(max(0.0, min(1.0, component)) * 255.0) for component in rgb)
+
+
+def _tdraw_paint(shape, styles):
+    """Representative object colour: outline first, then a solid fill."""
+    stroke = shape.get("stroke")
+    fill = shape.get("fill")
+    style_id = shape.get("style")
+    style = styles.get(style_id)
+    if isinstance(style, dict):
+        parts = style.get("parts") if isinstance(style.get("parts"), dict) else {}
+        if parts.get("outline", True):
+            stroke = style.get("stroke")
+        if parts.get("fill", True):
+            fill = style.get("fill")
+    if isinstance(stroke, dict):
+        color = _tdraw_color(stroke.get("color"))
+        if color is not None:
+            return color
+    if isinstance(fill, dict) and fill.get("fill") == "solid":
+        color = _tdraw_color(fill)
+        if color is not None:
+            return color
+    return (0, 0, 0)
+
+
+def _tdraw_point(value):
+    if not isinstance(value, dict):
+        return None
+    try:
+        point = (float(value["x"]), float(value["y"]))
+    except (KeyError, TypeError, ValueError):
+        return None
+    return point if all(math.isfinite(v) for v in point) else None
+
+
+def _line_bezier(start, end):
+    return (start,
+            (start[0] + (end[0] - start[0]) / 3.0,
+             start[1] + (end[1] - start[1]) / 3.0),
+            (start[0] + 2.0 * (end[0] - start[0]) / 3.0,
+             start[1] + 2.0 * (end[1] - start[1]) / 3.0),
+            end)
+
+
+def _tdraw_subpaths(commands):
+    """TraceDraw ``BezPath`` JSON to separate ``(beziers, closed)`` subpaths."""
+    out = []
+    beziers = []
+    start = current = None
+
+    def finish(closed=False):
+        nonlocal beziers, start, current
+        if beziers:
+            if closed and start is not None and current is not None \
+                    and math.dist(current, start) > 1e-12:
+                beziers.append(_line_bezier(current, start))
+            out.append((beziers, bool(closed)))
+        beziers = []
+        start = current = None
+
+    if not isinstance(commands, list):
+        return out, 1
+    invalid = 0
+    for command in commands:
+        if command == "ClosePath" or isinstance(command, dict) and "ClosePath" in command:
+            finish(True)
+            continue
+        if not isinstance(command, dict) or len(command) != 1:
+            invalid += 1
+            continue
+        name, value = next(iter(command.items()))
+        if name == "MoveTo":
+            finish(False)
+            start = current = _tdraw_point(value)
+            invalid += start is None
+        elif name == "LineTo":
+            end = _tdraw_point(value)
+            if current is None or end is None:
+                invalid += 1
+                continue
+            beziers.append(_line_bezier(current, end))
+            current = end
+        elif name == "CurveTo":
+            points = [_tdraw_point(point) for point in value] if isinstance(value, list) else []
+            if current is None or len(points) != 3 or any(point is None for point in points):
+                invalid += 1
+                continue
+            beziers.append((current, points[0], points[1], points[2]))
+            current = points[2]
+        else:
+            invalid += 1
+    finish(False)
+    return out, invalid
+
+
+def _tdraw_rect(kind, transform):
+    rect = kind.get("rect") if isinstance(kind.get("rect"), dict) else {}
+    try:
+        x0, y0, x1, y1 = (float(rect[key]) for key in ("x0", "y0", "x1", "y1"))
+        radius = max(0.0, float(kind.get("radius", 0.0)))
+    except (KeyError, TypeError, ValueError):
+        return None, False
+    if not all(math.isfinite(v) for v in (x0, y0, x1, y1, radius)) or x0 == x1 or y0 == y1:
+        return None, False
+    x0, x1 = sorted((x0, x1))
+    y0, y1 = sorted((y0, y1))
+    radius = min(radius, (x1 - x0) / 2.0, (y1 - y0) / 2.0)
+    if radius <= 1e-15:
+        points = [(x0, y0), (x1, y0), (x1, y1), (x0, y1), (x0, y0)]
+        return r3.PolylineCurve([r3.Point3d(*_apply(transform, point), 0.0)
+                                 for point in points]), False
+    k = 0.5522847498307936 * radius
+    points = [(x0 + radius, y0), (x1 - radius, y0), (x1, y0 + radius),
+              (x1, y1 - radius), (x1 - radius, y1), (x0 + radius, y1),
+              (x0, y1 - radius), (x0, y0 + radius), (x0 + radius, y0)]
+    beziers = [
+        _line_bezier(points[0], points[1]),
+        (points[1], (x1 - radius + k, y0), (x1, y0 + radius - k), points[2]),
+        _line_bezier(points[2], points[3]),
+        (points[3], (x1, y1 - radius + k), (x1 - radius + k, y1), points[4]),
+        _line_bezier(points[4], points[5]),
+        (points[5], (x0 + radius - k, y1), (x0, y1 - radius + k), points[6]),
+        _line_bezier(points[6], points[7]),
+        (points[7], (x0, y0 + radius - k), (x0 + radius - k, y0), points[8]),
+    ]
+    return _bezier_curve(beziers, transform, True), True
+
+
+def _tdraw_polygon(kind, transform):
+    rect = kind.get("rect") if isinstance(kind.get("rect"), dict) else {}
+    try:
+        x0, y0, x1, y1 = (float(rect[key]) for key in ("x0", "y0", "x1", "y1"))
+        count = max(3, min(500, int(kind.get("points", 3))))
+        sharpness = max(0.0, min(1.0, float(kind.get("sharpness", 0.0))))
+        twist = float(kind.get("twist", 0.0))
+    except (KeyError, TypeError, ValueError):
+        return []
+    if not all(math.isfinite(v) for v in (x0, y0, x1, y1, sharpness, twist)):
+        return []
+    cx, cy = ((x0 + x1) / 2.0, (y0 + y1) / 2.0)
+    rx, ry = (abs(x1 - x0) / 2.0, abs(y1 - y0) / 2.0)
+    complex_step = kind.get("complex")
+    paths = []
+    if complex_step is not None:
+        try:
+            step = max(2, min(count - 1, int(complex_step) + 1))
+        except (TypeError, ValueError):
+            return []
+        vertices = [(cx + rx * math.cos(math.pi / 2.0 - i * math.tau / count),
+                     cy + ry * math.sin(math.pi / 2.0 - i * math.tau / count))
+                    for i in range(count)]
+        cycles = math.gcd(count, step)
+        for start in range(cycles):
+            points = [vertices[(start + i * step) % count] for i in range(count // cycles)]
+            points.append(points[0])
+            paths.append(points)
+    else:
+        star = sharpness > 0.0 or twist != 0.0
+        n = count * 2 if star else count
+        inner = 1.0 - sharpness if sharpness > 0.0 else math.cos(math.pi / count)
+        points = []
+        for i in range(n):
+            angle = math.pi / 2.0 - i * math.tau / n
+            scale = 1.0
+            if star and i % 2:
+                angle += twist
+                scale = inner
+            points.append((cx + rx * scale * math.cos(angle),
+                           cy + ry * scale * math.sin(angle)))
+        points.append(points[0])
+        paths.append(points)
+    return [r3.PolylineCurve([r3.Point3d(*_apply(transform, point), 0.0)
+                              for point in points]) for points in paths]
+
+
+def _read_tdraw(path, model):
+    """Read TraceDraw JSON as real curves while retaining pages and source layers."""
+    try:
+        with open(path, encoding="utf-8") as stream:
+            document = json.load(stream)
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise ValueError(f"invalid TraceDraw drawing: {exc}") from exc
+    if not isinstance(document, dict) or not isinstance(document.get("pages"), list) \
+            or not document["pages"]:
+        raise ValueError("TraceDraw drawing has no readable pages")
+
+    out = Imported()
+    k = 1.0 / _units().UNIT_SCALE_MM[_model_unit(model)]
+    styles = {style.get("id"): style for style in document.get("object_styles", [])
+              if isinstance(style, dict) and style.get("id") is not None}
+    symbols = document.get("symbols") if isinstance(document.get("symbols"), list) else []
+    unsupported = {}
+    invalid_commands = rounded = 0
+    y_offset = 0.0
+
+    def transform_of(value):
+        if not isinstance(value, list) or len(value) != 6:
+            return IDENTITY
+        try:
+            transform = tuple(float(component) for component in value)
+        except (TypeError, ValueError):
+            return IDENTITY
+        return transform if all(math.isfinite(component) for component in transform) else IDENTITY
+
+    def walk_shape(shape, parent, layer, symbol_stack=()):
+        nonlocal invalid_commands, rounded
+        if not isinstance(shape, dict) or shape.get("visible", True) is False \
+                or float(shape.get("opacity", 1.0) or 0.0) <= 0.0:
+            return
+        kind = shape.get("kind") if isinstance(shape.get("kind"), dict) else {}
+        shape_type = str(kind.get("type", "unknown")).lower()
+        transform = _mat_mul(parent, transform_of(shape.get("transform")))
+        base_name = str(shape.get("name") or {
+            "path": "Curve", "ellipse": "Ellipse", "rect": "Rectangle",
+            "polygon": "Polygon"}.get(shape_type, "Object"))
+        if layer not in out.layers:
+            out.layers[layer] = _tdraw_paint(shape, styles)
+        if shape_type == "path":
+            subpaths, bad = _tdraw_subpaths(kind.get("path"))
+            invalid_commands += bad
+            for beziers, closed in subpaths:
+                out.items.append((_bezier_curve(beziers, transform, closed), base_name, layer))
+        elif shape_type == "ellipse":
+            rect = kind.get("rect") if isinstance(kind.get("rect"), dict) else {}
+            if kind.get("arc") is not None:
+                unsupported["ellipse arc"] = unsupported.get("ellipse arc", 0) + 1
+                return
+            try:
+                x0, y0, x1, y1 = (float(rect[key]) for key in ("x0", "y0", "x1", "y1"))
+            except (KeyError, TypeError, ValueError):
+                invalid_commands += 1
+                return
+            if x0 != x1 and y0 != y1 and all(math.isfinite(v) for v in (x0, y0, x1, y1)):
+                out.items.append((_conic((x0 + x1) / 2.0, (y0 + y1) / 2.0,
+                                         abs(x1 - x0) / 2.0, abs(y1 - y0) / 2.0,
+                                         transform), base_name, layer))
+        elif shape_type == "rect":
+            curve, approximate = _tdraw_rect(kind, transform)
+            if curve is not None:
+                out.items.append((curve, base_name, layer))
+                rounded += int(approximate)
+        elif shape_type == "polygon":
+            for curve in _tdraw_polygon(kind, transform):
+                out.items.append((curve, base_name, layer))
+        elif shape_type == "group":
+            for child in kind.get("children", []):
+                walk_shape(child, transform, layer, symbol_stack)
+        elif shape_type == "symbolinstance":
+            try:
+                index = int(kind.get("index"))
+                symbol = symbols[index]
+            except (TypeError, ValueError, IndexError):
+                unsupported["invalid symbol instance"] = \
+                    unsupported.get("invalid symbol instance", 0) + 1
+                return
+            if index in symbol_stack or not isinstance(symbol, dict):
+                unsupported["recursive symbol instance"] = \
+                    unsupported.get("recursive symbol instance", 0) + 1
+                return
+            walk_shape(symbol.get("shape"), transform, layer, symbol_stack + (index,))
+        else:
+            unsupported[shape_type] = unsupported.get(shape_type, 0) + 1
+
+    pages = document["pages"]
+    masters = document.get("master") if isinstance(document.get("master"), list) else []
+    for page_index, page in enumerate(pages):
+        if not isinstance(page, dict):
+            continue
+        size = page.get("size") if isinstance(page.get("size"), dict) else {}
+        try:
+            width, height = float(size["width"]), float(size["height"])
+        except (KeyError, TypeError, ValueError):
+            raise ValueError(f"TraceDraw page {page_index + 1} has no measurable size")
+        if not (math.isfinite(width) and math.isfinite(height) and width > 0.0 and height > 0.0):
+            raise ValueError(f"TraceDraw page {page_index + 1} has no measurable size")
+        base = (k, 0.0, 0.0, k, 0.0, y_offset)
+        page_layers = []
+        for master in masters:
+            scope = str(master.get("scope", "all")).lower() if isinstance(master, dict) else ""
+            if scope == "all" or scope == "odd" and page_index % 2 == 0 \
+                    or scope == "even" and page_index % 2 == 1:
+                page_layers.append(master)
+        if isinstance(page.get("layers"), list):
+            page_layers.extend(page["layers"])
+        for layer_number, layer_record in enumerate(page_layers, start=1):
+            if not isinstance(layer_record, dict) or layer_record.get("visible", True) is False:
+                continue
+            layer = str(layer_record.get("name") or f"CorelDRAW Layer {layer_number}")
+            shapes = layer_record.get("shapes")
+            if not isinstance(shapes, list):
+                continue
+            for shape in shapes:
+                walk_shape(shape, base, layer)
+        y_offset += height * k
+        if page_index == 0:
+            out.page_size = (width * k, height * k)
+    out.notes.append("TraceDraw coordinates interpreted as millimetres")
+    if invalid_commands:
+        out.notes.append(f"NOT imported: {invalid_commands} invalid path command(s)")
+    if rounded:
+        out.notes.append(
+            f"APPROXIMATE: {rounded} rounded rectangle(s) use cubic quarter-circle paths")
+    if unsupported:
+        detail = ", ".join(f"{count} {kind}" for kind, count in sorted(unsupported.items()))
+        out.notes.append(f"NOT imported: unsupported TraceDraw object(s): {detail}")
+    return out
+
+
+def _read_cdr(path, model):
+    from . import tracedraw
+
+    with tempfile.TemporaryDirectory(prefix="narwhal3d_cdr_import_") as directory:
+        try:
+            structured_path, notes = tracedraw.cdr_to_tdraw(path, directory)
+        except tracedraw.TraceDrawError as exc:
+            raise ValueError(str(exc)) from exc
+        out = _read_tdraw(structured_path, model)
+        out.notes.extend(note for note in notes if note not in out.notes)
+        return out
+
+
+# --------------------------------------------------------------------------- 3DM
+
+
+def _read_3dm(path, model):
+    """Read a native model for merging into ``model`` without replacing that document.
+
+    ``NarwhalModel.load`` is also the Open path, so recipe-backed analytic geometry is
+    rehydrated before it leaves the source document. Uniform unit conversion goes through
+    ``bridge.transform_geometry`` rather than bare ``Geometry.Transform`` so each exact
+    master and recipe follows its document proxy.
+    """
+    from . import bridge
+    from .model import NarwhalModel
+
+    source = NarwhalModel.load(path)
+    factor = _scale(source.unit_system(), model)
+    xform = None
+    if abs(factor - 1.0) > 1e-15:
+        xform = r3.Transform.Scale(r3.Point3d(0.0, 0.0, 0.0), factor)
+
+    out = Imported()
+    for index in range(len(source.file.Layers)):
+        layer = source.file.Layers[index]
+        out.layers[layer.Name] = tuple(layer.Color)[:3]
+
+    skipped_blocks = 0
+    for fobj in source.file.Objects:
+        geom = fobj.Geometry
+        if isinstance(geom, r3.InstanceReference):
+            skipped_blocks += 1
+            continue
+        if xform is not None:
+            geom = geom.Duplicate()
+            geom = bridge.transform_geometry(geom, xform)
+        attrs = fobj.Attributes
+        layer_index = int(attrs.LayerIndex)
+        layer_name = (source.file.Layers[layer_index].Name
+                      if 0 <= layer_index < len(source.file.Layers) else None)
+        out.items.append((geom, attrs.Name or type(geom).__name__ or "Object", layer_name))
+
+    if abs(factor - 1.0) > 1e-15:
+        out.notes.append(
+            f"scaled from {source.unit_system()} to {model.unit_system()} by {factor:g}")
+    if skipped_blocks:
+        out.notes.append(
+            f"skipped {skipped_blocks} block instance(s): importing block definitions is not implemented yet")
+    return out
+
 
 # --------------------------------------------------------------------------- meshes
 
@@ -551,7 +956,8 @@ def _read_stl(path, model):
     return out
 
 
-READERS = {".step": _read_step, ".stp": _read_step, ".dxf": _read_dxf, ".svg": _read_svg,
+READERS = {".3dm": _read_3dm, ".step": _read_step, ".stp": _read_step,
+           ".dxf": _read_dxf, ".svg": _read_svg, ".cdr": _read_cdr,
            ".pdf": _read_pdf_ai, ".ai": _read_pdf_ai, ".obj": _read_obj,
            ".stl": _read_stl}
 
@@ -627,10 +1033,13 @@ def import_into(ctx, path):
             ". " + "; ".join(got.notes) if got.notes else "")
     ctx.note_change("Import")
     layer_cache = _LayerIndexCache(ctx.model)
+    added_names = []
     for geom, base, layer in got.items:
         li = layer_cache.index(layer, got.layers.get(layer, (0, 0, 0))) \
             if layer else None
-        ctx.add_geometry(geom, base, li)
+        added = ctx.add_geometry(geom, base, li)
+        if isinstance(added, (tuple, list)) and len(added) >= 2 and added[1]:
+            added_names.append(str(added[1]))
     # The Layers panel reads AppState.layers, a live mirror of model.file.Layers.
     # Open replaces the model and rebuilds that mirror in set_model(); Import
     # mutates the current model in place, so it must synchronize once after all
@@ -642,6 +1051,9 @@ def import_into(ctx, path):
             app_state._rebuild_layers()
     except Exception:  # noqa: BLE001 -- import is also used without Blender/state
         pass
+    select = getattr(ctx, "select_by_names", None)
+    if callable(select) and added_names:
+        select(added_names)
     return True, _summary(path, got, len(got.items))
 
 
@@ -666,7 +1078,7 @@ def open_foreign(path):
 
 class ImportCmd(commands.Command):
     name = "Import"
-    description = ("Import objects from a .step, .dxf, .svg, .pdf, .ai, .obj or .stl "
+    description = ("Import objects from a .3dm, .step, .dxf, .svg, .cdr, .pdf, .ai, .obj or .stl "
                    "file into the current model.")
     steps = [("Press Enter to choose the file, or type a file name:", TEXT)]
 

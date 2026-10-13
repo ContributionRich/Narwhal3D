@@ -30,6 +30,7 @@ _ALIASES: dict[str, tuple[str, ...]] = {
     "ghostscript": ("gs", "ghostscript"),
     "soffice": ("soffice", "libreoffice"),
     "libreoffice": ("soffice", "libreoffice"),
+    "tracedraw-cli": ("tracedraw-cli",),
 }
 
 

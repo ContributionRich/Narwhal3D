@@ -662,12 +662,39 @@ def planar_regions(loops):
     `face_from_curve_loops` per face.
     """
     _need()
-    faces = []
-    for lp in loops:
-        faces.append(face_from_curve_loops([lp]))
-    n = len(loops)
+    faces = [face_from_curve_loops([lp]) for lp in loops]
     areas = [abs(mass_properties(f, solid=False)["area"]) for f in faces]
     samples = [_loop_samples(lp) for lp in loops]
+
+    # OURS (owner-required multi-profile workflow): collapse only numerically coincident
+    # boundaries. Duplicate selected loops otherwise become duplicate inner wires in one
+    # face, which OCCT correctly rejects as invalid topology. Partial overlaps and genuinely
+    # offset loops remain separate, matching the documented PlanarSrf rules.
+    keep = []
+    for i in range(len(loops)):
+        duplicate = False
+        for j in keep:
+            size = math.sqrt(max(areas[i], areas[j], 1.0))
+            distance_tol = max(1e-7, size * 1e-9)
+            area_tol = max(1e-12, max(areas[i], areas[j], 1.0) * 1e-7)
+            if abs(areas[i] - areas[j]) > area_tol:
+                continue
+            boundary_i = _boundary(faces[i])
+            boundary_j = _boundary(faces[j])
+            if all(distance_to_shape(boundary_j, p) <= distance_tol for p in samples[i]) \
+                    and all(distance_to_shape(boundary_i, p) <= distance_tol
+                            for p in samples[j]):
+                duplicate = True
+                break
+        if not duplicate:
+            keep.append(i)
+    if len(keep) != len(loops):
+        loops = [loops[i] for i in keep]
+        faces = [faces[i] for i in keep]
+        areas = [areas[i] for i in keep]
+        samples = [samples[i] for i in keep]
+
+    n = len(loops)
 
     def inside(i, j):            # loop i wholly within loop j's region
         if areas[i] >= areas[j]:
@@ -1353,11 +1380,29 @@ DISPLAY_DEFLECTION = 0.02
 #: tolerance alone would under-sample a tiny fillet.
 DISPLAY_ANGLE = 0.3
 
+#: One bounded fallback for a DISPLAY mesh only. MEASURED: OCCT can return mesher status
+#: 6 and no triangles for a valid planar face whose C0 NURBS boundary passes within a few
+#: microns of a circular trim at the normal display settings. A coarser 0.08 / 0.3 pass
+#: draws that exact face without changing its master or recipe.
+DISPLAY_RETRY_SCALE = 4.0
+
+
+def _tessellate_with_retry(shape, deflection, angle, want_edges, tangent_angle=None):
+    """Tessellate once as requested, then retry one coarser DISPLAY mesh if OCCT emits none."""
+    try:
+        return _tessellate(shape, deflection, angle, want_edges, tangent_angle)
+    except KernelError as first:
+        if str(first) != "tessellation produced no triangles":
+            raise
+        retry_angle = max(float(angle), DISPLAY_ANGLE)
+        return _tessellate(shape, float(deflection) * DISPLAY_RETRY_SCALE, retry_angle,
+                           want_edges, tangent_angle)
+
 
 def tessellate(shape, deflection=DISPLAY_DEFLECTION, angle=DISPLAY_ANGLE):
     """``(vertices, triangles)`` for DRAWING `shape`. Never the geometry.
     (See `tessellate_with_edges` for the same mesh plus where its real edges run.)"""
-    verts, tris, _edges = _tessellate(shape, deflection, angle, False)
+    verts, tris, _edges = _tessellate_with_retry(shape, deflection, angle, False)
     return verts, tris
 
 
@@ -1436,7 +1481,7 @@ def tessellate_with_edges(shape, deflection=DISPLAY_DEFLECTION, angle=DISPLAY_ED
     Within one face OCCT shares nodes between its triangles -- except along a
     seam, where it repeats them -- so an edge used by ONE triangle of its face is exactly
     that face's boundary: the brep edges, and nothing else."""
-    return _tessellate(shape, deflection, angle, True, tangent_angle)
+    return _tessellate_with_retry(shape, deflection, angle, True, tangent_angle)
 
 
 def _tessellate(shape, deflection, angle, want_edges, tangent_angle=None):

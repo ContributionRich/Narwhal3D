@@ -1,6 +1,6 @@
 """2-D vector output: document curves -> cubic Beziers on a page. rhino3dm, **no bpy**.
 
-PDF, AI, and SVG are vector formats whose shared curve representation is the CUBIC
+PDF, AI, SVG, and CDR are vector formats whose shared curve representation is the CUBIC
 Bezier, so every document curve is turned into cubics here, projected through the view,
 and laid out on the page. `vector_export` writes the result.
 
@@ -33,6 +33,8 @@ Not built, and reported by `build_page` rather than skipped silently:
 from __future__ import annotations
 
 import math
+import os
+import tempfile
 from dataclasses import dataclass, field
 
 import rhino3dm as r3
@@ -459,7 +461,7 @@ def build_page(model, view, setup, objects=None):
 
 
 def write(path, page, title=""):
-    """Write `page` by extension (.pdf / .ai / .svg)."""
+    """Write `page` by extension (.pdf / .ai / .svg / genuine CDR v17)."""
     low = path.lower()
     if low.endswith(".pdf"):
         return vx.write_pdf(path, page.strokes, page.width_mm, page.height_mm, title)
@@ -467,4 +469,11 @@ def write(path, page, title=""):
         return vx.write_ai(path, page.strokes, page.width_mm, page.height_mm, title)
     if low.endswith(".svg"):
         return vx.write_svg(path, page.strokes, page.width_mm, page.height_mm)
-    raise ValueError(f"{path!r}: print/export writes .pdf, .ai or .svg")
+    if low.endswith(".cdr"):
+        from . import tracedraw
+
+        with tempfile.TemporaryDirectory(prefix="narwhal3d_cdr_export_") as directory:
+            svg = os.path.join(directory, "page.svg")
+            vx.write_svg(svg, page.strokes, page.width_mm, page.height_mm)
+            return tracedraw.svg_to_cdr(svg, path, tracedraw.DEFAULT_CDR_VERSION)
+    raise ValueError(f"{path!r}: print/export writes .pdf, .ai, .svg or .cdr")

@@ -22,7 +22,8 @@ from dataclasses import dataclass, field
 from . import print2d
 
 #: (label, file extension) -- the "printers" this build can print to
-DESTINATIONS = (("PDF", ".pdf"), ("Adobe Illustrator", ".ai"), ("SVG", ".svg"))
+DESTINATIONS = (("PDF", ".pdf"), ("CorelDRAW 2015/X7", ".cdr"),
+                ("Adobe Illustrator", ".ai"), ("SVG", ".svg"))
 ORIENTATIONS = ("Landscape", "Portrait")
 AREAS = ("Viewport", "Extents")
 #: Preset values for the dialog's scale box.
@@ -386,6 +387,8 @@ def click(state, lay, x, y, measure=None, shift=False):
             new = state.choices(rid)[h[1]]
             old = getattr(state, rid)
             setattr(state, rid, new)
+            if rid == "destination" and state.extension() == ".cdr" and state.scale == "Fit":
+                state.scale = "1:1"
 
             if rid == "size" and new == print2d.CUSTOM and old != print2d.CUSTOM:
                 _focus_field(state, "custom_w")
@@ -460,6 +463,8 @@ def key(state, kind, char="", shift=False):
         if kind == "enter" and state.hover is not None:
             rid = state.open_dropdown
             setattr(state, rid, state.choices(rid)[state.hover])
+            if rid == "destination" and state.extension() == ".cdr" and state.scale == "Fit":
+                state.scale = "1:1"
 
             state.open_dropdown, state.hover = None, None
             return f"chose:{rid}"

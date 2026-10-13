@@ -4,6 +4,7 @@ Fixtures pin format parsing, document units, layer mapping, exact-solid adoption
 Blender display conversion for imported meshes.
 """
 import importlib.util
+import json
 import math
 import os
 import subprocess
@@ -29,6 +30,7 @@ def _load(name, rel):
 
 _load("narwhal3d.cplane", "narwhal3d/cplane.py")
 _load("narwhal3d.runtime_tools", "narwhal3d/runtime_tools.py")
+td = _load("narwhal3d.tracedraw", "narwhal3d/tracedraw.py")
 vi = _load("narwhal3d.vector_import", "narwhal3d/vector_import.py")
 bridge = _load("narwhal3d.bridge", "narwhal3d/bridge.py")
 analysis = _load("narwhal3d.analysis", "narwhal3d/analysis.py")
@@ -83,6 +85,7 @@ class Ctx:
     def __init__(self, m):
         self.model = m
         self.added = []
+        self.selected = []
 
     def add_geometry(self, geom, base_name, layer_index=None):
         nm = f"{base_name}_{len(self.added) + 1}"
@@ -93,10 +96,46 @@ class Ctx:
     def note_change(self, label=None):
         pass
 
+    def select_by_names(self, names):
+        self.selected = list(names)
+        return list(names)
+
 
 def rel(a, b):
     return abs(a - b) / abs(b)
 
+
+print("-- native 3DM merges into the open model --")
+source_3dm = doc("Inches")
+cut_layer = source_3dm.add_layer("Cut", (17, 83, 149))
+source_3dm.add_object(bridge.make_circle((1, 2, 0), 2), "ImportedRing", cut_layer)
+source_3dm.add_object(bridge.make_line((0, 0, 0), (3, 0, 0)), "ImportedAxis", 0)
+native_path = os.path.join(TMP, "native.3dm")
+source_3dm.save(native_path)
+target_3dm = doc("Millimeters")
+target_3dm.add_object(bridge.make_line((-1, 0, 0), (-2, 0, 0)), "Existing", 0)
+native_ctx = Ctx(target_3dm)
+native_ok, native_msg = ic.import_into(native_ctx, native_path)
+native_objects = list(target_3dm.file.Objects)
+native_ring = next((o for o in native_objects
+                    if (o.Attributes.Name or "").startswith("ImportedRing")), None)
+native_circle = native_ring.Geometry.TryGetCircle() if native_ring is not None else None
+native_layer = (target_3dm.file.Layers[int(native_ring.Attributes.LayerIndex)]
+                if native_ring is not None else None)
+check(native_ok and len(native_objects) == 3 and native_circle is not None
+      and abs(native_circle.Radius - 50.8) < 1e-9,
+      f"3DM Import keeps the open document and scales 2 inches to 50.8 mm "
+      f"({len(native_objects)} objects; {native_msg!r})")
+check(native_layer is not None and native_layer.Name == "Cut"
+      and tuple(native_layer.Color)[:3] == (17, 83, 149),
+      f"3DM Import creates the source layer with its colour "
+      f"({native_layer and native_layer.Name!r}; {native_layer and tuple(native_layer.Color)[:3]})")
+check(native_ctx.selected == [name for name, _geom, _layer in native_ctx.added]
+      and len(native_ctx.selected) == 2 and "Existing" not in native_ctx.selected,
+      f"Import selects exactly every newly added object ({native_ctx.selected})")
+check(".3dm" in ic.FORMATS
+      and any("*.3dm" in patterns for _label, patterns in ic.IMPORT_FILTERS),
+      "Import's command and file-dialog formats expose .3dm")
 
 V_BU = 1000 + 45 * math.pi
 if ob.available():
@@ -354,6 +393,79 @@ check(layer_names == ["Cut", "Score", "Vector #0000FF"]
       and tuple(layered_model.file.Layers[1].Color)[:3] == (255, 0, 0)
       and tuple(layered_model.file.Layers[2].Color)[:3] == (0, 255, 0),
       f"SVG Open inserts curves on their source layers ({layer_names})")
+
+cdr_source = os.path.join(TMP, "drawing.cdr")
+open(cdr_source, "wb").write(b"CDR fixture dispatched through mocked TraceDraw")
+cdr_calls = []
+original_tdraw = td.cdr_to_tdraw
+
+
+def fake_cdr_tdraw(path, directory):
+    cdr_calls.append(path)
+    k = 0.5522847498307936
+
+    def circle(cx, cy):
+        return [{"MoveTo": {"x": cx + 1.0, "y": cy}},
+                {"CurveTo": [{"x": cx + 1.0, "y": cy + k},
+                             {"x": cx + k, "y": cy + 1.0},
+                             {"x": cx, "y": cy + 1.0}]},
+                {"CurveTo": [{"x": cx - k, "y": cy + 1.0},
+                             {"x": cx - 1.0, "y": cy + k},
+                             {"x": cx - 1.0, "y": cy}]},
+                {"CurveTo": [{"x": cx - 1.0, "y": cy - k},
+                             {"x": cx - k, "y": cy - 1.0},
+                             {"x": cx, "y": cy - 1.0}]},
+                {"CurveTo": [{"x": cx + k, "y": cy - 1.0},
+                             {"x": cx + 1.0, "y": cy - k},
+                             {"x": cx + 1.0, "y": cy}]}, "ClosePath"]
+
+    black_shapes = [{"id": 20 + i, "kind": {"type": "path", "path": circle(5 + i * 5, 5),
+                     "closed": True}, "transform": [1, 0, 0, 1, 0, 0],
+                     "fill": {"fill": "none"}, "stroke": None, "visible": True,
+                     "opacity": 1.0} for i in range(5)]
+    compound = {"id": 10, "kind": {"type": "path", "path": [
+        {"MoveTo": {"x": 0, "y": 0}}, {"LineTo": {"x": 25.4, "y": 0}},
+        {"MoveTo": {"x": 0, "y": 10}},
+        {"CurveTo": [{"x": 2, "y": 12}, {"x": 4, "y": 12}, {"x": 6, "y": 10}]}
+    ], "closed": False}, "transform": [1, 0, 0, 1, 10, 20],
+        "fill": {"fill": "none"},
+        "stroke": {"color": {"model": "rgb", "r": 1, "g": 0, "b": 0},
+                   "width": 0.1}, "visible": True, "opacity": 1.0}
+    fixture = {"title": "Structured CDR fixture", "pages": [{"id": 1,
+        "name": "Page 1", "size": {"width": 100.0, "height": 80.0}, "layers": [
+            {"id": 2, "name": "Layer 2", "visible": True, "printable": True,
+             "locked": False, "shapes": black_shapes},
+            {"id": 3, "name": "Layer 1", "visible": True, "printable": True,
+             "locked": False, "shapes": [compound]}
+        ]}]}
+    target = os.path.join(directory, "fixture.tdraw")
+    with open(target, "w", encoding="utf-8") as stream:
+        json.dump(fixture, stream)
+    return target, ["warning: unsupported vector fill retained as boundary"]
+
+
+td.cdr_to_tdraw = fake_cdr_tdraw
+try:
+    cdr_got = ic.read_foreign(cdr_source, doc("Inches"))
+finally:
+    td.cdr_to_tdraw = original_tdraw
+cdr_layers = [layer for _geom, _base, layer in cdr_got.items]
+first_curve = next((geom for geom, _base, layer in cdr_got.items if layer == "Layer 1"), None)
+check(cdr_calls == [cdr_source] and len(cdr_got.items) == 7
+      and cdr_layers.count("Layer 2") == 5 and cdr_layers.count("Layer 1") == 2
+      and cdr_got.layers == {"Layer 2": (0, 0, 0), "Layer 1": (255, 0, 0)}
+      and any("vector fill" in note for note in cdr_got.notes),
+      "CDR Import/Open uses structured TraceDraw data, retaining five secondary paths, "
+      "both compound subpaths, source layers, colours, and warnings")
+check(first_curve is not None
+      and math.dist((first_curve.PointAtStart.X, first_curve.PointAtStart.Y),
+                    (10.0 / 25.4, 20.0 / 25.4)) < 1e-12
+      and abs(math.dist((first_curve.PointAtStart.X, first_curve.PointAtStart.Y),
+                        (first_curve.PointAtEnd.X, first_curve.PointAtEnd.Y)) - 1.0) < 1e-12,
+      "structured CDR transforms and millimetres map exactly into model units")
+check(".cdr" in ic.FORMATS
+      and any("*.cdr" in patterns for _label, patterns in ic.IMPORT_FILTERS),
+      "Import/Open filters expose CorelDRAW files")
 
 # Import mutates the existing model rather than calling AppState.set_model. The
 # right Layers panel reads AppState.layers, so import must explicitly rebuild

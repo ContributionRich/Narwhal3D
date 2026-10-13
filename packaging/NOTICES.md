@@ -11,6 +11,6 @@ The pinned appimagetool 1.9.1 executable and type2 runtime tag `20251108` are re
 ## Deliberate exclusions
 
 - **openNURBS exact-save helper:** not downloaded, built, or bundled because redistribution clearance is unresolved. In particular, `launch/build_brep_writer.sh`, `narwhal3d/kernel/brep_writer.cpp`, and every file or symlink under `narwhal3d/kernel/bin/` are forbidden. Assembly fails if they are present in the source package, and verification rejects them in an AppDir or extracted AppImage.
-- **Optional converter support:** `narwhal3d/cdr_reader.py` and `narwhal3d/cdr_writer.py` are forbidden from this release, and optional converter runtimes are not downloaded or bundled. Their presence fails assembly/verification rather than being silently ignored. They may be introduced only after their artifacts, licenses, and hashes are reviewed and locked.
+- **Optional converter support:** the excluded private `narwhal3d/cdr_reader.py` and `narwhal3d/cdr_writer.py` remain forbidden. Public CDR commands use a locally installed TraceDraw CLI, but the 0.4.0 AppImage does not download or bundle that executable. A future bundle may include TraceDraw only after an immutable release or reproducible pinned source build, license, and platform hashes are reviewed and locked. Inkscape, Poppler, Ghostscript, and LibreOffice likewise remain optional external tools.
 
 No excluded component may be inferred to be present merely because the launcher can detect an independently installed copy.

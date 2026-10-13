@@ -17,7 +17,7 @@ sys.path.insert(0, ROOT)
 
 import rhino3dm as r3  # noqa: E402
 
-from narwhal3d import filedialog, kernel, print2d, print_commands  # noqa: E402
+from narwhal3d import filedialog, kernel, print2d, print_commands, tracedraw  # noqa: E402
 from narwhal3d.kernel import occt_backend as ob  # noqa: E402
 from narwhal3d.model import NarwhalModel  # noqa: E402
 from narwhal3d.state import app_state  # noqa: E402
@@ -134,6 +134,24 @@ def run():
         msg = export(circ, p)
         check(os.path.exists(p), f"Export .{ext} writes the file", f"{msg!r}")
 
+    cdr_calls = []
+    original_cdr = tracedraw.svg_to_cdr
+
+    def fake_cdr(source, target, version=17):
+        cdr_calls.append((os.path.isfile(source), version))
+        with open(target, "wb") as stream:
+            stream.write(b"CDR17")
+        return 5
+
+    tracedraw.svg_to_cdr = fake_cdr
+    try:
+        p = os.path.join(TMP, "circle.cdr")
+        msg = export(circ, p)
+    finally:
+        tracedraw.svg_to_cdr = original_cdr
+    check(os.path.exists(p) and open(p, "rb").read() == b"CDR17"
+          and cdr_calls == [(True, 17)] and ".cdr" in msg,
+          "Export .cdr routes the 1:1 vector page through TraceDraw as CDR v17", f"{msg!r}")
 
     # 6. perspective: a 2-D export cannot preserve scale -> refused
     print_commands.view_provider = lambda: print2d.View(

@@ -195,6 +195,22 @@ check(direct_master is not None
       and direct_recipe.get("kind") == "prism"
       and len((direct_recipe.get("a") or {}).get("loops") or []) == 2,
       "direct shared helper: one exact airtight 4-face annular prism with two-loop recipe")
+
+# A selected group can contain a second numerical copy of every boundary. Keeping both
+# copies creates duplicate hole wires and invalid topology; equivalent loops collapse while
+# genuinely offset/overlapping profiles remain separate.
+near_outer = bridge.transform_geometry(
+    OUTER.Duplicate(), r3.Transform.Translation(1e-8, -1e-8, 0.0))
+near_hole = bridge.transform_geometry(
+    HOLE.Duplicate(), r3.Transform.Translation(1e-8, -1e-8, 0.0))
+deduplicated = commands.extrude_planar_profile_regions(
+    [OUTER, HOLE, near_outer, near_hole], 5.0, (0.0, 0.0, 1.0),
+    both=False, solid=True)
+deduplicated_master = kernel.master_of(deduplicated[0]) if len(deduplicated) == 1 else None
+check(deduplicated_master is not None and ob.is_airtight(deduplicated_master)
+      and ob.face_types(deduplicated_master) == {"CYLINDER": 2, "PLANE": 2}
+      and rel(ob.volume(deduplicated_master), ring_volume) < 1e-12,
+      "near-coincident duplicate profile loops collapse to one exact airtight annular prism")
 try:
     commands.extrude_planar_profile_regions(
         [OUTER], 5.0, (0.0, 0.0, 1.0), both=False, solid=True)

@@ -26,7 +26,7 @@ The current application provides:
 - fifteen desktop toolbar tabs, a 37-cell left tool palette, and linked command flyouts;
 - layers, object properties inspection, display controls, and local/GitHub bug reporting;
 - exact NURBS curves, analytic primitives, exact solid operations through Open CASCADE, and display-only tessellation;
-- `.3dm`, STEP, DXF, SVG, PDF/AI, OBJ, and STL workflows within documented limits;
+- `.3dm`, STEP, DXF, SVG, optional TraceDraw-backed CorelDRAW, PDF/AI, OBJ, and STL workflows within documented limits;
 - undo/redo, groups, autosave, recovery, recent files, units, and atomic save paths;
 - a verified Linux x86_64 AppImage release process.
 

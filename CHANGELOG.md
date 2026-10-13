@@ -4,13 +4,37 @@ All notable public changes will be recorded here. Narwhal 3D is currently in pre
 
 ## Unreleased
 
+## 0.4.0 — 2026-10-12
+
+### Added
+
+- Add CorelDRAW `.cdr` Import, non-3dm Open, Export, Print, and Print Setup routes through an optional local TraceDraw CLI. CDR output defaults to genuine version 17 for CorelDRAW 2015/X7 and remains readable by 2016/X8.
+- Preserve TraceDraw page geometry, source layers, colours, transforms, and disconnected compound paths through structured `.tdraw` data instead of a lossy intermediate SVG.
+- Add exact document Cut, Copy, and Paste with layers, materials, groups, attributes, recipes, fresh identities, repeated paste, and Undo/Redo support.
+- Restore 22 public-neutral built-in command aliases.
+
+### Changed
+
+- Expand the desktop menus to 532 detailed leaves: 169 runnable commands, Recent Files, and 362 individually named `(Not implemented)` actions.
+- Give every viewport title a visible, separately clickable dropdown arrow while retaining independent title activation and maximize behavior.
+- Keep sidebar tooltips beside their icons and reflow open flyouts when dock dimensions change.
+- Extrude selected nested closed planar profiles as exact solids with holes; disjoint regions produce separate solids. Gumball extrusion uses the same region backend.
+
 ### Fixed
 
-- Preserve image textures and original UV registration when imported Picture surfaces are split or trimmed.
+- Preserve imported Picture textures and original UV registration through Split, Trim, and exact projection to the active construction plane.
+- Prevent accumulated float32 Gumball rotation previews from entering the non-uniform OCCT transform path when released.
+- Keep selected visible control points eligible for Point object snaps.
+- Increase viewport-only sampling where small many-span NURBS curves otherwise displayed as sharp segments, without changing document geometry.
+- Retry viewport tessellation at one bounded coarser setting when a valid exact split surface initially yields no display triangles.
+- Collapse only geometrically equivalent duplicate profile loops before exact region extrusion.
+- Import `.3dm` files into the already-open document with source layers, unit scaling, and selection of every imported object.
 - Make pending command enum values, including Orient scale modes, clickable in the command bar.
-- Extrude selected nested closed planar profiles as exact solids with holes; disjoint regions produce separate solids.
-- Apply the same nested-profile hole behavior to Gumball extrusion.
 - Draw live line and curve previews above reference Picture images.
+
+### Packaging note
+
+- The AppImage does not yet bundle TraceDraw. CDR commands report the missing optional dependency unless `tracedraw-cli` is installed on `PATH` or in Narwhal's converter runtime directory. A bundled converter requires an immutable release or reproducible pinned source build for both Linux and Windows.
 
 ## 0.3.0 — 2026-10-12
 

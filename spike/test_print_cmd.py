@@ -14,7 +14,7 @@ import traceback
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
-from narwhal3d import filedialog, print2d, print_commands  # noqa: E402
+from narwhal3d import filedialog, print2d, print_commands, tracedraw  # noqa: E402
 from narwhal3d.model import NarwhalModel  # noqa: E402
 from narwhal3d.state import app_state  # noqa: E402
 
@@ -119,6 +119,26 @@ def run():
             ok = ok and (info is None or "Pages:" in info)
         check(ok, f"Print to .{ext} writes a .{ext} file", f"{last()!r}")
 
+    cdr_calls = []
+    original_cdr = tracedraw.svg_to_cdr
+
+    def fake_cdr(source, target, version=17):
+        cdr_calls.append((os.path.isfile(source), version))
+        with open(target, "wb") as stream:
+            stream.write(b"CDR17")
+        return 5
+
+    tracedraw.svg_to_cdr = fake_cdr
+    try:
+        p = os.path.join(TMP, "print.cdr")
+        app_state.feed_line("Print")
+        app_state.feed_line(p)
+    finally:
+        tracedraw.svg_to_cdr = original_cdr
+    check(os.path.exists(p) and open(p, "rb").read() == b"CDR17"
+          and cdr_calls == [(True, 17)] and "1:1" in last(),
+          "Print to .cdr defaults to 1:1 and writes genuine CDR v17 through TraceDraw",
+          f"{last()!r}")
 
     # 4. a format Print does not write: refused by name
     p = os.path.join(TMP, "x.dwg")

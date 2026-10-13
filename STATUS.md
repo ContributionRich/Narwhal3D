@@ -50,8 +50,8 @@ Artwork published with Narwhal must be original or have clearly documented GPL-c
 - Exact solid operations use Open CASCADE and must preserve analytic surfaces and airtightness.
 - STEP is the recommended exact solid interchange format.
 - The initial public build does not bundle the optional openNURBS exact-Brep writer. Some Open CASCADE multi-face solids therefore cannot be stored as exact `.3dm` Breps; the application warns rather than claiming a faceted save is exact.
-- PDF and Adobe Illustrator import can use an optional converter pack that is not bundled in the initial release.
-- Native CorelDRAW import/export is not part of the public build.
+- PDF and Adobe Illustrator import can use an optional converter pack that is not bundled in the 0.4.0 AppImage.
+- CorelDRAW `.cdr` Import, Open, Export, Print, and Print Setup are implemented through an optional local TraceDraw CLI. Structured import retains pages, layers, transforms, colours, and disconnected paths; output defaults to genuine CDR v17 for CorelDRAW 2015/X7 and remains readable by 2016/X8. TraceDraw is not bundled in 0.4.0, and unsupported CDR content or a missing CLI is reported explicitly.
 
 ## Platform and architecture roadmap
 

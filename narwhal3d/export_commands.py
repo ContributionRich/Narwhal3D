@@ -23,7 +23,7 @@ Formats, and how exact each is:
   polylines as POLYLINE; anything else as a POLYLINE within the tolerance, and the
   message NAMES it approximate. Written in millimetres (the writer's `$INSUNITS` = 4),
   so an inch model is scaled by 25.4 rather than mislabelled.
-* **.ai / .pdf / .svg** -- a 2-D snapshot of
+* **.cdr / .ai / .pdf / .svg** -- a 2-D snapshot of
   the ACTIVE parallel viewport at 1:1 on a page the size of the drawing, through the
   same pipeline as Print (`print2d`; exact for polynomial curves, <= 0.001 mm for
   circles; silhouettes and perspective refused by name). A perspective viewport cannot
@@ -46,9 +46,9 @@ opts = commands.opts
 
 EXPORT_FILTERS = (("3DM Models", "*.3dm"), ("STEP", "*.step *.stp"),
                   ("STL (Stereolithography)", "*.stl"), ("Wavefront OBJ", "*.obj"),
-                  ("AutoCAD DXF", "*.dxf"), ("Adobe Illustrator", "*.ai"),
-                  ("PDF", "*.pdf"), ("SVG", "*.svg"))
-FORMATS = (".3dm", ".step", ".stp", ".stl", ".obj", ".dxf", ".ai", ".pdf", ".svg")
+                  ("AutoCAD DXF", "*.dxf"), ("CorelDRAW 2015/X7", "*.cdr"),
+                  ("Adobe Illustrator", "*.ai"), ("PDF", "*.pdf"), ("SVG", "*.svg"))
+FORMATS = (".3dm", ".step", ".stp", ".stl", ".obj", ".dxf", ".cdr", ".ai", ".pdf", ".svg")
 
 #: The export mesh's maximum angle between adjacent triangle normals. Tolerance
 #: is the maximum distance between the exact object and the polygon mesh and defaults to
@@ -376,8 +376,8 @@ def export_objects(model, objs, path, tolerance=None, angle_deg=None):
 
 class ExportCmd(commands.Command):
     name = "Export"
-    description = ("Export the selected objects to a .3dm, .step, .stl, .obj, .dxf, .ai, "
-                   ".pdf or .svg file (the model itself is unchanged).")
+    description = ("Export the selected objects to a .3dm, .step, .stl, .obj, .dxf, .cdr, "
+                   ".ai, .pdf or .svg file (the model itself is unchanged).")
     # Export-mesh and DXF approximation controls. Tolerance 0 uses the document's
     # absolute tolerance; Angle is in degrees.
     options = (
