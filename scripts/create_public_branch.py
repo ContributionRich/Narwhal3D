@@ -22,7 +22,7 @@ ROOT_FILES = (
     "COMPATIBILITY.md", "ROADMAP.md", "CHANGELOG.md", "SECURITY.md", "SUPPORT.md", "GOVERNANCE.md",
     "CODE_OF_CONDUCT.md", "THIRD_PARTY_NOTICES",
     "docs/readme-command-loft.gif", "docs/images/bugreport.png",
-    "docs/gaps.md", "docs/github-project.md",
+    "docs/gaps.md", "docs/github-project.md", "docs/windows-build.md",
     "narwhal3d.sh", "run_tests.sh", "uishot.sh", "pyrightconfig.json",
 )
 LAUNCH_FILES = (
@@ -44,6 +44,7 @@ SCRIPT_FILES = (
     "scripts/verify_linux_release.py", "scripts/audit_public_tree.py",
     "scripts/create_public_branch.py", "scripts/capture_readme_demo.py",
     "scripts/build_readme_demo.sh", "scripts/build_toolbar_icons.py",
+    "scripts/collect_windows_build_info.ps1",
 )
 TEST_FILES = (
     "spike/audit_representation.py", "spike/_roundtrip_reader.py",
@@ -67,7 +68,7 @@ TEST_FILES = (
     "spike/test_obj_reader.py", "spike/test_obj_writer.py",
     "spike/test_stl_writer.py", "spike/test_vector_export.py",
     "spike/test_tracedraw.py", "spike/test_onbrep_public.py", "spike/test_open_arg.py",
-    "spike/test_public_project.py", "spike/public_ui_report.py",
+    "spike/test_windows_collector.py", "spike/test_public_project.py", "spike/public_ui_report.py",
 )
 PACKAGE_EXCLUDES = {
     "narwhal3d/cdr_reader.py",

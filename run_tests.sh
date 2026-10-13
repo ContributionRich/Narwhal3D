@@ -61,6 +61,7 @@ PURE_SUITES=(
     spike/test_stl_writer.py
     spike/test_vector_export.py
     spike/test_tracedraw.py
+    spike/test_windows_collector.py
     spike/test_onbrep_public.py
 )
 

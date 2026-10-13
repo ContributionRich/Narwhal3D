@@ -55,7 +55,7 @@ Artwork published with Narwhal must be original or have clearly documented GPL-c
 
 ## Platform and architecture roadmap
 
-The current supported release target is Linux x86_64 through the AppImage bundle. Windows and macOS are planned but are not current release targets. A Windows executable is not published yet because it requires a native MSVC/Windows SDK build, Windows resource branding and launcher work, locked Windows dependencies, a platform-specific verifier, and real Windows GUI/GPU validation; a renamed or cross-wrapped Linux binary would not be a valid substitute.
+The current supported release target is Linux x86_64 through the AppImage bundle. Windows and macOS are planned but are not current release targets. A Windows executable is not published yet because it requires a native MSVC/Windows SDK build, Windows resource branding and launcher work, locked Windows dependencies, a platform-specific verifier, and real Windows GUI/GPU validation; a renamed or cross-wrapped Linux binary would not be a valid substitute. The privacy-conscious [Windows build collector](docs/windows-build.md) creates a reviewable Desktop ZIP with the system, GPU, toolchain, and dependency-reachability facts needed to prepare that build.
 
 During the 0.x phase, commands, interaction behavior, document orchestration, and much of the UI are implemented in Python for rapid correction and testing. Exact geometry already runs through compiled Open CASCADE code, and the bundled Blender runtime carries native Narwhal patches.
 

@@ -27,14 +27,14 @@ def check(condition, label, detail=""):
 required_docs = (
     "README.md", "STATUS.md", "COMPATIBILITY.md", "ROADMAP.md", "CHANGELOG.md", "CONTRIBUTING.md",
     "SECURITY.md", "SUPPORT.md", "GOVERNANCE.md", "CODE_OF_CONDUCT.md",
-    "docs/gaps.md", "docs/github-project.md",
+    "docs/gaps.md", "docs/github-project.md", "docs/windows-build.md",
 )
 check(all((ROOT / path).is_file() for path in required_docs),
       "the public project and governance document set is complete")
 
 readme = (ROOT / "README.md").read_text(encoding="utf-8")
 for link in ("STATUS.md", "COMPATIBILITY.md", "ROADMAP.md", "docs/gaps.md", "CONTRIBUTING.md",
-             "SUPPORT.md", "SECURITY.md", "docs/images/bugreport.png"):
+             "SUPPORT.md", "SECURITY.md", "docs/images/bugreport.png", "docs/windows-build.md"):
     check(link in readme, f"README links {link}")
 check("Narwhal_3D-0.4.0-x86_64.AppImage" in readme
       and "--version 0.4.0" in readme
@@ -89,8 +89,10 @@ assert spec is not None and spec.loader is not None
 module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
 public = set(module.public_files())
-check(set(required_docs) <= public and "docs/images/bugreport.png" in public,
-      "the public allowlist includes the roadmap, governance docs, and bug logo")
+check(set(required_docs) <= public and "docs/images/bugreport.png" in public
+      and "scripts/collect_windows_build_info.ps1" in public
+      and "spike/test_windows_collector.py" in public,
+      "the public allowlist includes roadmap/governance docs, the bug logo, and Windows collector")
 check({"spike/test_picture.py", "spike/test_cmdbar_hits.py",
        "spike/test_extrude_distance.py", "spike/test_extrude_options.py",
        "spike/test_picture_display.py", "spike/test_gumball_region_extrude.py"} <= public,

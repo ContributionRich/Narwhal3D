@@ -6,7 +6,7 @@ Narwhal 3D is a free, open-source, command-driven NURBS CAD application. The cur
 
 > **Project status:** early public MVP. Save important work often and verify manufacturing output before production use.
 
-[Current status](STATUS.md) · [Roadmap](ROADMAP.md) · [Feature gaps](docs/gaps.md) · [Compatibility and independence](COMPATIBILITY.md) · [Contributing](CONTRIBUTING.md) · [Support](SUPPORT.md) · [Security](SECURITY.md)
+[Current status](STATUS.md) · [Roadmap](ROADMAP.md) · [Feature gaps](docs/gaps.md) · [Windows build preparation](docs/windows-build.md) · [Compatibility and independence](COMPATIBILITY.md) · [Contributing](CONTRIBUTING.md) · [Support](SUPPORT.md) · [Security](SECURITY.md)
 
 ## Command workflow
 
