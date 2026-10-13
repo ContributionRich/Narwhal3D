@@ -48,9 +48,22 @@ Only build-relevant information is recorded:
 
 Paths beneath the user profile and occurrences of the Windows user name are redacted. The collector deliberately does not gather computer/user names, serial numbers, IP or MAC addresses, Wi-Fi details, complete environment variables, registry exports, personal files, browser data, or CAD documents.
 
-## What happens after the report
+## Prepare a machine with no build tools
 
-The report determines the exact bootstrap route and prevents repeatedly asking the Windows user to install or diagnose tools by hand. The subsequent build automation will:
+When the report shows no native toolchain, install these from their official installers or Windows Package Manager, reviewing each installer normally:
+
+1. **Visual Studio 2022 Build Tools or Community** with **Desktop development with C++**, MSVC v143, a current Windows 10/11 SDK, and CMake tools.
+2. **Git for Windows**, **CMake**, **Ninja**, **Python 3.13 x64**, and **Subversion**.
+3. Enable Windows long-path support and Git `core.longpaths`.
+4. Restart Windows so the SDK, compiler, and PATH changes are visible.
+
+Rust and Inno Setup are not needed for the first native compile; they can be added later for a reproducible TraceDraw build and installer packaging. Automated package installation is deliberately deferred because Windows Package Manager cannot reliably add a missing Visual Studio workload to every already-installed/current Build Tools configuration.
+
+After restarting, run the collector again and return the new collection ZIP.
+
+## What happens after the prepared-machine report
+
+The fresh report determines the exact bootstrap route and prevents repeatedly asking the Windows user to install or diagnose tools by hand. The subsequent build automation will:
 
 1. require Windows x86_64 and a supported Visual Studio 2022 C++ toolchain;
 2. fetch Blender at the pinned source revision;
