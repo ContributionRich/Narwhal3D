@@ -88,11 +88,14 @@ check("function Compiler-Info" in script and "VC\\Tools\\MSVC" in script
 check("C:\\Narwhal3D-build" in build and "\\s" in build
       and ".narwhal3d-windows-build-workspace" in build,
       "engineering build owns one conservative no-space workspace")
-check("make.bat update" in build and '"Blender make.bat update" $BlenderSource' in build,
-      "Blender dependency update runs with the source as working directory")
+check("make_update.py" in build and '"--no-blender"' in build
+      and '"update Blender libraries without changing Blender source" $BlenderSource' in build
+      and "verify Blender pinned revision after libraries update" in build,
+      "library update runs in the source without rebasing the pinned Blender checkout")
 check("2022 x64 release ninja nobuild builddir" in build
-      and '@("-C", $BuildDirectory, "-j", [string]$Jobs, "install")' in build,
-      "build forces VS 2022 x64 Release and bounds Ninja parallelism")
+      and "vcvars64.bat" in build and "run_ninja_with_msvc.cmd" in build
+      and "-j $Jobs install" in build,
+      "build forces VS 2022 x64 Release and bounds Ninja inside the MSVC environment")
 
 check(all(text in build for text in ("git", "lfs", "LongPathsEnabled", "core.longpaths",
                                       "Win32_PageFileUsage", "At least 60 GiB")),
@@ -107,9 +110,14 @@ check("6acffcc7493d35d59b25ee8843b28c2b16b605aa072567e112ee7e5ae12b642e" in buil
       and "d6a6909a73d2300ca4581ff762ccf0137993ac75c57a2dc82e12bffa3a12b680" in build,
       "engineering build pins all Windows geometry-wheel hashes")
 check("run packaged headless bootstrap" in build
+      and "verify_bundled_geometry.py" in build
+      and "Windows-compatible native branding source smoke test" in build
       and "Packaged dependency versions do not match" in build
       and "Packaged executable has the wrong version banner" in build,
-      "engineering output is validated through its copied package")
+      "engineering output is validated through Windows-safe copied-package probes")
+check("[switch]$ResumePackaging" in build and "Resuming packaging" in build
+      and "abort interrupted Blender rebase" in build,
+      "owner-measured fixes support packaging resume and interrupted-update recovery")
 check(".part.zip" in build and 'Capture-Native $Tar @("-tf"' in build
       and "Archive is missing" in build,
       "engineering archive is written temporarily and its required entries are inventoried")

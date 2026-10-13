@@ -4,6 +4,10 @@ All notable public changes will be recorded here. Narwhal 3D is an extremely ear
 
 ## Unreleased
 
+### Added
+
+- Publish an unsigned `0.4.0-preview.1` Windows x86_64 portable ZIP with a native Narwhal launcher, exact public application source, locked Windows geometry dependencies, complete hash inventory, and fail-closed verifier. Physical-GPU validation, installer/file associations, signing, and complete internal runtime PE branding remain open.
+
 ## 0.4.0 — 2026-10-12
 
 ### Added

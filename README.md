@@ -38,6 +38,12 @@ chmod +x Narwhal_3D-0.4.0-x86_64.AppImage
 
 The AppImage contains the natively branded runtime, locked Python dependencies, application package, icons, and license notices. It does not install a separate host application.
 
+## Early Windows x86_64 preview
+
+The `v0.4.0` prerelease also provides `Narwhal_3D-0.4.0-preview.1-Windows-x86_64.zip`. Extract the complete folder and start `Narwhal3D.exe`; do not move that executable away from its adjacent `app` and `runtime` folders.
+
+This is an unsigned, portable **early preview**, not an installer or supported production build. Windows SmartScreen may require **More info → Run anyway**. The launcher has original Narwhal icon/version resources and the packaged runtime/bootstrap passes native Windows and offline Wine headless checks, but final physical-GPU/real-window acceptance is pending and the internal viewport runtime still retains some Blender-derived PE resource strings/icons. There are no file associations or automatic installation yet.
+
 ## Develop from source
 
 Requirements: Python 3, Bash, HTTPS access, a C/C++ build toolchain, CMake, Ninja, and enough disk space for the runtime and source build.

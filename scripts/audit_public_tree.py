@@ -45,7 +45,9 @@ REQUIRED = {
     "scripts/collect_windows_build_info.ps1",
     "scripts/build_windows_preview.ps1",
     "scripts/release_policy.py",
+    "scripts/verify_windows_release.py",
     "spike/test_windows_collector.py",
+    "spike/test_windows_release.py",
     "spike/test_release_policy.py",
     "launch/narwhal3d.desktop.in",
     "launch/narwhal3d-3dm.xml",
@@ -94,6 +96,7 @@ ALLOWED_IMAGES = (
     "artwork/icons/*.png",
     "narwhal3d/icons/narwhal-*.png",
     "blender_patches/narwhal3d_app_icon.svg",
+    "packaging/windows/*.ico",
 )
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".tif", ".tiff", ".webp", ".ico", ".svg"}
 LEGACY_PATH_PATTERN = re.compile(r"rhi" + r"no(?!3dm)", re.IGNORECASE)

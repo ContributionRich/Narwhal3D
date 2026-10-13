@@ -41,7 +41,7 @@ PATCH_FILES = (
 SCRIPT_FILES = (
     "scripts/fetch_locked.py", "scripts/bootstrap_dev_linux.sh",
     "scripts/build_blender_linux.sh", "scripts/release_policy.py", "scripts/assemble_linux_release.py",
-    "scripts/verify_linux_release.py", "scripts/audit_public_tree.py",
+    "scripts/verify_linux_release.py", "scripts/verify_windows_release.py", "scripts/audit_public_tree.py",
     "scripts/create_public_branch.py", "scripts/capture_readme_demo.py",
     "scripts/build_readme_demo.sh", "scripts/build_toolbar_icons.py",
     "scripts/collect_windows_build_info.ps1", "scripts/build_windows_preview.ps1",
@@ -68,8 +68,8 @@ TEST_FILES = (
     "spike/test_obj_reader.py", "spike/test_obj_writer.py",
     "spike/test_stl_writer.py", "spike/test_vector_export.py",
     "spike/test_tracedraw.py", "spike/test_onbrep_public.py", "spike/test_open_arg.py",
-    "spike/test_windows_collector.py", "spike/test_release_policy.py",
-    "spike/test_public_project.py", "spike/public_ui_report.py",
+    "spike/test_windows_collector.py", "spike/test_windows_release.py",
+    "spike/test_release_policy.py", "spike/test_public_project.py", "spike/public_ui_report.py",
 )
 PACKAGE_EXCLUDES = {
     "narwhal3d/cdr_reader.py",

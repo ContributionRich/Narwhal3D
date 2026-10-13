@@ -1,10 +1,12 @@
-# Build a native Narwhal 3D Windows x86_64 preview and place return artifacts on Desktop.
+﻿# Build a native Narwhal 3D Windows x86_64 preview and place return artifacts on Desktop.
 # Run from ordinary 64-bit PowerShell after the collector reports the toolchain ready:
+# To skip an already successful compilation, use -ResumePackaging.
 #   powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\build_windows_preview.ps1
 [CmdletBinding()]
 param(
     [string]$Workspace = "C:\Narwhal3D-build",
-    [ValidateRange(1, 8)][int]$Jobs = 4
+    [ValidateRange(1, 8)][int]$Jobs = 4,
+    [switch]$ResumePackaging
 )
 
 Set-StrictMode -Version 2.0
@@ -218,6 +220,8 @@ $NarwhalSource = Join-Path $Workspace "narwhal-source"
 $BlenderSource = Join-Path $Workspace "blender-source"
 $BuildDirectory = Join-Path $Workspace "blender-build"
 $WheelCache = Join-Path $Workspace "wheels"
+$PatchDirectory = Join-Path $NarwhalSource "blender_patches"
+if (-not $ResumePackaging) {
 if (-not (Test-Path -LiteralPath (Join-Path $NarwhalSource ".git") -PathType Container)) {
     Run-Native $Git @("clone", "--filter=blob:none", $NarwhalRepository, $NarwhalSource) "clone Narwhal source"
 }
@@ -232,14 +236,42 @@ if (-not (Test-Path -LiteralPath (Join-Path $BlenderSource ".git") -PathType Con
 }
 $BlenderOrigin = @(Capture-Native $Git @("-C", $BlenderSource, "remote", "get-url", "origin") "verify Blender origin")[-1].Trim()
 if ($BlenderOrigin -ne $BlenderRepository) { throw "Unexpected Blender origin: $BlenderOrigin" }
+# An interrupted previous make.bat update may have left a Git rebase in progress.
+# Only touch the script-owned Blender checkout and only after the old build has stopped.
+$RebaseMergePath = @(Capture-Native $Git @("-C", $BlenderSource, "rev-parse", "--git-path", "rebase-merge") "locate Blender rebase metadata")[-1].Trim()
+$RebaseApplyPath = @(Capture-Native $Git @("-C", $BlenderSource, "rev-parse", "--git-path", "rebase-apply") "locate Blender apply metadata")[-1].Trim()
+if (-not [IO.Path]::IsPathRooted($RebaseMergePath)) { $RebaseMergePath = Join-Path $BlenderSource $RebaseMergePath }
+if (-not [IO.Path]::IsPathRooted($RebaseApplyPath)) { $RebaseApplyPath = Join-Path $BlenderSource $RebaseApplyPath }
+if ((Test-Path -LiteralPath $RebaseMergePath) -or (Test-Path -LiteralPath $RebaseApplyPath)) {
+    Log "An interrupted Blender rebase was detected; aborting it before restoring the pinned revision"
+    Run-Native $Git @("-C", $BlenderSource, "rebase", "--abort") "abort interrupted Blender rebase"
+}
 Run-Native $Git @("-C", $BlenderSource, "fetch", "origin", $BlenderRevision) "fetch pinned Blender revision"
 Run-Native $Git @("-C", $BlenderSource, "reset", "--hard", $BlenderRevision) "reset script-owned Blender clone"
 Run-Native $Git @("-C", $BlenderSource, "clean", "-ffd") "clean script-owned Blender clone"
 
-Run-Native $Cmd @("/d", "/s", "/c", "make.bat update") "Blender make.bat update" $BlenderSource
+# Blender make.bat does not accept --no-blender as an argument.
+# Call the pinned revision's dependency updater directly with --no-blender,
+# so it cannot run an unwanted `git pull --rebase` on the source repository.
 $LibraryDirectory = Join-Path $BlenderSource "lib\windows_x64"
+$DependencyPython = Join-Path $LibraryDirectory "python\313\bin\python.exe"
+$UpdateScript = Join-Path $BlenderSource "build_files\utils\make_update.py"
+$UpdatePython = if (Test-Path -LiteralPath $DependencyPython -PathType Leaf) {
+    $DependencyPython
+} else {
+    Log "Initializing Blender libraries with system Python; later runs use the pinned dependency Python"
+    $Python
+}
+Run-Native $UpdatePython @("-B", $UpdateScript, "--git-command", $Git, "--no-blender") "update Blender libraries without changing Blender source" $BlenderSource
+if (-not (Test-Path -LiteralPath $DependencyPython -PathType Leaf)) {
+    throw "Blender libraries update did not provide dependency Python: $DependencyPython"
+}
+$ActualBlenderRevision = @(Capture-Native $Git @("-C", $BlenderSource, "rev-parse", "HEAD") "verify Blender pinned revision after libraries update")[-1].Trim()
+if ($ActualBlenderRevision -ne $BlenderRevision) {
+    throw "Blender checkout moved from pinned revision $BlenderRevision to $ActualBlenderRevision"
+}
 if (-not (Test-Path -LiteralPath $LibraryDirectory -PathType Container)) {
-    throw "Blender make update did not produce lib\\windows_x64"
+    throw "Blender libraries update did not produce lib\\windows_x64"
 }
 
 $PatchDriver = Join-Path $Workspace "apply_narwhal_patches.py"
@@ -268,7 +300,6 @@ for name in ("apply_app_drawn.py", "apply_cad_boundary_wires.py"):
     module.SRC = str(source / "source" / "blender")
     module.main()
 '@ | Set-Content -LiteralPath $PatchDriver -Encoding UTF8
-$PatchDirectory = Join-Path $NarwhalSource "blender_patches"
 Run-Native $Python @($PatchDriver, $BlenderSource, $PatchDirectory) "apply Narwhal native patches"
 
 if (Test-Path -LiteralPath $BuildDirectory) {
@@ -276,7 +307,60 @@ if (Test-Path -LiteralPath $BuildDirectory) {
     Remove-Item -LiteralPath $BuildDirectory -Recurse -Force
 }
 Run-Native $Cmd @("/d", "/s", "/c", "make.bat 2022 x64 release ninja nobuild builddir $BuildDirectory") "configure Blender 2022 x64 Release Ninja build" $BlenderSource
-Run-Native $Ninja @("-C", $BuildDirectory, "-j", [string]$Jobs, "install") "compile and install Blender with bounded Ninja jobs" $BlenderSource
+# Ninja must execute in the same MSVC Developer environment used by Blender's
+# make.bat configure step. Environment changes inside make.bat cannot propagate
+# back into PowerShell, so launch Ninja through vcvars64.bat explicitly.
+$VsWhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
+$VisualStudioRoot = ""
+if (Test-Path -LiteralPath $VsWhere -PathType Leaf) {
+    $VisualStudioRoot = @(& $VsWhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath | Select-Object -First 1)
+    if ($VisualStudioRoot.Count -gt 0) { $VisualStudioRoot = [string]$VisualStudioRoot[0] }
+    else { $VisualStudioRoot = "" }
+}
+if (-not $VisualStudioRoot) {
+    foreach ($Edition in @("Community", "Professional", "Enterprise", "BuildTools")) {
+        $Candidate = Join-Path "C:\Program Files\Microsoft Visual Studio\2022" $Edition
+        if (Test-Path -LiteralPath (Join-Path $Candidate "VC\Auxiliary\Build\vcvars64.bat") -PathType Leaf) {
+            $VisualStudioRoot = $Candidate
+            break
+        }
+    }
+}
+if (-not $VisualStudioRoot) { throw "Visual Studio C++ build tools not found (vcvars64.bat)." }
+$Vcvars64 = Join-Path $VisualStudioRoot "VC\Auxiliary\Build\vcvars64.bat"
+if (-not (Test-Path -LiteralPath $Vcvars64 -PathType Leaf)) {
+    throw "Missing Visual Studio developer environment: $Vcvars64"
+}
+$NinjaWrapper = Join-Path $Workspace "run_ninja_with_msvc.cmd"
+@"
+@echo off
+call "$Vcvars64" >nul
+if errorlevel 1 exit /b 1
+if not defined INCLUDE (
+  echo ERROR: Visual Studio INCLUDE is not defined.
+  exit /b 1
+)
+if not defined LIB (
+  echo ERROR: Visual Studio LIB is not defined.
+  exit /b 1
+)
+"$Ninja" -C "$BuildDirectory" -j $Jobs install
+exit /b %errorlevel%
+"@ | Set-Content -LiteralPath $NinjaWrapper -Encoding ASCII
+Log ("Ninja will use Visual Studio environment: " + $Vcvars64)
+Run-Native $Cmd @("/d", "/c", $NinjaWrapper) "compile and install Blender with MSVC environment" $BlenderSource
+
+ } else {
+    Log "Resuming packaging: skipping source updates, patches, configuration, and compilation"
+    $ExpectedBinary = Join-Path $BuildDirectory "bin\blender.exe"
+    if (-not (Test-Path -LiteralPath $ExpectedBinary -PathType Leaf)) {
+        throw "ResumePackaging requires existing compiled executable: $ExpectedBinary"
+    }
+    foreach ($Pair in @(@($NarwhalSource, $NarwhalRevision), @($BlenderSource, $BlenderRevision))) {
+        $Found = @(Capture-Native $Git @("-C", $Pair[0], "rev-parse", "HEAD") "verify existing source revision")[-1].Trim()
+        if ($Found -ne $Pair[1]) { throw "Source revision mismatch in $($Pair[0]): $Found" }
+    }
+}
 
 $BuiltBlenderPath = Join-Path $BuildDirectory "bin\blender.exe"
 if (-not (Test-Path -LiteralPath $BuiltBlenderPath -PathType Leaf)) {
@@ -335,7 +419,10 @@ if (-not $VersionLines -or -not $VersionLines[0].StartsWith("Narwhal 3D 5.2.2"))
     throw "Packaged executable has the wrong version banner"
 }
 $Probe = 'import importlib.metadata,json,sys; import rhino3dm,OCP; print(json.dumps({"python":list(sys.version_info[:2]),"rhino3dm":importlib.metadata.version("rhino3dm"),"cadquery-ocp-novtk":importlib.metadata.version("cadquery-ocp-novtk"),"cadquery-ocp-proxy":importlib.metadata.version("cadquery-ocp-proxy")},sort_keys=True))'
-$ProbeLines = @(Capture-Native $RuntimePythonPath @("-I", "-c", $Probe) "verify bundled geometry imports")
+# A standalone .py file avoids Windows command-shell quote mangling of JSON keys.
+$ProbeScriptPath = Join-Path $Workspace "verify_bundled_geometry.py"
+Set-Content -LiteralPath $ProbeScriptPath -Value $Probe -Encoding UTF8
+$ProbeLines = @(Capture-Native $RuntimePythonPath @("-I", $ProbeScriptPath) "verify bundled geometry imports")
 $DependencyResult = $ProbeLines[-1] | ConvertFrom-Json
 if (($DependencyResult.python -join ".") -ne "3.13" -or
     $DependencyResult.rhino3dm -ne "8.35.0" -or
@@ -346,9 +433,28 @@ if (($DependencyResult.python -join ".") -ne "3.13" -or
 Run-Native (Join-Path $RuntimeDirectory "blender.exe") @(
     "-b", "--factory-startup", "--python-exit-code", "1", "--python",
     (Join-Path $ApplicationDirectory "launch\bootstrap.py")) "run packaged headless bootstrap"
-Run-Native (Join-Path $RuntimeDirectory "blender.exe") @(
-    "-b", "--factory-startup", "--python-exit-code", "1", "--python",
-    (Join-Path $NarwhalSource "spike\branding_test.py")) "run native branding source smoke test"
+# The upstream branding smoke test uses os.access(..., os.X_OK) to check
+# POSIX executable mode on a .desktop template. Windows does not implement
+# POSIX executable permission bits, so this check is not meaningful here.
+# Run a temporary Windows-adjusted copy next to the original test, preserving
+# __file__-relative paths and every other assertion. Keep the source untouched.
+$OriginalBrandingTest = Join-Path $NarwhalSource "spike\branding_test.py"
+$WindowsBrandingTest = Join-Path $NarwhalSource "spike\branding_test_windows_preview.py"
+$BrandingText = [IO.File]::ReadAllText($OriginalBrandingTest)
+$PosixAssertion = 'check(not os.access(TEMPLATE, os.X_OK), "desktop template must not be executable")'
+if (-not $BrandingText.Contains($PosixAssertion)) {
+    throw "Expected POSIX-only desktop permission assertion not found in branding test; refusing to alter its checks"
+}
+$WindowsAssertion = 'if os.name != "nt":' + "`n" + '    ' + $PosixAssertion
+$BrandingText = $BrandingText.Replace($PosixAssertion, $WindowsAssertion)
+try {
+    [IO.File]::WriteAllText($WindowsBrandingTest, $BrandingText, [Text.UTF8Encoding]::new($false))
+    Run-Native (Join-Path $RuntimeDirectory "blender.exe") @(
+        "-b", "--factory-startup", "--python-exit-code", "1", "--python",
+        $WindowsBrandingTest) "run Windows-compatible native branding source smoke test"
+} finally {
+    Remove-Item -LiteralPath $WindowsBrandingTest -Force -ErrorAction SilentlyContinue
+}
 
 $BinaryHash = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $RuntimeDirectory "blender.exe")).Hash.ToLowerInvariant()
 $PatchInputs = @()
