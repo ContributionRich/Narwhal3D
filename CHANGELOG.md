@@ -1,6 +1,6 @@
 # Changelog
 
-All notable public changes will be recorded here. Narwhal 3D is currently in preview development; compatibility may change between preview releases.
+All notable public changes will be recorded here. Narwhal 3D is an extremely early prerelease; compatibility may change between builds. Release numbering is intentionally frozen on the `0.4.x` line until the project owner explicitly lifts that cap.
 
 ## Unreleased
 

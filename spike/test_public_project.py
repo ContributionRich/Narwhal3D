@@ -40,6 +40,9 @@ check("Narwhal_3D-0.4.0-x86_64.AppImage" in readme
       and "--version 0.4.0" in readme
       and "--expected-version 0.4.0" in readme,
       "README install and release examples use version 0.4.0")
+check("extremely early prerelease" in readme
+      and "frozen on the `0.4.x` line" in readme,
+      "README pins the owner-required early-prerelease 0.4.x release line")
 
 gif_path = ROOT / "docs/readme-command-loft.gif"
 gif_bytes = gif_path.read_bytes()
@@ -92,7 +95,9 @@ public = set(module.public_files())
 check(set(required_docs) <= public and "docs/images/bugreport.png" in public
       and "scripts/collect_windows_build_info.ps1" in public
       and "scripts/build_windows_preview.ps1" in public
-      and "spike/test_windows_collector.py" in public,
+      and "scripts/release_policy.py" in public
+      and "spike/test_windows_collector.py" in public
+      and "spike/test_release_policy.py" in public,
       "the public allowlist includes roadmap/governance docs, the bug logo, and Windows collector")
 check({"spike/test_picture.py", "spike/test_cmdbar_hits.py",
        "spike/test_extrude_distance.py", "spike/test_extrude_options.py",

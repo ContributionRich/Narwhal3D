@@ -1,6 +1,6 @@
 # Narwhal 3D project status
 
-Narwhal 3D is an early public MVP. This page records what currently works and what remains incomplete so visible UI does not imply unsupported behavior.
+Narwhal 3D is an extremely early public prerelease. This page records what currently works and what remains incomplete so visible UI does not imply unsupported behavior. Package versions remain on the `0.4.x` line until the project owner explicitly lifts that cap.
 
 ## Command compatibility
 

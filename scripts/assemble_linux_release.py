@@ -16,6 +16,11 @@ import sys
 import tempfile
 from typing import Any
 
+from release_policy import (
+    MAX_HOST_GLIBC, format_glibc, glibc_versions, scan_runtime_glibc,
+    validate_preview_version,
+)
+
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE_LOCK_RELATIVE = Path("packaging/linux-x86_64.lock.json")
@@ -233,7 +238,7 @@ def validate_lock_and_runtime(
     lock_path: Path,
     runtime_dir: Path,
     source_root: Path,
-) -> tuple[JsonObject, dict[str, JsonObject], str, JsonObject]:
+) -> tuple[JsonObject, dict[str, JsonObject], str, JsonObject, tuple[int, int]]:
     """Require exact native runtime provenance; the locked official runtime is dev-only."""
     require_regular_file(lock_path, "artifact lock")
     raw_lock = lock_path.read_bytes()
@@ -252,6 +257,10 @@ def validate_lock_and_runtime(
     artifacts = locked_artifacts(lock)
 
     validate_source_tree(runtime_dir, "native Narwhal runtime")
+    try:
+        runtime_glibc, _glibc_path = scan_runtime_glibc(runtime_dir)
+    except RuntimeError as exc:
+        raise ReleaseError(str(exc)) from exc
     for official_marker in OFFICIAL_RUNTIME_MARKERS:
         if (runtime_dir / official_marker).exists() or (runtime_dir / official_marker).is_symlink():
             raise ReleaseError(f"official development runtime marker is forbidden in release runtime: {official_marker}")
@@ -341,7 +350,7 @@ print(json.dumps({
         raise ReleaseError(
             f"native runtime dependency mismatch: expected {expected_dependencies}, got {dependency_result}"
         )
-    return lock, artifacts, lock_sha, marker
+    return lock, artifacts, lock_sha, marker, runtime_glibc
 
 
 def validate_appimagetool(path: Path, artifacts: dict[str, JsonObject]) -> None:
@@ -495,6 +504,10 @@ def invoke_appimagetool(
 def assemble(args: argparse.Namespace) -> tuple[Path, Path, Path]:
     if not VERSION_RE.fullmatch(args.version):
         raise ReleaseError("--version must contain only letters, digits, dots, underscores, and hyphens")
+    try:
+        validate_preview_version(args.version)
+    except ValueError as exc:
+        raise ReleaseError(str(exc)) from exc
     if not REVISION_RE.fullmatch(args.source_revision):
         raise ReleaseError("--source-revision must be a full 40-hex Git revision")
     if args.source_date_epoch < 0:
@@ -508,7 +521,7 @@ def assemble(args: argparse.Namespace) -> tuple[Path, Path, Path]:
     if not source_root.is_dir():
         raise ReleaseError(f"source root does not exist: {source_root}")
     lock_path = source_root / SOURCE_LOCK_RELATIVE
-    _lock, artifacts, lock_sha, native_marker = validate_lock_and_runtime(
+    _lock, artifacts, lock_sha, native_marker, runtime_glibc = validate_lock_and_runtime(
         lock_path,
         runtime_dir,
         source_root,
@@ -595,6 +608,8 @@ def assemble(args: argparse.Namespace) -> tuple[Path, Path, Path]:
                 "appimage_runtime_sha256": APPIMAGE_RUNTIME_SHA256,
                 "source_revision": args.source_revision.lower(),
                 "source_date_epoch": args.source_date_epoch,
+                "max_host_glibc": format_glibc(MAX_HOST_GLIBC),
+                "runtime_required_glibc": format_glibc(runtime_glibc),
                 "lock_sha256": lock_sha,
             },
             "excluded_components": ["opennurbs-exact-save-helper", "optional-converters"],
@@ -624,10 +639,22 @@ def assemble(args: argparse.Namespace) -> tuple[Path, Path, Path]:
 def self_check() -> None:
     for good in ("1.0.0", "2026.10-beta_1"):
         if not VERSION_RE.fullmatch(good):
-            raise ReleaseError(f"self-check rejected safe version: {good}")
+            raise ReleaseError(f"self-check rejected syntactically safe version: {good}")
     for bad in ("", "../escape", "name/child", " space"):
         if VERSION_RE.fullmatch(bad):
             raise ReleaseError(f"self-check accepted unsafe version: {bad!r}")
+    for preview in ("0.4.0", "0.4.12-alpha.1"):
+        validate_preview_version(preview)
+    for forbidden in ("0.3.9", "0.5.0", "1.0.0"):
+        try:
+            validate_preview_version(forbidden)
+        except ValueError:
+            pass
+        else:
+            raise ReleaseError(f"self-check accepted release outside 0.4.x: {forbidden}")
+    parsed_glibc = glibc_versions("GLIBC_2.35 GLIBC_2.38 GLIBC_2.43")
+    if max(parsed_glibc) != (2, 43) or MAX_HOST_GLIBC != (2, 35):
+        raise ReleaseError("self-check lost the Ubuntu 22.04 host-glibc gate")
     if "launch/build_brep_writer.sh" in {f"launch/{name}" for name in LAUNCH_FILES}:
         raise ReleaseError("self-check found exact-save helper in launch whitelist")
     expected_excluded_files = {

@@ -15,6 +15,11 @@ import sys
 import tempfile
 from typing import Any
 
+from release_policy import (
+    MAX_HOST_GLIBC, format_glibc, glibc_versions, scan_runtime_glibc,
+    validate_preview_version,
+)
+
 
 PRODUCT = "Narwhal 3D"
 PLATFORM = "linux-x86_64"
@@ -210,6 +215,10 @@ def expected_inventory(manifest: JsonObject) -> dict[str, JsonObject]:
 
 
 def verify_identity(manifest: JsonObject, args: argparse.Namespace) -> JsonObject:
+    try:
+        validate_preview_version(args.expected_version)
+    except ValueError as exc:
+        raise VerificationError(str(exc)) from exc
     if manifest.get("schema") != 1:
         raise VerificationError("unsupported release manifest schema")
     identity = manifest.get("identity")
@@ -229,6 +238,7 @@ def verify_identity(manifest: JsonObject, args: argparse.Namespace) -> JsonObjec
         "appimage_runtime_version": APPIMAGE_RUNTIME_VERSION,
         "appimage_runtime_sha256": APPIMAGE_RUNTIME_SHA256,
         "source_revision": args.expected_source_revision.lower(),
+        "max_host_glibc": format_glibc(MAX_HOST_GLIBC),
     }
     if args.expected_source_date_epoch is not None:
         expected["source_date_epoch"] = args.expected_source_date_epoch
@@ -244,6 +254,11 @@ def verify_identity(manifest: JsonObject, args: argparse.Namespace) -> JsonObjec
         identity.get("runtime_build_source_date_epoch"),
         "release identity runtime_build_source_date_epoch",
     )
+    required_glibc = identity.get("runtime_required_glibc")
+    parsed_glibc = glibc_versions(f"GLIBC_{required_glibc}") \
+        if isinstance(required_glibc, str) else set()
+    if len(parsed_glibc) != 1 or max(parsed_glibc) > MAX_HOST_GLIBC:
+        raise VerificationError("release identity has an invalid runtime_required_glibc")
     for field in ("lock_sha256", "runtime_patch_aggregate_sha256", "runtime_binary_sha256"):
         value = identity.get(field)
         if not isinstance(value, str) or not SHA256_RE.fullmatch(value):
@@ -307,6 +322,12 @@ def verify_lock_and_markers(appdir: Path, identity: JsonObject) -> None:
         raise VerificationError("bundled lock has the wrong AppImage type2 runtime")
 
     runtime = appdir / APP_ROOT_RELATIVE / RUNTIME_RELATIVE
+    try:
+        runtime_glibc, _glibc_path = scan_runtime_glibc(runtime)
+    except RuntimeError as exc:
+        raise VerificationError(str(exc)) from exc
+    if format_glibc(runtime_glibc) != identity.get("runtime_required_glibc"):
+        raise VerificationError("measured runtime GLIBC requirement differs from release identity")
     for official_marker in (".narwhal3d-runtime.json", ".narwhal3d-artifact.json"):
         if (runtime / official_marker).exists() or (runtime / official_marker).is_symlink():
             raise VerificationError(f"official development runtime marker is forbidden: {official_marker}")
@@ -555,6 +576,18 @@ def verify_release(release: Path, args: argparse.Namespace) -> None:
 
 
 def self_check() -> None:
+    for preview in ("0.4.0", "0.4.9-alpha.1"):
+        validate_preview_version(preview)
+    for forbidden in ("0.3.9", "0.5.0", "1.0.0"):
+        try:
+            validate_preview_version(forbidden)
+        except ValueError:
+            pass
+        else:
+            raise VerificationError(f"self-check accepted release outside 0.4.x: {forbidden}")
+    if max(glibc_versions("GLIBC_2.35 GLIBC_2.43")) != (2, 43) \
+            or MAX_HOST_GLIBC != (2, 35):
+        raise VerificationError("self-check lost the Ubuntu 22.04 host-glibc gate")
     verify_desktop_version("[Desktop Entry]\nX-AppImage-Version=0.1.0\n", "0.1.0")
     for mutated_desktop in (
         "[Desktop Entry]\n",
@@ -683,6 +716,10 @@ def main(argv: list[str] | None = None) -> int:
         ]
         if missing:
             raise VerificationError(f"required arguments missing: {', '.join(missing)}")
+        try:
+            validate_preview_version(args.expected_version)
+        except ValueError as exc:
+            raise VerificationError(str(exc)) from exc
         if not REVISION_RE.fullmatch(args.expected_source_revision.lower()):
             raise VerificationError("--expected-source-revision must be a full 40-hex Git revision")
         if args.expected_source_date_epoch is not None and args.expected_source_date_epoch < 0:
