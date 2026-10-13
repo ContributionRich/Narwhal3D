@@ -252,12 +252,12 @@ class UndoStack:
 
     def clear(self):
         """Drop all history (the reference CAD application's `ClearUndoRecords`)."""
-        undoCount = len(self._undo)
-        redoCount = len(self._redo)
+        undo_count = len(self._undo)
+        redo_count = len(self._redo)
         self._undo.clear()
         self._redo.clear()
         self.abandon()
-        return undoCount, redoCount
+        return undo_count, redo_count
 
     def __repr__(self):  # pragma: no cover - debugging aid
         return (f"UndoStack(undo={len(self._undo)}, redo={len(self._redo)}, "

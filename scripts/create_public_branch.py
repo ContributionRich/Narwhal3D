@@ -63,6 +63,7 @@ TEST_FILES = (
     "spike/test_obj_reader.py", "spike/test_obj_writer.py",
     "spike/test_stl_writer.py", "spike/test_vector_export.py",
     "spike/test_onbrep_public.py", "spike/test_open_arg.py",
+    "spike/test_clear_undo.py",
     "spike/test_public_project.py", "spike/public_ui_report.py",
 )
 PACKAGE_EXCLUDES = {
