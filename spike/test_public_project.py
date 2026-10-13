@@ -91,6 +91,7 @@ spec.loader.exec_module(module)
 public = set(module.public_files())
 check(set(required_docs) <= public and "docs/images/bugreport.png" in public
       and "scripts/collect_windows_build_info.ps1" in public
+      and "scripts/build_windows_preview.ps1" in public
       and "spike/test_windows_collector.py" in public,
       "the public allowlist includes roadmap/governance docs, the bug logo, and Windows collector")
 check({"spike/test_picture.py", "spike/test_cmdbar_hits.py",

@@ -43,6 +43,7 @@ REQUIRED = {
     "narwhal3d/commands.py",
     "scripts/create_public_branch.py",
     "scripts/collect_windows_build_info.ps1",
+    "scripts/build_windows_preview.ps1",
     "spike/test_windows_collector.py",
     "launch/narwhal3d.desktop.in",
     "launch/narwhal3d-3dm.xml",

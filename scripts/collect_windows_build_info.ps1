@@ -111,6 +111,63 @@ function Command-Info([string]$Name, [string[]]$VersionArguments) {
     }
 }
 
+# MSVC's cl.exe is usually absent from an ordinary PowerShell PATH. Check PATH
+# first, then inspect Visual Studio installations without altering the shell.
+function Compiler-Info {
+    $FromPath = Command-Info "cl" @()
+    if ($FromPath.found) { return $FromPath }
+
+    $Roots = @()
+    if ($env:ProgramFiles) {
+        $Roots += (Join-Path $env:ProgramFiles "Microsoft Visual Studio\2022")
+    }
+    $ProgramFilesX86 = [Environment]::GetEnvironmentVariable("ProgramFiles(x86)")
+    if ($ProgramFilesX86) {
+        $Roots += (Join-Path $ProgramFilesX86 "Microsoft Visual Studio\2022")
+    }
+    $VsWhere = if ($ProgramFilesX86) {
+        Join-Path $ProgramFilesX86 "Microsoft Visual Studio\Installer\vswhere.exe"
+    } else { $null }
+    if ($VsWhere -and (Test-Path -LiteralPath $VsWhere -PathType Leaf)) {
+        $Locations = Invoke-BoundedProcess $VsWhere @(
+            "-all", "-products", "*", "-requires",
+            "Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
+            "-property", "installationPath")
+        if ($Locations.ok) {
+            $Roots += @($Locations.output -split "`r?`n" |
+                Where-Object { $_ -and $_.Trim() } | ForEach-Object { $_.Trim() })
+        }
+    }
+
+    $Candidates = @()
+    foreach ($Root in @($Roots | Select-Object -Unique)) {
+        $Installations = @()
+        if (Test-Path -LiteralPath (Join-Path $Root "VC\Tools\MSVC") -PathType Container) {
+            $Installations += $Root
+        } elseif (Test-Path -LiteralPath $Root -PathType Container) {
+            $Installations += @(Get-ChildItem -LiteralPath $Root -Directory -ErrorAction SilentlyContinue |
+                ForEach-Object { $_.FullName })
+        }
+        foreach ($Installation in $Installations) {
+            $Toolsets = Join-Path $Installation "VC\Tools\MSVC"
+            if (-not (Test-Path -LiteralPath $Toolsets -PathType Container)) { continue }
+            $Candidates += @(Get-ChildItem -LiteralPath $Toolsets -Directory -ErrorAction SilentlyContinue |
+                ForEach-Object { Join-Path $_.FullName "bin\Hostx64\x64\cl.exe" } |
+                Where-Object { Test-Path -LiteralPath $_ -PathType Leaf })
+        }
+    }
+    $Compiler = @($Candidates | Sort-Object -Unique -Descending | Select-Object -First 1)
+    if ($Compiler.Count -eq 0) { return $FromPath }
+    $CompilerPath = $Compiler[0]
+    $FileVersion = Try-Value { (Get-Item -LiteralPath $CompilerPath).VersionInfo.ProductVersion } "unknown"
+    return [ordered]@{
+        name = "cl"
+        found = $true
+        path = Redact-Path $CompilerPath
+        version = "installed (MSVC $FileVersion); not on PATH in this shell - use x64 Native Tools Command Prompt to compile"
+    }
+}
+
 function Network-Info([string]$Name, [string]$Url) {
     if ($SkipNetworkChecks) {
         return [ordered]@{ name = $Name; url = $Url; reachable = $null; result = "skipped" }
@@ -190,7 +247,7 @@ $Tools = @(
     Command-Info "ninja" @("--version")
     Command-Info "python" @("--version")
     Command-Info "py" @("--version")
-    Command-Info "cl" @()
+    Compiler-Info
     Command-Info "rustc" @("--version")
     Command-Info "cargo" @("--version")
     Command-Info "iscc" @("/Q")

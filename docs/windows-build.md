@@ -63,16 +63,27 @@ After restarting, run the collector again and return the new collection ZIP.
 
 ## What happens after the prepared-machine report
 
-The fresh report determines the exact bootstrap route and prevents repeatedly asking the Windows user to install or diagnose tools by hand. The subsequent build automation will:
+The fresh report determines the exact bootstrap route and prevents repeatedly asking the Windows user to install or diagnose tools by hand.
 
-1. require Windows x86_64 and a supported Visual Studio 2022 C++ toolchain;
-2. fetch Blender at the pinned source revision;
-3. apply and verify every Narwhal native patch;
-4. produce a portable native runtime and provenance marker;
-5. install SHA-256-locked CPython 3.13 Windows wheels for `rhino3dm` and Open CASCADE;
-6. run the pure, exact-geometry, headless, and real-window test gates;
-7. assemble and verify a portable ZIP first;
-8. only then create an installer executable and checksum.
+When Visual Studio C++, Git, Git LFS, CMake, Ninja, Python 3.13, long paths, free disk, and a pagefile are ready, download [`scripts/build_windows_preview.ps1`](../scripts/build_windows_preview.ps1) to the Desktop and run from ordinary 64-bit PowerShell:
+
+```powershell
+Set-Location ([Environment]::GetFolderPath('Desktop'))
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\build_windows_preview.ps1
+```
+
+The engineering build uses the dedicated no-space path `C:\Narwhal3D-build`, resets only clones owned by that marked workspace, and can be rerun after a failure. It follows Blender's official Windows flow from the Blender source directory, but separates configuration and compilation so Ninja is limited to four jobs on the measured 12 GiB machine. It:
+
+1. fetches Narwhal 0.4.0 and Blender at pinned commits and verifies their origins;
+2. downloads Blender's matching Windows libraries through `make.bat update`;
+3. applies every anchor-checked Narwhal native patch;
+4. configures Visual Studio 2022 x64 Release with Ninja and builds one deterministic output directory;
+5. installs SHA-256-locked CPython 3.13 Windows wheels for `rhino3dm` and Open CASCADE into the copied runtime;
+6. asserts the packaged paths, Narwhal version banner and dependency versions, then runs the packaged bootstrap headlessly;
+7. creates and inventories an atomic engineering ZIP on the Desktop;
+8. always creates a small reviewable Desktop result ZIP when a phase fails.
+
+Return both ZIP files named by the script. The large ZIP is an engineering runtime, not a distributable release. It still needs Windows PE icon/AppUserModelID branding, complete package inventory/verification, real-window and physical-GPU gates, an installer, and optional signing.
 
 Code signing is a separate release credential. An unsigned preview can be tested, but Windows SmartScreen may warn when it is launched.
 

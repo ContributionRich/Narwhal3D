@@ -44,7 +44,7 @@ SCRIPT_FILES = (
     "scripts/verify_linux_release.py", "scripts/audit_public_tree.py",
     "scripts/create_public_branch.py", "scripts/capture_readme_demo.py",
     "scripts/build_readme_demo.sh", "scripts/build_toolbar_icons.py",
-    "scripts/collect_windows_build_info.ps1",
+    "scripts/collect_windows_build_info.ps1", "scripts/build_windows_preview.ps1",
 )
 TEST_FILES = (
     "spike/audit_representation.py", "spike/_roundtrip_reader.py",
