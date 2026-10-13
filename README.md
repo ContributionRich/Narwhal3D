@@ -27,7 +27,9 @@ Narwhal keeps document geometry separate from viewport tessellation:
 
 ## Install on Linux x86_64
 
-The public release artifact is `Narwhal_3D-<version>-x86_64.AppImage`. Make it executable and run it directly:
+The public release artifact is `Narwhal_3D-<version>-x86_64.AppImage`. **Known 0.4.0 prerelease limitation:** its native runtime was built on glibc 2.43 and does not start on Ubuntu 22.04 or other older supported distributions. It is retained as early test evidence, not a portable catalog-ready build. The corrected artifact will remain on the `0.4.x` line and be built against a maximum glibc 2.35 baseline.
+
+Make the AppImage executable and run it directly on a compatible newer system:
 
 ```bash
 chmod +x Narwhal_3D-0.4.0-x86_64.AppImage
