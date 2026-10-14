@@ -11235,6 +11235,39 @@ class RedoCmd(Command):
         return f"Redid {name}", True
 
 
+class ClearUndoCmd(Command):
+    """The ClearUndo command drops all undo and redo history records."""
+
+    name = "ClearUndo"
+    description = "Clear all undo and redo records."
+    steps = [("Clear all undo records? (Yes/No) <No>:", TEXT)]
+    records_undo = False
+
+    def begin(self, ctx: NarwhalContext):
+        if not ctx.undo.can_undo and not ctx.undo.can_redo:
+            return "Nothing to clear", True
+        return super().begin(ctx)
+
+    def _enter_default(self, ctx):
+        return "No"
+
+    def execute(self, ctx: NarwhalContext):
+        if not ctx.undo.can_undo and not ctx.undo.can_redo:
+            return "Nothing to clear", True
+        if not self.args:
+            return "Nothing to clear", True
+        raw = self.args[-1]
+        answer = opts.parse_bool(raw)
+        if answer is None:
+            self.args.pop()
+            self.step_index = 0
+            return "ClearUndo: answer Yes or No", False
+        if not answer:
+            return "ClearUndo cancelled", True
+        undo_count, redo_count = ctx.undo.clear()
+        return f"Cleared {undo_count} undo and {redo_count} redo record(s)", True
+
+
 class GumballNumericCmd(Command):
     """The Gumball's numeric entry: a handle was CLICKED, so type a value.
 
@@ -13290,7 +13323,7 @@ def _build_registry():
                 ArrayPolarCmd, MirrorCmd, DeleteCmd, JoinCmd, ExplodeCmd, CloseCrvCmd,
                 ProjectCmd, ProjectToCPlaneCmd, ExtendCmd, DivideCmd, ExtractWireframeCmd,
                 SelectCmd, ZoomCmd,
-                UndoCmd, RedoCmd, PointsOnCmd, PointsOffCmd,
+                UndoCmd, RedoCmd, ClearUndoCmd, PointsOnCmd, PointsOffCmd,
                 SelAllCmd, SelNoneCmd, InvertCmd,
                 SelCrvCmd, SelSrfCmd, SelPolysrfCmd, SelPtCmd,
                 SelClosedCrvCmd, SelOpenCrvCmd, SelDupCmd, SelNameCmd, SetObjectNameCmd,

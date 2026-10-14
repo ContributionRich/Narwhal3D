@@ -50,6 +50,7 @@ PURE_SUITES=(
     spike/test_rightpanel.py
     spike/test_aliases.py
     spike/test_document_clipboard.py
+    spike/test_clear_undo.py
     spike/test_sessionlog.py
     spike/test_bugreport.py
     spike/test_open_arg.py

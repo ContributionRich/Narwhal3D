@@ -56,6 +56,7 @@ TEST_FILES = (
     "spike/test_tessellate.py", "spike/test_trim.py", "spike/test_sweep.py",
     "spike/test_picture_display.py", "spike/test_gumball_region_extrude.py",
     "spike/test_document_clipboard.py", "spike/test_control_point_osnap.py",
+    "spike/test_clear_undo.py",
     "spike/ui_smoke.py", "spike/addon_e2e.py", "spike/test_app_drawn.py",
     "spike/branding_test.py", "spike/test_toolbars.py",
     "spike/test_menubar.py", "spike/test_menubar_resource.py",
