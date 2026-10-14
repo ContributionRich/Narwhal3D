@@ -13,7 +13,7 @@ param(
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = "Stop"
 
-$NarwhalRevision = "071200ac982437bff148d8a213fd896bad204555"
+$NarwhalRevision = "874586bdbcf5cc79ffef7b2ebe33ca69802533f3"
 $BlenderRevision = "d13f752e3b9c4f8c261cda552b1021f8bcc0382c"
 $NarwhalRepository = "https://github.com/ContributionRich/Narwhal3D.git"
 $BlenderRepository = "https://projects.blender.org/blender/blender.git"
