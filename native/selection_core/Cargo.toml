@@ -1,0 +1,17 @@
+[package]
+name = "narwhal-selection-core"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-or-later"
+publish = false
+description = "Display-only selection acceleration feasibility core for Narwhal 3D"
+
+[lib]
+name = "narwhal_selection_core"
+crate-type = ["cdylib", "rlib"]
+
+[profile.release]
+codegen-units = 1
+lto = "thin"
+panic = "abort"
+strip = "symbols"

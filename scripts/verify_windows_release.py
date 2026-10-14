@@ -13,6 +13,14 @@ import tempfile
 import zipfile
 
 from release_policy import validate_preview_version
+from verify_selection_core import (
+    ABI_VERSION as SELECTION_CORE_ABI,
+    PLATFORMS as SELECTION_CORE_PLATFORMS,
+    RUST_TOOLCHAIN as SELECTION_CORE_TOOLCHAIN,
+    VerificationError as SelectionCoreError,
+    inspect_artifact as inspect_selection_core_artifact,
+    source_aggregate as selection_core_source_aggregate,
+)
 
 PRODUCT = "Narwhal 3D"
 PLATFORM = "windows-x86_64"
@@ -25,6 +33,7 @@ REQUIRED = {
     "Narwhal3D.exe", "Narwhal3D.cmd", "README-FIRST.txt",
     "runtime/blender.exe", "runtime/5.2/python/bin/python.exe",
     "app/narwhal3d/__init__.py", "app/launch/bootstrap.py",
+    "app/narwhal3d/native/narwhal_selection_core.dll",
     "app/LICENSE", "app/THIRD_PARTY_NOTICES", "app/STATUS.md", "app/CHANGELOG.md",
     "app/licenses/GPL-3.0-or-later.txt", "app/licenses/rhino3dm-MIT.txt",
     "app/licenses/OCP-Apache-2.0.txt", "app/licenses/LGPL-2.1-or-later.txt",
@@ -125,6 +134,34 @@ def metadata_version(site: Path, distribution: str) -> str | None:
     return None
 
 
+def verify_selection_core_component(root: Path, manifest: dict[str, object]) -> None:
+    section = manifest.get("selection_core")
+    if not isinstance(section, dict):
+        raise VerificationError("Windows release manifest has no selection-core provenance")
+    info = SELECTION_CORE_PLATFORMS[PLATFORM]
+    packaged_path = f"app/narwhal3d/native/{info['filename']}"
+    expected = {
+        "rust_toolchain": SELECTION_CORE_TOOLCHAIN,
+        "abi": SELECTION_CORE_ABI,
+        "packaged_path": packaged_path,
+        "source_aggregate_sha256": selection_core_source_aggregate(),
+    }
+    for key, value in expected.items():
+        if section.get(key) != value:
+            raise VerificationError(
+                f"selection-core provenance {key}: expected {value!r}, got {section.get(key)!r}"
+            )
+    artifact = section.get("artifact")
+    if not isinstance(artifact, dict):
+        raise VerificationError("Windows release manifest has no selection-core artifact record")
+    try:
+        measured = inspect_selection_core_artifact(root / packaged_path, PLATFORM)
+    except SelectionCoreError as exc:
+        raise VerificationError(f"packaged Windows selection core failed verification: {exc}") from exc
+    if artifact != measured:
+        raise VerificationError("packaged Windows selection core differs from release provenance")
+
+
 def verify_directory(root: Path, args: argparse.Namespace) -> None:
     manifest_path = root / "windows-release-manifest.json"
     try:
@@ -177,6 +214,7 @@ def verify_directory(root: Path, args: argparse.Namespace) -> None:
         raise VerificationError("Windows packaged headless-bootstrap evidence is absent")
     if validation.get("physical_gpu_real_window") is not False or validation.get("code_signed") is not False:
         raise VerificationError("Windows preview overclaims physical-GPU or signing status")
+    verify_selection_core_component(root, manifest)
     verify_public_source(root, args.expected_source_revision)
 
 

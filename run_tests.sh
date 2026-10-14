@@ -29,7 +29,9 @@ run() {
 run "packaging: fetch lock" "$PYTHON" scripts/fetch_locked.py --self-check
 run "packaging: assemble release" "$PYTHON" scripts/assemble_linux_release.py --self-check
 run "packaging: verify release" "$PYTHON" scripts/verify_linux_release.py --self-check
+run "packaging: verify selection core" "$PYTHON" scripts/verify_selection_core.py --self-check
 run "packaging: public-tree audit" "$PYTHON" scripts/audit_public_tree.py --self-check
+run "packaging: selection-core artifacts" "$PYTHON" spike/test_selection_core_packaging.py
 run "public project organization" "$PYTHON" spike/test_public_project.py
 run "packaging: bootstrap" scripts/bootstrap_dev_linux.sh --self-check
 run "packaging: Blender build" scripts/build_blender_linux.sh --self-check
@@ -64,6 +66,8 @@ PURE_SUITES=(
     spike/test_windows_collector.py
     spike/test_windows_release.py
     spike/test_release_policy.py
+    spike/test_rust_selection_core.py
+    spike/test_selection_release_integration.py
     spike/test_onbrep_public.py
 )
 
@@ -76,6 +80,7 @@ BLENDER_SUITES=(
     spike/test_picture_display.py
     spike/test_gumball_region_extrude.py
     spike/test_control_point_osnap.py
+    spike/test_native_selection.py
     spike/test_sweep.py
     spike/ui_smoke.py
     spike/addon_e2e.py

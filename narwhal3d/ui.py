@@ -54,6 +54,9 @@ from . import print2d
 # Blender's conventions differ on every one of those, so the semantics are ours
 # and live in a bpy-free module (spike/test_select.py).
 from . import select
+# Optional Rust acceleration only projects display segments. It returns None when
+# unavailable or invalid so selection retains the exact Python/cache path below.
+from . import native_selection
 # SUB-OBJECT selection (Ctrl+Shift+click). A different chord and a different rule
 # from object selection -- the same chord both selects and deselects, so it
 # TOGGLES -- which is why it is not folded into `select.py`.
@@ -17297,13 +17300,16 @@ def _projected_selection_segments(name, region, rv3d, entry):
     if rec is None or not rec.get("n"):
         entry["segments"][name] = ()
         return ()
-    projected = []
-    for segment in rec["lines"]:
-        a = _project_2d(region, rv3d, segment[0])
-        b = _project_2d(region, rv3d, segment[1])
-        if a is not None and b is not None:
-            projected.append((a, b))
-    result = tuple(projected)
+    result = native_selection.project_segments(
+        rec["lines"], rv3d.perspective_matrix, region.width, region.height)
+    if result is None:
+        projected = []
+        for segment in rec["lines"]:
+            a = _project_2d(region, rv3d, segment[0])
+            b = _project_2d(region, rv3d, segment[1])
+            if a is not None and b is not None:
+                projected.append((a, b))
+        result = tuple(projected)
     entry["segments"][name] = result
     entry["segment_indexes"][name] = _build_selection_segment_index(
         result, region.width, region.height)

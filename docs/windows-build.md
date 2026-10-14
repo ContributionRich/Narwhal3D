@@ -57,7 +57,7 @@ When the report shows no native toolchain, install these from their official ins
 3. Enable Windows long-path support and Git `core.longpaths`.
 4. Restart Windows so the SDK, compiler, and PATH changes are visible.
 
-Rust and Inno Setup are not needed for the first native compile; they can be added later for a reproducible TraceDraw build and installer packaging. Automated package installation is deliberately deferred because Windows Package Manager cannot reliably add a missing Visual Studio workload to every already-installed/current Build Tools configuration.
+Rust and Inno Setup are not installed by the Windows application build. The selection accelerator arrives as a separately built and verified `selection-core` folder; Rust is only needed on the machine that produces those reproducible artifacts. Rust may also be added later for a reproducible TraceDraw build, and Inno Setup for installer packaging. Automated package installation is deliberately deferred because Windows Package Manager cannot reliably add a missing Visual Studio workload to every already-installed/current Build Tools configuration.
 
 After restarting, run the collector again and return the new collection ZIP.
 
@@ -69,7 +69,8 @@ When Visual Studio C++, Git, Git LFS, CMake, Ninja, Python 3.13, long paths, fre
 
 ```powershell
 Set-Location ([Environment]::GetFolderPath('Desktop'))
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\build_windows_preview.ps1
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\build_windows_preview.ps1 `
+  -SelectionCoreArtifacts .\selection-core
 ```
 
 The engineering build uses the dedicated no-space path `C:\Narwhal3D-build`, resets only clones owned by that marked workspace, and can be rerun after a failure. It follows Blender's official Windows flow from the Blender source directory, but separates configuration and compilation so Ninja is limited to four jobs on the measured 12 GiB machine. It:
@@ -78,10 +79,11 @@ The engineering build uses the dedicated no-space path `C:\Narwhal3D-build`, res
 2. downloads Blender's matching Windows libraries through `make.bat update`;
 3. applies every anchor-checked Narwhal native patch;
 4. configures Visual Studio 2022 x64 Release with Ninja and builds one deterministic output directory;
-5. installs SHA-256-locked CPython 3.13 Windows wheels for `rhino3dm` and Open CASCADE into the copied runtime;
-6. asserts the packaged paths, Narwhal version banner and dependency versions, then runs the packaged bootstrap headlessly;
-7. creates and inventories an atomic engineering ZIP on the Desktop;
-8. always creates a small reviewable Desktop result ZIP when a phase fails.
+5. verifies the external selection-core manifest against the checked-out Rust source, copies the Windows DLL, and runs its ABI/math acceptance with bundled CPython;
+6. installs SHA-256-locked CPython 3.13 Windows wheels for `rhino3dm` and Open CASCADE into the copied runtime;
+7. asserts the packaged paths, Narwhal version banner and dependency versions, then runs the packaged bootstrap headlessly;
+8. creates and inventories an atomic engineering ZIP on the Desktop;
+9. always creates a small reviewable Desktop result ZIP when a phase fails.
 
 Return both ZIP files named by the script. The large ZIP is an engineering runtime, not a distributable release. It still needs Windows PE icon/AppUserModelID branding, complete package inventory/verification, real-window and physical-GPU gates, an installer, and optional signing.
 

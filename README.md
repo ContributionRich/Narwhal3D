@@ -6,7 +6,7 @@ Narwhal 3D is a free, open-source, command-driven NURBS CAD application. The cur
 
 > **Project status:** extremely early prerelease. Save important work often and verify manufacturing output before production use. Release numbering is intentionally frozen on the `0.4.x` line until the project owner explicitly lifts that cap.
 
-[Current status](STATUS.md) · [Roadmap](ROADMAP.md) · [Feature gaps](docs/gaps.md) · [Windows build preparation](docs/windows-build.md) · [Compatibility and independence](COMPATIBILITY.md) · [Contributing](CONTRIBUTING.md) · [Support](SUPPORT.md) · [Security](SECURITY.md)
+[Current status](STATUS.md) · [Roadmap](ROADMAP.md) · [Feature gaps](docs/gaps.md) · [Rust selection core](docs/rust-selection-core.md) · [Windows build preparation](docs/windows-build.md) · [Compatibility and independence](COMPATIBILITY.md) · [Contributing](CONTRIBUTING.md) · [Support](SUPPORT.md) · [Security](SECURITY.md)
 
 ## Command workflow
 
@@ -73,9 +73,12 @@ Once `tools/blender-patched/` exists, run:
 
 ## Build a one-click AppImage
 
-With a validated native runtime and the locked appimagetool downloaded:
+With a validated native runtime, the pinned Rust/MinGW toolchain, and the locked appimagetool downloaded:
 
 ```bash
+python3 scripts/build_selection_core.py --reproducible
+python3 scripts/verify_selection_core.py artifacts/selection-core
+
 python3 scripts/fetch_locked.py \
   --cache-dir ~/.cache/narwhal3d/artifacts \
   appimagetool appimage-runtime
@@ -90,6 +93,7 @@ python3 scripts/assemble_linux_release.py \
   --runtime-dir tools/blender-patched \
   --appimagetool ~/.cache/narwhal3d/artifacts/appimagetool-x86_64.AppImage \
   --appimage-runtime ~/.cache/narwhal3d/artifacts/runtime-x86_64 \
+  --selection-core-artifacts artifacts/selection-core \
   --output-dir dist
 
 python3 scripts/verify_linux_release.py \
@@ -99,7 +103,7 @@ python3 scripts/verify_linux_release.py \
   --expected-source-date-epoch "$EPOCH"
 ```
 
-Assembly fails closed unless the native binary identity, patch hashes, source commit, Python dependencies, notices, paths, and symlinks all pass. It emits the AppImage, a SHA-256 sidecar, and a retained AppDir for diagnostics.
+Assembly fails closed unless the native binary identity, patch hashes, source commit, Python dependencies, verified Rust source/artifact provenance, notices, paths, and symlinks all pass. It emits the AppImage, a SHA-256 sidecar, and a retained AppDir for diagnostics. The existing 0.4.0 AppImage and Windows preview predate this Rust integration and do not contain it.
 
 ## Tests
 

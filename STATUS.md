@@ -61,4 +61,6 @@ An unsigned `0.4.0-preview.1` Windows x86_64 portable ZIP is available for early
 
 During the 0.x phase, commands, interaction behavior, document orchestration, and much of the UI are implemented in Python for rapid correction and testing. Exact geometry already runs through compiled Open CASCADE code, and the bundled Blender runtime carries native Narwhal patches.
 
+A first dependency-free Rust component now accelerates cold display-only selection projection behind an exact Python fallback and the existing warm cache. Its Linux and Windows x86-64 binaries build reproducibly from pinned Rust 1.95 source and have fail-closed ABI, hash, export, dependency, and glibc verification. Existing 0.4.0 artifacts do not bundle it. Default release activation still requires a new verified 0.4.x package plus captured large-document and native Windows acceptance; Rust never receives document/manufacturing geometry.
+
 After feature and interaction behavior stabilize, the production application layer is intended to move into the Blender source tree and compile as one native Narwhal 3D application. Python may remain for tests, build tooling, and prototypes, but the released application should not depend on a separately installed add-on.
