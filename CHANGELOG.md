@@ -9,6 +9,10 @@ All notable public changes will be recorded here. Narwhal 3D is an extremely ear
 - Publish an unsigned `0.4.0-preview.1` Windows x86_64 portable ZIP with a native Narwhal launcher, exact public application source, locked Windows geometry dependencies, complete hash inventory, and fail-closed verifier. Physical-GPU validation, installer/file associations, signing, and complete internal runtime PE branding remain open.
 - Add an opt-in dependency-free Rust selection projector with exact Python fallback, reproducible pinned Linux/Windows builds, ABI/source/hash/dependency verification, and release-assembler gates. Existing 0.4.0 binaries predate this integration.
 
+### Changed
+
+- Expand the optional Rust selection core with allocation-free crossing refinement, batched curve click picking, and batched control-point and point-object queries. Python fallbacks remain authoritative whenever the verified native component is unavailable or rejects an input. Existing 0.4.0 binaries are unchanged.
+
 ## 0.4.0 — 2026-10-12
 
 ### Added

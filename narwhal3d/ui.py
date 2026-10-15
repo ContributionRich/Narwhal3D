@@ -4764,10 +4764,15 @@ def pick_curve_object(area, space, region, rx, ry, tolerance=CURVE_PICK_PX):
     for n in dirty:
         if n not in hidden and n not in locked:
             cands.append((n, _curve_record(bpy.data.objects.get(n))))
+    measurable = [(n, rec) for n, rec in cands if rec is not None and rec["n"]]
+    native_pick = native_selection.nearest_projected_curve(
+        [rec["lines"] for _name, rec in measurable],
+        m, width, height, mouse, tolerance)
+    if native_pick is not None:
+        index, _distance = native_pick
+        return None if index == native_selection.PICK_NO_HIT else measurable[index][0]
     best, best_d = None, float(tolerance)
-    for n, rec in cands:
-        if rec is None or not rec["n"]:
-            continue
+    for n, rec in measurable:
         d = osnap.segments_screen_distance(rec["lines"], m, width, height, mouse)
         if d <= best_d:
             best, best_d = n, d
@@ -13022,6 +13027,29 @@ def _document_point_locations():
 _point_loc_cache = {"key": None, "out": []}
 
 
+#: Point-object rows and their f64 coordinates after unnamed/locked filtering. The
+#: document cache keeps one stable source list until its key changes, so a survey file's
+#: points are packed once rather than on every click.
+_native_point_objects = {"source": None, "locked": None, "rows": [], "points": None}
+
+
+def _packed_point_objects(rows, locked):
+    """``(eligible rows, contiguous f64 XYZ)`` cached for point-object picking."""
+    cache = _native_point_objects
+    if cache["source"] is not rows or cache["locked"] != locked:
+        import numpy as np
+
+        eligible = [(name, world) for name, world in rows
+                    if name and name not in locked]
+        points = np.fromiter(
+            (coordinate for _name, world in eligible for coordinate in world),
+            dtype=np.float64,
+            count=len(eligible) * 3,
+        ).reshape(-1, 3)
+        cache.update(source=rows, locked=locked, rows=eligible, points=points)
+    return cache["rows"], cache["points"]
+
+
 #: How close (pixels) the cursor must come to a POINT OBJECT's marker to pick it.
 #: application-defined, and matched to the control-point tolerance so the two feel the same.
 POINT_OBJECT_PICK_PX = 9.0
@@ -13043,8 +13071,30 @@ def pick_point_object(area, space, region, rx, ry,
     # Locked point objects are not pickable either. This picker is entirely ours, so
     # Blender's `hide_select` does not reach it -- the names have to be filtered.
     locked = _locked_names_cached()
+    rows = _document_point_locations()
+    key = _doc_key()
+    source = (_point_loc_cache["out"] if key is not None
+              and _point_loc_cache["key"] == key else rows)
+    if source:
+        try:
+            if native_selection.available():
+                eligible, points = _packed_point_objects(source, locked)
+                if not eligible:
+                    return None
+                native = native_selection.nearest_projected_point(
+                    points, rv3d.perspective_matrix, region.width, region.height,
+                    (rx, ry), tolerance)
+                if native is not None:
+                    index, _distance = native
+                    if index == native_selection.PICK_NO_HIT:
+                        return None
+                    if type(index) is not int or not 0 <= index < len(eligible):
+                        raise ValueError("invalid native point-object index")
+                    return eligible[index][0]
+        except Exception:  # noqa: BLE001 -- any native/UI issue keeps scalar picking
+            pass
     best, best_d = None, float(tolerance)
-    for name, world in _document_point_locations():
+    for name, world in rows:
         if not name or name in locked:
             continue
         pos = _project_2d(region, rv3d, world)
@@ -13408,6 +13458,27 @@ _selected_cps = set()
 CONTROL_POINT_PICK_PX = 9.0
 
 
+#: The f64 world-coordinate array handed to optional native grip queries. `_cp_rows`
+#: returns the same cached list until its key changes, so packing 194k points is paid
+#: once rather than on every click or selection rectangle.
+_native_cp_points = {"rows": None, "points": None}
+
+
+def _packed_control_points(rows):
+    """Cached contiguous f64 ``(N, 3)`` coordinates for `_cp_rows()` output."""
+    cache = _native_cp_points
+    if cache["rows"] is not rows:
+        import numpy as np
+
+        points = np.fromiter(
+            (coordinate for _name, _index, world in rows for coordinate in world),
+            dtype=np.float64,
+            count=len(rows) * 3,
+        ).reshape(-1, 3)
+        cache.update(rows=rows, points=points)
+    return cache["points"]
+
+
 def selected_control_points():
     """The selected control points, as a sorted list of (name, index).
 
@@ -13437,6 +13508,19 @@ def pick_control_point(area, space, region, rx, ry,
     rv3d = getattr(space, "region_3d", None) if space is not None else None
     if rv3d is None or region is None:
         return None
+    rows = _cp_rows()
+    if rows:
+        try:
+            native = None
+            if native_selection.available():
+                native = native_selection.nearest_projected_point(
+                    _packed_control_points(rows), rv3d.perspective_matrix,
+                    region.width, region.height, (rx, ry), tolerance)
+            if native is not None:
+                index, _distance = native
+                return None if index == native_selection.PICK_NO_HIT else rows[index]
+        except Exception:  # noqa: BLE001 -- any native/UI issue keeps scalar picking
+            pass
     best, best_d = None, float(tolerance)
     for name, index, world in _control_point_locations():
         pos = _project_2d(region, rv3d, world)
@@ -17304,7 +17388,10 @@ def _projected_selection_segments(name, region, rv3d, entry):
         rec["lines"], rv3d.perspective_matrix, region.width, region.height)
     if result is None:
         projected = []
-        for segment in rec["lines"]:
+        lines = rec["lines"]
+        segments = (lines.reshape(-1, 2, 3)
+                    if getattr(lines, "ndim", 0) == 2 else lines)
+        for segment in segments:
             a = _project_2d(region, rv3d, segment[0])
             b = _project_2d(region, rv3d, segment[1])
             if a is not None and b is not None:
@@ -17383,10 +17470,22 @@ def _curve_crosses_selection_rect(name, region, rv3d, rect, projection=None):
         _key, entry = _selection_projection_entry(region, rv3d)
     if entry is None:
         return True                         # unavailable evidence must not hide an object
+    if name not in entry["segments"]:
+        rec = _curve_record(ob)
+        if rec is None or not rec.get("n"):
+            return True
+        native_result = native_selection.projected_segments_rect_query(
+            rec["lines"], rv3d.perspective_matrix,
+            region.width, region.height, rect)
+        if native_result == native_selection.RECT_HIT:
+            return True
+        if native_result == native_selection.RECT_MISS:
+            return False
+        if native_result == native_selection.RECT_NO_EVIDENCE:
+            return True
     segments = _projected_selection_segments(name, region, rv3d, entry)
     if not segments:
-        rec = _curve_record(ob)
-        return True if rec is None or not rec.get("n") else True
+        return True
     index = entry.get("segment_indexes", {}).get(name)
     numbers = (range(len(segments)) if index is None
                else _indexed_selection_segment_numbers(index, rect))
@@ -17394,11 +17493,60 @@ def _curve_crosses_selection_rect(name, region, rv3d, rect, projection=None):
                for i in numbers)
 
 
+def _curves_cross_selection_rect(names, region, rv3d, rect, projection=None):
+    """Filter broad-phase ``names`` with one native query when possible.
+
+    Result order is unchanged. Non-curves and unavailable evidence remain
+    conservative, existing Python screen caches stay authoritative, and any batch
+    failure reruns the established per-curve path for the complete input.
+    """
+    names = list(names)
+    if not names:
+        return []
+    entry = projection
+    if entry is None:
+        _key, entry = _selection_projection_entry(region, rv3d)
+    if entry is None:
+        return [name for name in names
+                if _curve_crosses_selection_rect(name, region, rv3d, rect, entry)]
+    decisions = {}
+    batch_names = []
+    batch_lines = []
+    for name in names:
+        ob = bpy.data.objects.get(name)
+        if ob is None or not bridge.is_app_drawn(ob):
+            decisions[name] = True
+            continue
+        if name in entry["segments"]:
+            decisions[name] = _curve_crosses_selection_rect(
+                name, region, rv3d, rect, entry)
+            continue
+        rec = _curve_record(ob)
+        if rec is None or not rec.get("n"):
+            decisions[name] = True
+            continue
+        batch_names.append(name)
+        batch_lines.append(rec["lines"])
+    if batch_names:
+        statuses = native_selection.projected_curves_rect_query(
+            batch_lines, rv3d.perspective_matrix,
+            region.width, region.height, rect)
+        if statuses is None or len(statuses) != len(batch_names):
+            return [name for name in names
+                    if _curve_crosses_selection_rect(
+                        name, region, rv3d, rect, entry)]
+        for name, status in zip(batch_names, statuses):
+            decisions[name] = status != native_selection.RECT_MISS
+    return [name for name in names if decisions.get(name, True)]
+
+
 def _rectangle_selection_hits(candidates, rect, mode, curve_crosses=None,
-                              expand_groups=None):
+                              curve_crosses_many=None, expand_groups=None):
     """Rectangle hits refined by actual curve strokes and document groups."""
     hits = select.in_rect(candidates, rect, mode)
-    if mode == select.CROSSING and curve_crosses is not None:
+    if mode == select.CROSSING and curve_crosses_many is not None:
+        hits = list(curve_crosses_many(hits))
+    elif mode == select.CROSSING and curve_crosses is not None:
         hits = [name for name in hits if curve_crosses(name)]
     if hits and expand_groups is not None:
         hits = list(expand_groups(hits))
@@ -17670,6 +17818,18 @@ def _control_points_in_rect(region, rv3d, rect):
     bounding-box rectangle path cannot see them. A point has no extent: window and
     crossing therefore agree on whether its centre is inside the rectangle.
     """
+    rows = _cp_rows()
+    if rows:
+        try:
+            indices = None
+            if native_selection.available():
+                indices = native_selection.projected_points_in_rect(
+                    _packed_control_points(rows), rv3d.perspective_matrix,
+                    region.width, region.height, rect)
+            if indices is not None:
+                return [(rows[index][0], rows[index][1]) for index in indices]
+        except Exception:  # noqa: BLE001 -- any native/UI issue keeps scalar selection
+            pass
     x0, y0, x1, y1 = rect
     hits = []
     for name, index, world in _control_point_locations():
@@ -17733,6 +17893,8 @@ def _sel_drag_end():
         candidates, rect, mode,
         curve_crosses=lambda name: _curve_crosses_selection_rect(
             name, region, rv3d, rect, projection),
+        curve_crosses_many=lambda names: _curves_cross_selection_rect(
+            names, region, rv3d, rect, projection),
         # A rectangle that catches one member catches the same transitive group unit
         # as a click. The old path skipped this expansion and visibly desynced groups.
         expand_groups=app_state.ctx.expand_group_names)
