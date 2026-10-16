@@ -17158,10 +17158,16 @@ def _pick_could_hit(region, rv3d, rx, ry):
     if not len(los):
         return False
     try:
-        keep = osnap.boxes_reach(los, his,
-                                 np.array(rv3d.perspective_matrix, dtype=np.float64),
-                                 float(region.width), float(region.height),
-                                 (float(rx), float(ry)), PICK_OBJECT_CULL_PX)
+        matrix = np.array(rv3d.perspective_matrix, dtype=np.float64)
+        mouse = (float(rx), float(ry))
+        rects = native_selection.screen_rects_from_aabbs(
+            los, his, matrix, float(region.width), float(region.height))
+        if rects is None:
+            keep = osnap.boxes_reach(
+                los, his, matrix, float(region.width), float(region.height),
+                mouse, PICK_OBJECT_CULL_PX)
+        else:
+            keep = osnap.rects_reach(rects, mouse, PICK_OBJECT_CULL_PX)
     except Exception:  # noqa: BLE001
         return True
     return bool(keep.any())

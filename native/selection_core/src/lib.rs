@@ -96,9 +96,22 @@ fn valid_slice_len<T>(len: usize) -> bool {
     len <= isize::MAX as usize / mem::size_of::<T>()
 }
 
+#[cfg(test)]
+std::thread_local! {
+    static MATRIX_PREPARE_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static SNAP_HYPOT_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 #[inline]
-fn project_display_point_f64(
-    matrix: &[f64],
+fn display_matrix_f32(matrix: &[f64]) -> [f32; 16] {
+    #[cfg(test)]
+    MATRIX_PREPARE_CALLS.with(|calls| calls.set(calls.get() + 1));
+    std::array::from_fn(|index| matrix[index] as f32)
+}
+
+#[inline]
+fn project_display_point_prepared(
+    matrix: &[f32; 16],
     point: &[f64],
     width: f64,
     height: f64,
@@ -114,7 +127,7 @@ fn project_display_point_f64(
         let base = row * 4;
         let mut dot = 0.0_f64;
         for column in 0..4 {
-            let product = (matrix[base + column] as f32) * vector[column];
+            let product = matrix[base + column] * vector[column];
             dot += f64::from(product);
         }
         dot as f32
@@ -136,6 +149,17 @@ fn project_display_point_f64(
     } else {
         None
     }
+}
+
+#[cfg(test)]
+#[inline]
+fn project_display_point_f64(
+    matrix: &[f64],
+    point: &[f64],
+    width: f64,
+    height: f64,
+) -> Option<(f64, f64)> {
+    project_display_point_prepared(&display_matrix_f32(matrix), point, width, height)
 }
 
 #[inline]
@@ -893,10 +917,12 @@ pub unsafe extern "C" fn narwhal_project_display_points_f64(
         return 0;
     }
     let points = slice::from_raw_parts(points_ptr, point_values);
+    let display_matrix = display_matrix_f32(matrix);
     let out_xy = slice::from_raw_parts_mut(out_xy_ptr, output_values);
     let out_visible = slice::from_raw_parts_mut(out_visible_ptr, count);
     for (index, point) in points.chunks_exact(3).enumerate() {
-        if let Some((x, y)) = project_display_point_f64(matrix, point, width, height) {
+        if let Some((x, y)) = project_display_point_prepared(&display_matrix, point, width, height)
+        {
             out_xy[index * 2] = x;
             out_xy[index * 2 + 1] = y;
             out_visible[index] = 1;
@@ -979,10 +1005,19 @@ pub unsafe extern "C" fn narwhal_projected_snap_distances_f64(
     }
     let out_indices = slice::from_raw_parts_mut(out_indices_ptr, point_count);
     let out_distances = slice::from_raw_parts_mut(out_distances_ptr, point_count);
+    let display_matrix = display_matrix_f32(matrix);
     let mut survivor_count = 0usize;
     for (index, point) in points.chunks_exact(3).enumerate() {
-        if let Some((x, y)) = project_display_point_f64(matrix, point, width, height) {
-            let distance = python_hypot2(x - mouse[0], y - mouse[1]);
+        if let Some((x, y)) = project_display_point_prepared(&display_matrix, point, width, height)
+        {
+            let dx = x - mouse[0];
+            let dy = y - mouse[1];
+            if dx.abs() > radius || dy.abs() > radius {
+                continue;
+            }
+            #[cfg(test)]
+            SNAP_HYPOT_CALLS.with(|calls| calls.set(calls.get() + 1));
+            let distance = python_hypot2(dx, dy);
             if distance.is_finite() && distance <= radius {
                 out_indices[survivor_count] = index as u64;
                 out_distances[survivor_count] = distance;
@@ -1219,6 +1254,7 @@ pub unsafe extern "C" fn narwhal_nearest_projected_polylines_f64(
             return ERR_INPUT;
         }
     }
+    let display_matrix = display_matrix_f32(matrix);
     let out_segments = slice::from_raw_parts_mut(out_segment_ptr, curve_count);
     let out_parameters = slice::from_raw_parts_mut(out_parameter_ptr, curve_count);
     let out_distances = slice::from_raw_parts_mut(out_distance_ptr, curve_count);
@@ -1229,14 +1265,18 @@ pub unsafe extern "C" fn narwhal_nearest_projected_polylines_f64(
         if end.saturating_sub(start) < 2 {
             continue;
         }
-        let mut previous =
-            project_display_point_f64(matrix, &points[start * 3..start * 3 + 3], width, height);
+        let mut previous = project_display_point_prepared(
+            &display_matrix,
+            &points[start * 3..start * 3 + 3],
+            width,
+            height,
+        );
         let mut best_segment = u64::MAX;
         let mut best_parameter = f64::NAN;
         let mut best_distance = f64::INFINITY;
         for point_index in start..end - 1 {
-            let next = project_display_point_f64(
-                matrix,
+            let next = project_display_point_prepared(
+                &display_matrix,
                 &points[(point_index + 1) * 3..(point_index + 1) * 3 + 3],
                 width,
                 height,
@@ -1704,10 +1744,12 @@ pub unsafe extern "C" fn narwhal_nearest_projected_point_f64(
         return 0;
     }
     let points = slice::from_raw_parts(points_ptr, point_values);
+    let display_matrix = display_matrix_f32(matrix);
     let mut best_index = u64::MAX;
     let mut best_distance = max_distance;
     for (index, point) in points.chunks_exact(3).enumerate() {
-        if let Some((x, y)) = project_display_point_f64(matrix, point, width, height) {
+        if let Some((x, y)) = project_display_point_prepared(&display_matrix, point, width, height)
+        {
             let dx = x - mouse[0];
             let dy = y - mouse[1];
             let distance = (dx * dx + dy * dy).sqrt();
@@ -1774,9 +1816,11 @@ pub unsafe extern "C" fn narwhal_projected_points_rect_query_f64(
         return ERR_INPUT;
     }
     let points = slice::from_raw_parts(points_ptr, point_values);
+    let display_matrix = display_matrix_f32(matrix);
     let out_inside = slice::from_raw_parts_mut(out_inside_ptr, count);
     for (index, point) in points.chunks_exact(3).enumerate() {
-        if let Some((x, y)) = project_display_point_f64(matrix, point, width, height) {
+        if let Some((x, y)) = project_display_point_prepared(&display_matrix, point, width, height)
+        {
             out_inside[index] =
                 u8::from(rect[0] <= x && x <= rect[2] && rect[1] <= y && y <= rect[3]);
         }
@@ -2234,6 +2278,126 @@ mod tests {
             SCREEN_DISTANCE_CALLS.load(std::sync::atomic::Ordering::Relaxed),
             0,
         );
+    }
+
+    #[test]
+    fn display_exports_prepare_once_and_snap_rejects_far_axes_before_hypot() {
+        let points = [0.0_f64, 0.0, 0.0, 10.0, 0.0, 0.0, 0.0, 10.0, 0.0];
+        let reset_prepare = || MATRIX_PREPARE_CALLS.with(|calls| calls.set(0));
+        let prepare_count = || MATRIX_PREPARE_CALLS.with(std::cell::Cell::get);
+
+        let mut pixels = [f64::NAN; 6];
+        let mut visible = [0_u8; 3];
+        reset_prepare();
+        assert_eq!(
+            unsafe {
+                narwhal_project_display_points_f64(
+                    IDENTITY.as_ptr(),
+                    points.as_ptr(),
+                    3,
+                    800.0,
+                    600.0,
+                    pixels.as_mut_ptr(),
+                    visible.as_mut_ptr(),
+                )
+            },
+            0
+        );
+        assert_eq!(prepare_count(), 1);
+
+        let mut indices = [u64::MAX; 3];
+        let mut distances = [f64::INFINITY; 3];
+        let mut survivor_count = 0_u64;
+        SNAP_HYPOT_CALLS.with(|calls| calls.set(0));
+        reset_prepare();
+        assert_eq!(
+            unsafe {
+                narwhal_projected_snap_distances_f64(
+                    IDENTITY.as_ptr(),
+                    points.as_ptr(),
+                    3,
+                    800.0,
+                    600.0,
+                    [400.0_f64, 300.0].as_ptr(),
+                    1.0,
+                    indices.as_mut_ptr(),
+                    distances.as_mut_ptr(),
+                    &mut survivor_count,
+                )
+            },
+            0
+        );
+        assert_eq!(
+            (prepare_count(), survivor_count, indices[0], distances[0]),
+            (1, 1, 0, 0.0)
+        );
+        assert_eq!(SNAP_HYPOT_CALLS.with(std::cell::Cell::get), 1);
+
+        let offsets = [0_u64, 3];
+        let mut segment = [u64::MAX];
+        let mut parameter = [f64::NAN];
+        let mut near_distance = [f64::INFINITY];
+        let mut near_valid = [0_u8];
+        reset_prepare();
+        assert_eq!(
+            unsafe {
+                narwhal_nearest_projected_polylines_f64(
+                    IDENTITY.as_ptr(),
+                    points.as_ptr(),
+                    3,
+                    offsets.as_ptr(),
+                    1,
+                    800.0,
+                    600.0,
+                    [400.0_f64, 300.0].as_ptr(),
+                    segment.as_mut_ptr(),
+                    parameter.as_mut_ptr(),
+                    near_distance.as_mut_ptr(),
+                    near_valid.as_mut_ptr(),
+                )
+            },
+            0
+        );
+        assert_eq!(prepare_count(), 1);
+
+        let mut point_index = u64::MAX;
+        let mut point_distance = f64::INFINITY;
+        reset_prepare();
+        assert_eq!(
+            unsafe {
+                narwhal_nearest_projected_point_f64(
+                    IDENTITY.as_ptr(),
+                    points.as_ptr(),
+                    3,
+                    800.0,
+                    600.0,
+                    [400.0_f64, 300.0].as_ptr(),
+                    1.0,
+                    &mut point_index,
+                    &mut point_distance,
+                )
+            },
+            1
+        );
+        assert_eq!(prepare_count(), 1);
+
+        let mut inside = [0_u8; 3];
+        reset_prepare();
+        assert_eq!(
+            unsafe {
+                narwhal_projected_points_rect_query_f64(
+                    IDENTITY.as_ptr(),
+                    points.as_ptr(),
+                    3,
+                    800.0,
+                    600.0,
+                    [399.0_f64, 299.0, 401.0, 301.0].as_ptr(),
+                    inside.as_mut_ptr(),
+                )
+            },
+            0
+        );
+        assert_eq!(prepare_count(), 1);
     }
 
     #[test]
