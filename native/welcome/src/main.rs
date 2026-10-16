@@ -17,6 +17,7 @@ const MIN_VISIBLE_SECONDS: f32 = 1.8;
 const FADE_SECONDS: f32 = 0.38;
 const ATTENTION_GRACE_SECONDS: f32 = 0.75;
 const EXIT_PENDING: i32 = i32::MIN;
+const SUBMIT_DELAY: Duration = Duration::from_millis(50);
 const NEW_UNITS: [(&str, &str); 5] = [
     ("Millimeters", "Millimeters"),
     ("Centimeters", "Centimeters"),
@@ -46,6 +47,40 @@ struct LaunchConfig {
     request: PathBuf,
 }
 
+struct PendingRequest {
+    temporary: PathBuf,
+    action: String,
+    publish_after: Instant,
+}
+
+impl PendingRequest {
+    fn prepare(
+        request: &Path,
+        action: &str,
+        argument: Option<&str>,
+        now: Instant,
+    ) -> std::io::Result<Self> {
+        let temporary = request.with_extension("tmp");
+        let mut file = fs::File::create(&temporary)?;
+        file.write_all(request_payload(action, argument).as_bytes())?;
+        file.sync_all()?;
+        Ok(Self {
+            temporary,
+            action: action.to_owned(),
+            publish_after: now + SUBMIT_DELAY,
+        })
+    }
+
+    fn is_due(&self, now: Instant) -> bool {
+        now >= self.publish_after
+    }
+
+    fn publish(self, request: &Path) -> std::io::Result<String> {
+        replace_request(&self.temporary, request)?;
+        Ok(self.action)
+    }
+}
+
 struct WelcomeApp {
     tab: Tab,
     recent: Vec<PathBuf>,
@@ -53,6 +88,7 @@ struct WelcomeApp {
     events: Receiver<RuntimeEvent>,
     sender: Sender<RuntimeEvent>,
     launch: Option<LaunchConfig>,
+    pending_request: Option<PendingRequest>,
     native_window: Option<native_stacking::NativeWindowId>,
     cancel_child: Arc<AtomicBool>,
     exit_code: Arc<AtomicI32>,
@@ -335,6 +371,7 @@ impl WelcomeApp {
             events,
             sender,
             launch: Some(config),
+            pending_request: None,
             native_window: native_stacking::welcome_window_id(cc),
             cancel_child,
             exit_code,
@@ -349,21 +386,56 @@ impl WelcomeApp {
         }
     }
 
-    fn send_request(&mut self, action: &str, argument: Option<&str>) {
-        let temporary = self.request.with_extension("tmp");
-        let result = (|| -> std::io::Result<()> {
-            let mut file = fs::File::create(&temporary)?;
-            file.write_all(request_payload(action, argument).as_bytes())?;
-            file.sync_all()?;
-            replace_request(&temporary, &self.request)?;
-            Ok(())
-        })();
-        self.status = match result {
-            Ok(()) if action == "open" => "Opening selected model…".to_owned(),
-            Ok(()) if action == "open-dialog" => "Opening file browser…".to_owned(),
-            Ok(()) => "Creating a new model…".to_owned(),
-            Err(error) => format!("Could not send startup request: {error}"),
-        };
+    fn action_status(action: &str) -> String {
+        match action {
+            "open" => "Opening selected model…".to_owned(),
+            "open-dialog" => "Opening file browser…".to_owned(),
+            _ => "Creating a new model…".to_owned(),
+        }
+    }
+
+    fn submit_and_hide(&mut self, action: &str, argument: Option<&str>, ctx: &egui::Context) {
+        if self.pending_request.is_some() {
+            return;
+        }
+        match PendingRequest::prepare(&self.request, action, argument, Instant::now()) {
+            Ok(pending) => {
+                self.status = Self::action_status(action);
+                self.pending_request = Some(pending);
+                self.hide_surface(ctx);
+            }
+            Err(error) => {
+                self.status = format!("Could not send startup request: {error}");
+            }
+        }
+    }
+
+    fn poll_submission(&mut self, ctx: &egui::Context) {
+        let now = Instant::now();
+        if !self
+            .pending_request
+            .as_ref()
+            .is_some_and(|pending| pending.is_due(now))
+        {
+            return;
+        }
+        let pending = self
+            .pending_request
+            .take()
+            .expect("pending request checked above");
+        match pending.publish(&self.request) {
+            Ok(action) => {
+                self.status = Self::action_status(&action);
+                self.lifetime.dismiss();
+                self.mark_closed();
+            }
+            Err(error) => {
+                self.status = format!("Could not send startup request: {error}");
+                self.hidden = false;
+                ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+                ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+            }
+        }
     }
 
     fn mark_closed(&self) {
@@ -372,13 +444,18 @@ impl WelcomeApp {
         }
     }
 
-    fn hide_welcome(&mut self, ctx: &egui::Context) {
+    fn hide_surface(&mut self, ctx: &egui::Context) {
         if self.hidden {
             return;
         }
-        self.mark_closed();
         self.hidden = true;
         ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+        ctx.request_repaint_after(Duration::from_millis(16));
+    }
+
+    fn hide_welcome(&mut self, ctx: &egui::Context) {
+        self.mark_closed();
+        self.hide_surface(ctx);
     }
 
     fn poll_runtime(&mut self, ctx: &egui::Context) {
@@ -500,7 +577,11 @@ impl WelcomeApp {
                             .on_hover_text(path.display().to_string())
                             .clicked()
                         {
-                            self.send_request("open", Some(path.to_string_lossy().as_ref()));
+                            self.submit_and_hide(
+                                "open",
+                                Some(path.to_string_lossy().as_ref()),
+                                ui.ctx(),
+                            );
                         }
                         ui.add(
                             egui::Label::new(
@@ -527,7 +608,7 @@ impl WelcomeApp {
                 .add_sized([190.0, 31.0], egui::Button::new(label))
                 .clicked()
             {
-                self.send_request("new", Some(unit));
+                self.submit_and_hide("new", Some(unit), ui.ctx());
             }
             ui.add_space(7.0);
         }
@@ -541,7 +622,7 @@ impl WelcomeApp {
             .add_sized([190.0, 31.0], egui::Button::new("Choose a model…"))
             .clicked()
         {
-            self.send_request("open-dialog", None);
+            self.submit_and_hide("open-dialog", None, ui.ctx());
         }
     }
 }
@@ -560,6 +641,7 @@ impl eframe::App for WelcomeApp {
 
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.poll_runtime(ctx);
+        self.poll_submission(ctx);
         if self
             .first_paint
             .is_some_and(|painted| painted.elapsed() >= Duration::from_millis(350))
@@ -728,8 +810,8 @@ fn main() -> eframe::Result {
 mod tests {
     use super::{
         is_ready_line, parse_args_from, progress_state, recent_files_from, replace_request,
-        request_payload, supervise_child, RuntimeEvent, WelcomeLifetime, ATTENTION_GRACE_SECONDS,
-        EXIT_PENDING, NEW_UNITS, READY_MARKER,
+        request_payload, supervise_child, PendingRequest, RuntimeEvent, WelcomeLifetime,
+        ATTENTION_GRACE_SECONDS, EXIT_PENDING, NEW_UNITS, READY_MARKER, SUBMIT_DELAY,
     };
     use std::fs;
     use std::path::Path;
@@ -822,6 +904,29 @@ mod tests {
         lifetime.note_attention(interacted + Duration::from_secs(31), true);
         assert!(lifetime.dismissed && lifetime.engaged);
         assert_eq!(lifetime.fade_alpha(interacted), 0.0);
+    }
+
+    #[test]
+    fn pending_request_waits_for_a_hidden_cycle_before_publication() {
+        let root = temporary_dir("pending-publisher");
+        let request = root.join("welcome.request");
+        let start = Instant::now();
+        let pending = PendingRequest::prepare(&request, "new", Some("Feet"), start).unwrap();
+        assert!(!request.exists());
+        assert!(!pending.is_due(start + SUBMIT_DELAY - Duration::from_millis(1)));
+        assert!(pending.is_due(start + SUBMIT_DELAY));
+        assert_eq!(pending.publish(&request).unwrap(), "new");
+        assert_eq!(fs::read_to_string(&request).unwrap(), "new\nFeet\n");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn pending_request_preparation_failure_cannot_publish() {
+        let root = temporary_dir("failed-publisher");
+        let request = root.join("missing").join("welcome.request");
+        assert!(PendingRequest::prepare(&request, "open-dialog", None, Instant::now()).is_err());
+        assert!(!request.exists());
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

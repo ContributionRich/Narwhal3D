@@ -156,10 +156,14 @@ with tempfile.TemporaryDirectory(prefix="narwhal-welcome-test-") as temporary:
           and opened == ["/models/Clock face.3dm"],
           "recent-file requests preserve spaced paths and keep the listener active")
 
+    request.write_text("new\nFeet\n", encoding="utf-8")
     closed = request.with_suffix(".closed")
     closed.write_text("", encoding="utf-8")
-    check(welcome_request(open_state) is None and not closed.exists(),
-          "welcome close marker ends the persistent request listener")
+    closing_state = {"tries": 0, "lines": None}
+    check(welcome_request(closing_state) is None
+          and commands[-3:] == ["New", "-Units", "Feet"]
+          and saved == [True, True, True] and not closed.exists(),
+          "queued action executes before its close marker stops the listener")
 
 os.environ.pop("NARWHAL3D_WELCOME_REQUEST", None)
 os.environ.pop("NARWHAL3D_UI_READY", None)
@@ -200,11 +204,14 @@ check("input.pointer.hover_pos().is_some()" in rust
       "first pointer/input interaction permanently owns the welcome and cancels auto-fade")
 close_start = rust.index('on_hover_text("Close welcome window")')
 close_route = rust[close_start:close_start + 500]
+hide_surface_start = rust.index("fn hide_surface")
 hide_start = rust.index("fn hide_welcome")
-hide_route = rust[hide_start:hide_start + 400]
+hide_surface_route = rust[hide_surface_start:hide_start]
+hide_route = rust[hide_start:hide_start + 200]
 check("self.lifetime.dismiss()" in close_route
       and "self.hide_welcome(ui.ctx())" in close_route
-      and "ViewportCommand::Visible(false)" in hide_route
+      and "self.hide_surface(ctx)" in hide_route
+      and "ViewportCommand::Visible(false)" in hide_surface_route
       and "cancel_child" not in close_route
       and "ViewportCommand::Close" not in close_route,
       "top-right close control immediately hides only the welcome surface")
@@ -214,13 +221,33 @@ top_tabs = rust[top_tabs_start:top_tabs_end]
 check("welcome-drag" not in rust
       and 'self.send_request("open-dialog"' not in top_tabs
       and all(unit in rust for unit in welcome_units)
-      and 'self.send_request("new", Some(unit))' in rust
+      and 'self.submit_and_hide("new", Some(unit), ui.ctx())' in rust
       and 'Button::new("Choose a model…")' in rust
       and 'ui.heading("Narwhal 3D")' in rust,
       "New, Open and About controls have unobstructed authored actions")
 check("progress_state(self.ready" in rust
       and "(1.0, false)" in rust,
       "ready progress is complete and no longer animated")
+submit_start = rust.index("fn submit_and_hide")
+submit_end = rust.index("fn poll_submission", submit_start)
+submit_route = rust[submit_start:submit_end]
+poll_end = rust.index("fn mark_closed", submit_end)
+poll_route = rust[submit_end:poll_end]
+prepare_pos = submit_route.find("PendingRequest::prepare")
+hide_pos = submit_route.find("self.hide_surface(ctx)")
+publish_pos = poll_route.find("pending.publish")
+closed_pos = poll_route.find("self.mark_closed()")
+check(0 <= prepare_pos < hide_pos
+      and "self.pending_request = Some(pending)" in submit_route
+      and "self.hidden = false" in poll_route
+      and "ViewportCommand::Visible(true)" in poll_route
+      and 0 <= publish_pos < closed_pos
+      and "cancel_child" not in submit_route + poll_route
+      and "ViewportCommand::Close" not in submit_route + poll_route
+      and 'self.submit_and_hide("new", Some(unit), ui.ctx())' in rust
+      and 'self.submit_and_hide("open-dialog", None, ui.ctx())' in rust
+      and '"open",\n                                Some(path.to_string_lossy().as_ref())' in rust,
+      "New, Open and Recent hide before delayed publication and recover publication failure")
 
 blender = ROOT / "tools" / "blender-patched" / "blender"
 probe = (
