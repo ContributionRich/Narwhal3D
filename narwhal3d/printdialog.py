@@ -32,7 +32,7 @@ SCALES = ("Fit", "1:1", "1:2", "1:5", "1:10", "1:20", "1:50", "1:100",
 COLORS = ("PrintColor", "DisplayColor", "BlackWhite")
 COLOR_LABELS = {"PrintColor": "Print color", "DisplayColor": "Display color",
                 "BlackWhite": "Black and white"}
-WIDTHS = tuple(f"{w:.2f}" for w in print2d.PRINT_WIDTHS_MM)
+WIDTHS = ("Hairline",) + tuple(f"{w:.2f}" for w in print2d.PRINT_WIDTHS_MM)
 SIZES = tuple(print2d.PAGE_SIZES_MM) + (print2d.CUSTOM,)
 #: Largest accepted custom sheet; 5 m accommodates large-format plotters.
 MAX_CUSTOM_MM = 5000.0
@@ -106,7 +106,7 @@ class DialogState:
         if rid == "color":
             return COLOR_LABELS[value]
         if rid == "width":
-            return f"{value} mm"
+            return value if value == "Hairline" else f"{value} mm"
         if rid == "size" and value == print2d.CUSTOM:
             return "Custom..."
         if rid == "size":
@@ -133,7 +133,7 @@ class DialogState:
         return DESTINATIONS[self.destination][1]
 
     def width_mm(self):
-        return float(self.width)
+        return print2d.HAIRLINE_MM if self.width == "Hairline" else float(self.width)
 
     def scale_value(self):
         from .print_commands import parse_scale

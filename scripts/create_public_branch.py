@@ -49,6 +49,7 @@ SCRIPT_FILES = (
     "scripts/verify_linux_release.py", "scripts/verify_windows_release.py", "scripts/audit_public_tree.py",
     "scripts/create_public_branch.py", "scripts/capture_readme_demo.py",
     "scripts/build_readme_demo.sh", "scripts/build_toolbar_icons.py",
+    "scripts/bootstrap_linux_runtime.py", "scripts/stage_fedora_inkscape.py",
     "scripts/collect_windows_build_info.ps1", "scripts/build_windows_preview.ps1",
 )
 TEST_FILES = (
@@ -74,15 +75,21 @@ TEST_FILES = (
     "spike/test_dxf_reader.py", "spike/test_dxf_writer.py",
     "spike/test_obj_reader.py", "spike/test_obj_writer.py",
     "spike/test_stl_writer.py", "spike/test_vector_export.py",
-    "spike/test_tracedraw.py", "spike/test_onbrep_public.py", "spike/test_open_arg.py",
+    "spike/test_tracedraw.py", "spike/test_cdr.py", "spike/test_native_cdr.py",
+    "spike/test_converter_supervisor.py", "spike/test_runtime_tools.py",
+    "spike/test_onbrep_public.py", "spike/test_open_arg.py",
     "spike/test_windows_collector.py", "spike/test_windows_release.py",
     "spike/test_release_policy.py", "spike/test_public_project.py", "spike/public_ui_report.py",
 )
-PACKAGE_EXCLUDES = {
-    "narwhal3d/cdr_reader.py",
-    "narwhal3d/cdr_writer.py",
-    "narwhal3d/kernel/brep_writer.cpp",
-}
+NATIVE_FILES = (
+    "native/cdr_core/.gitignore", "native/cdr_core/Cargo.lock",
+    "native/cdr_core/Cargo.toml", "native/cdr_core/src/lib.rs",
+    "native/cdr_core/src/reader.rs",
+    "native/converter_supervisor/.gitignore", "native/converter_supervisor/Cargo.lock",
+    "native/converter_supervisor/Cargo.toml", "native/converter_supervisor/src/main.rs",
+)
+RUNTIME_FILES = ("runtime/README.md", "runtime/manifest.json")
+PACKAGE_EXCLUDES = {"narwhal3d/kernel/brep_writer.cpp"}
 
 
 class PublicBranchError(RuntimeError):
@@ -123,7 +130,8 @@ def recursive_files(directory: str) -> list[str]:
 
 
 def public_files() -> list[str]:
-    paths = set(ROOT_FILES + LAUNCH_FILES + WELCOME_FILES + PATCH_FILES + SCRIPT_FILES + TEST_FILES)
+    paths = set(ROOT_FILES + LAUNCH_FILES + WELCOME_FILES + NATIVE_FILES + RUNTIME_FILES
+                + PATCH_FILES + SCRIPT_FILES + TEST_FILES)
     for directory in ("narwhal3d", "packaging", "licenses", ".github", "artwork"):
         paths.update(recursive_files(directory))
     missing = sorted(path for path in paths if not (ROOT / path).is_file())

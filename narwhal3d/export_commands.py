@@ -317,7 +317,7 @@ def _export_dxf(model, objs, path, tolerance):
     return msg
 
 
-def _export_2d(model, objs, path):
+def _export_2d(model, objs, path, hairline=False):
     from . import print_commands
 
     view = print_commands._view()
@@ -329,16 +329,18 @@ def _export_2d(model, objs, path):
     page = print2d.build_page(model, view, setup, objects=objs)
     if not page.strokes:
         raise ValueError("nothing in the export prints as curves")
-    print2d.write(path, page, os.path.splitext(os.path.basename(path))[0])
+    print2d.write(path, page, os.path.splitext(os.path.basename(path))[0], hairline=hairline)
     msg = (f"Exported {len(page.strokes)} curve(s) to {path} at 1:1 "
            f"({page.width_mm:.2f} x {page.height_mm:.2f} mm)")
+    if path.lower().endswith(".cdr"):
+        msg += " as native CorelDRAW v15 (2015/X7 compatible)"
 
     if page.notes:
         msg += ". NOTE: " + "; ".join(page.notes)
     return msg
 
 
-def export_objects(model, objs, path, tolerance=None, angle_deg=None):
+def export_objects(model, objs, path, tolerance=None, angle_deg=None, hairline=False):
     """Write `objs` to `path` by its extension. Returns ``(ok, message)``.
 
     `tolerance` (model units) and `angle_deg` drive the STL/OBJ export mesh and the DXF
@@ -367,7 +369,7 @@ def export_objects(model, objs, path, tolerance=None, angle_deg=None):
             return True, _export_obj(model, objs, path, tol, ang)
         if ext == ".dxf":
             return True, _export_dxf(model, objs, path, tol)
-        return True, _export_2d(model, objs, path)
+        return True, _export_2d(model, objs, path, hairline=hairline)
     except ValueError as e:
         return False, str(e)
     except Exception as e:  # noqa: BLE001
@@ -385,6 +387,8 @@ class ExportCmd(commands.Command):
                     help="export mesh tolerance (0 = the document's)"),
         opts.Option("Angle", opts.VALUE, default=DEFAULT_MESH_ANGLE_DEG,
                     value_kind="number", help="export mesh angle, degrees"),
+        opts.Option("Hairline", opts.TOGGLE, default=False,
+                    help="Write every CDR outline as CorelDRAW Hairline (0.003 inch)."),
     )
     records_undo = False
     variable_points = False
@@ -417,7 +421,8 @@ class ExportCmd(commands.Command):
                         "file name (" + " ".join(FORMATS) + ")."), False
         ok, msg = export_objects(model, objs, target,
                                  tolerance=self.opt.get("Tolerance") or None,
-                                 angle_deg=self.opt.get("Angle") or None)
+                                 angle_deg=self.opt.get("Angle") or None,
+                                 hairline=bool(self.opt.get("Hairline")))
         return msg, True
 
 

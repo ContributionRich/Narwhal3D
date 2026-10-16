@@ -65,11 +65,8 @@ FORBIDDEN_EXACT = {
     "POLICY.md",
     "coco" + "cad.sh",
     "rhi" + "no" + "alt.sh",
-    "narwhal3d/cdr_reader.py",
-    "narwhal3d/cdr_writer.py",
     "narwhal3d/kernel/brep_writer.cpp",
     "launch/build_brep_writer.sh",
-    "spike/test_cdr.py",
     "spike/ui_report.py",
 }
 FORBIDDEN_PREFIXES = (
@@ -301,6 +298,9 @@ def self_check() -> None:
         b"    pass\nROOT_GATE = \"--require-root-commit\"\n",
     )
     safe["narwhal3d/icons/narwhal-box.png"] = ("100644", b"\x89PNG\r\n\x1a\n\0")
+    safe["narwhal3d/cdr_reader.py"] = ("100644", b"def read_cdr(path):\n    return path\n")
+    safe["narwhal3d/cdr_writer.py"] = ("100644", b"def write_cdr(path):\n    return path\n")
+    safe["spike/test_cdr.py"] = ("100644", b"print('public CDR test')\n")
     safe["dependency-name.txt"] = ("100644", b"rhi" + b"no3dm is required\n")
     safe["COMPATIBILITY.md"] = (
         "100644", b"Target: Rhi" + b"noceros 3D\nhttps://www.rhi" + b"no3d.com/\n")

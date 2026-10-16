@@ -91,6 +91,10 @@ class PrintCmd(commands.Command):
         opts.Option("Color", opts.ENUM, default="PrintColor",
                     choices=("PrintColor", "DisplayColor", "BlackWhite"),
                     help="Print colour (layer/object), display colour, or black."),
+        opts.Option("Width", opts.ENUM, default=f"{print2d.DEFAULT_WIDTH_MM:.2f}",
+                    choices=("Hairline",) + tuple(
+                        f"{value:.2f}" for value in print2d.PRINT_WIDTHS_MM),
+                    help="Default line width in mm, or CorelDRAW Hairline (0.003 inch)."),
     )
 
 
@@ -141,10 +145,14 @@ class PrintCmd(commands.Command):
             return f"Scale: {e}", True
         if ext == ".cdr" and scale == "Fit":
             scale = 1.0
+        width_choice = self.opt.get("Width") or f"{print2d.DEFAULT_WIDTH_MM:.2f}"
+        default_width = (print2d.HAIRLINE_MM if width_choice == "Hairline"
+                         else float(width_choice))
         setup = print2d.PageSetup(size=self.opt["Size"],
                                   orientation=self.opt["Orientation"],
                                   area=self.opt["View"], scale=scale,
-                                  color=self.opt["Color"])
+                                  color=self.opt["Color"],
+                                  default_width_mm=default_width)
         try:
             view = _view()
             page = print2d.build_page(ctx.model, view, setup)
@@ -158,6 +166,8 @@ class PrintCmd(commands.Command):
         msg = (f"Printed {len(page.strokes)} curve(s) to {path} -- {setup.size} "
                f"{setup.orientation}, {setup.area}, {_describe_scale(scale)}"
                + (f" (= {page.scale:g} mm per unit)" if scale == "Fit" else ""))
+        if ext == ".cdr":
+            msg += ", native CorelDRAW v15 (2015/X7 compatible)"
         if page.notes:
             msg += ". NOTE: " + "; ".join(page.notes)
         return msg, True

@@ -28,10 +28,10 @@ Formats, and how exact each is:
   user units are ``width / viewBox width`` when both are present, else CSS px (1/96 in).
   OURS: SVG's y runs DOWN; it is flipped about the page so the drawing reads the right
   way up in Top, with the page's lower-left corner at the origin.
-* **.cdr** -- decoded locally by TraceDraw to its structured ``.tdraw`` JSON, preserving
-  pages, layers, affine transforms, and every disconnected path. Paths become real degree-3
-  NURBS curves without using TraceDraw's lossy SVG exporter. CDR versions 7 through 21 are
-  accepted; unsupported content is reported.
+* **.cdr** -- version 15 curves/layers/outlines are decoded directly by Narwhal's checked
+  Rust reader. Other generations and explicitly unsupported v15 object structures use the
+  pinned local TraceDraw structured-data fallback; malformed v15 files are refused rather
+  than silently passed to another parser. Paths become real degree-3 NURBS curves.
 * **.pdf / .ai** -- converted to SVG painting paths, then through the same exact
   cubic-to-NURBS route above. Modern PDF-compatible AI uses the PDF route; legacy
   PostScript AI is normalized by Ghostscript with `-dSAFER`. Text is omitted unless
@@ -88,6 +88,8 @@ class Imported:
         self.items: list[tuple] = []
         self.notes: list[str] = []
         self.layers: dict[str, tuple[int, int, int]] = {}  # name -> (r, g, b)
+        # Per-geometry plot width in millimetres; CDR uses 0.0762 for Hairline.
+        self.plot_widths: dict[int, float] = {}
         # (width, height) in model units, used only for PDF page stacking.
         self.page_size: tuple[float, float] | None = None
 
@@ -552,16 +554,37 @@ def _tdraw_color(value):
     return tuple(round(max(0.0, min(1.0, component)) * 255.0) for component in rgb)
 
 
+def _tdraw_outline(shape, styles):
+    stroke = shape.get("stroke")
+    style = styles.get(shape.get("style"))
+    if isinstance(style, dict):
+        parts = style.get("parts") if isinstance(style.get("parts"), dict) else {}
+        if parts.get("outline", True):
+            stroke = style.get("stroke")
+    return stroke if isinstance(stroke, dict) else None
+
+
+def _tdraw_width(shape, styles):
+    stroke = _tdraw_outline(shape, styles)
+    if stroke is None:
+        return None
+    if stroke.get("hairline") is True:
+        return 0.0762
+    try:
+        width = float(stroke.get("width"))
+    except (TypeError, ValueError):
+        return None
+    return width if math.isfinite(width) and width > 0.0 else None
+
+
 def _tdraw_paint(shape, styles):
     """Representative object colour: outline first, then a solid fill."""
-    stroke = shape.get("stroke")
+    stroke = _tdraw_outline(shape, styles)
     fill = shape.get("fill")
     style_id = shape.get("style")
     style = styles.get(style_id)
     if isinstance(style, dict):
         parts = style.get("parts") if isinstance(style.get("parts"), dict) else {}
-        if parts.get("outline", True):
-            stroke = style.get("stroke")
         if parts.get("fill", True):
             fill = style.get("fill")
     if isinstance(stroke, dict):
@@ -765,13 +788,26 @@ def _read_tdraw(path, model):
         base_name = str(shape.get("name") or {
             "path": "Curve", "ellipse": "Ellipse", "rect": "Rectangle",
             "polygon": "Polygon"}.get(shape_type, "Object"))
-        if layer not in out.layers:
-            out.layers[layer] = _tdraw_paint(shape, styles)
+        item_layer = layer
+        width = None
+        if shape_type in ("path", "ellipse", "rect", "polygon"):
+            color = _tdraw_paint(shape, styles)
+            prior = out.layers.get(item_layer)
+            if prior is not None and prior != color:
+                item_layer = f"{layer} [#{color[0]:02X}{color[1]:02X}{color[2]:02X}]"
+            out.layers[item_layer] = color
+            width = _tdraw_width(shape, styles)
+
+        def add_curve(curve):
+            out.items.append((curve, base_name, item_layer))
+            if width is not None:
+                out.plot_widths[id(curve)] = width
+
         if shape_type == "path":
             subpaths, bad = _tdraw_subpaths(kind.get("path"))
             invalid_commands += bad
             for beziers, closed in subpaths:
-                out.items.append((_bezier_curve(beziers, transform, closed), base_name, layer))
+                add_curve(_bezier_curve(beziers, transform, closed))
         elif shape_type == "ellipse":
             rect = kind.get("rect") if isinstance(kind.get("rect"), dict) else {}
             if kind.get("arc") is not None:
@@ -783,17 +819,17 @@ def _read_tdraw(path, model):
                 invalid_commands += 1
                 return
             if x0 != x1 and y0 != y1 and all(math.isfinite(v) for v in (x0, y0, x1, y1)):
-                out.items.append((_conic((x0 + x1) / 2.0, (y0 + y1) / 2.0,
-                                         abs(x1 - x0) / 2.0, abs(y1 - y0) / 2.0,
-                                         transform), base_name, layer))
+                add_curve(_conic((x0 + x1) / 2.0, (y0 + y1) / 2.0,
+                                 abs(x1 - x0) / 2.0, abs(y1 - y0) / 2.0,
+                                 transform))
         elif shape_type == "rect":
             curve, approximate = _tdraw_rect(kind, transform)
             if curve is not None:
-                out.items.append((curve, base_name, layer))
+                add_curve(curve)
                 rounded += int(approximate)
         elif shape_type == "polygon":
             for curve in _tdraw_polygon(kind, transform):
-                out.items.append((curve, base_name, layer))
+                add_curve(curve)
         elif shape_type == "group":
             for child in kind.get("children", []):
                 walk_shape(child, transform, layer, symbol_stack)
@@ -858,7 +894,7 @@ def _read_tdraw(path, model):
     return out
 
 
-def _read_cdr(path, model):
+def _read_cdr_tracedraw(path, model, reason):
     from . import tracedraw
 
     with tempfile.TemporaryDirectory(prefix="narwhal3d_cdr_import_") as directory:
@@ -867,8 +903,57 @@ def _read_cdr(path, model):
         except tracedraw.TraceDrawError as exc:
             raise ValueError(str(exc)) from exc
         out = _read_tdraw(structured_path, model)
+        fallback = f"Native v15 CDR subset unavailable ({reason}); used local TraceDraw"
+        out.notes.insert(0, fallback)
         out.notes.extend(note for note in notes if note not in out.notes)
         return out
+
+
+def _cdr_unsupported_reason(message):
+    lowered = message.lower()
+    markers = (
+        "supports version 15",
+        "unsupported non-curve object",
+        "needs one drawing page",
+        "contains no supported curve objects",
+    )
+    return message if any(marker in lowered for marker in markers) else None
+
+
+def _read_cdr(path, model):
+    from . import cdr_reader
+
+    try:
+        drawing = cdr_reader.read_cdr(path)
+    except cdr_reader.CDRReadError as exc:
+        unsupported = _cdr_unsupported_reason(str(exc))
+        if unsupported is not None:
+            return _read_cdr_tracedraw(path, model, unsupported)
+        raise ValueError(
+            f"malformed CorelDRAW file refused without converter fallback: {exc}") from exc
+
+    out = Imported()
+    scale = 1.0 / _units().UNIT_SCALE_MM[_model_unit(model)]
+    transform = (scale, 0.0, 0.0, scale, 0.0, 0.0)
+    layer_colors = {}
+    for obj in drawing.objects:
+        layer = obj.layer or "CorelDRAW Layer 1"
+        color = tuple(obj.rgb)
+        prior = layer_colors.get(layer)
+        if prior is not None and prior != color:
+            layer = f"{layer} [#{color[0]:02X}{color[1]:02X}{color[2]:02X}]"
+        layer_colors[layer] = color
+        out.layers[layer] = color
+        for path_data in obj.paths:
+            curve = _bezier_curve(path_data.beziers, transform, path_data.closed)
+            out.items.append((curve, "Curve", layer))
+            if obj.width_mm > 0.0:
+                out.plot_widths[id(curve)] = obj.width_mm
+    out.page_size = (drawing.width_mm * scale, drawing.height_mm * scale)
+    out.notes.append(
+        "CorelDRAW v15 decoded directly without an external converter "
+        "(checked Rust reader with bounded Python compatibility fallback)")
+    return out
 
 
 # --------------------------------------------------------------------------- 3DM
@@ -1022,6 +1107,23 @@ def _summary(path, got, n):
     return msg
 
 
+def _apply_plot_width(model, object_id, width_mm):
+    """Attach an imported object plot width while preserving its generated identity."""
+    if width_mm is None or not math.isfinite(width_mm) or width_mm <= 0.0:
+        return
+    key = str(object_id)
+    for file_object in model.file.Objects:
+        if str(file_object.Attributes.Id) != key:
+            continue
+        geometry = file_object.Geometry
+        attributes = file_object.Attributes
+        attributes.PlotWeightSource = r3.ObjectPlotWeightSource.PlotWeightFromObject
+        attributes.PlotWeight = float(width_mm)
+        model.file.Objects.Delete(key)
+        model.file.Objects.Add(geometry, attributes)
+        return
+
+
 def import_into(ctx, path):
     """Add a file's objects to `ctx`'s model through `ctx.add_geometry`. ``(ok, msg)``."""
     try:
@@ -1038,6 +1140,8 @@ def import_into(ctx, path):
         li = layer_cache.index(layer, got.layers.get(layer, (0, 0, 0))) \
             if layer else None
         added = ctx.add_geometry(geom, base, li)
+        if isinstance(added, (tuple, list)) and added:
+            _apply_plot_width(ctx.model, added[0], got.plot_widths.get(id(geom)))
         if isinstance(added, (tuple, list)) and len(added) >= 2 and added[1]:
             added_names.append(str(added[1]))
     # The Layers panel reads AppState.layers, a live mirror of model.file.Layers.
@@ -1072,7 +1176,9 @@ def open_foreign(path):
     layer_cache = _LayerIndexCache(model)
     for i, (geom, base, layer) in enumerate(got.items, start=1):
         li = layer_cache.index(layer, got.layers.get(layer, (0, 0, 0))) if layer else 0
-        model.add_object(geom, f"{base}{i:02d}", li)
+        added = model.add_object(geom, f"{base}{i:02d}", li)
+        if isinstance(added, (tuple, list)) and added:
+            _apply_plot_width(model, added[0], got.plot_widths.get(id(geom)))
     return model, _summary(path, got, len(got.items))
 
 

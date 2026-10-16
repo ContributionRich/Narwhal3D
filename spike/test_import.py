@@ -11,6 +11,7 @@ import subprocess
 import sys
 import tempfile
 import types
+import zipfile
 
 import rhino3dm as r3
 
@@ -43,6 +44,9 @@ dxf_writer = _load("narwhal3d.dxf_writer", "narwhal3d/dxf_writer.py")
 obj_writer = _load("narwhal3d.obj_writer", "narwhal3d/obj_writer.py")
 stl_writer = _load("narwhal3d.stl_writer", "narwhal3d/stl_writer.py")
 vector_export = _load("narwhal3d.vector_export", "narwhal3d/vector_export.py")
+_load("narwhal3d.native_cdr", "narwhal3d/native_cdr.py")
+_load("narwhal3d.cdr_reader", "narwhal3d/cdr_reader.py")
+cdr_writer = _load("narwhal3d.cdr_writer", "narwhal3d/cdr_writer.py")
 from narwhal3d import kernel  # noqa: E402
 from narwhal3d.kernel import occt_backend as ob, onbrep  # noqa: E402
 
@@ -89,9 +93,9 @@ class Ctx:
 
     def add_geometry(self, geom, base_name, layer_index=None):
         nm = f"{base_name}_{len(self.added) + 1}"
-        self.model.add_object(geom, nm, layer_index)
+        object_id, _attributes = self.model.add_object(geom, nm, layer_index)
         self.added.append((nm, geom, layer_index))
-        return nm, nm
+        return object_id, nm
 
     def note_change(self, label=None):
         pass
@@ -394,10 +398,80 @@ check(layer_names == ["Cut", "Score", "Vector #0000FF"]
       and tuple(layered_model.file.Layers[2].Color)[:3] == (0, 255, 0),
       f"SVG Open inserts curves on their source layers ({layer_names})")
 
-cdr_source = os.path.join(TMP, "drawing.cdr")
-open(cdr_source, "wb").write(b"CDR fixture dispatched through mocked TraceDraw")
+native_cdr_source = os.path.join(TMP, "native-v15.cdr")
+native_strokes = [
+    vector_export.Stroke(
+        beziers=(((10.0, 20.0), (20.0, 20.0), (30.0, 20.0), (40.0, 20.0)),),
+        rgb=(1.0, 0.0, 0.0), width_mm=0.0762, layer="Cut"),
+    vector_export.Stroke(
+        beziers=(((50.0, 10.0), (55.0, 10.0), (60.0, 10.0), (65.0, 10.0)),),
+        rgb=(0.0, 0.0, 1.0), width_mm=0.25, layer="Outline"),
+]
+cdr_writer.write_cdr(native_cdr_source, native_strokes, 100.0, 80.0, "Native import")
 cdr_calls = []
 original_tdraw = td.cdr_to_tdraw
+
+
+def forbidden_cdr_tdraw(*args, **kwargs):
+    cdr_calls.append((args, kwargs))
+    raise AssertionError("native v15 import called TraceDraw")
+
+
+td.cdr_to_tdraw = forbidden_cdr_tdraw
+try:
+    native_cdr_got = ic.read_foreign(native_cdr_source, doc("Inches"))
+finally:
+    td.cdr_to_tdraw = original_tdraw
+native_layers = [layer for _geom, _base, layer in native_cdr_got.items]
+native_first = native_cdr_got.items[0][0]
+check(not cdr_calls and native_layers == ["Cut", "Outline"]
+      and native_cdr_got.layers == {"Cut": (255, 0, 0), "Outline": (0, 0, 255)}
+      and abs(native_first.PointAtStart.X - 10.0 / 25.4) < 1e-12
+      and sorted(round(value, 4) for value in native_cdr_got.plot_widths.values())
+          == [0.0762, 0.25]
+      and any("without an external converter" in note for note in native_cdr_got.notes),
+      "CDR v15 Import uses the native reader without TraceDraw and preserves layers/colours/widths")
+native_opened, native_open_message = ic.open_foreign(native_cdr_source)
+native_open_widths = sorted(round(float(obj.Attributes.PlotWeight), 4)
+                            for obj in native_opened.file.Objects)
+check(native_open_widths == [0.0762, 0.25]
+      and "CorelDRAW v15 decoded directly" in native_open_message,
+      "CDR v15 Open applies ordinary widths and exact Hairline to document attributes")
+native_import_model = doc()
+native_import_ctx = Ctx(native_import_model)
+native_import_ok, native_import_message = ic.import_into(native_import_ctx, native_cdr_source)
+native_import_widths = sorted(round(float(obj.Attributes.PlotWeight), 4)
+                              for obj in native_import_model.file.Objects)
+check(native_import_ok and native_import_widths == [0.0762, 0.25],
+      "CDR v15 Import applies ordinary widths and exact Hairline through add_geometry UUIDs")
+
+malformed_cdr = os.path.join(TMP, "malformed.cdr")
+open(malformed_cdr, "wb").write(b"not a CDR package")
+td.cdr_to_tdraw = forbidden_cdr_tdraw
+try:
+    try:
+        ic.read_foreign(malformed_cdr, doc())
+    except ValueError as exc:
+        malformed_message = str(exc)
+    else:
+        malformed_message = ""
+finally:
+    td.cdr_to_tdraw = original_tdraw
+check("malformed CorelDRAW file refused" in malformed_message and not cdr_calls,
+      "malformed CDR is refused without silently switching to TraceDraw")
+check(ic._cdr_unsupported_reason("the CDR contains an unsupported non-curve object")
+      and ic._cdr_unsupported_reason("invalid CDR RIFF size") is None,
+      "unsupported-v15 structure is classified for explicit fallback without admitting malformed RIFF")
+
+cdr_source = os.path.join(TMP, "unsupported-v16.cdr")
+with zipfile.ZipFile(native_cdr_source) as source_archive, zipfile.ZipFile(cdr_source, "w") as out:
+    for info in source_archive.infolist():
+        data = source_archive.read(info.filename)
+        if info.filename == "content/riffData.cdr":
+            data = bytearray(data)
+            data[20:22] = (1600).to_bytes(2, "little")
+            data = bytes(data)
+        out.writestr(info, data)
 
 
 def fake_cdr_tdraw(path, directory):
@@ -431,10 +505,16 @@ def fake_cdr_tdraw(path, directory):
         "fill": {"fill": "none"},
         "stroke": {"color": {"model": "rgb", "r": 1, "g": 0, "b": 0},
                    "width": 0.1}, "visible": True, "opacity": 1.0}
+    color_conflict = {"id": 30, "kind": {"type": "path", "path": [
+        {"MoveTo": {"x": 2, "y": 15}}, {"LineTo": {"x": 8, "y": 15}}
+    ], "closed": False}, "transform": [1, 0, 0, 1, 0, 0],
+        "fill": {"fill": "none"},
+        "stroke": {"color": {"model": "rgb", "r": 1, "g": 0, "b": 0},
+                   "width": 0.2}, "visible": True, "opacity": 1.0}
     fixture = {"title": "Structured CDR fixture", "pages": [{"id": 1,
         "name": "Page 1", "size": {"width": 100.0, "height": 80.0}, "layers": [
             {"id": 2, "name": "Layer 2", "visible": True, "printable": True,
-             "locked": False, "shapes": black_shapes},
+             "locked": False, "shapes": black_shapes + [color_conflict]},
             {"id": 3, "name": "Layer 1", "visible": True, "printable": True,
              "locked": False, "shapes": [compound]}
         ]}]}
@@ -451,12 +531,19 @@ finally:
     td.cdr_to_tdraw = original_tdraw
 cdr_layers = [layer for _geom, _base, layer in cdr_got.items]
 first_curve = next((geom for geom, _base, layer in cdr_got.items if layer == "Layer 1"), None)
-check(cdr_calls == [cdr_source] and len(cdr_got.items) == 7
-      and cdr_layers.count("Layer 2") == 5 and cdr_layers.count("Layer 1") == 2
-      and cdr_got.layers == {"Layer 2": (0, 0, 0), "Layer 1": (255, 0, 0)}
-      and any("vector fill" in note for note in cdr_got.notes),
-      "CDR Import/Open uses structured TraceDraw data, retaining five secondary paths, "
-      "both compound subpaths, source layers, colours, and warnings")
+check(cdr_calls == [cdr_source] and len(cdr_got.items) == 8
+      and cdr_layers.count("Layer 2") == 5
+      and cdr_layers.count("Layer 2 [#FF0000]") == 1
+      and cdr_layers.count("Layer 1") == 2
+      and cdr_got.layers == {"Layer 2": (0, 0, 0),
+                             "Layer 2 [#FF0000]": (255, 0, 0),
+                             "Layer 1": (255, 0, 0)}
+      and sorted(round(value, 4) for value in cdr_got.plot_widths.values())
+          == [0.1, 0.1, 0.2]
+      and any("vector fill" in note for note in cdr_got.notes)
+      and any("used local TraceDraw" in note for note in cdr_got.notes),
+      "unsupported CDR uses explicit structured TraceDraw fallback, retaining five secondary "
+      "paths, both compound subpaths, source layers, colours, and warnings")
 check(first_curve is not None
       and math.dist((first_curve.PointAtStart.X, first_curve.PointAtStart.Y),
                     (10.0 / 25.4, 20.0 / 25.4)) < 1e-12

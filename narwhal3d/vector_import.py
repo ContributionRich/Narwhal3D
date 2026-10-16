@@ -14,7 +14,6 @@ from __future__ import annotations
 import os
 import re
 
-import subprocess
 import tempfile
 from collections.abc import Generator, Sequence
 from contextlib import contextmanager
@@ -43,13 +42,13 @@ def _need(program: str, purpose: str) -> str:
 
 
 def _run(argv: Sequence[str], purpose: str) -> str:
-    try:
-        done = subprocess.run(
-            argv, check=False, capture_output=True, text=True, timeout=120)
-    except subprocess.TimeoutExpired as exc:
-        raise VectorImportError(f"{purpose} timed out after 120 seconds") from exc
-    except OSError as exc:
-        raise VectorImportError(f"{purpose} could not start: {exc}") from exc
+    from . import converter_process
+
+    done = converter_process.run(argv, timeout=120, max_output=8192)
+    if done.timed_out:
+        raise VectorImportError(f"{purpose} timed out after 120 seconds")
+    if done.error:
+        raise VectorImportError(f"{purpose} could not start: {done.error}")
     if done.returncode:
         detail = (done.stderr or done.stdout or "unknown converter error").strip()
         if len(detail) > 600:

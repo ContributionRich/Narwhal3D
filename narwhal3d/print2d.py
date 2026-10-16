@@ -33,8 +33,6 @@ Not built, and reported by `build_page` rather than skipped silently:
 from __future__ import annotations
 
 import math
-import os
-import tempfile
 from dataclasses import dataclass, field
 
 import rhino3dm as r3
@@ -60,6 +58,8 @@ PRINT_WIDTHS_MM = (0.13, 0.18, 0.25, 0.30, 0.35, 0.50, 0.60, 0.70, 0.80, 0.90,
                    1.00, 1.20, 1.40, 2.00)
 #: The dialog uses the first standard drafting width by default.
 DEFAULT_WIDTH_MM = PRINT_WIDTHS_MM[0]
+#: CorelDRAW's native Hairline is exactly 0.003 inch.
+HAIRLINE_MM = 0.0762
 
 PAGE_TOL_MM = 0.001
 
@@ -460,8 +460,8 @@ def build_page(model, view, setup, objects=None):
     return page
 
 
-def write(path, page, title=""):
-    """Write `page` by extension (.pdf / .ai / .svg / genuine CDR v17)."""
+def write(path, page, title="", hairline=False):
+    """Write `page` by extension (.pdf / .ai / .svg / genuine native CDR v15)."""
     low = path.lower()
     if low.endswith(".pdf"):
         return vx.write_pdf(path, page.strokes, page.width_mm, page.height_mm, title)
@@ -470,10 +470,8 @@ def write(path, page, title=""):
     if low.endswith(".svg"):
         return vx.write_svg(path, page.strokes, page.width_mm, page.height_mm)
     if low.endswith(".cdr"):
-        from . import tracedraw
+        from . import cdr_writer
 
-        with tempfile.TemporaryDirectory(prefix="narwhal3d_cdr_export_") as directory:
-            svg = os.path.join(directory, "page.svg")
-            vx.write_svg(svg, page.strokes, page.width_mm, page.height_mm)
-            return tracedraw.svg_to_cdr(svg, path, tracedraw.DEFAULT_CDR_VERSION)
+        return cdr_writer.write_cdr(
+            path, page.strokes, page.width_mm, page.height_mm, title, hairline=hairline)
     raise ValueError(f"{path!r}: print/export writes .pdf, .ai, .svg or .cdr")

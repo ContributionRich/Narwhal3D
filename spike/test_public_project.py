@@ -110,6 +110,14 @@ check({"native/welcome/.gitignore", "native/welcome/Cargo.lock",
        "native/welcome/src/native_stacking.rs", "spike/test_welcome.py"} <= public
       and not any(path.startswith("native/welcome/target/") for path in public),
       "the public allowlist includes exact native welcome sources but no build tree")
+check({"native/cdr_core/Cargo.toml", "native/cdr_core/src/lib.rs",
+       "native/cdr_core/src/reader.rs", "native/converter_supervisor/Cargo.toml",
+       "native/converter_supervisor/src/main.rs", "narwhal3d/cdr_reader.py",
+       "narwhal3d/cdr_writer.py", "spike/test_cdr.py", "spike/test_native_cdr.py",
+       "spike/test_converter_supervisor.py", "scripts/stage_fedora_inkscape.py"} <= public
+      and not any(path.startswith(("native/cdr_core/target/",
+                                   "native/converter_supervisor/target/")) for path in public),
+      "the public allowlist includes native CDR/supervisor source and no build trees")
 check("POLICY.md" not in public and not any(path.startswith("artifacts/") for path in public),
       "instruction inputs and temporary planning artifacts stay outside public source")
 

@@ -83,6 +83,10 @@ PURE_SUITES=(
     spike/test_stl_writer.py
     spike/test_vector_export.py
     spike/test_tracedraw.py
+    spike/test_cdr.py
+    spike/test_native_cdr.py
+    spike/test_converter_supervisor.py
+    spike/test_runtime_tools.py
     spike/test_windows_collector.py
     spike/test_windows_release.py
     spike/test_release_policy.py

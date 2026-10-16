@@ -10,11 +10,12 @@ import subprocess
 import sys
 import tempfile
 import traceback
+import zipfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
-from narwhal3d import filedialog, print2d, print_commands, tracedraw  # noqa: E402
+from narwhal3d import cdr_reader, filedialog, print2d, print_commands, tracedraw  # noqa: E402
 from narwhal3d.model import NarwhalModel  # noqa: E402
 from narwhal3d.state import app_state  # noqa: E402
 
@@ -122,22 +123,35 @@ def run():
     cdr_calls = []
     original_cdr = tracedraw.svg_to_cdr
 
-    def fake_cdr(source, target, version=17):
-        cdr_calls.append((os.path.isfile(source), version))
-        with open(target, "wb") as stream:
-            stream.write(b"CDR17")
-        return 5
+    def forbidden_cdr(*args, **kwargs):
+        cdr_calls.append((args, kwargs))
+        raise AssertionError("native v15 print called TraceDraw")
 
-    tracedraw.svg_to_cdr = fake_cdr
+    tracedraw.svg_to_cdr = forbidden_cdr
     try:
         p = os.path.join(TMP, "print.cdr")
         app_state.feed_line("Print")
         app_state.feed_line(p)
     finally:
         tracedraw.svg_to_cdr = original_cdr
-    check(os.path.exists(p) and open(p, "rb").read() == b"CDR17"
-          and cdr_calls == [(True, 17)] and "1:1" in last(),
-          "Print to .cdr defaults to 1:1 and writes genuine CDR v17 through TraceDraw",
+    version = 0
+    if os.path.exists(p):
+        with zipfile.ZipFile(p) as archive:
+            riff = archive.read("content/riffData.cdr")
+            version = int.from_bytes(riff[20:22], "little")
+    check(os.path.exists(p) and version == 1500 and not cdr_calls
+          and "1:1" in last() and "native CorelDRAW v15" in last(),
+          "Print to .cdr defaults to 1:1 native v15 without TraceDraw",
+          f"{last()!r}")
+    hairline_path = os.path.join(TMP, "print-hairline.cdr")
+    for token in ("Print", "Width", "Hairline", hairline_path):
+        app_state.feed_line(token)
+    hairline_drawing = cdr_reader.read_cdr(hairline_path) \
+        if os.path.exists(hairline_path) else None
+    check(hairline_drawing is not None
+          and all(obj.hairline and abs(obj.width_mm - 0.0762) < 1e-12
+                  for obj in hairline_drawing.objects),
+          "Print Width=Hairline writes genuine 0.003-inch CorelDRAW outlines",
           f"{last()!r}")
 
     # 4. a format Print does not write: refused by name

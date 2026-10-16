@@ -1,17 +1,16 @@
-"""Local TraceDraw CLI boundary for genuine CorelDRAW files.
+"""Pinned local TraceDraw fallback for unsupported CorelDRAW generations/features.
 
 TraceDraw is an independent clean-room project (MIT or Apache-2.0). Narwhal uses only
-its command-line converter: no service, upload, GUI, or raster fallback. CDR input becomes
-TraceDraw's structured ``.tdraw`` JSON so layers and objects cannot be lost by an
-intermediate SVG exporter. Vector output becomes a genuine CDR v17 file, which targets
-CorelDRAW 2015/X7 and is readable by CorelDRAW 2016/X8.
+its command-line converter: no service, upload, GUI, or raster fallback. Native v15
+Import/Open and native v15 Export/Print do not require it. Unsupported source generations
+or structures can become structured ``.tdraw`` JSON without the lossy SVG importer;
+``svg_to_cdr`` remains available for explicit non-default version conversion.
 """
 from __future__ import annotations
 
 import json
 import os
 import re
-import subprocess
 from collections.abc import Mapping, Sequence
 
 
@@ -34,23 +33,22 @@ def executable() -> str:
         )
     except RuntimeToolError as exc:
         raise TraceDrawError(
-            "CorelDRAW files need tracedraw-cli; install the bundled converter runtime "
-            f"or add tracedraw-cli to PATH ({exc})"
+            "this unsupported CorelDRAW generation/feature needs tracedraw-cli; "
+            "install the bundled converter runtime or add tracedraw-cli to PATH "
+            f"({exc})"
         ) from exc
 
 
 def _run(argv: Sequence[str], purpose: str,
-         extra_env: Mapping[str, str] | None = None) -> subprocess.CompletedProcess[str]:
-    env = os.environ.copy()
-    if extra_env:
-        env.update({str(key): str(value) for key, value in extra_env.items()})
-    try:
-        done = subprocess.run(
-            list(argv), check=False, capture_output=True, text=True, timeout=180, env=env)
-    except subprocess.TimeoutExpired as exc:
-        raise TraceDrawError(f"{purpose} timed out after 180 seconds") from exc
-    except OSError as exc:
-        raise TraceDrawError(f"{purpose} could not start: {exc}") from exc
+         extra_env: Mapping[str, str] | None = None):
+    from . import converter_process
+
+    done = converter_process.run(
+        list(argv), timeout=180, extra_env=extra_env, max_output=8192)
+    if done.timed_out:
+        raise TraceDrawError(f"{purpose} timed out after 180 seconds")
+    if done.error:
+        raise TraceDrawError(f"{purpose} could not start: {done.error}")
     if done.returncode:
         detail = (done.stderr or done.stdout or "unknown TraceDraw error").strip()
         if len(detail) > 800:
@@ -59,7 +57,7 @@ def _run(argv: Sequence[str], purpose: str,
     return done
 
 
-def _warnings(done: subprocess.CompletedProcess[str]) -> list[str]:
+def _warnings(done) -> list[str]:
     lines = (done.stdout + "\n" + done.stderr).splitlines()
     return [line.strip() for line in lines if "warning:" in line.lower()]
 

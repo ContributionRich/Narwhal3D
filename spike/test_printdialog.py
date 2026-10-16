@@ -73,11 +73,11 @@ def _():
     assert by_key.extension() == ".cdr" and by_key.scale == "1:1"
 
 
-@check("the width list contains standard numeric drafting widths only")
+@check("the width list exposes genuine CorelDRAW Hairline and standard drafting widths")
 def _():
-    assert pd.WIDTHS[0] == "0.13" and pd.WIDTHS[-1] == "2.00"
-    st = pd.DialogState(width="0.13")
-    assert st.width_mm() == 0.13, st.width_mm()
+    assert pd.WIDTHS[:2] == ("Hairline", "0.13") and pd.WIDTHS[-1] == "2.00"
+    st = pd.DialogState(width="Hairline")
+    assert st.width_mm() == 0.0762 and st.shown("width") == "Hairline", st.width_mm()
 
 
 @check("the settings become the PageSetup the PDF writer uses")

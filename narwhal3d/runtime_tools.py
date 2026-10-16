@@ -11,6 +11,8 @@ then the app-local bundle, then the development bundle, and finally PATH unless
 """
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import platform as _platform
 import shutil
@@ -65,6 +67,68 @@ def _is_executable_file(path: Path) -> bool:
     return path.is_file() and os.access(path, os.X_OK)
 
 
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _canonical(tool: str) -> str:
+    key = tool.lower()
+    if key in ("libreoffice", "soffice"):
+        return "soffice"
+    if key in ("ghostscript", "gs"):
+        return "gs"
+    return key
+
+
+def _strict_verified(base: Path, key: str, tool: str, candidate: Path) -> bool:
+    """True only when generated inventory still matches immutable source metadata."""
+    inventory_path = base / key / "inventory.json"
+    manifest_path = base / "manifest.json"
+    canonical = _canonical(tool)
+    try:
+        inventory = json.loads(inventory_path.read_text(encoding="utf-8"))
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        record = inventory["tools"][canonical]
+        details = manifest["tools"][canonical]
+    except (OSError, KeyError, TypeError, json.JSONDecodeError):
+        return False
+    if not isinstance(record, dict) or not isinstance(details, dict):
+        return False
+    expected_executable = details.get("executable_sha256")
+    if not isinstance(expected_executable, str) or len(expected_executable) != 64:
+        return False
+    try:
+        executable_digest = _sha256(candidate)
+    except OSError:
+        return False
+    valid = (inventory.get("schema") == 1
+             and manifest.get("schema") == 1
+             and inventory.get("platform") == key
+             and record.get("verified") is True
+             and record.get("executable") == candidate.name
+             and record.get("executable_sha256") == expected_executable
+             and executable_digest == expected_executable)
+    expected_archive = details.get("sha256")
+    if expected_archive:
+        artifact = record.get("artifact")
+        if not isinstance(artifact, str) or Path(artifact).name != artifact:
+            return False
+        archive = candidate.parent / artifact
+        try:
+            archive_digest = _sha256(archive)
+        except OSError:
+            return False
+        valid = (valid and record.get("sha256") == expected_archive
+                 and archive_digest == expected_archive
+                 and record.get("revision") == details.get("revision")
+                 and record.get("version") == details.get("version"))
+    return valid
+
+
 def _roots(app_root: Path, env: dict[str, str], development_root: Path | None) -> Iterable[Path]:
     override = env.get("NARWHAL3D_RUNTIME_DIR")
     if override:
@@ -104,13 +168,15 @@ def resolve_tool(
             candidate = bin_dir / name
             attempted.append(str(candidate))
             if _is_executable_file(candidate):
-                return str(candidate)
+                if not strict_bundled or _strict_verified(base, key, tool, candidate):
+                    return str(candidate)
             # Windows bundles commonly retain .exe while the logical name does not.
             if platform_name(platform).startswith("windows"):
                 exe = candidate.with_suffix(".exe")
                 attempted.append(str(exe))
                 if _is_executable_file(exe):
-                    return str(exe)
+                    if not strict_bundled or _strict_verified(base, key, tool, exe):
+                        return str(exe)
     if not strict_bundled:
         path_value = environ.get("PATH")
         for name in _names(tool):

@@ -42,8 +42,8 @@ License: MIT for the Type-2 runtime, with its statically linked component notice
 --------------------------------------------------------
 
 - The optional openNURBS exact-Brep writer helper is not bundled while its redistribution requirements are under review. Narwhal reports the resulting exact `.3dm` limitation and directs users to STEP for exact solid interchange.
-- CorelDRAW conversion support uses the independently developed TraceDraw CLI when it is installed locally. TraceDraw is dual-licensed MIT or Apache-2.0, but no TraceDraw executable is included in the 0.4.0 AppImage because an immutable/reproducible platform build has not yet been locked. See https://github.com/igtoth/tracedraw.
-- Inkscape, Poppler, Ghostscript, LibreOffice, and TraceDraw are not included in the 0.4.0 converter pack. Features requiring them report the missing optional dependency; they do not claim those tools are bundled.
+- CorelDRAW generations/features outside Narwhal's built-in v15 subset can use the independently developed TraceDraw CLI fallback, dual-licensed MIT or Apache-2.0. Development runtime staging pins nightly revision `821ba1545e3d3f75843fe7d3f912214800929821` and verifies both its archive and extracted executable. See https://github.com/igtoth/tracedraw. Native v15 Import/Open/Export/Print do not require TraceDraw, and this staging does not retroactively add it to the existing 0.4.0 AppImage.
+- Inkscape, Poppler, Ghostscript, LibreOffice, and TraceDraw are not included in the published 0.4.0 converter pack. Features requiring them report the missing optional dependency; they do not claim those tools are bundled.
 
 Trademarks
 ----------
