@@ -47,6 +47,13 @@ else
     printf '\nSKIP: Rust selection-core runtime checks (no local artifact)\n'
 fi
 
+if command -v cargo >/dev/null 2>&1; then
+    run "Rust welcome window" cargo +1.95.0 test \
+        --manifest-path native/welcome/Cargo.toml --locked --offline
+else
+    printf '\nSKIP: Rust welcome-window checks (cargo is unavailable)\n'
+fi
+
 PURE_SUITES=(
     spike/test_geometry.py
     spike/test_kernel.py
@@ -58,6 +65,7 @@ PURE_SUITES=(
     spike/test_boolean_extrusion.py
     spike/branding_test.py
     spike/test_deferred_present_patch.py
+    spike/test_welcome.py
     spike/test_toolbars.py
     spike/test_menubar.py
     spike/test_menubar_resource.py

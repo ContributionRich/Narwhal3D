@@ -27,6 +27,60 @@ def _presentation_watchdog():
     return None
 
 
+_WELCOME_STATE = {"tries": 0, "lines": None}
+
+
+def _welcome_request(state=None):
+    """Consume one atomic request from the native welcome window.
+
+    The welcome paints before Blender's layout is ready, so requests that need application
+    state stay in this timer closure after their atomic file has been removed. This bridge must
+    remain Python because only Blender's process can feed its UI command state machine.
+    """
+    if state is None:
+        state = _WELCOME_STATE
+    path = os.environ.get("NARWHAL3D_WELCOME_REQUEST")
+    if not path:
+        return None
+    # A later click replaces an earlier pending choice until the UI is ready. The request
+    # file is atomic, so reading it first on every timer tick makes the user's final choice win.
+    if os.path.isfile(path):
+        claimed = path + ".reading"
+        try:
+            # Claim by rename before opening. A newer atomic publication can then occupy the
+            # original pathname and survive for the next tick instead of being unlinked here.
+            os.replace(path, claimed)
+            with open(claimed, encoding="utf-8") as stream:
+                state["lines"] = stream.read().splitlines()
+            state["tries"] = 0
+        except OSError as exc:
+            print(f"[narwhal3d] welcome request failed: {exc!r}",
+                  file=sys.stderr, flush=True)
+            return None
+        finally:
+            try:
+                os.remove(claimed)
+            except OSError:
+                pass
+    elif state["lines"] is None:
+        state["tries"] += 1
+        return 0.1 if state["tries"] < 600 else None
+    lines = state["lines"] or []
+    action = lines[0] if lines else ""
+    if action == "open" and len(lines) > 1:
+        result = _open_launch_file(lines[1])
+        if result is None:
+            state["lines"] = None
+        return result
+    if action in {"open-dialog", "new"}:
+        if os.environ.get("NARWHAL3D_UI_READY") != "1":
+            return 0.1
+        from narwhal3d.state import app_state
+        app_state.feed_line("Open" if action == "open-dialog" else "New")
+    state["lines"] = None
+    return None
+
+
 def _session_only_preferences():
     """Keep our preference tweaks in-session.
 
@@ -125,6 +179,8 @@ def main():
     # still reveals a diagnostic-capable window instead of leaving an invisible process.
     if os.environ.get("NARWHAL3D_DEFER_FIRST_PRESENT") == "1":
         bpy.app.timers.register(_presentation_watchdog, first_interval=9.0)
+    if os.environ.get("NARWHAL3D_WELCOME_REQUEST"):
+        bpy.app.timers.register(_welcome_request, first_interval=0.1)
     _session_only_preferences()
     _suppress_splash()
     _clear_default_scene()

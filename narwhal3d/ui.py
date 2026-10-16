@@ -6186,8 +6186,7 @@ def _draw_flyout_tooltip(shader, region, state):
     if index is None or not (0 <= index < len(layout["buttons"])):
         return
     button = layout["buttons"][index]
-    paragraphs = tbar.sidebar_tooltip_lines(
-        button, "command", _sidebar_command_name(button))
+    paragraphs = tbar.sidebar_tooltip_lines(button, "flyout")
     width = 230.0
     pad = tbar.SIDEBAR_TOOLTIP_PAD
     line_h = tbar.SIDEBAR_TOOLTIP_LINE

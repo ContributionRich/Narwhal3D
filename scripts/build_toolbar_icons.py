@@ -4,7 +4,8 @@
 Every manifested toolbar slot first receives a deterministic project placeholder. When
 ``toolbar_data.ICON_SOURCES`` names a contributed 96 px PNG, ImageMagick replaces that
 placeholder with a high-quality downscale. The mapping is by visible toolbar symbol—not by
-command—so repeated command variants can retain distinct artwork.
+command—so repeated command variants can retain distinct artwork. A small deterministic
+corner marker distinguishes the rare separately named source files whose pixels are identical.
 """
 from __future__ import annotations
 
@@ -20,14 +21,32 @@ SOURCE = ROOT / "artwork" / "icons"
 OUTPUT = ROOT / "narwhal3d" / "icons"
 
 
-def _toolbar_data():
-    path = ROOT / "narwhal3d" / "toolbar_data.py"
-    spec = importlib.util.spec_from_file_location("narwhal_toolbar_data", path)
+def _module(name, path):
+    spec = importlib.util.spec_from_file_location(name, path)
     if spec is None or spec.loader is None:
         raise RuntimeError(f"cannot load {path}")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def _toolbar_data():
+    return _module("narwhal_toolbar_data", ROOT / "narwhal3d" / "toolbar_data.py")
+
+
+def _flyout_icon_data():
+    return _module("narwhal_flyout_icon_data", ROOT / "narwhal3d" / "flyout_icon_data.py")
+
+
+def _badge_draw(marker):
+    """Return a font-independent 8 px binary corner badge for marker IDs 1..4."""
+    boxes = [(17, 17, 19, 19), (20, 17, 22, 19),
+             (17, 20, 19, 22), (20, 20, 22, 22)]
+    parts = ["fill '#185d85' rectangle 15,15 23,23", "fill white"]
+    for bit, (x1, y1, x2, y2) in enumerate(boxes):
+        if marker & (1 << bit):
+            parts.append(f"rectangle {x1},{y1} {x2},{y2}")
+    return " ".join(parts)
 
 
 def source_matches():
@@ -71,6 +90,7 @@ def converter():
 
 def install():
     matched, missing = source_matches()
+    badges = _flyout_icon_data().ICON_BADGES
     command = converter()
     _write_placeholders()
     with tempfile.TemporaryDirectory(prefix="narwhal3d-icons-") as temporary:
@@ -83,8 +103,10 @@ def install():
                 args.append("convert")
             args.extend([
                 str(source), "-filter", "Lanczos", "-resize", "24x24!",
-                "-strip", str(target),
             ])
+            if runtime in badges:
+                args.extend(["-draw", _badge_draw(badges[runtime])])
+            args.extend(["-strip", str(target)])
             subprocess.run(args, check=True)
             shutil.move(str(target), OUTPUT / runtime)
     return sorted(matched), missing

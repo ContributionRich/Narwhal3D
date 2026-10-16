@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 
+from . import flyout_icon_data
 from . import toolbar_data
 
 ICON_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "icons")
@@ -223,6 +224,11 @@ def sidebar_flyout_rows(button, implemented=None):
     if records is None:
         return []
     implemented = set(implemented or ())
+    records = [dict(record) for record in records]
+    for record in records:
+        icon = flyout_icon_data.icon_for(name, record.get("text") or "")
+        if icon:
+            record["icon"] = icon
     if name == "Circle":
         presets = {
             "Circle: center, radius": (),
@@ -233,7 +239,6 @@ def sidebar_flyout_rows(button, implemented=None):
         }
         routed = []
         for record in records:
-            record = dict(record)
             text = record.get("text") or ""
             if text in presets:
                 record["preset"] = presets[text]
@@ -279,15 +284,18 @@ def sidebar_button_index(buttons, target, preferred=None):
 
 
 def sidebar_tooltip_lines(button, part="command", command_name=None):
-    """Return only the hovered icon's command name.
+    """Return the concise label appropriate to the hovered toolbar surface.
 
-    Alternate-click and linked-toolbar details belong to menus, not the transient hover
-    card. Keeping this to one short line lets the card sit beside the icon instead of
-    occupying the dock's blank area. ``part`` remains accepted for caller compatibility.
+    Main-sidebar cells use the canonical registered command name. A flyout row is already
+    a specific authored variant, so its own tooltip/text must win instead of collapsing
+    every variant back to the shared command verb.
     """
     if button is None:
         return ()
-    name = command_name or button.left or button.text or button.tooltip
+    if part == "flyout" and command_name is None:
+        name = button.tooltip or button.text or button.left
+    else:
+        name = command_name or button.left or button.text or button.tooltip
     return (str(name),) if name else ()
 
 

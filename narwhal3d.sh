@@ -30,6 +30,8 @@ fi
 BLENDER="${ROOT}/tools/blender-patched/blender"
 [ -x "$BLENDER" ] || BLENDER="${ROOT}/tools/blender-5.2.2-linux-x64/blender"
 BOOTSTRAP="${ROOT}/launch/bootstrap.py"
+WELCOME="${ROOT}/artifacts/welcome/linux-x86_64/narwhal-welcome"
+[ -x "$WELCOME" ] || WELCOME="${ROOT}/runtime/${runtime_platform}-${runtime_arch}/bin/narwhal-welcome"
 # The template is named `.desktop.in`, not `.desktop`, deliberately: it contains
 # __ROOT__ placeholders and is not itself an installable desktop entry.
 DESKTOP_TEMPLATE="${ROOT}/launch/narwhal3d.desktop.in"
@@ -115,6 +117,13 @@ fi
 export NARWHAL3D_DEFER_FIRST_PRESENT=1
 unset NARWHAL3D_UI_READY || true
 unset NARWHAL3D_PRESENT_WATCHDOG || true
+
+# The native welcome window starts the runtime behind itself, forwards model arguments,
+# and remains as the supervising process after its visible surface fades. Source checkouts
+# without a built welcome binary retain the direct-launch compatibility path.
+if [[ -x "$WELCOME" ]]; then
+  exec "$WELCOME" --runtime "$BLENDER" --bootstrap "$BOOTSTRAP" -- "$@"
+fi
 
 # --factory-startup gives a predictable layout every launch; the bootstrap
 # applies Narwhal 3D's own interface and theme.

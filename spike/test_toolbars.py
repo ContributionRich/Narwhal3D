@@ -2,6 +2,7 @@
 """Focused pure tests for Narwhal 3D's complete desktop toolbar workspace."""
 from __future__ import annotations
 
+import hashlib
 import importlib
 import importlib.util
 import os
@@ -32,6 +33,7 @@ def _load(name: str, relpath: str) -> Any:
 
 
 data: Any = _load("narwhal3d.toolbar_data", "narwhal3d/toolbar_data.py")
+variant_icons: Any = sys.modules["narwhal3d.flyout_icon_data"]
 toolbars: Any = _load("narwhal3d.toolbars", "narwhal3d/toolbars.py")
 generator: Any = _load("narwhal3d.icon_generator", "narwhal3d/icon_generator.py")
 builder: Any = _load("narwhal_icon_builder", "scripts/build_toolbar_icons.py")
@@ -147,6 +149,50 @@ check(toolbars.activation_lines(circle_rows[0]) == ("circle",)
 check(tuple(index for index, row in enumerate(circle_rows) if row.enabled)
       == (0, 1, 2, 4, 5),
       "unimplemented Circle variants are visibly disabled instead of running bare Circle")
+mapped_rows = {}
+for flyout_name in sorted({key[0] for key in variant_icons.FLYOUT_SOURCES}):
+    flyout = types.SimpleNamespace(link=flyout_name)
+    mapped_rows[flyout_name] = [
+        row for row in toolbars.sidebar_flyout_rows(flyout, implemented)
+        if (flyout_name, row.text) in variant_icons.FLYOUT_SOURCES
+    ]
+check(len(mapped_rows) == 16 and sum(map(len, mapped_rows.values())) == 90,
+      "all 90 collapsed slots across sixteen flyouts have explicit icon mappings")
+check(all(len(rows) == len({row.icon for row in rows})
+          for rows in mapped_rows.values()),
+      "every mapped variant has its own stable runtime icon name")
+check(all(row.icon == variant_icons.icon_for(name, row.text)
+          for name, rows in mapped_rows.items() for row in rows),
+      "flyout rows apply only their exact authored slot mapping")
+line_rows = mapped_rows["Lines"]
+check(toolbars.sidebar_tooltip_lines(line_rows[2], "flyout")
+      == ("Line: Normal To Surface",)
+      and toolbars.sidebar_tooltip_lines(circle_rows[1], "flyout")
+      == ("Circle: diameter",),
+      "flyout hover shows the authored variant description, not the shared command")
+source_payloads = {}
+for (flyout_name, text), source_name in variant_icons.FLYOUT_SOURCES.items():
+    digest = hashlib.sha256(Path(ROOT, "artwork", "icons", source_name).read_bytes()).digest()
+    source_payloads.setdefault((flyout_name, digest), []).append(
+        variant_icons.icon_for(flyout_name, text))
+duplicate_source_groups = [
+    icons for icons in source_payloads.values() if len(icons) > 1
+]
+check(sum(map(len, duplicate_source_groups)) == 12
+      and all(set(icons) <= set(variant_icons.ICON_BADGES)
+              and len({variant_icons.ICON_BADGES[icon] for icon in icons}) == len(icons)
+              for icons in duplicate_source_groups),
+      "byte-identical authored variants receive explicit distinct runtime badges")
+variant_hashes = {
+    name: {hashlib.sha256(Path(PACKAGE_DIR, "icons", row.icon).read_bytes()).digest()
+           for row in rows}
+    for name, rows in mapped_rows.items()
+}
+check(all(len(variant_hashes[name]) == len(rows)
+          for name, rows in mapped_rows.items()),
+      "every mapped row in each flyout renders visibly distinct runtime artwork",
+      {name: (len(variant_hashes[name]), len(rows))
+       for name, rows in mapped_rows.items()})
 retained_button = linked[0]
 retained_index = sidebar.index(retained_button)
 rebuilt_sidebar = toolbars.sidebar_buttons(implemented)
@@ -214,7 +260,7 @@ check(record_icons == data.TOOLBAR_ICON_NAMES,
       "the toolbar manifest covers top, left, and flyout records")
 check(set(data.ICON_NAMES) == set(generator.icon_specs()),
       "the placeholder generator covers the complete runtime manifest")
-check(len(data.ICON_NAMES) == 561, "561 distinct runtime symbols are manifested")
+check(len(data.ICON_NAMES) == 631, "631 distinct runtime symbols are manifested")
 check(len(data.PANEL_ICON_NAMES) == 4,
       "the four right-dock tabs have project-owned icon slots")
 check(all(name.startswith("narwhal-") and name.endswith(".png")
@@ -228,7 +274,7 @@ expected_missing = {
     "Standard: Parametric tools",
     "Visibility: Hide A", "Visibility: Hide B", "Visibility: Hide C",
 }
-check(len(matched) == 555, "555 runtime symbols use contributor artwork", len(matched))
+check(len(matched) == 625, "625 runtime symbols use contributor artwork", len(matched))
 check(set(data.MISSING_ARTWORK) == expected_missing,
       "the exact six source-art gaps are explicit", data.MISSING_ARTWORK)
 check(set(missing) == {name for name, source in data.ICON_SOURCES.items() if not source},

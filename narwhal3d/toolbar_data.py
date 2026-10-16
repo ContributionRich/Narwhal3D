@@ -8327,4 +8327,20 @@ TOOLBAR_ICON_NAMES = frozenset(
     button['icon'] for rows in FLYOUTS.values() for button in rows if button.get('icon')
 )
 PANEL_ICON_NAMES = frozenset({'narwhal-panel-display.png', 'narwhal-panel-properties.png', 'narwhal-panel-report.png', 'narwhal-panel-layers.png'})
-ICON_NAMES = TOOLBAR_ICON_NAMES | PANEL_ICON_NAMES
+
+# Public, independently authored slot overrides restore distinctions that the historical
+# first-command icon reduction cannot represent. Keep the generated records unchanged;
+# `toolbars.sidebar_flyout_rows` applies these only to their exact stable slots.
+try:
+    from . import flyout_icon_data as _flyout_icon_data
+except ImportError:  # direct build-script loading, without importing Blender package code
+    import importlib.util as _importlib_util
+    from pathlib import Path as _Path
+    _variant_path = _Path(__file__).with_name("flyout_icon_data.py")
+    _variant_spec = _importlib_util.spec_from_file_location("narwhal_flyout_icon_data", _variant_path)
+    if _variant_spec is None or _variant_spec.loader is None:
+        raise ImportError(f"cannot load flyout icon data from {_variant_path}")
+    _flyout_icon_data = _importlib_util.module_from_spec(_variant_spec)
+    _variant_spec.loader.exec_module(_flyout_icon_data)
+ICON_SOURCES.update(_flyout_icon_data.ICON_SOURCES)
+ICON_NAMES = TOOLBAR_ICON_NAMES | PANEL_ICON_NAMES | _flyout_icon_data.ICON_NAMES

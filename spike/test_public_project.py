@@ -105,6 +105,11 @@ check({"spike/test_picture.py", "spike/test_cmdbar_hits.py",
        "spike/test_extrude_distance.py", "spike/test_extrude_options.py",
        "spike/test_picture_display.py", "spike/test_gumball_region_extrude.py"} <= public,
       "the public allowlist includes regressions for the post-0.3 interaction fixes")
+check({"native/welcome/.gitignore", "native/welcome/Cargo.lock",
+       "native/welcome/Cargo.toml", "native/welcome/src/main.rs",
+       "native/welcome/src/native_stacking.rs", "spike/test_welcome.py"} <= public
+      and not any(path.startswith("native/welcome/target/") for path in public),
+      "the public allowlist includes exact native welcome sources but no build tree")
 check("POLICY.md" not in public and not any(path.startswith("artifacts/") for path in public),
       "instruction inputs and temporary planning artifacts stay outside public source")
 

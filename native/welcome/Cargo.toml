@@ -1,0 +1,22 @@
+[package]
+name = "narwhal-welcome"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-or-later"
+publish = false
+description = "Fast native welcome window and runtime supervisor for Narwhal 3D"
+
+[dependencies]
+eframe = { version = "0.36.2", default-features = false, features = ["default_fonts", "glow", "wayland", "x11"] }
+image = { version = "0.25.10", default-features = false, features = ["png"] }
+serde_json = "1"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+raw-window-handle = "=0.6.2"
+x11rb = { version = "=0.13.2", default-features = false }
+
+[profile.release]
+codegen-units = 1
+lto = "thin"
+panic = "abort"
+strip = "symbols"

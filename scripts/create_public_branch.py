@@ -30,6 +30,10 @@ LAUNCH_FILES = (
     "launch/narwhal3d.desktop.in", "launch/narwhal3d-3dm.xml",
     "launch/narwhal3d.png",
 )
+WELCOME_FILES = (
+    "native/welcome/.gitignore", "native/welcome/Cargo.lock", "native/welcome/Cargo.toml",
+    "native/welcome/src/main.rs", "native/welcome/src/native_stacking.rs",
+)
 PATCH_FILES = (
     "blender_patches/README.md", "blender_patches/app_drawn.patch",
     "blender_patches/apply_app_drawn.py",
@@ -60,7 +64,7 @@ TEST_FILES = (
     "spike/test_document_clipboard.py", "spike/test_control_point_osnap.py",
     "spike/ui_smoke.py", "spike/addon_e2e.py", "spike/test_app_drawn.py",
     "spike/branding_test.py", "spike/test_deferred_present_patch.py",
-    "spike/test_toolbars.py",
+    "spike/test_welcome.py", "spike/test_toolbars.py",
     "spike/test_menubar.py", "spike/test_menubar_resource.py",
     "spike/test_rightpanel.py", "spike/test_aliases.py",
     "spike/test_file_commands.py", "spike/test_sessionlog.py",
@@ -119,7 +123,7 @@ def recursive_files(directory: str) -> list[str]:
 
 
 def public_files() -> list[str]:
-    paths = set(ROOT_FILES + LAUNCH_FILES + PATCH_FILES + SCRIPT_FILES + TEST_FILES)
+    paths = set(ROOT_FILES + LAUNCH_FILES + WELCOME_FILES + PATCH_FILES + SCRIPT_FILES + TEST_FILES)
     for directory in ("narwhal3d", "packaging", "licenses", ".github", "artwork"):
         paths.update(recursive_files(directory))
     missing = sorted(path for path in paths if not (ROOT / path).is_file())
