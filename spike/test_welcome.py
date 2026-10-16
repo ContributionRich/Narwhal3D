@@ -128,6 +128,19 @@ check("first_paint: Option<Instant>" in rust
 check("impl Drop for WelcomeApp" in rust and "child.try_wait()" in rust
       and "std::process::exit(code)" in rust,
       "native supervisor cancels abandoned children and propagates runtime failures")
+attention = rust.index("self.lifetime.note_attention(now)")
+alpha = rust.index("let alpha_f = self.alpha(&ctx, now)")
+check("input.pointer.hover_pos().is_some()" in rust
+      and "ATTENTION_GRACE_SECONDS" in rust
+      and "fn note_attention" in rust
+      and attention < alpha,
+      "hover and input update lifetime and cancel fading before alpha can hide the window")
+close_start = rust.index('on_hover_text("Close welcome window")')
+close_route = rust[close_start:close_start + 300]
+check("self.lifetime.dismiss(Instant::now())" in close_route
+      and "cancel_child" not in close_route
+      and "ViewportCommand::Close" not in close_route,
+      "top-right close control dismisses only the welcome lifetime")
 check('ui.add_enabled(\n                false,' in rust
       and rust.count("(Not implemented)") >= 3,
       "template choices remain visibly disabled rather than faking functionality")

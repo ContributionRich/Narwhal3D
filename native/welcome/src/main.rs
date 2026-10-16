@@ -15,6 +15,7 @@ const READY_MARKER: &str = "[narwhal3d] first presentation released (ui-ready)";
 const WINDOW_SIZE: [f32; 2] = [580.0, 438.0];
 const MIN_VISIBLE_SECONDS: f32 = 1.8;
 const FADE_SECONDS: f32 = 0.38;
+const ATTENTION_GRACE_SECONDS: f32 = 0.75;
 const EXIT_PENDING: i32 = i32::MIN;
 
 #[derive(Clone, Copy, PartialEq)]
@@ -50,7 +51,7 @@ struct WelcomeApp {
     exit_code: Arc<AtomicI32>,
     started: Instant,
     first_paint: Option<Instant>,
-    fade_started: Option<Instant>,
+    lifetime: WelcomeLifetime,
     hidden: bool,
     ready: bool,
     child_exited: bool,
@@ -145,8 +146,53 @@ fn is_ready_line(line: &str) -> bool {
     line == READY_MARKER
 }
 
-fn should_start_fade(ready: bool, already_started: bool, elapsed: Duration) -> bool {
-    ready && !already_started && elapsed >= Duration::from_secs_f32(MIN_VISIBLE_SECONDS)
+#[derive(Default)]
+struct WelcomeLifetime {
+    last_attention: Option<Instant>,
+    fade_started: Option<Instant>,
+    dismissed: bool,
+}
+
+impl WelcomeLifetime {
+    fn attention_active(&self, now: Instant) -> bool {
+        self.last_attention.is_some_and(|attention| {
+            now.saturating_duration_since(attention)
+                < Duration::from_secs_f32(ATTENTION_GRACE_SECONDS)
+        })
+    }
+
+    fn note_attention(&mut self, now: Instant) {
+        if self.dismissed {
+            return;
+        }
+        self.last_attention = Some(now);
+        self.fade_started = None;
+    }
+
+    fn maybe_start_auto_fade(&mut self, ready: bool, visible_for: Duration, now: Instant) {
+        if ready
+            && self.fade_started.is_none()
+            && !self.dismissed
+            && !self.attention_active(now)
+            && visible_for >= Duration::from_secs_f32(MIN_VISIBLE_SECONDS)
+        {
+            self.fade_started = Some(now);
+        }
+    }
+
+    fn dismiss(&mut self, now: Instant) {
+        self.dismissed = true;
+        self.fade_started = Some(now);
+    }
+
+    fn fade_alpha(&self, now: Instant) -> f32 {
+        self.fade_started
+            .map(|started| {
+                (1.0 - now.saturating_duration_since(started).as_secs_f32() / FADE_SECONDS)
+                    .clamp(0.0, 1.0)
+            })
+            .unwrap_or(1.0)
+    }
 }
 
 fn load_logo(cc: &eframe::CreationContext<'_>) -> egui::TextureHandle {
@@ -262,7 +308,7 @@ impl WelcomeApp {
             exit_code,
             started: Instant::now(),
             first_paint: None,
-            fade_started: None,
+            lifetime: WelcomeLifetime::default(),
             hidden: false,
             ready: false,
             child_exited: false,
@@ -297,7 +343,7 @@ impl WelcomeApp {
                 }
                 RuntimeEvent::Exited(code) => {
                     self.child_exited = true;
-                    if self.fade_started.is_none() {
+                    if self.lifetime.fade_started.is_none() {
                         self.status = format!("Narwhal closed during startup (status {code})");
                     }
                 }
@@ -312,14 +358,8 @@ impl WelcomeApp {
         }
     }
 
-    fn fade_alpha(&self) -> f32 {
-        self.fade_started
-            .map(|started| (1.0 - started.elapsed().as_secs_f32() / FADE_SECONDS).clamp(0.0, 1.0))
-            .unwrap_or(1.0)
-    }
-
-    fn alpha(&mut self, ctx: &egui::Context) -> f32 {
-        let alpha = self.fade_alpha();
+    fn alpha(&mut self, ctx: &egui::Context, now: Instant) -> f32 {
+        let alpha = self.lifetime.fade_alpha(now);
         if alpha <= 0.0 && !self.hidden {
             self.hidden = true;
             ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
@@ -359,6 +399,16 @@ impl WelcomeApp {
                 }
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let close = egui::Button::new(RichText::new("×").size(17.0))
+                    .min_size(Vec2::new(28.0, 24.0))
+                    .frame(false);
+                if ui
+                    .add(close)
+                    .on_hover_text("Close welcome window")
+                    .clicked()
+                {
+                    self.lifetime.dismiss(Instant::now());
+                }
                 ui.label(
                     RichText::new("EARLY PREVIEW")
                         .size(8.0)
@@ -456,7 +506,7 @@ impl Drop for WelcomeApp {
 
 impl eframe::App for WelcomeApp {
     fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
-        let alpha = self.fade_alpha();
+        let alpha = self.lifetime.fade_alpha(Instant::now());
         [0.97 * alpha, 0.97 * alpha, 0.97 * alpha, alpha]
     }
 
@@ -484,13 +534,13 @@ impl eframe::App for WelcomeApp {
             }
         }
 
+        let now = Instant::now();
         let visible_for = self
             .first_paint
-            .map(|painted| painted.elapsed())
+            .map(|painted| now.saturating_duration_since(painted))
             .unwrap_or_default();
-        if should_start_fade(self.ready, self.fade_started.is_some(), visible_for) {
-            self.fade_started = Some(Instant::now());
-        }
+        self.lifetime
+            .maybe_start_auto_fade(self.ready, visible_for, now);
         if self.hidden {
             ctx.request_repaint_after(Duration::from_millis(100));
         }
@@ -499,7 +549,13 @@ impl eframe::App for WelcomeApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.first_paint.get_or_insert_with(Instant::now);
         let ctx = ui.ctx().clone();
-        let alpha_f = self.alpha(&ctx);
+        let now = Instant::now();
+        let has_attention =
+            ctx.input(|input| input.pointer.hover_pos().is_some() || !input.events.is_empty());
+        if has_attention {
+            self.lifetime.note_attention(now);
+        }
+        let alpha_f = self.alpha(&ctx, now);
         if self.hidden {
             return;
         }
@@ -616,14 +672,14 @@ fn main() -> eframe::Result {
 #[cfg(test)]
 mod tests {
     use super::{
-        is_ready_line, parse_args_from, recent_files_from, request_payload, should_start_fade,
-        supervise_child, RuntimeEvent, EXIT_PENDING, READY_MARKER,
+        is_ready_line, parse_args_from, recent_files_from, request_payload, supervise_child,
+        RuntimeEvent, WelcomeLifetime, ATTENTION_GRACE_SECONDS, EXIT_PENDING, READY_MARKER,
     };
     use std::fs;
     use std::path::Path;
     use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
     use std::sync::{mpsc, Arc};
-    use std::time::{SystemTime, UNIX_EPOCH};
+    use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
     fn temporary_dir(label: &str) -> std::path::PathBuf {
         let stamp = SystemTime::now()
@@ -670,27 +726,36 @@ mod tests {
     }
 
     #[test]
-    fn fade_waits_for_readiness_and_the_minimum_visible_interval() {
-        assert!(!should_start_fade(
-            false,
-            false,
-            std::time::Duration::from_secs(10)
-        ));
-        assert!(!should_start_fade(
-            true,
-            false,
-            std::time::Duration::from_millis(1799)
-        ));
-        assert!(should_start_fade(
-            true,
-            false,
-            std::time::Duration::from_millis(1800)
-        ));
-        assert!(!should_start_fade(
-            true,
-            true,
-            std::time::Duration::from_secs(10)
-        ));
+    fn lifetime_holds_for_attention_and_manual_close_is_authoritative() {
+        let start = Instant::now();
+        let mut lifetime = WelcomeLifetime::default();
+
+        lifetime.maybe_start_auto_fade(false, Duration::from_secs(10), start);
+        assert!(lifetime.fade_started.is_none());
+        lifetime.maybe_start_auto_fade(true, Duration::from_millis(1799), start);
+        assert!(lifetime.fade_started.is_none());
+        lifetime.maybe_start_auto_fade(true, Duration::from_millis(1800), start);
+        assert_eq!(lifetime.fade_started, Some(start));
+
+        let reentered = start + Duration::from_millis(100);
+        lifetime.note_attention(reentered);
+        assert_eq!(lifetime.last_attention, Some(reentered));
+        assert!(lifetime.fade_started.is_none());
+        lifetime.maybe_start_auto_fade(true, Duration::from_secs(10), reentered);
+        assert!(lifetime.fade_started.is_none());
+
+        let after_grace =
+            reentered + Duration::from_secs_f32(ATTENTION_GRACE_SECONDS) + Duration::from_millis(1);
+        lifetime.maybe_start_auto_fade(true, Duration::from_secs(10), after_grace);
+        assert_eq!(lifetime.fade_started, Some(after_grace));
+
+        let dismissed = after_grace + Duration::from_millis(50);
+        lifetime.dismiss(dismissed);
+        assert!(lifetime.dismissed);
+        assert_eq!(lifetime.fade_started, Some(dismissed));
+        lifetime.note_attention(dismissed + Duration::from_millis(10));
+        assert_eq!(lifetime.fade_started, Some(dismissed));
+        assert!(lifetime.fade_alpha(dismissed + Duration::from_secs(1)) <= 0.0);
     }
 
     #[test]
