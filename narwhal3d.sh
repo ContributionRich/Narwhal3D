@@ -110,6 +110,12 @@ if [[ ! -x "$BLENDER" ]]; then
   exit 1
 fi
 
+# The patched runtime withholds its first presented frame until the complete Narwhal
+# layout signals readiness. Stock fallback runtimes ignore these environment values.
+export NARWHAL3D_DEFER_FIRST_PRESENT=1
+unset NARWHAL3D_UI_READY || true
+unset NARWHAL3D_PRESENT_WATCHDOG || true
+
 # --factory-startup gives a predictable layout every launch; the bootstrap
 # applies Narwhal 3D's own interface and theme.
 exec "$BLENDER" \

@@ -733,7 +733,9 @@ def _build_viewports_gui():
     reflow tick to settle (one action per tick), so this is a multi-tick state
     machine, not a single block. Verified end to end in a focused runtime check.
     """
-    state = {"tick": 0, "nones": 0, "wait": False, "retries": 0, "waits": 0}
+    state = {"tick": 0, "nones": 0, "wait": False, "retries": 0, "waits": 0,
+             "top_ready": False, "left_ready": False, "right_ready": False,
+             "complete": False}
     # The command area is 95 logical pixels high; `uiscale` scales every carved size.
     TARGET_BAR_PX = round(95 * uiscale.current())
     # Reserve 117 logical pixels for the left dock. Sidebar and Osnap each occupy
@@ -871,6 +873,7 @@ def _build_viewports_gui():
                     if reg is not None:
                         with bpy.context.temp_override(area=strip, region=reg):
                             bpy.ops.screen.space_type_set_or_cycle(space_type="INFO")
+                        state["top_ready"] = True
                         print(f"[narwhal3d] top strip -> INFO (h={strip.height})")
             elif t == 6:
                 # carve the LEFT DOCK BAND off the main viewport. The factor
@@ -905,6 +908,7 @@ def _build_viewports_gui():
                                 space_type="INFO")
                         print(f"[narwhal3d] left band -> INFO (w={band.width})")
                         _set_left_band_key(band)
+                        state["left_ready"] = True
                 else:
                     # WAIT for the t=6 split instead of abandoning the band.
                     state["wait"] = _retry("the left dock band to appear")
@@ -944,6 +948,7 @@ def _build_viewports_gui():
                                 space_type="INFO")
                         print(f"[narwhal3d] right band -> INFO (w={band.width})")
                         _set_right_band_key(band)
+                        state["right_ready"] = True
                 else:
                     # WAIT for the t=8 split, as on the left.
                     state["wait"] = _retry("the right dock band to appear")
@@ -995,6 +1000,10 @@ def _build_viewports_gui():
                 # what the old flat 0.4 s sleep was guessing about.
                 print(f"[narwhal3d] layout built in {state['tick']} steps "
                       f"+ {state['waits']} reflow wait(s)")
+                state["complete"] = (len(panes) == 4
+                                     and state["top_ready"]
+                                     and state["left_ready"]
+                                     and state["right_ready"])
         except Exception as e:  # noqa: BLE001
             # The tick NUMBER matters and used to be missing. This machine is twelve
             # steps long and every step touches the screen, so "a tick failed" on its
@@ -1009,6 +1018,13 @@ def _build_viewports_gui():
         # start a second, over-splitting build).
         if t >= 12:
             _viewports_in_progress = False
+            # Release the native first-presentation gate only after every layout
+            # step and final chrome update succeeded. A failed tick is left to the
+            # native watchdog so diagnostic UI eventually becomes visible.
+            if (state["complete"]
+                    and os.environ.get("NARWHAL3D_DEFER_FIRST_PRESENT") == "1"):
+                print("[narwhal3d] layout presentation ready", file=_sys.stderr, flush=True)
+                os.environ["NARWHAL3D_UI_READY"] = "1"
             return None
         return TICK_INTERVAL  # re-fire for the next tick
 
@@ -6052,13 +6068,19 @@ def sidebar_click(btn, right=False):
     """
     if btn is None:
         return None
-    cmd = btn.right if right else btn.left
+    lines = tbar.activation_lines(btn, right=right)
+    cmd = lines[0] if lines else None
     label = (btn.right_tooltip if right else btn.tooltip) or btn.text or cmd
     if not cmd:
         return f"{label}: nothing bound to that button"
+    enabled = btn.right_enabled if right else btn.enabled
+    if not enabled:
+        return f"{label} is not implemented yet"
     if cmd not in COMMANDS:
         return f"{label} is not implemented yet"
     app_state.start_command(cmd)
+    for argument in lines[1:]:
+        app_state.feed_line(argument)
     _ensure_input_open()
     return None
 

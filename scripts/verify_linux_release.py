@@ -19,14 +19,6 @@ from release_policy import (
     MAX_HOST_GLIBC, format_glibc, glibc_versions, scan_runtime_glibc,
     validate_preview_version,
 )
-from verify_selection_core import (
-    ABI_VERSION as SELECTION_CORE_ABI,
-    PLATFORMS as SELECTION_CORE_PLATFORMS,
-    RUST_TOOLCHAIN as SELECTION_CORE_TOOLCHAIN,
-    VerificationError as SelectionCoreError,
-    inspect_artifact as inspect_selection_core_artifact,
-    source_aggregate as selection_core_source_aggregate,
-)
 
 
 PRODUCT = "Narwhal 3D"
@@ -91,7 +83,6 @@ REQUIRED_PATHS = {
     "usr/lib/narwhal3d/packaging/linux-x86_64.lock.json",
     "usr/lib/narwhal3d/packaging/README.md",
     "usr/lib/narwhal3d/packaging/NOTICES.md",
-    "usr/lib/narwhal3d/narwhal3d/native/libnarwhal_selection_core.so",
     "usr/lib/narwhal3d/tools/blender-patched/blender",
     "usr/lib/narwhal3d/tools/blender-patched/5.2/python/bin/python3.13",
     "usr/lib/narwhal3d/tools/blender-patched/.narwhal3d-native-runtime.json",
@@ -365,6 +356,7 @@ def verify_lock_and_markers(appdir: Path, identity: JsonObject) -> None:
     expected_names = [
         "blender_patches/apply_app_drawn.py",
         "blender_patches/apply_cad_boundary_wires.py",
+        "blender_patches/apply_deferred_first_present.py",
         "blender_patches/apply_narwhal3d_branding.py",
         "blender_patches/narwhal3d_app_icon.svg",
     ]
@@ -504,37 +496,6 @@ print(json.dumps({
         raise VerificationError(f"dependency identity mismatch: expected {expected}, got {result}")
 
 
-def verify_selection_core_component(appdir: Path, manifest: JsonObject) -> None:
-    section = manifest.get("selection_core")
-    if not isinstance(section, dict):
-        raise VerificationError("release manifest has no selection-core provenance")
-    info = SELECTION_CORE_PLATFORMS[PLATFORM]
-    packaged_path = (
-        PurePosixPath("usr/lib/narwhal3d/narwhal3d/native")
-        / str(info["filename"])
-    ).as_posix()
-    expected = {
-        "rust_toolchain": SELECTION_CORE_TOOLCHAIN,
-        "abi": SELECTION_CORE_ABI,
-        "packaged_path": packaged_path,
-        "source_aggregate_sha256": selection_core_source_aggregate(),
-    }
-    for key, value in expected.items():
-        if section.get(key) != value:
-            raise VerificationError(
-                f"selection-core provenance {key}: expected {value!r}, got {section.get(key)!r}"
-            )
-    artifact = section.get("artifact")
-    if not isinstance(artifact, dict):
-        raise VerificationError("release manifest has no selection-core artifact record")
-    try:
-        measured = inspect_selection_core_artifact(appdir / Path(packaged_path), PLATFORM)
-    except SelectionCoreError as exc:
-        raise VerificationError(f"packaged selection core failed verification: {exc}") from exc
-    if artifact != measured:
-        raise VerificationError("packaged selection core differs from release provenance")
-
-
 def verify_appdir(appdir: Path, args: argparse.Namespace) -> None:
     if not appdir.is_dir() or appdir.is_symlink():
         raise VerificationError(f"AppDir must be a real directory: {appdir}")
@@ -558,7 +519,6 @@ def verify_appdir(appdir: Path, args: argparse.Namespace) -> None:
         if expected[path] != actual[path]:
             raise VerificationError(f"inventory metadata/hash mismatch: {path}")
     verify_lock_and_markers(appdir, identity)
-    verify_selection_core_component(appdir, manifest)
     verify_executables_and_imports(appdir)
 
 

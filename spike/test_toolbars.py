@@ -130,6 +130,23 @@ check(len(linked) == 28 and len({button.link for button in linked}) == 28,
       "28 left cells expose distinct selectable flyouts")
 check(all(toolbars.sidebar_flyout_rows(button, implemented) for button in linked),
       "every arrow-marked left cell opens a populated flyout")
+circle_button = next(button for button in linked if button.link == "Circle")
+circle_rows = toolbars.sidebar_flyout_rows(circle_button, implemented)
+check(tuple(row.text for row in circle_rows) == (
+    "Circle: center, radius", "Circle: diameter", "Circle: 3 points",
+    "Circle around curve", "Circle: tangent, tangent, radius",
+    "Circle tangent to 3 curves", "Circle vertical to CPlane: center, radius",
+    "Circle vertical to CPlane: diameter", "Circle: deformable", "Circle: fit points"),
+      "Circle flyout preserves ten distinct authored actions in order")
+check(toolbars.activation_lines(circle_rows[0]) == ("circle",)
+      and toolbars.activation_lines(circle_rows[1])
+      == ("circle", "Radius/Diameter=Diameter")
+      and toolbars.activation_lines(circle_rows[2]) == ("circle", "3Point")
+      and toolbars.activation_lines(circle_rows[4]) == ("circle", "Tangent"),
+      "implemented Circle flyout variants retain their distinct command presets")
+check(tuple(index for index, row in enumerate(circle_rows) if row.enabled)
+      == (0, 1, 2, 4, 5),
+      "unimplemented Circle variants are visibly disabled instead of running bare Circle")
 retained_button = linked[0]
 retained_index = sidebar.index(retained_button)
 rebuilt_sidebar = toolbars.sidebar_buttons(implemented)

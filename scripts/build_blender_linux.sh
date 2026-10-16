@@ -7,6 +7,7 @@ PATCH_DIR="$ROOT_DIR/blender_patches"
 BRANDING_PATCH="$PATCH_DIR/apply_narwhal3d_branding.py"
 APP_DRAWN_PATCH="$PATCH_DIR/apply_app_drawn.py"
 BOUNDARY_PATCH="$PATCH_DIR/apply_cad_boundary_wires.py"
+DEFERRED_PRESENT_PATCH="$PATCH_DIR/apply_deferred_first_present.py"
 ICON_SOURCE="$PATCH_DIR/narwhal3d_app_icon.svg"
 REQUIRED_COMMIT="d13f752e3b9c4f8c261cda552b1021f8bcc0382c"
 SOURCE_DIR=""
@@ -71,12 +72,12 @@ done
 
 [[ "$(uname -s)" == "Linux" ]] || { echo "native build requires Linux" >&2; exit 2; }
 [[ "$(uname -m)" == "x86_64" ]] || { echo "native build requires x86_64" >&2; exit 2; }
-for patch_input in "$BRANDING_PATCH" "$APP_DRAWN_PATCH" "$BOUNDARY_PATCH" "$ICON_SOURCE"; do
+for patch_input in "$BRANDING_PATCH" "$APP_DRAWN_PATCH" "$BOUNDARY_PATCH" "$DEFERRED_PRESENT_PATCH" "$ICON_SOURCE"; do
   [[ -f "$patch_input" && ! -L "$patch_input" ]] || { echo "required native patch input is missing or symlinked: $patch_input" >&2; exit 2; }
 done
 
 if ((SELF_CHECK)); then
-  python3 - "$REQUIRED_COMMIT" "$BRANDING_PATCH" "$APP_DRAWN_PATCH" "$BOUNDARY_PATCH" "$ICON_SOURCE" <<'PY'
+  python3 - "$REQUIRED_COMMIT" "$BRANDING_PATCH" "$APP_DRAWN_PATCH" "$BOUNDARY_PATCH" "$DEFERRED_PRESENT_PATCH" "$ICON_SOURCE" <<'PY'
 import ast
 import hashlib
 from pathlib import Path
@@ -88,7 +89,7 @@ if not re.fullmatch(r"[0-9a-f]{40}", commit):
     raise SystemExit("invalid fixed Blender source commit")
 if commit != "d13f752e3b9c4f8c261cda552b1021f8bcc0382c":
     raise SystemExit("fixed Blender source commit changed")
-for value in sys.argv[2:5]:
+for value in sys.argv[2:6]:
     path = Path(value)
     ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
 for value in sys.argv[2:]:
@@ -136,7 +137,7 @@ ACTUAL_COMMIT="$(git -C "$SOURCE_DIR" rev-parse HEAD)"
   exit 2
 }
 
-python3 - "$SOURCE_DIR" "$BRANDING_PATCH" "$APP_DRAWN_PATCH" "$BOUNDARY_PATCH" "$ICON_SOURCE" <<'PY'
+python3 - "$SOURCE_DIR" "$BRANDING_PATCH" "$APP_DRAWN_PATCH" "$BOUNDARY_PATCH" "$DEFERRED_PRESENT_PATCH" "$ICON_SOURCE" <<'PY'
 import importlib.util
 from pathlib import Path
 import sys
@@ -145,7 +146,8 @@ source = Path(sys.argv[1])
 branding_path = Path(sys.argv[2])
 app_drawn_path = Path(sys.argv[3])
 boundary_path = Path(sys.argv[4])
-icon = Path(sys.argv[5])
+deferred_path = Path(sys.argv[5])
+icon = Path(sys.argv[6])
 
 def load(name: str, path: Path):
     spec = importlib.util.spec_from_file_location(name, path)
@@ -158,7 +160,9 @@ def load(name: str, path: Path):
 branding = load("narwhal3d_branding", branding_path)
 changed = branding.apply(str(source), str(icon))
 print(f"branding patch applied ({len(changed)} changed paths)")
-for name, path in (("narwhal3d_app_drawn", app_drawn_path), ("narwhal3d_boundary_wires", boundary_path)):
+for name, path in (("narwhal3d_app_drawn", app_drawn_path),
+                   ("narwhal3d_boundary_wires", boundary_path),
+                   ("narwhal3d_deferred_present", deferred_path)):
     module = load(name, path)
     module.SRC = str(source / "source" / "blender")
     module.main()
@@ -206,6 +210,7 @@ python3 - \
   "$BRANDING_PATCH" \
   "$APP_DRAWN_PATCH" \
   "$BOUNDARY_PATCH" \
+  "$DEFERRED_PRESENT_PATCH" \
   "$ICON_SOURCE" <<'PY'
 from datetime import datetime, timezone
 import hashlib
@@ -222,7 +227,8 @@ logical_inputs = (
     ("blender_patches/apply_narwhal3d_branding.py", Path(sys.argv[6])),
     ("blender_patches/apply_app_drawn.py", Path(sys.argv[7])),
     ("blender_patches/apply_cad_boundary_wires.py", Path(sys.argv[8])),
-    ("blender_patches/narwhal3d_app_icon.svg", Path(sys.argv[9])),
+    ("blender_patches/apply_deferred_first_present.py", Path(sys.argv[9])),
+    ("blender_patches/narwhal3d_app_icon.svg", Path(sys.argv[10])),
 )
 records = []
 aggregate = hashlib.sha256()

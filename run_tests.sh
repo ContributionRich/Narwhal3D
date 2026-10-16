@@ -57,6 +57,7 @@ PURE_SUITES=(
     spike/test_extrude_options.py
     spike/test_boolean_extrusion.py
     spike/branding_test.py
+    spike/test_deferred_present_patch.py
     spike/test_toolbars.py
     spike/test_menubar.py
     spike/test_menubar_resource.py

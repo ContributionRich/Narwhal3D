@@ -81,10 +81,10 @@ class Button:
     """
 
     __slots__ = ("text", "tooltip", "left", "right", "right_tooltip", "icon",
-                 "link", "enabled", "right_enabled")
+                 "link", "enabled", "right_enabled", "preset")
 
     def __init__(self, text, tooltip, left, right, right_tooltip, icon,
-                 enabled, right_enabled, link=None):
+                 enabled, right_enabled, link=None, preset=()):
         self.text = text
         self.tooltip = tooltip
         self.left = left
@@ -94,6 +94,7 @@ class Button:
         self.link = link or None
         self.enabled = bool(enabled)
         self.right_enabled = bool(right_enabled)
+        self.preset = tuple(preset or ())
 
     @property
     def label(self):
@@ -132,9 +133,10 @@ def _button(record, implemented):
         right,
         record.get("right_tooltip") or "",
         record.get("icon"),
-        bool(left and left in implemented),
+        bool(left and left in implemented and record.get("available", True)),
         bool(right and right in implemented),
         record.get("link"),
+        record.get("preset") or (),
     )
 
 
@@ -215,13 +217,42 @@ def sidebar_buttons(implemented=None):
 
 
 def sidebar_flyout_rows(button, implemented=None):
-    """Return actions in the category linked by ``button``."""
+    """Return distinct actions in the category linked by ``button``."""
     name = getattr(button, "link", None)
     records = getattr(toolbar_data, "FLYOUTS", {}).get(name) if name else None
     if records is None:
         return []
     implemented = set(implemented or ())
+    if name == "Circle":
+        presets = {
+            "Circle: center, radius": (),
+            "Circle: diameter": ("Radius/Diameter=Diameter",),
+            "Circle: 3 points": ("3Point",),
+            "Circle: tangent, tangent, radius": ("Tangent",),
+            "Circle tangent to 3 curves": ("Tangent",),
+        }
+        routed = []
+        for record in records:
+            record = dict(record)
+            text = record.get("text") or ""
+            if text in presets:
+                record["preset"] = presets[text]
+            else:
+                record["available"] = False
+                record["preset"] = ()
+            routed.append(record)
+        records = routed
     return [_button(record, implemented) for record in records]
+
+
+def activation_lines(button, right=False):
+    """Command-line tokens for one toolbar activation, preserving flyout presets."""
+    if button is None:
+        return ()
+    command = button.right if right else button.left
+    if not command:
+        return ()
+    return (command,) if right else (command, *button.preset)
 
 
 def button_key(button):
@@ -229,7 +260,7 @@ def button_key(button):
     if button is None:
         return None
     return (button.left, button.right, button.link, button.icon,
-            button.text, button.tooltip)
+            button.text, button.tooltip, button.preset)
 
 
 def sidebar_button_index(buttons, target, preferred=None):

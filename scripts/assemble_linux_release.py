@@ -20,14 +20,6 @@ from release_policy import (
     MAX_HOST_GLIBC, format_glibc, glibc_versions, scan_runtime_glibc,
     validate_preview_version,
 )
-from verify_selection_core import (
-    ABI_VERSION as SELECTION_CORE_ABI,
-    MANIFEST_NAME as SELECTION_CORE_MANIFEST,
-    PLATFORMS as SELECTION_CORE_PLATFORMS,
-    RUST_TOOLCHAIN as SELECTION_CORE_TOOLCHAIN,
-    VerificationError as SelectionCoreError,
-    verify_directory as verify_selection_core_artifacts,
-)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -79,6 +71,7 @@ PATCH_INPUTS = (
     "blender_patches/apply_narwhal3d_branding.py",
     "blender_patches/apply_app_drawn.py",
     "blender_patches/apply_cad_boundary_wires.py",
+    "blender_patches/apply_deferred_first_present.py",
     "blender_patches/narwhal3d_app_icon.svg",
 )
 VERSION_RE = re.compile(r"[0-9A-Za-z][0-9A-Za-z._-]*\Z")
@@ -526,7 +519,6 @@ def assemble(args: argparse.Namespace) -> tuple[Path, Path, Path]:
     appimagetool = args.appimagetool.resolve()
     appimage_runtime = args.appimage_runtime.resolve()
     output_dir = args.output_dir.resolve()
-    selection_core_dir = args.selection_core_artifacts.resolve()
     if not source_root.is_dir():
         raise ReleaseError(f"source root does not exist: {source_root}")
     lock_path = source_root / SOURCE_LOCK_RELATIVE
@@ -537,18 +529,6 @@ def assemble(args: argparse.Namespace) -> tuple[Path, Path, Path]:
     )
     validate_appimagetool(appimagetool, artifacts)
     validate_appimage_runtime(appimage_runtime, artifacts)
-    try:
-        selection_core_manifest = verify_selection_core_artifacts(selection_core_dir)
-    except SelectionCoreError as exc:
-        raise ReleaseError(f"selection-core artifacts failed verification: {exc}") from exc
-    selection_info = SELECTION_CORE_PLATFORMS[PLATFORM]
-    selection_record = next(
-        (item for item in selection_core_manifest["artifacts"]
-         if isinstance(item, dict) and item.get("platform") == PLATFORM),
-        None,
-    )
-    if selection_record is None:
-        raise ReleaseError("verified selection-core manifest lacks Linux x86-64")
 
     launcher = source_root / "narwhal3d.sh"
     package = source_root / "narwhal3d"
@@ -589,13 +569,6 @@ def assemble(args: argparse.Namespace) -> tuple[Path, Path, Path]:
 
         copy_file(launcher, app_root / "narwhal3d.sh", "Narwhal 3D launcher")
         shutil.copytree(package, app_root / "narwhal3d", symlinks=True, ignore=ignore_python_cache)
-        selection_relative = Path(PLATFORM) / str(selection_info["filename"])
-        selection_destination = app_root / "narwhal3d/native" / str(selection_info["filename"])
-        copy_file(
-            selection_core_dir / selection_relative,
-            selection_destination,
-            "verified Linux Rust selection core",
-        )
         for filename in LAUNCH_FILES:
             copy_file(source_root / "launch" / filename, app_root / "launch" / filename, f"launch asset {filename}")
         for filename in PACKAGING_FILES:
@@ -639,17 +612,6 @@ def assemble(args: argparse.Namespace) -> tuple[Path, Path, Path]:
                 "max_host_glibc": format_glibc(MAX_HOST_GLIBC),
                 "runtime_required_glibc": format_glibc(runtime_glibc),
                 "lock_sha256": lock_sha,
-            },
-            "selection_core": {
-                "manifest_name": SELECTION_CORE_MANIFEST,
-                "source_aggregate_sha256": selection_core_manifest["source_aggregate_sha256"],
-                "rust_toolchain": SELECTION_CORE_TOOLCHAIN,
-                "abi": SELECTION_CORE_ABI,
-                "packaged_path": (
-                    PurePosixPath("usr/lib/narwhal3d/narwhal3d/native")
-                    / str(selection_info["filename"])
-                ).as_posix(),
-                "artifact": selection_record,
             },
             "excluded_components": ["opennurbs-exact-save-helper", "optional-converters"],
             "inventory": inventory(appdir),
@@ -830,7 +792,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--runtime-dir", type=Path, help="verified native Narwhal runtime")
     parser.add_argument("--appimagetool", type=Path, help="locked appimagetool 1.9.1 executable")
     parser.add_argument("--appimage-runtime", type=Path, help="locked type2 runtime 20251108 file")
-    parser.add_argument("--selection-core-artifacts", type=Path, help="verified dual-platform Rust artifacts")
     parser.add_argument("--output-dir", type=Path, help="new release output directory")
     parser.add_argument("--self-check", action="store_true", help="run local pure checks and exit")
     return parser
@@ -851,7 +812,6 @@ def main(argv: list[str] | None = None) -> int:
                 ("--runtime-dir", args.runtime_dir),
                 ("--appimagetool", args.appimagetool),
                 ("--appimage-runtime", args.appimage_runtime),
-                ("--selection-core-artifacts", args.selection_core_artifacts),
                 ("--output-dir", args.output_dir),
             )
             if value is None

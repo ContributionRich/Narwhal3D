@@ -14,6 +14,19 @@ if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
 
+def _presentation_watchdog():
+    """Reveal a diagnostic-capable window if layout startup never signals readiness."""
+    if (os.environ.get("NARWHAL3D_DEFER_FIRST_PRESENT") == "1"
+            and os.environ.get("NARWHAL3D_UI_READY") != "1"):
+        print("[narwhal3d] presentation watchdog releasing incomplete UI",
+              file=sys.stderr, flush=True)
+        os.environ["NARWHAL3D_PRESENT_WATCHDOG"] = "1"
+        screen = getattr(bpy.context, "screen", None)
+        for area in getattr(screen, "areas", ()):
+            area.tag_redraw()
+    return None
+
+
 def _session_only_preferences():
     """Keep our preference tweaks in-session.
 
@@ -108,6 +121,10 @@ def _open_launch_file(path, tries=[0]):
 
 
 def main():
+    # Register before any optional setup: if later bootstrap code fails, the event loop
+    # still reveals a diagnostic-capable window instead of leaving an invisible process.
+    if os.environ.get("NARWHAL3D_DEFER_FIRST_PRESENT") == "1":
+        bpy.app.timers.register(_presentation_watchdog, first_interval=9.0)
     _session_only_preferences()
     _suppress_splash()
     _clear_default_scene()

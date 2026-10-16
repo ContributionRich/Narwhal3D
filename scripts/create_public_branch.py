@@ -35,6 +35,7 @@ PATCH_FILES = (
     "blender_patches/apply_app_drawn.py",
     "blender_patches/cad_boundary_wires.patch",
     "blender_patches/apply_cad_boundary_wires.py",
+    "blender_patches/apply_deferred_first_present.py",
     "blender_patches/apply_narwhal3d_branding.py",
     "blender_patches/narwhal3d_app_icon.svg",
 )
@@ -58,7 +59,8 @@ TEST_FILES = (
     "spike/test_picture_display.py", "spike/test_gumball_region_extrude.py",
     "spike/test_document_clipboard.py", "spike/test_control_point_osnap.py",
     "spike/ui_smoke.py", "spike/addon_e2e.py", "spike/test_app_drawn.py",
-    "spike/branding_test.py", "spike/test_toolbars.py",
+    "spike/branding_test.py", "spike/test_deferred_present_patch.py",
+    "spike/test_toolbars.py",
     "spike/test_menubar.py", "spike/test_menubar_resource.py",
     "spike/test_rightpanel.py", "spike/test_aliases.py",
     "spike/test_file_commands.py", "spike/test_sessionlog.py",

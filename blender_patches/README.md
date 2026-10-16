@@ -62,10 +62,24 @@ Apply with `python3 blender_patches/apply_cad_boundary_wires.py`. The headless w
 in `spike/test_complex_import.py`; `spike/cad_wire_gui_check.py` verifies real pixels in both
 Shaded and Wireframe and proves actual mesh objects retain their topology.
 
+## `apply_deferred_first_present.py` — first visible frame is Narwhal
+
+Blender normally presents its factory layout before processing `--python`, which makes
+Outliner/Properties/timeline chrome flash before Narwhal's asynchronous four-view layout
+finishes. The launcher sets `NARWHAL3D_DEFER_FIRST_PRESENT=1`; this patch suppresses the
+initial clear/swap and, on the validated OpenGL backend, subsequent buffer presentation
+until the viewport state machine sets `NARWHAL3D_UI_READY=1`. Back-buffer drawing, reflow,
+timers and events continue. A nine-second Python watchdog requests a diagnostic presentation
+without claiming layout readiness, while a native ten-second fallback prevents an invisible
+process even if bootstrap fails. Vulkan and other stateful backends
+present normally because suppressing a release after image acquisition would violate their
+acquire/release lifecycle. Stock Blender ignores both variables and retains the development
+fallback.
+
 ## Rebuilding
 
 Use `scripts/build_blender_linux.sh` with the exact source commit and build inputs pinned
-in `packaging/linux-x86_64.lock.json`. The build script applies all three patches,
+in `packaging/linux-x86_64.lock.json`. The build script applies all four patches,
 validates their anchors, compiles the runtime, and writes the native-runtime provenance
 marker required by release assembly. Downloaded source, build trees, installed runtimes,
 and wheel caches remain ignored build artifacts.
