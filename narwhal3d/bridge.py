@@ -7149,6 +7149,35 @@ def curve_snap_target(curve, name="", samples=SNAP_SAMPLES):
                                         closed=closed, name=name, curve=curve)
 
 
+def _polycurve_snap_targets(polycurve, name="", samples=SNAP_SAMPLES):
+    """One target per exact PolyCurve leaf, recursively, in source order.
+
+    This adapter stays in Python because its leaves are rhino3dm/openNURBS objects,
+    which Rust cannot call. Each leaf still uses the existing curve adapter, so its
+    exact endpoints, sampled midpoint and exact-curve Near behavior stay unchanged.
+    """
+    try:
+        count = int(polycurve.SegmentCount)
+    except Exception:  # noqa: BLE001
+        return []
+
+    out = []
+    for i in range(count):
+        try:
+            segment = polycurve.SegmentCurve(i)
+        except Exception:  # noqa: BLE001
+            continue
+        if isinstance(segment, r3.PolyCurve):
+            out.extend(_polycurve_snap_targets(segment, name=name, samples=samples))
+            continue
+        if segment is None:
+            continue
+        target = curve_snap_target(segment, name=name, samples=samples)
+        if target is not None:
+            out.append(target)
+    return out
+
+
 def geometry_snap_targets(geom, name="", samples=SNAP_SAMPLES):
     """Every `osnap.SnapTarget` one piece of geometry offers.
 
@@ -7184,7 +7213,12 @@ def geometry_snap_targets(geom, name="", samples=SNAP_SAMPLES):
                 out.append(target)
         return out
 
-    # a curve
+    # a joined curve: each exact leaf is its own target, so Mid reaches every
+    # segment and End reaches the interior joined vertices.
+    if isinstance(geom, r3.PolyCurve):
+        return _polycurve_snap_targets(geom, name=name, samples=samples)
+
+    # any other curve
     if hasattr(geom, "Domain") and hasattr(geom, "PointAt"):
         target = curve_snap_target(geom, name=name, samples=samples)
         return [target] if target is not None else []

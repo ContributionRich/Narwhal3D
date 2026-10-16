@@ -23,7 +23,6 @@ ROOT_FILES = (
     "CODE_OF_CONDUCT.md", "THIRD_PARTY_NOTICES",
     "docs/readme-command-loft.gif", "docs/images/bugreport.png",
     "docs/gaps.md", "docs/github-project.md", "docs/windows-build.md",
-    "docs/rust-selection-core.md",
     "narwhal3d.sh", "run_tests.sh", "uishot.sh", "pyrightconfig.json",
 )
 LAUNCH_FILES = (
@@ -43,7 +42,6 @@ SCRIPT_FILES = (
     "scripts/fetch_locked.py", "scripts/bootstrap_dev_linux.sh",
     "scripts/build_blender_linux.sh", "scripts/release_policy.py", "scripts/assemble_linux_release.py",
     "scripts/verify_linux_release.py", "scripts/verify_windows_release.py", "scripts/audit_public_tree.py",
-    "scripts/build_selection_core.py", "scripts/verify_selection_core.py",
     "scripts/create_public_branch.py", "scripts/capture_readme_demo.py",
     "scripts/build_readme_demo.sh", "scripts/build_toolbar_icons.py",
     "scripts/collect_windows_build_info.ps1", "scripts/build_windows_preview.ps1",
@@ -55,7 +53,8 @@ TEST_FILES = (
     "spike/test_picture.py", "spike/test_cmdbar_hits.py",
     "spike/test_extrude_distance.py", "spike/test_extrude_options.py",
     "spike/test_boolean.py", "spike/test_boolean_extrusion.py",
-    "spike/test_tessellate.py", "spike/test_trim.py", "spike/test_sweep.py",
+    "spike/test_tessellate.py", "spike/test_trim.py", "spike/test_trim_drag.py",
+    "spike/test_sweep.py",
     "spike/test_picture_display.py", "spike/test_gumball_region_extrude.py",
     "spike/test_document_clipboard.py", "spike/test_control_point_osnap.py",
     "spike/ui_smoke.py", "spike/addon_e2e.py", "spike/test_app_drawn.py",
@@ -72,8 +71,6 @@ TEST_FILES = (
     "spike/test_tracedraw.py", "spike/test_onbrep_public.py", "spike/test_open_arg.py",
     "spike/test_windows_collector.py", "spike/test_windows_release.py",
     "spike/test_release_policy.py", "spike/test_public_project.py", "spike/public_ui_report.py",
-    "spike/test_rust_selection_core.py", "spike/test_native_selection.py",
-    "spike/test_selection_core_packaging.py", "spike/test_selection_release_integration.py",
 )
 PACKAGE_EXCLUDES = {
     "narwhal3d/cdr_reader.py",
@@ -111,8 +108,6 @@ def recursive_files(directory: str) -> list[str]:
         relative = path.relative_to(ROOT).as_posix()
         if "__pycache__" in path.parts or path.suffix in {".pyc", ".pyo"}:
             continue
-        if relative.startswith("native/selection_core/target/"):
-            continue
         if relative in PACKAGE_EXCLUDES:
             continue
         if relative.startswith("narwhal3d/kernel/bin/"):
@@ -125,7 +120,6 @@ def public_files() -> list[str]:
     paths = set(ROOT_FILES + LAUNCH_FILES + PATCH_FILES + SCRIPT_FILES + TEST_FILES)
     for directory in ("narwhal3d", "packaging", "licenses", ".github", "artwork"):
         paths.update(recursive_files(directory))
-    paths.update(recursive_files("native"))
     missing = sorted(path for path in paths if not (ROOT / path).is_file())
     if missing:
         raise PublicBranchError("allowlisted files are missing: " + ", ".join(missing))

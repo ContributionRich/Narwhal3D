@@ -6994,6 +6994,8 @@ class NARWHAL_OT_command_input(Operator):
             return {"RUNNING_MODAL"}
 
         if event.type == "ESC" and event.value == "PRESS":
+            if _trim_drag is not None:
+                _trim_drag_end()
             # Verified (the reference CAD application keyboard documentation) Esc "Cancels a
             # command", "Clears the command prompt" and "Deselects all selected
             # objects". It does NOT take keyboard focus away from the command line
@@ -7143,6 +7145,20 @@ class NARWHAL_OT_command_input(Operator):
                 name = app_state.ctx.undo_last()
                 if name:
                     st.log(f"{name} cancelled")
+                _tag_redraw_viewports()
+                self._redraw()
+                return {"RUNNING_MODAL"}
+
+        # Trim owns a held left button after its normal first pick. Mouse movement
+        # sweeps the existing curve picker; release merely closes the gesture.
+        if _trim_drag is not None:
+            if event.type == "MOUSEMOVE":
+                if _trim_drag_update(event.mouse_x, event.mouse_y):
+                    _tag_redraw_viewports()
+                    self._redraw()
+                return {"RUNNING_MODAL"}
+            if event.type == "LEFTMOUSE" and event.value == "RELEASE":
+                _trim_drag_end(event.mouse_x, event.mouse_y)
                 _tag_redraw_viewports()
                 self._redraw()
                 return {"RUNNING_MODAL"}
@@ -7347,6 +7363,9 @@ class NARWHAL_OT_command_input(Operator):
                     pt = pick_point(area, sp, region, rx, ry,
                                     constraint=_command_axis_constraint(cmd, area))
                     if pt is not None:
+                        trim_drag_latched = (_trim_drag_command(cmd)
+                                             and pick_curve_object(
+                                                 area, sp, region, rx, ry) is not None)
                         # if a snap is in range, THAT is the point. the reference CAD application:
                         # "the object snaps constrain the marker to an exact
                         # location on an object". Alt suspends snapping for this
@@ -7379,6 +7398,10 @@ class NARWHAL_OT_command_input(Operator):
                         text = coords.format_world(pt)
                         st.history.append("> " + text)
                         st.feed_line(text)
+                        if _trim_drag_command(st.active_command):
+                            _trim_drag_begin(
+                                area, sp, region, rx, ry,
+                                latched=trim_drag_latched)
                         if clear_active_snap():
                             _tag_redraw_viewports()
                         self._redraw()
@@ -17937,9 +17960,14 @@ def _object_screen_bboxes(area, space, region, projection=None):
     return out
 
 
+#: A held Trim click. The initial press still takes the normal point-pick route;
+#: subsequent mouse movement sweeps the existing Rust-accelerated curve picker.
+_trim_drag = None
+TRIM_DRAG_SAMPLE_PX = max(1.0, CURVE_PICK_PX * 0.5)
+
 #: An in-progress selection drag, or None. A click and a window selection start
-#: identically -- you cannot tell them apart until the button comes up -- so the
-#: decision is deferred to RELEASE, which is also how the reference CAD application must do it.
+# identically -- you cannot tell them apart until the button comes up -- so the
+# decision is deferred to RELEASE, which is also how the reference CAD application must do it.
 _sel_drag = None
 
 #: Rubber-band colours. **application-defined.** the reference CAD application names the settings
@@ -17971,6 +17999,89 @@ def selection_drag_rect():
     x1, y1 = st["now"]
     return (st["pane"], select.normalise_rect(x0, y0, x1, y1),
             select.drag_mode(x0, x1))
+
+
+def _trim_drag_command(cmd):
+    """True only while Trim is waiting for curve/surface parts to remove."""
+    return isinstance(cmd, commands.TrimCmd) and getattr(cmd, "step_index", -1) == 1
+
+
+def _trim_drag_begin(area, space, region, rx, ry, latched=False):
+    """Keep the already-processed Trim press alive for drag-over curve picks."""
+    global _trim_drag
+
+    _trim_drag = {
+        "pane": _pane_key(area), "start": (float(rx), float(ry)),
+        "last": (float(rx), float(ry)), "active": False,
+        "latched": bool(latched), "trimmed": 0,
+    }
+    return True
+
+
+def _trim_drag_update(mouse_x, mouse_y):
+    """Feed each newly crossed drawn curve part to the running Trim command."""
+    global _trim_drag
+    import math
+
+    st = _trim_drag
+    if st is None:
+        return False
+    if not _trim_drag_command(app_state.active_command):
+        _trim_drag = None
+        return False
+    area, space, region = _area_by_pane_key(st["pane"])
+    if region is None or space is None:
+        return False
+    now = (float(mouse_x - region.x), float(mouse_y - region.y))
+    if not st["active"]:
+        x0, y0 = st["start"]
+        if select.is_click(x0, y0, now[0], now[1]):
+            return False
+        st["active"] = True
+    x0, y0 = st["last"]
+    dx, dy = now[0] - x0, now[1] - y0
+    steps = max(1, int(math.ceil(math.hypot(dx, dy) / TRIM_DRAG_SAMPLE_PX)))
+    changed = False
+    for index in range(1, steps + 1):
+        rx = x0 + dx * index / steps
+        ry = y0 + dy * index / steps
+        hit = pick_curve_object(area, space, region, rx, ry)
+        if hit is None:
+            st["latched"] = False
+            continue
+        if st["latched"]:
+            continue
+        st["latched"] = True
+        cmd = app_state.active_command
+        if not _trim_drag_command(cmd):
+            _trim_drag = None
+            return changed
+        point = object_pick_location(area, space, region, rx, ry, hit)
+        if point is None:
+            continue
+        app_state.history.append("> " + coords.format_world(point))
+        app_state.feed_line(coords.format_world(point))
+        st["trimmed"] += 1
+        changed = True
+        if not _trim_drag_command(app_state.active_command):
+            _trim_drag = None
+            return changed
+    st["last"] = now
+    return changed
+
+
+def _trim_drag_end(mouse_x=None, mouse_y=None):
+    """Finish a held Trim gesture; a click was already handled on press."""
+    global _trim_drag
+
+    st = _trim_drag
+    if st is None:
+        return 0
+    if mouse_x is not None and mouse_y is not None and st.get("active"):
+        _trim_drag_update(mouse_x, mouse_y)
+    trimmed = int(st.get("trimmed", 0))
+    _trim_drag = None
+    return trimmed
 
 
 def _sel_drag_begin(area, region, rx, ry, shift=False, ctrl=False):

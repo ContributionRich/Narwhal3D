@@ -85,6 +85,7 @@ BLENDER_SUITES=(
     spike/test_boolean.py
     spike/test_tessellate.py
     spike/test_trim.py
+    spike/test_trim_drag.py
     spike/test_picture.py
     spike/test_picture_display.py
     spike/test_gumball_region_extrude.py
