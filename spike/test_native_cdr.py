@@ -17,6 +17,10 @@ import zlib
 
 ROOT = Path(__file__).resolve().parents[1]
 crate = ROOT / "native" / "cdr_core"
+rust_tests = subprocess.run(
+    ["cargo", "+1.95.0", "test", "--locked", "--offline"],
+    cwd=crate, text=True, capture_output=True,
+)
 build = subprocess.run(
     ["cargo", "+1.95.0", "build", "--release", "--locked", "--offline"],
     cwd=crate, text=True, capture_output=True,
@@ -42,6 +46,7 @@ def check(condition, label):
         raise AssertionError(label)
 
 
+check(rust_tests.returncode == 0, "Rust CDR unit tests pass from tracked vendored source")
 check(build.returncode == 0 and LIB.is_file(), "Rust CDR core builds from tracked source")
 prior = os.environ.get("NARWHAL_CDR_CORE")
 os.environ["NARWHAL_CDR_CORE"] = str(LIB)
@@ -71,6 +76,7 @@ try:
         with tempfile.TemporaryDirectory(prefix="narwhal_native_cdr_") as temporary:
             path = Path(temporary) / "native.cdr"
             writer.write_cdr(str(path), strokes, 100.0, 80.0, "Native", hairline=True)
+
             with zipfile.ZipFile(path) as archive:
                 sample_riff = archive.read("content/riffData.cdr")
                 sample_metadata = archive.read("metadata/metadata.xml")
@@ -123,6 +129,7 @@ try:
         ctypes.POINTER(ctypes.c_size_t),
     ]
     read_function.restype = ctypes.c_int32
+
     bad = (ctypes.c_uint8 * 1)(0xff)
     required = ctypes.c_size_t(123)
     check(function(bad, 1, None, 0, ctypes.byref(required)) == -2,

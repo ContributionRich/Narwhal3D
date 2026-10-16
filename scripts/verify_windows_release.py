@@ -29,13 +29,16 @@ REQUIRED = {
     "app/LICENSE", "app/THIRD_PARTY_NOTICES", "app/STATUS.md", "app/CHANGELOG.md",
     "app/licenses/GPL-3.0-or-later.txt", "app/licenses/rhino3dm-MIT.txt",
     "app/licenses/OCP-Apache-2.0.txt", "app/licenses/LGPL-2.1-or-later.txt",
-    "app/licenses/OCCT-exception-1.0.txt", "windows-release-manifest.json",
+    "app/licenses/OCCT-exception-1.0.txt", "app/licenses/TraceDraw-MIT.txt",
+    "app/licenses/TraceDraw-Rust-Dependencies.txt", "windows-release-manifest.json",
     "app/runtime/windows-x86_64/bin/narwhal_cdr_core.dll",
     "app/runtime/windows-x86_64/bin/narwhal-converter-supervisor.exe",
+    "app/runtime/windows-x86_64/bin/narwhal-cdr-multiversion.exe",
 }
 SOURCE_ROOTS = ("narwhal3d", "launch", "licenses")
 SOURCE_FILES = ("LICENSE", "THIRD_PARTY_NOTICES", "CHANGELOG.md", "STATUS.md")
 SHA_RE = re.compile(r"[0-9a-f]{64}\Z")
+CDR_MULTIVERSION_PROTOCOL = "narwhal-cdr-multiversion 1 tracedraw 821ba154 versions 16-18"
 
 
 class VerificationError(RuntimeError):
@@ -150,7 +153,8 @@ def verify_directory(root: Path, args: argparse.Namespace) -> None:
         raise VerificationError("Windows package inventory/hash manifest does not match")
     native_components = manifest.get("native_components")
     if not isinstance(native_components, dict) or set(native_components) != {
-        "narwhal_cdr_core.dll", "narwhal-converter-supervisor.exe"
+        "narwhal_cdr_core.dll", "narwhal-converter-supervisor.exe",
+        "narwhal-cdr-multiversion.exe"
     }:
         raise VerificationError("Windows manifest lacks the exact native component set")
     for field in ("runtime_binary_sha256", "launcher_sha256", "launcher_source_sha256"):
@@ -167,12 +171,18 @@ def verify_directory(root: Path, args: argparse.Namespace) -> None:
         root / "Narwhal3D.exe",
         ("Narwhal 3D".encode("utf-16le"), "Narwhal3D.exe".encode("utf-16le")),
         "Narwhal launcher")
-    for filename in ("narwhal_cdr_core.dll", "narwhal-converter-supervisor.exe"):
+    for filename in ("narwhal_cdr_core.dll", "narwhal-converter-supervisor.exe",
+                     "narwhal-cdr-multiversion.exe"):
         path = root / "app/runtime/windows-x86_64/bin" / filename
         record = native_components[filename]
+        data = path.read_bytes()
         if (not isinstance(record, dict) or record.get("sha256") != sha256(path)
-                or record.get("size") != path.stat().st_size or not path.read_bytes().startswith(b"MZ")):
+                or record.get("size") != path.stat().st_size or not data.startswith(b"MZ")):
             raise VerificationError(f"invalid packaged native component: {filename}")
+        if filename == "narwhal-cdr-multiversion.exe" and (
+                record.get("protocol") != CDR_MULTIVERSION_PROTOCOL
+                or CDR_MULTIVERSION_PROTOCOL.encode("ascii") not in data):
+            raise VerificationError("Windows multi-version CDR helper has the wrong protocol")
     require_bytes(
         root / "runtime/blender.exe",
         (b"Narwhal 3D quit", b" - Narwhal 3D"),

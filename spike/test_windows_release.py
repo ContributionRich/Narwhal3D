@@ -30,6 +30,7 @@ def check(condition: bool, label: str) -> None:
 launcher = (ROOT / "packaging/windows/narwhal3d_launcher.c").read_text(encoding="utf-8")
 resource = (ROOT / "packaging/windows/narwhal3d_launcher.rc.in").read_text(encoding="utf-8")
 icon = (ROOT / "packaging/windows/narwhal3d.ico").read_bytes()
+multiversion_source = (ROOT / "native/cdr_multiversion/src/main.rs").read_text(encoding="utf-8")
 
 check("CreateProcessW" in launcher and "runtime\\\\blender.exe" in launcher
       and "app\\\\launch\\\\bootstrap.py" in launcher,
@@ -51,6 +52,8 @@ check("Narwhal 3D early prerelease launcher" in resource
       "launcher version resource carries independent Narwhal identity")
 check(icon[:4] == b"\x00\x00\x01\x00" and len(icon) > 100_000,
       "Windows launcher icon is a substantive multi-resolution ICO")
+check(verifier.CDR_MULTIVERSION_PROTOCOL in multiversion_source,
+      "Windows verifier pins the bundled multi-version CDR helper protocol")
 
 with tempfile.TemporaryDirectory(prefix="narwhal_windows_verifier_test_") as temporary:
     root = Path(temporary)
@@ -61,7 +64,8 @@ with tempfile.TemporaryDirectory(prefix="narwhal_windows_verifier_test_") as tem
     check(all(any(item["path"] == path for item in base) for path in (
         "app/narwhal3d/cdr_reader.py", "app/narwhal3d/cdr_writer.py",
         "app/runtime/windows-x86_64/bin/narwhal_cdr_core.dll",
-        "app/runtime/windows-x86_64/bin/narwhal-converter-supervisor.exe")),
+        "app/runtime/windows-x86_64/bin/narwhal-converter-supervisor.exe",
+        "app/runtime/windows-x86_64/bin/narwhal-cdr-multiversion.exe")),
         "Windows release requires public CDR source and native components")
     for bad in (
         "app/narwhal3d/kernel/bin/helper.exe",

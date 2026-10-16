@@ -44,7 +44,7 @@ dxf_writer = _load("narwhal3d.dxf_writer", "narwhal3d/dxf_writer.py")
 obj_writer = _load("narwhal3d.obj_writer", "narwhal3d/obj_writer.py")
 stl_writer = _load("narwhal3d.stl_writer", "narwhal3d/stl_writer.py")
 vector_export = _load("narwhal3d.vector_export", "narwhal3d/vector_export.py")
-_load("narwhal3d.native_cdr", "narwhal3d/native_cdr.py")
+native_cdr = _load("narwhal3d.native_cdr", "narwhal3d/native_cdr.py")
 _load("narwhal3d.cdr_reader", "narwhal3d/cdr_reader.py")
 cdr_writer = _load("narwhal3d.cdr_writer", "narwhal3d/cdr_writer.py")
 from narwhal3d import kernel  # noqa: E402
@@ -445,6 +445,59 @@ native_import_widths = sorted(round(float(obj.Attributes.PlotWeight), 4)
 check(native_import_ok and native_import_widths == [0.0762, 0.25],
       "CDR v15 Import applies ordinary widths and exact Hairline through add_geometry UUIDs")
 
+embedded_helper = os.path.join(
+    ROOT, "native", "cdr_multiversion", "target", "release",
+    "narwhal-cdr-multiversion")
+fixture_generator = os.path.join(ROOT, "runtime", "linux-x86_64", "bin", "tracedraw-cli")
+if os.path.isfile(embedded_helper) and os.path.isfile(fixture_generator):
+    prior_helper = os.environ.get("NARWHAL_CDR_MULTIVERSION")
+    os.environ["NARWHAL_CDR_MULTIVERSION"] = embedded_helper
+    embedded_versions = []
+    embedded_signatures = []
+    cdr_calls.clear()
+    td.cdr_to_tdraw = forbidden_cdr_tdraw
+    try:
+        for version in (16, 17, 18):
+            generated_path = os.path.join(TMP, f"embedded-v{version}.cdr")
+            environment = os.environ.copy()
+            environment["TRACEDRAW_CDR_VERSION"] = str(version)
+            generated = subprocess.run(
+                [fixture_generator, "convert", layered_svg, generated_path],
+                env=environment, text=True, capture_output=True, timeout=120)
+            if generated.returncode == 0:
+                imported = ic.read_foreign(generated_path, doc("Inches"))
+                if (imported.items and any(
+                        f"CorelDRAW v{version} decoded by Narwhal's embedded" in note
+                        for note in imported.notes)):
+                    embedded_versions.append(version)
+                    first = imported.items[0][0]
+                    embedded_signatures.append((
+                        len(imported.items), tuple(sorted(imported.layers)),
+                        round(first.PointAtStart.X, 9), round(first.PointAtStart.Y, 9),
+                    ))
+        malformed_embedded = os.path.join(TMP, "malformed-embedded-v18.cdr")
+        with open(os.path.join(TMP, "embedded-v18.cdr"), "rb") as source:
+            damaged = source.read()[:-20]
+        open(malformed_embedded, "wb").write(damaged)
+        try:
+            ic.read_foreign(malformed_embedded, doc())
+        except ValueError as exc:
+            embedded_malformed_refused = "malformed CorelDRAW file refused" in str(exc)
+        else:
+            embedded_malformed_refused = False
+    finally:
+        td.cdr_to_tdraw = original_tdraw
+        if prior_helper is None:
+            os.environ.pop("NARWHAL_CDR_MULTIVERSION", None)
+        else:
+            os.environ["NARWHAL_CDR_MULTIVERSION"] = prior_helper
+    check(embedded_versions == [16, 17, 18]
+          and len(set(embedded_signatures)) == 1 and embedded_malformed_refused
+          and not cdr_calls,
+          "CDR v16/v17/v18 embedded imports agree and malformed packages never call the CLI")
+else:
+    print("  skip  embedded CDR integration waits for the source-built library/generator")
+
 malformed_cdr = os.path.join(TMP, "malformed.cdr")
 open(malformed_cdr, "wb").write(b"not a CDR package")
 td.cdr_to_tdraw = forbidden_cdr_tdraw
@@ -463,13 +516,13 @@ check(ic._cdr_unsupported_reason("the CDR contains an unsupported non-curve obje
       and ic._cdr_unsupported_reason("invalid CDR RIFF size") is None,
       "unsupported-v15 structure is classified for explicit fallback without admitting malformed RIFF")
 
-cdr_source = os.path.join(TMP, "unsupported-v16.cdr")
+cdr_source = os.path.join(TMP, "unsupported-v19.cdr")
 with zipfile.ZipFile(native_cdr_source) as source_archive, zipfile.ZipFile(cdr_source, "w") as out:
     for info in source_archive.infolist():
         data = source_archive.read(info.filename)
         if info.filename == "content/riffData.cdr":
             data = bytearray(data)
-            data[20:22] = (1600).to_bytes(2, "little")
+            data[20:22] = (1900).to_bytes(2, "little")
             data = bytes(data)
         out.writestr(info, data)
 
@@ -524,11 +577,18 @@ def fake_cdr_tdraw(path, directory):
     return target, ["warning: unsupported vector fill retained as boundary"]
 
 
+prior_embedded_helper = os.environ.get("NARWHAL_CDR_MULTIVERSION")
+if os.path.isfile(embedded_helper):
+    os.environ["NARWHAL_CDR_MULTIVERSION"] = embedded_helper
 td.cdr_to_tdraw = fake_cdr_tdraw
 try:
     cdr_got = ic.read_foreign(cdr_source, doc("Inches"))
 finally:
     td.cdr_to_tdraw = original_tdraw
+    if prior_embedded_helper is None:
+        os.environ.pop("NARWHAL_CDR_MULTIVERSION", None)
+    else:
+        os.environ["NARWHAL_CDR_MULTIVERSION"] = prior_embedded_helper
 cdr_layers = [layer for _geom, _base, layer in cdr_got.items]
 first_curve = next((geom for geom, _base, layer in cdr_got.items if layer == "Layer 1"), None)
 check(cdr_calls == [cdr_source] and len(cdr_got.items) == 8

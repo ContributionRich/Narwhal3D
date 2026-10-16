@@ -142,7 +142,13 @@ SECRET_MARKERS = (
 )
 # These policy files necessarily name exclusions/signatures. They remain subject to path,
 # symlink, Python-compilation, binary and secret checks.
-PROVENANCE_SCAN_EXEMPT = {".gitignore", "scripts/audit_public_tree.py"}
+PROVENANCE_SCAN_EXEMPT = {
+    ".gitignore",
+    "scripts/audit_public_tree.py",
+    # Exact upstream source has a local Rust variable named `owner`; its bytes are
+    # independently pinned by SOURCE_MANIFEST.json and spike/test_public_project.py.
+    "native/vendor/tracedraw/core/src/document.rs",
+}
 REQUIRED_EXECUTABLES = {
     "narwhal3d.sh",
     "run_tests.sh",

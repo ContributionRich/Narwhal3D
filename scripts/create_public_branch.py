@@ -76,6 +76,7 @@ TEST_FILES = (
     "spike/test_obj_reader.py", "spike/test_obj_writer.py",
     "spike/test_stl_writer.py", "spike/test_vector_export.py",
     "spike/test_tracedraw.py", "spike/test_cdr.py", "spike/test_native_cdr.py",
+    "spike/test_embedded_cdr.py",
     "spike/test_converter_supervisor.py", "spike/test_runtime_tools.py",
     "spike/test_onbrep_public.py", "spike/test_open_arg.py",
     "spike/test_windows_collector.py", "spike/test_windows_release.py",
@@ -87,6 +88,9 @@ NATIVE_FILES = (
     "native/cdr_core/src/reader.rs",
     "native/converter_supervisor/.gitignore", "native/converter_supervisor/Cargo.lock",
     "native/converter_supervisor/Cargo.toml", "native/converter_supervisor/src/main.rs",
+    "native/cdr_multiversion/.gitignore", "native/cdr_multiversion/Cargo.lock",
+    "native/cdr_multiversion/Cargo.toml",
+    "native/cdr_multiversion/src/main.rs",
 )
 RUNTIME_FILES = ("runtime/README.md", "runtime/manifest.json")
 PACKAGE_EXCLUDES = {"narwhal3d/kernel/brep_writer.cpp"}
@@ -119,7 +123,8 @@ def recursive_files(directory: str) -> list[str]:
         if not path.is_file():
             continue
         relative = path.relative_to(ROOT).as_posix()
-        if "__pycache__" in path.parts or path.suffix in {".pyc", ".pyo"}:
+        if "__pycache__" in path.parts or "target" in path.parts \
+                or path.suffix in {".pyc", ".pyo"}:
             continue
         if relative in PACKAGE_EXCLUDES:
             continue
@@ -133,6 +138,8 @@ def public_files() -> list[str]:
     paths = set(ROOT_FILES + LAUNCH_FILES + WELCOME_FILES + NATIVE_FILES + RUNTIME_FILES
                 + PATCH_FILES + SCRIPT_FILES + TEST_FILES)
     for directory in ("narwhal3d", "packaging", "licenses", ".github", "artwork"):
+        paths.update(recursive_files(directory))
+    for directory in ("native/vendor/tracedraw",):
         paths.update(recursive_files(directory))
     missing = sorted(path for path in paths if not (ROOT / path).is_file())
     if missing:

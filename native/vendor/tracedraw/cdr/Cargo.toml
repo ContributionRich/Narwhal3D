@@ -1,0 +1,19 @@
+[package]
+name = "tracedraw-cdr"
+version = "0.9.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+publish = false
+description = "Pinned TraceDraw clean-room CDR reader used by Narwhal"
+
+[dependencies]
+tracedraw-core = { path = "../core" }
+thiserror = "2"
+log = "0.4"
+zip = { version = "4", default-features = false, features = ["deflate"] }
+encoding_rs = "0.8"
+flate2 = "1"
+tiny-skia = "0.12"
+
+[dev-dependencies]
+tracedraw-core = { path = "../core", features = ["test-profiles"] }

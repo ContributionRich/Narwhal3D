@@ -4,6 +4,10 @@ All notable public changes will be recorded here. Narwhal 3D is an extremely ear
 
 ## Unreleased
 
+### Added
+
+- Embed pinned, licensed TraceDraw Rust reader crates in a bundled, supervised Narwhal helper for CDR v16, v17, and v18 Import/Open without any separately installed executable or service.
+
 ## 0.4.1 — 2026-10-16
 
 ### Added

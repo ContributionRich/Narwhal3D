@@ -36,7 +36,11 @@ APPIMAGE_RUNTIME_SHA256 = "2fca8b443c92510f1483a883f60061ad09b46b978b2631c807cd8
 APP_ROOT_RELATIVE = Path("usr/lib/narwhal3d")
 RUNTIME_RELATIVE = Path("tools/blender-patched")
 NATIVE_COMPONENT_RELATIVE = Path("runtime/linux-x86_64/bin")
-NATIVE_COMPONENTS = ("libnarwhal_cdr_core.so", "narwhal-converter-supervisor")
+CDR_MULTIVERSION_PROTOCOL = "narwhal-cdr-multiversion 1 tracedraw 821ba154 versions 16-18"
+NATIVE_COMPONENTS = (
+    "libnarwhal_cdr_core.so", "narwhal-converter-supervisor",
+    "narwhal-cdr-multiversion",
+)
 MANIFEST_RELATIVE = PurePosixPath("usr/lib/narwhal3d/packaging/release-manifest.json")
 LOCK_RELATIVE = APP_ROOT_RELATIVE / "packaging/linux-x86_64.lock.json"
 FORBIDDEN_PARTS = {"vendor", "More_Data", "ExamplePhotos", ".git", "bug_reports", "artifacts"}
@@ -64,6 +68,8 @@ REQUIRED_NOTICE_PATHS = {
     "usr/lib/narwhal3d/licenses/LGPL-2.1-or-later.txt",
     "usr/lib/narwhal3d/licenses/OCCT-exception-1.0.txt",
     "usr/lib/narwhal3d/licenses/AppImage-MIT.txt",
+    "usr/lib/narwhal3d/licenses/TraceDraw-MIT.txt",
+    "usr/lib/narwhal3d/licenses/TraceDraw-Rust-Dependencies.txt",
 }
 REQUIRED_PATHS = {
     *REQUIRED_NOTICE_PATHS,
@@ -89,6 +95,7 @@ REQUIRED_PATHS = {
     "usr/lib/narwhal3d/tools/blender-patched/.narwhal3d-native-runtime.json",
     "usr/lib/narwhal3d/runtime/linux-x86_64/bin/libnarwhal_cdr_core.so",
     "usr/lib/narwhal3d/runtime/linux-x86_64/bin/narwhal-converter-supervisor",
+    "usr/lib/narwhal3d/runtime/linux-x86_64/bin/narwhal-cdr-multiversion",
 }
 
 
@@ -440,9 +447,11 @@ def verify_executables_and_imports(appdir: Path) -> None:
     native_dir = app_root / NATIVE_COMPONENT_RELATIVE
     cdr_library = native_dir / "libnarwhal_cdr_core.so"
     supervisor = native_dir / "narwhal-converter-supervisor"
+    multiversion = native_dir / "narwhal-cdr-multiversion"
     for path, description in ((launcher, "launcher"), (blender, "Blender"),
                               (python, "bundled Python"),
-                              (supervisor, "native converter supervisor")):
+                              (supervisor, "native converter supervisor"),
+                              (multiversion, "bundled multi-version CDR reader")):
         if not path.is_file() or path.is_symlink() or not os.access(path, os.X_OK):
             raise VerificationError(f"{description} is missing, symlinked, or non-executable: {path}")
 
@@ -476,6 +485,14 @@ def verify_executables_and_imports(appdir: Path) -> None:
         raise VerificationError(f"cannot load packaged native CDR library: {exc}") from exc
     if cdr_abi != 1:
         raise VerificationError(f"packaged native CDR ABI must be 1, got {cdr_abi}")
+    try:
+        completed = subprocess.run(
+            [str(multiversion), "--version"], text=True, capture_output=True,
+            timeout=30, check=True)
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise VerificationError(f"cannot execute packaged multi-version CDR reader: {exc}") from exc
+    if completed.stdout.strip() != CDR_MULTIVERSION_PROTOCOL:
+        raise VerificationError("packaged multi-version CDR reader has the wrong protocol")
 
     probe = r'''
 import importlib.metadata
@@ -637,7 +654,10 @@ def self_check() -> None:
         path = APP_ROOT_RELATIVE / "narwhal3d" / included
         if is_excluded_app_payload(PurePosixPath(path.as_posix())):
             raise VerificationError(f"self-check still excludes public CDR source: {included}")
-    if NATIVE_COMPONENTS != ("libnarwhal_cdr_core.so", "narwhal-converter-supervisor"):
+    if NATIVE_COMPONENTS != (
+        "libnarwhal_cdr_core.so", "narwhal-converter-supervisor",
+        "narwhal-cdr-multiversion",
+    ):
         raise VerificationError("self-check found an incomplete native component set")
     for excluded in (*expected_excluded_files, EXCLUDED_APP_TREE / "helper"):
         if not is_excluded_app_payload(excluded):
@@ -692,6 +712,8 @@ def self_check() -> None:
         "usr/lib/narwhal3d/licenses/LGPL-2.1-or-later.txt",
         "usr/lib/narwhal3d/licenses/OCCT-exception-1.0.txt",
         "usr/lib/narwhal3d/licenses/AppImage-MIT.txt",
+        "usr/lib/narwhal3d/licenses/TraceDraw-MIT.txt",
+        "usr/lib/narwhal3d/licenses/TraceDraw-Rust-Dependencies.txt",
     }
     if REQUIRED_NOTICE_PATHS != expected_notices or not expected_notices.issubset(REQUIRED_PATHS):
         raise VerificationError("self-check found an incomplete required notice set")

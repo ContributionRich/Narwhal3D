@@ -2,11 +2,14 @@
 """Public repository organization, roadmap, issue forms, and asset policy checks."""
 from __future__ import annotations
 
+import hashlib
 import importlib.util
+import json
 from pathlib import Path
 import re
 import struct
 import sys
+import tomllib
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -114,10 +117,43 @@ check({"native/cdr_core/Cargo.toml", "native/cdr_core/src/lib.rs",
        "native/cdr_core/src/reader.rs", "native/converter_supervisor/Cargo.toml",
        "native/converter_supervisor/src/main.rs", "narwhal3d/cdr_reader.py",
        "narwhal3d/cdr_writer.py", "spike/test_cdr.py", "spike/test_native_cdr.py",
-       "spike/test_converter_supervisor.py", "scripts/stage_fedora_inkscape.py"} <= public
-      and not any(path.startswith(("native/cdr_core/target/",
-                                   "native/converter_supervisor/target/")) for path in public),
-      "the public allowlist includes native CDR/supervisor source and no build trees")
+       "spike/test_converter_supervisor.py", "scripts/stage_fedora_inkscape.py",
+       "native/vendor/tracedraw/core/Cargo.toml",
+       "native/vendor/tracedraw/cdr/Cargo.toml",
+       "native/vendor/tracedraw/LICENSE-MIT",
+       "native/vendor/tracedraw/LICENSE-APACHE",
+       "native/vendor/tracedraw/SOURCE_MANIFEST.json",
+       "native/cdr_multiversion/Cargo.toml", "native/cdr_multiversion/src/main.rs",
+       "narwhal3d/embedded_cdr.py", "spike/test_embedded_cdr.py",
+       "licenses/TraceDraw-MIT.txt", "licenses/TraceDraw-Rust-Dependencies.txt"} <= public
+      and not any("/target/" in f"/{path}/" for path in public),
+      "the public allowlist includes native CDR helpers/vendored source and no build trees")
+
+trace_root = ROOT / "native/vendor/tracedraw"
+trace_manifest = json.loads((trace_root / "SOURCE_MANIFEST.json").read_text(encoding="utf-8"))
+trace_files = {path.relative_to(trace_root).as_posix() for directory in (
+    trace_root / "core/src", trace_root / "cdr/src") for path in directory.rglob("*")
+    if path.is_file()} | {"LICENSE-MIT", "LICENSE-APACHE", "CLEANROOM.md"}
+check(trace_manifest.get("revision") == "821ba1545e3d3f75843fe7d3f912214800929821"
+      and set(trace_manifest.get("files", {})) == trace_files
+      and all(hashlib.sha256((trace_root / path).read_bytes()).hexdigest() == digest
+              for path, digest in trace_manifest["files"].items())
+      and set(trace_manifest.get("adapted_files", {}))
+          == {"core/Cargo.toml", "core/.gitignore", "cdr/Cargo.toml",
+              "cdr/.gitignore", "README.md"}
+      and all(hashlib.sha256((trace_root / path).read_bytes()).hexdigest() == digest
+              for path, digest in trace_manifest["adapted_files"].items())
+      and trace_manifest.get("dependency_notices_sha256")
+          == hashlib.sha256((ROOT / "licenses/TraceDraw-Rust-Dependencies.txt").read_bytes()).hexdigest(),
+      "vendored TraceDraw source matches its pinned cryptographic inventory")
+
+helper_lock = tomllib.loads((ROOT / "native/cdr_multiversion/Cargo.lock").read_text(encoding="utf-8"))
+helper_notices = (ROOT / "licenses/TraceDraw-Rust-Dependencies.txt").read_text(encoding="utf-8")
+registry_packages = [(package["name"], package["version"]) for package in helper_lock["package"]
+                     if str(package.get("source", "")).startswith("registry+")]
+check(registry_packages and all(f"PACKAGE {name} {version}\n" in helper_notices
+                                for name, version in registry_packages),
+      "static multi-version helper notices cover every locked registry package")
 check("POLICY.md" not in public and not any(path.startswith("artifacts/") for path in public),
       "instruction inputs and temporary planning artifacts stay outside public source")
 

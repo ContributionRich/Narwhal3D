@@ -755,6 +755,11 @@ def _read_tdraw(path, model):
             document = json.load(stream)
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         raise ValueError(f"invalid TraceDraw drawing: {exc}") from exc
+    return _read_tdraw_document(document, model)
+
+
+def _read_tdraw_document(document, model):
+    """Convert an already-decoded TraceDraw document without temporary files."""
     if not isinstance(document, dict) or not isinstance(document.get("pages"), list) \
             or not document["pages"]:
         raise ValueError("TraceDraw drawing has no readable pages")
@@ -921,17 +926,46 @@ def _cdr_unsupported_reason(message):
 
 
 def _read_cdr(path, model):
-    from . import cdr_reader
+    from . import cdr_reader, embedded_cdr
 
     try:
         drawing = cdr_reader.read_cdr(path)
     except cdr_reader.CDRReadError as exc:
-        unsupported = _cdr_unsupported_reason(str(exc))
+        original_error = exc
+    else:
+        return _import_native_v15_drawing(drawing, model)
+
+    try:
+        embedded = embedded_cdr.decode(path)
+    except embedded_cdr.EmbeddedCDRUnsupported as embedded_error:
+        return _read_cdr_tracedraw(path, model, str(embedded_error))
+    except embedded_cdr.EmbeddedCDRUnavailable as embedded_error:
+        hint = embedded_cdr.version_hint(path)
+        if hint is not None:
+            raise ValueError(str(embedded_error)) from embedded_error
+        unsupported = _cdr_unsupported_reason(str(original_error))
         if unsupported is not None:
             return _read_cdr_tracedraw(path, model, unsupported)
         raise ValueError(
-            f"malformed CorelDRAW file refused without converter fallback: {exc}") from exc
+            f"malformed CorelDRAW file refused without converter fallback: {original_error}") \
+            from original_error
+    except embedded_cdr.EmbeddedCDRError as embedded_error:
+        raise ValueError(
+            f"malformed CorelDRAW file refused without converter fallback: {embedded_error}") \
+            from embedded_error
+    else:
+        out = _read_tdraw_document(embedded["document"], model)
+        report = embedded["report"]
+        out.notes.insert(0, f"CorelDRAW v{embedded['version']} decoded by Narwhal's "
+                            "embedded TraceDraw Rust reader")
+        out.notes.extend(f"TraceDraw warning: {warning}" for warning in report["warnings"])
+        if report["skipped_objects"]:
+            out.notes.append(f"NOT imported: {report['skipped_objects']} object(s) skipped by "
+                             "the embedded CDR reader")
+        return out
 
+
+def _import_native_v15_drawing(drawing, model):
     out = Imported()
     scale = 1.0 / _units().UNIT_SCALE_MM[_model_unit(model)]
     transform = (scale, 0.0, 0.0, scale, 0.0, 0.0)

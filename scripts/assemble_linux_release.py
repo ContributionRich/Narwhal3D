@@ -38,7 +38,11 @@ FORBIDDEN_PARTS = {"vendor", "More_Data", "ExamplePhotos", ".git", "bug_reports"
 EXCLUDED_PACKAGE_FILES = {PurePosixPath("kernel/brep_writer.cpp")}
 EXCLUDED_PACKAGE_TREE = PurePosixPath("kernel/bin")
 NATIVE_COMPONENT_RELATIVE = Path("runtime/linux-x86_64/bin")
-NATIVE_COMPONENTS = ("libnarwhal_cdr_core.so", "narwhal-converter-supervisor")
+CDR_MULTIVERSION_PROTOCOL = "narwhal-cdr-multiversion 1 tracedraw 821ba154 versions 16-18"
+NATIVE_COMPONENTS = (
+    "libnarwhal_cdr_core.so", "narwhal-converter-supervisor",
+    "narwhal-cdr-multiversion",
+)
 LAUNCH_FILES = (
     "bootstrap.py",
     "open_arg.py",
@@ -54,6 +58,8 @@ REQUIRED_LICENSE_FILES = (
     "LGPL-2.1-or-later.txt",
     "OCCT-exception-1.0.txt",
     "AppImage-MIT.txt",
+    "TraceDraw-MIT.txt",
+    "TraceDraw-Rust-Dependencies.txt",
 )
 DISTRIBUTIONS = {
     "rhino3dm": "8.35.0",
@@ -394,8 +400,8 @@ def validate_native_components(directory: Path) -> dict[str, dict[str, object]]:
     for filename in NATIVE_COMPONENTS:
         path = directory / filename
         require_regular_file(path, f"native component {filename}")
-        if filename == "narwhal-converter-supervisor" and not os.access(path, os.X_OK):
-            raise ReleaseError("native converter supervisor is not executable")
+        if filename != "libnarwhal_cdr_core.so" and not os.access(path, os.X_OK):
+            raise ReleaseError(f"native component is not executable: {filename}")
         records[filename] = {"size": path.stat().st_size, "sha256": sha256_file(path)}
     try:
         required_glibc, _path = scan_runtime_glibc(directory)
@@ -411,6 +417,16 @@ def validate_native_components(directory: Path) -> dict[str, dict[str, object]]:
     if abi != 1:
         raise ReleaseError(f"native CDR ABI must be 1, got {abi}")
     records["libnarwhal_cdr_core.so"]["abi"] = abi
+    try:
+        completed = subprocess.run(
+            [str(directory / "narwhal-cdr-multiversion"), "--version"],
+            text=True, capture_output=True, timeout=30, check=True)
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise ReleaseError(f"cannot execute bundled multi-version CDR reader: {exc}") from exc
+    protocol = completed.stdout.strip()
+    if protocol != CDR_MULTIVERSION_PROTOCOL:
+        raise ReleaseError(f"wrong multi-version CDR protocol: {protocol!r}")
+    records["narwhal-cdr-multiversion"]["protocol"] = protocol
     records["required_glibc"] = format_glibc(required_glibc)
     return records
 
@@ -751,6 +767,8 @@ def self_check() -> None:
         "LGPL-2.1-or-later.txt",
         "OCCT-exception-1.0.txt",
         "AppImage-MIT.txt",
+        "TraceDraw-MIT.txt",
+        "TraceDraw-Rust-Dependencies.txt",
     }
     if set(REQUIRED_LICENSE_FILES) != expected_licenses:
         raise ReleaseError("self-check found an incomplete required license set")
@@ -803,7 +821,10 @@ def self_check() -> None:
             pass
         else:
             raise ReleaseError("self-check accepted a symlink in the license directory")
-        if NATIVE_COMPONENTS != ("libnarwhal_cdr_core.so", "narwhal-converter-supervisor"):
+        if NATIVE_COMPONENTS != (
+            "libnarwhal_cdr_core.so", "narwhal-converter-supervisor",
+            "narwhal-cdr-multiversion",
+        ):
             raise ReleaseError("self-check found an incomplete native component set")
     print("assemble_linux_release.py self-check: OK")
 

@@ -85,6 +85,7 @@ PURE_SUITES=(
     spike/test_tracedraw.py
     spike/test_cdr.py
     spike/test_native_cdr.py
+    spike/test_embedded_cdr.py
     spike/test_converter_supervisor.py
     spike/test_runtime_tools.py
     spike/test_windows_collector.py

@@ -51,7 +51,7 @@ Artwork published with Narwhal must be original or have clearly documented GPL-c
 - STEP is the recommended exact solid interchange format.
 - The initial public build does not bundle the optional openNURBS exact-Brep writer. Some Open CASCADE multi-face solids therefore cannot be stored as exact `.3dm` Breps; the application warns rather than claiming a faceted save is exact.
 - PDF and Adobe Illustrator import can use an optional converter pack that is not bundled in the 0.4.1 AppImage.
-- CorelDRAW `.cdr` v15 Import/Open and Export/Print now use Narwhal's built-in checked codec without external software. Curves, source layers, per-object colours, ordinary plot widths, and exact 0.003-inch Hairline survive the supported path; output defaults to genuine v15 for CorelDRAW 2015/X7 compatibility. Other generations and explicitly unsupported structures may use the local TraceDraw fallback with a visible note; malformed files are refused without silently switching parsers. TraceDraw is not bundled in 0.4.1.
+- CorelDRAW `.cdr` v15 Import/Open and Export/Print use Narwhal's built-in checked codec. Version 16, 17, and 18 Import/Open uses pinned TraceDraw Rust crates statically compiled into a bundled Narwhal helper and isolated by the native process supervisor. These paths require no separately installed executable or service. Curves, source layers, per-object colours, ordinary plot widths, and exact 0.003-inch Hairline survive the supported path; output remains genuine v15 for CorelDRAW 2015/X7 compatibility. Other generations and explicitly unsupported structures may use an optional local CLI fallback with a visible note; malformed files are refused without silently switching parsers.
 
 ## Platform and architecture roadmap
 
