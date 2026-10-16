@@ -58,8 +58,13 @@ with tempfile.TemporaryDirectory(prefix="narwhal_windows_verifier_test_") as tem
     base = [{"path": path, "size": 1, "sha256": "0" * 64}
             for path in verifier.REQUIRED if path != "windows-release-manifest.json"]
     verifier.validate_paths(root, base)
+    check(all(any(item["path"] == path for item in base) for path in (
+        "app/narwhal3d/cdr_reader.py", "app/narwhal3d/cdr_writer.py",
+        "app/runtime/windows-x86_64/bin/narwhal_cdr_core.dll",
+        "app/runtime/windows-x86_64/bin/narwhal-converter-supervisor.exe")),
+        "Windows release requires public CDR source and native components")
     for bad in (
-        "app/narwhal3d/cdr_" + "reader.py", "app/narwhal3d/kernel/bin/helper.exe",
+        "app/narwhal3d/kernel/bin/helper.exe",
         "runtime/blender.pdb", "app/launch/__pycache__/open_arg.pyc",
         "runtime/makesrna.exe", "bug_" + "reports/private.txt",
     ):

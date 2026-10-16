@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import ctypes
 import hashlib
 import json
 import os
@@ -34,12 +35,12 @@ APPIMAGE_RUNTIME_VERSION = "20251108"
 APPIMAGE_RUNTIME_SHA256 = "2fca8b443c92510f1483a883f60061ad09b46b978b2631c807cd873a47ec260d"
 APP_ROOT_RELATIVE = Path("usr/lib/narwhal3d")
 RUNTIME_RELATIVE = Path("tools/blender-patched")
+NATIVE_COMPONENT_RELATIVE = Path("runtime/linux-x86_64/bin")
+NATIVE_COMPONENTS = ("libnarwhal_cdr_core.so", "narwhal-converter-supervisor")
 MANIFEST_RELATIVE = PurePosixPath("usr/lib/narwhal3d/packaging/release-manifest.json")
 LOCK_RELATIVE = APP_ROOT_RELATIVE / "packaging/linux-x86_64.lock.json"
 FORBIDDEN_PARTS = {"vendor", "More_Data", "ExamplePhotos", ".git", "bug_reports", "artifacts"}
 EXCLUDED_APP_FILES = {
-    PurePosixPath("usr/lib/narwhal3d/narwhal3d/cdr_reader.py"),
-    PurePosixPath("usr/lib/narwhal3d/narwhal3d/cdr_writer.py"),
     PurePosixPath("usr/lib/narwhal3d/narwhal3d/kernel/brep_writer.cpp"),
 }
 EXCLUDED_APP_TREE = PurePosixPath("usr/lib/narwhal3d/narwhal3d/kernel/bin")
@@ -86,6 +87,8 @@ REQUIRED_PATHS = {
     "usr/lib/narwhal3d/tools/blender-patched/blender",
     "usr/lib/narwhal3d/tools/blender-patched/5.2/python/bin/python3.13",
     "usr/lib/narwhal3d/tools/blender-patched/.narwhal3d-native-runtime.json",
+    "usr/lib/narwhal3d/runtime/linux-x86_64/bin/libnarwhal_cdr_core.so",
+    "usr/lib/narwhal3d/runtime/linux-x86_64/bin/narwhal-converter-supervisor",
 }
 
 
@@ -434,7 +437,12 @@ def verify_executables_and_imports(appdir: Path) -> None:
     blender = runtime / "blender"
     python = runtime / "5.2/python/bin/python3.13"
     launcher = app_root / "narwhal3d.sh"
-    for path, description in ((launcher, "launcher"), (blender, "Blender"), (python, "bundled Python")):
+    native_dir = app_root / NATIVE_COMPONENT_RELATIVE
+    cdr_library = native_dir / "libnarwhal_cdr_core.so"
+    supervisor = native_dir / "narwhal-converter-supervisor"
+    for path, description in ((launcher, "launcher"), (blender, "Blender"),
+                              (python, "bundled Python"),
+                              (supervisor, "native converter supervisor")):
         if not path.is_file() or path.is_symlink() or not os.access(path, os.X_OK):
             raise VerificationError(f"{description} is missing, symlinked, or non-executable: {path}")
 
@@ -459,6 +467,15 @@ def verify_executables_and_imports(appdir: Path) -> None:
     marker = read_json(runtime / ".narwhal3d-native-runtime.json", "native runtime provenance marker")
     if marker.get("version_first_line") != first_line:
         raise VerificationError("executed native version banner differs from provenance")
+    try:
+        library = ctypes.CDLL(str(cdr_library))
+        library.narwhal_cdr_abi_version.argtypes = []
+        library.narwhal_cdr_abi_version.restype = ctypes.c_uint32
+        cdr_abi = int(library.narwhal_cdr_abi_version())
+    except (OSError, AttributeError, ValueError) as exc:
+        raise VerificationError(f"cannot load packaged native CDR library: {exc}") from exc
+    if cdr_abi != 1:
+        raise VerificationError(f"packaged native CDR ABI must be 1, got {cdr_abi}")
 
     probe = r'''
 import importlib.metadata
@@ -505,6 +522,9 @@ def verify_appdir(appdir: Path, args: argparse.Namespace) -> None:
         raise VerificationError("release manifest is missing or is a symlink")
     manifest = read_json(manifest_path, "release manifest")
     identity = verify_identity(manifest, args)
+    native_components = manifest.get("native_components")
+    if not isinstance(native_components, dict) or native_components.get("required_glibc") is None:
+        raise VerificationError("release manifest lacks native component provenance")
     expected = expected_inventory(manifest)
     actual = actual_inventory(appdir)
     missing_required = REQUIRED_PATHS - set(actual)
@@ -609,12 +629,16 @@ def self_check() -> None:
         else:
             raise VerificationError(f"self-check accepted unsafe path: {unsafe!r}")
     expected_excluded_files = {
-        PurePosixPath("usr/lib/narwhal3d/narwhal3d/cdr_reader.py"),
-        PurePosixPath("usr/lib/narwhal3d/narwhal3d/cdr_writer.py"),
         PurePosixPath("usr/lib/narwhal3d/narwhal3d/kernel/brep_writer.cpp"),
     }
     if EXCLUDED_APP_FILES != expected_excluded_files:
         raise VerificationError("self-check found an incomplete excluded application payload set")
+    for included in ("cdr_reader.py", "cdr_writer.py"):
+        path = APP_ROOT_RELATIVE / "narwhal3d" / included
+        if is_excluded_app_payload(PurePosixPath(path.as_posix())):
+            raise VerificationError(f"self-check still excludes public CDR source: {included}")
+    if NATIVE_COMPONENTS != ("libnarwhal_cdr_core.so", "narwhal-converter-supervisor"):
+        raise VerificationError("self-check found an incomplete native component set")
     for excluded in (*expected_excluded_files, EXCLUDED_APP_TREE / "helper"):
         if not is_excluded_app_payload(excluded):
             raise VerificationError(f"self-check accepted excluded application payload: {excluded}")

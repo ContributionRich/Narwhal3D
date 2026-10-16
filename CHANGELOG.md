@@ -4,11 +4,30 @@ All notable public changes will be recorded here. Narwhal 3D is an extremely ear
 
 ## Unreleased
 
+## 0.4.1 — 2026-10-16
+
 ### Added
 
-- Publish an unsigned `0.4.0-preview.1` Windows x86_64 portable ZIP with a native Narwhal launcher, exact public application source, locked Windows geometry dependencies, complete hash inventory, and fail-closed verifier. Physical-GPU validation, installer/file associations, signing, and complete internal runtime PE branding remain open.
+- Add a native startup welcome window with New-model unit choices, Open, Recent Files, About, immediate close, interaction pinning, and ready-state progress.
 - Add a checked Rust CorelDRAW v15 reader/writer so supported `.cdr` Import, Open, Export, and Print no longer require external software.
 - Preserve CDR source layers, per-object colours, ordinary plot widths, and exact 0.003-inch Hairline; use TraceDraw only as an explicit fallback for other generations/unsupported structures, never malformed input.
+- Add a bounded Rust converter supervisor with process-tree teardown and behavior-equivalent Python fallback.
+- Add unsigned Linux x86_64 AppImage and Windows x86_64 portable prerelease packages from one audited public source revision.
+
+### Changed
+
+- Move selection projection, crossing tests, point/control-point picking, snapping distance/coarse rejection, curve hover, Near queries, AABB reduction, and high-cardinality matrix preparation into checked Rust paths where available.
+- Defer the first native window presentation until the Narwhal interface is ready, replacing the previous startup flash with the welcome workflow.
+- Give sidebar flyout commands distinct icons, labels, hover descriptions, and actions.
+- Keep release numbering on the owner-required early `0.4.x` prerelease line.
+
+### Fixed
+
+- Restore endpoint, midpoint, and related object snaps on individual sections of joined curves.
+- Add drag-over Trim so a gesture can remove every crossed segment instead of requiring one click per piece.
+- Keep the welcome window open after user interaction, close it promptly on request, and ensure New/Open actions appear above it before dismissal.
+- Correct CDR Import/Open plot-width and Hairline propagation and preserve same-layer colour conflicts explicitly.
+- Rebuild the Linux native runtime against glibc 2.28 so the AppImage no longer requires the host's glibc 2.43.
 
 ## 0.4.0 — 2026-10-12
 

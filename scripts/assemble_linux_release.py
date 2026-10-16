@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import ctypes
 import hashlib
 import json
 import os
@@ -34,12 +35,10 @@ PLATFORM = "linux-x86_64"
 PACKAGE_FORMAT = "appimage"
 RUNTIME_FLAVOR = "native-narwhal-runtime"
 FORBIDDEN_PARTS = {"vendor", "More_Data", "ExamplePhotos", ".git", "bug_reports", "artifacts"}
-EXCLUDED_PACKAGE_FILES = {
-    PurePosixPath("cdr_reader.py"),
-    PurePosixPath("cdr_writer.py"),
-    PurePosixPath("kernel/brep_writer.cpp"),
-}
+EXCLUDED_PACKAGE_FILES = {PurePosixPath("kernel/brep_writer.cpp")}
 EXCLUDED_PACKAGE_TREE = PurePosixPath("kernel/bin")
+NATIVE_COMPONENT_RELATIVE = Path("runtime/linux-x86_64/bin")
+NATIVE_COMPONENTS = ("libnarwhal_cdr_core.so", "narwhal-converter-supervisor")
 LAUNCH_FILES = (
     "bootstrap.py",
     "open_arg.py",
@@ -388,10 +387,38 @@ def validate_appimage_runtime(path: Path, artifacts: dict[str, JsonObject]) -> N
         raise ReleaseError(f"AppImage runtime SHA-256 mismatch: expected {APPIMAGE_RUNTIME_SHA256}, got {actual}")
 
 
-def copy_file(source: Path, destination: Path, description: str) -> None:
+def validate_native_components(directory: Path) -> dict[str, dict[str, object]]:
+    if not directory.is_dir() or directory.is_symlink():
+        raise ReleaseError(f"native component directory is missing or symlinked: {directory}")
+    records = {}
+    for filename in NATIVE_COMPONENTS:
+        path = directory / filename
+        require_regular_file(path, f"native component {filename}")
+        if filename == "narwhal-converter-supervisor" and not os.access(path, os.X_OK):
+            raise ReleaseError("native converter supervisor is not executable")
+        records[filename] = {"size": path.stat().st_size, "sha256": sha256_file(path)}
+    try:
+        required_glibc, _path = scan_runtime_glibc(directory)
+    except RuntimeError as exc:
+        raise ReleaseError(str(exc)) from exc
+    try:
+        library = ctypes.CDLL(str(directory / "libnarwhal_cdr_core.so"))
+        library.narwhal_cdr_abi_version.argtypes = []
+        library.narwhal_cdr_abi_version.restype = ctypes.c_uint32
+        abi = int(library.narwhal_cdr_abi_version())
+    except (OSError, AttributeError, ValueError) as exc:
+        raise ReleaseError(f"cannot verify native CDR ABI: {exc}") from exc
+    if abi != 1:
+        raise ReleaseError(f"native CDR ABI must be 1, got {abi}")
+    records["libnarwhal_cdr_core.so"]["abi"] = abi
+    records["required_glibc"] = format_glibc(required_glibc)
+    return records
+
+
+def copy_file(source: Path, target: Path, description: str) -> None:
     require_regular_file(source, description)
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(source, destination)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(source, target)
 
 
 def ignore_python_cache(_directory: str, names: list[str]) -> set[str]:
@@ -519,6 +546,7 @@ def assemble(args: argparse.Namespace) -> tuple[Path, Path, Path]:
     appimagetool = args.appimagetool.resolve()
     appimage_runtime = args.appimage_runtime.resolve()
     output_dir = args.output_dir.resolve()
+    native_components_dir = args.native_components_dir.resolve()
     if not source_root.is_dir():
         raise ReleaseError(f"source root does not exist: {source_root}")
     lock_path = source_root / SOURCE_LOCK_RELATIVE
@@ -529,6 +557,7 @@ def assemble(args: argparse.Namespace) -> tuple[Path, Path, Path]:
     )
     validate_appimagetool(appimagetool, artifacts)
     validate_appimage_runtime(appimage_runtime, artifacts)
+    native_components = validate_native_components(native_components_dir)
 
     launcher = source_root / "narwhal3d.sh"
     package = source_root / "narwhal3d"
@@ -586,6 +615,11 @@ def assemble(args: argparse.Namespace) -> tuple[Path, Path, Path]:
         shutil.copytree(licenses, app_root / "licenses", symlinks=True)
         (app_root / "tools").mkdir(mode=0o755)
         shutil.copytree(runtime_dir, app_root / RUNTIME_RELATIVE, symlinks=True)
+        native_target = app_root / NATIVE_COMPONENT_RELATIVE
+        native_target.mkdir(parents=True, mode=0o755)
+        for filename in NATIVE_COMPONENTS:
+            copy_file(native_components_dir / filename, native_target / filename,
+                      f"native component {filename}")
 
         validate_appdir_paths(appdir)
         manifest = {
@@ -613,6 +647,7 @@ def assemble(args: argparse.Namespace) -> tuple[Path, Path, Path]:
                 "runtime_required_glibc": format_glibc(runtime_glibc),
                 "lock_sha256": lock_sha,
             },
+            "native_components": native_components,
             "excluded_components": ["opennurbs-exact-save-helper", "optional-converters"],
             "inventory": inventory(appdir),
         }
@@ -658,13 +693,12 @@ def self_check() -> None:
         raise ReleaseError("self-check lost the Ubuntu 22.04 host-glibc gate")
     if "launch/build_brep_writer.sh" in {f"launch/{name}" for name in LAUNCH_FILES}:
         raise ReleaseError("self-check found exact-save helper in launch whitelist")
-    expected_excluded_files = {
-        PurePosixPath("cdr_reader.py"),
-        PurePosixPath("cdr_writer.py"),
-        PurePosixPath("kernel/brep_writer.cpp"),
-    }
+    expected_excluded_files = {PurePosixPath("kernel/brep_writer.cpp")}
     if EXCLUDED_PACKAGE_FILES != expected_excluded_files:
         raise ReleaseError("self-check found an incomplete excluded package file set")
+    for included in (PurePosixPath("cdr_reader.py"), PurePosixPath("cdr_writer.py")):
+        if is_excluded_package_payload(included):
+            raise ReleaseError(f"self-check still excludes public CDR source: {included}")
     for excluded in (*expected_excluded_files, PurePosixPath("kernel/bin/helper")):
         if not is_excluded_package_payload(excluded):
             raise ReleaseError(f"self-check accepted excluded package payload: {excluded}")
@@ -769,15 +803,8 @@ def self_check() -> None:
             pass
         else:
             raise ReleaseError("self-check accepted a symlink in the license directory")
-        package = Path(temporary) / "narwhal3d"
-        package.mkdir()
-        (package / "cdr_reader.py").write_text("private helper\n", encoding="utf-8")
-        try:
-            validate_release_source_package(package)
-        except ReleaseError:
-            pass
-        else:
-            raise ReleaseError("self-check accepted excluded cdr_reader.py payload")
+        if NATIVE_COMPONENTS != ("libnarwhal_cdr_core.so", "narwhal-converter-supervisor"):
+            raise ReleaseError("self-check found an incomplete native component set")
     print("assemble_linux_release.py self-check: OK")
 
 
@@ -790,6 +817,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--source-date-epoch", type=int, help="fixed AppImage build timestamp")
     parser.add_argument("--source-root", type=Path, default=ROOT, help="public source checkout root")
     parser.add_argument("--runtime-dir", type=Path, help="verified native Narwhal runtime")
+    parser.add_argument("--native-components-dir", type=Path,
+                        help="verified Rust CDR library and converter supervisor directory")
     parser.add_argument("--appimagetool", type=Path, help="locked appimagetool 1.9.1 executable")
     parser.add_argument("--appimage-runtime", type=Path, help="locked type2 runtime 20251108 file")
     parser.add_argument("--output-dir", type=Path, help="new release output directory")
@@ -810,6 +839,7 @@ def main(argv: list[str] | None = None) -> int:
                 ("--source-revision", args.source_revision),
                 ("--source-date-epoch", args.source_date_epoch),
                 ("--runtime-dir", args.runtime_dir),
+                ("--native-components-dir", args.native_components_dir),
                 ("--appimagetool", args.appimagetool),
                 ("--appimage-runtime", args.appimage_runtime),
                 ("--output-dir", args.output_dir),

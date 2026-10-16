@@ -6,7 +6,7 @@ Narwhal 3D is a free, open-source, command-driven NURBS CAD application. The cur
 
 > **Project status:** extremely early prerelease. Save important work often and verify manufacturing output before production use. Release numbering is intentionally frozen on the `0.4.x` line until the project owner explicitly lifts that cap.
 
-[Current status](STATUS.md) · [Roadmap](ROADMAP.md) · [Feature gaps](docs/gaps.md) · [Rust selection core](docs/rust-selection-core.md) · [Windows build preparation](docs/windows-build.md) · [Compatibility and independence](COMPATIBILITY.md) · [Contributing](CONTRIBUTING.md) · [Support](SUPPORT.md) · [Security](SECURITY.md)
+[Current status](STATUS.md) · [Roadmap](ROADMAP.md) · [Feature gaps](docs/gaps.md) · [Windows build preparation](docs/windows-build.md) · [Compatibility and independence](COMPATIBILITY.md) · [Contributing](CONTRIBUTING.md) · [Support](SUPPORT.md) · [Security](SECURITY.md)
 
 ## Command workflow
 
@@ -27,20 +27,20 @@ Narwhal keeps document geometry separate from viewport tessellation:
 
 ## Install on Linux x86_64
 
-The public release artifact is `Narwhal_3D-<version>-x86_64.AppImage`. **Known 0.4.0 prerelease limitation:** its native runtime was built on glibc 2.43 and does not start on Ubuntu 22.04 or other older supported distributions. It is retained as early test evidence, not a portable catalog-ready build. The corrected artifact will remain on the `0.4.x` line and be built against a maximum glibc 2.35 baseline.
+The public release artifact is `Narwhal_3D-<version>-x86_64.AppImage`. Version 0.4.1 replaces the non-portable 0.4.0 runtime: every bundled ELF is capped at glibc 2.28, below the Ubuntu 22.04/glibc 2.35 compatibility ceiling enforced by the release verifier.
 
-Make the AppImage executable and run it directly on a compatible newer system:
+Make the AppImage executable and run it directly:
 
 ```bash
-chmod +x Narwhal_3D-0.4.0-x86_64.AppImage
-./Narwhal_3D-0.4.0-x86_64.AppImage
+chmod +x Narwhal_3D-0.4.1-x86_64.AppImage
+./Narwhal_3D-0.4.1-x86_64.AppImage
 ```
 
 The AppImage contains the natively branded runtime, locked Python dependencies, application package, icons, and license notices. It does not install a separate host application.
 
 ## Early Windows x86_64 preview
 
-The `v0.4.0` prerelease also provides `Narwhal_3D-0.4.0-preview.1-Windows-x86_64.zip`. Extract the complete folder and start `Narwhal3D.exe`; do not move that executable away from its adjacent `app` and `runtime` folders.
+The `v0.4.1` prerelease also provides `Narwhal_3D-0.4.1-Windows-x86_64.zip`. Extract the complete folder and start `Narwhal3D.exe`; do not move that executable away from its adjacent `app` and `runtime` folders.
 
 This is an unsigned, portable **early preview**, not an installer or supported production build. Windows SmartScreen may require **More info → Run anyway**. The launcher has original Narwhal icon/version resources and the packaged runtime/bootstrap passes native Windows and offline Wine headless checks, but final physical-GPU/real-window acceptance is pending and the internal viewport runtime still retains some Blender-derived PE resource strings/icons. There are no file associations or automatic installation yet.
 
@@ -73,12 +73,9 @@ Once `tools/blender-patched/` exists, run:
 
 ## Build a one-click AppImage
 
-With a validated native runtime, the pinned Rust/MinGW toolchain, and the locked appimagetool downloaded:
+With a validated native runtime and the locked appimagetool downloaded:
 
 ```bash
-python3 scripts/build_selection_core.py --reproducible
-python3 scripts/verify_selection_core.py artifacts/selection-core
-
 python3 scripts/fetch_locked.py \
   --cache-dir ~/.cache/narwhal3d/artifacts \
   appimagetool appimage-runtime
@@ -87,23 +84,23 @@ REVISION=$(git rev-parse HEAD)
 EPOCH=$(git show -s --format=%ct HEAD)
 
 python3 scripts/assemble_linux_release.py \
-  --version 0.4.0 \
+  --version 0.4.1 \
   --source-revision "$REVISION" \
   --source-date-epoch "$EPOCH" \
   --runtime-dir tools/blender-patched \
+  --native-components-dir runtime/linux-x86_64/bin \
   --appimagetool ~/.cache/narwhal3d/artifacts/appimagetool-x86_64.AppImage \
   --appimage-runtime ~/.cache/narwhal3d/artifacts/runtime-x86_64 \
-  --selection-core-artifacts artifacts/selection-core \
   --output-dir dist
 
 python3 scripts/verify_linux_release.py \
-  dist/Narwhal_3D-0.4.0-x86_64.AppImage \
-  --expected-version 0.4.0 \
+  dist/Narwhal_3D-0.4.1-x86_64.AppImage \
+  --expected-version 0.4.1 \
   --expected-source-revision "$REVISION" \
   --expected-source-date-epoch "$EPOCH"
 ```
 
-Assembly fails closed unless the native binary identity, patch hashes, source commit, Python dependencies, verified Rust source/artifact provenance, notices, paths, and symlinks all pass. It emits the AppImage, a SHA-256 sidecar, and a retained AppDir for diagnostics. The existing 0.4.0 AppImage and Windows preview predate this Rust integration and do not contain it.
+Assembly fails closed unless the native binary identity, patch hashes, source commit, Python dependencies, notices, paths, and symlinks all pass. It emits the AppImage, a SHA-256 sidecar, and a retained AppDir for diagnostics.
 
 ## Tests
 
@@ -130,7 +127,7 @@ Narwhal never uploads a screenshot, log, or model automatically. Review the brow
 
 ## Supported interchange
 
-Core, self-contained release functionality includes `.3dm`, STEP, DXF, SVG, OBJ, and STL paths. PDF and Adobe Illustrator conversion can use an optional converter pack. CorelDRAW `.cdr` Import, Open, Export, Print, and Print Setup use the independently developed TraceDraw CLI; CDR output defaults to version 17 for CorelDRAW 2015/X7 and is readable by 2016/X8. These converter executables are not bundled in the 0.4.0 AppImage, so commands report the missing dependency unless the corresponding local CLI is installed. No vector import route uploads files or silently rasterizes them.
+Core, self-contained release functionality includes `.3dm`, STEP, DXF, SVG, OBJ, STL, and the supported CorelDRAW v15 vector subset. Built-in `.cdr` Import/Open/Export/Print preserves curves, layers, colours, ordinary widths, and Hairline without external software. Other CDR generations and unsupported structures can use the optional local TraceDraw fallback; PDF and Adobe Illustrator conversion can use an optional converter pack. No vector import route uploads files or silently rasterizes them.
 
 ## Repository layout
 
