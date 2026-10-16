@@ -28,6 +28,7 @@ def _presentation_watchdog():
 
 
 _WELCOME_STATE = {"tries": 0, "lines": None}
+_WELCOME_UNITS = frozenset({"Millimeters", "Centimeters", "Meters", "Inches", "Feet"})
 
 
 def _welcome_request(state=None):
@@ -42,6 +43,7 @@ def _welcome_request(state=None):
     path = os.environ.get("NARWHAL3D_WELCOME_REQUEST")
     if not path:
         return None
+    closed = os.path.splitext(path)[0] + ".closed"
     # A later click replaces an earlier pending choice until the UI is ready. The request
     # file is atomic, so reading it first on every timer tick makes the user's final choice win.
     if os.path.isfile(path):
@@ -52,33 +54,59 @@ def _welcome_request(state=None):
             os.replace(path, claimed)
             with open(claimed, encoding="utf-8") as stream:
                 state["lines"] = stream.read().splitlines()
-            state["tries"] = 0
         except OSError as exc:
-            print(f"[narwhal3d] welcome request failed: {exc!r}",
+            print(f"[narwhal3d] welcome request will retry: {exc!r}",
                   file=sys.stderr, flush=True)
-            return None
+            return 0.1
         finally:
             try:
                 os.remove(claimed)
             except OSError:
                 pass
     elif state["lines"] is None:
-        state["tries"] += 1
-        return 0.1 if state["tries"] < 600 else None
+        if os.path.isfile(closed):
+            os.remove(closed)
+            return None
+        return 0.1
     lines = state["lines"] or []
     action = lines[0] if lines else ""
     if action == "open" and len(lines) > 1:
         result = _open_launch_file(lines[1])
-        if result is None:
-            state["lines"] = None
-        return result
+        if result is not None:
+            return result
+        state["lines"] = None
+        if os.path.isfile(closed):
+            os.remove(closed)
+            return None
+        return 0.1
     if action in {"open-dialog", "new"}:
         if os.environ.get("NARWHAL3D_UI_READY") != "1":
             return 0.1
         from narwhal3d.state import app_state
-        app_state.feed_line("Open" if action == "open-dialog" else "New")
+        if action == "open-dialog":
+            app_state.feed_line("Open")
+        else:
+            unit = lines[1] if len(lines) > 1 else "Millimeters"
+            if unit not in _WELCOME_UNITS:
+                print(f"[narwhal3d] welcome refused unknown unit {unit!r}",
+                      file=sys.stderr, flush=True)
+                state["lines"] = None
+                return 0.1
+            # Use the real command paths. New may be cancelled to protect unsaved work, so only
+            # apply units and a clean baseline after it actually replaces the document model.
+            previous_model = app_state.model
+            app_state.feed_line("New")
+            if app_state.model is previous_model:
+                state["lines"] = None
+                return 0.1
+            app_state.feed_line("-Units")
+            app_state.feed_line(unit)
+            app_state.mark_saved()
     state["lines"] = None
-    return None
+    if os.path.isfile(closed):
+        os.remove(closed)
+        return None
+    return 0.1
 
 
 def _session_only_preferences():

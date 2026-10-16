@@ -17,6 +17,13 @@ const MIN_VISIBLE_SECONDS: f32 = 1.8;
 const FADE_SECONDS: f32 = 0.38;
 const ATTENTION_GRACE_SECONDS: f32 = 0.75;
 const EXIT_PENDING: i32 = i32::MIN;
+const NEW_UNITS: [(&str, &str); 5] = [
+    ("Millimeters", "Millimeters"),
+    ("Centimeters", "Centimeters"),
+    ("Meters", "Meters"),
+    ("Inches", "Inches"),
+    ("Feet", "Feet"),
+];
 
 #[derive(Clone, Copy, PartialEq)]
 enum Tab {
@@ -133,10 +140,22 @@ fn recent_files() -> Vec<PathBuf> {
     recent_files_from(&data_dir().join("recent.json"))
 }
 
-fn request_payload(action: &str, path: Option<&Path>) -> String {
+fn replace_request(temporary: &Path, request: &Path) -> std::io::Result<()> {
+    // Unix rename replaces atomically. Windows rename refuses an existing destination, so remove
+    // it first; the Python consumer treats that brief missing-path claim race as retryable.
+    #[cfg(target_os = "windows")]
+    match fs::remove_file(request) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
+    }
+    fs::rename(temporary, request)
+}
+
+fn request_payload(action: &str, argument: Option<&str>) -> String {
     let mut payload = format!("{action}\n");
-    if let Some(path) = path {
-        payload.push_str(&path.display().to_string());
+    if let Some(argument) = argument {
+        payload.push_str(argument);
         payload.push('\n');
     }
     payload
@@ -146,10 +165,19 @@ fn is_ready_line(line: &str) -> bool {
     line == READY_MARKER
 }
 
+fn progress_state(ready: bool, elapsed: Duration) -> (f32, bool) {
+    if ready {
+        (1.0, false)
+    } else {
+        (((elapsed.as_secs_f32() * 0.55) % 1.0).max(0.04), true)
+    }
+}
+
 #[derive(Default)]
 struct WelcomeLifetime {
     last_attention: Option<Instant>,
     fade_started: Option<Instant>,
+    engaged: bool,
     dismissed: bool,
 }
 
@@ -161,17 +189,19 @@ impl WelcomeLifetime {
         })
     }
 
-    fn note_attention(&mut self, now: Instant) {
+    fn note_attention(&mut self, now: Instant, interaction_started: bool) {
         if self.dismissed {
             return;
         }
         self.last_attention = Some(now);
+        self.engaged |= interaction_started;
         self.fade_started = None;
     }
 
     fn maybe_start_auto_fade(&mut self, ready: bool, visible_for: Duration, now: Instant) {
         if ready
             && self.fade_started.is_none()
+            && !self.engaged
             && !self.dismissed
             && !self.attention_active(now)
             && visible_for >= Duration::from_secs_f32(MIN_VISIBLE_SECONDS)
@@ -180,12 +210,14 @@ impl WelcomeLifetime {
         }
     }
 
-    fn dismiss(&mut self, now: Instant) {
+    fn dismiss(&mut self) {
         self.dismissed = true;
-        self.fade_started = Some(now);
     }
 
     fn fade_alpha(&self, now: Instant) -> f32 {
+        if self.dismissed {
+            return 0.0;
+        }
         self.fade_started
             .map(|started| {
                 (1.0 - now.saturating_duration_since(started).as_secs_f32() / FADE_SECONDS)
@@ -317,13 +349,13 @@ impl WelcomeApp {
         }
     }
 
-    fn send_request(&mut self, action: &str, path: Option<&Path>) {
+    fn send_request(&mut self, action: &str, argument: Option<&str>) {
         let temporary = self.request.with_extension("tmp");
         let result = (|| -> std::io::Result<()> {
             let mut file = fs::File::create(&temporary)?;
-            file.write_all(request_payload(action, path).as_bytes())?;
+            file.write_all(request_payload(action, argument).as_bytes())?;
             file.sync_all()?;
-            fs::rename(&temporary, &self.request)?;
+            replace_request(&temporary, &self.request)?;
             Ok(())
         })();
         self.status = match result {
@@ -332,6 +364,21 @@ impl WelcomeApp {
             Ok(()) => "Creating a new model…".to_owned(),
             Err(error) => format!("Could not send startup request: {error}"),
         };
+    }
+
+    fn mark_closed(&self) {
+        if let Err(error) = fs::write(self.request.with_extension("closed"), b"") {
+            eprintln!("[narwhal-welcome] could not close request channel: {error}");
+        }
+    }
+
+    fn hide_welcome(&mut self, ctx: &egui::Context) {
+        if self.hidden {
+            return;
+        }
+        self.mark_closed();
+        self.hidden = true;
+        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
     }
 
     fn poll_runtime(&mut self, ctx: &egui::Context) {
@@ -360,9 +407,8 @@ impl WelcomeApp {
 
     fn alpha(&mut self, ctx: &egui::Context, now: Instant) -> f32 {
         let alpha = self.lifetime.fade_alpha(now);
-        if alpha <= 0.0 && !self.hidden {
-            self.hidden = true;
-            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+        if alpha <= 0.0 {
+            self.hide_welcome(ctx);
         }
         ctx.request_repaint_after(Duration::from_millis(16));
         alpha
@@ -393,9 +439,6 @@ impl WelcomeApp {
                     .min_size(Vec2::new(72.0, 24.0));
                 if ui.add(button).clicked() {
                     self.tab = tab;
-                    if tab == Tab::Open {
-                        self.send_request("open-dialog", None);
-                    }
                 }
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -407,7 +450,8 @@ impl WelcomeApp {
                     .on_hover_text("Close welcome window")
                     .clicked()
                 {
-                    self.lifetime.dismiss(Instant::now());
+                    self.lifetime.dismiss();
+                    self.hide_welcome(ui.ctx());
                 }
                 ui.label(
                     RichText::new("EARLY PREVIEW")
@@ -456,7 +500,7 @@ impl WelcomeApp {
                             .on_hover_text(path.display().to_string())
                             .clicked()
                         {
-                            self.send_request("open", Some(path));
+                            self.send_request("open", Some(path.to_string_lossy().as_ref()));
                         }
                         ui.add(
                             egui::Label::new(
@@ -476,24 +520,28 @@ impl WelcomeApp {
 
     fn new_panel(&mut self, ui: &mut egui::Ui, alpha: u8) {
         ui.heading(RichText::new("Start a new model").color(Color32::from_black_alpha(alpha)));
+        ui.label("Choose the document unit system:");
+        ui.add_space(12.0);
+        for (label, unit) in NEW_UNITS {
+            if ui
+                .add_sized([190.0, 31.0], egui::Button::new(label))
+                .clicked()
+            {
+                self.send_request("new", Some(unit));
+            }
+            ui.add_space(7.0);
+        }
+    }
+
+    fn open_panel(&mut self, ui: &mut egui::Ui, alpha: u8) {
+        ui.heading(RichText::new("Open a model").color(Color32::from_black_alpha(alpha)));
+        ui.label("Open a .3dm or another supported model file.");
         ui.add_space(18.0);
         if ui
-            .add_sized([190.0, 31.0], egui::Button::new("New Untitled Model"))
+            .add_sized([190.0, 31.0], egui::Button::new("Choose a model…"))
             .clicked()
         {
-            self.send_request("new", None);
-        }
-        ui.add_space(8.0);
-        for label in [
-            "Small Objects — Millimeters (Not implemented)",
-            "Large Objects — Millimeters (Not implemented)",
-            "Small Objects — Inches (Not implemented)",
-        ] {
-            ui.add_enabled(
-                false,
-                egui::Button::new(label).min_size(Vec2::new(190.0, 31.0)),
-            );
-            ui.add_space(8.0);
+            self.send_request("open-dialog", None);
         }
     }
 }
@@ -550,10 +598,24 @@ impl eframe::App for WelcomeApp {
         self.first_paint.get_or_insert_with(Instant::now);
         let ctx = ui.ctx().clone();
         let now = Instant::now();
-        let has_attention =
-            ctx.input(|input| input.pointer.hover_pos().is_some() || !input.events.is_empty());
-        if has_attention {
-            self.lifetime.note_attention(now);
+        let (pointer_over, interaction_started) = ctx.input(|input| {
+            let interacted = input.events.iter().any(|event| {
+                matches!(
+                    event,
+                    egui::Event::PointerMoved(_)
+                        | egui::Event::MouseMoved(_)
+                        | egui::Event::PointerButton { .. }
+                        | egui::Event::MouseWheel { .. }
+                        | egui::Event::Touch { .. }
+                        | egui::Event::Key { .. }
+                        | egui::Event::Text(_)
+                        | egui::Event::Paste(_)
+                )
+            });
+            (input.pointer.hover_pos().is_some(), interacted)
+        });
+        if pointer_over || interaction_started {
+            self.lifetime.note_attention(now, interaction_started);
         }
         let alpha_f = self.alpha(&ctx, now);
         if self.hidden {
@@ -566,14 +628,6 @@ impl eframe::App for WelcomeApp {
             .fill(Color32::from_rgba_unmultiplied(247, 248, 249, alpha))
             .stroke(Stroke::new(1.0, Color32::from_rgba_unmultiplied(85, 92, 100, alpha)))
             .show(ui, |ui| {
-                let title_rect = egui::Rect::from_min_max(
-                    ui.min_rect().min,
-                    egui::pos2(ui.max_rect().right(), ui.min_rect().top() + 44.0),
-                );
-                let drag = ui.interact(title_rect, egui::Id::new("welcome-drag"), egui::Sense::drag());
-                if drag.drag_started() {
-                    ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
-                }
                 self.top_tabs(ui, alpha);
                 ui.separator();
                 ui.horizontal(|ui| {
@@ -583,10 +637,7 @@ impl eframe::App for WelcomeApp {
                         match self.tab {
                             Tab::New => self.new_panel(ui, alpha),
                             Tab::Recent => self.recent_grid(ui, alpha),
-                            Tab::Open => {
-                                ui.heading("Opening file browser…");
-                                ui.label("The file browser will appear in Narwhal when the main window is ready.");
-                            }
+                            Tab::Open => self.open_panel(ui, alpha),
                             Tab::About => {
                                 ui.heading("Narwhal 3D");
                                 ui.label("Early precision NURBS CAD preview");
@@ -608,8 +659,12 @@ impl eframe::App for WelcomeApp {
                     });
                 });
                 ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
-                    let progress = ((self.started.elapsed().as_secs_f32() * 0.55) % 1.0).max(0.04);
-                    ui.add(egui::ProgressBar::new(progress).animate(true).desired_width(ui.available_width()));
+                    let (progress, animate) = progress_state(self.ready, self.started.elapsed());
+                    ui.add(
+                        egui::ProgressBar::new(progress)
+                            .animate(animate)
+                            .desired_width(ui.available_width()),
+                    );
                     ui.label(RichText::new(&self.status).color(Color32::from_black_alpha(alpha)));
                 });
             });
@@ -672,8 +727,9 @@ fn main() -> eframe::Result {
 #[cfg(test)]
 mod tests {
     use super::{
-        is_ready_line, parse_args_from, recent_files_from, request_payload, supervise_child,
-        RuntimeEvent, WelcomeLifetime, ATTENTION_GRACE_SECONDS, EXIT_PENDING, READY_MARKER,
+        is_ready_line, parse_args_from, progress_state, recent_files_from, replace_request,
+        request_payload, supervise_child, RuntimeEvent, WelcomeLifetime, ATTENTION_GRACE_SECONDS,
+        EXIT_PENDING, NEW_UNITS, READY_MARKER,
     };
     use std::fs;
     use std::path::Path;
@@ -738,8 +794,9 @@ mod tests {
         assert_eq!(lifetime.fade_started, Some(start));
 
         let reentered = start + Duration::from_millis(100);
-        lifetime.note_attention(reentered);
+        lifetime.note_attention(reentered, false);
         assert_eq!(lifetime.last_attention, Some(reentered));
+        assert!(!lifetime.engaged);
         assert!(lifetime.fade_started.is_none());
         lifetime.maybe_start_auto_fade(true, Duration::from_secs(10), reentered);
         assert!(lifetime.fade_started.is_none());
@@ -749,22 +806,63 @@ mod tests {
         lifetime.maybe_start_auto_fade(true, Duration::from_secs(10), after_grace);
         assert_eq!(lifetime.fade_started, Some(after_grace));
 
-        let dismissed = after_grace + Duration::from_millis(50);
-        lifetime.dismiss(dismissed);
+        let interacted = after_grace + Duration::from_millis(50);
+        lifetime.note_attention(interacted, true);
+        assert!(lifetime.engaged);
+        assert!(lifetime.fade_started.is_none());
+        lifetime.maybe_start_auto_fade(
+            true,
+            Duration::from_secs(30),
+            interacted + Duration::from_secs(30),
+        );
+        assert!(lifetime.fade_started.is_none());
+
+        lifetime.dismiss();
         assert!(lifetime.dismissed);
-        assert_eq!(lifetime.fade_started, Some(dismissed));
-        lifetime.note_attention(dismissed + Duration::from_millis(10));
-        assert_eq!(lifetime.fade_started, Some(dismissed));
-        assert!(lifetime.fade_alpha(dismissed + Duration::from_secs(1)) <= 0.0);
+        lifetime.note_attention(interacted + Duration::from_secs(31), true);
+        assert!(lifetime.dismissed && lifetime.engaged);
+        assert_eq!(lifetime.fade_alpha(interacted), 0.0);
     }
 
     #[test]
-    fn request_payload_is_line_oriented_and_exact() {
+    fn request_publisher_replaces_an_existing_choice_portably() {
+        let root = temporary_dir("publisher");
+        let request = root.join("welcome.request");
+        let temporary = root.join("welcome.tmp");
+        fs::write(&request, "old\n").unwrap();
+        fs::write(&temporary, "new\n").unwrap();
+        replace_request(&temporary, &request).unwrap();
+        assert_eq!(fs::read_to_string(&request).unwrap(), "new\n");
+        assert!(!temporary.exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn request_payload_and_new_units_are_line_oriented_and_exact() {
         assert_eq!(request_payload("new", None), "new\n");
+        assert_eq!(request_payload("new", Some("Inches")), "new\nInches\n");
         assert_eq!(
-            request_payload("open", Some(Path::new("/models/Clock face.3dm"))),
+            request_payload("open", Some("/models/Clock face.3dm")),
             "open\n/models/Clock face.3dm\n"
         );
+        assert_eq!(
+            NEW_UNITS,
+            [
+                ("Millimeters", "Millimeters"),
+                ("Centimeters", "Centimeters"),
+                ("Meters", "Meters"),
+                ("Inches", "Inches"),
+                ("Feet", "Feet"),
+            ]
+        );
+    }
+
+    #[test]
+    fn ready_progress_is_complete_and_not_animated() {
+        assert_eq!(progress_state(true, Duration::from_secs(10)), (1.0, false));
+        let (progress, animate) = progress_state(false, Duration::from_millis(500));
+        assert!((0.04..1.0).contains(&progress));
+        assert!(animate);
     }
 
     #[cfg(unix)]
