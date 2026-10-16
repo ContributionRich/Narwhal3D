@@ -13,6 +13,7 @@ import bpy
 import bpy_extras.view3d_utils as v3u
 from mathutils import Matrix, Vector
 import numpy as np
+import rhino3dm as r3
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -159,6 +160,52 @@ try:
           and abs(mixed_pick[1] - numpy_mixed) < 1e-9,
           "one NaN segment does not hide another finite segment in its curve",
           repr((mixed_pick, numpy_mixed)))
+    screen_pixels = np.array(((0.0, 0.0), (10.0, 0.0),
+                              (0.0, 0.0), (10.0, 0.0)), dtype=np.float64)
+    screen_visible = np.ones(4, dtype=np.uint8)
+    screen_offsets = np.array((0, 2, 4), dtype=np.uint64)
+    clip_values = np.array(((-1.0, -1.0, 0.0, 1.0),
+                            (1.0, 1.0, 0.0, 1.0),
+                            (0.0, 0.0, 0.0, -1.0),
+                            (0.0, 0.0, 0.0, 1.0)), dtype=np.float64)
+    clip_offsets = np.array((0, 3, 4), dtype=np.uint64)
+    clip_flags = np.array((0, 1), dtype=np.uint8)
+    clip_boxes = native_selection.screen_boxes_from_clip(
+        clip_values, clip_offsets, clip_flags, 800, 600)
+    check(clip_boxes is not None
+          and tuple(clip_boxes[1]) == (1, 1)
+          and tuple(clip_boxes[0][0]) == (0.0, 0.0, 800.0, 600.0)
+          and tuple(clip_boxes[0][1]) == (400.0, 300.0, 400.0, 300.0),
+          "clip-box adapter returns grouped rectangles without point tuples")
+    world_values = np.array(((-1.0, -1.0, 0.0),
+                             (1.0, 1.0, 0.0),
+                             (0.0, 0.0, -10.0),
+                             (0.0, 0.0, 0.0)), dtype=np.float64)
+    world_boxes = native_selection.screen_boxes_from_world(
+        world_values, identity, clip_offsets, clip_flags, 800, 600)
+    check(world_boxes is not None
+          and tuple(world_boxes[1]) == (1, 1)
+          and tuple(world_boxes[0][0]) == (0.0, 0.0, 800.0, 600.0)
+          and tuple(world_boxes[0][1]) == (400.0, 300.0, 400.0, 300.0),
+          "fused world-box adapter projects and reduces without a NumPy clip buffer")
+    check(native_selection.screen_boxes_from_clip(
+        clip_values, np.array((0, 4, 3), dtype=np.uint64), clip_flags,
+        800, 600) is None,
+          "malformed clip-box offsets request NumPy fallback")
+
+    screen_pick = native_selection.nearest_screen_polyline(
+        screen_pixels, screen_visible, screen_offsets, (5.0, 1.0), 9.0)
+    screen_boundary = native_selection.nearest_screen_polyline(
+        screen_pixels, screen_visible, screen_offsets, (5.0, 9.0), 9.0)
+    check(screen_pick == (0, 1.0)
+          and screen_boundary == (native_selection.PICK_NO_HIT, math.inf),
+          "screen-polyline adapter preserves strict earlier hover semantics",
+          repr((screen_pick, screen_boundary)))
+    check(native_selection.nearest_screen_polyline(
+        screen_pixels, screen_visible, np.array((0, 4, 2), dtype=np.uint64),
+        (5.0, 1.0), 9.0) is None,
+          "malformed screen-polyline offsets request Python fallback")
+
     point_values = np.array(((0.0, 0.0, 0.0), (0.0, 0.0, 0.0),
                              (1.0, 1.0, 0.0)), dtype=np.float64)
     nearest_point = native_selection.nearest_projected_point(
@@ -183,6 +230,8 @@ try:
     blender_boundary_rect = native_selection.projected_points_in_rect(
         precise_point, matrix, 800, 600,
         (blender_pixel.x, blender_pixel.y, blender_pixel.x, blender_pixel.y))
+    blender_display = native_selection.project_display_points(
+        precise_point, matrix, 800, 600)
     adversarial_matrix = np.array((
         (1.027998685836792, -0.42524489760398865, -0.466378778219223, 0.6437168717384338),
         (0.3514747619628906, 1.8906302452087402, -0.9491537809371948, 9.998909950256348),
@@ -203,10 +252,16 @@ try:
         adversarial_point, adversarial_matrix, 1920, 1080,
         (adversarial_pixel.x, adversarial_pixel.y,
          adversarial_pixel.x, adversarial_pixel.y))
+    adversarial_display = native_selection.project_display_points(
+        adversarial_point, adversarial_matrix, 1920, 1080)
     check(blender_boundary_pick is not None and blender_boundary_pick[0] == 0
           and abs(blender_boundary_pick[1] - 9.0) < 1e-12
           and blender_boundary_rect == (0,)
-          and adversarial_pick == (0, 0.0) and adversarial_rect == (0,),
+          and blender_display is not None
+          and tuple(blender_display[0][0]) == tuple(blender_pixel)
+          and adversarial_pick == (0, 0.0) and adversarial_rect == (0,)
+          and adversarial_display is not None
+          and tuple(adversarial_display[0][0]) == tuple(adversarial_pixel),
           "native point queries match Blender's mixed-precision projection at exact boundaries",
           repr((blender_pixel, blender_boundary_pick, blender_boundary_rect,
                 adversarial_pixel, adversarial_pick, adversarial_rect)))
@@ -324,6 +379,96 @@ try:
         ctypes.cast(args[-1], ctypes.POINTER(ctypes.c_double))[0] = 0.0
         return 1
 
+    def malformed_display(visibility, pixel):
+        def call(*args):
+            output = ctypes.cast(args[-2], ctypes.POINTER(ctypes.c_double))
+            mask = ctypes.cast(args[-1], ctypes.POINTER(ctypes.c_ubyte))
+            output[0] = output[1] = pixel
+            mask[0] = visibility
+            return 0
+        return call
+
+    def malformed_clip_boxes(validity, values):
+        values = values if isinstance(values, tuple) else (values,) * 4
+        def call(*args):
+            output = ctypes.cast(args[-2], ctypes.POINTER(ctypes.c_double))
+            valid = ctypes.cast(args[-1], ctypes.POINTER(ctypes.c_ubyte))
+            for index, value in enumerate(values):
+                output[index] = value
+            valid[0] = validity
+            return 0
+        return call
+
+    malformed_clip_cases = (
+        (malformed_clip_boxes(2, 0.0), 0),
+        (malformed_clip_boxes(1, math.nan), 0),
+        (malformed_clip_boxes(0, 0.0), 0),
+        (malformed_clip_boxes(1, (10.0, 10.0, 0.0, 0.0)), 0),
+        (malformed_clip_boxes(1, (0.0, 0.0, 1.0, 1.0)), 1),
+    )
+    malformed_clip_fallback = True
+    for clip_call, point_flag in malformed_clip_cases:
+        fake_clip_library = types.SimpleNamespace(
+            narwhal_screen_boxes_from_clip_f64=clip_call)
+        native_selection._native_binding = (
+            fake_clip_library, None, None, None, None, Path("bad-clip-native"))
+        malformed_clip_fallback &= native_selection.screen_boxes_from_clip(
+            clip_values[:3], np.array((0, 3), dtype=np.uint64),
+            np.array((point_flag,), dtype=np.uint8), 800, 600) is None
+    check(malformed_clip_fallback,
+          "malformed native clip-box masks and rectangles request NumPy fallback")
+
+    malformed_world_fallback = True
+    for world_call, point_flag in malformed_clip_cases:
+        fake_world_library = types.SimpleNamespace(
+            narwhal_screen_boxes_from_world_f64=world_call)
+        native_selection._native_binding = (
+            fake_world_library, None, None, None, None, Path("bad-world-native"))
+        malformed_world_fallback &= native_selection.screen_boxes_from_world(
+            world_values[:3], identity, np.array((0, 3), dtype=np.uint64),
+            np.array((point_flag,), dtype=np.uint8), 800, 600) is None
+    check(malformed_world_fallback,
+          "malformed fused world-box masks and rectangles request clip fallback")
+
+    malformed_display_cases = (
+        (malformed_display(2, 0.0), "undocumented native display visibility"),
+        (malformed_display(1, math.nan), "visible NaN native display output"),
+        (malformed_display(0, 0.0), "hidden finite native display output"),
+    )
+    malformed_display_fallback = True
+    for display_call, _label in malformed_display_cases:
+        fake_display_library = types.SimpleNamespace(
+            narwhal_project_display_points_f64=display_call)
+        native_selection._native_binding = (
+            fake_display_library, None, None, None, None, Path("bad-display-native"))
+        malformed_display_fallback &= native_selection.project_display_points(
+            point_values, identity, 800, 600) is None
+    check(malformed_display_fallback,
+          "malformed native display masks and pixels request scalar fallback")
+
+    def invalid_polyline_hit(*args):
+        ctypes.cast(args[-2], ctypes.POINTER(ctypes.c_uint64))[0] = 2
+        ctypes.cast(args[-1], ctypes.POINTER(ctypes.c_double))[0] = 0.0
+        return 1
+
+    fake_polyline_library = types.SimpleNamespace(
+        narwhal_nearest_screen_polyline_f64=invalid_polyline_hit)
+    native_selection._native_binding = (
+        fake_polyline_library, None, None, None, None, Path("bad-polyline-native"))
+    check(native_selection.nearest_screen_polyline(
+        screen_pixels, screen_visible, screen_offsets, (5.0, 1.0), 9.0) is None,
+          "out-of-range native screen-polyline index requests Python fallback")
+
+    def invalid_polyline_no_hit(*args):
+        ctypes.cast(args[-2], ctypes.POINTER(ctypes.c_uint64))[0] = 0
+        ctypes.cast(args[-1], ctypes.POINTER(ctypes.c_double))[0] = math.inf
+        return 0
+
+    fake_polyline_library.narwhal_nearest_screen_polyline_f64 = invalid_polyline_no_hit
+    check(native_selection.nearest_screen_polyline(
+        screen_pixels, screen_visible, screen_offsets, (5.0, 1.0), 9.0) is None,
+          "inconsistent native screen-polyline no-hit requests Python fallback")
+
     fake_point_library = types.SimpleNamespace(
         narwhal_nearest_projected_point_f64=invalid_point_hit)
     native_selection._native_binding = (
@@ -348,8 +493,16 @@ try:
     check(native_selection.nearest_projected_point(
         point_values, identity, 800, 600, (400.0, 300.0), 10.0) is None
           and native_selection.projected_points_in_rect(
-              point_values, identity, 800, 600, (0.0, 0.0, 800.0, 600.0)) is None,
-          "older ABI-1 library without point symbols uses scalar fallbacks")
+              point_values, identity, 800, 600, (0.0, 0.0, 800.0, 600.0)) is None
+          and native_selection.project_display_points(
+              point_values, identity, 800, 600) is None
+          and native_selection.nearest_screen_polyline(
+              screen_pixels, screen_visible, screen_offsets, (5.0, 1.0), 9.0) is None
+          and native_selection.screen_boxes_from_clip(
+              clip_values, clip_offsets, clip_flags, 800, 600) is None
+          and native_selection.screen_boxes_from_world(
+              world_values, identity, clip_offsets, clip_flags, 800, 600) is None,
+          "older ABI-1 library without later point, polyline, or box symbols uses fallbacks")
 
     os.environ["NARWHAL_SELECTION_CORE"] = str(ROOT / "missing-selection-core.so")
     native_selection._reset_for_tests()
@@ -362,6 +515,78 @@ finally:
     else:
         os.environ["NARWHAL_SELECTION_CORE"] = old_path
     native_selection._reset_for_tests()
+
+real_snap_settings = ui._snap_settings
+real_get_cplane = ui.get_cplane
+real_snap_reach = ui._snap_reach
+real_snap_targets = ui._snap_targets
+real_best_on_screen = ui.osnap.best_on_screen
+real_apply_projection = ui.osnap.apply_projection
+real_location_3d_to_region_2d = v3u.location_3d_to_region_2d
+real_snap_display_projection = ui.native_selection.project_display_points
+try:
+    ui._snap_settings = types.SimpleNamespace(
+        active=lambda **_kwargs: ("End",), radius_px=10.0,
+        snap_to_locked=False, project=False)
+    ui.get_cplane = lambda _area: object()
+    ui._snap_reach = lambda *_args: "native-snap-reach"
+    ui._snap_targets = lambda _excluded, *, reach=None: ("target", reach)
+    v3u.location_3d_to_region_2d = (
+        lambda _region, _rv3d, _point: types.SimpleNamespace(x=400.0, y=300.0))
+    snap_region = types.SimpleNamespace(width=800, height=600)
+    snap_rv3d = types.SimpleNamespace(
+        perspective_matrix=tuple(tuple(float(row == column) for column in range(4))
+                                 for row in range(4)))
+    native_snap_calls = []
+    ui.native_selection.project_display_points = (
+        lambda *args: native_snap_calls.append(args)
+        or (np.array(((400.0, 300.0), (800.0, 300.0))),
+            np.array((1, 1), dtype=np.uint8)))
+    routed_snap_batches = []
+
+    def capture_best(targets, cursor, modes, project, radius, plane, **kwargs):
+        routed_snap_batches.append((targets, cursor, modes, radius, plane,
+                                    project(cursor),
+                                    kwargs["project_batch"](((0.0, 0.0, 0.0),
+                                                             (1.0, 0.0, 0.0)))))
+        return "native-snap"
+
+    ui.osnap.best_on_screen = capture_best
+    ui.osnap.apply_projection = lambda snap, _plane, _enabled: snap
+    routed_snap = ui.snap_at(
+        None, types.SimpleNamespace(region_3d=snap_rv3d), snap_region,
+        (0.0, 0.0, 0.0))
+    check(routed_snap == "native-snap" and len(routed_snap_batches) == 1
+          and routed_snap_batches[0][0] == ("target", "native-snap-reach")
+          and routed_snap_batches[0][5] == (400.0, 300.0)
+          and len(native_snap_calls) == 1
+          and native_snap_calls[0][1].shape == (4, 4)
+          and native_snap_calls[0][2:] == (800, 600),
+          "snap_at supplies one viewport-shaped native candidate projection batch")
+
+    captured_batch = {}
+
+    def capture_decline(_targets, _cursor, _modes, _project, _radius, _plane, **kwargs):
+        captured_batch["result"] = kwargs["project_batch"](((0.0, 0.0, 0.0),))
+        return None
+
+    ui.osnap.best_on_screen = capture_decline
+    ui.native_selection.project_display_points = lambda *_args: (_ for _ in ()).throw(
+        RuntimeError("native projector unavailable"))
+    declined_snap = ui.snap_at(
+        None, types.SimpleNamespace(region_3d=snap_rv3d), snap_region,
+        (0.0, 0.0, 0.0))
+    check(declined_snap is None and captured_batch.get("result") is None,
+          "snap_at turns native batch exceptions into the scalar-fallback sentinel")
+finally:
+    ui._snap_settings = real_snap_settings
+    ui.get_cplane = real_get_cplane
+    ui._snap_reach = real_snap_reach
+    ui._snap_targets = real_snap_targets
+    ui.osnap.best_on_screen = real_best_on_screen
+    ui.osnap.apply_projection = real_apply_projection
+    v3u.location_3d_to_region_2d = real_location_3d_to_region_2d
+    ui.native_selection.project_display_points = real_snap_display_projection
 
 # A real curve-pass record is flat GL_LINES points, not the shaped adapter fixture above.
 production_mesh = bpy.data.meshes.new("RustProductionRecordMesh")
@@ -405,6 +630,7 @@ real_native = ui.native_selection.project_segments
 real_native_query = ui.native_selection.projected_segments_rect_query
 real_native_batch = ui.native_selection.projected_curves_rect_query
 real_native_nearest = ui.native_selection.nearest_projected_curve
+real_native_screen = ui.native_selection.nearest_screen_polyline
 real_curve_crosses = ui._curve_crosses_selection_rect
 real_curve_sync = ui._curve_sync
 real_unpickable = ui._unpickable_names_cached
@@ -422,6 +648,23 @@ real_document_points = ui._document_point_locations
 real_locked_names = ui._locked_names_cached
 real_doc_key = ui._doc_key
 real_point_loc_cache = dict(ui._point_loc_cache)
+real_hover_native_data = ui._hover_curve_native_data
+real_hover_world_data = ui._hover_curve_world_data
+real_hover_curve_object = ui._hover_curve_object
+real_native_screen_boxes = ui._native_selection_screen_boxes
+real_world_boxes = ui.native_selection.screen_boxes_from_world
+real_clip_boxes = ui.native_selection.screen_boxes_from_clip
+real_project_many = ui._project_many_2d
+real_curve_candidates = ui._curve_selection_candidates
+real_unpickable_for_boxes = ui._unpickable_names_cached
+real_doc_rows = ui._doc_rows
+real_curve_points = ui._curve_points
+real_display_visible = ui.bridge.display_visible
+real_geom_by_name = ui.geom_by_name_in_document
+real_ui_bpy = ui.bpy
+real_region_origin = v3u.region_2d_to_origin_3d
+real_region_vector = v3u.region_2d_to_vector_3d
+real_model = ui.app_state.model
 try:
     ui.bridge.is_app_drawn = lambda _ob: True
     record = {"n": 2, "lines": np.array((
@@ -584,6 +827,222 @@ try:
           and len(distance_calls) == 2,
           "native picker failure preserves per-curve NumPy and later-wins ties")
 
+    hover_pixels = np.array(((0.0, 0.0), (10.0, 0.0),
+                             (0.0, 0.0), (10.0, 0.0)), dtype=np.float64)
+    hover_visible = np.ones(4, dtype=np.uint8)
+    hover_offsets = np.array((0, 2, 4), dtype=np.uint64)
+    ui.native_selection.available = lambda: True
+    ui._hover_curve_native_data = lambda *_args: (
+        ("HoverFirst", "HoverSecond"), hover_offsets, hover_pixels, hover_visible)
+    check(ui._hover_curve_object(region, rv3d, 5.0, 1.0) == "HoverFirst",
+          "native hover projection preserves the earlier-curve exact tie")
+    check(ui._hover_curve_object(
+        region, rv3d, 5.0, ui.SUBOBJECT_PICK_PX) is None,
+          "native hover projection preserves strict distance < tolerance")
+    saved_hover_pixel = hover_pixels[1].copy()
+    hover_visible[1] = 0
+    hover_pixels[1] = (math.nan, math.nan)
+    check(ui._hover_curve_object(region, rv3d, 5.0, 1.0) == "HoverSecond",
+          "native hover drops only a segment with an unprojectable endpoint")
+
+    hover_visible[:] = 1
+    hover_pixels[1] = saved_hover_pixel
+    hover_native_calls = []
+    ui.native_selection.nearest_screen_polyline = (
+        lambda *args: hover_native_calls.append(args) or (0, 1.0))
+    check(ui._hover_curve_object(region, rv3d, 5.0, 1.0) == "HoverFirst"
+          and len(hover_native_calls) == 1
+          and hover_native_calls[0][0] is hover_pixels
+          and hover_native_calls[0][1] is hover_visible
+          and hover_native_calls[0][2] is hover_offsets,
+          "curve hover maps one native screen-polyline result without Python segments")
+    ui.native_selection.nearest_screen_polyline = (
+        lambda *_args: (native_selection.PICK_NO_HIT, math.inf))
+    check(ui._hover_curve_object(region, rv3d, 5.0, 1.0) is None,
+          "authoritative native screen-polyline miss bypasses Python distance")
+    ui.native_selection.nearest_screen_polyline = lambda *_args: (-2, 0.0)
+    check(ui._hover_curve_object(region, rv3d, 5.0, 1.0) == "HoverFirst",
+          "malformed UI screen-polyline result uses projected-array fallback")
+    ui.native_selection.nearest_screen_polyline = lambda *_args: None
+    check(ui._hover_curve_object(region, rv3d, 5.0, 1.0) == "HoverFirst",
+          "missing or failed screen-polyline query preserves projected-array fallback")
+    ui.native_selection.nearest_screen_polyline = real_native_screen
+
+    ray_curve_calls = []
+    ray_object = types.SimpleNamespace(name="RayFirstSurface")
+    ui._hover_curve_object = (
+        lambda *_args: ray_curve_calls.append(_args) or "CurveFallback")
+    ui.geom_by_name_in_document = lambda name: object() if name == ray_object.name else None
+    ui.bpy = types.SimpleNamespace(context=types.SimpleNamespace(
+        scene=types.SimpleNamespace(ray_cast=lambda *_args: (
+            True, None, None, None, ray_object, None)),
+        evaluated_depsgraph_get=lambda: object()))
+    v3u.region_2d_to_origin_3d = lambda *_args: (0.0, 0.0, 0.0)
+    v3u.region_2d_to_vector_3d = lambda *_args: (0.0, 0.0, -1.0)
+    ray_result = ui._hover_object(
+        None, types.SimpleNamespace(region_3d=rv3d), region, 5.0, 1.0)
+    check(ray_result == ray_object.name and not ray_curve_calls,
+          "surface and solid ray hits remain authoritative before curve hover")
+    ui._hover_curve_object = real_hover_curve_object
+    ui.geom_by_name_in_document = real_geom_by_name
+    ui.bpy = real_ui_bpy
+    v3u.region_2d_to_origin_3d = real_region_origin
+    v3u.region_2d_to_vector_3d = real_region_vector
+
+    ui._hover_curve_native_data = real_hover_native_data
+    projection_calls = []
+    local_hover_cache = {
+        "key": object(), "names": ("HoverFirst",),
+        "offsets": np.array((0, 2), dtype=np.uint64),
+        "points": np.array(((0.0, 0.0, 0.0), (1.0, 0.0, 0.0)), dtype=np.float64),
+        "view": None, "pixels": None, "visible": None,
+    }
+    ui._hover_curve_world_data = lambda: local_hover_cache
+    ui.native_selection.project_display_points = (
+        lambda *args: projection_calls.append(args)
+        or (np.array(((400.0, 300.0), (800.0, 300.0))), np.ones(2, dtype=np.uint8)))
+    ui._hover_curve_native_data(region, rv3d)
+    ui._hover_curve_native_data(region, rv3d)
+    changed_rv3d = type("RV3D", (), {"perspective_matrix": (
+        (1.0, 0.0, 0.0, 0.1), (0.0, 1.0, 0.0, 0.0),
+        (0.0, 0.0, 1.0, 0.0), (0.0, 0.0, 0.0, 1.0))})()
+    ui._hover_curve_native_data(region, changed_rv3d)
+    changed_width = types.SimpleNamespace(
+        width=region.width + 1, height=region.height)
+    ui._hover_curve_native_data(changed_width, changed_rv3d)
+    changed_height = types.SimpleNamespace(
+        width=changed_width.width, height=region.height + 1)
+    ui._hover_curve_native_data(changed_height, changed_rv3d)
+    check(len(projection_calls) == 4
+          and projection_calls[0][0] is local_hover_cache["points"],
+          "hover pixels cache by matrix, width, and height independently")
+
+    ui._hover_curve_world_data = real_hover_world_data
+
+    box_points = [(-1.0, -1.0, 0.0), (1.0, 1.0, 0.0), (0.0, 0.0, 0.0)]
+    box_slices = [("BoxFirst", 0, 2, False), ("PointSecond", 2, 3, True)]
+    fused_route_calls = []
+    ui.native_selection.screen_boxes_from_world = (
+        lambda *args: fused_route_calls.append(args)
+        or (np.array(((0.0, 0.0, 800.0, 600.0),
+                      (400.0, 300.0, 400.0, 300.0))),
+            np.array((1, 1), dtype=np.uint8)))
+    ui.native_selection.screen_boxes_from_clip = lambda *_args: (_ for _ in ()).throw(
+        AssertionError("clip reducer should be bypassed by fused projection"))
+    native_box_rows = ui._native_selection_screen_boxes(
+        region, rv3d, box_points, box_slices)
+    check(native_box_rows == [
+        ("BoxFirst", (0.0, 0.0, 800.0, 600.0)),
+        ("PointSecond", (400.0, 300.0, 400.0, 300.0))]
+          and len(fused_route_calls) == 1,
+          "UI box helper routes fused world projection and preserves source names")
+
+    clip_route_calls = []
+    ui.native_selection.screen_boxes_from_world = lambda *_args: None
+    ui.native_selection.screen_boxes_from_clip = (
+        lambda *args: clip_route_calls.append(args)
+        or (np.array(((0.0, 0.0, 800.0, 600.0),
+                      (400.0, 300.0, 400.0, 300.0))),
+            np.array((1, 1), dtype=np.uint8)))
+    clip_fallback_rows = ui._native_selection_screen_boxes(
+        region, rv3d, box_points, box_slices)
+    check(clip_fallback_rows == native_box_rows and len(clip_route_calls) == 1
+          and clip_route_calls[0][0].shape == (3, 4),
+          "fused decline uses the existing NumPy-clip native reducer")
+
+    ui.native_selection.screen_boxes_from_clip = lambda *_args: None
+    check(ui._native_selection_screen_boxes(region, rv3d, box_points, box_slices) is None,
+          "both native box stages declining requests the complete tuple fallback")
+    ui.native_selection.screen_boxes_from_world = real_world_boxes
+    ui.native_selection.screen_boxes_from_clip = real_clip_boxes
+    box_route_calls = []
+    ui._curve_selection_candidates = lambda *_args: (
+        [], set(bpy.data.objects.keys()))
+    ui._document_point_locations = lambda: []
+    ui._unpickable_names_cached = lambda: frozenset()
+    ui._native_selection_screen_boxes = (
+        lambda *args: box_route_calls.append(args)
+        or [("NativeBox", (1.0, 2.0, 3.0, 4.0))])
+    ui._project_many_2d = lambda *_args: (_ for _ in ()).throw(
+        AssertionError("tuple projection should be bypassed"))
+    routed_projection = {"boxes": None}
+    routed_boxes = ui._object_screen_bboxes(
+        None, types.SimpleNamespace(region_3d=rv3d), region, routed_projection)
+    check(routed_boxes == [("NativeBox", (1.0, 2.0, 3.0, 4.0))]
+          and len(box_route_calls) == 1
+          and routed_projection["boxes"] == tuple(routed_boxes),
+          "object screen boxes route one native reduction and cache its result")
+    ui._native_selection_screen_boxes = lambda *_args: None
+    fallback_record = {"n": 1, "lo": (-1.0, -1.0, 0.0),
+                       "hi": (1.0, 1.0, 0.0)}
+    ui._curve_selection_candidates = lambda *_args: (
+        [("FallbackBox", object(), fallback_record)],
+        set(bpy.data.objects.keys()) | {"FallbackBox"})
+    ui._project_many_2d = lambda _region, _rv3d, points: (
+        [(0.0, 0.0), (10.0, 10.0)] * (len(points) // 2))
+    fallback_projection = {"boxes": None}
+    fallback_boxes = ui._object_screen_bboxes(
+        None, types.SimpleNamespace(region_3d=rv3d), region,
+        fallback_projection)
+    check(fallback_boxes == [("FallbackBox", (0.0, 0.0, 10.0, 10.0))]
+          and fallback_projection["boxes"] == tuple(fallback_boxes),
+          "native clip-box decline runs the complete tuple/reduction fallback")
+    ui._native_selection_screen_boxes = real_native_screen_boxes
+    ui._project_many_2d = real_project_many
+    ui._curve_selection_candidates = real_curve_candidates
+    ui._document_point_locations = real_document_points
+    ui._unpickable_names_cached = real_unpickable_for_boxes
+
+    hover_object_names = ("RustHoverCacheA", "RustHoverCacheB")
+    hover_objects = [bpy.data.objects.get(item) or bpy.data.objects.new(item, None)
+                     for item in hover_object_names]
+    hover_file_objects = [types.SimpleNamespace(
+        Geometry=r3.LineCurve(r3.Point3d(index, 0.0, 0.0),
+                              r3.Point3d(index + 1.0, 0.0, 0.0)),
+        Attributes=types.SimpleNamespace(Name=item, Id=f"hover-{index}"))
+        for index, item in enumerate(hover_object_names)]
+    ui.app_state.model = types.SimpleNamespace(
+        file=types.SimpleNamespace(Objects=hover_file_objects))
+    hover_rows = [(item, None, None, fobj.Geometry, fobj.Attributes)
+                  for item, fobj in zip(hover_object_names, hover_file_objects)]
+    hover_row_source = [hover_rows]
+    hover_doc_key = [object()]
+    hidden_hover = set()
+    hover_curve_reads = []
+    ui._doc_rows = lambda: hover_row_source[0]
+    ui._doc_key = lambda: hover_doc_key[0]
+    ui.bridge.display_visible = lambda ob: ob.name not in hidden_hover
+    ui._curve_points = lambda curve: hover_curve_reads.append(curve) or [
+        (curve.PointAtStart.X, curve.PointAtStart.Y, curve.PointAtStart.Z),
+        (curve.PointAtEnd.X, curve.PointAtEnd.Y, curve.PointAtEnd.Z)]
+    ui._hover_curve_cache.update(
+        key=None, rows=None, names=(), offsets=None, points=None,
+        view=None, pixels=None, visible=None)
+    world_first = ui._hover_curve_world_data()
+    first_names = world_first["names"]
+    world_again = ui._hover_curve_world_data()
+    hidden_hover.add(hover_object_names[1])
+    world_hidden = ui._hover_curve_world_data()
+    hover_row_source[0] = list(hover_rows)
+    world_same_key_edit = ui._hover_curve_world_data()
+    hover_doc_key[0] = object()
+    world_changed = ui._hover_curve_world_data()
+    check(world_first is world_again is world_hidden is world_same_key_edit is world_changed
+          and len(hover_curve_reads) == 5
+          and first_names == hover_object_names
+          and world_first["names"] == (hover_object_names[0],),
+          "hover world cache preserves source order and rebuilds for visibility, "
+          "same-key invalidation, and document keys")
+
+    hidden_hover.clear()
+    hover_scalar_calls = []
+    ui.native_selection.project_display_points = lambda *_args: None
+    ui._project_2d = lambda _region, _rv3d, world: (
+        hover_scalar_calls.append(world) or (float(world[0]) * 10.0, 0.0))
+    check(ui._hover_curve_object(region, rv3d, 5.0, 0.0) == hover_object_names[0]
+          and len(hover_scalar_calls) == 4,
+          "native hover projection failure runs the complete scalar curve path")
+
     point_object_rows = [("", (-1.0, 0.0, 0.0)),
                          ("LockedPoint", (0.0, 0.0, 0.0)),
                          ("PointFirst", (0.0, 0.0, 0.0)),
@@ -723,6 +1182,7 @@ finally:
     ui.native_selection.projected_segments_rect_query = real_native_query
     ui.native_selection.projected_curves_rect_query = real_native_batch
     ui.native_selection.nearest_projected_curve = real_native_nearest
+    ui.native_selection.nearest_screen_polyline = real_native_screen
     ui._curve_crosses_selection_rect = real_curve_crosses
     ui._curve_sync = real_curve_sync
     ui._unpickable_names_cached = real_unpickable
@@ -741,11 +1201,33 @@ finally:
     ui._doc_key = real_doc_key
     ui._point_loc_cache.clear()
     ui._point_loc_cache.update(real_point_loc_cache)
+    ui._hover_curve_native_data = real_hover_native_data
+    ui._hover_curve_world_data = real_hover_world_data
+    ui._hover_curve_object = real_hover_curve_object
+    ui._native_selection_screen_boxes = real_native_screen_boxes
+    ui.native_selection.screen_boxes_from_world = real_world_boxes
+    ui.native_selection.screen_boxes_from_clip = real_clip_boxes
+    ui._project_many_2d = real_project_many
+    ui._curve_selection_candidates = real_curve_candidates
+    ui._document_point_locations = real_document_points
+    ui._unpickable_names_cached = real_unpickable_for_boxes
+    ui._doc_rows = real_doc_rows
+    ui._curve_points = real_curve_points
+    ui.bridge.display_visible = real_display_visible
+    ui.geom_by_name_in_document = real_geom_by_name
+    ui.bpy = real_ui_bpy
+    v3u.region_2d_to_origin_3d = real_region_origin
+    v3u.region_2d_to_vector_3d = real_region_vector
+    ui.app_state.model = real_model
+    ui._hover_curve_cache.update(
+        key=None, rows=None, names=(), offsets=None, points=None,
+        view=None, pixels=None, visible=None)
     ui._native_cp_points.update(rows=None, points=None)
     ui._native_point_objects.update(source=None, locked=None, rows=[], points=None)
     if ob.users == 0:
         bpy.data.objects.remove(ob)
-    for item in locals().get("batch_objects", ()):
+    for item in (*locals().get("batch_objects", ()),
+                 *locals().get("hover_objects", ())):
         if item.users == 0:
             bpy.data.objects.remove(item)
 

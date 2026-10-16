@@ -139,6 +139,113 @@ fn project_display_point_f64(
 }
 
 #[inline]
+fn double_length_mul(x: f64, y: f64) -> (f64, f64) {
+    let product = x * y;
+    (product, x.mul_add(y, -product))
+}
+
+#[inline]
+fn double_length_fast_sum(a: f64, b: f64) -> (f64, f64) {
+    let sum = a + b;
+    (sum, (a - sum) + b)
+}
+
+#[inline]
+fn frexp_exponent(value: f64) -> i32 {
+    let bits = value.to_bits() & 0x7fff_ffff_ffff_ffff;
+    let exponent = ((bits >> 52) & 0x7ff) as i32;
+    if exponent != 0 {
+        return exponent - 1022;
+    }
+    let mantissa = bits & ((1_u64 << 52) - 1);
+    (63 - mantissa.leading_zeros() as i32) - 1073
+}
+
+#[inline]
+fn exact_power_of_two(exponent: i32) -> f64 {
+    if exponent >= -1022 {
+        f64::from_bits(((exponent + 1023) as u64) << 52)
+    } else {
+        f64::from_bits(1_u64 << (exponent + 1074))
+    }
+}
+
+fn python_vector_norm2(mut values: [f64; 2], maximum: f64) -> f64 {
+    if maximum.is_infinite() || maximum == 0.0 {
+        return maximum;
+    }
+    let maximum_exponent = frexp_exponent(maximum);
+    if maximum_exponent < -1023 {
+        for value in &mut values {
+            *value /= f64::MIN_POSITIVE;
+        }
+        return f64::MIN_POSITIVE * python_vector_norm2(values, maximum / f64::MIN_POSITIVE);
+    }
+    let scale = exact_power_of_two(-maximum_exponent);
+    let mut compensated_sum = 1.0_f64;
+    let mut fraction1 = 0.0_f64;
+    let mut fraction2 = 0.0_f64;
+    for mut value in values {
+        value *= scale;
+        let product = double_length_mul(value, value);
+        let sum = double_length_fast_sum(compensated_sum, product.0);
+        compensated_sum = sum.0;
+        fraction1 += product.1;
+        fraction2 += sum.1;
+    }
+    let mut hypotenuse = (compensated_sum - 1.0 + (fraction1 + fraction2)).sqrt();
+    let product = double_length_mul(-hypotenuse, hypotenuse);
+    let sum = double_length_fast_sum(compensated_sum, product.0);
+    compensated_sum = sum.0;
+    fraction1 += product.1;
+    fraction2 += sum.1;
+    let correction = compensated_sum - 1.0 + (fraction1 + fraction2);
+    hypotenuse += correction / (2.0 * hypotenuse);
+    hypotenuse / scale
+}
+
+#[inline]
+fn python_hypot2(x: f64, y: f64) -> f64 {
+    let values = [x.abs(), y.abs()];
+    python_vector_norm2(values, values[0].max(values[1]))
+}
+
+#[inline]
+fn screen_point_segment_distance(mouse: [f64; 2], a: [f64; 2], b: [f64; 2]) -> f64 {
+    let dx = b[0] - a[0];
+    let dy = b[1] - a[1];
+    let denominator = dx * dx + dy * dy;
+    if denominator < 1.0e-9 {
+        return python_hypot2(mouse[0] - a[0], mouse[1] - a[1]);
+    }
+    let parameter = ((mouse[0] - a[0]) * dx + (mouse[1] - a[1]) * dy) / denominator;
+    // Python spells this `max(0.0, min(1.0, parameter))`. With NaN as the
+    // second `min` argument, its stable first-argument comparison returns 1.0.
+    let parameter = if parameter.is_nan() {
+        1.0
+    } else {
+        parameter.clamp(0.0, 1.0)
+    };
+    python_hypot2(
+        mouse[0] - (a[0] + parameter * dx),
+        mouse[1] - (a[1] + parameter * dy),
+    )
+}
+
+#[inline]
+fn selection_clip_point_f64(matrix: &[f64], point: &[f64]) -> [f64; 4] {
+    let x = point[0];
+    let y = point[1];
+    let z = point[2];
+    [
+        matrix[0] * x + matrix[1] * y + matrix[2] * z + matrix[3],
+        matrix[4] * x + matrix[5] * y + matrix[6] * z + matrix[7],
+        matrix[8] * x + matrix[9] * y + matrix[10] * z + matrix[11],
+        matrix[12] * x + matrix[13] * y + matrix[14] * z + matrix[15],
+    ]
+}
+
+#[inline]
 fn homogeneous_point(matrix: &[f64], point: &[f32]) -> [f64; 4] {
     let x = f64::from(point[0]);
     let y = f64::from(point[1]);
@@ -679,6 +786,439 @@ pub unsafe extern "C" fn narwhal_nearest_projected_curve_f32(
     1
 }
 
+/// Project packed f64 display-marker points with Blender's mixed-precision math.
+///
+/// `out_visible[i]` is one when `out_xy[2*i..2*i+2]` is valid and zero when the
+/// point is unprojectable. Hidden output coordinates are NaN. Source coordinates
+/// stay f64; only the projection follows mathutils' f32/f64 operation sequence.
+///
+/// # Safety
+///
+/// The caller must provide 16 readable matrix values, `count * 3` readable point
+/// values, `count * 2` writable pixel values, and `count` writable visibility bytes.
+/// Point/output pointers may be null only when `count == 0`; all buffers must be
+/// correctly aligned and non-overlapping.
+#[no_mangle]
+pub unsafe extern "C" fn narwhal_project_display_points_f64(
+    matrix_ptr: *const f64,
+    points_ptr: *const f64,
+    count: usize,
+    width: f64,
+    height: f64,
+    out_xy_ptr: *mut f64,
+    out_visible_ptr: *mut u8,
+) -> i32 {
+    if count > 0 && (out_xy_ptr.is_null() || out_visible_ptr.is_null()) {
+        return ERR_NULL;
+    }
+    let point_values = match count.checked_mul(3) {
+        Some(value) if valid_slice_len::<f64>(value) => value,
+        _ => return ERR_SIZE,
+    };
+    let output_values = match count.checked_mul(2) {
+        Some(value) if valid_slice_len::<f64>(value) && valid_slice_len::<u8>(count) => value,
+        _ => return ERR_SIZE,
+    };
+    if count > 0 {
+        ptr::write_bytes(out_visible_ptr, 0, count);
+        for index in 0..output_values {
+            ptr::write(out_xy_ptr.add(index), f64::NAN);
+        }
+    }
+    if matrix_ptr.is_null() || (count > 0 && points_ptr.is_null()) {
+        return ERR_NULL;
+    }
+    let matrix = slice::from_raw_parts(matrix_ptr, 16);
+    if !valid_matrix(matrix) || !valid_dimensions(width, height) {
+        return ERR_INPUT;
+    }
+    if count == 0 {
+        return 0;
+    }
+    let points = slice::from_raw_parts(points_ptr, point_values);
+    let out_xy = slice::from_raw_parts_mut(out_xy_ptr, output_values);
+    let out_visible = slice::from_raw_parts_mut(out_visible_ptr, count);
+    for (index, point) in points.chunks_exact(3).enumerate() {
+        if let Some((x, y)) = project_display_point_f64(matrix, point, width, height) {
+            out_xy[index * 2] = x;
+            out_xy[index * 2 + 1] = y;
+            out_visible[index] = 1;
+        }
+    }
+    0
+}
+
+/// Return the nearest cached screen-space polyline with command-hover semantics.
+///
+/// Curves are represented by concatenated f64 pixel points and monotonic u64 point
+/// offsets. A segment participates only when both endpoint visibility bytes are one.
+/// The return value is one for a strict hit inside `max_distance`, zero for no hit,
+/// and negative for invalid input. Exact ties keep the earlier curve, matching the
+/// command-hover loop's strict `<` update rule.
+///
+/// # Safety
+///
+/// The caller must provide `point_count * 2` readable pixel values, `point_count`
+/// readable visibility bytes, `curve_count + 1` readable offsets, two readable mouse
+/// coordinates, and writable curve-index/distance outputs. Point buffers may be null
+/// only when `point_count == 0`; offsets may be null only when `curve_count == 0`.
+/// All buffers must be correctly aligned and non-overlapping.
+#[no_mangle]
+pub unsafe extern "C" fn narwhal_nearest_screen_polyline_f64(
+    pixels_ptr: *const f64,
+    visible_ptr: *const u8,
+    point_count: usize,
+    offsets_ptr: *const u64,
+    curve_count: usize,
+    mouse_ptr: *const f64,
+    max_distance: f64,
+    out_curve_index_ptr: *mut u64,
+    out_distance_ptr: *mut f64,
+) -> i32 {
+    if out_curve_index_ptr.is_null() || out_distance_ptr.is_null() {
+        return ERR_NULL;
+    }
+    *out_curve_index_ptr = u64::MAX;
+    *out_distance_ptr = f64::INFINITY;
+    if mouse_ptr.is_null()
+        || (point_count > 0 && (pixels_ptr.is_null() || visible_ptr.is_null()))
+        || (curve_count > 0 && offsets_ptr.is_null())
+    {
+        return ERR_NULL;
+    }
+    let pixel_values = match point_count.checked_mul(2) {
+        Some(value) if valid_slice_len::<f64>(value) && valid_slice_len::<u8>(point_count) => value,
+        _ => return ERR_SIZE,
+    };
+    let offset_count = match curve_count.checked_add(1) {
+        Some(value) if valid_slice_len::<u64>(value) => value,
+        _ => return ERR_SIZE,
+    };
+    let mouse_slice = slice::from_raw_parts(mouse_ptr, 2);
+    let mouse = [mouse_slice[0], mouse_slice[1]];
+    if !mouse.iter().all(|value| value.is_finite())
+        || !max_distance.is_finite()
+        || max_distance < 0.0
+    {
+        return ERR_INPUT;
+    }
+    if curve_count == 0 {
+        return if point_count == 0 { 0 } else { ERR_INPUT };
+    }
+    let point_count_u64 = match u64::try_from(point_count) {
+        Ok(value) => value,
+        Err(_) => return ERR_SIZE,
+    };
+    let pixels = if pixel_values == 0 {
+        &[]
+    } else {
+        slice::from_raw_parts(pixels_ptr, pixel_values)
+    };
+    let visible = if point_count == 0 {
+        &[]
+    } else {
+        slice::from_raw_parts(visible_ptr, point_count)
+    };
+    for (index, visibility) in visible.iter().copied().enumerate() {
+        let point = &pixels[index * 2..index * 2 + 2];
+        if visibility > 1
+            || (visibility == 1 && !point.iter().all(|value| value.is_finite()))
+            || (visibility == 0 && !point.iter().all(|value| value.is_nan()))
+        {
+            return ERR_INPUT;
+        }
+    }
+    let offsets = slice::from_raw_parts(offsets_ptr, offset_count);
+    if offsets[0] != 0 || offsets[curve_count] != point_count_u64 {
+        return ERR_INPUT;
+    }
+    for pair in offsets.windows(2) {
+        if pair[0] > pair[1] || pair[1] > point_count_u64 {
+            return ERR_INPUT;
+        }
+    }
+
+    let mut best_index = u64::MAX;
+    let mut best_distance = max_distance;
+    for curve_index in 0..curve_count {
+        let start = offsets[curve_index] as usize;
+        let end = offsets[curve_index + 1] as usize;
+        if end.saturating_sub(start) < 2 {
+            continue;
+        }
+        let mut curve_distance = f64::INFINITY;
+        for point_index in start..end - 1 {
+            if visible[point_index] == 0 || visible[point_index + 1] == 0 {
+                continue;
+            }
+            let a = [pixels[point_index * 2], pixels[point_index * 2 + 1]];
+            let b = [
+                pixels[(point_index + 1) * 2],
+                pixels[(point_index + 1) * 2 + 1],
+            ];
+            curve_distance = curve_distance.min(screen_point_segment_distance(mouse, a, b));
+        }
+        if curve_distance < best_distance {
+            best_index = curve_index as u64;
+            best_distance = curve_distance;
+        }
+    }
+    if best_index == u64::MAX {
+        return 0;
+    }
+    *out_curve_index_ptr = best_index;
+    *out_distance_ptr = best_distance;
+    1
+}
+
+/// Reduce grouped homogeneous clip coordinates to screen-space object rectangles.
+///
+/// Each object owns `offsets[i]..offsets[i + 1]` clip rows. Rows with non-finite
+/// components, non-positive W, or non-finite pixels are ignored. Point-object flags
+/// select the first visible pixel as a zero-area rectangle; ordinary objects reduce
+/// all visible pixels to min/max bounds. Invalid objects retain NaN output and zero
+/// validity. This export receives display-only clip copies, never document geometry.
+///
+/// # Safety
+///
+/// The caller must provide `point_count * 4` readable clip values,
+/// `object_count + 1` readable offsets, `object_count` readable point flags,
+/// `object_count * 4` writable rectangle values, and `object_count` writable validity
+/// bytes. Point input may be null only for zero points; object buffers may be null only
+/// for zero objects. All buffers must be correctly aligned and non-overlapping.
+#[no_mangle]
+pub unsafe extern "C" fn narwhal_screen_boxes_from_clip_f64(
+    clip_ptr: *const f64,
+    point_count: usize,
+    offsets_ptr: *const u64,
+    object_count: usize,
+    point_flags_ptr: *const u8,
+    width: f64,
+    height: f64,
+    out_boxes_ptr: *mut f64,
+    out_valid_ptr: *mut u8,
+) -> i32 {
+    if object_count > 0 && (out_boxes_ptr.is_null() || out_valid_ptr.is_null()) {
+        return ERR_NULL;
+    }
+    let clip_values = match point_count.checked_mul(4) {
+        Some(value) if valid_slice_len::<f64>(value) => value,
+        _ => return ERR_SIZE,
+    };
+    let output_values = match object_count.checked_mul(4) {
+        Some(value) if valid_slice_len::<f64>(value) && valid_slice_len::<u8>(object_count) => {
+            value
+        }
+        _ => return ERR_SIZE,
+    };
+    let offset_count = match object_count.checked_add(1) {
+        Some(value) if valid_slice_len::<u64>(value) => value,
+        _ => return ERR_SIZE,
+    };
+    if object_count > 0 {
+        ptr::write_bytes(out_valid_ptr, 0, object_count);
+        for index in 0..output_values {
+            ptr::write(out_boxes_ptr.add(index), f64::NAN);
+        }
+    }
+    if (point_count > 0 && clip_ptr.is_null())
+        || (object_count > 0 && (offsets_ptr.is_null() || point_flags_ptr.is_null()))
+    {
+        return ERR_NULL;
+    }
+    if !valid_dimensions(width, height) {
+        return ERR_INPUT;
+    }
+    if object_count == 0 {
+        return if point_count == 0 { 0 } else { ERR_INPUT };
+    }
+    let point_count_u64 = match u64::try_from(point_count) {
+        Ok(value) => value,
+        Err(_) => return ERR_SIZE,
+    };
+    let clip = if clip_values == 0 {
+        &[]
+    } else {
+        slice::from_raw_parts(clip_ptr, clip_values)
+    };
+    let offsets = slice::from_raw_parts(offsets_ptr, offset_count);
+    let point_flags = slice::from_raw_parts(point_flags_ptr, object_count);
+    if offsets[0] != 0 || offsets[object_count] != point_count_u64 {
+        return ERR_INPUT;
+    }
+    for pair in offsets.windows(2) {
+        if pair[0] > pair[1] || pair[1] > point_count_u64 {
+            return ERR_INPUT;
+        }
+    }
+    if point_flags.iter().any(|flag| *flag > 1) {
+        return ERR_INPUT;
+    }
+    let out_boxes = slice::from_raw_parts_mut(out_boxes_ptr, output_values);
+    let out_valid = slice::from_raw_parts_mut(out_valid_ptr, object_count);
+    for object_index in 0..object_count {
+        let start = offsets[object_index] as usize;
+        let end = offsets[object_index + 1] as usize;
+        let mut first = true;
+        let mut bounds = [f64::NAN; 4];
+        for point_index in start..end {
+            let point = &clip[point_index * 4..point_index * 4 + 4];
+            if !point.iter().all(|value| value.is_finite()) || point[3] <= 0.0 {
+                continue;
+            }
+            let pixel_x = (point[0] / point[3] + 1.0) * width * 0.5;
+            let pixel_y = (point[1] / point[3] + 1.0) * height * 0.5;
+            if !pixel_x.is_finite() || !pixel_y.is_finite() {
+                continue;
+            }
+            if first {
+                bounds = [pixel_x, pixel_y, pixel_x, pixel_y];
+                first = false;
+                if point_flags[object_index] == 1 {
+                    break;
+                }
+            } else {
+                bounds[0] = bounds[0].min(pixel_x);
+                bounds[1] = bounds[1].min(pixel_y);
+                bounds[2] = bounds[2].max(pixel_x);
+                bounds[3] = bounds[3].max(pixel_y);
+            }
+        }
+        if !first {
+            out_boxes[object_index * 4..object_index * 4 + 4].copy_from_slice(&bounds);
+            out_valid[object_index] = 1;
+        }
+    }
+    0
+}
+
+/// Project grouped f64 world display samples and reduce them directly to screen boxes.
+///
+/// This is the fused form of `narwhal_screen_boxes_from_clip_f64`: each point is
+/// multiplied by the supplied f64 4x4 matrix in fixed row/term order, then reduced
+/// under the same visibility, point-flag, and canonical rectangle rules. Inputs are
+/// copied display samples only; this export never owns or mutates document geometry.
+///
+/// # Safety
+///
+/// The caller must provide 16 readable matrix values, `point_count * 3` readable world
+/// values, `object_count + 1` readable offsets, `object_count` readable point flags,
+/// `object_count * 4` writable rectangle values, and `object_count` writable validity
+/// bytes. Point input may be null only for zero points; object buffers may be null only
+/// for zero objects. All buffers must be correctly aligned and non-overlapping.
+#[no_mangle]
+pub unsafe extern "C" fn narwhal_screen_boxes_from_world_f64(
+    matrix_ptr: *const f64,
+    points_ptr: *const f64,
+    point_count: usize,
+    offsets_ptr: *const u64,
+    object_count: usize,
+    point_flags_ptr: *const u8,
+    width: f64,
+    height: f64,
+    out_boxes_ptr: *mut f64,
+    out_valid_ptr: *mut u8,
+) -> i32 {
+    if object_count > 0 && (out_boxes_ptr.is_null() || out_valid_ptr.is_null()) {
+        return ERR_NULL;
+    }
+    let point_values = match point_count.checked_mul(3) {
+        Some(value) if valid_slice_len::<f64>(value) => value,
+        _ => return ERR_SIZE,
+    };
+    let output_values = match object_count.checked_mul(4) {
+        Some(value) if valid_slice_len::<f64>(value) && valid_slice_len::<u8>(object_count) => {
+            value
+        }
+        _ => return ERR_SIZE,
+    };
+    let offset_count = match object_count.checked_add(1) {
+        Some(value) if valid_slice_len::<u64>(value) => value,
+        _ => return ERR_SIZE,
+    };
+    if object_count > 0 {
+        ptr::write_bytes(out_valid_ptr, 0, object_count);
+        for index in 0..output_values {
+            ptr::write(out_boxes_ptr.add(index), f64::NAN);
+        }
+    }
+    if matrix_ptr.is_null()
+        || (point_count > 0 && points_ptr.is_null())
+        || (object_count > 0 && (offsets_ptr.is_null() || point_flags_ptr.is_null()))
+    {
+        return ERR_NULL;
+    }
+    let matrix = slice::from_raw_parts(matrix_ptr, 16);
+    if !valid_matrix(matrix) || !valid_dimensions(width, height) {
+        return ERR_INPUT;
+    }
+    if object_count == 0 {
+        return if point_count == 0 { 0 } else { ERR_INPUT };
+    }
+    let point_count_u64 = match u64::try_from(point_count) {
+        Ok(value) => value,
+        Err(_) => return ERR_SIZE,
+    };
+    let points = if point_values == 0 {
+        &[]
+    } else {
+        slice::from_raw_parts(points_ptr, point_values)
+    };
+    if !points.iter().all(|value| value.is_finite()) {
+        return ERR_INPUT;
+    }
+    let offsets = slice::from_raw_parts(offsets_ptr, offset_count);
+    let point_flags = slice::from_raw_parts(point_flags_ptr, object_count);
+    if offsets[0] != 0 || offsets[object_count] != point_count_u64 {
+        return ERR_INPUT;
+    }
+    for pair in offsets.windows(2) {
+        if pair[0] > pair[1] || pair[1] > point_count_u64 {
+            return ERR_INPUT;
+        }
+    }
+    if point_flags.iter().any(|flag| *flag > 1) {
+        return ERR_INPUT;
+    }
+    let out_boxes = slice::from_raw_parts_mut(out_boxes_ptr, output_values);
+    let out_valid = slice::from_raw_parts_mut(out_valid_ptr, object_count);
+    for object_index in 0..object_count {
+        let start = offsets[object_index] as usize;
+        let end = offsets[object_index + 1] as usize;
+        let mut first = true;
+        let mut bounds = [f64::NAN; 4];
+        for point_index in start..end {
+            let clip =
+                selection_clip_point_f64(matrix, &points[point_index * 3..point_index * 3 + 3]);
+            if !clip.iter().all(|value| value.is_finite()) || clip[3] <= 0.0 {
+                continue;
+            }
+            let pixel_x = (clip[0] / clip[3] + 1.0) * width * 0.5;
+            let pixel_y = (clip[1] / clip[3] + 1.0) * height * 0.5;
+            if !pixel_x.is_finite() || !pixel_y.is_finite() {
+                continue;
+            }
+            if first {
+                bounds = [pixel_x, pixel_y, pixel_x, pixel_y];
+                first = false;
+                if point_flags[object_index] == 1 {
+                    break;
+                }
+            } else {
+                bounds[0] = bounds[0].min(pixel_x);
+                bounds[1] = bounds[1].min(pixel_y);
+                bounds[2] = bounds[2].max(pixel_x);
+                bounds[3] = bounds[3].max(pixel_y);
+            }
+        }
+        if !first {
+            out_boxes[object_index * 4..object_index * 4 + 4].copy_from_slice(&bounds);
+            out_valid[object_index] = 1;
+        }
+    }
+    0
+}
+
 /// Return the nearest projectable f64 display point within one screen radius.
 ///
 /// The return value is one for a hit, zero for no hit, and negative for invalid
@@ -1048,6 +1588,266 @@ mod tests {
             )
         };
         assert_eq!((result, index, distance), (1, 0, 0.0));
+    }
+
+    #[test]
+    fn display_point_projection_export_matches_the_shared_mixed_precision_path() {
+        let matrix = [
+            1.027_998_685_836_792,
+            -0.425_244_897_603_988_65,
+            -0.466_378_778_219_223,
+            0.643_716_871_738_433_8,
+            0.351_474_761_962_890_6,
+            1.890_630_245_208_740_2,
+            -0.949_153_780_937_194_8,
+            9.998_909_950_256_348,
+            -0.496_979_504_823_684_7,
+            -0.313_879_579_305_648_8,
+            -0.809_253_394_603_729_2,
+            6.883_465_290_069_58,
+            -0.496_880_114_078_521_73,
+            -0.313_816_815_614_700_3,
+            -0.809_091_567_993_164_1,
+            7.082_068_443_298_34,
+        ];
+        let points = [
+            6.764_359_507_293_101_f64,
+            -9.856_076_443_526_845,
+            0.483_920_382_336_751_94,
+            f64::NAN,
+            0.0,
+            0.0,
+        ];
+        let mut pixels = [0.0_f64; 4];
+        let mut visible = [9_u8; 2];
+        let result = unsafe {
+            narwhal_project_display_points_f64(
+                matrix.as_ptr(),
+                points.as_ptr(),
+                2,
+                1920.0,
+                1080.0,
+                pixels.as_mut_ptr(),
+                visible.as_mut_ptr(),
+            )
+        };
+        let expected = project_display_point_f64(&matrix, &points[..3], 1920.0, 1080.0)
+            .expect("the adversarial point is visible");
+        assert_eq!(result, 0);
+        assert_eq!((pixels[0], pixels[1]), expected);
+        assert_eq!(visible, [1, 0]);
+        assert!(pixels[2].is_nan() && pixels[3].is_nan());
+    }
+
+    #[test]
+    fn screen_polyline_query_preserves_strict_earlier_hover_semantics() {
+        let pixels = [0.0_f64, 0.0, 10.0, 0.0, 0.0, 0.0, 10.0, 0.0];
+        let visible = [1_u8; 4];
+        let offsets = [0_u64, 2, 4];
+        let mouse = [5.0_f64, 1.0];
+        let mut index = u64::MAX;
+        let mut distance = f64::INFINITY;
+        let hit = unsafe {
+            narwhal_nearest_screen_polyline_f64(
+                pixels.as_ptr(),
+                visible.as_ptr(),
+                4,
+                offsets.as_ptr(),
+                2,
+                mouse.as_ptr(),
+                9.0,
+                &mut index,
+                &mut distance,
+            )
+        };
+        assert_eq!((hit, index, distance), (1, 0, 1.0));
+
+        let boundary_mouse = [5.0_f64, 9.0];
+        let miss = unsafe {
+            narwhal_nearest_screen_polyline_f64(
+                pixels.as_ptr(),
+                visible.as_ptr(),
+                4,
+                offsets.as_ptr(),
+                2,
+                boundary_mouse.as_ptr(),
+                9.0,
+                &mut index,
+                &mut distance,
+            )
+        };
+        assert_eq!((miss, index, distance), (0, u64::MAX, f64::INFINITY));
+
+        let adversarial_mouse = [4.364_241_123_199_463_f64, 4.749_826_908_111_572];
+        let python_distance = 6.450_384_193_088_506_f64;
+        let degenerate_pixels = [0.0_f64; 4];
+        let one_curve = [0_u64, 2];
+        let adversarial_miss = unsafe {
+            narwhal_nearest_screen_polyline_f64(
+                degenerate_pixels.as_ptr(),
+                visible.as_ptr(),
+                2,
+                one_curve.as_ptr(),
+                1,
+                adversarial_mouse.as_ptr(),
+                python_distance,
+                &mut index,
+                &mut distance,
+            )
+        };
+        assert_eq!(
+            (adversarial_miss, index, distance),
+            (0, u64::MAX, f64::INFINITY)
+        );
+        let above_python_distance = f64::from_bits(python_distance.to_bits() + 1);
+        let adversarial_hit = unsafe {
+            narwhal_nearest_screen_polyline_f64(
+                degenerate_pixels.as_ptr(),
+                visible.as_ptr(),
+                2,
+                one_curve.as_ptr(),
+                1,
+                adversarial_mouse.as_ptr(),
+                above_python_distance,
+                &mut index,
+                &mut distance,
+            )
+        };
+        assert_eq!((adversarial_hit, index, distance), (1, 0, python_distance));
+
+        let threshold_dx = (1.0e-9_f64).sqrt();
+        assert_eq!(threshold_dx * threshold_dx, 1.0e-9);
+        let below_threshold_dx = f64::from_bits(threshold_dx.to_bits() - 1);
+        let epsilon_mouse = [threshold_dx * 2.0, 1.0];
+        let below_distance =
+            screen_point_segment_distance(epsilon_mouse, [0.0, 0.0], [below_threshold_dx, 0.0]);
+        let at_distance =
+            screen_point_segment_distance(epsilon_mouse, [0.0, 0.0], [threshold_dx, 0.0]);
+        assert_eq!(
+            below_distance,
+            python_hypot2(epsilon_mouse[0], epsilon_mouse[1])
+        );
+        assert_eq!(
+            at_distance,
+            python_hypot2(epsilon_mouse[0] - threshold_dx, epsilon_mouse[1]),
+        );
+        assert_ne!(below_distance, at_distance);
+        let extreme = 1.4e154_f64;
+        assert_eq!(
+            screen_point_segment_distance([extreme, extreme], [0.0, 0.0], [extreme, extreme],),
+            0.0,
+        );
+
+        let hidden_pixels = [0.0_f64, 0.0, f64::NAN, f64::NAN, 0.0, 0.0, 10.0, 0.0];
+        let hidden_visible = [1_u8, 0, 1, 1];
+        let malformed_hidden = unsafe {
+            narwhal_nearest_screen_polyline_f64(
+                pixels.as_ptr(),
+                hidden_visible.as_ptr(),
+                4,
+                offsets.as_ptr(),
+                2,
+                mouse.as_ptr(),
+                9.0,
+                &mut index,
+                &mut distance,
+            )
+        };
+        assert_eq!(malformed_hidden, ERR_INPUT);
+        let hidden_hit = unsafe {
+            narwhal_nearest_screen_polyline_f64(
+                hidden_pixels.as_ptr(),
+                hidden_visible.as_ptr(),
+                4,
+                offsets.as_ptr(),
+                2,
+                mouse.as_ptr(),
+                9.0,
+                &mut index,
+                &mut distance,
+            )
+        };
+        assert_eq!((hidden_hit, index, distance), (1, 1, 1.0));
+    }
+
+    #[test]
+    fn clip_box_reduction_preserves_grouping_visibility_and_point_flags() {
+        let clip = [
+            -1.0_f64,
+            -1.0,
+            0.0,
+            1.0,
+            1.0,
+            1.0,
+            0.0,
+            1.0,
+            99.0,
+            99.0,
+            0.0,
+            -1.0,
+            -0.5,
+            0.25,
+            0.0,
+            1.0,
+            0.75,
+            -0.75,
+            0.0,
+            1.0,
+            f64::NAN,
+            0.0,
+            0.0,
+            1.0,
+        ];
+        let offsets = [0_u64, 3, 5, 6];
+        let point_flags = [0_u8, 1, 0];
+        let mut boxes = [0.0_f64; 12];
+        let mut valid = [9_u8; 3];
+        let result = unsafe {
+            narwhal_screen_boxes_from_clip_f64(
+                clip.as_ptr(),
+                6,
+                offsets.as_ptr(),
+                3,
+                point_flags.as_ptr(),
+                800.0,
+                600.0,
+                boxes.as_mut_ptr(),
+                valid.as_mut_ptr(),
+            )
+        };
+        assert_eq!(result, 0);
+        assert_eq!(valid, [1, 1, 0]);
+        assert_eq!(&boxes[..4], &[0.0, 0.0, 800.0, 600.0]);
+        assert_eq!(&boxes[4..8], &[200.0, 375.0, 200.0, 375.0]);
+        assert!(boxes[8..].iter().all(|value| value.is_nan()));
+
+        let matrix = [
+            1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 1.0,
+        ];
+        let world = [
+            -1.0_f64, -1.0, 0.0, 1.0, 1.0, 0.0, 99.0, 99.0, -2.0, -0.5, 0.25, 0.0, 0.75, -0.75,
+            0.0, 0.0, 0.0, -2.0,
+        ];
+        let mut fused_boxes = [0.0_f64; 12];
+        let mut fused_valid = [9_u8; 3];
+        let fused = unsafe {
+            narwhal_screen_boxes_from_world_f64(
+                matrix.as_ptr(),
+                world.as_ptr(),
+                6,
+                offsets.as_ptr(),
+                3,
+                point_flags.as_ptr(),
+                800.0,
+                600.0,
+                fused_boxes.as_mut_ptr(),
+                fused_valid.as_mut_ptr(),
+            )
+        };
+        assert_eq!(fused, 0);
+        assert_eq!(fused_valid, valid);
+        assert_eq!(&fused_boxes[..8], &boxes[..8]);
+        assert!(fused_boxes[8..].iter().all(|value| value.is_nan()));
     }
 
     #[test]

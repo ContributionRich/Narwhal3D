@@ -61,6 +61,7 @@ shown to be wrong, this is the one line to change.
 from __future__ import annotations
 
 import math
+import numbers
 
 # ---------------------------------------------------------------------------
 # the snap modes, named exactly as the reference CAD application's Osnap control names them
@@ -974,14 +975,16 @@ def _near_on_screen(target, project, mouse):
 
 
 def best_on_screen(targets, cursor, modes, project, radius_px, plane=None, *,
-                   base=None, snap_to_locked=False):
+                   base=None, snap_to_locked=False, project_batch=None):
     """:func:`best`, with distance measured in SCREEN PIXELS. See the block comment.
 
     `project` maps a world point to ``(x, y)`` pixels, or None when it cannot be seen
     (behind a perspective camera). `cursor` is the cursor's world point; its
     projection IS the mouse position, so no separate mouse argument can disagree
-    with it. Every other rule -- `Near` as a fallback, ties broken by mode order,
-    locked targets dropped -- is :func:`best`'s, unchanged.
+    with it. ``project_batch`` may return packed ``(pixels, visibility)`` for all
+    candidate points; malformed or failed batches rerun the scalar projector for
+    every candidate. Every other rule -- `Near` as a fallback, ties broken by mode
+    order, locked targets dropped -- is :func:`best`'s, unchanged.
     """
     mouse = project(cursor) if cursor is not None else None
     if mouse is None:
@@ -998,14 +1001,47 @@ def best_on_screen(targets, cursor, modes, project, radius_px, plane=None, *,
             n = _near_on_screen(t, project, mouse)
             if n is not None:
                 found.append(Snap(n, NEAR, 0.0, t))
-    scored = []
-    for s in found:
-        q = project(s.point)
-        if q is None:
-            continue
-        d = math.hypot(q[0] - mouse[0], q[1] - mouse[1])
-        if radius_px is None or d <= radius_px:
-            scored.append(Snap(s.point, s.mode, d, s.target))
+    scored = None
+    if project_batch is not None and found:
+        try:
+            projected = project_batch(tuple(s.point for s in found))
+            if projected is not None:
+                pixels, visible = projected
+                if len(pixels) != len(found) or len(visible) != len(found):
+                    raise ValueError("projected candidate batch length mismatch")
+                batch_scored = []
+                for index, s in enumerate(found):
+                    raw_flag = visible[index]
+                    if not isinstance(raw_flag, numbers.Integral):
+                        raise ValueError("projected candidate visibility must be an integer")
+                    flag = int(raw_flag)
+                    if flag not in (0, 1):
+                        raise ValueError("projected candidate visibility must be zero/one")
+                    q = pixels[index]
+                    if len(q) != 2:
+                        raise ValueError("projected candidate pixels must be XY pairs")
+                    qx, qy = float(q[0]), float(q[1])
+                    if flag == 0:
+                        if not math.isnan(qx) or not math.isnan(qy):
+                            raise ValueError("hidden projected candidate pixels must be NaN")
+                        continue
+                    if not math.isfinite(qx) or not math.isfinite(qy):
+                        raise ValueError("visible projected candidate must be finite")
+                    d = math.hypot(qx - mouse[0], qy - mouse[1])
+                    if radius_px is None or d <= radius_px:
+                        batch_scored.append(Snap(s.point, s.mode, d, s.target))
+                scored = batch_scored
+        except Exception:  # noqa: BLE001 -- optional acceleration must fail closed
+            scored = None
+    if scored is None:
+        scored = []
+        for s in found:
+            q = project(s.point)
+            if q is None:
+                continue
+            d = math.hypot(q[0] - mouse[0], q[1] - mouse[1])
+            if radius_px is None or d <= radius_px:
+                scored.append(Snap(s.point, s.mode, d, s.target))
     if not scored:
         return None
     discrete = [s for s in scored if s.mode != NEAR]

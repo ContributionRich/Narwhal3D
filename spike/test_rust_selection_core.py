@@ -51,6 +51,10 @@ lib.narwhal_project_points_f32.argtypes = [
     DoubleP, FloatP, ctypes.c_size_t, ctypes.c_double, ctypes.c_double, DoubleP, ByteP,
 ]
 lib.narwhal_project_points_f32.restype = ctypes.c_int
+lib.narwhal_project_display_points_f64.argtypes = [
+    DoubleP, DoubleP, ctypes.c_size_t, ctypes.c_double, ctypes.c_double, DoubleP, ByteP,
+]
+lib.narwhal_project_display_points_f64.restype = ctypes.c_int
 lib.narwhal_any_screen_segment_crosses_rect_f64.argtypes = [
     DoubleP, ctypes.c_size_t, DoubleP,
 ]
@@ -78,6 +82,21 @@ lib.narwhal_nearest_projected_point_f64.argtypes = [
     DoubleP, ctypes.c_double, UInt64P, DoubleP,
 ]
 lib.narwhal_nearest_projected_point_f64.restype = ctypes.c_int
+lib.narwhal_nearest_screen_polyline_f64.argtypes = [
+    DoubleP, ByteP, ctypes.c_size_t, UInt64P, ctypes.c_size_t,
+    DoubleP, ctypes.c_double, UInt64P, DoubleP,
+]
+lib.narwhal_nearest_screen_polyline_f64.restype = ctypes.c_int
+lib.narwhal_screen_boxes_from_clip_f64.argtypes = [
+    DoubleP, ctypes.c_size_t, UInt64P, ctypes.c_size_t, ByteP,
+    ctypes.c_double, ctypes.c_double, DoubleP, ByteP,
+]
+lib.narwhal_screen_boxes_from_clip_f64.restype = ctypes.c_int
+lib.narwhal_screen_boxes_from_world_f64.argtypes = [
+    DoubleP, DoubleP, ctypes.c_size_t, UInt64P, ctypes.c_size_t, ByteP,
+    ctypes.c_double, ctypes.c_double, DoubleP, ByteP,
+]
+lib.narwhal_screen_boxes_from_world_f64.restype = ctypes.c_int
 lib.narwhal_projected_points_rect_query_f64.argtypes = [
     DoubleP, DoubleP, ctypes.c_size_t, ctypes.c_double, ctypes.c_double, DoubleP, ByteP,
 ]
@@ -150,6 +169,42 @@ def projections_close(got, want, tolerance=2e-5):
     return max(abs(got[index] - want[index]) for index in (0, 1)) < tolerance
 
 
+def scalar_segment_distance(point, a, b):
+    ax, ay = a
+    bx, by = b
+    px, py = point
+    dx, dy = bx - ax, by - ay
+    denominator = dx * dx + dy * dy
+    if denominator < 1.0e-9:
+        return math.hypot(px - ax, py - ay)
+    t = ((px - ax) * dx + (py - ay) * dy) / denominator
+    t = max(0.0, min(1.0, t))
+    return math.hypot(px - (ax + t * dx), py - (ay + t * dy))
+
+
+def scalar_clip_boxes(clip, offsets, point_flags, width=800.0, height=600.0):
+    boxes = []
+    for object_index, is_point in enumerate(point_flags):
+        visible = []
+        for point in clip[offsets[object_index]:offsets[object_index + 1]]:
+            if not all(math.isfinite(value) for value in point) or point[3] <= 0.0:
+                continue
+            pixel = ((point[0] / point[3] + 1.0) * width * 0.5,
+                     (point[1] / point[3] + 1.0) * height * 0.5)
+            if all(math.isfinite(value) for value in pixel):
+                visible.append(pixel)
+        if not visible:
+            boxes.append(None)
+        elif is_point:
+            boxes.append((*visible[0], *visible[0]))
+        else:
+            boxes.append((min(point[0] for point in visible),
+                          min(point[1] for point in visible),
+                          max(point[0] for point in visible),
+                          max(point[1] for point in visible)))
+    return boxes
+
+
 def scalar_crosses(a, b, rect):
     x0, y0, x1, y1 = rect
     ax, ay = a
@@ -182,6 +237,18 @@ def rust_project(matrix, points, width=800.0, height=600.0):
     )
     result = [None if not visible[index]
               else (out[index * 2], out[index * 2 + 1])
+              for index in range(len(points))]
+    return code, result
+
+
+def rust_display_project(matrix, points, width=800.0, height=600.0):
+    raw = darray(value for point in points for value in point)
+    pixels = (ctypes.c_double * (len(points) * 2))()
+    visible = (ctypes.c_ubyte * len(points))()
+    code = lib.narwhal_project_display_points_f64(
+        darray(matrix), raw, len(points), width, height, pixels, visible)
+    result = [None if not visible[index]
+              else (pixels[index * 2], pixels[index * 2 + 1])
               for index in range(len(points))]
     return code, result
 
@@ -239,6 +306,62 @@ def rust_nearest_batch(matrix, curves, mouse, limit, width=800.0, height=600.0):
     return code, index.value, distance.value
 
 
+def rust_screen_polyline(pixels, visible, offsets, mouse, limit):
+    index = ctypes.c_uint64((1 << 64) - 1)
+    distance = ctypes.c_double(math.inf)
+    code = lib.narwhal_nearest_screen_polyline_f64(
+        darray(value for point in pixels for value in point),
+        (ctypes.c_ubyte * len(visible))(*visible),
+        len(pixels),
+        (ctypes.c_uint64 * len(offsets))(*offsets),
+        len(offsets) - 1,
+        darray(mouse),
+        limit,
+        ctypes.byref(index),
+        ctypes.byref(distance),
+    )
+    return code, index.value, distance.value
+
+
+def rust_clip_boxes(clip, offsets, point_flags, width=800.0, height=600.0):
+    boxes = (ctypes.c_double * (len(point_flags) * 4))()
+    valid = (ctypes.c_ubyte * len(point_flags))()
+    code = lib.narwhal_screen_boxes_from_clip_f64(
+        darray(value for point in clip for value in point),
+        len(clip),
+        (ctypes.c_uint64 * len(offsets))(*offsets),
+        len(point_flags),
+        (ctypes.c_ubyte * len(point_flags))(*point_flags),
+        width,
+        height,
+        boxes,
+        valid,
+    )
+    result = [None if not valid[index] else tuple(boxes[index * 4:index * 4 + 4])
+              for index in range(len(point_flags))]
+    return code, result
+
+
+def rust_world_boxes(matrix, points, offsets, point_flags, width=800.0, height=600.0):
+    boxes = (ctypes.c_double * (len(point_flags) * 4))()
+    valid = (ctypes.c_ubyte * len(point_flags))()
+    code = lib.narwhal_screen_boxes_from_world_f64(
+        darray(matrix),
+        darray(value for point in points for value in point),
+        len(points),
+        (ctypes.c_uint64 * len(offsets))(*offsets),
+        len(point_flags),
+        (ctypes.c_ubyte * len(point_flags))(*point_flags),
+        width,
+        height,
+        boxes,
+        valid,
+    )
+    result = [None if not valid[index] else tuple(boxes[index * 4:index * 4 + 4])
+              for index in range(len(point_flags))]
+    return code, result
+
+
 def rust_nearest_point(matrix, points, mouse, limit, width=800.0, height=600.0):
     raw = darray(value for point in points for value in point)
     index = ctypes.c_uint64((1 << 64) - 1)
@@ -288,6 +411,20 @@ check(code == 0 and edge_actual == [(0.0, 0.0), (800.0, 600.0)],
       "orthographic NDC boundaries map exactly to region boundaries", repr(edge_actual))
 code, nonfinite = rust_project(IDENTITY, [(math.nan, 0.0, 0.0)])
 check(code == 0 and nonfinite == [None], "non-finite points are explicitly unprojectable")
+adversarial_matrix = (
+    1.027998685836792, -0.42524489760398865, -0.466378778219223, 0.6437168717384338,
+    0.3514747619628906, 1.8906302452087402, -0.9491537809371948, 9.998909950256348,
+    -0.4969795048236847, -0.3138795793056488, -0.8092533946037292, 6.88346529006958,
+    -0.49688011407852173, -0.3138168156147003, -0.8090915679931641, 7.08206844329834,
+)
+adversarial_points = [(6.764359507293101, -9.856076443526845, 0.48392038233675194),
+                      (math.nan, 0.0, 0.0)]
+display_code, display_actual = rust_display_project(
+    adversarial_matrix, adversarial_points, 1920.0, 1080.0)
+display_expected = [scalar_display_project(
+    adversarial_matrix, point, 1920.0, 1080.0) for point in adversarial_points]
+check(display_code == 0 and display_actual == display_expected,
+      "f64 display export matches adversarial mathutils mixed-precision projection")
 
 rect = (4.0, 4.0, 6.0, 6.0)
 check(rust_screen_any([((0.0, 5.0), (10.0, 5.0))], rect) == 1,
@@ -405,6 +542,172 @@ check(no_nearest[0] == 0 and no_nearest[1] == (1 << 64) - 1
       and math.isinf(no_nearest[2]),
       "nearest batch distinguishes an authoritative no-hit")
 
+screen_pixels = [(0.0, 0.0), (10.0, 0.0), (0.0, 0.0), (10.0, 0.0)]
+screen_offsets = [0, 2, 4]
+check(rust_screen_polyline(screen_pixels, [1, 1, 1, 1], screen_offsets, (5.0, 1.0), 9.0)
+      == (1, 0, 1.0),
+      "screen polyline query preserves earlier exact ties")
+screen_boundary = rust_screen_polyline(
+    screen_pixels, [1, 1, 1, 1], screen_offsets, (5.0, 9.0), 9.0)
+check(screen_boundary[0] == 0 and screen_boundary[1] == (1 << 64) - 1
+      and math.isinf(screen_boundary[2]),
+      "screen polyline query preserves strict distance < tolerance")
+hidden_pixels = [(0.0, 0.0), (math.nan, math.nan), (0.0, 0.0), (10.0, 0.0)]
+check(rust_screen_polyline(hidden_pixels, [1, 0, 1, 1], screen_offsets, (5.0, 1.0), 9.0)
+      == (1, 1, 1.0),
+      "screen polyline query drops only segments with a hidden endpoint")
+adversarial_mouse = (4.364241123199463, 4.749826908111572)
+adversarial_distance = math.hypot(*adversarial_mouse)
+adversarial_pixels = [(0.0, 0.0), (0.0, 0.0)]
+adversarial_offsets = [0, 2]
+adversarial_miss = rust_screen_polyline(
+    adversarial_pixels, [1, 1], adversarial_offsets,
+    adversarial_mouse, adversarial_distance)
+adversarial_hit = rust_screen_polyline(
+    adversarial_pixels, [1, 1], adversarial_offsets,
+    adversarial_mouse, math.nextafter(adversarial_distance, math.inf))
+check(adversarial_miss[0] == 0 and adversarial_miss[1] == (1 << 64) - 1
+      and math.isinf(adversarial_miss[2])
+      and adversarial_hit == (1, 0, adversarial_distance),
+      "screen polyline query is bit-exact with adversarial Python math.hypot")
+threshold_dx = math.sqrt(1.0e-9)
+below_threshold_dx = math.nextafter(threshold_dx, 0.0)
+epsilon_mouse = (threshold_dx * 2.0, 1.0)
+at_distance = scalar_segment_distance(
+    epsilon_mouse, (0.0, 0.0), (threshold_dx, 0.0))
+below_distance = scalar_segment_distance(
+    epsilon_mouse, (0.0, 0.0), (below_threshold_dx, 0.0))
+epsilon_limit = (at_distance + below_distance) / 2.0
+at_epsilon = rust_screen_polyline(
+    [(0.0, 0.0), (threshold_dx, 0.0)], [1, 1], [0, 2],
+    epsilon_mouse, epsilon_limit)
+below_epsilon = rust_screen_polyline(
+    [(0.0, 0.0), (below_threshold_dx, 0.0)], [1, 1], [0, 2],
+    epsilon_mouse, epsilon_limit)
+check(threshold_dx * threshold_dx == 1.0e-9
+      and at_epsilon == (1, 0, at_distance)
+      and below_epsilon[0] == 0 and below_epsilon[1] == (1 << 64) - 1,
+      "screen polyline query preserves the exact 1e-9 degenerate threshold")
+extreme = 1.4e154
+check(rust_screen_polyline(
+    [(0.0, 0.0), (extreme, extreme)], [1, 1], [0, 2],
+    (extreme, extreme), 9.0) == (1, 0, 0.0),
+      "screen polyline query matches Python max/min when the parameter is NaN")
+
+box_clip = [(-1.0, -1.0, 0.0, 1.0), (1.0, 1.0, 0.0, 1.0),
+            (99.0, 99.0, 0.0, -1.0), (-0.5, 0.25, 0.0, 1.0),
+            (0.75, -0.75, 0.0, 1.0), (math.nan, 0.0, 0.0, 1.0)]
+box_offsets = [0, 3, 5, 6]
+box_flags = [0, 1, 0]
+check(rust_clip_boxes(box_clip, box_offsets, box_flags) == (
+    0, [(0.0, 0.0, 800.0, 600.0), (200.0, 375.0, 200.0, 375.0), None]),
+      "clip-box reduction preserves grouping, hidden rows, and first point pixels")
+box_equivalent = True
+for _ in range(250):
+    object_count = rng.randrange(0, 24)
+    clip = []
+    offsets = [0]
+    point_flags = []
+    for _object in range(object_count):
+        point_flags.append(rng.randrange(0, 2))
+        for _point in range(rng.randrange(0, 10)):
+            point = [rng.uniform(-20.0, 20.0) for _component in range(4)]
+            if rng.random() < 0.12:
+                point[rng.randrange(0, 4)] = math.nan
+            clip.append(tuple(point))
+        offsets.append(len(clip))
+    expected = scalar_clip_boxes(clip, offsets, point_flags)
+    code, actual = rust_clip_boxes(clip, offsets, point_flags)
+    box_equivalent &= code == 0 and actual == expected
+    if not box_equivalent:
+        break
+check(box_equivalent, "250 randomized grouped clip batches match Python screen boxes exactly")
+
+world_matrix = (
+    1.2, 0.1, 0.0, 0.2,
+    0.0, 1.1, 0.1, -0.1,
+    0.0, 0.0, 1.0, 0.0,
+    0.15, -0.05, 0.2, 1.0,
+)
+world_points = [(-1.0, -1.0, 0.0), (1.0, 1.0, 0.0),
+                (0.0, 0.0, -10.0), (0.25, -0.5, 0.75)]
+world_offsets = [0, 3, 4]
+world_flags = [0, 1]
+world_clip = [tuple(
+    world_matrix[row * 4] * point[0]
+    + world_matrix[row * 4 + 1] * point[1]
+    + world_matrix[row * 4 + 2] * point[2]
+    + world_matrix[row * 4 + 3]
+    for row in range(4)) for point in world_points]
+check(rust_world_boxes(world_matrix, world_points, world_offsets, world_flags)
+      == (0, scalar_clip_boxes(world_clip, world_offsets, world_flags)),
+      "fused world-box query matches fixed-order f64 projection and reduction")
+world_box_equivalent = True
+for _ in range(250):
+    matrix = tuple(rng.uniform(-2.0, 2.0) for _value in range(16))
+    object_count = rng.randrange(0, 20)
+    points = []
+    offsets = [0]
+    flags = []
+    for _object in range(object_count):
+        flags.append(rng.randrange(0, 2))
+        points.extend(tuple(rng.uniform(-8.0, 8.0) for _coordinate in range(3))
+                      for _point in range(rng.randrange(0, 10)))
+        offsets.append(len(points))
+    clip = [tuple(
+        matrix[row * 4] * point[0]
+        + matrix[row * 4 + 1] * point[1]
+        + matrix[row * 4 + 2] * point[2]
+        + matrix[row * 4 + 3]
+        for row in range(4)) for point in points]
+    expected = scalar_clip_boxes(clip, offsets, flags)
+    code, actual = rust_world_boxes(matrix, points, offsets, flags)
+    world_box_equivalent &= code == 0 and actual == expected
+    if not world_box_equivalent:
+        break
+check(world_box_equivalent,
+      "250 randomized fused world-box batches match fixed-order Python exactly")
+
+screen_polyline_equivalent = True
+for _ in range(250):
+    curve_count = rng.randrange(0, 24)
+    offsets = [0]
+    pixels = []
+    visibility = []
+    for _curve in range(curve_count):
+        for _point in range(rng.randrange(0, 10)):
+            shown = rng.random() >= 0.18
+            visibility.append(int(shown))
+            pixels.append((rng.uniform(-400, 1200), rng.uniform(-300, 900))
+                          if shown else (math.nan, math.nan))
+        offsets.append(len(pixels))
+    cursor = (rng.uniform(-200, 1000), rng.uniform(-200, 800))
+    limit = rng.uniform(0.0, 300.0)
+    expected_index = (1 << 64) - 1
+    expected_distance = limit
+    for curve_index in range(curve_count):
+        start, end = offsets[curve_index:curve_index + 2]
+        curve_distance = math.inf
+        for point_index in range(start, max(start, end - 1)):
+            if not visibility[point_index] or not visibility[point_index + 1]:
+                continue
+            curve_distance = min(curve_distance, scalar_segment_distance(
+                cursor, pixels[point_index], pixels[point_index + 1]))
+        if curve_distance < expected_distance:
+            expected_index, expected_distance = curve_index, curve_distance
+    actual = rust_screen_polyline(pixels, visibility, offsets, cursor, limit)
+    if expected_index == (1 << 64) - 1:
+        screen_polyline_equivalent &= (
+            actual[0] == 0 and actual[1] == expected_index and math.isinf(actual[2]))
+    else:
+        screen_polyline_equivalent &= (
+            actual[0] == 1 and actual[1] == expected_index
+            and actual[2] == expected_distance)
+    if not screen_polyline_equivalent:
+        break
+check(screen_polyline_equivalent,
+      "250 randomized grouped screen polylines match strict-earlier Python distance")
+
 point_batch = [(0.0, 0.0, 0.0), (0.0, 0.0, 0.0), (1.0, 1.0, 0.0)]
 check(rust_nearest_point(IDENTITY, point_batch, (400.0, 300.0), 1.0)
       == (1, 1, 0.0),
@@ -413,7 +716,7 @@ check(rust_points_rect(IDENTITY, point_batch, (400.0, 300.0, 800.0, 600.0))
       == (0, (1, 1, 1)),
       "point rectangle query includes points exactly on every rectangle edge")
 
-point_equivalent = rect_equivalent = True
+point_equivalent = rect_equivalent = display_equivalent = True
 for _ in range(200):
     sample_points = [(rng.uniform(-3, 3), rng.uniform(-3, 3), rng.uniform(-6, 6))
                      for _point in range(rng.randrange(0, 40))]
@@ -423,6 +726,8 @@ for _ in range(200):
     expected_distance = limit
     projected = [scalar_display_project(PERSPECTIVE, point, 800.0, 600.0)
                  for point in sample_points]
+    display_code, display_points = rust_display_project(PERSPECTIVE, sample_points)
+    display_equivalent &= display_code == 0 and display_points == projected
     for index, pixel in enumerate(projected):
         if pixel is None:
             continue
@@ -444,8 +749,9 @@ for _ in range(200):
                             for pixel in projected)
     rect_equivalent &= rust_points_rect(
         PERSPECTIVE, sample_points, sample_rect) == (0, expected_inside)
-    if not point_equivalent or not rect_equivalent:
+    if not point_equivalent or not rect_equivalent or not display_equivalent:
         break
+check(display_equivalent, "200 randomized f64 display batches match scalar mixed precision")
 check(point_equivalent, "200 randomized nearest-point batches match scalar f64 projection")
 check(rect_equivalent, "200 randomized point-rectangle batches match inclusive scalar projection")
 
@@ -534,6 +840,111 @@ check(lib.narwhal_nearest_projected_curve_f32(
       "nearest batch rejects a null index output")
 point_index = ctypes.c_uint64(7)
 point_distance = ctypes.c_double(7.0)
+box_out = (ctypes.c_double * 8)(*([7.0] * 8))
+box_valid = (ctypes.c_ubyte * 2)(7, 7)
+box_offsets_raw = (ctypes.c_uint64 * 3)(0, 1, 2)
+box_flags_raw = (ctypes.c_ubyte * 2)(0, 1)
+box_clip_raw = darray((-1.0, -1.0, 0.0, 1.0, 1.0, 1.0, 0.0, 1.0))
+check(lib.narwhal_screen_boxes_from_clip_f64(
+    None, 2, box_offsets_raw, 2, box_flags_raw, 800.0, 600.0,
+    box_out, box_valid) == -1
+      and tuple(box_valid) == (0, 0) and all(math.isnan(value) for value in box_out),
+      "clip-box reduction clears outputs before rejecting null nonempty clip input")
+box_out[:] = [7.0] * 8
+box_valid[:] = [7, 7]
+check(lib.narwhal_screen_boxes_from_clip_f64(
+    box_clip_raw, 2, (ctypes.c_uint64 * 3)(0, 2, 1), 2, box_flags_raw,
+    800.0, 600.0, box_out, box_valid) == -2
+      and tuple(box_valid) == (0, 0) and all(math.isnan(value) for value in box_out),
+      "clip-box reduction rejects non-monotonic offsets and clears outputs")
+check(lib.narwhal_screen_boxes_from_clip_f64(
+    box_clip_raw, 2, box_offsets_raw, 2, (ctypes.c_ubyte * 2)(0, 2),
+    800.0, 600.0, box_out, box_valid) == -2,
+      "clip-box reduction rejects undocumented point flags")
+box_oversized = (sys.maxsize // ctypes.sizeof(ctypes.c_double) // 4) + 1
+check(lib.narwhal_screen_boxes_from_clip_f64(
+    box_clip_raw, box_oversized, (ctypes.c_uint64 * 2)(0, 1), 1,
+    (ctypes.c_ubyte * 1)(0), 800.0, 600.0, box_out, box_valid) == -3,
+      "clip-box reduction rejects a slice whose byte span exceeds isize::MAX")
+check(lib.narwhal_screen_boxes_from_clip_f64(
+    None, 0, None, 0, None, 800.0, 600.0, None, None) == 0,
+      "clip-box reduction safely accepts an empty null batch")
+box_out[:] = [7.0] * 8
+box_valid[:] = [7, 7]
+check(lib.narwhal_screen_boxes_from_world_f64(
+    None, darray((-1.0, -1.0, 0.0, 1.0, 1.0, 0.0)), 2,
+    box_offsets_raw, 2, box_flags_raw, 800.0, 600.0, box_out, box_valid) == -1
+      and tuple(box_valid) == (0, 0) and all(math.isnan(value) for value in box_out),
+      "fused world-box query clears outputs before rejecting a null matrix")
+box_out[:] = [7.0] * 8
+box_valid[:] = [7, 7]
+check(lib.narwhal_screen_boxes_from_world_f64(
+    darray(IDENTITY), darray((math.nan, 0.0, 0.0, 1.0, 1.0, 0.0)), 2,
+    box_offsets_raw, 2, box_flags_raw, 800.0, 600.0, box_out, box_valid) == -2
+      and tuple(box_valid) == (0, 0) and all(math.isnan(value) for value in box_out),
+      "fused world-box query rejects nonfinite points and clears outputs")
+world_box_oversized = (sys.maxsize // ctypes.sizeof(ctypes.c_double) // 3) + 1
+check(lib.narwhal_screen_boxes_from_world_f64(
+    darray(IDENTITY), darray((0.0, 0.0, 0.0)), world_box_oversized,
+    (ctypes.c_uint64 * 2)(0, 1), 1, (ctypes.c_ubyte * 1)(0),
+    800.0, 600.0, box_out, box_valid) == -3,
+      "fused world-box query rejects a slice whose byte span exceeds isize::MAX")
+check(lib.narwhal_screen_boxes_from_world_f64(
+    darray(IDENTITY), None, 0, None, 0, None,
+    800.0, 600.0, None, None) == 0,
+      "fused world-box query safely accepts an empty null batch")
+
+polyline_index = ctypes.c_uint64(7)
+polyline_distance = ctypes.c_double(7.0)
+polyline_pixels_raw = darray(value for point in screen_pixels for value in point)
+polyline_visible_raw = (ctypes.c_ubyte * 4)(1, 1, 1, 1)
+polyline_offsets_raw = (ctypes.c_uint64 * 3)(0, 2, 4)
+for label, pixels_ptr, visible_ptr, offsets_ptr, mouse_ptr in (
+    ("null mouse", polyline_pixels_raw, polyline_visible_raw, polyline_offsets_raw, None),
+    ("null pixels", None, polyline_visible_raw, polyline_offsets_raw, darray((5.0, 1.0))),
+    ("null visibility", polyline_pixels_raw, None, polyline_offsets_raw, darray((5.0, 1.0))),
+    ("null offsets", polyline_pixels_raw, polyline_visible_raw, None, darray((5.0, 1.0))),
+):
+    polyline_index.value = 7
+    polyline_distance.value = 7.0
+    result = lib.narwhal_nearest_screen_polyline_f64(
+        pixels_ptr, visible_ptr, 4, offsets_ptr, 2, mouse_ptr, 9.0,
+        ctypes.byref(polyline_index), ctypes.byref(polyline_distance))
+    check(result == -1 and polyline_index.value == (1 << 64) - 1
+          and math.isinf(polyline_distance.value),
+          f"screen polyline query rejects {label} and clears outputs")
+check(lib.narwhal_nearest_screen_polyline_f64(
+    polyline_pixels_raw, polyline_visible_raw, 4, polyline_offsets_raw, 2,
+    darray((5.0, 1.0)), 9.0, None, ctypes.byref(polyline_distance)) == -1
+      and lib.narwhal_nearest_screen_polyline_f64(
+          polyline_pixels_raw, polyline_visible_raw, 4, polyline_offsets_raw, 2,
+          darray((5.0, 1.0)), 9.0, ctypes.byref(polyline_index), None) == -1,
+      "screen polyline query rejects each null output pointer")
+check(lib.narwhal_nearest_screen_polyline_f64(
+    None, None, 0, empty_offsets, 2, darray((5.0, 1.0)), 9.0,
+    ctypes.byref(polyline_index), ctypes.byref(polyline_distance)) == 0
+      and polyline_index.value == (1 << 64) - 1 and math.isinf(polyline_distance.value),
+      "screen polyline query safely accepts multiple empty curves")
+invalid_point_offsets = (ctypes.c_uint64 * 3)(0, 4, 3)
+polyline_index.value = 7
+polyline_distance.value = 7.0
+check(lib.narwhal_nearest_screen_polyline_f64(
+    darray(value for point in screen_pixels for value in point),
+    (ctypes.c_ubyte * 4)(1, 1, 1, 1), 4, invalid_point_offsets, 2,
+    darray((5.0, 1.0)), 9.0,
+    ctypes.byref(polyline_index), ctypes.byref(polyline_distance)) == -2
+      and polyline_index.value == (1 << 64) - 1 and math.isinf(polyline_distance.value),
+      "screen polyline query rejects non-monotonic offsets and clears outputs")
+polyline_index.value = 7
+polyline_distance.value = 7.0
+check(lib.narwhal_nearest_screen_polyline_f64(
+    darray(value for point in screen_pixels for value in point),
+    (ctypes.c_ubyte * 4)(1, 2, 1, 1), 4,
+    (ctypes.c_uint64 * 3)(0, 2, 4), 2, darray((5.0, 1.0)), 9.0,
+    ctypes.byref(polyline_index), ctypes.byref(polyline_distance)) == -2
+      and polyline_index.value == (1 << 64) - 1 and math.isinf(polyline_distance.value),
+      "screen polyline query rejects visibility bytes and clears outputs")
+
 check(lib.narwhal_nearest_projected_point_f64(
     darray(IDENTITY), None, 0, 800.0, 600.0, darray((400.0, 300.0)), 6.0,
     ctypes.byref(point_index), ctypes.byref(point_distance)) == 0
@@ -558,7 +969,25 @@ check(lib.narwhal_nearest_projected_point_f64(
     800.0, 600.0, darray((400.0, 300.0)), 6.0,
     ctypes.byref(point_index), ctypes.byref(point_distance)) == -3,
       "nearest point query rejects a slice whose byte span exceeds isize::MAX")
+polyline_oversized = (sys.maxsize // ctypes.sizeof(ctypes.c_double) // 2) + 1
+check(lib.narwhal_nearest_screen_polyline_f64(
+    darray((0.0, 0.0)), (ctypes.c_ubyte * 1)(1), polyline_oversized,
+    (ctypes.c_uint64 * 2)(0, 1), 1, darray((0.0, 0.0)), 1.0,
+    ctypes.byref(polyline_index), ctypes.byref(polyline_distance)) == -3,
+      "screen polyline query rejects a slice whose byte span exceeds isize::MAX")
 point_inside = (ctypes.c_ubyte * 2)(9, 9)
+display_pixels = (ctypes.c_double * 4)(1.0, 1.0, 1.0, 1.0)
+display_visible = (ctypes.c_ubyte * 2)(9, 9)
+check(lib.narwhal_project_display_points_f64(
+    None, darray((0.0, 0.0, 0.0, 1.0, 1.0, 0.0)), 2,
+    800.0, 600.0, display_pixels, display_visible) == -1
+      and tuple(display_visible) == (0, 0)
+      and all(math.isnan(value) for value in display_pixels),
+      "display-point projection clears outputs before rejecting a null matrix")
+check(lib.narwhal_project_display_points_f64(
+    darray(IDENTITY), darray((0.0, 0.0, 0.0)), oversized_count,
+    800.0, 600.0, display_pixels, display_visible) == -3,
+      "display-point projection rejects a slice whose byte span exceeds isize::MAX")
 check(lib.narwhal_projected_points_rect_query_f64(
     None, darray((0.0, 0.0, 0.0, 1.0, 1.0, 0.0)), 2,
     800.0, 600.0, darray(rect), point_inside) == -1

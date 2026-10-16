@@ -1,8 +1,8 @@
 """Optional Rust acceleration for display-only selection projection.
 
 The native library never receives document geometry. It sees packed copies of a
-viewport matrix, float32 display segments, and float64 display-marker points. It can
-return ordinary screen tuples to an existing cache, answer nearest/rectangle queries
+viewport matrix, float32 display segments, float64 display-marker points, and cached
+screen polylines. It can return ordinary screen tuples to an existing cache, answer nearest/rectangle queries
 with stable indices, or classify curve crossings without materializing tuples. Any
 discovery, ABI, input, or call failure returns ``None`` so callers preserve their
 scalar paths.
@@ -105,6 +105,44 @@ def _binding():
                     nearest_curve.restype = ctypes.c_int
                 except AttributeError:
                     nearest_curve = None
+                try:
+                    display_points = library.narwhal_project_display_points_f64
+                    display_points.argtypes = [
+                        _DoubleP, _DoubleP, ctypes.c_size_t,
+                        ctypes.c_double, ctypes.c_double, _DoubleP, _ByteP,
+                    ]
+                    display_points.restype = ctypes.c_int
+                except AttributeError:
+                    pass
+                try:
+                    screen_polyline = library.narwhal_nearest_screen_polyline_f64
+                    screen_polyline.argtypes = [
+                        _DoubleP, _ByteP, ctypes.c_size_t,
+                        _UInt64P, ctypes.c_size_t, _DoubleP, ctypes.c_double,
+                        _UInt64P, _DoubleP,
+                    ]
+                    screen_polyline.restype = ctypes.c_int
+                except AttributeError:
+                    pass
+                try:
+                    world_boxes = library.narwhal_screen_boxes_from_world_f64
+                    world_boxes.argtypes = [
+                        _DoubleP, _DoubleP, ctypes.c_size_t,
+                        _UInt64P, ctypes.c_size_t, _ByteP,
+                        ctypes.c_double, ctypes.c_double, _DoubleP, _ByteP,
+                    ]
+                    world_boxes.restype = ctypes.c_int
+                except AttributeError:
+                    pass
+                try:
+                    clip_boxes = library.narwhal_screen_boxes_from_clip_f64
+                    clip_boxes.argtypes = [
+                        _DoubleP, ctypes.c_size_t, _UInt64P, ctypes.c_size_t,
+                        _ByteP, ctypes.c_double, ctypes.c_double, _DoubleP, _ByteP,
+                    ]
+                    clip_boxes.restype = ctypes.c_int
+                except AttributeError:
+                    pass
                 try:
                     nearest_point = library.narwhal_nearest_projected_point_f64
                     nearest_point.argtypes = [
@@ -453,6 +491,336 @@ def nearest_projected_curve(lines_by_curve, matrix, width, height, mouse, max_di
         return (int(curve_index.value), float(distance.value))
     except Exception as exc:  # noqa: BLE001 -- optimization failure must preserve selection
         _status = f"native selection nearest-curve query raised: {exc}"
+        return None
+
+
+def project_display_points(points, matrix, width, height):
+    """Project f64 display points with mathutils-exact mixed precision.
+
+    Returns ``(pixels, visible)`` NumPy arrays without Python tuple materialization.
+    ``None`` requests the unchanged scalar projection path for unavailable/old native
+    symbols, malformed inputs or outputs, native errors, and call exceptions.
+    """
+    global _status
+    binding = _binding()
+    if binding is None:
+        return None
+    library, _project, _rect_query, _batch_query, _nearest_curve, path = binding
+    display_points = getattr(library, "narwhal_project_display_points_f64", None)
+    if display_points is None:
+        _status = f"native selection display-point projection unavailable: {path}"
+        return None
+    try:
+        import numpy as np
+
+        values = _point_array(np, points)
+        view = np.ascontiguousarray(matrix, dtype=np.float64)
+        width = float(width)
+        height = float(height)
+        if values is None:
+            _status = "native selection input rejected: points must be an Nx3 array"
+            return None
+        if view.shape != (4, 4) or not np.isfinite(view).all():
+            _status = "native selection input rejected: matrix must be finite 4x4"
+            return None
+        if not np.isfinite((width, height)).all() or width < 0.0 or height < 0.0:
+            _status = "native selection input rejected: invalid region dimensions"
+            return None
+        pixels = np.empty((len(values), 2), dtype=np.float64)
+        visible = np.empty(len(values), dtype=np.uint8)
+        if len(values) == 0:
+            return pixels, visible
+        code = display_points(
+            view.ctypes.data_as(_DoubleP),
+            values.ctypes.data_as(_DoubleP),
+            len(values),
+            width,
+            height,
+            pixels.ctypes.data_as(_DoubleP),
+            visible.ctypes.data_as(_ByteP),
+        )
+        if code != 0 or not bool((visible <= 1).all()):
+            _status = f"native selection display-point projection failed with code {code}: {path}"
+            return None
+        shown = visible == 1
+        if ((shown.any() and not bool(np.isfinite(pixels[shown]).all()))
+                or ((~shown).any() and not bool(np.isnan(pixels[~shown]).all()))):
+            _status = f"native selection display-point output invalid: {path}"
+            return None
+        _status = f"ready: {path}"
+        return pixels, visible
+    except Exception as exc:  # noqa: BLE001 -- optimization failure preserves hover
+        _status = f"native selection display-point projection raised: {exc}"
+        return None
+
+
+def nearest_screen_polyline(pixels, visible, offsets, mouse, max_distance):
+    """Return the nearest cached display polyline with strict earlier-tie semantics.
+
+    ``(PICK_NO_HIT, inf)`` is an authoritative no-hit. ``None`` requests the
+    established projected-array/Python-distance fallback. Rust receives only cached
+    pixels, visibility and stable point offsets; curve names remain in Python.
+    """
+    global _status
+    binding = _binding()
+    if binding is None:
+        return None
+    library, _project, _rect_query, _batch_query, _nearest_curve, path = binding
+    nearest_polyline = getattr(library, "narwhal_nearest_screen_polyline_f64", None)
+    if nearest_polyline is None:
+        _status = f"native selection screen-polyline query unavailable: {path}"
+        return None
+    try:
+        import numpy as np
+
+        points = np.ascontiguousarray(pixels, dtype=np.float64)
+        raw_visible = np.asarray(visible)
+        raw_offsets = np.asarray(offsets)
+        cursor = np.ascontiguousarray(mouse, dtype=np.float64)
+        limit = float(max_distance)
+        if points.ndim != 2 or points.shape[1:] != (2,):
+            _status = "native selection input rejected: pixels must be an Nx2 array"
+            return None
+        if (raw_visible.ndim != 1 or len(raw_visible) != len(points)
+                or not np.issubdtype(raw_visible.dtype, np.integer)
+                or bool((raw_visible < 0).any()) or bool((raw_visible > 1).any())):
+            _status = "native selection input rejected: visibility must be N zero/one integers"
+            return None
+        if (raw_offsets.ndim != 1 or len(raw_offsets) < 1
+                or not np.issubdtype(raw_offsets.dtype, np.integer)
+                or bool((raw_offsets < 0).any())):
+            _status = "native selection input rejected: offsets must be unsigned integers"
+            return None
+        packed_visible = np.ascontiguousarray(raw_visible, dtype=np.uint8)
+        packed_offsets = np.ascontiguousarray(raw_offsets, dtype=np.uint64)
+        shown = packed_visible == 1
+        if ((shown.any() and not bool(np.isfinite(points[shown]).all()))
+                or ((~shown).any() and not bool(np.isnan(points[~shown]).all()))):
+            _status = "native selection input rejected: pixels disagree with visibility"
+            return None
+        if (int(packed_offsets[0]) != 0 or int(packed_offsets[-1]) != len(points)
+                or bool((packed_offsets[1:] < packed_offsets[:-1]).any())):
+            _status = "native selection input rejected: offsets must span monotonic points"
+            return None
+        if cursor.shape != (2,) or not np.isfinite(cursor).all():
+            _status = "native selection input rejected: mouse must be finite XY"
+            return None
+        if not np.isfinite(limit) or limit < 0.0:
+            _status = "native selection input rejected: invalid pick distance"
+            return None
+        curve_count = len(packed_offsets) - 1
+        if curve_count == 0:
+            return (PICK_NO_HIT, float("inf"))
+        curve_index = ctypes.c_uint64((1 << 64) - 1)
+        distance = ctypes.c_double(float("inf"))
+        code = nearest_polyline(
+            points.ctypes.data_as(_DoubleP),
+            packed_visible.ctypes.data_as(_ByteP),
+            len(points),
+            packed_offsets.ctypes.data_as(_UInt64P),
+            curve_count,
+            cursor.ctypes.data_as(_DoubleP),
+            limit,
+            ctypes.byref(curve_index),
+            ctypes.byref(distance),
+        )
+        if code == 0:
+            if curve_index.value != (1 << 64) - 1 or distance.value != float("inf"):
+                _status = f"native selection screen-polyline no-hit output invalid: {path}"
+                return None
+            _status = f"ready: {path}"
+            return (PICK_NO_HIT, float("inf"))
+        if (code != 1 or curve_index.value >= curve_count
+                or not np.isfinite(distance.value)
+                or distance.value < 0.0 or distance.value >= limit):
+            _status = f"native selection screen-polyline query failed with code {code}: {path}"
+            return None
+        _status = f"ready: {path}"
+        return int(curve_index.value), float(distance.value)
+    except Exception as exc:  # noqa: BLE001 -- optimization failure preserves hover
+        _status = f"native selection screen-polyline query raised: {exc}"
+        return None
+
+
+def screen_boxes_from_clip(clip, offsets, point_flags, width, height):
+    """Reduce grouped homogeneous clip rows to screen rectangles.
+
+    Returns ``(boxes, valid)`` NumPy arrays or ``None`` for the established
+    NumPy/pixel-tuple fallback. Inputs are display-only clip copies and grouping
+    metadata; object names and world/document geometry remain outside Rust.
+    """
+    global _status
+    binding = _binding()
+    if binding is None:
+        return None
+    library, _project, _rect_query, _batch_query, _nearest_curve, path = binding
+    clip_boxes = getattr(library, "narwhal_screen_boxes_from_clip_f64", None)
+    if clip_boxes is None:
+        _status = f"native selection clip-box reduction unavailable: {path}"
+        return None
+    try:
+        import numpy as np
+
+        values = np.ascontiguousarray(clip, dtype=np.float64)
+        raw_offsets = np.asarray(offsets)
+        raw_flags = np.asarray(point_flags)
+        width = float(width)
+        height = float(height)
+        if values.ndim != 2 or values.shape[1:] != (4,):
+            _status = "native selection input rejected: clip coordinates must be Nx4"
+            return None
+        if (raw_offsets.ndim != 1 or len(raw_offsets) < 1
+                or not np.issubdtype(raw_offsets.dtype, np.integer)
+                or bool((raw_offsets < 0).any())):
+            _status = "native selection input rejected: box offsets must be unsigned integers"
+            return None
+        packed_offsets = np.ascontiguousarray(raw_offsets, dtype=np.uint64)
+        object_count = len(packed_offsets) - 1
+        if (int(packed_offsets[0]) != 0 or int(packed_offsets[-1]) != len(values)
+                or bool((packed_offsets[1:] < packed_offsets[:-1]).any())):
+            _status = "native selection input rejected: box offsets must span monotonic points"
+            return None
+        if (raw_flags.ndim != 1 or len(raw_flags) != object_count
+                or not np.issubdtype(raw_flags.dtype, np.integer)
+                or bool((raw_flags < 0).any()) or bool((raw_flags > 1).any())):
+            _status = "native selection input rejected: point flags must be zero/one integers"
+            return None
+        if not np.isfinite((width, height)).all() or width < 0.0 or height < 0.0:
+            _status = "native selection input rejected: invalid box dimensions"
+            return None
+        packed_flags = np.ascontiguousarray(raw_flags, dtype=np.uint8)
+        boxes = np.empty((object_count, 4), dtype=np.float64)
+        valid = np.empty(object_count, dtype=np.uint8)
+        if object_count == 0:
+            return boxes, valid
+        code = clip_boxes(
+            values.ctypes.data_as(_DoubleP),
+            len(values),
+            packed_offsets.ctypes.data_as(_UInt64P),
+            object_count,
+            packed_flags.ctypes.data_as(_ByteP),
+            width,
+            height,
+            boxes.ctypes.data_as(_DoubleP),
+            valid.ctypes.data_as(_ByteP),
+        )
+        if code != 0 or not bool((valid <= 1).all()):
+            _status = f"native selection clip-box reduction failed with code {code}: {path}"
+            return None
+        shown = valid == 1
+        if ((shown.any() and not bool(np.isfinite(boxes[shown]).all()))
+                or ((~shown).any() and not bool(np.isnan(boxes[~shown]).all()))):
+            _status = f"native selection clip-box output invalid: {path}"
+            return None
+        if shown.any():
+            shown_boxes = boxes[shown]
+            if (bool((shown_boxes[:, 0] > shown_boxes[:, 2]).any())
+                    or bool((shown_boxes[:, 1] > shown_boxes[:, 3]).any())):
+                _status = f"native selection clip-box bounds inverted: {path}"
+                return None
+            point_boxes = shown_boxes[packed_flags[shown] == 1]
+            if (len(point_boxes)
+                    and (bool((point_boxes[:, 0] != point_boxes[:, 2]).any())
+                         or bool((point_boxes[:, 1] != point_boxes[:, 3]).any()))):
+                _status = f"native selection point box has area: {path}"
+                return None
+        _status = f"ready: {path}"
+        return boxes, valid
+    except Exception as exc:  # noqa: BLE001 -- optimization failure preserves selection
+        _status = f"native selection clip-box reduction raised: {exc}"
+        return None
+
+
+def screen_boxes_from_world(points, matrix, offsets, point_flags, width, height):
+    """Project grouped f64 display samples directly to canonical screen rectangles.
+
+    Returns ``(boxes, valid)`` NumPy arrays or ``None`` for the established
+    clip-buffer reducer. Object names and document geometry remain outside Rust.
+    """
+    global _status
+    binding = _binding()
+    if binding is None:
+        return None
+    library, _project, _rect_query, _batch_query, _nearest_curve, path = binding
+    world_boxes = getattr(library, "narwhal_screen_boxes_from_world_f64", None)
+    if world_boxes is None:
+        _status = f"native selection fused world-box projection unavailable: {path}"
+        return None
+    try:
+        import numpy as np
+
+        values = _point_array(np, points)
+        view = np.ascontiguousarray(matrix, dtype=np.float64)
+        raw_offsets = np.asarray(offsets)
+        raw_flags = np.asarray(point_flags)
+        width = float(width)
+        height = float(height)
+        if values is None:
+            _status = "native selection input rejected: box points must be an Nx3 array"
+            return None
+        if view.shape != (4, 4) or not np.isfinite(view).all():
+            _status = "native selection input rejected: box matrix must be finite 4x4"
+            return None
+        if (raw_offsets.ndim != 1 or len(raw_offsets) < 1
+                or not np.issubdtype(raw_offsets.dtype, np.integer)
+                or bool((raw_offsets < 0).any())):
+            _status = "native selection input rejected: world-box offsets must be unsigned integers"
+            return None
+        packed_offsets = np.ascontiguousarray(raw_offsets, dtype=np.uint64)
+        object_count = len(packed_offsets) - 1
+        if (int(packed_offsets[0]) != 0 or int(packed_offsets[-1]) != len(values)
+                or bool((packed_offsets[1:] < packed_offsets[:-1]).any())):
+            _status = "native selection input rejected: world-box offsets must span monotonic points"
+            return None
+        if (raw_flags.ndim != 1 or len(raw_flags) != object_count
+                or not np.issubdtype(raw_flags.dtype, np.integer)
+                or bool((raw_flags < 0).any()) or bool((raw_flags > 1).any())):
+            _status = "native selection input rejected: world-box flags must be zero/one integers"
+            return None
+        if not np.isfinite((width, height)).all() or width < 0.0 or height < 0.0:
+            _status = "native selection input rejected: invalid world-box dimensions"
+            return None
+        packed_flags = np.ascontiguousarray(raw_flags, dtype=np.uint8)
+        boxes = np.empty((object_count, 4), dtype=np.float64)
+        valid = np.empty(object_count, dtype=np.uint8)
+        if object_count == 0:
+            return boxes, valid
+        code = world_boxes(
+            view.ctypes.data_as(_DoubleP),
+            values.ctypes.data_as(_DoubleP),
+            len(values),
+            packed_offsets.ctypes.data_as(_UInt64P),
+            object_count,
+            packed_flags.ctypes.data_as(_ByteP),
+            width,
+            height,
+            boxes.ctypes.data_as(_DoubleP),
+            valid.ctypes.data_as(_ByteP),
+        )
+        if code != 0 or not bool((valid <= 1).all()):
+            _status = f"native selection fused world-box projection failed with code {code}: {path}"
+            return None
+        shown = valid == 1
+        if ((shown.any() and not bool(np.isfinite(boxes[shown]).all()))
+                or ((~shown).any() and not bool(np.isnan(boxes[~shown]).all()))):
+            _status = f"native selection fused world-box output invalid: {path}"
+            return None
+        if shown.any():
+            shown_boxes = boxes[shown]
+            if (bool((shown_boxes[:, 0] > shown_boxes[:, 2]).any())
+                    or bool((shown_boxes[:, 1] > shown_boxes[:, 3]).any())):
+                _status = f"native selection fused world-box bounds inverted: {path}"
+                return None
+            point_boxes = shown_boxes[packed_flags[shown] == 1]
+            if (len(point_boxes)
+                    and (bool((point_boxes[:, 0] != point_boxes[:, 2]).any())
+                         or bool((point_boxes[:, 1] != point_boxes[:, 3]).any()))):
+                _status = f"native selection fused point box has area: {path}"
+                return None
+        _status = f"ready: {path}"
+        return boxes, valid
+    except Exception as exc:  # noqa: BLE001 -- optimization failure preserves selection
+        _status = f"native selection fused world-box projection raised: {exc}"
         return None
 
 

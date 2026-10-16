@@ -12768,6 +12768,16 @@ def snap_at(area, space, region, cursor_world, first_point=False, suspend=False,
         q = v3u.location_3d_to_region_2d(region, rv3d, Vector(point))
         return None if q is None else (q.x, q.y)
 
+    def project_batch(points):
+        try:
+            import numpy as np
+
+            matrix = np.asarray(rv3d.perspective_matrix, dtype=np.float64)
+            return native_selection.project_display_points(
+                points, matrix, region.width, region.height)
+        except Exception:  # noqa: BLE001 -- scalar projection remains authoritative
+            return None
+
     # Only objects whose extent projects within the radius can snap, so only those are
     # sampled and handed to the engine (see `_snap_reach`). No mouse -> no cull, and
     # `best_on_screen` returns None for it anyway.
@@ -12784,7 +12794,8 @@ def snap_at(area, space, region, cursor_world, first_point=False, suspend=False,
                                 cursor_world, modes,
                                 project, _snap_settings.radius_px, plane,
                                 base=base,
-                                snap_to_locked=_snap_settings.snap_to_locked)
+                                snap_to_locked=_snap_settings.snap_to_locked,
+                                project_batch=project_batch)
     return osnap.apply_projection(snap, plane, _snap_settings.project)
 
 
@@ -14596,6 +14607,136 @@ def hover_pick():
     return _hover_pick[1] if _hover_pick else None
 
 
+_hover_curve_cache = {
+    "key": None, "rows": None, "names": (), "offsets": None, "points": None,
+    "view": None, "pixels": None, "visible": None,
+}
+
+
+def _hover_curve_world_data():
+    """Packed visible curve-overlay points, cached by document and visibility."""
+    import numpy as np
+    import rhino3dm as r3
+
+    model = getattr(app_state, "model", None)
+    file3dm = getattr(model, "file", None)
+    if file3dm is None:
+        return None
+    rows = _doc_rows()
+    curves = []
+    signature = []
+    for name, _mode, _layer_index, geom, attrs in rows:
+        if not isinstance(geom, r3.Curve):
+            continue
+        ob = bpy.data.objects.get(name)
+        if ob is None or not bridge.display_visible(ob):
+            continue
+        curves.append((name, geom))
+        signature.append((str(attrs.Id), name))
+    cache = _hover_curve_cache
+    key = (_doc_key(), tuple(signature))
+    if cache["rows"] is not rows or cache["key"] != key:
+        names = []
+        offsets = [0]
+        world_points = []
+        for name, geom in curves:
+            points = _curve_points(geom)
+            if len(points) < 2:
+                continue
+            names.append(name)
+            world_points.extend(points)
+            offsets.append(len(world_points))
+        packed = np.fromiter(
+            (coordinate for point in world_points for coordinate in point),
+            dtype=np.float64,
+            count=len(world_points) * 3,
+        ).reshape(-1, 3)
+        cache.update(
+            key=key,
+            rows=rows,
+            names=tuple(names),
+            offsets=np.ascontiguousarray(offsets, dtype=np.uint64),
+            points=packed,
+            view=None,
+            pixels=None,
+            visible=None,
+        )
+    return cache
+
+
+def _hover_curve_native_data(region, rv3d):
+    """``(names, offsets, pixels, visibility)`` or ``None`` for scalar fallback."""
+    cache = _hover_curve_world_data()
+    if cache is None:
+        return None
+    matrix = tuple(tuple(float(value) for value in row)
+                   for row in rv3d.perspective_matrix)
+    view = (matrix, float(region.width), float(region.height))
+    if cache["view"] != view:
+        projected = native_selection.project_display_points(
+            cache["points"], matrix, region.width, region.height)
+        if projected is None:
+            return None
+        cache["view"] = view
+        cache["pixels"], cache["visible"] = projected
+    return cache["names"], cache["offsets"], cache["pixels"], cache["visible"]
+
+
+def _hover_curve_object(region, rv3d, rx, ry):
+    """Curve-only half of `_hover_object`, with an exact optional native projector."""
+    try:
+        if native_selection.available():
+            data = _hover_curve_native_data(region, rv3d)
+            if data is not None:
+                names, offsets, pixels, visible = data
+                native_pick = native_selection.nearest_screen_polyline(
+                    pixels, visible, offsets, (rx, ry), SUBOBJECT_PICK_PX)
+                if native_pick is not None:
+                    curve_index, distance = native_pick
+                    if (curve_index == native_selection.PICK_NO_HIT
+                            and distance == float("inf")):
+                        return None
+                    if (type(curve_index) is int and 0 <= curve_index < len(names)
+                            and type(distance) in (int, float)
+                            and 0.0 <= distance < SUBOBJECT_PICK_PX):
+                        return names[curve_index]
+                best, best_d = None, SUBOBJECT_PICK_PX
+                for curve_index, name in enumerate(names):
+                    start = int(offsets[curve_index])
+                    end = int(offsets[curve_index + 1])
+                    for index in range(start, end - 1):
+                        if not visible[index] or not visible[index + 1]:
+                            continue
+                        a = (float(pixels[index, 0]), float(pixels[index, 1]))
+                        b = (float(pixels[index + 1, 0]), float(pixels[index + 1, 1]))
+                        distance = gumball._point_segment_distance_2d((rx, ry), a, b)
+                        if distance < best_d:
+                            best, best_d = name, distance
+                return best
+    except Exception:  # noqa: BLE001 -- optional projection never breaks hover
+        pass
+
+    # The original scalar route remains the complete fallback.
+    import rhino3dm as r3
+    best, best_d = None, SUBOBJECT_PICK_PX
+    for fobj in app_state.model.file.Objects:
+        geom = fobj.Geometry
+        if not isinstance(geom, r3.Curve):
+            continue
+        name = fobj.Attributes.Name or ""
+        ob = bpy.data.objects.get(name)
+        if ob is None or not bridge.display_visible(ob):
+            continue
+        points = [_project_2d(region, rv3d, world) for world in _curve_points(geom)]
+        for a, b in zip(points, points[1:]):
+            if a is None or b is None:
+                continue
+            distance = gumball._point_segment_distance_2d((rx, ry), a, b)
+            if distance < best_d:
+                best, best_d = name, distance
+    return best
+
+
 def _hover_object(area, space, region, rx, ry):
     """The object under the cursor, cheaply: a ray hit for surfaces/solids, else the
     nearest curve within SUBOBJECT_PICK_PX on screen."""
@@ -14612,24 +14753,7 @@ def _hover_object(area, space, region, rx, ry):
             return ob.name
     except Exception:  # noqa: BLE001
         pass
-    import rhino3dm as r3
-    best, best_d = None, SUBOBJECT_PICK_PX
-    for fobj in app_state.model.file.Objects:
-        g = fobj.Geometry
-        if not isinstance(g, r3.Curve):
-            continue
-        name = fobj.Attributes.Name or ""
-        ob = bpy.data.objects.get(name)
-        if ob is None or not bridge.display_visible(ob):
-            continue
-        pts = [_project_2d(region, rv3d, w) for w in _curve_points(g)]
-        for a, b in zip(pts, pts[1:]):
-            if a is None or b is None:
-                continue
-            dd = gumball._point_segment_distance_2d((rx, ry), a, b)
-            if dd < best_d:
-                best, best_d = name, dd
-    return best
+    return _hover_curve_object(region, rv3d, rx, ry)
 
 
 def _hover_target(cmd, area, space, region, rx, ry):
@@ -17674,6 +17798,61 @@ def _curve_selection_candidates(point_at, locked):
         return None
 
 
+def _native_selection_screen_boxes(region, rv3d, points, slices):
+    """Ordered ``(name, box)`` rows, or ``None`` for the established NumPy fallback."""
+    try:
+        if not native_selection.available():
+            return None
+        import numpy as np
+
+        matrix = np.asarray(rv3d.perspective_matrix, dtype=np.float64)
+        coordinates = np.asarray(points, dtype=np.float64)
+        if (matrix.shape != (4, 4) or coordinates.ndim != 2
+                or coordinates.shape[1:] != (3,)
+                or not np.isfinite(matrix).all()
+                or not np.isfinite(coordinates).all()):
+            return None
+        offsets = [0]
+        flags = []
+        expected_start = 0
+        for _name, start, end, is_point in slices:
+            if start != expected_start or end < start or end > len(coordinates):
+                return None
+            offsets.append(end)
+            flags.append(int(bool(is_point)))
+            expected_start = end
+        if expected_start != len(coordinates):
+            return None
+        packed_offsets = np.ascontiguousarray(offsets, dtype=np.uint64)
+        packed_flags = np.ascontiguousarray(flags, dtype=np.uint8)
+        reduced = native_selection.screen_boxes_from_world(
+            coordinates,
+            matrix,
+            packed_offsets,
+            packed_flags,
+            region.width,
+            region.height,
+        )
+        if reduced is None:
+            homogeneous = np.concatenate(
+                (coordinates, np.ones((len(coordinates), 1), dtype=np.float64)), axis=1)
+            clip = homogeneous @ matrix.T
+            reduced = native_selection.screen_boxes_from_clip(
+                clip,
+                packed_offsets,
+                packed_flags,
+                region.width,
+                region.height,
+            )
+        if reduced is None:
+            return None
+        boxes, valid = reduced
+        return [(slices[index][0], tuple(float(value) for value in boxes[index]))
+                for index in range(len(slices)) if valid[index]]
+    except Exception:  # noqa: BLE001 -- optional reduction never breaks selection
+        return None
+
+
 def _object_screen_bboxes(area, space, region, projection=None):
     """``(name, (x0, y0, x1, y1))`` in region pixels, for every visible object.
 
@@ -17737,14 +17916,19 @@ def _object_screen_bboxes(area, space, region, projection=None):
             corners = _selection_world_corners(ob, rec)
             pending.extend(tuple(float(v) for v in corner) for corner in corners)
             slices.append((ob.name, start, len(pending), False))
-    projected = _project_many_2d(region, rv3d, pending)
-    for name, start, end, is_point in slices:
-        visible = [pos for pos in projected[start:end] if pos is not None]
-        if not visible:
-            continue
-        xs, ys = [pos[0] for pos in visible], [pos[1] for pos in visible]
-        box = (xs[0], ys[0], xs[0], ys[0]) if is_point else (min(xs), min(ys), max(xs), max(ys))
-        out.append((name, box))
+    native_boxes = _native_selection_screen_boxes(region, rv3d, pending, slices)
+    if native_boxes is not None:
+        out.extend(native_boxes)
+    else:
+        projected = _project_many_2d(region, rv3d, pending)
+        for name, start, end, is_point in slices:
+            visible = [pos for pos in projected[start:end] if pos is not None]
+            if not visible:
+                continue
+            xs, ys = [pos[0] for pos in visible], [pos[1] for pos in visible]
+            box = ((xs[0], ys[0], xs[0], ys[0]) if is_point
+                   else (min(xs), min(ys), max(xs), max(ys)))
+            out.append((name, box))
     if projection is not None:
         projection["boxes"] = tuple(out)
     return out

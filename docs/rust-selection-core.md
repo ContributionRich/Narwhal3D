@@ -42,7 +42,7 @@ The verifier binds both files to the exact crate source aggregate and checks:
 
 - exact filenames and artifact set;
 - complete size and SHA-256 records;
-- ABI version 1 and exactly nine exported C symbols;
+- ABI version 1 and exactly thirteen exported C symbols;
 - ELF64/PE32+ x86-64 machine type;
 - executable Linux ABI probe when running on Linux x86-64;
 - Linux dependencies and maximum `GLIBC_2.35`;
@@ -80,11 +80,29 @@ f64 viewport division, and f32 pixel output. They return only stable point indic
 control-point and survey-style point-object picking avoid one Python/Blender projection
 per marker without moving analytic geometry or changing saved coordinates. Point-object
 inputs are filtered for named, unlocked rows before packing, and their array is rebuilt
-when the document-row source or lock set changes. Inputs whose slice byte span exceeds
-`isize::MAX` are rejected before Rust creates a slice. An older ABI-1
-library without an additive symbol, a load or call error, invalid offsets/input/output,
-or an unexpected status rejects the native result and uses the unchanged
-per-curve/Python fallback.
+when the document-row source or lock set changes. A further additive export projects
+packed f64 curve-overlay points into f32-exact display pixels plus one visibility byte
+per point. Command hover caches world points by document/visible-object signature and
+pixels by viewport matrix and dimensions. The eleventh export queries those cached
+screen polylines in one call using monotonic point offsets and the existing `1e-9`
+degenerate-segment rule. It returns only a stable curve index and pixel distance; names
+remain in Python, while strict `<` tolerance, earlier curve/segment ties, hidden
+endpoints, and ray-first surface/solid behavior remain exact. Distance uses a
+source-matched port of CPython 3.13's compensated two-component `vector_norm`, rather
+than platform `hypot`, so adversarial one-ULP boundaries agree on Linux and Windows
+without adding `libm`. The twelfth export reduces NumPy-produced homogeneous clip rows
+to grouped screen rectangles without publishing one Python tuple per box corner. The
+thirteenth fuses the preceding f64 world-to-homogeneous matrix multiplication into that
+same reduction, removing the remaining NumPy clip allocation on current libraries. Both
+use monotonic point offsets and point-object flags, ignore nonfinite or `w <= 0` rows,
+keep the first visible pixel for points, and return canonical min/max rectangles plus
+validity bytes in source order. Matrix row and term order match the established NumPy
+path exactly. Names, world points, candidate policy, selection rules, and the projection
+cache remain in Python. Inputs whose slice byte span exceeds `isize::MAX` are rejected
+before Rust creates a slice. A missing or failed fused symbol falls back to the twelfth
+export over NumPy clip rows; if that also declines, the original Python tuple publication
+and grouped reduction remain authoritative. Invalid inputs or malformed native outputs
+fail closed at every layer.
 
 Default activation still requires:
 
