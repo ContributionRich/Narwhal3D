@@ -94,7 +94,7 @@ check(sum(len(tab["buttons"]) for tab in data.TABS) == 582,
 
 implemented = live_command_names()
 rows = [button for name in names for button in toolbars.tab_rows(name, implemented)]
-check(len(implemented) == 169, "the app-equivalent registry has 169 commands", len(implemented))
+check(len(implemented) == 170, "the app-equivalent registry has 170 commands", len(implemented))
 check(len(rows) == 582, "every top slot reaches the stable Button API")
 check(sum(button.is_separator for button in rows) == 57,
       "57 intentional top-toolbar spacers remain real separators")
