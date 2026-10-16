@@ -125,6 +125,15 @@ def _binding():
                 except AttributeError:
                     pass
                 try:
+                    aabb_rects = library.narwhal_screen_rects_from_aabbs_f64
+                    aabb_rects.argtypes = [
+                        _DoubleP, _DoubleP, _DoubleP, ctypes.c_size_t,
+                        ctypes.c_double, ctypes.c_double, _DoubleP, _ByteP, _ByteP,
+                    ]
+                    aabb_rects.restype = ctypes.c_int
+                except AttributeError:
+                    pass
+                try:
                     world_boxes = library.narwhal_screen_boxes_from_world_f64
                     world_boxes.argtypes = [
                         _DoubleP, _DoubleP, ctypes.c_size_t,
@@ -821,6 +830,81 @@ def screen_boxes_from_world(points, matrix, offsets, point_flags, width, height)
         return boxes, valid
     except Exception as exc:  # noqa: BLE001 -- optimization failure preserves selection
         _status = f"native selection fused world-box projection raised: {exc}"
+        return None
+
+
+def screen_rects_from_aabbs(lower, upper, matrix, width, height):
+    """Project f64 world AABBs to cached screen rectangles, or request NumPy fallback."""
+    global _status
+    binding = _binding()
+    if binding is None:
+        return None
+    library, _project, _rect_query, _batch_query, _nearest_curve, path = binding
+    aabb_rects = getattr(library, "narwhal_screen_rects_from_aabbs_f64", None)
+    if aabb_rects is None:
+        _status = f"native selection AABB rectangle projection unavailable: {path}"
+        return None
+    try:
+        import numpy as np
+
+        low = _point_array(np, lower)
+        high = _point_array(np, upper)
+        view = np.ascontiguousarray(matrix, dtype=np.float64)
+        width = float(width)
+        height = float(height)
+        if low is None or high is None or low.shape != high.shape:
+            _status = "native selection input rejected: AABB bounds must be matching Nx3 arrays"
+            return None
+        if bool((low > high).any()):
+            _status = "native selection input rejected: AABB lower bounds exceed upper bounds"
+            return None
+        if view.shape != (4, 4) or not np.isfinite(view).all():
+            _status = "native selection input rejected: AABB matrix must be finite 4x4"
+            return None
+        if not np.isfinite((width, height)).all() or width < 0.0 or height < 0.0:
+            _status = "native selection input rejected: invalid AABB viewport dimensions"
+            return None
+        count = len(low)
+        rects = np.full((count, 4), np.nan, dtype=np.float64)
+        unbounded = np.full(count, 255, dtype=np.uint8)
+        all_behind = np.full(count, 255, dtype=np.uint8)
+        if count == 0:
+            empty = np.zeros(0, dtype=np.float64)
+            masks = np.zeros(0, dtype=bool)
+            return (empty, empty, empty, empty, masks, masks)
+        code = aabb_rects(
+            view.ctypes.data_as(_DoubleP),
+            low.ctypes.data_as(_DoubleP),
+            high.ctypes.data_as(_DoubleP),
+            count,
+            width,
+            height,
+            rects.ctypes.data_as(_DoubleP),
+            unbounded.ctypes.data_as(_ByteP),
+            all_behind.ctypes.data_as(_ByteP),
+        )
+        if (code != 0 or not bool((unbounded <= 1).all())
+                or not bool((all_behind <= 1).all())):
+            _status = f"native selection AABB projection failed with code {code}: {path}"
+            return None
+        if bool(np.isnan(rects).any()):
+            _status = f"native selection AABB rectangle output contains NaN: {path}"
+            return None
+        bounded = unbounded == 0
+        if (bounded.any()
+                and (not bool(np.isfinite(rects[bounded]).all())
+                     or bool((rects[bounded, 0] > rects[bounded, 2]).any())
+                     or bool((rects[bounded, 1] > rects[bounded, 3]).any()))):
+            _status = f"native selection AABB bounded rectangle invalid: {path}"
+            return None
+        if bool(((all_behind == 1) & (unbounded == 0)).any()):
+            _status = f"native selection AABB behind mask is inconsistent: {path}"
+            return None
+        _status = f"ready: {path}"
+        return (rects[:, 0], rects[:, 1], rects[:, 2], rects[:, 3],
+                unbounded.astype(bool), all_behind.astype(bool))
+    except Exception as exc:  # noqa: BLE001 -- optimization failure preserves culling
+        _status = f"native selection AABB rectangle projection raised: {exc}"
         return None
 
 

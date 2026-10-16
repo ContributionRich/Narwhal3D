@@ -1219,6 +1219,144 @@ pub unsafe extern "C" fn narwhal_screen_boxes_from_world_f64(
     0
 }
 
+/// Project f64 world-axis-aligned boxes to cached screen rectangles.
+///
+/// The output for each source box is `(x0, y0, x1, y1)` plus separate unbounded and
+/// all-behind bytes. A box crossing the eye plane remains conservatively unbounded;
+/// only a box whose eight corners are clearly behind can be culled by the caller.
+///
+/// # Safety
+///
+/// The caller must provide 16 readable matrix values, `box_count * 3` readable lower
+/// and upper coordinates, `box_count * 4` writable rectangle values, and two
+/// `box_count` writable byte arrays. Box buffers may be null only when `box_count` is
+/// zero. All buffers must be correctly aligned and non-overlapping.
+#[no_mangle]
+pub unsafe extern "C" fn narwhal_screen_rects_from_aabbs_f64(
+    matrix_ptr: *const f64,
+    lower_ptr: *const f64,
+    upper_ptr: *const f64,
+    box_count: usize,
+    width: f64,
+    height: f64,
+    out_rects_ptr: *mut f64,
+    out_unbounded_ptr: *mut u8,
+    out_all_behind_ptr: *mut u8,
+) -> i32 {
+    if box_count > 0
+        && (out_rects_ptr.is_null() || out_unbounded_ptr.is_null() || out_all_behind_ptr.is_null())
+    {
+        return ERR_NULL;
+    }
+    let coordinate_values = match box_count.checked_mul(3) {
+        Some(value) if valid_slice_len::<f64>(value) => value,
+        _ => return ERR_SIZE,
+    };
+    let rectangle_values = match box_count.checked_mul(4) {
+        Some(value) if valid_slice_len::<f64>(value) && valid_slice_len::<u8>(box_count) => value,
+        _ => return ERR_SIZE,
+    };
+    if box_count > 0 {
+        ptr::write_bytes(out_unbounded_ptr, 0, box_count);
+        ptr::write_bytes(out_all_behind_ptr, 0, box_count);
+        for index in 0..rectangle_values {
+            ptr::write(out_rects_ptr.add(index), f64::NAN);
+        }
+    }
+    if matrix_ptr.is_null() || (box_count > 0 && (lower_ptr.is_null() || upper_ptr.is_null())) {
+        return ERR_NULL;
+    }
+    let matrix = slice::from_raw_parts(matrix_ptr, 16);
+    if !valid_matrix(matrix) || !valid_dimensions(width, height) {
+        return ERR_INPUT;
+    }
+    if box_count == 0 {
+        return 0;
+    }
+    let lower = slice::from_raw_parts(lower_ptr, coordinate_values);
+    let upper = slice::from_raw_parts(upper_ptr, coordinate_values);
+    if !lower
+        .iter()
+        .chain(upper.iter())
+        .all(|value| value.is_finite())
+    {
+        return ERR_INPUT;
+    }
+    for index in 0..coordinate_values {
+        if lower[index] > upper[index] {
+            return ERR_INPUT;
+        }
+    }
+    let out_rects = slice::from_raw_parts_mut(out_rects_ptr, rectangle_values);
+    let out_unbounded = slice::from_raw_parts_mut(out_unbounded_ptr, box_count);
+    let out_all_behind = slice::from_raw_parts_mut(out_all_behind_ptr, box_count);
+    let half_width = width / 2.0;
+    let half_height = height / 2.0;
+    for box_index in 0..box_count {
+        let base = box_index * 3;
+        let mut bounds = [
+            f64::INFINITY,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            f64::NEG_INFINITY,
+        ];
+        let mut behind_count = 0usize;
+        let mut any_nonfront = false;
+        for corner in 0..8usize {
+            let x = if corner & 4 == 0 {
+                lower[base]
+            } else {
+                upper[base]
+            };
+            let y = if corner & 2 == 0 {
+                lower[base + 1]
+            } else {
+                upper[base + 1]
+            };
+            let z = if corner & 1 == 0 {
+                lower[base + 2]
+            } else {
+                upper[base + 2]
+            };
+            let w0 = matrix[12] * x;
+            let w1 = matrix[13] * y;
+            let w2 = matrix[14] * z;
+            let w = w0 + w1 + w2 + matrix[15];
+            if !(w > 0.0) {
+                any_nonfront = true;
+                let scale = w0.abs() + w1.abs() + w2.abs() + matrix[15].abs();
+                if w < -1.0e-5 * scale {
+                    behind_count += 1;
+                }
+                continue;
+            }
+            let clip_x = matrix[0] * x + matrix[1] * y + matrix[2] * z + matrix[3];
+            let clip_y = matrix[4] * x + matrix[5] * y + matrix[6] * z + matrix[7];
+            let pixel_x = half_width + half_width * (clip_x / w);
+            let pixel_y = half_height + half_height * (clip_y / w);
+            if pixel_x < bounds[0] {
+                bounds[0] = pixel_x;
+            }
+            if pixel_y < bounds[1] {
+                bounds[1] = pixel_y;
+            }
+            if pixel_x > bounds[2] {
+                bounds[2] = pixel_x;
+            }
+            if pixel_y > bounds[3] {
+                bounds[3] = pixel_y;
+            }
+        }
+        let all_behind = behind_count == 8;
+        let finite = bounds.iter().all(|value| value.is_finite());
+        let unbounded = (any_nonfront && !all_behind) || !finite;
+        out_rects[box_index * 4..box_index * 4 + 4].copy_from_slice(&bounds);
+        out_unbounded[box_index] = u8::from(unbounded);
+        out_all_behind[box_index] = u8::from(all_behind);
+    }
+    0
+}
+
 /// Return the nearest projectable f64 display point within one screen radius.
 ///
 /// The return value is one for a hit, zero for no hit, and negative for invalid
@@ -1768,6 +1906,35 @@ mod tests {
             )
         };
         assert_eq!((hidden_hit, index, distance), (1, 1, 1.0));
+    }
+
+    #[test]
+    fn aabb_rectangles_preserve_front_behind_and_straddling_states() {
+        let matrix = [
+            1.0_f64, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0,
+        ];
+        let lower = [-1.0_f64, -1.0, 1.0, -1.0, -1.0, -2.0, -1.0, -1.0, -1.0];
+        let upper = [1.0_f64, 1.0, 1.0, 1.0, 1.0, -1.0, 1.0, 1.0, 1.0];
+        let mut rects = [f64::NAN; 12];
+        let mut unbounded = [0_u8; 3];
+        let mut all_behind = [0_u8; 3];
+        let result = unsafe {
+            narwhal_screen_rects_from_aabbs_f64(
+                matrix.as_ptr(),
+                lower.as_ptr(),
+                upper.as_ptr(),
+                3,
+                800.0,
+                600.0,
+                rects.as_mut_ptr(),
+                unbounded.as_mut_ptr(),
+                all_behind.as_mut_ptr(),
+            )
+        };
+        assert_eq!(result, 0);
+        assert_eq!(&rects[..4], &[0.0, 0.0, 800.0, 600.0]);
+        assert_eq!(unbounded, [0, 1, 1]);
+        assert_eq!(all_behind, [0, 1, 0]);
     }
 
     #[test]

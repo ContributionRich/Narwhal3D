@@ -188,6 +188,24 @@ try:
           and tuple(world_boxes[0][0]) == (0.0, 0.0, 800.0, 600.0)
           and tuple(world_boxes[0][1]) == (400.0, 300.0, 400.0, 300.0),
           "fused world-box adapter projects and reduces without a NumPy clip buffer")
+    aabb_matrix = np.array(((1.0, 0.0, 0.0, 0.0),
+                            (0.0, 1.0, 0.0, 0.0),
+                            (0.0, 0.0, 1.0, 0.0),
+                            (0.0, 0.0, 1.0, 0.0)), dtype=np.float64)
+    aabb_lower = np.array(((-1.0, -1.0, 1.0),
+                           (-1.0, -1.0, -2.0),
+                           (-1.0, -1.0, -1.0)), dtype=np.float64)
+    aabb_upper = np.array(((1.0, 1.0, 1.0),
+                           (1.0, 1.0, -1.0),
+                           (1.0, 1.0, 1.0)), dtype=np.float64)
+    expected_aabbs = ui.osnap.boxes_screen_rects(
+        aabb_lower, aabb_upper, aabb_matrix, 800, 600)
+    native_aabbs = native_selection.screen_rects_from_aabbs(
+        aabb_lower, aabb_upper, aabb_matrix, 800, 600)
+    check(native_aabbs is not None
+          and all(np.array_equal(actual, expected)
+                  for actual, expected in zip(native_aabbs, expected_aabbs)),
+          "AABB adapter exactly preserves bounded, behind, and straddling rectangles")
     check(native_selection.screen_boxes_from_clip(
         clip_values, np.array((0, 4, 3), dtype=np.uint64), clip_flags,
         800, 600) is None,
@@ -430,6 +448,37 @@ try:
     check(malformed_world_fallback,
           "malformed fused world-box masks and rectangles request clip fallback")
 
+    def malformed_aabb_rects(unbounded_value, behind_value, values):
+        def call(*args):
+            output = ctypes.cast(args[-3], ctypes.POINTER(ctypes.c_double))
+            unbounded_output = ctypes.cast(args[-2], ctypes.POINTER(ctypes.c_ubyte))
+            behind_output = ctypes.cast(args[-1], ctypes.POINTER(ctypes.c_ubyte))
+            for index, value in enumerate(values):
+                output[index] = value
+            unbounded_output[0] = unbounded_value
+            behind_output[0] = behind_value
+            return 0
+        return call
+
+    malformed_aabb_cases = (
+        lambda *_args: 0,
+        malformed_aabb_rects(2, 0, (0.0, 0.0, 1.0, 1.0)),
+        malformed_aabb_rects(0, 2, (0.0, 0.0, 1.0, 1.0)),
+        malformed_aabb_rects(0, 0, (math.nan, 0.0, 1.0, 1.0)),
+        malformed_aabb_rects(0, 0, (2.0, 0.0, 1.0, 1.0)),
+        malformed_aabb_rects(0, 1, (0.0, 0.0, 1.0, 1.0)),
+    )
+    malformed_aabb_fallback = True
+    for aabb_call in malformed_aabb_cases:
+        fake_aabb_library = types.SimpleNamespace(
+            narwhal_screen_rects_from_aabbs_f64=aabb_call)
+        native_selection._native_binding = (
+            fake_aabb_library, None, None, None, None, Path("bad-aabb-native"))
+        malformed_aabb_fallback &= native_selection.screen_rects_from_aabbs(
+            aabb_lower[:1], aabb_upper[:1], identity, 800, 600) is None
+    check(malformed_aabb_fallback,
+          "malformed native AABB masks and rectangles request NumPy fallback")
+
     malformed_display_cases = (
         (malformed_display(2, 0.0), "undocumented native display visibility"),
         (malformed_display(1, math.nan), "visible NaN native display output"),
@@ -501,7 +550,9 @@ try:
           and native_selection.screen_boxes_from_clip(
               clip_values, clip_offsets, clip_flags, 800, 600) is None
           and native_selection.screen_boxes_from_world(
-              world_values, identity, clip_offsets, clip_flags, 800, 600) is None,
+              world_values, identity, clip_offsets, clip_flags, 800, 600) is None
+          and native_selection.screen_rects_from_aabbs(
+              aabb_lower, aabb_upper, identity, 800, 600) is None,
           "older ABI-1 library without later point, polyline, or box symbols uses fallbacks")
 
     os.environ["NARWHAL_SELECTION_CORE"] = str(ROOT / "missing-selection-core.so")

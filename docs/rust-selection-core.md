@@ -42,7 +42,7 @@ The verifier binds both files to the exact crate source aggregate and checks:
 
 - exact filenames and artifact set;
 - complete size and SHA-256 records;
-- ABI version 1 and exactly thirteen exported C symbols;
+- ABI version 1 and exactly fourteen exported C symbols;
 - ELF64/PE32+ x86-64 machine type;
 - executable Linux ABI probe when running on Linux x86-64;
 - Linux dependencies and maximum `GLIBC_2.35`;
@@ -102,7 +102,12 @@ cache remain in Python. Inputs whose slice byte span exceeds `isize::MAX` are re
 before Rust creates a slice. A missing or failed fused symbol falls back to the twelfth
 export over NumPy clip rows; if that also declines, the original Python tuple publication
 and grouped reduction remain authoritative. Invalid inputs or malformed native outputs
-fail closed at every layer.
+fail closed at every layer. The fourteenth export projects copied f64 world AABBs to
+view-keyed screen rectangles for snap culling. It preserves all eight corners, the
+relative eye-plane tolerance, conservative unbounded/straddling boxes and all-behind
+classification. Python retains entry identity, cache lifetime, mouse/radius policy and
+the rectangle query; missing or rejected native output uses the unchanged NumPy AABB
+projector.
 
 Default activation still requires:
 

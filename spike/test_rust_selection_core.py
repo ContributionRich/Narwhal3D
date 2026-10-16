@@ -97,6 +97,11 @@ lib.narwhal_screen_boxes_from_world_f64.argtypes = [
     ctypes.c_double, ctypes.c_double, DoubleP, ByteP,
 ]
 lib.narwhal_screen_boxes_from_world_f64.restype = ctypes.c_int
+lib.narwhal_screen_rects_from_aabbs_f64.argtypes = [
+    DoubleP, DoubleP, DoubleP, ctypes.c_size_t, ctypes.c_double, ctypes.c_double,
+    DoubleP, ByteP, ByteP,
+]
+lib.narwhal_screen_rects_from_aabbs_f64.restype = ctypes.c_int
 lib.narwhal_projected_points_rect_query_f64.argtypes = [
     DoubleP, DoubleP, ctypes.c_size_t, ctypes.c_double, ctypes.c_double, DoubleP, ByteP,
 ]
@@ -360,6 +365,60 @@ def rust_world_boxes(matrix, points, offsets, point_flags, width=800.0, height=6
     result = [None if not valid[index] else tuple(boxes[index * 4:index * 4 + 4])
               for index in range(len(point_flags))]
     return code, result
+
+
+def rust_aabb_rects(matrix, lower, upper, width=800.0, height=600.0):
+    count = len(lower)
+    rects = (ctypes.c_double * (count * 4))()
+    unbounded = (ctypes.c_ubyte * count)()
+    all_behind = (ctypes.c_ubyte * count)()
+    code = lib.narwhal_screen_rects_from_aabbs_f64(
+        darray(matrix),
+        darray(value for point in lower for value in point),
+        darray(value for point in upper for value in point),
+        count, width, height, rects, unbounded, all_behind,
+    )
+    return (code,
+            [tuple(rects[index * 4:index * 4 + 4]) for index in range(count)],
+            tuple(unbounded), tuple(all_behind))
+
+
+def scalar_aabb_rects(matrix, lower, upper, width=800.0, height=600.0):
+    rows = [matrix[index:index + 4] for index in range(0, 16, 4)]
+    result = []
+    for low, high in zip(lower, upper):
+        bounds = [math.inf, math.inf, -math.inf, -math.inf]
+        behind = 0
+        any_nonfront = False
+        for corner in range(8):
+            x = high[0] if corner & 4 else low[0]
+            y = high[1] if corner & 2 else low[1]
+            z = high[2] if corner & 1 else low[2]
+            w_terms = (rows[3][0] * x, rows[3][1] * y, rows[3][2] * z)
+            w = w_terms[0] + w_terms[1] + w_terms[2] + rows[3][3]
+            if not w > 0.0:
+                any_nonfront = True
+                scale = (abs(w_terms[0]) + abs(w_terms[1]) + abs(w_terms[2])
+                         + abs(rows[3][3]))
+                behind += int(w < -1.0e-5 * scale)
+                continue
+            clip_x = rows[0][0] * x + rows[0][1] * y + rows[0][2] * z + rows[0][3]
+            clip_y = rows[1][0] * x + rows[1][1] * y + rows[1][2] * z + rows[1][3]
+            px = width / 2.0 + width / 2.0 * (clip_x / w)
+            py = height / 2.0 + height / 2.0 * (clip_y / w)
+            if px < bounds[0]:
+                bounds[0] = px
+            if py < bounds[1]:
+                bounds[1] = py
+            if px > bounds[2]:
+                bounds[2] = px
+            if py > bounds[3]:
+                bounds[3] = py
+        all_behind = behind == 8
+        finite = all(math.isfinite(value) for value in bounds)
+        result.append((tuple(bounds), int((any_nonfront and not all_behind) or not finite),
+                       int(all_behind)))
+    return result
 
 
 def rust_nearest_point(matrix, points, mouse, limit, width=800.0, height=600.0):
@@ -668,6 +727,62 @@ for _ in range(250):
 check(world_box_equivalent,
       "250 randomized fused world-box batches match fixed-order Python exactly")
 
+aabb_matrix = (
+    1.0, 0.0, 0.0, 0.0,
+    0.0, 1.0, 0.0, 0.0,
+    0.0, 0.0, 1.0, 0.0,
+    0.0, 0.0, 1.0, 0.0,
+)
+aabb_lower = [(-1.0, -1.0, 1.0), (-1.0, -1.0, -2.0), (-1.0, -1.0, -1.0)]
+aabb_upper = [(1.0, 1.0, 1.0), (1.0, 1.0, -1.0), (1.0, 1.0, 1.0)]
+aabb_expected = scalar_aabb_rects(aabb_matrix, aabb_lower, aabb_upper)
+aabb_code, aabb_actual_rects, aabb_unbounded, aabb_behind = rust_aabb_rects(
+    aabb_matrix, aabb_lower, aabb_upper)
+check(aabb_code == 0
+      and list(zip(aabb_actual_rects, aabb_unbounded, aabb_behind)) == aabb_expected,
+      "AABB rectangles preserve bounded, all-behind, and eye-straddling states")
+near_eye_matrix = (
+    1.0, 0.0, 0.0, 0.0,
+    0.0, 1.0, 0.0, 0.0,
+    0.0, 0.0, 1.0, 0.0,
+    1.0, 0.0, 0.0, 1.0,
+)
+near_eye = rust_aabb_rects(
+    near_eye_matrix, [(-1.000001, -1.0, -1.0)],
+    [(-1.000001, 1.0, 1.0)])
+check(near_eye[0] == 0 and near_eye[2:] == ((1,), (0,)),
+      "relative cancellation near w=0 remains unbounded rather than clearly behind")
+overflow_w_matrix = (
+    0.0, 0.0, 0.0, 0.0,
+    0.0, 0.0, 0.0, 0.0,
+    0.0, 0.0, 1.0, 0.0,
+    1.0e308, 0.0, 0.0, 0.0,
+)
+overflow_w = rust_aabb_rects(
+    overflow_w_matrix, [(2.0, 0.0, 0.0)], [(2.0, 0.0, 0.0)])
+check(overflow_w == (0, [(400.0, 300.0, 400.0, 300.0)], (0,), (0,)),
+      "positive-infinite w remains front-facing exactly like the NumPy predicate")
+aabb_equivalent = True
+for _ in range(250):
+    matrix = tuple(rng.uniform(-2.0, 2.0) for _value in range(16))
+    count = rng.randrange(0, 30)
+    lower = []
+    upper = []
+    for _box in range(count):
+        centre = tuple(rng.uniform(-10.0, 10.0) for _coordinate in range(3))
+        extent = tuple(rng.uniform(0.0, 2.0) for _coordinate in range(3))
+        lower.append(tuple(centre[index] - extent[index] for index in range(3)))
+        upper.append(tuple(centre[index] + extent[index] for index in range(3)))
+    expected = scalar_aabb_rects(matrix, lower, upper, 1920.0, 1080.0)
+    code, actual_rects, actual_unbounded, actual_behind = rust_aabb_rects(
+        matrix, lower, upper, 1920.0, 1080.0)
+    actual = list(zip(actual_rects, actual_unbounded, actual_behind))
+    if code != 0 or actual != expected:
+        aabb_equivalent = False
+        break
+check(aabb_equivalent,
+      "250 randomized AABB batches match fixed-order Python rectangles exactly")
+
 screen_polyline_equivalent = True
 for _ in range(250):
     curve_count = rng.randrange(0, 24)
@@ -894,6 +1009,34 @@ check(lib.narwhal_screen_boxes_from_world_f64(
     800.0, 600.0, None, None) == 0,
       "fused world-box query safely accepts an empty null batch")
 
+aabb_out = (ctypes.c_double * 4)(0.0, 0.0, 0.0, 0.0)
+aabb_unbounded_out = (ctypes.c_ubyte * 1)(1)
+aabb_behind_out = (ctypes.c_ubyte * 1)(1)
+check(lib.narwhal_screen_rects_from_aabbs_f64(
+    darray(IDENTITY), None, darray((1.0, 1.0, 1.0)), 1, 800.0, 600.0,
+    aabb_out, aabb_unbounded_out, aabb_behind_out) == -1
+      and tuple(aabb_unbounded_out) == (0,) and tuple(aabb_behind_out) == (0,)
+      and all(math.isnan(value) for value in aabb_out),
+      "AABB projection clears outputs before rejecting null bounds")
+check(lib.narwhal_screen_rects_from_aabbs_f64(
+    darray(IDENTITY), darray((math.nan, 0.0, 0.0)), darray((1.0, 1.0, 1.0)),
+    1, 800.0, 600.0, aabb_out, aabb_unbounded_out, aabb_behind_out) == -2,
+      "AABB projection rejects nonfinite bounds")
+check(lib.narwhal_screen_rects_from_aabbs_f64(
+    darray(IDENTITY), darray((2.0, 0.0, 0.0)), darray((1.0, 1.0, 1.0)),
+    1, 800.0, 600.0, aabb_out, aabb_unbounded_out, aabb_behind_out) == -2,
+      "AABB projection rejects inverted bounds")
+aabb_oversized = (sys.maxsize // ctypes.sizeof(ctypes.c_double) // 3) + 1
+check(lib.narwhal_screen_rects_from_aabbs_f64(
+    darray(IDENTITY), darray((0.0, 0.0, 0.0)), darray((1.0, 1.0, 1.0)),
+    aabb_oversized, 800.0, 600.0, aabb_out, aabb_unbounded_out,
+    aabb_behind_out) == -3,
+      "AABB projection rejects a slice whose byte span exceeds isize::MAX")
+check(lib.narwhal_screen_rects_from_aabbs_f64(
+    darray(IDENTITY), None, None, 0, 800.0, 600.0, None, None, None) == 0,
+      "AABB projection safely accepts an empty null batch")
+
+screen_mouse = darray((5.0, 1.0))
 polyline_index = ctypes.c_uint64(7)
 polyline_distance = ctypes.c_double(7.0)
 polyline_pixels_raw = darray(value for point in screen_pixels for value in point)

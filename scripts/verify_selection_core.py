@@ -35,6 +35,7 @@ EXPECTED_EXPORTS = (
     "narwhal_projected_segments_rect_query_f32",
     "narwhal_screen_boxes_from_clip_f64",
     "narwhal_screen_boxes_from_world_f64",
+    "narwhal_screen_rects_from_aabbs_f64",
     "narwhal_selection_core_abi_version",
 )
 PLATFORMS = {
@@ -325,7 +326,7 @@ def verify_directory(root: Path) -> dict[str, object]:
 def self_check() -> None:
     sources = source_inventory()
     aggregate = source_aggregate(sources)
-    if not SHA_RE.fullmatch(aggregate) or len(EXPECTED_EXPORTS) != 13:
+    if not SHA_RE.fullmatch(aggregate) or len(EXPECTED_EXPORTS) != 14:
         raise VerificationError("selection-core verifier constants are invalid")
     toolchain = (CRATE / "rust-toolchain.toml").read_text(encoding="utf-8")
     config = (CRATE / ".cargo/config.toml").read_text(encoding="utf-8")

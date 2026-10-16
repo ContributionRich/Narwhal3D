@@ -12149,7 +12149,10 @@ def _snap_reach_mask(entries, reach):
     # view object per distinct view), so a drag projects them once
     if rect_view is not reach.view:
         matrix, width, height = reach.view
-        rects = osnap.boxes_screen_rects(lo, hi, matrix, width, height)
+        rects = native_selection.screen_rects_from_aabbs(
+            lo, hi, matrix, width, height)
+        if rects is None:
+            rects = osnap.boxes_screen_rects(lo, hi, matrix, width, height)
         c[4], c[5] = reach.view, rects
     return osnap.rects_reach(rects, reach.mouse, reach.radius_px) | ~has
 
