@@ -933,6 +933,21 @@ def best(targets, cursor, modes, plane=None, radius=None, *, base=None,
 # target are judged by how close they LOOK, not by their depth.
 
 
+def _refine_near(target, point):
+    """Refine one coarse display-polyline point on the target's exact curve."""
+    curve = getattr(target, "curve", None)
+    if curve is not None:
+        try:
+            try:
+                from . import nearest
+            except ImportError:  # loaded directly, without a package
+                import nearest
+            return nearest.closest_point_on_curve(curve, point).point
+        except Exception:  # noqa: BLE001
+            pass
+    return point
+
+
 def _near_on_screen(target, project, mouse):
     """`Near` measured on screen: the curve point whose projection is nearest the mouse.
 
@@ -959,23 +974,12 @@ def _near_on_screen(target, project, mouse):
             best_d = d
             best3 = (p0[0] + (p1[0] - p0[0]) * t, p0[1] + (p1[1] - p0[1]) * t,
                      p0[2] + (p1[2] - p0[2]) * t)
-    if best3 is None:
-        return None
-    curve = getattr(target, "curve", None)
-    if curve is not None:
-        try:
-            try:
-                from . import nearest
-            except ImportError:  # loaded directly, without a package
-                import nearest
-            return nearest.closest_point_on_curve(curve, best3).point
-        except Exception:  # noqa: BLE001
-            pass
-    return best3
+    return None if best3 is None else _refine_near(target, best3)
 
 
 def best_on_screen(targets, cursor, modes, project, radius_px, plane=None, *,
-                   base=None, snap_to_locked=False, project_batch=None):
+                   base=None, snap_to_locked=False, project_batch=None,
+                   project_near_batch=None):
     """:func:`best`, with distance measured in SCREEN PIXELS. See the block comment.
 
     `project` maps a world point to ``(x, y)`` pixels, or None when it cannot be seen
@@ -995,12 +999,30 @@ def best_on_screen(targets, cursor, modes, project, radius_px, plane=None, *,
     found = candidates(targets, cursor, tuple(m for m in wanted if m != NEAR),
                        plane, base=base)
     if NEAR in wanted:
-        for t in targets:
-            if t.is_point:
-                continue
-            n = _near_on_screen(t, project, mouse)
-            if n is not None:
-                found.append(Snap(n, NEAR, 0.0, t))
+        near_targets = [target for target in targets if not target.is_point]
+        coarse = None
+        if project_near_batch is not None and near_targets:
+            try:
+                coarse = tuple(project_near_batch(
+                    tuple(target.points for target in near_targets), mouse))
+                if len(coarse) != len(near_targets):
+                    raise ValueError("projected Near batch length mismatch")
+                for point in coarse:
+                    if point is not None and (len(point) != 3
+                                              or not all(math.isfinite(float(value))
+                                                         for value in point)):
+                        raise ValueError("projected Near points must be finite XYZ")
+            except Exception:  # noqa: BLE001 -- complete scalar Near fallback
+                coarse = None
+        if coarse is None:
+            near_points = [(_near_on_screen(target, project, mouse), target)
+                           for target in near_targets]
+        else:
+            near_points = [(None if point is None else _refine_near(target, point), target)
+                           for point, target in zip(coarse, near_targets)]
+        for point, target in near_points:
+            if point is not None:
+                found.append(Snap(point, NEAR, 0.0, target))
     scored = None
     if project_batch is not None and found:
         try:

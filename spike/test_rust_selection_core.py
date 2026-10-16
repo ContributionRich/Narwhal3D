@@ -82,6 +82,11 @@ lib.narwhal_nearest_projected_point_f64.argtypes = [
     DoubleP, ctypes.c_double, UInt64P, DoubleP,
 ]
 lib.narwhal_nearest_projected_point_f64.restype = ctypes.c_int
+lib.narwhal_nearest_projected_polylines_f64.argtypes = [
+    DoubleP, DoubleP, ctypes.c_size_t, UInt64P, ctypes.c_size_t,
+    ctypes.c_double, ctypes.c_double, DoubleP, UInt64P, DoubleP, DoubleP, ByteP,
+]
+lib.narwhal_nearest_projected_polylines_f64.restype = ctypes.c_int
 lib.narwhal_nearest_screen_polyline_f64.argtypes = [
     DoubleP, ByteP, ctypes.c_size_t, UInt64P, ctypes.c_size_t,
     DoubleP, ctypes.c_double, UInt64P, DoubleP,
@@ -421,6 +426,53 @@ def scalar_aabb_rects(matrix, lower, upper, width=800.0, height=600.0):
     return result
 
 
+def rust_projected_near(matrix, polylines, mouse, width=800.0, height=600.0):
+    points = [point for polyline in polylines for point in polyline]
+    offsets = [0]
+    for polyline in polylines:
+        offsets.append(offsets[-1] + len(polyline))
+    count = len(polylines)
+    segments = (ctypes.c_uint64 * count)()
+    parameters = (ctypes.c_double * count)()
+    distances = (ctypes.c_double * count)()
+    valid = (ctypes.c_ubyte * count)()
+    code = lib.narwhal_nearest_projected_polylines_f64(
+        darray(matrix), darray(value for point in points for value in point), len(points),
+        (ctypes.c_uint64 * len(offsets))(*offsets), count, width, height,
+        darray(mouse), segments, parameters, distances, valid,
+    )
+    result = []
+    for index in range(count):
+        result.append(None if not valid[index]
+                      else (segments[index], parameters[index], distances[index]))
+    return code, result
+
+
+def scalar_projected_near(matrix, polylines, mouse, width=800.0, height=600.0):
+    result = []
+    for polyline in polylines:
+        projected = [scalar_display_project(matrix, point, width, height)
+                     for point in polyline]
+        best = None
+        for index, (a, b) in enumerate(zip(projected, projected[1:])):
+            if a is None or b is None:
+                continue
+            dx, dy = b[0] - a[0], b[1] - a[1]
+            denominator = dx * dx + dy * dy
+            if denominator <= 0.0:
+                parameter = 0.0
+            else:
+                parameter = max(0.0, min(
+                    1.0, ((mouse[0] - a[0]) * dx + (mouse[1] - a[1]) * dy)
+                    / denominator))
+            distance = math.hypot(a[0] + dx * parameter - mouse[0],
+                                  a[1] + dy * parameter - mouse[1])
+            if best is None or distance < best[2]:
+                best = (index, parameter, distance)
+        result.append(best)
+    return result
+
+
 def rust_nearest_point(matrix, points, mouse, limit, width=800.0, height=600.0):
     raw = darray(value for point in points for value in point)
     index = ctypes.c_uint64((1 << 64) - 1)
@@ -606,6 +658,11 @@ screen_offsets = [0, 2, 4]
 check(rust_screen_polyline(screen_pixels, [1, 1, 1, 1], screen_offsets, (5.0, 1.0), 9.0)
       == (1, 0, 1.0),
       "screen polyline query preserves earlier exact ties")
+cancellation_pixels = [(-1.0, 0.5), (1.0, 0.5), (1.0e16, 0.0), (1.0, 0.0)]
+check(rust_screen_polyline(
+    cancellation_pixels, [1, 1, 1, 1], [0, 2, 4], (0.0, 0.0), 0.75)
+      == (1, 1, 0.0),
+      "hover broad rejection preserves floating interpolation outside endpoint AABBs")
 screen_boundary = rust_screen_polyline(
     screen_pixels, [1, 1, 1, 1], screen_offsets, (5.0, 9.0), 9.0)
 check(screen_boundary[0] == 0 and screen_boundary[1] == (1 << 64) - 1
@@ -782,6 +839,30 @@ for _ in range(250):
         break
 check(aabb_equivalent,
       "250 randomized AABB batches match fixed-order Python rectangles exactly")
+
+near_polylines = [
+    [(-1.0, 0.0, 0.0), (0.0, 0.0, 0.0), (1.0, 0.0, 0.0)],
+    [(0.25, 0.5, 0.0), (0.25, 0.5, 0.0)],
+    [(0.0, 0.0, 0.0)],
+]
+near_expected = scalar_projected_near(IDENTITY, near_polylines, (400.0, 300.0))
+check(rust_projected_near(IDENTITY, near_polylines, (400.0, 300.0))
+      == (0, near_expected),
+      "projected Near batches preserve segment parameter, degenerates, and empty curves")
+projected_near_equivalent = True
+for _ in range(250):
+    matrix = tuple(rng.uniform(-2.0, 2.0) for _value in range(16))
+    polylines = [[tuple(rng.uniform(-8.0, 8.0) for _coordinate in range(3))
+                  for _point in range(rng.randrange(0, 14))]
+                 for _curve in range(rng.randrange(0, 20))]
+    mouse = (rng.uniform(-2000.0, 2000.0), rng.uniform(-1200.0, 1200.0))
+    expected = scalar_projected_near(matrix, polylines, mouse, 1920.0, 1080.0)
+    code, actual = rust_projected_near(matrix, polylines, mouse, 1920.0, 1080.0)
+    if code != 0 or actual != expected:
+        projected_near_equivalent = False
+        break
+check(projected_near_equivalent,
+      "250 randomized projected Near batches match Python segment search exactly")
 
 screen_polyline_equivalent = True
 for _ in range(250):
@@ -1035,6 +1116,41 @@ check(lib.narwhal_screen_rects_from_aabbs_f64(
 check(lib.narwhal_screen_rects_from_aabbs_f64(
     darray(IDENTITY), None, None, 0, 800.0, 600.0, None, None, None) == 0,
       "AABB projection safely accepts an empty null batch")
+
+near_offsets_raw = (ctypes.c_uint64 * 3)(0, 2, 3)
+near_segments_out = (ctypes.c_uint64 * 2)(0, 0)
+near_parameters_out = (ctypes.c_double * 2)(0.0, 0.0)
+near_distances_out = (ctypes.c_double * 2)(0.0, 0.0)
+near_valid_out = (ctypes.c_ubyte * 2)(1, 1)
+check(lib.narwhal_nearest_projected_polylines_f64(
+    None, darray((-1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 2.0, 0.0, 0.0)), 3,
+    near_offsets_raw, 2, 800.0, 600.0, darray((400.0, 300.0)),
+    near_segments_out, near_parameters_out, near_distances_out, near_valid_out) == -1
+      and tuple(near_valid_out) == (0, 0)
+      and all(value == (1 << 64) - 1 for value in near_segments_out)
+      and all(math.isnan(value) for value in near_parameters_out)
+      and all(math.isinf(value) for value in near_distances_out),
+      "projected Near query clears every output before rejecting a null matrix")
+check(lib.narwhal_nearest_projected_polylines_f64(
+    darray(IDENTITY), darray((math.nan, 0.0, 0.0, 1.0, 0.0, 0.0)), 2,
+    (ctypes.c_uint64 * 2)(0, 2), 1, 800.0, 600.0, darray((400.0, 300.0)),
+    near_segments_out, near_parameters_out, near_distances_out, near_valid_out) == -2,
+      "projected Near query rejects nonfinite world points")
+check(lib.narwhal_nearest_projected_polylines_f64(
+    darray(IDENTITY), darray((0.0, 0.0, 0.0, 1.0, 0.0, 0.0)), 2,
+    (ctypes.c_uint64 * 3)(0, 2, 1), 2, 800.0, 600.0, darray((400.0, 300.0)),
+    near_segments_out, near_parameters_out, near_distances_out, near_valid_out) == -2,
+      "projected Near query rejects non-monotonic offsets")
+near_oversized = (sys.maxsize // ctypes.sizeof(ctypes.c_double) // 3) + 1
+check(lib.narwhal_nearest_projected_polylines_f64(
+    darray(IDENTITY), darray((0.0, 0.0, 0.0)), near_oversized,
+    (ctypes.c_uint64 * 2)(0, 1), 1, 800.0, 600.0, darray((400.0, 300.0)),
+    near_segments_out, near_parameters_out, near_distances_out, near_valid_out) == -3,
+      "projected Near query rejects a slice whose byte span exceeds isize::MAX")
+check(lib.narwhal_nearest_projected_polylines_f64(
+    darray(IDENTITY), None, 0, None, 0, 800.0, 600.0, darray((400.0, 300.0)),
+    None, None, None, None) == 0,
+      "projected Near query safely accepts an empty null batch")
 
 screen_mouse = darray((5.0, 1.0))
 polyline_index = ctypes.c_uint64(7)

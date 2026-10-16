@@ -206,6 +206,14 @@ try:
           and all(np.array_equal(actual, expected)
                   for actual, expected in zip(native_aabbs, expected_aabbs)),
           "AABB adapter exactly preserves bounded, behind, and straddling rectangles")
+    near_polylines = (
+        np.array(((-1.0, 0.0, 0.0), (1.0, 0.0, 0.0)), dtype=np.float64),
+        np.array(((0.25, 0.5, 0.0),), dtype=np.float64),
+    )
+    projected_near = native_selection.nearest_projected_polylines(
+        near_polylines, identity, 800, 600, (400.0, 300.0))
+    check(projected_near == ((0.0, 0.0, 0.0), None),
+          "projected Near adapter reconstructs each coarse world point in source order")
     check(native_selection.screen_boxes_from_clip(
         clip_values, np.array((0, 4, 3), dtype=np.uint64), clip_flags,
         800, 600) is None,
@@ -479,6 +487,34 @@ try:
     check(malformed_aabb_fallback,
           "malformed native AABB masks and rectangles request NumPy fallback")
 
+    def malformed_projected_near(validity, segment, parameter, distance):
+        def call(*args):
+            ctypes.cast(args[-4], ctypes.POINTER(ctypes.c_uint64))[0] = segment
+            ctypes.cast(args[-3], ctypes.POINTER(ctypes.c_double))[0] = parameter
+            ctypes.cast(args[-2], ctypes.POINTER(ctypes.c_double))[0] = distance
+            ctypes.cast(args[-1], ctypes.POINTER(ctypes.c_ubyte))[0] = validity
+            return 0
+        return call
+
+    malformed_near_calls = (
+        lambda *_args: 0,
+        malformed_projected_near(2, 0, 0.5, 0.0),
+        malformed_projected_near(1, 99, 0.5, 0.0),
+        malformed_projected_near(1, 0, 2.0, 0.0),
+        malformed_projected_near(1, 0, 0.5, math.nan),
+        malformed_projected_near(0, 0, 0.0, 0.0),
+    )
+    malformed_near_fallback = True
+    for near_call in malformed_near_calls:
+        fake_near_library = types.SimpleNamespace(
+            narwhal_nearest_projected_polylines_f64=near_call)
+        native_selection._native_binding = (
+            fake_near_library, None, None, None, None, Path("bad-near-native"))
+        malformed_near_fallback &= native_selection.nearest_projected_polylines(
+            near_polylines[:1], identity, 800, 600, (400.0, 300.0)) is None
+    check(malformed_near_fallback,
+          "no-write and malformed projected Near output requests scalar fallback")
+
     malformed_display_cases = (
         (malformed_display(2, 0.0), "undocumented native display visibility"),
         (malformed_display(1, math.nan), "visible NaN native display output"),
@@ -552,7 +588,9 @@ try:
           and native_selection.screen_boxes_from_world(
               world_values, identity, clip_offsets, clip_flags, 800, 600) is None
           and native_selection.screen_rects_from_aabbs(
-              aabb_lower, aabb_upper, identity, 800, 600) is None,
+              aabb_lower, aabb_upper, identity, 800, 600) is None
+          and native_selection.nearest_projected_polylines(
+              near_polylines, identity, 800, 600, (400.0, 300.0)) is None,
           "older ABI-1 library without later point, polyline, or box symbols uses fallbacks")
 
     os.environ["NARWHAL_SELECTION_CORE"] = str(ROOT / "missing-selection-core.so")
@@ -575,6 +613,7 @@ real_best_on_screen = ui.osnap.best_on_screen
 real_apply_projection = ui.osnap.apply_projection
 real_location_3d_to_region_2d = v3u.location_3d_to_region_2d
 real_snap_display_projection = ui.native_selection.project_display_points
+real_snap_near_projection = ui.native_selection.nearest_projected_polylines
 try:
     ui._snap_settings = types.SimpleNamespace(
         active=lambda **_kwargs: ("End",), radius_px=10.0,
@@ -593,13 +632,19 @@ try:
         lambda *args: native_snap_calls.append(args)
         or (np.array(((400.0, 300.0), (800.0, 300.0))),
             np.array((1, 1), dtype=np.uint8)))
+    native_near_calls = []
+    ui.native_selection.nearest_projected_polylines = (
+        lambda *args: native_near_calls.append(args) or ((0.5, 0.0, 0.0),))
     routed_snap_batches = []
 
     def capture_best(targets, cursor, modes, project, radius, plane, **kwargs):
         routed_snap_batches.append((targets, cursor, modes, radius, plane,
                                     project(cursor),
                                     kwargs["project_batch"](((0.0, 0.0, 0.0),
-                                                             (1.0, 0.0, 0.0)))))
+                                                             (1.0, 0.0, 0.0))),
+                                    kwargs["project_near_batch"](
+                                        (((0.0, 0.0, 0.0),
+                                          (1.0, 0.0, 0.0)),), (400.0, 300.0))))
         return "native-snap"
 
     ui.osnap.best_on_screen = capture_best
@@ -610,7 +655,8 @@ try:
     check(routed_snap == "native-snap" and len(routed_snap_batches) == 1
           and routed_snap_batches[0][0] == ("target", "native-snap-reach")
           and routed_snap_batches[0][5] == (400.0, 300.0)
-          and len(native_snap_calls) == 1
+          and len(native_snap_calls) == 1 and len(native_near_calls) == 1
+          and routed_snap_batches[0][7] == ((0.5, 0.0, 0.0),)
           and native_snap_calls[0][1].shape == (4, 4)
           and native_snap_calls[0][2:] == (800, 600),
           "snap_at supplies one viewport-shaped native candidate projection batch")
@@ -624,6 +670,8 @@ try:
     ui.osnap.best_on_screen = capture_decline
     ui.native_selection.project_display_points = lambda *_args: (_ for _ in ()).throw(
         RuntimeError("native projector unavailable"))
+    ui.native_selection.nearest_projected_polylines = lambda *_args: (_ for _ in ()).throw(
+        RuntimeError("native Near unavailable"))
     declined_snap = ui.snap_at(
         None, types.SimpleNamespace(region_3d=snap_rv3d), snap_region,
         (0.0, 0.0, 0.0))
@@ -638,6 +686,7 @@ finally:
     ui.osnap.apply_projection = real_apply_projection
     v3u.location_3d_to_region_2d = real_location_3d_to_region_2d
     ui.native_selection.project_display_points = real_snap_display_projection
+    ui.native_selection.nearest_projected_polylines = real_snap_near_projection
 
 # A real curve-pass record is flat GL_LINES points, not the shaped adapter fixture above.
 production_mesh = bpy.data.meshes.new("RustProductionRecordMesh")

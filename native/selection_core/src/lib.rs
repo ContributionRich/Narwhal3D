@@ -211,7 +211,59 @@ fn python_hypot2(x: f64, y: f64) -> f64 {
 }
 
 #[inline]
+fn screen_near_parameter(mouse: [f64; 2], a: [f64; 2], b: [f64; 2]) -> (f64, f64) {
+    let dx = b[0] - a[0];
+    let dy = b[1] - a[1];
+    let denominator = dx * dx + dy * dy;
+    let parameter = if denominator <= 0.0 {
+        0.0
+    } else {
+        let raw = ((mouse[0] - a[0]) * dx + (mouse[1] - a[1]) * dy) / denominator;
+        if raw.is_nan() {
+            1.0
+        } else {
+            raw.clamp(0.0, 1.0)
+        }
+    };
+    let distance = python_hypot2(
+        a[0] + dx * parameter - mouse[0],
+        a[1] + dy * parameter - mouse[1],
+    );
+    (parameter, distance)
+}
+
+fn screen_segment_aabb_could_beat(mouse: [f64; 2], a: [f64; 2], b: [f64; 2], limit: f64) -> bool {
+    let axis_could_beat = |value: f64, first: f64, second: f64| {
+        let delta = second - first;
+        // The exact scorer reconstructs `first + parameter * delta`. Catastrophic
+        // cancellation can make its parameter=1 endpoint differ from `second`; in
+        // that case the mathematical endpoint AABB is not a safe floating envelope.
+        if first + delta != second {
+            return true;
+        }
+        let low = first.min(second);
+        let high = first.max(second);
+        let distance = if value < low {
+            low - value
+        } else if value > high {
+            value - high
+        } else {
+            0.0
+        };
+        let scale = first.abs() + second.abs() + delta.abs() + value.abs() + limit.abs();
+        let slack = 16.0 * f64::EPSILON * scale;
+        distance <= limit + slack
+    };
+    axis_could_beat(mouse[0], a[0], b[0]) && axis_could_beat(mouse[1], a[1], b[1])
+}
+
+#[cfg(test)]
+static SCREEN_DISTANCE_CALLS: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
 fn screen_point_segment_distance(mouse: [f64; 2], a: [f64; 2], b: [f64; 2]) -> f64 {
+    #[cfg(test)]
+    SCREEN_DISTANCE_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let dx = b[0] - a[0];
     let dy = b[1] - a[1];
     let denominator = dx * dx + dy * dy;
@@ -956,6 +1008,10 @@ pub unsafe extern "C" fn narwhal_nearest_screen_polyline_f64(
                 pixels[(point_index + 1) * 2],
                 pixels[(point_index + 1) * 2 + 1],
             ];
+            let limit = best_distance.min(curve_distance);
+            if !screen_segment_aabb_could_beat(mouse, a, b, limit) {
+                continue;
+            }
             curve_distance = curve_distance.min(screen_point_segment_distance(mouse, a, b));
         }
         if curve_distance < best_distance {
@@ -969,6 +1025,146 @@ pub unsafe extern "C" fn narwhal_nearest_screen_polyline_f64(
     *out_curve_index_ptr = best_index;
     *out_distance_ptr = best_distance;
     1
+}
+
+/// Project grouped f64 world polylines and return each one's nearest screen segment.
+///
+/// Outputs are one local segment index, clamped segment parameter, CPython-matched
+/// pixel distance and validity byte per input curve. This is display-only coarse
+/// search; callers retain exact curve refinement and all snap policy.
+///
+/// # Safety
+///
+/// The caller must provide 16 readable matrix values, `point_count * 3` readable
+/// coordinates, `curve_count + 1` readable offsets, two readable mouse coordinates,
+/// and `curve_count` writable values in each output. Point buffers may be null only
+/// for zero points; curve outputs may be null only for zero curves. All buffers must
+/// be correctly aligned and non-overlapping.
+#[no_mangle]
+pub unsafe extern "C" fn narwhal_nearest_projected_polylines_f64(
+    matrix_ptr: *const f64,
+    points_ptr: *const f64,
+    point_count: usize,
+    offsets_ptr: *const u64,
+    curve_count: usize,
+    width: f64,
+    height: f64,
+    mouse_ptr: *const f64,
+    out_segment_ptr: *mut u64,
+    out_parameter_ptr: *mut f64,
+    out_distance_ptr: *mut f64,
+    out_valid_ptr: *mut u8,
+) -> i32 {
+    if curve_count > 0
+        && (out_segment_ptr.is_null()
+            || out_parameter_ptr.is_null()
+            || out_distance_ptr.is_null()
+            || out_valid_ptr.is_null())
+    {
+        return ERR_NULL;
+    }
+    let point_values = match point_count.checked_mul(3) {
+        Some(value) if valid_slice_len::<f64>(value) => value,
+        _ => return ERR_SIZE,
+    };
+    if !valid_slice_len::<u64>(curve_count)
+        || !valid_slice_len::<f64>(curve_count)
+        || !valid_slice_len::<u8>(curve_count)
+    {
+        return ERR_SIZE;
+    }
+    let offset_count = match curve_count.checked_add(1) {
+        Some(value) if valid_slice_len::<u64>(value) => value,
+        _ => return ERR_SIZE,
+    };
+    if curve_count > 0 {
+        for index in 0..curve_count {
+            ptr::write(out_segment_ptr.add(index), u64::MAX);
+            ptr::write(out_parameter_ptr.add(index), f64::NAN);
+            ptr::write(out_distance_ptr.add(index), f64::INFINITY);
+            ptr::write(out_valid_ptr.add(index), 0);
+        }
+    }
+    if matrix_ptr.is_null()
+        || mouse_ptr.is_null()
+        || (point_count > 0 && points_ptr.is_null())
+        || (curve_count > 0 && offsets_ptr.is_null())
+    {
+        return ERR_NULL;
+    }
+    let matrix = slice::from_raw_parts(matrix_ptr, 16);
+    let mouse_slice = slice::from_raw_parts(mouse_ptr, 2);
+    let mouse = [mouse_slice[0], mouse_slice[1]];
+    if !valid_matrix(matrix)
+        || !valid_dimensions(width, height)
+        || !mouse.iter().all(|value| value.is_finite())
+    {
+        return ERR_INPUT;
+    }
+    if curve_count == 0 {
+        return if point_count == 0 { 0 } else { ERR_INPUT };
+    }
+    let point_count_u64 = match u64::try_from(point_count) {
+        Ok(value) => value,
+        Err(_) => return ERR_SIZE,
+    };
+    let points = if point_values == 0 {
+        &[]
+    } else {
+        slice::from_raw_parts(points_ptr, point_values)
+    };
+    if !points.iter().all(|value| value.is_finite()) {
+        return ERR_INPUT;
+    }
+    let offsets = slice::from_raw_parts(offsets_ptr, offset_count);
+    if offsets[0] != 0 || offsets[curve_count] != point_count_u64 {
+        return ERR_INPUT;
+    }
+    for pair in offsets.windows(2) {
+        if pair[0] > pair[1] || pair[1] > point_count_u64 {
+            return ERR_INPUT;
+        }
+    }
+    let out_segments = slice::from_raw_parts_mut(out_segment_ptr, curve_count);
+    let out_parameters = slice::from_raw_parts_mut(out_parameter_ptr, curve_count);
+    let out_distances = slice::from_raw_parts_mut(out_distance_ptr, curve_count);
+    let out_valid = slice::from_raw_parts_mut(out_valid_ptr, curve_count);
+    for curve_index in 0..curve_count {
+        let start = offsets[curve_index] as usize;
+        let end = offsets[curve_index + 1] as usize;
+        if end.saturating_sub(start) < 2 {
+            continue;
+        }
+        let mut previous =
+            project_display_point_f64(matrix, &points[start * 3..start * 3 + 3], width, height);
+        let mut best_segment = u64::MAX;
+        let mut best_parameter = f64::NAN;
+        let mut best_distance = f64::INFINITY;
+        for point_index in start..end - 1 {
+            let next = project_display_point_f64(
+                matrix,
+                &points[(point_index + 1) * 3..(point_index + 1) * 3 + 3],
+                width,
+                height,
+            );
+            if let (Some(a), Some(b)) = (previous, next) {
+                let (parameter, distance) = screen_near_parameter(mouse, [a.0, a.1], [b.0, b.1]);
+                if distance < best_distance {
+                    best_segment = (point_index - start) as u64;
+                    best_parameter = parameter;
+                    best_distance = distance;
+                }
+            }
+            previous = next;
+        }
+        if best_segment != u64::MAX {
+            out_segments[curve_index] = best_segment;
+            out_parameters[curve_index] = best_parameter;
+            out_distances[curve_index] = best_distance;
+            out_valid[curve_index] = 1;
+        }
+    }
+    0
 }
 
 /// Reduce grouped homogeneous clip coordinates to screen-space object rectangles.
@@ -1906,6 +2102,38 @@ mod tests {
             )
         };
         assert_eq!((hidden_hit, index, distance), (1, 1, 1.0));
+
+        assert!(screen_segment_aabb_could_beat(
+            [0.0, 0.0],
+            [10.0, -1.0],
+            [10.0, 1.0],
+            10.0,
+        ));
+        let mut far_pixels = Vec::new();
+        for point in 0..101 {
+            far_pixels.extend_from_slice(&[10_000.0 + f64::from(point), 10_000.0]);
+        }
+        let far_visible = vec![1_u8; 101];
+        let far_offsets = [0_u64, 101];
+        SCREEN_DISTANCE_CALLS.store(0, std::sync::atomic::Ordering::Relaxed);
+        let far_miss = unsafe {
+            narwhal_nearest_screen_polyline_f64(
+                far_pixels.as_ptr(),
+                far_visible.as_ptr(),
+                101,
+                far_offsets.as_ptr(),
+                1,
+                [0.0_f64, 0.0].as_ptr(),
+                10.0,
+                &mut index,
+                &mut distance,
+            )
+        };
+        assert_eq!(far_miss, 0);
+        assert_eq!(
+            SCREEN_DISTANCE_CALLS.load(std::sync::atomic::Ordering::Relaxed),
+            0,
+        );
     }
 
     #[test]

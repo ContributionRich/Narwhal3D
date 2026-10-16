@@ -115,6 +115,16 @@ def _binding():
                 except AttributeError:
                     pass
                 try:
+                    projected_polylines = library.narwhal_nearest_projected_polylines_f64
+                    projected_polylines.argtypes = [
+                        _DoubleP, _DoubleP, ctypes.c_size_t, _UInt64P, ctypes.c_size_t,
+                        ctypes.c_double, ctypes.c_double, _DoubleP,
+                        _UInt64P, _DoubleP, _DoubleP, _ByteP,
+                    ]
+                    projected_polylines.restype = ctypes.c_int
+                except AttributeError:
+                    pass
+                try:
                     screen_polyline = library.narwhal_nearest_screen_polyline_f64
                     screen_polyline.argtypes = [
                         _DoubleP, _ByteP, ctypes.c_size_t,
@@ -648,6 +658,99 @@ def nearest_screen_polyline(pixels, visible, offsets, mouse, max_distance):
         return int(curve_index.value), float(distance.value)
     except Exception as exc:  # noqa: BLE001 -- optimization failure preserves hover
         _status = f"native selection screen-polyline query raised: {exc}"
+        return None
+
+
+def nearest_projected_polylines(polylines, matrix, width, height, mouse):
+    """Return one coarse nearest world point per display polyline, or scalar fallback."""
+    global _status
+    binding = _binding()
+    if binding is None:
+        return None
+    library, _project, _rect_query, _batch_query, _nearest_curve, path = binding
+    query = getattr(library, "narwhal_nearest_projected_polylines_f64", None)
+    if query is None:
+        _status = f"native selection projected-polyline query unavailable: {path}"
+        return None
+    try:
+        import numpy as np
+
+        source = list(polylines)
+        if not source:
+            return ()
+        view = np.ascontiguousarray(matrix, dtype=np.float64)
+        cursor = np.ascontiguousarray(mouse, dtype=np.float64)
+        width = float(width)
+        height = float(height)
+        if view.shape != (4, 4) or not np.isfinite(view).all():
+            _status = "native selection input rejected: Near matrix must be finite 4x4"
+            return None
+        if cursor.shape != (2,) or not np.isfinite(cursor).all():
+            _status = "native selection input rejected: Near mouse must be finite XY"
+            return None
+        if not np.isfinite((width, height)).all() or width < 0.0 or height < 0.0:
+            _status = "native selection input rejected: invalid Near viewport dimensions"
+            return None
+        arrays = []
+        offsets = [0]
+        total = 0
+        for polyline in source:
+            points = _point_array(np, polyline)
+            if points is None:
+                _status = "native selection input rejected: Near polylines must be Nx3"
+                return None
+            arrays.append(points)
+            total += len(points)
+            if total > np.iinfo(np.uint64).max:
+                _status = "native selection input rejected: Near point count exceeds u64"
+                return None
+            offsets.append(total)
+        packed = (np.concatenate(arrays, axis=0) if total
+                  else np.empty((0, 3), dtype=np.float64))
+        packed_offsets = np.ascontiguousarray(offsets, dtype=np.uint64)
+        count = len(arrays)
+        segments = np.full(count, np.iinfo(np.uint64).max, dtype=np.uint64)
+        parameters = np.full(count, np.nan, dtype=np.float64)
+        distances = np.full(count, np.inf, dtype=np.float64)
+        valid = np.full(count, 255, dtype=np.uint8)
+        code = query(
+            view.ctypes.data_as(_DoubleP), packed.ctypes.data_as(_DoubleP), total,
+            packed_offsets.ctypes.data_as(_UInt64P), count, width, height,
+            cursor.ctypes.data_as(_DoubleP), segments.ctypes.data_as(_UInt64P),
+            parameters.ctypes.data_as(_DoubleP), distances.ctypes.data_as(_DoubleP),
+            valid.ctypes.data_as(_ByteP),
+        )
+        if code != 0 or not bool((valid <= 1).all()):
+            _status = f"native selection projected-polyline query failed with code {code}: {path}"
+            return None
+        result = []
+        sentinel = np.iinfo(np.uint64).max
+        for index, points in enumerate(arrays):
+            if not valid[index]:
+                if (segments[index] != sentinel or not np.isnan(parameters[index])
+                        or distances[index] != np.inf):
+                    _status = f"native selection hidden Near output invalid: {path}"
+                    return None
+                result.append(None)
+                continue
+            segment = int(segments[index])
+            parameter = float(parameters[index])
+            distance = float(distances[index])
+            if (segment >= max(0, len(points) - 1)
+                    or not 0.0 <= parameter <= 1.0
+                    or not np.isfinite(distance) or distance < 0.0):
+                _status = f"native selection visible Near output invalid: {path}"
+                return None
+            a, b = points[segment], points[segment + 1]
+            point = a + (b - a) * parameter
+            if not bool(np.isfinite(point).all()):
+                _status = f"native selection reconstructed Near point invalid: {path}"
+                return None
+            result.append(tuple(float(value) for value in point))
+        _status = f"ready: {path}"
+        return tuple(result)
+    except Exception as exc:  # noqa: BLE001 -- optimization failure preserves Near
+        _status = f"native selection projected-polyline query raised: {exc}"
         return None
 
 

@@ -42,7 +42,7 @@ The verifier binds both files to the exact crate source aggregate and checks:
 
 - exact filenames and artifact set;
 - complete size and SHA-256 records;
-- ABI version 1 and exactly fourteen exported C symbols;
+- ABI version 1 and exactly fifteen exported C symbols;
 - ELF64/PE32+ x86-64 machine type;
 - executable Linux ABI probe when running on Linux x86-64;
 - Linux dependencies and maximum `GLIBC_2.35`;
@@ -107,7 +107,11 @@ view-keyed screen rectangles for snap culling. It preserves all eight corners, t
 relative eye-plane tolerance, conservative unbounded/straddling boxes and all-behind
 classification. Python retains entry identity, cache lifetime, mouse/radius policy and
 the rectangle query; missing or rejected native output uses the unchanged NumPy AABB
-projector.
+projector. The fifteenth export projects grouped f64 display polylines and returns each
+target's nearest local segment, interpolation parameter and CPython-matched pixel
+distance. It accelerates only Near Osnap's coarse screen search; Python retains target
+identity, reconstructs the world point and performs exact openNURBS curve refinement.
+Missing or malformed output reruns every target through the scalar projector/search.
 
 Default activation still requires:
 

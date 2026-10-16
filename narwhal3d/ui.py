@@ -12804,6 +12804,16 @@ def snap_at(area, space, region, cursor_world, first_point=False, suspend=False,
         except Exception:  # noqa: BLE001 -- scalar projection remains authoritative
             return None
 
+    def project_near_batch(polylines, mouse):
+        try:
+            import numpy as np
+
+            matrix = np.asarray(rv3d.perspective_matrix, dtype=np.float64)
+            return native_selection.nearest_projected_polylines(
+                polylines, matrix, region.width, region.height, mouse)
+        except Exception:  # noqa: BLE001 -- scalar Near remains authoritative
+            return None
+
     # Only objects whose extent projects within the radius can snap, so only those are
     # sampled and handed to the engine (see `_snap_reach`). No mouse -> no cull, and
     # `best_on_screen` returns None for it anyway.
@@ -12821,7 +12831,8 @@ def snap_at(area, space, region, cursor_world, first_point=False, suspend=False,
                                 project, _snap_settings.radius_px, plane,
                                 base=base,
                                 snap_to_locked=_snap_settings.snap_to_locked,
-                                project_batch=project_batch)
+                                project_batch=project_batch,
+                                project_near_batch=project_near_batch)
     return osnap.apply_projection(snap, plane, _snap_settings.project)
 
 
