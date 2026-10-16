@@ -42,7 +42,7 @@ The verifier binds both files to the exact crate source aggregate and checks:
 
 - exact filenames and artifact set;
 - complete size and SHA-256 records;
-- ABI version 1 and exactly fifteen exported C symbols;
+- ABI version 1 and exactly sixteen exported C symbols;
 - ELF64/PE32+ x86-64 machine type;
 - executable Linux ABI probe when running on Linux x86-64;
 - Linux dependencies and maximum `GLIBC_2.35`;
@@ -112,6 +112,16 @@ target's nearest local segment, interpolation parameter and CPython-matched pixe
 distance. It accelerates only Near Osnap's coarse screen search; Python retains target
 identity, reconstructs the world point and performs exact openNURBS curve refinement.
 Missing or malformed output reruns every target through the scalar projector/search.
+The sixteenth export fuses discrete Osnap candidate projection, CPython-matched distance
+and inclusive-radius classification, returning only compact source-ordered survivor
+indices/distances. Python retains candidate objects, rounded-distance ordering, mode
+priority and Near fallback; older libraries use the projected-pixel path unchanged.
+Near's copied f64 polyline slab is retained across mouse moves only for the immutable
+production shape (tuple polylines of tuple f64 points); mutable inputs always repack,
+and cache lookup/publication is lock-protected while the native call runs lock-free.
+The same conservative floating interpolation envelope used by curve hover now skips
+Near-polyline segment distance calls that cannot beat that target's current winner;
+projection, exact boundaries, earlier ties and final openNURBS refinement are unchanged.
 
 Default activation still requires:
 

@@ -26,6 +26,8 @@ _lock = threading.Lock()
 _signature: str | None = None
 _native_binding: Any = None
 _status = "not checked"
+_near_pack_cache = {"source": None, "arrays": None, "packed": None,
+                    "offsets": None, "total": 0}
 
 RECT_MISS = 0
 RECT_HIT = 1
@@ -105,6 +107,16 @@ def _binding():
                     nearest_curve.restype = ctypes.c_int
                 except AttributeError:
                     nearest_curve = None
+                try:
+                    snap_distances = library.narwhal_projected_snap_distances_f64
+                    snap_distances.argtypes = [
+                        _DoubleP, _DoubleP, ctypes.c_size_t, ctypes.c_double,
+                        ctypes.c_double, _DoubleP, ctypes.c_double, _UInt64P, _DoubleP,
+                        _UInt64P,
+                    ]
+                    snap_distances.restype = ctypes.c_int
+                except AttributeError:
+                    pass
                 try:
                     display_points = library.narwhal_project_display_points_f64
                     display_points.argtypes = [
@@ -573,6 +585,77 @@ def project_display_points(points, matrix, width, height):
         return None
 
 
+def projected_snap_distances(points, matrix, width, height, mouse, radius):
+    """Return compact source-ordered survivor indices/distances, or pixel fallback."""
+    global _status
+    binding = _binding()
+    if binding is None:
+        return None
+    library, _project, _rect_query, _batch_query, _nearest_curve, path = binding
+    query = getattr(library, "narwhal_projected_snap_distances_f64", None)
+    if query is None:
+        _status = f"native selection snap-distance query unavailable: {path}"
+        return None
+    try:
+        import numpy as np
+
+        values = _point_array(np, points)
+        view = np.ascontiguousarray(matrix, dtype=np.float64)
+        cursor = np.ascontiguousarray(mouse, dtype=np.float64)
+        width = float(width)
+        height = float(height)
+        radius = float(radius)
+        if values is None:
+            _status = "native selection input rejected: snap candidates must be Nx3"
+            return None
+        if view.shape != (4, 4) or not np.isfinite(view).all():
+            _status = "native selection input rejected: snap matrix must be finite 4x4"
+            return None
+        if cursor.shape != (2,) or not np.isfinite(cursor).all():
+            _status = "native selection input rejected: snap mouse must be finite XY"
+            return None
+        if (not np.isfinite((width, height, radius)).all()
+                or width < 0.0 or height < 0.0 or radius < 0.0):
+            _status = "native selection input rejected: invalid snap dimensions or radius"
+            return None
+        count = len(values)
+        if count == 0:
+            return (np.zeros(0, dtype=np.uint64),
+                    np.zeros(0, dtype=np.float64))
+        indices = np.full(count, np.iinfo(np.uint64).max, dtype=np.uint64)
+        distances = np.full(count, np.inf, dtype=np.float64)
+        survivor_count = ctypes.c_uint64(np.iinfo(np.uint64).max)
+        code = query(
+            view.ctypes.data_as(_DoubleP), values.ctypes.data_as(_DoubleP), count,
+            width, height, cursor.ctypes.data_as(_DoubleP), radius,
+            indices.ctypes.data_as(_UInt64P), distances.ctypes.data_as(_DoubleP),
+            ctypes.byref(survivor_count),
+        )
+        kept = int(survivor_count.value)
+        if code != 0 or kept > count:
+            _status = f"native selection snap-distance query failed with code {code}: {path}"
+            return None
+        selected_indices = indices[:kept]
+        selected_distances = distances[:kept]
+        if (kept and (bool((selected_indices >= count).any())
+                      or bool((selected_indices[1:] <= selected_indices[:-1]).any())
+                      or not bool(np.isfinite(selected_distances).all())
+                      or bool((selected_distances < 0.0).any())
+                      or bool((selected_distances > radius).any()))):
+            _status = f"native selection snap-distance output invalid: {path}"
+            return None
+        if ((kept < count)
+                and (not bool((indices[kept:] == np.iinfo(np.uint64).max).all())
+                     or not bool(np.isposinf(distances[kept:]).all()))):
+            _status = f"native selection snap-distance tail invalid: {path}"
+            return None
+        _status = f"ready: {path}"
+        return selected_indices, selected_distances
+    except Exception as exc:  # noqa: BLE001 -- optimization failure preserves scoring
+        _status = f"native selection snap-distance query raised: {exc}"
+        return None
+
+
 def nearest_screen_polyline(pixels, visible, offsets, mouse, max_distance):
     """Return the nearest cached display polyline with strict earlier-tie semantics.
 
@@ -675,7 +758,7 @@ def nearest_projected_polylines(polylines, matrix, width, height, mouse):
     try:
         import numpy as np
 
-        source = list(polylines)
+        source = tuple(polylines)
         if not source:
             return ()
         view = np.ascontiguousarray(matrix, dtype=np.float64)
@@ -691,23 +774,43 @@ def nearest_projected_polylines(polylines, matrix, width, height, mouse):
         if not np.isfinite((width, height)).all() or width < 0.0 or height < 0.0:
             _status = "native selection input rejected: invalid Near viewport dimensions"
             return None
-        arrays = []
-        offsets = [0]
-        total = 0
-        for polyline in source:
-            points = _point_array(np, polyline)
-            if points is None:
-                _status = "native selection input rejected: Near polylines must be Nx3"
-                return None
-            arrays.append(points)
-            total += len(points)
-            if total > np.iinfo(np.uint64).max:
-                _status = "native selection input rejected: Near point count exceeds u64"
-                return None
-            offsets.append(total)
-        packed = (np.concatenate(arrays, axis=0) if total
-                  else np.empty((0, 3), dtype=np.float64))
-        packed_offsets = np.ascontiguousarray(offsets, dtype=np.uint64)
+        with _lock:
+            cached_source = _near_pack_cache["source"]
+            reuse = (cached_source is not None and len(cached_source) == len(source)
+                     and all(old is new for old, new in zip(cached_source, source)))
+            if reuse:
+                arrays = _near_pack_cache["arrays"]
+                packed = _near_pack_cache["packed"]
+                packed_offsets = _near_pack_cache["offsets"]
+                total = _near_pack_cache["total"]
+            else:
+                cacheable = all(
+                    type(polyline) is tuple
+                    and all(type(point) is tuple and len(point) == 3
+                            and all(type(value) is float for value in point)
+                            for point in polyline)
+                    for polyline in source)
+                arrays = []
+                offsets = [0]
+                total = 0
+                for polyline in source:
+                    points = _point_array(np, polyline)
+                    if points is None:
+                        _status = "native selection input rejected: Near polylines must be Nx3"
+                        return None
+                    arrays.append(points)
+                    total += len(points)
+                    if total > np.iinfo(np.uint64).max:
+                        _status = "native selection input rejected: Near point count exceeds u64"
+                        return None
+                    offsets.append(total)
+                packed = (np.concatenate(arrays, axis=0) if total
+                          else np.empty((0, 3), dtype=np.float64))
+                packed_offsets = np.ascontiguousarray(offsets, dtype=np.uint64)
+                if cacheable:
+                    _near_pack_cache.update(
+                        source=source, arrays=arrays, packed=packed,
+                        offsets=packed_offsets, total=total)
         count = len(arrays)
         segments = np.full(count, np.iinfo(np.uint64).max, dtype=np.uint64)
         parameters = np.full(count, np.nan, dtype=np.float64)
@@ -1141,9 +1244,11 @@ def projected_points_in_rect(points, matrix, width, height, rect):
 
 
 def _reset_for_tests() -> None:
-    """Forget discovery state so tests can change the explicit library path."""
+    """Forget discovery and packed-input state so tests can change backends."""
     global _signature, _native_binding, _status
     with _lock:
         _signature = None
         _native_binding = None
         _status = "not checked"
+        _near_pack_cache.update(
+            source=None, arrays=None, packed=None, offsets=None, total=0)

@@ -210,8 +210,13 @@ fn python_hypot2(x: f64, y: f64) -> f64 {
     python_vector_norm2(values, values[0].max(values[1]))
 }
 
+#[cfg(test)]
+static NEAR_DISTANCE_CALLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
 #[inline]
 fn screen_near_parameter(mouse: [f64; 2], a: [f64; 2], b: [f64; 2]) -> (f64, f64) {
+    #[cfg(test)]
+    NEAR_DISTANCE_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let dx = b[0] - a[0];
     let dy = b[1] - a[1];
     let denominator = dx * dx + dy * dy;
@@ -900,6 +905,95 @@ pub unsafe extern "C" fn narwhal_project_display_points_f64(
     0
 }
 
+/// Project f64 display points and classify inclusive pixel-radius candidates.
+///
+/// Returns compact, source-ordered candidate indices and CPython-matched distances for
+/// points inside the inclusive radius. This export performs display arithmetic only;
+/// callers retain candidate identity, snap
+/// mode priority, rounded-distance ordering and Near fallback policy.
+///
+/// # Safety
+///
+/// The caller must provide 16 readable matrix values, `point_count * 3` readable
+/// coordinates, two readable mouse values, `point_count` writable index/distance
+/// outputs and one writable survivor count. Point/output buffers may be null only for
+/// zero points and all
+/// buffers must be correctly aligned and non-overlapping.
+#[no_mangle]
+pub unsafe extern "C" fn narwhal_projected_snap_distances_f64(
+    matrix_ptr: *const f64,
+    points_ptr: *const f64,
+    point_count: usize,
+    width: f64,
+    height: f64,
+    mouse_ptr: *const f64,
+    radius: f64,
+    out_indices_ptr: *mut u64,
+    out_distances_ptr: *mut f64,
+    out_count_ptr: *mut u64,
+) -> i32 {
+    if point_count > 0
+        && (out_indices_ptr.is_null() || out_distances_ptr.is_null() || out_count_ptr.is_null())
+    {
+        return ERR_NULL;
+    }
+    if !out_count_ptr.is_null() {
+        *out_count_ptr = 0;
+    }
+    let point_values = match point_count.checked_mul(3) {
+        Some(value)
+            if valid_slice_len::<f64>(value)
+                && valid_slice_len::<f64>(point_count)
+                && valid_slice_len::<u64>(point_count) =>
+        {
+            value
+        }
+        _ => return ERR_SIZE,
+    };
+    if point_count > 0 {
+        for index in 0..point_count {
+            ptr::write(out_indices_ptr.add(index), u64::MAX);
+            ptr::write(out_distances_ptr.add(index), f64::INFINITY);
+        }
+    }
+    if matrix_ptr.is_null() || mouse_ptr.is_null() || (point_count > 0 && points_ptr.is_null()) {
+        return ERR_NULL;
+    }
+    let matrix = slice::from_raw_parts(matrix_ptr, 16);
+    let mouse_values = slice::from_raw_parts(mouse_ptr, 2);
+    let mouse = [mouse_values[0], mouse_values[1]];
+    if !valid_matrix(matrix)
+        || !valid_dimensions(width, height)
+        || !mouse.iter().all(|value| value.is_finite())
+        || !radius.is_finite()
+        || radius < 0.0
+    {
+        return ERR_INPUT;
+    }
+    if point_count == 0 {
+        return 0;
+    }
+    let points = slice::from_raw_parts(points_ptr, point_values);
+    if !points.iter().all(|value| value.is_finite()) {
+        return ERR_INPUT;
+    }
+    let out_indices = slice::from_raw_parts_mut(out_indices_ptr, point_count);
+    let out_distances = slice::from_raw_parts_mut(out_distances_ptr, point_count);
+    let mut survivor_count = 0usize;
+    for (index, point) in points.chunks_exact(3).enumerate() {
+        if let Some((x, y)) = project_display_point_f64(matrix, point, width, height) {
+            let distance = python_hypot2(x - mouse[0], y - mouse[1]);
+            if distance.is_finite() && distance <= radius {
+                out_indices[survivor_count] = index as u64;
+                out_distances[survivor_count] = distance;
+                survivor_count += 1;
+            }
+        }
+    }
+    *out_count_ptr = survivor_count as u64;
+    0
+}
+
 /// Return the nearest cached screen-space polyline with command-hover semantics.
 ///
 /// Curves are represented by concatenated f64 pixel points and monotonic u64 point
@@ -1148,7 +1242,13 @@ pub unsafe extern "C" fn narwhal_nearest_projected_polylines_f64(
                 height,
             );
             if let (Some(a), Some(b)) = (previous, next) {
-                let (parameter, distance) = screen_near_parameter(mouse, [a.0, a.1], [b.0, b.1]);
+                let screen_a = [a.0, a.1];
+                let screen_b = [b.0, b.1];
+                if !screen_segment_aabb_could_beat(mouse, screen_a, screen_b, best_distance) {
+                    previous = next;
+                    continue;
+                }
+                let (parameter, distance) = screen_near_parameter(mouse, screen_a, screen_b);
                 if distance < best_distance {
                     best_segment = (point_index - start) as u64;
                     best_parameter = parameter;
@@ -2133,6 +2233,45 @@ mod tests {
         assert_eq!(
             SCREEN_DISTANCE_CALLS.load(std::sync::atomic::Ordering::Relaxed),
             0,
+        );
+    }
+
+    #[test]
+    fn projected_near_rejects_far_segments_after_each_target_has_a_winner() {
+        let mut points = vec![0.0_f64, 0.0, 0.0, 0.0, 0.0, 0.0];
+        for point in 0..99 {
+            points.extend_from_slice(&[10.0 + f64::from(point), 10.0, 0.0]);
+        }
+        let offsets = [0_u64, 101];
+        let mouse = [400.0_f64, 300.0];
+        let mut segment = [u64::MAX];
+        let mut parameter = [f64::NAN];
+        let mut distance = [f64::INFINITY];
+        let mut valid = [0_u8];
+        NEAR_DISTANCE_CALLS.store(0, std::sync::atomic::Ordering::Relaxed);
+        let result = unsafe {
+            narwhal_nearest_projected_polylines_f64(
+                IDENTITY.as_ptr(),
+                points.as_ptr(),
+                101,
+                offsets.as_ptr(),
+                1,
+                800.0,
+                600.0,
+                mouse.as_ptr(),
+                segment.as_mut_ptr(),
+                parameter.as_mut_ptr(),
+                distance.as_mut_ptr(),
+                valid.as_mut_ptr(),
+            )
+        };
+        assert_eq!(
+            (result, segment, parameter, distance, valid),
+            (0, [0], [0.0], [0.0], [1])
+        );
+        assert_eq!(
+            NEAR_DISTANCE_CALLS.load(std::sync::atomic::Ordering::Relaxed),
+            2,
         );
     }
 

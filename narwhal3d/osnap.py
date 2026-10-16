@@ -979,7 +979,7 @@ def _near_on_screen(target, project, mouse):
 
 def best_on_screen(targets, cursor, modes, project, radius_px, plane=None, *,
                    base=None, snap_to_locked=False, project_batch=None,
-                   project_near_batch=None):
+                   project_near_batch=None, project_distance_batch=None):
     """:func:`best`, with distance measured in SCREEN PIXELS. See the block comment.
 
     `project` maps a world point to ``(x, y)`` pixels, or None when it cannot be seen
@@ -1024,7 +1024,30 @@ def best_on_screen(targets, cursor, modes, project, radius_px, plane=None, *,
             if point is not None:
                 found.append(Snap(point, NEAR, 0.0, target))
     scored = None
-    if project_batch is not None and found:
+    if project_distance_batch is not None and found and radius_px is not None:
+        try:
+            indices, distances = project_distance_batch(
+                tuple(s.point for s in found), mouse, radius_px)
+            if len(indices) != len(distances) or len(indices) > len(found):
+                raise ValueError("projected snap-distance survivor lengths differ")
+            distance_scored = []
+            previous = -1
+            for raw_index, raw_distance in zip(indices, distances):
+                if not isinstance(raw_index, numbers.Integral):
+                    raise ValueError("snap-distance candidate index must be integral")
+                index = int(raw_index)
+                distance = float(raw_distance)
+                if (index <= previous or index >= len(found)
+                        or not math.isfinite(distance)
+                        or not 0.0 <= distance <= radius_px):
+                    raise ValueError("projected snap-distance survivor is invalid")
+                s = found[index]
+                distance_scored.append(Snap(s.point, s.mode, distance, s.target))
+                previous = index
+            scored = distance_scored
+        except Exception:  # noqa: BLE001 -- projected-pixel fallback remains complete
+            scored = None
+    if scored is None and project_batch is not None and found:
         try:
             projected = project_batch(tuple(s.point for s in found))
             if projected is not None:

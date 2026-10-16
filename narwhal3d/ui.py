@@ -12804,6 +12804,16 @@ def snap_at(area, space, region, cursor_world, first_point=False, suspend=False,
         except Exception:  # noqa: BLE001 -- scalar projection remains authoritative
             return None
 
+    def project_distance_batch(points, mouse, radius):
+        try:
+            import numpy as np
+
+            matrix = np.asarray(rv3d.perspective_matrix, dtype=np.float64)
+            return native_selection.projected_snap_distances(
+                points, matrix, region.width, region.height, mouse, radius)
+        except Exception:  # noqa: BLE001 -- projected-pixel scoring remains authoritative
+            return None
+
     def project_near_batch(polylines, mouse):
         try:
             import numpy as np
@@ -12832,7 +12842,8 @@ def snap_at(area, space, region, cursor_world, first_point=False, suspend=False,
                                 base=base,
                                 snap_to_locked=_snap_settings.snap_to_locked,
                                 project_batch=project_batch,
-                                project_near_batch=project_near_batch)
+                                project_near_batch=project_near_batch,
+                                project_distance_batch=project_distance_batch)
     return osnap.apply_projection(snap, plane, _snap_settings.project)
 
 

@@ -214,6 +214,52 @@ try:
         near_polylines, identity, 800, 600, (400.0, 300.0))
     check(projected_near == ((0.0, 0.0, 0.0), None),
           "projected Near adapter reconstructs each coarse world point in source order")
+    immutable_near = tuple(tuple(tuple(float(value) for value in point)
+                                 for point in points) for points in near_polylines)
+    native_selection.nearest_projected_polylines(
+        immutable_near, identity, 800, 600, (400.0, 300.0))
+    first_near_pack = native_selection._near_pack_cache["packed"]
+    native_selection.nearest_projected_polylines(
+        immutable_near, identity, 800, 600, (401.0, 300.0))
+    reused_near_pack = native_selection._near_pack_cache["packed"]
+    replacement_near = tuple(tuple(point for point in points) for points in immutable_near)
+    native_selection.nearest_projected_polylines(
+        replacement_near, identity, 800, 600, (400.0, 300.0))
+    rebuilt_near_pack = native_selection._near_pack_cache["packed"]
+    check(first_near_pack is reused_near_pack and rebuilt_near_pack is not reused_near_pack,
+          "Near packing reuses immutable identities and rebuilds equal replacement tuples")
+    mutable_near = np.array(((-1.0, 0.0, 0.0), (1.0, 0.0, 0.0)), dtype=np.float64)
+    first_mutable = native_selection.nearest_projected_polylines(
+        (mutable_near,), identity, 800, 600, (400.0, 300.0))
+    mutable_near[:, 0] = (0.5, 1.0)
+    changed_mutable = native_selection.nearest_projected_polylines(
+        (mutable_near,), identity, 800, 600, (400.0, 300.0))
+    check(first_mutable == ((0.0, 0.0, 0.0),)
+          and changed_mutable == ((0.5, 0.0, 0.0),),
+          "mutable Near inputs repack every call and cannot return stale geometry")
+    nested_mutable = ([-1.0, 0.0, 0.0], [1.0, 0.0, 0.0])
+    first_nested = native_selection.nearest_projected_polylines(
+        (nested_mutable,), identity, 800, 600, (400.0, 300.0))
+    nested_mutable[0][0] = 0.75
+    changed_nested = native_selection.nearest_projected_polylines(
+        (nested_mutable,), identity, 800, 600, (400.0, 300.0))
+    check(first_nested == ((0.0, 0.0, 0.0),)
+          and changed_nested == ((0.75, 0.0, 0.0),),
+          "tuple polylines containing mutable points are never cached")
+    snap_distances = native_selection.projected_snap_distances(
+        np.array(((0.0, 0.0, 0.0), (1.0, 1.0, 0.0)), dtype=np.float64),
+        identity, 800, 600, (400.0, 300.0), 1.0)
+    check(snap_distances is not None
+          and tuple(snap_distances[0]) == (0,)
+          and tuple(snap_distances[1]) == (0.0,),
+          "snap-distance adapter returns only ordered inclusive-radius survivors")
+    empty_snap_distances = native_selection.projected_snap_distances(
+        np.empty((0, 3), dtype=np.float64), identity, 800, 600,
+        (400.0, 300.0), 1.0)
+    check(empty_snap_distances is not None
+          and empty_snap_distances[0].dtype == np.uint64
+          and empty_snap_distances[1].dtype == np.float64,
+          "empty snap-distance output preserves compact index/distance dtypes")
     check(native_selection.screen_boxes_from_clip(
         clip_values, np.array((0, 4, 3), dtype=np.uint64), clip_flags,
         800, 600) is None,
@@ -515,6 +561,48 @@ try:
     check(malformed_near_fallback,
           "no-write and malformed projected Near output requests scalar fallback")
 
+    def malformed_snap_distances(count, index, distance):
+        def call(*args):
+            ctypes.cast(args[-3], ctypes.POINTER(ctypes.c_uint64))[0] = index
+            ctypes.cast(args[-2], ctypes.POINTER(ctypes.c_double))[0] = distance
+            ctypes.cast(args[-1], ctypes.POINTER(ctypes.c_uint64))[0] = count
+            return 0
+        return call
+
+    malformed_distance_calls = (
+        lambda *_args: 0,
+        malformed_snap_distances(0, 0, 0.0),
+        malformed_snap_distances(2, 0, 0.0),
+        malformed_snap_distances(1, 99, 0.0),
+        malformed_snap_distances(1, 0, math.nan),
+        malformed_snap_distances(1, 0, 11.0),
+    )
+    malformed_distance_fallback = True
+    for distance_call in malformed_distance_calls:
+        fake_distance_library = types.SimpleNamespace(
+            narwhal_projected_snap_distances_f64=distance_call)
+        native_selection._native_binding = (
+            fake_distance_library, None, None, None, None, Path("bad-distance-native"))
+        malformed_distance_fallback &= native_selection.projected_snap_distances(
+            point_values[:1], identity, 800, 600, (400.0, 300.0), 10.0) is None
+    check(malformed_distance_fallback,
+          "no-write and malformed snap-distance output requests pixel fallback")
+
+    def corrupt_snap_distance_tail(*args):
+        indices = ctypes.cast(args[-3], ctypes.POINTER(ctypes.c_uint64))
+        distances = ctypes.cast(args[-2], ctypes.POINTER(ctypes.c_double))
+        indices[0], distances[0] = 0, 0.0
+        indices[1], distances[1] = 1, 1.0
+        ctypes.cast(args[-1], ctypes.POINTER(ctypes.c_uint64))[0] = 1
+        return 0
+
+    native_selection._native_binding = (
+        types.SimpleNamespace(narwhal_projected_snap_distances_f64=corrupt_snap_distance_tail),
+        None, None, None, None, Path("bad-distance-tail"))
+    check(native_selection.projected_snap_distances(
+        point_values[:2], identity, 800, 600, (400.0, 300.0), 10.0) is None,
+          "corrupted compact snap-distance tail requests pixel fallback")
+
     malformed_display_cases = (
         (malformed_display(2, 0.0), "undocumented native display visibility"),
         (malformed_display(1, math.nan), "visible NaN native display output"),
@@ -590,7 +678,9 @@ try:
           and native_selection.screen_rects_from_aabbs(
               aabb_lower, aabb_upper, identity, 800, 600) is None
           and native_selection.nearest_projected_polylines(
-              near_polylines, identity, 800, 600, (400.0, 300.0)) is None,
+              near_polylines, identity, 800, 600, (400.0, 300.0)) is None
+          and native_selection.projected_snap_distances(
+              point_values, identity, 800, 600, (400.0, 300.0), 10.0) is None,
           "older ABI-1 library without later point, polyline, or box symbols uses fallbacks")
 
     os.environ["NARWHAL_SELECTION_CORE"] = str(ROOT / "missing-selection-core.so")
@@ -605,6 +695,11 @@ finally:
         os.environ["NARWHAL_SELECTION_CORE"] = old_path
     native_selection._reset_for_tests()
 
+check(all(native_selection._near_pack_cache[key] is None
+          for key in ("source", "arrays", "packed", "offsets"))
+      and native_selection._near_pack_cache["total"] == 0,
+      "native test reset clears every retained Near cache field")
+
 real_snap_settings = ui._snap_settings
 real_get_cplane = ui.get_cplane
 real_snap_reach = ui._snap_reach
@@ -614,6 +709,7 @@ real_apply_projection = ui.osnap.apply_projection
 real_location_3d_to_region_2d = v3u.location_3d_to_region_2d
 real_snap_display_projection = ui.native_selection.project_display_points
 real_snap_near_projection = ui.native_selection.nearest_projected_polylines
+real_snap_distance_projection = ui.native_selection.projected_snap_distances
 try:
     ui._snap_settings = types.SimpleNamespace(
         active=lambda **_kwargs: ("End",), radius_px=10.0,
@@ -632,6 +728,10 @@ try:
         lambda *args: native_snap_calls.append(args)
         or (np.array(((400.0, 300.0), (800.0, 300.0))),
             np.array((1, 1), dtype=np.uint8)))
+    native_distance_calls = []
+    ui.native_selection.projected_snap_distances = (
+        lambda *args: native_distance_calls.append(args)
+        or (np.array((0,), dtype=np.uint64), np.array((0.0,))))
     native_near_calls = []
     ui.native_selection.nearest_projected_polylines = (
         lambda *args: native_near_calls.append(args) or ((0.5, 0.0, 0.0),))
@@ -644,7 +744,10 @@ try:
                                                              (1.0, 0.0, 0.0))),
                                     kwargs["project_near_batch"](
                                         (((0.0, 0.0, 0.0),
-                                          (1.0, 0.0, 0.0)),), (400.0, 300.0))))
+                                          (1.0, 0.0, 0.0)),), (400.0, 300.0)),
+                                    kwargs["project_distance_batch"](
+                                        ((0.0, 0.0, 0.0), (1.0, 1.0, 0.0)),
+                                        (400.0, 300.0), 10.0)))
         return "native-snap"
 
     ui.osnap.best_on_screen = capture_best
@@ -656,7 +759,9 @@ try:
           and routed_snap_batches[0][0] == ("target", "native-snap-reach")
           and routed_snap_batches[0][5] == (400.0, 300.0)
           and len(native_snap_calls) == 1 and len(native_near_calls) == 1
+          and len(native_distance_calls) == 1
           and routed_snap_batches[0][7] == ((0.5, 0.0, 0.0),)
+          and tuple(routed_snap_batches[0][8][0]) == (0,)
           and native_snap_calls[0][1].shape == (4, 4)
           and native_snap_calls[0][2:] == (800, 600),
           "snap_at supplies one viewport-shaped native candidate projection batch")
@@ -672,6 +777,8 @@ try:
         RuntimeError("native projector unavailable"))
     ui.native_selection.nearest_projected_polylines = lambda *_args: (_ for _ in ()).throw(
         RuntimeError("native Near unavailable"))
+    ui.native_selection.projected_snap_distances = lambda *_args: (_ for _ in ()).throw(
+        RuntimeError("native snap distance unavailable"))
     declined_snap = ui.snap_at(
         None, types.SimpleNamespace(region_3d=snap_rv3d), snap_region,
         (0.0, 0.0, 0.0))
@@ -687,6 +794,7 @@ finally:
     v3u.location_3d_to_region_2d = real_location_3d_to_region_2d
     ui.native_selection.project_display_points = real_snap_display_projection
     ui.native_selection.nearest_projected_polylines = real_snap_near_projection
+    ui.native_selection.projected_snap_distances = real_snap_distance_projection
 
 # A real curve-pass record is flat GL_LINES points, not the shaped adapter fixture above.
 production_mesh = bpy.data.meshes.new("RustProductionRecordMesh")

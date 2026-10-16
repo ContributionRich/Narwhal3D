@@ -55,6 +55,11 @@ lib.narwhal_project_display_points_f64.argtypes = [
     DoubleP, DoubleP, ctypes.c_size_t, ctypes.c_double, ctypes.c_double, DoubleP, ByteP,
 ]
 lib.narwhal_project_display_points_f64.restype = ctypes.c_int
+lib.narwhal_projected_snap_distances_f64.argtypes = [
+    DoubleP, DoubleP, ctypes.c_size_t, ctypes.c_double, ctypes.c_double,
+    DoubleP, ctypes.c_double, UInt64P, DoubleP, UInt64P,
+]
+lib.narwhal_projected_snap_distances_f64.restype = ctypes.c_int
 lib.narwhal_any_screen_segment_crosses_rect_f64.argtypes = [
     DoubleP, ctypes.c_size_t, DoubleP,
 ]
@@ -261,6 +266,19 @@ def rust_display_project(matrix, points, width=800.0, height=600.0):
               else (pixels[index * 2], pixels[index * 2 + 1])
               for index in range(len(points))]
     return code, result
+
+
+def rust_snap_distances(matrix, points, mouse, radius, width=800.0, height=600.0):
+    count = len(points)
+    indices = (ctypes.c_uint64 * count)()
+    distances = (ctypes.c_double * count)()
+    survivor_count = ctypes.c_uint64(0)
+    code = lib.narwhal_projected_snap_distances_f64(
+        darray(matrix), darray(value for point in points for value in point), count,
+        width, height, darray(mouse), radius, indices, distances,
+        ctypes.byref(survivor_count))
+    kept = survivor_count.value
+    return code, tuple(indices[:kept]), tuple(distances[:kept])
 
 
 def rust_screen_any(segments, rect):
@@ -948,6 +966,33 @@ for _ in range(200):
     if not point_equivalent or not rect_equivalent or not display_equivalent:
         break
 check(display_equivalent, "200 randomized f64 display batches match scalar mixed precision")
+
+check(rust_snap_distances(IDENTITY, [(0.0, 0.0, 0.0)], (400.0, 300.0), 0.0)
+      == (0, (0,), (0.0,)),
+      "snap-distance compact output includes the exact radius boundary")
+snap_distance_equivalent = True
+for _ in range(200):
+    sample_points = [tuple(rng.uniform(-4.0, 4.0) for _coordinate in range(3))
+                     for _point in range(rng.randrange(0, 100))]
+    sample_mouse = (rng.uniform(-200.0, 1000.0), rng.uniform(-200.0, 800.0))
+    sample_radius = rng.uniform(0.0, 100.0)
+    code, indices, distances = rust_snap_distances(
+        PERSPECTIVE, sample_points, sample_mouse, sample_radius)
+    expected_indices = []
+    expected_distances = []
+    for index, point in enumerate(sample_points):
+        pixel = scalar_display_project(PERSPECTIVE, point, 800.0, 600.0)
+        distance = (math.inf if pixel is None else
+                    math.hypot(pixel[0] - sample_mouse[0], pixel[1] - sample_mouse[1]))
+        if distance <= sample_radius:
+            expected_indices.append(index)
+            expected_distances.append(distance)
+    if (code != 0 or indices != tuple(expected_indices)
+            or distances != tuple(expected_distances)):
+        snap_distance_equivalent = False
+        break
+check(snap_distance_equivalent,
+      "200 randomized snap-distance batches match projection, hypot, and inclusive radius")
 check(point_equivalent, "200 randomized nearest-point batches match scalar f64 projection")
 check(rect_equivalent, "200 randomized point-rectangle batches match inclusive scalar projection")
 
@@ -1243,6 +1288,67 @@ check(lib.narwhal_project_display_points_f64(
       and tuple(display_visible) == (0, 0)
       and all(math.isnan(value) for value in display_pixels),
       "display-point projection clears outputs before rejecting a null matrix")
+snap_index_output = (ctypes.c_uint64 * 2)(0, 0)
+snap_distance_output = (ctypes.c_double * 2)(0.0, 0.0)
+snap_survivor_count = ctypes.c_uint64(99)
+check(lib.narwhal_projected_snap_distances_f64(
+    None, darray((0.0, 0.0, 0.0, 1.0, 1.0, 0.0)), 2,
+    800.0, 600.0, darray((400.0, 300.0)), 10.0,
+    snap_index_output, snap_distance_output, ctypes.byref(snap_survivor_count)) == -1
+      and snap_survivor_count.value == 0
+      and all(value == (1 << 64) - 1 for value in snap_index_output)
+      and all(math.isinf(value) for value in snap_distance_output),
+      "snap-distance query clears outputs before rejecting a null matrix")
+check(lib.narwhal_projected_snap_distances_f64(
+    darray(IDENTITY), None, 0, 800.0, 600.0,
+    darray((400.0, 300.0)), 10.0, None, None, None) == 0,
+      "snap-distance query safely accepts an empty null batch")
+empty_snap_count = ctypes.c_uint64(99)
+check(lib.narwhal_projected_snap_distances_f64(
+    darray(IDENTITY), None, 0, 800.0, 600.0,
+    darray((400.0, 300.0)), 10.0, None, None, ctypes.byref(empty_snap_count)) == 0
+      and empty_snap_count.value == 0,
+      "empty snap-distance query clears a supplied survivor count")
+check(all(code == -1 for code in (
+    lib.narwhal_projected_snap_distances_f64(
+        darray(IDENTITY), darray((0.0, 0.0, 0.0)), 1, 800.0, 600.0,
+        darray((400.0, 300.0)), 1.0, None, snap_distance_output,
+        ctypes.byref(snap_survivor_count)),
+    lib.narwhal_projected_snap_distances_f64(
+        darray(IDENTITY), darray((0.0, 0.0, 0.0)), 1, 800.0, 600.0,
+        darray((400.0, 300.0)), 1.0, snap_index_output, None,
+        ctypes.byref(snap_survivor_count)),
+    lib.narwhal_projected_snap_distances_f64(
+        darray(IDENTITY), darray((0.0, 0.0, 0.0)), 1, 800.0, 600.0,
+        darray((400.0, 300.0)), 1.0, snap_index_output, snap_distance_output, None),
+)), "snap-distance query rejects each null nonempty output")
+snap_index_output[:] = (0, 0)
+snap_distance_output[:] = (0.0, 0.0)
+snap_survivor_count.value = 99
+check(lib.narwhal_projected_snap_distances_f64(
+    darray(IDENTITY), darray((0.0, 0.0, 0.0, 1.0, 1.0, 0.0)), 2,
+    800.0, 600.0, darray((400.0, 300.0)), -1.0,
+    snap_index_output, snap_distance_output, ctypes.byref(snap_survivor_count)) == -2
+      and snap_survivor_count.value == 0
+      and all(value == (1 << 64) - 1 for value in snap_index_output)
+      and all(math.isinf(value) for value in snap_distance_output),
+      "invalid snap radius leaves completely cleared outputs")
+check(lib.narwhal_projected_snap_distances_f64(
+    darray(IDENTITY), darray((0.0, 0.0, 0.0)), oversized_count,
+    800.0, 600.0, darray((400.0, 300.0)), 1.0,
+    snap_index_output, snap_distance_output, ctypes.byref(snap_survivor_count)) == -3,
+      "snap-distance query rejects a slice whose byte span exceeds isize::MAX")
+sparse_indices = (ctypes.c_uint64 * 3)(0, 0, 0)
+sparse_distances = (ctypes.c_double * 3)(0.0, 0.0, 0.0)
+sparse_count = ctypes.c_uint64(99)
+check(lib.narwhal_projected_snap_distances_f64(
+    darray(IDENTITY), darray((0.0, 0.0, 0.0, 1.0, 1.0, 0.0, -1.0, -1.0, 0.0)),
+    3, 800.0, 600.0, darray((400.0, 300.0)), 0.0,
+    sparse_indices, sparse_distances, ctypes.byref(sparse_count)) == 0
+      and sparse_count.value == 1 and sparse_indices[0] == 0 and sparse_distances[0] == 0.0
+      and tuple(sparse_indices[1:]) == ((1 << 64) - 1, (1 << 64) - 1)
+      and all(math.isinf(value) for value in sparse_distances[1:]),
+      "sparse snap-distance success preserves compact tail sentinels")
 check(lib.narwhal_project_display_points_f64(
     darray(IDENTITY), darray((0.0, 0.0, 0.0)), oversized_count,
     800.0, 600.0, display_pixels, display_visible) == -3,
