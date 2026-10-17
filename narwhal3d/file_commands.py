@@ -43,21 +43,17 @@ def _normalise(path):
 
 
 def _export_route(path):
-    """The export extension of `path` when Save should EXPORT instead, else None."""
-    from . import export_commands
-
+    """Return `.3dm` for the one document interchange route accepted by Save As."""
     ext = os.path.splitext((path or "").strip().strip('"'))[1].lower()
-    return ext if ext in export_commands.FORMATS else None
+    return ext if ext == INTERCHANGE_EXT else None
 
 
 def write_document(path):
     """Write the model to `path` (atomically). Returns ``(ok, message)``.
 
-    A path with another format's extension (.step, .ai, .pdf, .svg) EXPORTS the
-    whole model instead -- MEASURED (commands/save.htm): "To save as a different file
-    format, type the file name with the desired extension. See: Export." -- and, as
-    Export says, "it does not become your active the reference CAD application model": the document keeps
-    its file and its modified state.
+    `.3dm` writes a whole-document interchange copy without replacing the active native
+    project. Other formats belong to Export or Print and are refused here rather than
+    silently discarding unsupported document content.
     """
     app = _app()
     if _export_route(path):
@@ -130,7 +126,9 @@ class _FileCommand(commands.Command):
         app = _app()
         start = (app.doc_path or getattr(app, "suggested_name", None)
                  or os.path.join(filedialog.start_dir(), "Untitled" + EXT))
-        filters = (NATIVE_PROJECT_FILTER, *export_commands.EXPORT_FILTERS)
+        interchange = tuple(
+            item for item in export_commands.EXPORT_FILTERS if item[1] == "*.3dm")
+        filters = (NATIVE_PROJECT_FILTER, *interchange)
         return filedialog.ask_save_path(title, start, filters)
 
     def _settle_unsaved(self, verb):

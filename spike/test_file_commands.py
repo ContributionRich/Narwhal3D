@@ -149,10 +149,12 @@ def run():
           f"{kinds(fake)} {app_state.doc_path}")
     check(starts and starts[0] == want,
           "the Save As dialog opens on the current file", f"{starts}")
-    from narwhal3d import export_commands
-    expected_filters = (("Narwhal 3D Projects", "*.narwhal"), *export_commands.EXPORT_FILTERS)
+    expected_filters = (
+        ("Narwhal 3D Projects", "*.narwhal"),
+        ("3DM Models", "*.3dm"),
+    )
     check(filters == [expected_filters] and filters[0][0][1] == "*.narwhal",
-          "Save As defaults to Narwhal projects and lists every implemented export format",
+          "Save As defaults to Narwhal and offers only document-preserving formats",
           repr(filters))
 
     interchange = os.path.join(TMP, "copy.3dm")
@@ -174,20 +176,16 @@ def run():
           and app_state.doc_path == p2,
           "saving as .dwg is refused by name and nothing changes", f"{last()!r}")
 
-    # -- 5b. Save As with an EXPORT extension exports the whole model; the
-    # document keeps its own file ("it does not become your active the reference CAD application model")
-    from narwhal3d import print2d, print_commands
-    print_commands.view_provider = lambda: print2d.View(
-        (1, 0, 0), (0, 1, 0), (0, 0, 0), 100.0, 80.0)
-    p3b = os.path.join(TMP, "drawing.ai")
-    fake = Fake(save=[(OK, p3b)])
-    filedialog.set_backend(fake)
-    app_state.feed_line("SaveAs")
-    print_commands.view_provider = None
-    check(os.path.exists(p3b) and app_state.doc_path == p2
-          and "unchanged" in last(),
-          "Save As .ai exports the model (2-D, 1:1) and the document keeps its file",
-          f"{last()!r}")
+    # -- 5b. Lossy/specialized formats belong to Export or Print, not Save As --
+    for extension in (".step", ".stp", ".stl", ".obj", ".dxf", ".cdr", ".ai", ".pdf", ".svg"):
+        specialized = os.path.join(TMP, "specialized" + extension)
+        fake = Fake(save=[(OK, specialized)])
+        filedialog.set_backend(fake)
+        app_state.feed_line("SaveAs")
+        check(not os.path.exists(specialized) and app_state.doc_path == p2
+              and "use .narwhal, or Export" in last(),
+              f"Save As keeps {extension} in Export/Print instead of losing document content",
+              f"{last()!r}")
 
     # -- 6. a folder that does not exist: refused, the document keeps its file ---
     fake = Fake(save=[(OK, os.path.join(TMP, "nope", "x.narwhal"))])
