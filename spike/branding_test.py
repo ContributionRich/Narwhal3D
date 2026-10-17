@@ -17,6 +17,7 @@ ICON = os.path.join(ROOT, "launch", "narwhal3d.png")
 PRIMARY_LAUNCHER = os.path.join(ROOT, "narwhal3d.sh")
 
 MIME_XML = os.path.join(ROOT, "launch", "narwhal3d-3dm.xml")
+PROJECT_MIME_XML = os.path.join(ROOT, "launch", "narwhal3d-project.xml")
 APP_ID = "narwhal3d.desktop"
 PRODUCT_NAME = "Narwhal 3D"
 
@@ -73,6 +74,8 @@ check(values.get("StartupWMClass") == PRODUCT_NAME,
 check(values.get("Type") == "Application", "desktop Type must be Application")
 check("application/x-3dm;" in values.get("MimeType", ""),
       "desktop MimeType must list application/x-3dm")
+check("application/x-narwhal3d-project;" in values.get("MimeType", ""),
+      "desktop MimeType must list the native Narwhal project type")
 check("__ROOT__" in text, "template must use the __ROOT__ placeholder")
 first_line = text.splitlines()[0] if text.splitlines() else ""
 check(first_line == "[Desktop Entry]",
@@ -150,6 +153,20 @@ check('"Narwhal 3D public UI report"' in report_text,
 
 # MIME metadata remains a format description.
 check(os.path.isfile(MIME_XML), f"MIME package missing: {MIME_XML}")
+if os.path.isfile(PROJECT_MIME_XML):
+    namespace = {"m": "http://www.freedesktop.org/standards/shared-mime-info"}
+    try:
+        project_type = ET.parse(PROJECT_MIME_XML).getroot().find("m:mime-type", namespace)
+    except ET.ParseError as error:
+        project_type = None
+        failures.append(f"project MIME package is not valid XML: {error}")
+    if project_type is not None:
+        check(project_type.get("type") == "application/x-narwhal3d-project",
+              "native project MIME type must be application/x-narwhal3d-project")
+        project_globs = {node.get("pattern") for node in project_type.findall("m:glob", namespace)}
+        check("*.narwhal" in project_globs,
+              f"native project MIME package must glob *.narwhal ({project_globs})")
+
 if os.path.isfile(MIME_XML):
     namespace = {"m": "http://www.freedesktop.org/standards/shared-mime-info"}
     try:

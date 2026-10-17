@@ -39,15 +39,17 @@ EXCLUDED_PACKAGE_FILES = {PurePosixPath("kernel/brep_writer.cpp")}
 EXCLUDED_PACKAGE_TREE = PurePosixPath("kernel/bin")
 NATIVE_COMPONENT_RELATIVE = Path("runtime/linux-x86_64/bin")
 CDR_MULTIVERSION_PROTOCOL = "narwhal-cdr-multiversion 1 tracedraw 821ba154 read 16-18 write 17"
+DOCUMENT_CORE_PROTOCOL = "narwhal-document-core 1"
 NATIVE_COMPONENTS = (
     "libnarwhal_cdr_core.so", "narwhal-converter-supervisor",
-    "narwhal-cdr-multiversion",
+    "narwhal-cdr-multiversion", "narwhal-document-core",
 )
 LAUNCH_FILES = (
     "bootstrap.py",
     "open_arg.py",
     "narwhal3d.desktop.in",
     "narwhal3d-3dm.xml",
+    "narwhal3d-project.xml",
     "narwhal3d.png",
 )
 PACKAGING_FILES = ("linux-x86_64.lock.json", "README.md", "NOTICES.md")
@@ -393,9 +395,36 @@ def validate_appimage_runtime(path: Path, artifacts: dict[str, JsonObject]) -> N
         raise ReleaseError(f"AppImage runtime SHA-256 mismatch: expected {APPIMAGE_RUNTIME_SHA256}, got {actual}")
 
 
-def validate_native_components(directory: Path) -> dict[str, dict[str, object]]:
+def probe_supervisor_memory(supervisor: Path) -> None:
+    """Require an executed child under the memory-limit protocol used by native Open."""
+    try:
+        supervised = subprocess.run(
+            [str(supervisor), "--timeout-ms", "5000", "--max-output", "4096",
+             "--memory-mib", "64", "--", "/bin/true"],
+            text=True, capture_output=True, timeout=15, check=True)
+        packet = json.loads(supervised.stdout)
+    except (OSError, subprocess.SubprocessError, json.JSONDecodeError) as exc:
+        raise ReleaseError(
+            f"native converter supervisor lacks enforced memory-limit support: {exc}") from exc
+    if (not isinstance(packet, dict) or packet.get("returncode") != 0
+            or packet.get("timed_out") is not False or packet.get("error") is not None):
+        raise ReleaseError(f"native converter supervisor memory probe failed: {packet!r}")
+
+
+def validate_native_components(
+    directory: Path, document_core_artifacts: Path,
+) -> dict[str, dict[str, object]]:
     if not directory.is_dir() or directory.is_symlink():
         raise ReleaseError(f"native component directory is missing or symlinked: {directory}")
+    try:
+        from verify_document_core import verify_directory as verify_document_core
+        document_manifest = verify_document_core(document_core_artifacts)
+    except Exception as exc:  # noqa: BLE001
+        raise ReleaseError(f"document-core artifacts are not source-bound: {exc}") from exc
+    linux_records = [record for record in document_manifest["artifacts"]
+                     if record.get("platform") == "linux-x86_64"]
+    if len(linux_records) != 1:
+        raise ReleaseError("document-core artifact manifest lacks one Linux record")
     records = {}
     for filename in NATIVE_COMPONENTS:
         path = directory / filename
@@ -403,6 +432,14 @@ def validate_native_components(directory: Path) -> dict[str, dict[str, object]]:
         if filename != "libnarwhal_cdr_core.so" and not os.access(path, os.X_OK):
             raise ReleaseError(f"native component is not executable: {filename}")
         records[filename] = {"size": path.stat().st_size, "sha256": sha256_file(path)}
+    if (records["narwhal-document-core"]["sha256"] != linux_records[0].get("sha256")
+            or records["narwhal-document-core"]["size"] != linux_records[0].get("size")):
+        raise ReleaseError("packaged document core differs from source-bound Linux artifact")
+    records["narwhal-document-core"]["source_aggregate_sha256"] = (
+        document_manifest["source_aggregate_sha256"])
+    supervisor = directory / "narwhal-converter-supervisor"
+    probe_supervisor_memory(supervisor)
+    records["narwhal-converter-supervisor"]["memory_limit_probe_mib"] = 64
     try:
         required_glibc, _path = scan_runtime_glibc(directory)
     except RuntimeError as exc:
@@ -427,6 +464,15 @@ def validate_native_components(directory: Path) -> dict[str, dict[str, object]]:
     if protocol != CDR_MULTIVERSION_PROTOCOL:
         raise ReleaseError(f"wrong multi-version CDR protocol: {protocol!r}")
     records["narwhal-cdr-multiversion"]["protocol"] = protocol
+    try:
+        document_version = subprocess.run(
+            [str(directory / "narwhal-document-core"), "--version"],
+            text=True, capture_output=True, timeout=30, check=True).stdout.strip()
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise ReleaseError(f"cannot execute bundled Narwhal document core: {exc}") from exc
+    if document_version != DOCUMENT_CORE_PROTOCOL:
+        raise ReleaseError(f"wrong Narwhal document-core protocol: {document_version!r}")
+    records["narwhal-document-core"]["protocol"] = document_version
     records["required_glibc"] = format_glibc(required_glibc)
     return records
 
@@ -563,6 +609,7 @@ def assemble(args: argparse.Namespace) -> tuple[Path, Path, Path]:
     appimage_runtime = args.appimage_runtime.resolve()
     output_dir = args.output_dir.resolve()
     native_components_dir = args.native_components_dir.resolve()
+    document_core_artifacts = args.document_core_artifacts.resolve()
     if not source_root.is_dir():
         raise ReleaseError(f"source root does not exist: {source_root}")
     lock_path = source_root / SOURCE_LOCK_RELATIVE
@@ -573,7 +620,8 @@ def assemble(args: argparse.Namespace) -> tuple[Path, Path, Path]:
     )
     validate_appimagetool(appimagetool, artifacts)
     validate_appimage_runtime(appimage_runtime, artifacts)
-    native_components = validate_native_components(native_components_dir)
+    native_components = validate_native_components(
+        native_components_dir, document_core_artifacts)
 
     launcher = source_root / "narwhal3d.sh"
     package = source_root / "narwhal3d"
@@ -823,9 +871,21 @@ def self_check() -> None:
             raise ReleaseError("self-check accepted a symlink in the license directory")
         if NATIVE_COMPONENTS != (
             "libnarwhal_cdr_core.so", "narwhal-converter-supervisor",
-            "narwhal-cdr-multiversion",
+            "narwhal-cdr-multiversion", "narwhal-document-core",
         ):
             raise ReleaseError("self-check found an incomplete native component set")
+        supervisor_probe = Path(temporary) / "supervisor-probe"
+        supervisor_probe.write_text(
+            "#!/bin/sh\n"
+            "case \" $* \" in\n"
+            "  *\" --memory-mib 64 \"*) "
+            "printf '%s\\n' '{\"returncode\":0,\"stdout\":\"\",\"stderr\":\"\","
+            "\"timed_out\":false,\"error\":null}' ;;\n"
+            "  *) exit 2 ;;\n"
+            "esac\n",
+            encoding="utf-8")
+        supervisor_probe.chmod(0o755)
+        probe_supervisor_memory(supervisor_probe)
     print("assemble_linux_release.py self-check: OK")
 
 
@@ -839,7 +899,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--source-root", type=Path, default=ROOT, help="public source checkout root")
     parser.add_argument("--runtime-dir", type=Path, help="verified native Narwhal runtime")
     parser.add_argument("--native-components-dir", type=Path,
-                        help="verified Rust CDR library and converter supervisor directory")
+                        help="verified native component directory")
+    parser.add_argument("--document-core-artifacts", type=Path,
+                        help="source-bound Linux/Windows document-core artifact directory")
     parser.add_argument("--appimagetool", type=Path, help="locked appimagetool 1.9.1 executable")
     parser.add_argument("--appimage-runtime", type=Path, help="locked type2 runtime 20251108 file")
     parser.add_argument("--output-dir", type=Path, help="new release output directory")
@@ -861,6 +923,7 @@ def main(argv: list[str] | None = None) -> int:
                 ("--source-date-epoch", args.source_date_epoch),
                 ("--runtime-dir", args.runtime_dir),
                 ("--native-components-dir", args.native_components_dir),
+                ("--document-core-artifacts", args.document_core_artifacts),
                 ("--appimagetool", args.appimagetool),
                 ("--appimage-runtime", args.appimage_runtime),
                 ("--output-dir", args.output_dir),

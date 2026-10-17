@@ -11,8 +11,24 @@ import os
 from pathlib import Path
 import signal
 import subprocess
+import sys
 import threading
 from collections.abc import Mapping, Sequence
+
+_MAX_MEMORY_MIB = 1024 * 1024
+_MEMORY_WRAPPER = """\
+import os
+import resource
+import sys
+
+try:
+    limit = int(sys.argv[1])
+    resource.setrlimit(resource.RLIMIT_AS, (limit, limit))
+    os.execvpe(sys.argv[2], sys.argv[2:], os.environ)
+except BaseException as exc:
+    os.write(2, f"could not apply converter memory limit: {exc}\\n".encode("utf-8", "replace"))
+    raise SystemExit(126)
+"""
 
 _ALLOWED_ENV = (
     "PATH", "HOME", "USERPROFILE", "TMPDIR", "TEMP", "TMP", "LANG", "LC_ALL",
@@ -88,9 +104,13 @@ def _read_tail(stream, limit: int, output: list[bytes]) -> None:
         output.append(bytes(tail))
 
 
-def _terminate_tree(process: subprocess.Popen) -> None:
-    if os.name == "nt":
-        subprocess.run(
+def _is_windows() -> bool:
+    return os.name == "nt"
+
+
+def _terminate_tree(process: subprocess.Popen[bytes]) -> None:
+    if _is_windows():
+        _ = subprocess.run(
             ["taskkill", "/PID", str(process.pid), "/T", "/F"],
             check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         )
@@ -105,25 +125,53 @@ def _terminate_tree(process: subprocess.Popen) -> None:
         pass
 
 
-def _python_run(argv: Sequence[str], timeout: float, env: dict[str, str], limit: int) -> Result:
-    options = {
-        "stdin": subprocess.DEVNULL,
-        "stdout": subprocess.PIPE,
-        "stderr": subprocess.PIPE,
-        "env": env,
-    }
-    if os.name == "nt":
-        options["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
-    else:
-        options["start_new_session"] = True
+def _python_run(
+    argv: Sequence[str],
+    timeout: float,
+    env: dict[str, str],
+    limit: int,
+    memory_mib: int | None,
+) -> Result:
+    command = list(map(str, argv))
+    if memory_mib is not None:
+        try:
+            import resource
+        except ImportError:
+            return Result(-1, "", "", error="RLIMIT_AS is unavailable for Python fallback")
+        if not hasattr(resource, "RLIMIT_AS") or not sys.executable:
+            return Result(-1, "", "", error="RLIMIT_AS is unavailable for Python fallback")
+        command = [
+            sys.executable, "-c", _MEMORY_WRAPPER,
+            str(memory_mib * 1024 * 1024), *command,
+        ]
     try:
-        process = subprocess.Popen(list(argv), **options)
+        if _is_windows():
+            process = subprocess.Popen(
+                command,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                env=env,
+                creationflags=subprocess.CREATE_NEW_PROCESS_GROUP,
+            )
+        else:
+            process = subprocess.Popen(
+                command,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                env=env,
+                start_new_session=True,
+            )
     except OSError as exc:
         return Result(-1, "", "", error=f"could not start converter: {exc}")
     stdout, stderr = [], []
+    stdout_pipe = process.stdout
+    stderr_pipe = process.stderr
+    assert stdout_pipe is not None and stderr_pipe is not None
     threads = [
-        threading.Thread(target=_read_tail, args=(process.stdout, limit, stdout), daemon=True),
-        threading.Thread(target=_read_tail, args=(process.stderr, limit, stderr), daemon=True),
+        threading.Thread(target=_read_tail, args=(stdout_pipe, limit, stdout), daemon=True),
+        threading.Thread(target=_read_tail, args=(stderr_pipe, limit, stderr), daemon=True),
     ]
     for worker in threads:
         worker.start()
@@ -155,12 +203,18 @@ def run(
     timeout: float,
     extra_env: Mapping[str, str] | None = None,
     max_output: int = 8192,
+    memory_mib: int | None = None,
 ) -> Result:
-    """Run one converter with bounded output; never raises for converter failure."""
+    """Run one converter with bounded output and an optional process memory ceiling."""
     if not argv:
         return Result(-1, "", "", error="converter command is empty")
     if max_output < 1 or max_output > 1024 * 1024:
         return Result(-1, "", "", error="max_output must be from 1 through 1048576")
+    if memory_mib is not None and (
+        isinstance(memory_mib, bool) or not isinstance(memory_mib, int)
+        or memory_mib < 1 or memory_mib > _MAX_MEMORY_MIB
+    ):
+        return Result(-1, "", "", error="memory_mib must be from 1 through 1048576")
     env = _environment(extra_env)
     supervisor = _supervisor()
     if supervisor:
@@ -168,6 +222,8 @@ def run(
             supervisor, "--timeout-ms", str(max(1, round(timeout * 1000))),
             "--max-output", str(max_output),
         ]
+        if memory_mib is not None:
+            command.extend(("--memory-mib", str(memory_mib)))
         for key, value in sorted(env.items()):
             command.extend(("--env", f"{key}={value}"))
         command.extend(("--", *map(str, argv)))
@@ -205,4 +261,9 @@ def run(
             return Result(-1, "", "", error="native supervisor returned a malformed report",
                           native=True)
         return Result(returncode, stdout, stderr, timed_out, error, native=True)
-    return _python_run(argv, timeout, env, max_output)
+    if memory_mib is not None and _is_windows():
+        return Result(
+            -1, "", "",
+            error="memory limit requires the native converter supervisor on Windows",
+        )
+    return _python_run(argv, timeout, env, max_output, memory_mib)

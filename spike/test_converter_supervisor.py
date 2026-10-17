@@ -9,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from typing import cast
 import types
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -42,6 +43,10 @@ built = subprocess.run(
 supervisor = crate / "target" / "release" / "narwhal-converter-supervisor"
 check(built.returncode == 0 and supervisor.is_file() and os.access(supervisor, os.X_OK),
       "optimized Rust supervisor builds from tracked source for direct acceptance")
+supervisor_source = (crate / "src" / "main.rs").read_text(encoding="utf-8")
+check("JOB_OBJECT_LIMIT_PROCESS_MEMORY | JOB_OBJECT_LIMIT_JOB_MEMORY" in supervisor_source
+      and "information.JobMemoryLimit = process_memory_limit" in supervisor_source,
+      "Windows containment caps both each process and the aggregate Job Object")
 prior = os.environ.get("NARWHAL_CONVERTER_SUPERVISOR")
 os.environ["NARWHAL_CONVERTER_SUPERVISOR"] = str(supervisor)
 try:
@@ -52,6 +57,59 @@ try:
         check(result.native and result.returncode == 0 and result.stdout == "hello"
               and "warning: note" in result.stderr,
               "native supervisor returns converter status and both streams")
+
+        memory_bytes = 128 * 1024 * 1024
+        memory_probe = work / "memory_probe.py"
+        memory_probe.write_text(
+            "import resource\n"
+            "import sys\n"
+            "expected = int(sys.argv[1])\n"
+            "soft, _ = resource.getrlimit(resource.RLIMIT_AS)\n"
+            "print(soft)\n"
+            "if soft != expected:\n"
+            "    raise SystemExit(9)\n"
+            "try:\n"
+            "    bytearray(expected)\n"
+            "except MemoryError:\n"
+            "    print('limited')\n"
+            "else:\n"
+            "    print('allocation unexpectedly succeeded')\n"
+            "    raise SystemExit(10)\n",
+            encoding="utf-8",
+        )
+        result = converter_process.run(
+            [sys.executable, str(memory_probe), str(memory_bytes)],
+            timeout=2, memory_mib=128,
+        )
+        check(result.native and result.returncode == 0
+              and result.stdout.splitlines() == [str(memory_bytes), "limited"],
+              "native forwarding applies RLIMIT_AS before converter execution")
+
+        invalid_memory = subprocess.run(
+            [str(supervisor), "--timeout-ms", "1000", "--memory-mib", "0",
+             "--", str(success)],
+            text=True, capture_output=True,
+        )
+        check(invalid_memory.returncode == 2
+              and "--memory-mib must be from 1 through" in invalid_memory.stderr,
+              "native supervisor rejects a zero memory limit")
+
+        invalid_memory_effect = work / "invalid-memory-ran"
+        invalid_memory_converter = script(
+            work / "invalid-memory.sh", f"touch '{invalid_memory_effect}'\n",
+        )
+        invalid_results = [
+            converter_process.run(
+                [str(invalid_memory_converter)], timeout=2, memory_mib=value,
+            )
+            for value in (
+                0, -1, 1024 * 1024 + 1, True, cast(int, cast(object, "128")),
+            )
+        ]
+        check(all(result.returncode == -1 and result.error and not result.native
+                  for result in invalid_results)
+              and not invalid_memory_effect.exists(),
+              "Python API rejects non-positive, oversized, and non-integer limits before launch")
 
         noisy = script(
             work / "noisy.sh",
@@ -116,6 +174,13 @@ try:
         check(not result.native and result.stdout.endswith("ok")
               and len(result.stdout.encode()) <= 4,
               "Python fallback bounds invalid UTF-8 output in linear space")
+        result = converter_process.run(
+            [sys.executable, str(memory_probe), str(memory_bytes)],
+            timeout=2, memory_mib=128,
+        )
+        check(not result.native and result.returncode == 0
+              and result.stdout.splitlines() == [str(memory_bytes), "limited"],
+              "Unix Python fallback applies RLIMIT_AS before converter execution")
         fallback_pidfile = work / "fallback.pid"
         fallback_hanging = script(
             work / "fallback-hanging.sh",
@@ -135,6 +200,27 @@ try:
             time.sleep(0.05)
         check(result.timed_out and len(fallback_gone) == len(fallback_ids),
               "Python fallback bounds timeout and reaps the complete process tree")
+
+        windows_effect = work / "windows-fallback-ran"
+        windows_converter = script(
+            work / "windows-fallback.sh", f"touch '{windows_effect}'\n",
+        )
+        actual_is_windows = converter_process._is_windows
+        actual_python_run = converter_process._python_run
+        fallback_calls = []
+        try:
+            converter_process._is_windows = lambda: True
+            converter_process._python_run = lambda *args, **kwargs: fallback_calls.append(args)
+            result = converter_process.run(
+                [str(windows_converter)], timeout=2, memory_mib=128,
+            )
+        finally:
+            converter_process._python_run = actual_python_run
+            converter_process._is_windows = actual_is_windows
+        check(result.returncode == -1 and result.error
+              and "native converter supervisor" in result.error
+              and not fallback_calls and not windows_effect.exists(),
+              "Windows memory request fails closed when the native supervisor is unavailable")
 
         malformed = script(work / "malformed-supervisor.sh", "printf 'not json'\n")
         side_effect = work / "runs"

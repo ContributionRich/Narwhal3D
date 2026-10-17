@@ -28,7 +28,7 @@ ROOT_FILES = (
 LAUNCH_FILES = (
     "launch/bootstrap.py", "launch/make_icon.py", "launch/open_arg.py",
     "launch/narwhal3d.desktop.in", "launch/narwhal3d-3dm.xml",
-    "launch/narwhal3d.png",
+    "launch/narwhal3d-project.xml", "launch/narwhal3d.png",
 )
 WELCOME_FILES = (
     "native/welcome/.gitignore", "native/welcome/Cargo.lock", "native/welcome/Cargo.toml",
@@ -52,6 +52,7 @@ SCRIPT_FILES = (
     "scripts/bootstrap_linux_runtime.py", "scripts/stage_fedora_inkscape.py",
     "scripts/collect_windows_build_info.ps1", "scripts/build_windows_preview.ps1",
     "scripts/build_brep_writer_source.sh", "scripts/verify_brep_writer.py",
+    "scripts/build_document_core.py", "scripts/verify_document_core.py",
 )
 TEST_FILES = (
     "spike/audit_representation.py", "spike/_roundtrip_reader.py",
@@ -82,6 +83,7 @@ TEST_FILES = (
     "spike/test_onbrep_public.py", "spike/test_open_arg.py",
     "spike/test_windows_collector.py", "spike/test_windows_release.py",
     "spike/test_release_policy.py", "spike/test_public_project.py", "spike/public_ui_report.py",
+    "spike/test_narwhal_document.py", "spike/test_document_core_artifacts.py",
 )
 NATIVE_FILES = (
     "native/cdr_core/.gitignore", "native/cdr_core/Cargo.lock",
@@ -93,6 +95,12 @@ NATIVE_FILES = (
     "native/cdr_multiversion/Cargo.toml",
     "native/cdr_multiversion/src/main.rs",
     "native/brep_writer/main.cpp", "native/brep_writer/README.md",
+    "native/document_core/.cargo/config.toml", "native/document_core/.gitignore",
+    "native/document_core/Cargo.lock", "native/document_core/Cargo.toml",
+    "native/document_core/rust-toolchain.toml", "native/document_core/README.md",
+    "native/document_core/src/container.rs", "native/document_core/src/lib.rs",
+    "native/document_core/src/main.rs", "native/document_core/src/sha256.rs",
+    "native/document_core/tests/document_core.rs",
 )
 RUNTIME_FILES = ("runtime/README.md", "runtime/manifest.json")
 PACKAGE_EXCLUDES = {"narwhal3d/kernel/brep_writer.cpp"}

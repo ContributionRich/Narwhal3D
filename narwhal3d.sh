@@ -39,7 +39,19 @@ APP_DIR="${HOME}/.local/share/applications"
 DESKTOP_FILE="${APP_DIR}/narwhal3d.desktop"
 
 MIME_XML="${ROOT}/launch/narwhal3d-3dm.xml"
+PROJECT_MIME_XML="${ROOT}/launch/narwhal3d-project.xml"
 MIME_DIR="${HOME}/.local/share/mime"
+
+
+register_project() {
+  command -v xdg-mime >/dev/null 2>&1 || return 0
+  if [[ -f "$PROJECT_MIME_XML" ]] && command -v update-mime-database >/dev/null 2>&1; then
+    mkdir -p "${MIME_DIR}/packages" && cp "$PROJECT_MIME_XML" "${MIME_DIR}/packages/" \
+      && update-mime-database "$MIME_DIR" >/dev/null 2>&1 || true
+  fi
+  xdg-mime default narwhal3d.desktop application/x-narwhal3d-project >/dev/null 2>&1 || true
+  echo "[narwhal3d] .narwhal projects open with Narwhal 3D"
+}
 
 
 register_3dm() {
@@ -76,6 +88,7 @@ install_desktop() {
   fi
   mkdir -p "$APP_DIR" || { echo "[narwhal3d] cannot create $APP_DIR" >&2; return 0; }
   sed "s|__ROOT__|${ROOT}|g" "$template" > "$DESKTOP_FILE"
+  register_project || true
   register_3dm || true
   if command -v desktop-file-validate >/dev/null 2>&1; then
     desktop-file-validate "$DESKTOP_FILE" || true

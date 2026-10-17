@@ -34,11 +34,13 @@ REQUIRED = {
     "app/runtime/windows-x86_64/bin/narwhal_cdr_core.dll",
     "app/runtime/windows-x86_64/bin/narwhal-converter-supervisor.exe",
     "app/runtime/windows-x86_64/bin/narwhal-cdr-multiversion.exe",
+    "app/runtime/windows-x86_64/bin/narwhal-document-core.exe",
 }
 SOURCE_ROOTS = ("narwhal3d", "launch", "licenses")
 SOURCE_FILES = ("LICENSE", "THIRD_PARTY_NOTICES", "CHANGELOG.md", "STATUS.md")
 SHA_RE = re.compile(r"[0-9a-f]{64}\Z")
 CDR_MULTIVERSION_PROTOCOL = "narwhal-cdr-multiversion 1 tracedraw 821ba154 read 16-18 write 17"
+DOCUMENT_CORE_PROTOCOL = "narwhal-document-core 1"
 
 
 class VerificationError(RuntimeError):
@@ -154,7 +156,7 @@ def verify_directory(root: Path, args: argparse.Namespace) -> None:
     native_components = manifest.get("native_components")
     if not isinstance(native_components, dict) or set(native_components) != {
         "narwhal_cdr_core.dll", "narwhal-converter-supervisor.exe",
-        "narwhal-cdr-multiversion.exe"
+        "narwhal-cdr-multiversion.exe", "narwhal-document-core.exe"
     }:
         raise VerificationError("Windows manifest lacks the exact native component set")
     for field in ("runtime_binary_sha256", "launcher_sha256", "launcher_source_sha256"):
@@ -172,7 +174,7 @@ def verify_directory(root: Path, args: argparse.Namespace) -> None:
         ("Narwhal 3D".encode("utf-16le"), "Narwhal3D.exe".encode("utf-16le")),
         "Narwhal launcher")
     for filename in ("narwhal_cdr_core.dll", "narwhal-converter-supervisor.exe",
-                     "narwhal-cdr-multiversion.exe"):
+                     "narwhal-cdr-multiversion.exe", "narwhal-document-core.exe"):
         path = root / "app/runtime/windows-x86_64/bin" / filename
         record = native_components[filename]
         data = path.read_bytes()
@@ -183,6 +185,21 @@ def verify_directory(root: Path, args: argparse.Namespace) -> None:
                 record.get("protocol") != CDR_MULTIVERSION_PROTOCOL
                 or CDR_MULTIVERSION_PROTOCOL.encode("ascii") not in data):
             raise VerificationError("Windows multi-version CDR helper has the wrong protocol")
+        if (filename == "narwhal-converter-supervisor.exe"
+                and record.get("memory_limit_probe_mib") != 64):
+            raise VerificationError(
+                "Windows converter supervisor lacks executed memory-limit evidence")
+        if filename == "narwhal-document-core.exe":
+            if (record.get("protocol") != DOCUMENT_CORE_PROTOCOL
+                    or DOCUMENT_CORE_PROTOCOL.encode("ascii") not in data):
+                raise VerificationError("Windows Narwhal document core has the wrong protocol")
+            try:
+                from verify_document_core import source_aggregate
+                expected_source = source_aggregate()
+            except Exception as exc:  # noqa: BLE001
+                raise VerificationError(f"cannot bind document-core source: {exc}") from exc
+            if record.get("source_aggregate_sha256") != expected_source:
+                raise VerificationError("Windows document core is not bound to current source")
     require_bytes(
         root / "runtime/blender.exe",
         (b"Narwhal 3D quit", b" - Narwhal 3D"),

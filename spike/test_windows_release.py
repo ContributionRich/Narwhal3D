@@ -31,6 +31,8 @@ launcher = (ROOT / "packaging/windows/narwhal3d_launcher.c").read_text(encoding=
 resource = (ROOT / "packaging/windows/narwhal3d_launcher.rc.in").read_text(encoding="utf-8")
 icon = (ROOT / "packaging/windows/narwhal3d.ico").read_bytes()
 multiversion_source = (ROOT / "native/cdr_multiversion/src/main.rs").read_text(encoding="utf-8")
+document_core_source = (ROOT / "native/document_core/src/lib.rs").read_text(encoding="utf-8")
+build_script = (ROOT / "scripts/build_windows_preview.ps1").read_text(encoding="utf-8")
 
 check("CreateProcessW" in launcher and "runtime\\\\blender.exe" in launcher
       and "app\\\\launch\\\\bootstrap.py" in launcher,
@@ -54,6 +56,18 @@ check(icon[:4] == b"\x00\x00\x01\x00" and len(icon) > 100_000,
       "Windows launcher icon is a substantive multi-resolution ICO")
 check(verifier.CDR_MULTIVERSION_PROTOCOL in multiversion_source,
       "Windows verifier pins the bundled multi-version CDR helper protocol")
+check(verifier.DOCUMENT_CORE_PROTOCOL in document_core_source,
+      "Windows verifier pins the bundled Narwhal document-core protocol")
+check("[Parameter(Mandatory=$true)]" in build_script
+      and "[ValidatePattern('^[0-9a-f]{40}$')]" in build_script
+      and "[string]$NarwhalRevision" in build_script
+      and '$NarwhalRevision = "' not in build_script,
+      "Windows build requires an explicit immutable public source revision")
+check("native\\converter_supervisor\\Cargo.toml" in build_script
+      and '"--memory-mib", "64"' in build_script
+      and "narwhal-converter-supervisor.exe" in build_script
+      and "run packaged native-document Save/Open round trip" in build_script,
+      "Windows build packages a memory-bounded supervisor and proves native Save/Open")
 
 with tempfile.TemporaryDirectory(prefix="narwhal_windows_verifier_test_") as temporary:
     root = Path(temporary)
@@ -65,8 +79,9 @@ with tempfile.TemporaryDirectory(prefix="narwhal_windows_verifier_test_") as tem
         "app/narwhal3d/cdr_reader.py", "app/narwhal3d/cdr_writer.py",
         "app/runtime/windows-x86_64/bin/narwhal_cdr_core.dll",
         "app/runtime/windows-x86_64/bin/narwhal-converter-supervisor.exe",
-        "app/runtime/windows-x86_64/bin/narwhal-cdr-multiversion.exe")),
-        "Windows release requires public CDR source and native components")
+        "app/runtime/windows-x86_64/bin/narwhal-cdr-multiversion.exe",
+        "app/runtime/windows-x86_64/bin/narwhal-document-core.exe")),
+        "Windows release requires public CDR and native document components")
     for bad in (
         "app/narwhal3d/kernel/bin/helper.exe",
         "runtime/blender.pdb", "app/launch/__pycache__/open_arg.pyc",

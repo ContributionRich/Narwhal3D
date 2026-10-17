@@ -6,6 +6,7 @@ All notable public changes will be recorded here. Narwhal 3D is an extremely ear
 
 ### Added
 
+- Add the built-in `.narwhal` project format: a dependency-free Rust-validated atomic container with the complete document payload and checksum-protected exact OCCT BReps for every analytic master. `.3dm` remains Import/Open/Export interchange.
 - Embed pinned, licensed TraceDraw Rust codec crates in a bundled, supervised Narwhal helper for CDR v16, v17, and v18 Import/Open and opt-in v17 Export/Print without any separately installed executable or service.
 
 ## 0.4.1 — 2026-10-16

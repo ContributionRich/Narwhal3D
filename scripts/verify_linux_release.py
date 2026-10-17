@@ -37,9 +37,10 @@ APP_ROOT_RELATIVE = Path("usr/lib/narwhal3d")
 RUNTIME_RELATIVE = Path("tools/blender-patched")
 NATIVE_COMPONENT_RELATIVE = Path("runtime/linux-x86_64/bin")
 CDR_MULTIVERSION_PROTOCOL = "narwhal-cdr-multiversion 1 tracedraw 821ba154 read 16-18 write 17"
+DOCUMENT_CORE_PROTOCOL = "narwhal-document-core 1"
 NATIVE_COMPONENTS = (
     "libnarwhal_cdr_core.so", "narwhal-converter-supervisor",
-    "narwhal-cdr-multiversion",
+    "narwhal-cdr-multiversion", "narwhal-document-core",
 )
 MANIFEST_RELATIVE = PurePosixPath("usr/lib/narwhal3d/packaging/release-manifest.json")
 LOCK_RELATIVE = APP_ROOT_RELATIVE / "packaging/linux-x86_64.lock.json"
@@ -96,6 +97,7 @@ REQUIRED_PATHS = {
     "usr/lib/narwhal3d/runtime/linux-x86_64/bin/libnarwhal_cdr_core.so",
     "usr/lib/narwhal3d/runtime/linux-x86_64/bin/narwhal-converter-supervisor",
     "usr/lib/narwhal3d/runtime/linux-x86_64/bin/narwhal-cdr-multiversion",
+    "usr/lib/narwhal3d/runtime/linux-x86_64/bin/narwhal-document-core",
 }
 
 
@@ -448,12 +450,30 @@ def verify_executables_and_imports(appdir: Path) -> None:
     cdr_library = native_dir / "libnarwhal_cdr_core.so"
     supervisor = native_dir / "narwhal-converter-supervisor"
     multiversion = native_dir / "narwhal-cdr-multiversion"
+    document_core = native_dir / "narwhal-document-core"
     for path, description in ((launcher, "launcher"), (blender, "Blender"),
                               (python, "bundled Python"),
                               (supervisor, "native converter supervisor"),
-                              (multiversion, "bundled multi-version CDR reader")):
+                              (multiversion, "bundled multi-version CDR reader"),
+                              (document_core, "bundled Narwhal document core")):
         if not path.is_file() or path.is_symlink() or not os.access(path, os.X_OK):
             raise VerificationError(f"{description} is missing, symlinked, or non-executable: {path}")
+
+    try:
+        supervised = subprocess.run(
+            [str(supervisor), "--timeout-ms", "5000", "--max-output", "4096",
+             "--memory-mib", "64", "--", "/bin/true"],
+            text=True, capture_output=True, timeout=15, check=True)
+        supervisor_packet = json.loads(supervised.stdout)
+    except (OSError, subprocess.SubprocessError, json.JSONDecodeError) as exc:
+        raise VerificationError(
+            f"packaged converter supervisor lacks enforced memory-limit support: {exc}") from exc
+    if (not isinstance(supervisor_packet, dict)
+            or supervisor_packet.get("returncode") != 0
+            or supervisor_packet.get("timed_out") is not False
+            or supervisor_packet.get("error") is not None):
+        raise VerificationError(
+            f"packaged converter supervisor memory probe failed: {supervisor_packet!r}")
 
     environment = os.environ.copy()
     environment["PYTHONDONTWRITEBYTECODE"] = "1"
@@ -493,6 +513,39 @@ def verify_executables_and_imports(appdir: Path) -> None:
         raise VerificationError(f"cannot execute packaged multi-version CDR reader: {exc}") from exc
     if completed.stdout.strip() != CDR_MULTIVERSION_PROTOCOL:
         raise VerificationError("packaged multi-version CDR reader has the wrong protocol")
+    try:
+        completed = subprocess.run(
+            [str(document_core), "--version"], text=True, capture_output=True,
+            timeout=30, check=True)
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise VerificationError(f"cannot execute packaged Narwhal document core: {exc}") from exc
+    if completed.stdout.strip() != DOCUMENT_CORE_PROTOCOL:
+        raise VerificationError("packaged Narwhal document core has the wrong protocol")
+    with tempfile.TemporaryDirectory(prefix="narwhal-document-core-release-") as temporary:
+        root = Path(temporary)
+        staging = root / "staging"
+        staging.mkdir()
+        (staging / "manifest.json").write_text("{}\n", encoding="utf-8")
+        (staging / "document.3dm").write_bytes(b"release-probe")
+        packed = root / "probe.narwhal"
+        unpacked = root / "unpacked"
+        inspect_text = ""
+        for arguments in (("pack", str(staging), str(packed)),
+                          ("inspect", str(packed)),
+                          ("unpack", str(packed), str(unpacked))):
+            try:
+                result = subprocess.run(
+                    [str(document_core), *arguments], text=True, capture_output=True,
+                    timeout=30, check=True)
+            except (OSError, subprocess.SubprocessError) as exc:
+                raise VerificationError(
+                    f"packaged Narwhal document core failed {arguments[0]}: {exc}") from exc
+            if arguments[0] == "inspect":
+                inspect_text = result.stdout
+        if ((unpacked / "manifest.json").read_text(encoding="utf-8") != "{}\n"
+                or (unpacked / "document.3dm").read_bytes() != b"release-probe"
+                or "document.3dm" not in inspect_text):
+            raise VerificationError("packaged Narwhal document core failed its round trip")
 
     probe = r'''
 import importlib.metadata
@@ -542,6 +595,10 @@ def verify_appdir(appdir: Path, args: argparse.Namespace) -> None:
     native_components = manifest.get("native_components")
     if not isinstance(native_components, dict) or native_components.get("required_glibc") is None:
         raise VerificationError("release manifest lacks native component provenance")
+    supervisor_record = native_components.get("narwhal-converter-supervisor")
+    if (not isinstance(supervisor_record, dict)
+            or supervisor_record.get("memory_limit_probe_mib") != 64):
+        raise VerificationError("release manifest lacks converter-supervisor memory-limit evidence")
     expected = expected_inventory(manifest)
     actual = actual_inventory(appdir)
     missing_required = REQUIRED_PATHS - set(actual)
@@ -656,7 +713,7 @@ def self_check() -> None:
             raise VerificationError(f"self-check still excludes public CDR source: {included}")
     if NATIVE_COMPONENTS != (
         "libnarwhal_cdr_core.so", "narwhal-converter-supervisor",
-        "narwhal-cdr-multiversion",
+        "narwhal-cdr-multiversion", "narwhal-document-core",
     ):
         raise VerificationError("self-check found an incomplete native component set")
     for excluded in (*expected_excluded_files, EXCLUDED_APP_TREE / "helper"):

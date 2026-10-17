@@ -1,9 +1,10 @@
 """Headless-Blender tests for Save, SaveAs, New, Open, and Exit workflows.
 
 A scripted file-dialog backend records each interaction so tests can assert both the
-resulting .3dm files and whether a dialog or command-line prompt was requested.
+resulting native documents and whether a dialog or command-line prompt was requested.
 """
 import os
+import runpy
 import shutil
 import sys
 import tempfile
@@ -14,7 +15,7 @@ sys.path.insert(0, ROOT)
 
 import rhino3dm as r3  # noqa: E402
 
-from narwhal3d import filedialog  # noqa: E402
+from narwhal3d import filedialog, narwhal_document  # noqa: E402
 from narwhal3d.state import app_state  # noqa: E402
 from narwhal3d.model import NarwhalModel  # noqa: E402
 
@@ -76,6 +77,11 @@ def last():
 
 
 def objects_in(path):
+    if path.lower().endswith(narwhal_document.EXTENSION):
+        try:
+            return len(narwhal_document.load_model(path).file.Objects)
+        except Exception:
+            return None
     f = r3.File3dm.Read(path)
     return None if f is None else len(f.Objects)
 
@@ -103,11 +109,12 @@ def run():
     fake = Fake(save=[(OK, p1)])
     filedialog.set_backend(fake)
     app_state.feed_line("Save")
-    want = p1 + ".3dm"
+    want = p1 + ".narwhal"
     check(os.path.exists(want) and objects_in(want) == 1,
-          "Save writes the model, adding .3dm as the reference CAD application does", f"{last()!r}")
-    check(app_state.doc_path == want and not app_state.doc_modified(),
-          "the model is now that file, and unmodified", f"{app_state.doc_path}")
+          "Save writes the model, adding Narwhal's native extension", f"{last()!r}")
+    check(app_state.doc_path == want and app_state.model.path == want
+          and not app_state.doc_modified(),
+          "the model and resource base now use the native file path", f"{app_state.doc_path}")
     check(not [f for f in os.listdir(TMP) if f.endswith(".tmp")],
           "no temporary file is left behind", f"{os.listdir(TMP)}")
 
@@ -130,7 +137,7 @@ def run():
           "unmodified again")
 
     # -- 4. SaveAs: always asks; the model BECOMES the new file -----------------
-    p2 = os.path.join(TMP, "copy.3dm")
+    p2 = os.path.join(TMP, "copy.narwhal")
     fake = Fake(save=[(OK, p2)])
     filedialog.set_backend(fake)
     app_state.feed_line("SaveAs")
@@ -140,6 +147,15 @@ def run():
           f"{kinds(fake)} {app_state.doc_path}")
     check(starts and starts[0] == want,
           "the Save As dialog opens on the current file", f"{starts}")
+
+    interchange = os.path.join(TMP, "copy.3dm")
+    fake = Fake(save=[(OK, interchange)])
+    filedialog.set_backend(fake)
+    app_state.feed_line("SaveAs")
+    check(objects_in(interchange) == 2 and app_state.doc_path == p2
+          and "unchanged" in last(),
+          "Save As .3dm is an interchange export and does not replace the native project",
+          f"path={app_state.doc_path} {last()!r}")
 
     # -- 5. a format nobody writes: refused BY NAME, nothing written -----------
     # Use a format that is still unsupported; STEP is handled by Export.
@@ -167,7 +183,7 @@ def run():
           f"{last()!r}")
 
     # -- 6. a folder that does not exist: refused, the document keeps its file ---
-    fake = Fake(save=[(OK, os.path.join(TMP, "nope", "x.3dm"))])
+    fake = Fake(save=[(OK, os.path.join(TMP, "nope", "x.narwhal"))])
     filedialog.set_backend(fake)
     app_state.feed_line("SaveAs")
     check("does not exist" in last() and app_state.doc_path == p2,
@@ -181,7 +197,7 @@ def run():
         "ask": lambda *a: (UNAV, None)})())
     app_state.feed_line("Save")
     prompting = app_state.active_command is not None
-    p4 = os.path.join(TMP, "typed.3dm")
+    p4 = os.path.join(TMP, "typed.narwhal")
     app_state.feed_line(p4)
     check(prompting and objects_in(p4) == 1 and app_state.doc_path == p4,
           "with no dialog available Save asks for the name on the command line",
@@ -201,7 +217,7 @@ def run():
     asked = [c[1] for c in fake.calls if isinstance(c, tuple) and c[0] == "ask-text"]
     titles = [c[1] for c in fake.calls if isinstance(c, tuple) and c[0] == "ask-title"]
     check(len(app_state.model.file.Objects) == 2 and "cancelled" in last()
-          and asked and "typed.3dm" in asked[0] and titles == ["Narwhal 3D"],
+          and asked and "typed.narwhal" in asked[0] and titles == ["Narwhal 3D"],
           "New asks under the Narwhal 3D title; Cancel keeps the model",
           f"titles={titles} asked={asked} {last()!r}")
 
@@ -217,7 +233,7 @@ def run():
 
     # -- 10. New, answer Yes on an Untitled model: asks for a name, saves, new ---
     draw_line()
-    p5 = os.path.join(TMP, "before_new.3dm")
+    p5 = os.path.join(TMP, "before_new.narwhal")
     fake = Fake(ask=[(OK, "yes")], save=[(OK, p5)])
     filedialog.set_backend(fake)
     app_state.feed_line("New")
@@ -272,7 +288,7 @@ def run():
     fresh()
     draw_line()
     app_state.feed_line("Save")
-    p6 = os.path.join(TMP, "headless.3dm")
+    p6 = os.path.join(TMP, "headless.narwhal")
     app_state.feed_line(p6)
     check(objects_in(p6) == 1, "and Save then takes the typed name", f"{last()!r}")
 
@@ -319,7 +335,7 @@ def run():
         check(kinds(fake) == ["ask"] and not quits and app_state.doc_modified(),
               "Exit with unsaved changes ASKS; Cancel keeps the program open",
               f"{kinds(fake)} quits={quits}")
-        p7 = os.path.join(TMP, "exit_yes.3dm")
+        p7 = os.path.join(TMP, "exit_yes.narwhal")
         fake = Fake(ask=[(OK, "yes")], save=[(OK, p7)])
         filedialog.set_backend(fake)
         app_state.feed_line("Exit")
@@ -350,11 +366,18 @@ def run():
         app_state.mark_saved()
         check(file_commands.write_recovery() is None,
               "a model with no unsaved changes writes no recovery copy")
+        fresh()
+        app_state.ctx.note_change("Layer settings")
+        app_state.model.add_layer("Unsaved Settings", (1, 2, 3))
+        empty_recovery = file_commands.write_recovery()
+        check(empty_recovery is not None and objects_in(empty_recovery) == 0,
+              "recovery preserves metadata-only changes in a zero-object document",
+              repr(empty_recovery))
     finally:
         file_commands.quitter = None
         os.environ.pop("NARWHAL3D_DATA_DIR", None)
 
-    # -- 15. Open of a non-.3dm file -----------------------------------------
+    # -- 15. Open of an interchange file -------------------------------------
     os.environ["NARWHAL3D_DATA_DIR"] = os.path.join(TMP, "data2")
     try:
         from narwhal3d import dxf_writer
@@ -370,13 +393,13 @@ def run():
               and app_state.doc_path is None and not app_state.doc_modified(),
               "Open of a .dxf opens it as a NEW Untitled model, exact circle",
               f"{len(objs)} {last()!r}")
-        p8 = os.path.join(TMP, "plate.3dm")
+        p8 = os.path.join(TMP, "plate.narwhal")
         fake = Fake(save=[(OK, p8)])
         filedialog.set_backend(fake)
         app_state.feed_line("Save")
         starts = [c[1] for c in fake.calls if isinstance(c, tuple) and c[0] == "save-start"]
         check(starts == [p8] and objects_in(p8) == 1,
-              "its first Save suggests the file's own name as .3dm (the reference CAD application's rule)",
+              "its first Save suggests the interchange name with Narwhal's native extension",
               f"{starts}")
         from narwhal3d import file_commands as _fc
         rec = _fc.recent_items()
@@ -388,7 +411,18 @@ def run():
     finally:
         os.environ.pop("NARWHAL3D_DATA_DIR", None)
 
-    # -- 13. the menus see the commands ----------------------------------------
+    # -- 16. the native container's exact-master suite is part of this registered gate
+    native_suite_error = None
+    try:
+        runpy.run_path(os.path.join(ROOT, "spike", "test_narwhal_document.py"),
+                       run_name="narwhal_document_embedded_test")
+    except Exception as exc:  # noqa: BLE001
+        native_suite_error = traceback.format_exc()
+    check(native_suite_error is None,
+          "the registered file workflow includes exact native-container round trips",
+          native_suite_error or "")
+
+    # -- 17. the menus see the commands ----------------------------------------
     from narwhal3d import commands
     for key in ("save", "saveas", "new", "open", "exit"):
         check(commands.COMMANDS.get(key).__class__.__module__.endswith("file_commands"),

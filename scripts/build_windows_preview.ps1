@@ -1,10 +1,13 @@
 ﻿# Build a native Narwhal 3D Windows x86_64 preview and place return artifacts on Desktop.
 # Run from ordinary 64-bit PowerShell after the collector reports the toolchain ready:
 # To skip an already successful compilation, use -ResumePackaging.
-#   powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\build_windows_preview.ps1
+#   powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\build_windows_preview.ps1 `
+#     -NarwhalRevision <40-character-public-commit>
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory=$true)][string]$SelectionCoreArtifacts,
+    [Parameter(Mandatory=$true)]
+    [ValidatePattern('^[0-9a-f]{40}$')]
+    [string]$NarwhalRevision,
     [string]$Workspace = "C:\Narwhal3D-build",
     [ValidateRange(1, 8)][int]$Jobs = 4,
     [switch]$ResumePackaging
@@ -13,7 +16,6 @@ param(
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = "Stop"
 
-$NarwhalRevision = "874586bdbcf5cc79ffef7b2ebe33ca69802533f3"
 $BlenderRevision = "d13f752e3b9c4f8c261cda552b1021f8bcc0382c"
 $NarwhalRepository = "https://github.com/ContributionRich/Narwhal3D.git"
 $BlenderRepository = "https://projects.blender.org/blender/blender.git"
@@ -187,8 +189,6 @@ try {
 Log "Narwhal 3D Windows native engineering build"
 Log ("Workspace: " + $Workspace)
 Log ("Parallel jobs: " + $Jobs)
-$SelectionCoreArtifacts = [IO.Path]::GetFullPath($SelectionCoreArtifacts)
-Log ("Selection core artifacts: " + $SelectionCoreArtifacts)
 Log ("Git: " + $Git)
 Log ("Python: " + $Python)
 Log ("CMake: " + $CMake)
@@ -388,50 +388,32 @@ foreach ($File in @("LICENSE", "THIRD_PARTY_NOTICES", "CHANGELOG.md", "STATUS.md
     Copy-Item -LiteralPath (Join-Path $NarwhalSource $File) -Destination $ApplicationDirectory
 }
 
-$SelectionManifestPath = Join-Path $SelectionCoreArtifacts "selection-core-manifest.json"
-if (-not (Test-Path -LiteralPath $SelectionManifestPath -PathType Leaf)) {
-    throw "Selection-core manifest is missing: $SelectionManifestPath"
+$Rustup = (Get-Command rustup.exe -ErrorAction Stop).Source
+$Cargo = (Get-Command cargo.exe -ErrorAction Stop).Source
+Run-Native $Rustup @("target", "add", "x86_64-pc-windows-msvc", "--toolchain", "1.95.0") "install pinned native-component target"
+$DocumentManifest = Join-Path $NarwhalSource "native\document_core\Cargo.toml"
+Run-Native $Cargo @("+1.95.0", "build", "--release", "--locked", "--manifest-path", $DocumentManifest, "--target", "x86_64-pc-windows-msvc") "build native Narwhal document core" $NarwhalSource
+$SupervisorManifest = Join-Path $NarwhalSource "native\converter_supervisor\Cargo.toml"
+Run-Native $Cargo @("+1.95.0", "build", "--release", "--locked", "--manifest-path", $SupervisorManifest, "--target", "x86_64-pc-windows-msvc") "build bounded converter supervisor" $NarwhalSource
+$DocumentCoreSource = Join-Path $NarwhalSource "native\document_core\target\x86_64-pc-windows-msvc\release\narwhal-document-core.exe"
+$SupervisorSource = Join-Path $NarwhalSource "native\converter_supervisor\target\x86_64-pc-windows-msvc\release\narwhal-converter-supervisor.exe"
+$NativeComponentDirectory = Join-Path $ApplicationDirectory "runtime\windows-x86_64\bin"
+New-Item -ItemType Directory -Path $NativeComponentDirectory -Force | Out-Null
+$DocumentCoreTarget = Join-Path $NativeComponentDirectory "narwhal-document-core.exe"
+$SupervisorTarget = Join-Path $NativeComponentDirectory "narwhal-converter-supervisor.exe"
+Copy-Item -LiteralPath $DocumentCoreSource -Destination $DocumentCoreTarget
+Copy-Item -LiteralPath $SupervisorSource -Destination $SupervisorTarget
+$DocumentVersion = @(Capture-Native $DocumentCoreTarget @("--version") "verify native document-core protocol")
+if (($DocumentVersion -join "`n").Trim() -ne "narwhal-document-core 1") {
+    throw "Native document core has the wrong protocol"
 }
-$SelectionManifest = Get-Content -LiteralPath $SelectionManifestPath -Raw | ConvertFrom-Json
-if ($SelectionManifest.schema -ne 1 -or $SelectionManifest.component -ne "narwhal-selection-core" -or
-    $SelectionManifest.rust_toolchain -ne "1.95.0" -or $SelectionManifest.abi -ne 1) {
-    throw "Selection-core manifest identity is invalid"
+$SupervisorText = @(Capture-Native $SupervisorTarget @(
+    "--timeout-ms", "5000", "--max-output", "4096", "--memory-mib", "64",
+    "--", $Cmd, "/d", "/c", "exit", "0") "verify converter supervisor memory containment")
+$SupervisorReport = (($SupervisorText -join "`n") | ConvertFrom-Json)
+if ($SupervisorReport.returncode -ne 0 -or $SupervisorReport.timed_out -ne $false -or $null -ne $SupervisorReport.error) {
+    throw "Native converter supervisor memory containment probe failed"
 }
-foreach ($SourceRecord in @($SelectionManifest.source_files)) {
-    $Relative = [string]$SourceRecord.path
-    if ([IO.Path]::IsPathRooted($Relative) -or $Relative.Contains("..") -or $Relative.Contains("\")) {
-        throw "Unsafe selection-core source path: $Relative"
-    }
-    $SourcePath = Join-Path (Join-Path $NarwhalSource "native\selection_core") $Relative
-    if (-not (Test-Path -LiteralPath $SourcePath -PathType Leaf)) {
-        throw "Selection-core source input is missing: $Relative"
-    }
-    $SourceHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $SourcePath).Hash.ToLowerInvariant()
-    if ($SourceHash -ne [string]$SourceRecord.sha256) {
-        throw "Selection-core source hash differs: $Relative"
-    }
-}
-$WindowsSelectionRecords = @($SelectionManifest.artifacts | Where-Object { $_.platform -eq "windows-x86_64" })
-if ($WindowsSelectionRecords.Count -ne 1) { throw "Selection-core manifest lacks one Windows x86-64 artifact" }
-$WindowsSelectionRecord = $WindowsSelectionRecords[0]
-if ($WindowsSelectionRecord.target -ne "x86_64-pc-windows-gnu" -or
-    $WindowsSelectionRecord.path -ne "windows-x86_64/narwhal_selection_core.dll" -or
-    $WindowsSelectionRecord.abi -ne 1 -or $WindowsSelectionRecord.coff_timestamp -ne 0) {
-    throw "Selection-core Windows artifact metadata is invalid"
-}
-$SelectionDllSource = Join-Path $SelectionCoreArtifacts "windows-x86_64\narwhal_selection_core.dll"
-if (-not (Test-Path -LiteralPath $SelectionDllSource -PathType Leaf)) {
-    throw "Selection-core Windows DLL is missing: $SelectionDllSource"
-}
-$SelectionDllHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $SelectionDllSource).Hash.ToLowerInvariant()
-if ($SelectionDllHash -ne [string]$WindowsSelectionRecord.sha256 -or
-    (Get-Item -LiteralPath $SelectionDllSource).Length -ne [int64]$WindowsSelectionRecord.size) {
-    throw "Selection-core Windows DLL size/hash differs from its manifest"
-}
-$SelectionNativeDirectory = Join-Path $ApplicationDirectory "narwhal3d\native"
-New-Item -ItemType Directory -Path $SelectionNativeDirectory -Force | Out-Null
-$SelectionDll = Join-Path $SelectionNativeDirectory "narwhal_selection_core.dll"
-Copy-Item -LiteralPath $SelectionDllSource -Destination $SelectionDll
 
 $RuntimePython = @(Get-ChildItem -LiteralPath $RuntimeDirectory -Filter "python.exe" -File -Recurse |
     Where-Object { $_.FullName -match "\\python\\bin\\python\.exe$" } |
@@ -446,6 +428,18 @@ Run-Native $RuntimePythonPath @("-m", "ensurepip", "--upgrade") "enable pip in b
 $PipArguments = @("-m", "pip", "install", "--no-index", "--no-deps", "--force-reinstall") + $WheelPaths
 Run-Native $RuntimePythonPath $PipArguments "install locked geometry wheels"
 
+$PackagedTestDirectory = Join-Path $ApplicationDirectory "spike"
+New-Item -ItemType Directory -Path $PackagedTestDirectory -Force | Out-Null
+$PackagedDocumentTest = Join-Path $PackagedTestDirectory "test_narwhal_document.py"
+Copy-Item -LiteralPath (Join-Path $NarwhalSource "spike\test_narwhal_document.py") -Destination $PackagedDocumentTest
+try {
+    Run-Native (Join-Path $RuntimeDirectory "blender.exe") @(
+        "-b", "--factory-startup", "--python-exit-code", "1", "--python",
+        $PackagedDocumentTest) "run packaged native-document Save/Open round trip"
+} finally {
+    Remove-Item -LiteralPath $PackagedTestDirectory -Recurse -Force -ErrorAction SilentlyContinue
+}
+
 $Launcher = Join-Path $PackageDirectory "Narwhal3D.cmd"
 @'
 @echo off
@@ -457,7 +451,6 @@ set "ROOT=%~dp0"
 foreach ($RequiredPath in @(
     (Join-Path $RuntimeDirectory "blender.exe"), $RuntimePythonPath,
     (Join-Path $ApplicationDirectory "narwhal3d\__init__.py"),
-    (Join-Path $ApplicationDirectory "narwhal3d\native\narwhal_selection_core.dll"),
     (Join-Path $ApplicationDirectory "launch\bootstrap.py"), $Launcher)) {
     if (-not (Test-Path -LiteralPath $RequiredPath -PathType Leaf)) {
         throw "Required packaged path is missing: $RequiredPath"
@@ -482,15 +475,6 @@ if (($DependencyResult.python -join ".") -ne "3.13" -or
 Run-Native (Join-Path $RuntimeDirectory "blender.exe") @(
     "-b", "--factory-startup", "--python-exit-code", "1", "--python",
     (Join-Path $ApplicationDirectory "launch\bootstrap.py")) "run packaged headless bootstrap"
-$PriorSelectionCore = [Environment]::GetEnvironmentVariable("NARWHAL_SELECTION_CORE", "Process")
-try {
-    [Environment]::SetEnvironmentVariable("NARWHAL_SELECTION_CORE", $SelectionDll, "Process")
-    Run-Native $RuntimePythonPath @(
-        "-I", (Join-Path $NarwhalSource "spike\test_rust_selection_core.py")) `
-        "run packaged Windows selection-core ABI acceptance"
-} finally {
-    [Environment]::SetEnvironmentVariable("NARWHAL_SELECTION_CORE", $PriorSelectionCore, "Process")
-}
 # The upstream branding smoke test uses os.access(..., os.X_OK) to check
 # POSIX executable mode on a .desktop template. Windows does not implement
 # POSIX executable permission bits, so this check is not meaningful here.
@@ -531,14 +515,11 @@ $Result = [ordered]@{
     blender_revision = $BlenderRevision
     parallel_jobs = $Jobs
     blender_exe_sha256 = $BinaryHash
+    document_core_sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $DocumentCoreTarget).Hash.ToLowerInvariant()
+    converter_supervisor_sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $SupervisorTarget).Hash.ToLowerInvariant()
+    converter_supervisor_memory_limit_probe_mib = 64
+    packaged_native_document_round_trip = $true
     patch_inputs = $PatchInputs
-    selection_core = [ordered]@{
-        source_aggregate_sha256 = [string]$SelectionManifest.source_aggregate_sha256
-        rust_toolchain = [string]$SelectionManifest.rust_toolchain
-        abi = [int]$SelectionManifest.abi
-        artifact = $WindowsSelectionRecord
-        windows_packaged_abi_acceptance = $true
-    }
     package_directory = $PackageName
     physical_gpu_validation_complete = $false
     code_signed = $false
@@ -553,8 +534,9 @@ Run-Native $Tar @("-a", "-cf", $TemporaryPackageZip, "-C", $ReturnDirectory, $Pa
 $ArchiveEntries = @(Capture-Native $Tar @("-tf", $TemporaryPackageZip) "verify engineering package archive")
 foreach ($RequiredEntry in @(
     "$PackageName/runtime/blender.exe", "$PackageName/app/narwhal3d/__init__.py",
-    "$PackageName/app/narwhal3d/native/narwhal_selection_core.dll",
-    "$PackageName/app/launch/bootstrap.py", "$PackageName/Narwhal3D.cmd")) {
+    "$PackageName/app/launch/bootstrap.py", "$PackageName/app/runtime/windows-x86_64/bin/narwhal-document-core.exe",
+    "$PackageName/app/runtime/windows-x86_64/bin/narwhal-converter-supervisor.exe",
+    "$PackageName/Narwhal3D.cmd")) {
     if ($RequiredEntry -notin $ArchiveEntries) { throw "Archive is missing $RequiredEntry" }
 }
 if (Test-Path -LiteralPath $PackageZip) { Remove-Item -LiteralPath $PackageZip -Force }

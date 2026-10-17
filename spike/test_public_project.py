@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 import re
 import struct
+import subprocess
 import sys
 import tomllib
 
@@ -118,6 +119,14 @@ check({"native/brep_writer/main.cpp", "native/brep_writer/README.md",
       and not any(path.startswith("artifacts/brep-writer/") for path in public)
       and "narwhal3d/kernel/brep_writer.cpp" not in public,
       "the public allowlist includes bounded BRep helper source but no linked binary")
+check({"native/document_core/Cargo.toml", "native/document_core/README.md",
+       "native/document_core/src/main.rs", "native/document_core/src/container.rs",
+       "native/document_core/src/sha256.rs", "native/document_core/tests/document_core.rs",
+       "narwhal3d/native_document.py", "narwhal3d/narwhal_document.py",
+       "narwhal3d/document_worker.py", "scripts/build_document_core.py", "scripts/verify_document_core.py",
+       "spike/test_narwhal_document.py", "spike/test_document_core_artifacts.py"} <= public
+      and not any(path.startswith("native/document_core/target/") for path in public),
+      "the public allowlist includes native document source and exact round-trip tests")
 check({"native/cdr_core/Cargo.toml", "native/cdr_core/src/lib.rs",
        "native/cdr_core/src/reader.rs", "native/converter_supervisor/Cargo.toml",
        "native/converter_supervisor/src/main.rs", "narwhal3d/cdr_reader.py",
@@ -182,6 +191,12 @@ for relative in sorted(public):
     if legacy.search(text):
         hits.append(relative)
 check(not hits, "legacy target naming is confined to COMPATIBILITY.md", hits[:10])
+artifact_suite = subprocess.run(
+    [sys.executable, str(ROOT / "spike/test_document_core_artifacts.py")],
+    cwd=ROOT, text=True, capture_output=True, timeout=300)
+check(artifact_suite.returncode == 0,
+      "document-core artifact provenance and functionality suite passes",
+      (artifact_suite.stdout + artifact_suite.stderr)[-2000:])
 
 print(f"\n{checks - len(failures)}/{checks} public-project checks passed")
 if failures:

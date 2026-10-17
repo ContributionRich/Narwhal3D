@@ -17,7 +17,8 @@ from . import commands
 from . import filedialog
 
 TEXT = commands.TEXT
-EXT = ".3dm"
+EXT = ".narwhal"
+INTERCHANGE_EXT = ".3dm"
 
 
 def _app():
@@ -27,16 +28,16 @@ def _app():
 
 
 def _normalise(path):
-    """A typed/picked path -> an absolute .3dm path, or ``(None, reason)``."""
+    """A typed/picked path -> an absolute native document path, or a refusal."""
     p = os.path.abspath(os.path.expanduser((path or "").strip().strip('"')))
     if not (path or "").strip():
         return None, "no file name given"
     root, ext = os.path.splitext(p)
     if not ext:
-        p += EXT                     # the reference CAD application adds the extension for you
+        p += EXT                     # OURS: Save defaults to Narwhal's exact project format
     elif ext.lower() != EXT:
         return None, (f"{os.path.basename(p)!r}: saving as {ext} is not "
-                      f"implemented yet -- .3dm, or export to .step .ai .pdf .svg")
+                      f"implemented yet -- use {EXT}, or Export to .3dm .step .ai .pdf .svg")
     return p, None
 
 
@@ -45,7 +46,7 @@ def _export_route(path):
     from . import export_commands
 
     ext = os.path.splitext((path or "").strip().strip('"'))[1].lower()
-    return ext if ext in export_commands.FORMATS and ext != EXT else None
+    return ext if ext in export_commands.FORMATS else None
 
 
 def write_document(path):
@@ -70,19 +71,14 @@ def write_document(path):
     folder = os.path.dirname(target)
     if not os.path.isdir(folder):
         return False, f"the folder {folder!r} does not exist -- nothing was saved"
-    tmp = f"{target}.saving-{os.getpid()}.tmp"
     try:
-        ok = app.model.save(tmp)
-        if not ok or not os.path.exists(tmp) or os.path.getsize(tmp) == 0:
-            raise OSError("the 3dm writer reported failure")
-        os.replace(tmp, target)
+        from . import narwhal_document
+        ok = narwhal_document.save_model(app.model, target)
+        if not ok or not os.path.exists(target) or os.path.getsize(target) == 0:
+            raise OSError("the native document writer reported failure")
     except Exception as e:  # noqa: BLE001
-        try:
-            if os.path.exists(tmp):
-                os.remove(tmp)
-        except OSError:
-            pass
         return False, f"could not save {target}: {e}"
+    app.model.path = target
     app.mark_saved(target)
     app.suggested_name = None
     recent_add(target)
@@ -130,7 +126,7 @@ class _FileCommand(commands.Command):
     def _ask_save_path(self, title):
         app = _app()
         start = (app.doc_path or getattr(app, "suggested_name", None)
-                 or os.path.join(filedialog.start_dir(), "Untitled.3dm"))
+                 or os.path.join(filedialog.start_dir(), "Untitled" + EXT))
         return filedialog.ask_save_path(title, start)
 
     def _settle_unsaved(self, verb):
@@ -220,7 +216,7 @@ class NewCmd(_FileCommand):
 
 class OpenCmd(_FileCommand):
     name = "Open"
-    description = "Open a .3dm file (replaces the current model)."
+    description = "Open a native .narwhal project or import an interchange file as a new model."
     steps = [("File name to open:", TEXT)]
 
     def begin(self, ctx):
@@ -231,8 +227,9 @@ class OpenCmd(_FileCommand):
         from . import import_commands
 
         filt = (("Supported files", " ".join(
-                    ["*.3dm"] + [f"*{e}" for e in import_commands.FORMATS])),
-                ("the reference CAD application 3D Models", "*.3dm"))
+                    ["*" + EXT] + [f"*{e}" for e in import_commands.FORMATS])),
+                ("Narwhal 3D Projects", "*" + EXT),
+                ("3DM Interchange", "*.3dm"))
         status, path = filedialog.ask_open_path(
             self.name, filedialog.start_dir(app.doc_path), filt)
         if status == filedialog.OK:
@@ -249,8 +246,6 @@ class OpenCmd(_FileCommand):
         return self._open(self.args[0])
 
     def _open(self, path):
-        from .state import NarwhalModel
-
         p = os.path.abspath(os.path.expanduser((path or "").strip().strip('"')))
         root, ext = os.path.splitext(p)
         if not ext:
@@ -258,7 +253,7 @@ class OpenCmd(_FileCommand):
             ext = EXT
         app = _app()
         if ext.lower() != EXT:
-            # A STEP / DXF / SVG / OBJ / STL file opens as a NEW Untitled model
+            # An interchange file opens as a NEW Untitled model
             # (insert.htm#Open: "When the reference CAD application opens a non-3dm file ... When the model is
             # saved for the first time, this model name is entered as the file name").
             # The format-specific reader performs the import.
@@ -280,11 +275,11 @@ class OpenCmd(_FileCommand):
             recent_add(p)
             return msg, True
         try:
-            model = NarwhalModel.load(p)
-        except FileNotFoundError as e:
+            from . import narwhal_document
+            model = narwhal_document.load_model(p)
+            narwhal_document.commit_model(app, model, p)
+        except (FileNotFoundError, narwhal_document.NarwhalDocumentError) as e:
             return f"Could not open {p}: {e}", True
-        app.set_model(model)
-        app.mark_saved(p)
         drawn = _rebuild_display()
         recent_add(p)
         return f"Opened {p} ({model.object_count()} objects, {drawn} drawn)", True
@@ -350,6 +345,34 @@ def _recovery_dirs():
     return [recovery_dir()]
 
 
+def _native_recovery_candidates(folder):
+    """Native recovery files as ``(path, mtime)`` rows, newest sorting left to callers."""
+    try:
+        names = os.listdir(folder)
+    except OSError:
+        return []
+    found = []
+    for name in names:
+        if not name.lower().endswith(EXT):
+            continue
+        path = os.path.join(folder, name)
+        try:
+            if os.path.isfile(path):
+                found.append((path, os.path.getmtime(path)))
+        except OSError:
+            continue
+    return found
+
+
+def _prune_native_recovery(folder, keep=10):
+    rows = sorted(_native_recovery_candidates(folder), key=lambda row: row[1], reverse=True)
+    for path, _mtime in rows[max(0, int(keep)):]:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+
+
 def write_recovery():
     """Write the model to a recovery copy IF it has unsaved changes. Returns the path,
     or None (nothing to protect, or the write failed -- never raises at exit)."""
@@ -357,16 +380,16 @@ def write_recovery():
 
     app = _app()
     try:
-        if not app.doc_modified() or not len(app.model.file.Objects):
+        if not app.doc_modified():
             return None
         folder = recovery_dir()
         os.makedirs(folder, exist_ok=True)
-        path = autosave.autosave_path(folder, app.doc_path)
-        tmp = f"{path}.saving-{os.getpid()}.tmp"
-        if not app.model.save(tmp):
+        path = os.path.splitext(autosave.autosave_path(folder, app.doc_path))[0] + EXT
+        from . import narwhal_document
+        if not narwhal_document.save_model(app.model, path):
             return None
-        os.replace(tmp, path)
-        autosave.prune(folder, 10)          # OURS: keep the newest ten
+        autosave.prune(folder, 10)          # retain legacy .3dm recovery compatibility
+        _prune_native_recovery(folder, 10)  # OURS: keep the newest ten native projects
         return path
     except Exception:  # noqa: BLE001
         return None
@@ -380,6 +403,7 @@ def recovery_notice():
     for folder in _recovery_dirs():
         try:
             found.extend(autosave.recovery_candidates(folder))
+            found.extend(_native_recovery_candidates(folder))
         except Exception:  # noqa: BLE001
             continue
     if not found:

@@ -6,11 +6,14 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 const MAX_CAPTURE_LIMIT: usize = 1024 * 1024;
+const MIB: u64 = 1024 * 1024;
+const MAX_MEMORY_MIB: u64 = 1024 * 1024;
 
 #[derive(Debug)]
 struct Config {
     timeout: Duration,
     max_output: usize,
+    memory_mib: Option<u64>,
     environment: Vec<(String, String)>,
     program: String,
     arguments: Vec<String>,
@@ -25,10 +28,23 @@ struct Report {
     error: Option<String>,
 }
 
-fn parse_args() -> Result<Config, String> {
-    let mut args = std::env::args().skip(1);
+fn parse_memory_mib(value: &str) -> Result<u64, String> {
+    let memory_mib = value
+        .parse::<u64>()
+        .map_err(|_| "--memory-mib must be an integer")?;
+    if memory_mib == 0 || memory_mib > MAX_MEMORY_MIB {
+        return Err(format!(
+            "--memory-mib must be from 1 through {MAX_MEMORY_MIB}"
+        ));
+    }
+    Ok(memory_mib)
+}
+
+fn parse_args_from(arguments: impl IntoIterator<Item = String>) -> Result<Config, String> {
+    let mut args = arguments.into_iter();
     let mut timeout_ms = None;
     let mut max_output = 8192usize;
+    let mut memory_mib = None;
     let mut environment = Vec::new();
     let mut command = Vec::new();
     while let Some(arg) = args.next() {
@@ -47,6 +63,11 @@ fn parse_args() -> Result<Config, String> {
                     .ok_or("--max-output needs a value")?
                     .parse::<usize>()
                     .map_err(|_| "--max-output must be an integer")?;
+            }
+            "--memory-mib" => {
+                memory_mib = Some(parse_memory_mib(
+                    &args.next().ok_or("--memory-mib needs a value")?,
+                )?);
             }
             "--env" => {
                 let item = args.next().ok_or("--env needs KEY=VALUE")?;
@@ -79,10 +100,19 @@ fn parse_args() -> Result<Config, String> {
     Ok(Config {
         timeout: Duration::from_millis(timeout_ms),
         max_output,
+        memory_mib,
         environment,
         program,
         arguments: command.into_iter().skip(1).collect(),
     })
+}
+
+fn parse_args() -> Result<Config, String> {
+    parse_args_from(std::env::args().skip(1))
+}
+
+fn memory_bytes(memory_mib: u64) -> u64 {
+    memory_mib * MIB
 }
 
 fn read_tail(mut input: impl Read, limit: usize) -> io::Result<Vec<u8>> {
@@ -104,29 +134,42 @@ fn read_tail(mut input: impl Read, limit: usize) -> io::Result<Vec<u8>> {
 }
 
 #[cfg(unix)]
-fn configure_command(command: &mut Command) {
+fn configure_command(command: &mut Command, memory_mib: Option<u64>) {
     use std::os::unix::process::CommandExt as _;
-    // SAFETY: setpgid is async-signal-safe and touches no Rust-owned state in the child.
+    let memory_bytes = memory_mib.map(memory_bytes);
+    // SAFETY: setpgid and setrlimit are async-signal-safe and touch no Rust-owned state in the
+    // child. All fallible parsing and arithmetic happened before spawning.
     unsafe {
-        command.pre_exec(|| {
-            if libc::setpgid(0, 0) == 0 {
-                Ok(())
-            } else {
-                Err(io::Error::last_os_error())
+        command.pre_exec(move || {
+            if libc::setpgid(0, 0) != 0 {
+                return Err(io::Error::last_os_error());
             }
+            if let Some(memory_bytes) = memory_bytes {
+                let memory_bytes = libc::rlim_t::try_from(memory_bytes).map_err(|_| {
+                    io::Error::new(io::ErrorKind::InvalidInput, "memory limit is too large")
+                })?;
+                let limit = libc::rlimit {
+                    rlim_cur: memory_bytes,
+                    rlim_max: memory_bytes,
+                };
+                if libc::setrlimit(libc::RLIMIT_AS, &limit) != 0 {
+                    return Err(io::Error::last_os_error());
+                }
+            }
+            Ok(())
         });
     }
 }
 
 #[cfg(windows)]
-fn configure_command(command: &mut Command) {
+fn configure_command(command: &mut Command, _: Option<u64>) {
     use std::os::windows::process::CommandExt as _;
     use windows_sys::Win32::System::Threading::{CREATE_NEW_PROCESS_GROUP, CREATE_SUSPENDED};
     command.creation_flags(CREATE_NEW_PROCESS_GROUP | CREATE_SUSPENDED);
 }
 
 #[cfg(not(any(unix, windows)))]
-fn configure_command(_: &mut Command) {}
+fn configure_command(_: &mut Command, _: Option<u64>) {}
 
 #[cfg(unix)]
 struct PlatformGuard {
@@ -135,7 +178,7 @@ struct PlatformGuard {
 
 #[cfg(unix)]
 impl PlatformGuard {
-    fn attach(child: &Child) -> io::Result<Self> {
+    fn attach(child: &Child, _: Option<u64>) -> io::Result<Self> {
         Ok(Self {
             group: i32::try_from(child.id())
                 .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "child PID overflow"))?,
@@ -157,14 +200,22 @@ struct PlatformGuard {
 
 #[cfg(windows)]
 impl PlatformGuard {
-    fn attach(child: &Child) -> io::Result<Self> {
+    fn attach(child: &Child, memory_mib: Option<u64>) -> io::Result<Self> {
         use std::mem::{size_of, zeroed};
         use std::os::windows::io::AsRawHandle as _;
         use windows_sys::Win32::Foundation::{CloseHandle, FALSE};
         use windows_sys::Win32::System::JobObjects::{
             AssignProcessToJobObject, JobObjectExtendedLimitInformation, SetInformationJobObject,
-            JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+            JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_JOB_MEMORY,
+            JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, JOB_OBJECT_LIMIT_PROCESS_MEMORY,
         };
+        let process_memory_limit = memory_mib
+            .map(|memory_mib| {
+                usize::try_from(memory_bytes(memory_mib)).map_err(|_| {
+                    io::Error::new(io::ErrorKind::InvalidInput, "memory limit is too large")
+                })
+            })
+            .transpose()?;
         // SAFETY: handles are checked and the information size matches its C structure.
         unsafe {
             let job = windows_sys::Win32::System::JobObjects::CreateJobObjectW(
@@ -176,6 +227,12 @@ impl PlatformGuard {
             }
             let mut information: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = zeroed();
             information.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+            if let Some(process_memory_limit) = process_memory_limit {
+                information.BasicLimitInformation.LimitFlags |=
+                    JOB_OBJECT_LIMIT_PROCESS_MEMORY | JOB_OBJECT_LIMIT_JOB_MEMORY;
+                information.ProcessMemoryLimit = process_memory_limit;
+                information.JobMemoryLimit = process_memory_limit;
+            }
             if SetInformationJobObject(
                 job,
                 JobObjectExtendedLimitInformation,
@@ -224,7 +281,7 @@ struct PlatformGuard;
 
 #[cfg(not(any(unix, windows)))]
 impl PlatformGuard {
-    fn attach(_: &Child) -> io::Result<Self> {
+    fn attach(_: &Child, _: Option<u64>) -> io::Result<Self> {
         Ok(Self)
     }
     fn terminate(&self) {}
@@ -251,7 +308,7 @@ fn supervise(config: Config) -> Report {
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    configure_command(&mut command);
+    configure_command(&mut command, config.memory_mib);
     let mut child = match command.spawn() {
         Ok(child) => child,
         Err(error) => {
@@ -264,7 +321,7 @@ fn supervise(config: Config) -> Report {
             };
         }
     };
-    let guard = match PlatformGuard::attach(&child) {
+    let guard = match PlatformGuard::attach(&child, config.memory_mib) {
         Ok(guard) => guard,
         Err(error) => {
             let _ = child.kill();
@@ -362,7 +419,7 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::{lossy_tail, read_tail};
+    use super::{lossy_tail, parse_args_from, parse_memory_mib, read_tail, MAX_MEMORY_MIB};
 
     #[test]
     fn tail_keeps_only_the_latest_bytes() {
@@ -374,5 +431,32 @@ mod tests {
         let text = lossy_tail(&[0xff, 0xff, b'o', b'k'], 4);
         assert!(text.ends_with("ok"));
         assert!(text.len() <= 4);
+    }
+
+    #[test]
+    fn memory_parser_accepts_only_positive_bounded_mib() {
+        assert_eq!(parse_memory_mib("768").unwrap(), 768);
+        assert!(parse_memory_mib("0").is_err());
+        assert!(parse_memory_mib("-1").is_err());
+        assert!(parse_memory_mib(&(MAX_MEMORY_MIB + 1).to_string()).is_err());
+        assert!(parse_memory_mib("many").is_err());
+    }
+
+    #[test]
+    fn argument_parser_carries_the_optional_memory_limit() {
+        let arguments = [
+            "--timeout-ms",
+            "1000",
+            "--memory-mib",
+            "512",
+            "--",
+            "converter",
+            "input.cdr",
+        ]
+        .map(str::to_owned);
+        let config = parse_args_from(arguments).unwrap();
+        assert_eq!(config.memory_mib, Some(512));
+        assert_eq!(config.program, "converter");
+        assert_eq!(config.arguments, ["input.cdr"]);
     }
 }

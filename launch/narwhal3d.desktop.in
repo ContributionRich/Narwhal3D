@@ -11,4 +11,4 @@ Categories=Engineering;Graphics;X-CAD;
 Keywords=cad;nurbs;3d;modeling;engineering;design;
 StartupNotify=true
 StartupWMClass=Narwhal 3D
-MimeType=application/x-3dm;
+MimeType=application/x-narwhal3d-project;application/x-3dm;

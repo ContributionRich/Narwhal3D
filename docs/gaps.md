@@ -183,7 +183,8 @@ Viewport layout/state-machine work is deferred until it has dedicated integratio
 
 | Area | Status | Remaining work |
 |---|---|---|
-| `.3dm` | Partial | Source build for the exact multi-face writer is published; packaged linked binaries still await unambiguous openNURBS redistribution terms, plus broader metadata policy |
+| `.narwhal` project | Initial v1 | Exact masters, metadata, checksums and atomic Save/Open are built in; compression, embedded external picture assets and forward migration tooling remain |
+| `.3dm` interchange | Partial | Read/Open/Import/Export remain; exact multi-face export helper source is published, but packaged linked binaries still await unambiguous openNURBS redistribution terms and broader metadata policy |
 | STEP | Partial | Curves, wires, shells, surfaces, assemblies, colors/layers, broader round trips |
 | DXF | Partial | Blocks, text, bulges, styles, richer entities, surfaces/solids, options |
 | SVG/PDF/AI | Partial | Page selection, fill/text policy, portable converter availability |

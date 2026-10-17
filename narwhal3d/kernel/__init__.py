@@ -377,6 +377,48 @@ def register_master(proxy, shape):
     return key
 
 
+def master_registry_snapshot():
+    """Opaque copy used to roll back a failed document publication."""
+    return dict(_MASTERS)
+
+
+def restore_master_registry(snapshot):
+    """Restore a snapshot produced by :func:`master_registry_snapshot`."""
+    _MASTERS.clear()
+    _MASTERS.update(dict(snapshot or {}))
+
+
+def replace_document_masters(bindings):
+    """Atomically replace the process registry after a candidate document validates.
+
+    ``bindings`` contains ``(proxy, exact_shape)`` pairs from one complete document.
+    Candidate proxy tags are prepared first; only when every setter succeeds is the
+    global registry swapped in one operation. The prior document remains authoritative
+    throughout failed Open attempts.
+    """
+    import uuid
+
+    prepared = []
+    fresh = {}
+    for proxy, shape in bindings:
+        key = f"m-{uuid.uuid4().hex}"
+        setter = getattr(proxy, "SetUserString", None)
+        if not callable(setter):
+            raise RuntimeError("an exact proxy cannot store its master binding")
+        try:
+            if setter(MASTER_KEY, key) is False:
+                raise RuntimeError("proxy refused its exact master id")
+            if setter(REPRESENTATION_KEY, ANALYTIC_MASTER) is False:
+                raise RuntimeError("proxy refused its analytic representation")
+        except Exception as exc:  # noqa: BLE001
+            raise RuntimeError(f"could not prepare exact master binding: {exc}") from exc
+        prepared.append((proxy, key))
+        fresh[key] = shape
+    _MASTERS.clear()
+    _MASTERS.update(fresh)
+    return len(prepared)
+
+
 def master_key_of(geom):
     """The master id stored on `geom`, or None. (The id, not the shape.)"""
     getter = getattr(geom, "GetUserString", None)
