@@ -2,11 +2,17 @@
 import importlib.util
 import os
 import stat
+import subprocess
 import sys
 import tempfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MODULE_PATH = os.path.join(ROOT, "narwhal3d", "kernel", "onbrep.py")
+SOURCE_PATH = os.path.join(ROOT, "native", "brep_writer", "main.cpp")
+README_PATH = os.path.join(ROOT, "native", "brep_writer", "README.md")
+BUILD_PATH = os.path.join(ROOT, "scripts", "build_brep_writer_source.sh")
+VERIFY_PATH = os.path.join(ROOT, "scripts", "verify_brep_writer.py")
+PINNED_OPENNURBS = "eb92af3ba1806b0a34a99aba0d3bda83e3d46083"
 
 spec = importlib.util.spec_from_file_location("onbrep_public_test", MODULE_PATH)
 onbrep = importlib.util.module_from_spec(spec)
@@ -85,6 +91,48 @@ try:
         reset()
         check(onbrep.helper_path() == shipped,
               "the packaged platform helper is accepted when no override is set")
+
+        print("\n-- published bounded source build --")
+        check(all(os.path.isfile(path) for path in (
+            SOURCE_PATH, README_PATH, BUILD_PATH, VERIFY_PATH)),
+              "public source contains the helper, boundary README, and build recipe")
+        with open(SOURCE_PATH, encoding="utf-8") as stream:
+            helper_source = stream.read()
+        with open(BUILD_PATH, encoding="utf-8") as stream:
+            build_source = stream.read()
+        with open(README_PATH, encoding="utf-8") as stream:
+            boundary_readme = stream.read()
+        check(all(token in helper_source for token in (
+            "brep_writer ONBREP 1", "kMaxVertices = 100000",
+            "kMaxTotalTrims = 100000;", "kMaxArchiveBytes",
+            "std::isfinite", "valid_index", "reader.finish")),
+              "helper parsing is protocol-pinned, bounded, finite, indexed, and complete")
+        check(PINNED_OPENNURBS in build_source
+              and "artifacts/brep-writer" in build_source
+              and "manylinux_2_28_x86_64@sha256:" in build_source
+              and "--network none" in build_source and "--read-only" in build_source
+              and "narwhal3d/kernel/bin" not in build_source,
+              "developer build pins openNURBS and cannot populate packaged runtime paths")
+        check("does **not** determine or resolve" in boundary_readme
+              and "does not add the binary to a release" in boundary_readme,
+              "source boundary refuses to claim linked-binary redistribution clearance")
+        with open(os.path.join(ROOT, "README.md"), encoding="utf-8") as stream:
+            root_readme = stream.read()
+        with open(os.path.join(ROOT, "STATUS.md"), encoding="utf-8") as stream:
+            status_text = stream.read()
+        check("still do **not** bundle" in root_readme
+              and "Published binaries do not bundle" in status_text,
+              "public product documentation keeps packaged exact-save limitations explicit")
+        self_check = subprocess.run(
+            [BUILD_PATH, "--self-check"], capture_output=True, text=True, timeout=20)
+        verifier_check = subprocess.run(
+            [sys.executable, VERIFY_PATH, "--self-check"],
+            capture_output=True, text=True, timeout=20)
+        check(self_check.returncode == 0 and PINNED_OPENNURBS in self_check.stdout
+              and verifier_check.returncode == 0
+              and "self-check: OK" in verifier_check.stdout,
+              f"source/verifier self-checks pass without network/compiler "
+              f"({self_check.stdout!r}; {verifier_check.stdout!r})")
 
         print("\n-- no implicit build fallback --")
         onbrep.SHIPPED = missing

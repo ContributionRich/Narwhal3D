@@ -23,7 +23,7 @@ Narwhal keeps document geometry separate from viewport tessellation:
 - Triangles generated for shaded display are not treated as manufacturing geometry.
 - STEP export refuses geometry that has no exact analytic representation.
 
-`.3dm` reading and writing uses the MIT-licensed `rhino3dm` package. The initial public binary does **not** bundle the optional openNURBS exact-Brep helper while its redistribution requirements are being reviewed. Without that helper, some OCCT-created multi-face solids cannot be encoded as exact `.3dm` Breps. Narwhal reports that limitation when saving; use STEP for exact solid interchange. It never presents a faceted STEP fallback as exact geometry.
+`.3dm` reading and writing uses the MIT-licensed `rhino3dm` package. The public source includes Narwhal's independently authored, bounded ONBREP helper and a build recipe pinned to an exact official openNURBS revision. Release binaries still do **not** bundle the linked helper: official documentation says commercial use is encouraged and unrestricted, while the repository `LICENSE` simultaneously says “All Rights Reserved” without an explicit permission grant. Until that redistribution conflict is cleared, some OCCT-created multi-face solids cannot be encoded as exact `.3dm` Breps by packaged builds. Narwhal reports the limitation when saving; use STEP for exact solid interchange. It never presents a faceted STEP fallback as exact geometry.
 
 ## Install on Linux x86_64
 

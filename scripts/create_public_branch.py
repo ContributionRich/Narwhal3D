@@ -51,6 +51,7 @@ SCRIPT_FILES = (
     "scripts/build_readme_demo.sh", "scripts/build_toolbar_icons.py",
     "scripts/bootstrap_linux_runtime.py", "scripts/stage_fedora_inkscape.py",
     "scripts/collect_windows_build_info.ps1", "scripts/build_windows_preview.ps1",
+    "scripts/build_brep_writer_source.sh", "scripts/verify_brep_writer.py",
 )
 TEST_FILES = (
     "spike/audit_representation.py", "spike/_roundtrip_reader.py",
@@ -91,6 +92,7 @@ NATIVE_FILES = (
     "native/cdr_multiversion/.gitignore", "native/cdr_multiversion/Cargo.lock",
     "native/cdr_multiversion/Cargo.toml",
     "native/cdr_multiversion/src/main.rs",
+    "native/brep_writer/main.cpp", "native/brep_writer/README.md",
 )
 RUNTIME_FILES = ("runtime/README.md", "runtime/manifest.json")
 PACKAGE_EXCLUDES = {"narwhal3d/kernel/brep_writer.cpp"}

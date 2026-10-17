@@ -183,7 +183,7 @@ Viewport layout/state-machine work is deferred until it has dedicated integratio
 
 | Area | Status | Remaining work |
 |---|---|---|
-| `.3dm` | Partial | Guaranteed exact multi-face solid writer and broader metadata policy |
+| `.3dm` | Partial | Source build for the exact multi-face writer is published; packaged linked binaries still await unambiguous openNURBS redistribution terms, plus broader metadata policy |
 | STEP | Partial | Curves, wires, shells, surfaces, assemblies, colors/layers, broader round trips |
 | DXF | Partial | Blocks, text, bulges, styles, richer entities, surfaces/solids, options |
 | SVG/PDF/AI | Partial | Page selection, fill/text policy, portable converter availability |

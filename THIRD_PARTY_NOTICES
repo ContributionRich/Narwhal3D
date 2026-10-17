@@ -47,7 +47,7 @@ License: TraceDraw offers MIT OR Apache-2.0; Narwhal redistributes and staticall
 7. Components not included in the public bundle
 ------------------------------------------------
 
-- The optional openNURBS exact-Brep writer helper is not bundled while its redistribution requirements are under review. Narwhal reports the resulting exact `.3dm` limitation and directs users to STEP for exact solid interchange.
+- Narwhal's independently authored exact-Brep helper source and pinned developer build recipe are published, but no linked helper binary or openNURBS source is bundled. The official openNURBS documentation says commercial use is encouraged and that there are no restrictions, while the repository `LICENSE` says “All Rights Reserved” without an explicit permission grant. Binary redistribution remains disabled until that conflict is explicitly cleared. Narwhal reports the resulting packaged `.3dm` limitation and directs users to STEP for exact solid interchange. Repository source: https://github.com/mcneel/opennurbs at revision `eb92af3ba1806b0a34a99aba0d3bda83e3d46083`.
 - CDR generations outside the embedded range can still use an optional local TraceDraw CLI fallback. Development runtime staging pins and verifies the same revision, but the executable is not bundled.
 - Inkscape, Poppler, Ghostscript, LibreOffice, and the TraceDraw CLI are not included. Features requiring them report the missing optional dependency; they do not claim those tools are bundled.
 

@@ -44,6 +44,8 @@ REQUIRED = {
     "scripts/create_public_branch.py",
     "scripts/collect_windows_build_info.ps1",
     "scripts/build_windows_preview.ps1",
+    "scripts/build_brep_writer_source.sh",
+    "scripts/verify_brep_writer.py",
     "scripts/release_policy.py",
     "scripts/verify_windows_release.py",
     "spike/test_windows_collector.py",
@@ -59,6 +61,8 @@ REQUIRED = {
     "licenses/OCP-Apache-2.0.txt",
     "licenses/AppImage-MIT.txt",
     "licenses/rhino3dm-MIT.txt",
+    "native/brep_writer/main.cpp",
+    "native/brep_writer/README.md",
 }
 FORBIDDEN_EXACT = {
     "AGENTS" + ".md",

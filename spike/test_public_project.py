@@ -113,6 +113,11 @@ check({"native/welcome/.gitignore", "native/welcome/Cargo.lock",
        "native/welcome/src/native_stacking.rs", "spike/test_welcome.py"} <= public
       and not any(path.startswith("native/welcome/target/") for path in public),
       "the public allowlist includes exact native welcome sources but no build tree")
+check({"native/brep_writer/main.cpp", "native/brep_writer/README.md",
+       "scripts/build_brep_writer_source.sh", "scripts/verify_brep_writer.py"} <= public
+      and not any(path.startswith("artifacts/brep-writer/") for path in public)
+      and "narwhal3d/kernel/brep_writer.cpp" not in public,
+      "the public allowlist includes bounded BRep helper source but no linked binary")
 check({"native/cdr_core/Cargo.toml", "native/cdr_core/src/lib.rs",
        "native/cdr_core/src/reader.rs", "native/converter_supervisor/Cargo.toml",
        "native/converter_supervisor/src/main.rs", "narwhal3d/cdr_reader.py",
