@@ -44,6 +44,7 @@ class Fake:
 
     def save(self, title, start, filters):
         self.calls.append(("save-start", start))
+        self.calls.append(("save-filters", filters))
         return self._next("save", self.save_answers)
 
     def open(self, title, start, filters):
@@ -142,11 +143,15 @@ def run():
     filedialog.set_backend(fake)
     app_state.feed_line("SaveAs")
     starts = [c[1] for c in fake.calls if isinstance(c, tuple) and c[0] == "save-start"]
+    filters = [c[1] for c in fake.calls if isinstance(c, tuple) and c[0] == "save-filters"]
     check(kinds(fake) == ["save"] and objects_in(p2) == 2 and app_state.doc_path == p2,
           "SaveAs always asks, writes, and the model becomes the new file",
           f"{kinds(fake)} {app_state.doc_path}")
     check(starts and starts[0] == want,
           "the Save As dialog opens on the current file", f"{starts}")
+    check(filters == [(("Narwhal 3D Projects", "*.narwhal"),)],
+          "the Save As dialog offers Narwhal projects instead of the legacy .3dm filter",
+          repr(filters))
 
     interchange = os.path.join(TMP, "copy.3dm")
     fake = Fake(save=[(OK, interchange)])

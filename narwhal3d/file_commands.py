@@ -19,6 +19,7 @@ from . import filedialog
 TEXT = commands.TEXT
 EXT = ".narwhal"
 INTERCHANGE_EXT = ".3dm"
+NATIVE_SAVE_FILTERS = (("Narwhal 3D Projects", "*.narwhal"),)
 
 
 def _app():
@@ -127,7 +128,7 @@ class _FileCommand(commands.Command):
         app = _app()
         start = (app.doc_path or getattr(app, "suggested_name", None)
                  or os.path.join(filedialog.start_dir(), "Untitled" + EXT))
-        return filedialog.ask_save_path(title, start)
+        return filedialog.ask_save_path(title, start, NATIVE_SAVE_FILTERS)
 
     def _settle_unsaved(self, verb):
         """Before New/Open: ask about unsaved changes. Returns None to go on, or the

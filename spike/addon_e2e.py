@@ -440,7 +440,7 @@ else:
                             f"expected [3,5] (active-right minus left); got reversed")
 
 # --- save/reopen preserves geometry and keeps commands functional ----------
-t25_path = "/tmp/narwhal3d_roundtrip.3dm"
+t25_path = "/tmp/narwhal3d_roundtrip.narwhal"
 
 # Park a box at a known, deliberately non-default place, then save.
 run_command(st, "Box")
