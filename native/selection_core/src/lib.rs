@@ -327,6 +327,45 @@ fn selection_clip_point_f64(matrix: &[f64], point: &[f64]) -> [f64; 4] {
 }
 
 #[inline]
+fn grouped_world_bounds(
+    matrix: &[f64],
+    points: &[f64],
+    start: usize,
+    end: usize,
+    is_point: bool,
+    width: f64,
+    height: f64,
+) -> Option<[f64; 4]> {
+    let mut bounds: Option<[f64; 4]> = None;
+    for point_index in start..end {
+        let clip = selection_clip_point_f64(matrix, &points[point_index * 3..point_index * 3 + 3]);
+        if !clip.iter().all(|value| value.is_finite()) || clip[3] <= 0.0 {
+            continue;
+        }
+        let pixel_x = (clip[0] / clip[3] + 1.0) * width * 0.5;
+        let pixel_y = (clip[1] / clip[3] + 1.0) * height * 0.5;
+        if !pixel_x.is_finite() || !pixel_y.is_finite() {
+            continue;
+        }
+        match &mut bounds {
+            None => {
+                bounds = Some([pixel_x, pixel_y, pixel_x, pixel_y]);
+                if is_point {
+                    break;
+                }
+            }
+            Some(value) => {
+                value[0] = value[0].min(pixel_x);
+                value[1] = value[1].min(pixel_y);
+                value[2] = value[2].max(pixel_x);
+                value[3] = value[3].max(pixel_y);
+            }
+        }
+    }
+    bounds
+}
+
+#[inline]
 fn homogeneous_point(matrix: &[f64], point: &[f32]) -> [f64; 4] {
     let x = f64::from(point[0]);
     let y = f64::from(point[1]);
@@ -462,6 +501,293 @@ fn classify_projected_segments(
         }
     }
     (false, any_projectable)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct IntersectionSnap {
+    point: [f64; 3],
+    target: usize,
+}
+
+#[inline]
+fn point3(points: &[f64], index: usize) -> [f64; 3] {
+    let start = index * 3;
+    [points[start], points[start + 1], points[start + 2]]
+}
+
+#[inline]
+fn segment_boxes_overlap(a: [f64; 3], b: [f64; 3], c: [f64; 3], d: [f64; 3], tol: f64) -> bool {
+    (0..3).all(|axis| {
+        a[axis].min(b[axis]) <= c[axis].max(d[axis]) + tol
+            && c[axis].min(d[axis]) <= a[axis].max(b[axis]) + tol
+    })
+}
+
+#[inline]
+fn finite_norm3(x: f64, y: f64, z: f64) -> f64 {
+    let scale = x.abs().max(y.abs()).max(z.abs());
+    if scale == 0.0 {
+        0.0
+    } else {
+        scale * ((x / scale).powi(2) + (y / scale).powi(2) + (z / scale).powi(2)).sqrt()
+    }
+}
+
+#[inline]
+fn segment_intersection_point(
+    a1: [f64; 3],
+    a2: [f64; 3],
+    b1: [f64; 3],
+    b2: [f64; 3],
+    tol: f64,
+) -> Option<[f64; 3]> {
+    let d1 = std::array::from_fn::<_, 3, _>(|axis| a2[axis] - a1[axis]);
+    let d2 = std::array::from_fn::<_, 3, _>(|axis| b2[axis] - b1[axis]);
+    let r = std::array::from_fn::<_, 3, _>(|axis| a1[axis] - b1[axis]);
+    let dot = |left: [f64; 3], right: [f64; 3]| {
+        left[0] * right[0] + left[1] * right[1] + left[2] * right[2]
+    };
+    let aa = dot(d1, d1);
+    let bb = dot(d1, d2);
+    let dd = dot(d2, d2);
+    let ee = dot(r, d1);
+    let ff = dot(r, d2);
+    let denom = aa * dd - bb * bb;
+    let (mut s, mut t) = if denom > 1.0e-30 {
+        ((bb * ff - dd * ee) / denom, (aa * ff - bb * ee) / denom)
+    } else {
+        (0.0, if dd > 1.0e-30 { ff / dd } else { 0.0 })
+    };
+    if s < 0.0 {
+        s = 0.0;
+        t = if dd > 1.0e-30 { ff / dd } else { 0.0 };
+    } else if s > 1.0 {
+        s = 1.0;
+        t = if dd > 1.0e-30 { (bb + ff) / dd } else { 0.0 };
+    }
+    t = t.clamp(0.0, 1.0);
+    let pa = std::array::from_fn::<_, 3, _>(|axis| a1[axis] + d1[axis] * s);
+    let pb = std::array::from_fn::<_, 3, _>(|axis| b1[axis] + d2[axis] * t);
+    let distance = finite_norm3(pa[0] - pb[0], pa[1] - pb[1], pa[2] - pb[2]);
+    (distance <= tol).then(|| std::array::from_fn(|axis| (pa[axis] + pb[axis]) * 0.5))
+}
+
+fn intersection_snaps(points: &[f64], offsets: &[u64], tol: f64) -> Vec<IntersectionSnap> {
+    let target_count = offsets.len().saturating_sub(1);
+    let mut found: Vec<IntersectionSnap> = Vec::new();
+    for target_i in 0..target_count {
+        let start_i = offsets[target_i] as usize;
+        let end_i = offsets[target_i + 1] as usize;
+        for target_j in (target_i + 1)..target_count {
+            let start_j = offsets[target_j] as usize;
+            let end_j = offsets[target_j + 1] as usize;
+            for segment_i in start_i..end_i.saturating_sub(1) {
+                let a = point3(points, segment_i);
+                let b = point3(points, segment_i + 1);
+                for segment_j in start_j..end_j.saturating_sub(1) {
+                    let c = point3(points, segment_j);
+                    let d = point3(points, segment_j + 1);
+                    if !segment_boxes_overlap(a, b, c, d, tol) {
+                        continue;
+                    }
+                    let Some(point) = segment_intersection_point(a, b, c, d, tol) else {
+                        continue;
+                    };
+                    if found.iter().any(|prior| {
+                        finite_norm3(
+                            point[0] - prior.point[0],
+                            point[1] - prior.point[1],
+                            point[2] - prior.point[2],
+                        ) < 1.0e-9
+                    }) {
+                        continue;
+                    }
+                    found.push(IntersectionSnap {
+                        point,
+                        target: target_i,
+                    });
+                }
+            }
+        }
+    }
+    found
+}
+
+const DYNAMIC_PERP: u8 = 1;
+const DYNAMIC_TAN: u8 = 2;
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct DynamicSnap {
+    point: [f64; 3],
+    target: usize,
+    kind: u8,
+}
+
+#[inline]
+fn push_dynamic_unique(found: &mut Vec<DynamicSnap>, point: [f64; 3], target: usize, kind: u8) {
+    if found.iter().any(|prior| {
+        prior.target == target
+            && prior.kind == kind
+            && finite_norm3(
+                point[0] - prior.point[0],
+                point[1] - prior.point[1],
+                point[2] - prior.point[2],
+            ) < 1.0e-9
+    }) {
+        return;
+    }
+    found.push(DynamicSnap {
+        point,
+        target,
+        kind,
+    });
+}
+
+fn perpendicular_snaps(
+    points: &[f64],
+    start: usize,
+    end: usize,
+    base: [f64; 3],
+    target: usize,
+    found: &mut Vec<DynamicSnap>,
+) {
+    for segment in start..end.saturating_sub(1) {
+        let a = point3(points, segment);
+        let b = point3(points, segment + 1);
+        let delta = std::array::from_fn::<_, 3, _>(|axis| b[axis] - a[axis]);
+        let denominator = delta[0] * delta[0] + delta[1] * delta[1] + delta[2] * delta[2];
+        if denominator <= 0.0 {
+            continue;
+        }
+        let t = ((base[0] - a[0]) * delta[0]
+            + (base[1] - a[1]) * delta[1]
+            + (base[2] - a[2]) * delta[2])
+            / denominator;
+        if t <= 0.0 || t >= 1.0 {
+            continue;
+        }
+        let foot = std::array::from_fn(|axis| a[axis] + delta[axis] * t);
+        push_dynamic_unique(found, foot, target, DYNAMIC_PERP);
+    }
+}
+
+#[inline]
+fn cross3(left: [f64; 3], right: [f64; 3]) -> [f64; 3] {
+    [
+        left[1] * right[2] - left[2] * right[1],
+        left[2] * right[0] - left[0] * right[2],
+        left[0] * right[1] - left[1] * right[0],
+    ]
+}
+
+fn tangent_snaps(
+    points: &[f64],
+    start: usize,
+    mut end: usize,
+    base: [f64; 3],
+    closed: bool,
+    target: usize,
+    found: &mut Vec<DynamicSnap>,
+) {
+    if end.saturating_sub(start) < 3 {
+        return;
+    }
+    if closed
+        && finite_norm3(
+            points[start * 3] - points[(end - 1) * 3],
+            points[start * 3 + 1] - points[(end - 1) * 3 + 1],
+            points[start * 3 + 2] - points[(end - 1) * 3 + 2],
+        ) < 1.0e-9
+    {
+        end -= 1;
+    }
+    let count = end.saturating_sub(start);
+    if count < 3 {
+        return;
+    }
+    let mut crosses = Vec::with_capacity(count);
+    for local in 0..count {
+        let previous = if closed {
+            start + (local + count - 1) % count
+        } else {
+            start + local.saturating_sub(1)
+        };
+        let next = if closed {
+            start + (local + 1) % count
+        } else {
+            start + (local + 1).min(count - 1)
+        };
+        let point = point3(points, start + local);
+        let tangent =
+            std::array::from_fn(|axis| points[next * 3 + axis] - points[previous * 3 + axis]);
+        crosses.push(cross3(
+            std::array::from_fn(|axis| point[axis] - base[axis]),
+            tangent,
+        ));
+    }
+    let mut reference = crosses[0];
+    let mut reference_length =
+        reference[0] * reference[0] + reference[1] * reference[1] + reference[2] * reference[2];
+    for cross in crosses.iter().copied().skip(1) {
+        let length = cross[0] * cross[0] + cross[1] * cross[1] + cross[2] * cross[2];
+        if length > reference_length {
+            reference = cross;
+            reference_length = length;
+        }
+    }
+    if reference_length <= 0.0 {
+        return;
+    }
+    let scalar: Vec<f64> = crosses
+        .iter()
+        .map(|cross| cross[0] * reference[0] + cross[1] * reference[1] + cross[2] * reference[2])
+        .collect();
+    let limit = if closed { count } else { count - 1 };
+    for local in 0..limit {
+        let next = (local + 1) % count;
+        let first = scalar[local];
+        let second = scalar[next];
+        let point = if first == 0.0 {
+            point3(points, start + local)
+        } else if first * second < 0.0 {
+            let parameter = first / (first - second);
+            let a = point3(points, start + local);
+            let b = point3(points, start + next);
+            std::array::from_fn(|axis| a[axis] + (b[axis] - a[axis]) * parameter)
+        } else {
+            continue;
+        };
+        push_dynamic_unique(found, point, target, DYNAMIC_TAN);
+    }
+}
+
+fn dynamic_snaps(
+    points: &[f64],
+    offsets: &[u64],
+    closed: &[u8],
+    base: [f64; 3],
+    mode_mask: u8,
+) -> Vec<DynamicSnap> {
+    let mut found = Vec::new();
+    for target in 0..closed.len() {
+        let start = offsets[target] as usize;
+        let end = offsets[target + 1] as usize;
+        if mode_mask & DYNAMIC_PERP != 0 {
+            perpendicular_snaps(points, start, end, base, target, &mut found);
+        }
+        if mode_mask & DYNAMIC_TAN != 0 {
+            tangent_snaps(
+                points,
+                start,
+                end,
+                base,
+                closed[target] != 0,
+                target,
+                &mut found,
+            );
+        }
+    }
+    found
 }
 
 /// Return the stable ABI version for the feasibility interface.
@@ -1521,36 +1847,140 @@ pub unsafe extern "C" fn narwhal_screen_boxes_from_world_f64(
     for object_index in 0..object_count {
         let start = offsets[object_index] as usize;
         let end = offsets[object_index + 1] as usize;
-        let mut first = true;
-        let mut bounds = [f64::NAN; 4];
-        for point_index in start..end {
-            let clip =
-                selection_clip_point_f64(matrix, &points[point_index * 3..point_index * 3 + 3]);
-            if !clip.iter().all(|value| value.is_finite()) || clip[3] <= 0.0 {
-                continue;
-            }
-            let pixel_x = (clip[0] / clip[3] + 1.0) * width * 0.5;
-            let pixel_y = (clip[1] / clip[3] + 1.0) * height * 0.5;
-            if !pixel_x.is_finite() || !pixel_y.is_finite() {
-                continue;
-            }
-            if first {
-                bounds = [pixel_x, pixel_y, pixel_x, pixel_y];
-                first = false;
-                if point_flags[object_index] == 1 {
-                    break;
-                }
-            } else {
-                bounds[0] = bounds[0].min(pixel_x);
-                bounds[1] = bounds[1].min(pixel_y);
-                bounds[2] = bounds[2].max(pixel_x);
-                bounds[3] = bounds[3].max(pixel_y);
-            }
-        }
-        if !first {
+        if let Some(bounds) = grouped_world_bounds(
+            matrix,
+            points,
+            start,
+            end,
+            point_flags[object_index] == 1,
+            width,
+            height,
+        ) {
             out_boxes[object_index * 4..object_index * 4 + 4].copy_from_slice(&bounds);
             out_valid[object_index] = 1;
         }
+    }
+    0
+}
+
+/// Project, reduce, and classify grouped world samples against a screen rectangle.
+///
+/// `crossing` zero applies strict window containment; one applies inclusive
+/// crossing overlap. One byte per object is returned, avoiding screen-box
+/// publication for objects that did not hit. Point flags use only the first
+/// projectable sample, matching the established box reducer.
+///
+/// # Safety
+///
+/// The caller must provide the same matrix/point/offset/flag inputs as
+/// `narwhal_screen_boxes_from_world_f64`, a readable four-value rectangle, and
+/// `object_count` writable hit bytes. Buffers must be aligned and non-overlapping.
+#[no_mangle]
+pub unsafe extern "C" fn narwhal_world_rect_hit_mask_f64(
+    matrix_ptr: *const f64,
+    points_ptr: *const f64,
+    point_count: usize,
+    offsets_ptr: *const u64,
+    object_count: usize,
+    point_flags_ptr: *const u8,
+    width: f64,
+    height: f64,
+    rect_ptr: *const f64,
+    crossing: u8,
+    out_hits_ptr: *mut u8,
+) -> i32 {
+    if matrix_ptr.is_null() || rect_ptr.is_null() {
+        return ERR_NULL;
+    }
+    if object_count > 0
+        && (offsets_ptr.is_null() || point_flags_ptr.is_null() || out_hits_ptr.is_null())
+    {
+        return ERR_NULL;
+    }
+    if point_count > 0 && points_ptr.is_null() {
+        return ERR_NULL;
+    }
+    let point_values = match point_count.checked_mul(3) {
+        Some(value) if valid_slice_len::<f64>(value) => value,
+        _ => return ERR_SIZE,
+    };
+    let offset_count = match object_count.checked_add(1) {
+        Some(value) if valid_slice_len::<u64>(value) && valid_slice_len::<u8>(object_count) => {
+            value
+        }
+        _ => return ERR_SIZE,
+    };
+    if object_count > 0 {
+        ptr::write_bytes(out_hits_ptr, 0, object_count);
+    }
+    let matrix = slice::from_raw_parts(matrix_ptr, 16);
+    let rect_values = slice::from_raw_parts(rect_ptr, 4);
+    let rect = [
+        rect_values[0],
+        rect_values[1],
+        rect_values[2],
+        rect_values[3],
+    ];
+    if !valid_matrix(matrix)
+        || !valid_dimensions(width, height)
+        || !valid_rect(rect)
+        || crossing > 1
+    {
+        return ERR_INPUT;
+    }
+    if object_count == 0 {
+        return if point_count == 0 { 0 } else { ERR_INPUT };
+    }
+    let point_count_u64 = match u64::try_from(point_count) {
+        Ok(value) => value,
+        Err(_) => return ERR_SIZE,
+    };
+    let points = if point_count == 0 {
+        &[]
+    } else {
+        slice::from_raw_parts(points_ptr, point_values)
+    };
+    if points.iter().any(|value| !value.is_finite()) {
+        return ERR_INPUT;
+    }
+    let offsets = slice::from_raw_parts(offsets_ptr, offset_count);
+    let point_flags = slice::from_raw_parts(point_flags_ptr, object_count);
+    if offsets[0] != 0
+        || offsets[object_count] != point_count_u64
+        || offsets
+            .windows(2)
+            .any(|pair| pair[0] > pair[1] || pair[1] > point_count_u64)
+        || point_flags.iter().any(|flag| *flag > 1)
+    {
+        return ERR_INPUT;
+    }
+    let out_hits = slice::from_raw_parts_mut(out_hits_ptr, object_count);
+    for object_index in 0..object_count {
+        let start = offsets[object_index] as usize;
+        let end = offsets[object_index + 1] as usize;
+        let Some(bounds) = grouped_world_bounds(
+            matrix,
+            points,
+            start,
+            end,
+            point_flags[object_index] == 1,
+            width,
+            height,
+        ) else {
+            continue;
+        };
+        let hit = if crossing == 1 {
+            !(bounds[2] < rect[0]
+                || bounds[0] > rect[2]
+                || bounds[3] < rect[1]
+                || bounds[1] > rect[3])
+        } else {
+            bounds[0] >= rect[0]
+                && bounds[1] >= rect[1]
+                && bounds[2] <= rect[2]
+                && bounds[3] <= rect[3]
+        };
+        out_hits[object_index] = u8::from(hit);
     }
     0
 }
@@ -1658,7 +2088,7 @@ pub unsafe extern "C" fn narwhal_screen_rects_from_aabbs_f64(
             let w1 = matrix[13] * y;
             let w2 = matrix[14] * z;
             let w = w0 + w1 + w2 + matrix[15];
-            if !(w > 0.0) {
+            if w <= 0.0 || w.is_nan() {
                 any_nonfront = true;
                 let scale = w0.abs() + w1.abs() + w2.abs() + matrix[15].abs();
                 if w < -1.0e-5 * scale {
@@ -1824,6 +2254,188 @@ pub unsafe extern "C" fn narwhal_projected_points_rect_query_f64(
             out_inside[index] =
                 u8::from(rect[0] <= x && x <= rect[2] && rect[1] <= y && y <= rect[3]);
         }
+    }
+    0
+}
+
+/// Find intersections between different packed sampled polylines.
+///
+/// The first call may use `capacity == 0` and null output arrays to obtain the
+/// required row count in `out_count`. A second call with that exact capacity
+/// writes packed XYZ rows and the index of the earlier target in each pair.
+/// Results preserve target-pair and segment-pair traversal order and first-seen
+/// deduplication from the established scalar Osnap implementation.
+///
+/// # Safety
+///
+/// The caller must provide `point_count * 3` readable f64 values,
+/// `target_count + 1` readable u64 offsets, and a writable `out_count`. When
+/// capacity is nonzero, output arrays must hold `capacity * 3` f64 values and
+/// `capacity` u64 values. All provided buffers must be aligned and non-overlapping.
+#[no_mangle]
+pub unsafe extern "C" fn narwhal_intersection_snaps_f64(
+    points_ptr: *const f64,
+    point_count: usize,
+    offsets_ptr: *const u64,
+    target_count: usize,
+    tol: f64,
+    out_xyz_ptr: *mut f64,
+    out_targets_ptr: *mut u64,
+    capacity: usize,
+    out_count_ptr: *mut u64,
+) -> i32 {
+    if offsets_ptr.is_null() || out_count_ptr.is_null() || (point_count > 0 && points_ptr.is_null())
+    {
+        return ERR_NULL;
+    }
+    if capacity > 0 && (out_xyz_ptr.is_null() || out_targets_ptr.is_null()) {
+        return ERR_NULL;
+    }
+    let point_values = match point_count.checked_mul(3) {
+        Some(value) if valid_slice_len::<f64>(value) => value,
+        _ => return ERR_SIZE,
+    };
+    let offset_count = match target_count.checked_add(1) {
+        Some(value) if valid_slice_len::<u64>(value) => value,
+        _ => return ERR_SIZE,
+    };
+    let output_values = match capacity.checked_mul(3) {
+        Some(value) if valid_slice_len::<f64>(value) && valid_slice_len::<u64>(capacity) => value,
+        _ => return ERR_SIZE,
+    };
+    let points = if point_count == 0 {
+        &[]
+    } else {
+        slice::from_raw_parts(points_ptr, point_values)
+    };
+    let offsets = slice::from_raw_parts(offsets_ptr, offset_count);
+    if !tol.is_finite()
+        || tol < 0.0
+        || points.iter().any(|value| !value.is_finite())
+        || offsets.first() != Some(&0)
+        || offsets.last() != Some(&(point_count as u64))
+        || offsets.windows(2).any(|pair| pair[0] > pair[1])
+    {
+        return ERR_INPUT;
+    }
+    let found = intersection_snaps(points, offsets, tol);
+    ptr::write(out_count_ptr, found.len() as u64);
+    if capacity == 0 {
+        return 0;
+    }
+    if capacity < found.len() {
+        return ERR_SIZE;
+    }
+    let out_xyz = slice::from_raw_parts_mut(out_xyz_ptr, output_values);
+    let out_targets = slice::from_raw_parts_mut(out_targets_ptr, capacity);
+    out_xyz.fill(f64::NAN);
+    out_targets.fill(u64::MAX);
+    for (index, snap) in found.iter().enumerate() {
+        out_xyz[index * 3..index * 3 + 3].copy_from_slice(&snap.point);
+        out_targets[index] = snap.target as u64;
+    }
+    0
+}
+
+/// Compute sampled Perp and/or Tan candidates for packed polylines.
+///
+/// `mode_mask` uses bit 1 for Perp and bit 2 for Tan. Output rows retain target
+/// order, with all Perp rows before Tan rows for each target. The two-pass output
+/// contract is the same as `narwhal_intersection_snaps_f64`.
+///
+/// # Safety
+///
+/// The caller must provide valid packed point/offset/closed/base inputs and a
+/// writable count. Nonzero-capacity XYZ, target and kind outputs must be aligned,
+/// non-overlapping, and large enough for the declared capacity.
+#[no_mangle]
+pub unsafe extern "C" fn narwhal_dynamic_perp_tan_snaps_f64(
+    points_ptr: *const f64,
+    point_count: usize,
+    offsets_ptr: *const u64,
+    closed_ptr: *const u8,
+    target_count: usize,
+    base_ptr: *const f64,
+    mode_mask: u8,
+    out_xyz_ptr: *mut f64,
+    out_targets_ptr: *mut u64,
+    out_kinds_ptr: *mut u8,
+    capacity: usize,
+    out_count_ptr: *mut u64,
+) -> i32 {
+    if offsets_ptr.is_null()
+        || base_ptr.is_null()
+        || out_count_ptr.is_null()
+        || (point_count > 0 && points_ptr.is_null())
+        || (target_count > 0 && closed_ptr.is_null())
+    {
+        return ERR_NULL;
+    }
+    if capacity > 0
+        && (out_xyz_ptr.is_null() || out_targets_ptr.is_null() || out_kinds_ptr.is_null())
+    {
+        return ERR_NULL;
+    }
+    let point_values = match point_count.checked_mul(3) {
+        Some(value) if valid_slice_len::<f64>(value) => value,
+        _ => return ERR_SIZE,
+    };
+    let offset_count = match target_count.checked_add(1) {
+        Some(value) if valid_slice_len::<u64>(value) => value,
+        _ => return ERR_SIZE,
+    };
+    let output_values = match capacity.checked_mul(3) {
+        Some(value)
+            if valid_slice_len::<f64>(value)
+                && valid_slice_len::<u64>(capacity)
+                && valid_slice_len::<u8>(capacity) =>
+        {
+            value
+        }
+        _ => return ERR_SIZE,
+    };
+    let points = if point_count == 0 {
+        &[]
+    } else {
+        slice::from_raw_parts(points_ptr, point_values)
+    };
+    let offsets = slice::from_raw_parts(offsets_ptr, offset_count);
+    let closed = if target_count == 0 {
+        &[]
+    } else {
+        slice::from_raw_parts(closed_ptr, target_count)
+    };
+    let base_slice = slice::from_raw_parts(base_ptr, 3);
+    let base = [base_slice[0], base_slice[1], base_slice[2]];
+    if mode_mask == 0
+        || mode_mask & !(DYNAMIC_PERP | DYNAMIC_TAN) != 0
+        || base.iter().any(|value| !value.is_finite())
+        || points.iter().any(|value| !value.is_finite())
+        || closed.iter().any(|value| *value > 1)
+        || offsets.first() != Some(&0)
+        || offsets.last() != Some(&(point_count as u64))
+        || offsets.windows(2).any(|pair| pair[0] > pair[1])
+    {
+        return ERR_INPUT;
+    }
+    let found = dynamic_snaps(points, offsets, closed, base, mode_mask);
+    ptr::write(out_count_ptr, found.len() as u64);
+    if capacity == 0 {
+        return 0;
+    }
+    if capacity < found.len() {
+        return ERR_SIZE;
+    }
+    let out_xyz = slice::from_raw_parts_mut(out_xyz_ptr, output_values);
+    let out_targets = slice::from_raw_parts_mut(out_targets_ptr, capacity);
+    let out_kinds = slice::from_raw_parts_mut(out_kinds_ptr, capacity);
+    out_xyz.fill(f64::NAN);
+    out_targets.fill(u64::MAX);
+    out_kinds.fill(0);
+    for (index, snap) in found.iter().enumerate() {
+        out_xyz[index * 3..index * 3 + 3].copy_from_slice(&snap.point);
+        out_targets[index] = snap.target as u64;
+        out_kinds[index] = snap.kind;
     }
     0
 }
@@ -2257,7 +2869,7 @@ mod tests {
         for point in 0..101 {
             far_pixels.extend_from_slice(&[10_000.0 + f64::from(point), 10_000.0]);
         }
-        let far_visible = vec![1_u8; 101];
+        let far_visible = [1_u8; 101];
         let far_offsets = [0_u64, 101];
         SCREEN_DISTANCE_CALLS.store(0, std::sync::atomic::Ordering::Relaxed);
         let far_miss = unsafe {
@@ -2549,6 +3161,144 @@ mod tests {
     }
 
     #[test]
+    fn compact_world_rect_mask_preserves_modes_edges_and_point_flags() {
+        let points = [
+            -0.5_f64, -0.5, 0.0, 0.5, 0.5, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 0.0,
+        ];
+        let offsets = [0_u64, 2, 4];
+        let flags = [0_u8, 1];
+        let window = [300.0, 200.0, 500.0, 400.0];
+        let mut hits = [9_u8; 2];
+        let code = unsafe {
+            narwhal_world_rect_hit_mask_f64(
+                IDENTITY.as_ptr(),
+                points.as_ptr(),
+                4,
+                offsets.as_ptr(),
+                2,
+                flags.as_ptr(),
+                800.0,
+                600.0,
+                window.as_ptr(),
+                0,
+                hits.as_mut_ptr(),
+            )
+        };
+        assert_eq!(code, 0);
+        assert_eq!(hits, [0, 1]);
+
+        let exact_window = [200.0, 150.0, 600.0, 450.0];
+        let code = unsafe {
+            narwhal_world_rect_hit_mask_f64(
+                IDENTITY.as_ptr(),
+                points.as_ptr(),
+                4,
+                offsets.as_ptr(),
+                2,
+                flags.as_ptr(),
+                800.0,
+                600.0,
+                exact_window.as_ptr(),
+                0,
+                hits.as_mut_ptr(),
+            )
+        };
+        assert_eq!(code, 0);
+        assert_eq!(hits, [1, 1]);
+
+        let crossing = [600.0, 450.0, 700.0, 500.0];
+        let code = unsafe {
+            narwhal_world_rect_hit_mask_f64(
+                IDENTITY.as_ptr(),
+                points.as_ptr(),
+                4,
+                offsets.as_ptr(),
+                2,
+                flags.as_ptr(),
+                800.0,
+                600.0,
+                crossing.as_ptr(),
+                1,
+                hits.as_mut_ptr(),
+            )
+        };
+        assert_eq!(code, 0);
+        assert_eq!(hits, [1, 0]);
+
+        let point_window = [399.0, 299.0, 401.0, 301.0];
+        let code = unsafe {
+            narwhal_world_rect_hit_mask_f64(
+                IDENTITY.as_ptr(),
+                points.as_ptr(),
+                4,
+                offsets.as_ptr(),
+                2,
+                flags.as_ptr(),
+                800.0,
+                600.0,
+                point_window.as_ptr(),
+                0,
+                hits.as_mut_ptr(),
+            )
+        };
+        assert_eq!(code, 0);
+        assert_eq!(hits, [0, 1]);
+
+        hits.fill(9);
+        let invalid_mode = unsafe {
+            narwhal_world_rect_hit_mask_f64(
+                IDENTITY.as_ptr(),
+                points.as_ptr(),
+                4,
+                offsets.as_ptr(),
+                2,
+                flags.as_ptr(),
+                800.0,
+                600.0,
+                window.as_ptr(),
+                2,
+                hits.as_mut_ptr(),
+            )
+        };
+        assert_eq!(invalid_mode, ERR_INPUT);
+        assert_eq!(hits, [0, 0]);
+        let bad_offsets = [0_u64, 3, 2];
+        let bad_offset_code = unsafe {
+            narwhal_world_rect_hit_mask_f64(
+                IDENTITY.as_ptr(),
+                points.as_ptr(),
+                4,
+                bad_offsets.as_ptr(),
+                2,
+                flags.as_ptr(),
+                800.0,
+                600.0,
+                window.as_ptr(),
+                0,
+                hits.as_mut_ptr(),
+            )
+        };
+        assert_eq!(bad_offset_code, ERR_INPUT);
+        let bad_flags = [0_u8, 2];
+        let bad_flag_code = unsafe {
+            narwhal_world_rect_hit_mask_f64(
+                IDENTITY.as_ptr(),
+                points.as_ptr(),
+                4,
+                offsets.as_ptr(),
+                2,
+                bad_flags.as_ptr(),
+                800.0,
+                600.0,
+                window.as_ptr(),
+                0,
+                hits.as_mut_ptr(),
+            )
+        };
+        assert_eq!(bad_flag_code, ERR_INPUT);
+    }
+
+    #[test]
     fn point_queries_preserve_later_ties_and_inclusive_edges() {
         let points = [0.0_f64, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 0.0];
         let mouse = [400.0, 300.0];
@@ -2610,5 +3360,119 @@ mod tests {
         };
         assert_eq!(result, ERR_INPUT);
         assert_eq!(inside, [0, 0, 0]);
+    }
+
+    #[test]
+    fn intersection_snaps_preserve_order_inclusive_tolerance_and_dedup() {
+        let points = [
+            0.0, 0.0, 0.0, 5.0, 0.0, 0.0, 10.0, 0.0, 0.0, 8.0, -2.0, 0.0, 8.0, 2.0, 0.0, 5.0, -2.0,
+            0.0, 5.0, 2.0, 0.0, 2.0, -2.0, 1.0, 2.0, 2.0, 1.0,
+        ];
+        let offsets = [0_u64, 3, 5, 7, 9];
+        let exact = intersection_snaps(&points, &offsets, 0.0);
+        assert_eq!(exact.len(), 2);
+        assert_eq!(
+            exact[0],
+            IntersectionSnap {
+                point: [8.0, 0.0, 0.0],
+                target: 0
+            }
+        );
+        assert_eq!(
+            exact[1],
+            IntersectionSnap {
+                point: [5.0, 0.0, 0.0],
+                target: 0
+            }
+        );
+        let boundary = intersection_snaps(&points, &offsets, 1.0);
+        assert!(boundary.iter().any(|snap| snap.point == [2.0, 0.0, 0.5]));
+
+        let mut required = u64::MAX;
+        let first = unsafe {
+            narwhal_intersection_snaps_f64(
+                points.as_ptr(),
+                9,
+                offsets.as_ptr(),
+                4,
+                0.0,
+                ptr::null_mut(),
+                ptr::null_mut(),
+                0,
+                &mut required,
+            )
+        };
+        assert_eq!((first, required), (0, 2));
+        let mut xyz = [f64::NAN; 6];
+        let mut targets = [u64::MAX; 2];
+        let second = unsafe {
+            narwhal_intersection_snaps_f64(
+                points.as_ptr(),
+                9,
+                offsets.as_ptr(),
+                4,
+                0.0,
+                xyz.as_mut_ptr(),
+                targets.as_mut_ptr(),
+                2,
+                &mut required,
+            )
+        };
+        assert_eq!(second, 0);
+        assert_eq!(xyz, [8.0, 0.0, 0.0, 5.0, 0.0, 0.0]);
+        assert_eq!(targets, [0, 0]);
+    }
+
+    #[test]
+    fn dynamic_perp_tan_preserves_strict_feet_crossings_and_closed_seam() {
+        let points = [
+            0.0, 0.0, 0.0, 10.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, -1.0, 0.0, 0.0, 0.0, -1.0,
+            0.0,
+        ];
+        let offsets = [0_u64, 2, 6];
+        let closed = [0_u8, 1];
+        let base = [4.0, 3.0, 0.0];
+        let snaps = dynamic_snaps(&points, &offsets, &closed, base, DYNAMIC_PERP | DYNAMIC_TAN);
+        assert!(snaps.contains(&DynamicSnap {
+            point: [4.0, 0.0, 0.0],
+            target: 0,
+            kind: DYNAMIC_PERP,
+        }));
+        assert!(!snaps.iter().any(|snap| snap.kind == DYNAMIC_PERP
+            && (snap.point == [0.0, 0.0, 0.0] || snap.point == [10.0, 0.0, 0.0])));
+        let endpoint = dynamic_snaps(&points, &offsets, &closed, [0.0, 3.0, 0.0], DYNAMIC_PERP);
+        assert!(!endpoint.iter().any(|snap| snap.target == 0));
+        assert!(snaps
+            .iter()
+            .any(|snap| snap.target == 1 && snap.kind == DYNAMIC_TAN));
+
+        let seam_base = [2.0, -2.0, 0.0];
+        let seam = dynamic_snaps(&points, &offsets, &closed, seam_base, DYNAMIC_TAN);
+        let seam_points: Vec<[f64; 3]> = seam
+            .iter()
+            .filter(|snap| snap.target == 1 && snap.kind == DYNAMIC_TAN)
+            .map(|snap| snap.point)
+            .collect();
+        assert_eq!(seam_points, vec![[0.75, 0.25, 0.0], [-0.25, -0.75, 0.0]]);
+
+        let mut required = u64::MAX;
+        let sizing = unsafe {
+            narwhal_dynamic_perp_tan_snaps_f64(
+                points.as_ptr(),
+                6,
+                offsets.as_ptr(),
+                closed.as_ptr(),
+                2,
+                base.as_ptr(),
+                DYNAMIC_PERP | DYNAMIC_TAN,
+                ptr::null_mut(),
+                ptr::null_mut(),
+                ptr::null_mut(),
+                0,
+                &mut required,
+            )
+        };
+        assert_eq!(sizing, 0);
+        assert_eq!(required as usize, snaps.len());
     }
 }

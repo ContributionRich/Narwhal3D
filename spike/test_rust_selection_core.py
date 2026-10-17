@@ -107,6 +107,11 @@ lib.narwhal_screen_boxes_from_world_f64.argtypes = [
     ctypes.c_double, ctypes.c_double, DoubleP, ByteP,
 ]
 lib.narwhal_screen_boxes_from_world_f64.restype = ctypes.c_int
+lib.narwhal_world_rect_hit_mask_f64.argtypes = [
+    DoubleP, DoubleP, ctypes.c_size_t, UInt64P, ctypes.c_size_t, ByteP,
+    ctypes.c_double, ctypes.c_double, DoubleP, ctypes.c_ubyte, ByteP,
+]
+lib.narwhal_world_rect_hit_mask_f64.restype = ctypes.c_int
 lib.narwhal_screen_rects_from_aabbs_f64.argtypes = [
     DoubleP, DoubleP, DoubleP, ctypes.c_size_t, ctypes.c_double, ctypes.c_double,
     DoubleP, ByteP, ByteP,
@@ -116,6 +121,16 @@ lib.narwhal_projected_points_rect_query_f64.argtypes = [
     DoubleP, DoubleP, ctypes.c_size_t, ctypes.c_double, ctypes.c_double, DoubleP, ByteP,
 ]
 lib.narwhal_projected_points_rect_query_f64.restype = ctypes.c_int
+lib.narwhal_intersection_snaps_f64.argtypes = [
+    DoubleP, ctypes.c_size_t, UInt64P, ctypes.c_size_t, ctypes.c_double,
+    DoubleP, UInt64P, ctypes.c_size_t, UInt64P,
+]
+lib.narwhal_intersection_snaps_f64.restype = ctypes.c_int
+lib.narwhal_dynamic_perp_tan_snaps_f64.argtypes = [
+    DoubleP, ctypes.c_size_t, UInt64P, ByteP, ctypes.c_size_t, DoubleP,
+    ctypes.c_ubyte, DoubleP, UInt64P, ByteP, ctypes.c_size_t, UInt64P,
+]
+lib.narwhal_dynamic_perp_tan_snaps_f64.restype = ctypes.c_int
 
 checks = 0
 failures: list[str] = []
@@ -390,6 +405,18 @@ def rust_world_boxes(matrix, points, offsets, point_flags, width=800.0, height=6
     return code, result
 
 
+def rust_world_rect_mask(matrix, points, offsets, point_flags, rect, crossing,
+                         width=800.0, height=600.0):
+    hits = (ctypes.c_ubyte * len(point_flags))()
+    code = lib.narwhal_world_rect_hit_mask_f64(
+        darray(matrix), darray(value for point in points for value in point), len(points),
+        (ctypes.c_uint64 * len(offsets))(*offsets), len(point_flags),
+        (ctypes.c_ubyte * len(point_flags))(*point_flags), width, height,
+        darray(rect), int(bool(crossing)), hits,
+    )
+    return code, tuple(hits)
+
+
 def rust_aabb_rects(matrix, lower, upper, width=800.0, height=600.0):
     count = len(lower)
     rects = (ctypes.c_double * (count * 4))()
@@ -511,6 +538,61 @@ def rust_points_rect(matrix, points, rect, width=800.0, height=600.0):
     return code, tuple(inside)
 
 
+def rust_dynamic_snaps(polylines, closed, base, mode_mask):
+    points = [point for polyline in polylines for point in polyline]
+    offsets = [0]
+    for polyline in polylines:
+        offsets.append(offsets[-1] + len(polyline))
+    raw = darray(value for point in points for value in point)
+    packed_offsets = (ctypes.c_uint64 * len(offsets))(*offsets)
+    packed_closed = (ctypes.c_ubyte * len(closed))(*closed)
+    required = ctypes.c_uint64(0)
+    code = lib.narwhal_dynamic_perp_tan_snaps_f64(
+        raw, len(points), packed_offsets, packed_closed, len(polylines),
+        darray(base), mode_mask, None, None, None, 0, ctypes.byref(required),
+    )
+    if code != 0:
+        return code, ()
+    count = int(required.value)
+    xyz = (ctypes.c_double * (count * 3))()
+    targets = (ctypes.c_uint64 * count)()
+    kinds = (ctypes.c_ubyte * count)()
+    written = ctypes.c_uint64(0)
+    code = lib.narwhal_dynamic_perp_tan_snaps_f64(
+        raw, len(points), packed_offsets, packed_closed, len(polylines),
+        darray(base), mode_mask, xyz, targets, kinds, count, ctypes.byref(written),
+    )
+    rows = tuple((tuple(xyz[index * 3:index * 3 + 3]), targets[index], kinds[index])
+                 for index in range(written.value))
+    return code, rows
+
+
+def rust_intersections(polylines, tolerance):
+    points = [point for polyline in polylines for point in polyline]
+    offsets = [0]
+    for polyline in polylines:
+        offsets.append(offsets[-1] + len(polyline))
+    raw = darray(value for point in points for value in point)
+    packed_offsets = (ctypes.c_uint64 * len(offsets))(*offsets)
+    required = ctypes.c_uint64(0)
+    code = lib.narwhal_intersection_snaps_f64(
+        raw, len(points), packed_offsets, len(polylines), tolerance,
+        None, None, 0, ctypes.byref(required),
+    )
+    if code != 0:
+        return code, ()
+    xyz = (ctypes.c_double * (required.value * 3))()
+    targets = (ctypes.c_uint64 * required.value)()
+    written = ctypes.c_uint64(0)
+    code = lib.narwhal_intersection_snaps_f64(
+        raw, len(points), packed_offsets, len(polylines), tolerance,
+        xyz, targets, required.value, ctypes.byref(written),
+    )
+    rows = tuple((tuple(xyz[index * 3:index * 3 + 3]), targets[index])
+                 for index in range(written.value))
+    return code, rows
+
+
 IDENTITY = (
     1.0, 0.0, 0.0, 0.0,
     0.0, 1.0, 0.0, 0.0,
@@ -525,6 +607,39 @@ PERSPECTIVE = (
 )
 
 check(lib.narwhal_selection_core_abi_version() == 1, "C ABI version is pinned")
+intersection_lines = [
+    [(0.0, 0.0, 0.0), (5.0, 0.0, 0.0), (10.0, 0.0, 0.0)],
+    [(8.0, -2.0, 0.0), (8.0, 2.0, 0.0)],
+    [(5.0, -2.0, 0.0), (5.0, 2.0, 0.0)],
+    [(2.0, -2.0, 1.0), (2.0, 2.0, 1.0)],
+]
+intersection_code, intersection_rows = rust_intersections(intersection_lines, 0.0)
+check(intersection_code == 0 and intersection_rows == (
+    ((8.0, 0.0, 0.0), 0), ((5.0, 0.0, 0.0), 0)),
+      "native intersections preserve pair/segment order and first-seen dedup",
+      repr(intersection_rows))
+boundary_code, boundary_rows = rust_intersections(intersection_lines, 1.0)
+check(boundary_code == 0 and ((2.0, 0.0, 0.5), 0) in boundary_rows,
+      "native intersections include closest segment pairs exactly at tolerance",
+      repr(boundary_rows))
+dynamic_lines = [
+    [(0.0, 0.0, 0.0), (10.0, 0.0, 0.0)],
+    [(1.0, 0.0, 0.0), (0.0, 1.0, 0.0),
+     (-1.0, 0.0, 0.0), (0.0, -1.0, 0.0)],
+]
+perp_code, perp_rows = rust_dynamic_snaps(dynamic_lines, [0, 1], (4.0, 3.0, 0.0), 1)
+check(perp_code == 0 and perp_rows[0] == ((4.0, 0.0, 0.0), 0, 1)
+      and all(row[0] not in ((0.0, 0.0, 0.0), (10.0, 0.0, 0.0))
+              for row in perp_rows if row[1] == 0),
+      "native Perp keeps only strict interior segment feet", repr(perp_rows))
+endpoint_code, endpoint_rows = rust_dynamic_snaps(
+    dynamic_lines, [0, 1], (0.0, 3.0, 0.0), 1)
+check(endpoint_code == 0 and all(row[1] != 0 for row in endpoint_rows),
+      "native Perp rejects a foot exactly at a segment endpoint", repr(endpoint_rows))
+tan_code, tan_rows = rust_dynamic_snaps(dynamic_lines, [0, 1], (2.0, -2.0, 0.0), 2)
+check(tan_code == 0 and tan_rows == (
+    ((0.75, 0.25, 0.0), 1, 2), ((-0.25, -0.75, 0.0), 1, 2)),
+      "native Tan preserves sign crossings across a closed seam", repr(tan_rows))
 points = [(-1.0, -1.0, 0.0), (0.0, 0.0, 0.0), (1.0, 1.0, 0.0),
           (0.0, 0.0, -10.0), (2.0, -3.0, 4.0)]
 code, actual = rust_project(PERSPECTIVE, points)
@@ -776,6 +891,18 @@ world_clip = [tuple(
 check(rust_world_boxes(world_matrix, world_points, world_offsets, world_flags)
       == (0, scalar_clip_boxes(world_clip, world_offsets, world_flags)),
       "fused world-box query matches fixed-order f64 projection and reduction")
+mask_points = [(-0.5, -0.5, 0.0), (0.5, 0.5, 0.0),
+               (0.0, 0.0, 0.0), (1.0, 1.0, 0.0)]
+mask_offsets = [0, 2, 4]
+mask_flags = [0, 1]
+check(rust_world_rect_mask(
+    IDENTITY, mask_points, mask_offsets, mask_flags,
+    (300.0, 200.0, 500.0, 400.0), False) == (0, (0, 1)),
+      "compact window mask requires full containment and honors point flags")
+check(rust_world_rect_mask(
+    IDENTITY, mask_points, mask_offsets, mask_flags,
+    (600.0, 450.0, 700.0, 500.0), True) == (0, (1, 0)),
+      "compact crossing mask includes an exact rectangle edge")
 world_box_equivalent = True
 for _ in range(250):
     matrix = tuple(rng.uniform(-2.0, 2.0) for _value in range(16))

@@ -63,6 +63,11 @@ from __future__ import annotations
 import math
 import numbers
 
+try:
+    from . import native_selection
+except ImportError:  # loaded directly, without a package
+    native_selection = None
+
 # ---------------------------------------------------------------------------
 # the snap modes, named exactly as the reference CAD application's Osnap control names them
 # ---------------------------------------------------------------------------
@@ -726,6 +731,27 @@ def intersection_targets(targets, cursor, tol=1e-6):
     curve_targets = [t for t in targets or () if not t.is_point and len(t.points) >= 2]
     if len(curve_targets) < 2:
         return found
+    native = None
+    if native_selection is not None:
+        try:
+            native = native_selection.intersection_points(
+                tuple(target.points for target in curve_targets), tol)
+        except Exception:  # noqa: BLE001 -- complete scalar intersection fallback
+            native = None
+    if native is not None:
+        try:
+            rows = []
+            for point, target_index in native:
+                if (not isinstance(target_index, numbers.Integral)
+                        or not 0 <= int(target_index) < len(curve_targets)
+                        or len(point) != 3
+                        or not all(math.isfinite(float(value)) for value in point)):
+                    raise ValueError("invalid native intersection row")
+                rows.append(Snap(point, INT, _dist(point, cursor),
+                                 curve_targets[int(target_index)]))
+            return rows
+        except Exception:  # noqa: BLE001 -- malformed optional output falls back
+            pass
     segs = []
     for t in curve_targets:
         out = []
@@ -816,8 +842,31 @@ def candidates(targets, cursor, modes, plane=None, *, base=None):
     wanted = {m for m in (modes or ()) if is_implemented(m)}
     if not wanted:
         return found
+    targets = tuple(targets or ())
+    dynamic = None
+    dynamic_by_target = None
+    if (base is not None and native_selection is not None
+            and (PERP in wanted or TAN in wanted)):
+        try:
+            dynamic = native_selection.perpendicular_tangent_points(
+                tuple(target.points for target in targets),
+                tuple(target.closed for target in targets), base,
+                perp=PERP in wanted, tan=TAN in wanted)
+            if dynamic is not None:
+                dynamic_by_target = [{PERP: [], TAN: []} for _target in targets]
+                for point, target_index, mode in dynamic:
+                    if (not isinstance(target_index, numbers.Integral)
+                            or not 0 <= int(target_index) < len(targets)
+                            or mode not in (PERP, TAN) or mode not in wanted
+                            or len(point) != 3
+                            or not all(math.isfinite(float(value)) for value in point)):
+                        raise ValueError("invalid native Perp/Tan row")
+                    dynamic_by_target[int(target_index)][mode].append(point)
+        except Exception:  # noqa: BLE001 -- complete scalar dynamic-snap fallback
+            dynamic = None
+            dynamic_by_target = None
 
-    for target in targets or ():
+    for target_index, target in enumerate(targets):
         if target.is_point:
             if POINT in wanted:
                 loc = target.points[0] if target.points else None
@@ -856,11 +905,17 @@ def candidates(targets, cursor, modes, plane=None, *, base=None):
         # `Perp`/`Tan`: only with a previous point. No `base` -> no contribution,
         # never a silent fallback (house rule 4).
         if PERP in wanted and base is not None:
-            for p in perpendicular_points(target.points, base):
+            points = (perpendicular_points(target.points, base)
+                      if dynamic_by_target is None
+                      else dynamic_by_target[target_index][PERP])
+            for p in points:
                 found.append(Snap(p, PERP, _dist(p, cursor), target))
 
         if TAN in wanted and base is not None:
-            for p in tangent_points(target.points, base, target.closed):
+            points = (tangent_points(target.points, base, target.closed)
+                      if dynamic_by_target is None
+                      else dynamic_by_target[target_index][TAN])
+            for p in points:
                 found.append(Snap(p, TAN, _dist(p, cursor), target))
 
     if INT in wanted:

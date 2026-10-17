@@ -26,8 +26,12 @@ _lock = threading.Lock()
 _signature: str | None = None
 _native_binding: Any = None
 _status = "not checked"
-_near_pack_cache = {"source": None, "arrays": None, "packed": None,
-                    "offsets": None, "total": 0}
+_near_pack_cache: dict[str, Any] = {
+    "source": None, "arrays": None, "packed": None, "offsets": None, "total": 0,
+}
+_dynamic_snap_pack_cache: dict[str, Any] = {
+    "source": None, "arrays": None, "packed": None, "offsets": None, "total": 0,
+}
 
 RECT_MISS = 0
 RECT_HIT = 1
@@ -166,6 +170,17 @@ def _binding():
                 except AttributeError:
                     pass
                 try:
+                    world_rect_mask = library.narwhal_world_rect_hit_mask_f64
+                    world_rect_mask.argtypes = [
+                        _DoubleP, _DoubleP, ctypes.c_size_t,
+                        _UInt64P, ctypes.c_size_t, _ByteP,
+                        ctypes.c_double, ctypes.c_double, _DoubleP,
+                        ctypes.c_ubyte, _ByteP,
+                    ]
+                    world_rect_mask.restype = ctypes.c_int
+                except AttributeError:
+                    pass
+                try:
                     clip_boxes = library.narwhal_screen_boxes_from_clip_f64
                     clip_boxes.argtypes = [
                         _DoubleP, ctypes.c_size_t, _UInt64P, ctypes.c_size_t,
@@ -191,6 +206,26 @@ def _binding():
                         ctypes.c_double, ctypes.c_double, _DoubleP, _ByteP,
                     ]
                     points_rect.restype = ctypes.c_int
+                except AttributeError:
+                    pass
+                try:
+                    intersections = library.narwhal_intersection_snaps_f64
+                    intersections.argtypes = [
+                        _DoubleP, ctypes.c_size_t, _UInt64P, ctypes.c_size_t,
+                        ctypes.c_double, _DoubleP, _UInt64P, ctypes.c_size_t,
+                        _UInt64P,
+                    ]
+                    intersections.restype = ctypes.c_int
+                except AttributeError:
+                    pass
+                try:
+                    dynamic_snaps = library.narwhal_dynamic_perp_tan_snaps_f64
+                    dynamic_snaps.argtypes = [
+                        _DoubleP, ctypes.c_size_t, _UInt64P, _ByteP,
+                        ctypes.c_size_t, _DoubleP, ctypes.c_ubyte,
+                        _DoubleP, _UInt64P, _ByteP, ctypes.c_size_t, _UInt64P,
+                    ]
+                    dynamic_snaps.restype = ctypes.c_int
                 except AttributeError:
                     pass
             except (AttributeError, OSError) as exc:
@@ -857,6 +892,209 @@ def nearest_projected_polylines(polylines, matrix, width, height, mouse):
         return None
 
 
+def perpendicular_tangent_points(polylines, closed, base, *, perp=True, tan=True):
+    """Return ordered native sampled Perp/Tan rows for all target polylines.
+
+    Rows are ``((x, y, z), target_index, "Perp" | "Tan")``. Input packing is
+    shared with native intersection snaps; ``None`` requests scalar fallback.
+    """
+    global _status
+    binding = _binding()
+    if binding is None:
+        return None
+    library, _project, _rect_query, _batch_query, _nearest_curve, path = binding
+    query = getattr(library, "narwhal_dynamic_perp_tan_snaps_f64", None)
+    if query is None:
+        _status = f"native selection Perp/Tan query unavailable: {path}"
+        return None
+    try:
+        import numpy as np
+
+        source = tuple(polylines)
+        closed_flags = np.ascontiguousarray(tuple(closed), dtype=np.uint8)
+        origin = np.ascontiguousarray(base, dtype=np.float64)
+        mode_mask = int(bool(perp)) | (int(bool(tan)) << 1)
+        if (closed_flags.shape != (len(source),)
+                or bool((closed_flags > 1).any())
+                or origin.shape != (3,) or not bool(np.isfinite(origin).all())
+                or mode_mask == 0):
+            _status = "native selection input rejected: invalid Perp/Tan metadata"
+            return None
+        with _lock:
+            cached_source = _dynamic_snap_pack_cache["source"]
+            reuse = (cached_source is not None and len(cached_source) == len(source)
+                     and all(old is new for old, new in zip(cached_source, source)))
+            if reuse:
+                arrays = _dynamic_snap_pack_cache["arrays"]
+                packed = _dynamic_snap_pack_cache["packed"]
+                offsets = _dynamic_snap_pack_cache["offsets"]
+                total = _dynamic_snap_pack_cache["total"]
+            else:
+                cacheable = all(
+                    type(polyline) is tuple
+                    and all(type(point) is tuple and len(point) == 3
+                            and all(type(value) is float for value in point)
+                            for point in polyline)
+                    for polyline in source)
+                arrays = []
+                raw_offsets = [0]
+                total = 0
+                for polyline in source:
+                    points = _point_array(np, polyline)
+                    if points is None or not bool(np.isfinite(points).all()):
+                        _status = "native selection input rejected: Perp/Tan polylines must be finite Nx3"
+                        return None
+                    arrays.append(points)
+                    total += len(points)
+                    if total > np.iinfo(np.uint64).max:
+                        _status = "native selection input rejected: Perp/Tan point count exceeds u64"
+                        return None
+                    raw_offsets.append(total)
+                packed = (np.concatenate(arrays, axis=0) if total
+                          else np.empty((0, 3), dtype=np.float64))
+                offsets = np.ascontiguousarray(raw_offsets, dtype=np.uint64)
+                if cacheable:
+                    _dynamic_snap_pack_cache.update(
+                        source=source, arrays=arrays, packed=packed,
+                        offsets=offsets, total=total)
+        required = ctypes.c_uint64(0)
+        code = query(
+            packed.ctypes.data_as(_DoubleP), total,
+            offsets.ctypes.data_as(_UInt64P),
+            closed_flags.ctypes.data_as(_ByteP), len(arrays),
+            origin.ctypes.data_as(_DoubleP), mode_mask,
+            None, None, None, 0, ctypes.byref(required),
+        )
+        if code != 0 or required.value > np.iinfo(np.intp).max:
+            _status = f"native selection Perp/Tan sizing failed with code {code}: {path}"
+            return None
+        count = int(required.value)
+        if count == 0:
+            _status = f"ready: {path}"
+            return ()
+        xyz = np.full((count, 3), np.nan, dtype=np.float64)
+        targets = np.full(count, np.iinfo(np.uint64).max, dtype=np.uint64)
+        kinds = np.zeros(count, dtype=np.uint8)
+        written = ctypes.c_uint64(0)
+        code = query(
+            packed.ctypes.data_as(_DoubleP), total,
+            offsets.ctypes.data_as(_UInt64P),
+            closed_flags.ctypes.data_as(_ByteP), len(arrays),
+            origin.ctypes.data_as(_DoubleP), mode_mask,
+            xyz.ctypes.data_as(_DoubleP), targets.ctypes.data_as(_UInt64P),
+            kinds.ctypes.data_as(_ByteP), count, ctypes.byref(written),
+        )
+        allowed = {kind for kind, wanted in ((1, perp), (2, tan)) if wanted}
+        if (code != 0 or written.value != count or not bool(np.isfinite(xyz).all())
+                or bool((targets >= len(arrays)).any())
+                or any(int(kind) not in allowed for kind in kinds)):
+            _status = f"native selection Perp/Tan output invalid with code {code}: {path}"
+            return None
+        _status = f"ready: {path}"
+        names = {1: "Perp", 2: "Tan"}
+        return tuple((tuple(float(value) for value in xyz[index]),
+                      int(targets[index]), names[int(kinds[index])])
+                     for index in range(count))
+    except Exception as exc:  # noqa: BLE001 -- optimization failure preserves Osnap
+        _status = f"native selection Perp/Tan query raised: {exc}"
+        return None
+
+
+def intersection_points(polylines, tol=1.0e-6):
+    """Return ordered ``((x, y, z), earlier_target_index)`` intersection rows.
+
+    Inputs are immutable sampled display polylines. The native result mirrors the
+    scalar target-pair/segment-pair traversal and global first-seen deduplication;
+    ``None`` requests the complete Python fallback.
+    """
+    global _status
+    binding = _binding()
+    if binding is None:
+        return None
+    library, _project, _rect_query, _batch_query, _nearest_curve, path = binding
+    query = getattr(library, "narwhal_intersection_snaps_f64", None)
+    if query is None:
+        _status = f"native selection intersection query unavailable: {path}"
+        return None
+    try:
+        import numpy as np
+
+        source = tuple(polylines)
+        tolerance = float(tol)
+        if not np.isfinite(tolerance) or tolerance < 0.0:
+            _status = "native selection input rejected: intersection tolerance must be finite and nonnegative"
+            return None
+        with _lock:
+            cached_source = _dynamic_snap_pack_cache["source"]
+            reuse = (cached_source is not None and len(cached_source) == len(source)
+                     and all(old is new for old, new in zip(cached_source, source)))
+            if reuse:
+                arrays = _dynamic_snap_pack_cache["arrays"]
+                packed = _dynamic_snap_pack_cache["packed"]
+                offsets = _dynamic_snap_pack_cache["offsets"]
+                total = _dynamic_snap_pack_cache["total"]
+            else:
+                cacheable = all(
+                    type(polyline) is tuple
+                    and all(type(point) is tuple and len(point) == 3
+                            and all(type(value) is float for value in point)
+                            for point in polyline)
+                    for polyline in source)
+                arrays = []
+                raw_offsets = [0]
+                total = 0
+                for polyline in source:
+                    points = _point_array(np, polyline)
+                    if points is None or not bool(np.isfinite(points).all()):
+                        _status = "native selection input rejected: intersection polylines must be finite Nx3"
+                        return None
+                    arrays.append(points)
+                    total += len(points)
+                    if total > np.iinfo(np.uint64).max:
+                        _status = "native selection input rejected: intersection point count exceeds u64"
+                        return None
+                    raw_offsets.append(total)
+                packed = (np.concatenate(arrays, axis=0) if total
+                          else np.empty((0, 3), dtype=np.float64))
+                offsets = np.ascontiguousarray(raw_offsets, dtype=np.uint64)
+                if cacheable:
+                    _dynamic_snap_pack_cache.update(
+                        source=source, arrays=arrays, packed=packed,
+                        offsets=offsets, total=total)
+        required = ctypes.c_uint64(0)
+        code = query(
+            packed.ctypes.data_as(_DoubleP), total,
+            offsets.ctypes.data_as(_UInt64P), len(arrays), tolerance,
+            None, None, 0, ctypes.byref(required),
+        )
+        if code != 0 or required.value > np.iinfo(np.intp).max:
+            _status = f"native selection intersection sizing failed with code {code}: {path}"
+            return None
+        count = int(required.value)
+        if count == 0:
+            _status = f"ready: {path}"
+            return ()
+        xyz = np.full((count, 3), np.nan, dtype=np.float64)
+        targets = np.full(count, np.iinfo(np.uint64).max, dtype=np.uint64)
+        written = ctypes.c_uint64(0)
+        code = query(
+            packed.ctypes.data_as(_DoubleP), total,
+            offsets.ctypes.data_as(_UInt64P), len(arrays), tolerance,
+            xyz.ctypes.data_as(_DoubleP), targets.ctypes.data_as(_UInt64P), count,
+            ctypes.byref(written),
+        )
+        if (code != 0 or written.value != count or not bool(np.isfinite(xyz).all())
+                or bool((targets >= len(arrays)).any())):
+            _status = f"native selection intersection output invalid with code {code}: {path}"
+            return None
+        _status = f"ready: {path}"
+        return tuple((tuple(float(value) for value in xyz[index]), int(targets[index]))
+                     for index in range(count))
+    except Exception as exc:  # noqa: BLE001 -- optimization failure preserves Osnap
+        _status = f"native selection intersection query raised: {exc}"
+        return None
+
+
 def screen_boxes_from_clip(clip, offsets, point_flags, width, height):
     """Reduce grouped homogeneous clip rows to screen rectangles.
 
@@ -1036,6 +1274,82 @@ def screen_boxes_from_world(points, matrix, offsets, point_flags, width, height)
         return boxes, valid
     except Exception as exc:  # noqa: BLE001 -- optimization failure preserves selection
         _status = f"native selection fused world-box projection raised: {exc}"
+        return None
+
+
+def world_rect_hit_indices(points, matrix, offsets, point_flags, width, height,
+                           rect, *, crossing=False):
+    """Return compact ordered object indices hit by a window/crossing rectangle.
+
+    Rust fuses projection, grouped reduction and classification into one byte per
+    object. ``None`` requests the established screen-box fallback.
+    """
+    global _status
+    binding = _binding()
+    if binding is None:
+        return None
+    library, _project, _rect_query, _batch_query, _nearest_curve, path = binding
+    query = getattr(library, "narwhal_world_rect_hit_mask_f64", None)
+    if query is None:
+        _status = f"native selection compact rectangle mask unavailable: {path}"
+        return None
+    try:
+        import numpy as np
+
+        values = _point_array(np, points)
+        view = np.ascontiguousarray(matrix, dtype=np.float64)
+        raw_offsets = np.asarray(offsets)
+        raw_flags = np.asarray(point_flags)
+        bounds = np.ascontiguousarray(rect, dtype=np.float64)
+        width = float(width)
+        height = float(height)
+        if values is None:
+            _status = "native selection input rejected: rectangle-mask points must be Nx3"
+            return None
+        if view.shape != (4, 4) or not bool(np.isfinite(view).all()):
+            _status = "native selection input rejected: rectangle-mask matrix must be finite 4x4"
+            return None
+        if bounds.shape != (4,) or not bool(np.isfinite(bounds).all()) or not (
+                bounds[0] <= bounds[2] and bounds[1] <= bounds[3]):
+            _status = "native selection input rejected: rectangle-mask bounds are invalid"
+            return None
+        if (raw_offsets.ndim != 1 or len(raw_offsets) < 1
+                or not np.issubdtype(raw_offsets.dtype, np.integer)
+                or bool((raw_offsets < 0).any())):
+            _status = "native selection input rejected: rectangle-mask offsets must be unsigned"
+            return None
+        packed_offsets = np.ascontiguousarray(raw_offsets, dtype=np.uint64)
+        object_count = len(packed_offsets) - 1
+        if (int(packed_offsets[0]) != 0 or int(packed_offsets[-1]) != len(values)
+                or bool((packed_offsets[1:] < packed_offsets[:-1]).any())):
+            _status = "native selection input rejected: rectangle-mask offsets must span points"
+            return None
+        if (raw_flags.ndim != 1 or len(raw_flags) != object_count
+                or not np.issubdtype(raw_flags.dtype, np.integer)
+                or bool((raw_flags < 0).any()) or bool((raw_flags > 1).any())):
+            _status = "native selection input rejected: rectangle-mask flags must be zero/one"
+            return None
+        if not np.isfinite((width, height)).all() or width < 0.0 or height < 0.0:
+            _status = "native selection input rejected: invalid rectangle-mask dimensions"
+            return None
+        packed_flags = np.ascontiguousarray(raw_flags, dtype=np.uint8)
+        hits = np.zeros(object_count, dtype=np.uint8)
+        if object_count == 0:
+            return ()
+        code = query(
+            view.ctypes.data_as(_DoubleP), values.ctypes.data_as(_DoubleP), len(values),
+            packed_offsets.ctypes.data_as(_UInt64P), object_count,
+            packed_flags.ctypes.data_as(_ByteP), width, height,
+            bounds.ctypes.data_as(_DoubleP), int(bool(crossing)),
+            hits.ctypes.data_as(_ByteP),
+        )
+        if code != 0 or not bool((hits <= 1).all()):
+            _status = f"native selection compact rectangle mask failed with code {code}: {path}"
+            return None
+        _status = f"ready: {path}"
+        return tuple(int(index) for index in np.flatnonzero(hits))
+    except Exception as exc:  # noqa: BLE001 -- optimization failure preserves selection
+        _status = f"native selection compact rectangle mask raised: {exc}"
         return None
 
 
@@ -1251,4 +1565,6 @@ def _reset_for_tests() -> None:
         _native_binding = None
         _status = "not checked"
         _near_pack_cache.update(
+            source=None, arrays=None, packed=None, offsets=None, total=0)
+        _dynamic_snap_pack_cache.update(
             source=None, arrays=None, packed=None, offsets=None, total=0)

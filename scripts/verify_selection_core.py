@@ -25,6 +25,8 @@ MAX_GLIBC = (2, 35)
 EXPECTED_EXPORTS = (
     "narwhal_any_projected_segment_crosses_rect_f32",
     "narwhal_any_screen_segment_crosses_rect_f64",
+    "narwhal_dynamic_perp_tan_snaps_f64",
+    "narwhal_intersection_snaps_f64",
     "narwhal_nearest_projected_curve_f32",
     "narwhal_nearest_projected_point_f64",
     "narwhal_nearest_projected_polylines_f64",
@@ -39,6 +41,7 @@ EXPECTED_EXPORTS = (
     "narwhal_screen_boxes_from_world_f64",
     "narwhal_screen_rects_from_aabbs_f64",
     "narwhal_selection_core_abi_version",
+    "narwhal_world_rect_hit_mask_f64",
 )
 PLATFORMS = {
     "linux-x86_64": {
@@ -328,7 +331,7 @@ def verify_directory(root: Path) -> dict[str, object]:
 def self_check() -> None:
     sources = source_inventory()
     aggregate = source_aggregate(sources)
-    if not SHA_RE.fullmatch(aggregate) or len(EXPECTED_EXPORTS) != 16:
+    if not SHA_RE.fullmatch(aggregate) or len(EXPECTED_EXPORTS) != 19:
         raise VerificationError("selection-core verifier constants are invalid")
     toolchain = (CRATE / "rust-toolchain.toml").read_text(encoding="utf-8")
     config = (CRATE / ".cargo/config.toml").read_text(encoding="utf-8")

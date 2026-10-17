@@ -90,6 +90,45 @@ try:
                                             matrix, 800, 600) is None,
           "invalid segment shape requests Python fallback")
 
+    intersection_lines = (
+        ((0.0, 0.0, 0.0), (5.0, 0.0, 0.0), (10.0, 0.0, 0.0)),
+        ((8.0, -2.0, 0.0), (8.0, 2.0, 0.0)),
+        ((5.0, -2.0, 0.0), (5.0, 2.0, 0.0)),
+        ((2.0, -2.0, 1.0), (2.0, 2.0, 1.0)),
+    )
+    intersections = native_selection.intersection_points(intersection_lines, 0.0)
+    packed_first = native_selection._dynamic_snap_pack_cache["packed"]
+    repeated = native_selection.intersection_points(intersection_lines, 0.0)
+    check(intersections == (((8.0, 0.0, 0.0), 0), ((5.0, 0.0, 0.0), 0))
+          and repeated == intersections,
+          "adapter returns ordered deduplicated native intersections", repr(intersections))
+    check(native_selection._dynamic_snap_pack_cache["packed"] is packed_first,
+          "immutable intersection polylines reuse their packed f64 buffer")
+    boundary = native_selection.intersection_points(intersection_lines, 1.0)
+    check(boundary is not None and ((2.0, 0.0, 0.5), 0) in boundary,
+          "adapter preserves inclusive intersection tolerance", repr(boundary))
+    check(native_selection.intersection_points(intersection_lines, -1.0) is None,
+          "invalid intersection tolerance requests scalar fallback")
+
+    dynamic_lines = (
+        ((0.0, 0.0, 0.0), (10.0, 0.0, 0.0)),
+        ((1.0, 0.0, 0.0), (0.0, 1.0, 0.0),
+         (-1.0, 0.0, 0.0), (0.0, -1.0, 0.0)),
+    )
+    tangent_rows = native_selection.perpendicular_tangent_points(
+        dynamic_lines, (False, True), (2.0, -2.0, 0.0), perp=False)
+    check(tangent_rows == (
+        ((0.75, 0.25, 0.0), 1, "Tan"),
+        ((-0.25, -0.75, 0.0), 1, "Tan")),
+          "adapter preserves tangent crossings over a closed seam", repr(tangent_rows))
+    perp_rows = native_selection.perpendicular_tangent_points(
+        dynamic_lines, (False, True), (4.0, 3.0, 0.0), tan=False)
+    check(perp_rows is not None and perp_rows[0] == ((4.0, 0.0, 0.0), 0, "Perp"),
+          "adapter preserves strict interior Perp feet", repr(perp_rows))
+    check(native_selection.perpendicular_tangent_points(
+        dynamic_lines, (False,), (4.0, 3.0, 0.0)) is None,
+          "invalid Perp/Tan target metadata requests scalar fallback")
+
     identity = np.identity(4, dtype=np.float64)
     query_lines = np.array((((-1.0, 0.0, 0.0), (1.0, 0.0, 0.0)),), dtype=np.float32)
     check(native_selection.projected_segments_rect_query(
@@ -188,6 +227,20 @@ try:
           and tuple(world_boxes[0][0]) == (0.0, 0.0, 800.0, 600.0)
           and tuple(world_boxes[0][1]) == (400.0, 300.0, 400.0, 300.0),
           "fused world-box adapter projects and reduces without a NumPy clip buffer")
+    mask_values = np.array(((-0.5, -0.5, 0.0), (0.5, 0.5, 0.0),
+                            (0.0, 0.0, 0.0), (1.0, 1.0, 0.0)), dtype=np.float64)
+    mask_offsets = np.array((0, 2, 4), dtype=np.uint64)
+    mask_flags = np.array((0, 1), dtype=np.uint8)
+    window_hits = native_selection.world_rect_hit_indices(
+        mask_values, identity, mask_offsets, mask_flags, 800, 600,
+        (300.0, 200.0, 500.0, 400.0))
+    crossing_hits = native_selection.world_rect_hit_indices(
+        mask_values, identity, mask_offsets, mask_flags, 800, 600,
+        (600.0, 450.0, 700.0, 500.0), crossing=True)
+    check(window_hits == (1,),
+          "compact adapter returns only fully contained window indices", repr(window_hits))
+    check(crossing_hits == (0,),
+          "compact adapter preserves inclusive crossing edges", repr(crossing_hits))
     aabb_matrix = np.array(((1.0, 0.0, 0.0, 0.0),
                             (0.0, 1.0, 0.0, 0.0),
                             (0.0, 0.0, 1.0, 0.0),
@@ -860,6 +913,11 @@ real_hover_native_data = ui._hover_curve_native_data
 real_hover_world_data = ui._hover_curve_world_data
 real_hover_curve_object = ui._hover_curve_object
 real_native_screen_boxes = ui._native_selection_screen_boxes
+real_native_rect_names = ui._native_selection_rect_names
+real_world_rect_indices = ui.native_selection.world_rect_hit_indices
+real_selection_box_inputs = ui._selection_world_box_inputs
+real_object_screen_bboxes = ui._object_screen_bboxes
+real_rectangle_selection_hits = ui._rectangle_selection_hits
 real_world_boxes = ui.native_selection.screen_boxes_from_world
 real_clip_boxes = ui.native_selection.screen_boxes_from_clip
 real_project_many = ui._project_many_2d
@@ -1145,6 +1203,52 @@ try:
           and len(fused_route_calls) == 1,
           "UI box helper routes fused world projection and preserves source names")
 
+    compact_route_calls = []
+    ui.native_selection.world_rect_hit_indices = (
+        lambda *args, **kwargs: compact_route_calls.append((args, kwargs)) or (0, 1))
+    compact_names = ui._native_selection_rect_names(
+        region, rv3d, box_points, box_slices,
+        (390.0, 290.0, 410.0, 310.0), ui.select.CROSSING)
+    check(compact_names == ["BoxFirst", "PointSecond"]
+          and len(compact_route_calls) == 1
+          and compact_route_calls[0][1].get("crossing") is True,
+          "UI compact mask maps multiple hit indices back to ordered names")
+    ui.native_selection.world_rect_hit_indices = lambda *_args, **_kwargs: (1, 0)
+    check(ui._native_selection_rect_names(
+        region, rv3d, box_points, box_slices,
+        (390.0, 290.0, 410.0, 310.0), ui.select.CROSSING) is None,
+          "descending compact indices request the complete box fallback")
+    ui.native_selection.world_rect_hit_indices = real_world_rect_indices
+
+    compact_production_calls = []
+    ui._selection_world_box_inputs = lambda _projection: (tuple(box_points), tuple(box_slices))
+    ui._native_selection_rect_names = (
+        lambda *args: compact_production_calls.append(args) or ["PointSecond"])
+    ui._object_screen_bboxes = lambda *_args: [
+        ("WrongFallback", (0.0, 0.0, 1.0, 1.0))]
+    ui._rectangle_selection_hits = (
+        lambda candidates, _rect, _mode, **kwargs:
+        [tuple(candidates), tuple(kwargs.get("preclassified") or ())])
+    compact_production = ui._object_rectangle_hits(
+        None, types.SimpleNamespace(region_3d=rv3d), region, rv3d,
+        {"boxes": None, "box_inputs": None},
+        (390.0, 290.0, 410.0, 310.0), ui.select.WINDOW)
+    check(compact_production == [(), ("PointSecond",)]
+          and len(compact_production_calls) == 1,
+          "selection release consumes compact native names without materializing boxes")
+    ui._native_selection_rect_names = lambda *_args: None
+    compact_decline = ui._object_rectangle_hits(
+        None, types.SimpleNamespace(region_3d=rv3d), region, rv3d,
+        {"boxes": None, "box_inputs": None},
+        (0.0, 0.0, 2.0, 2.0), ui.select.WINDOW)
+    check(compact_decline == [
+        (("WrongFallback", (0.0, 0.0, 1.0, 1.0)),), ()],
+          "compact-mask decline enters the connected screen-box fallback branch")
+    ui._selection_world_box_inputs = real_selection_box_inputs
+    ui._native_selection_rect_names = real_native_rect_names
+    ui._object_screen_bboxes = real_object_screen_bboxes
+    ui._rectangle_selection_hits = real_rectangle_selection_hits
+
     clip_route_calls = []
     ui.native_selection.screen_boxes_from_world = lambda *_args: None
     ui.native_selection.screen_boxes_from_clip = (
@@ -1196,6 +1300,11 @@ try:
           and fallback_projection["boxes"] == tuple(fallback_boxes),
           "native clip-box decline runs the complete tuple/reduction fallback")
     ui._native_selection_screen_boxes = real_native_screen_boxes
+    ui._native_selection_rect_names = real_native_rect_names
+    ui.native_selection.world_rect_hit_indices = real_world_rect_indices
+    ui._selection_world_box_inputs = real_selection_box_inputs
+    ui._object_screen_bboxes = real_object_screen_bboxes
+    ui._rectangle_selection_hits = real_rectangle_selection_hits
     ui._project_many_2d = real_project_many
     ui._curve_selection_candidates = real_curve_candidates
     ui._document_point_locations = real_document_points

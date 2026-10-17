@@ -17565,7 +17565,8 @@ def _selection_projection_entry(region, rv3d):
     if entry is None:
         if len(entries) >= _SELECTION_PROJECTION_MAX:
             entries.pop(next(iter(entries)))
-        entry = {"boxes": None, "segments": {}, "segment_indexes": {}}
+        entry = {"boxes": None, "box_inputs": None,
+                 "segments": {}, "segment_indexes": {}}
         entries[key] = entry
     return key, entry
 
@@ -17740,9 +17741,11 @@ def _curves_cross_selection_rect(names, region, rv3d, rect, projection=None):
 
 
 def _rectangle_selection_hits(candidates, rect, mode, curve_crosses=None,
-                              curve_crosses_many=None, expand_groups=None):
+                              curve_crosses_many=None, expand_groups=None,
+                              preclassified=None):
     """Rectangle hits refined by actual curve strokes and document groups."""
-    hits = select.in_rect(candidates, rect, mode)
+    hits = (select.in_rect(candidates, rect, mode) if preclassified is None
+            else list(preclassified))
     if mode == select.CROSSING and curve_crosses_many is not None:
         hits = list(curve_crosses_many(hits))
     elif mode == select.CROSSING and curve_crosses is not None:
@@ -17750,6 +17753,25 @@ def _rectangle_selection_hits(candidates, rect, mode, curve_crosses=None,
     if hits and expand_groups is not None:
         hits = list(expand_groups(hits))
     return hits
+
+
+def _object_rectangle_hits(area, space, region, rv3d, projection, rect, mode):
+    """Broad native hit mask followed by unchanged curve/group refinement."""
+    preclassified = None
+    if projection is None or projection.get("boxes") is None:
+        points, slices = _selection_world_box_inputs(projection)
+        preclassified = _native_selection_rect_names(
+            region, rv3d, points, slices, rect, mode)
+    candidates = (() if preclassified is not None
+                  else _object_screen_bboxes(area, space, region, projection))
+    return _rectangle_selection_hits(
+        candidates, rect, mode,
+        curve_crosses=lambda name: _curve_crosses_selection_rect(
+            name, region, rv3d, rect, projection),
+        curve_crosses_many=lambda names: _curves_cross_selection_rect(
+            names, region, rv3d, rect, projection),
+        expand_groups=app_state.ctx.expand_group_names,
+        preclassified=preclassified)
 
 
 def _project_many_2d(region, rv3d, points):
@@ -17873,6 +17895,108 @@ def _curve_selection_candidates(point_at, locked):
         return None
 
 
+def _selection_world_box_inputs(projection=None):
+    """Return packed world samples and name slices for rectangle broad phase.
+
+    Gathering object bounds still belongs to Blender integration. The projection
+    cache retains these immutable rows so repeated rectangles in one view do not
+    revisit object metadata before Rust classifies them.
+    """
+    if projection is not None and projection.get("box_inputs") is not None:
+        return projection["box_inputs"]
+    import bpy
+    from mathutils import Vector
+
+    locked = _unpickable_names_cached()
+    point_locations = _document_point_locations()
+    point_at = {name: world for name, world in point_locations if name}
+    pending, slices = [], []
+    fast = _curve_selection_candidates(point_at, locked)
+    if fast is not None:
+        curve_candidates, app_names = fast
+        for name, ob, rec in curve_candidates:
+            start = len(pending)
+            pending.extend(_selection_world_corners(ob, rec))
+            slices.append((name, start, len(pending), False))
+        for name in bpy.data.objects.keys():
+            if name in app_names:
+                continue
+            ob = bpy.data.objects.get(name)
+            if ob is None or name in locked or not bridge.display_visible(ob):
+                continue
+            if name in point_at:
+                start = len(pending)
+                pending.append(point_at[name])
+                slices.append((name, start, start + 1, True))
+                continue
+            start = len(pending)
+            corners = [tuple(ob.matrix_world @ Vector(c))
+                       for c in bridge.local_box_corners(ob)]
+            pending.extend(tuple(float(v) for v in corner) for corner in corners)
+            slices.append((name, start, len(pending), False))
+    else:
+        for ob in bpy.data.objects:
+            if ob.name in locked or not bridge.display_visible(ob):
+                continue
+            if ob.name in point_at:
+                start = len(pending)
+                pending.append(point_at[ob.name])
+                slices.append((ob.name, start, start + 1, True))
+                continue
+            rec = _curve_record(ob) if bridge.is_app_drawn(ob) else None
+            start = len(pending)
+            corners = _selection_world_corners(ob, rec)
+            pending.extend(tuple(float(v) for v in corner) for corner in corners)
+            slices.append((ob.name, start, len(pending), False))
+    result = (tuple(pending), tuple(slices))
+    if projection is not None:
+        projection["box_inputs"] = result
+    return result
+
+
+def _native_selection_rect_names(region, rv3d, points, slices, rect, mode):
+    """Ordered broad-phase names from the compact Rust hit mask, or ``None``."""
+    try:
+        if not native_selection.available():
+            return None
+        import numpy as np
+
+        matrix = np.asarray(rv3d.perspective_matrix, dtype=np.float64)
+        coordinates = np.asarray(points, dtype=np.float64)
+        if (matrix.shape != (4, 4) or coordinates.ndim != 2
+                or coordinates.shape[1:] != (3,)
+                or not np.isfinite(matrix).all()
+                or not np.isfinite(coordinates).all()):
+            return None
+        offsets = [0]
+        flags = []
+        expected_start = 0
+        for _name, start, end, is_point in slices:
+            if start != expected_start or end < start or end > len(coordinates):
+                return None
+            offsets.append(end)
+            flags.append(int(bool(is_point)))
+            expected_start = end
+        if expected_start != len(coordinates):
+            return None
+        indices = native_selection.world_rect_hit_indices(
+            coordinates, matrix, np.ascontiguousarray(offsets, dtype=np.uint64),
+            np.ascontiguousarray(flags, dtype=np.uint8), region.width, region.height,
+            rect, crossing=mode == select.CROSSING)
+        if indices is None:
+            return None
+        previous = -1
+        names = []
+        for index in indices:
+            if not isinstance(index, int) or not previous < index < len(slices):
+                return None
+            previous = index
+            names.append(slices[previous][0])
+        return names
+    except Exception:  # noqa: BLE001 -- optional mask never breaks selection
+        return None
+
+
 def _native_selection_screen_boxes(region, rv3d, points, slices):
     """Ordered ``(name, box)`` rows, or ``None`` for the established NumPy fallback."""
     try:
@@ -17934,9 +18058,6 @@ def _object_screen_bboxes(area, space, region, projection=None):
     Curve-pass arrays provide the fast candidate path.  If they are absent or fail
     consistency checks, the conservative object walk below remains authoritative.
     """
-    import bpy
-    from mathutils import Vector
-
     rv3d = getattr(space, "region_3d", None) if space is not None else None
     if rv3d is None or region is None:
         return []
@@ -17944,53 +18065,8 @@ def _object_screen_bboxes(area, space, region, projection=None):
         _key, projection = _selection_projection_entry(region, rv3d)
     if projection is not None and projection["boxes"] is not None:
         return list(projection["boxes"])
-    out, locked = [], _unpickable_names_cached()
-    point_locations = _document_point_locations()
-    point_at = {name: world for name, world in point_locations if name}
-    pending, slices = [], []
-    fast = _curve_selection_candidates(point_at, locked)
-    if fast is not None:
-        curve_candidates, app_names = fast
-        for name, ob, rec in curve_candidates:
-            # Membership in the synchronized curve collection plus `hidden` above is
-            # the visibility test for app-drawn objects; calling display_visible here
-            # would re-enter Blender's per-object collection-user synchronization.
-            start = len(pending)
-            pending.extend(_selection_world_corners(ob, rec))
-            slices.append((name, start, len(pending), False))
-        # Points and ordinary display objects retain the old visibility and local-box
-        # semantics. App-drawn membership is already known from collection keys.
-        for name in bpy.data.objects.keys():
-            if name in app_names:
-                continue
-            ob = bpy.data.objects.get(name)
-            if ob is None or name in locked or not bridge.display_visible(ob):
-                continue
-            if name in point_at:
-                start = len(pending)
-                pending.append(point_at[name])
-                slices.append((name, start, start + 1, True))
-                continue
-            start = len(pending)
-            corners = [tuple(ob.matrix_world @ Vector(c))
-                       for c in bridge.local_box_corners(ob)]
-            pending.extend(tuple(float(v) for v in corner) for corner in corners)
-            slices.append((name, start, len(pending), False))
-    else:
-        # Conservative fallback: preserve the pre-cache path exactly.
-        for ob in bpy.data.objects:
-            if ob.name in locked or not bridge.display_visible(ob):
-                continue
-            if ob.name in point_at:
-                start = len(pending)
-                pending.append(point_at[ob.name])
-                slices.append((ob.name, start, start + 1, True))
-                continue
-            rec = _curve_record(ob) if bridge.is_app_drawn(ob) else None
-            start = len(pending)
-            corners = _selection_world_corners(ob, rec)
-            pending.extend(tuple(float(v) for v in corner) for corner in corners)
-            slices.append((ob.name, start, len(pending), False))
+    out = []
+    pending, slices = _selection_world_box_inputs(projection)
     native_boxes = _native_selection_screen_boxes(region, rv3d, pending, slices)
     if native_boxes is not None:
         out.extend(native_boxes)
@@ -18235,16 +18311,8 @@ def _sel_drag_end():
                                                  shift=shift, ctrl=ctrl)
         return wanted, mode
     _projection_key, projection = _selection_projection_entry(region, rv3d)
-    candidates = _object_screen_bboxes(area, space, region, projection)
-    hits = _rectangle_selection_hits(
-        candidates, rect, mode,
-        curve_crosses=lambda name: _curve_crosses_selection_rect(
-            name, region, rv3d, rect, projection),
-        curve_crosses_many=lambda names: _curves_cross_selection_rect(
-            names, region, rv3d, rect, projection),
-        # A rectangle that catches one member catches the same transitive group unit
-        # as a click. The old path skipped this expansion and visibly desynced groups.
-        expand_groups=app_state.ctx.expand_group_names)
+    hits = _object_rectangle_hits(
+        area, space, region, rv3d, projection, rect, mode)
     action = select.modifier_action(shift=shift, ctrl=ctrl)
     wanted = select.apply(selection_names(), hits, action)
     apply_selection(wanted, already_expanded=True)
