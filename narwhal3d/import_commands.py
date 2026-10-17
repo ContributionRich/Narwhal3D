@@ -1167,17 +1167,45 @@ def import_into(ctx, path):
     if not got.items:
         return False, f"Import: nothing in {os.path.basename(path)} could be imported" + (
             ". " + "; ".join(got.notes) if got.notes else "")
-    ctx.note_change("Import")
+    undo = getattr(ctx, "undo", None)
+    undo_was_enabled = bool(getattr(undo, "enabled", False))
+    already_captured = bool(getattr(undo, "captured", False))
+    captured_now = bool(ctx.note_change("Import"))
     layer_cache = _LayerIndexCache(ctx.model)
+    resolved_layers = [
+        (layer_cache.index(layer, got.layers.get(layer, (0, 0, 0)))
+         if layer else None)
+        for _geom, _base, layer in got.items
+    ]
+    # All imported layers now exist and remain unchanged while objects are inserted.
+    # `_make_display_object` asks for the complete layer records per object; reuse one
+    # immutable read for this batch instead of rebuilding it thousands of times.
+    layer_records_method = getattr(ctx.model, "layer_records", None)
+    layer_records_overridden = False
+    if callable(layer_records_method):
+        try:
+            layer_records = layer_records_method()
+            ctx.model.layer_records = lambda: layer_records
+            layer_records_overridden = True
+        except (AttributeError, TypeError):
+            pass
+    suspend_redundant_undo = bool(
+        undo is not None and undo_was_enabled and (already_captured or captured_now))
+    if suspend_redundant_undo:
+        undo.enabled = False
     added_names = []
-    for geom, base, layer in got.items:
-        li = layer_cache.index(layer, got.layers.get(layer, (0, 0, 0))) \
-            if layer else None
-        added = ctx.add_geometry(geom, base, li)
-        if isinstance(added, (tuple, list)) and added:
-            _apply_plot_width(ctx.model, added[0], got.plot_widths.get(id(geom)))
-        if isinstance(added, (tuple, list)) and len(added) >= 2 and added[1]:
-            added_names.append(str(added[1]))
+    try:
+        for (geom, base, _layer), li in zip(got.items, resolved_layers):
+            added = ctx.add_geometry(geom, base, li)
+            if isinstance(added, (tuple, list)) and added:
+                _apply_plot_width(ctx.model, added[0], got.plot_widths.get(id(geom)))
+            if isinstance(added, (tuple, list)) and len(added) >= 2 and added[1]:
+                added_names.append(str(added[1]))
+    finally:
+        if suspend_redundant_undo:
+            undo.enabled = undo_was_enabled
+        if layer_records_overridden:
+            ctx.model.layer_records = layer_records_method
     # The Layers panel reads AppState.layers, a live mirror of model.file.Layers.
     # Open replaces the model and rebuilds that mirror in set_model(); Import
     # mutates the current model in place, so it must synchronize once after all

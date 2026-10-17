@@ -109,6 +109,79 @@ def rel(a, b):
     return abs(a - b) / abs(b)
 
 
+print("-- Import batches undo capture and layer records --")
+batch_model = doc()
+batch_ctx = commands.NarwhalContext(batch_model)
+batch_items = ic.Imported()
+batch_items.layers = {f"Layer {index:02d}": (index, 255 - index, index * 3 % 256)
+                      for index in range(64)}
+for index in range(1200):
+    batch_items.items.append((
+        bridge.make_line((float(index), 0.0, 0.0), (float(index), 1.0, 0.0)),
+        "Line", f"Layer {index % 64:02d}"))
+real_read_foreign = ic.read_foreign
+real_snapshot = batch_model.snapshot
+real_layer_records = batch_model.layer_records
+snapshot_calls = []
+layer_record_calls = []
+selected_batch = []
+
+
+def counted_snapshot():
+    snapshot_calls.append(True)
+    return real_snapshot()
+
+
+def counted_layer_records():
+    layer_record_calls.append(True)
+    return real_layer_records()
+
+
+def batch_add(geom, base, layer_index=None):
+    batch_ctx.note_change(base)
+    name = f"{base}_{len(batch_model.file.Objects) + 1}"
+    object_id, _attributes = batch_model.add_object(geom, name, layer_index)
+    batch_model.layer_records()
+    return object_id, name
+
+
+batch_model.snapshot = counted_snapshot
+batch_model.layer_records = counted_layer_records
+batch_ctx.add_geometry = batch_add
+batch_ctx.select_by_names = lambda names: selected_batch.extend(names) or list(names)
+ic.read_foreign = lambda _path, _model: batch_items
+batch_ok, batch_msg = ic.import_into(batch_ctx, "batch.dxf")
+check(batch_ok and len(batch_model.file.Objects) == 1200
+      and len(selected_batch) == 1200 and "1200 object" in batch_msg,
+      "a 1,200-object Import remains complete and selects every new object")
+check(len(snapshot_calls) == 1 and len(batch_ctx.undo._undo) == 1,
+      f"Import constructs one before-snapshot and one atomic undo record "
+      f"({len(snapshot_calls)} snapshots, {len(batch_ctx.undo._undo)} records)")
+check(len(layer_record_calls) == 2,
+      f"Import reads layers once for the undo snapshot and once after pre-creation, "
+      f"never per object ({len(layer_record_calls)} reads)")
+check(batch_ctx.undo.enabled and batch_model.layer_records is counted_layer_records,
+      "Import restores undo and the model layer-record method after success")
+
+failure_model = doc()
+failure_ctx = commands.NarwhalContext(failure_model)
+failure_items = ic.Imported()
+failure_items.items = batch_items.items[:2]
+real_failure_layers = failure_model.layer_records
+failure_ctx.add_geometry = lambda *_args, **_kwargs: (_ for _ in ()).throw(
+    RuntimeError("injected insertion failure"))
+ic.read_foreign = lambda _path, _model: failure_items
+failed_cleanly = False
+try:
+    ic.import_into(failure_ctx, "failure.dxf")
+except RuntimeError as exc:
+    failed_cleanly = str(exc) == "injected insertion failure"
+check(failed_cleanly and failure_ctx.undo.enabled
+      and failure_model.layer_records == real_failure_layers,
+      "failed Import restores undo and layer-record state in finally")
+ic.read_foreign = real_read_foreign
+
+
 print("-- native 3DM merges into the open model --")
 source_3dm = doc("Inches")
 cut_layer = source_3dm.add_layer("Cut", (17, 83, 149))
