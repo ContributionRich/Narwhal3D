@@ -149,8 +149,10 @@ def run():
           f"{kinds(fake)} {app_state.doc_path}")
     check(starts and starts[0] == want,
           "the Save As dialog opens on the current file", f"{starts}")
-    check(filters == [(("Narwhal 3D Projects", "*.narwhal"),)],
-          "the Save As dialog offers Narwhal projects instead of the legacy .3dm filter",
+    from narwhal3d import export_commands
+    expected_filters = (("Narwhal 3D Projects", "*.narwhal"), *export_commands.EXPORT_FILTERS)
+    check(filters == [expected_filters] and filters[0][0][1] == "*.narwhal",
+          "Save As defaults to Narwhal projects and lists every implemented export format",
           repr(filters))
 
     interchange = os.path.join(TMP, "copy.3dm")
