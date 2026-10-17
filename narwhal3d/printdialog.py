@@ -40,6 +40,7 @@ MAX_CUSTOM_MM = 5000.0
 #: (id, label, kind) -- kind: "choice" (a dropdown), "check", "field"
 ROWS = (
     ("destination", "Printer", "choice"),
+    ("cdr_version", "CorelDRAW version", "choice"),
     ("size", "Size", "choice"),
     ("custom_w", "  Width (mm)", "field"),
     ("custom_h", "  Height (mm)", "field"),
@@ -59,6 +60,7 @@ BUTTONS = (("print", "Print"), ("close", "Close"))
 @dataclass
 class DialogState:
     destination: int = 0
+    cdr_version: str = "15"
     size: str = print2d.DEFAULT_PAGE
     orientation: str = print2d.DEFAULT_ORIENTATION
     color: str = "PrintColor"
@@ -85,12 +87,15 @@ class DialogState:
         for rid, label, kind in ROWS:
             if kind == "field" and self.size != print2d.CUSTOM:
                 continue
+            if rid == "cdr_version" and self.extension() != ".cdr":
+                continue
             out.append((rid, label, kind))
         return out
 
     def choices(self, rid):
         return {
             "destination": tuple(range(len(DESTINATIONS))),
+            "cdr_version": ("15", "17"),
             "size": SIZES,
             "orientation": ORIENTATIONS,
             "color": COLORS,
@@ -158,7 +163,8 @@ class DialogState:
                                  color=self.color,
                                  default_width_mm=self.width_mm(),
                                  custom_mm=(self.live_value("custom_w"),
-                                            self.live_value("custom_h")))
+                                            self.live_value("custom_h")),
+                                 cdr_version=int(self.cdr_version))
 
 
 # ---------------------------------------------------------------------------

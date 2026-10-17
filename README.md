@@ -127,7 +127,7 @@ Narwhal never uploads a screenshot, log, or model automatically. Review the brow
 
 ## Supported interchange
 
-Core, self-contained source functionality includes `.3dm`, STEP, DXF, SVG, OBJ, STL, and CorelDRAW vector interchange. Built-in v15 Import/Open/Export/Print preserves curves, layers, colours, ordinary widths, and Hairline; v16, v17, and v18 Import/Open uses pinned TraceDraw Rust reader crates compiled directly into Narwhal. None of those paths requires a separately installed executable or service. Other CDR generations and unsupported structures can use an optional local CLI fallback; PDF and Adobe Illustrator conversion can use an optional converter pack. No vector import route uploads files or silently rasterizes them.
+Core, self-contained source functionality includes `.3dm`, STEP, DXF, SVG, OBJ, STL, and CorelDRAW vector interchange. Built-in v15 Import/Open/Export/Print preserves curves, layers, colours, ordinary widths, and Hairline; v16, v17, and v18 Import/Open and opt-in v17 Export/Print use pinned TraceDraw Rust codec crates compiled into Narwhal's bundled helper. None of those paths requires a separately installed executable or service. Other CDR generations and unsupported structures can use an optional local CLI fallback; PDF and Adobe Illustrator conversion can use an optional converter pack. No vector import route uploads files or silently rasterizes them.
 
 ## Repository layout
 

@@ -1,4 +1,4 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::fs::{self, OpenOptions};
 use std::io::{Cursor, Read, Write};
@@ -14,7 +14,7 @@ const MAX_RECORDS: usize = 500_000;
 const MAX_DEPTH: usize = 256;
 const MAX_JSON_BYTES: usize = 128 * 1024 * 1024;
 const MEMORY_LIMIT_BYTES: usize = 768 * 1024 * 1024;
-const PROTOCOL: &str = "narwhal-cdr-multiversion 1 tracedraw 821ba154 versions 16-18";
+const PROTOCOL: &str = "narwhal-cdr-multiversion 1 tracedraw 821ba154 read 16-18 write 17";
 
 struct WarningCapture;
 static WARNING_CAPTURE: WarningCapture = WarningCapture;
@@ -123,6 +123,25 @@ struct Report {
     shapes: usize,
     skipped_objects: usize,
     warnings: Vec<String>,
+}
+
+#[derive(Deserialize)]
+struct WriteRequest {
+    page_w_mm: f64,
+    page_h_mm: f64,
+    title: String,
+    hairline: bool,
+    strokes: Vec<WriteStroke>,
+    layers: Vec<String>,
+}
+
+#[derive(Deserialize)]
+struct WriteStroke {
+    beziers: Vec<[[f64; 2]; 4]>,
+    closed: bool,
+    rgb: [f64; 3],
+    width_mm: f64,
+    layer: String,
 }
 
 fn u16_at(data: &[u8], offset: usize) -> Result<u16, String> {
@@ -405,6 +424,119 @@ fn decode(package: &[u8]) -> Result<Decoded, String> {
     })
 }
 
+fn write_v17(request_path: &PathBuf, output: &PathBuf) -> Result<(), String> {
+    use tracedraw_core::{BezPath, Color, Document, Layer, Shape, ShapeKind, Size, Stroke};
+
+    let bytes =
+        fs::read(request_path).map_err(|error| format!("cannot read write request: {error}"))?;
+    if bytes.len() as u64 > MAX_PACKAGE_BYTES {
+        return Err("CDR write request exceeds the input limit".to_owned());
+    }
+    let request: WriteRequest = serde_json::from_slice(&bytes)
+        .map_err(|error| format!("invalid CDR write request: {error}"))?;
+    if !request.page_w_mm.is_finite()
+        || !request.page_h_mm.is_finite()
+        || request.page_w_mm <= 0.0
+        || request.page_h_mm <= 0.0
+        || request.strokes.is_empty()
+        || request.strokes.len() > 100_000
+        || request.layers.is_empty()
+        || request.layers.len() > 100_000
+    {
+        return Err("invalid CDR write dimensions or collection sizes".to_owned());
+    }
+    let mut document = Document::new(
+        request.title,
+        Size::new(request.page_w_mm, request.page_h_mm),
+    );
+    document.pages[0].layers.clear();
+    let mut layer_ids = std::collections::BTreeMap::new();
+    for name in request.layers {
+        if name.is_empty() || name.len() > 65_536 || layer_ids.contains_key(&name) {
+            return Err("invalid or duplicate CDR layer name".to_owned());
+        }
+        let id = document.ids_mut().layer();
+        layer_ids.insert(name.clone(), id);
+        document.pages[0].layers.push(Layer::new(id, name));
+    }
+    let expected_shapes = request.strokes.len();
+    let mut nodes = 0usize;
+    for source in request.strokes {
+        let layer = *layer_ids
+            .get(&source.layer)
+            .ok_or("CDR stroke names an absent layer")?;
+        if source.beziers.is_empty()
+            || !source.width_mm.is_finite()
+            || source.width_mm <= 0.0
+            || source.rgb.iter().any(|value| !value.is_finite())
+        {
+            return Err("invalid CDR stroke".to_owned());
+        }
+        nodes = nodes
+            .checked_add(1 + source.beziers.len() * 3)
+            .ok_or("CDR node overflow")?;
+        if nodes > 10_000_000
+            || source
+                .beziers
+                .iter()
+                .flatten()
+                .flatten()
+                .any(|v| !v.is_finite())
+        {
+            return Err(
+                "CDR stroke nodes exceed limits or contain non-finite coordinates".to_owned(),
+            );
+        }
+        let mut path = BezPath::new();
+        let point = |value: [f64; 2]| (value[0], value[1]);
+        path.move_to(point(source.beziers[0][0]));
+        for bezier in &source.beziers {
+            path.curve_to(point(bezier[1]), point(bezier[2]), point(bezier[3]));
+        }
+        let mut shape = Shape::new(
+            document.ids_mut().shape(),
+            ShapeKind::Path {
+                path,
+                closed: source.closed,
+            },
+        );
+        shape.stroke = Some(Stroke {
+            color: Color::Rgb {
+                r: source.rgb[0].clamp(0.0, 1.0) as f32,
+                g: source.rgb[1].clamp(0.0, 1.0) as f32,
+                b: source.rgb[2].clamp(0.0, 1.0) as f32,
+            },
+            width: if request.hairline {
+                Stroke::HAIRLINE
+            } else {
+                source.width_mm
+            },
+            ..Stroke::default()
+        });
+        document
+            .layer_mut(layer)
+            .map_err(|error| error.to_string())?
+            .shapes
+            .push(shape);
+    }
+    let package = tracedraw_cdr::write::document_to_cdr_version(&document, 17);
+    if package.len() > MAX_PACKAGE_BYTES as usize {
+        return Err("CDR v17 output exceeds the limit".to_owned());
+    }
+    let checked = decode(&package)?;
+    if checked.version != 17 || checked.report.shapes != expected_shapes {
+        return Err("CDR v17 output failed strict reopen certification".to_owned());
+    }
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(output)
+        .map_err(|error| format!("cannot create CDR output: {error}"))?;
+    file.write_all(&package)
+        .and_then(|_| file.sync_all())
+        .map_err(|error| format!("cannot write CDR output: {error}"))
+}
+
 fn run() -> Result<(), String> {
     let mut arguments = std::env::args_os().skip(1);
     let first = arguments.next().ok_or("missing input CDR path")?;
@@ -414,6 +546,14 @@ fn run() -> Result<(), String> {
         }
         println!("{PROTOCOL}");
         return Ok(());
+    }
+    if first == "write17" {
+        let request = PathBuf::from(arguments.next().ok_or("missing CDR write request")?);
+        let output = PathBuf::from(arguments.next().ok_or("missing CDR output path")?);
+        if arguments.next().is_some() {
+            return Err("unexpected write17 arguments".to_owned());
+        }
+        return write_v17(&request, &output);
     }
     let input = PathBuf::from(first);
     let output = PathBuf::from(arguments.next().ok_or("missing output JSON path")?);

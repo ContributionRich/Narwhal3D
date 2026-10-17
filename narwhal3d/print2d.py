@@ -96,6 +96,7 @@ class PageSetup:
     margin_mm: float = 0.0          # vector files use the full page
     default_width_mm: float = DEFAULT_WIDTH_MM   # the dialog's "Default line width"
     custom_mm: tuple = (210.0, 297.0)            # used when size == CUSTOM
+    cdr_version: int = 15                         # v15 default; v17 is explicit opt-in
 
 
 @dataclass
@@ -105,6 +106,7 @@ class Page:
     strokes: list = field(default_factory=list)
     notes: list = field(default_factory=list)
     scale: float = 1.0               # page mm per model unit actually used
+    cdr_version: int = 15
 
 
 # ---------------------------------------------------------------------------
@@ -440,6 +442,7 @@ def build_page(model, view, setup, objects=None):
         s = float(setup.scale) * unit_mm       # page mm per model unit
     page = Page(pw, ph)
     page.scale = s
+    page.cdr_version = setup.cdr_version
     ox, oy = pw / 2.0, ph / 2.0                # centred on the output page
 
     def to_page(p):
@@ -460,7 +463,7 @@ def build_page(model, view, setup, objects=None):
     return page
 
 
-def write(path, page, title="", hairline=False):
+def write(path, page, title="", hairline=False, cdr_version=None):
     """Write `page` by extension (.pdf / .ai / .svg / genuine native CDR v15)."""
     low = path.lower()
     if low.endswith(".pdf"):
@@ -470,8 +473,16 @@ def write(path, page, title="", hairline=False):
     if low.endswith(".svg"):
         return vx.write_svg(path, page.strokes, page.width_mm, page.height_mm)
     if low.endswith(".cdr"):
-        from . import cdr_writer
+        version = int(cdr_version if cdr_version is not None else page.cdr_version)
+        if version == 15:
+            from . import cdr_writer
 
-        return cdr_writer.write_cdr(
-            path, page.strokes, page.width_mm, page.height_mm, title, hairline=hairline)
+            return cdr_writer.write_cdr(
+                path, page.strokes, page.width_mm, page.height_mm, title, hairline=hairline)
+        if version == 17:
+            from . import embedded_cdr
+
+            return embedded_cdr.write_v17(
+                path, page.strokes, page.width_mm, page.height_mm, title, hairline=hairline)
+        raise ValueError(f"CDR output version must be 15 or 17, not {version}")
     raise ValueError(f"{path!r}: print/export writes .pdf, .ai, .svg or .cdr")

@@ -38,7 +38,7 @@ FORBIDDEN_PARTS = {"vendor", "More_Data", "ExamplePhotos", ".git", "bug_reports"
 EXCLUDED_PACKAGE_FILES = {PurePosixPath("kernel/brep_writer.cpp")}
 EXCLUDED_PACKAGE_TREE = PurePosixPath("kernel/bin")
 NATIVE_COMPONENT_RELATIVE = Path("runtime/linux-x86_64/bin")
-CDR_MULTIVERSION_PROTOCOL = "narwhal-cdr-multiversion 1 tracedraw 821ba154 versions 16-18"
+CDR_MULTIVERSION_PROTOCOL = "narwhal-cdr-multiversion 1 tracedraw 821ba154 read 16-18 write 17"
 NATIVE_COMPONENTS = (
     "libnarwhal_cdr_core.so", "narwhal-converter-supervisor",
     "narwhal-cdr-multiversion",

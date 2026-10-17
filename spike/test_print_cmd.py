@@ -15,7 +15,8 @@ import zipfile
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
-from narwhal3d import cdr_reader, filedialog, print2d, print_commands, tracedraw  # noqa: E402
+from narwhal3d import (cdr_reader, embedded_cdr, filedialog, print2d,
+                       print_commands, tracedraw)  # noqa: E402
 from narwhal3d.model import NarwhalModel  # noqa: E402
 from narwhal3d.state import app_state  # noqa: E402
 
@@ -153,6 +154,23 @@ def run():
                   for obj in hairline_drawing.objects),
           "Print Width=Hairline writes genuine 0.003-inch CorelDRAW outlines",
           f"{last()!r}")
+    helper = os.path.join(ROOT, "native", "cdr_multiversion", "target", "release",
+                          "narwhal-cdr-multiversion")
+    if os.path.isfile(helper):
+        prior_helper = os.environ.get("NARWHAL_CDR_MULTIVERSION")
+        os.environ["NARWHAL_CDR_MULTIVERSION"] = helper
+        try:
+            v17_path = os.path.join(TMP, "print-v17.cdr")
+            for token in ("Print", "CDRVersion", "17", v17_path):
+                app_state.feed_line(token)
+            v17 = embedded_cdr.decode(v17_path) if os.path.exists(v17_path) else None
+        finally:
+            if prior_helper is None:
+                os.environ.pop("NARWHAL_CDR_MULTIVERSION", None)
+            else:
+                os.environ["NARWHAL_CDR_MULTIVERSION"] = prior_helper
+        check(v17 is not None and v17["version"] == 17,
+              "Print CDRVersion=17 uses the bundled Rust writer", f"{last()!r}")
 
     # 4. a format Print does not write: refused by name
     p = os.path.join(TMP, "x.dwg")

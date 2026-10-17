@@ -80,32 +80,36 @@ def version_hint(path: str) -> int | None:
     return value // 100 if value % 100 == 0 else None
 
 
-def decode(path: str) -> dict:
-    """Return an embedded v16-v18 TraceDraw document or raise a classified error."""
+def _run_helper(arguments, purpose):
     executable = _executable()
     if executable is None:
-        raise EmbeddedCDRUnavailable("bundled multi-version CDR reader is unavailable")
+        raise EmbeddedCDRUnavailable("bundled multi-version CDR helper is unavailable")
+    from . import converter_process
+
+    done = converter_process.run([executable, *arguments], timeout=120, max_output=8192)
+    if done.timed_out:
+        raise EmbeddedCDRError(f"{purpose} timed out")
+    if done.error:
+        raise EmbeddedCDRError(f"{purpose} could not start: {done.error}")
+    detail = (done.stderr or done.stdout or "helper refused the request").strip()
+    if done.returncode == 4:
+        raise EmbeddedCDRUnsupported(detail)
+    if done.returncode:
+        raise EmbeddedCDRError(detail)
+
+
+def decode(path: str) -> dict:
+    """Return an embedded v16-v18 TraceDraw document or raise a classified error."""
+
     source = os.path.abspath(path)
     try:
         if not os.path.isfile(source) or os.path.getsize(source) > 64 * 1024 * 1024:
             raise EmbeddedCDRError("CDR input must be a regular file no larger than 64 MiB")
     except OSError as exc:
         raise EmbeddedCDRError(f"cannot inspect CDR input: {exc}") from exc
-    from . import converter_process
-
     with tempfile.TemporaryDirectory(prefix="narwhal_embedded_cdr_") as directory:
         output = os.path.join(directory, "decoded.json")
-        done = converter_process.run(
-            [executable, source, output], timeout=120, max_output=8192)
-        if done.timed_out:
-            raise EmbeddedCDRError("bundled multi-version CDR reader timed out")
-        if done.error:
-            raise EmbeddedCDRError(f"bundled multi-version CDR reader could not start: {done.error}")
-        detail = (done.stderr or done.stdout or "reader refused the file").strip()
-        if done.returncode == 4:
-            raise EmbeddedCDRUnsupported(detail)
-        if done.returncode:
-            raise EmbeddedCDRError(detail)
+        _run_helper([source, output], "bundled multi-version CDR reader")
         try:
             if not os.path.isfile(output) or os.path.getsize(output) > 128 * 1024 * 1024:
                 raise EmbeddedCDRError("bundled CDR reader produced no bounded result")
@@ -116,3 +120,48 @@ def decode(path: str) -> dict:
     if not _valid(value):
         raise EmbeddedCDRError("bundled CDR reader produced an incomplete result")
     return value
+
+
+def write_v17(path, strokes, page_w_mm, page_h_mm, title="", hairline=False):
+    """Write and strictly reopen a genuine CDR v17 through the bundled Rust helper."""
+    target = os.path.abspath(path)
+    layers = []
+    encoded = []
+    for stroke in strokes:
+        if not stroke.beziers:
+            continue
+        layer = str(stroke.layer or "Layer 1")
+        if layer not in layers:
+            layers.append(layer)
+        encoded.append({
+            "beziers": stroke.beziers,
+            "closed": bool(stroke.closed),
+            "rgb": stroke.rgb,
+            "width_mm": float(stroke.width_mm),
+            "layer": layer,
+        })
+    request = target + f".request-{os.getpid()}.json"
+    temporary = target + f".saving-{os.getpid()}.tmp.cdr"
+    try:
+        with open(request, "x", encoding="utf-8") as stream:
+            json.dump({
+                "page_w_mm": float(page_w_mm), "page_h_mm": float(page_h_mm),
+                "title": str(title), "hairline": bool(hairline),
+                "strokes": encoded, "layers": layers,
+            }, stream, separators=(",", ":"), allow_nan=False)
+        _run_helper(["write17", request, temporary], "bundled CDR v17 writer")
+        result = decode(temporary)
+        if result["version"] != 17 or result["report"]["shapes"] != len(encoded):
+            raise EmbeddedCDRError("CDR v17 output failed strict reopen certification")
+        os.replace(temporary, target)
+        return os.path.getsize(target)
+    except (OSError, TypeError, ValueError) as exc:
+        if isinstance(exc, EmbeddedCDRError):
+            raise
+        raise EmbeddedCDRError(f"cannot write CDR v17: {exc}") from exc
+    finally:
+        for candidate in (request, temporary):
+            try:
+                os.unlink(candidate)
+            except FileNotFoundError:
+                pass

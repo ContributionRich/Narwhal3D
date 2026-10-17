@@ -45,7 +45,7 @@ check(BUILD.returncode == 0 and HELPER.is_file(),
       "bundled multi-version helper builds from tracked vendored source")
 protocol = subprocess.run([str(HELPER), "--version"], text=True, capture_output=True, timeout=30)
 check(protocol.returncode == 0 and protocol.stdout.strip()
-      == "narwhal-cdr-multiversion 1 tracedraw 821ba154 versions 16-18",
+      == "narwhal-cdr-multiversion 1 tracedraw 821ba154 read 16-18 write 17",
       "bundled helper exposes the exact release capability protocol")
 prior = os.environ.get("NARWHAL_CDR_MULTIVERSION")
 os.environ["NARWHAL_CDR_MULTIVERSION"] = str(HELPER)
@@ -88,6 +88,19 @@ try:
             check(embedded.version_hint(str(packages[19])) == 19,
                   "bounded metadata hint identifies an external-fallback generation")
 
+            written = work / "written-v17.cdr"
+            strokes = [types.SimpleNamespace(
+                beziers=(((10.0, 20.0), (20.0, 35.0), (30.0, 5.0), (40.0, 20.0)),),
+                closed=False, rgb=(1.0, 0.0, 0.0), width_mm=0.25, layer="Cut")]
+            embedded.write_v17(str(written), strokes, 100.0, 80.0, "Written", hairline=True)
+            reopened = embedded.decode(str(written))
+            shape = reopened["document"]["pages"][0]["layers"][0]["shapes"][0]
+            check(reopened["version"] == 17 and reopened["report"]["shapes"] == 1
+                  and shape["stroke"]["width"] == 0.0762
+                  and shape["stroke"]["color"] == {"model": "rgb", "r": 1.0,
+                                                     "g": 0.0, "b": 0.0},
+                  "bundled Rust writer emits/reopens v17 layers, RGB, and Hairline")
+
             damaged = work / "damaged-v18.cdr"
             with zipfile.ZipFile(packages[18]) as source, zipfile.ZipFile(damaged, "w") as output:
                 for info in source.infolist():
@@ -109,7 +122,7 @@ try:
     try:
         embedded._executable = lambda: None
         try:
-            embedded.decode("missing.cdr")
+            embedded.decode(__file__)
         except embedded.EmbeddedCDRUnavailable:
             unavailable = True
         else:

@@ -40,7 +40,7 @@ License: MIT for the Type-2 runtime, with its statically linked component notice
 
 6. TraceDraw 0.9.0-dev.821ba15
 --------------------------------
-Use: the vendored `tracedraw-core` and `tracedraw-cdr` Rust crates are statically compiled into Narwhal's bundled, supervised CDR helper for version 16 through 18 Import/Open.
+Use: the vendored `tracedraw-core` and `tracedraw-cdr` Rust crates are statically compiled into Narwhal's bundled, supervised CDR helper for version 16 through 18 Import/Open and opt-in version 17 Export/Print.
 Source: https://github.com/igtoth/tracedraw, revision `821ba1545e3d3f75843fe7d3f912214800929821`.
 License: TraceDraw offers MIT OR Apache-2.0; Narwhal redistributes and statically links these files under the MIT option. The complete MIT text is `licenses/TraceDraw-MIT.txt`; `licenses/TraceDraw-Rust-Dependencies.txt` records every locked static Rust dependency and its available license/notice texts. Upstream's license files and `CLEANROOM.md` remain beside the vendored crates. No TraceDraw executable, service, or separately installed application is required for embedded versions.
 

@@ -95,6 +95,8 @@ class PrintCmd(commands.Command):
                     choices=("Hairline",) + tuple(
                         f"{value:.2f}" for value in print2d.PRINT_WIDTHS_MM),
                     help="Default line width in mm, or CorelDRAW Hairline (0.003 inch)."),
+        opts.Option("CDRVersion", opts.ENUM, default="15", choices=("15", "17"),
+                    help="CDR 15 is the default; choose 17 explicitly for newer workflows."),
     )
 
 
@@ -152,7 +154,8 @@ class PrintCmd(commands.Command):
                                   orientation=self.opt["Orientation"],
                                   area=self.opt["View"], scale=scale,
                                   color=self.opt["Color"],
-                                  default_width_mm=default_width)
+                                  default_width_mm=default_width,
+                                  cdr_version=int(self.opt.get("CDRVersion") or 15))
         try:
             view = _view()
             page = print2d.build_page(ctx.model, view, setup)

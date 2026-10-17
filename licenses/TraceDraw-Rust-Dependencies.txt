@@ -2459,7 +2459,6 @@ Repository: https://github.com/srijs/rust-crc32fast
    See the License for the specific language governing permissions and
    limitations under the License.
 
-
 --- LICENSE-MIT ---
 MIT License
 
@@ -4911,7 +4910,7 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
 ==============================================================================
-PACKAGE libc 0.2.190
+PACKAGE libc 0.2.191
 Declared license: MIT OR Apache-2.0
 Repository: https://github.com/rust-lang/libc
 

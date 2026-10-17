@@ -6,7 +6,7 @@
     "core/.gitignore": "306fd52e74fca6746e12acc750f232de15e71da917756a1270d74c91f5eb7368",
     "core/Cargo.toml": "4afe4bbdc96277994364e5cbd8963db3b7adece5f75bedd80f33a5bff3cc469f"
   },
-  "dependency_notices_sha256": "9bcfa995850ce98154469b4a230ccc9820d33830579fa921bb07c15f4a8be50c",
+  "dependency_notices_sha256": "bebf986f59d3505bcca7161041be41b8ef06bd4ea1479bac9ad49d2d37bb828c",
   "files": {
     "CLEANROOM.md": "9cd55747d6a2a482ae155970d77f13bb1e6232fd3f073924e8aa550987ce4286",
     "LICENSE-APACHE": "8ca4cc52ef1d13350d103b6696253fa50032c08347a51d73c3780ca6eb498f84",

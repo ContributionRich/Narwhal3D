@@ -38,7 +38,7 @@ REQUIRED = {
 SOURCE_ROOTS = ("narwhal3d", "launch", "licenses")
 SOURCE_FILES = ("LICENSE", "THIRD_PARTY_NOTICES", "CHANGELOG.md", "STATUS.md")
 SHA_RE = re.compile(r"[0-9a-f]{64}\Z")
-CDR_MULTIVERSION_PROTOCOL = "narwhal-cdr-multiversion 1 tracedraw 821ba154 versions 16-18"
+CDR_MULTIVERSION_PROTOCOL = "narwhal-cdr-multiversion 1 tracedraw 821ba154 read 16-18 write 17"
 
 
 class VerificationError(RuntimeError):

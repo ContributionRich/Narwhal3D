@@ -64,6 +64,9 @@ def _():
     lay = pd.layout(1600, 900, 1.0, st)
     assert pd.click(st, lay, *dict(lay.dropdown)[1].center) == "chose:destination"
     assert st.extension() == ".cdr" and st.scale == "1:1"
+    assert "cdr_version" in [rid for rid, _label, _kind in st.visible_rows()]
+    st.cdr_version = "17"
+    assert st.setup().cdr_version == 17
     by_key = pd.DialogState()
     lay = pd.layout(1600, 900, 1.0, by_key)
     destination = next(vr for rid, _label, vr in lay.rows if rid == "destination")

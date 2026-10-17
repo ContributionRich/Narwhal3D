@@ -36,7 +36,7 @@ APPIMAGE_RUNTIME_SHA256 = "2fca8b443c92510f1483a883f60061ad09b46b978b2631c807cd8
 APP_ROOT_RELATIVE = Path("usr/lib/narwhal3d")
 RUNTIME_RELATIVE = Path("tools/blender-patched")
 NATIVE_COMPONENT_RELATIVE = Path("runtime/linux-x86_64/bin")
-CDR_MULTIVERSION_PROTOCOL = "narwhal-cdr-multiversion 1 tracedraw 821ba154 versions 16-18"
+CDR_MULTIVERSION_PROTOCOL = "narwhal-cdr-multiversion 1 tracedraw 821ba154 read 16-18 write 17"
 NATIVE_COMPONENTS = (
     "libnarwhal_cdr_core.so", "narwhal-converter-supervisor",
     "narwhal-cdr-multiversion",

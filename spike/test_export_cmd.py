@@ -18,7 +18,8 @@ sys.path.insert(0, ROOT)
 
 import rhino3dm as r3  # noqa: E402
 
-from narwhal3d import cdr_reader, filedialog, kernel, print2d, print_commands, tracedraw  # noqa: E402
+from narwhal3d import (cdr_reader, embedded_cdr, filedialog, kernel, print2d,
+                       print_commands, tracedraw)  # noqa: E402
 from narwhal3d.kernel import occt_backend as ob  # noqa: E402
 from narwhal3d.model import NarwhalModel  # noqa: E402
 from narwhal3d.state import app_state  # noqa: E402
@@ -47,12 +48,15 @@ def select(names):
         o.select_set(o.name in names)
 
 
-def export(names, path, hairline=False):
+def export(names, path, hairline=False, cdr_version=15):
     app_state.active_command = None
     select(names)
     app_state.feed_line("Export")
     if hairline:
         app_state.feed_line("Hairline")
+    if cdr_version != 15:
+        app_state.feed_line("CDRVersion")
+        app_state.feed_line(str(cdr_version))
     app_state.feed_line(path)
     return last()
 
@@ -167,6 +171,25 @@ def run():
                   for obj in hairline_drawing.objects),
           "Export Hairline command option writes genuine 0.003-inch CorelDRAW outlines",
           f"{hairline_msg!r}")
+    helper = os.path.join(ROOT, "native", "cdr_multiversion", "target", "release",
+                          "narwhal-cdr-multiversion")
+    if os.path.isfile(helper):
+        prior_helper = os.environ.get("NARWHAL_CDR_MULTIVERSION")
+        os.environ["NARWHAL_CDR_MULTIVERSION"] = helper
+        try:
+            v17_path = os.path.join(TMP, "circle-v17.cdr")
+            v17_msg = export(circ, v17_path, hairline=True, cdr_version=17)
+            v17 = embedded_cdr.decode(v17_path) if os.path.exists(v17_path) else None
+        finally:
+            if prior_helper is None:
+                os.environ.pop("NARWHAL_CDR_MULTIVERSION", None)
+            else:
+                os.environ["NARWHAL_CDR_MULTIVERSION"] = prior_helper
+        check(v17 is not None and v17["version"] == 17
+              and v17["document"]["pages"][0]["layers"][0]["shapes"][0]
+                  ["stroke"]["width"] == 0.0762,
+              "Export CDRVersion=17 uses the bundled Rust writer and strictly reopens",
+              f"{v17_msg!r}")
 
     # 6. perspective: a 2-D export cannot preserve scale -> refused
     print_commands.view_provider = lambda: print2d.View(
