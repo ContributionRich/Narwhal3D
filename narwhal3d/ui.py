@@ -12845,6 +12845,17 @@ def snap_at(area, space, region, cursor_world, first_point=False, suspend=False,
         except Exception:  # noqa: BLE001 -- scalar Near remains authoritative
             return None
 
+    def discrete_batch(targets, modes, active_plane, mouse, radius):
+        try:
+            import numpy as np
+
+            matrix = np.asarray(rv3d.perspective_matrix, dtype=np.float64)
+            return native_selection.discrete_snap_survivors(
+                targets, modes, active_plane, matrix,
+                region.width, region.height, mouse, radius)
+        except Exception:  # noqa: BLE001 -- complete static Osnap fallback
+            return None
+
     # Only objects whose extent projects within the radius can snap, so only those are
     # sampled and handed to the engine (see `_snap_reach`). No mouse -> no cull, and
     # `best_on_screen` returns None for it anyway.
@@ -12864,7 +12875,8 @@ def snap_at(area, space, region, cursor_world, first_point=False, suspend=False,
                                 snap_to_locked=_snap_settings.snap_to_locked,
                                 project_batch=project_batch,
                                 project_near_batch=project_near_batch,
-                                project_distance_batch=project_distance_batch)
+                                project_distance_batch=project_distance_batch,
+                                discrete_batch=discrete_batch)
     return osnap.apply_projection(snap, plane, _snap_settings.project)
 
 
@@ -16573,7 +16585,42 @@ def set_gumball_alignment(name):
 
 #: `gumball_frame`'s selection points and their box centre per plane, valid for one
 #: (document state, object / grip / sub-object selection) -- see the comment there
-_gumball_pts_cache = {"key": None, "pts": [], "centres": {}, "builds": 0}
+_gumball_pts_cache = {
+    "key": None, "pts": [], "packed": None, "centres": {}, "builds": 0,
+}
+
+
+def _oriented_gumball_center(plane, points):
+    """Native-first CPlane bounds with the pure Gumball implementation as oracle."""
+    try:
+        native = native_selection.oriented_bbox_center(points, plane)
+        if native is not None:
+            return None if native == () else native
+    except Exception:  # noqa: BLE001 -- widget placement keeps its pure fallback
+        pass
+    fallback_points = points.tolist() if hasattr(points, "tolist") else points
+    return gumball.bbox_center(plane, fallback_points)
+
+
+def _gumball_cached_selection(skey):
+    """Refresh and return packed selection points for one complete selection key."""
+    gc = _gumball_pts_cache
+    if skey[0] is None or gc["key"] != skey:
+        pts = _selection_world_points()
+        packed = None
+        if pts:
+            try:
+                import numpy as np
+                candidate = np.ascontiguousarray(pts, dtype=np.float64)
+                if (candidate.ndim == 2 and candidate.shape[1:] == (3,)
+                        and np.isfinite(candidate).all()):
+                    packed = candidate
+            except Exception:  # noqa: BLE001 -- list fallback remains complete
+                pass
+        gc["key"], gc["pts"], gc["packed"], gc["centres"] = (
+            skey, pts, packed, {})
+        gc["builds"] += 1
+    return gc
 
 
 def gumball_frame():
@@ -16623,10 +16670,7 @@ def gumball_frame():
     # for that state; the plane-independent part is shared by every alignment.
     skey = (_doc_key(), frozenset(selected_display_names()), frozenset(_selected_cps),
             frozenset(_selected_subobjects))
-    gc = _gumball_pts_cache
-    if skey[0] is None or gc["key"] != skey:
-        gc["key"], gc["pts"], gc["centres"] = skey, _selection_world_points(), {}
-        gc["builds"] += 1
+    gc = _gumball_cached_selection(skey)
     pts = gc["pts"]
     if not pts:
         return None
@@ -16662,7 +16706,8 @@ def gumball_frame():
         pk = None
     origin = gc["centres"].get(pk) if pk is not None else None
     if origin is None:
-        origin = gumball.bbox_center(plane, pts)
+        origin = _oriented_gumball_center(
+            plane, gc["packed"] if gc.get("packed") is not None else pts)
         if pk is not None and origin is not None:
             gc["centres"][pk] = origin
     if origin is None:
@@ -17344,6 +17389,23 @@ def selection_names():
         return [ob.name for ob in app_state.ctx.selected_objects()]
     except Exception:  # noqa: BLE001
         return []
+
+
+NATIVE_BULK_SELECTION_MIN = 256
+
+
+def _ordered_selection_apply(current, hits, action):
+    """Use Rust for large quadratic Add operations; preserve the pure fallback."""
+    current = list(current or ())
+    hits = list(hits or ())
+    if action == select.ADD and len(current) + len(hits) >= NATIVE_BULK_SELECTION_MIN:
+        try:
+            native = native_selection.ordered_selection_apply(current, hits, action)
+            if native is not None:
+                return list(native)
+        except Exception:  # noqa: BLE001 -- selection must retain its pure path
+            pass
+    return select.apply(current, hits, action)
 
 
 def narwhal_click_select(area, space, region, rx, ry, shift=False, ctrl=False):
@@ -18266,7 +18328,7 @@ def _select_control_points_in_rect(region, rv3d, rect, shift=False, ctrl=False):
     """Apply a window/crossing rectangle to visible grips using the reference CAD application modifiers."""
     hits = _control_points_in_rect(region, rv3d, rect)
     action = select.modifier_action(shift=shift, ctrl=ctrl)
-    wanted = select.apply(sorted(_selected_cps), hits, action)
+    wanted = _ordered_selection_apply(sorted(_selected_cps), hits, action)
     _selected_cps.clear()
     _selected_cps.update(wanted)
     _tag_redraw_viewports()
@@ -18314,7 +18376,7 @@ def _sel_drag_end():
     hits = _object_rectangle_hits(
         area, space, region, rv3d, projection, rect, mode)
     action = select.modifier_action(shift=shift, ctrl=ctrl)
-    wanted = select.apply(selection_names(), hits, action)
+    wanted = _ordered_selection_apply(selection_names(), hits, action)
     apply_selection(wanted, already_expanded=True)
     _tag_redraw_viewports()
     return wanted, mode

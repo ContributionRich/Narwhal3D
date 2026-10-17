@@ -1034,7 +1034,8 @@ def _near_on_screen(target, project, mouse):
 
 def best_on_screen(targets, cursor, modes, project, radius_px, plane=None, *,
                    base=None, snap_to_locked=False, project_batch=None,
-                   project_near_batch=None, project_distance_batch=None):
+                   project_near_batch=None, project_distance_batch=None,
+                   discrete_batch=None):
     """:func:`best`, with distance measured in SCREEN PIXELS. See the block comment.
 
     `project` maps a world point to ``(x, y)`` pixels, or None when it cannot be seen
@@ -1048,11 +1049,37 @@ def best_on_screen(targets, cursor, modes, project, radius_px, plane=None, *,
     mouse = project(cursor) if cursor is not None else None
     if mouse is None:
         return None
+    targets = tuple(targets or ())
     if not snap_to_locked:
-        targets = [t for t in targets if not getattr(t, "locked", False)]
+        targets = tuple(t for t in targets if not getattr(t, "locked", False))
     wanted = tuple(m for m in (modes or ()) if is_implemented(m))
-    found = candidates(targets, cursor, tuple(m for m in wanted if m != NEAR),
-                       plane, base=base)
+    native_static = False
+    found = None
+    dynamic_modes = {INT, NEAR, PERP, TAN}
+    if (discrete_batch is not None and radius_px is not None and plane is not None
+            and not (set(wanted) & dynamic_modes)):
+        try:
+            rows = discrete_batch(targets, wanted, plane, mouse, radius_px)
+            if rows is not None:
+                native_found = []
+                for point, target_index, mode, distance in rows:
+                    if (not isinstance(target_index, numbers.Integral)
+                            or not 0 <= int(target_index) < len(targets)
+                            or mode not in wanted or mode in dynamic_modes
+                            or len(point) != 3
+                            or not all(math.isfinite(float(value)) for value in point)
+                            or not math.isfinite(float(distance))
+                            or not 0.0 <= float(distance) <= radius_px):
+                        raise ValueError("invalid native discrete snap row")
+                    native_found.append(Snap(
+                        point, mode, distance, targets[int(target_index)]))
+                found = native_found
+                native_static = True
+        except Exception:  # noqa: BLE001 -- complete candidate fallback
+            found = None
+    if found is None:
+        found = candidates(targets, cursor, tuple(m for m in wanted if m != NEAR),
+                           plane, base=base)
     if NEAR in wanted:
         near_targets = [target for target in targets if not target.is_point]
         coarse = None
@@ -1078,8 +1105,8 @@ def best_on_screen(targets, cursor, modes, project, radius_px, plane=None, *,
         for point, target in near_points:
             if point is not None:
                 found.append(Snap(point, NEAR, 0.0, target))
-    scored = None
-    if project_distance_batch is not None and found and radius_px is not None:
+    scored = found if native_static else None
+    if scored is None and project_distance_batch is not None and found and radius_px is not None:
         try:
             indices, distances = project_distance_batch(
                 tuple(s.point for s in found), mouse, radius_px)

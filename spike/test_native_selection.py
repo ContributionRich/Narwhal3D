@@ -63,6 +63,111 @@ try:
     native_selection._reset_for_tests()
     check(native_selection.available(), "explicit ABI-1 Rust library is available",
           native_selection.backend_status())
+    rotated_plane = ui.cplane.CPlane(
+        (0.0, 0.0, 0.0),
+        (math.sqrt(0.5), math.sqrt(0.5), 0.0),
+        (-math.sqrt(0.5), math.sqrt(0.5), 0.0))
+    native_center = native_selection.oriented_bbox_center(
+        ((0.0, 0.0, 0.0), (2.0, 0.0, 0.0), (0.0, 1.0, 0.0)),
+        rotated_plane)
+    check(native_center is not None
+          and max(abs(a - b) for a, b in zip(native_center, (0.75, 0.25, 0.0))) < 1e-12,
+          "oriented bbox adapter preserves a rotated CPlane center", repr(native_center))
+    check(native_selection.oriented_bbox_center((), rotated_plane) == (),
+          "oriented bbox adapter distinguishes an empty selection")
+    static_curve = ui.osnap.SnapTarget(
+        points=((0.0, 0.0, 0.0), (2.0, 0.0, 0.0), (10.0, 0.0, 0.0)),
+        vertices=((0.0, 0.0, 0.0), (2.0, 0.0, 0.0), (10.0, 0.0, 0.0)),
+        knots=((4.0, 0.0, 0.0),), center=(5.0, 1.0, 0.0))
+    static_point = ui.osnap.SnapTarget.point((0.0, 0.0, 0.0), name="P")
+    static_targets = (static_curve, static_point)
+    static_rows = native_selection.discrete_snap_survivors(
+        static_targets, ("End", "Mid", "Cen", "Quad", "Point", "Knot"),
+        ui.cplane.WORLD_TOP, np.identity(4), 100, 100, (50.0, 50.0), 1000.0)
+    static_packed = native_selection._discrete_snap_pack_cache["packed"]
+    static_repeat = native_selection.discrete_snap_survivors(
+        static_targets, ("End", "Mid", "Cen", "Quad", "Point", "Knot"),
+        ui.cplane.WORLD_TOP, np.identity(4), 100, 100, (50.0, 50.0), 1000.0)
+    check(static_rows is not None and static_repeat == static_rows
+          and any(row[:3] == ((5.0, 0.0, 0.0), 0, "Mid") for row in static_rows)
+          and [row[2] for row in static_rows if row[1] == 1] == ["Point"],
+          "discrete-snap adapter preserves static candidate identities and modes")
+    check(native_selection._discrete_snap_pack_cache["packed"] is static_packed,
+          "discrete-snap adapter reuses immutable packed target metadata")
+    original_static_points = static_curve.points
+    static_curve.points = tuple((point[0] + 1.0, point[1], point[2])
+                                for point in original_static_points)
+    refreshed_static = native_selection.discrete_snap_survivors(
+        static_targets, ("Quad",), ui.cplane.WORLD_TOP,
+        np.identity(4), 100, 100, (50.0, 50.0), 1000.0)
+    check(refreshed_static is not None
+          and native_selection._discrete_snap_pack_cache["packed"] is not static_packed,
+          "replaced target samples invalidate packed discrete metadata")
+    static_curve.points = original_static_points
+    native_selection._discrete_snap_pack_cache.update(signature=None, packed=None)
+
+    real_discrete_binding = native_selection._native_binding
+    real_discrete_signature = native_selection._signature
+    real_discrete_status = native_selection._status
+    real_library = real_discrete_binding[0]
+    binding_tail = real_discrete_binding[1:]
+
+    def no_write_discrete(*_args):
+        return 0
+
+    fake_library = types.SimpleNamespace(
+        narwhal_discrete_snap_survivors_f64=no_write_discrete,
+        narwhal_projected_snap_distances_f64=(
+            real_library.narwhal_projected_snap_distances_f64))
+    native_selection._native_binding = (fake_library, *binding_tail)
+    check(native_selection.discrete_snap_survivors(
+        static_targets, ("End",), ui.cplane.WORLD_TOP,
+        np.identity(4), 100, 100, (50.0, 50.0), 1000.0) is None,
+          "no-write native discrete success requests the complete fallback")
+
+    def invented_discrete(*args):
+        xyz = ctypes.cast(args[20], ctypes.POINTER(ctypes.c_double))
+        targets = ctypes.cast(args[21], ctypes.POINTER(ctypes.c_uint64))
+        modes = ctypes.cast(args[22], ctypes.POINTER(ctypes.c_ubyte))
+        distances = ctypes.cast(args[23], ctypes.POINTER(ctypes.c_double))
+        written = ctypes.cast(args[25], ctypes.POINTER(ctypes.c_uint64))
+        xyz[0], xyz[1], xyz[2] = 9.0, 9.0, 9.0
+        targets[0], modes[0], distances[0], written[0] = 0, 1, 636.3961030678928, 1
+        return 0
+
+    fake_library.narwhal_discrete_snap_survivors_f64 = invented_discrete
+    check(native_selection.discrete_snap_survivors(
+        static_targets, ("End",), ui.cplane.WORLD_TOP,
+        np.identity(4), 100, 100, (50.0, 50.0), 1000.0) is None,
+          "invented native point/distance cannot become an authoritative snap")
+
+    def point_as_end_discrete(*args):
+        xyz = ctypes.cast(args[20], ctypes.POINTER(ctypes.c_double))
+        targets = ctypes.cast(args[21], ctypes.POINTER(ctypes.c_uint64))
+        modes = ctypes.cast(args[22], ctypes.POINTER(ctypes.c_ubyte))
+        distances = ctypes.cast(args[23], ctypes.POINTER(ctypes.c_double))
+        written = ctypes.cast(args[25], ctypes.POINTER(ctypes.c_uint64))
+        xyz[0], xyz[1], xyz[2] = 0.0, 0.0, 0.0
+        targets[0], modes[0], distances[0], written[0] = 1, 1, 0.0, 1
+        return 0
+
+    fake_library.narwhal_discrete_snap_survivors_f64 = point_as_end_discrete
+    check(native_selection.discrete_snap_survivors(
+        static_targets, ("End",), ui.cplane.WORLD_TOP,
+        np.identity(4), 100, 100, (50.0, 50.0), 1000.0) is None,
+          "a point target mislabeled End requests the complete fallback")
+    native_selection._native_binding = real_discrete_binding
+    native_selection._signature = real_discrete_signature
+    native_selection._status = real_discrete_status
+
+    check(native_selection.ordered_selection_apply(
+        ("A", "B", "A"), ("B", "C", "C"), "add") == ("A", "B", "C"),
+          "ordered selection adapter preserves Add order and duplicate handling")
+    check(native_selection.ordered_selection_apply(
+        (("Grip", 2), ("Grip", 1)), (("Grip", 1),), "remove") == (("Grip", 2),),
+          "ordered selection adapter supports tuple-valued grip keys")
+    check(native_selection.ordered_selection_apply((), (), "unknown") is None,
+          "unknown ordered selection actions request the pure fallback")
     matrix = np.array((
         (1.2, 0.1, 0.0, 0.2),
         (0.0, 1.1, 0.1, -0.1),
@@ -763,6 +868,7 @@ real_location_3d_to_region_2d = v3u.location_3d_to_region_2d
 real_snap_display_projection = ui.native_selection.project_display_points
 real_snap_near_projection = ui.native_selection.nearest_projected_polylines
 real_snap_distance_projection = ui.native_selection.projected_snap_distances
+real_snap_discrete = ui.native_selection.discrete_snap_survivors
 try:
     ui._snap_settings = types.SimpleNamespace(
         active=lambda **_kwargs: ("End",), radius_px=10.0,
@@ -788,6 +894,10 @@ try:
     native_near_calls = []
     ui.native_selection.nearest_projected_polylines = (
         lambda *args: native_near_calls.append(args) or ((0.5, 0.0, 0.0),))
+    native_discrete_calls = []
+    ui.native_selection.discrete_snap_survivors = (
+        lambda *args: native_discrete_calls.append(args)
+        or (((0.0, 0.0, 0.0), 0, "End", 0.0),))
     routed_snap_batches = []
 
     def capture_best(targets, cursor, modes, project, radius, plane, **kwargs):
@@ -800,6 +910,9 @@ try:
                                           (1.0, 0.0, 0.0)),), (400.0, 300.0)),
                                     kwargs["project_distance_batch"](
                                         ((0.0, 0.0, 0.0), (1.0, 1.0, 0.0)),
+                                        (400.0, 300.0), 10.0),
+                                    kwargs["discrete_batch"](
+                                        ("target",), ("End",), plane,
                                         (400.0, 300.0), 10.0)))
         return "native-snap"
 
@@ -815,6 +928,8 @@ try:
           and len(native_distance_calls) == 1
           and routed_snap_batches[0][7] == ((0.5, 0.0, 0.0),)
           and tuple(routed_snap_batches[0][8][0]) == (0,)
+          and routed_snap_batches[0][9][0][2] == "End"
+          and len(native_discrete_calls) == 1
           and native_snap_calls[0][1].shape == (4, 4)
           and native_snap_calls[0][2:] == (800, 600),
           "snap_at supplies one viewport-shaped native candidate projection batch")
@@ -848,6 +963,7 @@ finally:
     ui.native_selection.project_display_points = real_snap_display_projection
     ui.native_selection.nearest_projected_polylines = real_snap_near_projection
     ui.native_selection.projected_snap_distances = real_snap_distance_projection
+    ui.native_selection.discrete_snap_survivors = real_snap_discrete
 
 # A real curve-pass record is flat GL_LINES points, not the shaped adapter fixture above.
 production_mesh = bpy.data.meshes.new("RustProductionRecordMesh")
@@ -918,6 +1034,12 @@ real_world_rect_indices = ui.native_selection.world_rect_hit_indices
 real_selection_box_inputs = ui._selection_world_box_inputs
 real_object_screen_bboxes = ui._object_screen_bboxes
 real_rectangle_selection_hits = ui._rectangle_selection_hits
+real_ordered_selection_apply = ui.native_selection.ordered_selection_apply
+real_oriented_bbox_center = ui.native_selection.oriented_bbox_center
+real_gumball_bbox_center = ui.gumball.bbox_center
+real_selection_world_points = ui._selection_world_points
+real_gumball_pts_cache = dict(ui._gumball_pts_cache)
+real_bulk_selection_min = ui.NATIVE_BULK_SELECTION_MIN
 real_world_boxes = ui.native_selection.screen_boxes_from_world
 real_clip_boxes = ui.native_selection.screen_boxes_from_clip
 real_project_many = ui._project_many_2d
@@ -932,6 +1054,61 @@ real_region_origin = v3u.region_2d_to_origin_3d
 real_region_vector = v3u.region_2d_to_vector_3d
 real_model = ui.app_state.model
 try:
+    bulk_calls = []
+    ui.NATIVE_BULK_SELECTION_MIN = 4
+    ui.native_selection.ordered_selection_apply = (
+        lambda current, hits, action: bulk_calls.append((tuple(current), tuple(hits), action))
+        or ("Current", "NativeHit"))
+    check(ui._ordered_selection_apply(
+        ["Current", "Other"], ["Other", "NativeHit"], ui.select.ADD)
+          == ["Current", "NativeHit"] and len(bulk_calls) == 1,
+          "large Add selection uses the native ordered algebra route")
+    ui.native_selection.ordered_selection_apply = lambda *_args: None
+    check(ui._ordered_selection_apply(
+        ["Current", "Other"], ["Other", "FallbackHit"], ui.select.ADD)
+          == ["Current", "Other", "FallbackHit"],
+          "native ordered-selection decline preserves the pure Add fallback")
+    ui.native_selection.ordered_selection_apply = real_ordered_selection_apply
+    ui.NATIVE_BULK_SELECTION_MIN = real_bulk_selection_min
+
+    gumball_native_calls = []
+    ui.native_selection.oriented_bbox_center = (
+        lambda points, plane: gumball_native_calls.append((points, plane))
+        or (9.0, 8.0, 7.0))
+    ui.gumball.bbox_center = lambda *_args: (_ for _ in ()).throw(
+        AssertionError("native Gumball center should bypass scalar bounds"))
+    check(ui._oriented_gumball_center(rotated_plane, ((0.0, 0.0, 0.0),))
+          == (9.0, 8.0, 7.0) and len(gumball_native_calls) == 1,
+          "Gumball center uses the native oriented-bounds route")
+    ui.native_selection.oriented_bbox_center = lambda *_args: None
+    ui.gumball.bbox_center = lambda *_args: (1.0, 2.0, 3.0)
+    check(ui._oriented_gumball_center(
+        rotated_plane, np.array(((0.0, 0.0, 0.0),), dtype=np.float64))
+          == (1.0, 2.0, 3.0),
+          "native Gumball decline converts cached arrays for scalar bbox fallback")
+    ui.native_selection.oriented_bbox_center = real_oriented_bbox_center
+    ui.gumball.bbox_center = real_gumball_bbox_center
+
+    cached_sources = [[(1.0, 2.0, 3.0)]]
+    ui._selection_world_points = lambda: list(cached_sources[0])
+    ui._gumball_pts_cache.update(
+        key=None, pts=[], packed=None, centres={}, builds=0)
+    key_first = (object(), frozenset({"A"}), frozenset(), frozenset())
+    key_second = (key_first[0], frozenset({"B"}), frozenset(), frozenset())
+    first_cache = ui._gumball_cached_selection(key_first)
+    first_packed = first_cache["packed"]
+    cached_sources[0] = [(9.0, 8.0, 7.0)]
+    same_cache = ui._gumball_cached_selection(key_first)
+    same_packed = same_cache["packed"]
+    second_cache = ui._gumball_cached_selection(key_second)
+    check(first_packed is same_packed
+          and tuple(second_cache["packed"][0]) == (9.0, 8.0, 7.0)
+          and second_cache["builds"] == 2,
+          "Gumball packed points reuse one selection key and rebuild for the next")
+    ui._selection_world_points = real_selection_world_points
+    ui._gumball_pts_cache.clear()
+    ui._gumball_pts_cache.update(real_gumball_pts_cache)
+
     ui.bridge.is_app_drawn = lambda _ob: True
     record = {"n": 2, "lines": np.array((
         (0.0, 0.0, 0.0), (1.0, 1.0, 0.0),
@@ -1305,6 +1482,8 @@ try:
     ui._selection_world_box_inputs = real_selection_box_inputs
     ui._object_screen_bboxes = real_object_screen_bboxes
     ui._rectangle_selection_hits = real_rectangle_selection_hits
+    ui.native_selection.ordered_selection_apply = real_ordered_selection_apply
+    ui.NATIVE_BULK_SELECTION_MIN = real_bulk_selection_min
     ui._project_many_2d = real_project_many
     ui._curve_selection_candidates = real_curve_candidates
     ui._document_point_locations = real_document_points
@@ -1522,6 +1701,13 @@ finally:
     ui._hover_curve_world_data = real_hover_world_data
     ui._hover_curve_object = real_hover_curve_object
     ui._native_selection_screen_boxes = real_native_screen_boxes
+    ui.native_selection.ordered_selection_apply = real_ordered_selection_apply
+    ui.native_selection.oriented_bbox_center = real_oriented_bbox_center
+    ui.gumball.bbox_center = real_gumball_bbox_center
+    ui._selection_world_points = real_selection_world_points
+    ui._gumball_pts_cache.clear()
+    ui._gumball_pts_cache.update(real_gumball_pts_cache)
+    ui.NATIVE_BULK_SELECTION_MIN = real_bulk_selection_min
     ui.native_selection.screen_boxes_from_world = real_world_boxes
     ui.native_selection.screen_boxes_from_clip = real_clip_boxes
     ui._project_many_2d = real_project_many

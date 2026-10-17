@@ -44,9 +44,19 @@ lib = ctypes.CDLL(str(LIB_PATH))
 DoubleP = ctypes.POINTER(ctypes.c_double)
 FloatP = ctypes.POINTER(ctypes.c_float)
 ByteP = ctypes.POINTER(ctypes.c_ubyte)
+UInt32P = ctypes.POINTER(ctypes.c_uint32)
 UInt64P = ctypes.POINTER(ctypes.c_uint64)
 lib.narwhal_selection_core_abi_version.argtypes = []
 lib.narwhal_selection_core_abi_version.restype = ctypes.c_uint32
+lib.narwhal_ordered_selection_apply_u32.argtypes = [
+    UInt32P, ctypes.c_size_t, UInt32P, ctypes.c_size_t, ctypes.c_ubyte,
+    UInt32P, ctypes.c_size_t, UInt64P,
+]
+lib.narwhal_ordered_selection_apply_u32.restype = ctypes.c_int
+lib.narwhal_oriented_bbox_center_f64.argtypes = [
+    DoubleP, ctypes.c_size_t, DoubleP, DoubleP, ByteP,
+]
+lib.narwhal_oriented_bbox_center_f64.restype = ctypes.c_int
 lib.narwhal_project_points_f32.argtypes = [
     DoubleP, FloatP, ctypes.c_size_t, ctypes.c_double, ctypes.c_double, DoubleP, ByteP,
 ]
@@ -131,6 +141,16 @@ lib.narwhal_dynamic_perp_tan_snaps_f64.argtypes = [
     ctypes.c_ubyte, DoubleP, UInt64P, ByteP, ctypes.c_size_t, UInt64P,
 ]
 lib.narwhal_dynamic_perp_tan_snaps_f64.restype = ctypes.c_int
+lib.narwhal_discrete_snap_survivors_f64.argtypes = [
+    DoubleP, ctypes.c_size_t, UInt64P,
+    DoubleP, ctypes.c_size_t, UInt64P,
+    DoubleP, ctypes.c_size_t, UInt64P,
+    DoubleP, ByteP, ByteP, ctypes.c_size_t,
+    DoubleP, DoubleP, ctypes.c_double, ctypes.c_double,
+    DoubleP, ctypes.c_double, ctypes.c_uint16,
+    DoubleP, UInt64P, ByteP, DoubleP, ctypes.c_size_t, UInt64P,
+]
+lib.narwhal_discrete_snap_survivors_f64.restype = ctypes.c_int
 
 checks = 0
 failures: list[str] = []
@@ -538,6 +558,63 @@ def rust_points_rect(matrix, points, rect, width=800.0, height=600.0):
     return code, tuple(inside)
 
 
+def rust_discrete_snaps(points, offsets, vertices, vertex_offsets,
+                        knots, knot_offsets, centers, center_valid, flags,
+                        frame, matrix, mouse, radius, mode_mask):
+    target_count = len(flags)
+    arguments = (
+        darray(value for point in points for value in point), len(points),
+        (ctypes.c_uint64 * len(offsets))(*offsets),
+        darray(value for point in vertices for value in point), len(vertices),
+        (ctypes.c_uint64 * len(vertex_offsets))(*vertex_offsets),
+        darray(value for point in knots for value in point), len(knots),
+        (ctypes.c_uint64 * len(knot_offsets))(*knot_offsets),
+        darray(value for point in centers for value in point),
+        (ctypes.c_ubyte * len(center_valid))(*center_valid),
+        (ctypes.c_ubyte * target_count)(*flags), target_count,
+        darray(frame), darray(matrix), 100.0, 100.0, darray(mouse), radius, mode_mask,
+    )
+    required = ctypes.c_uint64(0)
+    code = lib.narwhal_discrete_snap_survivors_f64(
+        *arguments, None, None, None, None, 0, ctypes.byref(required))
+    if code != 0:
+        return code, ()
+    count = int(required.value)
+    xyz = (ctypes.c_double * (count * 3))()
+    targets = (ctypes.c_uint64 * count)()
+    modes = (ctypes.c_ubyte * count)()
+    distances = (ctypes.c_double * count)()
+    written = ctypes.c_uint64(0)
+    code = lib.narwhal_discrete_snap_survivors_f64(
+        *arguments, xyz, targets, modes, distances, count, ctypes.byref(written))
+    rows = tuple((tuple(xyz[i * 3:i * 3 + 3]), targets[i], modes[i], distances[i])
+                 for i in range(written.value))
+    return code, rows
+
+
+def rust_oriented_bbox(points, origin, xaxis, yaxis):
+    output = (ctypes.c_double * 3)(math.nan, math.nan, math.nan)
+    valid = ctypes.c_ubyte(255)
+    code = lib.narwhal_oriented_bbox_center_f64(
+        darray(value for point in points for value in point), len(points),
+        darray((*origin, *xaxis, *yaxis)), output, ctypes.byref(valid),
+    )
+    return code, valid.value, tuple(output)
+
+
+def rust_selection_apply(current, hits, action):
+    capacity = len(set(current) | set(hits))
+    output = (ctypes.c_uint32 * capacity)()
+    written = ctypes.c_uint64((1 << 64) - 1)
+    current_array = (ctypes.c_uint32 * len(current))(*current)
+    hit_array = (ctypes.c_uint32 * len(hits))(*hits)
+    code = lib.narwhal_ordered_selection_apply_u32(
+        current_array, len(current), hit_array, len(hits), action,
+        output, capacity, ctypes.byref(written),
+    )
+    return code, tuple(output[:written.value])
+
+
 def rust_dynamic_snaps(polylines, closed, base, mode_mask):
     points = [point for polyline in polylines for point in polyline]
     offsets = [0]
@@ -607,6 +684,49 @@ PERSPECTIVE = (
 )
 
 check(lib.narwhal_selection_core_abi_version() == 1, "C ABI version is pinned")
+static_points = [
+    (0.0, 0.0, 0.0), (2.0, 0.0, 0.0), (10.0, 0.0, 0.0),
+    (0.0, 0.0, 0.0), (2.0, 0.0, 0.0), (2.0, 2.0, 0.0),
+    (0.0, 0.0, 0.0),
+]
+static_code, static_rows = rust_discrete_snaps(
+    static_points, [0, 3, 6, 7], static_points, [0, 3, 6, 7],
+    [(4.0, 0.0, 0.0)], [0, 1, 1, 1],
+    [(5.0, 1.0, 0.0), (0.0, 0.0, 0.0), (0.0, 0.0, 0.0)],
+    [1, 0, 0], [0, 2, 1],
+    (0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0),
+    IDENTITY, (50.0, 50.0), 1000.0, 63)
+check(static_code == 0
+      and any(row[0] == (5.0, 0.0, 0.0) and row[1:3] == (0, 2)
+              for row in static_rows)
+      and any(row[0] == (1.0, 1.0, 0.0) and row[1:3] == (1, 2)
+              for row in static_rows)
+      and [row[2] for row in static_rows if row[1] == 2] == [5],
+      "native discrete snaps preserve arc Mid, closed seam Mid, and point-only mode")
+root_half = math.sqrt(2.0) / 2.0
+bbox_code, bbox_valid, bbox_center = rust_oriented_bbox(
+    [(0.0, 0.0, 0.0), (2.0, 0.0, 0.0), (0.0, 1.0, 0.0)],
+    (0.0, 0.0, 0.0), (root_half, root_half, 0.0),
+    (-root_half, root_half, 0.0))
+check(bbox_code == 0 and bbox_valid == 1
+      and max(abs(a - b) for a, b in zip(bbox_center, (0.75, 0.25, 0.0))) < 1e-12,
+      "native oriented bbox uses the rotated CPlane frame", repr(bbox_center))
+depth_code, depth_valid, depth_center = rust_oriented_bbox(
+    [(12.0, 17.0, 34.0), (16.0, 19.0, 38.0)],
+    (10.0, 20.0, 30.0), (1.0, 0.0, 0.0), (0.0, 0.0, 1.0))
+check((depth_code, depth_valid, depth_center) == (0, 1, (14.0, 18.0, 36.0)),
+      "native oriented bbox includes derived Z and nonzero plane origin")
+selection_current = [3, 1, 3, 2]
+selection_hits = [2, 4, 4, 1, 5]
+check(rust_selection_apply(selection_current, selection_hits, 0)
+      == (0, (2, 4, 1, 5)),
+      "native ordered Replace keeps first hit occurrences")
+check(rust_selection_apply(selection_current, selection_hits, 1)
+      == (0, (3, 1, 2, 4, 5)),
+      "native ordered Add keeps current first then unseen hits")
+check(rust_selection_apply(selection_current, selection_hits, 2)
+      == (0, (3,)),
+      "native ordered Remove preserves surviving current order")
 intersection_lines = [
     [(0.0, 0.0, 0.0), (5.0, 0.0, 0.0), (10.0, 0.0, 0.0)],
     [(8.0, -2.0, 0.0), (8.0, 2.0, 0.0)],

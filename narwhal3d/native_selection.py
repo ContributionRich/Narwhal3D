@@ -21,6 +21,7 @@ _ENV_PATH = "NARWHAL_SELECTION_CORE"
 _DoubleP = ctypes.POINTER(ctypes.c_double)
 _FloatP = ctypes.POINTER(ctypes.c_float)
 _ByteP = ctypes.POINTER(ctypes.c_ubyte)
+_UInt32P = ctypes.POINTER(ctypes.c_uint32)
 _UInt64P = ctypes.POINTER(ctypes.c_uint64)
 _lock = threading.Lock()
 _signature: str | None = None
@@ -32,6 +33,7 @@ _near_pack_cache: dict[str, Any] = {
 _dynamic_snap_pack_cache: dict[str, Any] = {
     "source": None, "arrays": None, "packed": None, "offsets": None, "total": 0,
 }
+_discrete_snap_pack_cache: dict[str, Any] = {"signature": None, "packed": None}
 
 RECT_MISS = 0
 RECT_HIT = 1
@@ -170,6 +172,38 @@ def _binding():
                 except AttributeError:
                     pass
                 try:
+                    discrete_snaps = library.narwhal_discrete_snap_survivors_f64
+                    discrete_snaps.argtypes = [
+                        _DoubleP, ctypes.c_size_t, _UInt64P,
+                        _DoubleP, ctypes.c_size_t, _UInt64P,
+                        _DoubleP, ctypes.c_size_t, _UInt64P,
+                        _DoubleP, _ByteP, _ByteP, ctypes.c_size_t,
+                        _DoubleP, _DoubleP, ctypes.c_double, ctypes.c_double,
+                        _DoubleP, ctypes.c_double, ctypes.c_uint16,
+                        _DoubleP, _UInt64P, _ByteP, _DoubleP,
+                        ctypes.c_size_t, _UInt64P,
+                    ]
+                    discrete_snaps.restype = ctypes.c_int
+                except AttributeError:
+                    pass
+                try:
+                    oriented_bbox = library.narwhal_oriented_bbox_center_f64
+                    oriented_bbox.argtypes = [
+                        _DoubleP, ctypes.c_size_t, _DoubleP, _DoubleP, _ByteP,
+                    ]
+                    oriented_bbox.restype = ctypes.c_int
+                except AttributeError:
+                    pass
+                try:
+                    selection_apply = library.narwhal_ordered_selection_apply_u32
+                    selection_apply.argtypes = [
+                        _UInt32P, ctypes.c_size_t, _UInt32P, ctypes.c_size_t,
+                        ctypes.c_ubyte, _UInt32P, ctypes.c_size_t, _UInt64P,
+                    ]
+                    selection_apply.restype = ctypes.c_int
+                except AttributeError:
+                    pass
+                try:
                     world_rect_mask = library.narwhal_world_rect_hit_mask_f64
                     world_rect_mask.argtypes = [
                         _DoubleP, _DoubleP, ctypes.c_size_t,
@@ -264,6 +298,372 @@ def backend_status() -> str:
     """A diagnostic status; acceleration absence is not a feature failure."""
     _binding()
     return _status
+
+
+def discrete_snap_survivors(targets, modes, plane, matrix, width, height, mouse, radius):
+    """Return ordered in-radius static Osnap rows, or ``None`` for full fallback."""
+    global _status
+    binding = _binding()
+    if binding is None:
+        return None
+    library, _project, _rect_query, _batch_query, _nearest_curve, path = binding
+    query = getattr(library, "narwhal_discrete_snap_survivors_f64", None)
+    if query is None:
+        _status = f"native discrete Osnap query unavailable: {path}"
+        return None
+    mode_bits = {"End": 1, "Mid": 2, "Cen": 4, "Quad": 8, "Point": 16, "Knot": 32}
+    mode_ids = {1: "End", 2: "Mid", 3: "Cen", 4: "Quad", 5: "Point", 6: "Knot"}
+    try:
+        import numpy as np
+
+        targets = tuple(targets)
+        wanted = tuple(modes)
+        if not wanted or any(mode not in mode_bits for mode in wanted):
+            return None
+        mask = 0
+        for mode in wanted:
+            mask |= mode_bits[mode]
+        view = np.ascontiguousarray(matrix, dtype=np.float64)
+        cursor = np.ascontiguousarray(mouse, dtype=np.float64)
+        frame = np.ascontiguousarray((
+            *tuple(plane.origin), *tuple(plane.xaxis), *tuple(plane.yaxis)), dtype=np.float64)
+        width, height, radius = float(width), float(height), float(radius)
+        if (view.shape != (4, 4) or not bool(np.isfinite(view).all())
+                or cursor.shape != (2,) or not bool(np.isfinite(cursor).all())
+                or frame.shape != (9,) or not bool(np.isfinite(frame).all())
+                or not bool(np.isfinite((width, height, radius)).all())
+                or width < 0.0 or height < 0.0 or radius < 0.0):
+            return None
+        signature = tuple((id(target), id(target.points), id(target.vertices),
+                           id(target.knots), target.center,
+                           bool(target.closed), bool(target.is_point))
+                          for target in targets)
+        with _lock:
+            packed = (_discrete_snap_pack_cache["packed"]
+                      if _discrete_snap_pack_cache["signature"] == signature else None)
+            if packed is None:
+                families = []
+                for attribute in ("points", "vertices", "knots"):
+                    arrays, offsets, total = [], [0], 0
+                    for target in targets:
+                        source = getattr(target, attribute)
+                        array = (np.empty((0, 3), dtype=np.float64) if len(source) == 0
+                                 else _point_array(np, source))
+                        if array is None or not bool(np.isfinite(array).all()):
+                            return None
+                        arrays.append(array)
+                        total += len(array)
+                        offsets.append(total)
+                    values = (np.concatenate(arrays, axis=0) if total
+                              else np.empty((0, 3), dtype=np.float64))
+                    families.append((values, np.ascontiguousarray(offsets, dtype=np.uint64)))
+                centers = np.zeros((len(targets), 3), dtype=np.float64)
+                center_valid = np.zeros(len(targets), dtype=np.uint8)
+                flags = np.zeros(len(targets), dtype=np.uint8)
+                for index, target in enumerate(targets):
+                    if target.center is not None:
+                        center = np.ascontiguousarray(target.center, dtype=np.float64)
+                        if center.shape != (3,) or not bool(np.isfinite(center).all()):
+                            return None
+                        centers[index] = center
+                        center_valid[index] = 1
+                    flags[index] = int(bool(target.is_point)) | (int(bool(target.closed)) << 1)
+                packed = (*families, centers, center_valid, flags)
+                _discrete_snap_pack_cache.update(signature=signature, packed=packed)
+        (point_data, vertex_data, knot_data,
+         centers, center_valid, flags) = packed
+        points, point_offsets = point_data
+        vertices, vertex_offsets = vertex_data
+        knots, knot_offsets = knot_data
+        vertex_counts = np.diff(vertex_offsets).astype(np.int64, copy=False)
+        knot_counts = np.diff(knot_offsets).astype(np.int64, copy=False)
+        point_counts = np.diff(point_offsets).astype(np.int64, copy=False)
+        point_targets = (flags & 1) != 0
+        curves = ~point_targets
+        capacity = 0
+        if "Point" in wanted:
+            capacity += int(np.count_nonzero(point_targets & (point_counts > 0)))
+        if "End" in wanted:
+            capacity += int(vertex_counts[curves].sum())
+        if "Mid" in wanted:
+            capacity += int((np.maximum(vertex_counts[curves] - 1, 0) + 1).sum())
+            capacity += int(np.count_nonzero(
+                curves & ((flags & 2) != 0) & (vertex_counts >= 3)))
+        if "Cen" in wanted:
+            capacity += int(np.count_nonzero(curves & (center_valid != 0)))
+        if "Quad" in wanted:
+            capacity += 4 * int(np.count_nonzero(curves & (point_counts > 0)))
+        if "Knot" in wanted:
+            capacity += int(knot_counts[curves].sum())
+        if capacity == 0:
+            return ()
+        arguments = (
+            points.ctypes.data_as(_DoubleP), len(points), point_offsets.ctypes.data_as(_UInt64P),
+            vertices.ctypes.data_as(_DoubleP), len(vertices), vertex_offsets.ctypes.data_as(_UInt64P),
+            knots.ctypes.data_as(_DoubleP), len(knots), knot_offsets.ctypes.data_as(_UInt64P),
+            centers.ctypes.data_as(_DoubleP), center_valid.ctypes.data_as(_ByteP),
+            flags.ctypes.data_as(_ByteP), len(targets), frame.ctypes.data_as(_DoubleP),
+            view.ctypes.data_as(_DoubleP), width, height, cursor.ctypes.data_as(_DoubleP),
+            radius, mask,
+        )
+        xyz = np.full((capacity, 3), np.nan, dtype=np.float64)
+        target_ids = np.full(capacity, np.iinfo(np.uint64).max, dtype=np.uint64)
+        mode_values = np.zeros(capacity, dtype=np.uint8)
+        distances = np.full(capacity, np.inf, dtype=np.float64)
+        written = ctypes.c_uint64(np.iinfo(np.uint64).max)
+        code = query(
+            *arguments, xyz.ctypes.data_as(_DoubleP), target_ids.ctypes.data_as(_UInt64P),
+            mode_values.ctypes.data_as(_ByteP), distances.ctypes.data_as(_DoubleP),
+            capacity, ctypes.byref(written))
+        count = int(written.value)
+        if code != 0 or count > capacity:
+            return None
+        if count == 0:
+            if (not bool(np.isnan(xyz).all())
+                    or not bool((target_ids == np.iinfo(np.uint64).max).all())
+                    or not bool((mode_values == 0).all())
+                    or not bool(np.isinf(distances).all())):
+                return None
+            _status = f"ready: {path}"
+            return ()
+        allowed_ids = {identifier for identifier, name in mode_ids.items() if name in wanted}
+        if (not bool(np.isfinite(xyz[:count]).all())
+                or not bool(np.isfinite(distances[:count]).all())
+                or bool((distances[:count] < 0.0).any())
+                or bool((distances[:count] > radius).any())
+                or bool((target_ids[:count] >= len(targets)).any())
+                or any(int(value) not in allowed_ids for value in mode_values[:count])
+                or (count < capacity and (
+                    not bool(np.isnan(xyz[count:]).all())
+                    or not bool((target_ids[count:] == np.iinfo(np.uint64).max).all())
+                    or not bool((mode_values[count:] == 0).all())
+                    or not bool(np.isinf(distances[count:]).all())))):
+            return None
+        distance_query = getattr(library, "narwhal_projected_snap_distances_f64", None)
+        if distance_query is None:
+            return None
+        check_indices = np.full(count, np.iinfo(np.uint64).max, dtype=np.uint64)
+        check_distances = np.full(count, np.inf, dtype=np.float64)
+        check_count = ctypes.c_uint64(np.iinfo(np.uint64).max)
+        distance_code = distance_query(
+            view.ctypes.data_as(_DoubleP), xyz.ctypes.data_as(_DoubleP), count,
+            width, height, cursor.ctypes.data_as(_DoubleP), radius,
+            check_indices.ctypes.data_as(_UInt64P),
+            check_distances.ctypes.data_as(_DoubleP), ctypes.byref(check_count))
+        if (distance_code != 0 or check_count.value != count
+                or not bool(np.array_equal(
+                    check_indices, np.arange(count, dtype=np.uint64)))
+                or not bool(np.array_equal(check_distances, distances[:count]))):
+            return None
+
+        import math
+        semantic_cache = {}
+
+        def semantic_points(target_index, mode):
+            key = (target_index, mode)
+            if key in semantic_cache:
+                return semantic_cache[key]
+            target = targets[target_index]
+            if mode == "End":
+                answer = tuple(target.vertices)
+            elif mode == "Cen":
+                answer = (() if target.center is None else (target.center,))
+            elif mode == "Point":
+                answer = tuple(target.points[:1]) if target.is_point else ()
+            elif mode == "Knot":
+                answer = tuple(target.knots)
+            elif mode == "Mid":
+                verts = tuple(target.vertices)
+                mids = [tuple((a[i] + b[i]) / 2.0 for i in range(3))
+                        for a, b in zip(verts[:-1], verts[1:])]
+                if (target.closed and len(verts) >= 3
+                        and math.dist(verts[-1], verts[0]) > 1.0e-12):
+                    mids.append(tuple((verts[-1][i] + verts[0][i]) / 2.0
+                                      for i in range(3)))
+                samples = tuple(target.points)
+                lengths = [math.dist(a, b) for a, b in zip(samples[:-1], samples[1:])]
+                total = sum(lengths)
+                if total > 0.0:
+                    half, walked, arc = total / 2.0, 0.0, samples[-1]
+                    for segment, length in enumerate(lengths):
+                        if length <= 0.0:
+                            continue
+                        if walked + length >= half:
+                            parameter = (half - walked) / length
+                            a, b = samples[segment], samples[segment + 1]
+                            arc = tuple(a[i] + (b[i] - a[i]) * parameter
+                                        for i in range(3))
+                            break
+                        walked += length
+                    if not any(math.dist(arc, prior) < 1.0e-9 for prior in mids):
+                        mids.append(arc)
+                answer = tuple(mids)
+            else:
+                samples = tuple(target.points)
+                if not samples:
+                    answer = ()
+                else:
+                    origin = tuple(plane.origin)
+                    xaxis = tuple(plane.xaxis)
+                    yaxis = tuple(plane.yaxis)
+                    scored = []
+                    for point in samples:
+                        delta = tuple(point[i] - origin[i] for i in range(3))
+                        scored.append((sum(delta[i] * xaxis[i] for i in range(3)),
+                                       sum(delta[i] * yaxis[i] for i in range(3)), point))
+                    raw = (min(scored, key=lambda row: row[0])[2],
+                           max(scored, key=lambda row: row[0])[2],
+                           min(scored, key=lambda row: row[1])[2],
+                           max(scored, key=lambda row: row[1])[2])
+                    unique = []
+                    for point in raw:
+                        if not any(math.dist(point, prior) < 1.0e-9 for prior in unique):
+                            unique.append(point)
+                    answer = tuple(unique)
+            semantic_cache[key] = answer
+            return answer
+
+        previous_target, previous_mode = -1, -1
+        result = []
+        for index in range(count):
+            target_index = int(target_ids[index])
+            mode_id = int(mode_values[index])
+            if (target_index < previous_target
+                    or (target_index == previous_target and mode_id < previous_mode)):
+                return None
+            mode = mode_ids[mode_id]
+            target = targets[target_index]
+            if bool(target.is_point) != (mode == "Point"):
+                return None
+            point = tuple(float(value) for value in xyz[index])
+            if not any(math.dist(point, expected) < 1.0e-8
+                       for expected in semantic_points(target_index, mode)):
+                return None
+            previous_target, previous_mode = target_index, mode_id
+            result.append((point, target_index, mode, float(distances[index])))
+        _status = f"ready: {path}"
+        return tuple(result)
+    except Exception as exc:  # noqa: BLE001 -- optimization failure preserves Osnap
+        _status = f"native discrete Osnap raised: {exc}"
+        return None
+
+
+def oriented_bbox_center(points, plane):
+    """Return a CPlane-oriented world bbox center, ``()`` for empty, or fallback."""
+    global _status
+    binding = _binding()
+    if binding is None:
+        return None
+    library, _project, _rect_query, _batch_query, _nearest_curve, path = binding
+    query = getattr(library, "narwhal_oriented_bbox_center_f64", None)
+    if query is None:
+        _status = f"native oriented bbox unavailable: {path}"
+        return None
+    try:
+        import numpy as np
+
+        if len(points) == 0:
+            return ()
+        values = _point_array(np, points)
+        if values is None or not bool(np.isfinite(values).all()):
+            _status = "native selection input rejected: oriented bbox points must be finite Nx3"
+            return None
+        frame = np.ascontiguousarray((
+            *tuple(plane.origin), *tuple(plane.xaxis), *tuple(plane.yaxis)),
+            dtype=np.float64)
+        if frame.shape != (9,) or not bool(np.isfinite(frame).all()):
+            _status = "native selection input rejected: oriented bbox frame must be finite origin/X/Y"
+            return None
+        output = np.full(3, np.nan, dtype=np.float64)
+        valid = ctypes.c_ubyte(255)
+        code = query(
+            values.ctypes.data_as(_DoubleP), len(values),
+            frame.ctypes.data_as(_DoubleP), output.ctypes.data_as(_DoubleP),
+            ctypes.byref(valid),
+        )
+        if (code != 0 or valid.value != 1 or not bool(np.isfinite(output).all())):
+            _status = f"native oriented bbox output invalid with code {code}: {path}"
+            return None
+        _status = f"ready: {path}"
+        return tuple(float(value) for value in output)
+    except Exception as exc:  # noqa: BLE001 -- optimization failure preserves Gumball
+        _status = f"native oriented bbox raised: {exc}"
+        return None
+
+
+def ordered_selection_apply(current, hits, action):
+    """Apply ordered selection algebra to arbitrary hashable Python keys in Rust.
+
+    Keys are mapped to opaque u32 IDs in first-seen order. Native output is
+    checked against a linear reference ordering before being mapped back; ``None``
+    requests the established ``select.apply`` fallback.
+    """
+    global _status
+    binding = _binding()
+    if binding is None:
+        return None
+    library, _project, _rect_query, _batch_query, _nearest_curve, path = binding
+    query = getattr(library, "narwhal_ordered_selection_apply_u32", None)
+    if query is None:
+        _status = f"native ordered selection algebra unavailable: {path}"
+        return None
+    actions = {"replace": 0, "add": 1, "remove": 2}
+    if action not in actions:
+        _status = "native selection input rejected: unknown selection action"
+        return None
+    try:
+        import numpy as np
+
+        current = tuple(current or ())
+        hits = tuple(hits or ())
+        ids = {}
+        values = []
+
+        def encode(items):
+            encoded = []
+            for item in items:
+                if item not in ids:
+                    if len(values) >= (1 << 32):
+                        raise OverflowError("selection key count exceeds u32")
+                    ids[item] = len(values)
+                    values.append(item)
+                encoded.append(ids[item])
+            return encoded
+
+        current_ids = encode(current)
+        hit_ids = encode(hits)
+        if actions[action] == 0:
+            expected = list(dict.fromkeys(hit_ids))
+        elif actions[action] == 1:
+            expected = list(dict.fromkeys((*current_ids, *hit_ids)))
+        else:
+            drop = set(hit_ids)
+            expected = [value for value in dict.fromkeys(current_ids) if value not in drop]
+        if not values:
+            return ()
+        packed_current = np.ascontiguousarray(current_ids, dtype=np.uint32)
+        packed_hits = np.ascontiguousarray(hit_ids, dtype=np.uint32)
+        output = np.full(len(values), np.iinfo(np.uint32).max, dtype=np.uint32)
+        written = ctypes.c_uint64(np.iinfo(np.uint64).max)
+        code = query(
+            packed_current.ctypes.data_as(_UInt32P), len(packed_current),
+            packed_hits.ctypes.data_as(_UInt32P), len(packed_hits), actions[action],
+            output.ctypes.data_as(_UInt32P), len(output), ctypes.byref(written),
+        )
+        count = int(written.value)
+        result_ids = [int(value) for value in output[:min(count, len(output))]]
+        if (code != 0 or count > len(output) or result_ids != expected
+                or len(result_ids) != len(set(result_ids))
+                or any(value >= len(values) for value in result_ids)
+                or (count < len(output)
+                    and not bool((output[count:] == np.iinfo(np.uint32).max).all()))):
+            _status = f"native ordered selection output invalid with code {code}: {path}"
+            return None
+        _status = f"ready: {path}"
+        return tuple(values[value] for value in result_ids)
+    except Exception as exc:  # noqa: BLE001 -- optimization failure preserves selection
+        _status = f"native ordered selection algebra raised: {exc}"
+        return None
 
 
 def project_segments(lines, matrix, width, height):
@@ -1568,3 +1968,4 @@ def _reset_for_tests() -> None:
             source=None, arrays=None, packed=None, offsets=None, total=0)
         _dynamic_snap_pack_cache.update(
             source=None, arrays=None, packed=None, offsets=None, total=0)
+        _discrete_snap_pack_cache.update(signature=None, packed=None)

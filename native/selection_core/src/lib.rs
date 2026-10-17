@@ -4,7 +4,7 @@
 //! This crate never owns document geometry. It accepts packed copies of viewport
 //! matrices, display points, and display segments through a small C ABI.
 
-use std::{mem, ptr, slice};
+use std::{collections::HashSet, mem, ptr, slice};
 
 const ABI_VERSION: u32 = 1;
 const ERR_NULL: i32 = -1;
@@ -2440,6 +2440,691 @@ pub unsafe extern "C" fn narwhal_dynamic_perp_tan_snaps_f64(
     0
 }
 
+const SNAP_END: u16 = 1;
+const SNAP_MID: u16 = 2;
+const SNAP_CEN: u16 = 4;
+const SNAP_QUAD: u16 = 8;
+const SNAP_POINT: u16 = 16;
+const SNAP_KNOT: u16 = 32;
+const SNAP_ALL_STATIC: u16 = SNAP_END | SNAP_MID | SNAP_CEN | SNAP_QUAD | SNAP_POINT | SNAP_KNOT;
+const TARGET_POINT: u8 = 1;
+const TARGET_CLOSED: u8 = 2;
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct StaticSnap {
+    point: [f64; 3],
+    target: usize,
+    mode: u8,
+    distance: f64,
+}
+
+#[inline]
+#[allow(clippy::too_many_arguments)]
+fn push_static_survivor(
+    found: &mut Vec<StaticSnap>,
+    point: [f64; 3],
+    target: usize,
+    mode: u8,
+    display_matrix: &[f32; 16],
+    width: f64,
+    height: f64,
+    mouse: [f64; 2],
+    radius: f64,
+) {
+    let Some(pixel) = project_display_point_prepared(display_matrix, &point, width, height) else {
+        return;
+    };
+    let distance = python_hypot2(pixel.0 - mouse[0], pixel.1 - mouse[1]);
+    if distance <= radius {
+        found.push(StaticSnap {
+            point,
+            target,
+            mode,
+            distance,
+        });
+    }
+}
+
+fn sampled_arc_midpoint(points: &[f64], start: usize, end: usize) -> Option<[f64; 3]> {
+    if end.saturating_sub(start) < 2 {
+        return None;
+    }
+    let mut total = 0.0;
+    for index in start..end - 1 {
+        let a = point3(points, index);
+        let b = point3(points, index + 1);
+        total += finite_norm3(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+    }
+    if total <= 0.0 {
+        return None;
+    }
+    let half = total / 2.0;
+    let mut walked = 0.0;
+    for index in start..end - 1 {
+        let a = point3(points, index);
+        let b = point3(points, index + 1);
+        let length = finite_norm3(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+        if length <= 0.0 {
+            continue;
+        }
+        if walked + length >= half {
+            let parameter = (half - walked) / length;
+            return Some(std::array::from_fn(|axis| {
+                a[axis] + (b[axis] - a[axis]) * parameter
+            }));
+        }
+        walked += length;
+    }
+    Some(point3(points, end - 1))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn static_snap_survivors(
+    points: &[f64],
+    point_offsets: &[u64],
+    vertices: &[f64],
+    vertex_offsets: &[u64],
+    knots: &[f64],
+    knot_offsets: &[u64],
+    centers: &[f64],
+    center_valid: &[u8],
+    target_flags: &[u8],
+    frame: &[f64],
+    matrix: &[f64],
+    width: f64,
+    height: f64,
+    mouse: [f64; 2],
+    radius: f64,
+    mode_mask: u16,
+) -> Vec<StaticSnap> {
+    let display_matrix = display_matrix_f32(matrix);
+    let mut found = Vec::new();
+    for target in 0..target_flags.len() {
+        let point_start = point_offsets[target] as usize;
+        let point_end = point_offsets[target + 1] as usize;
+        let vertex_start = vertex_offsets[target] as usize;
+        let vertex_end = vertex_offsets[target + 1] as usize;
+        let knot_start = knot_offsets[target] as usize;
+        let knot_end = knot_offsets[target + 1] as usize;
+        if target_flags[target] & TARGET_POINT != 0 {
+            if mode_mask & SNAP_POINT != 0 && point_start < point_end {
+                push_static_survivor(
+                    &mut found,
+                    point3(points, point_start),
+                    target,
+                    5,
+                    &display_matrix,
+                    width,
+                    height,
+                    mouse,
+                    radius,
+                );
+            }
+            continue;
+        }
+        if mode_mask & SNAP_END != 0 {
+            for index in vertex_start..vertex_end {
+                push_static_survivor(
+                    &mut found,
+                    point3(vertices, index),
+                    target,
+                    1,
+                    &display_matrix,
+                    width,
+                    height,
+                    mouse,
+                    radius,
+                );
+            }
+        }
+        if mode_mask & SNAP_MID != 0 {
+            let mut mids = Vec::new();
+            for index in vertex_start..vertex_end.saturating_sub(1) {
+                let a = point3(vertices, index);
+                let b = point3(vertices, index + 1);
+                let midpoint = std::array::from_fn(|axis| (a[axis] + b[axis]) / 2.0);
+                mids.push(midpoint);
+                push_static_survivor(
+                    &mut found,
+                    midpoint,
+                    target,
+                    2,
+                    &display_matrix,
+                    width,
+                    height,
+                    mouse,
+                    radius,
+                );
+            }
+            if target_flags[target] & TARGET_CLOSED != 0
+                && vertex_end.saturating_sub(vertex_start) >= 3
+            {
+                let a = point3(vertices, vertex_end - 1);
+                let b = point3(vertices, vertex_start);
+                if finite_norm3(a[0] - b[0], a[1] - b[1], a[2] - b[2]) > 1.0e-12 {
+                    let midpoint = std::array::from_fn(|axis| (a[axis] + b[axis]) / 2.0);
+                    mids.push(midpoint);
+                    push_static_survivor(
+                        &mut found,
+                        midpoint,
+                        target,
+                        2,
+                        &display_matrix,
+                        width,
+                        height,
+                        mouse,
+                        radius,
+                    );
+                }
+            }
+            if let Some(midpoint) = sampled_arc_midpoint(points, point_start, point_end) {
+                let duplicate = mids.iter().any(|prior| {
+                    finite_norm3(
+                        midpoint[0] - prior[0],
+                        midpoint[1] - prior[1],
+                        midpoint[2] - prior[2],
+                    ) < 1.0e-9
+                });
+                if !duplicate {
+                    push_static_survivor(
+                        &mut found,
+                        midpoint,
+                        target,
+                        2,
+                        &display_matrix,
+                        width,
+                        height,
+                        mouse,
+                        radius,
+                    );
+                }
+            }
+        }
+        if mode_mask & SNAP_CEN != 0 && center_valid[target] == 1 {
+            push_static_survivor(
+                &mut found,
+                point3(centers, target),
+                target,
+                3,
+                &display_matrix,
+                width,
+                height,
+                mouse,
+                radius,
+            );
+        }
+        if mode_mask & SNAP_QUAD != 0 && point_start < point_end {
+            let origin = [frame[0], frame[1], frame[2]];
+            let xaxis = [frame[3], frame[4], frame[5]];
+            let yaxis = [frame[6], frame[7], frame[8]];
+            let first = point3(points, point_start);
+            let first_delta = [
+                first[0] - origin[0],
+                first[1] - origin[1],
+                first[2] - origin[2],
+            ];
+            let first_u =
+                first_delta[0] * xaxis[0] + first_delta[1] * xaxis[1] + first_delta[2] * xaxis[2];
+            let first_v =
+                first_delta[0] * yaxis[0] + first_delta[1] * yaxis[1] + first_delta[2] * yaxis[2];
+            let mut umin = (first_u, first);
+            let mut umax = (first_u, first);
+            let mut vmin = (first_v, first);
+            let mut vmax = (first_v, first);
+            for index in point_start + 1..point_end {
+                let point = point3(points, index);
+                let delta = [
+                    point[0] - origin[0],
+                    point[1] - origin[1],
+                    point[2] - origin[2],
+                ];
+                let u = delta[0] * xaxis[0] + delta[1] * xaxis[1] + delta[2] * xaxis[2];
+                let v = delta[0] * yaxis[0] + delta[1] * yaxis[1] + delta[2] * yaxis[2];
+                if u < umin.0 {
+                    umin = (u, point);
+                }
+                if u > umax.0 {
+                    umax = (u, point);
+                }
+                if v < vmin.0 {
+                    vmin = (v, point);
+                }
+                if v > vmax.0 {
+                    vmax = (v, point);
+                }
+            }
+            let mut unique: Vec<[f64; 3]> = Vec::new();
+            for point in [umin.1, umax.1, vmin.1, vmax.1] {
+                if unique.iter().any(|prior| {
+                    finite_norm3(
+                        point[0] - prior[0],
+                        point[1] - prior[1],
+                        point[2] - prior[2],
+                    ) < 1.0e-9
+                }) {
+                    continue;
+                }
+                unique.push(point);
+                push_static_survivor(
+                    &mut found,
+                    point,
+                    target,
+                    4,
+                    &display_matrix,
+                    width,
+                    height,
+                    mouse,
+                    radius,
+                );
+            }
+        }
+        if mode_mask & SNAP_KNOT != 0 {
+            for index in knot_start..knot_end {
+                push_static_survivor(
+                    &mut found,
+                    point3(knots, index),
+                    target,
+                    6,
+                    &display_matrix,
+                    width,
+                    height,
+                    mouse,
+                    radius,
+                );
+            }
+        }
+    }
+    found
+}
+
+/// Derive and score static discrete Osnap candidates for packed targets.
+///
+/// Modes are End/Mid/Cen/Quad/Point/Knot bits 0..5. Target flags are point bit
+/// 0 and closed bit 1. Output uses mode IDs 1..6 in that same named order and
+/// preserves the established per-target candidate traversal after radius filtering.
+///
+/// # Safety
+///
+/// Every point family must provide its declared packed XYZ buffer and
+/// `target_count + 1` offsets. Centers contain three values per target. Frame,
+/// display matrix, mouse, output count, and nonzero-capacity outputs are required.
+/// Every provided buffer must be valid for its declared length, correctly aligned,
+/// and non-overlapping with writable output buffers.
+#[no_mangle]
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "C" fn narwhal_discrete_snap_survivors_f64(
+    points_ptr: *const f64,
+    point_count: usize,
+    point_offsets_ptr: *const u64,
+    vertices_ptr: *const f64,
+    vertex_count: usize,
+    vertex_offsets_ptr: *const u64,
+    knots_ptr: *const f64,
+    knot_count: usize,
+    knot_offsets_ptr: *const u64,
+    centers_ptr: *const f64,
+    center_valid_ptr: *const u8,
+    target_flags_ptr: *const u8,
+    target_count: usize,
+    frame_ptr: *const f64,
+    matrix_ptr: *const f64,
+    width: f64,
+    height: f64,
+    mouse_ptr: *const f64,
+    radius: f64,
+    mode_mask: u16,
+    out_xyz_ptr: *mut f64,
+    out_targets_ptr: *mut u64,
+    out_modes_ptr: *mut u8,
+    out_distances_ptr: *mut f64,
+    capacity: usize,
+    out_count_ptr: *mut u64,
+) -> i32 {
+    if out_count_ptr.is_null() {
+        return ERR_NULL;
+    }
+    ptr::write(out_count_ptr, 0);
+    if point_offsets_ptr.is_null()
+        || vertex_offsets_ptr.is_null()
+        || knot_offsets_ptr.is_null()
+        || frame_ptr.is_null()
+        || matrix_ptr.is_null()
+        || mouse_ptr.is_null()
+        || (point_count > 0 && points_ptr.is_null())
+        || (vertex_count > 0 && vertices_ptr.is_null())
+        || (knot_count > 0 && knots_ptr.is_null())
+        || (target_count > 0
+            && (centers_ptr.is_null() || center_valid_ptr.is_null() || target_flags_ptr.is_null()))
+        || (capacity > 0
+            && (out_xyz_ptr.is_null()
+                || out_targets_ptr.is_null()
+                || out_modes_ptr.is_null()
+                || out_distances_ptr.is_null()))
+    {
+        return ERR_NULL;
+    }
+    let point_values = match point_count.checked_mul(3) {
+        Some(value) if valid_slice_len::<f64>(value) => value,
+        _ => return ERR_SIZE,
+    };
+    let vertex_values = match vertex_count.checked_mul(3) {
+        Some(value) if valid_slice_len::<f64>(value) => value,
+        _ => return ERR_SIZE,
+    };
+    let knot_values = match knot_count.checked_mul(3) {
+        Some(value) if valid_slice_len::<f64>(value) => value,
+        _ => return ERR_SIZE,
+    };
+    let center_values = match target_count.checked_mul(3) {
+        Some(value) if valid_slice_len::<f64>(value) => value,
+        _ => return ERR_SIZE,
+    };
+    let offset_count = match target_count.checked_add(1) {
+        Some(value) if valid_slice_len::<u64>(value) => value,
+        _ => return ERR_SIZE,
+    };
+    let output_values = match capacity.checked_mul(3) {
+        Some(value)
+            if valid_slice_len::<f64>(value)
+                && valid_slice_len::<u64>(capacity)
+                && valid_slice_len::<u8>(capacity) =>
+        {
+            value
+        }
+        _ => return ERR_SIZE,
+    };
+    let points = if point_count == 0 {
+        &[]
+    } else {
+        slice::from_raw_parts(points_ptr, point_values)
+    };
+    let vertices = if vertex_count == 0 {
+        &[]
+    } else {
+        slice::from_raw_parts(vertices_ptr, vertex_values)
+    };
+    let knots = if knot_count == 0 {
+        &[]
+    } else {
+        slice::from_raw_parts(knots_ptr, knot_values)
+    };
+    let centers = if target_count == 0 {
+        &[]
+    } else {
+        slice::from_raw_parts(centers_ptr, center_values)
+    };
+    let center_valid = if target_count == 0 {
+        &[]
+    } else {
+        slice::from_raw_parts(center_valid_ptr, target_count)
+    };
+    let target_flags = if target_count == 0 {
+        &[]
+    } else {
+        slice::from_raw_parts(target_flags_ptr, target_count)
+    };
+    let point_offsets = slice::from_raw_parts(point_offsets_ptr, offset_count);
+    let vertex_offsets = slice::from_raw_parts(vertex_offsets_ptr, offset_count);
+    let knot_offsets = slice::from_raw_parts(knot_offsets_ptr, offset_count);
+    let frame = slice::from_raw_parts(frame_ptr, 9);
+    let matrix = slice::from_raw_parts(matrix_ptr, 16);
+    let mouse_values = slice::from_raw_parts(mouse_ptr, 2);
+    let mouse = [mouse_values[0], mouse_values[1]];
+    let offsets_valid = |offsets: &[u64], count: usize| {
+        offsets.first() == Some(&0)
+            && offsets.last() == Some(&(count as u64))
+            && !offsets
+                .windows(2)
+                .any(|pair| pair[0] > pair[1] || pair[1] > count as u64)
+    };
+    if mode_mask == 0
+        || mode_mask & !SNAP_ALL_STATIC != 0
+        || !valid_matrix(matrix)
+        || !valid_dimensions(width, height)
+        || !radius.is_finite()
+        || radius < 0.0
+        || !mouse.iter().all(|value| value.is_finite())
+        || frame.iter().any(|value| !value.is_finite())
+        || points
+            .iter()
+            .chain(vertices)
+            .chain(knots)
+            .chain(centers)
+            .any(|value| !value.is_finite())
+        || center_valid.iter().any(|value| *value > 1)
+        || target_flags
+            .iter()
+            .any(|value| *value & !(TARGET_POINT | TARGET_CLOSED) != 0)
+        || !offsets_valid(point_offsets, point_count)
+        || !offsets_valid(vertex_offsets, vertex_count)
+        || !offsets_valid(knot_offsets, knot_count)
+    {
+        return ERR_INPUT;
+    }
+    let found = static_snap_survivors(
+        points,
+        point_offsets,
+        vertices,
+        vertex_offsets,
+        knots,
+        knot_offsets,
+        centers,
+        center_valid,
+        target_flags,
+        frame,
+        matrix,
+        width,
+        height,
+        mouse,
+        radius,
+        mode_mask,
+    );
+    ptr::write(out_count_ptr, found.len() as u64);
+    if capacity == 0 {
+        return 0;
+    }
+    if capacity < found.len() {
+        return ERR_SIZE;
+    }
+    let out_xyz = slice::from_raw_parts_mut(out_xyz_ptr, output_values);
+    let out_targets = slice::from_raw_parts_mut(out_targets_ptr, capacity);
+    let out_modes = slice::from_raw_parts_mut(out_modes_ptr, capacity);
+    let out_distances = slice::from_raw_parts_mut(out_distances_ptr, capacity);
+    out_xyz.fill(f64::NAN);
+    out_targets.fill(u64::MAX);
+    out_modes.fill(0);
+    out_distances.fill(f64::INFINITY);
+    for (index, snap) in found.iter().enumerate() {
+        out_xyz[index * 3..index * 3 + 3].copy_from_slice(&snap.point);
+        out_targets[index] = snap.target as u64;
+        out_modes[index] = snap.mode;
+        out_distances[index] = snap.distance;
+    }
+    0
+}
+
+/// Compute the active-frame-oriented bounding-box center of packed world points.
+///
+/// The frame is nine f64 values: origin XYZ, X axis XYZ, then Y axis XYZ. Z is
+/// derived as X cross Y, matching the CPlane model's right-handed invariant.
+///
+/// # Safety
+///
+/// The point buffer must contain `point_count * 3` readable f64 values. Frame,
+/// output XYZ and output-valid pointers are always required and non-overlapping.
+#[no_mangle]
+pub unsafe extern "C" fn narwhal_oriented_bbox_center_f64(
+    points_ptr: *const f64,
+    point_count: usize,
+    frame_ptr: *const f64,
+    out_xyz_ptr: *mut f64,
+    out_valid_ptr: *mut u8,
+) -> i32 {
+    if frame_ptr.is_null() || out_xyz_ptr.is_null() || out_valid_ptr.is_null() {
+        return ERR_NULL;
+    }
+    ptr::write_bytes(out_xyz_ptr, 0xFF, 3);
+    ptr::write(out_valid_ptr, 0);
+    if point_count > 0 && points_ptr.is_null() {
+        return ERR_NULL;
+    }
+    let point_values = match point_count.checked_mul(3) {
+        Some(value) if valid_slice_len::<f64>(value) => value,
+        _ => return ERR_SIZE,
+    };
+    let frame = slice::from_raw_parts(frame_ptr, 9);
+    if frame.iter().any(|value| !value.is_finite()) {
+        return ERR_INPUT;
+    }
+    let origin = [frame[0], frame[1], frame[2]];
+    let xaxis = [frame[3], frame[4], frame[5]];
+    let yaxis = [frame[6], frame[7], frame[8]];
+    let x_length = finite_norm3(xaxis[0], xaxis[1], xaxis[2]);
+    let y_length = finite_norm3(yaxis[0], yaxis[1], yaxis[2]);
+    let orthogonality = xaxis[0] * yaxis[0] + xaxis[1] * yaxis[1] + xaxis[2] * yaxis[2];
+    if (x_length - 1.0).abs() > 1.0e-6
+        || (y_length - 1.0).abs() > 1.0e-6
+        || orthogonality.abs() > 1.0e-6
+    {
+        return ERR_INPUT;
+    }
+    if point_count == 0 {
+        return 0;
+    }
+    let points = slice::from_raw_parts(points_ptr, point_values);
+    if points.iter().any(|value| !value.is_finite()) {
+        return ERR_INPUT;
+    }
+    let zaxis = cross3(xaxis, yaxis);
+    let mut lower = [f64::INFINITY; 3];
+    let mut upper = [f64::NEG_INFINITY; 3];
+    for point in points.chunks_exact(3) {
+        let delta = [
+            point[0] - origin[0],
+            point[1] - origin[1],
+            point[2] - origin[2],
+        ];
+        let local = [
+            delta[0] * xaxis[0] + delta[1] * xaxis[1] + delta[2] * xaxis[2],
+            delta[0] * yaxis[0] + delta[1] * yaxis[1] + delta[2] * yaxis[2],
+            delta[0] * zaxis[0] + delta[1] * zaxis[1] + delta[2] * zaxis[2],
+        ];
+        for axis in 0..3 {
+            lower[axis] = lower[axis].min(local[axis]);
+            upper[axis] = upper[axis].max(local[axis]);
+        }
+    }
+    let middle = [
+        (lower[0] + upper[0]) / 2.0,
+        (lower[1] + upper[1]) / 2.0,
+        (lower[2] + upper[2]) / 2.0,
+    ];
+    let output = slice::from_raw_parts_mut(out_xyz_ptr, 3);
+    output[0] = origin[0] + xaxis[0] * middle[0] + yaxis[0] * middle[1] + zaxis[0] * middle[2];
+    output[1] = origin[1] + xaxis[1] * middle[0] + yaxis[1] * middle[1] + zaxis[1] * middle[2];
+    output[2] = origin[2] + xaxis[2] * middle[0] + yaxis[2] * middle[1] + zaxis[2] * middle[2];
+    ptr::write(out_valid_ptr, 1);
+    0
+}
+
+/// Apply ordered selection replacement, addition, or removal to opaque u32 IDs.
+///
+/// Actions are 0=replace, 1=add, and 2=remove. First occurrences win; output
+/// always follows input traversal order and never hash-table iteration order.
+/// A zero-capacity sizing call writes the required row count without output.
+///
+/// # Safety
+///
+/// Input buffers must contain the declared u32 counts. `out_count` is always
+/// writable. A nonzero output capacity requires a writable output buffer.
+#[no_mangle]
+pub unsafe extern "C" fn narwhal_ordered_selection_apply_u32(
+    current_ptr: *const u32,
+    current_count: usize,
+    hits_ptr: *const u32,
+    hit_count: usize,
+    action: u8,
+    output_ptr: *mut u32,
+    output_capacity: usize,
+    out_count_ptr: *mut u64,
+) -> i32 {
+    if out_count_ptr.is_null() {
+        return ERR_NULL;
+    }
+    ptr::write(out_count_ptr, 0);
+    if (current_count > 0 && current_ptr.is_null())
+        || (hit_count > 0 && hits_ptr.is_null())
+        || (output_capacity > 0 && output_ptr.is_null())
+    {
+        return ERR_NULL;
+    }
+    if action > 2
+        || !valid_slice_len::<u32>(current_count)
+        || !valid_slice_len::<u32>(hit_count)
+        || !valid_slice_len::<u32>(output_capacity)
+    {
+        return if action > 2 { ERR_INPUT } else { ERR_SIZE };
+    }
+    let current = if current_count == 0 {
+        &[]
+    } else {
+        slice::from_raw_parts(current_ptr, current_count)
+    };
+    let hits = if hit_count == 0 {
+        &[]
+    } else {
+        slice::from_raw_parts(hits_ptr, hit_count)
+    };
+    let maximum = match current_count.checked_add(hit_count) {
+        Some(value) => value,
+        None => return ERR_SIZE,
+    };
+    let mut result = Vec::with_capacity(maximum);
+    match action {
+        0 => {
+            let mut seen = HashSet::with_capacity(hit_count);
+            for &value in hits {
+                if seen.insert(value) {
+                    result.push(value);
+                }
+            }
+        }
+        1 => {
+            let mut seen = HashSet::with_capacity(maximum);
+            for &value in current.iter().chain(hits.iter()) {
+                if seen.insert(value) {
+                    result.push(value);
+                }
+            }
+        }
+        2 => {
+            let drop: HashSet<u32> = hits.iter().copied().collect();
+            let mut seen = HashSet::with_capacity(current_count);
+            for &value in current {
+                if !drop.contains(&value) && seen.insert(value) {
+                    result.push(value);
+                }
+            }
+        }
+        _ => unreachable!(),
+    }
+    let result_count = match u64::try_from(result.len()) {
+        Ok(value) => value,
+        Err(_) => return ERR_SIZE,
+    };
+    ptr::write(out_count_ptr, result_count);
+    if output_capacity == 0 {
+        return 0;
+    }
+    if output_capacity < result.len() {
+        return ERR_SIZE;
+    }
+    let output = slice::from_raw_parts_mut(output_ptr, output_capacity);
+    output.fill(u32::MAX);
+    output[..result.len()].copy_from_slice(&result);
+    0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2447,6 +3132,372 @@ mod tests {
     const IDENTITY: [f64; 16] = [
         1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
     ];
+
+    #[test]
+    fn static_discrete_snaps_preserve_mid_seam_quad_and_target_order() {
+        let points = [
+            0.0_f64, 0.0, 0.0, 2.0, 0.0, 0.0, 10.0, 0.0, 0.0, 0.0, 0.0, 0.0, 2.0, 0.0, 0.0, 2.0,
+            2.0, 0.0, 0.0, 0.0, 0.0,
+        ];
+        let offsets = [0_u64, 3, 6, 7];
+        let knots = [4.0_f64, 0.0, 0.0];
+        let knot_offsets = [0_u64, 1, 1, 1];
+        let centers = [5.0_f64, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+        let center_valid = [1_u8, 0, 0];
+        let flags = [0_u8, TARGET_CLOSED, TARGET_POINT];
+        let frame = [0.0_f64, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0];
+        let snaps = static_snap_survivors(
+            &points,
+            &offsets,
+            &points,
+            &offsets,
+            &knots,
+            &knot_offsets,
+            &centers,
+            &center_valid,
+            &flags,
+            &frame,
+            &IDENTITY,
+            100.0,
+            100.0,
+            [50.0, 50.0],
+            1000.0,
+            SNAP_ALL_STATIC,
+        );
+        assert!(snaps
+            .windows(2)
+            .all(|pair| pair[0].target <= pair[1].target));
+        assert!(snaps
+            .iter()
+            .any(|snap| snap.target == 0 && snap.mode == 2 && snap.point == [5.0, 0.0, 0.0]));
+        assert!(snaps
+            .iter()
+            .any(|snap| snap.target == 1 && snap.mode == 2 && snap.point == [1.0, 1.0, 0.0]));
+        let point_rows: Vec<StaticSnap> = snaps
+            .iter()
+            .copied()
+            .filter(|snap| snap.target == 2)
+            .collect();
+        assert_eq!(point_rows.len(), 1);
+        assert_eq!(point_rows[0].mode, 5);
+        assert_eq!(point_rows[0].point, [0.0, 0.0, 0.0]);
+        let mode_order: Vec<u8> = snaps
+            .iter()
+            .filter(|snap| snap.target == 0)
+            .map(|snap| snap.mode)
+            .collect();
+        assert!(mode_order.windows(2).all(|pair| pair[0] <= pair[1]));
+
+        let quad_points = [
+            0.0_f64, 0.0, 0.0, 4.0, 0.0, 0.0, 0.0, 4.0, 0.0, 3.0, 3.0, 0.0,
+        ];
+        let quad_offsets = [0_u64, 4];
+        let empty_offsets = [0_u64, 0];
+        let quad_centers = [0.0_f64; 3];
+        let quad_valid = [0_u8];
+        let quad_flags = [0_u8];
+        let root = 2.0_f64.sqrt() / 2.0;
+        let rotated = [0.0_f64, 0.0, 0.0, root, root, 0.0, -root, root, 0.0];
+        let quadrants = static_snap_survivors(
+            &quad_points,
+            &quad_offsets,
+            &[],
+            &empty_offsets,
+            &[],
+            &empty_offsets,
+            &quad_centers,
+            &quad_valid,
+            &quad_flags,
+            &rotated,
+            &IDENTITY,
+            100.0,
+            100.0,
+            [50.0, 50.0],
+            1000.0,
+            SNAP_QUAD,
+        );
+        let quad_rows: Vec<[f64; 3]> = quadrants.iter().map(|snap| snap.point).collect();
+        assert_eq!(
+            quad_rows,
+            vec![
+                [0.0, 0.0, 0.0],
+                [3.0, 3.0, 0.0],
+                [4.0, 0.0, 0.0],
+                [0.0, 4.0, 0.0],
+            ]
+        );
+
+        let boundary_point = [0.2_f64, 0.0, 0.0];
+        let boundary_offsets = [0_u64, 1];
+        let boundary_flags = [TARGET_POINT];
+        let boundary = static_snap_survivors(
+            &boundary_point,
+            &boundary_offsets,
+            &[],
+            &empty_offsets,
+            &[],
+            &empty_offsets,
+            &quad_centers,
+            &quad_valid,
+            &boundary_flags,
+            &frame,
+            &IDENTITY,
+            100.0,
+            100.0,
+            [50.0, 50.0],
+            10.0,
+            SNAP_POINT,
+        );
+        assert_eq!(boundary.len(), 1);
+        assert_eq!(boundary[0].distance, 10.0);
+
+        let mouse = [50.0_f64, 50.0];
+        let mut xyz = [0.0_f64; 192];
+        let mut targets = [0_u64; 64];
+        let mut modes = [0_u8; 64];
+        let mut distances = [0.0_f64; 64];
+        let mut written = 77_u64;
+        let valid_code = unsafe {
+            narwhal_discrete_snap_survivors_f64(
+                points.as_ptr(),
+                7,
+                offsets.as_ptr(),
+                points.as_ptr(),
+                7,
+                offsets.as_ptr(),
+                knots.as_ptr(),
+                1,
+                knot_offsets.as_ptr(),
+                centers.as_ptr(),
+                center_valid.as_ptr(),
+                flags.as_ptr(),
+                3,
+                frame.as_ptr(),
+                IDENTITY.as_ptr(),
+                100.0,
+                100.0,
+                mouse.as_ptr(),
+                1000.0,
+                SNAP_ALL_STATIC,
+                xyz.as_mut_ptr(),
+                targets.as_mut_ptr(),
+                modes.as_mut_ptr(),
+                distances.as_mut_ptr(),
+                64,
+                &mut written,
+            )
+        };
+        assert_eq!(valid_code, 0);
+        assert_eq!(written as usize, snaps.len());
+
+        written = 77;
+        let null_offsets = unsafe {
+            narwhal_discrete_snap_survivors_f64(
+                points.as_ptr(),
+                7,
+                ptr::null(),
+                points.as_ptr(),
+                7,
+                offsets.as_ptr(),
+                knots.as_ptr(),
+                1,
+                knot_offsets.as_ptr(),
+                centers.as_ptr(),
+                center_valid.as_ptr(),
+                flags.as_ptr(),
+                3,
+                frame.as_ptr(),
+                IDENTITY.as_ptr(),
+                100.0,
+                100.0,
+                mouse.as_ptr(),
+                1000.0,
+                SNAP_ALL_STATIC,
+                xyz.as_mut_ptr(),
+                targets.as_mut_ptr(),
+                modes.as_mut_ptr(),
+                distances.as_mut_ptr(),
+                64,
+                &mut written,
+            )
+        };
+        assert_eq!((null_offsets, written), (ERR_NULL, 0));
+
+        written = 77;
+        let invalid_mask = unsafe {
+            narwhal_discrete_snap_survivors_f64(
+                points.as_ptr(),
+                7,
+                offsets.as_ptr(),
+                points.as_ptr(),
+                7,
+                offsets.as_ptr(),
+                knots.as_ptr(),
+                1,
+                knot_offsets.as_ptr(),
+                centers.as_ptr(),
+                center_valid.as_ptr(),
+                flags.as_ptr(),
+                3,
+                frame.as_ptr(),
+                IDENTITY.as_ptr(),
+                100.0,
+                100.0,
+                mouse.as_ptr(),
+                1000.0,
+                0,
+                xyz.as_mut_ptr(),
+                targets.as_mut_ptr(),
+                modes.as_mut_ptr(),
+                distances.as_mut_ptr(),
+                64,
+                &mut written,
+            )
+        };
+        assert_eq!((invalid_mask, written), (ERR_INPUT, 0));
+
+        written = 77;
+        let undersized = unsafe {
+            narwhal_discrete_snap_survivors_f64(
+                points.as_ptr(),
+                7,
+                offsets.as_ptr(),
+                points.as_ptr(),
+                7,
+                offsets.as_ptr(),
+                knots.as_ptr(),
+                1,
+                knot_offsets.as_ptr(),
+                centers.as_ptr(),
+                center_valid.as_ptr(),
+                flags.as_ptr(),
+                3,
+                frame.as_ptr(),
+                IDENTITY.as_ptr(),
+                100.0,
+                100.0,
+                mouse.as_ptr(),
+                1000.0,
+                SNAP_ALL_STATIC,
+                xyz.as_mut_ptr(),
+                targets.as_mut_ptr(),
+                modes.as_mut_ptr(),
+                distances.as_mut_ptr(),
+                1,
+                &mut written,
+            )
+        };
+        assert_eq!(undersized, ERR_SIZE);
+        assert_eq!(written as usize, snaps.len());
+    }
+
+    #[test]
+    fn oriented_bbox_center_uses_all_active_frame_axes() {
+        let root = 2.0_f64.sqrt() / 2.0;
+        let frame = [0.0_f64, 0.0, 0.0, root, root, 0.0, -root, root, 0.0];
+        let points = [0.0_f64, 0.0, 0.0, 2.0, 0.0, 0.0, 0.0, 1.0, 0.0];
+        let mut output = [0.0_f64; 3];
+        let mut valid = 9_u8;
+        let code = unsafe {
+            narwhal_oriented_bbox_center_f64(
+                points.as_ptr(),
+                3,
+                frame.as_ptr(),
+                output.as_mut_ptr(),
+                &mut valid,
+            )
+        };
+        assert_eq!((code, valid), (0, 1));
+        assert!((output[0] - 0.75).abs() < 1.0e-12);
+        assert!((output[1] - 0.25).abs() < 1.0e-12);
+        assert_eq!(output[2], 0.0);
+
+        let front = [10.0_f64, 20.0, 30.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0];
+        let depth_points = [12.0_f64, 17.0, 34.0, 16.0, 19.0, 38.0];
+        let code = unsafe {
+            narwhal_oriented_bbox_center_f64(
+                depth_points.as_ptr(),
+                2,
+                front.as_ptr(),
+                output.as_mut_ptr(),
+                &mut valid,
+            )
+        };
+        assert_eq!((code, valid), (0, 1));
+        assert_eq!(output, [14.0, 18.0, 36.0]);
+
+        let empty = unsafe {
+            narwhal_oriented_bbox_center_f64(
+                ptr::null(),
+                0,
+                frame.as_ptr(),
+                output.as_mut_ptr(),
+                &mut valid,
+            )
+        };
+        assert_eq!((empty, valid), (0, 0));
+        assert!(output.iter().all(|value| value.is_nan()));
+    }
+
+    #[test]
+    fn ordered_selection_algebra_preserves_first_occurrence_and_input_order() {
+        let current = [3_u32, 1, 3, 2];
+        let hits = [2_u32, 4, 4, 1, 5];
+        let cases = [
+            (0_u8, vec![2_u32, 4, 1, 5]),
+            (1_u8, vec![3_u32, 1, 2, 4, 5]),
+            (2_u8, vec![3_u32]),
+        ];
+        for (action, expected) in cases {
+            let mut required = u64::MAX;
+            let size_code = unsafe {
+                narwhal_ordered_selection_apply_u32(
+                    current.as_ptr(),
+                    current.len(),
+                    hits.as_ptr(),
+                    hits.len(),
+                    action,
+                    ptr::null_mut(),
+                    0,
+                    &mut required,
+                )
+            };
+            assert_eq!(size_code, 0);
+            assert_eq!(required as usize, expected.len());
+            let mut output = vec![99_u32; current.len() + hits.len()];
+            let code = unsafe {
+                narwhal_ordered_selection_apply_u32(
+                    current.as_ptr(),
+                    current.len(),
+                    hits.as_ptr(),
+                    hits.len(),
+                    action,
+                    output.as_mut_ptr(),
+                    output.len(),
+                    &mut required,
+                )
+            };
+            assert_eq!(code, 0);
+            assert_eq!(&output[..expected.len()], expected.as_slice());
+            assert!(output[expected.len()..]
+                .iter()
+                .all(|value| *value == u32::MAX));
+        }
+        let mut count = 77_u64;
+        let invalid = unsafe {
+            narwhal_ordered_selection_apply_u32(
+                ptr::null(),
+                0,
+                ptr::null(),
+                0,
+                9,
+                ptr::null_mut(),
+                0,
+                &mut count,
+            )
+        };
+        assert_eq!((invalid, count), (ERR_INPUT, 0));
+    }
 
     #[test]
     fn projection_maps_ndc_to_pixels() {
