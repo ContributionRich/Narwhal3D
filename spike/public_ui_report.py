@@ -150,7 +150,7 @@ def _inspect(layout_was_ready):
           f"{len(menu_names)}: {', '.join(menu_names)}")
     menu_enabled, menu_total = menubar.coverage(set(ui.COMMANDS))
     check("menu actions are runnable or explicitly marked TODO",
-          (menu_enabled, menu_total) == (169, 532), f"{menu_enabled}/{menu_total}")
+          (menu_enabled, menu_total) == (170, 533), f"{menu_enabled}/{menu_total}")
     file_groups = {row[1] for row in menubar.resource_rows("File")
                    if row[0] == "popup"}
     help_groups = {row[1] for row in menubar.resource_rows("Help")

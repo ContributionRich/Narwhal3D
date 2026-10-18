@@ -55,6 +55,7 @@ _CORE_MENUS = (
         _popup("History", (
             _item("Undo", "undo"),
             _item("Redo", "redo"),
+            _item("Clear Undo", "clearundo"),
         )),
         _item("Cut", "cut"),
         _item("Copy", "copytoclipboard"),

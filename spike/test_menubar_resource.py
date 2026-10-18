@@ -65,7 +65,7 @@ EXPECTED_MENUS = [
 ]
 EXPECTED_RUNNABLE_COUNTS = {
     "File": 8,
-    "Edit": 47,
+    "Edit": 48,
     "View": 11,
     "Curve": 35,
     "Surface": 12,
@@ -136,14 +136,14 @@ def _():
 
 @check("live bare-package registry includes all sibling providers")
 def _():
-    assert len(registered) == 169, len(registered)
+    assert len(registered) == 170, len(registered)
     assert {
         "import", "filletedge", "saveas", "print", "export", "setdisplaymode",
         "changelayer",
     } <= registered
 
 
-@check("all 169 registered commands appear exactly once")
+@check("all 170 registered commands appear exactly once")
 def _():
     runnable = [command for _menu, _path, _label, command in leaves()
                 if command in registered]
@@ -210,6 +210,7 @@ def _():
     assert indexed[("Edit", (), "Cut")] == "cut"
     assert indexed[("Edit", (), "Copy")] == "copytoclipboard"
     assert indexed[("Edit", (), "Paste")] == "paste"
+    assert indexed[("Edit", ("History",), "Clear Undo")] == "clearundo"
     assert indexed[("Solid", ("Create and Edit",), "Fillet Edges")] == "filletedge"
     assert indexed[("Window", (), "Workspace Management (Not implemented)")] == "workspace"
     assert indexed[("File", ("Recent and Recovery",), "Recent Files")] == "__recent_files__"
@@ -250,7 +251,7 @@ def _():
         "menus": len(EXPECTED_MENUS),
         "source": "original",
     }, (data.REPORT, counts)
-    assert counts == {"items": 532, "separators": 16, "popups": 61}, counts
+    assert counts == {"items": 533, "separators": 16, "popups": 61}, counts
 
 
 @check("resource source retains original provenance")
