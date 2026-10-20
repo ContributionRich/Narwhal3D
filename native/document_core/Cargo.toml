@@ -1,0 +1,18 @@
+[package]
+name = "narwhal-document-core"
+version = "1.0.0"
+edition = "2021"
+rust-version = "1.95"
+license = "GPL-3.0-or-later"
+publish = false
+description = "Dependency-free Narwhal document container utility"
+
+[[bin]]
+name = "narwhal-document-core"
+path = "src/main.rs"
+
+[profile.release]
+codegen-units = 1
+lto = "thin"
+panic = "abort"
+strip = "symbols"

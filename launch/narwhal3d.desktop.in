@@ -1,0 +1,14 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Narwhal 3D
+GenericName=NURBS CAD
+Comment=Precision NURBS computer-aided design
+Exec=__ROOT__/narwhal3d.sh %f
+Icon=__ROOT__/launch/narwhal3d.png
+Terminal=false
+Categories=Engineering;Graphics;X-CAD;
+Keywords=cad;nurbs;3d;modeling;engineering;design;
+StartupNotify=true
+StartupWMClass=Narwhal 3D
+MimeType=application/x-narwhal3d-project;application/x-3dm;

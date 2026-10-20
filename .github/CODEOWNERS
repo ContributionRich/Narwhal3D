@@ -1,0 +1,10 @@
+# Default review owner
+* @ContributionRich
+
+# High-risk areas
+/narwhal3d/kernel/ @ContributionRich
+/narwhal3d/bridge.py @ContributionRich
+/packaging/ @ContributionRich
+/scripts/assemble_linux_release.py @ContributionRich
+/scripts/verify_linux_release.py @ContributionRich
+/.github/workflows/ @ContributionRich

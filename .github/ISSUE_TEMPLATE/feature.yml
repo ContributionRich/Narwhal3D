@@ -1,0 +1,45 @@
+name: Feature proposal
+description: Propose one focused command, UI behavior, backend, or platform capability
+title: "[Feature] "
+labels:
+  - enhancement
+body:
+  - type: input
+    id: feature
+    attributes:
+      label: Feature or command
+    validations:
+      required: true
+  - type: textarea
+    id: workflow
+    attributes:
+      label: User workflow
+      description: Describe inputs, prompts, selections, options, completion, cancellation, and output.
+    validations:
+      required: true
+  - type: textarea
+    id: value
+    attributes:
+      label: Why this belongs in Narwhal
+    validations:
+      required: true
+  - type: dropdown
+    id: representation
+    attributes:
+      label: Geometry or document impact
+      options:
+        - No document geometry change
+        - Exact curve or point geometry
+        - Exact surface or solid geometry
+        - Tolerance-fitted geometry
+        - Intentional mesh geometry
+        - File, document, UI, or platform behavior
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: State observable behavior, undo, persistence, exactness, accessibility, and platform expectations.
+    validations:
+      required: true

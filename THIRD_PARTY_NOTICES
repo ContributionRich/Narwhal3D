@@ -1,0 +1,57 @@
+THIRD-PARTY NOTICES — Narwhal 3D
+================================
+
+Narwhal 3D project code is licensed under GPL-3.0-or-later. Each bundled third-party component remains under its own license. Exact artifact versions, URLs, and SHA-256 digests are recorded in `packaging/linux-x86_64.lock.json`.
+
+1. Blender 5.2.2
+-----------------
+Use: bundled application, viewport, input, and Python runtime.
+Source: https://projects.blender.org/blender/blender
+License: GNU General Public License. The AppImage contains a Blender 5.2.2 source build with focused Narwhal title, icon, dependency-graph, and CAD-boundary patches, distributed under GPL-compatible terms. The bundled runtime carries its complete component notices in its `license/` directory. The SHA-256-locked official binary in the source lock is for development bootstrap only and is rejected by release assembly.
+
+2. rhino3dm 8.35.0
+------------------
+Use: `.3dm` file and NURBS/Brep data access.
+Source: https://github.com/mcneel/rhino3dm
+License: MIT. See `licenses/rhino3dm-MIT.txt` and the wheel's installed `.dist-info/licenses/` directory.
+
+3. cadquery-ocp-novtk 8.0.1.0.0 and cadquery-ocp-proxy 8.0.1.0.0
+----------------------------------------------------------------------------
+Use: Python bindings and loader for Open CASCADE Technology.
+Source: https://github.com/CadQuery/OCP
+License: Apache License 2.0 for the OCP bindings. See `licenses/OCP-Apache-2.0.txt` and the installed wheel metadata.
+
+4. Open CASCADE Technology 8.0.1
+--------------------------------
+Use: exact solid modeling operations, tessellation for display/export, and STEP I/O. OCCT shared libraries are supplied by the locked cadquery-ocp-novtk wheel and are loaded dynamically.
+Source: https://github.com/Open-Cascade-SAS/OCCT/tree/V8_0_1
+License: GNU Lesser General Public License version 2.1 with the Open CASCADE exception version 1.0. See:
+
+- `licenses/LGPL-2.1-or-later.txt`
+- `licenses/OCCT-exception-1.0.txt`
+
+Prominent notice: Narwhal 3D makes use of facilities provided by Open CASCADE Technology software.
+
+5. AppImage packaging tools
+----------------------------
+Use: appimagetool 1.9.1 assembles the release, and the pinned Type-2 runtime tag 20251108 starts the mounted AppImage.
+Sources: https://github.com/AppImage/appimagetool and https://github.com/AppImage/type2-runtime
+License: MIT for the Type-2 runtime, with its statically linked component notices. See `licenses/AppImage-MIT.txt`. appimagetool is a build-time input and is not embedded as the application runtime.
+
+6. TraceDraw 0.9.0-dev.821ba15
+--------------------------------
+Use: the vendored `tracedraw-core` and `tracedraw-cdr` Rust crates are statically compiled into Narwhal's bundled, supervised CDR helper for version 16 through 18 Import/Open and opt-in version 17 Export/Print.
+Source: https://github.com/igtoth/tracedraw, revision `821ba1545e3d3f75843fe7d3f912214800929821`.
+License: TraceDraw offers MIT OR Apache-2.0; Narwhal redistributes and statically links these files under the MIT option. The complete MIT text is `licenses/TraceDraw-MIT.txt`; `licenses/TraceDraw-Rust-Dependencies.txt` records every locked static Rust dependency and its available license/notice texts. Upstream's license files and `CLEANROOM.md` remain beside the vendored crates. No TraceDraw executable, service, or separately installed application is required for embedded versions.
+
+7. Components not included in the public bundle
+------------------------------------------------
+
+- Narwhal's independently authored exact-Brep helper source and pinned developer build recipe are published, but no linked helper binary or openNURBS source is bundled. The official openNURBS documentation says commercial use is encouraged and that there are no restrictions, while the repository `LICENSE` says “All Rights Reserved” without an explicit permission grant. Binary redistribution remains disabled until that conflict is explicitly cleared. Narwhal reports the resulting packaged `.3dm` limitation and directs users to STEP for exact solid interchange. Repository source: https://github.com/mcneel/opennurbs at revision `eb92af3ba1806b0a34a99aba0d3bda83e3d46083`.
+- CDR generations outside the embedded range can still use an optional local TraceDraw CLI fallback. Development runtime staging pins and verifies the same revision, but the executable is not bundled.
+- Inkscape, Poppler, Ghostscript, LibreOffice, and the TraceDraw CLI are not included. Features requiring them report the missing optional dependency; they do not claim those tools are bundled.
+
+Trademarks
+----------
+
+Narwhal 3D is an independent project. Blender, CorelDRAW, Adobe Illustrator, AutoCAD, Open CASCADE, and other names belong to their respective owners and are used only to identify third-party software or file formats.

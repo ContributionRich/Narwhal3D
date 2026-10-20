@@ -1,0 +1,1745 @@
+//! Text chunks: `font` (font table), `stlt` (style table) and `txsm` (text
+//! content with its runs), plus the string encodings they use.
+//!
+//! Layouts follow the public declarative description of the format; see
+//! `docs/cdr-format.md` for the status of each fact. Everything here is
+//! tolerant: a malformed chunk yields `None` or a shorter result, never a
+//! panic.
+
+use crate::parse::Reader;
+
+/// Points per coordinate unit (version 6+: 1/254000 inch).
+const PT_PER_UNIT: f64 = 72.0 / 254000.0;
+/// Points per coordinate unit before version 6 (1/1000 inch).
+const PT_PER_UNIT16: f64 = 72.0 / 1000.0;
+
+/// Upper bounds that keep hostile counts from allocating.
+const MAX_FRAMES: usize = 4096;
+const MAX_PARAGRAPHS: usize = 65536;
+const MAX_RUNS: usize = 65536;
+const MAX_CHARS: usize = 4_000_000;
+
+/// Windows-1252 code points for bytes 0x80..0x9f (0 = undefined, mapped to
+/// U+FFFD). Bytes below 0x80 and from 0xa0 are Latin-1.
+const CP1252_HIGH: [u16; 32] = [
+    0x20ac, 0, 0x201a, 0x0192, 0x201e, 0x2026, 0x2020, 0x2021, 0x02c6, 0x2030, 0x0160, 0x2039,
+    0x0152, 0, 0x017d, 0, 0, 0x2018, 0x2019, 0x201c, 0x201d, 0x2022, 0x2013, 0x2014, 0x02dc,
+    0x2122, 0x0161, 0x203a, 0x0153, 0, 0x017e, 0x0178,
+];
+
+/// Decode single-byte text as Windows-1252, stopping at the first NUL.
+pub(crate) fn decode_cp1252(b: &[u8]) -> String {
+    b.iter()
+        .take_while(|c| **c != 0)
+        .map(|&c| {
+            if (0x80..0xa0).contains(&c) {
+                match CP1252_HIGH[(c - 0x80) as usize] {
+                    0 => '\u{fffd}',
+                    u => char::from_u32(u as u32).unwrap_or('\u{fffd}'),
+                }
+            } else {
+                c as char
+            }
+        })
+        .collect()
+}
+
+/// Decode version 17+ text whose characters are one byte each (Windows-1252)
+/// except those flagged `wide`, which are a UTF-16LE unit of two bytes:
+/// letters beyond Latin-1 such as "č" (0D 01) or "ř" (59 01). `None` when
+/// the widths do not add up to the bytes stored.
+pub(crate) fn decode_mixed_width(b: &[u8], wide: &[bool]) -> Option<String> {
+    let needed: usize = wide.iter().map(|w| if *w { 2 } else { 1 }).sum();
+    if needed != b.len() {
+        return None;
+    }
+    let mut units: Vec<u16> = Vec::with_capacity(wide.len());
+    let mut pos = 0;
+    for w in wide {
+        if *w {
+            units.push(u16::from_le_bytes([*b.get(pos)?, *b.get(pos + 1)?]));
+            pos += 2;
+        } else {
+            let c = *b.get(pos)?;
+            let u = if (0x80..0xa0).contains(&c) {
+                match CP1252_HIGH[(c - 0x80) as usize] {
+                    0 => 0xfffd,
+                    u => u,
+                }
+            } else {
+                c as u16
+            };
+            units.push(u);
+            pos += 1;
+        }
+    }
+    Some(String::from_utf16_lossy(&units))
+}
+
+/// Decode UTF-16LE text, stopping at the first NUL unit.
+pub(crate) fn decode_utf16le(b: &[u8]) -> String {
+    let units: Vec<u16> = b
+        .chunks_exact(2)
+        .map(|c| u16::from_le_bytes([c[0], c[1]]))
+        .take_while(|u| *u != 0)
+        .collect();
+    String::from_utf16_lossy(&units)
+}
+
+/// The code page a font record's character set names (the Windows
+/// character set values): Latin (0, and the default, OEM and unknown
+/// sets) reads as Windows-1252.
+fn charset_encoding(charset: u8) -> Option<&'static encoding_rs::Encoding> {
+    use encoding_rs::*;
+    Some(match charset {
+        128 => SHIFT_JIS,
+        129 => EUC_KR,
+        134 => GBK,
+        136 => BIG5,
+        161 => WINDOWS_1253,
+        162 => WINDOWS_1254,
+        163 => WINDOWS_1258,
+        177 => WINDOWS_1255,
+        178 => WINDOWS_1256,
+        186 => WINDOWS_1257,
+        204 => WINDOWS_1251,
+        222 => WINDOWS_874,
+        238 => WINDOWS_1250,
+        _ => return None,
+    })
+}
+
+/// Single-byte (or double-byte) text in the code page of the character set
+/// `charset`, stopping at the first NUL. Symbol fonts (2) keep the byte
+/// values, which symbol fonts map to their glyphs.
+pub(crate) fn decode_charset(b: &[u8], charset: u8) -> String {
+    let b = &b[..b.iter().position(|c| *c == 0).unwrap_or(b.len())];
+    if charset == 2 {
+        return b.iter().map(|&c| c as char).collect();
+    }
+    match charset_encoding(charset) {
+        Some(enc) => enc.decode_without_bom_handling(b).0.into_owned(),
+        None => decode_cp1252(b),
+    }
+}
+
+/// The character set is one whose text differs from Windows-1252.
+pub(crate) fn is_non_latin_charset(charset: u8) -> bool {
+    charset == 2 || charset_encoding(charset).is_some()
+}
+
+/// Decoded `text_style_flags`: the low 18 bits name the face (one bit per
+/// weight/italic combination), bits 18..20 underline, 21..23 overline,
+/// 24..26 strike-through, 27..28 script.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct StyleFlags(pub u32);
+
+impl StyleFlags {
+    const BOLD_BITS: u32 = 0x400 | 0x800 | 0x1000 | 0x2000 | 0x4000 | 0x8000 | 0x1_0000 | 0x2_0000;
+    const ITALIC_BITS: u32 = 0x2 | 0x8 | 0x20 | 0x80 | 0x200 | 0x800 | 0x2000 | 0x8000 | 0x2_0000;
+
+    pub fn bold(self) -> bool {
+        self.0 & 0x3ffff & Self::BOLD_BITS != 0
+    }
+    pub fn italic(self) -> bool {
+        self.0 & 0x3ffff & Self::ITALIC_BITS != 0
+    }
+    pub fn underline(self) -> bool {
+        (self.0 >> 18) & 0x7 != 0
+    }
+    pub fn strikethrough(self) -> bool {
+        (self.0 >> 24) & 0x7 != 0
+    }
+}
+
+/// `font` chunk: id, family name and character set.
+pub(crate) struct FontRec {
+    pub id: u16,
+    pub name: String,
+    /// The Windows character set of the font's text (the low byte of the
+    /// encoding field): 0 Latin, 204 Cyrillic, 238 Central European ...
+    pub charset: u8,
+}
+
+/// `font`: id u16, encoding u16, style flags u32, 10 unknown bytes, name
+/// to the end of the chunk (UTF-16LE from version 12, before that in the
+/// code page of the encoding's character set).
+pub(crate) fn read_font(d: &[u8], v: u16) -> Option<FontRec> {
+    let mut r = Reader::new(d, false);
+    let id = r.u16()?;
+    let charset = (r.u16()? & 0xff) as u8;
+    let _flags = r.u32()?;
+    r.skip(10);
+    let raw = d.get(r.pos..)?;
+    let name = if v >= 12 {
+        decode_utf16le(raw)
+    } else {
+        decode_charset(raw, charset)
+    };
+    let name = name.trim().to_string();
+    if name.is_empty() {
+        return None;
+    }
+    Some(FontRec { id, name, charset })
+}
+
+/// Character and paragraph properties a run or a style may set. `None`
+/// means "inherit".
+#[derive(Debug, Clone, Default, PartialEq)]
+pub(crate) struct RunStyle {
+    pub font_id: Option<u16>,
+    /// The character set of the text (before version 12; see
+    /// [`decode_charset`]).
+    pub charset: Option<u8>,
+    pub family: Option<String>,
+    pub size_pt: Option<f64>,
+    pub flags: Option<StyleFlags>,
+    pub bold: Option<bool>,
+    pub italic: Option<bool>,
+    pub fill_id: Option<u32>,
+    pub outl_id: Option<u32>,
+    /// Alignment code (0 none, 1 left, 2 centre, 3 right, 4 and 5 justify).
+    pub align: Option<u32>,
+    /// Line spacing as a factor of the character height (1.0 = 100 %).
+    pub line_spacing: Option<f64>,
+    /// Line spacing as a distance between baselines, mm (set instead of
+    /// `line_spacing`).
+    pub line_spacing_mm: Option<f64>,
+    /// Extra character spacing as a fraction of the em (0 = none).
+    pub char_spacing: Option<f64>,
+    /// Paragraph indents in points: (left, first line, right).
+    pub indent_pt: Option<(f64, f64, f64)>,
+    /// An inline uniform fill colour (version 16 and later style strings
+    /// describe the run's fill as an object with its colour);
+    /// `Some(None)` is no fill.
+    pub fill_color: Option<Option<tracedraw_core::Color>>,
+    /// Version 16+ style strings: underline and strikeout on or off.
+    pub underline: Option<bool>,
+    pub strikethrough: Option<bool>,
+}
+
+impl RunStyle {
+    /// `self` on top of `base`: set fields win, unset ones inherit.
+    pub fn over(&self, base: &RunStyle) -> RunStyle {
+        RunStyle {
+            font_id: self.font_id.or(base.font_id),
+            charset: self.charset.or(base.charset),
+            family: self.family.clone().or_else(|| base.family.clone()),
+            size_pt: self.size_pt.or(base.size_pt),
+            flags: self.flags.or(base.flags),
+            bold: self.bold.or(base.bold),
+            italic: self.italic.or(base.italic),
+            fill_id: self.fill_id.or(base.fill_id),
+            outl_id: self.outl_id.or(base.outl_id),
+            align: self.align.or(base.align),
+            // The two ways of giving the spacing replace each other.
+            line_spacing: if self.line_spacing.is_some() || self.line_spacing_mm.is_some() {
+                self.line_spacing
+            } else {
+                base.line_spacing
+            },
+            line_spacing_mm: if self.line_spacing.is_some() || self.line_spacing_mm.is_some() {
+                self.line_spacing_mm
+            } else {
+                base.line_spacing_mm
+            },
+            char_spacing: self.char_spacing.or(base.char_spacing),
+            indent_pt: self.indent_pt.or(base.indent_pt),
+            fill_color: self.fill_color.or(base.fill_color),
+            underline: self.underline.or(base.underline),
+            strikethrough: self.strikethrough.or(base.strikethrough),
+        }
+    }
+}
+
+/// One record of the `stlt` table after its indirections are resolved.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct StyleRec {
+    pub parent: u32,
+    pub style: RunStyle,
+}
+
+/// A style's line spacing as the interval table gives it.
+#[derive(Debug, Clone, Copy)]
+enum LineSpacing {
+    Factor(f64),
+    Mm(f64),
+}
+
+/// `stlt`: count, mapping tables (fills, outlines, fonts, alignments,
+/// intervals, set5, tabs, bullets, indents, hyphens, drop caps, set11),
+/// then the style records. Returns (style id, record).
+pub(crate) fn read_stlt(d: &[u8], v: u16, warn: &mut dyn FnMut(String)) -> Vec<(u32, StyleRec)> {
+    let v16 = v < 6;
+    let coord_size = if v16 { 2 } else { 4 };
+    let mut r = Reader::new(d, v16);
+    let Some(num_records) = r.u32() else {
+        return Vec::new();
+    };
+    if num_records == 0 {
+        return Vec::new();
+    }
+    // Entry tables: (id, 4 unknown, value) with an optional tail.
+    fn read_entries(r: &mut Reader, extra: usize) -> Option<std::collections::HashMap<u32, u32>> {
+        let n = r.u32()? as usize;
+        let size = 12 + extra;
+        let n = n.min(r.remaining() / size);
+        let mut m = std::collections::HashMap::with_capacity(n);
+        for _ in 0..n {
+            let id = r.u32()?;
+            r.skip(4);
+            let value = r.u32()?;
+            r.skip(extra);
+            m.insert(id, value);
+        }
+        Some(m)
+    }
+    let Some(fills) = read_entries(&mut r, if v >= 13 { 48 } else { 0 }) else {
+        return Vec::new();
+    };
+    let Some(outls) = read_entries(&mut r, 0) else {
+        return Vec::new();
+    };
+    // Fonts: id, unknown 12 (before 10) / 20, font id u16, encoding u16,
+    // 8 unknown, size coord, 8 unknown, style flags u32, 8 unknown (10+).
+    let font_gap = if v < 10 { 12 } else { 20 };
+    let font_size = 4 + font_gap + 2 + 2 + 8 + coord_size + 8 + 4 + if v >= 10 { 8 } else { 0 };
+    let Some(nf) = r.u32() else {
+        return Vec::new();
+    };
+    let nf = (nf as usize).min(r.remaining() / font_size);
+    let mut fonts: std::collections::HashMap<u32, (u16, u8, f64, StyleFlags)> =
+        std::collections::HashMap::with_capacity(nf);
+    for _ in 0..nf {
+        let (Some(id), _, Some(font_id), Some(enc), _, Some(size), _, Some(flags)) = (
+            r.u32(),
+            r.skip(font_gap),
+            r.u16(),
+            r.u16(),
+            r.skip(8),
+            r.sint(),
+            r.skip(8),
+            r.u32(),
+        ) else {
+            return Vec::new();
+        };
+        if v >= 10 {
+            r.skip(8);
+        }
+        let pt = size as f64 * if v16 { PT_PER_UNIT16 } else { PT_PER_UNIT };
+        fonts.insert(id, (font_id, (enc & 0xff) as u8, pt, StyleFlags(flags)));
+    }
+    let Some(aligns) = read_entries(&mut r, 0) else {
+        return Vec::new();
+    };
+    // Tables we do not use: skip by their fixed record sizes.
+    let skip_table = |r: &mut Reader, size: usize| -> Option<()> {
+        let n = r.u32()? as usize;
+        let n = n.min(r.remaining() / size.max(1));
+        r.skip(n * size);
+        Some(())
+    };
+    // Intervals: id, 8 unknown, character spacing i32 (millionths), 8
+    // unknown, line spacing, 20 unknown, the line spacing's unit u32: 0
+    // (and 2) millionths of the character height, 1 a distance in
+    // coordinate units (7 pt stored as 24 694 in a version 12 file whose
+    // multi-line text otherwise collapses onto one line).
+    let coord_mm = 25.4 / 72.0 * if v16 { PT_PER_UNIT16 } else { PT_PER_UNIT };
+    let Some(ni) = r.u32() else {
+        return Vec::new();
+    };
+    let ni = (ni as usize).min(r.remaining() / 52);
+    let mut intervals: std::collections::HashMap<u32, (f64, LineSpacing)> =
+        std::collections::HashMap::with_capacity(ni);
+    for _ in 0..ni {
+        let (Some(id), _, Some(ch), _, Some(ln), _, Some(unit)) = (
+            r.u32(),
+            r.skip(8),
+            r.u32(),
+            r.skip(8),
+            r.u32(),
+            r.skip(20),
+            r.u32(),
+        ) else {
+            return Vec::new();
+        };
+        let line = if unit == 1 {
+            LineSpacing::Mm(ln as i32 as f64 * coord_mm)
+        } else {
+            LineSpacing::Factor(ln as i32 as f64 / 1_000_000.0)
+        };
+        intervals.insert(id, (ch as i32 as f64 / 1_000_000.0, line));
+    }
+    if skip_table(&mut r, 152).is_none() || skip_table(&mut r, 784).is_none() {
+        return Vec::new();
+    }
+    // Bullets have a variable size.
+    let Some(nb) = r.u32() else {
+        return Vec::new();
+    };
+    for _ in 0..(nb as usize).min(4096) {
+        if r.remaining() == 0 {
+            break;
+        }
+        r.skip(40);
+        if v >= 14 {
+            r.skip(4);
+        }
+        if v >= 13 {
+            let Some(ind) = r.u32() else { break };
+            r.skip(if ind != 0 { 68 } else { 12 });
+        } else {
+            r.skip(20);
+            if v >= 10 {
+                r.skip(8);
+            }
+            let Some(ind) = r.u32() else { break };
+            if ind != 0 {
+                r.skip(8);
+            }
+            r.skip(8);
+        }
+    }
+    // Indents: id, 12 unknown, right, first line, left (coordinates).
+    let indent_size = 4 + 12 + 3 * coord_size;
+    let Some(nind) = r.u32() else {
+        return Vec::new();
+    };
+    let nind = (nind as usize).min(r.remaining() / indent_size);
+    let mut indents: std::collections::HashMap<u32, (f64, f64, f64)> =
+        std::collections::HashMap::with_capacity(nind);
+    let unit_pt = if v16 { PT_PER_UNIT16 } else { PT_PER_UNIT };
+    for _ in 0..nind {
+        let (Some(id), _, Some(right), Some(first), Some(left)) =
+            (r.u32(), r.skip(12), r.sint(), r.sint(), r.sint())
+        else {
+            return Vec::new();
+        };
+        indents.insert(
+            id,
+            (
+                left as f64 * unit_pt,
+                first as f64 * unit_pt,
+                right as f64 * unit_pt,
+            ),
+        );
+    }
+    if skip_table(&mut r, 32 + if v >= 13 { 4 } else { 0 }).is_none()
+        || skip_table(&mut r, 28).is_none()
+    {
+        return Vec::new();
+    }
+    // The set11 table exists from the CDR 8 variant (801) on; our major
+    // version cannot tell 800 from 801, so version 8 reads it as absent.
+    let has_set11 = v >= 9;
+    if has_set11 && skip_table(&mut r, 12).is_none() {
+        return Vec::new();
+    }
+
+    let mut out = Vec::new();
+    for _ in 0..(num_records as usize).min(65536) {
+        let (Some(num), Some(style_id), Some(parent), _, Some(len)) =
+            (r.u32(), r.u32(), r.u32(), r.skip(8), r.u32())
+        else {
+            break;
+        };
+        let bytes = (len as usize).saturating_mul(if v >= 12 { 2 } else { 1 });
+        if bytes > r.remaining() {
+            warn(format!(
+                "stlt record {style_id}: name longer than the chunk"
+            ));
+            break;
+        }
+        r.skip(bytes);
+        let (Some(fill_ref), Some(outl_ref)) = (r.u32(), r.u32()) else {
+            break;
+        };
+        let mut style = RunStyle {
+            fill_id: fills.get(&fill_ref).copied(),
+            outl_id: outls.get(&outl_ref).copied(),
+            ..RunStyle::default()
+        };
+        if num > 1 {
+            let (Some(font_ref), Some(align_ref), Some(interval_ref), Some(_set5)) =
+                (r.u32(), r.u32(), r.u32(), r.u32())
+            else {
+                break;
+            };
+            if let Some((ch, ln)) = intervals.get(&interval_ref) {
+                match *ln {
+                    LineSpacing::Factor(f) if f > 0.0 && f.is_finite() => {
+                        style.line_spacing = Some(f);
+                    }
+                    LineSpacing::Mm(mm) if mm > 0.0 && mm.is_finite() => {
+                        style.line_spacing_mm = Some(mm);
+                    }
+                    _ => {}
+                }
+                if ch.is_finite() && ch.abs() <= 20.0 {
+                    style.char_spacing = Some(*ch);
+                }
+            }
+            if has_set11 {
+                r.skip(4);
+            }
+            if let Some((font_id, charset, pt, flags)) = fonts.get(&font_ref) {
+                style.font_id = Some(*font_id);
+                style.charset = Some(*charset);
+                if *pt > 0.0 && pt.is_finite() {
+                    style.size_pt = Some(*pt);
+                }
+                style.flags = Some(*flags);
+            }
+            style.align = aligns.get(&align_ref).copied();
+        }
+        if num > 2 {
+            // tab, bullet, indent, hyphen and drop cap ids.
+            let (Some(_tab), Some(_bullet), Some(indent_ref), Some(_hyphen), Some(_drop)) =
+                (r.u32(), r.u32(), r.u32(), r.u32(), r.u32())
+            else {
+                break;
+            };
+            if let Some(ind) = indents.get(&indent_ref) {
+                if ind.0.is_finite() && ind.1.is_finite() && ind.2.is_finite() {
+                    style.indent_pt = Some(*ind);
+                }
+            }
+        }
+        out.push((style_id, StyleRec { parent, style }));
+    }
+    out
+}
+
+/// One styled run of text.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct TextRun {
+    pub text: String,
+    pub style: RunStyle,
+    /// Before version 12: the run's bytes, decoded in its font's code page
+    /// once its style is resolved (`text` holds them read as
+    /// Windows-1252).
+    pub raw: Option<Vec<u8>>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub(crate) struct TextParagraph {
+    pub style_id: u32,
+    /// Paragraph-wide properties (version 16+ style strings); runs sit on top.
+    pub base: RunStyle,
+    pub runs: Vec<TextRun>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub(crate) struct Txsm {
+    /// At least one frame is fitted to a path (the path itself is a
+    /// sibling object in the same group).
+    pub on_path: bool,
+    /// How the first frame fitted to a path sits on it (version 16+).
+    pub path_settings: Option<PathSettings>,
+    pub paragraphs: Vec<TextParagraph>,
+}
+
+/// How a text fitted to a path sits on it: the 40 bytes after the
+/// on-path flag of a version 16+ `txsm` frame (assumed from a version 21
+/// file: two texts on one circle, at its top and bottom).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct PathSettings {
+    /// 4: the middle of the text sits at `offset` (the only value seen).
+    pub placement: u32,
+    /// Along the baseline, from the path's start, in coordinate units.
+    pub offset: i32,
+    /// From the path to the baseline, in coordinate units; negative
+    /// towards the inside of a closed path.
+    pub distance: i32,
+    /// Placed on the other side of the path (both flags seen together).
+    pub mirror_h: bool,
+    pub mirror_v: bool,
+}
+
+impl PathSettings {
+    fn read(b: &[u8]) -> Option<PathSettings> {
+        let word = |i: usize| -> Option<i32> {
+            let w = b.get(i * 4..i * 4 + 4)?;
+            Some(i32::from_le_bytes([w[0], w[1], w[2], w[3]]))
+        };
+        Some(PathSettings {
+            placement: word(1)? as u32,
+            offset: word(4)?,
+            distance: word(6)?,
+            mirror_h: word(8)? != 0,
+            mirror_v: word(9)? != 0,
+        })
+    }
+}
+
+/// `txsm`: two layouts, versions 7 to version 15 and version 16+. Versions before 7 are
+/// not described and yield `None`.
+pub(crate) fn read_txsm(d: &[u8], v: u16, warn: &mut dyn FnMut(String)) -> Option<Txsm> {
+    if v < 7 {
+        warn(format!(
+            "txsm layout of version {v} is not described; text skipped"
+        ));
+        return None;
+    }
+    if v >= 16 {
+        read_txsm_16(d, v, warn)
+    } else {
+        read_txsm_7(d, v, warn)
+    }
+}
+
+fn coord_pt(raw: i32) -> f64 {
+    raw as f64 * PT_PER_UNIT
+}
+
+fn read_txsm_7(d: &[u8], v: u16, warn: &mut dyn FnMut(String)) -> Option<Txsm> {
+    let mut r = Reader::new(d, false);
+    let frame = r.u32()? != 0;
+    r.skip(32);
+    if v >= 15 {
+        r.skip(1);
+    }
+    let mut any_on_path = false;
+    if v < 8 {
+        let on_path = r.u32()?;
+        if on_path != 0 {
+            any_on_path = true;
+            r.skip(32);
+        }
+    }
+    let nf = r.u32()? as usize;
+    if nf > MAX_FRAMES {
+        return None;
+    }
+    for _ in 0..nf {
+        let _frame_id = r.u32()?;
+        r.skip(48);
+        if v >= 8 {
+            let on_path = r.u32()?;
+            if on_path != 0 {
+                any_on_path = true;
+                r.skip(4);
+                if v >= 13 {
+                    r.skip(8);
+                }
+                r.skip(28);
+                if v >= 15 {
+                    r.skip(8);
+                }
+            } else if v >= 15 {
+                r.skip(8);
+            }
+        }
+        if !frame {
+            // The 34-byte size belongs to the CDR 8 variant (801), which our
+            // major version cannot tell from 800 (32 bytes).
+            r.skip(if v >= 15 {
+                40
+            } else if v >= 14 {
+                36
+            } else if v > 8 {
+                34
+            } else if v == 8 {
+                32
+            } else {
+                36
+            });
+        } else if v >= 15 {
+            r.skip(4);
+        }
+    }
+    let np = r.u32()? as usize;
+    if np > MAX_PARAGRAPHS {
+        return None;
+    }
+    let mut out = Txsm {
+        on_path: any_on_path,
+        path_settings: None,
+        paragraphs: Vec::new(),
+    };
+    for _ in 0..np {
+        let style_id = r.u32()?;
+        r.skip(1);
+        if v >= 13 && frame {
+            r.skip(1);
+        }
+        let ns = r.u32()? as usize;
+        if ns > MAX_RUNS || ns > r.remaining() / 3 {
+            return finish(out, warn, "style count");
+        }
+        let mut styles: Vec<(usize, RunStyle)> = Vec::with_capacity(ns);
+        for _ in 0..ns {
+            let n = r.u16()? as usize;
+            let flags = r.u8()?;
+            let fl3 = if v >= 8 { r.u8()? } else { 0 };
+            let mut s = RunStyle::default();
+            if flags & 0x01 != 0 {
+                s.font_id = Some(r.u16()?);
+                s.charset = Some((r.u16()? & 0xff) as u8);
+            }
+            if flags & 0x02 != 0 {
+                s.flags = Some(StyleFlags(r.u32()?));
+            }
+            if flags & 0x04 != 0 {
+                let pt = coord_pt(r.i32()?);
+                if pt > 0.0 {
+                    s.size_pt = Some(pt);
+                }
+            }
+            if flags & 0x08 != 0 {
+                r.skip(4);
+            }
+            if flags & 0x10 != 0 {
+                r.skip(4);
+            }
+            if flags & 0x20 != 0 {
+                r.skip(4);
+            }
+            if flags & 0x40 != 0 {
+                s.fill_id = Some(r.u32()?);
+                if v >= 13 {
+                    r.skip(48);
+                }
+            }
+            if flags & 0x80 != 0 {
+                s.outl_id = Some(r.u32()?);
+            }
+            if fl3 & 0x02 != 0 {
+                let len = r.u32()? as usize;
+                r.skip(len.saturating_mul(2));
+            }
+            if fl3 & 0x08 != 0 {
+                if v < 13 {
+                    r.skip(4);
+                } else {
+                    let len = r.u32()? as usize;
+                    r.skip(len.saturating_mul(2));
+                }
+            }
+            if fl3 & 0x20 != 0 {
+                // A flag byte is peeked; when set, a block (including the
+                // byte) follows.
+                let flag = *d.get(r.pos)?;
+                if flag != 0 {
+                    r.skip(if v >= 15 { 52 } else { 4 });
+                }
+            }
+            styles.push((n, s));
+        }
+        let nc = r.u32()? as usize;
+        if nc > MAX_CHARS {
+            return finish(out, warn, "character count");
+        }
+        // One record a character; from version 12 they are 8 bytes and
+        // bit 0 of the first marks a character stored in two bytes.
+        let mut wide = Vec::new();
+        if v >= 12 {
+            if nc > r.remaining() / 8 {
+                return finish(out, warn, "character count");
+            }
+            wide.reserve(nc);
+            for _ in 0..nc {
+                wide.push(r.u16()? & 1 != 0);
+                r.skip(6);
+            }
+        } else {
+            r.skip(nc.saturating_mul(4));
+        }
+        let nbytes = if v >= 12 { r.u32()? as usize } else { nc };
+        let text = d.get(r.pos..r.pos.checked_add(nbytes)?)?;
+        r.skip(nbytes);
+        let has_path = r.u8()?;
+        if has_path != 0 {
+            r.skip(nc.saturating_mul(24));
+        }
+        // From version 12 a character is one byte (in its font's code
+        // page) unless its record flags it as a UTF-16LE unit of two bytes
+        // ("ć" in a Croatian word stored as 07 01 among single-byte
+        // Portuguese letters). Text with every character in two bytes and
+        // no flags is read as UTF-16.
+        let any_wide = wide.iter().any(|w| *w);
+        let runs = if v < 12 || (nbytes == nc && !any_wide) {
+            split_byte_runs(text, &styles)
+        } else if let Some(s) = decode_mixed_width(text, &wide) {
+            split_runs(&s, &styles)
+        } else if nbytes == nc.saturating_mul(2) {
+            split_runs(&decode_utf16le(text), &styles)
+        } else {
+            warn(format!(
+                "text of {nc} characters in {nbytes} bytes; read one byte per character"
+            ));
+            split_byte_runs(text, &styles)
+        };
+        out.paragraphs.push(TextParagraph {
+            style_id,
+            base: RunStyle::default(),
+            runs,
+        });
+    }
+    Some(out)
+}
+
+/// Return what was read so far when a count is implausible.
+fn finish(out: Txsm, warn: &mut dyn FnMut(String), what: &str) -> Option<Txsm> {
+    warn(format!("txsm: implausible {what}; text truncated"));
+    if out.paragraphs.is_empty() {
+        None
+    } else {
+        Some(out)
+    }
+}
+
+/// Cut `units` into runs of `n` units per style; a shortfall extends the
+/// last run, and a surplus becomes a run with no properties. Never empty.
+fn split_by_lengths<'t, T>(
+    units: &'t [T],
+    styles: &[(usize, RunStyle)],
+) -> Vec<(&'t [T], RunStyle)> {
+    let mut runs = Vec::new();
+    let mut pos = 0usize;
+    for (i, (n, s)) in styles.iter().enumerate() {
+        let last = i + 1 == styles.len();
+        let end = if last {
+            units.len()
+        } else {
+            pos.saturating_add(*n).min(units.len())
+        };
+        if end > pos || last {
+            runs.push((&units[pos..end], s.clone()));
+        }
+        pos = end;
+    }
+    if pos < units.len() {
+        runs.push((&units[pos..], RunStyle::default()));
+    }
+    if runs.is_empty() {
+        runs.push((units, RunStyle::default()));
+    }
+    runs
+}
+
+/// Cut `text` into runs of `n` characters per style (see
+/// [`split_by_lengths`]).
+fn split_runs(text: &str, styles: &[(usize, RunStyle)]) -> Vec<TextRun> {
+    let chars: Vec<char> = text.chars().collect();
+    split_by_lengths(&chars, styles)
+        .into_iter()
+        .map(|(c, style)| TextRun {
+            text: c.iter().collect(),
+            style,
+            raw: None,
+        })
+        .collect()
+}
+
+/// Cut single-byte `text` (before version 12; it ends at the first NUL)
+/// into runs of `n` bytes per style, each keeping its bytes for decoding
+/// in its font's code page.
+fn split_byte_runs(text: &[u8], styles: &[(usize, RunStyle)]) -> Vec<TextRun> {
+    let text = &text[..text.iter().position(|c| *c == 0).unwrap_or(text.len())];
+    split_by_lengths(text, styles)
+        .into_iter()
+        .map(|(b, style)| TextRun {
+            text: decode_cp1252(b),
+            style,
+            raw: Some(b.to_vec()),
+        })
+        .collect()
+}
+
+fn read_style_string(r: &mut Reader, d: &[u8], v: u16) -> Option<String> {
+    let len = r.u32()? as usize;
+    let bytes = if v < 17 { len.saturating_mul(2) } else { len };
+    let s = d.get(r.pos..r.pos.checked_add(bytes)?)?;
+    r.skip(bytes);
+    Some(if v < 17 {
+        decode_utf16le(s)
+    } else {
+        decode_cp1252(s)
+    })
+}
+
+fn read_txsm_16(d: &[u8], v: u16, warn: &mut dyn FnMut(String)) -> Option<Txsm> {
+    let mut r = Reader::new(d, false);
+    // Not zero: the frame layout of the records below (artistic text has
+    // it too in version 21, with all bits set).
+    let frame = r.u32()? != 0;
+    r.skip(32);
+    let layout = r.u16()?;
+    r.skip(3);
+    let nf = r.u32()? as usize;
+    if nf > MAX_FRAMES {
+        return None;
+    }
+    let mut any_on_path = false;
+    let mut path_settings = None;
+    for _ in 0..nf {
+        let _frame_id = r.u32()?;
+        r.skip(48);
+        let on_path = r.u32()?;
+        if on_path != 0 {
+            any_on_path = true;
+            if path_settings.is_none() {
+                path_settings = d.get(r.pos..r.pos + 40).and_then(PathSettings::read);
+            }
+            r.skip(40);
+        }
+        r.skip(8);
+        if !frame {
+            r.skip(16);
+            let len = r.u32()? as usize;
+            r.skip(if v >= 17 { len } else { len.saturating_mul(2) });
+        }
+    }
+    let np = r.u32()? as usize;
+    if np > MAX_PARAGRAPHS {
+        return None;
+    }
+    let mut out = Txsm {
+        on_path: any_on_path,
+        path_settings,
+        paragraphs: Vec::new(),
+    };
+    for _ in 0..np {
+        let style_id = r.u32()?;
+        r.skip(1);
+        let flag = if frame { r.u8()? } else { 0 };
+        if flag == 1 {
+            r.skip(64);
+        }
+        let mut base = RunStyle::default();
+        if layout < 1700 && !frame {
+            let s = read_style_string(&mut r, d, v)?;
+            base = parse_style_string(&s);
+        }
+        let default = parse_style_string(&read_style_string(&mut r, d, v)?).over(&base);
+        let nr = r.u32()? as usize;
+        if nr > MAX_RUNS || nr > r.remaining() / 6 {
+            return finish(out, warn, "style record count");
+        }
+        let mut records: Vec<RunStyle> = Vec::with_capacity(nr);
+        for _ in 0..nr {
+            let _st1 = r.u16()?;
+            let st2 = r.u16()?;
+            let st3 = r.u16()?;
+            if st2 == 0x3fff && st3 & 0x11 == 0x11 {
+                let len = r.u32()? as usize;
+                r.skip(if v >= 17 { len } else { len.saturating_mul(2) });
+            }
+            if st3 & 0x04 != 0 {
+                let len = r.u32()? as usize;
+                r.skip(len.saturating_mul(2));
+            }
+            let style = if st2 != 0 || st3 & 0x04 != 0 {
+                parse_style_string(&read_style_string(&mut r, d, v)?)
+            } else {
+                RunStyle::default()
+            };
+            records.push(style);
+        }
+        let nc = r.u32()? as usize;
+        if nc > MAX_CHARS || nc > r.remaining() / 8 {
+            return finish(out, warn, "character count");
+        }
+        let mut overrides = Vec::with_capacity(nc);
+        let mut wide = Vec::with_capacity(nc);
+        for _ in 0..nc {
+            let flags = r.u16()?;
+            let idx = r.u8()? >> 1;
+            r.skip(5);
+            overrides.push(idx as usize);
+            wide.push(flags & 1 != 0);
+        }
+        let nbytes = r.u32()? as usize;
+        let text = d.get(r.pos..r.pos.checked_add(nbytes)?)?;
+        r.skip(nbytes);
+        let has_path = r.u8()?;
+        if has_path != 0 {
+            r.skip(nc.saturating_mul(24));
+        }
+        // From version 17 a character is one byte (Windows-1252) unless
+        // its record's flag bit 0 is set: then it is a UTF-16LE unit of
+        // two bytes (seen in a version 22 file: "č" stored as 0D 01, "ř" as
+        // 59 01, "í" as ED). Version 16 files hold either UTF-16LE (two
+        // bytes a character) or the same one-byte text.
+        let text = if v >= 17 || nbytes != nc.saturating_mul(2) {
+            match decode_mixed_width(text, &wide) {
+                Some(s) => s,
+                None if nbytes == nc * 2 => decode_utf16le(text),
+                None => {
+                    warn(format!(
+                        "text of {nc} characters in {nbytes} bytes; read one byte per character"
+                    ));
+                    decode_cp1252(text)
+                }
+            }
+        } else {
+            decode_utf16le(text)
+        };
+        // Group consecutive characters sharing a style record.
+        let mut runs: Vec<TextRun> = Vec::new();
+        for (i, ch) in text.chars().enumerate() {
+            let idx = overrides.get(i).copied().unwrap_or(usize::MAX);
+            let style = match records.get(idx) {
+                Some(s) => s.over(&default),
+                None => default.clone(),
+            };
+            match runs.last_mut() {
+                Some(last) if last.style == style => last.text.push(ch),
+                _ => runs.push(TextRun {
+                    text: ch.to_string(),
+                    style,
+                    raw: None,
+                }),
+            }
+        }
+        if runs.is_empty() {
+            runs.push(TextRun {
+                text: String::new(),
+                style: default.clone(),
+                raw: None,
+            });
+        }
+        out.paragraphs.push(TextParagraph {
+            style_id,
+            base: default,
+            runs,
+        });
+    }
+    Some(out)
+}
+
+/// Text with its line breaks as `\n`: files end lines with a carriage
+/// return (`\r`, version 21 artistic text), a CR LF pair, a line or
+/// paragraph separator or a vertical tab.
+pub(crate) fn line_breaks(text: &str) -> String {
+    if !text.contains(['\r', '\u{2028}', '\u{2029}', '\u{0B}']) {
+        return text.to_string();
+    }
+    text.replace("\r\n", "\n")
+        .replace(['\r', '\u{2028}', '\u{2029}', '\u{0B}'], "\n")
+}
+
+/// Minimal JSON value for the version 16+ style strings.
+#[derive(Debug, Clone, PartialEq)]
+enum Json {
+    Null,
+    Bool(bool),
+    Num(f64),
+    Str(String),
+    Arr(Vec<Json>),
+    Obj(Vec<(String, Json)>),
+}
+
+impl Json {
+    fn num(&self) -> Option<f64> {
+        match self {
+            Json::Num(n) => Some(*n),
+            Json::Str(s) => s.trim().parse().ok(),
+            Json::Bool(b) => Some(if *b { 1.0 } else { 0.0 }),
+            _ => None,
+        }
+    }
+}
+
+/// Lenient recursive-descent JSON parser (depth and size bounded).
+fn parse_json(s: &str) -> Option<Json> {
+    let chars: Vec<char> = s.chars().collect();
+    let mut pos = 0usize;
+    let v = json_value(&chars, &mut pos, 0)?;
+    Some(v)
+}
+
+fn json_ws(c: &[char], pos: &mut usize) {
+    while *pos < c.len() && c[*pos].is_whitespace() {
+        *pos += 1;
+    }
+}
+
+fn json_value(c: &[char], pos: &mut usize, depth: usize) -> Option<Json> {
+    if depth > 32 {
+        return None;
+    }
+    json_ws(c, pos);
+    match *c.get(*pos)? {
+        '{' => {
+            *pos += 1;
+            let mut items = Vec::new();
+            loop {
+                json_ws(c, pos);
+                match c.get(*pos)? {
+                    '}' => {
+                        *pos += 1;
+                        break;
+                    }
+                    ',' => {
+                        *pos += 1;
+                    }
+                    _ => {
+                        let key = match json_value(c, pos, depth + 1)? {
+                            Json::Str(k) => k,
+                            Json::Num(n) => n.to_string(),
+                            _ => return None,
+                        };
+                        json_ws(c, pos);
+                        if *c.get(*pos)? != ':' {
+                            return None;
+                        }
+                        *pos += 1;
+                        let v = json_value(c, pos, depth + 1)?;
+                        if items.len() < 1024 {
+                            items.push((key, v));
+                        }
+                    }
+                }
+            }
+            Some(Json::Obj(items))
+        }
+        '[' => {
+            *pos += 1;
+            let mut items = Vec::new();
+            loop {
+                json_ws(c, pos);
+                match c.get(*pos)? {
+                    ']' => {
+                        *pos += 1;
+                        break;
+                    }
+                    ',' => {
+                        *pos += 1;
+                    }
+                    _ => {
+                        let v = json_value(c, pos, depth + 1)?;
+                        if items.len() < 1024 {
+                            items.push(v);
+                        }
+                    }
+                }
+            }
+            Some(Json::Arr(items))
+        }
+        '"' | '\'' => {
+            let quote = c[*pos];
+            *pos += 1;
+            let mut s = String::new();
+            loop {
+                let ch = *c.get(*pos)?;
+                *pos += 1;
+                match ch {
+                    '\\' => {
+                        let e = *c.get(*pos)?;
+                        *pos += 1;
+                        match e {
+                            'n' => s.push('\n'),
+                            't' => s.push('\t'),
+                            'r' => s.push('\r'),
+                            'u' => {
+                                let hex: String = c.get(*pos..*pos + 4)?.iter().collect();
+                                *pos += 4;
+                                let n = u32::from_str_radix(&hex, 16).ok()?;
+                                s.push(char::from_u32(n).unwrap_or('\u{fffd}'));
+                            }
+                            other => s.push(other),
+                        }
+                    }
+                    q if q == quote => break,
+                    other => s.push(other),
+                }
+            }
+            Some(Json::Str(s))
+        }
+        't' | 'f' | 'n' => {
+            let rest: String = c[*pos..].iter().take(5).collect();
+            if rest.starts_with("true") {
+                *pos += 4;
+                Some(Json::Bool(true))
+            } else if rest.starts_with("false") {
+                *pos += 5;
+                Some(Json::Bool(false))
+            } else if rest.starts_with("null") {
+                *pos += 4;
+                Some(Json::Null)
+            } else {
+                None
+            }
+        }
+        _ => {
+            let start = *pos;
+            while *pos < c.len()
+                && (c[*pos].is_ascii_digit() || matches!(c[*pos], '-' | '+' | '.' | 'e' | 'E'))
+            {
+                *pos += 1;
+            }
+            if start == *pos {
+                return None;
+            }
+            let s: String = c[start..*pos].iter().collect();
+            s.parse().ok().map(Json::Num)
+        }
+    }
+}
+
+/// Font size as stored in a style string: values above 1000 are taken as
+/// coordinate units, smaller ones as points (assumed).
+fn style_size_pt(n: f64) -> Option<f64> {
+    if !n.is_finite() || n <= 0.0 {
+        return None;
+    }
+    Some(if n > 1000.0 { n * PT_PER_UNIT } else { n })
+}
+
+/// Apply one (key, value) pair of a style string to `s`, matching keys
+/// loosely so both the JSON and the `key:value;` spellings work.
+fn apply_style_key(s: &mut RunStyle, key: &str, value: &Json) {
+    let k = key.to_ascii_lowercase();
+    // Version 16+ style strings write numbers as strings ("1024").
+    let number = match value {
+        Json::Str(t) => t.trim().parse::<f64>().ok().map(Json::Num),
+        _ => None,
+    };
+    let value = number.as_ref().unwrap_or(value);
+    if k == "underline" || k == "strikeout" || k == "strikethrough" {
+        if let Some(n) = value.num() {
+            if k == "underline" {
+                s.underline = Some(n != 0.0);
+            } else {
+                s.strikethrough = Some(n != 0.0);
+            }
+        }
+        return;
+    }
+    if k.contains("overline") {
+        return;
+    }
+    if k.contains("weight") {
+        // The style code of the style tables: a power of two whose
+        // exponent counts weights in steps (64 = 400, 1024 = 600,
+        // 4096 = 700; an odd exponent is the italic of the weight below,
+        // as the embedded faces of a version 19 file confirm for 64,
+        // 1024 and 4096). Other numbers are CSS weights.
+        if let Some(n) = value.num() {
+            let code = n as u64;
+            if n >= 1.0 && n.fract() == 0.0 && code.is_power_of_two() && code < 1 << 18 {
+                let f = StyleFlags(code as u32);
+                s.bold = Some(f.bold());
+                if f.italic() {
+                    s.italic = Some(true);
+                }
+            } else if (100.0..=1000.0).contains(&n) {
+                s.bold = Some(n >= 600.0);
+            }
+            return;
+        }
+    }
+    if k.contains("size") {
+        if let Some(pt) = value.num().and_then(style_size_pt) {
+            s.size_pt = Some(pt);
+        }
+    } else if k.contains("weight") || k.contains("bold") {
+        match value {
+            Json::Str(w) => {
+                let w = w.to_ascii_lowercase();
+                s.bold = Some(w.contains("bold") || w.contains("heavy") || w.contains("black"));
+            }
+            other => {
+                if let Some(n) = other.num() {
+                    s.bold = Some(n >= 600.0 || (n > 0.0 && n <= 1.0));
+                }
+            }
+        }
+    } else if k.contains("italic") || k == "style" || k.contains("font-style") {
+        match value {
+            Json::Str(w) => {
+                let w = w.to_ascii_lowercase();
+                if w.contains("italic") || w.contains("oblique") {
+                    s.italic = Some(true);
+                } else if k.contains("italic") {
+                    s.italic = Some(false);
+                }
+            }
+            other => {
+                if let Some(n) = other.num() {
+                    if k.contains("italic") {
+                        s.italic = Some(n != 0.0);
+                    } else if n >= 0.0 && n <= u32::MAX as f64 {
+                        s.flags = Some(StyleFlags(n as u32));
+                    }
+                }
+            }
+        }
+    } else if k.contains("fill") {
+        if let Some(n) = value.num() {
+            if n >= 0.0 && n <= u32::MAX as f64 {
+                s.fill_id = Some(n as u32);
+            }
+        }
+    } else if k.contains("outl") || k == "line" {
+        if let Some(n) = value.num() {
+            if n >= 0.0 && n <= u32::MAX as f64 {
+                s.outl_id = Some(n as u32);
+            }
+        }
+    } else if k.contains("justif") || k.contains("align") {
+        match value {
+            // A word ("center"); numbers written as strings ("2") are codes.
+            Json::Str(a) if a.trim().parse::<f64>().is_err() => {
+                let a = a.to_ascii_lowercase();
+                s.align = Some(if a.contains("cent") {
+                    2
+                } else if a.contains("right") {
+                    3
+                } else if a.contains("just") || a.contains("full") {
+                    4
+                } else {
+                    1
+                });
+            }
+            other => {
+                // The style table's numbering: 2 centres the lines on one
+                // another (seen in version 19 and 21 files); 3 right and
+                // 4, 5 justify are assumed; 0 and 1 read as left.
+                if let Some(n) = other.num() {
+                    if (0.0..=5.0).contains(&n) {
+                        s.align = Some(match n as u32 {
+                            0 => 1,
+                            k => k,
+                        });
+                    }
+                }
+            }
+        }
+    } else if k.contains("font") || k.contains("family") || k.contains("face") {
+        match value {
+            Json::Num(n) if *n >= 0.0 && *n <= u16::MAX as f64 => s.font_id = Some(*n as u16),
+            Json::Str(name) if !name.trim().is_empty() => {
+                if let Ok(n) = name.trim().parse::<u16>() {
+                    s.font_id = Some(n);
+                } else {
+                    s.family = Some(name.trim().to_string());
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+fn apply_style_object(s: &mut RunStyle, obj: &Json, depth: usize) {
+    if depth > 8 {
+        return;
+    }
+    if let Json::Obj(items) = obj {
+        for (k, v) in items {
+            match (k.as_str(), v) {
+                // An inline fill: the run's colour. Its own keys (type,
+                // overprint, screens) are not run settings.
+                ("fill", Json::Obj(_)) => {
+                    if let Some(c) = inline_fill_color(v) {
+                        s.fill_color = Some(c);
+                    }
+                }
+                // An inline outline, the frame and the settings for
+                // right-to-left and East Asian scripts are not read; only
+                // the Latin font settings apply to the text.
+                ("outline" | "frame" | "RTL" | "farEast", Json::Obj(_)) => {}
+                ("paragraph", Json::Obj(p)) => apply_paragraph_object(s, p),
+                (_, Json::Obj(_)) => apply_style_object(s, v, depth + 1),
+                _ => apply_style_key(s, k, v),
+            }
+        }
+    }
+}
+
+/// The `paragraph` section of a version 16+ style string: line spacing as
+/// a millionth of the line height (1000000 = 100 %, assumed from a version
+/// 21 file holding the default), alignment; the underline, overline and
+/// strikeout geometry keys are left out (their names would read as
+/// outline references).
+fn apply_paragraph_object(s: &mut RunStyle, items: &[(String, Json)]) {
+    for (k, v) in items {
+        let lk = k.to_ascii_lowercase();
+        if matches!(v, Json::Obj(_) | Json::Arr(_)) {
+            continue;
+        }
+        if lk == "interlinespacing" {
+            if let Some(n) = v.num() {
+                let f = n / 1_000_000.0;
+                if f.is_finite() && f > 0.0 && f < 100.0 {
+                    s.line_spacing = Some(f);
+                }
+            }
+            continue;
+        }
+        if lk.contains("underline")
+            || lk.contains("overline")
+            || lk.contains("strikeout")
+            || lk.starts_with("thin")
+            || lk.starts_with("thick")
+            || lk.starts_with("dbl")
+            || lk.starts_with("inter")
+            || lk.contains("spacing")
+        {
+            continue;
+        }
+        apply_style_key(s, k, v);
+    }
+}
+
+/// The opacity an object's version 16+ style string gives it: its
+/// `transparency` section's `uniformTransparency` is the share of the
+/// object that lets the background through (0.3 draws it at 70 %: the
+/// colours of a version 19 file's preview match that). Without it, the
+/// mean of `startTransparency` and `endTransparency` (a graded
+/// transparency drawn uniform, assumed). `None` for an empty section.
+pub(crate) fn object_opacity(style: &str) -> Option<f64> {
+    let t = style.trim_matches(|c: char| c == '\0' || c.is_whitespace());
+    let Json::Obj(items) = parse_json(t)? else {
+        return None;
+    };
+    let Json::Obj(tr) = &items.iter().find(|(k, _)| k == "transparency")?.1 else {
+        return None;
+    };
+    let get = |key: &str| {
+        tr.iter()
+            .find(|(k, _)| k == key)
+            .and_then(|(_, v)| v.num())
+            .filter(|n| n.is_finite())
+    };
+    let amount = match get("uniformTransparency") {
+        Some(u) => u,
+        None => (get("startTransparency")? + get("endTransparency")?) / 2.0,
+    };
+    Some((1.0 - amount).clamp(0.0, 1.0))
+}
+
+/// The width of a paragraph frame from an object's version 16+ style
+/// string, in file units: its `frame` section's `columns` lists each
+/// column's width and the gutter after it (`"623721,0"`: one column); the
+/// frame is the columns with the gutters between them (seen in a version
+/// 21 file with one column; several columns assumed alike).
+pub(crate) fn frame_width_units(style: &str) -> Option<f64> {
+    let t = style.trim_matches(|c: char| c == '\0' || c.is_whitespace());
+    let Json::Obj(items) = parse_json(t)? else {
+        return None;
+    };
+    let Json::Obj(frame) = &items.iter().find(|(k, _)| k == "frame")?.1 else {
+        return None;
+    };
+    let Json::Str(cols) = &frame.iter().find(|(k, _)| k == "columns")?.1 else {
+        return None;
+    };
+    let v: Vec<f64> = cols
+        .split(',')
+        .map(|p| p.trim().parse::<f64>().ok())
+        .collect::<Option<Vec<f64>>>()?;
+    if v.is_empty() {
+        return None;
+    }
+    // Widths at even places, gutters at odd ones; the last gutter is
+    // outside the frame.
+    let widths: f64 = v.iter().step_by(2).sum();
+    let gutters: f64 = v
+        .iter()
+        .skip(1)
+        .step_by(2)
+        .take(v.len().div_ceil(2).saturating_sub(1))
+        .sum();
+    let w = widths + gutters;
+    (w.is_finite() && w > 0.0).then_some(w)
+}
+
+/// The colour of an inline fill object of a version 16+ style string:
+/// `type` 1 is a uniform fill whose `primaryColor` reads
+/// `MODEL,PALETTE,v1,v2,...` (`CMYK255` on 0..255 and `CMYK` on 0..100,
+/// both seen in a version 21 file; `RGB255` and `GRAY255` assumed alike);
+/// `type` 0 is no fill (`Some(None)`). Other fill types give `None` (the
+/// object's fill applies).
+fn inline_fill_color(fill: &Json) -> Option<Option<tracedraw_core::Color>> {
+    let Json::Obj(items) = fill else {
+        return None;
+    };
+    let get = |key: &str| items.iter().find(|(k, _)| k == key).map(|(_, v)| v);
+    match get("type").and_then(Json::num) {
+        Some(0.0) => return Some(None),
+        Some(1.0) => {}
+        _ => return None,
+    }
+    let Json::Str(spec) = get("primaryColor")? else {
+        return None;
+    };
+    parse_color_spec(spec).map(Some)
+}
+
+/// A colour written `MODEL,PALETTE,v1,v2,...` in version 16+ style strings.
+pub(crate) fn parse_color_spec(spec: &str) -> Option<tracedraw_core::Color> {
+    use tracedraw_core::Color;
+    let parts: Vec<&str> = spec.split(',').map(str::trim).collect();
+    let model = parts.first()?.to_ascii_uppercase();
+    let nums: Vec<f64> = parts
+        .iter()
+        .skip(2)
+        .map_while(|p| p.parse::<f64>().ok())
+        .collect();
+    let unit = |v: f64, max: f64| (v / max).clamp(0.0, 1.0) as f32;
+    let c = match model.as_str() {
+        "CMYK255" if nums.len() >= 4 => Color::cmyk_pct(
+            unit(nums[0], 255.0) * 100.0,
+            unit(nums[1], 255.0) * 100.0,
+            unit(nums[2], 255.0) * 100.0,
+            unit(nums[3], 255.0) * 100.0,
+        ),
+        "CMYK" if nums.len() >= 4 => Color::cmyk_pct(
+            unit(nums[0], 100.0) * 100.0,
+            unit(nums[1], 100.0) * 100.0,
+            unit(nums[2], 100.0) * 100.0,
+            unit(nums[3], 100.0) * 100.0,
+        ),
+        "RGB255" | "RGB" if nums.len() >= 3 => Color::rgb8(
+            nums[0].clamp(0.0, 255.0) as u8,
+            nums[1].clamp(0.0, 255.0) as u8,
+            nums[2].clamp(0.0, 255.0) as u8,
+        ),
+        "GRAY255" | "GRAYSCALE" | "GRAY" if !nums.is_empty() => {
+            let g = nums[0].clamp(0.0, 255.0) as u8;
+            Color::rgb8(g, g, g)
+        }
+        _ => return None,
+    };
+    Some(c)
+}
+
+/// version 16+ style string: a JSON object with `character` and `paragraph`
+/// sections (font, size, fill, outline, justify), or a `key:value;` list.
+/// Unknown keys are ignored.
+pub(crate) fn parse_style_string(s: &str) -> RunStyle {
+    let mut out = RunStyle::default();
+    let t = s.trim_matches(|c: char| c == '\0' || c.is_whitespace());
+    if t.is_empty() {
+        return out;
+    }
+    if t.starts_with('{') {
+        if let Some(json) = parse_json(t) {
+            apply_style_object(&mut out, &json, 0);
+            return out;
+        }
+    }
+    for item in t.split(';') {
+        let mut kv = item.splitn(2, [':', '=']);
+        let (Some(k), Some(v)) = (kv.next(), kv.next()) else {
+            continue;
+        };
+        let v = v.trim().trim_matches('"');
+        let value = match v.parse::<f64>() {
+            Ok(n) => Json::Num(n),
+            Err(_) => Json::Str(v.to_string()),
+        };
+        apply_style_key(&mut out, k.trim(), &value);
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cp1252_maps_the_high_half() {
+        assert_eq!(
+            decode_cp1252(&[0x41, 0x80, 0x93, 0xe9, 0x00, 0x42]),
+            "A\u{20ac}\u{201c}é"
+        );
+    }
+
+    #[test]
+    fn old_text_reads_in_the_code_page_of_its_character_set() {
+        // Cyrillic, Central European, Greek, Turkish, Baltic, Japanese.
+        assert_eq!(
+            decode_charset(&[0xcf, 0xf0, 0xe8, 0xe2, 0xe5, 0xf2], 204),
+            "\u{41f}\u{440}\u{438}\u{432}\u{435}\u{442}"
+        );
+        assert_eq!(
+            decode_charset(&[0xa3, 0xf3, 0x64, 0x9f], 238),
+            "\u{141}\u{f3}d\u{17a}"
+        );
+        assert_eq!(
+            decode_charset(&[0xc3, 0xe5, 0xe9, 0xe1], 161),
+            "\u{393}\u{3b5}\u{3b9}\u{3b1}"
+        );
+        assert_eq!(
+            decode_charset(&[0xf0, 0xfd, 0xfe], 162),
+            "\u{11f}\u{131}\u{15f}"
+        );
+        assert_eq!(decode_charset(&[0xe0, 0xf0], 186), "\u{105}\u{161}");
+        assert_eq!(
+            decode_charset(&[0x93, 0xfa, 0x96, 0x7b], 128),
+            "\u{65e5}\u{672c}"
+        );
+        // Latin and unknown sets read as Windows-1252; symbol fonts keep
+        // the byte values; text ends at a NUL.
+        assert_eq!(decode_charset(&[0x80, 0xe9], 0), "\u{20ac}\u{e9}");
+        assert_eq!(decode_charset(&[0x80, 0xe9], 77), "\u{20ac}\u{e9}");
+        assert_eq!(decode_charset(&[0x41, 0x80, 0xf0], 2), "A\u{80}\u{f0}");
+        assert_eq!(decode_charset(&[0xcf, 0, 0xf0], 204), "\u{41f}");
+        assert!(is_non_latin_charset(204) && is_non_latin_charset(2));
+        assert!(!is_non_latin_charset(0) && !is_non_latin_charset(1));
+        // A cut double-byte character is replaced, not a panic.
+        assert_eq!(decode_charset(&[0x41, 0x93], 128), "A\u{fffd}");
+    }
+
+    #[test]
+    fn style_flags_bold_italic_underline() {
+        assert!(StyleFlags(0x1000).bold());
+        assert!(!StyleFlags(0x1000).italic());
+        assert!(StyleFlags(0x2000).bold() && StyleFlags(0x2000).italic());
+        assert!(StyleFlags(0x80).italic() && !StyleFlags(0x80).bold());
+        assert!(!StyleFlags(0x40).bold());
+        assert!(StyleFlags(1 << 18).underline());
+        assert!(StyleFlags(1 << 24).strikethrough());
+        assert!(!StyleFlags(0x40).underline());
+    }
+
+    /// The version 21 style string: the run's colour from its inline
+    /// fill, the Latin font, the size; the outline's and the paragraph's
+    /// own keys (behindFill, overline geometry) are not run settings.
+    #[test]
+    fn version_21_style_strings_give_the_inline_colour() {
+        let s = parse_style_string(
+            r#"{"character":{"fill":{"type":"1","primaryColor":"CMYK255,USER,0,255,255,0,100,u"},
+            "outline":{"behindFill":"0","width":"762"},
+            "RTL":{"font":"Other","size":"9999999"},
+            "latin":{"font":"Example Script","weight":"64","italic":"0","size":"128819"}},
+            "paragraph":{"interLineSpacing":"1200000","thinOverlineThickness":"45455","dblUnderline1Distance":"-90909"}}"#,
+        );
+        assert_eq!(s.family.as_deref(), Some("Example Script"));
+        assert!((s.size_pt.expect("size") - 36.5156).abs() < 1e-3);
+        assert_eq!(s.bold, Some(false));
+        assert_eq!(s.fill_id, None);
+        assert_eq!(s.outl_id, None);
+        assert_eq!(
+            s.fill_color,
+            Some(Some(tracedraw_core::Color::cmyk_pct(
+                0.0, 100.0, 100.0, 0.0
+            )))
+        );
+        assert!((s.line_spacing.expect("spacing") - 1.2).abs() < 1e-9);
+        // No fill, and colour specs in the other spellings.
+        let s = parse_style_string(r#"{"character":{"fill":{"type":"0"}}}"#);
+        assert_eq!(s.fill_color, Some(None));
+        assert_eq!(
+            parse_color_spec("CMYK,USER,0,0,0,100,100,x"),
+            Some(tracedraw_core::Color::cmyk_pct(0.0, 0.0, 0.0, 100.0))
+        );
+        assert_eq!(
+            parse_color_spec("RGB255,USER,255,128,0,100,x"),
+            Some(tracedraw_core::Color::rgb8(255, 128, 0))
+        );
+        assert_eq!(parse_color_spec("PANTONE,X,1"), None);
+        assert_eq!(parse_color_spec(""), None);
+        // The frame's width: the columns and the gutters between them.
+        assert_eq!(
+            frame_width_units(r#"{"frame":{"columns":"623721,0","equalWidthColumns":"1"}}"#),
+            Some(623721.0)
+        );
+        assert_eq!(
+            frame_width_units(r#"{"frame":{"columns":"100,10,100,10"}}"#),
+            Some(210.0)
+        );
+        assert_eq!(frame_width_units(r#"{"frame":{}}"#), None);
+        assert_eq!(frame_width_units(r#"{"frame":{"columns":"x"}}"#), None);
+        assert_eq!(frame_width_units("not json"), None);
+    }
+
+    #[test]
+    fn style_strings_give_the_object_transparency() {
+        let o = object_opacity(
+            r#"{"transparency":{"startTransparency":"0.3","endTransparency":"1","uniformTransparency":"0.3","mode":"0"},"fill":{}}"#,
+        );
+        assert!((o.unwrap() - 0.7).abs() < 1e-9);
+        let o =
+            object_opacity(r#"{"transparency":{"startTransparency":"0","endTransparency":"1"}}"#);
+        assert!((o.unwrap() - 0.5).abs() < 1e-9);
+        assert_eq!(object_opacity(r#"{"transparency":{},"fill":{}}"#), None);
+        assert_eq!(object_opacity(r#"{"fill":{}}"#), None);
+        assert_eq!(object_opacity("not json"), None);
+        let o = object_opacity(r#"{"transparency":{"uniformTransparency":"7"}}"#);
+        assert_eq!(o, Some(0.0));
+    }
+
+    #[test]
+    fn style_string_weights_are_style_codes() {
+        let latin = |inner: &str| parse_style_string(&format!(r#"{{"latin":{{{inner}}}}}"#));
+        let s = latin(r#""weight":"64","italic":"0""#);
+        assert_eq!((s.bold, s.italic), (Some(false), Some(false)));
+        // 1024 is a 600 weight (a semibold face), 4096 a 700 one.
+        assert_eq!(latin(r#""weight":"1024""#).bold, Some(true));
+        assert_eq!(latin(r#""weight":"4096""#).bold, Some(true));
+        // An odd exponent is the italic of a weight.
+        let s = latin(r#""weight":"8192""#);
+        assert_eq!((s.bold, s.italic), (Some(true), Some(true)));
+        assert_eq!(latin(r#""weight":"128""#).italic, Some(true));
+        // CSS weights and words still read.
+        assert_eq!(latin(r#""weight":700"#).bold, Some(true));
+        assert_eq!(latin(r#""weight":"400""#).bold, Some(false));
+        assert_eq!(latin(r#""fontWeight":"bold""#).bold, Some(true));
+        // Italic, underline and strikeout written as "1" or "0".
+        let s = latin(r#""italic":"1","underline":"1","strikeout":"0","overline":"1""#);
+        assert_eq!(s.italic, Some(true));
+        assert_eq!(s.underline, Some(true));
+        assert_eq!(s.strikethrough, Some(false));
+        assert_eq!(s.outl_id, None);
+    }
+
+    #[test]
+    fn line_breaks_become_newlines() {
+        assert_eq!(line_breaks("Fazendo\rum bolo"), "Fazendo\num bolo");
+        assert_eq!(
+            line_breaks("a\r\nb\u{2028}c\u{2029}d\u{0B}e"),
+            "a\nb\nc\nd\ne"
+        );
+        assert_eq!(line_breaks("plain"), "plain");
+    }
+
+    #[test]
+    fn style_string_json_and_key_value_forms() {
+        let s = parse_style_string(
+            r#"{"character":{"font":7,"size":304800,"fill":12},"paragraph":{"justify":"2"}}"#,
+        );
+        assert_eq!(s.font_id, Some(7));
+        assert!((s.size_pt.unwrap() - 86.4).abs() < 1e-6);
+        assert_eq!(s.fill_id, Some(12));
+        // "justify" 2 centres, as in the style table.
+        assert_eq!(s.align, Some(2));
+        let align =
+            |j: &str| parse_style_string(&format!(r#"{{"paragraph":{{"justify":"{j}"}}}}"#)).align;
+        assert_eq!(align("0"), Some(1));
+        assert_eq!(align("1"), Some(1));
+        assert_eq!(align("2"), Some(2));
+        assert_eq!(align("3"), Some(3));
+        assert_eq!(align("4"), Some(4));
+        assert_eq!(align("9"), None);
+        let s = parse_style_string("font-family:Times New Roman;font-size:12;font-weight:bold");
+        assert_eq!(s.family.as_deref(), Some("Times New Roman"));
+        assert_eq!(s.size_pt, Some(12.0));
+        assert_eq!(s.bold, Some(true));
+        assert_eq!(parse_style_string("").size_pt, None);
+        assert_eq!(parse_style_string("{broken").size_pt, None);
+    }
+
+    #[test]
+    fn split_runs_covers_the_whole_text() {
+        let styles = vec![
+            (2usize, RunStyle::default()),
+            (
+                1usize,
+                RunStyle {
+                    bold: Some(true),
+                    ..RunStyle::default()
+                },
+            ),
+        ];
+        let runs = split_runs("abcd", &styles);
+        assert_eq!(runs.len(), 2);
+        assert_eq!(runs[0].text, "ab");
+        assert_eq!(runs[1].text, "cd");
+        assert_eq!(split_runs("xyz", &[]).len(), 1);
+    }
+}

@@ -1,0 +1,44 @@
+{
+  "schema": 1,
+  "tools": {
+    "gs": {
+      "executable": "gs",
+      "license": "AGPL-3.0-or-later",
+      "sha256": null,
+      "source": "Ghostscript release artifact (URL unresolved)",
+      "version": "unresolved"
+    },
+    "inkscape": {
+      "executable": "inkscape",
+      "license": "GPL",
+      "sha256": "18d9066cf8eaedf1a209f8adb00a1ae77c555da20a569f6f684ca0a50eb8e431",
+      "source": "https://inkscape.org/release/inkscape-1.4/gnulinux/appimage/dl/",
+      "version": "1.4"
+    },
+    "pdfinfo": {
+      "executable": "pdfinfo",
+      "license": "GPL-2.0-or-later",
+      "sha256": null,
+      "source": "Poppler project release artifact (URL unresolved)",
+      "version": "unresolved"
+    },
+    "soffice": {
+      "executable": "soffice",
+      "license": "MPL-2.0",
+      "sha256": null,
+      "source": "LibreOffice release artifact (URL unresolved)",
+      "version": "unresolved"
+    },
+    "tracedraw-cli": {
+      "archive_member": "tracedraw-cli",
+      "archive_name": "tracedraw-0.9.0-dev.821ba15-linux-x86_64.tar.gz",
+      "executable": "tracedraw-cli",
+      "executable_sha256": "fe21ae1024bdfe0935ae28a38c70a67d743a28c3ccbcb003238f58882305894d",
+      "license": "MIT OR Apache-2.0",
+      "revision": "821ba1545e3d3f75843fe7d3f912214800929821",
+      "sha256": "08e74a27fa7b5a7350e718fd0660e6926212cf36d29203caab21eaeb130af20c",
+      "source": "https://github.com/igtoth/tracedraw/releases/download/nightly/tracedraw-0.9.0-dev.821ba15-linux-x86_64.tar.gz",
+      "version": "0.9.0-dev.821ba15"
+    }
+  }
+}

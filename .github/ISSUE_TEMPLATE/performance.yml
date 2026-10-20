@@ -1,0 +1,48 @@
+name: Performance regression
+description: Report a slow, frozen, high-memory, or unresponsive workflow
+title: "[Performance] "
+labels:
+  - bug
+body:
+  - type: textarea
+    id: operation
+    attributes:
+      label: Slow operation
+      description: Include the exact command or UI sequence and where the delay occurs.
+    validations:
+      required: true
+  - type: input
+    id: scale
+    attributes:
+      label: Model scale
+      placeholder: Object, curve, face, edge, control-point, or file counts
+    validations:
+      required: true
+  - type: input
+    id: timing
+    attributes:
+      label: Approximate timing and previous behavior
+      placeholder: Current duration; expected or previously observed duration
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Version, package, OS, graphics/display backend, CPU, memory, and GPU
+      placeholder: 0.4.2 AppImage, Windows portable ZIP, or macOS source build; OS; CPU; RAM; GPU and driver
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Privacy-reviewed diagnostics
+      description: Paste a relevant log excerpt or attach a minimal redistributable model.
+  - type: checkboxes
+    id: reproducible
+    attributes:
+      label: Reproduction
+      options:
+        - label: I tested this more than once.
+          required: true
+        - label: I reviewed all diagnostics and attachments for private information.
+          required: true
