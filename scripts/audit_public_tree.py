@@ -41,6 +41,7 @@ REQUIRED = {
     "narwhal3d.sh",
     "run_tests.sh",
     "uishot.sh",
+    "Build-Narwhal3D-macOS.command",
     "narwhal3d/commands.py",
     "scripts/create_public_branch.py",
     "scripts/collect_windows_build_info.ps1",
@@ -228,6 +229,7 @@ REQUIRED_EXECUTABLES = {
     "scripts/bootstrap_dev_linux.sh",
     "scripts/build_blender_linux.sh",
     "scripts/build_macos_source.sh",
+    "Build-Narwhal3D-macOS.command",
     "scripts/build_readme_demo.sh",
 }
 REQUIRED_CONTENT = {

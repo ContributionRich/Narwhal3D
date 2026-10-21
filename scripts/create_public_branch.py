@@ -23,7 +23,8 @@ ROOT_FILES = (
     "CODE_OF_CONDUCT.md", "THIRD_PARTY_NOTICES",
     "docs/readme-command-loft.gif", "docs/images/bugreport.png",
     "docs/gaps.md", "docs/github-project.md", "docs/windows-build.md", "docs/macos-build.md",
-    "narwhal3d.sh", "run_tests.sh", "uishot.sh", "pyrightconfig.json",
+    "narwhal3d.sh", "run_tests.sh", "uishot.sh", "Build-Narwhal3D-macOS.command",
+    "pyrightconfig.json",
 )
 LAUNCH_FILES = (
     "launch/bootstrap.py", "launch/make_icon.py", "launch/open_arg.py",

@@ -27,6 +27,25 @@ Because the exact `rhino3dm` wheel starts at macOS 14, this recipe requires **ma
 
 It does not sign, notarize, create a DMG, install file associations, build a universal binary, or claim the GUI works correctly.
 
+## One-click build and collection
+
+After installing the prerequisites below, Finder can run the complete engineering build by double-clicking:
+
+```text
+Build-Narwhal3D-macOS.command
+```
+
+macOS may ask which application should open it; choose Terminal. The command uses the dedicated `~/Library/Caches/Narwhal3D-macOS-build` directory for the pinned Blender checkout, verifies that cache's upstream URL before resetting it, invokes `scripts/build_macos_source.sh`, and then runs the exact representation audit and real-window UI report. A failed run is resumable: correct the reported prerequisite or build problem and double-click the command again.
+
+The Desktop receives:
+
+- a **Build ZIP** containing the native-architecture `Narwhal 3D.app`, the six macOS Rust runtime components, and build identity;
+- a much smaller **Report ZIP** containing sanitized logs, tool/platform facts, native-component hashes, the UI report and screenshot when available, and the Build ZIP checksum.
+
+The collector uploads nothing. Review `README-BEFORE-SHARING.txt`, `build-report.txt`, and `build.log` before returning the ZIP files. It intentionally does not collect user or computer names, serial numbers, network addresses, environment dumps, personal files, or CAD documents. The Build ZIP can be large because it contains the complete application bundle.
+
+These are engineering return artifacts, not a signed or notarized public release. The returned host-native binaries and acceptance evidence let the maintainer develop and verify macOS release assembly without pretending Linux can produce Apple binaries.
+
 ## Requirements
 
 Install Apple's command-line developer tools:
@@ -90,7 +109,7 @@ Open a GitHub issue marked as a **macOS source build** and include:
 
 - Mac model category, Apple Silicon or Intel, macOS version, and GPU family;
 - Xcode/command-line-tools, CMake, Git LFS, Rust, and Blender build results;
-- whether the app reaches four viewports and UI report 23/23;
+- whether the app reaches four viewports and the complete UI report passes;
 - whether `.narwhal` save/reopen and the exact representation audit pass;
 - the first failing command and relevant terminal output.
 
