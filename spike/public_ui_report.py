@@ -13,6 +13,7 @@ SIDEBAR_FLYOUT_IMAGE = os.path.join(ARTIFACTS, "ui_sidebar_flyout.png")
 VIEWPORT_ARROW_IMAGE = os.path.join(ARTIFACTS, "ui_viewport_arrow.png")
 PRINT_SELECTION_IMAGE = os.path.join(ARTIFACTS, "ui_print_selection.png")
 FILLET_SELECTION_IMAGE = os.path.join(ARTIFACTS, "ui_fillet_selection.png")
+FILLET_CONTOUR_IMAGE = os.path.join(ARTIFACTS, "ui_fillet_contour.png")
 REPORT_PATH = os.path.join(ARTIFACTS, "ui_report.txt")
 POLL_SECONDS = 0.25
 MAX_POLLS = 120
@@ -553,6 +554,8 @@ def _inspect(layout_was_ready):
             edit_phase = False
             handles = ()
             preview_exact = False
+            contour_exposed = False
+            contour_detail = "no propagated contour tested"
             if selected_ok:
                 from narwhal3d import kernel as fillet_kernel
 
@@ -579,16 +582,81 @@ def _inspect(layout_was_ready):
                 if result_master is not None and occt is not None:
                     result_types = occt.face_types(result_master)
                     airtight = occt.is_airtight(result_master)
+
+                result_parts = (ui._brep_parts_all().get(result_name, {})
+                                if result_name is not None else {})
+                propagated = None
+                for candidate_id, candidate_line in result_parts.get("edges", ()):
+                    if not candidate_line:
+                        continue
+                    try:
+                        affected = set(ui.bridge.bevel_affected_edges_occt(
+                            result_geom, 1.0, [candidate_id]))
+                    except Exception:  # noqa: BLE001
+                        continue
+                    if len(affected) <= 1:
+                        continue
+                    candidate_point = (tuple((candidate_line[0][i] + candidate_line[1][i]) * 0.5
+                                             for i in range(3))
+                                       if len(candidate_line) == 2
+                                       else candidate_line[len(candidate_line) // 2])
+                    candidate_screen = fillet_view3d.location_3d_to_region_2d(
+                        top_region, top_space.region_3d, FilletVector(candidate_point))
+                    if candidate_screen is None:
+                        continue
+                    candidate_hit = ui.pick_brep_part(
+                        top_view, top_space, top_region,
+                        float(candidate_screen.x), float(candidate_screen.y))
+                    if candidate_hit == (result_name, "Edge", candidate_id):
+                        propagated = (candidate_id, candidate_screen, affected)
+                        break
+                if propagated is not None:
+                    candidate_id, candidate_screen, affected = propagated
+                    app_state.feed_line("FilletEdge")
+                    contour_click = ui._answer_edge_prompt_with_click(
+                        top_view, top_space, top_region,
+                        float(candidate_screen.x), float(candidate_screen.y))
+                    contour_cmd = app_state.active_command
+                    shown = {edge_id for _name, edge_id in contour_cmd.edge_selection_keys()}
+                    yellow_counts = []
+                    if contour_click and _capture_path(bpy, FILLET_CONTOUR_IMAGE):
+                        edge_lines = dict(result_parts.get("edges", ()))
+                        for affected_id in sorted(affected):
+                            line = edge_lines[affected_id]
+                            point = (tuple((line[0][i] + line[1][i]) * 0.5 for i in range(3))
+                                     if len(line) == 2 else line[len(line) // 2])
+                            screen = fillet_view3d.location_3d_to_region_2d(
+                                top_region, top_space.region_3d, FilletVector(point))
+                            if screen is None:
+                                yellow_counts.append(0)
+                                continue
+                            pixels = _crop_pixels(
+                                bpy, FILLET_CONTOUR_IMAGE,
+                                (top_region.x + float(screen.x) - 10,
+                                 top_region.y + float(screen.y) - 10,
+                                 top_region.x + float(screen.x) + 10,
+                                 top_region.y + float(screen.y) + 10))
+                            yellow_counts.append(sum(
+                                max(abs(rgb[i] - ui.SUBOBJECT_COLOR[i]) for i in range(3)) <= 0.15
+                                for rgb in pixels))
+                    contour_exposed = (contour_click and getattr(contour_cmd, "_edges", [])
+                                       == [candidate_id] and shown == affected
+                                       and yellow_counts and min(yellow_counts) > 2)
+                    contour_detail = (f"clicked={candidate_id}, affected={sorted(affected)}, "
+                                      f"shown={sorted(shown)}, yellow={yellow_counts}")
+                    app_state.cancel()
             fillet_ok = (selected_ok and edit_phase and len(handles) == 1
                          and preview_exact and app_state.active_command is None
-                         and airtight and result_types.get("CYLINDER", 0) >= 1)
+                         and airtight and result_types.get("CYLINDER", 0) >= 1
+                         and contour_exposed)
             fillet_detail = (f"box={box_name}, expected edge={edge_id}, "
                              f"screen hit={screen_hit}, helper={helper_eligible}, "
                              f"owner={owner_name}, args={picked_args}, edges={picked_edges}, "
                              f"whole selection={selected_whole}, yellow={selected_edge_yellow}, "
                              f"label white={handle_label_white}, edit={edit_phase}, "
                              f"handles={len(handles)}, preview exact={preview_exact}, "
-                             f"result={result_name}, types={result_types}, airtight={airtight}")
+                             f"result={result_name}, types={result_types}, airtight={airtight}, "
+                             f"contour=({contour_detail})")
         except Exception as exc:  # noqa: BLE001
             fillet_detail = repr(exc)
         finally:

@@ -121,7 +121,8 @@ class _EdgeBevelCmd(Command):
         self._owner_name = None
         self._owner_geom = None
         self._operand = None
-        self._edge_points = {}       # authoritative edge id -> bridge transport point
+        self._edge_points = {}       # authoritative clicked edge id -> UI handle point
+        self._affected_edges = set() # includes OCCT's automatic tangent-contour propagation
         self._picks = []             # compatibility mirrors; never authoritative
         self._edges = []
         self._candidate = None
@@ -158,6 +159,14 @@ class _EdgeBevelCmd(Command):
         self._edges = list(self._edge_points)
         self._picks = list(self._edge_points.values())
 
+    def _refresh_affected_edges(self):
+        if self._owner_geom is None or not self._edge_points:
+            self._affected_edges = set()
+            return
+        self._affected_edges = set(bridge.bevel_affected_edges_occt(
+            self._owner_geom, float(self.opt[self.size_option]), list(self._edge_points),
+            chamfer=self.chamfer))
+
     def _bind_owner(self, name, edge_id, ctx):
         geom = ctx.geom_by_name(name) if name else None
         if not isinstance(geom, (r3.Brep, r3.Extrusion)):
@@ -182,7 +191,8 @@ class _EdgeBevelCmd(Command):
         """Stable ``(object name, edge id)`` keys currently selected by the command."""
         if self._owner_name is None:
             return frozenset()
-        return frozenset((self._owner_name, edge_id) for edge_id in self._edge_points)
+        shown = self._affected_edges or set(self._edge_points)
+        return frozenset((self._owner_name, edge_id) for edge_id in shown)
 
     def handle_records(self):
         """Handle descriptions for UI drawing; no geometry is built here."""
@@ -208,7 +218,7 @@ class _EdgeBevelCmd(Command):
         try:
             out = bridge.bevel_edges_occt(
                 self._owner_geom, float(self.opt[self.size_option]), chamfer=self.chamfer,
-                edge_points=list(self._edge_points.values()))
+                edge_indices=list(self._edge_points))
         except ValueError as e:
             self._candidate_error = str(e)
             return None
@@ -250,9 +260,16 @@ class _EdgeBevelCmd(Command):
             self._edge_points[edge_id] = tuple(float(v) for v in interior_point)
         self._sync_pick_mirrors()
         self._invalidate_candidate()
+        try:
+            self._refresh_affected_edges()
+        except Exception as e:  # noqa: BLE001
+            return f"{self.name}: unable to inspect the exact bevel contour -- {e}", False
         if self.opt["Preview"] and self._edge_points:
             self._refresh_candidate(ctx)
-        return f"{len(self._edge_points)} edge(s) selected -- press Enter when done", False
+        selected = len(self._edge_points)
+        affected = len(self._affected_edges)
+        extra = f"; {affected} tangent-contour edges will be affected" if affected > selected else ""
+        return f"{selected} edge(s) selected{extra} -- press Enter when done", False
 
     def on_mode(self, name, ctx):
         if name == "SelectEdges":
@@ -268,6 +285,7 @@ class _EdgeBevelCmd(Command):
                     f"(got {_num(value)})"), False
         if option.name == self.size_option:
             self._invalidate_candidate()
+            self._refresh_affected_edges()
             if self.phase == self.EDIT_HANDLES or self.opt["Preview"]:
                 self._refresh_candidate(ctx)
         elif (option.name == "Preview" and value and self._edge_points

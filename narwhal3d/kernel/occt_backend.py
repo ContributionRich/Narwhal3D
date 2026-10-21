@@ -3415,6 +3415,38 @@ def fillet_all_edges(shape, radius):
         raise KernelError(f"fillet failed: {e}") from e
 
 
+def bevel_affected_edges(shape, size, indices, chamfer=False):
+    """Return every source edge OCCT puts in the named bevel contours."""
+    _need()
+    from OCP.BRepFilletAPI import BRepFilletAPI_MakeChamfer, BRepFilletAPI_MakeFillet
+
+    if size <= 0:
+        raise KernelError(f"a bevel size must be positive (got {size})")
+    edges = _unique_edges(shape)
+    chosen = sorted({int(i) for i in indices})
+    bad = [i for i in chosen if i < 1 or i > len(edges)]
+    if bad:
+        raise KernelError(
+            f"edge index {bad} out of range; this solid has {len(edges)} edges "
+            f"numbered 1..{len(edges)}")
+    if not chosen:
+        return []
+    mk = (BRepFilletAPI_MakeChamfer(shape) if chamfer
+          else BRepFilletAPI_MakeFillet(shape))
+    for i in chosen:
+        mk.Add(float(size), edges[i - 1])
+    affected = set()
+    for contour in range(1, mk.NbContours() + 1):
+        for position in range(1, mk.NbEdges(contour) + 1):
+            edge = mk.Edge(contour, position)
+            index = next((i for i, candidate in enumerate(edges, 1)
+                          if candidate.IsSame(edge)), None)
+            if index is None:
+                raise KernelError("OCCT reported a bevel-contour edge outside the source solid")
+            affected.add(index)
+    return sorted(affected)
+
+
 def bevel_edges(shape, size, indices=None, chamfer=False):
     """Fillet or chamfer the edges named by `indices` (1-based, from `edge_curves`).
 

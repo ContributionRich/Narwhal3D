@@ -6596,7 +6596,16 @@ def cap_planar_holes_occt(geom):
     return proxy
 
 
-def bevel_edges_occt(geom, size, chamfer=False, edge_points=None):
+def bevel_affected_edges_occt(geom, size, edge_indices, chamfer=False):
+    """Source edge ids OCCT will include through automatic tangent propagation."""
+    occt = _occt()
+    operand = _occt_operand(geom) if occt is not None else None
+    if operand is None:
+        return []
+    return occt.bevel_affected_edges(operand, size, edge_indices, chamfer=chamfer)
+
+
+def bevel_edges_occt(geom, size, chamfer=False, edge_points=None, edge_indices=None):
     """An ANALYTIC edge fillet/chamfer via OpenCASCADE, or None if not possible.
 
     Returns the display proxy with its analytic master registered, exactly like
@@ -6628,7 +6637,10 @@ def bevel_edges_occt(geom, size, chamfer=False, edge_points=None):
     # The edges are read off `operand` (not `geom`'s master) so the indices refer to the very
     # shape being beveled -- reading them from a different shape would be a silent off-by-one
     # waiting to happen.
-    indices = None
+    if edge_points and edge_indices is not None:
+        raise ValueError("name bevel edges by stable ids or points, not both")
+    indices = ([int(index) for index in edge_indices]
+               if edge_indices is not None else None)
     if edge_points:
         try:
             curves = occt.edge_curves(operand)
