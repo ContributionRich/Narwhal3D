@@ -18,6 +18,31 @@ def _data(curve):
     return nurbs, points, tuple(float(value) for value in nurbs.Knots.ToList())
 
 
+def sample_point_tweens(first, second, number=1, sample_number=100, flip=False):
+    """Tween incompatible curves through corresponding equal-length samples."""
+    from . import arclength, interpolate
+    number, sample_number = int(number), int(sample_number)
+    if number < 1 or not 2 <= sample_number <= 9999:
+        raise ValueError("Number must be >=1 and SampleNumber must be 2..9999")
+    a, b = first.ToNurbsCurve(), second.ToNurbsCurve()
+    if flip:
+        b.Reverse()
+    def samples(curve):
+        total = arclength.length_of(curve)
+        out=[]
+        for index in range(sample_number):
+            parameter = arclength.parameter_at_length(
+                curve, total * index / (sample_number-1))
+            point=curve.PointAt(parameter);out.append((point.X,point.Y,point.Z))
+        return out
+    pa,pb=samples(a),samples(b);curves=[]
+    for index in range(1,number+1):
+        fraction=index/(number+1.0)
+        points=[tuple(x[k]+fraction*(y[k]-x[k]) for k in range(3)) for x,y in zip(pa,pb)]
+        curves.append(interpolate.interpolate_curve(points,degree=3,style="Chord"))
+    return curves
+
+
 def compatible_tweens(first, second, number=1, flip=False):
     """Return control-point tween NURBS for structurally compatible curves."""
     number = int(number)

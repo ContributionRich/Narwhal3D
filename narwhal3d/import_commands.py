@@ -14,8 +14,9 @@ Formats, and how exact each is:
   the document. UNIT-AWARE: the reader converts the file's length unit
   into the MODEL's (MEASURED: an inch box reads 1 x 2 x 3 into an inch model, 25.4 x 50.8 x
   76.2 into a mm one). Free edges come in as curves.
-* **.dxf** -- `dxf_reader`. LINE / CIRCLE / ARC become EXACT rhino3dm curves
-  (a circle is the rational degree-2 circle), POLYLINE / LWPOLYLINE polylines.
+* **.dxf** -- `dxf_reader`. LINE / CIRCLE / ARC and SPLINE become EXACT rhino3dm
+  curves (a circle is rational degree 2; a spline retains degree, knots, controls and
+  weights), while POLYLINE / LWPOLYLINE remain polylines.
   `$INSUNITS` scales into the model units (unitless = model units). What the reader
   skipped (bulges, blocks, text) is REPORTED by count. Layers come across by name.
 * **.svg** -- `svgpath` for path data, plus `circle` / `ellipse` / `rect` /
@@ -161,24 +162,79 @@ def _arc_from(center, radius, a0, a1):
     return pts
 
 
+def _dxf_rgb24(value):
+    value = int(value)
+    return ((value >> 16) & 255, (value >> 8) & 255, value & 255)
+
+
+def _dxf_layer_colors(layer_acis, layer_true_colors, entity_layers, entity_true_colors):
+    """Resolve source layer colors, preferring one consistent explicit entity RGB."""
+    by_layer = {}
+    for layer, true_color in zip(entity_layers, entity_true_colors):
+        if layer and true_color is not None:
+            by_layer.setdefault(layer, set()).add(int(true_color))
+    names = list(layer_acis)
+    names.extend(layer for layer in entity_layers if layer and layer not in names)
+    colors = {}
+    for name in names:
+        explicit = layer_true_colors.get(name)
+        if explicit is None and len(by_layer.get(name, ())) == 1:
+            explicit = next(iter(by_layer[name]))
+        colors[name] = (_dxf_rgb24(explicit) if explicit is not None else
+                        ACI_RGB.get(abs(int(layer_acis.get(name, 7))), (128, 128, 128)))
+    return colors
+
+
+def _dxf_entity_layer(layer, true_color, colors):
+    if not layer or true_color is None:
+        return layer
+    rgb = _dxf_rgb24(true_color)
+    if colors.get(layer) == rgb:
+        return layer
+    resolved = f"{layer} [#{rgb[0]:02X}{rgb[1]:02X}{rgb[2]:02X}]"
+    colors[resolved] = rgb
+    return resolved
+
+
+def _dxf_spline(degree, knots, points, weights, scale):
+    """Construct the exact DXF NURBS; DXF stores the two outer clamped knots."""
+    rational = bool(weights)
+    curve = r3.NurbsCurve(3, rational, int(degree) + 1, len(points))
+    if len(curve.Knots) != len(knots) - 2:
+        raise ValueError("DXF SPLINE knot count is incompatible with openNURBS")
+    for index, point in enumerate(points):
+        weight = float(weights[index]) if rational else 1.0
+        curve.Points[index] = r3.Point4d(
+            point[0] * scale * weight,
+            point[1] * scale * weight,
+            point[2] * scale * weight,
+            weight,
+        )
+    for index, knot in enumerate(knots[1:-1]):
+        curve.Knots[index] = float(knot)
+    if not curve.IsValid:
+        raise ValueError("DXF SPLINE did not form a valid exact NURBS curve")
+    return curve
+
+
 def _dxf_from_packed(data, model):
     """Build exact imported curves directly from validated native DXF arrays."""
     from . import bridge
 
-    (types, entity_layers, _entity_colors, closed, coord_counts, coords,
-     layers, insunits, skipped) = data
+    (types, entity_layers, _entity_colors, entity_true_colors, closed,
+     coord_counts, coords, layers, layer_true_colors, insunits, skipped) = data
     file_unit = DXF_UNITS.get(insunits or 0)
     k = _scale(file_unit, model) if file_unit else 1.0
     out = Imported()
-    for name, aci in layers.items():
-        out.layers[name] = ACI_RGB.get(int(aci) if aci is not None else 7,
-                                       (128, 128, 128))
+    out.layers.update(_dxf_layer_colors(
+        layers, layer_true_colors, entity_layers, entity_true_colors))
 
     offset = 0
     for index, typ in enumerate(types):
         count = coord_counts[index]
         end = offset + count
-        layer = entity_layers[index]
+        layer = _dxf_entity_layer(
+            entity_layers[index], entity_true_colors[index], out.layers)
         if typ == 0:
             p0 = (coords[offset] * k, coords[offset + 1] * k,
                   coords[offset + 2] * k)
@@ -196,6 +252,18 @@ def _dxf_from_packed(data, model):
             start, middle, finish = _arc_from(
                 center, coords[offset + 3] * k, coords[offset + 4], coords[offset + 5])
             out.items.append((bridge.make_arc(start, middle, finish), "Arc", layer))
+        elif typ == 5:
+            degree, knot_count, point_count, weight_count = (
+                int(coords[offset + slot]) for slot in range(4))
+            pos = offset + 4
+            knots = coords[pos:pos + knot_count]
+            pos += knot_count
+            points = [coords[at:at + 3]
+                      for at in range(pos, pos + point_count * 3, 3)]
+            pos += point_count * 3
+            weights = coords[pos:pos + weight_count]
+            out.items.append((_dxf_spline(degree, knots, points, weights, k),
+                              "Curve", layer))
         else:
             points = [r3.Point3d(coords[pos] * k, coords[pos + 1] * k,
                                  coords[pos + 2] * k)
@@ -242,15 +310,19 @@ def _dxf_from_dict(data, model):
     file_unit = DXF_UNITS.get(data.get("insunits") or 0)
     k = _scale(file_unit, model) if file_unit else 1.0
     out = Imported()
-    for name, aci in (data.get("layers") or {}).items():
-        out.layers[name] = ACI_RGB.get(int(aci) if aci is not None else 7, (128, 128, 128))
+    entities = data["entities"]
+    entity_layers = [entity.get("layer") for entity in entities]
+    entity_true_colors = [entity.get("true_color") for entity in entities]
+    out.layers.update(_dxf_layer_colors(
+        data.get("layers") or {}, data.get("layer_true_colors") or {},
+        entity_layers, entity_true_colors))
 
     def P(p):
         return (p[0] * k, p[1] * k, (p[2] if len(p) > 2 else 0.0) * k)
 
-    for e in data["entities"]:
+    for e in entities:
         t = e["type"]
-        layer = e.get("layer")
+        layer = _dxf_entity_layer(e.get("layer"), e.get("true_color"), out.layers)
         if t == "LINE":
             out.items.append((bridge.make_line(P(e["p0"]), P(e["p1"])), "Line", layer))
         elif t == "CIRCLE":
@@ -260,6 +332,9 @@ def _dxf_from_dict(data, model):
             s, m, en = _arc_from(P(e["center"]), e["radius"] * k, e["start_deg"],
                                  e["end_deg"])
             out.items.append((bridge.make_arc(s, m, en), "Arc", layer))
+        elif t == "SPLINE":
+            out.items.append((_dxf_spline(e["degree"], e["knots"], e["points"],
+                                          e.get("weights") or (), k), "Curve", layer))
         elif t in ("POLYLINE", "LWPOLYLINE"):
             pts = [P(p) for p in e["points"]]
             if len(pts) < 2:
@@ -1044,6 +1119,8 @@ def _cdr_unsupported_reason(message):
     lowered = message.lower()
     markers = (
         "supports version 15",
+        "valid v15 packages without metadata/metadata.xml",
+
         "unsupported non-curve object",
         "needs one drawing page",
         "contains no supported curve objects",

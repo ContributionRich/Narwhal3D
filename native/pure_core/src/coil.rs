@@ -309,6 +309,96 @@ fn catenary_plan(
     }
 }
 
+/// Sample the analytic coil locus into caller-owned xyz preview points.
+/// # Safety
+/// Input triples are readable and output is writable for its declared capacity.
+#[allow(clippy::too_many_arguments)]
+#[no_mangle]
+pub unsafe extern "C" fn narwhal_pure_core_coil_preview(
+    start: *const f64,
+    end: *const f64,
+    radial: *const f64,
+    radius0: f64,
+    radius1: f64,
+    turns: f64,
+    reverse: u8,
+    flat: u8,
+    point_count: usize,
+    output: *mut f64,
+    output_capacity: usize,
+    out_values: *mut u64,
+) -> i32 {
+    if out_values.is_null() {
+        return ERR_NULL;
+    }
+    *out_values = 0;
+    if reverse > 1 || flat > 1 || !(2..=2049).contains(&point_count) {
+        return ERR_INPUT;
+    }
+    let triple = |ptr| match crate::checked_slice(ptr, 3) {
+        Some(v) => Ok([v[0], v[1], v[2]]),
+        None => Err(ERR_NULL),
+    };
+    let s = match triple(start) {
+        Ok(v) => V3(v),
+        Err(e) => return e,
+    };
+    let e = match triple(end) {
+        Ok(v) => V3(v),
+        Err(e) => return e,
+    };
+    let rv = match triple(radial) {
+        Ok(v) => V3(v),
+        Err(e) => return e,
+    };
+    if !radius0.is_finite() || !radius1.is_finite() || !turns.is_finite() || turns <= 0.0 {
+        return ERR_INPUT;
+    }
+    let av = e.sub(s);
+    let al = av.norm();
+    let axis = match av.unit() {
+        Some(v) => v,
+        None => return ERR_INPUT,
+    };
+    let x = match rv.sub(axis.scale(rv.dot(axis))).unit() {
+        Some(v) => v,
+        None => return ERR_INPUT,
+    };
+    let y = match axis.cross(x).unit() {
+        Some(v) => v,
+        None => return ERR_INPUT,
+    };
+    let total = if reverse != 0 {
+        -TAU * turns
+    } else {
+        TAU * turns
+    };
+    let coil = Coil {
+        start: s,
+        axis,
+        x,
+        y,
+        axis_length: if flat != 0 { 0.0 } else { al },
+        radius0,
+        radius1,
+        theta_total: total,
+    };
+    let needed = match point_count.checked_mul(3) {
+        Some(v) if v <= output_capacity => v,
+        _ => return ERR_SIZE,
+    };
+    let out = match crate::checked_slice_mut(output, output_capacity) {
+        Some(v) => v,
+        None => return ERR_NULL,
+    };
+    for i in 0..point_count {
+        let theta = total * i as f64 / (point_count - 1) as f64;
+        out[3 * i..3 * i + 3].copy_from_slice(&coil.point_derivative(theta).0 .0)
+    }
+    *out_values = needed as u64;
+    0
+}
+
 /// Build one cubic C1 NURBS plan for an axis-based helix or spiral.
 ///
 /// `radial` is a direction vector, not a point. Output poles are packed xyz.
@@ -484,6 +574,36 @@ pub unsafe extern "C" fn narwhal_pure_core_catenary_plan(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn analytic_preview_has_exact_count_endpoints_and_reverse() {
+        let s = [0., 0., 0.];
+        let e = [0., 0., 5.];
+        let r = [1., 0., 0.];
+        let mut out = [0.; 15];
+        let mut used = 0;
+        let rc = unsafe {
+            narwhal_pure_core_coil_preview(
+                s.as_ptr(),
+                e.as_ptr(),
+                r.as_ptr(),
+                2.,
+                3.,
+                1.,
+                0,
+                0,
+                5,
+                out.as_mut_ptr(),
+                out.len(),
+                &mut used,
+            )
+        };
+        assert_eq!(rc, 0);
+        assert_eq!(used, 15);
+        assert_eq!(&out[..3], &[2., 0., 0.]);
+        assert!((out[12] - 3.).abs() < 1e-12);
+        assert!((out[14] - 5.).abs() < 1e-12);
+    }
 
     #[test]
     fn helix_plan_has_expected_endpoints_knots_and_deviation() {

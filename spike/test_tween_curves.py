@@ -17,8 +17,8 @@ class Ctx:
     def add_geometry(self,g,base_name,layer_index=None): self.made.append((g,layer_index)); return f"Tween_{len(self.made)}",f"Tween_{len(self.made)}"
     def note_change(self,_label=None): pass
 
-def execute(number=3,flip=False,layer="CurrentLayer",incompatible=False,method="ControlPoint"):
-    ctx=Ctx(incompatible); cmd=commands.TweenCurvesCmd(); cmd.args=["A","B"]; cmd.opt["Number"]=number; cmd.opt["OutputLayer"]=layer; cmd.opt["MatchMethod"]=method; cmd._flip=flip; msg,done=cmd.execute(ctx); return ctx,cmd,msg,done
+def execute(number=3,flip=False,layer="CurrentLayer",incompatible=False,method="ControlPoint",samples=100):
+    ctx=Ctx(incompatible); cmd=commands.TweenCurvesCmd(); cmd.args=["A","B"]; cmd.opt["Number"]=number; cmd.opt["OutputLayer"]=layer; cmd.opt["MatchMethod"]=method; cmd.opt["SampleNumber"]=samples; cmd._flip=flip; msg,done=cmd.execute(ctx); return ctx,cmd,msg,done
 ctx,cmd,msg,done=execute();
 check(done and len(ctx.made)==3 and "3 tween curves" in msg,"Number creates every requested compatible tween")
 ys=[ctx.made[i][0].Points[0].Y for i in range(3)]
@@ -29,8 +29,10 @@ ctx,cmd,msg,done=execute(number=1,layer="StartCrv")
 check(done and ctx.made[0][1]==1,"OutputLayer=StartCrv inherits the first curve layer")
 ctx,cmd,msg,done=execute(incompatible=True)
 check(done and not ctx.made and "requires equal degree" in msg,"incompatible ControlPoint inputs refuse explicitly")
-ctx,cmd,msg,done=execute(method="SamplePoints")
-check(done and not ctx.made and "not implemented yet" in msg,"unbuilt SamplePoints method refuses explicitly")
+ctx,cmd,msg,done=execute(number=1,incompatible=True,method="SamplePoints",samples=25)
+sampled=ctx.made[0][0] if ctx.made else None
+check(done and sampled is not None and sampled.Degree==3 and len(sampled.Points)==25,
+      "SamplePoints tweens structurally incompatible curves through requested samples")
 check("tweencurves" in commands.COMMANDS,"TweenCurves is registered")
 for ok,label in checks: print(f"[{'PASS' if ok else 'FAIL'}] {label}")
 failed=sum(not x for x,_ in checks); print(f"\n{len(checks)-failed}/{len(checks)} passed"); raise SystemExit(1 if failed else 0)

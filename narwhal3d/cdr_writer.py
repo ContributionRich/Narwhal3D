@@ -1,7 +1,8 @@
-"""Native CDR v15 vector writer, compatible with CorelDRAW 2015/X7.
+"""Native CDR v15 vector writer targeting CorelDRAW 2015/X7.
 
-This is a real CDR writer, not a PDF/SVG file with a ``.cdr`` suffix.  It emits
-CorelDRAW's ZIP package and an uncompressed RIFF ``CDRF`` document stream.  The
+This is a real CDR writer, not a PDF/SVG file with a ``.cdr`` suffix. The
+production package and compressed/indexed RIFF ``CDRF`` stream are built entirely
+by the tracked Rust core; Python only marshals strokes and writes returned bytes. The
 implemented interchange subset is deliberately narrow: pages, layers, RGB
 outlines, line widths, open/closed paths, and cubic Beziers.  Those are exactly
 the primitives produced by :mod:`print2d` for manufacturing drawings.
@@ -92,7 +93,7 @@ def _color(rgb: RGB) -> bytes:
 
 
 def _outline(outline_id: int, rgb: RGB, width_mm: float) -> bytes:
-    """One solid RGB outline style accepted by CorelDRAW/libcdr v15."""
+    """One legacy solid RGB outline record independently decoded by libcdr v15."""
     if width_mm <= 0:
         raise ValueError("CDR outline width must be positive")
     payload = bytearray()
@@ -323,7 +324,7 @@ def _writestr(archive: zipfile.ZipFile, name: str, data: bytes | str,
 
 def write_cdr(path: str, strokes: Iterable[StrokeLike], page_w_mm: float,
               page_h_mm: float, title: str = "", hairline: bool = False) -> int:
-    """Write a genuine CDR compatible with CorelDRAW 2015.
+    """Write a compressed native CDR v15 package for CorelDRAW 2015.
 
     ``hairline=True`` stores every outline at Corel's native 0.003-inch
     Hairline width, irrespective of the document print width.
@@ -336,30 +337,14 @@ def write_cdr(path: str, strokes: Iterable[StrokeLike], page_w_mm: float,
     if any(1 + 3 * len(stroke.beziers) > 0xFFFF for stroke in strokes):
         raise ValueError("one CDR curve exceeds the v15 limit of 65535 path nodes")
 
-    layer_names = []
-    for stroke in strokes:
-        name = str(stroke.layer or "Layer 1")
-        if name not in layer_names:
-            layer_names.append(name)
+    from . import native_cdr
 
-    with zipfile.ZipFile(path, "w") as archive:
-        # Corel's package keeps these two entries uncompressed.  `mimetype` must
-        # be first so generic file detectors can identify the package cheaply.
-        _writestr(archive, "mimetype", MIMETYPE, zipfile.ZIP_STORED)
-        _writestr(archive, "content/riffData.cdr",
-                  _riff(strokes, page_w_mm, page_h_mm, hairline), zipfile.ZIP_STORED)
-        _writestr(archive, "metadata/textinfo.xml", _textinfo(layer_names),
-                  zipfile.ZIP_DEFLATED)
-        _writestr(archive, "metadata/metadata.xml",
-                  _metadata(strokes, page_w_mm, page_h_mm, title, layer_names, hairline),
-                  zipfile.ZIP_DEFLATED)
-        _writestr(archive, "color/color.xml",
-                  "<Color><ColorContext><ColorModel>Rgb</ColorModel>"
-                  "</ColorContext><HasRgbObjects>true</HasRgbObjects></Color>",
-                  zipfile.ZIP_DEFLATED)
-        _writestr(archive, "color/docPalette.xml",
-                  "<?xml version=\"1.0\"?><palette name=\"Document Palette\">"
-                  "<colors/></palette>", zipfile.ZIP_DEFLATED)
-        _writestr(archive, "links.xml", "<?xml version=\"1.0\"?><links/>",
-                  zipfile.ZIP_DEFLATED)
-    return os.path.getsize(path)
+    package = native_cdr.package_v15(
+        strokes, page_w_mm, page_h_mm, title=title, hairline=hairline)
+    if package is None:
+        raise RuntimeError(
+            "native CorelDRAW v15 package writer is unavailable; refusing to emit "
+            "the legacy RIFF subset that real CorelDRAW cannot open")
+    with open(path, "wb") as stream:
+        stream.write(package)
+    return len(package)

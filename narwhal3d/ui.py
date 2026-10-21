@@ -45,6 +45,8 @@ from . import pickconstraint
 from . import ortho
 from . import printdialog
 from . import bugreport
+from . import ai_assistant
+from . import ai_transport
 from . import textfield
 from . import sessionlog
 from . import uiscale
@@ -2950,7 +2952,7 @@ def draw_right_band():
     band's handler had only the "is a band" test, which was enough while there was
     one band and wrong the moment there were two.
 
-    Draws the band, its caption row, four-tab strip and the selected working body.
+    Draws the band, its caption row, five-tab strip and the selected working body.
     Each body exposes only behavior actually wired to document/view state; unsupported
     deeper controls are omitted rather than drawn as dead chrome.
     """
@@ -3059,6 +3061,13 @@ def draw_right_band():
             print(f"[narwhal3d] bug report panel failed: {e!r}")
     else:
         _bug["lay"] = None
+    if rightpanel.TABS[_right_tab].name == "AI Assistant":
+        try:
+            _draw_ai_panel(shader, region, box)
+        except Exception as e:  # noqa: BLE001
+            print(f"[narwhal3d] AI Assistant panel failed: {e!r}")
+    else:
+        _ai["lay"] = None
 
 
 #: the New Layer button's box (window coordinates), recorded by the draw
@@ -5082,7 +5091,7 @@ def _draw_layers_panel_text(lay, rows, current):
 
 
 def _draw_right_tab_icons(box):
-    """The four tab icons. Falls back to the tab's initial when an icon is missing,
+    """The right tab icons. Falls back to the tab's initial when an icon is missing,
     which is what happens on a machine without the help bundle."""
     img_shader = _image_shader()
     if img_shader is None:
@@ -5107,6 +5116,473 @@ def _draw_right_tab_icons(box):
             ).draw(img_shader)
         except Exception:  # noqa: BLE001
             pass
+
+
+# ---------------------------------------------------------------------------
+# AI ASSISTANT panel -- bounded provider transport; command actions remain disabled
+# ---------------------------------------------------------------------------
+def _initial_ai_state():
+    config = ai_assistant.credential_status(
+        ai_assistant.ProviderConfig(), os.environ)
+    return ai_assistant.AssistantState(provider=config)
+
+
+_ai = {"state": _initial_ai_state(), "lay": None, "region": None, "view": None}
+
+
+def ai_assistant_state():
+    return _ai["state"]
+
+
+def ai_panel_open():
+    return rightpanel.TABS[_right_tab].name == "AI Assistant"
+
+
+def _fit_panel_text(text, width, fs):
+    """Ellipsize one UI line; secrets never enter these public strings."""
+    value = str(text)
+    if _text_width(value, fs) <= width:
+        return value
+    while value and _text_width(value + "...", fs) > width:
+        value = value[:-1]
+    return value + "..."
+
+
+_AI_PROVIDER_ITEMS = tuple((provider_id, label, "")
+                           for provider_id, label in ai_assistant.PROVIDERS)
+_AI_MANUAL_MODEL = "__manual__"
+
+
+def _ai_model_label(info):
+    details = []
+    if info.model_type:
+        details.append(info.model_type.upper())
+    if info.state:
+        details.append(info.state)
+    if info.max_context_length:
+        details.append(f"{info.max_context_length:,} context")
+    if info.tool_use:
+        details.append("tools")
+    return info.model_id + (f"  ({', '.join(details)})" if details else "")
+
+
+def _ai_model_enum_items(_operator, _context):
+    return _ai.get("model_items") or (
+        (_AI_MANUAL_MODEL, "Manual model entry", "Enter a model identifier below"),)
+
+
+def _ai_select_discovered_model(operator, _context):
+    if operator.model_choice != _AI_MANUAL_MODEL:
+        operator.model = operator.model_choice
+
+
+def _ai_discovery_worker(config, output):
+    try:
+        output.put((True, ai_transport.discover_models(config, os.environ)))
+    except ai_transport.TransportError as exc:
+        output.put((False, str(exc)))
+    except Exception as exc:  # noqa: BLE001 -- never expose provider internals
+        output.put((False, f"model discovery failed: {type(exc).__name__}"))
+
+
+def _ai_poll_model_discovery():
+    import queue
+
+    output = _ai.get("model_output")
+    if output is None:
+        return None
+    try:
+        ok, result = output.get_nowait()
+    except queue.Empty:
+        return 0.1
+    _ai.pop("model_output", None)
+    _ai.pop("model_thread", None)
+    if ok:
+        _ai["models"] = result
+        _ai["model_items"] = tuple([
+            (_AI_MANUAL_MODEL, "Manual model entry", "Enter a model identifier below"),
+        ] + [(info.model_id, _ai_model_label(info), info.model_id) for info in result])
+        _ai["model_status"] = (f"Found {len(result)} chat model(s)."
+                               if result else "Connected, but no chat models were reported.")
+    else:
+        _ai["models"] = ()
+        _ai["model_items"] = ()
+        _ai["model_status"] = f"Model discovery failed: {result}"
+    _tag_redraw_bands()
+    return None
+
+
+def _ai_start_model_discovery(config):
+    import queue
+    import threading
+
+    running = _ai.get("model_thread")
+    if running is not None and running.is_alive():
+        return False
+    output = queue.Queue(maxsize=1)
+    worker = threading.Thread(target=_ai_discovery_worker,
+                              args=(config, output), daemon=True)
+    _ai["models"] = ()
+    _ai["model_items"] = ()
+    _ai["model_status"] = "Discovering available models..."
+    _ai["model_output"] = output
+    _ai["model_thread"] = worker
+    worker.start()
+    bpy.app.timers.register(_ai_poll_model_discovery, first_interval=0.05)
+    return True
+
+
+class NARWHAL_OT_ai_refresh_models(Operator):
+    """Refresh available models without blocking Blender's UI thread."""
+
+    bl_idname = "narwhal.ai_refresh_models"
+    bl_label = "Refresh Models"
+    bl_description = "Query the configured provider for available chat models"
+    bl_options = {"INTERNAL"}
+
+    def execute(self, context):
+        draft = _ai.get("settings_draft")
+        try:
+            if draft is None:
+                config = _ai["state"].provider
+            else:
+                config = ai_assistant.set_provider(*draft[:4],
+                                                   allow_insecure_remote=draft[4])
+        except ValueError as exc:
+            self.report({"ERROR"}, str(exc))
+            return {"CANCELLED"}
+        if not _ai_start_model_discovery(config):
+            self.report({"INFO"}, "Model discovery is already running")
+        return {"FINISHED"}
+
+
+class NARWHAL_OT_ai_settings(Operator):
+    """Configure public provider routing without accepting or storing a raw API key."""
+
+    bl_idname = "narwhal.ai_settings"
+    bl_label = "AI Assistant Settings"
+    bl_description = "Configure AI provider, model, endpoint, and credential environment variable"
+    bl_options = {"INTERNAL"}
+
+    provider_id: EnumProperty(name="Provider", items=_AI_PROVIDER_ITEMS)
+    model: StringProperty(name="Model (manual or selected)", maxlen=200)
+    model_choice: EnumProperty(name="Available models", items=_ai_model_enum_items,
+                               update=_ai_select_discovered_model)
+    endpoint: StringProperty(name="Endpoint", maxlen=2048)
+    credential_env: StringProperty(name="API key environment variable", maxlen=200)
+    allow_insecure_remote: BoolProperty(
+        name="Allow unencrypted remote HTTP (not recommended)", default=False)
+
+    def invoke(self, context, event):
+        config = _ai["state"].provider
+        self.provider_id = config.provider_id
+        self.model = config.model
+        self.endpoint = config.endpoint
+        self.credential_env = config.credential_env
+        self.allow_insecure_remote = config.allow_insecure_remote
+        self.model_choice = (config.model if any(
+            item[0] == config.model for item in _ai_model_enum_items(self, context))
+            else _AI_MANUAL_MODEL)
+        _ai_start_model_discovery(config)
+        return context.window_manager.invoke_props_dialog(self, width=620)
+
+    def draw(self, context):
+        column = self.layout.column(align=True)
+        _ai["settings_draft"] = (
+            self.provider_id, self.model, self.endpoint, self.credential_env,
+            self.allow_insecure_remote)
+        column.prop(self, "provider_id")
+        column.prop(self, "endpoint")
+        refresh = column.row(align=True)
+        refresh.operator("narwhal.ai_refresh_models", icon="FILE_REFRESH")
+        refresh.label(text=_ai.get("model_status", "Models have not been queried."))
+        if _ai.get("model_items"):
+            column.prop(self, "model_choice")
+        column.prop(self, "model")
+        column.prop(self, "credential_env")
+        column.prop(self, "allow_insecure_remote")
+        column.separator()
+        column.label(text="Set the named environment variable before launching Narwhal 3D.")
+        column.label(text="Raw API keys are never stored in documents or assistant settings.")
+
+    def execute(self, context):
+        try:
+            config = ai_assistant.set_provider(
+                self.provider_id, self.model, self.endpoint, self.credential_env,
+                allow_insecure_remote=self.allow_insecure_remote)
+        except ValueError as exc:
+            self.report({"ERROR"}, str(exc))
+            return {"CANCELLED"}
+        st = _ai["state"]
+        st.provider = ai_assistant.credential_status(config, os.environ)
+        st.status = "configured" if config.model else "disconnected"
+        st.error = ("Settings applied. Provider transport is not connected yet."
+                    if config.model else "Settings applied; choose a model before connecting.")
+        _tag_redraw_bands()
+        return {"FINISHED"}
+
+
+def _draw_ai_panel(shader, region, box):
+    import gpu
+
+    st = _ai["state"]
+    sc = _ui_scale()
+    fs = 11.0 * sc
+    lay = ai_assistant.panel_layout(box["body"], sc)
+    _ai["lay"] = lay
+    _ai["region"] = (region.x, region.y)
+    ink = (0.08, 0.08, 0.08, 1)
+    muted = (0.45, 0.45, 0.47, 1)
+    blue = (0.20, 0.45, 0.85, 1)
+    pale = (0.86, 0.86, 0.88, 1)
+    prev = gpu.state.blend_get()
+    gpu.state.blend_set("ALPHA")
+    try:
+        title = lay["title"]
+        _draw_text(title[0], title[1] + 2 * sc, "AI Assistant", fs + 1, ink)
+        connection = lay["connection"]
+        connection_text = {
+            "connected": "Connection: Connected",
+            "sending": "Connection: Sending...",
+            "error": "Connection: Error",
+        }.get(st.status, ("Connection: Configured, not connected"
+                          if st.provider.model else "Connection: Not connected"))
+        _draw_text(connection[0], connection[1] + 5 * sc,
+                   _fit_panel_text(connection_text,
+                                   connection[2] - connection[0], fs - 1),
+                   fs - 1, ink)
+
+        context = lay["context"]
+        selected_count = len(selected_display_names())
+        square = 12 * sc
+        qy = context[1] + (context[3] - context[1] - square) * 0.5
+        shader.bind()
+        _draw_rect(shader, context[0], qy, context[0] + square, qy + square,
+                   blue if st.include_selection else (1, 1, 1, 1))
+        _draw_text(context[0] + square + 5 * sc, context[1] + 4 * sc,
+                   _fit_panel_text(f"Include selection context ({selected_count})",
+                                   context[2] - context[0] - square - 5 * sc, fs - 1),
+                   fs - 1, ink)
+
+        transcript = lay["transcript"]
+        shader.bind()
+        _draw_rect(shader, transcript[0] - 1, transcript[1] - 1,
+                   transcript[2] + 1, transcript[3] + 1, (0.65, 0.65, 0.67, 1))
+        _draw_rect(shader, *transcript, (0.96, 0.96, 0.97, 1))
+        line_h = 14 * sc
+        max_rows = ai_assistant.transcript_row_count(transcript, sc)
+        width = max(1, transcript[2] - transcript[0] - 8 * sc)
+        transcript_lines = []
+        for message in st.messages:
+            prefix = {"user": "You: ", "assistant": "Assistant: ",
+                      "status": "Status: "}[message.role]
+            transcript_lines.extend(bugreport.wrap(prefix + message.text, width,
+                                                    lambda value: _text_width(value, fs - 1)))
+        if not transcript_lines:
+            transcript_lines = ["Ask about selected objects, CAD workflows, or future actions."]
+        shown = transcript_lines[-max_rows:] if max_rows else []
+        base = transcript[3] - 4 * sc - line_h
+        for index, line in enumerate(shown):
+            safe_line = _fit_panel_text(line, width, fs - 1)
+            _draw_text(transcript[0] + 4 * sc, base - index * line_h, safe_line,
+                       fs - 1, muted if not st.messages else ink)
+
+        input_box = lay["input"]
+        shader.bind()
+        _draw_rect(shader, input_box[0] - 1, input_box[1] - 1,
+                   input_box[2] + 1, input_box[3] + 1,
+                   blue if st.focus else (0.6, 0.6, 0.62, 1))
+        _draw_rect(shader, *input_box, (1, 1, 1, 1))
+        measure = _bug_measure(fs)
+        view = ai_assistant.input_view(st, input_box, measure, sc)
+        _ai["view"] = view
+        editor = ai_assistant.field_of(st)
+        first, rows, lh = view["first"], view["rows"], view["line_h"]
+        base = view["top"] - lh + 3 * sc
+        if not editor.text and not st.focus:
+            _draw_text(view["x0"], base, "Type a message...", fs, muted)
+        else:
+            selection = editor.selection()
+            if selection is not None and st.focus:
+                shader.bind()
+                for line, sx0, sx1 in textfield.selection_rects(
+                        view["spans"], editor.text, selection, measure):
+                    if first <= line < first + rows:
+                        yb = view["top"] - (line - first + 1) * lh
+                        _draw_rect(shader, view["x0"] + sx0, yb,
+                                   view["x0"] + max(sx1, sx0 + 3 * sc), yb + lh,
+                                   (0.70, 0.82, 1.0, 1))
+            for index, (start, end) in enumerate(view["spans"][first:first + rows]):
+                _draw_text(view["x0"], base - index * lh, editor.text[start:end], fs, ink)
+            if st.focus:
+                caret_x, caret_line = textfield.caret_xy(view["spans"], editor.text,
+                                                        editor.caret, measure, lh)
+                if first <= caret_line < first + rows:
+                    cx = view["x0"] + caret_x
+                    cy = base - (caret_line - first) * lh
+                    shader.bind()
+                    _draw_rect(shader, cx, cy - 2 * sc, cx + 1.5 * sc,
+                               cy + 11 * sc, ink)
+
+        for button_id, rect in lay["buttons"]:
+            shader.bind()
+            _draw_rect(shader, *rect, blue if button_id == "send" else pale)
+            label = {"send": "Send", "new": "New Chat", "settings": "Settings"}[button_id]
+            _draw_text(rect[0] + max(3 * sc, (rect[2] - rect[0] -
+                       _text_width(label, fs)) * 0.5), rect[1] + 7 * sc, label, fs,
+                       (1, 1, 1, 1) if button_id == "send" else ink)
+
+        status = lay["status"]
+        status_text = (st.error or {
+            "connected": "Connected. Tool actions still require approval and are disabled.",
+            "sending": "Waiting for the provider response...",
+        }.get(st.status, "Open Settings to configure a provider. Tool actions are disabled."))
+        for index, line in enumerate(bugreport.wrap(
+                status_text, status[2] - status[0],
+                lambda value: _text_width(value, fs - 1))[:2]):
+            _draw_text(status[0], status[3] - (index + 1) * 12 * sc,
+                       line, fs - 1, muted)
+    finally:
+        gpu.state.blend_set(prev)
+
+
+def _ai_selected_context():
+    """Bounded structured context only; never document bytes or display triangles."""
+    names = sorted(selected_display_names())
+    selection = []
+    for name in names[:64]:
+        props = _object_properties(name)
+        selection.append({
+            "name": name,
+            "type": str(getattr(props, "type", "Unknown")),
+            "layer": str(getattr(props, "layer", "")),
+        })
+    return {
+        "document": {"units": str(app_state.model.unit_system())},
+        "selection": selection,
+        "selection_truncated": len(names) > len(selection),
+    }
+
+
+def _ai_transport_worker(config, request, output):
+    try:
+        result = ai_transport.send_chat(config, request, os.environ)
+        output.put((True, result.text))
+    except ai_transport.TransportError as exc:
+        output.put((False, str(exc)))
+    except Exception as exc:  # noqa: BLE001 -- boundary converts to non-secret type only
+        output.put((False, f"provider failed: {type(exc).__name__}"))
+
+
+def _ai_poll_transport():
+    import queue
+
+    st = _ai["state"]
+    output = _ai.get("transport_output")
+    if output is None:
+        return None
+    try:
+        ok, text = output.get_nowait()
+    except queue.Empty:
+        return 0.1
+    _ai.pop("transport_output", None)
+    _ai.pop("transport_thread", None)
+    if ok:
+        st.add_message("assistant", text)
+        st.status = "connected"
+        st.error = ""
+    else:
+        st.add_message("status", text)
+        st.status = "error"
+        st.error = text
+    _tag_redraw_bands()
+    return None
+
+
+def _ai_send():
+    import queue
+    import threading
+
+    st = _ai["state"]
+    if st.status == "sending":
+        return "AI Assistant: a request is already in progress"
+    if not st.provider.model:
+        st.error = "Open Settings and choose a model first."
+        return "AI Assistant: choose a model in Settings first"
+    context = _ai_selected_context() if st.include_selection else None
+    request = ai_assistant.submit_input(st, context)
+    if request is None:
+        st.error = "Type a message first."
+        return "AI Assistant: type a message first"
+    output = queue.Queue(maxsize=1)
+    worker = threading.Thread(target=_ai_transport_worker,
+                              args=(st.provider, request, output), daemon=True)
+    _ai["transport_output"] = output
+    _ai["transport_thread"] = worker
+    st.status = "sending"
+    st.error = ""
+    worker.start()
+    bpy.app.timers.register(_ai_poll_transport, first_interval=0.05)
+    return "AI Assistant: sending request"
+
+
+def ai_panel_click(win_x, win_y, shift=False):
+    lay = _ai.get("lay")
+    if lay is None or not ai_panel_open():
+        return None
+    rx, ry = _ai.get("region") or (0, 0)
+    x, y = win_x - rx, win_y - ry
+    hit = ai_assistant.panel_hit(lay, x, y)
+    st = _ai["state"]
+    if hit is None:
+        if st.focus:
+            st.focus = False
+            _tag_redraw_bands()
+        return None
+    kind, ident = hit
+    if kind == "input":
+        ai_assistant.input_click(st, _ai["view"], x, y,
+                                 _bug_measure(11.0 * _ui_scale()), shift)
+    elif kind == "context":
+        st.include_selection = not st.include_selection
+    elif ident == "new":
+        st.new_chat()
+    elif ident == "settings":
+        bpy.ops.narwhal.ai_settings("INVOKE_DEFAULT")
+    else:
+        _ai_send()
+    _tag_redraw_bands()
+    return f"{kind}:{ident}"
+
+
+def ai_panel_drag(win_x, win_y):
+    view = _ai.get("view")
+    if view is None or not ai_panel_open():
+        return False
+    rx, ry = _ai.get("region") or (0, 0)
+    changed = ai_assistant.input_drag(_ai["state"], view, win_x - rx, win_y - ry,
+                                      _bug_measure(11.0 * _ui_scale()))
+    if changed:
+        _tag_redraw_bands()
+    return changed
+
+
+def ai_panel_release():
+    ai_assistant.input_release(_ai["state"])
+
+
+def ai_panel_key(kind, char="", shift=False):
+    st = _ai["state"]
+    if not ai_panel_open() or not st.focus:
+        return None
+    view = _ai.get("view")
+    result = ai_assistant.input_key(st, kind, char, shift,
+                                    _bug_measure(11.0 * _ui_scale()),
+                                    view["width"] if view else None)
+    if result == "submit":
+        _ai_send()
+    _tag_redraw_bands()
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -6881,6 +7357,45 @@ class NARWHAL_OT_command_input(Operator):
                 if inside:
                     return {"RUNNING_MODAL"}
                 sidebar_flyout_close()
+        # Chat/report text fields own drags and keyboard while focused; input never
+        # falls through into commands or viewport interaction.
+        if _ai["state"].extra.get("dragging") and ai_panel_open():
+            if event.type == "MOUSEMOVE":
+                ai_panel_drag(event.mouse_x, event.mouse_y)
+                return {"RUNNING_MODAL"}
+            if event.type == "LEFTMOUSE" and event.value == "RELEASE":
+                ai_panel_release()
+                return {"RUNNING_MODAL"}
+        if _ai["state"].focus and ai_panel_open() and event.value in ("PRESS", "REPEAT"):
+            kind, ch = None, ""
+            motion = {"LEFT_ARROW": "left", "RIGHT_ARROW": "right", "UP_ARROW": "up",
+                      "DOWN_ARROW": "down", "HOME": "home", "END": "end"}
+            if event.type in ("RET", "NUMPAD_ENTER"):
+                kind = "submit" if event.ctrl else "enter"
+            elif event.type == "ESC":
+                kind = "esc"
+            elif event.type == "BACK_SPACE":
+                kind = "back"
+            elif event.type == "DEL":
+                kind = "delete"
+            elif event.type in motion:
+                kind = motion[event.type]
+            elif event.ctrl and event.type == "A":
+                kind = "select_all"
+            elif event.ctrl and event.type in ("C", "X"):
+                kind = "copy" if event.type == "C" else "cut"
+            elif event.type == "V" and event.ctrl:
+                kind, ch = "paste", context.window_manager.clipboard or ""
+            elif event.ascii and event.ascii.isprintable() and not event.ctrl \
+                    and not event.alt:
+                kind, ch = "char", event.ascii
+            if kind is not None:
+                ai_panel_key(kind, ch, shift=event.shift)
+                if kind in ("copy", "cut"):
+                    clip = _ai["state"].extra.get("clipboard")
+                    if clip:
+                        context.window_manager.clipboard = clip
+                return {"RUNNING_MODAL"}
         # a drag that began in the report box selects text
         if bug_panel_dragging():
             if event.type == "MOUSEMOVE":
@@ -7326,6 +7841,10 @@ class NARWHAL_OT_command_input(Operator):
             # reason as the tab strip and the Osnap panel before it -- the band is
             # not a viewport, so the guard below would pass these clicks to Blender
             # and the list would be dead chrome.
+            if ai_panel_click(event.mouse_x, event.mouse_y,
+                              shift=event.shift) is not None:
+                self._redraw()
+                return {"RUNNING_MODAL"}
             if bug_panel_click(event.mouse_x, event.mouse_y,
                                shift=event.shift) is not None:
                 self._redraw()
@@ -10127,6 +10646,8 @@ CLASSES = (
     NARWHAL_OT_run_command_option,
     NARWHAL_OT_maximize_viewport,
     NARWHAL_OT_units_dialog,
+    NARWHAL_OT_ai_refresh_models,
+    NARWHAL_OT_ai_settings,
     NARWHAL_OT_track_mouse,
     NARWHAL_OT_osnap_toggle,
     NARWHAL_OT_osnap_flag,
@@ -14422,6 +14943,13 @@ def draw_point_markers():
     region = getattr(context, "region", None)
     if area is None or region is None or area.type != "VIEW_3D":
         return
+    # This handler is registered after the Print dialog in POST_PIXEL order. Without
+    # this guard, selecting a curve paints its control points and polygon over the
+    # already-drawn white preview sheet, even though the page itself is unchanged.
+    if (_print_dialog is not None
+            and _pane_key(area) == _print_dialog.get("pane")):
+        return
+
     space = next((s for s in area.spaces if s.type == "VIEW_3D"), None)
     rv3d = getattr(space, "region_3d", None) if space is not None else None
     if rv3d is None:

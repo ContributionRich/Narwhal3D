@@ -15,7 +15,7 @@ import zipfile
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
-from narwhal3d import (cdr_reader, embedded_cdr, filedialog, print2d,
+from narwhal3d import (cdr_reader, dxf_reader, embedded_cdr, filedialog, print2d,
                        print_commands, tracedraw)  # noqa: E402
 from narwhal3d.model import NarwhalModel  # noqa: E402
 from narwhal3d.state import app_state  # noqa: E402
@@ -120,6 +120,18 @@ def run():
             info = pdfinfo(p)
             ok = ok and (info is None or "Pages:" in info)
         check(ok, f"Print to .{ext} writes a .{ext} file", f"{last()!r}")
+
+    dxf_path = os.path.join(TMP, "print.dxf")
+    for token in ("Print", "Scale", "1:2", dxf_path):
+        app_state.feed_line(token)
+    dxf = dxf_reader.read_dxf(dxf_path) if os.path.exists(dxf_path) else None
+    spline = dxf["entities"][0] if dxf and dxf["entities"] else None
+    control_x = [point[0] for point in spline["points"]] if spline else []
+    check(spline is not None and spline["type"] == "SPLINE"
+          and spline["degree"] == 3 and abs(max(control_x) - min(control_x) - 20.0) < 1e-9
+          and dxf["insunits"] == 4 and spline.get("true_color") == 0,
+          "Print to .dxf writes one exact colored cubic SPLINE at paper scale",
+          f"{last()!r}; {spline}")
 
     cdr_calls = []
     original_cdr = tracedraw.svg_to_cdr

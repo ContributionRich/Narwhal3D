@@ -10,7 +10,7 @@ import struct
 import sys
 import uuid
 
-_ABI = 1
+_ABI = 3
 _library = None
 _checked = False
 _status = "not checked"
@@ -59,6 +59,12 @@ def _load():
                 ctypes.POINTER(ctypes.c_size_t),
             ]
             function.restype = ctypes.c_int32
+            package_function = library.narwhal_cdr_v15_package
+            package_function.argtypes = function.argtypes
+            package_function.restype = ctypes.c_int32
+            validate_package = library.narwhal_cdr_v15_validate_package
+            validate_package.argtypes = [ctypes.POINTER(ctypes.c_uint8), ctypes.c_size_t]
+            validate_package.restype = ctypes.c_int32
             try:
                 read_function = library.narwhal_cdr_v15_read
                 read_function.argtypes = [
@@ -112,8 +118,9 @@ def _valid_riff(data: bytes) -> bool:
                 return False
             list_kinds.add(data[pos + 8:pos + 12])
         pos = stop + (length & 1)
-    return (pos == len(data) and {b"vrsn", b"LIST"} <= tags
-            and {b"doc ", b"page"} <= list_kinds)
+    uncompressed = {b"doc ", b"page"} <= list_kinds
+    compressed = b"cmpr" in list_kinds and b"CPng" in data
+    return pos == len(data) and {b"vrsn", b"LIST"} <= tags and (uncompressed or compressed)
 
 
 def _finite_number(value):
@@ -175,11 +182,7 @@ def read_v15(riff: bytes, metadata: bytes):
         return None
 
 
-def riff_v15(strokes, page_w_mm, page_h_mm, hairline=False):
-    """Return a native RIFF stream, or None to request the complete Python fallback."""
-    library = _load()
-    if library is None:
-        return None
+def _request_packet(strokes, page_w_mm, page_h_mm, hairline=False, title=""):
     layers = []
     layer_names = []
     encoded_strokes = []
@@ -198,24 +201,56 @@ def riff_v15(strokes, page_w_mm, page_h_mm, hairline=False):
                 "width_mm": float(stroke.width_mm),
                 "layer": layer,
             })
-        packet = json.dumps({
+        return json.dumps({
             "page_w_mm": float(page_w_mm),
             "page_h_mm": float(page_h_mm),
             "hairline": bool(hairline),
+            "title": str(title),
             "strokes": encoded_strokes,
             "layers": layers,
         }, separators=(",", ":"), allow_nan=False).encode("utf-8")
+    except (MemoryError, OverflowError, TypeError, ValueError):
+        return None
+
+
+def _call_bytes(function, packet, minimum):
+    if function is None or packet is None:
+        return None
+    try:
         source = (ctypes.c_uint8 * len(packet)).from_buffer_copy(packet)
         required = ctypes.c_size_t()
-        function = library.narwhal_cdr_v15_riff
         code = function(source, len(packet), None, 0, ctypes.byref(required))
-        if code != 1 or required.value < 12 or required.value > 512 * 1024 * 1024:
+        if code != 1 or required.value < minimum or required.value > 512 * 1024 * 1024:
             return None
         output = (ctypes.c_uint8 * required.value)()
         code = function(source, len(packet), output, len(output), ctypes.byref(required))
         if code != 0 or required.value != len(output):
             return None
-        data = bytes(output)
-        return data if _valid_riff(data) else None
+        return bytes(output)
+    except (MemoryError, OverflowError, TypeError, ValueError, ctypes.ArgumentError):
+        return None
+
+
+def riff_v15(strokes, page_w_mm, page_h_mm, hairline=False):
+    """Return the Rust-built compressed RIFF stream, or ``None``."""
+    library = _load()
+    function = getattr(library, "narwhal_cdr_v15_riff", None) if library else None
+    data = _call_bytes(function, _request_packet(
+        strokes, page_w_mm, page_h_mm, hairline), 12)
+    return data if data is not None and _valid_riff(data) else None
+
+
+def package_v15(strokes, page_w_mm, page_h_mm, title="", hairline=False):
+    """Return the complete Rust-built CorelDRAW v15 package, or ``None``."""
+    library = _load()
+    function = getattr(library, "narwhal_cdr_v15_package", None) if library else None
+    data = _call_bytes(function, _request_packet(
+        strokes, page_w_mm, page_h_mm, hairline, title), 22)
+    validator = getattr(library, "narwhal_cdr_v15_validate_package", None) if library else None
+    if data is None or validator is None:
+        return None
+    try:
+        source = (ctypes.c_uint8 * len(data)).from_buffer_copy(data)
+        return data if validator(source, len(data)) == 0 else None
     except (MemoryError, OverflowError, TypeError, ValueError, ctypes.ArgumentError):
         return None

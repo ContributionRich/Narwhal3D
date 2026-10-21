@@ -11,6 +11,7 @@ IMAGE_PATH = os.path.join(ARTIFACTS, "ui.png")
 SIDEBAR_HOVER_IMAGE = os.path.join(ARTIFACTS, "ui_sidebar_hover.png")
 SIDEBAR_FLYOUT_IMAGE = os.path.join(ARTIFACTS, "ui_sidebar_flyout.png")
 VIEWPORT_ARROW_IMAGE = os.path.join(ARTIFACTS, "ui_viewport_arrow.png")
+PRINT_SELECTION_IMAGE = os.path.join(ARTIFACTS, "ui_print_selection.png")
 REPORT_PATH = os.path.join(ARTIFACTS, "ui_report.txt")
 POLL_SECONDS = 0.25
 MAX_POLLS = 120
@@ -24,7 +25,7 @@ EXPECTED_TOOLBARS = (
     "Visibility", "Transform", "Curve Tools", "Surface Tools", "Solid Tools",
     "SubD Tools", "Mesh Tools", "Render", "Drafting",
 )
-EXPECTED_RIGHT_TABS = ("Layers", "Properties", "Display", "Bug Report")
+EXPECTED_RIGHT_TABS = ("Layers", "Properties", "Display", "Bug Report", "AI Assistant")
 EXPECTED_VIEWS = ("Top", "Front", "Perspective", "Right")
 
 
@@ -42,7 +43,7 @@ def _window_region(area):
 
 def _layout_ready():
     import bpy
-    from narwhal3d import ui
+    from narwhal3d import rightpanel, ui
 
     screen = getattr(bpy.context, "screen", None)
     if screen is None:
@@ -55,7 +56,7 @@ def _layout_ready():
         and ui.right_band_area() is not None
         and len(getattr(ui, "_sidebar_cells", ())) == 37
         and bool(ui.get_osnap_panel_boxes())
-        and len(getattr(ui, "_right_tab_boxes", ())) == 4
+        and len(getattr(ui, "_right_tab_boxes", ())) == len(rightpanel.TABS)
     )
 
 
@@ -130,6 +131,7 @@ def _inspect(layout_was_ready):
     from narwhal3d import rightpanel
     from narwhal3d import toolbars
     from narwhal3d import ui
+    from narwhal3d.state import app_state
 
     checks = []
 
@@ -150,7 +152,7 @@ def _inspect(layout_was_ready):
           f"{len(menu_names)}: {', '.join(menu_names)}")
     menu_enabled, menu_total = menubar.coverage(set(ui.COMMANDS))
     check("menu actions are runnable or explicitly marked TODO",
-          (menu_enabled, menu_total) == (179, 541), f"{menu_enabled}/{menu_total}")
+          (menu_enabled, menu_total) == (181, 543), f"{menu_enabled}/{menu_total}")
     file_groups = {row[1] for row in menubar.resource_rows("File")
                    if row[0] == "popup"}
     help_groups = {row[1] for row in menubar.resource_rows("Help")
@@ -335,7 +337,7 @@ def _inspect(layout_was_ready):
     live_body_width = max(0, getattr(right_region, "width", 0) - rightpanel.TAB_STRIP_W)
     drawn_tabs = len(getattr(ui, "_right_tab_boxes", ()))
     right_ok = (rightpanel.tab_names() == EXPECTED_RIGHT_TABS
-                and drawn_tabs == 4
+                and drawn_tabs == len(EXPECTED_RIGHT_TABS)
                 and body[2] - body[0] == live_body_width
                 and live_body_width > 0)
     check("right dock has exact tabs and a live-width body", right_ok,
@@ -384,6 +386,78 @@ def _inspect(layout_was_ready):
           and arrow_dark > 3 and arrow_colors >= 3,
           f"box={arrow_box}, dark={arrow_dark}, colors={arrow_colors}")
 
+    # A selected curve automatically shows its control points. Those markers are a
+    # later POST_PIXEL pass than the Print dialog and used to repaint over its white
+    # sheet, making the preview look as if it contained extra objects. Put a circle
+    # directly behind the sheet centre so this gate cannot pass by accidental layout.
+    print_ok = False
+    print_detail = "Top viewport unavailable"
+    top_view = next((area for area in views if ui.pane_label(area) == "Top"), None)
+    top_region = _window_region(top_view) if top_view is not None else None
+    created_names = []
+    if top_view is not None and top_region is not None:
+        try:
+            import bpy_extras.view3d_utils as view3d_utils
+            from mathutils import Vector
+
+            ui.set_active_pane(top_view)
+            dialog_state = ui.printdialog.DialogState()
+            dialog_layout = ui.printdialog.layout(
+                top_region.width, top_region.height, ui._ui_scale(), dialog_state)
+            page_w, page_h = ui.print2d.page_size(dialog_state.setup())
+            sheet = ui.printdialog.page_rect(dialog_layout.preview, page_w, page_h)
+            sheet_center = (sheet.x + sheet.w * 0.5, sheet.y + sheet.h * 0.5)
+            top_space = next(space for space in top_view.spaces if space.type == "VIEW_3D")
+            center = view3d_utils.region_2d_to_location_3d(
+                top_region, top_space.region_3d, sheet_center, Vector((0.0, 0.0, 0.0)))
+            before_names = {obj.name for obj in bpy.data.objects}
+            if app_state.active_command is not None:
+                app_state.cancel()
+            for line in ("Circle", f"w{center.x},{center.y},0", "5"):
+                app_state.feed_line(line)
+            created_names = sorted({obj.name for obj in bpy.data.objects} - before_names)
+            for obj in bpy.context.selected_objects:
+                obj.select_set(False)
+            for name in created_names:
+                bpy.data.objects[name].select_set(True)
+            opened_print = ui.open_print_dialog()
+            selected_page = ui._print_dialog.get("page") if ui._print_dialog else None
+            selected_strokes = len(selected_page.strokes) if selected_page is not None else -1
+            captured = opened_print and _capture_path(bpy, PRINT_SELECTION_IMAGE)
+            leaked_markers = -1
+            if captured and selected_page is not None:
+                live_layout = ui._print_dialog_layout(top_region)
+                live_sheet = ui.printdialog.page_rect(
+                    live_layout.preview, selected_page.width_mm, selected_page.height_mm)
+                pixels = _crop_pixels(
+                    bpy, PRINT_SELECTION_IMAGE,
+                    (top_region.x + live_sheet.x, top_region.y + live_sheet.y,
+                     top_region.x + live_sheet.x + live_sheet.w,
+                     top_region.y + live_sheet.y + live_sheet.h))
+                target = ui.CONTROL_POINT_COLOR[:3]
+                leaked_markers = sum(
+                    max(abs(rgb[i] - target[i]) for i in range(3)) <= 0.12
+                    for rgb in pixels)
+            for obj in bpy.context.selected_objects:
+                obj.select_set(False)
+            ui._print_dialog_refresh()
+            clear_page = ui._print_dialog.get("page") if ui._print_dialog else None
+            clear_strokes = len(clear_page.strokes) if clear_page is not None else -2
+            print_ok = (opened_print and captured and selected_strokes == clear_strokes
+                        and leaked_markers == 0)
+            print_detail = (f"strokes selected/clear={selected_strokes}/{clear_strokes}, "
+                            f"control-point pixels on sheet={leaked_markers}")
+        except Exception as exc:  # noqa: BLE001
+            print_detail = repr(exc)
+        finally:
+            ui.close_print_dialog()
+            for obj in bpy.context.selected_objects:
+                obj.select_set(False)
+            if created_names:
+                app_state.ctx.undo_last()
+    check("selected curves do not add content or overlays to unchecked Print preview",
+          print_ok, print_detail)
+
     registered, operator_total = _registered_operator_state(ui, bpy)
     check("Narwhal operator namespace is registered",
           operator_total > 0 and registered == operator_total,
@@ -405,6 +479,22 @@ def _inspect(layout_was_ready):
     )
     check("visible product and add-on metadata says Narwhal 3D", metadata_ok,
           metadata.get("name", "missing"))
+
+    assistant_index = rightpanel.tab_names().index("AI Assistant")
+    ui.set_right_tab(assistant_index)
+    bpy.ops.wm.redraw_timer(type="DRAW_WIN_SWAP", iterations=2)
+    assistant_layout = ui._ai.get("lay")
+    assistant_state = ui.ai_assistant_state()
+    assistant_ok = (assistant_layout is not None
+                    and "connection" in assistant_layout
+                    and "providers" not in assistant_layout
+                    and len(assistant_layout.get("buttons", ())) == 3
+                    and assistant_layout["transcript"][3] > assistant_layout["transcript"][1]
+                    and assistant_layout["input"][3] > assistant_layout["input"][1]
+                    and assistant_state.include_selection
+                    and assistant_state.status == "disconnected")
+    check("AI Assistant tab draws its honest local chat shell", assistant_ok,
+          "connection status, selection context, clipped transcript, input, controls")
 
     check("window screenshot captured", _capture(bpy), "artifacts/ui.png")
 

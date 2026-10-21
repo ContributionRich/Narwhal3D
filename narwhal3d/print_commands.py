@@ -1,4 +1,4 @@
-"""Print -- vector output of the active viewport to PDF, AI, SVG, or CDR.
+"""Print -- vector output of the active viewport to PDF, AI, SVG, DXF, or CDR.
 
 The command supports viewport or extents output, paper-to-model scale, output colour,
 and standard paper sizes. In the app it opens a dialog with a live preview; this module
@@ -23,7 +23,8 @@ from . import print2d
 TEXT = commands.TEXT
 
 PRINT_FILTERS = (("PDF", "*.pdf"), ("CorelDRAW 2015/X7", "*.cdr"),
-                 ("Adobe Illustrator", "*.ai"), ("SVG", "*.svg"))
+                 ("AutoCAD DXF", "*.dxf"), ("Adobe Illustrator", "*.ai"),
+                 ("SVG", "*.svg"))
 
 #: set by the app (ui) or a test: a callable returning the ACTIVE viewport as a
 #: `print2d.View`. Left None, the app's own `ui.print_view_spec` is used.
@@ -71,7 +72,7 @@ def _describe_scale(s):
 
 class PrintCmd(commands.Command):
     name = "Print"
-    description = ("Print the active viewport as vectors to PDF, AI, SVG, or CDR. "
+    description = ("Print the active viewport as vectors to PDF, AI, SVG, DXF, or CDR. "
                    "Press Enter to choose the file.")
     records_undo = False
     variable_points = False
@@ -131,13 +132,13 @@ class PrintCmd(commands.Command):
                 self.args.clear()
                 self.step_index = 0
                 return ("No file dialog is available (kdialog / zenity) -- type the "
-                        "file name (.pdf, .ai, .svg or .cdr)."), False
+                        "file name (.pdf, .ai, .svg, .dxf or .cdr)."), False
         path = os.path.abspath(os.path.expanduser(target.strip().strip('"')))
         ext = os.path.splitext(path)[1].lower()
         if not ext:
             path += ".pdf"
-        elif ext not in (".pdf", ".ai", ".svg", ".cdr"):
-            return (f"Print writes .pdf, .ai, .svg or .cdr -- not {ext}. (Paper printers "
+        elif ext not in (".pdf", ".ai", ".svg", ".dxf", ".cdr"):
+            return (f"Print writes .pdf, .ai, .svg, .dxf or .cdr -- not {ext}. (Paper printers "
                     f"are not implemented yet.)"), True
         if not os.path.isdir(os.path.dirname(path)):
             return f"the folder {os.path.dirname(path)!r} does not exist", True
@@ -171,6 +172,8 @@ class PrintCmd(commands.Command):
                + (f" (= {page.scale:g} mm per unit)" if scale == "Fit" else ""))
         if ext == ".cdr":
             msg += ", native CorelDRAW v15 (2015/X7 compatible)"
+        elif ext == ".dxf":
+            msg += ", exact degree-3 DXF SPLINE output in millimetres"
         if page.notes:
             msg += ". NOTE: " + "; ".join(page.notes)
         return msg, True

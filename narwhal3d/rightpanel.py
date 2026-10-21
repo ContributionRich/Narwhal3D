@@ -1,7 +1,7 @@
 """Pure layout and content model for Narwhal 3D's right dock.
 
-The dock has four working panels—Layers, Properties, Display, and Bug Report—in a
-fixed vertical tab strip. Sizes and colors are project UI constants. The panel body
+The dock has five working panels—Layers, Properties, Display, Bug Report, and AI
+Assistant—in a fixed vertical tab strip. Sizes and colors are project UI constants. The panel body
 uses all remaining live width so resizing the dock expands useful content rather than
 scaling icons. Unsupported controls are omitted instead of being drawn as dead chrome.
 """
@@ -98,6 +98,7 @@ TABS = (
     Tab("Properties", "narwhal-panel-properties.png", built=True, reason=""),
     Tab("Display", "narwhal-panel-display.png", built=True, reason=""),
     Tab("Bug Report", "narwhal-panel-report.png", built=True, reason=""),
+    Tab("AI Assistant", "narwhal-panel-assistant.png", built=True, reason=""),
 )
 
 #: Layers is the default working panel.

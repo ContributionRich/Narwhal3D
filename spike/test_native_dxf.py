@@ -167,6 +167,21 @@ def _():
         "direct native differs from Python (with layers dict)"
 
 
+@check("native encoder writes exact SPLINE chains and group-420 colors byte-identically")
+def _():
+    spline = [{"type": "SPLINE",
+               "control_points": [(0, 0, 0), (1, 2, 0), (2, 2, 0), (3, 0, 0),
+                                  (4, -2, 0), (5, -2, 0), (6, 0, 0)],
+               "closed": False, "layer": "Cut", "true_color": 0}]
+    layers = {"Cut": 0x1000000 + 0xFF0000}
+    encoded = native.encode_dxf(spline, layers)
+    assert encoded == _py_reference(spline, layers)
+    text = encoded.decode("latin-1")
+    assert "1\nAC1027\n" in text and "0\nSPLINE\n" in text
+    assert "420\n16711680\n" in text and "420\n0\n" in text
+    assert "71\n3\n72\n11\n73\n7\n" in text
+
+
 @check("one-pass dxf_encode_into: byte-identity with the Python writer (direct)")
 def _():
     _reset()
@@ -251,14 +266,14 @@ def _():
     assert native.encode_dxf(open_ents) == _py_reference(open_ents)
 
 
-@check("unknown entity type is a domain error (None, counter NOT moved)")
+@check("malformed SPLINE is a domain error (None, counter NOT moved)")
 def _():
     _reset()
     before = native._native_dxf_calls
-    bad = [{"type": "SPLINE", "layer": "0"}]
+    bad = [{"type": "SPLINE", "control_points": [(0, 0, 0)] * 5, "layer": "0"}]
     got = native.encode_dxf(bad)
     assert got is None, \
-        "an unknown entity type must be a domain error, not bytes: %r" % got
+        "a non-3n+1 SPLINE must be a domain error, not bytes: %r" % got
     assert native._native_dxf_calls == before, \
         "counter must not increment on a rejected input"
 
@@ -449,6 +464,44 @@ def _():
     assert e["layer"] == "layer1" and e["color"] == 5
     # A LAYER-free file: the entity names a free-string layer, not an index.
     assert got["layers"] == {}
+
+
+@check("native decode: modern ASCII SPLINE is structurally identical to Python")
+def _():
+    p = _write_text(
+        "modern_spline.dxf",
+        "0\nSECTION\n2\nHEADER\n9\n$ACADVER\n1\nAC1027\n0\nENDSEC\n"
+        "0\nSECTION\n2\nENTITIES\n"
+        "0\nSPLINE\n8\ncut\n62\n1\n420\n16711680\n"
+        "70\n9\n71\n3\n72\n8\n73\n4\n74\n0\n"
+        "40\n0\n40\n0\n40\n0\n40\n0\n40\n1\n40\n1\n40\n1\n40\n1\n"
+        "10\n0\n20\n0\n30\n0\n10\n1\n20\n0\n30\n0\n"
+        "10\n1\n20\n1\n30\n0\n10\n0\n20\n0\n30\n0\n"
+        "0\nHATCH\n8\ncut\n0\nENDSEC\n")
+    want = _py_read(p)
+    got = _native_read(p)
+    assert got == want, (got, want)
+    spline = got["entities"][0]
+    assert spline["type"] == "SPLINE" and spline["degree"] == 3
+    assert spline["closed"] and len(spline["knots"]) == 8
+    assert spline["color"] == 7 and spline["true_color"] == 0xFF0000
+    assert spline["points"][0] == spline["points"][-1]
+    assert got["skipped"] == {"HATCH": 1}
+
+
+@check("native decode: LINE group 420 true color survives packed decoding")
+def _():
+    p = _write_text(
+        "true_color_line.dxf",
+        "0\nSECTION\n2\nENTITIES\n"
+        "0\nLINE\n8\nRegister\n62\n7\n420\n0\n"
+        "10\n0\n20\n0\n30\n0\n11\n1\n21\n0\n31\n0\n"
+        "0\nENDSEC\n")
+    want = _py_read(p)
+    got = _native_read(p)
+    assert got == want, (got, want)
+    assert got["entities"][0]["color"] == 7
+    assert got["entities"][0]["true_color"] == 0x000000
 
 
 @check("native decode: LWPOLYLINE bulge (code 42) dropped but counted")

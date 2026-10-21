@@ -107,7 +107,7 @@ def _records(data: bytes, start: int, end: int,
         node = _Node(tag=tag, payload=payload)
         if tag in (b"LIST", b"RIFF") and len(payload) >= 4:
             node.kind = payload[:4]
-            if node.kind != b"cmpr":
+            if node.kind not in (b"cmpr", b"stlt"):
                 node.children = _records(
                     data, pos + 12, stop, lengths, state, depth + 1)
                 node.payload = b""
@@ -249,7 +249,8 @@ def _outlines(nodes: list[_Node]) -> dict[int, Outline]:
         if field_id != 1 or pos + 76 > len(data):
             continue
         line_type = _u16(data, pos)
-        if not (line_type & 0x20):
+        # Bit 0 means no outline; 0x20 only means scale-with-object.
+        if line_type & 0x01:
             continue
         width = _i32(data, pos + 6) / UNITS_PER_MM
         color = _rgb(data, pos + 64)
@@ -258,9 +259,18 @@ def _outlines(nodes: list[_Node]) -> dict[int, Outline]:
     return result
 
 
+def _own_records(nodes: list[_Node], tag: bytes) -> Generator[_Node, None, None]:
+    for node in nodes:
+        if node.tag == tag:
+            yield node
+        if node.tag == b"LIST" and node.kind in (b"obj ", b"grp "):
+            continue
+        yield from _own_records(node.children, tag)
+
+
 def _transform(node: _Node) -> tuple[float, float, float, float, float, float]:
-    """Read the first v15 affine `trfd` transform, in millimetres."""
-    for record in _all(node.children, b"trfd"):
+    """Read this object/group's first v15 affine `trfd`, excluding nested owners."""
+    for record in _own_records(node.children, b"trfd"):
         data = record.payload
         if len(data) < 20:
             continue
@@ -278,6 +288,13 @@ def _transform(node: _Node) -> tuple[float, float, float, float, float, float]:
             raise CDRReadError("CDR transform contains a non-finite value")
         return a, b, tx / UNITS_PER_MM, d, e, ty / UNITS_PER_MM
     return 1.0, 0.0, 0.0, 0.0, 1.0, 0.0
+
+
+def _compose(parent, child):
+    a, b, tx, d, e, ty = parent
+    f, g, ux, h, i, uy = child
+    return (a * f + b * h, a * g + b * i, a * ux + b * uy + tx,
+            d * f + e * h, d * g + e * i, d * ux + e * uy + ty)
 
 
 def _path_data(data: bytes, page_w: float, page_h: float,
@@ -355,7 +372,8 @@ def _path_data(data: bytes, page_w: float, page_h: float,
 
 
 def _object(node: _Node, layer: str, outlines: dict[int, Outline], page_w: float,
-            page_h: float, node_state: list[int]) -> Object:
+            page_h: float, node_state: list[int],
+            inherited=(1.0, 0.0, 0.0, 0.0, 1.0, 0.0)) -> Object:
     for loda in _all(node.children, b"loda"):
         kind, args = _args(loda.payload)
         if kind != 3 or 0x1E not in args:
@@ -368,10 +386,49 @@ def _object(node: _Node, layer: str, outlines: dict[int, Outline], page_w: float
             color = (0, 0, 0)
         if not math.isfinite(width) or width < 0:
             raise CDRReadError("invalid CDR outline width")
-        paths = _path_data(args[0x1E], page_w, page_h, _transform(node), node_state)
+        paths = _path_data(args[0x1E], page_w, page_h,
+                           _compose(inherited, _transform(node)), node_state)
         if paths:
             return Object(paths, layer, color, width, hairline)
     raise CDRReadError("the CDR contains an unsupported non-curve object")
+
+
+def _mcfg_dimensions(nodes: list[_Node]) -> tuple[float, float]:
+    record = next(_all(nodes, b"mcfg"), None)
+    if record is None or len(record.payload) < 20:
+        raise CDRReadError("CDR RIFF has no measurable mcfg page dimensions")
+    width = _i32(record.payload, 12) / UNITS_PER_MM
+    height = _i32(record.payload, 16) / UNITS_PER_MM
+    if not (math.isfinite(width) and math.isfinite(height)
+            and 0 < width <= 10_000 and 0 < height <= 10_000):
+        raise CDRReadError("CDR mcfg page dimensions are invalid")
+    return width, height
+
+
+def _collect_objects(nodes, layer, outlines, page_w, page_h, inherited,
+                     drawing, node_state, totals, depth=0):
+    if depth > MAX_DEPTH:
+        raise CDRReadError("CDR group nesting is too deep")
+    for node in nodes:
+        if node.tag != b"LIST":
+            continue
+        if node.kind == b"obj ":
+            if len(drawing.objects) >= MAX_OBJECTS:
+                raise CDRReadError("CDR has too many objects")
+            totals[0] += len(layer.encode("utf-8"))
+            if totals[0] > MAX_LAYER_BYTES:
+                raise CDRReadError("CDR reconstructed layer data exceeds the limit")
+            obj = _object(node, layer, outlines, page_w, page_h,
+                          node_state, inherited)
+            totals[1] += len(obj.paths)
+            if totals[1] > MAX_PATHS:
+                raise CDRReadError("CDR reconstructed data exceeds the limit")
+            drawing.objects.append(obj)
+        elif node.kind == b"grp ":
+            _collect_objects(
+                node.children, layer, outlines, page_w, page_h,
+                _compose(inherited, _transform(node)), drawing, node_state,
+                totals, depth + 1)
 
 
 def _read_cdr_python(riff: bytes, metadata_bytes: bytes) -> Drawing:
@@ -383,11 +440,10 @@ def _read_cdr_python(riff: bytes, metadata_bytes: bytes) -> Drawing:
     version = _u16(riff, 20) if riff[12:16] == b"vrsn" else 0
     match_w = re.search(r"<PageWidth>\s*(\d+)\s*</PageWidth>", metadata)
     match_h = re.search(r"<PageHeight>\s*(\d+)\s*</PageHeight>", metadata)
-    if not match_w or not match_h:
-        raise CDRReadError("CDR package has no measurable page dimensions")
-    page_w = int(match_w.group(1)) / UNITS_PER_MM
-    page_h = int(match_h.group(1)) / UNITS_PER_MM
-    if page_w <= 0 or page_h <= 0:
+    page_w = int(match_w.group(1)) / UNITS_PER_MM if match_w else None
+    page_h = int(match_h.group(1)) / UNITS_PER_MM if match_h else None
+    if ((page_w is not None and page_w <= 0)
+            or (page_h is not None and page_h <= 0)):
         raise CDRReadError("CDR page dimensions must be positive")
 
     record_state = [0]
@@ -401,6 +457,8 @@ def _read_cdr_python(riff: bytes, metadata_bytes: bytes) -> Drawing:
                 nodes.extend(expanded)
         elif node.tag != b"vrsn":
             nodes.append(node)
+    if page_w is None or page_h is None:
+        page_w, page_h = _mcfg_dimensions(nodes)
     outline_styles = _outlines(nodes)
     drawing = Drawing(page_w, page_h, version=version)
     pages = [node for node in nodes if node.tag == b"LIST" and node.kind == b"page"]
@@ -414,25 +472,15 @@ def _read_cdr_python(riff: bytes, metadata_bytes: bytes) -> Drawing:
     layers = [node for node in _all(drawing_pages[0].children, b"LIST")
               if node.kind == b"layr"]
     node_state = [0]
-    total_paths = 0
-    total_layer_bytes = 0
+    totals = [0, 0]  # layer-name bytes, paths
     for layer_index, layer_node in enumerate(layers, start=1):
         name = _layer_name(layer_node, f"Layer {layer_index}")
-        total_layer_bytes += len(name.encode("utf-8"))
-        if total_layer_bytes > MAX_LAYER_BYTES:
+        totals[0] += len(name.encode("utf-8"))
+        if totals[0] > MAX_LAYER_BYTES:
             raise CDRReadError("CDR reconstructed layer data exceeds the limit")
-        for child in layer_node.children:
-            if child.tag == b"LIST" and child.kind == b"obj ":
-                if len(drawing.objects) >= MAX_OBJECTS:
-                    raise CDRReadError("CDR has too many objects")
-                total_layer_bytes += len(name.encode("utf-8"))
-                if total_layer_bytes > MAX_LAYER_BYTES:
-                    raise CDRReadError("CDR reconstructed layer data exceeds the limit")
-                obj = _object(child, name, outline_styles, page_w, page_h, node_state)
-                total_paths += len(obj.paths)
-                if total_paths > MAX_PATHS:
-                    raise CDRReadError("CDR reconstructed data exceeds the limit")
-                drawing.objects.append(obj)
+        _collect_objects(
+            layer_node.children, name, outline_styles, page_w, page_h,
+            (1.0, 0.0, 0.0, 0.0, 1.0, 0.0), drawing, node_state, totals)
     if not drawing.objects:
         raise CDRReadError("the CDR contains no supported curve objects")
     return drawing
@@ -466,15 +514,20 @@ def _drawing_from_native(value: dict[str, Any]) -> Drawing:
 
 def read_cdr(path: str) -> Drawing:
     """Read v15 curves exactly, using Rust first and a complete Python fallback."""
+    metadata_info = None
     try:
         with zipfile.ZipFile(path) as archive:
             riff_info = archive.getinfo("content/riffData.cdr")
-            metadata_info = archive.getinfo("metadata/metadata.xml")
+            try:
+                metadata_info = archive.getinfo("metadata/metadata.xml")
+            except KeyError:
+                pass
             if (riff_info.file_size > MAX_RIFF_BYTES
-                    or metadata_info.file_size > MAX_METADATA_BYTES):
+                    or metadata_info is not None
+                    and metadata_info.file_size > MAX_METADATA_BYTES):
                 raise CDRReadError("CDR package member exceeds the size limit")
             riff = archive.read(riff_info)
-            metadata = archive.read(metadata_info)
+            metadata = archive.read(metadata_info) if metadata_info is not None else b""
             if len(riff) > MAX_RIFF_BYTES or len(metadata) > MAX_METADATA_BYTES:
                 raise CDRReadError("CDR package member exceeds the size limit")
     except (OSError, KeyError, zipfile.BadZipFile) as exc:
@@ -485,6 +538,7 @@ def read_cdr(path: str) -> Drawing:
     version = _u16(riff, 20) if riff[12:16] == b"vrsn" else 0
     if version != 1500:
         raise CDRReadError(f"native CDR reader currently supports version 15, not {version}")
+
     try:
         from . import native_cdr
         native = native_cdr.read_v15(riff, metadata)

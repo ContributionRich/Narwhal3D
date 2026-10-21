@@ -16,6 +16,7 @@ from . import coil
 from . import conics
 from . import catenary
 from . import tween
+from . import handlecurve
 # the Gumball's pure geometry/mode rules. bpy-free and rhino3dm-free, so
 # importing it here is safe everywhere; `GumballNumericCmd` needs its mode table.
 from . import gumball
@@ -612,8 +613,9 @@ class Command:
         if not selected:
             return 0
         taken = 0
-        while self.step_index < len(self.steps) \
-                and self.steps[self.step_index][1] in SELECTION_KINDS:
+        while (self.step_index < len(self.steps)
+               and self.steps[self.step_index][1] in SELECTION_KINDS
+               and taken < wanted and taken < len(selected)):
             kind = self.steps[self.step_index][1]
             if kind == OBJECTS_MULTI:
                 # the WHOLE selection, as a list -- and only ONE such step is
@@ -637,9 +639,18 @@ class Command:
                         except Exception:  # noqa: BLE001
                             pass
                 break
-            self.args.append(selected[0].name)
+            self.args.append(selected[taken].name)
             self.step_index += 1
             taken += 1
+        if (taken and self.step_index < len(self.steps)
+                and self.steps[self.step_index][1] in SELECTION_KINDS
+                and taken >= len(selected)):
+            selector = getattr(ctx, "select_by_names", None)
+            if callable(selector):
+                try:
+                    selector([])
+                except Exception:  # noqa: BLE001
+                    pass
         return taken
 
     def _feed_objects_step(self, text, ctx):
@@ -2311,6 +2322,35 @@ class CurveCmd(Command):
             geom = bridge.make_polyline(self.args, degree=3)
         _, display_name = ctx.add_geometry(geom, "Curve")
         return f"Created {display_name}", True
+
+
+class HandleCurveCmd(Command):
+    """Draw chained illustration-style cubic Bézier handles as one C1 NURBS."""
+    name="HandleCurve";description="Draw a chained Bézier handle curve.";variable_points=True
+    options=(opts.Option("AutoClose",opts.TOGGLE,default=False,help="Close near the first point."),
+             opts.Option("PersistentClose",opts.MODE,help="Remain closed while adding points."),
+             opts.Option("Close",opts.MODE,help="Close the curve smoothly."),
+             opts.Option("Sharp",opts.MODE,help="Close with a kink."),
+             opts.Option("Undo",opts.MODE,help="Reverse the last pick."))
+    @property
+    def prompt(self):
+        base=("First curve point:" if not self.args else
+              "Handle location:" if len(self.args)%2 else "Next curve point:")
+        return opts.format_prompt(base,self.options,self.opt)
+    def on_option_set(self,option,value,ctx):
+        if option.name=="AutoClose" and value:return "HandleCurve: AutoClose is not implemented yet",False
+        return super().on_option_set(option,value,ctx)
+    def on_mode(self,name,ctx):
+        if name=="Undo":
+            if self.args:self.args.pop();return "HandleCurve: reversed last pick",False
+            return "HandleCurve: nothing to undo",False
+        if name=="Close":self._close=True;return self.execute(ctx)
+        if name in ("PersistentClose","Sharp"):return f"HandleCurve: {name} is not implemented yet",False
+        return super().on_mode(name,ctx)
+    def execute(self,ctx):
+        try:curve=handlecurve.make_handle_curve(self.args,getattr(self,"_close",False))
+        except ValueError as exc:return f"HandleCurve: {exc}",True
+        _,display=ctx.add_geometry(curve,"HandleCurve");return f"Created {display} (C1 cubic NURBS)",True
 
 
 class InterpCrvCmd(Command):
@@ -4385,12 +4425,51 @@ class CurveThroughPtCmd(Command):
         return f"Created {display} from {len(points)} distinct points", True
 
 
+class CurveThroughSrfControlPtCmd(Command):
+    """Extract U/V surface control polygons as real curves."""
+    name="CurveThroughSrfControlPt";description="Fit curves through a surface control polygon."
+    steps=[("Select surface:",OBJECTS),("Point near control point:",POINT)];preselect_names=1
+    options=(opts.Option("Degree",opts.VALUE,default=3,value_kind="number",help="Output curve degree."),
+             opts.Option("CurveType",opts.ENUM,choices=("ControlPoint","Interpolated"),default="ControlPoint",help="Control or interpolated curve."),
+             opts.Option("Direction",opts.ENUM,choices=("U","V","Both"),default="U",help="Surface control-net direction."),
+             opts.Option("Toggle",opts.MODE,help="Toggle between U and V."))
+    def on_mode(self,name,ctx):
+        if name=="Toggle":
+            current=self.opt.get("Direction","U");self.opt["Direction"]="V" if current=="U" else "U"
+            return f"CurveThroughSrfControlPt: Direction={self.opt['Direction']}",False
+        return super().on_mode(name,ctx)
+    def execute(self,ctx):
+        name,near=self.args;geom=ctx.geom_by_name(name)
+        if isinstance(geom,r3.Brep):
+            if len(geom.Faces)!=1:return "CurveThroughSrfControlPt: polysurfaces are not implemented yet",True
+            surface=geom.Faces[0].ToNurbsSurface()
+        elif isinstance(geom,r3.NurbsSurface):surface=geom
+        else:return f"CurveThroughSrfControlPt: {name!r} is not a surface",True
+        grid=surface.Points
+        def point(u,v):
+            cp=grid.GetControlPoint(u,v);w=cp.W or 1.0;return (cp.X/w,cp.Y/w,cp.Z/w)
+        iu,iv=min(((u,v) for u in range(grid.CountU) for v in range(grid.CountV)),key=lambda q:math.dist(point(*q),near))
+        direction=self.opt.get("Direction","U");rows=[]
+        if direction in ("U","Both"):rows.append([point(u,iv) for u in range(grid.CountU)])
+        if direction in ("V","Both"):rows.append([point(iu,v) for v in range(grid.CountV)])
+        degree_value=float(self.opt.get("Degree",3));degree=int(degree_value)
+        if degree!=degree_value or degree<1:return "CurveThroughSrfControlPt: Degree must be a whole number >= 1",True
+        made=[]
+        try:
+            for row in rows:
+                curve=(bridge.make_interpolated_curve(row,degree=degree)
+                       if self.opt.get("CurveType")=="Interpolated" else bridge.make_polyline(row,degree=degree))
+                made.append(ctx.add_geometry(curve,"Curve")[1])
+        except ValueError as exc:return f"CurveThroughSrfControlPt: {exc}",True
+        return f"Created {len(made)} surface-control curve{'s' if len(made)!=1 else ''}",True
+
+
 class TweenCurvesCmd(Command):
     """Create compatible control-point tween curves between two inputs."""
 
     name = "TweenCurves"
     description = "Create intermediate curves between two compatible curves."
-    steps = [("Select first curve:", NAME), ("Select second curve:", NAME)]
+    steps = [("Select first curve:", OBJECTS), ("Select second curve:", OBJECTS)]
     preselect_names = 2
     options = (
         opts.Option("Number", opts.VALUE, default=1, value_kind="number",
@@ -4427,14 +4506,19 @@ class TweenCurvesCmd(Command):
         if not isinstance(first, r3.Curve) or not isinstance(second, r3.Curve):
             return "TweenCurves: select two curves", True
         method = self.opt.get("MatchMethod", "ControlPoint")
-        if method != "ControlPoint":
-            return f"TweenCurves: MatchMethod={method} is not implemented yet", True
+        if method == "Refit":
+            return "TweenCurves: MatchMethod=Refit is not implemented yet", True
         number_value = float(self.opt.get("Number", 1))
         number = int(number_value)
         if number != number_value or number < 1:
             return "TweenCurves: Number must be a whole number >= 1", True
         try:
-            curves = tween.compatible_tweens(first, second, number, flip=self._flip)
+            if method == "SamplePoints":
+                sample_value=float(self.opt.get("SampleNumber",100));sample_number=int(sample_value)
+                if sample_number!=sample_value:raise ValueError("SampleNumber must be a whole number")
+                curves=tween.sample_point_tweens(first,second,number,sample_number,flip=self._flip)
+            else:
+                curves = tween.compatible_tweens(first, second, number, flip=self._flip)
         except ValueError as exc:
             return f"TweenCurves: {exc}", True
         output_layer = self.opt.get("OutputLayer", "CurrentLayer")
@@ -4731,7 +4815,7 @@ class OffsetCmd(Command):
     # ThroughPoint). the command behavior: "Move the mouse cursor to decide the
     # offset direction, and click." and "ThroughPoint -- Offsets through a
     # picked point instead of at a distance."
-    steps = [("Curve:", NAME), ("Distance:", DISTANCE)]
+    steps = [("Select curve:", OBJECTS), ("Distance:", DISTANCE)]
     # the reference CAD application selects first, then runs the command; the selection
     # fallback these commands already tried was unreachable, because an
     # empty answer at a fixed prompt CANCELS (see Command.feed).
@@ -13934,8 +14018,9 @@ class PipeCmd(Command):
 def _build_registry():
     cmds: dict[str, Command] = {}
     for cls in [LineCmd, PointCmd, PointsCmd, CircleCmd, PolylineCmd, LinesCmd,
-                CurveCmd,
-                InterpCrvCmd, CurveThroughPolylineCmd, CurveThroughPtCmd, TweenCurvesCmd,
+                CurveCmd, HandleCurveCmd,
+                InterpCrvCmd, CurveThroughPolylineCmd, CurveThroughPtCmd,
+                CurveThroughSrfControlPtCmd, TweenCurvesCmd,
                 BoxCmd, SphereCmd, CylinderCmd, ConeCmd,
                 RectangleCmd, PlaneCmd, EllipseCmd, PolygonCmd, ArcCmd, ConicCmd,
                 ParabolaCmd, Parabola3PtCmd, HyperbolaCmd, CatenaryCmd,

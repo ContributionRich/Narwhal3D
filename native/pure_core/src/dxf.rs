@@ -1,11 +1,11 @@
-//! Native AutoCAD R12 ASCII DXF encoder and decoder.
+//! Native ASCII DXF encoder and decoder.
 //!
 //! Q106-06 (encoder). Two-pass checked encode (`narwhal_pure_core_dxf_size` /
 //! `narwhal_pure_core_dxf_encode`) that reproduces `dxf_writer.write_dxf`
-//! byte-for-byte: HEADER (`$ACADVER = AC1009`, `$INSUNITS = 4`), a LAYER
-//! table (one entry per layer, in the caller's order), an ENTITIES section
-//! (LINE / CIRCLE / ARC / POLYLINE with the R12 group-code ordering), then
-//! `EOF`. Every group code sits on its own line, the value on the next, the
+//! byte-for-byte: HEADER (`$ACADVER = AC1009`, or `AC1027` when exact cubic
+//! SPLINE chains are present; `$INSUNITS = 4`), a LAYER table (one entry per
+//! layer, in the caller's order), an ENTITIES section (LINE / CIRCLE / ARC /
+//! POLYLINE / SPLINE), then `EOF`. Every group code sits on its own line, the value on the next, the
 //! file is joined with `\n` and ends with a final `\n`, latin-1.
 //!
 //! Q106-07 (decoder). Two-pass checked decode (`narwhal_pure_core_dxf_decode_
@@ -33,6 +33,7 @@ const T_LINE: i64 = 0;
 const T_CIRCLE: i64 = 1;
 const T_ARC: i64 = 2;
 const T_POLYLINE: i64 = 3;
+const T_SPLINE: i64 = 4;
 
 /// A checked view over `len` bytes, or `None` on null / overflow.
 fn byte_span<'a>(ptr: *const u8, len: usize) -> Option<&'a [u8]> {
@@ -85,7 +86,8 @@ struct Dxf<'a> {
 /// from the packed `nums` buffer).
 /// The per-entity coordinate arity (the count of `f64`s this entity consumes
 /// from the packed `nums` buffer): LINE 6 (two points), CIRCLE 4 (center +
-/// radius), ARC 6 (center + radius + start + end), POLYLINE 3*points.
+/// radius), ARC 6 (center + radius + start + end), and POLYLINE/SPLINE
+/// 3*points. SPLINE is a connected cubic Bezier chain, so it has 3n+1 controls.
 fn entity_arity(t: i64, point_count: i64) -> Option<i64> {
     match t {
         T_LINE => Some(6),
@@ -93,6 +95,12 @@ fn entity_arity(t: i64, point_count: i64) -> Option<i64> {
         T_ARC => Some(6),
         T_POLYLINE => {
             if point_count < 2 {
+                return None;
+            }
+            point_count.checked_mul(3)
+        }
+        T_SPLINE => {
+            if point_count < 4 || (point_count - 1) % 3 != 0 {
                 return None;
             }
             point_count.checked_mul(3)
@@ -163,6 +171,15 @@ fn validate(r: &RawInput) -> Option<Dxf<'_>> {
         if !v.is_finite() {
             return None;
         }
+    }
+    // Colors are either ordinary ACI 0..255 or the adapter's unambiguous
+    // 0x1000000 + 0xRRGGBB true-color sentinel.
+    if lco
+        .iter()
+        .chain(col.iter())
+        .any(|value| !((0..=255).contains(value) || (0x100_0000..=0x1FF_FFFF).contains(value)))
+    {
+        return None;
     }
     Some(Dxf {
         layer_names: ln,
@@ -244,7 +261,11 @@ fn build_into(d: &Dxf, out: &mut [u8]) -> usize {
     p = emit(out, p, "0", "SECTION");
     p = emit(out, p, "2", "HEADER");
     p = emit(out, p, "9", "$ACADVER");
-    p = emit(out, p, "1", "AC1009");
+    let modern = d.entity_types.contains(&T_SPLINE)
+        || d.layer_colors.iter().any(|color| *color > 0xFF_FFFF)
+        || d.colors.iter().any(|color| *color > 0xFF_FFFF);
+    let version = if modern { "AC1027" } else { "AC1009" };
+    p = emit(out, p, "1", version);
     p = emit(out, p, "9", "$INSUNITS");
     p = emit(out, p, "70", "4");
     p = emit(out, p, "0", "ENDSEC");
@@ -262,7 +283,19 @@ fn build_into(d: &Dxf, out: &mut [u8]) -> usize {
         p = emit(out, p, "0", "LAYER");
         p = emit(out, p, "2", name);
         p = emit(out, p, "70", "0");
-        p = emit(out, p, "62", &d.layer_colors[i].to_string());
+        let is_true_color = d.layer_colors[i] > 0xFF_FFFF;
+        let layer_color = if is_true_color {
+            d.layer_colors[i] - 0x100_0000
+        } else {
+            d.layer_colors[i]
+        }
+        .to_string();
+        p = emit(
+            out,
+            p,
+            if is_true_color { "420" } else { "62" },
+            &layer_color,
+        );
         p = emit(out, p, "6", "CONTINUOUS");
         noff += len;
     }
@@ -284,14 +317,21 @@ fn build_into(d: &Dxf, out: &mut [u8]) -> usize {
         }
         let ll = d.layer_name_lens[lid] as usize;
         let lname = std::str::from_utf8(&d.layer_names[loff..loff + ll]).unwrap_or("");
-        let color = d.colors[e].to_string();
+        let is_true_color = d.colors[e] > 0xFF_FFFF;
+        let color = if is_true_color {
+            d.colors[e] - 0x100_0000
+        } else {
+            d.colors[e]
+        }
+        .to_string();
+        let color_code = if is_true_color { "420" } else { "62" };
         let n = d.nums;
         let fmt = |i: usize| crate::obj::format_9g(n[i]);
 
         if t == T_LINE {
             p = emit(out, p, "0", "LINE");
             p = emit(out, p, "8", lname);
-            p = emit(out, p, "62", &color);
+            p = emit(out, p, color_code, &color);
             p = emit(out, p, "10", &fmt(off));
             p = emit(out, p, "20", &fmt(off + 1));
             p = emit(out, p, "30", &fmt(off + 2));
@@ -301,7 +341,7 @@ fn build_into(d: &Dxf, out: &mut [u8]) -> usize {
         } else if t == T_CIRCLE {
             p = emit(out, p, "0", "CIRCLE");
             p = emit(out, p, "8", lname);
-            p = emit(out, p, "62", &color);
+            p = emit(out, p, color_code, &color);
             p = emit(out, p, "10", &fmt(off));
             p = emit(out, p, "20", &fmt(off + 1));
             p = emit(out, p, "30", &fmt(off + 2));
@@ -309,7 +349,7 @@ fn build_into(d: &Dxf, out: &mut [u8]) -> usize {
         } else if t == T_ARC {
             p = emit(out, p, "0", "ARC");
             p = emit(out, p, "8", lname);
-            p = emit(out, p, "62", &color);
+            p = emit(out, p, color_code, &color);
             p = emit(out, p, "10", &fmt(off));
             p = emit(out, p, "20", &fmt(off + 1));
             p = emit(out, p, "30", &fmt(off + 2));
@@ -320,7 +360,7 @@ fn build_into(d: &Dxf, out: &mut [u8]) -> usize {
             let pc = d.point_counts[e] as usize;
             p = emit(out, p, "0", "POLYLINE");
             p = emit(out, p, "8", lname);
-            p = emit(out, p, "62", &color);
+            p = emit(out, p, color_code, &color);
             p = emit(out, p, "66", "1");
 
             p = emit(out, p, "70", if d.closed_flags[e] != 0 { "1" } else { "0" });
@@ -332,6 +372,36 @@ fn build_into(d: &Dxf, out: &mut [u8]) -> usize {
                 p = emit(out, p, "30", &fmt(off + 3 * k + 2));
             }
             p = emit(out, p, "0", "SEQEND");
+        } else if t == T_SPLINE {
+            let pc = d.point_counts[e] as usize;
+            let spans = (pc - 1) / 3;
+            let knot_count = pc + 4;
+            p = emit(out, p, "0", "SPLINE");
+            p = emit(out, p, "8", lname);
+            p = emit(out, p, color_code, &color);
+            p = emit(out, p, "70", if d.closed_flags[e] != 0 { "1" } else { "0" });
+            p = emit(out, p, "71", "3");
+            p = emit(out, p, "72", &knot_count.to_string());
+            p = emit(out, p, "73", &pc.to_string());
+            p = emit(out, p, "74", "0");
+            for _ in 0..4 {
+                p = emit(out, p, "40", "0");
+            }
+            for span in 1..spans {
+                let knot = span.to_string();
+                for _ in 0..3 {
+                    p = emit(out, p, "40", &knot);
+                }
+            }
+            let final_knot = spans.to_string();
+            for _ in 0..4 {
+                p = emit(out, p, "40", &final_knot);
+            }
+            for k in 0..pc {
+                p = emit(out, p, "10", &fmt(off + 3 * k));
+                p = emit(out, p, "20", &fmt(off + 3 * k + 1));
+                p = emit(out, p, "30", &fmt(off + 3 * k + 2));
+            }
         }
         off += entity_arity(t, d.point_counts[e]).unwrap_or(0) as usize;
     }
@@ -542,19 +612,21 @@ pub unsafe extern "C" fn narwhal_pure_core_dxf_encode_into(
 const DFX_OUT_MAGIC: u32 = 0x44584631; // distinct from OBJ's 0x33445741
 const DFX_OUT_VERSION: u32 = 1;
 
-/// The decoded entity type codes (the encoder's four plus LWPOLYLINE, which
-/// only the reader models -- the writer never emits it).
+/// The decoded entity type codes (the encoder's four plus LWPOLYLINE and exact
+/// SPLINE, which only the reader models -- the writer never emits them).
 const DT_LINE: i64 = 0;
 const DT_CIRCLE: i64 = 1;
 const DT_ARC: i64 = 2;
 const DT_POLYLINE: i64 = 3;
 const DT_LWPOLYLINE: i64 = 4;
+const DT_SPLINE: i64 = 5;
+const TRUE_COLOR_FLAG: i64 = 1 << 24;
 
 /// Stable, distinct-from-the-encoder error codes. A non-zero return from the
 /// size query or decode means the caller must run the unchanged Python reader;
 /// it is never a partial result (no output is ever produced).
 const ERR_DXF_TRUNCATED: i32 = -20; // odd line count / code with no value
-const ERR_DXF_VERSION: i32 = -21; // binary sentinel or $ACADVER != AC1009
+const ERR_DXF_VERSION: i32 = -21; // binary sentinel or malformed $ACADVER
 const ERR_DXF_BADVALUE: i32 = -22; // an integer/float value will not parse
 
 /// One decoded entity. `layer` is the entity's own group-code-8 string (a
@@ -713,6 +785,14 @@ fn parse_f64_tok(tok: &[u8]) -> Option<f64> {
     std::str::from_utf8(tok).ok()?.trim().parse::<f64>().ok()
 }
 
+fn packed_true_color(tok: &[u8]) -> Result<i64, i32> {
+    let value = parse_i64_tok(tok).ok_or(ERR_DXF_BADVALUE)?;
+    if !(0..=0xFF_FFFF).contains(&value) {
+        return Err(ERR_DXF_BADVALUE);
+    }
+    Ok(TRUE_COLOR_FLAG + value)
+}
+
 /// Split a byte slice into lines the way Python text-mode iteration does
 /// (universal newlines: `\n`, `\r`, and `\r\n` each end one line), WITHOUT
 /// the spurious trailing empty line that a file ending in a newline would
@@ -803,6 +883,8 @@ fn parse_geom_body(pairs: &[(i64, &[u8])], a: usize, b: usize, typ: i64) -> Resu
                 layer = v.to_vec();
             } else if c == 62 {
                 color = parse_i64_tok(v).ok_or(ERR_DXF_BADVALUE)?;
+            } else if c == 420 {
+                color = packed_true_color(v)?;
             } else if c == 70 {
                 closed = parse_i64_tok(v).ok_or(ERR_DXF_BADVALUE)? & 1;
             } else if c == 42 {
@@ -838,6 +920,8 @@ fn parse_geom_body(pairs: &[(i64, &[u8])], a: usize, b: usize, typ: i64) -> Resu
                 layer = v.to_vec();
             } else if c == 62 {
                 color = parse_i64_tok(v).ok_or(ERR_DXF_BADVALUE)?;
+            } else if c == 420 {
+                color = packed_true_color(v)?;
             } else if (c == 10
                 || c == 20
                 || c == 30
@@ -866,6 +950,107 @@ fn parse_geom_body(pairs: &[(i64, &[u8])], a: usize, b: usize, typ: i64) -> Resu
     }
 }
 
+/// Parse one exact DXF SPLINE into a self-describing numeric block:
+/// degree, knot/control/weight counts, full knots, xyz controls, then weights.
+fn parse_spline(pairs: &[(i64, &[u8])], a: usize, b: usize) -> Result<DxfEnt, i32> {
+    let mut layer = b"0".to_vec();
+    let mut color = 7i64;
+    let mut flags = 0i64;
+    let mut degree: Option<i64> = None;
+    let mut declared_knots: Option<usize> = None;
+    let mut declared_points: Option<usize> = None;
+    let mut fit_count = 0i64;
+    let mut knots = Vec::new();
+    let mut weights = Vec::new();
+    let mut points: Vec<(f64, f64, f64)> = Vec::new();
+    let (mut x, mut y, mut z, mut started) = (0.0, 0.0, 0.0, false);
+    for &(code, value) in &pairs[a..b] {
+        match code {
+            8 => layer = value.to_vec(),
+            62 => color = parse_i64_tok(value).ok_or(ERR_DXF_BADVALUE)?,
+            420 => color = packed_true_color(value)?,
+            70 => flags = parse_i64_tok(value).ok_or(ERR_DXF_BADVALUE)?,
+            71 => degree = Some(parse_i64_tok(value).ok_or(ERR_DXF_BADVALUE)?),
+            72 => {
+                declared_knots = Some(
+                    usize::try_from(parse_i64_tok(value).ok_or(ERR_DXF_BADVALUE)?)
+                        .map_err(|_| ERR_DXF_BADVALUE)?,
+                );
+            }
+            73 => {
+                declared_points = Some(
+                    usize::try_from(parse_i64_tok(value).ok_or(ERR_DXF_BADVALUE)?)
+                        .map_err(|_| ERR_DXF_BADVALUE)?,
+                );
+            }
+            74 => fit_count = parse_i64_tok(value).ok_or(ERR_DXF_BADVALUE)?,
+            40 => knots.push(parse_f64_tok(value).ok_or(ERR_DXF_BADVALUE)?),
+            41 => weights.push(parse_f64_tok(value).ok_or(ERR_DXF_BADVALUE)?),
+            10 => {
+                if started {
+                    points.push((x, y, z));
+                }
+                x = parse_f64_tok(value).ok_or(ERR_DXF_BADVALUE)?;
+                y = 0.0;
+                z = 0.0;
+                started = true;
+            }
+            20 => y = parse_f64_tok(value).ok_or(ERR_DXF_BADVALUE)?,
+            30 => z = parse_f64_tok(value).ok_or(ERR_DXF_BADVALUE)?,
+            _ => {}
+        }
+    }
+    if started {
+        points.push((x, y, z));
+    }
+    let degree = degree.ok_or(ERR_DXF_BADVALUE)?;
+    let knot_count = declared_knots.ok_or(ERR_DXF_BADVALUE)?;
+    let point_count = declared_points.ok_or(ERR_DXF_BADVALUE)?;
+    if !(1..=11).contains(&degree)
+        || flags & 2 != 0
+        || fit_count < 0
+        || point_count <= degree as usize
+        || knot_count != knots.len()
+        || point_count != points.len()
+        || knot_count != point_count + degree as usize + 1
+        || (!weights.is_empty() && weights.len() != point_count)
+        || weights
+            .iter()
+            .any(|value| !value.is_finite() || *value <= 0.0)
+        || knots.iter().any(|value| !value.is_finite())
+        || knots.windows(2).any(|pair| pair[0] > pair[1])
+        || points
+            .iter()
+            .any(|point| !point.0.is_finite() || !point.1.is_finite() || !point.2.is_finite())
+    {
+        return Err(ERR_DXF_BADVALUE);
+    }
+    let capacity = 4usize
+        .checked_add(knot_count)
+        .and_then(|count| count.checked_add(point_count.checked_mul(3)?))
+        .and_then(|count| count.checked_add(weights.len()))
+        .ok_or(ERR_DXF_BADVALUE)?;
+    let mut coords = Vec::with_capacity(capacity);
+    coords.extend_from_slice(&[
+        degree as f64,
+        knot_count as f64,
+        point_count as f64,
+        weights.len() as f64,
+    ]);
+    coords.extend_from_slice(&knots);
+    for point in points {
+        coords.extend_from_slice(&[point.0, point.1, point.2]);
+    }
+    coords.extend_from_slice(&weights);
+    Ok(DxfEnt {
+        typ: DT_SPLINE,
+        layer,
+        color,
+        closed: flags & 1,
+        coords,
+    })
+}
+
 /// Parse a POLYLINE entity: its header (layer / color / closed flag up to the
 /// first code-0), then its VERTEX children (one point each, terminated by
 /// SEQEND or a non-VERTEX code-0), returning the entity and the index to
@@ -881,6 +1066,8 @@ fn parse_polyline(pairs: &[(i64, &[u8])], i: usize, hi: usize) -> Result<(DxfEnt
             layer = v.to_vec();
         } else if c == 62 {
             color = parse_i64_tok(v).ok_or(ERR_DXF_BADVALUE)?;
+        } else if c == 420 {
+            color = packed_true_color(v)?;
         } else if c == 70 {
             closed = parse_i64_tok(v).ok_or(ERR_DXF_BADVALUE)? & 1;
         }
@@ -931,10 +1118,9 @@ fn parse_polyline(pairs: &[(i64, &[u8])], i: usize, hi: usize) -> Result<(DxfEnt
     ))
 }
 
-/// Parse a complete ASCII R12 DXF file into its packed form, or a stable
-/// error code when the file is one the Python reader must handle (a binary
-/// sentinel, a non-`AC1009` `$ACADVER`, a truncated line count, or a value
-/// that will not parse). Mirrors `dxf_reader.read_dxf`'s ordering of checks.
+/// Parse a complete ASCII DXF file into its packed form, or a stable error code
+/// for a binary sentinel, malformed version, truncated input, or invalid exact
+/// entity. Unknown entity types remain counted rather than silently dropped.
 fn parse_dxf(data: &[u8]) -> Result<DxfOut, i32> {
     // REFUSE A BINARY DXF BY ITS MAGIC SENTINEL -- before any line splitting.
     if data.starts_with(b"AutoCAD Binary DXF\r\n\x1a\0") {
@@ -952,14 +1138,18 @@ fn parse_dxf(data: &[u8]) -> Result<DxfOut, i32> {
         let code = parse_i64_tok(lines[i]).ok_or(ERR_DXF_BADVALUE)?;
         pairs.push((code, lines[i + 1]));
     }
-    // REFUSE ANY $ACADVER THAT IS NOT AC1009 (an unsupported version).
+    // ASCII generations retain group-code framing; reject only malformed names.
     for i in 0..pairs.len() {
         if pairs[i].0 == 9
             && pairs[i].1 == b"$ACADVER"
             && i + 1 < pairs.len()
             && pairs[i + 1].0 == 1
         {
-            if pairs[i + 1].1 != b"AC1009" {
+            let value = pairs[i + 1].1;
+            if value.len() != 6
+                || !value.starts_with(b"AC")
+                || !value[2..].iter().all(u8::is_ascii_digit)
+            {
                 return Err(ERR_DXF_VERSION);
             }
             break;
@@ -985,14 +1175,15 @@ fn parse_dxf(data: &[u8]) -> Result<DxfOut, i32> {
         if pairs[i].0 == 0 && pairs[i].1 == b"LAYER" {
             let mut name: Option<&[u8]> = None;
             let mut color: i64 = 7;
-            let mut j = i + 1;
-            while j < hi && !(pairs[j].0 == 0 && pairs[j].1 == b"LAYER") {
-                if pairs[j].0 == 2 {
-                    name = Some(pairs[j].1);
-                } else if pairs[j].0 == 62 {
-                    color = parse_i64_tok(pairs[j].1).ok_or(ERR_DXF_BADVALUE)?;
+            let j = next_code0(&pairs, i + 1, hi);
+            for &(code, value) in &pairs[i + 1..j] {
+                if code == 2 {
+                    name = Some(value);
+                } else if code == 62 {
+                    color = parse_i64_tok(value).ok_or(ERR_DXF_BADVALUE)?;
+                } else if code == 420 {
+                    color = packed_true_color(value)?;
                 }
-                j += 1;
             }
             if let Some(n) = name {
                 layers.push((n.to_vec(), color));
@@ -1045,6 +1236,10 @@ fn parse_dxf(data: &[u8]) -> Result<DxfOut, i32> {
             let (ent, next_i) = parse_polyline(&pairs, i, hi)?;
             ents.push(ent);
             i = next_i;
+        } else if val == b"SPLINE" {
+            let j = next_code0(&pairs, i + 1, hi);
+            ents.push(parse_spline(&pairs, i + 1, j)?);
+            i = j;
         } else {
             // BLOCK / INSERT / TEXT / POINT / ... -- count it, skip its body.
             let count = skipped.entry(val.to_vec()).or_insert(0i64);
@@ -1185,6 +1380,23 @@ mod tests {
         }
     }
 
+    fn spline_fixture() -> Fix {
+        Fix {
+            layer_names: b"Cut".to_vec(),
+            layer_name_lens: vec![3],
+            layer_colors: vec![0x100_0000 + 0xFF_0000],
+            entity_types: vec![T_SPLINE],
+            layer_ids: vec![0],
+            colors: vec![0x100_0000],
+            nums: vec![
+                0.0, 0.0, 0.0, 1.0, 2.0, 0.0, 2.0, 2.0, 0.0, 3.0, 0.0, 0.0, 4.0, -2.0, 0.0, 5.0,
+                -2.0, 0.0, 6.0, 0.0, 0.0,
+            ],
+            point_counts: vec![7],
+            closed_flags: vec![0],
+        }
+    }
+
     fn raw(f: &Fix) -> RawInput {
         RawInput {
             layer_names: f.layer_names.as_ptr(),
@@ -1214,6 +1426,50 @@ mod tests {
         let got = String::from_utf8(encode(&fixture())).unwrap();
         assert!(got.contains("AC1009"), "{got:?}");
         assert!(got.contains("$INSUNITS\n70\n4\n"), "{got:?}");
+    }
+
+    #[test]
+    fn spline_selects_modern_header_and_preserves_cubic_knots_and_true_colors() {
+        let got = String::from_utf8(encode(&spline_fixture())).unwrap();
+        assert!(got.contains("1\nAC1027\n"), "{got:?}");
+        assert!(got.contains("420\n16711680\n"), "{got:?}");
+        assert!(got.contains("420\n0\n"), "{got:?}");
+        assert!(got.contains("0\nSPLINE\n8\nCut\n"), "{got:?}");
+        assert!(got.contains("71\n3\n72\n11\n73\n7\n74\n0\n"), "{got:?}");
+        assert!(
+            got.contains(
+                "40\n0\n40\n0\n40\n0\n40\n0\n40\n1\n40\n1\n40\n1\n40\n2\n40\n2\n40\n2\n40\n2\n"
+            ),
+            "{got:?}"
+        );
+    }
+
+    #[test]
+    fn true_color_without_spline_still_selects_modern_header() {
+        let mut f = fixture();
+        f.layer_colors[0] = 0x100_0000 + 0x12_3456;
+        f.colors[0] = 0x100_0000;
+        let got = String::from_utf8(encode(&f)).unwrap();
+        assert!(got.contains("1\nAC1027\n"), "{got:?}");
+        assert!(got.contains("420\n1193046\n"), "{got:?}");
+        assert!(got.contains("420\n0\n"), "{got:?}");
+    }
+
+    #[test]
+    fn invalid_aci_and_true_color_sentinels_are_rejected() {
+        for value in [-1, 256, 0xFF_FFFF, 0x200_0000] {
+            let mut f = fixture();
+            f.colors[0] = value;
+            assert!(validate(&raw(&f)).is_none(), "accepted {value}");
+        }
+    }
+
+    #[test]
+    fn malformed_cubic_spline_control_count_is_rejected() {
+        let mut f = spline_fixture();
+        f.point_counts[0] = 5;
+        f.nums.truncate(15);
+        assert!(validate(&raw(&f)).is_none());
     }
 
     #[test]
@@ -1634,6 +1890,43 @@ mod tests {
     }
 
     #[test]
+    fn decode_modern_ascii_spline_preserves_exact_nurbs_data() {
+        let out = decode_text(concat!(
+            "0\nSECTION\n2\nHEADER\n9\n$ACADVER\n1\nAC1027\n0\nENDSEC\n",
+            "0\nSECTION\n2\nTABLES\n0\nTABLE\n2\nLAYER\n",
+            "0\nLAYER\n2\nRegister\n62\n51\n6\nContinuous\n",
+            "0\nLAYER\n2\ncut\n62\n91\n6\nContinuous\n0\nENDTAB\n0\nENDSEC\n",
+            "0\nSECTION\n2\nENTITIES\n",
+            "0\nSPLINE\n8\ncut\n62\n1\n420\n16711680\n",
+            "70\n9\n71\n3\n72\n8\n73\n4\n74\n0\n",
+            "40\n0\n40\n0\n40\n0\n40\n0\n40\n1\n40\n1\n40\n1\n40\n1\n",
+            "10\n0\n20\n0\n30\n0\n10\n1\n20\n0\n30\n0\n",
+            "10\n1\n20\n1\n30\n0\n10\n0\n20\n0\n30\n0\n",
+            "0\nHATCH\n8\ncut\n0\nENDSEC\n"
+        ));
+        assert_eq!(out.ents.len(), 1);
+        let spline = &out.ents[0];
+        assert_eq!(spline.typ, DT_SPLINE);
+        assert_eq!(spline.layer, b"cut".to_vec());
+        assert_eq!(spline.color, TRUE_COLOR_FLAG + 0xFF0000);
+        assert_eq!(spline.closed, 1);
+        assert_eq!(
+            out.layers,
+            vec![(b"Register".to_vec(), 51), (b"cut".to_vec(), 91)]
+        );
+        assert_eq!(&spline.coords[..4], &[3.0, 8.0, 4.0, 0.0]);
+        assert_eq!(
+            &spline.coords[4..12],
+            &[0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0]
+        );
+        assert_eq!(
+            &spline.coords[12..],
+            &[0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0]
+        );
+        assert_eq!(out.skipped, vec![(b"HATCH".to_vec(), 1)]);
+    }
+
+    #[test]
     fn decode_polyline_and_lwpolyline_both_closed() {
         // A POLYLINE (VERTEX/SEQEND) and an LWPOLYLINE in the same file, both
         // closed: each must carry its own closed flag and point run.
@@ -1720,10 +2013,10 @@ mod tests {
     }
 
     #[test]
-    fn decode_non_r12_acadver_is_rejected() {
+    fn decode_malformed_ascii_acadver_is_rejected() {
         let out = parse_dxf(
             concat!(
-                "0\nSECTION\n2\nHEADER\n9\n$ACADVER\n1\nAC1012\n0\nENDSEC\n",
+                "0\nSECTION\n2\nHEADER\n9\n$ACADVER\n1\nACBAD!\n0\nENDSEC\n",
                 "0\nSECTION\n2\nENTITIES\n0\nENDSEC\n"
             )
             .as_bytes(),

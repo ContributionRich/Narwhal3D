@@ -23,6 +23,8 @@ straight back into ``write_dxf``.
 
 Also handled (the writer does not emit these, but a real DXF has them):
 
+* ``SPLINE`` -> exact NURBS degree, full DXF knot vector, control points, and
+  optional rational weights. No fit-point or polyline approximation is substituted.
 * ``LWPOLYLINE`` -> ``{"type":"LWPOLYLINE","points":[(x,y,z),...],
   "closed": bool, "layer","color"}``.  ``closed`` is flag 70 bit 0 (value 1);
   a bulge (code 42) is read and DROPPED but COUNTED in ``skipped["bulge"]`` --
@@ -37,11 +39,9 @@ the header has no ``$INSUNITS``.
 
 REFUSED: a BINARY DXF (the byte sentinel ``AutoCAD Binary DXF\r\n\x1a\0``)
 raises :class:`FileFormatError` *before* any line splitting -- a text reader
-would mis-parse those bytes.  In addition, any ``$ACADVER`` that is not the
-ASCII R12 (``AC1009``) the writer produces is an unsupported version and is
-also refused: a non-``AC1009`` name is no longer treated as *proof of binary*
-(that is what the sentinel check is for), but we still never mis-parse a
-different encoding byte-for-byte.
+would mis-parse those bytes. ASCII ``$ACADVER`` generations retain the same
+group-code framing; this reader imports only explicitly supported entity records
+and counts every other type, while malformed version markers are refused.
 
 The entity, layer, and ``insunits`` contract mirrors the writer exactly so the
 two modules form a true round-trip pair.
@@ -148,7 +148,7 @@ def read_dxf(path):
     """Read *path* as a DXF -> the dict described in the module docstring.
 
     Raises :class:`FileFormatError` for a binary DXF (by its byte sentinel),
-    for any unsupported ``$ACADVER`` (not ASCII R12), or a truncated file.
+    malformed ASCII version markers, malformed exact entities, or a truncated file.
 
     When an ABI-compatible native decoder is available its (struct-identical)
     output is used; on any native unavailability or rejection the unchanged
@@ -189,19 +189,17 @@ def read_dxf(path):
         lines = [ln.rstrip("\r\n") for ln in fh]
     pairs = _pairs(lines)
 
-    # REFUSE ANY $ACADVER THAT IS NOT THE ASCII R12 WE MODEL -- the writer is
-    # ASCII R12 (AC1009). A different $ACADVER is an unsupported version
-    # (ASCII or binary) and would be mis-parsed; the binary encodings began
-    # with R13. A non-AC1009 name is no longer *proof of binary* (that is the
-    # sentinel check above) -- but we still refuse to mis-parse it.
+    # ASCII DXF preserves group-code framing across versions. The reader imports
+    # only explicitly supported entity records and reports every other type, so a
+    # newer ASCII producer is safe; malformed/non-ASCII version names still fail.
     for i, (code, val) in enumerate(pairs):
         if code == 9 and val == "$ACADVER" and i + 1 < len(pairs) \
                 and pairs[i + 1][0] == 1:
             acadver = pairs[i + 1][1]
-            if acadver != "AC1009":
+            if not (len(acadver) == 6 and acadver.startswith("AC")
+                    and acadver[2:].isdigit()):
                 raise FileFormatError(
-                    "unsupported DXF version ($ACADVER=%s) -- this reader is "
-                    "ASCII R12 (AC1009) only" % acadver)
+                    "malformed ASCII DXF version ($ACADVER=%s)" % acadver)
             break
 
     # --- insunits ($INSUNITS -> int or None) ------------------------------
@@ -214,21 +212,29 @@ def read_dxf(path):
 
     # --- layers (LAYER table: name -> aci color 62) -----------------------
     layers = {}
+    layer_true_colors = {}
     lo, hi = _section_range(pairs, "TABLES")
     i = lo
     while i < hi:
         if pairs[i][0] == 0 and pairs[i][1] == "LAYER":
             name = None
             color = 7
-            j = i + 1
-            while j < hi and not (pairs[j][0] == 0 and pairs[j][1] == "LAYER"):
-                if pairs[j][0] == 2:
-                    name = pairs[j][1]
-                elif pairs[j][0] == 62:
-                    color = int(pairs[j][1])
-                j += 1
+            true_color = None
+            j = _next_code0(pairs, i + 1, hi)
+            for code, value in pairs[i + 1:j]:
+                if code == 2:
+                    name = value
+                elif code == 62:
+                    color = int(value)
+                elif code == 420:
+                    true_color = int(value)
+                    color = 7
+                    if not 0 <= true_color <= 0xFFFFFF:
+                        raise FileFormatError("DXF layer true color is outside 0x000000..0xFFFFFF")
             if name is not None:
                 layers[name] = color
+                if true_color is not None:
+                    layer_true_colors[name] = true_color
             i = j
         else:
             i += 1
@@ -252,7 +258,7 @@ def read_dxf(path):
 
         t = val
 
-        if t in ("LINE", "CIRCLE", "ARC", "LWPOLYLINE"):
+        if t in ("LINE", "CIRCLE", "ARC", "LWPOLYLINE", "SPLINE"):
             ent = {"type": t, "layer": "0", "color": 7}
             have = {}          # group code -> [values in order]
             bulge = 0
@@ -264,11 +270,20 @@ def read_dxf(path):
                     ent["layer"] = v
                 elif c == 62:
                     ent["color"] = int(v)
-                elif c == 70 and t == "LWPOLYLINE":
+                elif c == 420:
+                    true_color = int(v)
+                    ent["color"] = 7
+                    if not 0 <= true_color <= 0xFFFFFF:
+                        raise FileFormatError(
+                            "DXF entity true color is outside 0x000000..0xFFFFFF")
+                    ent["true_color"] = true_color
+                elif c == 70 and t in ("LWPOLYLINE", "SPLINE"):
                     closed = (int(v) & 1) != 0       # bit 0 (value 1) = closed
+                    have.setdefault(c, []).append(float(v))
                 elif c == 42 and t == "LWPOLYLINE":
                     bulge += 1
-                elif c in (10, 20, 30, 11, 21, 31, 40, 50, 51):
+                elif c in (10, 20, 30, 11, 21, 31, 40, 41, 50, 51,
+                           71, 72, 73, 74):
                     have.setdefault(c, []).append(float(v))
             if bulge:
                 skipped["bulge"] = skipped.get("bulge", 0) + bulge
@@ -283,6 +298,32 @@ def read_dxf(path):
                 ent["radius"] = have[40][0]
                 ent["start_deg"] = have[50][0]
                 ent["end_deg"] = have[51][0]
+            elif t == "SPLINE":
+                flags = int(have.get(70, [0])[0])
+                degree = int(have.get(71, [0])[0])
+                knot_count = int(have.get(72, [0])[0])
+                point_count = int(have.get(73, [0])[0])
+                fit_count = int(have.get(74, [0])[0])
+                knots = have.get(40, [])
+                xs, ys = have.get(10, []), have.get(20, [])
+                zs = have.get(30, [0.0] * len(xs))
+                weights = have.get(41, [])
+                if flags & 2:
+                    raise FileFormatError("periodic DXF SPLINE is not implemented exactly")
+                if not 1 <= degree <= 11 or point_count <= degree:
+                    raise FileFormatError("DXF SPLINE has an invalid degree/control count")
+                if (knot_count != len(knots) or point_count != len(xs)
+                        or len(ys) != point_count or len(zs) != point_count
+                        or fit_count < 0 or knot_count != point_count + degree + 1
+                        or weights and (len(weights) != point_count
+                                           or any(weight <= 0 for weight in weights))
+                        or any(knots[n] > knots[n + 1] for n in range(len(knots) - 1))):
+                    raise FileFormatError("DXF SPLINE has inconsistent exact NURBS data")
+                ent.update({
+                    "degree": degree, "knots": knots,
+                    "points": list(zip(xs, ys, zs)), "weights": weights,
+                    "closed": closed,
+                })
             elif t == "LWPOLYLINE":
                 # vertices are ordered 10,20,[42],[30]; a new vertex starts at 10
                 # (z is per-vertex, so it must be walked in order, not grouped).
@@ -318,6 +359,13 @@ def read_dxf(path):
                     ent["layer"] = v
                 elif c == 62:
                     ent["color"] = int(v)
+                elif c == 420:
+                    true_color = int(v)
+                    ent["color"] = 7
+                    if not 0 <= true_color <= 0xFFFFFF:
+                        raise FileFormatError(
+                            "DXF entity true color is outside 0x000000..0xFFFFFF")
+                    ent["true_color"] = true_color
                 elif c == 70:
                     ent["closed"] = (int(v) & 1) != 0    # bit 0 = closed
             # walk VERTEX ... SEQEND, collecting one point per VERTEX
@@ -354,4 +402,5 @@ def read_dxf(path):
             i = _next_code0(pairs, i + 1, hi)
 
     return {"entities": entities, "layers": layers,
+            "layer_true_colors": layer_true_colors,
             "insunits": insunits, "skipped": skipped}

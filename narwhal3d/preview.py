@@ -43,6 +43,7 @@ import math
 #: circle at any practical zoom; the real geometry is built by rhino3dm later, so
 #: this only affects the preview's smoothness.
 CIRCLE_SEGMENTS = 64
+NATIVE_COIL_PREVIEW_MIN_POINTS = 241
 
 
 # ---------------------------------------------------------------------------
@@ -986,16 +987,45 @@ def preview_coil(args, cursor, plane, cmd=None, spiral=False):
     total = (-1.0 if getattr(cmd, "_reverse_twist", False) else 1.0) * 2.0 * math.pi * turns
     count = max(16, min(2048, int(math.ceil(turns * 24.0))))
     flat = bool(getattr(cmd, "_flat", False))
-    points = []
-    for index in range(count + 1):
-        fraction = index / count
-        theta = total * fraction
-        radius = radius0 + (radius1 - radius0) * fraction
-        axial = 0.0 if flat else axis_length * fraction
-        points.append(tuple(start[k] + radius * (math.cos(theta) * x[k]
-                                                   + math.sin(theta) * y[k])
-                            + axial * axis[k] for k in range(3)))
+    points = None
+    if count + 1 >= NATIVE_COIL_PREVIEW_MIN_POINTS:
+        try:
+            from . import native_coil
+            points = native_coil.preview_points(
+                start,end,x,radius0,radius1,turns,
+                getattr(cmd,"_reverse_twist",False),flat,count+1)
+        except Exception:  # noqa: BLE001 -- pure Python preview remains fallback
+            points = None
+    if points is None:
+        points = []
+        for index in range(count + 1):
+            fraction = index / count
+            theta = total * fraction
+            radius = radius0 + (radius1 - radius0) * fraction
+            axial = 0.0 if flat else axis_length * fraction
+            points.append(tuple(start[k] + radius * (math.cos(theta) * x[k]
+                                                       + math.sin(theta) * y[k])
+                                + axial * axis[k] for k in range(3)))
     return [[start, end], points]
+
+
+def preview_handlecurve(args, cursor, plane):
+    values=[tuple(value) for value in (args or []) if _is_point(value)]
+    if not values:return []
+    guides=[values+[tuple(cursor)]]
+    complete=values[:-1] if len(values)%2 else values
+    if len(complete)<4:return guides
+    anchors=complete[0::2];handles=complete[1::2];curve=[]
+    for i in range(len(anchors)-1):
+        a0,a1=anchors[i],anchors[i+1];h0,h1=handles[i],handles[i+1]
+        incoming=tuple(2*a1[k]-h1[k] for k in range(3))
+
+        for sample in range(17):
+            if i and sample==0:continue
+            t=sample/16;s=1-t
+            curve.append(tuple(s**3*a0[k]+3*s*s*t*h0[k]+3*s*t*t*incoming[k]+t**3*a1[k]
+                               for k in range(3)))
+    return guides+([curve] if curve else [])
 
 
 def _quadratic_preview(p0, p1, p2):
@@ -1225,6 +1255,7 @@ PREVIEWS = {
     # shares the preview because it uses the same builder.
     "curve": preview_curve,
     "interpcrv": preview_curve,
+    "handlecurve": preview_handlecurve,
     "circle": preview_circle,
     "box": preview_box,
     "sphere": preview_sphere,

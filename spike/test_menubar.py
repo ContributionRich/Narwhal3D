@@ -57,7 +57,7 @@ EXPECTED_RUNNABLE_COUNTS = {
     "File": 8,
     "Edit": 47,
     "View": 11,
-    "Curve": 45,
+    "Curve": 47,
     "Surface": 12,
     "SubD": 0,
     "Solid": 18,
@@ -102,7 +102,7 @@ def walk_rows(rows, path=()):
 
 
 print("\n-- live registry and authored structure --")
-check(len(REGISTERED) == 179, "the bare-package live registry has 179 commands",
+check(len(REGISTERED) == 181, "the bare-package live registry has 181 commands",
       repr(len(REGISTERED)))
 check(SIBLING_PINS <= REGISTERED,
       "commands unique to every sibling provider are present",

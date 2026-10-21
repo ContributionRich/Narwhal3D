@@ -41,9 +41,22 @@ checks = 0
 def check(condition, label):
     global checks
     checks += 1
-    print(f"  {'ok  ' if condition else 'FAIL'} {label}")
+    print("  ok  " if condition else "  FAIL", label)
     if not condition:
         raise AssertionError(label)
+
+
+def expanded_records(riff):
+    result = []
+    pos = 12
+    while pos + 8 <= len(riff):
+        length = int.from_bytes(riff[pos + 4:pos + 8], "little")
+        payload = riff[pos + 8:pos + 8 + length]
+        if riff[pos:pos + 4] == b"LIST" and payload[:4] == b"cmpr":
+            span = int.from_bytes(payload[4:8], "little")
+            result.append(zlib.decompress(payload[28:28 + span - 8]))
+        pos += 8 + length + (length & 1)
+    return b"".join(result)
 
 
 check(rust_tests.returncode == 0, "Rust CDR unit tests pass from tracked vendored source")
@@ -66,7 +79,7 @@ try:
             closed=True, rgb=(0.0, 0.0, 1.0), width_mm=0.5, layer="Outline"),
     ]
     check(native.status() == f"ready: {LIB}",
-          "adapter verifies ABI 1 on the exact source-built library")
+          "adapter verifies ABI 3 on the exact source-built library")
 
     old_fallback = writer._riff_python
     old_reader_fallback = reader._read_cdr_python
@@ -113,6 +126,11 @@ try:
         writer._riff_python = old_fallback
         reader._read_cdr_python = old_reader_fallback
 
+    # Security mutations below target individual RIFF records. Keep those probes
+    # on the legacy uncompressed fixture so each malformed field remains directly
+    # addressable; production package assertions above exercise the compressed ABI.
+    sample_riff = old_fallback(strokes, 100.0, 80.0, True)
+
     library = ctypes.CDLL(str(LIB))
     function = library.narwhal_cdr_v15_riff
     function.argtypes = [
@@ -129,6 +147,18 @@ try:
         ctypes.POINTER(ctypes.c_size_t),
     ]
     read_function.restype = ctypes.c_int32
+    validate_package = library.narwhal_cdr_v15_validate_package
+    validate_package.argtypes = [ctypes.POINTER(ctypes.c_uint8), ctypes.c_size_t]
+    validate_package.restype = ctypes.c_int32
+
+    package_bytes = native.package_v15(strokes, 100.0, 80.0, "Validator", True)
+    package_buffer = (ctypes.c_uint8 * len(package_bytes)).from_buffer_copy(package_bytes)
+    damaged_package = bytearray(package_bytes)
+    damaged_package[-22:-18] = b"BAD!"
+    damaged_buffer = (ctypes.c_uint8 * len(damaged_package)).from_buffer_copy(damaged_package)
+    check(validate_package(package_buffer, len(package_bytes)) == 0
+          and validate_package(damaged_buffer, len(damaged_package)) == -2,
+          "Rust package validator rejects a damaged ZIP end record")
 
     bad = (ctypes.c_uint8 * 1)(0xff)
     required = ctypes.c_size_t(123)
@@ -436,6 +466,24 @@ try:
         native.riff_v15 = original_native
         writer._riff_python = old_fallback
 
+    original_package = native.package_v15
+    native.package_v15 = lambda *_a, **_k: None
+    writer._riff_python = lambda *_a, **_k: (_ for _ in ()).throw(
+        AssertionError("legacy Python writer must not run"))
+    try:
+        with tempfile.TemporaryDirectory(prefix="narwhal_no_cdr_fallback_") as temporary:
+            refused_path = Path(temporary) / "refused.cdr"
+            try:
+                writer.write_cdr(str(refused_path), strokes, 100.0, 80.0)
+            except RuntimeError as error:
+                refused = "legacy RIFF subset" in str(error) and not refused_path.exists()
+            else:
+                refused = False
+        check(refused, "production writer refuses when the Rust package ABI is unavailable")
+    finally:
+        native.package_v15 = original_package
+        writer._riff_python = old_fallback
+
     close_widths = [
         vector.Stroke(beziers=strokes[0].beziers, rgb=(0.0, 0.0, 0.0),
                       width_mm=0.25001, layer="Cut"),
@@ -443,8 +491,8 @@ try:
                       width_mm=0.25002, layer="Cut"),
     ]
     close_data = native.riff_v15(close_widths, 100.0, 80.0, False)
-    check(close_data is not None and close_data.count(b"outl") == 2,
-          "native style identity matches Python before coordinate quantization")
+    check(close_data is not None and expanded_records(close_data).count(b"outl") == 3,
+          "two native styles remain distinct beside the required default no-outline style")
 
 
     many = strokes * 250
@@ -454,8 +502,9 @@ try:
     started = time.perf_counter()
     rust_data = native.riff_v15(many, 100.0, 80.0, False)
     rust_write_ms = (time.perf_counter() - started) * 1000
-    check(rust_data is not None and rust_data[:12] == python_data[:12],
-          "large native and Python outputs share the genuine RIFF/CDRF envelope")
+    check(rust_data is not None and rust_data[:4] == python_data[:4] == b"RIFF"
+          and rust_data[8:12] == python_data[8:12] == b"CDRF",
+          "large native and legacy fixtures share the genuine RIFF/CDRF envelope")
     print(f"  measured 500-stroke RIFF: Python {python_write_ms:.3f} ms, "
           f"native adapter {rust_write_ms:.3f} ms")
 

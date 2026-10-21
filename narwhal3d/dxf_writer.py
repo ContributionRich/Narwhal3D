@@ -10,15 +10,20 @@ code converts exact geometry into the entities below; this module only writes th
     ARC      {"type":"ARC","center":(x,y,z),"radius":r,"start_deg":a0,
               "end_deg":a1,...}
     POLYLINE {"type":"POLYLINE","points":[(x,y,z),...],"closed":bool,...}
+    SPLINE   {"type":"SPLINE","control_points":[(x,y,z),...],"closed":bool,...}
+
+``color`` is an ACI value written as group 62. ``true_color`` is an exact
+``0xRRGGBB`` value written as group 420 and takes precedence.
 
 ``layers`` is an optional ``{"name": aci_color}`` map. Any layer an entity
 names is added to the table if it is missing (with the default color 7).
 
-R12 (``AC1009``) is an old, widely supported DXF format. Every group code sits
-on its own line with the value on
-the next. ``$INSUNITS = 4`` (millimetres). ARC angles are degrees,
-counter-clockwise from +X. Colors are AutoCAD Color Index (1 red, 5 blue,
-7 black/white); the default is 7.
+Files containing only LINE/CIRCLE/ARC/POLYLINE use widely supported R12
+(``AC1009``). A SPLINE requires modern ASCII DXF and selects ``AC1027``. Every
+group code sits on its own line with the value on the next. ``$INSUNITS = 4``
+(millimetres). ARC angles are degrees, counter-clockwise from +X. Colors are
+AutoCAD Color Index (1 red, 5 blue, 7 black/white) unless exact RGB group 420
+is supplied; the default is ACI 7.
 """
 
 import os
@@ -68,7 +73,9 @@ def build_dxf_bytes(entities, layers=None) -> bytes:
     emit(0, "SECTION")
     emit(2, "HEADER")
     emit(9, "$ACADVER")
-    emit(1, "AC1009")
+    modern = (any(e.get("type") == "SPLINE" or "true_color" in e for e in entities)
+              or any(int(color) > 0xFFFFFF for _name, color in merged))
+    emit(1, "AC1027" if modern else "AC1009")
     emit(9, "$INSUNITS")
     emit(70, 4)  # 4 = millimetres
     emit(0, "ENDSEC")
@@ -83,7 +90,7 @@ def build_dxf_bytes(entities, layers=None) -> bytes:
         emit(0, "LAYER")
         emit(2, name)
         emit(70, 0)
-        emit(62, color)
+        _emit_color(emit, color)
         emit(6, "CONTINUOUS")
     emit(0, "ENDTAB")
     emit(0, "ENDSEC")
@@ -159,9 +166,10 @@ def write_dxf(path, entities, layers=None) -> int:
     # list.
     materialized = []
     for entity in entities:
-        if entity.get("type") == "POLYLINE":
+        if entity.get("type") in ("POLYLINE", "SPLINE"):
             entity = dict(entity)
-            entity["points"] = list(entity["points"])
+            key = "points" if entity["type"] == "POLYLINE" else "control_points"
+            entity[key] = list(entity[key])
         materialized.append(entity)
     # One-pass native route (Q117-02): active only when the one-pass export is
     # available and the materialized input clears the measured crossover.
@@ -185,15 +193,38 @@ def _point(emit, p):
     emit(30, _num(p[2]))
 
 
+def _emit_color(emit, color):
+    value = int(color)
+    if 0 <= value <= 255:
+        emit(62, value)
+    elif 0x1000000 <= value <= 0x1FFFFFF:
+        emit(420, value - 0x1000000)
+    else:
+        raise ValueError("DXF color is neither ACI 0..255 nor true RGB 0x000000..0xFFFFFF")
+
+
+def _spline_knots(control_count):
+    spans = (control_count - 1) // 3
+    return ([0.0] * 4
+            + [float(index) for index in range(1, spans) for _ in range(3)]
+            + [float(spans)] * 4)
+
+
 def _entity(emit, e):
     t = e["type"]
     layer = e.get("layer", "0")
-    color = e.get("color", 7)
+    if "true_color" in e:
+        true_color = int(e["true_color"])
+        if not 0 <= true_color <= 0xFFFFFF:
+            raise ValueError("DXF true_color is outside 0x000000..0xFFFFFF")
+        color = 0x1000000 + true_color
+    else:
+        color = e.get("color", 7)
 
     if t == "LINE":
         emit(0, "LINE")
         emit(8, layer)
-        emit(62, color)
+        _emit_color(emit, color)
         _point(emit, e["p0"])
         emit(11, _num(e["p1"][0]))
         emit(21, _num(e["p1"][1]))
@@ -201,13 +232,13 @@ def _entity(emit, e):
     elif t == "CIRCLE":
         emit(0, "CIRCLE")
         emit(8, layer)
-        emit(62, color)
+        _emit_color(emit, color)
         _point(emit, e["center"])
         emit(40, _num(e["radius"]))
     elif t == "ARC":
         emit(0, "ARC")
         emit(8, layer)
-        emit(62, color)
+        _emit_color(emit, color)
         _point(emit, e["center"])
         emit(40, _num(e["radius"]))
         emit(50, _num(e["start_deg"]))
@@ -215,7 +246,7 @@ def _entity(emit, e):
     elif t == "POLYLINE":
         emit(0, "POLYLINE")
         emit(8, layer)
-        emit(62, color)
+        _emit_color(emit, color)
         emit(66, 1)
         emit(70, 1 if e.get("closed") else 0)
         for p in e["points"]:
@@ -223,5 +254,22 @@ def _entity(emit, e):
             emit(8, layer)
             _point(emit, p)
         emit(0, "SEQEND")
+    elif t == "SPLINE":
+        points = e["control_points"]
+        if len(points) < 4 or (len(points) - 1) % 3:
+            raise ValueError("SPLINE needs a connected cubic Bezier control chain")
+        knots = _spline_knots(len(points))
+        emit(0, "SPLINE")
+        emit(8, layer)
+        _emit_color(emit, color)
+        emit(70, 1 if e.get("closed") else 0)
+        emit(71, 3)
+        emit(72, len(knots))
+        emit(73, len(points))
+        emit(74, 0)
+        for knot in knots:
+            emit(40, _num(knot))
+        for point in points:
+            _point(emit, point)
     else:
         raise ValueError("unknown entity type %r" % (t,))

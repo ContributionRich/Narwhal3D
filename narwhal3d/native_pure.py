@@ -2583,7 +2583,7 @@ def decode_obj_packed(data: bytes, file_base: str = None) -> Optional[tuple]:
 
 
 # The DXF entity-type codes the Rust encoder understands (dxf.rs).
-_DXF_TYPE_CODES = {"LINE": 0, "CIRCLE": 1, "ARC": 2, "POLYLINE": 3}
+_DXF_TYPE_CODES = {"LINE": 0, "CIRCLE": 1, "ARC": 2, "POLYLINE": 3, "SPLINE": 4}
 
 
 def _pack_dxf(entities, layers=None):
@@ -2628,24 +2628,37 @@ def _pack_dxf(entities, layers=None):
             typ = _DXF_TYPE_CODES.get(entity["type"])
             if typ is None:
                 return None
+            points = (entity.get("points") if typ == 3
+                      else entity.get("control_points") if typ == 4 else None)
+            if typ == 4 and (points is None or len(points) < 4 or (len(points) - 1) % 3):
+                return None
             expected_coords += (6 if typ in (0, 2) else 4 if typ == 1
-                                else 3 * len(entity["points"]))
+                                else 3 * len(points))
             if expected_coords > _MAX_DXF_COORDS:
                 return None
         layer_id_of = {name: i for i, (name, _c) in enumerate(layer_names)}
         # Per-entity packing (one slot per entity, in entity order).
         entity_types = array.array("q")   # i64 type code
         layer_ids = array.array("q")      # i64 layer index
-        colors = array.array("q")         # i64 ACI color
-        point_counts = array.array("q")   # i64 POLYLINE point count (0 others)
-        closed_flags = array.array("q")   # i64 POLYLINE closed (0/1)
+        colors = array.array("q")         # i64 ACI or 0xRRGGBB true color
+        point_counts = array.array("q")   # i64 POLYLINE/SPLINE point count
+        closed_flags = array.array("q")   # i64 POLYLINE/SPLINE closed (0/1)
         nums = array.array("d")           # f64 flat coordinates
         for e in entities:
             t = _DXF_TYPE_CODES.get(e["type"])
             if t is None:
                 return None  # unknown type: Python writer raises for these
             layer_ids.append(layer_id_of[e.get("layer", "0")])
-            colors.append(int(e.get("color", 7)))
+            if "true_color" in e:
+                true_color = int(e["true_color"])
+                if not 0 <= true_color <= 0xFFFFFF:
+                    return None
+                colors.append(0x1000000 + true_color)
+            else:
+                color = int(e.get("color", 7))
+                if not 0 <= color <= 255:
+                    return None
+                colors.append(color)
             entity_types.append(t)
             if t == 0:  # LINE: p0 (3) + p1 (3)
                 p0, p1 = e["p0"], e["p1"]
@@ -2662,8 +2675,8 @@ def _pack_dxf(entities, layers=None):
                 nums.extend((c[0], c[1], c[2], r, e["start_deg"], e["end_deg"]))
                 point_counts.append(0)
                 closed_flags.append(0)
-            else:  # POLYLINE: 3 coords per point
-                pts = e["points"]
+            else:  # POLYLINE/SPLINE: 3 coords per point/control
+                pts = e["points"] if t == 3 else e["control_points"]
                 for p in pts:
                     nums.extend((p[0], p[1], p[2]))
                 point_counts.append(len(pts))
@@ -2681,7 +2694,10 @@ def _pack_dxf(entities, layers=None):
                 return None
         layer_colors = array.array("q")
         for _name, color in layer_names:
-            layer_colors.append(int(color))
+            value = int(color)
+            if not (0 <= value <= 255 or 0x1000000 <= value <= 0x1FFFFFF):
+                return None
+            layer_colors.append(value)
         # Names are emitted once in the table, once per entity, and once per
         # POLYLINE vertex. This mirrors Rust's conservative capacity bound and
         # prevents a reused long layer name from under-allocating the FFI output.
@@ -2719,10 +2735,10 @@ def _pack_dxf(entities, layers=None):
 
 
 def encode_dxf(entities, layers=None) -> Optional[bytes]:
-    """Encode *entities* to a complete R12 ASCII DXF file's bytes, or ``None``.
+    """Encode *entities* to complete ASCII DXF bytes, or ``None``.
 
     ``entities`` is a sequence of dicts in the exact shape
-    ``dxf_writer.write_dxf`` takes (LINE / CIRCLE / ARC / POLYLINE). ``layers``
+    ``dxf_writer.write_dxf`` takes (LINE / CIRCLE / ARC / POLYLINE / SPLINE). ``layers``
     is an optional ``{"name": aci_color}`` map; any layer an entity names but
     the caller did not list is added with color 7, caller order preserved.
 
@@ -3048,7 +3064,7 @@ def _parse_dxf_packed(raw: bytes, *, flat=False):
         raise ValueError("DXF packed buffer has an invalid layer count")
     layer_name_lens = _read_i64(layer_count)
     layer_names = _read_run(layer_name_lens)
-    layer_colors = _read_i64(layer_count)
+    packed_layer_colors = _read_i64(layer_count)
 
     (entity_count,) = _read_i64(1)
     if not 0 <= entity_count <= _MAX_DXF_ENTITIES:
@@ -3056,7 +3072,7 @@ def _parse_dxf_packed(raw: bytes, *, flat=False):
     entity_types = _read_i64(entity_count)
     ent_name_lens = _read_i64(entity_count)
     ent_layer_names = _read_run(ent_name_lens)
-    entity_colors = _read_i64(entity_count)
+    packed_entity_colors = _read_i64(entity_count)
     entity_closed = _read_i64(entity_count)
     entity_coord_counts = _read_i64(entity_count)
     if any(count < 0 for count in entity_coord_counts):
@@ -3066,7 +3082,7 @@ def _parse_dxf_packed(raw: bytes, *, flat=False):
         raise ValueError("DXF packed buffer has too many coordinates")
     for typ, closed, count in zip(entity_types, entity_closed,
                                   entity_coord_counts):
-        if typ not in (0, 1, 2, 3, 4):
+        if typ not in (0, 1, 2, 3, 4, 5):
             raise ValueError("DXF packed buffer has unknown type %d" % typ)
         if closed not in (0, 1):
             raise ValueError("DXF packed buffer has a non-boolean closed field")
@@ -3078,7 +3094,32 @@ def _parse_dxf_packed(raw: bytes, *, flat=False):
             raise ValueError("DXF ARC packed arity/closed field is invalid")
         if typ in (3, 4) and count % 3:
             raise ValueError("DXF polyline coordinate count is not divisible by 3")
+        if typ == 5 and count < 4:
+            raise ValueError("DXF SPLINE packed header is missing")
     coords = _read_f64(total_coords)
+    coord_offset = 0
+    for typ, count in zip(entity_types, entity_coord_counts):
+        if typ == 5:
+            header = coords[coord_offset:coord_offset + 4]
+            values = tuple(int(value) for value in header)
+            if any(float(integer) != value for integer, value in zip(values, header)):
+                raise ValueError("DXF SPLINE packed counts are not integers")
+            degree, knot_count, point_count, weight_count = values
+            expected = 4 + knot_count + point_count * 3 + weight_count
+            segment = coords[coord_offset:coord_offset + count]
+            knot_start = 4
+            weight_start = knot_start + knot_count + point_count * 3
+            knots = segment[knot_start:knot_start + knot_count]
+            weights = segment[weight_start:]
+            if (not 1 <= degree <= 11 or point_count <= degree
+                    or knot_count != point_count + degree + 1
+                    or weight_count not in (0, point_count) or count != expected
+                    or any(not math.isfinite(value) for value in segment[4:])
+                    or any(knots[index] > knots[index + 1]
+                           for index in range(len(knots) - 1))
+                    or any(weight <= 0 for weight in weights)):
+                raise ValueError("DXF SPLINE packed arity is invalid")
+        coord_offset += count
 
     (skipped_count,) = _read_i64(1)
     if not 0 <= skipped_count <= _MAX_DXF_ENTITIES:
@@ -3091,15 +3132,29 @@ def _parse_dxf_packed(raw: bytes, *, flat=False):
     if o != len(raw):
         raise ValueError("DXF packed buffer has %d trailing bytes" % (len(raw) - o))
 
+    def _color(value):
+        if 1 << 24 <= value <= (1 << 25) - 1:
+            return 7, value - (1 << 24)
+        return value, None
+
     decoded_layers = tuple(name.decode("latin-1") for name in layer_names)
     decoded_entity_layers = tuple(name.decode("latin-1") for name in ent_layer_names)
+    layer_colors_and_true = tuple(_color(value) for value in packed_layer_colors)
+    entity_colors_and_true = tuple(_color(value) for value in packed_entity_colors)
+    layer_colors = tuple(value[0] for value in layer_colors_and_true)
+    layer_true_colors = {decoded_layers[i]: value[1]
+                         for i, value in enumerate(layer_colors_and_true)
+                         if value[1] is not None}
+    entity_colors = tuple(value[0] for value in entity_colors_and_true)
+    entity_true_colors = tuple(value[1] for value in entity_colors_and_true)
     layers = {decoded_layers[i]: layer_colors[i] for i in range(layer_count)}
     skipped = {skipped_names[i].decode("latin-1"): skipped_counts[i]
                for i in range(skipped_count)}
     if flat:
-        return (tuple(entity_types), decoded_entity_layers, tuple(entity_colors),
-                tuple(entity_closed), tuple(entity_coord_counts), tuple(coords),
-                layers, (None if insunits == -1 else insunits), skipped)
+        return (tuple(entity_types), decoded_entity_layers, entity_colors,
+                entity_true_colors, tuple(entity_closed), tuple(entity_coord_counts),
+                tuple(coords), layers, layer_true_colors,
+                (None if insunits == -1 else insunits), skipped)
 
     entities = []
     c_off = 0
@@ -3110,6 +3165,7 @@ def _parse_dxf_packed(raw: bytes, *, flat=False):
         c_off += count
         layer = decoded_entity_layers[i]
         color = entity_colors[i]
+        true_color = entity_true_colors[i]
         closed = bool(entity_closed[i])
         if typ == 0:
             ent = {"type": "LINE", "p0": (c[0], c[1], c[2]),
@@ -3121,16 +3177,30 @@ def _parse_dxf_packed(raw: bytes, *, flat=False):
             ent = {"type": "ARC", "center": (c[0], c[1], c[2]),
                    "radius": c[3], "start_deg": c[4], "end_deg": c[5],
                    "layer": layer, "color": color}
+        elif typ == 5:
+            degree, knot_count, point_count, weight_count = map(int, c[:4])
+            pos = 4
+            knots = list(c[pos:pos + knot_count])
+            pos += knot_count
+            points = [tuple(c[at:at + 3])
+                      for at in range(pos, pos + point_count * 3, 3)]
+            pos += point_count * 3
+            ent = {"type": "SPLINE", "degree": degree, "knots": knots,
+                   "points": points, "weights": list(c[pos:pos + weight_count]),
+                   "closed": closed, "layer": layer, "color": color}
         else:
             points = [(c[k], c[k + 1], c[k + 2]) for k in range(0, count, 3)]
             ent = {"type": ("POLYLINE" if typ == 3 else "LWPOLYLINE"),
                    "points": points, "closed": closed,
                    "layer": layer, "color": color}
+        if true_color is not None:
+            ent["true_color"] = true_color
         entities.append(ent)
     if c_off != len(coords):
         raise ValueError("DXF packed coordinate offsets do not match")
 
     return {"entities": entities, "layers": layers,
+            "layer_true_colors": layer_true_colors,
             "insunits": (None if insunits == -1 else insunits),
             "skipped": skipped}
 

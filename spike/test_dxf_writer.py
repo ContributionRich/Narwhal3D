@@ -195,6 +195,49 @@ def _():
     assert int(count) == len(layer_names), (count, layer_names)
 
 
+@check("exact RGB uses group 420 for entities and layers, including black")
+def _():
+    p = os.path.join(TMP, "true-color.dxf")
+    entity = {"type": "LINE", "p0": (0, 0, 0), "p1": (1, 0, 0),
+              "layer": "Cut", "true_color": 0}
+    dxf.write_dxf(p, [entity], layers={"Cut": 0x1000000 + 0xFF0000})
+    pr = _all_pairs(p)
+    version = pr.index(("9", "$ACADVER"))
+    assert pr[version + 1] == ("1", "AC1027"), pr[version:version + 2]
+    assert ("420", "16711680") in pr, pr
+    assert ("420", "0") in pr, pr
+
+
+@check("out-of-range true colors are refused")
+def _():
+    p = os.path.join(TMP, "invalid-color.dxf")
+    for value in (-1, 0x1000000):
+        try:
+            dxf.write_dxf(p, [{"type": "LINE", "p0": (0, 0, 0), "p1": (1, 0, 0),
+                               "true_color": value}])
+        except ValueError:
+            continue
+        raise AssertionError("accepted invalid true color %r" % value)
+
+
+@check("a cubic Bezier chain is one exact modern degree-3 SPLINE")
+def _():
+    p = os.path.join(TMP, "spline.dxf")
+    controls = [(0, 0, 0), (1, 2, 0), (2, 2, 0), (3, 0, 0),
+                (4, -2, 0), (5, -2, 0), (6, 0, 0)]
+    dxf.write_dxf(p, [{"type": "SPLINE", "control_points": controls,
+                       "closed": False, "layer": "Cut", "true_color": 0xFF0000}])
+    pr = _all_pairs(p)
+    version = pr.index(("9", "$ACADVER"))
+    assert pr[version + 1] == ("1", "AC1027"), pr[version:version + 2]
+    block = _block(pr, "SPLINE")
+    assert ("71", "3") in block and ("72", "11") in block
+    assert ("73", "7") in block and ("420", "16711680") in block
+    assert [value for code, value in block if code == "40"] == [
+        "0", "0", "0", "0", "1", "1", "1", "2", "2", "2", "2"]
+    assert len([1 for code, _value in block if code == "10"]) == 7
+
+
 @check("a real reader accepts it: inkscape -> SVG with geometry per entity")
 def _():
     if not shutil.which("inkscape"):

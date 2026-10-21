@@ -77,6 +77,7 @@ PURE_CORE_PYTESTS = (
     "spike/test_native_vector_export.py",
     "spike/test_native_command_search.py",
     "spike/test_native_coil.py",
+    "spike/test_native_coil_preview.py",
     "spike/test_native_interpolate.py",
     "spike/test_native_tween.py",
 )

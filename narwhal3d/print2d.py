@@ -464,7 +464,7 @@ def build_page(model, view, setup, objects=None):
 
 
 def write(path, page, title="", hairline=False, cdr_version=None):
-    """Write `page` by extension (.pdf / .ai / .svg / genuine native CDR v15)."""
+    """Write `page` by extension (.pdf/.ai/.svg/.dxf/native CDR)."""
     low = path.lower()
     if low.endswith(".pdf"):
         return vx.write_pdf(path, page.strokes, page.width_mm, page.height_mm, title)
@@ -472,6 +472,27 @@ def write(path, page, title="", hairline=False, cdr_version=None):
         return vx.write_ai(path, page.strokes, page.width_mm, page.height_mm, title)
     if low.endswith(".svg"):
         return vx.write_svg(path, page.strokes, page.width_mm, page.height_mm)
+    if low.endswith(".dxf"):
+        from . import dxf_writer
+
+        entities = []
+        layers = {}
+        for stroke in page.strokes:
+            if not stroke.beziers:
+                continue
+            layer = stroke.layer or "0"
+            rgb = tuple(max(0, min(255, round(value * 255))) for value in stroke.rgb)
+            true_color = (rgb[0] << 16) | (rgb[1] << 8) | rgb[2]
+            layers.setdefault(layer, 0x1000000 + true_color)
+            controls = [(*stroke.beziers[0][0], 0.0)]
+            for _p0, p1, p2, p3 in stroke.beziers:
+                controls.extend(((*p1, 0.0), (*p2, 0.0), (*p3, 0.0)))
+            entities.append({"type": "SPLINE", "control_points": controls,
+                             "closed": stroke.closed, "layer": layer,
+                             "true_color": true_color})
+        if not entities:
+            raise ValueError("nothing to write to DXF")
+        return dxf_writer.write_dxf(path, entities, layers=layers)
     if low.endswith(".cdr"):
         version = int(cdr_version if cdr_version is not None else page.cdr_version)
         if version == 15:
@@ -485,4 +506,4 @@ def write(path, page, title="", hairline=False, cdr_version=None):
             return embedded_cdr.write_v17(
                 path, page.strokes, page.width_mm, page.height_mm, title, hairline=hairline)
         raise ValueError(f"CDR output version must be 15 or 17, not {version}")
-    raise ValueError(f"{path!r}: print/export writes .pdf, .ai, .svg or .cdr")
+    raise ValueError(f"{path!r}: print/export writes .pdf, .ai, .svg, .dxf or .cdr")

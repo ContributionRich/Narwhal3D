@@ -182,6 +182,22 @@ check('line == READY_MARKER' in rust and 'line.contains(READY_MARKER)' not in ru
       "fade readiness uses the exact native marker, not a substring")
 check('WM_TRANSIENT_FOR' in stacking and 'restack_window' in stacking,
       "Linux welcome establishes native transient ownership and EWMH restacking")
+check('moveresize_window: Atom' in stacking
+      and 'intern(connection, b"_NET_MOVERESIZE_WINDOW")' in stacking
+      and 'place_welcome_over_runtime(connection, root, atoms, welcome, runtime)?' in stacking
+      and 'translate_coordinates(runtime, root, 0, 0)' in stacking,
+      "welcome relocates over the mapped application window instead of staying on a default monitor")
+check('welcome_centers_over_the_runtime_even_on_offset_monitors' in stacking
+      and 'centered_origin(-1600, -200' in stacking,
+      "monitor placement covers desktops with negative and positive monitor origins")
+check('selected mapped windows: welcome={welcome:#x}, runtime={runtime:#x}, runtime_pid={runtime_pid}' in stacking
+      and 'runtime_root_x={}' in stacking and 'runtime_root_y={}' in stacking
+      and 'runtime_width={}' in stacking and 'runtime_height={}' in stacking
+      and 'welcome_width={}' in stacking and 'welcome_height={}' in stacking
+      and 'requested_x={}' in stacking and 'requested_y={}' in stacking
+      and '_NET_MOVERESIZE_WINDOW accepted={}' in stacking
+      and 'ConfigureWindow accepted={}' in stacking,
+      "native stacking logs selected windows, complete placement geometry and both request results")
 check('remove_var("WAYLAND_DISPLAY")' in rust
       and 'set_var("WINIT_UNIX_BACKEND"' not in rust,
       "winit 0.30 is forced to X11 through its supported display selection")

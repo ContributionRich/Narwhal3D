@@ -159,6 +159,7 @@ check({"native/pure_core/Cargo.toml", "native/pure_core/README.md",
        "spike/test_native_obj.py", "spike/test_native_dxf.py",
        "spike/test_native_joinchain.py", "spike/test_native_vector_export.py",
        "spike/test_native_command_search.py", "spike/test_native_coil.py",
+       "spike/test_native_coil_preview.py",
        "spike/test_native_interpolate.py", "spike/test_native_tween.py",
        "spike/test_curve_options.py", "spike/test_helix.py",
        "spike/test_spiral.py", "spike/test_coil_preview.py",
@@ -166,7 +167,9 @@ check({"native/pure_core/Cargo.toml", "native/pure_core/README.md",
        "spike/test_conic.py",
        "spike/test_parabola.py", "spike/test_parabola3pt.py",
        "spike/test_hyperbola.py", "spike/test_catenary.py",
-       "spike/test_curve_through_pt.py", "spike/test_tween_curves.py"} <= public
+       "spike/test_curve_through_pt.py", "spike/test_tween_curves.py",
+       "spike/test_handlecurve.py", "spike/test_curve_through_srf_control_pt.py",
+       "spike/test_sequential_object_steps.py"} <= public
       and not any(path.startswith("native/pure_core/target/") for path in public),
       "the public allowlist includes pure-core source and never-slower route gates")
 check({"native/selection_core/Cargo.toml", "native/selection_core/src/lib.rs",

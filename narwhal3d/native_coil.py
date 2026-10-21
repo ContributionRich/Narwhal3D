@@ -18,6 +18,8 @@ _signature = None
 _binding = None
 _catenary_signature = None
 _catenary_binding = None
+_preview_signature = None
+_preview_binding = None
 _native_calls = 0
 _native_catenary_calls = 0
 
@@ -112,6 +114,35 @@ def _catenary_binding_for_library():
             _catenary_binding = fn
             return fn
         return None
+
+
+def _preview_binding_for_library():
+    global _preview_signature, _preview_binding
+    explicit=os.environ.get(_ENV); signature=explicit or "<packaged>"
+    if _preview_signature==signature:return _preview_binding
+    with _lock:
+        if _preview_signature==signature:return _preview_binding
+        _preview_signature,_preview_binding=signature,None
+        packaged=Path(__file__).resolve().parent/"native"/_library_name()
+        for path in ((Path(explicit).expanduser(),) if explicit else (packaged,)):
+            if not path.is_file():continue
+            try:
+                lib=ctypes.CDLL(str(path));fn=lib.narwhal_pure_core_coil_preview
+                fn.argtypes=[ctypes.POINTER(ctypes.c_double)]*3+[ctypes.c_double,ctypes.c_double,ctypes.c_double,ctypes.c_ubyte,ctypes.c_ubyte,ctypes.c_size_t,ctypes.POINTER(ctypes.c_double),ctypes.c_size_t,ctypes.POINTER(ctypes.c_uint64)];fn.restype=ctypes.c_int32
+            except (AttributeError,OSError):continue
+            _preview_binding=fn;return fn
+        return None
+
+
+def preview_points(start,end,radial,radius0,radius1,turns,reverse,flat,count):
+    fn=_preview_binding_for_library()
+    if fn is None:return None
+    try:
+        inputs=[array.array("d",map(float,p)) for p in (start,end,radial)];views=[(ctypes.c_double*3).from_buffer(p) for p in inputs];out=array.array("d",[0.0])*(3*count);ov=(ctypes.c_double*len(out)).from_buffer(out);used=ctypes.c_uint64()
+        code=fn(*views,float(radius0),float(radius1),float(turns),int(bool(reverse)),int(bool(flat)),count,ov,len(out),ctypes.byref(used))
+    except Exception:return None
+    if code!=0 or int(used.value)!=3*count or any(not math.isfinite(v) for v in out):return None
+    return [tuple(out[3*i:3*i+3]) for i in range(count)]
 
 
 def plan(start, end, radial, radius0, radius1, turns, reverse, tolerance, flat=False):
@@ -215,11 +246,14 @@ def catenary_plan(start, end, axis_point, through, tolerance):
 
 def _reset_for_tests():
     global _signature, _binding, _catenary_signature, _catenary_binding
+    global _preview_signature, _preview_binding
     global _native_calls, _native_catenary_calls
     with _lock:
         _signature = None
         _binding = None
         _catenary_signature = None
         _catenary_binding = None
+        _preview_signature = None
+        _preview_binding = None
         _native_calls = 0
         _native_catenary_calls = 0

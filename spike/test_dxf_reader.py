@@ -8,7 +8,7 @@ Pins the import contract:
   COUNTED in skipped["bulge"];
 * BLOCK / INSERT / TEXT are not parsed but COUNTED in skipped[type];
 * insunits is the $INSUNITS int (4 = mm), None when the header has none;
-* a BINARY DXF ($ACADVER != AC1009) is REFUSED BY NAME (FileFormatError);
+* a BINARY DXF sentinel is REFUSED while newer ASCII generations remain readable;
 * a truncated file (code with no value) raises FileFormatError.
 
 """
@@ -186,17 +186,61 @@ def _():
         assert "binary" in str(e).lower(), str(e)
 
 
-@check("a newer ASCII $ACADVER (AC1012) is refused as unsupported version")
+@check("a newer ASCII $ACADVER keeps supported exact entities readable")
 def _():
-    p = _write("bin.dxf",
-               "0\nSECTION\n2\nHEADER\n9\n$ACADVER\n1\nAC1012\n0\nENDSEC\n"
-               "0\nSECTION\n2\nENTITIES\n0\nENDSEC\n")
-    try:
-        rdr.read_dxf(p)
-        raise AssertionError("expected FileFormatError for unsupported version")
-    except rdr.FileFormatError as e:
-        assert "AC1012" in str(e), str(e)
-        assert "unsupported" in str(e).lower(), str(e)
+    p = _write("modern.dxf",
+               "0\nSECTION\n2\nHEADER\n9\n$ACADVER\n1\nAC1027\n0\nENDSEC\n"
+               "0\nSECTION\n2\nENTITIES\n"
+               "0\nLINE\n10\n0\n20\n0\n30\n0\n11\n1\n21\n2\n31\n0\n"
+               "0\nENDSEC\n")
+    got = rdr.read_dxf(p)
+    assert got["entities"] == [{
+        "type": "LINE", "layer": "0", "color": 7,
+        "p0": (0.0, 0.0, 0.0), "p1": (1.0, 2.0, 0.0),
+    }], got
+
+
+@check("modern ASCII SPLINE preserves exact degree, full knots, controls, and closure")
+def _():
+    p = _write("spline.dxf",
+               "0\nSECTION\n2\nHEADER\n9\n$ACADVER\n1\nAC1027\n0\nENDSEC\n"
+               "0\nSECTION\n2\nENTITIES\n"
+               "0\nSPLINE\n8\ncut\n70\n9\n71\n3\n72\n8\n73\n4\n74\n0\n"
+               "40\n0\n40\n0\n40\n0\n40\n0\n40\n1\n40\n1\n40\n1\n40\n1\n"
+               "10\n0\n20\n0\n30\n0\n10\n1\n20\n0\n30\n0\n"
+               "10\n1\n20\n1\n30\n0\n10\n0\n20\n0\n30\n0\n"
+               "0\nHATCH\n8\ncut\n0\nENDSEC\n")
+    got = rdr.read_dxf(p)
+    spline = got["entities"][0]
+    assert spline == {
+        "type": "SPLINE", "layer": "cut", "color": 7, "degree": 3,
+        "knots": [0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0],
+        "points": [(0.0, 0.0, 0.0), (1.0, 0.0, 0.0),
+                   (1.0, 1.0, 0.0), (0.0, 0.0, 0.0)],
+        "weights": [], "closed": True,
+    }, spline
+    assert got["skipped"] == {"HATCH": 1}, got["skipped"]
+
+
+@check("LAYER records stop at code 0 and entity true colors are exact")
+def _():
+    p = _write(
+        "true-colors.dxf",
+        "0\nSECTION\n2\nTABLES\n0\nTABLE\n2\nLAYER\n"
+        "0\nLAYER\n2\nRegister\n62\n51\n6\nContinuous\n"
+        "0\nLAYER\n2\nCut\n62\n91\n6\nContinuous\n0\nENDTAB\n0\nENDSEC\n"
+        "0\nSECTION\n2\nENTITIES\n"
+        "0\nLINE\n8\nCut\n62\n1\n420\n16711680\n"
+        "10\n0\n20\n0\n30\n0\n11\n1\n21\n0\n31\n0\n"
+        "0\nLINE\n8\nRegister\n62\n7\n420\n0\n"
+        "10\n0\n20\n0\n30\n0\n11\n0\n21\n1\n31\n0\n"
+        "0\nENDSEC\n")
+    got = rdr.read_dxf(p)
+    assert got["layers"] == {"Register": 51, "Cut": 91}, got["layers"]
+    assert got["layer_true_colors"] == {}
+    assert [(entity["layer"], entity["color"], entity["true_color"])
+            for entity in got["entities"]] == [
+                ("Cut", 7, 0xFF0000), ("Register", 7, 0x000000)]
 
 
 @check("a truncated file (group code with no value) raises FileFormatError")

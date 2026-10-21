@@ -94,7 +94,7 @@ check(sum(len(tab["buttons"]) for tab in data.TABS) == 582,
 
 implemented = live_command_names()
 rows = [button for name in names for button in toolbars.tab_rows(name, implemented)]
-check(len(implemented) == 179, "the app-equivalent registry has 179 commands", len(implemented))
+check(len(implemented) == 181, "the app-equivalent registry has 181 commands", len(implemented))
 check(len(rows) == 582, "every top slot reaches the stable Button API")
 check(sum(button.is_separator for button in rows) == 57,
       "57 intentional top-toolbar spacers remain real separators")
@@ -268,9 +268,9 @@ check(record_icons == data.TOOLBAR_ICON_NAMES,
       "the toolbar manifest covers top, left, and flyout records")
 check(set(data.ICON_NAMES) == set(generator.icon_specs()),
       "the placeholder generator covers the complete runtime manifest")
-check(len(data.ICON_NAMES) == 631, "631 distinct runtime symbols are manifested")
-check(len(data.PANEL_ICON_NAMES) == 4,
-      "the four right-dock tabs have project-owned icon slots")
+check(len(data.ICON_NAMES) == 632, "632 distinct runtime symbols are manifested")
+check(len(data.PANEL_ICON_NAMES) == 5,
+      "the five right-dock tabs have project-owned icon slots")
 check(all(name.startswith("narwhal-") and name.endswith(".png")
           and name == os.path.basename(name) for name in data.ICON_NAMES),
       "all runtime icon names are safe project basenames")
@@ -282,14 +282,14 @@ expected_missing = {
     "Standard: Parametric tools",
     "Visibility: Hide A", "Visibility: Hide B", "Visibility: Hide C",
 }
-check(len(matched) == 625, "625 runtime symbols use contributor artwork", len(matched))
+check(len(matched) == 626, "626 runtime symbols use contributor artwork", len(matched))
 check(set(data.MISSING_ARTWORK) == expected_missing,
       "the exact six source-art gaps are explicit", data.MISSING_ARTWORK)
 check(set(missing) == {name for name, source in data.ICON_SOURCES.items() if not source},
       "only the six declared gaps use generated placeholders", missing)
 check({data.ICON_SOURCES[name] for name in data.PANEL_ICON_NAMES} ==
-      {"layer.png", "properties.png", "panel_display.png", "bugreport.png"},
-      "right-dock tabs use the contributed layer/property/display/report artwork")
+      {"layer.png", "properties.png", "panel_display.png", "bugreport.png", "help.png"},
+      "right-dock tabs use contributed artwork, with Help temporary for Assistant")
 check(all((Path(builder.SOURCE) / source).is_file() for source in matched.values()),
       "every mapped source PNG is bundled")
 check(all(png_size(Path(builder.SOURCE) / source) == (96, 96)

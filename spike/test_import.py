@@ -333,6 +333,26 @@ got = ic.read_foreign(lw, doc())
 check(len(got.items) == 1 and any("bulge" in n and "TEXT" in n and "STRAIGHT" in n
                                   for n in got.notes),
       f"what the reader skipped (a bulge, a TEXT) is REPORTED, bulge named ({got.notes})")
+modern_spline_dxf = os.path.join(TMP, "modern-spline.dxf")
+open(modern_spline_dxf, "w").write(
+    "0\nSECTION\n2\nHEADER\n9\n$ACADVER\n1\nAC1027\n9\n$INSUNITS\n70\n1\n0\nENDSEC\n"
+    "0\nSECTION\n2\nENTITIES\n"
+    "0\nSPLINE\n8\nCut\n62\n1\n420\n16711680\n"
+    "70\n9\n71\n3\n72\n8\n73\n4\n74\n0\n"
+    "40\n0\n40\n0\n40\n0\n40\n0\n40\n1\n40\n1\n40\n1\n40\n1\n"
+    "10\n0\n20\n0\n30\n0\n10\n1\n20\n0\n30\n0\n"
+    "10\n1\n20\n1\n30\n0\n10\n0\n20\n0\n30\n0\n"
+    "0\nHATCH\n8\nCut\n0\nENDSEC\n0\nEOF\n")
+modern_got = ic.read_foreign(modern_spline_dxf, doc())
+modern_curve = modern_got.items[0][0] if modern_got.items else None
+check(modern_curve is not None and modern_curve.IsValid and modern_curve.IsClosed
+      and modern_curve.Degree == 3 and len(modern_curve.Points) == 4
+      and list(modern_curve.Knots) == [0.0, 0.0, 0.0, 1.0, 1.0, 1.0]
+      and abs(modern_curve.PointAtStart.X) < 1e-12
+      and abs(modern_curve.Points[1].X - 25.4) < 1e-12
+      and modern_got.layers.get("Cut") == (255, 0, 0)
+      and any("5 HATCH" not in note and "1 HATCH" in note for note in modern_got.notes),
+      "modern ASCII DXF SPLINE becomes an exact closed degree-3 NURBS with unit scaling")
 
 if os.path.isfile(PURE_LIB):
     prior_pure = os.environ.get("NARWHAL_PURE_CORE")
@@ -366,6 +386,16 @@ if os.path.isfile(PURE_LIB):
     check(lw_direct is not None and len(lw_direct.items) == 1
           and any("bulge" in note and "TEXT" in note for note in lw_direct.notes),
           "direct packed DXF Import preserves skipped and bulge reporting")
+    spline_packed = native_pure.decode_dxf_packed(open(modern_spline_dxf, "rb").read())
+    spline_direct = ic._dxf_from_packed(spline_packed, doc()) if spline_packed else None
+    packed_curve = spline_direct.items[0][0] if spline_direct and spline_direct.items else None
+    check(packed_curve is not None and packed_curve.IsValid and packed_curve.IsClosed
+          and packed_curve.Degree == 3 and len(packed_curve.Points) == 4
+          and list(packed_curve.Knots) == [0.0, 0.0, 0.0, 1.0, 1.0, 1.0]
+          and abs(packed_curve.Points[1].X - 25.4) < 1e-12
+          and spline_direct.layers.get("Cut") == (255, 0, 0)
+          and any("1 HATCH" in note for note in spline_direct.notes),
+          "direct packed DXF SPLINE materializes the same exact openNURBS curve")
 
     perf_dxf = os.path.join(TMP, "packed-perf.dxf")
     perf_entities = [
@@ -626,6 +656,47 @@ native_import_widths = sorted(round(float(obj.Attributes.PlotWeight), 4)
                               for obj in native_import_model.file.Objects)
 check(native_import_ok and native_import_widths == [0.0762, 0.25],
       "CDR v15 Import applies ordinary widths and exact Hairline through add_geometry UUIDs")
+
+metadata_less_cdr = os.path.join(TMP, "metadata-less-v15.cdr")
+with zipfile.ZipFile(native_cdr_source) as source_archive, \
+        zipfile.ZipFile(metadata_less_cdr, "w") as target_archive:
+    target_archive.writestr("content/riffData.cdr",
+                            source_archive.read("content/riffData.cdr"))
+fallback_calls = []
+original_cdr_fallback = ic._read_cdr_tracedraw
+
+
+def metadata_less_fallback(path, target_model, reason):
+    fallback_calls.append((path, target_model, reason))
+    raise AssertionError("valid metadata-less v15 called TraceDraw")
+
+
+ic._read_cdr_tracedraw = metadata_less_fallback
+try:
+    metadata_less_got = ic.read_foreign(metadata_less_cdr, doc())
+finally:
+    ic._read_cdr_tracedraw = original_cdr_fallback
+check(len(metadata_less_got.items) == 2 and not fallback_calls
+      and any("decoded directly without an external converter" in note
+              for note in metadata_less_got.notes),
+      "a valid metadata-less CDR v15 decodes natively without TraceDraw")
+
+damaged_metadata_less = os.path.join(TMP, "damaged-metadata-less.cdr")
+with zipfile.ZipFile(damaged_metadata_less, "w") as archive:
+    archive.writestr("content/riffData.cdr", b"not a valid RIFF stream")
+fallback_calls.clear()
+ic._read_cdr_tracedraw = metadata_less_fallback
+try:
+    try:
+        ic.read_foreign(damaged_metadata_less, doc())
+    except ValueError as exc:
+        damaged_metadata_message = str(exc)
+    else:
+        damaged_metadata_message = ""
+finally:
+    ic._read_cdr_tracedraw = original_cdr_fallback
+check("malformed CorelDRAW file refused" in damaged_metadata_message and not fallback_calls,
+      "missing metadata never lets a damaged CDR RIFF reach converter fallback")
 
 embedded_helper = os.path.join(
     ROOT, "native", "cdr_multiversion", "target", "release",

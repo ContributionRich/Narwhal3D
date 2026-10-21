@@ -57,6 +57,15 @@ KNOT_STYLES = ("Uniform", "Chord", "SqrtChrd")
 #: hand-picked points.
 DEFAULT_KNOT_STYLE = "Chord"
 NATIVE_INTERPOLATE_MIN_POINTS = 16
+NATIVE_SKIN_MIN_VALUES = 64
+
+
+def _native_skinning(sections, degree, style):
+    try:
+        from . import native_interpolate
+        return native_interpolate.skin_control_net(sections, degree, style)
+    except Exception:  # noqa: BLE001 -- complete Python solver remains fallback
+        return None
 
 
 def _native_interpolation(points, degree, style):
@@ -331,6 +340,10 @@ def skin_control_net(sections, degree=3, style=DEFAULT_KNOT_STYLE):
     # not a property of tensor-product skinning.
     if q > k - 1:
         q = max(1, k - 1)
+    if k * width >= NATIVE_SKIN_MIN_VALUES:
+        native = _native_skinning(sections, degree, style)
+        if native is not None:
+            return native
 
     # averaged V parameters across all columns (P&T eq. 10.8's spirit)
     if style == "Uniform" or q == 1:

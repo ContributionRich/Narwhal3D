@@ -116,12 +116,14 @@ fn records(
         if is_container {
             kind.copy_from_slice(&data[pos + 8..pos + 12]);
         }
-        let payload = if !is_container || &kind == b"cmpr" {
+        // v7+ `stlt` is an opaque style table whose bytes are not RIFF children.
+        let opaque = is_container && (&kind == b"cmpr" || &kind == b"stlt");
+        let payload = if !is_container || opaque {
             data[pos + 8..stop].to_vec()
         } else {
             Vec::new()
         };
-        let children = if is_container && &kind != b"cmpr" {
+        let children = if is_container && !opaque {
             records(data, pos + 12, stop, lengths, count, depth + 1)?
         } else {
             Vec::new()
@@ -355,7 +357,9 @@ fn outlines(nodes: &[Node]) -> BTreeMap<u32, ([u8; 3], f64, bool)> {
             continue;
         }
         let line_type = u16_at(data, pos).unwrap_or(0);
-        if line_type & 0x20 == 0 {
+        // Bit 0 means no outline. Bit 0x20 is only scale-with-object and is not
+        // an outline-presence flag (real Corel v15 commonly emits 0x0002).
+        if line_type & 0x01 != 0 {
             continue;
         }
         let width = i32_at(data, pos + 6).unwrap_or(0) as f64 / UNITS_PER_MM;
@@ -365,8 +369,22 @@ fn outlines(nodes: &[Node]) -> BTreeMap<u32, ([u8; 3], f64, bool)> {
     result
 }
 
+fn own_transform_records<'a>(nodes: &'a [Node], result: &mut Vec<&'a Node>) {
+    for node in nodes {
+        if &node.tag == b"trfd" {
+            result.push(node);
+        }
+        if &node.tag == b"LIST" && (&node.kind == b"obj " || &node.kind == b"grp ") {
+            continue;
+        }
+        own_transform_records(&node.children, result);
+    }
+}
+
 fn transform(node: &Node) -> Result<Transform, String> {
-    for record in all(&node.children, b"trfd") {
+    let mut records = Vec::new();
+    own_transform_records(&node.children, &mut records);
+    for record in records {
         let data = &record.payload;
         if data.len() < 20 {
             continue;
@@ -404,6 +422,19 @@ fn transform(node: &Node) -> Result<Transform, String> {
         }
     }
     Ok([1.0, 0.0, 0.0, 0.0, 1.0, 0.0])
+}
+
+fn compose(parent: Transform, child: Transform) -> Transform {
+    let [a, b, tx, d, e, ty] = parent;
+    let [f, g, ux, h, i, uy] = child;
+    [
+        a * f + b * h,
+        a * g + b * i,
+        a * ux + b * uy + tx,
+        d * f + e * h,
+        d * g + e * i,
+        d * ux + e * uy + ty,
+    ]
 }
 
 fn line_bezier(start: Point, end: Point) -> Bezier {
@@ -525,6 +556,7 @@ fn object(
     styles: &BTreeMap<u32, ([u8; 3], f64, bool)>,
     page_w: f64,
     page_h: f64,
+    inherited: Transform,
     total_nodes: &mut usize,
 ) -> Result<Object, String> {
     for loda in all(&node.children, b"loda") {
@@ -554,7 +586,13 @@ fn object(
         if !styles.contains_key(&outline_id) && fill_id != 0 {
             color = [0, 0, 0];
         }
-        let paths = path_data(shape, page_w, page_h, transform(node)?, total_nodes)?;
+        let paths = path_data(
+            shape,
+            page_w,
+            page_h,
+            compose(inherited, transform(node)?),
+            total_nodes,
+        )?;
         if !paths.is_empty() {
             return Ok(Object {
                 paths,
@@ -566,6 +604,84 @@ fn object(
         }
     }
     Err("the CDR contains an unsupported non-curve object".to_owned())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn collect_objects(
+    nodes: &[Node],
+    layer: &str,
+    styles: &BTreeMap<u32, ([u8; 3], f64, bool)>,
+    page_w: f64,
+    page_h: f64,
+    inherited: Transform,
+    depth: usize,
+    objects: &mut Vec<Object>,
+    total_nodes: &mut usize,
+    total_paths: &mut usize,
+    total_layer_bytes: &mut usize,
+) -> Result<(), String> {
+    if depth > MAX_DEPTH {
+        return Err("CDR group nesting is too deep".to_owned());
+    }
+    for node in nodes {
+        if &node.tag != b"LIST" {
+            continue;
+        }
+        if &node.kind == b"obj " {
+            if objects.len() >= MAX_OBJECTS {
+                return Err("CDR has too many objects".to_owned());
+            }
+            *total_layer_bytes = total_layer_bytes
+                .checked_add(layer.len())
+                .ok_or("CDR layer-size overflow")?;
+            if *total_layer_bytes > MAX_LAYER_BYTES {
+                return Err("CDR reconstructed layer data exceeds the limit".to_owned());
+            }
+            let value = object(node, layer, styles, page_w, page_h, inherited, total_nodes)?;
+            *total_paths = total_paths
+                .checked_add(value.paths.len())
+                .ok_or("CDR path-count overflow")?;
+            if *total_paths > MAX_PATHS {
+                return Err("CDR reconstructed data exceeds the limit".to_owned());
+            }
+            objects.push(value);
+        } else if &node.kind == b"grp " {
+            let group_transform = compose(inherited, transform(node)?);
+            collect_objects(
+                &node.children,
+                layer,
+                styles,
+                page_w,
+                page_h,
+                group_transform,
+                depth + 1,
+                objects,
+                total_nodes,
+                total_paths,
+                total_layer_bytes,
+            )?;
+        }
+    }
+    Ok(())
+}
+
+fn mcfg_dimensions(nodes: &[Node]) -> Result<(f64, f64), String> {
+    let record = all(nodes, b"mcfg")
+        .into_iter()
+        .next()
+        .ok_or("CDR RIFF has no measurable mcfg page dimensions")?;
+    let width = i32_at(&record.payload, 12)? as f64 / UNITS_PER_MM;
+    let height = i32_at(&record.payload, 16)? as f64 / UNITS_PER_MM;
+    if !(width.is_finite()
+        && height.is_finite()
+        && 0.0 < width
+        && width <= 10_000.0
+        && 0.0 < height
+        && height <= 10_000.0)
+    {
+        return Err("CDR mcfg page dimensions are invalid".to_owned());
+    }
+    Ok((width, height))
 }
 
 fn metadata_dimension(metadata: &str, tag: &str) -> Result<f64, String> {
@@ -603,12 +719,11 @@ pub fn decode(riff: &[u8], metadata: &[u8]) -> Result<Drawing, String> {
             "native CDR reader supports version 15, not {version}"
         ));
     }
-    let metadata = std::str::from_utf8(metadata).map_err(|_| "CDR metadata is not UTF-8")?;
-    let width = metadata_dimension(metadata, "PageWidth")?;
-    let height = metadata_dimension(metadata, "PageHeight")?;
-    if width <= 0.0 || height <= 0.0 {
-        return Err("CDR page dimensions must be positive".to_owned());
-    }
+    let metadata = if metadata.is_empty() {
+        None
+    } else {
+        Some(std::str::from_utf8(metadata).map_err(|_| "CDR metadata is not UTF-8")?)
+    };
     let mut count = 0;
     let outer = records(riff, 12, riff.len(), None, &mut count, 0)?;
     let mut nodes = Vec::new();
@@ -620,6 +735,15 @@ pub fn decode(riff: &[u8], metadata: &[u8]) -> Result<Drawing, String> {
             nodes.push(node);
         }
     }
+    let (width, height) = mcfg_dimensions(&nodes).or_else(|_| {
+        let metadata = metadata.ok_or("CDR package has no measurable page dimensions")?;
+        let width = metadata_dimension(metadata, "PageWidth")?;
+        let height = metadata_dimension(metadata, "PageHeight")?;
+        if width <= 0.0 || height <= 0.0 {
+            return Err("CDR page dimensions must be positive".to_owned());
+        }
+        Ok((width, height))
+    })?;
     let styles = outlines(&nodes);
     let pages: Vec<&Node> = nodes
         .iter()
@@ -655,27 +779,19 @@ pub fn decode(riff: &[u8], metadata: &[u8]) -> Result<Drawing, String> {
         if total_layer_bytes > MAX_LAYER_BYTES {
             return Err("CDR reconstructed layer data exceeds the limit".to_owned());
         }
-        for child in &layer.children {
-            if &child.tag == b"LIST" && &child.kind == b"obj " {
-                if objects.len() >= MAX_OBJECTS {
-                    return Err("CDR has too many objects".to_owned());
-                }
-                total_layer_bytes = total_layer_bytes
-                    .checked_add(name.len())
-                    .ok_or("CDR layer-size overflow")?;
-                if total_layer_bytes > MAX_LAYER_BYTES {
-                    return Err("CDR reconstructed layer data exceeds the limit".to_owned());
-                }
-                let value = object(child, &name, &styles, width, height, &mut total_nodes)?;
-                total_paths = total_paths
-                    .checked_add(value.paths.len())
-                    .ok_or("CDR path-count overflow")?;
-                if total_paths > MAX_PATHS {
-                    return Err("CDR reconstructed data exceeds the limit".to_owned());
-                }
-                objects.push(value);
-            }
-        }
+        collect_objects(
+            &layer.children,
+            &name,
+            &styles,
+            width,
+            height,
+            [1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+            0,
+            &mut objects,
+            &mut total_nodes,
+            &mut total_paths,
+            &mut total_layer_bytes,
+        )?;
     }
     if objects.is_empty() {
         return Err("the CDR contains no supported curve objects".to_owned());
@@ -690,9 +806,102 @@ pub fn decode(riff: &[u8], metadata: &[u8]) -> Result<Drawing, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{inflate, layer_name, object, path_data, Node, MAX_LAYER_NAME_BYTES};
+    use super::{
+        collect_objects, inflate, layer_name, mcfg_dimensions, object, outlines, path_data,
+        records, Node, MAX_LAYER_NAME_BYTES,
+    };
     use flate2::{write::ZlibEncoder, Compression};
     use std::io::Write;
+
+    #[test]
+    fn style_table_list_is_opaque_not_fake_riff_children() {
+        let mut data = Vec::new();
+        data.extend_from_slice(b"LIST");
+        data.extend_from_slice(&12u32.to_le_bytes());
+        data.extend_from_slice(b"stlt");
+        data.extend_from_slice(&[5, 0, 0, 0, 2, 0, 0, 0]);
+        let mut count = 0;
+        let nodes = records(&data, 0, data.len(), None, &mut count, 0).unwrap();
+        assert_eq!(nodes.len(), 1);
+        assert_eq!(&nodes[0].kind, b"stlt");
+        assert!(nodes[0].children.is_empty());
+        assert_eq!(&nodes[0].payload[..4], b"stlt");
+    }
+
+    #[test]
+    fn mcfg_dimensions_are_available_without_package_metadata() {
+        let mut payload = vec![0u8; 20];
+        payload[12..16].copy_from_slice(&3_810_000i32.to_le_bytes());
+        payload[16..20].copy_from_slice(&5_715_000i32.to_le_bytes());
+        let nodes = vec![Node {
+            tag: *b"mcfg",
+            kind: [0; 4],
+            payload,
+            children: Vec::new(),
+        }];
+        assert_eq!(mcfg_dimensions(&nodes).unwrap(), (381.0, 571.5));
+    }
+
+    #[test]
+    fn real_v15_outline_presence_uses_bit_zero_not_scale_bit() {
+        fn outline_node(id: u32, line_type: u16, width: i32, rgb: u32) -> Node {
+            let mut payload = vec![0u8; 88];
+            payload[..4].copy_from_slice(&id.to_le_bytes());
+            payload[4..8].copy_from_slice(&1u32.to_le_bytes());
+            payload[12..14].copy_from_slice(&line_type.to_le_bytes());
+            payload[18..22].copy_from_slice(&width.to_le_bytes());
+            payload[76..78].copy_from_slice(&5u16.to_le_bytes());
+            payload[84..88].copy_from_slice(&rgb.to_le_bytes());
+            Node {
+                tag: *b"outl",
+                kind: [0; 4],
+                payload,
+                children: Vec::new(),
+            }
+        }
+        let nodes = vec![
+            outline_node(1, 0x0002, 1323, 0x00ff0000),
+            outline_node(2, 0x0001, 0, 0),
+        ];
+        let got = outlines(&nodes);
+        assert_eq!(got.get(&1), Some(&([255, 0, 0], 0.1323, false)));
+        assert!(!got.contains_key(&2));
+    }
+
+    #[test]
+    fn grouped_object_is_visited_by_the_native_collector() {
+        let object_node = Node {
+            tag: *b"LIST",
+            kind: *b"obj ",
+            payload: Vec::new(),
+            children: Vec::new(),
+        };
+        let group = Node {
+            tag: *b"LIST",
+            kind: *b"grp ",
+            payload: Vec::new(),
+            children: vec![object_node],
+        };
+        let mut objects = Vec::new();
+        let mut total_nodes = 0;
+        let mut total_paths = 0;
+        let mut total_layer_bytes = 0;
+        let error = collect_objects(
+            &[group],
+            "Layer 1",
+            &Default::default(),
+            381.0,
+            571.5,
+            [1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+            0,
+            &mut objects,
+            &mut total_nodes,
+            &mut total_paths,
+            &mut total_layer_bytes,
+        )
+        .unwrap_err();
+        assert!(error.contains("unsupported non-curve object"));
+    }
 
     #[test]
     fn move_close_starts_a_new_open_subpath_without_a_chord() {
@@ -764,6 +973,7 @@ mod tests {
             &Default::default(),
             100.0,
             80.0,
+            [1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
             &mut total_nodes,
         )
         .is_err());

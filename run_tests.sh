@@ -74,6 +74,9 @@ PURE_SUITES=(
     spike/test_curve_through_polyline.py
     spike/test_curve_through_pt.py
     spike/test_tween_curves.py
+    spike/test_sequential_object_steps.py
+    spike/test_handlecurve.py
+    spike/test_curve_through_srf_control_pt.py
     spike/test_conic.py
     spike/test_parabola.py
     spike/test_parabola3pt.py
@@ -92,6 +95,8 @@ PURE_SUITES=(
     spike/test_document_clipboard.py
     spike/test_sessionlog.py
     spike/test_bugreport.py
+    spike/test_ai_assistant.py
+    spike/test_ai_transport.py
     spike/test_open_arg.py
     spike/test_printdialog.py
     spike/test_dxf_reader.py
@@ -122,6 +127,7 @@ PURE_SUITES=(
     spike/test_native_vector_export.py
     spike/test_native_command_search.py
     spike/test_native_coil.py
+    spike/test_native_coil_preview.py
     spike/test_native_interpolate.py
     spike/test_native_tween.py
     spike/test_tracedraw.py

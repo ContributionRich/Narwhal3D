@@ -18,8 +18,9 @@ sys.path.insert(0, ROOT)
 
 import rhino3dm as r3  # noqa: E402
 
-from narwhal3d import (cdr_reader, embedded_cdr, filedialog, kernel, print2d,
-                       print_commands, tracedraw)  # noqa: E402
+from narwhal3d import (cdr_reader, dxf_reader, embedded_cdr, export_commands,
+                       filedialog, import_commands, kernel, print2d, print_commands,
+                       tracedraw)  # noqa: E402
 from narwhal3d.kernel import occt_backend as ob  # noqa: E402
 from narwhal3d.model import NarwhalModel  # noqa: E402
 from narwhal3d.state import app_state  # noqa: E402
@@ -190,6 +191,53 @@ def run():
                   ["stroke"]["width"] == 0.0762,
               "Export CDRVersion=17 uses the bundled Rust writer and strictly reopens",
               f"{v17_msg!r}")
+
+    # Paired physical-unit round trips: the same 25.4 mm-radius drawing authored
+    # as 25.4 model units in mm and 1 model unit in inches must reopen identically.
+    def physical_model(unit, radius):
+        candidate = NarwhalModel()
+        candidate.set_unit_system(unit)
+        layer = r3.Layer()
+        layer.Name = "Cut"
+        layer.Color = (255, 0, 0, 255)
+        layer_index = candidate.file.Layers.Add(layer)
+        candidate.add_object(bridge.make_circle((0, 0, 0), radius), "Physical", layer_index)
+        return candidate
+
+    physical = [("mm", physical_model("Millimeters", 25.4)),
+                ("inch", physical_model("Inches", 1.0))]
+    dxf_paths, cdr_paths = [], []
+    for label, candidate in physical:
+        dxf_path = os.path.join(TMP, f"physical-{label}.dxf")
+        cdr_path = os.path.join(TMP, f"physical-{label}.cdr")
+        export_commands.export_objects(candidate, list(candidate.file.Objects), dxf_path)
+        export_commands.export_objects(candidate, list(candidate.file.Objects), cdr_path)
+        dxf_paths.append(dxf_path)
+        cdr_paths.append(cdr_path)
+    dxf_drawings = [dxf_reader.read_dxf(path) for path in dxf_paths]
+    dxf_radii = [drawing["entities"][0]["radius"] for drawing in dxf_drawings]
+    dxf_models = [import_commands.open_foreign(path)[0] for path in dxf_paths]
+    dxf_spans = [model.file.Objects[0].Geometry.GetBoundingBox().Max.X
+                 - model.file.Objects[0].Geometry.GetBoundingBox().Min.X
+                 for model in dxf_models]
+    check(dxf_radii == [25.4, 25.4] and all(abs(span - 50.8) < 1e-9
+                                             for span in dxf_spans),
+          "identical mm/inch DXF exports reopen at the same physical size",
+          f"radii={dxf_radii}, spans={dxf_spans}")
+    check(all(drawing["layer_true_colors"].get("Cut") == 0xFF0000
+              and drawing["entities"][0].get("true_color") == 0xFF0000
+              for drawing in dxf_drawings),
+          "DXF export preserves exact red layer and entity color through group 420",
+          f"{dxf_drawings}")
+    cdr_drawings = [cdr_reader.read_cdr(path) for path in cdr_paths]
+    cdr_models = [import_commands.open_foreign(path)[0] for path in cdr_paths]
+    cdr_spans = [model.file.Objects[0].Geometry.GetBoundingBox().Max.X
+                 - model.file.Objects[0].Geometry.GetBoundingBox().Min.X
+                 for model in cdr_models]
+    check(all(abs(drawing.width_mm - 50.8) < 1e-9 for drawing in cdr_drawings)
+          and all(abs(span - 50.8) < 1e-6 for span in cdr_spans),
+          "identical mm/inch CDR exports reopen at the same physical size",
+          f"pages={[drawing.width_mm for drawing in cdr_drawings]}, spans={cdr_spans}")
 
     # 6. perspective: a 2-D export cannot preserve scale -> refused
     print_commands.view_provider = lambda: print2d.View(

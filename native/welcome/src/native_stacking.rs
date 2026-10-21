@@ -25,6 +25,22 @@ fn forced_wayland_socket(pid: u32) -> String {
     format!("narwhal3d-force-x11-{pid}")
 }
 
+fn centered_origin(
+    parent_x: i32,
+    parent_y: i32,
+    parent_width: u32,
+    parent_height: u32,
+    child_width: u32,
+    child_height: u32,
+) -> (i32, i32) {
+    let x = i64::from(parent_x) + (i64::from(parent_width) - i64::from(child_width)) / 2;
+    let y = i64::from(parent_y) + (i64::from(parent_height) - i64::from(child_height)) / 2;
+    (
+        x.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32,
+        y.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32,
+    )
+}
+
 #[cfg(target_os = "linux")]
 pub fn configure_child(command: &mut Command, welcome: Option<NativeWindowId>) {
     if welcome.is_some() && std::env::var_os("DISPLAY").is_some() {
@@ -82,6 +98,7 @@ mod x11 {
         wm_state_above: Atom,
         active_window: Atom,
         restack_window: Atom,
+        moveresize_window: Atom,
     }
 
     impl Atoms {
@@ -93,6 +110,7 @@ mod x11 {
                 wm_state_above: intern(connection, b"_NET_WM_STATE_ABOVE")?,
                 active_window: intern(connection, b"_NET_ACTIVE_WINDOW")?,
                 restack_window: intern(connection, b"_NET_RESTACK_WINDOW")?,
+                moveresize_window: intern(connection, b"_NET_MOVERESIZE_WINDOW")?,
             })
         }
     }
@@ -181,6 +199,65 @@ mod x11 {
         Ok(())
     }
 
+    fn place_welcome_over_runtime(
+        connection: &RustConnection,
+        root: Window,
+        atoms: &Atoms,
+        welcome: Window,
+        runtime: Window,
+    ) -> Result<()> {
+        let runtime_geometry = connection.get_geometry(runtime)?.reply()?;
+        let runtime_root = connection
+            .translate_coordinates(runtime, root, 0, 0)?
+            .reply()?;
+        let welcome_geometry = connection.get_geometry(welcome)?.reply()?;
+        let (x, y) = super::centered_origin(
+            i32::from(runtime_root.dst_x),
+            i32::from(runtime_root.dst_y),
+            u32::from(runtime_geometry.width),
+            u32::from(runtime_geometry.height),
+            u32::from(welcome_geometry.width),
+            u32::from(welcome_geometry.height),
+        );
+        eprintln!(
+            "[narwhal-welcome] placement geometry: runtime={runtime:#x} runtime_root_x={} runtime_root_y={} runtime_width={} runtime_height={} welcome={welcome:#x} welcome_width={} welcome_height={} requested_x={} requested_y={}",
+            runtime_root.dst_x,
+            runtime_root.dst_y,
+            runtime_geometry.width,
+            runtime_geometry.height,
+            welcome_geometry.width,
+            welcome_geometry.height,
+            x,
+            y,
+        );
+        // EWMH is authoritative for reparenting window managers. Bits 8 and 9 say that
+        // x and y are present; StaticGravity keeps them in root-window coordinates.
+        let ewmh_result = send_ewmh(
+            connection,
+            root,
+            welcome,
+            atoms.moveresize_window,
+            [10 | (1 << 8) | (1 << 9), x as u32, y as u32, 0, 0],
+        );
+        // Best-effort fallback for lightweight/non-EWMH managers.
+        let direct_result = connection
+            .configure_window(welcome, &ConfigureWindowAux::new().x(x).y(y))
+            .map_err(|error| error.to_string())
+            .and_then(|cookie| cookie.check().map_err(|error| error.to_string()));
+        eprintln!(
+            "[narwhal-welcome] placement requests: _NET_MOVERESIZE_WINDOW accepted={}; ConfigureWindow accepted={}",
+            ewmh_result.is_ok(),
+            direct_result.is_ok(),
+        );
+        match (ewmh_result, direct_result) {
+            (Err(ewmh_error), Err(direct_error)) => Err(format!(
+                "both placement requests failed: EWMH: {ewmh_error}; direct: {direct_error}"
+            )
+            .into()),
+            _ => Ok(()),
+        }
+    }
+
     fn establish(
         connection: &RustConnection,
         root: Window,
@@ -189,6 +266,7 @@ mod x11 {
         runtime: Window,
         request_focus: bool,
     ) -> Result<()> {
+        place_welcome_over_runtime(connection, root, atoms, welcome, runtime)?;
         connection
             .change_property32(
                 PropMode::REPLACE,
@@ -249,6 +327,9 @@ mod x11 {
             thread::sleep(Duration::from_millis(25));
         };
 
+        eprintln!(
+            "[narwhal-welcome] selected mapped windows: welcome={welcome:#x}, runtime={runtime:#x}, runtime_pid={runtime_pid}"
+        );
         establish(&connection, root, &atoms, welcome, runtime, true)?;
         for delay in [50, 150, 300] {
             thread::sleep(Duration::from_millis(delay));
@@ -263,11 +344,24 @@ mod x11 {
 
 #[cfg(test)]
 mod tests {
-    use super::forced_wayland_socket;
+    use super::{centered_origin, forced_wayland_socket};
 
     #[test]
     fn forced_socket_is_process_specific_and_non_default() {
         assert_eq!(forced_wayland_socket(42), "narwhal3d-force-x11-42");
         assert_ne!(forced_wayland_socket(42), "wayland-0");
+    }
+
+    #[test]
+    fn welcome_centers_over_the_runtime_even_on_offset_monitors() {
+        assert_eq!(
+            centered_origin(1920, 120, 2560, 1440, 900, 620),
+            (2750, 530)
+        );
+        assert_eq!(
+            centered_origin(-1600, -200, 1600, 1200, 900, 620),
+            (-1250, 90)
+        );
+        assert_eq!(centered_origin(40, 50, 400, 300, 900, 620), (-210, -110));
     }
 }

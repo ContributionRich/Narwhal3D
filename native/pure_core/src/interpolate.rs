@@ -158,6 +158,188 @@ fn solve(points: &[[f64; 3]], degree: usize, style: u8) -> Result<Interpolation,
     Ok((y, k, p))
 }
 
+#[allow(clippy::needless_range_loop)]
+fn skin(
+    sections: &[[f64; 3]],
+    k: usize,
+    width: usize,
+    degree: usize,
+    style: u8,
+) -> Result<Interpolation, i32> {
+    if k < 2 || width == 0 || sections.len() != k * width || style > 2 {
+        return Err(ERR_INPUT);
+    }
+    let q = degree.min(k - 1).max(1);
+    let params = if style == 0 || q == 1 {
+        (0..k)
+            .map(|j| j as f64 / (k - 1) as f64)
+            .collect::<Vec<_>>()
+    } else {
+        let mut acc = vec![0.0; k];
+        let mut used = 0usize;
+        for i in 0..width {
+            let col: Vec<[f64; 3]> = (0..k).map(|j| sections[j * width + i]).collect();
+            if let Ok(p) = parameters(&col, style) {
+                used += 1;
+                for j in 0..k {
+                    acc[j] += p[j];
+                }
+            }
+        }
+        if used == 0 {
+            (0..k).map(|j| j as f64 / (k - 1) as f64).collect()
+        } else {
+            for v in &mut acc {
+                *v /= used as f64
+            }
+            acc[0] = 0.0;
+            acc[k - 1] = 1.0;
+            acc
+        }
+    };
+    if q == 1 {
+        let mut knots = vec![0.0];
+        knots.extend(&params);
+        knots.push(1.0);
+        let mut out = Vec::with_capacity(k * width);
+        for i in 0..width {
+            for j in 0..k {
+                out.push(sections[j * width + i]);
+            }
+        }
+        return Ok((out, knots, q));
+    }
+    let knot = knots(&params, q);
+    let mut a = vec![0.0; k * k];
+    for (row, &u) in params.iter().enumerate() {
+        let s = span(k, q, u, &knot);
+        for (j, v) in basis(s, u, q, &knot).into_iter().enumerate() {
+            a[row * k + s - q + j] = v;
+        }
+    }
+    let mut perm: Vec<usize> = (0..k).collect();
+    for col in 0..k {
+        let pivot = (col..k)
+            .max_by(|&i, &j| a[i * k + col].abs().total_cmp(&a[j * k + col].abs()))
+            .unwrap();
+        if a[pivot * k + col].abs() < 1e-14 {
+            return Err(ERR_SINGULAR);
+        }
+        if pivot != col {
+            for j in 0..k {
+                a.swap(col * k + j, pivot * k + j)
+            }
+            perm.swap(col, pivot)
+        }
+        let inv = 1.0 / a[col * k + col];
+        for i in col + 1..k {
+            let f = a[i * k + col] * inv;
+            a[i * k + col] = f;
+            if f != 0.0 {
+                for j in col + 1..k {
+                    a[i * k + j] -= f * a[col * k + j];
+                }
+            }
+        }
+    }
+    let mut out = Vec::with_capacity(k * width);
+    for column in 0..width {
+        let mut y: Vec<[f64; 3]> = perm.iter().map(|&j| sections[j * width + column]).collect();
+        for i in 1..k {
+            for p in 0..i {
+                let f = a[i * k + p];
+                for d in 0..3 {
+                    y[i][d] -= f * y[p][d];
+                }
+            }
+        }
+        for i in (0..k).rev() {
+            for p in i + 1..k {
+                let f = a[i * k + p];
+                for d in 0..3 {
+                    y[i][d] -= f * y[p][d];
+                }
+            }
+            let inv = 1.0 / a[i * k + i];
+            for d in 0..3 {
+                y[i][d] *= inv;
+            }
+        }
+        out.extend(y);
+    }
+    Ok((out, knot, q))
+}
+
+/// Skin section-major xyz control rows into width-major output columns.
+/// # Safety
+/// Input/output spans are valid for declared capacities and do not overlap.
+#[allow(clippy::too_many_arguments)]
+#[no_mangle]
+pub unsafe extern "C" fn narwhal_pure_core_skin_control_net(
+    sections: *const f64,
+    section_count: usize,
+    width: usize,
+    degree: i64,
+    style: u8,
+    output: *mut f64,
+    output_capacity: usize,
+    out_knots: *mut f64,
+    knot_capacity: usize,
+    out_degree: *mut u64,
+    out_values: *mut u64,
+    out_knot_count: *mut u64,
+) -> i32 {
+    if out_degree.is_null() || out_values.is_null() || out_knot_count.is_null() {
+        return ERR_NULL;
+    }
+    *out_degree = 0;
+    *out_values = 0;
+    *out_knot_count = 0;
+    let point_count = match section_count.checked_mul(width) {
+        Some(v) if v <= 2_000_000 => v,
+        _ => return ERR_SIZE,
+    };
+    let coords = match point_count.checked_mul(3) {
+        Some(v) => v,
+        None => return ERR_SIZE,
+    };
+    let flat = match crate::checked_slice(sections, coords) {
+        Some(v) => v,
+        None => return ERR_NULL,
+    };
+    if flat.iter().any(|v| !v.is_finite()) {
+        return ERR_INPUT;
+    }
+    let pts: Vec<[f64; 3]> = flat.chunks_exact(3).map(|v| [v[0], v[1], v[2]]).collect();
+    let degree = match usize::try_from(degree) {
+        Ok(v) => v,
+        Err(_) => return ERR_INPUT,
+    };
+    let (net, k, q) = match skin(&pts, section_count, width, degree, style) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+    if output_capacity < coords || knot_capacity < k.len() {
+        return ERR_SIZE;
+    }
+    let out = match crate::checked_slice_mut(output, output_capacity) {
+        Some(v) => v,
+        None => return ERR_NULL,
+    };
+    let ko = match crate::checked_slice_mut(out_knots, knot_capacity) {
+        Some(v) => v,
+        None => return ERR_NULL,
+    };
+    for (i, p) in net.iter().enumerate() {
+        out[3 * i..3 * i + 3].copy_from_slice(p)
+    }
+    ko[..k.len()].copy_from_slice(&k);
+    *out_degree = q as u64;
+    *out_values = coords as u64;
+    *out_knot_count = k.len() as u64;
+    0
+}
+
 /// Interpolate packed xyz points into caller-owned controls and full knots.
 /// # Safety
 /// Input/output spans are valid for declared capacities and do not overlap.
@@ -239,6 +421,24 @@ mod tests {
         assert_eq!(c[0], p[0]);
         assert_eq!(c[3], p[3]);
     }
+    #[test]
+    fn skinning_preserves_width_major_shape() {
+        let sections = vec![
+            [0., 0., 0.],
+            [1., 0., 0.],
+            [0., 1., 1.],
+            [1., 1., 1.],
+            [0., 2., 0.],
+            [1., 2., 0.],
+        ];
+        let (net, k, q) = skin(&sections, 3, 2, 3, 1).unwrap();
+        assert_eq!(q, 2);
+        assert_eq!(net.len(), 6);
+        assert_eq!(k.len(), 6);
+        assert_eq!(net[0], sections[0]);
+        assert_eq!(net[2], sections[4]);
+    }
+
     #[test]
     fn duplicate_chord_rejects() {
         assert_eq!(

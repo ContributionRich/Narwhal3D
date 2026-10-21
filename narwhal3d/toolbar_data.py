@@ -8047,6 +8047,7 @@ ICON_SOURCES = {'narwhal-3dface.png': '3dface.png',
  'narwhal-packsubdfaces.png': 'packsubdfaces.png',
  'narwhal-packtextures.png': 'packtextures.png',
  'narwhal-pan.png': 'pan.png',
+ 'narwhal-panel-assistant.png': 'help.png',
  'narwhal-panel-display.png': 'panel_display.png',
  'narwhal-panel-layers.png': 'layer.png',
  'narwhal-panel-properties.png': 'properties.png',
@@ -8326,7 +8327,7 @@ TOOLBAR_ICON_NAMES = frozenset(
 ) | frozenset(
     button['icon'] for rows in FLYOUTS.values() for button in rows if button.get('icon')
 )
-PANEL_ICON_NAMES = frozenset({'narwhal-panel-display.png', 'narwhal-panel-properties.png', 'narwhal-panel-report.png', 'narwhal-panel-layers.png'})
+PANEL_ICON_NAMES = frozenset({'narwhal-panel-assistant.png', 'narwhal-panel-display.png', 'narwhal-panel-properties.png', 'narwhal-panel-report.png', 'narwhal-panel-layers.png'})
 
 # Public, independently authored slot overrides restore distinctions that the historical
 # first-command icon reduction cannot represent. Keep the generated records unchanged;

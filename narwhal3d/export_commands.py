@@ -283,7 +283,7 @@ def _export_dxf(model, objs, path, tolerance):
     from . import dxf_writer
 
     unit_mm, unit = print2d.model_unit_mm(model)
-    entities, approx, skipped = [], [], []
+    entities, approx, skipped, layers = [], [], [], {}
     for obj in objs:
         geom = obj.Geometry
         name = obj.Attributes.Name or "object"
@@ -292,11 +292,22 @@ def _export_dxf(model, objs, path, tolerance):
             continue
         es, exact = _dxf_entities(geom, float(tolerance), unit_mm)
         try:
-            layer = model.file.Layers[int(obj.Attributes.LayerIndex)].Name or "0"
+            layer_record = model.file.Layers[int(obj.Attributes.LayerIndex)]
+            layer = layer_record.Name or "0"
+            layer_rgb = tuple(layer_record.Color)[:3]
         except Exception:  # noqa: BLE001
             layer = "0"
+            layer_rgb = (0, 0, 0)
+        layers[layer] = 0x1000000 + ((int(layer_rgb[0]) << 16)
+                                    | (int(layer_rgb[1]) << 8)
+                                    | int(layer_rgb[2]))
+        rgb = print2d._rgb(model, obj, "DisplayColor")
+        true_color = ((round(rgb[0] * 255) << 16)
+                      | (round(rgb[1] * 255) << 8)
+                      | round(rgb[2] * 255))
         for e in es:
             e["layer"] = layer
+            e["true_color"] = true_color
         entities += es
         if not exact:
             approx.append(name)
@@ -304,7 +315,7 @@ def _export_dxf(model, objs, path, tolerance):
         raise ValueError("nothing to export -- DXF export writes curves, and no curve "
                          "was selected (surfaces and solids are not written to DXF yet)")
     tmp = f"{path}.saving-{os.getpid()}.tmp"
-    dxf_writer.write_dxf(tmp, entities)
+    dxf_writer.write_dxf(tmp, entities, layers=layers)
     os.replace(tmp, path)
     msg = f"Exported {len(entities)} DXF entit{'y' if len(entities) == 1 else 'ies'} to {path}"
     if unit != "Millimeters":

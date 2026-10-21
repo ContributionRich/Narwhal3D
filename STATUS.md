@@ -6,7 +6,7 @@ Narwhal 3D is an extremely early public prerelease. This page records what curre
 
 Narwhal 3D is **not yet at full command parity with established NURBS CAD workflows**. It has a substantial working command set, but many commands, advanced options, selection routes, dialogs, and viewport tools remain missing or incomplete. A registered command name means that command is runnable; it does not guarantee every advanced option or interaction path is complete.
 
-The authored menu hierarchy exposes all 179 commands currently registered by Narwhal, plus Recent Files and 362 individually named unavailable commands with `(Not implemented)` labels. File includes recent/recovery, template, and document groups; Help includes learning/reference and support groups. The desktop toolbar workspace contains 582 top-strip slots across fifteen tabs plus the 37-cell left tool palette and its 28 linked flyouts. Of the 525 non-separator top slots, 118 currently invoke registered commands; every unavailable action remains visible, identifies itself on hover, and explains the gap when clicked.
+The authored menu hierarchy exposes all 181 commands currently registered by Narwhal, plus Recent Files and 361 individually named unavailable commands with `(Not implemented)` labels. File includes recent/recovery, template, and document groups; Help includes learning/reference and support groups. The desktop toolbar workspace contains 582 top-strip slots across fifteen tabs plus the 37-cell left tool palette and its 28 linked flyouts. Of the 525 non-separator top slots, 119 currently invoke registered commands; every unavailable action remains visible, identifies itself on hover, and explains the gap when clicked.
 
 The issue tracker is the live source for bounded contribution work. Current one-command starter tasks include:
 
@@ -15,7 +15,7 @@ The issue tracker is the live source for bounded contribution work. Current one-
 - [LockSwap](https://github.com/ContributionRich/Narwhal3D/issues/2)
 - [JoinCopy](https://github.com/ContributionRich/Narwhal3D/issues/3)
 
-Axis-based `Helix`, variable-radius `Spiral`, exact `Conic`, `Parabola`, `Hyperbola`, polyline/point-to-curve conversion, compatible `TweenCurves`, and tolerance-qualified `Catenary` now create real curve geometry with live previews; planar `Flat` Spiral is supported. `AroundCurve` remains explicitly unavailable until its moving-frame convention is measured.
+Axis-based `Helix`, variable-radius `Spiral`, exact `Conic`, `Parabola`, `Hyperbola`, polyline/point-to-curve conversion, compatible `TweenCurves`, tolerance-qualified `Catenary`, C1 `HandleCurve`, and surface-control-polygon extraction now create real curve geometry with live previews where point-driven; planar `Flat` Spiral is supported. `AroundCurve` remains explicitly unavailable until its moving-frame convention is measured.
 
 Major missing or incomplete areas include advanced curve and surface construction, deformation tools, some solid-editing operations, advanced viewport arrangements, document/options panels, rendering features, and many less-common command options. Examples that are not currently implemented include `Bend`, `Twist`, `Taper`, `Flow`, `BlendSrf`, `FilletSrf`, `NetworkSrf`, `Patch`, `MatchSrf`, `Untrim`, and `BooleanSplit`.
 
