@@ -1455,7 +1455,11 @@ def _edge_visibility(shape, tangent_angle=None):
                 continuity = None
             if continuity in (GeomAbs_G1, GeomAbs_G2, GeomAbs_C1, GeomAbs_C2,
                               GeomAbs_C3, GeomAbs_CN):
+                # A tangent join is still a structural boundary between two distinct
+                # analytic faces. Fillet-to-plane edges remain visible in shaded CAD views;
+                # only a periodic seam whose two ancestors are the SAME face is hidden.
                 counts["tangent"] += 1
+                visible.add(index)
             else:
                 counts["crease"] += 1
                 visible.add(index)
@@ -1475,7 +1479,8 @@ def tessellate_with_edges(shape, deflection=DISPLAY_DEFLECTION, angle=DISPLAY_ED
     """``(vertices, triangles, edge_pairs)``: `tessellate` plus the vertex pairs lying on
     the shape's REAL edges -- each face's own trim boundary, seams included.
 
-    the reference CAD application draws a solid's B-Rep edges rather than every sharp display-triangle boundary.
+    The viewport draws structural B-Rep boundaries, including tangent joins between distinct
+    faces, rather than every sharp display-triangle boundary. Same-face periodic seams stay hidden.
     Thin slivers produced by OCCT on curved walls can cross an angle threshold; in a
     representative extrusion, about 4% of the drawn mesh edges were not B-Rep edges.
     Within one face OCCT shares nodes between its triangles -- except along a
