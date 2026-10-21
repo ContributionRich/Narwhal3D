@@ -12,6 +12,7 @@ SIDEBAR_HOVER_IMAGE = os.path.join(ARTIFACTS, "ui_sidebar_hover.png")
 SIDEBAR_FLYOUT_IMAGE = os.path.join(ARTIFACTS, "ui_sidebar_flyout.png")
 VIEWPORT_ARROW_IMAGE = os.path.join(ARTIFACTS, "ui_viewport_arrow.png")
 PRINT_SELECTION_IMAGE = os.path.join(ARTIFACTS, "ui_print_selection.png")
+FILLET_SELECTION_IMAGE = os.path.join(ARTIFACTS, "ui_fillet_selection.png")
 REPORT_PATH = os.path.join(ARTIFACTS, "ui_report.txt")
 POLL_SECONDS = 0.25
 MAX_POLLS = 120
@@ -520,18 +521,54 @@ def _inspect(layout_was_ready):
                 ui._sel_drag_end()
             fillet_cmd = app_state.active_command
             selected_whole = sorted(ui.selected_display_names())
+            selected_edge_yellow = 0
+            handle_label_white = 0
+            if screen_point is not None and _capture_path(bpy, FILLET_SELECTION_IMAGE):
+                sx, sy = float(screen_point.x), float(screen_point.y)
+                pixels = _crop_pixels(
+                    bpy, FILLET_SELECTION_IMAGE,
+                    (top_region.x + sx - 30, top_region.y + sy - 30,
+                     top_region.x + sx + 30, top_region.y + sy + 30))
+                yellow = ui.SUBOBJECT_COLOR[:3]
+                selected_edge_yellow = sum(
+                    max(abs(rgb[i] - yellow[i]) for i in range(3)) <= 0.15
+                    for rgb in pixels)
+                label_pixels = _crop_pixels(
+                    bpy, FILLET_SELECTION_IMAGE,
+                    (top_region.x + sx + 46, top_region.y + sy + 14,
+                     top_region.x + sx + 88, top_region.y + sy + 38))
+                handle_label_white = sum(min(rgb) >= 0.75 for rgb in label_pixels)
             picked_edges = list(getattr(fillet_cmd, "_edges", ()))
             picked_args = list(getattr(fillet_cmd, "args", ()))
+            owner_name = getattr(fillet_cmd, "_owner_name", None)
             selected_ok = (box_name is not None and edge_id is not None
                            and getattr(fillet_cmd, "name", None) == "FilletEdge"
-                           and picked_args == [box_name] and picked_edges == [edge_id]
-                           and not selected_whole)
+                           and picked_args == [] and owner_name == box_name
+                           and picked_edges == [edge_id] and not selected_whole
+                           and selected_edge_yellow > 5 and handle_label_white > 5
+                           and fillet_cmd.prompt.startswith("Select edges to fillet."))
             result_name = None
             result_types = {}
             airtight = False
+            edit_phase = False
+            handles = ()
+            preview_exact = False
             if selected_ok:
                 from narwhal3d import kernel as fillet_kernel
 
+                app_state.feed_line("")
+                edit_cmd = app_state.active_command
+                edit_phase = (edit_cmd is fillet_cmd
+                              and fillet_cmd.phase == fillet_cmd.EDIT_HANDLES)
+                handles = fillet_cmd.handle_records()
+                original_still_present = app_state.ctx.geom_by_name(box_name) is not None
+                app_state.feed_line("Preview=Yes")
+                preview_geom = fillet_cmd.preview_geometry()
+                preview_master = fillet_kernel.master_of(preview_geom)
+                occt = ui.bridge._occt()
+                preview_exact = (preview_master is not None and occt is not None
+                                 and occt.is_airtight(preview_master)
+                                 and original_still_present)
                 app_state.feed_line("")
                 fillet_executed = True
                 result_names = sorted({obj.name for obj in bpy.data.objects} - before_names)
@@ -539,17 +576,19 @@ def _inspect(layout_was_ready):
                 result_geom = (app_state.ctx.geom_by_name(result_name)
                                if result_name is not None else None)
                 result_master = fillet_kernel.master_of(result_geom)
-                occt = ui.bridge._occt()
                 if result_master is not None and occt is not None:
                     result_types = occt.face_types(result_master)
                     airtight = occt.is_airtight(result_master)
-            fillet_ok = (selected_ok and app_state.active_command is None and airtight
-                         and result_types.get("CYLINDER", 0) >= 1)
+            fillet_ok = (selected_ok and edit_phase and len(handles) == 1
+                         and preview_exact and app_state.active_command is None
+                         and airtight and result_types.get("CYLINDER", 0) >= 1)
             fillet_detail = (f"box={box_name}, expected edge={edge_id}, "
                              f"screen hit={screen_hit}, helper={helper_eligible}, "
-                             f"args={picked_args}, edges={picked_edges}, "
-                             f"whole selection={selected_whole}, result={result_name}, "
-                             f"types={result_types}, airtight={airtight}")
+                             f"owner={owner_name}, args={picked_args}, edges={picked_edges}, "
+                             f"whole selection={selected_whole}, yellow={selected_edge_yellow}, "
+                             f"label white={handle_label_white}, edit={edit_phase}, "
+                             f"handles={len(handles)}, preview exact={preview_exact}, "
+                             f"result={result_name}, types={result_types}, airtight={airtight}")
         except Exception as exc:  # noqa: BLE001
             fillet_detail = repr(exc)
         finally:

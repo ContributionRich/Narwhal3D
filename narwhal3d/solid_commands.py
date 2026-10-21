@@ -88,122 +88,255 @@ def _exact_or_none(out):
 # ---------------------------------------------------------------------------
 
 class _EdgeBevelCmd(Command):
-    """Shared implementation of ``FilletEdge`` and ``ChamferEdge``.
+    """Two-phase reference-compatible lifecycle for exact edge fillets and chamfers.
 
-    The size option applies one radius or distance to every picked edge, and the exact
-    result replaces the input solid. Other declared modes report that they are not yet
-    implemented and leave the document unchanged.
+    A viewport edge hit enters through :meth:`pick_edge`. The stable edge id is selection
+    state; its interior world point is only transport for the existing bridge API. The first
+    accepted edge binds the command to its owning solid, so subsequent picks cannot silently
+    cross into another part.
 
-    The solid is selected first, then each edge is identified by a point on it. Picks must
-    lie on exactly one edge within document tolerance; face, off-solid, vertex, and seam
-    picks are refused to avoid modifying the wrong edge. The size defaults to 1. Enter with
-    no edge selected ends the command without changing the document.
+    Enter closes edge selection and builds an exact cached candidate without editing the
+    document. A second Enter commits that candidate. ``preview_geometry`` is deliberately a
+    side-effect-free getter suitable for a draw callback; all OCCT work happens while handling
+    picks, options, or Enter.
     """
+    SELECT_EDGES = "SELECT_EDGES"
+    EDIT_HANDLES = "EDIT_HANDLES"
+
     chamfer = False
-    verb = "fillet"                 # "Select edges to <verb>"
+    verb = "fillet"
     past = "Filleted"
     size_option = "NextRadius"
     size_prompt = "Fillet radius"
     size_word = "radius"
-    preselect_names = 1
+    show_option = "ShowRadius"
+    # One synthetic step keeps Command.begin() interactive, but object selection is never
+    # consumed: this command begins with an edge-only viewport prompt.
+    steps = [("Select edges:", POINT)]
+    preselect_names = 0
 
     def __init__(self):
         super().__init__()
-        self._picks = []            # world points, one per picked edge
-        self._edges = []            # the edge index each pick resolved to
-        self._operand = None        # the exact OCCT solid the picks are resolved against
+        self.phase = self.SELECT_EDGES
+        self._owner_name = None
+        self._owner_geom = None
+        self._operand = None
+        self._edge_points = {}       # authoritative edge id -> bridge transport point
+        self._picks = []             # compatibility mirrors; never authoritative
+        self._edges = []
+        self._candidate = None
+        self._candidate_key = None
+        self._candidate_error = None
 
     @property
     def prompt(self):
         if self.pending_option is not None and self.pending_option.name == self.size_option:
             return f"{self.size_prompt} <{_num(self.opt[self.size_option])}>:"
-        return super().prompt
+        if self.pending_option is not None:
+            return opts.value_prompt(self.pending_option)
+        if self.phase == self.SELECT_EDGES:
+            base = f"Select edges to {self.verb}. Press Enter when done:"
+        else:
+            noun = "chamfer distance" if self.chamfer else "fillet"
+            base = f"Select {noun} handle to edit. Press Enter when done:"
+        return opts.format_prompt(base, self.options, self.opt)
 
     def _solid(self, ctx):
-        name = self.args[0] if self.args else None
+        name = self._owner_name
         return name, (ctx.geom_by_name(name) if name else None)
+
+    def _state_key(self):
+        return (self._owner_name, tuple(self._edge_points.items()),
+                float(self.opt[self.size_option]), bool(self.chamfer))
+
+    def _invalidate_candidate(self):
+        self._candidate = None
+        self._candidate_key = None
+        self._candidate_error = None
+
+    def _sync_pick_mirrors(self):
+        self._edges = list(self._edge_points)
+        self._picks = list(self._edge_points.values())
+
+    def _bind_owner(self, name, edge_id, ctx):
+        geom = ctx.geom_by_name(name) if name else None
+        if not isinstance(geom, (r3.Brep, r3.Extrusion)):
+            raise LookupError(f"{name!r} is not a polysurface")
+        occt = bridge._occt()
+        if occt is None:
+            raise LookupError("this command needs the OCCT kernel, which is not installed")
+        operand = bridge._occt_operand(geom)
+        if operand is None:
+            raise LookupError(
+                f"{name} has no exact solid (no registered master and no rebuildable recipe), "
+                f"so it cannot be {self.past.lower()} exactly")
+        curves = occt.edge_curves(operand)
+        valid = {int(curve.get("index", i + 1)) for i, curve in enumerate(curves)}
+        if int(edge_id) not in valid:
+            raise ValueError(f"edge {edge_id} does not exist on {name}")
+        self._owner_name = name
+        self._owner_geom = geom
+        self._operand = operand
+
+    def edge_selection_keys(self):
+        """Stable ``(object name, edge id)`` keys currently selected by the command."""
+        if self._owner_name is None:
+            return frozenset()
+        return frozenset((self._owner_name, edge_id) for edge_id in self._edge_points)
+
+    def handle_records(self):
+        """Handle descriptions for UI drawing; no geometry is built here."""
+        if not self.opt[self.show_option]:
+            return ()
+        size = float(self.opt[self.size_option])
+        return tuple({"name": self._owner_name, "edge_id": edge_id, "point": point,
+                      "size": size, "kind": self.size_word}
+                     for edge_id, point in self._edge_points.items())
+
+    def preview_geometry(self):
+        """The already-built exact preview, or None. This getter never calls OCCT."""
+        if not self.opt["Preview"] or self._candidate_key != self._state_key():
+            return None
+        return self._candidate
+
+    def _refresh_candidate(self, ctx):
+        self._candidate = None
+        self._candidate_key = self._state_key()
+        self._candidate_error = None
+        if self._owner_name is None or not self._edge_points:
+            return None
+        try:
+            out = bridge.bevel_edges_occt(
+                self._owner_geom, float(self.opt[self.size_option]), chamfer=self.chamfer,
+                edge_points=list(self._edge_points.values()))
+        except ValueError as e:
+            self._candidate_error = str(e)
+            return None
+        self._candidate = _exact_or_none(out)
+        if self._candidate is None:
+            self._candidate_error = bridge.last_occt_decline() or "the kernel declined"
+        return self._candidate
+
+    def pick_edge(self, name, edge_id, interior_point, action, ctx):
+        """Apply one viewport edge hit.
+
+        Plain click and Shift+click add. Ctrl+click removes. Only the first accepted add binds
+        the owner; every later action must name that same solid. ``edge_id`` remains the
+        authoritative identity while ``interior_point`` is retained for ``bevel_edges_occt``.
+        """
+        if self.phase != self.SELECT_EDGES:
+            return f"{self.name}: choose SelectEdges before changing edge selection", False
+        mode = (action or "plain").strip().lower()
+        if mode in ("control", "remove"):
+            mode = "ctrl"
+        if mode in ("add", "none", ""):
+            mode = "plain"
+        if mode not in ("plain", "shift", "ctrl"):
+            return f"{self.name}: unsupported edge action {action!r}", False
+        if self._owner_name is not None and name != self._owner_name:
+            return (f"{self.name}: edge {edge_id} belongs to {name}, but the first edge "
+                    f"belongs to {self._owner_name}"), False
+        edge_id = int(edge_id)
+        if mode == "ctrl":
+            if self._owner_name is None or edge_id not in self._edge_points:
+                return "that edge is not selected", False
+            del self._edge_points[edge_id]
+        else:
+            if self._owner_name is None:
+                try:
+                    self._bind_owner(name, edge_id, ctx)
+                except (LookupError, ValueError) as e:
+                    return f"{self.name}: {e}. Nothing was changed.", isinstance(e, LookupError)
+            self._edge_points[edge_id] = tuple(float(v) for v in interior_point)
+        self._sync_pick_mirrors()
+        self._invalidate_candidate()
+        if self.opt["Preview"] and self._edge_points:
+            self._refresh_candidate(ctx)
+        return f"{len(self._edge_points)} edge(s) selected -- press Enter when done", False
+
+    def on_mode(self, name, ctx):
+        if name == "SelectEdges":
+            self.phase = self.SELECT_EDGES
+            return "Select more edges. Press Enter when done.", False
+        return super().on_mode(name, ctx)
 
     def on_option_set(self, option, value, ctx):
         if option.name == self.size_option and float(value) <= 0.0:
             self.opt[option.name] = option.default
+            self._invalidate_candidate()
             return (f"{self.name}: the {self.size_word} must be positive "
                     f"(got {_num(value)})"), False
+        if option.name == self.size_option:
+            self._invalidate_candidate()
+            if self.phase == self.EDIT_HANDLES or self.opt["Preview"]:
+                self._refresh_candidate(ctx)
+        elif (option.name == "Preview" and value and self._edge_points
+              and self._candidate_key != self._state_key()):
+            self._refresh_candidate(ctx)
         return super().on_option_set(option, value, ctx)
 
-    def _resolve_pick(self, point, ctx):
-        """The edge index `point` picks on the solid. Raises ValueError, naming the problem."""
-        occt = bridge._occt()
-        if self._operand is None:
-            name, geom = self._solid(ctx)
-            if not isinstance(geom, (r3.Brep, r3.Extrusion)):
-                raise LookupError(f"{name!r} is not a polysurface")
-            if occt is None:
-                raise LookupError("this command needs the OCCT kernel, which is not installed")
-            self._operand = bridge._occt_operand(geom)
-            if self._operand is None:
-                raise LookupError(
-                    f"{name} has no exact solid (no registered master and no rebuildable "
-                    f"recipe), so it cannot be {self.past.lower()} exactly")
-        return _edge_at(self._operand, point, commands._document_tolerance(ctx))
-
     def _feed(self, text, ctx):
-        if self.step_index == 1 and self.pending_option is None:
-            raw = (text or "").strip()
-            if not raw:
-                if not self._picks:
-                    return f"{self.name}: no edges selected -- nothing changed", True
-                return self.execute(ctx)
-            is_option = opts.match(raw, self.options, self.opt).status != opts.NONE
-            if not is_option:
-                try:
-                    point = self._parse(POINT, raw, ctx)
-                    index = self._resolve_pick(point, ctx)
-                except LookupError as e:          # the OBJECT is unusable: stop
-                    return f"{self.name}: {e}. Nothing was changed.", True
-                except ValueError as e:           # just this pick: say so and stay
-                    return f"{self.name}: {e}", False
-                if index in self._edges:
-                    return f"that edge is already selected ({len(self._edges)} edge(s))", False
-                self._picks.append(point)
-                self._edges.append(index)
-                return f"{len(self._edges)} edge(s) selected -- press Enter when done", False
-        return super()._feed(text, ctx)
+        raw = (text or "").strip()
+        if self.pending_option is not None:
+            return super()._feed(raw, ctx)
+        if raw:
+            match = opts.match(raw, self.options, self.opt)
+            if match.status != opts.NONE:
+                return self._apply_option(match, ctx)
+            return (f"{self.name}: select an edge in the viewport; whole-object and point "
+                    f"input are not accepted"), False
+        if self.phase == self.SELECT_EDGES:
+            if not self._edge_points:
+                return f"{self.name}: no edges selected", False
+            self.phase = self.EDIT_HANDLES
+            if self._candidate_key != self._state_key():
+                self._refresh_candidate(ctx)
+            return f"Edit {self.size_word} handles, then press Enter to accept", False
+        return self.execute(ctx)
 
     def execute(self, ctx):
         name, geom = self._solid(ctx)
         if not isinstance(geom, (r3.Brep, r3.Extrusion)):
             return f"{self.name}: {name!r} is not a polysurface", True
+        if not self._edge_points:
+            return f"{self.name}: no edges selected -- nothing changed", True
+        if self._candidate_key != self._state_key():
+            self._refresh_candidate(ctx)
+        out = self._candidate
         size = float(self.opt[self.size_option])
-        try:
-            out = bridge.bevel_edges_occt(geom, size, chamfer=self.chamfer,
-                                          edge_points=list(self._picks))
-        except ValueError as e:
-            return f"{self.name}: {e}. Nothing was changed.", True
-        out = _exact_or_none(out)
         if out is None:
-            why = bridge.last_occt_decline() or "the kernel declined"
+            why = self._candidate_error or "the kernel declined"
             return (f"{self.name}: unable to {self.verb} {name} at {self.size_word} "
                     f"{_num(size)} -- {why}. Nothing was changed."), True
         display = _replace(ctx, name, out, self.past)
-        return (f"{self.past} {len(self._picks)} edge(s) of {name} at {self.size_word} "
-                f"{_num(size)}: {display}"), True
+        return (f"{self.past} {len(self._edge_points)} edge(s) of {name} at "
+                f"{self.size_word} {_num(size)}: {display}"), True
 
 
 def _not_built(names):
     return tuple(opts.Option(n, opts.MODE, help="Not implemented yet.") for n in names)
 
 
+def _edge_options(show_name, size_name, size_help):
+    return (
+        opts.Option(show_name, opts.TOGGLE, default=True,
+                    help="Show size handles in the viewport."),
+        opts.Option(size_name, opts.VALUE, default=1.0, value_kind="number", help=size_help),
+    ) + _not_built(("ChainEdges", "FaceEdges", "PreviousEdgeSelection")) + (
+        opts.Option("Preview", opts.TOGGLE, default=False,
+                    help="Display the cached exact result while editing."),
+    ) + _not_built(("Edit", "TrimAndJoin", "History")) + (
+        opts.Option("SelectEdges", opts.MODE,
+                    help="Return to edge selection after it has been closed."),
+    )
+
+
 class FilletEdgeCmd(_EdgeBevelCmd):
     __doc__ = _EdgeBevelCmd.__doc__
     name = "FilletEdge"
     description = "Round the picked edges of a solid with an exact rolling-ball fillet."
-    steps = [("Select the polysurface to fillet:", OBJECTS),
-             ("Select edges to fillet. Press Enter when done:", POINT)]
-    options = (
-        opts.Option("NextRadius", opts.VALUE, default=1.0, value_kind="number",
-                    help="Specifies the radius for the next edge."),
-    ) + _not_built(("ShowRadius", "ChainEdges", "FaceEdges", "PreviousEdgeSelection",
-                    "TrimAndJoin", "History", "SelectEdges", "Preview", "Edit"))
+    options = _edge_options("ShowRadius", "NextRadius",
+                            "Specifies the radius for the next edge.")
 
 
 class ChamferEdgeCmd(_EdgeBevelCmd):
@@ -216,14 +349,9 @@ class ChamferEdgeCmd(_EdgeBevelCmd):
     size_option = "NextChamferDistance"
     size_prompt = "Chamfer distance"
     size_word = "distance"
-    steps = [("Select the polysurface to chamfer:", OBJECTS),
-             ("Select edges to chamfer. Press Enter when done:", POINT)]
-    options = (
-        opts.Option("NextChamferDistance", opts.VALUE, default=1.0, value_kind="number",
-                    help="Specifies the chamfer distance for the next edge."),
-    ) + _not_built(("ShowChamferDistance", "ChainEdges", "FaceEdges",
-                    "PreviousEdgeSelection", "TrimAndJoin", "History", "SelectEdges",
-                    "Preview", "Edit"))
+    show_option = "ShowChamferDistance"
+    options = _edge_options("ShowChamferDistance", "NextChamferDistance",
+                            "Specifies the chamfer distance for the next edge.")
 
 
 # ---------------------------------------------------------------------------

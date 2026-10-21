@@ -15,6 +15,7 @@ Layout strategy (verified against Blender 5.2):
 """
 from __future__ import annotations
 
+import math
 import os
 
 import bpy
@@ -7903,7 +7904,9 @@ class NARWHAL_OT_command_input(Operator):
                     # Edge-edit commands need the actual 3-D edge, not the active
                     # CPlane point under the cursor. The same helper also handles their
                     # first click, but subsequent edge picks arrive here directly.
-                    if _answer_edge_prompt_with_click(area, sp, region, rx, ry):
+                    if _answer_edge_prompt_with_click(
+                            area, sp, region, rx, ry,
+                            shift=event.shift, ctrl=event.ctrl):
                         self._redraw()
                         return {"RUNNING_MODAL"}
                     pt = pick_point(area, sp, region, rx, ry,
@@ -14970,7 +14973,7 @@ def draw_point_markers():
     drag = selection_drag_rect()
     if drag is not None and drag[0] != _pane_key(area):
         drag = None
-    highlight = bool(_selected_subobjects)
+    highlight = bool(_selected_subobjects or _command_edge_selection_keys())
     hovering = hover_pick() is not None or bool(
         _gumball_drag is not None and _gumball_drag.get("ext_ghost"))
     if not doc_pts and not rows and drag is None and not highlight and not raw_polys \
@@ -15059,6 +15062,7 @@ def draw_point_markers():
                 batch_for_shader(shader, "LINES", {"pos": outlines}).draw(shader)
         if highlight:
             draw_subobject_highlight(region, rv3d, shader, batch_for_shader)
+        draw_edge_command_handles(region, rv3d, shader, batch_for_shader)
         if hovering:
             draw_hover_pick(region, rv3d, shader, batch_for_shader)
         if drag is not None:
@@ -15652,6 +15656,47 @@ def _apply_xform_to_subobjects(xform):
     return True
 
 
+def _command_edge_selection_keys():
+    cmd = app_state.active_command
+    getter = getattr(cmd, "edge_selection_keys", None)
+    if not callable(getter):
+        return frozenset()
+    try:
+        return frozenset((name, subobject.EDGE, int(edge_id))
+                         for name, edge_id in getter())
+    except Exception:  # noqa: BLE001
+        return frozenset()
+
+
+
+def draw_edge_command_handles(region, rv3d, shader, batch_for_shader):
+    """Draw the selected edge's radius/distance leader, grip and value label."""
+    getter = getattr(app_state.active_command, "handle_records", None)
+    if not callable(getter):
+        return
+    try:
+        records = getter()
+    except Exception:  # noqa: BLE001
+        return
+    for record in records:
+        pos = _project_2d(region, rv3d, record["point"])
+        if pos is None:
+            continue
+        x, y = pos
+        hx, hy = x + 38.0, y + 24.0
+        shader.uniform_float("color", (0.95, 0.95, 0.95, 1.0))
+        batch_for_shader(shader, "LINES", {"pos": ((x, y), (hx, hy))}).draw(shader)
+        circle = []
+        for i in range(12):
+            a = 2.0 * math.pi * i / 12.0
+            b = 2.0 * math.pi * (i + 1) / 12.0
+            circle.extend(((hx + 4.0 * math.cos(a), hy + 4.0 * math.sin(a)),
+                           (hx + 4.0 * math.cos(b), hy + 4.0 * math.sin(b))))
+        batch_for_shader(shader, "LINES", {"pos": circle}).draw(shader)
+        _draw_text(hx + 10.0, hy - 5.0, f"{float(record['size']):.2f}", 13,
+                   (0.95, 0.95, 0.95, 1.0))
+
+
 def draw_subobject_highlight(region, rv3d, shader, batch_for_shader):
     """Draw the selected segments over the wire, in the reference CAD application's selection yellow.
 
@@ -15659,6 +15704,8 @@ def draw_subobject_highlight(region, rv3d, shader, batch_for_shader):
     runs POST_PIXEL and already has a projection to hand. A 3-D overlay would need
     its own depth handling to sit on top of the curve it highlights.
     """
+    command_edges = _command_edge_selection_keys()
+    selected_keys = set(_selected_subobjects) | set(command_edges)
     segs = []
     for key, points, _grips in _subobject_candidates(_selected_object_names_of_subobjects()):
         if key not in _selected_subobjects:
@@ -15669,7 +15716,7 @@ def draw_subobject_highlight(region, rv3d, shader, batch_for_shader):
                 segs.extend(((a[0], a[1]), (b[0], b[1])))
     # selected FACES (a translucent fill), EDGES and VERTICES of solids
     tris, dots = [], []
-    if any(k[1] in _BREP_KINDS for k in _selected_subobjects):
+    if any(k[1] in _BREP_KINDS for k in selected_keys):
         # during a Gumball drag the part's highlight follows the cursor; the
         # solid itself is rebuilt on release
         off = _brep_part_offset() or (0.0, 0.0, 0.0)
@@ -15679,19 +15726,19 @@ def draw_subobject_highlight(region, rv3d, shader, batch_for_shader):
 
         for name, parts in _brep_parts_all().items():
             for fid, ftris in parts.get("faces", ()):
-                if (name, subobject.FACE, fid) in _selected_subobjects:
+                if (name, subobject.FACE, fid) in selected_keys:
                     for tri in ftris:
                         c = [_project_2d(region, rv3d, _sh(p)) for p in tri]
                         if None not in c:
                             tris.extend((q[0], q[1]) for q in c)
             for eid, pl in parts.get("edges", ()):
-                if (name, subobject.EDGE, eid) in _selected_subobjects:
+                if (name, subobject.EDGE, eid) in selected_keys:
                     pos = [_project_2d(region, rv3d, _sh(w)) for w in pl]
                     for a, b in zip(pos, pos[1:]):
                         if a is not None and b is not None:
                             segs.extend(((a[0], a[1]), (b[0], b[1])))
             for vid, p in parts.get("vertices", ()):
-                if (name, subobject.VERTEX, vid) in _selected_subobjects:
+                if (name, subobject.VERTEX, vid) in selected_keys:
                     q = _project_2d(region, rv3d, _sh(p))
                     if q is not None:
                         dots.append(q)
@@ -16203,7 +16250,11 @@ def draw_command_preview():
     import bpy
 
     cmd = app_state.active_command
-    if cmd is None or _preview_cursor is None:
+    if cmd is None:
+        return
+    preview_getter = getattr(cmd, "preview_geometry", None)
+    exact_preview = preview_getter() if callable(preview_getter) else None
+    if _preview_cursor is None and exact_preview is None:
         return
     context = bpy.context
     area = getattr(context, "area", None)
@@ -16241,8 +16292,9 @@ def draw_command_preview():
     polylines = preview.segments(getattr(cmd, "name", None), cmd.args,
                                 _preview_cursor, plane,
                                 resolve=_resolve_preview_geom, cmd=cmd)
+    exact_polylines = ghost_polylines(exact_preview) if exact_preview is not None else []
     ghost = live_transform(cmd, _preview_cursor) is not None
-    if not polylines and not ghost:
+    if not polylines and not exact_polylines and not ghost:
         return
 
     try:
@@ -16261,6 +16313,12 @@ def draw_command_preview():
             # the objects themselves, then the band on top of them
             _draw_transform_ghost(cmd, shader, gpu, batch_for_shader)
         shader.bind()
+        if exact_polylines:
+            shader.uniform_float("color", (0.92, 0.92, 0.92, 1.0))
+            for poly in exact_polylines:
+                coords = [point for pair in zip(poly, poly[1:]) for point in pair]
+                if coords:
+                    batch_for_shader(shader, "LINES", {"pos": coords}).draw(shader)
         shader.uniform_float("color", PREVIEW_COLOR)
         for poly in polylines or ():
             # LINE_STRIP is not available on every builtin shader, so build the
@@ -18079,32 +18137,12 @@ def object_pick_location(area, space, region, rx, ry, name):
     return None
 
 
-def _answer_edge_prompt_with_click(area, space, region, rx, ry):
-    """Answer an edge-edit prompt from one exact viewport edge hit.
-
-    ``FilletEdge``/``ChamferEdge`` historically took two clicks: one selected the
-    whole solid and a later POINT click was projected onto the CPlane. A 3-D edge
-    away from that plane was then rejected as off-edge. For an OBJECTS step followed
-    by an edge POINT step, this feeds the owning object internally and immediately
-    feeds a midpoint sampled from the hit edge's exact-topology polyline. At an
-    existing edge POINT step it feeds only that edge. Returns whether it answered.
-    """
+def _answer_edge_prompt_with_click(area, space, region, rx, ry,
+                                   shift=False, ctrl=False):
+    """Give a command-capability edge picker one exact viewport edge hit."""
     cmd = app_state.active_command
-    if cmd is None or getattr(cmd, "pending_option", None) is not None:
-        return False
-    steps = getattr(cmd, "steps", None) or []
-    index = getattr(cmd, "step_index", 0)
-    if index >= len(steps):
-        return False
-    prompt, kind = steps[index]
-    edge_step = kind == commands.POINT and "edge" in prompt.lower()
-    owner_then_edge = (
-        kind == commands.OBJECTS
-        and index + 1 < len(steps)
-        and steps[index + 1][1] == commands.POINT
-        and "edge" in steps[index + 1][0].lower()
-    )
-    if not (edge_step or owner_then_edge):
+    picker = getattr(cmd, "pick_edge", None)
+    if not callable(picker) or getattr(cmd, "pending_option", None) is not None:
         return False
     hit = pick_brep_part(area, space, region, rx, ry)
     if hit is None or hit[1] != subobject.EDGE:
@@ -18113,29 +18151,21 @@ def _answer_edge_prompt_with_click(area, space, region, rx, ry):
     parts = _brep_parts_all().get(name, {})
     polyline = next((points for ident, points in parts.get("edges", ())
                      if ident == edge_id), None)
-    if not polyline:
-        return False
-    # Every polyline sample lies on the exact edge (``bridge.subobject_parts``).
-    # Curved edges have interior samples. A straight edge has only its two endpoints,
-    # so use their midpoint; choosing ``polyline[1]`` there picked the shared vertex.
-    if len(polyline) == 1:
+    if not polyline or len(polyline) < 2:
         return False
     if len(polyline) == 2:
         point = tuple((float(polyline[0][i]) + float(polyline[1][i])) * 0.5
                       for i in range(3))
     else:
         point = polyline[len(polyline) // 2]
-    if owner_then_edge:
-        app_state.history.append("> " + name)
-        app_state.feed_line(name)
-        if app_state.active_command is not cmd:
-            return True
-    current = getattr(cmd, "step_index", 0)
-    if current >= len(steps) or steps[current][1] != commands.POINT:
-        return True
-    text = coords.format_world(point)
-    app_state.history.append("> " + text)
-    app_state.feed_line(text)
+    action = "ctrl" if ctrl else "shift" if shift else "plain"
+    message, done = picker(name, edge_id, point, action, app_state.ctx)
+    app_state.history.append(f"> {action} edge {edge_id} of {name}")
+    if message:
+        app_state.log(message)
+    if done:
+        app_state.active_command = None
+    redraw_cmdbar()
     return True
 
 
@@ -18984,7 +19014,8 @@ def _sel_drag_end():
         # click. Do this before ordinary selection, which would select the whole solid
         # and discard the edge intent.
         if (app_state.active_command is not None and not (shift or ctrl)
-                and _answer_edge_prompt_with_click(area, space, region, x0, y0)):
+                and _answer_edge_prompt_with_click(
+                    area, space, region, x0, y0, shift=shift, ctrl=ctrl)):
             return sorted(selected_display_names()), None
         wanted = narwhal_click_select(area, space, region, x0, y0,
                                       shift=shift, ctrl=ctrl)
