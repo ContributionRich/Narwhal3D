@@ -458,6 +458,115 @@ def _inspect(layout_was_ready):
     check("selected curves do not add content or overlays to unchecked Print preview",
           print_ok, print_detail)
 
+    # FilletEdge used to make the first click select the whole solid, then convert the
+    # second edge click to a CPlane point. A real 3-D edge above that plane was therefore
+    # rejected as "not on an edge". Drive the actual click-release route at a known exact
+    # box edge: one ordinary click must identify both owner and stable edge id.
+    fillet_ok = False
+    fillet_detail = "Top viewport unavailable"
+    fillet_names = []
+    fillet_view = None
+    fillet_executed = False
+    if top_view is not None and top_region is not None:
+        try:
+            import bpy_extras.view3d_utils as fillet_view3d
+            from mathutils import Vector as FilletVector
+
+            if app_state.active_command is not None:
+                app_state.cancel()
+            app_state.feed_line("SelNone")
+            ui.clear_subobject_selection()
+            ui.set_active_pane(top_view)
+            top_space = next(space for space in top_view.spaces if space.type == "VIEW_3D")
+            fillet_view = (top_space.region_3d.view_location.copy(),
+                           top_space.region_3d.view_distance)
+            before_names = {obj.name for obj in bpy.data.objects}
+            for line in ("Box", "w300,300,0", "w320,320,0", "10"):
+                app_state.feed_line(line)
+            fillet_names = sorted({obj.name for obj in bpy.data.objects} - before_names)
+            box_name = fillet_names[0] if fillet_names else None
+            top_space.region_3d.view_location = FilletVector((310.0, 310.0, 0.0))
+            top_space.region_3d.view_distance = 60.0
+            top_space.region_3d.update()
+            parts = ui._brep_parts_all().get(box_name, {}) if box_name else {}
+            top_edges = [
+                (edge_id, polyline) for edge_id, polyline in parts.get("edges", ())
+                if polyline and all(abs(point[2] - 10.0) < 1e-6 for point in polyline)
+            ]
+            edge_id, polyline = top_edges[0] if top_edges else (None, ())
+            edge_point = (tuple((polyline[0][i] + polyline[1][i]) * 0.5
+                                for i in range(3)) if len(polyline) == 2
+                          else polyline[len(polyline) // 2] if polyline else None)
+            screen_point = (fillet_view3d.location_3d_to_region_2d(
+                top_region, top_space.region_3d, FilletVector(edge_point))
+                            if edge_point is not None else None)
+            screen_hit = (ui.pick_brep_part(top_view, top_space, top_region,
+                                            float(screen_point.x), float(screen_point.y))
+                          if screen_point is not None else None)
+            app_state.feed_line("FilletEdge")
+            helper_eligible = False
+            if screen_point is not None:
+                click = (float(screen_point.x), float(screen_point.y))
+                helper_eligible = ui._answer_edge_prompt_with_click(
+                    top_view, top_space, top_region, *click)
+                if helper_eligible:
+                    # Recreate the command so the click-release route, not the direct
+                    # diagnostic call above, is what the assertion judges.
+                    app_state.cancel()
+                    app_state.feed_line("FilletEdge")
+                ui._sel_drag = {"pane": ui._pane_key(top_view), "start": click,
+                                "now": click, "shift": False, "ctrl": False,
+                                "active": False}
+                ui._sel_drag_end()
+            fillet_cmd = app_state.active_command
+            selected_whole = sorted(ui.selected_display_names())
+            picked_edges = list(getattr(fillet_cmd, "_edges", ()))
+            picked_args = list(getattr(fillet_cmd, "args", ()))
+            selected_ok = (box_name is not None and edge_id is not None
+                           and getattr(fillet_cmd, "name", None) == "FilletEdge"
+                           and picked_args == [box_name] and picked_edges == [edge_id]
+                           and not selected_whole)
+            result_name = None
+            result_types = {}
+            airtight = False
+            if selected_ok:
+                from narwhal3d import kernel as fillet_kernel
+
+                app_state.feed_line("")
+                fillet_executed = True
+                result_names = sorted({obj.name for obj in bpy.data.objects} - before_names)
+                result_name = result_names[0] if len(result_names) == 1 else None
+                result_geom = (app_state.ctx.geom_by_name(result_name)
+                               if result_name is not None else None)
+                result_master = fillet_kernel.master_of(result_geom)
+                occt = ui.bridge._occt()
+                if result_master is not None and occt is not None:
+                    result_types = occt.face_types(result_master)
+                    airtight = occt.is_airtight(result_master)
+            fillet_ok = (selected_ok and app_state.active_command is None and airtight
+                         and result_types.get("CYLINDER", 0) >= 1)
+            fillet_detail = (f"box={box_name}, expected edge={edge_id}, "
+                             f"screen hit={screen_hit}, helper={helper_eligible}, "
+                             f"args={picked_args}, edges={picked_edges}, "
+                             f"whole selection={selected_whole}, result={result_name}, "
+                             f"types={result_types}, airtight={airtight}")
+        except Exception as exc:  # noqa: BLE001
+            fillet_detail = repr(exc)
+        finally:
+            if app_state.active_command is not None:
+                app_state.cancel()
+            app_state.feed_line("SelNone")
+            if fillet_names:
+                app_state.ctx.undo_last()
+                if fillet_executed:
+                    app_state.ctx.undo_last()
+            if fillet_view is not None:
+                top_space.region_3d.view_location = fillet_view[0]
+                top_space.region_3d.view_distance = fillet_view[1]
+                top_space.region_3d.update()
+    check("FilletEdge selects a viable 3-D edge in one click without preselecting its solid",
+          fillet_ok, fillet_detail)
+
     registered, operator_total = _registered_operator_state(ui, bpy)
     check("Narwhal operator namespace is registered",
           operator_total > 0 and registered == operator_total,

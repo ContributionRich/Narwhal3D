@@ -7900,6 +7900,12 @@ class NARWHAL_OT_command_input(Operator):
                 if region is not None:
                     rx = event.mouse_x - region.x
                     ry = event.mouse_y - region.y
+                    # Edge-edit commands need the actual 3-D edge, not the active
+                    # CPlane point under the cursor. The same helper also handles their
+                    # first click, but subsequent edge picks arrive here directly.
+                    if _answer_edge_prompt_with_click(area, sp, region, rx, ry):
+                        self._redraw()
+                        return {"RUNNING_MODAL"}
                     pt = pick_point(area, sp, region, rx, ry,
                                     constraint=_command_axis_constraint(cmd, area))
                     if pt is not None:
@@ -18073,6 +18079,66 @@ def object_pick_location(area, space, region, rx, ry, name):
     return None
 
 
+def _answer_edge_prompt_with_click(area, space, region, rx, ry):
+    """Answer an edge-edit prompt from one exact viewport edge hit.
+
+    ``FilletEdge``/``ChamferEdge`` historically took two clicks: one selected the
+    whole solid and a later POINT click was projected onto the CPlane. A 3-D edge
+    away from that plane was then rejected as off-edge. For an OBJECTS step followed
+    by an edge POINT step, this feeds the owning object internally and immediately
+    feeds a midpoint sampled from the hit edge's exact-topology polyline. At an
+    existing edge POINT step it feeds only that edge. Returns whether it answered.
+    """
+    cmd = app_state.active_command
+    if cmd is None or getattr(cmd, "pending_option", None) is not None:
+        return False
+    steps = getattr(cmd, "steps", None) or []
+    index = getattr(cmd, "step_index", 0)
+    if index >= len(steps):
+        return False
+    prompt, kind = steps[index]
+    edge_step = kind == commands.POINT and "edge" in prompt.lower()
+    owner_then_edge = (
+        kind == commands.OBJECTS
+        and index + 1 < len(steps)
+        and steps[index + 1][1] == commands.POINT
+        and "edge" in steps[index + 1][0].lower()
+    )
+    if not (edge_step or owner_then_edge):
+        return False
+    hit = pick_brep_part(area, space, region, rx, ry)
+    if hit is None or hit[1] != subobject.EDGE:
+        return False
+    name, _kind, edge_id = hit
+    parts = _brep_parts_all().get(name, {})
+    polyline = next((points for ident, points in parts.get("edges", ())
+                     if ident == edge_id), None)
+    if not polyline:
+        return False
+    # Every polyline sample lies on the exact edge (``bridge.subobject_parts``).
+    # Curved edges have interior samples. A straight edge has only its two endpoints,
+    # so use their midpoint; choosing ``polyline[1]`` there picked the shared vertex.
+    if len(polyline) == 1:
+        return False
+    if len(polyline) == 2:
+        point = tuple((float(polyline[0][i]) + float(polyline[1][i])) * 0.5
+                      for i in range(3))
+    else:
+        point = polyline[len(polyline) // 2]
+    if owner_then_edge:
+        app_state.history.append("> " + name)
+        app_state.feed_line(name)
+        if app_state.active_command is not cmd:
+            return True
+    current = getattr(cmd, "step_index", 0)
+    if current >= len(steps) or steps[current][1] != commands.POINT:
+        return True
+    text = coords.format_world(point)
+    app_state.history.append("> " + text)
+    app_state.feed_line(text)
+    return True
+
+
 def _answer_objects_step_with_click(area, space, region, rx, ry):
     """: a click that hit an object while a command waits at a single-object step.
 
@@ -18914,8 +18980,14 @@ def _sel_drag_end():
     shift, ctrl = st["shift"], st["ctrl"]
 
     if not st.get("active") or select.is_click(x0, y0, x1, y1):
+        # FilletEdge/ChamferEdge consume the exact edge and its owner in this one
+        # click. Do this before ordinary selection, which would select the whole solid
+        # and discard the edge intent.
+        if (app_state.active_command is not None and not (shift or ctrl)
+                and _answer_edge_prompt_with_click(area, space, region, x0, y0)):
+            return sorted(selected_display_names()), None
         wanted = narwhal_click_select(area, space, region, x0, y0,
-                                    shift=shift, ctrl=ctrl)
+                                      shift=shift, ctrl=ctrl)
         if app_state.active_command is not None and not (shift or ctrl):
             _answer_objects_step_with_click(area, space, region, x0, y0)
         return wanted, None
