@@ -11,6 +11,7 @@ from __future__ import annotations
 import importlib
 import importlib.util
 from collections import OrderedDict
+import itertools
 
 import math
 
@@ -3640,6 +3641,7 @@ def extract_subobject(geom, kind, sub_id):
 #: A moved face's corners count as coplanar within this fraction of the solid's size.
 #: Far below any visible bend, and well above double-precision noise.
 SUBOBJECT_PLANAR_TOL = 1e-9
+_MODIFIED_BOX_MOVE_CACHE = {}
 
 
 def _polyhedron_signed_volume(occt, verts, faces):
@@ -3754,6 +3756,132 @@ def _move_modified_box_face(geom, shape, selected, vector, recipe, base, occt):
     return out
 
 
+def _part_samples(occt, part, kind):
+    if kind == "vertex":
+        return [part]
+    if kind == "edge":
+        return occt._sample_edge(part, 1e-3, 0.2)
+    points = []
+    for edge in occt._unique_edges(part):
+        points.extend(occt._sample_edge(edge, 1e-3, 0.2))
+    return points
+
+
+def _translated_part_matches(occt, old_part, new_part, kind, vector, tol):
+    v = tuple(float(c) for c in vector)
+    if kind == "vertex":
+        return math.dist(tuple(old_part[i] + v[i] for i in range(3)), new_part) <= tol
+    if kind == "face":
+        if occt._face_type_name(old_part) != occt._face_type_name(new_part):
+            return False
+        old_area = occt.mass_properties(old_part, solid=False)["area"]
+        new_area = occt.mass_properties(new_part, solid=False)["area"]
+        if abs(old_area - new_area) > tol * max(1.0, old_area):
+            return False
+        old_centre = occt.surface_centroid(old_part)
+        new_centre = occt.surface_centroid(new_part)
+        if math.dist(tuple(old_centre[i] + v[i] for i in range(3)), new_centre) > tol:
+            return False
+    old_samples = _part_samples(occt, old_part, kind)
+    new_samples = _part_samples(occt, new_part, kind)
+    return (all(occt.distance_to_shape(new_part, tuple(p[i] + v[i] for i in range(3)))
+                <= tol for p in old_samples)
+            and all(occt.distance_to_shape(old_part, tuple(p[i] - v[i] for i in range(3)))
+                    <= tol for p in new_samples))
+
+
+def _move_modified_box_subobject(geom, shape, kind, sub_id, vector, recipe, base, occt):
+    matrix = base.get("xform") or _IDENTITY16
+    axes = [_matrix_vector(matrix, tuple(1.0 if i == axis else 0.0
+                                          for i in range(3))) for axis in range(3)]
+    scales = [math.sqrt(sum(c * c for c in axis)) for axis in axes]
+    if min(scales) <= 1e-12 or max(scales) - min(scales) > 1e-8 * max(scales):
+        raise ValueError("moving a modified box part needs a rigid or uniformly scaled recipe")
+    units = [tuple(c / scale for c in axis) for axis, scale in zip(axes, scales)]
+    if max(abs(sum(a * b for a, b in zip(units[i], units[j])))
+           for i in range(3) for j in range(i)) > 1e-8:
+        raise ValueError("moving a modified box part needs an orthogonal recipe transform")
+
+    v = tuple(float(c) for c in vector)
+    components = [sum(a * b for a, b in zip(v, unit)) for unit in units]
+    reconstructed = tuple(sum(components[j] * units[j][i] for j in range(3))
+                          for i in range(3))
+    size = max(1.0, *(abs(float(base[key])) * scales[i]
+                      for i, key in enumerate(("dx", "dy", "dz"))))
+    tol = 1e-7 * size
+    if math.dist(v, reconstructed) > tol:
+        raise ValueError("the requested move is outside the base box coordinate frame")
+    active = [i for i, value in enumerate(components) if abs(value) > tol]
+    if not active:
+        raise ValueError("the requested sub-object move is zero")
+
+    tables = {
+        "face": occt.unique_faces,
+        "edge": occt._unique_edges,
+        "vertex": occt._unique_vertices,
+    }
+    parts = tables[kind](shape)
+    index = int(sub_id)
+    if index < 1 or index > len(parts):
+        raise SubObjectError(f"{kind} {index} is out of range; this solid has {len(parts)} "
+                             f"{kind}s numbered 1..{len(parts)}")
+    old_part = (occt.vertex_at(shape, index) if kind == "vertex" else parts[index - 1])
+    before_types = occt.face_types(shape)
+    accepted = []
+    cache_key = (repr(recipe), kind, index, tuple(active))
+    cached_sides = _MODIFIED_BOX_MOVE_CACHE.get(cache_key)
+    side_choices = ([cached_sides] if cached_sides is not None
+                    else itertools.product(("min", "max"), repeat=len(active)))
+    for sides in side_choices:
+        updated_base = dict(base)
+        dimensions = [float(base[key]) for key in ("dx", "dy", "dz")]
+        translation = [0.0, 0.0, 0.0]
+        for axis_index, side in zip(active, sides):
+            amount = components[axis_index]
+            local = amount / scales[axis_index]
+            dimensions[axis_index] += local if side == "max" else -local
+            if side == "min":
+                for coordinate in range(3):
+                    translation[coordinate] += amount * units[axis_index][coordinate]
+        if any(d * scales[i] <= tol for i, d in enumerate(dimensions)):
+            continue
+        for key, dimension in zip(("dx", "dy", "dz"), dimensions):
+            updated_base[key] = dimension
+        if any(abs(c) > tol for c in translation):
+            updated_base["xform"] = _mat_mul(_translation_matrix(translation), matrix)
+        updated_recipe = _replace_modifier_base(recipe, updated_base)
+        try:
+            solid = occt.from_recipe(updated_recipe)
+        except _kernel().KernelError:
+            continue
+        if not occt.is_airtight(solid) or occt.face_types(solid) != before_types:
+            continue
+        new_parts = tables[kind](solid)
+        matching = []
+        for new_index, part in enumerate(new_parts, 1):
+            new_part = occt.vertex_at(solid, new_index) if kind == "vertex" else part
+            if _translated_part_matches(occt, old_part, new_part, kind, v, tol):
+                matching.append(new_index)
+        if len(matching) == 1:
+            accepted.append((updated_recipe, solid, matching[0], tuple(sides)))
+    unique = {}
+    for updated_recipe, solid, matched, sides in accepted:
+        key = repr(updated_recipe)
+        unique[key] = (updated_recipe, solid, matched, sides)
+    if len(unique) != 1:
+        reason = "no exact base-side replay translates that part" if not unique else \
+                 "more than one base-side replay translates that part"
+        raise ValueError(f"{reason}; the move was refused as ambiguous")
+    updated_recipe, solid, _matched, accepted_sides = next(iter(unique.values()))
+    if cached_sides is None:
+        # Keep the accepted enumeration choice, not a geometric re-inference: rotations make
+        # individual translation matrix entries unsuitable side identifiers.
+        _MODIFIED_BOX_MOVE_CACHE[cache_key] = accepted_sides
+    out = occt_backed(solid, updated_recipe)
+    _copy_geometry_user_strings(geom, out)
+    return out
+
+
 def _move_extruded_cap(geom, shape, kind, sub_id, vector, occt):
     """'s narrow exact case: stretch one end of a straight recipe extrusion.
 
@@ -3761,9 +3889,6 @@ def _move_extruded_cap(geom, shape, kind, sub_id, vector, occt):
     for the base cap, its placement rebuilds the same profile with an analytically extended
     side surface.  No display-proxy vertex participates in the operation.
     """
-    if kind != "face":
-        raise ValueError("moving an edge or vertex of a solid with CURVED faces is not "
-                         "implemented yet")
     recipe = _kernel().recipe_of(geom)
     base = _modifier_base(recipe) if isinstance(recipe, dict) else None
     recipe_kind = base.get("kind") if isinstance(base, dict) else None
@@ -3771,6 +3896,23 @@ def _move_extruded_cap(geom, shape, kind, sub_id, vector, occt):
         raise ValueError("moving a part of this CURVED solid is not implemented yet -- only "
                          "a surviving planar face of a filleted box, cylinder, or straight "
                          "extrusion recipe can be rebuilt exactly")
+    if recipe_kind == "box":
+        if kind == "face":
+            faces = occt.unique_faces(shape)
+            i = int(sub_id)
+            if i < 1 or i > len(faces):
+                raise SubObjectError(
+                    f"face {i} is out of range; this solid has {len(faces)} faces numbered "
+                    f"1..{len(faces)}")
+            selected = occt.face_plane(faces[i - 1])
+            if selected is not None:
+                return _move_modified_box_face(
+                    geom, shape, selected, vector, recipe, base, occt)
+        return _move_modified_box_subobject(
+            geom, shape, kind, sub_id, vector, recipe, base, occt)
+    if kind != "face":
+        raise ValueError("moving an edge or vertex of this CURVED solid is not implemented "
+                         "yet; only a filleted box recipe can be replayed exactly")
     if recipe_kind == "extrusion":
         if base.get("both"):
             raise ValueError("moving a cap of a BothSides extrusion is not implemented yet")
@@ -3788,9 +3930,6 @@ def _move_extruded_cap(geom, shape, kind, sub_id, vector, occt):
     if selected is None:
         raise ValueError("moving a CURVED lateral wall is not implemented yet -- select one "
                          "surviving planar face")
-    if recipe_kind == "box":
-        return _move_modified_box_face(geom, shape, selected, vector, recipe, base, occt)
-
     matrix = base.get("xform") or _IDENTITY16
     if recipe_kind == "cylinder":
         local_axis = (0.0, 0.0, float(base["height"]))
