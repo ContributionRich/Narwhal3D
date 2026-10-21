@@ -3679,6 +3679,81 @@ def _copy_geometry_user_strings(source, target):
         pass
 
 
+def _modifier_base(recipe):
+    base = recipe
+    while isinstance(base, dict) and base.get("kind") in ("fillet", "chamfer"):
+        base = base.get("a")
+    return base
+
+
+def _replace_modifier_base(recipe, replacement):
+    if recipe.get("kind") not in ("fillet", "chamfer"):
+        return replacement
+    updated = dict(recipe)
+    updated["a"] = _replace_modifier_base(recipe["a"], replacement)
+    return updated
+
+
+def _move_modified_box_face(geom, shape, selected, vector, recipe, base, occt):
+    matrix = base.get("xform") or _IDENTITY16
+    origin = tuple(float(matrix[r * 4 + 3]) for r in range(3))
+    dimensions = [float(base[key]) for key in ("dx", "dy", "dz")]
+    candidates = []
+    for axis_index, dimension in enumerate(dimensions):
+        axis = _matrix_vector(matrix, tuple(1.0 if i == axis_index else 0.0
+                                            for i in range(3)))
+        scale = math.sqrt(sum(c * c for c in axis))
+        if scale <= 1e-12:
+            continue
+        unit = tuple(c / scale for c in axis)
+        if abs(sum(a * b for a, b in zip(selected[3], unit))) < 1.0 - 1e-8:
+            continue
+        far = tuple(origin[i] + axis[i] * dimension for i in range(3))
+        for side, plane_origin in (("min", origin), ("max", far)):
+            distance = abs(sum((selected[0][i] - plane_origin[i]) * unit[i]
+                               for i in range(3)))
+            candidates.append((distance, axis_index, side, unit, scale, dimension))
+    if not candidates:
+        raise ValueError("that planar face is not a surviving side of the base box recipe")
+    distance, axis_index, side, unit, scale, old_dimension = min(candidates)
+    world_size = max(1.0, *(abs(d) * scale for d in dimensions))
+    if distance > 1e-8 * world_size:
+        raise ValueError("that planar face is not on a side plane of the base box recipe")
+
+    v = tuple(float(c) for c in vector)
+    along = sum(a * b for a, b in zip(v, unit))
+    residual = math.sqrt(sum((a - along * b) ** 2 for a, b in zip(v, unit)))
+    tol = 1e-9 * max(world_size, math.sqrt(sum(c * c for c in v)), 1.0)
+    if residual > tol:
+        raise ValueError("a filleted box face can only move along its normal; a lateral move "
+                         "cannot replay the exact rolling surfaces")
+    if abs(along) <= tol:
+        raise ValueError("the requested face move has zero distance along its normal")
+    new_dimension = (old_dimension + along / scale if side == "max"
+                     else old_dimension - along / scale)
+    if new_dimension * scale <= tol:
+        raise ValueError("that move would collapse the base box or turn it inside out")
+
+    updated_base = dict(base)
+    updated_base[("dx", "dy", "dz")[axis_index]] = new_dimension
+    if side == "min":
+        updated_base["xform"] = _mat_mul(_translation_matrix(v), matrix)
+    updated_recipe = _replace_modifier_base(recipe, updated_base)
+    try:
+        solid = occt.from_recipe(updated_recipe)
+    except _kernel().KernelError as e:
+        raise ValueError(f"that face move cannot replay the exact edge modifiers ({e})") from e
+    if not occt.is_airtight(solid):
+        raise ValueError("that face move did not leave one airtight exact solid")
+    before_types, after_types = occt.face_types(shape), occt.face_types(solid)
+    if after_types != before_types:
+        raise ValueError(f"that face move changed the analytic face types from {before_types} "
+                         f"to {after_types}; it was refused rather than approximated")
+    out = occt_backed(solid, updated_recipe)
+    _copy_geometry_user_strings(geom, out)
+    return out
+
+
 def _move_extruded_cap(geom, shape, kind, sub_id, vector, occt):
     """'s narrow exact case: stretch one end of a straight recipe extrusion.
 
@@ -3690,17 +3765,18 @@ def _move_extruded_cap(geom, shape, kind, sub_id, vector, occt):
         raise ValueError("moving an edge or vertex of a solid with CURVED faces is not "
                          "implemented yet")
     recipe = _kernel().recipe_of(geom)
-    recipe_kind = recipe.get("kind") if isinstance(recipe, dict) else None
-    if recipe_kind not in ("cylinder", "extrusion"):
+    base = _modifier_base(recipe) if isinstance(recipe, dict) else None
+    recipe_kind = base.get("kind") if isinstance(base, dict) else None
+    if recipe_kind not in ("box", "cylinder", "extrusion"):
         raise ValueError("moving a part of this CURVED solid is not implemented yet -- only "
-                         "a planar end cap of a direct cylinder or straight extrusion recipe "
-                         "can be stretched exactly")
+                         "a surviving planar face of a filleted box, cylinder, or straight "
+                         "extrusion recipe can be rebuilt exactly")
     if recipe_kind == "extrusion":
-        if recipe.get("both"):
+        if base.get("both"):
             raise ValueError("moving a cap of a BothSides extrusion is not implemented yet")
-        if recipe.get("draft") not in (None, 0, 0.0):
+        if base.get("draft") not in (None, 0, 0.0):
             raise ValueError("moving a cap of a drafted extrusion is not implemented yet")
-        if not bool(recipe.get("solid", True)):
+        if not bool(base.get("solid", True)):
             raise ValueError("the extrusion is not a closed solid")
 
     faces = occt.unique_faces(shape)
@@ -3711,13 +3787,15 @@ def _move_extruded_cap(geom, shape, kind, sub_id, vector, occt):
     selected = occt.face_plane(faces[i - 1])
     if selected is None:
         raise ValueError("moving a CURVED lateral wall is not implemented yet -- select one "
-                         "planar end cap")
+                         "surviving planar face")
+    if recipe_kind == "box":
+        return _move_modified_box_face(geom, shape, selected, vector, recipe, base, occt)
 
-    matrix = recipe.get("xform") or _IDENTITY16
+    matrix = base.get("xform") or _IDENTITY16
     if recipe_kind == "cylinder":
-        local_axis = (0.0, 0.0, float(recipe["height"]))
+        local_axis = (0.0, 0.0, float(base["height"]))
     else:
-        local_axis = tuple(float(c) for c in recipe["dir"])
+        local_axis = tuple(float(c) for c in base["dir"])
     axis = _matrix_vector(matrix, local_axis)
     old_length = math.sqrt(sum(c * c for c in axis))
     if old_length <= 1e-12:
@@ -3753,13 +3831,14 @@ def _move_extruded_cap(geom, shape, kind, sub_id, vector, occt):
     if new_length <= tol:
         raise ValueError("that move would collapse the extrusion or turn it inside out")
     ratio = new_length / old_length
-    updated = dict(recipe)
+    updated_base = dict(base)
     if recipe_kind == "cylinder":
-        updated["height"] = float(recipe["height"]) * ratio
+        updated_base["height"] = float(base["height"]) * ratio
     else:
-        updated["dir"] = [float(c) * ratio for c in recipe["dir"]]
+        updated_base["dir"] = [float(c) * ratio for c in base["dir"]]
     if not moving_top:
-        updated["xform"] = _mat_mul(_translation_matrix(v), matrix)
+        updated_base["xform"] = _mat_mul(_translation_matrix(v), matrix)
+    updated = _replace_modifier_base(recipe, updated_base)
 
     try:
         solid = occt.from_recipe(updated)
