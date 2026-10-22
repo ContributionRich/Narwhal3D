@@ -1,0 +1,18 @@
+[package]
+name = "narwhal-geometry-core"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-or-later"
+publish = false
+description = "Native exact-geometry core for Narwhal 3D"
+build = "build.rs"
+
+[lib]
+name = "narwhal_geometry_core"
+crate-type = ["cdylib", "staticlib"]
+
+[profile.release]
+codegen-units = 1
+lto = "thin"
+panic = "abort"
+strip = "symbols"

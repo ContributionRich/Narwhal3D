@@ -3218,6 +3218,19 @@ def _occt():
             from kernel import occt_backend
     except Exception:  # noqa: BLE001
         return None
+    return occt_backend
+
+
+def _native_geometry():
+    """The thin Rust geometry ABI boundary, or None outside the installed package."""
+    try:
+        try:
+            from . import native_geometry
+        except ImportError:
+            import native_geometry
+    except Exception:  # noqa: BLE001
+        return None
+    return native_geometry
     return occt_backend if occt_backend.available() else None
 
 
@@ -3755,22 +3768,39 @@ def _move_modified_box_face(geom, shape, selected, vector, recipe, base, occt):
 
 
 
-def _move_modified_box_subobject(geom, shape, kind, sub_id, vector, recipe, _base, occt):
+def _move_modified_box_subobject(geom, shape, kind, sub_id, vector, recipe, _base, occt,
+                                 live=False):
     """Move only the selected final B-rep component; stretch its incident topology."""
     target = occt.local_subobject_signature(shape, kind, sub_id)
     updated_recipe = {"kind": "local_move", "a": recipe, "component": kind,
                       "index": int(sub_id), "vector": [float(c) for c in vector],
                       "target": target}
-    try:
-        solid = occt.move_subobject_local(shape, kind, sub_id, vector, target)
-    except _kernel().KernelError as e:
-        raise ValueError(str(e)) from e
+    native = _native_geometry()
+    result = None
+    if native is not None:
+        kinds = {"face": 1, "edge": 2, "vertex": 3}
+        result = native.move_component(
+            geom, lambda: occt.shape_to_bytes(shape, triangles=False),
+            kinds[kind], int(sub_id), vector, live=live)
+    if result is not None and result.ok:
+        try:
+            solid = occt.shape_from_bytes(result.data)
+        except _kernel().KernelError as e:
+            raise ValueError(f"native local move returned an invalid exact B-rep: {e}") from e
+    elif result is not None and not result.unavailable:
+        raise ValueError(result.detail or
+                         f"native local move failed ({result.status}, {result.refusal_reason})")
+    else:
+        try:
+            solid = occt.move_subobject_local(shape, kind, sub_id, vector, target)
+        except _kernel().KernelError as e:
+            raise ValueError(str(e)) from e
     out = occt_backed(solid, updated_recipe)
     _copy_geometry_user_strings(geom, out)
     return out
 
 
-def _move_extruded_cap(geom, shape, kind, sub_id, vector, occt):
+def _move_extruded_cap(geom, shape, kind, sub_id, vector, occt, live=False):
     """'s narrow exact case: stretch one end of a straight recipe extrusion.
 
     The construction recipe is the geometry authority.  Changing its height/direction and,
@@ -3797,7 +3827,7 @@ def _move_extruded_cap(geom, shape, kind, sub_id, vector, occt):
                 return _move_modified_box_face(
                     geom, shape, selected, vector, recipe, base, occt)
         return _move_modified_box_subobject(
-            geom, shape, kind, sub_id, vector, recipe, base, occt)
+            geom, shape, kind, sub_id, vector, recipe, base, occt, live=live)
     if kind != "face":
         raise ValueError("moving an edge or vertex of this CURVED solid is not implemented "
                          "yet; only a filleted box recipe can be replayed exactly")
@@ -3882,7 +3912,7 @@ def _move_extruded_cap(geom, shape, kind, sub_id, vector, occt):
     return out
 
 
-def move_subobject(geom, kind, sub_id, vector):
+def move_subobject(geom, kind, sub_id, vector, *, live=False):
     """`geom` with one FACE, EDGE or VERTEX moved, as a NEW exact object.
 
     (the command behavior, the command behavior): "Select a face. Pick a point to move
@@ -3919,7 +3949,7 @@ def move_subobject(geom, kind, sub_id, vector):
         verts, faces, edges = occt.planar_polyhedron(shape)
     except _kernel().KernelError as e:
         try:
-            return _move_extruded_cap(geom, shape, kind, sub_id, vector, occt)
+            return _move_extruded_cap(geom, shape, kind, sub_id, vector, occt, live=live)
         except ValueError as cap_error:
             raise cap_error from e
     table = {"face": faces, "edge": edges, "vertex": verts}[kind]

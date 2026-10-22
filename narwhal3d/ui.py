@@ -20103,7 +20103,8 @@ def _brep_part_live(st, force=False):
     name, kind, sub_id = st["brep_part"]
     vec = st.get("brep_vec") or (0.0, 0.0, 0.0)
     try:
-        cand = bridge.move_subobject(st["brep_geom"], kind.lower(), sub_id, vec)
+        cand = bridge.move_subobject(
+            st["brep_geom"], kind.lower(), sub_id, vec, live=True)
         why = None
     except ValueError as e:
         cand, why = None, str(e)
