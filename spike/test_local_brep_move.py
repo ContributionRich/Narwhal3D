@@ -20,6 +20,7 @@ sys.modules["narwhal3d"] = pkg
 from narwhal3d.kernel import KernelError  # noqa: E402
 from narwhal3d.kernel import occt_backend as ob  # noqa: E402
 from OCP.BRep import BRep_Tool  # noqa: E402
+from OCP.BRepAlgoAPI import BRepAlgoAPI_Check  # noqa: E402
 from OCP.BRepAdaptor import BRepAdaptor_Curve, BRepAdaptor_Surface  # noqa: E402
 from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeVertex  # noqa: E402
 from OCP.BRepClass import BRepClass_FaceClassifier  # noqa: E402
@@ -31,7 +32,7 @@ from OCP.GProp import GProp_GProps  # noqa: E402
 from OCP.TopAbs import TopAbs_EDGE, TopAbs_IN, TopAbs_VERTEX  # noqa: E402
 from OCP.TopExp import TopExp_Explorer  # noqa: E402
 from OCP.TopoDS import TopoDS  # noqa: E402
-from OCP.gp import gp_Pnt, gp_Pnt2d  # noqa: E402
+from OCP.gp import gp_Pnt, gp_Pnt2d, gp_Vec  # noqa: E402
 
 checks = 0
 failures = []
@@ -256,6 +257,114 @@ def topology_counts(shape):
     return len(ob.unique_faces(shape)), len(ob._unique_edges(shape)), len(ob._unique_vertices(shape))
 
 
+def composite_quality_candidates(shape, kind, index, vector):
+    faces = ob.unique_faces(shape)
+    edges = ob._unique_edges(shape)
+    vertices = ob._unique_vertices(shape)
+    edge_vertices = [ob._local_edge_vertices(edge, vertices) for edge in edges]
+    face_edges = [ob._local_face_edges(face, edges) for face in faces]
+    if kind == "face":
+        selected_edges = set(face_edges[index - 1])
+        moved = {vertex for edge in selected_edges for vertex in edge_vertices[edge]}
+    elif kind == "edge":
+        moved = set(edge_vertices[index - 1])
+    else:
+        moved = {index - 1}
+    changed_edges = {edge for edge, endpoints in enumerate(edge_vertices)
+                     if any(vertex in moved for vertex in endpoints)}
+    replacements = {
+        edge: ob._local_rebuild_edge(
+            edges[edge], edge_vertices[edge], vertices, moved, vector,
+            ob._local_tolerances(shape)["build"])[0]
+        for edge in changed_edges
+    }
+    changed_faces = {face for face, boundary in enumerate(face_edges)
+                     if any(edge in changed_edges for edge in boundary)}
+    tolerances = ob._local_tolerances(shape)
+    found = []
+    for face_index in changed_faces:
+        boundary = ob._local_boundary_edges(
+            faces[face_index], edges, replacements, vertices, moved, vector,
+            tolerances["build"])
+        if len(boundary) == 5 and ob._local_planar_face(boundary) is None:
+            found.extend(ob._local_composite_coons_candidates(
+                faces[face_index], boundary, tolerances))
+    return found, tolerances
+
+
+def accepted_composite_quality(shape, kind, index, vector):
+    candidates, tolerances = composite_quality_candidates(shape, kind, index, vector)
+    accepted = [candidate for candidate in candidates
+                if candidate["boundary_error"] <= tolerances["compare"]
+                and candidate["normal_jump"] <= ob.LOCAL_COONS_NORMAL_JUMP]
+    return accepted, tolerances
+
+
+def independent_boundary_error(face, boundary):
+    source_wire = ob._local_make_wire(boundary)
+    result_wire = BRepTools.OuterWire_s(face)
+    worst = 0.0
+    for edge in boundary:
+        for sample in edge_samples(edge, 33):
+            worst = max(worst, point_shape_distance(
+                (sample.X(), sample.Y(), sample.Z()), result_wire))
+    explorer = TopExp_Explorer(result_wire, TopAbs_EDGE)
+    while explorer.More():
+        edge = TopoDS.Edge(explorer.Current())
+        for sample in edge_samples(edge, 33):
+            worst = max(worst, point_shape_distance(
+                (sample.X(), sample.Y(), sample.Z()), source_wire))
+        explorer.Next()
+    return worst
+
+
+def independent_normal_jump(surface):
+    u0, u1, v0, v1 = surface.Bounds()
+    jumps = []
+    for axis in (0, 1):
+        degree = surface.UDegree() if axis == 0 else surface.VDegree()
+        count = surface.NbUKnots() if axis == 0 else surface.NbVKnots()
+        knot = surface.UKnot if axis == 0 else surface.VKnot
+        multiplicity = surface.UMultiplicity if axis == 0 else surface.VMultiplicity
+        for index in range(2, count):
+            if multiplicity(index) < degree:
+                continue
+            value = knot(index)
+            delta = min(value - knot(index - 1), knot(index + 1) - value) * 1e-6
+            worst = 0.0
+            for sample in range(1, 10):
+                cross = (v0 + (v1 - v0) * sample / 10.0 if axis == 0 else
+                         u0 + (u1 - u0) * sample / 10.0)
+                normals = []
+                for side in (-1.0, 1.0):
+                    u, v = ((value + side * delta, cross) if axis == 0 else
+                            (cross, value + side * delta))
+                    p, du, dv = gp_Pnt(), gp_Vec(), gp_Vec()
+                    surface.D1(u, v, p, du, dv)
+                    normal = du.Crossed(dv)
+                    normal.Normalize()
+                    normals.append(normal)
+                cosine = max(-1.0, min(1.0, normals[0].Dot(normals[1])))
+                worst = max(worst, math.acos(cosine))
+            jumps.append(worst)
+    return max(jumps) if jumps else math.inf
+
+
+def composite_face_records(shape):
+    records = []
+    edges = ob._unique_edges(shape)
+    for face in ob.unique_faces(shape):
+        adaptor = BRepAdaptor_Surface(face)
+        if adaptor.GetType() != GeomAbs_BSplineSurface:
+            continue
+        surface = adaptor.BSpline()
+        if (surface.UDegree(), surface.VDegree(), surface.NbUPoles(),
+                surface.NbVPoles()) == (2, 1, 5, 2):
+            boundary = face_edge_indices(face, edges)
+            records.append((face, surface, boundary))
+    return records
+
+
 def parent_recipe(scale=1.0, transform=None):
     recipe = {
         "kind": "fillet", "size": scale, "edges": [13],
@@ -297,6 +406,7 @@ def validate_result(before, after, kind, index, vector):
         "unchanged": unchanged_faces_preserved(before, after, kind, index),
         "face_subset": exact_face_subset(after),
         "positive_volume": ob.volume(after) > 0.0,
+        "self_intersection": BRepAlgoAPI_Check(after).IsValid(),
     }
     if not all(verdicts.values()):
         print(f"    oracle detail {kind}{index} {vector}: {verdicts}")
@@ -311,6 +421,15 @@ def fresh_mode(path):
         after = ob.from_recipe(item["move"])
         kind, index, vector = item["component"], item["index"], tuple(item["vector"])
         assert validate_result(before, after, kind, index, vector)
+        if (kind, index) in (("edge", 20), ("vertex", 11)):
+            quality, tolerances = accepted_composite_quality(before, kind, index, vector)
+            assert len(quality) == 1
+            assert independent_boundary_error(
+                quality[0]["face"], quality[0]["source_boundary"]) <= tolerances["compare"]
+            assert independent_normal_jump(
+                BRepAdaptor_Surface(quality[0]["face"]).BSpline()) <= ob.LOCAL_COONS_NORMAL_JUMP
+            records = composite_face_records(after)
+            assert len(records) == 1 and len(records[0][2]) == 5
         cutter = translated_sphere((10.0, 5.0, 16.0), 0.2)
         cut = ob.boolean(after, cutter, "DIFFERENCE")
         assert ob.is_airtight(cut) and ob.volume(cut) < ob.volume(after)
@@ -332,8 +451,9 @@ for name, value in vars(ob).items():
 for forbidden in ("BRepOffsetAPI_MakeFilling", "BRepFill_Filling", "BRepMesh_",
                   "Triangulation_s", "tessellate(", "MESH_DERIVED"):
     check(forbidden not in source, f"local implementation forbids {forbidden}")
-check("GeomFill_BSplineCurves" in source and "GeomFill_StretchStyle" in source,
-      "GeomFill_BSplineCurves StretchStyle is the allowed boundary-exact Coons primitive")
+check("GeomFill_BSplineCurves" in source and "GeomFill_StretchStyle" in source
+      and "GeomConvert_CompCurveToBSplineCurve" in source,
+      "composite-natural GeomFill_BSplineCurves is the allowed boundary-exact Coons primitive")
 
 parent = parent_recipe()
 base = ob.from_recipe(parent)
@@ -345,10 +465,10 @@ check(ob.local_continuity_report(base) == {"C0": 12, "G1": 9},
 
 success_axes = {
     ("face", 2): {0, 2},
-    ("edge", 20): {1},
+    ("edge", 20): {0, 1, 2},
     ("edge", 5): {0, 1, 2},
     ("vertex", 1): {0, 1, 2},
-    ("vertex", 11): {1},
+    ("vertex", 11): {0, 1, 2},
 }
 results = {}
 for (kind, index), axes in success_axes.items():
@@ -364,30 +484,62 @@ for (kind, index), axes in success_axes.items():
                 result = ob.move_subobject_local(base, kind, index, vector, signature)
             except KernelError as exc:
                 results[key] = "refuse"
-                check(axis not in axes and "local move refused" in str(exc),
+                expected_refusal = axis not in axes and "local move refused" in str(exc)
+                if kind == "face" and index == 2 and axis == 1:
+                    expected_refusal = expected_refusal and all(
+                        word in str(exc).lower() for word in ("smoothness", "crease"))
+                check(expected_refusal,
                       f"{kind}{index} {vector} explicitly refuses outside safe matrix: {exc}")
                 continue
             results[key] = "success"
             check(axis in axes, f"{kind}{index} {vector} succeeds only in safe matrix")
             check(validate_result(base, result, kind, index, vector),
                   f"{kind}{index} {vector} passes independent exact/containment/B-rep oracle")
+            if (kind, index) in (("edge", 20), ("vertex", 11)) and axis in (0, 2):
+                quality, quality_tolerances = accepted_composite_quality(
+                    base, kind, index, vector)
+                records = composite_face_records(result)
+                check(len(quality) == 1 and quality[0]["degrees"] == (2, 1)
+                      and quality[0]["poles"] == (5, 2)
+                      and independent_boundary_error(
+                          quality[0]["face"], quality[0]["source_boundary"])
+                      <= quality_tolerances["compare"]
+                      and independent_normal_jump(
+                          BRepAdaptor_Surface(quality[0]["face"]).BSpline())
+                      <= ob.LOCAL_COONS_NORMAL_JUMP
+                      and len(records) == 1 and len(records[0][2]) == 5,
+                      f"{kind}{index} {vector} composite is boundary-exact, smooth, 2x1/5x2, "
+                      "and adds no seam")
+
+for sign in (1.0, -1.0):
+    vector = (0.0, sign * 0.5, 0.0)
+    candidates, tolerances = composite_quality_candidates(base, "face", 2, vector)
+    boundary_exact = [candidate for candidate in candidates
+                      if independent_boundary_error(
+                          candidate["face"], candidate["source_boundary"])
+                      <= tolerances["compare"]]
+    best_jump = min(independent_normal_jump(
+        BRepAdaptor_Surface(candidate["face"]).BSpline()) for candidate in boundary_exact)
+    check(boundary_exact and best_jump > ob.LOCAL_COONS_NORMAL_JUMP
+          and best_jump > math.radians(0.7),
+          f"face2 {vector} boundary-exact candidates retain measured smoothness crease "
+          f"({math.degrees(best_jump):.6f} degrees)")
 
 representatives = {
     ("face", 2): (0.5, 0.0, 0.0),
-    ("edge", 20): (0.0, 0.5, 0.0),
+    ("edge", 20): (0.5, 0.0, 0.0),
     ("edge", 5): (0.5, 0.0, 0.0),
     ("vertex", 1): (0.5, 0.0, 0.0),
-    ("vertex", 11): (0.0, 0.5, 0.0),
+    ("vertex", 11): (0.5, 0.0, 0.0),
 }
 continuity_after = {
     ("face", 2): {"C0": 18, "C1": 1, "G1": 2},
-    ("edge", 20): {"C0": 15, "G1": 6},
+    ("edge", 20): {"C0": 13, "C1": 1, "G1": 7},
     ("edge", 5): {"C0": 19, "G1": 2},
     ("vertex", 1): {"C0": 17, "G1": 4},
-    ("vertex", 11): {"C0": 14, "G1": 7},
+    ("vertex", 11): {"C0": 13, "C1": 1, "G1": 7},
 }
 fresh_payload = []
-fresh_components = set()
 for (kind, index), vector in representatives.items():
     recipe = move_recipe(parent, base, kind, index, vector)
     direct = ob.move_subobject_local(base, kind, index, vector, recipe["target"])
@@ -398,16 +550,30 @@ for (kind, index), vector in representatives.items():
           f"{kind}{index} recipe/direct volumes agree")
     check(ob.local_continuity_report(direct) == continuity_after[(kind, index)],
           f"{kind}{index} continuity loss is explicit, not claimed G1 preservation")
+    if (kind, index) in (("edge", 20), ("vertex", 11)):
+        quality, tolerances = accepted_composite_quality(base, kind, index, vector)
+        check(len(quality) == 1,
+              f"{kind}{index} has one unambiguous smooth composite-natural-Coons candidate")
+        candidate = quality[0]
+        check(candidate["degrees"] == (2, 1) and candidate["poles"] == (5, 2),
+              f"{kind}{index} composite is degree 2x1 with 5x2 poles")
+        check(independent_boundary_error(candidate["face"], candidate["source_boundary"])
+              <= tolerances["compare"],
+              f"{kind}{index} composite boundary correspondence is exact bidirectionally")
+        check(independent_normal_jump(BRepAdaptor_Surface(candidate["face"]).BSpline())
+              <= ob.LOCAL_COONS_NORMAL_JUMP,
+              f"{kind}{index} full-knot normal jump is numerical zero")
+        records = composite_face_records(direct)
+        check(len(records) == 1 and len(records[0][2]) == 5,
+              f"{kind}{index} final solid has one split five-edge composite face, no extra seam")
     parts = {"face": ob.unique_faces(base), "edge": ob._unique_edges(base),
              "vertex": ob._unique_vertices(base)}[kind]
     wrong_hint = index % len(parts) + 1
     rerouted = ob.from_recipe(move_recipe(parent, base, kind, index, vector, wrong_hint))
     check(validate_result(base, rerouted, kind, index, vector),
           f"{kind}{index} target signature overrides stale index hint {wrong_hint}")
-    if kind not in fresh_components:
-        fresh_components.add(kind)
-        fresh_payload.append({"parent": parent, "move": recipe, "component": kind,
-                              "index": index, "vector": list(vector)})
+    fresh_payload.append({"parent": parent, "move": recipe, "component": kind,
+                          "index": index, "vector": list(vector)})
 
 bad_target = ob.local_subobject_signature(base, "face", 2)
 bad_target["type"] = "PLANE"
@@ -457,6 +623,18 @@ for scale in (1e-3, 1.0, 1e3):
         moved = ob.move_subobject_local(scaled, kind, index, vector, signature)
         check(validate_result(scaled, moved, kind, index, vector),
               f"scale {scale:g} {kind}{index} preserves exact local-move contract")
+        if (kind, index) in (("edge", 20), ("vertex", 11)):
+            quality, quality_tolerances = accepted_composite_quality(
+                scaled, kind, index, vector)
+            check(len(quality) == 1 and quality[0]["degrees"] == (2, 1)
+                  and quality[0]["poles"] == (5, 2)
+                  and independent_boundary_error(
+                      quality[0]["face"], quality[0]["source_boundary"])
+                  <= quality_tolerances["compare"]
+                  and independent_normal_jump(
+                      BRepAdaptor_Surface(quality[0]["face"]).BSpline())
+                  <= ob.LOCAL_COONS_NORMAL_JUMP,
+                  f"scale {scale:g} {kind}{index} composite quality remains bounded")
 
 angle = math.radians(31.0)
 c, s = math.cos(angle), math.sin(angle)
@@ -473,6 +651,18 @@ for (kind, index), local_vector in representatives.items():
         rotated, kind, index, vector, ob.local_subobject_signature(rotated, kind, index))
     check(validate_result(rotated, moved, kind, index, vector),
           f"rotated/transformed parent {kind}{index} preserves exact local-move contract")
+    if (kind, index) in (("edge", 20), ("vertex", 11)):
+        quality, quality_tolerances = accepted_composite_quality(
+            rotated, kind, index, vector)
+        check(len(quality) == 1 and quality[0]["degrees"] == (2, 1)
+              and quality[0]["poles"] == (5, 2)
+              and independent_boundary_error(
+                  quality[0]["face"], quality[0]["source_boundary"])
+              <= quality_tolerances["compare"]
+              and independent_normal_jump(
+                  BRepAdaptor_Surface(quality[0]["face"]).BSpline())
+              <= ob.LOCAL_COONS_NORMAL_JUMP,
+              f"rotated/transformed {kind}{index} composite quality remains bounded")
 
 with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as stream:
     json.dump(fresh_payload, stream)

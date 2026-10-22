@@ -2653,7 +2653,21 @@ def _local_bspline_edge(edge, tolerance):
     return bspline
 
 
-def _local_rebuild_face(face, boundary, tolerance):
+LOCAL_COONS_NORMAL_JUMP = 2e-6
+
+
+def _local_planar_face(boundary):
+    from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeFace
+    from OCP.BRepCheck import BRepCheck_Analyzer
+
+    try:
+        maker = BRepBuilderAPI_MakeFace(_local_make_wire(boundary), True)
+    except Exception:  # noqa: BLE001 - OCCT throws instead of returning IsDone=False
+        return None
+    return maker.Face() if maker.IsDone() and BRepCheck_Analyzer(maker.Face()).IsValid() else None
+
+
+def _local_coons_face(face, curves, tolerance):
     from OCP.BRepAdaptor import BRepAdaptor_Surface
     from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeFace
     from OCP.BRepCheck import BRepCheck_Analyzer
@@ -2662,44 +2676,180 @@ def _local_rebuild_face(face, boundary, tolerance):
     from OCP.TopAbs import TopAbs_REVERSED
     from OCP.TopoDS import TopoDS
 
-    wire = _local_make_wire(boundary)
     try:
-        planar = BRepBuilderAPI_MakeFace(wire, True)
-    except Exception:  # noqa: BLE001 - OCCT throws instead of returning IsDone=False
-        planar = None
-    if planar is not None and planar.IsDone() and BRepCheck_Analyzer(planar.Face()).IsValid():
-        rebuilt = planar.Face()
-    else:
-        if len(boundary) > 4:
-            raise KernelError(
-                f"local move refused: affected nonplanar face has {len(boundary)} real "
-                "boundaries; only boundary-exact 3/4-boundary Coons reconstruction is "
-                "supported")
-        curves = [_local_bspline_edge(edge, tolerance) for edge in boundary]
-        try:
-            surface = GeomFill_BSplineCurves(
-                *curves, GeomFill_FillingStyle.GeomFill_StretchStyle).Surface()
-            maker = BRepBuilderAPI_MakeFace(surface, tolerance)
-            rebuilt = maker.Face() if maker.IsDone() else None
-        except Exception as exc:  # noqa: BLE001
-            raise KernelError(
-                f"local move refused: boundary-exact {len(boundary)}-boundary Coons face "
-                "failed: "
-                f"{exc}") from exc
-        if rebuilt is None or not BRepCheck_Analyzer(rebuilt).IsValid():
-            raise KernelError(
-                f"local move refused: boundary-exact {len(boundary)}-boundary Coons face "
-                "is invalid")
-        adaptor = BRepAdaptor_Surface(rebuilt)
-        if adaptor.GetType() != GeomAbs_BSplineSurface:
-            raise KernelError("local move refused: Coons reconstruction returned no BSpline face")
-        bspline = adaptor.BSpline()
-        if bspline.UDegree() > 2 or bspline.VDegree() > 2:
-            raise KernelError(
-                "local move refused: Coons reconstruction exceeded the exact degree-2 subset")
+        surface = GeomFill_BSplineCurves(
+            *curves, GeomFill_FillingStyle.GeomFill_StretchStyle).Surface()
+        maker = BRepBuilderAPI_MakeFace(surface, tolerance)
+        rebuilt = maker.Face() if maker.IsDone() else None
+    except Exception as exc:  # noqa: BLE001
+        raise KernelError(f"local move refused: boundary-exact Coons face failed: {exc}") from exc
+    if rebuilt is None or not BRepCheck_Analyzer(rebuilt).IsValid():
+        raise KernelError("local move refused: boundary-exact Coons face is invalid")
+    adaptor = BRepAdaptor_Surface(rebuilt)
+    if adaptor.GetType() != GeomAbs_BSplineSurface:
+        raise KernelError("local move refused: Coons reconstruction returned no BSpline face")
+    bspline = adaptor.BSpline()
+    if bspline.UDegree() > 2 or bspline.VDegree() > 2:
+        raise KernelError(
+            "local move refused: Coons reconstruction exceeded the exact degree-2 subset")
     if face.Orientation() == TopAbs_REVERSED:
         rebuilt = TopoDS.Face(rebuilt.Reversed())
-    return rebuilt
+    return rebuilt, bspline
+
+
+def _local_wire_edges(wire):
+    from OCP.TopAbs import TopAbs_EDGE
+    from OCP.TopExp import TopExp_Explorer
+    from OCP.TopoDS import TopoDS
+
+    edges = []
+    explorer = TopExp_Explorer(wire, TopAbs_EDGE)
+    while explorer.More():
+        edges.append(TopoDS.Edge(explorer.Current()))
+        explorer.Next()
+    return edges
+
+
+def _local_boundary_error(face, boundary):
+    from OCP.BRepTools import BRepTools
+
+    source_wire = _local_make_wire(boundary)
+    result_edges = _local_wire_edges(BRepTools.OuterWire_s(face))
+    worst = 0.0
+    for edge in boundary:
+        for sample in _local_edge_points(edge, 33):
+            worst = max(worst, _local_point_shape_distance(sample, BRepTools.OuterWire_s(face)))
+    for edge in result_edges:
+        for sample in _local_edge_points(edge, 33):
+            worst = max(worst, _local_point_shape_distance(sample, source_wire))
+    return worst
+
+
+def _local_edge_points(edge, count):
+    from OCP.BRepAdaptor import BRepAdaptor_Curve
+
+    adaptor = BRepAdaptor_Curve(edge)
+    first, last = adaptor.FirstParameter(), adaptor.LastParameter()
+    return [tuple(getattr(adaptor.Value(first + (last - first) * i / (count - 1)), axis)()
+                  for axis in ("X", "Y", "Z"))
+            for i in range(count)]
+
+
+def _local_unit_normal(surface, u, v):
+    from OCP.gp import gp_Pnt, gp_Vec
+
+    point, du, dv = gp_Pnt(), gp_Vec(), gp_Vec()
+    surface.D1(u, v, point, du, dv)
+    normal = du.Crossed(dv)
+    if normal.Magnitude() <= 1e-15:
+        raise KernelError("local move refused: composite Coons surface has a singular normal")
+    normal.Normalize()
+    return normal
+
+
+def _local_full_knot_normal_jump(surface):
+    """Maximum normal jump across every internal knot of full degree multiplicity."""
+    u0, u1, v0, v1 = surface.Bounds()
+    jumps = []
+    for axis in (0, 1):
+        degree = surface.UDegree() if axis == 0 else surface.VDegree()
+        count = surface.NbUKnots() if axis == 0 else surface.NbVKnots()
+        knot = surface.UKnot if axis == 0 else surface.VKnot
+        multiplicity = surface.UMultiplicity if axis == 0 else surface.VMultiplicity
+        for index in range(2, count):
+            if multiplicity(index) < degree:
+                continue
+            value = knot(index)
+            delta = min(value - knot(index - 1), knot(index + 1) - value) * 1e-6
+            if delta <= 0.0:
+                raise KernelError("local move refused: composite Coons knot span is degenerate")
+            worst = 0.0
+            for sample in range(1, 10):
+                cross = (v0 + (v1 - v0) * sample / 10.0 if axis == 0 else
+                         u0 + (u1 - u0) * sample / 10.0)
+                before = (_local_unit_normal(surface, value - delta, cross) if axis == 0 else
+                          _local_unit_normal(surface, cross, value - delta))
+                after = (_local_unit_normal(surface, value + delta, cross) if axis == 0 else
+                         _local_unit_normal(surface, cross, value + delta))
+                cosine = max(-1.0, min(1.0, before.Dot(after)))
+                worst = max(worst, math.acos(cosine))
+            jumps.append(worst)
+    if not jumps:
+        raise KernelError(
+            "local move refused: composite Coons surface has no full-multiplicity join knot")
+    return max(jumps)
+
+
+def _local_face_deformation(old_face, new_face, tolerance):
+    old_samples = _local_face_interior_samples(old_face, tolerance)
+    new_samples = _local_face_interior_samples(new_face, tolerance)
+    squared = []
+    for sample in old_samples:
+        squared.append(_local_point_shape_distance(
+            (sample.X(), sample.Y(), sample.Z()), new_face) ** 2)
+    for sample in new_samples:
+        squared.append(_local_point_shape_distance(
+            (sample.X(), sample.Y(), sample.Z()), old_face) ** 2)
+    return math.sqrt(sum(squared) / len(squared))
+
+
+def _local_composite_coons_candidates(face, boundary, tolerances):
+    """Five adjacent-pair natural Coons candidates; no N-sided approximation."""
+    from OCP.GeomConvert import GeomConvert_CompCurveToBSplineCurve
+
+    curves = [_local_bspline_edge(edge, tolerances["build"]) for edge in boundary]
+    candidates = []
+    for join_index in range(5):
+        ordered = curves[join_index:] + curves[:join_index]
+        joiner = GeomConvert_CompCurveToBSplineCurve(ordered[0])
+        full_multiplicity = max(ordered[0].Degree(), ordered[1].Degree())
+        if not joiner.Add(ordered[1], tolerances["build"], True, True,
+                          full_multiplicity):
+            continue
+        try:
+            rebuilt, surface = _local_coons_face(
+                face, [joiner.BSplineCurve(), ordered[2], ordered[3], ordered[4]],
+                tolerances["build"])
+            boundary_error = _local_boundary_error(rebuilt, boundary)
+            normal_jump = _local_full_knot_normal_jump(surface)
+            deformation = _local_face_deformation(
+                face, rebuilt, tolerances["compare"])
+        except KernelError:
+            continue
+        rank = (max(surface.UDegree(), surface.VDegree()),
+                surface.UDegree() + surface.VDegree(),
+                surface.NbUPoles() * surface.NbVPoles(),
+                surface.NbUPoles() + surface.NbVPoles(), deformation)
+        candidates.append({"face": rebuilt, "source_boundary": boundary,
+                           "rank": rank, "boundary_error": boundary_error,
+                           "normal_jump": normal_jump,
+                           "degrees": (surface.UDegree(), surface.VDegree()),
+                           "poles": (surface.NbUPoles(), surface.NbVPoles())})
+    if not candidates:
+        raise KernelError(
+            "local move refused: no composite-natural-Coons candidate could be built")
+    return candidates
+
+
+def _local_rebuild_face_options(face, boundary, tolerances):
+    planar = _local_planar_face(boundary)
+    if planar is not None:
+        return [{"face": planar, "rank": (0, 0, 0, 0, 0.0)}]
+    if len(boundary) == 5:
+        return _local_composite_coons_candidates(face, boundary, tolerances)
+    if len(boundary) not in (3, 4):
+        raise KernelError(
+            f"local move refused: affected nonplanar face has {len(boundary)} real "
+            "boundaries; only boundary-exact 3/4-boundary Coons or smooth composite-natural-"
+            "Coons reconstruction is supported")
+    rebuilt, surface = _local_coons_face(
+        face, [_local_bspline_edge(edge, tolerances["build"]) for edge in boundary],
+        tolerances["build"])
+    return [{"face": rebuilt,
+             "rank": (max(surface.UDegree(), surface.VDegree()),
+                      surface.UDegree() + surface.VDegree(),
+                      surface.NbUPoles() * surface.NbVPoles(),
+                      surface.NbUPoles() + surface.NbVPoles(), 0.0)}]
 
 
 def _local_point_shape_distance(point, shape):
@@ -2930,69 +3080,109 @@ def move_subobject_local(shape, kind, index, vector, target_signature=None):
     changed_faces = {face_index for face_index, boundary in enumerate(face_edges)
                      if any(edge in changed_edges for edge in boundary)}
 
-    rebuilt_faces = []
+    import itertools
+
+    face_options = []
+    has_composite = False
     for face_index, face in enumerate(faces):
         if kind == "face" and face_index == selected_index:
             rebuilt = TopoDS.Face(BRepBuilderAPI_Transform(
                 face, _local_translation(vector), True).Shape())
+            options = [{"face": rebuilt, "rank": (0, 0, 0, 0, 0.0)}]
         elif face_index in changed_faces:
             boundary = _local_boundary_edges(
                 face, edges, replacements, vertices, moved, vector, build_tolerance)
-            rebuilt = _local_rebuild_face(face, boundary, build_tolerance)
+            options = _local_rebuild_face_options(face, boundary, tolerances)
+            has_composite = has_composite or len(boundary) == 5
         else:
-            rebuilt = face
-        rebuilt_faces.append(rebuilt)
-
-    sewing = BRepBuilderAPI_Sewing(tolerances["sew"])
-    for face in rebuilt_faces:
-        sewing.Add(face)
-    sewing.Perform()
-    if sewing.NbFreeEdges() or sewing.NbMultipleEdges():
+            options = [{"face": face, "rank": (0, 0, 0, 0, 0.0)}]
+        face_options.append(options)
+    candidate_count = math.prod(len(options) for options in face_options)
+    if candidate_count > 25:
         raise KernelError(
-            f"local move refused: faces did not sew cleanly "
-            f"({sewing.NbFreeEdges()} free, {sewing.NbMultipleEdges()} multiple edges)")
-    sewn = sewing.SewedShape()
-    shells = []
-    explorer = TopExp_Explorer(sewn, TopAbs_SHELL)
-    while explorer.More():
-        shells.append(TopoDS.Shell(explorer.Current()))
-        explorer.Next()
-    if len(shells) != 1:
-        raise KernelError(
-            f"local move refused: sewing produced {len(shells)} shells instead of one")
-    solid = BRepBuilderAPI_MakeSolid(shells[0]).Solid()
-    fixer = ShapeFix_Solid(solid)
-    fixer.Perform()
-    result = fixer.Solid()
-    if volume(result) < 0.0:
-        result = TopoDS.Solid(result.Reversed())
-    if not is_airtight(result):
-        raise KernelError("local move refused: rebuilt result is not valid and airtight")
-    if not BRepAlgoAPI_Check(result).IsValid():
-        raise KernelError("local move refused: rebuilt result intersects itself")
-    if len(unique_faces(result)) != len(faces):
-        raise KernelError("local move refused: rebuilding changed the face count")
+            "local move refused: interacting composite Coons choices are ambiguous")
 
-    result_vertices = _unique_vertices(result)
-    _local_verify_vertex_containment(
-        vertices, result_vertices, moved, vector, comparison_tolerance)
-    if kind in ("face", "edge"):
-        candidates = unique_faces(result) if kind == "face" else _unique_edges(result)
-        matches = [candidate for candidate in candidates
-                   if _local_translated_match(
-                       selected, candidate, kind, vector, comparison_tolerance)]
-        if len(matches) != 1:
+    accepted = []
+    saw_boundary_exact = False
+    saw_smoothness_crease = False
+    for choices in itertools.product(*face_options):
+        composite = [choice for choice in choices if "normal_jump" in choice]
+        boundary_exact = not any(
+            choice["boundary_error"] > comparison_tolerance for choice in composite)
+        numerically_smooth = not any(
+            choice["normal_jump"] > LOCAL_COONS_NORMAL_JUMP for choice in composite)
+        sewing = BRepBuilderAPI_Sewing(tolerances["sew"])
+        for choice in choices:
+            sewing.Add(choice["face"])
+        sewing.Perform()
+        if sewing.NbFreeEdges() or sewing.NbMultipleEdges():
+            continue
+        sewn = sewing.SewedShape()
+        shells = []
+        explorer = TopExp_Explorer(sewn, TopAbs_SHELL)
+        while explorer.More():
+            shells.append(TopoDS.Shell(explorer.Current()))
+            explorer.Next()
+        if len(shells) != 1:
+            continue
+        solid = BRepBuilderAPI_MakeSolid(shells[0]).Solid()
+        fixer = ShapeFix_Solid(solid)
+        fixer.Perform()
+        result = fixer.Solid()
+        if volume(result) < 0.0:
+            result = TopoDS.Solid(result.Reversed())
+        if not is_airtight(result) or not BRepAlgoAPI_Check(result).IsValid():
+            continue
+        if (len(unique_faces(result)), len(_unique_edges(result)),
+                len(_unique_vertices(result))) != (len(faces), len(edges), len(vertices)):
+            continue
+        if composite and boundary_exact:
+            saw_boundary_exact = True
+        if composite and boundary_exact and not numerically_smooth:
+            saw_smoothness_crease = True
+            continue
+        if not boundary_exact:
+            continue
+        try:
+            result_vertices = _unique_vertices(result)
+            _local_verify_vertex_containment(
+                vertices, result_vertices, moved, vector, comparison_tolerance)
+            if kind in ("face", "edge"):
+                result_parts = (unique_faces(result) if kind == "face" else
+                                _unique_edges(result))
+                matches = [candidate for candidate in result_parts
+                           if _local_translated_match(
+                               selected, candidate, kind, vector, comparison_tolerance)]
+                if len(matches) != 1:
+                    continue
+            else:
+                target = _local_add(_local_point(selected), vector)
+                matches = [vertex for vertex in result_vertices
+                           if _local_distance(target, _local_point(vertex))
+                           <= comparison_tolerance]
+                if len(matches) != 1:
+                    continue
+        except KernelError:
+            continue
+        rank = tuple(sum(choice["rank"][i] for choice in choices)
+                     for i in range(5))
+        accepted.append({"result": result, "rank": rank})
+
+    if not accepted:
+        if has_composite and saw_boundary_exact and saw_smoothness_crease:
             raise KernelError(
-                f"local move refused: selected {kind} did not translate as one exact, "
-                "unique component")
-    else:
-        target = _local_add(_local_point(selected), vector)
-        matches = [vertex for vertex in result_vertices
-                   if _local_distance(target, _local_point(vertex)) <= comparison_tolerance]
-        if len(matches) != 1:
+                "local move refused: composite-natural-Coons candidates have a smoothness "
+                "crease above the strict angular gate")
+        raise KernelError(
+            "local move refused: no boundary-exact candidate made one valid airtight solid")
+    accepted.sort(key=lambda candidate: candidate["rank"])
+    if len(accepted) > 1:
+        first, second = accepted[0]["rank"], accepted[1]["rank"]
+        if first[:4] == second[:4] and abs(first[4] - second[4]) <= comparison_tolerance:
             raise KernelError(
-                "local move refused: selected vertex did not translate exactly and uniquely")
-    return result
+                "local move refused: equivalent composite-natural-Coons candidates are "
+                "ambiguous")
+    return accepted[0]["result"]
 
 
 def surface_centroid(shape):
