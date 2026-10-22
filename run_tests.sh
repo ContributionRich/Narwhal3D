@@ -64,6 +64,7 @@ fi
 PURE_SUITES=(
     spike/test_geometry.py
     spike/test_kernel.py
+    spike/test_local_brep_move.py
     spike/test_primitives.py
     spike/test_picture.py
     spike/test_cmdbar_hits.py

@@ -233,6 +233,10 @@ RECIPE_KINDS = {
     # or vertex of a planar-faced solid produces, recorded as the RESULT so it rebuilds
     # exactly (every face is a real PLANE through its own corners).
     "polyhedron": ("vertices", "faces"),
+    # An exact topology-local edit. The parent recipe is rebuilt first, then only the
+    # selected component and its incident topology are reconstructed. Unsupported
+    # N-sided surface deformation is refused rather than approximated.
+    "local_move": ("a", "component", "index", "vector", "target"),
     # These primitives are built canonically about the origin (axis +Z) and placed by the
     # recipe's `xform`, as box, cylinder, and cone are. An ellipsoid needs no separate kind:
     # it is a unit `sphere` whose transform carries non-uniform axis scaling, applied exactly
@@ -1341,6 +1345,10 @@ def from_recipe(recipe, _depth=0):
                                 recipe["signature"])
         elif kind == "polyhedron":
             shape = make_polyhedron(recipe["vertices"], recipe["faces"])
+        elif kind == "local_move":
+            shape = move_subobject_local(from_recipe(recipe["a"], _depth + 1),
+                                         recipe["component"], recipe["index"],
+                                         recipe["vector"], recipe["target"])
         elif kind == "torus":
             shape = make_torus(recipe["major"], recipe["minor"])
         elif kind == "truncated_cone":
@@ -2209,6 +2217,782 @@ def vertex_at(shape, index):
             f"1..{len(verts)}")
     p = BRep_Tool.Pnt_s(verts[i - 1])
     return (p.X(), p.Y(), p.Z())
+
+
+def _local_shape_index(shapes, query):
+    return next((i for i, shape in enumerate(shapes) if shape.IsSame(query)), None)
+
+
+def _local_point(vertex):
+    from OCP.BRep import BRep_Tool
+
+    point = BRep_Tool.Pnt_s(vertex)
+    return point.X(), point.Y(), point.Z()
+
+
+def _local_distance(a, b):
+    return math.sqrt(sum((float(x) - float(y)) ** 2 for x, y in zip(a, b)))
+
+
+def _local_add(point, vector):
+    return tuple(float(point[i]) + float(vector[i]) for i in range(3))
+
+
+def _local_translation(vector):
+    from OCP.gp import gp_Trsf, gp_Vec
+
+    transform = gp_Trsf()
+    transform.SetTranslation(gp_Vec(*vector))
+    return transform
+
+
+def _local_tolerances(shape):
+    """Build/sew and comparison tolerances derived from OCCT and this shape.
+
+    OCCT's 1e-7 geometric confusion and the shape's own stored tolerances govern building.
+    Comparison is deliberately tighter: parametric confusion, coordinate ULPs, and at most
+    one eighth of an input tolerance. The extent terms keep both values meaningful from
+    millimetre-scale micro-parts through kilometre coordinates without permitting an
+    already-loose input tolerance to hide a wrong selected component.
+    """
+    from OCP.BRep import BRep_Tool
+    from OCP.Precision import Precision
+    from OCP.TopAbs import TopAbs_EDGE, TopAbs_FACE, TopAbs_VERTEX
+
+    low, high = tight_bbox(shape)
+    extent = max(max(high[i] - low[i] for i in range(3)), Precision.Confusion_s())
+    coordinate = max(1.0, *(abs(value) for value in low + high))
+    ulp = math.ulp(coordinate)
+    input_tolerance = max(
+        BRep_Tool.MaxTolerance_s(shape, TopAbs_VERTEX),
+        BRep_Tool.MaxTolerance_s(shape, TopAbs_EDGE),
+        BRep_Tool.MaxTolerance_s(shape, TopAbs_FACE),
+    )
+    loose_limit = max(1000.0 * Precision.Confusion_s(), extent * 1e-4)
+    if input_tolerance > loose_limit:
+        raise KernelError(
+            f"local move refused: input tolerance {input_tolerance:g} is too large for "
+            f"shape extent {extent:g}")
+    comparison = max(
+        Precision.PConfusion_s(), 64.0 * ulp,
+        min(input_tolerance / 8.0, extent * 1e-10),
+    )
+    build = max(Precision.Confusion_s(), input_tolerance, 8.0 * comparison)
+    sew = min(4.0 * build, loose_limit)
+    return {"build": build, "sew": sew, "compare": comparison,
+            "extent": extent, "input": input_tolerance, "ulp": ulp}
+
+
+def _local_edge_vertices(edge, vertices):
+    from OCP.TopAbs import TopAbs_VERTEX
+    from OCP.TopExp import TopExp_Explorer
+    from OCP.TopoDS import TopoDS
+
+    result = []
+    explorer = TopExp_Explorer(edge, TopAbs_VERTEX)
+    while explorer.More():
+        index = _local_shape_index(vertices, TopoDS.Vertex(explorer.Current()))
+        if index is None:
+            raise KernelError("local move refused: an edge vertex is outside the solid")
+        if index not in result:
+            result.append(index)
+        explorer.Next()
+    return result
+
+
+def _local_face_edges(face, edges):
+    from OCP.TopAbs import TopAbs_EDGE
+    from OCP.TopExp import TopExp_Explorer
+    from OCP.TopoDS import TopoDS
+
+    result = []
+    explorer = TopExp_Explorer(face, TopAbs_EDGE)
+    while explorer.More():
+        index = _local_shape_index(edges, TopoDS.Edge(explorer.Current()))
+        if index is None:
+            raise KernelError("local move refused: a face edge is outside the solid")
+        if index not in result:
+            result.append(index)
+        explorer.Next()
+    return result
+
+
+def _local_curve_type(edge):
+    from OCP.BRep import BRep_Tool
+    from OCP.BRepAdaptor import BRepAdaptor_Curve
+    from OCP.Geom import Geom_TrimmedCurve
+    from OCP.GeomAbs import GeomAbs_BSplineCurve, GeomAbs_Circle, GeomAbs_Ellipse, GeomAbs_Line
+    from OCP.GeomConvert import GeomConvert_CurveToAnaCurve
+    from OCP.Precision import Precision
+
+    if BRep_Tool.Degenerated_s(edge):
+        return "DEGENERATED"
+    adaptor = BRepAdaptor_Curve(edge)
+    curve_type = adaptor.GetType()
+    if curve_type != GeomAbs_BSplineCurve:
+        return str(curve_type).split("_")[-1].upper()
+    first, last = adaptor.FirstParameter(), adaptor.LastParameter()
+    curve = BRep_Tool.Curve_s(edge, first, last)
+    if curve is None:
+        return "BSPLINECURVE"
+    trimmed = Geom_TrimmedCurve(curve, first, last)
+    # Curved targets precede LINE: OCCT's converter reports a misleading tiny LINE gap
+    # for a rational quarter-circle when output parameters are Python value arguments.
+    for target, name in ((GeomAbs_Circle, "CIRCLE"), (GeomAbs_Ellipse, "ELLIPSE"),
+                         (GeomAbs_Line, "LINE")):
+        converter = GeomConvert_CurveToAnaCurve(trimmed)
+        converter.SetTarget(target)
+        try:
+            converted = converter.ConvertToAnalytical(
+                Precision.PConfusion_s(), trimmed, first, last, first, last)
+        except Exception:  # noqa: BLE001
+            converted = False
+        if converted and converter.Gap() <= Precision.PConfusion_s():
+            return name
+    return "BSPLINECURVE"
+
+
+def _local_part_type(part, kind):
+    if kind == "face":
+        return _face_type_name(part)
+    if kind == "edge":
+        return _local_curve_type(part)
+    return "VERTEX"
+
+
+def _local_signature_adjacency(shape, kind, part):
+    from OCP.BRep import BRep_Tool
+    from OCP.TopAbs import TopAbs_EDGE, TopAbs_FACE
+    from OCP.TopExp import TopExp_Explorer
+    from OCP.TopoDS import TopoDS
+
+    faces, edges = unique_faces(shape), _unique_edges(shape)
+    if kind == "face":
+        edge_types = []
+        degenerated = 0
+        explorer = TopExp_Explorer(part, TopAbs_EDGE)
+        seen = []
+        while explorer.More():
+            edge = TopoDS.Edge(explorer.Current())
+            if not any(old.IsSame(edge) for old in seen):
+                seen.append(edge)
+                if BRep_Tool.Degenerated_s(edge):
+                    degenerated += 1
+                else:
+                    edge_types.append(_local_curve_type(edge))
+            explorer.Next()
+        return {"edge_types": sorted(edge_types), "real_boundaries": len(edge_types),
+                "degenerated": degenerated}
+    if kind == "edge":
+        adjacent_faces = []
+        for face in faces:
+            explorer = TopExp_Explorer(face, TopAbs_EDGE)
+            while explorer.More():
+                if TopoDS.Edge(explorer.Current()).IsSame(part):
+                    adjacent_faces.append(_face_type_name(face))
+                    break
+                explorer.Next()
+        vertices = _unique_vertices(shape)
+        endpoints = _local_edge_vertices(part, vertices)
+        valences = []
+        for endpoint in endpoints:
+            valences.append(sum(endpoint in _local_edge_vertices(edge, vertices)
+                                for edge in edges))
+        return {"face_types": sorted(adjacent_faces), "endpoint_valences": sorted(valences)}
+
+    vertex_index = _local_shape_index(_unique_vertices(shape), part)
+    edge_types = []
+    face_types_ = []
+    if vertex_index is None:
+        raise KernelError("local move target signature: vertex is outside the parent")
+    vertices = _unique_vertices(shape)
+    incident_edges = [edge for edge in edges
+                      if vertex_index in _local_edge_vertices(edge, vertices)]
+    edge_types = sorted(_local_curve_type(edge) for edge in incident_edges)
+    for face in faces:
+        explorer = TopExp_Explorer(face, TopAbs_EDGE)
+        found = False
+        while explorer.More() and not found:
+            edge = TopoDS.Edge(explorer.Current())
+            found = any(edge.IsSame(incident) for incident in incident_edges)
+            explorer.Next()
+        if found:
+            face_types_.append(_face_type_name(face))
+    return {"edge_types": edge_types, "face_types": sorted(face_types_),
+            "edge_valence": len(incident_edges)}
+
+
+def local_subobject_signature(shape, kind, index):
+    """Return a JSON-safe geometric/topological identity for a local-move target."""
+    _need()
+    if kind not in ("face", "edge", "vertex"):
+        raise KernelError(f"local move target signature: unsupported kind {kind!r}")
+    parts = {"face": unique_faces(shape), "edge": _unique_edges(shape),
+             "vertex": _unique_vertices(shape)}[kind]
+    position = int(index) - 1
+    if position < 0 or position >= len(parts):
+        raise KernelError(
+            f"local move target signature: {kind} index {index} is outside 1..{len(parts)}")
+    part = parts[position]
+    if kind == "vertex":
+        centroid = _local_point(part)
+        measure = 0.0
+        bounds = centroid, centroid
+    else:
+        measure, centroid = _local_part_measure(part, kind)
+        bounds = tight_bbox(part)
+    return {
+        "version": 1,
+        "component": kind,
+        "type": _local_part_type(part, kind),
+        "measure": float(measure),
+        "centroid": [float(value) for value in centroid],
+        "bounds": [[float(value) for value in corner] for corner in bounds],
+        "adjacency": _local_signature_adjacency(shape, kind, part),
+    }
+
+
+def _local_signature_matches(candidate, target, tolerances):
+    if not isinstance(target, dict) or target.get("version") != 1:
+        return False
+    required = ("component", "type", "measure", "centroid", "bounds", "adjacency")
+    if any(name not in target for name in required):
+        return False
+    if candidate["component"] != target["component"] or candidate["type"] != target["type"]:
+        return False
+    if candidate["adjacency"] != target["adjacency"]:
+        return False
+    try:
+        measure = float(target["measure"])
+        centroid = [float(value) for value in target["centroid"]]
+        bounds = [[float(value) for value in corner] for corner in target["bounds"]]
+    except (TypeError, ValueError):
+        return False
+    values = [measure, *centroid, *(value for corner in bounds for value in corner)]
+    if len(centroid) != 3 or len(bounds) != 2 or any(len(corner) != 3 for corner in bounds):
+        return False
+    if not all(math.isfinite(value) for value in values):
+        return False
+    mass_tolerance = 2.5e-7 * max(tolerances["compare"], abs(measure))
+    if abs(candidate["measure"] - measure) > mass_tolerance:
+        return False
+    comparison = tolerances["compare"]
+    if any(abs(candidate["centroid"][i] - centroid[i]) > comparison for i in range(3)):
+        return False
+    return all(abs(candidate["bounds"][side][axis] - bounds[side][axis]) <= comparison
+               for side in range(2) for axis in range(3))
+
+
+def _local_resolve_target(shape, kind, index, target, tolerances):
+    if not isinstance(target, dict) or target.get("component") != kind:
+        raise KernelError("local move refused: persisted target signature is missing or malformed")
+    parts = {"face": unique_faces(shape), "edge": _unique_edges(shape),
+             "vertex": _unique_vertices(shape)}[kind]
+    matches = []
+    for position in range(1, len(parts) + 1):
+        candidate = local_subobject_signature(shape, kind, position)
+        if _local_signature_matches(candidate, target, tolerances):
+            matches.append(position - 1)
+    if len(matches) != 1:
+        raise KernelError(
+            f"local move refused: persisted target signature resolved to {len(matches)} "
+            f"{kind}s instead of one (stored index hint {index})")
+    return matches[0]
+
+
+def _local_orient_edge(edge, start, tolerance):
+    from OCP.TopExp import TopExp
+    from OCP.TopoDS import TopoDS
+
+    first = _local_point(TopExp.FirstVertex_s(edge, True))
+    last = _local_point(TopExp.LastVertex_s(edge, True))
+    if min(_local_distance(first, start), _local_distance(last, start)) > tolerance:
+        raise KernelError("local move refused: a rebuilt edge does not meet its wire vertex")
+    return TopoDS.Edge(edge.Reversed()) if _local_distance(last, start) < _local_distance(first, start) else edge
+
+
+def _local_rebuild_edge(edge, vertex_indices, vertices, moved, vector, tolerance):
+    from OCP.BRep import BRep_Tool
+    from OCP.BRepAdaptor import BRepAdaptor_Curve
+    from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeEdge, BRepBuilderAPI_Transform
+    from OCP.Geom import Geom_TrimmedCurve
+    from OCP.GeomAbs import GeomAbs_Line
+    from OCP.GeomConvert import GeomConvert
+    from OCP.TopoDS import TopoDS
+    from OCP.gp import gp_Pnt
+
+    if not vertex_indices:
+        raise KernelError("local move refused: a changed edge has no vertices")
+    if all(index in moved for index in vertex_indices):
+        transformed = BRepBuilderAPI_Transform(
+            edge, _local_translation(vector), True).Shape()
+        return TopoDS.Edge(transformed), True
+    if len(vertex_indices) != 2:
+        raise KernelError(
+            "local move refused: an incident closed or singular edge cannot move one endpoint")
+
+    old_points = [_local_point(vertices[index]) for index in vertex_indices]
+    new_points = [_local_add(point, vector) if index in moved else point
+                  for point, index in zip(old_points, vertex_indices)]
+    adaptor = BRepAdaptor_Curve(edge)
+    if adaptor.GetType() == GeomAbs_Line:
+        maker = BRepBuilderAPI_MakeEdge(gp_Pnt(*new_points[0]), gp_Pnt(*new_points[1]))
+        if not maker.IsDone():
+            raise KernelError("local move refused: an incident line could not be rebuilt")
+        return maker.Edge(), False
+
+    first, last = adaptor.FirstParameter(), adaptor.LastParameter()
+    curve = BRep_Tool.Curve_s(edge, first, last)
+    if curve is None:
+        raise KernelError("local move refused: an incident edge has no exact 3D curve")
+    bspline = GeomConvert.CurveToBSplineCurve_s(Geom_TrimmedCurve(curve, first, last))
+    changed_poles = set()
+    for pole_index in (1, bspline.NbPoles()):
+        pole = bspline.Pole(pole_index)
+        pole_point = pole.X(), pole.Y(), pole.Z()
+        for vertex_index, old_point in zip(vertex_indices, old_points):
+            if vertex_index in moved and _local_distance(pole_point, old_point) <= tolerance:
+                bspline.SetPole(pole_index, gp_Pnt(*_local_add(pole_point, vector)))
+                changed_poles.add(pole_index)
+    if len(changed_poles) != sum(index in moved for index in vertex_indices):
+        raise KernelError(
+            "local move refused: an incident curve endpoint is not an endpoint BSpline pole")
+    maker = BRepBuilderAPI_MakeEdge(bspline)
+    if not maker.IsDone():
+        raise KernelError("local move refused: an endpoint-adjusted BSpline edge is invalid")
+    return maker.Edge(), False
+
+
+def _local_boundary_edges(face, edges, replacements, vertices, moved, vector, tolerance):
+    from OCP.BRep import BRep_Tool
+    from OCP.BRepTools import BRepTools, BRepTools_WireExplorer
+    from OCP.TopAbs import TopAbs_WIRE
+    from OCP.TopExp import TopExp_Explorer
+    from OCP.TopoDS import TopoDS
+
+    outer = BRepTools.OuterWire_s(face)
+    wire_count = 0
+    explorer = TopExp_Explorer(face, TopAbs_WIRE)
+    while explorer.More():
+        wire_count += 1
+        explorer.Next()
+    if wire_count != 1:
+        raise KernelError(
+            "local move refused: affected faces with holes or multiple wires are unsupported")
+
+    boundary = []
+    occurrences = {}
+    wire_explorer = BRepTools_WireExplorer(outer, face)
+    while wire_explorer.More():
+        old_edge = TopoDS.Edge(wire_explorer.Current())
+        edge_index = _local_shape_index(edges, old_edge)
+        if edge_index is None:
+            raise KernelError("local move refused: an ordered boundary edge is unknown")
+        start_vertex = TopoDS.Vertex(wire_explorer.CurrentVertex())
+        vertex_index = _local_shape_index(vertices, start_vertex)
+        if vertex_index is None:
+            raise KernelError("local move refused: an ordered boundary vertex is unknown")
+        occurrences[edge_index] = occurrences.get(edge_index, 0) + 1
+        if BRep_Tool.Degenerated_s(old_edge):
+            if edge_index in replacements:
+                raise KernelError(
+                    "local move refused: a changed degenerate boundary edge is unsupported")
+            # A fixed zero-length pole edge contributes no geometric boundary. Omitting it
+            # turns the same singular patch into its mathematically equivalent three-real-
+            # boundary Coons form; its one pole vertex is still retained by adjacent edges.
+            wire_explorer.Next()
+            continue
+        if occurrences[edge_index] > 1 or BRep_Tool.IsClosed_s(old_edge, face):
+            raise KernelError(
+                "local move refused: an affected periodic same-face seam is unsupported")
+        start = _local_point(start_vertex)
+        if vertex_index in moved:
+            start = _local_add(start, vector)
+        boundary.append(_local_orient_edge(
+            replacements.get(edge_index, edges[edge_index]), start, tolerance))
+        wire_explorer.Next()
+    if len(boundary) < 3:
+        raise KernelError(
+            "local move refused: an affected face has fewer than three real boundaries")
+    return boundary
+
+
+def _local_make_wire(boundary):
+    from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeWire
+
+    maker = BRepBuilderAPI_MakeWire()
+    for edge in boundary:
+        maker.Add(edge)
+    if not maker.IsDone():
+        raise KernelError("local move refused: affected boundary edges do not form a wire")
+    return maker.Wire()
+
+
+def _local_bspline_edge(edge, tolerance):
+    from OCP.BRep import BRep_Tool
+    from OCP.BRepAdaptor import BRepAdaptor_Curve
+    from OCP.Geom import Geom_TrimmedCurve
+    from OCP.GeomConvert import GeomConvert
+    from OCP.TopExp import TopExp
+
+    adaptor = BRepAdaptor_Curve(edge)
+    first, last = adaptor.FirstParameter(), adaptor.LastParameter()
+    curve = BRep_Tool.Curve_s(edge, first, last)
+    if curve is None:
+        raise KernelError("local move refused: a surface boundary has no exact 3D curve")
+    bspline = GeomConvert.CurveToBSplineCurve_s(Geom_TrimmedCurve(curve, first, last))
+    start = _local_point(TopExp.FirstVertex_s(edge, True))
+    a = bspline.StartPoint()
+    b = bspline.EndPoint()
+    start_distance = _local_distance((a.X(), a.Y(), a.Z()), start)
+    end_distance = _local_distance((b.X(), b.Y(), b.Z()), start)
+    if min(start_distance, end_distance) > tolerance:
+        raise KernelError("local move refused: a BSpline boundary has the wrong orientation")
+    if end_distance < start_distance:
+        bspline.Reverse()
+    return bspline
+
+
+def _local_rebuild_face(face, boundary, tolerance):
+    from OCP.BRepAdaptor import BRepAdaptor_Surface
+    from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeFace
+    from OCP.BRepCheck import BRepCheck_Analyzer
+    from OCP.GeomAbs import GeomAbs_BSplineSurface
+    from OCP.GeomFill import GeomFill_BSplineCurves, GeomFill_FillingStyle
+    from OCP.TopAbs import TopAbs_REVERSED
+    from OCP.TopoDS import TopoDS
+
+    wire = _local_make_wire(boundary)
+    try:
+        planar = BRepBuilderAPI_MakeFace(wire, True)
+    except Exception:  # noqa: BLE001 - OCCT throws instead of returning IsDone=False
+        planar = None
+    if planar is not None and planar.IsDone() and BRepCheck_Analyzer(planar.Face()).IsValid():
+        rebuilt = planar.Face()
+    else:
+        if len(boundary) > 4:
+            raise KernelError(
+                f"local move refused: affected nonplanar face has {len(boundary)} real "
+                "boundaries; only boundary-exact 3/4-boundary Coons reconstruction is "
+                "supported")
+        curves = [_local_bspline_edge(edge, tolerance) for edge in boundary]
+        try:
+            surface = GeomFill_BSplineCurves(
+                *curves, GeomFill_FillingStyle.GeomFill_StretchStyle).Surface()
+            maker = BRepBuilderAPI_MakeFace(surface, tolerance)
+            rebuilt = maker.Face() if maker.IsDone() else None
+        except Exception as exc:  # noqa: BLE001
+            raise KernelError(
+                f"local move refused: boundary-exact {len(boundary)}-boundary Coons face "
+                "failed: "
+                f"{exc}") from exc
+        if rebuilt is None or not BRepCheck_Analyzer(rebuilt).IsValid():
+            raise KernelError(
+                f"local move refused: boundary-exact {len(boundary)}-boundary Coons face "
+                "is invalid")
+        adaptor = BRepAdaptor_Surface(rebuilt)
+        if adaptor.GetType() != GeomAbs_BSplineSurface:
+            raise KernelError("local move refused: Coons reconstruction returned no BSpline face")
+        bspline = adaptor.BSpline()
+        if bspline.UDegree() > 2 or bspline.VDegree() > 2:
+            raise KernelError(
+                "local move refused: Coons reconstruction exceeded the exact degree-2 subset")
+    if face.Orientation() == TopAbs_REVERSED:
+        rebuilt = TopoDS.Face(rebuilt.Reversed())
+    return rebuilt
+
+
+def _local_point_shape_distance(point, shape):
+    from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeVertex
+    from OCP.BRepExtrema import BRepExtrema_DistShapeShape
+    from OCP.gp import gp_Pnt
+
+    extrema = BRepExtrema_DistShapeShape(
+        BRepBuilderAPI_MakeVertex(gp_Pnt(*point)).Vertex(), shape)
+    extrema.Perform()
+    return extrema.Value() if extrema.IsDone() else math.inf
+
+
+def _local_face_interior_samples(face, tolerance):
+    """Trim-aware interior samples evaluated directly on the exact face support."""
+    from OCP.BRepAdaptor import BRepAdaptor_Surface
+    from OCP.BRepClass import BRepClass_FaceClassifier
+    from OCP.BRepTools import BRepTools
+    from OCP.TopAbs import TopAbs_IN
+    from OCP.gp import gp_Pnt2d
+
+    adaptor = BRepAdaptor_Surface(face)
+    u0, u1, v0, v1 = BRepTools.UVBounds_s(face)
+    samples = []
+    for i in range(1, 8):
+        for j in range(1, 8):
+            u = u0 + (u1 - u0) * i / 8.0
+            v = v0 + (v1 - v0) * j / 8.0
+            classifier = BRepClass_FaceClassifier(face, gp_Pnt2d(u, v), tolerance)
+            if classifier.State() == TopAbs_IN:
+                samples.append(adaptor.Value(u, v))
+    if not samples:
+        raise KernelError("local move refused: selected face has no classifiable interior")
+    return samples
+
+
+def _local_part_samples(part, kind):
+    from OCP.BRep import BRep_Tool
+    from OCP.BRepAdaptor import BRepAdaptor_Curve
+    from OCP.TopAbs import TopAbs_EDGE, TopAbs_VERTEX
+    from OCP.TopExp import TopExp_Explorer
+    from OCP.TopoDS import TopoDS
+
+    def edge_samples(edge):
+        adaptor = BRepAdaptor_Curve(edge)
+        first, last = adaptor.FirstParameter(), adaptor.LastParameter()
+        return [adaptor.Value(first + (last - first) * i / 20.0) for i in range(21)]
+
+    if kind == "edge":
+        return edge_samples(TopoDS.Edge(part))
+    samples = _local_face_interior_samples(TopoDS.Face(part), 1e-9)
+    explorer = TopExp_Explorer(part, TopAbs_EDGE)
+    seen = []
+    while explorer.More():
+        edge = TopoDS.Edge(explorer.Current())
+        if not BRep_Tool.Degenerated_s(edge) and not any(old.IsSame(edge) for old in seen):
+            seen.append(edge)
+            samples.extend(edge_samples(edge))
+        explorer.Next()
+    explorer = TopExp_Explorer(part, TopAbs_VERTEX)
+    while explorer.More():
+        samples.append(BRep_Tool.Pnt_s(TopoDS.Vertex(explorer.Current())))
+        explorer.Next()
+    return samples
+
+
+def _local_part_measure(part, kind):
+    from OCP.BRepGProp import BRepGProp
+    from OCP.GProp import GProp_GProps
+
+    props = GProp_GProps()
+    if kind == "edge":
+        BRepGProp.LinearProperties_s(part, props)
+    else:
+        BRepGProp.SurfaceProperties_s(part, props, 1e-10)
+    center = props.CentreOfMass()
+    return props.Mass(), (center.X(), center.Y(), center.Z())
+
+
+def _local_translated_match(old_part, candidate, kind, vector, tolerance):
+    if _local_part_type(old_part, kind) != _local_part_type(candidate, kind):
+        return False
+    old_mass, _old_center = _local_part_measure(old_part, kind)
+    new_mass, _new_center = _local_part_measure(candidate, kind)
+    if abs(new_mass - old_mass) > 2.5e-7 * max(tolerance, abs(old_mass)):
+        return False
+    for point in _local_part_samples(old_part, kind):
+        translated = _local_add((point.X(), point.Y(), point.Z()), vector)
+        if _local_point_shape_distance(translated, candidate) > tolerance:
+            return False
+    reverse = tuple(-value for value in vector)
+    for point in _local_part_samples(candidate, kind):
+        restored = _local_add((point.X(), point.Y(), point.Z()), reverse)
+        if _local_point_shape_distance(restored, old_part) > tolerance:
+            return False
+    return True
+
+
+def _local_verify_vertex_containment(old_vertices, new_vertices, moved, vector, tolerance):
+    if len(old_vertices) != len(new_vertices):
+        raise KernelError(
+            "local move refused: rebuilding changed the number of topological vertices")
+    available = set(range(len(new_vertices)))
+    for index, vertex in enumerate(old_vertices):
+        expected = _local_point(vertex)
+        if index in moved:
+            expected = _local_add(expected, vector)
+        matches = [candidate for candidate in available
+                   if _local_distance(expected, _local_point(new_vertices[candidate])) <= tolerance]
+        if len(matches) != 1:
+            raise KernelError(
+                "local move refused: selected-part translation or strict vertex containment "
+                "was not preserved")
+        available.remove(matches[0])
+
+
+def local_continuity_report(shape):
+    """Stored OCCT continuity classes for every manifold edge of ``shape``.
+
+    This reports topology metadata; it does not claim that a local stretch preserves G1.
+    """
+    from OCP.BRep import BRep_Tool
+    from OCP.TopAbs import TopAbs_EDGE
+    from OCP.TopExp import TopExp_Explorer
+    from OCP.TopoDS import TopoDS
+
+    faces = unique_faces(shape)
+    report = {}
+    for edge in _unique_edges(shape):
+        ancestors = []
+        for face in faces:
+            explorer = TopExp_Explorer(face, TopAbs_EDGE)
+            while explorer.More():
+                if TopoDS.Edge(explorer.Current()).IsSame(edge):
+                    ancestors.append(face)
+                    break
+                explorer.Next()
+        if len(ancestors) != 2:
+            continue
+        try:
+            name = str(BRep_Tool.Continuity_s(
+                edge, ancestors[0], ancestors[1])).split("_")[-1]
+        except Exception:  # noqa: BLE001
+            name = "UNKNOWN"
+        report[name] = report.get(name, 0) + 1
+    return dict(sorted(report.items()))
+
+
+def move_subobject_local(shape, kind, index, vector, target_signature=None):
+    """Translate one face, edge, or vertex by topology-local B-rep reconstruction.
+
+    The only free-form primitive is ``GeomFill_BSplineCurves``: a deterministic,
+    boundary-interpolating low-degree NURBS Coons construction for exactly three or four
+    ordered curves. It is distinct from approximate N-sided filling, which is never used.
+    Translating one component does not promise retained G1 continuity on adjusted neighbours;
+    callers can inspect :func:`local_continuity_report` before and after. Recipe replay supplies
+    ``target_signature`` so the persisted component is uniquely re-resolved instead of trusting
+    a possibly stale topology index.
+    """
+    _need()
+    from OCP.BRep import BRep_Tool
+    from OCP.BRepAlgoAPI import BRepAlgoAPI_Check
+    from OCP.BRepBuilderAPI import (BRepBuilderAPI_MakeSolid, BRepBuilderAPI_Sewing,
+                                    BRepBuilderAPI_Transform)
+    from OCP.ShapeFix import ShapeFix_Solid
+    from OCP.TopAbs import TopAbs_SHELL
+    from OCP.TopExp import TopExp_Explorer
+    from OCP.TopoDS import TopoDS
+
+    if kind not in ("face", "edge", "vertex"):
+        raise KernelError(
+            f"local move refused: kind must be face, edge, or vertex (got {kind!r})")
+    try:
+        vector = tuple(float(value) for value in vector)
+    except (TypeError, ValueError) as exc:
+        raise KernelError("local move refused: vector must contain three finite numbers") from exc
+    if len(vector) != 3 or not all(math.isfinite(value) for value in vector):
+        raise KernelError("local move refused: vector must contain three finite numbers")
+    if max(abs(value) for value in vector) <= 1e-14:
+        raise KernelError("local move refused: translation vector is zero")
+    if not is_airtight(shape):
+        raise KernelError("local move refused: input is not one valid airtight solid")
+
+    tolerances = _local_tolerances(shape)
+    faces, edges, vertices = unique_faces(shape), _unique_edges(shape), _unique_vertices(shape)
+    parts = {"face": faces, "edge": edges, "vertex": vertices}[kind]
+    selected_index = int(index) - 1
+    if selected_index < 0 or selected_index >= len(parts):
+        raise KernelError(
+            f"local move refused: {kind} index {index} is outside 1..{len(parts)}")
+    if target_signature is not None:
+        selected_index = _local_resolve_target(
+            shape, kind, index, target_signature, tolerances)
+    selected = parts[selected_index]
+    edge_vertices = [_local_edge_vertices(edge, vertices) for edge in edges]
+    face_edges = [_local_face_edges(face, edges) for face in faces]
+    if kind == "face":
+        selected_edges = set(face_edges[selected_index])
+        moved = {vertex for edge in selected_edges for vertex in edge_vertices[edge]}
+    elif kind == "edge":
+        if BRep_Tool.Degenerated_s(selected):
+            raise KernelError("local move refused: selected edge is degenerated")
+        selected_edges = {selected_index}
+        moved = set(edge_vertices[selected_index])
+    else:
+        selected_edges = set()
+        moved = {selected_index}
+    if not moved:
+        raise KernelError("local move refused: selected component contains no vertices")
+
+    build_tolerance = tolerances["build"]
+    comparison_tolerance = tolerances["compare"]
+    changed_edges = {edge_index for edge_index, endpoint_indices in enumerate(edge_vertices)
+                     if any(vertex in moved for vertex in endpoint_indices)}
+    replacements = {}
+    wholesale = {}
+    for edge_index in changed_edges:
+        if BRep_Tool.Degenerated_s(edges[edge_index]):
+            raise KernelError(
+                "local move refused: a changed degenerate boundary edge is unsupported")
+        replacements[edge_index], wholesale[edge_index] = _local_rebuild_edge(
+            edges[edge_index], edge_vertices[edge_index], vertices, moved, vector,
+            build_tolerance)
+        if wholesale[edge_index] != (edge_index in selected_edges):
+            raise KernelError(
+                "local move refused: strict containment would translate an unselected edge "
+                "wholesale")
+    changed_faces = {face_index for face_index, boundary in enumerate(face_edges)
+                     if any(edge in changed_edges for edge in boundary)}
+
+    rebuilt_faces = []
+    for face_index, face in enumerate(faces):
+        if kind == "face" and face_index == selected_index:
+            rebuilt = TopoDS.Face(BRepBuilderAPI_Transform(
+                face, _local_translation(vector), True).Shape())
+        elif face_index in changed_faces:
+            boundary = _local_boundary_edges(
+                face, edges, replacements, vertices, moved, vector, build_tolerance)
+            rebuilt = _local_rebuild_face(face, boundary, build_tolerance)
+        else:
+            rebuilt = face
+        rebuilt_faces.append(rebuilt)
+
+    sewing = BRepBuilderAPI_Sewing(tolerances["sew"])
+    for face in rebuilt_faces:
+        sewing.Add(face)
+    sewing.Perform()
+    if sewing.NbFreeEdges() or sewing.NbMultipleEdges():
+        raise KernelError(
+            f"local move refused: faces did not sew cleanly "
+            f"({sewing.NbFreeEdges()} free, {sewing.NbMultipleEdges()} multiple edges)")
+    sewn = sewing.SewedShape()
+    shells = []
+    explorer = TopExp_Explorer(sewn, TopAbs_SHELL)
+    while explorer.More():
+        shells.append(TopoDS.Shell(explorer.Current()))
+        explorer.Next()
+    if len(shells) != 1:
+        raise KernelError(
+            f"local move refused: sewing produced {len(shells)} shells instead of one")
+    solid = BRepBuilderAPI_MakeSolid(shells[0]).Solid()
+    fixer = ShapeFix_Solid(solid)
+    fixer.Perform()
+    result = fixer.Solid()
+    if volume(result) < 0.0:
+        result = TopoDS.Solid(result.Reversed())
+    if not is_airtight(result):
+        raise KernelError("local move refused: rebuilt result is not valid and airtight")
+    if not BRepAlgoAPI_Check(result).IsValid():
+        raise KernelError("local move refused: rebuilt result intersects itself")
+    if len(unique_faces(result)) != len(faces):
+        raise KernelError("local move refused: rebuilding changed the face count")
+
+    result_vertices = _unique_vertices(result)
+    _local_verify_vertex_containment(
+        vertices, result_vertices, moved, vector, comparison_tolerance)
+    if kind in ("face", "edge"):
+        candidates = unique_faces(result) if kind == "face" else _unique_edges(result)
+        matches = [candidate for candidate in candidates
+                   if _local_translated_match(
+                       selected, candidate, kind, vector, comparison_tolerance)]
+        if len(matches) != 1:
+            raise KernelError(
+                f"local move refused: selected {kind} did not translate as one exact, "
+                "unique component")
+    else:
+        target = _local_add(_local_point(selected), vector)
+        matches = [vertex for vertex in result_vertices
+                   if _local_distance(target, _local_point(vertex)) <= comparison_tolerance]
+        if len(matches) != 1:
+            raise KernelError(
+                "local move refused: selected vertex did not translate exactly and uniquely")
+    return result
 
 
 def surface_centroid(shape):
