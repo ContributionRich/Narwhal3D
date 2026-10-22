@@ -7530,6 +7530,22 @@ class NARWHAL_OT_command_input(Operator):
             # keep the input open for chained commands (the reference CAD application stays in command mode)
             return {"RUNNING_MODAL"}
 
+        # Space is the reference CAD application's repeat: with nothing typed and no
+        # command running, Space re-runs the last command (the reference CAD application's
+        # documented Space, "Repeat the last command"). Like the empty-line Enter above,
+        # this must live in the modal: it runs for the whole session, so SPACE would
+        # otherwise be consumed by the printable-character branch below as a literal
+        # space and the `narwhal.repeat_last` keymap item would never fire.
+        # While typing (a non-empty buffer) or mid-command, Space falls through and
+        # inserts a space, as before.
+        if event.type == "SPACE" and event.value == "PRESS":
+            if (st.active_command is None
+                    and not st.input_buffer.strip()
+                    and st.last_command):
+                st.start_command(st.last_command)
+                self._redraw()
+                return {"RUNNING_MODAL"}
+
         if event.type == "ESC" and event.value == "PRESS":
             if _trim_drag is not None:
                 _trim_drag_end()
