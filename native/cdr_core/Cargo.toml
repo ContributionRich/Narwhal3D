@@ -1,0 +1,22 @@
+[package]
+name = "narwhal-cdr-core"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-or-later"
+publish = false
+description = "Checked native CorelDRAW v15 vector subset codec for Narwhal 3D"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+crc32fast = "1"
+flate2 = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.release]
+codegen-units = 1
+lto = "thin"
+panic = "abort"
+strip = "symbols"

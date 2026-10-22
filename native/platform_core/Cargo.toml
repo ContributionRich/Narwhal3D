@@ -1,0 +1,16 @@
+[package]
+name = "narwhal-platform-core"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-or-later"
+publish = false
+description = "Dependency-free native platform dialogs for Narwhal 3D"
+
+[lib]
+name = "narwhal_platform_core"
+crate-type = ["cdylib", "staticlib"]
+
+[profile.release]
+codegen-units = 1
+lto = "thin"
+strip = "symbols"

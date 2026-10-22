@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- A MIME type for .3dm files, installed by narwhal3d.sh only when this machine's
+     shared-mime-info has none. The magic is the openNURBS file signature. -->
+<mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">
+  <mime-type type="application/x-3dm">
+    <comment>3DM model</comment>
+    <glob pattern="*.3dm"/>
+    <glob pattern="*.3DM"/>
+    <magic priority="50">
+      <match type="string" offset="0" value="3D Geometry File Format "/>
+    </magic>
+  </mime-type>
+</mime-info>
