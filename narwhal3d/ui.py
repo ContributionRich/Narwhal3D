@@ -159,6 +159,7 @@ CMD_CURSOR = (0.85, 0.25, 0.15, 1.0)     # caret (the reference CAD application-
 # colours. The first candidate is the one Enter/Tab completes to, so it is
 # highlighted the way the reference CAD application highlights the selected entry.
 CMD_OPTION = (0.05, 0.26, 0.63, 1.0)     # option text: clickable (blue)
+CMD_OPTION_KEY = (0.80, 0.30, 0.00, 1.0)  # option activation letter: amber (~231,149,0 sRGB on the white bar)
 CMD_COMPLETION = (0.12, 0.12, 0.12, 1.0)  # candidate command name
 CMD_COMPLETION_SEL = (1.0, 1.0, 1.0, 1.0)  # the selected candidate's text
 CMD_COMPLETION_HL = (0.16, 0.38, 0.75, 1.0)  # the selected candidate's bar
@@ -2065,16 +2066,45 @@ def draw_command_bar(context=None):
                 in_use = set(cmd.active_modes())
             except Exception:  # noqa: BLE001
                 in_use = set()
+            # Activation letters are AUTO-ASSIGNED per option set (first free
+            # alphabetic letter in each name: 2Point->P, 3Point->O, Diameter->I
+            # after Deformable took D). The matcher uses the SAME map, so the
+            # ambered letter is always the one that works. ENUM value-choices
+            # are not in the map and keep their first letter.
+            try:
+                opt_keys = opts.assign_keys(getattr(cmd, "options", ()))
+            except Exception:  # noqa: BLE001
+                opt_keys = {}
             for text_part, opt_name in segments:
+                x0 = x
                 width = _text_width(text_part, font_size)
                 if opt_name is not None:
-                    boxes.append((opt_name, x, x + width))
-                    _draw_text(x, prompt_y, text_part, font_size, CMD_OPTION)
+                    boxes.append((opt_name, x0, x0 + width))
+                    # The activation letter in the accent colour: the option's
+                    # assigned key -- mid-word when an earlier sibling claimed
+                    # the first letter (the O in "3Point") -- or the segment's
+                    # first letter for value choices. The hit-box above still
+                    # covers the WHOLE segment, so clicking is unchanged.
+                    split = opts.key_split(
+                        text_part, opt_keys.get(opt_name, text_part[:1]))
+                    if split is None:
+                        # every letter claimed: no key to show, whole segment blue
+                        _draw_text(x0, prompt_y, text_part, font_size, CMD_OPTION)
+                    else:
+                        before, key_char, after = split
+                        x = x0
+                        if before:
+                            _draw_text(x, prompt_y, before, font_size, CMD_OPTION)
+                            x += _text_width(before, font_size)
+                        _draw_text(x, prompt_y, key_char, font_size, CMD_OPTION_KEY)
+                        x += _text_width(key_char, font_size)
+                        if after:
+                            _draw_text(x, prompt_y, after, font_size, CMD_OPTION)
                     if opt_name in in_use:
                         shader.bind()
-                        fill(x, prompt_y - 3, x + width, prompt_y - 1.5, CMD_OPTION)
+                        fill(x0, prompt_y - 3, x0 + width, prompt_y - 1.5, CMD_OPTION)
                 else:
-                    _draw_text(x, prompt_y, text_part, font_size, CMD_TEXT)
+                    _draw_text(x0, prompt_y, text_part, font_size, CMD_TEXT)
                 x += width
             # a trailing space before the typed text, as the old single-string
             # prompt had (state.prompt appended one)

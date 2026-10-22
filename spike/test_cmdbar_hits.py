@@ -302,6 +302,85 @@ def _():
 
 
 # ---------------------------------------------------------------------------
+# 5. activation letters: auto-assigned per option set, first free letter
+# ---------------------------------------------------------------------------
+
+@check("assign_keys takes the first free alphabetic letter, in display order")
+def _():
+    # Deformable claims D; 2Point skips its digit and claims P; 3Point's P is
+    # taken, so it claims the next free letter in the word (the lowercase o).
+    keys = opts.assign_keys(CIRCLE_OPTS)
+    assert keys == {"Deformable": "D", "2Point": "P", "3Point": "o",
+                    "Vertical": "V"}, keys
+
+
+@check("digits are never keys -- they are the number path")
+def _():
+    keys = opts.assign_keys(CIRCLE_OPTS)
+    assert all(k is None or k.isalpha() for k in keys.values()), keys
+
+
+@check("assignment depends on display order")
+def _():
+    swapped = (opts.Option("3Point", opts.MODE), opts.Option("2Point", opts.MODE))
+    assert opts.assign_keys(swapped) == {"3Point": "P", "2Point": "o"}, \
+        opts.assign_keys(swapped)
+
+
+@check("an option with every letter claimed gets None (no highlighted letter)")
+def _():
+    crowded = (opts.Option("A", opts.MODE), opts.Option("B", opts.MODE),
+               opts.Option("ab", opts.MODE))
+    assert opts.assign_keys(crowded) == {"A": "A", "B": "B", "ab": None}
+
+
+@check("claiming is case-insensitive")
+def _():
+    keys = opts.assign_keys((opts.Option("Point", opts.MODE),
+                             opts.Option("3point", opts.MODE)))
+    assert keys["Point"] == "P" and keys["3point"] == "o", keys
+
+
+@check("the assigned key is exactly what match() accepts for the option")
+def _():
+    # The bar highlights assign_keys' letter; typing it (any case) must resolve
+    # to that same option. A bare name on a TOGGLE flips it (SET), on a MODE it
+    # branches (BRANCH); either way the match resolves to the option itself.
+    keys = opts.assign_keys(CIRCLE_OPTS)
+    for opt in CIRCLE_OPTS:
+        m = opts.match(keys[opt.name].lower(), CIRCLE_OPTS, {"Deformable": False})
+        assert m.status not in (opts.NONE, opts.AMBIGUOUS), (opt.name, m)
+        assert m.option is opt, (opt.name, m)
+
+
+@check("a pure-digit input is never an option (it stays a number)")
+def _():
+    for digit in ("3", "2"):
+        m = opts.match(digit, CIRCLE_OPTS, {"Deformable": False})
+        assert m.status == opts.NONE, (digit, m)
+
+
+@check("typing the full name of a digit-led option still works")
+def _():
+    m = opts.match("3point", CIRCLE_OPTS, {"Deformable": False})
+    assert m.option is CIRCLE_OPTS[2], m
+
+
+@check("key_split lands on the first occurrence of the key and rejoins")
+def _():
+    cases = (("3Point", "o", ("3P", "o", "int")),
+             ("Vertical", "V", ("", "V", "ertical")),
+             ("Deformable=Yes", "D", ("", "D", "eformable=Yes")),
+             ("Rounded", "z", None),
+             ("Rounded", "", None))
+    for text, key, want in cases:
+        got = opts.key_split(text, key)
+        assert got == want, (text, key, got)
+        if got is not None:
+            assert "".join(got) == text, (text, got)
+
+
+# ---------------------------------------------------------------------------
 failed = 0
 for name, status, detail in results:
     print(f"[{status}] {name}" + (f"  -- {detail}" if detail else ""))

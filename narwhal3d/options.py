@@ -213,9 +213,20 @@ def match(text, options, values=None):
     if not name_part:
         return Match(NONE)
 
-    # exact (case-insensitive) name beats prefix matching
+    # exact (case-insensitive) name beats the activation letter, which beats
+    # prefix matching
     hits = [o for o in options if o.name.lower() == name_part.lower()]
-    if not hits:
+    if not hits and len(name_part) == 1:
+        # the auto-assigned activation letter (see assign_keys) -- the letter
+        # the command bar highlights, so the input the user sees is the input
+        # that works
+        keys = assign_keys(options)
+        hits = [o for o in options
+                if (keys.get(o.name) or "").lower() == name_part.lower()]
+    if not hits and not name_part.isdigit():
+        # a pure-digit input is NEVER an option: digits are the number path
+        # (coordinates/distances/angles at point prompts) and option letters
+        # are always alphabetic. Typing the full word "3point" still matches.
         hits = [o for o in options if o.name.lower().startswith(name_part.lower())]
     if not hits:
         return Match(NONE)
@@ -315,6 +326,62 @@ def prompt_segments(base, options, values=None):
         segments.append((format_option(option, values), option.name))
     segments.append((tail, None))
     return segments
+
+
+def assign_keys(options):
+    """Auto-assign each option its activation letter: a ``name -> letter`` map.
+
+    The options are walked in display order and each one CLAIMS the first
+    alphabetic character of its name that no earlier option has already
+    claimed. Digits are never claimed: a typed digit is a coordinate, distance
+    or angle at a point prompt, so option letters must always be letters and
+    the highlighted letter can never collide with the number path.
+
+    This is why ``2Point`` gets ``P`` and ``3Point`` gets ``O``: P is already
+    taken when 3Point is reached, so it takes the next free letter in the
+    word. The same rule gives ``Deformable`` -> D and ``Diameter`` -> I.
+
+    The map is computed PER OPTION SET, because a letter's availability
+    depends on its siblings. The matcher and the command-bar renderer both
+    derive their behaviour from this one function over the same set, so the
+    letter the bar highlights is always the letter that works.
+
+    An option whose letters are all claimed maps to ``None``: it stays
+    activatable by typing its name, it just has no highlighted letter.
+    """
+    keys = {}
+    claimed = set()
+    for opt in options or ():
+        key = None
+        for ch in opt.name:
+            if ch.isalpha() and ch.lower() not in claimed:
+                key = ch
+                claimed.add(ch.lower())
+                break
+        keys[opt.name] = key
+    return keys
+
+
+def key_split(text, key):
+    """Split a segment's text at its activation letter: ``(before, letter, after)``.
+
+    The split lands on the FIRST case-insensitive occurrence of ``key`` in
+    ``text`` -- for a first-letter key that is position 0, for a claimed-later
+    key (the O in "3Point") it is mid-word. The renderer draws ``letter`` in
+    the accent colour and ``before``/``after`` in the ordinary option colour;
+    the three parts always join back to ``text`` byte-for-byte.
+
+    Returns ``None`` when ``key`` is empty or absent from ``text`` (the
+    degenerate all-letters-claimed case): the caller then draws the whole
+    segment in the ordinary colour.
+    """
+    text = str(text)
+    if not key:
+        return None
+    i = text.lower().find(str(key).lower())
+    if i < 0:
+        return None
+    return (text[:i], text[i], text[i + 1:])
 
 
 def value_prompt(option):
