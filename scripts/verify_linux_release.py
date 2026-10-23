@@ -417,6 +417,20 @@ def verify_lock_and_markers(appdir: Path, identity: JsonObject) -> None:
         raise VerificationError("native runtime binary lacks required Narwhal title/quit markers")
 
 
+def verify_app_run_version(app_run_text: str, expected_version: str) -> None:
+    """Require one launcher version and the AppImage path contract used by updates."""
+    expected_line = f"export NARWHAL3D_VERSION={expected_version}"
+    version_lines = [line for line in app_run_text.splitlines()
+                     if line.startswith("export NARWHAL3D_VERSION=")]
+    if version_lines != [expected_line]:
+        raise VerificationError(
+            f"AppRun version must be exactly one {expected_line!r} line; got {version_lines}"
+        )
+    if ('${APPIMAGE:-}' not in app_run_text
+            or 'export NARWHAL3D_PACKAGE_PATH="$APPIMAGE"' not in app_run_text):
+        raise VerificationError("AppRun does not pass the current AppImage path to the updater")
+
+
 def verify_desktop_version(desktop_text: str, expected_version: str) -> None:
     """Require exactly one AppImage version line matching release identity."""
     expected_line = f"X-AppImage-Version={expected_version}"
@@ -437,6 +451,7 @@ def verify_appdir_shape(appdir: Path, expected_version: str) -> None:
     app_run_text = app_run.read_text(encoding="utf-8")
     if "NARWHAL3D_APPIMAGE=1" not in app_run_text or "usr/lib/narwhal3d/narwhal3d.sh" not in app_run_text:
         raise VerificationError("AppRun does not identify AppImage mode and launch the internal application")
+    verify_app_run_version(app_run_text, expected_version)
     if not desktop.is_file() or desktop.is_symlink():
         raise VerificationError("AppDir root narwhal3d.desktop is missing or symlinked")
     desktop_text = desktop.read_text(encoding="utf-8")
@@ -521,7 +536,8 @@ def verify_executables_and_imports(appdir: Path) -> None:
     welcome_data = welcome.read_bytes()
     if not all(marker in welcome_data for marker in
                (b"--runtime is required", b"--bootstrap is required",
-                b"NARWHAL3D_WELCOME_REQUEST")):
+                b"NARWHAL3D_WELCOME_REQUEST", b"NARWHAL3D_VERSION",
+                b"NARWHAL3D_RELEASES_API", b"download sha256 does not match")):
         raise VerificationError("native welcome executable lacks its launch/request contract")
 
     try:
@@ -772,6 +788,20 @@ def self_check() -> None:
     if max(glibc_versions("GLIBC_2.35 GLIBC_2.43")) != (2, 43) \
             or MAX_HOST_GLIBC != (2, 35):
         raise VerificationError("self-check lost the Ubuntu 22.04 host-glibc gate")
+    verify_app_run_version(
+        '#!/bin/sh\nexport NARWHAL3D_VERSION=0.1.0\nif [ -n "${APPIMAGE:-}" ]; then\n'
+        'export NARWHAL3D_PACKAGE_PATH="$APPIMAGE"\nfi\n', "0.1.0")
+    for mutated_app_run in (
+        '#!/bin/sh\nif [ -n "${APPIMAGE:-}" ]; then\nexport NARWHAL3D_PACKAGE_PATH="$APPIMAGE"\nfi\n',
+        '#!/bin/sh\nexport NARWHAL3D_VERSION=0.1.1\nif [ -n "${APPIMAGE:-}" ]; then\nexport NARWHAL3D_PACKAGE_PATH="$APPIMAGE"\nfi\n',
+        '#!/bin/sh\nexport NARWHAL3D_VERSION=0.1.0\nexport NARWHAL3D_VERSION=0.1.0\n',
+    ):
+        try:
+            verify_app_run_version(mutated_app_run, "0.1.0")
+        except VerificationError:
+            pass
+        else:
+            raise VerificationError("self-check accepted an unsafe or mismatched AppRun")
     verify_desktop_version("[Desktop Entry]\nX-AppImage-Version=0.1.0\n", "0.1.0")
     for mutated_desktop in (
         "[Desktop Entry]\n",

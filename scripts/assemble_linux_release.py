@@ -99,12 +99,17 @@ VERSION_RE = re.compile(r"[0-9A-Za-z][0-9A-Za-z._-]*\Z")
 REVISION_RE = re.compile(r"[0-9a-fA-F]{40}\Z")
 JsonObject = dict[str, Any]
 
+APP_RUN_VERSION_TOKEN = "__NARWHAL3D_APPIMAGE_VERSION__"
 APP_RUN = """#!/bin/sh
 set -eu
 APPDIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 export APPDIR
 export NARWHAL3D_APPIMAGE=1
 export NARWHAL3D_PACKAGE_FORMAT=appimage
+export NARWHAL3D_VERSION=__NARWHAL3D_APPIMAGE_VERSION__
+if [ -n "${APPIMAGE:-}" ]; then
+    export NARWHAL3D_PACKAGE_PATH="$APPIMAGE"
+fi
 exec "$APPDIR/usr/lib/narwhal3d/narwhal3d.sh" "$@"
 """
 
@@ -129,6 +134,17 @@ MimeType=application/x-3dm;
 
 class ReleaseError(RuntimeError):
     """A required AppImage input is absent, inconsistent, or unsafe."""
+
+
+def render_app_run(version: str) -> str:
+    """Render the immutable product version consumed by the native updater."""
+    if not VERSION_RE.fullmatch(version):
+        raise ReleaseError("unsafe AppImage launcher version")
+    rendered = APP_RUN.replace(APP_RUN_VERSION_TOKEN, version)
+    expected_line = f"export NARWHAL3D_VERSION={version}"
+    if APP_RUN_VERSION_TOKEN in rendered or rendered.splitlines().count(expected_line) != 1:
+        raise ReleaseError("AppRun template must render exactly one matching product-version line")
+    return rendered
 
 
 def render_desktop_entry(version: str) -> str:
@@ -482,7 +498,8 @@ def validate_native_components(
         document_manifest["source_aggregate_sha256"])
     welcome_data = (directory / "narwhal-welcome").read_bytes()
     welcome_markers = (b"--runtime is required", b"--bootstrap is required",
-                       b"NARWHAL3D_WELCOME_REQUEST")
+                       b"NARWHAL3D_WELCOME_REQUEST", b"NARWHAL3D_VERSION",
+                       b"NARWHAL3D_RELEASES_API", b"download sha256 does not match")
     if not all(marker in welcome_data for marker in welcome_markers):
         raise ReleaseError("native welcome executable lacks its runtime/bootstrap request contract")
     records["narwhal-welcome"]["launch_contract"] = 1
@@ -694,7 +711,7 @@ def assemble(args: argparse.Namespace) -> tuple[Path, Path, Path]:
         app_root.mkdir(parents=True, mode=0o755)
 
         app_run = appdir / "AppRun"
-        app_run.write_text(APP_RUN, encoding="utf-8")
+        app_run.write_text(render_app_run(args.version), encoding="utf-8")
         os.chmod(app_run, 0o755)
         desktop = appdir / "narwhal3d.desktop"
         desktop.write_text(render_desktop_entry(args.version), encoding="utf-8")
@@ -787,6 +804,8 @@ def self_check() -> None:
     for good in ("1.0.0", "2026.10-beta_1"):
         if not VERSION_RE.fullmatch(good):
             raise ReleaseError(f"self-check rejected syntactically safe version: {good}")
+        if f"export NARWHAL3D_VERSION={good}" not in render_app_run(good):
+            raise ReleaseError(f"self-check did not render AppRun version: {good}")
     for bad in ("", "../escape", "name/child", " space"):
         if VERSION_RE.fullmatch(bad):
             raise ReleaseError(f"self-check accepted unsafe version: {bad!r}")

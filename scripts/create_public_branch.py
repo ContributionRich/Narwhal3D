@@ -107,7 +107,7 @@ TEST_FILES = (
     "spike/test_converter_supervisor.py", "spike/test_runtime_tools.py",
     "spike/test_onbrep_public.py", "spike/test_open_arg.py",
     "spike/test_windows_collector.py", "spike/test_windows_release.py",
-    "spike/test_package_completeness.py", "spike/test_release_policy.py", "spike/test_macos_source.py",
+    "spike/test_linux_release.py", "spike/test_package_completeness.py", "spike/test_release_policy.py", "spike/test_macos_source.py",
     "spike/test_rust_selection_core.py", "spike/test_native_selection.py",
     "spike/test_selection_core_packaging.py",
     "spike/test_native_geometry.py", "spike/test_native_platform.py",

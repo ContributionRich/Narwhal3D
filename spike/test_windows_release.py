@@ -15,6 +15,11 @@ spec = importlib.util.spec_from_file_location(
 assert spec is not None and spec.loader is not None
 verifier = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(verifier)
+assembler_spec = importlib.util.spec_from_file_location(
+    "windows_assembler", ROOT / "scripts" / "assemble_windows_release.py")
+assert assembler_spec is not None and assembler_spec.loader is not None
+assembler = importlib.util.module_from_spec(assembler_spec)
+assembler_spec.loader.exec_module(assembler)
 
 checks = 0
 
@@ -47,8 +52,11 @@ check('wcscmp(test_mode, L"headless")' in launcher
       and "launch_program = runtime" in launcher,
       "headless/version acceptance routes remain direct and deterministic")
 check("NARWHAL3D_PACKAGE_FORMAT" in launcher and "windows-portable" in launcher
-      and "NARWHAL3D_WINDOWS" in launcher,
-      "launcher identifies the portable Windows environment")
+      and "NARWHAL3D_WINDOWS" in launcher
+      and '#define NARWHAL3D_VERSION L"development"' in launcher
+      and 'SetEnvironmentVariableW(L"NARWHAL3D_VERSION", NARWHAL3D_VERSION)' in launcher
+      and 'SetEnvironmentVariableW(L"NARWHAL3D_PACKAGE_PATH", root)' in launcher,
+      "launcher identifies the portable Windows environment and exact update target")
 check("NARWHAL3D_LAUNCHER_TEST" in launcher
       and 'wcscmp(test_mode, L"headless")' in launcher,
       "launcher has an environment-only packaged-bootstrap test route")
@@ -70,7 +78,7 @@ check("[Parameter(Mandatory=$true)]" in build_script
       and "[ValidatePattern('^[0-9a-f]{40}$')]" in build_script
       and "[string]$NarwhalRevision" in build_script
       and '$NarwhalRevision = "' not in build_script
-      and "[string]$Version = \"0.4.4\"" in build_script
+      and "[string]$Version = \"0.4.5\"" in build_script
       and "[ValidatePattern('^0\\.4\\.[0-9]+$')]" in build_script,
       "Windows build requires immutable source and a validated 0.4.x version")
 check("native\\converter_supervisor\\Cargo.toml" in build_script
@@ -102,6 +110,20 @@ for label, path in chooser_routes.items():
 
 with tempfile.TemporaryDirectory(prefix="narwhal_windows_verifier_test_") as temporary:
     root = Path(temporary)
+    compiled_launcher = root / "Narwhal3D.exe"
+    compiled_launcher.write_bytes(
+        b"MZ" + "NARWHAL3D_VERSION".encode("utf-16le")
+        + "NARWHAL3D_PACKAGE_PATH".encode("utf-16le")
+        + "0.4.5".encode("utf-16le"))
+    assembler.validate_launcher_version(compiled_launcher, "0.4.5")
+    check(True, "Windows assembler accepts only a launcher carrying exact release identity")
+    try:
+        assembler.validate_launcher_version(compiled_launcher, "0.4.4")
+    except assembler.AssemblyError:
+        stale_launcher_refused = True
+    else:
+        stale_launcher_refused = False
+    check(stale_launcher_refused, "Windows assembler rejects a stale launcher version")
     (root / "windows-release-manifest.json").write_text("{}", encoding="utf-8")
     base = [{"path": path, "size": 1, "sha256": "0" * 64}
             for path in verifier.REQUIRED if path != "windows-release-manifest.json"]

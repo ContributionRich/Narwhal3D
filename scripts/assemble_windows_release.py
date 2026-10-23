@@ -34,6 +34,17 @@ def require_file(path: Path, label: str) -> Path:
     return path
 
 
+def validate_launcher_version(path: Path, version: str) -> None:
+    data = require_file(path, "Windows launcher").read_bytes()
+    markers = (
+        "NARWHAL3D_VERSION".encode("utf-16le"),
+        "NARWHAL3D_PACKAGE_PATH".encode("utf-16le"),
+        version.encode("utf-16le"),
+    )
+    if not data.startswith(b"MZ") or any(marker not in data for marker in markers):
+        raise AssemblyError(f"Windows launcher is not compiled for release {version}")
+
+
 def safe_extract(archive_path: Path, destination: Path) -> Path:
     with zipfile.ZipFile(archive_path) as archive:
         roots = set()
@@ -90,8 +101,9 @@ def remove_forbidden_payload(package: Path) -> None:
 
 
 def copy_native_inputs(package: Path, launcher: Path, cdr_core: Path,
-                       cdr_multiversion: Path, welcome: Path) -> None:
-    shutil.copy2(require_file(launcher, "Windows launcher"), package / "Narwhal3D.exe")
+                       cdr_multiversion: Path, welcome: Path, version: str) -> None:
+    validate_launcher_version(launcher, version)
+    shutil.copy2(launcher, package / "Narwhal3D.exe")
     runtime_native = package / "app/runtime/windows-x86_64/bin"
     runtime_native.mkdir(parents=True, exist_ok=True)
     shutil.copy2(require_file(cdr_core, "Windows CDR core"),
@@ -110,7 +122,8 @@ def native_records(package: Path) -> dict[str, dict[str, object]]:
         if name == "narwhal-welcome.exe":
             data = path.read_bytes()
             markers = (b"--runtime is required", b"--bootstrap is required",
-                       b"NARWHAL3D_WELCOME_REQUEST")
+                       b"NARWHAL3D_WELCOME_REQUEST", b"NARWHAL3D_VERSION",
+                       b"NARWHAL3D_RELEASES_API", b"download sha256 does not match")
             if not all(marker in data for marker in markers):
                 raise AssemblyError("Windows native welcome lacks its launch/request contract")
             record["launch_contract"] = 1
@@ -212,7 +225,7 @@ def assemble(args: argparse.Namespace) -> tuple[Path, Path]:
         shutil.move(str(engineering), package)
     replace_public_source(package, source_root)
     copy_native_inputs(package, args.launcher.resolve(), args.cdr_core.resolve(),
-                       args.cdr_multiversion.resolve(), args.welcome.resolve())
+                       args.cdr_multiversion.resolve(), args.welcome.resolve(), args.version)
     (package / "README-FIRST.txt").write_text(
         f"Narwhal 3D {args.version} early prerelease\n\n"
         "Extract the complete folder and run Narwhal3D.exe. Keep app and runtime beside it.\n"

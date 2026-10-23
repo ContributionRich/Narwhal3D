@@ -87,9 +87,9 @@ check("function Compiler-Info" in script and "VC\\Tools\\MSVC" in script
 
 check("C:\\Narwhal3D-build" in build and "\\s" in build
       and ".narwhal3d-windows-build-workspace" in build
-      and "[string]$Version = \"0.4.4\"" in build
+      and "[string]$Version = \"0.4.5\"" in build
       and 'Narwhal_3D-$Version-Windows-x86_64-Engineering' in build,
-      "engineering build owns one conservative workspace and defaults to 0.4.4")
+      "engineering build owns one conservative workspace and defaults to 0.4.5")
 check("make_update.py" in build and '"--no-blender"' in build
       and '"update Blender libraries without changing Blender source" $BlenderSource' in build
       and "verify Blender pinned revision after libraries update" in build,

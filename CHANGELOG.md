@@ -2,26 +2,31 @@
 
 All notable public changes will be recorded here. Narwhal 3D is an extremely early prerelease; compatibility may change between builds. Release numbering is intentionally frozen on the `0.4.x` line until the project owner explicitly lifts that cap.
 
-## Unreleased
+## 0.4.5 — 2026-10-23
+
+Changes from 0.4.4:
 
 ### Added
 
 - Add exact Rust/OCCT local movement for all box faces, edges, and vertices, repeated edits of the resulting curved NURBS solids, axial cylinder caps, and axial circular cylinder rims.
-- Allow Sweep1 and Sweep2 rail prompts to select exact edges directly from surfaces and solids.
-- Apply Grid Snap to Gumball translation independently of Snappy/Smooth object snapping, including native U/V/W lattice snapping for free Perspective movement.
+- Allow Sweep1 and Sweep2 rail prompts to select exact analytic/NURBS edges directly from surfaces and solids without converting rails to viewport meshes.
+- Apply Grid Snap to Gumball translation independently of Snappy/Smooth object snapping, including native U/V/W lattice snapping for free three-dimensional Perspective movement.
+- Check GitHub releases asynchronously after the native welcome window paints, show concise release news, and offer an explicit SHA-256-verified update action. AppImages replace atomically; Windows portable updates validate and stage the ZIP, wait for Narwhal to exit, and retain rollback recovery.
 
 ### Changed
 
-- Display only real analytic BRep boundary curves after solid-part edits; remove the experimental sampled midpoint surface lines.
+- Use a complete prospective boundary wireframe—not an expensive rebuilt shaded solid—for point, edge, and face drag previews; exact geometry is solved once on release.
+- Display only real analytic BRep boundary curves after solid-part edits; remove the experimental fake midpoint U/V surface lines.
+- Prefer a smooth exact direct-edit result whenever one exists, while accepting a real NURBS crease only when the requested edit has no smooth candidate and all exactness, topology, validity, self-intersection, and airtightness certificates pass.
 
 ### Fixed
 
-- Keep solid-part dragging smooth with a complete prospective wireframe for faces, edges and vertices; edge movement stretches every incident boundary from both moved endpoints, and release performs one fully certified exact Rust/OCCT solve.
+- Restore live drag previews for points, boundary curves, and faces; edge movement stretches every incident real boundary from both moved endpoints.
+- Keep Grid Snap from flattening point/edge/face movement onto the bottom plane in Perspective, snap Gumball translation by grid increments, and allow axis-constrained height stages such as Box to complete.
 - Prevent a point-edited solid followed by Gumball scaling from entering OCCT's crash-prone optional `ShapeFix_Shape` recognition pass; the exact transformed NURBS must still be valid and airtight.
 - Rebuild deferred Scale1D, Scale2D, and Scale3D commits from canonical double-precision drag state instead of accumulated float32 preview matrices.
 - Keep exact `local_move` results editable on subsequent operations instead of reporting a generic curved-solid limitation.
 - Move faces, edges, and vertices on repeatedly edited and selectively filleted curved NURBS solids through the certified native OCCT core, with valid airtight results and deterministic recipe replay.
-- Allow explicitly requested direct edits to introduce a real NURBS crease when boundary, topology, mapping, validity, self-intersection, and solid airtightness certificates still pass.
 - Move points, boundary curves, and the whole surface of standalone one-face Sweep1 BReps, preserving one valid exact face and honestly reporting that an open surface is not airtight.
 - Resolve selective fillet/chamfer edges by persisted geometric signatures rather than unstable topology indices.
 - Close sub-tolerance UV trim endpoint round-off in the source-built `.3dm` BRep writer while preserving exact 3-D edges and surfaces.

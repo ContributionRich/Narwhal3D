@@ -27,20 +27,20 @@ Narwhal's active project format is `.narwhal`: a dependency-free Rust-validated 
 
 ## Install on Linux x86_64
 
-The public release artifact is `Narwhal_3D-<version>-x86_64.AppImage`. Version 0.4.4 uses the portable runtime introduced in 0.4.1: every bundled ELF is capped at glibc 2.28, below the Ubuntu 22.04/glibc 2.35 compatibility ceiling enforced by the release verifier.
+The public release artifact is `Narwhal_3D-<version>-x86_64.AppImage`. Version 0.4.5 uses the portable runtime introduced in 0.4.1: every bundled ELF is capped at glibc 2.28, below the Ubuntu 22.04/glibc 2.35 compatibility ceiling enforced by the release verifier.
 
 Make the AppImage executable and run it directly:
 
 ```bash
-chmod +x Narwhal_3D-0.4.4-x86_64.AppImage
-./Narwhal_3D-0.4.4-x86_64.AppImage
+chmod +x Narwhal_3D-0.4.5-x86_64.AppImage
+./Narwhal_3D-0.4.5-x86_64.AppImage
 ```
 
 The AppImage contains the native startup welcome window, natively branded runtime, all nine mandatory native components, locked Python dependencies, application package, icons, and license notices. It does not install a separate host application.
 
 ## Early Windows x86_64 preview
 
-The `v0.4.4` prerelease also provides `Narwhal_3D-0.4.4-Windows-x86_64.zip`. Extract the complete folder and start `Narwhal3D.exe`; the native welcome window remains visible while the bundled runtime initializes. Do not move that executable away from its adjacent `app` and `runtime` folders.
+The `v0.4.5` prerelease also provides `Narwhal_3D-0.4.5-Windows-x86_64.zip`. Extract the complete folder and start `Narwhal3D.exe`; the native welcome window remains visible while the bundled runtime initializes. Do not move that executable away from its adjacent `app` and `runtime` folders.
 
 This is an unsigned, portable **early preview**, not an installer or supported production build. Windows SmartScreen may require **More info → Run anyway**. The launcher has original Narwhal icon/version resources and the packaged runtime/bootstrap passes native Windows and offline Wine headless checks, but final physical-GPU/real-window acceptance is pending and the internal viewport runtime still retains some Blender-derived PE resource strings/icons. There are no file associations or automatic installation yet.
 
@@ -90,7 +90,7 @@ REVISION=$(git rev-parse HEAD)
 EPOCH=$(git show -s --format=%ct HEAD)
 
 python3 scripts/assemble_linux_release.py \
-  --version 0.4.4 \
+  --version 0.4.5 \
   --source-revision "$REVISION" \
   --source-date-epoch "$EPOCH" \
   --source-root . \
@@ -102,8 +102,8 @@ python3 scripts/assemble_linux_release.py \
   --output-dir dist
 
 python3 scripts/verify_linux_release.py \
-  dist/Narwhal_3D-0.4.4-x86_64.AppImage \
-  --expected-version 0.4.4 \
+  dist/Narwhal_3D-0.4.5-x86_64.AppImage \
+  --expected-version 0.4.5 \
   --expected-source-revision "$REVISION" \
   --expected-source-date-epoch "$EPOCH"
 ```

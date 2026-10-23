@@ -175,6 +175,7 @@ check('runtime/${runtime_platform}-${runtime_arch}/bin/narwhal-welcome' in launc
       "launcher supports a packaged platform-specific welcome binary")
 
 rust = (ROOT / "native" / "welcome" / "src" / "main.rs").read_text(encoding="utf-8")
+production_rust = rust[:rust.index("#[cfg(test)]")]
 stacking = (ROOT / "native" / "welcome" / "src" / "native_stacking.rs").read_text(
     encoding="utf-8"
 )
@@ -208,6 +209,53 @@ check("centered: true" in rust,
 check("first_paint: Option<Instant>" in rust
       and "painted.elapsed() >= Duration::from_millis(350)" in rust,
       "runtime launch and minimum visibility are measured from the first paint")
+check('NARWHAL3D_DISABLE_UPDATE_CHECK' in rust
+      and 'if self.first_paint.is_some()' in rust
+      and 'std::thread::spawn(move ||' in rust
+      and 'NARWHAL3D_RELEASES_API' in rust
+      and '/releases?per_page=20' in rust
+      and '/releases/latest' not in rust,
+      "release discovery starts asynchronously after first paint and is deterministic-testable")
+check('UPDATE_USER_AGENT' in rust
+      and 'env!("CARGO_PKG_VERSION")' in rust
+      and '.user_agent(UPDATE_USER_AGENT)' in rust
+      and 'connect_timeout(CONNECT_TIMEOUT)' in rust
+      and '.timeout(timeout)' in rust
+      and 'trusted_production_host(attempt.url().host_str())' in rust
+      and 'if cfg!(debug_assertions)' in rust
+      and 'API_RESPONSE_LIMIT' in rust
+      and 'DOWNLOAD_LIMIT' in rust,
+      "release requests have a versioned identity, bounded redirects/timeouts/sizes, and dev-only API override")
+check('NARWHAL3D_VERSION' in rust
+      and 'env!("CARGO_PKG_VERSION")' in rust
+      and 'Err("release launcher did not provide NARWHAL3D_VERSION"' in rust,
+      "release builds require launcher-supplied product version while dev uses Cargo metadata")
+check('asset.digest.as_deref().and_then(parse_sha256)' in rust
+      and 'if !digest_matches(&actual, &expected)' in rust
+      and 'download sha256 does not match GitHub' in rust
+      and 'Download and install' in rust,
+      "installation is user-triggered and requires GitHub's exact sha256 asset digest")
+check('APPIMAGE' in rust
+      and 'fs::rename(&staged, &target)' in rust
+      and 'PermissionsExt' in rust
+      and 'current AppImage must be a regular non-symlink file' in rust,
+      "Linux atomically replaces only a validated AppImage and preserves executable mode")
+check('WINDOWS_UPDATER_SCRIPT' in rust
+      and 'Wait-Process -Id $WelcomePid' in rust
+      and '[System.IO.Compression.ZipFile]::OpenRead($Archive)' in rust
+      and 'Unsafe update ZIP path' in rust
+      and 'Duplicate update ZIP path' in rust
+      and 'Update ZIP expands beyond the safe limit' in rust
+      and '-Attributes ReparsePoint' in rust
+      and 'Expand-Archive -LiteralPath $Archive' in rust
+      and 'Move-Item -LiteralPath $Target' in rust
+      and 'Invoke-Expression' not in production_rust
+      and '.arg(&target)' in rust,
+      "Windows schedules a literal-argument post-exit portable-package replacement")
+check('ui.hyperlink_to("Open release page"' in rust
+      and 'Update failed safely. Download it from the release page.' in rust
+      and 'self.start_install(release.clone())' in rust,
+      "News shows an explicit update action and a safe manual-release fallback")
 check("impl Drop for WelcomeApp" in rust and "child.try_wait()" in rust
       and "std::process::exit(code)" in rust,
       "native supervisor cancels abandoned children and propagates runtime failures")

@@ -5,6 +5,10 @@
 #include <stdlib.h>
 #include <string.h>
 
+#ifndef NARWHAL3D_VERSION
+#define NARWHAL3D_VERSION L"development"
+#endif
+
 struct buffer {
   wchar_t *text;
   size_t used;
@@ -137,8 +141,15 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR command_line, 
     }
   }
 
-  SetEnvironmentVariableW(L"NARWHAL3D_PACKAGE_FORMAT", L"windows-portable");
-  SetEnvironmentVariableW(L"NARWHAL3D_WINDOWS", L"1");
+  if (!SetEnvironmentVariableW(L"NARWHAL3D_PACKAGE_FORMAT", L"windows-portable") ||
+      !SetEnvironmentVariableW(L"NARWHAL3D_WINDOWS", L"1") ||
+      !SetEnvironmentVariableW(L"NARWHAL3D_VERSION", NARWHAL3D_VERSION) ||
+      !SetEnvironmentVariableW(L"NARWHAL3D_PACKAGE_PATH", root)) {
+    show_error(L"Windows could not initialize the portable package environment.");
+    LocalFree(argv);
+    free(command.text);
+    return 3;
+  }
   STARTUPINFOW startup = {sizeof(startup)};
   PROCESS_INFORMATION process = {0};
   if (!CreateProcessW(launch_program, command.text, NULL, NULL, FALSE,

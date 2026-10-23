@@ -1,9 +1,13 @@
 mod native_stacking;
 
 use eframe::egui::{self, Color32, RichText, Stroke, Vec2};
+use reqwest::blocking::{Client, Response};
+use reqwest::redirect::Policy;
+use serde::Deserialize;
 use serde_json::Value;
-use std::fs;
-use std::io::{BufRead, BufReader, Write};
+use sha2::{Digest, Sha256};
+use std::fs::{self, OpenOptions};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
@@ -18,6 +22,19 @@ const FADE_SECONDS: f32 = 0.38;
 const ATTENTION_GRACE_SECONDS: f32 = 0.75;
 const EXIT_PENDING: i32 = i32::MIN;
 const SUBMIT_DELAY: Duration = Duration::from_millis(50);
+const RELEASES_API: &str =
+    "https://api.github.com/repos/ContributionRich/Narwhal3D/releases?per_page=20";
+const RELEASES_PAGE: &str = "https://github.com/ContributionRich/Narwhal3D/releases";
+const UPDATE_USER_AGENT: &str = concat!(
+    "Narwhal3D-Welcome/",
+    env!("CARGO_PKG_VERSION"),
+    " (+https://github.com/ContributionRich/Narwhal3D)"
+);
+const API_RESPONSE_LIMIT: u64 = 2 * 1024 * 1024;
+const DOWNLOAD_LIMIT: u64 = 2 * 1024 * 1024 * 1024;
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(4);
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(12);
+const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(180);
 const NEW_UNITS: [(&str, &str); 5] = [
     ("Millimeters", "Millimeters"),
     ("Centimeters", "Centimeters"),
@@ -38,6 +55,59 @@ enum RuntimeEvent {
     Ready,
     Exited(i32),
     Failed(String),
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum UpdatePlatform {
+    LinuxX86_64,
+    WindowsX86_64,
+}
+
+impl UpdatePlatform {
+    fn current() -> Option<Self> {
+        #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+        return Some(Self::LinuxX86_64);
+        #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+        return Some(Self::WindowsX86_64);
+        #[allow(unreachable_code)]
+        None
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+struct ReleaseAsset {
+    name: String,
+    browser_download_url: String,
+    digest: Option<String>,
+    size: u64,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct GithubRelease {
+    tag_name: String,
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    body: String,
+    html_url: String,
+    #[serde(default)]
+    draft: bool,
+    assets: Vec<ReleaseAsset>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct AvailableRelease {
+    version: String,
+    title: String,
+    notes: String,
+    page_url: String,
+    asset: ReleaseAsset,
+}
+
+enum UpdateEvent {
+    Checked(Result<Option<AvailableRelease>, String>),
+    Installed(Result<String, String>),
 }
 
 struct LaunchConfig {
@@ -87,6 +157,8 @@ struct WelcomeApp {
     request: PathBuf,
     events: Receiver<RuntimeEvent>,
     sender: Sender<RuntimeEvent>,
+    update_events: Receiver<UpdateEvent>,
+    update_sender: Sender<UpdateEvent>,
     launch: Option<LaunchConfig>,
     pending_request: Option<PendingRequest>,
     native_window: Option<native_stacking::NativeWindowId>,
@@ -99,6 +171,11 @@ struct WelcomeApp {
     ready: bool,
     child_exited: bool,
     status: String,
+    current_version: Option<String>,
+    update_check_started: bool,
+    update_busy: bool,
+    available_release: Option<AvailableRelease>,
+    update_message: Option<String>,
     logo: egui::TextureHandle,
 }
 
@@ -207,6 +284,524 @@ fn progress_state(ready: bool, elapsed: Duration) -> (f32, bool) {
     } else {
         (((elapsed.as_secs_f32() * 0.55) % 1.0).max(0.04), true)
     }
+}
+
+fn parse_version(value: &str) -> Option<[u64; 3]> {
+    let value = value.trim().trim_start_matches(['v', 'V']);
+    let core = value.split(['-', '+']).next()?;
+    let mut parts = core.split('.');
+    let version = [
+        parts.next()?.parse().ok()?,
+        parts.next()?.parse().ok()?,
+        parts.next()?.parse().ok()?,
+    ];
+    (parts.next().is_none() && version[0] == 0 && version[1] == 4).then_some(version)
+}
+
+fn current_version() -> Result<String, String> {
+    match std::env::var("NARWHAL3D_VERSION") {
+        Ok(version) if parse_version(&version).is_some() => Ok(version),
+        Ok(_) => Err("NARWHAL3D_VERSION must be a 0.4.x version".to_owned()),
+        Err(std::env::VarError::NotPresent) if cfg!(debug_assertions) => {
+            Ok(env!("CARGO_PKG_VERSION").to_owned())
+        }
+        Err(std::env::VarError::NotPresent) => {
+            Err("release launcher did not provide NARWHAL3D_VERSION".to_owned())
+        }
+        Err(std::env::VarError::NotUnicode(_)) => {
+            Err("NARWHAL3D_VERSION is not valid Unicode".to_owned())
+        }
+    }
+}
+
+fn parse_sha256(value: &str) -> Option<[u8; 32]> {
+    let hex = value.strip_prefix("sha256:")?;
+    if hex.len() != 64 || !hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return None;
+    }
+    let mut result = [0_u8; 32];
+    for (index, slot) in result.iter_mut().enumerate() {
+        *slot = u8::from_str_radix(&hex[index * 2..index * 2 + 2], 16).ok()?;
+    }
+    Some(result)
+}
+
+fn digest_matches(actual: &[u8; 32], expected: &[u8; 32]) -> bool {
+    actual == expected
+}
+
+fn asset_matches_platform(name: &str, platform: UpdatePlatform) -> bool {
+    let name = name.to_ascii_lowercase();
+    match platform {
+        UpdatePlatform::LinuxX86_64 => {
+            name.ends_with("-x86_64.appimage") && name.starts_with("narwhal_3d-")
+        }
+        UpdatePlatform::WindowsX86_64 => {
+            name.ends_with("-windows-x86_64.zip") && name.starts_with("narwhal_3d-")
+        }
+    }
+}
+
+fn concise_text(value: &str, fallback: &str, limit: usize) -> String {
+    let joined = value.split_whitespace().collect::<Vec<_>>().join(" ");
+    let source = if joined.is_empty() { fallback } else { &joined };
+    let mut result: String = source.chars().take(limit).collect();
+    if source.chars().count() > limit {
+        result.push('…');
+    }
+    result
+}
+
+fn release_page_url(value: &str) -> String {
+    if value.starts_with("https://github.com/ContributionRich/Narwhal3D/releases/") {
+        value.to_owned()
+    } else {
+        RELEASES_PAGE.to_owned()
+    }
+}
+
+fn select_release(
+    releases: &[GithubRelease],
+    current: &str,
+    platform: UpdatePlatform,
+) -> Option<AvailableRelease> {
+    let current = parse_version(current)?;
+    releases
+        .iter()
+        .filter(|release| !release.draft)
+        .filter_map(|release| {
+            let version = parse_version(&release.tag_name)?;
+            if version <= current {
+                return None;
+            }
+            let asset = release.assets.iter().find(|asset| {
+                asset_matches_platform(&asset.name, platform)
+                    && asset.size > 0
+                    && asset.size <= DOWNLOAD_LIMIT
+                    && asset.digest.as_deref().and_then(parse_sha256).is_some()
+            })?;
+            Some((
+                version,
+                AvailableRelease {
+                    version: release.tag_name.trim_start_matches(['v', 'V']).to_owned(),
+                    title: concise_text(&release.name, &release.tag_name, 72),
+                    notes: concise_text(&release.body, "See the release page for details.", 220),
+                    page_url: release_page_url(&release.html_url),
+                    asset: asset.clone(),
+                },
+            ))
+        })
+        .max_by_key(|(version, _)| *version)
+        .map(|(_, release)| release)
+}
+
+fn read_limited(mut reader: impl Read, limit: u64) -> Result<Vec<u8>, String> {
+    let mut bytes = Vec::new();
+    reader
+        .by_ref()
+        .take(limit + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|error| format!("could not read response: {error}"))?;
+    if bytes.len() as u64 > limit {
+        return Err(format!("response exceeds {limit} bytes"));
+    }
+    Ok(bytes)
+}
+
+fn trusted_production_host(host: Option<&str>) -> bool {
+    matches!(
+        host,
+        Some("api.github.com")
+            | Some("github.com")
+            | Some("objects.githubusercontent.com")
+            | Some("release-assets.githubusercontent.com")
+    )
+}
+
+fn http_client(timeout: Duration, allow_insecure_override: bool) -> Result<Client, String> {
+    let redirect = Policy::custom(move |attempt| {
+        if attempt.previous().len() >= 5 {
+            return attempt.stop();
+        }
+        if !allow_insecure_override
+            && (attempt.url().scheme() != "https"
+                || !trusted_production_host(attempt.url().host_str()))
+        {
+            return attempt.stop();
+        }
+        attempt.follow()
+    });
+    Client::builder()
+        .user_agent(UPDATE_USER_AGENT)
+        .connect_timeout(CONNECT_TIMEOUT)
+        .timeout(timeout)
+        .redirect(redirect)
+        .build()
+        .map_err(|error| format!("could not configure secure HTTP: {error}"))
+}
+
+fn releases_api() -> (String, bool) {
+    if cfg!(debug_assertions) {
+        if let Ok(value) = std::env::var("NARWHAL3D_RELEASES_API") {
+            if !value.trim().is_empty() {
+                return (value, true);
+            }
+        }
+    }
+    (RELEASES_API.to_owned(), false)
+}
+
+fn check_for_update(
+    current: &str,
+    platform: UpdatePlatform,
+) -> Result<Option<AvailableRelease>, String> {
+    let (api, overridden) = releases_api();
+    let client = http_client(REQUEST_TIMEOUT, overridden)?;
+    let response = client
+        .get(&api)
+        .header("Accept", "application/vnd.github+json")
+        .header("X-GitHub-Api-Version", "2022-11-28")
+        .send()
+        .map_err(|error| format!("release check failed: {error}"))?;
+    if !response.status().is_success() {
+        return Err(format!("release service returned {}", response.status()));
+    }
+    if response
+        .content_length()
+        .is_some_and(|size| size > API_RESPONSE_LIMIT)
+    {
+        return Err("release response is too large".to_owned());
+    }
+    let bytes = read_limited(response, API_RESPONSE_LIMIT)?;
+    let releases: Vec<GithubRelease> = serde_json::from_slice(&bytes)
+        .map_err(|error| format!("invalid release response: {error}"))?;
+    Ok(select_release(&releases, current, platform))
+}
+
+fn trusted_asset_url(value: &str, overridden: bool) -> bool {
+    let Ok(url) = reqwest::Url::parse(value) else {
+        return false;
+    };
+    if overridden {
+        return matches!(url.scheme(), "http" | "https");
+    }
+    url.scheme() == "https"
+        && matches!(
+            url.host_str(),
+            Some("github.com")
+                | Some("objects.githubusercontent.com")
+                | Some("release-assets.githubusercontent.com")
+        )
+}
+
+fn unique_stamp() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos()
+}
+
+fn download_verified(asset: &ReleaseAsset, destination: &Path) -> Result<(), String> {
+    let (_, overridden) = releases_api();
+    if !trusted_asset_url(&asset.browser_download_url, overridden) {
+        return Err("release asset URL is not trusted".to_owned());
+    }
+    if asset.size == 0 || asset.size > DOWNLOAD_LIMIT {
+        return Err("release asset size is outside the safe limit".to_owned());
+    }
+    let expected = asset
+        .digest
+        .as_deref()
+        .and_then(parse_sha256)
+        .ok_or("release asset has no valid GitHub sha256 digest")?;
+    let client = http_client(DOWNLOAD_TIMEOUT, overridden)?;
+    let result = (|| -> Result<(), String> {
+        let mut response: Response = client
+            .get(&asset.browser_download_url)
+            .header("Accept", "application/octet-stream")
+            .send()
+            .map_err(|error| format!("download failed: {error}"))?;
+        if !response.status().is_success() {
+            return Err(format!("asset service returned {}", response.status()));
+        }
+        if response
+            .content_length()
+            .is_some_and(|size| size > DOWNLOAD_LIMIT || size != asset.size)
+        {
+            return Err("asset length does not match the signed release metadata".to_owned());
+        }
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(destination)
+            .map_err(|error| format!("could not create update file: {error}"))?;
+        let mut hasher = Sha256::new();
+        let mut total = 0_u64;
+        let mut buffer = [0_u8; 64 * 1024];
+        loop {
+            let count = response
+                .read(&mut buffer)
+                .map_err(|error| format!("download read failed: {error}"))?;
+            if count == 0 {
+                break;
+            }
+            total = total
+                .checked_add(count as u64)
+                .ok_or("download size overflow")?;
+            if total > DOWNLOAD_LIMIT || total > asset.size {
+                return Err("download exceeded its declared size".to_owned());
+            }
+            hasher.update(&buffer[..count]);
+            file.write_all(&buffer[..count])
+                .map_err(|error| format!("could not write update: {error}"))?;
+        }
+        if total != asset.size {
+            return Err("download was truncated".to_owned());
+        }
+        let actual: [u8; 32] = hasher.finalize().into();
+        if !digest_matches(&actual, &expected) {
+            return Err("download sha256 does not match GitHub's asset digest".to_owned());
+        }
+        file.sync_all()
+            .map_err(|error| format!("could not sync verified update: {error}"))?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(destination);
+    }
+    result
+}
+
+fn safe_absolute_path(path: &Path) -> bool {
+    path.is_absolute()
+        && !path
+            .as_os_str()
+            .to_string_lossy()
+            .chars()
+            .any(char::is_control)
+}
+
+#[cfg(target_os = "linux")]
+fn install_linux(release: &AvailableRelease) -> Result<String, String> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let raw_target = std::env::var_os("APPIMAGE")
+        .or_else(|| std::env::var_os("NARWHAL3D_PACKAGE_PATH"))
+        .ok_or("cannot locate the current AppImage; use the release page")?;
+    let target = PathBuf::from(raw_target);
+    if !safe_absolute_path(&target) {
+        return Err("current AppImage path is not a safe absolute path".to_owned());
+    }
+    let metadata = fs::symlink_metadata(&target)
+        .map_err(|error| format!("cannot inspect current AppImage: {error}"))?;
+    if !metadata.file_type().is_file() || metadata.file_type().is_symlink() {
+        return Err("current AppImage must be a regular non-symlink file".to_owned());
+    }
+    let parent = target
+        .parent()
+        .ok_or("current AppImage has no parent directory")?;
+    let staged = parent.join(format!(
+        ".narwhal3d-update-{}-{}.AppImage",
+        std::process::id(),
+        unique_stamp()
+    ));
+    download_verified(&release.asset, &staged)?;
+    let result = (|| -> Result<(), String> {
+        fs::set_permissions(
+            &staged,
+            fs::Permissions::from_mode(metadata.permissions().mode()),
+        )
+        .map_err(|error| format!("could not preserve executable mode: {error}"))?;
+        fs::rename(&staged, &target)
+            .map_err(|error| format!("could not atomically replace current AppImage: {error}"))?;
+        fs::File::open(parent)
+            .and_then(|directory| directory.sync_all())
+            .map_err(|error| format!("could not sync AppImage directory: {error}"))?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&staged);
+    }
+    result?;
+    Ok(format!(
+        "Narwhal 3D {} is installed. Restart to use it.",
+        release.version
+    ))
+}
+
+#[cfg(any(test, target_os = "windows"))]
+const WINDOWS_UPDATER_SCRIPT: &str = r#"param(
+    [Parameter(Mandatory=$true)][string]$Archive,
+    [Parameter(Mandatory=$true)][string]$Target,
+    [Parameter(Mandatory=$true)][string]$Staging,
+    [Parameter(Mandatory=$true)][string]$Backup,
+    [Parameter(Mandatory=$true)][int]$WelcomePid
+)
+$ErrorActionPreference = 'Stop'
+try { Wait-Process -Id $WelcomePid -ErrorAction SilentlyContinue } catch {}
+Remove-Item -LiteralPath $Staging -Recurse -Force -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath $Backup -Recurse -Force -ErrorAction SilentlyContinue
+
+# Validate the central directory before Expand-Archive sees any path. The asset
+# digest authenticates bytes; these checks additionally confine extraction to
+# one ordinary portable-package tree under our staging directory.
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+$Zip = [System.IO.Compression.ZipFile]::OpenRead($Archive)
+try {
+    $Seen = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
+    $Root = $null
+    [uint64]$ExpandedBytes = 0
+    [int]$EntryCount = 0
+    foreach ($Entry in $Zip.Entries) {
+        $Name = $Entry.FullName
+        $EntryCount++
+        if ($EntryCount -gt 200000) { throw 'Update ZIP contains too many entries.' }
+        if ([string]::IsNullOrWhiteSpace($Name) -or $Name.Contains('\') -or
+            $Name.StartsWith('/') -or $Name -match '^[A-Za-z]:' -or $Name -match '[\x00-\x1f]') {
+            throw "Unsafe update ZIP path: $Name"
+        }
+        $Parts = @($Name.Split('/') | Where-Object { $_ -ne '' })
+        if ($Parts.Count -eq 0) { throw "Unsafe update ZIP path: $Name" }
+        foreach ($Part in $Parts) {
+            if ($Part -eq '.' -or $Part -eq '..' -or $Part.EndsWith('.') -or $Part.EndsWith(' ') -or $Part.Contains(':')) {
+                throw "Unsafe update ZIP path: $Name"
+            }
+        }
+        if ($null -eq $Root) { $Root = $Parts[0] }
+        if ($Parts[0] -cne $Root) { throw 'Update ZIP must contain one package directory.' }
+        if (-not $Seen.Add($Name.TrimEnd('/'))) { throw "Duplicate update ZIP path: $Name" }
+        $UnixType = ($Entry.ExternalAttributes -shr 16) -band 0xF000
+        if ($UnixType -ne 0 -and $UnixType -ne 0x4000 -and $UnixType -ne 0x8000) {
+            throw "Update ZIP contains a link or special file: $Name"
+        }
+        $ExpandedBytes += [uint64]$Entry.Length
+        if ($ExpandedBytes -gt 8589934592) { throw 'Update ZIP expands beyond the safe limit.' }
+        $Candidate = [System.IO.Path]::GetFullPath((Join-Path $Staging $Name))
+        $StagePrefix = [System.IO.Path]::GetFullPath($Staging).TrimEnd('\') + '\'
+        if (-not $Candidate.StartsWith($StagePrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw "Update ZIP escapes its staging directory: $Name"
+        }
+    }
+    if ($EntryCount -eq 0 -or [string]::IsNullOrWhiteSpace($Root)) { throw 'Update ZIP is empty.' }
+    if (-not $Seen.Contains(($Root + '/Narwhal3D.exe'))) { throw 'Update package is missing Narwhal3D.exe.' }
+    if (-not ($Seen | Where-Object { $_.StartsWith(($Root + '/app/'), [System.StringComparison]::OrdinalIgnoreCase) })) {
+        throw 'Update package is missing its app directory.'
+    }
+} finally {
+    $Zip.Dispose()
+}
+Expand-Archive -LiteralPath $Archive -DestinationPath $Staging
+$Entries = @(Get-ChildItem -LiteralPath $Staging -Force)
+if ($Entries.Count -ne 1 -or -not $Entries[0].PSIsContainer) { throw 'Update ZIP must contain one package directory.' }
+$NewRoot = $Entries[0].FullName
+if (@(Get-ChildItem -LiteralPath $NewRoot -Recurse -Force -Attributes ReparsePoint).Count -ne 0) { throw 'Update package contains a reparse point.' }
+if (-not (Test-Path -LiteralPath (Join-Path $NewRoot 'Narwhal3D.exe') -PathType Leaf)) { throw 'Update package is missing Narwhal3D.exe.' }
+Move-Item -LiteralPath $Target -Destination $Backup
+try {
+    Move-Item -LiteralPath $NewRoot -Destination $Target
+    Remove-Item -LiteralPath $Backup -Recurse -Force
+    Remove-Item -LiteralPath $Staging -Recurse -Force
+    Remove-Item -LiteralPath $Archive -Force
+} catch {
+    if (-not (Test-Path -LiteralPath $Target) -and (Test-Path -LiteralPath $Backup)) {
+        Move-Item -LiteralPath $Backup -Destination $Target
+    }
+    throw
+}
+"#;
+
+#[cfg(any(test, target_os = "windows"))]
+fn validate_windows_update_paths(paths: [&Path; 4]) -> Result<(), String> {
+    if paths.iter().any(|path| !safe_absolute_path(path)) {
+        return Err("Windows updater paths must be safe absolute paths".to_owned());
+    }
+    for left in 0..paths.len() {
+        for right in left + 1..paths.len() {
+            if paths[left] == paths[right] {
+                return Err("Windows updater paths must be distinct".to_owned());
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+fn windows_package_root() -> Result<PathBuf, String> {
+    if let Some(root) = std::env::var_os("NARWHAL3D_PACKAGE_PATH") {
+        return Ok(PathBuf::from(root));
+    }
+    let executable = std::env::current_exe()
+        .map_err(|error| format!("cannot locate welcome executable: {error}"))?;
+    executable
+        .ancestors()
+        .nth(5)
+        .map(Path::to_path_buf)
+        .ok_or_else(|| "welcome executable is not inside a portable package".to_owned())
+}
+
+#[cfg(target_os = "windows")]
+fn schedule_windows_update(release: &AvailableRelease) -> Result<String, String> {
+    use std::os::windows::process::CommandExt;
+
+    let target = windows_package_root()?;
+    if !target.join("Narwhal3D.exe").is_file() || !target.join("app").is_dir() {
+        return Err("current Windows portable package layout is not valid".to_owned());
+    }
+    let parent = target
+        .parent()
+        .ok_or("portable package has no parent directory")?;
+    let stamp = format!("{}-{}", std::process::id(), unique_stamp());
+    let archive = std::env::temp_dir().join(format!("narwhal3d-update-{stamp}.zip"));
+    let script = std::env::temp_dir().join(format!("narwhal3d-update-{stamp}.ps1"));
+    let staging = parent.join(format!(".narwhal3d-update-{stamp}.stage"));
+    let backup = parent.join(format!(".narwhal3d-update-{stamp}.backup"));
+    validate_windows_update_paths([&archive, &target, &staging, &backup])?;
+    download_verified(&release.asset, &archive)?;
+    if let Err(error) = fs::write(&script, WINDOWS_UPDATER_SCRIPT.as_bytes()) {
+        let _ = fs::remove_file(&archive);
+        return Err(format!("could not write Windows updater: {error}"));
+    }
+    let spawned = Command::new("powershell.exe")
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-WindowStyle",
+            "Hidden",
+            "-File",
+        ])
+        .arg(&script)
+        .arg("-Archive")
+        .arg(&archive)
+        .arg("-Target")
+        .arg(&target)
+        .arg("-Staging")
+        .arg(&staging)
+        .arg("-Backup")
+        .arg(&backup)
+        .arg("-WelcomePid")
+        .arg(std::process::id().to_string())
+        .creation_flags(0x0800_0000)
+        .spawn();
+    if let Err(error) = spawned {
+        let _ = fs::remove_file(&archive);
+        let _ = fs::remove_file(&script);
+        return Err(format!("could not schedule Windows updater: {error}"));
+    }
+    Ok(format!(
+        "Narwhal 3D {} is verified and will install after Narwhal closes.",
+        release.version
+    ))
+}
+
+fn install_update(release: &AvailableRelease) -> Result<String, String> {
+    #[cfg(target_os = "linux")]
+    return install_linux(release);
+    #[cfg(target_os = "windows")]
+    return schedule_windows_update(release);
+    #[allow(unreachable_code)]
+    Err("automatic updates are not available on this platform; use the release page".to_owned())
 }
 
 #[derive(Default)]
@@ -364,12 +959,16 @@ impl WelcomeApp {
         exit_code: Arc<AtomicI32>,
     ) -> Self {
         let (sender, events) = mpsc::channel();
+        let (update_sender, update_events) = mpsc::channel();
+        let current_version = current_version().ok();
         Self {
             tab: Tab::Recent,
             recent: recent_files(),
             request: config.request.clone(),
             events,
             sender,
+            update_events,
+            update_sender,
             launch: Some(config),
             pending_request: None,
             native_window: native_stacking::welcome_window_id(cc),
@@ -382,6 +981,11 @@ impl WelcomeApp {
             ready: false,
             child_exited: false,
             status: "Preparing Narwhal 3D…".to_owned(),
+            current_version,
+            update_check_started: false,
+            update_busy: false,
+            available_release: None,
+            update_message: None,
             logo: load_logo(cc),
         }
     }
@@ -479,6 +1083,109 @@ impl WelcomeApp {
         }
         if self.child_exited {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        }
+    }
+
+    fn start_update_check(&mut self) {
+        if self.update_check_started || std::env::var_os("NARWHAL3D_DISABLE_UPDATE_CHECK").is_some()
+        {
+            return;
+        }
+        self.update_check_started = true;
+        let Some(version) = self.current_version.clone() else {
+            self.update_message = Some("Update check unavailable in this package.".to_owned());
+            return;
+        };
+        let Some(platform) = UpdatePlatform::current() else {
+            self.update_message =
+                Some("Use the release page for updates on this platform.".to_owned());
+            return;
+        };
+        let sender = self.update_sender.clone();
+        std::thread::spawn(move || {
+            let result = check_for_update(&version, platform);
+            let _ = sender.send(UpdateEvent::Checked(result));
+        });
+    }
+
+    fn start_install(&mut self, release: AvailableRelease) {
+        if self.update_busy {
+            return;
+        }
+        self.update_busy = true;
+        self.update_message = Some("Downloading and verifying update…".to_owned());
+        let sender = self.update_sender.clone();
+        std::thread::spawn(move || {
+            let result = install_update(&release);
+            let _ = sender.send(UpdateEvent::Installed(result));
+        });
+    }
+
+    fn poll_updates(&mut self) {
+        while let Ok(event) = self.update_events.try_recv() {
+            match event {
+                UpdateEvent::Checked(Ok(Some(release))) => {
+                    self.lifetime.fade_started = None;
+                    self.available_release = Some(release);
+                    self.update_message = None;
+                }
+                UpdateEvent::Checked(Ok(None)) => {
+                    if let Some(version) = &self.current_version {
+                        self.update_message = Some(format!("Version {version} is up to date."));
+                    }
+                }
+                UpdateEvent::Checked(Err(error)) => {
+                    eprintln!("[narwhal-welcome] {error}");
+                    self.update_message = Some("Could not check for updates safely.".to_owned());
+                }
+                UpdateEvent::Installed(result) => {
+                    self.update_busy = false;
+                    self.update_message = Some(match result {
+                        Ok(message) => message,
+                        Err(error) => {
+                            eprintln!("[narwhal-welcome] update failed: {error}");
+                            "Update failed safely. Download it from the release page.".to_owned()
+                        }
+                    });
+                }
+            }
+        }
+    }
+
+    fn news_panel(&mut self, ui: &mut egui::Ui) {
+        ui.heading("News");
+        if let Some(release) = self.available_release.clone() {
+            ui.label(RichText::new(format!("Version {} available", release.version)).strong());
+            ui.label(&release.title);
+            ui.label(&release.notes);
+            if ui
+                .add_enabled(
+                    !self.update_busy,
+                    egui::Button::new(if self.update_busy {
+                        "Updating…"
+                    } else {
+                        "Download and install"
+                    }),
+                )
+                .clicked()
+            {
+                self.start_install(release.clone());
+            }
+            ui.hyperlink_to("Open release page", &release.page_url);
+        } else if let Some(message) = &self.update_message {
+            ui.label(message);
+            if message.contains("unavailable") || message.contains("safely") {
+                ui.hyperlink_to("Open release page", RELEASES_PAGE);
+            }
+        } else if self.update_check_started {
+            ui.label("Checking for updates…");
+        } else {
+            ui.label("Rust acceleration and startup work are in progress.");
+        }
+        if let Some(message) = &self.update_message {
+            if self.available_release.is_some() {
+                ui.label(message);
+            }
         }
     }
 
@@ -642,6 +1349,10 @@ impl eframe::App for WelcomeApp {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.poll_runtime(ctx);
         self.poll_submission(ctx);
+        self.poll_updates();
+        if self.first_paint.is_some() {
+            self.start_update_check();
+        }
         if self
             .first_paint
             .is_some_and(|painted| painted.elapsed() >= Duration::from_millis(350))
@@ -669,8 +1380,11 @@ impl eframe::App for WelcomeApp {
             .first_paint
             .map(|painted| now.saturating_duration_since(painted))
             .unwrap_or_default();
-        self.lifetime
-            .maybe_start_auto_fade(self.ready, visible_for, now);
+        self.lifetime.maybe_start_auto_fade(
+            self.ready && self.available_release.is_none() && !self.update_busy,
+            visible_for,
+            now,
+        );
         if self.hidden {
             ctx.request_repaint_after(Duration::from_millis(100));
         }
@@ -730,8 +1444,7 @@ impl eframe::App for WelcomeApp {
                     ui.separator();
                     ui.vertical(|ui| {
                         ui.set_width(155.0);
-                        ui.heading("News");
-                        ui.label("Rust acceleration and startup work are in progress.");
+                        self.news_panel(ui);
                         ui.add_space(35.0);
                         ui.heading("Tips");
                         ui.label("Use the viewport-title arrow to change display mode.");
@@ -809,11 +1522,16 @@ fn main() -> eframe::Result {
 #[cfg(test)]
 mod tests {
     use super::{
-        is_ready_line, parse_args_from, progress_state, recent_files_from, replace_request,
-        request_payload, supervise_child, PendingRequest, RuntimeEvent, WelcomeLifetime,
-        ATTENTION_GRACE_SECONDS, EXIT_PENDING, NEW_UNITS, READY_MARKER, SUBMIT_DELAY,
+        asset_matches_platform, digest_matches, is_ready_line, parse_args_from, parse_sha256,
+        parse_version, progress_state, read_limited, recent_files_from, replace_request,
+        request_payload, safe_absolute_path, select_release, supervise_child,
+        trusted_production_host, validate_windows_update_paths, GithubRelease, PendingRequest,
+        ReleaseAsset, RuntimeEvent, UpdatePlatform, WelcomeLifetime, API_RESPONSE_LIMIT,
+        ATTENTION_GRACE_SECONDS, DOWNLOAD_LIMIT, EXIT_PENDING, NEW_UNITS, READY_MARKER,
+        SUBMIT_DELAY, UPDATE_USER_AGENT, WINDOWS_UPDATER_SCRIPT,
     };
     use std::fs;
+    use std::io::Cursor;
     use std::path::Path;
     use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
     use std::sync::{mpsc, Arc};
@@ -852,6 +1570,160 @@ mod tests {
         assert_eq!(config.bootstrap, Path::new("/bootstrap.py"));
         assert_eq!(config.forwarded, ["a.3dm", "--flag"]);
         assert!(parse_args_from(["unexpected".to_owned()]).is_err());
+    }
+
+    #[test]
+    fn versions_compare_only_well_formed_zero_four_releases() {
+        assert_eq!(parse_version("0.4.4"), Some([0, 4, 4]));
+        assert_eq!(parse_version("v0.4.5-preview.1"), Some([0, 4, 5]));
+        assert!(parse_version("0.4.5") > parse_version("0.4.4"));
+        assert_eq!(parse_version("0.5.0"), None);
+        assert_eq!(parse_version("0.4"), None);
+        assert_eq!(parse_version("0.4.5.1"), None);
+        assert_eq!(env!("CARGO_PKG_VERSION"), "0.4.5");
+        assert!(UPDATE_USER_AGENT.contains(env!("CARGO_PKG_VERSION")));
+    }
+
+    fn asset(name: &str, size: u64, digest: Option<&str>) -> ReleaseAsset {
+        ReleaseAsset {
+            name: name.to_owned(),
+            browser_download_url:
+                "https://github.com/ContributionRich/Narwhal3D/releases/download/v0.4.5/asset"
+                    .to_owned(),
+            digest: digest.map(str::to_owned),
+            size,
+        }
+    }
+
+    fn release(tag: &str, assets: Vec<ReleaseAsset>) -> GithubRelease {
+        GithubRelease {
+            tag_name: tag.to_owned(),
+            name: format!("Narwhal {tag}"),
+            body: "Small release notes".to_owned(),
+            html_url: format!("https://github.com/ContributionRich/Narwhal3D/releases/tag/{tag}"),
+            draft: false,
+            assets,
+        }
+    }
+
+    #[test]
+    fn release_selection_requires_newer_version_platform_asset_digest_and_size() {
+        let digest = format!("sha256:{}", "ab".repeat(32));
+        let releases = vec![
+            release(
+                "v0.4.4",
+                vec![asset("Narwhal_3D-0.4.4-x86_64.AppImage", 10, Some(&digest))],
+            ),
+            release(
+                "v0.4.6",
+                vec![asset(
+                    "Narwhal_3D-0.4.6-Windows-x86_64.zip",
+                    10,
+                    Some(&digest),
+                )],
+            ),
+            release(
+                "v0.4.7",
+                vec![asset(
+                    "Narwhal_3D-0.4.7-x86_64.AppImage",
+                    DOWNLOAD_LIMIT + 1,
+                    Some(&digest),
+                )],
+            ),
+            release(
+                "v0.4.8",
+                vec![asset("Narwhal_3D-0.4.8-x86_64.AppImage", 10, None)],
+            ),
+            release(
+                "v0.4.5",
+                vec![asset("Narwhal_3D-0.4.5-x86_64.AppImage", 10, Some(&digest))],
+            ),
+        ];
+        let linux = select_release(&releases, "0.4.4", UpdatePlatform::LinuxX86_64).unwrap();
+        assert_eq!(linux.version, "0.4.5");
+        assert!(linux.asset.name.ends_with("-x86_64.AppImage"));
+        let windows = select_release(&releases, "0.4.4", UpdatePlatform::WindowsX86_64).unwrap();
+        assert_eq!(windows.version, "0.4.6");
+        assert!(windows.asset.name.ends_with("-Windows-x86_64.zip"));
+    }
+
+    #[test]
+    fn digest_parser_is_exact_and_case_insensitive_only_for_hex() {
+        let digest = format!("sha256:{}", "aB".repeat(32));
+        assert_eq!(parse_sha256(&digest), Some([0xab; 32]));
+        assert_eq!(parse_sha256(&format!("SHA256:{}", "ab".repeat(32))), None);
+        assert_eq!(parse_sha256(&format!("sha256:{}", "ab".repeat(31))), None);
+        assert_eq!(parse_sha256(&format!("sha256:{}zz", "ab".repeat(31))), None);
+        assert!(digest_matches(&[0xab; 32], &[0xab; 32]));
+        assert!(!digest_matches(&[0xab; 32], &[0xac; 32]));
+    }
+
+    #[test]
+    fn bounded_reader_rejects_one_byte_over_limit() {
+        assert_eq!(
+            read_limited(Cursor::new(vec![1_u8; 4]), 4).unwrap(),
+            vec![1_u8; 4]
+        );
+        assert!(read_limited(Cursor::new(vec![1_u8; 5]), 4).is_err());
+        assert!(API_RESPONSE_LIMIT < DOWNLOAD_LIMIT);
+    }
+
+    #[test]
+    fn production_redirect_hosts_are_explicitly_bounded() {
+        assert!(trusted_production_host(Some("api.github.com")));
+        assert!(trusted_production_host(Some("github.com")));
+        assert!(trusted_production_host(Some(
+            "release-assets.githubusercontent.com"
+        )));
+        assert!(!trusted_production_host(Some("github.com.example.invalid")));
+        assert!(!trusted_production_host(Some("example.invalid")));
+        assert!(!trusted_production_host(None));
+    }
+
+    #[test]
+    fn platform_asset_names_are_exact() {
+        assert!(asset_matches_platform(
+            "Narwhal_3D-0.4.5-x86_64.AppImage",
+            UpdatePlatform::LinuxX86_64
+        ));
+        assert!(!asset_matches_platform(
+            "Narwhal_3D-0.4.5-aarch64.AppImage",
+            UpdatePlatform::LinuxX86_64
+        ));
+        assert!(asset_matches_platform(
+            "Narwhal_3D-0.4.5-Windows-x86_64.zip",
+            UpdatePlatform::WindowsX86_64
+        ));
+        assert!(!asset_matches_platform(
+            "source-Windows-x86_64.zip",
+            UpdatePlatform::WindowsX86_64
+        ));
+    }
+
+    #[test]
+    fn windows_updater_uses_literal_parameters_and_rejects_unsafe_paths() {
+        assert!(WINDOWS_UPDATER_SCRIPT.contains("Wait-Process -Id $WelcomePid"));
+        assert!(
+            WINDOWS_UPDATER_SCRIPT.contains("[System.IO.Compression.ZipFile]::OpenRead($Archive)")
+        );
+        assert!(WINDOWS_UPDATER_SCRIPT.contains("$Name.Contains('\\')"));
+        assert!(WINDOWS_UPDATER_SCRIPT.contains("$Part -eq '..'"));
+        assert!(WINDOWS_UPDATER_SCRIPT.contains("Unsafe update ZIP path"));
+        assert!(WINDOWS_UPDATER_SCRIPT.contains("Duplicate update ZIP path"));
+        assert!(WINDOWS_UPDATER_SCRIPT.contains("Update ZIP expands beyond the safe limit"));
+        assert!(WINDOWS_UPDATER_SCRIPT.contains("-Attributes ReparsePoint"));
+        assert!(WINDOWS_UPDATER_SCRIPT.contains("Expand-Archive -LiteralPath $Archive"));
+        assert!(WINDOWS_UPDATER_SCRIPT.contains("Move-Item -LiteralPath $Target"));
+        assert!(!WINDOWS_UPDATER_SCRIPT.contains("Invoke-Expression"));
+        assert!(!WINDOWS_UPDATER_SCRIPT.contains("Start-Process"));
+        let archive = Path::new("/tmp/update.zip");
+        let target = Path::new("/opt/Narwhal 3D");
+        let staging = Path::new("/opt/.narwhal-stage");
+        let backup = Path::new("/opt/.narwhal-backup");
+        assert!(validate_windows_update_paths([archive, target, staging, backup]).is_ok());
+        assert!(validate_windows_update_paths([archive, target, target, backup]).is_err());
+        assert!(!safe_absolute_path(Path::new("relative/package")));
+        assert!(!safe_absolute_path(Path::new("/tmp/bad\npath")));
     }
 
     #[test]

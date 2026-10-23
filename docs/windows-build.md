@@ -1,6 +1,6 @@
 # Windows build preparation
 
-Narwhal 3D publishes an unsigned **0.4.4 Windows x86_64 portable ZIP** for early testing. It contains a native MSVC-built runtime, Windows CPython/OpenCASCADE dependencies, Rust native components, the native startup welcome window, and `Narwhal3D.exe`; it is not a renamed or wrapped Linux binary. Extract the complete folder and keep `Narwhal3D.exe` beside its `app` and `runtime` directories.
+Narwhal 3D publishes an unsigned **0.4.5 Windows x86_64 portable ZIP** for early testing. It contains a native MSVC-built runtime, Windows CPython/OpenCASCADE dependencies, Rust native components, the native startup welcome window, and `Narwhal3D.exe`; it is not a renamed or wrapped Linux binary. Extract the complete folder and keep `Narwhal3D.exe` beside its `app` and `runtime` directories.
 
 The ZIP remains an extremely early prerelease, not a supported Windows release. Native Windows headless checks and independent offline Wine checks pass, but physical-GPU/real-window acceptance, remaining internal runtime PE identity cleanup, installer/file associations, and optional signing are still open. SmartScreen may warn because the preview is unsigned.
 
@@ -74,7 +74,7 @@ Set-Location ([Environment]::GetFolderPath('Desktop'))
 $Revision = "PASTE_THE_40_CHARACTER_PUBLIC_SOURCE_COMMIT"
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\build_windows_preview.ps1 `
   -NarwhalRevision $Revision `
-  -Version 0.4.4
+  -Version 0.4.5
 ```
 
 The engineering build uses the dedicated no-space path `C:\Narwhal3D-build`, resets only clones owned by that marked workspace, and can be rerun after a failure. It follows Blender's official Windows flow from the Blender source directory, but separates configuration and compilation so Ninja is limited to four jobs on the measured 12 GiB machine. It:
@@ -90,7 +90,7 @@ The engineering build uses the dedicated no-space path `C:\Narwhal3D-build`, res
 9. creates, inventories, and hashes an atomic engineering ZIP on the Desktop;
 10. always creates a small reviewable Desktop result ZIP when a phase fails.
 
-Return both ZIP files named by the script. Its large ZIP is an engineering candidate until `scripts/verify_windows_release.py` and the release acceptance checks pass. The published 0.4.4 portable ZIP demonstrates the packaging route, but future candidates still require source/inventory verification and real Windows testing; installer/file associations, complete internal PE identity replacement, physical-GPU gates, and optional signing remain open.
+Return both ZIP files named by the script. Its large ZIP is an engineering candidate until `scripts/verify_windows_release.py` and the release acceptance checks pass. The published 0.4.5 portable ZIP demonstrates the packaging route, but future candidates still require source/inventory verification and real Windows testing; installer/file associations, complete internal PE identity replacement, physical-GPU gates, and optional signing remain open.
 
 Code signing is a separate release credential. An unsigned preview can be tested, but Windows SmartScreen may warn when it is launched.
 

@@ -371,7 +371,13 @@ def verify_directory(root: Path, args: argparse.Namespace) -> None:
         raise VerificationError("launcher source hash does not match public source")
     require_bytes(
         root / "Narwhal3D.exe",
-        ("Narwhal 3D".encode("utf-16le"), "Narwhal3D.exe".encode("utf-16le")),
+        (
+            "Narwhal 3D".encode("utf-16le"),
+            "Narwhal3D.exe".encode("utf-16le"),
+            "NARWHAL3D_VERSION".encode("utf-16le"),
+            "NARWHAL3D_PACKAGE_PATH".encode("utf-16le"),
+            args.expected_version.encode("utf-16le"),
+        ),
         "Narwhal launcher")
     for filename, relative_path in NATIVE_COMPONENT_PATHS.items():
         path = root / relative_path
@@ -382,7 +388,8 @@ def verify_directory(root: Path, args: argparse.Namespace) -> None:
             raise VerificationError(f"invalid packaged native component: {filename}")
         if filename == "narwhal-welcome.exe":
             markers = (b"--runtime is required", b"--bootstrap is required",
-                       b"NARWHAL3D_WELCOME_REQUEST")
+                       b"NARWHAL3D_WELCOME_REQUEST", b"NARWHAL3D_VERSION",
+                       b"NARWHAL3D_RELEASES_API", b"download sha256 does not match")
             if record.get("launch_contract") != 1 or not all(marker in data for marker in markers):
                 raise VerificationError("Windows native welcome lacks its launch/request contract")
         if filename == "narwhal_geometry_core.dll":
