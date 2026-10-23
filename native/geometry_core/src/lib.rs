@@ -28,6 +28,8 @@ pub const VALIDATION_COMMIT: u32 = 2;
 
 pub const MAX_BUFFER_BYTES: usize = 512 * 1024 * 1024;
 pub const LOCAL_MOVE_ZERO_TRANSLATION: f64 = 1.0e-14;
+// Legacy diagnostic threshold: larger measured jumps are retained in the certificate but
+// accepted when every boundary/topology/validity requirement passes.
 pub const LOCAL_MOVE_MAX_NORMAL_JUMP: f64 = 2.0e-6;
 pub const LOCAL_MOVE_MAX_CANDIDATES: u32 = 25;
 pub const LOCAL_MOVE_EDGE_SAMPLES: u32 = 33;
@@ -226,6 +228,12 @@ extern "C" {
         capacity: usize,
         required: *mut usize,
         selected_face: *mut u64,
+    ) -> i32;
+    #[cfg(test)]
+    fn narwhal_occt_adapter_make_open_face_fixture(
+        output: *mut u8,
+        capacity: usize,
+        required: *mut usize,
     ) -> i32;
     #[cfg(test)]
     fn narwhal_occt_adapter_make_local_move_fixture(
@@ -905,6 +913,20 @@ mod tests {
         }
     }
 
+    unsafe fn make_open_face_fixture() -> Vec<u8> {
+        unsafe {
+            exact_bytes_from_two_pass(|output, capacity| {
+                let mut required = 0usize;
+                let status =
+                    narwhal_occt_adapter_make_open_face_fixture(output, capacity, &mut required);
+                match status {
+                    ADAPTER_OK | ADAPTER_BUFFER_TOO_SMALL => required as i64,
+                    _ => adapter_error(status),
+                }
+            })
+        }
+    }
+
     unsafe fn make_fixture() -> Vec<u8> {
         unsafe {
             exact_bytes_from_two_pass(|output, capacity| {
@@ -1137,7 +1159,8 @@ mod tests {
         }
         if certificate.quality_checked_bits & QUALITY_INTERNAL_KNOT != 0 {
             assert!(certificate.internal_knot_face_count > 0);
-            assert!(certificate.max_internal_normal_jump <= LOCAL_MOVE_MAX_NORMAL_JUMP);
+            assert!(certificate.max_internal_normal_jump.is_finite());
+            assert!(certificate.max_internal_normal_jump <= std::f64::consts::PI);
         } else {
             assert_eq!(certificate.internal_knot_face_count, 0);
             assert_eq!(certificate.max_internal_normal_jump, 0.0);
@@ -1602,11 +1625,60 @@ mod tests {
     }
 
     #[test]
+    fn standalone_face_moves_remain_exact_valid_surfaces() {
+        let fixture = unsafe { make_open_face_fixture() };
+        let baseline = unsafe { inspect(&fixture) };
+        assert_eq!(
+            (
+                baseline.valid,
+                baseline.airtight,
+                baseline.face_count,
+                baseline.edge_count,
+                baseline.vertex_count
+            ),
+            (1, 0, 1, 4, 4)
+        );
+        for (kind, index) in [
+            (COMPONENT_FACE, 1_u64),
+            (COMPONENT_EDGE, 1_u64),
+            (COMPONENT_VERTEX, 1_u64),
+        ] {
+            let (moved, certificate) =
+                unsafe { move_once(&fixture, kind, index, [0.25, 0.5, 0.75]) };
+            let inspection = unsafe { inspect(&moved) };
+            assert_eq!(
+                (
+                    inspection.valid,
+                    inspection.airtight,
+                    inspection.face_count,
+                    inspection.edge_count,
+                    inspection.vertex_count
+                ),
+                (1, 0, 1, 4, 4)
+            );
+            assert_eq!(certificate.valid, 1);
+            assert_eq!(certificate.airtight, 0);
+            assert_eq!(certificate.self_intersection_free, 1);
+            assert_eq!(certificate.topology_counts_preserved, 1);
+            assert_eq!(certificate.moved_vertex_mapping_verified, 1);
+            assert_eq!(certificate.mapped_incidence_preserved, 1);
+            assert_eq!(certificate.unchanged_geometry_preserved, 1);
+            assert_eq!(certificate.selected_match_count, 1);
+            assert_eq!(certificate.component_kind, kind);
+            assert_eq!(certificate.face_count, 1);
+            assert_eq!(certificate.edge_count, 4);
+            assert_eq!(certificate.vertex_count, 4);
+            assert_eq!(certificate.volume, 0.0);
+            assert!(certificate.selected_translation_error <= certificate.comparison_tolerance);
+        }
+    }
+
+    #[test]
     fn current_local_move_matrix_is_exact_and_deterministic() {
         let fixture = unsafe { make_fixture() };
         let baseline = unsafe { inspect(&fixture) };
         let cases = [
-            (COMPONENT_FACE, 2_u64, [true, false, true]),
+            (COMPONENT_FACE, 2_u64, [true, true, true]),
             (COMPONENT_EDGE, 20, [true, true, true]),
             (COMPONENT_EDGE, 5, [true, true, true]),
             (COMPONENT_VERTEX, 1, [true, true, true]),
@@ -1634,6 +1706,14 @@ mod tests {
                                 0
                             );
                             assert_ne!(certificate.quality_checked_bits & QUALITY_INTERNAL_KNOT, 0);
+                            assert!(
+                                certificate.max_internal_normal_jump <= LOCAL_MOVE_MAX_NORMAL_JUMP
+                            );
+                        }
+                        if kind == COMPONENT_FACE && index == 2 && axis == 1 {
+                            assert!(
+                                certificate.max_internal_normal_jump > LOCAL_MOVE_MAX_NORMAL_JUMP
+                            );
                         }
                         if sign > 0.0 && axis == 0 {
                             let (repeat, repeat_certificate) =

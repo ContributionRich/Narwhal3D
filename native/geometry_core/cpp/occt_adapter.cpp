@@ -1132,6 +1132,7 @@ struct ComponentSignature {
 struct MoveSource {
   TopoDS_Shape shape;
   Tolerances tolerances;
+  bool requires_airtight = true;
   ShapeMap faces;
   ShapeMap edges;
   ShapeMap vertices;
@@ -1162,10 +1163,13 @@ MoveSource prepare_move_source(const TopoDS_Shape& shape,
   if (!within_resource_caps(shape, policy.max_faces, policy.max_edges, policy.max_vertices)) {
     refuse(kReasonResourceLimit, kLimitExceeded);
   }
-  if (!is_airtight(shape)) {
+  const bool airtight = is_airtight(shape);
+  const bool single_face = shape.ShapeType() == TopAbs_FACE &&
+      BRepCheck_Analyzer(shape, true).IsValid();
+  if (!airtight && !single_face) {
     refuse(kReasonInputNotAirtight);
   }
-  MoveSource source{shape, local_tolerances(shape)};
+  MoveSource source{shape, local_tolerances(shape), airtight};
   map_shapes(shape, TopAbs_FACE, source.faces);
   map_shapes(shape, TopAbs_EDGE, source.edges);
   map_shapes(shape, TopAbs_VERTEX, source.vertices);
@@ -1195,7 +1199,7 @@ MoveSource isolated_move_source(const MoveSource& cached) {
   if (!copier.IsDone()) {
     refuse(kReasonNoCandidate);
   }
-  MoveSource working{copier.Shape(), cached.tolerances};
+  MoveSource working{copier.Shape(), cached.tolerances, cached.requires_airtight};
   for (int index = 1; index <= cached.faces.Extent(); ++index) {
     const TopoDS_Shape copied = copier.ModifiedShape(cached.faces.FindKey(index));
     if (copied.IsNull()) {
@@ -1690,7 +1694,6 @@ TopoDS_Shape move_component(const MoveSource& source,
           : std::nullopt;
 
   std::vector<std::vector<FaceOption>> face_options;
-  bool has_composite = false;
   std::uint64_t candidate_count = 1;
   for (int face_index = 0; face_index < faces.Extent(); ++face_index) {
     const TopoDS_Face face = TopoDS::Face(faces.FindKey(face_index + 1));
@@ -1707,7 +1710,7 @@ TopoDS_Shape move_component(const MoveSource& source,
       const std::vector<TopoDS_Edge> boundary = boundary_edges(
           face, edges, replacements, vertices, moved, vector, tolerances.build,
           validation_mode == 1);
-      has_composite = has_composite || boundary.size() == 5;
+
       const int cached_strategy = face_strategies == nullptr
           ? -1
           : (*face_strategies)[face_index];
@@ -1761,8 +1764,7 @@ TopoDS_Shape move_component(const MoveSource& source,
     std::vector<int> merge_choices;
   };
   std::vector<Accepted> accepted;
-  bool saw_boundary_exact = false;
-  bool saw_smoothness_crease = false;
+
   double observed_boundary = 0.0;
   double observed_jump = 0.0;
   std::uint32_t observed_reconstructed_count = 0;
@@ -1777,11 +1779,10 @@ TopoDS_Shape move_component(const MoveSource& source,
       cursor /= options.size();
     }
     bool boundary_exact = true;
-    bool smooth = true;
+
     double max_boundary = 0.0;
     double max_jump = 0.0;
-    bool reconstructed_bspline = false;
-    bool internal_knot_applicable = false;
+
     std::uint32_t reconstructed_count = 0;
     std::uint32_t reconstructed_bspline_count = 0;
     std::uint32_t internal_knot_count = 0;
@@ -1790,16 +1791,14 @@ TopoDS_Shape move_component(const MoveSource& source,
         ++reconstructed_count;
       }
       if (choice->reconstructed_bspline) {
-        reconstructed_bspline = true;
         ++reconstructed_bspline_count;
         max_boundary = std::max(max_boundary, choice->boundary_error);
         boundary_exact = boundary_exact && choice->boundary_error <= tolerances.compare;
       }
       if (choice->internal_knot_checked) {
-        internal_knot_applicable = true;
         ++internal_knot_count;
         max_jump = std::max(max_jump, choice->normal_jump);
-        smooth = smooth && choice->normal_jump <= policy.max_normal_jump;
+
       }
     }
     observed_boundary = std::max(observed_boundary, max_boundary);
@@ -1809,37 +1808,50 @@ TopoDS_Shape move_component(const MoveSource& source,
         std::max(observed_reconstructed_bspline_count, reconstructed_bspline_count);
     observed_internal_knot_count = std::max(observed_internal_knot_count, internal_knot_count);
 
-    BRepBuilderAPI_Sewing sewing(tolerances.sew);
-    for (const FaceOption* choice : choices) {
-      sewing.Add(choice->face);
-    }
-    sewing.Perform();
-    if (sewing.NbFreeEdges() != 0 || sewing.NbMultipleEdges() != 0) {
-      continue;
-    }
-    std::vector<TopoDS_Shell> shells;
-    for (TopExp_Explorer explorer(sewing.SewedShape(), TopAbs_SHELL); explorer.More(); explorer.Next()) {
-      shells.push_back(TopoDS::Shell(explorer.Current()));
-    }
-    if (shells.size() != 1) {
-      continue;
-    }
-    TopoDS_Solid solid = BRepBuilderAPI_MakeSolid(shells[0]).Solid();
-    TopoDS_Shape result = solid;
-    if (validation_mode == 2) {
-      ShapeFix_Solid fixer(solid);
-      fixer.Perform();
-      result = fixer.Solid();
-    }
-    if (shape_volume(result) < 0.0) {
-      result = result.Reversed();
-    }
-    std::future<bool> airtight_future = std::async(
-        std::launch::async, [&result]() { return is_airtight(result); });
-    const bool self_intersection_free = BRepAlgoAPI_Check(result).IsValid();
-    const bool airtight = airtight_future.get();
-    if (!airtight || !self_intersection_free) {
-      continue;
+    TopoDS_Shape result;
+    bool self_intersection_free = false;
+    if (source.requires_airtight) {
+      BRepBuilderAPI_Sewing sewing(tolerances.sew);
+      for (const FaceOption* choice : choices) {
+        sewing.Add(choice->face);
+      }
+      sewing.Perform();
+      if (sewing.NbFreeEdges() != 0 || sewing.NbMultipleEdges() != 0) {
+        continue;
+      }
+      std::vector<TopoDS_Shell> shells;
+      for (TopExp_Explorer explorer(sewing.SewedShape(), TopAbs_SHELL);
+           explorer.More(); explorer.Next()) {
+        shells.push_back(TopoDS::Shell(explorer.Current()));
+      }
+      if (shells.size() != 1) {
+        continue;
+      }
+      const TopoDS_Solid solid = BRepBuilderAPI_MakeSolid(shells[0]).Solid();
+      result = solid;
+      if (validation_mode == 2) {
+        ShapeFix_Solid fixer(solid);
+        fixer.Perform();
+        result = fixer.Solid();
+      }
+      if (shape_volume(result) < 0.0) {
+        result = result.Reversed();
+      }
+      std::future<bool> airtight_future = std::async(
+          std::launch::async, [&result]() { return is_airtight(result); });
+      self_intersection_free = BRepAlgoAPI_Check(result).IsValid();
+      if (!airtight_future.get() || !self_intersection_free) {
+        continue;
+      }
+    } else {
+      if (choices.size() != 1) {
+        continue;
+      }
+      result = choices.front()->face;
+      self_intersection_free = BRepAlgoAPI_Check(result).IsValid();
+      if (!BRepCheck_Analyzer(result, true).IsValid() || !self_intersection_free) {
+        continue;
+      }
     }
     ShapeMap result_faces;
     ShapeMap result_edges;
@@ -1851,13 +1863,7 @@ TopoDS_Shape move_component(const MoveSource& source,
         result_vertices.Extent() != vertices.Extent()) {
       continue;
     }
-    if (reconstructed_bspline && boundary_exact) {
-      saw_boundary_exact = true;
-    }
-    if (internal_knot_applicable && boundary_exact && !smooth) {
-      saw_smoothness_crease = true;
-      continue;
-    }
+
     if (!boundary_exact) {
       continue;
     }
@@ -1946,10 +1952,19 @@ TopoDS_Shape move_component(const MoveSource& source,
       certificate.quality_scope_bits |= kQualityInternalKnot;
       certificate.quality_checked_bits |= kQualityInternalKnot;
     }
-    if (has_composite && saw_boundary_exact && saw_smoothness_crease) {
-      refuse(kReasonSmoothness, kSmoothnessCrease);
-    }
+
     refuse(kReasonNoCandidate);
+  }
+  const bool has_smooth_candidate = std::any_of(
+      accepted.begin(), accepted.end(), [&](const Accepted& candidate) {
+        return candidate.max_jump <= policy.max_normal_jump;
+      });
+  if (has_smooth_candidate) {
+    accepted.erase(
+        std::remove_if(accepted.begin(), accepted.end(), [&](const Accepted& candidate) {
+          return candidate.max_jump > policy.max_normal_jump;
+        }),
+        accepted.end());
   }
   std::sort(accepted.begin(), accepted.end(), [](const Accepted& first, const Accepted& second) {
     return first.rank < second.rank;
@@ -2085,6 +2100,20 @@ std::pair<TopoDS_Shape, std::uint64_t> make_surface_family_fixture(
     throw std::runtime_error("surface-family fixture has no planar move face");
   }
   return {result, selected};
+}
+
+TopoDS_Shape make_open_face_fixture() {
+  const TopoDS_Shape box = BRepPrimAPI_MakeBox(8.0, 6.0, 4.0).Shape();
+  ShapeMap faces;
+  map_shapes(box, TopAbs_FACE, faces);
+  if (faces.IsEmpty()) {
+    throw std::runtime_error("open-face fixture has no face");
+  }
+  const TopoDS_Face face = TopoDS::Face(faces.FindKey(1));
+  if (!BRepCheck_Analyzer(face, true).IsValid()) {
+    throw std::runtime_error("open-face fixture is invalid");
+  }
+  return face;
 }
 
 TopoDS_Shape make_fixture() {
@@ -2312,7 +2341,9 @@ extern "C" std::int32_t narwhal_occt_adapter_session_move(
         &cached.plan_moved_vertices, &cached.plan_changed_edges,
         &cached.plan_changed_faces, &cached.face_strategies,
         &cached.certified_merge_choices, *certificate);
-    certificate_from_inspection(inspect_certified_shape(result), *certificate);
+    certificate_from_inspection(
+        working->requires_airtight ? inspect_certified_shape(result) : inspect_shape(result),
+        *certificate);
     certificate->status = kOk;
     cached.cached_kind = component_kind;
     cached.cached_index = component_index;
@@ -2464,6 +2495,22 @@ extern "C" std::int32_t narwhal_occt_adapter_make_surface_family_fixture(
     return kKernelFailure;
   } catch (const std::exception&) {
     return kUnexpectedFailure;
+  } catch (...) {
+    return kUnexpectedFailure;
+  }
+}
+
+extern "C" std::int32_t narwhal_occt_adapter_make_open_face_fixture(
+    std::uint8_t* const output, const std::size_t capacity,
+    std::size_t* const required) noexcept {
+  if (required == nullptr || (capacity != 0 && output == nullptr)) {
+    return kInvalidArgument;
+  }
+  *required = 0;
+  try {
+    return copy_serialized(serialize_shape(make_open_face_fixture()), output, capacity, required);
+  } catch (const Standard_Failure&) {
+    return kKernelFailure;
   } catch (...) {
     return kUnexpectedFailure;
   }

@@ -2706,6 +2706,9 @@ def _local_normalize_bezier_weights(curve):
             index, curve.Weight(index) * factor ** (index - 1) / first_weight)
 
 
+
+# Diagnostic reference retained for continuity reports/tests. A larger jump is an accepted
+# NURBS crease when every exactness, topology, validity and airtightness gate passes.
 LOCAL_COONS_NORMAL_JUMP = 2e-6
 
 
@@ -3096,8 +3099,9 @@ def move_subobject_local(shape, kind, index, vector, target_signature=None):
     from OCP.BRepAlgoAPI import BRepAlgoAPI_Check
     from OCP.BRepBuilderAPI import (BRepBuilderAPI_MakeSolid, BRepBuilderAPI_Sewing,
                                     BRepBuilderAPI_Transform)
+    from OCP.BRepCheck import BRepCheck_Analyzer
     from OCP.ShapeFix import ShapeFix_Solid
-    from OCP.TopAbs import TopAbs_SHELL
+    from OCP.TopAbs import TopAbs_FACE, TopAbs_SHELL
     from OCP.TopExp import TopExp_Explorer
     from OCP.TopoDS import TopoDS
 
@@ -3112,8 +3116,12 @@ def move_subobject_local(shape, kind, index, vector, target_signature=None):
         raise KernelError("local move refused: vector must contain three finite numbers")
     if max(abs(value) for value in vector) <= 1e-14:
         raise KernelError("local move refused: translation vector is zero")
-    if not is_airtight(shape):
-        raise KernelError("local move refused: input is not one valid airtight solid")
+    requires_airtight = is_airtight(shape)
+    single_face = (shape.ShapeType() == TopAbs_FACE and
+                   BRepCheck_Analyzer(shape, True).IsValid())
+    if not requires_airtight and not single_face:
+        raise KernelError(
+            "local move refused: input is neither one valid airtight solid nor one valid face")
 
     tolerances = _local_tolerances(shape)
     faces, edges, vertices = unique_faces(shape), _unique_edges(shape), _unique_vertices(shape)
@@ -3165,7 +3173,6 @@ def move_subobject_local(shape, kind, index, vector, target_signature=None):
     import itertools
 
     face_options = []
-    has_composite = False
     for face_index, face in enumerate(faces):
         if kind == "face" and face_index == selected_index:
             rebuilt = TopoDS.Face(BRepBuilderAPI_Transform(
@@ -3175,7 +3182,6 @@ def move_subobject_local(shape, kind, index, vector, target_signature=None):
             boundary = _local_boundary_edges(
                 face, edges, replacements, vertices, moved, vector, build_tolerance)
             options = _local_rebuild_face_options(face, boundary, tolerances)
-            has_composite = has_composite or len(boundary) == 5
         else:
             options = [{"face": face, "rank": (0, 0, 0, 0, 0.0)}]
         face_options.append(options)
@@ -3186,54 +3192,51 @@ def move_subobject_local(shape, kind, index, vector, target_signature=None):
 
     accepted = []
     stage_counts = {name: 0 for name in (
-        "sewn", "shell", "valid", "topology", "boundary", "smooth", "mapped")}
-    saw_boundary_exact = False
-    saw_smoothness_crease = False
+        "sewn", "shell", "valid", "topology", "boundary", "mapped")}
     for choices in itertools.product(*face_options):
         reconstructed = [choice for choice in choices if "boundary_error" in choice]
-        composite = [choice for choice in choices if "normal_jump" in choice]
         boundary_exact = not any(
             choice["boundary_error"] > comparison_tolerance for choice in reconstructed)
-        numerically_smooth = not any(
-            choice["normal_jump"] > LOCAL_COONS_NORMAL_JUMP for choice in composite)
-        sewing = BRepBuilderAPI_Sewing(tolerances["sew"])
-        for choice in choices:
-            sewing.Add(choice["face"])
-        sewing.Perform()
-        if sewing.NbFreeEdges() or sewing.NbMultipleEdges():
-            continue
-        stage_counts["sewn"] += 1
-        sewn = sewing.SewedShape()
-        shells = []
-        explorer = TopExp_Explorer(sewn, TopAbs_SHELL)
-        while explorer.More():
-            shells.append(TopoDS.Shell(explorer.Current()))
-            explorer.Next()
-        if len(shells) != 1:
-            continue
-        stage_counts["shell"] += 1
-        solid = BRepBuilderAPI_MakeSolid(shells[0]).Solid()
-        fixer = ShapeFix_Solid(solid)
-        fixer.Perform()
-        result = fixer.Solid()
-        if volume(result) < 0.0:
-            result = TopoDS.Solid(result.Reversed())
-        if not is_airtight(result) or not BRepAlgoAPI_Check(result).IsValid():
+        if requires_airtight:
+            sewing = BRepBuilderAPI_Sewing(tolerances["sew"])
+            for choice in choices:
+                sewing.Add(choice["face"])
+            sewing.Perform()
+            if sewing.NbFreeEdges() or sewing.NbMultipleEdges():
+                continue
+            stage_counts["sewn"] += 1
+            sewn = sewing.SewedShape()
+            shells = []
+            explorer = TopExp_Explorer(sewn, TopAbs_SHELL)
+            while explorer.More():
+                shells.append(TopoDS.Shell(explorer.Current()))
+                explorer.Next()
+            if len(shells) != 1:
+                continue
+            stage_counts["shell"] += 1
+            solid = BRepBuilderAPI_MakeSolid(shells[0]).Solid()
+            fixer = ShapeFix_Solid(solid)
+            fixer.Perform()
+            result = fixer.Solid()
+            if volume(result) < 0.0:
+                result = TopoDS.Solid(result.Reversed())
+            valid_result = is_airtight(result) and BRepAlgoAPI_Check(result).IsValid()
+        else:
+            if len(choices) != 1:
+                continue
+            result = choices[0]["face"]
+            valid_result = (BRepCheck_Analyzer(result, True).IsValid() and
+                            BRepAlgoAPI_Check(result).IsValid())
+        if not valid_result:
             continue
         stage_counts["valid"] += 1
         if (len(unique_faces(result)), len(_unique_edges(result)),
                 len(_unique_vertices(result))) != (len(faces), len(edges), len(vertices)):
             continue
         stage_counts["topology"] += 1
-        if composite and boundary_exact:
-            saw_boundary_exact = True
-        if composite and boundary_exact and not numerically_smooth:
-            saw_smoothness_crease = True
-            continue
         if not boundary_exact:
             continue
         stage_counts["boundary"] += 1
-        stage_counts["smooth"] += 1
         try:
             result_vertices = _unique_vertices(result)
             _local_verify_vertex_containment(
@@ -3258,17 +3261,21 @@ def move_subobject_local(shape, kind, index, vector, target_signature=None):
         stage_counts["mapped"] += 1
         rank = tuple(sum(choice["rank"][i] for choice in choices)
                      for i in range(5))
-        accepted.append({"result": result, "rank": rank})
+        accepted.append({
+            "result": result, "rank": rank,
+            "max_jump": max((choice.get("normal_jump", 0.0) for choice in choices),
+                            default=0.0),
+        })
 
     if not accepted:
-        if has_composite and saw_boundary_exact and saw_smoothness_crease:
-            raise KernelError(
-                "local move refused: composite-natural-Coons candidates have a smoothness "
-                "crease above the strict angular gate")
         stages = ", ".join(f"{name}={count}" for name, count in stage_counts.items())
         raise KernelError(
-            "local move refused: no boundary-exact candidate made one valid airtight solid; "
+            "local move refused: no boundary-exact candidate made one valid result; "
             f"candidate stages: {stages}")
+    smooth = [candidate for candidate in accepted
+              if candidate["max_jump"] <= LOCAL_COONS_NORMAL_JUMP]
+    if smooth:
+        accepted = smooth
     accepted.sort(key=lambda candidate: candidate["rank"])
     if len(accepted) > 1:
         first, second = accepted[0]["rank"], accepted[1]["rank"]

@@ -22,8 +22,8 @@ STATUS_POLICY_REFUSED = -7
 STATUS_SMOOTHNESS_CREASE = -8
 CAP_EDIT_SESSIONS = 1 << 5
 _REFUSAL_DETAILS = {
-    1: "input is not one airtight solid",
-    2: "component index is outside the solid",
+    1: "input is neither one airtight solid nor one valid face",
+    2: "component index is outside the BRep",
     3: "selected or incident topology is degenerate",
     4: "affected boundary topology is not supported exactly",
     5: "strict selected-component containment was not preserved",

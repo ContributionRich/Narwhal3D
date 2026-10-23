@@ -248,7 +248,7 @@ def exact_face_subset(shape):
         adaptor = BRepAdaptor_Surface(face)
         if adaptor.GetType() == GeomAbs_BSplineSurface:
             surface = adaptor.BSpline()
-            if surface.UDegree() > 2 or surface.VDegree() > 2:
+            if surface.UDegree() > 8 or surface.VDegree() > 8:
                 return False
     return True
 
@@ -464,7 +464,7 @@ check(ob.local_continuity_report(base) == {"C0": 12, "G1": 9},
       f"owner continuity baseline is explicit ({ob.local_continuity_report(base)})")
 
 success_axes = {
-    ("face", 2): {0, 2},
+    ("face", 2): {0, 1, 2},
     ("edge", 20): {0, 1, 2},
     ("edge", 5): {0, 1, 2},
     ("vertex", 1): {0, 1, 2},
@@ -485,9 +485,6 @@ for (kind, index), axes in success_axes.items():
             except KernelError as exc:
                 results[key] = "refuse"
                 expected_refusal = axis not in axes and "local move refused" in str(exc)
-                if kind == "face" and index == 2 and axis == 1:
-                    expected_refusal = expected_refusal and all(
-                        word in str(exc).lower() for word in ("smoothness", "crease"))
                 check(expected_refusal,
                       f"{kind}{index} {vector} explicitly refuses outside safe matrix: {exc}")
                 continue
@@ -521,8 +518,9 @@ for sign in (1.0, -1.0):
     best_jump = min(independent_normal_jump(
         BRepAdaptor_Surface(candidate["face"]).BSpline()) for candidate in boundary_exact)
     check(boundary_exact and best_jump > ob.LOCAL_COONS_NORMAL_JUMP
-          and best_jump > math.radians(0.7),
-          f"face2 {vector} boundary-exact candidates retain measured smoothness crease "
+          and best_jump > math.radians(0.7)
+          and results[("face", 2, vector)] == "success",
+          f"face2 {vector} accepts boundary-exact candidates with measured crease "
           f"({math.degrees(best_jump):.6f} degrees)")
 
 representatives = {

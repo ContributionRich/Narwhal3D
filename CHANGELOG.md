@@ -20,6 +20,8 @@ All notable public changes will be recorded here. Narwhal 3D is an extremely ear
 - Rebuild deferred Scale1D, Scale2D, and Scale3D commits from canonical double-precision drag state instead of accumulated float32 preview matrices.
 - Keep exact `local_move` results editable on subsequent operations instead of reporting a generic curved-solid limitation.
 - Move faces, edges, and vertices on repeatedly edited and selectively filleted curved NURBS solids through the certified native OCCT core, with valid airtight results and deterministic recipe replay.
+- Allow explicitly requested direct edits to introduce a real NURBS crease when boundary, topology, mapping, validity, self-intersection, and solid airtightness certificates still pass.
+- Move points, boundary curves, and the whole surface of standalone one-face Sweep1 BReps, preserving one valid exact face and honestly reporting that an open surface is not airtight.
 - Resolve selective fillet/chamfer edges by persisted geometric signatures rather than unstable topology indices.
 - Close sub-tolerance UV trim endpoint round-off in the source-built `.3dm` BRep writer while preserving exact 3-D edges and surfaces.
 - Load source-built Rust cores from normal development launches when packaged runtime copies are absent.

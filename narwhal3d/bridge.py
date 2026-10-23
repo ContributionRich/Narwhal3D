@@ -3952,7 +3952,7 @@ def move_subobject(geom, kind, sub_id, vector, *, live=False):
                              f"{', '.join(SUBOBJECT_KINDS)}")
     source, shape = _subobject_source(geom)
     if source not in ("master", "recipe"):
-        raise ValueError("that object has no exact solid (no master and no recipe), so its "
+        raise ValueError("that object has no exact BRep (no master and no recipe), so its "
                          "parts cannot be moved exactly")
     recipe = _kernel().recipe_of(geom)
     base = _modifier_base(recipe) if isinstance(recipe, dict) else None
@@ -3980,6 +3980,13 @@ def move_subobject(geom, kind, sub_id, vector, *, live=False):
             live=live, native_only=True)
         if native_result is not None:
             return native_result
+    if len(occt.unique_faces(shape)) == 1 and not occt.is_airtight(shape):
+        # Standalone exact surfaces (including Sweep1) are one FACE rather than one SOLID.
+        # The same native/local engine rebuilds their boundary and returns one valid face;
+        # it must not pretend the intentionally open result is airtight.
+        return _move_modified_box_subobject(
+            geom, shape, kind, sub_id, vector, recipe, base, occt,
+            live=live, native_only=False)
     try:
         verts, faces, edges = occt.planar_polyhedron(shape)
     except _kernel().KernelError as e:
