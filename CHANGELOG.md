@@ -7,6 +7,7 @@ All notable public changes will be recorded here. Narwhal 3D is an extremely ear
 ### Added
 
 - Add exact Rust/OCCT local movement for all box faces, edges, and vertices, repeated edits of the resulting curved NURBS solids, axial cylinder caps, and axial circular cylinder rims.
+- Allow Sweep1 and Sweep2 rail prompts to select exact edges directly from surfaces and solids.
 - Apply Grid Snap to Gumball translation independently of Snappy/Smooth object snapping, including native U/V/W lattice snapping for free Perspective movement.
 
 ### Changed

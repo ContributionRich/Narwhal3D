@@ -614,10 +614,52 @@ class _SweepCmd(Command):
     """
     rails = 1
     preselect_names = 0     # rails and sections must be told apart; never guess from a set
+    accepts_subobjects = True
+
+    @staticmethod
+    def _selected_subobjects(ctx):
+        getter = getattr(ctx, "selected_subobjects", None)
+        if not callable(getter):
+            try:
+                from . import ui
+                getter = ui.selected_subobjects
+            except ImportError:
+                getter = None
+        try:
+            return list(getter() or []) if callable(getter) else []
+        except Exception:  # noqa: BLE001
+            return []
+
+    @staticmethod
+    def _clear_subobjects(ctx):
+        clearer = getattr(ctx, "clear_subobject_selection", None)
+        if callable(clearer):
+            try:
+                clearer()
+                return
+            except Exception:  # noqa: BLE001
+                pass
+        try:
+            from . import ui
+            ui.clear_subobject_selection()
+        except (ImportError, AttributeError):
+            pass
 
     def _feed_objects_step(self, text, ctx):
         before = self.step_index
-        out = super()._feed_objects_step(text, ctx)
+        if not text and self.step_index < self.rails:
+            selected = self._selected_subobjects(ctx)
+            edges = [(name, int(index)) for name, kind, index in selected if kind == "Edge"]
+            if len(edges) == 1 and len(selected) == 1:
+                self.args.append(("edge", edges[0][0], edges[0][1]))
+                self.step_index += 1
+                out = self.execute(ctx) if self.step_index >= len(self.steps) else (None, False)
+            elif selected:
+                return f"{self.name}: select one surface edge for this rail", False
+            else:
+                out = super()._feed_objects_step(text, ctx)
+        else:
+            out = super()._feed_objects_step(text, ctx)
         if self.step_index > before and self.step_index < len(self.steps):
             selector = getattr(ctx, "select_by_names", None)
             if callable(selector):
@@ -625,6 +667,7 @@ class _SweepCmd(Command):
                     selector([])
                 except Exception:  # noqa: BLE001
                     pass
+            self._clear_subobjects(ctx)
         return out
 
     def _curves(self, ctx):
@@ -634,11 +677,20 @@ class _SweepCmd(Command):
                                      else []) if n not in rail_names]
         rails = []
         for i, n in enumerate(rail_names):
-            g = ctx.geom_by_name(n)
+            label = n
+            if isinstance(n, tuple) and len(n) == 3 and n[0] == "edge":
+                owner = ctx.geom_by_name(n[1])
+                try:
+                    g = bridge.extract_subobject(owner, "edge", n[2])
+                except (bridge.SubObjectError, TypeError) as exc:
+                    return f"Rail surface edge is no longer valid ({exc})"
+                label = f"edge {n[2]} of {n[1]}"
+            else:
+                g = ctx.geom_by_name(n)
             if not isinstance(g, r3.Curve):
                 which = ("Rail curve is not valid" if self.rails == 1 else
                          ("First", "Second")[i] + " rail curve is not valid")
-                return f"{which} ({n!r} is not a curve)"
+                return f"{which} ({label!r} is not a curve; select a surface edge)"
             rails.append(g)
         if not section_names:
             return "no cross-section curve was selected"

@@ -15,7 +15,7 @@ The issue tracker is the live source for bounded contribution work. Current one-
 - [LockSwap](https://github.com/ContributionRich/Narwhal3D/issues/2)
 - [JoinCopy](https://github.com/ContributionRich/Narwhal3D/issues/3)
 
-Axis-based `Helix`, variable-radius `Spiral`, exact `Conic`, `Parabola`, `Hyperbola`, polyline/point-to-curve conversion, compatible `TweenCurves`, tolerance-qualified `Catenary`, C1 `HandleCurve`, and surface-control-polygon extraction now create real curve geometry with live previews where point-driven; planar `Flat` Spiral is supported. `AroundCurve` remains explicitly unavailable until its moving-frame convention is measured.
+Axis-based `Helix`, variable-radius `Spiral`, exact `Conic`, `Parabola`, `Hyperbola`, polyline/point-to-curve conversion, compatible `TweenCurves`, tolerance-qualified `Catenary`, C1 `HandleCurve`, and surface-control-polygon extraction now create real curve geometry with live previews where point-driven; planar `Flat` Spiral is supported. Sweep1 and Sweep2 rail prompts accept exact Ctrl+Shift-selected surface/solid edges as well as standalone curve objects. `AroundCurve` remains explicitly unavailable until its moving-frame convention is measured.
 
 Major missing or incomplete areas include advanced curve and surface construction, deformation tools, some solid-editing operations, advanced viewport arrangements, document/options panels, rendering features, and many less-common command options. Examples that are not currently implemented include `Bend`, `Twist`, `Taper`, `Flow`, `BlendSrf`, `FilletSrf`, `NetworkSrf`, `Patch`, `MatchSrf`, `Untrim`, and `BooleanSplit`.
 
