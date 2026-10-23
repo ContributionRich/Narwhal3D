@@ -50,6 +50,8 @@ Artwork published with Narwhal must be original or have clearly documented GPL-c
 
 - Viewport tessellation is display-only and must not become document or manufacturing geometry.
 - Exact solid operations use Open CASCADE and must preserve analytic surfaces and airtightness.
+- Box faces, edges, and vertices can be moved through the Rust/OCCT local-edit core, including repeated edits after incident faces become exact NURBS. Full-cylinder caps and circular rims support strict axial movement. Unsupported periodic/singular topology is refused rather than faceted.
+- Solid-part Gumball motion uses a smooth display-only face/edge/vertex preview; release performs one fully validated exact native solve. Non-uniform scaling of an edited NURBS solid retains exact transformed NURBS and avoids OCCT's unsafe optional face-recognition healer.
 - `.narwhal` is the built-in active project format. Its Rust-validated v1 container stores document metadata plus checksum-protected exact OCCT BReps for every analytic master; Save/Open does not depend on the optional openNURBS writer.
 - STEP remains the recommended exact solid interchange format for other CAD/CAM systems.
 - Public source includes Narwhal's bounded ONBREP helper and an exact-revision developer build recipe. Published binaries do not bundle the linked openNURBS helper while the official “no restrictions” documentation conflicts with the repository's “All Rights Reserved” license text. Some Open CASCADE multi-face solids therefore cannot yet be stored as exact `.3dm` Breps by packaged builds; the application warns rather than claiming a faceted save is exact.

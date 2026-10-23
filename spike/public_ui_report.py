@@ -224,9 +224,13 @@ def _inspect(layout_was_ready):
                   if snap_area is not None else None)
     snap_region = _window_region(snap_area) if snap_area is not None else None
     prior_grid_snap = ui.grid_snap_on()
+    prior_gumball_snappy = ui.gumball_snappy()
     snap_settings = ui.snap_settings()
     prior_disabled = snap_settings.disabled
-    grid_result = object_result = None
+    grid_result = object_result = axis_result = None
+    axis_negative = None
+    gumball_grid_distance = None
+    gumball_grid_marker = None
     try:
         ui.set_grid_snap(True)
         snap_settings.disabled = True
@@ -234,6 +238,19 @@ def _inspect(layout_was_ready):
         cursor = plane.to_world(1.2, -2.6, 5.0)
         expected_grid = plane.to_world(1.0, -3.0, 0.0)
         grid_result = ui.snap_at(snap_area, snap_space, snap_region, cursor)
+        axis_origin = plane.origin
+        axis_direction = (2.0, 0.0, 2.0)
+        axis_unit = tuple(value / (8.0 ** 0.5) for value in axis_direction)
+        axis_cursor = tuple(axis_origin[i] + 2.6 * axis_unit[i] for i in range(3))
+        axis_expected = tuple(axis_origin[i] + 3.0 * axis_unit[i] for i in range(3))
+        axis_result = ui.snap_at(
+            snap_area, snap_space, snap_region, axis_cursor,
+            grid_axis=(axis_origin, axis_direction))
+        negative_cursor = tuple(axis_origin[i] - 2.6 * axis_unit[i] for i in range(3))
+        axis_negative = ui._grid_snap_axis_point(
+            negative_cursor, (axis_origin, axis_direction), 1.0)
+        axis_negative_expected = tuple(
+            axis_origin[i] - 3.0 * axis_unit[i] for i in range(3))
         real_best = osnap.best_on_screen
         snap_settings.disabled = False
         object_point = plane.to_world(9.0, 8.0, 0.0)
@@ -246,18 +263,36 @@ def _inspect(layout_was_ready):
         clicked_off = ui.statusbar_click("grid_snap")
         clicked_on = ui.statusbar_click("grid_snap")
         state_on = ui.statusbar_state().get("grid_snap")
+        ui.set_gumball_snappy(False)
+        gumball_grid_distance = ui._gumball_grid_snap_distance(
+            {"origin": plane.origin, "axis_dir": (2.0, 0.0, 0.0)},
+            snap_area, 2.6)
+        gumball_grid_marker = ui._active_snap
     finally:
         snap_settings.disabled = prior_disabled
+        ui.set_gumball_snappy(prior_gumball_snappy)
         ui.set_grid_snap(prior_grid_snap)
     grid_ok = (grid_result is not None and grid_result.mode == "Grid"
                and all(abs(a - b) <= 1e-12
                        for a, b in zip(grid_result.point, expected_grid))
+               and axis_result is not None and axis_result.mode == "Grid"
+               and all(abs(a - b) <= 1e-12
+                       for a, b in zip(axis_result.point, axis_expected))
+               and all(abs(a - b) <= 1e-12
+                       for a, b in zip(axis_negative, axis_negative_expected))
                and object_result is not None and object_result.mode == osnap.END
                and object_result.point == object_point
                and clicked_off == "Grid Snap off" and clicked_on == "Grid Snap on"
-               and state_on is True)
-    check("Grid Snap uses Rust on the active CPlane and yields to object snaps",
-          grid_ok, f"grid={grid_result!r}, object={object_result!r}")
+               and state_on is True
+               and gumball_grid_distance == 3.0
+               and gumball_grid_marker is not None
+               and gumball_grid_marker.mode == "Grid"
+               and gumball_grid_marker.point == tuple(
+                   plane.origin[i] + (3.0 if i == 0 else 0.0) for i in range(3)))
+    check("Grid Snap uses Rust for command points and Gumball translation independently of object snaps",
+          grid_ok, f"grid={grid_result!r}, axis={axis_result!r}/{axis_negative!r}, "
+          f"object={object_result!r}, "
+          f"gumball={gumball_grid_distance!r}/{gumball_grid_marker!r}")
 
     sidebar_cells = list(getattr(ui, "_sidebar_cells", ()))
     check("left tool palette has 37 live cells", len(sidebar_cells) == 37,

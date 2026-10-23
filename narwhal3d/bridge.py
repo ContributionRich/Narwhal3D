@@ -1478,6 +1478,25 @@ def _display_density(brep) -> int:
     return 1 if _display_is_mesh_derived(brep) else 32
 
 
+def _add_master_isocurves(bm, master):
+    """Add exact-surface display isocurves as loose edges; never document topology."""
+    try:
+        polylines = _occt().surface_isocurves(master)
+    except Exception:  # noqa: BLE001
+        return bm
+    for line in polylines:
+        previous = None
+        for point in line:
+            vertex = bm.verts.new(point)
+            if previous is not None:
+                try:
+                    bm.edges.new((previous, vertex))
+                except ValueError:
+                    pass
+            previous = vertex
+    return bm
+
+
 def _master_bmesh(master):
     """The display mesh of an analytic MASTER: OCCT's tessellation, welded, smooth-shaded
     with its hard edges kept -- what the triangulated proxy used to be drawn from."""
@@ -1485,8 +1504,10 @@ def _master_bmesh(master):
     if hit is not None and hit[0] is master:
         # an Open's worker tessellated this very master (`prefetch_document`)
         edges = _rows2(hit[3]) if len(hit) > 3 and hit[3] is not None else None
-        return _tessellation_bmesh(_rows3(hit[1]), _rows3(hit[2]), edges)
-    return _tessellation_bmesh(*display_tessellation(master))
+        bm = _tessellation_bmesh(_rows3(hit[1]), _rows3(hit[2]), edges)
+    else:
+        bm = _tessellation_bmesh(*display_tessellation(master))
+    return _add_master_isocurves(bm, master)
 
 
 def display_tessellation(master):
@@ -3769,7 +3790,7 @@ def _move_modified_box_face(geom, shape, selected, vector, recipe, base, occt):
 
 
 def _move_modified_box_subobject(geom, shape, kind, sub_id, vector, recipe, _base, occt,
-                                 live=False):
+                                 live=False, native_only=False):
     """Move only the selected final B-rep component; stretch its incident topology."""
     target = occt.local_subobject_signature(shape, kind, sub_id)
     updated_recipe = {"kind": "local_move", "a": recipe, "component": kind,
@@ -3790,6 +3811,8 @@ def _move_modified_box_subobject(geom, shape, kind, sub_id, vector, recipe, _bas
     elif result is not None and not result.unavailable:
         raise ValueError(result.detail or
                          f"native local move failed ({result.status}, {result.refusal_reason})")
+    elif native_only:
+        return None
     else:
         try:
             solid = occt.move_subobject_local(shape, kind, sub_id, vector, target)
@@ -3828,6 +3851,12 @@ def _move_extruded_cap(geom, shape, kind, sub_id, vector, occt, live=False):
                     geom, shape, selected, vector, recipe, base, occt)
         return _move_modified_box_subobject(
             geom, shape, kind, sub_id, vector, recipe, base, occt, live=live)
+    if recipe_kind == "cylinder" and kind == "edge":
+        native_result = _move_modified_box_subobject(
+            geom, shape, kind, sub_id, vector, recipe, base, occt,
+            live=live, native_only=True)
+        if native_result is not None:
+            return native_result
     if kind != "face":
         raise ValueError("moving an edge or vertex of this CURVED solid is not implemented "
                          "yet; only a filleted box recipe can be replayed exactly")
@@ -3919,21 +3948,18 @@ def move_subobject(geom, kind, sub_id, vector, *, live=False):
     from. Pick a point to move to." The neighbouring faces follow, staying attached.
     `kind` is one of `SUBOBJECT_KINDS` and `sub_id` is 's id (`subobject_parts`).
 
-    Returns a NEW proxy, with its master registered and a ``polyhedron`` recipe, so it
-    survives save + reload. The caller puts it in place of the old object
-    (`NarwhalModel.replace_geometry`) and must re-read the sub-object ids, which change.
-    `geom` is not modified.
+    Returns a NEW proxy with its exact master and recipe registered, so it survives save
+    + reload. The caller puts it in place of the old object (`NarwhalModel.replace_geometry`)
+    and must re-read the sub-object ids, which can change. `geom` is not modified.
 
-    BUILT for solids whose faces are all PLANES with straight edges (holes in a face are
-    fine). Every corner on the picked part moves, and every face must still be planar
-    afterwards. Raises ValueError,
-    naming the reason and changing nothing, for:
-    * a curved face or edge -- "not implemented yet";
-    * a move that would bend a face out of plane (most vertex moves do);
-    * a move that would turn the whole solid inside out, collapse a face, or make the
-      solid pass through itself (a single face reversing is NOT refused because a pocket
-      floor raised past the rim can validly become a boss whose walls face the other way);
-    * no exact solid behind `geom`, a bad kind, or an id out of range.
+    Recipe-backed boxes use the authoritative native local-move core first. A moved corner
+    may turn its three incident planes into exact BSpline surfaces; that is real boundary
+    representation geometry, not a faceted proxy. A native refusal/error is final. Only
+    when that core is unavailable does the complete compatibility path below rebuild an
+    all-planar straight-edged solid as a ``polyhedron`` recipe. Other recipe families use
+    their existing strict exact special cases. Raises ValueError, naming the reason and
+    changing nothing, when the available exact path cannot certify the result, or when no
+    exact solid exists behind `geom`; bad kinds and ids raise SubObjectError.
     """
     occt = _occt()
     if occt is None:
@@ -3945,6 +3971,32 @@ def move_subobject(geom, kind, sub_id, vector, *, live=False):
     if source not in ("master", "recipe"):
         raise ValueError("that object has no exact solid (no master and no recipe), so its "
                          "parts cannot be moved exactly")
+    recipe = _kernel().recipe_of(geom)
+    base = _modifier_base(recipe) if isinstance(recipe, dict) else None
+    if isinstance(recipe, dict) and recipe.get("kind") == "local_move":
+        current_parts = {"face": occt.unique_faces, "edge": occt._unique_edges,
+                         "vertex": occt._unique_vertices}[kind](shape)
+        i = int(sub_id)
+        if i < 1 or i > len(current_parts):
+            raise SubObjectError(f"{kind} {i} is out of range; this solid has "
+                                 f"{len(current_parts)} {kind}s numbered 1..{len(current_parts)}")
+        native_result = _move_modified_box_subobject(
+            geom, shape, kind, i, vector, recipe, base, occt,
+            live=live, native_only=True)
+        if native_result is not None:
+            return native_result
+    if isinstance(base, dict) and base.get("kind") == "box":
+        box_parts = {"face": occt.unique_faces, "edge": occt._unique_edges,
+                     "vertex": occt._unique_vertices}[kind](shape)
+        i = int(sub_id)
+        if i < 1 or i > len(box_parts):
+            raise SubObjectError(f"{kind} {i} is out of range; this solid has "
+                                 f"{len(box_parts)} {kind}s numbered 1..{len(box_parts)}")
+        native_result = _move_modified_box_subobject(
+            geom, shape, kind, i, vector, recipe, base, occt,
+            live=live, native_only=True)
+        if native_result is not None:
+            return native_result
     try:
         verts, faces, edges = occt.planar_polyhedron(shape)
     except _kernel().KernelError as e:
@@ -5644,6 +5696,48 @@ _REPRESENTATION_KEYS = ("Narwhal3D:KernelShape", "Narwhal3D:Representation",
                         "Narwhal3D:DocumentForm", "Narwhal3D:Recipe")
 
 
+def _transform_local_move_recipe(recipe, matrix, occt):
+    """Affine-transform a local-move tree by replaying it, never GTransforming its result."""
+    effective = _mat_mul(matrix, recipe.get("xform") or _IDENTITY16)
+    parent_recipe = recipe.get("a")
+    if not isinstance(parent_recipe, dict):
+        raise ValueError("the local-move recipe has no exact parent")
+    if parent_recipe.get("kind") == "local_move":
+        transformed_parent, parent_shape = _transform_local_move_recipe(
+            parent_recipe, effective, occt)
+    else:
+        transformed_parent = dict(parent_recipe)
+        transformed_parent["xform"] = _mat_mul(
+            effective, parent_recipe.get("xform") or _IDENTITY16)
+        parent_shape = occt.from_recipe(transformed_parent)
+
+    component = recipe.get("component")
+    index = int(recipe.get("index"))
+    vector = _matrix_vector(effective, recipe.get("vector") or ())
+    target = occt.local_subobject_signature(parent_shape, component, index)
+    updated = dict(recipe)
+    updated.pop("xform", None)
+    updated.update(a=transformed_parent, vector=list(vector), target=target)
+
+    native = _native_geometry()
+    result = None
+    if native is not None:
+        kinds = {"face": 1, "edge": 2, "vertex": 3}
+        result = native.move_component(
+            parent_shape, lambda: occt.shape_to_bytes(parent_shape, triangles=False),
+            kinds[component], index, vector, live=False)
+    if result is not None and result.ok:
+        shape = occt.shape_from_bytes(result.data)
+    elif result is not None and not result.unavailable:
+        raise ValueError(result.detail or
+                         f"native local move failed ({result.status}, "
+                         f"{result.refusal_reason})")
+    else:
+        shape = occt.move_subobject_local(
+            parent_shape, component, index, vector, target)
+    return updated, shape
+
+
 def _transform_nonuniform(geom, matrix):
     """`geom` under a non-similarity, as a NEW exact document object."""
     occt = _occt()
@@ -5662,12 +5756,17 @@ def _transform_nonuniform(geom, matrix):
             "this object has no exact shape, so a non-uniform scale cannot be applied "
             "exactly -- it was left unchanged")
     try:
-        moved = occt.transform(shape, matrix)
+        if recipe.get("kind") == "local_move":
+            updated, moved = _transform_local_move_recipe(recipe, matrix, occt)
+        else:
+            moved = occt.transform(shape, matrix)
+            updated = dict(recipe)
+            updated["xform"] = _mat_mul(matrix, recipe.get("xform") or _IDENTITY16)
+        if not occt.is_airtight(moved):
+            raise ValueError("the transformed result is not one valid airtight solid")
     except Exception as e:  # noqa: BLE001
         raise NonUniformTransformError(f"the non-uniform scale failed ({e}) -- the object "
                                        f"was left unchanged") from e
-    updated = dict(recipe)
-    updated["xform"] = _mat_mul(matrix, recipe.get("xform") or _IDENTITY16)
     new = occt_backed(moved, updated)
     getter = getattr(geom, "GetUserStrings", None)
     if callable(getter):

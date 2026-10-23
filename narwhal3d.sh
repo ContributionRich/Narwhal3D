@@ -21,6 +21,14 @@ case "$runtime_arch" in
   amd64|x86-64) runtime_arch=x86_64 ;;
   aarch64|armv8*) runtime_arch=arm64 ;;
 esac
+case "${runtime_platform}-${runtime_arch}" in
+  linux-x86_64) native_target=x86_64-unknown-linux-gnu ;;
+  linux-arm64) native_target=aarch64-unknown-linux-gnu ;;
+  macos-x86_64) native_target=x86_64-apple-darwin ;;
+  macos-arm64) native_target=aarch64-apple-darwin ;;
+  windows-x86_64) native_target=x86_64-pc-windows-msvc ;;
+  *) native_target= ;;
+esac
 
 # Prefer the patched application runtime when it is available, then the stock bundle.
 if [ "$runtime_platform" = macos ]; then
@@ -66,9 +74,13 @@ case "$runtime_platform" in
 esac
 
 set_native_library() {
-  local variable="$1" filename="$2" candidate
+  local variable="$1" filename="$2" crate="$3" candidate
   candidate="$ROOT/narwhal3d/native/$filename"
   [ -f "$candidate" ] || candidate="$LOCAL_RUNTIME_BIN/$filename"
+  if [[ ! -f "$candidate" && -n "$native_target" ]]; then
+    candidate="$ROOT/native/$crate/target/$native_target/release/$filename"
+  fi
+  [ -f "$candidate" ] || candidate="$ROOT/native/$crate/target/release/$filename"
   if [ -f "$candidate" ]; then
     printf -v "$variable" '%s' "$candidate"
     export "$variable"
@@ -78,13 +90,22 @@ set_native_library() {
 if [ -d "$LOCAL_RUNTIME_BIN" ]; then
   PATH="$LOCAL_RUNTIME_BIN${PATH:+:$PATH}"
   export PATH
-  set_native_library NARWHAL_PURE_CORE "${native_prefix}narwhal_pure_core${native_suffix}"
-  set_native_library NARWHAL_SELECTION_CORE "${native_prefix}narwhal_selection_core${native_suffix}"
-  set_native_library NARWHAL_CDR_CORE "${native_prefix}narwhal_cdr_core${native_suffix}"
-  set_native_library NARWHAL_GEOMETRY_CORE "${native_prefix}narwhal_geometry_core${native_suffix}"
-  set_native_library NARWHAL_PLATFORM_CORE "${native_prefix}narwhal_platform_core${native_suffix}"
   [ ! -x "$LOCAL_RUNTIME_BIN/$document_core_name" ] || \
     export NARWHAL_DOCUMENT_CORE="$LOCAL_RUNTIME_BIN/$document_core_name"
+fi
+set_native_library NARWHAL_PURE_CORE "${native_prefix}narwhal_pure_core${native_suffix}" pure_core
+set_native_library NARWHAL_SELECTION_CORE "${native_prefix}narwhal_selection_core${native_suffix}" selection_core
+set_native_library NARWHAL_CDR_CORE "${native_prefix}narwhal_cdr_core${native_suffix}" cdr_core
+set_native_library NARWHAL_GEOMETRY_CORE "${native_prefix}narwhal_geometry_core${native_suffix}" geometry_core
+set_native_library NARWHAL_PLATFORM_CORE "${native_prefix}narwhal_platform_core${native_suffix}" platform_core
+
+if [[ "${NARWHAL3D_LAUNCHER_TEST:-}" == native-paths ]]; then
+  printf 'NARWHAL_PURE_CORE=%s\n' "${NARWHAL_PURE_CORE:-}"
+  printf 'NARWHAL_SELECTION_CORE=%s\n' "${NARWHAL_SELECTION_CORE:-}"
+  printf 'NARWHAL_CDR_CORE=%s\n' "${NARWHAL_CDR_CORE:-}"
+  printf 'NARWHAL_GEOMETRY_CORE=%s\n' "${NARWHAL_GEOMETRY_CORE:-}"
+  printf 'NARWHAL_PLATFORM_CORE=%s\n' "${NARWHAL_PLATFORM_CORE:-}"
+  exit 0
 fi
 BOOTSTRAP="${ROOT}/launch/bootstrap.py"
 WELCOME="${ROOT}/artifacts/welcome/${runtime_platform}-${runtime_arch}/narwhal-welcome"

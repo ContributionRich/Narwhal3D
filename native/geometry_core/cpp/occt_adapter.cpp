@@ -22,6 +22,7 @@
 #include <BRepGProp.hxx>
 #include <BRepPrimAPI_MakeBox.hxx>
 #include <BRepPrimAPI_MakeCone.hxx>
+#include <BRepPrimAPI_MakeCylinder.hxx>
 #include <BRepPrimAPI_MakeTorus.hxx>
 #include <BRepTools.hxx>
 #include <BRepTools_WireExplorer.hxx>
@@ -58,6 +59,8 @@
 #include <TopoDS_Vertex.hxx>
 #include <TopoDS_Wire.hxx>
 #include <gp_Ax2.hxx>
+#include <gp_Circ.hxx>
+#include <gp_Cylinder.hxx>
 #include <gp_Dir.hxx>
 #include <gp_Pnt.hxx>
 #include <gp_Pnt2d.hxx>
@@ -1332,6 +1335,140 @@ MappingChecks verify_mapped_topology(
   return checks;
 }
 
+struct CylinderCapPlan {
+  int cap_face = -1;
+  int lateral_face = -1;
+  FaceOption option;
+};
+
+std::optional<CylinderCapPlan> analytic_cylinder_cap_plan(
+    const ShapeMap& faces,
+    const ShapeMap& edges,
+    const std::vector<std::vector<int>>& face_edges,
+    const int selected_face,
+    const Point& vector,
+    const Tolerances& tolerances) {
+  if (faces.Extent() != 3 || edges.Extent() != 3 || selected_face < 0 ||
+      selected_face >= faces.Extent() || face_edges[selected_face].size() != 1) {
+    return std::nullopt;
+  }
+  const TopoDS_Face cap = TopoDS::Face(faces.FindKey(selected_face + 1));
+  if (BRepAdaptor_Surface(cap, true).GetType() != GeomAbs_Plane) {
+    return std::nullopt;
+  }
+  const int selected_rim = face_edges[selected_face].front();
+  BRepAdaptor_Curve rim(TopoDS::Edge(edges.FindKey(selected_rim + 1)));
+  if (rim.GetType() != GeomAbs_Circle) {
+    return std::nullopt;
+  }
+
+  int lateral_index = -1;
+  int plane_count = 0;
+  for (int index = 0; index < faces.Extent(); ++index) {
+    const GeomAbs_SurfaceType type =
+        BRepAdaptor_Surface(TopoDS::Face(faces.FindKey(index + 1)), true).GetType();
+    if (type == GeomAbs_Plane) {
+      ++plane_count;
+    } else if (type == GeomAbs_Cylinder && lateral_index < 0) {
+      lateral_index = index;
+    } else {
+      return std::nullopt;
+    }
+  }
+  if (plane_count != 2 || lateral_index < 0 || face_edges[lateral_index].size() != 3 ||
+      std::find(face_edges[lateral_index].begin(), face_edges[lateral_index].end(),
+                selected_rim) == face_edges[lateral_index].end()) {
+    return std::nullopt;
+  }
+
+  const TopoDS_Face lateral = TopoDS::Face(faces.FindKey(lateral_index + 1));
+  int circle_count = 0;
+  int closed_line_count = 0;
+  for (const int edge_index : face_edges[lateral_index]) {
+    const TopoDS_Edge edge = TopoDS::Edge(edges.FindKey(edge_index + 1));
+    const GeomAbs_CurveType type = BRepAdaptor_Curve(edge).GetType();
+    if (type == GeomAbs_Circle) {
+      ++circle_count;
+    } else if (type == GeomAbs_Line && BRep_Tool::IsClosed(edge, lateral)) {
+      ++closed_line_count;
+    } else {
+      return std::nullopt;
+    }
+  }
+  if (circle_count != 2 || closed_line_count != 1) {
+    return std::nullopt;
+  }
+
+  BRepAdaptor_Surface surface(lateral, true);
+  const gp_Cylinder cylinder = surface.Cylinder();
+  const gp_Dir axis = cylinder.Axis().Direction();
+  const gp_Vec axis_vector(axis);
+  const gp_Vec translation(vector[0], vector[1], vector[2]);
+  const double axial = translation.Dot(axis_vector);
+  const gp_Vec residual = translation - axial * axis_vector;
+  if (residual.Magnitude() > tolerances.compare) {
+    return std::nullopt;
+  }
+
+  const gp_Circ circle = rim.Circle();
+  if (std::abs(circle.Radius() - cylinder.Radius()) > tolerances.compare ||
+      std::abs(std::abs(circle.Axis().Direction().Dot(axis)) - 1.0) > 1.0e-10) {
+    return std::nullopt;
+  }
+  const double selected_v = gp_Vec(cylinder.Location(), circle.Location()).Dot(axis_vector);
+  const double first_v = surface.FirstVParameter();
+  const double last_v = surface.LastVParameter();
+  const bool at_first = std::abs(selected_v - first_v) <= tolerances.compare;
+  const bool at_last = std::abs(selected_v - last_v) <= tolerances.compare;
+  if (at_first == at_last) {
+    return std::nullopt;
+  }
+  const double new_first = at_first ? first_v + axial : first_v;
+  const double new_last = at_last ? last_v + axial : last_v;
+  if (new_last - new_first <= tolerances.build) {
+    refuse(kReasonContainment);
+  }
+
+  BRepBuilderAPI_MakeFace maker(cylinder, surface.FirstUParameter(),
+                                surface.LastUParameter(), new_first, new_last);
+  if (!maker.IsDone()) {
+    refuse(kReasonNoCandidate);
+  }
+  TopoDS_Face rebuilt = maker.Face();
+  rebuilt.Orientation(lateral.Orientation());
+  FaceOption option;
+  option.face = rebuilt;
+  option.reconstructed = true;
+  return CylinderCapPlan{selected_face, lateral_index, std::move(option)};
+}
+
+std::optional<CylinderCapPlan> analytic_cylinder_rim_plan(
+    const ShapeMap& faces,
+    const ShapeMap& edges,
+    const std::vector<std::vector<int>>& face_edges,
+    const int selected_edge,
+    const Point& vector,
+    const Tolerances& tolerances) {
+  if (selected_edge < 0 || selected_edge >= edges.Extent() ||
+      BRepAdaptor_Curve(TopoDS::Edge(edges.FindKey(selected_edge + 1))).GetType() !=
+          GeomAbs_Circle) {
+    return std::nullopt;
+  }
+  int cap_face = -1;
+  for (int index = 0; index < faces.Extent(); ++index) {
+    if (face_edges[index].size() == 1 && face_edges[index].front() == selected_edge &&
+        BRepAdaptor_Surface(TopoDS::Face(faces.FindKey(index + 1)), true).GetType() ==
+            GeomAbs_Plane) {
+      if (cap_face >= 0) {
+        return std::nullopt;
+      }
+      cap_face = index;
+    }
+  }
+  return cap_face < 0 ? std::nullopt : analytic_cylinder_cap_plan(
+      faces, edges, face_edges, cap_face, vector, tolerances);
+}
+
 void certificate_from_inspection(const AdapterInspection& inspection,
                                  AdapterMoveCertificate& certificate) {
   certificate.valid = inspection.valid;
@@ -1444,16 +1581,27 @@ TopoDS_Shape move_component(const MoveSource& source,
     }
   }
 
+  const std::optional<CylinderCapPlan> cylinder_cap = kind == 1
+      ? analytic_cylinder_cap_plan(faces, edges, face_edges, selected_index, vector, tolerances)
+      : kind == 2
+          ? analytic_cylinder_rim_plan(
+                faces, edges, face_edges, selected_index, vector, tolerances)
+          : std::nullopt;
+
   std::vector<std::vector<FaceOption>> face_options;
   bool has_composite = false;
   std::uint64_t candidate_count = 1;
   for (int face_index = 0; face_index < faces.Extent(); ++face_index) {
     const TopoDS_Face face = TopoDS::Face(faces.FindKey(face_index + 1));
     std::vector<FaceOption> options;
-    if (kind == 1 && face_index == selected_index) {
+    if ((kind == 1 && face_index == selected_index) ||
+        (cylinder_cap.has_value() && face_index == cylinder_cap->cap_face)) {
       const TopoDS_Shape moved_face = BRepBuilderAPI_Transform(
           face, translation_transform(vector), true).Shape();
       options.push_back(FaceOption{TopoDS::Face(moved_face)});
+    } else if (cylinder_cap.has_value() &&
+               face_index == cylinder_cap->lateral_face) {
+      options.push_back(cylinder_cap->option);
     } else if (changed_faces.count(face_index) != 0) {
       const std::vector<TopoDS_Edge> boundary = boundary_edges(
           face, edges, replacements, vertices, moved, vector, tolerances.build,
@@ -1747,6 +1895,55 @@ TopoDS_Shape move_component(const MoveSource& source,
   certificate.verification_failure_stage = 0;
   certificate.verification_failure_detail = 0;
   return best.result;
+}
+
+std::tuple<TopoDS_Shape, std::uint64_t, std::uint64_t,
+           std::uint64_t, std::uint64_t> make_cylinder_fixture() {
+  const gp_Pnt origin(3.0, -2.0, 1.0);
+  const gp_Dir direction(1.0, 2.0, 3.0);
+  const TopoDS_Shape shape =
+      BRepPrimAPI_MakeCylinder(gp_Ax2(origin, direction), 2.0, 6.0).Shape();
+  if (!is_airtight(shape)) {
+    throw std::runtime_error("cylinder fixture is not airtight");
+  }
+  ShapeMap faces;
+  ShapeMap edges;
+  map_shapes(shape, TopAbs_FACE, faces);
+  map_shapes(shape, TopAbs_EDGE, edges);
+  std::uint64_t lower = 0;
+  std::uint64_t upper = 0;
+  double minimum = std::numeric_limits<double>::infinity();
+  double maximum = -std::numeric_limits<double>::infinity();
+  for (int index = 1; index <= faces.Extent(); ++index) {
+    const TopoDS_Face face = TopoDS::Face(faces.FindKey(index));
+    if (BRepAdaptor_Surface(face, true).GetType() != GeomAbs_Plane) {
+      continue;
+    }
+    GProp_GProps properties;
+    BRepGProp::SurfaceProperties(face, properties, 1.0e-10);
+    const double along = gp_Vec(origin, properties.CentreOfMass()).Dot(gp_Vec(direction));
+    if (along < minimum) {
+      minimum = along;
+      lower = static_cast<std::uint64_t>(index);
+    }
+    if (along > maximum) {
+      maximum = along;
+      upper = static_cast<std::uint64_t>(index);
+    }
+  }
+  if (lower == 0 || upper == 0 || lower == upper) {
+    throw std::runtime_error("cylinder fixture cap faces are unavailable");
+  }
+  const std::vector<int> lower_edges = face_edge_indices(
+      TopoDS::Face(faces.FindKey(static_cast<int>(lower))), edges);
+  const std::vector<int> upper_edges = face_edge_indices(
+      TopoDS::Face(faces.FindKey(static_cast<int>(upper))), edges);
+  if (lower_edges.size() != 1 || upper_edges.size() != 1) {
+    throw std::runtime_error("cylinder fixture rim edges are unavailable");
+  }
+  return {shape, lower, upper,
+          static_cast<std::uint64_t>(lower_edges.front() + 1),
+          static_cast<std::uint64_t>(upper_edges.front() + 1)};
 }
 
 std::pair<TopoDS_Shape, std::uint64_t> make_surface_family_fixture(
@@ -2113,6 +2310,37 @@ extern "C" std::int32_t narwhal_occt_adapter_move_component(
     return kUnexpectedFailure;
   } catch (...) {
     certificate->status = kUnexpectedFailure;
+    return kUnexpectedFailure;
+  }
+}
+
+extern "C" std::int32_t narwhal_occt_adapter_make_cylinder_fixture(
+    std::uint8_t* const output, const std::size_t capacity,
+    std::size_t* const required, std::uint64_t* const lower_face,
+    std::uint64_t* const upper_face, std::uint64_t* const lower_edge,
+    std::uint64_t* const upper_edge) noexcept {
+  if (required == nullptr || lower_face == nullptr || upper_face == nullptr ||
+      lower_edge == nullptr || upper_edge == nullptr ||
+      (capacity != 0 && output == nullptr)) {
+    return kInvalidArgument;
+  }
+  *required = 0;
+  *lower_face = 0;
+  *upper_face = 0;
+  *lower_edge = 0;
+  *upper_edge = 0;
+  try {
+    auto [shape, lower, upper, lower_rim, upper_rim] = make_cylinder_fixture();
+    *lower_face = lower;
+    *upper_face = upper;
+    *lower_edge = lower_rim;
+    *upper_edge = upper_rim;
+    return copy_serialized(serialize_shape(shape), output, capacity, required);
+  } catch (const Standard_Failure&) {
+    return kKernelFailure;
+  } catch (const std::exception&) {
+    return kUnexpectedFailure;
+  } catch (...) {
     return kUnexpectedFailure;
   }
 }

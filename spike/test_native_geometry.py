@@ -182,7 +182,8 @@ class NativeGeometryBoundaryTests(unittest.TestCase):
         bridge_source = (ROOT / "narwhal3d" / "bridge.py").read_text()
         ui_source = (ROOT / "narwhal3d" / "ui.py").read_text()
         self.assertIn("native.move_component(", bridge_source)
-        self.assertIn("kind.lower(), sub_id, vec, live=True", ui_source)
+        self.assertNotIn("live=True", ui_source)
+        self.assertIn("new = bridge.move_subobject(st.get(\"brep_geom\")", ui_source)
 
     def test_real_library_moves_occt_box_bytes(self):
         configured = self.old_env

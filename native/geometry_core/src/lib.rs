@@ -210,6 +210,16 @@ extern "C" {
         certificate: *mut NarwhalLocalMoveCertificateV3,
     ) -> i32;
     #[cfg(test)]
+    fn narwhal_occt_adapter_make_cylinder_fixture(
+        output: *mut u8,
+        capacity: usize,
+        required: *mut usize,
+        lower_face: *mut u64,
+        upper_face: *mut u64,
+        lower_edge: *mut u64,
+        upper_edge: *mut u64,
+    ) -> i32;
+    #[cfg(test)]
     fn narwhal_occt_adapter_make_surface_family_fixture(
         family: u32,
         output: *mut u8,
@@ -909,6 +919,32 @@ mod tests {
         }
     }
 
+    unsafe fn make_cylinder_fixture() -> (Vec<u8>, u64, u64, u64, u64) {
+        let mut lower_face = 0_u64;
+        let mut upper_face = 0_u64;
+        let mut lower_edge = 0_u64;
+        let mut upper_edge = 0_u64;
+        let bytes = unsafe {
+            exact_bytes_from_two_pass(|output, capacity| {
+                let mut required = 0usize;
+                let status = narwhal_occt_adapter_make_cylinder_fixture(
+                    output,
+                    capacity,
+                    &mut required,
+                    &mut lower_face,
+                    &mut upper_face,
+                    &mut lower_edge,
+                    &mut upper_edge,
+                );
+                match status {
+                    ADAPTER_OK | ADAPTER_BUFFER_TOO_SMALL => required as i64,
+                    _ => adapter_error(status),
+                }
+            })
+        };
+        (bytes, lower_face, upper_face, lower_edge, upper_edge)
+    }
+
     unsafe fn make_surface_family_fixture(family: u32) -> (Vec<u8>, u64) {
         let mut selected_face = 0_u64;
         let bytes = unsafe {
@@ -1348,6 +1384,196 @@ mod tests {
             (6, 3, 1)
         );
         assert_eq!(inspection.bspline_faces, 0);
+    }
+
+    #[test]
+    fn axial_cylinder_cap_moves_preserve_one_exact_cylinder() {
+        let (fixture, lower, upper, _lower_edge, _upper_edge) = unsafe { make_cylinder_fixture() };
+        let baseline = unsafe { inspect(&fixture) };
+        assert_eq!((baseline.valid, baseline.airtight), (1, 1));
+        assert_eq!(
+            (
+                baseline.face_count,
+                baseline.edge_count,
+                baseline.vertex_count
+            ),
+            (3, 3, 2)
+        );
+        assert_eq!((baseline.plane_faces, baseline.cylinder_faces), (2, 1));
+        let axis = [
+            1.0 / 14.0_f64.sqrt(),
+            2.0 / 14.0_f64.sqrt(),
+            3.0 / 14.0_f64.sqrt(),
+        ];
+        let area = std::f64::consts::PI * 4.0;
+        for (face, sign) in [(lower, -1.0), (lower, 1.0), (upper, -1.0), (upper, 1.0)] {
+            let distance = if face == lower {
+                -sign * 0.5
+            } else {
+                sign * 0.5
+            };
+            let vector = axis.map(|value| value * distance);
+            let (moved, certificate) = unsafe { move_once(&fixture, COMPONENT_FACE, face, vector) };
+            assert_certificate(&certificate, &baseline, COMPONENT_FACE);
+            let after = unsafe { inspect(&moved) };
+            assert_eq!((after.valid, after.airtight), (1, 1));
+            assert_eq!(
+                (after.face_count, after.edge_count, after.vertex_count),
+                (3, 3, 2)
+            );
+            assert_eq!((after.plane_faces, after.cylinder_faces), (2, 1));
+            let expected_height = if face == lower {
+                6.0 - distance
+            } else {
+                6.0 + distance
+            };
+            assert!((after.volume - area * expected_height).abs() <= 1.0e-8);
+        }
+    }
+
+    #[test]
+    fn cylinder_cap_special_case_refuses_radial_and_collapsing_moves() {
+        let (fixture, lower, upper, _lower_edge, _upper_edge) = unsafe { make_cylinder_fixture() };
+        for (face, vector) in [
+            (lower, [0.5, 0.0, 0.0]),
+            (
+                upper,
+                [
+                    -6.0 / 14.0_f64.sqrt(),
+                    -12.0 / 14.0_f64.sqrt(),
+                    -18.0 / 14.0_f64.sqrt(),
+                ],
+            ),
+        ] {
+            let mut certificate = NarwhalLocalMoveCertificateV3::default();
+            let status = unsafe {
+                narwhal_geometry_core_move_component_brep(
+                    fixture.as_ptr(),
+                    fixture.len(),
+                    COMPONENT_FACE,
+                    face,
+                    vector[0],
+                    vector[1],
+                    vector[2],
+                    ptr::null_mut(),
+                    0,
+                    &mut certificate,
+                )
+            };
+            assert!(status < 0);
+            assert_ne!(certificate.refusal_reason, REFUSAL_NONE);
+        }
+    }
+
+    #[test]
+    fn cylinder_cap_session_matches_stateless_commit() {
+        let (fixture, _lower, upper, _lower_edge, _upper_edge) = unsafe { make_cylinder_fixture() };
+        let axis = [
+            1.0 / 14.0_f64.sqrt(),
+            2.0 / 14.0_f64.sqrt(),
+            3.0 / 14.0_f64.sqrt(),
+        ];
+        let vector = axis.map(|value| value * 0.75);
+        let (stateless, stateless_certificate) =
+            unsafe { move_once(&fixture, COMPONENT_FACE, upper, vector) };
+        let handle = unsafe { import_session(&fixture) };
+        let (session, session_certificate) =
+            unsafe { session_move_once(handle, COMPONENT_FACE, upper, vector) };
+        assert_eq!(session, stateless);
+        assert_eq!(session_certificate, stateless_certificate);
+        assert_eq!(narwhal_geometry_core_edit_session_release(handle), 0);
+    }
+
+    #[test]
+    fn axial_cylinder_rim_moves_preserve_one_exact_cylinder() {
+        let (fixture, _lower_face, _upper_face, lower, upper) = unsafe { make_cylinder_fixture() };
+        let baseline = unsafe { inspect(&fixture) };
+        let axis = [
+            1.0 / 14.0_f64.sqrt(),
+            2.0 / 14.0_f64.sqrt(),
+            3.0 / 14.0_f64.sqrt(),
+        ];
+        let area = std::f64::consts::PI * 4.0;
+        for (edge, distance) in [(lower, -0.5), (lower, 0.5), (upper, -0.5), (upper, 0.5)] {
+            let vector = axis.map(|value| value * distance);
+            let (moved, certificate) = unsafe { move_once(&fixture, COMPONENT_EDGE, edge, vector) };
+            assert_certificate(&certificate, &baseline, COMPONENT_EDGE);
+            let after = unsafe { inspect(&moved) };
+            assert_eq!((after.valid, after.airtight), (1, 1));
+            assert_eq!(
+                (after.face_count, after.edge_count, after.vertex_count),
+                (3, 3, 2)
+            );
+            assert_eq!((after.plane_faces, after.cylinder_faces), (2, 1));
+            assert_eq!(after.bspline_faces, 0);
+            let expected_height = if edge == lower {
+                6.0 - distance
+            } else {
+                6.0 + distance
+            };
+            assert!((after.volume - area * expected_height).abs() <= 1.0e-8);
+        }
+    }
+
+    #[test]
+    fn cylinder_rim_special_case_refuses_radial_and_collapsing_moves() {
+        let (fixture, _lower_face, _upper_face, lower, upper) = unsafe { make_cylinder_fixture() };
+        for (edge, vector) in [
+            (lower, [0.5, 0.0, 0.0]),
+            (
+                lower,
+                [
+                    6.0 / 14.0_f64.sqrt(),
+                    12.0 / 14.0_f64.sqrt(),
+                    18.0 / 14.0_f64.sqrt(),
+                ],
+            ),
+            (
+                upper,
+                [
+                    -6.0 / 14.0_f64.sqrt(),
+                    -12.0 / 14.0_f64.sqrt(),
+                    -18.0 / 14.0_f64.sqrt(),
+                ],
+            ),
+        ] {
+            let mut certificate = NarwhalLocalMoveCertificateV3::default();
+            let status = unsafe {
+                narwhal_geometry_core_move_component_brep(
+                    fixture.as_ptr(),
+                    fixture.len(),
+                    COMPONENT_EDGE,
+                    edge,
+                    vector[0],
+                    vector[1],
+                    vector[2],
+                    ptr::null_mut(),
+                    0,
+                    &mut certificate,
+                )
+            };
+            assert!(status < 0);
+            assert_ne!(certificate.refusal_reason, REFUSAL_NONE);
+        }
+    }
+
+    #[test]
+    fn cylinder_rim_session_matches_stateless_commit() {
+        let (fixture, _lower_face, _upper_face, _lower, upper) = unsafe { make_cylinder_fixture() };
+        let axis = [
+            1.0 / 14.0_f64.sqrt(),
+            2.0 / 14.0_f64.sqrt(),
+            3.0 / 14.0_f64.sqrt(),
+        ];
+        let vector = axis.map(|value| value * 0.75);
+        let (stateless, stateless_certificate) =
+            unsafe { move_once(&fixture, COMPONENT_EDGE, upper, vector) };
+        let handle = unsafe { import_session(&fixture) };
+        let (session, session_certificate) =
+            unsafe { session_move_once(handle, COMPONENT_EDGE, upper, vector) };
+        assert_eq!(session, stateless);
+        assert_eq!(session_certificate, stateless_certificate);
+        assert_eq!(narwhal_geometry_core_edit_session_release(handle), 0);
     }
 
     #[test]

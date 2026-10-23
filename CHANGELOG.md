@@ -4,6 +4,19 @@ All notable public changes will be recorded here. Narwhal 3D is an extremely ear
 
 ## Unreleased
 
+### Added
+
+- Add exact Rust/OCCT local movement for all box faces, edges, and vertices, repeated edits of the resulting curved NURBS solids, axial cylinder caps, and axial circular cylinder rims.
+- Apply Grid Snap to Gumball translation independently of Snappy/Smooth object snapping.
+
+### Fixed
+
+- Keep solid-part dragging smooth with a display-only translated face/edge/vertex preview and perform one fully certified exact Rust/OCCT solve on release.
+- Prevent a point-edited solid followed by Gumball scaling from entering OCCT's crash-prone optional `ShapeFix_Shape` recognition pass; the exact transformed NURBS must still be valid and airtight.
+- Rebuild deferred Scale1D, Scale2D, and Scale3D commits from canonical double-precision drag state instead of accumulated float32 preview matrices.
+- Keep exact `local_move` results editable on subsequent operations instead of reporting a generic curved-solid limitation.
+- Load source-built Rust cores from normal development launches when packaged runtime copies are absent.
+
 ## 0.4.4 — 2026-10-22
 
 ### Fixed

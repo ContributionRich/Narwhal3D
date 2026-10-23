@@ -128,8 +128,9 @@ check(set(required_docs) <= public and "docs/images/bugreport.png" in public
       "the public allowlist includes platform build guides and their focused gates")
 check({"spike/test_picture.py", "spike/test_cmdbar_hits.py",
        "spike/test_extrude_distance.py", "spike/test_extrude_options.py",
-       "spike/test_picture_display.py", "spike/test_gumball_region_extrude.py"} <= public,
-      "the public allowlist includes regressions for the post-0.3 interaction fixes")
+       "spike/test_picture_display.py", "spike/test_gumball_region_extrude.py",
+       "spike/test_bug102_live.py", "spike/test_local_move_scale.py"} <= public,
+      "the public allowlist includes regressions for interaction, exact local moves, and scaling")
 check({"native/welcome/.gitignore", "native/welcome/Cargo.lock",
        "native/welcome/Cargo.toml", "native/welcome/src/main.rs",
        "native/welcome/src/native_stacking.rs", "spike/test_welcome.py"} <= public

@@ -85,6 +85,9 @@ if command -v cargo >/dev/null 2>&1; then
         run "Rust geometry-core Python boundary" env \
             NARWHAL_GEOMETRY_CORE="$ROOT/native/geometry_core/target/release/libnarwhal_geometry_core.so" \
             LD_LIBRARY_PATH="$OCCT_LIBS" "$PYTHON" spike/test_native_geometry.py
+        run "Rust geometry-core local-move scale" env \
+            NARWHAL_GEOMETRY_CORE="$ROOT/native/geometry_core/target/release/libnarwhal_geometry_core.so" \
+            LD_LIBRARY_PATH="$OCCT_LIBS" "$PYTHON" spike/test_local_move_scale.py
         run "Rust platform-core format" cargo fmt --manifest-path native/platform_core/Cargo.toml --check
         run "Rust platform-core Clippy" cargo clippy \
             --manifest-path native/platform_core/Cargo.toml --all-targets -- -D warnings
@@ -193,6 +196,7 @@ BLENDER_SUITES=(
     spike/test_picture.py
     spike/test_picture_display.py
     spike/test_gumball_region_extrude.py
+    spike/test_bug102_live.py
     spike/test_control_point_osnap.py
     spike/test_sweep.py
     spike/ui_smoke.py

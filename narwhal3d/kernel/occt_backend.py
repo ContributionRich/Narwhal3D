@@ -1097,7 +1097,7 @@ def cap_planar_holes(shape):
         raise KernelError(f"cap failed: {e}") from e
 
 
-def transform(shape, matrix):
+def transform(shape, matrix, *, recognise=True):
     """`shape` moved by a row-major 4x4 `matrix` (16 floats, or 4 rows of 4).
 
     Mirrors `bridge.to_plane`: our primitives are built canonically at the origin in world
@@ -1127,7 +1127,7 @@ def transform(shape, matrix):
             f"only affine transforms can be applied to a solid; this matrix's last row "
             f"is {tuple(last)}, not (0, 0, 0, 1)")
     if not is_similarity(m):
-        return _general_transform(shape, m)
+        return _general_transform(shape, m, recognise=recognise)
     trsf = gp_Trsf()
     trsf.SetValues(m[0], m[1], m[2], m[3],
                    m[4], m[5], m[6], m[7],
@@ -1157,7 +1157,7 @@ def is_similarity(m, tol=1e-12):
                for i in range(3) for j in range(3))
 
 
-def _general_transform(shape, m):
+def _general_transform(shape, m, *, recognise=True):
     """Apply a non-similarity affine map (non-uniform scale or shear) exactly through
     `BRepBuilderAPI_GTransform` (`gp_GTrsf`).
 
@@ -1194,7 +1194,7 @@ def _general_transform(shape, m):
         raise KernelError(f"could not apply the non-uniform transform: {e}") from e
     # MEASURED: a MIRRORING one (det < 0, scale (-2,1,1)) comes back correctly OUTWARD from
     # GTransform (volume +128 for a 4-cube), so no orientation fix-up is needed here.
-    return _recognise_faces(out)
+    return _recognise_faces(out) if recognise else out
 
 
 def _aligned_plane(ana, bs):
@@ -1772,6 +1772,47 @@ def boolean(shape_a, shape_b, operation):
 # --------------------------------------------------------------------------
 # Airtightness -- asserted, not assumed
 # --------------------------------------------------------------------------
+
+def surface_isocurves(shape, samples=33):
+    """Display-only midpoint U/V isocurves of exact BSpline faces, clipped by trims."""
+    _need()
+    from OCP.BRepAdaptor import BRepAdaptor_Surface
+    from OCP.BRepClass import BRepClass_FaceClassifier
+    from OCP.BRepTools import BRepTools
+    from OCP.GeomAbs import GeomAbs_BSplineSurface
+    from OCP.TopAbs import TopAbs_IN, TopAbs_ON
+    from OCP.gp import gp_Pnt2d
+
+    count = max(3, min(int(samples), 257))
+    out = []
+    for face in unique_faces(shape):
+        adaptor = BRepAdaptor_Surface(face, True)
+        if adaptor.GetType() != GeomAbs_BSplineSurface:
+            continue
+        u0, u1, v0, v1 = BRepTools.UVBounds_s(face)
+        if not (u1 > u0 and v1 > v0):
+            continue
+        for direction, fixed, lo, hi in (
+                (0, 0.5 * (u0 + u1), v0, v1),
+                (1, 0.5 * (v0 + v1), u0, u1)):
+            line = []
+            for index in range(count):
+                varying = lo + (hi - lo) * index / (count - 1)
+                u, v = ((fixed, varying) if direction == 0
+                        else (varying, fixed))
+                state = BRepClass_FaceClassifier(
+                    face, gp_Pnt2d(u, v), 1e-9).State()
+                if state not in (TopAbs_IN, TopAbs_ON):
+                    if len(line) >= 2:
+                        out.append(line)
+                    line = []
+                    continue
+                point = adaptor.Value(u, v)
+                line.append((point.X(), point.Y(), point.Z()))
+            if len(line) >= 2:
+                out.append(line)
+    return out
+
 
 def is_valid(shape):
     """The kernel's own verdict on the shape's topology/geometry.

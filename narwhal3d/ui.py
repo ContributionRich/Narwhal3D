@@ -7216,10 +7216,11 @@ def _command_hover(cmd, mouse_x, mouse_y, alt=False, shift=False):
     if region is not None:
         # the SAME constraint as the click handler, so the snap marker and the
         # preview show exactly where the pick will land
+        axis_constraint = _command_axis_constraint(cmd, area)
         pt = pick_point(area, sp, region,
                         mouse_x - region.x,
                         mouse_y - region.y,
-                        constraint=_command_axis_constraint(cmd, area))
+                        constraint=axis_constraint)
         # track the snap under the cursor so the marker can show
         # it BEFORE the click -- "moving the cursor near a specified
         # point on an object causes the marker to jump to that point".
@@ -7228,7 +7229,8 @@ def _command_hover(cmd, mouse_x, mouse_y, alt=False, shift=False):
         snapped = snap_at(area, sp, region, pt,
                           first_point=_snap_base(cmd) is None,
                           suspend=alt,
-                          base=_snap_base(cmd))
+                          base=_snap_base(cmd),
+                          grid_axis=axis_constraint)
         changed = set_active_snap(snapped,
                                   _pane_key(area) if area else None)
         # the preview should follow the SNAPPED point, or it would show
@@ -7956,8 +7958,9 @@ class NARWHAL_OT_command_input(Operator):
                             shift=event.shift, ctrl=event.ctrl):
                         self._redraw()
                         return {"RUNNING_MODAL"}
+                    axis_constraint = _command_axis_constraint(cmd, area)
                     pt = pick_point(area, sp, region, rx, ry,
-                                    constraint=_command_axis_constraint(cmd, area))
+                                    constraint=axis_constraint)
                     if pt is not None:
                         trim_drag_latched = (_trim_drag_command(cmd)
                                              and pick_curve_object(
@@ -7969,7 +7972,8 @@ class NARWHAL_OT_command_input(Operator):
                         snapped = snap_at(area, sp, region, pt,
                                           first_point=_snap_base(cmd) is None,
                                           suspend=event.alt,
-                                          base=_snap_base(cmd))
+                                          base=_snap_base(cmd),
+                                          grid_axis=axis_constraint)
                         if snapped is not None:
                             pt = snapped.point
                         else:
@@ -13397,8 +13401,28 @@ def forget_curve_densities():
     _retess_job.update(ppu=None, doc=None, queue=[])
 
 
+def _grid_snap_axis_point(cursor, axis_constraint, spacing):
+    """Rust-rounded signed distance on an arbitrary world axis."""
+    if cursor is None or axis_constraint is None:
+        return None
+    origin, direction = axis_constraint
+    length = math.sqrt(sum(float(value) ** 2 for value in direction))
+    if length <= 1e-15:
+        return None
+    unit = tuple(float(value) / length for value in direction)
+    distance = sum((float(cursor[i]) - float(origin[i])) * unit[i]
+                   for i in range(3))
+    snapped = native_pure.grid_snap(
+        (distance, 0.0, 0.0), (0.0, 0.0, 0.0),
+        (1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0), spacing)
+    if snapped is None:
+        return None
+    return tuple(float(origin[i]) + float(snapped[0]) * unit[i]
+                 for i in range(3))
+
+
 def snap_at(area, space, region, cursor_world, first_point=False, suspend=False,
-            exclude_names=(), base=None):
+            exclude_names=(), base=None, grid_axis=None):
     """The snap for a cursor at `cursor_world` in this pane, or None.
 
     Ties the pieces together: the pane's CPlane decides `Quad` and `Project`, the
@@ -13505,8 +13529,10 @@ def snap_at(area, space, region, cursor_world, first_point=False, suspend=False,
     settings = grid_settings_for_area(area)
     if settings is None:
         return None
-    point = native_pure.grid_snap(cursor_world, plane.origin, plane.xaxis,
-                                  plane.yaxis, plane.zaxis, settings.snap_spacing)
+    point = (_grid_snap_axis_point(cursor_world, grid_axis, settings.snap_spacing)
+             if grid_axis is not None else
+             native_pure.grid_snap(cursor_world, plane.origin, plane.xaxis,
+                                   plane.yaxis, plane.zaxis, settings.snap_spacing))
     if point is None:
         return None
     return osnap.Snap(point, "Grid", math.dist(point, cursor_world))
@@ -15059,7 +15085,7 @@ def draw_point_markers():
     drag = selection_drag_rect()
     if drag is not None and drag[0] != _pane_key(area):
         drag = None
-    highlight = bool(_selected_subobjects or _command_edge_selection_keys())
+    highlight = bool(_subobject_highlight_keys())
     hovering = hover_pick() is not None or bool(
         _gumball_drag is not None and _gumball_drag.get("ext_ghost"))
     if not doc_pts and not rows and drag is None and not highlight and not raw_polys \
@@ -15207,6 +15233,7 @@ SUBOBJECT_PICK_PX = 10.0
 #: the reference CAD application draws a selected sub-object in the same yellow it uses for a selected
 #: object (SELECT_COLOR), and this highlight is drawn OVER the wire.
 SUBOBJECT_COLOR = (1.0, 0.85, 0.0, 1.0)
+SUBOBJECT_PREVIEW_COLOR = (0.22, 0.24, 0.27, 0.85)
 
 
 def _subobject_candidates(names=None):
@@ -15783,6 +15810,64 @@ def draw_edge_command_handles(region, rv3d, shader, batch_for_shader):
                    (0.95, 0.95, 0.95, 1.0))
 
 
+def _brep_preview_wireframe(parts, part, vector):
+    """Display-only prospective edge polylines for one translated BRep part."""
+    if not parts or not part:
+        return []
+    _name, kind, sub_id = part
+    edges = list(parts.get("edges", ()))
+    vertices = dict(parts.get("vertices", ()))
+    all_points = list(vertices.values())
+    if not all_points:
+        all_points = [point for _eid, line in edges for point in line]
+    if not all_points:
+        return []
+    span = max(max(p[axis] for p in all_points) - min(p[axis] for p in all_points)
+               for axis in range(3))
+    tolerance = max(1e-8, span * 1e-7)
+
+    moved_points = []
+    selected_edge = int(sub_id) if kind == subobject.EDGE else None
+    if kind == subobject.VERTEX and int(sub_id) in vertices:
+        moved_points = [vertices[int(sub_id)]]
+    elif kind == subobject.FACE:
+        triangles = dict(parts.get("faces", ())).get(int(sub_id), ())
+        moved_points = [point for triangle in triangles for point in triangle]
+
+    def moved(point):
+        return any(math.dist(point, candidate) <= tolerance for candidate in moved_points)
+
+    delta = tuple(float(value) for value in vector)
+    result = []
+    for edge_id, source in edges:
+        line = [tuple(float(value) for value in point) for point in source]
+        if not line:
+            continue
+        if selected_edge == int(edge_id):
+            weights = [1.0] * len(line)
+        elif kind == subobject.FACE and moved(line[0]) and moved(line[-1]):
+            weights = [1.0] * len(line)
+        else:
+            first, last = moved(line[0]), moved(line[-1])
+            denominator = max(1, len(line) - 1)
+            weights = [max((1.0 - i / denominator) if first else 0.0,
+                           (i / denominator) if last else 0.0)
+                       for i in range(len(line))]
+        result.append([
+            tuple(point[axis] + weights[i] * delta[axis] for axis in range(3))
+            for i, point in enumerate(line)
+        ])
+    return result
+
+
+def _subobject_highlight_keys():
+    """Selected/command parts plus the frozen solid part owned by an active drag."""
+    keys = set(_selected_subobjects) | set(_command_edge_selection_keys())
+    if _gumball_drag is not None and _gumball_drag.get("brep_part") is not None:
+        keys.add(tuple(_gumball_drag["brep_part"]))
+    return keys
+
+
 def draw_subobject_highlight(region, rv3d, shader, batch_for_shader):
     """Draw the selected segments over the wire, in the reference CAD application's selection yellow.
 
@@ -15790,9 +15875,19 @@ def draw_subobject_highlight(region, rv3d, shader, batch_for_shader):
     runs POST_PIXEL and already has a projection to hand. A 3-D overlay would need
     its own depth handling to sit on top of the curve it highlights.
     """
-    command_edges = _command_edge_selection_keys()
-    selected_keys = set(_selected_subobjects) | set(command_edges)
+    selected_keys = _subobject_highlight_keys()
     segs = []
+    preview_segs = []
+    drag = _gumball_drag
+    if drag is not None and drag.get("brep_part") is not None:
+        part = tuple(drag["brep_part"])
+        parts = _brep_parts_all().get(part[0]) or {}
+        for line in _brep_preview_wireframe(
+                parts, part, drag.get("brep_vec") or (0.0, 0.0, 0.0)):
+            positions = [_project_2d(region, rv3d, point) for point in line]
+            for a, b in zip(positions, positions[1:]):
+                if a is not None and b is not None:
+                    preview_segs.extend(((a[0], a[1]), (b[0], b[1])))
     for key, points, _grips in _subobject_candidates(_selected_object_names_of_subobjects()):
         if key not in _selected_subobjects:
             continue
@@ -15828,6 +15923,9 @@ def draw_subobject_highlight(region, rv3d, shader, batch_for_shader):
                     q = _project_2d(region, rv3d, _sh(p))
                     if q is not None:
                         dots.append(q)
+    if preview_segs:
+        shader.uniform_float("color", SUBOBJECT_PREVIEW_COLOR)
+        batch_for_shader(shader, "LINES", {"pos": preview_segs}).draw(shader)
     if tris:
         shader.uniform_float("color", SUBOBJECT_COLOR[:3] + (0.35,))
         batch_for_shader(shader, "TRIS", {"pos": tris}).draw(shader)
@@ -20133,11 +20231,6 @@ def _brep_part_refusal(mode):
     return None
 
 
-#: application-defined: the live redraw of a part drag rebuilds the exact solid at most this often (s).
-#: Verified cost of one rebuild of a 10-face booleaned solid is a few ms, so 30 Hz keeps
-#: the drag fluid without queueing rebuilds behind the mouse.
-BREP_PART_LIVE_INTERVAL = 1.0 / 30.0
-
 
 def _brep_part_frame(default_plane):
     """Reopened : the Gumball on ONE selected FACE is aligned to that face -- its
@@ -20176,34 +20269,6 @@ def _brep_part_frame(default_plane):
         return None
 
 
-def _brep_part_live(st, force=False):
-    """Rebuild the exact solid from the drag's original geometry and running total,
-    then show it by
-    re-tessellating that one object in place. The document is not touched until release.
-    A refused move shows the solid unmoved and says why, once per new reason."""
-    import time
-    now = time.monotonic()
-    if not force and now - st.get("brep_t", 0.0) < BREP_PART_LIVE_INTERVAL:
-        return
-    st["brep_t"] = now
-    name, kind, sub_id = st["brep_part"]
-    vec = st.get("brep_vec") or (0.0, 0.0, 0.0)
-    try:
-        cand = bridge.move_subobject(
-            st["brep_geom"], kind.lower(), sub_id, vec, live=True)
-        why = None
-    except ValueError as e:
-        cand, why = None, str(e)
-    st["brep_candidate"] = (vec, cand)
-    try:
-        _rebuild_one(name, cand if cand is not None else st["brep_geom"])
-    except Exception as e:  # noqa: BLE001
-        print(f"[narwhal3d] live part redraw failed: {e!r}")
-    if why and why != st.get("brep_why"):
-        app_state.log(f"Gumball: {kind.lower()} {sub_id} of {name} cannot move there -- {why}")
-        redraw_cmdbar()
-    st["brep_why"] = why
-
 
 def _brep_part_offset():
     """The running drag's translation of a solid part (world), or None -- for the
@@ -20223,18 +20288,18 @@ def _commit_brep_part_move(st):
     fobj = _document_object(name)
     if fobj is None:
         return f"Gumball: {name} is no longer in the document"
-    done_vec, new = st.get("brep_candidate") or (None, None)
-    if new is None or done_vec != vec:
+    try:
+        # A live result intentionally has reduced validation. Release always requests the
+        # mandatory commit path, even when the preview already reached this vector.
+        new = bridge.move_subobject(st.get("brep_geom") or fobj.Geometry,
+                                    kind.lower(), sub_id, vec)
+    except ValueError as e:
+        # rule 4: the solid stays as it was (its live mesh is put back), and says why
         try:
-            new = bridge.move_subobject(st.get("brep_geom") or fobj.Geometry,
-                                        kind.lower(), sub_id, vec)
-        except ValueError as e:
-            # rule 4: the solid stays as it was (its live mesh is put back), and says why
-            try:
-                _rebuild_one(name, fobj.Geometry)
-            except Exception:  # noqa: BLE001
-                pass
-            return f"Gumball: {kind.lower()} {sub_id} of {name} was not moved -- {e}"
+            _rebuild_one(name, fobj.Geometry)
+        except Exception:  # noqa: BLE001
+            pass
+        return f"Gumball: {kind.lower()} {sub_id} of {name} was not moved -- {e}"
     try:
         app_state.ctx.note_change("Gumball")
     except Exception:  # noqa: BLE001
@@ -20359,6 +20424,15 @@ def _gumball_flush(st):
         # document commit is one canonical double-precision rotation from drag state.
         commit_xform = bridge.rotation_xform(
             st.get("total", 0.0), st["axis_dir"], st["origin"])
+    elif mode == gumball.SCALE and st.get("axis_dir") and st.get("origin"):
+        commit_xform = bridge.scale_1d_xform(
+            st.get("total", 1.0), st["axis_dir"], st["origin"])
+    elif mode == gumball.SCALE_2D and st.get("plane_axes") and st.get("origin"):
+        commit_xform = bridge.scale_2d_xform(
+            st.get("total", 1.0), *st["plane_axes"], st["origin"])
+    elif mode == gumball.SCALE_3D and st.get("origin"):
+        commit_xform = bridge.scale_3d_xform(
+            st.get("total", 1.0), st["origin"])
     try:
         commands.apply_transform(app_state.ctx, commit_xform)
     except Exception as e:  # noqa: BLE001
@@ -20547,7 +20621,10 @@ def _gumball_apply(xform):
             return False
         v = st.get("brep_vec") or (0.0, 0.0, 0.0)
         st["brep_vec"] = (v[0] + d[0], v[1] + d[1], v[2] + d[2])
-        _brep_part_live(st)
+
+        # Display-only approximation: the selected exact face/edge/vertex overlay
+        # follows this vector at mouse-event rate. The shaded source stays stable;
+        # Rust/OCCT builds and certifies the real solid once, on release.
         _tag_redraw_viewports()
         return True
     if gumball_targets_subobjects():
@@ -20577,6 +20654,43 @@ def _apply_xform_to_control_points(xform):
         return False
     return _edit_control_points("Gumball control point",
                                 lambda p: bridge.transform_point(xform, p)) > 0
+
+
+def _gumball_grid_snap_point(area, cursor):
+    """Grid-only translation snap, independent of Snappy/Smooth object snapping."""
+    if cursor is None or not grid_snap_on():
+        return None
+    settings = grid_settings_for_area(area)
+    if settings is None:
+        return None
+    plane = get_cplane(area)
+    point = native_pure.grid_snap(cursor, plane.origin, plane.xaxis,
+                                  plane.yaxis, plane.zaxis, settings.snap_spacing)
+    if point is None:
+        return None
+    return osnap.Snap(point, "Grid", math.dist(point, cursor))
+
+
+def _gumball_grid_snap_distance(st, area, distance):
+    """Rust-rounded axis distance plus the corresponding world marker point."""
+    if not grid_snap_on():
+        return None
+    settings = grid_settings_for_area(area)
+    if settings is None:
+        return None
+    point = native_pure.grid_snap(
+        (float(distance), 0.0, 0.0), (0.0, 0.0, 0.0),
+        (1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0),
+        settings.snap_spacing)
+    if point is None:
+        return None
+    snapped = float(point[0])
+    delta = gumball.translation(st["axis_dir"], snapped)
+    marker = tuple(float(st["origin"][i]) + delta[i] for i in range(3))
+    snap = osnap.Snap(marker, "Grid", abs(snapped - float(distance)))
+    if set_active_snap(snap, _pane_key(area) if area is not None else None):
+        _tag_redraw_viewports()
+    return snapped
 
 
 def _gumball_snap_point(st, area, space, region, mouse_x, mouse_y):
@@ -20678,27 +20792,16 @@ def _gumball_update(mouse_x, mouse_y, shift_held=None):
         return True
 
     if kind == gumball.MOVE:
-        d = None
-        if _gumball_snappy:
-            g_area, g_space, g_region = _area_by_pane_key(st["pane"])
-            if g_region is not None and g_space is not None:
-                snap = _gumball_snap_point(st, g_area, g_space, g_region,
-                                           mouse_x, mouse_y)
-                if snap is not None:
-                    # A move arrow is ONE-dimensional, so the snap's world POINT is
-                    # reduced to a distance along the arrow: the widget origin
-                    # travels to the snap's projection on the axis. Drag Strength is
-                    # deliberately skipped here -- see `_gumball_snap_point`.
-                    d = gumball.project_onto_axis(st["origin"], st["axis_dir"],
-                                                  snap.point)
+        raw_distance = gumball.move_distance(
+            st["axis_2d"][0], st["axis_2d"][1], st["axis_len"],
+            st["mouse0"], (mouse_x, mouse_y))
+        g_area, _g_space, _g_region = _area_by_pane_key(st["pane"])
+        d = _gumball_grid_snap_distance(st, g_area, raw_distance)
         if d is None:
-            d = gumball.move_distance(st["axis_2d"][0], st["axis_2d"][1],
-                                      st["axis_len"], st["mouse0"],
-                                      (mouse_x, mouse_y))
             # "Drag Strength -- Sets the amount of the gumball drag as a percentage
             # of mouse movement." At the documented default of 100 this is the
             # identity, so the ordinary drag is unchanged.
-            d = gumball.apply_drag_strength(d, _gumball_drag_strength)
+            d = gumball.apply_drag_strength(raw_distance, _gumball_drag_strength)
         step = d - st["last"]
         st["last"] = d
         st["total"] = d
@@ -20794,9 +20897,12 @@ def _gumball_update(mouse_x, mouse_y, shift_held=None):
                               mouse_y - region.y, st["origin"], st["axis_dir"])
         if pt is None:
             return False
-        snap = _gumball_snap_point(st, _area, space, region, mouse_x, mouse_y)
+        snap = _gumball_grid_snap_point(_area, pt)
+        if set_active_snap(snap, _pane_key(_area) if snap is not None else None):
+            _tag_redraw_viewports()
         if snap is not None:
-            # snappy moves the CENTRE onto the snap (in the plane)
+            # Grid Snap constrains translation even though plane handles deliberately
+            # ignore object snaps.
             pt = snap.point
             centre = gumball.relocated_origin(st["origin"], st.get("widget_shift"))
             delta = gumball.plane_delta(st["axis_dir"], centre, pt)
@@ -20823,7 +20929,11 @@ def _gumball_update(mouse_x, mouse_y, shift_held=None):
                         mouse_x - region.x, mouse_y - region.y)
         if pt is None:
             return False
-        snap = _gumball_snap_point(st, area, space, region, mouse_x, mouse_y)
+        snap = (_gumball_snap_point(st, area, space, region, mouse_x, mouse_y)
+                if _gumball_snappy else _gumball_grid_snap_point(area, pt))
+        if not _gumball_snappy and set_active_snap(
+                snap, _pane_key(area) if snap is not None else None):
+            _tag_redraw_viewports()
         if snap is not None:
             # Snappy free movement places the widget center on the snap point.
             pt = snap.point
