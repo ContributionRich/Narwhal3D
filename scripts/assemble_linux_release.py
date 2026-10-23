@@ -499,7 +499,8 @@ def validate_native_components(
     welcome_data = (directory / "narwhal-welcome").read_bytes()
     welcome_markers = (b"--runtime is required", b"--bootstrap is required",
                        b"NARWHAL3D_WELCOME_REQUEST", b"NARWHAL3D_VERSION",
-                       b"NARWHAL3D_RELEASES_API", b"download sha256 does not match")
+                       b"releases?per_page=20", b"download sha256 does not match",
+                       b"could not atomically replace current AppImage")
     if not all(marker in welcome_data for marker in welcome_markers):
         raise ReleaseError("native welcome executable lacks its runtime/bootstrap request contract")
     records["narwhal-welcome"]["launch_contract"] = 1

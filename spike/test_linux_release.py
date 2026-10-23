@@ -166,7 +166,8 @@ with tempfile.TemporaryDirectory(prefix="narwhal-linux-release-test-") as tempor
         if filename == "narwhal-welcome":
             path.write_bytes(
                 b"--runtime is required\0--bootstrap is required\0NARWHAL3D_WELCOME_REQUEST\0"
-                b"NARWHAL3D_VERSION\0NARWHAL3D_RELEASES_API\0download sha256 does not match")
+                b"NARWHAL3D_VERSION\0releases?per_page=20\0download sha256 does not match\0"
+                b"could not atomically replace current AppImage")
         record = {"size": path.stat().st_size, "sha256": verify.sha256_file(path)}
         if filename in expected_abis:
             record["abi"] = expected_abis[filename]

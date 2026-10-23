@@ -537,7 +537,8 @@ def verify_executables_and_imports(appdir: Path) -> None:
     if not all(marker in welcome_data for marker in
                (b"--runtime is required", b"--bootstrap is required",
                 b"NARWHAL3D_WELCOME_REQUEST", b"NARWHAL3D_VERSION",
-                b"NARWHAL3D_RELEASES_API", b"download sha256 does not match")):
+                b"releases?per_page=20", b"download sha256 does not match",
+                b"could not atomically replace current AppImage")):
         raise VerificationError("native welcome executable lacks its launch/request contract")
 
     try:

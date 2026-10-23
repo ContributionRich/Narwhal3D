@@ -123,7 +123,8 @@ def native_records(package: Path) -> dict[str, dict[str, object]]:
             data = path.read_bytes()
             markers = (b"--runtime is required", b"--bootstrap is required",
                        b"NARWHAL3D_WELCOME_REQUEST", b"NARWHAL3D_VERSION",
-                       b"NARWHAL3D_RELEASES_API", b"download sha256 does not match")
+                       b"releases?per_page=20", b"download sha256 does not match",
+                       b"Update ZIP expands beyond the safe limit")
             if not all(marker in data for marker in markers):
                 raise AssemblyError("Windows native welcome lacks its launch/request contract")
             record["launch_contract"] = 1

@@ -389,7 +389,8 @@ def verify_directory(root: Path, args: argparse.Namespace) -> None:
         if filename == "narwhal-welcome.exe":
             markers = (b"--runtime is required", b"--bootstrap is required",
                        b"NARWHAL3D_WELCOME_REQUEST", b"NARWHAL3D_VERSION",
-                       b"NARWHAL3D_RELEASES_API", b"download sha256 does not match")
+                       b"releases?per_page=20", b"download sha256 does not match",
+                       b"Update ZIP expands beyond the safe limit")
             if record.get("launch_contract") != 1 or not all(marker in data for marker in markers):
                 raise VerificationError("Windows native welcome lacks its launch/request contract")
         if filename == "narwhal_geometry_core.dll":
