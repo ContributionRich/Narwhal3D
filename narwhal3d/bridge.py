@@ -3693,15 +3693,18 @@ def _copy_geometry_user_strings(source, target):
         pass
 
 
+_REPLAYABLE_MODIFIERS = ("fillet", "chamfer", "local_move")
+
+
 def _modifier_base(recipe):
     base = recipe
-    while isinstance(base, dict) and base.get("kind") in ("fillet", "chamfer"):
+    while isinstance(base, dict) and base.get("kind") in _REPLAYABLE_MODIFIERS:
         base = base.get("a")
     return base
 
 
 def _replace_modifier_base(recipe, replacement):
-    if recipe.get("kind") not in ("fillet", "chamfer"):
+    if recipe.get("kind") not in _REPLAYABLE_MODIFIERS:
         return replacement
     updated = dict(recipe)
     updated["a"] = _replace_modifier_base(recipe["a"], replacement)
@@ -6882,10 +6885,13 @@ def bevel_edges_occt(geom, size, chamfer=False, edge_points=None, edge_indices=N
         recipe = {"kind": "chamfer" if chamfer else "fillet",
                   "size": float(size), "a": base}
         if indices is not None:
-            # Record WHICH edges, so a selectively beveled solid rebuilds identically after a
-            # reload. This relies on the operand rebuilding to the same edge ordering, which
-            # it does because it is rebuilt from the same recipe by the same kernel.
+            # Indices are only hints: native local reconstruction may return equivalent topology
+            # in a different order than recipe replay. Persist exact edge signatures so selective
+            # bevels resolve the same geometric edges after save/reload.
             recipe["edges"] = list(indices)
+            recipe["edge_targets"] = [
+                occt.local_subobject_signature(operand, "edge", index)
+                for index in indices]
         k.record_recipe(proxy, recipe)
     return proxy
 

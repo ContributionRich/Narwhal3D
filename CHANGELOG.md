@@ -19,6 +19,9 @@ All notable public changes will be recorded here. Narwhal 3D is an extremely ear
 - Prevent a point-edited solid followed by Gumball scaling from entering OCCT's crash-prone optional `ShapeFix_Shape` recognition pass; the exact transformed NURBS must still be valid and airtight.
 - Rebuild deferred Scale1D, Scale2D, and Scale3D commits from canonical double-precision drag state instead of accumulated float32 preview matrices.
 - Keep exact `local_move` results editable on subsequent operations instead of reporting a generic curved-solid limitation.
+- Move faces, edges, and vertices on repeatedly edited and selectively filleted curved NURBS solids through the certified native OCCT core, with valid airtight results and deterministic recipe replay.
+- Resolve selective fillet/chamfer edges by persisted geometric signatures rather than unstable topology indices.
+- Close sub-tolerance UV trim endpoint round-off in the source-built `.3dm` BRep writer while preserving exact 3-D edges and surfaces.
 - Load source-built Rust cores from normal development launches when packaged runtime copies are absent.
 
 ## 0.4.4 — 2026-10-22

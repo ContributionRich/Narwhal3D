@@ -36,6 +36,7 @@
 #include <GeomConvert_CurveToAnaCurve.hxx>
 #include <GeomFill_BSplineCurves.hxx>
 #include <GeomFill_FillingStyle.hxx>
+#include <GeomAPI_ProjectPointOnCurve.hxx>
 #include <Geom_BSplineCurve.hxx>
 #include <Geom_BSplineSurface.hxx>
 #include <Geom_Curve.hxx>
@@ -632,19 +633,62 @@ Handle(Geom_BSplineCurve) bspline_edge(const TopoDS_Edge& edge, const double tol
   if (last_distance < first_distance) {
     bspline->Reverse();
   }
-  return bspline;
+  Handle(Geom_BSplineCurve) detached = Handle(Geom_BSplineCurve)::DownCast(bspline->Copy());
+  if (detached.IsNull()) {
+    refuse(kReasonNoCandidate);
+  }
+  return detached;
+}
+
+void normalize_bezier_weights(const Handle(Geom_BSplineCurve)& bspline) {
+  // GeomFill combines boundary homogeneous coordinates directly. A trimmed rational
+  // Bezier may have unequal endpoint weights, so coincident geometric corners are not
+  // compatible in homogeneous space and the generated surface misses its boundaries.
+  // Scaling homogeneous pole i by factor^i is the exact projective substitution
+  // t = factor*u / (1-u+factor*u): poles stay fixed, only the parameterization changes.
+  // Normalize only clamped single-span curves; strict boundary certification remains the
+  // authority for every other rational B-spline.
+  if (!bspline->IsRational() || bspline->Degree() < 1 || bspline->NbKnots() != 2 ||
+      bspline->NbPoles() != bspline->Degree() + 1) {
+    return;
+  }
+  const double first_weight = bspline->Weight(1);
+  const double last_weight = bspline->Weight(bspline->NbPoles());
+  if (first_weight <= 0.0 || last_weight <= 0.0) {
+    return;
+  }
+  const double factor = std::pow(first_weight / last_weight, 1.0 / bspline->Degree());
+  for (int index = 1; index <= bspline->NbPoles(); ++index) {
+    bspline->SetWeight(
+        index, bspline->Weight(index) * std::pow(factor, index - 1) / first_weight);
+  }
 }
 
 std::pair<TopoDS_Face, Handle(Geom_BSplineSurface)> coons_face(
     const TopoDS_Face& source,
     const std::vector<Handle(Geom_BSplineCurve)>& curves,
-    const double tolerance) {
+    const double tolerance,
+    const bool normalize_weights = true) {
+  std::vector<Handle(Geom_BSplineCurve)> private_curves;
+  private_curves.reserve(curves.size());
+  for (const Handle(Geom_BSplineCurve)& curve : curves) {
+    private_curves.push_back(Handle(Geom_BSplineCurve)::DownCast(curve->Copy()));
+    if (private_curves.back().IsNull()) {
+      refuse(kReasonNoCandidate);
+    }
+  }
+  if (normalize_weights) {
+    for (const Handle(Geom_BSplineCurve)& curve : private_curves) {
+      normalize_bezier_weights(curve);
+    }
+  }
   Handle(Geom_BSplineSurface) surface;
-  if (curves.size() == 3) {
-    surface = GeomFill_BSplineCurves(curves[0], curves[1], curves[2], GeomFill_StretchStyle).Surface();
-  } else if (curves.size() == 4) {
-    surface = GeomFill_BSplineCurves(curves[0], curves[1], curves[2], curves[3],
+  if (private_curves.size() == 3) {
+    surface = GeomFill_BSplineCurves(private_curves[0], private_curves[1], private_curves[2],
                                      GeomFill_StretchStyle).Surface();
+  } else if (private_curves.size() == 4) {
+    surface = GeomFill_BSplineCurves(private_curves[0], private_curves[1], private_curves[2],
+                                     private_curves[3], GeomFill_StretchStyle).Surface();
   } else {
     refuse(kReasonUnsupportedBoundary);
   }
@@ -653,7 +697,10 @@ std::pair<TopoDS_Face, Handle(Geom_BSplineSurface)> coons_face(
     refuse(kReasonNoCandidate);
   }
   TopoDS_Face rebuilt = maker.Face();
-  if (surface->UDegree() > 2 || surface->VDegree() > 2) {
+  // Bounded exact subset. GeomFill interpolates every supplied analytic boundary;
+  // later certification still checks boundary error, topology, containment, validity,
+  // airtightness and (for composite joins) normal continuity.
+  if (surface->UDegree() > 8 || surface->VDegree() > 8) {
     refuse(kReasonUnsupportedBoundary);
   }
   if (source.Orientation() == TopAbs_REVERSED) {
@@ -684,20 +731,48 @@ double point_shape_distance(const Point& point, const TopoDS_Shape& shape) {
   return extrema.IsDone() ? extrema.Value() : std::numeric_limits<double>::infinity();
 }
 
+double point_curve_distance(const Point& point, const TopoDS_Edge& edge) {
+  BRepAdaptor_Curve adaptor(edge);
+  const double first = adaptor.FirstParameter();
+  const double last = adaptor.LastParameter();
+  double curve_first = first;
+  double curve_last = last;
+  Handle(Geom_Curve) curve = BRep_Tool::Curve(edge, curve_first, curve_last);
+  if (curve.IsNull()) {
+    return std::numeric_limits<double>::infinity();
+  }
+  GeomAPI_ProjectPointOnCurve projection(
+      gp_Pnt(point[0], point[1], point[2]), curve, first, last);
+  return projection.NbPoints() == 0
+      ? std::numeric_limits<double>::infinity()
+      : projection.LowerDistance();
+}
+
 double boundary_error(const TopoDS_Face& face,
                       const std::vector<TopoDS_Edge>& boundary,
                       const std::uint32_t sample_count) {
-  const TopoDS_Wire source_wire = make_wire(boundary);
-  const TopoDS_Wire result_wire = BRepTools::OuterWire(face);
+  std::vector<TopoDS_Edge> result_edges;
+  for (TopExp_Explorer explorer(BRepTools::OuterWire(face), TopAbs_EDGE);
+       explorer.More(); explorer.Next()) {
+    result_edges.push_back(TopoDS::Edge(explorer.Current()));
+  }
   double worst = 0.0;
   for (const TopoDS_Edge& edge : boundary) {
     for (const Point& point : edge_points(edge, sample_count)) {
-      worst = std::max(worst, point_shape_distance(point, result_wire));
+      double nearest = std::numeric_limits<double>::infinity();
+      for (const TopoDS_Edge& candidate : result_edges) {
+        nearest = std::min(nearest, point_curve_distance(point, candidate));
+      }
+      worst = std::max(worst, nearest);
     }
   }
-  for (TopExp_Explorer explorer(result_wire, TopAbs_EDGE); explorer.More(); explorer.Next()) {
-    for (const Point& point : edge_points(TopoDS::Edge(explorer.Current()), sample_count)) {
-      worst = std::max(worst, point_shape_distance(point, source_wire));
+  for (const TopoDS_Edge& edge : result_edges) {
+    for (const Point& point : edge_points(edge, sample_count)) {
+      double nearest = std::numeric_limits<double>::infinity();
+      for (const TopoDS_Edge& candidate : boundary) {
+        nearest = std::min(nearest, point_curve_distance(point, candidate));
+      }
+      worst = std::max(worst, nearest);
     }
   }
   return worst;
@@ -808,7 +883,12 @@ std::vector<FaceOption> composite_options(const TopoDS_Face& face,
   for (int join_index = 0; join_index < 5; ++join_index) {
     std::vector<Handle(Geom_BSplineCurve)> ordered;
     for (int offset = 0; offset < 5; ++offset) {
-      ordered.push_back(curves[(join_index + offset) % 5]);
+      Handle(Geom_BSplineCurve) copy = Handle(Geom_BSplineCurve)::DownCast(
+          curves[(join_index + offset) % 5]->Copy());
+      if (copy.IsNull()) {
+        refuse(kReasonNoCandidate);
+      }
+      ordered.push_back(copy);
     }
     GeomConvert_CompCurveToBSplineCurve joiner(ordered[0]);
     const int full_multiplicity = std::max(ordered[0]->Degree(), ordered[1]->Degree());
@@ -817,7 +897,7 @@ std::vector<FaceOption> composite_options(const TopoDS_Face& face,
     }
     try {
       auto rebuilt = coons_face(face, {joiner.BSplineCurve(), ordered[2], ordered[3], ordered[4]},
-                                tolerances.build);
+                                tolerances.build, false);
       FaceOption option;
       option.face = rebuilt.first;
       option.reconstructed = true;
@@ -1008,8 +1088,9 @@ bool translated_match(const TopoDS_Shape& old_part,
                       const std::uint32_t kind,
                       const Point& vector,
                       const double tolerance,
-                      double& maximum_error) {
-  if (!same_part_type(old_part, candidate, kind)) {
+                      double& maximum_error,
+                      const bool require_same_type = true) {
+  if (require_same_type && !same_part_type(old_part, candidate, kind)) {
     return false;
   }
   const double old_mass = part_measure(old_part, kind);
@@ -1020,7 +1101,9 @@ bool translated_match(const TopoDS_Shape& old_part,
   maximum_error = 0.0;
   for (const gp_Pnt& sample : part_samples(old_part, kind)) {
     const Point moved = translated({sample.X(), sample.Y(), sample.Z()}, vector);
-    const double error = point_shape_distance(moved, candidate);
+    const double error = kind == 2
+        ? point_curve_distance(moved, TopoDS::Edge(candidate))
+        : point_shape_distance(moved, candidate);
     maximum_error = std::max(maximum_error, error);
     if (error > tolerance) {
       return false;
@@ -1029,7 +1112,9 @@ bool translated_match(const TopoDS_Shape& old_part,
   const Point reverse{-vector[0], -vector[1], -vector[2]};
   for (const gp_Pnt& sample : part_samples(candidate, kind)) {
     const Point restored = translated({sample.X(), sample.Y(), sample.Z()}, reverse);
-    const double error = point_shape_distance(restored, old_part);
+    const double error = kind == 2
+        ? point_curve_distance(restored, TopoDS::Edge(old_part))
+        : point_shape_distance(restored, old_part);
     maximum_error = std::max(maximum_error, error);
     if (error > tolerance) {
       return false;
@@ -1212,40 +1297,56 @@ MappingChecks verify_mapped_topology(
     const TopoDS_Edge expected_edge = replacements[old_index].value_or(
         TopoDS::Edge(old_edges.FindKey(old_index + 1)));
     const EdgeSemantic old_semantic = edge_semantic(expected_edge);
+    bool endpoint_match = false;
+    bool semantic_match = false;
+    bool geometry_match = false;
     for (int candidate = 0; candidate < new_edges.Extent(); ++candidate) {
       std::vector<int> actual = new_edge_vertices[candidate];
       std::sort(actual.begin(), actual.end());
       const TopoDS_Edge candidate_edge = TopoDS::Edge(new_edges.FindKey(candidate + 1));
+      if (actual == expected) {
+        endpoint_match = true;
+      }
       if (changed_edges.count(old_index) != 0) {
         if (actual == expected) {
           edge_candidates[old_index].push_back(candidate);
+          geometry_match = true;
         }
         continue;
       }
       const EdgeSemantic candidate_semantic = edge_semantic(candidate_edge);
+      if (actual == expected && old_semantic == candidate_semantic) {
+        semantic_match = true;
+      }
       if (old_semantic == EdgeSemantic::Degenerated &&
           candidate_semantic == EdgeSemantic::Degenerated) {
         edge_candidates[old_index].push_back(candidate);
         continue;
       }
-      if (actual != expected || old_semantic != candidate_semantic) {
+      if (actual != expected) {
         continue;
       }
       if (expected_edge.IsSame(candidate_edge)) {
         edge_candidates[old_index].push_back(candidate);
+        geometry_match = true;
         continue;
       }
       double error = 0.0;
       if (translated_match(expected_edge, candidate_edge, 2,
                            {0.0, 0.0, 0.0},
-                           std::max(tolerance, Precision::Confusion()), error)) {
+                           std::max(tolerance, Precision::Confusion()), error,
+                           false)) {
         edge_candidates[old_index].push_back(candidate);
+        geometry_match = true;
       }
     }
     if (edge_candidates[old_index].empty()) {
       checks.failure_stage = 2;
       checks.failure_detail = static_cast<std::uint32_t>(old_index + 1) |
-          (static_cast<std::uint32_t>(changed_edges.count(old_index) != 0) << 31);
+          (static_cast<std::uint32_t>(changed_edges.count(old_index) != 0) << 31) |
+          (static_cast<std::uint32_t>(endpoint_match) << 30) |
+          (static_cast<std::uint32_t>(semantic_match) << 29) |
+          (static_cast<std::uint32_t>(geometry_match) << 28);
       return checks;
     }
   }

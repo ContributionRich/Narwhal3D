@@ -107,6 +107,11 @@ try:
             "kMaxTotalTrims = 100000;", "kMaxArchiveBytes",
             "std::isfinite", "valid_index", "reader.finish")),
               "helper parsing is protocol-pinned, bounded, finite, indexed, and complete")
+        check(all(token in helper_source for token in (
+            "current_end.DistanceTo(next_start) > tolerance",
+            "current->SetEndPoint(next_start)",
+            "false, false, false, false, false, false, false,\n                                  true")),
+              "sub-tolerance trim closure recomputes parameter-space bounding boxes")
         check(PINNED_OPENNURBS in build_source
               and "artifacts/brep-writer" in build_source
               and "manylinux_2_28_x86_64@sha256:" in build_source

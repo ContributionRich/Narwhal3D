@@ -1346,9 +1346,26 @@ def from_recipe(recipe, _depth=0):
         elif kind == "polyhedron":
             shape = make_polyhedron(recipe["vertices"], recipe["faces"])
         elif kind == "local_move":
-            shape = move_subobject_local(from_recipe(recipe["a"], _depth + 1),
-                                         recipe["component"], recipe["index"],
-                                         recipe["vector"], recipe["target"])
+            base = from_recipe(recipe["a"], _depth + 1)
+            component = recipe["component"]
+            resolved = _local_resolve_target(
+                base, component, recipe["index"], recipe["target"], _local_tolerances(base)) + 1
+            native_result = None
+            try:
+                from .. import native_geometry
+                native_result = native_geometry.move_component(
+                    base, lambda: shape_to_bytes(base, triangles=False),
+                    {"face": 1, "edge": 2, "vertex": 3}[component], resolved,
+                    recipe["vector"], live=False)
+            except (ImportError, KeyError):
+                native_result = None
+            if native_result is not None and native_result.ok:
+                shape = shape_from_bytes(native_result.data)
+            elif native_result is not None and not native_result.unavailable:
+                raise KernelError(native_result.detail or "native recipe local move failed")
+            else:
+                shape = move_subobject_local(
+                    base, component, resolved, recipe["vector"], target_signature=None)
         elif kind == "torus":
             shape = make_torus(recipe["major"], recipe["minor"])
         elif kind == "truncated_cone":
@@ -1360,7 +1377,16 @@ def from_recipe(recipe, _depth=0):
                                          sew_tolerance=recipe.get("tolerance", 1e-6))
         elif kind in ("fillet", "chamfer"):
             base = from_recipe(recipe["a"], _depth + 1)
-            shape = bevel_edges(base, recipe["size"], recipe.get("edges"),
+            indices = recipe.get("edges")
+            targets = recipe.get("edge_targets")
+            if targets is not None:
+                if indices is None or not isinstance(targets, list) or len(targets) != len(indices):
+                    raise KernelError("a selective bevel recipe has malformed edge targets")
+                tolerances = _local_tolerances(base)
+                indices = [
+                    _local_resolve_target(base, "edge", hint, target, tolerances) + 1
+                    for hint, target in zip(indices, targets)]
+            shape = bevel_edges(base, recipe["size"], indices,
                                 chamfer=(kind == "chamfer"))
         else:
             shape = boolean(from_recipe(recipe["a"], _depth + 1),
@@ -2651,7 +2677,33 @@ def _local_bspline_edge(edge, tolerance):
         raise KernelError("local move refused: a BSpline boundary has the wrong orientation")
     if end_distance < start_distance:
         bspline.Reverse()
-    return bspline
+    return bspline.Copy()
+
+
+def _local_normalize_bezier_weights(curve):
+    """Exactly reparameterize a rational Bezier to unit endpoint weights.
+
+    ``GeomFill_BSplineCurves`` combines boundary homogeneous coordinates directly. A trimmed
+    rational Bezier can have unequal endpoint weights, making geometrically coincident corners
+    incompatible and shifting the generated surface boundary. For a degree-n Bezier, multiplying
+    homogeneous pole i by ``factor**i`` is the exact projective parameter substitution
+    ``t = factor*u / (1-u+factor*u)``. Poles stay fixed while their weights change, so the curve's
+    geometric image is unchanged. Multi-span curves remain untouched and are still rejected by
+    the downstream strict boundary certificate if OCCT cannot interpolate them exactly.
+    """
+    if not curve.IsRational():
+        return
+    degree = curve.Degree()
+    if degree < 1 or curve.NbKnots() != 2 or curve.NbPoles() != degree + 1:
+        return
+    first_weight = curve.Weight(1)
+    last_weight = curve.Weight(curve.NbPoles())
+    if first_weight <= 0.0 or last_weight <= 0.0:
+        return
+    factor = (first_weight / last_weight) ** (1.0 / degree)
+    for index in range(1, curve.NbPoles() + 1):
+        curve.SetWeight(
+            index, curve.Weight(index) * factor ** (index - 1) / first_weight)
 
 
 LOCAL_COONS_NORMAL_JUMP = 2e-6
@@ -2668,7 +2720,7 @@ def _local_planar_face(boundary):
     return maker.Face() if maker.IsDone() and BRepCheck_Analyzer(maker.Face()).IsValid() else None
 
 
-def _local_coons_face(face, curves, tolerance):
+def _local_coons_face(face, curves, tolerance, *, normalize_weights=True):
     from OCP.BRepAdaptor import BRepAdaptor_Surface
     from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeFace
     from OCP.BRepCheck import BRepCheck_Analyzer
@@ -2678,8 +2730,12 @@ def _local_coons_face(face, curves, tolerance):
     from OCP.TopoDS import TopoDS
 
     try:
+        private_curves = [curve.Copy() for curve in curves]
+        if normalize_weights:
+            for curve in private_curves:
+                _local_normalize_bezier_weights(curve)
         surface = GeomFill_BSplineCurves(
-            *curves, GeomFill_FillingStyle.GeomFill_StretchStyle).Surface()
+            *private_curves, GeomFill_FillingStyle.GeomFill_StretchStyle).Surface()
         maker = BRepBuilderAPI_MakeFace(surface, tolerance)
         rebuilt = maker.Face() if maker.IsDone() else None
     except Exception as exc:  # noqa: BLE001
@@ -2690,9 +2746,10 @@ def _local_coons_face(face, curves, tolerance):
     if adaptor.GetType() != GeomAbs_BSplineSurface:
         raise KernelError("local move refused: Coons reconstruction returned no BSpline face")
     bspline = adaptor.BSpline()
-    if bspline.UDegree() > 2 or bspline.VDegree() > 2:
+    if bspline.UDegree() > 8 or bspline.VDegree() > 8:
         raise KernelError(
-            "local move refused: Coons reconstruction exceeded the exact degree-2 subset")
+            "local move refused: Coons reconstruction exceeded the certified degree-8 subset "
+            f"({bspline.UDegree()}x{bspline.VDegree()})")
     if face.Orientation() == TopAbs_REVERSED:
         rebuilt = TopoDS.Face(rebuilt.Reversed())
     return rebuilt, bspline
@@ -2714,16 +2771,33 @@ def _local_wire_edges(wire):
 def _local_boundary_error(face, boundary):
     from OCP.BRepTools import BRepTools
 
-    source_wire = _local_make_wire(boundary)
     result_edges = _local_wire_edges(BRepTools.OuterWire_s(face))
     worst = 0.0
     for edge in boundary:
         for sample in _local_edge_points(edge, 33):
-            worst = max(worst, _local_point_shape_distance(sample, BRepTools.OuterWire_s(face)))
+            worst = max(worst, min(
+                _local_point_curve_distance(sample, candidate) for candidate in result_edges))
     for edge in result_edges:
         for sample in _local_edge_points(edge, 33):
-            worst = max(worst, _local_point_shape_distance(sample, source_wire))
+            worst = max(worst, min(
+                _local_point_curve_distance(sample, candidate) for candidate in boundary))
     return worst
+
+
+def _local_point_curve_distance(point, edge):
+    """Tight point-to-edge-curve distance for the strict Coons boundary certificate."""
+    from OCP.BRep import BRep_Tool
+    from OCP.BRepAdaptor import BRepAdaptor_Curve
+    from OCP.GeomAPI import GeomAPI_ProjectPointOnCurve
+    from OCP.gp import gp_Pnt
+
+    adaptor = BRepAdaptor_Curve(edge)
+    first, last = adaptor.FirstParameter(), adaptor.LastParameter()
+    curve = BRep_Tool.Curve_s(edge, first, last)
+    if curve is None:
+        return math.inf
+    projection = GeomAPI_ProjectPointOnCurve(gp_Pnt(*point), curve, first, last)
+    return projection.LowerDistance() if projection.NbPoints() else math.inf
 
 
 def _local_edge_points(edge, count):
@@ -2801,7 +2875,8 @@ def _local_composite_coons_candidates(face, boundary, tolerances):
     curves = [_local_bspline_edge(edge, tolerances["build"]) for edge in boundary]
     candidates = []
     for join_index in range(5):
-        ordered = curves[join_index:] + curves[:join_index]
+        ordered = [curve.Copy() for curve in (
+            curves[join_index:] + curves[:join_index])]
         joiner = GeomConvert_CompCurveToBSplineCurve(ordered[0])
         full_multiplicity = max(ordered[0].Degree(), ordered[1].Degree())
         if not joiner.Add(ordered[1], tolerances["build"], True, True,
@@ -2810,7 +2885,7 @@ def _local_composite_coons_candidates(face, boundary, tolerances):
         try:
             rebuilt, surface = _local_coons_face(
                 face, [joiner.BSplineCurve(), ordered[2], ordered[3], ordered[4]],
-                tolerances["build"])
+                tolerances["build"], normalize_weights=False)
             boundary_error = _local_boundary_error(rebuilt, boundary)
             normal_jump = _local_full_knot_normal_jump(surface)
             deformation = _local_face_deformation(
@@ -2850,7 +2925,8 @@ def _local_rebuild_face_options(face, boundary, tolerances):
              "rank": (max(surface.UDegree(), surface.VDegree()),
                       surface.UDegree() + surface.VDegree(),
                       surface.NbUPoles() * surface.NbVPoles(),
-                      surface.NbUPoles() + surface.NbVPoles(), 0.0)}]
+                      surface.NbUPoles() + surface.NbVPoles(), 0.0),
+             "boundary_error": _local_boundary_error(rebuilt, boundary)}]
 
 
 def _local_point_shape_distance(point, shape):
@@ -2931,7 +3007,8 @@ def _local_part_measure(part, kind):
 
 
 def _local_translated_match(old_part, candidate, kind, vector, tolerance):
-    if _local_part_type(old_part, kind) != _local_part_type(candidate, kind):
+    if (kind != "edge" and
+            _local_part_type(old_part, kind) != _local_part_type(candidate, kind)):
         return False
     old_mass, _old_center = _local_part_measure(old_part, kind)
     new_mass, _new_center = _local_part_measure(candidate, kind)
@@ -2939,12 +3016,16 @@ def _local_translated_match(old_part, candidate, kind, vector, tolerance):
         return False
     for point in _local_part_samples(old_part, kind):
         translated = _local_add((point.X(), point.Y(), point.Z()), vector)
-        if _local_point_shape_distance(translated, candidate) > tolerance:
+        distance = (_local_point_curve_distance(translated, candidate) if kind == "edge" else
+                    _local_point_shape_distance(translated, candidate))
+        if distance > tolerance:
             return False
     reverse = tuple(-value for value in vector)
     for point in _local_part_samples(candidate, kind):
         restored = _local_add((point.X(), point.Y(), point.Z()), reverse)
-        if _local_point_shape_distance(restored, old_part) > tolerance:
+        distance = (_local_point_curve_distance(restored, old_part) if kind == "edge" else
+                    _local_point_shape_distance(restored, old_part))
+        if distance > tolerance:
             return False
     return True
 
@@ -3104,12 +3185,15 @@ def move_subobject_local(shape, kind, index, vector, target_signature=None):
             "local move refused: interacting composite Coons choices are ambiguous")
 
     accepted = []
+    stage_counts = {name: 0 for name in (
+        "sewn", "shell", "valid", "topology", "boundary", "smooth", "mapped")}
     saw_boundary_exact = False
     saw_smoothness_crease = False
     for choices in itertools.product(*face_options):
+        reconstructed = [choice for choice in choices if "boundary_error" in choice]
         composite = [choice for choice in choices if "normal_jump" in choice]
         boundary_exact = not any(
-            choice["boundary_error"] > comparison_tolerance for choice in composite)
+            choice["boundary_error"] > comparison_tolerance for choice in reconstructed)
         numerically_smooth = not any(
             choice["normal_jump"] > LOCAL_COONS_NORMAL_JUMP for choice in composite)
         sewing = BRepBuilderAPI_Sewing(tolerances["sew"])
@@ -3118,6 +3202,7 @@ def move_subobject_local(shape, kind, index, vector, target_signature=None):
         sewing.Perform()
         if sewing.NbFreeEdges() or sewing.NbMultipleEdges():
             continue
+        stage_counts["sewn"] += 1
         sewn = sewing.SewedShape()
         shells = []
         explorer = TopExp_Explorer(sewn, TopAbs_SHELL)
@@ -3126,6 +3211,7 @@ def move_subobject_local(shape, kind, index, vector, target_signature=None):
             explorer.Next()
         if len(shells) != 1:
             continue
+        stage_counts["shell"] += 1
         solid = BRepBuilderAPI_MakeSolid(shells[0]).Solid()
         fixer = ShapeFix_Solid(solid)
         fixer.Perform()
@@ -3134,9 +3220,11 @@ def move_subobject_local(shape, kind, index, vector, target_signature=None):
             result = TopoDS.Solid(result.Reversed())
         if not is_airtight(result) or not BRepAlgoAPI_Check(result).IsValid():
             continue
+        stage_counts["valid"] += 1
         if (len(unique_faces(result)), len(_unique_edges(result)),
                 len(_unique_vertices(result))) != (len(faces), len(edges), len(vertices)):
             continue
+        stage_counts["topology"] += 1
         if composite and boundary_exact:
             saw_boundary_exact = True
         if composite and boundary_exact and not numerically_smooth:
@@ -3144,6 +3232,8 @@ def move_subobject_local(shape, kind, index, vector, target_signature=None):
             continue
         if not boundary_exact:
             continue
+        stage_counts["boundary"] += 1
+        stage_counts["smooth"] += 1
         try:
             result_vertices = _unique_vertices(result)
             _local_verify_vertex_containment(
@@ -3165,6 +3255,7 @@ def move_subobject_local(shape, kind, index, vector, target_signature=None):
                     continue
         except KernelError:
             continue
+        stage_counts["mapped"] += 1
         rank = tuple(sum(choice["rank"][i] for choice in choices)
                      for i in range(5))
         accepted.append({"result": result, "rank": rank})
@@ -3174,8 +3265,10 @@ def move_subobject_local(shape, kind, index, vector, target_signature=None):
             raise KernelError(
                 "local move refused: composite-natural-Coons candidates have a smoothness "
                 "crease above the strict angular gate")
+        stages = ", ".join(f"{name}={count}" for name, count in stage_counts.items())
         raise KernelError(
-            "local move refused: no boundary-exact candidate made one valid airtight solid")
+            "local move refused: no boundary-exact candidate made one valid airtight solid; "
+            f"candidate stages: {stages}")
     accepted.sort(key=lambda candidate: candidate["rank"])
     if len(accepted) > 1:
         first, second = accepted[0]["rank"], accepted[1]["rank"]

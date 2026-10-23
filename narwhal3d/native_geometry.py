@@ -235,16 +235,41 @@ def available():
 def _outcome(status, certificate=None, detail=""):
     refusal_reason = 0
     certificate_status = status
+    failure_stage = 0
+    failure_detail = 0
+    diagnostics = ""
     if certificate is not None:
         certificate_status = ctypes.c_int32.from_buffer(certificate, 8).value
         refusal_reason = ctypes.c_uint32.from_buffer(certificate, 12).value
+        failure_stage = ctypes.c_uint32.from_buffer(certificate, 72).value
+        failure_detail = ctypes.c_uint32.from_buffer(certificate, 76).value
+        reconstructed = ctypes.c_uint32.from_buffer(certificate, 60).value
+        reconstructed_bspline = ctypes.c_uint32.from_buffer(certificate, 64).value
+        internal_knots = ctypes.c_uint32.from_buffer(certificate, 68).value
+        max_boundary = ctypes.c_double.from_buffer(certificate, 120).value
+        max_jump = ctypes.c_double.from_buffer(certificate, 128).value
+        if any((failure_stage, reconstructed, reconstructed_bspline, internal_knots,
+                max_boundary, max_jump)):
+            verify_detail = str(failure_detail)
+            if failure_stage == 2:
+                edge_index = failure_detail & 0x0FFFFFFF
+                flags = (
+                    f"edge {edge_index}, changed={bool(failure_detail & 0x80000000)}, "
+                    f"endpoints={bool(failure_detail & 0x40000000)}, "
+                    f"semantic={bool(failure_detail & 0x20000000)}, "
+                    f"geometry={bool(failure_detail & 0x10000000)}")
+                verify_detail = flags
+            diagnostics = (
+                f"; verify={failure_stage}:{verify_detail}, rebuilt={reconstructed}/"
+                f"{reconstructed_bspline}, knots={internal_knots}, "
+                f"boundary={max_boundary:.3g}, normal_jump={max_jump:.3g}")
         if status >= 0 and certificate_status < 0:
             status = certificate_status
     kind = ("refused" if refusal_reason or status in
             (STATUS_POLICY_REFUSED, STATUS_SMOOTHNESS_CREASE) else "error")
     if kind == "refused":
         reason = _REFUSAL_DETAILS.get(refusal_reason, "native exact local move was refused")
-        detail = f"native local move refused: {reason}"
+        detail = f"native local move refused: {reason}{diagnostics}"
     return MoveResult(kind, status=status, refusal_reason=refusal_reason, detail=detail)
 
 

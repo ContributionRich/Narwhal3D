@@ -18,6 +18,7 @@
 #include <memory>
 #include <new>
 #include <string>
+#include <vector>
 
 #if defined(_WIN32)
 #include <fcntl.h>
@@ -483,6 +484,8 @@ bool parse_description(std::istream& input, ON_Brep& brep, std::string& error) {
       const ON_BrepLoop::TYPE loop_type =
           loop_type_raw == 1 ? ON_BrepLoop::outer : ON_BrepLoop::inner;
       ON_BrepLoop& loop = brep.NewLoop(loop_type, face);
+      std::vector<int> loop_curve_indices;
+      loop_curve_indices.reserve(trim_count);
 
       for (std::size_t trim_index = 0; trim_index < trim_count; ++trim_index) {
         std::int64_t edge_index = -1;
@@ -538,6 +541,7 @@ bool parse_description(std::istream& input, ON_Brep& brep, std::string& error) {
           return false;
         }
         trim_curve.release();
+        loop_curve_indices.push_back(trim_curve_index);
 
         ON_BrepTrim* trim = nullptr;
         if (edge_index == -1) {
@@ -552,6 +556,30 @@ bool parse_description(std::istream& input, ON_Brep& brep, std::string& error) {
         }
         trim->m_tolerance[0] = tolerance;
         trim->m_tolerance[1] = tolerance;
+      }
+
+      // OCCT pcurves meeting at one topological vertex can differ by round-off in UV.
+      // openNURBS requires consecutive trim endpoints to be identical more strictly than
+      // the BRep's declared tolerance. Close only gaps already within that tolerance;
+      // larger gaps remain an error rather than being hidden. This changes the 2-D trim
+      // endpoint only--the exact 3-D edge curve and NURBS surface remain untouched.
+      for (std::size_t trim_index = 0; trim_index < loop_curve_indices.size(); ++trim_index) {
+        ON_Curve* current = brep.m_C2[loop_curve_indices[trim_index]];
+        ON_Curve* next = brep.m_C2[loop_curve_indices[(trim_index + 1) % loop_curve_indices.size()]];
+        if (current == nullptr || next == nullptr) {
+          error = "openNURBS returned a null loop trim curve";
+          return false;
+        }
+        const ON_3dPoint current_end = current->PointAtEnd();
+        const ON_3dPoint next_start = next->PointAtStart();
+        if (current_end.DistanceTo(next_start) > tolerance) {
+          error = "consecutive trim endpoints exceed the B-rep tolerance";
+          return false;
+        }
+        if (!current->SetEndPoint(next_start)) {
+          error = "openNURBS could not close a trim endpoint within tolerance";
+          return false;
+        }
       }
     }
   }
@@ -621,7 +649,7 @@ int run(int argc, char** argv) {
   brep.SetTrimTypeFlags(true);
   brep.SetTrimIsoFlags();
   brep.SetTolerancesBoxesAndFlags(false, false, false, false, false, false, false,
-                                  false);
+                                  true);
 
   ON_wString validation_text;
   ON_TextLog validation_log(validation_text);
