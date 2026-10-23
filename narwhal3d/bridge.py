@@ -1478,24 +1478,6 @@ def _display_density(brep) -> int:
     return 1 if _display_is_mesh_derived(brep) else 32
 
 
-def _add_master_isocurves(bm, master):
-    """Add exact-surface display isocurves as loose edges; never document topology."""
-    try:
-        polylines = _occt().surface_isocurves(master)
-    except Exception:  # noqa: BLE001
-        return bm
-    for line in polylines:
-        previous = None
-        for point in line:
-            vertex = bm.verts.new(point)
-            if previous is not None:
-                try:
-                    bm.edges.new((previous, vertex))
-                except ValueError:
-                    pass
-            previous = vertex
-    return bm
-
 
 def _master_bmesh(master):
     """The display mesh of an analytic MASTER: OCCT's tessellation, welded, smooth-shaded
@@ -1504,10 +1486,8 @@ def _master_bmesh(master):
     if hit is not None and hit[0] is master:
         # an Open's worker tessellated this very master (`prefetch_document`)
         edges = _rows2(hit[3]) if len(hit) > 3 and hit[3] is not None else None
-        bm = _tessellation_bmesh(_rows3(hit[1]), _rows3(hit[2]), edges)
-    else:
-        bm = _tessellation_bmesh(*display_tessellation(master))
-    return _add_master_isocurves(bm, master)
+        return _tessellation_bmesh(_rows3(hit[1]), _rows3(hit[2]), edges)
+    return _tessellation_bmesh(*display_tessellation(master))
 
 
 def display_tessellation(master):

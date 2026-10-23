@@ -1773,46 +1773,6 @@ def boolean(shape_a, shape_b, operation):
 # Airtightness -- asserted, not assumed
 # --------------------------------------------------------------------------
 
-def surface_isocurves(shape, samples=33):
-    """Display-only midpoint U/V isocurves of exact BSpline faces, clipped by trims."""
-    _need()
-    from OCP.BRepAdaptor import BRepAdaptor_Surface
-    from OCP.BRepClass import BRepClass_FaceClassifier
-    from OCP.BRepTools import BRepTools
-    from OCP.GeomAbs import GeomAbs_BSplineSurface
-    from OCP.TopAbs import TopAbs_IN, TopAbs_ON
-    from OCP.gp import gp_Pnt2d
-
-    count = max(3, min(int(samples), 257))
-    out = []
-    for face in unique_faces(shape):
-        adaptor = BRepAdaptor_Surface(face, True)
-        if adaptor.GetType() != GeomAbs_BSplineSurface:
-            continue
-        u0, u1, v0, v1 = BRepTools.UVBounds_s(face)
-        if not (u1 > u0 and v1 > v0):
-            continue
-        for direction, fixed, lo, hi in (
-                (0, 0.5 * (u0 + u1), v0, v1),
-                (1, 0.5 * (v0 + v1), u0, u1)):
-            line = []
-            for index in range(count):
-                varying = lo + (hi - lo) * index / (count - 1)
-                u, v = ((fixed, varying) if direction == 0
-                        else (varying, fixed))
-                state = BRepClass_FaceClassifier(
-                    face, gp_Pnt2d(u, v), 1e-9).State()
-                if state not in (TopAbs_IN, TopAbs_ON):
-                    if len(line) >= 2:
-                        out.append(line)
-                    line = []
-                    continue
-                point = adaptor.Value(u, v)
-                line.append((point.X(), point.Y(), point.Z()))
-            if len(line) >= 2:
-                out.append(line)
-    return out
-
 
 def is_valid(shape):
     """The kernel's own verdict on the shape's topology/geometry.

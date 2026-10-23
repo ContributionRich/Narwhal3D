@@ -22,6 +22,9 @@ real_document_object = ui._document_object
 real_rebuild_display = ui.rebuild_display_keeping_selection
 real_invalidate = ui.invalidate_snap_cache
 real_redraw = ui._tag_redraw_viewports
+real_view_direction = ui._view_direction
+real_ray_plane_point = ui._ray_plane_point
+real_pick_point = ui.pick_point
 real_ctx = app_state.ctx
 real_model = app_state.model
 real_drag = ui._gumball_drag
@@ -41,13 +44,11 @@ display_master = display_occt.move_subobject_local(
 display_solid = bridge.occt_backed(display_master, {
     "kind": "local_move", "a": display_recipe, "component": "vertex",
     "index": 1, "vector": list(display_vector), "target": display_target})
-display_isocurves = bridge._occt().surface_isocurves(display_master)
 display_mesh = bridge.geometry_to_bmesh(display_solid)
 loose_edges = sum(not edge.link_faces for edge in display_mesh.edges)
 display_mesh.free()
-check(len(display_isocurves) >= 6 and loose_edges >= sum(
-    len(line) - 1 for line in display_isocurves),
-    "exact post-edit BSpline isocurves are loose viewport edges, not document topology")
+check(loose_edges == 0,
+      "post-edit display contains only real boundary geometry, not artificial isocurves")
 
 calls = []
 redraws = []
@@ -91,6 +92,35 @@ try:
     check(len(preview) == 12 and len(changed) == 3
           and all((2.0, 3.0, 4.0) in line for line in changed),
           "vertex preview draws all 12 prospective edges and stretches its 3 incident edges")
+    edge_preview = ui._brep_preview_wireframe(
+        {"vertices": cube_vertices, "edges": cube_edges},
+        ("Box1", "Edge", 1), (2.0, 3.0, 4.0))
+    edge_changed = [line for line, (_edge_id, source) in zip(edge_preview, cube_edges)
+                    if line != source]
+    check(len(edge_preview) == 12 and len(edge_changed) == 5
+          and edge_preview[0] == [(2.0, 3.0, 4.0), (3.0, 3.0, 4.0)],
+          "edge preview moves the curve and stretches all four incident edges")
+
+    class Region3D:
+        is_perspective = True
+
+    class Space:
+        region_3d = Region3D()
+
+    class Region:
+        x = 10.0
+        y = 20.0
+
+    ray_calls = []
+    ui._view_direction = lambda _rv3d: (0.2, -0.4, -0.8)
+    ui._ray_plane_point = lambda *args: ray_calls.append(args) or (4.0, 5.0, 6.0)
+    ui.pick_point = lambda *_args: (_ for _ in ()).throw(
+        AssertionError("Perspective free drag flattened to the CPlane"))
+    free_point = ui._gumball_free_drag_point(
+        object(), Space(), Region(), 100.0, 200.0, (7.0, 8.0, 9.0))
+    check(free_point == (4.0, 5.0, 6.0)
+          and ray_calls[0][-2:] == ((7.0, 8.0, 9.0), (0.2, -0.4, -0.8)),
+          "Perspective free drag tracks on the camera-facing plane through the part")
     started = time.perf_counter()
     moved = ui._gumball_apply(bridge.translation_xform((1.0, 2.0, 3.0)))
     elapsed = time.perf_counter() - started
@@ -141,6 +171,9 @@ finally:
     ui.rebuild_display_keeping_selection = real_rebuild_display
     ui.invalidate_snap_cache = real_invalidate
     ui._tag_redraw_viewports = real_redraw
+    ui._view_direction = real_view_direction
+    ui._ray_plane_point = real_ray_plane_point
+    ui.pick_point = real_pick_point
     app_state.ctx = real_ctx
     app_state.model = real_model
     ui._gumball_drag = real_drag

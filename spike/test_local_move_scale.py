@@ -67,7 +67,5 @@ assert not calls, "locally edited solids must replay instead of transforming the
 assert after is not None and occt.is_airtight(after)
 assert abs(occt.volume(after) - 2.0 * before_volume) < 1e-8
 assert occt.face_types(after) == {"PLANE": 3, "BSPLINE": 3}
-isocurves = occt.surface_isocurves(after)
-assert len(isocurves) >= 6 and all(len(line) >= 2 for line in isocurves)
 assert kernel.honesty_problem(scaled) is None
 print("LOCAL MOVE SCALE PASSED")

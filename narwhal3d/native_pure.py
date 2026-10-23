@@ -508,7 +508,10 @@ def backend_status() -> str:
 
 _gs_signature: str | None = None
 _gs_binding: Any = None
+_gs3_signature: str | None = None
+_gs3_binding: Any = None
 _native_gridsnap_calls = 0
+_native_gridsnap3_calls = 0
 
 
 def _gridsnap_binding():
@@ -548,6 +551,43 @@ def _gridsnap_binding():
         return None
 
 
+def _gridsnap3_binding():
+    """Return the additive ABI-1 three-dimensional Grid Snap export, or ``None``."""
+    global _gs3_signature, _gs3_binding
+    explicit = os.environ.get(_ENV_PATH)
+    signature = explicit or "<packaged>"
+    if _gs3_signature == signature:
+        return _gs3_binding
+    with _lock:
+        if _gs3_signature == signature:
+            return _gs3_binding
+        _gs3_signature = signature
+        _gs3_binding = None
+        candidates = ((Path(explicit).expanduser(),) if explicit
+                      else (_PACKAGED_LIBRARY,))
+        for path in candidates:
+            if not path.is_file():
+                continue
+            try:
+                library = ctypes.CDLL(str(path))
+                version = library.narwhal_pure_core_abi_version
+                version.argtypes = []
+                version.restype = ctypes.c_uint32
+                if version() != _ABI_VERSION:
+                    continue
+                function = library.narwhal_pure_core_grid_snap_3d
+                function.argtypes = [
+                    _DoubleP, _DoubleP, _DoubleP, _DoubleP, _DoubleP,
+                    ctypes.c_double, _DoubleP,
+                ]
+                function.restype = ctypes.c_int32
+            except (AttributeError, OSError):
+                continue
+            _gs3_binding = function
+            return function
+        return None
+
+
 def _fixed_vec3(values):
     """Marshal exactly three values without performing geometry computation."""
     try:
@@ -583,6 +623,29 @@ def grid_snap(point, origin, x_axis, y_axis, z_axis, spacing):
     if code != 0 or not all(math.isfinite(value) for value in result):
         return None
     _native_gridsnap_calls += 1
+    return result
+
+
+def grid_snap_3d(point, origin, x_axis, y_axis, z_axis, spacing):
+    """Return a Rust-snapped U/V/W lattice point, or ``None``."""
+    global _native_gridsnap3_calls
+    function = _gridsnap3_binding()
+    if function is None:
+        return None
+    arrays = tuple(_fixed_vec3(values) for values in
+                   (point, origin, x_axis, y_axis, z_axis))
+    if any(values is None for values in arrays):
+        return None
+    try:
+        spacing = float(spacing)
+        output = (ctypes.c_double * 3)()
+        code = function(*arrays, spacing, output)
+    except (ctypes.ArgumentError, TypeError, ValueError, OverflowError, OSError):
+        return None
+    result = tuple(output)
+    if code != 0 or not all(math.isfinite(value) for value in result):
+        return None
+    _native_gridsnap3_calls += 1
     return result
 
 
@@ -3422,6 +3485,7 @@ def _reset_for_tests() -> None:
     global _pdfp_signature, _pdfp_binding, _native_pdf_calls
     global _svgvp_signature, _svgvp_binding, _native_svg_vector_calls
     global _gs_signature, _gs_binding, _native_gridsnap_calls
+    global _gs3_signature, _gs3_binding, _native_gridsnap3_calls
     with _lock:
         _signature = None
         _native_binding = None
@@ -3438,6 +3502,9 @@ def _reset_for_tests() -> None:
         _gs_signature = None
         _gs_binding = None
         _native_gridsnap_calls = 0
+        _gs3_signature = None
+        _gs3_binding = None
+        _native_gridsnap3_calls = 0
         _np_signature = None
         _np_binding = None
         _native_numparse_calls = 0

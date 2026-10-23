@@ -7,11 +7,15 @@ All notable public changes will be recorded here. Narwhal 3D is an extremely ear
 ### Added
 
 - Add exact Rust/OCCT local movement for all box faces, edges, and vertices, repeated edits of the resulting curved NURBS solids, axial cylinder caps, and axial circular cylinder rims.
-- Apply Grid Snap to Gumball translation independently of Snappy/Smooth object snapping.
+- Apply Grid Snap to Gumball translation independently of Snappy/Smooth object snapping, including native U/V/W lattice snapping for free Perspective movement.
+
+### Changed
+
+- Display only real analytic BRep boundary curves after solid-part edits; remove the experimental sampled midpoint surface lines.
 
 ### Fixed
 
-- Keep solid-part dragging smooth with a display-only translated face/edge/vertex preview and perform one fully certified exact Rust/OCCT solve on release.
+- Keep solid-part dragging smooth with a complete prospective wireframe for faces, edges and vertices; edge movement stretches every incident boundary from both moved endpoints, and release performs one fully certified exact Rust/OCCT solve.
 - Prevent a point-edited solid followed by Gumball scaling from entering OCCT's crash-prone optional `ShapeFix_Shape` recognition pass; the exact transformed NURBS must still be valid and airtight.
 - Rebuild deferred Scale1D, Scale2D, and Scale3D commits from canonical double-precision drag state instead of accumulated float32 preview matrices.
 - Keep exact `local_move` results editable on subsequent operations instead of reporting a generic curved-solid limitation.

@@ -231,6 +231,7 @@ def _inspect(layout_was_ready):
     axis_negative = None
     gumball_grid_distance = None
     gumball_grid_marker = None
+    gumball_grid_3d = None
     try:
         ui.set_grid_snap(True)
         snap_settings.disabled = True
@@ -268,6 +269,9 @@ def _inspect(layout_was_ready):
             {"origin": plane.origin, "axis_dir": (2.0, 0.0, 0.0)},
             snap_area, 2.6)
         gumball_grid_marker = ui._active_snap
+        gumball_grid_3d = ui._gumball_grid_snap_point(
+            snap_area, plane.to_world(1.2, -2.6, 2.6))
+        gumball_grid_3d_expected = plane.to_world(1.0, -3.0, 3.0)
     finally:
         snap_settings.disabled = prior_disabled
         ui.set_gumball_snappy(prior_gumball_snappy)
@@ -288,11 +292,15 @@ def _inspect(layout_was_ready):
                and gumball_grid_marker is not None
                and gumball_grid_marker.mode == "Grid"
                and gumball_grid_marker.point == tuple(
-                   plane.origin[i] + (3.0 if i == 0 else 0.0) for i in range(3)))
+                   plane.origin[i] + (3.0 if i == 0 else 0.0) for i in range(3))
+               and gumball_grid_3d is not None
+               and all(abs(a - b) <= 1e-12 for a, b in zip(
+                   gumball_grid_3d.point, gumball_grid_3d_expected)))
     check("Grid Snap uses Rust for command points and Gumball translation independently of object snaps",
           grid_ok, f"grid={grid_result!r}, axis={axis_result!r}/{axis_negative!r}, "
           f"object={object_result!r}, "
-          f"gumball={gumball_grid_distance!r}/{gumball_grid_marker!r}")
+          f"gumball={gumball_grid_distance!r}/{gumball_grid_marker!r}, "
+          f"free3d={gumball_grid_3d!r}")
 
     sidebar_cells = list(getattr(ui, "_sidebar_cells", ()))
     check("left tool palette has 37 live cells", len(sidebar_cells) == 37,

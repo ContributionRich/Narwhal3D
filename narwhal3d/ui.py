@@ -13422,7 +13422,7 @@ def _grid_snap_axis_point(cursor, axis_constraint, spacing):
 
 
 def snap_at(area, space, region, cursor_world, first_point=False, suspend=False,
-            exclude_names=(), base=None, grid_axis=None):
+            exclude_names=(), base=None, grid_axis=None, grid_3d=False):
     """The snap for a cursor at `cursor_world` in this pane, or None.
 
     Ties the pieces together: the pane's CPlane decides `Quad` and `Project`, the
@@ -13531,6 +13531,9 @@ def snap_at(area, space, region, cursor_world, first_point=False, suspend=False,
         return None
     point = (_grid_snap_axis_point(cursor_world, grid_axis, settings.snap_spacing)
              if grid_axis is not None else
+             native_pure.grid_snap_3d(cursor_world, plane.origin, plane.xaxis,
+                                      plane.yaxis, plane.zaxis, settings.snap_spacing)
+             if grid_3d else
              native_pure.grid_snap(cursor_world, plane.origin, plane.xaxis,
                                    plane.yaxis, plane.zaxis, settings.snap_spacing))
     if point is None:
@@ -15828,7 +15831,12 @@ def _brep_preview_wireframe(parts, part, vector):
 
     moved_points = []
     selected_edge = int(sub_id) if kind == subobject.EDGE else None
-    if kind == subobject.VERTEX and int(sub_id) in vertices:
+    if selected_edge is not None:
+        selected_line = next((line for edge_id, line in edges
+                              if int(edge_id) == selected_edge), ())
+        if selected_line:
+            moved_points = [selected_line[0], selected_line[-1]]
+    elif kind == subobject.VERTEX and int(sub_id) in vertices:
         moved_points = [vertices[int(sub_id)]]
     elif kind == subobject.FACE:
         triangles = dict(parts.get("faces", ())).get(int(sub_id), ())
@@ -19345,6 +19353,19 @@ def _ray_plane_point(space, region, rx, ry, plane_origin, plane_normal):
                                      plane_origin, plane_normal)
 
 
+def _gumball_free_drag_point(area, space, region, mouse_x, mouse_y, origin):
+    """Cursor point for free Gumball movement without collapsing perspective depth."""
+    rv3d = getattr(space, "region_3d", None)
+    if rv3d is not None and getattr(rv3d, "is_perspective", False):
+        normal = _view_direction(rv3d)
+        if normal is not None:
+            return _ray_plane_point(
+                space, region, mouse_x - region.x, mouse_y - region.y,
+                origin, normal)
+    return pick_point(area, space, region,
+                      mouse_x - region.x, mouse_y - region.y)
+
+
 def _gumball_begin(area, space, region, mouse_x, mouse_y, shift=False, ctrl=False):
     """Start a drag if a handle is under the cursor. True if one started.
 
@@ -19486,9 +19507,8 @@ def _gumball_begin(area, space, region, mouse_x, mouse_y, shift=False, ctrl=Fals
             ref = gumball.plane_delta(normal, origin, pt)
             state["ref_dist"] = (ref[0] ** 2 + ref[1] ** 2 + ref[2] ** 2) ** 0.5
             state["accum"] = 1.0
-    else:  # the origin marker -- free movement on the CPlane
-        pt = pick_point(area, space, region,
-                        mouse_x - region.x, mouse_y - region.y)
+    else:  # the origin marker -- free movement in the pane's drag plane
+        pt = _gumball_free_drag_point(area, space, region, mouse_x, mouse_y, origin)
         if pt is None:
             return False
         state["last_world"] = pt
@@ -20657,15 +20677,15 @@ def _apply_xform_to_control_points(xform):
 
 
 def _gumball_grid_snap_point(area, cursor):
-    """Grid-only translation snap, independent of Snappy/Smooth object snapping."""
+    """Grid-only 3-D translation snap, independent of Snappy/Smooth object snapping."""
     if cursor is None or not grid_snap_on():
         return None
     settings = grid_settings_for_area(area)
     if settings is None:
         return None
     plane = get_cplane(area)
-    point = native_pure.grid_snap(cursor, plane.origin, plane.xaxis,
-                                  plane.yaxis, plane.zaxis, settings.snap_spacing)
+    point = native_pure.grid_snap_3d(cursor, plane.origin, plane.xaxis,
+                                     plane.yaxis, plane.zaxis, settings.snap_spacing)
     if point is None:
         return None
     return osnap.Snap(point, "Grid", math.dist(point, cursor))
@@ -20693,7 +20713,8 @@ def _gumball_grid_snap_distance(st, area, distance):
     return snapped
 
 
-def _gumball_snap_point(st, area, space, region, mouse_x, mouse_y):
+def _gumball_snap_point(st, area, space, region, mouse_x, mouse_y,
+                        cursor_world=None, grid_3d=False):
     """The object snap under the cursor during this drag, or None.
 
     Verified (the reference CAD application documentation): "Snappy gumball -- Snaps to
@@ -20721,12 +20742,13 @@ def _gumball_snap_point(st, area, space, region, mouse_x, mouse_y):
     mode = st.get("mode") or st["kind"]
     if not gumball.snappy_applies(mode):
         return None
-    cursor = pick_point(area, space, region,
-                        mouse_x - region.x, mouse_y - region.y)
+    cursor = (cursor_world if cursor_world is not None else
+              pick_point(area, space, region,
+                         mouse_x - region.x, mouse_y - region.y))
     if cursor is None:
         return None
     snap = snap_at(area, space, region, cursor,
-                   exclude_names=st.get("exclude") or ())
+                   exclude_names=st.get("exclude") or (), grid_3d=grid_3d)
     if set_active_snap(snap, _pane_key(area) if snap is not None else None):
         _tag_redraw_viewports()
     return snap
@@ -20925,11 +20947,13 @@ def _gumball_update(mouse_x, mouse_y, shift_held=None):
         area, space, region = _area_by_pane_key(st["pane"])
         if region is None or space is None:
             return False
-        pt = pick_point(area, space, region,
-                        mouse_x - region.x, mouse_y - region.y)
+        pt = _gumball_free_drag_point(
+            area, space, region, mouse_x, mouse_y, st["origin"])
         if pt is None:
             return False
-        snap = (_gumball_snap_point(st, area, space, region, mouse_x, mouse_y)
+        snap = (_gumball_snap_point(
+                    st, area, space, region, mouse_x, mouse_y,
+                    cursor_world=pt, grid_3d=True)
                 if _gumball_snappy else _gumball_grid_snap_point(area, pt))
         if not _gumball_snappy and set_active_snap(
                 snap, _pane_key(area) if snap is not None else None):
