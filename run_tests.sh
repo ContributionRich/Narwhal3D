@@ -94,6 +94,9 @@ if command -v cargo >/dev/null 2>&1; then
         run "Rust geometry-core creased solid and Sweep1 local move" env \
             NARWHAL_GEOMETRY_CORE="$ROOT/native/geometry_core/target/release/libnarwhal_geometry_core.so" \
             LD_LIBRARY_PATH="$OCCT_LIBS" "$PYTHON" spike/test_bug104_subobject_move.py
+        run "Rust geometry-core general extrusion-part movement" env \
+            NARWHAL_GEOMETRY_CORE="$ROOT/native/geometry_core/target/release/libnarwhal_geometry_core.so" \
+            LD_LIBRARY_PATH="$OCCT_LIBS" "$PYTHON" spike/test_bug105.py
         run "Rust platform-core format" cargo fmt --manifest-path native/platform_core/Cargo.toml --check
         run "Rust platform-core Clippy" cargo clippy \
             --manifest-path native/platform_core/Cargo.toml --all-targets -- -D warnings

@@ -2,6 +2,13 @@
 
 All notable public changes will be recorded here. Narwhal 3D is an extremely early prerelease; compatibility may change between builds. Release numbering is intentionally frozen on the `0.4.x` line until the project owner explicitly lifts that cap.
 
+## Unreleased
+
+### Fixed
+
+- Route curved faces, edges, and vertices on exact extrusion solids through the certified Rust/OCCT local-move core instead of obsolete recipe-specific blanket refusals.
+- Restore live Gumball extrusion previews after the direct-edit preview optimization removed a shared throttle constant; unexpected candidate failures now stay inside the drag and no longer poison the modal operator.
+
 ## 0.4.5 — 2026-10-23
 
 Changes from 0.4.4:

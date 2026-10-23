@@ -71,6 +71,7 @@ TEST_FILES = (
     "spike/test_picture_display.py", "spike/test_gumball_region_extrude.py",
     "spike/test_bug102_live.py", "spike/test_local_move_scale.py",
     "spike/test_bug103_curved_move.py", "spike/test_bug104_subobject_move.py",
+    "spike/test_bug105.py",
     "spike/test_document_clipboard.py", "spike/test_control_point_osnap.py",
     "spike/ui_smoke.py", "spike/addon_e2e.py", "spike/test_app_drawn.py",
     "spike/branding_test.py", "spike/test_deferred_present_patch.py",

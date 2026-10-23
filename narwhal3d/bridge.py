@@ -3816,10 +3816,18 @@ def _move_extruded_cap(geom, shape, kind, sub_id, vector, occt, live=False):
     recipe = _kernel().recipe_of(geom)
     base = _modifier_base(recipe) if isinstance(recipe, dict) else None
     recipe_kind = base.get("kind") if isinstance(base, dict) else None
+    def general_exact_move():
+        if not isinstance(recipe, dict):
+            return None
+        return _move_modified_box_subobject(
+            geom, shape, kind, sub_id, vector, recipe, base, occt,
+            live=live, native_only=False)
+
     if recipe_kind not in ("box", "cylinder", "extrusion"):
-        raise ValueError("moving a part of this CURVED solid is not implemented yet -- only "
-                         "a surviving planar face of a filleted box, cylinder, or straight "
-                         "extrusion recipe can be rebuilt exactly")
+        moved = general_exact_move()
+        if moved is not None:
+            return moved
+        raise ValueError("this exact solid has no replayable recipe for a certified local move")
     if recipe_kind == "box":
         if kind == "face":
             faces = occt.unique_faces(shape)
@@ -3834,22 +3842,13 @@ def _move_extruded_cap(geom, shape, kind, sub_id, vector, occt, live=False):
                     geom, shape, selected, vector, recipe, base, occt)
         return _move_modified_box_subobject(
             geom, shape, kind, sub_id, vector, recipe, base, occt, live=live)
-    if recipe_kind == "cylinder" and kind == "edge":
-        native_result = _move_modified_box_subobject(
-            geom, shape, kind, sub_id, vector, recipe, base, occt,
-            live=live, native_only=True)
-        if native_result is not None:
-            return native_result
     if kind != "face":
-        raise ValueError("moving an edge or vertex of this CURVED solid is not implemented "
-                         "yet; only a filleted box recipe can be replayed exactly")
-    if recipe_kind == "extrusion":
-        if base.get("both"):
-            raise ValueError("moving a cap of a BothSides extrusion is not implemented yet")
-        if base.get("draft") not in (None, 0, 0.0):
-            raise ValueError("moving a cap of a drafted extrusion is not implemented yet")
-        if not bool(base.get("solid", True)):
-            raise ValueError("the extrusion is not a closed solid")
+        return general_exact_move()
+    if recipe_kind == "extrusion" and (
+            base.get("both")
+            or base.get("draft") not in (None, 0, 0.0)
+            or not bool(base.get("solid", True))):
+        return general_exact_move()
 
     faces = occt.unique_faces(shape)
     i = int(sub_id)
@@ -3858,8 +3857,7 @@ def _move_extruded_cap(geom, shape, kind, sub_id, vector, occt, live=False):
                              f"numbered 1..{len(faces)}")
     selected = occt.face_plane(faces[i - 1])
     if selected is None:
-        raise ValueError("moving a CURVED lateral wall is not implemented yet -- select one "
-                         "surviving planar face")
+        return general_exact_move()
     matrix = base.get("xform") or _IDENTITY16
     if recipe_kind == "cylinder":
         local_axis = (0.0, 0.0, float(base["height"]))
@@ -3882,8 +3880,7 @@ def _move_extruded_cap(geom, shape, kind, sub_id, vector, occt, live=False):
             caps.append((sum(a * b for a, b in zip(centre, u)), fid, centre))
     caps.sort()
     if len(caps) != 2 or i not in (caps[0][1], caps[1][1]):
-        raise ValueError("that planar face is not one of the extrusion's two end caps -- "
-                         "moving side faces is not implemented yet")
+        return general_exact_move()
 
     v = tuple(float(c) for c in vector)
     along = sum(a * b for a, b in zip(v, u))
@@ -3937,10 +3934,11 @@ def move_subobject(geom, kind, sub_id, vector, *, live=False):
 
     Recipe-backed boxes use the authoritative native local-move core first. A moved corner
     may turn its three incident planes into exact BSpline surfaces; that is real boundary
-    representation geometry, not a faceted proxy. A native refusal/error is final. Only
-    when that core is unavailable does the complete compatibility path below rebuild an
-    all-planar straight-edged solid as a ``polyhedron`` recipe. Other recipe families use
-    their existing strict exact special cases. Raises ValueError, naming the reason and
+    representation geometry, not a faceted proxy. Extrusions retain their analytic cap
+    resize fast path, while lateral faces, edges and vertices route through the same general
+    certified local-move engine instead of an old recipe-family refusal. A native
+    refusal/error is final. Only when that core is unavailable does the complete
+    compatibility path below rebuild supported exact geometry. Raises ValueError, naming the reason and
     changing nothing, when the available exact path cannot certify the result, or when no
     exact solid exists behind `geom`; bad kinds and ids raise SubObjectError.
     """

@@ -61,7 +61,7 @@ inner = add_circle(ctx, (0.0, 0.0, 0.0), 4.0)
 ctx.select_by_names([outer, inner])
 ctx.undo.clear()
 st = extrusion_state([outer, inner])
-ui._extrude_compute(st, force=True)
+ui._extrude_compute(st)
 candidates = st.get("ext_cands") or []
 check(len(candidates) == 1,
       "one candidate is built for the annular profile region", len(candidates))
@@ -109,6 +109,25 @@ check(len(disjoint) == 2,
 check(all(kernel.master_of(row[2]) is not None
           and occt.is_airtight(kernel.master_of(row[2])) for row in disjoint),
       "every disjoint candidate is an airtight analytic master")
+
+print("\n-- bug #105: live, non-forced preview errors stay inside the drag --")
+ctx = reset()
+single = add_circle(ctx, (0.0, 0.0, 0.0), 2.0)
+st = extrusion_state([single], distance=3.0)
+original_extrude = bridge.gumball_extrude
+try:
+    def broken_preview(*_args, **_kwargs):
+        raise RuntimeError("synthetic live preview failure")
+
+    bridge.gumball_extrude = broken_preview
+    ui._extrude_compute(st)
+finally:
+    bridge.gumball_extrude = original_extrude
+check(not (st.get("ext_cands") or [])
+      and "synthetic live preview failure" in (st.get("ext_why") or ""),
+      "unexpected live preview errors are reported without escaping or poisoning the modal drag")
+check(abs(ui.GUMBALL_EXTRUDE_LIVE_INTERVAL - 1.0 / 30.0) < 1e-12,
+      "Gumball extrusion owns a dedicated 30 Hz live-preview throttle")
 
 print(f"\n{checks - len(failures)}/{checks} checks passed")
 if failures:

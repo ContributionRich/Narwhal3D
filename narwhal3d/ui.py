@@ -20537,11 +20537,16 @@ def _extrude_targets():
     return ("objects", names) if names else None
 
 
+#: Application-defined: exact Gumball extrusion ghosts rebuild at most 30 times/second.
+#: This is separate from direct-edit previews, which are now display-only and unthrottled.
+GUMBALL_EXTRUDE_LIVE_INTERVAL = 1.0 / 30.0
+
+
 def _extrude_compute(st, force=False):
     """Recompute the extrude candidates for the drag so far (throttled) and their ghost."""
     import time
     now = time.monotonic()
-    if not force and now - st.get("ext_t", 0.0) < BREP_PART_LIVE_INTERVAL:
+    if not force and now - st.get("ext_t", 0.0) < GUMBALL_EXTRUDE_LIVE_INTERVAL:
         return
     st["ext_t"] = now
     d = float(st.get("total") or 0.0)
@@ -20560,7 +20565,8 @@ def _extrude_compute(st, force=False):
                     regions = commands.extrude_planar_profile_regions(
                         [fobj.Geometry for _name, fobj in rows], d,
                         direction=st["axis_dir"])
-                except ValueError as e:
+                except Exception as e:  # noqa: BLE001
+                    print(f"[narwhal3d] Gumball profile extrusion preview failed: {e!r}")
                     why = f"selected profiles: {e}"
                     jobs = []
                 else:
@@ -20578,7 +20584,8 @@ def _extrude_compute(st, force=False):
                 continue
             try:
                 new = bridge.gumball_extrude(fobj.Geometry, st["axis_dir"], d, part=part)
-            except ValueError as e:
+            except Exception as e:  # noqa: BLE001
+                print(f"[narwhal3d] Gumball extrusion preview failed for {name}: {e!r}")
                 why = f"{name}: {e}"
                 continue
             cands.append((name, part, new))
