@@ -132,7 +132,7 @@ check({"spike/test_picture.py", "spike/test_cmdbar_hits.py",
        "spike/test_picture_display.py", "spike/test_gumball_region_extrude.py",
        "spike/test_bug102_live.py", "spike/test_local_move_scale.py",
        "spike/test_bug103_curved_move.py", "spike/test_bug104_subobject_move.py",
-       "spike/test_bug105.py"} <= public,
+       "spike/test_bug105.py", "spike/test_bug106.py"} <= public,
       "the public allowlist includes regressions for interaction, exact local moves, and scaling")
 check({"native/welcome/.gitignore", "native/welcome/Cargo.lock",
        "native/welcome/Cargo.toml", "native/welcome/src/main.rs",

@@ -875,49 +875,86 @@ std::vector<FaceOption> composite_options(const TopoDS_Face& face,
                                           const std::vector<TopoDS_Edge>& boundary,
                                           const Tolerances& tolerances,
                                           const AdapterMovePolicy& policy) {
+  const int edge_count = static_cast<int>(boundary.size());
+  if (edge_count < 5 || edge_count > 6) {
+    refuse(kReasonUnsupportedBoundary);
+  }
   std::vector<Handle(Geom_BSplineCurve)> curves;
   for (const TopoDS_Edge& edge : boundary) {
     curves.push_back(bspline_edge(edge, tolerances.build));
   }
   std::vector<FaceOption> candidates;
-  for (int join_index = 0; join_index < 5; ++join_index) {
-    std::vector<Handle(Geom_BSplineCurve)> ordered;
-    for (int offset = 0; offset < 5; ++offset) {
-      Handle(Geom_BSplineCurve) copy = Handle(Geom_BSplineCurve)::DownCast(
-          curves[(join_index + offset) % 5]->Copy());
-      if (copy.IsNull()) {
-        refuse(kReasonNoCandidate);
+  int partition_index = 0;
+  // Choose four cyclic group starts. This enumerates C(5,4)=5 or C(6,4)=15 exact
+  // partitions, safely below the 25-candidate policy ceiling. Every source edge remains
+  // on one composite boundary with full-multiplicity joins; sewing and the later
+  // bidirectional boundary/topology certificates remain authoritative.
+  for (int a = 0; a < edge_count - 3; ++a) {
+    for (int b = a + 1; b < edge_count - 2; ++b) {
+      for (int c = b + 1; c < edge_count - 1; ++c) {
+        for (int d = c + 1; d < edge_count; ++d, ++partition_index) {
+          const std::array<int, 4> starts{a, b, c, d};
+          std::vector<Handle(Geom_BSplineCurve)> composite;
+          bool joined = true;
+          for (int group = 0; group < 4 && joined; ++group) {
+            const int start = starts[group];
+            const int stop = starts[(group + 1) % 4];
+            Handle(Geom_BSplineCurve) first = Handle(Geom_BSplineCurve)::DownCast(
+                curves[start]->Copy());
+            if (first.IsNull()) {
+              joined = false;
+              break;
+            }
+            GeomConvert_CompCurveToBSplineCurve joiner(first);
+            int index = (start + 1) % edge_count;
+            while (index != stop) {
+              Handle(Geom_BSplineCurve) next = Handle(Geom_BSplineCurve)::DownCast(
+                  curves[index]->Copy());
+              if (next.IsNull()) {
+                joined = false;
+                break;
+              }
+              const int full_multiplicity =
+                  std::max(joiner.BSplineCurve()->Degree(), next->Degree());
+              if (!joiner.Add(next, tolerances.build, true, true, full_multiplicity)) {
+                joined = false;
+                break;
+              }
+              index = (index + 1) % edge_count;
+            }
+            if (joined) {
+              composite.push_back(joiner.BSplineCurve());
+            }
+          }
+          if (!joined || composite.size() != 4) {
+            continue;
+          }
+          try {
+            auto rebuilt = coons_face(face, composite, tolerances.build, false);
+            FaceOption option;
+            option.face = rebuilt.first;
+            option.reconstructed = true;
+            option.reconstructed_bspline = true;
+            option.boundary_error = boundary_error(option.face, boundary, policy.edge_samples);
+            const std::optional<double> jump = full_knot_normal_jump(rebuilt.second);
+            if (!jump.has_value()) {
+              continue;
+            }
+            option.internal_knot_checked = true;
+            option.merge_choice = partition_index;
+            option.normal_jump = *jump;
+            option.rank = {
+                static_cast<double>(std::max(rebuilt.second->UDegree(), rebuilt.second->VDegree())),
+                static_cast<double>(rebuilt.second->UDegree() + rebuilt.second->VDegree()),
+                static_cast<double>(rebuilt.second->NbUPoles() * rebuilt.second->NbVPoles()),
+                static_cast<double>(rebuilt.second->NbUPoles() + rebuilt.second->NbVPoles()),
+                face_deformation(face, option.face, tolerances.compare)};
+            candidates.push_back(option);
+          } catch (const Refusal&) {
+          } catch (const Standard_Failure&) {
+          }
+        }
       }
-      ordered.push_back(copy);
-    }
-    GeomConvert_CompCurveToBSplineCurve joiner(ordered[0]);
-    const int full_multiplicity = std::max(ordered[0]->Degree(), ordered[1]->Degree());
-    if (!joiner.Add(ordered[1], tolerances.build, true, true, full_multiplicity)) {
-      continue;
-    }
-    try {
-      auto rebuilt = coons_face(face, {joiner.BSplineCurve(), ordered[2], ordered[3], ordered[4]},
-                                tolerances.build, false);
-      FaceOption option;
-      option.face = rebuilt.first;
-      option.reconstructed = true;
-      option.reconstructed_bspline = true;
-      option.boundary_error = boundary_error(option.face, boundary, policy.edge_samples);
-      const std::optional<double> jump = full_knot_normal_jump(rebuilt.second);
-      if (!jump.has_value()) {
-        continue;
-      }
-      option.internal_knot_checked = true;
-      option.merge_choice = join_index;
-      option.normal_jump = *jump;
-      option.rank = {static_cast<double>(std::max(rebuilt.second->UDegree(), rebuilt.second->VDegree())),
-                     static_cast<double>(rebuilt.second->UDegree() + rebuilt.second->VDegree()),
-                     static_cast<double>(rebuilt.second->NbUPoles() * rebuilt.second->NbVPoles()),
-                     static_cast<double>(rebuilt.second->NbUPoles() + rebuilt.second->NbVPoles()),
-                     face_deformation(face, option.face, tolerances.compare)};
-      candidates.push_back(option);
-    } catch (const Refusal&) {
-    } catch (const Standard_Failure&) {
     }
   }
   if (candidates.empty()) {
@@ -942,7 +979,7 @@ std::vector<FaceOption> rebuild_face_options(const TopoDS_Face& face,
       refuse(kReasonNoCandidate);
     }
   }
-  if (boundary.size() == 5) {
+  if (boundary.size() == 5 || boundary.size() == 6) {
     return composite_options(face, boundary, tolerances, policy);
   }
   if (boundary.size() != 3 && boundary.size() != 4) {
@@ -1719,9 +1756,9 @@ TopoDS_Shape move_component(const MoveSource& source,
       if (face_strategies != nullptr && cached_strategy < 0) {
         (*face_strategies)[face_index] = !options.front().reconstructed_bspline
             ? 1
-            : boundary.size() == 5 ? 3 : 2;
+            : boundary.size() >= 5 ? 3 : 2;
       }
-      if (boundary.size() == 5 && certified_merges != nullptr &&
+      if (boundary.size() >= 5 && certified_merges != nullptr &&
           (*certified_merges)[face_index] >= 0) {
         const int required_choice = (*certified_merges)[face_index];
         options.erase(

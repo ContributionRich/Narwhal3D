@@ -97,6 +97,9 @@ if command -v cargo >/dev/null 2>&1; then
         run "Rust geometry-core general extrusion-part movement" env \
             NARWHAL_GEOMETRY_CORE="$ROOT/native/geometry_core/target/release/libnarwhal_geometry_core.so" \
             LD_LIBRARY_PATH="$OCCT_LIBS" "$PYTHON" spike/test_bug105.py
+        run "Rust geometry-core six-edge extrusion-cap movement" env \
+            NARWHAL_GEOMETRY_CORE="$ROOT/native/geometry_core/target/release/libnarwhal_geometry_core.so" \
+            LD_LIBRARY_PATH="$OCCT_LIBS" "$PYTHON" spike/test_bug106.py
         run "Rust platform-core format" cargo fmt --manifest-path native/platform_core/Cargo.toml --check
         run "Rust platform-core Clippy" cargo clippy \
             --manifest-path native/platform_core/Cargo.toml --all-targets -- -D warnings

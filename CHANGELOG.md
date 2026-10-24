@@ -7,6 +7,7 @@ All notable public changes will be recorded here. Narwhal 3D is an extremely ear
 ### Fixed
 
 - Route curved faces, edges, and vertices on exact extrusion solids through the certified Rust/OCCT local-move core instead of obsolete recipe-specific blanket refusals.
+- Move vertices out of six-edge extrusion caps by rebuilding one exact composite NURBS cap from all six real boundary curves; no triangular or planar subdivision is introduced.
 - Restore live Gumball extrusion previews after the direct-edit preview optimization removed a shared throttle constant; unexpected candidate failures now stay inside the drag and no longer poison the modal operator.
 
 ## 0.4.5 — 2026-10-23
