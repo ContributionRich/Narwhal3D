@@ -108,6 +108,7 @@ REQUIRED = {
     "native/geometry_core/build.rs",
     "native/geometry_core/cpp/occt_adapter.cpp",
     "native/geometry_core/include/narwhal_geometry_core.h",
+    "native/geometry_core/src/height_field.rs",
     "native/geometry_core/src/lib.rs",
     "native/platform_core/Cargo.toml",
     "native/platform_core/include/narwhal_platform_core.h",

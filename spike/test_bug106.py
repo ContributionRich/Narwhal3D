@@ -2,6 +2,7 @@
 import importlib.util
 import os
 import sys
+import time
 import types
 
 import rhino3dm as r3
@@ -60,7 +61,9 @@ selected_index = min(
 old_point = points[selected_index - 1]
 vector = (0.0, 0.0, 0.25)
 
+started = time.perf_counter()
 moved = bridge.move_subobject(extrusion, "vertex", selected_index, vector)
+elapsed = time.perf_counter() - started
 moved_shape = shape_of(moved)
 recipe = kernel.recipe_of(moved)
 assert topology(moved_shape) == topology(source)
@@ -71,10 +74,16 @@ new_points = [occt._local_point(vertex) for vertex in occt._unique_vertices(move
 target = tuple(old_point[index] + vector[index] for index in range(3))
 assert sum(occt._local_distance(target, point) <= 1e-8 for point in new_points) == 1
 assert occt.face_types(moved_shape) == {"PLANE": 6, "BSPLINE": 2}
+assert elapsed < 5.0, f"first six-edge exact move blocked for {elapsed:.3f}s"
 
 replay = occt.from_recipe(recipe)
 assert topology(replay) == topology(source)
 assert occt.is_valid(replay) and occt.is_airtight(replay)
 assert occt.face_types(replay) == occt.face_types(moved_shape)
 assert abs(occt.volume(replay) - occt.volume(moved_shape)) <= 1e-8
-print("BUG 106 SIX-EDGE CAP VERTEX MOVEMENT PASSED")
+adapter_source = open(
+    os.path.join(ROOT, "native/geometry_core/cpp/occt_adapter.cpp"),
+    encoding="utf-8").read()
+assert "preferred_filter_used" in adapter_source
+assert "certificate, false" in adapter_source
+print(f"BUG 106 SIX-EDGE CAP VERTEX MOVEMENT PASSED ({elapsed:.3f}s)")

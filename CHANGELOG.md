@@ -8,6 +8,8 @@ All notable public changes will be recorded here. Narwhal 3D is an extremely ear
 
 - Route curved faces, edges, and vertices on exact extrusion solids through the certified Rust/OCCT local-move core instead of obsolete recipe-specific blanket refusals.
 - Move vertices out of six-edge extrusion caps by rebuilding one exact composite NURBS cap from all six real boundary curves; no triangular or planar subdivision is introduced.
+- Prevent six-edge point edits from freezing the window on first release by trying the topology-oriented exact partition before the exhaustive fallback; the reported exact solve drops from about 14 seconds to 2 seconds.
+- Rebuild a six-edge cap lifted by a point edit as one smooth exact bicubic NURBS height field over the original cap plane instead of a folded composite patch. A new Rust solver fits the surface; OCCT builds the exact face with planar p-curves and edge tolerances that are re-measured to bound the true surface gap. Multi-span curved edges attached to the moved point now bend smoothly along their whole length instead of kinking in their last span. On the reported model the cap area matches the reference result within 0.1%, and the edit commits in about 1.2 seconds instead of 3.6.
 - Restore live Gumball extrusion previews after the direct-edit preview optimization removed a shared throttle constant; unexpected candidate failures now stay inside the drag and no longer poison the modal operator.
 
 ## 0.4.5 — 2026-10-23

@@ -10,6 +10,8 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::ptr;
 use std::sync::{Arc, Mutex, OnceLock};
 
+pub mod height_field;
+
 pub const ABI_VERSION: u32 = 4;
 pub const CERTIFICATE_VERSION: u32 = 3;
 pub const CAPABILITY_MAKE_BOX_BREP: u64 = 1 << 0;
@@ -195,6 +197,7 @@ extern "C" {
         certificate: *mut NarwhalLocalMoveCertificateV3,
     ) -> i32;
     fn narwhal_occt_adapter_session_destroy(session: *mut c_void) -> i32;
+    fn narwhal_occt_adapter_set_height_field_solver(solver: HeightFieldSolver);
     #[cfg(test)]
     fn narwhal_occt_adapter_session_live_count() -> usize;
     fn narwhal_occt_adapter_move_component(
@@ -315,7 +318,30 @@ fn set_certificate_error(
     }
 }
 
+type HeightFieldSolver = unsafe extern "C" fn(
+    *const f64,
+    usize,
+    f64,
+    f64,
+    u32,
+    *mut f64,
+    usize,
+    *mut height_field::NarwhalHeightFieldV1,
+) -> i32;
+
+/// Hands the Rust height-field solver to the C++ adapter once, before the first move.
+fn register_height_field_solver() {
+    static REGISTERED: OnceLock<()> = OnceLock::new();
+    REGISTERED.get_or_init(|| {
+        let solver: HeightFieldSolver = height_field::fit_height_field_ffi;
+        // SAFETY: the adapter only stores the pointer; the function lives for the
+        // whole program and matches the C++ `HeightFieldSolver` signature.
+        unsafe { narwhal_occt_adapter_set_height_field_solver(solver) };
+    });
+}
+
 fn move_policy() -> AdapterMovePolicy {
+    register_height_field_solver();
     AdapterMovePolicy {
         zero_translation: LOCAL_MOVE_ZERO_TRANSLATION,
         max_normal_jump: LOCAL_MOVE_MAX_NORMAL_JUMP,
