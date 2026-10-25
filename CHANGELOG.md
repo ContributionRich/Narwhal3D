@@ -12,6 +12,16 @@ All notable public changes will be recorded here. Narwhal 3D is an extremely ear
 - Rebuild a six-edge cap lifted by a point edit as one smooth exact bicubic NURBS height field over the original cap plane instead of a folded composite patch. A new Rust solver fits the surface; OCCT builds the exact face with planar p-curves and edge tolerances that are re-measured to bound the true surface gap. Multi-span curved edges attached to the moved point now bend smoothly along their whole length instead of kinking in their last span. On the reported model the cap area matches the reference result within 0.1%, and the edit commits in about 1.2 seconds instead of 3.6.
 - Keep sequential point edits on a curved cap smooth and fast. A cap that is already a fitted surface is now refit over its original plane, which is recovered from its unmoved straight edges. Before this, a second point on it could not be moved, and moving the first point back folded the cap and took 7–15 seconds. The fitted cap now stays on one side of its curved edges, so the solid check no longer stalls (one edit took 139 seconds). Edge tolerances are measured against the part size and no longer grow with each edit. Lines and arcs on the cap stay analytic. A saved model whose edit history was recorded by an earlier build still rebuilds its exact geometry, because each moved point is matched by its exact position.
 - Move every point, edge and face of extruded profiles with any number of segments. Previously caps with more than six edges were refused, so extrusions of profiles with arcs, such as a keyhole, could not move anything across the cap plane. Arcs that continue each other tangentially keep their tangency when a shared point moves. Lifted arcs now rise with continuous curvature, so the rebuilt cap meets them closely. Translated arcs keep their identity check through an accurate arc-length measure. On the reported model all 400 checked moves succeed.
+- Make points, edges and faces movable on every kind of solid. Moves were refused on cylinders, cones, tubes, extruded circles and ellipses, spheres, tori, and any face with a hole.
+  - A wall that closes on itself through a seam is rebuilt as the exact ruled surface between its rims. A cylinder whose top slides sideways becomes an exact oblique cylinder.
+  - Faces with holes are rebuilt as one smooth surface that keeps every hole.
+  - Cone tips and sphere poles move, stretching the surface smoothly.
+  - A move that carries every vertex translates the solid exactly.
+  - Moving a circle's single point carries the whole circle.
+  - Finished moves are certified best-first, which brings a lifted fillet face from 9 s to under 1 s.
+  - Edge and volume measurements use adaptive integration.
+
+  A test now covers 18 kinds of solid: every part in six directions, 1,944 moves. The one remaining refusal is a sideways ellipsoid pole stretch, which OCCT's self-intersection check cannot certify for that surface.
 - Restore live Gumball extrusion previews after the direct-edit preview optimization removed a shared throttle constant; unexpected candidate failures now stay inside the drag and no longer poison the modal operator.
 
 ## 0.4.5 — 2026-10-23

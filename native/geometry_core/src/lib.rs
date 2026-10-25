@@ -321,6 +321,8 @@ fn set_certificate_error(
 type HeightFieldSolver = unsafe extern "C" fn(
     *const f64,
     usize,
+    *const usize,
+    usize,
     f64,
     f64,
     u32,
@@ -1482,18 +1484,44 @@ mod tests {
     }
 
     #[test]
-    fn cylinder_cap_special_case_refuses_radial_and_collapsing_moves() {
+    fn cylinder_cap_moves_radially_into_an_oblique_cylinder_and_refuses_collapse() {
+        // Bug #110 matrix: a sideways move of a cylinder cap used to be refused. The wall is
+        // now the exact ruled surface between the rims -- an oblique cylinder whose volume
+        // is the base area times the new axial height.
         let (fixture, lower, upper, _lower_edge, _upper_edge) = unsafe { make_cylinder_fixture() };
-        for (face, vector) in [
-            (lower, [0.5, 0.0, 0.0]),
-            (
-                upper,
-                [
-                    -6.0 / 14.0_f64.sqrt(),
-                    -12.0 / 14.0_f64.sqrt(),
-                    -18.0 / 14.0_f64.sqrt(),
-                ],
-            ),
+        let baseline = unsafe { inspect(&fixture) };
+        let axis = [
+            1.0 / 14.0_f64.sqrt(),
+            2.0 / 14.0_f64.sqrt(),
+            3.0 / 14.0_f64.sqrt(),
+        ];
+        let area = std::f64::consts::PI * 4.0;
+        for (part, vector) in [(lower, [0.5, 0.0, 0.0]), (upper, [0.0, -0.5, 0.25])] {
+            let (moved, certificate) = unsafe { move_once(&fixture, COMPONENT_FACE, part, vector) };
+            assert_certificate(&certificate, &baseline, COMPONENT_FACE);
+            let after = unsafe { inspect(&moved) };
+            assert_eq!((after.valid, after.airtight), (1, 1));
+            assert_eq!(
+                (after.face_count, after.edge_count, after.vertex_count),
+                (3, 3, 2)
+            );
+            assert_eq!((after.plane_faces, after.bspline_faces), (2, 1));
+            let along: f64 = (0..3).map(|i| vector[i] * axis[i]).sum();
+            let height = if part == lower {
+                6.0 - along
+            } else {
+                6.0 + along
+            };
+            assert!(
+                (after.volume - area * height).abs() <= 1.0e-6 * area * height,
+                "{}",
+                after.volume
+            );
+        }
+        // Moving a rim onto the other one still collapses the solid and is refused.
+        for (part, vector) in [
+            (lower, axis.map(|value| value * 6.0)),
+            (upper, axis.map(|value| value * -6.0)),
         ] {
             let mut certificate = NarwhalLocalMoveCertificateV3::default();
             let status = unsafe {
@@ -1501,7 +1529,7 @@ mod tests {
                     fixture.as_ptr(),
                     fixture.len(),
                     COMPONENT_FACE,
-                    face,
+                    part,
                     vector[0],
                     vector[1],
                     vector[2],
@@ -1566,26 +1594,44 @@ mod tests {
     }
 
     #[test]
-    fn cylinder_rim_special_case_refuses_radial_and_collapsing_moves() {
+    fn cylinder_rim_moves_radially_into_an_oblique_cylinder_and_refuses_collapse() {
+        // Bug #110 matrix: a sideways move of a cylinder rim used to be refused. The wall is
+        // now the exact ruled surface between the rims -- an oblique cylinder whose volume
+        // is the base area times the new axial height.
         let (fixture, _lower_face, _upper_face, lower, upper) = unsafe { make_cylinder_fixture() };
-        for (edge, vector) in [
-            (lower, [0.5, 0.0, 0.0]),
-            (
-                lower,
-                [
-                    6.0 / 14.0_f64.sqrt(),
-                    12.0 / 14.0_f64.sqrt(),
-                    18.0 / 14.0_f64.sqrt(),
-                ],
-            ),
-            (
-                upper,
-                [
-                    -6.0 / 14.0_f64.sqrt(),
-                    -12.0 / 14.0_f64.sqrt(),
-                    -18.0 / 14.0_f64.sqrt(),
-                ],
-            ),
+        let baseline = unsafe { inspect(&fixture) };
+        let axis = [
+            1.0 / 14.0_f64.sqrt(),
+            2.0 / 14.0_f64.sqrt(),
+            3.0 / 14.0_f64.sqrt(),
+        ];
+        let area = std::f64::consts::PI * 4.0;
+        for (part, vector) in [(lower, [0.5, 0.0, 0.0]), (upper, [0.0, -0.5, 0.25])] {
+            let (moved, certificate) = unsafe { move_once(&fixture, COMPONENT_EDGE, part, vector) };
+            assert_certificate(&certificate, &baseline, COMPONENT_EDGE);
+            let after = unsafe { inspect(&moved) };
+            assert_eq!((after.valid, after.airtight), (1, 1));
+            assert_eq!(
+                (after.face_count, after.edge_count, after.vertex_count),
+                (3, 3, 2)
+            );
+            assert_eq!((after.plane_faces, after.bspline_faces), (2, 1));
+            let along: f64 = (0..3).map(|i| vector[i] * axis[i]).sum();
+            let height = if part == lower {
+                6.0 - along
+            } else {
+                6.0 + along
+            };
+            assert!(
+                (after.volume - area * height).abs() <= 1.0e-6 * area * height,
+                "{}",
+                after.volume
+            );
+        }
+        // Moving a rim onto the other one still collapses the solid and is refused.
+        for (part, vector) in [
+            (lower, axis.map(|value| value * 6.0)),
+            (upper, axis.map(|value| value * -6.0)),
         ] {
             let mut certificate = NarwhalLocalMoveCertificateV3::default();
             let status = unsafe {
@@ -1593,7 +1639,7 @@ mod tests {
                     fixture.as_ptr(),
                     fixture.len(),
                     COMPONENT_EDGE,
-                    edge,
+                    part,
                     vector[0],
                     vector[1],
                     vector[2],

@@ -86,12 +86,14 @@ for kind, index, vector in (
 cylinder = bridge.make_cylinder((0, 0, 0), 3.0, 5.0)
 wall = next(index for index, face in enumerate(occt.unique_faces(shape_of(cylinder)), 1)
             if occt.face_plane(face) is None)
-try:
-    bridge.move_subobject(cylinder, "face", wall, (0.2, 0.0, 0.0))
-except ValueError as error:
-    message = str(error)
-    assert "native local move refused" in message and "not implemented" not in message
-else:
-    raise AssertionError("the unsupported cylinder-wall deformation unexpectedly succeeded")
-print("PASS: unsupported curved deformation reaches exact certification, not a blanket refusal")
+# The wall carries both rims and so every vertex: moving it moves the whole cylinder
+# rigidly (bug #110 matrix; this was refused before), exactly and keeping its type.
+moved_cylinder = shape_of(bridge.move_subobject(cylinder, "face", wall, (0.2, 0.0, 0.0)))
+assert occt.is_valid(moved_cylinder) and occt.is_airtight(moved_cylinder)
+assert occt.face_types(moved_cylinder) == occt.face_types(shape_of(cylinder))
+assert abs(occt.volume(moved_cylinder) - occt.volume(shape_of(cylinder))) <= 1e-9
+before = sorted(occt._local_point(v) for v in occt._unique_vertices(shape_of(cylinder)))
+after = sorted(occt._local_point(v) for v in occt._unique_vertices(moved_cylinder))
+assert all(occt._local_distance((a[0] + 0.2, a[1], a[2]), b) <= 1e-9 for a, b in zip(before, after))
+print("PASS: a cylinder wall move translates the whole cylinder exactly")
 print("BUG 105 EXACT SUBOBJECT MOVEMENT PASSED")

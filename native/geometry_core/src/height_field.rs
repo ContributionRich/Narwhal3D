@@ -326,6 +326,63 @@ pub fn is_simple_polygon(points: &[[f64; 2]], scale: f64) -> bool {
     true
 }
 
+/// True when the closed loops (`loops` holds each loop's first index; loop k runs to the
+/// next start) neither touch themselves nor each other -- an outline plus its holes.
+pub fn are_simple_loops(points: &[[f64; 2]], loops: &[usize], scale: f64) -> bool {
+    if loops.is_empty() || loops[0] != 0 || loops.windows(2).any(|w| w[1] <= w[0]) {
+        return false;
+    }
+    let ends: Vec<usize> = loops
+        .iter()
+        .skip(1)
+        .copied()
+        .chain([points.len()])
+        .collect();
+    if loops
+        .iter()
+        .zip(&ends)
+        .any(|(start, end)| end - start < 3 || *end > points.len())
+    {
+        return false;
+    }
+    if loops.len() == 1 {
+        return is_simple_polygon(points, scale);
+    }
+    let mut segments = Vec::new();
+    for (loop_index, (&start, &end)) in loops.iter().zip(&ends).enumerate() {
+        let count = end - start;
+        for k in 0..count {
+            segments.push((
+                loop_index,
+                k,
+                count,
+                points[start + k],
+                points[start + (k + 1) % count],
+            ));
+        }
+    }
+    let epsilon = scale * scale * 1.0e-14;
+    for i in 0..segments.len() {
+        let (li, ki, ni, a, b) = segments[i];
+        for &(lj, kj, _, c, d) in &segments[i + 1..] {
+            if li == lj && (kj == ki + 1 || (ki == 0 && kj == ni - 1)) {
+                continue;
+            }
+            if a[0].max(b[0]) < c[0].min(d[0])
+                || c[0].max(d[0]) < a[0].min(b[0])
+                || a[1].max(b[1]) < c[1].min(d[1])
+                || c[1].max(d[1]) < a[1].min(b[1])
+            {
+                continue;
+            }
+            if segments_cross(a, b, c, d, epsilon) {
+                return false;
+            }
+        }
+    }
+    true
+}
+
 /// Spans along the longer side of the first grid tried. Coarser grids reach the boundary
 /// tolerance sooner but leave the interior visibly stiffer than the thin-plate limit.
 const START_SPANS: usize = 24;
@@ -544,6 +601,7 @@ fn biased_targets(
 /// while a one-signed gap of the same size intersects in 0.03 s.
 pub fn fit(
     samples: &[[f64; 3]],
+    loops: &[usize],
     smoothing: f64,
     target_error: f64,
     max_spans: u32,
@@ -571,7 +629,7 @@ pub fn fit(
         return Err((STATUS_INVALID_INPUT, None));
     }
     let outline: Vec<[f64; 2]> = samples.iter().map(|s| [s[0], s[1]]).collect();
-    if !is_simple_polygon(&outline, diagonal) {
+    if !are_simple_loops(&outline, loops, diagonal) {
         return Err((STATUS_NOT_SIMPLE, None));
     }
     let flat = diagonal * 1.0e-12;
@@ -644,15 +702,19 @@ pub fn fit(
 }
 
 /// C ABI handed to the C++ adapter as a function pointer (deliberately not an exported
-/// symbol). `samples` is `sample_count` packed `(x, y, z)` triples. On `STATUS_OK` (and on
+/// symbol). `samples` is `sample_count` packed `(x, y, z)` triples, made of `loop_count`
+/// closed loops starting at the indices in `loop_starts` (the outline, then any holes). On `STATUS_OK` (and on
 /// `STATUS_NOT_CONVERGED`, for diagnostics) `result` and `heights` hold the fit.
 ///
 /// # Safety
-/// `samples` must point to `3 * sample_count` doubles, `heights` to `capacity` doubles and
+/// `samples` must point to `3 * sample_count` doubles, `loop_starts` to `loop_count`
+/// indices, `heights` to `capacity` doubles and
 /// `result` to one writable `NarwhalHeightFieldV1`.
 pub unsafe extern "C" fn fit_height_field_ffi(
     samples: *const f64,
     sample_count: usize,
+    loop_starts: *const usize,
+    loop_count: usize,
     smoothing: f64,
     target_error: f64,
     max_spans: u32,
@@ -662,6 +724,8 @@ pub unsafe extern "C" fn fit_height_field_ffi(
     result: *mut NarwhalHeightFieldV1,
 ) -> i32 {
     if samples.is_null()
+        || loop_starts.is_null()
+        || loop_count == 0
         || heights.is_null()
         || result.is_null()
         || sample_count == 0
@@ -672,7 +736,9 @@ pub unsafe extern "C" fn fit_height_field_ffi(
     // SAFETY: the caller guarantees `samples` holds `3 * sample_count` doubles.
     let flat = unsafe { std::slice::from_raw_parts(samples, sample_count * 3) };
     let points: Vec<[f64; 3]> = flat.chunks_exact(3).map(|c| [c[0], c[1], c[2]]).collect();
-    let (status, field) = match fit(&points, smoothing, target_error, max_spans, bias) {
+    // SAFETY: the caller guarantees `loop_starts` holds `loop_count` indices.
+    let loops = unsafe { std::slice::from_raw_parts(loop_starts, loop_count) };
+    let (status, field) = match fit(&points, loops, smoothing, target_error, max_spans, bias) {
         Ok(field) => (STATUS_OK, Some(field)),
         Err((status, field)) => (status, field),
     };
@@ -748,7 +814,7 @@ mod tests {
         ];
         let plane = |x: f64, y: f64| 0.3 * x - 0.2 * y + 4.0;
         let samples = loop_samples(&corners, 40, plane);
-        let field = fit(&samples, 1e-12, 1e-9, 24, 0.0).expect("plane fits");
+        let field = fit(&samples, &[0], 1e-12, 1e-9, 24, 0.0).expect("plane fits");
         assert_eq!(field.info.pinned_sides, 0);
         assert!(field.info.max_error < 1e-9, "{}", field.info.max_error);
         let u = Axis {
@@ -790,7 +856,7 @@ mod tests {
         };
         assert_eq!(lift(lifted[0], lifted[1]), 20.0);
         let samples = loop_samples(&corners, 64, lift);
-        let field = match fit(&samples, 1e-12, 1e-5, 24, 0.0) {
+        let field = match fit(&samples, &[0], 1e-12, 1e-5, 24, 0.0) {
             Ok(f) => f,
             Err((s, f)) => panic!("status {s} {:?}", f.map(|f| f.info)),
         };
@@ -848,7 +914,7 @@ mod tests {
         };
         let samples = loop_samples(&corners, 96, lift);
         let (target, bias) = (1e-5, 2e-5);
-        let field = fit(&samples, 1e-12, target, 24, bias).expect("biased fit converges");
+        let field = fit(&samples, &[0], 1e-12, target, 24, bias).expect("biased fit converges");
         assert_eq!(field.info.pinned_sides, PIN_X_MAX | PIN_Y_MIN);
         let u = Axis {
             start: field.info.x_min,
@@ -883,6 +949,52 @@ mod tests {
     }
 
     #[test]
+    fn an_outline_with_a_hole_fits_and_a_crossing_hole_is_refused() {
+        let outer = [
+            [0.0, 0.0, 0.0],
+            [60.0, 0.0, 0.0],
+            [60.0, 40.0, 0.0],
+            [0.0, 40.0, 0.0],
+        ];
+        let lift = |x: f64, y: f64| {
+            if (x - 60.0).abs() < 1e-12 {
+                6.0 * y / 40.0
+            } else if (y - 40.0).abs() < 1e-12 {
+                6.0 * x / 60.0
+            } else {
+                0.0
+            }
+        };
+        let mut samples = loop_samples(&outer, 64, lift);
+        let start = samples.len();
+        // A square hole, flat, wound clockwise.
+        let hole = [
+            [20.0, 15.0, 0.0],
+            [20.0, 25.0, 0.0],
+            [30.0, 25.0, 0.0],
+            [30.0, 15.0, 0.0],
+        ];
+        samples.extend(loop_samples(&hole, 16, |_, _| 0.0));
+        let field = fit(&samples, &[0, start], 1e-12, 1e-5, 48, 0.0).expect("outline with hole");
+        assert!(field.info.max_error <= 1e-5);
+        let mut crossing = loop_samples(&outer, 64, lift);
+        let start = crossing.len();
+        let bad = [
+            [50.0, 15.0, 0.0],
+            [50.0, 25.0, 0.0],
+            [70.0, 25.0, 0.0],
+            [70.0, 15.0, 0.0],
+        ];
+        crossing.extend(loop_samples(&bad, 16, |_, _| 0.0));
+        assert_eq!(
+            fit(&crossing, &[0, start], 1e-12, 1e-5, 48, 0.0)
+                .unwrap_err()
+                .0,
+            STATUS_NOT_SIMPLE
+        );
+    }
+
+    #[test]
     fn a_self_overlapping_outline_is_refused() {
         let bow_tie = [
             [0.0, 0.0, 0.0],
@@ -892,7 +1004,7 @@ mod tests {
         ];
         let samples = loop_samples(&bow_tie, 10, |_, _| 0.0);
         assert_eq!(
-            fit(&samples, 1e-8, 1e-6, 32, 0.0).unwrap_err().0,
+            fit(&samples, &[0], 1e-8, 1e-6, 32, 0.0).unwrap_err().0,
             STATUS_NOT_SIMPLE
         );
     }
@@ -915,6 +1027,8 @@ mod tests {
             fit_height_field_ffi(
                 flat.as_ptr(),
                 flat.len() / 3,
+                [0usize].as_ptr(),
+                1,
                 1e-8,
                 1e-9,
                 32,
@@ -930,6 +1044,8 @@ mod tests {
             fit_height_field_ffi(
                 flat.as_ptr(),
                 flat.len() / 3,
+                [0usize].as_ptr(),
+                1,
                 1e-8,
                 1e-9,
                 32,

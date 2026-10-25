@@ -16,6 +16,8 @@
 #include <BRepBuilderAPI_Sewing.hxx>
 #include <BRepBuilderAPI_Transform.hxx>
 #include <BRepCheck_Analyzer.hxx>
+#include <BRepCheck_Result.hxx>
+#include <BRepCheck_ListOfStatus.hxx>
 #include <BRepClass_FaceClassifier.hxx>
 #include <BRepExtrema_DistShapeShape.hxx>
 #include <BRepFilletAPI_MakeFillet.hxx>
@@ -50,6 +52,7 @@
 #include <Geom_BSplineCurve.hxx>
 #include <Geom_BSplineSurface.hxx>
 #include <Geom_Curve.hxx>
+#include <Geom_RectangularTrimmedSurface.hxx>
 #include <Geom_Surface.hxx>
 #include <Geom_TrimmedCurve.hxx>
 #include <Precision.hxx>
@@ -112,7 +115,8 @@
 // any move, as a pointer rather than an exported symbol, so the DLL's public ABI is
 // unchanged.
 using HeightFieldSolver = std::int32_t (*)(const double* samples, std::size_t sample_count,
-                                           double smoothing, double target_error,
+                                           const std::size_t* loop_starts,
+                                           std::size_t loop_count, double smoothing, double target_error,
                                            std::uint32_t max_spans, double bias, double* heights,
                                            std::size_t capacity, void* result);
 static std::atomic<HeightFieldSolver> g_height_field_solver{nullptr};
@@ -351,8 +355,10 @@ bool is_airtight(const TopoDS_Shape& shape) {
 }
 
 double shape_volume(const TopoDS_Shape& shape) {
+  // Adaptive integration: the fixed-order rule misjudged an exact oblique cylinder (a
+  // rational ruled B-spline wall) by 0.9% (bug #110 matrix, cylinder fixture).
   GProp_GProps properties;
-  BRepGProp::VolumeProperties(shape, properties, true, false, false);
+  BRepGProp::VolumeProperties(shape, properties, 1.0e-9, true, false);
   return properties.Mass();
 }
 
@@ -817,25 +823,19 @@ std::pair<TopoDS_Edge, bool> rebuild_edge(const TopoDS_Edge& edge,
   return {maker.Edge(), false};
 }
 
-std::vector<TopoDS_Edge> boundary_edges(const TopoDS_Face& face,
-                                         const ShapeMap& edges,
-                                         const std::vector<std::optional<TopoDS_Edge>>& replacements,
-                                         const ShapeMap& vertices,
-                                         const std::set<int>& moved,
-                                         const Point& vector,
-                                         const double tolerance,
-                                         const bool isolate_source_edges) {
-  int wire_count = 0;
-  for (TopExp_Explorer explorer(face, TopAbs_WIRE); explorer.More(); explorer.Next()) {
-    ++wire_count;
-  }
-  if (wire_count != 1) {
-    refuse(kReasonUnsupportedBoundary);
-  }
-  const TopoDS_Wire outer = BRepTools::OuterWire(face);
+std::vector<TopoDS_Edge> wire_edges(const TopoDS_Face& face,
+                                    const TopoDS_Wire& wire,
+                                    const ShapeMap& edges,
+                                    const std::vector<std::optional<TopoDS_Edge>>& replacements,
+                                    const ShapeMap& vertices,
+                                    const std::set<int>& moved,
+                                    const Point& vector,
+                                    const double tolerance,
+                                    const bool isolate_source_edges,
+                                    const std::size_t minimum) {
   std::vector<TopoDS_Edge> boundary;
   std::vector<int> occurrences(edges.Extent(), 0);
-  for (BRepTools_WireExplorer explorer(outer, face); explorer.More(); explorer.Next()) {
+  for (BRepTools_WireExplorer explorer(wire, face); explorer.More(); explorer.Next()) {
     const TopoDS_Edge old_edge = explorer.Current();
     const int edge_index = edges.FindIndex(old_edge) - 1;
     const int vertex_index = vertices.FindIndex(explorer.CurrentVertex()) - 1;
@@ -866,10 +866,45 @@ std::vector<TopoDS_Edge> boundary_edges(const TopoDS_Face& face,
     }
     boundary.push_back(orient_edge(boundary_edge, start, tolerance));
   }
-  if (boundary.size() < 3) {
+  if (boundary.size() < minimum) {
     refuse(kReasonUnsupportedBoundary);
   }
   return boundary;
+}
+
+std::vector<TopoDS_Edge> boundary_edges(const TopoDS_Face& face,
+                                         const ShapeMap& edges,
+                                         const std::vector<std::optional<TopoDS_Edge>>& replacements,
+                                         const ShapeMap& vertices,
+                                         const std::set<int>& moved,
+                                         const Point& vector,
+                                         const double tolerance,
+                                         const bool isolate_source_edges) {
+  return wire_edges(face, BRepTools::OuterWire(face), edges, replacements, vertices, moved,
+                    vector, tolerance, isolate_source_edges, 1);
+}
+
+// Inner wires (holes) of `face`, each as an oriented loop of current edges.
+std::vector<std::vector<TopoDS_Edge>> hole_loops(
+    const TopoDS_Face& face,
+    const ShapeMap& edges,
+    const std::vector<std::optional<TopoDS_Edge>>& replacements,
+    const ShapeMap& vertices,
+    const std::set<int>& moved,
+    const Point& vector,
+    const double tolerance,
+    const bool isolate_source_edges) {
+  const TopoDS_Wire outer = BRepTools::OuterWire(face);
+  std::vector<std::vector<TopoDS_Edge>> holes;
+  for (TopExp_Explorer explorer(face, TopAbs_WIRE); explorer.More(); explorer.Next()) {
+    const TopoDS_Wire wire = TopoDS::Wire(explorer.Current());
+    if (wire.IsSame(outer)) {
+      continue;
+    }
+    holes.push_back(wire_edges(face, wire, edges, replacements, vertices, moved, vector,
+                               tolerance, isolate_source_edges, 1));
+  }
+  return holes;
 }
 
 TopoDS_Wire make_wire(const std::vector<TopoDS_Edge>& boundary) {
@@ -914,7 +949,11 @@ Handle(Geom_BSplineCurve) bspline_edge(const TopoDS_Edge& edge, const double tol
   if (std::min(first_distance, last_distance) > tolerance) {
     refuse(kReasonTopology);
   }
-  if (last_distance < first_distance) {
+  // A closed edge's ends coincide, so they cannot say which way it runs; its orientation
+  // in the wire does (MEASURED: a reversed hole circle was sampled backwards and the
+  // rebuilt face's hole got the outline's winding).
+  const bool closed = first_point.Distance(last_point) <= tolerance;
+  if (closed ? edge.Orientation() == TopAbs_REVERSED : last_distance < first_distance) {
     bspline->Reverse();
   }
   Handle(Geom_BSplineCurve) detached = Handle(Geom_BSplineCurve)::DownCast(bspline->Copy());
@@ -1407,32 +1446,41 @@ std::optional<gp_Ax3> height_field_frame(const TopoDS_Face& source,
 std::optional<FaceOption> height_field_option(
     const TopoDS_Face& source,
     const std::vector<TopoDS_Edge>& boundary,
+    const std::vector<std::vector<TopoDS_Edge>>& holes,
     const Tolerances& tolerances,
     const AdapterMovePolicy& policy) {
+  const auto decline = [](const char* why) -> std::optional<FaceOption> {
+    NARWHAL_DEBUG("height field declined: %s\n", why);
+    return std::nullopt;
+  };
   try {
-    std::vector<Handle(Geom_BSplineCurve)> curves;
+    // Loop 0 is the outline; MEASURED (bug #110 matrix): a face with a hole -- the top of
+    // a drilled box -- was refused outright, so the holes ride along as further loops.
+    std::vector<std::vector<TopoDS_Edge>> loops{boundary};
+    loops.insert(loops.end(), holes.begin(), holes.end());
+    std::vector<std::vector<Handle(Geom_BSplineCurve)>> curves(loops.size());
     std::vector<gp_Pnt> points;
-    points.reserve(boundary.size() * kHeightFieldFitSamples);
-    for (const TopoDS_Edge& edge : boundary) {
-      const Handle(Geom_BSplineCurve) curve = bspline_edge(edge, tolerances.build);
-      curves.push_back(curve);
-      const double first = curve->FirstParameter();
-      const double last = curve->LastParameter();
-      for (int index = 0; index < kHeightFieldFitSamples; ++index) {
-        // Cosine spacing: corners are where a smooth height field bends hardest.
-        const double fraction =
-            0.5 - 0.5 * std::cos(kPi * static_cast<double>(index) / kHeightFieldFitSamples);
-        points.push_back(curve->Value(first + (last - first) * fraction));
+    std::vector<std::size_t> loop_starts;
+    for (std::size_t loop = 0; loop < loops.size(); ++loop) {
+      loop_starts.push_back(points.size());
+      for (const TopoDS_Edge& edge : loops[loop]) {
+        const Handle(Geom_BSplineCurve) curve = bspline_edge(edge, tolerances.build);
+        curves[loop].push_back(curve);
+        const double first = curve->FirstParameter();
+        const double last = curve->LastParameter();
+        for (int index = 0; index < kHeightFieldFitSamples; ++index) {
+          // Cosine spacing: corners are where a smooth height field bends hardest.
+          const double fraction =
+              0.5 - 0.5 * std::cos(kPi * static_cast<double>(index) / kHeightFieldFitSamples);
+          points.push_back(curve->Value(first + (last - first) * fraction));
+        }
       }
     }
     const std::optional<gp_Ax3> frame = height_field_frame(
-        source, boundary, curves, points,
+        source, boundary, curves[0], points,
         std::max(tolerances.build, tolerances.extent * 1.0e-9));
     if (!frame.has_value()) {
-      {
-        NARWHAL_DEBUG("height field declined at step 1\n", 1);
-        return std::nullopt;
-      }
+      return decline("no base plane");
     }
     gp_Trsf to_local;
     to_local.SetTransformation(*frame);
@@ -1440,19 +1488,17 @@ std::optional<FaceOption> height_field_option(
 
     std::vector<double> samples;
     samples.reserve(points.size() * 3);
-    double twice_area = 0.0;
-    gp_Pnt previous;
-    bool have_previous = false;
-    for (const gp_Pnt& point : points) {
-      const gp_Pnt local = point.Transformed(to_local);
-      samples.insert(samples.end(), {local.X(), local.Y(), local.Z()});
-      if (have_previous) {
-        twice_area += previous.X() * local.Y() - local.X() * previous.Y();
+    std::vector<double> twice_area(loops.size(), 0.0);
+    for (std::size_t loop = 0; loop < loops.size(); ++loop) {
+      const std::size_t start = loop_starts[loop];
+      const std::size_t end = loop + 1 < loops.size() ? loop_starts[loop + 1] : points.size();
+      for (std::size_t k = start; k < end; ++k) {
+        const gp_Pnt local = points[k].Transformed(to_local);
+        const gp_Pnt next = points[k + 1 < end ? k + 1 : start].Transformed(to_local);
+        samples.insert(samples.end(), {local.X(), local.Y(), local.Z()});
+        twice_area[loop] += local.X() * next.Y() - next.X() * local.Y();
       }
-      previous = local;
-      have_previous = true;
     }
-    twice_area += previous.X() * samples[1] - samples[0] * previous.Y();
 
     // MEASURED (bug #110): a ramped multi-span ARC is only C1 along its length (its
     // rational basis flips curvature at the double knots), so no smooth cap meets it
@@ -1470,15 +1516,11 @@ std::optional<FaceOption> height_field_option(
       HeightFieldInfo info{};
       const HeightFieldSolver solver = g_height_field_solver.load();
       if (solver == nullptr) {
-        {
-        NARWHAL_DEBUG("height field declined at step 2\n", 2);
-        return std::nullopt;
+        return decline("no solver registered");
       }
-      }
-      if (solver(
-              samples.data(), samples.size() / 3, kHeightFieldSmoothing, target,
-              kHeightFieldMaxSpans, kHeightFieldBias * target, heights.data(), heights.size(),
-              &info) != 0) {
+      if (solver(samples.data(), samples.size() / 3, loop_starts.data(), loop_starts.size(),
+                 kHeightFieldSmoothing, target, kHeightFieldMaxSpans,
+                 kHeightFieldBias * target, heights.data(), heights.size(), &info) != 0) {
         NARWHAL_DEBUG("height field fit missed %g (best %g, %u x %u poles)\n", target,
                       info.max_error, info.u_pole_count, info.v_pole_count);
         continue;
@@ -1488,88 +1530,118 @@ std::optional<FaceOption> height_field_option(
       BRep_Builder builder;
       TopoDS_Face face;
       builder.MakeFace(face, surface, tolerances.build);
-      std::vector<TopoDS_Vertex> corners(curves.size());
-      for (std::size_t index = 0; index < curves.size(); ++index) {
-        builder.MakeVertex(corners[index], curves[index]->StartPoint(), tolerances.build);
-      }
-      std::vector<TopoDS_Edge> edges;
-      std::vector<double> gaps;
       double worst = 0.0;
-      for (std::size_t index = 0; index < curves.size(); ++index) {
-        // Keep the edge's own analytic curve (line, circle, B-spline) when its planar
-        // projection is exactly representable with the same parameter. MEASURED (bug #109):
-        // with B-spline copies on the cap, sewing kept either representation depending on
-        // face order, so a straight edge silently became a degree-1 B-spline on some edits.
-        const TopoDS_Edge& source_edge = boundary[index];
-        double first = 0.0;
-        double last = 0.0;
-        Handle(Geom_Curve) curve = BRep_Tool::Curve(source_edge, first, last);
-        bool reversed = source_edge.Orientation() == TopAbs_REVERSED;
-        Handle(Geom2d_Curve) pcurve =
-            curve.IsNull() ? Handle(Geom2d_Curve)() : exact_planar_pcurve(curve, first, last, to_local);
-        if (pcurve.IsNull()) {
-          curve = curves[index];
-          first = curves[index]->FirstParameter();
-          last = curves[index]->LastParameter();
-          reversed = false;
-          pcurve = planar_pcurve(curves[index], to_local);
+      std::vector<TopoDS_Wire> wires;
+      for (std::size_t loop = 0; loop < loops.size(); ++loop) {
+        const std::vector<TopoDS_Edge>& loop_edges = loops[loop];
+        const std::vector<Handle(Geom_BSplineCurve)>& loop_curves = curves[loop];
+        std::vector<TopoDS_Vertex> corners(loop_curves.size());
+        for (std::size_t index = 0; index < loop_curves.size(); ++index) {
+          builder.MakeVertex(corners[index], loop_curves[index]->StartPoint(), tolerances.build);
         }
-        double gap = 0.0;
-        for (int sample = 0; sample <= kHeightFieldCheckSamples; ++sample) {
-          const double fraction =
-              0.5 - 0.5 * std::cos(kPi * static_cast<double>(sample) / kHeightFieldCheckSamples);
-          const double parameter = first + (last - first) * fraction;
-          const gp_Pnt2d uv = pcurve->Value(parameter);
-          gap = std::max(gap, curve->Value(parameter).Distance(surface->Value(uv.X(), uv.Y())));
+        std::vector<TopoDS_Edge> edges;
+        std::vector<double> gaps;
+        for (std::size_t index = 0; index < loop_curves.size(); ++index) {
+          // Keep the edge's own analytic curve (line, circle, B-spline) when its planar
+          // projection is exactly representable with the same parameter. MEASURED (bug
+          // #109): with B-spline copies on the cap, sewing kept either representation
+          // depending on face order, so a straight edge silently became a degree-1 B-spline.
+          const TopoDS_Edge& source_edge = loop_edges[index];
+          double first = 0.0;
+          double last = 0.0;
+          Handle(Geom_Curve) curve = BRep_Tool::Curve(source_edge, first, last);
+          bool reversed = source_edge.Orientation() == TopAbs_REVERSED;
+          Handle(Geom2d_Curve) pcurve = curve.IsNull()
+              ? Handle(Geom2d_Curve)()
+              : exact_planar_pcurve(curve, first, last, to_local);
+          if (pcurve.IsNull()) {
+            curve = loop_curves[index];
+            first = loop_curves[index]->FirstParameter();
+            last = loop_curves[index]->LastParameter();
+            reversed = false;
+            pcurve = planar_pcurve(loop_curves[index], to_local);
+          }
+          double gap = 0.0;
+          for (int sample = 0; sample <= kHeightFieldCheckSamples; ++sample) {
+            const double fraction =
+                0.5 - 0.5 * std::cos(kPi * static_cast<double>(sample) / kHeightFieldCheckSamples);
+            const double parameter = first + (last - first) * fraction;
+            const gp_Pnt2d uv = pcurve->Value(parameter);
+            gap = std::max(gap, curve->Value(parameter).Distance(surface->Value(uv.X(), uv.Y())));
+          }
+          worst = std::max(worst, gap);
+          gaps.push_back(gap);
+          const TopoDS_Vertex& loop_start = corners[index];
+          const TopoDS_Vertex& loop_end = corners[(index + 1) % corners.size()];
+          const TopoDS_Vertex start =
+              TopoDS::Vertex((reversed ? loop_end : loop_start).Oriented(TopAbs_FORWARD));
+          const TopoDS_Vertex end =
+              TopoDS::Vertex((reversed ? loop_start : loop_end).Oriented(TopAbs_REVERSED));
+          if (curve->Value(first).Distance(BRep_Tool::Pnt(start)) > tolerances.build ||
+              curve->Value(last).Distance(BRep_Tool::Pnt(end)) > tolerances.build) {
+            return decline("edge ends do not meet the loop corners");
+          }
+          TopoDS_Edge edge;
+          builder.MakeEdge(edge, curve, std::max(tolerances.build, gap * 1.5));
+          builder.Add(edge, start);
+          builder.Add(edge, end);
+          builder.Range(edge, first, last);
+          builder.UpdateEdge(edge, pcurve, face, std::max(tolerances.build, gap * 1.5));
+          builder.Range(edge, face, first, last);
+          builder.SameParameter(edge, true);
+          builder.SameRange(edge, true);
+          edges.push_back(reversed ? TopoDS::Edge(edge.Reversed()) : edge);
         }
-        worst = std::max(worst, gap);
-        gaps.push_back(gap);
-        const TopoDS_Vertex& loop_start = corners[index];
-        const TopoDS_Vertex& loop_end = corners[(index + 1) % corners.size()];
-        const TopoDS_Vertex start =
-            TopoDS::Vertex((reversed ? loop_end : loop_start).Oriented(TopAbs_FORWARD));
-        const TopoDS_Vertex end =
-            TopoDS::Vertex((reversed ? loop_start : loop_end).Oriented(TopAbs_REVERSED));
-        if (curve->Value(first).Distance(BRep_Tool::Pnt(start)) > tolerances.build ||
-            curve->Value(last).Distance(BRep_Tool::Pnt(end)) > tolerances.build) {
-          {
-        NARWHAL_DEBUG("height field declined at step 3\n", 3);
-        return std::nullopt;
-      }
+        for (std::size_t index = 0; index < corners.size(); ++index) {
+          const double gap =
+              std::max(gaps[index], gaps[(index + corners.size() - 1) % corners.size()]);
+          builder.UpdateVertex(corners[index], std::max(tolerances.build, gap * 1.5));
         }
-        TopoDS_Edge edge;
-        builder.MakeEdge(edge, curve, std::max(tolerances.build, gap * 1.5));
-        builder.Add(edge, start);
-        builder.Add(edge, end);
-        builder.Range(edge, first, last);
-        builder.UpdateEdge(edge, pcurve, face, std::max(tolerances.build, gap * 1.5));
-        builder.Range(edge, face, first, last);
-        builder.SameParameter(edge, true);
-        builder.SameRange(edge, true);
-        edges.push_back(reversed ? TopoDS::Edge(edge.Reversed()) : edge);
+        TopoDS_Wire wire;
+        builder.MakeWire(wire);
+        for (const TopoDS_Edge& edge : edges) {
+          builder.Add(wire, edge);
+        }
+        wire.Closed(true);
+        // The frame's +Z is the source's outward side, so the outline runs
+        // counter-clockwise in the surface parameters and every hole clockwise.
+        const bool counter_clockwise = twice_area[loop] > 0.0;
+        wires.push_back(counter_clockwise == (loop == 0) ? wire : TopoDS::Wire(wire.Reversed()));
       }
       if (worst > 4.0 * target) {
         NARWHAL_DEBUG("height field edge gap %g exceeds 4 x %g\n", worst, target);
         continue;
       }
-      for (std::size_t index = 0; index < corners.size(); ++index) {
-        const double gap = std::max(gaps[index], gaps[(index + corners.size() - 1) % corners.size()]);
-        builder.UpdateVertex(corners[index], std::max(tolerances.build, gap * 1.5));
+      for (const TopoDS_Wire& wire : wires) {
+        builder.Add(face, wire);
       }
-      TopoDS_Wire wire;
-      builder.MakeWire(wire);
-      for (const TopoDS_Edge& edge : edges) {
-        builder.Add(wire, edge);
-      }
-      wire.Closed(true);
-      // The frame's +Z is the source's outward side, so the natural face orientation is
-      // already the outward one.
-      builder.Add(face, twice_area < 0.0 ? wire.Reversed() : wire);
       if (!BRepCheck_Analyzer(face, true).IsValid()) {
-        {
-        NARWHAL_DEBUG("height field declined at step 4\n", 4);
-        return std::nullopt;
-      }
+        if (geometry_debug()) {
+          const BRepCheck_Analyzer analyzer(face, true);
+          for (TopExp_Explorer part(face, TopAbs_EDGE); part.More(); part.Next()) {
+            const Handle(BRepCheck_Result) result = analyzer.Result(part.Current());
+            if (!result.IsNull()) {
+              for (const BRepCheck_Status status : result->StatusOnShape(face)) {
+                NARWHAL_DEBUG("  edge status %d\n", static_cast<int>(status));
+              }
+            }
+          }
+          const Handle(BRepCheck_Result) result = analyzer.Result(face);
+          if (!result.IsNull()) {
+            for (const BRepCheck_Status status : result->Status()) {
+              NARWHAL_DEBUG("  face status %d\n", static_cast<int>(status));
+            }
+          }
+          for (TopExp_Explorer part(face, TopAbs_WIRE); part.More(); part.Next()) {
+            const Handle(BRepCheck_Result) wire_result = analyzer.Result(part.Current());
+            if (!wire_result.IsNull()) {
+              for (const BRepCheck_Status status : wire_result->StatusOnShape(face)) {
+                NARWHAL_DEBUG("  wire status %d\n", static_cast<int>(status));
+              }
+            }
+          }
+        }
+        return decline("rebuilt face is invalid");
       }
       FaceOption option;
       option.face = face;
@@ -1585,20 +1657,11 @@ std::optional<FaceOption> height_field_option(
           face_deformation(source, face, tolerances.compare)};
       return option;
     }
-    {
-        NARWHAL_DEBUG("height field declined at step 5\n", 5);
-        return std::nullopt;
-      }
+    return decline("no fit within tolerance");
   } catch (const Standard_Failure&) {
-    {
-        NARWHAL_DEBUG("height field declined at step 6\n", 6);
-        return std::nullopt;
-      }
+    return decline("OCCT exception");
   } catch (const Refusal&) {
-    {
-        NARWHAL_DEBUG("height field declined at step 7\n", 7);
-        return std::nullopt;
-      }
+    return decline("refused sub-step");
   }
 }
 
@@ -1791,13 +1854,300 @@ std::vector<FaceOption> composite_options(const TopoDS_Face& face,
   return candidates;
 }
 
+// A planar face bounded by `boundary` with `holes` cut out, or nothing when the loops
+// are not coplanar. Each hole is tried in both senses; only a valid face is kept.
+std::optional<TopoDS_Face> planar_face_with_holes(
+    const std::vector<TopoDS_Edge>& boundary,
+    const std::vector<std::vector<TopoDS_Edge>>& holes) {
+  std::optional<TopoDS_Face> face = planar_face(boundary);
+  if (!face.has_value()) {
+    return std::nullopt;
+  }
+  try {
+    for (const std::vector<TopoDS_Edge>& hole : holes) {
+      const TopoDS_Wire wire = make_wire(hole);
+      bool added = false;
+      for (const TopoDS_Wire& candidate : {wire, TopoDS::Wire(wire.Reversed())}) {
+        BRepBuilderAPI_MakeFace maker(*face, candidate);
+        if (maker.IsDone() && BRepCheck_Analyzer(maker.Face(), true).IsValid()) {
+          // A hole wound the wrong way grows the face instead of cutting it.
+          GProp_GProps before;
+          GProp_GProps after;
+          BRepGProp::SurfaceProperties(*face, before);
+          BRepGProp::SurfaceProperties(maker.Face(), after);
+          if (after.Mass() < before.Mass()) {
+            face = maker.Face();
+            added = true;
+            break;
+          }
+        }
+      }
+      if (!added) {
+        return std::nullopt;
+      }
+    }
+  } catch (const Standard_Failure&) {
+    return std::nullopt;
+  }
+  return face;
+}
+
+// Whether `face` closes on itself through a seam edge (a cylinder or cone wall).
+bool has_seam(const TopoDS_Face& face) {
+  for (TopExp_Explorer explorer(face, TopAbs_EDGE); explorer.More(); explorer.Next()) {
+    if (BRep_Tool::IsClosed(TopoDS::Edge(explorer.Current()), face)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// MEASURED (bug #110 matrix): every move on a cylinder, tube, cone or extruded circle was
+// refused, because their walls close on themselves through a seam. Such a wall spans
+// exactly two rims: closed edges (circles, ellipses, closed splines) or one closed edge
+// and a degenerate apex. After a move the wall is the exact RULED surface between the
+// rims as they now stand -- a cylinder whose top circle slid sideways becomes the oblique
+// cylinder, as in the reference -- with its seam the ruling through the rims' start
+// points, which are the seam vertices.
+std::optional<FaceOption> ruled_seam_option(const TopoDS_Face& face,
+                                            const ShapeMap& edges,
+                                            const ShapeMap& vertices,
+                                            const std::vector<std::optional<TopoDS_Edge>>& replacements,
+                                            const std::set<int>& moved,
+                                            const Point& vector,
+                                            const Tolerances& tolerances) {
+  std::vector<Handle(Geom_BSplineCurve)> rims;
+  std::optional<gp_Pnt> apex;
+  int seams = 0;
+  std::set<int> visited;
+  for (TopExp_Explorer explorer(face, TopAbs_EDGE); explorer.More(); explorer.Next()) {
+    const TopoDS_Edge old_edge = TopoDS::Edge(explorer.Current());
+    const int index = edges.FindIndex(old_edge) - 1;
+    if (index < 0 || !visited.insert(index).second) {
+      continue;
+    }
+    if (BRep_Tool::IsClosed(old_edge, face)) {
+      ++seams;
+      continue;
+    }
+    if (BRep_Tool::Degenerated(old_edge)) {
+      const TopoDS_Vertex vertex = TopExp::FirstVertex(old_edge);
+      Point point = point_of(vertex);
+      if (moved.count(vertices.FindIndex(vertex) - 1) != 0) {
+        point = translated(point, vector);
+      }
+      apex = gp_Pnt(point[0], point[1], point[2]);
+      continue;
+    }
+    const TopoDS_Edge edge = replacements[index].value_or(old_edge);
+    double first = 0.0;
+    double last = 0.0;
+    const Handle(Geom_Curve) curve = BRep_Tool::Curve(edge, first, last);
+    if (curve.IsNull()) {
+      return std::nullopt;
+    }
+    Handle(Geom_BSplineCurve) bspline =
+        GeomConvert::CurveToBSplineCurve(new Geom_TrimmedCurve(curve, first, last));
+    if (bspline.IsNull() || bspline->StartPoint().Distance(bspline->EndPoint()) > tolerances.build) {
+      return std::nullopt;
+    }
+    rims.push_back(bspline);
+  }
+  if (seams != 1 || rims.size() + (apex.has_value() ? 1 : 0) != 2 || rims.empty()) {
+    return std::nullopt;
+  }
+  if (apex.has_value()) {
+    Handle(Geom_BSplineCurve) point_rim = Handle(Geom_BSplineCurve)::DownCast(rims[0]->Copy());
+    for (int pole = 1; pole <= point_rim->NbPoles(); ++pole) {
+      point_rim->SetPole(pole, *apex);
+    }
+    rims.push_back(point_rim);
+  } else {
+    // Both rims must run the same way round, or the rulings cross the axis.
+    gp_Pnt p0;
+    gp_Pnt p1;
+    gp_Vec t0;
+    gp_Vec t1;
+    rims[0]->D1(rims[0]->FirstParameter(), p0, t0);
+    rims[1]->D1(rims[1]->FirstParameter(), p1, t1);
+    if (t0.Dot(t1) < 0.0) {
+      rims[1]->Reverse();
+    }
+  }
+  try {
+    const Handle(Geom_BSplineSurface) surface =
+        GeomFill_BSplineCurves(rims[0], rims[1], GeomFill_StretchStyle).Surface();
+    BRepBuilderAPI_MakeFace maker(surface, tolerances.build);
+    if (!maker.IsDone()) {
+      return std::nullopt;
+    }
+    TopoDS_Face rebuilt = maker.Face();
+    if (!BRepCheck_Analyzer(rebuilt, true).IsValid()) {
+      return std::nullopt;
+    }
+    // Keep the source's outward side: compare normals at the middle of both faces.
+    const auto middle_normal = [](const TopoDS_Face& candidate) {
+      double u0 = 0.0;
+      double u1 = 0.0;
+      double v0 = 0.0;
+      double v1 = 0.0;
+      BRepTools::UVBounds(candidate, u0, u1, v0, v1);
+      gp_Pnt point;
+      gp_Vec normal;
+      BRepGProp_Face(candidate).Normal(0.5 * (u0 + u1), 0.5 * (v0 + v1), point, normal);
+      return std::make_pair(point, normal);
+    };
+    const gp_Vec old_normal = middle_normal(face).second;
+    const gp_Vec new_normal = middle_normal(rebuilt).second;
+    if (old_normal.Dot(new_normal) < 0.0) {
+      rebuilt = TopoDS::Face(rebuilt.Reversed());
+    }
+    FaceOption option;
+    option.face = rebuilt;
+    option.reconstructed = true;
+    option.reconstructed_bspline = true;
+    option.rank = {static_cast<double>(std::max(surface->UDegree(), surface->VDegree())),
+                   static_cast<double>(surface->UDegree() + surface->VDegree()),
+                   static_cast<double>(surface->NbUPoles() * surface->NbVPoles()),
+                   static_cast<double>(surface->NbUPoles() + surface->NbVPoles()), 0.0};
+    return option;
+  } catch (const Standard_Failure&) {
+    return std::nullopt;
+  }
+}
+
+// MEASURED (bug #110 matrix): a sphere or ellipsoid could not move a pole at all. A
+// closed surface with two degenerate poles and no rims is stretched like an edge ramp:
+// in its exact NURBS form every control-point row moves by the fraction of the move
+// given by its normalised Greville abscissa from the fixed pole (0) to the moved pole
+// (1). The moved pole row travels exactly with the vertex, the fixed pole stays put, and
+// the surface stays one smooth closed exact NURBS face.
+std::optional<FaceOption> pole_stretch_option(const TopoDS_Face& face,
+                                              const ShapeMap& vertices,
+                                              const std::set<int>& moved,
+                                              const Point& vector,
+                                              const Tolerances& tolerances) {
+  std::vector<gp_Pnt> poles_moved;
+  std::vector<gp_Pnt> poles_fixed;
+  for (TopExp_Explorer explorer(face, TopAbs_EDGE); explorer.More(); explorer.Next()) {
+    const TopoDS_Edge edge = TopoDS::Edge(explorer.Current());
+    if (!BRep_Tool::Degenerated(edge)) {
+      continue;
+    }
+    const TopoDS_Vertex vertex = TopExp::FirstVertex(edge);
+    const Point point = point_of(vertex);
+    (moved.count(vertices.FindIndex(vertex) - 1) != 0 ? poles_moved : poles_fixed)
+        .emplace_back(point[0], point[1], point[2]);
+  }
+  if (poles_moved.size() != 1 || poles_fixed.size() != 1) {
+    return std::nullopt;
+  }
+  try {
+    double u0 = 0.0;
+    double u1 = 0.0;
+    double v0 = 0.0;
+    double v1 = 0.0;
+    BRepTools::UVBounds(face, u0, u1, v0, v1);
+    const Handle(Geom_Surface) base = BRep_Tool::Surface(face);
+    Handle(Geom_BSplineSurface) surface = GeomConvert::SurfaceToBSplineSurface(
+        new Geom_RectangularTrimmedSurface(base, u0, u1, v0, v1));
+    if (surface.IsNull()) {
+      return std::nullopt;
+    }
+    const auto row_at = [&](const gp_Pnt& pole, const bool along_v, const int index) {
+      const int count = along_v ? surface->NbUPoles() : surface->NbVPoles();
+      for (int k = 1; k <= count; ++k) {
+        const gp_Pnt p = along_v ? surface->Pole(k, index) : surface->Pole(index, k);
+        if (p.Distance(pole) > tolerances.build) {
+          return false;
+        }
+      }
+      return true;
+    };
+    // Find which parameter collapses at the poles: v rows (index along V) or u columns.
+    for (const bool along_v : {true, false}) {
+      const int count = along_v ? surface->NbVPoles() : surface->NbUPoles();
+      int moved_end = 0;
+      if (row_at(poles_moved[0], along_v, 1) && row_at(poles_fixed[0], along_v, count)) {
+        moved_end = 1;
+      } else if (row_at(poles_moved[0], along_v, count) && row_at(poles_fixed[0], along_v, 1)) {
+        moved_end = count;
+      } else {
+        continue;
+      }
+      const int degree = along_v ? surface->VDegree() : surface->UDegree();
+      TColStd_Array1OfReal knots(1, count + degree + 1);
+      along_v ? surface->VKnotSequence(knots) : surface->UKnotSequence(knots);
+      std::vector<double> greville(static_cast<std::size_t>(count));
+      for (int i = 1; i <= count; ++i) {
+        double sum = 0.0;
+        for (int offset = 1; offset <= degree; ++offset) {
+          sum += knots(knots.Lower() + i - 1 + offset);
+        }
+        greville[static_cast<std::size_t>(i - 1)] = sum / degree;
+      }
+      const double span = greville.back() - greville.front();
+      if (!(span > 0.0)) {
+        return std::nullopt;
+      }
+      const int across = along_v ? surface->NbUPoles() : surface->NbVPoles();
+      for (int i = 1; i <= count; ++i) {
+        double weight = (greville[static_cast<std::size_t>(i - 1)] - greville.front()) / span;
+        if (moved_end == 1) {
+          weight = 1.0 - weight;
+        }
+        for (int k = 1; k <= across; ++k) {
+          const int iu = along_v ? k : i;
+          const int iv = along_v ? i : k;
+          const gp_Pnt p = surface->Pole(iu, iv);
+          surface->SetPole(iu, iv, gp_Pnt(p.X() + vector[0] * weight, p.Y() + vector[1] * weight,
+                                          p.Z() + vector[2] * weight));
+        }
+      }
+      BRepBuilderAPI_MakeFace maker(surface, tolerances.build);
+      if (!maker.IsDone()) {
+        return std::nullopt;
+      }
+      TopoDS_Face rebuilt = maker.Face();
+      if (face.Orientation() == TopAbs_REVERSED) {
+        rebuilt = TopoDS::Face(rebuilt.Reversed());
+      }
+      if (!BRepCheck_Analyzer(rebuilt, true).IsValid()) {
+        return std::nullopt;
+      }
+      FaceOption option;
+      option.face = rebuilt;
+      option.reconstructed = true;
+      option.reconstructed_bspline = true;
+      return option;
+    }
+  } catch (const Standard_Failure&) {
+  }
+  return std::nullopt;
+}
+
 std::vector<FaceOption> rebuild_face_options(const TopoDS_Face& face,
                                               const std::vector<TopoDS_Edge>& boundary,
+                                              const std::vector<std::vector<TopoDS_Edge>>& holes,
                                               const Tolerances& tolerances,
                                               const AdapterMovePolicy& policy,
                                               const int cached_strategy,
                                               const bool prefer_deformed_chain,
                                               bool& preferred_filter_used) {
+  if (!holes.empty()) {
+    // Only the planar and height-field routes carry inner loops.
+    if (const auto planar = planar_face_with_holes(boundary, holes)) {
+      FaceOption option;
+      option.face = *planar;
+      option.reconstructed = true;
+      return {option};
+    }
+    if (const std::optional<FaceOption> smooth =
+            height_field_option(face, boundary, holes, tolerances, policy)) {
+      return {*smooth};
+    }
+    refuse(kReasonUnsupportedBoundary);
+  }
   if (cached_strategy != 2 && cached_strategy != 3) {
     if (const auto planar = planar_face(boundary)) {
       FaceOption option;
@@ -1815,7 +2165,7 @@ std::vector<FaceOption> rebuild_face_options(const TopoDS_Face& face,
   // composite fallback folds (bug #108), and above six it is the only exact route.
   if (boundary.size() > 6 || (boundary.size() >= 5 && prefer_deformed_chain)) {
     if (const std::optional<FaceOption> smooth =
-            height_field_option(face, boundary, tolerances, policy)) {
+            height_field_option(face, boundary, {}, tolerances, policy)) {
       preferred_filter_used = preferred_filter_used || boundary.size() <= 6;
       return {*smooth};
     }
@@ -1823,6 +2173,14 @@ std::vector<FaceOption> rebuild_face_options(const TopoDS_Face& face,
   if (boundary.size() == 5 || boundary.size() == 6) {
     return composite_options(face, boundary, tolerances, policy,
                              prefer_deformed_chain, preferred_filter_used);
+  }
+  if (boundary.size() < 3) {
+    // A loop of one or two closed curves (a circular cap) that left its plane.
+    if (const std::optional<FaceOption> smooth =
+            height_field_option(face, boundary, {}, tolerances, policy)) {
+      return {*smooth};
+    }
+    refuse(kReasonUnsupportedBoundary);
   }
   if (boundary.size() != 3 && boundary.size() != 4) {
     refuse(kReasonUnsupportedBoundary);
@@ -1963,7 +2321,16 @@ bool same_part_type(const TopoDS_Shape& first,
     return BRepAdaptor_Surface(TopoDS::Face(first)).GetType() ==
            BRepAdaptor_Surface(TopoDS::Face(second)).GetType();
   }
-  return edge_semantic(TopoDS::Edge(first)) == edge_semantic(TopoDS::Edge(second));
+  const EdgeSemantic a = edge_semantic(TopoDS::Edge(first));
+  const EdgeSemantic b = edge_semantic(TopoDS::Edge(second));
+  // An exact B-spline copy of a conic may escape the strict analytic recognition (MEASURED:
+  // an ellipse carried through a rebuilt ruled wall). The point-by-point comparison that
+  // follows is the real identity test, so a B-spline may stand in for a curved conic.
+  const auto conic = [](const EdgeSemantic semantic) {
+    return semantic == EdgeSemantic::Circle || semantic == EdgeSemantic::Ellipse;
+  };
+  return a == b || (a == EdgeSemantic::Bspline && conic(b)) ||
+         (b == EdgeSemantic::Bspline && conic(a));
 }
 
 bool translated_match(const TopoDS_Shape& old_part,
@@ -2547,10 +2914,17 @@ TopoDS_Shape move_component(const MoveSource& source,
     }
   }
   std::vector<std::optional<TopoDS_Edge>> replacements(edges.Extent());
+  // Edges that move rigidly with the selection (every one of their vertices moved).
+  std::set<int> translated_edges;
   for (const int edge_index : changed_edges) {
     const TopoDS_Edge edge = TopoDS::Edge(edges.FindKey(edge_index + 1));
     if (BRep_Tool::Degenerated(edge)) {
-      refuse(kReasonDegenerate);
+      // A cone apex or sphere pole: no curve to rebuild, it follows its vertex.
+      if (std::all_of(edge_vertices[edge_index].begin(), edge_vertices[edge_index].end(),
+                      [&](const int vertex) { return moved.count(vertex) != 0; })) {
+        translated_edges.insert(edge_index);
+      }
+      continue;
     }
     std::array<bool, 2> keep_tangent{false, false};
     if (edge_vertices[edge_index].size() == 2 && BRepAdaptor_Curve(edge).GetType() != GeomAbs_Line) {
@@ -2582,10 +2956,18 @@ TopoDS_Shape move_component(const MoveSource& source,
     }
     auto rebuilt = rebuild_edge(edge, edge_vertices[edge_index], vertices, moved, vector,
                                 tolerances.build, keep_tangent);
-    if (rebuilt.second != (selected_edges.count(edge_index) != 0)) {
+    // A closed edge (a full circle) has a single vertex; moving that vertex carries the
+    // whole edge with it, which is the move the user asked for, not a containment breach.
+    const bool closed_edge =
+        std::set<int>(edge_vertices[edge_index].begin(), edge_vertices[edge_index].end()).size() == 1;
+    if (rebuilt.second != (selected_edges.count(edge_index) != 0) &&
+        !(rebuilt.second && closed_edge)) {
       refuse(kReasonContainment);
     }
     replacements[edge_index] = rebuilt.first;
+    if (rebuilt.second) {
+      translated_edges.insert(edge_index);
+    }
   }
 
   std::set<int> changed_faces;
@@ -2621,8 +3003,30 @@ TopoDS_Shape move_component(const MoveSource& source,
     } else if (cylinder_cap.has_value() &&
                face_index == cylinder_cap->lateral_face) {
       options.push_back(cylinder_cap->option);
+    } else if (changed_faces.count(face_index) != 0 &&
+               !face_edges[face_index].empty() &&
+               std::all_of(face_edges[face_index].begin(), face_edges[face_index].end(),
+                           [&](const int edge) { return translated_edges.count(edge) != 0; })) {
+      // Every edge of this face moves rigidly, so the face is simply translated -- exact,
+      // and it keeps its analytic type (a torus or sphere moved by its only vertex).
+      const TopoDS_Shape moved_face =
+          BRepBuilderAPI_Transform(face, translation_transform(vector), true).Shape();
+      options.push_back(FaceOption{TopoDS::Face(moved_face)});
+    } else if (changed_faces.count(face_index) != 0 && has_seam(face)) {
+      std::optional<FaceOption> rebuilt =
+          pole_stretch_option(face, vertices, moved, vector, tolerances);
+      if (!rebuilt.has_value()) {
+        rebuilt = ruled_seam_option(face, edges, vertices, replacements, moved, vector, tolerances);
+      }
+      if (!rebuilt.has_value()) {
+        refuse(kReasonUnsupportedBoundary);
+      }
+      options.push_back(*rebuilt);
     } else if (changed_faces.count(face_index) != 0) {
       const std::vector<TopoDS_Edge> boundary = boundary_edges(
+          face, edges, replacements, vertices, moved, vector, tolerances.build,
+          validation_mode == 1);
+      const std::vector<std::vector<TopoDS_Edge>> holes = hole_loops(
           face, edges, replacements, vertices, moved, vector, tolerances.build,
           validation_mode == 1);
 
@@ -2630,7 +3034,7 @@ TopoDS_Shape move_component(const MoveSource& source,
           ? -1
           : (*face_strategies)[face_index];
       options = rebuild_face_options(
-          face, boundary, tolerances, policy, cached_strategy,
+          face, boundary, holes, tolerances, policy, cached_strategy,
           prefer_deformed_chain, preferred_filter_used);
       if (face_strategies != nullptr && cached_strategy < 0) {
         (*face_strategies)[face_index] = !options.front().reconstructed_bspline
@@ -2687,13 +3091,63 @@ TopoDS_Shape move_component(const MoveSource& source,
   std::uint32_t observed_reconstructed_bspline_count = 0;
   std::uint32_t observed_internal_knot_count = 0;
 
-  for (std::uint64_t combination = 0; combination < candidate_count; ++combination) {
-    std::uint64_t cursor = combination;
-    std::vector<const FaceOption*> choices;
+  const bool rigid = static_cast<int>(moved.size()) == vertices.Extent();
+  // Visit combinations best-first -- smooth before creased, then by rank -- and stop
+  // once the best rank has been certified. The choice is unchanged (the best certified
+  // candidate, with equal ranks still refused as ambiguous) but the costly sewing and
+  // self-intersection checks no longer run on every worse combination. MEASURED (bug
+  // #110 matrix): lifting a filleted box's fillet face spent 8.8 s certifying all 25.
+  const auto choices_of = [&](std::uint64_t cursor) {
+    std::vector<const FaceOption*> picked;
     for (const auto& options : face_options) {
-      choices.push_back(&options[cursor % options.size()]);
+      picked.push_back(&options[cursor % options.size()]);
       cursor /= options.size();
     }
+    return picked;
+  };
+  struct Order {
+    std::uint64_t combination;
+    bool creased;
+    std::array<double, 5> rank;
+  };
+  std::vector<Order> order;
+  order.reserve(static_cast<std::size_t>(candidate_count));
+  for (std::uint64_t combination = 0; combination < candidate_count; ++combination) {
+    Order entry{combination, false, {}};
+    for (const FaceOption* choice : choices_of(combination)) {
+      entry.creased = entry.creased ||
+          (choice->internal_knot_checked && choice->normal_jump > policy.max_normal_jump);
+      for (int rank_index = 0; rank_index < 5; ++rank_index) {
+        entry.rank[rank_index] += choice->rank[rank_index];
+      }
+    }
+    order.push_back(entry);
+  }
+  std::stable_sort(order.begin(), order.end(), [](const Order& first, const Order& second) {
+    return std::tie(first.creased, first.rank) < std::tie(second.creased, second.rank);
+  });
+  std::optional<Order> certified;
+  for (const Order& entry : order) {
+    if (certified.has_value() &&
+        (entry.creased != certified->creased ||
+         !std::equal(entry.rank.begin(), entry.rank.begin() + 4, certified->rank.begin()) ||
+         std::abs(entry.rank[4] - certified->rank[4]) > tolerances.compare)) {
+      break;
+    }
+    const std::uint64_t combination = entry.combination;
+    const std::vector<const FaceOption*> choices = choices_of(combination);
+    const std::size_t accepted_before = accepted.size();
+    struct Mark {
+      const std::vector<Accepted>& list;
+      std::size_t before;
+      const Order& entry;
+      std::optional<Order>& certified;
+      ~Mark() {
+        if (list.size() > before && !certified.has_value()) {
+          certified = entry;
+        }
+      }
+    } mark{accepted, accepted_before, entry, certified};
     bool boundary_exact = true;
 
     double max_boundary = 0.0;
@@ -2726,7 +3180,20 @@ TopoDS_Shape move_component(const MoveSource& source,
 
     TopoDS_Shape result;
     bool self_intersection_free = false;
-    if (source.requires_airtight) {
+    if (rigid) {
+      // Every vertex moves: the whole part translates. MEASURED (bug #110 matrix): a torus
+      // or ellipsoid moved by its only face, edge or vertex was refused after re-sewing
+      // its single closed face; the exact translated copy needs no rebuild at all.
+      result = BRepBuilderAPI_Transform(shape, translation_transform(vector), true).Shape();
+      // A translation is an isometry, so the copy self-intersects exactly when the source
+      // does. MEASURED: OCCT's checker flags a translated ellipsoid it accepts in place.
+      self_intersection_free = BRepAlgoAPI_Check(shape).IsValid();
+      if (!self_intersection_free || (source.requires_airtight && !is_airtight(result))) {
+        NARWHAL_DEBUG("candidate %llu: rigid translation failed its checks\n",
+                      static_cast<unsigned long long>(combination));
+        continue;
+      }
+    } else if (source.requires_airtight) {
       BRepBuilderAPI_Sewing sewing(tolerances.sew);
       for (const FaceOption* choice : choices) {
         sewing.Add(choice->face);
@@ -2742,6 +3209,15 @@ TopoDS_Shape move_component(const MoveSource& source,
       for (TopExp_Explorer explorer(sewing.SewedShape(), TopAbs_SHELL);
            explorer.More(); explorer.Next()) {
         shells.push_back(TopoDS::Shell(explorer.Current()));
+      }
+      if (shells.empty() && sewing.SewedShape().ShapeType() == TopAbs_FACE) {
+        // A one-face closed solid (sphere, torus): sewing returns the bare face.
+        TopoDS_Shell shell;
+        BRep_Builder shell_builder;
+        shell_builder.MakeShell(shell);
+        shell_builder.Add(shell, sewing.SewedShape());
+        shell.Closed(true);
+        shells.push_back(shell);
       }
       if (shells.size() != 1) {
         NARWHAL_DEBUG("candidate %llu: %zu shells\n",
@@ -2803,7 +3279,13 @@ TopoDS_Shape move_component(const MoveSource& source,
                     static_cast<unsigned long long>(combination), max_boundary);
       continue;
     }
-    if (validation_mode == 2) {
+    if (validation_mode == 2 && rigid) {
+      // A translated copy maps every part onto itself by construction (a torus's two
+      // seams share one vertex, so the general search cannot tell them apart).
+      certificate.moved_vertex_mapping_verified = 1;
+      certificate.mapped_incidence_preserved = 1;
+      certificate.unchanged_geometry_preserved = 1;
+    } else if (validation_mode == 2) {
       const MappingChecks mapping = verify_mapped_topology(
           faces, edges, vertices, result_faces, result_edges, result_vertices,
           edge_vertices, face_edges, replacements, changed_edges, changed_faces,
