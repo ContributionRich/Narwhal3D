@@ -78,7 +78,7 @@ check("[Parameter(Mandatory=$true)]" in build_script
       and "[ValidatePattern('^[0-9a-f]{40}$')]" in build_script
       and "[string]$NarwhalRevision" in build_script
       and '$NarwhalRevision = "' not in build_script
-      and "[string]$Version = \"0.4.5\"" in build_script
+      and "[string]$Version = \"0.4.6\"" in build_script
       and "[ValidatePattern('^0\\.4\\.[0-9]+$')]" in build_script,
       "Windows build requires immutable source and a validated 0.4.x version")
 check("native\\converter_supervisor\\Cargo.toml" in build_script
@@ -114,8 +114,8 @@ with tempfile.TemporaryDirectory(prefix="narwhal_windows_verifier_test_") as tem
     compiled_launcher.write_bytes(
         b"MZ" + "NARWHAL3D_VERSION".encode("utf-16le")
         + "NARWHAL3D_PACKAGE_PATH".encode("utf-16le")
-        + "0.4.5".encode("utf-16le"))
-    assembler.validate_launcher_version(compiled_launcher, "0.4.5")
+        + "0.4.6".encode("utf-16le"))
+    assembler.validate_launcher_version(compiled_launcher, "0.4.6")
     check(True, "Windows assembler accepts only a launcher carrying exact release identity")
     try:
         assembler.validate_launcher_version(compiled_launcher, "0.4.4")

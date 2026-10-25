@@ -4,7 +4,7 @@ This directory defines the fail-closed AppImage scaffold for the public Narwhal 
 
 ## Early-prerelease version and host baseline
 
-Narwhal 3D remains an extremely early prerelease. The assembler and verifier accept only `0.4.x` package versions until the project owner explicitly lifts that cap; the current release is `0.4.5`, not `0.5.0`.
+Narwhal 3D remains an extremely early prerelease. The assembler and verifier accept only `0.4.x` package versions until the project owner explicitly lifts that cap; the current release is `0.4.6`, not `0.5.0`.
 
 A release runtime must also require no newer than **GLIBC 2.35**, the baseline from Ubuntu 22.04 (the oldest Ubuntu LTS still in standard support in 2026). Every regular ELF in the runtime is checked with `readelf --version-info` before assembly and again after extraction. This gate exists because the 0.4.0 runtime was built on glibc 2.43 and the AppImage catalog measured immediate startup failure on its older supported test system. Build native Linux release runtimes in an Ubuntu 22.04 container or equivalent old supported base; assembling on a newer host does not make a newer-linked executable portable.
 

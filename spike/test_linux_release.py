@@ -107,14 +107,14 @@ check("launcher exports every native library boundary",
 check("launcher selects Linux .so and preserves macOS .dylib behavior",
       "native_suffix=.so" in launcher and "native_suffix=.dylib" in launcher
       and "native_prefix=lib" in launcher)
-rendered_app_run = assemble.render_app_run("0.4.5")
+rendered_app_run = assemble.render_app_run("0.4.6")
 check("AppImage launcher carries exact updater version and package path",
-      rendered_app_run.splitlines().count("export NARWHAL3D_VERSION=0.4.5") == 1
+      rendered_app_run.splitlines().count("export NARWHAL3D_VERSION=0.4.6") == 1
       and '${APPIMAGE:-}' in rendered_app_run
       and 'export NARWHAL3D_PACKAGE_PATH="$APPIMAGE"' in rendered_app_run)
 rejects("AppImage launcher rejects shell-injectable release versions",
-        lambda: assemble.render_app_run("0.4.5;touch-bad"), assemble.ReleaseError)
-verify.verify_app_run_version(rendered_app_run, "0.4.5")
+        lambda: assemble.render_app_run("0.4.6;touch-bad"), assemble.ReleaseError)
+verify.verify_app_run_version(rendered_app_run, "0.4.6")
 rejects("AppImage verifier rejects a mismatched updater version",
         lambda: verify.verify_app_run_version(rendered_app_run, "0.4.4"),
         verify.VerificationError)

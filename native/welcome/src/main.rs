@@ -32,8 +32,11 @@ const UPDATE_USER_AGENT: &str = concat!(
 );
 const API_RESPONSE_LIMIT: u64 = 2 * 1024 * 1024;
 const DOWNLOAD_LIMIT: u64 = 2 * 1024 * 1024 * 1024;
-const CONNECT_TIMEOUT: Duration = Duration::from_secs(4);
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(12);
+// MEASURED: a 4 s connect timeout failed 3 of 6 release checks on an ordinary home
+// connection (connects took up to 2.9 s); 10 s passed 8 of 8. The check runs on a
+// background thread after first paint, so a longer wait never blocks the window.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
 const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(180);
 const NEW_UNITS: [(&str, &str); 5] = [
     ("Millimeters", "Millimeters"),
@@ -440,6 +443,19 @@ fn http_client(timeout: Duration, allow_insecure_override: bool) -> Result<Clien
         .map_err(|error| format!("could not configure secure HTTP: {error}"))
 }
 
+// reqwest's top-level message ("error sending request") hides the cause; name every
+// source (DNS, TLS, timeout) so a failed release check can be diagnosed from the log.
+fn error_chain(error: &dyn std::error::Error) -> String {
+    let mut text = error.to_string();
+    let mut source = error.source();
+    while let Some(cause) = source {
+        text.push_str(": ");
+        text.push_str(&cause.to_string());
+        source = cause.source();
+    }
+    text
+}
+
 fn releases_api() -> (String, bool) {
     if cfg!(debug_assertions) {
         if let Ok(value) = std::env::var("NARWHAL3D_RELEASES_API") {
@@ -462,7 +478,7 @@ fn check_for_update(
         .header("Accept", "application/vnd.github+json")
         .header("X-GitHub-Api-Version", "2022-11-28")
         .send()
-        .map_err(|error| format!("release check failed: {error}"))?;
+        .map_err(|error| format!("release check failed: {}", error_chain(&error)))?;
     if !response.status().is_success() {
         return Err(format!("release service returned {}", response.status()));
     }
@@ -1522,13 +1538,13 @@ fn main() -> eframe::Result {
 #[cfg(test)]
 mod tests {
     use super::{
-        asset_matches_platform, digest_matches, is_ready_line, parse_args_from, parse_sha256,
-        parse_version, progress_state, read_limited, recent_files_from, replace_request,
-        request_payload, safe_absolute_path, select_release, supervise_child,
+        asset_matches_platform, digest_matches, error_chain, is_ready_line, parse_args_from,
+        parse_sha256, parse_version, progress_state, read_limited, recent_files_from,
+        replace_request, request_payload, safe_absolute_path, select_release, supervise_child,
         trusted_production_host, validate_windows_update_paths, GithubRelease, PendingRequest,
         ReleaseAsset, RuntimeEvent, UpdatePlatform, WelcomeLifetime, API_RESPONSE_LIMIT,
-        ATTENTION_GRACE_SECONDS, DOWNLOAD_LIMIT, EXIT_PENDING, NEW_UNITS, READY_MARKER,
-        SUBMIT_DELAY, UPDATE_USER_AGENT, WINDOWS_UPDATER_SCRIPT,
+        ATTENTION_GRACE_SECONDS, CONNECT_TIMEOUT, DOWNLOAD_LIMIT, EXIT_PENDING, NEW_UNITS,
+        READY_MARKER, REQUEST_TIMEOUT, SUBMIT_DELAY, UPDATE_USER_AGENT, WINDOWS_UPDATER_SCRIPT,
     };
     use std::fs;
     use std::io::Cursor;
@@ -1573,6 +1589,33 @@ mod tests {
     }
 
     #[test]
+    fn release_check_waits_long_enough_for_a_slow_connection() {
+        assert!(CONNECT_TIMEOUT >= Duration::from_secs(10));
+        assert!(REQUEST_TIMEOUT > CONNECT_TIMEOUT);
+    }
+
+    #[test]
+    fn error_chain_names_every_cause() {
+        #[derive(Debug)]
+        struct Wrapper(std::io::Error);
+        impl std::fmt::Display for Wrapper {
+            fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("error sending request")
+            }
+        }
+        impl std::error::Error for Wrapper {
+            fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+                Some(&self.0)
+            }
+        }
+        let wrapped = Wrapper(std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            "timed out",
+        ));
+        assert_eq!(error_chain(&wrapped), "error sending request: timed out");
+    }
+
+    #[test]
     fn versions_compare_only_well_formed_zero_four_releases() {
         assert_eq!(parse_version("0.4.4"), Some([0, 4, 4]));
         assert_eq!(parse_version("v0.4.5-preview.1"), Some([0, 4, 5]));
@@ -1580,7 +1623,7 @@ mod tests {
         assert_eq!(parse_version("0.5.0"), None);
         assert_eq!(parse_version("0.4"), None);
         assert_eq!(parse_version("0.4.5.1"), None);
-        assert_eq!(env!("CARGO_PKG_VERSION"), "0.4.5");
+        assert_eq!(env!("CARGO_PKG_VERSION"), "0.4.6");
         assert!(UPDATE_USER_AGENT.contains(env!("CARGO_PKG_VERSION")));
     }
 

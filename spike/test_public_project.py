@@ -41,11 +41,11 @@ for link in ("STATUS.md", "COMPATIBILITY.md", "ROADMAP.md", "docs/gaps.md", "CON
              "SUPPORT.md", "SECURITY.md", "docs/images/bugreport.png", "docs/windows-build.md",
              "docs/macos-build.md"):
     check(link in readme, f"README links {link}")
-check("Narwhal_3D-0.4.5-x86_64.AppImage" in readme
-      and "--version 0.4.5" in readme
-      and "--expected-version 0.4.5" in readme
+check("Narwhal_3D-0.4.6-x86_64.AppImage" in readme
+      and "--version 0.4.6" in readme
+      and "--expected-version 0.4.6" in readme
       and "native startup welcome window" in readme,
-      "README install and release examples use version 0.4.5 with native welcome")
+      "README install and release examples use version 0.4.6 with native welcome")
 check("extremely early prerelease" in readme
       and "frozen on the `0.4.x` line" in readme,
       "README pins the owner-required early-prerelease 0.4.x release line")
@@ -96,7 +96,7 @@ check(all("AppImage" in form_text[name] and "Windows portable ZIP" in form_text[
       and "0.2.0 AppImage" not in form_text["bug.yml"],
       "runtime issue forms accept Linux, Windows, macOS-source, and source reports")
 windows_guide = (ROOT / "docs/windows-build.md").read_text(encoding="utf-8")
-check("0.4.5 Windows x86_64 portable ZIP" in windows_guide
+check("0.4.6 Windows x86_64 portable ZIP" in windows_guide
       and "native startup welcome window" in windows_guide
       and "-NarwhalRevision $Revision" in windows_guide
       and "physical-GPU/real-window acceptance" in windows_guide

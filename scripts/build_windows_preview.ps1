@@ -9,7 +9,7 @@ param(
     [ValidatePattern('^[0-9a-f]{40}$')]
     [string]$NarwhalRevision,
     [ValidatePattern('^0\.4\.[0-9]+$')]
-    [string]$Version = "0.4.5",
+    [string]$Version = "0.4.6",
     [string]$Workspace = "C:\Narwhal3D-build",
     [ValidateRange(1, 8)][int]$Jobs = 4,
     [switch]$ResumePackaging
