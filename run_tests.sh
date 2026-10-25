@@ -106,6 +106,9 @@ if command -v cargo >/dev/null 2>&1; then
         run "Rust geometry-core sequential six-edge cap edits" env \
             NARWHAL_GEOMETRY_CORE="$ROOT/native/geometry_core/target/release/libnarwhal_geometry_core.so" \
             LD_LIBRARY_PATH="$OCCT_LIBS" "$PYTHON" spike/test_bug109.py
+        run "Rust geometry-core multi-arc extrusion movability matrix" env \
+            NARWHAL_GEOMETRY_CORE="$ROOT/native/geometry_core/target/release/libnarwhal_geometry_core.so" \
+            LD_LIBRARY_PATH="$OCCT_LIBS" "$PYTHON" spike/test_bug110.py
         run "Rust platform-core format" cargo fmt --manifest-path native/platform_core/Cargo.toml --check
         run "Rust platform-core Clippy" cargo clippy \
             --manifest-path native/platform_core/Cargo.toml --all-targets -- -D warnings

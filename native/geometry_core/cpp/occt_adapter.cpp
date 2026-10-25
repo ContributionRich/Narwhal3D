@@ -33,6 +33,7 @@
 #include <GProp_GProps.hxx>
 #include <GeomAbs_CurveType.hxx>
 #include <GeomAbs_SurfaceType.hxx>
+#include <GCPnts_AbscissaPoint.hxx>
 #include <GeomConvert.hxx>
 #include <GeomConvert_CompCurveToBSplineCurve.hxx>
 #include <GeomConvert_CurveToAnaCurve.hxx>
@@ -90,6 +91,8 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <exception>
 #include <functional>
@@ -238,8 +241,22 @@ struct Refusal {
   std::uint32_t reason;
 };
 
+// Opt-in diagnostics: NARWHAL_GEOMETRY_DEBUG=1 prints why a local move was declined.
+bool geometry_debug() {
+  static const bool enabled = std::getenv("NARWHAL_GEOMETRY_DEBUG") != nullptr;
+  return enabled;
+}
+#define NARWHAL_DEBUG(...)                       \
+  do {                                           \
+    if (geometry_debug()) {                      \
+      std::fprintf(stderr, "[geometry] " __VA_ARGS__); \
+    }                                            \
+  } while (false)
+
 [[noreturn]] void refuse(const std::uint32_t reason,
-                         const std::int32_t status = kPolicyRefused) {
+                         const std::int32_t status = kPolicyRefused,
+                         const int line = __builtin_LINE()) {
+  NARWHAL_DEBUG("refused: reason %u at occt_adapter.cpp:%d\n", reason, line);
   throw Refusal{status, reason};
 }
 
@@ -495,12 +512,177 @@ TopoDS_Edge orient_edge(const TopoDS_Edge& edge, const Point& start, const doubl
   return last_distance < first_distance ? TopoDS::Edge(edge.Reversed()) : edge;
 }
 
+// Pole offsets (fractions of the move) for a ramped multi-span edge whose own basis is
+// less than C2 at some interior knots -- in practice a rational arc/ellipse converted to
+// NURBS, which has double knots. MEASURED (bug #110): there the plain Greville ramp's
+// height along the arc flips curvature at every double knot (d2z/ds2 -4.6e-4 -> +4.6e-4
+// per mm on a 209-degree arc), and no smooth cap can follow that within 2e-3 mm. The
+// offsets are the least-squares closest to the Greville ramp subject to C1 AND C2 of the
+// height in arc length at those knots, plus the fixed end values and kept tangents.
+// Small dense system, evaluated with OCCT's own rational basis; empty when not needed
+// or not solvable (the caller keeps the plain ramp).
+std::vector<double> smooth_ramp(const Handle(Geom_BSplineCurve)& curve,
+                                const std::vector<double>& target,
+                                const bool keep_first,
+                                const bool keep_last) {
+  const int n = curve->NbPoles();
+  const int degree = curve->Degree();
+  std::vector<double> joints;
+  for (int k = 2; k < curve->NbKnots(); ++k) {
+    if (degree - curve->Multiplicity(k) < 2) {
+      joints.push_back(curve->Knot(k));
+    }
+  }
+  if (joints.empty() || n < 4) {
+    return {};
+  }
+  std::vector<Handle(Geom_BSplineCurve)> basis;
+  for (int i = 1; i <= n; ++i) {
+    Handle(Geom_BSplineCurve) unit = Handle(Geom_BSplineCurve)::DownCast(curve->Copy());
+    for (int j = 1; j <= n; ++j) {
+      unit->SetPole(j, gp_Pnt(0.0, 0.0, i == j ? 1.0 : 0.0));
+    }
+    basis.push_back(unit);
+  }
+  std::vector<std::vector<double>> rows;
+  std::vector<double> values;
+  const double eps = 1.0e-9 * (curve->LastParameter() - curve->FirstParameter());
+  for (const double knot : joints) {
+    std::array<std::vector<double>, 2> first_rows{std::vector<double>(n), std::vector<double>(n)};
+    std::array<std::vector<double>, 2> second_rows{std::vector<double>(n), std::vector<double>(n)};
+    for (int side = 0; side < 2; ++side) {
+      const double t = side == 0 ? knot - eps : knot + eps;
+      gp_Pnt point;
+      gp_Vec d1;
+      gp_Vec d2;
+      curve->D2(t, point, d1, d2);
+      const double speed = d1.Magnitude();
+      if (speed <= 1.0e-12) {
+        return {};
+      }
+      const double stretch = d1.Dot(d2) / (speed * speed);
+      for (int i = 0; i < n; ++i) {
+        gp_Pnt value;
+        gp_Vec r1;
+        gp_Vec r2;
+        basis[static_cast<std::size_t>(i)]->D2(t, value, r1, r2);
+        first_rows[side][static_cast<std::size_t>(i)] = r1.Z() / speed;
+        second_rows[side][static_cast<std::size_t>(i)] = (r2.Z() - r1.Z() * stretch) / (speed * speed);
+      }
+    }
+    for (const auto* pair : {&first_rows, &second_rows}) {
+      std::vector<double> row(n);
+      double scale = 0.0;
+      for (int i = 0; i < n; ++i) {
+        row[static_cast<std::size_t>(i)] = (*pair)[0][static_cast<std::size_t>(i)] -
+                                           (*pair)[1][static_cast<std::size_t>(i)];
+        scale = std::max(scale, std::abs(row[static_cast<std::size_t>(i)]));
+      }
+      if (scale > 0.0) {
+        for (double& entry : row) {
+          entry /= scale;
+        }
+        rows.push_back(row);
+        values.push_back(0.0);
+      }
+    }
+  }
+  const auto pin = [&](const int index, const double value) {
+    std::vector<double> row(n, 0.0);
+    row[static_cast<std::size_t>(index)] = 1.0;
+    rows.push_back(row);
+    values.push_back(value);
+  };
+  pin(0, target.front());
+  pin(n - 1, target.back());
+  if (keep_first) {
+    pin(1, target.front());
+  }
+  if (keep_last) {
+    pin(n - 2, target.back());
+  }
+  // Penalty form of the equality-constrained least squares: (I + mu A^T A) s = g + mu A^T b.
+  constexpr double mu = 1.0e10;
+  std::vector<std::vector<double>> matrix(n, std::vector<double>(n + 1, 0.0));
+  for (int i = 0; i < n; ++i) {
+    matrix[static_cast<std::size_t>(i)][static_cast<std::size_t>(i)] = 1.0;
+    matrix[static_cast<std::size_t>(i)][static_cast<std::size_t>(n)] = target[static_cast<std::size_t>(i)];
+  }
+  for (std::size_t r = 0; r < rows.size(); ++r) {
+    for (int i = 0; i < n; ++i) {
+      for (int j = 0; j < n; ++j) {
+        matrix[static_cast<std::size_t>(i)][static_cast<std::size_t>(j)] +=
+            mu * rows[r][static_cast<std::size_t>(i)] * rows[r][static_cast<std::size_t>(j)];
+      }
+      matrix[static_cast<std::size_t>(i)][static_cast<std::size_t>(n)] +=
+          mu * rows[r][static_cast<std::size_t>(i)] * values[r];
+    }
+  }
+  for (int column = 0; column < n; ++column) {
+    int pivot = column;
+    for (int row = column + 1; row < n; ++row) {
+      if (std::abs(matrix[static_cast<std::size_t>(row)][static_cast<std::size_t>(column)]) >
+          std::abs(matrix[static_cast<std::size_t>(pivot)][static_cast<std::size_t>(column)])) {
+        pivot = row;
+      }
+    }
+    std::swap(matrix[static_cast<std::size_t>(column)], matrix[static_cast<std::size_t>(pivot)]);
+    const double diagonal = matrix[static_cast<std::size_t>(column)][static_cast<std::size_t>(column)];
+    if (std::abs(diagonal) <= 1.0e-300) {
+      return {};
+    }
+    for (int row = 0; row < n; ++row) {
+      if (row == column) {
+        continue;
+      }
+      const double factor =
+          matrix[static_cast<std::size_t>(row)][static_cast<std::size_t>(column)] / diagonal;
+      for (int j = column; j <= n; ++j) {
+        matrix[static_cast<std::size_t>(row)][static_cast<std::size_t>(j)] -=
+            factor * matrix[static_cast<std::size_t>(column)][static_cast<std::size_t>(j)];
+      }
+    }
+  }
+  std::vector<double> result(n);
+  for (int i = 0; i < n; ++i) {
+    result[static_cast<std::size_t>(i)] =
+        matrix[static_cast<std::size_t>(i)][static_cast<std::size_t>(n)] /
+        matrix[static_cast<std::size_t>(i)][static_cast<std::size_t>(i)];
+    if (!std::isfinite(result[static_cast<std::size_t>(i)])) {
+      return {};
+    }
+  }
+  return result;
+}
+
+// Unit tangent of `edge` leaving `vertex` (null vector when degenerate or not an end).
+gp_Vec outward_tangent(const TopoDS_Edge& edge, const Point& vertex, const double tolerance) {
+  BRepAdaptor_Curve adaptor(edge);
+  const double first = adaptor.FirstParameter();
+  const double last = adaptor.LastParameter();
+  gp_Pnt point;
+  gp_Vec tangent;
+  const gp_Pnt start = adaptor.Value(first);
+  const gp_Pnt end = adaptor.Value(last);
+  const gp_Pnt target(vertex[0], vertex[1], vertex[2]);
+  if (start.Distance(target) <= tolerance) {
+    adaptor.D1(first, point, tangent);
+  } else if (end.Distance(target) <= tolerance) {
+    adaptor.D1(last, point, tangent);
+    tangent.Reverse();
+  } else {
+    return gp_Vec(0.0, 0.0, 0.0);
+  }
+  return tangent.Magnitude() > 1.0e-12 ? tangent.Normalized() : gp_Vec(0.0, 0.0, 0.0);
+}
+
 std::pair<TopoDS_Edge, bool> rebuild_edge(const TopoDS_Edge& edge,
                                            const std::vector<int>& endpoint_indices,
                                            const ShapeMap& vertices,
                                            const std::set<int>& moved,
                                            const Point& vector,
-                                           const double tolerance) {
+                                           const double tolerance,
+                                           const std::array<bool, 2>& keep_tangent = {false, false}) {
   if (endpoint_indices.empty()) {
     refuse(kReasonTopology);
   }
@@ -537,6 +719,13 @@ std::pair<TopoDS_Edge, bool> rebuild_edge(const TopoDS_Edge& edge,
   }
   Handle(Geom_BSplineCurve) bspline = GeomConvert::CurveToBSplineCurve(
       new Geom_TrimmedCurve(curve, first, last));
+  const Handle(Geom_BSplineCurve) original =
+      Handle(Geom_BSplineCurve)::DownCast(bspline->Copy());
+  // Which endpoint (0/1) sits at the first pole.
+  const gp_Pnt first_pole = bspline->Pole(1);
+  const int first_endpoint =
+      point_distance({first_pole.X(), first_pole.Y(), first_pole.Z()}, old_points[0]) <= tolerance
+      ? 0 : 1;
   std::set<int> changed_poles;
   for (const int pole_index : {1, bspline->NbPoles()}) {
     const gp_Pnt pole = bspline->Pole(pole_index);
@@ -580,13 +769,45 @@ std::pair<TopoDS_Edge, bool> rebuild_edge(const TopoDS_Edge& edge,
     if (!(span > 0.0) || bspline->IsPeriodic()) {
       refuse(kReasonUnsupportedBoundary);
     }
-    for (int pole = 2; pole < pole_count; ++pole) {
+    std::vector<double> weights(static_cast<std::size_t>(pole_count));
+    for (int pole = 1; pole <= pole_count; ++pole) {
       const double ramp = (greville[static_cast<std::size_t>(pole - 1)] - greville.front()) / span;
-      const double weight = moved_at_end ? ramp : 1.0 - ramp;
+      weights[static_cast<std::size_t>(pole - 1)] = moved_at_end ? ramp : 1.0 - ramp;
+    }
+    const std::vector<double> smoothed = smooth_ramp(
+        original, weights, keep_tangent[first_endpoint], keep_tangent[1 - first_endpoint]);
+    if (!smoothed.empty()) {
+      weights = smoothed;
+    }
+    for (int pole = 2; pole < pole_count; ++pole) {
+      const double weight = weights[static_cast<std::size_t>(pole - 1)];
       const gp_Pnt old_pole = bspline->Pole(pole);
       bspline->SetPole(pole, gp_Pnt(old_pole.X() + vector[0] * weight,
                                     old_pole.Y() + vector[1] * weight,
                                     old_pole.Z() + vector[2] * weight));
+    }
+  }
+  // MEASURED (bug #110): where this edge continues another one tangentially (a circle
+  // split into two arcs, a fillet meeting a line) the cap's boundary was smooth in plan,
+  // but the moved edges arrived at the vertex with opposite slopes. That crease along a
+  // smooth outline cannot lie on any smooth cap, and the fit was refused. Keeping the end
+  // tangent -- the pole next to that end gets exactly the end pole's offset -- preserves
+  // the tangent continuity in 3D. The moved end is applied last so it wins on a curve
+  // too short to keep both.
+  const int pole_count = bspline->NbPoles();
+  for (const bool moved_pass : {false, true}) {
+    for (const int side : {1, pole_count}) {
+      const int endpoint = side == 1 ? first_endpoint : 1 - first_endpoint;
+      const bool end_moved = moved.count(endpoint_indices[endpoint]) != 0;
+      if (end_moved != moved_pass || !keep_tangent[endpoint] || pole_count < 3) {
+        continue;
+      }
+      const int neighbour = side == 1 ? 2 : pole_count - 1;
+      const gp_Pnt base = original->Pole(neighbour);
+      const double weight = end_moved ? 1.0 : 0.0;
+      bspline->SetPole(neighbour, gp_Pnt(base.X() + vector[0] * weight,
+                                         base.Y() + vector[1] * weight,
+                                         base.Z() + vector[2] * weight));
     }
   }
   BRepBuilderAPI_MakeEdge maker(bspline);
@@ -950,9 +1171,10 @@ struct HeightFieldInfo {
 static_assert(sizeof(HeightFieldInfo) == 56, "Rust/C++ height-field layout changed");
 
 // MEASURED on bug #108: the cap's shape converges towards the thin-plate limit as the
-// grid refines (24 spans: area within 0.1% of the reference), but BRepAlgoAPI_Check on the
-// rebuilt solid took 0.12 s at 24 spans and 80 s at 32. A single 24-span grid keeps the
-// edit interactive; a boundary it cannot meet is refused, not widened.
+// grid refines (24 spans: area within 0.1% of the reference). BRepAlgoAPI_Check took 80 s
+// at 32 spans while the cap's gap to a shared edge alternated in sign; with the
+// one-signed bias (bug #109) a 48-span refinement checks in about a second, which a
+// boundary with long arcs needs (bug #110). The fit starts at 24 spans.
 constexpr double kPi = 3.14159265358979323846;
 constexpr int kHeightFieldChoice = -2;
 constexpr double kHeightFieldSmoothing = 1.0e-12;
@@ -960,7 +1182,7 @@ constexpr double kHeightFieldSmoothing = 1.0e-12;
 // shared edge never changes sign (bug #109); the true gap is then 1-3 target errors,
 // inside the 4x refusal limit below.
 constexpr double kHeightFieldBias = 2.0;
-constexpr std::uint32_t kHeightFieldMaxSpans = 24;
+constexpr std::uint32_t kHeightFieldMaxSpans = 48;
 constexpr int kHeightFieldFitSamples = 128;
 constexpr int kHeightFieldCheckSamples = 2048;
 
@@ -1207,7 +1429,10 @@ std::optional<FaceOption> height_field_option(
         source, boundary, curves, points,
         std::max(tolerances.build, tolerances.extent * 1.0e-9));
     if (!frame.has_value()) {
-      return std::nullopt;
+      {
+        NARWHAL_DEBUG("height field declined at step 1\n", 1);
+        return std::nullopt;
+      }
     }
     gp_Trsf to_local;
     to_local.SetTransformation(*frame);
@@ -1229,122 +1454,151 @@ std::optional<FaceOption> height_field_option(
     }
     twice_area += previous.X() * samples[1] - samples[0] * previous.Y();
 
-    // Relative to the part only, never to the input's tolerance: an input that already
-    // carries a fitted cap's edge tolerance would otherwise loosen the target on every
-    // edit (MEASURED bug #109: 1.2e-4 -> 5.6e-4 -> 2e-3 mm over two edits).
-    const double target = std::max(Precision::Confusion(), tolerances.extent * 1.0e-6);
-    const std::size_t capacity = static_cast<std::size_t>(kHeightFieldMaxSpans + 3) *
-                                 static_cast<std::size_t>(kHeightFieldMaxSpans + 3);
-    std::vector<double> heights(capacity, 0.0);
-    HeightFieldInfo info{};
-    const HeightFieldSolver solver = g_height_field_solver.load();
-    if (solver == nullptr) {
-      return std::nullopt;
-    }
-    if (solver(
-            samples.data(), samples.size() / 3, kHeightFieldSmoothing, target,
-            kHeightFieldMaxSpans, kHeightFieldBias * target, heights.data(), heights.size(),
-            &info) != 0) {
-      return std::nullopt;
-    }
-    const Handle(Geom_BSplineSurface) surface = height_field_surface(info, heights, to_global);
-
-    BRep_Builder builder;
-    TopoDS_Face face;
-    builder.MakeFace(face, surface, tolerances.build);
-    std::vector<TopoDS_Vertex> corners(curves.size());
-    for (std::size_t index = 0; index < curves.size(); ++index) {
-      builder.MakeVertex(corners[index], curves[index]->StartPoint(), tolerances.build);
-    }
-    std::vector<TopoDS_Edge> edges;
-    std::vector<double> gaps;
-    double worst = 0.0;
-    for (std::size_t index = 0; index < curves.size(); ++index) {
-      // Keep the edge's own analytic curve (line, circle, B-spline) when its planar
-      // projection is exactly representable with the same parameter. MEASURED (bug #109):
-      // with B-spline copies on the cap, sewing kept either representation depending on
-      // face order, so a straight edge silently became a degree-1 B-spline on some edits.
-      const TopoDS_Edge& source_edge = boundary[index];
-      double first = 0.0;
-      double last = 0.0;
-      Handle(Geom_Curve) curve = BRep_Tool::Curve(source_edge, first, last);
-      bool reversed = source_edge.Orientation() == TopAbs_REVERSED;
-      Handle(Geom2d_Curve) pcurve =
-          curve.IsNull() ? Handle(Geom2d_Curve)() : exact_planar_pcurve(curve, first, last, to_local);
-      if (pcurve.IsNull()) {
-        curve = curves[index];
-        first = curves[index]->FirstParameter();
-        last = curves[index]->LastParameter();
-        reversed = false;
-        pcurve = planar_pcurve(curves[index], to_local);
-      }
-      double gap = 0.0;
-      for (int sample = 0; sample <= kHeightFieldCheckSamples; ++sample) {
-        const double fraction =
-            0.5 - 0.5 * std::cos(kPi * static_cast<double>(sample) / kHeightFieldCheckSamples);
-        const double parameter = first + (last - first) * fraction;
-        const gp_Pnt2d uv = pcurve->Value(parameter);
-        gap = std::max(gap, curve->Value(parameter).Distance(surface->Value(uv.X(), uv.Y())));
-      }
-      worst = std::max(worst, gap);
-      gaps.push_back(gap);
-      const TopoDS_Vertex& loop_start = corners[index];
-      const TopoDS_Vertex& loop_end = corners[(index + 1) % corners.size()];
-      const TopoDS_Vertex start =
-          TopoDS::Vertex((reversed ? loop_end : loop_start).Oriented(TopAbs_FORWARD));
-      const TopoDS_Vertex end =
-          TopoDS::Vertex((reversed ? loop_start : loop_end).Oriented(TopAbs_REVERSED));
-      if (curve->Value(first).Distance(BRep_Tool::Pnt(start)) > tolerances.build ||
-          curve->Value(last).Distance(BRep_Tool::Pnt(end)) > tolerances.build) {
+    // MEASURED (bug #110): a ramped multi-span ARC is only C1 along its length (its
+    // rational basis flips curvature at the double knots), so no smooth cap meets it
+    // closer than ~2e-3 mm on a 200 mm part. The fit aims for 1e-6 of the part and, only
+    // if that cannot be met, accepts 1e-5 -- still a hundred times inside the reference's
+    // own 0.28 mm gap on bug #108.
+    for (const double relative : {1.0e-6, 1.0e-5}) {
+      // Relative to the part only, never to the input's tolerance: an input that already
+      // carries a fitted cap's edge tolerance would otherwise loosen the target on every
+      // edit (MEASURED bug #109: 1.2e-4 -> 5.6e-4 -> 2e-3 mm over two edits).
+      const double target = std::max(Precision::Confusion(), tolerances.extent * relative);
+      const std::size_t capacity = static_cast<std::size_t>(kHeightFieldMaxSpans + 3) *
+                                   static_cast<std::size_t>(kHeightFieldMaxSpans + 3);
+      std::vector<double> heights(capacity, 0.0);
+      HeightFieldInfo info{};
+      const HeightFieldSolver solver = g_height_field_solver.load();
+      if (solver == nullptr) {
+        {
+        NARWHAL_DEBUG("height field declined at step 2\n", 2);
         return std::nullopt;
       }
-      TopoDS_Edge edge;
-      builder.MakeEdge(edge, curve, std::max(tolerances.build, gap * 1.5));
-      builder.Add(edge, start);
-      builder.Add(edge, end);
-      builder.Range(edge, first, last);
-      builder.UpdateEdge(edge, pcurve, face, std::max(tolerances.build, gap * 1.5));
-      builder.Range(edge, face, first, last);
-      builder.SameParameter(edge, true);
-      builder.SameRange(edge, true);
-      edges.push_back(reversed ? TopoDS::Edge(edge.Reversed()) : edge);
+      }
+      if (solver(
+              samples.data(), samples.size() / 3, kHeightFieldSmoothing, target,
+              kHeightFieldMaxSpans, kHeightFieldBias * target, heights.data(), heights.size(),
+              &info) != 0) {
+        NARWHAL_DEBUG("height field fit missed %g (best %g, %u x %u poles)\n", target,
+                      info.max_error, info.u_pole_count, info.v_pole_count);
+        continue;
+      }
+      const Handle(Geom_BSplineSurface) surface = height_field_surface(info, heights, to_global);
+
+      BRep_Builder builder;
+      TopoDS_Face face;
+      builder.MakeFace(face, surface, tolerances.build);
+      std::vector<TopoDS_Vertex> corners(curves.size());
+      for (std::size_t index = 0; index < curves.size(); ++index) {
+        builder.MakeVertex(corners[index], curves[index]->StartPoint(), tolerances.build);
+      }
+      std::vector<TopoDS_Edge> edges;
+      std::vector<double> gaps;
+      double worst = 0.0;
+      for (std::size_t index = 0; index < curves.size(); ++index) {
+        // Keep the edge's own analytic curve (line, circle, B-spline) when its planar
+        // projection is exactly representable with the same parameter. MEASURED (bug #109):
+        // with B-spline copies on the cap, sewing kept either representation depending on
+        // face order, so a straight edge silently became a degree-1 B-spline on some edits.
+        const TopoDS_Edge& source_edge = boundary[index];
+        double first = 0.0;
+        double last = 0.0;
+        Handle(Geom_Curve) curve = BRep_Tool::Curve(source_edge, first, last);
+        bool reversed = source_edge.Orientation() == TopAbs_REVERSED;
+        Handle(Geom2d_Curve) pcurve =
+            curve.IsNull() ? Handle(Geom2d_Curve)() : exact_planar_pcurve(curve, first, last, to_local);
+        if (pcurve.IsNull()) {
+          curve = curves[index];
+          first = curves[index]->FirstParameter();
+          last = curves[index]->LastParameter();
+          reversed = false;
+          pcurve = planar_pcurve(curves[index], to_local);
+        }
+        double gap = 0.0;
+        for (int sample = 0; sample <= kHeightFieldCheckSamples; ++sample) {
+          const double fraction =
+              0.5 - 0.5 * std::cos(kPi * static_cast<double>(sample) / kHeightFieldCheckSamples);
+          const double parameter = first + (last - first) * fraction;
+          const gp_Pnt2d uv = pcurve->Value(parameter);
+          gap = std::max(gap, curve->Value(parameter).Distance(surface->Value(uv.X(), uv.Y())));
+        }
+        worst = std::max(worst, gap);
+        gaps.push_back(gap);
+        const TopoDS_Vertex& loop_start = corners[index];
+        const TopoDS_Vertex& loop_end = corners[(index + 1) % corners.size()];
+        const TopoDS_Vertex start =
+            TopoDS::Vertex((reversed ? loop_end : loop_start).Oriented(TopAbs_FORWARD));
+        const TopoDS_Vertex end =
+            TopoDS::Vertex((reversed ? loop_start : loop_end).Oriented(TopAbs_REVERSED));
+        if (curve->Value(first).Distance(BRep_Tool::Pnt(start)) > tolerances.build ||
+            curve->Value(last).Distance(BRep_Tool::Pnt(end)) > tolerances.build) {
+          {
+        NARWHAL_DEBUG("height field declined at step 3\n", 3);
+        return std::nullopt;
+      }
+        }
+        TopoDS_Edge edge;
+        builder.MakeEdge(edge, curve, std::max(tolerances.build, gap * 1.5));
+        builder.Add(edge, start);
+        builder.Add(edge, end);
+        builder.Range(edge, first, last);
+        builder.UpdateEdge(edge, pcurve, face, std::max(tolerances.build, gap * 1.5));
+        builder.Range(edge, face, first, last);
+        builder.SameParameter(edge, true);
+        builder.SameRange(edge, true);
+        edges.push_back(reversed ? TopoDS::Edge(edge.Reversed()) : edge);
+      }
+      if (worst > 4.0 * target) {
+        NARWHAL_DEBUG("height field edge gap %g exceeds 4 x %g\n", worst, target);
+        continue;
+      }
+      for (std::size_t index = 0; index < corners.size(); ++index) {
+        const double gap = std::max(gaps[index], gaps[(index + corners.size() - 1) % corners.size()]);
+        builder.UpdateVertex(corners[index], std::max(tolerances.build, gap * 1.5));
+      }
+      TopoDS_Wire wire;
+      builder.MakeWire(wire);
+      for (const TopoDS_Edge& edge : edges) {
+        builder.Add(wire, edge);
+      }
+      wire.Closed(true);
+      // The frame's +Z is the source's outward side, so the natural face orientation is
+      // already the outward one.
+      builder.Add(face, twice_area < 0.0 ? wire.Reversed() : wire);
+      if (!BRepCheck_Analyzer(face, true).IsValid()) {
+        {
+        NARWHAL_DEBUG("height field declined at step 4\n", 4);
+        return std::nullopt;
+      }
+      }
+      FaceOption option;
+      option.face = face;
+      option.reconstructed = true;
+      option.reconstructed_bspline = true;
+      option.boundary_error = boundary_error(face, boundary, policy.edge_samples);
+      option.merge_choice = kHeightFieldChoice;
+      option.rank = {
+          static_cast<double>(std::max(surface->UDegree(), surface->VDegree())),
+          static_cast<double>(surface->UDegree() + surface->VDegree()),
+          static_cast<double>(surface->NbUPoles() * surface->NbVPoles()),
+          static_cast<double>(surface->NbUPoles() + surface->NbVPoles()),
+          face_deformation(source, face, tolerances.compare)};
+      return option;
     }
-    if (worst > 4.0 * target) {
-      return std::nullopt;
-    }
-    for (std::size_t index = 0; index < corners.size(); ++index) {
-      const double gap = std::max(gaps[index], gaps[(index + corners.size() - 1) % corners.size()]);
-      builder.UpdateVertex(corners[index], std::max(tolerances.build, gap * 1.5));
-    }
-    TopoDS_Wire wire;
-    builder.MakeWire(wire);
-    for (const TopoDS_Edge& edge : edges) {
-      builder.Add(wire, edge);
-    }
-    wire.Closed(true);
-    // The frame's +Z is the source's outward side, so the natural face orientation is
-    // already the outward one.
-    builder.Add(face, twice_area < 0.0 ? wire.Reversed() : wire);
-    if (!BRepCheck_Analyzer(face, true).IsValid()) {
-      return std::nullopt;
-    }
-    FaceOption option;
-    option.face = face;
-    option.reconstructed = true;
-    option.reconstructed_bspline = true;
-    option.boundary_error = boundary_error(face, boundary, policy.edge_samples);
-    option.merge_choice = kHeightFieldChoice;
-    option.rank = {
-        static_cast<double>(std::max(surface->UDegree(), surface->VDegree())),
-        static_cast<double>(surface->UDegree() + surface->VDegree()),
-        static_cast<double>(surface->NbUPoles() * surface->NbVPoles()),
-        static_cast<double>(surface->NbUPoles() + surface->NbVPoles()),
-        face_deformation(source, face, tolerances.compare)};
-    return option;
+    {
+        NARWHAL_DEBUG("height field declined at step 5\n", 5);
+        return std::nullopt;
+      }
   } catch (const Standard_Failure&) {
-    return std::nullopt;
+    {
+        NARWHAL_DEBUG("height field declined at step 6\n", 6);
+        return std::nullopt;
+      }
   } catch (const Refusal&) {
-    return std::nullopt;
+    {
+        NARWHAL_DEBUG("height field declined at step 7\n", 7);
+        return std::nullopt;
+      }
   }
 }
 
@@ -1555,10 +1809,14 @@ std::vector<FaceOption> rebuild_face_options(const TopoDS_Face& face,
       refuse(kReasonNoCandidate);
     }
   }
-  if (boundary.size() == 6 && prefer_deformed_chain) {
+  // MEASURED (bug #110): an extruded profile with eight segments has eight-edge caps, so
+  // every move with a component across the cap plane was refused. The height field takes
+  // any number of boundary edges; for five and six it is tried first because the
+  // composite fallback folds (bug #108), and above six it is the only exact route.
+  if (boundary.size() > 6 || (boundary.size() >= 5 && prefer_deformed_chain)) {
     if (const std::optional<FaceOption> smooth =
             height_field_option(face, boundary, tolerances, policy)) {
-      preferred_filter_used = true;
+      preferred_filter_used = preferred_filter_used || boundary.size() <= 6;
       return {*smooth};
     }
   }
@@ -1620,7 +1878,11 @@ std::vector<gp_Pnt> part_samples(const TopoDS_Shape& part, const std::uint32_t k
 double part_measure(const TopoDS_Shape& part, const std::uint32_t kind) {
   GProp_GProps properties;
   if (kind == 2) {
-    BRepGProp::LinearProperties(part, properties);
+    // MEASURED (bug #110): the fixed-order linear properties misjudged a translated
+    // circle stored as a rational B-spline by 6e-6 relative, so the exact translated
+    // edge failed the 2.5e-7 identity test. Adaptive arc length is accurate.
+    const BRepAdaptor_Curve adaptor(TopoDS::Edge(part));
+    return GCPnts_AbscissaPoint::Length(adaptor, 1.0e-12);
   } else {
     BRepGProp::SurfaceProperties(part, properties, 1.0e-10);
   }
@@ -1717,6 +1979,7 @@ bool translated_match(const TopoDS_Shape& old_part,
   const double old_mass = part_measure(old_part, kind);
   const double new_mass = part_measure(candidate, kind);
   if (std::abs(new_mass - old_mass) > 2.5e-7 * std::max(tolerance, std::abs(old_mass))) {
+    NARWHAL_DEBUG("translated match: measure %.12g vs %.12g\n", new_mass, old_mass);
     return false;
   }
   maximum_error = 0.0;
@@ -1727,6 +1990,7 @@ bool translated_match(const TopoDS_Shape& old_part,
         : point_shape_distance(moved, candidate);
     maximum_error = std::max(maximum_error, error);
     if (error > tolerance) {
+      NARWHAL_DEBUG("translated match: sample off by %g (limit %g)\n", error, tolerance);
       return false;
     }
   }
@@ -2288,8 +2552,36 @@ TopoDS_Shape move_component(const MoveSource& source,
     if (BRep_Tool::Degenerated(edge)) {
       refuse(kReasonDegenerate);
     }
+    std::array<bool, 2> keep_tangent{false, false};
+    if (edge_vertices[edge_index].size() == 2 && BRepAdaptor_Curve(edge).GetType() != GeomAbs_Line) {
+      for (int end = 0; end < 2; ++end) {
+        const int vertex = edge_vertices[edge_index][end];
+        const Point point = point_of(TopoDS::Vertex(vertices.FindKey(vertex + 1)));
+        const gp_Vec own = outward_tangent(edge, point, tolerances.build);
+        if (own.Magnitude() == 0.0) {
+          continue;
+        }
+        for (int partner = 0; partner < static_cast<int>(edge_vertices.size()); ++partner) {
+          if (partner == edge_index ||
+              std::find(edge_vertices[partner].begin(), edge_vertices[partner].end(), vertex) ==
+                  edge_vertices[partner].end()) {
+            continue;
+          }
+          const TopoDS_Edge other = TopoDS::Edge(edges.FindKey(partner + 1));
+          // At a moved vertex only a curved partner keeps its tangent too; a straight
+          // partner turns, so there is no continuity left to preserve.
+          if (moved.count(vertex) != 0 && BRepAdaptor_Curve(other).GetType() == GeomAbs_Line) {
+            continue;
+          }
+          const gp_Vec theirs = outward_tangent(other, point, tolerances.build);
+          if (theirs.Magnitude() != 0.0 && own.Dot(theirs) <= -std::cos(1.0e-4)) {
+            keep_tangent[end] = true;
+          }
+        }
+      }
+    }
     auto rebuilt = rebuild_edge(edge, edge_vertices[edge_index], vertices, moved, vector,
-                                tolerances.build);
+                                tolerances.build, keep_tangent);
     if (rebuilt.second != (selected_edges.count(edge_index) != 0)) {
       refuse(kReasonContainment);
     }
@@ -2441,6 +2733,9 @@ TopoDS_Shape move_component(const MoveSource& source,
       }
       sewing.Perform();
       if (sewing.NbFreeEdges() != 0 || sewing.NbMultipleEdges() != 0) {
+        NARWHAL_DEBUG("candidate %llu: sewing left %d free / %d multiple edges\n",
+                      static_cast<unsigned long long>(combination), sewing.NbFreeEdges(),
+                      sewing.NbMultipleEdges());
         continue;
       }
       std::vector<TopoDS_Shell> shells;
@@ -2449,6 +2744,8 @@ TopoDS_Shape move_component(const MoveSource& source,
         shells.push_back(TopoDS::Shell(explorer.Current()));
       }
       if (shells.size() != 1) {
+        NARWHAL_DEBUG("candidate %llu: %zu shells\n",
+                      static_cast<unsigned long long>(combination), shells.size());
         continue;
       }
       const TopoDS_Solid solid = BRepBuilderAPI_MakeSolid(shells[0]).Solid();
@@ -2470,7 +2767,11 @@ TopoDS_Shape move_component(const MoveSource& source,
       std::future<bool> airtight_future = std::async(
           std::launch::async, [&result]() { return is_airtight(result); });
       self_intersection_free = BRepAlgoAPI_Check(result).IsValid();
-      if (!airtight_future.get() || !self_intersection_free) {
+      const bool airtight = airtight_future.get();
+      if (!airtight || !self_intersection_free) {
+        NARWHAL_DEBUG("candidate %llu: airtight %d, self-intersection free %d\n",
+                      static_cast<unsigned long long>(combination), airtight ? 1 : 0,
+                      self_intersection_free ? 1 : 0);
         continue;
       }
     } else {
@@ -2491,10 +2792,15 @@ TopoDS_Shape move_component(const MoveSource& source,
     map_shapes(result, TopAbs_VERTEX, result_vertices);
     if (result_faces.Extent() != faces.Extent() || result_edges.Extent() != edges.Extent() ||
         result_vertices.Extent() != vertices.Extent()) {
+      NARWHAL_DEBUG("candidate %llu: topology %d/%d/%d\n",
+                    static_cast<unsigned long long>(combination), result_faces.Extent(),
+                    result_edges.Extent(), result_vertices.Extent());
       continue;
     }
 
     if (!boundary_exact) {
+      NARWHAL_DEBUG("candidate %llu: boundary error %g\n",
+                    static_cast<unsigned long long>(combination), max_boundary);
       continue;
     }
     if (validation_mode == 2) {
@@ -2514,6 +2820,9 @@ TopoDS_Shape move_component(const MoveSource& source,
       certificate.verification_failure_stage = mapping.failure_stage;
       certificate.verification_failure_detail = mapping.failure_detail;
       if (!mapping.moved_vertices || !mapping.incidence || !mapping.unchanged_geometry) {
+        NARWHAL_DEBUG("candidate %llu: mapping stage %u detail %u\n",
+                      static_cast<unsigned long long>(combination), mapping.failure_stage,
+                      mapping.failure_detail);
         continue;
       }
     }
@@ -2541,6 +2850,8 @@ TopoDS_Shape move_component(const MoveSource& source,
       }
     }
     if (match_count != 1) {
+      NARWHAL_DEBUG("candidate %llu: selected part matched %d times\n",
+                    static_cast<unsigned long long>(combination), match_count);
       continue;
     }
 

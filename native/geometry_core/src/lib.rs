@@ -1732,14 +1732,26 @@ mod tests {
                                 certificate.quality_checked_bits & QUALITY_BSPLINE_BOUNDARY,
                                 0
                             );
-                            assert_ne!(certificate.quality_checked_bits & QUALITY_INTERNAL_KNOT, 0);
+                            // Where the fillet's five-edge end face leaves its plane it is now
+                            // rebuilt as ONE smooth height-field patch (bug #110), with no
+                            // composite joins left to check; moving edge 20 along X still
+                            // rebuilds through composite joins, and those are checked.
+                            if kind == COMPONENT_EDGE && axis == 0 {
+                                assert_ne!(
+                                    certificate.quality_checked_bits & QUALITY_INTERNAL_KNOT,
+                                    0
+                                );
+                            }
                             assert!(
                                 certificate.max_internal_normal_jump <= LOCAL_MOVE_MAX_NORMAL_JUMP
                             );
                         }
                         if kind == COMPONENT_FACE && index == 2 && axis == 1 {
+                            // This move used to fall back to a measured composite crease;
+                            // the height-field route (bug #110) now gives a smooth exact
+                            // face, and a smooth candidate always wins.
                             assert!(
-                                certificate.max_internal_normal_jump > LOCAL_MOVE_MAX_NORMAL_JUMP
+                                certificate.max_internal_normal_jump <= LOCAL_MOVE_MAX_NORMAL_JUMP
                             );
                         }
                         if sign > 0.0 && axis == 0 {
