@@ -324,6 +324,7 @@ type HeightFieldSolver = unsafe extern "C" fn(
     f64,
     f64,
     u32,
+    f64,
     *mut f64,
     usize,
     *mut height_field::NarwhalHeightFieldV1,

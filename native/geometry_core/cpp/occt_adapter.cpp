@@ -20,6 +20,7 @@
 #include <BRepExtrema_DistShapeShape.hxx>
 #include <BRepFilletAPI_MakeFillet.hxx>
 #include <BRepGProp.hxx>
+#include <BRepGProp_Face.hxx>
 #include <BRepPrimAPI_MakeBox.hxx>
 #include <BRepPrimAPI_MakeCone.hxx>
 #include <BRepPrimAPI_MakeCylinder.hxx>
@@ -39,6 +40,11 @@
 #include <GeomFill_FillingStyle.hxx>
 #include <GeomAPI_ProjectPointOnCurve.hxx>
 #include <Geom2d_BSplineCurve.hxx>
+#include <gp_Dir2d.hxx>
+#include <gp_Ax22d.hxx>
+#include <Geom_Line.hxx>
+#include <Geom_Circle.hxx>
+#include <Geom2d_Circle.hxx>
 #include <Geom2d_Curve.hxx>
 #include <Geom_BSplineCurve.hxx>
 #include <Geom_BSplineSurface.hxx>
@@ -104,7 +110,7 @@
 // unchanged.
 using HeightFieldSolver = std::int32_t (*)(const double* samples, std::size_t sample_count,
                                            double smoothing, double target_error,
-                                           std::uint32_t max_spans, double* heights,
+                                           std::uint32_t max_spans, double bias, double* heights,
                                            std::size_t capacity, void* result);
 static std::atomic<HeightFieldSolver> g_height_field_solver{nullptr};
 
@@ -950,6 +956,10 @@ static_assert(sizeof(HeightFieldInfo) == 56, "Rust/C++ height-field layout chang
 constexpr double kPi = 3.14159265358979323846;
 constexpr int kHeightFieldChoice = -2;
 constexpr double kHeightFieldSmoothing = 1.0e-12;
+// The fit sits this many target errors outward of every unpinned edge, so the gap to a
+// shared edge never changes sign (bug #109); the true gap is then 1-3 target errors,
+// inside the 4x refusal limit below.
+constexpr double kHeightFieldBias = 2.0;
 constexpr std::uint32_t kHeightFieldMaxSpans = 24;
 constexpr int kHeightFieldFitSamples = 128;
 constexpr int kHeightFieldCheckSamples = 2048;
@@ -1019,6 +1029,154 @@ Handle(Geom2d_BSplineCurve) planar_pcurve(const Handle(Geom_BSplineCurve)& curve
                                  curve->IsPeriodic());
 }
 
+// Exact p-curve of a 3D edge curve on a height-field surface whose parameters are the
+// frame's plane coordinates, sharing the edge's parameter. Null when the projection is
+// not representable with that parameter (the caller then uses a B-spline copy).
+Handle(Geom2d_Curve) exact_planar_pcurve(const Handle(Geom_Curve)& curve,
+                                         const double first,
+                                         const double last,
+                                         const gp_Trsf& to_local) {
+  Handle(Geom_Curve) basis = curve;
+  while (const Handle(Geom_TrimmedCurve) trimmed = Handle(Geom_TrimmedCurve)::DownCast(basis)) {
+    basis = trimmed->BasisCurve();
+  }
+  const auto flat = [&](const gp_Pnt& point) {
+    const gp_Pnt local = point.Transformed(to_local);
+    return gp_Pnt2d(local.X(), local.Y());
+  };
+  if (Handle(Geom_Line)::DownCast(basis)) {
+    TColgp_Array1OfPnt2d poles(1, 2);
+    poles.SetValue(1, flat(basis->Value(first)));
+    poles.SetValue(2, flat(basis->Value(last)));
+    if (poles(1).Distance(poles(2)) <= Precision::Confusion()) {
+      return nullptr;
+    }
+    TColStd_Array1OfReal knots(1, 2);
+    knots.SetValue(1, first);
+    knots.SetValue(2, last);
+    TColStd_Array1OfInteger multiplicities(1, 2);
+    multiplicities.SetValue(1, 2);
+    multiplicities.SetValue(2, 2);
+    return new Geom2d_BSplineCurve(poles, knots, multiplicities, 1);
+  }
+  if (const Handle(Geom_Circle) circle = Handle(Geom_Circle)::DownCast(basis)) {
+    const gp_Ax2 position = circle->Position();
+    const gp_Dir axis = position.Direction().Transformed(to_local);
+    if (std::abs(std::abs(axis.Z()) - 1.0) > 1.0e-12) {
+      return nullptr;
+    }
+    const gp_Dir x = position.XDirection().Transformed(to_local);
+    const gp_Dir y = position.YDirection().Transformed(to_local);
+    return new Geom2d_Circle(gp_Ax22d(flat(position.Location()), gp_Dir2d(x.X(), x.Y()),
+                                      gp_Dir2d(y.X(), y.Y())),
+                             circle->Radius());
+  }
+  if (const Handle(Geom_BSplineCurve) bspline = Handle(Geom_BSplineCurve)::DownCast(basis)) {
+    if (bspline->IsPeriodic()) {
+      return nullptr;
+    }
+    return planar_pcurve(bspline, to_local);
+  }
+  return nullptr;
+}
+
+// Base frame for a height-field face, with +Z along the face's outward side.
+//
+// MEASURED (bug #109): a second edit of a cap that is already a fitted height field
+// (or a first edit that moves another vertex of it) must reuse the ORIGINAL cap plane.
+// Otherwise the unmoved flat sides stop being exact, and the old shape can only go
+// through the composite route, which folded the cap (Jacobian ratio 4e-3) and took
+// 7-15 s. The original plane is the plane through two coplanar, non-parallel straight
+// boundary edges that contains the most boundary samples. A planar source uses its own
+// plane. Curved sources other than near-flat B-spline graphs are refused.
+std::optional<gp_Ax3> height_field_frame(const TopoDS_Face& source,
+                                         const std::vector<TopoDS_Edge>& boundary,
+                                         const std::vector<Handle(Geom_BSplineCurve)>& curves,
+                                         const std::vector<gp_Pnt>& points,
+                                         const double tolerance) {
+  BRepGProp_Face properties(source);
+  double u0 = 0.0;
+  double u1 = 0.0;
+  double v0 = 0.0;
+  double v1 = 0.0;
+  BRepTools::UVBounds(source, u0, u1, v0, v1);
+  std::vector<gp_Dir> normals;
+  gp_Vec outward(0.0, 0.0, 0.0);
+  for (int i = 1; i < 10; ++i) {
+    for (int j = 1; j < 10; ++j) {
+      const double u = u0 + (u1 - u0) * i / 10.0;
+      const double v = v0 + (v1 - v0) * j / 10.0;
+      if (BRepClass_FaceClassifier(source, gp_Pnt2d(u, v), tolerance).State() != TopAbs_IN) {
+        continue;
+      }
+      gp_Pnt point;
+      gp_Vec normal;
+      properties.Normal(u, v, point, normal);
+      if (normal.Magnitude() > 1.0e-12) {
+        normals.emplace_back(normal);
+        outward += gp_Vec(normals.back());
+      }
+    }
+  }
+  if (normals.empty() || outward.Magnitude() <= 1.0e-12) {
+    return std::nullopt;
+  }
+  outward.Normalize();
+  const auto facing = [&](const gp_Dir& direction) {
+    return gp_Vec(direction).Dot(outward) < 0.0 ? direction.Reversed() : direction;
+  };
+  BRepAdaptor_Surface adaptor(source, true);
+  if (adaptor.GetType() == GeomAbs_Plane) {
+    const gp_Ax3 plane = adaptor.Plane().Position();
+    return gp_Ax3(plane.Location(), facing(plane.Direction()), plane.XDirection());
+  }
+  if (adaptor.GetType() != GeomAbs_BSplineSurface) {
+    return std::nullopt;
+  }
+  std::optional<gp_Ax3> best;
+  std::size_t best_count = 0;
+  for (std::size_t a = 0; a < boundary.size(); ++a) {
+    if (BRepAdaptor_Curve(boundary[a]).GetType() != GeomAbs_Line) {
+      continue;
+    }
+    const gp_Pnt origin = curves[a]->StartPoint();
+    const gp_Vec first(origin, curves[a]->EndPoint());
+    for (std::size_t b = a + 1; b < boundary.size(); ++b) {
+      if (BRepAdaptor_Curve(boundary[b]).GetType() != GeomAbs_Line) {
+        continue;
+      }
+      const gp_Vec second(curves[b]->StartPoint(), curves[b]->EndPoint());
+      const gp_Vec cross = first.Crossed(second);
+      if (cross.Magnitude() <= 1.0e-6 * first.Magnitude() * second.Magnitude()) {
+        continue;
+      }
+      const gp_Dir normal = facing(gp_Dir(cross));
+      if (std::abs(gp_Vec(origin, curves[b]->StartPoint()).Dot(gp_Vec(normal))) > tolerance) {
+        continue;
+      }
+      // The old face must be a graph over the candidate plane (no steep or folded
+      // region): a vertical plane through two coplanar side lines is not the cap plane.
+      if (std::any_of(normals.begin(), normals.end(), [&](const gp_Dir& face_normal) {
+            return face_normal.Dot(normal) < 0.2;
+          })) {
+        continue;
+      }
+      const std::size_t count = static_cast<std::size_t>(std::count_if(
+          points.begin(), points.end(), [&](const gp_Pnt& point) {
+            return std::abs(gp_Vec(origin, point).Dot(gp_Vec(normal))) <= tolerance;
+          }));
+      if (count > best_count) {
+        best_count = count;
+        best = gp_Ax3(origin, normal, gp_Dir(first));
+      }
+    }
+  }
+  if (!best.has_value()) {
+    return std::nullopt;
+  }
+  return best;
+}
+
 // MEASURED (bug #108): when a vertex leaves a planar cap, the reference rebuilds the cap as a
 // smooth bicubic height field over the original plane. OURS: the fit itself is in Rust
 // (`height_field.rs`); here the exact boundary edges keep their 3D curves, get exact
@@ -1030,21 +1188,9 @@ std::optional<FaceOption> height_field_option(
     const Tolerances& tolerances,
     const AdapterMovePolicy& policy) {
   try {
-    BRepAdaptor_Surface source_surface(source, true);
-    if (source_surface.GetType() != GeomAbs_Plane) {
-      return std::nullopt;
-    }
-    const gp_Ax3 frame = source_surface.Plane().Position();
-    gp_Trsf to_local;
-    to_local.SetTransformation(frame);
-    const gp_Trsf to_global = to_local.Inverted();
-
     std::vector<Handle(Geom_BSplineCurve)> curves;
-    std::vector<double> samples;
-    samples.reserve(boundary.size() * kHeightFieldFitSamples * 3);
-    double twice_area = 0.0;
-    gp_Pnt previous;
-    bool have_previous = false;
+    std::vector<gp_Pnt> points;
+    points.reserve(boundary.size() * kHeightFieldFitSamples);
     for (const TopoDS_Edge& edge : boundary) {
       const Handle(Geom_BSplineCurve) curve = bspline_edge(edge, tolerances.build);
       curves.push_back(curve);
@@ -1054,18 +1200,39 @@ std::optional<FaceOption> height_field_option(
         // Cosine spacing: corners are where a smooth height field bends hardest.
         const double fraction =
             0.5 - 0.5 * std::cos(kPi * static_cast<double>(index) / kHeightFieldFitSamples);
-        const gp_Pnt local = curve->Value(first + (last - first) * fraction).Transformed(to_local);
-        samples.insert(samples.end(), {local.X(), local.Y(), local.Z()});
-        if (have_previous) {
-          twice_area += previous.X() * local.Y() - local.X() * previous.Y();
-        }
-        previous = local;
-        have_previous = true;
+        points.push_back(curve->Value(first + (last - first) * fraction));
       }
+    }
+    const std::optional<gp_Ax3> frame = height_field_frame(
+        source, boundary, curves, points,
+        std::max(tolerances.build, tolerances.extent * 1.0e-9));
+    if (!frame.has_value()) {
+      return std::nullopt;
+    }
+    gp_Trsf to_local;
+    to_local.SetTransformation(*frame);
+    const gp_Trsf to_global = to_local.Inverted();
+
+    std::vector<double> samples;
+    samples.reserve(points.size() * 3);
+    double twice_area = 0.0;
+    gp_Pnt previous;
+    bool have_previous = false;
+    for (const gp_Pnt& point : points) {
+      const gp_Pnt local = point.Transformed(to_local);
+      samples.insert(samples.end(), {local.X(), local.Y(), local.Z()});
+      if (have_previous) {
+        twice_area += previous.X() * local.Y() - local.X() * previous.Y();
+      }
+      previous = local;
+      have_previous = true;
     }
     twice_area += previous.X() * samples[1] - samples[0] * previous.Y();
 
-    const double target = std::max(tolerances.build, tolerances.extent * 1.0e-6);
+    // Relative to the part only, never to the input's tolerance: an input that already
+    // carries a fitted cap's edge tolerance would otherwise loosen the target on every
+    // edit (MEASURED bug #109: 1.2e-4 -> 5.6e-4 -> 2e-3 mm over two edits).
+    const double target = std::max(Precision::Confusion(), tolerances.extent * 1.0e-6);
     const std::size_t capacity = static_cast<std::size_t>(kHeightFieldMaxSpans + 3) *
                                  static_cast<std::size_t>(kHeightFieldMaxSpans + 3);
     std::vector<double> heights(capacity, 0.0);
@@ -1076,7 +1243,8 @@ std::optional<FaceOption> height_field_option(
     }
     if (solver(
             samples.data(), samples.size() / 3, kHeightFieldSmoothing, target,
-            kHeightFieldMaxSpans, heights.data(), heights.size(), &info) != 0) {
+            kHeightFieldMaxSpans, kHeightFieldBias * target, heights.data(), heights.size(),
+            &info) != 0) {
       return std::nullopt;
     }
     const Handle(Geom_BSplineSurface) surface = height_field_surface(info, heights, to_global);
@@ -1092,10 +1260,24 @@ std::optional<FaceOption> height_field_option(
     std::vector<double> gaps;
     double worst = 0.0;
     for (std::size_t index = 0; index < curves.size(); ++index) {
-      const Handle(Geom_BSplineCurve)& curve = curves[index];
-      const Handle(Geom2d_BSplineCurve) pcurve = planar_pcurve(curve, to_local);
-      const double first = curve->FirstParameter();
-      const double last = curve->LastParameter();
+      // Keep the edge's own analytic curve (line, circle, B-spline) when its planar
+      // projection is exactly representable with the same parameter. MEASURED (bug #109):
+      // with B-spline copies on the cap, sewing kept either representation depending on
+      // face order, so a straight edge silently became a degree-1 B-spline on some edits.
+      const TopoDS_Edge& source_edge = boundary[index];
+      double first = 0.0;
+      double last = 0.0;
+      Handle(Geom_Curve) curve = BRep_Tool::Curve(source_edge, first, last);
+      bool reversed = source_edge.Orientation() == TopAbs_REVERSED;
+      Handle(Geom2d_Curve) pcurve =
+          curve.IsNull() ? Handle(Geom2d_Curve)() : exact_planar_pcurve(curve, first, last, to_local);
+      if (pcurve.IsNull()) {
+        curve = curves[index];
+        first = curves[index]->FirstParameter();
+        last = curves[index]->LastParameter();
+        reversed = false;
+        pcurve = planar_pcurve(curves[index], to_local);
+      }
       double gap = 0.0;
       for (int sample = 0; sample <= kHeightFieldCheckSamples; ++sample) {
         const double fraction =
@@ -1106,10 +1288,14 @@ std::optional<FaceOption> height_field_option(
       }
       worst = std::max(worst, gap);
       gaps.push_back(gap);
-      const TopoDS_Vertex start = TopoDS::Vertex(corners[index].Oriented(TopAbs_FORWARD));
-      const TopoDS_Vertex end = TopoDS::Vertex(
-          corners[(index + 1) % corners.size()].Oriented(TopAbs_REVERSED));
-      if (curve->EndPoint().Distance(BRep_Tool::Pnt(end)) > tolerances.build) {
+      const TopoDS_Vertex& loop_start = corners[index];
+      const TopoDS_Vertex& loop_end = corners[(index + 1) % corners.size()];
+      const TopoDS_Vertex start =
+          TopoDS::Vertex((reversed ? loop_end : loop_start).Oriented(TopAbs_FORWARD));
+      const TopoDS_Vertex end =
+          TopoDS::Vertex((reversed ? loop_start : loop_end).Oriented(TopAbs_REVERSED));
+      if (curve->Value(first).Distance(BRep_Tool::Pnt(start)) > tolerances.build ||
+          curve->Value(last).Distance(BRep_Tool::Pnt(end)) > tolerances.build) {
         return std::nullopt;
       }
       TopoDS_Edge edge;
@@ -1121,7 +1307,7 @@ std::optional<FaceOption> height_field_option(
       builder.Range(edge, face, first, last);
       builder.SameParameter(edge, true);
       builder.SameRange(edge, true);
-      edges.push_back(edge);
+      edges.push_back(reversed ? TopoDS::Edge(edge.Reversed()) : edge);
     }
     if (worst > 4.0 * target) {
       return std::nullopt;
@@ -1136,10 +1322,9 @@ std::optional<FaceOption> height_field_option(
       builder.Add(wire, edge);
     }
     wire.Closed(true);
+    // The frame's +Z is the source's outward side, so the natural face orientation is
+    // already the outward one.
     builder.Add(face, twice_area < 0.0 ? wire.Reversed() : wire);
-    if (source.Orientation() == TopAbs_REVERSED) {
-      face = TopoDS::Face(face.Reversed());
-    }
     if (!BRepCheck_Analyzer(face, true).IsValid()) {
       return std::nullopt;
     }
@@ -1208,21 +1393,6 @@ void raise_tolerances_to_true_gaps(const TopoDS_Shape& shape) {
       }
     }
   }
-}
-
-// MEASURED (bug #108): on a solid whose fitted cap carries ~1e-4 edge tolerances, the
-// exact self-interference check spent 10 s on the cap/wall seams; with the fuzzy value
-// set to those tolerances it takes 0.16 s and still reports real crossings, which are
-// orders of magnitude larger. Untouched for every other route.
-bool self_intersection_free_shape(const TopoDS_Shape& shape, const bool tolerant) {
-  if (!tolerant) {
-    return BRepAlgoAPI_Check(shape).IsValid();
-  }
-  BRepAlgoAPI_Check checker;
-  checker.SetData(shape, true, true);
-  checker.SetFuzzyValue(BRep_Tool::MaxTolerance(shape, TopAbs_EDGE));
-  checker.Perform();
-  return checker.IsValid();
 }
 
 std::vector<FaceOption> composite_options(const TopoDS_Face& face,
@@ -2299,7 +2469,7 @@ TopoDS_Shape move_component(const MoveSource& source,
       }
       std::future<bool> airtight_future = std::async(
           std::launch::async, [&result]() { return is_airtight(result); });
-      self_intersection_free = self_intersection_free_shape(result, tolerant_face);
+      self_intersection_free = BRepAlgoAPI_Check(result).IsValid();
       if (!airtight_future.get() || !self_intersection_free) {
         continue;
       }

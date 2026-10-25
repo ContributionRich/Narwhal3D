@@ -229,7 +229,8 @@ assert occt.is_valid(replay) and occt.is_airtight(replay)
 assert abs(occt.volume(replay) - occt.volume(shape)) <= 1e-6 * occt.volume(shape)
 
 # Downward: MEASURED 9.4 s inside the exact self-interference check (and 100 s for a
-# 40 mm lift) before its fuzzy value was tied to the fitted cap's real edge tolerances.
+# 40 mm lift) while the fitted cap crossed its shared curved edge back and forth; the
+# fit now keeps that gap one-signed (bug #109).
 moved_down, shape_down, elapsed = lift(-20.0)
 timings.append(elapsed)
 cap, _ = cap_of(shape_down)

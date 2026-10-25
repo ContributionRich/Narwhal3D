@@ -2520,6 +2520,20 @@ def _local_resolve_target(shape, kind, index, target, tolerances):
         candidate = local_subobject_signature(shape, kind, position)
         if _local_signature_matches(candidate, target, tolerances):
             matches.append(position - 1)
+    if not matches and kind == "vertex":
+        # A vertex's position is fixed by the recorded moves alone, while the TYPES of the
+        # curves and surfaces around it depend on how the kernel rebuilt them. MEASURED
+        # (bug #109): a file saved before a rebuild-strategy change replayed its first edit
+        # with different neighbouring curve types, so later steps resolved to 0 vertices
+        # and the whole solid lost its exact geometry on reload. An exact, unique position
+        # match identifies the same vertex; anything ambiguous is still refused.
+        try:
+            point = [float(value) for value in target["centroid"]]
+        except (KeyError, TypeError, ValueError):
+            point = None
+        if point is not None and len(point) == 3:
+            matches = [position for position, vertex in enumerate(parts)
+                       if _local_distance(_local_point(vertex), point) <= tolerances["compare"]]
     if len(matches) != 1:
         raise KernelError(
             f"local move refused: persisted target signature resolved to {len(matches)} "

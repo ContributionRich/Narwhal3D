@@ -488,17 +488,72 @@ fn evaluate(heights: &[f64], u: Axis, v: Axis, x: f64, y: f64) -> f64 {
     value
 }
 
+fn biased_targets(
+    samples: &[[f64; 3]],
+    bounds: [f64; 4],
+    pinned: u32,
+    flat: f64,
+    bias: f64,
+    taper: f64,
+) -> Vec<[f64; 3]> {
+    if bias == 0.0 {
+        return samples.to_vec();
+    }
+    let on_pinned = |sample: &[f64; 3]| {
+        [
+            (PIN_X_MIN, 0, bounds[0]),
+            (PIN_X_MAX, 0, bounds[1]),
+            (PIN_Y_MIN, 1, bounds[2]),
+            (PIN_Y_MAX, 1, bounds[3]),
+        ]
+        .iter()
+        .any(|&(bit, axis, value)| pinned & bit != 0 && (sample[axis] - value).abs() <= flat)
+    };
+    let anchors: Vec<[f64; 2]> = samples
+        .iter()
+        .filter(|sample| on_pinned(sample))
+        .map(|sample| [sample[0], sample[1]])
+        .collect();
+    samples
+        .iter()
+        .map(|sample| {
+            if on_pinned(sample) {
+                return *sample;
+            }
+            let nearest = anchors
+                .iter()
+                .map(|anchor| (sample[0] - anchor[0]).hypot(sample[1] - anchor[1]))
+                .fold(f64::INFINITY, f64::min);
+            [
+                sample[0],
+                sample[1],
+                sample[2] + bias * (nearest / taper).min(1.0),
+            ]
+        })
+        .collect()
+}
+
 /// Fits a height field to closed-loop boundary samples `(x, y, z)` given in the source
 /// plane's frame (z = height above it), in loop order without repeating the first point.
+///
+/// `bias` (>= 0) lifts the surface that far above every boundary sample that is not on a
+/// pinned (exact) side, tapering to zero over two grid cells next to pinned samples.
+/// MEASURED (bug #109): a residual that alternates in sign along an edge shared with
+/// another B-spline face makes OCCT's surface/surface intersection leave and re-enter the
+/// neighbour's domain at every sign change -- 57 fragments and 139 s for one face pair --
+/// while a one-signed gap of the same size intersects in 0.03 s.
 pub fn fit(
     samples: &[[f64; 3]],
     smoothing: f64,
     target_error: f64,
     max_spans: u32,
+    bias: f64,
 ) -> Result<HeightField, (i32, Option<HeightField>)> {
     if samples.len() < 8
         || !(smoothing > 0.0)
         || !(target_error > 0.0)
+        || !(bias >= 0.0)
+        || !bias.is_finite()
         || max_spans < 4
         || samples.iter().flatten().any(|value| !value.is_finite())
     {
@@ -539,6 +594,15 @@ pub fn fit(
     let spans_for =
         |length: f64, base: usize| ((base as f64 * length / longest).round() as usize).max(4);
     let mut base = (START_SPANS as u32).min(max_spans) as usize;
+    let targets = biased_targets(
+        samples,
+        [x0, x1, y0, y1],
+        pinned,
+        flat,
+        bias,
+        2.0 * longest / base as f64,
+    );
+    let samples = targets.as_slice();
     let mut best: Option<HeightField> = None;
     loop {
         let u = Axis {
@@ -592,6 +656,7 @@ pub unsafe extern "C" fn fit_height_field_ffi(
     smoothing: f64,
     target_error: f64,
     max_spans: u32,
+    bias: f64,
     heights: *mut f64,
     capacity: usize,
     result: *mut NarwhalHeightFieldV1,
@@ -607,7 +672,7 @@ pub unsafe extern "C" fn fit_height_field_ffi(
     // SAFETY: the caller guarantees `samples` holds `3 * sample_count` doubles.
     let flat = unsafe { std::slice::from_raw_parts(samples, sample_count * 3) };
     let points: Vec<[f64; 3]> = flat.chunks_exact(3).map(|c| [c[0], c[1], c[2]]).collect();
-    let (status, field) = match fit(&points, smoothing, target_error, max_spans) {
+    let (status, field) = match fit(&points, smoothing, target_error, max_spans, bias) {
         Ok(field) => (STATUS_OK, Some(field)),
         Err((status, field)) => (status, field),
     };
@@ -683,7 +748,7 @@ mod tests {
         ];
         let plane = |x: f64, y: f64| 0.3 * x - 0.2 * y + 4.0;
         let samples = loop_samples(&corners, 40, plane);
-        let field = fit(&samples, 1e-12, 1e-9, 24).expect("plane fits");
+        let field = fit(&samples, 1e-12, 1e-9, 24, 0.0).expect("plane fits");
         assert_eq!(field.info.pinned_sides, 0);
         assert!(field.info.max_error < 1e-9, "{}", field.info.max_error);
         let u = Axis {
@@ -725,7 +790,7 @@ mod tests {
         };
         assert_eq!(lift(lifted[0], lifted[1]), 20.0);
         let samples = loop_samples(&corners, 64, lift);
-        let field = match fit(&samples, 1e-12, 1e-5, 24) {
+        let field = match fit(&samples, 1e-12, 1e-5, 24, 0.0) {
             Ok(f) => f,
             Err((s, f)) => panic!("status {s} {:?}", f.map(|f| f.info)),
         };
@@ -763,6 +828,61 @@ mod tests {
     }
 
     #[test]
+    fn a_bias_keeps_the_surface_on_one_side_of_unpinned_edges() {
+        // One lifted corner; the flat sides stay pinned and exact, every other edge sample
+        // must lie strictly BELOW the surface so shared-edge intersections cannot fragment.
+        let corners = [
+            [0.0, 0.0, 0.0],
+            [60.0, 0.0, 0.0],
+            [60.0, 40.0, 0.0],
+            [0.0, 40.0, 0.0],
+        ];
+        let lift = |x: f64, y: f64| {
+            if (y - 40.0).abs() < 1e-12 {
+                8.0 * (1.0 - x / 60.0)
+            } else if x.abs() < 1e-12 {
+                8.0 * y / 40.0
+            } else {
+                0.0
+            }
+        };
+        let samples = loop_samples(&corners, 96, lift);
+        let (target, bias) = (1e-5, 2e-5);
+        let field = fit(&samples, 1e-12, target, 24, bias).expect("biased fit converges");
+        assert_eq!(field.info.pinned_sides, PIN_X_MAX | PIN_Y_MIN);
+        let u = Axis {
+            start: field.info.x_min,
+            end: field.info.x_max,
+            spans: field.info.u_pole_count as usize - 3,
+        };
+        let v = Axis {
+            start: field.info.y_min,
+            end: field.info.y_max,
+            spans: field.info.v_pole_count as usize - 3,
+        };
+        let taper = 2.0 * 60.0 / START_SPANS as f64;
+        let mut checked = 0;
+        for sample in &samples {
+            let gap = evaluate(&field.heights, u, v, sample[0], sample[1]) - sample[2];
+            assert!(
+                gap <= bias + target + 1e-12,
+                "gap {gap} above the bias band"
+            );
+            let pinned_distance = (60.0 - sample[0]).min(sample[1]);
+            if pinned_distance <= 1e-9 {
+                assert!(gap.abs() <= 1e-9, "pinned side moved by {gap}");
+            } else if pinned_distance >= taper {
+                assert!(
+                    gap >= bias - target - 1e-12,
+                    "edge sample above the surface: {gap}"
+                );
+                checked += 1;
+            }
+        }
+        assert!(checked > 100);
+    }
+
+    #[test]
     fn a_self_overlapping_outline_is_refused() {
         let bow_tie = [
             [0.0, 0.0, 0.0],
@@ -772,7 +892,7 @@ mod tests {
         ];
         let samples = loop_samples(&bow_tie, 10, |_, _| 0.0);
         assert_eq!(
-            fit(&samples, 1e-8, 1e-6, 32).unwrap_err().0,
+            fit(&samples, 1e-8, 1e-6, 32, 0.0).unwrap_err().0,
             STATUS_NOT_SIMPLE
         );
     }
@@ -798,6 +918,7 @@ mod tests {
                 1e-8,
                 1e-9,
                 32,
+                0.0,
                 tiny.as_mut_ptr(),
                 tiny.len(),
                 &mut info,
@@ -812,6 +933,7 @@ mod tests {
                 1e-8,
                 1e-9,
                 32,
+                0.0,
                 heights.as_mut_ptr(),
                 heights.len(),
                 &mut info,
