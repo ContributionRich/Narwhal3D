@@ -4788,7 +4788,10 @@ class RevolveCmd(Command):
         geom = ctx.geom_by_name(name)
         if geom is None or not isinstance(geom, r3.Curve):
             return f"No curve named {name!r}", True
-        solid = bridge.make_revolve(geom, a1, a2, 0.0, angle)
+        try:
+            solid = bridge.make_revolve(geom, a1, a2, 0.0, angle)
+        except ValueError as e:
+            return str(e), True
         _, display_name = ctx.add_geometry(solid, "Revolved")
         return f"Created {display_name} ({angle:g} deg)", True
 

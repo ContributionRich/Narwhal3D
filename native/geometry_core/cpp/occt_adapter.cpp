@@ -68,6 +68,7 @@
 #include <TopExp.hxx>
 #include <TopExp_Explorer.hxx>
 #include <NCollection_IndexedMap.hxx>
+#include <TopTools_IndexedDataMapOfShapeListOfShape.hxx>
 #include <TopTools_ShapeMapHasher.hxx>
 #include <TopoDS.hxx>
 #include <TopoDS_Edge.hxx>
@@ -1712,6 +1713,26 @@ void raise_tolerances_to_true_gaps(const TopoDS_Shape& shape) {
   }
 }
 
+// Edges used by exactly one face (an open surface's boundary).
+int free_edge_count(const TopoDS_Shape& shape) {
+  TopTools_IndexedDataMapOfShapeListOfShape ancestors;
+  TopExp::MapShapesAndAncestors(shape, TopAbs_EDGE, TopAbs_FACE, ancestors);
+  int count = 0;
+  for (int index = 1; index <= ancestors.Extent(); ++index) {
+    const TopoDS_Edge edge = TopoDS::Edge(ancestors.FindKey(index));
+    if (!BRep_Tool::Degenerated(edge) && ancestors.FindFromIndex(index).Extent() == 1) {
+      ++count;
+    }
+  }
+  return count;
+}
+
+bool tolerant_face_in(const std::vector<const FaceOption*>& choices) {
+  return std::any_of(choices.begin(), choices.end(), [](const FaceOption* choice) {
+    return choice->merge_choice == kHeightFieldChoice;
+  });
+}
+
 std::vector<FaceOption> composite_options(const TopoDS_Face& face,
                                           const std::vector<TopoDS_Edge>& boundary,
                                           const Tolerances& tolerances,
@@ -2016,30 +2037,48 @@ std::optional<FaceOption> ruled_seam_option(const TopoDS_Face& face,
   }
 }
 
-// MEASURED (bug #110 matrix): a sphere or ellipsoid could not move a pole at all. A
-// closed surface with two degenerate poles and no rims is stretched like an edge ramp:
-// in its exact NURBS form every control-point row moves by the fraction of the move
-// given by its normalised Greville abscissa from the fixed pole (0) to the moved pole
-// (1). The moved pole row travels exactly with the vertex, the fixed pole stays put, and
-// the surface stays one smooth closed exact NURBS face.
-std::optional<FaceOption> pole_stretch_option(const TopoDS_Face& face,
-                                              const ShapeMap& vertices,
-                                              const std::set<int>& moved,
-                                              const Point& vector,
-                                              const Tolerances& tolerances) {
-  std::vector<gp_Pnt> poles_moved;
-  std::vector<gp_Pnt> poles_fixed;
+// MEASURED (bug #110 matrix): a sphere or ellipsoid could not move a pole at all, and
+// (surfaces matrix) a seamed wall whose rims are not joined by straight lines -- a
+// revolved arc, a bent pipe -- was replaced by the straight ruled surface between its
+// rims, flattening the bulge or straightening the tube. A seamed face spanning exactly
+// two ends (poles or closed rims), one carried rigidly by the move and one fixed, is
+// stretched like an edge ramp instead: in its exact NURBS form every control-point row
+// moves by the fraction of the move given by its normalised Greville abscissa from the
+// fixed end (0) to the moved end (1). The moved end travels exactly with the move, the
+// fixed end stays put, and the wall keeps its curvature as one exact NURBS face. On a
+// cylinder or cone (degree 1 along the wall) this is exactly the ruled surface.
+std::optional<FaceOption> end_stretch_option(const TopoDS_Face& face,
+                                             const ShapeMap& vertices,
+                                             const std::set<int>& moved,
+                                             const Point& vector,
+                                             const Tolerances& tolerances) {
+  struct End {
+    std::optional<gp_Pnt> pole;
+    TopoDS_Edge rim;
+  };
+  std::vector<End> ends_moved;
+  std::vector<End> ends_fixed;
+  ShapeMap seen;
   for (TopExp_Explorer explorer(face, TopAbs_EDGE); explorer.More(); explorer.Next()) {
     const TopoDS_Edge edge = TopoDS::Edge(explorer.Current());
-    if (!BRep_Tool::Degenerated(edge)) {
+    if (seen.Contains(edge) || BRep_Tool::IsClosed(edge, face)) {
       continue;
     }
+    seen.Add(edge);
     const TopoDS_Vertex vertex = TopExp::FirstVertex(edge);
-    const Point point = point_of(vertex);
-    (moved.count(vertices.FindIndex(vertex) - 1) != 0 ? poles_moved : poles_fixed)
-        .emplace_back(point[0], point[1], point[2]);
+    if (!vertex.IsSame(TopExp::LastVertex(edge))) {
+      return std::nullopt;  // only poles and closed rims bound such a wall
+    }
+    End end;
+    if (BRep_Tool::Degenerated(edge)) {
+      end.pole = BRep_Tool::Pnt(vertex);
+    } else {
+      end.rim = edge;
+    }
+    (moved.count(vertices.FindIndex(vertex) - 1) != 0 ? ends_moved : ends_fixed)
+        .push_back(end);
   }
-  if (poles_moved.size() != 1 || poles_fixed.size() != 1) {
+  if (ends_moved.size() != 1 || ends_fixed.size() != 1) {
     return std::nullopt;
   }
   try {
@@ -2054,28 +2093,56 @@ std::optional<FaceOption> pole_stretch_option(const TopoDS_Face& face,
     if (surface.IsNull()) {
       return std::nullopt;
     }
-    const auto row_at = [&](const gp_Pnt& pole, const bool along_v, const int index) {
-      const int count = along_v ? surface->NbUPoles() : surface->NbVPoles();
-      for (int k = 1; k <= count; ++k) {
-        const gp_Pnt p = along_v ? surface->Pole(k, index) : surface->Pole(index, k);
-        if (p.Distance(pole) > tolerances.build) {
+    // Does the iso-curve at the first (or last) parameter of the ramp direction lie on
+    // the end? Sampled on the exact surface, compared with the end's exact geometry.
+    double s_u0 = 0.0;
+    double s_u1 = 0.0;
+    double s_v0 = 0.0;
+    double s_v1 = 0.0;
+    surface->Bounds(s_u0, s_u1, s_v0, s_v1);
+    const auto row_at = [&](const End& end, const bool along_v, const bool at_first) {
+      const double fixed_parameter =
+          along_v ? (at_first ? s_v0 : s_v1) : (at_first ? s_u0 : s_u1);
+      const double from = along_v ? s_u0 : s_v0;
+      const double to = along_v ? s_u1 : s_v1;
+      for (int k = 0; k <= 6; ++k) {
+        const double t = from + (to - from) * k / 6.0;
+        const gp_Pnt p = along_v ? surface->Value(t, fixed_parameter)
+                                 : surface->Value(fixed_parameter, t);
+        double gap = 0.0;
+        if (end.pole.has_value()) {
+          gap = p.Distance(*end.pole);
+        } else {
+          BRepExtrema_DistShapeShape distance(BRepBuilderAPI_MakeVertex(p).Vertex(), end.rim);
+          if (!distance.IsDone()) {
+            return false;
+          }
+          gap = distance.Value();
+        }
+        if (gap > tolerances.build) {
           return false;
         }
       }
       return true;
     };
-    // Find which parameter collapses at the poles: v rows (index along V) or u columns.
+    // Find which parameter runs between the two ends: along V (rows at v0, v1) or U.
     for (const bool along_v : {true, false}) {
       const int count = along_v ? surface->NbVPoles() : surface->NbUPoles();
       int moved_end = 0;
-      if (row_at(poles_moved[0], along_v, 1) && row_at(poles_fixed[0], along_v, count)) {
+      if (row_at(ends_moved[0], along_v, true) && row_at(ends_fixed[0], along_v, false)) {
         moved_end = 1;
-      } else if (row_at(poles_moved[0], along_v, count) && row_at(poles_fixed[0], along_v, 1)) {
+      } else if (row_at(ends_moved[0], along_v, false) && row_at(ends_fixed[0], along_v, true)) {
         moved_end = count;
       } else {
         continue;
       }
       const int degree = along_v ? surface->VDegree() : surface->UDegree();
+      if (degree == 1) {
+        // A straight wall (cylinder, cone): the ruled route builds the same surface,
+        // and MEASURED, OCCT's interference check certifies its parametrisation of a
+        // cone whose base moved along the axis where it falsely flags this one.
+        return std::nullopt;
+      }
       TColStd_Array1OfReal knots(1, count + degree + 1);
       along_v ? surface->VKnotSequence(knots) : surface->UKnotSequence(knots);
       std::vector<double> greville(static_cast<std::size_t>(count));
@@ -2416,9 +2483,16 @@ MoveSource prepare_move_source(const TopoDS_Shape& shape,
     refuse(kReasonResourceLimit, kLimitExceeded);
   }
   const bool airtight = is_airtight(shape);
-  const bool single_face = shape.ShapeType() == TopAbs_FACE &&
-      BRepCheck_Analyzer(shape, true).IsValid();
-  if (!airtight && !single_face) {
+  // MEASURED (bug #110 surfaces matrix): only solids and lone faces were accepted, so an
+  // open polysurface -- a revolve that is not a full closed turn, an open extrusion, a
+  // Sweep1 -- and even a single face stored as a shell refused every move. Any valid
+  // open surface or polysurface is now accepted; its boundary must survive the edit.
+  bool has_face = false;
+  for (TopExp_Explorer explorer(shape, TopAbs_FACE); explorer.More(); explorer.Next()) {
+    has_face = true;
+    break;
+  }
+  if (!airtight && !(has_face && BRepCheck_Analyzer(shape, true).IsValid())) {
     refuse(kReasonInputNotAirtight);
   }
   MoveSource source{shape, local_tolerances(shape), airtight};
@@ -3014,7 +3088,7 @@ TopoDS_Shape move_component(const MoveSource& source,
       options.push_back(FaceOption{TopoDS::Face(moved_face)});
     } else if (changed_faces.count(face_index) != 0 && has_seam(face)) {
       std::optional<FaceOption> rebuilt =
-          pole_stretch_option(face, vertices, moved, vector, tolerances);
+          end_stretch_option(face, vertices, moved, vector, tolerances);
       if (!rebuilt.has_value()) {
         rebuilt = ruled_seam_option(face, edges, vertices, replacements, moved, vector, tolerances);
       }
@@ -3250,13 +3324,52 @@ TopoDS_Shape move_component(const MoveSource& source,
                       self_intersection_free ? 1 : 0);
         continue;
       }
-    } else {
-      if (choices.size() != 1) {
-        continue;
-      }
+    } else if (choices.size() == 1 && shape.ShapeType() == TopAbs_FACE) {
       result = choices.front()->face;
       self_intersection_free = BRepAlgoAPI_Check(result).IsValid();
       if (!BRepCheck_Analyzer(result, true).IsValid() || !self_intersection_free) {
+        continue;
+      }
+    } else {
+      // An open surface or polysurface: sew the faces back together and require the
+      // same shells and the same free boundary as the source.
+      BRepBuilderAPI_Sewing sewing(tolerances.sew);
+      for (const FaceOption* choice : choices) {
+        sewing.Add(choice->face);
+      }
+      sewing.Perform();
+      result = sewing.SewedShape();
+      const auto count = [](const TopoDS_Shape& candidate, const TopAbs_ShapeEnum type) {
+        int total = 0;
+        for (TopExp_Explorer explorer(candidate, type); explorer.More(); explorer.Next()) {
+          ++total;
+        }
+        return total;
+      };
+      if (result.ShapeType() == TopAbs_FACE && count(shape, TopAbs_SHELL) == 1) {
+        // A one-face surface stored as a shell: sewing returns the bare face.
+        TopoDS_Shell shell;
+        BRep_Builder shell_builder;
+        shell_builder.MakeShell(shell);
+        shell_builder.Add(shell, result);
+        result = shell;
+      }
+      if (sewing.NbMultipleEdges() != 0 ||
+          count(result, TopAbs_SHELL) != count(shape, TopAbs_SHELL) ||
+          free_edge_count(result) != free_edge_count(shape)) {
+        NARWHAL_DEBUG("candidate %llu: open surface boundary changed (%d multiple edges)\n",
+                      static_cast<unsigned long long>(combination), sewing.NbMultipleEdges());
+        continue;
+      }
+      if (tolerant_face_in(choices)) {
+        raise_tolerances_to_true_gaps(result);
+      }
+      self_intersection_free = BRepAlgoAPI_Check(result).IsValid();
+      const bool topology_valid = BRepCheck_Analyzer(result, true).IsValid();
+      if (!topology_valid || !self_intersection_free) {
+        NARWHAL_DEBUG("candidate %llu: open surface valid %d, self-intersection free %d\n",
+                      static_cast<unsigned long long>(combination), topology_valid ? 1 : 0,
+                      self_intersection_free ? 1 : 0);
         continue;
       }
     }

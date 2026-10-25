@@ -22,6 +22,11 @@ All notable public changes will be recorded here. Narwhal 3D is an extremely ear
   - Edge and volume measurements use adaptive integration.
 
   A test now covers 18 kinds of solid: every part in six directions, 1,944 moves. The one remaining refusal is a sideways ellipsoid pole stretch, which OCCT's self-intersection check cannot certify for that surface.
+- Make Revolve exact. A revolved curve is now an exact OCCT shape with a `revolve` recipe, so it can be moved part by part, booleaned, exported and reloaded exactly. Before this it was a display-only surface with no kernel shape. A full turn of a closed profile becomes a closed solid; a revolved rectangle is two planes and two cylinders with the exact ring volume. An open cone (`Solid=No`) is now an exact revolve as well.
+- Make points, edges and faces movable on open surfaces and polysurfaces, not just solids. Planar surfaces (with or without holes), lofts, edge surfaces, Sweep1, Sweep2, open pipes, open extrusions, open cones and partial revolves previously refused every move. Each edit is sewn back together and must keep the same boundary.
+  - A curved wall between two rims keeps its curvature when one rim moves. Moving the end of a bent pipe no longer straightens the tube, and moving the rim of a revolved arc no longer flattens its bulge.
+
+  A new test covers 15 kinds of surface, with every part moved in six directions.
 - Restore live Gumball extrusion previews after the direct-edit preview optimization removed a shared throttle constant; unexpected candidate failures now stay inside the drag and no longer poison the modal operator.
 
 ## 0.4.5 — 2026-10-23

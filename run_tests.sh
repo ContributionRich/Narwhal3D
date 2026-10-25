@@ -112,6 +112,9 @@ if command -v cargo >/dev/null 2>&1; then
         run "Rust geometry-core movability catalog (every solid, every part)" env \
             NARWHAL_GEOMETRY_CORE="$ROOT/native/geometry_core/target/release/libnarwhal_geometry_core.so" \
             LD_LIBRARY_PATH="$OCCT_LIBS" "$PYTHON" spike/test_movability_catalog.py
+        run "Rust geometry-core surface movability (every open surface, every part)" env \
+            NARWHAL_GEOMETRY_CORE="$ROOT/native/geometry_core/target/release/libnarwhal_geometry_core.so" \
+            LD_LIBRARY_PATH="$OCCT_LIBS" "$PYTHON" spike/test_surface_movability.py
         run "Rust platform-core format" cargo fmt --manifest-path native/platform_core/Cargo.toml --check
         run "Rust platform-core Clippy" cargo clippy \
             --manifest-path native/platform_core/Cargo.toml --all-targets -- -D warnings

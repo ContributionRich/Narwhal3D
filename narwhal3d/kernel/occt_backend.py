@@ -221,6 +221,9 @@ RECIPE_KINDS = {
     "prism": ("a", "dir"),
     # EdgeSrf -- the Coons surface of 2, 3 or 4 boundary curves (in loop order).
     "edge_surface": ("curves",),
+    # Revolve: `profile` (a serialized curve) about the axis through `origin` along
+    # `axis`, by `angle` degrees. A closed profile revolved a full turn is a solid.
+    "revolve": ("profile", "origin", "axis", "angle"),
     # One piece of a curved single-face surface split by curves: `a` is the surface's
     # recipe, `curves` [[curve, normal|None], ...], `signature` {area, centroid} of the piece.
     "split_piece": ("a", "curves", "signature"),
@@ -409,6 +412,47 @@ def wire_from_curve(profile):
 #: the reference CAD application's ExtrudeCrvTapered Corners values map to OCCT transition modes (Smooth = G2
 #: blends has no OCCT transition and is refused by name).
 DRAFT_CORNERS = ("Sharp", "Round")
+
+
+def make_revolve(profile, origin, axis, angle_deg):
+    """Revolve a serialized curve about an axis -- EXACT (`BRepPrimAPI_MakeRevol`): a
+    line revolves into a cone/cylinder/plane, an arc into a sphere/torus, a NURBS curve
+    into a surface of revolution. A closed profile revolved a full turn becomes a
+    closed solid; anything else stays an open surface (the reference command does not
+    cap a revolve)."""
+    _need()
+    import math
+    from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeSolid
+    from OCP.BRepPrimAPI import BRepPrimAPI_MakeRevol
+    from OCP.TopAbs import TopAbs_ShapeEnum
+    from OCP.TopExp import TopExp_Explorer
+    from OCP.TopoDS import TopoDS
+    from OCP.gp import gp_Ax1, gp_Dir, gp_Pnt
+
+    angle = float(angle_deg)
+    if not 0.0 < abs(angle) <= 360.0:
+        raise KernelError(f"revolve: angle {angle:g} must be in (0, 360] degrees")
+    wire = wire_from_curve(profile)
+    ax = gp_Ax1(gp_Pnt(*[float(v) for v in origin]), gp_Dir(*[float(v) for v in axis]))
+    full = abs(abs(angle) - 360.0) <= 1e-9
+    maker = BRepPrimAPI_MakeRevol(wire, ax, math.radians(angle) if not full else 2 * math.pi, True)
+    maker.Build()
+    if not maker.IsDone():
+        raise KernelError("revolve: OCCT could not revolve the curve")
+    shape = maker.Shape()
+    if full and wire.Closed():
+        shells = []
+        explorer = TopExp_Explorer(shape, TopAbs_ShapeEnum.TopAbs_SHELL)
+        while explorer.More():
+            shells.append(TopoDS.Shell(explorer.Current()))
+            explorer.Next()
+        if len(shells) == 1:
+            solid = BRepBuilderAPI_MakeSolid(shells[0]).Solid()
+            if volume(solid) < 0:
+                solid.Reverse()
+            if is_airtight(solid):
+                shape = solid
+    return shape
 
 
 def make_extrusion_ex(profile, direction, both=False, solid=True, draft_deg=None,
@@ -1331,6 +1375,9 @@ def from_recipe(recipe, _depth=0):
                                solid=bool(recipe.get("solid", True)))
         elif kind == "edge_surface":
             shape = make_edge_surface(recipe["curves"])
+        elif kind == "revolve":
+            shape = make_revolve(recipe["profile"], recipe["origin"], recipe["axis"],
+                                 recipe["angle"])
         elif kind == "shell":
             shape = make_shell(from_recipe(recipe["a"], _depth + 1), recipe["remove"],
                                recipe["thickness"])

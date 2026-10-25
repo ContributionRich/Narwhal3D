@@ -77,6 +77,14 @@ def slot():
     return curve
 
 
+def dome_profile():
+    curve = r3.PolyCurve()
+    curve.Append(r3.LineCurve(P(4, 0, 0), P(12, 0, 0)))
+    curve.Append(r3.Arc(P(12, 0, 0), P(10, 0, 6), P(4, 0, 8)).ToNurbsCurve())
+    curve.Append(r3.LineCurve(P(4, 0, 8), P(4, 0, 0)))
+    return curve
+
+
 def box():
     return bridge.make_box((0, 0, 0), (30, 20, 0), 10)
 
@@ -107,6 +115,9 @@ CATALOG = [
     ("box_with_hole", lambda: bridge.boolean_brep(
         box(), bridge.make_cylinder((15, 10, -1), 4, 12), "DIFFERENCE"), 3.0),
     ("box_with_fillet", lambda: bridge.bevel_edges_occt(box(), 2.0, edge_indices=[1]), 3.0),
+    ("revolved_ring", lambda: bridge.make_revolve(polyline(
+        [(5, 0, 0), (10, 0, 0), (10, 0, 10), (5, 0, 10)]), (0, 0, 0), (0, 0, 1), 0, 360), 2.0),
+    ("revolved_dome", lambda: bridge.make_revolve(dome_profile(), (0, 0, 0), (0, 0, 1), 0, 360), 2.0),
 ]
 
 # MEASURED limitation, kept honest: OCCT's self-interference check reports a translated

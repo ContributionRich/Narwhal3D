@@ -2341,6 +2341,16 @@ def make_cone(center, base_radius, height, plane=None, solid=True):
     profile = r3.LineCurve(
         r3.Point3d(base_radius, 0, 0), r3.Point3d(0, 0, float(height))
     ).ToNurbsCurve()
+    if not solid and _occt() is not None:
+        # MEASURED (surfaces matrix): the open cone was a rhino3dm-only surface with no
+        # kernel shape, so it could not be moved, booleaned or exported exactly. It is
+        # the exact revolve of its profile line, placed on the plane first.
+        xf = _plane_xform(center, plane)
+        profile.Transform(xf)
+        base, top = r3.Point3d(0, 0, 0), r3.Point3d(0, 0, 1)
+        base.Transform(xf)
+        top.Transform(xf)
+        return make_revolve(profile, (base.X, base.Y, base.Z), (top.X, top.Y, top.Z))
     axis = r3.Line(r3.Point3d(0, 0, 0), r3.Point3d(0, 0, max(float(height), 1.0) * 2))
     rev = r3.RevSurface.Create(profile, axis, 0.0, 6.283185307179586)
     brep = r3.Brep.CreateFromRevSurface(rev, bool(solid), False)
@@ -2908,13 +2918,41 @@ def extrude_curve(curve, distance, direction=None, both=False, solid=True, draft
 
 
 def make_revolve(profile_curve, axis_p1, axis_p2, start_deg=0.0, end_deg=360.0):
+    """Revolve a curve about the axis through two points -- EXACT via OCCT, with a
+    `revolve` recipe so it can be booleaned, edited part-by-part and reloaded.
+
+    MEASURED (movability matrix): the old rhino3dm-only route produced a brep with no
+    kernel shape at all, so a revolved object could not be moved, booleaned or exported
+    exactly. `start_deg` rotates the profile first, so the sweep covers start..end.
+    Falls back to the rhino3dm surface only when OCCT is not installed."""
     import math
 
-    profile = profile_curve if isinstance(profile_curve, r3.Curve) else profile_curve
-    axis = r3.Line(r3.Point3d(*axis_p1), r3.Point3d(*axis_p2))
-    rev = r3.RevSurface.Create(
-        profile, axis, math.radians(start_deg), math.radians(end_deg))
-    return r3.Brep.CreateFromRevSurface(rev, False, False)
+    occt = _occt()
+    axis_from = [float(v) for v in axis_p1]
+    axis_to = [float(v) for v in axis_p2]
+    direction = [b - a for a, b in zip(axis_from, axis_to)]
+    if math.sqrt(sum(d * d for d in direction)) <= 1e-12:
+        raise ValueError("Revolve: the two axis points coincide")
+    if occt is None:
+        axis = r3.Line(r3.Point3d(*axis_from), r3.Point3d(*axis_to))
+        rev = r3.RevSurface.Create(
+            profile_curve, axis, math.radians(start_deg), math.radians(end_deg))
+        return r3.Brep.CreateFromRevSurface(rev, False, False)
+    curve = profile_curve
+    if start_deg:
+        curve = profile_curve.Duplicate()
+        curve.Transform(r3.Transform.Rotation(
+            math.radians(start_deg), r3.Vector3d(*direction), r3.Point3d(*axis_from)))
+    profile = curve_recipe(curve)
+    if profile is None:
+        raise ValueError("Revolve: the curve could not be carried to the kernel")
+    recipe = {"kind": "revolve", "profile": profile, "origin": axis_from,
+              "axis": direction, "angle": float(end_deg) - float(start_deg)}
+    try:
+        shape = occt.from_recipe(recipe)
+    except Exception as e:  # noqa: BLE001
+        raise ValueError(f"Revolve: {e}") from e
+    return occt_backed(shape, recipe)
 
 
 def make_loft(curve_a, curve_b):
