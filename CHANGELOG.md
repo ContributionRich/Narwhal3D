@@ -4,9 +4,9 @@ All notable public changes will be recorded here. Narwhal 3D is an extremely ear
 
 ## Unreleased
 
-## 0.4.7 — pending release
+## 0.4.7 — 2026-10-27
 
-Changes since public v0.4.6 (`5a40d6d1eee16b26f4e6b5714862c711cafad797`). These notes cover the implemented source changes; final integrated validation and portable Linux/Windows packages are still pending.
+Changes since historical public v0.4.6 (`5a40d6d1eee16b26f4e6b5714862c711cafad797`). Release assets are named `Narwhal_3D-0.4.7-x86_64.AppImage` and `Narwhal_3D-0.4.7-Windows-x86_64.zip`; the platform evidence and remaining gates are recorded below.
 
 ### Added
 
@@ -42,11 +42,11 @@ Changes since public v0.4.6 (`5a40d6d1eee16b26f4e6b5714862c711cafad797`). These 
 - Start the layer colour picker's HSV Value at 255 and leave the layer unchanged until the colour is confirmed.
 - Include SrfPt in the representation audit without exemptions; focused audit coverage includes all six geometry gates.
 
-### Release validation still required
+### Packaging and platform limitations
 
-- The final integrated suite, current-runtime UI gate, audited public source and packaged acceptance checks must pass before publication. Focused checks recorded during development are not a substitute for those release gates.
-- Linux needs a rebuilt portable runtime containing the new native UI APIs and a compatible welcome binary. The current source-development executables require GLIBC 2.43 and must not ship; every bundled ELF must pass the GLIBC 2.35 ceiling. Do not assume 0.4.6's measured GLIBC 2.28 baseline applies to the new assets until they are scanned.
-- Windows needs the updated native runtime and welcome, source/inventory verification and extracted-ZIP acceptance. No 0.4.7 asset availability, digest or new platform certification is claimed here.
+- The Linux 0.4.7 AppImage has been built and its inventory verified. All 290 bundled ELFs require at most GLIBC 2.28, below the GLIBC 2.35 release ceiling. The portable runtime and welcome contain the current native UI patches; the separate GLIBC 2.43 source-development executables must not ship.
+- Linux UI, rendering, preferences and window-overlay checks are green. The full suite passed on the preceding source snapshot; subsequent fixture followups passed focused checks and mutation tests. Final candidate followup, full tests, audited public source and packaged acceptance checks remain publication gates after the metadata freeze.
+- Windows remains an unsigned, portable early preview. The 0.4.7 full Windows compile and extracted-ZIP validation are pending; no new Windows validation pass is claimed. Source/inventory verification is required independently of Linux. Physical-GPU/real-window acceptance, complete internal PE identity cleanup, installer/file associations and optional signing remain open. Historical 0.4.6 Windows results do not certify 0.4.7.
 
 ## 0.4.6 — 2026-10-24
 

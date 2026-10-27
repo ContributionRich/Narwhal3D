@@ -27,24 +27,24 @@ Narwhal's active project format is `.narwhal`: a dependency-free Rust-validated 
 
 ## Install on Linux x86_64
 
-The published release is **0.4.6**; **0.4.7 is in preparation**, with final validation and portable Linux/Windows packages still pending. No 0.4.7 assets are available yet.
+**Release: 0.4.7.** The Linux x86_64 asset is `Narwhal_3D-0.4.7-x86_64.AppImage`.
 
-The public release artifact is `Narwhal_3D-<version>-x86_64.AppImage`. The published 0.4.6 AppImage uses the portable runtime introduced in 0.4.1: every bundled ELF was measured to require at most glibc 2.28, below the Ubuntu 22.04/glibc 2.35 compatibility ceiling enforced by the release verifier. This is 0.4.6 evidence, not certification of a 0.4.7 candidate.
+The 0.4.7 AppImage has been built and its inventory verified. All 290 bundled ELFs were measured to require at most glibc 2.28, below the Ubuntu 22.04/glibc 2.35 compatibility ceiling enforced by the release verifier.
 
-Make the published 0.4.6 AppImage executable and run it directly:
+Make the AppImage executable and run it directly:
 
 ```bash
-chmod +x Narwhal_3D-0.4.6-x86_64.AppImage
-./Narwhal_3D-0.4.6-x86_64.AppImage
+chmod +x Narwhal_3D-0.4.7-x86_64.AppImage
+./Narwhal_3D-0.4.7-x86_64.AppImage
 ```
 
 The AppImage contains the native startup welcome window, natively branded runtime, all nine mandatory native components, locked Python dependencies, application package, icons, and license notices. It does not install a separate host application.
 
 ## Early Windows x86_64 preview
 
-The `v0.4.6` prerelease also provides `Narwhal_3D-0.4.6-Windows-x86_64.zip`. Extract the complete folder and start `Narwhal3D.exe`; the native welcome window remains visible while the bundled runtime initializes. Do not move that executable away from its adjacent `app` and `runtime` folders.
+The Windows asset name for 0.4.7 is `Narwhal_3D-0.4.7-Windows-x86_64.zip`. Extract the complete folder and start `Narwhal3D.exe`; the native welcome window remains visible while the bundled runtime initializes. Do not move that executable away from its adjacent `app` and `runtime` folders.
 
-This is an unsigned, portable **early preview**, not an installer or supported production build. Windows SmartScreen may require **More info → Run anyway**. The launcher has original Narwhal icon/version resources and the published 0.4.6 runtime/bootstrap passed native Windows and offline Wine headless checks, but final physical-GPU/real-window acceptance is pending and the internal viewport runtime still retains some Blender-derived PE resource strings/icons. There are no file associations or automatic installation yet.
+This is an unsigned, portable **early preview**, not an installer or supported production build. Windows SmartScreen may require **More info → Run anyway**. The launcher has original Narwhal icon/version resources, but the 0.4.7 full Windows compile and extracted-ZIP validation are pending; no new Windows validation pass is claimed. Historical native Windows and offline Wine headless checks passed for 0.4.6 only. Physical-GPU/real-window acceptance remains open, and the internal viewport runtime still retains some Blender-derived PE resource strings/icons. There are no file associations or automatic installation yet. See the [platform limitations](docs/windows-build.md); publication waits for the final asset gates.
 
 ## Experimental macOS source build
 
@@ -81,7 +81,7 @@ Once `tools/blender-patched/` exists, run:
 
 ## Build a one-click AppImage
 
-The examples below target **0.4.7 in preparation**, not a downloadable or validated release. Use an audited public source revision and a freshly validated portable runtime containing all current native patches, plus matching native components and the locked appimagetool. The 0.4.6 runtime cannot stand in for the new UI APIs; the current GLIBC 2.43 source-development runtime and welcome binary must not ship. All bundled ELFs must pass the GLIBC 2.35 ceiling before assembly and after extraction.
+The examples below build **0.4.7**. Use the audited public release source revision and the portable runtime containing all current native patches, plus matching native components and the locked appimagetool. The 0.4.7 portable Linux runtime and welcome have been built and verified; the current GLIBC 2.43 source-development runtime and welcome binary are separate inputs and must not ship. The historical 0.4.6 runtime cannot stand in for the new UI APIs. All bundled ELFs must pass the GLIBC 2.35 ceiling before assembly and after extraction.
 
 ```bash
 python3 scripts/fetch_locked.py \

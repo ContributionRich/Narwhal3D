@@ -93,6 +93,56 @@ def coverage(label, points, before, painted, after, expected, tolerance=0):
     check(any(a != b for a, b in zip(before, painted)), label + ': visible overlay', fatal=False)
 
 
+def outline_precondition(theme, pane, points, before, vx, hy, pad):
+    """Observe the real outline's contribution, not proximity to its unblended RGB.
+
+    MEASURED: packaged Linux at scale .95 draws a 1.9px frame; light outline
+    samples differ from ACCENT_TITLE by 7 despite correct overlay coverage.
+    Suppress ONLY draw_viewport_label's active frame batch, leaving titles and
+    all other drawing intact. Python is required to intercept the live GPU call.
+    """
+    draw_rects = ui._draw_rects
+    calls = 0
+
+    def without_outline(shader, rects, color):
+        nonlocal calls
+        region = bpy.context.region
+        if region and bpy.context.area == pane:
+            w, h = region.width, region.height
+            bw = max(1.0, ui._fpx(design.VIEWPORT_BORDER_W))
+            frame = [(0, 0, w, bw), (0, h-bw, w, h),
+                     (0, 0, bw, h), (w-bw, 0, w, h)]
+            if rects == frame and color == design.rgb01(design.ACCENT_TITLE):
+                calls += 1
+                return
+        return draw_rects(shader, rects, color)
+
+    with patch.object(ui, '_draw_rects', without_outline):
+        yield from settle()
+        suppressed = capture('ui_overlay_' + theme + '_outline_suppressed', points)
+    yield from settle()
+    restored = capture('ui_overlay_' + theme + '_outline_restored', points)
+    observed = [i for i, (a, b) in enumerate(zip(suppressed, restored)) if a != b]
+    # Separate arms exclude the intersection: one corner pixel cannot prove both.
+    vertical = [i for i in observed if vx[0]-pad <= points[i][0] <= vx[1]+pad
+                and points[i][1] < hy[0]-pad]
+    horizontal = [i for i in observed if hy[0]-pad <= points[i][1] <= hy[1]+pad
+                  and points[i][0] < vx[0]-pad]
+    RESULT.setdefault('outline', {})[theme] = {
+        'points': points, 'suppressed': suppressed, 'restored': restored,
+        'draw_calls_suppressed': calls, 'observed': observed,
+        'vertical': vertical, 'horizontal': horizontal,
+    }
+    check(ui._pane_key(pane) == ui.active_pane_key(), theme + ': fixture pane remains active')
+    check(calls > 0, theme + ': actual active outline painter intercepted')
+    check(before == restored, theme + ': outline restoration is pixel-exact')
+    check(bool(observed), theme + ': observed active outline included in samples')
+    check(bool(vertical) and bool(horizontal), theme + ': observed active outline beside both central seams')
+    check(any(vx[0] <= x <= vx[1] and y < hy[0]-pad for x, y in points) and
+          any(hy[0] <= y <= hy[1] and x < vx[0]-pad for x, y in points),
+          theme + ': samples include both native central gaps, not just the outline')
+
+
 def native_contract():
     import gpu
     from mathutils import Matrix, Vector
@@ -199,14 +249,14 @@ def run():
 
         ui.sidebar_hover_update(-1, -1)
         before = capture('ui_overlay_' + theme + '_before', points)
+        yield from outline_precondition(theme, lb, points, before, vx, hy, pad)
         box = open_popup()
         yield from settle()
         painted = capture('ui_overlay_seams' if theme == 'light' else 'ui_overlay_dark_popup', points)
         shell_popup.close()
         yield from settle()
         after = capture('ui_overlay_' + theme + '_after_dismiss', points)
-        check(any(max(abs(rgb[c]-design.ACCENT_TITLE[c]) for c in range(3)) <= 6 for rgb in before),
-              'active viewport outline included in samples (allow its fractional-pixel AA)')
+
         RESULT[theme] = {'scale': s, 'popup_box': box, 'vertical_gap': vx, 'horizontal_gap': hy}
         coverage(theme + '.popup', points, before, painted, after, [tuple(design.MENU_BG)]*len(points))
 
