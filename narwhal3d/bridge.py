@@ -2960,42 +2960,51 @@ def make_loft(curve_a, curve_b):
     return r3.NurbsSurface.CreateRuledSurface(curve_a, curve_b)
 
 
-def loft_brep(sections, style="Straight", closed=False):
-    """Loft a Brep through N section curves (extended by ).
+# MEASURED (reference API, `LoftType`): Normal "uses chord-length parameterization in
+# the loft direction"; Tight "uses square root of chord-length parameterization";
+# Uniform "the object knot vectors will be uniform". Each is the interpolating skin
+# with that parameterisation. `Smooth` is this project's older name for Normal.
+_LOFT_SKIN_STYLES = {"normal": "Chord", "smooth": "Chord", "tight": "SqrtChrd",
+                     "uniform": "Uniform"}
+LOFT_STYLES = ("Normal", "Loose", "Tight", "Straight", "Uniform")
 
-    Styles (the command behavior):
+
+def loft_brep(sections, style="Straight", closed=False, align=True):
+    """Loft a Brep through N section curves.
+
+    Styles (the command behavior and the reference API's `LoftType`):
     * **Straight** -- a ruled (piecewise-linear in V) surface through all sections.
       Two sections use `CreateRuledSurface` (exact); N>2 build a degree-1-in-V net.
     * **Loose** -- "the surface control points are created at the same locations as
       the control points of the original": the sections' control nets ARE the
-      surface's V control rows (degree min(k-1, 3) in V, uniform knots). This is a
-      literal constructive spec, so it is built exactly where the sections are
-      compatible.
-    * **Normal / Tight / Uniform** -- described in the help only by feel ("average
-      stretching", "closely follows", "uniform knots") with no measurable algorithm,
-      so each is REFUSED by name rather than guessed.
+      surface's V control rows (degree min(k-1, 3) in V, uniform knots).
+    * **Normal / Tight / Uniform** -- a smooth degree-3 skin that passes through every
+      section, with chord-length, square-root-chord or uniform V parameters.
+    * **Developable** is obsolete in the reference API and is refused by name.
+
+    `align` reverses sections that run against their neighbour and, for closed
+    sections, also matches their winding and moves each seam to the point nearest the
+    previous seam (the reference "Automatic" alignment). MEASURED: without it one
+    reversed section folds the surface through itself, and the fold cannot be edited.
 
     N sections of DIFFERENT degree/knots are first made compatible (reparametrize
-    to [0,1], degree-elevate to the max, merge knot vectors) -- all three rhino3dm
-    primitives exist (`Curve.Domain` setter, `NurbsCurve.IncreaseDegree`,
-    `NurbsKnotList.InsertKnot`). The result is EXACT (no sampling): a `Loose` loft of
-    two identical circles reproduces their control points bit-for-bit, and a degree-1
-    `Straight` surface passes through every section because a degree-1 curve
-    interpolates its control points.
+    to [0,1], degree-elevate to the max, merge knot vectors). The result is EXACT (no
+    sampling): a `Loose` loft of two identical circles reproduces their control points
+    bit-for-bit, and every other style passes through each section.
 
     Raises ValueError for <2 sections, a closed loft, or a non-buildable style.
     """
     st = style.lower()
-    if st not in ("straight", "loose", "smooth"):
+    if st not in ("straight", "loose") and st not in _LOFT_SKIN_STYLES:
         raise ValueError(
-            f"loft style '{style}' not implemented; buildable styles are 'Straight' "
-            f"(ruled), 'Loose' (control-point) and 'Smooth' (interpolating) -- "
-            f"the reference CAD application's 'Normal', 'Tight' and 'Uniform' are described by feel, not "
-            f"algorithm")
+            f"loft style '{style}' not implemented; buildable styles are "
+            f"{', '.join(LOFT_STYLES)} (Smooth is accepted as Normal)")
     if closed:
         raise ValueError("closed loft not implemented")
     if len(sections) < 2:
         raise ValueError(f"loft needs at least 2 sections (got {len(sections)})")
+    if align:
+        sections = align_loft_sections(sections)
 
     if st == "straight" and len(sections) == 2:
         rs = r3.NurbsSurface.CreateRuledSurface(sections[0], sections[1])
@@ -3008,12 +3017,10 @@ def loft_brep(sections, style="Straight", closed=False):
         return brep
 
     nurbs = _loft_compatible_sections(sections)
-    if st == "smooth":
+    if st in _LOFT_SKIN_STYLES:
         # INTERPOLATE across the sections, so the surface passes through every one
-        # AND is smooth (degree 3) in V. This is what a swept surface needs; see
-        # `_skin_surface_from_sections`. This is named 'Smooth' rather than 'Normal'
-        # because the latter's behavior is not specified precisely enough to claim a match.
-        surf = _skin_surface_from_sections(nurbs, 3)
+        # AND is smooth (degree 3) in V; see `_skin_surface_from_sections`.
+        surf = _skin_surface_from_sections(nurbs, 3, _LOFT_SKIN_STYLES[st])
     else:
         degree_v = 1 if st == "straight" else min(len(nurbs) - 1, 3)
         surf = _loft_surface_from_net(nurbs, degree_v)
@@ -3022,12 +3029,154 @@ def loft_brep(sections, style="Straight", closed=False):
         raise ValueError("Brep.CreateFromSurface failed on the lofted net")
     # every loft style is already an EXACT NURBS construction (ruled, control-point
     # net, interpolating skin), so its recipe is the RESULT's own faces -- an OCCT master
-    # built from them bit-for-bit, which booleans (after Cap), measures and survives a
-    # reload. OCCT's ThruSections matches Straight but not Smooth, where it produces an
-    # approximating skin, so
-    # rebuilding through ThruSections would have silently changed a Smooth loft.
+    # built from them bit-for-bit. OCCT's ThruSections approximates a skin, so
+    # rebuilding through it would silently change the surface.
     record_exact_recipe(brep)
     return brep
+
+
+def _corner_problem_python(pts, tolerance):
+    """Python fallback of `pure_core::surface::corner_problem`."""
+    if len(pts) not in (3, 4):
+        return 1, (0, 0)
+    for i in range(len(pts)):
+        for j in range(i + 1, len(pts)):
+            if sum((a - b) ** 2 for a, b in zip(pts[i], pts[j])) <= tolerance ** 2:
+                return 2, (i + 1, j + 1)
+    a, b, c = pts[:3]
+    u = [b[k] - a[k] for k in range(3)]
+    v = [c[k] - a[k] for k in range(3)]
+    n = (u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0])
+    if sum(x * x for x in n) ** 0.5 <= tolerance * max(1.0, sum(x * x for x in u) ** 0.5):
+        return 3, (0, 0)
+    return 0, (0, 0)
+
+
+def make_srf_pt(points):
+    """SrfPt -- a surface from three or four corner points (the command behavior:
+    "Pick the fourth corner. Or press Enter to create a triangular surface.").
+
+    Four corners: the exact bilinear NURBS patch (degree 1 x 1, the corners are its four
+    control points), planar or not. Three corners: the exact planar triangle (OURS: the
+    reference collapses one edge of a bilinear patch; a planar trimmed triangle is the
+    same point set without a singular edge). Both carry an exact recipe."""
+    pts = [tuple(float(c) for c in p) for p in points]
+    tolerance = 1e-9
+    native = _native_surface()
+    verdict = native.corner_problem(pts, tolerance) if native else None
+    if verdict is None:
+        verdict = _corner_problem_python(pts, tolerance)
+    code, (i, j) = verdict
+    if code == 1:
+        raise ValueError(f"SrfPt needs 3 or 4 corner points (got {len(pts)})")
+    if code == 2:
+        raise ValueError(f"corners {i} and {j} coincide")
+    if code == 3:
+        raise ValueError("the first three corners are in a line")
+    if len(pts) == 3:
+        loop = r3.PolylineCurve([r3.Point3d(*p) for p in pts + [pts[0]]])
+        return make_planar_srf([loop])[0]
+    surf = r3.NurbsSurface.Create(3, False, 2, 2, 2, 2)
+    surf.KnotsU[0], surf.KnotsU[1] = 0.0, 1.0
+    surf.KnotsV[0], surf.KnotsV[1] = 0.0, 1.0
+    # Corners are picked round the boundary: 1 -> 2 -> 3 -> 4.
+    surf.Points[0, 0] = r3.Point4d(*pts[0], 1.0)
+    surf.Points[1, 0] = r3.Point4d(*pts[1], 1.0)
+    surf.Points[1, 1] = r3.Point4d(*pts[2], 1.0)
+    surf.Points[0, 1] = r3.Point4d(*pts[3], 1.0)
+    brep = r3.Brep.CreateFromSurface(surf)
+    if brep is None or not record_exact_recipe(brep):
+        raise ValueError("the corner surface could not be built exactly")
+    return brep
+
+
+def _native_surface():
+    try:
+        from . import native_surface
+    except ImportError:  # direct-file loading outside the package
+        try:
+            import native_surface
+        except ImportError:
+            return None
+    return native_surface
+
+
+def _samples(curve, count=64):
+    d = curve.Domain
+    closed = bool(curve.IsClosed)
+    span = count if closed else count - 1
+    out = []
+    for k in range(count):
+        p = curve.PointAt(d.T0 + (d.T1 - d.T0) * k / span)
+        out.append((p.X, p.Y, p.Z))
+    return out
+
+
+def _should_reverse_python(previous, current, closed):
+    """Python fallback of the Rust decision (`pure_core::surface::should_reverse`)."""
+    def d2(a, b):
+        return sum((x - y) ** 2 for x, y in zip(a, b))
+    if closed:
+        def normal(points):
+            n = [0.0, 0.0, 0.0]
+            for k, p in enumerate(points):
+                q = points[(k + 1) % len(points)]
+                n[0] += (p[1] - q[1]) * (p[2] + q[2])
+                n[1] += (p[2] - q[2]) * (p[0] + q[0])
+                n[2] += (p[0] - q[0]) * (p[1] + q[1])
+            return n
+        a, b = normal(previous), normal(current)
+        return a[0] * b[0] + a[1] * b[1] + a[2] * b[2] < 0.0
+    same = d2(previous[0], current[0]) + d2(previous[-1], current[-1])
+    crossed = d2(previous[0], current[-1]) + d2(previous[-1], current[0])
+    return crossed < same
+
+
+def align_loft_sections(sections):
+    """Copies of `sections` oriented consistently for lofting (the reference
+    "Automatic" alignment). Each curve is compared with the one before it:
+
+    * open curves are reversed when their start lies nearer the previous curve's END
+      than its start ("Select open curves near the same ends");
+    * closed curves are reversed when they wind against the previous one, and their
+      seam is moved to the knot nearest the previous seam ("adjust the curve seams").
+
+    The decisions run in Rust (`native/pure_core/src/surface.rs`) on samples of the
+    exact curves, with this module's Python as the complete fallback. Only orientation
+    and the seam position change, so every curve keeps its exact shape. The first curve
+    is never changed."""
+    native = _native_surface()
+    out = []
+    for index, curve in enumerate(sections):
+        copy = curve.Duplicate()
+        if index:
+            prev = out[-1]
+            closed = bool(copy.IsClosed and prev.IsClosed)
+            if closed or (not copy.IsClosed and not prev.IsClosed):
+                a, b = _samples(prev), _samples(copy)
+                flip = native.should_reverse(a, b, closed) if native else None
+                if flip is None:
+                    flip = _should_reverse_python(a, b, closed)
+                if flip:
+                    copy.Reverse()
+            if closed:
+                # OURS (the reference offers SnapToKnots=Yes): the seam moves only to a
+                # knot. That keeps the control structure, so a rational circle keeps its
+                # weight pattern and can still be skinned with its neighbours.
+                seam = prev.PointAtStart
+                d = copy.Domain
+                knots = sorted({round(v, 12) for v in copy.ToNurbsCurve().Knots.ToList()
+                                if d.T0 - 1e-12 <= v < d.T1 - 1e-12}) or [d.T0]
+                candidates = [(p.X, p.Y, p.Z) for p in (copy.PointAt(t) for t in knots)]
+                target = (seam.X, seam.Y, seam.Z)
+                best = native.nearest_index(target, candidates) if native else None
+                if best is None:
+                    best = min(range(len(candidates)), key=lambda i: sum(
+                        (x - y) ** 2 for x, y in zip(candidates[i], target)))
+                if abs(knots[best] - d.T0) > 1e-12:
+                    copy.ChangeClosedCurveSeam(knots[best])
+        out.append(copy)
+    return out
 
 
 def _loft_compatible_sections(sections):
@@ -3108,7 +3257,7 @@ def _interpolate():
     return interpolate
 
 
-def _skin_surface_from_sections(nurbs, degree_v=3):
+def _skin_surface_from_sections(nurbs, degree_v=3, style=None):
     """A SMOOTH surface that PASSES THROUGH every section.
 
     The difference from:func:`_loft_surface_from_net` is the whole point: that one puts
@@ -3156,7 +3305,8 @@ def _skin_surface_from_sections(nurbs, degree_v=3):
                 "implemented (a sweep's sections always share weights)")
         rows.append(euclid)
 
-    net, v_knots_full, degree_v = interp.skin_control_net(rows, degree_v)
+    net, v_knots_full, degree_v = interp.skin_control_net(
+        rows, degree_v, style or interp.DEFAULT_KNOT_STYLE)
 
     surf = r3.NurbsSurface.Create(3, rational, degree_u + 1, degree_v + 1, cv_u, k)
     for i, val in enumerate(list(nurbs[0].Knots.ToList())):
@@ -6866,12 +7016,65 @@ def bevel_affected_edges_occt(geom, size, edge_indices, chamfer=False):
     return occt.bevel_affected_edges(operand, size, edge_indices, chamfer=chamfer)
 
 
-def bevel_edges_occt(geom, size, chamfer=False, edge_points=None, edge_indices=None):
+def bevel_edge_endpoints_occt(geom, edge_indices):
+    """Exact ordered world endpoints for independent radius handles; id -> [start, end].
+
+    Raises ValueError rather than inventing handles when no exact operand is available.
+    Pass these anchors back as `edge_endpoints` if topology orientation may have changed.
+    """
+    occt = _occt()
+    operand = _occt_operand(geom) if occt is not None else None
+    if operand is None:
+        raise ValueError("fillet endpoints require an exact master or rebuildable recipe")
+    return occt.bevel_edge_endpoints(operand, edge_indices)
+
+
+def bevel_edge_sections_occt(geom, size, edge_indices, edge_radii=None, edge_endpoints=None):
+    """Cacheable exact section handles, independent of solid Preview (including Preview=No).
+
+    Return {edge_id: [start_record, end_record]}, ordered by the supplied endpoint anchors
+    or `bevel_edge_endpoints_occt`. Records contain anchor, radius, curve (exact arc recipe),
+    circle_center and grip_point (arc midpoint); all coordinates are world XYZ lists.
+    `curve_from_recipe(record["curve"])` converts the arc to exact rhino3dm geometry.
+    Radius/anchor arguments follow `bevel_edges_occt`; size supplies unlisted edge radii.
+
+    Call once per input edit and cache for drawing. OCCT Simulate computes sections only:
+    no candidate solid, meshing, proxy or master registration. The input master is reused;
+    a recipe-only input may need its existing operand rebuilt. This does not certify that
+    a later solid build succeeds. None + last_occt_decline() means discard the cached data.
+    """
+    occt = _occt()
+    if occt is None:
+        _decline("fillet section preview requires the OCCT kernel")
+        return None
+    try:
+        operand = _occt_operand(geom)
+        if operand is None:
+            raise ValueError("fillet section preview requires an exact master or recipe")
+        sections = occt.bevel_edge_sections(operand, size, edge_indices,
+                                            edge_radii=edge_radii,
+                                            edge_endpoints=edge_endpoints)
+    except Exception as e:  # noqa: BLE001
+        _decline(f"{type(e).__name__}: {e}")
+        return None
+    _decline(None)
+    return sections
+
+
+def bevel_edges_occt(geom, size, chamfer=False, edge_points=None, edge_indices=None,
+                     edge_radii=None, edge_endpoints=None):
     """An ANALYTIC edge fillet/chamfer via OpenCASCADE, or None if not possible.
 
     Returns the display proxy with its analytic master registered, exactly like
     `boolean_occt`. Returns None -- rather than approximating -- when `geom` has no master
-    and no rebuildable recipe, so the caller falls back to the mesh bevel AND SAYS SO.
+    and no rebuildable recipe. A declined variable law must NOT fall back to a scalar or mesh.
+
+    `edge_radii`: {edge_id: (rStart, rEnd)}, or [(edge_id, (rStart, rEnd)), ...].
+    Only those edges are selected when edge_indices/edge_points are omitted. Other explicitly
+    selected edges retain `size`. `edge_endpoints` optionally maps those same ids to two XYZ
+    anchors (from `bevel_edge_endpoints_occt`); otherwise the current edge direction is used.
+    Unequal radii require isolated open OCCT contours, and a replayable operand recipe.
+    Failure returns None and sets `last_occt_decline()`; no previous candidate is retained.
 
     against the mesh route it replaces, a 4x4x4 box with every edge beveled by 0.5:
 
@@ -6887,7 +7090,8 @@ def bevel_edges_occt(geom, size, chamfer=False, edge_points=None, edge_indices=N
     occt = _occt()
     if occt is None:
         return None
-    if size <= 0:
+    if not math.isfinite(size) or size <= 0:
+        _decline("a bevel size must be finite and positive")
         return None
     operand = _occt_operand(geom)
     if operand is None:
@@ -6911,31 +7115,47 @@ def bevel_edges_occt(geom, size, chamfer=False, edge_points=None, edge_indices=N
             # ValueError rather than silently falling back to beveling every edge.
             raise ValueError(str(e)) from e
 
+    k = _kernel()
+    base = k.recipe_of(geom)
     try:
-        result = occt.bevel_edges(operand, size, indices, chamfer=chamfer)
+        radii = occt._bevel_radius_map(edge_radii)
+        if radii is not None:
+            if not base:
+                raise ValueError("variable fillet requires a rebuildable operand recipe")
+            if indices is None:
+                indices = list(radii)
+        result = occt.bevel_edges(operand, size, indices, chamfer=chamfer,
+                                 edge_radii=radii, edge_endpoints=edge_endpoints)
         if not occt.is_airtight(result):
             _decline("the beveled result was not airtight")
             return None
+        recipe = None
+        if base:
+            recipe = {"kind": "chamfer" if chamfer else "fillet",
+                      "size": float(size), "a": base}
+            if indices is not None:
+                # IDs are hints; exact signatures survive topology reorder on replay.
+                indices = list(dict.fromkeys(indices))
+                recipe["edges"] = indices
+                recipe["edge_targets"] = [
+                    occt.local_subobject_signature(operand, "edge", index)
+                    for index in indices]
+                if radii is not None:
+                    anchors = occt.bevel_edge_endpoints(operand, indices)
+                    if edge_endpoints is not None:
+                        anchors.update(dict(edge_endpoints))
+                    # Aligned with edge_targets, in the OPERAND's world frame. The existing
+                    # outer xform moves the finished fillet, not these construction anchors.
+                    recipe["edge_radii"] = [list(radii.get(i, (size, size))) for i in indices]
+                    recipe["edge_endpoints"] = [anchors[i] for i in indices]
         proxy = _proxy_from_occt(result)
+        if recipe is not None and not k.record_recipe(proxy, recipe):
+            raise ValueError("could not persist the bevel recipe")
     except Exception as e:  # noqa: BLE001
         _decline(f"{type(e).__name__}: {e}")
         return None
     _decline(None)
-    k = _kernel()
     k.register_master(proxy, result)
-    base = k.recipe_of(geom)
-    if base:
-        recipe = {"kind": "chamfer" if chamfer else "fillet",
-                  "size": float(size), "a": base}
-        if indices is not None:
-            # Indices are only hints: native local reconstruction may return equivalent topology
-            # in a different order than recipe replay. Persist exact edge signatures so selective
-            # bevels resolve the same geometric edges after save/reload.
-            recipe["edges"] = list(indices)
-            recipe["edge_targets"] = [
-                occt.local_subobject_signature(operand, "edge", index)
-                for index in indices]
-        k.record_recipe(proxy, recipe)
     return proxy
 
 

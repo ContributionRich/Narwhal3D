@@ -59,10 +59,8 @@ PANES = [
     # "The x/y/z coordinates of the mouse cursor location." A plain display:
     # the help gives it no click action, so it is not clickable.
     Pane("coordinates", "x y z", KIND_READOUT, clickable=False),
-    # "The current units setting. During drawing commands, displays the
-    # distance from last picked point to the current location." A plain
-    # display with no documented click action.
-    Pane("units", "Units", KIND_READOUT, clickable=False),
+    # OURS: v4 promotes the document-unit readout to an interactive selector.
+    Pane("units", "Units", KIND_READOUT, clickable=True),
     # "If objects are selected, the Layer pane displays the layer of the
     # selected objects. If no objects are selected, ... the current layer.
     # Click the Layer pane to access quick controls ...". Readout, clickable.
@@ -100,6 +98,10 @@ PANES = [
     # session. The Info pane cycles through the list of specified categories."
     # The reference state uses the "Memory use" category.
     Pane("info", "Info", KIND_READOUT, clickable=True),
+    # OURS (UI design): the document's absolute tolerance, on the bar because it is
+    # what every exact operation is held to. Clicking opens the Units window, where
+    # the tolerance is set.
+    Pane("tolerance", "Absolute Tolerance", KIND_READOUT, clickable=True),
 ]
 
 _PANE_BY_ID = {p.id: p for p in PANES}
@@ -188,6 +190,14 @@ def _coord_trailing(x, y, z, w):
     return len(full) - len(full.rstrip())
 
 
+def compact_coordinates(value):
+    """v7 text for a pixel-fixed slot; padding must not resize adjacent controls."""
+    if value is None:
+        return 'x -  y -  z -'
+    values = (value['x'], value['y'], value['z']) if isinstance(value, dict) else value
+    return '  '.join(f'{axis} {float(number):.3f}' for axis, number in zip('xyz', values))
+
+
 def coordinate_placeholder():
     """The idle readout, padded to the same width as a real one.
 
@@ -227,6 +237,7 @@ _PANE_WIDTH_CHARS = {
     "record_history": 14,
     "filter": 6,
     "info": 12,                   # OURS: Info cycles through categories
+    "tolerance": 26,              # OURS: "Absolute Tolerance: 0.001"
 }
 
 

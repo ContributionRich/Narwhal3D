@@ -68,12 +68,12 @@ EXPECTED_RUNNABLE_COUNTS = {
     "Edit": 47,
     "View": 14,
     "Curve": 47,
-    "Surface": 12,
+    "Surface": 13,
     "SubD": 0,
     "Solid": 18,
     "Mesh": 0,
     "Drafting": 1,
-    "Transform": 15,
+    "Transform": 16,
     "Analyze": 13,
     "Render": 0,
     "Tools": 8,
@@ -81,7 +81,7 @@ EXPECTED_RUNNABLE_COUNTS = {
     "Help": 1,
 }
 EXPECTED_TODO_COUNTS = {
-    "File": 5,
+    "File": 10,
     "Edit": 40,
     "View": 60,
     "Curve": 33,
@@ -90,7 +90,7 @@ EXPECTED_TODO_COUNTS = {
     "Solid": 21,
     "Mesh": 39,
     "Drafting": 32,
-    "Transform": 18,
+    "Transform": 17,
     "Analyze": 1,
     "Render": 33,
     "Tools": 3,
@@ -98,7 +98,8 @@ EXPECTED_TODO_COUNTS = {
     "Help": 5,
 }
 EXPECTED_SERVICE_TODOS = {
-    "recoverysettings", "newfromtemplate", "saveacopy", "documentnotes",
+    "revert", "savesmall", "incrementalsave", "saveastemplate", "insert",
+    "importfromfile", "exportwithorigin", "worksession", "documentnotes",
     "gettingstarted", "inputreference", "onlinedocumentation", "showbugreport",
     "aboutnarwhal3d",
 }
@@ -136,14 +137,14 @@ def _():
 
 @check("live bare-package registry includes all sibling providers")
 def _():
-    assert len(registered) == 184, len(registered)
+    assert len(registered) == 186, len(registered)
     assert {
         "import", "filletedge", "saveas", "print", "export", "setdisplaymode",
         "changelayer",
     } <= registered
 
 
-@check("all 184 registered commands appear exactly once")
+@check("all 186 registered commands appear exactly once")
 def _():
     runnable = [command for _menu, _path, _label, command in leaves()
                 if command in registered]
@@ -165,8 +166,7 @@ def _():
         assert sum((marked, live, special)) == 1, (menu, path, label, command, live)
         if special:
             specials.append((menu, path, label, command))
-    assert specials == [("File", ("Recent and Recovery",),
-                         "Recent Files", "__recent_files__")], specials
+    assert specials == [("File", (), "Recent Files", "__recent_files__")], specials
 
 
 @check("TODO labels and canonical payloads are exact")
@@ -179,7 +179,7 @@ def _():
         for tab in data.toolbar_data.TABS for record in tab["buttons"]
         if record.get("command")
     }
-    assert len(todos) == 361, len(todos)
+    assert len(todos) == 365, len(todos)
     assert EXPECTED_SERVICE_TODOS <= payloads
     assert toolbar_commands - registered <= payloads
     for menu, label, command in todos:
@@ -206,14 +206,30 @@ def _():
 @check("representative implemented and TODO mappings are pinned")
 def _():
     indexed = {(menu, path, label): command for menu, path, label, command in leaves()}
-    assert indexed[("File", ("Document",), "New Model")] == "new"
+    assert indexed[("File", (), "New...")] == "new"
+    assert indexed[("Surface", ("Create Directly or from Curves",),
+                    "Surface from 3 or 4 Corner Points")] == "srfpt"
+    assert indexed[("Transform", ("Deform",), "Cage Edit")] == "cageedit"
     assert indexed[("Edit", (), "Cut")] == "cut"
     assert indexed[("Edit", (), "Copy")] == "copytoclipboard"
     assert indexed[("Edit", (), "Paste")] == "paste"
     assert indexed[("Solid", ("Create and Edit",), "Fillet Edges")] == "filletedge"
     assert indexed[("Window", (), "Workspace Management (Not implemented)")] == "workspace"
-    assert indexed[("File", ("Recent and Recovery",), "Recent Files")] == "__recent_files__"
+    assert indexed[("File", (), "Recent Files")] == "__recent_files__"
     assert indexed[("Help", ("Support",), "Report a Bug (Not implemented)")] == "showbugreport"
+
+
+@check("File is the reference's flat grouped list, in order")
+def _():
+    rows = dict(data.MENUS)["File"]
+    shape = ["-" if row[0] == "sep" else row[1].replace(data.TODO_SUFFIX, "") for row in rows]
+    assert shape == [
+        "New...", "Open...", "Revert", "-",
+        "Save", "Save Small", "Incremental Save", "Save As...", "Save as Template...", "-",
+        "Insert...", "Import...", "Import from File", "Export Selected...",
+        "Export with Origin...", "-", "Worksession", "-", "Notes", "Properties...", "-",
+        "Print...", "-", "Recent Files", "Exit"], shape
+    assert not any(row[0] == "popup" for row in rows), "File has no nested groups"
 
 
 @check("labels and sibling groups are unambiguous")
@@ -250,7 +266,7 @@ def _():
         "menus": len(EXPECTED_MENUS),
         "source": "original",
     }, (data.REPORT, counts)
-    assert counts == {"items": 546, "separators": 16, "popups": 61}, counts
+    assert counts == {"items": 552, "separators": 20, "popups": 57}, counts
 
 
 @check("resource source retains original provenance")

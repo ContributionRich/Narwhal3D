@@ -46,10 +46,11 @@ def check(label, cond):
 
 
 print("== layout constants ==")
-check("default band is 200 project pixels wide", rp.BAND_W == 200)
-check("tab strip is a fixed 21 project pixels", rp.TAB_STRIP_W == 21)
-check("tab pitch is 36 project pixels", rp.TAB_PITCH == 36)
-check("tab icons remain fixed at 16 pixels", rp.TAB_ICON == 16)
+# UI design: a 280 px inspector = a 72 px icon-and-label rail + the panel body.
+check("default inspector is 280 project pixels wide", rp.BAND_W == 280)
+check("tab rail is a fixed 72 project pixels", rp.TAB_STRIP_W == 72)
+check("tab pitch is the design's 63 px minimum tab height", rp.TAB_PITCH == 63)
+check("tab icons remain fixed at 20 pixels", rp.TAB_ICON == 20)
 check("optional caption row is 21 project pixels", rp.TITLE_H == 21)
 check("the strip fits inside the band", rp.TAB_STRIP_W < rp.BAND_W)
 check("an icon fits inside its tab", rp.TAB_ICON <= rp.TAB_PITCH
@@ -73,9 +74,11 @@ check("AI Assistant is directly beneath Bug Report",
 check("Layers is the authored default",
       rp.DEFAULT_TAB == 0 and rp.TABS[rp.DEFAULT_TAB].name == "Layers")
 panel_icons = {t.icon for t in rp.TABS}
-check("every tab names a project-owned manifested icon",
-      panel_icons == set(toolbar_data.PANEL_ICON_NAMES)
-      and panel_icons <= set(toolbar_data.ICON_NAMES))
+check("tabs use the exact approved legacy Layers/Report and v4 Properties/Display/AI icons",
+      panel_icons == {"narwhal-panel-layers.png", "narwhal-panel-report.png",
+                      "v4-panel-properties.png", "v4-panel-display.png",
+                      "v4-panel-ai-assistant.png"}
+      and all(rp.toolbars.icon_path(name) for name in panel_icons))
 check("icon filenames are distinct",
       len(panel_icons) == len(rp.TABS))
 
@@ -93,17 +96,21 @@ check("and no BUILT tab carries a stale 'not built because' reason",
 print("\n== the Layers LIST: measured geometry ==")
 
 check(rp.HEADER_H == 24, "the column header is 24 px (42 screen px / 1.75)")
-check(rp.ROW_H == 20, "a layer row is 20 px (35 screen px / 1.75)")
-check(rp.NAME_COL_W == 79, "the Name column is 79 px (first divider at screen x+139)")
+check(rp.ROW_H == 26, "a layer row is 26 px (UI design; the old compact list was 20)")
+body_w = rp.BAND_W - rp.TAB_STRIP_W
+check(rp.NAME_COL_W == body_w - 5 * rp.NARROW_COL_W == 108,
+      "the Name column fills the 208 px inspector body beside five 20 px state columns")
 check(rp.NARROW_COL_W == 20, "the other columns are 20 px (divider pitch 35 / 1.75)")
-check(rp.column_dividers() == [79, 99, 119, 139, 159],
-      f"the five dividers land where they were measured ({rp.column_dividers()})")
+check(rp.column_dividers() == [108, 128, 148, 168, 188],
+      f"the five dividers follow the Name column ({rp.column_dividers()})")
 check(rp.COLUMNS[:2] == ("Name", "Current"),
-      "the column order is layer.htm's: Name, Current, On, Lock, Color, Material")
+      "the list starts with the name and the current-layer tick")
+check(rp.COLUMNS == ("Name", "Current", "Color", "On", "Lock", "Menu"),
+      f"UI design columns: name, tick, swatch, eye, lock, more ({rp.COLUMNS})")
 check(len(rp.COLUMNS) == 6, f"six columns fit the default list ({len(rp.COLUMNS)})")
-check(rp.name_column_width(179) == rp.NAME_COL_W,
-      "the default 179 px body preserves the measured 79 px Name column")
-check(rp.name_column_width(279) == rp.NAME_COL_W + 100,
+check(rp.name_column_width(body_w) == rp.NAME_COL_W,
+      "the default body preserves the default Name column")
+check(rp.name_column_width(body_w + 100) == rp.NAME_COL_W + 100,
       "widening the dock by 100 px gives all added width to the descriptive Name column")
 check(rp.column_dividers(width=279) == [179, 199, 219, 239, 259],
       "the compact state columns stay fixed and remain anchored to the widened right edge")
@@ -156,6 +163,8 @@ for i in range(len(rp.COLUMNS)):
 check(rp.hit_column(row[0] + 500, row) is None,
       "a click PAST the last column hits nothing")
 wide_body = rp.layout(300, 400, title_h=0)["body"]
+wide_row = rp.list_layout(wide_body, 1)["rows"][0]
+wide_body = rp.layout(rp.BAND_W + 100, 400, title_h=0)["body"]
 wide_row = rp.list_layout(wide_body, 1)["rows"][0]
 check(rp.cell(wide_row, 0)[2] - rp.cell(wide_row, 0)[0] == rp.NAME_COL_W + 100,
       "the actual widened layer row gives the extra 100 px to its Name cell")
@@ -215,15 +224,15 @@ check("the caption row is at the TOP (y1 == height)", ty1 == H)
 check("the caption row is TITLE_H tall by default", ty1 - ty0 == rp.TITLE_H)
 
 sx0, sy0, sx1, sy1 = box["strip"]
-check("the strip is flush with the band's RIGHT edge", sx1 == W)
+check("the rail is flush with the band's LEFT edge", sx0 == 0)
 check("the strip is TAB_STRIP_W wide", sx1 - sx0 == rp.TAB_STRIP_W)
 check("the strip starts below the caption row", sy1 == H - rp.TITLE_H)
 check("the strip reaches the bottom", sy0 == 0)
 
 bx0, by0, bx1, by1 = box["body"]
-check("the body ends where the strip begins", bx1 == sx0)
-check("the body starts at the left edge", bx0 == 0)
-check("the body and the strip do not overlap", bx1 <= sx0)
+check("the body starts where the rail ends", bx0 == sx1)
+check("the body reaches the right edge", bx1 == W)
+check("the body and the rail do not overlap", bx0 >= sx1)
 check("the body is below the caption row", by1 == H - rp.TITLE_H)
 
 print("\n== the tabs run TOP-DOWN (descending y), not bottom-up ==")
@@ -297,9 +306,10 @@ tx0b, ty0b, tx1b, ty1b = tabs[0]
 check("the icon is TAB_ICON square",
       abs((ib[2] - ib[0]) - rp.TAB_ICON) < 1e-9
       and abs((ib[3] - ib[1]) - rp.TAB_ICON) < 1e-9)
-check("the icon's centre is its tab's centre",
+check("the icon is centred across its tab and sits above the label",
       abs((ib[0] + ib[2]) / 2 - (tx0b + tx1b) / 2) < 1e-9
-      and abs((ib[1] + ib[3]) / 2 - (ty0b + ty1b) / 2) < 1e-9)
+      and (ib[1] + ib[3]) / 2 > (ty0b + ty1b) / 2
+      and ib[1] - ty0b >= rp.TAB_LABEL_INSET + rp.TAB_LABEL_FONT)
 check("the icon stays inside its tab vertically",
       ib[1] >= ty0b and ib[3] <= ty1b)
 
@@ -330,6 +340,32 @@ check("mixed layer does not collapse to the first object",
 check("unsupported non-persistent fields are not shown as properties",
       "Display mode" not in rows_mixed and "Custom mesh" not in rows_mixed)
 
+print("\n== the Layers panel: title buttons, search field, filter ==")
+title = (72, 500, 280, 534)
+tb = rp.title_buttons(title)
+check(set(tb) == {"new", "menu"}, "the title row carries + and ...")
+check(tb["menu"][2] == title[2] - rp.SEARCH_PAD and tb["new"][2] < tb["menu"][0],
+      f"... sits at the right edge and + just left of it ({tb})")
+check(all(title[1] <= b[1] and b[3] <= title[3] for b in tb.values()),
+      "both buttons stay inside the title row")
+body = (72, 0, 280, 500)
+ll = rp.layers_layout(body, 4)
+sx0, sy0, sx1, sy1 = ll["search"]
+check(sy1 == body[3] - rp.SEARCH_PAD and sy1 - sy0 == rp.SEARCH_H,
+      f"the search field runs along the top of the body ({ll['search']})")
+check(ll["header"][3] <= sy0, "and the list header starts BELOW it, never under it")
+check(len(ll["rows"]) == 4 and ll["rows"][0][3] <= ll["header"][1],
+      "rows follow the header, top-down")
+tiny = rp.layers_layout((72, 0, 280, 40), 3)
+check(tiny["search"] is None, "a body too short for the field gives the list all of it")
+names = ["Default", "Layer 01", "Walls", "layer 02", "Doors"]
+check(rp.filter_layer_indices(names, "") == [0, 1, 2, 3, 4], "a blank query keeps every layer")
+check(rp.filter_layer_indices(names, "  ") == [0, 1, 2, 3, 4], "so does whitespace")
+check(rp.filter_layer_indices(names, "LAYER") == [1, 3],
+      "matching ignores case and keeps the tree order")
+check(rp.filter_layer_indices(names, "oo") == [4], "and matches inside a name")
+check(rp.filter_layer_indices(names, "zzz") == [], "and can match nothing")
+
 print("\n== rules() cannot drift from the constants ==")
 r = rp.rules()
 check("rules() reports the band width", r["band_w"] == rp.BAND_W)
@@ -337,6 +373,88 @@ check("rules() reports the tab names", r["tabs"] == rp.tab_names())
 check("rules() records the screenshot's DPI scale",
       r["dpi_scale_of_screenshot"] == 1.75)
 check("rules() reports the default tab", r["default_tab"] == rp.DEFAULT_TAB)
+
+print("\n== opt-in fixed-row Layers scrolling ==")
+scroll_body = (72, 10, 280, 150)
+filtered = [2, 7, 11, 19, 23]
+scroll = rp.layers_scroll_layout(scroll_body, filtered, 999)
+check("search and column header stay fixed above a 78px row viewport",
+      scroll["search"] == (78, 118, 274, 144)
+      and scroll["header"] == (72, 88, 280, 112)
+      and scroll["viewport"] == (72, 10, 280, 88))
+check("five fixed26 rows require 130px content and 52px bounded scroll",
+      (scroll["offset"], scroll["max_offset"], scroll["content_extent"], scroll["total"])
+      == (52, 52, 130, 5))
+check("visible rows retain document indices after filtering and scrolling",
+      scroll["cells"] == ((11, 72, 62, 280, 88), (19, 72, 36, 280, 62),
+                          (23, 72, 10, 280, 36))
+      and scroll["hit_cells"] == scroll["cells"])
+check("background/dividers fill the scroll viewport, not only the first fitted rows",
+      scroll["list"] == (72, 10, 280, 112)
+      and scroll["dividers"] == [(180, 10, 112), (200, 10, 112), (220, 10, 112),
+                                  (240, 10, 112), (260, 10, 112)])
+check("row/column hits use original layer indices and fixed column boxes",
+      rp.layers_scroll_hit(80, 70, scroll) == (11, 0)
+      and rp.layers_scroll_hit(270, 20, scroll) == (23, 5))
+check("header, search, outside width and viewport bottom do not hit layers",
+      all(rp.layers_scroll_hit(x, y, scroll) is None for x, y in
+          ((80, 88), (80, 125), (280, 70), (71, 70), (80, 9))))
+partial = rp.layers_scroll_layout(scroll_body, filtered, 13)
+check("partial edge rows are full26 draw boxes with clipped hit intersections",
+      partial["cells"][0] == (2, 72, 75, 280, 101)
+      and partial["hit_cells"][0] == (2, 72, 75, 280, 88)
+      and partial["cells"][-1] == (19, 72, -3, 280, 23)
+      and partial["hit_cells"][-1] == (19, 72, 10, 280, 23))
+check("clipped rows cannot capture header or below-body clicks",
+      rp.layers_scroll_hit(80, 95, partial) is None
+      and rp.layers_scroll_hit(80, 5, partial) is None
+      and rp.layers_scroll_hit(80, 80, partial) == (2, 0))
+check("row boundaries are half-open: boundary belongs to upper row only",
+      rp.layers_scroll_hit(80, 75, partial) == (2, 0)
+      and rp.layers_scroll_hit(80, 74.9, partial) == (7, 0))
+seen, consistent = set(), True
+for offset in range(53):
+    state = rp.layers_scroll_layout(scroll_body, filtered, offset)
+    consistent &= state["search"] == scroll["search"] and state["header"] == scroll["header"]
+    for index, x0, y0, x1, y1 in state["cells"]:
+        consistent &= y1 - y0 == 26
+    for index, x0, y0, x1, y1 in state["hit_cells"]:
+        seen.add(index)
+        row_box = next(entry[1:] for entry in state["cells"] if entry[0] == index)
+        for column in range(6):
+            box = rp.cell(row_box, column)
+            consistent &= rp.layers_scroll_hit((box[0]+box[2])/2, (y0+y1)/2, state) == (index, column)
+check("all filtered rows/columns reachable at fixed size with draw/hit agreement at every offset",
+      consistent and seen == set(filtered))
+check("filtering and enlarging the viewport clamp stale scroll state",
+      rp.layers_scroll_layout(scroll_body, [23], 999)["offset"] == 0
+      and rp.layers_scroll_layout((72, 10, 280, 1000), filtered, 999)["max_offset"] == 0
+      and rp.layers_scroll_layout(scroll_body, filtered, -9)["offset"] == 0)
+short_scroll = rp.layers_scroll_layout((72, 0, 280, 40), [7, 19], 999)
+check("short body removes search but still scrolls through full26 rows in a 16px viewport",
+      short_scroll["search"] is None and short_scroll["max_offset"] == 36
+      and short_scroll["cells"] == ((19, 72, 0, 280, 26),)
+      and short_scroll["hit_cells"] == ((19, 72, 0, 280, 16),)
+      and rp.layers_scroll_hit(80, 8, short_scroll) == (19, 0))
+empty = rp.layers_scroll_layout(scroll_body, [], 999)
+check("empty filter result has no phantom rows or stale offset",
+      empty["cells"] == empty["hit_cells"] == () and empty["total"] == 0
+      and empty["offset"] == empty["max_offset"] == empty["content_extent"] == 0)
+check("zero-width and no-row-height viewports contain no hittable rows",
+      all(rp.layers_scroll_layout(box, filtered, 999)["cells"] == () for box in
+          ((72, 0, 72, 400), (72, 0, 280, 24), (72, 0, 280, 0))))
+check("exact-fit viewport has zero scroll; one pixel less has one pixel scroll",
+      rp.layers_scroll_layout((72, 0, 280, 140), range(3))["max_offset"] == 0
+      and rp.layers_scroll_layout((72, 0, 280, 139), range(3))["max_offset"] == 1)
+check("supplied row height supports scaled host coordinates without changing defaults",
+      rp.layers_scroll_layout(scroll_body, [7, 11], row_h=52)["content_extent"] == 104
+      and rp.ROW_H == 26)
+try:
+    rp.layers_scroll_layout(scroll_body, filtered, row_h=0)
+except ValueError:
+    check("zero row height rejected instead of losing rows", True)
+else:
+    check("zero row height rejected instead of losing rows", False)
 
 print(f"\n{checks - len(failures)}/{checks} checks passed")
 if failures:

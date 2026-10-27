@@ -284,7 +284,7 @@ def sweep1(rail, section, style="Freeform", up=None, stations=None):
         if exact is not None:
             return exact
     sections = sweep1_sections(rail, section, style=style, up=up, stations=stations)
-    return _bridge().loft_brep(sections, style="Smooth")
+    return _bridge().loft_brep(sections, style="Smooth", align=False)
 
 
 def _sweep1_occt(rail, section, style, up):
@@ -499,4 +499,4 @@ def sweep2(rail_a, rail_b, section, stations=None, maintain_height=False,
     # Sweep2 now has an OCCT master and booleans exactly. OCCT has no two-rail sweep that
     # SCALES the section to span the rails (MakePipeShell's auxiliary spine only orients),
     # so the geometry stays this construction.
-    return _bridge().loft_brep(sections, style="Smooth")
+    return _bridge().loft_brep(sections, style="Smooth", align=False)

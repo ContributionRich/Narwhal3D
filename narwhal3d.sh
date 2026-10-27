@@ -211,6 +211,7 @@ fi
 # The patched runtime withholds its first presented frame until the complete Narwhal
 # layout signals readiness. Stock fallback runtimes ignore these environment values.
 export NARWHAL3D_DEFER_FIRST_PRESENT=1
+export NARWHAL3D_STATUSBAR_HEIGHT=37
 unset NARWHAL3D_UI_READY || true
 unset NARWHAL3D_PRESENT_WATCHDOG || true
 

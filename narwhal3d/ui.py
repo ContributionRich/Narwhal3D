@@ -49,6 +49,13 @@ from . import bugreport
 from . import ai_assistant
 from . import ai_transport
 from . import textfield
+from . import glyphs
+from . import shell_popup
+from . import shell_input
+from . import grid_render
+from . import theme_bindings
+from . import preferences
+from . import edge_handles
 from . import sessionlog
 from . import uiscale
 from . import alias_table
@@ -110,6 +117,7 @@ from . import gumball
 # chip are the same arithmetic.
 from . import views
 from . import viewport_menu_data
+from . import design
 from . import rightpanel
 from .object_properties import ObjectProperties
 from .views import (
@@ -120,16 +128,16 @@ from .views import (
 
 # Label text for the pane corner. Dark like the wireframe, a touch lighter
 # than the selection colour so it reads on the near-white viewport.
-LABEL_COLOR = (0.16, 0.16, 0.16, 1.0)
+LABEL_COLOR = design.rgb01(design.VIEWPORT_TEXT)
 LABEL_FONT_SIZE = 13.0
-LABEL_PAD = 8
+LABEL_PAD = views.TITLE_LABEL_PAD   # chip inset + chip padding (design reference)
 
 # The dynamic command preview's line colour. the reference CAD application draws the in-progress
 # curve in the layer/draw colour, which on the default layer is black; a slightly
 # lifted near-black reads clearly against the measured viewport grey
 # (157,163,170) without looking like finished geometry. `gpu` draws are NOT
 # sRGB-encoded (see views.gpu_rgba), so this is a plain byte ratio.
-PREVIEW_COLOR = (0.1, 0.1, 0.1, 1.0)
+PREVIEW_COLOR = design.rgb01(design.PREVIEW)
 
 # The object-snap marker is a small constant-size box with the snap's name beside it.
 # Its saturated application-defined colour remains legible against the measured
@@ -151,20 +159,22 @@ SNAP_LABEL_FONT_SIZE = 12.0
 # its highest multisample mode; use it globally for the reference CAD application's smooth object edges.
 VIEWPORT_AA = "32"
 
-CMD_BG = (1.0, 1.0, 1.0, 1.0)            # command area: pure white (measured 255,255,255)
-CMD_TEXT = (0.12, 0.12, 0.12, 1.0)       # current input / prompt (dark, reads on white)
-CMD_HISTORY = (0.35, 0.35, 0.36, 1.0)    # history lines (medium gray on white)
-CMD_CURSOR = (0.85, 0.25, 0.15, 1.0)     # caret (the reference CAD application-ish red)
+CMD_BG = design.rgb01(design.COMMAND_FRAME)  # around the command box
+CMD_BOX_BG = design.rgb01(design.CONSOLE_BG)
+CMD_BOX_BORDER = design.rgb01(design.CONSOLE_BORDER)
+CMD_TEXT = design.rgb01(design.PROMPT)
+CMD_HISTORY = design.rgb01(design.CONSOLE_TEXT)
+CMD_CURSOR = design.rgb01(design.CONSOLE_INPUT)     # caret (the reference CAD application-ish red)
 # command-line options are clickable buttons in the reference CAD application, so they are drawn in
 # a link-like blue to say so, and the autocomplete candidate list needs its own
 # colours. The first candidate is the one Enter/Tab completes to, so it is
 # highlighted the way the reference CAD application highlights the selected entry.
-CMD_OPTION = (0.05, 0.26, 0.63, 1.0)     # option text: clickable (blue)
-CMD_OPTION_KEY = (0.80, 0.30, 0.00, 1.0)  # option activation letter: amber (~231,149,0 sRGB on the white bar)
+CMD_OPTION = design.rgb01(design.ACCENT)      # option text: clickable (light accent on dark)
+CMD_OPTION_KEY = design.rgb01(design.PROMPT)  # option activation letter: amber on dark
 CMD_COMPLETION = (0.12, 0.12, 0.12, 1.0)  # candidate command name
 CMD_COMPLETION_SEL = (1.0, 1.0, 1.0, 1.0)  # the selected candidate's text
-CMD_COMPLETION_HL = (0.16, 0.38, 0.75, 1.0)  # the selected candidate's bar
-CMD_COMPLETION_BG = (0.93, 0.94, 0.96, 1.0)  # the candidate list's backdrop
+CMD_COMPLETION_HL = design.rgb01(design.ACCENT)  # the selected candidate's bar
+CMD_COMPLETION_BG = design.rgb01(design.MENU_BG)  # the candidate list's backdrop
 # ---------------------------------------------------------------------------
 # Compatibility viewport palette: a MEDIUM BLUE-GREY viewport --
 # NOT near-white -- with a very low-contrast grid (minor lines only ~10/255
@@ -183,11 +193,12 @@ CMD_COMPLETION_BG = (0.93, 0.94, 0.96, 1.0)  # the candidate list's backdrop
 # NOTE the arity: in this Blender build `grid`/`grid_major` are RGBA (4-tuple)
 # but `object_selected`/`object_active`/`wire` are RGB (3-tuple). Assigning a
 # 4-tuple to an RGB property raises, so each constant matches its target.
-VIEWPORT_BG = (0.337, 0.366, 0.402, 1.0) # measured (157,163,170) sRGB, linear
-GRID_COLOR = (0.292, 0.318, 0.352, 1.0)  # measured (147,153,160) sRGB, linear -- subtle
-GRID_MAJOR = (0.220, 0.238, 0.262, 1.0)  # measured (129,134,140) sRGB, linear
+VIEWPORT_BG = design.linear(design.VIEWPORT_BG)  # dark design surface, linear
+GRID_COLOR = design.linear(design.GRID_MINOR)
+GRID_MAJOR = design.linear(design.GRID_MAJOR)
 SELECT_COLOR = (1.0, 0.85, 0.0)          # the reference CAD application's yellow selection highlight (RGB)
-WIRE_COLOR = (0.0, 0.0, 0.0)             # black wireframes (RGB)
+WIRE_COLOR = design.rgb01(design.WIRE)[:3]   # gpu-drawn curves: raw byte ratio
+WIRE_THEME = design.linear(design.WIRE)[:3]  # Blender's colour-managed wire theme
 
 # Reference-only world-axis colours: X is muted red (150,75,75), Y is muted green
 # (75,150,75). Blender's `view_3d` theme exposes no per-axis colour property, only
@@ -247,6 +258,53 @@ def _draw_rect(shader, x0, y0, x1, y1, color):
     batch.draw(shader)
 
 
+def _alpha_blend():
+    """Re-enable alpha blending; `blf.draw` turns it off, which draws icons on black."""
+    try:
+        import gpu
+        gpu.state.blend_set("ALPHA")
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _round_rect_tris(x0, y0, x1, y1, radius, segments=6):
+    """Triangles filling a rectangle with rounded corners (pure; testable)."""
+    import math
+    r = max(0.0, min(float(radius), (x1 - x0) / 2.0, (y1 - y0) / 2.0))
+    if r <= 0.0:
+        return [(x0, y0), (x1, y0), (x0, y1), (x1, y0), (x1, y1), (x0, y1)]
+    corners = ((x1 - r, y1 - r, 0.0), (x0 + r, y1 - r, 0.5 * math.pi),
+               (x0 + r, y0 + r, math.pi), (x1 - r, y0 + r, 1.5 * math.pi))
+    outline = []
+    for cx, cy, start in corners:
+        for k in range(segments + 1):
+            a = start + 0.5 * math.pi * k / segments
+            outline.append((cx + r * math.cos(a), cy + r * math.sin(a)))
+    centre = ((x0 + x1) / 2.0, (y0 + y1) / 2.0)
+    tris = []
+    for k, p in enumerate(outline):
+        tris += [centre, p, outline[(k + 1) % len(outline)]]
+    return tris
+
+
+def _draw_round_rect(shader, x0, y0, x1, y1, radius, color, border=None, border_width=1.0):
+    """Fill a rounded rectangle; with `border`, a hairline frame of that colour."""
+    try:
+        from gpu_extras.batch import batch_for_shader
+    except Exception:  # noqa: BLE001
+        return
+    if border is not None:
+        batch = batch_for_shader(shader, "TRIS", {"pos": _round_rect_tris(
+            x0, y0, x1, y1, radius)})
+        shader.uniform_float("color", border)
+        batch.draw(shader)
+        x0, y0, x1, y1 = x0 + border_width, y0 + border_width, x1 - border_width, y1 - border_width
+        radius = max(0.0, radius - border_width)
+    batch = batch_for_shader(shader, "TRIS", {"pos": _round_rect_tris(x0, y0, x1, y1, radius)})
+    shader.uniform_float("color", color)
+    batch.draw(shader)
+
+
 def _draw_rects(shader, rects, color):
     """`_draw_rect` for MANY rectangles of one colour, in ONE batch. Same pixels as
     drawing them one by one (they are all the same colour, so their order among
@@ -271,7 +329,8 @@ def _draw_text(x, y, text, size=13.0, color=(0, 0, 0, 1), font_id=_DEFAULT_FONT_
 
     blf.size(font_id, size)
     blf.color(font_id, *color)
-    blf.position(font_id, x, y, 0)
+    # A fractional baseline resamples glyph coverage and softens stationary chrome.
+    blf.position(font_id, round(x), round(y), 0)
     blf.draw(font_id, text)
 
 
@@ -363,17 +422,19 @@ def region_toggle_chips_suppressed():
     return not apps.show_regions_visibility_toggle
 
 
-def apply_narwhal_theme():
+def apply_narwhal_theme(preserve_modes=False):
     """Make the viewport look like the reference CAD application's default light scene.
 
     Every attribute is set independently and reported on failure, so a missing or
     re-typed attribute on some Blender build can neither break startup nor silently
     skip the rest of the theme.
     """
+    theme_bindings.refresh(_sys.modules[__name__], views)
     try:
         bpy.context.preferences.system.viewport_aa = VIEWPORT_AA
     except Exception as e:  # noqa: BLE001
         print(f"[narwhal3d] could not set {VIEWPORT_AA}-sample viewport anti-aliasing: {e!r}")
+    apply_menu_theme()
     try:
         v3d = bpy.context.preferences.themes[0].view_3d
     except Exception:  # noqa: BLE001
@@ -387,7 +448,7 @@ def apply_narwhal_theme():
     _set_color(v3d, "grid_major", GRID_MAJOR)
     _set_color(v3d, "object_selected", SELECT_COLOR)
     _set_color(v3d, "object_active", SELECT_COLOR)
-    _set_color(v3d, "wire", WIRE_COLOR)
+    _set_color(v3d, "wire", WIRE_THEME)
 
     # The 3D view background. Two independent mechanisms have to agree:
     # * the THEME gradient (used when shading.background_type == 'THEME')
@@ -410,7 +471,8 @@ def apply_narwhal_theme():
         sp = next((s for s in area.spaces if s.type == "VIEW_3D"), None)
         if sp is None:
             continue
-        _set_attr(sp.shading, "type", "SOLID")
+        if not preserve_modes:
+            _set_attr(sp.shading, "type", "SOLID")
         _set_attr(sp.shading, "background_type", "VIEWPORT")
         # 3 floats, NOT 4 -- passing VIEWPORT_BG whole raises ValueError
         _set_attr(sp.shading, "background_color", VIEWPORT_BG[:3])
@@ -426,6 +488,61 @@ def apply_narwhal_theme():
         _set_attr(sp.overlay, "show_axis_y", False)
         _set_attr(sp.overlay, "show_axis_z", False)
         _set_attr(sp.overlay, "show_object_origins", False)
+
+
+def _theme_set(obj, name, value):
+    """Write one theme property, matching a colour's length to the property's own.
+    Returns 1 when written, 0 (and a log line) when this build refuses it."""
+    try:
+        current = getattr(obj, name)
+        if isinstance(value, tuple) and hasattr(current, "__len__"):
+            value = tuple(value[:len(current)]) + tuple(current[len(value):])
+        setattr(obj, name, value)
+        return 1
+    except Exception as e:  # noqa: BLE001
+        print(f"[narwhal3d] theme: could not set {name} = {value!r}: {e}")
+        return 0
+
+
+def apply_menu_theme():
+    """Light window chrome: the menu bar, its drop-downs and every popup menu use the
+    measured light palette (`views.menu_theme`) instead of Blender's dark widgets.
+    Returns how many theme properties were written."""
+    try:
+        theme = bpy.context.preferences.themes[0]
+        widgets = theme.user_interface
+    except Exception:  # noqa: BLE001
+        return 0
+    written = 0
+    for widget_name, values in views.menu_theme().items():
+        widget = getattr(widgets, widget_name, None)
+        if widget is None:
+            print(f"[narwhal3d] theme widget {widget_name} is missing; menus keep its default")
+            continue
+        for prop, value in values.items():
+            written += _theme_set(widget, prop, value)
+    # A softer drop shadow than Blender's, closer to a flat desktop menu.
+    written += _theme_set(widgets, "menu_shadow_fac", 0.25)
+    written += _theme_set(widgets, "menu_shadow_width", 4)
+    # Editor headers/backgrounds and the gaps between panels (the design's darkest layer,
+    # which frames each rounded viewport).
+    for editor, (colour, text, strong) in design.space_colours().items():
+        space = getattr(getattr(theme, editor, None), "space", None)
+        if space is None:
+            continue
+        for prop in ("header", "back"):
+            if hasattr(space, prop):
+                written += _theme_set(space, prop, design.rgb01(colour))
+        for prop in ("text", "header_text", "title"):
+            if hasattr(space, prop):
+                written += _theme_set(space, prop, design.rgb01(text))
+        for prop in ("text_hi", "header_text_hi"):
+            if hasattr(space, prop):
+                written += _theme_set(space, prop, design.rgb01(strong))
+    for prop in ("editor_border", "editor_outline"):
+        if hasattr(widgets, prop):
+            written += _theme_set(widgets, prop, design.rgb01(design.APP_BG))
+    return written
 
 
 def _find_bottom_strip():
@@ -727,6 +844,30 @@ def _build_viewports_headless():
     _finish_viewports(all_v)
 
 
+def _command_bar_px(scale=None):
+    """Height in window pixels carved for the top command area at the interface scale.
+
+    UI design: the 78 px category strip over the 65 px two-line console with its
+    5 px margins (the old icon-strip header is hidden).
+    """
+    s = uiscale.current() if scale is None else float(scale)
+    return round((design.CATEGORY_H + design.COMMAND_BOX_H
+                  + 2 * design.COMMAND_MARGIN) * s)
+
+
+def _top_strip_settled(strip_height, bar_px):
+    """True once the carved command-bar strip is visible, i.e. the split has reflowed.
+
+    Before the reflow, the shortest top VIEW_3D is still the whole unsplit viewport.
+    The limit must SCALE with the bar: it was a literal 200 px, which held at scale
+    1.0 for the old 95 px bar but not for the 153 px bar at scale 1.7 (260 px). MEASURED
+    on a 3360x1761 window (the welcome launch, which forces X11): step 5 never accepted
+    the strip, the bar stayed a viewport, and the dock bands and 2x2 split cascaded into
+    seven viewports -- "viewplanes everywhere".
+    """
+    return strip_height < bar_px * 1.5
+
+
 def _build_viewports_gui():
     """Build the the reference CAD application layout in the GUI: a TOP command bar above a balanced 2x2.
 
@@ -741,11 +882,11 @@ def _build_viewports_gui():
     state = {"tick": 0, "nones": 0, "wait": False, "retries": 0, "waits": 0,
              "top_ready": False, "left_ready": False, "right_ready": False,
              "complete": False}
-    # The command area is 95 logical pixels high; `uiscale` scales every carved size.
-    TARGET_BAR_PX = round(95 * uiscale.current())
+    # `uiscale` scales every carved size.
+    TARGET_BAR_PX = _command_bar_px()
     # Reserve 117 logical pixels for the left dock. Sidebar and Osnap each occupy
     # half its height, and the viewports begin to its right.
-    TARGET_BAND_PX = round(117 * uiscale.current())
+    TARGET_BAND_PX = round(design.LEFT_PANEL_W * uiscale.current())
     # The right dock is one full-height tabbed panel; see `rightpanel.py`.
     TARGET_RIGHT_BAND_PX = rightpanel.BAND_W
 
@@ -765,7 +906,8 @@ def _build_viewports_gui():
         return False
 
     def _main_view3d():
-        v3d = [a for a in bpy.context.screen.areas if a.type == "VIEW_3D"]
+        screen = bpy.context.screen
+        v3d = [a for a in screen.areas if a.type == "VIEW_3D"] if screen else []
         return max(v3d, key=lambda a: a.width * a.height) if v3d else None
 
     def _split(area, direction, factor=0.5):
@@ -864,7 +1006,7 @@ def _build_viewports_gui():
                     _split(m, "HORIZONTAL", factor)
             elif t == 5:
                 strip = _top_strip()
-                if strip is None or strip.height >= 200:
+                if strip is None or not _top_strip_settled(strip.height, TARGET_BAR_PX):
                     # the t=4 split has not reflowed yet. WAIT for it. This used
                     # to print "no thin top strip found to convert" and carry on, which
                     # left the command bar as a VIEW_3D -- the flat 0.4 s sleep was the
@@ -1022,6 +1164,7 @@ def _build_viewports_gui():
         # set on every intermediate tick so a concurrent setup_layout call cannot
         # start a second, over-splitting build).
         if t >= 12:
+            _restore_user_preferences()
             _viewports_in_progress = False
             # Release the native first-presentation gate only after every layout
             # step and final chrome update succeeded. A failed tick is left to the
@@ -1324,7 +1467,10 @@ def _click_command_bar(win_x, win_y):
     #  is chrome sitting on top of the bar: the history lines run underneath it, and
     #  in the reference CAD application clicking a tab switches toolbars rather than doing whatever the bar
     #  would have done.
-    tab = tbar.hit_tab_row(rx, ry, _toolbar_tab_boxes, _toolbar_tab_row_top)
+    # The row height MUST be passed: without it `hit_tab_row` falls back to the old
+    # 18 px text-tab row, so only the top quarter of each 78 px category button
+    # answered a click (MEASURED by real clicks: icon and label were dead).
+    tab = toolbar_tab_row_at(win_x, win_y)
     if tab is not None:
         if set_toolbar_tab(tab):
             app_state.log(f"{tab} toolbar")
@@ -1995,7 +2141,7 @@ def draw_command_bar(context=None):
         def fill(x0, y0, x1, y1, color):
             _draw_rect(shader, x0, y0, x1, y1, color)
 
-        # background
+        # background: the design's dark frame
         fill(0, 0, w, h, CMD_BG)
 
         line_h = cmdbar.LINE_H
@@ -2020,6 +2166,15 @@ def draw_command_bar(context=None):
         # blank white box with the tabs above it -- caught by the "command bar draws
         # its text" pixel gate, not by anything structural.
         tab_row_h = _draw_toolbar_tab_row(shader, w, h, font_size)
+        # The console: a rounded, framed two-line panel inset below the category row
+        # (UI design: 65 px, 5 px margins, 6 px radius).
+        gap = _fpx(design.COMMAND_MARGIN) * 2
+        box_top = h - tab_row_h - gap / 2.0
+        if box_top - gap / 2.0 > 8:
+            _draw_round_rect(shader, gap / 2.0, gap / 2.0, w - gap / 2.0, box_top,
+                             _fpx(design.RADIUS), CMD_BOX_BG, border=CMD_BOX_BORDER)
+        pad_x = _fpx(10) + gap / 2.0
+        pad_y = pad_y + int(gap / 2.0) + 2
 
         # The prompt is PINNED to the bottom line and history scrolls above it.
         # Previously history was allowed every line that fit and the prompt was
@@ -2027,8 +2182,15 @@ def draw_command_bar(context=None):
         # the prompt fell off the bottom and the user could not see what they
         # were typing. The arithmetic now lives in the bpy-free cmdbar module so
         # a headless test can cover it (draw handlers never run under -b).
-        prompt_y, history_ys, max_history = cmdbar.command_bar_layout(
-            int(h - tab_row_h), len(st.history), line_h, pad_y)
+        # Two real console lines, regardless of the amount of accumulated history.
+        console_h = max(0, box_top - gap / 2.0)
+        prompt_y = gap / 2.0 + console_h * 0.25 - _fpx(4)
+        history_ys = [gap / 2.0 + console_h * 0.75 - _fpx(4)]
+        max_history = 1
+        if _input_active:
+            shader.bind()
+            fill(gap, gap / 2.0 + 1, w - gap, gap / 2.0 + _fpx(2),
+                 design.rgb01(design.CONSOLE_FOCUS))
 
         # ---- autocomplete candidates ---------------------------
         # The list is NO LONGER DRAWN IN THE BAR. Verified: the bar's WINDOW region is
@@ -2086,24 +2248,11 @@ def draw_command_bar(context=None):
                     # the first letter (the O in "3Point") -- or the segment's
                     # first letter for value choices. The hit-box above still
                     # covers the WHOLE segment, so clicking is unchanged.
-                    split = opts.key_split(
-                        text_part, opt_keys.get(opt_name, text_part[:1]))
-                    if split is None:
-                        # every letter claimed: no key to show, whole segment blue
-                        _draw_text(x0, prompt_y, text_part, font_size, CMD_OPTION)
-                    else:
-                        before, key_char, after = split
-                        x = x0
-                        if before:
-                            _draw_text(x, prompt_y, before, font_size, CMD_OPTION)
-                            x += _text_width(before, font_size)
-                        _draw_text(x, prompt_y, key_char, font_size, CMD_OPTION_KEY)
-                        x += _text_width(key_char, font_size)
-                        if after:
-                            _draw_text(x, prompt_y, after, font_size, CMD_OPTION)
+                    ink = design.rgb01(design.ACCENT) if opt_name == _option_hover else CMD_TEXT
+                    _draw_text(x0, prompt_y, text_part, font_size, ink)
                     if opt_name in in_use:
                         shader.bind()
-                        fill(x0, prompt_y - 3, x0 + width, prompt_y - 1.5, CMD_OPTION)
+                        fill(x0, prompt_y - 3, x0 + width, prompt_y - 1.5, ink)
                 else:
                     _draw_text(x0, prompt_y, text_part, font_size, CMD_TEXT)
                 x += width
@@ -2116,14 +2265,25 @@ def draw_command_bar(context=None):
             x += _text_width(head, font_size)
         _set_option_boxes(boxes, prompt_y)
 
-        # the text the user has typed, after the prompt
-        if st.input_buffer:
-            _draw_text(x, prompt_y, st.input_buffer, font_size, CMD_TEXT)
-            x += _text_width(st.input_buffer, font_size)
+        # Editing and paint share one caret/selection, even when autocomplete or
+        # command execution replaces the input buffer externally.
+        field = shell_input.sync(st.input_buffer)
+        input_font = _fpx(design.CONSOLE_INPUT_FONT)
+        selected = field.selection()
+        if selected is not None:
+            left, right = selected
+            _alpha_blend()
+            shader.bind()
+            fill(x + _text_width(field.text[:left], input_font), prompt_y - 2,
+                 x + _text_width(field.text[:right], input_font), prompt_y + input_font,
+                 design.rgb01(design.ACCENT_SOFT))
+        _draw_text(x, prompt_y, field.text, input_font, design.rgb01(design.CONSOLE_INPUT))
+        x += _text_width(field.text[:field.caret], input_font)
 
         # caret (block after the input text), placed by real measured width
-        if cmd is not None or st.input_buffer:
-            fill(x + 1, prompt_y - 2, x + 5, prompt_y + line_h - 4, CMD_CURSOR)
+        if _input_active:
+            shader.bind()
+            fill(x + 1, prompt_y - 2, x + _fpx(1.5), prompt_y + _fpx(12), CMD_CURSOR)
     finally:
         # never leak blend state back into Blender's own drawing
         gpu.state.blend_set(prev_blend)
@@ -2395,20 +2555,28 @@ def draw_viewport_label(context=None):
 
         rect = views.title_rect(text_w, text_h, h, label_pad=LABEL_PAD)
         arrow_box = views.title_arrow_rect(rect)
-        if fill_rgba is not None:
-            # Keep the arrow visually attached to the active title instead of leaving
-            # a tiny triangle floating on the viewport background.
-            _draw_rect(shader, *views.title_menu_rect(rect), fill_rgba)
-        elif arrow_box is not None:
-            # Inactive titles have no chip fill, so their menu affordance needs its own
-            # quiet button plate to remain visible.
-            _draw_rect(shader, *arrow_box, views.gpu_rgba(views.TITLE_ARROW_FILL))
-        if arrow_box is not None:
-            border = views.gpu_rgba(views.TITLE_ARROW_BORDER)
-            _draw_rect(shader, arrow_box[0], arrow_box[1], arrow_box[0] + 1,
-                       arrow_box[3], border)
-            _draw_rect(shader, arrow_box[0], arrow_box[1], arrow_box[2],
-                       arrow_box[1] + 1, border)
+        # Design reference: every title is a rounded chip holding the label and its
+        # chevron; the active pane's chip is accent blue.
+        chip = views.title_menu_rect(rect)
+        if chip is not None and fill_rgba is not None:
+            _draw_round_rect(shader, *chip, _fpx(design.CHIP_RADIUS), fill_rgba)
+        # UI design: a maximize/restore button in the top-right corner.
+        corner = views.corner_button_rect(w, h, _fpx(views.CORNER_BUTTON),
+                                          _fpx(views.CORNER_INSET))
+        _draw_round_rect(shader, *corner, _fpx(design.CHIP_RADIUS),
+                         design.rgb01(design.TITLE_CHIP_BG))
+        try:
+            from gpu_extras.batch import batch_for_shader
+            name = 'v4-viewport-restore.png' if is_maximized() else 'v4-viewport-maximize.png'
+            _draw_shell_icon(name, corner, _fpx(design.VIEWPORT_CONTROL_ICON_SIZE))
+            shader.bind()
+        except Exception:  # noqa: BLE001
+            pass
+        # UI design: every viewport is outlined; the active one in the accent.
+        bw = max(1.0, _fpx(design.VIEWPORT_BORDER_W))
+        frame = design.rgb01(design.ACCENT_TITLE if is_active else design.VIEWPORT_BORDER)
+        _draw_rects(shader, [(0, 0, w, bw), (0, h - bw, w, h), (0, 0, bw, h), (w - bw, 0, w, h)],
+                    frame)
         _draw_text(LABEL_PAD, baseline_y, label, LABEL_FONT_SIZE, text_rgba)
         # Draw the drop-down arrow for every pane, active or not:
         # it advertises the viewport title menu, which every pane has. Same
@@ -2416,6 +2584,10 @@ def draw_viewport_label(context=None):
         # chip and the clickable box cannot drift apart.
         tri = views.title_arrow_triangle(rect)
         if tri is not None:
+            _alpha_blend()
+            shader.bind()
+            if _pane_key(area) == _title_arrow_hover_key:
+                _draw_round_rect(shader, *arrow_box, _fpx(design.CHIP_RADIUS), (1, 1, 1, .16))
             _draw_tri(shader, tri, text_rgba)
     finally:
         # never leak blend state back into Blender's own drawing
@@ -2482,6 +2654,7 @@ def set_viewport_tabs_visible(on):
     """Show or hide the strip. Returns the state in force."""
     global _tabs_visible
     _tabs_visible = bool(on)
+    _remember_preferences({'viewport_tabs': _tabs_visible})
     _tag_redraw_viewports()
     return _tabs_visible
 
@@ -2519,6 +2692,8 @@ def _tab_strip_geometry():
         name = pane_label(a)
         if name not in present:
             present.append(name)
+    if _maximized:
+        present = [state['label'] for state in _saved_pane_views if state is not None]
     return (x0, x1, y, views.tab_labels(present))
 
 
@@ -2646,8 +2821,7 @@ def viewport_tab_click(label):
             return "the Add Viewport menu could not open"
         return None
     if _maximized:
-        return (f"switching to {label} while a viewport is maximized is not "
-                f"implemented yet (double-click the title to restore first)")
+        return _switch_maximized_view(label)
     area = _pane_by_label(label)
     if area is None:
         return f"there is no {label} viewport"
@@ -2759,15 +2933,15 @@ def _osnap_panel_row_state():
 _left_band_key = None
 
 #: Caption for the combined left dock band.
-LEFT_BAND_CAPTION = "Sidebar"
+LEFT_BAND_CAPTION = ""   # the panel draws its own category header
 
 #: Color of the small triangle marking a linked toolbar.
-SIDEBAR_MARK_COLOR = (0.1, 0.1, 0.1, 1.0)
+SIDEBAR_MARK_COLOR = design.rgb01(design.TEXT_MUTED)
 #: Reuse the dock/tab grey when hovering a linked-toolbar cell.
-SIDEBAR_HOVER_COLOR = views.gpu_rgba(views.TAB_BAND_BG)
+SIDEBAR_HOVER_COLOR = design.rgb01(design.TOOL_HOVER)
 SIDEBAR_FLYOUT_HOVER_COLOR = views.gpu_rgba(views.TAB_ACTIVE_BG)
 SIDEBAR_FLYOUT_PRESSED_COLOR = views.gpu_rgba(views.TAB_BORDER)
-SIDEBAR_TOOLTIP_BG = (0.08, 0.08, 0.08, 0.94)
+SIDEBAR_TOOLTIP_BG = design.rgb01(design.BAR_BG, 0.97)
 SIDEBAR_TOOLTIP_BORDER = views.gpu_rgba(views.TAB_BORDER)
 SIDEBAR_TOOLTIP_TEXT = (0.95, 0.95, 0.95, 1.0)
 
@@ -2866,6 +3040,7 @@ def set_right_tab(index):
     if not (0 <= index < len(rightpanel.TABS)):
         return None
     _right_tab = index
+    _remember_preferences({'inspector': rightpanel.TABS[index].name})
     _tag_redraw_viewports()
     tab = rightpanel.TABS[index]
     if not tab.built:
@@ -2947,10 +3122,12 @@ def _draw_display_panel(shader, region, box):
         current = next(iter(unique)) if len(unique) == 1 else None
     active_view = next((name for name, _mode, active in rows if active), None)
     bg = views.gpu_rgba(views.LAYER_LIST_BG)
-    hover = views.gpu_rgba(views.TAB_BAND_BG)
     selected = views.gpu_rgba(views.TAB_ACTIVE_BG)
     border = views.gpu_rgba(views.TAB_BORDER)
-    ink = views.gpu_rgba(views.OSNAP_PANEL_TEXT)
+    ink = design.rgb01(design.TEXT)
+    active_ink = design.rgb01(design.TEXT_STRONG)
+    label_ink = design.rgb01(design.TEXT_MUTED)
+    font_size = _fpx(12)
 
     def paint(entries, selected_value):
         for _kind, value, x0, y0, x1, y1 in entries:
@@ -2965,15 +3142,17 @@ def _draw_display_panel(shader, region, box):
     paint(lay["scope"], _display_panel_scope)
     paint(lay["modes"], current)
     paint(lay["viewports"], active_view)
-    for _name, x0, y0, _x1, _y1 in lay["labels"]:
-        _draw_rect(shader, x0, y0, x0 + 3, y0 + 3, hover)
-    for name, x0, y0, _x1, _y1 in lay["labels"]:
-        _draw_text(x0, y0 + 3, name, 11, ink)
-    for _kind, value, x0, y0, _x1, _y1 in lay["scope"] + lay["modes"]:
-        _draw_text(x0 + 6, y0 + 7, value, 11, ink)
+    for name, x0, y0, x1, y1 in lay['labels']:
+        _draw_text(round(x0), round((y0 + y1) / 2 - font_size * .35),
+                   name, font_size, label_ink)
     by_name = {name: mode for name, mode, _active in rows}
-    for _kind, value, x0, y0, _x1, _y1 in lay["viewports"]:
-        _draw_text(x0 + 6, y0 + 7, f"{value} — {by_name.get(value) or '-'}", 11, ink)
+    active_values = {'scope': _display_panel_scope, 'mode': current, 'viewport': active_view}
+    for kind, value, x0, y0, x1, y1 in lay['scope'] + lay['modes'] + lay['viewports']:
+        text = f"{value} — {by_name.get(value) or '-'}" if kind == 'viewport' else value
+        pad = _fpx(7)
+        _draw_text(round(x0 + pad), round((y0 + y1) / 2 - font_size * .35),
+                   _clip_text(text, x1 - x0 - 2 * pad, font_size), font_size,
+                   active_ink if value == active_values[kind] else ink)
 
 
 def draw_right_band():
@@ -3009,6 +3188,11 @@ def draw_right_band():
     box = rightpanel.layout(region.width, region.height, title_h=0)
     _right_tab_boxes = [(region.x + x0, region.y + y0, region.x + x1, region.y + y1)
                         for x0, y0, x1, y1 in box["tabs"]]
+    # UI design: the panel carries its own title row (the band header is hidden).
+    bx0, by0, bx1, by1 = box["body"]
+    panel_title_h = _fpx(rightpanel.PANEL_TITLE_H) if CATEGORY_STRIP else 0
+    box["panel_title"] = (bx0, by1 - panel_title_h, bx1, by1)
+    box["body"] = (bx0, by0, bx1, by1 - panel_title_h)
 
     # re-assert each LAYER's On/Lock here, because this handler is
     # guaranteed to run AFTER anything that rebuilt the scene -- including
@@ -3032,20 +3216,15 @@ def draw_right_band():
                    views.gpu_rgba(views.OSNAP_PANEL_BG))
         # the tab strip sits on a DARKER ground than the panel -- that contrast is
         # what makes the active tab (painted in the panel's colour) read as selected
+        # UI design: a permanent rail on the inspector's left; the selected tab is
+        # a soft accent fill with a 3 px accent bar on its left edge.
         sx0, sy0, sx1, sy1 = box["strip"]
-        _draw_rect(shader, sx0, sy0, sx1, sy1, views.gpu_rgba(views.TAB_BAND_BG))
+        _draw_rect(shader, sx0, sy0, sx1, sy1, design.rgb01(design.RAIL_BG))
+        _draw_rect(shader, sx1 - 1, sy0, sx1, sy1, design.rgb01(design.BORDER))
         for i, (x0, y0, x1, y1) in enumerate(box["tabs"]):
             if i == _right_tab:
-                _draw_rect(shader, x0, y0, x1, y1,
-                           views.gpu_rgba(views.TAB_ACTIVE_BG))
-            else:
-                # a hairline between inactive tabs, so four of them are countable
-                _draw_rect(shader, x0 + 3, y0, x1 - 3, y0 + 1,
-                           views.gpu_rgba(views.TAB_BORDER))
-        # the band's own LEFT edge, so it reads as a dock and not as a gap. Mirror
-        # of the left band's right edge.
-        _draw_rect(shader, 0, 0, 1, region.height,
-                   views.gpu_rgba(views.OSNAP_PANEL_BORDER))
+                _draw_rect(shader, x0, y0, x1 - 1, y1, design.rgb01(design.ACCENT_SOFT))
+                _draw_rect(shader, x0, y0, x0 + _fpx(3), y1, design.rgb01(design.ACCENT))
     except Exception as e:  # noqa: BLE001
         print(f"[narwhal3d] right band draw failed: {e!r}")
     finally:
@@ -3064,6 +3243,10 @@ def draw_right_band():
         gpu.state.blend_set(prev2)
 
     _draw_right_band_text(box)
+    if box["panel_title"][3] > box["panel_title"][1]:
+        tx0, ty0, _tx1, _ty1 = box["panel_title"]
+        _draw_text(tx0 + _fpx(10), ty0 + _fpx(10), rightpanel.TABS[_right_tab].name,
+                   _fpx(13), design.rgb01(design.TEXT_STRONG))
 
     # The ACTIVE panel's body. Each branch owns and clears its own hit boxes.
     global _layer_rows, _layer_row_objs
@@ -3507,8 +3690,8 @@ def layer_panel_click(row_index, column_index):
     * **On / Off** -- "Controls global visibility of a layer."
     * **Lock / Unlock** -- "Controls the selectable state of the objects on a layer."
 
-    `Color` and `Material` report that they are not built rather than doing nothing:
-    the reference CAD application opens a colour picker and a material browser, and we have neither.
+    `Color` opens the desktop colour picker; `Menu` (the row's "more" button) opens
+    the layer context menu.
     """
     if not (0 <= row_index < len(_layer_row_objs)):
         return None
@@ -3542,16 +3725,18 @@ def layer_panel_click(row_index, column_index):
         from . import colordialog
 
         status, rgb = colordialog.ask_color(f"Layer color: {layer.name}",
-                                            tuple(layer.color or (0, 0, 0))[:3])
+                                            colordialog.layer_picker_initial(tuple(layer.color or (0, 0, 0))[:3]))
         if status == colordialog.UNAVAILABLE:
             return ("no colour picker is available (kdialog / zenity) -- the layer "
                     "colour cannot be chosen here yet")
         if status != colordialog.OK:
             return None
         return set_layer_color(layer, rgb)
-    elif name == "Material":
-        return (f"the layer {name} picker is not implemented yet "
-                f"({layer.name})")
+    elif name == "Menu":
+        # The row's "more" button opens the layer context menu, on RELEASE so it
+        # stays up as a persistent popup (the same rule as the sidebar flyouts).
+        _defer_menu(lambda n=layer.name: show_layer_menu(n))
+        return None
     else:
         return None
 
@@ -3913,16 +4098,20 @@ grid_settings = None
 _grid_batch_cache = {}
 #: sRGB of the minor / major lines -- the values the theme constants above were measured
 #: from (GRID_COLOR / GRID_MAJOR), passed to `gpu` as plain byte ratios (views.gpu_rgba).
-GRID_MINOR_RGB = (147, 153, 160)
-GRID_MAJOR_RGB = (129, 134, 140)
+GRID_MINOR_RGB = design.GRID_MINOR
+GRID_MAJOR_RGB = design.GRID_MAJOR
 #: Rendered viewport background. The grid multiplies it; see `draw_cplane_grid`.
-GRID_BG_RGB = (157, 163, 170)
+GRID_BG_RGB = design.VIEWPORT_BG
 
 
-def grid_multiplier(rgb, bg=GRID_BG_RGB):
-    """The MULTIPLY-blend factor that turns the background into `rgb`: rgb / bg, per
-    channel, capped at one because multiplying can only darken."""
-    return tuple(min(1.0, c / float(b)) for c, b in zip(rgb, bg)) + (1.0,)
+def grid_multiplier(rgb, bg=GRID_BG_RGB, blend=None):
+    """The blend colour that turns the background into `rgb` without hiding a curve that
+    crosses the grid. With MULTIPLY (a grid darker than the viewport, the light theme)
+    it is rgb / bg capped at one; with ADDITIVE (a lighter grid, the dark theme) it is
+    (rgb - bg) / 255 floored at zero. `blend` defaults to the active theme's."""
+    if (blend or design.grid_blend()) == "MULTIPLY":
+        return tuple(min(1.0, c / float(b)) for c, b in zip(rgb, bg)) + (1.0,)
+    return tuple(max(0.0, (c - b) / 255.0) for c, b in zip(rgb, bg)) + (1.0,)
 
 
 def _grid_settings_for_area(area):
@@ -3982,7 +4171,7 @@ def _grid_batches(plane, area=None):
     shader = _uniform_color_shader()
     segs = _grid.grid_segments(plane, s)
     colours = {"minor": GRID_MINOR_RGB, "major": GRID_MAJOR_RGB,
-               "xaxis": _grid.X_AXIS_RGB, "yaxis": _grid.Y_AXIS_RGB}
+               "xaxis": design.AXIS_X, "yaxis": design.AXIS_Y}
     batches = []
     for kind in ("minor", "major", "xaxis", "yaxis"):      # axes last, on top
         pts = [p for seg in segs[kind] for p in seg]
@@ -4016,37 +4205,9 @@ def draw_cplane_grid():
     try:
         import gpu
 
-        batches = _grid_batches(get_cplane(area), area)
-        shader = _uniform_color_shader()
-        inv = rv3d.view_matrix.inverted()
-        if rv3d.is_perspective:
-            away = (rv3d.view_location - inv.translation).normalized()
-        else:
-            away = -inv.col[2].xyz.normalized()            # into the screen
-        nudge = away * (1e-4 * max(rv3d.view_distance, 1e-3))
-        gpu.matrix.push()
-        gpu.matrix.translate(tuple(nudge))
-        # Verified (live-window checks, and a focused runtime check in plain Blender):
-        # Wireframe still writes the solids' FACE depth, which hid the grid inside a
-        # cylinder outline, so Wireframe skips the depth test.
-        see_through = getattr(space.shading, "type", "") == "WIREFRAME"
-        gpu.state.depth_test_set("ALWAYS" if see_through else "LESS_EQUAL")
-        gpu.state.depth_mask_set(False)
-        # Drawing the grid opaque after the scene paints over every edge and curve it
-        # crossed (most visibly in Wireframe), so they looked broken wherever the grid
-        # was. MULTIPLY by grid/background: on the background that IS the grid colour,
-        # on a black edge it is still black, on a coloured one a ~6 % darkening.
-        gpu.state.blend_set("MULTIPLY")
-        try:
-            shader.bind()
-            for batch, rgba in batches:
-                shader.uniform_float("color", rgba)
-                batch.draw(shader)
-        finally:
-            gpu.matrix.pop()
-            gpu.state.blend_set("NONE")
-            gpu.state.depth_test_set("NONE")
-            gpu.state.depth_mask_set(True)
+        grid_render.draw(get_cplane(area), _grid_settings_for_area(area),
+                         bpy.context.region, rv3d,
+                         see_through=getattr(space.shading, 'type', '') == 'WIREFRAME')
     except Exception as e:  # noqa: BLE001
         print(f"[narwhal3d] grid draw failed: {e!r}")
 
@@ -4929,98 +5090,237 @@ def _document_layers():
         return []
 
 
+#: The Layers panel's search field: its text and whether it has keyboard focus.
+_layer_search = {"field": None, "focus": False}
+#: Hit boxes recorded by the draw, in WINDOW coordinates.
+_layer_search_box = None
+_layer_menu_btn = None
+
+
+def _layer_search_field():
+    if _layer_search["field"] is None:
+        _layer_search["field"] = textfield.TextField("", multiline=False, max_chars=80)
+    return _layer_search["field"]
+
+
+def layer_search_text():
+    return _layer_search_field().text
+
+
+def layer_search_focused():
+    return bool(_layer_search["focus"])
+
+
+def layer_search_at(mouse_x, mouse_y):
+    b = _layer_search_box
+    return (b is not None and rightpanel.TABS[_right_tab].name == "Layers"
+            and b[0] <= mouse_x < b[2] and b[1] <= mouse_y < b[3])
+
+
+def layer_menu_button_at(mouse_x, mouse_y):
+    b = _layer_menu_btn
+    return (b is not None and rightpanel.TABS[_right_tab].name == "Layers"
+            and b[0] <= mouse_x < b[2] and b[1] <= mouse_y < b[3])
+
+
+def layer_search_focus(on):
+    """Give the search field the keyboard (True) or take it away. True if it changed."""
+    on = bool(on)
+    if on == _layer_search["focus"]:
+        return False
+    _layer_search["focus"] = on
+    _tag_redraw_bands()
+    return True
+
+
+def layer_search_key(kind, char="", shift=False):
+    """A key while the search field has focus. Returns "handled", or None when it has
+    no focus. Enter keeps the filter and releases the keyboard; Esc clears it."""
+    if not _layer_search["focus"]:
+        return None
+    f = _layer_search_field()
+    if kind == "enter":
+        layer_search_focus(False)
+        return "handled"
+    if kind == "esc":
+        f.set_text("")
+        layer_search_focus(False)
+        return "handled"
+    actions = {"back": f.backspace, "delete": f.delete, "select_all": f.select_all,
+               "left": lambda: f.move(-1, select=shift),
+               "right": lambda: f.move(1, select=shift),
+               "home": lambda: f.home(select=shift), "end": lambda: f.end(select=shift)}
+    if kind in actions:
+        actions[kind]()
+    elif kind in ("char", "paste"):
+        f.insert(char)
+    _tag_redraw_bands()
+    return "handled"
+
+
+def _draw_glyph(shader, tris, color):
+    """One `glyphs` triangle list in one colour."""
+    if not tris:
+        return
+    try:
+        from gpu_extras.batch import batch_for_shader
+    except Exception:  # noqa: BLE001
+        return
+    shader.bind()
+    shader.uniform_float("color", color)
+    batch_for_shader(shader, "TRIS", {"pos": tris}).draw(shader)
+
+
 def _draw_layers_panel(shader, region, box):
-    """Draw the Layers list in the right band's body.
+    """Draw the Layers panel in the right band's body (UI design).
 
-    Rows come from the document's live `LayerTree`; the current layer is marked with a
-    bold tick, and On/Lock/Color show per-layer state. Clicking is handled by
-    `layer_panel_click`.
-
-    The search box and two 16 px toolbar rows are deliberately omitted: drawing a field
-    that cannot accept input or eleven inert buttons would misrepresent unsupported
-    controls as implemented.
+    Title row: "+" (new layer) and "..." (the current layer's context menu). Below it a
+    search field that filters the rows, then the list: name, current tick, colour
+    swatch, eye (on/off), padlock and a per-row "..." menu. The current layer's row is
+    filled with the soft accent. Rows come from the document's live `LayerTree`;
+    clicks go through `layer_panel_click`, against the filtered rows actually drawn.
     """
-    global _layer_rows, _layer_row_objs
+    global _layer_rows, _layer_row_objs, _layer_new_btn, _layer_menu_btn, _layer_search_box
 
     import gpu
 
-    layers = _document_layers()
-    # a "New Layer" button along the bottom of the panel (Verified, the reference CAD application documentation:
-    # "New Layer: Click to create a new layer"); the list gets the rest of the body
-    bx0, by0, bx1, by1 = box["body"]
-    bh = 22
-    global _layer_new_btn
-    _layer_new_btn = (region.x + bx0 + 4, region.y + by0 + 4,
-                      region.x + bx1 - 4, region.y + by0 + 4 + bh)
-    lay = rightpanel.list_layout((bx0, by0 + bh + 8, bx1, by1), len(layers))
-    rows = lay["rows"]
+    all_layers = _document_layers()
+    query = layer_search_text()
+    keep = rightpanel.filter_layer_indices([L.name for L in all_layers], query)
+    layers = [all_layers[i] for i in keep]
+
+    # "+" and "..." on the panel's title row
+    tbx = box.get("panel_title")
+    if tbx is not None and tbx[3] > tbx[1]:
+        tb = rightpanel.title_buttons(tbx)
+        _layer_new_btn = tuple(v + (region.x if k % 2 == 0 else region.y)
+                               for k, v in enumerate(tb["new"]))
+        _layer_menu_btn = tuple(v + (region.x if k % 2 == 0 else region.y)
+                                for k, v in enumerate(tb["menu"]))
+    else:
+        tb = None
+        _layer_new_btn = _layer_menu_btn = None
+
+    global _layer_scroll, _layer_scroll_layout
+    lay = rightpanel.layers_scroll_layout(box['body'], keep, _layer_scroll)
+    _layer_scroll = lay['offset']
+    rows = [entry[1:] for entry in lay['cells']]
     _layer_rows = [(region.x + x0, region.y + y0, region.x + x1, region.y + y1)
-                   for x0, y0, x1, y1 in rows]
-    _layer_row_objs = layers[:len(rows)]
+                   for i, x0, y0, x1, y1 in lay['hit_cells']]
+    _layer_row_objs = [all_layers[entry[0]] for entry in lay['cells']]
+    lay['rows'] = rows
+    _layer_scroll_layout = dict(lay, viewport=(region.x+lay['viewport'][0], region.y+lay['viewport'][1],
+                                              region.x+lay['viewport'][2], region.y+lay['viewport'][3]))
+    search = lay["search"]
+    _layer_search_box = (None if search is None else
+                         (region.x + search[0], region.y + search[1],
+                          region.x + search[2], region.y + search[3]))
 
     current = getattr(getattr(app_state, "layers", None), "current", None)
+    ink = design.rgb01(design.TEXT)
+    muted = design.rgb01(design.TEXT_MUTED)
+    faint = design.rgb01(design.TEXT_DISABLED)
+    accent = design.rgb01(design.ACCENT)
+    border = design.rgb01(design.BORDER)
+    glyph = _fpx(12.0)
 
     prev = gpu.state.blend_get()
     gpu.state.blend_set("ALPHA")
     try:
         shader.bind()
         lx0, ly0, lx1, ly1 = lay["list"]
-        _draw_rect(shader, lx0, ly0, lx1, ly1,
-                   views.gpu_rgba(views.LAYER_LIST_BG))
-        grid = views.gpu_rgba(views.LAYER_GRID)
-        # Batched by colour (`_draw_rects`): Verified (a focused runtime check) this
-        # panel issued ~1,330 one-rectangle batches -- mostly the dotted separators --
-        # 13-18 ms of EVERY frame that repaints the band, i.e. every Gumball move.
-        # Layering is kept: grid lines, then the swatch fills, then their outlines.
-        lines = []
-        # header's bottom rule
+        _draw_rect(shader, lx0, ly0, lx1, ly1, design.rgb01(design.LIST_BG))
         hx0, hy0, hx1, _hy1 = lay["header"]
-        lines.append((hx0, hy0, hx1, hy0 + 1))
-        # column dividers, spanning header + rows
-        for dx, dy0, dy1 in lay["dividers"]:
-            lines.append((dx, dy0, dx + 1, dy1))
-        fills, outlines = {}, []
-        # per-row furniture
-        for row, layer in zip(rows, _layer_row_objs):
+        _draw_rect(shader, hx0, hy0, hx1, hy0 + 1, border)
+        if tb is not None:
+            for key, b in tb.items():
+                cx, cy = (b[0] + b[2]) / 2.0, (b[1] + b[3]) / 2.0
+                tris = (glyphs.plus(cx, cy, glyph * 0.85) if key == "new"
+                        else glyphs.ellipsis(cx, cy, glyph))
+                _draw_glyph(shader, tris, ink)
+        if search is not None:
+            sx0, sy0, sx1, sy1 = search
+            focus = layer_search_focused()
+            shader.bind()
+            _draw_round_rect(shader, sx0, sy0, sx1, sy1, _fpx(design.CHIP_RADIUS),
+                             design.rgb01(design.MENU_BG if focus else design.FIELD_BG),
+                             border=accent if focus else border)
+            _draw_glyph(shader, glyphs.magnifier(sx0 + _fpx(13), (sy0 + sy1) / 2.0,
+                                                 glyph * 0.9), muted)
+        # header glyphs over the eye and padlock columns
+        for col, maker in (("On", lambda cx, cy: glyphs.eye(cx, cy, glyph)),
+                           ("Lock", lambda cx, cy: glyphs.lock(cx, cy, glyph * 0.9))):
+            i = rightpanel.COLUMNS.index(col)
+            c0, c1 = rightpanel.column_x(i, hx1 - hx0)
+            _draw_glyph(shader, maker(hx0 + (c0 + c1) / 2.0, (hy0 + lay["header"][3]) / 2.0),
+                        muted)
+        swatches = []
+        row_clip = _layer_scroll_layout['viewport']
+        old_scissor = gpu.state.scissor_get()
+        old_test = True
+        gpu.state.scissor_test_set(True)
+        gpu.state.scissor_set(int(row_clip[0]-region.x), int(row_clip[1]-region.y), int(row_clip[2]-row_clip[0]),
+                              max(0, int(row_clip[3]-row_clip[1])))
+        for row_index, (row, layer) in enumerate(zip(rows, _layer_row_objs)):
             rx0, ry0, rx1, ry1 = row
-            # Draw the dotted separator under each row
-            # on the control-point display and the reference CAD application uses it here too (Verified: a
-            # 1 px line at (222,226,233) covering ~29 % of the width, i.e. dotted)
-            for dx in range(int(rx0), int(rx1), 3):
-                lines.append((dx, ry0, dx + 1, ry0 + 1))
-            # COLOR swatch: a filled square, which is what the screenshot shows
-            cx0, cy0, cx1, cy1 = rightpanel.cell(row, rightpanel.COLUMNS.index("Color"))
-            pad = 4
-            if cx1 - cx0 > pad * 2:
-                r, g, b = [c / 255.0 for c in (layer.color or (0, 0, 0))[:3]]
-                fills.setdefault((r, g, b, 1.0), []).append(
-                    (cx0 + pad, cy0 + pad, cx1 - pad, cy1 - pad))
-                # an outline, so a WHITE layer colour is still visible on white
-                outlines += [(cx0 + pad, cy0 + pad, cx1 - pad, cy0 + pad + 1),
-                             (cx0 + pad, cy1 - pad - 1, cx1 - pad, cy1 - pad),
-                             (cx0 + pad, cy0 + pad, cx0 + pad + 1, cy1 - pad),
-                             (cx1 - pad - 1, cy0 + pad, cx1 - pad, cy1 - pad)]
-        _draw_rects(shader, lines, grid)
-        for rgba, rects in fills.items():
-            _draw_rects(shader, rects, rgba)
-        _draw_rects(shader, outlines, grid)
-        # the New Layer button
-        nb = _layer_new_btn
-        shader.bind()
-        _draw_rect(shader, nb[0] - region.x, nb[1] - region.y, nb[2] - region.x,
-                   nb[3] - region.y, (0.86, 0.86, 0.88, 1.0))
+            if layer is current or row_index == _layer_hover:
+                shader.bind()
+                _draw_round_rect(shader, rx0 + _fpx(2), ry0 + 1, rx1 - _fpx(2), ry1 - 1,
+                                 _fpx(design.CHIP_RADIUS), design.rgb01(
+                                     design.ACCENT_SOFT if layer is current else design.LAYER_HOVER))
+
+            def centre(col, _row=row):
+                c = rightpanel.cell(_row, rightpanel.COLUMNS.index(col))
+                return (c[0] + c[2]) / 2.0, (c[1] + c[3]) / 2.0, c
+            if layer is current:
+                cx, cy, _c = centre("Current")
+                _draw_glyph(shader, glyphs.tick(cx, cy, glyph * 0.8), ink)
+            cx, cy, c = centre("Color")
+            half = min(_fpx(6.0), (c[2] - c[0]) / 2.0 - 2)
+            if half > 1:
+                swatches.append(((cx - half, cy - half, cx + half, cy + half),
+                                 tuple(v / 255.0 for v in (layer.color or (0, 0, 0))[:3])))
+            cx, cy, _c = centre("On")
+            _draw_glyph(shader, glyphs.eye(cx, cy, glyph, open_=layer.visible),
+                        ink if layer.visible else faint)
+            cx, cy, _c = centre("Lock")
+            _draw_glyph(shader, glyphs.lock(cx, cy, glyph * 0.9, locked=layer.locked),
+                        ink if layer.locked else faint)
+            cx, cy, _c = centre("Menu")
+            _draw_glyph(shader, glyphs.ellipsis(cx, cy, glyph * 0.9), muted)
+        for (x0, y0, x1, y1), rgb in swatches:
+            shader.bind()
+            # an outline, so a white layer colour is still visible on the light list
+            _draw_round_rect(shader, x0, y0, x1, y1, _fpx(2.0), (*rgb, 1.0),
+                             border=design.rgb01(design.BORDER_STRONG))
     except Exception as e:  # noqa: BLE001
         print(f"[narwhal3d] layers panel draw failed: {e!r}")
     finally:
+        if 'old_scissor' in locals():
+            gpu.state.scissor_set(*old_scissor)
+            gpu.state.scissor_test_set(old_test)
         gpu.state.blend_set(prev)
-    try:
-        nb = _layer_new_btn
-        label = "+  New Layer"
-        _draw_text(nb[0] - region.x + ((nb[2] - nb[0]) - _text_width(label, _fpx(11))) / 2,
-                   nb[1] - region.y + _fpx(6), label, _fpx(11), (0.1, 0.1, 0.1, 1))
-    except Exception:  # noqa: BLE001
-        pass
 
+    if search is not None:
+        sx0, sy0, sx1, sy1 = search
+        text = layer_search_text()
+        tx = sx0 + _fpx(24)
+        ty = (sy0 + sy1) / 2.0 - _fpx(4)
+        if text or layer_search_focused():
+            _draw_text(tx, ty, _clip_text(text, sx1 - tx - _fpx(6), _fpx(11)), _fpx(11), ink)
+            if layer_search_focused():
+                f = _layer_search_field()
+                guard = _text_width("|", _fpx(11))
+                caret = tx + ((_text_width(f.text[:f.caret] + "|", _fpx(11)) - guard)
+                              if f.caret else 0.0)
+                _alpha_blend()
+                shader.bind()
+                _draw_rect(shader, caret, sy0 + _fpx(6), caret + 1.5, sy1 - _fpx(6), ink)
+        else:
+            _draw_text(tx, ty, "Search layers...", _fpx(11), muted)
+    if query and not layers:
+        _draw_text(lay["header"][0] + _fpx(8), lay["header"][1] - _fpx(18),
+                   "No layer matches", _fpx(11), muted)
     _draw_layers_panel_text(lay, rows, current)
     _draw_layer_name_edit(shader, rows)
 
@@ -5062,69 +5362,46 @@ def _draw_layer_name_edit(shader, rows):
 
 
 def _draw_layers_panel_text(lay, rows, current):
-    """The Layers list's glyphs: column headings, names, ticks and state marks."""
-    try:
-        import blf
-    except Exception:  # noqa: BLE001
-        return
-    fid = 0
-    ink = [c / 255.0 for c in views.OSNAP_PANEL_TEXT]
-    dim = [c / 255.0 for c in views.LAYER_DIM]
-
-    # --- column headings ---------------------------------------------------
-    blf.size(fid, _fpx(11))
-    blf.color(fid, *ink, 1.0)
-    hx0, hy0, hx1, hy1 = lay["header"]
-    for i, name in enumerate(rightpanel.COLUMNS):
-        cx0, cx1 = rightpanel.column_x(i, hx1 - hx0)
-        if hx0 + cx0 >= hx1:
-            break
-        # the reference CAD application heads the name column "Layer", not "Name" (Verified: the
-        # screenshot's header reads "Layer"), and abbreviates the narrow ones to
-        # whatever fits -- which at 20 px is one letter.
-        label = "Layer" if i == 0 else name[0]
-        blf.position(fid, hx0 + cx0 + (4 if i == 0 else 6), hy0 + 7, 0)
-        blf.draw(fid, label)
-
-    # --- one line per layer ------------------------------------------------
+    """The Layers list's text: the Name heading and each layer's name (the current
+    layer's in strong ink, the others in normal ink)."""
+    hx0, hy0, _hx1, hy1 = lay["header"]
+    _draw_text(hx0 + _fpx(8), (hy0 + hy1) / 2.0 - _fpx(4), "Name", _fpx(11),
+               design.rgb01(design.TEXT_MUTED))
+    name_w = None
     for row, layer in zip(rows, _layer_row_objs):
         rx0, ry0, rx1, ry1 = row
+        if ry0 < lay['viewport'][1] or ry1 > lay['viewport'][3]:
+            continue
+        if name_w is None:
+            c = rightpanel.cell(row, 0)
+            name_w = c[2] - c[0] - _fpx(12)
         is_current = layer is current
-        # NAME. the reference CAD application draws the current layer's name BOLD (Verified: "Default" is
-        # bold in the screenshot). blf has no bold face here, so the current layer
-        # is drawn in full ink and the others dimmer -- application-defined, and flagged: it is a
-        # weight difference rendered as a contrast difference.
-        blf.size(fid, _fpx(11))
-        blf.color(fid, *(ink if is_current else [c * 0.75 for c in ink]), 1.0)
-        name = layer.name or ""
-        while name and blf.dimensions(fid, name)[0] > rightpanel.NAME_COL_W - 10:
-            name = name[:-1]
-        blf.position(fid, rx0 + 5, ry0 + 6, 0)
-        blf.draw(fid, name)
+        _draw_text(rx0 + _fpx(8), (ry0 + ry1) / 2.0 - _fpx(4),
+                   _clip_text(layer.name or "", name_w, _fpx(11)), _fpx(11),
+                   design.rgb01(design.TEXT_STRONG if is_current else design.TEXT))
 
-        def _mark(col_name, glyph, on):
-            i = rightpanel.COLUMNS.index(col_name)
-            cx0, cy0, cx1, cy1 = rightpanel.cell(row, i)
-            if cx1 - cx0 < 6:
-                return
-            blf.color(fid, *(ink if on else dim), 1.0)
-            w = blf.dimensions(fid, glyph)[0]
-            blf.position(fid, cx0 + max(2, ((cx1 - cx0) - w) * 0.5), cy0 + 6, 0)
-            blf.draw(fid, glyph)
 
-        # CURRENT: a tick, exactly as the screenshot shows for "Default".
-        if is_current:
-            _mark("Current", "\u2713", True)
-        # ON / LOCK. the reference CAD application uses a light bulb and a padlock; we have neither glyph
-        # nor artwork, so these are application-defined: a filled vs hollow marker, dimmed when
-        # off/unlocked. The STATE is real -- it is the document's.
-        _mark("On", "\u25cf" if layer.visible else "\u25cb", layer.visible)
-        _mark("Lock", "\u25a0" if layer.locked else "\u25a1", layer.locked)
+def _rail_label_lines(name, width, size):
+    """A rail label in at most two lines that fit `width` ("Bug Report", "AI
+    Assistant" wrap at their space)."""
+    if _text_width(name, size) <= width or " " not in name:
+        return [name]
+    head, tail = name.split(" ", 1)
+    return [head, tail]
 
 
 def _draw_right_tab_icons(box):
-    """The right tab icons. Falls back to the tab's initial when an icon is missing,
-    which is what happens on a machine without the help bundle."""
+    """The right tab icons with their labels underneath (UI design)."""
+    for i, (x0, y0, x1, y1) in enumerate(box["tabs"]):
+        name = rightpanel.TABS[i].name
+        size = _fpx(rightpanel.TAB_LABEL_FONT)
+        colour = design.RAIL_ACTIVE_TEXT if i == _right_tab else design.TEXT
+        lines = _rail_label_lines(name, x1 - x0 - _fpx(6), size)
+        for k, line in enumerate(lines):
+            tw = _text_width(line, size)
+            _draw_text((x0 + x1 - tw) / 2.0, y0 + _fpx(rightpanel.TAB_LABEL_INSET)
+                       + (len(lines) - 1 - k) * size * 1.2, line, size, design.rgb01(colour))
+    _alpha_blend()
     img_shader = _image_shader()
     if img_shader is None:
         return
@@ -5316,26 +5593,35 @@ class NARWHAL_OT_ai_settings(Operator):
             item[0] == config.model for item in _ai_model_enum_items(self, context))
             else _AI_MANUAL_MODEL)
         _ai_start_model_discovery(config)
-        return context.window_manager.invoke_props_dialog(self, width=620)
+        apply_menu_theme()
+        return context.window_manager.invoke_props_dialog(self, width=520)
 
     def draw(self, context):
-        column = self.layout.column(align=True)
+        root = self.layout
+        root.use_property_split = True
+        root.use_property_decorate = False
+        column = root.box().column(align=False)
+        column.label(text='Connection', icon='NETWORK_DRIVE')
         _ai["settings_draft"] = (
             self.provider_id, self.model, self.endpoint, self.credential_env,
             self.allow_insecure_remote)
         column.prop(self, "provider_id")
         column.prop(self, "endpoint")
+        column = root.box().column(align=False)
+        column.label(text='Model', icon='OUTLINER_OB_LIGHT')
         refresh = column.row(align=True)
         refresh.operator("narwhal.ai_refresh_models", icon="FILE_REFRESH")
         refresh.label(text=_ai.get("model_status", "Models have not been queried."))
         if _ai.get("model_items"):
             column.prop(self, "model_choice")
         column.prop(self, "model")
-        column.prop(self, "credential_env")
+        column = root.box().column(align=False)
+        column.label(text='Credentials and transport', icon='LOCKED')
+        column.prop(self, "credential_env", text='Key variable')
         column.prop(self, "allow_insecure_remote")
         column.separator()
-        column.label(text="Set the named environment variable before launching Narwhal 3D.")
-        column.label(text="Raw API keys are never stored in documents or assistant settings.")
+        root.label(text='Set the named environment variable before launch.', icon='INFO')
+        root.label(text='Only the variable name is saved, never your API key.')
 
     def execute(self, context):
         try:
@@ -5347,6 +5633,10 @@ class NARWHAL_OT_ai_settings(Operator):
             return {"CANCELLED"}
         st = _ai["state"]
         st.provider = ai_assistant.credential_status(config, os.environ)
+        _remember_preferences({'ai_config': {
+            'provider_id': config.provider_id, 'model': config.model,
+            'endpoint': config.endpoint, 'credential_env': config.credential_env,
+            'allow_insecure_remote': config.allow_insecure_remote}})
         st.status = "configured" if config.model else "disconnected"
         st.error = ("Settings applied. Provider transport is not connected yet."
                     if config.model else "Settings applied; choose a model before connecting.")
@@ -5363,10 +5653,10 @@ def _draw_ai_panel(shader, region, box):
     lay = ai_assistant.panel_layout(box["body"], sc)
     _ai["lay"] = lay
     _ai["region"] = (region.x, region.y)
-    ink = (0.08, 0.08, 0.08, 1)
-    muted = (0.45, 0.45, 0.47, 1)
-    blue = (0.20, 0.45, 0.85, 1)
-    pale = (0.86, 0.86, 0.88, 1)
+    ink = design.rgb01(design.TEXT)
+    muted = design.rgb01(design.TEXT_MUTED)
+    blue = design.rgb01(design.ACCENT)
+    pale = design.rgb01(design.CHIP_BG)
     prev = gpu.state.blend_get()
     gpu.state.blend_set("ALPHA")
     try:
@@ -5390,7 +5680,7 @@ def _draw_ai_panel(shader, region, box):
         qy = context[1] + (context[3] - context[1] - square) * 0.5
         shader.bind()
         _draw_rect(shader, context[0], qy, context[0] + square, qy + square,
-                   blue if st.include_selection else (1, 1, 1, 1))
+                   blue if st.include_selection else design.rgb01(design.FIELD_BG))
         _draw_text(context[0] + square + 5 * sc, context[1] + 4 * sc,
                    _fit_panel_text(f"Include selection context ({selected_count})",
                                    context[2] - context[0] - square - 5 * sc, fs - 1),
@@ -5399,8 +5689,8 @@ def _draw_ai_panel(shader, region, box):
         transcript = lay["transcript"]
         shader.bind()
         _draw_rect(shader, transcript[0] - 1, transcript[1] - 1,
-                   transcript[2] + 1, transcript[3] + 1, (0.65, 0.65, 0.67, 1))
-        _draw_rect(shader, *transcript, (0.96, 0.96, 0.97, 1))
+                   transcript[2] + 1, transcript[3] + 1, design.rgb01(design.BORDER_STRONG))
+        _draw_rect(shader, *transcript, design.rgb01(design.LIST_BG))
         line_h = 14 * sc
         max_rows = ai_assistant.transcript_row_count(transcript, sc)
         width = max(1, transcript[2] - transcript[0] - 8 * sc)
@@ -5423,8 +5713,8 @@ def _draw_ai_panel(shader, region, box):
         shader.bind()
         _draw_rect(shader, input_box[0] - 1, input_box[1] - 1,
                    input_box[2] + 1, input_box[3] + 1,
-                   blue if st.focus else (0.6, 0.6, 0.62, 1))
-        _draw_rect(shader, *input_box, (1, 1, 1, 1))
+                   blue if st.focus else design.rgb01(design.BORDER_STRONG))
+        _draw_rect(shader, *input_box, design.rgb01(design.FIELD_BG))
         measure = _bug_measure(fs)
         view = ai_assistant.input_view(st, input_box, measure, sc)
         _ai["view"] = view
@@ -5443,7 +5733,7 @@ def _draw_ai_panel(shader, region, box):
                         yb = view["top"] - (line - first + 1) * lh
                         _draw_rect(shader, view["x0"] + sx0, yb,
                                    view["x0"] + max(sx1, sx0 + 3 * sc), yb + lh,
-                                   (0.70, 0.82, 1.0, 1))
+                                   design.rgb01(design.ACCENT_SOFT))
             for index, (start, end) in enumerate(view["spans"][first:first + rows]):
                 _draw_text(view["x0"], base - index * lh, editor.text[start:end], fs, ink)
             if st.focus:
@@ -5462,7 +5752,7 @@ def _draw_ai_panel(shader, region, box):
             label = {"send": "Send", "new": "New Chat", "settings": "Settings"}[button_id]
             _draw_text(rect[0] + max(3 * sc, (rect[2] - rect[0] -
                        _text_width(label, fs)) * 0.5), rect[1] + 7 * sc, label, fs,
-                       (1, 1, 1, 1) if button_id == "send" else ink)
+                       design.rgb01(design.BAR_TEXT_STRONG) if button_id == "send" else ink)
 
         status = lay["status"]
         status_text = (st.error or {
@@ -5577,6 +5867,7 @@ def ai_panel_click(win_x, win_y, shift=False):
                                  _bug_measure(11.0 * _ui_scale()), shift)
     elif kind == "context":
         st.include_selection = not st.include_selection
+        _remember_preferences({'ai_include_selection': st.include_selection})
     elif ident == "new":
         st.new_chat()
     elif ident == "settings":
@@ -5642,8 +5933,8 @@ def _draw_bug_panel(shader, region, box):
     lay = bugreport.layout((x0, y0, x1, y1), sc, measure=lambda t_: _text_width(t_, fs))
     _bug["lay"] = lay
     _bug["region"] = (region.x, region.y)
-    ink = (0.08, 0.08, 0.08, 1)
-    blue = (0.20, 0.45, 0.85, 1)
+    ink = design.rgb01(design.TEXT)
+    blue = design.rgb01(design.ACCENT)
     prev = gpu.state.blend_get()
     gpu.state.blend_set("ALPHA")
     try:
@@ -5654,15 +5945,15 @@ def _draw_bug_panel(shader, region, box):
         for cid, r in lay["chips"]:
             shader.bind()
             on = cid == st.category
-            _draw_rect(shader, *r, blue if on else (0.86, 0.86, 0.88, 1))
+            _draw_rect(shader, *r, blue if on else design.rgb01(design.CHIP_BG))
             label = dict(bugreport.CATEGORIES)[cid]
             _draw_text(r[0] + (r[2] - r[0] - _text_width(label, fs)) / 2,
-                       r[1] + 5 * sc, label, fs, (1, 1, 1, 1) if on else ink)
+                       r[1] + 5 * sc, label, fs, design.rgb01(design.BAR_TEXT_STRONG) if on else ink)
         b = lay["box"]
         shader.bind()
         _draw_rect(shader, b[0] - 1, b[1] - 1, b[2] + 1, b[3] + 1,
-                   blue if st.focus else (0.6, 0.6, 0.62, 1))
-        _draw_rect(shader, *b, (1, 1, 1, 1))
+                   blue if st.focus else design.rgb01(design.BORDER_STRONG))
+        _draw_rect(shader, *b, design.rgb01(design.FIELD_BG))
         # the box is a real text field -- caret where you click, a
         # selection you can drag or Shift-extend. `bugreport.text_view` is the geometry
         # the click uses too, so the character drawn is the character hit.
@@ -5678,7 +5969,7 @@ def _draw_bug_panel(shader, region, box):
                                   "or Report saves it, copies it, and opens GitHub.",
                                   view["width"], measure)
             for i, ln in enumerate(hint[:rows]):
-                _draw_text(view["x0"], base - i * lh, ln, fs, (0.55, 0.55, 0.55, 1))
+                _draw_text(view["x0"], base - i * lh, ln, fs, design.rgb01(design.TEXT_MUTED))
         else:
             sel = fld.selection()
             if sel is not None and st.focus:
@@ -5689,7 +5980,7 @@ def _draw_bug_panel(shader, region, box):
                         yb = view["top"] - (line - first + 1) * lh
                         _draw_rect(shader, view["x0"] + sx0, yb,
                                    view["x0"] + max(sx1, sx0 + 3 * sc), yb + lh,
-                                   (0.70, 0.82, 1.0, 1))
+                                   design.rgb01(design.ACCENT_SOFT))
             for i, (s0, s1) in enumerate(view["spans"][first:first + rows]):
                 _draw_text(view["x0"], base - i * lh, fld.text[s0:s1], fs, ink)
             if st.focus:
@@ -5710,27 +6001,27 @@ def _draw_bug_panel(shader, region, box):
             qx0, qy0 = r[0], r[1] + (r[3] - r[1] - sq) / 2
             shader.bind()
             _draw_rect(shader, qx0, qy0, qx0 + sq, qy0 + sq,
-                       (0.45, 0.45, 0.48, 1) if enabled else (0.75, 0.75, 0.77, 1))
+                       design.rgb01(design.BORDER_STRONG) if enabled else design.rgb01(design.BORDER))
             _draw_rect(shader, qx0 + 1, qy0 + 1, qx0 + sq - 1, qy0 + sq - 1,
-                       blue if on else (1, 1, 1, 1))
+                       blue if on else design.rgb01(design.FIELD_BG))
             label = dict(bugreport.CHECKS)[cid]
             if not enabled:
                 label += " (none yet)"
             _draw_text(qx0 + sq + 5 * sc, qy0 + 2 * sc, label, fs - 1,
-                       ink if enabled else (0.6, 0.6, 0.6, 1))
+                       ink if enabled else design.rgb01(design.TEXT_DISABLED))
         for bid, r in lay["buttons"]:
             shader.bind()
-            _draw_rect(shader, *r, blue if bid == "submit" else (0.86, 0.86, 0.88, 1))
+            _draw_rect(shader, *r, blue if bid == "submit" else design.rgb01(design.CHIP_BG))
             label = {"submit": "Report", "clear": "Clear"}[bid]
             _draw_text(r[0] + (r[2] - r[0] - _text_width(label, fs)) / 2,
                        r[1] + 7 * sc, label, fs,
-                       (1, 1, 1, 1) if bid == "submit" else ink)
+                       design.rgb01(design.BAR_TEXT_STRONG) if bid == "submit" else ink)
         if st.message:
             sr = lay["status"]
             for i, ln in enumerate(bugreport.wrap(st.message, sr[2] - sr[0],
                                                   lambda t_: _text_width(t_, fs - 1))[:2]):
                 _draw_text(sr[0], sr[1] + 2 * sc - i * 12 * sc, ln, fs - 1,
-                           (0.3, 0.3, 0.3, 1))
+                           design.rgb01(design.TEXT_MUTED))
     finally:
         gpu.state.blend_set(prev)
 
@@ -6235,6 +6526,8 @@ def _image_shader():
     """
     import gpu
 
+    if design.THEME == 'dark':
+        return _disabled_icon_shader(unavailable=False)
     for name in ("IMAGE", "2D_IMAGE"):
         try:
             return gpu.shader.from_builtin(name)
@@ -6246,9 +6539,48 @@ def _image_shader():
 #: GPU textures for sidebar icons, keyed by filename. Built once per icon and kept:
 #: `gpu.texture.from_image` is not free and the band redraws often.
 _sidebar_textures = {}
+_sidebar_images = {}
 #: Icons we failed to load, so a bad file is tried once rather than every draw --
 #: the same guard `_toolbar_icon_bad` gives the strip.
 _sidebar_tex_bad = set()
+
+
+_disabled_icon_shader_cache = None
+
+
+def _disabled_icon_shader(unavailable=True):
+    """CSS-equivalent icon tone: light grayscale, dark brightness/contrast, native size."""
+    global _disabled_icon_shader_cache
+    if _disabled_icon_shader_cache is None:
+        import gpu
+        interface = gpu.types.GPUStageInterfaceInfo('narwhal_disabled_icon')
+        interface.smooth('VEC2', 'uv')
+        info = gpu.types.GPUShaderCreateInfo()
+        info.push_constant('MAT4', 'ModelViewProjectionMatrix')
+        info.sampler(0, 'FLOAT_2D', 'image')
+        info.push_constant('BOOL', 'darkTheme')
+        info.push_constant('BOOL', 'unavailable')
+        info.push_constant('BOOL', 'srgbTarget')
+        info.vertex_in(0, 'VEC2', 'pos')
+        info.vertex_in(1, 'VEC2', 'texCoord')
+        info.vertex_out(interface)
+        info.fragment_out(0, 'VEC4', 'color')
+        info.vertex_source('void main(){uv=texCoord;gl_Position=ModelViewProjectionMatrix*vec4(pos,0.0,1.0);}')
+        info.fragment_source('''void main(){
+          vec4 c=texture(image,uv);
+          if(darkTheme) c.rgb=clamp((c.rgb*1.08-0.5)*1.08+0.5,0.0,1.0);
+          else if(unavailable) c.rgb=vec3(dot(c.rgb,vec3(0.2126,0.7152,0.0722)));
+          if(srgbTarget){
+            vec3 rgb=max(c.rgb,vec3(0));
+            c.rgb=mix(rgb/12.92,pow((rgb+0.055)/1.055,vec3(2.4)),step(vec3(0.04045),rgb));
+          }
+          color=vec4(c.rgb,c.a*(unavailable?0.35:1.0));
+        }''')
+        _disabled_icon_shader_cache = gpu.shader.create_from_info(info)
+    _disabled_icon_shader_cache.bind()
+    _disabled_icon_shader_cache.uniform_bool('darkTheme', design.THEME == 'dark')
+    _disabled_icon_shader_cache.uniform_bool('unavailable', unavailable)
+    return _disabled_icon_shader_cache
 
 
 def _sidebar_texture(icon):
@@ -6269,7 +6601,13 @@ def _sidebar_texture(icon):
     try:
         import gpu
 
-        img = bpy.data.images.load(path, check_existing=True)
+        # IMAGE consumes display-referred sRGB samples. UI PNGs are not scene
+        # textures: keep their bytes unconverted, rather than decoding to linear
+        # and treating that result as sRGB a second time. Own the datablock so a
+        # document picture using the same file is never recoloured.
+        img = bpy.data.images.load(path, check_existing=False)
+        img.colorspace_settings.name = 'Non-Color'
+        _sidebar_images[icon] = img
         tex = gpu.texture.from_image(img)
     except Exception:  # noqa: BLE001
         _sidebar_tex_bad.add(icon)
@@ -6286,6 +6624,9 @@ _sidebar_buttons = []
 _sidebar_hover_index = None
 _sidebar_hover_part = None
 _sidebar_hover_pos = None
+_sidebar_tooltip_anchor = None
+_sidebar_hover_transitions = {}
+_sidebar_hover_timer_running = False
 _sidebar_region_box = None
 _sidebar_pressed = None
 _sidebar_flyout_button = None
@@ -6299,22 +6640,60 @@ def _draw_left_sidebar(shader, region):
     to flyout toolbars. The grid is top-aligned above the Osnap panel.
     """
     global _sidebar_cells, _sidebar_buttons, _sidebar_hover_index, _sidebar_hover_part
-    global _sidebar_region_box
+    global _sidebar_region_box, _tool_scroll_indicator
 
+    _tool_scroll_indicator = None
     _sidebar_region_box = (region.x, region.y,
                            region.x + region.width, region.y + region.height)
-    buttons = tbar.sidebar_buttons(set(COMMANDS))
+    category = toolbar_tab()
+    buttons = tbar.context_buttons(category, set(COMMANDS))
+    if not _show_unavailable:
+        buttons = [b for b in buttons if b.enabled]
+    # Header strip with the active category's name (UI design).
+    header_h = _fpx(tbar.CONTEXT_HEADER_H)
+    shader.bind()
+    _draw_rect(shader, 0, region.height - header_h, region.width, region.height,
+               design.rgb01(design.PANEL_HEADER_BG))
+    _draw_rect(shader, 0, region.height - header_h, region.width,
+               region.height - header_h + 1, design.rgb01(design.BORDER))
+    # The header is a drop-down (UI design): a chevron on the right, and a click
+    # anywhere on the strip lists every category -- the way back to one the top
+    # strip had no room for.
+    global _left_header_box
+    _left_header_box = (region.x, region.y + region.height - header_h,
+                        region.x + region.width, region.y + region.height)
+    if _left_header_hover:
+        _draw_rect(shader, 0, region.height - header_h + 1, region.width, region.height,
+                   design.rgb01(design.TOOL_HOVER))
+    half = _fpx(4.0)
+    cx = region.width - _fpx(12)
+    cy = region.height - header_h / 2.0
+    shader.bind()
+    _draw_tri(shader, ((cx - half, cy + half * 0.5), (cx + half, cy + half * 0.5),
+                       (cx, cy - half * 0.6)), design.rgb01(design.TEXT_MUTED))
+    _draw_text(_fpx(10), region.height - header_h + _fpx(10),
+               _clip_text(category, region.width - _fpx(30), _fpx(12)), _fpx(12),
+               design.rgb01(design.TEXT_STRONG))
+    _alpha_blend()          # the header text turned blending off
     if not buttons:
         _sidebar_cells, _sidebar_buttons = [], []
-        return 0.0
-    # Icons keep their normal 24-pixel size while the grid reflows with dock width.
-    columns = tbar.sidebar_columns(region.width)
-    x_grid = tbar.sidebar_grid_x(region.width, columns)
-    y_top = float(region.height)  # region coordinates grow upward
-    cells = tbar.sidebar_cells(len(buttons), x_grid, y_top, columns=columns)
-    _sidebar_cells = [(i, region.x + x0, region.y + y0,
-                       region.x + x1, region.y + y1)
-                      for i, x0, y0, x1, y1 in cells]
+        return header_h
+    # Fixed-size three-column tools; scrolling reveals overflow without shrinking icons.
+    global _tool_scroll_layout
+    gap = _fpx(4.0)
+    osnap_h = views.osnap_panel_height() if _osnap_panel_visible else 0.0
+    cell = _fpx(design.TOOL_CELL)
+    columns = tbar.CONTEXT_COLUMNS
+    viewport = (region.x, region.y + osnap_h, region.x + region.width,
+                region.y + region.height - header_h)
+    _tool_scroll_layout = tbar.context_scroll_layout(len(buttons), viewport,
+        _tool_scroll.get(category, 0), cell=cell, gap=_fpx(design.TOOL_GAP), pad=gap,
+        x_offset=_tool_scroll_x.get(category, 0))
+    _tool_scroll[category] = _tool_scroll_layout['offset']
+    _tool_scroll_x[category] = _tool_scroll_layout['x_offset']
+    _sidebar_cells = list(_tool_scroll_layout['cells'])
+    cells = [(i, x0-region.x, y0-region.y, x1-region.x, y1-region.y)
+             for i, x0, y0, x1, y1 in _sidebar_cells]
     _sidebar_buttons = buttons
     sidebar_flyout_reflow()
     if _sidebar_hover_pos is not None:
@@ -6327,29 +6706,44 @@ def _draw_left_sidebar(shader, region):
         _sidebar_hover_part = None
 
     img_shader = _image_shader()
-    pad = tbar.SIDEBAR_PAD
+    # 24 px icons centred in the (larger) cell, as in the design's tool grid.
+    # SIDEBAR_ICON has already been scaled by uiscale.apply; never scale it twice.
+    pad = max(tbar.SIDEBAR_PAD, (cell - tbar.SIDEBAR_ICON) / 2.0)
     mark = tbar.SIDEBAR_MARK
     try:
         from gpu_extras.batch import batch_for_shader
     except Exception:  # noqa: BLE001
-        return tbar.sidebar_height(len(buttons), columns=columns)
+        return header_h + tbar.sidebar_height(len(buttons), columns=columns, cell=cell)
 
-    for (i, x0, y0, x1, y1), btn in zip(cells, buttons):
-        if i == _sidebar_hover_index:
+    import gpu
+    clip_before = gpu.state.scissor_get()
+    # Blender exposes the rectangle but no scissor enable-state getter.
+    clip_on = True
+    gpu.state.scissor_test_set(True)
+    gpu.state.scissor_set(int(viewport[0]-region.x), int(viewport[1]-region.y),
+                          max(0, int(viewport[2]-viewport[0])), max(0, int(viewport[3]-viewport[1])))
+    for (i, x0, y0, x1, y1) in cells:
+        btn = buttons[i]
+        weight = _sidebar_hover_weight(i)
+        if weight > 0:
+            _alpha_blend()
             shader.bind()
-            _draw_rect(shader, x0, y0, x1, y1, SIDEBAR_HOVER_COLOR)
+            _draw_round_rect(shader, x0, y0, x1, y1, _fpx(design.CHIP_RADIUS),
+                             (*SIDEBAR_HOVER_COLOR[:3], weight))
         tex = _sidebar_texture(btn.icon)
         if tex is not None and img_shader is not None:
-            ix0, iy0 = x0 + pad, y0 + pad
-            ix1, iy1 = x1 - pad, y1 - pad
+            ix0, iy0 = round(x0 + pad), round(y0 + pad)
+            ix1, iy1 = ix0 + tbar.SIDEBAR_ICON, iy0 + tbar.SIDEBAR_ICON
             try:
-                img_shader.bind()
-                img_shader.uniform_sampler("image", tex)
+                icon_shader = _image_shader() if btn.enabled else _disabled_icon_shader()
+                _alpha_blend()
+                icon_shader.bind()
+                icon_shader.uniform_sampler("image", tex)
                 batch_for_shader(
-                    img_shader, "TRI_FAN",
+                    icon_shader, "TRI_FAN",
                     {"pos": ((ix0, iy0), (ix1, iy0), (ix1, iy1), (ix0, iy1)),
                      "texCoord": ((0, 0), (1, 0), (1, 1), (0, 1))},
-                ).draw(img_shader)
+                ).draw(icon_shader)
             except Exception:  # noqa: BLE001
                 pass
         # The cascade marker. Verified (the reference CAD application documentation): this triangle means a
@@ -6380,7 +6774,50 @@ def _draw_left_sidebar(shader, region):
                        (x1 - pad, y0 + pad + mark),
                        (x1 - pad - mark, y0 + pad)),
                       SIDEBAR_MARK_COLOR)
-    return tbar.sidebar_height(len(buttons), columns=columns)
+    gpu.state.scissor_set(*clip_before)
+    gpu.state.scissor_test_set(clip_on)
+    _tool_scroll_indicator = tbar.scroll_indicator(_tool_scroll_layout, _fpx(6), _fpx(2), _fpx(24))
+    if _tool_scroll_indicator is not None:
+        _alpha_blend()
+        shader.bind()
+        for part, color in (('track', design.CHIP_BG),
+                            ('thumb', design.TEXT_MUTED if _tool_scroll_hover or _tool_scroll_drag else design.BORDER_STRONG)):
+            x0, y0, x1, y1 = _tool_scroll_indicator[part]
+            _draw_round_rect(shader, x0-region.x, y0-region.y, x1-region.x, y1-region.y,
+                             _fpx(3), design.rgb01(color))
+    return header_h + min(_tool_scroll_layout['content_extent'], viewport[3]-viewport[1])
+
+
+#: The left panel's header strip (window coordinates), recorded by the draw.
+_left_header_box = None
+_left_header_hover = False
+
+
+def left_header_at(mouse_x, mouse_y):
+    """True when the window cursor is on the left panel's category header."""
+    b = _left_header_box
+    return b is not None and b[0] <= mouse_x < b[2] and b[1] <= mouse_y < b[3]
+
+
+def left_header_hover_update(mouse_x, mouse_y):
+    """Track hover on the category header. True when it changed (and was repainted)."""
+    global _left_header_hover
+    on = left_header_at(mouse_x, mouse_y)
+    if on == _left_header_hover:
+        return False
+    _left_header_hover = on
+    _tag_redraw_bands()
+    return True
+
+
+def show_category_menu():
+    """Open the category list under the pointer. True if it opened."""
+    try:
+        bpy.ops.wm.call_menu(name="NARWHAL_MT_toolbar_tabs")
+    except Exception as e:  # noqa: BLE001
+        print(f"[narwhal3d] category menu could not open: {e!r}")
+        return False
+    return True
 
 
 def _sidebar_wrap_line(text, width, font_size):
@@ -6428,13 +6865,15 @@ def _sidebar_overlay_left():
             region = next((item for item in area.regions
                            if item.type == "WINDOW" and item.width > 1), None)
             if region is not None and region.x >= dock_right:
-                candidates.append(float(region.x))
+                # Leave the native area-outline/rounded-edge pixels unobscured.
+                # Drawing the popup's 1px border at region.x clipped it at HiDPI.
+                candidates.append(float(math.ceil(region.x + _fpx(2))))
     return max(float(dock_right), min(candidates)) if candidates else float(dock_right)
 
 
 def sidebar_tooltip_layout():
     """The one-line sidebar hover card in window coordinates, or ``None``."""
-    if (_sidebar_hover_index is None
+    if (_sidebar_tooltip_anchor is None or _sidebar_hover_index is None
             or not (0 <= _sidebar_hover_index < len(_sidebar_buttons))):
         return None
     source = next((cell for cell in _sidebar_cells
@@ -6445,24 +6884,38 @@ def sidebar_tooltip_layout():
     window = getattr(bpy.context, "window", None)
     if source is None or not lines or window is None:
         return None
-    # Always place the card just outside the responsive grid, while retaining the
-    # hovered row's vertical center. A first-column icon therefore gets the same nearby
-    # tooltip as a last-column icon instead of drawing a card inside the dock clipping area.
-    anchor = (source[0], source[1], source[2], _sidebar_overlay_left(), source[4])
-    text = lines[0]
-    box = tbar.sidebar_tooltip_layout(
-        anchor, _text_width(text, tbar.SIDEBAR_TOOLTIP_FONT),
-        window.width, window.height)
-    return {"box": box, "lines": lines} if box is not None else None
+    font_size = _fpx(12)
+    box = tbar.tooltip_box_at(_sidebar_tooltip_anchor,
+        [_text_width(line, font_size) for line in lines], len(lines),
+        (window.width, window.height), uiscale.current())
+    return {'box': box, 'lines': lines, 'font_size': font_size} if box is not None else None
 
 
-def draw_sidebar_tooltip_overlay():
-    """Draw the compact sidebar command name over the adjacent viewport."""
+_window_chrome_handle = None
+
+
+def _overlay_paint_region(window_level):
+    if not window_level:
+        return getattr(bpy.context, 'region', None)
+    import gpu
+    from types import SimpleNamespace
+    _, _, width, height = gpu.state.viewport_get()
+    return SimpleNamespace(x=0, y=0, width=width, height=height, type='WINDOW')
+
+
+def _draw_window_chrome():
+    draw_sidebar_tooltip_overlay(window_level=True)
+    draw_sidebar_flyout_overlay(window_level=True)
+
+
+def draw_sidebar_tooltip_overlay(window_level=False):
+    """Paint the hover card above editor composition, including divider pixels."""
     context = bpy.context
     area = getattr(context, "area", None)
-    region = getattr(context, "region", None)
+    region = _overlay_paint_region(window_level)
     layout = sidebar_tooltip_layout()
-    if layout is None or area is None or region is None or area.type != "VIEW_3D":
+    if (layout is None or region is None or region.type != 'WINDOW'
+            or (not window_level and (area is None or area.type not in ('VIEW_3D', 'INFO')))):
         return
     box = layout["box"]
     region_box = (region.x, region.y, region.x + region.width, region.y + region.height)
@@ -6487,12 +6940,48 @@ def draw_sidebar_tooltip_overlay():
         _draw_rect(shader, x0, y1 - 1, x1, y1, SIDEBAR_TOOLTIP_BORDER)
         _draw_rect(shader, x0, y0, x0 + 1, y1, SIDEBAR_TOOLTIP_BORDER)
         _draw_rect(shader, x1 - 1, y0, x1, y1, SIDEBAR_TOOLTIP_BORDER)
-        _draw_text(x0 + tbar.SIDEBAR_TOOLTIP_PAD,
-                   y1 - tbar.SIDEBAR_TOOLTIP_PAD - tbar.SIDEBAR_TOOLTIP_FONT,
-                   layout["lines"][0], tbar.SIDEBAR_TOOLTIP_FONT,
-                   SIDEBAR_TOOLTIP_TEXT)
+        for index, line in enumerate(layout['lines']):
+            _draw_text(x0 + _fpx(9), y1 - _fpx(5) - layout['font_size'] - index * _fpx(15.6),
+                       _clip_text(line, x1 - x0 - _fpx(18), layout['font_size']),
+                       layout['font_size'], SIDEBAR_TOOLTIP_TEXT)
     finally:
         gpu.state.blend_set(prev)
+
+
+def _sidebar_hover_weight(index, now=None):
+    import time
+    now = time.monotonic() if now is None else now
+    entry = _sidebar_hover_transitions.get(index)
+    if entry is None:
+        return 1.0 if index == _sidebar_hover_index else 0.0
+    start, initial, target = entry
+    return initial + (target - initial) * tbar.hover_weight(now - start)
+
+
+def _sidebar_hover_tick():
+    global _sidebar_hover_timer_running
+    import time
+    now = time.monotonic()
+    for index, (start, initial, target) in list(_sidebar_hover_transitions.items()):
+        if now - start >= .12:
+            del _sidebar_hover_transitions[index]
+    _tag_redraw_bands()
+    if _sidebar_hover_transitions:
+        return 1 / 60
+    _sidebar_hover_timer_running = False
+    return None
+
+
+def _animate_sidebar_hover(previous, current):
+    global _sidebar_hover_timer_running
+    import time
+    now = time.monotonic()
+    for index in {previous, current} - {None}:
+        initial = _sidebar_hover_weight(index, now)
+        _sidebar_hover_transitions[index] = (now, initial, 1.0 if index == current else 0.0)
+    if not _sidebar_hover_timer_running and not bpy.app.background:
+        bpy.app.timers.register(_sidebar_hover_tick, first_interval=1 / 60)
+        _sidebar_hover_timer_running = True
 
 
 def sidebar_hover_update(mouse_x, mouse_y):
@@ -6501,7 +6990,7 @@ def sidebar_hover_update(mouse_x, mouse_y):
     Returns True only when the highlighted button OR its selectable part changes,
     allowing viewport mouse motion to avoid unnecessary dock redraws.
     """
-    global _sidebar_hover_index, _sidebar_hover_part, _sidebar_hover_pos
+    global _sidebar_hover_index, _sidebar_hover_part, _sidebar_hover_pos, _sidebar_tooltip_anchor
     _sidebar_hover_pos = (mouse_x, mouse_y)
     action = tbar.sidebar_action_at(mouse_x, mouse_y, _sidebar_cells,
                                     _sidebar_buttons)
@@ -6509,12 +6998,17 @@ def sidebar_hover_update(mouse_x, mouse_y):
     part = action[1] if action is not None else None
     if (idx, part) == (_sidebar_hover_index, _sidebar_hover_part):
         return False
+    if idx != _sidebar_hover_index:
+        _animate_sidebar_hover(_sidebar_hover_index, idx)
+        _sidebar_tooltip_anchor = (mouse_x, mouse_y) if idx is not None else None
     _sidebar_hover_index, _sidebar_hover_part = idx, part
     return True
 
 
 def sidebar_action_at(mouse_x, mouse_y):
     """The sidebar button and selectable part under the window cursor."""
+    if _tool_scroll_layout is not None and not _inside_box(mouse_x, mouse_y, _tool_scroll_layout['viewport']):
+        return None
     action = tbar.sidebar_action_at(mouse_x, mouse_y, _sidebar_cells,
                                     _sidebar_buttons)
     if action is None:
@@ -6605,6 +7099,8 @@ def sidebar_flyout_reflow():
     button = (_sidebar_buttons[index]
               if index is not None and 0 <= index < len(_sidebar_buttons) else None)
     rows = tbar.sidebar_flyout_rows(button, set(COMMANDS))
+    if not _show_unavailable:
+        rows = [b for b in rows if b.enabled]
     if source is None or not getattr(button, "link", None) or not rows:
         return False
     anchor_x = _sidebar_overlay_left()
@@ -6625,6 +7121,8 @@ def show_sidebar_flyout(button, source_index=None):
     live_button = (_sidebar_buttons[index]
                    if index is not None and 0 <= index < len(_sidebar_buttons) else None)
     rows = tbar.sidebar_flyout_rows(live_button, set(COMMANDS))
+    if not _show_unavailable:
+        rows = [b for b in rows if b.enabled]
     if not getattr(live_button, "link", None) or not rows:
         app_state.log(f"{getattr(button, 'link', None) or 'That'} toolbar is unavailable")
         redraw_cmdbar()
@@ -6728,13 +7226,13 @@ def _draw_flyout_tooltip(shader, region, state):
                    tbar.SIDEBAR_TOOLTIP_FONT, SIDEBAR_TOOLTIP_TEXT)
 
 
-def draw_sidebar_flyout_overlay():
+def draw_sidebar_flyout_overlay(window_level=False):
     """POST_PIXEL floating toolbar drawn over whichever viewports it intersects."""
     state = _sidebar_flyout_state
     context = bpy.context
-    area = getattr(context, "area", None)
-    region = getattr(context, "region", None)
-    if state is None or area is None or region is None or area.type != "VIEW_3D":
+    area = getattr(context, 'area', None)
+    region = _overlay_paint_region(window_level)
+    if state is None or region is None or (not window_level and (area is None or area.type != 'VIEW_3D')):
         return
     panel = state["layout"]["panel"]
     region_box = (region.x, region.y, region.x + region.width, region.y + region.height)
@@ -6778,8 +7276,10 @@ def draw_sidebar_flyout_overlay():
                 _draw_rect(shader, x0, y0, x1, y1, SIDEBAR_HOVER_COLOR)
             tex = _sidebar_texture(button.icon)
             if tex is not None and image_shader is not None:
-                inset = max(2.0, (tbar.FLYOUT_CELL - tbar.SIDEBAR_ICON) * 0.5)
-                ix0, iy0, ix1, iy1 = x0 + inset, y0 + inset, x1 - inset, y1 - inset
+                icon_px = round(tbar.FLYOUT_ICON)
+                ix0, iy0 = round((x0 + x1 - icon_px) / 2), round((y0 + y1 - icon_px) / 2)
+                ix1, iy1 = ix0 + icon_px, iy0 + icon_px
+                image_shader = _image_shader() if button.enabled else _disabled_icon_shader()
                 image_shader.bind()
                 image_shader.uniform_sampler("image", tex)
                 batch_for_shader(
@@ -6910,10 +7410,8 @@ def draw_osnap_panel():
     if shader is None:
         return
     total = views.osnap_panel_height(len(rows))
-    bg = views.gpu_rgba(views.OSNAP_PANEL_BG)
+    bg = design.rgb01(design.OSNAP_BG)
     border = views.gpu_rgba(views.OSNAP_PANEL_BORDER)
-    box_bg = views.gpu_rgba(views.OSNAP_BOX_BG)
-    tick = views.gpu_rgba(views.OSNAP_TICK)
     text_c = views.gpu_rgba(views.OSNAP_PANEL_TEXT)
 
     prev_blend = gpu.state.blend_get()
@@ -6926,27 +7424,40 @@ def draw_osnap_panel():
         # right edge, so the panel reads as a docked column rather than a floating box
         _draw_rect(shader, rx + panel_w - 1, ry,
                    rx + panel_w, ry + total, border)
-        _draw_text(rx + views.OSNAP_PAD, ry + total - views.OSNAP_TITLE_H + 5,
-                   "Osnap", views.OSNAP_FONT_SIZE, text_c)
+        # header strip, styled like the category header above the tools (UI design)
+        _draw_rect(shader, rx, ry + total - views.OSNAP_TITLE_H, rx + panel_w, ry + total,
+                   design.rgb01(design.PANEL_HEADER_BG))
+        _draw_rect(shader, rx, ry + total - 1, rx + panel_w, ry + total, border)
+        _draw_text(rx + views.OSNAP_PAD + 2,
+                   ry + total - views.OSNAP_TITLE_H / 2.0 - views.OSNAP_FONT_SIZE * 0.35,
+                   "Osnap", views.OSNAP_FONT_SIZE, design.rgb01(design.TEXT_STRONG))
+        _alpha_blend()
+        box_off = design.rgb01(design.MENU_BG)
+        box_line = design.rgb01(design.BORDER_STRONG)
+        box_on = design.rgb01(design.ACCENT)
+        tick_c = design.rgb01(design.BAR_TEXT_STRONG)
+        radius = max(1.0, views.OSNAP_BOX * 0.2)
         for (label, on, implemented), (_l, bx0, by0, bx1, _by1) in zip(rows, boxes):
             cy = by0 - region.y + (views.OSNAP_ROW_H - views.OSNAP_BOX) // 2
             cx = bx0 - region.x + views.OSNAP_PAD
-            _draw_rect(shader, cx, cy, cx + views.OSNAP_BOX,
-                       cy + views.OSNAP_BOX, box_bg)
-            _draw_rect(shader, cx, cy, cx + views.OSNAP_BOX, cy + 1, border)
-            _draw_rect(shader, cx, cy + views.OSNAP_BOX - 1,
-                       cx + views.OSNAP_BOX, cy + views.OSNAP_BOX, border)
-            _draw_rect(shader, cx, cy, cx + 1, cy + views.OSNAP_BOX, border)
-            _draw_rect(shader, cx + views.OSNAP_BOX - 1, cy,
-                       cx + views.OSNAP_BOX, cy + views.OSNAP_BOX, border)
+            shader.bind()
+            # a real checkbox: white with a strong outline when off, accent-filled
+            # with a white tick when on
+            _draw_round_rect(shader, cx, cy, cx + views.OSNAP_BOX, cy + views.OSNAP_BOX,
+                             radius, box_on if on else box_off,
+                             border=box_on if on else box_line)
             if on:
-                _draw_rect(shader, cx + 2, cy + 2, cx + views.OSNAP_BOX - 2,
-                           cy + views.OSNAP_BOX - 2, tick)
+                _draw_glyph(shader, glyphs.tick(cx + views.OSNAP_BOX / 2.0,
+                                                cy + views.OSNAP_BOX / 2.0,
+                                                views.OSNAP_BOX * 0.62), tick_c)
+                shader.bind()
             # a snap the reference CAD application offers that we do not COMPUTE keeps its row and is marked,
             # rather than being hidden -- the same rule the menus follow
             name = label if implemented else f"{label} *"
-            _draw_text(cx + views.OSNAP_BOX + 6, by0 - region.y + 4,
+            _draw_text(cx + views.OSNAP_BOX + 6,
+                       cy + views.OSNAP_BOX / 2.0 - views.OSNAP_FONT_SIZE * 0.35,
                        name, views.OSNAP_FONT_SIZE, text_c)
+            _alpha_blend()
     except Exception as e:  # noqa: BLE001
         print(f"[narwhal3d] osnap panel draw failed: {e!r}")
     finally:
@@ -6963,7 +7474,21 @@ def osnap_panel_at(win_x, win_y):
     return views.hit_osnap_panel_row(win_x, win_y, _osnap_panel_boxes)
 
 
+def _remember_snap_preferences():
+    settings = snap_settings()
+    if settings is not None:
+        _remember_preferences({'osnap_modes': sorted(settings.enabled),
+                               'osnap_disabled': settings.disabled,
+                               'osnap_project': settings.project})
+
+
 def osnap_panel_click(label):
+    message = _osnap_panel_action(label)
+    _remember_snap_preferences()
+    return message
+
+
+def _osnap_panel_action(label):
     """Toggle the row `label`. Returns the line to log, or None.
 
     `Project` and `Disable` are the settings object's own flags; everything else is a
@@ -7347,6 +7872,17 @@ class NARWHAL_OT_command_input(Operator):
 
     def modal(self, context, event):
         st = app_state
+        if _shell_title_doubleclick(event):
+            self._redraw()
+            return {'RUNNING_MODAL'}
+        if shell_popup.handle_event(event, context=context):
+            return {"RUNNING_MODAL"}
+        if _edge_radius_event(event):
+            self._redraw()
+            return {'RUNNING_MODAL'}
+        if _shell_chrome_event(event):
+            self._redraw()
+            return {"RUNNING_MODAL"}
         # the cursor shows a crosshair while a command waits for a POINT
         _update_pick_cursor(getattr(context, "window", None), event)
         # Bug Report: while its text box has focus, the keyboard types the REPORT,
@@ -7370,6 +7906,23 @@ class NARWHAL_OT_command_input(Operator):
                 if msg and msg != "handled":
                     st.log(msg)
                 redraw_cmdbar()
+                return {"RUNNING_MODAL"}
+        # While the Layers search field has focus the keyboard types the FILTER, not a
+        # command (Enter keeps it, Esc clears it).
+        if layer_search_focused() and event.value in ("PRESS", "REPEAT"):
+            kmap = {"RET": "enter", "NUMPAD_ENTER": "enter", "ESC": "esc",
+                    "BACK_SPACE": "back", "DEL": "delete", "LEFT_ARROW": "left",
+                    "RIGHT_ARROW": "right", "HOME": "home", "END": "end"}
+            kind, ch = kmap.get(event.type), ""
+            if kind is None and event.ctrl and event.type in ("A", "V"):
+                kind = "select_all" if event.type == "A" else "paste"
+                ch = (context.window_manager.clipboard or "").splitlines()[0:1]
+                ch = ch[0] if ch else ""
+            elif kind is None and event.ascii and event.ascii.isprintable() \
+                    and not event.ctrl and not event.alt:
+                kind, ch = "char", event.ascii
+            if kind is not None:
+                layer_search_key(kind, ch, shift=event.shift)
                 return {"RUNNING_MODAL"}
         # Right-click opens the layer context menu; F2 starts rename.
         if event.value == "PRESS" and event.type in ("RIGHTMOUSE", "F2"):
@@ -7618,7 +8171,12 @@ class NARWHAL_OT_command_input(Operator):
                     names = sorted(c.name for c in COMMANDS.values())
                     sel = cmdbar.autocomplete(st.input_buffer.strip(), names)
                 if sel:
-                    st.input_buffer = sel
+                    # v4: Enter and Tab accept/run the selected command. This
+                    # branch is idle-only; Tab's modeling direction lock above stays intact.
+                    st.input_buffer = ''
+                    st.history.append('> ' + sel)
+                    st.feed_line(sel)
+                    _set_completion_index(0)
                     self._redraw()
             return {"RUNNING_MODAL"}
 
@@ -7809,6 +8367,9 @@ class NARWHAL_OT_command_input(Operator):
         # this must be tested BEFORE the viewport branch (the bar is not a
         # viewport, so that branch would only pass the click through to Blender).
         if event.type == "LEFTMOUSE" and event.value == "PRESS":
+            # a click anywhere but the Layers search field gives the keyboard back
+            if layer_search_focused() and not layer_search_at(event.mouse_x, event.mouse_y):
+                layer_search_focus(False)
             handled = _click_command_bar(event.mouse_x, event.mouse_y)
             if handled is not None:
                 self._redraw()
@@ -7859,6 +8420,11 @@ class NARWHAL_OT_command_input(Operator):
             # exactly the same reason as the Osnap panel -- it is chrome in the dock
             # band, which is NOT a viewport, so the guard below would pass its clicks
             # through to Blender.
+            if left_header_at(event.mouse_x, event.mouse_y):
+                # a persistent popup opens on RELEASE, like the flyouts below
+                _defer_menu(show_category_menu)
+                self._redraw()
+                return {"RUNNING_MODAL"}
             side_action = sidebar_action_at(event.mouse_x, event.mouse_y)
             if side_action is not None:
                 side_index, side_btn, part = side_action
@@ -7912,6 +8478,16 @@ class NARWHAL_OT_command_input(Operator):
                 if msg:
                     st.log(msg)
                 _tag_redraw_bands()
+                self._redraw()
+                return {"RUNNING_MODAL"}
+            if layer_search_at(event.mouse_x, event.mouse_y):
+                layer_search_focus(True)
+                self._redraw()
+                return {"RUNNING_MODAL"}
+            if layer_menu_button_at(event.mouse_x, event.mouse_y):
+                cur = getattr(getattr(st, "layers", None), "current", None)
+                if cur is not None:
+                    _defer_menu(lambda n=cur.name: show_layer_menu(n))
                 self._redraw()
                 return {"RUNNING_MODAL"}
             if layer_new_button_at(event.mouse_x, event.mouse_y):
@@ -8075,6 +8651,12 @@ class NARWHAL_OT_command_input(Operator):
             # The menu is, unchanged -- this is the affordance, not a second
             # menu. Activating the pane first matches what clicking the title does,
             # so the menu always acts on the pane you aimed at.
+            if (region is not None
+                    and pane_corner_button_at(event.mouse_x, event.mouse_y) is not None):
+                set_active_pane(area)
+                toggle_maximize(area)
+                _tag_redraw_viewports()
+                return {"RUNNING_MODAL"}
             if (st.active_command is None and region is not None
                     and pane_title_arrow_at(event.mouse_x, event.mouse_y)
                     is not None):
@@ -8190,12 +8772,16 @@ class NARWHAL_OT_command_input(Operator):
                     and subobject.is_subobject_chord(shift=event.shift, ctrl=event.ctrl)):
                 # Ctrl+Shift picks a sub-object at a selection prompt; a command that
                 # takes sub-objects (`accepts_subobjects`) is then answered at once.
+                before = set(selected_subobjects())
                 _sel, msg = subobject_click(area, sp, region, event.mouse_x - region.x,
                                             event.mouse_y - region.y)
                 if msg:
                     st.log(msg)
-                if (_sel and getattr(st.active_command, "accepts_subobjects", False)):
-                    st.feed_line("")
+                cmd = st.active_command
+                added = set(_sel).difference(before)
+                single = cmd is not None and cmd.step_index < len(cmd.steps) and cmd.steps[cmd.step_index][1] == commands.OBJECTS
+                if added and single and getattr(cmd, 'accepts_subobjects', False):
+                    st.feed_line('')
                 self._redraw()
                 return {"RUNNING_MODAL"}
             if (st.active_command is not None and region is not None
@@ -8268,9 +8854,21 @@ class NARWHAL_OT_command_input(Operator):
             # never consume a move: navigation and Blender's own hover need it
             return {"PASS_THROUGH"}
 
-        if event.type in ("LEFT_ARROW", "RIGHT_ARROW") and event.value == "PRESS":
-            # MVP: caret stays at end; arrows are no-ops but consumed
-            return {"RUNNING_MODAL"}
+        # Delete belongs to the document keymap unless there is text to edit or
+        # the command field explicitly owns focus. Empty global input is not focus.
+        text_delete = event.type != 'DEL' or _console_focus or bool(st.input_buffer)
+        if (not event.ctrl or _console_focus) and text_delete:
+            edit = shell_input.handle(event, st.input_buffer, context.window_manager.clipboard or '')
+            if edit is not None:
+                changed = edit['text'] != st.input_buffer
+                st.input_buffer = edit['text']
+                if 'clipboard' in edit:
+                    context.window_manager.clipboard = edit['clipboard']
+                if changed:
+                    _set_completion_index(0)
+                    typed_changed()
+                self._redraw()
+                return {'RUNNING_MODAL'}
 
         if event.type == "UP_ARROW" and event.value == "PRESS":
             if st.active_command is None and _completion_rows_now(st):
@@ -9058,6 +9656,135 @@ def _implemented_keys():
     return set(COMMANDS)
 
 
+_preferences_ready = False
+_preferences_error = None
+
+
+def _remember_preferences(values):
+    """Save user choices, never document data; failures remain visible and nonfatal."""
+    global _preferences_error
+    if not _preferences_ready or bpy.app.background:
+        return
+    try:
+        changed = {k: v for k, v in values.items() if preferences.get(k) != v}
+        if changed:
+            preferences.update(changed)
+        _preferences_error = None
+    except (OSError, ValueError) as exc:
+        message = f'Could not save user preferences: {exc}'
+        if message != _preferences_error:
+            app_state.log(message)
+            print('[narwhal3d] ' + message, flush=True)
+        _preferences_error = message
+
+
+def user_preference_snapshot():
+    settings = snap_settings()
+    return {'theme': design.THEME, 'show_unavailable': _show_unavailable,
+            'toolbar': toolbar_tab(), 'inspector': rightpanel.TABS[_right_tab].name,
+            'grid_snap': grid_snap_on(), 'ortho': ortho_on(),
+            'gumball': gumball_enabled(), 'gumball_alignment': gumball_alignment(),
+            'viewport_tabs': viewport_tabs_visible(),
+            'osnap_modes': sorted(settings.enabled), 'osnap_disabled': settings.disabled,
+            'osnap_project': settings.project, 'ai_include_selection': _ai['state'].include_selection}
+
+
+def _restore_user_preferences():
+    global _preferences_ready, _toolbar_tab, _right_tab, _show_unavailable
+    global _grid_snap_on, _ortho_on, _gumball_enabled, _gumball_alignment, _tabs_visible
+    if _preferences_ready or bpy.app.background:
+        return
+    stored = preferences.load()
+    _toolbar_tab = stored['toolbar']
+    _right_tab = next(i for i, tab in enumerate(rightpanel.TABS) if tab.name == stored['inspector'])
+    _show_unavailable = stored['show_unavailable']
+    _grid_snap_on, _ortho_on = stored['grid_snap'], stored['ortho']
+    _gumball_enabled, _gumball_alignment = stored['gumball'], stored['gumball_alignment']
+    _tabs_visible = stored['viewport_tabs']
+    settings = snap_settings()
+    settings.enabled = set(stored['osnap_modes'])
+    settings.disabled, settings.project = stored['osnap_disabled'], stored['osnap_project']
+    _ai['state'].include_selection = stored['ai_include_selection']
+    if stored['ai_config']:
+        _ai['state'].provider = ai_assistant.credential_status(
+            ai_assistant.set_provider(**stored['ai_config']), os.environ)
+    _preferences_ready = True
+    _tag_redraw_bands()
+    _tag_redraw_viewports()
+
+
+_show_unavailable = True
+
+
+def show_unavailable():
+    return _show_unavailable
+
+
+def set_show_unavailable(show):
+    global _show_unavailable
+    _show_unavailable = bool(show)
+    _remember_preferences({'show_unavailable': _show_unavailable})
+    sidebar_flyout_close()
+    shell_popup.close()
+    _tool_scroll.clear()
+    _sidebar_cells.clear()
+    _tag_redraw_bands()
+    _tag_redraw_viewports()
+    redraw_cmdbar()
+    return _show_unavailable
+
+
+def set_shell_theme(name):
+    changed = design.set_theme(name)
+    _remember_preferences({'theme': design.THEME})
+    if changed:
+        apply_narwhal_theme(preserve_modes=True)
+        _grid_batch_cache.clear()
+        _tag_redraw_bands()
+        _tag_redraw_viewports()
+        _tag_redraw_cmdbar_header()
+        _tag_redraw_statusbar()
+    return changed
+
+
+class NARWHAL_OT_shell_theme(Operator):
+    bl_idname = 'narwhal.shell_theme'
+    bl_label = 'Interface theme'
+    theme: bpy.props.EnumProperty(items=(('light', 'Light', ''), ('dark', 'Dark', '')))
+
+    def execute(self, context):
+        set_shell_theme(self.theme)
+        return {'FINISHED'}
+
+
+class NARWHAL_OT_show_unavailable(Operator):
+    bl_idname = 'narwhal.show_unavailable'
+    bl_label = 'Show Unavailable'
+    bl_description = 'Show or hide unavailable tools and menu items'
+
+    def execute(self, context):
+        set_show_unavailable(not _show_unavailable)
+        return {'FINISHED'}
+
+
+class NARWHAL_MT_shell_theme(bpy.types.Menu):
+    bl_idname = 'NARWHAL_MT_shell_theme'
+    bl_label = 'Theme'
+
+    def draw(self, context):
+        for name in ('light', 'dark'):
+            self.layout.operator('narwhal.shell_theme', text=name.title(),
+                icon='CHECKMARK' if name == design.THEME else 'BLANK1').theme = name
+
+
+def _draw_view_preferences(layout):
+    layout.separator()
+    layout.menu('NARWHAL_MT_shell_theme', text='Theme')
+    # v7's check marks its filtered state (hide-unavailable), despite the label.
+    layout.operator('narwhal.show_unavailable', text='Show Unavailable',
+                    icon='CHECKMARK' if not _show_unavailable else 'BLANK1')
+
+
 def _draw_menu_items(layout, path):
     """Draw the rows at `path`, recursing into submenus.
 
@@ -9092,10 +9819,14 @@ def _draw_menu_items(layout, path):
     else:
         parent_command = None
 
+    preferences_added = False
     for row, command, option in menubar.submenu_actions(rows, parent_command,
                                                         option_names):
         kind, label, accel = row[0], row[1], row[2]
         if kind == "sep":
+            if menu == 'View' and not inner and not preferences_added:
+                _draw_view_preferences(layout)
+                preferences_added = True
             layout.separator()
             continue
         text = menubar.plain_label(label)
@@ -9121,12 +9852,27 @@ def _draw_menu_items(layout, path):
                 op = layout.operator("narwhal.run_command", text=text)
                 op.command = COMMANDS[command.lower()].name
             continue
-        # NOT drawn `enabled = False`. That was the first version and it was a bad
-        # kind of honest: most items are unbuilt, so almost anything the user clicked
-        # was greyed with no explanation.
-        op = layout.operator("narwhal.menu_todo", text=text)
-        op.label = menubar.plain_label(label)
-        op.command = command or ""
+        _todo_row(layout, text, menubar.plain_label(label), command or "")
+    if menu == 'View' and not inner and not preferences_added:
+        _draw_view_preferences(layout)
+
+
+def _todo_row(layout, text, label, command):
+    """An unbuilt menu row: greyed like the reference's unavailable rows, but still
+    clickable, so it explains itself instead of silently doing nothing. (An earlier
+    `enabled = False` version greyed rows with no explanation at all.) The
+    "(Not implemented)" label suffix is dropped from the drawn text -- the grey says it.
+    """
+    if not _show_unavailable:
+        return
+    suffix = menubar.resource_data.TODO_SUFFIX
+    shown = text[:-len(suffix)] if text.endswith(suffix) else text
+    plain = label[:-len(suffix)] if label.endswith(suffix) else label
+    col = layout.column()
+    col.active = False
+    op = col.operator("narwhal.menu_todo", text=shown)
+    op.label = plain
+    op.command = command
 
 
 def _ensure_menu(path):
@@ -9277,25 +10023,29 @@ def _draw_caption_items(layout, path):
         if accel:
             text = f"{text}    {accel}"
         if kind == "popup":
-            layout.menu(_ensure_caption_menu(tuple(path) + (label,)), text=text)
+            layout.menu(_ensure_caption_menu(tuple(path) + (label,)), text=text, icon="BLANK1")
             continue
         if label == views.DISPLAY_MODE_PLACEHOLDER:
-            # the reference CAD application fills this slot with its display modes; the current one ticked
+            # MEASURED (reference screenshot): the display modes are listed inline,
+            # the current one marked with a bullet. Unbuilt modes are greyed.
             cur = display_mode_of(active_pane_area()) if active_pane_area() else None
             for name, _key, implemented, _sh in views.DISPLAY_MODES:
-                op = layout.operator("narwhal.set_display_mode",
-                                     text=name + ("" if implemented else "  *"),
-                                     icon="CHECKMARK" if name == cur else "NONE")
+                col = layout.column()
+                col.active = bool(implemented)
+                op = col.operator("narwhal.set_display_mode", text=name,
+                                  icon="LAYER_ACTIVE" if name == cur else "BLANK1")
                 op.mode = name
             continue
         action = views.caption_action(plain_path, label)
         if action == views.ACTION_MAXIMIZE:
-            layout.operator("narwhal.maximize_viewport", text=text)
+            layout.operator("narwhal.maximize_viewport", text=text, icon="BLANK1")
         elif action and action.lower() in COMMANDS:
-            op = layout.operator("narwhal.run_command", text=text)
+            op = layout.operator("narwhal.run_command", text=text, icon="BLANK1")
             op.command = COMMANDS[action.lower()].name
         else:
-            op = layout.operator("narwhal.menu_todo", text=text)
+            col = layout.column()
+            col.active = False
+            op = col.operator("narwhal.menu_todo", text=text, icon="BLANK1")
             op.label = views.strip_accel(label)
             op.command = ""
 
@@ -9311,7 +10061,8 @@ def _register_one_caption_menu(path):
 
     cls = type(idname, (bpy.types.Menu,), {
         "bl_idname": idname,
-        "bl_label": views.strip_accel(frozen[-1]) if frozen else "Viewport",
+        # Empty label: the reference menu has no title row.
+        "bl_label": views.strip_accel(frozen[-1]) if frozen else "",
         "draw": draw,
     })
     try:
@@ -9402,6 +10153,249 @@ def pending_menu_armed():
     return _pending_menu is not None
 
 
+def _draw_shell_icon(name, box, size):
+    """Blender GPU boundary for the supplied PNG artwork, centred without distortion."""
+    from gpu_extras.batch import batch_for_shader
+    tex = _sidebar_texture(name)
+    shader = _image_shader()
+    if tex is None or shader is None:
+        return False
+    size = round(size)
+    x = round((box[0] + box[2] - size) / 2)
+    y = round((box[1] + box[3] - size) / 2)
+    _alpha_blend()
+    shader.bind()
+    shader.uniform_sampler('image', tex)
+    batch_for_shader(shader, 'TRI_FAN', {
+        'pos': ((x, y), (x + size, y), (x + size, y + size), (x, y + size)),
+        'texCoord': ((0, 0), (1, 0), (1, 1), (0, 1))}).draw(shader)
+    return True
+
+
+def _caption_popup_rows(path=()):
+    result = []
+    for kind, label, shortcut, payload in views.viewport_menu_rows(_caption_tree(), path):
+        if kind == 'sep':
+            result.append({'separator': True})
+        elif kind == 'popup':
+            result.append({'label': views.strip_accel(label),
+                           'children': _caption_popup_rows(path + (label,))})
+        elif label == views.DISPLAY_MODE_PLACEHOLDER:
+            for mode, key, enabled, shading in views.DISPLAY_MODES:
+                result.append({'label': mode, 'action': ('display', mode),
+                               'checked': mode == display_mode_of(active_pane_area()),
+                               'enabled': enabled})
+        else:
+            action = views.caption_action(tuple(views.strip_accel(p) for p in path), label)
+            enabled = bool(action and (action == views.ACTION_MAXIMIZE or action.lower() in COMMANDS))
+            result.append({'label': views.strip_accel(label), 'action': ('caption', action),
+                           'shortcut': shortcut, 'enabled': enabled})
+    if not _show_unavailable:
+        result = [r for r in result if r.get('enabled', True)]
+    return result
+
+
+def _caption_popup_action(action, explanation):
+    if explanation:
+        app_state.log(explanation)
+    elif action[0] == 'display':
+        area = active_pane_area()
+        if area is not None:
+            set_display_mode(area, action[1])
+    elif action[1] == views.ACTION_MAXIMIZE:
+        toggle_maximize(active_pane_area())
+    elif app_state.active_command is not None:
+        app_state.log('Finish or cancel the current command before starting another command')
+    else:
+        app_state.feed_line(action[1])
+    _tag_redraw_viewports()
+    redraw_cmdbar()
+
+
+_console_focus = False
+_category_scroll = 0.0
+_category_scroll_max = 0.0
+_tool_scroll = {}
+_tool_scroll_x = {}
+_tool_scroll_layout = None
+_tool_scroll_indicator = None
+_tool_scroll_hover = False
+_tool_scroll_drag = None
+_layer_scroll = 0.0
+_layer_scroll_layout = None
+_layer_hover = None
+
+
+def _layer_hover_update(x, y):
+    global _layer_hover
+    hit = layer_row_at(x, y) if rightpanel.TABS[_right_tab].name == 'Layers' else None
+    index = hit[0] if hit is not None else None
+    if index != _layer_hover:
+        _layer_hover = index
+        _tag_redraw_bands()
+
+
+def _shell_scroll_at(x, y, direction, horizontal=False):
+    global _category_scroll, _layer_scroll
+    bar = _cmdbar_area()
+    if bar is not None:
+        r = _window_region(bar)
+        if r and r.x <= x < r.x + r.width and r.y + r.height - _toolbar_tab_row_h <= y < r.y + r.height:
+            _category_scroll = max(0, min(_category_scroll_max, _category_scroll + direction * _fpx(83)))
+            redraw_cmdbar()
+            return True
+    if _tool_scroll_layout is not None and _inside_box(x, y, _tool_scroll_layout['viewport']):
+        store = _tool_scroll_x if horizontal else _tool_scroll
+        maximum = _tool_scroll_layout['max_x_offset' if horizontal else 'max_offset']
+        store[toolbar_tab()] = max(0, min(maximum, store.get(toolbar_tab(), 0) + direction * _fpx(38) * 3))
+        _tag_redraw_bands()
+        return True
+    if (rightpanel.TABS[_right_tab].name == 'Layers' and _layer_scroll_layout is not None
+            and _inside_box(x, y, _layer_scroll_layout['viewport'])):
+        _layer_scroll = max(0, min(_layer_scroll_layout['max_offset'], _layer_scroll + direction * rightpanel.ROW_H * 3))
+        _tag_redraw_bands()
+        return True
+    return False
+
+
+_title_release_guard = False
+
+
+def _shell_title_doubleclick(event):
+    """The second title press must win over the popup opened by the first click."""
+    global _last_title_click, _pending_menu, _title_release_guard
+    if event.type != 'LEFTMOUSE':
+        return False
+    if event.value == 'RELEASE' and _title_release_guard:
+        _title_release_guard = False
+        return True
+    if event.value not in ('PRESS', 'DOUBLE_CLICK'):
+        return False
+    hit = None if pane_title_arrow_at(event.mouse_x, event.mouse_y) is not None else pane_title_at(event.mouse_x, event.mouse_y)
+    if hit is None:
+        _last_title_click = (0.0, None)
+        return False
+    import time
+    when, key = _last_title_click
+    if key != _pane_key(hit[0]) or time.monotonic() - when > DOUBLE_CLICK_SECONDS:
+        return False
+    _last_title_click = (0.0, None)
+    _pending_menu = None
+    shell_popup.close()
+    _title_release_guard = True
+    set_active_pane(hit[0])
+    toggle_maximize(hit[0])
+    return True
+
+
+def _tool_scroll_pointer(x, y):
+    global _tool_scroll_hover
+    hover = bool(_tool_scroll_layout and _inside_box(x, y, _tool_scroll_layout['viewport']))
+    if hover != _tool_scroll_hover:
+        _tool_scroll_hover = hover
+        _tag_redraw_bands()
+
+
+def _tool_scroll_event(event):
+    global _tool_scroll_drag
+    if _tool_scroll_drag is not None:
+        if event.type == 'MOUSEMOVE' and _tool_scroll_indicator is not None:
+            start_y, offset, category = _tool_scroll_drag
+            travel = _tool_scroll_indicator['travel']
+            if travel > 0 and category == toolbar_tab():
+                maximum = _tool_scroll_layout['max_offset']
+                _tool_scroll[category] = max(0, min(maximum, offset +
+                    (start_y - event.mouse_y) * maximum / travel))
+                _tag_redraw_bands()
+            return True
+        if (event.type == 'LEFTMOUSE' and event.value == 'RELEASE') or event.type == 'ESC':
+            _tool_scroll_drag = None
+            _tag_redraw_bands()
+            return True
+    bar = _tool_scroll_indicator
+    if (bar is None or event.type != 'LEFTMOUSE' or event.value != 'PRESS'
+            or not _inside_box(event.mouse_x, event.mouse_y, bar['track'])):
+        return False
+    category = toolbar_tab()
+    if _inside_box(event.mouse_x, event.mouse_y, bar['thumb']):
+        _tool_scroll_drag = (event.mouse_y, _tool_scroll.get(category, 0), category)
+    else:
+        page = _tool_scroll_layout['viewport'][3] - _tool_scroll_layout['viewport'][1]
+        direction = 1 if event.mouse_y < bar['thumb'][1] else -1
+        _tool_scroll[category] = max(0, min(_tool_scroll_layout['max_offset'],
+            _tool_scroll.get(category, 0) + direction * page * .9))
+    _tag_redraw_bands()
+    return True
+
+
+def _shell_chrome_event(event):
+    """UI gets first refusal: a title/control click is never a modeling point."""
+    if _tool_scroll_event(event):
+        return True
+    if event.type in ('WHEELUPMOUSE', 'WHEELDOWNMOUSE'):
+        if event.value != 'PRESS':
+            return False
+        return _shell_scroll_at(event.mouse_x, event.mouse_y,
+                                1 if event.type == 'WHEELDOWNMOUSE' else -1,
+                                getattr(event, 'shift', False))
+    if event.value != 'PRESS':
+        return False
+    if event.type in ('LEFTMOUSE', 'RIGHTMOUSE'):
+        global _sidebar_tooltip_anchor
+        _sidebar_tooltip_anchor = None
+        _tag_redraw_bands()
+        _tag_redraw_viewports()
+    if event.type == 'RIGHTMOUSE':
+        flyout_button = sidebar_flyout_action_at(event.mouse_x, event.mouse_y)
+        if flyout_button is not None:
+            message = sidebar_click(flyout_button, right=True)
+            if message:
+                app_state.log(message)
+            redraw_cmdbar()
+            return True
+        hit = sidebar_action_at(event.mouse_x, event.mouse_y)
+        if hit is not None:
+            message = sidebar_click(hit[1], right=True)
+            if message:
+                app_state.log(message)
+            redraw_cmdbar()
+            return True
+        return False
+    if event.type != 'LEFTMOUSE':
+        return False
+    global _console_focus
+    bar = _cmdbar_area()
+    _console_focus = bool(bar and bar.x <= event.mouse_x < bar.x + bar.width
+                          and bar.y <= event.mouse_y < bar.y + bar.height - _toolbar_tab_row_h)
+    tab = viewport_tab_at(event.mouse_x, event.mouse_y)
+    if tab is not None:
+        message = viewport_tab_click(tab)
+        if message:
+            app_state.log(message)
+        return True
+    corner = pane_corner_button_at(event.mouse_x, event.mouse_y)
+    if corner is not None:
+        set_active_pane(corner[0])
+        toggle_maximize(corner[0])
+        return True
+    arrow = pane_title_arrow_at(event.mouse_x, event.mouse_y)
+    if arrow is not None:
+        # Only the chevron opens a menu; it is not part of the title double-click.
+        _defer_menu(lambda: show_caption_menu(arrow[0]))
+        set_active_pane(arrow[0])
+        return True
+    title = pane_title_at(event.mouse_x, event.mouse_y)
+    if title is not None:
+        import time
+        global _last_title_click
+        area, space, region = title
+        _last_title_click = (time.monotonic(), _pane_key(area))
+        set_active_pane(area)
+        _tag_redraw_viewports()
+        return True
+    return False
+
+
 def show_caption_menu(area=None):
     """Raise the viewport-caption menu. Returns its class name, or None.
 
@@ -9415,14 +10409,17 @@ def show_caption_menu(area=None):
         app_state.log("the viewport menu data is missing from this installation")
         redraw_cmdbar()
         return None
-    name = _ensure_caption_menu(())
-    try:
-        bpy.ops.wm.call_menu(name=name)
-    except Exception as e:  # noqa: BLE001
-        app_state.log(f"the viewport menu could not open ({e!r})")
-        redraw_cmdbar()
+    area = area or active_pane_area()
+    region = _window_region(area) if area is not None else None
+    if region is None:
         return None
-    return name
+    rect = views.title_menu_rect(_title_hit_rect(area, region))
+    if rect is None:
+        return None
+    shell_popup.register()
+    shell_popup.open(_caption_popup_rows(), (region.x + rect[0], region.y + rect[1]),
+                     pane_label(area), _caption_popup_action, scale=uiscale.current())
+    return _caption_idname(())
 
 
 def _draw_narwhal_menubar(self, context):
@@ -9441,6 +10438,10 @@ def _draw_narwhal_menubar(self, context):
     layout = self.layout
     layout.alignment = "LEFT"
     row = layout.row(align=True)
+    brand = _brand_icon_id()
+    if brand:
+        row.label(text='', icon_value=brand)
+        row.separator(factor=0.3)
     for name in menubar.resource_menu_names():
         row.menu(_ensure_menu((name,)), text=name)
 
@@ -9527,11 +10528,14 @@ _toolbar_icon_bad = set()
 #: toolbars in their own dock row, which is the layout state machine.
 TOOLBAR_TABS_AS_DROPDOWN = False
 
-#: Colours for the tab row. application-defined -- measured only as "the active tab is highlighted".
-TAB_ROW_BG = (0.16, 0.16, 0.16, 1.0)
-TAB_ROW_ACTIVE_BG = (0.30, 0.42, 0.62, 1.0)
-TAB_ROW_TEXT = (0.72, 0.72, 0.72, 1.0)
-TAB_ROW_ACTIVE_TEXT = (1.0, 1.0, 1.0, 1.0)
+#: Colours for the tab row. MEASURED from a reference screenshot: a #D8D9DD band, the
+#: active tab #E9EBEF (the button-row colour it opens onto), black text -- the same
+#: palette as the viewport tabs, so the chrome reads as one family. It was dark grey
+#: with a blue active tab, which was Blender's styling rather than the reference's.
+TAB_ROW_BG = design.rgb01(design.RIBBON_BG)
+TAB_ROW_ACTIVE_BG = design.rgb01(design.ACCENT_DEEP)
+TAB_ROW_TEXT = design.rgb01(design.BAR_TEXT)
+TAB_ROW_ACTIVE_TEXT = design.rgb01(design.BAR_TEXT_STRONG)
 
 #: The tab row's boxes from the last draw, for hit-testing. Recorded rather than
 #: recomputed for the same reason the prompt's option boxes are: the row we test is
@@ -9540,59 +10544,118 @@ _toolbar_tab_boxes = []
 _toolbar_tab_row_top = 0.0
 
 
+#: The compact category strip (UI design). True draws it in place of the old icon
+#: strip and text tab row.
+CATEGORY_STRIP = True
+_toolbar_tab_row_h = float(tbar.TAB_ROW_H)
+
+
 def _draw_toolbar_tab_row(shader, w, h, font_size):
-    """Draw the toolbar tab row across the top of the command-bar region.
+    """Draw the category strip across the top of the command-bar region and return
+    the height it used (0.0 when nothing fits).
 
-    Returns the height it used, so the command bar can lay itself out in what is
-    left. Returns 0.0 when there is nothing to draw, so the bar is unaffected.
-
-    Verified (the reference CAD application documentation): "Each toolbar in the container
-    displays as a tab. Click the tabs to switch between toolbars." All sixteen are
-    drawn, not just the active one -- which is the whole point of this over the
-    dropdown it replaces.
+    UI design: one compact button per category -- icon over label, the selected one
+    filled with the accent -- choosing which tools the LEFT panel shows. It is a
+    category selector, deliberately not a ribbon of commands.
     """
-    global _toolbar_tab_boxes, _toolbar_tab_row_top
+    global _toolbar_tab_boxes, _toolbar_tab_row_top, _toolbar_tab_row_h
+    global _category_scroll, _category_scroll_max
 
     names = tbar.tab_names()
-    if not names or h < tbar.TAB_ROW_H * 2:
+    strip_h = float(_fpx(design.CATEGORY_H))
+    if not names or h < strip_h + 20:
         _toolbar_tab_boxes = []
         return 0.0
-    widths = [_text_width(n, tbar.TAB_FONT_SIZE) for n in names]
-    boxes = tbar.tab_row_boxes(names, widths, w)
     row_top = float(h)
-    row_bot = row_top - tbar.TAB_ROW_H
-    _toolbar_tab_boxes = boxes
+    row_bot = row_top - strip_h
+    pad = _fpx(5.0)
+    button_w = float(_fpx(design.CATEGORY_BUTTON_W))
+    scrolling = tbar.category_scroll_layout(names, (0, row_bot, w, row_top),
+        _category_scroll, button_w=button_w, gap=_fpx(design.CATEGORY_GAP), pad=_fpx(design.CATEGORY_PAD_X))
+    _category_scroll, _category_scroll_max = scrolling['offset'], scrolling['max_offset']
+    boxes = [(names[i], x0, x1) for i, x0, y0, x1, y1 in scrolling['cells']]
+    _toolbar_tab_boxes = [(names[i], x0, x1) for i, x0, y0, x1, y1 in scrolling['hit_cells']]
     _toolbar_tab_row_top = row_top
+    _toolbar_tab_row_h = strip_h
 
     _draw_rect(shader, 0, row_bot, w, row_top, TAB_ROW_BG)
+    _draw_rect(shader, 0, row_bot, w, row_bot + 1, design.rgb01(design.BAR_BORDER))
     active = toolbar_tab()
+    icon_px = _fpx(tbar.CATEGORY_ICON)
+    label_size = _fpx(tbar.CATEGORY_LABEL_FONT)
+    img_shader = _image_shader()
+    try:
+        from gpu_extras.batch import batch_for_shader
+    except Exception:  # noqa: BLE001
+        batch_for_shader = None
     for name, x0, x1 in boxes:
-        is_active = name == active
-        if is_active:
-            _draw_rect(shader, x0, row_bot, x1, row_top, TAB_ROW_ACTIVE_BG)
-        _draw_text(x0 + tbar.TAB_PAD_X, row_bot + 6.0, name, tbar.TAB_FONT_SIZE,
-                   TAB_ROW_ACTIVE_TEXT if is_active else TAB_ROW_TEXT)
-    # An unimplemented thing must never look implemented: if the window is too
-    # narrow for the whole row, say how many tabs are missing rather than letting
-    # them vanish. the reference CAD application scrolls its row; we do not have that yet.
-    hidden = tbar.tabs_hidden(names, boxes)
-    if hidden:
-        _draw_text(max(0.0, w - 34.0), row_bot + 6.0, f"+{hidden}",
-                   tbar.TAB_FONT_SIZE, TAB_ROW_TEXT)
-    return float(tbar.TAB_ROW_H)
+        y0, y1 = row_bot + pad, row_top - pad
+        if name == active:
+            shader.bind()
+            _draw_round_rect(shader, x0, y0, x1, y1, _fpx(design.CHIP_RADIUS),
+                             TAB_ROW_ACTIVE_BG)
+        else:
+            if name == _category_hover:
+                shader.bind()
+                _draw_round_rect(shader, x0, y0, x1, y1, _fpx(design.CHIP_RADIUS),
+                                 design.rgb01(design.RIBBON_HOVER))
+            shader.bind()
+            _draw_rect(shader, x1 + _fpx(0.5), y0 + _fpx(8), x1 + _fpx(1.5), y1 - _fpx(8),
+                       design.rgb01(design.BAR_BORDER, 0.6))
+        cx = (x0 + x1) / 2.0
+        icon_top = y1 - _fpx(10)
+        tex = _sidebar_texture(tbar.category_icon(name))
+        # `blf` text drawing leaves blending off; icons need alpha or they draw on black
+        _alpha_blend()
+        if tex is not None and img_shader is not None and batch_for_shader is not None:
+            ix0, ix1 = cx - icon_px / 2.0, cx + icon_px / 2.0
+            iy0, iy1 = icon_top - icon_px, icon_top
+            try:
+                img_shader.bind()
+                img_shader.uniform_sampler("image", tex)
+                batch_for_shader(img_shader, "TRI_FAN", {
+                    "pos": ((ix0, iy0), (ix1, iy0), (ix1, iy1), (ix0, iy1)),
+                    "texCoord": ((0, 0), (1, 0), (1, 1), (0, 1))}).draw(img_shader)
+            except Exception:  # noqa: BLE001
+                pass
+        text_w = _text_width(name, label_size)
+        _draw_text(cx - text_w / 2.0, y0 + _fpx(8), name, label_size,
+                   TAB_ROW_ACTIVE_TEXT if name == active else TAB_ROW_TEXT)
+    return strip_h
 
 
 def toolbar_tab_row_at(mouse_x, mouse_y):
-    """The tab name under the WINDOW-space cursor on the tab row, or None.
+    """The category under the WINDOW-space cursor, or None.
 
-    Tested against the boxes recorded by the last draw, so the row that responds is
-    the row that is visible.
+    The ONE hit test for the category strip: the click route and the hover both use
+    it, so what lights up is exactly what a click selects. Tested against the boxes
+    the last draw recorded, in the command bar's own region -- the dock bands are
+    INFO areas too, and their coordinates must never be read against these boxes.
     """
-    area, region = _info_region_at(mouse_x, mouse_y)
-    if region is None:
+    area = _cmdbar_area()
+    if area is None:
+        return None
+    region = next((r for r in area.regions if r.type == "WINDOW"), None)
+    if region is None or not (region.x <= mouse_x < region.x + region.width
+                              and region.y <= mouse_y < region.y + region.height):
         return None
     return tbar.hit_tab_row(mouse_x - region.x, mouse_y - region.y,
-                            _toolbar_tab_boxes, _toolbar_tab_row_top)
+                            _toolbar_tab_boxes, _toolbar_tab_row_top, _toolbar_tab_row_h)
+
+
+#: The category button under the pointer, highlighted by the draw.
+_category_hover = None
+
+
+def category_hover_update(mouse_x, mouse_y):
+    """Track the hovered category button. True when it changed (and was repainted)."""
+    global _category_hover
+    name = toolbar_tab_row_at(mouse_x, mouse_y)
+    if name == _category_hover:
+        return False
+    _category_hover = name
+    _tag_redraw_cmdbar_header()
+    return True
 
 
 def _info_region_at(mouse_x, mouse_y):
@@ -9634,6 +10697,8 @@ def set_toolbar_tab(name):
     if name not in tbar.tab_names():
         return None
     _toolbar_tab = name
+    _sidebar_hover_transitions.clear()
+    _remember_preferences({'toolbar': name})
     _tag_redraw_cmdbar_header()
     return _toolbar_tab
 
@@ -9646,6 +10711,20 @@ def _tag_redraw_cmdbar_header():
                 area.tag_redraw()
     except Exception:  # noqa: BLE001
         pass
+
+
+def _brand_icon_id():
+    """Load the application mark once into Blender's native menu-bar preview cache."""
+    global _toolbar_icons
+    import bpy.utils.previews
+    if _toolbar_icons is None:
+        _toolbar_icons = bpy.utils.previews.new()
+    if '__brand__' not in _toolbar_icons:
+        path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'launch', 'narwhal3d.png')
+        if not os.path.isfile(path):
+            return 0
+        _toolbar_icons.load('__brand__', path, 'IMAGE')
+    return _toolbar_icons['__brand__'].icon_id
 
 
 def _toolbar_icon_id(icon):
@@ -9686,19 +10765,19 @@ def _toolbar_icon_id(icon):
 class NARWHAL_MT_toolbar_tabs(bpy.types.Menu):
     """The toolbar container's sixteen tabs in compatibility order."""
     bl_idname = "NARWHAL_MT_toolbar_tabs"
-    bl_label = "Toolbars"
+    bl_label = "Categories"
 
     def draw(self, context):
         layout = self.layout
         active = toolbar_tab()
         for name in tbar.tab_names():
-            op = layout.operator("narwhal.toolbar_tab",
-                                 text=f"{name}  *" if name == active else name)
+            op = layout.operator("narwhal.toolbar_tab", text=name,
+                                 icon="CHECKMARK" if name == active else "BLANK1")
             op.tab = name
 
 
 class NARWHAL_OT_toolbar_tab(Operator):
-    """Switch the toolbar strip to a tab."""
+    """Show this category's tools in the left panel"""
     bl_idname = "narwhal.toolbar_tab"
     bl_label = "Toolbar"
     bl_options = {"INTERNAL"}
@@ -9841,7 +10920,19 @@ def _show_cmdbar_header():
     sp = next((s for s in info.spaces if s.type == "INFO"), None)
     if sp is None:
         return False
-    return _set_attr(sp, "show_region_header", True)
+    # UI design: one compact category strip replaces the icon strip AND the text tab
+    # row; the selected category's tools live in the left panel, which draws its own
+    # category header -- so the left band's Blender header is hidden too.
+    if CATEGORY_STRIP:
+        try:
+            for area in bpy.context.screen.areas:
+                if area.type == "INFO" and _band_side(area) in ("left", "right"):
+                    band = next((x for x in area.spaces if x.type == "INFO"), None)
+                    if band is not None:
+                        _set_attr(band, "show_region_header", False)
+        except Exception:  # noqa: BLE001
+            pass
+    return _set_attr(sp, "show_region_header", not CATEGORY_STRIP)
 
 
 #: How many of Blender's UI units one character of pane text needs.
@@ -9994,6 +11085,15 @@ def statusbar_state():
     # Ortho: lit while the persistent mode is on (Shift only flips it for a pick)
     state["ortho"] = bool(_ortho_on)
 
+    # the document's absolute tolerance (UI design)
+    try:
+        model = getattr(app_state, "model", None)
+        if model is not None:
+            state["tolerance"] = (
+                f"Absolute Tolerance: {float(model.absolute_tolerance()):.6g}")
+    except Exception:  # noqa: BLE001
+        pass
+
     return state
 
 
@@ -10013,8 +11113,17 @@ def statusbar_click(pane_id):
         label = sbar.pane(pane_id).label
         return f"{label} is not implemented yet"
 
+    if pane_id == 'units':
+        if not bpy.app.background:
+            bpy.ops.wm.call_menu(name='NARWHAL_MT_status_units')
+        return None
     if pane_id == "grid_snap":
         return toggle_grid_snap()
+
+    if pane_id == 'tolerance':
+        if not bpy.app.background:
+            bpy.ops.wm.call_menu(name='NARWHAL_MT_status_tolerance')
+        return None
 
     if pane_id == "cplane":
         _statusbar_cplane_mode = not _statusbar_cplane_mode
@@ -10037,6 +11146,7 @@ def statusbar_click(pane_id):
             set_osnap_panel_visible(True)
             return "Osnap panel shown"
         settings.disabled = not settings.disabled
+        _remember_snap_preferences()
         _tag_redraw_viewports()
         return f"Osnap is {'off' if settings.disabled else 'on'}"
 
@@ -10159,6 +11269,23 @@ def _uninstall_statusbar_context_menu():
 _statusbar_ctx_installed = False
 
 
+_option_hover = None
+
+
+def _option_hover_update(mouse_x, mouse_y):
+    global _option_hover
+    area = _cmdbar_area()
+    region = _window_region(area) if area is not None else None
+    hover = None
+    if region is not None and region.x <= mouse_x < region.x + region.width:
+        y = mouse_y - region.y
+        if _option_line_y - 2 <= y < _option_line_y + cmdbar.LINE_H:
+            hover = cmdbar.hit_option(mouse_x - region.x, _option_boxes)
+    if hover != _option_hover:
+        _option_hover = hover
+        redraw_cmdbar()
+
+
 def _track_cursor(mouse_x, mouse_y):
     """Feed the status bar's x/y/z readout from a window-space mouse position.
 
@@ -10166,6 +11293,17 @@ def _track_cursor(mouse_x, mouse_y):
     and by the command-line modal, so the readout behaves the same whether or not
     a command is running -- the help makes it unconditional.
     """
+    # Category-strip and left-header hover ride on the same always-on MOUSEMOVE feed.
+    category_hover_update(mouse_x, mouse_y)
+    left_header_hover_update(mouse_x, mouse_y)
+    _layer_hover_update(mouse_x, mouse_y)
+    _tool_scroll_pointer(mouse_x, mouse_y)
+    _title_arrow_hover_update(mouse_x, mouse_y)
+    _option_hover_update(mouse_x, mouse_y)
+    if not _point_in_view3d(mouse_x, mouse_y):
+        # v7 retains the last real model coordinates when entering chrome. In
+        # particular an open Units menu must not make its anchor jump.
+        return False
     area, sp, region = _view3d_under_mouse(mouse_x, mouse_y)
     if region is None:
         # Outside every viewport there is no location to report. Cleared rather
@@ -10563,6 +11701,133 @@ class NARWHAL_OT_maximize_viewport(Operator):
         return {"FINISHED"}
 
 
+STATUS_UNIT_OPTIONS = ('Microns', 'Millimeters', 'Centimeters', 'Meters', 'Inches', 'Feet')
+
+
+def choose_status_units(unit):
+    """Use the existing document command, including its scale-model question."""
+    if unit not in STATUS_UNIT_OPTIONS:
+        return 'Unknown document unit'
+    if app_state.active_command is not None:
+        return 'Finish or cancel the current command before changing document units'
+    if app_state.model.unit_system() == unit:
+        return None
+    app_state.feed_line('-Units')
+    app_state.feed_line(unit)
+    _tag_redraw_statusbar()
+    redraw_cmdbar()
+    return f'Document units: {app_state.model.unit_system()}'
+
+
+class NARWHAL_OT_status_units(Operator):
+    bl_idname = 'narwhal.status_units'
+    bl_label = 'Document units'
+    bl_description = 'Change document units; asks whether to scale existing geometry'
+    unit: StringProperty(default='Millimeters')
+
+    def execute(self, context):
+        msg = choose_status_units(self.unit)
+        if msg:
+            app_state.log(msg)
+        return {'FINISHED'}
+
+
+class NARWHAL_MT_status_units(bpy.types.Menu):
+    bl_idname = 'NARWHAL_MT_status_units'
+    bl_label = 'Units'
+
+    def draw(self, context):
+        current = app_state.model.unit_system()
+        for unit in STATUS_UNIT_OPTIONS:
+            op = self.layout.operator('narwhal.status_units', text=unit,
+                icon='CHECKMARK' if unit == current else 'BLANK1')
+            op.unit = unit
+
+
+# OURS: convenient numeric choices; Custom retains the full positive-value domain.
+STATUS_TOLERANCES = (0.0001, 0.001, 0.01, 0.1, 1.0)
+
+
+def choose_status_tolerance(value):
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        return 'Absolute tolerance must be a finite positive number'
+    if not math.isfinite(value) or value <= 0:
+        return 'Absolute tolerance must be a finite positive number'
+    if app_state.active_command is not None:
+        return 'Finish or cancel the current command before changing tolerance'
+    # Enter at Units' unit prompt keeps the unit; the existing command owns undo
+    # and document persistence. No model scaling or unrelated setting is changed.
+    app_state.feed_line('-Units')
+    app_state.feed_line(f'AbsoluteTolerance={value:.12g}')
+    app_state.feed_line('')
+    _tag_redraw_statusbar()
+    redraw_cmdbar()
+    return f'Absolute tolerance: {app_state.model.absolute_tolerance():.12g}'
+
+
+class NARWHAL_OT_status_tolerance(Operator):
+    bl_idname = 'narwhal.status_tolerance'
+    bl_label = 'Absolute Tolerance'
+    value: bpy.props.FloatProperty(name='Tolerance', min=1e-12, default=.01, precision=6)
+    decimal_value: StringProperty(name='Tolerance', default='')
+
+    def execute(self, context):
+        message = choose_status_tolerance(self.decimal_value or self.value)
+        if message:
+            app_state.log(message)
+        return {'FINISHED'}
+
+    def invoke(self, context, event):
+        self.decimal_value = f'{app_state.model.absolute_tolerance():.12g}'
+        return context.window_manager.invoke_props_dialog(self, width=280)
+
+    def draw(self, context):
+        self.layout.label(text=f'In {app_state.model.unit_system().lower()}')
+        self.layout.prop(self, 'decimal_value', text='Tolerance')
+
+
+class NARWHAL_MT_status_tolerance(bpy.types.Menu):
+    bl_idname = 'NARWHAL_MT_status_tolerance'
+    bl_label = 'Absolute Tolerance'
+
+    def draw(self, context):
+        current = app_state.model.absolute_tolerance()
+        values = sorted(set(STATUS_TOLERANCES + (current,)))
+        self.layout.operator_context = 'EXEC_DEFAULT'
+        for value in values:
+            # Keep menu decimals exact instead of round-tripping through an RNA
+            # float32 property (0.01 otherwise becomes 0.00999999977648).
+            self.layout.operator('narwhal.status_tolerance', text=f'{value:.12g}',
+                icon='CHECKMARK' if value == current else 'BLANK1').decimal_value = f'{value:.12g}'
+        self.layout.separator()
+        self.layout.operator_context = 'INVOKE_DEFAULT'
+        self.layout.operator('narwhal.status_tolerance', text='Custom…')
+
+
+class NARWHAL_OT_edge_radius(Operator):
+    bl_idname = 'narwhal.edge_radius'
+    bl_label = 'Fillet Radius'
+    value: StringProperty(name='Radius')
+
+    def invoke(self, context, event):
+        current = edge_handles.numeric_start()
+        if current is None:
+            return {'CANCELLED'}
+        self.value = current
+        return context.window_manager.invoke_props_dialog(self, width=260)
+
+    def draw(self, context):
+        self.layout.prop(self, 'value')
+
+    def execute(self, context):
+        message = edge_handles.numeric_apply(self.value)
+        if message:
+            app_state.log(message)
+        return {'FINISHED'}
+
+
 class NARWHAL_OT_statusbar_click(Operator):
     """Clicking a status-bar pane."""
     bl_idname = "narwhal.statusbar_click"
@@ -10596,10 +11861,13 @@ def _draw_narwhal_statusbar(self, context):
     except Exception as exc:  # noqa: BLE001
         layout.label(text=f"status bar failed: {exc!r}")
         return
-    row = layout.row(align=True)
+    # Separate rounded chips with a small gap (UI design), not one fused strip.
+    row = layout.row(align=False)
+    row.scale_y = 0.9
     for pane in sbar.panes():
         try:
-            text = sbar.render(pane.id, state)
+            text = (sbar.compact_coordinates(state.get('coordinates')) if pane.id == 'coordinates'
+                    else sbar.render(pane.id, state))
         except Exception:  # noqa: BLE001
             continue
         # Each pane gets its own fixed-width cell so changing coordinate digits cannot
@@ -10612,8 +11880,16 @@ def _draw_narwhal_statusbar(self, context):
         # actually fixes it, and it fixes every pane at once rather than only the
         # readout -- a long layer name would have moved the row too.
         cell = row.row(align=True)
-        cell.ui_units_x = sbar.pane_width_chars(pane.id) * STATUSBAR_UNITS_PER_CHAR
-        if pane.clickable:
+        cell.ui_units_x = (design.COORDINATE_SLOT_W / 20.0 if pane.id == 'coordinates'
+                           else sbar.pane_width_chars(pane.id) * STATUSBAR_UNITS_PER_CHAR)
+        if pane.id == 'coordinates':
+            text = _clip_text(text, _fpx(design.COORDINATE_SLOT_W - 16), _fpx(12))
+        cell.active = pane.id not in STATUSBAR_UNIMPLEMENTED
+        if pane.id == 'units':
+            cell.menu('NARWHAL_MT_status_units', text=text + '  ▾')
+        elif pane.id == 'tolerance':
+            cell.menu('NARWHAL_MT_status_tolerance', text=text + '  ▾')
+        elif pane.clickable:
             op = cell.operator("narwhal.statusbar_click", text=text,
                                depress=sbar.is_active(pane.id, state))
             op.pane = pane.id
@@ -10707,6 +11983,14 @@ CLASSES = (
     NARWHAL_OT_repeat_last,
     NARWHAL_OT_toggle_layer,
     NARWHAL_OT_statusbar_click,
+    NARWHAL_OT_shell_theme,
+    NARWHAL_OT_show_unavailable,
+    NARWHAL_MT_shell_theme,
+    NARWHAL_OT_status_units,
+    NARWHAL_MT_status_units,
+    NARWHAL_OT_status_tolerance,
+    NARWHAL_MT_status_tolerance,
+    NARWHAL_OT_edge_radius,
     NARWHAL_OT_menu_todo,
     NARWHAL_OT_run_command_option,
     NARWHAL_OT_maximize_viewport,
@@ -11576,6 +12860,7 @@ def grid_snap_on():
 def set_grid_snap(on):
     global _grid_snap_on
     _grid_snap_on = bool(on)
+    _remember_preferences({'grid_snap': _grid_snap_on})
     _tag_redraw_viewports()
     return _grid_snap_on
 
@@ -11601,6 +12886,7 @@ def set_ortho(on):
     """Set the persistent Ortho mode. Returns the new state."""
     global _ortho_on
     _ortho_on = bool(on)
+    _remember_preferences({'ortho': _ortho_on})
     _tag_redraw_viewports()
     return _ortho_on
 
@@ -13670,10 +14956,10 @@ _auto_points_selection = [frozenset()]
 
 #: Colour of a point OBJECT's marker. application-defined -- the reference CAD application colours objects by layer and
 #: we have no per-object colour plumbing yet, so this is a deliberate stand-in.
-POINT_OBJECT_COLOR = (0.05, 0.05, 0.05, 1.0)
+POINT_OBJECT_COLOR = design.rgb01(design.POINT)
 
 #: Colour of a CONTROL point marker. application-defined.
-CONTROL_POINT_COLOR = (0.10, 0.10, 0.55, 1.0)
+CONTROL_POINT_COLOR = design.rgb01(design.CONTROL_POINT)
 
 #: Colour of a SELECTED control point. application-defined -- the reference CAD application's selection colour is a
 #: setting we have not plumbed; yellow reads as "selected" the way the Gumball's
@@ -13689,7 +14975,7 @@ POINT_WHITE = (1.0, 1.0, 1.0, 1.0)
 #: but the help states neither its colour nor its dash pattern. Deliberately a
 #: a dark neutral line drawn UNDER markers so it reads as structure without competing
 #: with the geometry.
-CONTROL_POLYGON_COLOR = (0.22, 0.22, 0.25, 0.9)
+CONTROL_POLYGON_COLOR = design.rgb01(design.CONTROL_POLYGON, 0.9)
 
 
 def points_on_names():
@@ -15227,6 +16513,7 @@ def draw_point_markers():
 #: points, sub-objects are parts rather than objects, so they cannot live in the
 #: Blender selection and need their own set.
 _selected_subobjects = set()
+_subobject_pick_order = []
 
 #: How close (pixels) the cursor must come to a segment to pick it. application-defined -- the reference CAD application
 #: documents the chord but not its pick radius. Wider than CONTROL_POINT_PICK_PX
@@ -15236,7 +16523,7 @@ SUBOBJECT_PICK_PX = 10.0
 #: the reference CAD application draws a selected sub-object in the same yellow it uses for a selected
 #: object (SELECT_COLOR), and this highlight is drawn OVER the wire.
 SUBOBJECT_COLOR = (1.0, 0.85, 0.0, 1.0)
-SUBOBJECT_PREVIEW_COLOR = (0.22, 0.24, 0.27, 0.85)
+SUBOBJECT_PREVIEW_COLOR = design.rgb01(design.SUBOBJECT_PREVIEW, 0.85)
 
 
 def _subobject_candidates(names=None):
@@ -15277,6 +16564,11 @@ def selected_subobjects():
     return sorted(_selected_subobjects)
 
 
+def ordered_selected_subobjects():
+    retained = [key for key in _subobject_pick_order if key in _selected_subobjects]
+    return retained + sorted(_selected_subobjects.difference(retained))
+
+
 def clear_subobject_selection():
     """Drop the whole sub-object selection. Returns how many were dropped.
 
@@ -15285,6 +16577,7 @@ def clear_subobject_selection():
     """
     n = len(_selected_subobjects)
     _selected_subobjects.clear()
+    _subobject_pick_order.clear()
     if n:
         _tag_redraw_viewports()
     return n
@@ -15650,6 +16943,11 @@ def toggle_subobject(hit):
     that is the honest reading of the help rather than a clear.
     """
     wanted = subobject.toggle(sorted(_selected_subobjects), hit)
+    if hit is not None:
+        if hit in _subobject_pick_order:
+            _subobject_pick_order.remove(hit)
+        if hit in wanted:
+            _subobject_pick_order.append(hit)
     _selected_subobjects.clear()
     _selected_subobjects.update(wanted)
     _tag_redraw_viewports()
@@ -15720,6 +17018,16 @@ def _selected_subobject_points():
     return pts
 
 
+def _refresh_cage_captives(model, geom):
+    """CageEdit: a moved cage point re-deforms every captive of that cage."""
+    try:
+        from . import cage
+        if cage.binding_of(geom) is not None:
+            cage.refresh(model, geom)
+    except Exception as exc:  # noqa: BLE001 -- report, never break the drag
+        print(f"[narwhal3d] CageEdit refresh failed: {exc}")
+
+
 def gumball_targets_subobjects():
     """True when the Gumball is acting on a sub-object selection."""
     return bool(_selected_subobjects) and bool(_selected_subobject_points())
@@ -15744,7 +17052,8 @@ def _apply_xform_to_subobjects(xform):
     if file3dm is None:
         return False
     moved = 0
-    for fobj in file3dm.Objects:
+    moved_geoms = []
+    for fobj in list(file3dm.Objects):
         name = fobj.Attributes.Name or ""
         if name not in grips:
             continue
@@ -15764,6 +17073,10 @@ def _apply_xform_to_subobjects(xform):
             if bridge.set_control_point(geom, index, new):
                 moved += 1
                 _bump_cp_version()
+        if targets:
+            moved_geoms.append(geom)
+    for geom in moved_geoms:          # after the walk: refreshing edits the object table
+        _refresh_cage_captives(model, geom)
     if not moved:
         return False
     rebuild_display_keeping_selection()
@@ -15786,31 +17099,11 @@ def _command_edge_selection_keys():
 
 
 def draw_edge_command_handles(region, rv3d, shader, batch_for_shader):
-    """Draw the selected edge's radius/distance leader, grip and value label."""
-    getter = getattr(app_state.active_command, "handle_records", None)
-    if not callable(getter):
-        return
-    try:
-        records = getter()
-    except Exception:  # noqa: BLE001
-        return
-    for record in records:
-        pos = _project_2d(region, rv3d, record["point"])
-        if pos is None:
-            continue
-        x, y = pos
-        hx, hy = x + 38.0, y + 24.0
-        shader.uniform_float("color", (0.95, 0.95, 0.95, 1.0))
-        batch_for_shader(shader, "LINES", {"pos": ((x, y), (hx, hy))}).draw(shader)
-        circle = []
-        for i in range(12):
-            a = 2.0 * math.pi * i / 12.0
-            b = 2.0 * math.pi * (i + 1) / 12.0
-            circle.extend(((hx + 4.0 * math.cos(a), hy + 4.0 * math.sin(a)),
-                           (hx + 4.0 * math.cos(b), hy + 4.0 * math.sin(b))))
-        batch_for_shader(shader, "LINES", {"pos": circle}).draw(shader)
-        _draw_text(hx + 10.0, hy - 5.0, f"{float(record['size']):.2f}", 13,
-                   (0.95, 0.95, 0.95, 1.0))
+    edge_handles.draw(region, rv3d, shader, batch_for_shader)
+
+
+def _edge_radius_event(event):
+    return edge_handles.handle_event(event)
 
 
 def _brep_preview_wireframe(parts, part, vector):
@@ -16446,7 +17739,9 @@ def draw_command_preview():
         return
     preview_getter = getattr(cmd, "preview_geometry", None)
     exact_preview = preview_getter() if callable(preview_getter) else None
-    if _preview_cursor is None and exact_preview is None:
+    line_getter = getattr(cmd, 'preview_lines', None)
+    section_lines = line_getter() if callable(line_getter) else ()
+    if _preview_cursor is None and exact_preview is None and not section_lines:
         return
     context = bpy.context
     area = getattr(context, "area", None)
@@ -16484,6 +17779,7 @@ def draw_command_preview():
     polylines = preview.segments(getattr(cmd, "name", None), cmd.args,
                                 _preview_cursor, plane,
                                 resolve=_resolve_preview_geom, cmd=cmd)
+    polylines = list(polylines or ()) + list(section_lines)
     exact_polylines = ghost_polylines(exact_preview) if exact_preview is not None else []
     ghost = live_transform(cmd, _preview_cursor) is not None
     if not polylines and not exact_polylines and not ghost:
@@ -16499,34 +17795,38 @@ def draw_command_preview():
         return
 
     prev_blend = gpu.state.blend_get()
+    prev_width = gpu.state.line_width_get()
     gpu.state.blend_set("ALPHA")
     try:
         if ghost:
             # the objects themselves, then the band on top of them
             _draw_transform_ghost(cmd, shader, gpu, batch_for_shader)
-        shader.bind()
+        shader, aa = _line_shader()
+        if shader is None:
+            return
+        _line_begin(shader, aa)
+        _line_width(shader, aa, CURVE_WIRE_WIDTH)
         if exact_polylines:
             shader.uniform_float("color", (0.92, 0.92, 0.92, 1.0))
             for poly in exact_polylines:
                 coords = [point for pair in zip(poly, poly[1:]) for point in pair]
                 if coords:
-                    batch_for_shader(shader, "LINES", {"pos": coords}).draw(shader)
+                    _line_batch(shader, aa, coords).draw(shader)
         shader.uniform_float("color", PREVIEW_COLOR)
         for poly in polylines or ():
-            # LINE_STRIP is not available on every builtin shader, so build the
-            # segment pairs explicitly and draw LINES.
+            # Feed endpoint pairs to the same AA stroke builder as completed curves.
             coords = []
             for a, b in zip(poly, poly[1:]):
                 coords.append(a)
                 coords.append(b)
             if not coords:
                 continue
-            batch = batch_for_shader(shader, "LINES", {"pos": coords})
-            batch.draw(shader)
+            _line_batch(shader, aa, coords).draw(shader)
     except Exception as e:  # noqa: BLE001
         # A preview is cosmetic; never let it break the viewport draw.
         print(f"[narwhal3d] preview draw failed: {e!r}")
     finally:
+        gpu.state.line_width_set(prev_width)
         gpu.state.blend_set(prev_blend)
 
 
@@ -16607,6 +17907,9 @@ def open_print_dialog():
     st = printdialog.DialogState(views=labels,
                                  view=pane_label(active) if pane_label(active)
                                  in views else (labels[0] if labels else ""))
+    for key, value in preferences.get('print_settings').items():
+        if key != 'view' or value in labels:
+            setattr(st, key, value)
     _print_dialog = {"state": st, "views": views, "pane": _pane_key(active),
                      "page": None}
     _print_dialog_refresh()
@@ -16617,6 +17920,11 @@ def open_print_dialog():
 def close_print_dialog():
     global _print_dialog
     was = _print_dialog is not None
+    if was:
+        st = _print_dialog['state']
+        _remember_preferences({'print_settings': {key: getattr(st, key) for key in (
+            'destination', 'cdr_version', 'size', 'orientation', 'color', 'area',
+            'scale', 'width', 'view', 'selected_only', 'custom_w', 'custom_h')}})
     _print_dialog = None
     _tag_redraw_viewports()
     return was
@@ -16845,10 +18153,10 @@ def draw_print_dialog():
     st = _print_dialog["state"]
     lay = printdialog.layout(region.width, region.height, sc, st)
     fs = 13.0 * sc
-    ink = (0.05, 0.05, 0.05, 1)
-    blue = (0.20, 0.45, 0.85, 1)
+    ink = design.rgb01(design.TEXT)
+    blue = design.rgb01(design.ACCENT)
 
-    def box(r, fill, border=(0.6, 0.6, 0.62, 1)):
+    def box(r, fill, border=design.rgb01(design.BORDER_STRONG)):
         shader.bind()
         _draw_rect(shader, r.x - 1, r.y - 1, r.x + r.w + 1, r.y + r.h + 1, border)
         _draw_rect(shader, r.x, r.y, r.x + r.w, r.y + r.h, fill)
@@ -16858,25 +18166,25 @@ def draw_print_dialog():
         shader.bind()
         _draw_rect(shader, 0, 0, region.width, region.height, (0, 0, 0, 0.35))
         p = lay.panel
-        _draw_rect(shader, p.x, p.y, p.x + p.w, p.y + p.h, (0.94, 0.94, 0.94, 1))
+        _draw_rect(shader, p.x, p.y, p.x + p.w, p.y + p.h, design.rgb01(design.PANEL_BG))
         t = lay.title
-        _draw_rect(shader, t.x, t.y, t.x + t.w, t.y + t.h, (0.85, 0.85, 0.87, 1))
+        _draw_rect(shader, t.x, t.y, t.x + t.w, t.y + t.h, design.rgb01(design.PANEL_HEADER_BG))
         _draw_text(t.x + 10 * sc, t.y + 9 * sc, "Print Setup", fs + 1, ink)
         for rid, lr, vr in lay.rows:
             kind = printdialog.ROW_KINDS[rid]
             _draw_text(lr.x, lr.y + 8 * sc, printdialog.ROW_LABELS[rid], fs,
-                       (0.1, 0.1, 0.1, 1))
+                       design.rgb01(design.TEXT))
             if kind == "check":
                 cb = printdialog.Rect(vr.x, vr.y + (vr.h - 16 * sc) / 2, 16 * sc,
                                       16 * sc)
-                box(cb, blue if st.selected_only else (1, 1, 1, 1))
+                box(cb, blue if st.selected_only else design.rgb01(design.FIELD_BG))
                 if st.selected_only:
                     _draw_text(cb.x + 3 * sc, cb.y + 3 * sc, "\u2713", fs,
                                (1, 1, 1, 1))
                 continue
             focused = kind == "field" and st.focus == rid
             opened = st.open_dropdown == rid
-            box(vr, (1, 1, 1, 1), blue if (focused or opened) else (0.6, 0.6, 0.62, 1))
+            box(vr, design.rgb01(design.FIELD_BG), blue if (focused or opened) else design.rgb01(design.BORDER_STRONG))
             text = st.shown(rid)
             tx0 = vr.x + printdialog.FIELD_TEXT_PAD * sc
             if focused:
@@ -16888,7 +18196,7 @@ def draw_print_dialog():
                     shader.bind()
                     _draw_rect(shader, tx0 + meas(text[:sel[0]]), vr.y + 4 * sc,
                                tx0 + meas(text[:sel[1]]), vr.y + vr.h - 4 * sc,
-                               (0.70, 0.82, 1.0, 1))
+                               design.rgb01(design.ACCENT_SOFT))
             _draw_text(tx0, vr.y + 8 * sc, text, fs, ink)
             if focused:
                 cx = tx0 + meas(text[:fld.caret])
@@ -16897,10 +18205,10 @@ def draw_print_dialog():
                            vr.y + vr.h - 5 * sc, ink)
             if kind == "choice":
                 _draw_text(vr.x + vr.w - 16 * sc, vr.y + 8 * sc, "\u25be", fs,
-                           (0.3, 0.3, 0.3, 1))
+                           design.rgb01(design.TEXT_MUTED))
         pv = lay.preview
         shader.bind()
-        _draw_rect(shader, pv.x, pv.y, pv.x + pv.w, pv.y + pv.h, (0.55, 0.56, 0.58, 1))
+        _draw_rect(shader, pv.x, pv.y, pv.x + pv.w, pv.y + pv.h, design.rgb01(design.APP_BG))
         page = _print_dialog.get("page")
         if page is not None:
             sheet = printdialog.page_rect(pv, page.width_mm, page.height_mm)
@@ -16935,14 +18243,14 @@ def draw_print_dialog():
             for ln in lines:
                 if y_ < nr.y:
                     break
-                _draw_text(nr.x, y_, ln, fs - 1, (0.25, 0.25, 0.25, 1))
+                _draw_text(nr.x, y_, ln, fs - 1, design.rgb01(design.TEXT_MUTED))
                 y_ -= line_h
         for bid, b in lay.buttons:
             shader.bind()
-            fill = blue if bid == "print" else (0.88, 0.88, 0.9, 1)
+            fill = blue if bid == "print" else design.rgb01(design.CHIP_BG)
             _draw_rect(shader, b.x, b.y, b.x + b.w, b.y + b.h, fill)
             label = dict(printdialog.BUTTONS)[bid]
-            col = (1, 1, 1, 1) if bid == "print" else (0, 0, 0, 1)
+            col = (1, 1, 1, 1) if bid == "print" else ink
             _draw_text(b.x + (b.w - _text_width(label, fs)) / 2, b.y + 9 * sc,
                        label, fs, col)
         # the open dropdown LAST, so it sits over everything it overlaps
@@ -16953,7 +18261,7 @@ def draw_print_dialog():
             r0 = lay.dropdown[0][1]
             frame = printdialog.Rect(r0.x, min(ys), r0.w,
                                      max(ys) + r0.h - min(ys))
-            box(frame, (1, 1, 1, 1), (0.45, 0.45, 0.48, 1))
+            box(frame, design.rgb01(design.MENU_BG), design.rgb01(design.BORDER_STRONG))
             cur = getattr(st, rid)
             for i, r in lay.dropdown:
                 if i == st.hover:
@@ -16977,6 +18285,7 @@ def _exit_handler(*_args):
     intercept) keep unsaved work in a recovery copy. Never raises."""
     from . import file_commands
 
+    _remember_preferences(user_preference_snapshot())
     path = file_commands.write_recovery()
     if path:
         print(f"[narwhal3d] unsaved changes kept in {path}")
@@ -17269,6 +18578,7 @@ def set_gumball(on):
     global _gumball_enabled
     changed = bool(on) != _gumball_enabled
     _gumball_enabled = bool(on)
+    _remember_preferences({'gumball': _gumball_enabled})
     if changed:
         _tag_redraw_viewports()
     return _gumball_enabled
@@ -17378,6 +18688,7 @@ def set_gumball_alignment(name):
     if not gumball.alignment_is_implemented(key):
         return None
     _gumball_alignment = key
+    _remember_preferences({'gumball_alignment': key})
     _gumball_turn = None                  # choosing an alignment re-aligns the widget
     _tag_redraw_viewports()
     return _gumball_alignment
@@ -17575,6 +18886,31 @@ def pane_title_at(mouse_x, mouse_y):
     return None
 
 
+def pane_corner_button_at(mouse_x, mouse_y):
+    """``(area, space, region)`` when the cursor is on a viewport's corner
+    maximize/restore button (UI design), else None."""
+    area, space, region = _view3d_under_mouse(mouse_x, mouse_y)
+    if region is None:
+        return None
+    if views.hit_corner_button(mouse_x - region.x, mouse_y - region.y, region.width,
+                               region.height, _fpx(views.CORNER_BUTTON),
+                               _fpx(views.CORNER_INSET)):
+        return area, space, region
+    return None
+
+
+_title_arrow_hover_key = None
+
+
+def _title_arrow_hover_update(x, y):
+    global _title_arrow_hover_key
+    hit = pane_title_arrow_at(x, y)
+    key = _pane_key(hit[0]) if hit is not None else None
+    if key != _title_arrow_hover_key:
+        _title_arrow_hover_key = key
+        _tag_redraw_viewports()
+
+
 def pane_title_arrow_at(mouse_x, mouse_y):
     """``(area, space, region)`` when the cursor is on a title's DROP-DOWN ARROW.
 
@@ -17667,7 +19003,39 @@ def _pane_view_state(area):
         # restore re-SPLITS the panes, and a split copies the maximized pane's
         # shading -- so each pane's own display mode has to be put back with its camera.
         "display": display_mode_of(area),
+        "label": pane_label(area),
+        "cplane": get_cplane(area),
     }
+
+
+def _apply_one_pane_state(area, state):
+    rv = _view3d_space(area).region_3d
+    rv.view_perspective = state['perspective']
+    rv.view_rotation = state['rotation']
+    rv.view_location = state['location']
+    rv.view_distance = state['distance']
+    if state.get('display'):
+        set_display_mode(area, state['display'])
+    if state.get('cplane') is not None:
+        set_cplane(area, state['cplane'])
+
+
+def _switch_maximized_view(label):
+    global _maximized_slot
+    if _maximize_busy:
+        return 'Viewport layout is changing'
+    slot = next((i for i, state in enumerate(_saved_pane_views)
+                 if state and state['label'] == label), None)
+    area = next(iter(_view3d_areas()), None)
+    if slot is None or area is None:
+        return f'There is no {label} viewport'
+    if _maximized_slot is not None:
+        _saved_pane_views[_maximized_slot] = _pane_view_state(area)
+    _apply_one_pane_state(area, _saved_pane_views[slot])
+    _maximized_slot = slot
+    set_active_pane(area)
+    _tag_redraw_viewports()
+    return f'Activated the {label} viewport'
 
 
 def _capture_pane_views():
@@ -17703,6 +19071,8 @@ def _apply_pane_views(states):
             rv3d.view_distance = st["distance"]
             if st.get("display"):
                 set_display_mode(area, st["display"])
+            if st.get('cplane') is not None:
+                set_cplane(area, st['cplane'])
             applied += 1
         except Exception:  # noqa: BLE001
             pass
@@ -17754,6 +19124,9 @@ def _maximize_step():
                             rv3d.view_distance = want["distance"]
                             if want.get("display"):
                                 set_display_mode(v3d[0], want["display"])
+                            if want.get('cplane') is not None:
+                                set_cplane(v3d[0], want['cplane'])
+                            set_active_pane(v3d[0])
                         except Exception:  # noqa: BLE001
                             pass
                 _maximized = True
@@ -18350,7 +19723,8 @@ def _answer_edge_prompt_with_click(area, space, region, rx, ry,
                       for i in range(3))
     else:
         point = polyline[len(polyline) // 2]
-    action = "ctrl" if ctrl else "shift" if shift else "plain"
+    # Ctrl+Shift is the component-pick chord, not Ctrl-only removal.
+    action = "shift" if shift else "ctrl" if ctrl else "plain"
     message, done = picker(name, edge_id, point, action, app_state.ctx)
     app_state.history.append(f"> {action} edge {edge_id} of {name}")
     if message:
@@ -19253,7 +20627,10 @@ def _project_2d(region, rv3d, point):
         import bpy_extras.view3d_utils as v3u
         from mathutils import Vector
 
-        co = v3u.location_3d_to_region_2d(region, rv3d, Vector(point))
+        # rhino3dm Point3d is not iterable. Exact segment producers return those
+        # points, so Vector(point) silently rejected every curve-component pick.
+        xyz = (point.X, point.Y, point.Z) if hasattr(point, 'X') else point
+        co = v3u.location_3d_to_region_2d(region, rv3d, Vector(xyz))
     except Exception:  # noqa: BLE001
         return None
     if co is None:
@@ -21248,7 +22625,9 @@ def draw_gumball():
     # lines draw over them. No depth buffer is used -- the widget stays on top of the
     # model, as the reference CAD application's does -- so a solid reads as 3-D by drawing only its FRONT faces,
     # each shaded by how squarely it faces the viewer.
-    tris = gumball_solid_triangles(handles, getattr(space, "region_3d", None), active)
+    caps = [handle for handle in handles if handle.kind in (gumball.EXTRUDE_HANDLE, gumball.SCALE)]
+    under = [handle for handle in handles if handle.kind not in (gumball.EXTRUDE_HANDLE, gumball.SCALE)]
+    tris = gumball_solid_triangles(under, getattr(space, "region_3d", None), active)
     if tris[0]:
         try:
             smooth = gpu.shader.from_builtin("SMOOTH_COLOR")
@@ -21271,6 +22650,13 @@ def draw_gumball():
                     coords_.append(b)
             if coords_:
                 _line_batch(shader, aa, coords_).draw(shader)
+        # Opaque grab controls are foreground occluders. Painting them after the
+        # shafts prevents other projected axes/leaders cutting through a highlighted ball/cube.
+        cap_tris = gumball_solid_triangles(caps, getattr(space, 'region_3d', None), active)
+        if cap_tris[0]:
+            smooth = gpu.shader.from_builtin('SMOOTH_COLOR')
+            smooth.bind()
+            batch_for_shader(smooth, 'TRIS', {'pos': cap_tris[0], 'color': cap_tris[1]}).draw(smooth)
     except Exception as e:  # noqa: BLE001
         # the widget is cosmetic until grabbed; never break the viewport draw
         print(f"[narwhal3d] gumball draw failed: {e!r}")
@@ -21295,9 +22681,8 @@ def _attach_gumball_handler():
     handler_id = bpy.types.SpaceView3D.draw_handler_add(
         draw_gumball, (), "WINDOW", "POST_VIEW")
     _gumball_handlers.append((bpy.types.SpaceView3D, handler_id))
-    tip_id = bpy.types.SpaceView3D.draw_handler_add(
-        draw_gumball_tooltip, (), "WINDOW", "POST_PIXEL")
-    _gumball_handlers.append((bpy.types.SpaceView3D, tip_id))
+    # Passive handle descriptions are intentionally hidden; numeric drag input
+    # and command prompts remain available without a tooltip covering the model.
     return True
 
 
@@ -21342,9 +22727,17 @@ def _attach_view_labels():
     _view_label_handlers.append((bpy.types.SpaceView3D, comp_id))
     # Sidebar icon names are compact cards beside the dock, drawn in viewport space so
     # the left INFO region cannot clip them.
+    global _window_chrome_handle
+    if hasattr(bpy.types.Window, 'draw_handler_add'):
+        if _window_chrome_handle is None:
+            _window_chrome_handle = bpy.types.Window.draw_handler_add(_draw_window_chrome, (), 'POST_PIXEL')
+        return True
     tooltip_id = bpy.types.SpaceView3D.draw_handler_add(
         draw_sidebar_tooltip_overlay, (), "WINDOW", "POST_PIXEL")
     _view_label_handlers.append((bpy.types.SpaceView3D, tooltip_id))
+    tooltip_info = bpy.types.SpaceInfo.draw_handler_add(
+        draw_sidebar_tooltip_overlay, (), 'WINDOW', 'POST_PIXEL')
+    _view_label_handlers.append((bpy.types.SpaceInfo, tooltip_info))
     # The cascade popup must be last so its floating toolbar and hover card stay
     # above viewport labels, command completion chrome, and the anchor tooltip.
     flyout_id = bpy.types.SpaceView3D.draw_handler_add(
@@ -21443,6 +22836,16 @@ def register():
 
 
 def unregister():
+    global _window_chrome_handle
+    if _window_chrome_handle is not None:
+        bpy.types.Window.draw_handler_remove(_window_chrome_handle)
+        _window_chrome_handle = None
+    shell_popup.unregister()
+    _sidebar_textures.clear()
+    for image in _sidebar_images.values():
+        bpy.data.images.remove(image)
+    _sidebar_images.clear()
+    grid_render.clear_cache()
     # Restore the suppressed Blender shortcuts BEFORE removing our own keymap
     # entries. Removing items from the "3D View" keymap makes Blender
     # re-materialise it, which invalidates the KeyMapItem references recorded
@@ -21507,7 +22910,8 @@ SCALED_CONSTANTS = {
     cmdbar: ("LINE_H", "PAD_X", "PAD_Y"),
     rightpanel: ("BAND_W", "TAB_STRIP_W", "TAB_PITCH", "TAB_ICON", "TITLE_H", "HEADER_H",
                  "ROW_H", "NAME_COL_W", "NARROW_COL_W", "DISPLAY_PAD",
-                 "DISPLAY_LABEL_H", "DISPLAY_ROW_H", "DISPLAY_GAP"),
+                 "DISPLAY_LABEL_H", "DISPLAY_ROW_H", "DISPLAY_GAP",
+                 "SEARCH_H", "SEARCH_PAD", "TITLE_BUTTON"),
     views: ("TITLE_CHIP_PAD_X", "TITLE_CHIP_PAD_Y", "TITLE_LABEL_PAD", "TITLE_ARROW_W",
             "TITLE_ARROW_HALF", "TITLE_ARROW_H", "TAB_H", "TAB_PAD_X", "TAB_GAP",
             "OSNAP_PANEL_W", "OSNAP_ROW_H", "OSNAP_BOX", "OSNAP_PAD", "OSNAP_TITLE_H",
@@ -21515,7 +22919,7 @@ SCALED_CONSTANTS = {
     tbar: ("TAB_ROW_H", "TAB_PAD_X", "TAB_FONT_SIZE", "SIDEBAR_ICON", "SIDEBAR_PAD",
            "SIDEBAR_CELL", "SIDEBAR_MARK", "SIDEBAR_FLYOUT_HOT",
            "SIDEBAR_TOOLTIP_PAD", "SIDEBAR_TOOLTIP_GAP", "SIDEBAR_TOOLTIP_LINE",
-           "SIDEBAR_TOOLTIP_FONT", "FLYOUT_CELL", "FLYOUT_MARGIN", "FLYOUT_TITLE_H",
+           "SIDEBAR_TOOLTIP_FONT", "FLYOUT_CELL", "FLYOUT_ICON", "FLYOUT_GAP", "FLYOUT_MARGIN", "FLYOUT_TITLE_H",
            "FLYOUT_OVERLAP"),
     gumball: ("DEFAULT_SIZE_PX", "PICK_TOLERANCE_PX", "MENU_PICK_MARGIN_PX"),
     pointdisplay: ("DEFAULT_SIZE_PX", "CONTROL_POLYGON_DASH_PX", "CONTROL_POLYGON_GAP_PX"),

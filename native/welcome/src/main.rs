@@ -1,4 +1,5 @@
 mod native_stacking;
+mod theme;
 
 use eframe::egui::{self, Color32, RichText, Stroke, Vec2};
 use reqwest::blocking::{Client, Response};
@@ -155,6 +156,7 @@ impl PendingRequest {
 }
 
 struct WelcomeApp {
+    theme: theme::Theme,
     tab: Tab,
     recent: Vec<PathBuf>,
     request: PathBuf,
@@ -977,7 +979,10 @@ impl WelcomeApp {
         let (sender, events) = mpsc::channel();
         let (update_sender, update_events) = mpsc::channel();
         let current_version = current_version().ok();
+        let theme = theme::Theme::load();
+        theme.apply(&cc.egui_ctx);
         Self {
+            theme,
             tab: Tab::Recent,
             recent: recent_files(),
             request: config.request.clone(),
@@ -1214,7 +1219,8 @@ impl WelcomeApp {
         alpha
     }
 
-    fn top_tabs(&mut self, ui: &mut egui::Ui, alpha: u8) {
+    fn top_tabs(&mut self, ui: &mut egui::Ui) {
+        let palette = self.theme.palette();
         let tabs = [
             (Tab::New, "New"),
             (Tab::Recent, "Recent"),
@@ -1225,13 +1231,13 @@ impl WelcomeApp {
             for (tab, label) in tabs {
                 let selected = self.tab == tab;
                 let text = RichText::new(label).size(10.5).color(if selected {
-                    Color32::from_white_alpha(alpha)
+                    palette.on_accent
                 } else {
-                    Color32::from_black_alpha(alpha)
+                    palette.text
                 });
                 let button = egui::Button::new(text)
                     .fill(if selected {
-                        Color32::from_rgba_unmultiplied(24, 93, 133, alpha)
+                        palette.accent
                     } else {
                         Color32::TRANSPARENT
                     })
@@ -1256,20 +1262,21 @@ impl WelcomeApp {
                 ui.label(
                     RichText::new("EARLY PREVIEW")
                         .size(8.0)
-                        .color(Color32::from_black_alpha(alpha)),
+                        .color(palette.muted),
                 );
             });
         });
     }
 
-    fn recent_grid(&mut self, ui: &mut egui::Ui, alpha: u8) {
+    fn recent_grid(&mut self, ui: &mut egui::Ui) {
+        let palette = self.theme.palette();
         if self.recent.is_empty() {
             ui.vertical_centered(|ui| {
                 ui.add_space(90.0);
                 ui.label(
                     RichText::new("No recent models yet")
                         .size(12.0)
-                        .color(Color32::from_black_alpha(alpha)),
+                        .color(palette.muted),
                 );
                 ui.label("Use Open… to choose a .3dm model.");
             });
@@ -1290,10 +1297,10 @@ impl WelcomeApp {
                             RichText::new("NARWHAL\n3DM")
                                 .size(8.5)
                                 .strong()
-                                .color(Color32::from_rgba_unmultiplied(225, 241, 247, alpha)),
+                                .color(palette.chrome_text),
                         )
-                        .fill(Color32::from_rgba_unmultiplied(99, 118, 132, alpha))
-                        .stroke(Stroke::new(1.0, Color32::from_black_alpha(alpha)))
+                        .fill(palette.chrome)
+                        .stroke(Stroke::new(1.0, palette.border_strong))
                         .min_size(Vec2::new(76.0, 70.0));
                         if ui
                             .add(preview)
@@ -1307,12 +1314,8 @@ impl WelcomeApp {
                             );
                         }
                         ui.add(
-                            egui::Label::new(
-                                RichText::new(name)
-                                    .size(7.5)
-                                    .color(Color32::from_black_alpha(alpha)),
-                            )
-                            .truncate(),
+                            egui::Label::new(RichText::new(name).size(7.5).color(palette.text))
+                                .truncate(),
                         );
                     });
                     if index % 4 == 3 {
@@ -1322,8 +1325,8 @@ impl WelcomeApp {
             });
     }
 
-    fn new_panel(&mut self, ui: &mut egui::Ui, alpha: u8) {
-        ui.heading(RichText::new("Start a new model").color(Color32::from_black_alpha(alpha)));
+    fn new_panel(&mut self, ui: &mut egui::Ui) {
+        ui.heading(RichText::new("Start a new model").color(self.theme.palette().strong));
         ui.label("Choose the document unit system:");
         ui.add_space(12.0);
         for (label, unit) in NEW_UNITS {
@@ -1337,8 +1340,8 @@ impl WelcomeApp {
         }
     }
 
-    fn open_panel(&mut self, ui: &mut egui::Ui, alpha: u8) {
-        ui.heading(RichText::new("Open a model").color(Color32::from_black_alpha(alpha)));
+    fn open_panel(&mut self, ui: &mut egui::Ui) {
+        ui.heading(RichText::new("Open a model").color(self.theme.palette().strong));
         ui.label("Open a .3dm or another supported model file.");
         ui.add_space(18.0);
         if ui
@@ -1359,7 +1362,7 @@ impl Drop for WelcomeApp {
 impl eframe::App for WelcomeApp {
     fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
         let alpha = self.lifetime.fade_alpha(Instant::now());
-        [0.97 * alpha, 0.97 * alpha, 0.97 * alpha, alpha]
+        self.theme.clear_color(alpha)
     }
 
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
@@ -1433,23 +1436,23 @@ impl eframe::App for WelcomeApp {
         if self.hidden {
             return;
         }
-        let alpha = (alpha_f * 255.0) as u8;
+        let palette = self.theme.palette();
+        // Fade the entire UI once, including custom text and theme-provided widgets.
         ui.set_opacity(alpha_f);
-        ctx.set_visuals(egui::Visuals::light());
         egui::Frame::new()
-            .fill(Color32::from_rgba_unmultiplied(247, 248, 249, alpha))
-            .stroke(Stroke::new(1.0, Color32::from_rgba_unmultiplied(85, 92, 100, alpha)))
+            .fill(palette.panel)
+            .stroke(Stroke::new(1.0, palette.border))
             .show(ui, |ui| {
-                self.top_tabs(ui, alpha);
+                self.top_tabs(ui);
                 ui.separator();
                 ui.horizontal(|ui| {
                     ui.vertical(|ui| {
                         ui.set_width(400.0);
                         ui.add_space(12.0);
                         match self.tab {
-                            Tab::New => self.new_panel(ui, alpha),
-                            Tab::Recent => self.recent_grid(ui, alpha),
-                            Tab::Open => self.open_panel(ui, alpha),
+                            Tab::New => self.new_panel(ui),
+                            Tab::Recent => self.recent_grid(ui),
+                            Tab::Open => self.open_panel(ui),
                             Tab::About => {
                                 ui.heading("Narwhal 3D");
                                 ui.label("Early precision NURBS CAD preview");
@@ -1466,7 +1469,7 @@ impl eframe::App for WelcomeApp {
                         ui.label("Use the viewport-title arrow to change display mode.");
                         ui.add_space(50.0);
                         ui.image((self.logo.id(), Vec2::splat(85.0)));
-                        ui.label(RichText::new("Narwhal 3D").size(16.0).strong().color(Color32::from_rgba_unmultiplied(24, 93, 133, alpha)));
+                        ui.label(RichText::new("Narwhal 3D").size(16.0).strong().color(palette.accent));
                     });
                 });
                 ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
@@ -1476,7 +1479,7 @@ impl eframe::App for WelcomeApp {
                             .animate(animate)
                             .desired_width(ui.available_width()),
                     );
-                    ui.label(RichText::new(&self.status).color(Color32::from_black_alpha(alpha)));
+                    ui.label(RichText::new(&self.status).color(palette.text));
                 });
             });
         ctx.request_repaint_after(Duration::from_millis(33));
@@ -1623,7 +1626,7 @@ mod tests {
         assert_eq!(parse_version("0.5.0"), None);
         assert_eq!(parse_version("0.4"), None);
         assert_eq!(parse_version("0.4.5.1"), None);
-        assert_eq!(env!("CARGO_PKG_VERSION"), "0.4.6");
+        assert_eq!(env!("CARGO_PKG_VERSION"), "0.4.7");
         assert!(UPDATE_USER_AGENT.contains(env!("CARGO_PKG_VERSION")));
     }
 

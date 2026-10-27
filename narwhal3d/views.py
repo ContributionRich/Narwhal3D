@@ -10,6 +10,18 @@ a single source of truth; `views.py` is the pure, testable one.
 """
 from __future__ import annotations
 
+try:
+    from . import design
+except ImportError:  # loaded by file path (pure tests): design.py is its sibling
+    import importlib.util as _ilu
+    import os as _os
+    import sys as _sys
+    _design_spec = _ilu.spec_from_file_location(
+        "narwhal_design", _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "design.py"))
+    design = _ilu.module_from_spec(_design_spec)
+    _sys.modules.setdefault("narwhal_design", design)
+    _design_spec.loader.exec_module(design)
+
 # View quaternions used for `region_3d.view_rotation`.
 VIEW_TOP = (1.0, 0.0, 0.0, 0.0)
 VIEW_FRONT = (0.7071, 0.7071, 0.0, 0.0)
@@ -98,9 +110,12 @@ def quat_to_label(view_rotation, view_perspective, tol=1e-3):
 # use dark text with no fill. Values below are sRGB bytes.
 # ---------------------------------------------------------------------------
 
-ACTIVE_TITLE_FILL = (107, 163, 255)
-ACTIVE_TITLE_TEXT = (46, 47, 48)
-INACTIVE_TITLE_TEXT = (84, 86, 87)
+# Modern dark design (`design.py`): every title sits on a rounded chip; the active
+# one is accent blue.
+ACTIVE_TITLE_FILL = design.ACCENT_TITLE
+ACTIVE_TITLE_TEXT = design.ACTIVE_TITLE_TEXT
+INACTIVE_TITLE_FILL = design.TITLE_CHIP_BG
+INACTIVE_TITLE_TEXT = design.CHIP_TEXT
 
 
 def srgb_to_linear(component):
@@ -161,17 +176,16 @@ def clip_range_for(view_distance, view_location, scene_radius, scene_center=(0, 
 
 
 #: Padding around title text; the chip follows the measured glyph extent.
-TITLE_CHIP_PAD_X = 6
-TITLE_CHIP_PAD_Y = 4
+TITLE_CHIP_PAD_X = design.TITLE_CHIP_PAD_X
+TITLE_CHIP_PAD_Y = design.TITLE_CHIP_PAD_Y
 
 #: Distance from the pane's top-left corner to the title text. Mirrors `ui.LABEL_PAD`
 #: -- passed in by the caller, this is only the default so the pure tests have one.
-TITLE_LABEL_PAD = 8
+TITLE_LABEL_PAD = design.TITLE_CHIP_INSET + TITLE_CHIP_PAD_X
 
 
 def title_rect(text_w, text_h, region_h,
-               label_pad=TITLE_LABEL_PAD,
-               pad_x=TITLE_CHIP_PAD_X, pad_y=TITLE_CHIP_PAD_Y):
+               label_pad=None, pad_x=None, pad_y=None):
     """The viewport title's box, as ``(x0, y0, x1, y1)`` in region pixels.
 
     ONE function for two jobs, deliberately: it is both the chip that
@@ -186,6 +200,11 @@ def title_rect(text_w, text_h, region_h,
     The y arithmetic follows the draw: glyphs grow UP from the baseline, so the
     baseline sits a full text height below the top of the region.
     """
+    # uiscale updates these globals; defaults bound at import kept padding at
+    # 1x while the text moved/scaled, producing inconsistent HiDPI title chips.
+    label_pad = TITLE_LABEL_PAD if label_pad is None else label_pad
+    pad_x = TITLE_CHIP_PAD_X if pad_x is None else pad_x
+    pad_y = TITLE_CHIP_PAD_Y if pad_y is None else pad_y
     baseline_y = region_h - label_pad - text_h
     return (label_pad - pad_x, baseline_y - pad_y,
             label_pad + text_w + pad_x, baseline_y + text_h + pad_y)
@@ -213,11 +232,11 @@ def hit_title(x, y, rect):
 # ---------------------------------------------------------------------------
 
 #: Arrow box width, and the triangle's half-width and height, in pixels. OURS.
-TITLE_ARROW_W = 15.0
+TITLE_ARROW_W = 20.0
 TITLE_ARROW_HALF = 4.0
 TITLE_ARROW_H = 4.0
-TITLE_ARROW_FILL = (216, 217, 221)
-TITLE_ARROW_BORDER = (160, 162, 166)
+TITLE_ARROW_FILL = design.TITLE_CHIP_BG
+TITLE_ARROW_BORDER = design.BORDER_STRONG
 
 
 def title_arrow_rect(rect, width=None):
@@ -272,6 +291,43 @@ def hit_title_arrow(x, y, rect):
     return hit_title(x, y, title_arrow_rect(rect))
 
 
+#: The viewport's corner control (UI design): a maximize/restore button at the
+#: top-right, the same size and inset as the title chip so the two read as a pair.
+CORNER_BUTTON = 20.0
+CORNER_INSET = 6.0
+
+
+def corner_button_rect(region_w, region_h, size=None, inset=None):
+    """The maximize/restore button's box in region pixels (top-right corner)."""
+    size = CORNER_BUTTON if size is None else size
+    inset = CORNER_INSET if inset is None else inset
+    x1 = float(region_w) - inset
+    y1 = float(region_h) - inset
+    return (x1 - size, y1 - size, x1, y1)
+
+
+def hit_corner_button(x, y, region_w, region_h, size=None, inset=None):
+    """True when region pixel ``(x, y)`` is on the corner maximize/restore button."""
+    return hit_title(x, y, corner_button_rect(region_w, region_h, size, inset))
+
+
+def corner_glyph(rect, maximized):
+    """Outline segments ``[(p, q), ...]`` for the button's glyph: one square to
+    maximize, two offset squares to restore."""
+    x0, y0, x1, y1 = rect
+    m = (x1 - x0) * 0.28
+
+    def square(a0, b0, a1, b1):
+        return [((a0, b0), (a1, b0)), ((a1, b0), (a1, b1)),
+                ((a1, b1), (a0, b1)), ((a0, b1), (a0, b0))]
+    if not maximized:
+        return square(x0 + m, y0 + m, x1 - m, y1 - m)
+    d = (x1 - x0) * 0.12
+    return square(x0 + m - d, y0 + m - d, x1 - m - d, y1 - m - d) + [
+        ((x0 + m, y1 - m + d * 0.0 + d), (x1 - m + d, y1 - m + d)),
+        ((x1 - m + d, y1 - m + d), (x1 - m + d, y0 + m))]
+
+
 def title_style(is_active):
     """How to draw a viewport title: ``(fill_rgba_or_None, text_rgba)``.
 
@@ -281,7 +337,7 @@ def title_style(is_active):
     """
     if is_active:
         return gpu_rgba(ACTIVE_TITLE_FILL), gpu_rgba(ACTIVE_TITLE_TEXT)
-    return None, gpu_rgba(INACTIVE_TITLE_TEXT)
+    return gpu_rgba(INACTIVE_TITLE_FILL), gpu_rgba(INACTIVE_TITLE_TEXT)
 
 
 # ---------------------------------------------------------------------------
@@ -310,12 +366,39 @@ TAB_PAD_X = 10
 TAB_GAP = 1
 
 #: Viewport tab palette: a grey band with a lighter active tab and frame border.
-TAB_BAND_BG = (0xD8, 0xD9, 0xDD)
-TAB_ACTIVE_BG = (0xE9, 0xEB, 0xEF)
-TAB_BORDER = (0xC0, 0xC8, 0xD9)
+TAB_BAND_BG = design.PANEL_HEADER_BG
+TAB_ACTIVE_BG = design.ACCENT_SOFT
+TAB_BORDER = design.BORDER
 #: Tab text matches viewport titles so the chrome reads as one family.
-TAB_TEXT = (0x20, 0x20, 0x20)
-TAB_TEXT_ACTIVE = (0x00, 0x00, 0x00)
+TAB_TEXT = design.TEXT
+TAB_TEXT_ACTIVE = design.TEXT_STRONG
+
+#: Window chrome and drop-down menus, from the modern dark design (`design.py`). The
+#: menu LAYOUT follows reference screenshots (flat groups, square-cornered list, a
+#: filled accent row on hover); its colours are the design's.
+CHROME_BG = design.BAR_BG
+CHROME_TEXT = design.BAR_TEXT
+MENU_BG = design.MENU_BG
+MENU_BORDER = design.BORDER_STRONG
+MENU_SEPARATOR = design.BORDER_STRONG
+MENU_HOVER = design.ACCENT
+MENU_HOVER_TEXT = design.BAR_TEXT_STRONG
+MENU_TEXT = design.TEXT
+MENU_TEXT_DISABLED = design.TEXT_DISABLED
+MENU_ROUNDNESS = 0.2
+TOOL_PRESSED = design.ACCENT
+
+
+def ui_rgba(rgb, alpha=1.0):
+    """An sRGB byte triple -> a Blender UI WIDGET theme colour. Widget colours are
+    plain sRGB fractions (Blender's own default menu back 0.094 is #181818), unlike the
+    colour-managed viewport colours `srgb_rgba` converts."""
+    return (rgb[0] / 255.0, rgb[1] / 255.0, rgb[2] / 255.0, alpha)
+
+
+def menu_theme():
+    """The Blender widget theme of the modern design (see `design.blender_theme`)."""
+    return design.blender_theme()
 
 
 def tab_labels(present=None, order=TAB_ORDER):
@@ -489,12 +572,13 @@ def menu_command_key(label):
 ACTION_MAXIMIZE = "__maximize__"
 
 CAPTION_ACTIONS = {
-    # Original Narwhal menu entries expose only actions that are already runnable.
-    ((), "Zoom"): "Zoom",
-    ((), "Construction Plane"): "CPlane",
-    ((), "Grid Settings"): "Grid",
+    # Only rows that already run something are routed; every other row is greyed and
+    # reports that it is not implemented yet.
+    (("Pan, Zoom, and Rotate",), "Zoom"): "Zoom",
+    ((), "Set CPlane"): "CPlane",
+    ((), "Grid Options..."): "Grid",
     # Double-clicking the title and this menu row share the same maximize behavior.
-    ((), "Maximize Viewport"): ACTION_MAXIMIZE,
+    ((), "Maximize"): ACTION_MAXIMIZE,
 }
 
 
@@ -569,27 +653,28 @@ OSNAP_PANEL_ORDER = ("End", "Near", "Point", "Mid", "Cen", "Int", "Perp", "Tan",
 OSNAP_PANEL_FLAGS = ("Project", "Disable")
 
 #: Osnap palette: light panel, white checkbox interiors, and grey borders.
-OSNAP_PANEL_BG = (0xE9, 0xEB, 0xEF)
-OSNAP_PANEL_BORDER = (0xC0, 0xC0, 0xC0)
-OSNAP_BOX_BG = (0xFF, 0xFF, 0xFF)
-OSNAP_PANEL_TEXT = (0x20, 0x20, 0x20)
+OSNAP_PANEL_BG = design.PANEL_BG
+OSNAP_PANEL_BORDER = design.BORDER
+OSNAP_BOX_BG = design.CHIP_BG
+OSNAP_PANEL_TEXT = design.TEXT_MUTED
 #: OURS: Project tick color; the reference image does not show a checked box.
 OSNAP_TICK = (0x1B, 0x4D, 0x8F)
 
-#: OURS: logical-pixel metrics; row height follows the command bar rhythm.
+#: OURS: logical-pixel metrics. UI design: a roomier checkbox list (about 21 px rows
+#: with 13 px boxes) under its own header.
 OSNAP_PANEL_W = 117
-OSNAP_ROW_H = 17
-OSNAP_BOX = 11
+OSNAP_ROW_H = 20
+OSNAP_BOX = 13
 OSNAP_PAD = 6
-OSNAP_TITLE_H = 18
-OSNAP_FONT_SIZE = 11.0
+OSNAP_TITLE_H = 24
+OSNAP_FONT_SIZE = 12.0
 
 #: The Layers list in the right dock band.
 #:
 #: Layer list and header use white; dividers and dotted row separators use a light
 #: blue-grey.
-LAYER_LIST_BG = (0xFF, 0xFF, 0xFF)
-LAYER_GRID = (0xDE, 0xE2, 0xE9)
+LAYER_LIST_BG = design.LIST_BG
+LAYER_GRID = design.BORDER
 #: Application-defined colours for the current-layer tick and a layer that is
 #: switched OFF. the reference CAD application uses a check glyph and a half-lit bulb; we have neither
 #: artwork nor a measured value for them.

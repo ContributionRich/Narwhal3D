@@ -1,6 +1,12 @@
 ﻿# Build a native Narwhal 3D Windows x86_64 preview and place return artifacts on Desktop.
 # Run from ordinary 64-bit PowerShell after the collector reports the toolchain ready:
-# To skip an already successful compilation, use -ResumePackaging.
+# -ResumePackaging skips native source updates/patch/configure/compile, but requires
+# current compiled-input provenance. An old/unattested runtime must be rebuilt.
+# -RebuildRuntime preserves blender-build and cached libraries; never use the default
+# clean build for a cached release update. Modes are mutually exclusive.
+# -SourceOverlay merges a trusted public source export (no .git/tools/vendor) after
+# resetting only the marked workspace's app clone. Allowed only with -RebuildRuntime.
+# Stop any other build in this workspace before running. -Jobs bounds native parallelism.
 #   powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\build_windows_preview.ps1 `
 #     -NarwhalRevision <40-character-public-commit>
 [CmdletBinding()]
@@ -9,14 +15,23 @@ param(
     [ValidatePattern('^[0-9a-f]{40}$')]
     [string]$NarwhalRevision,
     [ValidatePattern('^0\.4\.[0-9]+$')]
-    [string]$Version = "0.4.6",
+    [string]$Version = "0.4.7",
     [string]$Workspace = "C:\Narwhal3D-build",
     [ValidateRange(1, 8)][int]$Jobs = 4,
-    [switch]$ResumePackaging
+    [switch]$ResumePackaging,
+    [switch]$RebuildRuntime,
+    [ValidateRange(1, 1440)][int]$RuntimeTimeoutMinutes = 180,
+    [string]$SourceOverlay = "",
+    [ValidatePattern('^[0-9]+\.[0-9]+(\.[0-9]+)?$')]
+    [string]$MsvcToolsetVersion = "14.44",
+    [ValidatePattern('^$|^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$')]
+    [string]$WindowsSdkVersion = ""
 )
 
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = "Stop"
+if ($ResumePackaging -and $RebuildRuntime) { throw "Choose -ResumePackaging OR -RebuildRuntime" }
+if ($SourceOverlay -and -not $RebuildRuntime) { throw "-SourceOverlay requires -RebuildRuntime" }
 
 $BlenderRevision = "d13f752e3b9c4f8c261cda552b1021f8bcc0382c"
 $OcctRevision = "b8f597c677811d1f9f4d8a97f5ae2825c0353a42"
@@ -213,14 +228,48 @@ if ($MemoryGiB -lt 16 -and -not @(Get-CimInstance Win32_PageFileUsage -ErrorActi
 }
 Log ("Preflight: long paths enabled, free GiB=" + $FreeGiB + ", RAM GiB=" + $MemoryGiB)
 
+$Workspace = [IO.Path]::GetFullPath($Workspace).TrimEnd('\')
+if ($Workspace -eq [IO.Path]::GetPathRoot($Workspace).TrimEnd('\')) {
+    throw "The workspace must not be a drive root"
+}
+function Assert-NoReparseAncestor([string]$Path) {
+    $Cursor = [IO.Path]::GetFullPath($Path)
+    while ($Cursor) {
+        if (Test-Path -LiteralPath $Cursor) {
+            if ((Get-Item -Force -LiteralPath $Cursor).Attributes -band [IO.FileAttributes]::ReparsePoint) {
+                throw "Refusing junction/symlink in owned workspace path: $Cursor"
+            }
+        }
+        $Cursor = Split-Path -Parent $Cursor
+    }
+}
+Assert-NoReparseAncestor $Workspace
 $WorkspaceMarker = Join-Path $Workspace ".narwhal3d-windows-build-workspace"
 if (Test-Path -LiteralPath $Workspace) {
-    if (-not (Test-Path -LiteralPath $WorkspaceMarker -PathType Leaf)) {
+    Assert-NoReparseAncestor $WorkspaceMarker
+    if (-not (Test-Path -LiteralPath $WorkspaceMarker -PathType Leaf) -or
+        ([IO.File]::ReadAllText($WorkspaceMarker).Trim() -ne "Narwhal 3D owned build workspace")) {
         throw "Refusing existing unowned workspace: $Workspace"
     }
 } else {
+    if ($RebuildRuntime -or $ResumePackaging) { throw "Reuse requires an existing marked workspace" }
     New-Item -ItemType Directory -Path $Workspace | Out-Null
     Set-Content -LiteralPath $WorkspaceMarker -Value "Narwhal 3D owned build workspace" -Encoding ASCII
+}
+
+$WorkspaceLockPath = Join-Path $Workspace '.native-build.lock'
+Assert-NoReparseAncestor $WorkspaceLockPath
+$WorkspaceLock = [IO.File]::Open($WorkspaceLockPath, [IO.FileMode]::OpenOrCreate,
+    [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
+function Assert-OwnedCheckout([string]$Path) {
+    Assert-NoReparseAncestor (Join-Path $Path '.git')
+    if (-not (Test-Path -LiteralPath (Join-Path $Path '.git') -PathType Container)) {
+        throw "Not a standalone script-owned checkout: $Path"
+    }
+    $Top = @(Capture-Native $Git @('-C', $Path, 'rev-parse', '--show-toplevel') 'verify owned checkout root')[-1].Trim()
+    if ([IO.Path]::GetFullPath($Top) -ne $Path -or (Split-Path -Parent $Path) -ne $Workspace) {
+        throw "Refusing Git reset outside the marked workspace checkout: $Path"
+    }
 }
 
 $NarwhalSource = Join-Path $Workspace "narwhal-source"
@@ -229,19 +278,125 @@ $OcctSource = Join-Path $Workspace "occt-source"
 $BuildDirectory = Join-Path $Workspace "blender-build"
 $WheelCache = Join-Path $Workspace "wheels"
 $PatchDirectory = Join-Path $NarwhalSource "blender_patches"
+foreach ($OwnedPath in @($NarwhalSource, $BlenderSource, $OcctSource, $BuildDirectory,
+                        (Join-Path $NarwhalSource '.git'), (Join-Path $BlenderSource '.git'),
+                        (Join-Path $OcctSource '.git'))) {
+    Assert-NoReparseAncestor $OwnedPath
+}
+$RuntimeMarker = Join-Path $BuildDirectory "bin\.narwhal3d-native-runtime.json"
+$NativeInputNames = @(
+    "apply_narwhal3d_branding.py", "apply_app_drawn.py", "apply_cad_boundary_wires.py",
+    "apply_deferred_first_present.py", "apply_statusbar_height.py",
+    "narwhal3d_app_icon.svg", "apply_window_overlay.py"
+)
+if ($RebuildRuntime) {
+    # Fail before resetting either clone or touching the retained build tree.
+    foreach ($Required in @((Join-Path $BuildDirectory 'CMakeCache.txt'),
+                           (Join-Path $BuildDirectory 'build.ninja'),
+                           (Join-Path $BlenderSource 'lib\windows_x64\python\313\bin\python.exe'))) {
+        Assert-NoReparseAncestor $Required
+        if (-not (Test-Path -LiteralPath $Required -PathType Leaf)) { throw "Incremental runtime prerequisite missing: $Required" }
+    }
+    $CachedRevision = @(Capture-Native $Git @('-C', $BlenderSource, 'rev-parse', 'HEAD') 'verify incremental Blender revision')[-1].Trim()
+    if ($CachedRevision -ne $BlenderRevision) { throw "Incremental Blender source revision mismatch" }
+    Assert-OwnedCheckout $NarwhalSource
+    Assert-OwnedCheckout $BlenderSource
+    $CacheCheckDriver = Join-Path $Workspace 'check_incremental_cache.py'
+@'
+# CMake cache inspection only: never reconfigure or rewrite a mismatched cache.
+import json
+from pathlib import Path, PureWindowsPath
+import re
+import sys
+
+def validate_cache(text, source, toolset, sdk, exists=lambda path: Path(path).is_file()):
+    cache = dict(re.findall(r'^([^#/:\n][^:\n]*):[^=\n]+=(.*)$', text, re.M))
+    if (PureWindowsPath(cache.get('CMAKE_HOME_DIRECTORY', '')) != PureWindowsPath(source)
+            or cache.get('CMAKE_GENERATOR') != 'Ninja' or cache.get('CMAKE_BUILD_TYPE') != 'Release'):
+        raise SystemExit('Incremental CMake source/generator/configuration mismatch; cache was not changed')
+    for key in ('CMAKE_C_COMPILER', 'CMAKE_CXX_COMPILER'):
+        compiler = cache.get(key, '')
+        if (not exists(compiler) or not re.search(r'[/\\]2022[/\\]', compiler)
+                or not re.search(r'[/\\]MSVC[/\\]' + re.escape(toolset) + r'(\.|[/\\])', compiler)):
+            raise SystemExit(f'Incremental compiler does not match VS2022 / requested MSVC toolset: {key}={compiler}')
+    cached_sdk = cache.get('CMAKE_VS_WINDOWS_TARGET_PLATFORM_VERSION', '')
+    if sdk and cached_sdk and sdk != cached_sdk:
+        raise SystemExit('Incremental Windows SDK mismatch')
+    return {'windows_sdk': sdk or cached_sdk}
+
+if __name__ == '__main__':
+    cache_path, source, toolset, sdk = sys.argv[1:]
+    print(json.dumps(validate_cache(Path(cache_path).read_text(encoding='utf-8'), source, toolset,
+                                   '' if sdk == 'auto' else sdk)))
+'@ | Set-Content -LiteralPath $CacheCheckDriver -Encoding UTF8
+    # Explicit sentinel avoids Windows PowerShell dropping an empty native argv item.
+    $SdkArgument = if ($WindowsSdkVersion) { $WindowsSdkVersion } else { 'auto' }
+    $CacheResult = @(Capture-Native $Python @('-B', $CacheCheckDriver,
+        (Join-Path $BuildDirectory 'CMakeCache.txt'), $BlenderSource, $MsvcToolsetVersion,
+        $SdkArgument) 'validate retained CMake cache')[-1] | ConvertFrom-Json
+    $WindowsSdkVersion = $CacheResult.windows_sdk
+}
 if (-not $ResumePackaging) {
 if (-not (Test-Path -LiteralPath (Join-Path $NarwhalSource ".git") -PathType Container)) {
     Run-Native $Git @("clone", "--filter=blob:none", $NarwhalRepository, $NarwhalSource) "clone Narwhal source"
 }
+Assert-OwnedCheckout $NarwhalSource
 $NarwhalOrigin = @(Capture-Native $Git @("-C", $NarwhalSource, "remote", "get-url", "origin") "verify Narwhal origin")[-1].Trim()
 if ($NarwhalOrigin -ne $NarwhalRepository) { throw "Unexpected Narwhal origin: $NarwhalOrigin" }
-Run-Native $Git @("-C", $NarwhalSource, "fetch", "origin", $NarwhalRevision) "fetch pinned Narwhal revision"
+# A VM helper may have already imported the exact public commit without network.
+if ($RebuildRuntime) {
+    # Fail closed if the helper has not imported this commit; do not unexpectedly fetch.
+    $LocalRevision = @(Capture-Native $Git @('-C', $NarwhalSource, 'rev-parse', '--verify',
+        ($NarwhalRevision + '^{commit}')) 'require locally available incremental app revision')[-1].Trim()
+    if ($LocalRevision -ne $NarwhalRevision) { throw "Incremental app revision is not locally available" }
+} else {
+    Run-Native $Git @("-C", $NarwhalSource, "fetch", "origin", $NarwhalRevision) "fetch pinned Narwhal revision"
+}
 Run-Native $Git @("-C", $NarwhalSource, "reset", "--hard", $NarwhalRevision) "reset script-owned Narwhal clone"
 Run-Native $Git @("-C", $NarwhalSource, "clean", "-ffd") "clean script-owned Narwhal clone"
+$ActualNarwhalRevision = @(Capture-Native $Git @('-C', $NarwhalSource, 'rev-parse', 'HEAD') 'verify pinned Narwhal revision')[-1].Trim()
+if ($ActualNarwhalRevision -ne $NarwhalRevision) { throw "Narwhal source revision mismatch" }
+if ($SourceOverlay) {
+    $OverlayDriver = Join-Path $Workspace 'merge_source_overlay.py'
+@'
+# Build-time file orchestration only; never copy Git metadata or build caches.
+from pathlib import Path
+import shutil
+import sys
+source, target = (Path(p) for p in sys.argv[1:])
+if source.is_symlink() or getattr(source, 'is_junction', lambda: False)():
+    raise SystemExit('overlay root must not be a symlink/junction')
+source, target = source.resolve(), target.resolve()
+if not source.is_dir() or source == target or source in target.parents or target in source.parents:
+    raise SystemExit('overlay must be a separate public source export directory')
+forbidden = {'.git', 'tools', 'vendor', 'more_data', 'artifacts', '__pycache__', 'target'}
+files = []
+for path in source.rglob('*'):
+    relative = path.relative_to(source)
+    if (path.is_symlink() or getattr(path, 'is_junction', lambda: False)()
+            or forbidden.intersection(part.lower() for part in relative.parts)
+            or any(part.endswith(('.', ' ')) or ':' in part for part in relative.parts)):
+        raise SystemExit(f'unsafe overlay entry: {relative}')
+    destination = target / relative
+    for parent in (destination, *destination.parents):
+        if parent == target.parent:
+            break
+        if parent.is_symlink() or getattr(parent, 'is_junction', lambda: False)():
+            raise SystemExit(f'unsafe overlay destination: {relative}')
+    if path.is_file():
+        files.append((path, destination))
+for path, destination in files:
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(path, destination)
+print(f'merged {len(files)} public overlay files; base commit is not an attestation of overlay contents')
+'@ | Set-Content -LiteralPath $OverlayDriver -Encoding UTF8
+    Run-Native $Python @('-B', $OverlayDriver, $SourceOverlay, $NarwhalSource) 'merge explicit public source overlay into owned app clone'
+}
 
 if (-not (Test-Path -LiteralPath (Join-Path $BlenderSource ".git") -PathType Container)) {
     Run-Native $Git @("clone", "--filter=blob:none", $BlenderRepository, $BlenderSource) "clone Blender source"
 }
+Assert-OwnedCheckout $BlenderSource
 $BlenderOrigin = @(Capture-Native $Git @("-C", $BlenderSource, "remote", "get-url", "origin") "verify Blender origin")[-1].Trim()
 if ($BlenderOrigin -ne $BlenderRepository) { throw "Unexpected Blender origin: $BlenderOrigin" }
 # An interrupted previous make.bat update may have left a Git rebase in progress.
@@ -254,7 +409,9 @@ if ((Test-Path -LiteralPath $RebaseMergePath) -or (Test-Path -LiteralPath $Rebas
     Log "An interrupted Blender rebase was detected; aborting it before restoring the pinned revision"
     Run-Native $Git @("-C", $BlenderSource, "rebase", "--abort") "abort interrupted Blender rebase"
 }
-Run-Native $Git @("-C", $BlenderSource, "fetch", "origin", $BlenderRevision) "fetch pinned Blender revision"
+if (-not $RebuildRuntime) {
+    Run-Native $Git @("-C", $BlenderSource, "fetch", "origin", $BlenderRevision) "fetch pinned Blender revision"
+}
 Run-Native $Git @("-C", $BlenderSource, "reset", "--hard", $BlenderRevision) "reset script-owned Blender clone"
 Run-Native $Git @("-C", $BlenderSource, "clean", "-ffd") "clean script-owned Blender clone"
 
@@ -270,7 +427,11 @@ $UpdatePython = if (Test-Path -LiteralPath $DependencyPython -PathType Leaf) {
     Log "Initializing Blender libraries with system Python; later runs use the pinned dependency Python"
     $Python
 }
-Run-Native $UpdatePython @("-B", $UpdateScript, "--git-command", $Git, "--no-blender") "update Blender libraries without changing Blender source" $BlenderSource
+if (-not $RebuildRuntime) {
+    Run-Native $UpdatePython @("-B", $UpdateScript, "--git-command", $Git, "--no-blender") "update Blender libraries without changing Blender source" $BlenderSource
+} else {
+    Log "Incremental runtime: retaining existing pinned-checkout libraries; no dependency update"
+}
 if (-not (Test-Path -LiteralPath $DependencyPython -PathType Leaf)) {
     throw "Blender libraries update did not provide dependency Python: $DependencyPython"
 }
@@ -303,25 +464,34 @@ def load(name, path):
 branding = load("narwhal_branding", patch_dir / "apply_narwhal3d_branding.py")
 changed = branding.apply(str(source), str(patch_dir / "narwhal3d_app_icon.svg"))
 print(f"branding changed {len(changed)} path(s)")
-for name in ("apply_app_drawn.py", "apply_cad_boundary_wires.py"):
+for name in ("apply_app_drawn.py", "apply_cad_boundary_wires.py", "apply_deferred_first_present.py"):
     module = load("narwhal_" + name.replace(".py", ""), patch_dir / name)
     module.SRC = str(source / "source" / "blender")
     module.main()
+# These newer entry points parse argv; never pass build-driver arguments to main().
+for name in ("apply_statusbar_height.py", "apply_window_overlay.py"):
+    module = load("narwhal_" + name.replace(".py", ""), patch_dir / name)
+    changed = module.apply(source / "source" / "blender")
+    print(f"{name} changed {len(changed)} path(s)")
 '@ | Set-Content -LiteralPath $PatchDriver -Encoding UTF8
-Run-Native $Python @($PatchDriver, $BlenderSource, $PatchDirectory) "apply Narwhal native patches"
+# Invalidate successful-build provenance BEFORE patching, including failed rebuilds.
+Remove-Item -LiteralPath $RuntimeMarker -Force -ErrorAction SilentlyContinue
+Run-Native $Python @('-B', $PatchDriver, $BlenderSource, $PatchDirectory) "apply Narwhal native patches"
 
-if (Test-Path -LiteralPath $BuildDirectory) {
+if (-not $RebuildRuntime -and (Test-Path -LiteralPath $BuildDirectory)) {
     Log "Removing prior build output while retaining downloaded Blender libraries"
     Remove-Item -LiteralPath $BuildDirectory -Recurse -Force
 }
-Run-Native $Cmd @("/d", "/s", "/c", "make.bat 2022 x64 release ninja nobuild builddir $BuildDirectory") "configure Blender 2022 x64 Release Ninja build" $BlenderSource
+if (-not $RebuildRuntime) {
+    Run-Native $Cmd @("/d", "/s", "/c", "make.bat 2022 x64 release ninja nobuild builddir $BuildDirectory") "configure Blender 2022 x64 Release Ninja build" $BlenderSource
+}
 # Ninja must execute in the same MSVC Developer environment used by Blender's
 # make.bat configure step. Environment changes inside make.bat cannot propagate
 # back into PowerShell, so launch Ninja through vcvars64.bat explicitly.
 $VsWhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
 $VisualStudioRoot = ""
 if (Test-Path -LiteralPath $VsWhere -PathType Leaf) {
-    $VisualStudioRoot = @(& $VsWhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath | Select-Object -First 1)
+    $VisualStudioRoot = @(& $VsWhere -latest -version '[17.0,18.0)' -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath | Select-Object -First 1)
     if ($VisualStudioRoot.Count -gt 0) { $VisualStudioRoot = [string]$VisualStudioRoot[0] }
     else { $VisualStudioRoot = "" }
 }
@@ -340,9 +510,14 @@ if (-not (Test-Path -LiteralPath $Vcvars64 -PathType Leaf)) {
     throw "Missing Visual Studio developer environment: $Vcvars64"
 }
 $NinjaWrapper = Join-Path $Workspace "run_ninja_with_msvc.cmd"
+$IncrementalConfigure = if ($RebuildRuntime) {
+    '"' + $CMake + '" -S "' + $BlenderSource + '" -B "' + $BuildDirectory + '" -G Ninja -DCMAKE_BUILD_TYPE=Release'
+} else { 'rem Clean build was configured by make.bat' }
 @"
 @echo off
-call "$Vcvars64" >nul
+call "$Vcvars64" $WindowsSdkVersion -vcvars_ver=$MsvcToolsetVersion >nul
+if errorlevel 1 exit /b 1
+$IncrementalConfigure
 if errorlevel 1 exit /b 1
 if not defined INCLUDE (
   echo ERROR: Visual Studio INCLUDE is not defined.
@@ -356,7 +531,23 @@ if not defined LIB (
 exit /b %errorlevel%
 "@ | Set-Content -LiteralPath $NinjaWrapper -Encoding ASCII
 Log ("Ninja will use Visual Studio environment: " + $Vcvars64)
-Run-Native $Cmd @("/d", "/c", $NinjaWrapper) "compile and install Blender with MSVC environment" $BlenderSource
+$RuntimeBuildRunner = Join-Path $Workspace 'run_bounded_runtime_build.py'
+@'
+# Process orchestration only. On timeout kill cmd + Ninja + compiler descendants.
+import subprocess
+import sys
+process = subprocess.Popen(sys.argv[2:])
+try:
+    code = process.wait(timeout=int(sys.argv[1]) * 60)
+except subprocess.TimeoutExpired:
+    subprocess.run(['taskkill.exe', '/PID', str(process.pid), '/T', '/F'],
+                   check=True, timeout=30)
+    process.wait(timeout=30)
+    raise SystemExit('native runtime build timed out; build cache retained; rerun -RebuildRuntime')
+raise SystemExit(code)
+'@ | Set-Content -LiteralPath $RuntimeBuildRunner -Encoding UTF8
+Run-Native $Python @('-B', $RuntimeBuildRunner, [string]$RuntimeTimeoutMinutes,
+    $Cmd, '/d', '/c', $NinjaWrapper) "compile and install Blender with bounded MSVC environment" $BlenderSource
 
  } else {
     Log "Resuming packaging: skipping source updates, patches, configuration, and compilation"
@@ -370,11 +561,129 @@ Run-Native $Cmd @("/d", "/c", $NinjaWrapper) "compile and install Blender with M
     }
 }
 
+# Build-time provenance and source inspection are Python orchestration, not runtime logic.
+# This same driver checks ResumePackaging before any package is created. It cannot
+# certify rendering/physical DPI; those remain real-window release acceptance gates.
+$ProvenanceDriver = Join-Path $Workspace 'native_runtime_provenance.py'
+@'
+from __future__ import annotations
+import hashlib
+import importlib.util
+import json
+from pathlib import Path
+import sys
+
+NATIVE_MARKERS = (b'NARWHAL3D_DEFER_FIRST_PRESENT', b'NARWHAL3D_STATUSBAR_HEIGHT',
+                  b'RNA_WINDOW_DRAW_HANDLE', b'narwhal_app_drawn', b'narwhal_boundary_wires')
+
+def regular(path):
+    if not path.is_file() or any(p.is_symlink() or getattr(p, 'is_junction', lambda: False)()
+                                 for p in (path, *path.parents)):
+        raise SystemExit(f'missing or linked native input: {path}')
+    return path
+
+def inspect(source, patch_dir, binary, commit, names):
+    records = []
+    aggregate = hashlib.sha256()
+    for name in sorted(names):
+        path = regular(patch_dir / name)
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        logical = 'blender_patches/' + name
+        records.append({'path': logical, 'sha256': digest})
+        aggregate.update(logical.encode() + b'\0' + digest.encode('ascii') + b'\n')
+        if name.endswith('.py') and name != 'apply_narwhal3d_branding.py':
+            spec = importlib.util.spec_from_file_location('verify_' + path.stem, path)
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            for relative, old, new in module.EDITS:
+                text = regular(source / 'source/blender' / relative).read_text(encoding='utf-8')
+                if text.count(new) != 1 or text.count(old) != new.count(old):
+                    raise SystemExit(f'current native patch missing from source: {name}: {relative}')
+            if name == 'apply_window_overlay.py':
+                header = regular(source / 'source/blender' / module.HEADER)
+                if header.read_text(encoding='utf-8') != module.HEADER_TEXT:
+                    raise SystemExit('current window-overlay header missing from source')
+    data = regular(binary).read_bytes()
+    for marker in NATIVE_MARKERS:
+        if marker not in data:
+            raise SystemExit(f'runtime lacks native marker {marker!r}; use -RebuildRuntime')
+    return {'schema': 1, 'product': 'Narwhal 3D', 'platform': 'windows-x86_64',
+            'blender_source_commit': commit, 'binary_sha256': hashlib.sha256(data).hexdigest(),
+            'patch_inputs': records, 'patch_aggregate_sha256': aggregate.hexdigest()}
+
+def main():
+    mode, source, patch_dir, runtime, commit, *names = sys.argv[1:]
+    runtime = Path(runtime)
+    marker = runtime / '.narwhal3d-native-runtime.json'
+    expected = inspect(Path(source), Path(patch_dir), runtime / 'blender.exe', commit, names)
+    if mode == 'check':
+        if not marker.is_file():
+            raise SystemExit('no compiled runtime provenance; use -RebuildRuntime, not -ResumePackaging')
+        actual = json.loads(regular(marker).read_text(encoding='utf-8'))
+        if actual != expected:
+            raise SystemExit('stale compiled runtime provenance; use -RebuildRuntime')
+    elif mode == 'record':
+        temporary = marker.with_suffix('.json.tmp')
+        temporary.write_text(json.dumps(expected, indent=2, sort_keys=True) + '\n', encoding='utf-8')
+        temporary.replace(marker)
+    else:
+        raise SystemExit('invalid provenance mode')
+    print(json.dumps(expected, sort_keys=True))
+
+if __name__ == '__main__':
+    main()
+'@ | Set-Content -LiteralPath $ProvenanceDriver -Encoding UTF8
+$RuntimeApiProbe = Join-Path $Workspace 'verify_native_ui_api.py'
+@'
+# bpy integration only. No UI layout changes or saved preferences.
+import bpy
+import json
+import math
+
+def require(ok, message):
+    if not ok:
+        raise SystemExit(message)
+
+require('narwhal_app_drawn' in bpy.types.Collection.bl_rna.properties, 'missing Collection app-drawn API')
+require('narwhal_boundary_wires' in bpy.types.Mesh.bl_rna.properties, 'missing Mesh boundary-wire API')
+require(callable(getattr(bpy.types.STATUSBAR_HT_header, 'draw', None)), 'missing statusbar header draw API')
+for owner, region in ((bpy.types.SpaceView3D, 'HEADER'), (bpy.types.SpaceInfo, 'WINDOW')):
+    handle = owner.draw_handler_add(lambda: None, (), region, 'POST_PIXEL')
+    owner.draw_handler_remove(handle, region)
+window = bpy.types.Window
+require(callable(getattr(window, 'draw_handler_add', None)) and
+        callable(getattr(window, 'draw_handler_remove', None)), 'missing Window overlay API')
+handle = window.draw_handler_add(lambda: None, (), 'POST_PIXEL')
+window.draw_handler_remove(handle)
+window.draw_handler_remove(handle)
+scale = bpy.context.preferences.system.ui_scale
+require(math.isfinite(scale) and scale > 0, 'invalid native UI scale')
+print(json.dumps({'native_ui_api': 'ok', 'ui_scale': scale,
+                  'statusbar_height_env': 'NARWHAL3D_STATUSBAR_HEIGHT',
+                  'statusbar_logical_pixels': 37}))
+'@ | Set-Content -LiteralPath $RuntimeApiProbe -Encoding UTF8
+$NativeRuntimeDirectory = Join-Path $BuildDirectory 'bin'
+$ProvenanceArguments = @('-B', $ProvenanceDriver, 'check', $BlenderSource, $PatchDirectory,
+                        $NativeRuntimeDirectory, $BlenderRevision) + $NativeInputNames
+if ($ResumePackaging) {
+    Run-Native $Python $ProvenanceArguments 'require current compiled runtime before resuming packaging'
+}
+Run-Native (Join-Path $NativeRuntimeDirectory 'blender.exe') @(
+    '-b', '--factory-startup', '--python-exit-code', '1', '--python', $RuntimeApiProbe
+) 'verify compiled native UI APIs before packaging'
+if (-not $ResumePackaging) {
+    $RecordArguments = @('-B', $ProvenanceDriver, 'record', $BlenderSource, $PatchDirectory,
+                         $NativeRuntimeDirectory, $BlenderRevision) + $NativeInputNames
+    Run-Native $Python $RecordArguments 'record successfully built and probed native runtime inputs'
+}
+$RuntimeProvenance = [IO.File]::ReadAllText($RuntimeMarker) | ConvertFrom-Json
+
 # geometry_core compiles against the exact official headers matching the pinned OCP
 # wheel. This checkout is script-owned and independently verified by build.rs markers.
 if (-not (Test-Path -LiteralPath (Join-Path $OcctSource ".git") -PathType Container)) {
     Run-Native $Git @("clone", "--filter=blob:none", "--no-checkout", $OcctRepository, $OcctSource) "clone pinned OCCT source"
 }
+Assert-OwnedCheckout $OcctSource
 $OcctOrigin = @(Capture-Native $Git @("-C", $OcctSource, "remote", "get-url", "origin") "verify OCCT origin")[-1].Trim()
 if ($OcctOrigin -ne $OcctRepository) { throw "Unexpected OCCT origin: $OcctOrigin" }
 $ExistingOcctRevision = @(Capture-Native $Git @("-C", $OcctSource, "rev-parse", "HEAD") "inspect existing OCCT revision")[-1].Trim()
@@ -403,6 +712,9 @@ $ApplicationDirectory = Join-Path $PackageDirectory "app"
 New-Item -ItemType Directory -Path $PackageDirectory | Out-Null
 Log "Copying native runtime into portable package"
 Copy-Item -LiteralPath $BuiltRuntime -Destination $RuntimeDirectory -Recurse
+$PackagedProvenanceArguments = @('-B', $ProvenanceDriver, 'check', $BlenderSource, $PatchDirectory,
+                                $RuntimeDirectory, $BlenderRevision) + $NativeInputNames
+Run-Native $Python $PackagedProvenanceArguments 'verify packaged runtime matches compiled input provenance'
 New-Item -ItemType Directory -Path $ApplicationDirectory | Out-Null
 foreach ($Directory in @("narwhal3d", "launch", "licenses")) {
     Copy-Item -LiteralPath (Join-Path $NarwhalSource $Directory) -Destination $ApplicationDirectory -Recurse
@@ -427,7 +739,7 @@ if (-not (Get-Variable Vcvars64 -Scope Script -ErrorAction SilentlyContinue) -or
     $VsWhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
     $VisualStudioRoot = ""
     if (Test-Path -LiteralPath $VsWhere -PathType Leaf) {
-        $VisualStudioRoot = @(& $VsWhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath | Select-Object -First 1)
+        $VisualStudioRoot = @(& $VsWhere -latest -version '[17.0,18.0)' -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath | Select-Object -First 1)
         if ($VisualStudioRoot.Count -gt 0) { $VisualStudioRoot = [string]$VisualStudioRoot[0] }
         else { $VisualStudioRoot = "" }
     }
@@ -573,6 +885,9 @@ if (($DependencyResult.python -join ".") -ne "3.13" -or
     $DependencyResult.'cadquery-ocp-proxy' -ne "8.0.1.0.0") {
     throw "Packaged dependency versions do not match the Windows lock"
 }
+Run-Native (Join-Path $RuntimeDirectory 'blender.exe') @(
+    '-b', '--factory-startup', '--python-exit-code', '1', '--python', $RuntimeApiProbe
+) 'verify packaged native UI APIs'
 $NativeProbePath = Join-Path $Workspace "verify_packaged_native_cores.py"
 @'
 from __future__ import annotations
@@ -669,9 +984,7 @@ try {
 
 $BinaryHash = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $RuntimeDirectory "blender.exe")).Hash.ToLowerInvariant()
 $PatchInputs = @()
-foreach ($Relative in @(
-    "apply_narwhal3d_branding.py", "apply_app_drawn.py",
-    "apply_cad_boundary_wires.py", "narwhal3d_app_icon.svg")) {
+foreach ($Relative in $NativeInputNames) {
     $Path = Join-Path $PatchDirectory $Relative
     $PatchInputs += [ordered]@{ name = $Relative; sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $Path).Hash.ToLowerInvariant() }
 }
@@ -683,6 +996,9 @@ $Result = [ordered]@{
     narwhal_revision = $NarwhalRevision
     blender_revision = $BlenderRevision
     parallel_jobs = $Jobs
+    rebuild_runtime = [bool]$RebuildRuntime
+    source_overlay_used = [bool]$SourceOverlay
+    native_runtime_provenance = $RuntimeProvenance
     blender_exe_sha256 = $BinaryHash
     document_core_sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $DocumentCoreTarget).Hash.ToLowerInvariant()
     converter_supervisor_sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $SupervisorTarget).Hash.ToLowerInvariant()
@@ -740,3 +1056,4 @@ Write-Host ("Portable package: " + $PackageZip)
 Write-Host ("Logs to return:  " + $ReturnZip)
 Write-Host "Return both ZIP files. This is an engineering artifact, not a distributable release."
 Write-Host "Windows PE identity, installer verification, signing, and physical-GPU acceptance remain required."
+$WorkspaceLock.Dispose()

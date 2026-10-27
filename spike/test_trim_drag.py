@@ -105,7 +105,10 @@ try:
 
     # Drive the complete production press branch, not just the helpers. All chrome
     # hit tests are neutral so the viewport point route receives the event.
+    # Title interception also runs during commands; the fake area has no Blender spaces.
     for name, value in (
+            ("pane_title_arrow_at", lambda *_args: None),
+            ("pane_title_at", lambda *_args: None),
             ("_click_command_bar", lambda *_args: None),
             ("osnap_panel_at", lambda *_args: None),
             ("sidebar_action_at", lambda *_args: None),

@@ -155,16 +155,15 @@ def _inspect(layout_was_ready):
           f"{len(menu_names)}: {', '.join(menu_names)}")
     menu_enabled, menu_total = menubar.coverage(set(ui.COMMANDS))
     check("menu actions are runnable or explicitly marked TODO",
-          (menu_enabled, menu_total) == (184, 546), f"{menu_enabled}/{menu_total}")
-    file_groups = {row[1] for row in menubar.resource_rows("File")
-                   if row[0] == "popup"}
+          (menu_enabled, menu_total) == (186, 552), f"{menu_enabled}/{menu_total}")
+    file_labels = [row[1] for row in menubar.resource_rows("File") if row[0] != "sep"]
     help_groups = {row[1] for row in menubar.resource_rows("Help")
                    if row[0] == "popup"}
-    check("File and Help expose the expanded desktop command groups",
-          {"Document", "Save and Exchange", "Recent and Recovery",
-           "Templates and Document", "Document Commands"} <= file_groups
+    check("File is the reference's flat list and Help keeps its groups",
+          file_labels[:2] == ["New...", "Open..."] and file_labels[-2:] == ["Recent Files", "Exit"]
+          and not any(row[0] == "popup" for row in menubar.resource_rows("File"))
           and {"Learning and Reference", "Support"} <= help_groups,
-          f"File={len(file_groups)}, Help={len(help_groups)}")
+          f"File={len(file_labels)}, Help={len(help_groups)}")
 
     toolbar_names = toolbars.tab_names()
     check("toolbar installed with exact authored categories",
@@ -176,9 +175,50 @@ def _inspect(layout_was_ready):
     check("toolbar defaults to Standard and can switch",
           initial_tab == "Standard" and switched,
           f"initial={initial_tab!r}, final={ui.toolbar_tab()!r}")
+    # Drive the CLICK ROUTE, not the setter: every category button must answer over its
+    # whole height. Only the top 18 px answered while the strip was 78 px tall, and the
+    # setter check above could not see that.
+    dead = []
+    bar = ui._cmdbar_area()
+    bar_region = (next((r for r in bar.regions if r.type == "WINDOW"), None)
+                  if bar is not None else None)
+    boxes = list(ui._toolbar_tab_boxes)
+    if bar_region is not None:
+        top, height = ui._toolbar_tab_row_top, ui._toolbar_tab_row_h
+        for name, x0, x1 in boxes:
+            for frac in (0.85, 0.5, 0.15):
+                ui.set_toolbar_tab("Standard" if name != "Standard" else "Display")
+                wx = bar_region.x + (x0 + x1) / 2.0
+                wy = bar_region.y + top - height * (1.0 - frac)
+                ui._click_command_bar(wx, wy)
+                if ui.toolbar_tab() != name:
+                    dead.append(f"{name}@{frac}")
+    hover_ok = None
+    left = ui.left_band_area()
+    if bar_region is not None and boxes and left is not None:
+        name, x0, x1 = boxes[3]
+        ui.category_hover_update(bar_region.x + (x0 + x1) / 2.0,
+                                 bar_region.y + ui._toolbar_tab_row_top
+                                 - ui._toolbar_tab_row_h / 2.0)
+        on_button = ui._category_hover
+        # A point in the left dock at the strip's region-relative height: the docks are
+        # INFO areas too, and must not be read against the strip's boxes.
+        ui.category_hover_update(left.x + (x0 + x1) / 2.0 if (x0 + x1) / 2.0 < left.width
+                                 else left.x + 10,
+                                 left.y + ui._toolbar_tab_row_top
+                                 - ui._toolbar_tab_row_h / 2.0)
+        in_dock = ui._category_hover
+        hover_ok = (on_button == name and in_dock is None, on_button, in_dock)
+    check("the hovered category lights up, and only over the strip",
+          hover_ok is not None and hover_ok[0],
+          f"button={hover_ok and hover_ok[1]!r} dock={hover_ok and hover_ok[2]!r}")
+    ui.set_toolbar_tab("Standard")
+    check("every category button answers a click over its whole height",
+          len(boxes) == len(toolbar_names) and not dead,
+          f"{len(boxes)} buttons, dead: {', '.join(dead[:6]) or 'none'}")
     toolbar_enabled, toolbar_total = toolbars.coverage(set(ui.COMMANDS))
     check("toolbar actions are runnable or explicitly unavailable",
-          (toolbar_enabled, toolbar_total) == (119, 525),
+          (toolbar_enabled, toolbar_total) == (120, 525),
           f"{toolbar_enabled}/{toolbar_total}")
 
     class RepeatState:
@@ -327,19 +367,31 @@ def _inspect(layout_was_ready):
                    if hovered is not None else ())
     hover_card = ui.sidebar_tooltip_layout()
     hover_ok = (hovered is not None
-                and hover_lines == (ui._sidebar_command_name(hovered[1]),)
-                and hover_card is not None and hover_card["lines"] == hover_lines
-                and hover_card["box"][0] >= ui._sidebar_region_box[2]
-                and hover_redraws == ["band", "viewport"])
-    check("hovering a left icon shows its command name beside the icon", hover_ok,
-          hover_lines[0] if hover_lines else "no tooltip")
+                and hover_lines and hover_lines[0].startswith(hovered[1].tooltip or hovered[1].text)
+                and any(line.startswith('right-click:') for line in hover_lines)
+                and hover_card is not None and hover_card['lines'] == hover_lines
+                and abs(hover_card['box'][0] - (first_center[0] + ui._fpx(14))) < 1
+                and hover_redraws == ['band', 'viewport'])
+    check('hovering a tool shows authored and alternate-action descriptions near the pointer', hover_ok,
+          '\n'.join(hover_lines) if hover_lines else 'no tooltip')
     hover_dark = hover_light = 0
+    hover_paper = hover_ink = hover_total = 0
     if hover_card is not None and _capture_path(bpy, SIDEBAR_HOVER_IMAGE):
-        hover_dark, hover_light = _luma_counts(
-            _crop_pixels(bpy, SIDEBAR_HOVER_IMAGE, hover_card["box"]))
+        pixels = _crop_pixels(bpy, SIDEBAR_HOVER_IMAGE, hover_card['box'])
+        hover_total = len(pixels)
+        hover_dark, hover_light = _luma_counts(pixels)
+        # v7 uses the menu palette for tooltips, not the former dark-slate card.
+        # Require both actual text ink and a majority of the exact background.
+        hover_paper = sum(all(abs(p[c]-ui.SIDEBAR_TOOLTIP_BG[c]) < .025 for c in range(3)) for p in pixels)
+        # Small antialiased glyphs need not contain a fully opaque texel at every
+        # DPI. Measure ink coverage along the expected paper-to-ink contrast instead.
+        delta = [ui.SIDEBAR_TOOLTIP_BG[c] - ui.SIDEBAR_TOOLTIP_TEXT[c] for c in range(3)]
+        contrast2 = sum(c*c for c in delta)
+        hover_ink = sum(sum((ui.SIDEBAR_TOOLTIP_BG[c]-p[c])*delta[c] for c in range(3))
+                        > .65 * contrast2 for p in pixels) if contrast2 else 0
     check("sidebar command-name tooltip is visibly rendered",
-          hover_dark > 200 and hover_light > 20,
-          f"dark={hover_dark}, light={hover_light}")
+          hover_paper > max(200, hover_total / 2) and hover_ink > 10,
+          f"paper={hover_paper}, ink={hover_ink}, dark={hover_dark}, light={hover_light}")
     linked_button = next((button for button in sidebar_buttons
                           if button.link), None)
     linked_index = sidebar_buttons.index(linked_button) if linked_button is not None else None
@@ -358,9 +410,14 @@ def _inspect(layout_was_ready):
         flyout_hit = ui.sidebar_flyout_action_at(*flyout_center)
         if _capture_path(bpy, SIDEBAR_FLYOUT_IMAGE):
             panel = flyout["panel"]
-            flyout_border_dark, _unused = _luma_counts(_crop_pixels(
-                bpy, SIDEBAR_FLYOUT_IMAGE,
-                (panel[0] - 2.0, panel[1], panel[0] + 5.0, panel[3])))
+            # v4 has a light border. Assert the specified border colour, not the old
+            # theme's arbitrary dark-luminance threshold; removing the outline must fail.
+            border_pixels = _crop_pixels(bpy, SIDEBAR_FLYOUT_IMAGE,
+                (panel[0], panel[1] + 2, panel[0] + 1, panel[3] - 2))
+            expected_border = ui.SIDEBAR_TOOLTIP_BORDER[:3]
+
+            flyout_border_dark = sum(all(abs(p[c] - expected_border[c]) < .025 for c in range(3))
+                                     for p in border_pixels)
             first_icon_colors = _distinct_colors(
                 _crop_pixels(bpy, SIDEBAR_FLYOUT_IMAGE, first[1:]))
     flyout_reflowed = False
@@ -437,6 +494,75 @@ def _inspect(layout_was_ready):
     )
     check("Osnap boxes stay inside the left dock", osnap_inside,
           f"{len(osnap_boxes)} boxes")
+    # The checkbox state must be VISIBLE: a checked box is accent-filled, an unchecked
+    # one white. Sampled just inside the box corner, clear of the tick.
+    osnap_rows = ui._osnap_panel_row_state()
+    on_row = next((i for i, r in enumerate(osnap_rows) if r[1]), None)
+    off_row = next((i for i, r in enumerate(osnap_rows) if not r[1]), None)
+    on_px = off_px = []
+    osnap_image = os.path.join(ARTIFACTS, "ui_osnap_check.png")
+    if on_row is not None and off_row is not None and _capture_path(bpy, osnap_image):
+        def corner(i):
+            _l, bx0, by0, _bx1, _by1 = osnap_boxes[i]
+            cx = bx0 + ui.views.OSNAP_PAD
+            cy = by0 + (ui.views.OSNAP_ROW_H - ui.views.OSNAP_BOX) // 2
+            return (cx + 2, cy + 2, cx + 4, cy + 4)
+        on_px = _crop_pixels(bpy, osnap_image, corner(on_row))
+        off_px = _crop_pixels(bpy, osnap_image, corner(off_row))
+    on_blue = bool(on_px) and all(p[2] > p[0] + 0.25 for p in on_px)
+    off_white = bool(off_px) and all(min(p) > 0.85 for p in off_px)
+    check("Osnap checkboxes show their state: checked accent, unchecked white",
+          on_blue and off_white,
+          f"on={on_px[:1]}, off={off_px[:1]}")
+
+    # The left panel stacks header / tool grid / Osnap list with no overlap, shows
+    # every Standard tool at this window size, and its header is the category menu.
+    head = ui._left_header_box
+    cells = list(ui._sidebar_cells)
+    standard_n = len(toolbars.context_buttons("Standard", set(ui.COMMANDS)))
+    lowest_cell = min((c[2] for c in cells), default=None)
+    highest_cell = max((c[4] for c in cells), default=None)
+    highest_osnap = max((b[4] for b in osnap_boxes), default=None)
+    stack_ok = (head is not None and cells and osnap_boxes
+                and box_inside(head, left_box, tolerance=2.0)
+                and highest_cell <= head[1] + 1
+                and lowest_cell >= highest_osnap
+                and len(cells) == standard_n)
+    check("left panel: header, every Standard tool, then Osnap, without overlap",
+          stack_ok, f"header={head}, cells={len(cells)}/{standard_n}, "
+          f"cell bottom={lowest_cell}, osnap top={highest_osnap}")
+    on_head = (head is not None
+               and ui.left_header_at((head[0] + head[2]) / 2.0, (head[1] + head[3]) / 2.0))
+    off_head = bool(cells) and not ui.left_header_at(
+        (cells[0][1] + cells[0][3]) / 2.0, (cells[0][2] + cells[0][4]) / 2.0)
+    check("the left header is the category drop-down, and a tool is not", on_head and off_head,
+          f"on={on_head}, off={off_head}")
+    # Category -> left panel -> command, through the click routes: the strip's click
+    # switches the panel, and the panel's first runnable tool starts its command.
+    started = None
+    want = None
+    tf_box = next((b for b in ui._toolbar_tab_boxes if b[0] == "Transform"), None)
+    if bar_region is not None and tf_box is not None:
+        ui._click_command_bar(bar_region.x + (tf_box[1] + tf_box[2]) / 2.0,
+                              bar_region.y + ui._toolbar_tab_row_top
+                              - ui._toolbar_tab_row_h / 2.0)
+        bpy.ops.wm.redraw_timer(type="DRAW_WIN_SWAP", iterations=1)
+        for cell in ui._sidebar_cells:
+            hit = ui.sidebar_action_at((cell[1] + cell[3]) / 2.0, (cell[2] + cell[4]) / 2.0)
+            if hit is not None and hit[1].enabled and hit[2] != "flyout":
+                want = ui._sidebar_command_name(hit[1])
+                ui.sidebar_click(hit[1])
+                started = getattr(app_state.active_command, "name", None)
+                break
+        app_state.active_command = None
+    ui.set_toolbar_tab("Standard")
+    bpy.ops.wm.redraw_timer(type="DRAW_WIN_SWAP", iterations=1)
+    tf_first = next((ui._sidebar_command_name(b) for b in
+                     toolbars.context_buttons("Transform", set(ui.COMMANDS))
+                     if b.enabled), None)
+    check("clicking Transform, then its first tool, starts that tool's command",
+          want is not None and started == want == tf_first,
+          f"wanted {want!r} (Transform's first: {tf_first!r}), started {started!r}")
 
     right_region = _window_region(right) if right is not None else None
     right_layout = (rightpanel.layout(right_region.width, right_region.height, title_h=0)
@@ -450,6 +576,42 @@ def _inspect(layout_was_ready):
                 and live_body_width > 0)
     check("right dock has exact tabs and a live-width body", right_ok,
           f"{', '.join(rightpanel.tab_names())}; body={body[2] - body[0]}/{live_body_width}")
+
+    # The Layers panel (UI design): title + and ..., a search field that really filters
+    # the drawn rows, and a per-row ... that arms the layer menu.
+    prev_tab = ui.right_tab_index()
+    ui.set_right_tab(0)
+    bpy.ops.wm.redraw_timer(type="DRAW_WIN_SWAP", iterations=1)
+    rbox = ((right.x, right.y, right.x + right.width, right.y + right.height)
+            if right is not None else (0, 0, 0, 0))
+    furniture = [ui._layer_search_box, ui._layer_new_btn, ui._layer_menu_btn]
+    drawn = all(b is not None and box_inside(b, rbox, tolerance=1.0) for b in furniture)
+    n_all = len(ui._layer_row_objs)
+    ui.layer_search_focus(True)
+    for ch in "zzq":
+        ui.layer_search_key("char", ch)
+    bpy.ops.wm.redraw_timer(type="DRAW_WIN_SWAP", iterations=1)
+    n_none = len(ui._layer_row_objs)
+    ui.layer_search_key("esc")
+    bpy.ops.wm.redraw_timer(type="DRAW_WIN_SWAP", iterations=1)
+    n_back = len(ui._layer_row_objs)
+    menu_col = rightpanel.COLUMNS.index("Menu")
+    armed = False
+    if ui._layer_row_objs:
+        ui.layer_panel_click(0, menu_col)
+        armed = ui.pending_menu_armed()
+        ui._pending_menu = None
+    check("Layers panel: search, + and ... drawn; the filter really filters; row ... arms the menu",
+          drawn and n_all >= 1 and n_none == 0 and n_back == n_all
+          and not ui.layer_search_focused() and armed,
+          f"drawn={drawn}, rows {n_all} -> 'zzq' {n_none} -> Esc {n_back}, menu armed={armed}")
+    ui.set_right_tab(prev_tab)
+
+    tol_text = ui.statusbar_state().get("tolerance", "")
+    want_tol = f"Absolute Tolerance: {float(app_state.model.absolute_tolerance()):.6g}"
+    check("status bar shows the document's absolute tolerance",
+          tol_text == want_tol and ui.sbar.is_clickable("tolerance"),
+          f"{tol_text!r} (want {want_tol!r})")
 
     caption_rows = tuple(ui._caption_tree())
     implemented_modes = tuple(
@@ -640,11 +802,14 @@ def _inspect(layout_was_ready):
                 selected_edge_yellow = sum(
                     max(abs(rgb[i] - yellow[i]) for i in range(3)) <= 0.15
                     for rgb in pixels)
-                label_pixels = _crop_pixels(
-                    bpy, FILLET_SELECTION_IMAGE,
-                    (top_region.x + sx + 46, top_region.y + sy + 14,
-                     top_region.x + sx + 88, top_region.y + sy + 38))
-                handle_label_white = sum(min(rgb) >= 0.75 for rgb in label_pixels)
+                handle_boxes = [record for record in ui.edge_handles.boxes()
+                                if record['id'][1] == edge_id
+                                and top_region.x <= record['grip'][0] < top_region.x + top_region.width
+                                and top_region.y <= record['grip'][1] < top_region.y + top_region.height]
+                label_pixels = (_crop_pixels(bpy, FILLET_SELECTION_IMAGE, handle_boxes[0]['label'])
+                                if handle_boxes else [])
+                # Radius labels use theme-aware viewport text, not fixed white.
+                handle_label_white = sum(max(rgb) < .45 for rgb in label_pixels)
             picked_edges = list(getattr(fillet_cmd, "_edges", ()))
             picked_args = list(getattr(fillet_cmd, "args", ()))
             owner_name = getattr(fillet_cmd, "_owner_name", None)
@@ -751,7 +916,7 @@ def _inspect(layout_was_ready):
                     contour_detail = (f"clicked={candidate_id}, affected={sorted(affected)}, "
                                       f"shown={sorted(shown)}, yellow={yellow_counts}")
                     app_state.cancel()
-            fillet_ok = (selected_ok and edit_phase and len(handles) == 1
+            fillet_ok = (selected_ok and edit_phase and len(handles) == 2
                          and preview_exact and app_state.active_command is None
                          and airtight and result_types.get("CYLINDER", 0) >= 1
                          and contour_exposed)
@@ -759,7 +924,7 @@ def _inspect(layout_was_ready):
                              f"screen hit={screen_hit}, helper={helper_eligible}, "
                              f"owner={owner_name}, args={picked_args}, edges={picked_edges}, "
                              f"whole selection={selected_whole}, yellow={selected_edge_yellow}, "
-                             f"label white={handle_label_white}, edit={edit_phase}, "
+                             f"radius label ink={handle_label_white}, edit={edit_phase}, "
                              f"handles={len(handles)}, preview exact={preview_exact}, "
                              f"result={result_name}, types={result_types}, airtight={airtight}, "
                              f"contour=({contour_detail})")

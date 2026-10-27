@@ -42,10 +42,42 @@ for link in ("STATUS.md", "COMPATIBILITY.md", "ROADMAP.md", "docs/gaps.md", "CON
              "docs/macos-build.md"):
     check(link in readme, f"README links {link}")
 check("Narwhal_3D-0.4.6-x86_64.AppImage" in readme
-      and "--version 0.4.6" in readme
-      and "--expected-version 0.4.6" in readme
+      and "Narwhal_3D-0.4.6-Windows-x86_64.zip" in readme
+      and "The published release is **0.4.6**" in readme
+      and "**0.4.7 is in preparation**" in readme
+      and "No 0.4.7 assets are available yet" in readme
+      and "0.4.6 evidence, not certification of a 0.4.7 candidate" in readme
       and "native startup welcome window" in readme,
-      "README install and release examples use version 0.4.6 with native welcome")
+      "README distinguishes published 0.4.6 assets/evidence from pending 0.4.7")
+check("--version 0.4.7" in readme
+      and "dist/Narwhal_3D-0.4.7-x86_64.AppImage" in readme
+      and "--expected-version 0.4.7" in readme
+      and "not a downloadable or validated release" in readme
+      and "--version 0.4.6" not in readme
+      and "--expected-version 0.4.6" not in readme,
+      "README assembly and verification examples target the unvalidated 0.4.7 candidate")
+status = (ROOT / "STATUS.md").read_text(encoding="utf-8")
+check("Published release: 0.4.6. Version 0.4.7 is in preparation" in status
+      and "no 0.4.7 assets are available yet" in status
+      and "historical 0.4.6 evidence, not a measured baseline for 0.4.7" in status
+      and "passed for the published 0.4.6 ZIP" in status,
+      "STATUS retains historical platform evidence without certifying 0.4.7")
+packaging = (ROOT / "packaging/README.md").read_text(encoding="utf-8")
+check("the published release is `0.4.6`, and `0.4.7` is in preparation" in packaging
+      and "no new assets are claimed available" in packaging
+      and "historical result does not certify a 0.4.7 candidate" in packaging
+      and "--version 0.4.7" in packaging
+      and "--expected-version 0.4.7" in packaging
+      and "Publishing 0.4.7 remains deferred" in packaging,
+      "packaging guide separates candidate instructions from published measurements")
+welcome_manifest = tomllib.loads((ROOT / "native/welcome/Cargo.toml").read_text(encoding="utf-8"))
+welcome_lock = tomllib.loads((ROOT / "native/welcome/Cargo.lock").read_text(encoding="utf-8"))
+welcome_source = (ROOT / "native/welcome/src/main.rs").read_text(encoding="utf-8")
+check(welcome_manifest["package"]["version"] == "0.4.7"
+      and [package["version"] for package in welcome_lock["package"]
+           if package["name"] == "narwhal-welcome"] == ["0.4.7"]
+      and 'assert_eq!(env!("CARGO_PKG_VERSION"), "0.4.7");' in welcome_source,
+      "welcome manifest, lock and Rust version assertion agree on 0.4.7")
 check("extremely early prerelease" in readme
       and "frozen on the `0.4.x` line" in readme,
       "README pins the owner-required early-prerelease 0.4.x release line")
@@ -99,9 +131,14 @@ windows_guide = (ROOT / "docs/windows-build.md").read_text(encoding="utf-8")
 check("0.4.6 Windows x86_64 portable ZIP" in windows_guide
       and "native startup welcome window" in windows_guide
       and "-NarwhalRevision $Revision" in windows_guide
+      and "-Version 0.4.7" in windows_guide
+      and "-Version 0.4.6" not in windows_guide
+      and "**0.4.7 is in preparation**" in windows_guide
+      and "not available to download or certified by the 0.4.6 results" in windows_guide
+      and "passed for the published 0.4.6 ZIP" in windows_guide
       and "physical-GPU/real-window acceptance" in windows_guide
       and "does not yet publish a Windows executable" not in windows_guide,
-      "Windows guide distinguishes the published preview from remaining release gates")
+      "Windows guide distinguishes published 0.4.6 from pending 0.4.7 build instructions")
 check((ROOT / ".github/PULL_REQUEST_TEMPLATE.md").is_file()
       and (ROOT / ".github/CODEOWNERS").is_file(),
       "pull-request guidance and review ownership are present")
@@ -161,7 +198,9 @@ check({"native/pure_core/Cargo.toml", "native/pure_core/README.md",
        "native/pure_core/src/svgpath.rs", "native/pure_core/src/joinchain.rs",
        "native/pure_core/src/vector_export.rs", "native/pure_core/src/command_search.rs",
        "native/pure_core/src/coil.rs", "native/pure_core/src/interpolate.rs",
-       "native/pure_core/src/tween.rs", "native/pure_core/src/gridsnap.rs",
+       "native/pure_core/src/tween.rs", "native/pure_core/src/surface.rs",
+       "native/pure_core/src/cage.rs",
+       "native/pure_core/src/gridsnap.rs",
        "scripts/check_pure_core.py", "spike/test_pure_core_gate.py",
        "spike/test_native_stl.py",
        "spike/test_native_obj.py", "spike/test_native_dxf.py",

@@ -12,6 +12,7 @@ import os
 import rhino3dm as r3
 
 from . import bridge
+from . import curve_inputs
 from . import coil
 from . import conics
 from . import catenary
@@ -202,6 +203,10 @@ class Command:
     # set as cancellation. Two-set Boolean commands leave this disabled so they can
     # continue waiting for their required operands.
     cancel_on_empty_set = False
+    # OURS: explicit non-destructive curve-input protocol, never a global permission
+    # to operate on (or delete) a component's owner. Python only routes UI/API calls.
+    accepts_curve_subobjects = False
+    accepts_subobjects = False
     # does this command's work belong in an undo record? True for anything
     # that can change the document. `Undo` and `Redo` set it False -- they NAVIGATE
     # history rather than adding to it, and running them inside an open record
@@ -547,6 +552,15 @@ class Command:
             # command actually changed something (`note_change` captures; `end`
             # discards an empty record), so Zoom and Help leave no history.
             return self._recorded(ctx, lambda: self.execute(ctx))
+        if (self.accepts_curve_subobjects and self.preselect_names and not self.args
+                and self.steps and self.steps[0][1] in SELECTION_KINDS):
+            try:
+                components = self._selected_curve_subobjects(ctx)
+            except curve_inputs.CurveInputError as exc:
+                return f"{self.name}: {exc}", False
+            if components:
+                # Do not let preselection substitute stale whole names for parts.
+                return self._recorded(ctx, lambda: self._feed("", ctx))
         self._take_preselection(ctx)
         self._take_objects_selection(ctx)
         if self.step_index >= len(self.steps) and not self.variable_points:
@@ -653,6 +667,44 @@ class Command:
                     pass
         return taken
 
+    @staticmethod
+    def _selected_curve_subobjects(ctx):
+        getter = getattr(ctx, "selected_subobjects", None)
+        if not callable(getter):
+            try:
+                from . import ui
+                getter = ui.ordered_selected_subobjects
+            except (ImportError, AttributeError):
+                getter = None
+        try:
+            return list(getter() or []) if callable(getter) else []
+        except Exception as exc:  # never fall back to whole owners on a failed pick read
+            raise curve_inputs.CurveInputError(f"cannot read curve selection: {exc}") from exc
+
+    def _curve_component_refs(self, ctx):
+        # The UI supplies its current ordered list (currently sorted); do not sort
+        # again or collapse different parts of one owner into a single name.
+        refs = [curve_inputs.reference_from_selection(item)
+                for item in self._selected_curve_subobjects(ctx)]
+        for ref in refs:
+            curve_inputs.resolve(ctx, ref)  # validate detached EXACT geometry before accepting
+        return refs
+
+    @staticmethod
+    def _clear_curve_input_selection(ctx):
+        selector = getattr(ctx, "select_by_names", None)
+        if callable(selector):
+            selector([])
+        clearer = getattr(ctx, "clear_subobject_selection", None)
+        if not callable(clearer):
+            try:
+                from . import ui
+                clearer = ui.clear_subobject_selection
+            except (ImportError, AttributeError):
+                clearer = None
+        if callable(clearer):
+            clearer()
+
     def _feed_objects_step(self, text, ctx):
         """answer the current `objects` step.
 
@@ -673,6 +725,15 @@ class Command:
 
         Returns (message|None, done:bool).
         """
+        if self.accepts_curve_subobjects and not text:
+            try:
+                refs = self._curve_component_refs(ctx)
+            except curve_inputs.CurveInputError as exc:
+                return f"{self.name}: {exc}", False
+            if len(refs) > 1:
+                return f"{self.name}: select one curve, segment or surface edge", False
+            if refs:
+                text = refs[0]
         getter = getattr(ctx, "selected_objects", None)
         try:
             selected = list(getter()) if callable(getter) else []
@@ -682,6 +743,8 @@ class Command:
             if selected:
                 self.args.append(selected[0].name)
                 self.step_index += 1
+                if self.accepts_curve_subobjects:
+                    self._clear_curve_input_selection(ctx)
                 if self.step_index >= len(self.steps):
                     return self.execute(ctx)
                 return None, False
@@ -690,6 +753,8 @@ class Command:
         # replacement). Take it; the command's `execute` validates it.
         self.args.append(text)
         self.step_index += 1
+        if self.accepts_curve_subobjects:
+            self._clear_curve_input_selection(ctx)
         if self.step_index >= len(self.steps):
             return self.execute(ctx)
         return None, False
@@ -724,6 +789,13 @@ class Command:
                     f"press Enter when done"), False
 
         names = list(self._pending_multi)
+        if self.accepts_curve_subobjects:
+            try:
+                # Typed names are deliberate inputs; components supersede only
+                # stale whole-object selection, not names explicitly entered.
+                names.extend(self._curve_component_refs(ctx))
+            except curve_inputs.CurveInputError as exc:
+                return f"{self.name}: {exc}", False
         if not names:
             getter = getattr(ctx, "selected_objects", None)
             try:
@@ -740,6 +812,8 @@ class Command:
         self._pending_multi = []
         self.args.append(names)
         self.step_index += 1
+        if self.accepts_curve_subobjects:
+            self._clear_curve_input_selection(ctx)
         if self.step_index < len(self.steps):
             # Clear the selection only before ANOTHER selection step (a two-set
             # command's second set must start empty -- see the docstring). A
@@ -4260,10 +4334,16 @@ class ExtrudeCrvTaperedCmd(ExtrudeCmd):
 
 def _curves_named(ctx, names):
     out, bad = [], []
-    for nm in names or []:
-        g = ctx.geom_by_name(nm)
-        (out if isinstance(g, r3.Curve) else bad).append((nm, g))
-    return out, [n for n, _g in bad]
+    for ref in names or []:
+        try:
+            out.append((ref, curve_inputs.resolve(ctx, ref)))
+        except curve_inputs.CurveInputError:
+            if not isinstance(ref, str):
+                # Components can become stale between acceptance and execution.
+                # Never ignore one (PlanarSrf) or retry it as its whole parent.
+                raise
+            bad.append(ref)  # preserve the established whole-name diagnostics
+    return out, bad
 
 
 class CurveThroughPolylineCmd(Command):
@@ -4341,11 +4421,16 @@ class PlanarSrfCmd(Command):
     name = "PlanarSrf"
     description = "Create planar surfaces bounded by closed planar curves (inner curves are holes)."
     steps = [("Select planar curves to build surface:", OBJECTS_MULTI)]
+    accepts_curve_subobjects = True
+    accepts_subobjects = True
     preselect_names = 1
     cancel_on_empty_set = True
 
     def execute(self, ctx: NarwhalContext):
-        curves, bad = _curves_named(ctx, self.args[0] if self.args else [])
+        try:
+            curves, bad = _curves_named(ctx, self.args[0] if self.args else [])
+        except curve_inputs.CurveInputError as exc:
+            return f"PlanarSrf: {exc}", True
         if not curves:
             return "PlanarSrf: select planar curves", True
         try:
@@ -4370,11 +4455,16 @@ class EdgeSrfCmd(Command):
     name = "EdgeSrf"
     description = "Create a surface from 2, 3 or 4 edge curves."
     steps = [("Select 2, 3, or 4 open curves:", OBJECTS_MULTI)]
+    accepts_curve_subobjects = True
+    accepts_subobjects = True
     preselect_names = 1
     cancel_on_empty_set = True
 
     def execute(self, ctx: NarwhalContext):
-        curves, bad = _curves_named(ctx, self.args[0] if self.args else [])
+        try:
+            curves, bad = _curves_named(ctx, self.args[0] if self.args else [])
+        except curve_inputs.CurveInputError as exc:
+            return f"EdgeSrf: {exc}", True
         if bad:
             return f"EdgeSrf: only curves can be edges ({', '.join(bad)})", True
         try:
@@ -4797,18 +4887,51 @@ class RevolveCmd(Command):
 
 
 class LoftCmd(Command):
+    """`Loft` -- the command behavior: "Select the curves in the order in which the
+    surface should pass through them." MEASURED: this used to loft exactly two curves
+    with a ruled surface and no options. It now takes any number of sections in pick
+    order, aligns their directions and seams automatically, and builds every
+    `LoftType` the reference API defines except the obsolete Developable -- all exact
+    NURBS with a recipe (`bridge.loft_brep`)."""
     name = "Loft"
-    description = "Straight loft between two curves."
-    steps = [("Curve 1:", "name"), ("Curve 2:", "name")]
+    description = "Loft a surface through two or more curves, in the order picked."
+    steps = [("Select curves to loft:", OBJECTS_MULTI)]
+    accepts_curve_subobjects = True
+    accepts_subobjects = True
+    preselect_names = 1
+    cancel_on_empty_set = True
+    options = (
+        opts.Option("Style", opts.ENUM, choices=bridge.LOFT_STYLES, default="Normal",
+                    help="Normal: chord-length skin. Loose: control points of the curves. "
+                         "Tight: square-root chord skin. Straight: ruled. Uniform: uniform knots."),
+        opts.Option("Closed", opts.TOGGLE, default=False,
+                    help="Continue the surface past the last curve back to the first "
+                         "(not implemented yet)."),
+        opts.Option("Point", opts.MODE, help="Taper to a point (not implemented yet)."),
+    )
 
     def execute(self, ctx: NarwhalContext):
-        n1, n2 = self.args
-        g1, g2 = ctx.geom_by_name(n1), ctx.geom_by_name(n2)
-        if not isinstance(g1, r3.Curve) or not isinstance(g2, r3.Curve):
-            return "Both objects must be curves", True
-        surf = bridge.make_loft(g1, g2)
-        _, display_name = ctx.add_geometry(surf, "Loft")
-        return f"Created {display_name}", True
+        names = list(self.args[0]) if self.args else []
+        try:
+            curves, bad = _curves_named(ctx, names)
+        except curve_inputs.CurveInputError as exc:
+            return f"Loft: {exc}", True
+        if bad:
+            return f"Loft: only curves can be lofted ({', '.join(bad)})", True
+        if len(curves) < 2:
+            return "Loft: select at least two curves", True
+        if self.opt.get("Closed"):
+            return "Loft: Closed=Yes is not implemented yet. Nothing was created.", True
+        closed = {bool(g.IsClosed) for _n, g in curves}
+        if len(closed) > 1:
+            return "Loft: the curves must be all open or all closed", True
+        style = self.opt.get("Style", "Normal")
+        try:
+            brep = bridge.loft_brep([g for _n, g in curves], style=style)
+        except ValueError as e:
+            return f"Loft failed: {e}", True
+        _, display_name = ctx.add_geometry(brep, "Loft")
+        return f"Created {display_name} ({style}, {len(curves)} curves)", True
 
 
 class OffsetCmd(Command):
@@ -14169,4 +14292,11 @@ try:
 except Exception as _e:  # noqa: BLE001
     import sys as _sys
     print(f"[narwhal3d] the solid commands are unavailable: {type(_e).__name__}: {_e}",
+          file=_sys.stderr)
+
+try:
+    from . import surface_commands  # noqa: E402,F401
+except Exception as _e:  # noqa: BLE001
+    import sys as _sys
+    print(f"[narwhal3d] the surface commands are unavailable: {type(_e).__name__}: {_e}",
           file=_sys.stderr)

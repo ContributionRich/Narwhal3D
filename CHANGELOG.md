@@ -4,6 +4,50 @@ All notable public changes will be recorded here. Narwhal 3D is an extremely ear
 
 ## Unreleased
 
+## 0.4.7 — pending release
+
+Changes since public v0.4.6 (`5a40d6d1eee16b26f4e6b5714862c711cafad797`). These notes cover the implemented source changes; final integrated validation and portable Linux/Windows packages are still pending.
+
+### Added
+
+- Loft now lofts any number of curves in the order they are picked, with a Style option: Normal, Loose, Tight, Straight and Uniform. Before, it lofted exactly two curves with a ruled surface and had no options. Normal, Tight and Uniform pass through every curve with chord-length, square-root-chord or uniform spacing, as the reference API defines them. Every result is an exact NURBS surface that can be moved, booleaned after capping, and reloaded.
+- Loft aligns its curves automatically. A curve drawn in the opposite direction, or a closed curve whose seam starts elsewhere, no longer folds or twists the surface.
+- SrfPt creates a surface from three or four corner points: the exact bilinear patch through four corners, or the exact triangle when Enter is pressed at the fourth.
+- CageEdit deforms curves, points, meshes and untrimmed surfaces with a bounding-box control cage. PointCount and Degree can be set per direction. Dragging the cage's points with the normal point tools reshapes every captive object. Only control points move, so a captive circle stays an exact rational curve with the same degree, knots and weights. Each edit is computed from the original shape, so repeated edits never accumulate error. Trimmed surfaces, polysurfaces, solids and the Line, Rectangle and Box control objects say they are not implemented yet.
+- The cage volume, loft section alignment and corner checks run in the Rust core. CageEdit has no Python copy of its math: without the Rust core it says so instead of running slowly.
+- Sweep1 and Sweep2 accept exact Segment/Edge inputs for both rails and sections. Loft, EdgeSrf and PlanarSrf share the same non-destructive component selection: source curves, surfaces and solids are not split or replaced with viewport meshes.
+- FilletEdge supports independent start and end radii on supported edges, with exact kernel geometry and replayable recipes. Radius handles support scalar and endpoint drags and numeric editing; cached section arcs remain available with Preview=No. Invalid candidates are rejected rather than committed. Unequal radii explicitly refuse unsupported closed or multi-edge tangent contours.
+- Theme and visibility preferences can be changed in the interface and restored on the next launch. The selected tool category and inspector tab, viewport-tab visibility, Grid Snap, Ortho, object snaps, Gumball settings, AI provider/selection choices and Print settings also persist. AI preferences store the credential environment-variable name, not the secret value; document units and tolerance remain document settings.
+- Sidebar tools have authored multiline tooltips describing primary actions, alternate actions and flyouts, with pointer anchoring, a 120 ms hover transition and separate arrow hover feedback.
+
+### Changed
+
+- Redesigned the workspace around a shared light/dark palette: slate chrome, light panels and a grey viewport by default, or charcoal chrome and panels in dark mode. The command line sits in a rounded, framed box; viewport titles use rounded chips with a blue active-view accent. Menus, controls, checkboxes, tooltips and status-bar chips use the same semantic colours. Readability checks retain the 4.5:1 small-text contrast requirement in both themes.
+- Tool categories now use a full-height clickable strip and a matching drop-down above the contextual left toolbar. The tool list has a visible draggable scrollbar when it overflows. The inspector has a labelled tab rail; Layers has search, add/more controls, visibility and lock controls, and row menus. Object snaps use a headed list with real checkboxes.
+- Bug Report, AI Assistant, AI Settings, Print controls and the native welcome window follow the chosen theme. The physical Print page stays white in either theme.
+- The File menu and viewport menu use flat, grouped layouts. Display modes are listed directly with the current one marked. Unavailable actions can be hidden; when shown, they remain visibly unavailable and explain the limitation instead of pretending to work.
+- Viewport menus open only from the title arrow. Double-clicking a title or using the corner control maximizes/restores the viewport while preserving camera, CPlane and display state.
+- The status bar uses consistent toggle chips, a fixed coordinate slot and an Absolute Tolerance readout with a native menu.
+- Gumball removes the mid-plane scale square and passive tooltips. Shafts avoid extrusion balls, and filled caps draw above shafts so the controls remain distinct.
+- Release tooling records and verifies the new native UI patch inputs. The Windows engineering builder can explicitly rebuild a cached runtime; resume-packaging rejects missing or stale native provenance rather than treating an old executable as current.
+
+### Fixed
+
+- PlanarSrf, ExtrudeSrf and EdgeSrf command checks now run in the test suite. They had silently stopped running, which hid a test that named its surface after a command option.
+- Restore Delete and command-field editing in the redesigned shell.
+- Keep startup viewport layout and title-chip padding correct at higher interface scales instead of producing stray viewplanes or mismatched title hit areas.
+- Draw tooltips and popups after native area borders through a window-level overlay, eliminating seams when an overlay crosses viewport boundaries.
+- Filter finite CPlane grids in pixel space and use the same antialiasing path for preview and committed lines. Correct UI PNG colour-space handling and scaling.
+- Ctrl+Shift component picking accepts rhino3dm Point3d coordinates and preserves pick order, so sequential rail and section choices reach the command correctly.
+- Start the layer colour picker's HSV Value at 255 and leave the layer unchanged until the colour is confirmed.
+- Include SrfPt in the representation audit without exemptions; focused audit coverage includes all six geometry gates.
+
+### Release validation still required
+
+- The final integrated suite, current-runtime UI gate, audited public source and packaged acceptance checks must pass before publication. Focused checks recorded during development are not a substitute for those release gates.
+- Linux needs a rebuilt portable runtime containing the new native UI APIs and a compatible welcome binary. The current source-development executables require GLIBC 2.43 and must not ship; every bundled ELF must pass the GLIBC 2.35 ceiling. Do not assume 0.4.6's measured GLIBC 2.28 baseline applies to the new assets until they are scanned.
+- Windows needs the updated native runtime and welcome, source/inventory verification and extracted-ZIP acceptance. No 0.4.7 asset availability, digest or new platform certification is claimed here.
+
 ## 0.4.6 — 2026-10-24
 
 Changes from 0.4.5:

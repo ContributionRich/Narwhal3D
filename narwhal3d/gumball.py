@@ -480,7 +480,8 @@ def _extrude_handle(origin, axis_dir, axes, size, color, axis, props=None):
                   solids=_sphere(centre, axes, radius))
 
 
-def _arrow(origin, axis_dir, size, color, axis, other_a, other_b, props=None):
+def _arrow(origin, axis_dir, size, color, axis, other_a, other_b, props=None,
+           extrude=False):
     """A move arrow: a shaft along the axis ending in a filled CONE.
 
     A cone remains legible from every view. Two flat barbs in one transverse axis
@@ -490,14 +491,24 @@ def _arrow(origin, axis_dir, size, color, axis, other_a, other_b, props=None):
     tip = _add(origin, _mul(axis_dir, size * p["arrow_tip"]))
     back = _add(tip, _mul(axis_dir, -size * p["head_len"]))
     # the shaft stops at the cone's base, so its line is not drawn through the cone
-    shaft = [origin, back]
+    shaft = [[origin, back]]
+    if extrude and p["extrude_radius"] > 0.0:
+        # OURS: leave the displayed sphere clear, not a line through its fill.
+        # Only DRAW geometry is split; the move hit ray below stays continuous.
+        end = p["arrow_tip"] - p["head_len"]
+        lo = max(0.0, p["extrude_at"] - p["extrude_radius"])
+        hi = min(end, p["extrude_at"] + p["extrude_radius"])
+        if lo < hi:
+            shaft = [[_add(origin, _mul(axis_dir, size * a)),
+                      _add(origin, _mul(axis_dir, size * b))]
+                     for a, b in ((0.0, lo), (hi, end)) if a < b]
     head_solid = _cone(back, tip, size * p["head_half"], axis_dir, other_a, other_b)
     # The shaft is DRAWN from the origin but only HOT from just past the origin marker:
     # every shaft touches the centre, so a hot line from the origin tied the origin
     # marker there and, being earlier in `build`, won -- the centre could not be
     # grabbed. The offset is twice the marker's half-width.
     hot_from = _add(origin, _mul(axis_dir, size * 2.0 * p["origin_half"]))
-    return Handle(MOVE, axis, [shaft], [[hot_from, tip]], color,
+    return Handle(MOVE, axis, shaft, [[hot_from, tip]], color,
                   f"Move {'xyz'[axis]}", solids=head_solid)
 
 
@@ -557,22 +568,17 @@ def _scale_handle(origin, axis_dir, size, color, axis, other_a, other_b,
     at = _add(origin, _mul(direction, size * p["scale_at"]))
     a = _mul(other_a, size * p["scale_half"])
     b = _mul(other_b, size * p["scale_half"])
-    square = [
-        _add(_add(at, a), b),
-        _add(_sub(at, a), b),
-        _sub(_sub(at, a), b),
-        _sub(_add(at, a), b),
-    ]
-    square.append(square[0])
+
     leader = _dashed_segment(origin, at, size * p.get("leader_dash", 0.0))
     # hit-test the centre cross: a small closed square is fiddly to hit by edge.
     # The LEADER is deliberately not hot -- it runs the length of the axis and would
     # swallow clicks meant for the arrow underneath it.
     cross = [[_sub(at, a), _add(at, a)], [_sub(at, b), _add(at, b)]]
-    # Use a filled cube with the same half-width; the square remains as its outline.
+    # OURS: the owner wants only the filled cube, not the old mid-plane square
+    # drawn across its faces. Keep the cube dimensions, leader and hot cross.
     box = _cube(at, (_unit(axis_dir), _unit(other_a), _unit(other_b)),
                 size * p["scale_half"])
-    return Handle(SCALE, axis, [square] + leader, cross, color,
+    return Handle(SCALE, axis, leader, cross, color,
                   f"Scale {'xyz'[axis]}", solids=box)
 
 
@@ -1013,12 +1019,13 @@ def build(origin, plane, size, view_dir=None, proportions=None,
         # An axis aimed at the viewer collapses onto the origin on screen; omit its
         # arrow and scale handle so the origin remains selectable.
         end_on = view_dir is not None and axis_faces_viewer(axes[i], view_dir)
-        if extrude and p.get("extrude_radius", 0.0) > 0.0 and not end_on:
+        want_extrude = extrude and p.get("extrude_radius", 0.0) > 0.0 and not end_on
+        if want_extrude:
             # Before the arrow: where their hit regions overlap, the visible dot wins.
             handles.append(_extrude_handle(origin, axes[i], axes, size, color, i, props=p))
         if want_move and not end_on:
             handles.append(_arrow(origin, axes[i], size, color, i,
-                                  axes[j], axes[k], props=p))
+                                  axes[j], axes[k], props=p, extrude=want_extrude))
         if want_scale and not end_on:
             handles.append(_scale_handle(origin, axes[i], size, color, i,
                                          axes[j], axes[k], props=p))

@@ -162,7 +162,8 @@ settings_source = ui_source.split("class NARWHAL_OT_ai_settings", 1)[1].split(
     "def _draw_ai_panel", 1)[0]
 check("credential_env: StringProperty" in settings_source
       and "api_key: StringProperty" not in settings_source
-      and "Raw API keys are never stored" in settings_source,
+      and 'column.prop(self, "credential_env",' in settings_source
+      and "Only the variable name is saved, never your API key." in settings_source,
       "Settings configures an environment-variable name and has no raw-key input")
 check("model_choice: EnumProperty" in settings_source
       and 'column.prop(self, "model_choice")' in settings_source

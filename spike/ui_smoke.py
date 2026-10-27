@@ -528,8 +528,10 @@ try:
     check(_close(tuple(v3d.object_selected)[:3], tuple(ui.SELECT_COLOR)[:3]),
           f"object_selected {tuple(v3d.object_selected)} not the reference CAD application yellow "
           f"{ui.SELECT_COLOR}")
-    check(_close(tuple(v3d.wire), (0.0, 0.0, 0.0)),
-          f"wire theme {tuple(v3d.wire)} != black")
+    design = sys.modules.get("narwhal3d.design") or __import__("narwhal3d.design").design
+    _wire = tuple(design.linear(design.WIRE)[:3])
+    check(_close(tuple(v3d.wire), _wire),
+          f"wire theme {tuple(v3d.wire)} != the design's light wire {_wire}")
 
     # Constants are linear-space equivalents of the intended sRGB colors. Blender stores
     # LINEAR space and applies sRGB EOTF when rendering, so the stored value is
@@ -540,12 +542,16 @@ try:
     # the constant alone would be self-referential and still pass if wrong.
     def _srgb_to_linear(c):
         return c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4
+    # The modern dark design (`design.py`). Viewport colours are colour-managed, so the
+    # constants must be the LINEAR form of the design's sRGB values.
     _measured_srgb = {
-        "VIEWPORT_BG": (157, 163, 170),
-        "GRID_COLOR": (147, 153, 160),
-        "GRID_MAJOR": (129, 134, 140),
-        "CMD_BG": (255, 255, 255),
+        "VIEWPORT_BG": design.VIEWPORT_BG,
+        "GRID_COLOR": design.GRID_MINOR,
+        "GRID_MAJOR": design.GRID_MAJOR,
     }
+    # The command area is drawn with `gpu`, which bypasses colour management: raw bytes.
+    check(_close(tuple(ui.CMD_BG[:3]), tuple(c / 255.0 for c in design.COMMAND_FRAME), 2e-3),
+          f"CMD_BG {ui.CMD_BG[:3]} != the design command frame {design.COMMAND_FRAME} as gpu byte ratios")
     for _name, _srgb in _measured_srgb.items():
         _expected = tuple(round(_srgb_to_linear(c / 255.0), 3) for c in _srgb)
         _const = tuple(round(c, 3) for c in getattr(ui, _name)[:3])

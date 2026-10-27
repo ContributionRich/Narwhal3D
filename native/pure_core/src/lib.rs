@@ -14,6 +14,7 @@
 //! under `src/`.
 
 pub mod bearing;
+pub mod cage;
 pub mod calc;
 pub mod coil;
 pub mod command_search;
@@ -27,6 +28,7 @@ pub mod macro_plan;
 pub mod numparse;
 pub mod obj;
 pub mod stl;
+pub mod surface;
 pub mod svgpath;
 pub mod tween;
 pub mod vector_export;

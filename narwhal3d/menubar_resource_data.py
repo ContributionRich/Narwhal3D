@@ -36,19 +36,35 @@ def _popup(label, rows):
 
 
 _CORE_MENUS = (
+    # File follows the reference layout (a flat list in groups, MEASURED from a
+    # screenshot of the open menu). Unbuilt rows stay explicit TODO actions; the
+    # renderer shows them greyed, as the reference shows unavailable rows.
     ("File", (
-        _popup("Document", (
-            _item("New Model", "new"),
-            _item("Open Model", "open"),
-            _item("Import into Model", "import"),
-        )),
-        _popup("Save and Exchange", (
-            _item("Save", "save"),
-            _item("Save As", "saveas"),
-            _item("Export Selected", "export"),
-        )),
-        _item("Print / Vector Output", "print"),
+        _item("New...", "new"),
+        _item("Open...", "open"),
+        _todo("Revert", "revert"),
         _sep(),
+        _item("Save", "save"),
+        _todo("Save Small", "savesmall"),
+        _todo("Incremental Save", "incrementalsave"),
+        _item("Save As...", "saveas"),
+        _todo("Save as Template...", "saveastemplate"),
+        _sep(),
+        _todo("Insert...", "insert"),
+        _item("Import...", "import"),
+        _todo("Import from File", "importfromfile"),
+        _item("Export Selected...", "export"),
+        _todo("Export with Origin...", "exportwithorigin"),
+        _sep(),
+        _todo("Worksession", "worksession"),
+        _sep(),
+        _todo("Notes", "documentnotes"),
+        _todo("Properties...", "documentproperties"),
+        _sep(),
+        _item("Print...", "print"),
+        _sep(),
+        # OURS: the reference lists recent files in this place; ours are a submenu.
+        _item("Recent Files", "__recent_files__"),
         _item("Exit", "exit"),
     )),
     ("Edit", (
@@ -208,6 +224,7 @@ _CORE_MENUS = (
             _item("Plane Surface", "plane"),
             _item("Planar Surface from Boundaries", "planarsrf"),
             _item("Surface from Edge Curves", "edgesrf"),
+            _item("Surface from 3 or 4 Corner Points", "srfpt"),
             _item("Loft", "loft"),
             _item("One-Rail Sweep", "sweep1"),
             _item("Two-Rail Sweep", "sweep2"),
@@ -264,6 +281,9 @@ _CORE_MENUS = (
         _todo("Hatches, Layouts, and Detail Views", "layout"),
     )),
     ("Transform", (
+        _popup("Deform", (
+            _item("Cage Edit", "cageedit"),
+        )),
         _popup("Move and Duplicate", (
             _item("Move", "move"),
             _item("Copy Objects", "copy"),
@@ -353,17 +373,6 @@ _CORE_MENUS = (
 # come from the public toolbar manifest, and the service gaps come from the public
 # roadmap. Unavailable leaves remain explicit and clickable.
 _SERVICE_GROUPS = {
-    "File": (
-        _popup("Recent and Recovery", (
-            _item("Recent Files", "__recent_files__"),
-            _todo("Recovery Settings", "recoverysettings"),
-        )),
-        _popup("Templates and Document", (
-            _todo("New from Template", "newfromtemplate"),
-            _todo("Save a Copy", "saveacopy"),
-            _todo("Document Notes", "documentnotes"),
-        )),
-    ),
     "Help": (
         _popup("Learning and Reference", (
             _todo("Getting Started", "gettingstarted"),

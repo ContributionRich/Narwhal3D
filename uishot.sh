@@ -10,6 +10,9 @@ REPORTER="${ROOT}/spike/public_ui_report.py"
 TIMEOUT_SECONDS=90
 
 export NARWHAL3D_NO_DIALOGS=1
+export NARWHAL3D_DEFER_FIRST_PRESENT=1
+export NARWHAL3D_STATUSBAR_HEIGHT=37
+unset NARWHAL3D_UI_READY NARWHAL3D_PRESENT_WATCHDOG
 PURE_CORE="${ROOT}/native/pure_core/target/x86_64-unknown-linux-gnu/release/libnarwhal_pure_core.so"
 if [[ -z "${NARWHAL_PURE_CORE:-}" && -f "$PURE_CORE" ]]; then
   export NARWHAL_PURE_CORE="$PURE_CORE"
@@ -28,7 +31,9 @@ fi
 mkdir -p "${ROOT}/artifacts"
 LOG="${TMPDIR:-/tmp}/narwhal3d_uishot.$$.log"
 LOCK="${TMPDIR:-/tmp}/narwhal3d_gui.lock"
-trap 'rm -f "$LOG"' EXIT
+PREFS_DIR="$(mktemp -d "${TMPDIR:-/tmp}/narwhal3d-shot-prefs.XXXXXX")"
+export NARWHAL3D_SETTINGS_FILE="$PREFS_DIR/preferences.json"
+trap 'rm -f "$LOG"; rm -rf "$PREFS_DIR"' EXIT
 
 if command -v flock >/dev/null 2>&1; then
   exec 9>"$LOCK"

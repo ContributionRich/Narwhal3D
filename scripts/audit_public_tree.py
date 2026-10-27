@@ -103,6 +103,8 @@ REQUIRED = {
     "native/pure_core/src/coil.rs",
     "native/pure_core/src/interpolate.rs",
     "native/pure_core/src/tween.rs",
+    "native/pure_core/src/surface.rs",
+    "native/pure_core/src/cage.rs",
     "native/pure_core/src/gridsnap.rs",
     "native/geometry_core/Cargo.toml",
     "native/geometry_core/build.rs",
@@ -187,6 +189,10 @@ ALLOWED_IMAGES = (
     "narwhal3d/icons/narwhal-*.png",
     "blender_patches/narwhal3d_app_icon.svg",
     "packaging/windows/*.ico",
+    *(f'{folder}/{stem}.{extension}'
+      for folder, extension in (('artwork/icons', 'svg'), ('narwhal3d/icons', 'png'))
+      for stem in ('v4-panel-properties', 'v4-panel-display', 'v4-panel-ai-assistant',
+                   'v4-viewport-maximize', 'v4-viewport-restore')),
 )
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".tif", ".tiff", ".webp", ".ico", ".svg"}
 LEGACY_PATH_PATTERN = re.compile(r"rhi" + r"no(?!3dm)", re.IGNORECASE)

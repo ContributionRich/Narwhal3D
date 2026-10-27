@@ -94,7 +94,7 @@ check(sum(len(tab["buttons"]) for tab in data.TABS) == 582,
 
 implemented = live_command_names()
 rows = [button for name in names for button in toolbars.tab_rows(name, implemented)]
-check(len(implemented) == 184, "the app-equivalent registry has 184 commands", len(implemented))
+check(len(implemented) == 186, "the app-equivalent registry has 186 commands", len(implemented))
 check(len(rows) == 582, "every top slot reaches the stable Button API")
 check(sum(button.is_separator for button in rows) == 57,
       "57 intentional top-toolbar spacers remain real separators")
@@ -108,7 +108,7 @@ check(len(parametric) == 1 and parametric[0].tooltip == "Parametric tools"
       and not parametric[0].enabled,
       "the generic parametric slot remains vendor-neutral and explicitly unavailable")
 enabled, total = toolbars.coverage(implemented)
-check((enabled, total) == (119, 525),
+check((enabled, total) == (120, 525),
       "coverage counts repeated runnable slots and explicit unavailable slots", (enabled, total))
 
 print("\n2. Exact 37-cell left palette and linked flyouts")
@@ -174,10 +174,10 @@ check(all(row.icon == variant_icons.icon_for(name, row.text)
       "flyout rows apply only their exact authored slot mapping")
 line_rows = mapped_rows["Lines"]
 check(toolbars.sidebar_tooltip_lines(line_rows[2], "flyout")
-      == ("Line: Normal To Surface",)
+      == ("Line: Normal To Surface", "right-click: Surface normal, both sides")
       and toolbars.sidebar_tooltip_lines(circle_rows[1], "flyout")
       == ("Circle: diameter",),
-      "flyout hover shows the authored variant description, not the shared command")
+      "flyout hover preserves authored variants and their alternate descriptions")
 source_payloads = {}
 for (flyout_name, text), source_name in variant_icons.FLYOUT_SOURCES.items():
     digest = hashlib.sha256(Path(ROOT, "artwork", "icons", source_name).read_bytes()).digest()
@@ -215,11 +215,49 @@ check(toolbars.sidebar_flyout_rows(sidebar[0], implemented) == [],
       "an unlinked left cell does not invent a flyout")
 point_button = next(button for button in linked if button.link == "Point")
 point_tip = toolbars.sidebar_tooltip_lines(point_button, "command", "Point")
-check(point_tip == ("Point",),
-      "sidebar hover shows only the canonical command name")
-check(toolbars.sidebar_tooltip_lines(point_button, "flyout", "Point") ==
-      ("Point",),
-      "the arrow corner keeps the same compact command-name tooltip")
+check(point_tip == (point_button.tooltip, "right-click: " + point_button.right_tooltip,
+                    "◢ opens the Point toolbar"),
+      "sidebar hover includes authored primary, alternate and actual flyout link", point_tip)
+check(toolbars.sidebar_tooltip_lines(point_button, "flyout", "Point") == point_tip,
+      "the arrow corner keeps the same full description as the command surface")
+
+# Synthetic variants keep availability tests independent of registry additions.
+for left_enabled in (False, True):
+    for right_enabled in (False, True):
+        variant = toolbars.Button("Short text", "Circle: diameter", "circle", "points",
+                                  "Multiple points", None, left_enabled, right_enabled,
+                                  link="Actual linked category")
+        expected = ("Circle: diameter" + ("" if left_enabled else " - not implemented yet"),
+                    "right-click: Multiple points" +
+                    ("" if right_enabled else " - not implemented yet"),
+                    "◢ opens the Actual linked category toolbar")
+        check(all(toolbars.sidebar_tooltip_lines(variant, part, "Circle") == expected
+                  for part in ("command", "flyout")),
+              f"authored variant/link win; independent availability {left_enabled}/{right_enabled}")
+
+fallback = toolbars.Button("Text fallback", "", "rawcommand", "rawright", "", None,
+                           True, False)
+check(toolbars.sidebar_tooltip_lines(fallback, command_name="Canonical") ==
+      ("Text fallback", "right-click: rawright - not implemented yet"),
+      "text precedes canonical fallback and bare right command remains described")
+fallback.text = ""
+check(toolbars.sidebar_tooltip_lines(fallback, command_name="Canonical") ==
+      ("Canonical", "right-click: rawright - not implemented yet")
+      and toolbars.sidebar_tooltip_lines(fallback) ==
+      ("rawcommand", "right-click: rawright - not implemented yet"),
+      "missing authored text uses optional canonical then raw command fallback")
+fallback.right = None
+fallback.right_tooltip = "Authored alternate without a command"
+check(toolbars.sidebar_tooltip_lines(fallback) ==
+      ("rawcommand", "right-click: Authored alternate without a command - not implemented yet"),
+      "prototype alternate help survives even without a runnable right command")
+fallback.right_tooltip = ""
+check(toolbars.sidebar_tooltip_lines(fallback) == ("rawcommand",),
+      "absent alternate and link do not invent extra lines")
+check(toolbars.sidebar_tooltip_lines(None) == ()
+      and toolbars.sidebar_tooltip_lines(
+          toolbars.Button("", "", None, None, "", None, False, False)) == (),
+      "missing buttons and empty separator records have no description")
 tip_box = toolbars.sidebar_tooltip_layout(
     (0, 20.0, 100.0, 48.0, 128.0), 60.0, 1600.0, 900.0)
 check(tip_box is not None and tip_box[0] == 48.0 + toolbars.SIDEBAR_TOOLTIP_GAP
@@ -248,8 +286,11 @@ popup = toolbars.flyout_popup_layout(117, 700, flyout_buttons, 1600, 900)
 check(toolbars.FLYOUT_COLUMNS == 5 and toolbars.FLYOUT_OVERLAP == 0.0
       and popup["panel"][0] == 117
       and popup["panel"][2] - popup["panel"][0]
-      == toolbars.FLYOUT_MARGIN * 2 + toolbars.FLYOUT_COLUMNS * toolbars.FLYOUT_CELL,
-      "floating toolbar starts outside the dock and is exactly five cells wide")
+      == toolbars.FLYOUT_MARGIN * 2 + toolbars.FLYOUT_COLUMNS * toolbars.FLYOUT_CELL
+      + (toolbars.FLYOUT_COLUMNS - 1) * toolbars.FLYOUT_GAP,
+      "floating toolbar starts outside the dock and has five cells plus v7 gaps")
+check(toolbars.FLYOUT_CELL == 32 and toolbars.FLYOUT_ICON == 22 and toolbars.FLYOUT_GAP == 2,
+      'v7 flyouts use native-sized 32px buttons, 22px icons and 2px gaps')
 check(len(popup["cells"]) == len(popup["buttons"]) == len(flattened),
       "floating toolbar allocates one hit box for every displayed icon")
 first_cell = popup["cells"][0]
@@ -301,8 +342,16 @@ check("GPL-3.0-or-later" in license_text and "ContributionRich" in license_text,
 print("\n4. Runtime icon safety and visual replacement")
 check(toolbars.icons_available(), "every declared runtime icon is bundled")
 bundled = {path.name for path in Path(PACKAGE_DIR, "icons").glob("*.png")}
-check(bundled == set(data.ICON_NAMES), "runtime icon directory exactly matches the manifest",
-      sorted(bundled ^ set(data.ICON_NAMES)))
+expected_v4 = {
+    "v4-panel-properties.png", "v4-panel-display.png", "v4-panel-ai-assistant.png",
+    "v4-viewport-maximize.png", "v4-viewport-restore.png",
+}
+check(toolbars.V4_ICON_NAMES == expected_v4, "v4 allowlist is exactly the five approved icons")
+check(bundled == set(data.ICON_NAMES) | expected_v4,
+      "runtime icon directory exactly matches legacy manifest plus five v4 assets",
+      sorted(bundled ^ (set(data.ICON_NAMES) | expected_v4)))
+check(all(toolbars.icon_path(name) and png_size(toolbars.icon_path(name)) == (96, 96)
+          for name in expected_v4), "all five v4 icons resolve as 96x96 PNGs")
 resolved = [toolbars.icon_path(name) for name in sorted(data.ICON_NAMES)]
 icon_root = os.path.realpath(os.path.join(PACKAGE_DIR, "icons"))
 check(all(path and os.path.commonpath((icon_root, os.path.realpath(path))) == icon_root
@@ -347,6 +396,199 @@ check(toolbars.sidebar_action_at(*center, cells, sidebar) == (linked_index, "com
 check(toolbars.sidebar_action_at(linked_cell[3] - 1, linked_cell[2] + 1,
                                  cells, sidebar) == (linked_index, "flyout"),
       "the linked cell corner opens its flyout")
+
+print("\n6. Category strip and contextual left toolbar (UI design)")
+check(all(toolbars.icon_path(toolbars.category_icon(name)) for name in names),
+      "every category has a bundled, safe icon")
+standard = toolbars.context_buttons("Standard", implemented)
+check([b.text for b in standard] == [b.text for b in sidebar],
+      "Standard shows the favourite drawing palette in the left panel")
+transform = toolbars.context_buttons("Transform", implemented)
+check(transform and not any(b.is_separator for b in transform)
+      and [b.text for b in transform]
+      == [b.text for b in toolbars.tab_rows("Transform", implemented) if not b.is_separator],
+      "another category shows exactly its own tools, without separators")
+check(toolbars.context_buttons("No Such Category", implemented) == [],
+      "an unknown category shows nothing")
+strip = toolbars.category_boxes(names, 1600, 80, gap=2, x0=5)
+check(len(strip) == len(names) and strip[0] == ("Standard", 5.0, 85.0)
+      and all(b[1] - a[2] == 2 for a, b in zip(strip, strip[1:])),
+      "all fifteen category buttons fit a wide window, 80 px each, 2 px apart")
+narrow = toolbars.category_boxes(names, 500, 80, gap=2, x0=5)
+check(len(narrow) == 6 and toolbars.tabs_hidden(names, narrow) == 9,
+      "a narrow window reports the categories that did not fit")
+check(toolbars.context_grid(37, 120, 600, 35) == (35.0, 37),
+      "the palette keeps its preferred 35 px cells when everything fits")
+cell, shown = toolbars.context_grid(50, 120, 400, 35)
+check(cell == 26.0 and shown == 45,
+      "a long category shrinks to the minimum cell and reports what it cannot show")
+cell, shown = toolbars.context_grid(50, 120, 500, 35)
+check(shown == 50 and 26.0 <= cell < 35.0 and -(-50 // 3) * cell <= 500,
+      "a long category shrinks just enough to fit")
+
+print("\n7. v4 icon confinement (including allowed-name symlink escapes)")
+with tempfile.TemporaryDirectory() as scratch:
+    root = Path(scratch, "icons")
+    root.mkdir()
+    outside = Path(scratch, "outside.png")
+    outside.write_bytes(b"not an icon")
+    saved_dir = toolbars.ICON_DIR
+    toolbars.ICON_DIR = str(root)
+    try:
+        for name in (known, "v4-panel-display.png"):
+            candidate = root / name
+            check(toolbars.icon_path(name) is None, f"missing allowed icon refused: {name}")
+            candidate.mkdir()
+            check(toolbars.icon_path(name) is None, f"directory refused: {name}")
+            candidate.rmdir()
+            candidate.symlink_to(outside)
+            check(toolbars.icon_path(name) is None, f"allowed-name symlink escape refused: {name}")
+            candidate.unlink()
+            candidate.write_bytes(b"present")
+            check(toolbars.icon_path(name) == str(candidate), f"confined regular file resolves: {name}")
+            check(toolbars.icon_path(str(candidate)) is None, f"absolute path refused: {name}")
+        unknown = root / "v4-not-approved.png"
+        unknown.write_bytes(b"present")
+        check(toolbars.icon_path(unknown.name) is None, "existing unknown v4 basename is refused")
+        check(all(toolbars.icon_path(value) is None for value in
+                  ([], 1, "../" + known, "icons/" + known, "..\\" + known)),
+              "non-string and nested/traversal names remain refused")
+    finally:
+        toolbars.ICON_DIR = saved_dir
+
+print("\n8. Opt-in fixed-size scrolling layouts")
+cat = toolbars.category_scroll_layout(["A", "A", "C"], (10, 20, 210, 80), 90)
+check((cat["offset"], cat["max_offset"], cat["content_extent"], cat["total"]) == (60, 60, 260, 3),
+      "category extent includes both 7px pads, fixed80 buttons and 3px gaps; offset clamps")
+check(cat["cells"] == ((0, -43, 27, 37, 73), (1, 40, 27, 120, 73), (2, 123, 27, 203, 73))
+      and cat["hit_cells"][0] == (0, 10, 27, 37, 73),
+      "category boxes translate without shrinking; partially visible button is clipped only for hits")
+check(toolbars.hit_scroll(5, 40, cat) is None and toolbars.hit_scroll(38, 40, cat) is None
+      and toolbars.hit_scroll(70, 40, cat) == 1 and toolbars.hit_scroll(203, 40, cat) is None,
+      "category hits respect clipping, gaps, half-open boundaries and duplicate original indices")
+check(toolbars.category_scroll_layout(names, (0, 0, 200, 60), -20)["offset"] == 0
+      and toolbars.category_scroll_layout(names, (0, 0, 2000, 60), 999)["offset"] == 0,
+      "negative and stale wide-resize category offsets clamp to zero")
+check(toolbars.category_scroll_layout(["A", "B"], (0, 0, 177, 60))["max_offset"] == 0,
+      "two categories exactly fit including padding, without a phantom trailing gap")
+seen = set()
+for offset in range(1060):
+    scroll = toolbars.category_scroll_layout(names, (0, 0, 200, 60), offset)
+    seen.update(i for i, x0, y0, x1, y1 in scroll["hit_cells"]
+                if toolbars.hit_scroll((x0+x1)/2, (y0+y1)/2, scroll) == i)
+check(seen == set(range(len(names))), "scrolling makes all fifteen categories hittable, not just first slots")
+
+grid = toolbars.context_scroll_layout(50, (10, 20, 129, 120), 9999)
+check((grid["offset"], grid["max_offset"], grid["content_extent"], grid["content_width"],
+       grid["max_x_offset"], grid["total"]) == (551, 551, 651, 119, 0, 50),
+      "50 tools keep three fixed35 columns, 3px gaps, 4px padding and 551px vertical range")
+check(grid["cells"] and grid["hit_cells"]
+      and grid["cells"][0] == (42, 14, 100, 49, 135)
+      and grid["hit_cells"][0] == (42, 14, 100, 49, 120)
+      and grid["cells"][-1] == (49, 52, 24, 87, 59),
+      "scrolled grid keeps original index42 at top and final tool49 fully reachable at bottom")
+check(toolbars.hit_scroll(20, 125, grid) is None
+      and toolbars.hit_scroll(50, 110, grid) is None,
+      "clipped-off top and 3px column gap never activate a tool")
+check(toolbars.context_scroll_layout(6, (0, 0, 119, 81))["max_offset"] == 0
+      and toolbars.context_scroll_layout(6, (0, 0, 119, 80))["max_offset"] == 1,
+      "grid exact fit and one-pixel overflow include bottom padding but no trailing gap")
+check(toolbars.context_scroll_layout(50, (0, 0, 119, 100), -5)["offset"] == 0
+      and toolbars.context_scroll_layout(1, (0, 0, 119, 100), 999)["offset"] == 0,
+      "negative and stale category-switch offsets clamp")
+seen, fixed, matched_hits = set(), True, True
+for offset in range(552):
+    scroll = toolbars.context_scroll_layout(50, (0, 0, 119, 100), offset)
+    fixed &= all(x1-x0 == 35 and y1-y0 == 35 for i, x0, y0, x1, y1 in scroll["cells"])
+    for i, x0, y0, x1, y1 in scroll["hit_cells"]:
+        seen.add(i)
+        matched_hits &= toolbars.hit_scroll((x0+x1)/2, (y0+y1)/2, scroll) == i
+check(seen == set(range(50)) and fixed and matched_hits,
+      "all fifty fixed-size tools are reachable; every visible box picks its original index")
+seen = set()
+for offset in range(81):
+    for horizontal in range(100):
+        scroll = toolbars.context_scroll_layout(6, (0, 0, 20, 20), offset, x_offset=horizontal)
+        seen.update(entry[0] for entry in scroll["hit_cells"])
+check(seen == set(range(6)) and scroll["max_x_offset"] == 99
+      and toolbars.context_scroll_layout(6, (0, 0, 20, 20), x_offset=999)["x_offset"] == 99
+      and toolbars.context_scroll_layout(6, (0, 0, 20, 20), x_offset=-1)["x_offset"] == 0,
+      "even a 20px-wide viewport can scroll to every original column without shrinking")
+linked_buttons = [types.SimpleNamespace(link="Circle")]
+partial = toolbars.context_scroll_layout(1, (0, 0, 20, 40))
+check(toolbars.context_scroll_action_at(19, 6, partial, linked_buttons) == (0, "command")
+      and toolbars.context_scroll_action_at(37, 6, partial, linked_buttons) is None,
+      "clipping neither relocates a flyout corner nor enables invisible pixels")
+partial = toolbars.context_scroll_layout(1, (0, 0, 20, 40), x_offset=20)
+check(toolbars.context_scroll_action_at(18, 6, partial, linked_buttons) == (0, "flyout"),
+      "scrolling the real flyout corner into view makes it actionable")
+for build in (lambda box, count: toolbars.category_scroll_layout(range(count), box, 999),
+              lambda box, count: toolbars.context_scroll_layout(count, box, 999)):
+    empty = build((0, 0, 119, 100), 0)
+    check(empty["total"] == 0 and empty["cells"] == empty["hit_cells"] == ()
+          and empty["offset"] == empty["max_offset"] == empty["content_extent"] == 0,
+          "empty scroll content clears stale state")
+    check(all(build(box, 4)["cells"] == build(box, 4)["hit_cells"] == ()
+              for box in ((0, 0, 0, 100), (0, 0, 119, 0), (10, 10, 0, 0))),
+          "zero/reversed viewport never draws or hits degenerate cells")
+scaled = toolbars.context_scroll_layout(6, (0, 0, 238, 162), cell=70, gap=6, pad=8)
+check(scaled["max_offset"] == 0 and scaled["cells"][0] == (0, 8, 84, 78, 154),
+      "explicit physical-pixel metrics preserve the 2x layout without hidden scaling")
+for call in (lambda: toolbars.category_scroll_layout(names, (0, 0, 200, 60), button_w=0),
+             lambda: toolbars.context_scroll_layout(3, (0, 0, 119, 100), cell=0),
+             lambda: toolbars.context_scroll_layout(3, (0, 0, 119, 100), columns=1.5)):
+    try:
+        call()
+    except ValueError:
+        check(True, "invalid fixed metrics refused instead of dropping cells")
+    else:
+        check(False, "invalid fixed metrics refused instead of dropping cells")
+
+print('\n9. Visible scroll indicator')
+long_grid = toolbars.context_scroll_layout(50, (0, 0, 126, 200))
+bar = toolbars.scroll_indicator(long_grid)
+check(bar is not None and bar['thumb'][3] == bar['track'][3],
+      'overflow shows a thumb at the top before scrolling')
+check(bar['thumb'][3] - bar['thumb'][1] < bar['track'][3] - bar['track'][1],
+      'thumb length indicates hidden content')
+bottom_grid = toolbars.context_scroll_layout(50, (0, 0, 126, 200), 99999)
+bottom_bar = toolbars.scroll_indicator(bottom_grid)
+check(abs(bottom_bar['thumb'][1] - bottom_bar['track'][1]) < 1e-9,
+      'the thumb reaches the bottom when the last tools are visible')
+check(toolbars.scroll_indicator(toolbars.context_scroll_layout(3, (0, 0, 126, 200))) is None,
+      'no misleading scrollbar when all tools fit')
+
+print("\n10. HTMLv7 pointer tooltip and soft background timing")
+check(toolbars.hover_weight(-1) == toolbars.hover_weight(0) == 0.0
+      and toolbars.hover_weight(.12) == toolbars.hover_weight(1) == 1.0,
+      "120ms hover transition clamps at both ends")
+check(.7 < toolbars.hover_weight(.06) < .9
+      and toolbars.hover_weight(.03, .06) == toolbars.hover_weight(.06),
+      "midpoint is eased, not a binary or linear jump; custom duration rescales time")
+weights = [toolbars.hover_weight(i * .001) for i in range(121)]
+check(all(0 <= a <= b <= 1 for a, b in zip(weights, weights[1:]))
+      and max(b - a for a, b in zip(weights, weights[1:])) < .03,
+      "background progress is monotone and smooth through the whole transition")
+check(toolbars.hover_weight(0, 0) == toolbars.hover_weight(1, -1) == 1,
+      "nonpositive animation duration finishes immediately")
+box = toolbars.tooltip_box_at((100, 200), [40, 80, 60], 3, (800, 600))
+check(box is not None and box[0] == 114 and box[2] == 212
+      and abs(box[3] - 186) < 1e-9 and abs(box[1] - 129.2) < 1e-9,
+      "tooltip anchors 14px right/down with longest-line width and three padded lines")
+scaled_box = toolbars.tooltip_box_at((200, 400), [80, 160, 120], 3, (1600, 1200), 2)
+check(all(abs(a * 2 - b) < 1e-9 for a, b in zip(box, scaled_box)),
+      "2x scale doubles CSS metrics without double-scaling measured text widths")
+check(toolbars.tooltip_box_at((790, 10), [80], 1, (800, 600)) ==
+      (702, 0, 800, 25.6), "right/bottom edge clamps instead of overflowing")
+upper = toolbars.tooltip_box_at((-100, 1000), [80], 1, (800, 600))
+check(upper[0] == 0 and upper[3] == 600,
+      "left/top edge clamps stale off-window anchors")
+check(toolbars.tooltip_box_at((20, 20), [1000], 100, (40, 30)) == (0, 0, 40, 30)
+      and toolbars.tooltip_box_at((20, 20), [1000], 100, (0, 0)) == (0, 0, 0, 0),
+      "oversized descriptions and zero-size windows stay bounded")
+check(toolbars.tooltip_box_at(None, [80], 1, (800, 600)) is None
+      and toolbars.tooltip_box_at((20, 20), [], 0, (800, 600)) is None,
+      "no captured pointer or no description produces no tooltip box")
 
 print("\n" + "=" * 70)
 if failures:

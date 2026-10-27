@@ -12,6 +12,11 @@ from . import flyout_icon_data
 from . import toolbar_data
 
 ICON_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "icons")
+V4_ICON_NAMES = frozenset({
+    "v4-panel-properties.png", "v4-panel-display.png",
+    "v4-panel-ai-assistant.png", "v4-viewport-maximize.png",
+    "v4-viewport-restore.png",
+})
 
 
 def container_name():
@@ -153,11 +158,12 @@ def tab_rows(name, implemented):
 def icon_path(icon):
     """Resolve a bundled Narwhal icon, rejecting unknown or unsafe names.
 
-    Resolution is restricted to the explicit toolbar manifest and to real files
+    Resolution is restricted to the explicit toolbar/v4 allowlists and to real files
     whose resolved location remains inside :data:`ICON_DIR`. Missing files return
     ``None`` so a renderer can safely use button text instead.
     """
-    if not isinstance(icon, str) or icon not in toolbar_data.ICON_NAMES:
+    if not isinstance(icon, str) or (
+                icon not in toolbar_data.ICON_NAMES and icon not in V4_ICON_NAMES):
         return None
     if icon != os.path.basename(icon):
         return None
@@ -196,8 +202,10 @@ SIDEBAR_TOOLTIP_GAP = 4.0
 SIDEBAR_TOOLTIP_LINE = 14.0
 SIDEBAR_TOOLTIP_FONT = 11.0
 FLYOUT_COLUMNS = 5
-FLYOUT_CELL = 40.0
-FLYOUT_MARGIN = 5.0
+FLYOUT_CELL = 32.0
+FLYOUT_ICON = 22.0
+FLYOUT_GAP = 2.0
+FLYOUT_MARGIN = 4.0
 FLYOUT_TITLE_H = 14.0
 FLYOUT_OVERLAP = 0.0
 
@@ -284,19 +292,60 @@ def sidebar_button_index(buttons, target, preferred=None):
 
 
 def sidebar_tooltip_lines(button, part="command", command_name=None):
-    """Return the concise label appropriate to the hovered toolbar surface.
+    """HTMLv7 descriptions: primary, alternate action, then actual flyout link.
 
-    Main-sidebar cells use the canonical registered command name. A flyout row is already
-    a specific authored variant, so its own tooltip/text must win instead of collapsing
-    every variant back to the shared command verb.
+    ``part`` is retained for API compatibility; the whole cell shows full help.
+    ``command_name`` is only a primary fallback, never an authored-text override.
+    MEASURED: tmp/v7_app.js toolTip; command-only fallbacks are OURS.
     """
     if button is None:
         return ()
-    if part == "flyout" and command_name is None:
-        name = button.tooltip or button.text or button.left
-    else:
-        name = command_name or button.left or button.text or button.tooltip
-    return (str(name),) if name else ()
+    lines = []
+    primary = button.tooltip or button.text or command_name or button.left
+    if primary:
+        lines.append(str(primary) + ("" if button.enabled else " - not implemented yet"))
+    alternate = button.right_tooltip or button.right
+    if alternate:
+        lines.append(f"right-click: {alternate}" +
+                     ("" if button.right_enabled else " - not implemented yet"))
+    if button.link:
+        lines.append(f"◢ opens the {button.link} toolbar")
+    return tuple(lines)
+
+
+def hover_weight(elapsed, duration=.12):
+    """Clamped background-transition progress; not a tooltip visibility delay.
+
+    MEASURED: HTMLv7 uses background .12s ease. OURS: a small cubic ease-out
+    approximation, not an exact CSS Bezier solver. Host UI animation glue stays
+    in Python; interpolate from the current weight to 1 (enter) or 0 (leave).
+    Nonpositive duration completes immediately, including at elapsed zero.
+    """
+    if duration <= 0:
+        return 1.0
+    t = min(1.0, max(0.0, float(elapsed) / duration))
+    return 1.0 - (1.0 - t) ** 3
+
+
+def tooltip_box_at(pointer, widths, linecount, windowsize, scale=1.0):
+    """Return a pointer-anchored ``(x0, y0, x1, y1)`` box, or None without lines.
+
+    Pointer/window coordinates and measured text widths are physical pixels,
+    bottom-left origin (y increases UP). Pass the captured enter pointer, not
+    each motion event. Only CSS metrics are scaled: +14px right/down, 8px/4px
+    padding, 1px border, and 12px font at 1.3 line height (MEASURED HTMLv7).
+    OURS: clamp the box to the window, clipping oversize content in the renderer.
+    This is small host-UI coordinate glue, not a bulk layout/geometry operation.
+    """
+    if pointer is None or linecount <= 0:
+        return None
+    scale = max(0.0, float(scale))
+    ww, wh = (max(0.0, float(size)) for size in windowsize)
+    width = min(ww, max(0.0, max(widths, default=0.0)) + 18.0 * scale)
+    height = min(wh, (15.6 * linecount + 10.0) * scale)
+    x0 = min(max(0.0, pointer[0] + 14.0 * scale), ww - width)
+    y0 = min(max(0.0, pointer[1] - 14.0 * scale - height), wh - height)
+    return (x0, y0, x0 + width, y0 + height)
 
 
 def sidebar_tooltip_layout(cell, text_width, window_width, window_height,
@@ -361,8 +410,8 @@ def flyout_popup_layout(anchor_x, anchor_y, buttons, window_width, window_height
     columns = max(1, int(columns))
     cell = max(1.0, float(cell))
     rows = (len(items) + columns - 1) // columns if items else 0
-    panel_w = FLYOUT_MARGIN * 2.0 + columns * cell
-    panel_h = FLYOUT_TITLE_H + FLYOUT_MARGIN * 2.0 + rows * cell
+    panel_w = FLYOUT_MARGIN * 2.0 + columns * cell + (columns - 1) * FLYOUT_GAP
+    panel_h = FLYOUT_TITLE_H + FLYOUT_MARGIN * 2.0 + rows * cell + max(0, rows - 1) * FLYOUT_GAP
     max_x = max(0.0, float(window_width) - panel_w)
     max_top = max(panel_h, float(window_height))
     x0 = min(max(0.0, float(anchor_x) - FLYOUT_OVERLAP), max_x)
@@ -374,8 +423,8 @@ def flyout_popup_layout(anchor_x, anchor_y, buttons, window_width, window_height
     for index in range(len(items)):
         column = index % columns
         row = index // columns
-        cx0 = x0 + FLYOUT_MARGIN + column * cell
-        cy1 = grid_top - row * cell
+        cx0 = x0 + FLYOUT_MARGIN + column * (cell + FLYOUT_GAP)
+        cy1 = grid_top - row * (cell + FLYOUT_GAP)
         cells.append((index, cx0, cy1 - cell, cx0 + cell, cy1))
     return {"panel": panel, "title": title, "cells": tuple(cells), "buttons": items}
 
@@ -457,3 +506,187 @@ def hit_sidebar(x, y, cells):
         if x0 <= x < x1 and y0 <= y < y1:
             return index
     return None
+
+
+# ---------------------------------------------------------------------------
+# Category strip and contextual left toolbar (UI design, light slate concept).
+#
+# The top strip holds one compact button per category (icon over label) -- it selects
+# a category, it is NOT a ribbon of commands. The left panel then shows that
+# category's tools. Standard keeps the favourite drawing palette, which is what the
+# design reference shows under "Standard".
+# ---------------------------------------------------------------------------
+
+#: One representative bundled icon per category.
+CATEGORY_ICONS = {
+    "Standard": "narwhal-box.png",
+    "CPlanes": "narwhal-cplane.png",
+    "Set View": "narwhal-rotateview.png",
+    "Display": "narwhal-viewport_shaded.png",
+    "Select": "narwhal-selall.png",
+    "Viewport Layout": "narwhal-4view.png",
+    "Visibility": "narwhal-hide.png",
+    "Transform": "narwhal-move.png",
+    "Curve Tools": "narwhal-fillet.png",
+    "Surface Tools": "narwhal-loft.png",
+    "Solid Tools": "narwhal-booleanunion.png",
+    "SubD Tools": "narwhal-removecrease.png",
+    "Mesh Tools": "narwhal-meshrepair.png",
+    "Render": "narwhal-render.png",
+    "Drafting": "narwhal-dim.png",
+}
+CATEGORY_ICON = 26.0        # icon inside a category button
+CATEGORY_LABEL_FONT = 11.0
+CONTEXT_COLUMNS = 3
+CONTEXT_HEADER_H = 30.0     # "Standard" header strip above the tools
+CONTEXT_MIN_CELL = 26.0
+
+
+def category_icon(name):
+    """The bundled icon for a category, or None."""
+    return CATEGORY_ICONS.get(name)
+
+
+def context_buttons(category, implemented=None):
+    """The tools the left panel shows for `category` (separators removed)."""
+    if category == "Standard":
+        return sidebar_buttons(implemented)
+    return [button for button in tab_rows(category, implemented) if not button.is_separator]
+
+
+def category_boxes(names, width, button_w, gap=2.0, x0=0.0):
+    """Fixed-width ``(name, x0, x1)`` category buttons left to right; buttons that do
+    not fit are omitted (see :func:`tabs_hidden`)."""
+    out = []
+    x = float(x0)
+    for name in names or ():
+        if x + button_w > width:
+            break
+        out.append((name, x, x + button_w))
+        x += button_w + gap
+    return out
+
+
+def context_grid(n_buttons, width, height, cell, columns=CONTEXT_COLUMNS,
+                 min_cell=CONTEXT_MIN_CELL):
+    """``(cell, shown)`` for the contextual grid: the preferred `cell` when all
+    `n_buttons` fit in `height`, else a smaller cell down to `min_cell`; `shown` is how
+    many buttons are drawn (the rest are reported, never silently dropped)."""
+    columns = max(1, int(columns))
+    cell = min(float(cell), max(1.0, float(width)) / columns)
+    rows = -(-max(0, int(n_buttons)) // columns)
+    if rows and rows * cell > height:
+        cell = max(float(min_cell), float(height) / rows)
+    fit_rows = int(max(0.0, float(height)) // cell) if cell > 0 else 0
+    return cell, min(int(n_buttons), fit_rows * columns)
+
+
+# OURS: opt-in v4 UI coordinate glue, kept in Python beside the host's draw/hit
+# adapters. These small box layouts neither compute nor approximate CAD geometry.
+def bounded_scroll_offset(offset, content_extent, viewport_extent):
+    """Return ``(offset, max_offset)`` in pixels, clamping stale resize/filter state."""
+    maximum = max(0.0, float(content_extent) - max(0.0, float(viewport_extent)))
+    return min(maximum, max(0.0, float(offset))), maximum
+
+
+def scroll_cells(viewport, cells):
+    """Record visible indexed draw boxes and their half-open hit intersections.
+
+    ``viewport`` is ``(x0, y0, x1, y1)`` in bottom-left-origin coordinates.
+    ``cells`` entries are ``(original_index, x0, y0, x1, y1)``. Draw using the
+    returned full-size ``cells`` under a scissor of ``viewport``; never anchor an
+    icon to its clipped ``hit_cells`` box. Use :func:`hit_scroll` for picking.
+    Degenerate/reversed viewport dimensions produce no visible or hittable cells.
+    """
+    vx0, vy0, vx1, vy1 = viewport
+    visible, hits = [], []
+    for index, x0, y0, x1, y1 in cells:
+        clipped = (index, max(vx0, x0), max(vy0, y0), min(vx1, x1), min(vy1, y1))
+        if clipped[1] < clipped[3] and clipped[2] < clipped[4]:
+            visible.append((index, x0, y0, x1, y1))
+            hits.append(clipped)
+    return {"viewport": tuple(viewport), "cells": tuple(visible), "hit_cells": tuple(hits)}
+
+
+def hit_scroll(x, y, layout):
+    """Original item index under the point, using the layout's recorded hit boxes."""
+    return hit_sidebar(x, y, layout["hit_cells"])
+
+
+def category_scroll_layout(names, viewport, offset=0.0, *, button_w=80.0,
+                           gap=3.0, pad=7.0):
+    """Opt-in horizontal category strip; fixed-width buttons, padding on all sides.
+
+    In addition to :func:`scroll_cells`' keys, returns bounded ``offset``,
+    ``max_offset``, ``content_extent`` (width including end padding), and ``total``.
+    Indices address the original ``names`` sequence, even with duplicate labels.
+    Positive offset reveals later categories. All lengths use the caller's pixel
+    space; pass scaled metrics when the viewport is in physical pixels.
+    """
+    if button_w <= 0 or gap < 0 or pad < 0:
+        raise ValueError("category width must be positive; gap/padding nonnegative")
+    names = tuple(names or ())
+    x0, y0, x1, y1 = viewport
+    extent = 2 * pad + len(names) * button_w + max(0, len(names) - 1) * gap if names else 0.0
+    offset, maximum = bounded_scroll_offset(offset, extent, x1 - x0)
+    cells = ((i, x0 + pad + i * (button_w + gap) - offset, y0 + pad,
+              x0 + pad + i * (button_w + gap) - offset + button_w, y1 - pad)
+             for i in range(len(names)))
+    out = scroll_cells(viewport, cells)
+    out.update(offset=offset, max_offset=maximum, content_extent=extent, total=len(names))
+    return out
+
+
+def context_scroll_layout(n_buttons, viewport, offset=0.0, *, cell=35.0,
+                          columns=3, gap=3.0, pad=4.0, x_offset=0.0):
+    """Opt-in fixed-cell context grid, three columns, scrolling top-to-bottom.
+
+    ``offset``/``max_offset`` refer to vertical pixels; ``content_extent`` is the
+    padded content height. ``content_width`` is the required width (119 by default).
+    For narrower viewports the host can use ``x_offset``/``max_x_offset`` to reach
+    every column without shrinking cells. Both offsets are bounded. Also returns
+    ``total`` and :func:`scroll_cells`' draw/hit boxes. Exclude the context header
+    from ``viewport``; pass scaled cell/gap/pad explicitly for physical pixels.
+    """
+    if cell <= 0 or columns < 1 or int(columns) != columns or gap < 0 or pad < 0:
+        raise ValueError("positive cell/integer columns and nonnegative gap/padding required")
+    columns = int(columns)
+    count = max(0, int(n_buttons))
+    rows = (count + columns - 1) // columns
+    extent = 2 * pad + rows * cell + max(0, rows - 1) * gap if count else 0.0
+    width = 2 * pad + columns * cell + (columns - 1) * gap if count else 0.0
+    x0, y0, x1, y1 = viewport
+    offset, maximum = bounded_scroll_offset(offset, extent, y1 - y0)
+    x_offset, max_x = bounded_scroll_offset(x_offset, width, x1 - x0)
+    cells = []
+    for i in range(count):
+        left = x0 + pad + (i % columns) * (cell + gap) - x_offset
+        top = y1 - pad - (i // columns) * (cell + gap) + offset
+        cells.append((i, left, top - cell, left + cell, top))
+    out = scroll_cells(viewport, cells)
+    out.update(offset=offset, max_offset=maximum, content_extent=extent, total=count,
+               x_offset=x_offset, max_x_offset=max_x, content_width=width)
+    return out
+
+
+def scroll_indicator(layout, width=6.0, inset=2.0, minimum=24.0):
+    """Track/thumb boxes for a vertical overflowing tool viewport, in its coordinates."""
+    if not layout or layout.get('max_offset', 0) <= 0:
+        return None
+    x0, y0, x1, y1 = layout['viewport']
+    track = (x1 - inset - width, y0 + inset, x1 - inset, y1 - inset)
+    height = max(0.0, track[3] - track[1])
+    if height <= 0:
+        return None
+    thumb_h = min(height, max(minimum, height * max(0, y1-y0) / layout['content_extent']))
+    travel = height - thumb_h
+    offset = min(layout['max_offset'], max(0.0, layout['offset']))
+    top = track[3] - travel * offset / layout['max_offset']
+    return {'track': track, 'thumb': (track[0], top-thumb_h, track[2], top), 'travel': travel}
+
+
+def context_scroll_action_at(x, y, layout, buttons, pad=None, mark=None, hot=None):
+    """Clipped picking with flyout corners anchored to the FULL fixed-size cells."""
+    if hit_scroll(x, y, layout) is None:
+        return None
+    return sidebar_action_at(x, y, layout["cells"], buttons, pad=pad, mark=mark, hot=hot)

@@ -27,9 +27,11 @@ Narwhal's active project format is `.narwhal`: a dependency-free Rust-validated 
 
 ## Install on Linux x86_64
 
-The public release artifact is `Narwhal_3D-<version>-x86_64.AppImage`. Version 0.4.6 uses the portable runtime introduced in 0.4.1: every bundled ELF is capped at glibc 2.28, below the Ubuntu 22.04/glibc 2.35 compatibility ceiling enforced by the release verifier.
+The published release is **0.4.6**; **0.4.7 is in preparation**, with final validation and portable Linux/Windows packages still pending. No 0.4.7 assets are available yet.
 
-Make the AppImage executable and run it directly:
+The public release artifact is `Narwhal_3D-<version>-x86_64.AppImage`. The published 0.4.6 AppImage uses the portable runtime introduced in 0.4.1: every bundled ELF was measured to require at most glibc 2.28, below the Ubuntu 22.04/glibc 2.35 compatibility ceiling enforced by the release verifier. This is 0.4.6 evidence, not certification of a 0.4.7 candidate.
+
+Make the published 0.4.6 AppImage executable and run it directly:
 
 ```bash
 chmod +x Narwhal_3D-0.4.6-x86_64.AppImage
@@ -42,7 +44,7 @@ The AppImage contains the native startup welcome window, natively branded runtim
 
 The `v0.4.6` prerelease also provides `Narwhal_3D-0.4.6-Windows-x86_64.zip`. Extract the complete folder and start `Narwhal3D.exe`; the native welcome window remains visible while the bundled runtime initializes. Do not move that executable away from its adjacent `app` and `runtime` folders.
 
-This is an unsigned, portable **early preview**, not an installer or supported production build. Windows SmartScreen may require **More info → Run anyway**. The launcher has original Narwhal icon/version resources and the packaged runtime/bootstrap passes native Windows and offline Wine headless checks, but final physical-GPU/real-window acceptance is pending and the internal viewport runtime still retains some Blender-derived PE resource strings/icons. There are no file associations or automatic installation yet.
+This is an unsigned, portable **early preview**, not an installer or supported production build. Windows SmartScreen may require **More info → Run anyway**. The launcher has original Narwhal icon/version resources and the published 0.4.6 runtime/bootstrap passed native Windows and offline Wine headless checks, but final physical-GPU/real-window acceptance is pending and the internal viewport runtime still retains some Blender-derived PE resource strings/icons. There are no file associations or automatic installation yet.
 
 ## Experimental macOS source build
 
@@ -79,7 +81,7 @@ Once `tools/blender-patched/` exists, run:
 
 ## Build a one-click AppImage
 
-With a validated native runtime and the locked appimagetool downloaded:
+The examples below target **0.4.7 in preparation**, not a downloadable or validated release. Use an audited public source revision and a freshly validated portable runtime containing all current native patches, plus matching native components and the locked appimagetool. The 0.4.6 runtime cannot stand in for the new UI APIs; the current GLIBC 2.43 source-development runtime and welcome binary must not ship. All bundled ELFs must pass the GLIBC 2.35 ceiling before assembly and after extraction.
 
 ```bash
 python3 scripts/fetch_locked.py \
@@ -90,7 +92,7 @@ REVISION=$(git rev-parse HEAD)
 EPOCH=$(git show -s --format=%ct HEAD)
 
 python3 scripts/assemble_linux_release.py \
-  --version 0.4.6 \
+  --version 0.4.7 \
   --source-revision "$REVISION" \
   --source-date-epoch "$EPOCH" \
   --source-root . \
@@ -102,8 +104,8 @@ python3 scripts/assemble_linux_release.py \
   --output-dir dist
 
 python3 scripts/verify_linux_release.py \
-  dist/Narwhal_3D-0.4.6-x86_64.AppImage \
-  --expected-version 0.4.6 \
+  dist/Narwhal_3D-0.4.7-x86_64.AppImage \
+  --expected-version 0.4.7 \
   --expected-source-revision "$REVISION" \
   --expected-source-date-epoch "$EPOCH"
 ```

@@ -10,6 +10,11 @@ PYTHON="$ROOT/tools/blender-patched/5.2/python/bin/python3.13"
 
 cd "$ROOT"
 export PYTHONDONTWRITEBYTECODE=1
+# Backend suites and their child processes need the same exact-geometry runtime as GUI tests.
+export PYTHONPATH="$ROOT/vendor/occt${PYTHONPATH:+:$PYTHONPATH}"
+export LD_LIBRARY_PATH="$ROOT/tools/blender-patched/5.2/python/lib/python3.13/site-packages/cadquery_ocp_novtk.libs${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+export NARWHAL_PURE_CORE="${NARWHAL_PURE_CORE:-$ROOT/native/pure_core/target/x86_64-unknown-linux-gnu/release/libnarwhal_pure_core.so}"
+export NARWHAL_GEOMETRY_CORE="${NARWHAL_GEOMETRY_CORE:-$ROOT/native/geometry_core/target/release/libnarwhal_geometry_core.so}"
 
 find narwhal3d spike scripts -type d -name __pycache__ -prune -exec rm -rf {} +
 
@@ -135,6 +140,11 @@ PURE_SUITES=(
     spike/test_geometry.py
     spike/test_kernel.py
     spike/test_local_brep_move.py
+    spike/test_native_local_brep_replay.py
+    spike/test_curve_inputs.py
+    spike/test_curve_consumer_inputs.py
+    spike/test_variable_edge_fillet.py
+    spike/test_solid_commands.py
     spike/test_primitives.py
     spike/test_picture.py
     spike/test_cmdbar_hits.py
@@ -157,11 +167,26 @@ PURE_SUITES=(
     spike/test_boolean_extrusion.py
     spike/branding_test.py
     spike/test_deferred_present_patch.py
+    spike/test_statusbar_height_patch.py
+    spike/test_window_overlay_patch.py
+    spike/test_native_runtime_provenance.py
     spike/test_welcome.py
     spike/test_toolbars.py
     spike/test_menubar.py
+    spike/test_design.py
+    spike/test_v4_assets.py
+    spike/test_theme_bindings.py
+    spike/test_preferences.py
+    spike/test_user_settings.py
+    spike/test_grid_render.py
+    spike/test_shell_popup.py
+    spike/test_shell_input.py
+    spike/test_views.py
     spike/test_menubar_resource.py
     spike/test_rightpanel.py
+    spike/test_colordialog.py
+    spike/test_glyphs.py
+    spike/test_statusbar.py
     spike/test_aliases.py
     spike/test_document_clipboard.py
     spike/test_sessionlog.py
@@ -209,8 +234,10 @@ PURE_SUITES=(
     spike/test_converter_supervisor.py
     spike/test_runtime_tools.py
     spike/test_windows_collector.py
+    spike/test_windows_build.py
     spike/test_windows_release.py
     spike/test_release_policy.py
+    spike/test_release_harness.py
     spike/test_onbrep_public.py
 )
 
@@ -226,7 +253,12 @@ BLENDER_SUITES=(
     spike/test_bug102_live.py
     spike/test_control_point_osnap.py
     spike/test_sweep.py
+    spike/test_loft.py
+    spike/test_interpolate.py
+    spike/test_surface_cmds.py
+    spike/test_cage_edit.py
     spike/ui_smoke.py
+    spike/test_startup_layout.py
     spike/addon_e2e.py
     spike/test_app_drawn.py
     spike/test_file_commands.py
@@ -262,6 +294,8 @@ done
 
 if [[ -n "${DISPLAY:-}" || -n "${WAYLAND_DISPLAY:-}" ]]; then
     run "UI screenshot suite" ./uishot.sh
+    run "v4 real UI interactions" bash spike/v4_live_gui.sh
+    run "startup layout via the welcome's X11 route" spike/startup_layout_gui.sh
 else
     printf '\nSKIP: UI screenshot suite (no display)\n'
 fi

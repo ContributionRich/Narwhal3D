@@ -58,12 +58,12 @@ EXPECTED_RUNNABLE_COUNTS = {
     "Edit": 47,
     "View": 14,
     "Curve": 47,
-    "Surface": 12,
+    "Surface": 13,
     "SubD": 0,
     "Solid": 18,
     "Mesh": 0,
     "Drafting": 1,
-    "Transform": 15,
+    "Transform": 16,
     "Analyze": 13,
     "Render": 0,
     "Tools": 8,
@@ -71,7 +71,8 @@ EXPECTED_RUNNABLE_COUNTS = {
     "Help": 1,
 }
 EXPECTED_SERVICE_TODOS = frozenset({
-    "recoverysettings", "newfromtemplate", "saveacopy", "documentnotes",
+    "revert", "savesmall", "incrementalsave", "saveastemplate", "insert",
+    "importfromfile", "exportwithorigin", "worksession", "documentnotes",
     "gettingstarted", "inputreference", "onlinedocumentation", "showbugreport",
     "aboutnarwhal3d",
 })
@@ -102,7 +103,7 @@ def walk_rows(rows, path=()):
 
 
 print("\n-- live registry and authored structure --")
-check(len(REGISTERED) == 184, "the bare-package live registry has 184 commands",
+check(len(REGISTERED) == 186, "the bare-package live registry has 186 commands",
       repr(len(REGISTERED)))
 check(SIBLING_PINS <= REGISTERED,
       "commands unique to every sibling provider are present",
@@ -148,7 +149,7 @@ toolbar_commands = {
     for tab in resource.toolbar_data.TABS for record in tab["buttons"]
     if record.get("command")
 }
-check(len(todos) == 361 and EXPECTED_SERVICE_TODOS <= todo_payloads
+check(len(todos) == 365 and EXPECTED_SERVICE_TODOS <= todo_payloads
       and toolbar_commands - REGISTERED <= todo_payloads,
       "all public toolbar-only commands and service gaps are explicit menu leaves",
       repr({"todos": len(todos),

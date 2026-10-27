@@ -1433,8 +1433,21 @@ def from_recipe(recipe, _depth=0):
                 indices = [
                     _local_resolve_target(base, "edge", hint, target, tolerances) + 1
                     for hint, target in zip(indices, targets)]
+            radii = recipe.get("edge_radii")
+            endpoints = recipe.get("edge_endpoints")
+            if radii is not None:
+                if (targets is None or not isinstance(radii, list)
+                        or not isinstance(endpoints, list)
+                        or len(radii) != len(indices) or len(endpoints) != len(indices)
+                        or len(set(indices)) != len(indices)):
+                    raise KernelError("a variable bevel recipe has malformed endpoint laws")
+                radii = dict(zip(indices, radii))
+                endpoints = dict(zip(indices, endpoints))
+            elif endpoints is not None:
+                raise KernelError("a bevel recipe has endpoints but no radius laws")
             shape = bevel_edges(base, recipe["size"], indices,
-                                chamfer=(kind == "chamfer"))
+                                chamfer=(kind == "chamfer"), edge_radii=radii,
+                                edge_endpoints=endpoints)
         else:
             shape = boolean(from_recipe(recipe["a"], _depth + 1),
                             from_recipe(recipe["b"], _depth + 1),
@@ -4588,7 +4601,201 @@ def bevel_affected_edges(shape, size, indices, chamfer=False):
     return sorted(affected)
 
 
-def bevel_edges(shape, size, indices=None, chamfer=False):
+def _bevel_radius_map(edge_radii):
+    """OURS: id -> (start, end), or a sequence of (id, (start, end)) pairs."""
+    if edge_radii is None:
+        return None
+    try:
+        items = edge_radii.items() if hasattr(edge_radii, "items") else edge_radii
+        result = {}
+        for index, pair in items:
+            i = int(index)
+            if i != index or i in result or len(pair) != 2:
+                raise ValueError("duplicate/non-integer edge id or malformed radius pair")
+            radii = tuple(float(r) for r in pair)
+            if not all(math.isfinite(r) and r > 0 for r in radii):
+                raise ValueError("endpoint radii must be finite and positive")
+            result[i] = radii
+        if not result:
+            raise ValueError("no endpoint radius laws were supplied")
+        return result
+    except (TypeError, ValueError, OverflowError) as e:
+        raise KernelError(f"invalid edge_radii: {e}") from e
+
+
+def bevel_edge_endpoints(shape, indices):
+    """OURS: exact ordered world endpoints for radius handles, keyed by 1-based edge id.
+
+    Order is the edge's topological walking direction, not sorted coordinates. Persist these
+    coordinates with the radii: map order and even edge orientation may change on replay.
+    Closed edges have coincident ends; they support constant, not independent-end laws.
+    This is OCCT inspection/interop, not a Python geometry implementation.
+    """
+    from OCP.BRep import BRep_Tool
+    from OCP.TopExp import TopExp
+
+    edges = _unique_edges(shape)
+    result = {}
+    for index in indices:
+        i = int(index)
+        if i != index or not 1 <= i <= len(edges):
+            raise KernelError(f"invalid bevel edge index {index}; expected 1..{len(edges)}")
+        edge = edges[i - 1]
+        vertices = (TopExp.FirstVertex_s(edge, True), TopExp.LastVertex_s(edge, True))
+        if BRep_Tool.Degenerated_s(edge) or any(v.IsNull() for v in vertices):
+            raise KernelError(f"edge {i} has no usable fillet endpoints")
+        result[i] = [list(BRep_Tool.Pnt_s(v).Coord()) for v in vertices]
+    return result
+
+
+def _bevel_contour_reversed(mk, contour, anchors, index, tolerance):
+    """Validate an isolated open contour, returning its direction relative to the anchors."""
+    from OCP.BRep import BRep_Tool
+
+    first, last = mk.FirstVertex(contour), mk.LastVertex(contour)
+    if first.IsNull() or last.IsNull() or first.IsSame(last):
+        raise KernelError(f"edge {index}: independent endpoints on a closed contour are unsupported")
+    a, b = anchors
+    c, d = BRep_Tool.Pnt_s(first).Coord(), BRep_Tool.Pnt_s(last).Coord()
+    if math.dist(c, d) <= tolerance:
+        raise KernelError(f"edge {index}: independent endpoints on a closed contour are unsupported")
+    if mk.NbEdges(contour) != 1:
+        raise KernelError(f"edge {index}: multi-edge tangent contour endpoints are unsupported")
+    if math.dist(a, c) <= tolerance and math.dist(b, d) <= tolerance:
+        return False
+    if math.dist(a, d) <= tolerance and math.dist(b, c) <= tolerance:
+        return True
+    raise KernelError(f"edge {index}: fillet contour endpoints differ from selected edge")
+
+
+def _set_bevel_laws(mk, shape, edges, chosen, size, radii, endpoints):
+    """Forward endpoint laws to OCCT; return the validated anchors for the supplied laws."""
+    anchors = bevel_edge_endpoints(shape, radii)
+    if endpoints is not None:
+        try:
+            supplied = dict(endpoints)
+            if set(supplied) != set(radii):
+                raise ValueError("endpoint ids must match radius-law ids")
+            for i, pair in supplied.items():
+                if len(pair) != 2 or any(len(p) != 3 for p in pair):
+                    raise ValueError("expected two XYZ endpoints per edge")
+                anchors[i] = [[float(c) for c in p] for p in pair]
+                if not all(math.isfinite(c) for p in anchors[i] for c in p):
+                    raise ValueError("endpoint coordinates must be finite")
+        except (TypeError, ValueError, OverflowError) as e:
+            raise KernelError(f"invalid edge_endpoints: {e}") from e
+    tolerance = _local_tolerances(shape)["build"]
+
+    def same(a, b):
+        return math.dist(a, b) <= tolerance
+
+    actual = bevel_edge_endpoints(shape, radii)
+    for i, (a, b) in anchors.items():
+        c, d = actual[i]
+        if not ((same(a, c) and same(b, d)) or (same(a, d) and same(b, c))):
+            raise KernelError(f"edge {i}: radius endpoints do not match the selected edge")
+    for i in chosen:
+        mk.Add(edges[i - 1])
+    assigned = {}
+    for i in chosen:
+        contour = mk.Contour(edges[i - 1])
+        if contour <= 0:
+            raise KernelError(f"edge {i} has no fillet contour")
+        r0, r1 = radii.get(i, (float(size), float(size)))
+        if r0 != r1 and _bevel_contour_reversed(mk, contour, anchors[i], i, tolerance):
+            r0, r1 = r1, r0
+        law = (r0, r1)
+        if contour in assigned and assigned[contour] != law:
+            raise KernelError(f"edge {i}: conflicting radius laws on one tangent contour")
+        assigned[contour] = law
+        if r0 == r1:
+            mk.SetRadius(r0, contour, 1)
+        else:
+            # MEASURED OCP overload: R1/R2 refer to FirstVertex/LastVertex of the CONTOUR.
+            mk.SetRadius(r0, r1, contour, 1)
+    return anchors
+
+
+def bevel_edge_sections(shape, size, indices, edge_radii=None, edge_endpoints=None):
+    """OURS: exact, cacheable endpoint sections without building a candidate solid.
+
+    Return {edge_id: [start_record, end_record]} in anchored order. Each record contains
+    anchor XYZ, radius, curve (an exact arc recipe with center/xaxis/yaxis/normal/radius/
+    start/end angles in radians), circle_center XYZ and grip_point XYZ (arc midpoint).
+    Every coordinate is world-space. The UI may sample these arcs for DISPLAY only.
+
+    Uses OCCT Simulate, never Build/Shape, meshing, or document/master registration. It is
+    independent of solid Preview; call on edits and cache, NOT during draw. Simulation is
+    not a promise that a subsequent trimmed/closed solid build succeeds. Refuses closed,
+    multi-edge and multi-surface contours rather than guessing their endpoint sections.
+    """
+    _need()
+    from OCP.BRepFilletAPI import BRepFilletAPI_MakeFillet
+    from OCP.ElCLib import ElCLib
+    from OCP.gp import gp_Circ
+
+    try:
+        if not math.isfinite(size) or size <= 0:
+            raise KernelError("a section-preview size must be finite and positive")
+        anchors = bevel_edge_endpoints(shape, indices)
+        if not anchors:
+            raise KernelError("no edges were named for section preview")
+        radii = _bevel_radius_map(edge_radii)
+        if radii is None:
+            radii = {i: (float(size), float(size)) for i in anchors}
+        if not set(radii) <= set(anchors):
+            raise KernelError("edge_radii names an edge outside the selected edges")
+        edges = _unique_edges(shape)
+        mk = BRepFilletAPI_MakeFillet(shape)
+        anchors.update(_set_bevel_laws(
+            mk, shape, edges, list(anchors), size, radii, edge_endpoints))
+        tolerance = _local_tolerances(shape)["build"]
+        result = {}
+        for i, ends in anchors.items():
+            contour = mk.Contour(edges[i - 1])
+            reverse = _bevel_contour_reversed(mk, contour, ends, i, tolerance)
+            mk.Simulate(contour)
+            if mk.NbSurf(contour) != 1:
+                raise KernelError(f"edge {i}: section preview requires one fillet surface")
+            sections = mk.Sect(contour, 1)
+            if sections is None or sections.Length() < 2:
+                raise KernelError(f"edge {i}: OCCT did not supply two endpoint sections")
+            positions = [sections.Lower(), sections.Upper()]
+            if reverse:
+                positions.reverse()
+            records = []
+            for anchor, radius, position in zip(ends, radii.get(i, (size, size)), positions):
+                circle = gp_Circ()
+                start, end = sections.Value(position).Get(circle)
+                actual_radius = circle.Radius()
+                if (not math.isfinite(actual_radius) or actual_radius <= 0
+                        or abs(actual_radius - radius) > tolerance
+                        or not math.isfinite(start) or not math.isfinite(end) or end <= start):
+                    raise KernelError(f"edge {i}: ambiguous endpoint section radius or angles")
+                axis = circle.Position()
+                center = list(axis.Location().Coord())
+                normal = list(axis.Direction().Coord())
+                # The section must be at this source endpoint, not an interior sample or a
+                # section of a neighbouring contour. OCCT supplies its exact support plane.
+                if abs(sum((anchor[j] - center[j]) * normal[j] for j in range(3))) > tolerance:
+                    raise KernelError(f"edge {i}: section plane does not contain its endpoint")
+                curve = {"ctype": "arc", "center": center,
+                         "xaxis": list(axis.XDirection().Coord()),
+                         "yaxis": list(axis.YDirection().Coord()), "normal": normal,
+                         "radius": actual_radius, "start": start, "end": end}
+                records.append({"anchor": list(anchor), "radius": actual_radius,
+                                "curve": curve, "circle_center": list(center),
+                                "grip_point": list(ElCLib.Value_s((start + end) / 2, circle).Coord())})
+            result[i] = records
+        return result
+    except KernelError:
+        raise
+    except Exception as e:  # noqa: BLE001
+        raise KernelError(f"fillet section preview failed: {e}") from e
+
+
+def bevel_edges(shape, size, indices=None, chamfer=False, edge_radii=None,
+                edge_endpoints=None):
     """Fillet or chamfer the edges named by `indices` (1-based, from `edge_curves`).
 
     `indices=None` means EVERY edge, which is what `fillet_all_edges`/`chamfer_all_edges`
@@ -4599,12 +4806,25 @@ def bevel_edges(shape, size, indices=None, chamfer=False):
     `edge_curves` as `"index"`. An index that does not exist is refused BY NAME rather than
     ignored -- quietly beveling nothing, or the wrong edge, is the failure mode that matters
     here.
+
+    OURS: `edge_radii` maps ids to (start, end) radii (or is a list of such id/pair entries).
+    With no indices, only those ids are selected; other explicitly selected edges use size.
+    Ends follow `bevel_edge_endpoints`, or explicit `edge_endpoints` anchors. Unequal radii
+    use OCCT's native law, never an average. Only isolated open contours are supported for
+    unequal radii; tangent chains/closed contours and conflicting constant laws refuse.
     """
     _need()
     from OCP.BRepFilletAPI import BRepFilletAPI_MakeChamfer, BRepFilletAPI_MakeFillet
 
-    if size <= 0:
-        raise KernelError(f"a bevel size must be positive (got {size})")
+    if not math.isfinite(size) or size <= 0:
+        raise KernelError(f"a bevel size must be finite and positive (got {size})")
+    radii = _bevel_radius_map(edge_radii)
+    if radii is not None and chamfer:
+        raise KernelError("endpoint radius laws are not supported for chamfers")
+    if edge_endpoints is not None and radii is None:
+        raise KernelError("edge_endpoints requires edge_radii")
+    if indices is None and radii is not None:
+        indices = list(radii)
     edges = _unique_edges(shape)
     if not edges:
         raise KernelError("the shape has no edges to bevel")
@@ -4619,17 +4839,25 @@ def bevel_edges(shape, size, indices=None, chamfer=False):
                 f"numbered 1..{len(edges)}")
         if not chosen:
             raise KernelError("no edges were named to bevel")
+    if radii is not None and not set(radii) <= set(chosen):
+        raise KernelError("edge_radii names an edge outside the selected edges")
     try:
         mk = (BRepFilletAPI_MakeChamfer(shape) if chamfer
               else BRepFilletAPI_MakeFillet(shape))
-        for i in chosen:
-            mk.Add(float(size), edges[i - 1])
+        if radii is None:
+            for i in chosen:
+                mk.Add(float(size), edges[i - 1])
+        else:
+            _set_bevel_laws(mk, shape, edges, chosen, size, radii, edge_endpoints)
         mk.Build()
         if not mk.IsDone():
             raise KernelError(
                 f"could not bevel at size {size} -- it may exceed the size of an "
                 f"adjacent face")
-        return mk.Shape()
+        result = mk.Shape()
+        if not is_valid(result) or not is_airtight(result):
+            raise KernelError("the beveled result is invalid or not airtight")
+        return result
     except KernelError:
         raise
     except Exception as e:  # noqa: BLE001

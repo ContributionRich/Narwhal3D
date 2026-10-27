@@ -6,6 +6,7 @@ uses all remaining live width so resizing the dock expands useful content rather
 scaling icons. Unsupported controls are omitted instead of being drawn as dead chrome.
 """
 
+from . import toolbars
 from .object_properties import (
     ObjectProperties, aggregate, aggregate_capabilities, MIXED, UNAVAILABLE,
 )
@@ -56,17 +57,25 @@ def property_rows(selection):
 format_property_rows = property_rows
 
 
-#: Default band width in project logical pixels.
-BAND_W = 200
+#: Default band width in project logical pixels. UI design: a 280 px inspector made
+#: of a 72 px tab rail and the panel body.
+BAND_W = 280
 
-#: Width of the vertical tab strip down the band's right edge.
-TAB_STRIP_W = 21
+#: Width of the vertical tab rail down the band's LEFT edge (icon over label).
+TAB_STRIP_W = 72
 
-#: Vertical distance between tab centres.
-TAB_PITCH = 36
+#: Vertical distance between tab tops (the design's 63 px minimum tab height).
+TAB_PITCH = 63
 
 #: Fixed tab icon edge length; dock resizing does not scale bitmap artwork.
-TAB_ICON = 16
+TAB_ICON = 20
+
+#: Tab label size, and where the label baseline sits above the tab's bottom.
+TAB_LABEL_FONT = 11.0
+
+#: The panel's own title row ("Layers") above its body.
+PANEL_TITLE_H = 34
+TAB_LABEL_INSET = 6
 
 #: Height of the optional caption row.
 TITLE_H = 21
@@ -92,13 +101,13 @@ class Tab:
         return f"Tab({self.name!r}, built={self.built})"
 
 
-#: Working panels in product order. Every tab uses contributor-owned source artwork.
+#: Working panels in product order, using the approved legacy/v4 tab artwork.
 TABS = (
     Tab("Layers", "narwhal-panel-layers.png", built=True, reason=""),
-    Tab("Properties", "narwhal-panel-properties.png", built=True, reason=""),
-    Tab("Display", "narwhal-panel-display.png", built=True, reason=""),
+    Tab("Properties", "v4-panel-properties.png", built=True, reason=""),
+    Tab("Display", "v4-panel-display.png", built=True, reason=""),
     Tab("Bug Report", "narwhal-panel-report.png", built=True, reason=""),
-    Tab("AI Assistant", "narwhal-panel-assistant.png", built=True, reason=""),
+    Tab("AI Assistant", "v4-panel-ai-assistant.png", built=True, reason=""),
 )
 
 #: Layers is the default working panel.
@@ -119,7 +128,7 @@ def layout(width, height, title_h=None):
         the caption row, full width, along the top. ZERO-HEIGHT when the host
         already provides one -- see `title_h` below.
     ``strip``
-        the vertical tab strip, down the right edge, below the title.
+        the vertical tab rail, down the LEFT edge, below the title (UI design).
     ``tabs``
         one box per :data:`TABS` entry, TOP-DOWN inside ``strip``. Shorter than
         ``TABS`` if the band is too short to hold them all -- the band is painted
@@ -145,9 +154,9 @@ def layout(width, height, title_h=None):
     top = height
     title = (0, top - title_h, width, top)
 
-    strip_x0 = max(0, width - TAB_STRIP_W)
+    strip_x1 = min(width, TAB_STRIP_W)
     strip_top = top - title_h
-    strip = (strip_x0, 0, width, strip_top)
+    strip = (0, 0, strip_x1, strip_top)
 
     tabs = []
     for i in range(len(TABS)):
@@ -155,9 +164,9 @@ def layout(width, height, title_h=None):
         y0 = y1 - TAB_PITCH
         if y0 < 0:
             break
-        tabs.append((strip_x0, y0, width, y1))
+        tabs.append((0, y0, strip_x1, y1))
 
-    body = (0, 0, strip_x0, strip_top)
+    body = (strip_x1, 0, width, strip_top)
     return {"title": title, "strip": strip, "tabs": tabs, "body": body}
 
 
@@ -177,11 +186,11 @@ def hit_tab(x, y, tabs):
 
 
 def icon_box(tab_box, size=None):
-    """The square an icon occupies, centred in its tab box."""
+    """The square an icon occupies: centred across the tab, above its label."""
     size = TAB_ICON if size is None else size   # read now: uiscale may have rescaled it
     x0, y0, x1, y1 = tab_box
     cx = (x0 + x1) * 0.5
-    cy = (y0 + y1) * 0.5
+    cy = y0 + (y1 - y0) * 0.7
     half = size * 0.5
     return (cx - half, cy - half, cx + half, cy + half)
 
@@ -201,19 +210,20 @@ def icon_box(tab_box, size=None):
 #: Column header height in logical pixels.
 HEADER_H = 24
 
-#: One layer row in logical pixels.
-ROW_H = 20
+#: One layer row in logical pixels. UI design: roomy 26 px rows (the reference CAD
+#: application's compact list measured 20).
+ROW_H = 26
 
 #: Minimum width of the Name column.
-NAME_COL_W = 79
+NAME_COL_W = BAND_W - TAB_STRIP_W - 5 * 20   # 108: the body less five state columns
 
 #: Width of every compact state column.
 NARROW_COL_W = 20
 
-#: The columns follow the reference CAD application's Layer Properties order: Name, Current, On/Off,
-#: Lock/Unlock, Color, Material, Linetype, Print Color, Print Width, and Section Style.
-#: The compact panel exposes the first six.
-COLUMNS = ("Name", "Current", "On", "Lock", "Color", "Material")
+#: UI design order: name, the current-layer tick, colour swatch, visibility (eye), lock
+#: and a per-row "more" menu (the layer context menu). Material, which only reported
+#: "not implemented", is left to the full Layer Properties.
+COLUMNS = ("Name", "Current", "Color", "On", "Lock", "Menu")
 
 
 def name_column_width(width=None, count=len(COLUMNS)):
@@ -308,6 +318,96 @@ def hit_column(x, row_box):
         if rx0 + cx0 <= x < rx0 + cx1:
             return i
     return None
+
+
+# The Layers panel's furniture above the list (UI design): "+" and "..." on the title
+# row, then a search field that filters the rows.
+SEARCH_H = 26
+SEARCH_PAD = 6
+TITLE_BUTTON = 22
+
+
+def title_buttons(title_box, size=None, pad=None):
+    """``{"new": box, "menu": box}`` right-aligned and centred on the title row."""
+    size = TITLE_BUTTON if size is None else size   # read now: uiscale may have rescaled it
+    pad = SEARCH_PAD if pad is None else pad
+    x0, y0, x1, y1 = title_box
+    cy = (y0 + y1) / 2.0
+    menu = (x1 - pad - size, cy - size / 2.0, x1 - pad, cy + size / 2.0)
+    new = (menu[0] - 2 - size, menu[1], menu[0] - 2, menu[3])
+    return {"new": new, "menu": menu}
+
+
+def layers_layout(body, n_rows, search_h=None, pad=None):
+    """Split the Layers body: a search field along the top, the list below it.
+
+    Returns :func:`list_layout`'s dict plus ``search``. With no room for the field the
+    list keeps the whole body and ``search`` is None.
+    """
+    search_h = SEARCH_H if search_h is None else search_h
+    pad = SEARCH_PAD if pad is None else pad
+    bx0, by0, bx1, by1 = body
+    if by1 - by0 < search_h + 2 * pad + HEADER_H:
+        out = list_layout(body, n_rows)
+        out["search"] = None
+        return out
+    search = (bx0 + pad, by1 - pad - search_h, bx1 - pad, by1 - pad)
+    out = list_layout((bx0, by0, bx1, search[1] - pad), n_rows)
+    out["search"] = search
+    return out
+
+
+def layers_scroll_layout(body, indices, offset=0.0, *, row_h=None, search_h=None, pad=None):
+    """OURS: opt-in Layers scrolling; ``indices`` are original document indices.
+
+    Pure Python UI glue around the existing search/header furniture. Accepts
+    :func:`filter_layer_indices`' result (or ``range(n_layers)``), in display order.
+    Returns ``search``, ``header``, ``list`` background, ``dividers`` plus the
+    scroll contract: ``viewport``, indexed full-size ``cells``, clipped
+    ``hit_cells``, bounded pixel ``offset``/``max_offset``, ``content_extent`` and
+    ``total``. The row viewport excludes the stationary search and column header.
+    Draw cells under its scissor; use :func:`layers_scroll_hit` for row/column hits.
+    Positive offset reveals later rows. ``row_h`` defaults to the current ROW_H
+    (26 logical pixels); lengths must share the body's coordinate space.
+    Legacy :func:`layers_layout` and its unindexed ``rows`` remain unchanged.
+    """
+    row_h = ROW_H if row_h is None else float(row_h)
+    if row_h <= 0:
+        raise ValueError("layer row height must be positive")
+    indices = tuple(indices)
+    furniture = layers_layout(body, 0, search_h=search_h, pad=pad)
+    header = furniture["header"]
+    viewport = (body[0], body[1], body[2], header[1])
+    extent = len(indices) * row_h
+    offset, maximum = toolbars.bounded_scroll_offset(offset, extent, viewport[3] - viewport[1])
+    cells = ((index, body[0], header[1] - (slot + 1) * row_h + offset,
+              body[2], header[1] - slot * row_h + offset)
+             for slot, index in enumerate(indices))
+    out = toolbars.scroll_cells(viewport, cells)
+    width = max(0, body[2] - body[0])
+    out.update(search=furniture["search"], header=header,
+               list=(body[0], body[1], body[2], header[3]),
+               dividers=[(body[0] + x, body[1], header[3])
+                         for x in column_dividers(width=width) if x < width],
+               offset=offset, max_offset=maximum, content_extent=extent, total=len(indices))
+    return out
+
+
+def layers_scroll_hit(x, y, layout):
+    """Return ``(original_layer_index, column_index)`` from recorded row boxes."""
+    index = toolbars.hit_scroll(x, y, layout)
+    if index is None:
+        return None
+    row = next(entry[1:] for entry in layout["cells"] if entry[0] == index)
+    column = hit_column(x, row)
+    return (index, column) if column is not None else None
+
+
+def filter_layer_indices(names, query):
+    """Indices of `names` containing `query`, case-insensitively; all of them when the
+    query is blank. Order is preserved, so the tree's order survives filtering."""
+    q = (query or "").strip().casefold()
+    return [i for i, n in enumerate(names) if not q or q in (n or "").casefold()]
 
 
 # ---------------------------------------------------------------------------

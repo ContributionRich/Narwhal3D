@@ -392,6 +392,8 @@ def verify_lock_and_markers(appdir: Path, identity: JsonObject) -> None:
         "blender_patches/apply_cad_boundary_wires.py",
         "blender_patches/apply_deferred_first_present.py",
         "blender_patches/apply_narwhal3d_branding.py",
+        "blender_patches/apply_statusbar_height.py",
+        "blender_patches/apply_window_overlay.py",
         "blender_patches/narwhal3d_app_icon.svg",
     ]
     if not isinstance(patch_inputs, list) or [item.get("path") for item in patch_inputs if isinstance(item, dict)] != expected_names:

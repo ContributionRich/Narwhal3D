@@ -1,4 +1,8 @@
-"""Hardened acceptance for exact-only topology-local OCCT movement.
+"""Hardened acceptance for Python/OCP exact-only topology-local movement.
+
+The standalone suite deliberately disables native replay, including in its child.
+Fixture/oracle helpers may be imported without running tests or changing backend
+selection; current-native replay is covered by test_native_local_brep_replay.py.
 
 Run: PYTHONPATH=vendor/occt tools/blender-5.2.2-linux-x64/5.2/python/bin/python3.13 \
          spike/test_local_brep_move.py
@@ -13,9 +17,10 @@ import tempfile
 import types
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-pkg = types.ModuleType("narwhal3d")
-pkg.__path__ = [os.path.join(ROOT, "narwhal3d")]
-sys.modules["narwhal3d"] = pkg
+if "narwhal3d" not in sys.modules:
+    pkg = types.ModuleType("narwhal3d")
+    pkg.__path__ = [os.path.join(ROOT, "narwhal3d")]
+    sys.modules["narwhal3d"] = pkg
 
 from narwhal3d.kernel import KernelError  # noqa: E402
 from narwhal3d.kernel import occt_backend as ob  # noqa: E402
@@ -437,65 +442,230 @@ def fresh_mode(path):
     print("FRESH-LOCAL-MOVE-OK")
 
 
-if not ob.available():
-    print(f"skip: local B-rep movement needs OCCT ({ob.unavailable_reason()})")
-    raise SystemExit(0)
-if len(sys.argv) == 3 and sys.argv[1] == "--fresh":
-    fresh_mode(sys.argv[2])
-    raise SystemExit(0)
+if __name__ == "__main__":
+    # A unique missing file prevents both configured and packaged native discovery.
+    # The child inherits this override and also establishes its own isolation.
+    with tempfile.TemporaryDirectory(prefix="local-brep-python-") as missing_native:
+        os.environ["NARWHAL_GEOMETRY_CORE"] = os.path.join(
+            missing_native, "missing-native-library")
+        from narwhal3d import native_geometry
 
-source = inspect.getsource(ob.move_subobject_local)
-for name, value in vars(ob).items():
-    if name.startswith("_local_") and callable(value):
-        source += "\n" + inspect.getsource(value)
-for forbidden in ("BRepOffsetAPI_MakeFilling", "BRepFill_Filling", "BRepMesh_",
-                  "Triangulation_s", "tessellate(", "MESH_DERIVED"):
-    check(forbidden not in source, f"local implementation forbids {forbidden}")
-check("GeomFill_BSplineCurves" in source and "GeomFill_StretchStyle" in source
-      and "GeomConvert_CompCurveToBSplineCurve" in source,
-      "composite-natural GeomFill_BSplineCurves is the allowed boundary-exact Coons primitive")
+        assert not native_geometry.available(), "Python/OCP suite must not load native"
+        if not ob.available():
+            print(f"skip: local B-rep movement needs OCCT ({ob.unavailable_reason()})")
+            raise SystemExit(0)
+        if len(sys.argv) == 3 and sys.argv[1] == "--fresh":
+            fresh_mode(sys.argv[2])
+            raise SystemExit(0)
 
-parent = parent_recipe()
-base = ob.from_recipe(parent)
-check(ob.is_airtight(base), "twice-filleted owner solid is valid and airtight")
-check(ob.face_types(base) == {"PLANE": 6, "CYLINDER": 3, "SPHERE": 1},
-      f"owner solid retains exact analytic faces ({ob.face_types(base)})")
-check(ob.local_continuity_report(base) == {"C0": 12, "G1": 9},
-      f"owner continuity baseline is explicit ({ob.local_continuity_report(base)})")
+        source = inspect.getsource(ob.move_subobject_local)
+        for name, value in vars(ob).items():
+            if name.startswith("_local_") and callable(value):
+                source += "\n" + inspect.getsource(value)
+        for forbidden in ("BRepOffsetAPI_MakeFilling", "BRepFill_Filling", "BRepMesh_",
+                          "Triangulation_s", "tessellate(", "MESH_DERIVED"):
+            check(forbidden not in source, f"local implementation forbids {forbidden}")
+        check("GeomFill_BSplineCurves" in source and "GeomFill_StretchStyle" in source
+              and "GeomConvert_CompCurveToBSplineCurve" in source,
+              "composite-natural GeomFill_BSplineCurves is the allowed boundary-exact Coons primitive")
 
-success_axes = {
-    ("face", 2): {0, 1, 2},
-    ("edge", 20): {0, 1, 2},
-    ("edge", 5): {0, 1, 2},
-    ("vertex", 1): {0, 1, 2},
-    ("vertex", 11): {0, 1, 2},
-}
-results = {}
-for (kind, index), axes in success_axes.items():
-    signature = ob.local_subobject_signature(base, kind, index)
-    check(json.loads(json.dumps(signature)) == signature,
-          f"{kind}{index} target signature is JSON-safe")
-    for axis in range(3):
+        parent = parent_recipe()
+        base = ob.from_recipe(parent)
+        check(ob.is_airtight(base), "twice-filleted owner solid is valid and airtight")
+        check(ob.face_types(base) == {"PLANE": 6, "CYLINDER": 3, "SPHERE": 1},
+              f"owner solid retains exact analytic faces ({ob.face_types(base)})")
+        check(ob.local_continuity_report(base) == {"C0": 12, "G1": 9},
+              f"owner continuity baseline is explicit ({ob.local_continuity_report(base)})")
+
+        success_axes = {
+            ("face", 2): {0, 1, 2},
+            ("edge", 20): {0, 1, 2},
+            ("edge", 5): {0, 1, 2},
+            ("vertex", 1): {0, 1, 2},
+            ("vertex", 11): {0, 1, 2},
+        }
+        results = {}
+        for (kind, index), axes in success_axes.items():
+            signature = ob.local_subobject_signature(base, kind, index)
+            check(json.loads(json.dumps(signature)) == signature,
+                  f"{kind}{index} target signature is JSON-safe")
+            for axis in range(3):
+                for sign in (1.0, -1.0):
+                    vector = tuple(sign * 0.5 if coordinate == axis else 0.0
+                                   for coordinate in range(3))
+                    key = kind, index, vector
+                    try:
+                        result = ob.move_subobject_local(base, kind, index, vector, signature)
+                    except KernelError as exc:
+                        results[key] = "refuse"
+                        expected_refusal = axis not in axes and "local move refused" in str(exc)
+                        check(expected_refusal,
+                              f"{kind}{index} {vector} explicitly refuses outside safe matrix: {exc}")
+                        continue
+                    results[key] = "success"
+                    check(axis in axes, f"{kind}{index} {vector} succeeds only in safe matrix")
+                    check(validate_result(base, result, kind, index, vector),
+                          f"{kind}{index} {vector} passes independent exact/containment/B-rep oracle")
+                    if (kind, index) in (("edge", 20), ("vertex", 11)) and axis in (0, 2):
+                        quality, quality_tolerances = accepted_composite_quality(
+                            base, kind, index, vector)
+                        records = composite_face_records(result)
+                        check(len(quality) == 1 and quality[0]["degrees"] == (2, 1)
+                              and quality[0]["poles"] == (5, 2)
+                              and independent_boundary_error(
+                                  quality[0]["face"], quality[0]["source_boundary"])
+                              <= quality_tolerances["compare"]
+                              and independent_normal_jump(
+                                  BRepAdaptor_Surface(quality[0]["face"]).BSpline())
+                              <= ob.LOCAL_COONS_NORMAL_JUMP
+                              and len(records) == 1 and len(records[0][2]) == 5,
+                              f"{kind}{index} {vector} composite is boundary-exact, smooth, 2x1/5x2, "
+                              "and adds no seam")
+
         for sign in (1.0, -1.0):
-            vector = tuple(sign * 0.5 if coordinate == axis else 0.0
-                           for coordinate in range(3))
-            key = kind, index, vector
-            try:
-                result = ob.move_subobject_local(base, kind, index, vector, signature)
-            except KernelError as exc:
-                results[key] = "refuse"
-                expected_refusal = axis not in axes and "local move refused" in str(exc)
-                check(expected_refusal,
-                      f"{kind}{index} {vector} explicitly refuses outside safe matrix: {exc}")
-                continue
-            results[key] = "success"
-            check(axis in axes, f"{kind}{index} {vector} succeeds only in safe matrix")
-            check(validate_result(base, result, kind, index, vector),
-                  f"{kind}{index} {vector} passes independent exact/containment/B-rep oracle")
-            if (kind, index) in (("edge", 20), ("vertex", 11)) and axis in (0, 2):
+            vector = (0.0, sign * 0.5, 0.0)
+            candidates, tolerances = composite_quality_candidates(base, "face", 2, vector)
+            boundary_exact = [candidate for candidate in candidates
+                              if independent_boundary_error(
+                                  candidate["face"], candidate["source_boundary"])
+                              <= tolerances["compare"]]
+            best_jump = min(independent_normal_jump(
+                BRepAdaptor_Surface(candidate["face"]).BSpline()) for candidate in boundary_exact)
+            check(boundary_exact and best_jump > ob.LOCAL_COONS_NORMAL_JUMP
+                  and best_jump > math.radians(0.7)
+                  and results[("face", 2, vector)] == "success",
+                  f"face2 {vector} accepts boundary-exact candidates with measured crease "
+                  f"({math.degrees(best_jump):.6f} degrees)")
+
+        representatives = {
+            ("face", 2): (0.5, 0.0, 0.0),
+            ("edge", 20): (0.5, 0.0, 0.0),
+            ("edge", 5): (0.5, 0.0, 0.0),
+            ("vertex", 1): (0.5, 0.0, 0.0),
+            ("vertex", 11): (0.5, 0.0, 0.0),
+        }
+        continuity_after = {
+            ("face", 2): {"C0": 18, "C1": 1, "G1": 2},
+            ("edge", 20): {"C0": 13, "C1": 1, "G1": 7},
+            ("edge", 5): {"C0": 19, "G1": 2},
+            ("vertex", 1): {"C0": 17, "G1": 4},
+            ("vertex", 11): {"C0": 13, "C1": 1, "G1": 7},
+        }
+        fresh_payload = []
+        for (kind, index), vector in representatives.items():
+            recipe = move_recipe(parent, base, kind, index, vector)
+            direct = ob.move_subobject_local(base, kind, index, vector, recipe["target"])
+            rebuilt = ob.from_recipe(recipe)
+            check(validate_result(base, rebuilt, kind, index, vector),
+                  f"{kind}{index} local_move recipe resolves signature and rebuilds deterministically")
+            check(abs(ob.volume(rebuilt) - ob.volume(direct)) <= 1e-8,
+                  f"{kind}{index} recipe/direct volumes agree")
+            check(ob.local_continuity_report(direct) == continuity_after[(kind, index)],
+                  f"{kind}{index} continuity loss is explicit, not claimed G1 preservation")
+            if (kind, index) in (("edge", 20), ("vertex", 11)):
+                quality, tolerances = accepted_composite_quality(base, kind, index, vector)
+                check(len(quality) == 1,
+                      f"{kind}{index} has one unambiguous smooth composite-natural-Coons candidate")
+                candidate = quality[0]
+                check(candidate["degrees"] == (2, 1) and candidate["poles"] == (5, 2),
+                      f"{kind}{index} composite is degree 2x1 with 5x2 poles")
+                check(independent_boundary_error(candidate["face"], candidate["source_boundary"])
+                      <= tolerances["compare"],
+                      f"{kind}{index} composite boundary correspondence is exact bidirectionally")
+                check(independent_normal_jump(BRepAdaptor_Surface(candidate["face"]).BSpline())
+                      <= ob.LOCAL_COONS_NORMAL_JUMP,
+                      f"{kind}{index} full-knot normal jump is numerical zero")
+                records = composite_face_records(direct)
+                check(len(records) == 1 and len(records[0][2]) == 5,
+                      f"{kind}{index} final solid has one split five-edge composite face, no extra seam")
+            parts = {"face": ob.unique_faces(base), "edge": ob._unique_edges(base),
+                     "vertex": ob._unique_vertices(base)}[kind]
+            wrong_hint = index % len(parts) + 1
+            rerouted = ob.from_recipe(move_recipe(parent, base, kind, index, vector, wrong_hint))
+            check(validate_result(base, rerouted, kind, index, vector),
+                  f"{kind}{index} target signature overrides stale index hint {wrong_hint}")
+            fresh_payload.append({"parent": parent, "move": recipe, "component": kind,
+                                  "index": index, "vector": list(vector)})
+
+        bad_target = ob.local_subobject_signature(base, "face", 2)
+        bad_target["type"] = "PLANE"
+        try:
+            ob.move_subobject_local(base, "face", 2, (0.5, 0.0, 0.0), bad_target)
+        except KernelError as exc:
+            check("resolved to 0" in str(exc), f"tampered target signature refuses explicitly: {exc}")
+        else:
+            check(False, "tampered target signature must refuse")
+
+        # The sphere corner has one unchanged zero-length pole boundary. Edge 5 can move because
+        # that boundary contributes no curve and collapses to an equivalent singular 3-boundary patch.
+        face6_signature = ob.local_subobject_signature(base, "face", 6)
+        check(face6_signature["adjacency"]["degenerated"] == 1,
+              "owner sphere patch records one unchanged zero-length pole boundary")
+        edge5_result = ob.move_subobject_local(
+            base, "edge", 5, (0.5, 0.0, 0.0), ob.local_subobject_signature(base, "edge", 5))
+        check(ob.is_airtight(edge5_result) and topology_counts(edge5_result) == topology_counts(base),
+              "unchanged zero-length boundary collapses to equivalent singular Coons patch")
+        try:
+            ob.move_subobject_local(base, "vertex", 8, (0.5, 0.0, 0.0))
+        except KernelError as exc:
+            check("changed degenerate" in str(exc), f"changed degenerate edge refuses: {exc}")
+        else:
+            check(False, "changed degenerate edge must refuse")
+
+        cylinder = ob.make_cylinder(2.0, 5.0)
+        cap_index = next(i for i, face in enumerate(ob.unique_faces(cylinder), 1)
+                         if ob.face_plane(face) is not None)
+        try:
+            ob.move_subobject_local(cylinder, "face", cap_index, (0.0, 0.0, 0.5))
+        except KernelError as exc:
+            check("periodic same-face seam" in str(exc) or "changed degenerate" in str(exc),
+                  f"affected unsupported periodic/seam structure refuses explicitly: {exc}")
+        else:
+            check(False, "affected unsupported periodic seam must refuse")
+
+        for scale in (1e-3, 1.0, 1e3):
+            scaled_parent = parent_recipe(scale)
+            scaled = ob.from_recipe(scaled_parent)
+            tolerances = ob._local_tolerances(scaled)
+            check(0.0 < tolerances["compare"] < tolerances["build"] <= tolerances["sew"],
+                  f"scale {scale:g} derives bounded comparison/build/sew tolerances {tolerances}")
+            for (kind, index), unit_vector in representatives.items():
+                vector = tuple(value * scale for value in unit_vector)
+                signature = ob.local_subobject_signature(scaled, kind, index)
+                moved = ob.move_subobject_local(scaled, kind, index, vector, signature)
+                check(validate_result(scaled, moved, kind, index, vector),
+                      f"scale {scale:g} {kind}{index} preserves exact local-move contract")
+                if (kind, index) in (("edge", 20), ("vertex", 11)):
+                    quality, quality_tolerances = accepted_composite_quality(
+                        scaled, kind, index, vector)
+                    check(len(quality) == 1 and quality[0]["degrees"] == (2, 1)
+                          and quality[0]["poles"] == (5, 2)
+                          and independent_boundary_error(
+                              quality[0]["face"], quality[0]["source_boundary"])
+                          <= quality_tolerances["compare"]
+                          and independent_normal_jump(
+                              BRepAdaptor_Surface(quality[0]["face"]).BSpline())
+                          <= ob.LOCAL_COONS_NORMAL_JUMP,
+                          f"scale {scale:g} {kind}{index} composite quality remains bounded")
+
+        angle = math.radians(31.0)
+        c, s = math.cos(angle), math.sin(angle)
+        transform = [c, -s, 0.0, 7.0,
+                     s, c, 0.0, -4.0,
+                     0.0, 0.0, 1.0, 2.0,
+                     0.0, 0.0, 0.0, 1.0]
+        rotated_parent = parent_recipe(transform=transform)
+        rotated = ob.from_recipe(rotated_parent)
+        for (kind, index), local_vector in representatives.items():
+            vector = (c * local_vector[0] - s * local_vector[1],
+                      s * local_vector[0] + c * local_vector[1], local_vector[2])
+            moved = ob.move_subobject_local(
+                rotated, kind, index, vector, ob.local_subobject_signature(rotated, kind, index))
+            check(validate_result(rotated, moved, kind, index, vector),
+                  f"rotated/transformed parent {kind}{index} preserves exact local-move contract")
+            if (kind, index) in (("edge", 20), ("vertex", 11)):
                 quality, quality_tolerances = accepted_composite_quality(
-                    base, kind, index, vector)
-                records = composite_face_records(result)
+                    rotated, kind, index, vector)
                 check(len(quality) == 1 and quality[0]["degrees"] == (2, 1)
                       and quality[0]["poles"] == (5, 2)
                       and independent_boundary_error(
@@ -503,191 +673,35 @@ for (kind, index), axes in success_axes.items():
                       <= quality_tolerances["compare"]
                       and independent_normal_jump(
                           BRepAdaptor_Surface(quality[0]["face"]).BSpline())
-                      <= ob.LOCAL_COONS_NORMAL_JUMP
-                      and len(records) == 1 and len(records[0][2]) == 5,
-                      f"{kind}{index} {vector} composite is boundary-exact, smooth, 2x1/5x2, "
-                      "and adds no seam")
+                      <= ob.LOCAL_COONS_NORMAL_JUMP,
+                      f"rotated/transformed {kind}{index} composite quality remains bounded")
 
-for sign in (1.0, -1.0):
-    vector = (0.0, sign * 0.5, 0.0)
-    candidates, tolerances = composite_quality_candidates(base, "face", 2, vector)
-    boundary_exact = [candidate for candidate in candidates
-                      if independent_boundary_error(
-                          candidate["face"], candidate["source_boundary"])
-                      <= tolerances["compare"]]
-    best_jump = min(independent_normal_jump(
-        BRepAdaptor_Surface(candidate["face"]).BSpline()) for candidate in boundary_exact)
-    check(boundary_exact and best_jump > ob.LOCAL_COONS_NORMAL_JUMP
-          and best_jump > math.radians(0.7)
-          and results[("face", 2, vector)] == "success",
-          f"face2 {vector} accepts boundary-exact candidates with measured crease "
-          f"({math.degrees(best_jump):.6f} degrees)")
+        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as stream:
+            json.dump(fresh_payload, stream)
+            fresh_path = stream.name
+        try:
+            process = subprocess.run(
+                [sys.executable, os.path.abspath(__file__), "--fresh", fresh_path],
+                cwd=ROOT, text=True, capture_output=True, timeout=120,
+                env={**os.environ, "PYTHONPATH": os.path.join(ROOT, "vendor", "occt")},
+                check=False,
+            )
+        finally:
+            os.unlink(fresh_path)
+        check(process.returncode == 0 and "FRESH-LOCAL-MOVE-OK" in process.stdout,
+              f"fresh-process face/edge/vertex recipes and downstream booleans pass: "
+              f"{process.stdout.strip()} {process.stderr.strip()}")
 
-representatives = {
-    ("face", 2): (0.5, 0.0, 0.0),
-    ("edge", 20): (0.5, 0.0, 0.0),
-    ("edge", 5): (0.5, 0.0, 0.0),
-    ("vertex", 1): (0.5, 0.0, 0.0),
-    ("vertex", 11): (0.5, 0.0, 0.0),
-}
-continuity_after = {
-    ("face", 2): {"C0": 18, "C1": 1, "G1": 2},
-    ("edge", 20): {"C0": 13, "C1": 1, "G1": 7},
-    ("edge", 5): {"C0": 19, "G1": 2},
-    ("vertex", 1): {"C0": 17, "G1": 4},
-    ("vertex", 11): {"C0": 13, "C1": 1, "G1": 7},
-}
-fresh_payload = []
-for (kind, index), vector in representatives.items():
-    recipe = move_recipe(parent, base, kind, index, vector)
-    direct = ob.move_subobject_local(base, kind, index, vector, recipe["target"])
-    rebuilt = ob.from_recipe(recipe)
-    check(validate_result(base, rebuilt, kind, index, vector),
-          f"{kind}{index} local_move recipe resolves signature and rebuilds deterministically")
-    check(abs(ob.volume(rebuilt) - ob.volume(direct)) <= 1e-8,
-          f"{kind}{index} recipe/direct volumes agree")
-    check(ob.local_continuity_report(direct) == continuity_after[(kind, index)],
-          f"{kind}{index} continuity loss is explicit, not claimed G1 preservation")
-    if (kind, index) in (("edge", 20), ("vertex", 11)):
-        quality, tolerances = accepted_composite_quality(base, kind, index, vector)
-        check(len(quality) == 1,
-              f"{kind}{index} has one unambiguous smooth composite-natural-Coons candidate")
-        candidate = quality[0]
-        check(candidate["degrees"] == (2, 1) and candidate["poles"] == (5, 2),
-              f"{kind}{index} composite is degree 2x1 with 5x2 poles")
-        check(independent_boundary_error(candidate["face"], candidate["source_boundary"])
-              <= tolerances["compare"],
-              f"{kind}{index} composite boundary correspondence is exact bidirectionally")
-        check(independent_normal_jump(BRepAdaptor_Surface(candidate["face"]).BSpline())
-              <= ob.LOCAL_COONS_NORMAL_JUMP,
-              f"{kind}{index} full-knot normal jump is numerical zero")
-        records = composite_face_records(direct)
-        check(len(records) == 1 and len(records[0][2]) == 5,
-              f"{kind}{index} final solid has one split five-edge composite face, no extra seam")
-    parts = {"face": ob.unique_faces(base), "edge": ob._unique_edges(base),
-             "vertex": ob._unique_vertices(base)}[kind]
-    wrong_hint = index % len(parts) + 1
-    rerouted = ob.from_recipe(move_recipe(parent, base, kind, index, vector, wrong_hint))
-    check(validate_result(base, rerouted, kind, index, vector),
-          f"{kind}{index} target signature overrides stale index hint {wrong_hint}")
-    fresh_payload.append({"parent": parent, "move": recipe, "component": kind,
-                          "index": index, "vector": list(vector)})
+        print("\nSUCCESS/REFUSAL MATRIX")
+        for (kind, index), axes in success_axes.items():
+            row = []
+            for axis, label in enumerate("XYZ"):
+                states = [results[(kind, index, tuple(sign * 0.5 if i == axis else 0.0
+                                                      for i in range(3)))]
+                          for sign in (1.0, -1.0)]
+                row.append(f"{label}: {states[0]}/{states[1]}")
+            print(f"  {kind}{index}: " + ", ".join(row))
 
-bad_target = ob.local_subobject_signature(base, "face", 2)
-bad_target["type"] = "PLANE"
-try:
-    ob.move_subobject_local(base, "face", 2, (0.5, 0.0, 0.0), bad_target)
-except KernelError as exc:
-    check("resolved to 0" in str(exc), f"tampered target signature refuses explicitly: {exc}")
-else:
-    check(False, "tampered target signature must refuse")
-
-# The sphere corner has one unchanged zero-length pole boundary. Edge 5 can move because
-# that boundary contributes no curve and collapses to an equivalent singular 3-boundary patch.
-face6_signature = ob.local_subobject_signature(base, "face", 6)
-check(face6_signature["adjacency"]["degenerated"] == 1,
-      "owner sphere patch records one unchanged zero-length pole boundary")
-edge5_result = ob.move_subobject_local(
-    base, "edge", 5, (0.5, 0.0, 0.0), ob.local_subobject_signature(base, "edge", 5))
-check(ob.is_airtight(edge5_result) and topology_counts(edge5_result) == topology_counts(base),
-      "unchanged zero-length boundary collapses to equivalent singular Coons patch")
-try:
-    ob.move_subobject_local(base, "vertex", 8, (0.5, 0.0, 0.0))
-except KernelError as exc:
-    check("changed degenerate" in str(exc), f"changed degenerate edge refuses: {exc}")
-else:
-    check(False, "changed degenerate edge must refuse")
-
-cylinder = ob.make_cylinder(2.0, 5.0)
-cap_index = next(i for i, face in enumerate(ob.unique_faces(cylinder), 1)
-                 if ob.face_plane(face) is not None)
-try:
-    ob.move_subobject_local(cylinder, "face", cap_index, (0.0, 0.0, 0.5))
-except KernelError as exc:
-    check("periodic same-face seam" in str(exc) or "changed degenerate" in str(exc),
-          f"affected unsupported periodic/seam structure refuses explicitly: {exc}")
-else:
-    check(False, "affected unsupported periodic seam must refuse")
-
-for scale in (1e-3, 1.0, 1e3):
-    scaled_parent = parent_recipe(scale)
-    scaled = ob.from_recipe(scaled_parent)
-    tolerances = ob._local_tolerances(scaled)
-    check(0.0 < tolerances["compare"] < tolerances["build"] <= tolerances["sew"],
-          f"scale {scale:g} derives bounded comparison/build/sew tolerances {tolerances}")
-    for (kind, index), unit_vector in representatives.items():
-        vector = tuple(value * scale for value in unit_vector)
-        signature = ob.local_subobject_signature(scaled, kind, index)
-        moved = ob.move_subobject_local(scaled, kind, index, vector, signature)
-        check(validate_result(scaled, moved, kind, index, vector),
-              f"scale {scale:g} {kind}{index} preserves exact local-move contract")
-        if (kind, index) in (("edge", 20), ("vertex", 11)):
-            quality, quality_tolerances = accepted_composite_quality(
-                scaled, kind, index, vector)
-            check(len(quality) == 1 and quality[0]["degrees"] == (2, 1)
-                  and quality[0]["poles"] == (5, 2)
-                  and independent_boundary_error(
-                      quality[0]["face"], quality[0]["source_boundary"])
-                  <= quality_tolerances["compare"]
-                  and independent_normal_jump(
-                      BRepAdaptor_Surface(quality[0]["face"]).BSpline())
-                  <= ob.LOCAL_COONS_NORMAL_JUMP,
-                  f"scale {scale:g} {kind}{index} composite quality remains bounded")
-
-angle = math.radians(31.0)
-c, s = math.cos(angle), math.sin(angle)
-transform = [c, -s, 0.0, 7.0,
-             s, c, 0.0, -4.0,
-             0.0, 0.0, 1.0, 2.0,
-             0.0, 0.0, 0.0, 1.0]
-rotated_parent = parent_recipe(transform=transform)
-rotated = ob.from_recipe(rotated_parent)
-for (kind, index), local_vector in representatives.items():
-    vector = (c * local_vector[0] - s * local_vector[1],
-              s * local_vector[0] + c * local_vector[1], local_vector[2])
-    moved = ob.move_subobject_local(
-        rotated, kind, index, vector, ob.local_subobject_signature(rotated, kind, index))
-    check(validate_result(rotated, moved, kind, index, vector),
-          f"rotated/transformed parent {kind}{index} preserves exact local-move contract")
-    if (kind, index) in (("edge", 20), ("vertex", 11)):
-        quality, quality_tolerances = accepted_composite_quality(
-            rotated, kind, index, vector)
-        check(len(quality) == 1 and quality[0]["degrees"] == (2, 1)
-              and quality[0]["poles"] == (5, 2)
-              and independent_boundary_error(
-                  quality[0]["face"], quality[0]["source_boundary"])
-              <= quality_tolerances["compare"]
-              and independent_normal_jump(
-                  BRepAdaptor_Surface(quality[0]["face"]).BSpline())
-              <= ob.LOCAL_COONS_NORMAL_JUMP,
-              f"rotated/transformed {kind}{index} composite quality remains bounded")
-
-with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as stream:
-    json.dump(fresh_payload, stream)
-    fresh_path = stream.name
-try:
-    process = subprocess.run(
-        [sys.executable, os.path.abspath(__file__), "--fresh", fresh_path],
-        cwd=ROOT, text=True, capture_output=True, timeout=120,
-        env={**os.environ, "PYTHONPATH": os.path.join(ROOT, "vendor", "occt")},
-        check=False,
-    )
-finally:
-    os.unlink(fresh_path)
-check(process.returncode == 0 and "FRESH-LOCAL-MOVE-OK" in process.stdout,
-      f"fresh-process face/edge/vertex recipes and downstream booleans pass: "
-      f"{process.stdout.strip()} {process.stderr.strip()}")
-
-print("\nSUCCESS/REFUSAL MATRIX")
-for (kind, index), axes in success_axes.items():
-    row = []
-    for axis, label in enumerate("XYZ"):
-        states = [results[(kind, index, tuple(sign * 0.5 if i == axis else 0.0
-                                              for i in range(3)))]
-                  for sign in (1.0, -1.0)]
-        row.append(f"{label}: {states[0]}/{states[1]}")
-    print(f"  {kind}{index}: " + ", ".join(row))
-
-print(f"\n{checks - len(failures)}/{checks} hardened local B-rep move checks passed")
-if failures:
-    raise SystemExit(1)
+        print(f"\n{checks - len(failures)}/{checks} hardened local B-rep move checks passed")
+        if failures:
+            raise SystemExit(1)

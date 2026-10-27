@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import runpy
 from pathlib import Path
 import sys
 import tempfile
@@ -78,7 +79,7 @@ check("[Parameter(Mandatory=$true)]" in build_script
       and "[ValidatePattern('^[0-9a-f]{40}$')]" in build_script
       and "[string]$NarwhalRevision" in build_script
       and '$NarwhalRevision = "' not in build_script
-      and "[string]$Version = \"0.4.6\"" in build_script
+      and "[string]$Version = \"0.4.7\"" in build_script
       and "[ValidatePattern('^0\\.4\\.[0-9]+$')]" in build_script,
       "Windows build requires immutable source and a validated 0.4.x version")
 check("native\\converter_supervisor\\Cargo.toml" in build_script
@@ -228,5 +229,7 @@ check(verifier.normalized(b"a\r\nb\r\n") == b"a\nb\n",
       "public source comparison normalizes Windows checkout line endings only")
 check(verifier.FORMAT == "portable-zip" and verifier.PLATFORM == "windows-x86_64",
       "Windows verifier pins portable ZIP and x86-64 identity")
+
+runpy.run_path(str(ROOT / "spike/test_windows_build.py"))["run_checks"](check)
 
 print(f"\n{checks}/{checks} Windows release checks passed")

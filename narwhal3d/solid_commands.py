@@ -13,7 +13,7 @@ import types
 
 import rhino3dm as r3
 
-from . import bridge, commands
+from . import bridge, commands, curve_inputs
 from . import options as opts
 from .commands import OBJECTS, OBJECTS_MULTI, POINT, Command, _num
 
@@ -91,7 +91,7 @@ class _EdgeBevelCmd(Command):
     """Two-phase reference-compatible lifecycle for exact edge fillets and chamfers.
 
     A viewport edge hit enters through :meth:`pick_edge`. The stable edge id is selection
-    state; its interior world point is only transport for the existing bridge API. The first
+    state; its interior world point locates the scalar selection handle. The first
     accepted edge binds the command to its owning solid, so subsequent picks cannot silently
     cross into another part.
 
@@ -128,6 +128,12 @@ class _EdgeBevelCmd(Command):
         self._candidate = None
         self._candidate_key = None
         self._candidate_error = None
+        self._edge_radii = {}        # edge id -> (radius at anchor 0, radius at anchor 1)
+        self._edge_endpoints = {}    # exact source anchors, retained across radius edits
+        self._sections = {}
+        self._section_curves = ()
+        self._section_lines = ()
+        self._section_error = None
 
     @property
     def prompt(self):
@@ -148,12 +154,22 @@ class _EdgeBevelCmd(Command):
 
     def _state_key(self):
         return (self._owner_name, tuple(self._edge_points.items()),
-                float(self.opt[self.size_option]), bool(self.chamfer))
+                tuple(self._edge_radii.items()), tuple(self._edge_endpoints.items()),
+                bool(self.chamfer))
 
     def _invalidate_candidate(self):
         self._candidate = None
         self._candidate_key = None
         self._candidate_error = None
+
+    def _bevel_parameters(self):
+        """Keep the legacy scalar route when all selected radii are equal."""
+        pairs = list(self._edge_radii.values())
+        size = pairs[0][0] if pairs else float(self.opt[self.size_option])
+        if all(pair == (size, size) for pair in pairs):
+            return size, {}
+        return size, {"edge_radii": dict(self._edge_radii),
+                      "edge_endpoints": dict(self._edge_endpoints)}
 
     def _sync_pick_mirrors(self):
         self._edges = list(self._edge_points)
@@ -164,7 +180,7 @@ class _EdgeBevelCmd(Command):
             self._affected_edges = set()
             return
         self._affected_edges = set(bridge.bevel_affected_edges_occt(
-            self._owner_geom, float(self.opt[self.size_option]), list(self._edge_points),
+            self._owner_geom, self._bevel_parameters()[0], list(self._edge_points),
             chamfer=self.chamfer))
 
     def _bind_owner(self, name, edge_id, ctx):
@@ -195,13 +211,111 @@ class _EdgeBevelCmd(Command):
         return frozenset((self._owner_name, edge_id) for edge_id in shown)
 
     def handle_records(self):
-        """Handle descriptions for UI drawing; no geometry is built here."""
+        """Draw-safe records. OURS ids are (owner, edge_id, endpoint), never list indices.
+
+        endpoint is None for the scalar selection handle (also closed edges/chamfers),
+        or 0/1 in EDIT_HANDLES, ordered by the exact source anchors. `point` is the
+        grip location; `anchor` remains the source endpoint, NOT the circle center.
+        """
         if not self.opt[self.show_option]:
             return ()
-        size = float(self.opt[self.size_option])
-        return tuple({"name": self._owner_name, "edge_id": edge_id, "point": point,
-                      "size": size, "kind": self.size_word}
-                     for edge_id, point in self._edge_points.items())
+        records = []
+        for edge_id, point in self._edge_points.items():
+            anchors = self._edge_endpoints[edge_id]
+            ends = (0, 1) if (self.phase == self.EDIT_HANDLES and not self.chamfer
+                              and anchors[0] != anchors[1]) else (None,)
+            for endpoint in ends:
+                radius = self._edge_radii[edge_id][endpoint or 0]
+                anchor = anchors[endpoint] if endpoint is not None else point
+                sections = self._sections.get(edge_id, ())
+                section = sections[endpoint] if endpoint is not None and sections else {}
+                grip = tuple(section.get("grip_point", anchor))
+                records.append({"name": self._owner_name, "edge_id": edge_id,
+                                "edge": edge_id, "point": grip, "size": radius,
+                                "radius": radius, "kind": self.size_word,
+                                "id": (self._owner_name, edge_id, endpoint),
+                                "anchor": anchor, "grip_point": grip,
+                                "endpoint": endpoint,
+                                "circle_center": section.get("circle_center")})
+        return tuple(records)
+
+    def preview_section_curves(self):
+        """Cached exact rhino3dm section arcs, even with Preview=No. Never builds."""
+        return self._section_curves
+
+    def preview_lines(self):
+        """Cached display-only polylines: tuple of tuple-of-XYZ points. Never builds."""
+        return self._section_lines
+
+    def preview_section_error(self):
+        """Why endpoint sections are unavailable; scalar solid fillets may still work."""
+        return self._section_error
+
+    def _clear_sections(self):
+        self._sections = {}
+        self._section_curves = ()
+        self._section_lines = ()
+        self._section_error = None
+
+    def _refresh_sections(self):
+        self._clear_sections()
+        if self.chamfer or not self._edge_points:
+            return
+        try:
+            sections = bridge.bevel_edge_sections_occt(
+                self._owner_geom, self._bevel_parameters()[0], list(self._edge_points),
+                edge_radii=dict(self._edge_radii), edge_endpoints=dict(self._edge_endpoints))
+            if sections is None:
+                self._section_error = bridge.last_occt_decline() or "section preview declined"
+                return
+            curves = tuple(bridge.curve_from_recipe(section["curve"])
+                           for records in sections.values() for section in records)
+            # Python is UI/OCCT orchestration only. Reuse the bridge's existing display
+            # sampler; these polylines NEVER become document geometry or recipes.
+            lines = tuple(tuple((p.X, p.Y, p.Z) for p in bridge.sample_curve(curve))
+                          for curve in curves)
+            self._sections, self._section_curves, self._section_lines = sections, curves, lines
+        except (ValueError, RuntimeError) as exc:
+            self._section_error = str(exc)
+
+    def set_handle_radius(self, handle_id, value, ctx):
+        """Edit one stable handle, then cache sections and the exact candidate off-draw.
+
+        SELECT_EDGES sets that edge's scalar pair; EDIT_HANDLES sets only the named
+        endpoint of an open fillet edge. Closed edges retain one scalar handle.
+        """
+        # Do not use handle_records for validation: ShowRadius=No may hide a hovered grip.
+        if not isinstance(handle_id, tuple) or len(handle_id) != 3:
+            return f"{self.name}: invalid handle id", False
+        owner, edge_id, endpoint = handle_id
+        if owner != self._owner_name or type(edge_id) is not int or edge_id not in self._edge_points:
+            return f"{self.name}: handle is not on a selected edge", False
+        anchors = self._edge_endpoints[edge_id]
+        independent = self.phase == self.EDIT_HANDLES and not self.chamfer and anchors[0] != anchors[1]
+        if (independent and (type(endpoint) is not int or endpoint not in (0, 1))
+                or not independent and endpoint is not None):
+            return f"{self.name}: handle does not belong to the current phase", False
+        self._invalidate_candidate()
+        self._clear_sections()
+        try:
+            radius = float(value)
+            if not math.isfinite(radius) or radius <= 0:
+                raise ValueError("radius must be finite and positive")
+        except (TypeError, ValueError, OverflowError):
+            self._candidate_key = self._state_key()
+            self._candidate_error = f"the {self.size_word} must be finite and positive"
+            return f"{self.name}: {self._candidate_error}", False
+        pair = list(self._edge_radii[edge_id])
+        if independent:
+            pair[endpoint] = radius
+        else:
+            pair = [radius, radius]
+        self._edge_radii[edge_id] = tuple(pair)
+        self._refresh_sections()
+        self._refresh_candidate(ctx)
+        if self._candidate is None:
+            return f"{self.name}: {self._candidate_error}. Nothing was changed.", False
+        return f"{self.name}: {self.size_word} {_num(radius)}", False
 
     def preview_geometry(self):
         """The already-built exact preview, or None. This getter never calls OCCT."""
@@ -216,13 +330,14 @@ class _EdgeBevelCmd(Command):
         if self._owner_name is None or not self._edge_points:
             return None
         try:
+            size, parameters = self._bevel_parameters()
             out = bridge.bevel_edges_occt(
-                self._owner_geom, float(self.opt[self.size_option]), chamfer=self.chamfer,
-                edge_indices=list(self._edge_points))
-        except ValueError as e:
+                self._owner_geom, size, chamfer=self.chamfer,
+                edge_indices=list(self._edge_points), **parameters)
+            self._candidate = _exact_or_none(out)
+        except (ValueError, RuntimeError) as e:
             self._candidate_error = str(e)
             return None
-        self._candidate = _exact_or_none(out)
         if self._candidate is None:
             self._candidate_error = bridge.last_occt_decline() or "the kernel declined"
         return self._candidate
@@ -232,7 +347,7 @@ class _EdgeBevelCmd(Command):
 
         Plain click and Shift+click add. Ctrl+click removes. Only the first accepted add binds
         the owner; every later action must name that same solid. ``edge_id`` remains the
-        authoritative identity while ``interior_point`` is retained for ``bevel_edges_occt``.
+        authoritative identity while ``interior_point`` locates its scalar selection handle.
         """
         if self.phase != self.SELECT_EDGES:
             return f"{self.name}: choose SelectEdges before changing edge selection", False
@@ -246,20 +361,32 @@ class _EdgeBevelCmd(Command):
         if self._owner_name is not None and name != self._owner_name:
             return (f"{self.name}: edge {edge_id} belongs to {name}, but the first edge "
                     f"belongs to {self._owner_name}"), False
-        edge_id = int(edge_id)
+        if type(edge_id) is not int:
+            return f"{self.name}: edge id must be an integer", False
         if mode == "ctrl":
             if self._owner_name is None or edge_id not in self._edge_points:
                 return "that edge is not selected", False
             del self._edge_points[edge_id]
+            del self._edge_radii[edge_id]
+            del self._edge_endpoints[edge_id]
         else:
-            if self._owner_name is None:
-                try:
-                    self._bind_owner(name, edge_id, ctx)
-                except (LookupError, ValueError) as e:
-                    return f"{self.name}: {e}. Nothing was changed.", isinstance(e, LookupError)
-            self._edge_points[edge_id] = tuple(float(v) for v in interior_point)
+            try:
+                # Validate every pick, not only the first one. Retain anchors for already
+                # selected edges so a re-pick never reverses an edited endpoint law.
+                self._bind_owner(name, edge_id, ctx)
+                anchors = bridge.bevel_edge_endpoints_occt(self._owner_geom, [edge_id])[edge_id]
+                point = tuple(float(v) for v in interior_point)
+                if len(point) != 3 or not all(math.isfinite(v) for v in point):
+                    raise ValueError("edge pick must be a finite XYZ point")
+            except (LookupError, ValueError, RuntimeError) as e:
+                return f"{self.name}: {e}. Nothing was changed.", isinstance(e, LookupError)
+            self._edge_points[edge_id] = point
+            self._edge_endpoints.setdefault(edge_id, tuple(tuple(p) for p in anchors))
+            size = float(self.opt[self.size_option])
+            self._edge_radii.setdefault(edge_id, (size, size))
         self._sync_pick_mirrors()
         self._invalidate_candidate()
+        self._refresh_sections()
         try:
             self._refresh_affected_edges()
         except Exception as e:  # noqa: BLE001
@@ -269,7 +396,10 @@ class _EdgeBevelCmd(Command):
         selected = len(self._edge_points)
         affected = len(self._affected_edges)
         extra = f"; {affected} tangent-contour edges will be affected" if affected > selected else ""
-        return f"{selected} edge(s) selected{extra} -- press Enter when done", False
+        warning = f"; endpoint sections unavailable: {self._section_error}" if self._section_error else ""
+        if self._candidate_error:
+            warning += f"; {self._candidate_error}"
+        return f"{selected} edge(s) selected{extra}{warning} -- press Enter when done", False
 
     def on_mode(self, name, ctx):
         if name == "SelectEdges":
@@ -278,16 +408,17 @@ class _EdgeBevelCmd(Command):
         return super().on_mode(name, ctx)
 
     def on_option_set(self, option, value, ctx):
-        if option.name == self.size_option and float(value) <= 0.0:
+        if option.name == self.size_option and (not math.isfinite(float(value)) or float(value) <= 0.0):
             self.opt[option.name] = option.default
             self._invalidate_candidate()
-            return (f"{self.name}: the {self.size_word} must be positive "
-                    f"(got {_num(value)})"), False
+            self._clear_sections()
+            self._candidate_key = self._state_key()
+            self._candidate_error = f"the {self.size_word} must be positive and finite"
+            return f"{self.name}: {self._candidate_error} (got {_num(value)})", False
         if option.name == self.size_option:
-            self._invalidate_candidate()
-            self._refresh_affected_edges()
-            if self.phase == self.EDIT_HANDLES or self.opt["Preview"]:
-                self._refresh_candidate(ctx)
+            # MEASURED filletedge.htm: NextRadius specifies the NEXT edge's radius.
+            # Existing laws (and therefore the candidate key) do not change here.
+            return f"{self.name}: next edge {self.size_word} {_num(value)}", False
         elif (option.name == "Preview" and value and self._edge_points
               and self._candidate_key != self._state_key()):
             self._refresh_candidate(ctx)
@@ -321,14 +452,16 @@ class _EdgeBevelCmd(Command):
         if self._candidate_key != self._state_key():
             self._refresh_candidate(ctx)
         out = self._candidate
-        size = float(self.opt[self.size_option])
+        sizes = {radius for pair in self._edge_radii.values() for radius in pair}
+        size_text = (_num(min(sizes)) if len(sizes) == 1 else
+                     f"{_num(min(sizes))}..{_num(max(sizes))}")
         if out is None:
             why = self._candidate_error or "the kernel declined"
             return (f"{self.name}: unable to {self.verb} {name} at {self.size_word} "
-                    f"{_num(size)} -- {why}. Nothing was changed."), True
+                    f"{size_text} -- {why}. Nothing was changed."), True
         display = _replace(ctx, name, out, self.past)
         return (f"{self.past} {len(self._edge_points)} edge(s) of {name} at "
-                f"{self.size_word} {_num(size)}: {display}"), True
+                f"{self.size_word} {size_text}: {display}"), True
 
 
 def _not_built(names):
@@ -622,7 +755,7 @@ class _SweepCmd(Command):
         if not callable(getter):
             try:
                 from . import ui
-                getter = ui.selected_subobjects
+                getter = ui.ordered_selected_subobjects
             except ImportError:
                 getter = None
         try:
@@ -645,30 +778,59 @@ class _SweepCmd(Command):
         except (ImportError, AttributeError):
             pass
 
+    def _selection_refs(self, ctx):
+        # Python only orchestrates the UI reference protocol; exact extraction belongs
+        # to curve_inputs / OCCT. Preserve the getter's order, never sort by owner/id.
+        selected = self._selected_subobjects(ctx)
+        if selected:
+            refs = [curve_inputs.reference_from_selection(item) for item in selected]
+            for ref in refs:
+                curve_inputs.resolve(ctx, ref)
+            return list(dict.fromkeys(refs))
+        getter = getattr(ctx, "selected_objects", None)
+        return [obj.name for obj in (getter() or [])] if callable(getter) else []
+
+    def _clear_selection(self, ctx):
+        selector = getattr(ctx, "select_by_names", None)
+        if callable(selector):
+            selector([])
+        self._clear_subobjects(ctx)
+
     def _feed_objects_step(self, text, ctx):
-        before = self.step_index
-        if not text and self.step_index < self.rails:
-            selected = self._selected_subobjects(ctx)
-            edges = [(name, int(index)) for name, kind, index in selected if kind == "Edge"]
-            if len(edges) == 1 and len(selected) == 1:
-                self.args.append(("edge", edges[0][0], edges[0][1]))
-                self.step_index += 1
-                out = self.execute(ctx) if self.step_index >= len(self.steps) else (None, False)
-            elif selected:
-                return f"{self.name}: select one surface edge for this rail", False
+        try:
+            refs = [text] if text else self._selection_refs(ctx)
+        except curve_inputs.CurveInputError as exc:
+            return f"{self.name}: {exc}", False
+        if not refs:
+            return "Nothing selected", False
+        if len(refs) != 1:
+            return f"{self.name}: select one curve, segment or surface edge for this rail", False
+        self.args.append(refs[0])
+        self.step_index += 1
+        self._clear_selection(ctx)
+        return None, False
+
+    def _feed_objects_multi_step(self, text, ctx):
+        if text:
+            self._pending_multi.append(text)
+            return f"{text} added -- press Enter when done", False
+        try:
+            # Explicit components beat stale whole-object selection, including the
+            # selected parent. Typed names remain deliberate inputs, not UI mirrors.
+            if self._selected_subobjects(ctx):
+                refs = list(self._pending_multi) + self._selection_refs(ctx)
             else:
-                out = super()._feed_objects_step(text, ctx)
-        else:
-            out = super()._feed_objects_step(text, ctx)
-        if self.step_index > before and self.step_index < len(self.steps):
-            selector = getattr(ctx, "select_by_names", None)
-            if callable(selector):
-                try:
-                    selector([])
-                except Exception:  # noqa: BLE001
-                    pass
-            self._clear_subobjects(ctx)
-        return out
+                refs = list(self._pending_multi) or self._selection_refs(ctx)
+        except curve_inputs.CurveInputError as exc:
+            return f"{self.name}: {exc}", False
+        refs = list(dict.fromkeys(refs))
+        if not refs:
+            return "Nothing selected", False
+        self._pending_multi = []
+        self.args.append(refs)
+        self.step_index += 1
+        self._clear_selection(ctx)
+        return self.execute(ctx)
 
     def _curves(self, ctx):
         """(rails, sections) as geometry, or a refusal string."""
@@ -676,30 +838,22 @@ class _SweepCmd(Command):
         section_names = [n for n in (self.args[self.rails] if len(self.args) > self.rails
                                      else []) if n not in rail_names]
         rails = []
-        for i, n in enumerate(rail_names):
-            label = n
-            if isinstance(n, tuple) and len(n) == 3 and n[0] == "edge":
-                owner = ctx.geom_by_name(n[1])
-                try:
-                    g = bridge.extract_subobject(owner, "edge", n[2])
-                except (bridge.SubObjectError, TypeError) as exc:
-                    return f"Rail surface edge is no longer valid ({exc})"
-                label = f"edge {n[2]} of {n[1]}"
-            else:
-                g = ctx.geom_by_name(n)
-            if not isinstance(g, r3.Curve):
+        for i, ref in enumerate(rail_names):
+            try:
+                rails.append(curve_inputs.resolve(ctx, ref))
+            except curve_inputs.CurveInputError as exc:
                 which = ("Rail curve is not valid" if self.rails == 1 else
                          ("First", "Second")[i] + " rail curve is not valid")
-                return f"{which} ({label!r} is not a curve; select a surface edge)"
-            rails.append(g)
+                return f"{which} ({exc})"
         if not section_names:
             return "no cross-section curve was selected"
         if len(section_names) > 1:
             return (f"sweeping through {len(section_names)} cross-sections is not "
                     f"implemented yet -- one cross-section is")
-        sec = ctx.geom_by_name(section_names[0])
-        if not isinstance(sec, r3.Curve):
-            return f"Shape curve 1 is invalid ({section_names[0]!r} is not a curve)"
+        try:
+            sec = curve_inputs.resolve(ctx, section_names[0])
+        except curve_inputs.CurveInputError as exc:
+            return f"Shape curve 1 is invalid ({exc})"
         return rails, sec
 
     def _build(self, rails, section):

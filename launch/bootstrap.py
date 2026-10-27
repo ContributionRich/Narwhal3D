@@ -203,6 +203,9 @@ def _open_launch_file(path, tries=[0]):
 
 
 def main():
+    # Source-script launches use the same v4 strip as the desktop launcher. The
+    # patched runtime re-evaluates global-area sizes during layout refresh.
+    os.environ.setdefault('NARWHAL3D_STATUSBAR_HEIGHT', '37')
     # Register before any optional setup: if later bootstrap code fails, the event loop
     # still reveals a diagnostic-capable window instead of leaving an invisible process.
     if os.environ.get("NARWHAL3D_DEFER_FIRST_PRESENT") == "1":

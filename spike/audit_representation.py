@@ -211,6 +211,53 @@ row("make_edge_srf (two arcs + two lines)", "1 curved",
         bridge.make_arc((5, 0, 9), (3.5355339, 3.5355339, 9), (0, 5, 9))]), closure="open")
 
 
+def _srf_pt_case(points):
+    """Audit exact corner surfaces, including trims and the deliberately warped quad.
+
+    MEASURED: the 4x3 triangle has area 6; lifting the opposite quad corner by 2 gives
+    (4u, 3v, 2uv). Degree 1x1 is EXACT for this bilinear patch, not a faceted sweep.
+    """
+    try:
+        from narwhal3d.kernel import occt_backend as ob
+        from OCP.BRepAdaptor import BRepAdaptor_Surface
+        from OCP.BRepGProp import BRepGProp
+        from OCP.GProp import GProp_GProps
+
+        geom = bridge.make_srf_pt(points)
+        triangle = len(points) == 3
+        assert isinstance(geom, r3.Brep) and geom.IsValid and not geom.IsSolid, "valid open Brep"
+        assert len(geom.Faces) == 1, "one exact face, not triangle facets"
+        assert geom.Faces[0].IsPlanar() == triangle, "corner surface planarity"
+        assert kernel.honesty_problem(geom) is None, "honest representation"
+        recipe = kernel.recipe_of(geom)
+        assert recipe, "rebuildable corner-surface recipe"
+        for shape in (bridge._occt_operand(geom), ob.from_recipe(recipe)):
+            assert shape is not None and ob.is_valid(shape), "valid exact master/replay"
+            assert ob.face_types(shape) == ({"PLANE": 1} if triangle else {"BSPLINE": 1}), "face types"
+            assert not ob.is_airtight(shape), "a patch is not a solid"
+            if triangle:
+                props = GProp_GProps()
+                BRepGProp.SurfaceProperties_s(shape, props)
+                assert abs(props.Mass() - 6.0) < 1e-9, "triangle trim, not its bounding rectangle"
+            else:
+                surface = BRepAdaptor_Surface(ob.unique_faces(shape)[0])
+                for u, v in ((0, 0), (1, 0), (1, 1), (0, 1), (0.5, 0.5), (0.25, 0.75)):
+                    point = surface.Value(
+                        surface.FirstUParameter() + u * (surface.LastUParameter() - surface.FirstUParameter()),
+                        surface.FirstVParameter() + v * (surface.LastVParameter() - surface.FirstVParameter()))
+                    assert max(abs(a - b) for a, b in zip(point.Coord(), (4*u, 3*v, 2*u*v))) < 1e-9, "bilinear interior"
+        return geom
+    except Exception as error:  # row(None) enters the existing gate-1 NOTHING BUILT failure path.
+        print(f"  SrfPt {len(points)}-corner geometry check FAILED: {error!r}")
+        return None
+
+
+row("make_srf_pt (triangle)", "1 planar, trimmed",
+    lambda: _srf_pt_case([(0, 0, 0), (4, 0, 0), (0, 3, 0)]), closure="open")
+row("make_srf_pt (noncoplanar quad)", "1 curved, bilinear",
+    lambda: _srf_pt_case([(0, 0, 0), (4, 0, 0), (4, 3, 2), (0, 3, 0)]), closure="open")
+
+
 # Exact planar Trim/Split: the holed piece is a master + proxy (the proxy is
 # triangles, which is fine -- the gate reads the master); the disk is a native trimmed plane.
 def _planar_pieces():
@@ -511,6 +558,10 @@ EXPECTED_OPEN = {
         "a planar surface is intentionally open",
     "make_edge_srf (two arcs + two lines)":
         "an edge surface is intentionally open",
+    "make_srf_pt (triangle)":
+        "three corners define an open trimmed planar patch, not a solid",
+    "make_srf_pt (noncoplanar quad)":
+        "four corners define one open bilinear patch, not a solid",
     "split_surface (cylinder wall, projected circle)":
         "a trimmed curved SURFACE -- open is correct",
 }

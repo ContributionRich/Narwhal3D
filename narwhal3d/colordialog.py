@@ -60,6 +60,26 @@ def to_hex(rgb):
     return "#%02x%02x%02x" % seq
 
 
+def layer_picker_initial(rgb):
+    """Return a layer-picker default with HSV Value 255, without changing ``rgb``.
+
+    OURS: the layer-only UI preference, not a generic picker policy.
+    Scale nonblack RGB uniformly to preserve hue/saturation within byte rounding;
+    black starts white. Validation/coercion follows :func:`to_hex` (ValueError
+    on invalid colours). Integer rounding is nearest, with halves rounded up.
+
+    This three-channel desktop UI adapter stays in Python alongside the backend.
+    Callers pass the result to ``ask_color`` only for layer swatches, and update
+    document colour only on OK -- neither opening nor cancelling changes it.
+    """
+    hex_color = to_hex(rgb)
+    channels = tuple(int(hex_color[i:i + 2], 16) for i in (1, 3, 5))
+    peak = max(channels)
+    if peak == 0:
+        return (255, 255, 255)
+    return tuple((2 * c * 255 + peak) // (2 * peak) for c in channels)
+
+
 def parse_color(text):
     """Parse a colour string -> ``((r, g, b) | None, error | None)``.
 

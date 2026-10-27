@@ -1,8 +1,10 @@
 # Windows build preparation
 
-Narwhal 3D publishes an unsigned **0.4.6 Windows x86_64 portable ZIP** for early testing. It contains a native MSVC-built runtime, Windows CPython/OpenCASCADE dependencies, Rust native components, the native startup welcome window, and `Narwhal3D.exe`; it is not a renamed or wrapped Linux binary. Extract the complete folder and keep `Narwhal3D.exe` beside its `app` and `runtime` directories.
+Narwhal 3D's published preview is an unsigned **0.4.6 Windows x86_64 portable ZIP** for early testing. It contains a native MSVC-built runtime, Windows CPython/OpenCASCADE dependencies, Rust native components, the native startup welcome window, and `Narwhal3D.exe`; it is not a renamed or wrapped Linux binary. Extract the complete folder and keep `Narwhal3D.exe` beside its `app` and `runtime` directories.
 
-The ZIP remains an extremely early prerelease, not a supported Windows release. Native Windows headless checks and independent offline Wine checks pass, but physical-GPU/real-window acceptance, remaining internal runtime PE identity cleanup, installer/file associations, and optional signing are still open. SmartScreen may warn because the preview is unsigned.
+The ZIP remains an extremely early prerelease, not a supported Windows release. Native Windows headless checks and independent offline Wine checks passed for the published 0.4.6 ZIP, but physical-GPU/real-window acceptance, remaining internal runtime PE identity cleanup, installer/file associations, and optional signing are still open. SmartScreen may warn because the preview is unsigned.
+
+**0.4.7 is in preparation**, not available to download or certified by the 0.4.6 results. Its updated native runtime and welcome, final integrated tests, source/inventory verification and extracted-ZIP acceptance are still pending.
 
 ## Reproducing the Windows build environment
 
@@ -65,7 +67,7 @@ After restarting, run the collector again and return the new collection ZIP.
 
 ## Build a new engineering candidate
 
-The fresh report determines the exact bootstrap route and prevents repeatedly asking the Windows user to install or diagnose tools by hand.
+The fresh report determines the exact bootstrap route and prevents repeatedly asking the Windows user to install or diagnose tools by hand. The example below targets a 0.4.7 engineering candidate, not an already validated release; supply the audited public source revision containing the 0.4.7 changes.
 
 When Visual Studio C++, Git, Git LFS, CMake, Ninja, Python 3.13, long paths, free disk, and a pagefile are ready, download [`scripts/build_windows_preview.ps1`](../scripts/build_windows_preview.ps1) to the Desktop and run from ordinary 64-bit PowerShell:
 
@@ -74,7 +76,7 @@ Set-Location ([Environment]::GetFolderPath('Desktop'))
 $Revision = "PASTE_THE_40_CHARACTER_PUBLIC_SOURCE_COMMIT"
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\build_windows_preview.ps1 `
   -NarwhalRevision $Revision `
-  -Version 0.4.6
+  -Version 0.4.7
 ```
 
 The engineering build uses the dedicated no-space path `C:\Narwhal3D-build`, resets only clones owned by that marked workspace, and can be rerun after a failure. It follows Blender's official Windows flow from the Blender source directory, but separates configuration and compilation so Ninja is limited to four jobs on the measured 12 GiB machine. It:

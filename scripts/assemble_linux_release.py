@@ -93,7 +93,9 @@ PATCH_INPUTS = (
     "blender_patches/apply_app_drawn.py",
     "blender_patches/apply_cad_boundary_wires.py",
     "blender_patches/apply_deferred_first_present.py",
+    "blender_patches/apply_statusbar_height.py",
     "blender_patches/narwhal3d_app_icon.svg",
+    "blender_patches/apply_window_overlay.py",
 )
 VERSION_RE = re.compile(r"[0-9A-Za-z][0-9A-Za-z._-]*\Z")
 REVISION_RE = re.compile(r"[0-9a-fA-F]{40}\Z")

@@ -93,11 +93,16 @@ check('os.environ["NARWHAL3D_PRESENT_WATCHDOG"] = "1"' in watchdog_function
 marker_builder = builder[builder.index('  "$INSTALL_DIR/.narwhal3d-native-runtime.json"'):]
 marker_invocation = marker_builder[:marker_builder.index("<<'PY'")]
 marker_args = re.findall(r'^\s+"\$([A-Z_]+)"', marker_invocation, re.MULTILINE)
-check(marker_args[-5:] == ["BRANDING_PATCH", "APP_DRAWN_PATCH", "BOUNDARY_PATCH",
-                           "DEFERRED_PRESENT_PATCH", "ICON_SOURCE"]
+check(marker_args[-7:] == ["BRANDING_PATCH", "APP_DRAWN_PATCH", "BOUNDARY_PATCH",
+                           "DEFERRED_PRESENT_PATCH", "STATUSBAR_HEIGHT_PATCH", "ICON_SOURCE",
+                           "WINDOW_OVERLAY_PATCH"]
       and '("blender_patches/apply_deferred_first_present.py", Path(sys.argv[9]))'
       in marker_builder
-      and '("blender_patches/narwhal3d_app_icon.svg", Path(sys.argv[10]))'
+      and '("blender_patches/apply_statusbar_height.py", Path(sys.argv[10]))'
+      in marker_builder
+      and '("blender_patches/narwhal3d_app_icon.svg", Path(sys.argv[11]))'
+      in marker_builder
+      and '("blender_patches/apply_window_overlay.py", Path(sys.argv[12]))'
       in marker_builder,
       "runtime provenance arguments and path-to-index mappings are exact")
 

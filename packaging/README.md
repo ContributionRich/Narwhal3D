@@ -4,9 +4,11 @@ This directory defines the fail-closed AppImage scaffold for the public Narwhal 
 
 ## Early-prerelease version and host baseline
 
-Narwhal 3D remains an extremely early prerelease. The assembler and verifier accept only `0.4.x` package versions until the project owner explicitly lifts that cap; the current release is `0.4.6`, not `0.5.0`.
+Narwhal 3D remains an extremely early prerelease. The assembler and verifier accept only `0.4.x` package versions until the project owner explicitly lifts that cap; the published release is `0.4.6`, and `0.4.7` is in preparation, not `0.5.0`. Final integrated validation and portable Linux/Windows packages for 0.4.7 are still pending; no new assets are claimed available.
 
 A release runtime must also require no newer than **GLIBC 2.35**, the baseline from Ubuntu 22.04 (the oldest Ubuntu LTS still in standard support in 2026). Every regular ELF in the runtime is checked with `readelf --version-info` before assembly and again after extraction. This gate exists because the 0.4.0 runtime was built on glibc 2.43 and the AppImage catalog measured immediate startup failure on its older supported test system. Build native Linux release runtimes in an Ubuntu 22.04 container or equivalent old supported base; assembling on a newer host does not make a newer-linked executable portable.
+
+The published 0.4.6 AppImage was measured to require at most GLIBC 2.28 across all bundled ELFs. That historical result does not certify a 0.4.7 candidate. The new UI requires rebuilt native patches and matching native components; the current source-development runtime and welcome require GLIBC 2.43 and must not ship. Use `--version 0.4.7` for candidate assembly and `--expected-version 0.4.7` for verification only after preparing compatible inputs.
 
 ## Development runtime is not publishable
 
@@ -28,9 +30,24 @@ The build applies all current Narwhal native patches:
 - `blender_patches/apply_app_drawn.py`
 - `blender_patches/apply_cad_boundary_wires.py`
 - `blender_patches/apply_deferred_first_present.py`
+- `blender_patches/apply_statusbar_height.py`
 - `blender_patches/narwhal3d_app_icon.svg`
+- `blender_patches/apply_window_overlay.py`
 
 After installation, the script requires a version banner beginning `Narwhal 3D 5.2.2`, compiled window-title and quit markers, and writes `.narwhal3d-native-runtime.json`. The marker records the exact Blender commit, each patch input hash, a deterministic aggregate, installed binary hash, build timestamp, and optional `build_source_date_epoch` supplied through `--source-date-epoch`. A native runtime may legitimately predate the final public source commit, so this build epoch is independent of the AppImage manifest's required `source_date_epoch`, which controls public-source identity and AppDir normalization.
+
+The statusbar patch is applied through `apply(source / "source" / "blender")`, not its CLI `main()`. Its native 37-logical-pixel sizing is opt-in: both `NARWHAL3D_STATUSBAR_HEIGHT=37` and `NARWHAL3D_DEFER_FIRST_PRESENT=1` must be set; otherwise Blender keeps its normal statusbar sizing.
+
+The window-overlay patch also uses the explicit `apply(source / "source" / "blender")` API. It adds the native Window POST_PIXEL callback bridge and `python/BPY_window_draw.hh`. Provenance now covers seven inputs (six patch scripts plus the icon); older six-input markers are rejected.
+
+After an **already completed incremental build and install of all current patch inputs**, refresh the installed marker with the same validation/hash-writing path, without rerunning a clean build:
+
+```sh
+scripts/build_blender_linux.sh --record-installed-provenance \
+  --source-dir tools/blender-src --install-dir tools/blender-patched
+```
+
+This deliberately allows patched source, requires the pinned source commit, current statusbar/window-overlay source anchors and exact overlay header, and validates the installed banner, branding and deferred/statusbar/overlay (`RNA_WINDOW_DRAW_HANDLE`) binary markers before atomically replacing provenance. It does not patch source, configure, compile, install, or launch the GUI. It is the caller's attestation that this installed binary was built from these current inputs: marker strings cannot prove source-to-binary equivalence. Do not use it to bless an unbuilt patch-script change. `--source-date-epoch` may specify the actual build epoch; without it the new marker records the current recording time and a null build epoch (it does not preserve stale marker metadata).
 
 The native Blender build does not download Python wheels. Before assembly, the three wheels pinned by the lock must be installed into the native runtime's bundled CPython 3.13 from a verified cache. Assembly probes `rhino3dm`, `OCP`, and all exact distribution versions before invoking appimagetool.
 
@@ -51,6 +68,6 @@ The assembler invokes only the locked appimagetool with `--appimage-extract-and-
 
 The public lock does not yet pin the Blender source archive, precompiled dependency archives, compiler/container image, or complete native build dependency graph. Therefore `.github/workflows/linux-release.yml` validates only the public source and packaging scaffold. It intentionally does **not** download an official runtime, build an AppImage, or upload a release artifact.
 
-Publishing remains deferred until a sanitized public source tree and locally built native runtime have passed the excluded-payload, native marker, branding, dependency import, AppDir, and extracted-AppImage verification gates—or until the complete native toolchain is locked for CI. The scaffold does not claim byte-for-byte native build reproducibility before that work is complete.
+Publishing 0.4.7 remains deferred until a sanitized public source tree and locally built native runtime have passed the excluded-payload, native marker, branding, dependency import, AppDir, and extracted-AppImage verification gates—or until the complete native toolchain is locked for CI. The scaffold does not claim byte-for-byte native build reproducibility before that work is complete.
 
 See `NOTICES.md` for required notices and deliberately excluded components.

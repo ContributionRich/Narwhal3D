@@ -8,7 +8,9 @@ BRANDING_PATCH="$PATCH_DIR/apply_narwhal3d_branding.py"
 APP_DRAWN_PATCH="$PATCH_DIR/apply_app_drawn.py"
 BOUNDARY_PATCH="$PATCH_DIR/apply_cad_boundary_wires.py"
 DEFERRED_PRESENT_PATCH="$PATCH_DIR/apply_deferred_first_present.py"
+STATUSBAR_HEIGHT_PATCH="$PATCH_DIR/apply_statusbar_height.py"
 ICON_SOURCE="$PATCH_DIR/narwhal3d_app_icon.svg"
+WINDOW_OVERLAY_PATCH="$PATCH_DIR/apply_window_overlay.py"
 REQUIRED_COMMIT="d13f752e3b9c4f8c261cda552b1021f8bcc0382c"
 SOURCE_DIR=""
 BUILD_DIR=""
@@ -17,6 +19,7 @@ EXPECTED_COMMIT="$REQUIRED_COMMIT"
 SOURCE_DATE_EPOCH=""
 JOBS=""
 SELF_CHECK=0
+RECORD_INSTALLED=0
 
 usage() {
   cat <<'EOF'
@@ -27,8 +30,8 @@ d13f752e3b9c4f8c261cda552b1021f8bcc0382c, then configure, compile, install,
 validate native branding, and write .narwhal3d-native-runtime.json.
 
 Required:
-  --source-dir PATH         Clean Blender source checkout at the required commit
-  --build-dir PATH          Out-of-tree build directory
+  --source-dir PATH         Blender checkout at the required commit (clean for build)
+  --build-dir PATH          Out-of-tree build directory (build mode only)
   --install-dir PATH        Installation destination
 
 Optional:
@@ -36,6 +39,12 @@ Optional:
   --source-date-epoch N     Optional native-build epoch recorded as build_source_date_epoch
   --jobs N                  Parallel build jobs
   --self-check              Validate patch inputs and local script logic only
+  --record-installed-provenance
+                            Attest an already patched, built and installed runtime;
+                            validate and write its marker without patching/building.
+                            Requires --source-dir and --install-dir. Caller must
+                            have built/installed ALL current patch inputs from this
+                            source; checks cannot prove source-to-binary equivalence.
   -h, --help                Show this help
 EOF
 }
@@ -53,6 +62,10 @@ while (($#)); do
         --jobs) JOBS="$2" ;;
       esac
       shift 2
+      ;;
+    --record-installed-provenance)
+      RECORD_INSTALLED=1
+      shift
       ;;
     --self-check)
       SELF_CHECK=1
@@ -72,12 +85,12 @@ done
 
 [[ "$(uname -s)" == "Linux" ]] || { echo "native build requires Linux" >&2; exit 2; }
 [[ "$(uname -m)" == "x86_64" ]] || { echo "native build requires x86_64" >&2; exit 2; }
-for patch_input in "$BRANDING_PATCH" "$APP_DRAWN_PATCH" "$BOUNDARY_PATCH" "$DEFERRED_PRESENT_PATCH" "$ICON_SOURCE"; do
+for patch_input in "$BRANDING_PATCH" "$APP_DRAWN_PATCH" "$BOUNDARY_PATCH" "$DEFERRED_PRESENT_PATCH" "$STATUSBAR_HEIGHT_PATCH" "$ICON_SOURCE" "$WINDOW_OVERLAY_PATCH"; do
   [[ -f "$patch_input" && ! -L "$patch_input" ]] || { echo "required native patch input is missing or symlinked: $patch_input" >&2; exit 2; }
 done
 
 if ((SELF_CHECK)); then
-  python3 - "$REQUIRED_COMMIT" "$BRANDING_PATCH" "$APP_DRAWN_PATCH" "$BOUNDARY_PATCH" "$DEFERRED_PRESENT_PATCH" "$ICON_SOURCE" <<'PY'
+  python3 - "$REQUIRED_COMMIT" "$BRANDING_PATCH" "$APP_DRAWN_PATCH" "$BOUNDARY_PATCH" "$DEFERRED_PRESENT_PATCH" "$STATUSBAR_HEIGHT_PATCH" "$ICON_SOURCE" "$WINDOW_OVERLAY_PATCH" <<'PY'
 import ast
 import hashlib
 from pathlib import Path
@@ -89,9 +102,10 @@ if not re.fullmatch(r"[0-9a-f]{40}", commit):
     raise SystemExit("invalid fixed Blender source commit")
 if commit != "d13f752e3b9c4f8c261cda552b1021f8bcc0382c":
     raise SystemExit("fixed Blender source commit changed")
-for value in sys.argv[2:6]:
+for value in sys.argv[2:]:
     path = Path(value)
-    ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    if path.suffix == ".py":
+        ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
 for value in sys.argv[2:]:
     hashlib.sha256(Path(value).read_bytes()).hexdigest()
 PY
@@ -99,11 +113,11 @@ PY
   exit 0
 fi
 
-for command_name in git python3 cmake ninja; do
+for command_name in git python3; do
   command -v "$command_name" >/dev/null || { echo "required command is missing: $command_name" >&2; exit 2; }
 done
-[[ -n "$SOURCE_DIR" && -n "$BUILD_DIR" && -n "$INSTALL_DIR" ]] || {
-  echo "--source-dir, --build-dir, and --install-dir are required" >&2
+[[ -n "$SOURCE_DIR" && -n "$INSTALL_DIR" ]] && { ((RECORD_INSTALLED)) || [[ -n "$BUILD_DIR" ]]; } || {
+  echo "--source-dir and --install-dir are required; build mode also requires --build-dir" >&2
   exit 2
 }
 [[ "${EXPECTED_COMMIT,,}" == "$REQUIRED_COMMIT" ]] || {
@@ -120,24 +134,32 @@ if [[ -n "$JOBS" && ! "$JOBS" =~ ^[1-9][0-9]*$ ]]; then
 fi
 
 SOURCE_DIR="$(realpath "$SOURCE_DIR")"
-mkdir -p "$BUILD_DIR" "$INSTALL_DIR"
-BUILD_DIR="$(realpath "$BUILD_DIR")"
+if ((RECORD_INSTALLED)); then
+  [[ -d "$INSTALL_DIR" ]] || { echo "installed runtime directory is missing: $INSTALL_DIR" >&2; exit 2; }
+else
+  for command_name in cmake ninja; do
+    command -v "$command_name" >/dev/null || { echo "required command is missing: $command_name" >&2; exit 2; }
+  done
+  mkdir -p "$BUILD_DIR" "$INSTALL_DIR"
+  BUILD_DIR="$(realpath "$BUILD_DIR")"
+fi
 INSTALL_DIR="$(realpath "$INSTALL_DIR")"
 [[ -f "$SOURCE_DIR/CMakeLists.txt" && -d "$SOURCE_DIR/.git" ]] || {
   echo "source directory is not a Blender Git checkout: $SOURCE_DIR" >&2
   exit 2
 }
-ACTUAL_COMMIT="$(git -C "$SOURCE_DIR" rev-parse HEAD)"
+ACTUAL_COMMIT="$(git --no-pager -C "$SOURCE_DIR" rev-parse HEAD)"
 [[ "${ACTUAL_COMMIT,,}" == "$REQUIRED_COMMIT" ]] || {
   echo "source commit mismatch: required $REQUIRED_COMMIT, got $ACTUAL_COMMIT" >&2
   exit 2
 }
-[[ -z "$(git -C "$SOURCE_DIR" status --porcelain --untracked-files=no)" ]] || {
+build_native() {
+[[ -z "$(git --no-pager --no-optional-locks -C "$SOURCE_DIR" status --porcelain --untracked-files=no)" ]] || {
   echo "source checkout has tracked modifications; refusing a non-reproducible patch/build" >&2
   exit 2
 }
 
-python3 - "$SOURCE_DIR" "$BRANDING_PATCH" "$APP_DRAWN_PATCH" "$BOUNDARY_PATCH" "$DEFERRED_PRESENT_PATCH" "$ICON_SOURCE" <<'PY'
+python3 - "$SOURCE_DIR" "$BRANDING_PATCH" "$APP_DRAWN_PATCH" "$BOUNDARY_PATCH" "$DEFERRED_PRESENT_PATCH" "$STATUSBAR_HEIGHT_PATCH" "$ICON_SOURCE" "$WINDOW_OVERLAY_PATCH" <<'PY'
 import importlib.util
 from pathlib import Path
 import sys
@@ -147,7 +169,9 @@ branding_path = Path(sys.argv[2])
 app_drawn_path = Path(sys.argv[3])
 boundary_path = Path(sys.argv[4])
 deferred_path = Path(sys.argv[5])
-icon = Path(sys.argv[6])
+statusbar_path = Path(sys.argv[6])
+icon = Path(sys.argv[7])
+overlay_path = Path(sys.argv[8])
 
 def load(name: str, path: Path):
     spec = importlib.util.spec_from_file_location(name, path)
@@ -166,6 +190,14 @@ for name, path in (("narwhal3d_app_drawn", app_drawn_path),
     module = load(name, path)
     module.SRC = str(source / "source" / "blender")
     module.main()
+# Unlike the legacy patches, main() parses sys.argv. Call the explicit API so
+# the build driver's positional arguments never reach the patch's argparse.
+statusbar = load("narwhal3d_statusbar_height", statusbar_path)
+changed = statusbar.apply(source / "source" / "blender")
+print(f"statusbar-height patch applied ({len(changed)} changed paths)")
+overlay = load("narwhal3d_window_overlay", overlay_path)
+changed = overlay.apply(source / "source" / "blender")
+print(f"window-overlay patch applied ({len(changed)} changed paths)")
 PY
 
 if [[ -n "$SOURCE_DATE_EPOCH" ]]; then
@@ -181,6 +213,33 @@ else
   cmake --build "$BUILD_DIR" --parallel
 fi
 cmake --install "$BUILD_DIR"
+}
+
+if ((RECORD_INSTALLED)); then
+  # Read-only anchor verification: do not repair source after its binary was built.
+  python3 - "$SOURCE_DIR/source/blender" "$STATUSBAR_HEIGHT_PATCH" "$WINDOW_OVERLAY_PATCH" <<'PY'
+import importlib.util
+from pathlib import Path
+import sys
+
+source = Path(sys.argv[1])
+for name, patch_path in (("statusbar", sys.argv[2]), ("window-overlay", sys.argv[3])):
+    spec = importlib.util.spec_from_file_location(name, patch_path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    for relative, old, new in module.EDITS:
+        path = source / relative
+        text = path.read_text(encoding="utf-8") if path.is_file() else ""
+        if text.count(new) != 1 or text.count(old) != new.count(old):
+            raise SystemExit(f"installed provenance requires the current {name} patch in source: {relative}")
+    if name == "window-overlay":
+        header = source / module.HEADER
+        if not header.is_file() or header.read_text(encoding="utf-8") != module.HEADER_TEXT:
+            raise SystemExit(f"installed provenance requires the current window-overlay header: {module.HEADER}")
+PY
+else
+  build_native
+fi
 
 BRANDED_BINARY="$INSTALL_DIR/blender"
 [[ -x "$BRANDED_BINARY" && ! -L "$BRANDED_BINARY" ]] || {
@@ -201,6 +260,13 @@ LC_ALL=C grep -aFq "Narwhal 3D quit" "$BRANDED_BINARY" || {
   exit 2
 }
 
+for native_marker in NARWHAL3D_DEFER_FIRST_PRESENT NARWHAL3D_STATUSBAR_HEIGHT RNA_WINDOW_DRAW_HANDLE; do
+  LC_ALL=C grep -aFq "$native_marker" "$BRANDED_BINARY" || {
+    echo "installed executable lacks the native patch marker: $native_marker" >&2
+    exit 2
+  }
+done
+
 python3 - \
   "$INSTALL_DIR/.narwhal3d-native-runtime.json" \
   "$BRANDED_BINARY" \
@@ -211,7 +277,9 @@ python3 - \
   "$APP_DRAWN_PATCH" \
   "$BOUNDARY_PATCH" \
   "$DEFERRED_PRESENT_PATCH" \
-  "$ICON_SOURCE" <<'PY'
+  "$STATUSBAR_HEIGHT_PATCH" \
+  "$ICON_SOURCE" \
+  "$WINDOW_OVERLAY_PATCH" <<'PY'
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -228,7 +296,9 @@ logical_inputs = (
     ("blender_patches/apply_app_drawn.py", Path(sys.argv[7])),
     ("blender_patches/apply_cad_boundary_wires.py", Path(sys.argv[8])),
     ("blender_patches/apply_deferred_first_present.py", Path(sys.argv[9])),
-    ("blender_patches/narwhal3d_app_icon.svg", Path(sys.argv[10])),
+    ("blender_patches/apply_statusbar_height.py", Path(sys.argv[10])),
+    ("blender_patches/narwhal3d_app_icon.svg", Path(sys.argv[11])),
+    ("blender_patches/apply_window_overlay.py", Path(sys.argv[12])),
 )
 records = []
 aggregate = hashlib.sha256()
@@ -260,4 +330,4 @@ temporary.write_text(json.dumps(marker, indent=2, sort_keys=True) + "\n", encodi
 temporary.replace(marker_path)
 PY
 
-echo "Native Narwhal 3D runtime installed with provenance: $INSTALL_DIR"
+echo "Native Narwhal 3D runtime provenance recorded: $INSTALL_DIR"
