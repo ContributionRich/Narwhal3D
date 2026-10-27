@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from test_windows_build import disk_allows
+
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "collect_windows_build_info.ps1"
 BUILD = ROOT / "scripts" / "build_windows_preview.ps1"
@@ -100,8 +102,14 @@ check("2022 x64 release ninja nobuild builddir" in build
       "build forces VS 2022 x64 Release and bounds Ninja inside the MSVC environment")
 
 check(all(text in build for text in ("git", "lfs", "LongPathsEnabled", "core.longpaths",
-                                      "Win32_PageFileUsage", "At least 60 GiB")),
-      "engineering build preflights source, long paths, disk, and low-memory pagefile")
+                                      "Win32_PageFileUsage"))
+      and all(disk_allows(build, free, mode) == allowed
+              for mode in ("clean", "rebuild", "resume")
+              for free, allowed in ((16 * 1024**3 - 1, False),
+                                    (16 * 1024**3, mode == "resume"),
+                                    (60 * 1024**3 - 1, mode == "resume"),
+                                    (60 * 1024**3, True))),
+      "build preflights source/long paths/pagefile and enforces 60 GiB compile / 16 GiB packaging on raw bytes")
 
 check('"reset", "--hard", $NarwhalRevision' in build
       and '"reset", "--hard", $BlenderRevision' in build

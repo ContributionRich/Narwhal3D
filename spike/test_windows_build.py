@@ -51,6 +51,18 @@ def execute(code, argv=(), modules=None):
     return namespace
 
 
+def disk_allows(script, free_bytes, mode):
+    """Interpret only the explicit PowerShell disk policy; never run the builder."""
+    policy = re.search(r'\$MinimumFreeGiB = if \(\$(\w+)\) \{ (\d+) \} else \{ (\d+) \}', script)
+    assert policy, 'explicit mode-specific disk reservation is missing'
+    guard = re.search(r'if \(\$SystemDrive\.FreeSpace -(lt|le) \(\$MinimumFreeGiB \* 1GB\)\) \{ throw ', script)
+    assert guard, 'disk guard must compare unrounded bytes and throw on insufficient space'
+    flag, when_true, when_false = policy.groups()
+    flags = {'ResumePackaging': mode == 'resume', 'RebuildRuntime': mode == 'rebuild'}
+    required = int(when_true if flags[flag] else when_false) * 1024**3
+    return free_bytes >= required if guard[1] == 'lt' else free_bytes > required
+
+
 def run_checks(check):
     script = (ROOT / 'scripts/build_windows_preview.ps1').read_text()
     linux = (ROOT / 'scripts/build_blender_linux.sh').read_text()
@@ -84,6 +96,30 @@ def run_checks(check):
           'failed patch/build invalidates the old compiled attestation')
     check('skipping source updates, patches, configuration, and compilation' in script,
           'ResumePackaging retains documented native-skip semantics')
+
+    gib = 1024**3
+    disk_cases = [(mode, free, allowed) for mode in ('clean', 'rebuild', 'resume')
+                  for free, allowed in ((16 * gib - 1, False),
+                                        (16 * gib, mode == 'resume'),
+                                        (49 * gib, mode == 'resume'),
+                                        (60 * gib - 1, mode == 'resume'),
+                                        (60 * gib, True))]
+    for mode, free, allowed in disk_cases:
+        check(disk_allows(script, free, mode) == allowed,
+              f'disk policy: {mode} at {free} bytes accepted={allowed}')
+    for label, broken in (
+        ('wrong mode', script.replace('$MinimumFreeGiB = if ($ResumePackaging)',
+                                      '$MinimumFreeGiB = if ($RebuildRuntime)')),
+        ('insufficient packaging space accepted', script.replace('{ 16 } else { 60 }', '{ 1 } else { 60 }')),
+        ('compile reservation weakened', script.replace('{ 16 } else { 60 }', '{ 16 } else { 16 }')),
+        ('disk guard removed', script.replace('if ($SystemDrive.FreeSpace -lt ($MinimumFreeGiB * 1GB))', 'if ($false)')),
+    ):
+        try:
+            assert all(disk_allows(broken, free, mode) == allowed for mode, free, allowed in disk_cases)
+        except AssertionError:
+            check(True, 'MUTATION RED: ' + label)
+        else:
+            check(False, 'MUTATION did not fail: ' + label)
 
     codes = {name: embedded(script, name) for name in (
         'PatchDriver', 'ProvenanceDriver', 'RuntimeApiProbe', 'OverlayDriver', 'RuntimeBuildRunner',
@@ -241,10 +277,43 @@ def run_checks(check):
         Mesh=SimpleNamespace(bl_rna=SimpleNamespace(properties={'narwhal_boundary_wires'})),
         STATUSBAR_HT_header=SimpleNamespace(draw=lambda: None),
         SpaceView3D=space, SpaceInfo=space, Window=window)
-    bpy = SimpleNamespace(types=types, context=SimpleNamespace(preferences=SimpleNamespace(system=system)))
+    bpy = SimpleNamespace(types=types, app=SimpleNamespace(background=False),
+                          context=SimpleNamespace(preferences=SimpleNamespace(system=system)))
     execute(codes['RuntimeApiProbe'], modules={'bpy': bpy})
     check([call[2:] for call in handles] == [('HEADER', 'POST_PIXEL'), ('WINDOW', 'POST_PIXEL'), ('POST_PIXEL',)],
           'UI probe exercises header, Info and Window callback signatures')
+    def probe_allows(code, scale, background):
+        system.ui_scale = scale
+        bpy.app.background = background
+        try:
+            execute(code, modules={'bpy': bpy})
+        except SystemExit:
+            return False
+        return True
+
+    scale_cases = [(scale, background, allowed)
+                   for background in (False, True)
+                   for scale, allowed in ((0.0, background), (1.25, True),
+                                          (-1.0, False), (-0.01, False),
+                                          (float('nan'), False), (float('inf'), False),
+                                          (float('-inf'), False))]
+    for scale, background, allowed in scale_cases:
+        check(probe_allows(codes['RuntimeApiProbe'], scale, background) == allowed,
+              f'UI scale {scale}, background={background}, accepted={allowed}')
+    probe = codes['RuntimeApiProbe']
+    for label, broken in (
+        ('missing background guard', probe.replace('bpy.app.background and scale == 0', 'scale == 0')),
+        ('nonfinite scale allowed', probe.replace('math.isfinite(scale) and ', '')),
+        ('negative background scale allowed', probe.replace('scale == 0', 'scale <= 0')),
+        ('NaN silently normalized', probe.replace('scale = bpy.context.preferences.system.ui_scale',
+             'scale = bpy.context.preferences.system.ui_scale\nscale = 1.0 if math.isnan(scale) else scale')),
+        ('background zero rejected again', probe.replace(' or (bpy.app.background and scale == 0)', '')),
+    ):
+        check(any(probe_allows(broken, scale, background) != allowed
+                  for scale, background, allowed in scale_cases), 'MUTATION RED: ' + label)
+    system.ui_scale = 1.25
+    bpy.app.background = False
+
     for mutation in ('window', 'scale', 'header'):
         if mutation == 'window':
             window.draw_handler_add = None

@@ -221,7 +221,10 @@ if (-not $GitLongPaths -or $GitLongPaths[-1].Trim().ToLowerInvariant() -ne "true
 }
 $SystemDrive = Get-CimInstance Win32_LogicalDisk -Filter ("DeviceID='" + $env:SystemDrive + "'")
 $FreeGiB = [math]::Round($SystemDrive.FreeSpace / 1GB, 2)
-if ($FreeGiB -lt 60) { throw "At least 60 GiB free is required; found $FreeGiB GiB" }
+# OURS: packaging reserves 16 GiB for runtime/app copies, Rust cores and ZIP staging.
+# Both clean and incremental native compilation retain the 60 GiB reservation.
+$MinimumFreeGiB = if ($ResumePackaging) { 16 } else { 60 }
+if ($SystemDrive.FreeSpace -lt ($MinimumFreeGiB * 1GB)) { throw "At least $MinimumFreeGiB GiB free is required; found $FreeGiB GiB" }
 $MemoryGiB = [math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory / 1GB, 2)
 if ($MemoryGiB -lt 16 -and -not @(Get-CimInstance Win32_PageFileUsage -ErrorAction SilentlyContinue)) {
     throw "A Windows pagefile is required on machines with less than 16 GiB RAM"
@@ -657,8 +660,11 @@ handle = window.draw_handler_add(lambda: None, (), 'POST_PIXEL')
 window.draw_handler_remove(handle)
 window.draw_handler_remove(handle)
 scale = bpy.context.preferences.system.ui_scale
-require(math.isfinite(scale) and scale > 0, 'invalid native UI scale')
-print(json.dumps({'native_ui_api': 'ok', 'ui_scale': scale,
+# MEASURED: background Windows startup exposes zero before window DPI initialization.
+# A real window must still report a positive scale; never coerce invalid values.
+require(math.isfinite(scale) and (scale > 0 or (bpy.app.background and scale == 0)),
+        'invalid native UI scale')
+print(json.dumps({'native_ui_api': 'ok', 'ui_scale': scale, 'background': bpy.app.background,
                   'statusbar_height_env': 'NARWHAL3D_STATUSBAR_HEIGHT',
                   'statusbar_logical_pixels': 37}))
 '@ | Set-Content -LiteralPath $RuntimeApiProbe -Encoding UTF8
