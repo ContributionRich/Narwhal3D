@@ -64,3 +64,5 @@ run_gui spike/test_preferences_gui.py PREFERENCES_GUI_RESULT before-bootstrap
 unset NARWHAL_PREF_TEST_PHASE
 rm -f "$NARWHAL3D_SETTINGS_FILE"
 run_gui spike/test_window_overlay_gui.py WINDOW_OVERLAY_RESULT before-bootstrap
+rm -f "$NARWHAL3D_SETTINGS_FILE"
+run_gui spike/test_gumball_extrude_scale_gui.py GUMBALL_GUI_RESULT before-bootstrap

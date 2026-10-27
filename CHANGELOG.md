@@ -35,6 +35,7 @@ Changes since historical public v0.4.6 (`5a40d6d1eee16b26f4e6b5714862c711cafad79
 
 - PlanarSrf, ExtrudeSrf and EdgeSrf command checks now run in the test suite. They had silently stopped running, which hid a test that named its surface after a command option.
 - Restore Delete and command-field editing in the redesigned shell.
+- Gumball-created curve extrusions now scale correctly after being displayed. Nonuniform transforms operate on a detached exact master without inherited display triangulation; source geometry, smooth surfaces, recipes and Undo remain intact. Refused or failed Gumball transforms report the failure instead of claiming a successful scale.
 - Keep startup viewport layout and title-chip padding correct at higher interface scales instead of producing stray viewplanes or mismatched title hit areas.
 - Draw tooltips and popups after native area borders through a window-level overlay, eliminating seams when an overlay crosses viewport boundaries.
 - Filter finite CPlane grids in pixel space and use the same antialiasing path for preview and committed lines. Correct UI PNG colour-space handling and scaling.

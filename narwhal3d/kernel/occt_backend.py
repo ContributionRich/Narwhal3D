@@ -1215,7 +1215,7 @@ def _general_transform(shape, m, *, recognise=True):
     never strips). Faces that ARE still planes, cylinders ... are then recognised back
     (`_recognise_faces`), so a scaled box stays {PLANE: 6}. A singular matrix is refused.
     """
-    from OCP.BRepBuilderAPI import BRepBuilderAPI_GTransform
+    from OCP.BRepBuilderAPI import BRepBuilderAPI_Copy, BRepBuilderAPI_GTransform
     from OCP.gp import gp_GTrsf, gp_Mat, gp_XYZ
 
     det = (m[0] * (m[5] * m[10] - m[6] * m[9]) - m[1] * (m[4] * m[10] - m[6] * m[8])
@@ -1227,7 +1227,12 @@ def _general_transform(shape, m, *, recognise=True):
     g.SetVectorialPart(gp_Mat(m[0], m[1], m[2], m[4], m[5], m[6], m[8], m[9], m[10]))
     g.SetTranslationPart(gp_XYZ(m[3], m[7], m[11]))
     try:
-        b = BRepBuilderAPI_GTransform(shape, g, True)
+        # MEASURED: a meshed circle extrusion gives InvalidPolygonOnTriangulation
+        # after GTransform. Detach exact geometry without display polygons, as in
+        # _nurbs_convert; never clean the shared master or discard its display cache.
+        # This is OCP-handle interop: the Rust core cannot directly consume this handle.
+        clean = BRepBuilderAPI_Copy(shape, True, False).Shape()
+        b = BRepBuilderAPI_GTransform(clean, g, True)
         b.Build()
         if not b.IsDone():
             raise KernelError("the non-uniform transform did not complete")

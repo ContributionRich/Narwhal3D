@@ -21831,8 +21831,11 @@ def _gumball_flush(st):
         commit_xform = bridge.scale_3d_xform(
             st.get("total", 1.0), st["origin"])
     try:
-        commands.apply_transform(app_state.ctx, commit_xform)
+        applied = commands.apply_transform(app_state.ctx, commit_xform)
+        if applied == [] and d["selected_names"]:
+            st["transform_error"] = "Gumball: no objects transformed; see the refusal in command history"
     except Exception as e:  # noqa: BLE001
+        st["transform_error"] = f"Gumball: transform failed ({e})"
         print(f"[narwhal3d] gumball transform failed: {e!r}")
         invalidate_snap_cache()        # it may have got part way: trust nothing
         return False
@@ -22416,6 +22419,8 @@ def _gumball_end():
     _note_objects_changed((), before)
     if st is None:
         return None
+    if st.get("transform_error"):
+        return st["transform_error"]
     mode = st.get("mode") or st["kind"]
     # the scale modes accumulate a RATIO (1.0 = unchanged); everything else
     # accumulates a signed amount (0.0 = unchanged)

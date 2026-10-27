@@ -5177,6 +5177,8 @@ def _apply_transform_to_selection(ctx: NarwhalContext, xform: r3.Transform):
                 new = bridge.transform_geometry(old, xform)
             except bridge.NonUniformTransformError as e:
                 # never a wrong solid -- the object stays as it was, and says so
+                from .state import app_state
+
                 app_state.log(f"{ob.name}: {e}")
                 refused = True
             else:

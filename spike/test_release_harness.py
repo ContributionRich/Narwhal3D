@@ -20,12 +20,12 @@ PURE_ADDITIONS = (
     'test_curve_inputs.py', 'test_curve_consumer_inputs.py',
     'test_variable_edge_fillet.py', 'test_solid_commands.py',
     'test_colordialog.py', 'test_preferences.py', 'test_user_settings.py', 'test_window_overlay_patch.py',
-    'test_windows_build.py', 'test_release_harness.py',
+    'test_windows_build.py', 'test_release_harness.py', 'test_meshed_master_transform.py',
 )
 LIVE_SUITES = (
     'test_v4_live.py', 'test_shell_fixes_gui.py', 'test_render_quality_gui.py',
     'test_component_fillet_gui.py', 'test_preferences_gui.py',
-    'test_preferences_gui.py', 'test_window_overlay_gui.py',
+    'test_preferences_gui.py', 'test_window_overlay_gui.py', 'test_gumball_extrude_scale_gui.py',
 )
 CORES = {
     'NARWHAL_PURE_CORE': 'native/pure_core/target/x86_64-unknown-linux-gnu/release/libnarwhal_pure_core.so',
@@ -72,6 +72,7 @@ if live:
         'test_component_fillet_gui.py': 'COMPONENT_FILLET_RESULT',
         'test_preferences_gui.py': 'PREFERENCES_GUI_RESULT',
         'test_window_overlay_gui.py': 'WINDOW_OVERLAY_RESULT',
+        'test_gumball_extrude_scale_gui.py': 'GUMBALL_GUI_RESULT',
     }[suite]
     mode = env.get('HARNESS_FAILURE', '') if suite == env.get('HARNESS_FAIL_SUITE') else ''
     if mode != 'missing-marker':

@@ -141,6 +141,7 @@ PURE_SUITES=(
     spike/test_kernel.py
     spike/test_local_brep_move.py
     spike/test_native_local_brep_replay.py
+    spike/test_meshed_master_transform.py
     spike/test_curve_inputs.py
     spike/test_curve_consumer_inputs.py
     spike/test_variable_edge_fillet.py

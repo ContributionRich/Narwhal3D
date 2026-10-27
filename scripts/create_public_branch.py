@@ -62,7 +62,7 @@ SCRIPT_FILES = (
 TEST_FILES = (
     "spike/audit_representation.py", "spike/_roundtrip_reader.py",
     "spike/test_geometry.py", "spike/test_local_brep_move.py",
-    "spike/test_native_local_brep_replay.py",
+    "spike/test_native_local_brep_replay.py", "spike/test_meshed_master_transform.py",
     "spike/test_kernel.py", "spike/test_primitives.py",
     "spike/test_picture.py", "spike/test_cmdbar_hits.py",
     "spike/test_extrude_distance.py", "spike/test_extrude_options.py",
@@ -73,6 +73,7 @@ TEST_FILES = (
     "spike/test_sweep.py", "spike/test_loft.py", "spike/test_interpolate.py",
     "spike/test_surface_cmds.py", "spike/test_cage_edit.py",
     "spike/test_picture_display.py", "spike/test_gumball_region_extrude.py",
+    "spike/test_gumball_extrude_scale_gui.py",
     "spike/test_bug102_live.py", "spike/test_local_move_scale.py",
     "spike/test_bug103_curved_move.py", "spike/test_bug104_subobject_move.py",
     "spike/test_bug105.py", "spike/test_bug106.py", "spike/test_bug108.py",
