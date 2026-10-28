@@ -10,7 +10,7 @@ Draw with the mouse, type a command, or choose a tool from the sidebar. Work in 
 
 ## Your workspace, light or dark
 
-The same model in **Narwhal 3D 0.4.7**. These are real application screenshots, not mockups.
+The same model in **Narwhal 3D 0.4.7**. 
 
 ### Light
 
