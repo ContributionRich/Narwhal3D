@@ -4,11 +4,21 @@ This directory defines the fail-closed AppImage scaffold for the public Narwhal 
 
 ## Early-prerelease version and host baseline
 
-Narwhal 3D remains an extremely early prerelease. The assembler and verifier accept only `0.4.x` package versions until the project owner explicitly lifts that cap; this release is `0.4.7`, not `0.5.0`. Its Linux asset is `Narwhal_3D-0.4.7-x86_64.AppImage`. Publication waits for the final asset gates; Windows compilation and validation are separate from the Linux results below.
+Narwhal 3D remains an extremely early prerelease. The assembler and verifier accept only `0.4.x` package versions until the project owner explicitly lifts that cap; this release is `0.4.7`, not `0.5.0`. Its Linux asset is `Narwhal_3D-0.4.7-x86_64.AppImage`. Final shipping-asset gates passed for both platforms; Windows build and acceptance evidence is recorded separately in [the Windows guide](../docs/windows-build.md).
 
 A release runtime must also require no newer than **GLIBC 2.35**, the baseline from Ubuntu 22.04 (the oldest Ubuntu LTS still in standard support in 2026). Every regular ELF in the runtime is checked with `readelf --version-info` before assembly and again after extraction. This gate exists because the 0.4.0 runtime was built on glibc 2.43 and the AppImage catalog measured immediate startup failure on its older supported test system. Build native Linux release runtimes in an Ubuntu 22.04 container or equivalent old supported base; assembling on a newer host does not make a newer-linked executable portable.
 
 The 0.4.7 AppImage has been built and its inventory verified: all 290 bundled ELFs require at most GLIBC 2.28. Its portable native runtime and welcome have been rebuilt with the current UI patches and matching native components. The separate source-development runtime and welcome still require GLIBC 2.43 and must not ship. Use `--version 0.4.7` for assembly and `--expected-version 0.4.7` for verification; every reassembled final candidate must pass the same gates.
+
+## Shipping 0.4.7 source and evidence
+
+The AppImage is **437,832,184 bytes**, SHA-256 `6097aa60cdc8702e59370f83b66d13a6de42da2c3b10c0a4cc3cded753cd67a9`. Both shipping assets use frozen public source revision `94534c954dc77f1f1d22f2be6064bedcc8cd1f5b`, source epoch `1793144099`. The release tag identifies that asset-build revision; this documentation follow-up does not require a repackage. See [both asset checksums](../README.md#release-source-and-integrity).
+
+Final Linux source release gates, including the full suite, passed. The AppDir and actual extracted-AppImage verifiers passed before and after package acceptance, checking source binding, native provenance, imports and inventory. All 809 packaged source/license/launcher files match the frozen source; all nine native components match verified artifacts. Negative controls rejected wrong revisions, epochs and source/native/runtime hashes.
+
+Actual shipping-archive GUI acceptance used NVIDIA/OpenGL: Gumball mouse extrusion then scale 24/24, render quality 47/47, preferences write/restore 183/193 checks, window overlays 105/105, component/fillet interaction 74/74, and shell interaction 73/73. Background Gumball checks passed 47/47 and all 28 meshed-master transform/round-trip combinations passed. Clean-copy and overlay mutations went RED; restored production paths passed. All 8,650 extraction inventory entries and the final archive digest remained unchanged.
+
+The AppImage is unsigned: a SHA-256 checksum is integrity evidence, not publisher authentication. Pristine Ubuntu-desktop and optional GPU-backend acceptance remain open. Standard desktop libraries and optional AMD HIP/Intel Level Zero drivers remain host-provided; the GLIBC ceiling does not certify those environments.
 
 ## Development runtime is not publishable
 
@@ -68,6 +78,6 @@ The assembler invokes only the locked appimagetool with `--appimage-extract-and-
 
 The public lock does not yet pin the Blender source archive, precompiled dependency archives, compiler/container image, or complete native build dependency graph. Therefore `.github/workflows/linux-release.yml` validates only the public source and packaging scaffold. It intentionally does **not** download an official runtime, build an AppImage, or upload a release artifact.
 
-Publishing 0.4.7 remains gated on the final sanitized public source tree and assets: excluded-payload, native marker, branding, dependency import, AppDir, and extracted-AppImage verification must all pass for the frozen candidate. The measured Linux build and inventory checks do not waive the final candidate followup or full test run. Windows requires its own full compile, source/inventory verification and extracted-ZIP acceptance. The scaffold does not claim byte-for-byte native build reproducibility or complete native CI toolchain locking.
+The frozen 0.4.7 shipping candidate passed the final sanitized-source and asset gates: excluded-payload, native marker, branding, dependency import, AppDir and extracted-AppImage verification, plus the full source suite and packaged acceptance described above. Windows independently passed its engineering build, directory/ZIP verification and extracted-ZIP acceptance; its software-rendered VM GUI evidence does not certify a physical GPU. Future candidates still require their own gates. The scaffold does not claim byte-for-byte native build reproducibility or complete native CI toolchain locking.
 
 See `NOTICES.md` for required notices and deliberately excluded components.

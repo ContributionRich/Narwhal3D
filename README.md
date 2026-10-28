@@ -29,7 +29,7 @@ Narwhal's active project format is `.narwhal`: a dependency-free Rust-validated 
 
 **Release: 0.4.7.** The Linux x86_64 asset is `Narwhal_3D-0.4.7-x86_64.AppImage`.
 
-The 0.4.7 AppImage has been built and its inventory verified. All 290 bundled ELFs were measured to require at most glibc 2.28, below the Ubuntu 22.04/glibc 2.35 compatibility ceiling enforced by the release verifier.
+The 0.4.7 AppImage has been built and its inventory verified. Final Linux source release gates, including the full suite, and AppDir/extracted-AppImage verification passed. Actual extracted-package GUI checks passed on NVIDIA/OpenGL, including Gumball extrusion then scale (24/24), rendering (47/47), preferences write/restore (183/193 checks), and window overlays (105/105). All 290 bundled ELFs were measured to require at most glibc 2.28, below the Ubuntu 22.04/glibc 2.35 compatibility ceiling enforced by the release verifier. This does not certify a pristine Ubuntu desktop or optional GPU backends; those checks remain open. The AppImage is unsigned.
 
 Make the AppImage executable and run it directly:
 
@@ -44,7 +44,18 @@ The AppImage contains the native startup welcome window, natively branded runtim
 
 The Windows asset name for 0.4.7 is `Narwhal_3D-0.4.7-Windows-x86_64.zip`. Extract the complete folder and start `Narwhal3D.exe`; the native welcome window remains visible while the bundled runtime initializes. Do not move that executable away from its adjacent `app` and `runtime` folders.
 
-This is an unsigned, portable **early preview**, not an installer or supported production build. Windows SmartScreen may require **More info → Run anyway**. The launcher has original Narwhal icon/version resources, but the 0.4.7 full Windows compile and extracted-ZIP validation are pending; no new Windows validation pass is claimed. Historical native Windows and offline Wine headless checks passed for 0.4.6 only. Physical-GPU/real-window acceptance remains open, and the internal viewport runtime still retains some Blender-derived PE resource strings/icons. There are no file associations or automatic installation yet. See the [platform limitations](docs/windows-build.md); publication waits for the final asset gates.
+This is an unsigned, portable **early preview**, not an installer or supported production build. Windows SmartScreen may require **More info → Run anyway**. The 0.4.7 engineering build completed using a verified, unchanged native runtime; directory and ZIP verifiers passed. Actual extracted-final-ZIP WinBoat acceptance passed: Gumball mouse press/drag/release (24/24), preferences write/restore (184/194 checks), window overlays (112/112), and all six representation gates. GUI acceptance used temporary Mesa llvmpipe software rendering, not a simulated UI; it is **not physical-GPU certification**. The temporary driver was removed and the exact package inventory restored; it is not bundled. Physical-GPU acceptance remains open. The launcher has original Narwhal icon/version resources, but the internal viewport runtime retains some Blender-derived PE resource strings/icons. There are no file associations or automatic installation yet. See the [platform evidence and limitations](docs/windows-build.md).
+
+## Release source and integrity
+
+Both 0.4.7 shipping assets were assembled from public source revision `94534c954dc77f1f1d22f2be6064bedcc8cd1f5b`, source epoch `1793144099`. The release tag identifies that asset-build revision; this documentation follow-up is separate from the build, not a repackage or a change to the assets' source identity.
+
+| Asset | Bytes | SHA-256 |
+|---|---:|---|
+| `Narwhal_3D-0.4.7-x86_64.AppImage` | 437,832,184 | `6097aa60cdc8702e59370f83b66d13a6de42da2c3b10c0a4cc3cded753cd67a9` |
+| `Narwhal_3D-0.4.7-Windows-x86_64.zip` | 355,197,176 | `23015f7338358f7fd62fcabada325bd615d06f0eb9f0898cac3279d0eb638290` |
+
+SHA-256 checks integrity, not publisher authentication. Neither asset is cryptographically signed.
 
 ## Experimental macOS source build
 

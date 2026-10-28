@@ -58,20 +58,19 @@ status = (ROOT / "STATUS.md").read_text(encoding="utf-8")
 check("**Release: 0.4.7.**" in status
       and "Narwhal_3D-0.4.7-x86_64.AppImage" in status
       and "Narwhal_3D-0.4.7-Windows-x86_64.zip" in status
-      and "full suite passed on the preceding source snapshot" in status
-      and "fixture followups passed focused checks and mutation tests" in status
-      and "full tests are still required after the metadata freeze" in status
-      and "publication waits for the final asset gates" in status,
-      "STATUS identifies 0.4.7 without certifying the frozen candidate")
+      and "Final Linux source release gates, including the full suite" in status
+      and "AppDir/extracted-AppImage verification passed" in status
+      and "Package inventory and archive digest were unchanged after acceptance" in status,
+      "STATUS identifies 0.4.7 and records completed frozen-candidate Linux gates")
 packaging = (ROOT / "packaging/README.md").read_text(encoding="utf-8")
 check("this release is `0.4.7`" in packaging
       and "Narwhal_3D-0.4.7-x86_64.AppImage" in packaging
       and "--version 0.4.7" in packaging
       and "--expected-version 0.4.7" in packaging
-      and "Publishing 0.4.7 remains gated on the final sanitized public source tree and assets" in packaging
-      and "do not waive the final candidate followup or full test run" in packaging
+      and "frozen 0.4.7 shipping candidate passed the final sanitized-source and asset gates" in packaging
+      and "Future candidates still require their own gates" in packaging
       and "does not claim byte-for-byte native build reproducibility" in packaging,
-      "packaging guide pins 0.4.7 and retains frozen-candidate publication gates")
+      "packaging guide pins 0.4.7 and distinguishes completed gates from future builds")
 changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
 release_notes = changelog.split("## 0.4.6 —", 1)[0]
 check("## 0.4.7 — 2026-10-27\n" in release_notes
@@ -85,9 +84,11 @@ check(all(term in release_notes for term in (
     "Theme and visibility preferences", "tooltips", "light/dark palette",
     "status bar", "Gumball", "window-level overlay", "CPlane grids",
     "layer colour picker", "all six geometry gates",
-    "full suite passed on the preceding source snapshot",
-    "fixture followups passed focused checks and mutation tests",
-    "remain publication gates after the metadata freeze",
+    "Gumball-created curve extrusions now scale correctly after being displayed",
+    "detached exact master without inherited display triangulation",
+    "Final Linux source release gates, including the full suite",
+    "AppDir/extracted-AppImage verification passed",
+    "clean-copy and overlay mutations went RED",
 )), "0.4.7 release notes retain feature, fix and validation coverage")
 for name, text in (("README", readme), ("STATUS", status),
                    ("packaging guide", packaging), ("changelog", release_notes)):
@@ -162,20 +163,53 @@ check("0.4.7 Windows x86_64 portable ZIP" in windows_guide
       and "-Version 0.4.7" in windows_guide
       and "-Version 0.4.6" not in windows_guide
       and "## Platform limitations" in windows_guide
-      and "Publication waits for the full compile, source/inventory verification and packaged acceptance gates" in windows_guide
-      and "passed for the published 0.4.6 ZIP only" in windows_guide
-      and "those results do not certify 0.4.7" in windows_guide,
-      "Windows guide targets 0.4.7 while retaining platform-specific acceptance gates")
+      and "shipping 0.4.7 ZIP passed those gates" in windows_guide
+      and "not a claim of a fresh full runtime compile" in windows_guide
+      and "7,705-file package inventory restored" in windows_guide
+      and "Neither driver DLL is in the shipping ZIP" in windows_guide
+      and "that result does not certify a newly assembled candidate" in windows_guide,
+      "Windows guide records verified runtime reuse, acceptance and exact inventory restoration")
 for name, text in (("README", readme), ("STATUS", status),
                    ("Windows guide", windows_guide), ("changelog", release_notes)):
     lower = text.lower()
-    check("0.4.7 full windows compile and extracted-zip validation are pending" in lower
-          and "no new windows validation pass is claimed" in lower
+    check("engineering build completed using a verified, unchanged native runtime" in lower
+          and "directory and zip verifiers passed" in lower
+          and "actual extracted-final-zip winboat acceptance passed" in lower
+          and "all six representation gates" in lower
           and "unsigned" in lower and "portable" in lower
           and "early preview" in lower.replace("**", "")
-          and "physical-gpu/real-window acceptance" in lower
+          and "physical-gpu acceptance" in lower
           and "file associations" in lower,
-          f"{name} keeps Windows preview limitations and does not transfer Linux certification")
+          f"{name} records independent Windows acceptance without dropping preview limitations")
+    check("temporary mesa llvmpipe software rendering" in lower
+          and "not physical-gpu certification" in lower.replace("**", "")
+          and "temporary driver was removed" in lower
+          and "package inventory restored" in lower,
+          f"{name} distinguishes real VM GUI acceptance from physical-GPU certification")
+for name, text in (("README", readme), ("STATUS", status),
+                   ("packaging guide", packaging), ("changelog", release_notes)):
+    lower = text.lower()
+    check("pristine ubuntu-desktop" in lower or "pristine ubuntu desktop" in lower,
+          f"{name} retains the untested clean-Ubuntu limitation")
+    check("optional gpu-backend" in lower or "optional gpu backend" in lower,
+          f"{name} retains optional GPU-backend limitations")
+    check("unsigned" in lower and "full suite" in lower,
+          f"{name} records full Linux source gates without implying a signed AppImage")
+for name, text, size, digest in (
+    ("README Linux", readme, "437,832,184", "6097aa60cdc8702e59370f83b66d13a6de42da2c3b10c0a4cc3cded753cd67a9"),
+    ("README Windows", readme, "355,197,176", "23015f7338358f7fd62fcabada325bd615d06f0eb9f0898cac3279d0eb638290"),
+    ("packaging guide", packaging, "437,832,184", "6097aa60cdc8702e59370f83b66d13a6de42da2c3b10c0a4cc3cded753cd67a9"),
+    ("Windows guide", windows_guide, "355,197,176", "23015f7338358f7fd62fcabada325bd615d06f0eb9f0898cac3279d0eb638290"),
+):
+    check(size in text and f"`{digest}`" in text,
+          f"{name} pins the shipping asset size and SHA-256")
+for name, text in (("README", readme), ("STATUS", status), ("changelog", release_notes)):
+    check(all(term in text for term in ("24/24", "184/194", "112/112")),
+          f"{name} records actual Windows Gumball, preferences and overlay counts")
+check(all(term in windows_guide for term in (
+    "24/24", "184 checks", "194 checks", "112/112", "47/47", "28/28",
+    "Mesa 26.2.4 llvmpipe", "OpenGL 4.6", "fresh-process write/reopen",
+)), "Windows guide retains the measured extracted-package acceptance detail")
 for name, text in (("README", readme), ("STATUS", status),
                    ("packaging guide", packaging), ("Windows guide", windows_guide),
                    ("changelog", release_notes)):
@@ -184,8 +218,20 @@ for name, text in (("README", readme), ("STATUS", status),
           and "0.4.7` is in preparation" not in text
           and "0.4.7 in preparation" not in text
           and "0.4.7 — pending release" not in text
-          and "no 0.4.7 assets are available yet" not in text.lower(),
+          and "no 0.4.7 assets are available yet" not in text.lower()
+          and not any(stale in text.lower() for stale in (
+              "full windows compile and extracted-zip validation are pending",
+              "no new windows validation pass is claimed",
+              "full tests are still required after the metadata freeze",
+              "publication waits for", "remain publication gates after the metadata freeze",
+              "publishing 0.4.7 remains gated", "physical-gpu/real-window acceptance",
+          )),
           f"{name} has no stale asset filenames or pending-release framing")
+    check("94534c954dc77f1f1d22f2be6064bedcc8cd1f5b" in text
+          and "1793144099" in text
+          and "asset-build revision" in text
+          and "documentation follow-up" in text,
+          f"{name} separates frozen asset source/epoch from the documentation follow-up")
 check((ROOT / ".github/PULL_REQUEST_TEMPLATE.md").is_file()
       and (ROOT / ".github/CODEOWNERS").is_file(),
       "pull-request guidance and review ownership are present")

@@ -6,7 +6,7 @@ All notable public changes will be recorded here. Narwhal 3D is an extremely ear
 
 ## 0.4.7 — 2026-10-27
 
-Changes since historical public v0.4.6 (`5a40d6d1eee16b26f4e6b5714862c711cafad797`). Release assets are named `Narwhal_3D-0.4.7-x86_64.AppImage` and `Narwhal_3D-0.4.7-Windows-x86_64.zip`; the platform evidence and remaining gates are recorded below.
+Changes since historical public v0.4.6 (`5a40d6d1eee16b26f4e6b5714862c711cafad797`). Release assets are named `Narwhal_3D-0.4.7-x86_64.AppImage` and `Narwhal_3D-0.4.7-Windows-x86_64.zip`. Both use public source revision `94534c954dc77f1f1d22f2be6064bedcc8cd1f5b`, source epoch `1793144099`; the release tag stays on that asset-build revision. This documentation follow-up does not repackage the assets. See [checksums and sizes](README.md#release-source-and-integrity); platform evidence and remaining limitations follow.
 
 ### Added
 
@@ -46,8 +46,8 @@ Changes since historical public v0.4.6 (`5a40d6d1eee16b26f4e6b5714862c711cafad79
 ### Packaging and platform limitations
 
 - The Linux 0.4.7 AppImage has been built and its inventory verified. All 290 bundled ELFs require at most GLIBC 2.28, below the GLIBC 2.35 release ceiling. The portable runtime and welcome contain the current native UI patches; the separate GLIBC 2.43 source-development executables must not ship.
-- Linux UI, rendering, preferences and window-overlay checks are green. The full suite passed on the preceding source snapshot; subsequent fixture followups passed focused checks and mutation tests. Final candidate followup, full tests, audited public source and packaged acceptance checks remain publication gates after the metadata freeze.
-- Windows remains an unsigned, portable early preview. The 0.4.7 full Windows compile and extracted-ZIP validation are pending; no new Windows validation pass is claimed. Source/inventory verification is required independently of Linux. Physical-GPU/real-window acceptance, complete internal PE identity cleanup, installer/file associations and optional signing remain open. Historical 0.4.6 Windows results do not certify 0.4.7.
+- Final Linux source release gates, including the full suite, and AppDir/extracted-AppImage verification passed. Actual shipping-archive NVIDIA/OpenGL acceptance passed Gumball mouse extrusion then scale (24/24), rendering (47/47), preferences write/restore (183/193 checks), window overlays (105/105), component/fillet interaction (74/74), and shell interaction (73/73). All 28 meshed-master transform/round-trip combinations passed; clean-copy and overlay mutations went RED, then restored paths passed. The package inventory and archive digest stayed unchanged. Pristine Ubuntu-desktop and optional GPU-backend acceptance remain open; the AppImage is unsigned.
+- Windows remains an unsigned, portable early preview, not an installer. The 0.4.7 engineering build completed using a verified, unchanged native runtime; directory and ZIP verifiers passed. Actual extracted-final-ZIP WinBoat acceptance passed Gumball mouse press/drag/release (24/24), preferences write/restore (184/194 checks), window overlays (112/112), all 28 meshed-master transform/round-trip combinations, and all six representation gates. GUI acceptance used temporary Mesa llvmpipe software rendering, not a simulated UI; it is not physical-GPU certification. The temporary driver was removed and the exact package inventory restored; no test driver ships. Physical-GPU acceptance, complete internal PE identity cleanup, installer/file associations and optional signing remain open.
 
 ## 0.4.6 — 2026-10-24
 
