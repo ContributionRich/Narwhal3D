@@ -224,14 +224,27 @@ else:
     icon_spec.loader.exec_module(icon_module)
     check(icon_module.ICON_FILENAME == "narwhal3d.png",
           "icon generator must output narwhal3d.png")
-    check(icon_module.OCEAN != icon_module.WHALE != icon_module.TUSK,
-          "narwhal icon must retain distinct ocean, whale, and tusk colors")
+    check(str(icon_module.SOURCE_PNG) == "artwork/Logo/narwhal.png"
+          and str(icon_module.SOURCE_SVG) == "artwork/Logo/narwhal_vector.svg",
+          "icon generator must consume the supplied canonical raster and vector logos")
 native_icon = os.path.join(ROOT, "blender_patches", "narwhal3d_app_icon.svg")
 check(os.path.isfile(native_icon), "native narwhal SVG is missing")
 if os.path.isfile(native_icon):
     native_icon_text = open(native_icon, encoding="utf-8").read()
-    check("<circle" in native_icon_text and native_icon_text.count("<path") >= 3,
-          "native icon must contain the original narwhal body, tusk, eye, and mouth art")
+    canonical_svg = os.path.join(ROOT, "artwork", "Logo", "narwhal_vector.svg")
+    check(native_icon_text == open(canonical_svg, encoding="utf-8").read(),
+          "native icon must exactly match the supplied vector logo")
+    elements = tuple(ET.fromstring(native_icon_text).iter())
+    palette = {element.get("stop-color") for element in elements if element.get("stop-color")}
+    shapes = [element for element in elements
+              if element.tag.rsplit("}", 1)[-1] in ("path", "circle", "ellipse", "rect", "polygon")]
+    check(len(palette) >= 4 and len(shapes) >= 3,
+          "supplied logo retains its gradients and vector artwork, including path-based shapes")
+
+readme_text = open(os.path.join(ROOT, "README.md"), encoding="utf-8").read()
+check('src="artwork/Logo/narwhal_vector.svg"' in readme_text
+      and 'alt="Narwhal 3D logo"' in readme_text,
+      "README must display the canonical vector logo with an accessible label")
 
 # Native patch: exercise a stock source fixture; never touch ignored source.
 native_path = os.path.join(ROOT, "blender_patches", "apply_narwhal3d_branding.py")

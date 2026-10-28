@@ -188,6 +188,8 @@ ALLOWED_IMAGES = (
     "docs/images/workspace-light.png",
     "docs/images/workspace-dark.png",
     "artwork/icons/*.png",
+    "artwork/Logo/narwhal.png",
+    "artwork/Logo/narwhal_vector.svg",
     "narwhal3d/icons/narwhal-*.png",
     "blender_patches/narwhal3d_app_icon.svg",
     "packaging/windows/*.ico",

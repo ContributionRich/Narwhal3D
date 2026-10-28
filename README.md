@@ -1,6 +1,10 @@
-# Narwhal 3D
+<p align="center">
+  <img src="artwork/Logo/narwhal_vector.svg" width="112" height="112" alt="Narwhal 3D logo">
+</p>
 
-**Free, open-source CAD for precise curves, smooth surfaces, and solid models.**
+<h1 align="center">Narwhal 3D</h1>
+
+<p align="center"><strong>Free, open-source CAD for precise curves, smooth surfaces, and solid models.</strong></p>
 
 Draw with the mouse, type a command, or choose a tool from the sidebar. Work in four views at once, shape your model with on-screen handles, and choose a light or dark workspace.
 
@@ -10,7 +14,7 @@ Draw with the mouse, type a command, or choose a tool from the sidebar. Work in 
 
 ## Your workspace, light or dark
 
-The same model in **Narwhal 3D 0.4.7**. 
+The same model in **Narwhal 3D 0.4.7**.
 
 ### Light
 
