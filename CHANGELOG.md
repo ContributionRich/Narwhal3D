@@ -6,7 +6,7 @@ All notable public changes will be recorded here. Narwhal 3D is an extremely ear
 
 ## 0.4.7 — 2026-10-27
 
-Changes since historical public v0.4.6 (`5a40d6d1eee16b26f4e6b5714862c711cafad797`). Release assets are named `Narwhal_3D-0.4.7-x86_64.AppImage` and `Narwhal_3D-0.4.7-Windows-x86_64.zip`. Both use public source revision `94534c954dc77f1f1d22f2be6064bedcc8cd1f5b`, source epoch `1793144099`; the release tag stays on that asset-build revision. This documentation follow-up does not repackage the assets. See [checksums and sizes](README.md#release-source-and-integrity); platform evidence and remaining limitations follow.
+Changes since historical public v0.4.6 (`5a40d6d1eee16b26f4e6b5714862c711cafad797`). Release assets are named `Narwhal_3D-0.4.7-x86_64.AppImage` and `Narwhal_3D-0.4.7-Windows-x86_64.zip`. Both use public source revision `94534c954dc77f1f1d22f2be6064bedcc8cd1f5b`, source epoch `1793144099`; the release tag stays on that asset-build revision. This documentation follow-up does not repackage the assets. See [checksums and sizes](docs/technical-reference.md#release-source-and-integrity); platform evidence and remaining limitations follow.
 
 ### Added
 

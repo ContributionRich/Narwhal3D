@@ -123,11 +123,15 @@ try:
               "source boundary refuses to claim linked-binary redistribution clearance")
         with open(os.path.join(ROOT, "README.md"), encoding="utf-8") as stream:
             root_readme = stream.read()
+        with open(os.path.join(ROOT, "docs", "technical-reference.md"), encoding="utf-8") as stream:
+            technical_reference = stream.read()
         with open(os.path.join(ROOT, "STATUS.md"), encoding="utf-8") as stream:
             status_text = stream.read()
-        check("still do **not** bundle" in root_readme
+        check("Some solids cannot yet be exported as exact `.3dm` geometry" in root_readme
+              and "docs/technical-reference.md#geometry-model" in root_readme
+              and "still do **not** bundle" in technical_reference
               and "Published binaries do not bundle" in status_text,
-              "public product documentation keeps packaged exact-save limitations explicit")
+              "README summarizes exact-save limits and links the preserved helper disclosure")
         self_check = subprocess.run(
             [BUILD_PATH, "--self-check"], capture_output=True, text=True, timeout=20)
         verifier_check = subprocess.run(

@@ -12,7 +12,7 @@ The 0.4.7 AppImage has been built and its inventory verified: all 290 bundled EL
 
 ## Shipping 0.4.7 source and evidence
 
-The AppImage is **437,832,184 bytes**, SHA-256 `6097aa60cdc8702e59370f83b66d13a6de42da2c3b10c0a4cc3cded753cd67a9`. Both shipping assets use frozen public source revision `94534c954dc77f1f1d22f2be6064bedcc8cd1f5b`, source epoch `1793144099`. The release tag identifies that asset-build revision; this documentation follow-up does not require a repackage. See [both asset checksums](../README.md#release-source-and-integrity).
+The AppImage is **437,832,184 bytes**, SHA-256 `6097aa60cdc8702e59370f83b66d13a6de42da2c3b10c0a4cc3cded753cd67a9`. Both shipping assets use frozen public source revision `94534c954dc77f1f1d22f2be6064bedcc8cd1f5b`, source epoch `1793144099`. The release tag identifies that asset-build revision; this documentation follow-up does not require a repackage. See [both asset checksums](../docs/technical-reference.md#release-source-and-integrity).
 
 Final Linux source release gates, including the full suite, passed. The AppDir and actual extracted-AppImage verifiers passed before and after package acceptance, checking source binding, native provenance, imports and inventory. All 809 packaged source/license/launcher files match the frozen source; all nine native components match verified artifacts. Negative controls rejected wrong revisions, epochs and source/native/runtime hashes.
 

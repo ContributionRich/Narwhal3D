@@ -1,0 +1,556 @@
+{
+  "snapshots": [
+    {
+      "theme": "light",
+      "document": [
+        {
+          "id": "caa80444-eb86-b042-afa7-d5081d28dd3d",
+          "name": "Bearing mount1",
+          "layer": 1,
+          "recipe_bytes": "{\"a\": {\"a\": {\"a\": {\"a\": {\"a\": {\"a\": {\"a\": {\"dx\": 80.0, \"dy\": 48.0, \"dz\": 14.0, \"kind\": \"box\", \"xform\": [1.0, 0.0, 0.0, -40.0, 0.0, 1.0, 0.0, -24.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0]}, \"kind\": \"fillet\", \"size\": 2.0}, \"b\": {\"height\": 16.0, \"kind\": \"cylinder\", \"radius\": 16.0, \"xform\": [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 12.0, 0.0, 0.0, 0.0, 1.0]}, \"kind\": \"boolean\", \"op\": \"UNION\"}, \"b\": {\"height\": 34.0, \"kind\": \"cylinder\", \"radius\": 3.5, \"xform\": [1.0, 0.0, 0.0, -28.0, 0.0, 1.0, 0.0, -14.0, 0.0, 0.0, 1.0, -2.0, 0.0, 0.0, 0.0, 1.0]}, \"kind\": \"boolean\", \"op\": \"DIFFERENCE\"}, \"b\": {\"height\": 34.0, \"kind\": \"cylinder\", \"radius\": 3.5, \"xform\": [1.0, 0.0, 0.0, -28.0, 0.0, 1.0, 0.0, 14.0, 0.0, 0.0, 1.0, -2.0, 0.0, 0.0, 0.0, 1.0]}, \"kind\": \"boolean\", \"op\": \"DIFFERENCE\"}, \"b\": {\"height\": 34.0, \"kind\": \"cylinder\", \"radius\": 3.5, \"xform\": [1.0, 0.0, 0.0, 28.0, 0.0, 1.0, 0.0, -14.0, 0.0, 0.0, 1.0, -2.0, 0.0, 0.0, 0.0, 1.0]}, \"kind\": \"boolean\", \"op\": \"DIFFERENCE\"}, \"b\": {\"height\": 34.0, \"kind\": \"cylinder\", \"radius\": 3.5, \"xform\": [1.0, 0.0, 0.0, 28.0, 0.0, 1.0, 0.0, 14.0, 0.0, 0.0, 1.0, -2.0, 0.0, 0.0, 0.0, 1.0]}, \"kind\": \"boolean\", \"op\": \"DIFFERENCE\"}, \"b\": {\"height\": 34.0, \"kind\": \"cylinder\", \"radius\": 10.0, \"xform\": [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, -2.0, 0.0, 0.0, 0.0, 1.0]}, \"kind\": \"boolean\", \"op\": \"DIFFERENCE\"}",
+          "geometry_sha256": "60cab27d3586c0f0038712df973292f8ff22f02283506b3ac6a7a8b038a8bf81"
+        },
+        {
+          "id": "9113394a-7e6c-264c-bfdf-3736552f9553",
+          "name": "Bore profile1",
+          "layer": 2,
+          "recipe_bytes": "",
+          "geometry_sha256": "43a565f99594e8828231316a5bff12a6ea5082fbade0bb4d6e8c39449f57e026"
+        }
+      ],
+      "views": {
+        "Perspective": {
+          "mode": "Shaded",
+          "location": [
+            0.0,
+            0.0,
+            17.0
+          ],
+          "rotation": [
+            0.8365179896354675,
+            0.4829620122909546,
+            0.12940600514411926,
+            0.224139004945755
+          ],
+          "distance": 148.74998474121094,
+          "projection": "PERSP",
+          "lens": 50.0,
+          "area": [
+            889,
+            437,
+            765,
+            400
+          ]
+        },
+        "Top": {
+          "mode": "Shaded",
+          "location": [
+            0.0,
+            0.0,
+            17.0
+          ],
+          "rotation": [
+            1.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "distance": 149.1388702392578,
+          "projection": "ORTHO",
+          "lens": 50.0,
+          "area": [
+            121,
+            437,
+            767,
+            400
+          ]
+        },
+        "Front": {
+          "mode": "Shaded",
+          "location": [
+            0.0,
+            0.0,
+            17.0
+          ],
+          "rotation": [
+            0.7071067690849304,
+            0.7071067690849304,
+            -0.0,
+            -0.0
+          ],
+          "distance": 148.3968963623047,
+          "projection": "ORTHO",
+          "lens": 50.0,
+          "area": [
+            121,
+            34,
+            767,
+            402
+          ]
+        },
+        "Right": {
+          "mode": "Shaded",
+          "location": [
+            0.0,
+            0.0,
+            17.0
+          ],
+          "rotation": [
+            0.5,
+            0.5,
+            0.5,
+            0.5
+          ],
+          "distance": 148.0099334716797,
+          "projection": "ORTHO",
+          "lens": 50.0,
+          "area": [
+            889,
+            34,
+            765,
+            402
+          ]
+        }
+      },
+      "viewport_backgrounds": {
+        "Perspective": [
+          0.4019777774810791,
+          0.46207699179649353,
+          0.533276379108429
+        ],
+        "Top": [
+          0.4019777774810791,
+          0.46207699179649353,
+          0.533276379108429
+        ],
+        "Front": [
+          0.4019777774810791,
+          0.46207699179649353,
+          0.533276379108429
+        ],
+        "Right": [
+          0.4019777774810791,
+          0.46207699179649353,
+          0.533276379108429
+        ]
+      },
+      "window": [
+        1920,
+        1006
+      ],
+      "selected": [],
+      "bands_visible": true
+    },
+    {
+      "theme": "dark",
+      "document": [
+        {
+          "id": "caa80444-eb86-b042-afa7-d5081d28dd3d",
+          "name": "Bearing mount1",
+          "layer": 1,
+          "recipe_bytes": "{\"a\": {\"a\": {\"a\": {\"a\": {\"a\": {\"a\": {\"a\": {\"dx\": 80.0, \"dy\": 48.0, \"dz\": 14.0, \"kind\": \"box\", \"xform\": [1.0, 0.0, 0.0, -40.0, 0.0, 1.0, 0.0, -24.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0]}, \"kind\": \"fillet\", \"size\": 2.0}, \"b\": {\"height\": 16.0, \"kind\": \"cylinder\", \"radius\": 16.0, \"xform\": [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 12.0, 0.0, 0.0, 0.0, 1.0]}, \"kind\": \"boolean\", \"op\": \"UNION\"}, \"b\": {\"height\": 34.0, \"kind\": \"cylinder\", \"radius\": 3.5, \"xform\": [1.0, 0.0, 0.0, -28.0, 0.0, 1.0, 0.0, -14.0, 0.0, 0.0, 1.0, -2.0, 0.0, 0.0, 0.0, 1.0]}, \"kind\": \"boolean\", \"op\": \"DIFFERENCE\"}, \"b\": {\"height\": 34.0, \"kind\": \"cylinder\", \"radius\": 3.5, \"xform\": [1.0, 0.0, 0.0, -28.0, 0.0, 1.0, 0.0, 14.0, 0.0, 0.0, 1.0, -2.0, 0.0, 0.0, 0.0, 1.0]}, \"kind\": \"boolean\", \"op\": \"DIFFERENCE\"}, \"b\": {\"height\": 34.0, \"kind\": \"cylinder\", \"radius\": 3.5, \"xform\": [1.0, 0.0, 0.0, 28.0, 0.0, 1.0, 0.0, -14.0, 0.0, 0.0, 1.0, -2.0, 0.0, 0.0, 0.0, 1.0]}, \"kind\": \"boolean\", \"op\": \"DIFFERENCE\"}, \"b\": {\"height\": 34.0, \"kind\": \"cylinder\", \"radius\": 3.5, \"xform\": [1.0, 0.0, 0.0, 28.0, 0.0, 1.0, 0.0, 14.0, 0.0, 0.0, 1.0, -2.0, 0.0, 0.0, 0.0, 1.0]}, \"kind\": \"boolean\", \"op\": \"DIFFERENCE\"}, \"b\": {\"height\": 34.0, \"kind\": \"cylinder\", \"radius\": 10.0, \"xform\": [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, -2.0, 0.0, 0.0, 0.0, 1.0]}, \"kind\": \"boolean\", \"op\": \"DIFFERENCE\"}",
+          "geometry_sha256": "60cab27d3586c0f0038712df973292f8ff22f02283506b3ac6a7a8b038a8bf81"
+        },
+        {
+          "id": "9113394a-7e6c-264c-bfdf-3736552f9553",
+          "name": "Bore profile1",
+          "layer": 2,
+          "recipe_bytes": "",
+          "geometry_sha256": "43a565f99594e8828231316a5bff12a6ea5082fbade0bb4d6e8c39449f57e026"
+        }
+      ],
+      "views": {
+        "Perspective": {
+          "mode": "Shaded",
+          "location": [
+            0.0,
+            0.0,
+            17.0
+          ],
+          "rotation": [
+            0.8365179896354675,
+            0.4829620122909546,
+            0.12940600514411926,
+            0.224139004945755
+          ],
+          "distance": 148.74998474121094,
+          "projection": "PERSP",
+          "lens": 50.0,
+          "area": [
+            889,
+            437,
+            765,
+            400
+          ]
+        },
+        "Top": {
+          "mode": "Shaded",
+          "location": [
+            0.0,
+            0.0,
+            17.0
+          ],
+          "rotation": [
+            1.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "distance": 149.1388702392578,
+          "projection": "ORTHO",
+          "lens": 50.0,
+          "area": [
+            121,
+            437,
+            767,
+            400
+          ]
+        },
+        "Front": {
+          "mode": "Shaded",
+          "location": [
+            0.0,
+            0.0,
+            17.0
+          ],
+          "rotation": [
+            0.7071067690849304,
+            0.7071067690849304,
+            -0.0,
+            -0.0
+          ],
+          "distance": 148.3968963623047,
+          "projection": "ORTHO",
+          "lens": 50.0,
+          "area": [
+            121,
+            34,
+            767,
+            402
+          ]
+        },
+        "Right": {
+          "mode": "Shaded",
+          "location": [
+            0.0,
+            0.0,
+            17.0
+          ],
+          "rotation": [
+            0.5,
+            0.5,
+            0.5,
+            0.5
+          ],
+          "distance": 148.0099334716797,
+          "projection": "ORTHO",
+          "lens": 50.0,
+          "area": [
+            889,
+            34,
+            765,
+            402
+          ]
+        }
+      },
+      "viewport_backgrounds": {
+        "Perspective": [
+          0.02518685907125473,
+          0.02518685907125473,
+          0.02518685907125473
+        ],
+        "Top": [
+          0.02518685907125473,
+          0.02518685907125473,
+          0.02518685907125473
+        ],
+        "Front": [
+          0.02518685907125473,
+          0.02518685907125473,
+          0.02518685907125473
+        ],
+        "Right": [
+          0.02518685907125473,
+          0.02518685907125473,
+          0.02518685907125473
+        ]
+      },
+      "window": [
+        1920,
+        1006
+      ],
+      "selected": [],
+      "bands_visible": true
+    }
+  ],
+  "scene": {
+    "description": "Synthetic bearing mounting block and circular bore profile",
+    "units": "millimeters",
+    "base_dimensions": [
+      80,
+      48,
+      14
+    ],
+    "edge_fillet_radius": 2,
+    "boss_radius": 16,
+    "boss_top_z": 28,
+    "mounting_hole_radius": 3.5,
+    "bore_radius": 10,
+    "profile_center": [
+      0,
+      0,
+      34
+    ],
+    "profile_radius": 10,
+    "face_types": {
+      "CYLINDER": 18,
+      "PLANE": 7,
+      "SPHERE": 8
+    },
+    "volume_mm3": 53591.01458155679,
+    "airtight": true,
+    "exact_master": true,
+    "recipe": {
+      "a": {
+        "a": {
+          "a": {
+            "a": {
+              "a": {
+                "a": {
+                  "a": {
+                    "dx": 80.0,
+                    "dy": 48.0,
+                    "dz": 14.0,
+                    "kind": "box",
+                    "xform": [
+                      1.0,
+                      0.0,
+                      0.0,
+                      -40.0,
+                      0.0,
+                      1.0,
+                      0.0,
+                      -24.0,
+                      0.0,
+                      0.0,
+                      1.0,
+                      0.0,
+                      0.0,
+                      0.0,
+                      0.0,
+                      1.0
+                    ]
+                  },
+                  "kind": "fillet",
+                  "size": 2.0
+                },
+                "b": {
+                  "height": 16.0,
+                  "kind": "cylinder",
+                  "radius": 16.0,
+                  "xform": [
+                    1.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    1.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    1.0,
+                    12.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    1.0
+                  ]
+                },
+                "kind": "boolean",
+                "op": "UNION"
+              },
+              "b": {
+                "height": 34.0,
+                "kind": "cylinder",
+                "radius": 3.5,
+                "xform": [
+                  1.0,
+                  0.0,
+                  0.0,
+                  -28.0,
+                  0.0,
+                  1.0,
+                  0.0,
+                  -14.0,
+                  0.0,
+                  0.0,
+                  1.0,
+                  -2.0,
+                  0.0,
+                  0.0,
+                  0.0,
+                  1.0
+                ]
+              },
+              "kind": "boolean",
+              "op": "DIFFERENCE"
+            },
+            "b": {
+              "height": 34.0,
+              "kind": "cylinder",
+              "radius": 3.5,
+              "xform": [
+                1.0,
+                0.0,
+                0.0,
+                -28.0,
+                0.0,
+                1.0,
+                0.0,
+                14.0,
+                0.0,
+                0.0,
+                1.0,
+                -2.0,
+                0.0,
+                0.0,
+                0.0,
+                1.0
+              ]
+            },
+            "kind": "boolean",
+            "op": "DIFFERENCE"
+          },
+          "b": {
+            "height": 34.0,
+            "kind": "cylinder",
+            "radius": 3.5,
+            "xform": [
+              1.0,
+              0.0,
+              0.0,
+              28.0,
+              0.0,
+              1.0,
+              0.0,
+              -14.0,
+              0.0,
+              0.0,
+              1.0,
+              -2.0,
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          },
+          "kind": "boolean",
+          "op": "DIFFERENCE"
+        },
+        "b": {
+          "height": 34.0,
+          "kind": "cylinder",
+          "radius": 3.5,
+          "xform": [
+            1.0,
+            0.0,
+            0.0,
+            28.0,
+            0.0,
+            1.0,
+            0.0,
+            14.0,
+            0.0,
+            0.0,
+            1.0,
+            -2.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        },
+        "kind": "boolean",
+        "op": "DIFFERENCE"
+      },
+      "b": {
+        "height": 34.0,
+        "kind": "cylinder",
+        "radius": 10.0,
+        "xform": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0,
+          -2.0,
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      },
+      "kind": "boolean",
+      "op": "DIFFERENCE"
+    },
+    "private_content": false
+  },
+  "schema": 1,
+  "product": "Narwhal 3D",
+  "version": "0.4.7",
+  "source_revision": "94534c954dc77f1f1d22f2be6064bedcc8cd1f5b",
+  "runtime_binary_sha256": "4b6e93dd4a88b051898ca894bddd1bb8bb89951fc0c85d8de9dba406cb167a5e",
+  "package_format": "AppImage extraction",
+  "capture_command": "/usr/bin/python3 scripts/capture_readme_themes.py --app-root APPROOT --out OUT",
+  "app_root_description": "Published Linux 0.4.7 extraction: usr/lib/narwhal3d",
+  "helper_sha256": "a409e7397c5f773ccb72cbc41d27f157ed1be0fed5cac63d3a301df142ea97dc",
+  "elapsed_seconds": 9.96,
+  "validation": {
+    "same_document_recipe_bytes": true,
+    "same_four_viewports": true,
+    "same_cameras": true,
+    "packaged_imports_only": true,
+    "readonly_package": true,
+    "memory_max_bytes": 4294967296,
+    "memory_swap_max_bytes": 0,
+    "pixel_difference": {
+      "difference_bbox": [
+        0,
+        0,
+        1920,
+        1006
+      ],
+      "mean_absolute_rgb_difference": [
+        108.25435719019218,
+        115.86297630881378,
+        125.76208996023857
+      ]
+    }
+  },
+  "image_processing": "None: full-resolution application-window screenshots",
+  "images": {
+    "workspace-light.png": {
+      "resolution": [
+        1920,
+        1006
+      ],
+      "bytes": 649644,
+      "sha256": "f66db0330c6fa6a933e130a533b033f8ddf0d286ba9dd6ff645e4a2c489be68d"
+    },
+    "workspace-dark.png": {
+      "resolution": [
+        1920,
+        1006
+      ],
+      "bytes": 579490,
+      "sha256": "bc7b2945d407a4aa22698efb36f038fa53adc87acd0f2df4d2c1cb80f31efc6b"
+    }
+  }
+}

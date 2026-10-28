@@ -11,6 +11,8 @@ import struct
 import subprocess
 import sys
 import tomllib
+from urllib.parse import unquote, urlsplit
+import zlib
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -32,28 +34,139 @@ required_docs = (
     "README.md", "STATUS.md", "COMPATIBILITY.md", "ROADMAP.md", "CHANGELOG.md", "CONTRIBUTING.md",
     "SECURITY.md", "SUPPORT.md", "GOVERNANCE.md", "CODE_OF_CONDUCT.md",
     "docs/gaps.md", "docs/github-project.md", "docs/windows-build.md", "docs/macos-build.md",
+    "docs/technical-reference.md",
 )
 check(all((ROOT / path).is_file() for path in required_docs),
       "the public project and governance document set is complete")
 
+
+def markdown_targets(text, *, images=False):
+    """Extract inline/reference destinations, not examples inside fenced code."""
+    text = re.sub(r"```.*?```|~~~.*?~~~|<!--.*?-->", "", text, flags=re.S)
+    definitions = dict(re.findall(r"^\s*\[([^\]]+)\]:\s*<?([^\s>]+)>?", text, re.M))
+    prefix = r"!" if images else r"(?<!!)"
+    inline = re.findall(prefix + r"\[[^\]\n]+\]\(<?([^\s)>]+)>?(?:\s+\"[^\"]*\")?\)", text)
+    references = re.findall(prefix + r"\[([^\]\n]+)\]\[([^\]\n]*)\]", text)
+    return set(inline) | {definitions[key or label] for label, key in references
+                          if (key or label) in definitions}
+
+
+def markdown_anchors(text):
+    """GitHub heading fragments for the public guides, including duplicate headings."""
+    anchors = set()
+    text = re.sub(r"```.*?```|~~~.*?~~~|<!--.*?-->", "", text, flags=re.S)
+    for heading in re.findall(r"^#{1,6}\s+(.+?)\s*#*\s*$", text, re.M):
+        base = re.sub(r"[^\w\- ]", "", heading.lower()).replace(" ", "-")
+        slug, suffix = base, 0
+        while slug in anchors:
+            suffix += 1
+            slug = f"{base}-{suffix}"
+        anchors.add(slug)
+    return anchors
+
+
+def screenshot_data(path):
+    """Validate the lossless, non-interlaced RGB(A) PNGs used for UI captures.
+
+    Check CRCs and the complete decompressed scanlines, not just an IHDR that
+    could belong to an otherwise truncated or unreadable image. No Pillow or
+    Blender dependency is needed by this public-source documentation test.
+    """
+    data = path.read_bytes()
+    if data[:8] != b"\x89PNG\r\n\x1a\n":
+        raise ValueError("not a PNG")
+    offset, chunks = 8, []
+    while offset < len(data):
+        size = struct.unpack(">I", data[offset:offset + 4])[0]
+        kind = data[offset + 4:offset + 8]
+        payload = data[offset + 8:offset + 8 + size]
+        crc = struct.unpack(">I", data[offset + 8 + size:offset + 12 + size])[0]
+        if zlib.crc32(kind + payload) != crc:
+            raise ValueError("PNG chunk CRC mismatch")
+        chunks.append((kind, payload))
+        offset += size + 12
+    if chunks[0][0] != b"IHDR" or chunks[-1] != (b"IEND", b""):
+        raise ValueError("missing PNG header/end")
+    width, height, depth, colour, compression, filtering, interlace = struct.unpack(
+        ">IIBBBBB", chunks[0][1])
+    if not (width > 0 and height > 0 and depth == 8 and colour in (2, 6)
+            and compression == filtering == interlace == 0):
+        raise ValueError("expected a non-interlaced 8-bit RGB/RGBA capture")
+    decoder = zlib.decompressobj()
+    stride = width * (3 if colour == 2 else 4) + 1
+    expected = height * stride
+    pixels = decoder.decompress(b"".join(chunk for kind, chunk in chunks if kind == b"IDAT"),
+                                expected + 1)
+    if (len(pixels) != expected or not decoder.eof or decoder.unused_data
+            or any(pixels[row] > 4 for row in range(0, expected, stride))):
+        raise ValueError("invalid PNG scanlines")
+    return (width, height), hashlib.sha256(pixels).digest()
+
+
 readme = (ROOT / "README.md").read_text(encoding="utf-8")
-for link in ("STATUS.md", "COMPATIBILITY.md", "ROADMAP.md", "docs/gaps.md", "CONTRIBUTING.md",
-             "SUPPORT.md", "SECURITY.md", "docs/images/bugreport.png", "docs/windows-build.md",
-             "docs/macos-build.md"):
-    check(link in readme, f"README links {link}")
-check("**Release: 0.4.7.**" in readme
-      and "chmod +x Narwhal_3D-0.4.7-x86_64.AppImage" in readme
-      and "./Narwhal_3D-0.4.7-x86_64.AppImage" in readme
-      and "Narwhal_3D-0.4.7-Windows-x86_64.zip" in readme
-      and "native startup welcome window" in readme,
-      "README identifies 0.4.7 and gives matching Linux/Windows asset names")
-check("--version 0.4.7" in readme
-      and "dist/Narwhal_3D-0.4.7-x86_64.AppImage" in readme
-      and "--expected-version 0.4.7" in readme
-      and "The examples below build **0.4.7**" in readme
-      and "--version 0.4.6" not in readme
-      and "--expected-version 0.4.6" not in readme,
-      "README assembly and verification examples target release 0.4.7")
+reference_path = ROOT / "docs/technical-reference.md"
+technical_reference = reference_path.read_text(encoding="utf-8")
+readme_links = markdown_targets(readme)
+readme_images = markdown_targets(readme, images=True)
+reference_links = markdown_targets(technical_reference)
+reference_images = markdown_targets(technical_reference, images=True)
+for link in ("docs/technical-reference.md", "CONTRIBUTING.md", "LICENSE"):
+    check(link in readme_links, f"README has a clickable {link} link")
+check(len(readme.splitlines()) < 150, "README remains a short landing page (under 150 lines)")
+check("GPL-3.0-or-later" in readme, "README identifies the project GPL license")
+check(re.search(r"early\s+(?:preview|prerelease|pre-release)", readme, re.I),
+      "README warns that the application is an early preview")
+check(re.search(r"View\W+Theme\b", readme), "README explains the View → Theme switch")
+for asset in ("Narwhal_3D-0.4.7-x86_64.AppImage", "Narwhal_3D-0.4.7-Windows-x86_64.zip"):
+    check(f"https://github.com/ContributionRich/Narwhal3D/releases/download/v0.4.7/{asset}"
+          in readme_links, f"README offers a direct Markdown download for {asset}")
+check(not any("/releases/download/" in link and "/v0.4.7/" not in link
+              for link in readme_links), "README has no stale release download targets")
+check("docs/readme-command-loft.gif" not in readme_images,
+      "README uses the workspace screenshots rather than the old command GIF")
+screenshots = ("docs/images/workspace-light.png", "docs/images/workspace-dark.png")
+image_data = []
+for image in screenshots:
+    check(image in readme_images, f"README embeds {image}")
+    try:
+        dimensions, pixels_digest = screenshot_data(ROOT / image)
+        check(dimensions[0] >= 1200, f"{image} is at least 1200 pixels wide", dimensions)
+        image_data.append((dimensions, pixels_digest))
+    except (OSError, ValueError, IndexError, struct.error, zlib.error) as exc:
+        check(False, f"{image} is a readable screenshot PNG", str(exc))
+check(len(image_data) == 2 and image_data[0][0] == image_data[1][0],
+      "light/dark screenshots have the same frame dimensions")
+check(len(image_data) == 2 and image_data[0][1] != image_data[1][1],
+      "light/dark screenshots have different image data, not just metadata")
+
+for link in ("../STATUS.md", "../COMPATIBILITY.md", "../ROADMAP.md", "gaps.md",
+             "../CONTRIBUTING.md", "../SUPPORT.md", "../SECURITY.md", "images/bugreport.png",
+             "windows-build.md", "macos-build.md"):
+    check(link in reference_links | reference_images, f"technical reference links {link}")
+check("**Release: 0.4.7.**" in technical_reference
+      and "chmod +x Narwhal_3D-0.4.7-x86_64.AppImage" in technical_reference
+      and "./Narwhal_3D-0.4.7-x86_64.AppImage" in technical_reference
+      and "Narwhal_3D-0.4.7-Windows-x86_64.zip" in technical_reference
+      and "native startup welcome window" in technical_reference,
+      "technical reference identifies 0.4.7 and gives matching Linux/Windows asset names")
+check("--version 0.4.7" in technical_reference
+      and "dist/Narwhal_3D-0.4.7-x86_64.AppImage" in technical_reference
+      and "--expected-version 0.4.7" in technical_reference
+      and "The examples below build **0.4.7**" in technical_reference
+      and "--version 0.4.6" not in technical_reference
+      and "--expected-version 0.4.6" not in technical_reference,
+      "technical reference assembly and verification examples target release 0.4.7")
+check(all(term in technical_reference for term in (
+    "document geometry separate from viewport tessellation",
+    "Triangles generated for shaded display are not treated as manufacturing geometry",
+    "STEP export refuses geometry that has no exact analytic representation",
+    "exact checksum-protected OCCT BReps for every analytic master",
+    "some OCCT-created multi-face solids cannot be encoded as exact `.3dm` Breps",
+    "It never presents a faceted STEP fallback as exact geometry",
+)), "technical reference retains exact-geometry guarantees and packaged interchange limitations")
+check(all(term in technical_reference for term in (
+    "GPL-3.0-or-later", "THIRD_PARTY_NOTICES", "separately licensed open-source components",
+)), "technical reference retains project and third-party license information")
 status = (ROOT / "STATUS.md").read_text(encoding="utf-8")
 check("**Release: 0.4.7.**" in status
       and "Narwhal_3D-0.4.7-x86_64.AppImage" in status
@@ -90,7 +203,7 @@ check(all(term in release_notes for term in (
     "AppDir/extracted-AppImage verification passed",
     "clean-copy and overlay mutations went RED",
 )), "0.4.7 release notes retain feature, fix and validation coverage")
-for name, text in (("README", readme), ("STATUS", status),
+for name, text in (("technical reference", technical_reference), ("STATUS", status),
                    ("packaging guide", packaging), ("changelog", release_notes)):
     lower = text.lower()
     check("0.4.7 appimage has been built and its inventory verified" in lower
@@ -106,9 +219,9 @@ check(welcome_manifest["package"]["version"] == "0.4.7"
            if package["name"] == "narwhal-welcome"] == ["0.4.7"]
       and 'assert_eq!(env!("CARGO_PKG_VERSION"), "0.4.7");' in welcome_source,
       "welcome manifest, lock and Rust version assertion agree on 0.4.7")
-check("extremely early prerelease" in readme
-      and "frozen on the `0.4.x` line" in readme,
-      "README pins the owner-required early-prerelease 0.4.x release line")
+check("extremely early prerelease" in technical_reference
+      and "frozen on the `0.4.x` line" in technical_reference,
+      "technical reference pins the owner-required early-prerelease 0.4.x release line")
 
 gif_path = ROOT / "docs/readme-command-loft.gif"
 gif_bytes = gif_path.read_bytes()
@@ -169,7 +282,7 @@ check("0.4.7 Windows x86_64 portable ZIP" in windows_guide
       and "Neither driver DLL is in the shipping ZIP" in windows_guide
       and "that result does not certify a newly assembled candidate" in windows_guide,
       "Windows guide records verified runtime reuse, acceptance and exact inventory restoration")
-for name, text in (("README", readme), ("STATUS", status),
+for name, text in (("technical reference", technical_reference), ("STATUS", status),
                    ("Windows guide", windows_guide), ("changelog", release_notes)):
     lower = text.lower()
     check("engineering build completed using a verified, unchanged native runtime" in lower
@@ -186,7 +299,7 @@ for name, text in (("README", readme), ("STATUS", status),
           and "temporary driver was removed" in lower
           and "package inventory restored" in lower,
           f"{name} distinguishes real VM GUI acceptance from physical-GPU certification")
-for name, text in (("README", readme), ("STATUS", status),
+for name, text in (("technical reference", technical_reference), ("STATUS", status),
                    ("packaging guide", packaging), ("changelog", release_notes)):
     lower = text.lower()
     check("pristine ubuntu-desktop" in lower or "pristine ubuntu desktop" in lower,
@@ -196,21 +309,21 @@ for name, text in (("README", readme), ("STATUS", status),
     check("unsigned" in lower and "full suite" in lower,
           f"{name} records full Linux source gates without implying a signed AppImage")
 for name, text, size, digest in (
-    ("README Linux", readme, "437,832,184", "6097aa60cdc8702e59370f83b66d13a6de42da2c3b10c0a4cc3cded753cd67a9"),
-    ("README Windows", readme, "355,197,176", "23015f7338358f7fd62fcabada325bd615d06f0eb9f0898cac3279d0eb638290"),
+    ("technical reference Linux", technical_reference, "437,832,184", "6097aa60cdc8702e59370f83b66d13a6de42da2c3b10c0a4cc3cded753cd67a9"),
+    ("technical reference Windows", technical_reference, "355,197,176", "23015f7338358f7fd62fcabada325bd615d06f0eb9f0898cac3279d0eb638290"),
     ("packaging guide", packaging, "437,832,184", "6097aa60cdc8702e59370f83b66d13a6de42da2c3b10c0a4cc3cded753cd67a9"),
     ("Windows guide", windows_guide, "355,197,176", "23015f7338358f7fd62fcabada325bd615d06f0eb9f0898cac3279d0eb638290"),
 ):
     check(size in text and f"`{digest}`" in text,
           f"{name} pins the shipping asset size and SHA-256")
-for name, text in (("README", readme), ("STATUS", status), ("changelog", release_notes)):
+for name, text in (("technical reference", technical_reference), ("STATUS", status), ("changelog", release_notes)):
     check(all(term in text for term in ("24/24", "184/194", "112/112")),
           f"{name} records actual Windows Gumball, preferences and overlay counts")
 check(all(term in windows_guide for term in (
     "24/24", "184 checks", "194 checks", "112/112", "47/47", "28/28",
     "Mesa 26.2.4 llvmpipe", "OpenGL 4.6", "fresh-process write/reopen",
 )), "Windows guide retains the measured extracted-package acceptance detail")
-for name, text in (("README", readme), ("STATUS", status),
+for name, text in (("technical reference", technical_reference), ("STATUS", status),
                    ("packaging guide", packaging), ("Windows guide", windows_guide),
                    ("changelog", release_notes)):
     check(not re.search(r"Narwhal_3D-0\.4\.6-(?:x86_64\.AppImage|Windows-x86_64\.zip)", text)
@@ -242,6 +355,24 @@ assert spec is not None and spec.loader is not None
 module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
 public = set(module.public_files())
+check(set(screenshots) | {"docs/technical-reference.md"} <= public,
+      "the public allowlist includes both README screenshots and the technical reference")
+for document, targets in ((ROOT / "README.md", readme_links | readme_images),
+                          (reference_path, reference_links | reference_images),
+                          (ROOT / "STATUS.md", markdown_targets(status)),
+                          (ROOT / "CHANGELOG.md", markdown_targets(changelog)),
+                          (ROOT / "packaging/README.md", markdown_targets(packaging))):
+    for target in sorted(targets):
+        url = urlsplit(target)
+        if url.scheme or url.netloc:
+            continue
+        resolved = (document.parent / unquote(url.path)).resolve() if url.path else document
+        relative = resolved.relative_to(ROOT).as_posix() if resolved.is_relative_to(ROOT) else ""
+        check(resolved.is_file() and relative in public,
+              f"{document.name} local link resolves to a public source file: {target}")
+        if url.fragment and resolved.is_file() and resolved.suffix == ".md":
+            check(unquote(url.fragment) in markdown_anchors(resolved.read_text(encoding="utf-8")),
+                  f"{document.relative_to(ROOT)} local link fragment exists: {target}")
 check(set(required_docs) <= public and "docs/images/bugreport.png" in public
       and "scripts/collect_windows_build_info.ps1" in public
       and "scripts/build_windows_preview.ps1" in public

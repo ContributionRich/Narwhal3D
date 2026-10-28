@@ -60,7 +60,7 @@ Artwork published with Narwhal must be original or have clearly documented GPL-c
 
 ## Platform and architecture roadmap
 
-**Release: 0.4.7.** Both shipping assets use public source revision `94534c954dc77f1f1d22f2be6064bedcc8cd1f5b`, source epoch `1793144099`; the release tag retains that asset-build revision, not this documentation follow-up. See [release checksums and sizes](README.md#release-source-and-integrity).
+**Release: 0.4.7.** Both shipping assets use public source revision `94534c954dc77f1f1d22f2be6064bedcc8cd1f5b`, source epoch `1793144099`; the release tag retains that asset-build revision, not this documentation follow-up. See [release checksums and sizes](docs/technical-reference.md#release-source-and-integrity).
 
 The Linux 0.4.7 AppImage has been built and its inventory verified. Final Linux source release gates, including the full suite, and AppDir/extracted-AppImage verification passed. Actual shipping-archive acceptance on NVIDIA/OpenGL passed Gumball mouse extrusion then scale (24/24), background Gumball checks (47/47), all 28 meshed-master transform/round-trip combinations, render quality (47/47), preferences write/restore (183/193 checks), window overlays (105/105), component/fillet interaction (74/74), and shell interaction (73/73). Clean-copy and overlay negative controls went RED and restored production paths passed. Package inventory and archive digest were unchanged after acceptance. These Linux results do not certify Windows.
 

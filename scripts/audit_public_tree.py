@@ -185,6 +185,8 @@ ALLOWED_IMAGES = (
     "launch/narwhal3d.png",
     "docs/readme-command-loft.gif",
     "docs/images/bugreport.png",
+    "docs/images/workspace-light.png",
+    "docs/images/workspace-dark.png",
     "artwork/icons/*.png",
     "narwhal3d/icons/narwhal-*.png",
     "blender_patches/narwhal3d_app_icon.svg",
