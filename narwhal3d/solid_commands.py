@@ -1013,12 +1013,14 @@ class _SweepCmd(Command):
 
 
 class Sweep1Cmd(_SweepCmd):
-    __doc__ = _SweepCmd.__doc__ + """
-    Sweep1 supports Freeform framing, which preserves the section's angle to the rail,
-    and Roadlike framing, which uses a fixed axis. Roadlike's custom axis is not built.
+    """Sweep1 keeps the established single-section Freeform/Roadlike routes.
+
+    OURS bounded multi-section Freeform accepts two to four already-oriented whole
+    curves in explicit typed traversal order. No component-generation or arbitrary
+    profile/seam solver is available; unsupported inputs refuse without fallback.
     """
     name = "Sweep1"
-    description = "Sweep a cross-section curve along one rail into a smooth surface."
+    description = "Sweep cross-section curves along one rail into a smooth surface."
     steps = [("Select rail:", OBJECTS),
              ("Select cross-section curves. Press Enter when done:", OBJECTS_MULTI)]
     options = (
@@ -1032,6 +1034,136 @@ class Sweep1Cmd(_SweepCmd):
     def __init__(self):
         super().__init__()
         self.style = "Freeform"
+        self._accepted_sources = {}
+        self._source_environment = None
+
+    def _capture_source(self, ctx, ref):
+        # Keep the legacy component/single-section route unchanged. Components
+        # cannot authorize the new branch without owner topology-generation checks.
+        if ref in self._accepted_sources:
+            return
+        try:
+            if not isinstance(ref, str):
+                raise ValueError("multi-section components are not implemented yet; use whole curves")
+            owners = [o for o in ctx.model.file.Objects
+                      if (o.Attributes.Name or "").lower() == ref.lower()]
+            if len(owners) != 1:
+                raise ValueError(f"source {ref}: missing or ambiguous same-name owners")
+            owner = owners[0]
+            curve = curve_inputs.resolve(ctx, ref)
+            if curve.IsClosed or curve.IsPeriodic:
+                raise ValueError("multi-section closed/periodic sources are not implemented yet")
+            self._accepted_sources[ref] = (str(owner.Attributes.Id), bridge._freeform_source_hash(curve))
+        except Exception as exc:
+            self._accepted_sources[ref] = str(exc)
+        if self._source_environment is None:
+            from .state import app_state
+            model = ctx.model
+            self._source_environment = (app_state, ctx, model, model.file,
+                                        app_state.doc_path, model.path, self._source_settings(model))
+
+    @staticmethod
+    def _source_settings(model):
+        settings = model.file.Settings
+        return (settings.ModelUnitSystem, settings.ModelAbsoluteTolerance,
+                settings.ModelRelativeTolerance, settings.ModelAngleToleranceRadians,
+                model.current_layer_index)
+
+    def _feed_objects_step(self, text, ctx):
+        result = super()._feed_objects_step(text, ctx)
+        if self.step_index == 1 and self.args:
+            self._capture_source(ctx, self.args[0])
+        return result
+
+    def _feed_objects_multi_step(self, text, ctx):
+        if text:
+            self._capture_source(ctx, text)
+        elif not self._pending_multi and not self._selected_subobjects(ctx):
+            refs = self._selection_refs(ctx)
+            if len(refs) > 1:
+                return ("Sweep1: whole-object selection order is ambiguous; type each "
+                        "section name in traversal order, then press Enter"), False
+            for ref in refs:
+                self._capture_source(ctx, ref)
+        return super()._feed_objects_multi_step(text, ctx)
+
+    def _resolve_accepted_sources(self, ctx, refs):
+        from .state import app_state
+
+        env = self._source_environment
+        if env is None:
+            raise ValueError("Freeform requires ordered source capture through the command")
+        state, original_ctx, model, file, path, model_path, settings = env
+        if (app_state is not state or state.ctx is not ctx or ctx is not original_ctx
+                or state.model is not model or ctx.model is not model or model.file is not file
+                or state.active_command is not self or state.doc_path != path or model.path != model_path):
+            raise ValueError("stale or cancelled Freeform command/document")
+        if self._source_settings(model) != settings or self.style != "Freeform":
+            raise ValueError("Freeform units/tolerance/layer or frame style changed")
+        ids, curves = [], []
+        for ref in refs:
+            accepted = self._accepted_sources.get(ref)
+            if not isinstance(accepted, tuple):
+                raise ValueError(accepted or "multi-section components are not implemented yet; use whole curves")
+            oid, fingerprint = accepted
+            owner = file.Objects.FindId(oid)
+            if owner is None:
+                raise ValueError("stale Freeform source UUID is missing")
+            curve = owner.Geometry
+            if bridge._freeform_source_hash(curve) != fingerprint:
+                raise ValueError("stale Freeform source geometry changed after acceptance")
+            ids.append(oid)
+            curves.append(curve)
+        if len(set(ids)) != len(ids):
+            raise ValueError("Freeform requires distinct source UUIDs")
+        return tuple(ids), curves
+
+    def execute(self, ctx):
+        sections = self.args[1] if len(self.args) > 1 else []
+        if len(sections) <= 1:
+            return super().execute(ctx)
+        if self.style != "Freeform" or not 2 <= len(sections) <= 4:
+            return (f"Sweep1: {self.style} with {len(sections)} cross-sections is not implemented yet; "
+                    "bounded Freeform supports two to four. Nothing was created."), True
+        refs = (self.args[0], *sections)
+        for ref in refs:
+            if not isinstance(ref, str):
+                return "Sweep1: multi-section components are not implemented yet; use whole curves", True
+            error = self._accepted_sources.get(ref)
+            if isinstance(error, str):
+                return f"Sweep1: {error}. Nothing was created.", True
+        out = None
+        master = None
+        stack = getattr(ctx, "undo", None)
+        record = getattr(stack, "_open", None)
+        before = record.before if record is not None else None
+        file = (self._source_environment[3] if self._source_environment is not None
+                else ctx.model.file)
+        baseline = before
+        try:
+            resolve = lambda: self._resolve_accepted_sources(ctx, refs)
+            ids, curves = resolve()
+            if stack is None or not stack.enabled or record is None:
+                raise ValueError("bounded Freeform requires an active Undo record")
+            baseline = ctx.model.snapshot()
+            required = float(ctx.model.file.Settings.ModelAbsoluteTolerance)
+            if not math.isfinite(required) or required < 1e-9:
+                raise ValueError("Freeform document precision is tighter than supported [1e-9, 1e-3]")
+            tolerance = min(1e-7, required)
+            out = bridge.sweep1_freeform_from_sources(
+                curves[0], curves[1:], source_ids=ids, resolve_sources=resolve, tolerance=tolerance)
+            master = kernel.master_of(out)
+            resolve()
+            _, display = ctx.add_geometry(out, "Sweep", publication_check=resolve)
+            return f"Created {display}", True
+        except Exception as exc:
+            if out is not None:
+                kernel.discard_master_binding(kernel.master_key_of(out), master)
+            if baseline is not None:
+                ctx._settle_failed_publication(record, before, file, baseline)
+            from .state import app_state
+            return (f"Sweep1 failed: {exc}. Nothing was created.",
+                    app_state.active_command is self)
 
     def on_mode(self, name, ctx):
         if name in ("Freeform", "Roadlike"):

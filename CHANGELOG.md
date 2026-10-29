@@ -4,11 +4,13 @@ All notable public changes will be recorded here. Narwhal 3D is an extremely ear
 
 ## Unreleased
 
-Local source-checkout integration only; not yet released. Integration and remaining geometry/UI checks passed, but the full test gate is blocked by the Windows launcher icon's minimum-file-size assertion. No package acceptance or publication is claimed.
+Source-only development update. The downloadable **0.4.7** assets and release tag are unchanged; these additions require a current source build and matching native libraries. No new binary release or version bump is included.
 
 ### Added
 
-- Add an opt-in read-only MCP stdio entrypoint that launches a new visible application, using a private inherited Unix capability. Linux normal-startup acceptance covers four metadata tools, live document/selection reads, rejected mutations, document-replacement revocation and disconnect cleanup without closing the GUI. Supports legacy **2025-11-25 only**: no arbitrary existing-app attachment, Windows acceptance, mutation tools or modern protocol support.
+- The opt-in read-only MCP entrypoint supports both **2025-11-25** initialization and **2026-07-28** request-local metadata/discovery. Nine bounded metadata reads share Rust schemas with the in-app assistant. Both eras have Linux visible-startup, document-replacement revocation and disconnect/app-survival acceptance. Arbitrary existing-app attachment, Windows transport and mutation tools remain unavailable.
+- The existing AI panel now uses native bounded conversation/tool-call policy, explicit metadata-read consent, correlated read-only continuations, logical timeouts and stale-response invalidation on New Chat, settings or document replacement. Circle requests remain visibly proposal-only; no CAD execution is enabled. Provider requests use Chat Completions-compatible or Anthropic Messages forms, not the Responses API, and physical HTTP cancellation is not guaranteed.
+- Sweep1 accepts a bounded **2–4-section Freeform** route through whole-curve names typed in traversal order. Physical station mapping, source UUID/content checks, one exact open rational result, Undo/Redo and fresh project/STEP verification are covered. Multi-object click order, components, arbitrary profiles, automatic reversal and multi-section Roadlike remain explicitly unsupported; existing single-section and Sweep2 routes are preserved.
 - Integrate the bounded Rust/OCCT parallel-section surfacing backend through the internal `bridge.sweep1_parallel` API, with exact master/document/recipe transforms and fresh-process `.narwhal`/`.3dm` round trips. Required-native focused integration passes 17/17. This is not generic multi-section Freeform/Roadlike Sweep1 and is not exposed as a Sweep1 UI option.
 
 ### Changed
@@ -18,6 +20,11 @@ Local source-checkout integration only; not yet released. Integration and remain
 - Gumball extrusion uses a reusable GPU display guide during held motion and builds exact manufacturing geometry once on release. Focused circle/annulus acceptance retains caps, holes, recipes and one Undo; the guide never becomes document geometry. Preview timing is measured to current-value draw submission, not GPU completion or a universal frame-rate guarantee.
 
 ### Fixed
+
+- Guarded surface publication rolls back only its own document/display/master allocations, including auto-renamed meshes. A surviving external edit stays dirty and undoable rather than being hidden by a failed Sweep1 record.
+- Refuse self-intersecting prism results rather than relying on closure alone.
+- Adapt native Point3d samples in overlap component picking.
+- Validate actual decoded multi-resolution ICO images, alpha coverage and corruption instead of using compressed file size as a quality proxy. Restore the existing Undo regression to the current context/model names without removing its assertions.
 
 - FilletEdge grip clicks now open command-line radius input, while a deliberate drag adjusts the radius until release. Enter, numpad Enter, Space and right-click accept the radius subprompt without prematurely committing the whole fillet. Escape restores the current adjustment, and invalid values remain correctable without committing a stale preview.
 - FilletEdge's displayed prompt and clickable options now follow edge selection, handle editing and radius input instead of continuing to display the initial selection step.

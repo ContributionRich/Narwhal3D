@@ -1317,14 +1317,160 @@ class NarwhalContext:
 
     # -- create a Blender object from rhino3dm geometry
     def add_geometry(self, geom, base_name: str,
-                     layer_index: int | None = None) -> tuple[str, str]:
+                     layer_index: int | None = None, *, publication_check=None) -> tuple[str, str]:
+        if publication_check is not None:
+            return self._guarded_geometry_add(geom, base_name, layer_index, publication_check)
+        return self._add_geometry(geom, base_name, layer_index)
+
+    @staticmethod
+    def _same_publication_document(before, after):
+        """Compare existing Undo snapshots, not meshes or a new document store.
+
+        Shared immutable entries need no serialization; changed API wrappers are
+        compared by their persisted contents. Only used to settle a failed addition.
+        """
+        for field in ("settings", "layers", "groups", "strings"):
+            if getattr(before, field) != getattr(after, field):
+                return False
+        if before.by_id.keys() != after.by_id.keys():
+            return False
+        for oid, entry in before.by_id.items():
+            other = after.by_id[oid]
+            if entry is other:
+                continue
+            for field in ("attrs", "user_strings", "groups"):
+                if entry[field] != other[field]:
+                    return False
+            if entry["geometry"].Encode() != other["geometry"].Encode():
+                return False
+        return True
+
+    def _settle_failed_publication(self, record, previous_before, file, baseline):
+        """Keep surviving external edits undoable/dirty and invalidate stale Redo.
+
+        UndoStack.end handles the serial and Redo chain normally. A failed Sweep1
+        must not erase an external edit's capture just to leave no Sweep1 record.
+        Never attach a replacement file to the old document's history.
+        """
+        if record is None or self.undo._open is not record:
+            return
+        if previous_before is not None:
+            if record.name != "Sweep1":
+                record.before = previous_before  # Preserve a legitimate enclosing record.
+                return
+            # Selection-clear callbacks can edit sources in this feed's Sweep1
+            # record BEFORE execute starts. That capture is external too.
+            baseline, previous_before = previous_before, None
+        if self.model.file is file and not self._same_publication_document(baseline, self.model.snapshot()):
+            record.before = baseline
+            record.name = "External change during Sweep1"
+        else:
+            record.before = previous_before
+
+    @staticmethod
+    def _remove_publication_allocations(allocations):
+        """Delete only allocation-time RNA handles, never names or pointer deltas."""
         import bpy
+
+        objects = []
+        for obj in allocations["objects"]:
+            try:
+                if obj.as_pointer():
+                    objects.append(obj)
+            except ReferenceError:
+                pass  # An external document replacement already deleted it.
+        bridge.note_display_changed([o.name for o in objects if bridge.is_app_drawn(o)], removed=True)
+        if objects:
+            # Do not use remove_display_objects: a callback may have assigned an
+            # unrelated mesh to our object, and that helper also deletes its data.
+            bpy.data.batch_remove(objects)
+        for mesh in allocations["meshes"]:
+            try:
+                if mesh.as_pointer() and mesh.users == 0:
+                    bpy.data.meshes.remove(mesh)
+            except ReferenceError:
+                pass
+
+    def _guarded_geometry_add(self, geom, base_name, layer_index, check):
+        """Opt-in single-result rollback; never restore an entire document/registry.
+
+        Sweep1 needs this because a display failure occurs AFTER document insertion.
+        The ordinary command/Undo path is retained; only this operation's allocation
+        and lazy undo capture are undone. Python owns Blender/API transactions only.
+        """
+        import bpy
+        from . import kernel
+
+        model, file, stack = self.model, self.model.file, self.undo
+        record = stack._open
+        if stack.enabled and record is None:
+            raise RuntimeError("guarded geometry publication requires an open undo record")
+        before = record.before if record is not None else None
+        baseline = model.snapshot()
+        counter = self.counters.get(base_name, 0)
+        name = f"{base_name}{counter + 1}"
+        # Refuse a collision rather than let Blender silently rename only the display.
+        if any((o.Attributes.Name or "").lower() == name.lower() for o in file.Objects) or bpy.data.objects.get(name):
+            raise RuntimeError("publication display name already exists")
+        created_before = selection_state.last_created(model)
+        master = kernel.master_of(geom)
+        key = kernel.master_key_of(geom)
+        publication = {"check": check, "allocations": {"objects": [], "meshes": []}}
+        previous_hook = model.before_change
+
+        def before_insert():
+            check()
+            if previous_hook is not None:
+                previous_hook()
+            # A callback may switch files. Stop BEFORE Objects.Add can target it;
+            # rollback must never scan/delete objects in a replacement document.
+            check()
+
+        try:
+            check()
+            model.before_change = before_insert
+            result = self._add_geometry(geom, base_name, layer_index, publication)
+            check()
+            return result
+        except Exception:
+            # An injected writer may insert then raise before returning its UUID.
+            # Match our unique binding, not all IDs added since a global snapshot.
+            for obj in list(file.Objects):
+                if key and kernel.master_key_of(obj.Geometry) == key:
+                    oid = str(obj.Attributes.Id)
+                    file.Objects.Delete(oid)
+                    if model._blender_names.get(oid) == name:
+                        model._blender_names.pop(oid, None)
+            self._remove_publication_allocations(publication["allocations"])
+            if self.counters.get(base_name) == counter + 1:
+                if counter:
+                    self.counters[base_name] = counter
+                else:
+                    self.counters.pop(base_name, None)
+            entry = selection_state._state.get(model)
+            if entry is not None and name not in created_before:
+                entry["created"][:] = [n for n in entry["created"] if n != name]
+            self._settle_failed_publication(record, before, file, baseline)
+            kernel.discard_master_binding(key, master)
+            raise
+        finally:
+            if model.before_change is before_insert:
+                model.before_change = previous_hook
+
+    def _add_geometry(self, geom, base_name, layer_index, publication=None):
+        import bpy
+
+        def check():
+            if publication is not None:
+                publication["check"]()
 
         # snapshot BEFORE the document changes, so this addition is undoable
         self.note_change(base_name)
+        check()
         _tag_representation(geom)
         display_name = self.next_name(base_name)
         obj_id, _attr = self.model.add_object(geom, display_name, layer_index)
+        check()
         # wiring: `layer_index=None` means "the current layer" --
         # `model.add_object` resolves it to `model.current_layer_index`. Resolve
         # the SAME index here so the display object is coloured by the layer the
@@ -1335,7 +1481,14 @@ class NarwhalContext:
         resolved = (self.model.current_layer_index if layer_index is None
                     else layer_index)
         _assign_picture_material(self.model, obj_id, geom)
-        self._make_display_object(geom, display_name, resolved)
+        if publication is None:
+            self._make_display_object(geom, display_name, resolved)
+        else:
+            display = self._make_display_object(
+                geom, display_name, resolved, allocations=publication["allocations"])
+            if display is None:
+                raise RuntimeError("publication did not create a display object")
+        check()
         self.model.register_blender_object(obj_id, display_name)
         # this object was just CREATED by a drawing command -- record it
         # so `SelLast` can select the "last created objects". `add_geometry` is
@@ -1479,7 +1632,7 @@ class NarwhalContext:
         return self._make_display_object(geom, name, layer_index, fobj=fobj, layers=layers)
 
     def _make_display_object(self, geom, display_name: str, layer_index: int = 0,
-                             fobj=None, layers=None):
+                             fobj=None, layers=None, *, allocations=None):
         """Tessellate `geom` into a Blender object named `display_name`.
 
         Shared by add_geometry (new geometry) and rebuild_display (after Open). `fobj` (the
@@ -1497,7 +1650,8 @@ class NarwhalContext:
             frame = self._texture_frame(geom, fobj)
             if frame is not None:
                 bridge._apply_picture_uvs(bm, frame)
-        ob = bridge.bmesh_to_object(display_name, bm)
+        ob = (bridge.bmesh_to_object(display_name, bm) if allocations is None else
+              bridge.bmesh_to_object(display_name, bm, allocations=allocations))
         if (frame is None and isinstance(geom, (r3.Brep, r3.Extrusion, r3.Surface))
                 and hasattr(ob.data, "narwhal_boundary_wires")):
             # Patched Blender: this mesh is only the shaded proxy of analytic CAD geometry.

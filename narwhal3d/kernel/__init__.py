@@ -382,6 +382,18 @@ def master_registry_snapshot():
     return dict(_MASTERS)
 
 
+def discard_master_binding(key, shape):
+    """Roll back only an unpublished binding still owned by this operation.
+
+    A document switch may have replaced the registry meanwhile; never restore a
+    global snapshot or remove a replacement binding belonging to another owner.
+    """
+    if key and _MASTERS.get(key) is shape:
+        del _MASTERS[key]
+        return True
+    return False
+
+
 def restore_master_registry(snapshot):
     """Restore a snapshot produced by :func:`master_registry_snapshot`."""
     _MASTERS.clear()

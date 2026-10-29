@@ -1845,19 +1845,27 @@ class blender_sees_curves:
         return False
 
 
-def bmesh_to_object(name: str, bm, collection=None):
+def bmesh_to_object(name: str, bm, collection=None, *, allocations=None):
     """Turn a bmesh into a Blender mesh object linked to `collection` (or scene).
 
     With no `collection`, a bmesh with NO faces (a curve, a point) goes into the
     app-drawn CURVE_COLLECTION, which Blender never draws -- see the block above.
+    An optional operation-local allocation ledger receives handles immediately,
+    before conversion/linking/callbacks can fail or another document can take over.
     """
     import bpy
 
     faceless = len(bm.faces) == 0
     me = bpy.data.meshes.new(name)
-    bm.to_mesh(me)
-    bm.free()
+    if allocations is not None:
+        allocations["meshes"].append(me)
+    try:
+        bm.to_mesh(me)
+    finally:
+        bm.free()
     ob = bpy.data.objects.new(name, me)
+    if allocations is not None:
+        allocations["objects"].append(ob)
     if collection is None:
         collection = (curve_collection() if faceless
                       else bpy.context.scene.collection)
@@ -5791,6 +5799,55 @@ def sweep1_parallel(rail, sections, parameters, *, axis, across, reverse=None,
         raise k.KernelError("parallel-section sweep could not persist its exact recipe")
     k.register_master(proxy, result.shape)
     return proxy
+
+
+def _freeform_source_hash(curve):
+    """Fingerprint an accepted API object, using preparation's serialization format.
+
+    Python handles rhino3dm serialization/identity only; no geometry computation.
+    """
+    import hashlib
+    import json
+
+    text = json.dumps(curve.Encode(), sort_keys=True, separators=(",", ":"), allow_nan=False)
+    if len(text) > 16 * 1024 * 1024:
+        raise _kernel().KernelError("Freeform source snapshot exceeds 16 MiB")
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def sweep1_freeform_from_sources(rail, sections, *, source_ids, resolve_sources,
+                                 station_points=None, reverse=None, tolerance=1e-7):
+    """Publish one exact bounded Freeform face, without inserting a document object.
+
+    OURS tolerance-fitted moving frame, not arbitrary-profile sweep parity. Python
+    orchestrates existing Rust/OCCT preparation, exact writer and master APIs only.
+    The resolver must check live command/document authorization as well as UUIDs.
+    """
+    from . import surfacing_backend
+
+    k = _kernel()
+    prepared = surfacing_backend.prepare_freeform(
+        rail, sections, source_ids=source_ids, station_points=station_points,
+        reverse=reverse, tolerance=tolerance)
+    result = surfacing_backend.build_prepared_freeform(prepared, resolve_sources=resolve_sources)
+    proxy = _onbrep().exact_brep(result.shape, _occt())
+    if proxy is None:
+        raise k.KernelError("Freeform exact document conversion failed; no approximate fallback")
+    if not proxy.IsValid or len(proxy.Faces) != 1 or proxy.IsSolid:
+        raise k.KernelError("Freeform requires one valid exact open document face")
+    if not proxy.SetUserString(k.DOCUMENT_FORM_KEY, "exact") or not k.record_recipe(proxy, result.recipe):
+        raise k.KernelError("Freeform could not persist its exact recipe")
+    surfacing_backend.validate_prepared_sources(prepared, *resolve_sources())
+    key = None
+    try:
+        key = k.register_master(proxy, result.shape)
+        if k.master_of(proxy) is not result.shape or k.honesty_problem(proxy):
+            raise k.KernelError("Freeform exact master registration failed")
+        surfacing_backend.validate_prepared_sources(prepared, *resolve_sources())
+        return proxy
+    except Exception:
+        k.discard_master_binding(key or k.master_key_of(proxy), result.shape)
+        raise
 
 
 def record_exact_recipe(geom, tolerance=1e-6):

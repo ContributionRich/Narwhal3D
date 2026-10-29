@@ -157,6 +157,8 @@ TEST_FILES = (
     "spike/test_automation_host.py", "spike/test_automation_startup.py",
     "spike/test_automation_context.py", "spike/test_automation_modern.py",
     "spike/test_automation_lifecycle.py",
+    "spike/test_sweep1_command_integration.py", "spike/test_sweep1_command_gui.py",
+    "spike/test_undo.py",
     "spike/test_surfacing_parallel.py", "spike/test_surfacing_probe.py",
     "spike/test_surfacing_integration.py",
     "spike/test_surfacing_freeform.py", "spike/test_surfacing_freeform_probe.py",

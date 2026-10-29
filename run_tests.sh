@@ -167,6 +167,7 @@ fi
 
 PURE_SUITES=(
     spike/test_geometry.py
+    spike/test_undo.py
     spike/test_kernel.py
     spike/test_local_brep_move.py
     spike/test_native_local_brep_replay.py
@@ -329,6 +330,7 @@ done
 # Fail on a stale/missing surfacing capability, rather than passing with native cases skipped.
 run "surfacing bridge integration (native required)" "$PYTHON" \
     spike/test_surfacing_integration.py --require-native
+run "bounded multi-section Sweep1 command" "$PYTHON" spike/test_sweep1_command_integration.py --launch
 
 run "native document core build" cargo +1.95.0 build --release --locked \
     --manifest-path native/document_core/Cargo.toml
@@ -355,6 +357,7 @@ if [[ -n "${DISPLAY:-}" || -n "${WAYLAND_DISPLAY:-}" ]]; then
     run "preview responsiveness live" "$PYTHON" spike/test_preview_responsiveness_gui.py --run integration
     run "Trim box live" "$PYTHON" spike/test_trim_box_gui.py --launch --baseline
     run "overlap selection menu live" "$PYTHON" spike/test_selection_menu_gui.py --launch
+    run "typed multi-section Sweep1 live" "$PYTHON" spike/test_sweep1_command_gui.py --launch
     # The actual CLI resolves staged artifacts, not AUTOMATION_SERVER. Do not overwrite them.
     printf '\nSKIP: staged-product automation startup acceptance; run python3 -B spike/test_automation_startup.py separately after staging the reviewed server\n'
     run "startup layout via the welcome's X11 route" spike/startup_layout_gui.sh

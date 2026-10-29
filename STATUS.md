@@ -2,6 +2,15 @@
 
 Narwhal 3D is an extremely early public prerelease. This page records what currently works and what remains incomplete so visible UI does not imply unsupported behavior. Package versions remain on the `0.4.x` line until the project owner explicitly lifts that cap.
 
+## Current source checkout (unreleased)
+
+GitHub `main` contains newer source work than the **0.4.7** downloads. This update does not create a release or change the shipping assets.
+
+- The in-app AI uses a bounded native read-tool workflow with explicit metadata consent, correlated callbacks and lifetime invalidation. It can inspect supported document metadata and discuss proposals; **CAD mutation dispatch remains disabled**. Active-view/CPlane/component snapshots, authoritative document revisions and approved modeling execution remain follow-up work.
+- The read-only MCP entrypoint supports both protocol eras (2025-11-25 and 2026-07-28) and nine bounded metadata tools. Build/stage matching native automation executable and library for source use; old 0.4.7 binaries do not gain these features automatically. No Windows/private-transport acceptance is claimed.
+- Bounded multi-section Freeform `Sweep1` accepts 2–4 compatible open rational quadratic sections entered by name in traversal order. It uses physical station mapping, exact NURBS document representation, source-identity checks and one undoable result. Fitting remains tolerance-qualified; this is not arbitrary-profile or private-algorithm parity. Unordered multi-object picks, components and multi-section Roadlike refuse explicitly.
+- New surface publication and failure paths preserve existing documents/displays/history; exact project round trips and imported STEP geometry are tested. This is source validation, not a newly certified release package.
+
 ## Command compatibility
 
 Narwhal 3D is **not yet at full command parity with established NURBS CAD workflows**. It has a substantial working command set, but many commands, advanced options, selection routes, dialogs, and viewport tools remain missing or incomplete. A registered command name means that command is runnable; it does not guarantee every advanced option or interaction path is complete.
