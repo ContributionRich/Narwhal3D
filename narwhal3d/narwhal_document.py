@@ -221,8 +221,13 @@ def _worker_command(root: Path) -> tuple[str, ...]:
 
 
 def _validate_in_worker(root: Path, count: int) -> Path:
+    # Preserve the trusted launcher's kernel selection for recipe replay, not any
+    # document-supplied path or the rest of the parent's (possibly secret) environment.
+    selected_core = os.environ.get("NARWHAL_GEOMETRY_CORE")
+    extra_env = {"NARWHAL_GEOMETRY_CORE": selected_core} if selected_core else {}
     result = converter_process.run(
-        _worker_command(root), timeout=600, max_output=65536, memory_mib=4096)
+        _worker_command(root), timeout=600, max_output=65536, memory_mib=4096,
+        extra_env=extra_env)
     marker = next((line for line in reversed(result.stdout.splitlines())
                    if line.startswith("NARWHAL-DOCUMENT-WORKER ")), None)
     report = None
@@ -351,15 +356,34 @@ def load_model(source: str | os.PathLike):
             file_object = objects.get(object_id)
             if file_object is None:
                 raise NarwhalDocumentError(f"exact master {object_id} has no document object")
-            proxy_box = file_object.Geometry.GetBoundingBox()
-            proxy_bounds = [proxy_box.Min.X, proxy_box.Min.Y, proxy_box.Min.Z,
-                            proxy_box.Max.X, proxy_box.Max.Y, proxy_box.Max.Z]
             document_tolerance = float(model.file.Settings.ModelAbsoluteTolerance)
             if not math.isfinite(document_tolerance) or document_tolerance <= 0.0:
                 raise NarwhalDocumentError("native metadata has invalid model tolerance")
+            proxy = file_object.Geometry
+            if proxy.GetUserString(kernel.DOCUMENT_FORM_KEY) == "exact":
+                from . import bridge
+
+                # Independently reconstruct the stored proxy, never _occt_operand
+                # (which resolves back to the master/recipe being checked).
+                try:
+                    proxy_shape = occt_backend.shape_from_brep_data(
+                        bridge.brep_data(proxy), sew_tolerance=document_tolerance)
+                    if (not occt_backend.is_valid(proxy_shape)
+                            or bool(occt_backend.is_airtight(proxy_shape)) != airtight):
+                        raise ValueError("proxy validity/closure differs")
+                    proxy_bounds = [float(value) for point in
+                                    occt_backend.tight_bbox(proxy_shape) for value in point]
+                except Exception as exc:  # noqa: BLE001
+                    raise NarwhalDocumentError(
+                        f"exact master {object_id} document proxy cannot be measured: {exc}") from exc
+            else:
+                proxy_box = proxy.GetBoundingBox()
+                proxy_bounds = [proxy_box.Min.X, proxy_box.Min.Y, proxy_box.Min.Z,
+                                proxy_box.Max.X, proxy_box.Max.Y, proxy_box.Max.Z]
             tolerance = max(1.0e-7, document_tolerance * 10.0)
-            if any(abs(float(a) - float(b)) > tolerance
-                   for a, b in zip(proxy_bounds, actual_bounds)):
+            if (not all(math.isfinite(float(value)) for value in proxy_bounds)
+                    or any(abs(float(a) - float(b)) > tolerance
+                           for a, b in zip(proxy_bounds, actual_bounds))):
                 raise NarwhalDocumentError(
                     f"exact master {object_id} does not match its document proxy bounds")
             bindings.append((file_object.Geometry, shape))

@@ -5736,8 +5736,60 @@ def occt_backed(shape, recipe):
     triangulated stand-in -- marked, so saving says so."""
     k = _kernel()
     proxy = _proxy_from_occt(shape)
+    if not k.record_recipe(proxy, recipe):
+        raise ProxyBuildError("could not persist the exact geometry recipe")
     k.register_master(proxy, shape)
-    k.record_recipe(proxy, recipe)
+    return proxy
+
+
+def sweep1_parallel(rail, sections, parameters, *, axis, across, reverse=None,
+                    tolerance=1e-7):
+    """OURS bounded parallel-section interpolation, NOT Sweep1 Freeform/Roadlike.
+
+    Accept rhino3dm curves, explicit ordered stations and a fixed axis/across frame.
+    The existing ``curve_recipe`` conversion preserves curve types and weights; typed
+    arcs/circles, polylines and polycurves are NOT implicitly refit into this backend's
+    single-span NURBS contract. See docs/surfacing/SWEEP1_PARALLEL.md for all bounds.
+
+    Return a NEW exact open Brep with registered OCCT master and replay recipe, without
+    adding a document object. Raise KernelError on refusal, including missing native
+    capability or exact document writer. No Freeform, Python-geometry or mesh fallback.
+    Python here only adapts rhino3dm/OCP handles; Rust owns the numerical construction.
+    """
+    from . import surfacing_backend
+
+    k = _kernel()
+    if not isinstance(sections, (list, tuple)) or not 2 <= len(sections) <= 4:
+        raise k.KernelError("parallel-section sweep supports two to four sections")
+
+    def convert(curve, label):
+        if not isinstance(curve, r3.Curve) or not curve.IsValid:
+            raise k.KernelError(f"{label}: expected a valid rhino3dm curve")
+        if curve.IsClosed or curve.IsPeriodic:
+            raise k.KernelError(f"{label}: closed/periodic curves and seam shifts are unsupported")
+        recipe = curve_recipe(curve)
+        if recipe is None or recipe.get("ctype") != "nurbs":
+            kind = type(curve).__name__ if recipe is None else recipe.get("ctype")
+            raise k.KernelError(f"{label}: unsupported profile type {kind}; "
+                                "parallel-section sweep requires single-span NURBS; no implicit refit")
+        return recipe
+
+    result = surfacing_backend.sweep1_parallel(
+        convert(rail, "rail"),
+        [convert(section, f"section {i + 1}") for i, section in enumerate(sections)],
+        parameters, axis=axis, across=across, reverse=reverse, tolerance=tolerance)
+    # Deliberately use the exact writer rather than _proxy_from_occt: that general
+    # adapter permits a marked display proxy, but this bounded API promises an exact
+    # document face too. Persist everything before publishing the master binding.
+    proxy = _onbrep().exact_brep(result.shape, _occt())
+    if proxy is None:
+        raise k.KernelError("parallel-section sweep exact document conversion failed: "
+                            f"{_onbrep().last_error()}; no approximate fallback")
+    if not proxy.IsValid or len(proxy.Faces) != 1 or proxy.IsSolid:
+        raise k.KernelError("parallel-section sweep requires one valid exact open document face")
+    if not proxy.SetUserString(k.DOCUMENT_FORM_KEY, "exact") or not k.record_recipe(proxy, result.recipe):
+        raise k.KernelError("parallel-section sweep could not persist its exact recipe")
+    k.register_master(proxy, result.shape)
     return proxy
 
 
@@ -5923,27 +5975,45 @@ def _transform_nonuniform(geom, matrix):
             "installed -- the object was left unchanged")
     k = _kernel()
     shape, recipe = _occt_operand(geom), k.recipe_of(geom)
-    if shape is None or not recipe:
-        work = geom if isinstance(geom, r3.Brep) else geom.ToBrep(False)
-        if work is not None and record_exact_recipe(work):
-            shape, recipe = k.master_of(work), k.recipe_of(work)
-    if shape is None or not recipe:
-        raise NonUniformTransformError(
-            "this object has no exact shape, so a non-uniform scale cannot be applied "
-            "exactly -- it was left unchanged")
     try:
+        if shape is None or not recipe:
+            work = geom if isinstance(geom, r3.Brep) else geom.ToBrep(False)
+            if work is not None:
+                # Build a candidate only: record_exact_recipe(work) would publish a
+                # master and modify the ORIGINAL even when the later transform fails.
+                data = brep_data(work)
+                shape = occt.shape_from_brep_data(data, sew_tolerance=1e-6)
+                recipe = {"kind": "brep_data", "data": data, "tolerance": 1e-6}
+        if shape is None or not recipe:
+            raise ValueError("this object has no exact shape")
+        if not occt.is_valid(shape):
+            raise ValueError("the original shape is invalid")
+        kind = shape.ShapeType().name
+        requires_solid = occt.solid_count(shape) > 0 or kind in ("TopAbs_SOLID", "TopAbs_COMPSOLID")
+        if requires_solid:
+            if not occt.is_airtight(shape):
+                raise ValueError("the original is not one valid airtight solid")
+        elif kind not in ("TopAbs_FACE", "TopAbs_SHELL"):
+            raise ValueError("the original is neither a solid nor a face/shell")
         if recipe.get("kind") == "local_move":
             updated, moved = _transform_local_move_recipe(recipe, matrix, occt)
         else:
             moved = occt.transform(shape, matrix)
             updated = dict(recipe)
             updated["xform"] = _mat_mul(matrix, recipe.get("xform") or _IDENTITY16)
-        if not occt.is_airtight(moved):
-            raise ValueError("the transformed result is not one valid airtight solid")
+        if requires_solid:
+            if not occt.is_airtight(moved):
+                raise ValueError("the transformed result is not one valid airtight solid")
+        elif (not occt.is_valid(moved) or moved.ShapeType() != shape.ShapeType()
+              or occt.solid_count(moved) != 0
+              or occt.face_count(moved) != occt.face_count(shape)
+              or len(occt._unique_edges(moved)) != len(occt._unique_edges(shape))
+              or len(occt._unique_vertices(moved)) != len(occt._unique_vertices(shape))):
+            raise ValueError("the transformed face/shell is invalid or changed topological kind")
+        new = occt_backed(moved, updated)
     except Exception as e:  # noqa: BLE001
         raise NonUniformTransformError(f"the non-uniform scale failed ({e}) -- the object "
                                        f"was left unchanged") from e
-    new = occt_backed(moved, updated)
     getter = getattr(geom, "GetUserStrings", None)
     if callable(getter):
         try:

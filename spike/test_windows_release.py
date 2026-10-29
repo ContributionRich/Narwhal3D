@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import importlib.util
 import runpy
+import struct
+import zlib
 from pathlib import Path
 import sys
 import tempfile
@@ -11,6 +13,7 @@ import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
+from validate_windows_icon import RESOLUTIONS, PNG_SIGNATURE, decode_rgba_png, validate_icon
 spec = importlib.util.spec_from_file_location(
     "windows_verifier", ROOT / "scripts" / "verify_windows_release.py")
 assert spec is not None and spec.loader is not None
@@ -69,8 +72,146 @@ check("Narwhal 3D early prerelease launcher" in resource
       and resource.count("__VERSION_COMMA__") == 2
       and resource.count("__VERSION__ prerelease") == 2,
       "launcher resource carries independent identity and rendered-version placeholders")
-check(icon[:4] == b"\x00\x00\x01\x00" and len(icon) > 100_000,
-      "Windows launcher icon is a substantive multi-resolution ICO")
+check(validate_icon(icon) == RESOLUTIONS,
+      "Windows ICO decodes seven RGBA resolutions with visible artwork and antialiased transparency")
+
+
+def rejected_icon(candidate, reason, label):
+    try:
+        validate_icon(candidate)
+    except ValueError as exc:
+        check(reason in str(exc), f"ICO mutation RED: {label}")
+    else:
+        check(False, f"ICO mutation escaped validation: {label}")
+
+
+def directory_mutation(offset, fmt, value):
+    candidate = bytearray(icon)
+    struct.pack_into(fmt, candidate, offset, value)
+    return bytes(candidate)
+
+
+def png_chunk(kind, payload):
+    return (struct.pack(">I", len(payload)) + kind + payload
+            + struct.pack(">I", zlib.crc32(kind + payload)))
+
+
+def png_image(size, raw, *, header=None, compressed=None):
+    return (PNG_SIGNATURE
+            + png_chunk(b"IHDR", header or struct.pack(">IIBBBBB", size, size, 8, 6, 0, 0, 0))
+            + png_chunk(b"IDAT", zlib.compress(raw) if compressed is None else compressed)
+            + png_chunk(b"IEND", b""))
+
+
+frames = []
+for index in range(len(RESOLUTIONS)):
+    length, offset = struct.unpack_from("<II", icon, 14 + index * 16)
+    frames.append(icon[offset:offset + length])
+
+
+def replace_frame(index, image):
+    images = list(frames)
+    images[index] = image
+    offset = 6 + 16 * len(images)
+    directory = bytearray(icon[:offset])
+    for i, frame in enumerate(images):
+        struct.pack_into("<II", directory, 14 + i * 16, len(frame), offset)
+        offset += len(frame)
+    return bytes(directory) + b"".join(images)
+
+
+for offset, fmt, value, reason, label in (
+    (0, "<H", 1, "header", "reserved header"),
+    (2, "<H", 2, "header", "cursor instead of icon"),
+    (4, "<H", 1, "header", "missing resolutions"),
+    (22, "B", 16, "directory entry", "duplicate/mismatched resolution"),
+    (6, "B", 20, "directory entry", "unsupported resolution"),
+    (8, "B", 1, "directory entry", "palette metadata"),
+    (9, "B", 1, "directory entry", "reserved entry"),
+    (10, "<H", 2, "directory entry", "invalid planes"),
+    (12, "<H", 24, "directory entry", "lost RGBA depth"),
+    (14, "<I", len(icon), "outside payload", "out-of-bounds image length"),
+    (18, "<I", 0, "outside payload", "image inside directory"),
+    (34, "<I", 118, "overlap", "overlapping images"),
+):
+    rejected_icon(directory_mutation(offset, fmt, value), reason, label)
+rejected_icon(icon[:100], "truncated ICO directory", "truncated directory")
+rejected_icon(icon[:-1], "outside payload", "truncated last image")
+rejected_icon(icon + b"padding", "trailing bytes", "unreferenced trailing data")
+
+for index, size in enumerate(RESOLUTIONS):
+    png = frames[index]
+    pixels = decode_rgba_png(png, size)
+    raw = b"".join(b"\0" + pixels[row:row + size * 4]
+                   for row in range(0, len(pixels), size * 4))
+    broken_crc = bytearray(png)
+    broken_crc[29] ^= 1
+    rejected_icon(replace_frame(index, bytes(broken_crc)), "CRC", f"{size}px PNG CRC")
+    for alpha, label in ((255, "opaque"), (0, "invisible"), (128, "no opaque artwork")):
+        changed = bytearray(pixels)
+        changed[3::4] = bytes([alpha]) * (size * size)
+        scanlines = b"".join(b"\0" + changed[row:row + size * 4]
+                             for row in range(0, len(changed), size * 4))
+        rejected_icon(replace_frame(index, png_image(size, scanlines)), "alpha",
+                      f"{size}px {label} with valid PNG CRC/zlib")
+    binary_alpha = bytearray(pixels)
+    binary_alpha[3::4] = bytes(255 if a else 0 for a in pixels[3::4])
+    binary_rows = b"".join(b"\0" + binary_alpha[row:row + size * 4]
+                           for row in range(0, len(binary_alpha), size * 4))
+    rejected_icon(replace_frame(index, png_image(size, binary_rows)), "alpha",
+                  f"{size}px antialiasing lost")
+    flat = bytearray(pixels)
+    for i in range(0, len(flat), 4):
+        flat[i:i + 3] = b"\x42\x42\x42"
+    flat_rows = b"".join(b"\0" + flat[row:row + size * 4]
+                         for row in range(0, len(flat), size * 4))
+    rejected_icon(replace_frame(index, png_image(size, flat_rows)), "colour detail",
+                  f"{size}px visible colour detail lost")
+    check(validate_icon(replace_frame(index, png_image(size, raw))) == RESOLUTIONS,
+          f"ICO restored GREEN: {size}px fully decoded/re-encoded pixels")
+
+# Checksummed corruptions must reach decoding, not merely fail the CRC guard.
+size = RESOLUTIONS[0]
+pixels = decode_rgba_png(frames[0], size)
+raw = b"".join(b"\0" + pixels[row:row + size * 4]
+               for row in range(0, len(pixels), size * 4))
+for image, reason, label in (
+    (png_image(size, raw, header=struct.pack(">IIBBBBB", 32, 32, 8, 6, 0, 0, 0)),
+     "dimensions/format", "PNG/directory disagreement"),
+    (png_image(size, raw, header=struct.pack(">IIBBBBB", size, size, 8, 2, 0, 0, 0)),
+     "dimensions/format", "RGB instead of RGBA"),
+    (png_image(size, raw, compressed=b"not zlib"), "compressed stream", "invalid zlib"),
+    (png_image(size, raw, compressed=zlib.compress(raw)[:-1]), "decoded length/end", "zlib truncation"),
+    (png_image(size, raw, compressed=zlib.compress(raw) + zlib.compress(raw)),
+     "decoded length/end", "extra compressed stream"),
+    (png_image(size, raw[:-1]), "decoded length/end", "short decoded image"),
+    (png_image(size, raw + b"\0"), "decoded length/end", "oversized decoded image"),
+    (png_image(size, b"\5" + raw[1:]), "scanline filter", "invalid decoded filter"),
+    (frames[0][:-12], "terminal IEND", "missing PNG end"),
+    (frames[0] + png_chunk(b"IEND", b""), "terminal IEND", "duplicate PNG end"),
+):
+    rejected_icon(replace_frame(0, image), reason, label)
+
+# Independent fixture encodings exercise every inverse filter (especially alpha:
+# filtered alpha bytes are not the actual opacity). No asset files are rewritten.
+fixture = bytes((i * 37 + i // 9) % 256 for i in range(16 * 16 * 4))
+for filtering in range(5):
+    rows = bytearray()
+    for y in range(16):
+        rows.append(filtering)
+        for x in range(64):
+            i = y * 64 + x
+            a = fixture[i - 4] if x >= 4 else 0
+            b = fixture[i - 64] if y else 0
+            c = fixture[i - 68] if y and x >= 4 else 0
+            p = a + b - c
+            pa, pb, pc = abs(p - a), abs(p - b), abs(p - c)
+            paeth = a if pa <= pb and pa <= pc else b if pb <= pc else c
+            predictor = (0, a, b, (a + b) // 2, paeth)[filtering]
+            rows.append((fixture[i] - predictor) % 256)
+    check(decode_rgba_png(png_image(16, rows), 16) == fixture,
+          f"PNG filter {filtering} reconstructs every known RGBA pixel")
+check(validate_icon(icon) == RESOLUTIONS, "original ICO restored GREEN after all in-memory mutations")
 check(verifier.CDR_MULTIVERSION_PROTOCOL in multiversion_source,
       "Windows verifier pins the bundled multi-version CDR helper protocol")
 check(verifier.DOCUMENT_CORE_PROTOCOL in document_core_source,

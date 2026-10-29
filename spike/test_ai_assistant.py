@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Pure security, provider, transcript, and proposal tests for AI Assistant."""
+import ast
 import importlib
 import json
 import os
@@ -178,7 +179,9 @@ check('"Discovering available models..."' in ui_source
       and '"Model discovery failed:' in ui_source
       and '"Connected, but no chat models were reported."' in ui_source,
       "Settings exposes bounded model loading, empty, and error states")
-panel_source = ui_source.split("def _draw_ai_panel", 1)[1].split("def _ai_send", 1)[0]
+panel_node = next(node for node in ast.parse(ui_source).body
+                  if isinstance(node, ast.FunctionDef) and node.name == "_draw_ai_panel")
+panel_source = ast.get_source_segment(ui_source, panel_node)
 check("credential_env" not in panel_source and "masked_credential" not in panel_source
       and "Model:" not in panel_source and "Connection:" in panel_source,
       "the chat body shows only connection status; setup details stay in Settings")

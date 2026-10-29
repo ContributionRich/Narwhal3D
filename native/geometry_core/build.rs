@@ -839,6 +839,9 @@ int32_t narwhal_geometry_core_edit_session_release(NarwhalEditSessionHandle h) {
 
 fn main() {
     println!("cargo:rerun-if-changed=cpp/occt_adapter.cpp");
+    println!("cargo:rerun-if-changed=cpp/sweep_adapter.inc");
+    println!("cargo:rerun-if-changed=cpp/freeform_adapter.inc");
+    println!("cargo:rerun-if-changed=cpp/preparation_adapter.inc");
     println!("cargo:rerun-if-changed=include/narwhal_geometry_core.h");
     println!("cargo:rerun-if-env-changed=NARWHAL_OCCT_SOURCE_DIR");
     println!("cargo:rerun-if-env-changed=NARWHAL_OCCT_LIB_DIR");

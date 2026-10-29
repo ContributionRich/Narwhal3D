@@ -2,6 +2,7 @@
 """Public repository organization, roadmap, issue forms, and asset policy checks."""
 from __future__ import annotations
 
+import ast
 import hashlib
 import importlib.util
 import json
@@ -28,6 +29,133 @@ def check(condition, label, detail=""):
     else:
         failures.append(label)
         print(f"  FAIL {label}" + (f" ({detail})" if detail else ""))
+
+
+def public_completeness_checks():
+    """Offline source/fixture closure; never import native or GUI test modules."""
+    sys.path.insert(0, str(ROOT / "scripts"))
+    import audit_public_tree as audit
+    import create_public_branch as builder
+
+    public = set(builder.public_files())
+    native = set()
+    for crate in ("automation_core", "geometry_core"):
+        base = ROOT / "native" / crate
+        native.update(f"native/{crate}/{name}" for name in ("Cargo.toml", "Cargo.lock"))
+        # Discovery is a completeness assertion, NOT a publication glob. New source
+        # files still require an explicit reviewed addition to both manifests.
+        for directory, suffixes in (("src", {".rs"}), ("cpp", {".cpp", ".inc"}),
+                                    ("include", {".h"})):
+            native.update(path.relative_to(ROOT).as_posix()
+                          for path in (base / directory).rglob("*")
+                          if path.is_file() and path.suffix in suffixes)
+    native.add("native/geometry_core/build.rs")
+    focused = {
+        "spike/test_ai_workflow.py", "spike/test_ai_workflow_native.py",
+        "spike/test_ai_cad.py", "spike/test_ai_cad_native.py",
+        "spike/test_ai_ui_workflow.py", "spike/test_ai_workflow_transport.py",
+        "spike/test_ai_ui_workflow_gui.py",
+        "spike/test_pick_candidates.py", "spike/test_selection_menu.py",
+        "spike/test_selection_menu_gui.py", "spike/test_ui_bundle.py",
+        "spike/test_automation_context.py", "spike/test_automation_bridge.py",
+        "spike/test_automation_host.py", "spike/test_automation_native.py",
+        "spike/test_automation_mcp.py", "spike/test_automation_modern.py",
+        "spike/test_automation_lifecycle.py", "spike/test_automation_live.py",
+        "spike/test_automation_startup.py",
+        "spike/test_surfacing_parallel.py", "spike/test_surfacing_probe.py",
+        "spike/test_surfacing_integration.py", "spike/test_surfacing_freeform.py",
+        "spike/test_surfacing_freeform_probe.py", "spike/test_surfacing_freeform_mutations.py",
+        "spike/test_surfacing_interior.py", "spike/test_surfacing_step_roundtrip.py",
+        "spike/test_surfacing_readiness_mutations.py", "spike/test_surfacing_preparation.py",
+        "spike/test_surfacing_preparation_mutations.py",
+        "spike/test_windows_release.py", "spike/test_windows_build.py",
+        "scripts/validate_windows_icon.py",
+    }
+    pending = list(focused)
+    while pending:
+        relative = pending.pop()
+        tree = ast.parse((ROOT / relative).read_bytes(), filename=relative)
+        for node in ast.walk(tree):
+            names = ([alias.name for alias in node.names] if isinstance(node, ast.Import)
+                     else [node.module or ""] if isinstance(node, ast.ImportFrom) else [])
+            for name in names:
+                if name.startswith("test_"):
+                    dependency = "spike/" + name.replace(".", "/") + ".py"
+                    if dependency not in focused:
+                        focused.add(dependency)
+                        pending.append(dependency)
+    import build_ui_bundle as bundle
+    preview = {"scripts/build_ui_bundle.py", "scripts/ui_bundle_export.py",
+               "scripts/ui_bundle_shots.py", "scripts/ui_bundle/test_preview.cjs",
+               "scripts/ui_bundle/index.html", "docs/UI_DESIGNER_BUNDLE.md"}
+    preview.update("scripts/ui_bundle/" + name for name in bundle.PLAYGROUND_FILES)
+    preview_inputs = set(bundle.source_inventory()) | set(bundle.asset_inventory()) | preview
+    check(preview_inputs <= public, "editable preview's complete source/asset inventory is public",
+          sorted(preview_inputs - public))
+    source_entries = {path: ("100644", (ROOT / path).read_bytes()) for path in public
+                      if path.endswith(".sh") or path.startswith("spike/") and path.endswith(".py")}
+    harness = audit.required_public_paths(source_entries) - audit.REQUIRED
+    required = native | focused | preview | harness
+    check(required <= public, "explicit public allowlist closes native and focused-test sources",
+          sorted(required - public))
+    audited = audit.required_public_paths(source_entries)
+    check(required <= audited, "public audit requires the complete native/test/harness closure",
+          sorted(required - audited))
+    # Removing any member must produce a named failure, even if the other files
+    # still contain that member's name (e.g. a driver references an absent fixture).
+    entries = {path: ("100644", b"pass\n") for path in audited}
+    entries.update((path, entry) for path, entry in source_entries.items() if path.endswith(".sh"))
+    missing_checks = []
+    for path in sorted(required):
+        candidate = dict(entries)
+        candidate.pop(path, None)
+        if f"missing required public file: {path}" not in audit.audit_entries(candidate):
+            missing_checks.append(path)
+    check(not missing_checks, "every source/fixture omission mutation is rejected by name",
+          missing_checks)
+    check(not any(path.startswith(("docs/agent_tasks/", "docs/automation/", "docs/surfacing/",
+                                  "tmp/", "artifacts/", "vendor/", "tools/"))
+                  or "/target/" in path or path.endswith((".so", ".dll", ".exe", ".pyc"))
+                  for path in public),
+          "native closure does not admit private notes, scratch data or runtime binaries")
+    # Exercise source references that are NOT already in either static manifest.
+    # This prevents a new conditional suite or transitive fixture from escaping
+    # merely because the harness audit and this caller share discovery code.
+    fixture = {
+        "run_tests.sh": ("100755", b'if test -n "DISPLAY"; then\n bash spike/closure_gui.sh\nfi\n'),
+        "spike/closure_gui.sh": ("100755", b'python3 spike/test_closure_case.py\n'),
+        "spike/test_closure_case.py": ("100644", b'import test_closure_fixture\n'),
+        "spike/test_closure_fixture.py": ("100644", b'pass\n'),
+    }
+    found = audit.required_public_paths(fixture)
+    check(set(fixture) <= found, "conditional shell suite and imported fixture are required")
+    for path in list(fixture)[1:]:
+        candidate = dict(fixture)
+        candidate.pop(path)
+        check(f"missing required public file: {path}" in audit.audit_entries(candidate),
+              f"harness dependency omission is rejected: {path}")
+    commented = {"run_tests.sh": ("100755", b'# python3 spike/test_not_executed.py\n')}
+    check("spike/test_not_executed.py" not in audit.required_public_paths(commented),
+          "comment-only references do not admit historical fixtures")
+    reference = "scripts/ui_bundle/references/workspace-light.png"
+    check(audit.path_problem(reference) is None
+          and audit.path_problem(reference.replace("workspace-light", "unreviewed")) is not None,
+          "only the exact reviewed preview screenshot is permitted")
+    for name, digest in {
+        "Inter.woff2": "fb865a5087637ba194b14aef6f0558214f3c4b3ec939e3c0812c66de41036a47",
+        "Ubuntu-Light.ttf": "80307b8da7649aa4ee4d484b232140e3ce1ec0ca093073d3c53c8f5a5ced7a70",
+        "OFL-1.1.txt": "c1a781a6a032bf00b1bbffc388fd6936bf28a0ded472c263bcff88b181dea456",
+        "UFL.txt": "2f0015108d68627bd788d313f529c21ff4da2c2c42a5e1f3883acc83480f9002",
+    }.items():
+        check(hashlib.sha256((ROOT / "scripts/ui_bundle/fonts" / name).read_bytes()).hexdigest() == digest,
+              f"preview font/license bytes are unmodified: {name}")
+    return required
+
+
+if "--completeness-only" in sys.argv:
+    public_completeness_checks()
+    print(f"\n{checks - len(failures)}/{checks} public completeness checks passed")
+    raise SystemExit(bool(failures))
 
 
 required_docs = (
@@ -355,6 +483,7 @@ assert spec is not None and spec.loader is not None
 module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
 public = set(module.public_files())
+public_completeness_checks()
 check(set(screenshots) | {"docs/technical-reference.md"} <= public,
       "the public allowlist includes both README screenshots and the technical reference")
 for document, targets in ((ROOT / "README.md", readme_links | readme_images),

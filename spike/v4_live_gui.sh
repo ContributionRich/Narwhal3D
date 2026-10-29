@@ -56,6 +56,8 @@ run_gui spike/test_render_quality_gui.py RENDER_QUALITY_RESULT after-bootstrap
 rm -f "$NARWHAL3D_SETTINGS_FILE"
 run_gui spike/test_component_fillet_gui.py COMPONENT_FILLET_RESULT before-bootstrap
 rm -f "$NARWHAL3D_SETTINGS_FILE"
+run_gui spike/test_fillet_mouse_gui.py FILLET_MOUSE_RESULT before-bootstrap
+rm -f "$NARWHAL3D_SETTINGS_FILE"
 # These two launches intentionally share the write phase's disposable preferences.
 export NARWHAL_PREF_TEST_PHASE=write
 run_gui spike/test_preferences_gui.py PREFERENCES_GUI_RESULT before-bootstrap
@@ -66,3 +68,16 @@ rm -f "$NARWHAL3D_SETTINGS_FILE"
 run_gui spike/test_window_overlay_gui.py WINDOW_OVERLAY_RESULT before-bootstrap
 rm -f "$NARWHAL3D_SETTINGS_FILE"
 run_gui spike/test_gumball_extrude_scale_gui.py GUMBALL_GUI_RESULT before-bootstrap
+rm -f "$NARWHAL3D_SETTINGS_FILE"
+# This offscreen shader oracle needs a real GPU context, but no app bootstrap or events.
+status=0
+timeout --kill-after=5s 120s "$ROOT/tools/blender-patched/blender" --factory-startup \
+  --threads 2 --python-exit-code 1 --python "$ROOT/spike/test_extrude_preview_gpu.py" \
+  >"$LOG" 2>&1 || status=$?
+if [[ $status -ne 0 ]] || ! grep -qx 'EXTRUDE PREVIEW GPU PASSED' "$LOG" \
+    || grep -qE 'Traceback|draw failed|panel failed|viewport setup .*failed' "$LOG"; then
+  cat "$LOG"
+  echo "FAIL: spike/test_extrude_preview_gpu.py (exit $status)" >&2
+  exit 1
+fi
+echo 'PASS: spike/test_extrude_preview_gpu.py'

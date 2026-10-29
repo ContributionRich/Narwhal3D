@@ -12,6 +12,9 @@ def register():
 
 
 def unregister():
+    from . import automation_host
+
+    automation_host.close()
     _ui.unregister()
 
 

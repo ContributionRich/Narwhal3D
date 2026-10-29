@@ -15,6 +15,8 @@
 /build/
 /tmp/
 /.wt_*/
+# Disposable HTML-preview browser/dependency cache, never application source.
+/.cache/ui-preview-test/
 
 # Python and local environments
 /.venv/

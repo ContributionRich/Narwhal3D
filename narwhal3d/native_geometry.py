@@ -21,6 +21,7 @@ STATUS_LIMIT_EXCEEDED = -2
 STATUS_POLICY_REFUSED = -7
 STATUS_SMOOTHNESS_CREASE = -8
 CAP_EDIT_SESSIONS = 1 << 5
+CAP_SWEEP1_PARALLEL = 1 << 6
 _REFUSAL_DETAILS = {
     1: "input is neither one airtight solid nor one valid face",
     2: "component index is outside the BRep",
@@ -371,6 +372,202 @@ def move_component(source_identity, encoded_brep_supplier, kind, index, vector, 
             return _outcome(certificate_status, certificate,
                             "native certificate reported failure")
         return MoveResult("ok", data=bytes(output), status=STATUS_OK)
+
+
+class SweepReport(ctypes.Structure):
+    _fields_ = [("struct_size", ctypes.c_uint32), ("version", ctypes.c_uint32),
+                ("status", ctypes.c_int32), ("reason", ctypes.c_uint32),
+                ("section_control_error_bound", ctypes.c_double),
+                ("min_axial_increment", ctypes.c_double),
+                ("min_transverse_increment", ctypes.c_double),
+                ("projected_jacobian_lower_bound", ctypes.c_double)]
+
+
+_SWEEP_REFUSALS = {
+    1: "malformed or nonfinite parallel-section input",
+    2: "parallel-section axes must be orthonormal",
+    3: "section parameters must run from 0 to 1 in order, separated by at least 0.05",
+    4: "closed, degenerate or nonmonotone rail is unsupported",
+    5: "section anchor/parallel plane or interpolation error exceeds tolerance",
+    6: "degenerate, folded or nonmonotone section control net is unsupported",
+}
+
+
+def sweep1_parallel_available():
+    with _lock:
+        binding = _load_locked()
+        return (binding is not None
+                and bool(int(binding.library.narwhal_geometry_core_capabilities())
+                         & CAP_SWEEP1_PARALLEL)
+                and hasattr(binding.library, "narwhal_geometry_core_sweep1_parallel_v1"))
+
+
+def sweep1_parallel(packed):
+    """Transport bounded doubles to Rust; return (explicit outcome, report dict)."""
+    with _lock:
+        if not sweep1_parallel_available():
+            return MoveResult("unavailable", detail="native parallel-section Sweep1 capability unavailable"), {}
+        if not 1 <= len(packed) <= 65:
+            return MoveResult("error", status=-1, detail="invalid parallel-section input size"), {}
+        binding = _load_locked()
+        fn = binding.library.narwhal_geometry_core_sweep1_parallel_v1
+        fn.argtypes = [ctypes.POINTER(ctypes.c_double), ctypes.c_size_t,
+                       _ByteP, ctypes.c_size_t, ctypes.POINTER(SweepReport)]
+        fn.restype = ctypes.c_int64
+        try:
+            source = (ctypes.c_double * len(packed))(*packed)
+            info = SweepReport()
+            required = int(fn(source, len(packed), None, 0, ctypes.byref(info)))
+            if info.struct_size != ctypes.sizeof(SweepReport) or info.version != 1:
+                return MoveResult("error", detail="native sweep report version/layout mismatch"), {}
+            if required <= 0 or required > MAX_BUFFER_BYTES:
+                return MoveResult("refused" if info.reason else "error", status=required,
+                                  refusal_reason=info.reason,
+                                  detail=_SWEEP_REFUSALS.get(info.reason, "native sweep construction failed")), {}
+            output = (ctypes.c_ubyte * required)()
+            written = int(fn(source, len(packed), output, required, ctypes.byref(info)))
+            if written != required or info.status != 0:
+                return MoveResult("error", status=written, detail="native sweep output failed"), {}
+        except (TypeError, ValueError, OverflowError, OSError) as exc:
+            return MoveResult("error", detail=f"native sweep transport failed: {exc}"), {}
+        report = {name: getattr(info, name) for name, _ in SweepReport._fields_}
+        return MoveResult("ok", data=bytes(output), status=0), report
+
+
+class FreeformReport(ctypes.Structure):
+    _fields_ = [("struct_size", ctypes.c_uint32), ("version", ctypes.c_uint32),
+                ("status", ctypes.c_int32), ("reason", ctypes.c_uint32),
+                ("samples", ctypes.c_uint32), ("patches", ctypes.c_uint32),
+                ("proof_cells", ctypes.c_uint32), ("continuity", ctypes.c_uint32),
+                ("fit_error", ctypes.c_double), ("section_error", ctypes.c_double),
+                ("rail_error", ctypes.c_double), ("law_error", ctypes.c_double),
+                ("min_cell_determinant", ctypes.c_double)]
+
+
+_FREEFORM_REFUSALS = {
+    1: "invalid Freeform inputs or tolerance",
+    2: "unsupported curve: one smooth rail edge and quadratic single-span sections required",
+    3: "section stations must span the rail domain in order, separated by at least 5%",
+    4: "closed, discontinuous or degenerate rail/section is unsupported",
+    5: "section anchor, normal-plane placement or common rational weights disagree",
+    6: "folding/degenerate surface or unable to certify the bounded projection domain",
+    7: "Freeform fit, rail or original-section agreement exceeds tolerance",
+    8: "Freeform result does not satisfy the C2/complexity contract",
+    9: "Freeform result has invalid BRep topology",
+}
+
+
+def sweep1_freeform_available():
+    with _lock:
+        binding = _load_locked()
+        return (binding is not None
+                and bool(int(binding.library.narwhal_geometry_core_capabilities()) & (1 << 7))
+                and hasattr(binding.library, "narwhal_geometry_core_sweep1_freeform_approx_v1"))
+
+
+def sweep1_freeform_approx(data, parameters, reverse, tolerance):
+    """Opaque exact-curve transport; numerical work belongs to Rust/OCCT."""
+    with _lock:
+        if not sweep1_freeform_available():
+            return MoveResult("unavailable", detail="native multi-section Freeform capability unavailable"), {}
+        if not 2 <= len(parameters) <= 4 or len(reverse) != len(parameters):
+            return MoveResult("error", detail="two to four explicit section stations required"), {}
+        raw, error = _source_bytes(lambda: data)
+        if error is not None:
+            return error, {}
+        if len(raw) > 16 * 1024 * 1024:
+            return MoveResult("error", detail="Freeform inputs exceed 16 MiB"), {}
+        fn = _load_locked().library.narwhal_geometry_core_sweep1_freeform_approx_v1
+        fn.argtypes = [_ByteP, ctypes.c_size_t, ctypes.POINTER(ctypes.c_double), ctypes.c_size_t,
+                       ctypes.c_double, _ByteP, ctypes.c_size_t, ctypes.POINTER(FreeformReport)]
+        fn.restype = ctypes.c_int64
+        try:
+            source = (ctypes.c_ubyte * len(raw)).from_buffer_copy(raw)
+            stations = (ctypes.c_double * (2 * len(parameters)))(
+                *[v for pair in zip(parameters, reverse) for v in pair])
+            info = FreeformReport()
+            args = (source, len(raw), stations, len(parameters), float(tolerance))
+            needed = int(fn(*args, None, 0, ctypes.byref(info)))
+            if info.struct_size != ctypes.sizeof(info) or info.version != 1:
+                return MoveResult("error", detail="Freeform report layout mismatch"), {}
+            report = {name: getattr(info, name) for name, _ in info._fields_}
+            if not 0 < needed <= MAX_BUFFER_BYTES:
+                return MoveResult("refused" if info.reason else "error", status=needed,
+                                  refusal_reason=info.reason,
+                                  detail=_FREEFORM_REFUSALS.get(info.reason, "native Freeform construction failed")), report
+            output = (ctypes.c_ubyte * needed)()
+            written = int(fn(*args, output, needed, ctypes.byref(info)))
+            if written != needed or info.status:
+                return MoveResult("error", status=written, detail="Freeform output copy failed"), report
+            return MoveResult("ok", data=bytes(output), status=0), report
+        except (TypeError, ValueError, OverflowError, OSError) as exc:
+            return MoveResult("error", detail=f"Freeform transport failed: {exc}"), {}
+
+
+class StationReport(ctypes.Structure):
+    _fields_ = [("struct_size", ctypes.c_uint32), ("version", ctypes.c_uint32),
+                ("status", ctypes.c_int32), ("reason", ctypes.c_uint32),
+                ("count", ctypes.c_uint32), ("reserved", ctypes.c_uint32),
+                ("first", ctypes.c_double), ("last", ctypes.c_double),
+                ("parameters", ctypes.c_double * 4),
+                ("points", (ctypes.c_double * 3) * 4), ("max_error", ctypes.c_double)]
+
+
+_PREPARATION_REFUSALS = {
+    1: "invalid physical station input",
+    2: "unsupported rail or section curve class",
+    3: "physical stations must span rail endpoints in order with at least 5% separation",
+    4: "closed, discontinuous or degenerate source curve",
+    5: "physical station, section anchor/normal plane or common weights disagree",
+    6: "ambiguous physical station: multiple native rail parameters",
+    7: "physical station is not on the rail",
+    8: "physical station preparation exceeds its resource bound",
+}
+
+
+def prepare_freeform_available():
+    with _lock:
+        binding = _load_locked()
+        return (binding is not None
+                and bool(int(binding.library.narwhal_geometry_core_capabilities()) & (1 << 8))
+                and hasattr(binding.library, "narwhal_geometry_core_prepare_freeform_v1"))
+
+
+def prepare_freeform_stations(data, points, reverse, tolerance):
+    """Transport exact wires and physical coordinates; no inverse mapping in Python."""
+    with _lock:
+        if not prepare_freeform_available():
+            return MoveResult("unavailable", detail="native Freeform preparation capability unavailable"), {}
+        n = len(points)
+        if not 2 <= n <= 4 or len(reverse) != n or any(len(p) != 3 for p in points):
+            return MoveResult("error", detail="invalid physical station dimensions"), {}
+        raw, error = _source_bytes(lambda: data)
+        if error is not None:
+            return error, {}
+        if len(raw) > 16 * 1024 * 1024:
+            return MoveResult("error", detail="Freeform inputs exceed 16 MiB"), {}
+        fn = _load_locked().library.narwhal_geometry_core_prepare_freeform_v1
+        fn.argtypes = [_ByteP, ctypes.c_size_t, ctypes.POINTER(ctypes.c_double), _ByteP,
+                       ctypes.c_size_t, ctypes.c_double, ctypes.POINTER(StationReport)]
+        fn.restype = ctypes.c_int32
+        try:
+            source = (ctypes.c_ubyte * len(raw)).from_buffer_copy(raw)
+            xyz = (ctypes.c_double * (3*n))(*[v for p in points for v in p])
+            flags = (ctypes.c_ubyte * n)(*reverse)
+            report = StationReport()
+            status = int(fn(source, len(raw), xyz, flags, n, float(tolerance), ctypes.byref(report)))
+            if report.struct_size != ctypes.sizeof(report) or report.version != 1:
+                return MoveResult("error", detail="native preparation report layout mismatch"), {}
+            if status != 0:
+                return MoveResult("refused" if report.reason else "error", status=status,
+                                  refusal_reason=report.reason,
+                                  detail=_PREPARATION_REFUSALS.get(report.reason, "native preparation failed")), {}
+            result = dict(parameters=tuple(report.parameters[:n]),
+                          points=tuple(tuple(report.points[i]) for i in range(n)),
+                          domain=(report.first, report.last), max_error=report.max_error)
+            return MoveResult("ok", status=0), result
+        except (TypeError, ValueError, OverflowError, OSError) as exc:
+            return MoveResult("error", detail=f"physical station transport failed: {exc}"), {}
 
 
 def reset_sessions():

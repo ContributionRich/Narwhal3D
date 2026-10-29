@@ -213,6 +213,10 @@ RECIPE_KINDS = {
     # A sweep along one rail (`BRepOffsetAPI_MakePipeShell`) -- `binormal` None is
     # the reference CAD application's Freeform (corrected Frenet), a direction is Roadlike (constant binormal).
     "sweep1": ("rail", "section"),
+    "sweep1_freeform_approx": ("version", "rail", "sections", "parameters", "reverse", "tolerance"),
+    # OURS: explicit bounded parallel-section interpolation; never replaces Freeform.
+    "sweep1_parallel": ("version", "rail", "sections", "parameters", "axis", "across",
+                        "reverse", "tolerance"),
     # A surface/polysurface given by its own exact faces (`brep_data`) -- what a Loft or
     # Sweep2 produces, recorded as the result so it rebuilds bit-for-bit.
     "brep_data": ("data",),
@@ -600,6 +604,18 @@ def make_prism(shape, direction, both=False, solid=True):
         raise
     except Exception as e:  # noqa: BLE001
         raise KernelError(f"could not extrude: {e}") from e
+    if solid and solid_count(out):
+        # OCP-handle validation, not Python geometry. A swept face can fold into
+        # a closed, BRepCheck-valid shell whose caps intersect; positive volume
+        # alone missed that manufacturing defect in the Freeform STEP fixture.
+        from OCP.BRepAlgoAPI import BRepAlgoAPI_Check
+
+        try:
+            valid = BRepAlgoAPI_Check(out, True, True).IsValid()
+        except Exception as exc:  # noqa: BLE001
+            raise KernelError(f"could not validate the solid extrusion: {exc}") from exc
+        if not valid:
+            raise KernelError("the solid extrusion is invalid or self-intersecting")
     if solid and solid_count(out) == 1 and volume(out) < 0:
         from OCP.TopoDS import TopoDS
 
@@ -875,6 +891,19 @@ def _outward(shape):
 
 #: MakePipeShell's measured 3-D approximation tolerance, in model units.
 SWEEP_TOLERANCE = 1e-7
+
+
+def freeform_inputs_bytes(rail, sections):
+    """OCP-handle interop only: exact ordered wires for the native sweep adapter."""
+    from OCP.BRep import BRep_Builder
+    from OCP.TopoDS import TopoDS_Compound
+
+    compound = TopoDS_Compound()
+    builder = BRep_Builder()
+    builder.MakeCompound(compound)
+    for curve in [rail] + list(sections):
+        builder.Add(compound, wire_from_curve(curve))
+    return shape_to_bytes(compound, triangles=False)
 
 
 def make_sweep1(rail, section, binormal=None):
@@ -1374,6 +1403,12 @@ def from_recipe(recipe, _depth=0):
             shape = face_from_curve_loops(recipe["loops"])
         elif kind == "sweep1":
             shape = make_sweep1(recipe["rail"], recipe["section"], recipe.get("binormal"))
+        elif kind == "sweep1_freeform_approx":
+            from ..surfacing_backend import replay_freeform
+            shape = replay_freeform(recipe)
+        elif kind == "sweep1_parallel":
+            from ..surfacing_backend import replay
+            shape = replay(recipe)
         elif kind == "prism":
             shape = make_prism(from_recipe(recipe["a"], _depth + 1), recipe["dir"],
                                both=bool(recipe.get("both")),

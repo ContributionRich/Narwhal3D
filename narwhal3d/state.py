@@ -5,6 +5,8 @@ operator context) can read it cheaply every frame.
 """
 from __future__ import annotations
 
+import sys
+
 import rhino3dm as r3  # noqa: F401  (re-exported for convenience)
 
 from .commands import COMMANDS, NarwhalContext
@@ -54,6 +56,9 @@ class AppState:
         self._saved_serial = self.ctx.undo.top_serial
 
     def set_model(self, model: NarwhalModel):
+        host = sys.modules.get(__package__ + ".automation_host")
+        if host is not None:
+            host.close()
         self.model = model
         self.ctx = NarwhalContext(model)
         self.active_command = None

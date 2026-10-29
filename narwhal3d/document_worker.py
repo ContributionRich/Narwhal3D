@@ -238,11 +238,18 @@ def main():
             if (not math.isfinite(recipe_volume)
                     or abs(recipe_volume - volume) > 1.0e-10 * max(1.0, abs(volume))):
                 fail(f"master {object_id} volume differs from its recipe")
-        proxy_box = proxy.GetBoundingBox()
-        proxy_bounds = [proxy_box.Min.X, proxy_box.Min.Y, proxy_box.Min.Z,
-                        proxy_box.Max.X, proxy_box.Max.Y, proxy_box.Max.Z]
-        if any(abs(float(a) - float(b)) > max(1.0e-7, tolerance * 10.0)
-               for a, b in zip(proxy_bounds, bounds)):
+        if document_form == "exact":
+            # Compare equivalent bounds. These came from the proxy's OWN stored
+            # faces/edges/loops above, not its registered master or replay recipe.
+            # rhino3dm's raw NURBS box may enclose the control hull, not the surface.
+            proxy_bounds = proxy_shape_bounds
+        else:
+            proxy_box = proxy.GetBoundingBox()
+            proxy_bounds = [proxy_box.Min.X, proxy_box.Min.Y, proxy_box.Min.Z,
+                            proxy_box.Max.X, proxy_box.Max.Y, proxy_box.Max.Z]
+        if (not all(math.isfinite(float(value)) for value in proxy_bounds)
+                or any(abs(float(a) - float(b)) > max(1.0e-7, tolerance * 10.0)
+                       for a, b in zip(proxy_bounds, bounds))):
             fail(f"master {object_id} does not match proxy bounds")
         try:
             canonical = bytes(occt_backend.shape_to_bytes(shape, triangles=False))

@@ -1,0 +1,224 @@
+/* Dialog-only browser styling. Source logical metrics: printdialog.layout;
+   shell_popup constants; ui.Units (380px), ui.AbsoluteTolerance (280px).
+   Native file/color/save-question layouts are explicit approximations: catalog().
+   No selectors target parent UI. Tokens inherit the parent's exported theme.
+   --preview-scale is a positive unitless number, as in the parent playground. */
+.cad-dialog-root {
+  --cad-field: var(--FIELD_BG, var(--CONTROL_BG, #fff));
+  --cad-border: var(--BORDER_STRONG, #b9c3ce);
+  --cad-ink: var(--TEXT, #293645);
+  box-sizing: border-box;
+  position: fixed;
+  padding: 0;
+  margin: auto;
+  border: 1px solid var(--cad-border);
+  border-radius: 0;
+  color: var(--cad-ink);
+  background: var(--PANEL_BG, #edf1f5);
+  font: 13px/1.3 system-ui, sans-serif;
+  box-shadow: 0 12px 35px #0005;
+  zoom: var(--preview-scale, 1);
+  max-width: calc(100vw / var(--preview-scale, 1) - 24px);
+  max-height: calc(100vh / var(--preview-scale, 1) - 24px);
+  overflow: auto;
+  color-scheme: light;
+}
+.cad-dialog-root[data-theme="dark"] { color-scheme: dark; }
+.cad-dialog-root::backdrop { background: rgb(0 0 0 / 35%); }
+.cad-dialog-root *, .cad-dialog-root *::before, .cad-dialog-root *::after { box-sizing: border-box; }
+.cad-dialog-root [hidden] { display: none !important; }
+.cad-dialog-title {
+  height: 30px;
+  display: flex;
+  align-items: center;
+  padding: 0 10px;
+  background: var(--PANEL_HEADER_BG, #e3e9ef);
+  color: var(--cad-ink);
+  font-size: 14px;
+  font-weight: 400;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cad-dialog-body { padding: 14px; }
+.cad-dialog-footer { display: flex; justify-content: flex-end; gap: 10px; padding: 0 14px 14px; }
+.cad-dialog-root button, .cad-dialog-root input {
+  font: inherit;
+  color: inherit;
+  letter-spacing: normal;
+  margin: 0;
+}
+.cad-dialog-root button { cursor: pointer; }
+.cad-dialog-root button:disabled { cursor: default; opacity: .6; }
+.cad-dialog-button {
+  min-width: 85px;
+  height: 30px;
+  padding: 4px 12px;
+  border: 1px solid var(--cad-border);
+  background: var(--CHIP_BG, #e1e7ed);
+  border-radius: 0;
+}
+.cad-dialog-button:hover { background: var(--TOOL_HOVER, #d7e5f0); }
+.cad-dialog-root .cad-dialog-primary { background: var(--ACCENT, #2674df); color: #fff; border-color: transparent; }
+.cad-dialog-root button:focus-visible, .cad-dialog-root input:focus-visible, .cad-dialog-color-plane:focus-visible {
+  outline: 2px solid var(--ACCENT, #2674df); outline-offset: 1px;
+}
+.cad-dialog-row {
+  display: grid;
+  grid-template-columns: 40% minmax(0, 1fr);
+  align-items: center;
+  position: relative;
+  min-height: 30px;
+  gap: 0;
+}
+.cad-dialog-label { padding-right: 8px; min-width: 0; }
+.cad-dialog-input, .cad-dialog-choice {
+  width: 100%;
+  min-width: 0;
+  height: 26px;
+  border: 1px solid var(--cad-border);
+  border-radius: 0;
+  background: var(--cad-field);
+  padding: 3px 6px;
+  text-align: left;
+}
+.cad-dialog-input[aria-invalid="true"] { border-color: var(--ERROR, #bd3333); }
+.cad-dialog-choice { position: relative; padding-right: 24px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cad-dialog-choice::after { content: '▾'; position: absolute; right: 7px; color: var(--TEXT_MUTED, #627389); }
+.cad-dialog-choice[aria-expanded="true"] { border-color: var(--ACCENT, #2674df); }
+.cad-dialog-dropdown {
+  position: absolute;
+  top: calc(100% - 2px);
+  left: 40%;
+  z-index: 10;
+  width: max(60%, 300px);
+  max-width: calc(100vw / var(--preview-scale, 1) - 32px);
+  max-height: min(360px, 55vh);
+  overflow: auto;
+  border: 1px solid var(--cad-border);
+  background: var(--MENU_BG, #fff);
+  box-shadow: 0 3px 8px #0003;
+  padding: 0;
+}
+.cad-dialog-dropdown-up { top: auto; bottom: calc(100% - 2px); }
+.cad-dialog-option {
+  display: block;
+  position: relative;
+  width: 100%;
+  min-height: 24px;
+  border: 0;
+  border-radius: 0;
+  text-align: left;
+  padding: 3px 8px 3px 27px;
+  background: transparent;
+  white-space: nowrap;
+}
+.cad-dialog-option[aria-selected="true"]::before { content: '✓'; position: absolute; left: 7px; }
+.cad-dialog-option:hover, .cad-dialog-option:focus,
+.cad-dialog-menu-item:hover, .cad-dialog-menu-item:focus, .cad-dialog-highlight {
+  background: var(--ACCENT, #2674df) !important;
+  color: var(--BAR_TEXT_STRONG, #fff) !important;
+  outline: none;
+}
+.cad-dialog-check { display: flex; gap: 8px; align-items: center; min-height: 30px; cursor: pointer; }
+.cad-dialog-checkbox { width: 16px; height: 16px; accent-color: var(--ACCENT, #2674df); flex-shrink: 0; }
+.cad-dialog-message { padding: 8px 14px; font-size: 12px; color: var(--TEXT_MUTED, #627389); overflow-wrap: anywhere; }
+.cad-dialog-section-label { margin: 0 0 10px; }
+
+/* Print Setup: maximum 1100 x 720, title 30, pad 14, row 30, buttons 110 x 30.
+   Source uses 44% of panel width for controls (the old docstring says 38%). */
+.cad-dialog-print { width: 1100px; height: 720px; }
+.cad-dialog-print .cad-dialog-body {
+  display: grid;
+  grid-template-columns: calc(44% - 14px) minmax(0, 1fr);
+  gap: 28px;
+  height: calc(100% - 88px);
+  min-height: 390px;
+  padding: 14px 14px 0;
+}
+.cad-dialog-print-controls { min-width: 0; }
+.cad-dialog-print .cad-dialog-row { grid-template-columns: calc(40% - 8px) minmax(0, 1fr); }
+.cad-dialog-print .cad-dialog-check { flex-direction: row-reverse; justify-content: flex-end; }
+.cad-dialog-print .cad-dialog-check .cad-dialog-label { order: 1; width: calc(40% - 8px); }
+.cad-dialog-print-preview {
+  background: var(--APP_BG, #d7dde5);
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 18px;
+  overflow: hidden;
+}
+.cad-dialog-sheet { display: block; width: 100%; height: 100%; max-width: 100%; max-height: 100%; background: transparent; filter: drop-shadow(4px 4px 0 #4c4c4c); }
+.cad-dialog-print .cad-dialog-footer { padding-top: 14px; }
+.cad-dialog-print .cad-dialog-button { width: 110px; }
+.cad-dialog-print .cad-dialog-message { position: absolute; bottom: 14px; left: 0; width: 44%; max-height: 110px; overflow: auto; }
+
+/* Window-level shell menu. Native source has BLF-measured width; max-content is
+   the browser equivalent, not a fixed broad modal. */
+.cad-dialog-picker, .cad-dialog-preferences {
+  min-width: 200px;
+  width: max-content;
+  max-height: calc(80vh / var(--preview-scale, 1));
+  background: var(--MENU_BG, #fff);
+  border-radius: var(--chip-r, 4px);
+  padding: 4px;
+  font-size: 12px;
+}
+.cad-dialog-picker::backdrop, .cad-dialog-preferences::backdrop { background: transparent; }
+.cad-dialog-picker .cad-dialog-title, .cad-dialog-preferences .cad-dialog-title {
+  height: 22px; padding: 0 6px; background: transparent;
+  font-size: 11px; color: var(--TEXT_MUTED, #627389);
+}
+.cad-dialog-picker .cad-dialog-body, .cad-dialog-preferences .cad-dialog-body { padding: 0; }
+.cad-dialog-menu-item { display: block; width: 100%; height: 22px; border: 0; padding: 2px 14px 2px 28px; text-align: left; white-space: nowrap; background: transparent; position: relative; }
+.cad-dialog-menu-item[aria-checked="true"]::before { content: '✓'; position: absolute; left: 9px; }
+.cad-dialog-preferences { min-width: 250px; }
+.cad-dialog-preferences .cad-dialog-row { padding-left: 28px; }
+.cad-dialog-preferences .cad-dialog-dropdown { position: static; grid-column: 1 / -1; min-width: 0; width: 100%; }
+
+/* Native dialog equivalents. Their browser metrics are OURS, not product pixels. */
+.cad-dialog-file { width: 760px; }
+.cad-dialog-file .cad-dialog-body { padding: 12px; }
+.cad-dialog-file-nav { display: flex; gap: 8px; margin-bottom: 12px; }
+.cad-dialog-file-nav > .cad-dialog-button { min-width: 30px; padding: 2px; }
+.cad-dialog-file-nav > .cad-dialog-row { flex: 1; grid-template-columns: 65px 1fr; }
+.cad-dialog-file-workspace { display: grid; grid-template-columns: 135px minmax(0, 1fr); border: 1px solid var(--cad-border); height: 300px; margin-bottom: 12px; }
+.cad-dialog-places { padding: 6px; border-right: 1px solid var(--cad-border); background: var(--PANEL_BG, #edf1f5); }
+.cad-dialog-place { width: 100%; display: block; text-align: left; padding: 6px; border: 0; background: transparent; }
+.cad-dialog-place:hover { background: var(--TOOL_HOVER, #d7e5f0); }
+.cad-dialog-file-list { overflow: auto; background: var(--cad-field); }
+.cad-dialog-files { width: 100%; border-collapse: collapse; text-align: left; }
+.cad-dialog-files-heading { padding: 6px; font-weight: 400; background: var(--PANEL_HEADER_BG, #e3e9ef); border-bottom: 1px solid var(--cad-border); position: sticky; top: 0; }
+.cad-dialog-file-item { display: block; width: 100%; background: transparent; border: 0; text-align: left; padding: 5px 8px; }
+.cad-dialog-file-size, .cad-dialog-file-date { padding: 5px; white-space: nowrap; color: var(--TEXT_MUTED, #627389); font-size: 11px; }
+.cad-dialog-file-entry[aria-selected="true"] { background: var(--ACCENT_SOFT, #d5e7fc); }
+.cad-dialog-file > .cad-dialog-body > .cad-dialog-row { grid-template-columns: 100px minmax(0, 1fr); }
+.cad-dialog-file > .cad-dialog-body > .cad-dialog-row > .cad-dialog-dropdown { left: 100px; width: calc(100% - 100px); }
+.cad-dialog-color { width: 540px; }
+.cad-dialog-color-layout { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); gap: 18px; margin-bottom: 12px; }
+.cad-dialog-color-plane { height: 190px; position: relative; touch-action: none; background: linear-gradient(to top, #000, transparent), linear-gradient(to right, #fff, transparent), var(--cad-hue, red); cursor: crosshair; border: 1px solid var(--cad-border); }
+.cad-dialog-color-cursor { position: absolute; width: 9px; height: 9px; border: 1px solid #fff; outline: 1px solid #000; border-radius: 50%; transform: translate(-50%, -50%); pointer-events: none; }
+.cad-dialog-color-row { display: grid; grid-template-columns: 70px minmax(0, 1fr) 28px; align-items: center; height: 30px; gap: 3px; font-size: 12px; }
+.cad-dialog-slider { width: 100%; min-width: 0; accent-color: var(--ACCENT, #2674df); }
+.cad-dialog-color-number { text-align: right; font-variant-numeric: tabular-nums; }
+.cad-dialog-swatches { display: grid; grid-template-columns: repeat(6, 1fr); gap: 4px; margin-top: 10px; }
+.cad-dialog-swatch { height: 23px; border: 1px solid var(--cad-border); }
+.cad-dialog-color-samples { display: flex; gap: 14px; margin-top: 8px; }
+.cad-dialog-color-sample { flex: 1; display: flex; align-items: center; gap: 8px; font-size: 12px; }
+.cad-dialog-color-sample::before { content: ''; display: block; width: 48px; height: 28px; background: var(--cad-swatch); border: 1px solid var(--cad-border); }
+.cad-dialog-units { width: 380px; }
+.cad-dialog-fillet-radius { width: 260px; }
+.cad-dialog-tolerance { width: 280px; }
+.cad-dialog-save-changes { width: 400px; }
+.cad-dialog-question { margin: 8px 0 14px; }
+@media (max-width: 650px) {
+  .cad-dialog-print .cad-dialog-body { grid-template-columns: 1fr; height: auto; }
+  .cad-dialog-print-preview { min-height: 200px; }
+  .cad-dialog-print { height: auto; }
+  .cad-dialog-print .cad-dialog-message { position: static; width: auto; }
+  .cad-dialog-dropdown { max-width: 60vw; }
+  .cad-dialog-color-layout { grid-template-columns: 1fr; }
+  .cad-dialog-file-workspace { grid-template-columns: 100px minmax(0, 1fr); }
+}

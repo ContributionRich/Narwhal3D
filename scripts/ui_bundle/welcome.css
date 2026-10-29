@@ -1,0 +1,204 @@
+/* native/welcome/src/main.rs:20,1222–1353,1439–1483; theme.rs:85–167.
+ * Fixed logical pixels, scaled once by the parent's --preview-scale.
+ * DERIVED: CSS flow projects egui's default spacing/line boxes (8×3 item spacing,
+ * 6px separators, 13px body/button, 18px heading; egui 0.36.2 style.rs).
+ * Compare in-browser before
+ * claiming raster equivalence. Native uses egui's bundled proportional font;
+ * no font asset is supplied here, so installed Ubuntu/system sans is a fallback.
+ * RichText::strong() changes ink in egui; it does not select a bold font face.
+ */
+.welcome-window {
+  --welcome-panel: #f2f5fa;
+  --welcome-chrome: #334151;
+  --welcome-chrome-text: #edf3fc;
+  --welcome-field: #eff3f9;
+  --welcome-menu: #fff;
+  --welcome-button: #e5ebf4;
+
+  --welcome-hover: #ddebff;
+  --welcome-border: #d0d9e5;
+  --welcome-border-strong: #99aabd;
+  --welcome-text: #253343;
+  --welcome-strong: #202b3a;
+  --welcome-muted: #526275;
+  --welcome-accent: #266ce2;
+  --welcome-accent-soft: #d9e7ff;
+  --welcome-on-accent: #fff;
+  position: fixed;
+  z-index: 1000;
+  left: 50%;
+  top: 50%;
+  width: 580px;
+  height: 438px;
+  min-width: 580px;
+  max-width: 580px;
+  padding: 0;
+  margin: 0;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--welcome-border);
+  border-radius: 0;
+  background: var(--welcome-panel);
+  color: var(--welcome-text);
+  font: 300 13px/1.2 "Ubuntu Light", "Ubuntu-Light", Ubuntu, system-ui, sans-serif;
+  text-align: left;
+  letter-spacing: normal;
+  text-transform: none;
+  transform: translate(-50%, -50%) scale(var(--preview-scale, 1));
+  transform-origin: center;
+  /* main.rs:1505–1515: undecorated transparent native surface; no scrim/shadow. */
+  box-shadow: none;
+  isolation: isolate;
+  overflow: hidden;
+  color-scheme: light;
+}
+.welcome-window[data-theme="dark"] {
+  --welcome-panel: #333;
+  --welcome-chrome: #3a3a3a;
+  --welcome-chrome-text: #d8d8d8;
+  --welcome-field: #2b2b2b;
+  --welcome-menu: #3a3a3a;
+  --welcome-button: #444;
+  --welcome-hover: #454545;
+  --welcome-border: #4b4b4b;
+  --welcome-border-strong: #5e5e5e;
+  --welcome-text: #d0d0d0;
+  --welcome-strong: #f0f0f0;
+  --welcome-muted: #a3a3a3;
+  --welcome-accent: #4ea1ff;
+  --welcome-accent-soft: #203248;
+  --welcome-on-accent: #2b2b2b;
+  color-scheme: dark;
+}
+.welcome-window *, .welcome-window *::before, .welcome-window *::after {
+  box-sizing: border-box;
+}
+.welcome-window .welcome-button {
+  appearance: none;
+  flex: none;
+  min-height: 18px;
+  margin: 0;
+  padding: 1px 4px;
+  border: 1px solid var(--welcome-border);
+  border-radius: 2px;
+  background: var(--welcome-button);
+  color: var(--welcome-text);
+  font: inherit;
+  text-align: center;
+  letter-spacing: normal;
+  text-transform: none;
+  cursor: pointer;
+  box-shadow: none;
+}
+.welcome-window .welcome-button:hover {
+  background: var(--welcome-hover);
+  border-color: var(--welcome-border-strong);
+}
+.welcome-window .welcome-button:active {
+  background: var(--welcome-accent-soft);
+  border-color: var(--welcome-accent);
+  color: var(--welcome-strong);
+}
+.welcome-window .welcome-button:disabled {
+  opacity: 0.5;
+  cursor: default;
+  background: var(--welcome-button);
+  border-color: var(--welcome-border);
+}
+.welcome-window .welcome-button:focus-visible,
+.welcome-window .welcome-content:focus-visible {
+  outline: 1px solid var(--welcome-accent);
+  outline-offset: -1px;
+}
+.welcome-header {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+  height: 24px;
+  position: relative;
+  /* egui separator consumes 6px plus 3px item spacing on each side. */
+  margin-bottom: 12px;
+}
+.welcome-header::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -6px;
+  height: 1px;
+  background: var(--welcome-border);
+}
+.welcome-tabs { display: flex; gap: 8px; align-items: center; }
+.welcome-window .welcome-tab {
+  width: 72px;
+  height: 24px;
+  font-size: 10.5px;
+  background: transparent;
+  border: 0;
+}
+.welcome-window .welcome-tab[aria-selected="true"] {
+  background: var(--welcome-accent);
+  color: var(--welcome-on-accent);
+}
+.welcome-preview { margin-left: auto; color: var(--welcome-muted); font-size: 8px; white-space: nowrap; }
+.welcome-window .welcome-close { width: 28px; height: 24px; font-size: 17px; border: 0; background: transparent; }
+.welcome-body {
+  display: grid;
+  grid-template-columns: 400px 6px 155px;
+  column-gap: 8px;
+  align-items: center;
+  flex: none;
+}
+.welcome-content { width: 400px; min-width: 0; padding: 12px 0 0; outline: none; }
+.welcome-divider { width: 1px; height: 100%; justify-self: center; background: var(--welcome-border); }
+.welcome-sidebar { width: 155px; min-width: 0; }
+.welcome-heading, .welcome-label, .welcome-empty-title, .welcome-recent-name,
+.welcome-brand-name, .welcome-status { padding: 0; margin: 0; font-weight: inherit; }
+.welcome-heading { font-size: 18px; line-height: 1.2; color: var(--welcome-text); }
+.welcome-label { font-size: 13px; line-height: 1.2; white-space: pre-wrap; overflow-wrap: break-word; }
+.welcome-window .welcome-strong { color: var(--welcome-strong); }
+.welcome-content > .welcome-label, .welcome-news > * + *, .welcome-tips > * + * { margin-top: 3px; }
+.welcome-units { display: flex; flex-direction: column; gap: 10px; margin-top: 15px; padding-bottom: 7px; align-items: flex-start; }
+.welcome-window .welcome-unit, .welcome-window .welcome-choose { width: 190px; height: 31px; }
+.welcome-window .welcome-choose { display: block; margin-top: 21px; }
+.welcome-empty { padding-top: 90px; text-align: center; }
+.welcome-empty-title { font-size: 12px; color: var(--welcome-muted); margin-bottom: 3px; }
+.welcome-recent-grid { display: grid; grid-template-columns: repeat(4, 76px); gap: 9px 8px; }
+.welcome-recent-item { width: 76px; min-width: 0; }
+.welcome-window .welcome-recent-preview {
+  display: block;
+  width: 76px;
+  height: 70px;
+  white-space: pre-line;
+  font-size: 8.5px;
+  color: var(--welcome-chrome-text);
+  background: var(--welcome-chrome);
+  border-color: var(--welcome-border-strong);
+}
+.welcome-recent-name { margin-top: 3px; font-size: 7.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.welcome-tips { margin-top: 38px; }
+.welcome-branding { margin-top: 53px; }
+.welcome-logo { display: block; width: 85px; height: 85px; object-fit: fill; border: 0; border-radius: 0; }
+.welcome-brand-name { margin-top: 3px; font-size: 16px; color: var(--welcome-accent); }
+.welcome-news .welcome-install { max-width: 155px; }
+.welcome-window .welcome-link {
+  display: block;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  color: var(--welcome-accent);
+  background: transparent;
+  text-align: left;
+  text-decoration: none;
+}
+.welcome-window .welcome-link:hover { color: var(--welcome-accent); background: transparent; text-decoration: underline; }
+/* main.rs:1475: bottom_up layout anchors the progress and status to the bottom. */
+.welcome-footer { position: absolute; bottom: 0; left: 0; right: 0; display: flex; flex-direction: column; gap: 3px; }
+.welcome-status { font-size: 13px; line-height: 1.2; }
+.welcome-progress { height: 18px; width: 100%; background: var(--welcome-field); border-radius: 9px; overflow: hidden; }
+.welcome-progress-fill { height: 100%; min-width: 18px; border-radius: inherit; position: relative; }
+.welcome-progress-fill::before { content: ""; position: absolute; inset: 0; border-radius: inherit; background: var(--welcome-accent-soft); opacity: var(--welcome-progress-opacity, 1); }
+.welcome-progress-arc { position: absolute; right: 0; top: 0; width: 18px; height: 18px; overflow: visible; fill: none; stroke: var(--welcome-text); stroke-width: 2px; }
+.welcome-progress-arc[hidden] { display: none; }

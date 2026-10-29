@@ -2,8 +2,8 @@
 
 This module deliberately performs no network requests and executes no commands. It builds
 bounded provider-neutral request data and turns a narrowly-shaped JSON object into a
-reviewable :class:`ToolProposal`. UI/transport code must still obtain explicit user
-approval and send approved lines through the normal command-line state machine.
+reviewable :class:`ToolProposal`. Legacy string proposals are compatibility data,
+not executable commands. The chat uses WorkflowSession; all CAD dispatch is disabled.
 
 Raw API keys never enter these dataclasses. Provider adapters may read the named
 environment variable at send time, but persistent, document, report, and debug state sees
@@ -120,6 +120,9 @@ class AssistantState:
         return message
 
     def new_chat(self):
+        workflow = self.extra.get("workflow")
+        if workflow is not None:
+            workflow.invalidate("new_chat")
         self.messages.clear()
         self.input_text = ""
         self.error = ""
@@ -495,3 +498,242 @@ def input_key(state: AssistantState, kind: str, char: str = "", shift: bool = Fa
         editor.insert(addition)
     state.input_text = editor.text
     return result
+
+
+class WorkflowUnavailable(RuntimeError):
+    """New workflow fails closed when its reviewed native backend is unavailable."""
+
+
+class WorkflowSession:
+    """Thin main-thread orchestration around Rust-owned conversation policy.
+
+    The existing chat wires lifetime/consent and polls finish() on the main thread.
+    library_path is a trusted test/host injection, never a model argument. Legacy
+    text-chat APIs remain for compatibility, not as a native-unavailable fallback.
+    """
+
+    def __init__(self, state, document_context, *, allow_reads=False, library_path=None):
+        import ctypes
+        import pathlib
+        import platform
+        import sys
+        import threading
+
+        self._main_thread()
+        if state.extra.get("workflow") is not None:
+            raise WorkflowUnavailable("workflow_already_attached")
+        self._state = state
+        self._document_context = self._context_id(document_context)
+        self._allow_reads = bool(allow_reads)
+        self._cancel_event = threading.Event()
+        self._handle = 0
+        self._disabled = False
+        if library_path is None:
+            root = pathlib.Path(__file__).resolve().parents[1]
+            system = {"linux": "linux", "darwin": "macos"}.get(sys.platform)
+            arch = {"amd64": "x86_64", "aarch64": "arm64"}.get(platform.machine().lower(), platform.machine().lower())
+            if system is None:
+                raise WorkflowUnavailable("workflow_platform_not_validated")
+            name = "libnarwhal_automation.dylib" if system == "macos" else "libnarwhal_automation.so"
+            candidates = (root / "runtime" / f"{system}-{arch}" / "lib" / name,
+                          root / "artifacts" / "automation" / f"{system}-{arch}" / name)
+            library_path = next((p for p in candidates if p.is_file()), None)
+        if library_path is None:
+            raise WorkflowUnavailable("native_workflow_not_installed")
+        try:
+            self._lib = ctypes.CDLL(str(library_path))
+            self._lib.narwhal_workflow_abi.restype = ctypes.c_uint32
+            if self._lib.narwhal_workflow_abi() != 1:
+                raise ValueError
+            call = self._lib.narwhal_workflow_json
+            call.argtypes = [ctypes.c_uint64, ctypes.c_char_p, ctypes.c_size_t,
+                             ctypes.c_void_p, ctypes.c_size_t]
+            call.restype = ctypes.c_ssize_t
+        except (OSError, AttributeError, ValueError):
+            raise WorkflowUnavailable("native_workflow_unavailable") from None
+        created = self._exchange({"op": "create", "binding": self._binding()})
+        self._handle = created["handle"]
+        state.extra["workflow"] = self
+
+    @staticmethod
+    def _context_id(value):
+        if type(value) is not str or not value or len(value) > 256:
+            raise WorkflowUnavailable("document_context_identity_required")
+        return value
+
+    @staticmethod
+    def _main_thread():
+        import threading
+        if threading.current_thread() is not threading.main_thread():
+            raise WorkflowUnavailable("workflow_requires_main_thread")
+
+    def _binding(self, document_context=...):
+        context = self._document_context if document_context is ... else self._context_id(document_context)
+        config = self._state.provider
+        return {"config": {"provider_id": config.provider_id, "model": config.model,
+                           "endpoint": validate_endpoint(config.endpoint, config.allow_insecure_remote),
+                           "credential_env": config.credential_env,
+                           "allow_insecure_remote": config.allow_insecure_remote,
+                           "include_selection": self._state.include_selection},
+                "document_context": context,
+                "allow_reads": self._allow_reads and context == self._document_context}
+
+    def _exchange(self, data):
+        import ctypes
+        self._main_thread()
+        if self._disabled and data.get("op") != "close":
+            raise WorkflowUnavailable("workflow_disabled")
+        raw = json.dumps(data, ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode()
+        if len(raw) > 1_048_576:
+            raise WorkflowUnavailable("workflow_input_limit")
+        output = ctypes.create_string_buffer(524_288)
+        size = self._lib.narwhal_workflow_json(self._handle, raw, len(raw), output, len(output))
+        if size < 0 or size > len(output):
+            raise WorkflowUnavailable("workflow_backend_failed")
+        result = json.loads(output.raw[:size])
+        if result.get("status") == "failed" and "token" not in result:
+            raise WorkflowUnavailable(result.get("code", "workflow_backend_failed"))
+        return result
+
+    def prepare(self, document_context, *, user_text=None, context=None,
+                timeout_ms=30_000, max_tokens=4096, continuation=False):
+        from .ai_transport import PreparedTurn
+        import threading
+
+        self._main_thread()
+        context_id = self._context_id(document_context)
+        if context_id != self._document_context:
+            self._allow_reads = False
+        self._document_context = context_id
+        if getattr(self, "_active_binding", None) != self._binding():
+            self._cancel_event.set()
+        text = None if continuation else (self._state.input_text if user_text is None else user_text)
+        if not self._state.include_selection:
+            context = None
+        ready = self._exchange({"op": "begin", "binding": self._binding(), "text": text,
+                                "context": context, "timeout_ms": timeout_ms, "max_tokens": max_tokens})
+        self._cancel_event = threading.Event()
+        self._active_binding = ready["binding"]
+        if text is not None:
+            self._state.add_message("user", text)
+            self._state.input_text = ""
+            field_of(self._state).set_text("")
+        self._state.status = "sending"
+        return PreparedTurn(self._state.provider, ready, self._cancel_event)
+
+    def finish(self, receipt, document_context):
+        """Only this main-thread gate may publish a worker's answer into the chat."""
+        self._main_thread()
+        if self._disabled or not self._handle:
+            return {"status": "stale"}
+        completion = {"op": "complete", "token": receipt.token,
+                      "binding": self._binding(document_context), "raw": receipt.raw, "failure": receipt.failure}
+        try:
+            result = self._exchange(completion)
+        except WorkflowUnavailable as exc:
+            if str(exc) != "workflow_input_limit":
+                raise
+            # Retire the matching pending request even when its envelope cannot
+            # cross the ABI; never leave the conversation permanently pending.
+            completion.update(raw=None, failure="response_too_large")
+            result = self._exchange(completion)
+        status = result["status"]
+        if status == "stale":
+            return result
+        if status in ("completed", "tool_calls"):
+            text = result["response"]["text"]
+            if text:
+                self._state.add_message("assistant", text)
+            self._state.status = "connected"
+            self._state.error = ""
+        else:
+            self._state.status = "error"
+            self._state.error = result.get("code", status)
+        return result
+
+    def poll_timeout(self):
+        """Main's timer can expire logical work even while urllib is still blocked."""
+        result = self._exchange({"op": "poll"})
+        if result["status"] == "timeout":
+            self._cancel_event.set()
+            self._state.status = "error"
+            self._state.error = "timeout"
+        return result
+
+    def record_results(self, token, results, document_context):
+        self._main_thread()
+        return self._exchange({"op": "results", "token": token,
+                               "binding": self._binding(document_context), "results": results})
+
+    def operation_catalog(self):
+        return self._exchange({"op": "catalog"})
+
+    def read_tool_result(self, token, call_id, reader, document_context):
+        """Resolve an accepted call in Rust, then read the existing main-thread API.
+
+        reader is Main's trusted ApplicationReader, never supplied by model data.
+        No operation/proposal can be dispatched through this read-only method.
+        """
+        from .automation_tools import ReadError, SAFE_ERRORS
+        self._main_thread()
+        plan = self._exchange({"op": "resolve_call", "token": token, "binding": self._binding(document_context), "call_id": call_id})
+        if plan["kind"] == "proposal_only":
+            raise WorkflowUnavailable("proposal_requires_review")
+        try:
+            if plan["kind"] == "result":
+                output = plan["output"]
+            else:
+                output = reader.read(plan["tool"], plan["arguments"])
+            return {"call_id": call_id, "output": output, "is_error": False}
+        except ReadError as exc:
+            code = exc.args[0] if exc.args else "read_failed"
+            return {"call_id": call_id, "output": {"code": code if code in SAFE_ERRORS else "read_failed"}, "is_error": True}
+
+    def propose_circle(self, token, call_id, document_context, *, expected=None):
+        self._main_thread()
+        return self._exchange({"op": "propose_circle", "token": token, "binding": self._binding(document_context),
+                               "call_id": call_id, "expected": expected})
+
+    def review_proposal(self, proposal, document_context, *, current=None, accepted=False):
+        """Main's explicit review decision only; never driven by provider content."""
+        self._main_thread()
+        return self._exchange({"op": "review_proposal", "binding": self._binding(document_context),
+                               "proposal": proposal, "current": current, "accepted": accepted})
+
+    def check_proposal(self, proposal_id, document_context, *, current=None):
+        """Validate review/preconditions but ALWAYS refuse production dispatch."""
+        self._main_thread()
+        return self._exchange({"op": "check_proposal", "binding": self._binding(document_context),
+                               "id": proposal_id, "current": current})
+
+    def invalidate(self, reason="cancelled"):
+        self._main_thread()
+        self._cancel_event.set()
+        if reason == "document_replaced":
+            self._allow_reads = False
+        try:
+            result = self._exchange({"op": "cancel"} if reason == "cancelled" else
+                                    {"op": "reset", "binding": self._binding()})
+        except (WorkflowUnavailable, ValueError):
+            self._disabled = True
+            result = {"status": "cancelled"}
+        result["physical_http_cancelled"] = False
+        self._state.status = "configured" if self._state.provider.model else "disconnected"
+        return result
+
+    def close(self):
+        self._main_thread()
+        self._cancel_event.set()
+        if self._handle:
+            try:
+                self._exchange({"op": "close"})
+            finally:
+                self._handle = 0
+                if self._state.extra.get("workflow") is self:
+                    self._state.extra.pop("workflow")
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_exc):
+        self.close()

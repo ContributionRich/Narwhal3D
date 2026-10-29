@@ -48,14 +48,18 @@ from . import printdialog
 from . import bugreport
 from . import ai_assistant
 from . import ai_transport
+from . import ai_settings_popup
 from . import textfield
 from . import glyphs
 from . import shell_popup
+from . import selection_menu
+from . import pick_candidates
 from . import shell_input
 from . import grid_render
 from . import theme_bindings
 from . import preferences
 from . import edge_handles
+from . import extrude_preview
 from . import sessionlog
 from . import uiscale
 from . import alias_table
@@ -1522,6 +1526,9 @@ def _prompt_segments_for(cmd):
     each displayed choice is a clickable segment; a free-form VALUE prompt remains
     unlabelled. Otherwise this is the step prompt plus the bracketed option list.
     """
+    provider = getattr(cmd, "prompt_segments", None)
+    if callable(provider):
+        return provider()
     pending = getattr(cmd, "pending_option", None)
     if pending is not None:
         return opts.value_prompt_segments(pending)
@@ -5506,6 +5513,8 @@ def _ai_poll_model_discovery():
         return 0.1
     _ai.pop("model_output", None)
     _ai.pop("model_thread", None)
+    request_config = _ai.pop("model_request_config", None)
+    request_generation = _ai.pop("model_request_generation", None)
     if ok:
         _ai["models"] = result
         _ai["model_items"] = tuple([
@@ -5517,6 +5526,10 @@ def _ai_poll_model_discovery():
         _ai["models"] = ()
         _ai["model_items"] = ()
         _ai["model_status"] = f"Model discovery failed: {result}"
+    if request_config is not None and request_generation == _ai.get("settings_generation"):
+        ai_settings_popup.set_discovery(
+            request_config, [info.model_id for info in result] if ok else (),
+            _ai["model_status"], error=not ok)
     _tag_redraw_bands()
     return None
 
@@ -5536,6 +5549,8 @@ def _ai_start_model_discovery(config):
     _ai["model_status"] = "Discovering available models..."
     _ai["model_output"] = output
     _ai["model_thread"] = worker
+    _ai["model_request_config"] = config
+    _ai["model_request_generation"] = _ai.get("settings_generation")
     worker.start()
     bpy.app.timers.register(_ai_poll_model_discovery, first_interval=0.05)
     return True
@@ -5565,6 +5580,40 @@ class NARWHAL_OT_ai_refresh_models(Operator):
         return {"FINISHED"}
 
 
+def _apply_ai_settings(config):
+    """Persist the validated draft before publishing it to the live assistant."""
+    values = {'provider_id': config.provider_id, 'model': config.model,
+              'endpoint': config.endpoint, 'credential_env': config.credential_env,
+              'allow_insecure_remote': config.allow_insecure_remote}
+    if _preferences_ready and not bpy.app.background:
+        try:
+            saved = preferences.update({'ai_config': values})
+            config = ai_assistant.set_provider(**saved['ai_config'])
+        except (OSError, ValueError):
+            return 'Could not save AI settings. Check configuration-file permissions.'
+    st = _ai["state"]
+    _ai_invalidate("configuration_changed")
+    st.provider = ai_assistant.credential_status(config, os.environ)
+    st.status = "configured" if config.model else "disconnected"
+    st.error = ("Settings applied. Provider transport is not connected yet."
+                if config.model else "Settings applied; choose a model before connecting.")
+    _ai.pop("settings_draft", None)
+    _tag_redraw_bands()
+    return None
+
+
+def _ai_settings_anchor(context):
+    region = _ai.get("region")
+    layout = _ai.get("lay")
+    if region and layout:
+        rect = next((rect for ident, rect in layout.get("buttons", ()) if ident == "settings"), None)
+        if rect is not None:
+            return region[0] + rect[0], region[1] + rect[3]
+    # Direct operator invocation still opens beside the existing right dock.
+    width, height = context.window.width, context.window.height
+    return width - _fpx(design.RIGHT_RAIL_W + design.RIGHT_PANEL_W), height - _fpx(100)
+
+
 class NARWHAL_OT_ai_settings(Operator):
     """Configure public provider routing without accepting or storing a raw API key."""
 
@@ -5592,9 +5641,15 @@ class NARWHAL_OT_ai_settings(Operator):
         self.model_choice = (config.model if any(
             item[0] == config.model for item in _ai_model_enum_items(self, context))
             else _AI_MANUAL_MODEL)
-        _ai_start_model_discovery(config)
-        apply_menu_theme()
-        return context.window_manager.invoke_props_dialog(self, width=520)
+        _ai["settings_generation"] = _ai.get("settings_generation", 0) + 1
+        _ai.pop("settings_draft", None)
+        shell_popup.close()
+        popup = ai_settings_popup.open(
+            config, anchor=_ai_settings_anchor(context),
+            window_size=(context.window.width, context.window.height), scale=_ui_scale(),
+            on_save=_apply_ai_settings, on_refresh=_ai_start_model_discovery)
+        popup.refresh()
+        return {"FINISHED"}
 
     def draw(self, context):
         root = self.layout
@@ -5631,16 +5686,10 @@ class NARWHAL_OT_ai_settings(Operator):
         except ValueError as exc:
             self.report({"ERROR"}, str(exc))
             return {"CANCELLED"}
-        st = _ai["state"]
-        st.provider = ai_assistant.credential_status(config, os.environ)
-        _remember_preferences({'ai_config': {
-            'provider_id': config.provider_id, 'model': config.model,
-            'endpoint': config.endpoint, 'credential_env': config.credential_env,
-            'allow_insecure_remote': config.allow_insecure_remote}})
-        st.status = "configured" if config.model else "disconnected"
-        st.error = ("Settings applied. Provider transport is not connected yet."
-                    if config.model else "Settings applied; choose a model before connecting.")
-        _tag_redraw_bands()
+        error = _apply_ai_settings(config)
+        if error:
+            self.report({"ERROR"}, error)
+            return {"CANCELLED"}
         return {"FINISHED"}
 
 
@@ -5768,84 +5817,200 @@ def _draw_ai_panel(shader, region, box):
         gpu.state.blend_set(prev)
 
 
-def _ai_selected_context():
-    """Bounded structured context only; never document bytes or display triangles."""
-    names = sorted(selected_display_names())
-    selection = []
-    for name in names[:64]:
-        props = _object_properties(name)
-        selection.append({
-            "name": name,
-            "type": str(getattr(props, "type", "Unknown")),
-            "layer": str(getattr(props, "layer", "")),
-        })
-    return {
-        "document": {"units": str(app_state.model.unit_system())},
-        "selection": selection,
-        "selection_truncated": len(names) > len(selection),
-    }
-
-
-def _ai_transport_worker(config, request, output):
+def _ai_invalidate(reason="cancelled"):
+    """OURS: revoke publication/read consent; never claim physical HTTP cancellation."""
+    ai_assistant.WorkflowSession._main_thread()
+    workflow = _ai["state"].extra.get("workflow")
     try:
-        result = ai_transport.send_chat(config, request, os.environ)
-        output.put((True, result.text))
-    except ai_transport.TransportError as exc:
-        output.put((False, str(exc)))
-    except Exception as exc:  # noqa: BLE001 -- boundary converts to non-secret type only
-        output.put((False, f"provider failed: {type(exc).__name__}"))
+        if workflow is not None:
+            try:
+                workflow.invalidate(reason)
+            finally:
+                workflow.close()
+    except ai_assistant.WorkflowUnavailable:
+        # close() retires the local handle even if the native backend rejects it.
+        # Do not let that failure preserve a grant/worker queue during teardown.
+        pass
+    finally:
+        for key in ("transport_output", "transport_thread", "read_grant", "consent_scope"):
+            _ai.pop(key, None)
+
+
+def _ai_scope():
+    """Answer correlation only, NOT an authoritative document revision/write guard."""
+    import uuid
+    from dataclasses import replace
+    ai_assistant.WorkflowSession._main_thread()
+    identity = (app_state, app_state.model, app_state.model.file)
+    old = _ai.get("document_identity")
+    if old is None or any(a is not b for a, b in zip(old, identity)):
+        _ai_invalidate("document_replaced")
+        # Strong references prevent Python identity reuse while this scope is alive.
+        _ai["document_identity"] = identity
+        _ai["document_context"] = uuid.uuid4().hex
+    st = _ai["state"]
+    # Copy scalar configuration fields: retaining the live object would let an
+    # in-place compatibility edit rewrite both the grant and an open dialog's scope.
+    scope = (_ai["document_context"], replace(st.provider), st.include_selection)
+    if _ai.get("workflow_scope") != scope:
+        _ai_invalidate("configuration_changed")
+        _ai["workflow_scope"] = scope
+    return scope
+
+
+class NARWHAL_OT_ai_read_consent(bpy.types.Operator):
+    bl_idname = "narwhal.ai_read_consent"
+    bl_label = "Allow AI metadata reads for this chat?"
+
+    def invoke(self, context, event):
+        self._scope = _ai_scope()
+        _ai["consent_scope"] = self._scope
+        return context.window_manager.invoke_props_dialog(self, width=560)
+
+    def draw(self, context):
+        layout = self.layout
+        layout.label(text="Send bounded object/layer names, IDs, workspace and selection metadata.")
+        layout.label(text="No geometry/file upload. Reads may include unselected objects.")
+        layout.label(text="Up to 8 model turns / 8 calls per chat; provider charges may apply.")
+        layout.label(text="Proposal only: CAD edits and command execution are not implemented.")
+        layout.label(text="New Chat, settings, document or selection-toggle changes revoke access.")
+        layout.label(text="Cancel and turn off Include selection for text-only chat.")
+        layout.label(text="Model: " + self._scope[1].model)
+        layout.label(text="Endpoint: " + self._scope[1].endpoint)
+
+    def execute(self, context):
+        scope = _ai_scope()
+        if (getattr(self, "_scope", None) != scope
+                or _ai.get("consent_scope") != scope or not scope[2]):
+            return {"CANCELLED"}
+        _ai["read_grant"] = scope
+        _ai.pop("consent_scope", None)
+        _ai_send()
+        return {"FINISHED"}
+
+    def cancel(self, context):
+        _ai.pop("consent_scope", None)
+
+
+def _ai_transport_worker(prepared, output):
+    # Worker owns HTTP only; no Blender, native session or transcript access.
+    try:
+        result = ai_transport.send_turn(prepared, os.environ)
+    except Exception:  # noqa: BLE001 -- never publish exception/provider internals
+        result = ai_transport.TurnTransportResult(prepared.data["token"], failure="transport_failed")
+    output.put(result)
+
+
+def _ai_start_turn(prepared):
+    import queue
+    import threading
+    output = queue.Queue(maxsize=1)
+    worker = threading.Thread(target=_ai_transport_worker, args=(prepared, output), daemon=True)
+    _ai["transport_output"] = output
+    _ai["transport_thread"] = worker
+    _ai["state"].error = ""
+    if not bpy.app.timers.is_registered(_ai_poll_transport):
+        bpy.app.timers.register(_ai_poll_transport, first_interval=0.05)
+    worker.start()
+
+
+def _ai_read_results(workflow, outcome, document_context):
+    from .automation_tools import ApplicationReader
+    reader = ApplicationReader(app_state, os.environ.get("NARWHAL3D_VERSION") or "unknown")
+    results = []
+    for call in outcome["response"]["tool_calls"]:
+        try:
+            result = workflow.read_tool_result(outcome["token"], call["id"], reader, document_context)
+        except ai_assistant.WorkflowUnavailable as exc:
+            if str(exc) != "proposal_requires_review":
+                raise
+            proposal = workflow.propose_circle(outcome["token"], call["id"], document_context)
+            _ai["state"].add_message("status", "Proposal only — not executed: " +
+                                     str(proposal["proposal"]["action"]) +
+                                     ". CAD mutation dispatch is disabled.")
+            # No approval UI/authority exists in this slice. Retire, never execute.
+            workflow.review_proposal(proposal["proposal"], document_context, accepted=False)
+            result = {"call_id": call["id"], "is_error": True,
+                      "output": {"code": "proposal_only_dispatch_disabled", "dispatch_enabled": False}}
+        results.append(result)
+    workflow.record_results(outcome["token"], results, document_context)
 
 
 def _ai_poll_transport():
     import queue
-
     st = _ai["state"]
-    output = _ai.get("transport_output")
-    if output is None:
-        return None
     try:
-        ok, text = output.get_nowait()
-    except queue.Empty:
-        return 0.1
-    _ai.pop("transport_output", None)
-    _ai.pop("transport_thread", None)
-    if ok:
-        st.add_message("assistant", text)
-        st.status = "connected"
-        st.error = ""
-    else:
-        st.add_message("status", text)
+        scope = _ai_scope()
+        workflow = st.extra.get("workflow")
+        if workflow is None:
+            _tag_redraw_bands()
+            return None
+        if workflow.poll_timeout()["status"] == "timeout":
+            _ai.pop("transport_output", None)
+            _ai.pop("transport_thread", None)
+            st.add_message("status", "Request timed out. Physical HTTP cancellation is not guaranteed.")
+            _tag_redraw_bands()
+        output = _ai.get("transport_output")
+        if output is None:
+            return 0.1  # Also guard idle conversations against document replacement.
+        try:
+            receipt = output.get_nowait()
+        except queue.Empty:
+            return 0.1
+        _ai.pop("transport_output", None)
+        _ai.pop("transport_thread", None)
+        outcome = workflow.finish(receipt, scope[0])
+        if outcome["status"] == "tool_calls":
+            _ai_read_results(workflow, outcome, scope[0])
+            _ai_start_turn(workflow.prepare(scope[0], continuation=True))
+        elif outcome["status"] == "completed":
+            st.add_message("status", "Proposal-only assistant: no CAD changes were executed. New Chat cancels pending work.")
+        elif outcome["status"] != "stale":
+            st.add_message("status", st.error)
+    except Exception as exc:  # noqa: BLE001 -- API/read boundary; no raw error data
+        _ai_invalidate("workflow_failed")
         st.status = "error"
-        st.error = text
+        st.error = "AI workflow stopped (" + type(exc).__name__ + "). Start a new chat or check native installation."
+        st.add_message("status", st.error)
     _tag_redraw_bands()
-    return None
+    return 0.1 if st.extra.get("workflow") is not None else None
 
 
 def _ai_send():
-    import queue
-    import threading
-
     st = _ai["state"]
+    scope = _ai_scope()
     if st.status == "sending":
         return "AI Assistant: a request is already in progress"
     if not st.provider.model:
         st.error = "Open Settings and choose a model first."
         return "AI Assistant: choose a model in Settings first"
-    context = _ai_selected_context() if st.include_selection else None
-    request = ai_assistant.submit_input(st, context)
-    if request is None:
+    if not st.input_text.strip():
         st.error = "Type a message first."
         return "AI Assistant: type a message first"
-    output = queue.Queue(maxsize=1)
-    worker = threading.Thread(target=_ai_transport_worker,
-                              args=(st.provider, request, output), daemon=True)
-    _ai["transport_output"] = output
-    _ai["transport_thread"] = worker
-    st.status = "sending"
-    st.error = ""
-    worker.start()
-    bpy.app.timers.register(_ai_poll_transport, first_interval=0.05)
-    return "AI Assistant: sending request"
+    if st.include_selection and _ai.get("read_grant") != scope:
+        st.error = "Confirm metadata reads, or turn off Include selection for text-only chat."
+        bpy.ops.narwhal.ai_read_consent("INVOKE_DEFAULT")
+        return "AI Assistant: awaiting read consent; nothing sent"
+    try:
+        workflow = st.extra.get("workflow")
+        if workflow is None:
+            workflow = ai_assistant.WorkflowSession(st, scope[0], allow_reads=_ai.get("read_grant") == scope)
+        _ai_start_turn(workflow.prepare(scope[0]))
+    except Exception as exc:  # noqa: BLE001 -- fail closed; never use legacy send_chat
+        _ai_invalidate("workflow_failed")
+        st.status = "error"
+        st.error = "AI workflow unavailable (" + type(exc).__name__ + "). Check native installation or start New Chat."
+        return st.error
+    return "AI Assistant: sending request (proposal only)"
+
+
+def _ai_shutdown():
+    _ai_invalidate("unregister")
+    for callback in (_ai_poll_transport, _ai_poll_model_discovery):
+        if bpy.app.timers.is_registered(callback):
+            bpy.app.timers.unregister(callback)
+    for key in ("model_output", "model_thread", "document_identity", "document_context", "workflow_scope"):
+        _ai.pop(key, None)
 
 
 def ai_panel_click(win_x, win_y, shift=False):
@@ -5867,8 +6032,10 @@ def ai_panel_click(win_x, win_y, shift=False):
                                  _bug_measure(11.0 * _ui_scale()), shift)
     elif kind == "context":
         st.include_selection = not st.include_selection
+        _ai_invalidate("selection_toggle_changed")
         _remember_preferences({'ai_include_selection': st.include_selection})
     elif ident == "new":
+        _ai_invalidate("new_chat")
         st.new_chat()
     elif ident == "settings":
         bpy.ops.narwhal.ai_settings("INVOKE_DEFAULT")
@@ -7872,6 +8039,11 @@ class NARWHAL_OT_command_input(Operator):
 
     def modal(self, context, event):
         st = app_state
+        if ai_settings_popup.handle_event(event, context):
+            return {'RUNNING_MODAL'}
+        if selection_menu.handle_event(event, context):
+            self._redraw()
+            return {'RUNNING_MODAL'}
         if _shell_title_doubleclick(event):
             self._redraw()
             return {'RUNNING_MODAL'}
@@ -8133,6 +8305,11 @@ class NARWHAL_OT_command_input(Operator):
             return {"RUNNING_MODAL"}
 
         if event.type == "ESC" and event.value == "PRESS":
+            globals()["_sel_drag"] = None
+            if _gumball_drag is not None and _gumball_drag.get("extrude") is not None:
+                _cancel_gumball_extrude()
+                self._redraw()
+                return {"RUNNING_MODAL"}
             if _trim_drag is not None:
                 _trim_drag_end()
             # Verified (the reference CAD application keyboard documentation) Esc "Cancels a
@@ -8297,9 +8474,9 @@ class NARWHAL_OT_command_input(Operator):
         # sweeps the existing curve picker; release merely closes the gesture.
         if _trim_drag is not None:
             if event.type == "MOUSEMOVE":
-                if _trim_drag_update(event.mouse_x, event.mouse_y):
-                    _tag_redraw_viewports()
-                    self._redraw()
+                _trim_drag_update(event.mouse_x, event.mouse_y)
+                _tag_redraw_viewports()
+                self._redraw()
                 return {"RUNNING_MODAL"}
             if event.type == "LEFTMOUSE" and event.value == "RELEASE":
                 _trim_drag_end(event.mouse_x, event.mouse_y)
@@ -8727,6 +8904,10 @@ class NARWHAL_OT_command_input(Operator):
                 # object rules, where Ctrl means REMOVE.
                 if subobject.is_subobject_chord(shift=event.shift,
                                                 ctrl=event.ctrl):
+                    if _open_selection_choices(area, sp, region, rx, ry, 'part',
+                                               shift=event.shift, ctrl=event.ctrl):
+                        self._redraw()
+                        return {'RUNNING_MODAL'}
                     _sel, msg = subobject_click(area, sp, region, rx, ry)
                     if msg:
                         st.log(msg)
@@ -8736,9 +8917,8 @@ class NARWHAL_OT_command_input(Operator):
                 # click -- on empty space or on another object -- drops the sub-object
                 # selection, then selects as usual. Shift/Ctrl clicks edit the OBJECT
                 # selection and leave sub-objects alone.
-                if not (event.shift or event.ctrl) and _selected_subobjects:
-                    clear_subobject_selection()
-                    _tag_redraw_viewports()
+                # Defer dropping parts until an object is actually chosen; an
+                # overlap-menu cancellation must preserve the existing selection.
                 # Control points get FIRST refusal when they are shown: they are
                 # drawn on top of the curve that owns them, so a click near one
                 # means the grip, not the object underneath.
@@ -8772,6 +8952,11 @@ class NARWHAL_OT_command_input(Operator):
                     and subobject.is_subobject_chord(shift=event.shift, ctrl=event.ctrl)):
                 # Ctrl+Shift picks a sub-object at a selection prompt; a command that
                 # takes sub-objects (`accepts_subobjects`) is then answered at once.
+                if _open_selection_choices(area, sp, region, event.mouse_x - region.x,
+                                           event.mouse_y - region.y, 'part',
+                                           shift=event.shift, ctrl=event.ctrl):
+                    self._redraw()
+                    return {'RUNNING_MODAL'}
                 before = set(selected_subobjects())
                 _sel, msg = subobject_click(area, sp, region, event.mouse_x - region.x,
                                             event.mouse_y - region.y)
@@ -11997,6 +12182,7 @@ CLASSES = (
     NARWHAL_OT_units_dialog,
     NARWHAL_OT_ai_refresh_models,
     NARWHAL_OT_ai_settings,
+    NARWHAL_OT_ai_read_consent,
     NARWHAL_OT_track_mouse,
     NARWHAL_OT_osnap_toggle,
     NARWHAL_OT_osnap_flag,
@@ -13433,6 +13619,18 @@ def invalidate_snap_cache(names=None):
     the CURRENT document state -- only those are re-read; see `_note_objects_changed`
     for the stricter form that also carries the cache across a key change.
     """
+    selection_menu.close()
+    pick_candidates.clear()
+    drag = globals().get("_gumball_drag")
+    if drag is not None and drag.get("extrude") is not None:
+        kind, targets = drag["extrude"]
+        targets = (targets[0],) if kind == "part" else targets
+        if names is not None:
+            names = tuple(names)
+        changed = None if names is None else {str(name).lower() for name in names}
+        if changed is None or changed.intersection(str(name).lower() for name in targets):
+            drag.update(ext_invalidated=True, ext_preview=None, ext_ghost=(),
+                        ext_cands=[], ext_d=None)
     _doc_rows_cache["key"] = None
     _document_object_cache["key"] = None
     _snap_build["key"] = None
@@ -16371,12 +16569,13 @@ def draw_point_markers():
     # Drawn FIRST, under the markers -- see below.
     raw_polys = _control_polygons_cached(rows)
     # the live selection rectangle, drawn only in the pane the drag started in
-    drag = selection_drag_rect()
+    drag = selection_drag_rect() or _trim_drag_rect()
     if drag is not None and drag[0] != _pane_key(area):
         drag = None
     highlight = bool(_subobject_highlight_keys())
     hovering = hover_pick() is not None or bool(
-        _gumball_drag is not None and _gumball_drag.get("ext_ghost"))
+        _gumball_drag is not None and
+        (_gumball_drag.get("ext_preview") or _gumball_drag.get("ext_ghost")))
     if not doc_pts and not rows and drag is None and not highlight and not raw_polys \
             and not hovering:
         return
@@ -16648,6 +16847,11 @@ HOVER_PICK_COLOR = (1.0, 0.55, 0.15, 1.0)
 
 
 def hover_pick():
+    choice = selection_menu.highlighted()
+    if choice is not None:
+        return ('object', choice.key[0]) if choice.key[1] == 'Object' else ('part', choice.key)
+    if selection_menu.current() is not None:
+        return None
     return _hover_pick[1] if _hover_pick else None
 
 
@@ -16864,9 +17068,21 @@ def _hover_world_lines(target):
 
 
 def draw_hover_pick(region, rv3d, shader, batch_for_shader):
-    lines, tris = _hover_world_lines(hover_pick())
-    # the extrude ghost follows the cursor through the same drawing
-    if _gumball_drag is not None and _gumball_drag.get("ext_ghost"):
+    choice = selection_menu.highlighted()
+    lines, tris = ((choice.lines, choice.triangles) if choice is not None
+                   else _hover_world_lines(hover_pick()))
+    if choice is not None:
+        for point in choice.points:
+            pos = _project_2d(region, rv3d, point)
+            if pos is not None:
+                _draw_rect(shader, pos[0] - 4, pos[1] - 4, pos[0] + 4, pos[1] + 4,
+                           HOVER_PICK_COLOR)
+    # Cached extrusion guides displace/project on the GPU, not once per point here.
+    guide = _gumball_drag.get("ext_preview") if _gumball_drag is not None else None
+    if guide:
+        guide.draw(region, rv3d, HOVER_PICK_COLOR)
+        shader.bind()
+    elif _gumball_drag is not None and _gumball_drag.get("ext_ghost"):
         lines = list(lines) + list(_gumball_drag["ext_ghost"])
     segs = []
     for pl in lines:
@@ -16971,6 +17187,10 @@ def subobject_click(area, space, region, rx, ry):
         # Something IS under the cursor, but it has no sub-objects to pick (a single
         # curve has none until it is joined; a point has none at all).
         return selected_subobjects(), f"{name} has no selectable sub-objects"
+    return _apply_subobject_hit(hit)
+
+
+def _apply_subobject_hit(hit):
     before = set(_selected_subobjects)
     selection = toggle_subobject(hit)
     verb = "deselected" if hit in before else "selected"
@@ -19609,7 +19829,13 @@ def narwhal_click_select(area, space, region, rx, ry, shift=False, ctrl=False):
         hit = pick_curve_object(area, space, region, rx, ry)
     if hit is None:
         hit = _pick_object_at(area, space, region, rx, ry)
+    return _select_object_hit(hit, shift=shift, ctrl=ctrl)
+
+
+def _select_object_hit(hit, shift=False, ctrl=False):
     global _last_click_hit
+    if not (shift or ctrl):
+        clear_subobject_selection()
     _last_click_hit = hit
     action = select.modifier_action(shift=shift, ctrl=ctrl)
     hits = [hit] if hit else []
@@ -19703,13 +19929,14 @@ def object_pick_location(area, space, region, rx, ry, name):
 
 
 def _answer_edge_prompt_with_click(area, space, region, rx, ry,
-                                   shift=False, ctrl=False):
+                                   shift=False, ctrl=False, hit=None):
     """Give a command-capability edge picker one exact viewport edge hit."""
     cmd = app_state.active_command
     picker = getattr(cmd, "pick_edge", None)
     if not callable(picker) or getattr(cmd, "pending_option", None) is not None:
         return False
-    hit = pick_brep_part(area, space, region, rx, ry)
+    if hit is None:
+        hit = pick_brep_part(area, space, region, rx, ry)
     if hit is None or hit[1] != subobject.EDGE:
         return False
     name, _kind, edge_id = hit
@@ -20408,6 +20635,17 @@ def selection_drag_rect():
             select.drag_mode(x0, x1))
 
 
+def _trim_drag_rect():
+    """Draw-only feedback for Trim's existing drag-over gesture; not selection state."""
+    st = _trim_drag
+    if st is None or not st.get("active"):
+        return None
+    x0, y0 = st["start"]
+    x1, y1 = st["last"]
+    return (st["pane"], select.normalise_rect(x0, y0, x1, y1),
+            select.drag_mode(x0, x1))
+
+
 def _trim_drag_command(cmd):
     """True only while Trim is waiting for curve/surface parts to remove."""
     return isinstance(cmd, commands.TrimCmd) and getattr(cmd, "step_index", -1) == 1
@@ -20555,6 +20793,56 @@ def _select_control_points_in_rect(region, rv3d, rect, shift=False, ctrl=False):
     return sorted(_selected_cps)
 
 
+def _open_selection_choices(area, space, region, rx, ry, mode, shift=False, ctrl=False):
+    """Defer ambiguous picks without changing selection, command phase or history."""
+    import sys
+    candidates = pick_candidates.at(sys.modules[__name__], area, space, region, rx, ry, mode)
+    if len(candidates) < 2:
+        return False
+    cmd = app_state.active_command
+    phase = (getattr(cmd, 'step_index', None), getattr(cmd, 'pending_option', None))
+    model = app_state.model
+    key = _doc_key()
+    pane = _pane_key(area)
+    view = tuple(tuple(row) for row in space.region_3d.perspective_matrix)
+    size = (region.width, region.height)
+    objects = tuple(selection_names())
+    parts = tuple(selected_subobjects())
+
+    def valid():
+        a, s, r = _area_by_pane_key(pane)
+        return (app_state.model is model and _doc_key() == key
+                and app_state.active_command is cmd
+                and (getattr(cmd, 'step_index', None), getattr(cmd, 'pending_option', None)) == phase
+                and tuple(selection_names()) == objects and tuple(selected_subobjects()) == parts
+                and r is not None and s is not None and (r.width, r.height) == size
+                and tuple(tuple(row) for row in s.region_3d.perspective_matrix) == view)
+
+    def choose(hit):
+        if mode == 'edge':
+            _answer_edge_prompt_with_click(area, space, region, rx, ry,
+                                          shift=shift, ctrl=ctrl, hit=hit)
+        elif mode == 'part':
+            before = set(selected_subobjects())
+            selected, message = _apply_subobject_hit(hit)
+            if message:
+                app_state.log(message)
+            single = (cmd is not None and cmd.step_index < len(cmd.steps)
+                      and cmd.steps[cmd.step_index][1] == commands.OBJECTS)
+            if set(selected).difference(before) and single and getattr(cmd, 'accepts_subobjects', False):
+                app_state.feed_line('')
+        else:
+            _select_object_hit(hit[0], shift=shift, ctrl=ctrl)
+            if cmd is not None and not (shift or ctrl):
+                _answer_objects_step_with_click(area, space, region, rx, ry)
+        redraw_cmdbar()
+        _tag_redraw_viewports()
+
+    globals()['_hover_pick'] = None
+    return selection_menu.open(candidates, (region.x + rx + 8, region.y + ry - 8),
+                               choose, valid, context=bpy.context, scale=_ui_scale())
+
+
 def _sel_drag_end():
     """Resolve the press: a click, or a window/crossing selection.
 
@@ -20576,6 +20864,11 @@ def _sel_drag_end():
     shift, ctrl = st["shift"], st["ctrl"]
 
     if not st.get("active") or select.is_click(x0, y0, x1, y1):
+        cmd = app_state.active_command
+        mode = 'edge' if callable(getattr(cmd, 'pick_edge', None)) else 'object'
+        if _open_selection_choices(area, space, region, x0, y0, mode,
+                                   shift=shift, ctrl=ctrl):
+            return selection_names(), None
         # FilletEdge/ChamferEdge consume the exact edge and its owner in this one
         # click. Do this before ordinary selection, which would select the whole solid
         # and discard the edge intent.
@@ -20889,6 +21182,13 @@ def _gumball_begin(area, space, region, mouse_x, mouse_y, shift=False, ctrl=Fals
         if pt is None:
             return False
         state["last_world"] = pt
+    if ext_targets is not None:
+        try:
+            _prepare_extrude_preview(state)
+        except (ValueError, RuntimeError) as exc:
+            app_state.log(f"Gumball extrusion preview unavailable: {exc}")
+            redraw_cmdbar()
+            return True
     _gumball_drag = state
     # Keep the Gumball display origin synchronized with the dragged object.
     #
@@ -21917,13 +22217,54 @@ def _extrude_targets():
     return ("objects", names) if names else None
 
 
-#: Application-defined: exact Gumball extrusion ghosts rebuild at most 30 times/second.
-#: This is separate from direct-edit previews, which are now display-only and unthrottled.
+_extrude_gpu_attempted = False
+
+
+def _warm_extrude_gpu_once():
+    global _extrude_gpu_attempted
+    if _extrude_gpu_attempted:
+        return
+    _extrude_gpu_attempted = True
+    try:
+        extrude_preview.warm_gpu()
+    except Exception as exc:
+        app_state.log(f"Extrusion preview shader unavailable: {exc}")
+
+
+def _prepare_extrude_preview(st):
+    kind, what = st["extrude"]
+    jobs = [(what[0], ("face", what[1]))] if kind == "part" else [(name, None) for name in what]
+    sources = []
+    for name, part in jobs:
+        fobj = _document_object(name)
+        if fobj is None:
+            raise ValueError(f"{name} is no longer in the document")
+        sources.append((fobj.Geometry, part))
+    guide = extrude_preview.prepare(sources)
+    if not guide:
+        raise ValueError("selected inputs have no drawable extrusion boundary")
+    guide.update(st["axis_dir"], float(st.get("total") or 0.0))
+    st.update(ext_preview=guide, ext_source_key=_doc_key(), ext_cands=[],
+              ext_d=None, ext_ghost=(), ext_why=None)
+
+
+def _update_extrude_preview(st):
+    if st.get("ext_invalidated") or ("ext_source_key" in st and st["ext_source_key"] != _doc_key()):
+        st["ext_preview"] = None
+        st["ext_why"] = "source document changed during extrusion; start a new drag"
+        return
+    if "ext_preview" not in st:
+        _prepare_extrude_preview(st)
+    if st["ext_preview"]:
+        st["ext_preview"].update(st["axis_dir"], st["total"])
+
+
+#: Retained for explicit exact-candidate callers; live pointer updates do not use this gate.
 GUMBALL_EXTRUDE_LIVE_INTERVAL = 1.0 / 30.0
 
 
 def _extrude_compute(st, force=False):
-    """Recompute the extrude candidates for the drag so far (throttled) and their ghost."""
+    """Construct exact candidates for acceptance; never called by live pointer motion."""
     import time
     now = time.monotonic()
     if not force and now - st.get("ext_t", 0.0) < GUMBALL_EXTRUDE_LIVE_INTERVAL:
@@ -21981,10 +22322,23 @@ def _extrude_compute(st, force=False):
     st["ext_why"] = why
 
 
+def _cancel_gumball_extrude():
+    """Discard the display-only drag without entering the exact commit path."""
+    global _gumball_drag
+    _gumball_drag = None
+    app_state.ctx.end_undo()
+    clear_preview_cursor()
+    clear_active_snap()
+    app_state.log("Gumball extrude cancelled")
+    _tag_redraw_viewports()
+
+
 def _extrude_commit(st):
     """Release of an extrude drag. Returns the line to log."""
     if abs(float(st.get("total") or 0.0)) <= 1e-9:
         return None
+    if st.get("ext_invalidated") or ("ext_source_key" in st and st["ext_source_key"] != _doc_key()):
+        return "Gumball extrude: source document changed; nothing was extruded"
     if st.get("ext_d") != st.get("total"):
         _extrude_compute(st, force=True)
     cands = st.get("ext_cands") or []
@@ -22196,7 +22550,7 @@ def _gumball_update(mouse_x, mouse_y, shift_held=None):
                                   st["mouse0"], (mouse_x, mouse_y))
         d = gumball.apply_drag_strength(d, _gumball_drag_strength)
         st["total"] = d
-        _extrude_compute(st)
+        _update_extrude_preview(st)
         _tag_redraw_viewports()
         return True
 
@@ -22609,6 +22963,7 @@ def draw_gumball():
     space = _view3d_space(area)
     if space is None:
         return
+    _warm_extrude_gpu_once()
     _frame, handles = _gumball_handles(area, space, region)
     if not handles:
         return
@@ -22842,6 +23197,11 @@ def register():
 
 def unregister():
     global _window_chrome_handle
+    _ai_shutdown()
+    ai_settings_popup.close()
+    selection_menu.close()
+    pick_candidates.clear()
+    edge_handles._drop_drag()
     if _window_chrome_handle is not None:
         bpy.types.Window.draw_handler_remove(_window_chrome_handle)
         _window_chrome_handle = None

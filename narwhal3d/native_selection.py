@@ -1200,8 +1200,12 @@ def nearest_screen_polyline(pixels, visible, offsets, mouse, max_distance):
         return None
 
 
-def nearest_projected_polylines(polylines, matrix, width, height, mouse):
-    """Return one coarse nearest world point per display polyline, or scalar fallback."""
+def nearest_projected_polylines(polylines, matrix, width, height, mouse, *, with_distances=False):
+    """Return coarse world points, optionally paired with Rust's pixel distances.
+
+    ``with_distances`` serves the overlap picker without redoing hit-test math in
+    Python. The default Near-snap return contract remains unchanged.
+    """
     global _status
     binding = _binding()
     if binding is None:
@@ -1305,7 +1309,8 @@ def nearest_projected_polylines(polylines, matrix, width, height, mouse):
             if not bool(np.isfinite(point).all()):
                 _status = f"native selection reconstructed Near point invalid: {path}"
                 return None
-            result.append(tuple(float(value) for value in point))
+            world = tuple(float(value) for value in point)
+            result.append((world, distance) if with_distances else world)
         _status = f"ready: {path}"
         return tuple(result)
     except Exception as exc:  # noqa: BLE001 -- optimization failure preserves Near

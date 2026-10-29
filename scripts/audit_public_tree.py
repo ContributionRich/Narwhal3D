@@ -8,6 +8,7 @@ identifiers from entering the public root commit.
 from __future__ import annotations
 
 import argparse
+import ast
 import fnmatch
 import os
 from pathlib import Path, PurePosixPath
@@ -59,6 +60,8 @@ REQUIRED = {
     "scripts/verify_windows_release.py",
     "spike/test_windows_collector.py",
     "spike/test_windows_release.py",
+    "spike/test_windows_build.py",
+    "scripts/validate_windows_icon.py",
     "spike/test_package_completeness.py",
     "spike/test_release_policy.py",
     "spike/test_macos_source.py",
@@ -107,11 +110,31 @@ REQUIRED = {
     "native/pure_core/src/cage.rs",
     "native/pure_core/src/gridsnap.rs",
     "native/geometry_core/Cargo.toml",
+    "native/geometry_core/Cargo.lock",
     "native/geometry_core/build.rs",
     "native/geometry_core/cpp/occt_adapter.cpp",
     "native/geometry_core/include/narwhal_geometry_core.h",
     "native/geometry_core/src/height_field.rs",
     "native/geometry_core/src/lib.rs",
+    "native/geometry_core/src/surfacing.rs",
+    "native/geometry_core/cpp/sweep_adapter.inc",
+    "native/geometry_core/src/freeform.rs",
+    "native/geometry_core/src/freeform_math.rs",
+    "native/geometry_core/src/preparation.rs",
+    "native/geometry_core/cpp/freeform_adapter.inc",
+    "native/geometry_core/cpp/preparation_adapter.inc",
+    "narwhal3d/surfacing_backend.py",
+    "spike/test_surfacing_parallel.py",
+    "spike/test_surfacing_probe.py",
+    "spike/test_surfacing_integration.py",
+    "spike/test_surfacing_freeform.py",
+    "spike/test_surfacing_freeform_probe.py",
+    "spike/test_surfacing_freeform_mutations.py",
+    "spike/test_surfacing_interior.py",
+    "spike/test_surfacing_step_roundtrip.py",
+    "spike/test_surfacing_readiness_mutations.py",
+    "spike/test_surfacing_preparation.py",
+    "spike/test_surfacing_preparation_mutations.py",
     "native/platform_core/Cargo.toml",
     "native/platform_core/include/narwhal_platform_core.h",
     "native/platform_core/src/lib.rs",
@@ -122,6 +145,45 @@ REQUIRED = {
     "spike/test_native_platform.py",
     "spike/test_ai_assistant.py",
     "spike/test_ai_transport.py",
+    "spike/test_ai_workflow.py",
+    "spike/test_ai_workflow_native.py",
+    "spike/test_ai_workflow_transport.py",
+    "spike/test_ai_ui_workflow.py",
+    "spike/test_ai_cad.py",
+    "spike/test_ai_cad_native.py",
+    "native/automation_core/Cargo.toml",
+    "native/automation_core/Cargo.lock",
+    "native/automation_core/src/main.rs",
+    "native/automation_core/src/protocol.rs",
+    "native/automation_core/src/lib.rs",
+    "native/automation_core/src/json.rs",
+    "native/automation_core/src/provider.rs",
+    "native/automation_core/src/conversation.rs",
+    "native/automation_core/src/catalog.rs",
+    "native/automation_core/src/actions.rs",
+    "native/automation_core/src/policy.rs",
+    "scripts/narwhal_mcp.py",
+    "narwhal3d/automation_tools.py",
+    "narwhal3d/automation_bridge.py",
+    "narwhal3d/automation_host.py",
+    "narwhal3d/ai_settings_popup.py",
+    "narwhal3d/extrude_preview.py",
+    "spike/test_automation_bridge.py",
+    "spike/test_automation_mcp.py",
+    "spike/test_automation_live.py",
+    "spike/test_automation_native.py",
+    "spike/test_automation_host.py",
+    "spike/test_automation_startup.py",
+    "spike/test_automation_context.py",
+    "spike/test_automation_modern.py",
+    "spike/test_automation_lifecycle.py",
+    "spike/test_ai_settings_popup.py",
+    "spike/test_ai_settings_popup_gui.py",
+    "spike/test_extrude_preview.py",
+    "spike/test_extrude_preview_gpu.py",
+    "spike/test_fillet_preview_latency.py",
+    "spike/test_preview_responsiveness_gui.py",
+    "spike/test_trim_box_gui.py",
     "spike/test_native_gridsnap.py",
     "native/selection_core/Cargo.toml",
     "native/selection_core/src/lib.rs",
@@ -154,6 +216,29 @@ REQUIRED = {
     "spike/test_rust_selection_core.py",
     "spike/test_native_selection.py",
     "spike/test_selection_core_packaging.py",
+    "spike/test_pick_candidates.py",
+    "spike/test_selection_menu.py",
+    "spike/test_selection_menu_gui.py",
+    "spike/test_ai_ui_workflow_gui.py",
+    "spike/test_ui_bundle.py",
+    "docs/UI_DESIGNER_BUNDLE.md",
+    "scripts/build_ui_bundle.py",
+    "scripts/ui_bundle_export.py",
+    "scripts/ui_bundle_shots.py",
+    "scripts/ui_bundle/index.html",
+    "scripts/ui_bundle/app.js",
+    "scripts/ui_bundle/style.css",
+    "scripts/ui_bundle/dialogs.js",
+    "scripts/ui_bundle/dialogs.css",
+    "scripts/ui_bundle/welcome.js",
+    "scripts/ui_bundle/welcome.css",
+    "scripts/ui_bundle/test_preview.cjs",
+    "scripts/ui_bundle/fonts/Inter.woff2",
+    "scripts/ui_bundle/fonts/Ubuntu-Light.ttf",
+    "scripts/ui_bundle/fonts/OFL-1.1.txt",
+    "scripts/ui_bundle/fonts/UFL.txt",
+    "scripts/ui_bundle/fonts/README.md",
+    "scripts/ui_bundle/references/workspace-light.png",
 }
 FORBIDDEN_EXACT = {
     "AGENTS" + ".md",
@@ -187,6 +272,7 @@ ALLOWED_IMAGES = (
     "docs/images/bugreport.png",
     "docs/images/workspace-light.png",
     "docs/images/workspace-dark.png",
+    "scripts/ui_bundle/references/workspace-light.png",
     "artwork/icons/*.png",
     "artwork/Logo/narwhal.png",
     "artwork/Logo/narwhal_vector.svg",
@@ -338,11 +424,50 @@ def path_problem(path: str) -> str | None:
     return None
 
 
+def required_public_paths(entries: dict[str, tuple[str, bytes]]) -> set[str]:
+    """Add harness source references and imported test fixtures, never publish them.
+
+    Conditional suites count too: a public checkout must not depend on whether the
+    auditing host happens to have a display, compiler or staged native library.
+    Comments are not executable dependencies; policy-negative literals in Python
+    tests are not dependencies either. Their contents still face the normal scan.
+    """
+    required = set(REQUIRED)
+    pending = ["run_tests.sh", "uishot.sh", *sorted(p for p in REQUIRED if p.startswith("spike/"))]
+    visited = set()
+    source_path = re.compile(r"\b(?:spike|scripts|native|launch)/[\w./-]+\.(?:py|sh|rs|toml)(?![\w.])")
+    while pending:
+        path = pending.pop()
+        if path in visited or path not in entries:
+            continue
+        visited.add(path)
+        blob = entries[path][1]
+        dependencies = set()
+        if path.endswith(".sh"):
+            text = "\n".join(line for line in blob.decode("utf-8", "replace").splitlines()
+                             if not line.lstrip().startswith("#"))
+            dependencies.update(source_path.findall(text))
+        elif path.endswith(".py"):
+            try:
+                tree = ast.parse(blob, filename=path)
+            except (SyntaxError, UnicodeError, ValueError):
+                continue  # audit_entries separately rejects invalid Python.
+            for node in ast.walk(tree):
+                names = ([alias.name for alias in node.names] if isinstance(node, ast.Import)
+                         else [node.module or ""] if isinstance(node, ast.ImportFrom) else [])
+                for name in names:
+                    if name.startswith("test_"):
+                        dependencies.add("spike/" + name.replace(".", "/") + ".py")
+        required.update(dependencies)
+        pending.extend(dependencies - visited)
+    return required
+
+
 def audit_entries(entries: dict[str, tuple[str, bytes]], require_manifest: bool = True) -> list[str]:
     problems: list[str] = []
     paths = set(entries)
     if require_manifest:
-        for missing in sorted(REQUIRED - paths):
+        for missing in sorted(required_public_paths(entries) - paths):
             problems.append(f"missing required public file: {missing}")
     for path, (mode, blob) in sorted(entries.items()):
         problem = path_problem(path)

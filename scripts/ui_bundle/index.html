@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Narwhal 3D — editable interface preview</title>
+<meta http-equiv="Content</head>-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'none'; form-action 'none'; base-uri 'none'">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="playground/style.css">
+<link rel="stylesheet" href="playground/welcome.css">
+<link rel="stylesheet" href="playground/dialogs.css">
+<script src="data/ui_data.js"></script>
+</head>
+<body>
+<div id="app" class="app" aria-label="Narwhal 3D interface preview">
+  <header class="menubar" id="menubar"></header>
+  <nav class="categories" id="categories" aria-label="Tool categories"></nav>
+  <section class="console" aria-label="Command console">
+    <div class="console-box"><div class="console-history" id="history"></div>
+    <label class="console-line"><span class="prompt" id="prompt">Command:</span><input id="command" autocomplete="off" spellcheck="false" aria-label="Command"></label></div>
+    <ul class="completions" id="completions" hidden></ul>
+  </section>
+  <main class="workspace">
+    <aside class="left" aria-label="Tools">
+      <button class="left-header" id="left-header" aria-haspopup="menu"><span id="left-title">Standard</span><span class="chev">▾</span></button>
+      <div class="tools" id="tools"></div>
+      <section class="osnap" aria-label="Object snaps"><h2>Osnap</h2><ul id="osnap"></ul></section>
+    </aside>
+    <section class="viewport-column"><div class="viewports" id="viewports"></div><nav class="vptabs" id="vptabs" aria-label="Viewport tabs"></nav></section>
+    <aside class="inspector" aria-label="Inspector"><nav class="rail" id="rail"></nav><section class="panel" id="panel"></section><div class="dock-resize" role="separator" aria-label="Resize right dock" tabindex="0"></div></aside>
+  </main>
+  <footer class="status" id="status"></footer>
+</div>
+<div id="popup-root"></div><div class="tooltip" id="tooltip" hidden></div>
+<div id="ai-settings" class="ai-settings" role="dialog" aria-label="AI Assistant Settings" hidden></div>
+<dialog id="inventory" class="preview-guide" aria-labelledby="guide-title"></dialog>
+<script src="playground/welcome.js"></script>
+<script src="playground/dialogs.js"></script>
+<script src="playground/app.js"></script>
+</body>
+</html>

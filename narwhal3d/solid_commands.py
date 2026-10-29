@@ -110,6 +110,11 @@ class _EdgeBevelCmd(Command):
     size_prompt = "Fillet radius"
     size_word = "radius"
     show_option = "ShowRadius"
+    _handle_input_options = tuple(
+        opts.Option(name, opts.MODE, help="Not implemented yet.")
+        for name in ("FromCurve", "FromTwoPoints"))
+    _handle_cache_fields = ("_candidate", "_candidate_key", "_candidate_error",
+                            "_sections", "_section_curves", "_section_lines", "_section_error")
     # One synthetic step keeps Command.begin() interactive, but object selection is never
     # consumed: this command begins with an edge-only viewport prompt.
     steps = [("Select edges:", POINT)]
@@ -120,6 +125,9 @@ class _EdgeBevelCmd(Command):
         self.phase = self.SELECT_EDGES
         self._owner_name = None
         self._owner_geom = None
+        self._owner_document = None
+        self._owner_id = None
+        self._handle_input = None
         self._operand = None
         self._edge_points = {}       # authoritative clicked edge id -> UI handle point
         self._affected_edges = set() # includes OCCT's automatic tangent-contour propagation
@@ -137,16 +145,82 @@ class _EdgeBevelCmd(Command):
 
     @property
     def prompt(self):
-        if self.pending_option is not None and self.pending_option.name == self.size_option:
-            return f"{self.size_prompt} <{_num(self.opt[self.size_option])}>:"
+        return "".join(text for text, _ in self.prompt_segments())
+
+    def prompt_segments(self):
+        """One source for command text and clickable option labels, including subprompts."""
+        if self.handle_input_active():
+            session = self._handle_input
+            radius = session["pair"][session["id"][2] or 0]
+            # MEASURED live grip/held-drag capture (2026-10-28): retain the initial default.
+            base = f"Select new {self.verb} {self.size_word} <{radius:.3f}>"
+            return opts.prompt_segments(base, self._handle_input_options, self.opt)
         if self.pending_option is not None:
-            return opts.value_prompt(self.pending_option)
+            base = (f"{self.size_prompt} <{_num(self.opt[self.size_option])}>:"
+                    if self.pending_option.name == self.size_option
+                    else opts.value_prompt(self.pending_option))
+            return opts.prompt_segments(base, ())
         if self.phase == self.SELECT_EDGES:
             base = f"Select edges to {self.verb}. Press Enter when done:"
+            visible = {self.show_option, self.size_option, "ChainEdges", "FaceEdges", "Preview", "Edit"}
         else:
             noun = "chamfer distance" if self.chamfer else "fillet"
             base = f"Select {noun} handle to edit. Press Enter when done:"
-        return opts.format_prompt(base, self.options, self.opt)
+            visible = {self.show_option, "Preview", "SelectEdges", "TrimAndJoin"}
+        return opts.prompt_segments(base, tuple(o for o in self.options if o.name in visible), self.opt)
+
+    def _owner_is_current(self, ctx):
+        # Geometry wrappers are recreated by File3dm lookups; use document + object identity.
+        model = ctx.model
+        return (self._owner_name is not None and model.file is self._owner_document
+                and model.object_id_by_name(self._owner_name) == self._owner_id
+                and self._owner_id is not None)
+
+    def begin_handle_input(self, handle_id, ctx):
+        """Begin a UI-only subedit. Python coordinates existing parser/OCCT APIs, not math.
+
+        Cache references are intentional: setters replace these caches, so Escape can
+        restore their exact identities without rebuilding or touching document geometry.
+        """
+        if (self.handle_input_active() or self.pending_option is not None
+                or self._handle_id_error(handle_id) or not self._owner_is_current(ctx)):
+            return False
+        self._handle_input = {
+            "id": handle_id, "phase": self.phase,
+            "pair": self._edge_radii[handle_id[1]],
+            "cache": tuple(getattr(self, name) for name in self._handle_cache_fields),
+        }
+        return True
+
+    def handle_input_active(self):
+        return self._handle_input is not None
+
+    def _handle_input_is_current(self, ctx):
+        session = self._handle_input
+        return (session is not None and self.phase == session["phase"]
+                and not self._handle_id_error(session["id"]) and self._owner_is_current(ctx))
+
+    def finish_handle_input(self):
+        """Finish a click/drag adjustment, never the command or its undo record."""
+        active = self.handle_input_active()
+        self._handle_input = None
+        return active
+
+    def cancel_handle_input(self, ctx):
+        """Escape restores just this adjustment, including a previously declined cache."""
+        if not self.handle_input_active():
+            return False
+        session = self._handle_input
+        current = self._handle_input_is_current(ctx)
+        self.finish_handle_input()
+        if not current:
+            self._invalidate_candidate()
+            self._clear_sections()
+            return False
+        self._edge_radii[session["id"][1]] = session["pair"]
+        for name, value in zip(self._handle_cache_fields, session["cache"]):
+            setattr(self, name, value)
+        return True
 
     def _solid(self, ctx):
         name = self._owner_name
@@ -200,6 +274,8 @@ class _EdgeBevelCmd(Command):
         if int(edge_id) not in valid:
             raise ValueError(f"edge {edge_id} does not exist on {name}")
         self._owner_name = name
+        self._owner_document = ctx.model.file
+        self._owner_id = ctx.model.object_id_by_name(name)
         self._owner_geom = geom
         self._operand = operand
 
@@ -278,23 +354,42 @@ class _EdgeBevelCmd(Command):
         except (ValueError, RuntimeError) as exc:
             self._section_error = str(exc)
 
-    def set_handle_radius(self, handle_id, value, ctx):
-        """Edit one stable handle, then cache sections and the exact candidate off-draw.
-
-        SELECT_EDGES sets that edge's scalar pair; EDIT_HANDLES sets only the named
-        endpoint of an open fillet edge. Closed edges retain one scalar handle.
-        """
+    def _handle_id_error(self, handle_id):
         # Do not use handle_records for validation: ShowRadius=No may hide a hovered grip.
         if not isinstance(handle_id, tuple) or len(handle_id) != 3:
-            return f"{self.name}: invalid handle id", False
+            return "invalid handle id"
         owner, edge_id, endpoint = handle_id
         if owner != self._owner_name or type(edge_id) is not int or edge_id not in self._edge_points:
-            return f"{self.name}: handle is not on a selected edge", False
+            return "handle is not on a selected edge"
         anchors = self._edge_endpoints[edge_id]
         independent = self.phase == self.EDIT_HANDLES and not self.chamfer and anchors[0] != anchors[1]
         if (independent and (type(endpoint) is not int or endpoint not in (0, 1))
                 or not independent and endpoint is not None):
-            return f"{self.name}: handle does not belong to the current phase", False
+            return "handle does not belong to the current phase"
+        if self.phase not in (self.SELECT_EDGES, self.EDIT_HANDLES):
+            return "handle does not belong to the current phase"
+        return None
+
+    def set_handle_radius(self, handle_id, value, ctx, *, preview_only=False):
+        """Edit a stable handle; optionally simulate sections without building a solid.
+
+        SELECT_EDGES sets that edge's scalar pair; EDIT_HANDLES sets only the named
+        endpoint of an open fillet edge. Closed edges retain one scalar handle.
+        The UI timer uses preview_only for live wires. Exact validation stays pending
+        (no current candidate key) until release/typed acceptance or command execution.
+        """
+        error = self._handle_id_error(handle_id)
+        if error:
+            return f"{self.name}: {error}", False
+        if not self._owner_is_current(ctx):
+            self._invalidate_candidate()
+            self._clear_sections()
+            return f"{self.name}: the source document object changed", False
+        if self.handle_input_active() and (
+                not self._handle_input_is_current(ctx) or handle_id != self._handle_input["id"]):
+            return f"{self.name}: finish the active handle input first", False
+        _, edge_id, endpoint = handle_id
+        independent = endpoint is not None
         self._invalidate_candidate()
         self._clear_sections()
         try:
@@ -312,6 +407,12 @@ class _EdgeBevelCmd(Command):
             pair = [radius, radius]
         self._edge_radii[edge_id] = tuple(pair)
         self._refresh_sections()
+        if preview_only:
+            self._candidate_error = "exact preview pending; release to validate"
+            warning = (f"; section preview unavailable: {self._section_error}"
+                       if self._section_error else "")
+            return (f"{self.name}: {self.size_word} {_num(radius)} -- "
+                    f"{self._candidate_error}{warning}"), False
         self._refresh_candidate(ctx)
         if self._candidate is None:
             return f"{self.name}: {self._candidate_error}. Nothing was changed.", False
@@ -349,6 +450,8 @@ class _EdgeBevelCmd(Command):
         the owner; every later action must name that same solid. ``edge_id`` remains the
         authoritative identity while ``interior_point`` locates its scalar selection handle.
         """
+        if self.handle_input_active():
+            return f"{self.name}: finish the active handle input first", False
         if self.phase != self.SELECT_EDGES:
             return f"{self.name}: choose SelectEdges before changing edge selection", False
         mode = (action or "plain").strip().lower()
@@ -402,6 +505,8 @@ class _EdgeBevelCmd(Command):
         return f"{selected} edge(s) selected{extra}{warning} -- press Enter when done", False
 
     def on_mode(self, name, ctx):
+        if self.handle_input_active():
+            return f"{self.name}: finish the active handle input first", False
         if name == "SelectEdges":
             self.phase = self.SELECT_EDGES
             return "Select more edges. Press Enter when done.", False
@@ -426,6 +531,29 @@ class _EdgeBevelCmd(Command):
 
     def _feed(self, text, ctx):
         raw = (text or "").strip()
+        if self.handle_input_active():
+            if not self._handle_input_is_current(ctx):
+                self.cancel_handle_input(ctx)
+                return f"{self.name}: the handle or source document object changed", False
+            session = self._handle_input
+            try:
+                radius = (commands.parse_number(raw) if raw
+                          else session["pair"][session["id"][2] or 0])
+                if not math.isfinite(radius) or radius <= 0:
+                    raise ValueError("not finite and positive")
+            except (ValueError, OverflowError):
+                match = opts.match(raw, self._handle_input_options, self.opt)
+                if match.status == opts.BRANCH:
+                    return f"{self.name}: {match.option.name} is not implemented yet", False
+                if match.status != opts.NONE:
+                    return match.message, False
+                # Keep the subprompt, but never leave a successful pre-typo candidate
+                # available for a subsequent release/commit. Escape still has the snapshot.
+                return self.set_handle_radius(session["id"], float("nan"), ctx)
+            result = self.set_handle_radius(session["id"], radius, ctx)
+            if self._candidate is not None:
+                self.finish_handle_input()
+            return result
         if self.pending_option is not None:
             return super()._feed(raw, ctx)
         if raw:
@@ -444,6 +572,12 @@ class _EdgeBevelCmd(Command):
         return self.execute(ctx)
 
     def execute(self, ctx):
+        if self.handle_input_active():
+            return f"{self.name}: finish the active handle input first", False
+        if not self._owner_is_current(ctx):
+            self._invalidate_candidate()
+            self._clear_sections()
+            return f"{self.name}: the source document object changed. Nothing was changed.", True
         name, geom = self._solid(ctx)
         if not isinstance(geom, (r3.Brep, r3.Extrusion)):
             return f"{self.name}: {name!r} is not a polysurface", True

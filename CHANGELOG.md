@@ -4,6 +4,26 @@ All notable public changes will be recorded here. Narwhal 3D is an extremely ear
 
 ## Unreleased
 
+Local source-checkout integration only; not yet released. Integration and remaining geometry/UI checks passed, but the full test gate is blocked by the Windows launcher icon's minimum-file-size assertion. No package acceptance or publication is claimed.
+
+### Added
+
+- Add an opt-in read-only MCP stdio entrypoint that launches a new visible application, using a private inherited Unix capability. Linux normal-startup acceptance covers four metadata tools, live document/selection reads, rejected mutations, document-replacement revocation and disconnect cleanup without closing the GUI. Supports legacy **2025-11-25 only**: no arbitrary existing-app attachment, Windows acceptance, mutation tools or modern protocol support.
+- Integrate the bounded Rust/OCCT parallel-section surfacing backend through the internal `bridge.sweep1_parallel` API, with exact master/document/recipe transforms and fresh-process `.narwhal`/`.3dm` round trips. Required-native focused integration passes 17/17. This is not generic multi-section Freeform/Roadlike Sweep1 and is not exposed as a Sweep1 UI option.
+
+### Changed
+
+- The existing AI Assistant Settings button opens a small side-anchored popup, without a new trigger or full-window backdrop. Provider/model discovery, manual IDs, environment-variable credential names and preferences reuse existing services; saved/live settings match after normalization. Focused popup checks pass in normal and narrow windows; discovery transport was mocked, not provider reliability-certified.
+- FilletEdge held drags coalesce current section previews instead of rebuilding full fillet solids for each motion. Release validates the latest radius exactly once; later command acceptance reuses that candidate. Section preview is not a validated solid, and failed final validation cannot commit an older candidate.
+- Gumball extrusion uses a reusable GPU display guide during held motion and builds exact manufacturing geometry once on release. Focused circle/annulus acceptance retains caps, holes, recipes and one Undo; the guide never becomes document geometry. Preview timing is measured to current-value draw submission, not GPU completion or a universal frame-rate guarantee.
+
+### Fixed
+
+- FilletEdge grip clicks now open command-line radius input, while a deliberate drag adjusts the radius until release. Enter, numpad Enter, Space and right-click accept the radius subprompt without prematurely committing the whole fillet. Escape restores the current adjustment, and invalid values remain correctable without committing a stale preview.
+- FilletEdge's displayed prompt and clickable options now follow edge selection, handle editing and radius input instead of continuing to display the initial selection step.
+- Cancel or invalidate held Gumball extrusion guides before release, preventing a canceled drag or changed source from producing an extrusion. The complete focused preview integration passes 98/98; this is not the full project gate.
+- Keep Trim's held drag rectangle visible in cutter and remove-parts stages, redraw it during empty-space motion, and clear it on release/Escape. Existing held-motion trimming is preserved; this does not introduce rectangle-based part removal. Focused GUI checks pass 189/189, with legacy drag checks 19/19.
+
 ## 0.4.7 — 2026-10-27
 
 Changes since historical public v0.4.6 (`5a40d6d1eee16b26f4e6b5714862c711cafad797`). Release assets are named `Narwhal_3D-0.4.7-x86_64.AppImage` and `Narwhal_3D-0.4.7-Windows-x86_64.zip`. Both use public source revision `94534c954dc77f1f1d22f2be6064bedcc8cd1f5b`, source epoch `1793144099`; the release tag stays on that asset-build revision. This documentation follow-up does not repackage the assets. See [checksums and sizes](docs/technical-reference.md#release-source-and-integrity); platform evidence and remaining limitations follow.

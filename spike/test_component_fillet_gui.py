@@ -181,7 +181,10 @@ def drag(cmd, endpoint, amount):
     before = dict(cmd._edge_radii)
     yield from move(center(row['grip']))
     start = POSITION
-    end = tuple(round(start[i] + row['axis'][i]*row['pixels_per_unit']*amount) for i in range(2))
+    # Exercise a deliberate drag at every DPI/zoom, not sub-threshold click jitter.
+    pixels = math.copysign(max(abs(row['pixels_per_unit']*amount), ui._fpx(5), 4.0), amount)
+    end = tuple(round(start[i] + row['axis'][i]*pixels) for i in range(2))
+    check(math.dist(start, end) >= ui._fpx(3), 'fixture crosses the grip drag threshold')
     event('LEFTMOUSE', 'PRESS')
     yield .12
     yield from move(end)

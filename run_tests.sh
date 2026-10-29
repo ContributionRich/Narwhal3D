@@ -51,8 +51,37 @@ if [[ -f "$SELECTION_CORE" ]]; then
     run "Rust selection adapter/UI" env NARWHAL_SELECTION_CORE="$SELECTION_CORE" \
         "$BLENDER" -b --factory-startup --python-exit-code 1 \
         --python spike/test_native_selection.py
+    run "overlap pick candidates (native/fallback + mutations)" env NARWHAL_SELECTION_CORE="$SELECTION_CORE" \
+        "$BLENDER" -b --factory-startup --python-exit-code 1 \
+        --python spike/test_pick_candidates.py -- --mutations
 else
     printf '\nSKIP: Rust selection-core runtime checks (no local artifact)\n'
+fi
+
+if command -v cargo >/dev/null 2>&1; then
+    # Fixed source target: neither a stale staged product binary nor a private build cache.
+    AUTOMATION_TARGET="$ROOT/native/automation_core/target"
+    AUTOMATION_SERVER="$AUTOMATION_TARGET/debug/narwhal-automation"
+    AUTOMATION_LIBRARY="$AUTOMATION_TARGET/debug/libnarwhal_automation.so"
+    run "Rust automation-core tests" timeout --kill-after=5s 180s cargo +1.95.0 test \
+        --manifest-path native/automation_core/Cargo.toml --target-dir "$AUTOMATION_TARGET" \
+        --locked --offline --jobs "${CARGO_BUILD_JOBS:-2}"
+    run "Rust automation-core build" timeout --kill-after=5s 180s cargo +1.95.0 build \
+        --manifest-path native/automation_core/Cargo.toml --target-dir "$AUTOMATION_TARGET" \
+        --locked --offline --jobs "${CARGO_BUILD_JOBS:-2}"
+    run "automation source protocol" timeout --kill-after=5s 60s "$PYTHON" \
+        spike/test_automation_mcp.py --server "$AUTOMATION_SERVER"
+    run "automation modern source protocol" timeout --kill-after=5s 90s "$PYTHON" \
+        spike/test_automation_modern.py --server "$AUTOMATION_SERVER"
+    run "automation combined lifecycle" timeout --kill-after=5s 60s "$PYTHON" \
+        spike/test_automation_lifecycle.py --server "$AUTOMATION_SERVER"
+    run "AI native conversation workflow" "$PYTHON" spike/test_ai_workflow.py --library "$AUTOMATION_LIBRARY"
+    run "AI native CAD reads and proposal policy" "$PYTHON" spike/test_ai_cad.py --library "$AUTOMATION_LIBRARY"
+    run "AI UI orchestration" "$PYTHON" spike/test_ai_ui_workflow.py --library "$AUTOMATION_LIBRARY"
+    run "automation source live bridge (background Blender)" timeout --kill-after=5s 120s "$PYTHON" \
+        spike/test_automation_mcp.py --server "$AUTOMATION_SERVER" --live "$BLENDER"
+else
+    printf '\nSKIP: Rust automation source/protocol/live checks (cargo is unavailable)\n'
 fi
 
 if command -v cargo >/dev/null 2>&1; then
@@ -145,11 +174,19 @@ PURE_SUITES=(
     spike/test_curve_inputs.py
     spike/test_curve_consumer_inputs.py
     spike/test_variable_edge_fillet.py
+    spike/test_fillet_handle_input.py
+    spike/test_fillet_preview_latency.py
     spike/test_solid_commands.py
     spike/test_primitives.py
     spike/test_picture.py
     spike/test_cmdbar_hits.py
     spike/test_extrude_distance.py
+    spike/test_extrude_preview.py
+    spike/test_surfacing_probe.py
+    spike/test_surfacing_parallel.py
+    spike/test_surfacing_freeform.py
+    spike/test_surfacing_preparation.py
+    spike/test_surfacing_step_roundtrip.py
     spike/test_curve_options.py
     spike/test_helix.py
     spike/test_spiral.py
@@ -181,6 +218,8 @@ PURE_SUITES=(
     spike/test_user_settings.py
     spike/test_grid_render.py
     spike/test_shell_popup.py
+    spike/test_selection_menu.py
+    spike/test_ui_bundle.py
     spike/test_shell_input.py
     spike/test_views.py
     spike/test_menubar_resource.py
@@ -194,6 +233,11 @@ PURE_SUITES=(
     spike/test_bugreport.py
     spike/test_ai_assistant.py
     spike/test_ai_transport.py
+    spike/test_ai_workflow_transport.py
+    spike/test_automation_context.py
+    spike/test_ai_settings_popup.py
+    spike/test_automation_bridge.py
+    spike/test_automation_host.py
     spike/test_open_arg.py
     spike/test_printdialog.py
     spike/test_dxf_reader.py
@@ -282,6 +326,10 @@ for suite in "${PURE_SUITES[@]}"; do
     run "$suite" "$PYTHON" "$suite"
 done
 
+# Fail on a stale/missing surfacing capability, rather than passing with native cases skipped.
+run "surfacing bridge integration (native required)" "$PYTHON" \
+    spike/test_surfacing_integration.py --require-native
+
 run "native document core build" cargo +1.95.0 build --release --locked \
     --manifest-path native/document_core/Cargo.toml
 DOCUMENT_CORE="$ROOT/native/document_core/target/release/narwhal-document-core"
@@ -296,6 +344,19 @@ done
 if [[ -n "${DISPLAY:-}" || -n "${WAYLAND_DISPLAY:-}" ]]; then
     run "UI screenshot suite" ./uishot.sh
     run "v4 real UI interactions" bash spike/v4_live_gui.sh
+    # These drivers acquire their own GUI (and sometimes heavy-build) locks.
+    # Never invoke them inside v4's lock or as Blender --python payloads.
+    run "AI settings popup live" "$PYTHON" spike/test_ai_settings_popup_gui.py --launch
+    if [[ -f "$ROOT/artifacts/automation/linux-x86_64/libnarwhal_automation.so" && -f "$ROOT/artifacts/automation/linux-x86_64/narwhal-automation" ]]; then
+        run "installed AI workflow live" "$PYTHON" spike/test_ai_ui_workflow_gui.py --launch
+    else
+        printf '\nSKIP: installed AI GUI acceptance (stage reviewed automation executable/library first)\n'
+    fi
+    run "preview responsiveness live" "$PYTHON" spike/test_preview_responsiveness_gui.py --run integration
+    run "Trim box live" "$PYTHON" spike/test_trim_box_gui.py --launch --baseline
+    run "overlap selection menu live" "$PYTHON" spike/test_selection_menu_gui.py --launch
+    # The actual CLI resolves staged artifacts, not AUTOMATION_SERVER. Do not overwrite them.
+    printf '\nSKIP: staged-product automation startup acceptance; run python3 -B spike/test_automation_startup.py separately after staging the reviewed server\n'
     run "startup layout via the welcome's X11 route" spike/startup_layout_gui.sh
 else
     printf '\nSKIP: UI screenshot suite (no display)\n'

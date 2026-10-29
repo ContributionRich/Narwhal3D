@@ -6,11 +6,11 @@ No kernel work runs during drawing. Pixel-to-radius sensitivity is measured from
 the projected radius direction, with a view-plane fallback for end-on handles.
 """
 import math
-import time
 
 _boxes = {}
 _drag = None
 _numeric = None
+_preview_timer = None
 
 
 def _ui():
@@ -82,12 +82,68 @@ def _inside(x, y, box):
     return box[0] <= x < box[2] and box[1] <= y < box[3]
 
 
-def _apply(value):
-    ui = _ui()
-    if _drag is None or ui.app_state.active_command is not _drag['cmd']:
+def _drag_is_current(drag):
+    if drag is None or _drag is not drag or _ui().app_state.active_command is not drag['cmd']:
+        return False
+    return (not drag.get('command_input') or
+            drag['cmd'].handle_input_active() and
+            drag['cmd']._handle_input is drag['input_session'])
+
+
+def _cancel_preview_timer():
+    global _preview_timer
+    callback, _preview_timer = _preview_timer, None
+    if callback is not None:
+        import bpy
+        if bpy.app.timers.is_registered(callback):
+            bpy.app.timers.unregister(callback)
+
+
+def _drop_drag():
+    global _drag
+    _cancel_preview_timer()
+    _drag = None
+
+
+def _schedule_preview():
+    """One latest-value slot, consumed on the next main-thread timer tick, even at rest.
+
+    Fillet motion only schedules the existing OCCT section simulation. No worker
+    handles, new geometry math, or kernel calls in the mouse-motion handler.
+    """
+    global _preview_timer
+    if _preview_timer is not None:
         return
-    message, done = _drag['cmd'].set_handle_radius(_drag['id'], value, ui.app_state.ctx)
-    _drag['last'] = time.monotonic()
+    drag = _drag
+
+    def tick():
+        global _preview_timer
+        # A canceled callback may already have been queued. It must neither consume
+        # a new drag's value nor clear the new drag's timer, even on the same command.
+        if _preview_timer is not tick:
+            return None
+        _preview_timer = None
+        if not _drag_is_current(drag):
+            return None
+        value = drag['pending']
+        if value is not None and value != drag.get('preview_value'):
+            # Chamfer has no section wires: retain its existing exact preview rather
+            # than blanking Preview=Yes while sharing this pointer/timer plumbing.
+            _apply(value, preview_only=not drag['cmd'].chamfer)
+            drag['preview_value'] = value
+        return None
+
+    import bpy
+    _preview_timer = tick
+    bpy.app.timers.register(tick, first_interval=0.0)
+
+
+def _apply(value, *, preview_only=False):
+    ui = _ui()
+    if not _drag_is_current(_drag):
+        return
+    message, done = _drag['cmd'].set_handle_radius(
+        _drag['id'], value, ui.app_state.ctx, preview_only=preview_only)
     if message:
         ui.app_state.log(message)
     ui._tag_redraw_viewports()
@@ -114,39 +170,81 @@ def numeric_apply(text):
 def handle_event(event):
     global _drag, _numeric
     ui = _ui()
+    st = ui.app_state
+    cmd = st.active_command
+    input_active = callable(getattr(cmd, 'handle_input_active', None)) and cmd.handle_input_active()
+    if _drag is not None and not _drag_is_current(_drag):
+        _drop_drag()
+    # Radius input owns its cancellation and confirmation, not the outer command.
+    if input_active and event.value == 'PRESS':
+        if event.type == 'ESC':
+            _drop_drag()
+            cmd.cancel_handle_input(st.ctx)
+            st.input_buffer = ''
+            ui._tag_redraw_viewports()
+            ui.redraw_cmdbar()
+            return True
+        if event.type in ('RET', 'NUMPAD_ENTER', 'SPACE'):
+            line, st.input_buffer = st.input_buffer, ''
+            if line.strip():
+                st.history.append('> ' + line)
+            elif _drag is not None and _drag['pending'] is not None:
+                # Enter during a held drag accepts the last pointer value, not the
+                # original click default or the last value a timer happened to consume.
+                line = str(_drag['pending'])
+            _drop_drag()
+            st.feed_line(line)
+            return True
     if _drag is not None:
-        if ui.app_state.active_command is not _drag['cmd']:
-            _drag = None
-            return False
         if event.type == 'ESC' and event.value == 'PRESS':
+            _cancel_preview_timer()
             _apply(_drag['radius'])
-            _drag = None
+            _drop_drag()
             return True
         if event.type == 'MOUSEMOVE':
             dx, dy = event.mouse_x-_drag['start'][0], event.mouse_y-_drag['start'][1]
+            # OURS: a three-logical-pixel threshold separates a click from hand jitter.
+            if not _drag['moved'] and math.hypot(dx, dy) < ui._fpx(3):
+                return True
+            _drag['moved'] = True
             delta = dx*_drag['axis'][0] + dy*_drag['axis'][1]
             value = max(1e-9, _drag['radius'] + delta/_drag['pixels_per_unit'])
             _drag['pending'] = value
-            if time.monotonic()-_drag['last'] >= .05:
-                _apply(value)
+            _schedule_preview()
             return True
         if event.type == 'LEFTMOUSE' and event.value == 'RELEASE':
+            _cancel_preview_timer()
             if _drag['pending'] is not None:
                 _apply(_drag['pending'])
-            _drag = None
+            if _drag['moved'] and _drag.get('command_input'):
+                cmd.finish_handle_input()
+            # A click leaves the radius prompt active; a drag only ends the adjustment.
+            _drop_drag()
             return True
     if event.type != 'LEFTMOUSE' or event.value != 'PRESS':
         return False
-    if not callable(getattr(ui.app_state.active_command, 'set_handle_radius', None)):
+    if not callable(getattr(cmd, 'set_handle_radius', None)):
         return False
     if not ui._point_in_view3d(event.mouse_x, event.mouse_y):
         return False
     for record in boxes():
         if _inside(event.mouse_x, event.mouse_y, record['grip']):
-            _drag = dict(record, start=(event.mouse_x,event.mouse_y), last=0.0, pending=None)
+            _drop_drag()
+            begin = getattr(cmd, 'begin_handle_input', None)
+            if input_active:
+                cmd.cancel_handle_input(st.ctx)
+            if callable(begin) and not begin(record['id'], st.ctx):
+                return True
+            st.input_buffer = ''
+            _drag = dict(record, start=(event.mouse_x,event.mouse_y),
+                         pending=None, moved=False, command_input=callable(begin),
+                         input_session=getattr(cmd, '_handle_input', None))
             return True
         if _inside(event.mouse_x, event.mouse_y, record['label']):
             import bpy
+            _drop_drag()
+            if input_active:
+                cmd.cancel_handle_input(st.ctx)
             _numeric = record
             ui._defer_menu(lambda: bpy.ops.narwhal.edge_radius('INVOKE_DEFAULT'))
             return True

@@ -221,6 +221,10 @@ def main():
 
     # Registration applies the CAD workspace theme and builds the command bar via a timer.
     narwhal3d.register()
+    from narwhal3d import automation_host
+    from narwhal3d.state import app_state
+
+    automation_host.attach_inherited(app_state, os.environ.get("NARWHAL3D_VERSION", ""))
 
     # Chrome tweaks must run after the add-on has reshaped the layout.
     def _late():

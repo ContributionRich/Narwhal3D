@@ -121,6 +121,50 @@ The canonical C/C++ declaration is
 prototypes, C++ guards, and C/C++ static layout assertions. Every build compiles,
 links, and executes C and C++ consumers against both static and shared smoke providers.
 
+## Physical station preparation (additive ABI-4 capability)
+
+Capability bit `1 << 8` exposes `narwhal_geometry_core_prepare_freeform_v1`.
+Exact OCCT curve projection supplies candidates including endpoints; Rust resolves
+unique physical stations, checks order/endpoints/placement and refuses ambiguity.
+This does not equate original application parameters with typed arc angles. The
+176-byte station report and input spans remain caller-owned; no surface is created.
+Python's immutable source snapshot preserves IDs/content hashes and re-resolves
+sources before/after construction. It is not a document-generation or authorization
+service. See `docs/surfacing/SWEEP1_COMMAND_READINESS.md`. ABI stays 4; current full
+capability mask is 511. Existing constructors, edits and record layouts are unchanged.
+
+## Freeform surfacing (additive ABI-4 capability)
+
+Capability bit `1 << 7` exposes `narwhal_geometry_core_sweep1_freeform_approx_v1`.
+The exact BinTools input compound contains one open C2 rail and 2..4 compatible
+rational quadratic sections; explicit native rail parameters and reversal flags
+travel separately. Rust interpolates local section poles, OCCT fits their corrected-
+Frenet transport, and independent original-section/rail/law checks enforce the
+requested tolerance. Output is one rational C2 BRep face, never a mesh. The `approx`
+name discloses fitted frame composition rather than claiming symbolic interpolation
+of the world-space sweep. A 72-byte report records errors, sampling scope, patch
+count and interval qualification. See `docs/surfacing/SWEEP1_FREEFORM.md` for the
+strict supported domain and proof limits; in particular sampled errors and floating
+Bezier extraction are not end-to-end formal certificates. Existing parallel and
+local-edit exports/layouts are unchanged; ABI stays 4 with bits 0..7 retained.
+
+## Parallel-section surfacing (additive ABI-4 capability)
+
+Capability bit `1 << 6` exposes `narwhal_geometry_core_sweep1_parallel_v1`.
+This is a bounded **OURS parallel-section mode**, not Freeform: an open cubic rail
+and two to four exact quadratic rational sections with shared weights produce one
+valid degree-2 x degree-3 rational BRep face. Rust constructs and qualifies the
+control net; the private C++ adapter only creates/validates/serializes OCCT geometry.
+The 48-byte `NarwhalSweepReportV1` carries section control residual plus a numerical
+allowance, monotonicity margins and a projected Jacobian lower bound. The header
+specifies packed input, orientation and refusal contracts. Existing exports and
+ABI layouts are unchanged. Old libraries do not advertise the capability.
+
+See `docs/surfacing/SWEEP1_PARALLEL.md` and
+`docs/agent_tasks/SURFACING_PROGRESS.md` for mathematical scope, independent error
+measurements, runnable tests, and the pending Main-owned integration. No sampled
+mesh, implicit fitting, capped-solid claim or alternate geometry store is used.
+
 ## Edit sessions and current performance
 
 ABI 4 adds Rust-owned edit sessions. Import parses one exact BinTools BRep once and

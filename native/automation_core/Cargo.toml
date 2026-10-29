@@ -1,0 +1,25 @@
+[package]
+name = "narwhal-automation"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+publish = false
+
+[lib]
+name = "narwhal_automation"
+crate-type = ["rlib", "cdylib"]
+
+# Official maintained Apache-2.0 MCP SDK; no HTTP, OAuth, macros or model provider.
+[dependencies]
+rmcp = { version = "=3.8.0", default-features = false, features = ["server", "transport-io"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt", "macros", "net", "time", "signal"] }
+tokio-util = { version = "0.7", features = ["codec"] }
+futures = "0.3"
+# Validate/duplicate the inherited descriptor before transferring ownership to Rust.
+libc = "0.2"
+
+[profile.dev]
+debug = 0
+incremental = false

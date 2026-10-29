@@ -11,8 +11,9 @@ NARWHAL3D_UI_READY, NARWHAL3D_THEME and NARWHAL3D_WELCOME_REQUEST. Main's existi
 launcher helper must supply NARWHAL_PURE_CORE, NARWHAL_SELECTION_CORE,
 NARWHAL_PLATFORM_CORE (and its normal geometry/document/CDR core paths).
 Negative control: NARWHAL_PREF_TEST_MUTATION=drop-write, fresh write phase: MUST
-exit 1 on disk.theme. Old-style source must fail, never skip missing APIs. Then
-run unmutated write/read. Templates remain pending Core_root scope, not simulated.
+exit 1 on disk.theme. Popup negative controls: popup-no-draw, popup-wrong-theme,
+popup-escape-save (in-memory only); each must fail its corresponding popup check.
+Old-style source must fail, never skip missing APIs. Then run unmutated write/read. Templates remain pending Core_root scope, not simulated.
 Main must also reject asynchronous draw errors in the runtime log. These checks
 observe real draw submissions, not a screenshot pixel/contrast oracle.
 """
@@ -24,6 +25,8 @@ import tempfile
 import threading
 import time
 import traceback
+from contextlib import ExitStack
+from copy import deepcopy
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -195,6 +198,122 @@ def draw_checks(name):
     RESULT['draws'][name] = {key: {k: len(v) for k, v in rec.items()} for key, rec in records.items()}
 
 
+def ai_popup_checks(name, win):
+    popup = ui.ai_settings_popup
+    before_bytes = SETTINGS.read_bytes()
+    before_preferences = deepcopy(ui.user_preference_snapshot())
+    before_provider = deepcopy(vars(ui._ai['state'].provider))
+    generation = ui._ai.get('settings_generation', 0)
+    previous_model = popup._model
+    calls, boxes, texts = [], [], []
+    drawing = False
+    original_draw = popup.draw_model
+    original_box, original_text = ui._draw_round_rect, ui._draw_text
+
+    def draw(model, theme='light'):
+        nonlocal drawing
+        drawing = True
+        try:
+            original_draw(model, theme)
+            calls.append((model, theme))
+        finally:
+            drawing = False
+
+    def box(*args, **kwargs):
+        if drawing:
+            boxes.append((tuple(args[1:5]), tuple(args[6])))
+        return original_box(*args, **kwargs)
+
+    def text(*args, **kwargs):
+        if drawing:
+            texts.append((str(args[2]), tuple(args[4])))
+        return original_text(*args, **kwargs)
+
+    def palette(token):
+        return tuple(v / 255 for v in bytes.fromhex(popup.PALETTES[name][token][1:])) + (1,)
+
+    with ExitStack() as stack:
+        discovery = stack.enter_context(patch.object(ui, '_ai_start_model_discovery', return_value=False))
+        save = stack.enter_context(patch.object(ui, '_apply_ai_settings', wraps=ui._apply_ai_settings))
+        stack.enter_context(patch.object(popup, 'draw_model', draw))
+        stack.enter_context(patch.object(ui, '_draw_round_rect', box))
+        stack.enter_context(patch.object(ui, '_draw_text', text))
+        if RESULT['mutation'] == 'popup-no-draw':
+            stack.enter_context(patch.object(popup, 'draw_model', lambda *_: None))
+        elif RESULT['mutation'] == 'popup-wrong-theme':
+            stack.enter_context(patch.object(popup, 'draw_model', lambda model, theme: draw(
+                model, 'light' if theme == 'dark' else 'dark')))
+        # INVOKE now hands ownership to the Window overlay/input router, not a
+        # native invoke_props_dialog; operator.draw is no longer its renderer.
+        equal(bpy.ops.narwhal.ai_settings('INVOKE_DEFAULT'), {'FINISHED'}, name + ' actual AI settings invoke')
+        model = popup._model
+        check(popup.is_open() and isinstance(model, popup.PopupModel), name + ' custom settings popup open')
+        check(model is not previous_model, name + ' fresh popup draft')
+        check(popup._handler is not None and popup._window == win, name + ' Window draw handler registered')
+        equal(ui._ai['settings_generation'], generation + 1, name + ' new settings generation')
+        equal(model.original, ui._ai['state'].provider, name + ' draft starts from live provider')
+        equal(model.provider_id, AI['provider_id'], name + ' draft provider')
+        equal({key: field.text for key, field in model.fields.items()},
+              {key: AI[key] for key in model.fields}, name + ' restored draft fields')
+        equal(model.allow_insecure_remote, AI['allow_insecure_remote'], name + ' draft transport policy')
+        equal(model.anchor, ui._ai_settings_anchor(bpy.context), name + ' popup anchored to settings button')
+        equal(model.window_size, (win.width, win.height), name + ' popup window dimensions')
+        equal(discovery.call_count, 1, name + ' discovery routed once without network')
+        equal(vars(discovery.call_args.args[0]), before_provider, name + ' discovery uses restored configuration')
+        yield .4
+        redraw()
+        check(bool(calls) and all(m is model for m, _ in calls), name + ' actual Window popup draw submissions')
+        check(all(theme == name for _, theme in calls), name + ' popup draw uses current theme')
+        equal(design.THEME, name, name + ' popup leaves shell theme unchanged')
+        colors = [color for bounds, color in boxes if bounds == tuple(model.rect)]
+        check(bool(colors) and all(color == palette('bg') for color in colors), name + ' actual popup background')
+        # Scroll each field into view: absence of an offscreen draw must not be
+        # mistaken for correct input styling on a small application window.
+        for key, field in model.fields.items():
+            model.ensure_visible(key)
+            boxes.clear()
+            texts.clear()
+            redraw()
+            colors = [color for bounds, color in boxes if bounds == tuple(model.controls[key])]
+            check(bool(colors) and all(color == palette('input') for color in colors),
+                  name + ' actual popup input ' + key)
+            check((field.text, palette('text')) in texts, name + ' actual popup field text ' + key)
+        check(any(color == palette('muted') for _, color in texts), name + ' actual popup muted text')
+        widget = bpy.context.preferences.themes[0].user_interface.wcol_menu_back
+        expected = design.blender_theme()['wcol_menu_back']['text']
+        check(all(abs(a - b) < 1e-5 for a, b in zip(widget.text, expected)), name + ' native menu text normal')
+        # A changed draft makes an accidental save-on-Escape observable, unlike
+        # cancelling an untouched copy of the already-persisted configuration.
+        model.fields['model'].set_text('discard-this-unsaved-model')
+        model._changed()
+        check(model.fields['model'].text != before_provider['model'], name + ' unsaved draft differs')
+        equal(SETTINGS.read_bytes(), before_bytes, name + ' opening/drawing/editing leaves settings bytes unchanged')
+        equal(vars(ui._ai['state'].provider), before_provider, name + ' draft is not live configuration')
+        if RESULT['mutation'] == 'popup-escape-save':
+            original_close = model.close
+            def save_on_close():
+                model.on_save(model.validated_config())
+                original_close()
+            stack.enter_context(patch.object(model, 'close', save_on_close))
+        win.event_simulate(type='ESC', value='PRESS')
+        yield .1
+        win.event_simulate(type='ESC', value='RELEASE')
+        yield .3
+        check(not popup.is_open() and not model.is_open, name + ' Escape closes custom settings popup')
+        check(popup._handler is None, name + ' Escape unregisters Window draw handler')
+        check('ESC' not in model._releases, name + ' Escape release consumed')
+        draw_count = len(calls)
+        calls.clear()
+        redraw()
+        check(not calls, name + ' closed popup no longer draws')
+        equal(SETTINGS.read_bytes(), before_bytes, name + ' Escape preserves settings bytes')
+        equal(vars(ui._ai['state'].provider), before_provider, name + ' Escape preserves live provider')
+        equal(ui.user_preference_snapshot(), before_preferences, name + ' Escape preserves user preferences')
+        equal(save.call_count, 0, name + ' Escape never applies draft')
+        equal(ui._ai['settings_generation'], generation + 1, name + ' drawing/Escape do not change generation')
+        RESULT['draws'][name]['ai_settings_popup'] = {'draws': draw_count}
+
+
 def run():
     while os.environ.get('NARWHAL3D_UI_READY') != '1' or ui._viewports_in_progress:
         yield .1
@@ -239,27 +358,7 @@ def run():
     check(len(ui.app_state.model.file.Objects) == 1, 'real printable Line fixture')
     for name in ('dark', 'light'):
         draw_checks(name)
-        called = []
-        original_draw = ui.NARWHAL_OT_ai_settings.draw
-        def dialog_draw(self, context):
-            called.append(True)
-            return original_draw(self, context)
-        with patch.object(ui, '_ai_start_model_discovery', lambda *_: False), \
-             patch.object(ui.NARWHAL_OT_ai_settings, 'draw', dialog_draw):
-            equal(bpy.ops.narwhal.ai_settings('INVOKE_DEFAULT'), {'RUNNING_MODAL'}, 'actual AI settings invoke')
-            yield .4
-            redraw()
-            check(bool(called), name + ' actual AI settings class.draw called')
-            widget = bpy.context.preferences.themes[0].user_interface.wcol_menu_back
-            expected = design.blender_theme()['wcol_menu_back']['text']
-            check(all(abs(a - b) < 1e-5 for a, b in zip(widget.text, expected)), name + ' native menu text normal')
-            win.event_simulate(type='ESC', value='PRESS')
-            yield .1
-            win.event_simulate(type='ESC', value='RELEASE')
-            yield .3
-            called.clear()
-            redraw()
-            check(not called, name + ' Escape closes native settings dialog')
+        yield from ai_popup_checks(name, win)
     ui.set_shell_theme('dark')
     inspector('AI Assistant')
     restored()
@@ -301,7 +400,8 @@ try:
     ui.app_state.model.set_absolute_tolerance(.037)
     original_restore = ui._restore_user_preferences
     ui._restore_user_preferences = observe_restore
-    check(RESULT['mutation'] in ('', 'drop-write'), 'known mutation mode')
+    check(RESULT['mutation'] in ('', 'drop-write', 'popup-no-draw', 'popup-wrong-theme',
+                                'popup-escape-save'), 'known mutation mode')
     if RESULT['mutation'] == 'drop-write':
         ui._remember_preferences = lambda values: None
     STEPS = run()
