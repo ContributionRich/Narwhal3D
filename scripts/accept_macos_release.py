@@ -51,7 +51,7 @@ try:
     env = {k: v for k, v in os.environ.items() if not k.startswith(("NARWHAL", "DYLD_"))}
     profile = work / "profile"
     profile.mkdir()
-    env.update(HOME=str(profile), PYTHONDONTWRITEBYTECODE="1", PYTHONPATH=str(app),
+    env.update(HOME=str(profile), TMPDIR=str(work), PYTHONDONTWRITEBYTECODE="1", PYTHONPATH=str(app),
                NARWHAL3D_SETTINGS_FILE=str(profile / "preferences.json"),
                BLENDER_USER_CONFIG=str(profile / "blender"), NARWHAL3D_VERSION="0.4.8",
                NARWHAL3D_DISABLE_UPDATE_CHECK="1", NARWHAL3D_NO_DIALOGS="1",
@@ -77,7 +77,12 @@ try:
         command += ["-b"] if background else ["--enable-event-simulate"]
         for script in ([test, bootstrap] if first else [bootstrap, test]):
             command += ["--python", script]
-        text = run(command, env=env, timeout=600 if background else 180, label=label)
+        case_profile = work / ("profile-" + label)
+        case_profile.mkdir()
+        case_env = dict(env, HOME=str(case_profile),
+                        NARWHAL3D_SETTINGS_FILE=str(case_profile / "preferences.json"),
+                        BLENDER_USER_CONFIG=str(case_profile / "blender"))
+        text = run(command, env=case_env, timeout=600 if background else 180, label=label)
         assert marker in text, (label, "acceptance marker missing")
         assert "Traceback (most recent call last)" not in text, label
         if not background:

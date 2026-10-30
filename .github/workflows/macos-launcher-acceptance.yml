@@ -24,6 +24,7 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           persist-credentials: false
+          fetch-depth: 0
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: macos-048-candidate-${{ inputs.package_run }}
@@ -41,6 +42,11 @@ jobs:
           with dmg.open('rb') as f: digest=hashlib.file_digest(f,'sha256').hexdigest()
           assert digest==receipt['sha256']==pathlib.Path(str(dmg)+'.sha256').read_text().split()[0]
           assert receipt['source_revision']==os.environ['EXPECTED_SOURCE'] and receipt['actual_dmg_verified']
+          for name in ('test_narwhal_document.py','test_render_quality_gui.py','test_gumball_extrude_scale_gui.py'):
+              path='spike/'+name
+              frozen=subprocess.check_output(['git','--no-pager','show',os.environ['EXPECTED_SOURCE']+':'+path])
+              assert hashlib.sha256(frozen).digest()==hashlib.sha256(pathlib.Path(path).read_bytes()).digest()
+          subprocess.run([sys.executable,'scripts/accept_macos_release.py','--dmg',str(dmg),'--source',os.environ['GITHUB_WORKSPACE'],'--work',str(root/'final-acceptance')],check=True,timeout=900)
           subprocess.run([sys.executable,'scripts/smoke_macos_launcher.py','--dmg',str(dmg),'--work',str(root/'launcher-evidence')],check=True,timeout=180)
           PY
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -50,5 +56,7 @@ jobs:
           path: |
             ${{ runner.temp }}/launcher-evidence/launcher.log
             ${{ runner.temp }}/launcher-evidence/launcher-result.json
+            ${{ runner.temp }}/final-acceptance/*.log
+            ${{ runner.temp }}/final-acceptance/results.json
           if-no-files-found: warn
           retention-days: 14
