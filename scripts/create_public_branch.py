@@ -155,6 +155,7 @@ TEST_FILES = (
     "spike/macos_containment/worker_fixture.rs", "spike/macos_containment/test_supervisor.py",
     "spike/macos_containment/native_mutations.py", "spike/macos_containment/test_worker_entry.py",
     "spike/macos_containment/test_package_policy.py", "spike/macos_containment/test_bytecode.py",
+    "spike/macos_containment/test_presentation_backend.py",
     "spike/test_converter_supervisor.py", "spike/test_runtime_tools.py",
     "spike/test_onbrep_public.py", "spike/test_open_arg.py",
     "spike/test_windows_collector.py", "spike/test_windows_release.py",

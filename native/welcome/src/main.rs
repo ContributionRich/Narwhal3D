@@ -325,6 +325,7 @@ fn is_ready_line(line: &str) -> bool {
 #[derive(Default)]
 struct RuntimeReadiness {
     watchdog_presented: bool,
+    continuous_metal: bool,
     layout_complete: bool,
     announced: bool,
 }
@@ -333,9 +334,11 @@ impl RuntimeReadiness {
     fn observe(&mut self, line: &str) -> bool {
         self.watchdog_presented |= line == "[narwhal3d] first presentation released (watchdog)";
         self.layout_complete |= line == "[narwhal3d] layout presentation ready";
-        // A watchdog frame alone is incomplete. Once both native presentation
-        // and completed layout are observed, slow startup must not spin forever.
-        let ready = is_ready_line(line) || (self.watchdog_presented && self.layout_complete);
+        self.continuous_metal |= line == "[narwhal3d] continuous presentation backend: METAL";
+        // Metal does not withhold swap-buffer release and therefore never emits
+        // OpenGL's release marker. Require actual backend identification AND layout.
+        let ready = is_ready_line(line)
+            || ((self.watchdog_presented || self.continuous_metal) && self.layout_complete);
         if ready && !self.announced {
             self.announced = true;
             true
@@ -2173,6 +2176,22 @@ mod tests {
         assert!(validate_windows_update_paths([archive, target, target, backup]).is_err());
         assert!(!safe_absolute_path(Path::new("relative/package")));
         assert!(!safe_absolute_path(Path::new("/tmp/bad\npath")));
+    }
+
+    #[test]
+    fn metal_startup_requires_backend_and_layout_in_either_order() {
+        let backend = "[narwhal3d] continuous presentation backend: METAL";
+        let layout = "[narwhal3d] layout presentation ready";
+        for (first, second) in [(backend, layout), (layout, backend)] {
+            let mut readiness = super::RuntimeReadiness::default();
+            assert!(!readiness.observe(first));
+            assert!(readiness.observe(second));
+            assert!(!readiness.observe(second));
+        }
+        let mut other = super::RuntimeReadiness::default();
+        assert!(!other.observe(layout));
+        assert!(!other.observe("[narwhal3d] continuous presentation backend: OPENGL"));
+        assert!(!other.observe(&format!("prefix {backend}")));
     }
 
     #[test]

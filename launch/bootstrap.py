@@ -14,6 +14,20 @@ if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
 
+def _report_presentation_backend():
+    """Describe the actual non-deferred backend; this is not a layout-ready signal."""
+    if bpy.app.background:
+        return
+    try:
+        import gpu
+        backend = gpu.platform.backend_type_get()
+    except Exception as exc:
+        print(f"[narwhal3d] presentation backend unavailable: {type(exc).__name__}", file=sys.stderr, flush=True)
+        return
+    if backend == "METAL":
+        print("[narwhal3d] continuous presentation backend: METAL", file=sys.stderr, flush=True)
+
+
 def _presentation_watchdog():
     """Reveal a diagnostic-capable window if layout startup never signals readiness."""
     if (os.environ.get("NARWHAL3D_DEFER_FIRST_PRESENT") == "1"
@@ -208,6 +222,7 @@ def main():
     os.environ.setdefault('NARWHAL3D_STATUSBAR_HEIGHT', '37')
     # Register before any optional setup: if later bootstrap code fails, the event loop
     # still reveals a diagnostic-capable window instead of leaving an invisible process.
+    _report_presentation_backend()
     if os.environ.get("NARWHAL3D_DEFER_FIRST_PRESENT") == "1":
         bpy.app.timers.register(_presentation_watchdog, first_interval=9.0)
     if os.environ.get("NARWHAL3D_WELCOME_REQUEST"):
