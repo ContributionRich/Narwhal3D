@@ -56,6 +56,12 @@ Keep build/install/provenance together and record provenance only after rebuildi
 
 ### Windows portable EXE
 
+**Future releases publish only the portable EXE and its checksum, not a Windows
+ZIP.** The already-published0.4.8 ZIP remains unchanged. Internal engineering/staging
+ZIPs may still be used by the build tools but are not release downloads. Users of
+older ZIP installs must manually download the portable EXE once; their legacy ZIP
+updater cannot migrate itself to an EXE-only release.
+
 - Preserve MSVC runtime/OCCT ABI compatibility. The independent Rust bootstrap may
   use a GNU toolchain because it launches, rather than links, those applications.
 - Existing runtime/ZIP tooling: `scripts/build_windows_preview.ps1`,
@@ -78,8 +84,8 @@ Keep build/install/provenance together and record provenance only after rebuildi
   concurrency, verified extraction/reuse, lifetime leases and safe cleanup on real
   Windows. Wine does not establish Windows ACL behavior.
 - Prove updates replace the outer executable safely; never run the legacy ZIP
-  updater against an immutable cached payload. Keep ZIP availability until the EXE
-  and its updater pass all gates.
+  updater against an immutable cached payload. Publish only the qualified EXE;
+  a failing EXE gate is not permission to substitute a ZIP upload.
 - The detached updater must inherit **no** handles. Redirecting only standard I/O
   is insufficient: scheduler pipes can otherwise remain open until the application
   exits. Test scheduler exit **and pipe EOF** while the original application remains

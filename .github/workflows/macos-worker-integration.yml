@@ -1,0 +1,41 @@
+name: macOS real worker containment integration
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  worker:
+    runs-on: macos-14
+    timeout-minutes: 12
+    env:
+      MACOSX_DEPLOYMENT_TARGET: '14.0'
+      CARGO_BUILD_JOBS: '2'
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - run: rustup toolchain install 1.95.0 --profile minimal
+      - name: Build supervisor and bounded native fixture
+        run: |
+          cargo +1.95.0 test --release --locked --manifest-path native/converter_supervisor/Cargo.toml
+          cargo +1.95.0 build --release --locked --manifest-path native/converter_supervisor/Cargo.toml
+          rustc +1.95.0 --edition=2021 -O spike/macos_containment/worker_fixture.rs -o worker-fixture
+      - name: Exercise actual launch policy and Python entrypoint
+        shell: bash
+        run: |
+          set -o pipefail
+          python3 spike/macos_containment/test_worker_entry.py --mutations 2>&1 | tee worker-entry.log
+          python3 spike/macos_containment/test_supervisor.py --bin-dir native/converter_supervisor/target/release --fixture worker-fixture 2>&1 | tee worker-integration.log
+          python3 spike/macos_containment/native_mutations.py --target native/converter_supervisor/target --fixture worker-fixture 2>&1 | tee -a worker-integration.log
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: macos-worker-integration-${{ github.run_id }}
+          path: |
+            worker-entry.log
+            worker-integration.log
+          if-no-files-found: warn
+          retention-days: 14

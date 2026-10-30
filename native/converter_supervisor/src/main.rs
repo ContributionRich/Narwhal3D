@@ -6,6 +6,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 const MAX_CAPTURE_LIMIT: usize = 1024 * 1024;
+#[cfg(not(target_os = "macos"))]
 const MIB: u64 = 1024 * 1024;
 const MAX_MEMORY_MIB: u64 = 1024 * 1024;
 
@@ -111,6 +112,7 @@ fn parse_args() -> Result<Config, String> {
     parse_args_from(std::env::args().skip(1))
 }
 
+#[cfg(not(target_os = "macos"))]
 fn memory_bytes(memory_mib: u64) -> u64 {
     memory_mib * MIB
 }
@@ -136,9 +138,15 @@ fn read_tail(mut input: impl Read, limit: usize) -> io::Result<Vec<u8>> {
 #[cfg(unix)]
 fn configure_command(command: &mut Command, memory_mib: Option<u64>) {
     use std::os::unix::process::CommandExt as _;
+    #[cfg(not(target_os = "macos"))]
     let memory_bytes = memory_mib.map(memory_bytes);
-    // SAFETY: setpgid and setrlimit are async-signal-safe and touch no Rust-owned state in the
-    // child. All fallible parsing and arithmetic happened before spawning.
+    #[cfg(target_os = "macos")]
+    let memory_bytes: Option<u64> = {
+        let _ = memory_mib;
+        None
+    }; // final-image limit is installed by the trusted exec bootstrap
+       // SAFETY: setpgid and setrlimit are async-signal-safe and touch no Rust-owned state in the
+       // child. All fallible parsing and arithmetic happened before spawning.
     unsafe {
         command.pre_exec(move || {
             if libc::setpgid(0, 0) != 0 {
@@ -299,10 +307,42 @@ fn lossy_tail(bytes: &[u8], limit: usize) -> String {
     text[start..].to_owned()
 }
 
-fn supervise(config: Config) -> Report {
+fn worker_command(config: &Config) -> Result<Command, String> {
+    #[cfg(target_os = "macos")]
+    if let Some(limit) = config.memory_mib {
+        let supervisor = std::env::current_exe().map_err(|e| e.to_string())?;
+        narwhal_worker_policy::validate_document_worker(
+            &supervisor,
+            std::path::Path::new(&config.program),
+            &config.arguments,
+        )?;
+        let mut command = Command::new(supervisor);
+        command
+            .arg("--mac-worker-exec")
+            .arg(limit.to_string())
+            .arg(&config.program)
+            .args(&config.arguments);
+        return Ok(command);
+    }
     let mut command = Command::new(&config.program);
+    command.args(&config.arguments);
+    Ok(command)
+}
+
+fn supervise(config: Config) -> Report {
+    let mut command = match worker_command(&config) {
+        Ok(command) => command,
+        Err(error) => {
+            return Report {
+                returncode: -1,
+                stdout: String::new(),
+                stderr: String::new(),
+                timed_out: false,
+                error: Some(error),
+            }
+        }
+    };
     command
-        .args(&config.arguments)
         .env_clear()
         .envs(config.environment)
         .stdin(Stdio::null())
@@ -400,6 +440,25 @@ fn supervise(config: Config) -> Report {
 }
 
 fn main() {
+    #[cfg(target_os = "macos")]
+    if std::env::args().nth(1).as_deref() == Some("--mac-worker-exec") {
+        let result = (|| {
+            let mut args = std::env::args().skip(2);
+            let limit = parse_memory_mib(&args.next().ok_or("missing worker limit")?)?;
+            let program = args.next().ok_or("missing worker executable")?;
+            narwhal_worker_policy::macos::exec_limited(
+                &std::env::current_exe().map_err(|e| e.to_string())?,
+                std::path::Path::new(&program),
+                &args.collect::<Vec<_>>(),
+                limit,
+            )
+        })();
+        eprintln!(
+            "narwhal document-worker containment: {}",
+            result.unwrap_err()
+        );
+        std::process::exit(126);
+    }
     let config = match parse_args() {
         Ok(config) => config,
         Err(error) => {

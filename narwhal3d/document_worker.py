@@ -47,7 +47,25 @@ def _exclusive_volume(shape_a, shape_b):
     return 0.0 if result.IsNull() else abs(float(occt_backend.volume(result)))
 
 
+def _seal_macos_worker():
+    if sys.platform != "darwin":
+        return
+    # Python only bridges the Blender entrypoint; Rust installs the native policy.
+    import ctypes
+    policy = ROOT / "runtime" / "macos-arm64" / "bin" / "libnarwhal_worker_policy.dylib"
+    try:
+        library = ctypes.CDLL(str(policy))
+        seal = library.narwhal_seal_document_worker
+        seal.argtypes = []
+        seal.restype = ctypes.c_int
+        if seal() != 0:
+            raise RuntimeError("native worker launch/sealing contract was not established")
+    except (OSError, AttributeError, RuntimeError) as exc:
+        fail(f"macOS document-worker containment failed: {exc}")
+
+
 def main():
+    _seal_macos_worker()
     args = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
     if len(args) != 1:
         fail("usage: document_worker.py -- <extracted-root>")
