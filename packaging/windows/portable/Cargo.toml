@@ -1,0 +1,29 @@
+[package]
+name = "narwhal-portable-payload"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.88"
+license = "GPL-3.0-or-later"
+publish = false
+description = "Verified Narwhal Windows portable payload and cache bootstrap"
+
+[dependencies]
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = "=1.0.154"
+sha2 = "=0.10.9"
+zip = { version = "=2.6.1", default-features = false, features = ["deflate-flate2", "flate2"] }
+flate2 = { version = "=1.1.10", default-features = false, features = ["rust_backend"] }
+fs2 = "=0.4.3"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "=0.61.2", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_Storage_FileSystem", "Win32_System_Com", "Win32_System_Threading", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "=0.2.191"
+
+[lib]
+path = "src/lib.rs"
+
+[profile.dev]
+debug = 0
+incremental = false

@@ -8,9 +8,9 @@
 
 Draw with the mouse, type a command, or choose a tool from the sidebar. Work in four views at once, shape your model with on-screen handles, and choose a light or dark workspace.
 
-**[Download for Linux](https://github.com/ContributionRich/Narwhal3D/releases/download/v0.4.7/Narwhal_3D-0.4.7-x86_64.AppImage)** · **[Download for Windows](https://github.com/ContributionRich/Narwhal3D/releases/download/v0.4.7/Narwhal_3D-0.4.7-Windows-x86_64.zip)** · [What's new in 0.4.7](https://github.com/ContributionRich/Narwhal3D/releases/tag/v0.4.7)
+**[Download for Linux](https://github.com/ContributionRich/Narwhal3D/releases/download/v0.4.8/Narwhal_3D-0.4.8-x86_64.AppImage)** · **[Download for Windows](https://github.com/ContributionRich/Narwhal3D/releases/download/v0.4.8/Narwhal_3D-0.4.8-Windows-x86_64.exe)** · [Windows ZIP](https://github.com/ContributionRich/Narwhal3D/releases/download/v0.4.8/Narwhal_3D-0.4.8-Windows-x86_64.zip) · [What's new](CHANGELOG.md)
 
-> **Source updates are ahead of the downloads.** `main` includes the revised welcome/inspector UI, automatic AI selection context, remembered provider permissions, explicitly approved box creation, newer read-only MCP support and bounded multi-section Sweep1 work. The linked **0.4.7** downloads are unchanged; no new release accompanies this source update. See [current source status](STATUS.md#current-source-checkout-unreleased).
+> **Check the release page for available builds.** The 0.4.8 source includes the revised welcome/inspector UI, automatic AI selection context, remembered provider permissions, explicitly approved box creation, newer read-only MCP support and source-only bounded multi-section Sweep1 work. macOS is still pending qualification. See [current source status](STATUS.md).
 
 > **An early preview, built in the open.** Narwhal is still growing, and some tools are incomplete. Save important work often and verify dimensions and exported geometry before manufacturing. [See what works and what's still missing →](docs/gaps.md)
 
@@ -52,15 +52,17 @@ Switch at any time with **View → Theme**. Your choice is remembered the next t
 Download the **AppImage** above. In your file manager, open its properties, allow it to run as a program, and launch it. Or, from the folder containing the download:
 
 ```bash
-chmod +x Narwhal_3D-0.4.7-x86_64.AppImage
-./Narwhal_3D-0.4.7-x86_64.AppImage
+chmod +x Narwhal_3D-0.4.8-x86_64.AppImage
+./Narwhal_3D-0.4.8-x86_64.AppImage
 ```
 
 The application is bundled—no separate Blender installation is needed. The download is for **x86_64 Linux**; desktop and graphics-driver compatibility still varies. [Platform details](docs/technical-reference.md#install-on-linux-x86_64)
 
 ### Windows
 
-Download the **portable ZIP** above, extract the **entire folder**, and open **`Narwhal3D.exe`**. Keep the application and its accompanying folders together.
+For 0.4.8, the **portable EXE** manages its payload in a private per-user cache; no manual extraction is required. Its first launch prepares that cache. Keep user documents outside the replaceable application cache.
+
+The **portable ZIP** remains a compatibility option: extract the entire folder and open **`Narwhal3D.exe`**, keeping `app` and `runtime` beside it. Use only assets actually published on the release page.
 
 This is an **unsigned early preview**, so Windows may display a SmartScreen warning. There is no installer yet, and testing on physical Windows GPUs remains limited. [Windows details](docs/windows-build.md)
 

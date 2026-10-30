@@ -29,6 +29,7 @@ INPUTS = (
     "blender_patches/apply_statusbar_height.py",
     "blender_patches/apply_window_overlay.py",
     "blender_patches/narwhal3d_app_icon.svg",
+    "blender_patches/narwhal3d_window_icons.json",
 )
 BINARY = """#!/bin/sh
 # - Narwhal 3D
@@ -156,6 +157,14 @@ grep -q 'BPY_callback_window_draw' "$FIXTURE_OVERLAY_HEADER" || exit 93
         self.assertEqual(marker["build_timestamp_utc"], "2023-11-14T22:13:20Z")
         return marker
 
+    def test_native_icon_bundle_is_required_before_build_admission(self):
+        bundle = self.root / INPUTS[-1]
+        bundle.unlink()
+        output = self.run_builder("--self-check", ok=False)
+        self.assertIn("required native patch input is missing", output)
+        self.assertFalse(self.log.exists())
+        self.assertFalse(self.marker.exists())
+
     def test_self_check_requires_regular_parseable_statusbar_and_overlay_patches(self):
         self.run_builder("--self-check")
         for name in INPUTS[4:6]:
@@ -278,9 +287,9 @@ grep -q 'BPY_callback_window_draw' "$FIXTURE_OVERLAY_HEADER" || exit 93
         }
         with patch.object(verify, "scan_runtime_glibc", return_value=((2, 35), self.binary)):
             verify.verify_lock_and_markers(appdir, identity)
-            # Self-consistent six-input markers missing either patch are rejected.
+            # Even self-consistent receipts cannot omit a patch or native icon bundle.
             complete_inputs = marker["patch_inputs"]
-            for omitted in INPUTS[4:6]:
+            for omitted in (*INPUTS[4:6], INPUTS[-1]):
                 with self.subTest(omitted=omitted):
                     marker["patch_inputs"] = [item for item in complete_inputs
                                               if item["path"] != omitted]

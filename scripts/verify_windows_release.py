@@ -23,6 +23,7 @@ FORBIDDEN_FILES = {"brep_" + "writer.cpp"}
 FORBIDDEN_SUFFIXES = {".pyc", ".pyo", ".pdb", ".lib", ".exp"}
 FORBIDDEN_RUNTIME_TOOLS = {"datatoc.exe", "makesdna.exe", "makesrna.exe"}
 NATIVE_COMPONENT_PATHS = {
+    "narwhal_automation.dll": "app/runtime/windows-x86_64/bin/narwhal_automation.dll",
     "narwhal_cdr_core.dll": "app/runtime/windows-x86_64/bin/narwhal_cdr_core.dll",
     "narwhal-converter-supervisor.exe": "app/runtime/windows-x86_64/bin/narwhal-converter-supervisor.exe",
     "narwhal-cdr-multiversion.exe": "app/runtime/windows-x86_64/bin/narwhal-cdr-multiversion.exe",
@@ -336,6 +337,13 @@ def metadata_version(site: Path, distribution: str) -> str | None:
     return None
 
 
+def verify_automation_core_identity(path: Path) -> dict[str, object]:
+    identity = inspect_pe_dll(path)
+    if set(identity["exports"]) != {"narwhal_workflow_abi", "narwhal_workflow_json"}:
+        raise VerificationError("Windows automation library lacks the exact workflow ABI")
+    return identity
+
+
 def verify_directory(root: Path, args: argparse.Namespace) -> None:
     manifest_path = root / "windows-release-manifest.json"
     try:
@@ -393,6 +401,10 @@ def verify_directory(root: Path, args: argparse.Namespace) -> None:
                        b"Update ZIP expands beyond the safe limit")
             if record.get("launch_contract") != 1 or not all(marker in data for marker in markers):
                 raise VerificationError("Windows native welcome lacks its launch/request contract")
+        if filename == "narwhal_automation.dll":
+            identity = verify_automation_core_identity(path)
+            if record.get("exports") != list(identity["exports"]) or record.get("machine") != identity["machine"]:
+                raise VerificationError("Windows automation manifest identity differs")
         if filename == "narwhal_geometry_core.dll":
             identity = verify_geometry_core_identity(path)
             expected_identity = {

@@ -44,12 +44,14 @@ NATIVE_COMPONENTS = (
     "libnarwhal_platform_core.so", "libnarwhal_pure_core.so",
     "libnarwhal_selection_core.so", "narwhal-converter-supervisor",
     "narwhal-cdr-multiversion", "narwhal-document-core", "narwhal-welcome",
+    "libnarwhal_automation.so", "narwhal-automation",
 )
 PACKAGED_ACCELERATORS = (
     "libnarwhal_geometry_core.so", "libnarwhal_platform_core.so",
     "libnarwhal_pure_core.so", "libnarwhal_selection_core.so",
 )
 NATIVE_LIBRARY_ABIS = {
+    "libnarwhal_automation.so": ("narwhal_workflow_abi", 1),
     "libnarwhal_cdr_core.so": ("narwhal_cdr_abi_version", 3),
     "libnarwhal_geometry_core.so": ("narwhal_geometry_core_abi_version", 4),
     "libnarwhal_platform_core.so": ("narwhal_platform_core_abi_version", 1),
@@ -108,6 +110,8 @@ REQUIRED_PATHS = {
     "usr/lib/narwhal3d/tools/blender-patched/blender",
     "usr/lib/narwhal3d/tools/blender-patched/5.2/python/bin/python3.13",
     "usr/lib/narwhal3d/tools/blender-patched/.narwhal3d-native-runtime.json",
+    "usr/lib/narwhal3d/runtime/linux-x86_64/bin/libnarwhal_automation.so",
+    "usr/lib/narwhal3d/runtime/linux-x86_64/bin/narwhal-automation",
     "usr/lib/narwhal3d/runtime/linux-x86_64/bin/libnarwhal_cdr_core.so",
     "usr/lib/narwhal3d/runtime/linux-x86_64/bin/libnarwhal_geometry_core.so",
     "usr/lib/narwhal3d/runtime/linux-x86_64/bin/libnarwhal_platform_core.so",
@@ -395,6 +399,7 @@ def verify_lock_and_markers(appdir: Path, identity: JsonObject) -> None:
         "blender_patches/apply_statusbar_height.py",
         "blender_patches/apply_window_overlay.py",
         "blender_patches/narwhal3d_app_icon.svg",
+        "blender_patches/narwhal3d_window_icons.json",
     ]
     if not isinstance(patch_inputs, list) or [item.get("path") for item in patch_inputs if isinstance(item, dict)] != expected_names:
         raise VerificationError("native runtime marker has an incomplete or unordered patch input list")
@@ -838,12 +843,14 @@ def self_check() -> None:
         "libnarwhal_platform_core.so", "libnarwhal_pure_core.so",
         "libnarwhal_selection_core.so", "narwhal-converter-supervisor",
         "narwhal-cdr-multiversion", "narwhal-document-core", "narwhal-welcome",
+        "libnarwhal_automation.so", "narwhal-automation",
     ):
         raise VerificationError("self-check found an incomplete native component set")
     if PACKAGED_ACCELERATORS != (
         "libnarwhal_geometry_core.so", "libnarwhal_platform_core.so",
         "libnarwhal_pure_core.so", "libnarwhal_selection_core.so",
     ) or {name: abi for name, (_symbol, abi) in NATIVE_LIBRARY_ABIS.items()} != {
+        "libnarwhal_automation.so": 1,
         "libnarwhal_cdr_core.so": 3,
         "libnarwhal_geometry_core.so": 4,
         "libnarwhal_platform_core.so": 1,

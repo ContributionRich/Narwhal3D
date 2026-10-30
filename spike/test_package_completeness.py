@@ -27,13 +27,14 @@ linux_native = {
     "libnarwhal_platform_core.so", "libnarwhal_pure_core.so",
     "libnarwhal_selection_core.so", "narwhal-converter-supervisor",
     "narwhal-cdr-multiversion", "narwhal-document-core", "narwhal-welcome",
+    "libnarwhal_automation.so", "narwhal-automation",
 }
 windows_native = {
     "narwhal_cdr_core.dll", "narwhal_geometry_core.dll",
     "narwhal_platform_core.dll", "narwhal_pure_core.dll",
     "narwhal_selection_core.dll", "narwhal-converter-supervisor.exe",
     "narwhal-cdr-multiversion.exe", "narwhal-document-core.exe",
-    "narwhal-welcome.exe",
+    "narwhal-welcome.exe", "narwhal_automation.dll",
 }
 assert set(linux.NATIVE_COMPONENTS) == linux_native
 assert set(windows.NATIVE_COMPONENT_PATHS) == windows_native
@@ -66,6 +67,7 @@ for source, names in {
     "native_selection.py": ("narwhal_selection_core",),
     "embedded_cdr.py": ("narwhal-cdr-multiversion",),
     "converter_process.py": ("narwhal-converter-supervisor",),
+    "ai_assistant.py": ("libnarwhal_automation.so", "narwhal_automation.dll"),
 }.items():
     text = (ROOT / "narwhal3d" / source).read_text(encoding="utf-8")
     assert all(name in text for name in names), (source, names)
@@ -82,4 +84,4 @@ for exclusion in windows_assembler.EXCLUDED_COMPONENTS:
     assert exclusion in windows_verifier
 assert '"physical_gpu_real_window": False' in (ROOT / "scripts/assemble_windows_release.py").read_text(encoding="utf-8")
 assert '"code_signed": False' in (ROOT / "scripts/assemble_windows_release.py").read_text(encoding="utf-8")
-print("package completeness: Linux 9/9 native, Windows 9/9 native, source/launch/licenses/runtime and exclusions complete")
+print("package completeness: Linux 11/11 native, Windows 10/10 native, source/launch/licenses/runtime and exclusions complete")

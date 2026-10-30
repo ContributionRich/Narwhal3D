@@ -51,7 +51,7 @@ PATCH_INPUTS=(
   "$ROOT/blender_patches/apply_deferred_first_present.py"
   "$ROOT/blender_patches/narwhal3d_app_icon.svg"
 )
-for input in "${PATCH_INPUTS[@]}"; do
+for input in "${PATCH_INPUTS[@]}" "$ROOT/blender_patches/narwhal3d_window_icons.json"; do
   [[ -f "$input" && ! -L "$input" ]] || {
     echo "required patch input is missing or symlinked: $input" >&2
     exit 2

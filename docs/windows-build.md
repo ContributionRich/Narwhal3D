@@ -1,5 +1,15 @@
 # Windows build preparation
 
+## Current0.4.8 preparation
+
+The current pipeline adds a managed single-EXE package while retaining ZIP updates
+for existing users. See [the release procedure](../packaging/RELEASING.md) for cache
+reuse, source freeze, assembly and actual-package acceptance. Build completion is
+not GUI/update qualification. The0.4.7 record below is historical and must not be
+reused as proof for a new artifact.
+
+## Historical0.4.7 baseline
+
 Narwhal 3D's **0.4.7 Windows x86_64 portable ZIP** is an unsigned early preview, with asset name `Narwhal_3D-0.4.7-Windows-x86_64.zip`. It contains a native MSVC-built runtime, Windows CPython/OpenCASCADE dependencies, Rust native components, the native startup welcome window, and `Narwhal3D.exe`; it is not a renamed or wrapped Linux binary. Extract the complete folder and keep `Narwhal3D.exe` beside its `app` and `runtime` directories.
 
 ## Platform limitations

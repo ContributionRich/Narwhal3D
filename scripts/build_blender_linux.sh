@@ -10,6 +10,7 @@ BOUNDARY_PATCH="$PATCH_DIR/apply_cad_boundary_wires.py"
 DEFERRED_PRESENT_PATCH="$PATCH_DIR/apply_deferred_first_present.py"
 STATUSBAR_HEIGHT_PATCH="$PATCH_DIR/apply_statusbar_height.py"
 ICON_SOURCE="$PATCH_DIR/narwhal3d_app_icon.svg"
+WINDOW_ICON_BUNDLE="$PATCH_DIR/narwhal3d_window_icons.json"
 WINDOW_OVERLAY_PATCH="$PATCH_DIR/apply_window_overlay.py"
 REQUIRED_COMMIT="d13f752e3b9c4f8c261cda552b1021f8bcc0382c"
 SOURCE_DIR=""
@@ -85,12 +86,12 @@ done
 
 [[ "$(uname -s)" == "Linux" ]] || { echo "native build requires Linux" >&2; exit 2; }
 [[ "$(uname -m)" == "x86_64" ]] || { echo "native build requires x86_64" >&2; exit 2; }
-for patch_input in "$BRANDING_PATCH" "$APP_DRAWN_PATCH" "$BOUNDARY_PATCH" "$DEFERRED_PRESENT_PATCH" "$STATUSBAR_HEIGHT_PATCH" "$ICON_SOURCE" "$WINDOW_OVERLAY_PATCH"; do
+for patch_input in "$BRANDING_PATCH" "$APP_DRAWN_PATCH" "$BOUNDARY_PATCH" "$DEFERRED_PRESENT_PATCH" "$STATUSBAR_HEIGHT_PATCH" "$ICON_SOURCE" "$WINDOW_OVERLAY_PATCH" "$WINDOW_ICON_BUNDLE"; do
   [[ -f "$patch_input" && ! -L "$patch_input" ]] || { echo "required native patch input is missing or symlinked: $patch_input" >&2; exit 2; }
 done
 
 if ((SELF_CHECK)); then
-  python3 - "$REQUIRED_COMMIT" "$BRANDING_PATCH" "$APP_DRAWN_PATCH" "$BOUNDARY_PATCH" "$DEFERRED_PRESENT_PATCH" "$STATUSBAR_HEIGHT_PATCH" "$ICON_SOURCE" "$WINDOW_OVERLAY_PATCH" <<'PY'
+  python3 - "$REQUIRED_COMMIT" "$BRANDING_PATCH" "$APP_DRAWN_PATCH" "$BOUNDARY_PATCH" "$DEFERRED_PRESENT_PATCH" "$STATUSBAR_HEIGHT_PATCH" "$ICON_SOURCE" "$WINDOW_OVERLAY_PATCH" "$WINDOW_ICON_BUNDLE" <<'PY'
 import ast
 import hashlib
 from pathlib import Path
@@ -298,6 +299,7 @@ logical_inputs = (
     ("blender_patches/apply_deferred_first_present.py", Path(sys.argv[9])),
     ("blender_patches/apply_statusbar_height.py", Path(sys.argv[10])),
     ("blender_patches/narwhal3d_app_icon.svg", Path(sys.argv[11])),
+    ("blender_patches/narwhal3d_window_icons.json", Path(sys.argv[11]).with_name("narwhal3d_window_icons.json")),
     ("blender_patches/apply_window_overlay.py", Path(sys.argv[12])),
 )
 records = []

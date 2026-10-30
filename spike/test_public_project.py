@@ -252,10 +252,11 @@ check("GPL-3.0-or-later" in readme, "README identifies the project GPL license")
 check(re.search(r"early\s+(?:preview|prerelease|pre-release)", readme, re.I),
       "README warns that the application is an early preview")
 check(re.search(r"View\W+Theme\b", readme), "README explains the View → Theme switch")
-for asset in ("Narwhal_3D-0.4.7-x86_64.AppImage", "Narwhal_3D-0.4.7-Windows-x86_64.zip"):
-    check(f"https://github.com/ContributionRich/Narwhal3D/releases/download/v0.4.7/{asset}"
+for asset in ("Narwhal_3D-0.4.8-x86_64.AppImage", "Narwhal_3D-0.4.8-Windows-x86_64.exe",
+              "Narwhal_3D-0.4.8-Windows-x86_64.zip"):
+    check(f"https://github.com/ContributionRich/Narwhal3D/releases/download/v0.4.8/{asset}"
           in readme_links, f"README offers a direct Markdown download for {asset}")
-check(not any("/releases/download/" in link and "/v0.4.7/" not in link
+check(not any("/releases/download/" in link and "/v0.4.8/" not in link
               for link in readme_links), "README has no stale release download targets")
 check("docs/readme-command-loft.gif" not in readme_images,
       "README uses the workspace screenshots rather than the old command GIF")
@@ -349,11 +350,11 @@ for name, text in (("technical reference", technical_reference), ("STATUS", stat
 welcome_manifest = tomllib.loads((ROOT / "native/welcome/Cargo.toml").read_text(encoding="utf-8"))
 welcome_lock = tomllib.loads((ROOT / "native/welcome/Cargo.lock").read_text(encoding="utf-8"))
 welcome_source = (ROOT / "native/welcome/src/main.rs").read_text(encoding="utf-8")
-check(welcome_manifest["package"]["version"] == "0.4.7"
+check(welcome_manifest["package"]["version"] == "0.4.8"
       and [package["version"] for package in welcome_lock["package"]
-           if package["name"] == "narwhal-welcome"] == ["0.4.7"]
-      and 'assert_eq!(env!("CARGO_PKG_VERSION"), "0.4.7");' in welcome_source,
-      "welcome manifest, lock and Rust version assertion agree on 0.4.7")
+           if package["name"] == "narwhal-welcome"] == ["0.4.8"]
+      and 'assert_eq!(env!("CARGO_PKG_VERSION"), "0.4.8");' in welcome_source,
+      "welcome manifest, lock and Rust version assertion agree on 0.4.8")
 check("extremely early prerelease" in technical_reference
       and "frozen on the `0.4.x` line" in technical_reference,
       "technical reference pins the owner-required early-prerelease 0.4.x release line")

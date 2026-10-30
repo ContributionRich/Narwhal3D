@@ -2,7 +2,14 @@
 
 This directory defines the fail-closed AppImage scaffold for the public Narwhal 3D source branch.
 
-## Early-prerelease version and host baseline
+## Current0.4.8 pipeline
+
+Use [RELEASING.md](RELEASING.md) for current Linux AppImage, Windows managed EXE
+and compatibility ZIP preparation. macOS will be added separately only after its
+worker-containment and app/DMG gates pass. The0.4.7 measurements and commands below
+are preserved historical evidence, not certification of a new package.
+
+## Historical0.4.7 early-prerelease version and host baseline
 
 Narwhal 3D remains an extremely early prerelease. The assembler and verifier accept only `0.4.x` package versions until the project owner explicitly lifts that cap; this release is `0.4.7`, not `0.5.0`. Its Linux asset is `Narwhal_3D-0.4.7-x86_64.AppImage`. Final shipping-asset gates passed for both platforms; Windows build and acceptance evidence is recorded separately in [the Windows guide](../docs/windows-build.md).
 
@@ -42,13 +49,14 @@ The build applies all current Narwhal native patches:
 - `blender_patches/apply_deferred_first_present.py`
 - `blender_patches/apply_statusbar_height.py`
 - `blender_patches/narwhal3d_app_icon.svg`
+- `blender_patches/narwhal3d_window_icons.json`
 - `blender_patches/apply_window_overlay.py`
 
 After installation, the script requires a version banner beginning `Narwhal 3D 5.2.2`, compiled window-title and quit markers, and writes `.narwhal3d-native-runtime.json`. The marker records the exact Blender commit, each patch input hash, a deterministic aggregate, installed binary hash, build timestamp, and optional `build_source_date_epoch` supplied through `--source-date-epoch`. A native runtime may legitimately predate the final public source commit, so this build epoch is independent of the AppImage manifest's required `source_date_epoch`, which controls public-source identity and AppDir normalization.
 
 The statusbar patch is applied through `apply(source / "source" / "blender")`, not its CLI `main()`. Its native 37-logical-pixel sizing is opt-in: both `NARWHAL3D_STATUSBAR_HEIGHT=37` and `NARWHAL3D_DEFER_FIRST_PRESENT=1` must be set; otherwise Blender keeps its normal statusbar sizing.
 
-The window-overlay patch also uses the explicit `apply(source / "source" / "blender")` API. It adds the native Window POST_PIXEL callback bridge and `python/BPY_window_draw.hh`. Provenance now covers seven inputs (six patch scripts plus the icon); older six-input markers are rejected.
+The window-overlay patch also uses the explicit `apply(source / "source" / "blender")` API. It adds the native Window POST_PIXEL callback bridge and `python/BPY_window_draw.hh`. Current-source provenance covers eight inputs: six patch scripts, the Wayland SVG, and the generated native window-icon bundle. The bundle supplies X11 ARGB data, Windows ICO and legacy macOS ICNS from the canonical artwork through `launch/make_icon.py`; builders need no imaging dependency. Historical 0.4.7 used seven inputs. Its cached binary/receipt cannot qualify for the new resource inputs until an actual incremental build/install and new acceptance pass. Source fixtures verify resource replacement and pixel encoding; they are not installed-window certification.
 
 After an **already completed incremental build and install of all current patch inputs**, refresh the installed marker with the same validation/hash-writing path, without rerunning a clean build:
 

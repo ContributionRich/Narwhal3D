@@ -44,7 +44,18 @@ Use: the vendored `tracedraw-core` and `tracedraw-cdr` Rust crates are staticall
 Source: https://github.com/igtoth/tracedraw, revision `821ba1545e3d3f75843fe7d3f912214800929821`.
 License: TraceDraw offers MIT OR Apache-2.0; Narwhal redistributes and statically links these files under the MIT option. The complete MIT text is `licenses/TraceDraw-MIT.txt`; `licenses/TraceDraw-Rust-Dependencies.txt` records every locked static Rust dependency and its available license/notice texts. Upstream's license files and `CLEANROOM.md` remain beside the vendored crates. No TraceDraw executable, service, or separately installed application is required for embedded versions.
 
-7. Components not included in the public bundle
+7. Native Rust application components
+-------------------------------------
+The native welcome window, in-app automation backend and Windows portable bootstrap
+include Rust dependencies under their declared open-source licenses. The Linux/Windows
+locked dependency union and complete available license/notice texts are retained in
+`licenses/Native-Rust-Dependencies.txt`. That inventory includes target-specific and
+build dependencies; it does not claim every listed crate executes on every platform.
+Where a published crate omits a license file, the collection identifies the upstream
+repository revision supplying its license text. Font license texts are included too.
+Pillow used by icon-generation tests is a build-only tool, not added to the application.
+
+8. Components not included in the public bundle
 ------------------------------------------------
 
 - Narwhal's independently authored exact-Brep helper source and pinned developer build recipe are published, but no linked helper binary or openNURBS source is bundled. The official openNURBS documentation says commercial use is encouraged and that there are no restrictions, while the repository `LICENSE` says “All Rights Reserved” without an explicit permission grant. Binary redistribution remains disabled until that conflict is explicitly cleared. Narwhal reports the resulting packaged `.3dm` limitation and directs users to STEP for exact solid interchange. Repository source: https://github.com/mcneel/opennurbs at revision `eb92af3ba1806b0a34a99aba0d3bda83e3d46083`.

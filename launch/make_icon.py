@@ -9,6 +9,9 @@ Check without writing: /usr/bin/python3 launch/make_icon.py --check
 from __future__ import annotations
 
 import argparse
+import base64
+import hashlib
+import json
 from io import BytesIO
 from pathlib import Path
 import xml.etree.ElementTree as ET
@@ -19,6 +22,40 @@ ICON_FILENAME = "narwhal3d.png"
 SOURCE_PNG = Path("artwork/Logo/narwhal.png")
 SOURCE_SVG = Path("artwork/Logo/narwhal_vector.svg")
 ICO_SIZES = (16, 24, 32, 48, 64, 128, 256)
+
+
+def window_icon_bundle(image, ico: bytes) -> bytes:
+    """Freeze native resources once; platform builders need no imaging packages.
+
+    Pillow performs native resampling/encoding in this existing build-time asset
+    pipeline. No image conversion or Python pixel iteration runs in the app.
+    """
+    from PIL import Image
+
+    words = []
+    for size in (32, 48):
+        words.extend((size, size))
+        resized = image.resize((size, size), Image.Resampling.LANCZOS)
+        pixels = (resized.get_flattened_data() if hasattr(resized, "get_flattened_data")
+                  else resized.getdata())
+        words.extend((a << 24) | (r << 16) | (g << 8) | b
+                     for r, g, b, a in pixels)
+    header = (
+        "/* Generated from Narwhal 3D artwork; GPL-3.0-or-later. */\n"
+        "#pragma once\nstatic const unsigned long BLENDER_ICONS_WM_X11[] = {\n"
+        + "".join("  " + ", ".join(f"0x{word:08x}UL" for word in words[i:i + 8])
+                  + ",\n" for i in range(0, len(words), 8))
+        + "};\n"
+    ).encode("ascii")
+    icns = BytesIO()
+    image.save(icns, format="ICNS", append_images=[
+        image.resize((size, size), Image.Resampling.LANCZOS)
+        for size in (32, 64, 128, 256, 512, 1024)
+    ])
+    icons = {name: {"base64": base64.b64encode(data).decode("ascii"),
+                    "sha256": hashlib.sha256(data).hexdigest()}
+             for name, data in (("x11", header), ("windows", ico), ("macos", icns.getvalue()))}
+    return (json.dumps({"schema": 1, "icons": icons}, sort_keys=True, indent=2) + "\n").encode("ascii")
 
 
 def assets(root: Path = ROOT) -> dict[Path, bytes]:
@@ -41,6 +78,7 @@ def assets(root: Path = ROOT) -> dict[Path, bytes]:
         Path("launch") / ICON_FILENAME: png.getvalue(),
         Path("packaging/windows/narwhal3d.ico"): ico.getvalue(),
         Path("blender_patches/narwhal3d_app_icon.svg"): svg,
+        Path("blender_patches/narwhal3d_window_icons.json"): window_icon_bundle(image, ico.getvalue()),
     }
 
 

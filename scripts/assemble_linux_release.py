@@ -46,12 +46,14 @@ NATIVE_COMPONENTS = (
     "libnarwhal_platform_core.so", "libnarwhal_pure_core.so",
     "libnarwhal_selection_core.so", "narwhal-converter-supervisor",
     "narwhal-cdr-multiversion", "narwhal-document-core", "narwhal-welcome",
+    "libnarwhal_automation.so", "narwhal-automation",
 )
 PACKAGED_ACCELERATORS = (
     "libnarwhal_geometry_core.so", "libnarwhal_platform_core.so",
     "libnarwhal_pure_core.so", "libnarwhal_selection_core.so",
 )
 NATIVE_LIBRARY_ABIS = {
+    "libnarwhal_automation.so": ("narwhal_workflow_abi", 1),
     "libnarwhal_cdr_core.so": ("narwhal_cdr_abi_version", 3),
     "libnarwhal_geometry_core.so": ("narwhal_geometry_core_abi_version", 4),
     "libnarwhal_platform_core.so": ("narwhal_platform_core_abi_version", 1),
@@ -95,6 +97,7 @@ PATCH_INPUTS = (
     "blender_patches/apply_deferred_first_present.py",
     "blender_patches/apply_statusbar_height.py",
     "blender_patches/narwhal3d_app_icon.svg",
+    "blender_patches/narwhal3d_window_icons.json",
     "blender_patches/apply_window_overlay.py",
 )
 VERSION_RE = re.compile(r"[0-9A-Za-z][0-9A-Za-z._-]*\Z")
@@ -613,6 +616,8 @@ def appimagetool_command(tool: Path, runtime: Path, appdir: Path, appimage: Path
         "--appimage-extract-and-run",
         "--runtime-file",
         str(runtime),
+        "--mksquashfs-opt=-processors", "--mksquashfs-opt=4",
+        "--mksquashfs-opt=-mem", "--mksquashfs-opt=512M",
         str(appdir),
         str(appimage),
     ]
@@ -943,12 +948,14 @@ def self_check() -> None:
             "libnarwhal_platform_core.so", "libnarwhal_pure_core.so",
             "libnarwhal_selection_core.so", "narwhal-converter-supervisor",
             "narwhal-cdr-multiversion", "narwhal-document-core", "narwhal-welcome",
+            "libnarwhal_automation.so", "narwhal-automation",
         ):
             raise ReleaseError("self-check found an incomplete native component set")
         if PACKAGED_ACCELERATORS != (
             "libnarwhal_geometry_core.so", "libnarwhal_platform_core.so",
             "libnarwhal_pure_core.so", "libnarwhal_selection_core.so",
         ) or {name: abi for name, (_symbol, abi) in NATIVE_LIBRARY_ABIS.items()} != {
+            "libnarwhal_automation.so": 1,
             "libnarwhal_cdr_core.so": 3,
             "libnarwhal_geometry_core.so": 4,
             "libnarwhal_platform_core.so": 1,

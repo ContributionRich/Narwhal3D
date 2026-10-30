@@ -290,7 +290,7 @@ $RuntimeMarker = Join-Path $BuildDirectory "bin\.narwhal3d-native-runtime.json"
 $NativeInputNames = @(
     "apply_narwhal3d_branding.py", "apply_app_drawn.py", "apply_cad_boundary_wires.py",
     "apply_deferred_first_present.py", "apply_statusbar_height.py",
-    "narwhal3d_app_icon.svg", "apply_window_overlay.py"
+    "narwhal3d_app_icon.svg", "narwhal3d_window_icons.json", "apply_window_overlay.py"
 )
 if ($RebuildRuntime) {
     # Fail before resetting either clone or touching the retained build tree.
@@ -769,6 +769,13 @@ if errorlevel 1 exit /b 1
 "$Cargo" +1.95.0 %*
 exit /b %errorlevel%
 "@ | Set-Content -LiteralPath $CargoWrapper -Encoding ASCII
+# Only the in-app ABI is portable to Windows; the external MCP server uses Unix FDs.
+$AutomationManifest = Join-Path $NarwhalSource "native\automation_core\Cargo.toml"
+Run-Native $Cmd @("/d", "/c", $CargoWrapper, "build", "--release", "--locked", "--lib", "--manifest-path", $AutomationManifest, "--target", "x86_64-pc-windows-msvc") "build in-app automation ABI with pinned Rust MSVC" $NarwhalSource
+foreach ($Crate in @("cdr_core", "cdr_multiversion", "welcome")) {
+    $Manifest = Join-Path $NarwhalSource "native\$Crate\Cargo.toml"
+    Run-Native $Cmd @("/d", "/c", $CargoWrapper, "build", "--release", "--locked", "--manifest-path", $Manifest, "--target", "x86_64-pc-windows-msvc") "build $Crate with pinned Rust MSVC" $NarwhalSource
+}
 $DocumentManifest = Join-Path $NarwhalSource "native\document_core\Cargo.toml"
 Run-Native $Cmd @("/d", "/c", $CargoWrapper, "build", "--release", "--locked", "--manifest-path", $DocumentManifest, "--target", "x86_64-pc-windows-msvc") "build native Narwhal document core with pinned Rust MSVC" $NarwhalSource
 $SupervisorManifest = Join-Path $NarwhalSource "native\converter_supervisor\Cargo.toml"
@@ -792,6 +799,17 @@ $NativeComponentDirectory = Join-Path $ApplicationDirectory "runtime\windows-x86
 $AdjacentNativeDirectory = Join-Path $ApplicationDirectory "narwhal3d\native"
 New-Item -ItemType Directory -Path $NativeComponentDirectory -Force | Out-Null
 New-Item -ItemType Directory -Path $AdjacentNativeDirectory -Force | Out-Null
+foreach ($Component in @(
+    @("cdr_core", "narwhal_cdr_core.dll"),
+    @("cdr_multiversion", "narwhal-cdr-multiversion.exe"),
+    @("welcome", "narwhal-welcome.exe")
+)) {
+    $Built = Join-Path $NarwhalSource "native\$($Component[0])\target\x86_64-pc-windows-msvc\release\$($Component[1])"
+    Copy-Item -LiteralPath $Built -Destination (Join-Path $NativeComponentDirectory $Component[1])
+}
+$AutomationSource = Join-Path $NarwhalSource "native\automation_core\target\x86_64-pc-windows-msvc\release\narwhal_automation.dll"
+$AutomationTarget = Join-Path $NativeComponentDirectory "narwhal_automation.dll"
+Copy-Item -LiteralPath $AutomationSource -Destination $AutomationTarget
 $DocumentCoreTarget = Join-Path $NativeComponentDirectory "narwhal-document-core.exe"
 $SupervisorTarget = Join-Path $NativeComponentDirectory "narwhal-converter-supervisor.exe"
 $PureCoreTarget = Join-Path $AdjacentNativeDirectory "narwhal_pure_core.dll"
@@ -970,6 +988,20 @@ Run-Native (Join-Path $RuntimeDirectory "blender.exe") @(
 # POSIX executable permission bits, so this check is not meaningful here.
 # Run a temporary Windows-adjusted copy next to the original test, preserving
 # __file__-relative paths and every other assertion. Keep the source untouched.
+# Icon generation fixtures need Pillow; keep this build-only dependency out of
+# the distributed interpreter and retain the isolated test environment for reuse.
+$BrandingVenv = Join-Path $Workspace 'branding-test-venv'
+$BrandingPython = Join-Path $BrandingVenv 'Scripts\python.exe'
+if (-not (Test-Path -LiteralPath $BrandingPython)) {
+    Run-Native $Python @('-m', 'venv', $BrandingVenv) 'create isolated branding-test interpreter'
+}
+$PillowWheel = Download-Locked ([pscustomobject]@{
+    filename = 'pillow-12.0.0-cp313-cp313-win_amd64.whl'
+    url = 'https://files.pythonhosted.org/packages/6d/2a/dd43dcfd6dae9b6a49ee28a8eedb98c7d5ff2de94a5d834565164667b97b/pillow-12.0.0-cp313-cp313-win_amd64.whl'
+    sha256 = '4cf7fed4b4580601c4345ceb5d4cbf5a980d030fd5ad07c4d2ec589f95f09905'
+}) $WheelCache
+Run-Native $BrandingPython @('-m', 'pip', 'install', '--no-index', '--no-deps', $PillowWheel) 'install verified build-only icon test dependency'
+$PreviousTestPython = $env:NARWHAL3D_TEST_PYTHON
 $OriginalBrandingTest = Join-Path $NarwhalSource "spike\branding_test.py"
 $WindowsBrandingTest = Join-Path $NarwhalSource "spike\branding_test_windows_preview.py"
 $BrandingText = [IO.File]::ReadAllText($OriginalBrandingTest)
@@ -980,11 +1012,13 @@ if (-not $BrandingText.Contains($PosixAssertion)) {
 $WindowsAssertion = 'if os.name != "nt":' + "`n" + '    ' + $PosixAssertion
 $BrandingText = $BrandingText.Replace($PosixAssertion, $WindowsAssertion)
 try {
+    $env:NARWHAL3D_TEST_PYTHON = $BrandingPython
     [IO.File]::WriteAllText($WindowsBrandingTest, $BrandingText, [Text.UTF8Encoding]::new($false))
     Run-Native (Join-Path $RuntimeDirectory "blender.exe") @(
         "-b", "--factory-startup", "--python-exit-code", "1", "--python",
         $WindowsBrandingTest) "run Windows-compatible native branding source smoke test"
 } finally {
+    $env:NARWHAL3D_TEST_PYTHON = $PreviousTestPython
     Remove-Item -LiteralPath $WindowsBrandingTest -Force -ErrorAction SilentlyContinue
 }
 

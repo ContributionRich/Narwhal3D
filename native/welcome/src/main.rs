@@ -67,6 +67,7 @@ enum RuntimeEvent {
 enum UpdatePlatform {
     LinuxX86_64,
     WindowsX86_64,
+    WindowsPortableExe,
 }
 
 impl UpdatePlatform {
@@ -74,7 +75,9 @@ impl UpdatePlatform {
         #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
         return Some(Self::LinuxX86_64);
         #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
-        return Some(Self::WindowsX86_64);
+        return Some(windows_update_platform(
+            std::env::var("NARWHAL3D_PACKAGE_FORMAT").ok().as_deref(),
+        ));
         #[allow(unreachable_code)]
         None
     }
@@ -371,6 +374,21 @@ fn digest_matches(actual: &[u8; 32], expected: &[u8; 32]) -> bool {
     actual == expected
 }
 
+fn windows_update_platform(format: Option<&str>) -> UpdatePlatform {
+    if format == Some("windows-portable-exe") {
+        UpdatePlatform::WindowsPortableExe
+    } else {
+        UpdatePlatform::WindowsX86_64
+    }
+}
+
+fn validate_windows_update_format(format: Option<&str>) -> Result<(), String> {
+    if format == Some("windows-portable-exe") {
+        return Err("The ZIP updater cannot update a single-EXE package. The verified runtime cache was not modified.".to_owned());
+    }
+    Ok(())
+}
+
 fn asset_matches_platform(name: &str, platform: UpdatePlatform) -> bool {
     let name = name.to_ascii_lowercase();
     match platform {
@@ -379,6 +397,9 @@ fn asset_matches_platform(name: &str, platform: UpdatePlatform) -> bool {
         }
         UpdatePlatform::WindowsX86_64 => {
             name.ends_with("-windows-x86_64.zip") && name.starts_with("narwhal_3d-")
+        }
+        UpdatePlatform::WindowsPortableExe => {
+            name.ends_with("-windows-x86_64.exe") && name.starts_with("narwhal_3d-")
         }
     }
 }
@@ -843,6 +864,7 @@ fn windows_package_root() -> Result<PathBuf, String> {
 fn schedule_windows_update(release: &AvailableRelease) -> Result<String, String> {
     use std::os::windows::process::CommandExt;
 
+    validate_windows_update_format(std::env::var("NARWHAL3D_PACKAGE_FORMAT").ok().as_deref())?;
     let target = windows_package_root()?;
     if !target.join("Narwhal3D.exe").is_file() || !target.join("app").is_dir() {
         return Err("current Windows portable package layout is not valid".to_owned());
@@ -895,11 +917,71 @@ fn schedule_windows_update(release: &AvailableRelease) -> Result<String, String>
     ))
 }
 
+#[cfg(target_os = "windows")]
+fn schedule_windows_exe_update(release: &AvailableRelease) -> Result<String, String> {
+    use std::os::windows::process::CommandExt;
+
+    if !asset_matches_platform(&release.asset.name, UpdatePlatform::WindowsPortableExe) {
+        return Err("single-EXE updater requires a portable EXE asset".to_owned());
+    }
+    let target = PathBuf::from(
+        std::env::var_os("NARWHAL3D_PORTABLE_EXE")
+            .ok_or("cannot locate the portable executable")?,
+    );
+    let pid = std::env::var("NARWHAL3D_PORTABLE_PID")
+        .ok()
+        .and_then(|s| s.parse::<u32>().ok())
+        .filter(|pid| *pid != 0)
+        .ok_or("cannot identify the supervising portable launcher")?;
+    if !safe_absolute_path(&target) {
+        return Err("portable executable must have a safe absolute path".to_owned());
+    }
+    let metadata = fs::symlink_metadata(&target).map_err(|e| e.to_string())?;
+    if !metadata.is_file() || metadata.file_type().is_symlink() {
+        return Err("portable executable is not a regular file".to_owned());
+    }
+    let hash = release
+        .asset
+        .digest
+        .as_deref()
+        .and_then(|s| s.strip_prefix("sha256:"))
+        .filter(|s| parse_sha256(&format!("sha256:{s}")).is_some())
+        .ok_or("release has no valid digest")?;
+    let download = std::env::temp_dir().join(format!(
+        "narwhal3d-update-{}-{}.exe",
+        std::process::id(),
+        unique_stamp()
+    ));
+    download_verified(&release.asset, &download)?;
+    // The outer launcher owns the private staging, lifetime wait and rollback;
+    // Welcome must never replace files in its immutable runtime cache.
+    let result = Command::new(&target)
+        .arg("--portable-schedule-update")
+        .arg(&download)
+        .arg(hash)
+        .arg(pid.to_string())
+        .creation_flags(0x0800_0000)
+        .output();
+    let _ = fs::remove_file(&download);
+    let result = result.map_err(|e| format!("could not schedule portable update: {e}"))?;
+    if !result.status.success() {
+        return Err(format!(
+            "portable update refused: {}",
+            String::from_utf8_lossy(&result.stderr)
+        ));
+    }
+    Ok(format!("Version {} is verified. Close all Narwhal windows within five minutes to finish updating. The previous executable will be retained for recovery.", release.version))
+}
+
 fn install_update(release: &AvailableRelease) -> Result<String, String> {
     #[cfg(target_os = "linux")]
     return install_linux(release);
     #[cfg(target_os = "windows")]
-    return schedule_windows_update(release);
+    return if UpdatePlatform::current() == Some(UpdatePlatform::WindowsPortableExe) {
+        schedule_windows_exe_update(release)
+    } else {
+        schedule_windows_update(release)
+    };
     #[allow(unreachable_code)]
     Err("automatic updates are not available on this platform; use the release page".to_owned())
 }
@@ -1812,7 +1894,7 @@ mod tests {
         assert_eq!(parse_version("0.5.0"), None);
         assert_eq!(parse_version("0.4"), None);
         assert_eq!(parse_version("0.4.5.1"), None);
-        assert_eq!(env!("CARGO_PKG_VERSION"), "0.4.7");
+        assert_eq!(env!("CARGO_PKG_VERSION"), "0.4.8");
         assert!(UPDATE_USER_AGENT.contains(env!("CARGO_PKG_VERSION")));
     }
 
@@ -2010,7 +2092,40 @@ mod tests {
     }
 
     #[test]
+    fn portable_exe_updates_never_select_zip_assets() {
+        use super::windows_update_platform;
+        assert_eq!(
+            windows_update_platform(Some("windows-portable-exe")),
+            UpdatePlatform::WindowsPortableExe
+        );
+        assert_eq!(
+            windows_update_platform(Some("windows-portable")),
+            UpdatePlatform::WindowsX86_64
+        );
+        assert_eq!(windows_update_platform(None), UpdatePlatform::WindowsX86_64);
+        assert!(asset_matches_platform(
+            "Narwhal_3D-0.4.9-Windows-x86_64.exe",
+            UpdatePlatform::WindowsPortableExe
+        ));
+        assert!(!asset_matches_platform(
+            "Narwhal_3D-0.4.9-Windows-x86_64.zip",
+            UpdatePlatform::WindowsPortableExe
+        ));
+        assert!(!asset_matches_platform(
+            "Narwhal_3D-0.4.9-Windows-x86_64.exe",
+            UpdatePlatform::WindowsX86_64
+        ));
+    }
+
+    #[test]
     fn windows_updater_uses_literal_parameters_and_rejects_unsafe_paths() {
+        assert!(
+            super::validate_windows_update_format(Some("windows-portable-exe"))
+                .unwrap_err()
+                .contains("ZIP updater cannot")
+        );
+        assert!(super::validate_windows_update_format(Some("windows-portable")).is_ok());
+        assert!(super::validate_windows_update_format(None).is_ok());
         assert!(WINDOWS_UPDATER_SCRIPT.contains("Wait-Process -Id $WelcomePid"));
         assert!(
             WINDOWS_UPDATER_SCRIPT.contains("[System.IO.Compression.ZipFile]::OpenRead($Archive)")

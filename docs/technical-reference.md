@@ -4,6 +4,11 @@
 
 Build commands below run from the repository root. For a quick introduction and current workspace screenshots, see the main README.
 
+For the0.4.8 Linux/Windows pipeline and the separately pending Mac package, use
+[the current release procedure](../packaging/RELEASING.md). The detailed0.4.7 asset
+hashes, commands and acceptance results below are historical baselines, not proof
+that a newly assembled package passed those gates.
+
 Narwhal 3D is a free, open-source, command-driven NURBS CAD application. Release downloads are available for Linux x86_64 and as an early Windows x86_64 preview. It ships as one application bundle: a Narwhal launcher and interface on top of a bundled, open-source viewport runtime.
 
 **Licence:** [GPL-3.0-or-later](../LICENSE). Contributions and dependencies must be GPL-compatible; see [CONTRIBUTING.md](../CONTRIBUTING.md).

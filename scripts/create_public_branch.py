@@ -47,8 +47,13 @@ PATCH_FILES = (
     "blender_patches/apply_window_overlay.py",
     "blender_patches/apply_narwhal3d_branding.py",
     "blender_patches/narwhal3d_app_icon.svg",
+    "blender_patches/narwhal3d_window_icons.json",
 )
 SCRIPT_FILES = (
+    "scripts/assemble_windows_exe.py", "scripts/assemble_macos_release.py",
+    "scripts/build_linux_native.py", "scripts/build_macos_runtime.py", "scripts/build_macos_native.py",
+    "scripts/test_release_packages.py", "scripts/test_release_automation.py",
+    "scripts/test_macos_runtime.py", "scripts/test_present_backends.py",
     "scripts/fetch_locked.py", "scripts/bootstrap_dev_linux.sh",
     "scripts/build_blender_linux.sh", "scripts/release_policy.py", "scripts/assemble_linux_release.py",
     "scripts/assemble_windows_release.py", "scripts/verify_linux_release.py", "scripts/verify_windows_release.py", "scripts/audit_public_tree.py",
@@ -96,7 +101,7 @@ TEST_FILES = (
     "spike/test_document_clipboard.py", "spike/test_control_point_osnap.py",
     "spike/ui_smoke.py", "spike/test_startup_layout.py", "spike/startup_layout_gui.sh",
     "spike/addon_e2e.py", "spike/test_app_drawn.py",
-    "spike/branding_test.py", "spike/test_deferred_present_patch.py",
+    "spike/branding_test.py", "spike/test_native_window_icons.py", "spike/test_deferred_present_patch.py",
     "spike/test_welcome.py", "spike/test_toolbars.py",
     "spike/test_welcome_v44.py", "spike/test_ui_v44_icons.py", "spike/test_ui_v44_panels.py",
     "spike/test_menubar.py", "spike/test_menubar_resource.py", "spike/test_design.py",

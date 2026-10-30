@@ -2,17 +2,17 @@
 
 Narwhal 3D is an extremely early public prerelease. This page records what currently works and what remains incomplete so visible UI does not imply unsupported behavior. Package versions remain on the `0.4.x` line until the project owner explicitly lifts that cap.
 
-## Current source checkout (unreleased)
+## Current source and0.4.8 feature set
 
-GitHub `main` contains newer source work than the **0.4.7** downloads. This update does not create a release or change the shipping assets.
+This section describes the current source. Consult the GitHub release for published packages and their validation receipts. Linux and Windows are the initial0.4.8 targets; macOS is pending worker-containment and package qualification.
 
 - The in-app AI uses a bounded native read-tool workflow with explicit metadata consent, correlated callbacks and lifetime invalidation. Selected-object metadata is included automatically with each message. Sharing permission can be remembered for the provider/endpoint across chats and launches and revoked in Settings. Active-view/CPlane, command-phase and inherited layer-state snapshots are available; nonempty canonical component identity remains explicitly unavailable.
 - A tool-capable model can request **one new world-aligned box/cube**, created only after a separate human approval. Rust validates and consumes the approval; the existing analytic kernel and publication/Undo path create a six-face solid. Cancellation, stale destination state, replay, publication failure and Undo/Redo are checked. This does not enable unrestricted commands, edits to selected objects, other primitive execution or arbitrary model generation. OpenAI Responses is an explicit provider option alongside the existing APIs.
 - The revised welcome window shows installed version and actual update status. The AI panel uses role-aware messages, truthful request status and centered action labels; Bug Report uses a category dropdown and one full-width Submit report action.
-- The read-only MCP entrypoint supports both protocol eras (2025-11-25 and 2026-07-28) and nine bounded metadata tools. Build/stage matching native automation executable and library for source use; old 0.4.7 binaries do not gain these features automatically. No Windows/private-transport acceptance is claimed.
-- Bounded multi-section Freeform `Sweep1` accepts 2–4 compatible open rational quadratic sections entered by name or by individually ordered whole-curve picks, with direction-alignment markers. It uses physical station mapping, exact NURBS document representation, source-identity checks and one undoable result. Fitting remains tolerance-qualified; this is not arbitrary-profile or private-algorithm parity. Unordered batch picks, multi-section components and multi-section Roadlike refuse explicitly. The existing single-section component route is retained; hybrid typed/mouse construction consumes the validated UUID geometry even after a rename.
+- The read-only MCP entrypoint supports both protocol eras (2025-11-25 and 2026-07-28) and nine bounded metadata tools. Build/stage matching native automation components for source use; old0.4.7 binaries do not gain these features automatically. The Windows package includes the in-app automation library, not the Unix-only external MCP transport.
+- **Source-only with the optional exact-Brep writer:** bounded multi-section Freeform `Sweep1` accepts 2–4 compatible open rational quadratic sections entered by name or by individually ordered whole-curve picks, with direction-alignment markers. It uses physical station mapping, exact NURBS document representation, source-identity checks and one undoable result. Fitting remains tolerance-qualified; this is not arbitrary-profile or private-algorithm parity. Unordered batch picks, multi-section components and multi-section Roadlike refuse explicitly. The existing single-section component route is retained; hybrid typed/mouse construction consumes the validated UUID geometry even after a rename. The optional exact writer is not redistributed, so the bounded multi-section publication route refuses in the current binary packages rather than using an approximate document face.
 - New surface publication and failure paths preserve existing documents/displays/history; exact project round trips and imported STEP geometry are tested. This is source validation, not a newly certified release package.
-- **Release qualification is pending.** Focused native, geometry and real-window checks passed during integration; the latest full-suite run was interrupted. A clean, frozen candidate must pass the complete gate before the next release is published. CageEdit remains an explicitly limited mode, not full deformation parity.
+- A source check is not package certification: published assets require the frozen-source and extracted-package gates documented in `packaging/RELEASING.md`. CageEdit remains an explicitly limited mode, not full deformation parity. The first Mac package is not yet available; its worker memory-containment issue affects more than CorelDRAW integration.
 
 ## Command compatibility
 
@@ -71,6 +71,10 @@ Artwork published with Narwhal must be original or have clearly documented GPL-c
 - CorelDRAW `.cdr` v15 Import/Open and Export/Print use Narwhal's built-in checked codec. Version 16, 17, and 18 Import/Open uses pinned TraceDraw Rust crates statically compiled into a bundled Narwhal helper and isolated by the native process supervisor. These paths require no separately installed executable or service. Curves, source layers, per-object colours, ordinary plot widths, and exact 0.003-inch Hairline survive the supported path; output defaults to genuine v15 for CorelDRAW 2015/X7 compatibility, with v17 available as an explicit Export/Print option. Other generations and explicitly unsupported structures may use an optional local CLI fallback with a visible note; malformed files are refused without silently switching parsers.
 
 ## Platform and architecture roadmap
+
+### Historical0.4.7 package qualification
+
+The following preserved record describes0.4.7, not the pending/new0.4.8 packages.
 
 **Release: 0.4.7.** Both shipping assets use public source revision `94534c954dc77f1f1d22f2be6064bedcc8cd1f5b`, source epoch `1793144099`; the release tag retains that asset-build revision, not this documentation follow-up. See [release checksums and sizes](docs/technical-reference.md#release-source-and-integrity).
 

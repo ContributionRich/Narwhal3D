@@ -224,8 +224,8 @@ else:
     icon_spec.loader.exec_module(icon_module)
     check(icon_module.ICON_FILENAME == "narwhal3d.png",
           "icon generator must output narwhal3d.png")
-    check(str(icon_module.SOURCE_PNG) == "artwork/Logo/narwhal.png"
-          and str(icon_module.SOURCE_SVG) == "artwork/Logo/narwhal_vector.svg",
+    check(icon_module.SOURCE_PNG.as_posix() == "artwork/Logo/narwhal.png"
+          and icon_module.SOURCE_SVG.as_posix() == "artwork/Logo/narwhal_vector.svg",
           "icon generator must consume the supplied canonical raster and vector logos")
 native_icon = os.path.join(ROOT, "blender_patches", "narwhal3d_app_icon.svg")
 check(os.path.isfile(native_icon), "native narwhal SVG is missing")
@@ -270,8 +270,13 @@ else:
             os.makedirs(os.path.dirname(icon_dest), exist_ok=True)
             with open(icon_dest, "w", encoding="utf-8") as handle:
                 handle.write("<svg><!-- old icon --></svg>\n")
+            for relative in native.WINDOW_ICON_DESTS.values():
+                path = os.path.join(source, relative)
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                with open(path, "wb") as handle:
+                    handle.write(b"stock native icon")
             changed = native.apply(source)
-            expected_paths = set(fixtures) | {native.ICON_DEST}
+            expected_paths = set(fixtures) | {native.ICON_DEST} | set(native.WINDOW_ICON_DESTS.values())
             check(set(changed) == expected_paths,
                   f"native branding changed the complete expected set ({changed})")
             for rel, _stock, new, count in native.EDITS:
@@ -298,6 +303,9 @@ else:
                           f"required native identity {snippet!r} missing from {rel}")
             check(open(icon_dest, "rb").read() == open(native.ICON_SOURCE, "rb").read(),
                   "native Wayland window icon is not the Narwhal 3D SVG")
+            for relative, expected in native.window_icons().items():
+                check(open(os.path.join(source, relative), "rb").read() == expected,
+                      f"native titlebar/bundle icon was not replaced: {relative}")
             check(native.apply(source) == [], "native branding patch is not idempotent")
 
     exercise_native()
@@ -316,6 +324,12 @@ else:
             check(binary_contains(native_runtime,
                                   {b" - Narwhal 3D", b"Narwhal 3D quit"}),
                   "installed native runtime lacks Narwhal title/quit markers")
+
+native_icons_result = subprocess.run(
+    [os.environ.get("NARWHAL3D_TEST_PYTHON", sys.executable), "-B",
+     os.path.join(ROOT, "spike", "test_native_window_icons.py")],
+    timeout=60, check=False)
+check(native_icons_result.returncode == 0, "native window icon fixtures/mutations failed")
 
 print("\n" + "=" * 50)
 if failures:

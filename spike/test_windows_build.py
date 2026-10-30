@@ -24,7 +24,7 @@ ROOT = Path(__file__).resolve().parents[1]
 NAMES = (
     'apply_narwhal3d_branding.py', 'apply_app_drawn.py', 'apply_cad_boundary_wires.py',
     'apply_deferred_first_present.py', 'apply_statusbar_height.py',
-    'narwhal3d_app_icon.svg', 'apply_window_overlay.py',
+    'narwhal3d_app_icon.svg', 'narwhal3d_window_icons.json', 'apply_window_overlay.py',
 )
 
 
@@ -68,7 +68,7 @@ def run_checks(check):
     linux = (ROOT / 'scripts/build_blender_linux.sh').read_text()
     names = re.search(r'\$NativeInputNames = @\((.*?)\n\)', script, re.S)[1]
     check(tuple(re.findall(r'"([^"]+)"', names)) == NAMES,
-          'Windows native provenance uses exactly the seven current inputs')
+          'Windows native provenance uses exactly the eight current inputs')
     for name in NAMES:
         check('blender_patches/' + name in linux, 'native input also attested by Linux: ' + name)
     for token in (
@@ -180,7 +180,7 @@ def run_checks(check):
             (patches / name).write_text(prelude + body)
         execute(codes['PatchDriver'], (source, patches))
         expected = [['branding', str(source), str(patches / NAMES[5])]] + [
-            [name, str(source / 'source/blender')] for name in (NAMES[1], NAMES[2], NAMES[3], NAMES[4], NAMES[6])]
+            [name, str(source / 'source/blender')] for name in (NAMES[1], NAMES[2], NAMES[3], NAMES[4], NAMES[-1])]
         check([json.loads(line) for line in calls.read_text().splitlines()] == expected,
               'driver applies all six patches in order with correct checkout/source-blender roots')
         # Run the original missing-deferred-patch bug against the same assertion.
@@ -225,7 +225,7 @@ def run_checks(check):
         refused('check', 'ResumePackaging refuses missing compiled provenance')
         execute(codes['ProvenanceDriver'], ('record', *args))
         execute(codes['ProvenanceDriver'], ('check', *args))
-        check(True, 'record then resume accepts matching binary and seven current inputs')
+        check(True, 'record then resume accepts matching binary and eight current inputs')
         for name in NAMES:
             path = patches / name
             original = path.read_bytes()

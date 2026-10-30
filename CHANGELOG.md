@@ -2,15 +2,26 @@
 
 All notable public changes will be recorded here. Narwhal 3D is an extremely early prerelease; compatibility may change between builds. Release numbering is intentionally frozen on the `0.4.x` line until the project owner explicitly lifts that cap.
 
-## Unreleased
+## 0.4.8
 
-Source-only development update. The downloadable **0.4.7** assets and release tag are unchanged; these additions require a current source build and matching native libraries. No new binary release or version bump is included.
+Changes since the published0.4.7 release. Linux and Windows are the initial package targets; macOS remains pending separate portability and package acceptance. See the GitHub release for available assets and their qualification notes.
+
+### Release highlights
+
+- Revised welcome/inspector UI, including the Version/update section, refreshed icons, role-aware AI messages and centered AI/Bug Report action labels.
+- Automatic selected-object metadata for AI messages, remembered provider-scoped sharing permission with Settings revocation, and explicit OpenAI Responses API support.
+- A tool-capable model can request one new world-aligned analytic box/cube. Creation requires separate human approval, a one-use Rust gate and a valid document/Undo boundary; other modeling execution remains unsupported.
+- Polygon directional preview/count-memory fixes and bounded CageEdit safety improvements. Full CageEdit deformation parity is not claimed.
+- Windows gains a managed portable-EXE format with verified per-user payload caching and outer-executable update staging. The portable ZIP remains available for compatibility with earlier updaters.
+- Native window artwork is rebuilt from the current Narwhal logo. The automation library is included in Linux and Windows packages; the external MCP server remains Unix-only.
+
+CageEdit, advanced surfacing and unrestricted AI modeling remain incomplete. Packages are unsigned; physical Windows GPU coverage remains limited. There was no0.4.7 macOS release, and no Mac package is claimed ready here.
 
 ### Added
 
 - The opt-in read-only MCP entrypoint supports both **2025-11-25** initialization and **2026-07-28** request-local metadata/discovery. Nine bounded metadata reads share Rust schemas with the in-app assistant. Both eras have Linux visible-startup, document-replacement revocation and disconnect/app-survival acceptance. Arbitrary existing-app attachment, Windows transport and mutation tools remain unavailable.
-- The existing AI panel now uses native bounded conversation/tool-call policy, explicit metadata-read consent, correlated read-only continuations, logical timeouts and stale-response invalidation on New Chat, settings or document replacement. Circle requests remain visibly proposal-only; no CAD execution is enabled. Provider requests use Chat Completions-compatible or Anthropic Messages forms, not the Responses API, and physical HTTP cancellation is not guaranteed.
-- Sweep1 accepts a bounded **2–4-section Freeform** route through whole-curve names typed in traversal order. Physical station mapping, source UUID/content checks, one exact open rational result, Undo/Redo and fresh project/STEP verification are covered. Multi-object click order, components, arbitrary profiles, automatic reversal and multi-section Roadlike remain explicitly unsupported; existing single-section and Sweep2 routes are preserved.
+- The AI panel uses native bounded conversation/tool-call policy, explicit metadata-read consent, correlated continuations, logical timeouts and stale-response invalidation on New Chat, settings or document replacement. Circle requests remain proposal-only; the separately approved additive box flow is the only enabled modeling action. Chat Completions-compatible, Anthropic Messages and explicit OpenAI Responses providers are supported. Physical HTTP cancellation is not guaranteed.
+- Source builds with the optional exact-Brep writer accept a bounded **2–4-section Freeform Sweep1** route through names or individually ordered whole-curve picks, with direction-alignment markers. That writer is not redistributed, so this route explicitly refuses in the current binary packages. Physical station mapping, source UUID/content checks, one exact open rational result, Undo/Redo and project/STEP verification are covered in the source configuration. Unordered batch picks, multi-section components, arbitrary profiles and multi-section Roadlike remain explicitly unsupported. Existing single-section components and Sweep2 routes are preserved.
 - Integrate the bounded Rust/OCCT parallel-section surfacing backend through the internal `bridge.sweep1_parallel` API, with exact master/document/recipe transforms and fresh-process `.narwhal`/`.3dm` round trips. Required-native focused integration passes 17/17. This is not generic multi-section Freeform/Roadlike Sweep1 and is not exposed as a Sweep1 UI option.
 
 ### Changed

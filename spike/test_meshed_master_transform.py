@@ -134,7 +134,17 @@ class MeshedMasterTransformTests(unittest.TestCase):
         for mesher in MESHERS:
             with self.subTest(mesher=mesher.__name__):
                 geom = make_source()
-                master = kernel.master_of(geom)
+                produced = kernel.master_of(geom)
+                # Proxy construction may already have meshed the producer. Make
+                # the diagnostic's unmeshed baseline explicit without changing
+                # that producer or the separate production-transform matrix.
+                mesher(produced)
+                producer_cache = mesh_snapshot(produced)
+                master = BRepBuilderAPI_Copy(produced, True, False).Shape()
+                self.assertTrue(all(BRep_Tool.Triangulation_s(face, TopLoc_Location()) is None
+                                    for face in occt.unique_faces(master)))
+                self.assert_shape(master, (1.0, 1.0, 1.0), 0.0)
+                self.assert_cache_unchanged(produced, producer_cache)
                 self.assertTrue(occt.is_airtight(raw_general_transform(master, matrix)))
                 mesher(master)
                 cache = mesh_snapshot(master)
@@ -150,6 +160,7 @@ class MeshedMasterTransformTests(unittest.TestCase):
                 clean = BRepBuilderAPI_Copy(master, True, False).Shape()
                 self.assertTrue(occt.is_airtight(raw_general_transform(clean, matrix)))
                 self.assert_cache_unchanged(master, cache)
+                self.assert_cache_unchanged(produced, producer_cache)
 
     def test_meshed_master_transforms_and_roundtrips(self):
         for region in (False, True):

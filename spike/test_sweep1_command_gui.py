@@ -29,7 +29,13 @@ def launch():
 
     out = Path(tempfile.mkdtemp(prefix='narwhal-sweep1-gui-'))
     env = {k: v for k, v in os.environ.items() if k in (
-        'PATH', 'DISPLAY', 'XAUTHORITY', 'XDG_RUNTIME_DIR', 'DBUS_SESSION_BUS_ADDRESS', 'LANG')}
+        'PATH', 'DISPLAY', 'XAUTHORITY', 'XDG_RUNTIME_DIR', 'DBUS_SESSION_BUS_ADDRESS', 'LANG',
+        'NARWHAL3D_BREP_WRITER')}
+    # Source-only exact-document test dependency; never stage it into a release.
+    if env.get('NARWHAL3D_BREP_WRITER'):
+        writer = Path(env['NARWHAL3D_BREP_WRITER']).resolve(strict=True)
+        (out/'exact-writer-input.json').write_text(json.dumps({
+            'path': str(writer), 'sha256': hashlib.sha256(writer.read_bytes()).hexdigest()}))
     paths = subprocess.check_output(['bash', str(ROOT/'narwhal3d.sh')], cwd=ROOT,
         env=dict(os.environ, NARWHAL3D_LAUNCHER_TEST='native-paths'), text=True, timeout=10)
     for row in paths.splitlines():

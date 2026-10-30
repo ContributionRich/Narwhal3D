@@ -262,9 +262,14 @@ class CurveConsumerTests(unittest.TestCase):
                     self.assert_exact(profiles[1], self.joined.SegmentCurve(2))
                     self.assertEqual(len(self.ctx.added), 1, msg)
                     output = self.ctx.added[0]
-                    self.assertTrue(output.IsValid)
                     self.assertIsNotNone(kernel.recipe_of(output))
-                    self.assertIsNotNone(kernel.master_of(output))
+                    master = kernel.master_of(output)
+                    self.assertIsNotNone(master)
+                    # Without the optional exact-Brep writer, output is a display
+                    # proxy; its unset display-edge tolerances do not describe the
+                    # manufacturing surface. Validate the authoritative master.
+                    self.assertTrue(ob.is_valid(master))
+                    self.assertIsNone(kernel.honesty_problem(output))
                     self.assertEqual(snapshot(self.joined), before)
                     self.assertEqual(self.ctx.parts, [])
                     self.assertEqual(self.ctx.selection, [])

@@ -549,13 +549,15 @@ def _load_workflow_library(library_path=None):
 
     if library_path is None:
         root = pathlib.Path(__file__).resolve().parents[1]
-        system = {"linux": "linux", "darwin": "macos"}.get(sys.platform)
+        system = {"linux": "linux", "darwin": "macos", "win32": "windows"}.get(sys.platform)
         arch = {"amd64": "x86_64", "aarch64": "arm64"}.get(platform.machine().lower(), platform.machine().lower())
         if system is None:
             raise WorkflowUnavailable("workflow_platform_not_validated")
-        name = "libnarwhal_automation.dylib" if system == "macos" else "libnarwhal_automation.so"
+        name = {"macos": "libnarwhal_automation.dylib", "linux": "libnarwhal_automation.so",
+                "windows": "narwhal_automation.dll"}[system]
         library_path = next((p for p in (
             root / "runtime" / f"{system}-{arch}" / "lib" / name,
+            root / "runtime" / f"{system}-{arch}" / "bin" / name,
             root / "artifacts" / "automation" / f"{system}-{arch}" / name) if p.is_file()), None)
     if library_path is None:
         raise WorkflowUnavailable("native_workflow_not_installed")
