@@ -46,7 +46,7 @@ jobs:
         run: |
           mkdir -p native-evidence
           if [ -d "$HOME/narwhal-native/output" ]; then
-            cp -R licenses "$HOME/narwhal-native/output/licenses"
+            ditto licenses "$HOME/narwhal-native/output/licenses"
             tar -C "$HOME/narwhal-native/output" -czf native-evidence/macos-native.tar.gz .
             shasum -a 256 native-evidence/macos-native.tar.gz > native-evidence/native.sha256
           fi

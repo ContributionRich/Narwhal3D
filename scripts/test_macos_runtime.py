@@ -16,6 +16,15 @@ nspec.loader.exec_module(native)
 
 
 class RuntimeTests(unittest.TestCase):
+    def test_partial_native_results_cannot_pass_the_release_gate(self):
+        receipts = {name: {} for names in native.COMPONENTS.values() for name in names}
+        native.require_components(receipts, {})
+        with self.assertRaises(ValueError):
+            native.require_components(receipts, {"cdr_multiversion": "failed memory limit"})
+        del receipts["narwhal-cdr-multiversion"]
+        with self.assertRaises(ValueError):
+            native.require_components(receipts, {})
+
     def test_native_tests_use_short_socket_paths_and_pinned_geometry(self):
         env = native.build_environment(Path("/work"), Path("/occt"), Path("/libs"), Path("/tmp/nw-test"))
         self.assertEqual(env["TMPDIR"], "/tmp/nw-test")

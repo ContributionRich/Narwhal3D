@@ -13,6 +13,7 @@ from pathlib import Path
 import platform
 import shutil
 import subprocess
+import sys
 import tempfile
 import urllib.request
 import zipfile
@@ -60,6 +61,13 @@ def build_environment(work: Path, occt: Path, libraries: Path, test_tmp: Path) -
                 CARGO_BUILD_JOBS="2", MACOSX_DEPLOYMENT_TARGET="14.0",
                 NARWHAL_OCCT_SOURCE_DIR=str(occt), NARWHAL_OCCT_LIB_DIR=str(libraries),
                 DYLD_LIBRARY_PATH=str(libraries))
+
+
+def require_components(receipts: dict, failures: dict) -> None:
+    expected = {name for names in COMPONENTS.values() for name in names}
+    if failures or set(receipts) != expected:
+        raise ValueError("Native helper gate failed: " + ", ".join(sorted(failures))
+                         + "; missing components: " + ", ".join(sorted(expected - set(receipts))))
 
 
 def main() -> None:
@@ -117,13 +125,35 @@ def main() -> None:
     output.mkdir(exist_ok=True)
     bin_dir = output / "bin"
     bin_dir.mkdir(exist_ok=True)
+    probe = r'''import json,resource,sys
+kind=getattr(resource,sys.argv[1]); limit=768*1024*1024
+result={"resource":sys.argv[1],"before":resource.getrlimit(kind)}
+try:
+ resource.setrlimit(kind,(limit,limit)); result["after"]=resource.getrlimit(kind)
+ try:
+  block=bytearray(800*1024*1024); result["over_limit_allocation"]="allowed"; del block
+ except MemoryError: result["over_limit_allocation"]="refused"
+except (OSError,ValueError) as error: result["set_error"]=str(error)
+print(json.dumps(result))
+'''
+    memory_probe = []
+    for resource in ("RLIMIT_AS", "RLIMIT_DATA", "RLIMIT_RSS"):
+        result = subprocess.run([sys.executable, "-c", probe, resource], text=True, capture_output=True, timeout=20)
+        memory_probe.append({"resource": resource, "returncode": result.returncode, "stdout": result.stdout, "stderr": result.stderr})
+    (output / "mac-memory-probe.json").write_text(json.dumps(memory_probe, indent=2) + "\n")
     receipts = {}
+    failures = {}
     for crate, names in COMPONENTS.items():
         manifest = str(root / "native" / crate / "Cargo.toml")
-        with (output / f"{crate}.log").open("w") as log:
-            for mode in ("test", "build"):
-                run("cargo", "+1.95.0", mode, "--release", "--locked", "--jobs", "2", "--manifest-path", manifest,
-                    env=env, timeout=1800, log=log)
+        try:
+            with (output / f"{crate}.log").open("w") as log:
+                for mode in ("test", "build"):
+                    run("cargo", "+1.95.0", mode, "--release", "--locked", "--jobs", "2", "--manifest-path", manifest,
+                        env=env, timeout=1800, log=log)
+        except subprocess.SubprocessError as error:
+            failures[crate] = str(error)
+            print(f"{crate}: FAILED; collecting independent component results before failing the job", flush=True)
+            continue
         for name in names:
             destination = bin_dir / name
             shutil.copy2(work / "target/release" / name, destination)
@@ -140,10 +170,15 @@ def main() -> None:
                               "architecture": architecture, "dependencies": dependencies.splitlines()[1:]}
         print(f"{crate}: native tests and release build passed", flush=True)
     shutil.copytree(libraries, bin_dir / "occt", dirs_exist_ok=True)
+    if failures:
+        (output / "native-failures.json").write_text(json.dumps(failures, indent=2) + "\n")
+    require_components(receipts, failures)
+    (output / "native-failures.json").unlink(missing_ok=True)
     if source_inputs(root) != inputs:
         raise SystemExit("native sources changed during compilation")
     receipt = {"source_inputs": inputs, "source_revision": subprocess.check_output(["git", "--no-pager", "-C", str(root), "rev-parse", "HEAD"], text=True).strip(),
-               "occt_source": OCCT, "occt_wheel_sha256": WHEEL_SHA, "components": receipts,
+               "occt_source": OCCT, "occt_wheel_sha256": WHEEL_SHA,
+               "occt_libraries": {path.name: sha(path) for path in dylibs}, "components": receipts,
                "boundary": "Native helper tests only; not GUI, DMG or Gatekeeper acceptance"}
     (output / "native-build.json").write_text(json.dumps(receipt, indent=2) + "\n")
 
