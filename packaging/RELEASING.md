@@ -76,6 +76,17 @@ Keep build/install/provenance together and record provenance only after rebuildi
 - Prove updates replace the outer executable safely; never run the legacy ZIP
   updater against an immutable cached payload. Keep ZIP availability until the EXE
   and its updater pass all gates.
+- The detached updater must inherit **no** handles. Redirecting only standard I/O
+  is insufficient: scheduler pipes can otherwise remain open until the application
+  exits. Test scheduler exit **and pipe EOF** while the original application remains
+  running. Also test an already-exited launcher whose process handle is retained;
+  Windows can reject image-name queries for that object with error31.
+- For real-EXE acceptance, close only the owned CAD window normally and let Welcome
+  supervise shutdown. Do not simultaneously close both windows. Wait for the owned
+  updater/backup publication before hashing the replacement: repeated target-file
+  opens can conflict with Windows replacement sharing. Normalize extended Windows
+  paths when finding the owned helper, and retain exact old/new hashes and backup
+  checks. Never substitute a forced process-tree kill for normal-close acceptance.
 - Check Unicode paths/arguments, CWD, exit status, read-only runtime behavior,
   interruption, low disk and rollback. Signing requires real credentials and
   Authenticode-aware payload handling; checksums are not publisher signatures.
@@ -174,8 +185,8 @@ Use these as draft topics, not statements that packages already exist:
 - Responses API, workspace context and automatic selected-object metadata.
 - Remembered provider-scoped sharing permission, with explicit revocation.
 - Separately approved analytic box/cube creation, cancellation and Undo.
-- Ordered bounded multi-section Sweep1 and rename-safe hybrid input, preserving
-  the existing single-section component workflow.
+- Source-only ordered bounded multi-section Sweep1 and rename-safe hybrid input;
+  the binary packages refuse the multi-section route without the optional writer.
 - Polygon preview/count-memory improvements and bounded CageEdit safety; do not
   claim full CageEdit deformation parity.
 - Windows EXE/macOS DMG availability **only after their production gates pass**.

@@ -32,6 +32,7 @@ CageEdit, advanced surfacing and unrestricted AI modeling remain incomplete. Pac
 
 ### Fixed
 
+- Portable Windows updates detach without retaining scheduler pipe handles and correctly recognize an already-exited launcher while Windows still retains its process object.
 - Welcome completes its loading state after slow startup when the native presentation watchdog fired before the final layout was ready. Both signals are required; an incomplete watchdog frame alone does not announce readiness.
 - Guarded surface publication rolls back only its own document/display/master allocations, including auto-renamed meshes. A surviving external edit stays dirty and undoable rather than being hidden by a failed Sweep1 record.
 - Refuse self-intersecting prism results rather than relying on closure alone.

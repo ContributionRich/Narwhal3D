@@ -82,20 +82,55 @@ struct Plan {
 mod native {
     use super::*;
     use fs2::FileExt;
-    use std::{
-        os::windows::ffi::OsStrExt, os::windows::process::CommandExt, process::Command, ptr,
-    };
+    use std::{os::windows::ffi::OsStrExt, ptr};
     use windows_sys::Win32::{
         Foundation::{CloseHandle, ERROR_INVALID_PARAMETER, FILETIME, WAIT_OBJECT_0},
         Storage::FileSystem::{MoveFileExW, ReplaceFileW},
         System::Threading::{
-            GetProcessTimes, OpenProcess, QueryFullProcessImageNameW, WaitForSingleObject,
-            PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE,
+            CreateProcessW, GetProcessTimes, OpenProcess, QueryFullProcessImageNameW,
+            WaitForSingleObject, CREATE_NO_WINDOW, PROCESS_INFORMATION,
+            PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE, STARTUPINFOW,
         },
     };
     fn wide(path: &Path) -> Vec<u16> {
         path.as_os_str().encode_wide().chain(Some(0)).collect()
     }
+    fn spawn_helper(helper: &Path, plan: &Path) -> io::Result<()> {
+        let executable = wide(helper);
+        let mut command: Vec<u16> = "\"".encode_utf16().collect();
+        command.extend(helper.as_os_str().encode_wide());
+        command.extend("\" --portable-finish-update \"".encode_utf16());
+        command.extend(plan.as_os_str().encode_wide());
+        command.extend(['\"' as u16, 0]);
+        let mut startup = STARTUPINFOW::default();
+        startup.cb = std::mem::size_of::<STARTUPINFOW>() as u32;
+        let mut child = PROCESS_INFORMATION::default();
+        // No inherited handles at all: redirected scheduler pipes must reach EOF
+        // immediately even while this helper waits for the original application.
+        let created = unsafe {
+            CreateProcessW(
+                executable.as_ptr(),
+                command.as_mut_ptr(),
+                ptr::null(),
+                ptr::null(),
+                0,
+                CREATE_NO_WINDOW,
+                ptr::null(),
+                ptr::null(),
+                &startup,
+                &mut child,
+            )
+        };
+        if created == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        unsafe {
+            CloseHandle(child.hThread);
+            CloseHandle(child.hProcess);
+        }
+        Ok(())
+    }
+
     fn process(
         pid: u32,
     ) -> io::Result<Option<(windows_sys::Win32::Foundation::HANDLE, u64, PathBuf)>> {
@@ -115,6 +150,10 @@ mod native {
                 } else {
                     Err(e)
                 };
+            }
+            if WaitForSingleObject(handle, 0) == WAIT_OBJECT_0 {
+                CloseHandle(handle);
+                return Ok(None);
             }
             let result = (|| {
                 let mut created = FILETIME::default();
@@ -139,12 +178,44 @@ mod native {
             match result {
                 Ok((time, path)) => Ok(Some((handle, time, path))),
                 Err(e) => {
+                    // The launcher can exit between the initial liveness check
+                    // and its image query. Windows retains the process object
+                    // while another caller owns a handle, but rejects that query.
+                    let exited = WaitForSingleObject(handle, 0) == WAIT_OBJECT_0;
                     CloseHandle(handle);
-                    Err(e)
+                    if exited {
+                        Ok(None)
+                    } else {
+                        Err(e)
+                    }
                 }
             }
         }
     }
+    #[test]
+    fn live_launcher_keeps_its_identity_check() {
+        let (handle, created, image) = process(std::process::id()).unwrap().unwrap();
+        unsafe {
+            CloseHandle(handle);
+        }
+        assert_ne!(created, 0);
+        assert_eq!(
+            fs::canonicalize(image).unwrap(),
+            fs::canonicalize(std::env::current_exe().unwrap()).unwrap()
+        );
+    }
+
+    #[test]
+    fn exited_launcher_with_retained_handle_is_not_live() {
+        let mut child = std::process::Command::new("cmd.exe")
+            .args(["/d", "/c", "exit", "0"])
+            .spawn()
+            .unwrap();
+        child.wait().unwrap();
+        let result = process(child.id());
+        assert!(matches!(result, Ok(None)), "exited process: {result:?}");
+    }
+
     pub fn schedule(
         executable: &Path,
         current: &Payload,
@@ -219,14 +290,7 @@ mod native {
         file.write_all(&bytes)?;
         file.sync_all()?;
         drop(file);
-        Command::new(&helper)
-            .arg("--portable-finish-update")
-            .arg(&path)
-            .creation_flags(0x08000000)
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .spawn()?;
+        spawn_helper(&helper, &path)?;
         Ok(format!("Version {new_version} is verified. Close all Narwhal windows within five minutes to finish updating."))
     }
     pub fn finish(executable: &Path, current: &Payload, path: &Path) -> io::Result<String> {
