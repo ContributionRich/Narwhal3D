@@ -45,7 +45,7 @@ RELEASE_OLD = '''void wm_window_swap_buffer_release(wmWindow *win)
   ghost_window->swapBufferRelease();
 }
 '''
-RELEASE_NEW = '''static bool narwhal_defer_first_present(GHOST_IWindow *ghost_window)
+RELEASE_PREVIOUS = '''static bool narwhal_defer_first_present(GHOST_IWindow *ghost_window)
 {
   /* OpenGL's swap acquire is stateless. Vulkan acquires a presentation image, so
    * withholding its paired release would strand that image before the next draw. */
@@ -91,6 +91,23 @@ void wm_window_swap_buffer_release(wmWindow *win)
 }
 '''
 
+# Metal-only builds do not declare GHOST's OpenGL enum. Keep the previous exact
+# block as an upgrade anchor so incremental builds need not reset their source.
+RELEASE_NEW = RELEASE_PREVIOUS.replace(
+    "static bool narwhal_defer_first_present(GHOST_IWindow *ghost_window)\n{\n",
+    "static bool narwhal_defer_first_present(GHOST_IWindow *ghost_window)\n{\n#ifdef WITH_OPENGL_BACKEND\n",
+).replace(
+    "return std::chrono::steady_clock::now() - wait_started < std::chrono::seconds(10);\n}",
+    "return std::chrono::steady_clock::now() - wait_started < std::chrono::seconds(10);\n"
+    "#else\n  (void)ghost_window;\n  return false;\n#endif\n}",
+).replace(
+    "  static bool narwhal_release_reported = false;",
+    "#ifdef WITH_OPENGL_BACKEND\n  static bool narwhal_release_reported = false;",
+).replace(
+    "  ghost_window->swapBufferRelease();",
+    "#endif\n  ghost_window->swapBufferRelease();",
+)
+
 EDITS = (
     ("windowmanager/intern/wm_window.cc", WINDOW_OLD, WINDOW_NEW),
     ("windowmanager/intern/wm_window.cc", RELEASE_OLD, RELEASE_NEW),
@@ -105,6 +122,8 @@ def apply(source: str | os.PathLike[str] | None = None) -> list[str]:
         text = path.read_text(encoding="utf-8")
         if new in text:
             continue
+        if new == RELEASE_NEW and text.count(RELEASE_PREVIOUS) == 1:
+            old = RELEASE_PREVIOUS
         if text.count(old) != 1:
             raise RuntimeError(f"deferred-present patch anchor mismatch: {relative}")
         path.write_text(text.replace(old, new, 1), encoding="utf-8")

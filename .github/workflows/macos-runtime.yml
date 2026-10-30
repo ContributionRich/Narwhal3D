@@ -29,17 +29,30 @@ jobs:
           git lfs install
           xcodebuild -version
           xcrun --sdk macosx --show-sdk-version
+      - name: Check patched presentation in OpenGL and Metal-only builds
+        run: python3 -B scripts/test_present_backends.py
       - name: Restore exact runtime inputs and compiler cache
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        id: runtime-cache
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: ~/narwhal-runtime
-          key: macos14-arm64-xcode162-runtime-v1-${{ hashFiles('blender_patches/**', 'scripts/build_macos_runtime.py') }}
+          key: macos14-arm64-xcode162-runtime-v2-${{ hashFiles('blender_patches/**', 'scripts/build_macos_runtime.py') }}-${{ github.run_id }}
+          restore-keys: |
+            macos14-arm64-xcode162-runtime-v2-${{ hashFiles('blender_patches/**', 'scripts/build_macos_runtime.py') }}-
+            macos14-arm64-xcode162-runtime-v2-
       - name: Build all six patches with native artwork
+        id: build
         run: |
           set -euo pipefail
           mkdir -p runtime-evidence
           python3 -u scripts/build_macos_runtime.py --work "$HOME/narwhal-runtime" --jobs 2 \
             > runtime-evidence/build.log 2>&1
+      - name: Preserve compiler progress even after a failed build
+        if: always() && steps.build.outcome != 'skipped'
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ~/narwhal-runtime
+          key: ${{ steps.runtime-cache.outputs.cache-primary-key }}
       - name: Archive runtime without losing executable bits or symlinks
         run: |
           set -euo pipefail
