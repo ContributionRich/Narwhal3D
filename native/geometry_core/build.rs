@@ -370,7 +370,22 @@ fn is_shared_library_name(name: &str, stable_name: &str, msvc: bool) -> bool {
     (name.starts_with(&prefix) && name.contains(".so")) || name.starts_with(&plain_prefix)
 }
 
+fn is_macos_library_name(name: &str, stable_name: &str) -> bool {
+    if name == format!("lib{stable_name}.dylib") {
+        return true;
+    }
+    name.strip_prefix(&format!("lib{stable_name}."))
+        .and_then(|n| n.strip_suffix(".dylib"))
+        .is_some_and(|version| {
+            !version.is_empty()
+                && version
+                    .split('.')
+                    .all(|part| !part.is_empty() && part.bytes().all(|c| c.is_ascii_digit()))
+        })
+}
+
 fn discover_shared_library(directory: &Path, stable_name: &str, msvc: bool) -> PathBuf {
+    let macos = env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos");
     let mut matches = fs::read_dir(directory)
         .unwrap_or_else(|error| {
             panic!(
@@ -385,7 +400,11 @@ fn discover_shared_library(directory: &Path, stable_name: &str, msvc: bool) -> P
             let Some(name) = path.file_name().and_then(OsStr::to_str) else {
                 return false;
             };
-            is_shared_library_name(name, stable_name, msvc)
+            if macos {
+                is_macos_library_name(name, stable_name)
+            } else {
+                is_shared_library_name(name, stable_name, msvc)
+            }
         })
         .collect::<Vec<_>>();
     matches.sort();
@@ -523,10 +542,19 @@ int32_t narwhal_geometry_core_edit_session_release(NarwhalEditSessionHandle h) {
             .arg(&provider_object),
         "public-header smoke static archive",
     );
-    let shared_provider = out_dir.join("libnarwhal_header_smoke_shared.so");
+    let macos = env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos");
+    let shared_provider = out_dir.join(if macos {
+        "libnarwhal_header_smoke_shared.dylib"
+    } else {
+        "libnarwhal_header_smoke_shared.so"
+    });
+    let mut shared_command = Command::new(&cc);
+    shared_command.arg(if macos { "-dynamiclib" } else { "-shared" });
+    if macos {
+        shared_command.arg("-Wl,-install_name,@rpath/libnarwhal_header_smoke_shared.dylib");
+    }
     run(
-        Command::new(&cc)
-            .arg("-shared")
+        shared_command
             .arg(&provider_object)
             .arg("-o")
             .arg(&shared_provider),
@@ -943,17 +971,46 @@ fn main() {
             Command::new(archiver).arg("crs").arg(&archive).arg(&object),
             "system archiver",
         );
-        println!("cargo:rustc-link-lib=dylib=stdc++");
+        let macos = env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos");
+        println!(
+            "cargo:rustc-link-lib=dylib={}",
+            if macos { "c++" } else { "stdc++" }
+        );
         for library in libraries {
             println!("cargo:rustc-link-arg={}", library.display());
         }
-        println!("cargo:rustc-link-arg=-Wl,-rpath,$ORIGIN/occt");
+        println!(
+            "cargo:rustc-link-arg=-Wl,-rpath,{}",
+            if macos {
+                "@loader_path/occt"
+            } else {
+                "$ORIGIN/occt"
+            }
+        );
     }
 }
 
 #[cfg(test)]
 mod build_tests {
-    use super::{is_shared_library_name, normalized_source_marker, parse_dumpbin_exports};
+    use super::{
+        is_macos_library_name, is_shared_library_name, normalized_source_marker,
+        parse_dumpbin_exports,
+    };
+
+    #[test]
+    fn macos_library_names_are_exact_and_versioned() {
+        assert!(is_macos_library_name("libTKBin.8.0.1.dylib", "TKBin"));
+        assert!(is_macos_library_name("libTKBin.dylib", "TKBin"));
+        for wrong in [
+            "libTKBinL.8.0.1.dylib",
+            "libTKBin.8..1.dylib",
+            "libTKBin.so",
+            "libTKBin-malicious.dylib",
+            "TKBin.8.0.1.dylib",
+        ] {
+            assert!(!is_macos_library_name(wrong, "TKBin"), "{wrong}");
+        }
+    }
 
     #[test]
     fn platform_library_names_are_strict() {

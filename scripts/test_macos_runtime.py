@@ -10,9 +10,22 @@ from unittest.mock import patch
 spec = importlib.util.spec_from_file_location("runtime", Path(__file__).with_name("build_macos_runtime.py"))
 runtime = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(runtime)
+nspec = importlib.util.spec_from_file_location("native", Path(__file__).with_name("build_macos_native.py"))
+native = importlib.util.module_from_spec(nspec)
+nspec.loader.exec_module(native)
 
 
 class RuntimeTests(unittest.TestCase):
+    def test_mac_helpers_include_all_eleven_current_components(self):
+        actual = {name for names in native.COMPONENTS.values() for name in names}
+        self.assertEqual(actual, {
+            "libnarwhal_pure_core.dylib", "libnarwhal_selection_core.dylib",
+            "libnarwhal_cdr_core.dylib", "libnarwhal_platform_core.dylib",
+            "libnarwhal_geometry_core.dylib", "libnarwhal_automation.dylib",
+            "narwhal-document-core", "narwhal-converter-supervisor",
+            "narwhal-cdr-multiversion", "narwhal-automation", "narwhal-welcome",
+        })
+
     def test_xcode_requirement_is_checked_before_expensive_work(self):
         runtime.require_xcode("Xcode 16.2\nBuild version 16C5032a")
         for bad in ("Xcode 15.4\nBuild version 15F31d", "unknown"):
