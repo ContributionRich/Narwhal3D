@@ -13,6 +13,12 @@ spec.loader.exec_module(runtime)
 
 
 class RuntimeTests(unittest.TestCase):
+    def test_xcode_requirement_is_checked_before_expensive_work(self):
+        runtime.require_xcode("Xcode 16.2\nBuild version 16C5032a")
+        for bad in ("Xcode 15.4\nBuild version 15F31d", "unknown"):
+            with self.assertRaises(ValueError):
+                runtime.require_xcode(bad)
+
     def test_authoritative_remote_includes_the_required_lfs_store(self):
         self.assertEqual(runtime.BLENDER_REMOTE, "https://projects.blender.org/blender/blender.git")
 

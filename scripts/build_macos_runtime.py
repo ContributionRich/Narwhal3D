@@ -34,6 +34,13 @@ def output(*args: str) -> str:
     return subprocess.check_output(args, text=True, timeout=30).strip()
 
 
+def require_xcode(version: str) -> None:
+    import re
+    match = re.match(r"Xcode (\d+)\.", version)
+    if not match or int(match.group(1)) < 16:
+        raise ValueError("pinned Blender requires Xcode 16 or newer")
+
+
 def inputs(root: Path) -> dict[str, str]:
     result = {}
     for name in PATCHES:
@@ -69,6 +76,7 @@ def main() -> None:
         parser.error("requires native ARM64 macOS; not a cross-build script")
     if not 1 <= args.jobs <= 4:
         parser.error("jobs must be between 1 and 4")
+    require_xcode(output("xcodebuild", "-version"))
     root = Path(__file__).resolve().parents[1]
     work = args.work.resolve()
     if work == root or root in work.parents:
