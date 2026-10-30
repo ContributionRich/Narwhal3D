@@ -17,6 +17,7 @@ fn main() {
     assert!(!address.is_null());
     let seal: extern "C" fn() -> i32 = unsafe { std::mem::transmute(address) };
     assert_eq!(seal(), 0, "worker was not sealed");
+    assert_eq!(std::env::var("PYTHONDONTWRITEBYTECODE").as_deref(), Ok("1"));
     let mode = std::env::args().last().unwrap();
     match mode.as_str() {
         "over" => {

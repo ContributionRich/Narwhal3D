@@ -73,6 +73,12 @@ jobs:
         with:
           path: ~/narwhal-native
           key: ${{ steps.cache.outputs.cache-primary-key }}
+      - name: Qualify actual worker binaries and their negative controls
+        run: |
+          rustc +1.95.0 --edition=2021 -O spike/macos_containment/worker_fixture.rs -o "$RUNNER_TEMP/worker-fixture"
+          python3 spike/macos_containment/test_worker_entry.py --mutations
+          python3 spike/macos_containment/test_supervisor.py --bin-dir "$HOME/narwhal-native/output/bin" --fixture "$RUNNER_TEMP/worker-fixture"
+          python3 spike/macos_containment/native_mutations.py --target "$HOME/narwhal-native/target" --fixture "$RUNNER_TEMP/worker-fixture"
       - name: Assemble, sign ad-hoc and verify the real DMG
         run: |
           mkdir -p "$RUNNER_TEMP/mac-evidence"

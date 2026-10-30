@@ -36,6 +36,9 @@ with tempfile.TemporaryDirectory(prefix="nw-native-mutations-") as temporary:
         (copy / "src/lib.rs").write_text(source.replace(old, new))
         build(copy / "Cargo.toml")
         check(name)
-build(crate / "Cargo.toml")
-check()
+    # Rebuild the restored scratch crate itself. Reusing the original crate's
+    # fresh Cargo fingerprint can leave the last mutant in the shared output path.
+    (copy / "src/lib.rs").write_text(source)
+    build(copy / "Cargo.toml")
+    check()
 print("Restored native policy GREEN after three observed guard failures.")
