@@ -75,6 +75,9 @@ try:
         assert hashlib.sha256(test.read_bytes()).digest() == hashlib.sha256((source / "spike" / name).read_bytes()).digest()
         command = [runtime, "--threads", "2", "--factory-startup", "--python-exit-code", "1"]
         command += ["-b"] if background else ["--enable-event-simulate"]
+        # Blender ignores PYTHONPATH by default. Prepare only the import path;
+        # the pre-bootstrap interaction fixture must import the real package itself.
+        command += ["--python-expr", "import sys; sys.path.insert(0, " + repr(str(app)) + ")"]
         for script in ([test, bootstrap] if first else [bootstrap, test]):
             command += ["--python", script]
         case_profile = work / ("profile-" + label)
