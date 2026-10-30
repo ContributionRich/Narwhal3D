@@ -72,6 +72,24 @@ def require_components(receipts: dict, failures: dict) -> None:
                          + "; missing components: " + ", ".join(sorted(expected - set(receipts))))
 
 
+def reuse_output(root: Path, output: Path) -> bool:
+    """Reuse only an intact previously qualified output with identical native inputs."""
+    import json
+    try:
+        receipt = json.loads((output / "native-build.json").read_text())
+        if receipt["source_inputs"] != source_inputs(root) or receipt.get("unavailable_components") != UNAVAILABLE_COMPONENTS:
+            return False
+        if receipt["occt_source"] != OCCT or receipt["occt_wheel_sha256"] != WHEEL_SHA:
+            return False
+        require_components(receipt["components"], {})
+        if any(entry["architecture"] != "arm64" or sha(output / "bin" / name) != entry["sha256"] for name, entry in receipt["components"].items()):
+            return False
+        libraries = {p.name: sha(p) for p in (output / "bin/occt").glob("*.dylib")}
+        return libraries == receipt["occt_libraries"] and bool(libraries)
+    except (OSError, ValueError, KeyError, TypeError):
+        return False
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--work", required=True, type=Path)
@@ -84,6 +102,9 @@ def main() -> None:
     if work == root or root in work.parents:
         parser.error("build outside the source checkout")
     work.mkdir(parents=True, exist_ok=True)
+    if reuse_output(root, work / "output"):
+        print("Reusing qualified native outputs: complete source, binary and OCCT inventories match; original provenance retained.", flush=True)
+        return
     wheel = work / WHEEL
     if not wheel.exists():
         with urllib.request.urlopen("https://pypi.org/pypi/cadquery-ocp-novtk/8.0.1.0.0/json", timeout=30) as response:

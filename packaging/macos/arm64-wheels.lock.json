@@ -5,6 +5,14 @@
   "python": "3.13",
   "artifacts": [
     {
+      "name": "numpy",
+      "version": "2.3.4",
+      "filename": "numpy-2.3.4-cp313-cp313-macosx_14_0_arm64.whl",
+      "url": "https://files.pythonhosted.org/packages/ac/01/5a67cb785bda60f45415d09c2bc245433f1c68dd82eef9c9002c508b5a65/numpy-2.3.4-cp313-cp313-macosx_14_0_arm64.whl",
+      "sha256": "3634093d0b428e6c32c3a69b78e554f0cd20ee420dcad5a9f3b2a63762ce4197",
+      "size": 5108673
+    },
+    {
       "name": "rhino3dm",
       "version": "8.35.0",
       "filename": "rhino3dm-8.35.0-cp313-cp313-macosx_14_0_universal2.whl",

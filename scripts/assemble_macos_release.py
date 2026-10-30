@@ -162,7 +162,9 @@ def main() -> None:
         raise ValueError("wrong bundled Python ABI")
     wheels = download_wheels(source, output / "wheel-cache")
     run(str(python), "-I", "-B", "-m", "ensurepip", env=environment)
-    run(str(python), "-I", "-B", "-m", "pip", "install", "--no-index", "--no-deps", "--no-compile", *map(str, wheels), env=environment)
+    # The cached runtime's NumPy 2.3.4 was built for macOS26. Replace it with
+    # the SAME NumPy version's pinned macOS14 wheel, not a rewritten Mach-O header.
+    run(str(python), "-I", "-B", "-m", "pip", "install", "--force-reinstall", "--no-index", "--no-deps", "--no-compile", *map(str, wheels), env=environment)
     sites = list(runtime_app.glob("Contents/Resources/**/site-packages/OCP/.dylibs"))
     if len(sites) != 1:
         raise ValueError("bundled OCP library directory is ambiguous")
@@ -214,7 +216,9 @@ def main() -> None:
     Path(str(dmg) + ".sha256").write_text(f"{digest}  {dmg.name}\n")
     receipt = {"schema": 1, "source_revision": args.source_revision, "version": args.version,
                "sha256": digest, "size": dmg.stat().st_size, "signing": "ad-hoc, not notarized",
-               "actual_dmg_verified": True, "gui_acceptance": False, "inventory": records}
+               "actual_dmg_verified": True, "gui_acceptance": False, "inventory": records,
+               "python_wheels": json.loads((source / "packaging/macos/arm64-wheels.lock.json").read_text())["artifacts"],
+               "runtime_overrides": {"numpy": "same-version 2.3.4 macOS14 wheel replaces incompatible macOS26 prebuild"}}
     Path(str(dmg) + ".build.json").write_text(json.dumps(receipt, indent=2) + "\n")
     print(f"Created and verified {dmg.name}; GUI/downloaded-file acceptance is still required.")
 
