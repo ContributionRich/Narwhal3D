@@ -4,6 +4,8 @@ Same pattern as ``solid_commands``: every command here registers itself in
 ``commands.COMMANDS`` when this module is imported. All geometry comes from exact
 ``bridge`` producers; nothing here tessellates.
 """
+import math
+
 from . import bridge, commands
 from . import options as opts
 from .commands import OBJECTS_MULTI, POINT, Command
@@ -49,10 +51,14 @@ class CageEditCmd(Command):
     follows. The deformation is Rust (`pure_core::cage`); captives keep their exact
     NURBS degree, knots and weights because only their control points move.
 
-    OURS: the defaults (4 points, degree 3) are not documented; Line, Rectangle and
-    Box control objects and trimmed/solid captives are reported as not implemented."""
+    MEASURED: the owned reference planar probe starts with 4 points / degree 3.
+    OURS: this limited path still skips controller/region stages, uses a control-hull
+    box and preserves structure only. It is not the reference Global or Local deformation.
+    Line/Rectangle/Box controllers and trimmed/solid captives remain unsupported."""
     name = "CageEdit"
-    description = "Deform objects smoothly by editing the points of a control cage."
+    description = "Limited bounding-box cage edit, preserving captive control-point structure."
+    LIMITATION = ("Limited mode: control-hull bounding box, structure-preserving only; "
+                  "Global/Local influence and refitting are not implemented yet.")
     steps = [("Select captive objects:", OBJECTS_MULTI)]
     preselect_names = 1
     cancel_on_empty_set = True
@@ -96,11 +102,21 @@ class CageEditCmd(Command):
             return "CageEdit: select the objects to edit", True
         counts = [self.opt.get(f"PointCount{a}", 4) for a in "XYZ"]
         degrees = [self.opt.get(f"Degree{a}", 3) for a in "XYZ"]
-        if any(float(v) != int(float(v)) for v in counts + degrees):
-            return "CageEdit: PointCount and Degree must be whole numbers", True
+        # Python validates command input before conversions/FFI allocation; the
+        # deformation and frame validation remain in Rust. Limits are OURS (ABI).
         try:
-            control = cage.make_cage(captives, [int(float(v)) for v in counts],
-                                     [int(float(v)) for v in degrees])
+            values = [float(v) for v in counts + degrees]
+        except (TypeError, ValueError, OverflowError):
+            return "CageEdit: PointCount and Degree must be finite whole numbers", True
+        if any(not math.isfinite(v) or not v.is_integer() for v in values):
+            return "CageEdit: PointCount and Degree must be finite whole numbers", True
+        counts, degrees = [int(v) for v in values[:3]], [int(v) for v in values[3:]]
+        if any(n < 2 or n > 64 for n in counts):
+            return "CageEdit: PointCount must be at least 2 and at most 64 (implementation limit)", True
+        if any(d < 1 or d > 63 for d in degrees):
+            return "CageEdit: Degree must be from 1 to 63 (implementation limit)", True
+        try:
+            control = cage.make_cage(captives, counts, degrees)
         except cage.CageError as e:
             return f"CageEdit: {e}. Nothing was created.", True
         _, display = ctx.add_geometry(control, "Cage")
@@ -112,7 +128,7 @@ class CageEditCmd(Command):
         except Exception:  # noqa: BLE001 -- headless: the cage still exists
             pass
         return (f"Created {display} ({shape} cage points) around {len(captives)} "
-                f"object(s); edit its points to deform them"), True
+                f"object(s); edit its points to deform them. {self.LIMITATION}"), True
 
 
 PROVIDED = (SrfPtCmd, CageEditCmd)

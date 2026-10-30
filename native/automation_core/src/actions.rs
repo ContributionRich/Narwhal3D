@@ -253,7 +253,13 @@ pub fn operations() -> Value {
         "arguments_schema":circle_schema(),"proposal_available":true,"execution_available":false,
         "scope":"create_one_curve_only","representation":"exact_rational_nurbs",
         "blockers":["authoritative_document_session_and_change_token","checked_target_content_and_cplane_layer_state","approved_main_thread_command_undo_dispatch"],
-        "evidence":{"source":"commands.CircleCmd.execute","status":"source_inspected_not_workflow_executed"}}],
+        "evidence":{"source":"commands.CircleCmd.execute","status":"source_inspected_not_workflow_executed"}},
+        {"operation":"box","command":"Box","mode":"world_xyz_append_only",
+         "arguments_schema":crate::box_action::schema(),"proposal_available":true,
+         "execution_available":true,"requires_explicit_ui_approval":true,
+         "scope":"in_app_assistant_only_create_one_new_solid_never_edit_targets",
+         "representation":"analytic_brep_and_occt_master",
+         "blockers":["explicit_in_app_approval","unchanged_document_units_and_available_layer","idle_command_and_enabled_undo"]}],
         "provenance":{"source":"native_automation_catalog","registry_membership_is_not_execution_support":true}})
 }
 pub fn circle_schema() -> Value {

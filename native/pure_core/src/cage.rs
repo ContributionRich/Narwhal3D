@@ -3,14 +3,15 @@
 //! The cage is a box frame (origin plus three orthogonal edge vectors) carrying a
 //! `counts[0] x counts[1] x counts[2]` lattice of control points with clamped uniform
 //! knots of the given degrees. At rest every lattice point sits at its Greville
-//! abscissa, and B-splines reproduce linear functions, so an unmoved cage maps every
-//! point to itself exactly. Moving cage points moves each captive control point to the
-//! volume's value at the captive's rest parameters.
+//! abscissa, and B-splines reproduce linear functions, so an unmoved cage maps points
+//! in its spanned domain to themselves (up to floating-point roundoff). Moving cage
+//! points moves each captive control point to the volume's value at its rest parameters.
 //!
 //! Only CONTROL POINTS are mapped. A captive NURBS curve or surface therefore stays an
 //! exact NURBS of the same degree and knots -- it is never sampled or tessellated.
-//! Points outside the box are left where they are (OURS: the reference's global
-//! region is not documented precisely enough to extrapolate).
+//! Points outside the box are left where they are (OURS: inside-only behavior, not
+//! reference parity). The documented Global region DOES affect points outside the
+//! cage; that extrapolation is not implemented here.
 
 const ERR_NULL: i32 = -1;
 const ERR_INPUT: i32 = -2;
@@ -93,7 +94,9 @@ fn basis(n: usize, p: usize, u: f64) -> Vec<f64> {
 impl Cage {
     /// Validate the frame: finite, mutually orthogonal axes, and each count/degree
     /// pair buildable (1 <= count <= 64, degree < count). A zero-length axis is a flat
-    /// cage in that direction and must have count 1.
+    /// cage in that direction and must have count 1. OURS: a nonzero axis needs a
+    /// positive finite squared length and degree >= 1 to reproduce linear functions;
+    /// these are this implementation's identity invariants, not reference restrictions.
     pub fn new(
         origin: [f64; 3],
         axes: [[f64; 3]; 3],
@@ -109,7 +112,14 @@ impl Cage {
                 return None;
             }
             let length2 = dot(axes[d], axes[d]);
-            if length2 == 0.0 && counts[d] != 1 {
+            if !length2.is_finite() {
+                return None;
+            }
+            if axes[d] == [0.0; 3] {
+                if counts[d] != 1 {
+                    return None;
+                }
+            } else if length2 == 0.0 || degrees[d] == 0 {
                 return None;
             }
         }
@@ -413,6 +423,89 @@ mod tests {
         let skew = [[10.0, 0.0, 0.0], [1.0, 4.0, 0.0], [0.0, 0.0, 6.0]];
         assert!(Cage::new([0.0; 3], skew, [1, 1, 1], [2, 2, 2]).is_none());
         assert!(Cage::new([0.0; 3], flat, [2, 1, 0], [2, 2, 1]).is_none());
+    }
+
+    #[test]
+    fn nonzero_axes_require_positive_degree_and_multiple_points() {
+        let axes = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
+        for d in 0..3 {
+            let mut degrees = [1; 3];
+            degrees[d] = 0;
+            assert!(Cage::new([0.0; 3], axes, degrees, [2; 3]).is_none());
+            let mut counts = [2; 3];
+            counts[d] = 1;
+            assert!(Cage::new([0.0; 3], axes, degrees, counts).is_none());
+        }
+    }
+
+    #[test]
+    fn squared_axis_lengths_must_be_finite_and_nonzero_unless_flat() {
+        for magnitude in [1e200, 1e-200] {
+            let axes = [[magnitude, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
+            assert!(Cage::new([0.0; 3], axes, [1; 3], [2; 3]).is_none());
+            assert!(Cage::new([0.0; 3], axes, [0, 1, 1], [1, 2, 2]).is_none());
+        }
+    }
+
+    #[test]
+    fn flat_cages_preserve_identity_and_translation_in_their_plane() {
+        let cage = Cage::new(
+            [1.0, 2.0, 3.0],
+            [[10.0, 0.0, 0.0], [0.0, 4.0, 0.0], [0.0; 3]],
+            [2, 1, 0],
+            [4, 2, 1],
+        )
+        .unwrap();
+        let rest = cage.rest_points();
+        let moved: Vec<_> = rest
+            .iter()
+            .map(|p| [p[0] + 2.0, p[1], p[2] + 5.0])
+            .collect();
+        for point in [[1.0, 2.0, 3.0], [4.25, 3.5, 3.0], [11.0, 6.0, 3.0]] {
+            let identity = cage.deform(&rest, point);
+            let translated = cage.deform(&moved, point);
+            for c in 0..3 {
+                assert!((identity[c] - point[c]).abs() < 1e-12);
+                let delta = [2.0, 0.0, 5.0][c];
+                assert!((translated[c] - point[c] - delta).abs() < 1e-12);
+            }
+        }
+    }
+
+    #[test]
+    fn invalid_identity_frames_are_refused_by_both_abi_entries() {
+        for (length, degree, count) in [(1.0, 0, 2), (1.0, 0, 1), (1e200, 1, 2)] {
+            let frame = [
+                0.0, 0.0, 0.0, length, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0,
+            ];
+            let shape = [degree, 1, 1, count, 2, 2];
+            let lattice = [0.0; 24];
+            let point = [0.5; 3];
+            let mut out = [123.0; 24];
+            unsafe {
+                assert_eq!(
+                    narwhal_pure_core_cage_rest_points(
+                        frame.as_ptr(),
+                        shape.as_ptr(),
+                        out.as_mut_ptr(),
+                        out.len()
+                    ),
+                    i64::from(ERR_INPUT)
+                );
+                assert_eq!(
+                    narwhal_pure_core_cage_deform(
+                        frame.as_ptr(),
+                        shape.as_ptr(),
+                        lattice.as_ptr(),
+                        point.as_ptr(),
+                        1,
+                        out.as_mut_ptr()
+                    ),
+                    i64::from(ERR_INPUT)
+                );
+            }
+            assert_eq!(out, [123.0; 24]);
+        }
     }
 
     #[test]

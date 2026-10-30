@@ -1,9 +1,11 @@
 //! Native CAD conversation backend. No HTTP, Blender, command or kernel access.
 pub mod actions;
+pub mod box_action;
 pub mod catalog;
 pub mod conversation;
 pub mod json;
 pub mod provider;
+pub mod workspace;
 
 use conversation::{Conversation, Input};
 use serde_json::{Value, json};
@@ -23,6 +25,9 @@ static SESSIONS: OnceLock<Mutex<Sessions>> = OnceLock::new();
 fn exchange(handle: u64, input: &str) -> Result<Value, &'static str> {
     let value = crate::json::strict_json(input).map_err(|_| "invalid_json")?;
     let request: Input = serde_json::from_value(value).map_err(|_| "invalid_request")?;
+    if let Input::WorkspaceLayers { layers, targets } = request {
+        return Ok(json!({"status":"layers","flags":workspace::layer_flags(layers,targets)?}));
+    }
     if matches!(request, Input::Catalog) {
         return Ok(
             json!({"status":"catalog","tools":catalog::definitions(),"operations":actions::operations()}),
@@ -83,6 +88,10 @@ fn exchange(handle: u64, input: &str) -> Result<Value, &'static str> {
             call_id,
             expected,
         } => conversation.stage_circle(token, binding, call_id, expected),
+        Input::ProposeBox { token, binding, call_id, context } =>
+            conversation.stage_box(token, binding, call_id, context),
+        Input::DecideBox { binding, proposal, current, accepted } =>
+            conversation.decide_box(binding, proposal, current, accepted),
         Input::ReviewProposal {
             binding,
             proposal,

@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import array
 import ctypes
+import math
+import operator
 
 from . import native_surface
 
@@ -33,9 +35,35 @@ def available():
     return _bind() is not None
 
 
+# Mirror the ABI's bounds BEFORE allocating caller-owned buffers. Geometry validation
+# remains in Rust; Python must establish the sizes of the memory Rust may read.
+_MAX_COUNT = 64
+_MAX_POINTS = 10_000_000
+_INPUT_ERRORS = (TypeError, ValueError, OverflowError, LookupError)
+
+
+def _xyz(point):
+    if isinstance(point, (str, bytes)) or len(point) != 3:
+        raise ValueError("expected an xyz triple")
+    xyz = tuple(float(point[i]) for i in range(3))
+    if not all(math.isfinite(c) for c in xyz):
+        raise ValueError("expected finite coordinates")
+    return xyz
+
+
 def _frame(origin, axes, degrees, counts):
-    f = array.array("d", [*origin, *axes[0], *axes[1], *axes[2]])
-    s = array.array("Q", [*degrees, *counts])
+    try:
+        if len(axes) != 3 or len(degrees) != 3 or len(counts) != 3:
+            return None
+        deg = tuple(operator.index(degrees[i]) for i in range(3))
+        cnt = tuple(operator.index(counts[i]) for i in range(3))
+        if any(not 1 <= n <= _MAX_COUNT or not 0 <= d < n for d, n in zip(deg, cnt)):
+            return None
+        f = array.array("d", [*_xyz(origin), *_xyz(axes[0]),
+                              *_xyz(axes[1]), *_xyz(axes[2])])
+        s = array.array("Q", [*deg, *cnt])
+    except _INPUT_ERRORS:
+        return None
     return (f, (ctypes.c_double * 12).from_buffer(f),
             s, (ctypes.c_uint64 * 6).from_buffer(s))
 
@@ -45,8 +73,11 @@ def rest_points(origin, axes, degrees, counts):
     bound = _bind()
     if bound is None:
         return None
-    total = counts[0] * counts[1] * counts[2]
-    keep_f, f, keep_s, s = _frame(origin, axes, degrees, counts)
+    frame = _frame(origin, axes, degrees, counts)
+    if frame is None:
+        return None
+    keep_f, f, keep_s, s = frame
+    total = keep_s[3] * keep_s[4] * keep_s[5]
     out = array.array("d", [0.0]) * (3 * total)
     n = bound[0](f, s, (ctypes.c_double * len(out)).from_buffer(out), len(out))
     if n != total:
@@ -59,18 +90,27 @@ def deform(origin, axes, degrees, counts, lattice, points):
     bound = _bind()
     if bound is None:
         return None
-    total = counts[0] * counts[1] * counts[2]
-    if len(lattice) != total:
+    frame = _frame(origin, axes, degrees, counts)
+    if frame is None:
         return None
-    if not points:
+    keep_f, f, keep_s, s = frame
+    total = keep_s[3] * keep_s[4] * keep_s[5]
+    try:
+        count = len(points)
+        if len(lattice) != total or count > _MAX_POINTS:
+            return None
+        cage = array.array("d", (c for p in lattice for c in _xyz(p)))
+        pts = array.array("d", (c for p in points for c in _xyz(p)))
+    except _INPUT_ERRORS:
+        return None
+    if len(cage) != 3 * total or len(pts) != 3 * count:
+        return None
+    if count == 0:
         return []
-    keep_f, f, keep_s, s = _frame(origin, axes, degrees, counts)
-    cage = array.array("d", (float(c) for p in lattice for c in p[:3]))
-    pts = array.array("d", (float(c) for p in points for c in p[:3]))
     out = array.array("d", [0.0]) * len(pts)
     inside = bound[1](f, s, (ctypes.c_double * len(cage)).from_buffer(cage),
-                      (ctypes.c_double * len(pts)).from_buffer(pts), len(points),
+                      (ctypes.c_double * len(pts)).from_buffer(pts), count,
                       (ctypes.c_double * len(out)).from_buffer(out))
     if inside < 0:
         return None
-    return [tuple(out[3 * i:3 * i + 3]) for i in range(len(points))]
+    return [tuple(out[3 * i:3 * i + 3]) for i in range(count)]

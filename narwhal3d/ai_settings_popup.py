@@ -70,7 +70,8 @@ class PopupModel:
     def __init__(self, config: ai.ProviderConfig, *, anchor: Point, window_size: Point,
                  scale: float, on_save: Callable[[ai.ProviderConfig], str | None],
                  on_refresh: Callable[[ai.ProviderConfig], bool],
-                 measure: Callable[[str, float], float] | None = None):
+                 measure: Callable[[str, float], float] | None = None,
+                 on_revoke: Callable[[], str | None] | None = None):
         values = (*anchor, *window_size, scale)
         if not all(isfinite(v) for v in values) or min(*window_size, scale) <= 0:
             raise ValueError("anchor/size/scale must be finite; size and scale positive")
@@ -80,6 +81,7 @@ class PopupModel:
         measure = measure or (lambda text, size: len(text) * size * 0.6)
         self.measure: Callable[[str, float], float] = lambda text, size: measure(text, round(size))
         self.on_save, self.on_refresh = on_save, on_refresh
+        self.on_revoke = on_revoke
         self.original = config
         self.provider_id = config.provider_id
         self.fields = {key: textfield.TextField(getattr(config, key), max_chars=limit)
@@ -347,6 +349,9 @@ class PopupModel:
             lines("warning_text", "Security warning: remote HTTP can expose prompts and credentials. Use HTTPS whenever possible.", "error", left+10, right-10)
             cursor += 8
             nodes.insert(index, Item("warning", "warning", (left, warning_start, right, cursor)))
+        if self.on_revoke is not None:
+            add('revoke', 'button', cursor, 35, 'Forget workspace-sharing permission')
+            cursor += 43
         end_card(card)
         lines("note", "Set the named environment variable before launching Narwhal 3D.")
         self.content_height = round((cursor+12)*s)
@@ -415,6 +420,11 @@ class PopupModel:
             self.close()
         elif key == "save":
             self.save()
+        elif key == 'revoke' and self.on_revoke is not None:
+            error = self.on_revoke()
+            self.status = error or 'Permission forgotten. Your next message will ask again.'
+            self.status_error = error is not None
+            self.layout()
         elif key == "refresh":
             self.refresh()
         elif key == "insecure":
@@ -516,7 +526,8 @@ class PopupModel:
             return True
         if kind == "TAB":
             self.dropdown = None
-            self.focus = ORDER[(ORDER.index(self.focus) + (-1 if shift else 1)) % len(ORDER)]
+            order = ORDER[:7] + ('revoke',) + ORDER[7:] if self.on_revoke is not None else ORDER
+            self.focus = order[(order.index(self.focus) + (-1 if shift else 1)) % len(order)]
             self.ensure_visible(self.focus)
             return True
         if self.dropdown:
@@ -584,7 +595,8 @@ def _redraw():
 
 def open(config: ai.ProviderConfig, *, anchor: Point, window_size: Point, scale: float,
          on_save: Callable[[ai.ProviderConfig], str | None],
-         on_refresh: Callable[[ai.ProviderConfig], bool]) -> PopupModel:
+         on_refresh: Callable[[ai.ProviderConfig], bool],
+         on_revoke: Callable[[], str | None] | None = None) -> PopupModel:
     """Open only in the current window; returns the inspectable PopupModel.
 
     No discovery is started implicitly. Requires the native Window POST_PIXEL API.
@@ -597,7 +609,8 @@ def open(config: ai.ProviderConfig, *, anchor: Point, window_size: Point, scale:
                ("draw_handler_add", "draw_handler_remove")):
         raise RuntimeError("AI settings requires Window POST_PIXEL draw handlers; update the Narwhal runtime.")
     model = PopupModel(config, anchor=anchor, window_size=window_size, scale=scale,
-                       on_save=on_save, on_refresh=on_refresh, measure=ui._text_width)
+                       on_save=on_save, on_refresh=on_refresh, measure=ui._text_width,
+                       on_revoke=on_revoke)
     if bpy.context.window is None:
         raise RuntimeError("AI settings requires an active application window.")
     close()

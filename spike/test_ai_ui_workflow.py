@@ -7,6 +7,7 @@ No installed binary changes, external providers, document uploads or CAD writes.
 import argparse
 import ast
 from contextlib import contextmanager
+from dataclasses import replace
 import importlib
 import json
 import os
@@ -26,21 +27,24 @@ LIBRARY = None
 SOURCE = ROOT / "narwhal3d/ui.py"
 MUTATION = None
 MUTATIONS = (
+    ("remember_permission", "preferences.update({'ai_metadata_permission': ai_assistant.metadata_permission(scope[1])})", 'pass', 'test_consent_remembers_only_provider_metadata'),
+    ("forget_permission", "preferences.update({'ai_metadata_permission': {}})", 'pass', 'test_remembered_permission_is_recipient_scoped_and_revocable'),
     ("config_snapshot", 'replace(st.provider)', 'st.provider', "test_in_place_configuration_change_revokes_grant"),
     ("consent_snapshot", 'replace(st.provider)', 'st.provider', "test_in_place_configuration_cannot_retarget_open_consent"),
-    ("consent", 'if st.include_selection and _ai.get("read_grant") != scope:', 'if False:', "test_explicit_consent_and_selection_off"),
+    ("consent", 'if _ai.get("read_grant") != scope:', 'if False:', "test_explicit_consent_and_automatic_selection"),
     ("consent_scope", 'getattr(self, "_scope", None) != scope', 'False', "test_old_consent_cannot_authorize_new_document"),
     ("document_identity", 'any(a is not b for a, b in zip(old, identity))', 'False', "test_idle_document_replacement_revokes_reads"),
     ("config_commit", '_ai_invalidate("configuration_changed")\n    st.provider', '# mutation\n    st.provider', "test_settings_commit_closes_native_immediately"),
     ("poll_timeout", 'workflow.poll_timeout()["status"] == "timeout"', 'False', "test_logical_timeout_without_http_return"),
     ("finish_gate", 'outcome = workflow.finish(receipt, scope[0])', 'st.add_message("assistant", "UNSAFE"); outcome = workflow.finish(receipt, scope[0])', "test_stale_receipt_cannot_publish_or_finish_new_request"),
     ("new_chat", '_ai_invalidate("new_chat")', '# mutation', "test_new_chat_revokes_consent_and_closes_session"),
-    ("toggle", '_ai_invalidate("selection_toggle_changed")', '# mutation', "test_toggle_immediately_cancels_worker_and_revokes"),
+    ("automatic_selection", 'st.include_selection = True\n    scope =', 'st.include_selection = False\n    scope =', "test_automatic_context_ignores_legacy_opt_out"),
+        ("automatic_snapshot", 'context=_ai_selection_context(scope)', 'context=None', "test_explicit_consent_and_automatic_selection"),
     ("unregister", '_ai_invalidate("unregister")', '# mutation', "test_shutdown_closes_handle_and_detaches_timers"),
-    ("read_loop", '_ai_read_results(workflow, outcome, scope[0])', '# mutation', "test_shared_read_loop_and_proposals_do_not_modify_document"),
+    ("read_loop", 'if _ai_read_results(workflow, outcome, scope[0]):', 'if False:', "test_shared_read_loop_and_proposals_do_not_modify_document"),
     ("proposal_truth", '"Proposal only — not executed: "', '"Executed: "', "test_shared_read_loop_and_proposals_do_not_modify_document"),
     ("timer_cleanup", 'bpy.app.timers.unregister(callback)', 'pass', "test_shutdown_closes_handle_and_detaches_timers"),
-    ("cleanup_after_error", 'for key in ("transport_output", "transport_thread", "read_grant", "consent_scope"):', 'for key in ():', "test_native_close_error_still_detaches_grants_and_queue"),
+    ("cleanup_after_error", 'for key in ("transport_output", "transport_thread", "read_grant", "consent_scope", "box_pending"):', 'for key in ():', "test_native_close_error_still_detaches_grants_and_queue"),
 )
 
 
@@ -100,19 +104,24 @@ class UIWorkflowTests(unittest.TestCase):
                       ai_transport=transport, os=os, bpy=bpy, app_state=self.app,
                       _ai={"state": self.st}, _tag_redraw_bands=lambda: None,
                       _preferences_ready=False, ai_panel_open=lambda: True,
-                      _remember_preferences=lambda _values: None)
+                      _remember_preferences=lambda _values: None,
+                                            _inside_box=lambda x,y,b: b[0] <= x < b[2] and b[1] <= y < b[3])
         text = SOURCE.read_text()
         if MUTATION:
             _label, old, new, _test = MUTATION
             self.assertEqual(text.count(old), 1, "mutation anchor")
             text = text.replace(old, new, 1)
         names = {"_ai_invalidate", "_ai_scope", "NARWHAL_OT_ai_read_consent", "_ai_transport_worker",
-                 "_ai_start_turn", "_ai_read_results", "_ai_poll_transport", "_ai_send", "_ai_shutdown",
-                 "_ai_poll_model_discovery", "_apply_ai_settings", "ai_panel_click"}
+                 "_ai_start_turn", "_ai_read_results", "_ai_poll_transport", "_ai_send", "_ai_shutdown", "_ai_selection_context",
+                 "_ai_poll_model_discovery", "_apply_ai_settings", "ai_panel_click", "_ai_forget_metadata_permission"}
         tree = ast.parse(text)
         nodes = [n for n in tree.body if isinstance(n, (ast.FunctionDef, ast.ClassDef)) and n.name in names]
         self.assertEqual(len(nodes), len(names))
         exec(compile(ast.Module(body=nodes, type_ignores=[]), str(SOURCE), "exec"), self.g)
+        self.real_selection_context = self.g['_ai_selection_context']
+        self.selection_context = {'selection': {'scope': 'whole_objects', 'objects': [
+            {'object_id': '00000000-0000-0000-0000-000000000001', 'name': 'Current selection'}], 'truncated': False}}
+        self.g['_ai_selection_context'] = lambda scope: self.selection_context
         self.original_init = ai.WorkflowSession.__init__
         def native(session, state, context, **kwargs):
             return self.original_init(session, state, context, library_path=LIBRARY, **kwargs)
@@ -135,7 +144,7 @@ class UIWorkflowTests(unittest.TestCase):
         return ai.WorkflowSession(self.st, scope[0], allow_reads=reads), scope[0]
 
     def click(self, kind, ident):
-        self.g["_ai"].update(lay={}, region=(0, 0))
+        self.g["_ai"].update(lay=ai.panel_layout((0, 0, 208, 700)), region=(0, 0))
         with patch.object(ai, "panel_hit", return_value=(kind, ident)):
             self.g["ai_panel_click"](0, 0)
 
@@ -148,7 +157,7 @@ class UIWorkflowTests(unittest.TestCase):
             time.sleep(.005)
         self.fail("bounded local workflow did not finish")
 
-    def test_explicit_consent_and_selection_off(self):
+    def test_explicit_consent_and_automatic_selection(self):
         self.st.input_text = "hello"
         with patch.object(transport, "send_turn", side_effect=AssertionError("unexpected network")):
             self.assertIn("awaiting read consent", self.g["_ai_send"]())
@@ -156,12 +165,16 @@ class UIWorkflowTests(unittest.TestCase):
         self.assertEqual(len(self.st.messages), 0)
         with provider([base.payload("openai_compatible", "local answer")]) as (endpoint, seen, errors):
             self.st.provider = ai.set_provider("openai_compatible", "fixture", endpoint)
-            self.st.include_selection = False
+            self.st.include_selection = False  # Old saved opt-out is not a UI option.
+            self.assertIn('awaiting read consent', self.g['_ai_send']())
+            self.session(True)
             self.g["_ai_send"]()
             self.drive()
             self.assertEqual(self.st.status, "connected")
             self.assertEqual(len(seen), 1)
-            self.assertFalse(seen[0].get("tools"))
+            self.assertTrue(seen[0].get("tools"))
+            self.assertIn('Current selection', json.dumps(seen[0]['messages']))
+            self.assertTrue(self.st.include_selection)
             self.assertFalse(errors)
             self.assertIn("local answer", [m.text for m in self.st.messages])
 
@@ -245,14 +258,36 @@ class UIWorkflowTests(unittest.TestCase):
         self.assertNotIn("read_grant", self.g["_ai"])
         self.assertFalse(self.st.messages)
 
-    def test_toggle_immediately_cancels_worker_and_revokes(self):
+    def test_automatic_context_ignores_legacy_opt_out(self):
         session, context = self.session(True)
-        ready = session.prepare(context, user_text="old")
-        self.click("context", "selection")
-        self.assertFalse(self.st.include_selection)
-        self.assertEqual(session._handle, 0)
-        self.assertTrue(ready.cancel_event.is_set())
-        self.assertNotIn("read_grant", self.g["_ai"])
+        scope = self.g['_ai_scope']()
+        self.st.include_selection = False
+        self.assertEqual(self.g['_ai_scope'](), scope)
+        self.assertTrue(self.st.include_selection)
+        self.assertEqual(self.g['_ai']['read_grant'], scope)
+        lay = ai.panel_layout((0, 0, 208, 700))
+        rect = lay['context']
+        self.assertEqual(rect[1], rect[3])
+        self.assertNotEqual(ai.panel_hit(lay, rect[0], rect[1]), ('context', None))
+
+    def test_selection_snapshot_requires_consent_and_rechecks_identity(self):
+        scope = self.g['_ai_scope']()
+        reader = types.SimpleNamespace(read=lambda tool, args: {'tool': tool})
+        with patch('narwhal3d.automation_tools.ApplicationReader', return_value=reader) as factory:
+            with self.assertRaises(ai.WorkflowUnavailable):
+                self.real_selection_context(scope)
+            factory.assert_not_called()
+            self.g['_ai']['read_grant'] = scope
+            value = self.real_selection_context(scope)
+            self.assertEqual(value['selection']['tool'], 'narwhal.selection_summary')
+            self.assertEqual(value['components']['tool'], 'narwhal.components')
+            def replacement(tool, args):
+                self.app.model = types.SimpleNamespace(file=object())
+                return {}
+            reader.read = replacement
+            with self.assertRaises(ai.WorkflowUnavailable):
+                self.real_selection_context(scope)
+            self.assertNotIn('read_grant', self.g['_ai'])
 
     def test_shutdown_closes_handle_and_detaches_timers(self):
         session, context = self.session(True)
@@ -337,7 +372,8 @@ class UIWorkflowTests(unittest.TestCase):
             self.st.include_selection = False
             self.st.input_text = "text only"
             with patch.dict(self.g, _ai_read_results=lambda *_: self.fail("unconsented read")):
-                self.g["_ai_send"]()
+                session, context = self.session(False)
+                self.g['_ai_start_turn'](session.prepare(context, user_text='text only'))
                 self.drive()
             self.assertEqual(len(seen), 1)
             self.assertFalse(errors)
@@ -350,7 +386,7 @@ class UIWorkflowTests(unittest.TestCase):
             started.set()
             release.wait(3)
             return transport.TurnTransportResult(prepared.data["token"], raw=json.dumps(base.payload("openai_compatible", "late")))
-        self.st.include_selection = False
+        self.session(True)
         self.st.input_text = "old"
         try:
             with patch.object(transport, "send_turn", delayed):
@@ -414,8 +450,56 @@ class UIWorkflowTests(unittest.TestCase):
         thread.start(); thread.join(2)
         self.assertEqual(errors, ["workflow_requires_main_thread"])
 
+    def test_remembered_permission_is_recipient_scoped_and_revocable(self):
+        permission = ai.metadata_permission(self.st.provider)
+        saved = {'ai_metadata_permission': permission}
+        self.g.update(_preferences_ready=True, preferences=types.SimpleNamespace(
+            get=lambda key: saved[key], update=lambda data: saved.update(data)))
+        self.st.input_text = 'hello'
+        started = []
+        with patch.dict(self.g, _ai_start_turn=started.append):
+            self.g['_ai_send']()
+        self.assertEqual(len(started), 1)
+        self.assertFalse(self.dialogs)
+        self.assertEqual(self.g['_ai']['read_grant'], self.g['_ai_scope']())
+        self.assertIsNone(self.g['_ai_forget_metadata_permission']())
+        self.assertEqual(saved['ai_metadata_permission'], {})
+        self.assertNotIn('read_grant', self.g['_ai'])
+        saved['ai_metadata_permission'] = permission
+        self.st.provider = replace(self.st.provider, endpoint='http://127.0.0.1:4321/v1')
+        self.st.input_text = 'other recipient'
+        self.assertIn('awaiting read consent', self.g['_ai_send']())
+        self.assertEqual(len(self.dialogs), 1)
+
+    def test_failed_permission_write_still_revokes_this_session(self):
+        session, _ = self.session(True)
+        permission = ai.metadata_permission(self.st.provider)
+        def fail(_data):
+            raise OSError('fixture read-only settings')
+        self.g.update(_preferences_ready=True, preferences=types.SimpleNamespace(
+            get=lambda _key: permission, update=fail))
+        self.assertIn('Sharing stopped', self.g['_ai_forget_metadata_permission']())
+        self.assertEqual(session._handle, 0)
+        self.assertNotIn('read_grant', self.g['_ai'])
+        self.st.input_text = 'do not automatically regrant'
+        self.assertIn('awaiting read consent', self.g['_ai_send']())
+
+    def test_consent_remembers_only_provider_metadata(self):
+        saved = {}
+        self.g.update(_preferences_ready=True, preferences=types.SimpleNamespace(update=saved.update))
+        cls = self.g['NARWHAL_OT_ai_read_consent']
+        op = cls()
+        ctx = types.SimpleNamespace(window_manager=types.SimpleNamespace(invoke_props_dialog=lambda *_a, **_kw: {}))
+        op.invoke(ctx, None)
+        with patch.dict(self.g, _ai_send=lambda: None):
+            self.assertEqual(op.execute(ctx), {'FINISHED'})
+        self.assertEqual(saved, {'ai_metadata_permission': ai.metadata_permission(self.st.provider)})
+        self.assertNotIn('model', saved['ai_metadata_permission'])
+        self.assertNotIn('credential', saved['ai_metadata_permission'])
+
     def test_native_unavailable_never_falls_back_to_send_chat(self):
-        self.st.include_selection = False
+        scope = self.g['_ai_scope']()
+        self.g['_ai']['read_grant'] = scope
         self.st.input_text = "hello"
         with patch.object(ai.WorkflowSession, "__init__", side_effect=ai.WorkflowUnavailable("test missing library")), patch.object(transport, "send_chat", side_effect=AssertionError("legacy transport")):
             self.g["_ai_send"]()

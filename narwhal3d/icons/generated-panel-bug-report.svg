@@ -1,0 +1,5 @@
+<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none'><defs><style>.s{stroke:#2B69D9;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;fill:none}.f{stroke:#2B69D9;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;fill:#DDEBFF}.a{stroke:#6AA4FF;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;fill:none}.af{stroke:#6AA4FF;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;fill:#DDEBFF}.r{stroke:#E85B62;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;fill:none}.rf{stroke:#E85B62;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;fill:#E85B62}.w{fill:#FFFFFF;stroke:none}</style></defs>
+        <path class='f' d='M12 4.8 18.5 16H5.5L12 4.8Z'/>
+        <path class='s' d='M12 9v3.8'/>
+        <circle class='rf' cx='12' cy='15' r='1'/>
+    </svg>

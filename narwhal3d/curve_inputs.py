@@ -1,8 +1,9 @@
 """Exact curve inputs shared by rail and section prompts (OURS reference protocol).
 
-References are an object-name string, ``('segment', owner, zero_based_index)``,
-or ``('edge', owner, one_based_topology_id)``. They are identities, not cached
-geometry: resolve again when executing a command so missing parts are refused.
+Legacy references are an object-name string, ``('segment', owner, zero_based_index)``,
+or ``('edge', owner, one_based_topology_id)``. Sweep1 individual mouse picks use
+``WholeCurvePick``: captured document/UUID/content identity, never a later name lookup.
+All references resolve afresh; none contains display geometry.
 
 Python is deliberately only rhino3dm/OCCT interop here; construction and curve
 math stay in the existing bridge/kernel. No display samples become inputs.
@@ -10,7 +11,92 @@ Bridge imports are late so command registration can import this module safely.
 """
 from __future__ import annotations
 
+from dataclasses import dataclass, field
+
 import rhino3dm as r3
+
+
+@dataclass(frozen=True)
+class WholeCurvePick:
+    """Accepted UI pick identity/content, not a name lookup or persistent token."""
+    object_id: str
+    fingerprint: str
+    label: str = field(compare=False)
+    document: object = field(compare=False, repr=False)
+
+    def __str__(self):
+        return self.label
+
+
+def display_object_id(model, display_name):
+    """Resolve the existing UUID->display binding, never the first matching name."""
+    ids = [oid for oid, name in model._blender_names.items() if name == display_name]
+    if len(ids) != 1 or model.file.Objects.FindId(ids[0]) is None:
+        raise CurveInputError("picked display has no unique current document UUID")
+    return ids[0]
+
+
+def capture_display_pick(model, display_name):
+    from . import bridge
+
+    oid = display_object_id(model, display_name)
+    owner = model.file.Objects.FindId(oid)
+    return WholeCurvePick(oid, bridge._freeform_source_hash(owner.Geometry),
+                          owner.Attributes.Name or display_name, model.file)
+
+
+def selection_stamp(model):
+    """Reuse existing selection-state replacement identity as a mutation stamp.
+
+    This service does NOT contain chronology. Holding its actual list (not id(list))
+    detects even a same-membership select_by_names/SelPrev reapplication without
+    modifying selection machinery or allowing pointer reuse after garbage collection.
+    """
+    from . import selection_state
+
+    return selection_state._entry(model)["current"]
+
+
+class PickSequence:
+    """Command-local accepted individual picks; no selection engine or set sorting."""
+    def __init__(self):
+        self.picks = []
+        self.stamp = None
+        self.error = None
+
+    def invalidate(self, reason):
+        self.error = reason
+
+    def observe(self, pick, selected_ids, stamp, action, batch=False, previous_stamp=None):
+        selected = set(selected_ids)
+        if batch:
+            self.invalidate("whole-object selection order is ambiguous; use individual picks or typed names")
+            return
+        if action == "replace":
+            old = {p.object_id: p for p in self.picks}
+            self.picks = ([old.get(pick.object_id, pick)] if pick and pick.object_id in selected else [])
+            self.error = None
+        else:
+            if self.stamp is not None and self.stamp is not previous_stamp:
+                self.invalidate("whole-object selection order is ambiguous; selection was replaced or restored")
+            known = {p.object_id for p in self.picks}
+            if self.error or selected.difference(known | ({pick.object_id} if pick else set())):
+                self.invalidate("whole-object selection order is ambiguous; selection contains unaccepted inputs")
+                return
+            self.picks = [p for p in self.picks if p.object_id in selected]
+            if action == "add" and pick and pick.object_id in selected and pick.object_id not in known:
+                self.picks.append(pick)
+        if selected != {p.object_id for p in self.picks}:
+            self.invalidate("whole-object selection order is ambiguous; selection is not an individual-pick sequence")
+            return
+        self.stamp = stamp
+
+    def accepted(self, selected_ids, stamp):
+        if self.error:
+            raise CurveInputError(self.error)
+        if self.stamp is not stamp or set(selected_ids) != {p.object_id for p in self.picks}:
+            raise CurveInputError("whole-object selection order is ambiguous; selection was replaced or restored")
+        return list(self.picks)
 
 
 class CurveInputError(ValueError):
@@ -18,6 +104,8 @@ class CurveInputError(ValueError):
 
 
 def _validated(ref):
+    if isinstance(ref, WholeCurvePick):
+        return ref
     if isinstance(ref, str):
         if not ref.strip():
             raise CurveInputError("curve input needs a non-empty object name")
@@ -65,7 +153,7 @@ def owner_name(ref):
     names are not protected may be deleted. Resolving never deletes anything.
     """
     ref = _validated(ref)
-    return ref if isinstance(ref, str) else ref[1]
+    return ref.label if isinstance(ref, WholeCurvePick) else ref if isinstance(ref, str) else ref[1]
 
 
 def humanlabel(ref):
@@ -74,7 +162,7 @@ def humanlabel(ref):
     ``humanlabel(('edge', 'Cone1', 3)) == 'edge 3 of Cone1'``.
     """
     ref = _validated(ref)
-    return ref if isinstance(ref, str) else f"{ref[0]} {ref[2]} of {ref[1]}"
+    return ref.label if isinstance(ref, WholeCurvePick) else ref if isinstance(ref, str) else f"{ref[0]} {ref[2]} of {ref[1]}"
 
 
 def _detached(curve):
@@ -151,6 +239,16 @@ def resolve(ctx, ref):
     ref = _validated(ref)
     label = humanlabel(ref)
     try:
+        if isinstance(ref, WholeCurvePick):
+            from . import bridge
+            if ctx.model.file is not ref.document:
+                raise CurveInputError("stale picked document")
+            owner = ctx.model.file.Objects.FindId(ref.object_id)
+            if owner is None:
+                raise CurveInputError("stale picked source UUID is missing")
+            if bridge._freeform_source_hash(owner.Geometry) != ref.fingerprint:
+                raise CurveInputError("stale picked source geometry changed")
+            return _detached(owner.Geometry)
         geom = ctx.geom_by_name(owner_name(ref))
         if geom is None:
             raise CurveInputError("owner no longer exists")

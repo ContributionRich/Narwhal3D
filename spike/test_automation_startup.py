@@ -100,8 +100,8 @@ def fixture(phase, case, variant):
             exec(compile(source.replace(needle, "    pass  # TEST mutation: missing attachment"),
                          str(BOOT), "exec"), {"__file__": str(BOOT), "__name__": "__main__"})
         else:
-            # Disable BOTH the explicit pre-switch hook and the timer identity
-            # checks, in this process only. Neither production file is edited.
+            # Disable explicit/timer revocation AND the reader's new identity
+            # defense, in this process only. Keep the stale-access assertion strong.
             from narwhal3d import automation_host as host
             source = Path(host.__file__).read_text()
             for needle in ("state.app_state is not self._app", "self._app.model is not self._model",
@@ -110,6 +110,8 @@ def fixture(phase, case, variant):
                 source = source.replace(needle, "False")
             source += "\n# TEST mutation: disable explicit document-switch revocation.\ndef close():\n    pass\n"
             exec(compile(source, host.__file__, "exec"), host.__dict__)
+            from narwhal3d import ai_workspace
+            ai_workspace.WorkspaceSnapshots.current = lambda self: True
         return
 
     from narwhal3d import automation_host as host, state, model, ui, automation_tools
@@ -396,9 +398,16 @@ def run_case(output, variant, era):
             layers = client.call("narwhal.layers", {"offset": 0, "limit": 1})
             assert len(layers["layers"]) == 1 and layers["total_count"] >= 1
             workspace = client.call("narwhal.workspace")
-            assert workspace["active_command"]["busy"] is False and workspace["cplane"]["available"] is False
+            assert workspace["active_command"]["busy"] is False
+            assert workspace["active_command"]["phase"]["value"] == "idle"
+            assert workspace["cplane"]["available"] is True
+            assert set(workspace["cplane"]["value"]) == {"origin", "xaxis", "yaxis", "zaxis"}
+            assert all(len(v) == 3 for v in workspace["cplane"]["value"].values())
+            assert workspace["view"]["available"] is True
+            assert workspace["view"]["value"]["projection"] in {"PERSP", "ORTHO", "CAMERA"}
             components = client.call("narwhal.components")
-            assert components["available"] is False and components["reason"] == "component_snapshot_not_connected"
+            assert components["available"] is True and components["components"] == []
+            assert components["truncated"] is False
             operations = client.call("narwhal.operations")["operations"]
             assert len(operations) == 1 and operations[0]["command"] == "Circle"
             assert operations[0]["execution_available"] is False

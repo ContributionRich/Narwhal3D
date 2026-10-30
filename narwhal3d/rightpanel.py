@@ -101,13 +101,16 @@ class Tab:
         return f"Tab({self.name!r}, built={self.built})"
 
 
-#: Working panels in product order, using the approved legacy/v4 tab artwork.
+from . import ui_icon_data
+
+
+#: Working panels in product order, using the approved v4.4 tab artwork.
 TABS = (
-    Tab("Layers", "narwhal-panel-layers.png", built=True, reason=""),
-    Tab("Properties", "v4-panel-properties.png", built=True, reason=""),
-    Tab("Display", "v4-panel-display.png", built=True, reason=""),
-    Tab("Bug Report", "narwhal-panel-report.png", built=True, reason=""),
-    Tab("AI Assistant", "v4-panel-ai-assistant.png", built=True, reason=""),
+    Tab("Layers", ui_icon_data.INSPECTOR_ICONS["Layers"], built=True, reason=""),
+    Tab("Properties", ui_icon_data.INSPECTOR_ICONS["Properties"], built=True, reason=""),
+    Tab("Display", ui_icon_data.INSPECTOR_ICONS["Display"], built=True, reason=""),
+    Tab("Bug Report", ui_icon_data.INSPECTOR_ICONS["Bug Report"], built=True, reason=""),
+    Tab("AI Assistant", ui_icon_data.INSPECTOR_ICONS["AI Assistant"], built=True, reason=""),
 )
 
 #: Layers is the default working panel.
@@ -416,9 +419,9 @@ def filter_layer_indices(names, query):
 # The panel exposes the existing Active/All scope and Wireframe/Shaded/Rendered
 # modes. Its metrics reuse the Layers row rhythm.
 # ---------------------------------------------------------------------------
-DISPLAY_PAD = 8
-DISPLAY_LABEL_H = 18
-DISPLAY_ROW_H = 26
+DISPLAY_PAD = 11
+DISPLAY_LABEL_H = 28
+DISPLAY_ROW_H = 30
 DISPLAY_GAP = 6
 
 
@@ -456,7 +459,19 @@ def display_panel_layout(body, viewport_names=(), mode_names=()):
         y = scope_y0 - DISPLAY_GAP
 
     label("Display mode")
-    modes = [box for name in mode_names if (box := row("mode", name)) is not None]
+    modes = []
+    # Host UI layout: the approved mode buttons wrap rather than clip narrow labels.
+    minimum = DISPLAY_ROW_H * (76 / 30)
+    columns = max(1, int((width + DISPLAY_GAP) // (minimum + DISPLAY_GAP)))
+    columns = min(columns, max(1, len(mode_names)))
+    cell_w = max(0, (width - DISPLAY_GAP * (columns - 1)) / columns)
+    for start in range(0, len(mode_names), columns):
+        row_box = row("mode", "")
+        if row_box is None:
+            break
+        for index, name in enumerate(mode_names[start:start + columns]):
+            left = x0 + index * (cell_w + DISPLAY_GAP)
+            modes.append(("mode", name, left, row_box[3], left + cell_w, row_box[5]))
     label("Viewports")
     viewports = [box for name in viewport_names
                  if (box := row("viewport", name)) is not None]

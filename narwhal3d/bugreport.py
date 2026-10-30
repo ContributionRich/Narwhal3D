@@ -194,52 +194,33 @@ CHECKS = (("shot", "Include screenshot"), ("log", "Include session log"),
 
 
 def layout(body, scale=1.0, measure=None):
-    """``{"title", "chips": [(id, rect)], "box", "checks": [(id, rect)],
-    "buttons": [(id, rect)], "status"}`` inside `body` = (x0, y0, x1, y1). Rects are
-    (x0, y0, x1, y1).
+    """Approved v4.4 dropdown, editor, attachments, notice and full-width submit.
 
-    `measure(text) -> width` is the drawing font's; without one, an average glyph width
-    The category chips wrap onto extra rows when their labels do not fit
-    (`chip_rows`), and the text box gives up the height they take."""
+    Coordinates are shared with hit-testing; category choices are a popup, not
+    permanent chip rows. `measure` is retained for caller compatibility.
+    """
     s = max(0.5, float(scale))
-    if measure is None:
-        measure = lambda t: 6.5 * s * len(t)         # noqa: E731
     x0, y0, x1, y1 = body
-    pad = 6 * s
-    gap = 4 * s
-    title = (x0 + pad, y1 - 22 * s, x1 - pad, y1 - 4 * s)
-    chip_h = 20 * s
-    cy1 = title[1] - 4 * s
-    inner = x1 - x0 - 2 * pad
-    chips = []
-    for r, row in enumerate(chip_rows(inner, [lb for _c, lb in CATEGORIES], measure,
-                                      gap, 4 * s)):
-        top = cy1 - r * (chip_h + gap)
-        for i, x, w in row:
-            chips.append((CATEGORIES[i][0], (x0 + pad + x, top - chip_h,
-                                             x0 + pad + x + w, top)))
-    chips_bottom = min(r[1] for _c, r in chips)
-    status = (x0 + pad, y0 + pad, x1 - pad, y0 + pad + 16 * s)
-    btn_h = 24 * s
-    by0 = status[3] + 4 * s
-    bw = (x1 - x0 - 2 * pad - 4 * s) / 2
-    buttons = [("submit", (x0 + pad, by0, x0 + pad + bw, by0 + btn_h)),
-               ("clear", (x1 - pad - bw, by0, x1 - pad, by0 + btn_h))]
-    check_h = 18 * s
+    pad, gap = 11 * s, 8 * s
+    left, right = x0 + pad, max(x0 + pad, x1 - pad)
+    title = (left, y1 - 25*s, right, y1 - 10*s)
+    category = (left, title[1] - gap - 31*s, right, title[1] - gap)
+    submit = (left, y0 + pad, right, y0 + pad + 32*s)
+    status = (left, submit[3] + gap, right, submit[3] + gap + 56*s)
     checks = []
-    cy = by0 + btn_h + 4 * s
-    for cid, _l in reversed(CHECKS):              # listed top-down, laid out bottom-up
-        checks.append((cid, (x0 + pad, cy, x1 - pad, cy + check_h)))
-        cy += check_h
+    cy = status[3] + gap
+    for cid, _label in reversed(CHECKS):
+        checks.append((cid, (left, cy, right, cy + 27*s)))
+        cy += 27*s
     checks.reverse()
-    box = (x0 + pad, cy + 4 * s, x1 - pad, chips_bottom - 6 * s)
-    return {"title": title, "chips": chips, "box": box, "checks": checks,
-            "buttons": buttons, "status": status}
+    box = (left, cy + gap, right, max(cy + gap, category[1] - gap))
+    return {"title": title, "category": category, "box": box, "checks": checks,
+            "buttons": [("submit", submit)], "status": status}
 
 
 #: inner padding of the text box and its line height, at scale 1 (what ui.py draws)
-BOX_PAD = 4
-LINE_H = 14
+BOX_PAD = 10
+LINE_H = 17
 
 
 def text_view(state, box, measure, scale=1.0):
@@ -281,9 +262,8 @@ def _inside(r, x, y):
 def hit(lay, x, y):
     """``("chip", id)`` / ``("box", None)`` / ``("check", id)`` / ``("button", id)``
     / None."""
-    for cid, r in lay["chips"]:
-        if _inside(r, x, y):
-            return ("chip", cid)
+    if _inside(lay["category"], x, y):
+        return ("category", None)
     if _inside(lay["box"], x, y):
         return ("box", None)
     for cid, r in lay.get("checks", ()):
@@ -318,9 +298,9 @@ def click(state, lay, x, y, view=None, measure=None, shift=False, log_ok=True):
             state.extra["dragging"] = True
             state.extra.pop("goal_x", None)
         return "focus"
-    if kind == "chip":
-        state.category = ident
-        return f"category:{ident}"
+    if kind == "category":
+        state.focus = False
+        return "category_menu"
     if kind == "check":
         if ident == "shot":
             state.include_shot = not state.include_shot

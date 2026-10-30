@@ -47,6 +47,8 @@ from . import ortho
 from . import printdialog
 from . import bugreport
 from . import ai_assistant
+from . import ai_presentation
+from . import ui_icon_data
 from . import ai_transport
 from . import ai_settings_popup
 from . import textfield
@@ -336,6 +338,16 @@ def _draw_text(x, y, text, size=13.0, color=(0, 0, 0, 1), font_id=_DEFAULT_FONT_
     # A fractional baseline resamples glyph coverage and softens stationary chrome.
     blf.position(font_id, round(x), round(y), 0)
     blf.draw(font_id, text)
+
+
+def _draw_centered_panel_text(rect, text, size, color):
+    """Center against the actual button and BLF glyph dimensions, at current DPI."""
+    import blf
+    text = _fit_panel_text(text, max(0, rect[2]-rect[0]-6*_ui_scale()), size)
+    blf.size(_DEFAULT_FONT_ID, size)
+    width, height = blf.dimensions(_DEFAULT_FONT_ID, text)
+    _draw_text((rect[0]+rect[2]-width)/2, (rect[1]+rect[3]-height)/2,
+               text, size, color)
 
 
 def _text_width(text, size=13.0, font_id=_DEFAULT_FONT_ID) -> float:
@@ -3129,21 +3141,18 @@ def _draw_display_panel(shader, region, box):
         current = next(iter(unique)) if len(unique) == 1 else None
     active_view = next((name for name, _mode, active in rows if active), None)
     bg = views.gpu_rgba(views.LAYER_LIST_BG)
-    selected = views.gpu_rgba(views.TAB_ACTIVE_BG)
-    border = views.gpu_rgba(views.TAB_BORDER)
+    selected = design.rgb01(design.ACCENT_SOFT)
+    border = design.rgb01(design.BORDER)
     ink = design.rgb01(design.TEXT)
-    active_ink = design.rgb01(design.TEXT_STRONG)
+    active_ink = design.rgb01(design.RAIL_ACTIVE_TEXT)
     label_ink = design.rgb01(design.TEXT_MUTED)
-    font_size = _fpx(12)
+    font_size = _fpx(11)
 
     def paint(entries, selected_value):
         for _kind, value, x0, y0, x1, y1 in entries:
-            _draw_rect(shader, x0, y0, x1, y1,
-                       selected if value == selected_value else bg)
-            _draw_rect(shader, x0, y0, x1, y0 + 1, border)
-            _draw_rect(shader, x0, y1 - 1, x1, y1, border)
-            _draw_rect(shader, x0, y0, x0 + 1, y1, border)
-            _draw_rect(shader, x1 - 1, y0, x1, y1, border)
+            _draw_round_rect(shader, x0, y0, x1, y1, _fpx(5),
+                             selected if value == selected_value else bg,
+                             design.rgb01(design.ACCENT) if value == selected_value else border)
 
     shader.bind()
     paint(lay["scope"], _display_panel_scope)
@@ -5595,8 +5604,7 @@ def _apply_ai_settings(config):
     _ai_invalidate("configuration_changed")
     st.provider = ai_assistant.credential_status(config, os.environ)
     st.status = "configured" if config.model else "disconnected"
-    st.error = ("Settings applied. Provider transport is not connected yet."
-                if config.model else "Settings applied; choose a model before connecting.")
+    st.error = ("Settings applied." if config.model else "Choose a model in Settings.")
     _ai.pop("settings_draft", None)
     _tag_redraw_bands()
     return None
@@ -5647,7 +5655,8 @@ class NARWHAL_OT_ai_settings(Operator):
         popup = ai_settings_popup.open(
             config, anchor=_ai_settings_anchor(context),
             window_size=(context.window.width, context.window.height), scale=_ui_scale(),
-            on_save=_apply_ai_settings, on_refresh=_ai_start_model_discovery)
+            on_save=_apply_ai_settings, on_refresh=_ai_start_model_discovery,
+            on_revoke=_ai_forget_metadata_permission)
         popup.refresh()
         return {"FINISHED"}
 
@@ -5693,6 +5702,123 @@ class NARWHAL_OT_ai_settings(Operator):
         return {"FINISHED"}
 
 
+def _ai_transcript_event(event):
+    """Transcript browsing must never leak wheel/key input into CAD commands."""
+    if not ai_panel_open() or event.value not in ('PRESS', 'REPEAT'):
+        return False
+    lay = _ai.get('lay')
+    if lay is None:
+        return False
+    rx, ry = _ai.get('region') or (0, 0)
+    rect = lay['transcript']
+    inside = _inside_box(event.mouse_x - rx, event.mouse_y - ry, rect)
+    if not inside and event.type in ('LEFTMOUSE', 'RIGHTMOUSE', 'MIDDLEMOUSE'):
+        _ai['chat_focus'] = False
+        _tag_redraw_bands()
+        return False
+    view = _ai.get('chat_layout', {'height': 0})
+    offset = _ai.get('chat_offset', 0)
+    height = max(0, rect[3] - rect[1])
+    if event.type in ('WHEELUPMOUSE', 'WHEELDOWNMOUSE') and inside:
+        offset += (48 if event.type == 'WHEELUPMOUSE' else -48) * _ui_scale()
+    elif _ai.get('chat_focus'):
+        if event.type in ('ESC', 'TAB'):
+            _ai['chat_focus'] = False
+            _ai['state'].focus = event.type == 'TAB'
+            _tag_redraw_bands()
+            return True
+        result = ai_presentation.scroll_key(event.type, offset, view['height'], height,
+                                             _ui_scale())
+        if result is None:
+            # Pointer events still reach the actual controls; text cannot start a command.
+            return event.type not in ('LEFTMOUSE', 'RIGHTMOUSE', 'MIDDLEMOUSE',
+                                                  'WHEELUPMOUSE', 'WHEELDOWNMOUSE')
+        offset = result
+    else:
+        return False
+    _ai['chat_offset'] = ai_presentation.scroll_offset(offset, view['height'], height)
+    _tag_redraw_bands()
+    return True
+
+
+def _draw_ai_transcript(shader, rect, st, sc):
+    """Role-aware literal text, cached BLF wrapping and clipped scrolling."""
+    import gpu
+
+    palette = {key: design.rgb01(value)
+               for key, value in ai_presentation.PALETTES[design.THEME].items()}
+    blue = design.rgb01(design.ACCENT)
+    ink = design.rgb01(design.TEXT_STRONG)
+    fs = 11 * sc
+    shader.bind()
+    _draw_round_rect(shader, *rect, 8 * sc, palette['canvas'],
+                     blue if _ai.get('chat_focus') else design.rgb01(design.BORDER))
+    key = (tuple(id(message) for message in st.messages), max(1, rect[2] - rect[0]), sc)
+    if _ai.get('chat_cache') != key:
+        old = _ai.get('chat_layout')
+        layout = ai_presentation.transcript_layout(st.messages, key[1],
+                                                    _bug_measure(fs), sc)
+        if old:
+            _ai['chat_offset'] = ai_presentation.anchored_offset(
+                old, layout, _ai.get('chat_rect', rect), rect, _ai.get('chat_offset', 0))
+        _ai['chat_layout'], _ai['chat_cache'] = layout, key
+    _ai['chat_rect'] = rect
+    layout = _ai['chat_layout']
+    visible, _ai['chat_offset'] = ai_presentation.visible_items(
+        layout, rect, _ai.get('chat_offset', 0))
+    clip = gpu.state.scissor_get()
+    # Blender's POST_PIXEL boundary already enables scissoring; restore its box.
+    gpu.state.scissor_test_set(True)
+    gpu.state.scissor_set(int(rect[0] + 1), int(rect[1] + 1),
+                          max(0, int(rect[2] - rect[0] - 2)),
+                          max(0, int(rect[3] - rect[1] - 2)))
+    try:
+        if not st.messages:
+            for index, line in enumerate(bugreport.wrap(
+                    'Ask about selected objects, CAD workflows, or future actions.',
+                    max(1, rect[2] - rect[0] - 20 * sc), _bug_measure(fs))):
+                _draw_text(rect[0] + 10 * sc, rect[3] - (25 + 17 * index) * sc,
+                           line, fs, design.rgb01(design.TEXT_MUTED))
+        for item, bubble, top in visible:
+            role = item['role']
+            shader.bind()
+            tone = 'notice' if role == 'status' else role
+            _draw_round_rect(shader, *bubble, (6 if role == 'status' else 10) * sc,
+                             palette[tone], palette[tone + '_border'])
+            if role != 'status':
+                edge = bubble[2] - 3 * sc if role == 'user' else bubble[0]
+                _draw_rect(shader, edge, bubble[1] + 7 * sc, edge + 3 * sc,
+                           bubble[3] - 7 * sc, blue)
+                left = rect[0] + item['left']
+                avatar_x = left + item['width'] - 20 * sc if role == 'user' else left
+                avatar = (avatar_x, top - 20 * sc, avatar_x + 20 * sc, top)
+                if role == 'assistant':
+                    _draw_shell_icon(ui_icon_data.AI_REPLY_ICON, avatar, 17 * sc)
+                    label_x = avatar[2] + 6 * sc
+                else:
+                    _draw_round_rect(shader, *avatar, 7 * sc, palette['meta_bg'],
+                                     palette['user_border'])
+                    _draw_text(avatar_x + 6 * sc, top - 14 * sc, 'Y', 10 * sc, blue)
+                    label_x = avatar_x - 6 * sc - _text_width(item['label'], 10 * sc)
+                _draw_text(label_x, top - 14 * sc, item['label'], 10 * sc, palette['meta'])
+            padding = item['padding']
+            for index, line in enumerate(item['lines']):
+                baseline = bubble[3] - padding - (index + 1) * item['line_h'] + 3 * sc
+                if baseline + item['line_h'] < rect[1] or baseline > rect[3]:
+                    continue
+                _draw_text(bubble[0] + padding, baseline, line, fs,
+                           design.rgb01(design.TEXT_MUTED) if role == 'status' else ink)
+    finally:
+        gpu.state.scissor_set(*clip)
+    height = max(0, rect[3] - rect[1])
+    if height > 0 and layout['height'] > height:
+        thumb_h = min(height, max(18 * sc, height * height / layout['height']))
+        thumb_y = rect[1] + (height - thumb_h) * _ai['chat_offset'] / (layout['height'] - height)
+        shader.bind()
+        _draw_round_rect(shader, rect[2] - 5 * sc, thumb_y, rect[2] - 2 * sc,
+                         thumb_y + thumb_h, 1.5 * sc, design.rgb01(design.BORDER_STRONG))
+
+
 def _draw_ai_panel(shader, region, box):
     import gpu
 
@@ -5710,107 +5836,86 @@ def _draw_ai_panel(shader, region, box):
     gpu.state.blend_set("ALPHA")
     try:
         title = lay["title"]
-        _draw_text(title[0], title[1] + 2 * sc, "AI Assistant", fs + 1, ink)
+        if title[3] > title[1]:
+            _draw_text(title[0], title[1] + 2 * sc, "AI Assistant", fs + 1, ink)
+            subtitle = "Workspace chat"
+            sw = _text_width(subtitle, fs - 1)
+            if title[2] - title[0] > _text_width("AI Assistant", fs + 1) + sw + 6*sc:
+                _draw_text(title[2] - sw, title[1] + 2*sc, subtitle, fs - 1, muted)
         connection = lay["connection"]
-        connection_text = {
-            "connected": "Connection: Connected",
-            "sending": "Connection: Sending...",
-            "error": "Connection: Error",
-        }.get(st.status, ("Connection: Configured, not connected"
-                          if st.provider.model else "Connection: Not connected"))
-        _draw_text(connection[0], connection[1] + 5 * sc,
-                   _fit_panel_text(connection_text,
-                                   connection[2] - connection[0], fs - 1),
-                   fs - 1, ink)
+        connection_text = ai_assistant.connection_label(st)
+        if connection[3] > connection[1]:
+            shader.bind()
+            _draw_round_rect(shader, *connection, 6 * sc, design.rgb01(design.LIST_BG),
+                             design.rgb01(design.BORDER))
+            dot_x, dot_y = connection[0] + 9 * sc, connection[1] + 10 * sc
+            _draw_round_rect(shader, dot_x, dot_y, dot_x + 7 * sc, dot_y + 7 * sc,
+                             3.5 * sc, blue if st.provider.model else muted)
+            _draw_text(connection[0] + 24 * sc, connection[1] + 8 * sc,
+                       _fit_panel_text(connection_text,
+                                       connection[2] - connection[0] - 30 * sc, fs - 1),
+                       fs - 1, muted)
 
-        context = lay["context"]
-        selected_count = len(selected_display_names())
-        square = 12 * sc
-        qy = context[1] + (context[3] - context[1] - square) * 0.5
-        shader.bind()
-        _draw_rect(shader, context[0], qy, context[0] + square, qy + square,
-                   blue if st.include_selection else design.rgb01(design.FIELD_BG))
-        _draw_text(context[0] + square + 5 * sc, context[1] + 4 * sc,
-                   _fit_panel_text(f"Include selection context ({selected_count})",
-                                   context[2] - context[0] - square - 5 * sc, fs - 1),
-                   fs - 1, ink)
 
-        transcript = lay["transcript"]
-        shader.bind()
-        _draw_rect(shader, transcript[0] - 1, transcript[1] - 1,
-                   transcript[2] + 1, transcript[3] + 1, design.rgb01(design.BORDER_STRONG))
-        _draw_rect(shader, *transcript, design.rgb01(design.LIST_BG))
-        line_h = 14 * sc
-        max_rows = ai_assistant.transcript_row_count(transcript, sc)
-        width = max(1, transcript[2] - transcript[0] - 8 * sc)
-        transcript_lines = []
-        for message in st.messages:
-            prefix = {"user": "You: ", "assistant": "Assistant: ",
-                      "status": "Status: "}[message.role]
-            transcript_lines.extend(bugreport.wrap(prefix + message.text, width,
-                                                    lambda value: _text_width(value, fs - 1)))
-        if not transcript_lines:
-            transcript_lines = ["Ask about selected objects, CAD workflows, or future actions."]
-        shown = transcript_lines[-max_rows:] if max_rows else []
-        base = transcript[3] - 4 * sc - line_h
-        for index, line in enumerate(shown):
-            safe_line = _fit_panel_text(line, width, fs - 1)
-            _draw_text(transcript[0] + 4 * sc, base - index * line_h, safe_line,
-                       fs - 1, muted if not st.messages else ink)
+        _draw_ai_transcript(shader, lay['transcript'], st, sc)
 
         input_box = lay["input"]
-        shader.bind()
-        _draw_rect(shader, input_box[0] - 1, input_box[1] - 1,
-                   input_box[2] + 1, input_box[3] + 1,
-                   blue if st.focus else design.rgb01(design.BORDER_STRONG))
-        _draw_rect(shader, *input_box, design.rgb01(design.FIELD_BG))
-        measure = _bug_measure(fs)
-        view = ai_assistant.input_view(st, input_box, measure, sc)
-        _ai["view"] = view
-        editor = ai_assistant.field_of(st)
-        first, rows, lh = view["first"], view["rows"], view["line_h"]
-        base = view["top"] - lh + 3 * sc
-        if not editor.text and not st.focus:
-            _draw_text(view["x0"], base, "Type a message...", fs, muted)
-        else:
-            selection = editor.selection()
-            if selection is not None and st.focus:
-                shader.bind()
-                for line, sx0, sx1 in textfield.selection_rects(
-                        view["spans"], editor.text, selection, measure):
-                    if first <= line < first + rows:
-                        yb = view["top"] - (line - first + 1) * lh
-                        _draw_rect(shader, view["x0"] + sx0, yb,
-                                   view["x0"] + max(sx1, sx0 + 3 * sc), yb + lh,
-                                   design.rgb01(design.ACCENT_SOFT))
-            for index, (start, end) in enumerate(view["spans"][first:first + rows]):
-                _draw_text(view["x0"], base - index * lh, editor.text[start:end], fs, ink)
-            if st.focus:
-                caret_x, caret_line = textfield.caret_xy(view["spans"], editor.text,
-                                                        editor.caret, measure, lh)
-                if first <= caret_line < first + rows:
-                    cx = view["x0"] + caret_x
-                    cy = base - (caret_line - first) * lh
+        if input_box[3] - input_box[1] >= 34 * sc:
+            shader.bind()
+            _draw_round_rect(shader, *input_box, 7 * sc, design.rgb01(design.FIELD_BG),
+                             blue if st.focus else design.rgb01(design.BORDER_STRONG))
+            measure = _bug_measure(fs)
+            view = ai_assistant.input_view(st, input_box, measure, sc)
+            _ai["view"] = view
+            editor = ai_assistant.field_of(st)
+            first, rows, lh = view["first"], view["rows"], view["line_h"]
+            base = view["top"] - lh + 3 * sc
+            if not editor.text and not st.focus:
+                _draw_text(view["x0"], base, "Type a message...", fs, muted)
+            else:
+                selection = editor.selection()
+                if selection is not None and st.focus:
                     shader.bind()
-                    _draw_rect(shader, cx, cy - 2 * sc, cx + 1.5 * sc,
-                               cy + 11 * sc, ink)
+                    for line, sx0, sx1 in textfield.selection_rects(
+                            view["spans"], editor.text, selection, measure):
+                        if first <= line < first + rows:
+                            yb = view["top"] - (line - first + 1) * lh
+                            _draw_rect(shader, view["x0"] + sx0, yb,
+                                       view["x0"] + max(sx1, sx0 + 3 * sc), yb + lh,
+                                       design.rgb01(design.ACCENT_SOFT))
+                for index, (start, end) in enumerate(view["spans"][first:first + rows]):
+                    _draw_text(view["x0"], base - index * lh, editor.text[start:end], fs, ink)
+                if st.focus:
+                    caret_x, caret_line = textfield.caret_xy(view["spans"], editor.text,
+                                                            editor.caret, measure, lh)
+                    if first <= caret_line < first + rows:
+                        cx = view["x0"] + caret_x
+                        cy = base - (caret_line - first) * lh
+                        shader.bind()
+                        _draw_rect(shader, cx, cy - 2 * sc, cx + 1.5 * sc,
+                                   cy + 11 * sc, ink)
+        else:
+            st.focus = False
+            _ai['view'] = None
 
         for button_id, rect in lay["buttons"]:
+            if rect[3] - rect[1] < 20 * sc:
+                continue
             shader.bind()
-            _draw_rect(shader, *rect, blue if button_id == "send" else pale)
+            _draw_round_rect(shader, *rect, 6 * sc, blue if button_id == "send" else pale,
+                             blue if button_id == "send" else design.rgb01(design.BORDER))
             label = {"send": "Send", "new": "New Chat", "settings": "Settings"}[button_id]
-            _draw_text(rect[0] + max(3 * sc, (rect[2] - rect[0] -
-                       _text_width(label, fs)) * 0.5), rect[1] + 7 * sc, label, fs,
+            _draw_centered_panel_text(rect, label, fs,
                        design.rgb01(design.BAR_TEXT_STRONG) if button_id == "send" else ink)
 
         status = lay["status"]
         status_text = (st.error or {
-            "connected": "Connected. Tool actions still require approval and are disabled.",
-            "sending": "Waiting for the provider response...",
-        }.get(st.status, "Open Settings to configure a provider. Tool actions are disabled."))
+            "connected": "Selection included automatically · Box creation needs approval",
+            "sending": "Waiting for the provider...",
+        }.get(st.status, "Box creation needs approval · Other edits unavailable"))
         for index, line in enumerate(bugreport.wrap(
                 status_text, status[2] - status[0],
-                lambda value: _text_width(value, fs - 1))[:2]):
+                lambda value: _text_width(value, fs - 1))[:max(0, int((status[3]-status[1]) // (12*sc)))]):
             _draw_text(status[0], status[3] - (index + 1) * 12 * sc,
                        line, fs - 1, muted)
     finally:
@@ -5832,7 +5937,7 @@ def _ai_invalidate(reason="cancelled"):
         # Do not let that failure preserve a grant/worker queue during teardown.
         pass
     finally:
-        for key in ("transport_output", "transport_thread", "read_grant", "consent_scope"):
+        for key in ("transport_output", "transport_thread", "read_grant", "consent_scope", "box_pending"):
             _ai.pop(key, None)
 
 
@@ -5851,7 +5956,9 @@ def _ai_scope():
     st = _ai["state"]
     # Copy scalar configuration fields: retaining the live object would let an
     # in-place compatibility edit rewrite both the grant and an open dialog's scope.
-    scope = (_ai["document_context"], replace(st.provider), st.include_selection)
+    # Selection context is automatic in the UI; old saved opt-outs no longer apply.
+    st.include_selection = True
+    scope = (_ai["document_context"], replace(st.provider), True)
     if _ai.get("workflow_scope") != scope:
         _ai_invalidate("configuration_changed")
         _ai["workflow_scope"] = scope
@@ -5860,7 +5967,7 @@ def _ai_scope():
 
 class NARWHAL_OT_ai_read_consent(bpy.types.Operator):
     bl_idname = "narwhal.ai_read_consent"
-    bl_label = "Allow AI metadata reads for this chat?"
+    bl_label = "Allow workspace context for this provider?"
 
     def invoke(self, context, event):
         self._scope = _ai_scope()
@@ -5872,9 +5979,11 @@ class NARWHAL_OT_ai_read_consent(bpy.types.Operator):
         layout.label(text="Send bounded object/layer names, IDs, workspace and selection metadata.")
         layout.label(text="No geometry/file upload. Reads may include unselected objects.")
         layout.label(text="Up to 8 model turns / 8 calls per chat; provider charges may apply.")
-        layout.label(text="Proposal only: CAD edits and command execution are not implemented.")
-        layout.label(text="New Chat, settings, document or selection-toggle changes revoke access.")
-        layout.label(text="Cancel and turn off Include selection for text-only chat.")
+        layout.label(text="Box creation requires a separate approval. Other CAD edits are unavailable.")
+        layout.label(text="Selected-object context is included automatically with each message.")
+        layout.label(text="Remembered for this provider and endpoint across chats and launches.")
+        layout.label(text="Revoke this permission in AI Settings at any time.")
+        layout.label(text="Cancel sends nothing.")
         layout.label(text="Model: " + self._scope[1].model)
         layout.label(text="Endpoint: " + self._scope[1].endpoint)
 
@@ -5884,6 +5993,13 @@ class NARWHAL_OT_ai_read_consent(bpy.types.Operator):
                 or _ai.get("consent_scope") != scope or not scope[2]):
             return {"CANCELLED"}
         _ai["read_grant"] = scope
+        if _preferences_ready:
+            try:
+                preferences.update({'ai_metadata_permission': ai_assistant.metadata_permission(scope[1])})
+                _ai.pop('metadata_permission_revoked', None)
+            except (OSError, ValueError):
+                _ai['metadata_permission_revoked'] = True
+                _ai['state'].add_message('status', 'Allowed for this chat only; permission could not be saved.')
         _ai.pop("consent_scope", None)
         _ai_send()
         return {"FINISHED"}
@@ -5918,7 +6034,27 @@ def _ai_read_results(workflow, outcome, document_context):
     from .automation_tools import ApplicationReader
     reader = ApplicationReader(app_state, os.environ.get("NARWHAL3D_VERSION") or "unknown")
     results = []
-    for call in outcome["response"]["tool_calls"]:
+    box_pending = None
+    calls = outcome['response']['tool_calls']
+    box_count = sum(call['name'] == 'narwhal_create_box' for call in calls)
+    for call in calls:
+        if call['name'] == 'narwhal_create_box':
+            from . import ai_box
+            if box_count > 1:
+                results.append({'call_id': call['id'], 'is_error': True,
+                                'output': {'code': 'one_box_per_approval_request'}})
+                continue
+            try:
+                proposal = workflow.propose_box(outcome['token'], call['id'], document_context,
+                                                ai_box.context(app_state, document_context))
+                box_pending = {'workflow': workflow, 'proposal': proposal['proposal'],
+                               'scope': _ai_scope(), 'token': outcome['token'],
+                               'index': len(results), 'results': results, 'call_id': call['id']}
+                results.append(None)
+            except ai_assistant.WorkflowUnavailable:
+                results.append({'call_id': call['id'], 'is_error': True,
+                                'output': {'code': 'box_context_unavailable'}})
+            continue
         try:
             result = workflow.read_tool_result(outcome["token"], call["id"], reader, document_context)
         except ai_assistant.WorkflowUnavailable as exc:
@@ -5927,13 +6063,86 @@ def _ai_read_results(workflow, outcome, document_context):
             proposal = workflow.propose_circle(outcome["token"], call["id"], document_context)
             _ai["state"].add_message("status", "Proposal only — not executed: " +
                                      str(proposal["proposal"]["action"]) +
-                                     ". CAD mutation dispatch is disabled.")
+                                     ". Circle execution is not implemented yet.")
             # No approval UI/authority exists in this slice. Retire, never execute.
             workflow.review_proposal(proposal["proposal"], document_context, accepted=False)
             result = {"call_id": call["id"], "is_error": True,
                       "output": {"code": "proposal_only_dispatch_disabled", "dispatch_enabled": False}}
         results.append(result)
+    if box_pending is not None:
+        _ai['box_pending'] = box_pending
+        _ai['state'].status = 'awaiting_approval'
+        bpy.ops.narwhal.ai_box_approval('INVOKE_DEFAULT')
+        return False
     workflow.record_results(outcome["token"], results, document_context)
+    return True
+
+
+def _ai_complete_box(accepted, pending):
+    if pending is not _ai.get('box_pending'):
+        return False
+    from . import ai_box
+    scope = _ai_scope()
+    if scope != pending['scope'] or pending is not _ai.get('box_pending'):
+        return False
+    workflow = pending['workflow']
+    result = {'call_id': pending['call_id'], 'is_error': True, 'output': {'code': 'box_rejected'}}
+    try:
+        current = ai_box.context(app_state, scope[0])
+        approved = workflow.decide_box(pending['proposal'], scope[0], current, accepted=accepted)
+        if approved['status'] == 'approved_box':
+            def unchanged_scope():
+                if _ai_scope() != scope or pending is not _ai.get('box_pending'):
+                    raise ai_assistant.WorkflowUnavailable('box_scope_changed')
+            output = ai_box.publish(app_state, approved, unchanged_scope)
+            result.update(is_error=False, output=output)
+            _ai['state'].add_message('status', f"Created {output['name']}. Undo: AI Box.")
+            _tag_redraw_viewports()
+    except Exception as exc:  # fail closed; do not forward filesystem/provider details
+        result['output'] = {'code': 'box_not_created', 'reason': type(exc).__name__}
+    if pending is not _ai.get('box_pending'):
+        return False
+    _ai.pop('box_pending', None)
+    pending['results'][pending['index']] = result
+    try:
+        workflow.record_results(pending['token'], pending['results'], scope[0])
+        _ai_start_turn(workflow.prepare(scope[0], continuation=True))
+    except ai_assistant.WorkflowUnavailable:
+        _ai_invalidate('box_continuation_failed')
+        _ai['state'].error = 'Box result recorded locally; provider continuation failed.'
+    _tag_redraw_bands()
+    return True
+
+
+class NARWHAL_OT_ai_box_approval(bpy.types.Operator):
+    bl_idname = 'narwhal.ai_box_approval'
+    bl_label = 'Create this box?'
+
+    def invoke(self, context, event):
+        self._pending = _ai.get('box_pending')
+        if self._pending is None:
+            return {'CANCELLED'}
+        return context.window_manager.invoke_props_dialog(self, width=440)
+
+    def draw(self, context):
+        proposal = self._pending['proposal']
+        args = proposal['arguments']
+        self.layout.label(text='One new world-aligned solid. Selected objects are not modified.')
+        self.layout.label(text='Origin (world XYZ): ' + ', '.join(f'{v:g}' for v in args['origin']))
+        self.layout.label(text='Size (X/Y/Z): ' + ' × '.join(f'{v:g}' for v in args['size'])
+                          + ' ' + proposal['expected']['units'])
+        self.layout.label(text='One Undo step: AI Box. Cancel creates nothing.')
+
+    def execute(self, context):
+        pending = getattr(self, '_pending', None)
+        if pending is None or not _ai_complete_box(True, pending):
+            return {'CANCELLED'}
+        return {'FINISHED'}
+
+    def cancel(self, context):
+        pending = getattr(self, '_pending', None)
+        if pending is not None:
+            _ai_complete_box(False, pending)
 
 
 def _ai_poll_transport():
@@ -5961,11 +6170,9 @@ def _ai_poll_transport():
         _ai.pop("transport_thread", None)
         outcome = workflow.finish(receipt, scope[0])
         if outcome["status"] == "tool_calls":
-            _ai_read_results(workflow, outcome, scope[0])
-            _ai_start_turn(workflow.prepare(scope[0], continuation=True))
-        elif outcome["status"] == "completed":
-            st.add_message("status", "Proposal-only assistant: no CAD changes were executed. New Chat cancels pending work.")
-        elif outcome["status"] != "stale":
+            if _ai_read_results(workflow, outcome, scope[0]):
+                _ai_start_turn(workflow.prepare(scope[0], continuation=True))
+        elif outcome["status"] not in ("completed", "stale"):
             st.add_message("status", st.error)
     except Exception as exc:  # noqa: BLE001 -- API/read boundary; no raw error data
         _ai_invalidate("workflow_failed")
@@ -5976,9 +6183,41 @@ def _ai_poll_transport():
     return 0.1 if st.extra.get("workflow") is not None else None
 
 
+def _ai_forget_metadata_permission():
+    _ai['metadata_permission_revoked'] = True
+    _ai_invalidate('metadata_permission_revoked')
+    try:
+        preferences.update({'ai_metadata_permission': {}})
+    except (OSError, ValueError):
+        return 'Sharing stopped for this session, but saved permission could not be cleared. Check settings-file access.'
+    _ai['state'].add_message('status', 'Workspace-sharing permission forgotten. The next message will ask again.')
+    _tag_redraw_bands()
+    return None
+
+
+def _ai_selection_context(scope):
+    """Snapshot current selection after consent, immediately before the native turn.
+
+    Python is the trusted Blender main-thread adapter. The shared reader bounds
+    metadata and Rust enforces the context byte budget and labels it untrusted.
+    No geometry, file bytes or inference about the user's intent is sent here.
+    """
+    from .automation_tools import ApplicationReader
+    if _ai.get('read_grant') != scope or _ai_scope() != scope:
+        raise ai_assistant.WorkflowUnavailable('selection_context_not_authorized')
+    reader = ApplicationReader(app_state, os.environ.get('NARWHAL3D_VERSION') or 'unknown')
+    context = {'selection': reader.read('narwhal.selection_summary', {}),
+               'components': reader.read('narwhal.components', {})}
+    if _ai_scope() != scope:
+        raise ai_assistant.WorkflowUnavailable('selection_context_stale')
+    return context
+
+
 def _ai_send():
     st = _ai["state"]
     scope = _ai_scope()
+    if _ai.get('box_pending') is not None:
+        return 'AI Assistant: approve or cancel the pending box first'
     if st.status == "sending":
         return "AI Assistant: a request is already in progress"
     if not st.provider.model:
@@ -5987,21 +6226,26 @@ def _ai_send():
     if not st.input_text.strip():
         st.error = "Type a message first."
         return "AI Assistant: type a message first"
-    if st.include_selection and _ai.get("read_grant") != scope:
-        st.error = "Confirm metadata reads, or turn off Include selection for text-only chat."
+    if (_preferences_ready and not _ai.get('metadata_permission_revoked')
+            and preferences.get('ai_metadata_permission') ==
+            ai_assistant.metadata_permission(scope[1])):
+        _ai['read_grant'] = scope
+    if _ai.get("read_grant") != scope:
+        st.error = "Confirm workspace metadata sharing before sending."
         bpy.ops.narwhal.ai_read_consent("INVOKE_DEFAULT")
         return "AI Assistant: awaiting read consent; nothing sent"
     try:
         workflow = st.extra.get("workflow")
         if workflow is None:
             workflow = ai_assistant.WorkflowSession(st, scope[0], allow_reads=_ai.get("read_grant") == scope)
-        _ai_start_turn(workflow.prepare(scope[0]))
+        _ai_start_turn(workflow.prepare(scope[0], context=_ai_selection_context(scope)))
+        _ai['chat_offset'] = 0
     except Exception as exc:  # noqa: BLE001 -- fail closed; never use legacy send_chat
         _ai_invalidate("workflow_failed")
         st.status = "error"
         st.error = "AI workflow unavailable (" + type(exc).__name__ + "). Check native installation or start New Chat."
         return st.error
-    return "AI Assistant: sending request (proposal only)"
+    return "AI Assistant: sending request"
 
 
 def _ai_shutdown():
@@ -6021,6 +6265,11 @@ def ai_panel_click(win_x, win_y, shift=False):
     x, y = win_x - rx, win_y - ry
     hit = ai_assistant.panel_hit(lay, x, y)
     st = _ai["state"]
+    _ai['chat_focus'] = _inside_box(x, y, lay['transcript'])
+    if _ai['chat_focus']:
+        st.focus = False
+        _tag_redraw_bands()
+        return 'transcript'
     if hit is None:
         if st.focus:
             st.focus = False
@@ -6030,13 +6279,11 @@ def ai_panel_click(win_x, win_y, shift=False):
     if kind == "input":
         ai_assistant.input_click(st, _ai["view"], x, y,
                                  _bug_measure(11.0 * _ui_scale()), shift)
-    elif kind == "context":
-        st.include_selection = not st.include_selection
-        _ai_invalidate("selection_toggle_changed")
-        _remember_preferences({'ai_include_selection': st.include_selection})
+
     elif ident == "new":
         _ai_invalidate("new_chat")
         st.new_chat()
+        _ai['chat_offset'] = 0
     elif ident == "settings":
         bpy.ops.narwhal.ai_settings("INVOKE_DEFAULT")
     else:
@@ -6106,21 +6353,17 @@ def _draw_bug_panel(shader, region, box):
     gpu.state.blend_set("ALPHA")
     try:
         t = lay["title"]
-        n_open = bugreport.count_open(bugreport.report_dir(_ROOT))
-        _draw_text(t[0], t[1] + 4 * sc, f"Reports: {n_open} open",
-                   fs + 1, ink)
-        for cid, r in lay["chips"]:
-            shader.bind()
-            on = cid == st.category
-            _draw_rect(shader, *r, blue if on else design.rgb01(design.CHIP_BG))
-            label = dict(bugreport.CATEGORIES)[cid]
-            _draw_text(r[0] + (r[2] - r[0] - _text_width(label, fs)) / 2,
-                       r[1] + 5 * sc, label, fs, design.rgb01(design.BAR_TEXT_STRONG) if on else ink)
+        _draw_text(t[0], t[1] + 3 * sc, "Bug Report", fs, design.rgb01(design.TEXT_MUTED))
+        r = lay['category']
+        shader.bind()
+        _draw_round_rect(shader, *r, 5*sc, design.rgb01(design.FIELD_BG),
+                         design.rgb01(design.BORDER))
+        _draw_text(r[0]+8*sc, r[1]+10*sc, dict(bugreport.CATEGORIES)[st.category], fs, ink)
+        _draw_text(r[2]-17*sc, r[1]+10*sc, "▾", fs, ink)
         b = lay["box"]
         shader.bind()
-        _draw_rect(shader, b[0] - 1, b[1] - 1, b[2] + 1, b[3] + 1,
-                   blue if st.focus else design.rgb01(design.BORDER_STRONG))
-        _draw_rect(shader, *b, design.rgb01(design.FIELD_BG))
+        _draw_round_rect(shader, *b, 5 * sc, design.rgb01(design.FIELD_BG),
+                         blue if st.focus else design.rgb01(design.BORDER))
         # the box is a real text field -- caret where you click, a
         # selection you can drag or Shift-extend. `bugreport.text_view` is the geometry
         # the click uses too, so the character drawn is the character hit.
@@ -6131,10 +6374,7 @@ def _draw_bug_panel(shader, region, box):
         first, rows, lh = view["first"], view["rows"], view["line_h"]
         base = view["top"] - lh + 3 * sc         # text baseline of the first row
         if not st.text and not st.focus:
-            hint = bugreport.wrap("Click here and type what went wrong, what you "
-                                  "expected, and how to make it happen. Ctrl+Enter "
-                                  "or Report saves it, copies it, and opens GitHub.",
-                                  view["width"], measure)
+            hint = bugreport.wrap("Describe the problem...", view["width"], measure)
             for i, ln in enumerate(hint[:rows]):
                 _draw_text(view["x0"], base - i * lh, ln, fs, design.rgb01(design.TEXT_MUTED))
         else:
@@ -6178,17 +6418,21 @@ def _draw_bug_panel(shader, region, box):
                        ink if enabled else design.rgb01(design.TEXT_DISABLED))
         for bid, r in lay["buttons"]:
             shader.bind()
-            _draw_rect(shader, *r, blue if bid == "submit" else design.rgb01(design.CHIP_BG))
-            label = {"submit": "Report", "clear": "Clear"}[bid]
-            _draw_text(r[0] + (r[2] - r[0] - _text_width(label, fs)) / 2,
-                       r[1] + 7 * sc, label, fs,
+            _draw_round_rect(shader, *r, 5 * sc,
+                             blue if bid == "submit" else design.rgb01(design.CHIP_BG),
+                             blue if bid == "submit" else design.rgb01(design.BORDER))
+            label = {"submit": "Submit report"}[bid]
+            _draw_centered_panel_text(r, label, fs,
                        design.rgb01(design.BAR_TEXT_STRONG) if bid == "submit" else ink)
-        if st.message:
-            sr = lay["status"]
-            for i, ln in enumerate(bugreport.wrap(st.message, sr[2] - sr[0],
-                                                  lambda t_: _text_width(t_, fs - 1))[:2]):
-                _draw_text(sr[0], sr[1] + 2 * sc - i * 12 * sc, ln, fs - 1,
-                           design.rgb01(design.TEXT_MUTED))
+        sr = lay['status']
+        shader.bind()
+        _draw_round_rect(shader, *sr, 4*sc, design.rgb01(design.CHIP_BG))
+        _draw_rect(shader, sr[0], sr[1], sr[0]+2*sc, sr[3], design.rgb01(design.BORDER_STRONG))
+        notice = st.message or 'Saved locally. Review on GitHub before submitting. Attachments are not uploaded.'
+        for i, ln in enumerate(bugreport.wrap(notice, max(1, sr[2]-sr[0]-16*sc),
+                                              lambda t_: _text_width(t_, fs - 1))[:4]):
+            _draw_text(sr[0]+8*sc, sr[3]-(i+1)*12*sc-2*sc, ln, fs-1,
+                       design.rgb01(design.TEXT_MUTED))
     finally:
         gpu.state.blend_set(prev)
 
@@ -6328,6 +6572,24 @@ def submit_bug_report():
     return st.message
 
 
+def _show_bug_category_menu():
+    """Existing keyboard-accessible shell popup backs the approved category select."""
+    state = _bug['state']
+    rx, ry = _bug['region']
+    rect = _bug['lay']['category']
+
+    def choose(action, explanation):
+        if _bug['state'] is not state or action not in dict(bugreport.CATEGORIES):
+            return
+        state.category = action
+        _tag_redraw_bands()
+
+    shell_popup.register()
+    shell_popup.open([{'label': label, 'action': ident, 'enabled': True}
+                      for ident, label in bugreport.CATEGORIES],
+                     (rx+rect[0], ry+rect[1]), 'Report category', choose, scale=_ui_scale())
+
+
 def bug_panel_click(win_x, win_y, shift=False):
     """A click while the Bug Report panel is showing. Returns what it did, or None.
 
@@ -6342,7 +6604,9 @@ def bug_panel_click(win_x, win_y, shift=False):
     did = bugreport.click(_bug["state"], lay, win_x - rx, win_y - ry,
                           view=_bug.get("view"), measure=_bug_measure(fs), shift=shift,
                           log_ok=sessionlog.available())
-    if did == "submit":
+    if did == "category_menu":
+        _show_bug_category_menu()
+    elif did == "submit":
         submit_bug_report()
     if did is not None:
         _tag_redraw_bands()
@@ -8950,6 +9214,13 @@ class NARWHAL_OT_command_input(Operator):
             if (st.active_command is not None and region is not None
                     and _at_selection_step(st.active_command)
                     and subobject.is_subobject_chord(shift=event.shift, ctrl=event.ctrl)):
+                component_route = getattr(st.active_command, 'begin_component_pick', None)
+                if (callable(getattr(st.active_command, 'begin_mouse_pick', None))
+                        and not (callable(component_route) and component_route())):
+                    st.active_command.invalidate_mouse_selection('interactive components are not implemented; use whole curves')
+                    st.log('Sweep1: interactive components are not implemented; use whole curves')
+                    self._redraw()
+                    return {'RUNNING_MODAL'}
                 # Ctrl+Shift picks a sub-object at a selection prompt; a command that
                 # takes sub-objects (`accepts_subobjects`) is then answered at once.
                 if _open_selection_choices(area, sp, region, event.mouse_x - region.x,
@@ -9889,7 +10160,7 @@ def _restore_user_preferences():
     settings = snap_settings()
     settings.enabled = set(stored['osnap_modes'])
     settings.disabled, settings.project = stored['osnap_disabled'], stored['osnap_project']
-    _ai['state'].include_selection = stored['ai_include_selection']
+    _ai['state'].include_selection = True  # Automatic, including old settings with False.
     if stored['ai_config']:
         _ai['state'].provider = ai_assistant.credential_status(
             ai_assistant.set_provider(**stored['ai_config']), os.environ)
@@ -10516,6 +10787,8 @@ def _tool_scroll_event(event):
 def _shell_chrome_event(event):
     """UI gets first refusal: a title/control click is never a modeling point."""
     if _tool_scroll_event(event):
+        return True
+    if _ai_transcript_event(event):
         return True
     if event.type in ('WHEELUPMOUSE', 'WHEELDOWNMOUSE'):
         if event.value != 'PRESS':
@@ -12183,6 +12456,7 @@ CLASSES = (
     NARWHAL_OT_ai_refresh_models,
     NARWHAL_OT_ai_settings,
     NARWHAL_OT_ai_read_consent,
+    NARWHAL_OT_ai_box_approval,
     NARWHAL_OT_track_mouse,
     NARWHAL_OT_osnap_toggle,
     NARWHAL_OT_osnap_flag,
@@ -16563,6 +16837,7 @@ def draw_point_markers():
     if rv3d is None:
         return
 
+    _draw_sweep_orientation_guides(area, region, rv3d)
     doc_pts = _document_point_locations()
     rows = _cp_rows()
     # The control polygon, dashed, joining each object's control points in order.
@@ -19769,8 +20044,114 @@ def sync_locked_selectability():
     return len(locked)
 
 
-def apply_selection(names, already_expanded=False):
+_sweep_guide_cache = {}
+
+
+def _sweep_direction_markers(region, rv3d, cmd):
+    """Project cached endpoint/tangent guide data; never evaluate a CAD curve here."""
+    from bpy_extras.view3d_utils import location_3d_to_region_2d
+    from mathutils import Vector
+    import math
+
+    getter = getattr(cmd, 'orientation_guides', None)
+    guides = getter() if callable(getter) else ()
+    markers = []
+    for index, (anchor, tip, label) in enumerate(guides):
+        a = location_3d_to_region_2d(region, rv3d, Vector(anchor))
+        b = location_3d_to_region_2d(region, rv3d, Vector(tip))
+        if a is None:
+            continue
+        dx, dy = (b.x-a.x, b.y-a.y) if b is not None else (0., 0.)
+        length = math.hypot(dx, dy)
+        dx, dy = (dx/length, dy/length) if length > 1e-6 else (0., 0.)
+        markers.append((index, a.x, a.y, dx, dy, label))
+    return markers
+
+
+def _draw_sweep_orientation_guides(area, region, rv3d):
+    import gpu
+    from gpu_extras.batch import batch_for_shader
+
+    cmd = app_state.active_command
+    getter = getattr(cmd, 'orientation_guides', None)
+    guides = getter() if callable(getter) else ()
+    if not guides:
+        _sweep_guide_cache.clear()
+        return 0
+    scale = _ui_scale()
+    key = (id(cmd), guides, tuple(v for row in rv3d.perspective_matrix for v in row),
+           region.width, region.height, scale)
+    pane = _pane_key(area)
+    shader = _uniform_color_shader()
+    if shader is None:
+        return 0
+    cached = _sweep_guide_cache.get(pane)
+    if cached is None or cached[0] != key:
+        markers = _sweep_direction_markers(region, rv3d, cmd)
+        lines = []
+        for _, x, y, dx, dy, _label in markers:
+            if dx or dy:
+                tx, ty = x+24*scale*dx, y+24*scale*dy
+                lines.extend(((x,y),(tx,ty),(tx,ty),(tx-7*scale*dx-4*scale*dy,ty-7*scale*dy+4*scale*dx),
+                              (tx,ty),(tx-7*scale*dx+4*scale*dy,ty-7*scale*dy-4*scale*dx)))
+        batch = batch_for_shader(shader, 'LINES', {'pos': lines}) if lines else None
+        if len(_sweep_guide_cache) > 8:
+            _sweep_guide_cache.clear()
+        cached = (key, markers, batch)
+        _sweep_guide_cache[pane] = cached
+    _, markers, batch = cached
+    blend, width = gpu.state.blend_get(), gpu.state.line_width_get()
+    gpu.state.blend_set('ALPHA'); gpu.state.line_width_set(2.)
+    try:
+        if batch is not None:
+            shader.bind(); shader.uniform_float('color', PREVIEW_COLOR); batch.draw(shader)
+        for _, x, y, _dx, _dy, label in markers:
+            radius = 6*scale
+            _draw_rect(shader, x-radius, y-radius, x+radius, y+radius, PREVIEW_COLOR)
+            _draw_text(x+9*scale, y+9*scale, label, size=13*scale, color=PREVIEW_COLOR)
+    finally:
+        gpu.state.line_width_set(width); gpu.state.blend_set(blend)
+    return len(markers)
+
+
+def _sweep_orientation_click(area, space, region, rx, ry, shift=False, ctrl=False):
+    cmd = app_state.active_command
+    if not getattr(cmd, '_aligning', False):
+        return False
+    if shift or ctrl:
+        cmd.invalidate_mouse_selection('direction alignment requires an unmodified marker click')
+        app_state.log('Sweep1: direction alignment requires an unmodified marker click')
+    else:
+        markers = _sweep_direction_markers(region, space.region_3d, cmd)
+        hits = [i for i,x,y,_dx,_dy,_label in markers if (x-rx)**2+(y-ry)**2 <= (12*_ui_scale())**2]
+        if len(hits) == 1:
+            app_state.log(cmd.reverse_section(hits[0], app_state.ctx))
+        elif len(hits) > 1:
+            app_state.log('Sweep1: direction markers overlap; change view to choose one explicitly')
+    redraw_cmdbar(); _tag_redraw_viewports()
+    return True
+
+
+def _sweep_selection_command():
+    cmd = app_state.active_command
+    active = getattr(cmd, 'mouse_selection_active', None)
+    return cmd if callable(active) and active() else None
+
+
+def _sweep_pick_context_probe(area):
+    # Viewport/CPlane API glue; no geometric construction or global selection state.
+    def current():
+        plane = get_cplane(area)
+        return (_pane_key(area) if area is not None else None,
+                tuple(plane.origin), tuple(plane.xaxis), tuple(plane.yaxis))
+    return current
+
+
+def apply_selection(names, already_expanded=False, *, input_origin=None):
     """Make exactly ``names`` the selection. Returns the names actually found."""
+    cmd = _sweep_selection_command()
+    if cmd is not None and input_origin != 'single-pick':
+        cmd.invalidate_mouse_selection()
     if already_expanded:
         return app_state.ctx.select_by_names(names, already_expanded=True)
     return app_state.ctx.select_by_names(names)
@@ -19829,10 +20210,10 @@ def narwhal_click_select(area, space, region, rx, ry, shift=False, ctrl=False):
         hit = pick_curve_object(area, space, region, rx, ry)
     if hit is None:
         hit = _pick_object_at(area, space, region, rx, ry)
-    return _select_object_hit(hit, shift=shift, ctrl=ctrl)
+    return _select_object_hit(hit, shift=shift, ctrl=ctrl, area=area)
 
 
-def _select_object_hit(hit, shift=False, ctrl=False):
+def _select_object_hit(hit, shift=False, ctrl=False, area=None):
     global _last_click_hit
     if not (shift or ctrl):
         clear_subobject_selection()
@@ -19845,8 +20226,33 @@ def _select_object_hit(hit, shift=False, ctrl=False):
     # its still-selected partners.
     if hits:
         hits = app_state.ctx.expand_group_names(hits)
+    cmd = _sweep_selection_command()
+    pick = None
+    previous_stamp = None
+    if cmd is not None:
+        from . import curve_inputs
+        previous_stamp = curve_inputs.selection_stamp(app_state.model)
+        try:
+            if hit and len(hits) == 1:
+                pick = curve_inputs.capture_display_pick(app_state.model, hit)
+                cmd.begin_mouse_pick(app_state.ctx, pick,
+                                     _sweep_pick_context_probe(area or active_pane_area()))
+        except (ValueError, RuntimeError) as exc:
+            cmd.invalidate_mouse_selection(str(exc))
     wanted = select.apply(selection_names(), hits, action)
-    apply_selection(wanted, already_expanded=True)
+    if cmd is None:
+        apply_selection(wanted, already_expanded=True)
+    else:
+        apply_selection(wanted, already_expanded=True, input_origin='single-pick')
+        if app_state.active_command is cmd:
+            try:
+                ids = ([] if len(hits) > 1 or (cmd._mouse_sequence.error and action != select.REPLACE) else
+                       [curve_inputs.display_object_id(app_state.model, name) for name in selection_names()])
+                cmd.observe_mouse_selection(app_state.ctx, pick, ids, action, previous_stamp,
+                                            batch=len(hits) > 1)
+            except (ValueError, RuntimeError) as exc:
+                cmd.invalidate_mouse_selection(str(exc))
+        redraw_cmdbar()
     _tag_redraw_viewports()
     return wanted
 
@@ -19980,6 +20386,13 @@ def _answer_objects_step_with_click(area, space, region, rx, ry):
     idx = getattr(cmd, "step_index", 0)
     if idx >= len(steps) or steps[idx][1] != commands.OBJECTS:
         return None
+    if cmd is _sweep_selection_command():
+        # The UUID/content was captured by the actual pick before selection
+        # callbacks; a name feed here would discard that acceptance identity.
+        app_state.history.append("> " + hit)
+        before = len(app_state.history)
+        app_state.feed_line('')
+        return app_state.history[-1] if len(app_state.history) > before else None
     where = object_pick_location(area, space, region, rx, ry, hit)
     picks = dict(getattr(cmd, "pick_points", None) or {})
     if where is not None:
@@ -20832,7 +21245,7 @@ def _open_selection_choices(area, space, region, rx, ry, mode, shift=False, ctrl
             if set(selected).difference(before) and single and getattr(cmd, 'accepts_subobjects', False):
                 app_state.feed_line('')
         else:
-            _select_object_hit(hit[0], shift=shift, ctrl=ctrl)
+            _select_object_hit(hit[0], shift=shift, ctrl=ctrl, area=area)
             if cmd is not None and not (shift or ctrl):
                 _answer_objects_step_with_click(area, space, region, rx, ry)
         redraw_cmdbar()
@@ -20862,6 +21275,15 @@ def _sel_drag_end():
     x0, y0 = st["start"]
     x1, y1 = st["now"]
     shift, ctrl = st["shift"], st["ctrl"]
+
+    if getattr(app_state.active_command, '_aligning', False):
+        if not st.get('active') or select.is_click(x0,y0,x1,y1):
+            _sweep_orientation_click(area,space,region,x0,y0,shift=shift,ctrl=ctrl)
+        else:
+            app_state.active_command.invalidate_mouse_selection('direction alignment does not accept batch selection')
+            app_state.log('Sweep1: direction alignment does not accept batch selection')
+            redraw_cmdbar()
+        return selection_names(), None
 
     if not st.get("active") or select.is_click(x0, y0, x1, y1):
         cmd = app_state.active_command

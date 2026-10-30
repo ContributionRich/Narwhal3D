@@ -155,7 +155,9 @@ def bounding_frame(geoms, counts, degrees):
     axes, out_counts, out_degrees = [], [], []
     for d in range(3):
         axis = [0.0, 0.0, 0.0]
-        if size[d] <= 1e-9 * extent:
+        # Only an exactly flat axis can collapse without moving the rest geometry.
+        # Small but nonzero thickness is still manufacturing geometry, not tolerance noise.
+        if size[d] == 0.0:
             out_counts.append(1)
             out_degrees.append(0)
         else:

@@ -74,10 +74,10 @@ check("AI Assistant is directly beneath Bug Report",
 check("Layers is the authored default",
       rp.DEFAULT_TAB == 0 and rp.TABS[rp.DEFAULT_TAB].name == "Layers")
 panel_icons = {t.icon for t in rp.TABS}
-check("tabs use the exact approved legacy Layers/Report and v4 Properties/Display/AI icons",
-      panel_icons == {"narwhal-panel-layers.png", "narwhal-panel-report.png",
-                      "v4-panel-properties.png", "v4-panel-display.png",
-                      "v4-panel-ai-assistant.png"}
+check("tabs use the exact approved v4.4 inspector icons",
+      panel_icons == {"generated-panel-layers.png", "generated-panel-bug-report.png",
+                      "generated-panel-properties.png", "generated-panel-display.png",
+                      "generated-panel-ai-assistant.png"}
       and all(rp.toolbars.icon_path(name) for name in panel_icons))
 check("icon filenames are distinct",
       len(panel_icons) == len(rp.TABS))

@@ -561,7 +561,7 @@ MUTATIONS = (
     ("missing master", "missing = declared == kernel.ANALYTIC_MASTER and not master_present", "missing = False"),
     ("local layer visibility", '"visible_local": bool(layer.Visible)', '"visible_local": True'),
     ("unknown components", 'return {"available": False, "reason": reason}', 'return {"available": True, "reason": reason}'),
-    ("callback bounded", "self._component_snapshot(limit=MAX_PAGE)", "self._component_snapshot(limit=10000)"),
+    ("callback bounded", "snapshot_reader(limit=MAX_PAGE)", "snapshot_reader(limit=10000)"),
     ("callback row bound", 'len(snapshot["components"]) > MAX_PAGE', 'False'),
     ("canonical component type", 'entry["component_type"] not in COMPONENT_TYPES', 'False'),
     ("component index boolean", 'type(entry["component_index"]) is not int', 'not isinstance(entry["component_index"], int)'),
@@ -585,7 +585,7 @@ MUTATIONS = (
     ("workspace null unavailable", 'if value is None:\n            return self._unavailable("workspace_snapshot_unavailable")',
      'if False:\n            return self._unavailable("workspace_snapshot_unavailable")'),
     ("workspace callback provenance", 'self._provenance("workspace_snapshot")', 'self._provenance("invented_context")'),
-    ("workspace callback once", 'snapshot = self._workspace_snapshot()', 'snapshot = self._workspace_snapshot(); self._workspace_snapshot()'),
+    ("workspace callback once", 'snapshot = snapshot_reader()', 'snapshot = snapshot_reader(); snapshot_reader()'),
     ("main thread", "threading.current_thread() is not threading.main_thread()", "False"),
 )
 

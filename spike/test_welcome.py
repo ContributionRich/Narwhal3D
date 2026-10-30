@@ -233,7 +233,8 @@ check('NARWHAL3D_VERSION' in rust
 check('asset.digest.as_deref().and_then(parse_sha256)' in rust
       and 'if !digest_matches(&actual, &expected)' in rust
       and 'download sha256 does not match GitHub' in rust
-      and 'Download and install' in rust,
+      and 'Download update' in rust
+            and 'self.update_status != UpdateStatus::Available' in rust,
       "installation is user-triggered and requires GitHub's exact sha256 asset digest")
 check('APPIMAGE' in rust
       and 'fs::rename(&staged, &target)' in rust
@@ -252,10 +253,11 @@ check('WINDOWS_UPDATER_SCRIPT' in rust
       and 'Invoke-Expression' not in production_rust
       and '.arg(&target)' in rust,
       "Windows schedules a literal-argument post-exit portable-package replacement")
-check('ui.hyperlink_to("Open release page"' in rust
+check('ui.hyperlink_to("View releases"' in rust
       and 'Update failed safely. Download it from the release page.' in rust
-      and 'self.start_install(release.clone())' in rust,
-      "News shows an explicit update action and a safe manual-release fallback")
+      and 'self.start_install(release)' in rust
+      and 'RichText::new("Version")' in rust,
+      "Version shows a genuine update action and a safe manual-release fallback")
 check("impl Drop for WelcomeApp" in rust and "child.try_wait()" in rust
       and "std::process::exit(code)" in rust,
       "native supervisor cancels abandoned children and propagates runtime failures")
@@ -286,7 +288,7 @@ check("welcome-drag" not in rust
       and 'self.send_request("open-dialog"' not in top_tabs
       and all(unit in rust for unit in welcome_units)
       and 'self.submit_and_hide("new", Some(unit), ui.ctx())' in rust
-      and 'Button::new("Choose a model…")' in rust
+      and 'Button::new(RichText::new("Choose a model…")' in rust
       and 'ui.heading("Narwhal 3D")' in rust,
       "New, Open and About controls have unobstructed authored actions")
 check("progress_state(self.ready" in rust

@@ -46,6 +46,7 @@ DEFAULTS = {
     "osnap_project": False,
     "ai_config": {},
     "ai_include_selection": True,
+    "ai_metadata_permission": {},
     "print_settings": {},
 }
 _ENUMS = {
@@ -130,6 +131,17 @@ def _validate(key, value):
         if any(type(mode) is not str or mode not in _OSNAP_MODES for mode in value):
             raise ValueError("invalid osnap mode")
         return list(dict.fromkeys(value))
+    if key == "ai_metadata_permission":
+        if not value:
+            return {}
+        fields = {'version', 'provider_id', 'endpoint', 'credential_env', 'allow_insecure_remote'}
+        if set(value) != fields or type(value['version']) is not int or value['version'] != 1:
+            raise ValueError('invalid metadata permission')
+        config = _ai_config({k: v for k, v in value.items() if k != 'version'})
+        expected = ai_assistant.metadata_permission(ai_assistant.set_provider(**config))
+        if expected != value:
+            raise ValueError('metadata permission must use a canonical endpoint')
+        return expected
     if key == "ai_config":
         return _ai_config(value)
     if key == "print_settings":

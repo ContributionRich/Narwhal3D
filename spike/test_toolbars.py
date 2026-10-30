@@ -347,9 +347,11 @@ expected_v4 = {
     "v4-viewport-maximize.png", "v4-viewport-restore.png",
 }
 check(toolbars.V4_ICON_NAMES == expected_v4, "v4 allowlist is exactly the five approved icons")
-check(bundled == set(data.ICON_NAMES) | expected_v4,
-      "runtime icon directory exactly matches legacy manifest plus five v4 assets",
-      sorted(bundled ^ (set(data.ICON_NAMES) | expected_v4)))
+expected_v44 = set(toolbars.ui_icon_data.PNG_NAMES)
+check(len(expected_v44) == 83, "v4.4 adds exactly 82 pictograms plus the narwhal reply mark")
+check(bundled == set(data.ICON_NAMES) | expected_v4 | expected_v44,
+      "runtime icons exactly match legacy, v4 and approved v4.4 manifests",
+      sorted(bundled ^ (set(data.ICON_NAMES) | expected_v4 | expected_v44)))
 check(all(toolbars.icon_path(name) and png_size(toolbars.icon_path(name)) == (96, 96)
           for name in expected_v4), "all five v4 icons resolve as 96x96 PNGs")
 resolved = [toolbars.icon_path(name) for name in sorted(data.ICON_NAMES)]

@@ -993,8 +993,8 @@ class _SweepCmd(Command):
     def _build(self, rails, section):
         raise NotImplementedError
 
-    def execute(self, ctx):
-        got = self._curves(ctx)
+    def execute(self, ctx, *, resolved=None):
+        got = self._curves(ctx) if resolved is None else resolved
         if isinstance(got, str):
             return f"{self.name}: {got}. Nothing was created.", True
         rails, section = got
@@ -1015,9 +1015,10 @@ class _SweepCmd(Command):
 class Sweep1Cmd(_SweepCmd):
     """Sweep1 keeps the established single-section Freeform/Roadlike routes.
 
-    OURS bounded multi-section Freeform accepts two to four already-oriented whole
-    curves in explicit typed traversal order. No component-generation or arbitrary
-    profile/seam solver is available; unsupported inputs refuse without fallback.
+    Bounded multi-section Freeform accepts two to four whole curves in typed order
+    or an individually accepted mouse sequence. Mouse input offers an explicit
+    Align cross sections marker stage; typed entry keeps its established behavior.
+    No component-generation or arbitrary profile/seam solver is available.
     """
     name = "Sweep1"
     description = "Sweep cross-section curves along one rail into a smooth surface."
@@ -1035,7 +1036,20 @@ class Sweep1Cmd(_SweepCmd):
         super().__init__()
         self.style = "Freeform"
         self._accepted_sources = {}
+        self._multi_source_errors = {}
         self._source_environment = None
+        self._mouse_sequence = curve_inputs.PickSequence()
+        self._pick_context_probe = None
+        self._pick_context = None
+        self._mouse_used = False
+        self._legacy_component_mode = False
+        self._aligning = False
+        self._direction_cache = ()
+        self._orientation_guides = ()
+        self._section_reverse = None
+        self._direction_error = None
+        self._mixed_input_error = None
+        self._alignment_selection_stamp = None
 
     def _capture_source(self, ctx, ref):
         # Keep the legacy component/single-section route unchanged. Components
@@ -1043,16 +1057,20 @@ class Sweep1Cmd(_SweepCmd):
         if ref in self._accepted_sources:
             return
         try:
-            if not isinstance(ref, str):
-                raise ValueError("multi-section components are not implemented yet; use whole curves")
-            owners = [o for o in ctx.model.file.Objects
-                      if (o.Attributes.Name or "").lower() == ref.lower()]
-            if len(owners) != 1:
-                raise ValueError(f"source {ref}: missing or ambiguous same-name owners")
-            owner = owners[0]
-            curve = curve_inputs.resolve(ctx, ref)
+            if isinstance(ref, curve_inputs.WholeCurvePick):
+                owner = ctx.model.file.Objects.FindId(ref.object_id)
+                curve = curve_inputs.resolve(ctx, ref)
+            else:
+                if not isinstance(ref, str):
+                    raise ValueError("multi-section components are not implemented yet; use whole curves")
+                owners = [o for o in ctx.model.file.Objects
+                          if (o.Attributes.Name or "").lower() == ref.lower()]
+                if len(owners) != 1:
+                    raise ValueError(f"source {ref}: missing or ambiguous same-name owners")
+                owner = owners[0]
+                curve = curve_inputs.resolve(ctx, ref)
             if curve.IsClosed or curve.IsPeriodic:
-                raise ValueError("multi-section closed/periodic sources are not implemented yet")
+                self._multi_source_errors[ref] = "multi-section closed/periodic sources are not implemented yet"
             self._accepted_sources[ref] = (str(owner.Attributes.Id), bridge._freeform_source_hash(curve))
         except Exception as exc:
             self._accepted_sources[ref] = str(exc)
@@ -1069,25 +1087,160 @@ class Sweep1Cmd(_SweepCmd):
                 settings.ModelRelativeTolerance, settings.ModelAngleToleranceRadians,
                 model.current_layer_index)
 
+    def begin_component_pick(self):
+        # Preserve the existing exact single-section component route; it must not
+        # participate in whole-curve chronology or claim multi-section authority.
+        if self._mouse_used or self._aligning:
+            return False
+        self._legacy_component_mode = True
+        return True
+
+    def mouse_selection_active(self):
+        return (not self._legacy_component_mode and self.step_index < 2
+                and getattr(self, 'pending_option', None) is None)
+
+    def begin_mouse_pick(self, ctx, pick, context_probe):
+        # UI event orchestration only. Capture BEFORE selection callbacks can edit
+        # or replace the source/document, never reconstruct identity at Enter.
+        if self._pending_multi:
+            self._mixed_input_error = "do not mix typed and mouse section entry; Esc and restart using one route"
+            return
+        self._mouse_used = True
+        if self._pick_context_probe is None:
+            self._pick_context_probe = context_probe
+            self._pick_context = context_probe()
+        if pick is not None:
+            self._capture_source(ctx, pick)
+
+    def invalidate_mouse_selection(self, reason="whole-object selection order is ambiguous; use individual picks or typed names"):
+        if self._aligning:
+            self._direction_error = reason
+        elif self.mouse_selection_active() and not self._pending_multi:
+            self._mouse_sequence.invalidate(reason)
+
+    def observe_mouse_selection(self, ctx, pick, selected_ids, action, previous_stamp, batch=False):
+        if self._pending_multi:
+            return
+        self._mouse_sequence.observe(pick, selected_ids, curve_inputs.selection_stamp(ctx.model),
+                                     action, batch=batch, previous_stamp=previous_stamp)
+
+    def _selection_refs(self, ctx):
+        sequence = self._mouse_sequence
+        if sequence.error:
+            raise curve_inputs.CurveInputError(sequence.error)
+        if sequence.stamp is not None:
+            stamp = curve_inputs.selection_stamp(ctx.model)
+            if stamp is not sequence.stamp:
+                raise curve_inputs.CurveInputError("whole-object selection order is ambiguous; selection was replaced or restored")
+            objects = ctx.selected_objects()
+            if len(objects) > 4:
+                raise curve_inputs.CurveInputError("bounded Freeform supports at most four selected sections")
+            ids = [curve_inputs.display_object_id(ctx.model, obj.name) for obj in objects]
+            return sequence.accepted(ids, stamp)
+        return super()._selection_refs(ctx)
+
+    def _clear_selection(self, ctx):
+        super()._clear_selection(ctx)
+        self._mouse_sequence = curve_inputs.PickSequence()
+
     def _feed_objects_step(self, text, ctx):
+        if not text and self._mouse_used and self._selected_subobjects(ctx):
+            return "Sweep1: interactive components are not implemented; use whole curves", False
         result = super()._feed_objects_step(text, ctx)
         if self.step_index == 1 and self.args:
             self._capture_source(ctx, self.args[0])
         return result
 
     def _feed_objects_multi_step(self, text, ctx):
+        if not text and not self._pending_multi and (self._mouse_used or self._aligning) and self._selected_subobjects(ctx):
+            return "Sweep1: interactive components are not implemented; use whole curves", False
+        if self._mixed_input_error:
+            return f"Sweep1: {self._mixed_input_error}", False
+        if self._aligning:
+            if text:
+                return "Sweep1: click a direction marker to align sections; Enter to sweep or Esc to cancel", False
+            return self.execute(ctx)
         if text:
+            if self._mouse_sequence.picks:
+                return "Sweep1: mouse sections are already accepted; use Enter or Esc before typed entry", False
             self._capture_source(ctx, text)
         elif not self._pending_multi and not self._selected_subobjects(ctx):
-            refs = self._selection_refs(ctx)
-            if len(refs) > 1:
+            try:
+                refs = self._selection_refs(ctx)
+            except curve_inputs.CurveInputError as exc:
+                return f"Sweep1: {exc}", False
+            if len(refs) > 1 and not all(isinstance(ref, curve_inputs.WholeCurvePick) for ref in refs):
                 return ("Sweep1: whole-object selection order is ambiguous; type each "
                         "section name in traversal order, then press Enter"), False
             for ref in refs:
                 self._capture_source(ctx, ref)
+            if 2 <= len(refs) <= 4 and self.style == "Freeform" and all(
+                    isinstance(ref, curve_inputs.WholeCurvePick) for ref in refs):
+                return self._begin_alignment(ctx, refs)
         return super()._feed_objects_multi_step(text, ctx)
 
-    def _resolve_accepted_sources(self, ctx, refs):
+    def _begin_alignment(self, ctx, refs):
+        # MEASURED Sweep1 help: Align cross sections allows direction reversal.
+        # OURS: compact marker presentation, not a claim of reference dialog identity.
+        # Python only snapshots exact curve endpoint/tangent API values for display.
+        stack = getattr(ctx, 'undo', None)
+        record = getattr(stack, '_open', None)
+        previous = record.before if record is not None else None
+        file = ctx.model.file
+        baseline = ctx.model.snapshot()
+        try:
+            if record is None or not stack.enabled:
+                raise ValueError("bounded Freeform requires an active Undo record")
+            _, curves = self._resolve_accepted_sources(ctx, (self.args[0], *refs))
+            cache = []
+            for curve in curves[1:]:
+                ends = []
+                for parameter, sign in ((curve.Domain.T0, 1.), (curve.Domain.T1, -1.)):
+                    p, tangent = curve.PointAt(parameter), curve.TangentAt(parameter)
+                    point = (p.X, p.Y, p.Z)
+                    tip = (p.X + sign*tangent.X, p.Y + sign*tangent.Y, p.Z + sign*tangent.Z)
+                    ends.append((point, tip))
+                cache.append(tuple(ends))
+            self.args.append(list(refs))
+            self.steps = list(self.steps) + [(
+                "Align cross sections: click direction markers. Enter to sweep:", OBJECTS_MULTI)]
+            self.step_index = 2
+            self._clear_selection(ctx)
+            self._alignment_selection_stamp = curve_inputs.selection_stamp(ctx.model)
+            self._resolve_accepted_sources(ctx, (self.args[0], *refs))
+            self._direction_cache = tuple(cache)
+            self._section_reverse = [False] * len(refs)
+            self._aligning = True
+            self._refresh_orientation_guides()
+            return "Sweep1: Align cross sections -- click a marker to reverse its direction", False
+        except Exception as exc:
+            from .state import app_state
+            return f"Sweep1: {exc}. Nothing was created.", app_state.active_command is self
+        finally:
+            # Selection callbacks may carry independent edits. Preserve the existing
+            # rollback/history rules even though this new stage creates no geometry.
+            ctx._settle_failed_publication(record, previous, file, baseline)
+
+    def _refresh_orientation_guides(self):
+        self._orientation_guides = tuple(
+            (*ends[int(reverse)], str(i+1) + (' R' if reverse else ''))
+            for i, (ends, reverse) in enumerate(zip(self._direction_cache, self._section_reverse)))
+
+    def orientation_guides(self):
+        return self._orientation_guides if self._aligning else ()
+
+    def reverse_section(self, index, ctx):
+        if not self._aligning or type(index) is not int or not 0 <= index < len(self._section_reverse):
+            return "Sweep1: no supported section direction at this marker"
+        try:
+            self._resolve_accepted_sources(ctx, (self.args[0], *self.args[1]))
+        except Exception as exc:
+            return f"Sweep1: {exc}. Direction unchanged."
+        self._section_reverse[index] = not self._section_reverse[index]
+        self._refresh_orientation_guides()
+        return f"Sweep1: section {index+1} direction {'reversed' if self._section_reverse[index] else 'original'}"
+
+    def _resolve_accepted_sources(self, ctx, refs, require_freeform=True):
         from .state import app_state
 
         env = self._source_environment
@@ -1098,10 +1251,18 @@ class Sweep1Cmd(_SweepCmd):
                 or state.model is not model or ctx.model is not model or model.file is not file
                 or state.active_command is not self or state.doc_path != path or model.path != model_path):
             raise ValueError("stale or cancelled Freeform command/document")
-        if self._source_settings(model) != settings or self.style != "Freeform":
+        if self._alignment_selection_stamp is not None and curve_inputs.selection_stamp(model) is not self._alignment_selection_stamp:
+            raise ValueError("selection changed or was restored during direction alignment")
+        if self._direction_error:
+            raise ValueError(self._direction_error)
+        if self._pick_context_probe is not None and self._pick_context_probe() != self._pick_context:
+            raise ValueError("stale Freeform pick CPlane/viewport changed")
+        if self._source_settings(model) != settings or (require_freeform and self.style != "Freeform"):
             raise ValueError("Freeform units/tolerance/layer or frame style changed")
         ids, curves = [], []
         for ref in refs:
+            if require_freeform and ref in self._multi_source_errors:
+                raise ValueError(self._multi_source_errors[ref])
             accepted = self._accepted_sources.get(ref)
             if not isinstance(accepted, tuple):
                 raise ValueError(accepted or "multi-section components are not implemented yet; use whole curves")
@@ -1121,15 +1282,26 @@ class Sweep1Cmd(_SweepCmd):
     def execute(self, ctx):
         sections = self.args[1] if len(self.args) > 1 else []
         if len(sections) <= 1:
+            if self._mouse_used and len(sections) == 1:
+                try:
+                    _ids, curves = self._resolve_accepted_sources(
+                        ctx, (self.args[0], *sections), require_freeform=False)
+                except Exception as exc:
+                    from .state import app_state
+                    return f"Sweep1: {exc}. Nothing was created.", app_state.active_command is self
+                # The builder must use the UUID/content we just validated, not
+                # resolve a typed name again after a rename or name reuse.
+                detached = [curve_inputs._detached(curve) for curve in curves]
+                return super().execute(ctx, resolved=([detached[0]], detached[1]))
             return super().execute(ctx)
         if self.style != "Freeform" or not 2 <= len(sections) <= 4:
             return (f"Sweep1: {self.style} with {len(sections)} cross-sections is not implemented yet; "
                     "bounded Freeform supports two to four. Nothing was created."), True
         refs = (self.args[0], *sections)
         for ref in refs:
-            if not isinstance(ref, str):
+            if not isinstance(ref, (str, curve_inputs.WholeCurvePick)):
                 return "Sweep1: multi-section components are not implemented yet; use whole curves", True
-            error = self._accepted_sources.get(ref)
+            error = self._multi_source_errors.get(ref) or self._accepted_sources.get(ref)
             if isinstance(error, str):
                 return f"Sweep1: {error}. Nothing was created.", True
         out = None
@@ -1151,7 +1323,8 @@ class Sweep1Cmd(_SweepCmd):
                 raise ValueError("Freeform document precision is tighter than supported [1e-9, 1e-3]")
             tolerance = min(1e-7, required)
             out = bridge.sweep1_freeform_from_sources(
-                curves[0], curves[1:], source_ids=ids, resolve_sources=resolve, tolerance=tolerance)
+                curves[0], curves[1:], source_ids=ids, resolve_sources=resolve, tolerance=tolerance,
+                **({'reverse': list(self._section_reverse)} if self._section_reverse is not None else {}))
             master = kernel.master_of(out)
             resolve()
             _, display = ctx.add_geometry(out, "Sweep", publication_check=resolve)

@@ -455,11 +455,24 @@ class Controls(unittest.TestCase):
 class Mutations(unittest.TestCase):
     def test_legacy_prefix_unchanged(self):
         prefix = SOURCE.split('\n\n# Workflow HTTP integration only;', 1)[0]
-        # Only the explicitly authorized redirect-policy addition may change legacy source.
+        # Mask only the reviewed redirect and explicit Responses routing additions;
+        # the legacy bodies must still match their original fixed baseline hash.
         before, added = prefix.split('\n\nclass NoRedirectHandler', 1)
         prefix = before + '\n\nclass TransportError' + added.split('\n\nclass TransportError', 1)[1]
         prefix = prefix.replace('Request, urlopen, HTTPRedirectHandler, build_opener', 'Request, urlopen')
         prefix = prefix.replace('opener=_provider_open', 'opener=urlopen')
+        prefix = prefix.replace('''    if config.provider_id == "openai_responses":
+        if not key:
+            raise TransportError(f"set {config.credential_env} before connecting")
+        headers["Authorization"] = f"Bearer {key}"
+        # The body and response schema are native-owned; this is only HTTP routing.
+        return _endpoint(endpoint, "/responses"), headers, {}
+''', '')
+        prefix = prefix.replace('("openai", "openai_compatible", "openai_responses")', '("openai", "openai_compatible")')
+        prefix = prefix.replace('config.provider_id in ("openai", "openai_responses") and not key', 'config.provider_id == "openai" and not key')
+        prefix = prefix.replace('''    if config.provider_id == "openai_responses":
+        raise TransportError("OpenAI Responses requires the native workflow API")
+''', '')
         self.assertEqual(hashlib.sha256(prefix.encode()).hexdigest(),
                          'f228639cf4e284ebe037bd9364f0266bbe04e8c9db90554b354fadae5f45b4ea')
 

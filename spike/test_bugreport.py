@@ -55,9 +55,9 @@ check(all(meas(ln) <= 70 for ln in lines) and "" in lines,
 check(br.wrap("", 70, meas) == [""], "empty text wraps to one empty line")
 
 lay = br.layout((0, 0, 200, 600))
-for cid, r in lay["chips"]:
-    check(br.hit(lay, (r[0] + r[2]) / 2, (r[1] + r[3]) / 2) == ("chip", cid),
-          f"the {cid} chip is hit at its centre")
+r = lay['category']
+check(br.hit(lay, (r[0]+r[2])/2, (r[1]+r[3])/2) == ('category', None),
+      'the category dropdown is hit at its centre')
 b = lay["box"]
 st = br.ReportState()
 check(br.click(st, lay, (b[0] + b[2]) / 2, (b[1] + b[3]) / 2) == "focus" and st.focus,
@@ -67,48 +67,36 @@ check(br.click(st, lay, (sub[0] + sub[2]) / 2, (sub[1] + sub[3]) / 2) == "submit
       "the Submit button submits")
 check(br.click(st, lay, 1000, 1000) == "blur" and not st.focus,
       "a click off the panel takes the focus away")
-check(b[3] > b[1] + 100 and lay["chips"][0][1][1] > b[3] and sub[3] < b[1],
-      "layout: chips above the box, buttons below it, box tall")
+check(b[3] > b[1] + 100 and lay['category'][1] > b[3] and sub[3] < b[1],
+      'layout: dropdown above the editor, submit below, editor tall')
 
-# The compact panel can be about 160 px wide, where fixed three-column chips truncate
-# labels. Category chips therefore wrap and size from their measured text.
-check(dict(br.CATEGORIES).get("missing") == "Missing feature" and len(br.CATEGORIES) == 4,
-      "a fourth category, Missing feature, beside Bug / Behavior / Idea",
-      f"{br.CATEGORIES}")
-m7 = lambda t: 7.0 * len(t)            # noqa: E731  (~the panel font at 11 px)
+# The approved select uses one full-width row even in the narrow dock. The
+# old chip-packing helper remains covered independently for compatibility callers.
+check(dict(br.CATEGORIES).get('missing') == 'Missing feature' and len(br.CATEGORIES) == 4,
+      'all four report categories remain available')
+m7 = lambda t: 7.0 * len(t)
 for width in (160, 230, 700):
     lw = br.layout((0, 0, width, 600), measure=m7)
-    chips = lw["chips"]
-    labels = dict(br.CATEGORIES)
-    fits = all(m7(labels[c]) <= (r[2] - r[0]) for c, r in chips)
-    inside = all(r[0] >= 0 and r[2] <= width for _c, r in chips)
-    overlap = any(not (a[2] <= b_[0] or b_[2] <= a[0] or a[3] <= b_[1] or b_[3] <= a[1])
-                  for i, (_c, a) in enumerate(chips) for _d, b_ in chips[i + 1:])
-    box_ = lw["box"]
-    check(fits and inside and not overlap
-          and all(r[1] > box_[3] for _c, r in chips) and box_[3] > box_[1] + 100,
-          f"{width} px wide: every chip label fits its chip, nothing overlaps or leaves the "
-          f"panel, and the text box sits below all of them",
-          f"{[(c, round(r[2] - r[0]), m7(labels[c])) for c, r in chips]}")
-    for cid, r in chips:
-        if br.hit(lw, (r[0] + r[2]) / 2, (r[1] + r[3]) / 2) != ("chip", cid):
-            check(False, f"{width} px: the {cid} chip is hit at its centre")
-rows = lambda lw: len({round(r[1]) for _c, r in lw["chips"]})   # noqa: E731
-_l160 = br.layout((0, 0, 160, 600), measure=m7)
-_right = {}
-for _c, r in _l160["chips"]:
-    _right[round(r[1])] = max(_right.get(round(r[1]), 0), r[2])
-check(all(abs(v - (160 - 6)) < 1e-6 for v in _right.values()),
-      "each row of chips fills the panel width (no ragged right edge)", f"{_right}")
-check(rows(br.layout((0, 0, 700, 600), measure=m7)) == 1
-      and rows(br.layout((0, 0, 160, 600), measure=m7)) > 1,
-      "one row when there is room; extra rows only when a label would be cut off")
-st = br.ReportState()
-mr = dict(br.layout((0, 0, 160, 600), measure=m7)["chips"])["missing"]
-check(br.click(st, br.layout((0, 0, 160, 600), measure=m7),
-               (mr[0] + mr[2]) / 2, (mr[1] + mr[3]) / 2) == "category:missing"
-      and st.category == "missing",
-      "clicking Missing feature selects it")
+    rect = lw['category']
+    box_ = lw['box']
+    check(rect[0] == 11 and rect[2] == width-11 and rect[3]-rect[1] == 31,
+          f'{width}px dropdown fills the panel width without clipping')
+    check(all(m7(label) <= rect[2]-rect[0]-24 for _, label in br.CATEGORIES),
+          f'{width}px every category label fits with the chevron')
+    check(rect[1] > box_[3] and box_[3] > box_[1]+100,
+          f'{width}px dropdown and editor do not overlap')
+    check(br.hit(lw, (rect[0]+rect[2])/2, (rect[1]+rect[3])/2) == ('category', None),
+          f'{width}px dropdown has a live hit target')
+    check([bid for bid, _ in lw['buttons']] == ['submit']
+          and lw['buttons'][0][1][2]-lw['buttons'][0][1][0] == width-22,
+          f'{width}px one full-width Submit report action')
+    state = br.ReportState(focus=True)
+    check(br.click(state, lw, (rect[0]+rect[2])/2, (rect[1]+rect[3])/2) == 'category_menu'
+          and not state.focus, f'{width}px category select transfers editor focus to popup')
+    packed = br.chip_rows(width-22, [label for _, label in br.CATEGORIES], m7, 8, 4)
+    check(sum(len(row) for row in packed) == 4, 'compatibility chip helper retains every category')
+    check(all(abs(row[-1][1]+row[-1][2]-(width-22)) < 1e-6 for row in packed),
+          'compatibility chip rows still fill their supplied width')
 check("## #3 -- Missing feature -- t" in br.format_report(3, "t", "missing", "x", []),
       "and the report file labels it in words")
 

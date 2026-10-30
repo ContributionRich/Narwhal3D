@@ -1,4 +1,4 @@
-//! Welcome-only projection of narwhal3d/design.py; no application state or resources needed.
+//! Welcome-only v4.4 palette and control metrics; no application state or resources needed.
 use eframe::egui::{self, Color32, Stroke};
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -69,6 +69,11 @@ pub struct Palette {
     pub accent: Color32,
     pub accent_soft: Color32,
     pub on_accent: Color32,
+    pub sidebar: Color32,
+    pub status_neutral: Color32,
+    pub status_current: Color32,
+    pub status_available: Color32,
+    pub status_working: Color32,
 }
 
 impl Theme {
@@ -84,7 +89,7 @@ impl Theme {
 
     pub fn palette(self) -> Palette {
         let rgb = Color32::from_rgb;
-        // MEASURED: current light/dark semantic tokens in narwhal3d/design.py.
+        // MEASURED: welcome.css and polish/welcome-version.css in the approved v4.4 design.
         match self {
             Self::Light => Palette {
                 panel: rgb(0xF2, 0xF5, 0xFA),
@@ -102,6 +107,12 @@ impl Theme {
                 accent: rgb(0x26, 0x6C, 0xE2),
                 accent_soft: rgb(0xD9, 0xE7, 0xFF),
                 on_accent: Color32::WHITE,
+                // DERIVED: welcome-panel 88% + welcome-field 12% in sRGB.
+                sidebar: rgb(0xF2, 0xF5, 0xFA),
+                status_neutral: rgb(0x89, 0x95, 0xA7),
+                status_current: rgb(0x32, 0xA6, 0x78),
+                status_available: rgb(0xE3, 0xA2, 0x38),
+                status_working: rgb(0x50, 0x8F, 0xE8),
             },
             Self::Dark => Palette {
                 panel: rgb(0x33, 0x33, 0x33),
@@ -120,6 +131,11 @@ impl Theme {
                 accent_soft: rgb(0x20, 0x32, 0x48),
                 // OURS: dark ink on the brighter dark-theme accent keeps tabs legible.
                 on_accent: rgb(0x2B, 0x2B, 0x2B),
+                sidebar: rgb(0x32, 0x32, 0x32),
+                status_neutral: rgb(0x89, 0x95, 0xA7),
+                status_current: rgb(0x32, 0xA6, 0x78),
+                status_available: rgb(0xE3, 0xA2, 0x38),
+                status_working: rgb(0x50, 0x8F, 0xE8),
             },
         }
     }
@@ -150,6 +166,7 @@ impl Theme {
         ] {
             widget.bg_fill = p.button;
             widget.weak_bg_fill = p.button;
+            widget.corner_radius = egui::CornerRadius::same(7);
             widget.bg_stroke = Stroke::new(1.0, p.border);
             widget.fg_stroke = Stroke::new(1.0, p.text);
         }
@@ -165,6 +182,23 @@ impl Theme {
         v.widgets.open.bg_fill = p.menu;
         v.widgets.open.weak_bg_fill = p.menu;
         v
+    }
+
+    pub fn style_ui(self, ui: &mut egui::Ui) {
+        let style = ui.style_mut();
+        style.spacing.item_spacing = egui::vec2(8.0, 5.0);
+        style.spacing.button_padding = egui::vec2(11.0, 7.0);
+        style.spacing.interact_size.y = 34.0;
+        for (kind, size) in [
+            (egui::TextStyle::Heading, 17.0),
+            (egui::TextStyle::Body, 12.5),
+            (egui::TextStyle::Button, 12.5),
+            (egui::TextStyle::Small, 11.5),
+        ] {
+            style
+                .text_styles
+                .insert(kind, egui::FontId::proportional(size));
+        }
     }
 
     pub fn apply(self, ctx: &egui::Context) {
@@ -346,6 +380,38 @@ mod tests {
             ),
             Theme::Dark
         );
+    }
+
+    #[test]
+    fn v44_sidebar_status_colors_and_control_metrics() {
+        for theme in [Theme::Light, Theme::Dark] {
+            let p = theme.palette();
+            assert_eq!(
+                p.sidebar,
+                if theme == Theme::Light {
+                    Color32::from_rgb(0xF2, 0xF5, 0xFA)
+                } else {
+                    Color32::from_rgb(0x32, 0x32, 0x32)
+                }
+            );
+            assert_eq!(p.status_neutral, Color32::from_rgb(0x89, 0x95, 0xA7));
+            assert_eq!(p.status_current, Color32::from_rgb(0x32, 0xA6, 0x78));
+            assert_eq!(p.status_available, Color32::from_rgb(0xE3, 0xA2, 0x38));
+            assert_eq!(p.status_working, Color32::from_rgb(0x50, 0x8F, 0xE8));
+            let ctx = egui::Context::default();
+            theme.apply(&ctx);
+            let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                theme.style_ui(ui);
+                assert_eq!(ui.spacing().interact_size.y, 34.0);
+                assert_eq!(ui.style().text_styles[&egui::TextStyle::Heading].size, 17.0);
+                assert_eq!(ui.style().text_styles[&egui::TextStyle::Button].size, 12.5);
+                assert_eq!(
+                    ui.visuals().widgets.inactive.corner_radius,
+                    egui::CornerRadius::same(7)
+                );
+            });
+            output.textures_delta.clear();
+        }
     }
 
     #[test]

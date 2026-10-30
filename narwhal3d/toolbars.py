@@ -10,6 +10,7 @@ import os
 
 from . import flyout_icon_data
 from . import toolbar_data
+from . import ui_icon_data
 
 ICON_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "icons")
 V4_ICON_NAMES = frozenset({
@@ -146,24 +147,42 @@ def _button(record, implemented):
     )
 
 
+def _presented_buttons(category, records, implemented):
+    """Apply approved art to visible slots without changing authored action data."""
+    buttons = []
+    index = 0
+    for record in records:
+        button = _button(record, implemented)
+        if not button.is_separator:
+            visual = ui_icon_data.presentation(category, index, record)
+            if visual is not None:
+                button.text, button.icon = visual
+            index += 1
+        buttons.append(button)
+    return buttons
+
+
 def tab_rows(name, implemented):
     """Return buttons for one category, or ``[]`` for an unknown category."""
     tab = _tab(name)
     if tab is None:
         return []
     implemented = set(implemented or ())
-    return [_button(record, implemented) for record in tab["buttons"]]
+    # The approved Standard category is the sidebar, not this legacy top tab.
+    return _presented_buttons(name if name != "Standard" else None,
+                              tab["buttons"], implemented)
 
 
 def icon_path(icon):
     """Resolve a bundled Narwhal icon, rejecting unknown or unsafe names.
 
-    Resolution is restricted to the explicit toolbar/v4 allowlists and to real files
+    Resolution is restricted to the explicit toolbar/v4/v4.4 allowlists and to real files
     whose resolved location remains inside :data:`ICON_DIR`. Missing files return
     ``None`` so a renderer can safely use button text instead.
     """
     if not isinstance(icon, str) or (
-                icon not in toolbar_data.ICON_NAMES and icon not in V4_ICON_NAMES):
+                icon not in toolbar_data.ICON_NAMES and icon not in V4_ICON_NAMES
+                                and icon not in ui_icon_data.PNG_NAMES):
         return None
     if icon != os.path.basename(icon):
         return None
@@ -180,7 +199,8 @@ def icon_path(icon):
 def icons_available():
     """Return whether every icon declared by the toolbar is bundled and safe."""
     return bool(toolbar_data.ICON_NAMES) and all(
-        icon_path(name) is not None for name in toolbar_data.ICON_NAMES)
+        icon_path(name) is not None
+                for name in toolbar_data.ICON_NAMES | ui_icon_data.PNG_NAMES)
 
 
 def coverage(implemented):
@@ -222,7 +242,7 @@ def sidebar_buttons(implemented=None):
     if not sidebar:
         return []
     implemented = set(implemented or ())
-    return [_button(record, implemented) for record in sidebar.get("buttons") or ()]
+    return _presented_buttons("Standard", sidebar.get("buttons") or (), implemented)
 
 
 def sidebar_flyout_rows(button, implemented=None):

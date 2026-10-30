@@ -83,6 +83,7 @@ pub struct Conversation {
     calls: Option<(Token, Reply)>,
     used_call_ids: HashSet<String>,
     proposals: ActionGate,
+    box_gate: crate::box_action::Gate,
     staged_proposal_calls: HashSet<String>,
 }
 impl Conversation {
@@ -102,6 +103,7 @@ impl Conversation {
             calls: None,
             used_call_ids: HashSet::new(),
             proposals: ActionGate::default(),
+            box_gate: crate::box_action::Gate::default(),
             staged_proposal_calls: HashSet::new(),
         })
     }
@@ -115,6 +117,7 @@ impl Conversation {
         self.used_call_ids.clear();
         self.staged_proposal_calls.clear();
         self.proposals.clear();
+        self.box_gate.clear();
         self.turns = 0;
         self.actions = 0;
         self.output_bytes = 0;
@@ -123,6 +126,7 @@ impl Conversation {
     }
     pub fn cancel(&mut self) -> Value {
         self.proposals.clear();
+        self.box_gate.clear();
         self.generation += 1;
         self.pending = None;
         self.calls = None;
@@ -201,6 +205,8 @@ impl Conversation {
         )?;
         if self.binding.config.provider_id == Provider::Anthropic {
             body["system"] = Value::String(WORKFLOW_INSTRUCTIONS.into());
+        } else if self.binding.config.provider_id == Provider::OpenaiResponses {
+            body["instructions"] = Value::String(WORKFLOW_INSTRUCTIONS.into());
         } else {
             body["messages"]
                 .as_array_mut()
@@ -282,7 +288,11 @@ impl Conversation {
                 return Err("replayed_tool_call");
             }
         }
-        let bytes = serde_json::to_vec(&reply).unwrap().len();
+        let messages = provider::assistant_messages(self.binding.config.provider_id, &reply);
+        let replay_bytes = serde_json::to_vec(&messages).unwrap().len();
+        // Replay state is private to Rust, not serialized in the visible Reply.
+        // It still consumes the unconditional output/history budgets.
+        let bytes = serde_json::to_vec(&reply).unwrap().len().max(replay_bytes);
         if self.output_bytes + bytes > MAX_OUTPUT {
             return Err("output_budget");
         }
@@ -292,13 +302,19 @@ impl Conversation {
         if reported > MAX_TOTAL_TOKENS {
             return Err("token_budget");
         }
-        let message = provider::assistant_message(self.binding.config.provider_id, &reply);
-        if serde_json::to_vec(&self.history).unwrap().len() + message.to_string().len()
-            > MAX_CONTEXT
+        let result_slots = if reply.tool_calls.is_empty() {
+            0
+        } else if self.binding.config.provider_id == Provider::Anthropic {
+            1
+        } else {
+            reply.tool_calls.len()
+        };
+        if self.history.len() + messages.len() + result_slots > 60
+            || serde_json::to_vec(&self.history).unwrap().len() + replay_bytes > MAX_CONTEXT
         {
             return Err("context_budget");
         }
-        self.history.push(message);
+        self.history.extend(messages);
         self.output_bytes += bytes;
         self.reported_tokens = reported;
         self.actions += reply.tool_calls.len();
@@ -332,11 +348,56 @@ impl Conversation {
         if call.name == "narwhal_propose_circle" {
             return Ok(json!({"kind":"proposal_only","arguments":call.arguments}));
         }
+        if call.name == "narwhal_create_box" {
+            return Ok(json!({"kind":"box_proposal","arguments":call.arguments}));
+        }
         let tool = catalog::canonical(&call.name).ok_or("unsupported_tool")?;
         if tool == "narwhal.operations" {
             return Ok(json!({"kind":"result","output":crate::actions::operations()}));
         }
         Ok(json!({"kind":"application_read","tool":tool,"arguments":call.arguments}))
+    }
+    pub fn stage_box(
+        &mut self,
+        token: Token,
+        binding: Binding,
+        call_id: String,
+        context: crate::box_action::Context,
+    ) -> Result<Value, &'static str> {
+        let call = self.resolve_call(&token, binding, &call_id)?;
+        if call["kind"] != "box_proposal" {
+            return Err("not_a_box_call");
+        }
+        if self.staged_proposal_calls.contains(&call_id) {
+            return Err("proposal_call_replay");
+        }
+        if context.document_session != self.binding.document_context {
+            return Err("box_context_stale");
+        }
+        let args = serde_json::from_value(call["arguments"].clone())
+            .map_err(|_| "invalid_box_arguments")?;
+        let proposal = self.box_gate.stage(token, call_id.clone(), args, context)?;
+        self.staged_proposal_calls.insert(call_id);
+        Ok(json!({"status":"box_approval_required","proposal":proposal}))
+    }
+    pub fn decide_box(
+        &mut self,
+        binding: Binding,
+        proposal: crate::box_action::Proposal,
+        current: crate::box_action::Context,
+        accepted: bool,
+    ) -> Result<Value, &'static str> {
+        if binding != self.binding {
+            self.rebind(binding)?;
+            return Err("stale");
+        }
+        if proposal.request_token.conversation != self.id
+            || proposal.request_token.generation != self.generation
+            || current.document_session != self.binding.document_context
+        {
+            return Err("box_context_stale");
+        }
+        self.box_gate.decide(proposal, current, accepted)
     }
     pub fn stage_circle(
         &mut self,
@@ -423,9 +484,10 @@ impl Conversation {
             return Err("tool_result_budget");
         }
         let messages = provider::tool_result_messages(self.binding.config.provider_id, &results);
-        if serde_json::to_vec(&self.history).unwrap().len()
-            + serde_json::to_vec(&messages).unwrap().len()
-            > MAX_CONTEXT
+        if self.history.len() + messages.len() > 60
+            || serde_json::to_vec(&self.history).unwrap().len()
+                + serde_json::to_vec(&messages).unwrap().len()
+                > MAX_CONTEXT
         {
             return Err("context_budget");
         }
@@ -438,6 +500,10 @@ impl Conversation {
 #[derive(Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Input {
+    WorkspaceLayers {
+        layers: Vec<crate::workspace::LayerRow>,
+        targets: Vec<String>,
+    },
     Catalog,
     Poll,
     ResolveCall {
@@ -450,6 +516,18 @@ pub enum Input {
         binding: Binding,
         call_id: String,
         expected: Option<Preconditions>,
+    },
+    ProposeBox {
+        token: Token,
+        binding: Binding,
+        call_id: String,
+        context: crate::box_action::Context,
+    },
+    DecideBox {
+        binding: Binding,
+        proposal: crate::box_action::Proposal,
+        current: crate::box_action::Context,
+        accepted: bool,
     },
     ReviewProposal {
         binding: Binding,

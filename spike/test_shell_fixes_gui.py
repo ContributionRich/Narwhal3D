@@ -184,16 +184,16 @@ def run():
             finally:
                 ui._draw_display_panel = panel
                 ui._draw_text = text
-            size = 12 * ui.uiscale.current()
+            size = 11 * ui.uiscale.current()
             for label, token in (('Apply to', 'TEXT_MUTED'), ('Display mode', 'TEXT_MUTED'),
-                                 ('Active', 'TEXT_STRONG'), ('All', 'TEXT')):
+                                 ('Active', 'RAIL_ACTIVE_TEXT'), ('All', 'TEXT')):
                 check((label, size, design.rgb01(getattr(design, token))) in records, f'{theme}: {label} font/ink drawn')
             name, mode, _ = next(row for row in ui.display_panel_rows() if row[2])
             box = next(row[2:] for row in ui._display_panel_boxes['viewports'] if row[1] == name)
             width = box[2] - box[0] - 2 * ui._fpx(7)
             full = f'{name} — {mode}'
             clipped = ui._clip_text(full, width, size)
-            check((clipped, size, design.rgb01(design.TEXT_STRONG)) in records
+            check((clipped, size, design.rgb01(design.RAIL_ACTIVE_TEXT)) in records
                   and ui._text_width(clipped, size) <= width and (not narrow or clipped != full),
                   f'{theme}: active viewport strong text fits; narrow fixture really clips')
     yield from scroll(ui, st)

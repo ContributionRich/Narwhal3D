@@ -1,0 +1,5 @@
+<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none'><defs><style>.s{stroke:#2B69D9;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;fill:none}.f{stroke:#2B69D9;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;fill:#DDEBFF}.a{stroke:#6AA4FF;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;fill:none}.af{stroke:#6AA4FF;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;fill:#DDEBFF}.r{stroke:#E85B62;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;fill:none}.rf{stroke:#E85B62;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;fill:#E85B62}.w{fill:#FFFFFF;stroke:none}</style></defs>
+        <rect class='f' x='4.5' y='6' width='15' height='10' rx='2'/>
+        <path class='a' d='M8 18h8M10 16v2M14 16v2'/>
+        <path class='a' d='M7.5 12l2.6-2.6 2.2 2.1 2.9-3.1 1.8 2.6'/>
+    </svg>

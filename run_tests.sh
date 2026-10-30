@@ -76,7 +76,10 @@ if command -v cargo >/dev/null 2>&1; then
     run "automation combined lifecycle" timeout --kill-after=5s 60s "$PYTHON" \
         spike/test_automation_lifecycle.py --server "$AUTOMATION_SERVER"
     run "AI native conversation workflow" "$PYTHON" spike/test_ai_workflow.py --library "$AUTOMATION_LIBRARY"
+    run "AI Responses normalization and replay" "$PYTHON" spike/test_ai_responses.py --library "$AUTOMATION_LIBRARY"
+    run "AI workspace snapshots" "$PYTHON" spike/test_ai_workspace.py --library "$AUTOMATION_LIBRARY"
     run "AI native CAD reads and proposal policy" "$PYTHON" spike/test_ai_cad.py --library "$AUTOMATION_LIBRARY"
+    run "AI approved additive box policy" "$PYTHON" spike/test_ai_box.py --library "$AUTOMATION_LIBRARY"
     run "AI UI orchestration" "$PYTHON" spike/test_ai_ui_workflow.py --library "$AUTOMATION_LIBRARY"
     run "automation source live bridge (background Blender)" timeout --kill-after=5s 120s "$PYTHON" \
         spike/test_automation_mcp.py --server "$AUTOMATION_SERVER" --live "$BLENDER"
@@ -167,12 +170,15 @@ fi
 
 PURE_SUITES=(
     spike/test_geometry.py
+    spike/test_native_cage_safety.py
+    spike/test_cage_boundary.py
     spike/test_undo.py
     spike/test_kernel.py
     spike/test_local_brep_move.py
     spike/test_native_local_brep_replay.py
     spike/test_meshed_master_transform.py
     spike/test_curve_inputs.py
+    spike/test_sweep1_mouse_inputs.py
     spike/test_curve_consumer_inputs.py
     spike/test_variable_edge_fillet.py
     spike/test_fillet_handle_input.py
@@ -189,6 +195,7 @@ PURE_SUITES=(
     spike/test_surfacing_preparation.py
     spike/test_surfacing_step_roundtrip.py
     spike/test_curve_options.py
+    spike/test_polygon_behavior.py
     spike/test_helix.py
     spike/test_spiral.py
     spike/test_curve_through_polyline.py
@@ -210,10 +217,13 @@ PURE_SUITES=(
     spike/test_window_overlay_patch.py
     spike/test_native_runtime_provenance.py
     spike/test_welcome.py
+    spike/test_welcome_v44.py
     spike/test_toolbars.py
     spike/test_menubar.py
     spike/test_design.py
     spike/test_v4_assets.py
+    spike/test_ui_v44_icons.py
+    spike/test_ui_v44_panels.py
     spike/test_theme_bindings.py
     spike/test_preferences.py
     spike/test_user_settings.py
@@ -233,6 +243,7 @@ PURE_SUITES=(
     spike/test_sessionlog.py
     spike/test_bugreport.py
     spike/test_ai_assistant.py
+    spike/test_ai_responses_settings.py
     spike/test_ai_transport.py
     spike/test_ai_workflow_transport.py
     spike/test_automation_context.py
@@ -330,7 +341,7 @@ done
 # Fail on a stale/missing surfacing capability, rather than passing with native cases skipped.
 run "surfacing bridge integration (native required)" "$PYTHON" \
     spike/test_surfacing_integration.py --require-native
-run "bounded multi-section Sweep1 command" "$PYTHON" spike/test_sweep1_command_integration.py --launch
+run "ordered mouse and typed Sweep1 command" "$PYTHON" spike/test_sweep1_interaction_checks.py --launch
 
 run "native document core build" cargo +1.95.0 build --release --locked \
     --manifest-path native/document_core/Cargo.toml
@@ -355,9 +366,12 @@ if [[ -n "${DISPLAY:-}" || -n "${WAYLAND_DISPLAY:-}" ]]; then
         printf '\nSKIP: installed AI GUI acceptance (stage reviewed automation executable/library first)\n'
     fi
     run "preview responsiveness live" "$PYTHON" spike/test_preview_responsiveness_gui.py --run integration
+    run "drawing constraints live" "$PYTHON" spike/test_drawing_behavior_gui.py --launch
+    run "Polygon direction and constraints live" "$PYTHON" spike/test_polygon_behavior_gui.py --launch
     run "Trim box live" "$PYTHON" spike/test_trim_box_gui.py --launch --baseline
     run "overlap selection menu live" "$PYTHON" spike/test_selection_menu_gui.py --launch
     run "typed multi-section Sweep1 live" "$PYTHON" spike/test_sweep1_command_gui.py --launch
+    run "ordered mouse Sweep1 live" "$PYTHON" spike/test_sweep1_interaction_gui.py --launch
     # The actual CLI resolves staged artifacts, not AUTOMATION_SERVER. Do not overwrite them.
     printf '\nSKIP: staged-product automation startup acceptance; run python3 -B spike/test_automation_startup.py separately after staging the reviewed server\n'
     run "startup layout via the welcome's X11 route" spike/startup_layout_gui.sh

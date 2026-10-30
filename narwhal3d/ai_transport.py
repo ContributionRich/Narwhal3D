@@ -79,6 +79,12 @@ def _request_parts(config: ProviderConfig, request_data: dict, environ) -> tuple
         }]
     key = str(environ.get(config.credential_env, ""))
     headers = {"Content-Type": "application/json", "Accept": "application/json"}
+    if config.provider_id == "openai_responses":
+        if not key:
+            raise TransportError(f"set {config.credential_env} before connecting")
+        headers["Authorization"] = f"Bearer {key}"
+        # The body and response schema are native-owned; this is only HTTP routing.
+        return _endpoint(endpoint, "/responses"), headers, {}
     if config.provider_id in ("openai", "openai_compatible"):
         if config.provider_id == "openai" and not key:
             raise TransportError(f"set {config.credential_env} before connecting")
@@ -99,8 +105,8 @@ def _request_parts(config: ProviderConfig, request_data: dict, environ) -> tuple
 def _model_headers(config: ProviderConfig, environ) -> dict[str, str]:
     key = str(environ.get(config.credential_env, ""))
     headers = {"Accept": "application/json"}
-    if config.provider_id in ("openai", "openai_compatible"):
-        if config.provider_id == "openai" and not key:
+    if config.provider_id in ("openai", "openai_compatible", "openai_responses"):
+        if config.provider_id in ("openai", "openai_responses") and not key:
             raise TransportError(f"set {config.credential_env} before connecting")
         if key:
             headers["Authorization"] = f"Bearer {key}"
@@ -188,6 +194,8 @@ def _response_text(provider_id: str, payload) -> str:
 def send_chat(config: ProviderConfig, request_data: dict, environ,
               opener=_provider_open, timeout: float = DEFAULT_TIMEOUT_SECONDS) -> TransportResult:
     """Send one non-streaming chat request with strict size and timeout bounds."""
+    if config.provider_id == "openai_responses":
+        raise TransportError("OpenAI Responses requires the native workflow API")
     if not config.model:
         raise TransportError("choose a model in AI Assistant Settings")
     url, headers, payload = _request_parts(config, request_data, environ)

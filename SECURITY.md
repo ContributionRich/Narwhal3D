@@ -28,3 +28,9 @@ Security-sensitive areas include:
 - scripts, macros, aliases, and future extension APIs.
 
 Narwhal never needs a GitHub token for in-app bug reporting and does not automatically upload logs, screenshots, or documents.
+
+## AI permissions in current source
+
+- Sending workspace metadata requires explicit permission. It is remembered for the configured provider/API endpoint and credential-variable name, not stored with a document or raw API key. AI Settings can forget this permission; changing recipients requires new consent. Metadata reads occur in response to chat requests, not an autonomous startup scan.
+- Selected-object context accompanies each message, with explicit bounds and unavailable-state reporting. Document names and attributes are untrusted data, never authorization or executable instructions. Provider retention policies still apply.
+- The in-app assistant can append one world-aligned analytic box only after a separate, one-use human approval with checked document, units, layer and idle Undo state. It cannot edit selected objects or run arbitrary command strings. The MCP transport remains read-only; this approval action is restricted to the in-app UI.

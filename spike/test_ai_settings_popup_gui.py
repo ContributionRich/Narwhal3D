@@ -440,8 +440,9 @@ def cancelled_edits():
 def fields_and_save():
     yield from open_button()
     yield from control('provider')
-    check(model().choices() == ai.PROVIDERS and len(model().choices()) == 3,
-          'actual provider dropdown has exactly the backend three incl Anthropic')
+    check(model().choices() == ai.PROVIDERS and {p for p, _ in model().choices()} ==
+          {'openai', 'openai_responses', 'anthropic', 'openai_compatible'},
+          'actual provider dropdown has all four backend APIs including Responses')
     check('Ollama' not in str(model().choices()), 'no prototype Ollama provider')
     yield from settle()
     capture('provider_dropdown')

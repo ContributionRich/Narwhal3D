@@ -68,6 +68,9 @@ pub fn definitions() -> Vec<ToolDefinition> {
         })
         .collect();
     tools.push(ToolDefinition {name:"narwhal_propose_circle".into(), description:"Construct a typed center/radius circle proposal for user review. Never executes it; missing authoritative document/Undo hooks keep production writes disabled. Center is world coordinates, orientation is the captured active CPlane.".into(), parameters:actions::circle_schema()});
+    tools.push(ToolDefinition { name:"narwhal_create_box".into(),
+        description:"Request creation of one new world-XYZ-aligned analytic box (a cube has equal size values) in document units. Origin is the minimum corner; size is positive X/Y/Z length. Narwhal displays exact dimensions for explicit human approval before creating anything. This appends a solid, never modifies selected objects. Use one box call per response; ask for dimensions if unclear.".into(),
+        parameters:crate::box_action::schema() });
     tools
 }
 pub fn schema(name: &str) -> Value {
@@ -126,6 +129,12 @@ pub fn validate_read(name: &str, args: &Map<String, Value>) -> Result<(), &'stat
     Ok(())
 }
 pub fn validate(call: &ToolCall) -> Result<(), &'static str> {
+    if call.name == "narwhal_create_box" {
+        let args: crate::box_action::BoxArgs =
+            serde_json::from_value(Value::Object(call.arguments.clone()))
+                .map_err(|_| "invalid_box_arguments")?;
+        return args.validate();
+    }
     if call.name == "narwhal_propose_circle" {
         let args: actions::CircleArgs =
             serde_json::from_value(Value::Object(call.arguments.clone()))

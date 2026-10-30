@@ -44,12 +44,16 @@ class CadTests(unittest.TestCase):
     def test_catalog_discloses_real_execution_blocker(self):
         with workflow.workflow() as (_state, session):
             catalog = session.operation_catalog()
-            self.assertEqual(len(catalog["tools"]), 10)
+            self.assertEqual(len(catalog["tools"]), 11)
             operation = catalog["operations"]["operations"][0]
             self.assertEqual(operation["command"], "Circle")
             self.assertFalse(operation["execution_available"])
             self.assertTrue(operation["proposal_available"])
             self.assertGreater(len(operation["blockers"]), 0)
+            box = catalog['operations']['operations'][1]
+            self.assertEqual(box['command'], 'Box')
+            self.assertTrue(box['requires_explicit_ui_approval'])
+            self.assertIn('in_app_assistant_only', box['scope'])
 
     def test_proposal_wire_token_name_is_compatible(self):
         with workflow.workflow() as (_state, session):

@@ -404,7 +404,8 @@ def preview_ellipse(args, cursor, plane):
     return [out]
 
 
-def polygon_polyline(plane, center, radius, sides, inscribed=True):
+def polygon_polyline(plane, center, radius, sides, inscribed=True, *,
+                     start_angle=0.0, direction=1.0):
     """A regular polygon of `radius` and `sides` about `center`, in `plane`.
 
     `inscribed` (the reference CAD application's default) means the corners sit on a circle of the given
@@ -416,12 +417,13 @@ def polygon_polyline(plane, center, radius, sides, inscribed=True):
     if radius <= 0 or sides < 3:
         return []
     corner_radius = radius if inscribed else radius / math.cos(math.pi / sides)
-    # the first vertex sits along the plane's x axis, matching the canonical
-    # build (a unit circle's 0-parameter point is on its +x axis)
+    # MEASURED: CreateCircumscribedPolygon starts at (r, r*tan(pi/n)),
+    # not on +x like CreateInscribedPolygon. Edge supplies its own start/winding.
+    start_angle += 0.0 if inscribed else math.pi / sides
     u, v = plane.xaxis, plane.yaxis
     pts = []
     for i in range(sides + 1):          # +1 closes the loop
-        a = 2.0 * math.pi * i / sides
+        a = start_angle + direction * 2.0 * math.pi * i / sides
         c, s = math.cos(a) * corner_radius, math.sin(a) * corner_radius
         pts.append((center[0] + u[0] * c + v[0] * s,
                     center[1] + u[1] * c + v[1] * s,
@@ -429,30 +431,64 @@ def polygon_polyline(plane, center, radius, sides, inscribed=True):
     return pts
 
 
-def preview_polygon(args, cursor, plane):
-    """`Polygon`: the inscribed circle while picking, then the polygon outline.
+def preview_polygon(args, cursor, plane, cmd=None):
+    """Display the running Polygon's draft count/mode, never build kernel geometry.
 
-    `args` is [center, radius, sides]: the radius is a DISTANCE (stored as a
-    float, so points_only drops it) and the sides is a NUMBER. So we read the
-    raw `args` rather than points_only. One point -> the inscribed circle sized
-    by the cursor. Two (centre + radius) -> the circle at that radius. Three
-    (centre + radius + sides) -> the actual polygon outline.
+    Without a command, retain the legacy [center, radius, sides] helper contract
+    (a circle until sides are supplied). The live command no longer collects a
+    third argument. Python only adapts command options/frames to the existing
+    display helper; no new geometry producer or per-frame kernel calls.
     """
     if not args:
         return []
     center = args[0]
-    # the radius, once picked, is args[1] as a float (DISTANCE step)
-    radius = args[1] if len(args) >= 2 and not _is_point(args[1]) else None
-    sides = args[2] if len(args) >= 3 and not _is_point(args[2]) else None
-    if radius is None:
-        radius = _length(_sub(cursor, center))
-    circle = circle_polyline(plane, center, radius)
-    if not circle:
+    sides = (getattr(cmd, 'opt', {}).get('NumSides') if cmd is not None else
+             args[2] if len(args) >= 3 and not _is_point(args[2]) else None)
+    if cmd is not None:
+        # OURS: same interactive allocation ceiling as PolygonCmd; malformed
+        # external helper calls must not allocate an unbounded draw buffer.
+        count = float(sides)
+        if not math.isfinite(count) or not count.is_integer() or not 3 <= count <= 10_000:
+            return []
+        sides = int(count)
+        if getattr(cmd, '_edge', False):
+            end = args[1] if len(args) >= 2 else cursor
+            au, av, aw = plane.from_world(center)
+            bu, bv, _ = plane.from_world(end)
+            du, dv = bu - au, bv - av
+            length = math.hypot(du, dv)
+            if length <= 1e-12:
+                return []
+            direction = -1.0 if cmd.opt.get('Flip') else 1.0
+            # DERIVED: edge midpoint + signed left-normal apothem. Retain the
+            # start's elevation, matching PolygonCmd._edge_polygon's projection.
+            offset = direction / (2.0 * math.tan(math.pi / sides))
+            cu, cv = (au + bu) / 2.0 - dv * offset, (av + bv) / 2.0 + du * offset
+            poly = polygon_polyline(plane, plane.to_world(cu, cv, aw),
+                length / (2.0 * math.sin(math.pi / sides)), sides,
+                start_angle=math.atan2(av - cv, au - cu), direction=direction)
+            return [poly] if poly else []
+    start_angle = 0.0
+    if cmd is not None:
+        corner = args[1] if len(args) >= 2 else cursor
+        cu, cv, _ = plane.from_world(center)
+        pu, pv, _ = plane.from_world(corner)
+        du, dv = pu - cu, pv - cv
+        radius = math.hypot(du, dv)
+        start_angle = math.atan2(dv, du)
+    else:
+        # Legacy commandless helpers still accept scalar radius/sides.
+        radius = args[1] if len(args) >= 2 and not _is_point(args[1]) else None
+        if radius is None:
+            radius = _length(_sub(cursor, center))
+    if not math.isfinite(radius) or radius <= 0:
         return []
     if sides is None or int(sides) < 3:
-        return [circle]                 # radius known, sides not yet -> the circle
-    poly = polygon_polyline(plane, center, radius, int(sides), inscribed=True)
-    return [poly] if poly else [circle]
+        return [circle_polyline(plane, center, radius)]
+    poly = polygon_polyline(plane, center, radius, int(sides),
+                            inscribed=getattr(cmd, '_inscribed', True),
+                            start_angle=start_angle)
+    return [poly] if poly else []
 
 
 def preview_sphere(args, cursor, plane):
@@ -1263,7 +1299,6 @@ PREVIEWS = {
     "cone": preview_cone,
     "rectangle": preview_rectangle,
     "ellipse": preview_ellipse,
-    "polygon": preview_polygon,
     "arc": preview_arc,
     "distance": preview_distance,
     "mirror": preview_mirror,
@@ -1282,6 +1317,7 @@ PREVIEWS = {
 #: so the twenty existing `(args, cursor, plane)` functions keep their signature -- adding a
 #: fourth parameter to all of them to serve one command would be the wrong trade.
 PREVIEWS_WITH_CMD = {
+    "polygon": preview_polygon,
     "catenary": preview_catenary,
     "conic": preview_conic,
     "hyperbola": preview_hyperbola,

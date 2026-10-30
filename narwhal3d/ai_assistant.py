@@ -20,18 +20,21 @@ from urllib.parse import urlsplit, urlunsplit
 from . import textfield
 
 PROVIDERS = (
-    ("openai", "OpenAI"),
+    ("openai", "OpenAI Chat Completions"),
     ("anthropic", "Anthropic"),
     ("openai_compatible", "OpenAI-compatible / LM Studio"),
+    ("openai_responses", "OpenAI Responses"),
 )
 _PROVIDER_IDS = frozenset(provider_id for provider_id, _label in PROVIDERS)
 DEFAULT_ENDPOINTS = {
     "openai": "https://api.openai.com/v1",
+    "openai_responses": "https://api.openai.com/v1",
     "anthropic": "https://api.anthropic.com",
     "openai_compatible": "http://127.0.0.1:1234/v1",
 }
 DEFAULT_CREDENTIAL_ENVS = {
     "openai": "OPENAI_API_KEY",
+    "openai_responses": "OPENAI_API_KEY",
     "anthropic": "ANTHROPIC_API_KEY",
     "openai_compatible": "LM_STUDIO_API_KEY",
 }
@@ -224,6 +227,28 @@ def validate_endpoint(endpoint: str, allow_insecure_remote: bool = False) -> str
     return urlunsplit((parsed.scheme, netloc, path, "", ""))
 
 
+def metadata_permission(config: ProviderConfig) -> dict:
+    """Remember the data recipient, not a model/document or any credentials."""
+    return {'version': 1, 'provider_id': config.provider_id,
+            'endpoint': validate_endpoint(config.endpoint, config.allow_insecure_remote),
+            'credential_env': config.credential_env,
+            'allow_insecure_remote': config.allow_insecure_remote}
+
+
+def connection_label(state: AssistantState) -> str:
+    """HTTP chat has no persistent connection; report configuration/last outcome."""
+    if state.status == 'sending':
+        return 'Sending...'
+    if state.status == 'awaiting_approval':
+        return 'Awaiting your approval'
+    if state.status == 'error':
+        return 'Request failed'
+    key = (metadata_permission(state.provider), state.provider.model)
+    if state.extra.get('last_successful_provider') == key:
+        return 'Ready · Last request succeeded'
+    return 'Ready to send' if state.provider.model else 'Choose a model in Settings'
+
+
 def _bounded_context(context: object) -> Any:
     if context is None:
         return None
@@ -345,7 +370,7 @@ def public_state(state: AssistantState) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 # Pure right-dock layout and multiline input behavior
 # ---------------------------------------------------------------------------
-BOX_PAD = 4
+BOX_PAD = 10
 LINE_H = 14
 
 
@@ -353,34 +378,47 @@ def panel_layout(body: tuple[float, float, float, float], scale: float = 1.0):
     """Responsive boxes for the visible Assistant shell, in region coordinates."""
     x0, y0, x1, y1 = body
     s = max(0.5, float(scale))
-    pad, gap = 6 * s, 4 * s
+    pad, gap = min(10 * s, max(0, x1 - x0) / 2), 7 * s
     left, right = x0 + pad, max(x0 + pad, x1 - pad)
-    top = y1 - pad
-    title = (left, top - 18 * s, right, top)
-    top = title[1] - gap
-    connection = (left, top - 20 * s, right, top)
-    top = connection[1] - gap
-    context = (left, top - 18 * s, right, top)
-    top = context[1] - gap
+    height = max(0, y1 - y0)
+    top_pad, bottom_pad = min(9 * s, height / 2), min(11 * s, height / 2)
+    available = max(0, height - top_pad - bottom_pad)
+    heights = {'title': 23*s, 'connection': 27*s, 'context': 0,
+               'transcript': 0, 'input': 86*s, 'status': 29*s, 'buttons': 32*s}
+    # The owner requested automatic selection context, not an opt-in checkbox.
+    # Retain a collapsed compatibility box for older UI probe clients.
+    active = [key for key in heights if key != 'context']
 
-    button_h = 24 * s
-    buttons_y0 = y0 + pad
+    def required():
+        return sum(heights.values()) + max(0, len(active) - 1) * gap
+
+    # OURS compact fallback: shrink the composer before hiding informational rows.
+    # Draw and hit-testing share these zero-height boxes; controls never overlap.
+    heights['input'] -= min(50*s, max(0, required() - available))
+    for key in ('title', 'connection', 'status', 'input'):
+        if required() <= available:
+            break
+        heights[key] = 0
+        active.remove(key)
+    if required() > available:
+        active.remove('transcript')
+        heights['buttons'] = min(32*s, available)
+    heights['transcript'] = max(0, available - required())
+    result = {}
+    top = y1 - top_pad
+    for key in heights:
+        bottom = top - heights[key]
+        result[key] = (left, bottom, right, top)
+        if key in active:
+            top = bottom - (gap if key != active[-1] else 0)
+    button_box = result['buttons']
     width = max(0.0, right - left)
-    button_w = max(0.0, (width - 2 * gap) / 3)
-    buttons = [
-        ("send", (left, buttons_y0, left + button_w, buttons_y0 + button_h)),
-        ("new", (left + button_w + gap, buttons_y0,
-                 left + 2 * button_w + gap, buttons_y0 + button_h)),
-        ("settings", (left + 2 * (button_w + gap), buttons_y0,
-                      right, buttons_y0 + button_h)),
-    ]
-    status = (left, buttons_y0 + button_h + gap, right,
-              buttons_y0 + button_h + gap + 30 * s)
-    input_box = (left, status[3] + gap, right, status[3] + gap + 72 * s)
-    transcript = (left, input_box[3] + gap, right, max(input_box[3] + gap, top))
-    return {"title": title, "connection": connection, "context": context,
-            "transcript": transcript, "input": input_box,
-            "status": status, "buttons": buttons}
+    button_gap = min(6*s, width / 2)
+    button_w = max(0.0, (width - 2 * button_gap) / 3)
+    result['buttons'] = [(name, (left + i*(button_w+button_gap), button_box[1],
+                                left + i*(button_w+button_gap)+button_w, button_box[3]))
+                         for i, name in enumerate(('send', 'new', 'settings'))]
+    return result
 
 
 def _inside(rect, x: float, y: float) -> bool:
@@ -388,8 +426,6 @@ def _inside(rect, x: float, y: float) -> bool:
 
 
 def panel_hit(layout, x: float, y: float):
-    if _inside(layout["context"], x, y):
-        return "context", None
     if _inside(layout["input"], x, y):
         return "input", None
     for button_id, rect in layout.get("buttons", ()):
@@ -504,6 +540,59 @@ class WorkflowUnavailable(RuntimeError):
     """New workflow fails closed when its reviewed native backend is unavailable."""
 
 
+def _load_workflow_library(library_path=None):
+    """Trusted installed-path resolver shared by conversation and read-only adapters."""
+    import ctypes
+    import pathlib
+    import platform
+    import sys
+
+    if library_path is None:
+        root = pathlib.Path(__file__).resolve().parents[1]
+        system = {"linux": "linux", "darwin": "macos"}.get(sys.platform)
+        arch = {"amd64": "x86_64", "aarch64": "arm64"}.get(platform.machine().lower(), platform.machine().lower())
+        if system is None:
+            raise WorkflowUnavailable("workflow_platform_not_validated")
+        name = "libnarwhal_automation.dylib" if system == "macos" else "libnarwhal_automation.so"
+        library_path = next((p for p in (
+            root / "runtime" / f"{system}-{arch}" / "lib" / name,
+            root / "artifacts" / "automation" / f"{system}-{arch}" / name) if p.is_file()), None)
+    if library_path is None:
+        raise WorkflowUnavailable("native_workflow_not_installed")
+    try:
+        lib = ctypes.CDLL(str(library_path))
+        lib.narwhal_workflow_abi.restype = ctypes.c_uint32
+        if lib.narwhal_workflow_abi() != 1:
+            raise ValueError
+        call = lib.narwhal_workflow_json
+        call.argtypes = [ctypes.c_uint64, ctypes.c_char_p, ctypes.c_size_t, ctypes.c_void_p, ctypes.c_size_t]
+        call.restype = ctypes.c_ssize_t
+    except (OSError, AttributeError, ValueError):
+        raise WorkflowUnavailable("native_workflow_unavailable") from None
+    return lib
+
+
+def workspace_layer_flags(layers, targets, *, library_path=None):
+    """Read-only native calculation; no conversation, consent or document state created."""
+    import ctypes
+    WorkflowSession._main_thread()
+    if len(layers) > 512 or len(targets) > 32:
+        raise WorkflowUnavailable("layer_snapshot_limit")
+    raw = json.dumps({"op": "workspace_layers", "layers": layers, "targets": targets},
+                     ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode()
+    if len(raw) > 131072:
+        raise WorkflowUnavailable("layer_snapshot_limit")
+    lib = _load_workflow_library(library_path)
+    output = ctypes.create_string_buffer(524288)
+    size = lib.narwhal_workflow_json(0, raw, len(raw), output, len(output))
+    if not 0 < size <= len(output):
+        raise WorkflowUnavailable("native_layer_flags_unavailable")
+    result = json.loads(output.raw[:size])
+    if result.get("status") != "layers":
+        raise WorkflowUnavailable("native_layer_flags_unavailable")
+    return result["flags"]
+
+
 class WorkflowSession:
     """Thin main-thread orchestration around Rust-owned conversation policy.
 
@@ -513,10 +602,6 @@ class WorkflowSession:
     """
 
     def __init__(self, state, document_context, *, allow_reads=False, library_path=None):
-        import ctypes
-        import pathlib
-        import platform
-        import sys
         import threading
 
         self._main_thread()
@@ -528,29 +613,7 @@ class WorkflowSession:
         self._cancel_event = threading.Event()
         self._handle = 0
         self._disabled = False
-        if library_path is None:
-            root = pathlib.Path(__file__).resolve().parents[1]
-            system = {"linux": "linux", "darwin": "macos"}.get(sys.platform)
-            arch = {"amd64": "x86_64", "aarch64": "arm64"}.get(platform.machine().lower(), platform.machine().lower())
-            if system is None:
-                raise WorkflowUnavailable("workflow_platform_not_validated")
-            name = "libnarwhal_automation.dylib" if system == "macos" else "libnarwhal_automation.so"
-            candidates = (root / "runtime" / f"{system}-{arch}" / "lib" / name,
-                          root / "artifacts" / "automation" / f"{system}-{arch}" / name)
-            library_path = next((p for p in candidates if p.is_file()), None)
-        if library_path is None:
-            raise WorkflowUnavailable("native_workflow_not_installed")
-        try:
-            self._lib = ctypes.CDLL(str(library_path))
-            self._lib.narwhal_workflow_abi.restype = ctypes.c_uint32
-            if self._lib.narwhal_workflow_abi() != 1:
-                raise ValueError
-            call = self._lib.narwhal_workflow_json
-            call.argtypes = [ctypes.c_uint64, ctypes.c_char_p, ctypes.c_size_t,
-                             ctypes.c_void_p, ctypes.c_size_t]
-            call.restype = ctypes.c_ssize_t
-        except (OSError, AttributeError, ValueError):
-            raise WorkflowUnavailable("native_workflow_unavailable") from None
+        self._lib = _load_workflow_library(library_path)
         created = self._exchange({"op": "create", "binding": self._binding()})
         self._handle = created["handle"]
         state.extra["workflow"] = self
@@ -645,6 +708,8 @@ class WorkflowSession:
             if text:
                 self._state.add_message("assistant", text)
             self._state.status = "connected"
+            self._state.extra['last_successful_provider'] = (
+                metadata_permission(self._state.provider), self._state.provider.model)
             self._state.error = ""
         else:
             self._state.status = "error"
@@ -679,6 +744,8 @@ class WorkflowSession:
         plan = self._exchange({"op": "resolve_call", "token": token, "binding": self._binding(document_context), "call_id": call_id})
         if plan["kind"] == "proposal_only":
             raise WorkflowUnavailable("proposal_requires_review")
+        if plan['kind'] == 'box_proposal':
+            raise WorkflowUnavailable('box_requires_review')
         try:
             if plan["kind"] == "result":
                 output = plan["output"]
@@ -688,6 +755,16 @@ class WorkflowSession:
         except ReadError as exc:
             code = exc.args[0] if exc.args else "read_failed"
             return {"call_id": call_id, "output": {"code": code if code in SAFE_ERRORS else "read_failed"}, "is_error": True}
+
+    def propose_box(self, token, call_id, document_context, context):
+        self._main_thread()
+        return self._exchange({'op': 'propose_box', 'token': token,
+            'binding': self._binding(document_context), 'call_id': call_id, 'context': context})
+
+    def decide_box(self, proposal, document_context, current, *, accepted=False):
+        self._main_thread()
+        return self._exchange({'op': 'decide_box', 'binding': self._binding(document_context),
+            'proposal': proposal, 'current': current, 'accepted': accepted})
 
     def propose_circle(self, token, call_id, document_context, *, expected=None):
         self._main_thread()

@@ -242,7 +242,7 @@ check(a is not None and abs(a.Radius - 5) < 1e-12 and abs(length(g) - 5 * math.p
 
 # ---------------------------------------------------------------- 8. Polygon Circumscribed
 print("\n-- 8. Polygon Circumscribed --")
-g, msg, c = draw("polygon", ["Circumscribed", "0,0,0", "5", "6"])
+g, msg, c = draw("polygon", ["NumSides=6", "Circumscribed", "0,0,0", "5,0,0"])
 vs = verts(g)
 check(vs is not None and len(vs) == 7
       and all(abs(math.hypot(x, y) - 5 / math.cos(math.pi / 6)) < 1e-9 for x, y, _z in vs),
@@ -251,18 +251,20 @@ mids = [((vs[i][0] + vs[i + 1][0]) / 2, (vs[i][1] + vs[i + 1][1]) / 2) for i in 
     if vs else []
 check(mids and all(abs(math.hypot(*m) - 5) < 1e-9 for m in mids),
       "...and the MIDPOINTS of its sides on the R5 circle")
+check(any(math.dist(m, (5, 0)) < 1e-9 for m in mids),
+      "...the picked point is an edge MIDPOINT, not a corner")
 check(c is not None and c.steps[0][0].startswith("Center of circumscribed polygon"),
       "the measured prompt is `Center of circumscribed polygon`")
 
 # ---------------------------------------------------------------- 9. Polygon Edge
 print("\n-- 9. Polygon Edge --")
-g, msg, c = draw("polygon", ["Edge", "0,0,0", "4,0,0", "4"])
+g, msg, c = draw("polygon", ["NumSides=4", "Edge", "0,0,0", "4,0,0"])
 check(verts(g) == [(0, 0, 0), (4, 0, 0), (4, 4, 0), (0, 4, 0), (0, 0, 0)],
       f"edge (0,0)-(4,0), 4 sides: the square on its left ({verts(g)}; {msg!r})")
-g, msg, c = draw("polygon", ["Edge", "Flip=Yes", "0,0,0", "4,0,0", "4"])
+g, msg, c = draw("polygon", ["NumSides=4", "Edge", "Flip=Yes", "0,0,0", "4,0,0"])
 check(verts(g) == [(0, 0, 0), (4, 0, 0), (4, -4, 0), (0, -4, 0), (0, 0, 0)],
       f"Flip puts it on the other side ({verts(g)})")
-g, msg, c = draw("polygon", ["Edge", "0,0,0", "2,0,0", "6"])
+g, msg, c = draw("polygon", ["NumSides=6", "Edge", "0,0,0", "2,0,0"])
 vs = verts(g)
 check(vs is not None and len(vs) == 7
       and all(abs(math.dist(vs[i], vs[i + 1]) - 2) < 1e-9 for i in range(6)),

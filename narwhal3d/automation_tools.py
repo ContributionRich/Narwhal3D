@@ -103,10 +103,14 @@ class ApplicationReader:
         self._version = application_version
         self._component_snapshot = component_snapshot
         self._workspace_snapshot = workspace_snapshot
+        from .ai_workspace import WorkspaceSnapshots
+        self._snapshots = WorkspaceSnapshots(app_state)
 
     def read(self, tool, arguments):
         require_main_thread()
         validate_arguments(tool, arguments)
+        if not self._snapshots.current():
+            raise ReadError("application_unavailable")
         try:
             if tool == "narwhal.application_info":
                 # Blender has already loaded bpy. Importing the application package or
@@ -132,7 +136,19 @@ class ApplicationReader:
             if tool == "narwhal.objects":
                 return self._page(model.file.Objects, "objects", arguments, self._object)
             if tool == "narwhal.layers":
-                return self._page(model.file.Layers, "layers", arguments, self._layer)
+                result = self._page(model.file.Layers, "layers", arguments, self._layer)
+                if self._snapshots.ready():
+                    flags = self._snapshots.layer_flags([row["layer_id"] for row in result["layers"]])
+                    for row in result["layers"]:
+                        row["effective_flags"] = flags[row["layer_id"]]
+                    while result["layers"] and self._encoded_size(result) > MAX_CONTEXT_BYTES:
+                        result["layers"].pop()
+                        end = result["offset"] + len(result["layers"])
+                        result.update(next_offset=end if end <= MAX_SCAN else None,
+                                      truncated=True, truncation_reason="byte_limit")
+                if not self._snapshots.current():
+                    raise ReadError("application_unavailable")
+                return result
             if tool == "narwhal.workspace":
                 return self._workspace(model)
             if tool == "narwhal.components":
@@ -274,8 +290,11 @@ class ApplicationReader:
                 "cplane": self._unavailable("ui_snapshot_not_connected"),
                 "view": self._unavailable("ui_snapshot_not_connected"),
                 "provenance": self._provenance("NarwhalModel/AppState.active_command")}
-        if self._workspace_snapshot is not None:
-            snapshot = self._workspace_snapshot()
+        snapshot_reader = self._workspace_snapshot
+        if snapshot_reader is None and self._snapshots.ready():
+            snapshot_reader = self._snapshots.workspace
+        if snapshot_reader is not None:
+            snapshot = snapshot_reader()
             self._validate_workspace_snapshot(snapshot)
             frame = snapshot["cplane"] if snapshot is not None else None
             view = snapshot["view"] if snapshot is not None else None
@@ -285,6 +304,15 @@ class ApplicationReader:
                 {key: list(value) for key, value in frame.items()} if frame is not None else None)
             result["view"] = self._workspace_value(dict(view) if view is not None else None)
             result["active_command"]["phase"] = self._workspace_value(phase)
+        if self._snapshots.ready():
+            index = int(model.current_layer_index)
+            if 0 <= index < len(model.file.Layers):
+                layer_id = str(model.file.Layers[index].Id)
+                result["current_layer_effective"] = self._snapshots.layer_flags([layer_id])[layer_id]
+            else:
+                result["current_layer_effective"] = self._unavailable("current_layer_missing")
+        if not self._snapshots.current():
+            raise ReadError("application_unavailable")
         return result
 
     @staticmethod
@@ -322,10 +350,15 @@ class ApplicationReader:
 
     def _components(self):
         provenance = self._provenance("component_snapshot")
-        if self._component_snapshot is None:
+        snapshot_reader = self._component_snapshot
+        if snapshot_reader is None and self._snapshots.ready():
+            snapshot_reader = self._snapshots.components
+        if snapshot_reader is None:
             return dict(self._unavailable("component_snapshot_not_connected"),
                         provenance=provenance)
-        snapshot = self._component_snapshot(limit=MAX_PAGE)
+        snapshot = snapshot_reader(limit=MAX_PAGE)
+        if not self._snapshots.current():
+            raise ReadError("application_unavailable")
         if snapshot is None:
             return dict(self._unavailable("canonical_components_unavailable"),
                         provenance=provenance)

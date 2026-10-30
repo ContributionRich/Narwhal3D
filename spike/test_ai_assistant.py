@@ -25,8 +25,8 @@ def check(condition, label, detail=""):
 
 
 check(tuple(pid for pid, _label in ai.PROVIDERS) ==
-      ("openai", "anthropic", "openai_compatible"),
-      "the provider model exposes OpenAI, Anthropic, then local-compatible")
+      ("openai", "anthropic", "openai_compatible", "openai_responses"),
+      "provider choices preserve existing APIs and explicitly add Responses")
 local = ai.set_provider("openai_compatible", model="local-model")
 check(ai.validate_endpoint(local.endpoint) == "http://127.0.0.1:1234/v1",
       "LM Studio defaults to the loopback OpenAI-compatible endpoint")
@@ -146,8 +146,9 @@ check(ai.panel_hit(layout, (connection[0] + connection[2]) / 2,
                    (connection[1] + connection[3]) / 2) is None,
       "connection status is informative, not dead provider-selection chrome")
 context = layout["context"]
-check(ai.panel_hit(layout, context[0] + 2, (context[1] + context[3]) / 2)
-      == ("context", None), "selected-object context has an explicit clickable toggle")
+check(context[1] == context[3] and ai.panel_hit(
+      layout, context[0] + 2, context[1]) != ("context", None),
+      "automatic selected-object context has no visible or clickable opt-out")
 check([button_id for button_id, _rect in layout["buttons"]] ==
       ["send", "new", "settings"],
       "Send, New Chat, and Settings are three distinct controls")
@@ -183,7 +184,8 @@ panel_node = next(node for node in ast.parse(ui_source).body
                   if isinstance(node, ast.FunctionDef) and node.name == "_draw_ai_panel")
 panel_source = ast.get_source_segment(ui_source, panel_node)
 check("credential_env" not in panel_source and "masked_credential" not in panel_source
-      and "Model:" not in panel_source and "Connection:" in panel_source,
+      and "Model:" not in panel_source and "ai_assistant.connection_label(st)" in panel_source
+            and "Include selection" not in panel_source,
       "the chat body shows only connection status; setup details stay in Settings")
 
 measure = lambda value: len(value) * 7.0  # noqa: E731

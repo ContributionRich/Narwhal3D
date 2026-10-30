@@ -40,7 +40,7 @@ EXPECTED = dict(theme='dark', show_unavailable=False, toolbar='Transform',
                 inspector='AI Assistant', grid_snap=True, ortho=True, gumball=False,
                 gumball_alignment='World', viewport_tabs=False, osnap_disabled=False,
                 osnap_modes=['Cen', 'End', 'Mid', 'Near', 'Point', 'Quad'],
-                osnap_project=True, ai_include_selection=False)
+                osnap_project=True)
 AI = dict(provider_id='openai_compatible', model='test-model', endpoint='http://localhost:11434',
           credential_env='LOCAL_AI_KEY', allow_insecure_remote=False)
 PRINT = dict(size='A4', orientation='Portrait', scale='1:2', view='Top')
@@ -158,9 +158,9 @@ def draw_checks(name):
                 if frame is None:
                     break
                 if frame.f_code.co_name in records:
-                    value = (list(args[1:5]), tuple(args[5])) if kind == 'rect' else (
+                    value = (list(args[1:5]), tuple(args[6] if kind == 'round' else args[5])) if kind in ('rect', 'round') else (
                         str(args[2]), tuple(args[4] if len(args) > 4 else kwargs.get('color', (0, 0, 0, 1))))
-                    records[frame.f_code.co_name][kind].append(value)
+                    records[frame.f_code.co_name]['rect' if kind == 'round' else kind].append(value)
                     break
                 frame = frame.f_back
             return original(*args, **kwargs)  # Real GPU/BLF call, not fake drawing.
@@ -170,6 +170,7 @@ def draw_checks(name):
         check(bool(colors) and all(color == token for color in colors), name + ' ' + key + ' field/surface')
     ui.set_shell_theme(name)
     with patch.object(ui, '_draw_rect', capture('rect', ui._draw_rect)), \
+         patch.object(ui, '_draw_round_rect', capture('round', ui._draw_round_rect)), \
          patch.object(ui, '_draw_text', capture('text', ui._draw_text)):
         inspector('Bug Report')
         fill('_draw_bug_panel', ui._bug['lay']['box'], design.rgb01(design.FIELD_BG))
@@ -333,14 +334,15 @@ def run():
         ui.osnap_panel_click('Near')
         ui.osnap_panel_click('Project')
         rect = ui._ai['lay']['context']
-        rx, ry = ui._ai['region']
-        ui.ai_panel_click(rx + (rect[0] + rect[2]) / 2, ry + (rect[1] + rect[3]) / 2)
+        check(rect[1] == rect[3] and ui.ai_assistant_state().include_selection,
+              'AI selection context is automatic, with no checkbox or opt-out to persist')
         equal(bpy.ops.narwhal.ai_settings('EXEC_DEFAULT', **AI), {'FINISHED'}, 'AI execute without network')
         check(ui.open_print_dialog(), 'Print opens')
         for key, value in PRINT.items():
             print_choice(key, value)
         ui.close_print_dialog()
     restored()
+    check(ui.ai_assistant_state().include_selection, 'selection context is automatic after restore')
     subset(disk(), EXPECTED, 'disk')
     equal(disk()['ai_config'], AI, 'disk AI whitelist only')
     subset(disk()['print_settings'], PRINT, 'disk Print')

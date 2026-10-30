@@ -55,13 +55,33 @@ class PreferencesTests(unittest.TestCase):
             "gumball": True, "gumball_alignment": "CPlane", "viewport_tabs": True,
             "osnap_modes": ["End", "Point", "Mid", "Cen", "Quad"],
             "osnap_disabled": False, "osnap_project": False,
-            "ai_config": {}, "ai_include_selection": True, "print_settings": {},
+            "ai_config": {}, "ai_include_selection": True, "ai_metadata_permission": {}, "print_settings": {},
         }
         self.assertEqual(prefs.load(), expected)
         self.assertEqual({key: prefs.get(key) for key in expected}, expected)
         self.assertFalse(self.path.parent.exists())
         prefs.update({})
         self.assertFalse(self.path.exists())
+
+    def test_metadata_permission_is_explicit_bounded_and_recipient_scoped(self):
+        config = prefs.ai_assistant.set_provider('openai_compatible', 'model-a')
+        permission = prefs.ai_assistant.metadata_permission(config)
+        self.assertEqual(prefs.get('ai_metadata_permission'), {})
+        prefs.update({'ai_metadata_permission': permission})
+        prefs.reset_cache()
+        self.assertEqual(prefs.load()['ai_metadata_permission'], permission)
+        self.assertEqual(prefs.ai_assistant.metadata_permission(
+            prefs.ai_assistant.set_provider('openai_compatible', 'model-b')), permission)
+        self.assertNotEqual(prefs.ai_assistant.metadata_permission(
+            prefs.ai_assistant.set_provider('openai_compatible', 'model-a', 'http://127.0.0.1:4321/v1')), permission)
+        for bad in (dict(permission, version=True), dict(permission, api_key='secret'),
+                    dict(permission, endpoint='http://127.0.0.1:1234/v1/'),
+                    dict(permission, provider_id='unknown')):
+            with self.assertRaises(ValueError):
+                prefs.update({'ai_metadata_permission': bad})
+        prefs.update({'ai_metadata_permission': {}})
+        prefs.reset_cache()
+        self.assertEqual(prefs.load()['ai_metadata_permission'], {})
 
     def test_corrupt_files_and_wrong_types(self):
         self.path.parent.mkdir(parents=True)

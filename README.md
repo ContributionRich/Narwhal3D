@@ -10,7 +10,7 @@ Draw with the mouse, type a command, or choose a tool from the sidebar. Work in 
 
 **[Download for Linux](https://github.com/ContributionRich/Narwhal3D/releases/download/v0.4.7/Narwhal_3D-0.4.7-x86_64.AppImage)** · **[Download for Windows](https://github.com/ContributionRich/Narwhal3D/releases/download/v0.4.7/Narwhal_3D-0.4.7-Windows-x86_64.zip)** · [What's new in 0.4.7](https://github.com/ContributionRich/Narwhal3D/releases/tag/v0.4.7)
 
-> **Source updates are ahead of the downloads.** `main` includes newer AI/read-only MCP and bounded multi-section Sweep1 work. The linked **0.4.7** downloads are unchanged; no new release accompanies this source update. See [current source status](STATUS.md#current-source-checkout-unreleased).
+> **Source updates are ahead of the downloads.** `main` includes the revised welcome/inspector UI, automatic AI selection context, remembered provider permissions, explicitly approved box creation, newer read-only MCP support and bounded multi-section Sweep1 work. The linked **0.4.7** downloads are unchanged; no new release accompanies this source update. See [current source status](STATUS.md#current-source-checkout-unreleased).
 
 > **An early preview, built in the open.** Narwhal is still growing, and some tools are incomplete. Save important work often and verify dimensions and exported geometry before manufacturing. [See what works and what's still missing →](docs/gaps.md)
 

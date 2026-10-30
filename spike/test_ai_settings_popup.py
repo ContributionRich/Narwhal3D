@@ -75,7 +75,8 @@ class PopupTests(unittest.TestCase):
     def test_real_providers_and_no_raw_key(self):
         self.m.activate("provider")
         self.assertEqual(self.m.choices(), ai.PROVIDERS)
-        self.assertEqual(len(ai.PROVIDERS), 3)
+        self.assertEqual(len(ai.PROVIDERS), 4)
+        self.assertIn(("openai_responses", "OpenAI Responses"), self.m.choices())
         self.assertIn(("anthropic", "Anthropic"), self.m.choices())
         self.assertEqual(set(self.m.fields), {"endpoint", "model", "credential_env"})
         self.assertFalse(self.refreshed, "open must not start networking")

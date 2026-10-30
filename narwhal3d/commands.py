@@ -3353,27 +3353,16 @@ class EllipseCmd(Command):
 
 
 class PolygonCmd(Command):
-    # `Polygon` -- center, radius (to a corner, inscribed), number of
-    # sides. the command behavior: the default (Inscribed) means "the corners of
-    # the sides touch an imaginary circle of a specified radius" -- so the radius
-    # the user types is the CORNER radius, which is exactly what
-    # bridge.make_polygon inscribes.
+    # MEASURED: count changes at the initial point prompt; only a completed
+    # polygon updates remembered NumSides. Geometry remains in existing producers.
     name = "Polygon"
-    description = ("Draw a regular polygon. Pick the center, then a radius "
-                   "location or type a radius, then the number of sides.")
-    # The radius step is DISTANCE (a picked location answers it, from
-    # the centre -- the last picked point). The side count is a true NUMBER: a
-    # count is a ratio/count, not a location, so a click must NOT answer it --
-    # the same reasoning as Scale.
-    steps = [("Center:", POINT), ("Radius:", DISTANCE), ("Sides:", NUMBER)]
-    # the top-level options the the reference CAD application 8 help documents for Polygon
-    # (the command behavior). `NumSides` is a VALUE (a number) -- it sets the
-    # side count, which the default flow already collects, so it is redundant in
-    # the default path but must be declared for fidelity. The rest are MODE
-    # options (or TOGGLEs where the help describes them as on/off) and report
-    # "not implemented yet" through the framework's default on_mode.
+    description = "Draw a regular polygon. Set NumSides, then pick its center and corner."
+    # MEASURED live reference (probe_f5d19b426b8d48419d5c642720df42d9): a submitted
+    # radius keeps the corner pick active. POINT lets the UI's existing numeric
+    # distance constraint preserve that radius while the cursor chooses direction.
+    steps = [("Center of inscribed polygon:", POINT), ("Corner of polygon:", POINT)]
     options = (
-        opts.Option("NumSides", opts.VALUE, value_kind="number",
+        opts.Option("NumSides", opts.VALUE, default=5, value_kind="number",
                     help="Specifies the number of sides for the polygon."),
         opts.Option("Vertical", opts.MODE,
                     help="Draws a polygon perpendicular to the construction plane."),
@@ -3396,10 +3385,70 @@ class PolygonCmd(Command):
                           "of the outer and inner points are equal.")),
     )
 
+    # OURS: bound interactive allocation rather than accept an unbounded count.
+    MAX_SIDES = 10_000
+
     def __init__(self):
         super().__init__()
         self._inscribed = True
         self._edge = False
+        self._num_sides = 5
+        self._published_num_sides = None
+
+    def begin(self, ctx):
+        # Load at begin, not construction: the registry supplies deep-copied prototypes.
+        self._num_sides = self._validated_num_sides(getattr(ctx, '_polygon_num_sides', 5))
+        self.opt['NumSides'] = self._num_sides
+        return super().begin(ctx)
+
+    @classmethod
+    def _validated_num_sides(cls, value):
+        count = float(value)
+        if not math.isfinite(count) or not count.is_integer() or count < 3:
+            raise ValueError('Polygon: needs an integer count of at least 3 sides')
+        if count > cls.MAX_SIDES:
+            raise ValueError(f'Polygon: interactive side-count limit is {cls.MAX_SIDES}')
+        return int(count)
+
+    def on_option_set(self, option, value, ctx):
+        if option.name != 'NumSides':
+            return super().on_option_set(option, value, ctx)
+        try:
+            count = self._validated_num_sides(value)
+        except (TypeError, ValueError, OverflowError) as exc:
+            self.opt['NumSides'] = self._num_sides
+            return str(exc), False
+        self._num_sides = count
+        self.opt['NumSides'] = count
+        return f'NumSides={count}', False
+
+    def _feed(self, text, ctx):
+        text = text.strip()
+        if self.pending_option is not None and self.pending_option.name == 'NumSides' and text:
+            value, error = opts.coerce(self.pending_option, text)
+            if error:
+                return error, False
+            try:
+                self._validated_num_sides(value)
+            except (TypeError, ValueError, OverflowError) as exc:
+                return str(exc), False
+        elif self.pending_option is None and self.step_index == 0 and text:
+            try:
+                count = parse_number(text)
+            except ValueError:
+                pass
+            else:
+                return self._apply_option(opts.Match(opts.SET, self.options[0], count), ctx)
+        return super()._feed(text, ctx)
+
+    def _recorded(self, ctx, work):
+        self._published_num_sides = None
+        result = super()._recorded(ctx, work)
+        # A builder, publisher or Undo finalization exception must not commit the draft.
+        if self._published_num_sides is not None and result[1]:
+            ctx._polygon_num_sides = self._published_num_sides
+        self._published_num_sides = None
+        return result
 
     def on_mode(self, name, ctx):
         """`Inscribed` / `Circumscribed` ("Midpoints of the sides touch an imaginary
@@ -3408,16 +3457,18 @@ class PolygonCmd(Command):
         polygon", "Center of circumscribed polygon", "Start of edge" / "End of edge"."""
         if name in ("Inscribed", "Circumscribed"):
             self._inscribed = name == "Inscribed"
-            if not self._edge and self.step_index == 0:
-                self.steps[0] = (f"Center of {name.lower()} polygon:", POINT)
+            if not self._edge:
+                self.steps[1] = ("Corner of polygon:" if self._inscribed else
+                                 "Midpoint of polygon edge:", POINT)
+                if self.step_index == 0:
+                    self.steps[0] = (f"Center of {name.lower()} polygon:", POINT)
             return f"Polygon: {name} -- the radius reaches the " + (
                 "corners" if self._inscribed else "midpoints of the sides"), False
         if name == "Edge":
             if self.args:
                 return "Polygon: Edge is chosen before the first point", False
             self._edge = True
-            self.steps = [("Start of edge:", POINT), ("End of edge:", POINT),
-                          ("Sides:", NUMBER)]
+            self.steps = [("Start of edge:", POINT), ("End of edge:", POINT)]
             return "Polygon: Edge mode -- pick the two ends of one side", False
         return super().on_mode(name, ctx)
 
@@ -3425,8 +3476,8 @@ class PolygonCmd(Command):
         """Edge mode: a regular polygon with the picked side. it lies on the LEFT
         of start -> end in the active CPlane (the reference CAD application uses the cursor's side); `Flip`
         puts it on the right ("Flips the polygon about the edge you are drawing")."""
-        a, b, sides = self.args
-        n = int(sides)
+        a, b = self.args
+        n = self._num_sides
         if n < 3:
             return "Polygon: needs at least 3 sides"
         p = self._active_cplane(ctx)
@@ -3450,16 +3501,34 @@ class PolygonCmd(Command):
             if isinstance(geom, str):
                 return geom, True
             _, display_name = ctx.add_geometry(geom, "Polygon")
-            return f"Created {display_name} ({int(self.args[2])} sides, by edge)", True
-        center, radius, sides = self.args
-        if radius <= 0:
-            return "Polygon: radius must be positive", True
+            if not display_name:
+                raise RuntimeError('Polygon publication did not return a display object')
+            self._published_num_sides = self._num_sides
+            return f"Created {display_name} ({self._num_sides} sides, by edge)", True
+        center, corner = self.args
+        sides = self._num_sides
+        plane = self._active_cplane(ctx)
+        cu, cv, _ = plane.from_world(center)
+        pu, pv, _ = plane.from_world(corner)
+        du, dv = pu - cu, pv - cv
+        radius = math.hypot(du, dv)
+        if not math.isfinite(radius) or radius <= 0:
+            return "Polygon: radius must be positive in the construction plane", True
         sides = int(sides)
         if sides < 3:
             return "Polygon: needs at least 3 sides", True
+        # Frame adaptation only: reuse the exact producer, with +x pointing at
+        # the picked corner (or Circumscribed edge midpoint). No new geometry math.
+        oriented = cplane.CPlane(center, plane.vector_to_world(du / radius, dv / radius),
+                                 plane.vector_to_world(-dv / radius, du / radius))
         geom = bridge.make_polygon(center, radius, sides, inscribed=self._inscribed,
-                                   plane=self._active_cplane(ctx))
+                                   plane=oriented)
+        if geom is None or not isinstance(geom, r3.Curve) or not geom.IsValid:
+            raise ValueError('Polygon construction did not return a valid curve')
         _, display_name = ctx.add_geometry(geom, "Polygon")
+        if not display_name:
+            raise RuntimeError('Polygon publication did not return a display object')
+        self._published_num_sides = sides
         return f"Created {display_name} ({sides} sides, r={radius:g})", True
 
 

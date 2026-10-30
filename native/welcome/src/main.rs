@@ -17,7 +17,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const READY_MARKER: &str = "[narwhal3d] first presentation released (ui-ready)";
-const WINDOW_SIZE: [f32; 2] = [580.0, 438.0];
+// MEASURED: final welcome.css refinement, not its superseded base rules.
+const WINDOW_SIZE: [f32; 2] = [640.0, 470.0];
 const MIN_VISIBLE_SECONDS: f32 = 1.8;
 const FADE_SECONDS: f32 = 0.38;
 const ATTENTION_GRACE_SECONDS: f32 = 0.75;
@@ -109,8 +110,42 @@ struct AvailableRelease {
     asset: ReleaseAsset,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum UpdateStatus {
+    Idle,
+    Checking,
+    Unavailable,
+    Unsafe,
+    Current,
+    Available,
+    Updating,
+}
+
+impl UpdateStatus {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Idle => "Update status not checked",
+            Self::Checking => "Checking for updates…",
+            Self::Unavailable => "Update check unavailable",
+            Self::Unsafe => "Unable to check securely",
+            Self::Current => "You're up to date",
+            Self::Available => "Update available",
+            Self::Updating => "Installing update…",
+        }
+    }
+
+    fn shows_releases(self) -> bool {
+        matches!(self, Self::Unavailable | Self::Unsafe | Self::Available)
+    }
+}
+
+struct UpdateCheck {
+    status: UpdateStatus,
+    release: Option<AvailableRelease>,
+}
+
 enum UpdateEvent {
-    Checked(Result<Option<AvailableRelease>, String>),
+    Checked(Result<UpdateCheck, String>),
     Installed(Result<String, String>),
 }
 
@@ -179,6 +214,7 @@ struct WelcomeApp {
     current_version: Option<String>,
     update_check_started: bool,
     update_busy: bool,
+    update_status: UpdateStatus,
     available_release: Option<AvailableRelease>,
     update_message: Option<String>,
     logo: egui::TextureHandle,
@@ -469,10 +505,56 @@ fn releases_api() -> (String, bool) {
     (RELEASES_API.to_owned(), false)
 }
 
-fn check_for_update(
+// OURS: distinguish a successful comparison from an empty/unsupported/unsafe feed.
+// Never offer an older usable asset when the newest release cannot be verified.
+fn classify_update(
+    releases: &[GithubRelease],
     current: &str,
     platform: UpdatePlatform,
-) -> Result<Option<AvailableRelease>, String> {
+    overridden: bool,
+) -> UpdateCheck {
+    let outcome = |status| UpdateCheck {
+        status,
+        release: None,
+    };
+    let Some(installed) = parse_version(current) else {
+        return outcome(UpdateStatus::Unavailable);
+    };
+    let published: Vec<_> = releases.iter().filter(|release| !release.draft).collect();
+    if published
+        .iter()
+        .any(|release| parse_version(&release.tag_name).is_none())
+    {
+        return outcome(UpdateStatus::Unavailable);
+    }
+    let Some(latest) = published
+        .into_iter()
+        .max_by_key(|release| parse_version(&release.tag_name))
+    else {
+        return outcome(UpdateStatus::Unavailable);
+    };
+    if parse_version(&latest.tag_name).is_some_and(|version| version <= installed) {
+        return outcome(UpdateStatus::Current);
+    }
+    if !latest
+        .assets
+        .iter()
+        .any(|asset| asset_matches_platform(&asset.name, platform))
+    {
+        return outcome(UpdateStatus::Unavailable);
+    }
+    match select_release(std::slice::from_ref(latest), current, platform) {
+        Some(release) if trusted_asset_url(&release.asset.browser_download_url, overridden) => {
+            UpdateCheck {
+                status: UpdateStatus::Available,
+                release: Some(release),
+            }
+        }
+        _ => outcome(UpdateStatus::Unsafe),
+    }
+}
+
+fn check_for_update(current: &str, platform: UpdatePlatform) -> Result<UpdateCheck, String> {
     let (api, overridden) = releases_api();
     let client = http_client(REQUEST_TIMEOUT, overridden)?;
     let response = client
@@ -493,7 +575,7 @@ fn check_for_update(
     let bytes = read_limited(response, API_RESPONSE_LIMIT)?;
     let releases: Vec<GithubRelease> = serde_json::from_slice(&bytes)
         .map_err(|error| format!("invalid release response: {error}"))?;
-    Ok(select_release(&releases, current, platform))
+    Ok(classify_update(&releases, current, platform, overridden))
 }
 
 fn trusted_asset_url(value: &str, overridden: bool) -> bool {
@@ -1005,6 +1087,7 @@ impl WelcomeApp {
             current_version,
             update_check_started: false,
             update_busy: false,
+            update_status: UpdateStatus::Idle,
             available_release: None,
             update_message: None,
             logo: load_logo(cc),
@@ -1114,14 +1197,18 @@ impl WelcomeApp {
         }
         self.update_check_started = true;
         let Some(version) = self.current_version.clone() else {
-            self.update_message = Some("Update check unavailable in this package.".to_owned());
+            self.update_status = UpdateStatus::Unavailable;
+            self.update_message =
+                Some("The launcher did not provide a valid installed version.".to_owned());
             return;
         };
         let Some(platform) = UpdatePlatform::current() else {
+            self.update_status = UpdateStatus::Unavailable;
             self.update_message =
                 Some("Use the release page for updates on this platform.".to_owned());
             return;
         };
+        self.update_status = UpdateStatus::Checking;
         let sender = self.update_sender.clone();
         std::thread::spawn(move || {
             let result = check_for_update(&version, platform);
@@ -1130,10 +1217,11 @@ impl WelcomeApp {
     }
 
     fn start_install(&mut self, release: AvailableRelease) {
-        if self.update_busy {
+        if self.update_busy || self.update_status != UpdateStatus::Available {
             return;
         }
         self.update_busy = true;
+        self.update_status = UpdateStatus::Updating;
         self.update_message = Some("Downloading and verifying update…".to_owned());
         let sender = self.update_sender.clone();
         std::thread::spawn(move || {
@@ -1145,25 +1233,30 @@ impl WelcomeApp {
     fn poll_updates(&mut self) {
         while let Ok(event) = self.update_events.try_recv() {
             match event {
-                UpdateEvent::Checked(Ok(Some(release))) => {
-                    self.lifetime.fade_started = None;
-                    self.available_release = Some(release);
-                    self.update_message = None;
-                }
-                UpdateEvent::Checked(Ok(None)) => {
-                    if let Some(version) = &self.current_version {
-                        self.update_message = Some(format!("Version {version} is up to date."));
+                UpdateEvent::Checked(Ok(check)) => {
+                    if check.release.is_some() {
+                        self.lifetime.fade_started = None;
                     }
+                    self.update_status = check.status;
+                    self.available_release = check.release;
+                    self.update_message = None;
                 }
                 UpdateEvent::Checked(Err(error)) => {
                     eprintln!("[narwhal-welcome] {error}");
+                    self.update_status = UpdateStatus::Unsafe;
                     self.update_message = Some("Could not check for updates safely.".to_owned());
                 }
                 UpdateEvent::Installed(result) => {
                     self.update_busy = false;
+                    self.available_release = None;
                     self.update_message = Some(match result {
-                        Ok(message) => message,
+                        Ok(message) => {
+                            // The running version has not changed; a restart/exit is still required.
+                            self.update_status = UpdateStatus::Idle;
+                            message
+                        }
                         Err(error) => {
+                            self.update_status = UpdateStatus::Unsafe;
                             eprintln!("[narwhal-welcome] update failed: {error}");
                             "Update failed safely. Download it from the release page.".to_owned()
                         }
@@ -1173,40 +1266,61 @@ impl WelcomeApp {
         }
     }
 
-    fn news_panel(&mut self, ui: &mut egui::Ui) {
-        ui.heading("News");
+    fn version_panel(&mut self, ui: &mut egui::Ui) {
+        let p = self.theme.palette();
+        ui.label(RichText::new("Version").size(13.0).strong());
+        ui.add_space(12.0);
+        ui.label(RichText::new("Installed version").size(11.0).color(p.muted));
+        ui.add_space(5.0);
+        ui.label(
+            RichText::new(self.current_version.as_deref().unwrap_or("Not provided")).size(16.0),
+        );
+        ui.add_space(12.0);
+        egui::Frame::new()
+            .fill(p.field)
+            .stroke(Stroke::new(1.0, p.border))
+            .corner_radius(8)
+            .inner_margin(egui::Margin::symmetric(11, 10))
+            .show(ui, |ui| {
+                ui.horizontal_top(|ui| {
+                    ui.spacing_mut().item_spacing.x = 8.0;
+                    let dot = match self.update_status {
+                        UpdateStatus::Current => p.status_current,
+                        UpdateStatus::Available => p.status_available,
+                        UpdateStatus::Checking | UpdateStatus::Updating => p.status_working,
+                        _ => p.status_neutral,
+                    };
+                    let (rect, _) =
+                        ui.allocate_exact_size(Vec2::new(8.0, 16.0), egui::Sense::hover());
+                    ui.painter().circle_filled(rect.center(), 4.0, dot);
+                    ui.add(
+                        egui::Label::new(RichText::new(self.update_status.label()).size(12.0))
+                            .wrap(),
+                    );
+                });
+            });
         if let Some(release) = self.available_release.clone() {
-            ui.label(RichText::new(format!("Version {} available", release.version)).strong());
-            ui.label(&release.title);
-            ui.label(&release.notes);
-            if ui
-                .add_enabled(
-                    !self.update_busy,
-                    egui::Button::new(if self.update_busy {
-                        "Updating…"
-                    } else {
-                        "Download and install"
-                    }),
-                )
-                .clicked()
+            ui.add_space(10.0);
+            ui.label(RichText::new(format!("Latest version: {}", release.version)).size(12.0))
+                .on_hover_text(&release.title);
+            if self.update_status == UpdateStatus::Available
+                && ui
+                    .button("Download update")
+                    .on_hover_text(&release.notes)
+                    .clicked()
             {
-                self.start_install(release.clone());
+                self.start_install(release);
             }
-            ui.hyperlink_to("Open release page", &release.page_url);
-        } else if let Some(message) = &self.update_message {
-            ui.label(message);
-            if message.contains("unavailable") || message.contains("safely") {
-                ui.hyperlink_to("Open release page", RELEASES_PAGE);
-            }
-        } else if self.update_check_started {
-            ui.label("Checking for updates…");
-        } else {
-            ui.label("Rust acceleration and startup work are in progress.");
+        }
+        if self.update_status.shows_releases() {
+            let url = self
+                .available_release
+                .as_ref()
+                .map_or(RELEASES_PAGE, |release| &release.page_url);
+            ui.hyperlink_to("View releases", url);
         }
         if let Some(message) = &self.update_message {
-            if self.available_release.is_some() {
-                ui.label(message);
-            }
+            ui.add(egui::Label::new(RichText::new(message).size(11.5).color(p.muted)).wrap());
         }
     }
 
@@ -1228,28 +1342,36 @@ impl WelcomeApp {
             (Tab::About, "About"),
         ];
         ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 5.0;
+            ui.spacing_mut().button_padding = Vec2::new(14.0, 0.0);
+            ui.spacing_mut().interact_size.y = 30.0;
             for (tab, label) in tabs {
                 let selected = self.tab == tab;
-                let text = RichText::new(label).size(10.5).color(if selected {
-                    palette.on_accent
+                let text = RichText::new(label).size(12.5).color(if selected {
+                    palette.accent
                 } else {
-                    palette.text
+                    palette.muted
                 });
                 let button = egui::Button::new(text)
                     .fill(if selected {
-                        palette.accent
+                        palette.accent_soft
                     } else {
                         Color32::TRANSPARENT
                     })
-                    .stroke(Stroke::NONE)
-                    .min_size(Vec2::new(72.0, 24.0));
+                    .corner_radius(7)
+                    .stroke(if selected {
+                        Stroke::new(1.0, palette.accent.gamma_multiply(0.18))
+                    } else {
+                        Stroke::NONE
+                    })
+                    .min_size(Vec2::new(75.0, 34.0));
                 if ui.add(button).clicked() {
                     self.tab = tab;
                 }
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let close = egui::Button::new(RichText::new("×").size(17.0))
-                    .min_size(Vec2::new(28.0, 24.0))
+                let close = egui::Button::new(RichText::new("×").size(21.0).color(palette.muted))
+                    .min_size(Vec2::new(30.0, 30.0))
                     .frame(false);
                 if ui
                     .add(close)
@@ -1259,11 +1381,17 @@ impl WelcomeApp {
                     self.lifetime.dismiss();
                     self.hide_welcome(ui.ctx());
                 }
-                ui.label(
-                    RichText::new("EARLY PREVIEW")
-                        .size(8.0)
-                        .color(palette.muted),
-                );
+                egui::Frame::new()
+                    .fill(palette.accent_soft)
+                    .corner_radius(6)
+                    .inner_margin(egui::Margin::symmetric(9, 7))
+                    .show(ui, |ui| {
+                        ui.label(
+                            RichText::new("EARLY PREVIEW")
+                                .size(10.0)
+                                .color(palette.accent),
+                        );
+                    });
             });
         });
     }
@@ -1272,20 +1400,21 @@ impl WelcomeApp {
         let palette = self.theme.palette();
         if self.recent.is_empty() {
             ui.vertical_centered(|ui| {
-                ui.add_space(90.0);
+                ui.add_space(54.0);
                 ui.label(
                     RichText::new("No recent models yet")
-                        .size(12.0)
-                        .color(palette.muted),
+                        .size(15.0)
+                        .color(palette.strong),
                 );
                 ui.label("Use Open… to choose a .3dm model.");
             });
             return;
         }
         let recent = self.recent.clone();
+        let tile_width = (ui.available_width() - 36.0) / 4.0;
         egui::Grid::new("recent-grid")
             .num_columns(4)
-            .spacing([8.0, 9.0])
+            .spacing([12.0, 14.0])
             .show(ui, |ui| {
                 for (index, path) in recent.iter().enumerate() {
                     let name = path
@@ -1293,15 +1422,17 @@ impl WelcomeApp {
                         .and_then(|value| value.to_str())
                         .unwrap_or("Model.3dm");
                     ui.vertical(|ui| {
+                        ui.set_width(tile_width);
                         let preview = egui::Button::new(
                             RichText::new("NARWHAL\n3DM")
-                                .size(8.5)
+                                .size(10.0)
                                 .strong()
                                 .color(palette.chrome_text),
                         )
                         .fill(palette.chrome)
                         .stroke(Stroke::new(1.0, palette.border_strong))
-                        .min_size(Vec2::new(76.0, 70.0));
+                        .corner_radius(8)
+                        .min_size(Vec2::new(tile_width, 78.0));
                         if ui
                             .add(preview)
                             .on_hover_text(path.display().to_string())
@@ -1314,7 +1445,7 @@ impl WelcomeApp {
                             );
                         }
                         ui.add(
-                            egui::Label::new(RichText::new(name).size(7.5).color(palette.text))
+                            egui::Label::new(RichText::new(name).size(11.0).color(palette.text))
                                 .truncate(),
                         );
                     });
@@ -1327,25 +1458,51 @@ impl WelcomeApp {
 
     fn new_panel(&mut self, ui: &mut egui::Ui) {
         ui.heading(RichText::new("Start a new model").color(self.theme.palette().strong));
-        ui.label("Choose the document unit system:");
-        ui.add_space(12.0);
-        for (label, unit) in NEW_UNITS {
-            if ui
-                .add_sized([190.0, 31.0], egui::Button::new(label))
-                .clicked()
-            {
-                self.submit_and_hide("new", Some(unit), ui.ctx());
-            }
-            ui.add_space(7.0);
-        }
+        ui.add_space(3.0);
+        ui.label(
+            RichText::new("Choose the document unit system:").color(self.theme.palette().muted),
+        );
+        ui.add_space(20.0);
+        let width = (ui.available_width() - 10.0) / 2.0;
+        egui::Grid::new("welcome-units")
+            .num_columns(2)
+            .spacing([10.0, 10.0])
+            .show(ui, |ui| {
+                for (index, (label, unit)) in NEW_UNITS.into_iter().enumerate() {
+                    if ui
+                        .add_sized(
+                            [width, 42.0],
+                            egui::Button::new("")
+                                .left_text(label)
+                                .stroke(Stroke::new(1.0, self.theme.palette().border_strong)),
+                        )
+                        .clicked()
+                    {
+                        self.submit_and_hide("new", Some(unit), ui.ctx());
+                    }
+                    if index % 2 == 1 {
+                        ui.end_row();
+                    }
+                }
+            });
     }
 
     fn open_panel(&mut self, ui: &mut egui::Ui) {
         ui.heading(RichText::new("Open a model").color(self.theme.palette().strong));
-        ui.label("Open a .3dm or another supported model file.");
-        ui.add_space(18.0);
+        ui.add_space(3.0);
+        ui.label(
+            RichText::new("Open a .3dm or another supported model file.")
+                .color(self.theme.palette().muted),
+        );
+        ui.add_space(20.0);
+        let p = self.theme.palette();
         if ui
-            .add_sized([190.0, 31.0], egui::Button::new("Choose a model…"))
+            .add_sized(
+                [220.0, 40.0],
+                egui::Button::new(RichText::new("Choose a model…").color(p.on_accent))
+                    .fill(p.accent)
+                    .stroke(Stroke::new(1.0, p.accent)),
+            )
             .clicked()
         {
             self.submit_and_hide("open-dialog", None, ui.ctx());
@@ -1361,8 +1518,8 @@ impl Drop for WelcomeApp {
 
 impl eframe::App for WelcomeApp {
     fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
-        let alpha = self.lifetime.fade_alpha(Instant::now());
-        self.theme.clear_color(alpha)
+        // OURS: transparent outside the rounded native frame; UI opacity owns the fade.
+        self.theme.clear_color(0.0)
     }
 
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
@@ -1439,16 +1596,31 @@ impl eframe::App for WelcomeApp {
         let palette = self.theme.palette();
         // Fade the entire UI once, including custom text and theme-provided widgets.
         ui.set_opacity(alpha_f);
+        self.theme.style_ui(ui);
         egui::Frame::new()
             .fill(palette.panel)
-            .stroke(Stroke::new(1.0, palette.border))
+            .stroke(Stroke::new(1.0, palette.border_strong))
+            .corner_radius(12)
             .show(ui, |ui| {
-                self.top_tabs(ui);
-                ui.separator();
-                ui.horizontal(|ui| {
-                    ui.vertical(|ui| {
-                        ui.set_width(400.0);
-                        ui.add_space(12.0);
+                // OURS: reserve header/footer before scrollable content so long release
+                // details or recent filenames can never push progress out of the window.
+                let bounds = egui::Rect::from_min_size(ui.cursor().min, Vec2::new(638.0, 468.0));
+                let header_bottom = bounds.top() + 58.0;
+                let footer_top = bounds.bottom() - 60.0;
+                let divider_x = bounds.right() - 205.0;
+                let region = |left, top, right, bottom| egui::Rect::from_min_max(
+                    egui::pos2(left, top), egui::pos2(right, bottom));
+                let header = region(bounds.left() + 18.0, bounds.top() + 12.0,
+                    bounds.right() - 18.0, header_bottom - 12.0);
+                ui.scope_builder(egui::UiBuilder::new().max_rect(header), |ui| self.top_tabs(ui));
+                ui.painter().hline(bounds.x_range(), header_bottom, Stroke::new(1.0, palette.border));
+                let sidebar = region(divider_x, header_bottom, bounds.right(), footer_top);
+                ui.painter().rect_filled(sidebar, 0, palette.sidebar);
+                ui.painter().vline(divider_x, header_bottom..=footer_top, Stroke::new(1.0, palette.border));
+                let content = region(bounds.left() + 28.0, header_bottom + 30.0,
+                    divider_x - 28.0, footer_top - 24.0);
+                ui.scope_builder(egui::UiBuilder::new().max_rect(content), |ui| {
+                    egui::ScrollArea::vertical().id_salt("welcome-content").show(ui, |ui| {
                         match self.tab {
                             Tab::New => self.new_panel(ui),
                             Tab::Recent => self.recent_grid(ui),
@@ -1460,27 +1632,41 @@ impl eframe::App for WelcomeApp {
                             }
                         }
                     });
-                    ui.separator();
-                    ui.vertical(|ui| {
-                        ui.set_width(155.0);
-                        self.news_panel(ui);
-                        ui.add_space(35.0);
-                        ui.heading("Tips");
-                        ui.label("Use the viewport-title arrow to change display mode.");
-                        ui.add_space(50.0);
-                        ui.image((self.logo.id(), Vec2::splat(85.0)));
-                        ui.label(RichText::new("Narwhal 3D").size(16.0).strong().color(palette.accent));
+                });
+                let side_content = region(divider_x + 20.0, header_bottom + 27.0,
+                    bounds.right() - 20.0, footer_top - 66.0);
+                ui.scope_builder(egui::UiBuilder::new().max_rect(side_content), |ui| {
+                    egui::ScrollArea::vertical().id_salt("welcome-sidebar").show(ui, |ui| {
+                        self.version_panel(ui);
+                        ui.add_space(23.0);
+                        ui.label(RichText::new("Tips").size(13.0).strong());
+                        ui.label(RichText::new("Use the viewport-title arrow to change display mode.")
+                            .size(11.5).color(palette.muted));
                     });
                 });
-                ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
-                    let (progress, animate) = progress_state(self.ready, self.started.elapsed());
-                    ui.add(
-                        egui::ProgressBar::new(progress)
-                            .animate(animate)
-                            .desired_width(ui.available_width()),
-                    );
-                    ui.label(RichText::new(&self.status).color(palette.text));
+                let branding = region(divider_x + 20.0, footer_top - 61.0,
+                    bounds.right() - 20.0, footer_top - 18.0);
+                ui.scope_builder(egui::UiBuilder::new().max_rect(branding), |ui| {
+                    ui.painter().hline(branding.x_range(), branding.top(), Stroke::new(1.0, palette.border));
+                    ui.add_space(10.0);
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 10.0;
+                        ui.image((self.logo.id(), Vec2::splat(33.0)));
+                        ui.label(RichText::new("Narwhal 3D").size(13.0).color(palette.accent));
+                    });
                 });
+                ui.painter().hline(bounds.x_range(), footer_top, Stroke::new(1.0, palette.border));
+                let footer = region(bounds.left() + 18.0, footer_top + 13.0,
+                    bounds.right() - 18.0, bounds.bottom() - 16.0);
+                ui.scope_builder(egui::UiBuilder::new().max_rect(footer), |ui| {
+                    ui.spacing_mut().item_spacing.y = 8.0;
+                    ui.add(egui::Label::new(RichText::new(&self.status).size(11.5).color(palette.muted))
+                        .truncate()).on_hover_text(&self.status);
+                    let (progress, animate) = progress_state(self.ready, self.started.elapsed());
+                    ui.add(egui::ProgressBar::new(progress).animate(animate)
+                        .desired_height(6.0).desired_width(ui.available_width()));
+                });
+                ui.allocate_rect(bounds, egui::Sense::hover());
             });
         ctx.request_repaint_after(Duration::from_millis(33));
     }
@@ -1649,6 +1835,83 @@ mod tests {
             html_url: format!("https://github.com/ContributionRich/Narwhal3D/releases/tag/{tag}"),
             draft: false,
             assets,
+        }
+    }
+
+    #[test]
+    fn v44_update_results_never_confuse_missing_or_unsafe_assets_with_current() {
+        use super::{classify_update, UpdateStatus};
+        let digest = format!("sha256:{}", "ab".repeat(32));
+        for (platform, filename) in [
+            (
+                UpdatePlatform::LinuxX86_64,
+                "Narwhal_3D-0.4.8-x86_64.AppImage",
+            ),
+            (
+                UpdatePlatform::WindowsX86_64,
+                "Narwhal_3D-0.4.8-Windows-x86_64.zip",
+            ),
+        ] {
+            let good = release("v0.4.8", vec![asset(filename, 10, Some(&digest))]);
+            let check =
+                |releases: &[GithubRelease]| classify_update(releases, "0.4.7", platform, false);
+            assert_eq!(check(&[]).status, UpdateStatus::Unavailable);
+            assert_eq!(
+                check(&[release("v0.4.7", vec![])]).status,
+                UpdateStatus::Current
+            );
+            assert_eq!(
+                check(&[release("v0.5.0", vec![])]).status,
+                UpdateStatus::Unavailable
+            );
+            assert_eq!(
+                check(&[release("v0.4.8", vec![])]).status,
+                UpdateStatus::Unavailable
+            );
+            assert_eq!(
+                check(std::slice::from_ref(&good)).status,
+                UpdateStatus::Available
+            );
+            assert_eq!(
+                check(std::slice::from_ref(&good)).release.unwrap().version,
+                "0.4.8"
+            );
+            let mut draft = good.clone();
+            draft.draft = true;
+            assert_eq!(check(&[draft]).status, UpdateStatus::Unavailable);
+            for bad_asset in [
+                asset(filename, 10, None),
+                asset(filename, 0, Some(&digest)),
+                asset(filename, DOWNLOAD_LIMIT + 1, Some(&digest)),
+                asset(filename, 10, Some("sha256:bad")),
+                ReleaseAsset {
+                    browser_download_url: "https://untrusted.invalid/update".to_owned(),
+                    ..asset(filename, 10, Some(&digest))
+                },
+            ] {
+                let result = check(&[release("v0.4.8", vec![bad_asset])]);
+                assert_eq!(result.status, UpdateStatus::Unsafe);
+                assert!(result.release.is_none());
+            }
+            let newer_unusable = release("v0.4.9", vec![asset(filename, 10, None)]);
+            assert_eq!(check(&[good, newer_unusable]).status, UpdateStatus::Unsafe);
+        }
+    }
+
+    #[test]
+    fn v44_status_copy_and_release_actions_are_explicit() {
+        use super::UpdateStatus::*;
+        for (state, label, releases) in [
+            (Idle, "Update status not checked", false),
+            (Checking, "Checking for updates…", false),
+            (Unavailable, "Update check unavailable", true),
+            (Unsafe, "Unable to check securely", true),
+            (Current, "You're up to date", false),
+            (Available, "Update available", true),
+            (Updating, "Installing update…", false),
+        ] {
+            assert_eq!(state.label(), label);
+            assert_eq!(state.shows_releases(), releases);
         }
     }
 

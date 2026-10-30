@@ -15,7 +15,7 @@ MUTATIONS = (
     ("deadline", "conversation.rs", "if Instant::now() >= pending.deadline", "if false && Instant::now() >= pending.deadline", "test_cancel_timeout_and_replay_have_explicit_outcomes"),
     ("result_correlation", "conversation.rs", "r.call_id != c.id", "false", "test_tool_only_multiple_calls_and_result_round_trip"),
     ("read_consent", "conversation.rs", 'return Err("tools_not_authorized");', '/* mutation: omit read consent */', "test_no_read_consent_or_selection_toggle_means_no_tools"),
-    ("output_tokens", "provider.rs", "if n > cap", "if false && n > cap", "test_unknown_json_arguments_and_output_tokens_are_refused"),
+    ("output_tokens", "provider.rs", '.filter(|n| *n > 0)\n        .ok_or("invalid_usage")?;\n    if n > cap', '.filter(|n| *n > 0)\n        .ok_or("invalid_usage")?;\n    if false && n > cap', "test_unknown_json_arguments_and_output_tokens_are_refused"),
     ("truncation", "provider.rs", '\"length\" => return Err("truncated_response"),', '\"length\" => false,', "test_budgets_truncation_malformed_and_unsupported_calls"),
     ("turns", "conversation.rs", "if self.turns >= MAX_TURNS", "if false && self.turns >= MAX_TURNS", "test_turn_action_and_total_token_budgets"),
     ("tool_call_replay", "conversation.rs", "if self.used_call_ids.contains(&call.id)", "if false && self.used_call_ids.contains(&call.id)", "test_completed_tool_call_id_cannot_be_replayed"),
