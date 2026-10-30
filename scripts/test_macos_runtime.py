@@ -13,6 +13,9 @@ spec.loader.exec_module(runtime)
 
 
 class RuntimeTests(unittest.TestCase):
+    def test_authoritative_remote_includes_the_required_lfs_store(self):
+        self.assertEqual(runtime.BLENDER_REMOTE, "https://projects.blender.org/blender/blender.git")
+
     def test_every_runtime_input_is_bound_and_missing_inputs_refused(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

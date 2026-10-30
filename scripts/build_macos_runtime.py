@@ -16,6 +16,8 @@ from pathlib import Path
 
 BLENDER = "d13f752e3b9c4f8c261cda552b1021f8bcc0382c"
 MAC_LIBS = "a76ef917b4849ba2b1b1deb1a643e131a884a63b"
+# GitHub's source mirror does not host Blender's LFS objects.
+BLENDER_REMOTE = "https://projects.blender.org/blender/blender.git"
 PATCHES = (
     "apply_narwhal3d_branding.py", "apply_app_drawn.py",
     "apply_cad_boundary_wires.py", "apply_deferred_first_present.py",
@@ -80,7 +82,7 @@ def main() -> None:
     if not source.exists():
         source.mkdir()
         run("git", "init", str(source))
-        run("git", "-C", str(source), "remote", "add", "origin", "https://github.com/blender/blender.git")
+        run("git", "-C", str(source), "remote", "add", "origin", BLENDER_REMOTE)
         run("git", "-C", str(source), "fetch", "--depth", "1", "origin", BLENDER, timeout=900)
         run("git", "-C", str(source), "checkout", "--detach", "FETCH_HEAD")
     if output("git", "--no-pager", "-C", str(source), "rev-parse", "HEAD") != BLENDER:
