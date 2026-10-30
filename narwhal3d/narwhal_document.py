@@ -213,6 +213,7 @@ def _worker_command(root: Path) -> tuple[str, ...]:
         project = Path(__file__).resolve().parents[1]
         candidates = (
             project.parent / "runtime" / "blender.exe",
+            project.parent / "runtime" / "Blender.app" / "Contents" / "MacOS" / "Blender",
             project / "tools" / "blender-patched" / "blender",
             project / "tools" / "blender-5.2.2-linux-x64" / "blender",
         )

@@ -28,6 +28,23 @@ def load():
 
 
 class EntryTests(unittest.TestCase):
+    def test_packaged_mac_worker_selects_blender_not_embedded_python(self):
+        import tempfile
+        path = Path(__file__).resolve().parents[2] / "narwhal3d/narwhal_document.py"
+        tree = ast.parse(path.read_text())
+        tree.body = [n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name in ("_worker_command", "_worker_argv")]
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            runtime = root / "runtime/Blender.app/Contents/MacOS/Blender"
+            runtime.parent.mkdir(parents=True)
+            runtime.write_bytes(b"fixture")
+            ns = dict(Path=Path, __file__=str(root / "app/narwhal3d/narwhal_document.py"),
+                      sys=types.SimpleNamespace(executable=str(root / "runtime/Blender.app/Contents/Resources/5.2/python/bin/python3.13")))
+            exec(compile(tree, "narwhal_document.py", "exec"), ns)
+            command = ns["_worker_command"](root / "document")
+            self.assertEqual(command[0], str(runtime))
+            self.assertIn("--factory-startup", command)
+
     def test_missing_policy_refuses(self):
         namespace = load()
         fake = types.SimpleNamespace(CDLL=lambda _: (_ for _ in ()).throw(OSError("missing")))
