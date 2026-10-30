@@ -1,10 +1,14 @@
 # Release procedure
 
-This guide describes the build and release gates. Windows EXE assembly/update tooling
-is implemented but must pass native acceptance for each candidate. The macOS runtime
-has built successfully; its complete app/DMG remains blocked on worker containment.
-The owner authorizes publishing qualified Linux/Windows first and adding a qualified
-Mac asset to the same release later. Do not present a runtime archive as an app.
+Linux/Windows0.4.8 is published from `d818a4328a6286cb377f7fdd108684e0e40e1768`:
+AppImage, portable EXE, compatibility ZIP and their checksums passed upload verification.
+The Windows EXE passed native launch/cache/normal-close/update/backup acceptance.
+Every future candidate still needs its own package gates.
+
+The macOS runtime has built successfully; its complete app/DMG remains pending worker
+containment integration and platform qualification. See [the measured Mac continuation
+plan](MACOS_048_PLAN.md). The owner authorizes adding a qualified Mac asset to the same
+release later. Do not present a runtime archive or primitive test as a finished app.
 
 ## 1. Select and freeze source
 
@@ -175,9 +179,10 @@ append a dated platform-addition note to the same GitHub release. It is the firs
 Mac release—there was no0.4.7 Mac package. Do not create another release, replace
 existing assets or move tags merely to attach Mac later.
 
-## Release-note checklist for the pending0.4.8 work
+## 0.4.8 release-note topics and remaining Mac addition
 
-Use these as draft topics, not statements that packages already exist:
+The published release describes its qualified Linux/Windows changes. These topics
+remain a checklist for platform-specific notes; they are not blanket support claims:
 
 - Revised welcome with installed version and real update status.
 - Refreshed tool/inspector artwork and clearer AI/Bug Report controls.
