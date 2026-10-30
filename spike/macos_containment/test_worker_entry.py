@@ -42,7 +42,7 @@ class EntryTests(unittest.TestCase):
                       sys=types.SimpleNamespace(executable=str(root / "runtime/Blender.app/Contents/Resources/5.2/python/bin/python3.13")))
             exec(compile(tree, "narwhal_document.py", "exec"), ns)
             command = ns["_worker_command"](root / "document")
-            self.assertEqual(command[0], str(runtime))
+            self.assertEqual(command[0], str(runtime.resolve()))
             self.assertIn("--factory-startup", command)
 
     def test_missing_policy_refuses(self):
