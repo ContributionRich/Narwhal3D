@@ -283,7 +283,7 @@ def control_point_curve_polyline(control, max_degree=3,
     return out
 
 
-def preview_curve(args, cursor, plane):
+def preview_curve(args, cursor, plane, cmd=None):
     """`Curve`/`InterpCrv`: the SMOOTH curve the picks define, not the chain.
 
     The cursor is treated as the next control point, so the curve flexes as you
@@ -292,7 +292,8 @@ def preview_curve(args, cursor, plane):
     pts = points_only(args)
     if not pts:
         return []
-    smooth = control_point_curve_polyline(pts + [cursor])
+    degree = int(getattr(cmd, "opt", {}).get("Degree", "3"))
+    smooth = control_point_curve_polyline(pts + [cursor], max_degree=degree)
     return [smooth] if smooth else []
 
 
@@ -1317,6 +1318,7 @@ PREVIEWS = {
 #: so the twenty existing `(args, cursor, plane)` functions keep their signature -- adding a
 #: fourth parameter to all of them to serve one command would be the wrong trade.
 PREVIEWS_WITH_CMD = {
+    "curve": preview_curve,
     "polygon": preview_polygon,
     "catenary": preview_catenary,
     "conic": preview_conic,

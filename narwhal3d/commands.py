@@ -2497,7 +2497,7 @@ class PointsCmd(Command):
 
 class CurveCmd(Command):
     name = "Curve"
-    description = "Draw a smooth curve through points. Empty input finishes."
+    description = "Draw a control-point curve (Degree 2 or 3). Empty input finishes."
     variable_points = True
     # autoclose -- picking the start point after three picks closes the
     # curve (base `on_point`; Alt suspends it). (user_interface/keyboard
@@ -2509,10 +2509,27 @@ class CurveCmd(Command):
     # it is NOT the `Undo` COMMAND (nothing is in the document yet, so the undo
     # stack must stay untouched).
     options = (
+        opts.Option("Degree", opts.ENUM, default="3", choices=("2", "3"),
+                    help="Requested NURBS degree; 2 and 3 are supported. Fewer points reduce the degree."),
         opts.Option("Undo", opts.MODE,
                     help=("Removes the last point picked, without cancelling "
                           "the command.")),
     )
+
+    def begin(self, ctx):
+        degree = getattr(ctx, "_curve_degree", "3")
+        self.opt["Degree"] = degree if degree in ("2", "3") else "3"
+        return super().begin(ctx)
+
+    def _recorded(self, ctx, work):
+        self._published_degree = None
+        result = super()._recorded(ctx, work)
+        # MEASURED: degree persists after commit. OURS: keep the previous value
+        # after cancellation/failure until the live cancellation case is measured.
+        if self._published_degree is not None and result[1]:
+            ctx._curve_degree = self._published_degree
+        self._published_degree = None
+        return result
 
     def on_mode(self, name, ctx):
         if name == "Undo":
@@ -2535,20 +2552,25 @@ class CurveCmd(Command):
         if self._autoclosed:
             # this finish is an AUTOclose -- the start point was just
             # picked again, so args ends on a repeat of args[0]. Build the
-            # SMOOTH closed curve built (periodic; seam tangent
-            # 0.0 deg, G2 across the seam) from the UNIQUE points, instead of
+            # periodic curve (C1 quadratic or C2 cubic seam) from the
+            # UNIQUE points, instead of
             # a clamped curve through the repeated seam point, which leaves
             # a visible C0 corner at the seam.
             # `PolylineCmd` must NOT take this path: its corners are real.
             try:
-                geom = bridge.make_polyline(self.args[:-1], degree=3, closed=True)
+                geom = bridge.make_polyline(self.args[:-1], degree=int(self.opt.get("Degree", "3")), closed=True)
             except ValueError as e:
                 # refuses a closed curve below three points by name;
                 # surface ITS message rather than inventing a second answer.
                 return str(e), True
         else:
-            geom = bridge.make_polyline(self.args, degree=3)
+            geom = bridge.make_polyline(self.args, degree=int(self.opt.get("Degree", "3")))
+        requested = int(self.opt.get("Degree", "3"))
+        expected = min(requested, len(self.args) - 1)
+        if geom is None or not geom.IsValid or geom.Degree != expected:
+            return "Curve: requested NURBS degree could not be constructed", True
         _, display_name = ctx.add_geometry(geom, "Curve")
+        self._published_degree = str(requested)
         return f"Created {display_name}", True
 
 

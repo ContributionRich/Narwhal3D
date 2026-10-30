@@ -296,6 +296,15 @@ def send_turn(prepared: PreparedTurn, environ, opener=_provider_open) -> TurnTra
             return TurnTransportResult(token, failure="invalid_body")
         if len(encoded) > TURN_MAX_REQUEST_BYTES:
             return TurnTransportResult(token, failure="request_too_large")
+        # HTTP routing must match the native-approved snapshot, even if a caller
+        # changed a frozen dataclass's mutable __dict__ before this worker started.
+        route = {"provider_id": config.provider_id, "model": config.model,
+                 "endpoint": validate_endpoint(config.endpoint, config.allow_insecure_remote),
+                 "credential_env": config.credential_env,
+                 "allow_insecure_remote": config.allow_insecure_remote}
+        bound = data["binding"].get("config")
+        if not isinstance(bound, dict) or any(bound.get(key) != value for key, value in route.items()):
+            return TurnTransportResult(token, failure="request_scope_changed")
         url, headers, _ = _request_parts(config, {"messages": []}, environ)
         outbound = Request(url, data=encoded, headers=headers, method="POST")
         if cancel_event.is_set():

@@ -44,7 +44,8 @@ class CadTests(unittest.TestCase):
     def test_catalog_discloses_real_execution_blocker(self):
         with workflow.workflow() as (_state, session):
             catalog = session.operation_catalog()
-            self.assertEqual(len(catalog["tools"]), 11)
+            self.assertEqual(len(catalog["tools"]), 13)
+            self.assertEqual([tool['name'] for tool in catalog['tools'][-2:]], ['narwhal_plan','narwhal_verify'])
             operation = catalog["operations"]["operations"][0]
             self.assertEqual(operation["command"], "Circle")
             self.assertFalse(operation["execution_available"])

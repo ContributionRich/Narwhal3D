@@ -129,13 +129,27 @@ class Table:
         if not rows or rows[0] != ["Key", "Value", "Type"]:
             raise ValueError("Document User Text import requires Key,Value,Type header")
         table = cls(export_on_document_export=export_on_document_export)
+        # Keep the CSV/Row boundary in Python: measured native marshalling loses
+        # to this linear duplicate index. Subclasses and overridden hooks retain
+        # the original public add/get path rather than silently bypassing it.
+        fast = (cls is Table and type(table) is Table and cls.__init__ is _ORIGINAL_INIT
+                        and cls.add is _ORIGINAL_ADD and cls.get is _ORIGINAL_GET)
+        seen = set()
         for line, fields in enumerate(rows[1:], 2):
             if not fields or fields == []:
                 raise ValueError(f"invalid Document User Text row {line}: empty row")
             if len(fields) != 3:
                 raise ValueError(f"invalid Document User Text row {line}: expected 3 fields")
             try:
-                table.add(Row(*fields))
+                row = Row(*fields)
+                if fast and type(row.key) is str:
+                    if row.key in seen:
+                        raise ValueError(f"duplicate Document User Text key {row.key!r}")
+                    table._rows.append(row)
+                    seen.add(row.key)
+                else:
+                    fast = False
+                    table.add(row)
             except ValueError as exc:
                 raise ValueError(f"invalid Document User Text row {line}: {exc}") from exc
         return table
@@ -189,4 +203,7 @@ class Table:
         return prefix, value
 
 
+_ORIGINAL_INIT = Table.__init__
+_ORIGINAL_ADD = Table.add
+_ORIGINAL_GET = Table.get
 DocumentUserText = Table

@@ -3,8 +3,13 @@ pub mod actions;
 pub mod box_action;
 pub mod catalog;
 pub mod conversation;
+pub mod diagnostics;
 pub mod json;
+pub mod plan;
+pub mod plan_schema;
+pub mod primitives;
 pub mod provider;
+pub mod verification;
 pub mod workspace;
 
 use conversation::{Conversation, Input};
@@ -27,6 +32,12 @@ fn exchange(handle: u64, input: &str) -> Result<Value, &'static str> {
     let request: Input = serde_json::from_value(value).map_err(|_| "invalid_request")?;
     if let Input::WorkspaceLayers { layers, targets } = request {
         return Ok(json!({"status":"layers","flags":workspace::layer_flags(layers,targets)?}));
+    }
+    if let Input::CheckPrimitiveGeometry { arguments, facts } = request {
+        return arguments.check_geometry(facts);
+    }
+    if let Input::ValidatePlan { plan } = request {
+        return plan.describe();
     }
     if matches!(request, Input::Catalog) {
         return Ok(
@@ -88,10 +99,18 @@ fn exchange(handle: u64, input: &str) -> Result<Value, &'static str> {
             call_id,
             expected,
         } => conversation.stage_circle(token, binding, call_id, expected),
-        Input::ProposeBox { token, binding, call_id, context } =>
-            conversation.stage_box(token, binding, call_id, context),
-        Input::DecideBox { binding, proposal, current, accepted } =>
-            conversation.decide_box(binding, proposal, current, accepted),
+        Input::ProposeBox {
+            token,
+            binding,
+            call_id,
+            context,
+        } => conversation.stage_box(token, binding, call_id, context),
+        Input::DecideBox {
+            binding,
+            proposal,
+            current,
+            accepted,
+        } => conversation.decide_box(binding, proposal, current, accepted),
         Input::ReviewProposal {
             binding,
             proposal,
@@ -103,6 +122,24 @@ fn exchange(handle: u64, input: &str) -> Result<Value, &'static str> {
             id,
             current,
         } => conversation.check_proposal(binding, id, current),
+        Input::StagePrimitivePrototype {
+            owner,
+            binding,
+            arguments,
+            context,
+        } => conversation.stage_primitive(owner, binding, arguments, context),
+        Input::DecidePrimitivePrototype {
+            binding,
+            proposal,
+            current,
+            accepted,
+        } => conversation.decide_primitive(binding, proposal, current, accepted),
+        Input::TakePrimitivePrototype {
+            binding,
+            proposal,
+            current,
+        } => conversation.take_primitive(binding, proposal, current),
+        Input::State => Ok(conversation.public_state()),
         Input::Poll => Ok(conversation.poll_timeout()),
         Input::Cancel => Ok(conversation.cancel()),
         _ => Err("invalid_request"),
@@ -133,7 +170,9 @@ pub unsafe extern "C" fn narwhal_workflow_json(
         let result = std::str::from_utf8(bytes)
             .map_err(|_| "invalid_utf8")
             .and_then(|s| exchange(handle, s));
-        let value = result.unwrap_or_else(|code| json!({"status":"failed","code":code}));
+        let value = diagnostics::annotate(
+            result.unwrap_or_else(|code| json!({"status":"failed","code":code})),
+        );
         let bytes = serde_json::to_vec(&value).map_err(|_| ())?;
         if bytes.len() > OUTPUT_CAPACITY {
             return Err(());

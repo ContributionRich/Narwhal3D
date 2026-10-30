@@ -249,6 +249,15 @@ impl ActionGate {
 }
 
 pub fn operations() -> Value {
+    let disabled_prototypes = ["sphere", "cylinder", "cone"]
+        .iter()
+        .map(|operation| {
+            json!({
+        "operation":operation,"prototype_implemented":true,"execution_available":false,
+        "proposal_available":false,"scope":"new_world_aligned_analytic_solid_only",
+        "blocker":"main_geometry_approval_rollback_undo_review_and_ui_activation_required"})
+        })
+        .collect::<Vec<_>>();
     json!({"operations":[{"operation":"circle","command":"Circle","mode":"center_radius_active_cplane",
         "arguments_schema":circle_schema(),"proposal_available":true,"execution_available":false,
         "scope":"create_one_curve_only","representation":"exact_rational_nurbs",
@@ -260,7 +269,33 @@ pub fn operations() -> Value {
          "scope":"in_app_assistant_only_create_one_new_solid_never_edit_targets",
          "representation":"analytic_brep_and_occt_master",
          "blockers":["explicit_in_app_approval","unchanged_document_units_and_available_layer","idle_command_and_enabled_undo"]}],
+        "read_tools":crate::catalog::READS.iter().map(|(name,alias,_)|json!({"name":name,"alias":alias,"mutation":false})).collect::<Vec<_>>(),
+        "planning_operations":planning_operations(),
+        "disabled_prototypes":disabled_prototypes,
         "provenance":{"source":"native_automation_catalog","registry_membership_is_not_execution_support":true}})
+}
+
+/// Source-inspected command implementations, not callable executors or promises
+/// about arbitrary input geometry. OURS: the assistant plans a bounded subset.
+pub fn planning_operations() -> Value {
+    json!([
+        {"operation":"curve","command":"Curve","execution_available":false,
+         "source":"commands.CurveCmd.execute/bridge.make_polyline",
+         "representation":"nurbs_curve","unsupported_options":[],
+         "blockers":["curve_executor_not_integrated"]},
+        {"operation":"loft","command":"Loft","execution_available":false,
+         "source":"commands.LoftCmd.execute/bridge.loft_brep",
+         "representation":"nurbs_surface","unsupported_options":["Closed=Yes","Point"],
+         "blockers":["surfacing_executor_not_integrated","closure_and_continuity_need_verification"]},
+        {"operation":"pipe","command":"Pipe","execution_available":false,
+         "source":"commands.PipeCmd.execute/bridge.pipe_occt",
+         "representation":"analytic_constant_radius_pipe","unsupported_options":["Thick","Cap=Round","tapered_radius"],
+         "blockers":["pipe_executor_not_integrated","rail_support_requires_analytic_kernel_check"]},
+        {"operation":"boolean_difference","command":"BooleanDifference","execution_available":false,
+         "source":"commands.BooleanDifferenceCmd/bridge.boolean_brep",
+         "representation":"requires_analytic_operands_and_master","unsupported_options":[],
+         "blockers":["boolean_executor_not_integrated","analytic_route_must_not_fall_back_to_facets"]}
+    ])
 }
 pub fn circle_schema() -> Value {
     json!({"type":"object","properties":{"center":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},"radius":{"type":"number","exclusiveMinimum":0,"maximum":1e9}},"required":["center","radius"],"additionalProperties":false})

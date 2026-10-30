@@ -173,6 +173,11 @@ REQUIRED = {
     "native/automation_core/src/conversation.rs",
     "native/automation_core/src/catalog.rs",
     "native/automation_core/src/actions.rs",
+    "native/automation_core/src/diagnostics.rs",
+    "native/automation_core/src/plan.rs",
+    "native/automation_core/src/plan_schema.rs",
+    "native/automation_core/src/primitives.rs",
+    "native/automation_core/src/verification.rs",
     "native/automation_core/src/policy.rs",
     "native/automation_core/src/workspace.rs",
     "native/automation_core/src/box_action.rs",
@@ -593,8 +598,14 @@ def audit_entries(entries: dict[str, tuple[str, bytes]], require_manifest: bool 
             continue
         folded = blob.lower()
         if path not in PROVENANCE_SCAN_EXEMPT:
+            provenance = folded
+            if path in {"native/automation_core/src/conversation.rs",
+                        "native/automation_core/src/primitives.rs"}:
+                # A typed request-token field/parameter is code, not private
+                # attribution. Keep comments, strings and secret scans intact.
+                provenance = re.sub(rb"(?m)^[ \t]*(?:pub )?owner: &?token,[ \t]*$", b"", folded)
             for marker in FORBIDDEN_TEXT:
-                if marker in folded:
+                if marker in provenance:
                     problems.append(
                         f"{path}: contains forbidden private/legacy marker {marker!r}")
             for pattern in FORBIDDEN_PATTERNS:
@@ -643,6 +654,10 @@ def self_check() -> None:
     safe["dependency-name.txt"] = ("100644", b"rhi" + b"no3dm is required\n")
     safe["COMPATIBILITY.md"] = (
         "100644", b"Target: Rhi" + b"noceros 3D\nhttps://www.rhi" + b"no3d.com/\n")
+    safe["native/automation_core/src/primitives.rs"] = (
+        "100644", b"pub struct Proposal {\n    pub owner: Token,\n}\n")
+    safe["native/automation_core/src/conversation.rs"] = (
+        "100644", b"fn scope(\n    owner: &Token,\n) {}\n")
     if audit_entries(safe):
         raise AuditError("self-check rejected a safe synthetic manifest")
     cases = (
@@ -650,6 +665,14 @@ def self_check() -> None:
         ("legacy product", {"notes.txt": ("100644", b"Coco " + b"CAD")}),
         ("personal path", {"notes.txt": ("100644", b"/home/" + b"nathaniel/model.3dm")}),
         ("private attribution", {"notes.py": ("100644", b"# " + b"Owner's words\n")}),
+        ("Rust private attribution", {"native/automation_core/src/primitives.rs":
+            ("100644", b"// Owner: private notes\n    pub owner: Token,\n")}),
+        ("Rust private string", {"native/automation_core/src/conversation.rs":
+            ("100644", b'const NOTE: &str = "Owner: private";\n')}),
+        ("Rust field trailing private notes", {"native/automation_core/src/primitives.rs":
+            ("100644", b"    pub owner: Token, // Owner: private\n")}),
+        ("Rust field with secret", {"native/automation_core/src/primitives.rs":
+            ("100644", b"    pub owner: Token,\n// gh" + b"p_private\n")}),
         ("private document", {"notes.py": ("100644", b"# See docs/" + b"KERNEL.md\n")}),
         ("task identifier", {"notes.py": ("100644", b"# " + b"G-112 implementation\n")}),
         ("numbered report", {"notes.py": ("100644", b"# bug report " + b"#74\n")}),

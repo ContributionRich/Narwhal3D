@@ -253,7 +253,7 @@ check(re.search(r"early\s+(?:preview|prerelease|pre-release)", readme, re.I),
       "README warns that the application is an early preview")
 check(re.search(r"View\W+Theme\b", readme), "README explains the View → Theme switch")
 for asset in ("Narwhal_3D-0.4.8-x86_64.AppImage", "Narwhal_3D-0.4.8-Windows-x86_64.exe",
-              "Narwhal_3D-0.4.8-Windows-x86_64.zip"):
+              "Narwhal_3D-0.4.8-macOS-arm64.dmg"):
     check(f"https://github.com/ContributionRich/Narwhal3D/releases/download/v0.4.8/{asset}"
           in readme_links, f"README offers a direct Markdown download for {asset}")
 check(not any("/releases/download/" in link and "/v0.4.8/" not in link

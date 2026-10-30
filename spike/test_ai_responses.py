@@ -440,7 +440,7 @@ class ResponsesTests(unittest.TestCase):
     def test_flat_read_catalog_consent_and_circle_remain_proposal_only(self):
         expected = {"narwhal_application_info", "narwhal_document_summary", "narwhal_selection_summary",
                     "narwhal_object_summary", "narwhal_objects", "narwhal_layers", "narwhal_workspace",
-                    "narwhal_components", "narwhal_operations", "narwhal_propose_circle", "narwhal_create_box"}
+                    "narwhal_components", "narwhal_operations", "narwhal_propose_circle", "narwhal_create_box", "narwhal_plan", "narwhal_verify"}
         with workflow.workflow(PROVIDER) as (_state, session):
             prepared = session.prepare(DOC, user_text="Discover operations.")
             tools = prepared.data["body"]["tools"]

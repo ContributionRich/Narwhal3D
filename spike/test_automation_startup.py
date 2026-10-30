@@ -66,6 +66,117 @@ def catalog_controls(tools):
     validate_catalog(tools)
 
 
+def expected_operations():
+    """MEASURED: actions::operations metadata; Box approval is not an MCP executor."""
+    return {
+        "operations": [
+            {"operation": "circle", "command": "Circle", "mode": "center_radius_active_cplane",
+             "arguments_schema": {"type": "object", "properties": {
+                 "center": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3},
+                 "radius": {"type": "number", "exclusiveMinimum": 0, "maximum": 1e9}},
+                 "required": ["center", "radius"], "additionalProperties": False},
+             "proposal_available": True, "execution_available": False,
+             "scope": "create_one_curve_only", "representation": "exact_rational_nurbs",
+             "blockers": ["authoritative_document_session_and_change_token",
+                          "checked_target_content_and_cplane_layer_state",
+                          "approved_main_thread_command_undo_dispatch"],
+             "evidence": {"source": "commands.CircleCmd.execute",
+                          "status": "source_inspected_not_workflow_executed"}},
+            {"operation": "box", "command": "Box", "mode": "world_xyz_append_only",
+             "arguments_schema": {"type": "object", "properties": {
+                 "origin": {"type": "array", "items": {"type": "number", "minimum": -1e6, "maximum": 1e6},
+                            "minItems": 3, "maxItems": 3},
+                 "size": {"type": "array", "items": {"type": "number", "exclusiveMinimum": 0, "maximum": 1e6},
+                          "minItems": 3, "maxItems": 3}},
+                 "required": ["origin", "size"], "additionalProperties": False},
+             "proposal_available": True, "execution_available": True,
+             "requires_explicit_ui_approval": True,
+             "scope": "in_app_assistant_only_create_one_new_solid_never_edit_targets",
+             "representation": "analytic_brep_and_occt_master",
+             "blockers": ["explicit_in_app_approval", "unchanged_document_units_and_available_layer",
+                          "idle_command_and_enabled_undo"]},
+        ],
+        "read_tools": [{"name": "narwhal." + name, "alias": "narwhal_" + name, "mutation": False}
+                       for name in ("application_info", "document_summary", "selection_summary",
+                                    "object_summary", "objects", "layers", "workspace", "components", "operations")],
+        "planning_operations": [
+            {"operation": "curve", "command": "Curve", "execution_available": False,
+             "source": "commands.CurveCmd.execute/bridge.make_polyline", "representation": "nurbs_curve",
+             "unsupported_options": [], "blockers": ["curve_executor_not_integrated"]},
+            {"operation": "loft", "command": "Loft", "execution_available": False,
+             "source": "commands.LoftCmd.execute/bridge.loft_brep", "representation": "nurbs_surface",
+             "unsupported_options": ["Closed=Yes", "Point"],
+             "blockers": ["surfacing_executor_not_integrated", "closure_and_continuity_need_verification"]},
+            {"operation": "pipe", "command": "Pipe", "execution_available": False,
+             "source": "commands.PipeCmd.execute/bridge.pipe_occt", "representation": "analytic_constant_radius_pipe",
+             "unsupported_options": ["Thick", "Cap=Round", "tapered_radius"],
+             "blockers": ["pipe_executor_not_integrated", "rail_support_requires_analytic_kernel_check"]},
+            {"operation": "boolean_difference", "command": "BooleanDifference", "execution_available": False,
+             "source": "commands.BooleanDifferenceCmd/bridge.boolean_brep",
+             "representation": "requires_analytic_operands_and_master", "unsupported_options": [],
+             "blockers": ["boolean_executor_not_integrated", "analytic_route_must_not_fall_back_to_facets"]},
+        ],
+        "disabled_prototypes": [
+            {"operation": name, "prototype_implemented": True, "execution_available": False,
+             "proposal_available": False, "scope": "new_world_aligned_analytic_solid_only",
+             "blocker": "main_geometry_approval_rollback_undo_review_and_ui_activation_required"}
+            for name in ("sphere", "cylinder", "cone")],
+        "provenance": {"source": "native_automation_catalog", "registry_membership_is_not_execution_support": True},
+    }
+
+
+def validate_operations(payload):
+    # JSON comparison also rejects integer 0/1 masquerading as permission booleans.
+    assert json.dumps(payload, sort_keys=True) == json.dumps(expected_operations(), sort_keys=True), \
+        "exact accepted operations metadata required"
+
+
+def operations_controls(payload):
+    validate_operations(payload)
+    missing = object()
+    variants = (
+        ("missing operation", ("operations",), payload["operations"][:1]),
+        ("extra operation", ("operations",), payload["operations"] + [payload["operations"][0]]),
+        ("Circle executable", ("operations", 0, "execution_available"), True),
+        ("Circle wrong scope", ("operations", 0, "scope"), "edit_targets"),
+        ("Box execution metadata missing", ("operations", 1, "execution_available"), missing),
+        ("Box unapproved", ("operations", 1, "requires_explicit_ui_approval"), False),
+        ("Box approval missing", ("operations", 1, "requires_explicit_ui_approval"), missing),
+        ("Box numeric approval", ("operations", 1, "requires_explicit_ui_approval"), 1),
+        ("Box wrong scope", ("operations", 1, "scope"), "external_mcp"),
+        ("Box approval blocker removed", ("operations", 1, "blockers"), payload["operations"][1]["blockers"][1:]),
+        ("Box arbitrary arguments", ("operations", 1, "arguments_schema", "additionalProperties"), True),
+        ("prototype executable", ("disabled_prototypes", 0, "execution_available"), True),
+        ("prototype proposal enabled", ("disabled_prototypes", 1, "proposal_available"), True),
+        ("prototype wrong scope", ("disabled_prototypes", 2, "scope"), "edit_targets"),
+        ("prototype missing", ("disabled_prototypes",), payload["disabled_prototypes"][:2]),
+        ("prototype extra", ("disabled_prototypes",), payload["disabled_prototypes"] + [payload["disabled_prototypes"][0]]),
+        ("planning executor enabled", ("planning_operations", 0, "execution_available"), True),
+        ("read tool mutates", ("read_tools", 0, "mutation"), True),
+        ("provenance promises execution", ("provenance", "registry_membership_is_not_execution_support"), False),
+        ("unexpected metadata", ("external_execution_available",), True),
+    )
+    rejected = []
+    for label, path, value in variants:
+        invalid = json.loads(json.dumps(payload))
+        parent = invalid
+        for key in path[:-1]:
+            parent = parent[key]
+        if value is missing:
+            del parent[path[-1]]
+        else:
+            parent[path[-1]] = value
+        try:
+            validate_operations(invalid)
+        except AssertionError as exc:
+            assert str(exc) == "exact accepted operations metadata required"
+            rejected.append(label)
+        else:
+            raise AssertionError("operations negative control survived: " + label)
+    validate_operations(payload)
+    return rejected
+
+
 def validate_modern_result(result, *, cache_policy=False):
     assert result["resultType"] == "complete"
     if cache_policy:
@@ -408,9 +519,10 @@ def run_case(output, variant, era):
             components = client.call("narwhal.components")
             assert components["available"] is True and components["components"] == []
             assert components["truncated"] is False
-            operations = client.call("narwhal.operations")["operations"]
-            assert len(operations) == 1 and operations[0]["command"] == "Circle"
-            assert operations[0]["execution_available"] is False
+            operations = client.call("narwhal.operations")
+            receipt = {"tools": listed, "operations": operations}
+            record(case / "catalog-receipt.json", receipt)
+            result["operations_controls_red"] = operations_controls(operations)
             if era == MODERN:
                 before_reads = wait_file(case, "reads.json")["tools"]
                 for missing in (VERSION_KEY, CAPABILITIES_KEY):
@@ -424,6 +536,9 @@ def run_case(output, variant, era):
                 result["metadata_controls"] = "missing version/capabilities refused before read; valid request still works"
             refusal = client.request("tools/call", {"name": "narwhal.execute", "arguments": {"command": "Delete"}})
             assert "error" in refusal
+            receipt.update(operations_controls_red=result["operations_controls_red"], execute_refusal=refusal)
+            record(case / "catalog-receipt.json", receipt)
+            result["execute_denied"] = True
             assert client.call("narwhal.document_summary")["object_count"] == 1
             assert action(case, "advance", app["pid"])["objects"] == 2
             assert client.call("narwhal.document_summary")["object_count"] == 2

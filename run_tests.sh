@@ -84,6 +84,9 @@ if command -v cargo >/dev/null 2>&1; then
     run "AI workspace snapshots" "$PYTHON" spike/test_ai_workspace.py --library "$AUTOMATION_LIBRARY"
     run "AI native CAD reads and proposal policy" "$PYTHON" spike/test_ai_cad.py --library "$AUTOMATION_LIBRARY"
     run "AI approved additive box policy" "$PYTHON" spike/test_ai_box.py --library "$AUTOMATION_LIBRARY"
+    run "AI plans and truthful verification" "$PYTHON" spike/test_ai_plan.py --library "$AUTOMATION_LIBRARY"
+    run "AI disabled primitive prototype policy" "$PYTHON" spike/test_ai_primitives.py --library "$AUTOMATION_LIBRARY"
+    run "AI sustained lifecycle" "$PYTHON" spike/test_ai_sustained_lifecycle.py --library "$AUTOMATION_LIBRARY"
     run "AI UI orchestration" "$PYTHON" spike/test_ai_ui_workflow.py --library "$AUTOMATION_LIBRARY"
     run "automation source live bridge (background Blender)" timeout --kill-after=5s 120s "$PYTHON" \
         spike/test_automation_mcp.py --server "$AUTOMATION_SERVER" --live "$BLENDER"
@@ -199,6 +202,7 @@ PURE_SUITES=(
     spike/test_surfacing_preparation.py
     spike/test_surfacing_step_roundtrip.py
     spike/test_curve_options.py
+    spike/review_v4/test_curve_degree.py
     spike/test_polygon_behavior.py
     spike/test_helix.py
     spike/test_spiral.py
@@ -247,9 +251,12 @@ PURE_SUITES=(
     spike/test_statusbar.py
     spike/test_aliases.py
     spike/test_document_clipboard.py
+    spike/test_document_user_text.py
+    spike/review_v4/test_document_import.py
     spike/test_sessionlog.py
     spike/test_bugreport.py
     spike/test_ai_assistant.py
+    spike/review_v4/test_ai_evidence.py
     spike/test_ai_responses_settings.py
     spike/test_ai_transport.py
     spike/test_ai_workflow_transport.py
@@ -374,6 +381,7 @@ if [[ -n "${DISPLAY:-}" || -n "${WAYLAND_DISPLAY:-}" ]]; then
     fi
     run "preview responsiveness live" "$PYTHON" spike/test_preview_responsiveness_gui.py --run integration
     run "drawing constraints live" "$PYTHON" spike/test_drawing_behavior_gui.py --launch
+    run "Curve degree and AI evidence live" "$PYTHON" spike/review_v4/test_curve_degree_gui.py --launch
     run "Polygon direction and constraints live" "$PYTHON" spike/test_polygon_behavior_gui.py --launch
     run "Trim box live" "$PYTHON" spike/test_trim_box_gui.py --launch --baseline
     run "overlap selection menu live" "$PYTHON" spike/test_selection_menu_gui.py --launch

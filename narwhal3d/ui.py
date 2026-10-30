@@ -6172,7 +6172,12 @@ def _ai_poll_transport():
         if outcome["status"] == "tool_calls":
             if _ai_read_results(workflow, outcome, scope[0]):
                 _ai_start_turn(workflow.prepare(scope[0], continuation=True))
-        elif outcome["status"] not in ("completed", "stale"):
+        elif outcome["status"] == "completed":
+            from . import ai_evidence
+            evidence = ai_evidence.status_text(outcome.get("cad_state"))
+            if evidence is not None:
+                st.add_message("status", evidence)
+        elif outcome["status"] != "stale":
             st.add_message("status", st.error)
     except Exception as exc:  # noqa: BLE001 -- API/read boundary; no raw error data
         _ai_invalidate("workflow_failed")

@@ -69,15 +69,16 @@ class Trickle(Response):
 class Controls(unittest.TestCase):
     module = transport
 
-    def prepared(self, **updates):
+    def prepared(self, config=None, **updates):
+        config = config or ai.ProviderConfig(model="config-model")
         data = {"token": {"session": "s1", "turn": 7, "nested": {"revision": 2}},
-                "binding": {"provider_id": "openai_compatible", "model": "rust-model"},
+                "binding": {"config": {**dataclasses.asdict(config), "include_selection": False},
+                            "document_context": "fixture", "allow_reads": False},
                 "body": {"model": "rust-model", "messages": [], "stream": False,
                          "tools": [{"type": "function", "function": {"name": "inspect"}}]},
                 "timeout_ms": 1234}
         data.update(updates)
-        return self.module.PreparedTurn(ai.ProviderConfig(model="config-model"), data,
-                                        threading.Event())
+        return self.module.PreparedTurn(config, data, threading.Event())
 
     def send(self, prepared=None, response=None, environ=None):
         self.opened = []
@@ -155,7 +156,7 @@ class Controls(unittest.TestCase):
                         https_open = http_open
                     def fake_build(*handlers):
                         return build_opener(Wire(), *handlers)
-                    prepared = dataclasses.replace(self.prepared(), config=ai.set_provider(
+                    prepared = self.prepared(config=ai.set_provider(
                         provider, 'model', credential_env='TEST_KEY'))
                     with patch.object(self.module, 'build_opener', fake_build):
                         if name == 'send_turn':
@@ -318,10 +319,22 @@ class Controls(unittest.TestCase):
 
     def test_provider_headers(self):
         for provider, header in (("openai", "Authorization"), ("anthropic", "X-api-key")):
-            prepared = dataclasses.replace(self.prepared(), config=ai.set_provider(
+            prepared = self.prepared(config=ai.set_provider(
                 provider, "model", credential_env="TEST_KEY"))
             self.send(prepared, environ={"TEST_KEY": SECRET})
             self.assertIn(SECRET, self.opened[0][0].get_header(header))
+
+    def test_prepared_route_binding(self):
+        for key, value in (("endpoint", "https://other.invalid"), ("provider_id", "openai"),
+                           ("model", "other"), ("credential_env", "OTHER_KEY"),
+                           ("allow_insecure_remote", True)):
+            prepared = self.prepared()
+            prepared.config.__dict__[key] = value
+            result = self.send(prepared)
+            self.assertEqual(result.failure, "request_scope_changed", key)
+            self.assertEqual(self.opened, [])
+            self.assertIsNone(result.raw)
+        self.assertEqual(self.send(self.prepared(binding={})).failure, "request_scope_changed")
 
     def test_request_bound(self):
         for extra in (0, 1):
@@ -478,6 +491,7 @@ class Mutations(unittest.TestCase):
 
     def test_controls_kill_in_memory_mutations(self):
         mutations = [
+            ('prepared_route_binding', 'if not isinstance(bound, dict) or any(bound.get(key) != value for key, value in route.items()):', 'if False:', 1),
             ('global_admission', 'if not acquired:', 'if False:', 1),
             ('pre_cancel', 'if cancel_event.is_set():', 'if False:', 5),
             # Disable post-open guards together: either guard alone is redundant.

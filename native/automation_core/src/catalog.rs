@@ -34,7 +34,7 @@ pub const READS: [(&str, &str, &str); 9] = [
     (
         "narwhal.layers",
         "narwhal_layers",
-        "Read bounded layer pages with local visibility/lock flags; inherited flags are unavailable.",
+        "Read bounded layer pages with local and inherited document-layer flags where the initialized workspace can resolve them; not viewport visibility.",
     ),
     (
         "narwhal.workspace",
@@ -71,6 +71,12 @@ pub fn definitions() -> Vec<ToolDefinition> {
     tools.push(ToolDefinition { name:"narwhal_create_box".into(),
         description:"Request creation of one new world-XYZ-aligned analytic box (a cube has equal size values) in document units. Origin is the minimum corner; size is positive X/Y/Z length. Narwhal displays exact dimensions for explicit human approval before creating anything. This appends a solid, never modifies selected objects. Use one box call per response; ask for dimensions if unclear.".into(),
         parameters:crate::box_action::schema() });
+    tools.push(ToolDefinition { name:"narwhal_plan".into(),
+        description:"Validate and preflight a CAD plan against current-turn read results and actual executor availability. Never executes or approves. Read workspace/needed objects first; keep arguments under 4096 bytes. Unknown operations/options are rejected; name missing capabilities using unsupported. Questions are unresolved, not assumed answered.".into(),
+        parameters:crate::plan_schema::schema() });
+    tools.push(ToolDefinition { name:"narwhal_verify".into(),
+        description:"Check a separately approved Box action's host receipt against requested dimensions and a later object-ID read. Does not execute anything. Current geometry verification remains incomplete without fresh authoritative measurements; never infer success from provider prose.".into(),
+        parameters:crate::verification::schema() });
     tools
 }
 pub fn schema(name: &str) -> Value {
@@ -129,6 +135,17 @@ pub fn validate_read(name: &str, args: &Map<String, Value>) -> Result<(), &'stat
     Ok(())
 }
 pub fn validate(call: &ToolCall) -> Result<(), &'static str> {
+    if call.name == "narwhal_verify" {
+        let request: crate::verification::Request =
+            serde_json::from_value(Value::Object(call.arguments.clone()))
+                .map_err(|_| "invalid_verification_request")?;
+        return request.validate();
+    }
+    if call.name == "narwhal_plan" {
+        let plan: crate::plan::Plan = serde_json::from_value(Value::Object(call.arguments.clone()))
+            .map_err(|_| "invalid_plan")?;
+        return plan.validate();
+    }
     if call.name == "narwhal_create_box" {
         let args: crate::box_action::BoxArgs =
             serde_json::from_value(Value::Object(call.arguments.clone()))

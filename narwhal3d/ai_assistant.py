@@ -3,7 +3,8 @@
 This module deliberately performs no network requests and executes no commands. It builds
 bounded provider-neutral request data and turns a narrowly-shaped JSON object into a
 reviewable :class:`ToolProposal`. Legacy string proposals are compatibility data,
-not executable commands. The chat uses WorkflowSession; all CAD dispatch is disabled.
+not executable commands. The chat uses WorkflowSession; only separately approved
+Box/Cube creation is enabled. Other primitive publishers remain disabled prototypes.
 
 Raw API keys never enter these dataclasses. Provider adapters may read the named
 environment variable at send time, but persistent, document, report, and debug state sees
@@ -657,12 +658,15 @@ class WorkflowSession:
             raise WorkflowUnavailable("workflow_backend_failed")
         result = json.loads(output.raw[:size])
         if result.get("status") == "failed" and "token" not in result:
-            raise WorkflowUnavailable(result.get("code", "workflow_backend_failed"))
+            error = WorkflowUnavailable(result.get("code", "workflow_backend_failed"))
+            error.diagnostic = result.get("diagnostic", {"category": "local_rejection", "automatic_retry": False})
+            raise error
         return result
 
     def prepare(self, document_context, *, user_text=None, context=None,
                 timeout_ms=30_000, max_tokens=4096, continuation=False):
         from .ai_transport import PreparedTurn
+        from dataclasses import replace
         import threading
 
         self._main_thread()
@@ -684,7 +688,7 @@ class WorkflowSession:
             self._state.input_text = ""
             field_of(self._state).set_text("")
         self._state.status = "sending"
-        return PreparedTurn(self._state.provider, ready, self._cancel_event)
+        return PreparedTurn(replace(self._state.provider), ready, self._cancel_event)
 
     def finish(self, receipt, document_context):
         """Only this main-thread gate may publish a worker's answer into the chat."""
@@ -731,6 +735,30 @@ class WorkflowSession:
         self._main_thread()
         return self._exchange({"op": "results", "token": token,
                                "binding": self._binding(document_context), "results": results})
+
+    def public_workflow_state(self):
+        """Bounded Rust counters/categories, not a persistent HTTP connection claim."""
+        return self._exchange({"op": "state"})
+
+    def stage_primitive_prototype(self, owner, document_context, arguments, context):
+        """Development-only gate; not registered in any live tool catalog."""
+        return self._exchange({'op':'stage_primitive_prototype','owner':owner,
+            'binding':self._binding(document_context),'arguments':arguments,'context':context})
+
+    def decide_primitive_prototype(self, proposal, document_context, current, *, accepted=False):
+        return self._exchange({'op':'decide_primitive_prototype','proposal':proposal,
+            'binding':self._binding(document_context),'current':current,'accepted':accepted})
+
+    def check_primitive_geometry(self, arguments, facts):
+        return self._exchange({'op':'check_primitive_geometry','arguments':arguments,'facts':facts})
+
+    def take_primitive_prototype(self, proposal, document_context, current):
+        return self._exchange({'op':'take_primitive_prototype','proposal':proposal,
+            'binding':self._binding(document_context),'current':current})
+
+    def validate_plan(self, plan):
+        """Native schema validation only; never approval, execution or verification."""
+        return self._exchange({"op": "validate_plan", "plan": plan})
 
     def operation_catalog(self):
         return self._exchange({"op": "catalog"})
