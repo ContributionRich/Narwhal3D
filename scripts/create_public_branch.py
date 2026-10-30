@@ -52,6 +52,7 @@ PATCH_FILES = (
 )
 SCRIPT_FILES = (
     "scripts/assemble_windows_exe.py", "scripts/assemble_macos_release.py",
+    "scripts/accept_macos_release.py", "scripts/smoke_macos_launcher.py", "scripts/repack_macos_bytecode.py",
     "scripts/build_linux_native.py", "scripts/build_macos_runtime.py", "scripts/build_macos_native.py",
     "scripts/test_release_packages.py", "scripts/test_release_automation.py",
     "scripts/test_macos_runtime.py", "scripts/test_present_backends.py",
@@ -150,6 +151,10 @@ TEST_FILES = (
     "spike/test_native_interpolate.py", "spike/test_native_tween.py",
     "spike/test_tracedraw.py", "spike/test_cdr.py", "spike/test_native_cdr.py",
     "spike/test_embedded_cdr.py",
+    "spike/macos_containment/probe.rs", "spike/macos_containment/mutations.py",
+    "spike/macos_containment/worker_fixture.rs", "spike/macos_containment/test_supervisor.py",
+    "spike/macos_containment/native_mutations.py", "spike/macos_containment/test_worker_entry.py",
+    "spike/macos_containment/test_package_policy.py", "spike/macos_containment/test_bytecode.py",
     "spike/test_converter_supervisor.py", "spike/test_runtime_tools.py",
     "spike/test_onbrep_public.py", "spike/test_open_arg.py",
     "spike/test_windows_collector.py", "spike/test_windows_release.py",
@@ -200,6 +205,7 @@ NATIVE_FILES = (
     "native/cdr_core/src/reader.rs",
     "native/converter_supervisor/.gitignore", "native/converter_supervisor/Cargo.lock",
     "native/converter_supervisor/Cargo.toml", "native/converter_supervisor/src/main.rs",
+    "native/converter_supervisor/src/lib.rs",
     "native/cdr_multiversion/.gitignore", "native/cdr_multiversion/Cargo.lock",
     "native/cdr_multiversion/Cargo.toml",
     "native/cdr_multiversion/src/main.rs",

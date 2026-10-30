@@ -42,6 +42,15 @@ class RuntimeTests(unittest.TestCase):
             "libnarwhal_worker_policy.dylib", "narwhal-automation", "narwhal-welcome",
         })
 
+    def test_public_source_keeps_worker_policy_and_mac_qualification_tools(self):
+        import sys
+        with patch.object(sys, "path", [str(Path(__file__).parent), *sys.path]):
+            import create_public_branch as public
+        required = {"native/converter_supervisor/src/lib.rs", "scripts/accept_macos_release.py",
+                    "scripts/smoke_macos_launcher.py", "scripts/repack_macos_bytecode.py",
+                    "spike/macos_containment/test_bytecode.py"}
+        self.assertTrue(required <= set(public.public_files()))
+
     def test_inventory_diagnostics_include_bytecode_and_changed_content(self):
         import sys
         with patch.object(sys, "path", [str(Path(__file__).parent), *sys.path]):
@@ -52,6 +61,16 @@ class RuntimeTests(unittest.TestCase):
             "added": ["__pycache__/module.pyc"], "removed": ["gone"], "changed": ["keep"]})
         self.assertEqual(assemble.inventory_changes(before, list(reversed(before))), {
             "added": [], "removed": [], "changed": []})
+
+    def test_repack_rejects_non_mac_before_touching_input(self):
+        import sys
+        with patch.object(sys, "path", [str(Path(__file__).parent), *sys.path]):
+            import repack_macos_bytecode as repack
+        with patch.object(sys, "argv", ["repack", "--dmg", "/unused.dmg", "--output", "/unused", "--expected-source", "test"]), \
+             patch.object(repack.platform, "system", return_value="Linux"), patch.object(repack, "run") as run:
+            with self.assertRaises(SystemExit):
+                repack.main()
+            run.assert_not_called()
 
     def test_only_explicit_corel_deferral_is_accepted(self):
         self.assertEqual(set(native.UNAVAILABLE_COMPONENTS), {"cdr_multiversion"})
