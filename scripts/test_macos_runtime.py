@@ -16,6 +16,13 @@ nspec.loader.exec_module(native)
 
 
 class RuntimeTests(unittest.TestCase):
+    def test_native_tests_use_short_socket_paths_and_pinned_geometry(self):
+        env = native.build_environment(Path("/work"), Path("/occt"), Path("/libs"), Path("/tmp/nw-test"))
+        self.assertEqual(env["TMPDIR"], "/tmp/nw-test")
+        self.assertEqual(env["MACOSX_DEPLOYMENT_TARGET"], "14.0")
+        self.assertEqual(env["NARWHAL_OCCT_SOURCE_DIR"], "/occt")
+        self.assertEqual(env["DYLD_LIBRARY_PATH"], "/libs")
+
     def test_mac_helpers_include_all_eleven_current_components(self):
         actual = {name for names in native.COMPONENTS.values() for name in names}
         self.assertEqual(actual, {

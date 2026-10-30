@@ -31,6 +31,7 @@ jobs:
           key: macos14-arm64-native-v1-${{ hashFiles('native/**/Cargo.lock', 'native/geometry_core/build.rs', 'scripts/build_macos_native.py') }}-${{ github.run_id }}
           restore-keys: |
             macos14-arm64-native-v1-${{ hashFiles('native/**/Cargo.lock', 'native/geometry_core/build.rs', 'scripts/build_macos_native.py') }}-
+            macos14-arm64-native-v1-
       - name: Build and test every native component
         id: build
         run: python3 -u scripts/build_macos_native.py --work "$HOME/narwhal-native"

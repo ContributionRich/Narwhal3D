@@ -13,6 +13,7 @@ from pathlib import Path
 import platform
 import shutil
 import subprocess
+import tempfile
 import urllib.request
 import zipfile
 
@@ -42,6 +43,25 @@ def run(*args: str, env=None, timeout=600, log=None) -> None:
     subprocess.run(args, env=env, check=True, timeout=timeout, stdout=log, stderr=log)
 
 
+def source_inputs(root: Path) -> dict[str, str]:
+    result = {"launch/narwhal3d.png": sha(root / "launch/narwhal3d.png")}
+    for directory, dirs, files in os.walk(root / "native"):
+        dirs[:] = [name for name in dirs if name not in {"target", ".git", "__pycache__"}]
+        for name in files:
+            path = Path(directory) / name
+            if path.is_symlink():
+                raise ValueError(f"source symlink requires review: {path}")
+            result[path.relative_to(root).as_posix()] = sha(path)
+    return dict(sorted(result.items()))
+
+
+def build_environment(work: Path, occt: Path, libraries: Path, test_tmp: Path) -> dict[str, str]:
+    return dict(os.environ, TMPDIR=str(test_tmp), CARGO_TARGET_DIR=str(work / "target"),
+                CARGO_BUILD_JOBS="2", MACOSX_DEPLOYMENT_TARGET="14.0",
+                NARWHAL_OCCT_SOURCE_DIR=str(occt), NARWHAL_OCCT_LIB_DIR=str(libraries),
+                DYLD_LIBRARY_PATH=str(libraries))
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--work", required=True, type=Path)
@@ -49,6 +69,7 @@ def main() -> None:
     if platform.system() != "Darwin" or platform.machine() != "arm64":
         parser.error("native ARM64 macOS is required")
     root = Path(__file__).resolve().parents[1]
+    inputs = source_inputs(root)
     work = args.work.resolve()
     if work == root or root in work.parents:
         parser.error("build outside the source checkout")
@@ -88,9 +109,10 @@ def main() -> None:
         run("git", "-C", str(occt), "checkout", "--detach", "FETCH_HEAD")
     if subprocess.check_output(["git", "--no-pager", "-C", str(occt), "rev-parse", "HEAD"], text=True).strip() != OCCT:
         raise SystemExit("OCCT checkout differs from the approved pin")
-    env = dict(os.environ, CARGO_TARGET_DIR=str(work / "target"), CARGO_BUILD_JOBS="2",
-               MACOSX_DEPLOYMENT_TARGET="14.0", NARWHAL_OCCT_SOURCE_DIR=str(occt),
-               NARWHAL_OCCT_LIB_DIR=str(libraries), DYLD_LIBRARY_PATH=str(libraries))
+    # Darwin's normal /var/folders temporary prefix exceeds sockaddr_un limits
+    # for several nested socket fixtures. Keep those real socket tests intact.
+    test_tmp = tempfile.TemporaryDirectory(prefix="nw-", dir="/tmp")
+    env = build_environment(work, occt, libraries, Path(test_tmp.name))
     output = work / "output"
     output.mkdir(exist_ok=True)
     bin_dir = output / "bin"
@@ -118,7 +140,9 @@ def main() -> None:
                               "architecture": architecture, "dependencies": dependencies.splitlines()[1:]}
         print(f"{crate}: native tests and release build passed", flush=True)
     shutil.copytree(libraries, bin_dir / "occt", dirs_exist_ok=True)
-    receipt = {"source_revision": subprocess.check_output(["git", "--no-pager", "-C", str(root), "rev-parse", "HEAD"], text=True).strip(),
+    if source_inputs(root) != inputs:
+        raise SystemExit("native sources changed during compilation")
+    receipt = {"source_inputs": inputs, "source_revision": subprocess.check_output(["git", "--no-pager", "-C", str(root), "rev-parse", "HEAD"], text=True).strip(),
                "occt_source": OCCT, "occt_wheel_sha256": WHEEL_SHA, "components": receipts,
                "boundary": "Native helper tests only; not GUI, DMG or Gatekeeper acceptance"}
     (output / "native-build.json").write_text(json.dumps(receipt, indent=2) + "\n")
