@@ -34,8 +34,13 @@ mod mac {
         fn sandbox_init(profile: *const c_char, flags: u64, error: *mut *mut c_char) -> c_int;
         fn sandbox_free_error(error: *mut c_char);
     }
-    fn sandbox() {
-        let profile = CString::new("(version 1)(allow default)(deny process-fork)").unwrap();
+    fn sandbox(sealed: bool) {
+        let profile = CString::new(if sealed {
+            "(version 1)(allow default)(deny process-fork)(deny process-exec)"
+        } else {
+            "(version 1)(allow default)(deny process-fork)"
+        })
+        .unwrap();
         let mut error = std::ptr::null_mut();
         let result = unsafe { sandbox_init(profile.as_ptr(), 0, &mut error) };
         if !error.is_null() {
@@ -46,8 +51,9 @@ mod mac {
         assert_eq!(result, 0, "cannot deny worker process creation");
     }
     fn sandbox_worker(mode: &str) -> ! {
-        sandbox();
-        if mode == "--sandbox-fork" {
+        let sealed = mode.starts_with("--sealed-");
+        sandbox(sealed);
+        if mode.ends_with("-fork") {
             let pid = unsafe { fork() };
             if pid < 0 {
                 unsafe {
@@ -69,7 +75,7 @@ mod mac {
                 _exit(5)
             }
         }
-        if mode == "--sandbox-exec-allocate" {
+        if mode.ends_with("-exec-allocate") {
             let exe = CString::new(
                 std::env::current_exe()
                     .unwrap()
@@ -81,7 +87,13 @@ mod mac {
             let argv = [exe.as_ptr(), arg.as_ptr(), std::ptr::null()];
             unsafe {
                 execv(exe.as_ptr(), argv.as_ptr());
-                _exit(6)
+                _exit(
+                    if sealed && std::io::Error::last_os_error().raw_os_error() == Some(1) {
+                        0
+                    } else {
+                        6
+                    },
+                )
             }
         }
         worker(false)
@@ -197,9 +209,14 @@ mod mac {
             Some("--allocate") => worker(false),
             Some("--fork-allocate") => worker(true),
             Some("--empty") => unsafe { _exit(0) },
-            Some(mode @ ("--sandbox-allocate" | "--sandbox-fork" | "--sandbox-exec-allocate")) => {
-                sandbox_worker(mode)
-            }
+            Some(
+                mode @ ("--sandbox-allocate"
+                | "--sandbox-fork"
+                | "--sandbox-exec-allocate"
+                | "--sealed-allocate"
+                | "--sealed-fork"
+                | "--sealed-exec-allocate"),
+            ) => sandbox_worker(mode),
             _ => {}
         }
         assert_ne!(
@@ -212,6 +229,24 @@ mod mac {
         assert!(!address.is_null(), "jetsam spawn API unavailable");
         let setter: SetJetsam = unsafe { std::mem::transmute(address) };
         let mut passed = true;
+        if std::env::args().nth(1).as_deref() == Some("--sealed-suite") {
+            // A cooperating trusted worker must seal BOTH creation routes before
+            // parsing data. This proves the primitives, not arbitrary-worker support.
+            for (name, limit, mode, expected) in [
+                ("sealed_no_limit_control", None, "--sealed-allocate", 0),
+                ("sealed_below_limit", Some(768), "--sealed-allocate", 0),
+                ("sealed_over_limit", Some(64), "--sealed-allocate", 9),
+                ("sealed_denies_fork", Some(64), "--sealed-fork", 0),
+                ("sealed_denies_exec", Some(64), "--sealed-exec-allocate", 0),
+            ] {
+                let status = run(setter, limit, mode);
+                let ok = status.as_ref().is_ok_and(|raw| *raw == expected);
+                println!("{name}: result={status:?}; expected_status={expected}; passed={ok}");
+                passed &= ok;
+            }
+            assert!(passed, "sealed worker primitives not qualified");
+            return;
+        }
         if std::env::args().nth(1).as_deref() == Some("--sandbox-suite") {
             // Raw jetsam fork inheritance failed on native macOS. Keep that baseline
             // experiment below unchanged; test the alternative no-fork contract here.
