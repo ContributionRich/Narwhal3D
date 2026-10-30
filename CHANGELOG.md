@@ -2,6 +2,17 @@
 
 All notable public changes will be recorded here. Narwhal 3D is an extremely early prerelease; compatibility may change between builds. Release numbering is intentionally frozen on the `0.4.x` line until the project owner explicitly lifts that cap.
 
+## Unreleased
+
+- Reviewed in-process Rust acceleration for nearest ACI colour queries and larger
+  print-width files, preserving Python validation/I/O and complete compatibility
+  fallbacks. Tiny files and cheap exact-colour lookups avoid FFI overhead.
+- Refuse text wrapping that cannot progress instead of growing spans indefinitely.
+- Keep unregistered native experiments out of exported UI source bundles.
+- Track verified command-behavior findings and remaining exact Divide/Rotate/Arc
+  gaps in [the review](docs/reviews/2026-10-30-rust-research.md); these are not all
+  implemented commands or changes to existing0.4.8 release assets.
+
 ## 0.4.8
 
 Changes since the published0.4.7 release. Linux and Windows are the initial package targets; macOS remains pending separate portability and package acceptance. See the GitHub release for available assets and their qualification notes.

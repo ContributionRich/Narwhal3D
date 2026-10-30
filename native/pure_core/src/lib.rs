@@ -13,6 +13,7 @@
 //! `lib.rs` holds export shims only; the implementations live in focused modules
 //! under `src/`.
 
+pub mod aci_colors;
 pub mod bearing;
 pub mod cage;
 pub mod calc;
@@ -25,8 +26,10 @@ pub mod interpolate;
 pub mod joinchain;
 pub mod macro_parse;
 pub mod macro_plan;
+mod metadata_ffi;
 pub mod numparse;
 pub mod obj;
+pub mod printwidths;
 pub mod stl;
 pub mod surface;
 pub mod svgpath;

@@ -77,6 +77,14 @@ def inventory(bundle: Path) -> list[dict]:
     return records
 
 
+def inventory_changes(before: list[dict], after: list[dict]) -> dict[str, list[str]]:
+    old = {row["path"]: row for row in before}
+    new = {row["path"]: row for row in after}
+    return {"added": sorted(new.keys() - old.keys()),
+            "removed": sorted(old.keys() - new.keys()),
+            "changed": sorted(path for path in old.keys() & new.keys() if old[path] != new[path])}
+
+
 def binaries(bundle: Path):
     for path in sorted(bundle.rglob("*")):
         if path.is_file() and not path.is_symlink():

@@ -20,8 +20,8 @@ class RuntimeTests(unittest.TestCase):
         receipts = {name: {} for names in native.COMPONENTS.values() for name in names}
         native.require_components(receipts, {})
         with self.assertRaises(ValueError):
-            native.require_components(receipts, {"cdr_multiversion": "failed memory limit"})
-        del receipts["narwhal-cdr-multiversion"]
+            native.require_components(receipts, {"converter_supervisor": "failed memory limit"})
+        del receipts["libnarwhal_worker_policy.dylib"]
         with self.assertRaises(ValueError):
             native.require_components(receipts, {})
 
@@ -39,8 +39,24 @@ class RuntimeTests(unittest.TestCase):
             "libnarwhal_cdr_core.dylib", "libnarwhal_platform_core.dylib",
             "libnarwhal_geometry_core.dylib", "libnarwhal_automation.dylib",
             "narwhal-document-core", "narwhal-converter-supervisor",
-            "narwhal-cdr-multiversion", "narwhal-automation", "narwhal-welcome",
+            "libnarwhal_worker_policy.dylib", "narwhal-automation", "narwhal-welcome",
         })
+
+    def test_inventory_diagnostics_include_bytecode_and_changed_content(self):
+        import sys
+        with patch.object(sys, "path", [str(Path(__file__).parent), *sys.path]):
+            import assemble_macos_release as assemble
+        before = [{"path": "keep", "sha256": "a"}, {"path": "gone", "sha256": "b"}]
+        after = [{"path": "keep", "sha256": "c"}, {"path": "__pycache__/module.pyc", "sha256": "d"}]
+        self.assertEqual(assemble.inventory_changes(before, after), {
+            "added": ["__pycache__/module.pyc"], "removed": ["gone"], "changed": ["keep"]})
+        self.assertEqual(assemble.inventory_changes(before, list(reversed(before))), {
+            "added": [], "removed": [], "changed": []})
+
+    def test_only_explicit_corel_deferral_is_accepted(self):
+        self.assertEqual(set(native.UNAVAILABLE_COMPONENTS), {"cdr_multiversion"})
+        self.assertNotIn("cdr_multiversion", native.COMPONENTS)
+        self.assertIn("libnarwhal_worker_policy.dylib", native.COMPONENTS["converter_supervisor"])
 
     def test_xcode_requirement_is_checked_before_expensive_work(self):
         runtime.require_xcode("Xcode 16.2\nBuild version 16C5032a")

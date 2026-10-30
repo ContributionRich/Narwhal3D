@@ -235,7 +235,10 @@ PURE_SUITES=(
     spike/test_shell_popup.py
     spike/test_selection_menu.py
     spike/test_ui_bundle.py
+    spike/portfolio_review/test_bundle_drafts.py
     spike/test_shell_input.py
+    spike/test_textfield.py
+    spike/portfolio_review/test_wrap_progress.py
     spike/test_views.py
     spike/test_menubar_resource.py
     spike/test_rightpanel.py

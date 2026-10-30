@@ -40,6 +40,10 @@ _STANDARD = {
     9: (192, 192, 192),
 }
 
+# Exact nine-color lookup is cheaper than an FFI call (measured); only the
+# nearest-color search crosses into Rust.
+_EXACT_STANDARD = {rgb: index for index, rgb in _STANDARD.items()}
+
 
 def aci_to_rgb(i):
     """Return ``(rgb, error)`` for an ACI index.
@@ -87,6 +91,17 @@ def rgb_to_aci(rgb):
     a structurally invalid ``rgb`` (wrong arity, non-numeric, out of range).
     """
     r, g, b = _validate_rgb(rgb)
+    exact = _EXACT_STANDARD.get((r, g, b))
+    if exact is not None:
+        return exact, True
+    try:
+        from . import native_metadata
+    except ImportError:  # direct-file use retains the complete reference implementation
+        pass
+    else:
+        result = native_metadata.rgb_to_aci(r, g, b)
+        if result is not None:
+            return result
     for idx in range(1, 10):
         if (r, g, b) == tuple(float(v) for v in _STANDARD[idx]):
             return idx, True

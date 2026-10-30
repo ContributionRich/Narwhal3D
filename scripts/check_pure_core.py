@@ -63,6 +63,9 @@ PURE_CORE_PYTESTS = (
     "spike/test_native_numparse.py",
     "spike/test_calc.py",
     "spike/test_native_calc.py",
+    "spike/test_aci_colors.py",
+
+    "spike/portfolio_review/test_metadata.py",
     "spike/test_bearing.py",
     "spike/test_native_bearing.py",
     "spike/test_coords.py",

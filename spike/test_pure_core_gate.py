@@ -78,6 +78,8 @@ def _():
         "spike/test_dxf_writer.py", "spike/test_dxf_reader.py", "spike/test_native_dxf.py",
         "spike/test_numparse.py", "spike/test_native_numparse.py",
         "spike/test_calc.py", "spike/test_native_calc.py",
+        "spike/test_aci_colors.py",
+        "spike/portfolio_review/test_metadata.py",
         "spike/test_bearing.py", "spike/test_native_bearing.py",
         "spike/test_coords.py", "spike/test_native_coords.py",
         "spike/test_macro.py", "spike/test_native_macro.py",

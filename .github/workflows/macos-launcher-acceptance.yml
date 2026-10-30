@@ -58,5 +58,6 @@ jobs:
             ${{ runner.temp }}/launcher-evidence/launcher-result.json
             ${{ runner.temp }}/final-acceptance/*.log
             ${{ runner.temp }}/final-acceptance/results.json
+            ${{ runner.temp }}/final-acceptance/*-inventory.json
           if-no-files-found: warn
           retention-days: 14

@@ -168,6 +168,11 @@ def _wrap_paragraph(text, p0, p1, width, measure, out):
         if measure(text[start:p1].rstrip(" ")) <= width:
             out.append((start, p1))
             return
+        # OURS safety correction, matching the Rust port's NoProgress refusal.
+        # Font measurement stays in Python; an invalid width/metric must not
+        # append spans forever after the paragraph has been exhausted.
+        if start >= p1:
+            raise ValueError("text wrapping cannot make progress with this width/measurement")
         # Word breaks: just after a run of spaces. The fit test ignores the
         # trailing spaces, which stay on the line they end.
         best = None

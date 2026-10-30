@@ -46,7 +46,7 @@ EXTRA_SOURCE = (
     "blender_patches/apply_statusbar_height.py",
     "blender_patches/apply_deferred_first_present.py",
     "blender_patches/apply_narwhal3d_branding.py",
-    "scripts/build_ui_bundle.py", "scripts/ui_bundle_export.py",
+    "scripts/build_ui_bundle.py", "scripts/ui_bundle_export.py", "scripts/create_public_branch.py",
     "scripts/ui_bundle_shots.py", "scripts/ui_bundle/test_preview.cjs",
 )
 ASSET_ROOTS = ("narwhal3d/icons", "artwork/icons", "artwork/Logo")
@@ -161,6 +161,13 @@ def source_inventory(root=ROOT):
         pending.update(dependencies(root, rel, data) - sources.keys())
     for rel in EXTRA_SOURCE:
         sources[rel] = read_input(root, rel)
+    # Export only reviewed native sources, never another agent's unregistered
+    # experiments merely because they exist beside a compiled module.
+    public_tree = ast.parse(sources["scripts/create_public_branch.py"])
+    native_public = set()
+    for node in public_tree.body:
+        if isinstance(node, ast.Assign) and any(isinstance(t, ast.Name) and t.id in {"NATIVE_FILES", "WELCOME_FILES"} for t in node.targets):
+            native_public.update(ast.literal_eval(node.value))
     for base in NATIVE_ROOTS:
         directory = root / base
         if not directory.is_dir():
@@ -170,6 +177,8 @@ def source_inventory(root=ROOT):
                  *directory.glob("src/**/*.rs"), *directory.glob("include/*.h")]
         for path in paths:
             rel = path.relative_to(root).as_posix()
+            if rel not in native_public:
+                continue
             sources[rel] = read_input(root, rel)
     return sources
 
@@ -368,7 +377,7 @@ def prepare(stage, root=ROOT):
         "surfaces": {k: ["source/narwhal3d/" + n for n in v] for k, v in SURFACES.items()},
         "native_ui_sources": list(NATIVE_ROOTS),
         "source_count": len(sources), "asset_count": len(assets),
-        "source_rule": "UI entry points + recursive local Python imports + named native UI crates; source only, not runnable app",
+        "source_rule": "UI entry points + recursive local Python imports + reviewed public sources of named native UI crates; source only, not runnable app",
         "package_modules_outside_closure": sorted(p.relative_to(root).as_posix() for p in (root / "narwhal3d").rglob("*.py")
                                                   if "__pycache__" not in p.parts and p.relative_to(root).as_posix() not in sources),
         "screenshots": {"status": "reference included", "files": ["playground/references/workspace-light.png"], "reason": "Inspected blank application UI-report capture; no user document or VM imagery"},

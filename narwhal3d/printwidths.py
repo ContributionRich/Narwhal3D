@@ -52,4 +52,15 @@ def read_widths(path):
     """
     with open(path, "r", encoding="utf-8") as fh:
         text = fh.read()
+    # OURS: small files avoid the fixed FFI/decoding cost; file I/O and strict
+    # UTF-8/universal-newline handling stay in Python on both paths.
+    if len(text) >= 256:
+        try:
+            from . import native_metadata
+        except ImportError:
+            pass
+        else:
+            result = native_metadata.widths_from_text(text)
+            if result is not None:
+                return result
     return _widths_from_text(text)
