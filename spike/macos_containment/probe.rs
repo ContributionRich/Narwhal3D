@@ -25,8 +25,66 @@ mod mac {
         fn waitpid(pid: c_int, status: *mut c_int, options: c_int) -> c_int;
         fn kill(pid: c_int, signal: c_int) -> c_int;
         fn fork() -> c_int;
+        fn execv(path: *const c_char, argv: *const *const c_char) -> c_int;
         fn getuid() -> u32;
         fn _exit(status: c_int) -> !;
+    }
+    #[link(name = "sandbox")]
+    unsafe extern "C" {
+        fn sandbox_init(profile: *const c_char, flags: u64, error: *mut *mut c_char) -> c_int;
+        fn sandbox_free_error(error: *mut c_char);
+    }
+    fn sandbox() {
+        let profile = CString::new("(version 1)(allow default)(deny process-fork)").unwrap();
+        let mut error = std::ptr::null_mut();
+        let result = unsafe { sandbox_init(profile.as_ptr(), 0, &mut error) };
+        if !error.is_null() {
+            unsafe {
+                sandbox_free_error(error);
+            }
+        }
+        assert_eq!(result, 0, "cannot deny worker process creation");
+    }
+    fn sandbox_worker(mode: &str) -> ! {
+        sandbox();
+        if mode == "--sandbox-fork" {
+            let pid = unsafe { fork() };
+            if pid < 0 {
+                unsafe {
+                    _exit(
+                        if std::io::Error::last_os_error().raw_os_error() == Some(1) {
+                            0
+                        } else {
+                            4
+                        },
+                    )
+                }
+            }
+            if pid == 0 {
+                unsafe { _exit(7) }
+            }
+            let mut status = 0;
+            unsafe {
+                waitpid(pid, &mut status, 0);
+                _exit(5)
+            }
+        }
+        if mode == "--sandbox-exec-allocate" {
+            let exe = CString::new(
+                std::env::current_exe()
+                    .unwrap()
+                    .as_os_str()
+                    .as_encoded_bytes(),
+            )
+            .unwrap();
+            let arg = CString::new("--allocate").unwrap();
+            let argv = [exe.as_ptr(), arg.as_ptr(), std::ptr::null()];
+            unsafe {
+                execv(exe.as_ptr(), argv.as_ptr());
+                _exit(6)
+            }
+        }
+        worker(false)
     }
     fn allocate() {
         let mut bytes = vec![0u8; 128 * 1024 * 1024];
@@ -139,6 +197,9 @@ mod mac {
             Some("--allocate") => worker(false),
             Some("--fork-allocate") => worker(true),
             Some("--empty") => unsafe { _exit(0) },
+            Some(mode @ ("--sandbox-allocate" | "--sandbox-fork" | "--sandbox-exec-allocate")) => {
+                sandbox_worker(mode)
+            }
             _ => {}
         }
         assert_ne!(
@@ -151,6 +212,28 @@ mod mac {
         assert!(!address.is_null(), "jetsam spawn API unavailable");
         let setter: SetJetsam = unsafe { std::mem::transmute(address) };
         let mut passed = true;
+        if std::env::args().nth(1).as_deref() == Some("--sandbox-suite") {
+            // Raw jetsam fork inheritance failed on native macOS. Keep that baseline
+            // experiment below unchanged; test the alternative no-fork contract here.
+            for (name, limit, mode, expected) in [
+                ("sandbox_below_limit", 768, "--sandbox-allocate", 0),
+                ("sandbox_over_limit", 64, "--sandbox-allocate", 9),
+                ("sandbox_denies_fork", 64, "--sandbox-fork", 0),
+                (
+                    "sandbox_exec_preserves_limit",
+                    64,
+                    "--sandbox-exec-allocate",
+                    9,
+                ),
+            ] {
+                let status = run(setter, Some(limit), mode);
+                let ok = status.as_ref().is_ok_and(|raw| *raw == expected);
+                println!("{name}: result={status:?}; expected_status={expected}; passed={ok}");
+                passed &= ok;
+            }
+            assert!(passed, "sandbox strategy not qualified");
+            return;
+        }
         for (name, limit, mode, expected) in [
             ("no_limit_control", None, "--allocate", 0),
             ("below_limit", Some(768), "--allocate", 0),
