@@ -31,6 +31,13 @@ class AutomationPackaging(unittest.TestCase):
         self.assertEqual(set(linux.NATIVE_COMPONENTS),
                          {name for names in builder.COMPONENTS.values() for name in names})
 
+    def test_windows_geometry_exports_cover_current_surfacing_abi(self):
+        self.assertTrue({"narwhal_geometry_core_prepare_freeform_v1",
+                         "narwhal_geometry_core_sweep1_freeform_approx_v1",
+                         "narwhal_geometry_core_sweep1_parallel_v1"}
+                        <= set(windows.GEOMETRY_CORE_EXPORTS))
+        self.assertEqual(len(windows.GEOMETRY_CORE_EXPORTS), 12)
+
     def test_windows_automation_exports_are_required(self):
         good = {"machine": 0x8664, "exports": ["narwhal_workflow_abi", "narwhal_workflow_json"]}
         with patch.object(windows, "inspect_pe_dll", return_value=good):
