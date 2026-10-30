@@ -322,6 +322,29 @@ fn is_ready_line(line: &str) -> bool {
     line == READY_MARKER
 }
 
+#[derive(Default)]
+struct RuntimeReadiness {
+    watchdog_presented: bool,
+    layout_complete: bool,
+    announced: bool,
+}
+
+impl RuntimeReadiness {
+    fn observe(&mut self, line: &str) -> bool {
+        self.watchdog_presented |= line == "[narwhal3d] first presentation released (watchdog)";
+        self.layout_complete |= line == "[narwhal3d] layout presentation ready";
+        // A watchdog frame alone is incomplete. Once both native presentation
+        // and completed layout are observed, slow startup must not spin forever.
+        let ready = is_ready_line(line) || (self.watchdog_presented && self.layout_complete);
+        if ready && !self.announced {
+            self.announced = true;
+            true
+        } else {
+            false
+        }
+    }
+}
+
 fn progress_state(ready: bool, elapsed: Duration) -> (f32, bool) {
     if ready {
         (1.0, false)
@@ -1122,9 +1145,11 @@ fn spawn_runtime(
     let ready_sender = sender.clone();
     std::thread::spawn(move || {
         let reader = BufReader::new(stderr);
+        let mut readiness = RuntimeReadiness::default();
         for line in reader.lines().map_while(Result::ok) {
             eprintln!("{line}");
-            if is_ready_line(&line) {
+            if readiness.observe(&line) {
+                eprintln!("[narwhal-welcome] runtime ready");
                 let _ = ready_sender.send(RuntimeEvent::Ready);
             }
         }
@@ -2148,6 +2173,26 @@ mod tests {
         assert!(validate_windows_update_paths([archive, target, target, backup]).is_err());
         assert!(!safe_absolute_path(Path::new("relative/package")));
         assert!(!safe_absolute_path(Path::new("/tmp/bad\npath")));
+    }
+
+    #[test]
+    fn watchdog_startup_waits_for_both_signals_and_announces_once() {
+        let watchdog = "[narwhal3d] first presentation released (watchdog)";
+        let layout = "[narwhal3d] layout presentation ready";
+        for (first, second) in [(watchdog, layout), (layout, watchdog)] {
+            let mut readiness = super::RuntimeReadiness::default();
+            assert!(!readiness.observe(first));
+            assert!(!readiness.observe("[narwhal3d] presentation watchdog releasing incomplete UI"));
+            assert!(readiness.observe(second));
+            assert!(!readiness.observe(second));
+            assert!(!readiness.observe(READY_MARKER));
+        }
+        let mut normal = super::RuntimeReadiness::default();
+        assert!(normal.observe(READY_MARKER));
+        assert!(!normal.observe(READY_MARKER));
+        let mut unrelated = super::RuntimeReadiness::default();
+        assert!(!unrelated.observe(&format!("prefix {watchdog}")));
+        assert!(!unrelated.observe(&format!("{layout} suffix")));
     }
 
     #[test]
