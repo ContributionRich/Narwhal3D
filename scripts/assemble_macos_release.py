@@ -39,6 +39,30 @@ def run(*args: str, env=None, timeout=600) -> str:
     return result.stdout
 
 
+def create_dmg(stage: Path, destination: Path) -> None:
+    import time
+    if destination.exists():
+        raise ValueError("refusing to replace an existing DMG")
+    for attempt in range(1, 4):
+        candidate = destination.with_name(destination.stem + f".attempt-{attempt}.dmg")
+        if candidate.exists() or candidate.with_suffix(".failed").exists():
+            raise ValueError("DMG attempt path already exists")
+        try:
+            run("hdiutil", "create", "-volname", "Narwhal 3D", "-srcfolder", str(stage),
+                "-fs", "HFS+", "-format", "UDZO", str(candidate), timeout=1200)
+        except RuntimeError as error:
+            # Disk Arbitration/Spotlight can transiently hold a newly created image.
+            # Retain partial bytes and retry only this measured busy condition.
+            if candidate.exists():
+                candidate.rename(candidate.with_suffix(".failed"))
+            if "Resource busy" not in str(error) or attempt == 3:
+                raise
+            time.sleep(2 * attempt)
+        else:
+            candidate.rename(destination)
+            return
+
+
 def inventory(bundle: Path) -> list[dict]:
     bundle = bundle.resolve()
     records = []
@@ -198,7 +222,7 @@ def main() -> None:
         stage = Path(temporary)
         run("ditto", str(bundle), str(stage / bundle.name))
         (stage / "Applications").symlink_to("/Applications", target_is_directory=True)
-        run("hdiutil", "create", "-volname", "Narwhal 3D", "-srcfolder", str(stage), "-format", "UDZO", str(dmg), timeout=1200)
+        create_dmg(stage, dmg)
     run("hdiutil", "verify", str(dmg))
     mounted = plistlib.loads(run("hdiutil", "attach", "-readonly", "-nobrowse", "-plist", str(dmg)).encode())
     volume = next(item for item in mounted["system-entities"] if "mount-point" in item)

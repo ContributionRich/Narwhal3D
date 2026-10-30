@@ -7,6 +7,45 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
 import build_macos_native as build
 
 class PolicyTests(unittest.TestCase):
+    def test_busy_dmg_retry_preserves_partial_and_publishes_only_success(self):
+        import assemble_macos_release as assemble
+        import tempfile
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            output = root / "application.dmg"
+            calls = []
+            def tool(*args, **kwargs):
+                calls.append(args)
+                Path(args[-1]).write_bytes(b"partial" if len(calls) == 1 else b"complete")
+                if len(calls) == 1:
+                    raise RuntimeError("hdiutil: create failed - Resource busy")
+                return ""
+            with patch.object(assemble, "run", tool), patch("time.sleep"):
+                assemble.create_dmg(root, output)
+            self.assertEqual(output.read_bytes(), b"complete")
+            self.assertEqual((root / "application.attempt-1.failed").read_bytes(), b"partial")
+            self.assertEqual(len(calls), 2)
+            self.assertIn("HFS+", calls[0])
+
+    def test_busy_dmg_retries_are_bounded(self):
+        import assemble_macos_release as assemble
+        import tempfile
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as temporary, patch.object(assemble, "run", side_effect=RuntimeError("Resource busy")) as tool, patch("time.sleep"):
+            with self.assertRaisesRegex(RuntimeError, "Resource busy"):
+                assemble.create_dmg(Path(temporary), Path(temporary) / "application.dmg")
+            self.assertEqual(tool.call_count, 3)
+
+    def test_nonbusy_dmg_errors_are_not_retried(self):
+        import assemble_macos_release as assemble
+        import tempfile
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as temporary, patch.object(assemble, "run", side_effect=RuntimeError("invalid input")) as tool:
+            with self.assertRaisesRegex(RuntimeError, "invalid input"):
+                assemble.create_dmg(Path(temporary), Path(temporary) / "application.dmg")
+            self.assertEqual(tool.call_count, 1)
+
     def test_reuse_checks_native_source_binaries_and_kernel_pins(self):
         import json
         import tempfile
