@@ -83,7 +83,14 @@ mod mac {
                     .as_encoded_bytes(),
             )
             .unwrap();
-            let arg = CString::new("--allocate").unwrap();
+            // If exec unexpectedly succeeds, return a distinct status rather than
+            // the same zero used to acknowledge a correctly denied exec.
+            let arg = CString::new(if sealed {
+                "--exec-escape"
+            } else {
+                "--allocate"
+            })
+            .unwrap();
             let argv = [exe.as_ptr(), arg.as_ptr(), std::ptr::null()];
             unsafe {
                 execv(exe.as_ptr(), argv.as_ptr());
@@ -209,6 +216,10 @@ mod mac {
             Some("--allocate") => worker(false),
             Some("--fork-allocate") => worker(true),
             Some("--empty") => unsafe { _exit(0) },
+            Some("--exec-escape") => {
+                allocate();
+                unsafe { _exit(42) }
+            }
             Some(
                 mode @ ("--sandbox-allocate"
                 | "--sandbox-fork"
