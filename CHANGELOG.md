@@ -15,7 +15,7 @@ All notable public changes will be recorded here. Narwhal 3D is an extremely ear
 
 ## 0.4.8
 
-Changes since the published0.4.7 release. Linux and Windows are the initial package targets; macOS remains pending separate portability and package acceptance. See the GitHub release for available assets and their qualification notes.
+Changes since the published0.4.7 release. Linux and Windows shipped first; an Apple Silicon Mac DMG was added to the same release on2026-10-30. There was no0.4.7 Mac release. See the GitHub release for platform-specific source revisions and qualification notes.
 
 ### Release highlights
 
@@ -26,7 +26,9 @@ Changes since the published0.4.7 release. Linux and Windows are the initial pack
 - Windows gains a managed portable-EXE format with verified per-user payload caching and outer-executable update staging. The portable ZIP remains available for compatibility with earlier updaters.
 - Native window artwork is rebuilt from the current Narwhal logo. The automation library is included in Linux and Windows packages; the external MCP server remains Unix-only.
 
-CageEdit, advanced surfacing and unrestricted AI modeling remain incomplete. Packages are unsigned; physical Windows GPU coverage remains limited. There was no0.4.7 macOS release, and no Mac package is claimed ready here.
+CageEdit, advanced surfacing and unrestricted AI modeling remain incomplete. Windows packages are unsigned; the Mac preview is ad-hoc-signed but not notarized and needs explicit Gatekeeper approval. Physical GPU coverage remains limited. Corel multiversion conversion is unavailable on Mac.
+
+The Mac addition uses source `93dcc8c985926cd6305a5ef75919209a9318e388`, preserving the original Linux/Windows tag. It includes bounded document-worker containment, a compatible same-version NumPy wheel, relocation-safe bytecode caches and Metal-aware Welcome readiness. Native macOS15 acceptance passed document round trips, GPU rendering, Gumball, launcher readiness and unchanged signed-package inventories.
 
 ### Added
 

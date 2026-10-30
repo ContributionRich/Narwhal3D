@@ -1,8 +1,10 @@
-# Experimental macOS source build
+# macOS download and historical source-build helper
 
-Narwhal 3D does not currently publish a macOS application. This page provides a community build path for people who have a Mac and are willing to compile and test it themselves.
+A published **Apple Silicon DMG** is available in [v0.4.8](https://github.com/ContributionRich/Narwhal3D/releases/tag/v0.4.8): `Narwhal_3D-0.4.8-macOS-arm64.dmg`. Open it and copy **Narwhal 3D.app** to Applications. The self-contained package targets macOS14+; native qualification ran on macOS15 with Apple Paravirtual/Metal graphics. It is not an Intel/universal package.
 
-This is **not a supported release recipe**. No macOS build has yet passed Narwhal's real-window UI, exact-manufacturing-geometry, save/reload, signing, notarization, or distribution gates. Do not redistribute the resulting application as an official Narwhal package.
+The Mac preview is **ad-hoc-signed and unnotarized**, not Developer ID-signed. Gatekeeper assessment rejects this unsigned-publisher preview without explicit user approval. Follow Apple’s Privacy & Security instructions for opening a trusted download; do not disable Gatekeeper globally. Interactive downloaded-file approval and broad physical-Mac coverage are not certified. Corel multiversion conversion is unavailable.
+
+The official build/release route is documented in [packaging/RELEASING.md](../packaging/RELEASING.md). The legacy developer helper below is **not a supported release recipe** and does not replace the current worker-containment, dependency, signing, DMG and artifact-acceptance gates. Do not redistribute its output as an official package.
 
 ## Feasibility measured on 2026-10-19
 

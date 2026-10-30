@@ -5,10 +5,13 @@ AppImage, portable EXE, compatibility ZIP and their checksums passed upload veri
 The Windows EXE passed native launch/cache/normal-close/update/backup acceptance.
 Every future candidate still needs its own package gates.
 
-The macOS runtime has built successfully; its complete app/DMG remains pending worker
-containment integration and platform qualification. See [the measured Mac continuation
-plan](MACOS_048_PLAN.md). The owner authorizes adding a qualified Mac asset to the same
-release later. Do not present a runtime archive or primitive test as a finished app.
+The Apple Silicon Mac DMG was added to the same0.4.8 release from the isolated
+portability checkpoint `93dcc8c985926cd6305a5ef75919209a9318e388`. Native macOS15
+qualification passed geometry, rendering, Gumball, launcher/Welcome readiness,
+relocation/signature and unchanged-inventory checks. It is ad-hoc-signed, not
+notarized; Gatekeeper requires explicit approval and physical-Mac coverage is limited.
+Corel multiversion conversion is unavailable on Mac. The original tag and Linux/
+Windows assets remain unchanged. [Mac implementation history](MACOS_048_PLAN.md).
 
 ## 1. Select and freeze source
 
@@ -118,6 +121,17 @@ updater cannot migrate itself to an EXE-only release.
   `packaging/macos/launcher/` are the new app/DMG pipeline. They still require complete
   native qualification. `build_macos_source.sh` remains an experimental developer
   helper, not the approved release recipe.
+- Use `macos-package.yml` with an exact application source revision and a verified
+  runtime artifact. The separate `macos-launcher-acceptance.yml` checks the actual
+  app/Welcome path without rebuilding it. Preserve cached compiler outputs.
+- Compile checked-hash bytecode with the TARGET bundled Python before signing.
+  Blender ignores the environment-only no-bytecode switch; otherwise first launch
+  adds cache files and invalidates the signed inventory. Test after relocation and
+  timestamp changes. `repack_macos_bytecode.py` is a narrowly scoped repair route,
+  not permission to mix newer feature code into an existing platform candidate.
+- Metal startup requires actual backend identification plus completed layout,
+  not OpenGL's deferred-presentation marker. Keep both halves of that readiness
+  test and its premature/missing-signal mutations.
 - A validated OSXCross installation can build individual components on Linux.
   Preserve SDK licensing restrictions and do not redistribute SDK contents.
 - Inspect every Mach-O architecture, minimum OS, install ID, dependency and rpath.

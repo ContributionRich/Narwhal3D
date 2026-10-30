@@ -1,5 +1,14 @@
 # macOS addition to the published 0.4.8 release
 
+**Completed2026-10-30:** the Apple Silicon DMG and checksum are published in v0.4.8.
+Application source is `93dcc8c985926cd6305a5ef75919209a9318e388`, deliberately excluding
+next-release Rust ports. Native package run41126680014 and final artifact/launcher
+run41128183330 passed. The signed bundle remains unchanged after document, rendering
+and Gumball checks; checked-hash Python caches and Metal-aware readiness were required.
+The package is ad-hoc-signed, not notarized, and needs explicit Gatekeeper approval.
+Corel multiversion conversion remains unavailable. The sections below preserve the
+investigation and qualification history, not current blockers.
+
 Linux and Windows0.4.8 are published from `d818a4328a6286cb377f7fdd108684e0e40e1768`.
 Keep that tag and its existing assets unchanged. macOS will use an explicitly
 identified later portability revision and can be attached to the same release
