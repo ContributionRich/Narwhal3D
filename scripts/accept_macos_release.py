@@ -10,7 +10,7 @@ import shutil
 import subprocess
 import sys
 
-from assemble_macos_release import inventory
+from assemble_macos_release import inventory, inventory_changes
 
 p = argparse.ArgumentParser()
 p.add_argument("--dmg", type=Path, required=True)
@@ -51,7 +51,7 @@ try:
     env = {k: v for k, v in os.environ.items() if not k.startswith(("NARWHAL", "DYLD_"))}
     profile = work / "profile"
     profile.mkdir()
-    env.update(HOME=str(profile), PYTHONDONTWRITEBYTECODE="1", PYTHONPATH=str(app),
+    env.update(HOME=str(profile), TMPDIR=str(work), PYTHONDONTWRITEBYTECODE="1", PYTHONPATH=str(app),
                NARWHAL3D_SETTINGS_FILE=str(profile / "preferences.json"),
                BLENDER_USER_CONFIG=str(profile / "blender"), NARWHAL3D_VERSION="0.4.8",
                NARWHAL3D_DISABLE_UPDATE_CHECK="1", NARWHAL3D_NO_DIALOGS="1",
@@ -75,15 +75,27 @@ try:
         assert hashlib.sha256(test.read_bytes()).digest() == hashlib.sha256((source / "spike" / name).read_bytes()).digest()
         command = [runtime, "--threads", "2", "--factory-startup", "--python-exit-code", "1"]
         command += ["-b"] if background else ["--enable-event-simulate"]
+        # Blender ignores PYTHONPATH by default. Prepare only the import path;
+        # the pre-bootstrap interaction fixture must import the real package itself.
+        command += ["--python-expr", "import sys; sys.path.insert(0, " + repr(str(app)) + ")"]
         for script in ([test, bootstrap] if first else [bootstrap, test]):
             command += ["--python", script]
-        text = run(command, env=env, timeout=600 if background else 180, label=label)
+        case_profile = work / ("profile-" + label)
+        case_profile.mkdir()
+        case_env = dict(env, HOME=str(case_profile),
+                        NARWHAL3D_SETTINGS_FILE=str(case_profile / "preferences.json"),
+                        BLENDER_USER_CONFIG=str(case_profile / "blender"))
+        text = run(command, env=case_env, timeout=600 if background else 180, label=label)
+        changes = inventory_changes(before, inventory(bundle))
+        (work / (label + "-inventory.json")).write_text(json.dumps(changes, indent=2))
+        print("Inventory delta after", label, {key: len(value) for key, value in changes.items()}, flush=True)
         assert marker in text, (label, "acceptance marker missing")
         assert "Traceback (most recent call last)" not in text, label
         if not background:
             report = json.loads(next(line[len(marker)+1:] for line in reversed(text.splitlines()) if line.startswith(marker + " ")))
             assert report["status"] == "passed", report
-    assert inventory(bundle) == before, "relocated package changed during acceptance"
+    changes = inventory_changes(before, inventory(bundle))
+    assert not any(changes.values()), "relocated package changed during acceptance: " + repr({key: value[:12] for key, value in changes.items()})
     assert inventory(original) == before, "mounted DMG changed"
     records.append(dict(label="post-test-inventory", passed=True, files=len(before)))
     (work / "results.json").write_text(json.dumps(records, indent=2))

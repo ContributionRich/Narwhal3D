@@ -1,0 +1,66 @@
+name: macOS frozen app cache repair and qualification
+
+on:
+  workflow_dispatch:
+    inputs:
+      package_run:
+        description: Existing frozen application candidate artifact
+        required: true
+        default: '41096904716'
+      source_ref:
+        description: Application source revision (not newer feature work)
+        required: true
+        default: '02a001242c615279f9f215b2c79ef15bd75e626c'
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  qualify:
+    runs-on: macos-15
+    timeout-minutes: 25
+    env:
+      APPLICATION_SOURCE: ${{ inputs.source_ref }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: macos-048-candidate-${{ inputs.package_run }}
+          run-id: ${{ inputs.package_run }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/mac-input
+      - name: Repackage caches only, then qualify the actual output
+        run: |
+          python3 -u - <<'PY'
+          import hashlib,os,pathlib,subprocess,sys
+          root=pathlib.Path(os.environ['RUNNER_TEMP'])
+          matches=list((root/'mac-input').rglob('Narwhal_3D-0.4.8-macOS-arm64.dmg'))
+          assert len(matches)==1
+          for name in ('test_narwhal_document.py','test_render_quality_gui.py','test_gumball_extrude_scale_gui.py'):
+              path='spike/'+name
+              frozen=subprocess.check_output(['git','--no-pager','show',os.environ['APPLICATION_SOURCE']+':'+path])
+              assert hashlib.sha256(frozen).digest()==hashlib.sha256(pathlib.Path(path).read_bytes()).digest()
+          subprocess.run([sys.executable,'scripts/repack_macos_bytecode.py','--dmg',str(matches[0]),'--output',str(root/'mac-repacked'),'--expected-source',os.environ['APPLICATION_SOURCE']],check=True,timeout=600)
+          dmg=root/'mac-repacked'/matches[0].name
+          subprocess.run([sys.executable,'scripts/accept_macos_release.py','--dmg',str(dmg),'--source',os.environ['GITHUB_WORKSPACE'],'--work',str(root/'repack-acceptance')],check=True,timeout=900)
+          subprocess.run([sys.executable,'scripts/smoke_macos_launcher.py','--dmg',str(dmg),'--work',str(root/'launcher-evidence')],check=True,timeout=180)
+          PY
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: macos-048-repacked-${{ github.run_id }}
+          compression-level: 0
+          path: |
+            ${{ runner.temp }}/mac-repacked/*.dmg
+            ${{ runner.temp }}/mac-repacked/*.sha256
+            ${{ runner.temp }}/mac-repacked/*.build.json
+            ${{ runner.temp }}/repack-acceptance/*.log
+            ${{ runner.temp }}/repack-acceptance/*.json
+            ${{ runner.temp }}/launcher-evidence/launcher.log
+            ${{ runner.temp }}/launcher-evidence/launcher-result.json
+          if-no-files-found: warn
+          retention-days: 14

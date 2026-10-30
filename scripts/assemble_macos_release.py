@@ -77,6 +77,31 @@ def inventory(bundle: Path) -> list[dict]:
     return records
 
 
+def prime_bytecode(python: Path, bundle: Path) -> None:
+    """Compile relocation-safe Python caches with the bundled interpreter before signing.
+
+    Blender ignores the environment-only bytecode switch. Checked-hash caches
+    avoid first-launch writes even when relocation changes source timestamps.
+    Python owns compilation because its bytecode format is interpreter-specific.
+    """
+    code = (
+        "import compileall,py_compile,sys; "
+        "assert sys.version_info[:2] == (3,13); "
+        "ok=compileall.compile_dir(sys.argv[1],maxlevels=100,quiet=1,force=True,"
+        "stripdir=sys.argv[1],invalidation_mode=py_compile.PycInvalidationMode.CHECKED_HASH); "
+        "raise SystemExit(0 if ok else 1)"
+    )
+    run(str(python), "-I", "-B", "-c", code, str(bundle), timeout=300)
+
+
+def inventory_changes(before: list[dict], after: list[dict]) -> dict[str, list[str]]:
+    old = {row["path"]: row for row in before}
+    new = {row["path"]: row for row in after}
+    return {"added": sorted(new.keys() - old.keys()),
+            "removed": sorted(old.keys() - new.keys()),
+            "changed": sorted(path for path in old.keys() & new.keys() if old[path] != new[path])}
+
+
 def binaries(bundle: Path):
     for path in sorted(bundle.rglob("*")):
         if path.is_file() and not path.is_symlink():
@@ -209,6 +234,7 @@ def main() -> None:
     (app / "MACOS_LIMITATIONS.txt").write_text("\n".join(UNAVAILABLE_COMPONENTS.values()) + "\n")
     (bundle / "Contents/Info.plist").write_bytes(plistlib.dumps(info))
     (bundle / "Contents/PkgInfo").write_bytes(b"APPL????")
+    prime_bytecode(python, bundle)
     for path in binaries(bundle):
         verify_macho(path)
         run("codesign", "--force", "--sign", "-", str(path))

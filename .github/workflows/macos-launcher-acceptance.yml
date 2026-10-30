@@ -1,0 +1,63 @@
+name: macOS final artifact launcher acceptance
+
+on:
+  workflow_dispatch:
+    inputs:
+      package_run:
+        description: Completed DMG candidate run
+        required: true
+      source_ref:
+        description: Exact source revision in the DMG receipt
+        required: true
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  launcher:
+    runs-on: macos-15
+    timeout-minutes: 12
+    env:
+      EXPECTED_SOURCE: ${{ inputs.source_ref }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: macos-048-candidate-${{ inputs.package_run }}
+          run-id: ${{ inputs.package_run }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/mac-artifact
+      - name: Check exact candidate bytes and run the actual launcher
+        run: |
+          python3 - <<'PY'
+          import hashlib,json,os,pathlib,subprocess,sys
+          root=pathlib.Path(os.environ['RUNNER_TEMP'])
+          matches=list((root/'mac-artifact').rglob('Narwhal_3D-0.4.8-macOS-arm64.dmg'))
+          assert len(matches)==1
+          dmg=matches[0]; receipt=json.loads(pathlib.Path(str(dmg)+'.build.json').read_text())
+          with dmg.open('rb') as f: digest=hashlib.file_digest(f,'sha256').hexdigest()
+          assert digest==receipt['sha256']==pathlib.Path(str(dmg)+'.sha256').read_text().split()[0]
+          assert receipt['source_revision']==os.environ['EXPECTED_SOURCE'] and receipt['actual_dmg_verified']
+          for name in ('test_narwhal_document.py','test_render_quality_gui.py','test_gumball_extrude_scale_gui.py'):
+              path='spike/'+name
+              frozen=subprocess.check_output(['git','--no-pager','show',os.environ['EXPECTED_SOURCE']+':'+path])
+              assert hashlib.sha256(frozen).digest()==hashlib.sha256(pathlib.Path(path).read_bytes()).digest()
+          subprocess.run([sys.executable,'scripts/accept_macos_release.py','--dmg',str(dmg),'--source',os.environ['GITHUB_WORKSPACE'],'--work',str(root/'final-acceptance')],check=True,timeout=900)
+          subprocess.run([sys.executable,'scripts/smoke_macos_launcher.py','--dmg',str(dmg),'--work',str(root/'launcher-evidence')],check=True,timeout=180)
+          PY
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: macos-launcher-acceptance-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/launcher-evidence/launcher.log
+            ${{ runner.temp }}/launcher-evidence/launcher-result.json
+            ${{ runner.temp }}/final-acceptance/*.log
+            ${{ runner.temp }}/final-acceptance/results.json
+            ${{ runner.temp }}/final-acceptance/*-inventory.json
+          if-no-files-found: warn
+          retention-days: 14
