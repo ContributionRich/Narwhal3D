@@ -1,0 +1,90 @@
+name: macOS native memory containment probe
+
+on:
+  workflow_dispatch:
+    inputs:
+      native_run:
+        description: Native-helper artifact run to inspect
+        default: '41021358892'
+        required: true
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  probe:
+    runs-on: macos-14
+    timeout-minutes: 10
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_16.2.app/Contents/Developer
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: macos-arm64-native-${{ inputs.native_run }}
+          run-id: ${{ inputs.native_run }}
+          github-token: ${{ github.token }}
+          path: native-input
+      - name: Test actual supervisor and isolate allocator/linker effects
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import hashlib,json,os,pathlib,subprocess,tarfile
+          root=pathlib.Path('memory-evidence'); root.mkdir()
+          archive=pathlib.Path('native-input/macos-native.tar.gz')
+          expected=pathlib.Path('native-input/native.sha256').read_text().split()[0]
+          with archive.open('rb') as f: assert hashlib.file_digest(f,'sha256').hexdigest()==expected
+          with tarfile.open(archive) as t:
+              member=t.getmember('./bin/narwhal-converter-supervisor')
+              assert member.isfile() and member.size<20*1024*1024
+              supervisor=root/'supervisor'; supervisor.write_bytes(t.extractfile(member).read()); supervisor.chmod(0o755)
+          records=[]
+          for nano in (None,'0'):
+              env=os.environ.copy()
+              if nano is not None: env['MallocNanoZone']=nano
+              for limit in (None,64,768,4096):
+                  cmd=[str(supervisor.resolve()),'--timeout-ms','5000','--max-output','4096']
+                  if limit is not None: cmd+=['--memory-mib',str(limit)]
+                  cmd+=['--','/usr/bin/true']
+                  r=subprocess.run(cmd,env=env,text=True,capture_output=True,timeout=10)
+                  records.append(dict(kind='actual_supervisor',nano=nano,mib=limit,code=r.returncode,out=r.stdout,err=r.stderr))
+          code=r'''
+          #include <stdio.h>
+          #include <stdlib.h>
+          #include <errno.h>
+          #include <sys/resource.h>
+          #include <mach/mach.h>
+          int main(void) {
+            volatile char *small=malloc(16); small[0]=1; free((void*)small);
+            struct mach_task_basic_info info={0}; mach_msg_type_number_t count=MACH_TASK_BASIC_INFO_COUNT;
+            int task=task_info(mach_task_self(),MACH_TASK_BASIC_INFO,(task_info_t)&info,&count);
+            struct rlimit limit={768ULL*1024*1024,768ULL*1024*1024};
+            int result=setrlimit(RLIMIT_AS,&limit); int error=errno;
+            void *big=result==0 ? malloc(800ULL*1024*1024) : NULL;
+            printf("{\"task_status\":%d,\"virtual_bytes\":%llu,\"resident_bytes\":%llu,\"set_result\":%d,\"errno\":%d,\"over_limit_allocated\":%s}\n",task,(unsigned long long)info.virtual_size,(unsigned long long)info.resident_size,result,error,big?"true":"false");
+            free(big); return 0;
+          }
+          '''
+          source=root/'limit.c'; source.write_text(code)
+          for small_pagezero in (False,True):
+              exe=root/('small' if small_pagezero else 'default')
+              cmd=['clang',str(source),'-o',str(exe)]
+              if small_pagezero: cmd+=['-Wl,-pagezero_size,0x1000']
+              built=subprocess.run(cmd,text=True,capture_output=True,timeout=30)
+              if built.returncode:
+                  records.append(dict(kind='compile',small_pagezero=small_pagezero,code=built.returncode,err=built.stderr)); continue
+              for nano in (None,'0'):
+                  env=os.environ.copy()
+                  if nano is not None: env['MallocNanoZone']=nano
+                  r=subprocess.run([str(exe.resolve())],env=env,text=True,capture_output=True,timeout=10)
+                  records.append(dict(kind='minimal_native',small_pagezero=small_pagezero,nano=nano,code=r.returncode,out=r.stdout,err=r.stderr))
+          (root/'results.json').write_text(json.dumps(records,indent=2)+'\n')
+          print(json.dumps(records,indent=2))
+          PY
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: macos-memory-probe-${{ github.run_id }}
+          path: memory-evidence/results.json
+          if-no-files-found: warn
+          retention-days: 14
