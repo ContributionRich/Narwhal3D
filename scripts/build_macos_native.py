@@ -27,11 +27,13 @@ COMPONENTS = {
     "cdr_core": ("libnarwhal_cdr_core.dylib",),
     "platform_core": ("libnarwhal_platform_core.dylib",),
     "document_core": ("narwhal-document-core",),
-    "converter_supervisor": ("narwhal-converter-supervisor",),
-    "cdr_multiversion": ("narwhal-cdr-multiversion",),
+    "converter_supervisor": ("narwhal-converter-supervisor", "libnarwhal_worker_policy.dylib"),
     "automation_core": ("libnarwhal_automation.dylib", "narwhal-automation"),
     "geometry_core": ("libnarwhal_geometry_core.dylib",),
     "welcome": ("narwhal-welcome",),
+}
+UNAVAILABLE_COMPONENTS = {
+    "cdr_multiversion": "Standalone Corel multiversion conversion is unavailable on macOS pending its own memory-containment integration.",
 }
 
 
@@ -179,6 +181,7 @@ print(json.dumps(result))
     receipt = {"source_inputs": inputs, "source_revision": subprocess.check_output(["git", "--no-pager", "-C", str(root), "rev-parse", "HEAD"], text=True).strip(),
                "occt_source": OCCT, "occt_wheel_sha256": WHEEL_SHA,
                "occt_libraries": {path.name: sha(path) for path in dylibs}, "components": receipts,
+               "unavailable_components": UNAVAILABLE_COMPONENTS,
                "boundary": "Native helper tests only; not GUI, DMG or Gatekeeper acceptance"}
     (output / "native-build.json").write_text(json.dumps(receipt, indent=2) + "\n")
 

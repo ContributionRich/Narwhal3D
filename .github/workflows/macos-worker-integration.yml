@@ -8,7 +8,7 @@ permissions:
 
 jobs:
   worker:
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 12
     env:
       MACOSX_DEPLOYMENT_TARGET: '14.0'

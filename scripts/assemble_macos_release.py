@@ -19,7 +19,7 @@ import tempfile
 import urllib.request
 
 from build_macos_runtime import inputs as runtime_inputs, BLENDER
-from build_macos_native import source_inputs, COMPONENTS
+from build_macos_native import source_inputs, COMPONENTS, UNAVAILABLE_COMPONENTS
 from release_policy import validate_preview_version
 
 MACHO = {b"\xcf\xfa\xed\xfe", b"\xfe\xed\xfa\xcf", b"\xce\xfa\xed\xfe", b"\xfe\xed\xfa\xce",
@@ -32,7 +32,10 @@ def sha(path: Path) -> str:
 
 
 def run(*args: str, env=None, timeout=600) -> str:
-    result = subprocess.run(args, check=True, env=env, timeout=timeout, text=True, capture_output=True)
+    print(f"RUN {Path(args[0]).name}: {args[1] if len(args) > 1 else ''}", flush=True)
+    result = subprocess.run(args, env=env, timeout=timeout, text=True, capture_output=True)
+    if result.returncode:
+        raise RuntimeError(f"{Path(args[0]).name} exited {result.returncode}\n{result.stdout[-4000:]}\n{result.stderr[-4000:]}")
     return result.stdout
 
 
@@ -111,6 +114,8 @@ def main() -> None:
     native_receipt = json.loads((native / "native-build.json").read_text())
     if native_receipt["source_inputs"] != source_inputs(source):
         raise ValueError("native component source inputs differ from frozen source")
+    if native_receipt.get("unavailable_components") != UNAVAILABLE_COMPONENTS:
+        raise ValueError("native component availability differs from the approved Mac policy")
     expected = {name for names in COMPONENTS.values() for name in names}
     if set(native_receipt["components"]) != expected:
         raise ValueError("incomplete native component receipt")
@@ -175,6 +180,7 @@ def main() -> None:
             "CFBundleName": "Narwhal 3D", "CFBundleDisplayName": "Narwhal 3D", "CFBundlePackageType": "APPL",
             "CFBundleShortVersionString": args.version, "CFBundleVersion": args.version,
             "CFBundleIconFile": "narwhal.icns", "LSMinimumSystemVersion": "14.0", "NSHighResolutionCapable": True}
+    (app / "MACOS_LIMITATIONS.txt").write_text("\n".join(UNAVAILABLE_COMPONENTS.values()) + "\n")
     (bundle / "Contents/Info.plist").write_bytes(plistlib.dumps(info))
     (bundle / "Contents/PkgInfo").write_bytes(b"APPL????")
     for path in binaries(bundle):
