@@ -26,6 +26,13 @@ uint32_t narwhal_session_abi(void); /* 1 */
  */
 ptrdiff_t narwhal_session_json(const uint8_t *input, size_t length,
                                uint8_t *output, size_t capacity);
+/* Persistent history ABI1, separate from and additive to metadata ABI1.
+ * Same descriptors/preflight as above, but history input is limited to 1 MiB.
+ * Exact requests, result/header fields and ownership: ../HISTORY.md.
+ */
+uint32_t narwhal_history_abi(void); /* 1 */
+ptrdiff_t narwhal_history_json(const uint8_t *input, size_t length,
+                              uint8_t *output, size_t capacity);
 #ifdef __cplusplus
 }
 #endif

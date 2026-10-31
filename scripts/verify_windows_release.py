@@ -23,7 +23,11 @@ FORBIDDEN_FILES = {"brep_" + "writer.cpp"}
 FORBIDDEN_SUFFIXES = {".pyc", ".pyo", ".pdb", ".lib", ".exp"}
 FORBIDDEN_RUNTIME_TOOLS = {"datatoc.exe", "makesdna.exe", "makesrna.exe"}
 APPLICATION_CORE_ABI = 1
-APPLICATION_CORE_EXPORTS = ("narwhal_session_abi", "narwhal_session_json")
+APPLICATION_CORE_HISTORY_ABI = 1
+APPLICATION_CORE_EXPORTS = (
+    "narwhal_history_abi", "narwhal_history_json",
+    "narwhal_session_abi", "narwhal_session_json",
+)
 APPLICATION_CORE_ADJACENT = "app/narwhal3d/native/narwhal_application_core.dll"
 APPLICATION_CORE_LICENSE = "licenses/application_core-OPENNURBS.txt"
 APPLICATION_CORE_SOURCE = "app/runtime/windows-x86_64/bin/application-core-source.json"
@@ -377,9 +381,12 @@ def metadata_version(site: Path, distribution: str) -> str | None:
 
 
 def verify_application_core_identity(path: Path) -> dict[str, object]:
-    identity = inspect_pe_dll(path, constant_exports={"narwhal_session_abi": APPLICATION_CORE_ABI})
+    identity = inspect_pe_dll(path, constant_exports={
+        "narwhal_session_abi": APPLICATION_CORE_ABI,
+        "narwhal_history_abi": APPLICATION_CORE_HISTORY_ABI,
+    })
     if identity["exports"] != APPLICATION_CORE_EXPORTS:
-        raise VerificationError("Windows application core lacks the exact session ABI exports")
+        raise VerificationError("Windows application core lacks the exact session/history ABI exports")
     return identity
 
 
@@ -392,7 +399,8 @@ def verify_application_core_source(root: Path, source: Path) -> dict:
         receipt = json.loads(path.read_text(encoding="utf-8"))
         expected = {"inputs": source_inventory(source, "application_core"),
                     "sha256": sha256(root / NATIVE_COMPONENT_PATHS["narwhal_application_core.dll"]),
-                    "abi": APPLICATION_CORE_ABI}
+                    "abi": APPLICATION_CORE_ABI,
+                    "history_abi": APPLICATION_CORE_HISTORY_ABI}
         if receipt != expected:
             raise VerificationError("application-core source/ABI/binary receipt differs")
     except (OSError, ValueError) as exc:
@@ -479,6 +487,7 @@ def verify_directory(root: Path, args: argparse.Namespace) -> None:
         if filename == "narwhal_application_core.dll":
             identity = verify_application_core_identity(path)
             if (record.get("abi") != APPLICATION_CORE_ABI
+                    or record.get("history_abi") != APPLICATION_CORE_HISTORY_ABI
                     or record.get("exports") != list(identity["exports"])
                     or record.get("machine") != identity["machine"]):
                 raise VerificationError("Windows application-core manifest identity differs")

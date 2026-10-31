@@ -1,17 +1,20 @@
 #!/usr/bin/env python3
-"""Host-only session-core packaging gates; no native build or OS acceptance.
+"""Host-only metadata/history-core packaging gates; no native build or OS acceptance.
 
 Python tests existing packaging orchestration. Binary parsing uses a synthetic PE,
 not a product DLL. Mutants run in memory so other agents never see broken files.
 """
 import ast
 import copy
+import ctypes
 import inspect
 import io
 import json
+import linecache
 from pathlib import Path
 import re
 import struct
+import subprocess
 import sys
 import tempfile
 import textwrap
@@ -35,7 +38,33 @@ DLL = "narwhal_application_core.dll"
 LICENSE = "application_core-OPENNURBS.txt"
 
 
-def pe_fixture(abi=1):
+EXPORTS = ("narwhal_history_abi", "narwhal_history_json",
+           "narwhal_session_abi", "narwhal_session_json")
+
+
+def fake_library(abi=1, history_abi=1, missing=()):
+    library = types.SimpleNamespace(narwhal_session_abi=lambda: abi,
+                                    narwhal_session_json=lambda: None,
+                                    narwhal_history_abi=lambda: history_abi,
+                                    narwhal_history_json=lambda: None)
+    for symbol in missing:
+        delattr(library, symbol)
+    return library
+
+
+def execute_probe(command, **kwargs):
+    """Run only a production embedded Python probe; never invoke a native binary."""
+    index = command.index("-c")
+    output = io.StringIO()
+    with patch.object(sys, "argv", ["-c", *command[index + 2:]]), patch.object(sys, "stdout", output):
+        try:
+            exec(compile(command[index + 1], "packaging-ctypes-probe", "exec"), {})
+        except AttributeError as exc:
+            raise subprocess.CalledProcessError(1, command, stderr=str(exc)) from exc
+    return types.SimpleNamespace(stdout=output.getvalue())
+
+
+def pe_fixture(abi=1, history_abi=1, missing=()):
     """Small mapped x86-64 DLL with real export RVAs, ordinals and imports."""
     data = bytearray(0x1200)
     data[:2] = b"MZ"
@@ -48,17 +77,22 @@ def pe_fixture(abi=1):
     struct.pack_into("<IIII", data, 0x188 + 8, 0x1000, 0x1000, 0x1000, 0x200)
     def at(rva):
         return rva - 0x1000 + 0x200
-    struct.pack_into("<IIIII", data, at(0x1000) + 20, 2, 2, 0x1050, 0x1040, 0x1060)
-    struct.pack_into("<II", data, at(0x1040), 0x1080, 0x10a0)
-    struct.pack_into("<II", data, at(0x1050), 0x1200, 0x1220)
-    struct.pack_into("<HH", data, at(0x1060), 0, 1)
-    for rva, value in ((0x1080, b"narwhal_session_abi\0"),
-                       (0x10a0, b"narwhal_session_json\0"),
-                       (0x1180, b"KERNEL32.dll\0"), (0x11a2, b"Sleep\0")):
+    symbols = [name for name in EXPORTS if name not in missing]
+    struct.pack_into("<IIIII", data, at(0x1000) + 20, len(symbols), len(symbols), 0x1050, 0x1040, 0x1060)
+    for index, symbol in enumerate(symbols):
+        name_rva, function_rva = 0x1080 + 0x20 * index, 0x1200 + 0x20 * index
+        struct.pack_into("<I", data, at(0x1040) + 4 * index, name_rva)
+        struct.pack_into("<I", data, at(0x1050) + 4 * index, function_rva)
+        struct.pack_into("<H", data, at(0x1060) + 2 * index, index)
+        value = symbol.encode() + b"\0"
+        data[at(name_rva):at(name_rva) + len(value)] = value
+        result = history_abi if symbol == "narwhal_history_abi" else abi
+        data[at(function_rva):at(function_rva) + 6] = b"\xb8" + struct.pack("<I", result) + b"\xc3"
+    for rva, value in ((0x1180, b"KERNEL32.dll\0"), (0x11a2, b"Sleep\0")):
         data[at(rva):at(rva) + len(value)] = value
     struct.pack_into("<IIIII", data, at(0x1100), 0x1140, 0, 0, 0x1180, 0x1140)
     struct.pack_into("<QQ", data, at(0x1140), 0x11a0, 0)
-    data[at(0x1200):at(0x1200) + 6] = b"\xb8" + struct.pack("<I", abi) + b"\xc3"
+
     return bytes(data)
 
 
@@ -70,6 +104,9 @@ class ApplicationPackaging(unittest.TestCase):
             self.assertIn(SO, module.NATIVE_COMPONENTS)
             self.assertIn(SO, module.PACKAGED_ACCELERATORS)
             self.assertEqual(module.NATIVE_LIBRARY_ABIS[SO], ("narwhal_session_abi", 1))
+        for module in (linux, linux_verify, windows):
+            self.assertEqual(module.APPLICATION_CORE_HISTORY_ABI, 1)
+            self.assertEqual(module.APPLICATION_CORE_EXPORTS, EXPORTS)
         self.assertEqual(linux.NATIVE_COMPONENTS, linux_verify.NATIVE_COMPONENTS)
         self.assertIn("usr/lib/narwhal3d/runtime/linux-x86_64/bin/" + SO, linux_verify.REQUIRED_PATHS)
         self.assertIn("usr/lib/narwhal3d/narwhal3d/native/" + SO, linux_verify.REQUIRED_PATHS)
@@ -122,6 +159,7 @@ class ApplicationPackaging(unittest.TestCase):
                     adjacent.write_bytes(path.read_bytes())
             for name, (_, abi) in linux_verify.NATIVE_LIBRARY_ABIS.items():
                 records[name]["abi"] = abi
+            records[SO].update(history_abi=1, exports=list(EXPORTS))
             records["narwhal-welcome"]["launch_contract"] = 1
             linux_verify.verify_native_manifest(root, records)
             for relative in (linux_verify.NATIVE_COMPONENT_RELATIVE / SO, Path("narwhal3d/native") / SO):
@@ -139,6 +177,15 @@ class ApplicationPackaging(unittest.TestCase):
                     damaged[SO]["abi"] = 2
                 with self.assertRaises(linux_verify.VerificationError):
                     linux_verify.verify_native_manifest(root, damaged)
+            for key, value in (("history_abi", 2), ("exports", list(EXPORTS)[1:])):
+                for omit in (True, False):
+                    damaged = copy.deepcopy(records)
+                    if omit:
+                        del damaged[SO][key]
+                    else:
+                        damaged[SO][key] = value
+                    with self.assertRaises(linux_verify.VerificationError):
+                        linux_verify.verify_native_manifest(root, damaged)
             linux_verify.verify_native_manifest(root, records)
 
     def test_linux_abi_probe_rejects_actual_wrong_result(self):
@@ -152,6 +199,81 @@ class ApplicationPackaging(unittest.TestCase):
                         with self.assertRaises(linux.ReleaseError):
                             linux.probe_native_library_abi(root / SO, "narwhal_session_abi", 1, root)
                     self.assertIn("narwhal_session_abi", run.call_args.args[0])
+
+    def test_linux_history_probe_and_packaged_loader(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for options in ({}, {"abi": 2}, {"history_abi": 2},
+                            {"missing": ("narwhal_history_abi", "narwhal_history_json")},
+                            *({"missing": (symbol,)} for symbol in EXPORTS)):
+                library = fake_library(**options)
+                def load(path):
+                    if Path(path).name == SO:
+                        return library
+                    symbol, abi = linux.NATIVE_LIBRARY_ABIS[Path(path).name]
+                    return types.SimpleNamespace(**{symbol: lambda: abi})
+                with self.subTest(options=options), patch.object(ctypes, "CDLL", side_effect=load) as loaded, \
+                     patch.object(linux.subprocess, "run", side_effect=execute_probe):
+                    # Run the real assembler's ABI/receipt block, without other native probes.
+                    tree = ast.parse(textwrap.dedent(inspect.getsource(linux.validate_native_components)))
+                    body = tree.body[0].body
+                    start = next(i for i, node in enumerate(body) if isinstance(node, ast.For)
+                                 and "NATIVE_LIBRARY_ABIS" in ast.unparse(node.iter))
+                    end = next(i for i in range(start + 1, len(body)) if isinstance(body[i], ast.Try))
+                    code = compile(ast.Module(body=body[start:end], type_ignores=[]), "linux-abi-staging", "exec")
+                    namespace = dict(vars(linux), directory=root, occt_library_dir=root,
+                                     records={name: {} for name in linux.NATIVE_COMPONENTS})
+                    if options:
+                        with self.assertRaises(linux.ReleaseError):
+                            exec(code, namespace)
+                        with self.assertRaises(linux_verify.VerificationError):
+                            linux_verify.verify_native_library_abis(root, Path("python"), {})
+                    else:
+                        exec(code, namespace)
+                        self.assertEqual(namespace["records"][SO],
+                                         {"abi": 1, "history_abi": 1, "exports": list(EXPORTS)})
+                        loaded.reset_mock()
+                        linux_verify.verify_native_library_abis(root, Path("python"), {})
+                        paths = [call.args[0] for call in loaded.call_args_list if Path(call.args[0]).name == SO]
+                        self.assertEqual(paths, [str(root / "narwhal3d/native" / SO)] * 2)
+                        self.assertEqual(library.narwhal_history_abi.argtypes, [])
+                        self.assertIs(library.narwhal_history_abi.restype, ctypes.c_uint32)
+
+    def test_linux_packaged_history_receipt_must_match_executed_probe(self):
+        expected = {name: abi for name, (_, abi) in linux_verify.NATIVE_LIBRARY_ABIS.items()}
+        for history in (None, 2, 1):
+            result = dict(expected)
+            if history is not None:
+                result["application_core_history"] = history
+            with patch.object(linux_verify.subprocess, "run", return_value=types.SimpleNamespace(stdout=json.dumps(result))):
+                if history == 1:
+                    linux_verify.verify_native_library_abis(Path("app"), Path("python"), {})
+                else:
+                    with self.assertRaises(linux_verify.VerificationError):
+                        linux_verify.verify_native_library_abis(Path("app"), Path("python"), {})
+
+    def test_mac_executed_probe_requires_metadata_and_history(self):
+        with tempfile.TemporaryDirectory() as directory:
+            _, _, app = self.mac_fixture(Path(directory))
+            for options in ({}, {"abi": 2}, {"history_abi": 2},
+                            {"missing": ("narwhal_history_abi", "narwhal_history_json")},
+                            *({"missing": (symbol,)} for symbol in EXPORTS)):
+                with self.subTest(options=options), patch.object(ctypes, "CDLL", return_value=fake_library(**options)), \
+                     patch.object(mac, "run", side_effect=lambda *args, **kw: execute_probe(args).stdout):
+                    if options:
+                        with self.assertRaises((ValueError, subprocess.CalledProcessError)):
+                            mac.verify_application_core(app, Path("python"))
+                    else:
+                        self.assertEqual(mac.verify_application_core(app, Path("python")), 1)
+
+    def test_mac_receipt_keeps_metadata_and_adds_history_evidence(self):
+        tree = ast.parse(textwrap.dedent(inspect.getsource(mac.main)))
+        receipt = next(node.value for node in ast.walk(tree) if isinstance(node, ast.Assign)
+                       and any(isinstance(t, ast.Name) and t.id == "receipt" for t in node.targets))
+        fields = {key.value: value for key, value in zip(receipt.keys, receipt.values)}
+        self.assertEqual(ast.unparse(fields["application_core_abi"]), "application_core_abi")
+        self.assertEqual(ast.literal_eval(fields["application_core_history_abi"]), 1)
+        self.assertEqual(ast.literal_eval(fields["application_core_exports"]), list(EXPORTS))
 
     def mac_fixture(self, root):
         source, app = root / "source", root / "app"
@@ -204,8 +326,10 @@ class ApplicationPackaging(unittest.TestCase):
             dll = Path(directory) / DLL
             dll.write_bytes(pe_fixture())
             self.assertEqual(windows.verify_application_core_identity(dll)["exports"],
-                             ("narwhal_session_abi", "narwhal_session_json"))
-            for data in (pe_fixture(2), pe_fixture().replace(b"narwhal_session_abi", b"missing_sessionabi"),
+                             EXPORTS)
+            for data in (pe_fixture(2), pe_fixture(history_abi=2),
+                         pe_fixture(missing=("narwhal_history_abi", "narwhal_history_json")),
+                         *(pe_fixture(missing=(symbol,)) for symbol in EXPORTS),
                          pe_fixture().replace(b"\xb8\x01\0\0\0\xc3", b"\x90" * 6)):
                 dll.write_bytes(data)
                 with self.assertRaises(windows.VerificationError):
@@ -237,16 +361,54 @@ class ApplicationPackaging(unittest.TestCase):
                 windows.verify_application_core_copies(root)
             source_path = root / windows.APPLICATION_CORE_SOURCE
             receipt = {"inputs": linux_build.inventory(ROOT, "application_core"),
-                       "sha256": windows.sha256(root / windows.NATIVE_COMPONENT_PATHS[DLL]), "abi": 1}
+                       "sha256": windows.sha256(root / windows.NATIVE_COMPONENT_PATHS[DLL]),
+                       "abi": 1, "history_abi": 1}
             source_path.write_text(json.dumps(receipt))
             windows.verify_application_core_source(root, ROOT)
-            for key, value in (("inputs", {}), ("sha256", "0" * 64), ("abi", 2)):
+            metadata_only = dict(receipt)
+            del metadata_only["history_abi"]
+            source_path.write_text(json.dumps(metadata_only))
+            with self.assertRaises(windows.VerificationError):
+                windows.verify_application_core_source(root, ROOT)
+            for key, value in (("inputs", {}), ("sha256", "0" * 64), ("abi", 2), ("history_abi", 2)):
                 source_path.write_text(json.dumps(dict(receipt, **{key: value})))
                 with self.assertRaises(windows.VerificationError):
                     windows.verify_application_core_source(root, ROOT)
             source_path.unlink()
             with self.assertRaises(windows.VerificationError):
                 windows.verify_application_core_source(root, ROOT)
+
+    def test_windows_native_receipt_requires_both_services(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            runtime = root / windows.NATIVE_COMPONENT_PATHS[DLL]
+            adjacent = root / windows.APPLICATION_CORE_ADJACENT
+            for path in (runtime, adjacent):
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(pe_fixture())
+            source = root / windows.APPLICATION_CORE_SOURCE
+            source.write_text(json.dumps({"inputs": linux_build.inventory(ROOT, "application_core"),
+                                          "sha256": windows.sha256(runtime), "abi": 1, "history_abi": 1}))
+            with patch.object(windows, "NATIVE_COMPONENT_PATHS", {DLL: windows.NATIVE_COMPONENT_PATHS[DLL]}):
+                record = windows_assemble.native_records(root, ROOT)[DLL]
+            self.assertEqual(record, {"size": runtime.stat().st_size, "sha256": windows.sha256(runtime),
+                                      "abi": 1, "history_abi": 1, "exports": list(EXPORTS),
+                                      "machine": "pe32plus-x86-64"})
+            # Execute the actual verifier's application-core manifest branch only.
+            tree = ast.parse(textwrap.dedent(inspect.getsource(windows.verify_directory)))
+            branch = next(node for node in ast.walk(tree) if isinstance(node, ast.If)
+                          and ast.unparse(node.test) == "filename == 'narwhal_application_core.dll'")
+            code = compile(ast.Module(body=branch.body, type_ignores=[]), "windows-app-manifest", "exec")
+            exec(code, dict(vars(windows), path=runtime, record=record))
+            for key, value in (("abi", 2), ("history_abi", 2), ("exports", list(EXPORTS)[1:])):
+                for omit in (True, False):
+                    damaged = dict(record)
+                    if omit:
+                        del damaged[key]
+                    else:
+                        damaged[key] = value
+                    with self.assertRaises(windows.VerificationError):
+                        exec(code, dict(vars(windows), path=runtime, record=damaged))
 
     def test_windows_source_replacement_preserves_adjacent_and_copies_license(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -269,6 +431,8 @@ class ApplicationPackaging(unittest.TestCase):
     def test_assembly_calls_are_mandatory(self):
         mac_main = inspect.getsource(mac.main)
         self.assertIn("stage_application_core(source, native_bin, app)", mac_main)
+        self.assertIn("verify_native_library_abis(app_root, python, environment)",
+                      inspect.getsource(linux_verify.verify_executables_and_imports))
         self.assertIn("application_core_abi = verify_application_core(app, python)", mac_main)
         self.assertIn('verify_application_core(mounted_app / "Contents/Resources/app",', mac_main)
         self.assertIn("verify_application_core_copies(root)", inspect.getsource(windows.verify_directory))
@@ -346,14 +510,17 @@ class ApplicationPackaging(unittest.TestCase):
             execute("after")
             receipt = json.loads(dll.with_name("application-core-source.json").read_text())
             self.assertEqual(receipt, {"inputs": linux_build.inventory(source, "application_core"),
-                                       "sha256": windows.sha256(dll), "abi": 1})
+                                       "sha256": windows.sha256(dll), "abi": 1, "history_abi": 1})
             (crate / "Cargo.toml").write_text("changed source fixture")
             with self.assertRaises(SystemExit):
                 execute("after")
             execute("before")
-            dll.write_bytes(pe_fixture(2))
-            with self.assertRaises(windows.VerificationError):
-                execute("after")
+            for data in (pe_fixture(2), pe_fixture(history_abi=2),
+                         pe_fixture(missing=("narwhal_history_abi", "narwhal_history_json")),
+                         pe_fixture(missing=("narwhal_history_json",))):
+                dll.write_bytes(data)
+                with self.assertRaises(windows.VerificationError):
+                    execute("after")
 
     def test_windows_build_stage_and_executed_probe_contract(self):
         text = (ROOT / "scripts/build_windows_preview.ps1").read_text()
@@ -374,15 +541,17 @@ class ApplicationPackaging(unittest.TestCase):
             runtime.mkdir(parents=True)
             (native / DLL).write_bytes(b"fixture")
             (runtime / DLL).write_bytes(b"fixture")
-            import ctypes
-            for abi in (1, 2):
-                library = types.SimpleNamespace(narwhal_session_abi=lambda: abi, narwhal_session_json=lambda: None)
-                with patch.object(ctypes, "CDLL", return_value=library):
+            for options in ({}, {"abi": 2}, {"history_abi": 2},
+                            {"missing": ("narwhal_history_abi", "narwhal_history_json")},
+                            *({"missing": (symbol,)} for symbol in EXPORTS)):
+                library = fake_library(**options)
+                with self.subTest(options=options), patch.object(ctypes, "CDLL", return_value=library):
                     env = dict(ctypes=ctypes, native=native, app=app)
-                    if abi == 1:
+                    if not options:
                         exec(compile(text[start:end], "packaged-session-probe", "exec"), env)
+                        self.assertIs(library.narwhal_history_abi.restype, ctypes.c_uint32)
                     else:
-                        with self.assertRaises(SystemExit):
+                        with self.assertRaises((SystemExit, AttributeError)):
                             exec(compile(text[start:end], "packaged-session-probe", "exec"), env)
 
 
@@ -392,12 +561,24 @@ def mutation_checks():
         if source.count(old) != 1:
             raise AssertionError(f"ambiguous mutation {name}: {old}")
         namespace = dict(vars(module))
-        exec(compile(source.replace(old, new), "packaging-mutant", "exec"), namespace)
+        source = source.replace(old, new)
+        filename = f"<packaging-mutant-{module.__name__}-{name}-{len(linecache.cache)}>"
+        linecache.cache[filename] = (len(source), None, source.splitlines(keepends=True), filename)
+        exec(compile(source, filename, "exec"), namespace)
         # Keep live module globals so dependency mocks apply to mutant and control.
         function = types.FunctionType(namespace[name].__code__, vars(module), name,
                                       namespace[name].__defaults__)
         function.__kwdefaults__ = namespace[name].__kwdefaults__
         return patch.object(module, name, function)
+    def mutated_windows_driver(old, new):
+        path = ROOT / "scripts/build_windows_preview.ps1"
+        source = path.read_text()
+        if source.count(old) != 1:
+            raise AssertionError(f"ambiguous Windows driver mutation: {old}")
+        original = Path.read_text
+        return patch.object(Path, "read_text", lambda self, *args, **kwargs:
+                            source.replace(old, new) if self == path else original(self, *args, **kwargs))
+
     mutants = [
         ("Linux component omitted", patch.object(linux, "NATIVE_COMPONENTS", tuple(n for n in linux.NATIVE_COMPONENTS if n != SO)), "test_mandatory_build_and_package_contracts"),
         ("Linux wrong ABI accepted", mutated_function(linux, "probe_native_library_abi", "if actual != expected:", "if False:"), "test_linux_abi_probe_rejects_actual_wrong_result"),
@@ -412,6 +593,44 @@ def mutation_checks():
         ("Linux license optional", patch.object(linux_verify, "REQUIRED_NOTICE_PATHS", linux_verify.REQUIRED_NOTICE_PATHS - {"usr/lib/narwhal3d/licenses/" + LICENSE}), "test_source_inventory_and_locked_licenses"),
         ("Windows license source exempted", patch.object(windows, "GENERATED_PACKAGE_FILES", windows.GENERATED_PACKAGE_FILES | {windows.APPLICATION_CORE_LICENSE}), "test_windows_license_is_compared_to_maintained_source_not_exempted"),
         ("Windows source unchecked", patch.object(windows, "verify_application_core_source", lambda *args: None), "test_windows_required_paths_copies_and_source_receipt"),
+        ("Linux assembly history probe omitted", mutated_function(linux, "validate_native_components",
+            'application["history_abi"] = probe_native_library_abi(\n        directory / "libnarwhal_application_core.so", "narwhal_history_abi",\n        APPLICATION_CORE_HISTORY_ABI, occt_library_dir, APPLICATION_CORE_EXPORTS)',
+            'application["history_abi"] = APPLICATION_CORE_HISTORY_ABI'), "test_linux_history_probe_and_packaged_loader"),
+        ("Linux assembly JSON exports unchecked", mutated_function(linux, "probe_native_library_abi",
+            '"[getattr(lib, name) for name in sys.argv[3:]]; "', '""'), "test_linux_history_probe_and_packaged_loader"),
+        ("Linux packaged history probe omitted", mutated_function(linux_verify, "verify_native_library_abis",
+            '"narwhal_history_abi", APPLICATION_CORE_EXPORTS))',
+            '"narwhal_session_abi", APPLICATION_CORE_EXPORTS))'), "test_linux_history_probe_and_packaged_loader"),
+        ("Linux packaged JSON exports unchecked", mutated_function(linux_verify, "verify_native_library_abis",
+            '[getattr(lib, export) for export in exports]', '[]'), "test_linux_history_probe_and_packaged_loader"),
+        ("Linux wrong/missing history probe result accepted", mutated_function(linux_verify, "verify_native_library_abis",
+            'if actual_abis != expected_abis:', 'if False:'), "test_linux_packaged_history_receipt_must_match_executed_probe"),
+        ("Linux missing history manifest evidence accepted", mutated_function(linux_verify, "verify_native_manifest",
+            'if (application.get("history_abi") != APPLICATION_CORE_HISTORY_ABI\n            or application.get("exports") != list(APPLICATION_CORE_EXPORTS)):',
+            'if False:'), "test_linux_missing_copy_manifest_and_wrong_abi_rejected"),
+        ("Mac history ABI probe omitted", mutated_function(mac, "verify_application_core",
+            'for symbol in ("narwhal_session_abi", "narwhal_history_abi"):',
+            'for symbol in ("narwhal_session_abi",):'), "test_mac_executed_probe_requires_metadata_and_history"),
+        ("Mac wrong history ABI accepted", mutated_function(mac, "verify_application_core",
+            'if actual != "1":', 'if symbol == "narwhal_session_abi" and actual != "1":'), "test_mac_executed_probe_requires_metadata_and_history"),
+        ("Mac history JSON export unchecked", mutated_function(mac, "verify_application_core",
+            'lib.narwhal_history_json; ', ''), "test_mac_executed_probe_requires_metadata_and_history"),
+        ("Mac history receipt omitted", mutated_function(mac, "main",
+            '"application_core_history_abi": 1,', ''), "test_mac_receipt_keeps_metadata_and_adds_history_evidence"),
+        ("Windows history constant proof omitted", mutated_function(windows, "verify_application_core_identity",
+            '"narwhal_history_abi": APPLICATION_CORE_HISTORY_ABI,', ''), "test_windows_pe_wrong_abi_and_missing_export"),
+        ("Windows missing history JSON export accepted", mutated_function(windows, "verify_application_core_identity",
+            'if identity["exports"] != APPLICATION_CORE_EXPORTS:', 'if False:'), "test_windows_pe_wrong_abi_and_missing_export"),
+        ("Windows history manifest ABI unchecked", mutated_function(windows, "verify_directory",
+            'or record.get("history_abi") != APPLICATION_CORE_HISTORY_ABI', ''), "test_windows_native_receipt_requires_both_services"),
+        ("Windows history manifest receipt omitted", mutated_function(windows_assemble, "native_records",
+            '"history_abi": verifier.APPLICATION_CORE_HISTORY_ABI,', ''), "test_windows_native_receipt_requires_both_services"),
+        ("Windows history source receipt omitted", mutated_windows_driver('"history_abi": 1', '"old_history_abi": 1'),
+            "test_windows_embedded_source_driver_binds_actual_staged_bytes"),
+        ("Windows executed history ABI wrong accepted", mutated_windows_driver('if application.narwhal_history_abi() != 1:', 'if False:'),
+            "test_windows_build_stage_and_executed_probe_contract"),
+        ("Windows executed history JSON unchecked", mutated_windows_driver('getattr(application, "narwhal_history_json")', 'pass'),
+            "test_windows_build_stage_and_executed_probe_contract"),
     ]
     for label, mutant, test in mutants:
         with mutant:

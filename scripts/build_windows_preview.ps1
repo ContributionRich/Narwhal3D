@@ -792,7 +792,7 @@ elif mode == "after":
     library = Path(sys.argv[4])
     verify_application_core_identity(library)
     library.with_name("application-core-source.json").write_text(json.dumps(
-        {"inputs": inputs, "sha256": digest(library), "abi": 1}, sort_keys=True))
+        {"inputs": inputs, "sha256": digest(library), "abi": 1, "history_abi": 1}, sort_keys=True))
 else:
     raise SystemExit("unknown application-core inventory mode")
 '@ | Set-Content -LiteralPath $ApplicationInputsDriver -Encoding UTF8
@@ -965,6 +965,11 @@ application.narwhal_session_abi.restype = ctypes.c_uint32
 if application.narwhal_session_abi() != 1:
     raise SystemExit("application-core ABI mismatch")
 getattr(application, "narwhal_session_json")
+application.narwhal_history_abi.argtypes = []
+application.narwhal_history_abi.restype = ctypes.c_uint32
+if application.narwhal_history_abi() != 1:
+    raise SystemExit("application-core history ABI mismatch")
+getattr(application, "narwhal_history_json")
 if (native / "narwhal_application_core.dll").read_bytes() != (app / "runtime/windows-x86_64/bin/narwhal_application_core.dll").read_bytes():
     raise SystemExit("application-core runtime/adjacent copies differ")
 platform = ctypes.WinDLL(str(native / "narwhal_platform_core.dll"))

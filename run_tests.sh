@@ -68,6 +68,7 @@ fi
 if command -v cargo >/dev/null 2>&1; then
     run "Rust application-core source gate" "$PYTHON" scripts/check_application_core.py --stage-dev
     export NARWHAL_APPLICATION_CORE="$ROOT/artifacts/application-core/linux-x86_64/libnarwhal_application_core.so"
+    export NARWHAL_HISTORY_CORE="$NARWHAL_APPLICATION_CORE"
     run "Rust document-session integration" "$PYTHON" spike/test_document_session_integration.py --launch
     # Fixed source target: neither a stale staged product binary nor a private build cache.
     AUTOMATION_TARGET="$ROOT/native/automation_core/target"
@@ -374,6 +375,7 @@ DOCUMENT_CORE="$ROOT/native/document_core/target/release/narwhal-document-core"
 run "native document round trip" env PYTHONPATH="$ROOT/vendor/occt" \
     NARWHAL_DOCUMENT_CORE="$DOCUMENT_CORE" "$BLENDER" -b --factory-startup --python-exit-code 1 \
     --python spike/test_narwhal_document.py
+run "Rust unified history integration" "$PYTHON" spike/test_rust_history_integration.py --launch
 
 for suite in "${BLENDER_SUITES[@]}"; do
     run "$suite" "$BLENDER" -b --factory-startup --python-exit-code 1 --python "$suite"

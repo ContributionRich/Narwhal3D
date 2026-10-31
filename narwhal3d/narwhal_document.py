@@ -414,7 +414,7 @@ def commit_model(app, model, source: str) -> None:
     old_state = {
         name: getattr(app, name) for name in (
             "model", "ctx", "active_command", "input_buffer", "layers",
-            "_saved_serial", "doc_path") if hasattr(app, name)
+            "_saved_serial", "_saved_history_state", "_saved_uncertain_generation", "doc_path") if hasattr(app, name)
     }
     try:
         app.set_model(model)

@@ -1,4 +1,5 @@
 //! Persistent, process-local document-metadata authority. See README.md for ABI v1.
+mod history;
 mod ordinal_map;
 mod session;
 mod table;
@@ -119,9 +120,105 @@ pub unsafe extern "C" fn narwhal_session_json(
     required as isize
 }
 
+pub const MAX_HISTORY_REQUEST_BYTES: usize = 1024 * 1024;
+static HISTORY_REGISTRY: OnceLock<Mutex<history::Registry>> = OnceLock::new();
+
+#[derive(Serialize)]
+struct HistorySuccess {
+    status: &'static str,
+    #[serde(flatten)]
+    reply: history::Reply,
+}
+fn dispatch_history(input: &[u8], registry: &Mutex<history::Registry>) -> Vec<u8> {
+    let text = match std::str::from_utf8(input) {
+        Ok(text) => text,
+        Err(_) => return error("invalid_utf8"),
+    };
+    let request: history::Request = match serde_json::from_str(text) {
+        Ok(request) => request,
+        Err(e) => return error(wire::error_code(&e)),
+    };
+    let mut bytes = Vec::with_capacity(MIN_OUTPUT_CAPACITY);
+    let reply = match registry.lock() {
+        Ok(mut registry) => registry.execute(request),
+        Err(_) => return error("registry_poisoned"),
+    };
+    match reply {
+        Ok(reply) => serde_json::to_writer(
+            &mut bytes,
+            &HistorySuccess {
+                status: "ok",
+                reply,
+            },
+        )
+        .expect("closed history reply schema serializes infallibly to Vec"),
+        Err(code) => return error(code),
+    }
+    bytes
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn narwhal_history_abi() -> u32 {
+    1
+}
+
+/// Persistent history ABI1; see HISTORY.md. Mutation replies always fit 4096 bytes.
+///
+/// # Safety
+/// The same buffer validity, overlap and concurrency contract as
+/// `narwhal_session_json` applies. No caller pointer is retained.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn narwhal_history_json(
+    input: *const u8,
+    length: usize,
+    output: *mut u8,
+    capacity: usize,
+) -> isize {
+    if output.is_null() || capacity > MAX_OUTPUT_CAPACITY {
+        return -1;
+    }
+    let bytes = contain(|| {
+        if MIN_OUTPUT_CAPACITY > capacity {
+            return error("output_too_small");
+        }
+        if input.is_null() {
+            return error("null_input");
+        }
+        if length > MAX_HISTORY_REQUEST_BYTES {
+            return error("request_too_large");
+        }
+        // SAFETY: caller contract and descriptor bounds checked above.
+        let input = unsafe { std::slice::from_raw_parts(input, length) };
+        dispatch_history(
+            input,
+            HISTORY_REGISTRY.get_or_init(|| Mutex::new(history::Registry::default())),
+        )
+    });
+    let required = bytes.len();
+    if required <= capacity {
+        // SAFETY: the input borrow ended; bytes owns nonoverlapping storage.
+        unsafe {
+            std::ptr::copy_nonoverlapping(bytes.as_ptr(), output, required);
+        }
+    }
+    required as isize
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn history_poison_fails_closed() {
+        let mutex = Mutex::new(history::Registry::default());
+        let _ = catch_unwind(AssertUnwindSafe(|| {
+            let _guard = mutex.lock().unwrap();
+            panic!("history test-only poison");
+        }));
+        assert_eq!(
+            dispatch_history(br#"{"op":"create","limit":1}"#, &mutex),
+            error("registry_poisoned")
+        );
+    }
     #[test]
     fn panics_are_contained_and_poison_is_fail_closed() {
         let reply = contain(|| panic!("test-only injected failure"));

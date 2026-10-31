@@ -74,15 +74,19 @@ def build(target):
     python = ROOT / 'tools/blender-patched/5.2/python/bin/python3.13'
     if not python.is_file():
         python = Path(sys.executable)
-    env = dict(os.environ, NARWHAL_APPLICATION_CORE=str(library), PYTHONDONTWRITEBYTECODE='1')
+    env = dict(os.environ, NARWHAL_APPLICATION_CORE=str(library),
+               NARWHAL_HISTORY_CORE=str(library), PYTHONDONTWRITEBYTECODE='1')
     checked([python, '-B', ROOT / 'spike/test_document_session_abi.py', '--mutation'], env=env)
+    checked([python, '-B', ROOT / 'spike/test_rust_history_abi.py', '--mutations'], env=env)
     if before != source_inventory():
         raise RuntimeError('application-core sources changed during qualification')
-    return library, {'source_inputs': before, 'library_sha256': digest(library), 'abi': 1,
+    return library, {'source_inputs': before, 'library_sha256': digest(library), 'abi': 1, 'history_abi': 1,
                      'qualification': 'host Linux development; not a portable release or other-OS acceptance'}
 
 
 def stage(library, receipt):
+    if receipt.get('abi') != 1 or receipt.get('history_abi') != 1:
+        raise RuntimeError('both metadata and history ABIs must be qualified before staging')
     destination = ROOT / 'artifacts/application-core/linux-x86_64' / LIBRARY
     destination.parent.mkdir(parents=True, exist_ok=True)
     if destination.is_symlink():

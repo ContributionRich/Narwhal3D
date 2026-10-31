@@ -54,19 +54,30 @@ class AppState:
         # was last written; see `doc_modified`.
         self.doc_path: str | None = None
         self._saved_serial = self.ctx.undo.top_serial
+        self._saved_history_state = self.ctx.undo.state_id
+        self._saved_uncertain_generation = None
 
     def set_model(self, model: NarwhalModel):
-        host = sys.modules.get(__package__ + ".automation_host")
-        if host is not None:
-            host.close()
-        self.model = model
-        self.ctx = NarwhalContext(model)
-        self.active_command = None
-        self.input_buffer = ""
-        # A new document gets a fresh tree so layer state cannot leak across documents.
-        self._rebuild_layers()
-        # A fresh document is, by definition, what is on disk or is untitled.
-        self._saved_serial = self.ctx.undo.top_serial
+        context = NarwhalContext(model)
+        fields = ('model', 'ctx', 'active_command', 'input_buffer', 'layers',
+                  '_saved_serial', '_saved_history_state', '_saved_uncertain_generation')
+        previous = {name: getattr(self, name) for name in fields}
+        try:
+            self.model, self.ctx = model, context
+            self.active_command = None
+            self.input_buffer = ""
+            self._rebuild_layers()
+            self._saved_serial = context.undo.top_serial
+            self._saved_history_state = context.undo.state_id
+            self._saved_uncertain_generation = None
+            # Keep the old document/history alive until publication succeeds.
+            host = sys.modules.get(__package__ + ".automation_host")
+            if host is not None:
+                host.close()
+        except Exception:
+            for name, value in previous.items():
+                setattr(self, name, value)
+            raise
 
     # ------------------------------------------------------------- file
 
@@ -75,16 +86,26 @@ class AppState:
         if path:
             self.doc_path = path
         self._saved_serial = self.ctx.undo.top_serial
+        self._saved_history_state = self.ctx.undo.state_id
+        # A successful save (or explicitly settled Exit) acknowledges the current
+        # contents, but never repairs or unlocks an uncertain history timeline.
+        self._saved_uncertain_generation = self.ctx.undo.generation if self.ctx.undo.uncertain else None
 
     def doc_modified(self):
         """True when the model differs from its file (or is Untitled and non-empty).
 
-        Read from the undo history rather than a flag every command must remember to
-        set: every document change records an undo step, so a different top
-        record means a different document, and undoing back to the saved state
-        correctly reads as unmodified again.
+        History state identity survives pruning/clear and can return to the saved
+        position through Undo/Redo. An unconfirmed restore is dirty until an
+        explicit save/settled Exit acknowledges its new uncertainty generation;
+        its previous record number must never certify the document as saved.
         """
-        return self.ctx.undo.top_serial != self._saved_serial
+        if self.ctx.undo.uncertain:
+            try:
+                return self.ctx.undo.generation != self._saved_uncertain_generation
+            except RuntimeError:
+                return True  # Broken transport cannot certify a saved state.
+        return (self.ctx.undo.captured
+                or self.ctx.undo.state_id != self._saved_history_state)
 
     def doc_title(self):
         import os as _os

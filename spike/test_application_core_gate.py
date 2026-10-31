@@ -26,7 +26,7 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts/check_application_core.py"
 SOURCE = SCRIPT.read_text(encoding="utf-8")
-STEPS = ["fmt", "clippy", "test", "build", "abi"]
+STEPS = ["fmt", "clippy", "test", "build", "abi", "history"]
 NEW_BINARY = b"synthetic qualified application core\x00\x01"
 OLD_BINARY = b"previous working application core\x00\x02"
 
@@ -103,6 +103,8 @@ class Sandbox:
             step = command[command.index("cargo") + 2]
         elif str(self.root / "spike/test_document_session_abi.py") in command:
             step = "abi"
+        elif str(self.root / "spike/test_rust_history_abi.py") in command:
+            step = "history"
         else:
             raise AssertionError(f"unexpected subprocess: {command}")
         self.calls.append((step, command, kwargs))
@@ -157,8 +159,11 @@ class ApplicationCoreGateTests(unittest.TestCase):
                 self.assertTrue(kwargs["check"])
                 self.assertGreater(kwargs["timeout"], 0)
                 self.assertEqual(kwargs["cwd"], box.root)
-                if step == "abi":
-                    self.assertEqual(command[-3:], ["-B", str(box.root / "spike/test_document_session_abi.py"), "--mutation"])
+                if step in ("abi", "history"):
+                    filename, flag = (("test_document_session_abi.py", "--mutation") if step == "abi"
+                                      else ("test_rust_history_abi.py", "--mutations"))
+                    self.assertEqual(command[-3:], ["-B", str(box.root / "spike" / filename), flag])
+                    self.assertEqual(kwargs["env"]["NARWHAL_HISTORY_CORE"], str(box.library))
                     self.assertEqual(kwargs["env"]["NARWHAL_APPLICATION_CORE"], str(box.library))
                     self.assertEqual(kwargs["env"]["PYTHONDONTWRITEBYTECODE"], "1")
                     continue
@@ -183,6 +188,7 @@ class ApplicationCoreGateTests(unittest.TestCase):
         self.assertEqual(receipt["source_inputs"], expected_sources)
         self.assertEqual(receipt["library_sha256"], hashlib.sha256(NEW_BINARY).hexdigest())
         self.assertEqual(receipt["abi"], 1)
+        self.assertEqual(receipt["history_abi"], 1)
         self.assertFalse(box.destination.exists())
 
     def test_main_only_stages_after_all_checks(self):

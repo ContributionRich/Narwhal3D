@@ -311,3 +311,132 @@ SHA-256: `1ff893e02972a7657493fd3447db05ead82130e2935f69c6ed8716d15d47d4b6`
 `/tmp` artifacts are ephemeral; the main lane owns durable build/
 packaging integration. NUL policy remains explicitly refused pending main's probe;
 no Unicode casing approximation or supplementary-case limitation is hidden.
+
+## Persistent history service — MAIN-RUST-HISTORY-02
+
+Additive exports `narwhal_history_abi()` (=1) and `narwhal_history_json()` implement
+all operations and exact result/header shapes in [HISTORY.md](HISTORY.md).
+Metadata ABI1, its authority, normalization and exports are unchanged. The history
+registry has its own mutex/poison boundary. All requests are typed Rust schemas;
+unknown/duplicate fields and omitted required nullable fields are rejected. No
+per-call timeline snapshot, geometry serialization, or Python object pointer is
+used. Only explicit `record` / `records` reads project record data to JSON.
+
+The facade owns opaque payload objects; Rust owns persistent record arenas,
+undo/redo order, nesting, identity, refcounts, leases and navigation tickets.
+Record IDs remain stable through stack transfers, pruning and explicit leases.
+History close invalidates every resource, including leases and pending tickets.
+Reads do not implicitly lease records; the host must explicitly retain escaped
+views and release them. History/record/payload/ticket/state IDs share one monotonic
+non-reused history-service namespace; metadata handles use their separate ABI.
+
+**Concrete limits (OURS, process-wide unless stated otherwise):**
+
+| Resource | Limit |
+|---|---:|
+| Live histories | 256 |
+| Live records, including open and leased pruned records | 100,000 |
+| Payload registrations, including unacknowledged garbage | 200,000 |
+| Record leases | 1,000,000 |
+| Stored record-name UTF-8 bytes | 16 MiB |
+| One record name | 16,384 UTF-8 bytes |
+| Pending tickets | One/history, therefore at most 256 |
+| Configured oldest-undo-record count limit | 1..100,000/history |
+| Garbage batch / unique acknowledgment IDs | 1..128 / 0..128 |
+| Request / output descriptor | 1 MiB / 512 MiB |
+| Minimum output capacity before any operation | 4096 bytes |
+
+These are admission bounds on logical native storage, **not geometry memory or
+an allocator/RSS guarantee**. Host payload memory is opaque and not measured by
+Rust. Arenas/stack allocations may retain bounded high-water capacity. Admission
+refusals never evict another record; close frees the history's containers. The
+configured record count is the only automatic pruning policy. Garbage is a
+bounded ordered set, not an ever-growing log of stale retirement events; repeat
+retirement is deduplicated and reattachment removes the ID immediately.
+
+**Semantics important to the adapter:**
+
+- `current_serial` is the open serial or0; `top_serial` is newest undo serial or0.
+  Neither is saved-position identity. Compare `state_id` instead. Empty/abandoned
+  records consume serials, not state IDs. An ordinary clear preserves state ID;
+  a clear recovering unknown restoration assigns a fresh identity.
+- As in the existing `UndoStack.capture`, an eligible `capture(null)` returns
+  `captured:true`, but header `captured` remains false. Another capture is still
+  eligible. Capture with no open record or after a non-null before returns false.
+- `begin` checks enabled before nesting. Capture/end of an existing open record
+  still work when recording is disabled. Name strings are preserved exactly,
+  including empty strings and NUL; host name defaults are facade policy. The
+  metadata ABI's separate NUL refusal remains unchanged.
+- Real record/end, depth, enable, field/name edits, prepare/commit/abort and clear
+  advance generation when they change logical history. Read/retain/release,
+  register/drop payload, garbage/ack and idempotent edits do not advance it.
+  Releasing a final lease may still change resource counts/GC in the header.
+- Prepare pins current payload without modifying either record field, reserves
+  completion generation and destination stack capacity, then freezes edits.
+  Commit consumes the ticket once and refreshes the opposite payload. Abort
+  leaves fields/stacks/state unchanged; unknown restoration additionally blocks
+  edits/navigation until clear. Wrong/cross-history tickets never consume one.
+  Close and safe lifetime/GC operations remain available while pending/uncertain.
+- Every supplied non-null payload must belong to that history, even for an
+  otherwise ineligible capture/navigation. Unattached registrations are not
+  garbage. `drop_payload` accepts an existing zero-ref registration (also if
+  retired); it refuses live references. `ack_garbage` validates the whole unique
+  batch before removing anything. Garbage enumeration is ascending ID order.
+- Mutations return only compact typed results/headers, including large clears.
+  Only `record` and `records` can require a read retry with a valid4096-byte output.
+  The host must never retry a mutation as an output-sizing strategy.
+
+Error codes are fixed strings: `invalid_history`, `invalid_record`,
+`invalid_payload`, `invalid_ticket`, `invalid_limit`, `payload_in_use`,
+`record_not_retained`, `navigation_busy`, `history_uncertain`, `invalid_garbage`,
+`duplicate_payload`, `garbage_limit`, `history_limit`, `record_limit`,
+`payload_limit`, `lease_limit`, `name_limit`, `name_storage_limit`, `id_exhausted`,
+`serial_exhausted`, `depth_exhausted`, `generation_exhausted`, `allocation_failed`,
+and the existing descriptor/JSON/UTF-8/panic/poison error codes. Panic containment
+is not an allocator-OOM recovery mechanism; a poisoned registry fails closed.
+
+### Focused history validation
+
+`src/history_tests.rs` checks admission boundaries, ID/serial/depth/generation
+exhaustion and transactional refusal, global close accounting and payload refs.
+`tests/history_protocol.rs` exercises the actual ABI, lifetime and saved-state
+transitions, null/disabled/nested recording, field edits, no-op redo preservation,
+pruning, bounded GC, cross-owner handles, racing navigation consumers, unknown
+restoration blocking, strict schemas and every mutation's capacity preflight.
+
+`history_mutations.rs` copies only this crate's source/tests/manifests to external
+scratch directories; it never edits production source. It accepts
+`CRATE_DIR SCRATCH_DIR TARGET_DIR [FIRST [COUNT]]`, checks reserve *inside* the
+shared heavy lock, and requires actual assertion failures (not compile errors)
+for every mutant. Cargo invocations are offline/locked, one job, bounded90s,
+`MemoryMax=1024M`, `MemorySwapMax=0`. Use a fresh scratch directory per campaign.
+Restore baseline GREEN afterward; do not install a mutant build artifact.
+
+History artifact target for Main integration:
+`/tmp/narwhal3d-history-core/target/release/libnarwhal_application_core.so`.
+No Python, global build manifest, staging or installed artifact changes belong
+to this slice. End-to-end host restoration remains Main's integration gate.
+
+### History implementation validation receipt
+
+- **40/40 debug and release tests GREEN:**20 new history tests and20 unchanged
+  metadata tests. Release build GREEN; Clippy all targets with `-D warnings`
+  GREEN; crate and standalone mutation-runner formatting checks GREEN.
+- **32/32 history mutants observed RED at assertions**, isolated campaign
+  `/tmp/narwhal3d-history-core/mutations-02`, followed by restored production
+  GREEN. The first campaign exposed a Cargo fingerprint/output-cache collision
+  when different source copies shared a target. The runner now puts each mutant
+  in its own fresh `TARGET_DIR/history-mutants/<campaign>/<mutant>` directory;
+  the entire campaign was rerun, and production was explicitly rebuilt. No
+  production source was replaced by a mutant.
+- All build invocations used the shared heavy lock, offline/locked dependencies,
+  one job,1GiB/no-extra-swap cap, bounded runtime and4GiB desktop reserve. No
+  full project suite, GUI or VM validation was run, as requested.
+- `nm -D --defined-only` verifies exactly the two history and two metadata
+  exports. Final release library SHA-256:
+  `a7fe4fd33516cea0c99be2fe516fb89cd54f090cef6554965cfe7a4d4f825c8d`.
+- `HISTORY.md` was not modified. Changes are confined to this crate: new
+  `src/history.rs`, `src/history_tests.rs`, `tests/history_protocol.rs`,
+  `history_mutations.rs`, additive `src/lib.rs`/C header exports and this README.
+  No Cargo dependency/manifests, existing metadata implementation/tests,
+  installed library, staging, commit or other-agent files were changed.

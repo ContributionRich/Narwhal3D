@@ -164,12 +164,14 @@ def verify_application_core(app: Path, python: Path) -> int:
             raise ValueError(f"missing regular application-core payload: {path}")
     if sha(library) != sha(adjacent):
         raise ValueError("application-core runtime/adjacent copies differ")
-    code = ("import ctypes,sys; lib=ctypes.CDLL(sys.argv[1]); "
-            "fn=lib.narwhal_session_abi; fn.argtypes=[]; fn.restype=ctypes.c_uint32; "
+    code = ("import ctypes,sys; lib=ctypes.CDLL(sys.argv[2]); "
+            "lib.narwhal_session_json; lib.narwhal_history_json; "
+            "fn=getattr(lib,sys.argv[1]); fn.argtypes=[]; fn.restype=ctypes.c_uint32; "
             "print(fn())")
-    actual = run(str(python), "-I", "-B", "-c", code, str(adjacent), timeout=30).strip()
-    if actual != "1":
-        raise ValueError(f"application-core ABI must be 1, got {actual!r}")
+    for symbol in ("narwhal_session_abi", "narwhal_history_abi"):
+        actual = run(str(python), "-I", "-B", "-c", code, symbol, str(adjacent), timeout=30).strip()
+        if actual != "1":
+            raise ValueError(f"application-core {symbol} must be 1, got {actual!r}")
     return 1
 
 
@@ -303,6 +305,9 @@ def main() -> None:
                "sha256": digest, "size": dmg.stat().st_size, "signing": "ad-hoc, not notarized",
                "actual_dmg_verified": True, "gui_acceptance": False, "inventory": records,
                "application_core_abi": application_core_abi,
+               "application_core_history_abi": 1,
+               "application_core_exports": ["narwhal_history_abi", "narwhal_history_json",
+                                            "narwhal_session_abi", "narwhal_session_json"],
                "python_wheels": json.loads((source / "packaging/macos/arm64-wheels.lock.json").read_text())["artifacts"],
                "runtime_overrides": {"numpy": "same-version 2.3.4 macOS14 wheel replaces incompatible macOS26 prebuild"}}
     Path(str(dmg) + ".build.json").write_text(json.dumps(receipt, indent=2) + "\n")

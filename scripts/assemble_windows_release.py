@@ -136,6 +136,7 @@ def native_records(package: Path, source_root: Path | None = None) -> dict[str, 
         elif name == "narwhal_application_core.dll":
             identity = verifier.verify_application_core_identity(path)
             record.update({"abi": verifier.APPLICATION_CORE_ABI,
+                           "history_abi": verifier.APPLICATION_CORE_HISTORY_ABI,
                            "machine": identity["machine"], "exports": list(identity["exports"])})
         elif name == "narwhal_automation.dll":
             identity = verifier.verify_automation_core_identity(path)

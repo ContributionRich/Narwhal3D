@@ -1120,6 +1120,12 @@ class NarwhalModel:
         self.last_snapshot = ("shared", copied)
         return by_id
 
+    def validate_restore(self, snap):
+        """Pure restore admission; failure here has not changed any document table."""
+        strings = getattr(snap, 'strings', None)
+        if strings is not None:
+            self._document_metadata.validate_snapshot(strings)
+
     def restore(self, snap) -> int:
         """Make the document equal to `snap`. Returns the object count.
 
@@ -1141,10 +1147,7 @@ class NarwhalModel:
         self.last_restore = None
         if snap is None:
             return self.object_count()
-        strings = getattr(snap, "strings", None)
-        if strings is not None:
-            # Reject stale/cross-document native handles before touching ANY table.
-            self._document_metadata.validate_snapshot(strings)
+        self.validate_restore(snap)
         layers = getattr(snap, "layers", None)
         groups = getattr(snap, "groups", None)
         whole = False

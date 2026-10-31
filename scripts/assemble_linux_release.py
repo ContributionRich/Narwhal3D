@@ -54,6 +54,11 @@ PACKAGED_ACCELERATORS = (
     "libnarwhal_pure_core.so", "libnarwhal_selection_core.so",
     "libnarwhal_application_core.so",
 )
+APPLICATION_CORE_HISTORY_ABI = 1
+APPLICATION_CORE_EXPORTS = (
+    "narwhal_history_abi", "narwhal_history_json",
+    "narwhal_session_abi", "narwhal_session_json",
+)
 NATIVE_LIBRARY_ABIS = {
     "libnarwhal_application_core.so": ("narwhal_session_abi", 1),
     "libnarwhal_automation.so": ("narwhal_workflow_abi", 1),
@@ -452,6 +457,7 @@ def probe_supervisor_memory(supervisor: Path) -> None:
 
 def probe_native_library_abi(
     path: Path, symbol: str, expected: int, occt_library_dir: Path,
+    required_exports: tuple[str, ...] = (),
 ) -> int:
     """Load one component with only the bundled OCCT DSO directory in its search path."""
     if not occt_library_dir.is_dir() or occt_library_dir.is_symlink():
@@ -459,6 +465,7 @@ def probe_native_library_abi(
     probe = (
         "import ctypes,sys; "
         "lib=ctypes.CDLL(sys.argv[1]); "
+        "[getattr(lib, name) for name in sys.argv[3:]]; "
         "fn=getattr(lib,sys.argv[2]); "
         "fn.argtypes=[]; fn.restype=ctypes.c_uint32; "
         "print(int(fn()))"
@@ -468,7 +475,7 @@ def probe_native_library_abi(
     environment["PYTHONDONTWRITEBYTECODE"] = "1"
     try:
         completed = subprocess.run(
-            [sys.executable, "-I", "-c", probe, str(path), symbol],
+            [sys.executable, "-I", "-c", probe, str(path), symbol, *required_exports],
             env=environment, text=True, capture_output=True, timeout=30, check=True)
         actual = int(completed.stdout.strip())
     except (OSError, subprocess.SubprocessError, ValueError) as exc:
@@ -523,6 +530,11 @@ def validate_native_components(
     for filename, (symbol, expected_abi) in NATIVE_LIBRARY_ABIS.items():
         records[filename]["abi"] = probe_native_library_abi(
             directory / filename, symbol, expected_abi, occt_library_dir)
+    application = records["libnarwhal_application_core.so"]
+    application["history_abi"] = probe_native_library_abi(
+        directory / "libnarwhal_application_core.so", "narwhal_history_abi",
+        APPLICATION_CORE_HISTORY_ABI, occt_library_dir, APPLICATION_CORE_EXPORTS)
+    application["exports"] = list(APPLICATION_CORE_EXPORTS)
     try:
         completed = subprocess.run(
             [str(directory / "narwhal-cdr-multiversion"), "--version"],

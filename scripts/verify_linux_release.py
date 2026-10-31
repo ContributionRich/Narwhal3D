@@ -52,6 +52,11 @@ PACKAGED_ACCELERATORS = (
     "libnarwhal_pure_core.so", "libnarwhal_selection_core.so",
     "libnarwhal_application_core.so",
 )
+APPLICATION_CORE_HISTORY_ABI = 1
+APPLICATION_CORE_EXPORTS = (
+    "narwhal_history_abi", "narwhal_history_json",
+    "narwhal_session_abi", "narwhal_session_json",
+)
 NATIVE_LIBRARY_ABIS = {
     "libnarwhal_application_core.so": ("narwhal_session_abi", 1),
     "libnarwhal_automation.so": ("narwhal_workflow_abi", 1),
@@ -516,8 +521,50 @@ def verify_native_manifest(appdir: Path, native_components: object) -> None:
     for filename, (_symbol, expected_abi) in NATIVE_LIBRARY_ABIS.items():
         if native_components[filename].get("abi") != expected_abi:
             raise VerificationError(f"native manifest has the wrong {filename} ABI")
+    application = native_components["libnarwhal_application_core.so"]
+    if (application.get("history_abi") != APPLICATION_CORE_HISTORY_ABI
+            or application.get("exports") != list(APPLICATION_CORE_EXPORTS)):
+        raise VerificationError("native manifest lacks application-core history ABI/export evidence")
     if native_components["narwhal-welcome"].get("launch_contract") != 1:
         raise VerificationError("release manifest lacks native welcome launch-contract evidence")
+
+
+def verify_native_library_abis(app_root: Path, python: Path, environment: dict[str, str]) -> None:
+    """Execute ABI/export probes against the actual loader slots in the package."""
+    native_dir = app_root / NATIVE_COMPONENT_RELATIVE
+    abi_probe = (
+        "import ctypes,json,sys; "
+        "results={}; "
+        "specs=json.loads(sys.argv[1]); "
+        "[(lambda lib, symbol, name, exports: ([getattr(lib, export) for export in exports], "
+        "setattr(getattr(lib, symbol), 'argtypes', []), "
+        "setattr(getattr(lib, symbol), 'restype', ctypes.c_uint32), "
+        "results.__setitem__(name, int(getattr(lib, symbol)()))))(ctypes.CDLL(path), symbol, name, exports) "
+        "for name, path, symbol, exports in specs]; "
+        "print(json.dumps(results,sort_keys=True))"
+    )
+    abi_specs = [
+        (filename, str((app_root / "narwhal3d/native" / filename)
+                       if filename in PACKAGED_ACCELERATORS else native_dir / filename), symbol,
+         APPLICATION_CORE_EXPORTS if filename == "libnarwhal_application_core.so" else ())
+        for filename, (symbol, _expected) in NATIVE_LIBRARY_ABIS.items()
+    ]
+    abi_specs.append(("application_core_history", str(app_root / "narwhal3d/native/libnarwhal_application_core.so"),
+                      "narwhal_history_abi", APPLICATION_CORE_EXPORTS))
+    try:
+        completed = subprocess.run(
+            [str(python), "-I", "-c", abi_probe, json.dumps(abi_specs)],
+            cwd=app_root, env=environment, text=True, capture_output=True,
+            timeout=30, check=True)
+        actual_abis = json.loads(completed.stdout.strip())
+    except (OSError, subprocess.SubprocessError, json.JSONDecodeError) as exc:
+        detail = getattr(exc, "stderr", "")
+        raise VerificationError(f"cannot load packaged native accelerators: {detail or exc}") from exc
+    expected_abis = {name: expected for name, (_symbol, expected) in NATIVE_LIBRARY_ABIS.items()}
+    expected_abis["application_core_history"] = APPLICATION_CORE_HISTORY_ABI
+    if actual_abis != expected_abis:
+        raise VerificationError(
+            f"packaged native accelerator ABIs: expected {expected_abis}, got {actual_abis}")
 
 
 def verify_executables_and_imports(appdir: Path) -> None:
@@ -597,33 +644,7 @@ def verify_executables_and_imports(appdir: Path) -> None:
     marker = read_json(runtime / ".narwhal3d-native-runtime.json", "native runtime provenance marker")
     if marker.get("version_first_line") != first_line:
         raise VerificationError("executed native version banner differs from provenance")
-    abi_probe = (
-        "import ctypes,json,sys; "
-        "results={}; "
-        "specs=json.loads(sys.argv[1]); "
-        "[(lambda lib, symbol, name: (setattr(getattr(lib, symbol), 'restype', ctypes.c_uint32), "
-        "results.__setitem__(name, int(getattr(lib, symbol)()))))(ctypes.CDLL(path), symbol, name) "
-        "for name, path, symbol in specs]; "
-        "print(json.dumps(results,sort_keys=True))"
-    )
-    abi_specs = [
-        (filename, str((app_root / "narwhal3d/native" / filename)
-                       if filename in PACKAGED_ACCELERATORS else native_dir / filename), symbol)
-        for filename, (symbol, _expected) in NATIVE_LIBRARY_ABIS.items()
-    ]
-    try:
-        completed = subprocess.run(
-            [str(python), "-I", "-c", abi_probe, json.dumps(abi_specs)],
-            cwd=app_root, env=environment, text=True, capture_output=True,
-            timeout=30, check=True)
-        actual_abis = json.loads(completed.stdout.strip())
-    except (OSError, subprocess.SubprocessError, json.JSONDecodeError) as exc:
-        detail = getattr(exc, "stderr", "")
-        raise VerificationError(f"cannot load packaged native accelerators: {detail or exc}") from exc
-    expected_abis = {name: expected for name, (_symbol, expected) in NATIVE_LIBRARY_ABIS.items()}
-    if actual_abis != expected_abis:
-        raise VerificationError(
-            f"packaged native accelerator ABIs: expected {expected_abis}, got {actual_abis}")
+    verify_native_library_abis(app_root, python, environment)
     try:
         completed = subprocess.run(
             [str(multiversion), "--version"], text=True, capture_output=True,

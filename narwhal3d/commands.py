@@ -1123,6 +1123,8 @@ class NarwhalContext:
         """
         if not self.undo.enabled:
             return False
+        if self.undo.recording and self.undo.captured:
+            return False
         implicit = not self.undo.recording
         if implicit:
             self.undo.begin(name or "Change")
@@ -1135,12 +1137,25 @@ class NarwhalContext:
 
     def undo_last(self):
         """Step back one record. Returns its name, or None if there is nothing."""
-        record = self.undo.undo(self.model.snapshot(), restore=self._restore_document)
-        return record.name if record is not None else None
+        return self._navigate_history('undo')
 
     def redo_last(self):
         """Step forward one record. Returns its name, or None."""
-        record = self.undo.redo(self.model.snapshot(), restore=self._restore_document)
+        return self._navigate_history('redo')
+
+    def _navigate_history(self, direction):
+        started = False
+
+        def apply(snapshot):
+            nonlocal started
+            self.model.validate_restore(snapshot)
+            started = True
+            self._restore_document(snapshot)
+
+        # A failed pure admission is known not to have changed the document.
+        # Once restore/display work starts, an exception is not rollback proof.
+        record = getattr(self.undo, direction)(self.model.snapshot(), restore=apply,
+            failure_state=lambda _exc: 'unknown' if started else 'unchanged')
         return record.name if record is not None else None
 
     def _restore_document(self, snap):
