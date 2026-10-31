@@ -57,11 +57,22 @@ def write_document(path):
     """
     app = _app()
     if _export_route(path):
-        from . import export_commands
-
-        ok, msg = export_commands.export_objects(
-            app.model, list(app.model.file.Objects), path)
-        return ok, (msg + " -- the model's own file is unchanged") if ok else msg
+        import tempfile
+        target = os.path.abspath(os.path.expanduser(path.strip().strip('"')))
+        temporary = None
+        try:
+            fd, temporary = tempfile.mkstemp(prefix='.narwhal-interchange-', suffix='.3dm',
+                                             dir=os.path.dirname(target))
+            os.close(fd)
+            if not app.model.save(temporary) or os.path.getsize(temporary) == 0:
+                raise OSError('the document writer reported failure')
+            os.replace(temporary, target)
+        except Exception as exc:  # File/adapter boundary; the previous destination remains intact.
+            return False, f"could not save {target}: {exc}"
+        finally:
+            if temporary and os.path.exists(temporary):
+                os.unlink(temporary)
+        return True, f"Exported {app.model.object_count()} object(s) to {target} -- the model's own file is unchanged"
     target, err = _normalise(path)
     if err:
         return False, err

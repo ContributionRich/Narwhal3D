@@ -1501,12 +1501,20 @@ def import_into(ctx, path):
 
 
 def open_foreign(path):
-    """The Open route for a non-3dm file: ``(model, message)``, or ``(None, message)`` when
-    it cannot be read. The new model has the default units; the file's own units are
-    converted into them. `file_commands` uses this for the extensions in `FORMATS`
-    and then rebuilds the display."""
+    """Open a whole .3dm document, or import another format into a new model.
+
+    Whole-document .3dm adoption retains metadata, units and tables. Object Import
+    remains a separate merge route and never replaces destination document strings.
+    Other formats retain their existing default-unit conversion behavior.
+    """
     from .model import NarwhalModel
 
+    if os.path.splitext(str(path))[1].lower() == '.3dm':
+        try:
+            model = NarwhalModel.load(path)
+        except (OSError, ValueError, RuntimeError) as exc:
+            return None, f"Open: {exc}"
+        return model, f"Opened {path} ({model.object_count()} objects)"
     model = NarwhalModel()
     try:
         got = read_foreign(path, model)

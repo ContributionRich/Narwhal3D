@@ -221,23 +221,28 @@ class UndoStack:
     def redo_names(self):
         return [r.name for r in reversed(self._redo)]
 
-    def undo(self, current):
+    def undo(self, current, *, restore=None):
         """Take one step back. Returns the Record, or None if there is nothing.
 
         `current` is a snapshot of the document as it is NOW; it becomes the
         record's `after` so the step can be redone. The caller restores
         ``record.before``. Refused while a record is open -- undoing halfway
         through recording a change would leave the history describing a document
-        that never existed.
+        that never existed. With a restore callback, move the history only after
+        the host's document restoration succeeds; a rejected restore keeps the
+        original stack and snapshot references intact.
         """
         if self._open is not None or not self._undo:
             return None
-        record = self._undo.pop()
+        record = self._undo[-1]
+        if restore is not None:
+            restore(record.before)
+        self._undo.pop()
         record.after = current
         self._redo.append(record)
         return record
 
-    def redo(self, current):
+    def redo(self, current, *, restore=None):
         """Step forward again. Returns the Record, or None.
 
         The caller restores ``record.after``. `current` refreshes `before` so the
@@ -245,7 +250,10 @@ class UndoStack:
         """
         if self._open is not None or not self._redo:
             return None
-        record = self._redo.pop()
+        record = self._redo[-1]
+        if restore is not None:
+            restore(record.after)
+        self._redo.pop()
         record.before = current
         self._undo.append(record)
         return record

@@ -1,8 +1,8 @@
-"""Document model: wraps rhino3dm File3dm as the single source of truth.
+"""Document model: native geometry plus a persistent document-metadata session.
 
-Every the reference CAD application object we create is stored in a File3dm (so .3dm save/load is
-native and lossless) AND mirrored to a Blender mesh object for display.
-The registry maps File3dm object ids -> Blender objects.
+Objects remain in File3dm and exact kernel masters, with Blender display mirrors.
+When application-core is available it owns document user text; File3dm.Strings is
+its compatibility view and serialized projection, not a second editable authority.
 """
 from __future__ import annotations
 
@@ -418,7 +418,61 @@ def _wrap_table(func, name):
 _install_watch()
 
 
+def _metadata_api():
+    # Direct file-path test loading must not import the Blender add-on entry point.
+    import importlib.util
+    from pathlib import Path
+    name = 'narwhal3d.document_metadata'
+    module = sys.modules.get(name)
+    if module is None:
+        spec = importlib.util.spec_from_file_location(name, Path(__file__).with_name('document_metadata.py'))
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[name] = module
+        spec.loader.exec_module(module)
+    return module
+
+
 class NarwhalModel:
+    @property
+    def file(self):
+        return self._file
+
+    @file.setter
+    def file(self, value):
+        binding = _metadata_api().adopt(self, value, getattr(self, '_document_metadata', None))
+        self._file, self._document_metadata = value, binding
+
+    @property
+    def metadata_backend(self):
+        return self._document_metadata.backend
+
+    def metadata_revision(self):
+        """Metadata-only identity, deliberately NOT an authoritative document revision."""
+        session = getattr(self._document_metadata, 'session', None)
+        if session is None:
+            return {'available': False, 'scope': 'document_user_text'}
+        return dict(session.info(), available=True, scope='document_user_text', session=session.handle)
+
+    def document_user_text(self, key=None):
+        """Exact-key command lookup or ordered listing through the metadata owner."""
+        if key is None:
+            return list(self.file.Strings)
+        session = getattr(self._document_metadata, 'session', None)
+        if session is not None:
+            reply = session.get(key, exact=True)
+            return reply['value'] if reply['found'] else None
+        return next((value for name, value in self.file.Strings if name == key), None)
+
+    def set_document_user_text(self, key, value, before_change=None):
+        api = _metadata_api()
+        key = api._text(key)
+        value = None if value is None else api._text(value)
+        return self._document_metadata.change(key, value, before_change)
+
+    def _replace_backing_file(self, value):
+        binding = _metadata_api().adopt(self, value, self._document_metadata, preserve=True)
+        self._file, self._document_metadata = value, binding
+
     def __init__(self):
         self.file = r3.File3dm()
         # Ensure a default layer exists at index 0. the reference CAD application's factory templates ship a
@@ -725,7 +779,7 @@ class NarwhalModel:
             fresh = r3.File3dm.Read(tmp)
             if fresh is None:
                 raise RuntimeError("could not re-read the document")
-            self.file = fresh
+            self._replace_backing_file(fresh)
         finally:
             try:
                 os.remove(tmp)
@@ -1007,10 +1061,9 @@ class NarwhalModel:
         """
         out = _Snapshot()
         out.settings = (self.unit_system(), self.absolute_tolerance())
-        # File-level user text is document state, not object state. Keep the
-        # native ordered table in the snapshot so SetDocumentUserText has a
-        # complete, process-local Undo/Redo description.
-        out.strings = [(str(key), str(value)) for key, value in self.file.Strings]
+        # Native mode retains an immutable Rust state handle, not a copied table.
+        # The same document undo record still groups metadata and geometry changes.
+        out.strings = self._document_metadata.snapshot()
         out.layers = self.layer_records()           # layer edits participate in undo
         out.groups = self.group_records()           # preserve table and memberships together
         names = self._blender_names
@@ -1088,6 +1141,10 @@ class NarwhalModel:
         self.last_restore = None
         if snap is None:
             return self.object_count()
+        strings = getattr(snap, "strings", None)
+        if strings is not None:
+            # Reject stale/cross-document native handles before touching ANY table.
+            self._document_metadata.validate_snapshot(strings)
         layers = getattr(snap, "layers", None)
         groups = getattr(snap, "groups", None)
         whole = False
@@ -1105,12 +1162,7 @@ class NarwhalModel:
             whole = True
         strings = getattr(snap, "strings", None)
         if strings is not None:
-            current_strings = [(str(key), str(value)) for key, value in self.file.Strings]
-            if current_strings != strings:
-                for key, _ in current_strings:
-                    self.file.Strings.Delete(key)
-                for key, value in strings:
-                    self.file.Strings[key] = value
+            self._document_metadata.restore(strings)
         settings = getattr(snap, "settings", None)
         if settings:
             # Undoing `Units` restores unit and tolerance with the geometry.

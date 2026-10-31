@@ -47,12 +47,15 @@ NATIVE_COMPONENTS = (
     "libnarwhal_selection_core.so", "narwhal-converter-supervisor",
     "narwhal-cdr-multiversion", "narwhal-document-core", "narwhal-welcome",
     "libnarwhal_automation.so", "narwhal-automation",
+    "libnarwhal_application_core.so",
 )
 PACKAGED_ACCELERATORS = (
     "libnarwhal_geometry_core.so", "libnarwhal_platform_core.so",
     "libnarwhal_pure_core.so", "libnarwhal_selection_core.so",
+    "libnarwhal_application_core.so",
 )
 NATIVE_LIBRARY_ABIS = {
+    "libnarwhal_application_core.so": ("narwhal_session_abi", 1),
     "libnarwhal_automation.so": ("narwhal_workflow_abi", 1),
     "libnarwhal_cdr_core.so": ("narwhal_cdr_abi_version", 3),
     "libnarwhal_geometry_core.so": ("narwhal_geometry_core_abi_version", 4),
@@ -78,6 +81,7 @@ REQUIRED_LICENSE_FILES = (
     "AppImage-MIT.txt",
     "TraceDraw-MIT.txt",
     "TraceDraw-Rust-Dependencies.txt",
+    "Native-Rust-Dependencies.txt",
 )
 DISTRIBUTIONS = {
     "rhino3dm": "8.35.0",
@@ -744,6 +748,9 @@ def assemble(args: argparse.Namespace) -> tuple[Path, Path, Path]:
             "project THIRD_PARTY_NOTICES",
         )
         shutil.copytree(licenses, app_root / "licenses", symlinks=True)
+        copy_file(source_root / "native/application_core/OPENNURBS_LICENSE",
+                  app_root / "licenses/application_core-OPENNURBS.txt",
+                  "application-core openNURBS ordinal mapping license")
         (app_root / "tools").mkdir(mode=0o755)
         shutil.copytree(runtime_dir, app_root / RUNTIME_RELATIVE, symlinks=True)
         native_target = app_root / NATIVE_COMPONENT_RELATIVE
@@ -891,6 +898,7 @@ def self_check() -> None:
         "AppImage-MIT.txt",
         "TraceDraw-MIT.txt",
         "TraceDraw-Rust-Dependencies.txt",
+        "Native-Rust-Dependencies.txt",
     }
     if set(REQUIRED_LICENSE_FILES) != expected_licenses:
         raise ReleaseError("self-check found an incomplete required license set")
@@ -949,12 +957,15 @@ def self_check() -> None:
             "libnarwhal_selection_core.so", "narwhal-converter-supervisor",
             "narwhal-cdr-multiversion", "narwhal-document-core", "narwhal-welcome",
             "libnarwhal_automation.so", "narwhal-automation",
+            "libnarwhal_application_core.so",
         ):
             raise ReleaseError("self-check found an incomplete native component set")
         if PACKAGED_ACCELERATORS != (
             "libnarwhal_geometry_core.so", "libnarwhal_platform_core.so",
             "libnarwhal_pure_core.so", "libnarwhal_selection_core.so",
+            "libnarwhal_application_core.so",
         ) or {name: abi for name, (_symbol, abi) in NATIVE_LIBRARY_ABIS.items()} != {
+            "libnarwhal_application_core.so": 1,
             "libnarwhal_automation.so": 1,
             "libnarwhal_cdr_core.so": 3,
             "libnarwhal_geometry_core.so": 4,

@@ -22,7 +22,13 @@ FORBIDDEN_PARTS = {"bug_" + "reports", "More" + "_Data", "Example" + "Photos", "
 FORBIDDEN_FILES = {"brep_" + "writer.cpp"}
 FORBIDDEN_SUFFIXES = {".pyc", ".pyo", ".pdb", ".lib", ".exp"}
 FORBIDDEN_RUNTIME_TOOLS = {"datatoc.exe", "makesdna.exe", "makesrna.exe"}
+APPLICATION_CORE_ABI = 1
+APPLICATION_CORE_EXPORTS = ("narwhal_session_abi", "narwhal_session_json")
+APPLICATION_CORE_ADJACENT = "app/narwhal3d/native/narwhal_application_core.dll"
+APPLICATION_CORE_LICENSE = "licenses/application_core-OPENNURBS.txt"
+APPLICATION_CORE_SOURCE = "app/runtime/windows-x86_64/bin/application-core-source.json"
 NATIVE_COMPONENT_PATHS = {
+    "narwhal_application_core.dll": "app/runtime/windows-x86_64/bin/narwhal_application_core.dll",
     "narwhal_automation.dll": "app/runtime/windows-x86_64/bin/narwhal_automation.dll",
     "narwhal_cdr_core.dll": "app/runtime/windows-x86_64/bin/narwhal_cdr_core.dll",
     "narwhal-converter-supervisor.exe": "app/runtime/windows-x86_64/bin/narwhal-converter-supervisor.exe",
@@ -85,10 +91,15 @@ REQUIRED = {
     "app/runtime/windows-x86_64/bin/narwhal-cdr-multiversion.exe",
     "app/runtime/windows-x86_64/bin/narwhal-document-core.exe",
     *NATIVE_COMPONENT_PATHS.values(),
+    APPLICATION_CORE_ADJACENT,
+    APPLICATION_CORE_SOURCE,
+    "app/" + APPLICATION_CORE_LICENSE,
+    "app/licenses/Native-Rust-Dependencies.txt",
 }
 SOURCE_ROOTS = ("narwhal3d", "launch", "licenses")
 SOURCE_FILES = ("LICENSE", "THIRD_PARTY_NOTICES", "CHANGELOG.md", "STATUS.md")
 GENERATED_PACKAGE_FILES = {
+    "narwhal3d/native/narwhal_application_core.dll",
     "narwhal3d/native/narwhal_geometry_core.dll",
     "narwhal3d/native/narwhal_platform_core.dll",
     "narwhal3d/native/narwhal_pure_core.dll",
@@ -163,7 +174,9 @@ def verify_public_source(root: Path, revision: str) -> None:
         package_path = root / "app" / relative
         try:
             expected = subprocess.run(
-                ["git", "show", f"{revision}:{relative}"], check=True,
+                ["git", "--no-pager", "show", f"{revision}:" + (
+                    "native/application_core/OPENNURBS_LICENSE"
+                    if relative == APPLICATION_CORE_LICENSE else relative)], check=True,
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE).stdout
         except (OSError, subprocess.SubprocessError) as exc:
             raise VerificationError(f"cannot read public source {revision}:{relative}") from exc
@@ -177,7 +190,7 @@ def require_bytes(path: Path, markers: tuple[bytes, ...], description: str) -> N
         raise VerificationError(f"{description} has wrong PE identity/content: {path.name}")
 
 
-def inspect_pe_dll(path: Path) -> dict[str, object]:
+def inspect_pe_dll(path: Path, *, constant_exports: dict[str, int] | None = None) -> dict[str, object]:
     """Read PE32+ DLL exports/imports without trusting a host-side PE tool."""
     try:
         data = path.read_bytes()
@@ -245,6 +258,29 @@ def inspect_pe_dll(path: Path) -> dict[str, object]:
         raise VerificationError(f"{path.name} has an unreasonable PE export count")
     exports = tuple(sorted(c_string(unpack("<I", rva_offset(export_names_rva, export_count * 4) + 4 * index)[0])
                            for index in range(export_count)))
+
+    # OURS: cross-host qualification accepts only a direct x86-64 constant-return
+    # leaf for these ABI version exports. Unknown code generation fails closed;
+    # this is not execution or native Windows acceptance.
+    for symbol, expected in (constant_exports or {}).items():
+        if exports.count(symbol) != 1:
+            raise VerificationError(f"{path.name} lacks exactly one {symbol} export")
+        functions = unpack("<I", export_offset + 20)[0]
+        functions_rva = unpack("<I", export_offset + 28)[0]
+        ordinals_rva = unpack("<I", export_offset + 36)[0]
+        for index in range(export_count):
+            name_rva = unpack("<I", rva_offset(export_names_rva + 4 * index, 4))[0]
+            if c_string(name_rva) != symbol:
+                continue
+            ordinal = unpack("<H", rva_offset(ordinals_rva + 2 * index, 2))[0]
+            if ordinal >= functions:
+                raise VerificationError(f"invalid {symbol} export ordinal")
+            function_rva = unpack("<I", rva_offset(functions_rva + 4 * ordinal, 4))[0]
+            if export_rva <= function_rva < export_rva + export_size:
+                raise VerificationError(f"forwarded {symbol} ABI is not qualified")
+            offset = rva_offset(function_rva, 6)
+            if data[offset:offset + 6] != b"\xb8" + struct.pack("<I", expected) + b"\xc3":
+                raise VerificationError(f"{symbol} ABI is wrong or not a qualified constant-return leaf")
 
     if not import_rva or import_size < 20:
         raise VerificationError(f"{path.name} has no PE import directory")
@@ -340,6 +376,40 @@ def metadata_version(site: Path, distribution: str) -> str | None:
     return None
 
 
+def verify_application_core_identity(path: Path) -> dict[str, object]:
+    identity = inspect_pe_dll(path, constant_exports={"narwhal_session_abi": APPLICATION_CORE_ABI})
+    if identity["exports"] != APPLICATION_CORE_EXPORTS:
+        raise VerificationError("Windows application core lacks the exact session ABI exports")
+    return identity
+
+
+def verify_application_core_source(root: Path, source: Path) -> dict:
+    from build_linux_native import inventory as source_inventory
+    try:
+        path = root / APPLICATION_CORE_SOURCE
+        if path.is_symlink():
+            raise VerificationError("linked application-core source receipt")
+        receipt = json.loads(path.read_text(encoding="utf-8"))
+        expected = {"inputs": source_inventory(source, "application_core"),
+                    "sha256": sha256(root / NATIVE_COMPONENT_PATHS["narwhal_application_core.dll"]),
+                    "abi": APPLICATION_CORE_ABI}
+        if receipt != expected:
+            raise VerificationError("application-core source/ABI/binary receipt differs")
+    except (OSError, ValueError) as exc:
+        raise VerificationError(f"cannot bind application-core source: {exc}") from exc
+    return receipt
+
+
+def verify_application_core_copies(root: Path) -> None:
+    runtime = root / NATIVE_COMPONENT_PATHS["narwhal_application_core.dll"]
+    adjacent = root / APPLICATION_CORE_ADJACENT
+    for path in (runtime, adjacent):
+        if not path.is_file() or path.is_symlink():
+            raise VerificationError(f"missing regular application-core DLL: {path}")
+    if sha256(runtime) != sha256(adjacent):
+        raise VerificationError("application-core runtime/adjacent copies differ")
+
+
 def verify_automation_core_identity(path: Path) -> dict[str, object]:
     identity = inspect_pe_dll(path)
     if set(identity["exports"]) != {"narwhal_workflow_abi", "narwhal_workflow_json"}:
@@ -390,6 +460,8 @@ def verify_directory(root: Path, args: argparse.Namespace) -> None:
             args.expected_version.encode("utf-16le"),
         ),
         "Narwhal launcher")
+    verify_application_core_copies(root)
+    verify_application_core_source(root, Path(__file__).resolve().parents[1])
     for filename, relative_path in NATIVE_COMPONENT_PATHS.items():
         path = root / relative_path
         record = native_components[filename]
@@ -404,6 +476,12 @@ def verify_directory(root: Path, args: argparse.Namespace) -> None:
                        b"Update ZIP expands beyond the safe limit")
             if record.get("launch_contract") != 1 or not all(marker in data for marker in markers):
                 raise VerificationError("Windows native welcome lacks its launch/request contract")
+        if filename == "narwhal_application_core.dll":
+            identity = verify_application_core_identity(path)
+            if (record.get("abi") != APPLICATION_CORE_ABI
+                    or record.get("exports") != list(identity["exports"])
+                    or record.get("machine") != identity["machine"]):
+                raise VerificationError("Windows application-core manifest identity differs")
         if filename == "narwhal_automation.dll":
             identity = verify_automation_core_identity(path)
             if record.get("exports") != list(identity["exports"]) or record.get("machine") != identity["machine"]:

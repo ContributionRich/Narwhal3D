@@ -27,6 +27,7 @@ COMPONENTS = {
     "cdr_core": ("libnarwhal_cdr_core.dylib",),
     "platform_core": ("libnarwhal_platform_core.dylib",),
     "document_core": ("narwhal-document-core",),
+    "application_core": ("libnarwhal_application_core.dylib",),
     "converter_supervisor": ("narwhal-converter-supervisor", "libnarwhal_worker_policy.dylib"),
     "automation_core": ("libnarwhal_automation.dylib", "narwhal-automation"),
     "geometry_core": ("libnarwhal_geometry_core.dylib",),

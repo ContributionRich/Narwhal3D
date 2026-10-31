@@ -83,6 +83,9 @@ def replace_public_source(package: Path, source_root: Path) -> None:
                 (native / filename).write_bytes(data)
     for name in SOURCE_FILES:
         shutil.copy2(require_file(source_root / name, name), app / name)
+    shutil.copy2(require_file(source_root / "native/application_core/OPENNURBS_LICENSE",
+                              "application-core openNURBS license"),
+                 app / verifier.APPLICATION_CORE_LICENSE)
 
 
 def remove_forbidden_payload(package: Path) -> None:
@@ -114,8 +117,10 @@ def copy_native_inputs(package: Path, launcher: Path, cdr_core: Path,
                  runtime_native / "narwhal-welcome.exe")
 
 
-def native_records(package: Path) -> dict[str, dict[str, object]]:
+def native_records(package: Path, source_root: Path | None = None) -> dict[str, dict[str, object]]:
     records: dict[str, dict[str, object]] = {}
+    verifier.verify_application_core_copies(package)
+    verifier.verify_application_core_source(package, source_root or Path(__file__).resolve().parents[1])
     for name, relative in verifier.NATIVE_COMPONENT_PATHS.items():
         path = require_file(package / relative, f"native component {name}")
         record: dict[str, object] = {"size": path.stat().st_size, "sha256": verifier.sha256(path)}
@@ -128,6 +133,10 @@ def native_records(package: Path) -> dict[str, dict[str, object]]:
             if not all(marker in data for marker in markers):
                 raise AssemblyError("Windows native welcome lacks its launch/request contract")
             record["launch_contract"] = 1
+        elif name == "narwhal_application_core.dll":
+            identity = verifier.verify_application_core_identity(path)
+            record.update({"abi": verifier.APPLICATION_CORE_ABI,
+                           "machine": identity["machine"], "exports": list(identity["exports"])})
         elif name == "narwhal_automation.dll":
             identity = verifier.verify_automation_core_identity(path)
             record.update({"machine": identity["machine"], "exports": list(identity["exports"])})
@@ -175,7 +184,7 @@ def write_manifest(package: Path, source_root: Path, version: str, revision: str
         "runtime_binary_sha256": verifier.sha256(package / "runtime/blender.exe"),
         "launcher_sha256": verifier.sha256(package / "Narwhal3D.exe"),
         "launcher_source_sha256": verifier.sha256(source_root / "packaging/windows/narwhal3d_launcher.c"),
-        "native_components": native_records(package),
+        "native_components": native_records(package, source_root),
         "excluded_components": EXCLUDED_COMPONENTS,
         "validation": {
             "windows_packaged_headless_bootstrap": True,
@@ -259,6 +268,8 @@ def self_check() -> None:
         (source / "narwhal3d/__init__.py").write_text("# public source\n", encoding="utf-8")
         (source / "launch/bootstrap.py").write_text("# launcher\n", encoding="utf-8")
         (source / "licenses/GPL.txt").write_text("license\n", encoding="utf-8")
+        (source / "native/application_core").mkdir(parents=True)
+        (source / "native/application_core/OPENNURBS_LICENSE").write_text("ordinal license\n")
         for filename in SOURCE_FILES:
             (source / filename).write_text(filename + "\n", encoding="utf-8")
         native = package / "app/narwhal3d/native"

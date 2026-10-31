@@ -36,6 +36,9 @@ run "packaging: assemble release" "$PYTHON" scripts/assemble_linux_release.py --
 run "packaging: assemble Windows release" "$PYTHON" scripts/assemble_windows_release.py --self-check
 run "packaging: EXE and DMG contracts" "$PYTHON" scripts/test_release_packages.py
 run "packaging: native automation coverage" "$PYTHON" scripts/test_release_automation.py
+run "packaging: application-core coverage" "$PYTHON" scripts/test_release_application_core.py
+run "application-core source/provenance contracts" "$PYTHON" spike/test_application_core_source.py
+run "application-core build gate contracts" "$PYTHON" spike/test_application_core_gate.py
 run "packaging: verify release" "$PYTHON" scripts/verify_linux_release.py --self-check
 run "packaging: cross-platform completeness" "$PYTHON" spike/test_package_completeness.py
 run "packaging: public-tree audit" "$PYTHON" scripts/audit_public_tree.py --self-check
@@ -63,6 +66,9 @@ else
 fi
 
 if command -v cargo >/dev/null 2>&1; then
+    run "Rust application-core source gate" "$PYTHON" scripts/check_application_core.py --stage-dev
+    export NARWHAL_APPLICATION_CORE="$ROOT/artifacts/application-core/linux-x86_64/libnarwhal_application_core.so"
+    run "Rust document-session integration" "$PYTHON" spike/test_document_session_integration.py --launch
     # Fixed source target: neither a stale staged product binary nor a private build cache.
     AUTOMATION_TARGET="$ROOT/native/automation_core/target"
     AUTOMATION_SERVER="$AUTOMATION_TARGET/debug/narwhal-automation"
@@ -252,6 +258,8 @@ PURE_SUITES=(
     spike/test_aliases.py
     spike/test_document_clipboard.py
     spike/test_document_user_text.py
+    spike/test_set_document_user_text.py
+    spike/test_get_document_user_text.py
     spike/review_v4/test_document_import.py
     spike/test_sessionlog.py
     spike/test_bugreport.py

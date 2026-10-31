@@ -1135,19 +1135,13 @@ class NarwhalContext:
 
     def undo_last(self):
         """Step back one record. Returns its name, or None if there is nothing."""
-        record = self.undo.undo(self.model.snapshot())
-        if record is None:
-            return None
-        self._restore_document(record.before)
-        return record.name
+        record = self.undo.undo(self.model.snapshot(), restore=self._restore_document)
+        return record.name if record is not None else None
 
     def redo_last(self):
         """Step forward one record. Returns its name, or None."""
-        record = self.undo.redo(self.model.snapshot())
-        if record is None:
-            return None
-        self._restore_document(record.after)
-        return record.name
+        record = self.undo.redo(self.model.snapshot(), restore=self._restore_document)
+        return record.name if record is not None else None
 
     def _restore_document(self, snap):
         """Put `snap` back, rebuild the display, and keep the selection.
@@ -10104,8 +10098,8 @@ class SetDocumentUserTextCmd(Command):
     there is no object selection; the command asks for a key and then
     its value. A period-prefixed key is hidden from the Document User Text panel,
     but remains a real File3dm string. The literal value ``""`` removes an
-    existing key. Values are written directly to File3dm.Strings: no Python-only
-    document state is maintained.
+    existing key. The File3dm.Strings compatibility view routes writes through the
+    model's metadata owner; no independent Python table is maintained.
     """
 
     name = "SetDocumentUserText"
@@ -10117,21 +10111,12 @@ class SetDocumentUserTextCmd(Command):
         value = self.args[1] if len(self.args) > 1 else ""
         if not key:
             return "SetDocumentUserText: a key is required", True
-        strings = ctx.model.file.Strings
-        rows = list(strings)
-        old = next((old_value for old_key, old_value in rows if old_key == key), None)
         removing = value == '""'
-        if removing:
-            if old is None:
-                return f"SetDocumentUserText: {key!r} is unchanged", True
-            ctx.note_change(self.name)
-            strings.Delete(key)
-            return f"SetDocumentUserText: removed {key!r}", True
-        if old == value:
+        changed = ctx.model.set_document_user_text(
+            key, None if removing else value, before_change=lambda: ctx.note_change(self.name))
+        if not changed:
             return f"SetDocumentUserText: {key!r} is unchanged", True
-        ctx.note_change(self.name)
-        strings[key] = value
-        return f"SetDocumentUserText: set {key!r}", True
+        return f"SetDocumentUserText: {'removed' if removing else 'set'} {key!r}", True
 
 
 class GetUserTextCmd(Command):
@@ -10178,7 +10163,7 @@ class GetDocumentUserTextCmd(Command):
 
     from the fixed the reference CAD application help: the command retrieves the key/value
     strings written by ``SetDocumentUserText``.  The native ``File3dm.Strings``
-    table is authoritative.  Enter at the key prompt lists every row; a typed
+    compatibility view follows the metadata owner. Enter at the key prompt lists every row; a typed
     key queries exactly that row.  Period-prefixed keys are hidden from the
     Document User Text panel only, so they remain visible to both command forms.
     """
@@ -10199,12 +10184,12 @@ class GetDocumentUserTextCmd(Command):
 
     def execute(self, ctx: NarwhalContext):
         key = self.args[0] if self.args else ""
-        rows = list(ctx.model.file.Strings)
         if key:
-            value = next((value for row_key, value in rows if row_key == key), None)
+            value = ctx.model.document_user_text(key)
             if value is None:
                 return f"GetDocumentUserText: {key} not found", True
             return f"GetDocumentUserText: {key} = {value}", True
+        rows = ctx.model.document_user_text()
         if not rows:
             return "GetDocumentUserText: document has no user text", True
         return "\n".join(f"{row_key} = {value}" for row_key, value in rows), True

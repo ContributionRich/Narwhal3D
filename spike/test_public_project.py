@@ -661,10 +661,11 @@ for relative in sorted(public):
         continue
     if path.suffix.lower() in {".png", ".gif", ".svg"} or relative == "COMPATIBILITY.md":
         continue
-    text = path.read_text(encoding="utf-8", errors="ignore")
+    from audit_public_tree import legacy_scan_bytes
+    text = legacy_scan_bytes(relative, path.read_bytes()).decode('utf-8', errors='ignore')
     if legacy.search(text):
         hits.append(relative)
-check(not hits, "legacy target naming is confined to COMPATIBILITY.md", hits[:10])
+check(not hits, "legacy target naming is confined to compatibility and exact upstream attribution", hits[:10])
 artifact_suite = subprocess.run(
     [sys.executable, str(ROOT / "spike/test_document_core_artifacts.py")],
     cwd=ROOT, text=True, capture_output=True, timeout=300)

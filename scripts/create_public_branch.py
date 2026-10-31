@@ -27,7 +27,8 @@ ROOT_FILES = (
     "docs/gaps.md", "docs/github-project.md", "docs/windows-build.md", "docs/macos-build.md",
     "narwhal3d.sh", "run_tests.sh", "uishot.sh", "Build-Narwhal3D-macOS.command",
     "pyrightconfig.json", "docs/UI_DESIGNER_BUNDLE.md",
-    "docs/reviews/2026-10-30-rust-research.md",
+    "docs/reviews/2026-10-30-rust-research.md", "docs/application-core-packaging.md",
+    "docs/reviews/2026-10-31-rust-document-session.md",
         "docs/reviews/2026-10-30-agent-v3-integration.md",
 )
 LAUNCH_FILES = (
@@ -67,6 +68,7 @@ SCRIPT_FILES = (
     "scripts/collect_windows_build_info.ps1", "scripts/build_windows_preview.ps1",
     "scripts/build_brep_writer_source.sh", "scripts/verify_brep_writer.py",
     "scripts/build_document_core.py", "scripts/verify_document_core.py",
+    "scripts/check_application_core.py", "scripts/test_release_application_core.py",
     "scripts/check_pure_core.py", "scripts/build_macos_source.sh",
     "scripts/build_selection_core.py", "scripts/verify_selection_core.py",
     "scripts/narwhal_mcp.py", "scripts/validate_windows_icon.py",
@@ -200,9 +202,19 @@ TEST_FILES = (
     "spike/test_extrude_preview.py",
     "spike/test_extrude_preview_gpu.py", "spike/test_fillet_preview_latency.py",
     "spike/test_preview_responsiveness_gui.py", "spike/test_trim_box_gui.py",
+    "spike/test_document_session_abi.py", "spike/test_document_session_integration.py",
+    "spike/test_application_core_gate.py", "spike/test_application_core_source.py",
+    "spike/test_set_document_user_text.py", "spike/test_get_document_user_text.py",
     "spike/test_narwhal_document.py", "spike/test_document_core_artifacts.py",
 )
 NATIVE_FILES = (
+    "native/application_core/Cargo.toml", "native/application_core/Cargo.lock",
+    "native/application_core/README.md", "native/application_core/OPENNURBS_LICENSE",
+    "native/application_core/include/narwhal_application_core.h",
+    "native/application_core/src/lib.rs", "native/application_core/src/session.rs",
+    "native/application_core/src/table.rs", "native/application_core/src/wire.rs",
+    "native/application_core/src/ordinal_map.rs", "native/application_core/tests/protocol.rs",
+    "native/application_core/generate_ordinal.rs", "native/application_core/mutation_check.rs",
     "native/automation_core/Cargo.toml", "native/automation_core/Cargo.lock",
     "native/automation_core/src/main.rs", "native/automation_core/src/protocol.rs",
     "native/automation_core/src/lib.rs", "native/automation_core/src/json.rs",

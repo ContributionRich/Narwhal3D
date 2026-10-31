@@ -142,6 +142,37 @@ def download_wheels(source: Path, cache: Path) -> list[Path]:
     return paths
 
 
+def stage_application_core(source: Path, native_bin: Path, app: Path) -> None:
+    """The session loader uses the adjacent slot, never an optional runtime fallback."""
+    library = native_bin / "libnarwhal_application_core.dylib"
+    license_source = source / "native/application_core/OPENNURBS_LICENSE"
+    for path in (library, license_source, app / "licenses/Native-Rust-Dependencies.txt"):
+        if not path.is_file() or path.is_symlink():
+            raise ValueError(f"missing regular application-core input: {path}")
+    adjacent = app / "narwhal3d/native"
+    adjacent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(library, adjacent / library.name)
+    shutil.copy2(license_source, app / "licenses/application_core-OPENNURBS.txt")
+
+
+def verify_application_core(app: Path, python: Path) -> int:
+    library = app / "runtime/macos-arm64/bin/libnarwhal_application_core.dylib"
+    adjacent = app / "narwhal3d/native" / library.name
+    for path in (library, adjacent, app / "licenses/application_core-OPENNURBS.txt",
+                 app / "licenses/Native-Rust-Dependencies.txt"):
+        if not path.is_file() or path.is_symlink():
+            raise ValueError(f"missing regular application-core payload: {path}")
+    if sha(library) != sha(adjacent):
+        raise ValueError("application-core runtime/adjacent copies differ")
+    code = ("import ctypes,sys; lib=ctypes.CDLL(sys.argv[1]); "
+            "fn=lib.narwhal_session_abi; fn.argtypes=[]; fn.restype=ctypes.c_uint32; "
+            "print(fn())")
+    actual = run(str(python), "-I", "-B", "-c", code, str(adjacent), timeout=30).strip()
+    if actual != "1":
+        raise ValueError(f"application-core ABI must be 1, got {actual!r}")
+    return 1
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ("source", "runtime", "native", "output"):
@@ -202,6 +233,7 @@ def main() -> None:
     native_bin.mkdir(parents=True)
     for name in expected:
         shutil.copy2(native / "bin" / name, native_bin / name)
+    stage_application_core(source, native_bin, app)
     interpreters = list(runtime_app.glob("Contents/Resources/**/python/bin/python3.13"))
     if len(interpreters) != 1:
         raise ValueError("runtime lacks one bundled CPython 3.13")
@@ -243,6 +275,7 @@ def main() -> None:
     for path in (*nested, bundle):
         run("codesign", "--force", "--sign", "-", str(path))
     run("codesign", "--verify", "--deep", "--strict", str(bundle))
+    application_core_abi = verify_application_core(app, python)
     records = inventory(bundle)
     with tempfile.TemporaryDirectory(prefix="narwhal-dmg-", dir=output) as temporary:
         stage = Path(temporary)
@@ -257,6 +290,8 @@ def main() -> None:
         if inventory(mounted_app) != records:
             raise ValueError("actual DMG application inventory differs from signed staging")
         run("codesign", "--verify", "--deep", "--strict", str(mounted_app))
+        verify_application_core(mounted_app / "Contents/Resources/app",
+                                mounted_app / python.relative_to(bundle))
         banner = run(str(mounted_app / "Contents/MacOS/Narwhal3D"), env=dict(environment, NARWHAL3D_LAUNCHER_TEST="version"), timeout=60)
         if not banner.startswith("Narwhal 3D 5.2.2"):
             raise ValueError("actual DMG launcher failed its runtime version check")
@@ -267,6 +302,7 @@ def main() -> None:
     receipt = {"schema": 1, "source_revision": args.source_revision, "version": args.version,
                "sha256": digest, "size": dmg.stat().st_size, "signing": "ad-hoc, not notarized",
                "actual_dmg_verified": True, "gui_acceptance": False, "inventory": records,
+               "application_core_abi": application_core_abi,
                "python_wheels": json.loads((source / "packaging/macos/arm64-wheels.lock.json").read_text())["artifacts"],
                "runtime_overrides": {"numpy": "same-version 2.3.4 macOS14 wheel replaces incompatible macOS26 prebuild"}}
     Path(str(dmg) + ".build.json").write_text(json.dumps(receipt, indent=2) + "\n")

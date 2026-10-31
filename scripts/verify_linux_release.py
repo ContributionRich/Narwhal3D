@@ -45,12 +45,15 @@ NATIVE_COMPONENTS = (
     "libnarwhal_selection_core.so", "narwhal-converter-supervisor",
     "narwhal-cdr-multiversion", "narwhal-document-core", "narwhal-welcome",
     "libnarwhal_automation.so", "narwhal-automation",
+    "libnarwhal_application_core.so",
 )
 PACKAGED_ACCELERATORS = (
     "libnarwhal_geometry_core.so", "libnarwhal_platform_core.so",
     "libnarwhal_pure_core.so", "libnarwhal_selection_core.so",
+    "libnarwhal_application_core.so",
 )
 NATIVE_LIBRARY_ABIS = {
+    "libnarwhal_application_core.so": ("narwhal_session_abi", 1),
     "libnarwhal_automation.so": ("narwhal_workflow_abi", 1),
     "libnarwhal_cdr_core.so": ("narwhal_cdr_abi_version", 3),
     "libnarwhal_geometry_core.so": ("narwhal_geometry_core_abi_version", 4),
@@ -87,6 +90,8 @@ REQUIRED_NOTICE_PATHS = {
     "usr/lib/narwhal3d/licenses/AppImage-MIT.txt",
     "usr/lib/narwhal3d/licenses/TraceDraw-MIT.txt",
     "usr/lib/narwhal3d/licenses/TraceDraw-Rust-Dependencies.txt",
+    "usr/lib/narwhal3d/licenses/Native-Rust-Dependencies.txt",
+    "usr/lib/narwhal3d/licenses/application_core-OPENNURBS.txt",
 }
 REQUIRED_PATHS = {
     *REQUIRED_NOTICE_PATHS,
@@ -110,6 +115,8 @@ REQUIRED_PATHS = {
     "usr/lib/narwhal3d/tools/blender-patched/blender",
     "usr/lib/narwhal3d/tools/blender-patched/5.2/python/bin/python3.13",
     "usr/lib/narwhal3d/tools/blender-patched/.narwhal3d-native-runtime.json",
+    "usr/lib/narwhal3d/runtime/linux-x86_64/bin/libnarwhal_application_core.so",
+    "usr/lib/narwhal3d/narwhal3d/native/libnarwhal_application_core.so",
     "usr/lib/narwhal3d/runtime/linux-x86_64/bin/libnarwhal_automation.so",
     "usr/lib/narwhal3d/runtime/linux-x86_64/bin/narwhal-automation",
     "usr/lib/narwhal3d/runtime/linux-x86_64/bin/libnarwhal_cdr_core.so",
@@ -844,12 +851,15 @@ def self_check() -> None:
         "libnarwhal_selection_core.so", "narwhal-converter-supervisor",
         "narwhal-cdr-multiversion", "narwhal-document-core", "narwhal-welcome",
         "libnarwhal_automation.so", "narwhal-automation",
+        "libnarwhal_application_core.so",
     ):
         raise VerificationError("self-check found an incomplete native component set")
     if PACKAGED_ACCELERATORS != (
         "libnarwhal_geometry_core.so", "libnarwhal_platform_core.so",
         "libnarwhal_pure_core.so", "libnarwhal_selection_core.so",
+        "libnarwhal_application_core.so",
     ) or {name: abi for name, (_symbol, abi) in NATIVE_LIBRARY_ABIS.items()} != {
+        "libnarwhal_application_core.so": 1,
         "libnarwhal_automation.so": 1,
         "libnarwhal_cdr_core.so": 3,
         "libnarwhal_geometry_core.so": 4,
@@ -913,6 +923,8 @@ def self_check() -> None:
         "usr/lib/narwhal3d/licenses/AppImage-MIT.txt",
         "usr/lib/narwhal3d/licenses/TraceDraw-MIT.txt",
         "usr/lib/narwhal3d/licenses/TraceDraw-Rust-Dependencies.txt",
+        "usr/lib/narwhal3d/licenses/Native-Rust-Dependencies.txt",
+        "usr/lib/narwhal3d/licenses/application_core-OPENNURBS.txt",
     }
     if REQUIRED_NOTICE_PATHS != expected_notices or not expected_notices.issubset(REQUIRED_PATHS):
         raise VerificationError("self-check found an incomplete required notice set")

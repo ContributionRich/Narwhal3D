@@ -271,6 +271,7 @@ with tempfile.TemporaryDirectory(prefix="narwhal_windows_verifier_test_") as tem
             for path in verifier.REQUIRED if path != "windows-release-manifest.json"]
     verifier.validate_paths(root, base)
     check(verifier.GENERATED_PACKAGE_FILES == {
+        "narwhal3d/native/narwhal_application_core.dll",
         "narwhal3d/native/narwhal_geometry_core.dll",
         "narwhal3d/native/narwhal_platform_core.dll",
         "narwhal3d/native/narwhal_pure_core.dll",

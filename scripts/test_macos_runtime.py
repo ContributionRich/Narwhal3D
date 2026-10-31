@@ -21,9 +21,12 @@ class RuntimeTests(unittest.TestCase):
         native.require_components(receipts, {})
         with self.assertRaises(ValueError):
             native.require_components(receipts, {"converter_supervisor": "failed memory limit"})
-        del receipts["libnarwhal_worker_policy.dylib"]
-        with self.assertRaises(ValueError):
-            native.require_components(receipts, {})
+        for filename in ("libnarwhal_worker_policy.dylib", "libnarwhal_application_core.dylib"):
+            with self.subTest(missing=filename):
+                incomplete = dict(receipts)
+                del incomplete[filename]
+                with self.assertRaises(ValueError):
+                    native.require_components(incomplete, {})
 
     def test_native_tests_use_short_socket_paths_and_pinned_geometry(self):
         env = native.build_environment(Path("/work"), Path("/occt"), Path("/libs"), Path("/tmp/nw-test"))
@@ -32,12 +35,13 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(env["NARWHAL_OCCT_SOURCE_DIR"], "/occt")
         self.assertEqual(env["DYLD_LIBRARY_PATH"], "/libs")
 
-    def test_mac_helpers_include_all_eleven_current_components(self):
+    def test_mac_helpers_include_all_twelve_current_components(self):
         actual = {name for names in native.COMPONENTS.values() for name in names}
         self.assertEqual(actual, {
             "libnarwhal_pure_core.dylib", "libnarwhal_selection_core.dylib",
             "libnarwhal_cdr_core.dylib", "libnarwhal_platform_core.dylib",
             "libnarwhal_geometry_core.dylib", "libnarwhal_automation.dylib",
+            "libnarwhal_application_core.dylib",
             "narwhal-document-core", "narwhal-converter-supervisor",
             "libnarwhal_worker_policy.dylib", "narwhal-automation", "narwhal-welcome",
         })

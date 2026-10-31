@@ -772,7 +772,32 @@ exit /b %errorlevel%
 # Only the in-app ABI is portable to Windows; the external MCP server uses Unix FDs.
 $AutomationManifest = Join-Path $NarwhalSource "native\automation_core\Cargo.toml"
 Run-Native $Cmd @("/d", "/c", $CargoWrapper, "build", "--release", "--locked", "--lib", "--manifest-path", $AutomationManifest, "--target", "x86_64-pc-windows-msvc") "build in-app automation ABI with pinned Rust MSVC" $NarwhalSource
-foreach ($Crate in @("cdr_core", "cdr_multiversion", "welcome")) {
+$ApplicationInputsPath = Join-Path $Workspace "application-core-inputs.json"
+$ApplicationInputsDriver = Join-Path $Workspace "application_core_inputs.py"
+@'
+# Build/source inventory orchestration only, not application logic.
+import json
+from pathlib import Path
+import sys
+source, mode, snapshot = Path(sys.argv[1]), sys.argv[2], Path(sys.argv[3])
+sys.path.insert(0, str(source / "scripts"))
+from build_linux_native import inventory, digest
+inputs = inventory(source, "application_core")
+if mode == "before":
+    snapshot.write_text(json.dumps(inputs, sort_keys=True))
+elif mode == "after":
+    if json.loads(snapshot.read_text()) != inputs:
+        raise SystemExit("application-core source changed during build")
+    from verify_windows_release import verify_application_core_identity
+    library = Path(sys.argv[4])
+    verify_application_core_identity(library)
+    library.with_name("application-core-source.json").write_text(json.dumps(
+        {"inputs": inputs, "sha256": digest(library), "abi": 1}, sort_keys=True))
+else:
+    raise SystemExit("unknown application-core inventory mode")
+'@ | Set-Content -LiteralPath $ApplicationInputsDriver -Encoding UTF8
+Run-Native $Python @('-B', $ApplicationInputsDriver, $NarwhalSource, 'before', $ApplicationInputsPath) 'record application-core source inventory'
+foreach ($Crate in @("cdr_core", "cdr_multiversion", "welcome", "application_core")) {
     $Manifest = Join-Path $NarwhalSource "native\$Crate\Cargo.toml"
     Run-Native $Cmd @("/d", "/c", $CargoWrapper, "build", "--release", "--locked", "--manifest-path", $Manifest, "--target", "x86_64-pc-windows-msvc") "build $Crate with pinned Rust MSVC" $NarwhalSource
 }
@@ -800,6 +825,7 @@ $AdjacentNativeDirectory = Join-Path $ApplicationDirectory "narwhal3d\native"
 New-Item -ItemType Directory -Path $NativeComponentDirectory -Force | Out-Null
 New-Item -ItemType Directory -Path $AdjacentNativeDirectory -Force | Out-Null
 foreach ($Component in @(
+    @("application_core", "narwhal_application_core.dll"),
     @("cdr_core", "narwhal_cdr_core.dll"),
     @("cdr_multiversion", "narwhal-cdr-multiversion.exe"),
     @("welcome", "narwhal-welcome.exe")
@@ -807,6 +833,10 @@ foreach ($Component in @(
     $Built = Join-Path $NarwhalSource "native\$($Component[0])\target\x86_64-pc-windows-msvc\release\$($Component[1])"
     Copy-Item -LiteralPath $Built -Destination (Join-Path $NativeComponentDirectory $Component[1])
 }
+$ApplicationCoreTarget = Join-Path $NativeComponentDirectory "narwhal_application_core.dll"
+Run-Native $Python @('-B', $ApplicationInputsDriver, $NarwhalSource, 'after', $ApplicationInputsPath, $ApplicationCoreTarget) 'verify application-core source and ABI inventory'
+Copy-Item -LiteralPath $ApplicationCoreTarget -Destination (Join-Path $AdjacentNativeDirectory "narwhal_application_core.dll")
+Copy-Item -LiteralPath (Join-Path $NarwhalSource "native\application_core\OPENNURBS_LICENSE") -Destination (Join-Path $ApplicationDirectory "licenses\application_core-OPENNURBS.txt")
 $AutomationSource = Join-Path $NarwhalSource "native\automation_core\target\x86_64-pc-windows-msvc\release\narwhal_automation.dll"
 $AutomationTarget = Join-Path $NativeComponentDirectory "narwhal_automation.dll"
 Copy-Item -LiteralPath $AutomationSource -Destination $AutomationTarget
@@ -929,6 +959,14 @@ from narwhal3d import native_geometry, native_platform, native_pure
 from narwhal3d.kernel import occt_backend
 
 native = app / "narwhal3d" / "native"
+application = ctypes.CDLL(str(native / "narwhal_application_core.dll"))
+application.narwhal_session_abi.argtypes = []
+application.narwhal_session_abi.restype = ctypes.c_uint32
+if application.narwhal_session_abi() != 1:
+    raise SystemExit("application-core ABI mismatch")
+getattr(application, "narwhal_session_json")
+if (native / "narwhal_application_core.dll").read_bytes() != (app / "runtime/windows-x86_64/bin/narwhal_application_core.dll").read_bytes():
+    raise SystemExit("application-core runtime/adjacent copies differ")
 platform = ctypes.WinDLL(str(native / "narwhal_platform_core.dll"))
 platform.narwhal_platform_core_abi_version.restype = ctypes.c_uint32
 if platform.narwhal_platform_core_abi_version() != 1:
@@ -955,7 +993,7 @@ shape = occt_backend.shape_from_bytes(moved.data)
 if not occt_backend.is_airtight(shape):
     raise SystemExit("packaged geometry-core move is not airtight")
 print(json.dumps({"geometry_abi": 4, "geometry_move": "airtight",
-                  "platform_abi": 1, "grid_snap": list(result)}, sort_keys=True))
+                  "application_abi": 1, "platform_abi": 1, "grid_snap": list(result)}, sort_keys=True))
 '@ | Set-Content -LiteralPath $NativeProbePath -Encoding UTF8
 Run-Native (Join-Path $RuntimeDirectory "blender.exe") @(
     "-b", "--factory-startup", "--python-exit-code", "1", "--python",

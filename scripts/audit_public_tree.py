@@ -78,6 +78,15 @@ REQUIRED = {
     "licenses/rhino3dm-MIT.txt",
     "native/brep_writer/main.cpp",
     "native/brep_writer/README.md",
+    "native/application_core/Cargo.toml", "native/application_core/Cargo.lock",
+    "native/application_core/README.md", "native/application_core/OPENNURBS_LICENSE",
+    "native/application_core/include/narwhal_application_core.h",
+    "native/application_core/src/lib.rs", "native/application_core/src/session.rs",
+    "native/application_core/src/table.rs", "native/application_core/src/wire.rs",
+    "native/application_core/src/ordinal_map.rs", "native/application_core/tests/protocol.rs",
+    "native/application_core/generate_ordinal.rs", "native/application_core/mutation_check.rs",
+    "narwhal3d/native_document_session.py", "narwhal3d/document_metadata.py",
+    "scripts/check_application_core.py", "scripts/test_release_application_core.py",
     "native/document_core/Cargo.toml",
     "native/document_core/README.md",
     "native/document_core/src/main.rs",
@@ -571,6 +580,20 @@ def required_public_paths(entries: dict[str, tuple[str, bytes]]) -> set[str]:
     return required
 
 
+def legacy_scan_bytes(path: str, blob: bytes) -> bytes:
+    """Ignore only exact required upstream trademark sentences, never file contents."""
+    folded = blob.lower()
+    if path in {'native/application_core/src/ordinal_map.rs',
+                'native/application_core/generate_ordinal.rs'}:
+        sentence = (b'OpenNURBS, Rhi' + b'noceros, and Rhi' +
+                    b'no3D are registered trademarks of Robert').lower()
+        folded = folded.replace(sentence, b'upstream trademark attribution')
+    if path == 'native/application_core/OPENNURBS_LICENSE':
+        sentence = (b'Rhi' + b'noceros is a registered trademark of Robert McNeel & Associates.').lower()
+        folded = folded.replace(sentence, b'upstream trademark attribution')
+    return folded
+
+
 def audit_entries(entries: dict[str, tuple[str, bytes]], require_manifest: bool = True) -> list[str]:
     problems: list[str] = []
     paths = set(entries)
@@ -614,7 +637,7 @@ def audit_entries(entries: dict[str, tuple[str, bytes]], require_manifest: bool 
                     problems.append(
                         f"{path}: contains forbidden development marker {match.group(0)!r}")
             if path not in LEGACY_TEXT_ALLOWED:
-                match = LEGACY_TEXT_PATTERN.search(folded)
+                match = LEGACY_TEXT_PATTERN.search(legacy_scan_bytes(path, blob))
                 if match:
                     problems.append(
                         f"{path}: contains forbidden legacy product marker {match.group(0)!r}")
