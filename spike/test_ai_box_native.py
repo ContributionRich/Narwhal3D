@@ -14,7 +14,7 @@ CRATE = ROOT / 'native/automation_core'
 MUTATIONS = (
     ('explicit_approval', 'if !accepted {', 'if false {'),
     ('exact_context', 'if proposal.expected != current {', 'if false {'),
-    ('exact_proposal', 'if self.pending.as_ref() != Some(&proposal) {', 'if false {'),
+    ('exact_proposal', 'if self.pending.as_ref() != Some(proposal) {', 'if false {'),
     ('positive_size', '*v <= 0.0', '*v < 0.0'),
 )
 

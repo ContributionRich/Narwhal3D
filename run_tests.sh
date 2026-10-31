@@ -94,6 +94,9 @@ if command -v cargo >/dev/null 2>&1; then
     run "AI disabled primitive prototype policy" "$PYTHON" spike/test_ai_primitives.py --library "$AUTOMATION_LIBRARY"
     run "AI sustained lifecycle" "$PYTHON" spike/test_ai_sustained_lifecycle.py --library "$AUTOMATION_LIBRARY"
     run "AI UI orchestration" "$PYTHON" spike/test_ai_ui_workflow.py --library "$AUTOMATION_LIBRARY"
+    AI_REVIEW_TARGET="$HOME/.cache/narwhal3d-ai-review-gate"
+    run "AI accepted-review native fixture" "$PYTHON" spike/test_ai_accepted_review_native.py --target-dir "$AI_REVIEW_TARGET" --build --self-test
+    run "AI accepted-review actual publisher" "$PYTHON" spike/test_ai_v5_publisher.py --target-dir "$AI_REVIEW_TARGET"
     run "automation source live bridge (background Blender)" timeout --kill-after=5s 120s "$PYTHON" \
         spike/test_automation_mcp.py --server "$AUTOMATION_SERVER" --live "$BLENDER"
 else

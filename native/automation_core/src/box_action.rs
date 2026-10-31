@@ -98,15 +98,19 @@ impl Gate {
         self.pending = Some(proposal.clone());
         Ok(proposal)
     }
+    pub(crate) fn check_pending(&self, proposal: &Proposal) -> Result<(), &'static str> {
+        if self.pending.as_ref() != Some(proposal) {
+            return Err("box_approval_mismatch");
+        }
+        Ok(())
+    }
     pub fn decide(
         &mut self,
         proposal: Proposal,
         current: Context,
         accepted: bool,
     ) -> Result<Value, &'static str> {
-        if self.pending.as_ref() != Some(&proposal) {
-            return Err("box_approval_mismatch");
-        }
+        self.check_pending(&proposal)?;
         // Every decision spends this proposal, including rejection/stale state.
         self.pending = None;
         if !accepted {

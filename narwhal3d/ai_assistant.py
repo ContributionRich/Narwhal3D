@@ -756,6 +756,43 @@ class WorkflowSession:
         return self._exchange({'op':'take_primitive_prototype','proposal':proposal,
             'binding':self._binding(document_context),'current':current})
 
+    def _accepted_review_exchange(self, data):
+        """Trusted-host adapter; never a provider tool or automatic approval."""
+        try:
+            return self._exchange(data)
+        except WorkflowUnavailable as exc:
+            if str(exc) == 'invalid_request':
+                raise WorkflowUnavailable('accepted_review_unavailable') from exc
+            raise
+
+    def stage_accepted_review(self, owner, call_id, document_context, context):
+        return self._accepted_review_exchange({'op': 'stage_accepted_review',
+            'owner': owner, 'call_id': call_id, 'binding': self._binding(document_context),
+            'context': context})
+
+    def accepted_review_state(self, owner, call_id, document_context):
+        return self._accepted_review_exchange({'op': 'accepted_review_state',
+            'owner': owner, 'call_id': call_id, 'binding': self._binding(document_context)})
+
+    def decide_accepted_review(self, token, action, document_context, current, *, accepted=False):
+        """A separate human decision; metadata consent is not action approval."""
+        return self._accepted_review_exchange({'op': 'decide_accepted_review',
+            'token': token, 'action': action, 'binding': self._binding(document_context),
+            'current': current, 'allow': accepted})
+
+    def consume_accepted_review(self, token, document_context, current):
+        return self._accepted_review_exchange({'op': 'consume_accepted_review',
+            'token': token, 'binding': self._binding(document_context), 'current': current})
+
+    def record_review_publication(self, token, outcome, document_context):
+        """Actual publisher callback only, not provider/read-tool supplied facts."""
+        return self._accepted_review_exchange({'op': 'record_review_publication',
+            'token': token, 'binding': self._binding(document_context), 'outcome': outcome})
+
+    def accepted_review_result(self, owner, call_id, document_context):
+        return self._accepted_review_exchange({'op': 'accepted_review_result',
+            'owner': owner, 'call_id': call_id, 'binding': self._binding(document_context)})
+
     def validate_plan(self, plan):
         """Native schema validation only; never approval, execution or verification."""
         return self._exchange({"op": "validate_plan", "plan": plan})

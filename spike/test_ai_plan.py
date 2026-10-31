@@ -72,6 +72,23 @@ class PlanTests(unittest.TestCase):
         self.assertFalse(out['approved'])
         self.assertFalse(out['executed'])
 
+    def test_v4_lofted_enclosure_keeps_closure_and_wall_thickness_unresolved(self):
+        self.inspect()
+        data=plan(
+            step('skin','loft',{'style':'Normal'},'surface',inputs=[{'kind':'object','id':f'00000000-0000-0000-0000-{i:012x}'} for i in (1,2)]),
+            step('shell','unsupported',{'need':'Exact closure and wall-thickness construction are not integrated; verify airtightness and thickness before manufacturing'},
+                 inputs=[{'kind':'step','id':'skin'}],dependencies=['skin']))
+        data['goal']='Lofted enclosure from two existing section curves'
+        data['questions']=['What wall thickness should the enclosure have, in Millimeters?']
+        out=self.preflight(data)
+        self.assertEqual([row['operation'] for row in out['steps']],['loft','unsupported'])
+        self.assertEqual(len(out['questions']),1)
+        self.assertIn('wall thickness',out['questions'][0])
+        self.assertIn('not integrated',out['steps'][1]['unsupported_need'])
+        self.assertTrue(all(not row['execution_available'] and not row['can_execute_now'] for row in out['steps']))
+        self.assertTrue(all(not row['verification_checked'] for row in out['steps']))
+        self.assertEqual(out['created_object_ids'],[])
+
     def test_schema_is_not_execution_or_approval(self):
         original=plan()
         result=self.w.validate_plan(original)

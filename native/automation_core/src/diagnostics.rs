@@ -16,6 +16,9 @@ pub fn annotate(mut value: Value) -> Value {
 }
 pub fn classify(code: &str) -> (&'static str, &'static str) {
     match code {
+        "authoritative_identity_unavailable" | "authoritative_selection_unavailable" => {
+            ("unavailable_evidence", "choose_document_only_scope")
+        }
         "stale" | "stale_preconditions" | "box_context_stale" | "request_scope_changed" => {
             ("stale_context", "refresh_scope")
         }

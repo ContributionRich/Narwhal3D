@@ -29,6 +29,7 @@ ROOT_FILES = (
     "pyrightconfig.json", "docs/UI_DESIGNER_BUNDLE.md",
     "docs/reviews/2026-10-30-rust-research.md", "docs/application-core-packaging.md",
     "docs/reviews/2026-10-31-rust-document-session.md",
+    "docs/reviews/2026-10-31-coordinated-portfolio.md",
         "docs/reviews/2026-10-30-agent-v3-integration.md",
 )
 LAUNCH_FILES = (
@@ -180,6 +181,9 @@ TEST_FILES = (
     "spike/test_ai_responses.py", "spike/test_ai_responses_native.py", "spike/test_ai_responses_settings.py",
     "spike/test_ai_cad.py", "spike/test_ai_cad_native.py",
     "spike/test_ai_box.py", "spike/test_ai_box_native.py",
+    "spike/test_ai_accepted_review.py", "spike/test_ai_accepted_review_native.py",
+    "spike/test_ai_v4_compatibility.py", "spike/test_ai_v4_native.py",
+    "spike/test_ai_v5_publisher.py", "spike/test_ai_v6_review.py",
         "spike/test_ai_plan.py", "spike/test_ai_plan_native.py",
         "spike/test_ai_primitives.py", "spike/test_ai_primitives_native.py",
         "spike/test_ai_sustained_compatibility.py", "spike/test_ai_sustained_lifecycle.py",
@@ -220,6 +224,8 @@ NATIVE_FILES = (
     "native/automation_core/src/lib.rs", "native/automation_core/src/json.rs",
     "native/automation_core/src/provider.rs", "native/automation_core/src/conversation.rs",
     "native/automation_core/src/catalog.rs", "native/automation_core/src/actions.rs",
+    "native/automation_core/src/approval_lifecycle.rs", "native/automation_core/src/evidence_contract.rs",
+    "native/automation_core/src/plan_review.rs",
         "native/automation_core/src/diagnostics.rs", "native/automation_core/src/plan.rs",
         "native/automation_core/src/plan_schema.rs", "native/automation_core/src/primitives.rs",
         "native/automation_core/src/verification.rs",

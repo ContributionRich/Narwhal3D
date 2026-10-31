@@ -162,6 +162,34 @@ pub fn validate(call: &ToolCall) -> Result<(), &'static str> {
     validate_read(name, &call.arguments).map_err(|_| "invalid_tool_arguments")
 }
 
+/// Only Rust unit-test binaries can construct this catalog. No flag, JSON field,
+/// feature, FFI export or environment variable enables it in normal builds.
+#[cfg(test)]
+pub(crate) fn primitive_fixture_definitions() -> Vec<ToolDefinition> {
+    ["sphere", "cylinder", "cone"]
+        .iter()
+        .map(|kind| {
+            let mut parameters = crate::actions::circle_schema();
+            parameters["properties"]["radius"]["maximum"] = json!(1e6);
+            parameters["properties"]["center"]["items"] =
+                json!({"type":"number","minimum":-1e6,"maximum":1e6});
+            if *kind != "sphere" {
+                parameters["properties"]["height"] =
+                    json!({"type":"number","exclusiveMinimum":0,"maximum":1e6});
+                parameters["required"]
+                    .as_array_mut()
+                    .unwrap()
+                    .push(json!("height"));
+            }
+            ToolDefinition {
+                name: format!("narwhal_create_{kind}"),
+                description: "TEST ONLY disabled primitive fixture".into(),
+                parameters,
+            }
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

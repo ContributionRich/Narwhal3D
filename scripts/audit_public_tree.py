@@ -182,6 +182,9 @@ REQUIRED = {
     "native/automation_core/src/conversation.rs",
     "native/automation_core/src/catalog.rs",
     "native/automation_core/src/actions.rs",
+    "native/automation_core/src/approval_lifecycle.rs",
+    "native/automation_core/src/evidence_contract.rs",
+    "native/automation_core/src/plan_review.rs",
     "native/automation_core/src/diagnostics.rs",
     "native/automation_core/src/plan.rs",
     "native/automation_core/src/plan_schema.rs",
@@ -623,10 +626,16 @@ def audit_entries(entries: dict[str, tuple[str, bytes]], require_manifest: bool 
         if path not in PROVENANCE_SCAN_EXEMPT:
             provenance = folded
             if path in {"native/automation_core/src/conversation.rs",
-                        "native/automation_core/src/primitives.rs"}:
+                        "native/automation_core/src/primitives.rs",
+                        "native/automation_core/src/approval_lifecycle.rs",
+                        "native/automation_core/src/plan_review.rs"}:
                 # A typed request-token field/parameter is code, not private
                 # attribution. Keep comments, strings and secret scans intact.
                 provenance = re.sub(rb"(?m)^[ \t]*(?:pub )?owner: &?token,[ \t]*$", b"", folded)
+                provenance = re.sub(rb"(?m)^([ \t]*let )owner: token(?=\s*=)", rb"\1request_token", provenance)
+                provenance = re.sub(rb'(?m)^([ \t]*(?:pub(?:\(crate\))? )?fn [a-z_]+\([^"\n]*?)owner: (&?token)(?=[,)])',
+                                    rb'\1request_token: \2', provenance)
+                provenance = re.sub(rb"(?m)^[ \t]*owner: token\.owner,[ \t]*$", b"", provenance)
             for marker in FORBIDDEN_TEXT:
                 if marker in provenance:
                     problems.append(
@@ -681,6 +690,9 @@ def self_check() -> None:
         "100644", b"pub struct Proposal {\n    pub owner: Token,\n}\n")
     safe["native/automation_core/src/conversation.rs"] = (
         "100644", b"fn scope(\n    owner: &Token,\n) {}\n")
+    safe["native/automation_core/src/approval_lifecycle.rs"] = (
+        "100644", b"pub(crate) fn get(&self, owner: &Token, call_id: &str) {}\n"
+        b"    let owner: Token = parse(\"public\");\n    owner: token.owner,\n")
     if audit_entries(safe):
         raise AuditError("self-check rejected a safe synthetic manifest")
     cases = (

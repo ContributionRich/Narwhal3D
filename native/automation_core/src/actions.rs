@@ -174,19 +174,25 @@ impl ActionGate {
         )
     }
 
-    pub fn review(
-        &mut self,
-        proposal: Proposal,
-        current: Option<Preconditions>,
-        accepted: bool,
-    ) -> Result<Value, &'static str> {
-        let pending = self.pending.as_mut().ok_or("no_proposal")?;
+    pub(crate) fn check_pending(&self, proposal: Proposal) -> Result<(), &'static str> {
+        let pending = self.pending.as_ref().ok_or("no_proposal")?;
         if pending.proposal != proposal {
             return Err("approval_mismatch");
         }
         if pending.approved || pending.spent {
             return Err("approval_replay");
         }
+        Ok(())
+    }
+
+    pub fn review(
+        &mut self,
+        proposal: Proposal,
+        current: Option<Preconditions>,
+        accepted: bool,
+    ) -> Result<Value, &'static str> {
+        self.check_pending(proposal)?;
+        let pending = self.pending.as_mut().unwrap();
         if !accepted {
             self.clear();
             return Ok(json!({"status":"rejected","dispatch_enabled":false}));

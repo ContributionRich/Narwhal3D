@@ -11,8 +11,22 @@ pub struct Plan {
     pub goal: String,
     pub units: String,
     pub intent: Intent,
+    #[serde(default, skip_serializing_if = "ScopeRequirement::is_document")]
+    pub scope_requirement: ScopeRequirement,
     pub questions: Vec<String>,
     pub steps: Vec<Step>,
+}
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum ScopeRequirement {
+    #[default]
+    DocumentContext,
+    CurrentSelection,
+}
+impl ScopeRequirement {
+    fn is_document(&self) -> bool {
+        *self == Self::DocumentContext
+    }
 }
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
@@ -129,6 +143,37 @@ fn identifier(s: &str) -> bool {
 fn point(p: &[f64; 3]) -> bool {
     p.iter().all(|x| x.is_finite() && x.abs() <= 1e6)
 }
+// MEASURED source: narwhal3d/units.py UNIT_MEMBERS/UNIT_SCALE_MM. Membership
+// only: no conversion, guessed custom scale, or interpretation of None/Unset.
+pub(crate) fn fixed_scale_unit(name: &str) -> bool {
+    matches!(
+        name,
+        "Angstroms"
+            | "Nanometers"
+            | "Microns"
+            | "Millimeters"
+            | "Centimeters"
+            | "Decimeters"
+            | "Meters"
+            | "Dekameters"
+            | "Hectometers"
+            | "Kilometers"
+            | "Megameters"
+            | "Gigameters"
+            | "Microinches"
+            | "Mils"
+            | "Inches"
+            | "Feet"
+            | "Yards"
+            | "Miles"
+            | "PrinterPoints"
+            | "PrinterPicas"
+            | "NauticalMiles"
+            | "AstronomicalUnits"
+            | "LightYears"
+            | "Parsecs"
+    )
+}
 fn positive(x: f64) -> bool {
     x.is_finite() && x > 0. && x <= 1e6
 }
@@ -217,7 +262,15 @@ impl Plan {
                     return Err("plan_dependency");
                 }
             }
+            let mut inputs = std::collections::BTreeSet::new();
             for input in &step.inputs {
+                let key = match input {
+                    InputRef::Object(id) => format!("object:{}", id.to_ascii_lowercase()),
+                    InputRef::Step(id) => format!("step:{id}"),
+                };
+                if !inputs.insert(key) {
+                    return Err("plan_duplicate_input");
+                }
                 match input {
                     InputRef::Object(id) if !catalog::uuid(id) => return Err("plan_object_id"),
                     InputRef::Step(id) if !dependencies.contains(id) => {
@@ -401,11 +454,161 @@ impl Evidence {
         }
     }
 }
+#[cfg(test)]
+mod v4_tests {
+    use super::*;
+    pub(super) fn read_plan() -> Plan {
+        serde_json::from_value(json!({"version":1,"goal":"Advice unrelated to selection","units":"Millimeters","intent":"advice","questions":[],
+            "steps":[{"id":"read","depends_on":[],"inputs":[],"action":{"operation":"read","arguments":{"tool":"narwhal.workspace","arguments":{}}},
+            "expected":{"kind":"metadata","count":1},"verify":[{"kind":"object_count","count":1}]}]})).unwrap()
+    }
+    #[test]
+    fn v4_a22_requested_predicates_are_not_supported_measurements() {
+        let mut plan = read_plan();
+        plan.intent = Intent::Manufacturable;
+        plan.steps[0].action = Action::Box(BoxArgs {
+            origin: [0.; 3],
+            size: [2.; 3],
+        });
+        plan.steps[0].expected.kind = OutputKind::Solid;
+        plan.steps[0].verify = vec![
+            Predicate::ObjectCount { count: 1 },
+            Predicate::ExactGeometry,
+            Predicate::Airtight,
+            Predicate::Volume {
+                expected: 8.,
+                relative_tolerance: 0.001,
+            },
+            Predicate::Bounds {
+                min: [0.; 3],
+                max: [2.; 3],
+            },
+        ];
+        let out = plan.preflight(&Evidence::default()).unwrap();
+        assert_eq!(out["steps"][0]["verification_checked"], false);
+        assert_eq!(out["steps"][0]["verification_available"], false);
+        assert_eq!(
+            out["steps"][0]["verification_requirements"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
+        let mut surface = read_plan();
+        surface.steps[0].action = Action::Unsupported {
+            need: "surface continuity check".into(),
+        };
+        surface.steps[0].expected.kind = OutputKind::Surface;
+        surface.steps[0].verify = vec![Predicate::Continuity { order: 2 }];
+        let out = surface.preflight(&Evidence::default()).unwrap();
+        assert_eq!(
+            out["steps"][0]["verification_requirements"],
+            json!(["bounded_kernel_continuity_and_revision"])
+        );
+        assert_eq!(out["verification_status"], "not_performed");
+    }
+    #[test]
+    fn v4_a21_units_and_output_intent_are_not_guessed() {
+        let mut plan = read_plan();
+        plan.steps[0].action = Action::Box(BoxArgs {
+            origin: [0.; 3],
+            size: [2.; 3],
+        });
+        plan.steps[0].expected.kind = OutputKind::Solid;
+        plan.steps[0].verify = vec![Predicate::ExactGeometry, Predicate::Airtight];
+        let mut evidence = Evidence {
+            units: Some("Millimeters".into()),
+            idle: Some(true),
+            layer_available: Some(true),
+            ..Evidence::default()
+        };
+        for name in ["None", "Unset", "CustomUnits", "invented_unit"] {
+            plan.units = name.into();
+            evidence.units = Some(name.into());
+            let out = plan.preflight(&evidence).unwrap();
+            assert!(
+                out["steps"][0]["blockers"]
+                    .as_array()
+                    .unwrap()
+                    .contains(&json!("unit_scale_unavailable"))
+            );
+        }
+        plan.units = "Inches".into();
+        evidence.units = Some("Millimeters".into());
+        let out = plan.preflight(&evidence).unwrap();
+        assert!(
+            out["steps"][0]["blockers"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("workspace_units_missing_or_changed"))
+        );
+        assert!(
+            out["steps"][0]["blockers"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("geometry_intent_requires_clarification"))
+        );
+        assert_eq!(
+            serde_json::to_value(&plan.steps[0].action).unwrap()["arguments"]["size"],
+            json!([2.0, 2.0, 2.0])
+        );
+        assert!(read_plan().preflight(&Evidence::default()).is_ok());
+    }
+    #[test]
+    fn v4_a20_duplicate_inputs_and_unsupported_upstream_are_blocked() {
+        let mut plan = read_plan();
+        plan.steps[0].id = "missing".into();
+        plan.steps[0].action = Action::Unsupported {
+            need: "Missing exact surfacing executor".into(),
+        };
+        plan.steps[0].expected.kind = OutputKind::Solid;
+        plan.steps[0].verify = vec![Predicate::ExactGeometry, Predicate::Airtight];
+        let mut downstream = plan.steps[0].clone();
+        downstream.id = "box".into();
+        downstream.action = Action::Box(BoxArgs {
+            origin: [0.; 3],
+            size: [2.; 3],
+        });
+        downstream.depends_on = vec!["missing".into()];
+        downstream.inputs = vec![InputRef::Step("missing".into())];
+        plan.steps.push(downstream);
+        let out = plan.preflight(&Evidence::default()).unwrap();
+        assert_eq!(
+            out["steps"][1]["execution_available"], false,
+            "unsupported upstream cannot produce usable input"
+        );
+        assert_eq!(out["steps"][1]["executor_available"], true);
+        plan.steps[1].inputs.push(InputRef::Step("missing".into()));
+        assert_eq!(plan.validate().unwrap_err(), "plan_duplicate_input");
+    }
+    #[test]
+    fn v4_a16_missing_selection_identity_refuses_only_dependent_plan() {
+        let mut plan = read_plan();
+        assert!(plan.preflight(&Evidence::default()).is_ok());
+        plan.scope_requirement = ScopeRequirement::CurrentSelection;
+        assert_eq!(
+            plan.preflight(&Evidence::default()).unwrap_err(),
+            "authoritative_selection_unavailable"
+        );
+        plan.scope_requirement = ScopeRequirement::DocumentContext;
+        assert!(plan.preflight(&Evidence::default()).is_ok());
+        assert!(
+            !crate::plan_schema::schema()["required"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("scope_requirement"))
+        );
+    }
+}
 impl Plan {
     pub fn preflight(&self, evidence: &Evidence) -> Result<Value, &'static str> {
         self.validate()?;
+        if self.scope_requirement == ScopeRequirement::CurrentSelection {
+            return Err("authoritative_selection_unavailable");
+        }
         let catalog = crate::actions::operations();
         let mut steps = vec![];
+        let mut upstream_blocked = BTreeMap::new();
         for step in &self.steps {
             let operation = step.action.operation();
             let available =
@@ -413,11 +616,31 @@ impl Plan {
                     || catalog["operations"].as_array().unwrap().iter().any(|row| {
                         row["operation"] == operation && row["execution_available"] == true
                     });
+            let blocked_dependency = step
+                .depends_on
+                .iter()
+                .any(|id| upstream_blocked.get(id).copied().unwrap_or(true));
+            let planned_inputs = step
+                .inputs
+                .iter()
+                .any(|input| matches!(input, InputRef::Step(_)));
             let mut blockers: Vec<&str> = vec![];
+            if blocked_dependency {
+                blockers.push("upstream_step_blocked");
+            }
+            if planned_inputs {
+                blockers.push("planned_outputs_not_available");
+            }
             if !available {
                 blockers.push("executor_not_integrated");
             }
             if !matches!(step.action, Action::Read { .. }) {
+                if !fixed_scale_unit(&self.units) {
+                    blockers.push("unit_scale_unavailable");
+                }
+                if self.intent == Intent::Advice {
+                    blockers.push("geometry_intent_requires_clarification");
+                }
                 if evidence.units.as_deref() != Some(self.units.as_str()) {
                     blockers.push("workspace_units_missing_or_changed");
                 }
@@ -445,14 +668,26 @@ impl Plan {
             }
             blockers.sort_unstable();
             blockers.dedup();
+            upstream_blocked.insert(step.id.clone(), !available || !blockers.is_empty());
+            let requirements: std::collections::BTreeSet<_> = step
+                .verify
+                .iter()
+                .map(|predicate| match predicate {
+                    Predicate::ObjectCount { .. } => "fresh_object_ids_and_authoritative_revision",
+                    Predicate::Continuity { .. } => "bounded_kernel_continuity_and_revision",
+                    _ => "bounded_authoritative_geometry_and_revision",
+                })
+                .collect();
             steps.push(json!({"id":step.id,"operation":operation,"depends_on":step.depends_on,
                 "expected":step.expected,"verification_predicates":step.verify,
-                "execution_available":available,"executed":false,"blockers":blockers,
+                                "verification_requirements":requirements,"verification_available":false,"verification_checked":false,
+                "executor_available":available,"execution_available":available && !blocked_dependency,"dataflow_ready":!blocked_dependency && !planned_inputs,
+                                "can_execute_now":false,"executed":false,"blockers":blockers,
                 "unsupported_need":if let Action::Unsupported{need}=&step.action {Some(need)} else {None}}));
         }
         let unavailable = steps
             .iter()
-            .filter(|step| step["execution_available"] == false)
+            .filter(|step| step["executor_available"] == false)
             .count();
         let summary = format!(
             "Plan only: {} steps, {unavailable} without live executors. No geometry created or verified. Resolve stated blockers; each available action still needs its own explicit approval.",

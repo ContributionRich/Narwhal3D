@@ -68,9 +68,12 @@ pub fn schema() -> Value {
         "action":{"oneOf":actions},"expected":object(json!({"kind":choice(json!(["metadata","curve","surface","solid"])),"count":count})),
         "verify":array(json!({"oneOf":predicates}),1,8)}),
     );
-    object(
+    let mut schema = object(
         json!({"version":{"const":1},"goal":text(512),"units":text(64),
         "intent":choice(json!(["unspecified","advice","visual_study","manufacturable"])),
         "questions":array(text(256),0,4),"steps":array(step,1,16)}),
-    )
+    );
+    schema["properties"]["scope_requirement"] =
+        choice(json!(["document_context", "current_selection"]));
+    schema
 }

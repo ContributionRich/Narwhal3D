@@ -29,7 +29,22 @@ pub enum Arguments {
     },
 }
 impl Arguments {
-    fn validate(&self, tolerance: f64) -> Result<(), &'static str> {
+    pub(crate) fn from_accepted_call(
+        call: &crate::provider::ToolCall,
+    ) -> Result<Self, &'static str> {
+        let operation = match call.name.as_str() {
+            "narwhal_create_sphere" => "sphere",
+            "narwhal_create_cylinder" => "cylinder",
+            "narwhal_create_cone" => "cone",
+            _ => return Err("unsupported_tool"),
+        };
+        let args: Self =
+            serde_json::from_value(json!({"operation":operation,"arguments":call.arguments}))
+                .map_err(|_| "invalid_primitive_arguments")?;
+        args.validate(0.)?;
+        Ok(args)
+    }
+    pub(crate) fn validate(&self, tolerance: f64) -> Result<(), &'static str> {
         let (center, radius, height) = match self {
             Self::Sphere { center, radius } => (center, radius, None),
             Self::Cylinder {
@@ -134,7 +149,7 @@ pub struct Context {
     pub undo_next_serial: u64,
 }
 impl Context {
-    fn validate(&self) -> Result<(), &'static str> {
+    pub(crate) fn validate(&self) -> Result<(), &'static str> {
         self.append.validate()?;
         if self.undo_next_serial == 0 || self.undo_top_serial >= self.undo_next_serial {
             return Err("primitive_undo_state");

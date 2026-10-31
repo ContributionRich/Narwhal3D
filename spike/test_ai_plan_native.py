@@ -9,6 +9,7 @@ import tempfile
 from test_automation_native import ROOT, CRATE, checked, compile_crate
 
 SCHEMA_MUTATIONS = [
+    ('loft_closure_blocker', 'Some(need)', 'Some(&self.goal)', 'test_v4_lofted_enclosure_keeps_closure_and_wall_thickness_unresolved'),
     ('dependencies', 'if !prior.contains_key(dependency) || !dependencies.insert(dependency)',
      'if !dependencies.insert(dependency)', 'test_dependencies_are_ordered_unique_and_typed'),
     ('manufacturing', 'self.intent == Intent::Manufacturable',

@@ -139,6 +139,7 @@ impl Evidence {
             json!({"status":"verification_incomplete","call_id":input.call_id,"object_id":input.object_id,
             "creation_receipt_verified":confirmed,"post_action_object_observed":observed,
             "current_geometry_verified":false,"verified":false,"reason":reason,
+                        "evidence_stages":crate::evidence_contract::verification_stages(confirmed,observed),
             "remaining":["fresh_authoritative_geometry_measurement_required","authoritative_content_revision_unavailable"],
             "summary":"A creation receipt and a later object read are not proof of current dimensions, topology or manufacturability."}),
         )

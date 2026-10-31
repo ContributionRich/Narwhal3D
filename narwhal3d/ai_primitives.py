@@ -23,15 +23,50 @@ def publish_prototype(app, workflow, proposal, document_session, scope_check):
     cannot reuse the approval. Existing guarded publication rolls back only this
     object's bindings/allocations and retains unrelated external edits.
     """
-    from . import bridge, kernel
-    from .kernel import occt_backend as occt
     ai_assistant.WorkflowSession._main_thread()
     scope_check()
-    model, file, ctx = app.model, app.model.file, app.ctx
     current = context(app, document_session)
     consumed = workflow.take_primitive_prototype(proposal, document_session, current)
     if consumed.get('status') != 'primitive_prototype_consumed':
         raise ai_assistant.WorkflowUnavailable('primitive_approval_required')
+    return _publish_consumed(app, workflow, consumed, document_session, scope_check, {})
+
+
+def publish_accepted_review(app, workflow, token, document_session, scope_check):
+    """Disabled integration path: consume a real accepted-call review, then publish.
+
+    The publisher obtains fresh one-use authority itself; callers cannot supply a
+    cached consumed action. Return the native canonical result unchanged, including
+    unknown outcomes. This function does not enable any model tool or approve it.
+    """
+    ai_assistant.WorkflowSession._main_thread()
+    scope_check()
+    consumed = workflow.consume_accepted_review(token, document_session, context(app, document_session))
+    if consumed.get('status') != 'review_consumed' or consumed.get('token') != token:
+        raise ai_assistant.WorkflowUnavailable('primitive_approval_required')
+    publication = {'attempted': False}
+    try:
+        created = _publish_consumed(app, workflow, consumed, document_session, scope_check, publication)
+        outcome = {'outcome': 'succeeded', 'object_id': created['object_id'],
+                   'units': created['units'], 'action': consumed['action'], 'geometry': created['geometry']}
+    except Exception:  # no raw exception/private metadata is sent to the provider
+        # An exception from publication/Undo does not prove that rollback completed.
+        # Do not delete unrelated objects or turn ambiguity into permission to retry.
+        outcome = ({'outcome': 'unknown', 'reason': 'rollback_unconfirmed'}
+                   if publication['attempted'] else {'outcome': 'failed', 'reason': 'before_publication'})
+    try:
+        workflow.record_review_publication(token, outcome, document_session)
+    except ai_assistant.WorkflowUnavailable:
+        # A mismatch/expiry may already have a canonical unknown outcome. Ask Rust
+        # for it; never fabricate success or retry publication if the callback failed.
+        return workflow.accepted_review_result(token['owner'], token['call_id'], document_session)['result']
+    return workflow.accepted_review_result(token['owner'], token['call_id'], document_session)['result']
+
+
+def _publish_consumed(app, workflow, consumed, document_session, scope_check, publication):
+    from . import bridge, kernel
+    from .kernel import occt_backend as occt
+    model, file, ctx = app.model, app.model.file, app.ctx
     expected, action = consumed['context'], consumed['action']
     record = 0
 
@@ -65,6 +100,7 @@ def publish_prototype(app, workflow, proposal, document_session, scope_check):
     try:
         check()
         record = ctx.undo.begin('AI ' + name + ' prototype')
+        publication['attempted'] = True
         oid, display_name = ctx.add_geometry(geom, name, publication_check=check)
     except Exception:
         kernel.discard_master_binding(key, shape)
