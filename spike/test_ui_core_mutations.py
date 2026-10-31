@@ -1,6 +1,7 @@
-"""Mutation qualification in disposable /tmp sources, never the shared worktree.
+"""Mutation qualification in disposable TMPDIR sources, never the shared worktree.
 
-Uses one compiler worker and the shared heavy lock only during compiler commands.
+--python-only uses the staged library with no compiler/native source copy.
+Full native mutation mode uses one compiler worker and the shared heavy lock.
 All logs stay in the printed evidence directory. Requires a green development .so.
 """
 import os
@@ -41,8 +42,15 @@ NATIVE = [
     ("layout_shaping", "layout_contract.rs", "Ok(kerned(s))", "Ok(s.len() as f64 * 10.0)"),
 ]
 PYTHON = [
-    ("ownership", "self._native = Editor(lib, text, multiline, max_chars)", "super().__init__(text, multiline, max_chars)"),
-    ("handover_text", "state = dict(text=n.text(),", "state = dict(text='',"),
+    ("subclass_hook", "self.set_text(text)", "TextField.set_text(self, text)"),
+    ("edit_transport_terminal", "self.failed = True\n            raise  # The native mutation", "self.failed = False\n            raise  # The native mutation"),
+    ("read_transport_terminal", "except BaseException:\n                self.failed = True\n                raise", "except BaseException:\n                self.failed = False\n                raise"),
+    ("insert_noop", "return self._native.apply(2, text=str(s))", "return False"),
+    ("selection_read", "return self.text[sel[0]:sel[1]] if sel else \"\"", "return \"\""),
+    ("host_coercion", "self._native.apply(1, text=str(text))", "self._native.apply(1, text=repr(text))"),
+    ("raw_text_normalized", "n.apply(11, text=value)", "n.apply(1, text=value)"),
+    ("raw_caret_clamped", "raise ValueError(\"direct caret/anchor must be within text\")", "value = max(0, min(value, n.state.length))"),
+    ("missing_default", "raise RuntimeError('required native UI editor core is unavailable')", "return None"),
     ("projection_cache", "if self.text_revision != s.text_revision:", "if self.text_cache is None:"),
     ("delta_count", "start, end, count = self.patch if self.patch is not None else (0, 0, s.length)", "start, end, count = (0, 0, s.length)"),
     ("size_check", "out.length > LIMIT", "False"),
@@ -52,14 +60,16 @@ PYTHON = [
 
 
 def main():
-    evidence = Path(tempfile.mkdtemp(prefix="ui-mut-", dir="/tmp"))
+    evidence = Path(tempfile.mkdtemp(prefix="ui-mut-"))
+    python_only = '--python-only' in sys.argv
     crate = evidence / "ui_core"
-    shutil.copytree(ROOT / "native/ui_core", crate)
+    if not python_only:
+        shutil.copytree(ROOT / "native/ui_core", crate, ignore=shutil.ignore_patterns('target', '__pycache__'))
     source = evidence / "narwhal3d"
     source.mkdir()
     for name in ("textfield.py", "native_textfield.py"):
         shutil.copyfile(ROOT / "narwhal3d" / name, source / name)
-    env = dict(os.environ, UI_CORE_SOURCE_DIR=str(evidence))
+    env = dict(os.environ, UI_CORE_SOURCE_DIR=str(evidence), PYTHONDONTWRITEBYTECODE='1')
     control_lib = env["NARWHAL_UI_CORE_LIBRARY"]
     target = evidence / "target"
     receipts = []
@@ -70,7 +80,7 @@ def main():
 
     test = [sys.executable, "-B", str(ROOT / "spike/test_ui_core_editor.py")]
     assert run("initial-control", test) == 0
-    for name, file, old, new in NATIVE:
+    for name, file, old, new in ([] if python_only else NATIVE):
         path = crate / "src" / file
         original = path.read_text()
         assert old in original, (name, old)
@@ -95,7 +105,8 @@ def main():
         path.write_text(original.replace(old, new, 1))
         try:
             rc = run(name + "-python", test)
-            assert rc, name + " SURVIVED"
+            log = (evidence / (name + '-python.log')).read_text()
+            assert rc and 'FAIL:' in log, name + ' needs assertion kill, not fixture error'
             receipts.append((name, "RED", rc))
         finally:
             path.write_text(original)

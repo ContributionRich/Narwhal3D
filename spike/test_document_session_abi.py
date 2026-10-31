@@ -4,7 +4,7 @@
 NARWHAL_APPLICATION_CORE=/path/to/libnarwhal_application_core.so \
     python3 -B spike/test_document_session_abi.py
 Add --mutation to run in-memory adapter mutants against these same tests.
-Without an installed/explicit library, only the actual-core tests are skipped.
+An installed/explicit ABI1 library is required; missing support fails actionably.
 On Linux the CLI re-execs with LC_ALL=C and PYTHONUTF8=1 before applying its
 memory cap: this avoids this host's 223 MiB virtual mapping of locale-archive.
 Fake callbacks copy only into real allocations; hostile sizes never reach an
@@ -127,14 +127,16 @@ class DiscoveryTests(unittest.TestCase):
                 with self.subTest(present=present), \
                         mock.patch.object(Path, "exists", lambda path: path in present), \
                         mock.patch.object(ctypes, "CDLL", return_value=FakeLibrary()) as load:
-                    result = binding.load_library()
                     if expected is None:
-                        self.assertIsNone(result)
+                        with self.assertRaisesRegex(binding.SessionUnavailable, 'NARWHAL_APPLICATION_CORE'):
+                            binding.load_library()
+                        with mock.patch.object(binding, '_call') as call:
+                            with self.assertRaises(binding.SessionUnavailable):
+                                binding.Session()
+                            call.assert_not_called()
                         load.assert_not_called()
-                        with self.assertRaises(binding.SessionUnavailable):
-                            binding.Session()
                     else:
-                        self.assertIs(result, load.return_value)
+                        self.assertIs(binding.load_library(), load.return_value)
                         load.assert_called_once_with(str(expected.resolve()))
 
     def test_explicit_is_authoritative_including_empty_bad_and_old(self):
@@ -316,8 +318,6 @@ class NativeTests(SafeCase):
     @classmethod
     def setUpClass(cls):
         cls.library = binding.load_library()
-        if cls.library is None:
-            raise unittest.SkipTest("application-core not installed; set NARWHAL_APPLICATION_CORE")
 
     def session(self, rows=()):
         session = binding.Session(rows, library=self.library)
@@ -513,6 +513,10 @@ def mutation_checks():
     original = binding
     source = MODULE.read_text()
     mutations = [
+        ('missing defaults silently accepted',
+         '    raise SessionUnavailable("application-core library not installed")\n\n\ndef _uint',
+         '    return None\n\n\ndef _uint',
+         DiscoveryTests, 'test_default_discovery_order_and_missing'),
         ("explicit path authority", "if explicit is not None:\n        if not explicit:",
          "if explicit:\n        if not explicit:",
          DiscoveryTests, "test_explicit_is_authoritative_including_empty_bad_and_old"),
@@ -536,18 +540,16 @@ def mutation_checks():
          '{"op": op, "session": self._handle, **fields}',
          TransportTests, "test_native_error_propagates_without_fallback_or_data_retention"),
     ]
-    if original.load_library() is not None:
-        mutations.extend([
-            ("snapshot cleanup", 'session.request("release_snapshot", snapshot=handle)', "pass",
-             NativeTests, "test_gc_releases_snapshot_once_while_session_is_live"),
-            ("native snapshot equality", "if self._session is other._session:", "if False:",
-             NativeTests, "test_snapshot_restore_immutable_equality_and_no_python_table"),
-            ("restore owner identity", "if not isinstance(snapshot, Snapshot) or snapshot._session is not self:",
-             "if not isinstance(snapshot, Snapshot):",
-             NativeTests, "test_cross_session_snapshot_comparison_and_identity_validation"),
-        ])
-    else:
-        print("SKIP: native snapshot mutations (application-core unavailable)")
+    original.load_library()  # Native coverage is mandatory under native-only policy.
+    mutations.extend([
+        ("snapshot cleanup", 'session.request("release_snapshot", snapshot=handle)', "pass",
+         NativeTests, "test_gc_releases_snapshot_once_while_session_is_live"),
+        ("native snapshot equality", "if self._session is other._session:", "if False:",
+         NativeTests, "test_snapshot_restore_immutable_equality_and_no_python_table"),
+        ("restore owner identity", "if not isinstance(snapshot, Snapshot) or snapshot._session is not self:",
+         "if not isinstance(snapshot, Snapshot):",
+         NativeTests, "test_cross_session_snapshot_comparison_and_identity_validation"),
+    ])
     for label, old, new, test_class, test_name in mutations:
         if source.count(old) != 1:
             raise AssertionError(f"mutation anchor is not unique: {label}")

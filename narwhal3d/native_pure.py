@@ -657,81 +657,8 @@ def _name_ptr(name):
     return arr, len(name_bytes)
 
 
-# ---------------------------------------------------------------------------
-# Numparse (Q106-08) — number / fraction / length-with-unit parser.
-#
-# A SEPARATE, self-contained resolver (not a grown element of the 13-tuple
-# above): the parser functions are per-call FFI with a value in an out-param,
-# unlike the bulk two-pass file I/O. Keeping them in their own slot means the
-# existing 13-tuple's five unpack sites and the test_native_stl/obj/dxf suites
-# (which fabricate that tuple) are untouched by this task, and Q106-09..14 can
-# each add their own resolver the same way without colliding with the tuple.
-#
-# Error contract: the native function returns a stable integer code
-# (``NP_OK == 0`` on success, a negative code on rejection) and the parsed
-# value in an out-param. The Python layer uses the native route ONLY on a
-# success code -- on any error code it runs the unchanged Python parser, so
-# the exact public error string (which embeds the input) is always produced
-# by the original code. A fallback is therefore a correctness fallback, not a
-# slower one: the measured success path never touches the regex.
-# ---------------------------------------------------------------------------
-
-_np_signature: str | None = None
-_np_binding: Any = None
+# Required number/length parser is independent of the older bulk I/O bindings.
 _native_numparse_calls = 0
-
-
-def _numparse_binding():
-    """Return ``(number, length)`` ctypes handles, or ``None``.
-
-    Both are resolved as OPTIONAL (``None`` when absent) so a library built
-    before the numparse exports keeps every existing route and only the
-    numparse route falls back to Python. ``number`` and ``length`` are always
-    returned together or ``None`` (a half-resolved binding is a load error).
-    """
-    global _np_signature, _np_binding
-    explicit = os.environ.get(_ENV_PATH)
-    signature = explicit or "<packaged>"
-    if _np_signature == signature:
-        return _np_binding
-    with _lock:
-        if _np_signature == signature:
-            return _np_binding
-        _np_signature = signature
-        _np_binding = None
-        candidates = ((Path(explicit).expanduser(),) if explicit
-                      else (_PACKAGED_LIBRARY,))
-        for path in candidates:
-            if not path.is_file():
-                continue
-            try:
-                library = ctypes.CDLL(str(path))
-                version = library.narwhal_pure_core_abi_version
-                version.argtypes = []
-                version.restype = ctypes.c_uint32
-                if version() != _ABI_VERSION:
-                    continue
-                # The number/length inputs are caller-owned bytes; passing the
-                # ``bytes`` object straight through a ``c_char_p`` argtype
-                # avoids building a ``(c_ubyte * n)`` array per call (which is
-                # the dominant cost on the short-input path and would make the
-                # native route slower than the Python regex -- the "never
-                # slower" rule). ``c_char_p`` takes a ``bytes`` (or ``None``)
-                # and passes its length via the adjacent ``c_size_t``.
-                number = library.narwhal_pure_core_number
-                number.argtypes = [ctypes.c_char_p, ctypes.c_size_t, _DoubleP]
-                number.restype = ctypes.c_int32
-                length = library.narwhal_pure_core_length
-                length.argtypes = [
-                    ctypes.c_char_p, ctypes.c_size_t,
-                    ctypes.c_char_p, ctypes.c_size_t, _DoubleP,
-                ]
-                length.restype = ctypes.c_int32
-            except (AttributeError, OSError):
-                continue
-            _np_binding = (number, length)
-            return _np_binding
-        return None
 
 
 def _text_bytes(text):
@@ -745,45 +672,82 @@ def _text_bytes(text):
     return (b, len(b)) if b else (None, 0)
 
 
-def _native_number(text):
-    """Native ``parse_number``; ``None`` when the native route is unavailable,
-    rejected (the caller runs the Python parser), or failed."""
-    global _native_numparse_calls
-    binding = _numparse_binding()
-    if binding is None:
-        return None
-    number, _ = binding
-    arr, n = _text_bytes(text)
-    out = ctypes.c_double(0.0)
-    try:
-        code = number(arr, n, ctypes.byref(out))
-    except (ctypes.ArgumentError, OSError):
-        return None
-    if code != 0:
-        return None
-    _native_numparse_calls += 1
-    return out.value
+
+class ParseReply(ctypes.Structure):
+    _fields_ = [('code', ctypes.c_int32), ('reserved', ctypes.c_uint32),
+                ('value', ctypes.c_double), ('start', ctypes.c_uint32), ('end', ctypes.c_uint32)]
 
 
-def _native_length(text, model_unit):
-    """Native ``parse_length``; ``None`` when the native route is unavailable,
-    rejected (the caller runs the Python parser), or failed."""
-    global _native_numparse_calls
-    binding = _numparse_binding()
-    if binding is None:
-        return None
-    _, length = binding
-    tarr, tn = _text_bytes(text)
-    marr, mn = _text_bytes(model_unit)
-    out = ctypes.c_double(0.0)
+_owned_parse_binding = None
+_owned_parse_signature = None
+
+
+def _required_parse_binding():
+    """Mandatory additive parser ABI; never treat a broken override as absent."""
+    global _owned_parse_binding, _owned_parse_signature
+    configured = os.environ.get(_ENV_PATH)
+    signature = configured if configured is not None else '<packaged>'
+    if _owned_parse_binding is not None and signature == _owned_parse_signature and configured != '':
+        return _owned_parse_binding
+    path = Path(configured).expanduser() if configured else _PACKAGED_LIBRARY
     try:
-        code = length(tarr, tn, marr, mn, ctypes.byref(out))
-    except (ctypes.ArgumentError, OSError):
-        return None
-    if code != 0:
-        return None
+        if configured == '' or not path.is_file():
+            raise OSError('native parser library is missing')
+        lib = ctypes.CDLL(str(path))
+        abi = lib.narwhal_pure_core_parse_abi
+        abi.argtypes, abi.restype = [], ctypes.c_uint32
+        if abi() != 2:
+            raise RuntimeError('number parser ABI 2 required')
+        parse = lib.narwhal_pure_core_parse_v2
+        parse.argtypes = [ctypes.c_void_p, ctypes.c_size_t, ctypes.c_void_p,
+                          ctypes.c_size_t, ctypes.c_uint32, ctypes.c_uint32,
+                          ctypes.POINTER(ParseReply), ctypes.c_size_t]
+        parse.restype = ctypes.c_uint32
+    except (OSError, AttributeError, RuntimeError) as exc:
+        raise RuntimeError('Required Rust number parser unavailable; build or reinstall the current pure core') from exc
+    _owned_parse_binding, _owned_parse_signature = parse, signature
+    return parse
+
+
+def parse_owned(text, model_unit=None):
+    """One native parse, including errors; Python only marshals and formats repr."""
+    import math
+    import unicodedata
+    unicode = {'15.1.0': 151, '16.0.0': 160}.get(unicodedata.unidata_version)
+    if unicode is None:
+        raise RuntimeError('Unsupported Unicode database for Rust number parsing')
+    parse = _required_parse_binding()
+    if len(text) > 4096 or (model_unit is not None and len(model_unit) > 4096):
+        # Admission bound only; do not allocate an unbounded ABI buffer.
+        return None, 'number parser input exceeds 4096 characters'
+    encoding = 'utf-32-le' if sys.byteorder == 'little' else 'utf-32-be'
+    def buffer(value):
+        return (ctypes.c_uint32 * len(value)).from_buffer_copy(value.encode(encoding, 'surrogatepass'))
+    text_buffer = buffer(text)
+    model_buffer = buffer(model_unit or '')
+    # An unwritten reply must never resemble a valid zero-valued success.
+    out = ParseReply(code=2147483647)
+    rc = parse(text_buffer, len(text), model_buffer, len(model_unit or ''),
+               int(model_unit is not None), unicode, ctypes.byref(out), ctypes.sizeof(out))
+    if (rc != 0 or out.reserved != 0 or out.code not in (0, -1, -2, -3, -4, -5, -7, -8)
+            or not 0 <= out.start <= out.end <= len(text) or not math.isfinite(out.value)
+            or (out.code != 0 and out.value != 0.0)
+            or (model_unit is None and out.code in (-3, -4, -5))
+            or (out.code == 0 and (out.start != 0 or out.end != 0))):
+        raise RuntimeError('Invalid Rust number-parser reply; not replayed')
+    global _native_numparse_calls
     _native_numparse_calls += 1
-    return out.value
+    if out.code == 0:
+        return out.value, None
+    if out.code == -1:
+        return None, 'no spaces are permitted in a number'
+    if out.code == -5:
+        return None, 'unknown model unit: %r' % (model_unit,)
+    if out.code == -7:
+        return None, 'number parser input exceeds 4096 characters'
+    label = {-2: 'not a number', -3: 'not a length', -4: 'unknown unit suffix',
+             -8: 'number outside finite range'}[out.code]
+    return None, '%s: %r' % (label, text[out.start:out.end])
 
 
 # ---------------------------------------------------------------------------
@@ -3468,7 +3432,7 @@ def _reset_for_tests() -> None:
     global _native_calls, _native_decode_calls, _native_stl_mesh_calls, _native_obj_calls
     global _native_decode_obj_calls, _native_dxf_calls
     global _native_decode_dxf_calls
-    global _np_signature, _np_binding, _native_numparse_calls
+    global _owned_parse_signature, _owned_parse_binding, _native_numparse_calls
     global _c_signature, _c_binding, _native_calc_calls
     global _b_signature, _b_binding, _native_bearing_calls
     global _co_signature, _co_binding, _native_coords_calls
@@ -3505,8 +3469,8 @@ def _reset_for_tests() -> None:
         _gs3_signature = None
         _gs3_binding = None
         _native_gridsnap3_calls = 0
-        _np_signature = None
-        _np_binding = None
+        _owned_parse_signature = None
+        _owned_parse_binding = None
         _native_numparse_calls = 0
         _c_signature = None
         _c_binding = None

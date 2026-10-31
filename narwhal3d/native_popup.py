@@ -47,7 +47,7 @@ def library():
     global _bound
     lib = native_textfield.library()
     if lib is None:
-        return None
+        raise RuntimeError('required native UI popup core is unavailable')
     if lib is _bound:
         return lib
     try:
@@ -73,13 +73,11 @@ def library():
     return lib
 
 
-def model(window_size, scale, measure, legacy):
-    """Choose the complete fallback BEFORE construction/open, never after an error."""
+def model(window_size, scale, measure):
+    """Construct the sole popup owner; absence is an error, never a fallback."""
     lib = library()
     if lib is None:
-        result = legacy(window_size, scale, measure)
-        result._backend_reason = 'legacy: default UI core unavailable'
-        return result
+        raise RuntimeError('required native UI popup core is unavailable')
     return NativePopup(window_size, scale, measure, lib=lib)
 
 

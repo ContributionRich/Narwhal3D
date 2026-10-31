@@ -34,12 +34,12 @@ finally:
     sys.setprofile(None)
 print("ROUTE", counts)
 assert counts["native"] > 0, "suite never constructed a native field"
-assert counts["fallback"] == 0, "ordinary caller unexpectedly handed over"
+assert counts["fallback"] == 0, "ordinary caller lacks the required native owner"
 '''
 
 
 def main():
-    logs = Path(tempfile.mkdtemp(prefix="ui-callers-", dir="/tmp"))
+    logs = Path(tempfile.mkdtemp(prefix="ui-callers-"))
     for suite in SUITES:
         with (logs / (suite + ".log")).open("w") as stream:
             result = subprocess.run([sys.executable, "-B", "-c", WRAPPER, str(ROOT / "spike" / suite)],

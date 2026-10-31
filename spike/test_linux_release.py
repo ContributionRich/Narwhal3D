@@ -182,6 +182,8 @@ with tempfile.TemporaryDirectory(prefix="narwhal-linux-release-test-") as tempor
             record.update(history_abi=1, exports=list(verify.APPLICATION_CORE_EXPORTS))
         if filename == "libnarwhal_ui_core.so":
             record.update(verify.UI_CORE_IDENTITY)
+        if filename == "libnarwhal_pure_core.so":
+            record.update(verify.PURE_CORE_PARSE_IDENTITY)
         records[filename] = record
     for filename in expected_accelerators:
         source = runtime_native / filename

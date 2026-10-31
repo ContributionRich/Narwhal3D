@@ -10,12 +10,17 @@ from __future__ import annotations
 import argparse
 import ast
 import fnmatch
+import hashlib
+import io
+import json
+import math
 import os
 from pathlib import Path, PurePosixPath
 import re
 import subprocess
 import sys
 import tempfile
+import tokenize
 
 ROOT = Path(__file__).resolve().parents[1]
 REQUIRED = {
@@ -85,6 +90,13 @@ REQUIRED = {
     "native/ui_core/src/allocation_tests.rs", "native/ui_core/src/layout_algorithm.rs",
     "native/ui_core/src/layout_contract.rs", "native/ui_core/src/popup.rs",
     "native/ui_core/src/popup_ffi.rs", "native/ui_core/src/popup_tests.rs",
+    "native/ui_core/TRANSCRIPT.md", "native/ui_core/transcript_unicode.py",
+    "native/ui_core/src/transcript.rs", "native/ui_core/src/transcript_ffi.rs",
+    "native/ui_core/src/transcript_tests.rs",
+    "narwhal3d/native_transcript.py", "narwhal3d/command_transcript.py",
+    "narwhal3d/command_history.py", "narwhal3d/state.py",
+    "launch/check_native.py", "spike/test_desktop_native_startup.py",
+    "spike/test_release_harness.py",
     "narwhal3d/textfield.py", "narwhal3d/native_textfield.py",
     "narwhal3d/native_popup.py", "narwhal3d/shell_popup.py", "narwhal3d/ui.py",
     "narwhal3d/bridge.py", "narwhal3d/ai_assistant.py", "narwhal3d/ai_action_review.py",
@@ -94,7 +106,13 @@ REQUIRED = {
     "scripts/assemble_macos_release.py", "scripts/test_macos_runtime.py",
     "spike/test_ui_core_editor.py", "spike/test_ui_core_callers.py",
     "spike/test_ui_core_layout.py", "spike/test_ui_core_mutations.py",
-    "spike/fixtures/textfield_168212d4.py",
+    "spike/test_ui_core_golden.py", "spike/test_native_only_policy.py",
+    "spike/test_ui_transcript_abi.py", "spike/test_ui_transcript_model.py",
+    "spike/test_ui_transcript_consumers.py", "spike/test_ui_transcript_stress.py",
+    "spike/test_ui_transcript_gui.py", "spike/test_ui_transcript_unicode.py",
+    "spike/test_ui_transcript_mutations.py", "spike/test_ui_transcript_benchmark.py",
+    "spike/test_command_history.py", "spike/fixtures/numparse_golden.json",
+    "spike/test_pure_core_packaging.py",
     "spike/test_ui_core_benchmark.py", "spike/test_ui_core_review_gui.py",
     "spike/test_ui_core_popup.py", "spike/test_ui_core_popup_mutations.py",
     "spike/test_ui_core_popup_gui.py", "spike/test_ui_core_popup_failure.py",
@@ -107,7 +125,15 @@ REQUIRED = {
     "spike/test_ai_v7_visible.py", "spike/test_ai_v7_roundtrip.py",
     "spike/test_ai_v7_presentation.py", "spike/test_ai_v7_resources.py",
     "spike/test_ai_v7_native.py",
+    "spike/test_ai_v8_exit.py", "spike/test_ai_v8_reachability.py",
+    "spike/test_ai_v8_presentation.py", "spike/test_ai_v8_long_session.py",
+    "spike/test_ai_v8_plans.py", "spike/test_ai_v8_lifetime.py",
+    "spike/test_ai_v8_lifetime_gui.py", "spike/test_ai_v8_settings.py",
+    "spike/test_ai_v8_visible.py", "spike/test_ai_v8_x11.py", "spike/test_ai_v8_native.py",
     "docs/reviews/2026-10-31-ui-regressions.md",
+    "docs/reviews/2026-10-31-native-only.md",
+    "spike/test_rust_history_trace.py", "spike/test_numparse_owned.py",
+    "native/pure_core/src/numparse_owned.rs",
     "native/application_core/Cargo.toml", "native/application_core/Cargo.lock",
     "native/application_core/README.md", "native/application_core/OPENNURBS_LICENSE",
     "native/application_core/include/narwhal_application_core.h",
@@ -316,6 +342,7 @@ FORBIDDEN_EXACT = {
     "spike/ui_report.py",
 }
 FORBIDDEN_PREFIXES = (
+    "legacy/",
     "bug_reports/",
     "docs/measured/",
     "ExamplePhotos/",
@@ -529,7 +556,7 @@ def _run(root: Path, *args: str) -> subprocess.CompletedProcess[bytes]:
 
 def git_entries(root: Path, ref: str) -> dict[str, tuple[str, bytes]]:
     """Return ``path -> (mode, blob)`` for every file in *ref*."""
-    listing = _run(root, "git", "ls-tree", "-rz", ref).stdout
+    listing = _run(root, "git", "--no-pager", "ls-tree", "-rz", ref).stdout
     entries: dict[str, tuple[str, bytes]] = {}
     for record in listing.split(b"\0"):
         if not record:
@@ -539,7 +566,7 @@ def git_entries(root: Path, ref: str) -> dict[str, tuple[str, bytes]]:
         if kind != "blob":
             continue
         path = raw_path.decode("utf-8", "surrogateescape")
-        blob = _run(root, "git", "show", f"{ref}:{path}").stdout
+        blob = _run(root, "git", "--no-pager", "show", f"{ref}:{path}").stdout
         entries[path] = (mode, blob)
     return entries
 
@@ -558,8 +585,48 @@ def filesystem_entries(root: Path) -> dict[str, tuple[str, bytes]]:
     return entries
 
 
+def retirement_path_problem(path: str) -> str | None:
+    """Reject retired payloads at source or extracted application-relative paths."""
+    parts = PurePosixPath(path.replace("\\", "/")).parts
+    if any(part.casefold() == "legacy" or part.casefold().startswith("retired-python-")
+           or part.casefold() in {"legacy.zip", "legacy.tar", "legacy.tar.gz", "legacy.tgz"}
+           for part in parts):
+        return "retired archive is local-only"
+    if parts and parts[-1] == "textfield_168212d4.py":
+        return "retired executable reference"
+    return None
+
+
+def runtime_archive_problem(blob: bytes) -> str | None:
+    """Catch archive dependencies in runtime source and embedded artifact paths.
+
+    This is a bounded contamination check, not a general Python sandbox. String
+    constants are inspected as well as imports so split path construction is caught.
+    """
+    if re.search(rb"legacy[/\\\\]retired-python-", blob.lower()):
+        return "runtime artifact references the retirement archive"
+    try:
+        tree = ast.parse(blob)
+    except (SyntaxError, UnicodeError, ValueError):
+        return None  # Binary artifacts and compile errors are checked separately.
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            names = ([alias.name for alias in node.names] if isinstance(node, ast.Import)
+                     else [node.module or "", *(alias.name for alias in node.names)])
+            if any("legacy" in name.split(".") or "retired-python-" in name for name in names):
+                return "runtime imports the retirement archive"
+        if isinstance(node, ast.Constant) and isinstance(node.value, (str, bytes)):
+            value = node.value.decode("utf-8", "replace") if isinstance(node.value, bytes) else node.value
+            if retirement_path_problem(value):
+                return "runtime resolves a retirement archive path"
+    return None
+
+
 def path_problem(path: str) -> str | None:
     posix = PurePosixPath(path)
+    retired = retirement_path_problem(path)
+    if retired:
+        return retired
     if path.startswith("/") or ".." in posix.parts or "\\" in path:
         return "unsafe path spelling"
     if LEGACY_PATH_PATTERN.search(path):
@@ -575,6 +642,10 @@ def path_problem(path: str) -> str | None:
     ):
         return "unexpected image or artwork"
     return None
+
+
+# This source gate explicitly prepends scripts/ before importing its test helper.
+TEST_SUPPORT_IMPORTS = {"test_release_ui_core": "scripts/test_release_ui_core.py"}
 
 
 def required_public_paths(entries: dict[str, tuple[str, bytes]]) -> set[str]:
@@ -610,7 +681,7 @@ def required_public_paths(entries: dict[str, tuple[str, bytes]]) -> set[str]:
                          else [node.module or ""] if isinstance(node, ast.ImportFrom) else [])
                 for name in names:
                     if name.startswith("test_"):
-                        dependencies.add("spike/" + name.replace(".", "/") + ".py")
+                        dependencies.add(TEST_SUPPORT_IMPORTS.get(name, "spike/" + name.replace(".", "/") + ".py"))
         required.update(dependencies)
         pending.extend(dependencies - visited)
     return required
@@ -630,6 +701,184 @@ def legacy_scan_bytes(path: str, blob: bytes) -> bytes:
     return folded
 
 
+FROZEN_JSON_FILES = {
+    "spike/fixtures/numparse_golden.json": {
+        "origin": "50267dd6d4504b14052d1ab7e54675f3c8750637",
+        "kind": "pre-retirement numeric parser DATA; no executable oracle",
+        "sha256": "9016730b186ee2f394449b0eaa0c6761c7b5b101b66e89331f005ca0ab2203dd",
+        "rows": {"15.1.0": 2544, "16.0.0": 2624},
+    },
+}
+
+
+def frozen_json_scan(path: str, blob: bytes) -> bytes:
+    """Classify exact hash/schema-checked DATA, not escaped inputs as task prose.
+
+    The raw artifact still receives the secret scan. Any byte drift is a failure,
+    not a blanket JSON exemption or permission to hide new code/private payloads.
+    """
+    if path not in FROZEN_JSON_FILES:
+        return blob
+    provenance = FROZEN_JSON_FILES[path]
+    if hashlib.sha256(blob).hexdigest() != provenance["sha256"]:
+        raise ValueError("frozen JSON DATA provenance hash mismatch")
+    def pairs(items):
+        result = {}
+        for key, value in items:
+            if key in result:
+                raise ValueError("duplicate frozen DATA key")
+            result[key] = value
+        return result
+    data = json.loads(blob, object_pairs_hook=pairs)
+    if not isinstance(data, dict) or set(data) != set(provenance["rows"]):
+        raise ValueError("unexpected frozen DATA Unicode versions")
+    for version, count in provenance["rows"].items():
+        rows = data[version]
+        if not isinstance(rows, list) or len(rows) != count:
+            raise ValueError("frozen DATA row count mismatch")
+        for row in rows:
+            if not (isinstance(row, list) and len(row) == 3 and isinstance(row[0], str)
+                    and (row[1] is None or isinstance(row[1], str))
+                    and isinstance(row[2], list) and len(row[2]) == 2):
+                raise ValueError("invalid numeric DATA row")
+            value, error = row[2]
+            if not ((type(value) in (int, float) and math.isfinite(value) and error is None)
+                    or (value is None and isinstance(error, str))):
+                raise ValueError("invalid numeric DATA result")
+    return json.dumps(provenance, sort_keys=True).encode()
+
+
+FROZEN_DATA_FILES = {
+    "spike/test_ui_core_golden.py": "DATA",
+    "spike/test_rust_history_trace.py": "TRACE",
+}
+
+
+def frozen_data_scan(path: str, blob: bytes) -> bytes:
+    """Scan decoder source, not incidental words in a frozen DATA literal.
+
+    Only these two reviewed fixtures may use literal decoding. Reject definitions,
+    aliases, arbitrary calls and extra assignments rather than exempting a file.
+    Raw bytes still receive the secret scan.
+    """
+    if path not in FROZEN_DATA_FILES:
+        return blob
+    tree = ast.parse(blob, filename=path)
+    assignments = 0
+    for statement in tree.body:
+        if isinstance(statement, ast.Expr) and isinstance(statement.value, ast.Constant) and isinstance(statement.value.value, str):
+            continue
+        if isinstance(statement, ast.Import) and all(alias.name in {"json", "base64", "zlib"}
+                                                   and alias.asname is None for alias in statement.names):
+            continue
+        if not (isinstance(statement, ast.Assign) and len(statement.targets) == 1
+                and isinstance(statement.targets[0], ast.Name)
+                and statement.targets[0].id == FROZEN_DATA_FILES[path]):
+            raise ValueError("frozen fixture must contain only DATA and standard decoding")
+        assignments += 1
+        for node in ast.walk(statement.value):
+            if not isinstance(node, (ast.Call, ast.Attribute, ast.Name, ast.Load, ast.Constant)):
+                raise ValueError("executable logic in frozen DATA fixture")
+            if isinstance(node, ast.Call) and (ast.unparse(node.func) not in {
+                    "json.loads", "zlib.decompress", "base64.b85decode"} or node.keywords or len(node.args) != 1):
+                raise ValueError("unapproved frozen DATA decoder")
+        # The large literal is inert data, not private-development prose. Keep all
+        # imports, docstrings, comments and decoder expressions in the normal scan.
+        lines = blob.splitlines(keepends=True)
+        spans = [(node.lineno, node.col_offset, node.end_lineno, node.end_col_offset)
+                 for node in ast.walk(statement.value)
+                 if isinstance(node, ast.Constant) and isinstance(node.value, str)]
+    if assignments != 1:
+        raise ValueError("frozen fixture requires exactly one DATA assignment")
+    for start, column, end, last in reversed(spans):
+        lines[start - 1:end] = [lines[start - 1][:column] + b"'<frozen DATA>'" + lines[end - 1][last:]]
+    return b"".join(lines)
+
+
+def _rust_code_mask(blob: bytes) -> bytes:
+    """Preserve offsets while masking Rust comments and string literals for matching."""
+    code = bytearray(blob)
+    i = 0
+    while i < len(blob):
+        start = i
+        if blob[i:i + 2] == b'//':
+            end = blob.find(b'\n', i)
+            i = len(blob) if end < 0 else end
+        elif blob[i:i + 2] == b'/*':
+            depth, i = 1, i + 2
+            while i < len(blob) and depth:
+                if blob[i:i + 2] == b'/*':
+                    depth, i = depth + 1, i + 2
+                elif blob[i:i + 2] == b'*/':
+                    depth, i = depth - 1, i + 2
+                else:
+                    i += 1
+        elif raw := re.match(rb'(?:br|cr|r)(#*)"', blob[i:]):
+            end = blob.find(b'"' + raw[1], i + raw.end())
+            i = len(blob) if end < 0 else end + 1 + len(raw[1])
+        elif blob[i:i + 1] == b'"':
+            i += 1
+            while i < len(blob):
+                if blob[i:i + 1] == b'\\':
+                    i += 2
+                elif blob[i:i + 1] == b'"':
+                    i += 1
+                    break
+                else:
+                    i += 1
+        else:
+            i += 1
+            continue
+        code[start:i] = b' ' * (min(i, len(blob)) - start)
+    return bytes(code)
+
+
+def code_provenance_scan(path: str, blob: bytes) -> bytes:
+    """Normalize only approved syntactic identifiers, never comments or strings."""
+    spans = []
+    if path == 'native/ui_core/src/transcript_ffi.rs':
+        code = _rust_code_mask(blob)
+        patterns = (
+            rb'\bstruct\s+Snapshot\s*\{\s*(owner)\s*:\s*u64\s*,',
+            rb'\bfn\s+reply\s*\(\s*handle\s*:\s*u64\s*,\s*(owner)\s*:\s*&Transcript\s*\)\s*->\s*Reply\s*\{',
+            rb'\bSnapshot\s*\{\s*(owner)\s*:\s*handle\s*,',
+        )
+        spans = [match.span(1) for pattern in patterns for match in re.finditer(pattern, code)]
+    elif path in {'narwhal3d/native_transcript.py', 'spike/test_ui_transcript_model.py'}:
+        try:
+            tree = ast.parse(blob)
+            text = blob.decode('utf-8')
+            lines = text.splitlines(keepends=True)
+            offsets = [0]
+            for line in lines:
+                offsets.append(offsets[-1] + len(line.encode('utf-8')))
+            tokens = list(tokenize.generate_tokens(io.StringIO(text).readline))
+            classes = {node.lineno for node in ast.walk(tree) if isinstance(node, ast.ClassDef)
+                       and node.name == 'Owner' and not node.bases and not node.keywords}
+            bindings = {(item.optional_vars.lineno, item.optional_vars.col_offset)
+                        for node in ast.walk(tree) if isinstance(node, ast.With)
+                        for item in node.items if isinstance(item.optional_vars, ast.Name)
+                        and item.optional_vars.id == 'owner'}
+            for index, token in enumerate(tokens[1:-1], 1):
+                if token.type != tokenize.NAME or tokens[index + 1].string != ':':
+                    continue
+                line, column = token.start
+                byte_column = len(lines[line - 1][:column].encode('utf-8'))
+                declaration = (path == 'narwhal3d/native_transcript.py' and token.string == 'Owner'
+                               and line in classes and tokens[index - 1].string == 'class')
+                binding = (path == 'spike/test_ui_transcript_model.py' and token.string == 'owner'
+                           and (line, byte_column) in bindings and tokens[index - 1].string == 'as')
+                if declaration or binding:
+                    start = offsets[line - 1] + byte_column
+                    spans.append((start, start + len(token.string)))
+        except (SyntaxError, UnicodeError, tokenize.TokenError, ValueError):
+            return blob  # Malformed source receives the ordinary strict scan.
+    result = bytearray(blob)
+    for start, end in spans:
+        result[start:end] = b'value'  # Same five-byte width; surrounding prose stays intact.
+    return bytes(result)
+
+
 def audit_entries(entries: dict[str, tuple[str, bytes]], require_manifest: bool = True) -> list[str]:
     problems: list[str] = []
     paths = set(entries)
@@ -640,6 +889,12 @@ def audit_entries(entries: dict[str, tuple[str, bytes]], require_manifest: bool 
         problem = path_problem(path)
         if problem:
             problems.append(f"{path}: {problem}")
+        # Apply to package runtime paths too, without treating test-negative literals
+        # or retirement documentation as executable archive dependencies.
+        if "narwhal3d" in PurePosixPath(path).parts or "runtime" in PurePosixPath(path).parts:
+            archive_problem = runtime_archive_problem(blob)
+            if archive_problem:
+                problems.append(f"{path}: {archive_problem}")
         if mode == "120000":
             problems.append(f"{path}: symlinks are not permitted in the public source root")
             continue
@@ -655,9 +910,14 @@ def audit_entries(entries: dict[str, tuple[str, bytes]], require_manifest: bool 
                 problems.append(f"{path}: Python source does not compile: {exc}")
         if b"\0" in blob:
             continue
-        folded = blob.lower()
+        try:
+            scan = frozen_data_scan(path, frozen_json_scan(path, blob))
+        except (SyntaxError, UnicodeError, ValueError) as exc:
+            problems.append(f"{path}: invalid frozen DATA fixture: {exc}")
+            scan = blob
+        folded = scan.lower()
         if path not in PROVENANCE_SCAN_EXEMPT:
-            provenance = folded
+            provenance = code_provenance_scan(path, scan).lower()
             if path in {"native/automation_core/src/conversation.rs",
                         "native/automation_core/src/primitives.rs",
                         "native/automation_core/src/approval_lifecycle.rs",
@@ -679,7 +939,7 @@ def audit_entries(entries: dict[str, tuple[str, bytes]], require_manifest: bool 
                     problems.append(
                         f"{path}: contains forbidden development marker {match.group(0)!r}")
             if path not in LEGACY_TEXT_ALLOWED:
-                match = LEGACY_TEXT_PATTERN.search(legacy_scan_bytes(path, blob))
+                match = LEGACY_TEXT_PATTERN.search(legacy_scan_bytes(path, scan))
                 if match:
                     problems.append(
                         f"{path}: contains forbidden legacy product marker {match.group(0)!r}")
@@ -701,6 +961,10 @@ def self_check() -> None:
     safe = {path: ("100644", b"safe\n") for path in REQUIRED}
     for path in REQUIRED_EXECUTABLES:
         safe[path] = ("100755", b"#!/bin/sh\nexit 0\n")
+    for path, name in FROZEN_DATA_FILES.items():
+        safe[path] = ("100644", f'import json\n{name} = json.loads("[]")\n'.encode())
+    for path in FROZEN_JSON_FILES:
+        safe[path] = ("100644", (ROOT / path).read_bytes())
     safe["narwhal3d/commands.py"] = (
         "100644",
         b"class Command:\n    pass\n\ndef _build_registry():\n    return {}\n\n"
@@ -755,6 +1019,9 @@ def self_check() -> None:
         ("unapproved generated icon", {"narwhal3d/icons/generated-private-screenshot.png": ("100644", b"png")}),
         ("commercial miner", {"spike/rhi" + "no_help.py": ("100644", b"x")}),
         ("symlink", {"escape": ("120000", b"../private")}),
+        ("retired archive", {"legacy/retired-python-old/source.py": ("100644", b"safe\n")}),
+        ("retired packaged archive", {"app/narwhal3d/legacy/source.py": ("100644", b"safe\n")}),
+        ("runtime archive import", {"narwhal3d/retired_loader.py": ("100644", b"from legacy import source\n")}),
     )
     for label, addition in cases:
         candidate = dict(safe)
@@ -765,11 +1032,15 @@ def self_check() -> None:
     # Delete each input independently: an omitted license/test-only module is just
     # as incomplete as an omitted production module or ctypes adapter.
     closure = sorted(path for path in REQUIRED if path.startswith("native/ui_core/")
-                     or path.startswith("spike/test_ui_core_") or path in {
+                     or path.startswith("spike/test_ui_core_")
+                     or path.startswith("spike/test_ui_transcript_")
+                     or path.startswith("spike/test_ai_v8_") or path in {
+                         "spike/fixtures/numparse_golden.json", "spike/test_pure_core_packaging.py",
+                         "launch/check_native.py", "spike/test_desktop_native_startup.py",
                          "narwhal3d/native_textfield.py", "narwhal3d/native_popup.py",
                          "scripts/check_ui_core.py", "scripts/test_release_ui_core.py",
                          "spike/test_shell_popup.py", "spike/test_textfield.py",
-                         "spike/fixtures/textfield_168212d4.py",
+                         "spike/test_rust_history_trace.py", "spike/test_native_only_policy.py",
                          "spike/test_ai_v4_native.py", "spike/test_ai_accepted_review_native.py",
                      })
     for path in closure:

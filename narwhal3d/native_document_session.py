@@ -39,6 +39,11 @@ _OPS = _READ_OPS | frozenset(("create", "close", "snapshot", "release_snapshot",
 class SessionUnavailable(RuntimeError):
     """The native library is absent, unloadable or incompatible (before create)."""
 
+    def __init__(self, reason):
+        super().__init__(f'{reason}: native document metadata ABI1 is required. '
+                         'Install the matching application-core library or set '
+                         'NARWHAL_APPLICATION_CORE to it; no Python fallback is available.')
+
 
 class SessionError(RuntimeError):
     """Native operation or adapter protocol failure; ``code`` is always a string."""
@@ -81,8 +86,8 @@ def _configure(library):
 def load_library():
     """Load explicit env path, else adjacent native slot, else platform artifact.
 
-    Only missing *default* candidates return None. An explicit path (even empty),
-    or an installed but unloadable/incompatible library, raises SessionUnavailable.
+    Missing defaults, an invalid explicit path (even empty), or an installed but
+    unloadable/incompatible library raise SessionUnavailable before session creation.
     No development /tmp path, build invocation or fallback implementation is used.
     """
     explicit = os.environ.get(_ENV_PATH)
@@ -101,7 +106,7 @@ def load_library():
             return _configure(ctypes.CDLL(str(path.resolve())))
         except OSError as exc:
             raise SessionUnavailable(f"cannot load application-core: {path}") from exc
-    return None
+    raise SessionUnavailable("application-core library not installed")
 
 
 def _uint(value):

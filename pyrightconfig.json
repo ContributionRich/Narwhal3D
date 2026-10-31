@@ -4,6 +4,9 @@
     "vendor",
     "More_Data",
     "artifacts",
+    "legacy",
+    "tmp",
+    "native/**/target",
     "bug_reports",
     ".wt_*",
     "**/__pycache__"

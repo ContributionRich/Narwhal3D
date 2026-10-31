@@ -10,6 +10,10 @@ mod popup;
 mod popup_ffi;
 #[cfg(test)]
 mod popup_tests;
+mod transcript;
+mod transcript_ffi;
+#[cfg(test)]
+mod transcript_tests;
 mod unicode16;
 use editor::TextField;
 use std::collections::BTreeMap;

@@ -18,6 +18,7 @@ import tempfile
 from typing import Any
 
 from build_linux_native import probe_ui_core, verify_ui_core_source
+from check_pure_core import probe_pure_core_parser
 
 from release_policy import (
     MAX_HOST_GLIBC, format_glibc, glibc_versions, scan_runtime_glibc,
@@ -537,6 +538,11 @@ def validate_native_components(
         directory / "libnarwhal_application_core.so", "narwhal_history_abi",
         APPLICATION_CORE_HISTORY_ABI, occt_library_dir, APPLICATION_CORE_EXPORTS)
     application["exports"] = list(APPLICATION_CORE_EXPORTS)
+    try:
+        records["libnarwhal_pure_core.so"].update(probe_pure_core_parser(
+            directory / "libnarwhal_pure_core.so"))
+    except ValueError as exc:
+        raise ReleaseError(str(exc)) from exc
     try:
         completed = subprocess.run(
             [str(directory / "narwhal-cdr-multiversion"), "--version"],

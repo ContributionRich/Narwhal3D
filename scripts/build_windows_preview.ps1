@@ -885,6 +885,16 @@ $PlatformCoreTarget = Join-Path $AdjacentNativeDirectory "narwhal_platform_core.
 Copy-Item -LiteralPath $DocumentCoreSource -Destination $DocumentCoreTarget
 Copy-Item -LiteralPath $SupervisorSource -Destination $SupervisorTarget
 Copy-Item -LiteralPath $PureCoreSource -Destination $PureCoreTarget
+$PureParserProbe = Join-Path $Workspace "verify_pure_core_parser.py"
+@'
+# Packaging C ABI verification only; parsing remains native-owned.
+from pathlib import Path
+import sys
+sys.path.insert(0, str(Path(sys.argv[1]) / "scripts"))
+from verify_windows_release import pure_core_record
+print(pure_core_record(Path(sys.argv[2])))
+'@ | Set-Content -LiteralPath $PureParserProbe -Encoding UTF8
+Run-Native $Python @('-I', '-B', $PureParserProbe, $NarwhalSource, $PureCoreTarget) 'verify built pure-core parser ABI2 and semantics'
 Copy-Item -LiteralPath $SelectionCoreSource -Destination $SelectionCoreTarget
 Copy-Item -LiteralPath $PlatformCoreSource -Destination $PlatformCoreTarget
 $DocumentVersion = @(Capture-Native $DocumentCoreTarget @("--version") "verify native document-core protocol")
@@ -980,6 +990,7 @@ Run-Native (Join-Path $RuntimeDirectory 'blender.exe') @(
     '-b', '--factory-startup', '--python-exit-code', '1', '--python', $RuntimeApiProbe
 ) 'verify packaged native UI APIs'
 Run-Native $RuntimePythonPath @('-I', '-B', $UiInputsDriver, $NarwhalSource, 'verify', $UiInputsPath, $UiCoreTarget) 'verify packaged ui-core editor State88 and popup ABI'
+Run-Native $RuntimePythonPath @('-I', '-B', $PureParserProbe, $NarwhalSource, $PureCoreTarget) 'verify packaged pure-core parser ABI2 and semantics'
 $NativeProbePath = Join-Path $Workspace "verify_packaged_native_cores.py"
 @'
 from __future__ import annotations

@@ -54,10 +54,8 @@ def trial(cls, size, kind):
 for size in (8, 256, 100000):
     for kind in ("caret", "type", "paste"):
         gc.collect()
-        legacy = trial(tf._LegacyTextField, size, kind)
         native = trial(tf.TextField, size, kind)
-        print(json.dumps(dict(size=size, action=kind, legacy=legacy, native=native,
-                              p50_ratio=round(native["p50_us"]/legacy["p50_us"], 2))))
+        print(json.dumps(dict(size=size, action=kind, native=native)))
 # Same unchanged shell handler as production; setup is excluded from event latency.
 import importlib
 import sys
@@ -69,7 +67,7 @@ shell = importlib.import_module(pkg.__name__ + ".shell_input")
 for size in (8, 256, 100000):
     for kind in ("caret", "type", "paste"):
         result = {}
-        for name, cls in (("legacy", tf._LegacyTextField), ("native", tf.TextField)):
+        for name, cls in (("native", tf.TextField),):
             field = cls()
             shell._field = field
             n = getattr(field, "_native", None)

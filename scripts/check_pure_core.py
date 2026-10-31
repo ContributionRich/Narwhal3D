@@ -10,8 +10,8 @@ the working tree. It runs, in order:
 4. one Linux release build — the ``cdylib`` compiles for the shipped target.
 5. a direct ctypes ABI probe — the built library answers the stable C ABI
    (version + a real encode) without going through the Python adapter.
-6. the *dedicated* pure-core Python suites — adapter, route activation and the
-   four fallbacks.
+6. the *dedicated* pure-core Python suites — adapters, route activation,
+   compatibility paths, native-only parser and packaging contracts.
 
 The Python suites are an **explicit manifest**, never a ``test_native_*.py``
 glob: a glob would also capture the selection-core and CDR suites, which are a
@@ -60,7 +60,9 @@ PURE_CORE_PYTESTS = (
     "spike/test_dxf_reader.py",
     "spike/test_native_dxf.py",
     "spike/test_numparse.py",
+    "spike/test_numparse_owned.py",
     "spike/test_native_numparse.py",
+    "spike/test_pure_core_packaging.py",
     "spike/test_calc.py",
     "spike/test_native_calc.py",
     "spike/test_aci_colors.py",
@@ -84,6 +86,67 @@ PURE_CORE_PYTESTS = (
     "spike/test_native_interpolate.py",
     "spike/test_native_tween.py",
 )
+
+
+# Additive parser ABI: core ABI 1 and all its existing exports remain unchanged.
+PURE_CORE_PARSE_EXPORTS = (
+    "narwhal_pure_core_parse_abi", "narwhal_pure_core_parse_v2",
+)
+PURE_CORE_PARSE_IDENTITY = {
+    "abi": 1, "parse_abi": 2, "reply_bytes": 24,
+    "parser_exports": list(PURE_CORE_PARSE_EXPORTS),
+}
+# Packaging orchestration only: no Python grammar/fallback. Run the real C ABI
+# in a bounded child so an incompatible library cannot crash the verifier host.
+PURE_CORE_PARSE_PROBE = r'''
+import ctypes as c, json, sys
+lib = c.CDLL(sys.argv[1])
+for symbol, expected in (("narwhal_pure_core_abi_version", 1),
+                         ("narwhal_pure_core_parse_abi", 2)):
+    fn = getattr(lib, symbol)
+    fn.argtypes = []
+    fn.restype = c.c_uint32
+    if fn() != expected:
+        raise RuntimeError(symbol + " ABI mismatch")
+class Reply(c.Structure):
+    _fields_ = [("code", c.c_int32), ("reserved", c.c_uint32),
+                ("value", c.c_double), ("start", c.c_uint32), ("end", c.c_uint32)]
+if c.sizeof(Reply) != 24:
+    raise RuntimeError("pure-core parser Reply must be 24 bytes")
+parse = lib.narwhal_pure_core_parse_v2
+parse.argtypes = [c.POINTER(c.c_uint32), c.c_size_t, c.POINTER(c.c_uint32),
+                  c.c_size_t, c.c_uint32, c.c_uint32, c.POINTER(Reply), c.c_size_t]
+parse.restype = c.c_uint32
+# Independent ABI smoke witnesses, not a second implementation of the parser.
+for text, model, length, code, value in (("1/2", "", 0, 0, 0.5),
+                                        ("2cm", "Millimeters", 1, 0, 20.0),
+                                        ("bad", "", 0, -2, 0.0)):
+    points = (c.c_uint32 * len(text))(*map(ord, text))
+    units = (c.c_uint32 * len(model))(*map(ord, model))
+    reply = Reply(99, 99, 99.0, 99, 99)
+    status = parse(points, len(text), units, len(model), length, 160,
+                   c.byref(reply), c.sizeof(reply))
+    if status != 0 or reply.code != code or reply.reserved != 0 or reply.value != value:
+        raise RuntimeError("pure-core parser semantic probe failed: " + repr(text))
+print(json.dumps({"abi": 1, "parse_abi": 2, "reply_bytes": c.sizeof(Reply),
+                  "parser_exports": ["narwhal_pure_core_parse_abi", "narwhal_pure_core_parse_v2"]}, sort_keys=True))
+'''
+
+
+def probe_pure_core_parser(path: Path, python: Path | str = sys.executable, *, env=None) -> dict:
+    """Require the additive parser ABI and real number/length/rejection behavior."""
+    if not path.is_file() or path.is_symlink():
+        raise ValueError(f"missing regular pure-core parser library: {path}")
+    try:
+        completed = subprocess.run(
+            [str(python), "-I", "-B", "-c", PURE_CORE_PARSE_PROBE, str(path.resolve())],
+            env=env, text=True, capture_output=True, check=True, timeout=30)
+        identity = json.loads(completed.stdout)
+    except (OSError, subprocess.SubprocessError, ValueError) as error:
+        raise ValueError(f"cannot verify pure-core parser ABI/semantics: {getattr(error, 'stderr', '') or error}") from error
+    if identity != PURE_CORE_PARSE_IDENTITY:
+        raise ValueError(f"pure-core parser ABI/export evidence differs: {identity!r}")
+    return identity
 
 
 class GateError(RuntimeError):
@@ -168,7 +231,11 @@ def step_release_build(crate: Path) -> dict[str, object]:
 
 
 def step_direct_abi(lib_path: Path) -> dict[str, object]:
-    """Load the built library and exercise the stable C ABI directly."""
+    """Load the built library and exercise both stable and additive C ABIs."""
+    try:
+        parser_identity = probe_pure_core_parser(lib_path)
+    except ValueError as exc:
+        raise GateError(str(exc)) from exc
     try:
         lib = ctypes.CDLL(str(lib_path))
         version = lib.narwhal_pure_core_abi_version
@@ -215,7 +282,8 @@ def step_direct_abi(lib_path: Path) -> dict[str, object]:
     bad_ptr = (ctypes.c_double * 9).from_buffer(bad)
     if int(size(bad_ptr, 1, name_arr, len(name), 1)) >= 0:
         raise GateError("direct ABI size query accepted a NaN coordinate")
-    return {"status": "ok", "abi_version": ABI_VERSION, "command": "ctypes ABI probe"}
+    return {"status": "ok", "abi_version": ABI_VERSION, "parser": parser_identity,
+                "command": "ctypes ABI probe"}
 
 
 def step_adapter(crate: Path, lib_path: Path) -> dict[str, object]:

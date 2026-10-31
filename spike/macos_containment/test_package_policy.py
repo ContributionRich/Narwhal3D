@@ -3,7 +3,9 @@
 from pathlib import Path
 import sys
 import unittest
+from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
+from check_pure_core import PURE_CORE_PARSE_IDENTITY
 import build_macos_native as build
 
 class PolicyTests(unittest.TestCase):
@@ -49,7 +51,12 @@ class PolicyTests(unittest.TestCase):
     def test_reuse_checks_native_source_binaries_and_kernel_pins(self):
         import json
         import tempfile
-        with tempfile.TemporaryDirectory() as temporary:
+        # These files are inventory fixtures, not native binaries. ABI behavior is
+        # checked separately; model the mandatory successful probes explicitly.
+        from build_linux_native import UI_CORE_IDENTITY
+        with tempfile.TemporaryDirectory() as temporary, \
+                patch.object(build, "probe_ui_core", return_value=UI_CORE_IDENTITY), \
+                patch.object(build, "probe_pure_core_parser", return_value=PURE_CORE_PARSE_IDENTITY):
             root = Path(temporary) / "source"
             (root / "native").mkdir(parents=True)
             (root / "launch").mkdir()
@@ -65,9 +72,18 @@ class PolicyTests(unittest.TestCase):
                     file.write_bytes(name.encode())
                     components[name] = {"sha256": build.sha(file), "architecture": "arm64"}
             receipt = dict(source_inputs=build.source_inputs(root), components=components,
+                           ui_core=UI_CORE_IDENTITY, pure_core_parser=PURE_CORE_PARSE_IDENTITY,
                            unavailable_components=build.UNAVAILABLE_COMPONENTS,
                            occt_source=build.OCCT, occt_wheel_sha256=build.WHEEL_SHA,
                            occt_libraries={library.name: build.sha(library)})
+            (output / "native-build.json").write_text(json.dumps(receipt))
+            self.assertTrue(build.reuse_output(root, output))
+            with patch.object(build, "probe_pure_core_parser", side_effect=ValueError("old parser")):
+                self.assertFalse(build.reuse_output(root, output))
+            del receipt["pure_core_parser"]
+            (output / "native-build.json").write_text(json.dumps(receipt))
+            self.assertFalse(build.reuse_output(root, output))
+            receipt["pure_core_parser"] = PURE_CORE_PARSE_IDENTITY
             (output / "native-build.json").write_text(json.dumps(receipt))
             self.assertTrue(build.reuse_output(root, output))
             library.write_bytes(b"modified")

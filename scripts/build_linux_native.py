@@ -14,6 +14,8 @@ import shutil
 import subprocess
 import sys
 
+from check_pure_core import probe_pure_core_parser
+
 IMAGE = "quay.io/pypa/manylinux_2_28_x86_64@sha256:1e7b8460ad8fb3fb0fbe1cd818845159ac896b4fd17452d56e892c291f3b97a8"
 COMPONENTS = {
     "welcome": ("narwhal-welcome",),
@@ -37,24 +39,62 @@ UI_CORE_EXPORTS = (
     "narwhal_editor_abi", "narwhal_editor_close", "narwhal_editor_edit", "narwhal_editor_read",
     "narwhal_popup_abi", "narwhal_popup_apply", "narwhal_popup_destroy",
     "narwhal_popup_guards", "narwhal_popup_hit", "narwhal_popup_panel", "narwhal_popup_rows",
+    "narwhal_transcript_abi", "narwhal_transcript_apply", "narwhal_transcript_capabilities",
+    "narwhal_transcript_close", "narwhal_transcript_read", "narwhal_transcript_release",
+    "narwhal_transcript_stats",
 )
 UI_CORE_IDENTITY = {"editor_abi": 1, "popup_abi": 1, "state_bytes": 88,
+                    "transcript_abi": 1, "transcript_capabilities": 7,
+                    "transcript_request_bytes": 40, "transcript_reply_bytes": 56,
                     "exports": list(UI_CORE_EXPORTS)}
 UI_CORE_SOURCE = "ui-core-source.json"
+UI_CORE_REQUIRED_SOURCE = (
+    "Cargo.toml", "Cargo.lock", "LICENSE", "README.md", "POPUP.md", "TRANSCRIPT.md",
+    "narwhal_ui_core.h", "gen_unicode.py", "transcript_unicode.py",
+    "src/lib.rs", "src/editor.rs", "src/unicode16.rs", "src/allocation_tests.rs",
+    "src/layout_algorithm.rs", "src/layout_contract.rs", "src/popup.rs", "src/popup_ffi.rs",
+    "src/popup_tests.rs", "src/transcript.rs", "src/transcript_ffi.rs", "src/transcript_tests.rs",
+)
 UI_CORE_PROBE = r'''
-import ctypes as c, json, sys
+import ctypes as c, json, struct, sys
 lib = c.CDLL(sys.argv[1])
 exports = json.loads(sys.argv[2])
 for name in exports:
     getattr(lib, name)
 result = {"exports": exports}
-for name in ("editor", "popup"):
+for name in ("editor", "popup", "transcript"):
     fn = getattr(lib, "narwhal_" + name + "_abi")
     fn.argtypes = []
     fn.restype = c.c_uint32
     result[name + "_abi"] = int(fn())
-if result["editor_abi"] != 1 or result["popup_abi"] != 1:
-    raise RuntimeError("ui-core editor/popup ABI mismatch")
+if result["editor_abi"] != 1 or result["popup_abi"] != 1 or result["transcript_abi"] != 1:
+    raise RuntimeError("ui-core editor/popup/transcript ABI mismatch")
+lib.narwhal_transcript_capabilities.argtypes = []
+lib.narwhal_transcript_capabilities.restype = c.c_uint64
+result["transcript_capabilities"] = int(lib.narwhal_transcript_capabilities())
+if result["transcript_capabilities"] != 7:
+    raise RuntimeError("ui-core transcript capabilities mismatch")
+class TranscriptRequest(c.Structure):
+    _fields_ = [("op", c.c_uint32), ("flags", c.c_uint32), ("revision", c.c_uint64),
+                ("a", c.c_int64), ("b", c.c_int64), ("c", c.c_int64)]
+class TranscriptReply(c.Structure):
+    _fields_ = [(name, c.c_uint64) for name in ("handle", "revision", "len", "token", "count", "bytes", "kind")]
+result["transcript_request_bytes"] = c.sizeof(TranscriptRequest)
+result["transcript_reply_bytes"] = c.sizeof(TranscriptReply)
+if result["transcript_request_bytes"] != 40 or result["transcript_reply_bytes"] != 56:
+    raise RuntimeError("ui-core transcript Request40/Reply56 layout mismatch")
+lib.narwhal_transcript_apply.argtypes = [c.c_uint64, c.POINTER(TranscriptRequest), c.c_size_t,
+    c.POINTER(c.c_ubyte), c.c_size_t, c.POINTER(TranscriptReply), c.c_size_t]
+lib.narwhal_transcript_apply.restype = c.c_uint32
+lib.narwhal_transcript_read.argtypes = [c.c_uint64, c.c_uint64, c.c_uint64,
+    c.POINTER(c.c_ubyte), c.c_size_t, c.POINTER(c.c_size_t)]
+lib.narwhal_transcript_read.restype = c.c_uint32
+lib.narwhal_transcript_release.argtypes = [c.c_uint64, c.c_uint64]
+lib.narwhal_transcript_release.restype = c.c_uint32
+lib.narwhal_transcript_close.argtypes = [c.c_uint64]
+lib.narwhal_transcript_close.restype = c.c_uint32
+lib.narwhal_transcript_stats.argtypes = [c.POINTER(c.c_uint64), c.c_size_t]
+lib.narwhal_transcript_stats.restype = c.c_uint32
 class State(c.Structure):
     _fields_ = [(name, c.c_int64 if name in ("anchor", "max_chars") else c.c_uint64)
                 for name in ("handle", "revision", "text_revision", "length", "caret",
@@ -83,6 +123,58 @@ try:
 finally:
     if lib.narwhal_editor_close(state.handle) != 0:
         raise RuntimeError("ui-core editor close failed")
+# Fixed binary witness from TRANSCRIPT.md: two raw rows, preserving NUL,
+# a supplementary code point and a lone surrogate. No product adapter imports.
+payload = struct.pack("<8I", 2, 3, 65, 0, 0x1f40b, 2, 0xd800, 66)
+def transcript_stats(expected):
+    stats = (c.c_uint64 * 4)()
+    if lib.narwhal_transcript_stats(stats, 4) != 0 or tuple(stats) != expected:
+        raise RuntimeError("ui-core transcript ownership/snapshot stats differ")
+def transcript_call(handle, request, data=b""):
+    output = TranscriptReply()
+    input = (c.c_ubyte * len(data)).from_buffer_copy(data) if data else None
+    if lib.narwhal_transcript_apply(handle, c.byref(request), c.sizeof(request),
+            input, len(data), c.byref(output), c.sizeof(output)) != 0:
+        raise RuntimeError("ui-core transcript apply failed: " + str(request.op))
+    return output
+transcript_stats((0, 0, 0, 0))
+request, reply = TranscriptRequest(0, 2, 0, 4, 0, 0), TranscriptReply()
+for request_size, reply_size in ((39, 56), (40, 55)):
+    if lib.narwhal_transcript_apply(0, c.byref(request), request_size, None, 0,
+            c.byref(reply), reply_size) != 1:
+        raise RuntimeError("ui-core transcript accepted a wrong struct size")
+transcript_stats((0, 0, 0, 0))
+created = transcript_call(0, request)
+if not created.handle:
+    raise RuntimeError("ui-core transcript returned no owner")
+owner = created.handle
+try:
+    if (created.revision, created.len, created.token, created.count, created.bytes, created.kind) != (1, 0, 0, 0, 0, 0):
+        raise RuntimeError("ui-core transcript create reply differs")
+    appended = transcript_call(owner, TranscriptRequest(1, 0, created.revision, 0, 0, 0), payload)
+    if (appended.handle, appended.revision, appended.len, appended.token, appended.count, appended.bytes, appended.kind) != (owner, 2, 2, 0, 0, 0, 0):
+        raise RuntimeError("ui-core transcript append reply differs")
+    snapshot = transcript_call(owner, TranscriptRequest(4, 0, appended.revision, 0, 2, 1))
+    if not snapshot.token:
+        raise RuntimeError("ui-core transcript returned no snapshot")
+    try:
+        if (snapshot.handle, snapshot.revision, snapshot.len, snapshot.count, snapshot.bytes, snapshot.kind) != (owner, 2, 2, 2, len(payload), 1):
+            raise RuntimeError("ui-core transcript projection reply differs")
+        transcript_stats((1, 1, 5, len(payload)))
+        # Allocate from the known witness, never an untrusted native byte count.
+        output, needed = (c.c_ubyte * len(payload))(), c.c_size_t()
+        if (lib.narwhal_transcript_read(owner, snapshot.token, snapshot.revision,
+                output, len(output), c.byref(needed)) != 0
+                or needed.value != len(payload) or bytes(output) != payload):
+            raise RuntimeError("ui-core transcript projection bytes differ")
+    finally:
+        if lib.narwhal_transcript_release(owner, snapshot.token) != 0:
+            raise RuntimeError("ui-core transcript snapshot release failed")
+    transcript_stats((1, 0, 5, 0))
+finally:
+    if lib.narwhal_transcript_close(owner) != 0:
+        raise RuntimeError("ui-core transcript owner close failed")
+transcript_stats((0, 0, 0, 0))
 print(json.dumps(result, sort_keys=True))
 '''
 
@@ -95,9 +187,9 @@ def probe_ui_core(path: Path, python: Path | str = sys.executable, *, env=None) 
             env=env, text=True, capture_output=True, check=True, timeout=30)
         identity = json.loads(completed.stdout)
     except (OSError, subprocess.SubprocessError, ValueError) as error:
-        raise ValueError(f"cannot verify ui-core ABI/State88: {getattr(error, 'stderr', '') or error}") from error
+        raise ValueError(f"cannot verify ui-core ABI/State88/transcript Request40/Reply56: {getattr(error, 'stderr', '') or error}") from error
     if identity != UI_CORE_IDENTITY:
-        raise ValueError(f"ui-core ABI/State88/export evidence differs: {identity!r}")
+        raise ValueError(f"ui-core ABI/State88/transcript/export evidence differs: {identity!r}")
     return identity
 
 
@@ -109,6 +201,16 @@ def verify_ui_core_source(directory: Path, source: Path, library: str) -> dict:
         if any(not path.is_file() or path.is_symlink() for path in (receipt, binary)):
             raise ValueError("missing regular ui-core source receipt/library")
         actual = json.loads(receipt.read_text(encoding="utf-8"))
+        crate = source / "native/ui_core"
+        for name in UI_CORE_REQUIRED_SOURCE:
+            if not (crate / name).is_file():
+                raise ValueError(f"missing ui-core source input: {name}")
+        if (source / "native").is_symlink() or crate.is_symlink():
+            raise ValueError("symlinked ui-core source directory")
+        for directory, dirs, _ in os.walk(crate):
+            dirs[:] = [name for name in dirs if name not in {".git", "target", "__pycache__"}]
+            if any((Path(directory) / name).is_symlink() for name in dirs):
+                raise ValueError("symlinked ui-core source directory")
         expected = {"inputs": inventory(source, "ui_core"), "sha256": digest(binary)}
         if actual != expected:
             raise ValueError("ui-core source/binary receipt differs")
@@ -202,6 +304,9 @@ def main() -> None:
     if completed.returncode or before != after:
         raise SystemExit(f"{args.crate}: failed or source changed; inspect {log}")
     if not args.test:
+        if args.crate == "pure_core":
+            receipt["pure_core_parser"] = probe_pure_core_parser(target / "release/libnarwhal_pure_core.so")
+            (out / f"{args.crate}-{mode}-receipt.json").write_text(json.dumps(receipt, indent=2) + "\n")
         (out / "bin").mkdir(exist_ok=True)
         for name in COMPONENTS[args.crate]:
             source, destination = target / "release" / name, out / "bin" / name

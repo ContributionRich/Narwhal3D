@@ -2,7 +2,7 @@
 
 NARWHAL_UI_CORE_LIBRARY=... python3 -B spike/test_ui_core_popup.py
 Reuses ALL unchanged test_shell_popup.PopupTests with the native constructor and
-runtime factory; additional differential traces check state and metric call order.
+runtime factory; independently captured DATA checks state and metric call order.
 """
 import ctypes as C
 import gc
@@ -11,7 +11,7 @@ import io
 import math
 import os
 from pathlib import Path
-import random
+from test_ui_core_golden import DATA
 import sys
 from types import ModuleType, SimpleNamespace as NS
 import unittest
@@ -36,11 +36,8 @@ def load(name, path):
 nt = load(pkg.__name__ + '.native_textfield', SOURCE / 'narwhal3d/native_textfield.py')
 native = load(pkg.__name__ + '.native_popup', SOURCE / 'narwhal3d/native_popup.py')
 popup = load(pkg.__name__ + '.shell_popup', SOURCE / 'narwhal3d/shell_popup.py')
-legacy = popup.PopupModel
 old = load('_popup_unchanged_suite', ROOT / 'spike/test_shell_popup.py')
 old.popup = popup
-# Only the test subject binding changes, never any assertion or test body.
-popup.PopupModel = native.NativePopup
 PopupTests = old.PopupTests
 event, point = old.event, old.row_point
 
@@ -48,10 +45,8 @@ event, point = old.event, old.row_point
 class NativeTests(unittest.TestCase):
     def setUp(self):
         self.models = []
-        popup.PopupModel = legacy
 
     def tearDown(self):
-        popup.PopupModel = native.NativePopup
         for model in self.models:
             model.dispose()
         popup._model = popup._window = None
@@ -96,76 +91,67 @@ class NativeTests(unittest.TestCase):
             for a, b in zip(r, visible):
                 self.assertAlmostEqual(a, b)
 
-    def test_metrics_lazy_nonadditive_and_stateful(self):
-        rows = [{'label': 'AV', 'shortcut': 'ffi', 'children': [{'label': 'e\u0301', 'action': 1}]},
-                {'separator': True}, {'label': 'second', 'action': 2}]
-        logs = [[], []]
-        def metric(log):
-            def measure(text, size):
-                log.append((text, size))
-                return {'AV': 201, 'ffi': 45, 'e\u0301': 17}.get(text, 0) + len(log) * .75
-            return measure
-        a = legacy((1000, 800), .85, metric(logs[0])).open(rows, (790, 650), 'Title', lambda *a: None)
-        b = native.NativePopup((1000, 800), .85, metric(logs[1])).open(rows, (790, 650), 'Title', lambda *a: None)
-        self.models.append(b)
-        self.assertEqual(logs[0], logs[1])
-        self.assertNotIn(('e\u0301', 10.2), logs[1])
-        for key in ('HOME', 'RIGHT_ARROW', 'LEFT_ARROW', 'RIGHT_ARROW'):
-            a.handle_event(event(key)); b.handle_event(event(key))
-            self.compare(a, b)
-            self.assertEqual(logs[0], logs[1])
-        self.assertEqual([x[0] for x in logs[1]].count('e\u0301'), 2)
-
-    def compare(self, a, b):
-        self.assertEqual(a.is_open, b.is_open)
-        self.assertEqual(a._releases, b._releases)
-        self.assertEqual(len(a.panels), len(b.panels))
-        for p, q in zip(a.panels, b.panels):
+    def compare_golden(self, model, expected):
+        self.assertEqual(model.is_open, expected['is_open'])
+        self.assertEqual(sorted(model._releases), expected['releases'])
+        self.assertEqual(len(model.panels), len(expected['panels']))
+        def plain(value):
+            if hasattr(value, 'items'):
+                return {k: plain(v) for k, v in value.items()}
+            if isinstance(value, (tuple, list)):
+                return [plain(v) for v in value]
+            return value
+        for p, q in zip(model.panels, expected['panels']):
             for name in ('title', 'parent_index', 'selected', 'rows'):
-                self.assertEqual(getattr(p, name), getattr(q, name), name)
+                self.assertEqual(plain(getattr(p, name)), q[name], name)
             for name in ('offset', 'max_scroll', 'width'):
-                self.assertAlmostEqual(getattr(p, name), getattr(q, name), places=7, msg=name)
+                self.assertAlmostEqual(getattr(p, name), q[name], places=7, msg=name)
             for name in ('rect', 'body', 'up', 'down'):
-                x, y = getattr(p, name), getattr(q, name)
-                if x is None:
-                    self.assertIsNone(y)
+                got = getattr(p, name)
+                if q[name] is None:
+                    self.assertIsNone(got)
                 else:
-                    for u, v in zip(x, y):
-                        self.assertAlmostEqual(u, v, places=7, msg=name)
-            for x, y in zip(p.row_rects, q.row_rects):
-                for u, v in zip(x, y):
-                    self.assertAlmostEqual(u, v, places=7)
+                    self.assertEqual(len(got), len(q[name]))
+                    for x, y in zip(got, q[name]):
+                        self.assertAlmostEqual(x, y, places=7, msg=name)
+            self.assertEqual(len(p.row_rects), len(q['row_rects']))
+            for got, wanted in zip(p.row_rects, q['row_rects']):
+                for x, y in zip(got, wanted):
+                    self.assertAlmostEqual(x, y, places=7)
 
-    def test_seeded_event_parity(self):
-        rng = random.Random(71319)
-        rows = [{'label': 'nested', 'enabled': False, 'children': [
-            {'label': 'deeper', 'children': [{'label': 'leaf', 'action': 'leaf'}]},
-            {'label': 'child', 'action': 'child'}]}, {'separator': True}] + [
-            {'label': str(i), 'action': i, 'enabled': i % 4 != 0} for i in range(60)]
-        calls = [[], []]
-        a = legacy((1000, 800), .85)
-        b = native.NativePopup((1000, 800), .85)
-        self.models.append(b)
-        keys = ('HOME', 'END', 'UP_ARROW', 'DOWN_ARROW', 'LEFT_ARROW', 'RIGHT_ARROW', 'RET',
-                'NUMPAD_ENTER', 'PAGE_UP', 'PAGE_DOWN', 'MOUSEMOVE', 'INBETWEEN_MOUSEMOVE',
-                'WHEELUPMOUSE', 'WHEELDOWNMOUSE', 'LEFTMOUSE', 'RIGHTMOUSE', 'MIDDLEMOUSE',
-                'BUTTON4MOUSE', 'PEN', 'ERASER', 'TRACKPADPAN', 'TRACKPADZOOM', 'MOUSEROTATE',
-                'MOUSESMARTZOOM', 'ESC', 'A', 'TIMER', 'TIMER0', 'WINDOW_DEACTIVATE')
-        for i in range(900):
-            if not a.is_open or i % 41 == 0:
-                anchor = (rng.uniform(-100, 1100), rng.uniform(-100, 900))
-                for m, log in zip((a, b), calls):
-                    m.open(rows, anchor, 'Root', lambda *args, log=log: log.append(args))
-            if i % 29 == 0:
-                size = rng.choice(((1, 1), (160, 120), (1000, 800)))
-                a.resize(size); b.resize(size)
-            p = rng.choice(a.panels)
-            xy = (rng.uniform(p.rect[0] - 3, p.rect[2] + 3), rng.uniform(p.rect[1] - 3, p.rect[3] + 3))
-            e = event(rng.choice(keys), rng.choice(('PRESS', 'RELEASE', 'NOTHING', 'DOUBLE_CLICK', 'CLICK')), xy)
-            self.assertEqual(a.handle_event(e), b.handle_event(e), (i, e))
-            self.compare(a, b)
-            self.assertEqual(calls[0], calls[1])
-            self.assertEqual(a.hit_test(*xy), b.hit_test(*xy))
+    def test_metrics_lazy_nonadditive_and_stateful(self):
+        trace, log = DATA['popup_metrics'], []
+        def measure(text, size):
+            log.append([text, size])
+            return {'AV': 201, 'ffi': 45, 'e\u0301': 17}.get(text, 0) + len(log)*.75
+        m = native.NativePopup((1000, 800), .85, measure)
+        self.models.append(m)
+        m.open(trace['rows'], (790, 650), 'Title', lambda *a: None)
+        self.compare_golden(m, trace['initial'])
+        self.assertEqual(log, trace['calls'])
+        self.assertNotIn(['e\u0301', 10.2], log)
+        for step in trace['steps']:
+            m.handle_event(event(step['key']))
+            self.compare_golden(m, step['state'])
+            self.assertEqual(log, step['calls'])
+        self.assertEqual([x[0] for x in log].count('e\u0301'), 2)
+
+    def test_golden_event_trace(self):
+        trace, calls = DATA['popup'], []
+        m = native.NativePopup((1000, 800), .85)
+        self.models.append(m)
+        self.assertEqual(len(trace['steps']), 900)
+        for i, step in enumerate(trace['steps']):
+            if 'open' in step:
+                m.open(trace['rows'], step['open'], 'Root', lambda *args: calls.append(list(args)))
+            if 'resize' in step:
+                m.resize(step['resize'])
+            key, value, xy = step['event']
+            self.assertEqual(m.handle_event(event(key, value, xy)), step['consumed'], i)
+            self.compare_golden(m, step['state'])
+            self.assertEqual(calls, step['calls'])
+            hit = m.hit_test(*xy)
+            self.assertEqual(None if hit is None else list(hit), step['hit'])
 
     def test_failure_closes_without_callback_replay(self):
         log, calls = [], []
@@ -241,15 +227,21 @@ class NativeTests(unittest.TestCase):
         gc.collect()
         self.assertEqual(lib.narwhal_popup_destroy(h), 2)
 
+    def test_retired_gui_mode_refuses_before_launch(self):
+        driver = load('_popup_gui_policy', ROOT / 'spike/test_ui_core_popup_gui.py')
+        with patch.object(sys, 'argv', ['test', '--legacy']), patch.object(driver.tempfile, 'mkdtemp') as scratch:
+            with self.assertRaisesRegex(ValueError, '--legacy was retired'):
+                driver.launch()
+            scratch.assert_not_called()
+
     def test_factory_unavailable_and_bad_library(self):
         with patch.object(native, 'library', return_value=None):
-            m = native.model((1000, 800), 1, None, legacy)
-        self.assertIs(type(m), legacy)
-        self.assertIn('unavailable', m._backend_reason)
+            with self.assertRaisesRegex(RuntimeError, 'required native'):
+                native.model((1000, 800), 1, None)
         with patch.object(nt, '_loaded_library', None), patch.dict(os.environ,
                 NARWHAL_UI_CORE_LIBRARY='/var/tmp/nwp/no-such-library.so'):
             with self.assertRaisesRegex(RuntimeError, 'cannot load'):
-                native.model((1000, 800), 1, None, legacy)
+                native.model((1000, 800), 1, None)
         with patch.object(nt, 'library', return_value=NS()):
             with self.assertRaisesRegex(RuntimeError, 'popup core'):
                 native.library()

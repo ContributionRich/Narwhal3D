@@ -12,7 +12,7 @@ import gc
 import importlib.util
 import json
 import os
-import random
+
 import sys
 import types
 import unittest
@@ -38,67 +38,6 @@ class Payload:
         raise AssertionError("payload equality must not be consulted")
 
 
-class Reference:
-    """Frozen ordinary semantics read from undo.py before Main's factory changes.
-
-    Deliberately independent of live undo.py, whose implementation changes in the
-    parallel integration lane. No state-ID/uncertainty claims come from this fixture.
-    """
-
-    def __init__(self, limit):
-        self._undo, self._redo = [], []
-        self._open, self._depth, self.next_serial = None, 0, 1
-        self.enabled, self.limit = True, limit
-
-    def begin(self, name):
-        if not self.enabled:
-            return 0
-        if self._open is not None:
-            self._depth += 1
-            return self._open.serial
-        self._open = types.SimpleNamespace(serial=self.next_serial, name=str(name or "Change"), before=None, after=None)
-        self.next_serial += 1
-        self._depth = 1
-        return self._open.serial
-
-    def capture(self, value):
-        if self._open is None or self._open.before is not None:
-            return False
-        self._open.before = value
-        return True
-
-    def end(self):
-        if self._open is None:
-            return False
-        self._depth -= 1
-        if self._depth:
-            return False
-        record, self._open = self._open, None
-        if record.before is None:
-            return False
-        self._undo.append(record)
-        self._undo[:] = self._undo[-self.limit:]
-        self._redo.clear()
-        return True
-
-    def abandon(self):
-        self._open, self._depth = None, 0
-
-    def clear(self):
-        self._undo.clear()
-        self._redo.clear()
-        self.abandon()
-
-    def nav(self, direction, current):
-        source, dest, field = ((self._undo, self._redo, "after") if direction == "undo"
-                               else (self._redo, self._undo, "before"))
-        if self._open is not None or not source:
-            return None
-        record = source.pop()
-        setattr(record, field, current)
-        dest.append(record)
-        return record
-
 
 class RealHistory(unittest.TestCase):
     def stack(self, limit=100):
@@ -120,44 +59,43 @@ class RealHistory(unittest.TestCase):
                 tuple((id(r), self.fields(r)) for r in stack._redo),
                 None if stack._open is None else (id(stack._open), self.fields(stack._open)))
 
-    def assert_reference(self, stack, reference):
-        self.assertEqual([self.fields(r) for r in stack._undo], [self.fields(r) for r in reference._undo])
-        self.assertEqual([self.fields(r) for r in stack._redo], [self.fields(r) for r in reference._redo])
-        self.assertEqual(self.fields(stack._open), self.fields(reference._open))
-        self.assertEqual(stack._depth, reference._depth)
-        self.assertEqual(stack.next_serial, reference.next_serial)
-        self.assertEqual(stack.enabled, reference.enabled)
-        self.assertEqual(stack.can_undo, bool(reference._undo))
-        self.assertEqual(stack.can_redo, bool(reference._redo))
-        self.assertEqual(stack.recording, reference._open is not None)
-        self.assertEqual(stack.captured, reference._open is not None and reference._open.before is not None)
-        self.assertEqual(stack.current_serial, reference._open.serial if reference._open else 0)
-        self.assertEqual(stack.top_serial, reference._undo[-1].serial if reference._undo else 0)
-        self.assertEqual(stack.undo_names(), [r.name for r in reversed(reference._undo)])
-        self.assertEqual(stack.redo_names(), [r.name for r in reversed(reference._redo)])
-        self.assertEqual(stack.undo_name, reference._undo[-1].name if reference._undo else None)
-        self.assertEqual(stack.redo_name, reference._redo[-1].name if reference._redo else None)
-
     def test_reference_lifecycle(self):
-        stack, ref = self.stack(3), Reference(3)
-        rng = random.Random(187)
+        from test_rust_history_trace import TRACE
+        stack = self.stack(3)
         payloads = [None, Payload(), [], {}, Payload()]
-        operations = ["begin", "capture", "end", "abandon", "enable", "undo", "redo", "clear"]
-        for _ in range(350):
-            op = rng.choices(operations, weights=[6, 6, 7, 1, 1, 3, 3, 1])[0]
-            value = rng.choice(payloads)
-            if op == "begin":
-                name = rng.choice([None, "", "Move", "é\x00", 42])
-                self.assertEqual(stack.begin(name), ref.begin(name))
-            elif op == "capture":
-                self.assertEqual(stack.capture(value), ref.capture(value))
-            elif op == "enable":
-                stack.enabled = ref.enabled = not ref.enabled
-            elif op in ("undo", "redo"):
-                self.assertEqual(self.fields(getattr(stack, op)(value)), self.fields(ref.nav(op, value)))
-            else:
-                self.assertEqual(getattr(stack, op)(), getattr(ref, op)())
-            self.assert_reference(stack, ref)
+
+        def fields(data):
+            if data is None:
+                return None
+            serial, name, before, after = data
+            return serial, name, id(payloads[before]), id(payloads[after])
+
+        self.assertEqual(len(TRACE), 350)
+        for step, (op, arg, result, undo, redo, opened, depth, next_serial, enabled) in enumerate(TRACE):
+            with self.subTest(step=step, op=op):
+                if op == 'enable':
+                    stack.enabled = arg
+                elif op in ('undo', 'redo'):
+                    self.assertEqual(self.fields(getattr(stack, op)(payloads[arg])), fields(result))
+                else:
+                    args = (payloads[arg],) if op == 'capture' else (arg,) if op == 'begin' else ()
+                    self.assertEqual(getattr(stack, op)(*args), result)
+                self.assertEqual([self.fields(r) for r in stack._undo], [fields(r) for r in undo])
+                self.assertEqual([self.fields(r) for r in stack._redo], [fields(r) for r in redo])
+                self.assertEqual(self.fields(stack._open), fields(opened))
+                self.assertEqual(stack._depth, depth)
+                self.assertEqual(stack.next_serial, next_serial)
+                self.assertEqual(stack.enabled, enabled)
+                self.assertEqual(stack.can_undo, bool(undo))
+                self.assertEqual(stack.can_redo, bool(redo))
+                self.assertEqual(stack.recording, opened is not None)
+                self.assertEqual(stack.captured, opened is not None and opened[2] != 0)
+                self.assertEqual(stack.current_serial, opened[0] if opened else 0)
+                self.assertEqual(stack.top_serial, undo[-1][0] if undo else 0)
+                self.assertEqual(stack.undo_names(), [r[1] for r in reversed(undo)])
+                self.assertEqual(stack.redo_names(), [r[1] for r in reversed(redo)])
+                self.assertEqual(stack.undo_name, undo[-1][1] if undo else None)
+                self.assertEqual(stack.redo_name, redo[-1][1] if redo else None)
 
     def test_null_disabled_nested_and_noop(self):
         s = self.stack()
@@ -1206,17 +1144,24 @@ class Protocol(unittest.TestCase):
     def test_factory_discovery_and_explicit_errors(self):
         loader = types.SimpleNamespace(load_library=lambda: None)
         with patch.dict(os.environ, {}, clear=True), patch.object(h, "_session_module", return_value=loader):
-            self.assertIsNone(h.try_create())
-            loader.load_library = lambda: object()
-            self.assertIsNone(h.try_create())
+            for library, code in ((None, 'history_core_not_installed'),
+                                  (object(), 'history_exports_unavailable')):
+                loader.load_library = lambda: library
+                with patch.object(h, '_call') as call:
+                    with self.assertRaisesRegex(h.HistoryError, 'NARWHAL_HISTORY_CORE') as caught:
+                        h.try_create()
+                    self.assertEqual(caught.exception.code, code)
+                    call.assert_not_called()
             loader.load_library = lambda: types.SimpleNamespace(narwhal_history_abi=Function(lambda: 1))
             with self.assertRaises(h.HistoryError):
                 h.try_create()
             bad = Fake(lambda *_: b"{}")
             bad.narwhal_history_abi = Function(lambda: 2)
             loader.load_library = lambda: bad
-            with self.assertRaisesRegex(h.HistoryError, "history_abi_must_be_1"):
-                h.try_create()
+            with patch.object(h, '_call') as call:
+                with self.assertRaisesRegex(h.HistoryError, "history_abi_must_be_1"):
+                    h.try_create()
+                call.assert_not_called()
             loader.load_library = lambda: Fake(lambda *_: b"{}")
             with self.assertRaises(h.HistoryProtocolError):
                 h.try_create()
@@ -1247,6 +1192,17 @@ def run_mutations():
     global h
     baseline, source = h, SOURCE.read_text()
     mutants = [
+        ('frozen lifecycle names reversed',
+         "return self._request('names', side='undo')['result']['names']",
+         "return self._request('names', side='redo')['result']['names']",
+         RealHistory, 'test_reference_lifecycle'),
+        ('missing native history accepted',
+         'raise _unavailable("history_core_not_installed")', 'return None',
+         Protocol, 'test_factory_discovery_and_explicit_errors'),
+        ('old core accepted without history exports',
+         '        library = _configure(library)\n    return NativeUndoStack',
+         '        if not hasattr(library, "narwhal_history_abi"):\n            return None\n        library = _configure(library)\n    return NativeUndoStack',
+         Protocol, 'test_factory_discovery_and_explicit_errors'),
         ("captured fast path removed",
          "if not header['uncertain'] and header['captured']:", "if False:",
          RealHistory, "test_repeated_capture_shortcut_and_writable_before_reset"),

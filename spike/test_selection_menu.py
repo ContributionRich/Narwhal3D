@@ -1,7 +1,7 @@
 """Pure overlap-menu tests: python3 -B spike/test_selection_menu.py [--mutations].
 
 Compile current source, never package __init__ or bytecode. Exercise the real
-shell PopupModel/public routing; no Blender, drawing, timer or UI integration.
+native popup/public routing; no Blender, drawing, timer or UI integration.
 """
 import importlib
 import io
@@ -33,7 +33,6 @@ def event(key='LEFTMOUSE', value='PRESS', point=(0, 0)):
 
 
 class SelectionMenuTests(unittest.TestCase):
-    native_backend = False
 
     def setUp(self):
         modules = patch.dict(sys.modules)
@@ -45,15 +44,7 @@ class SelectionMenuTests(unittest.TestCase):
         self.shell = load('shell_popup', package)
         self.menu = load('selection_menu', package)
         adapter = importlib.import_module(package.__name__ + '.native_popup')
-        if self.native_backend:
-            if adapter.library() is None:
-                self.skipTest('native UI core unavailable; legacy controls still required')
-        else:
-            # These source mutants target the complete Python compatibility model.
-            # Keep that control explicit even when the native core is installed.
-            fallback = patch.object(adapter, 'library', return_value=None)
-            fallback.start()
-            self.addCleanup(fallback.stop)
+        self.assertIsNotNone(adapter.library(), 'native UI core is required')
         self.calls = []
         self.valid = True
         self.candidates = [NS(key=('Curve', 'Object', 0), label='Curve — Curve'),
@@ -174,9 +165,6 @@ class SelectionMenuTests(unittest.TestCase):
         self.assertEqual(self.calls, [])
 
 
-class NativeSelectionMenuTests(SelectionMenuTests):
-    native_backend = True
-
 
 def mutations():
     probes = [
@@ -184,15 +172,14 @@ def mutations():
          'test_hover_highlights_candidate_without_selecting'),
         ('selection_menu', 'and valid() and', 'and True and',
          'test_stale_confirmation_rechecks_valid_callback'),
-        ('selection_menu', "shell_popup._model is not st['menu']", 'False',
+        # Native replacement disposes the old owner, so BOTH stale-session guards
+        # must be removed to recreate the old live-stale-session defect.
+        ('selection_menu', "shell_popup._model is not st['menu'] or not st['menu'].is_open", 'False',
          'test_replaced_shell_model_is_neither_highlighted_nor_closed'),
         ('selection_menu', "and shell_popup._model is _session['menu']", '',
          'test_close_does_not_dismiss_replacement_before_current_poll'),
-        ('shell_popup', 'if pressed == (key, hit) and hit is not None:',
-         'if hit is not None:', 'test_callback_deferred_until_matching_release'),
-        ('shell_popup', 'if not self.is_open:\n            return guarded',
-         'if not self.is_open:\n            return False',
-         'test_cancellation_is_noop_and_shell_owns_release_guard'),
+        # Matching-press/closed-release computation now lives in Rust; those
+        # mutants are in test_ui_core_popup_mutations.py, not retired Python.
     ]
     try:
         for module, old, new, test in probes:
@@ -211,7 +198,6 @@ def mutations():
 if __name__ == '__main__':
     if '--mutations' in sys.argv:
         mutations()
-    suite = unittest.TestSuite(unittest.defaultTestLoader.loadTestsFromTestCase(cls)
-                               for cls in (SelectionMenuTests, NativeSelectionMenuTests))
+    suite = unittest.defaultTestLoader.loadTestsFromTestCase(SelectionMenuTests)
     result = unittest.TextTestRunner(verbosity=2).run(suite)
     raise SystemExit(not result.wasSuccessful())

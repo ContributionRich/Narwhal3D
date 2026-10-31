@@ -159,6 +159,7 @@ class ApplicationPackaging(unittest.TestCase):
                     adjacent.write_bytes(path.read_bytes())
             for name, (_, abi) in linux_verify.NATIVE_LIBRARY_ABIS.items():
                 records[name]["abi"] = abi
+            records["libnarwhal_pure_core.so"].update(linux_verify.PURE_CORE_PARSE_IDENTITY)
             records[SO].update(history_abi=1, exports=list(EXPORTS))
             records["narwhal-welcome"]["launch_contract"] = 1
             linux_verify.verify_native_manifest(root, records)
@@ -213,6 +214,7 @@ class ApplicationPackaging(unittest.TestCase):
                     symbol, abi = linux.NATIVE_LIBRARY_ABIS[Path(path).name]
                     return types.SimpleNamespace(**{symbol: lambda: abi})
                 with self.subTest(options=options), patch.object(ctypes, "CDLL", side_effect=load) as loaded, \
+                     patch.object(linux_verify, "probe_pure_core_parser", return_value=linux_verify.PURE_CORE_PARSE_IDENTITY), \
                      patch.object(linux.subprocess, "run", side_effect=execute_probe):
                     # Run the real assembler's ABI/receipt block, without other native probes.
                     tree = ast.parse(textwrap.dedent(inspect.getsource(linux.validate_native_components)))
@@ -245,7 +247,8 @@ class ApplicationPackaging(unittest.TestCase):
             result = dict(expected)
             if history is not None:
                 result["application_core_history"] = history
-            with patch.object(linux_verify.subprocess, "run", return_value=types.SimpleNamespace(stdout=json.dumps(result))):
+            with patch.object(linux_verify, "probe_pure_core_parser", return_value=linux_verify.PURE_CORE_PARSE_IDENTITY), \
+                    patch.object(linux_verify.subprocess, "run", return_value=types.SimpleNamespace(stdout=json.dumps(result))):
                 if history == 1:
                     linux_verify.verify_native_library_abis(Path("app"), Path("python"), {})
                 else:

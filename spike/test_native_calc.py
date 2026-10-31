@@ -2,9 +2,8 @@
 
 Complements ``spike/test_calc.py`` (which pins the grammar and the exact public
 error strings on the Python path) by proving the *native* route is the one
-actually running for valid input, and that every fallback scenario runs the
-*unchanged* Python evaluator with the exact error strings and with the native
-counter NOT incremented.
+actually running for valid input. The expression compatibility evaluator still
+uses the required Rust numeric parser; missing whole-core installations refuse.
 
 * the Rust ABI is present and ``_calc_binding()`` is not ``None``;
 * ``evaluate`` activates the native route (the ``_native_calc_calls`` counter
@@ -14,9 +13,9 @@ counter NOT incremented.
   ``(None, error)`` is byte-for-byte identical to the pure-Python result and the
   native counter is NOT incremented (a native success that should have been a
   rejection would make these RED);
-* the three fallback scenarios (missing library, an old library without the
-  calculator export, a malformed native output) all run the *unchanged Python
-  evaluator* with correct values/strings and with the counter NOT incremented;
+* missing/unloadable whole-core scenarios explicitly refuse numeric parsing;
+  a declined calculator call with the required numeric parser still available
+  preserves expression values/error strings without a native calculator success;
 * a performance guard: on the *same* valid input the native success path must
   not be *materially* slower than the pure-Python evaluator (the "never slower"
   rule -- a regression leaves a DECISION NEEDED note for the owner).
@@ -276,7 +275,16 @@ def _():
          native._native_calc_calls)
 
 
-@check("fallback: a missing library uses the unchanged Python evaluator")
+def required_parser_refuses(text, model_unit='Millimeters'):
+    try:
+        calc.evaluate(text, model_unit)
+    except RuntimeError as exc:
+        assert 'Required Rust number parser' in str(exc), str(exc)
+    else:
+        raise AssertionError('missing mandatory numeric parser was silently bypassed')
+
+
+@check("missing whole core refuses the mandatory numeric-parser dependency")
 def _():
     _reset()
     real_env = os.environ.get("NARWHAL_PURE_CORE")
@@ -285,15 +293,11 @@ def _():
         assert native._calc_binding() is None, \
             "a missing library must make the binding None"
         before = native._native_calc_calls
-        # A valid input still works via the Python path (value unchanged).
-        v, e = calc.evaluate("1+2*3")
-        assert v == 7.0 and e is None, (v, e)
-        v, e = calc.evaluate("27cm", "Meters")
-        assert v == 0.27 and e is None, (v, e)
-        # And a rejection keeps its exact public string.
-        v, e = calc.evaluate("1/0")
-        assert v is None and e == "bad number: '1/0'", (v, e)
-        # The native counter must NOT have moved (the Python evaluator ran).
+        # The expression fallback still needs its required native numeric parser.
+        required_parser_refuses('1+2*3')
+        required_parser_refuses('27cm', 'Meters')
+        required_parser_refuses('1/0')
+        # No native calculator call was made on this admission failure.
         assert native._native_calc_calls == before, \
             ("missing-lib fallback must not touch the native counter",
              before, native._native_calc_calls)
@@ -305,7 +309,7 @@ def _():
         _reset()
 
 
-@check("fallback: an old library without the calculator export uses Python")
+@check("unloadable whole core refuses instead of emulating numeric parsing")
 def _():
     # A real file that is not a valid shared library models "old symbol":
     # CDLL fails (OSError) so the binding is None and the Python evaluator
@@ -319,10 +323,8 @@ def _():
         assert native._calc_binding() is None, \
             "a library without the calc export must make the binding None"
         before = native._native_calc_calls
-        v, e = calc.evaluate("1+2*3")
-        assert v == 7.0 and e is None, (v, e)
-        v, e = calc.evaluate("1/0")
-        assert v is None and e == "bad number: '1/0'", (v, e)
+        required_parser_refuses('1+2*3')
+        required_parser_refuses('1/0')
         assert native._native_calc_calls == before, \
             ("old-symbol fallback must not touch the native counter",
              before, native._native_calc_calls)

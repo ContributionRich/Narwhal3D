@@ -1,7 +1,7 @@
 """Run Main's unchanged selection visibility body with an explicit popup backend.
 
 NARWHAL_UI_CORE_LIBRARY=... python3 -B spike/test_ui_core_popup_gui.py --launch
-Add --legacy for the complete pre-operation fallback control. One owned GUI, both
+The retired --legacy mode is refused. One owned GUI, both
 shared locks, 2 GiB/no swap, >=4 GiB desktop reserve, private disk-backed output.
 The wrapper qualifies backend/lifetime/real BLF identity; Main's original test
 qualifies actual events, row/geometry hover pixels and release shielding.
@@ -20,6 +20,8 @@ ROOT = Path(__file__).resolve().parents[1]
 def launch(script=None):
     import fcntl
     import subprocess
+    if '--legacy' in sys.argv:
+        raise ValueError('--legacy was retired; the required native core has no fallback')
     script = Path(script or __file__).resolve()
     out = Path(tempfile.mkdtemp(prefix='pg-', dir='/var/tmp/nwp'))
     library = Path(os.environ['NARWHAL_UI_CORE_LIBRARY']).resolve(strict=True)
@@ -42,8 +44,7 @@ def launch(script=None):
         NARWHAL3D_NO_DIALOGS='1', NARWHAL_UI_CORE_LIBRARY=str(library),
         OMP_NUM_THREADS='1', OPENBLAS_NUM_THREADS='1',
         VISIBILITY_07_OUTPUT=str(out), VISIBILITY_07_FIRST='object',
-        VISIBILITY_07_MUTATION='', VISIBILITY_07_DIAGNOSTIC_SCROLL='0',
-        POPUP_GUI_LEGACY=str(int('--legacy' in sys.argv)))
+        VISIBILITY_07_MUTATION='', VISIBILITY_07_DIAGNOSTIC_SCROLL='0')
     command = ['systemd-run', '--user', '--scope', '--quiet', '-p', 'MemoryMax=2G',
         '-p', 'MemorySwapMax=0', 'timeout', '--signal=TERM', '--kill-after=5s', '140s',
         'bwrap', '--ro-bind', '/', '/', '--dev-bind', '/dev', '/dev', '--proc', '/proc',
@@ -80,7 +81,7 @@ def launch(script=None):
         if available < 6 * 1024 * 1024:
             raise RuntimeError('Need 4 GiB reserve + 2 GiB GUI; nothing launched')
         (out / 'launch.json').write_text(json.dumps(dict(command=command, source_sha256=before,
-            mem_available_kib=available, native_paths=paths, legacy='--legacy' in sys.argv), indent=2))
+            mem_available_kib=available, native_paths=paths, backend='native'), indent=2))
         with (out / 'run.log').open('w') as log:
             result = subprocess.run(command, cwd=ROOT, env=env, stdout=log, stderr=subprocess.STDOUT, timeout=155)
         text = (out / 'run.log').read_text(errors='replace')
@@ -105,19 +106,15 @@ def run():
     main = runpy.run_path(str(ROOT / 'spike/test_selection_visibility_07.py'))
     try:
         from narwhal3d import native_popup, native_textfield, shell_popup, ui
-        legacy = os.environ['POPUP_GUI_LEGACY'] == '1'
-        if legacy:
-            native_popup.library = lambda: None
-        else:
-            lib = native_popup.library()
-            main['check'](lib.narwhal_editor_abi() == 1 and C.sizeof(native_textfield.State) == 88,
-                          'popup addition preserves editor ABI 1 / State88')
+        lib = native_popup.library()
+        main['check'](lib.narwhal_editor_abi() == 1 and C.sizeof(native_textfield.State) == 88,
+                      'popup addition preserves editor ABI 1 / State88')
         observed = shell_popup.open
 
         def open_popup(*args, **kwargs):
             model = observed(*args, **kwargs)
-            main['check'](isinstance(model, native_popup.NativePopup) != legacy,
-                          'runtime backend is ' + ('legacy' if legacy else 'persistent native'))
+            main['check'](isinstance(model, native_popup.NativePopup),
+                          'runtime backend is persistent native')
             main['check'](model.measure is ui._text_width, 'runtime whole-string BLF measurer retained')
             record = dict(backend=model._backend_reason, handle=getattr(model, 'handle', None),
                           events=0, title=args[2])
@@ -128,10 +125,9 @@ def run():
                 before = getattr(model, 'handle', None)
                 result = original_event(event)
                 record['events'] += 1
-                if not legacy:
-                    assert model.handle == before == record['handle'], 'native popup owner changed during event'
-                    record.update(uploaded_rows=model.uploaded_rows, downloaded_rows=model.downloaded_rows,
-                                  mutation_reply_bytes=model.mutation_reply_bytes)
+                assert model.handle == before == record['handle'], 'native popup owner changed during event'
+                record.update(uploaded_rows=model.uploaded_rows, downloaded_rows=model.downloaded_rows,
+                              mutation_reply_bytes=model.mutation_reply_bytes)
                 return result
             model.handle_event = persistent_event
             return model

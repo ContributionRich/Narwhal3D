@@ -198,48 +198,52 @@ def _session_module():
     return module
 
 
-def _configure(library, *, optional=False):
+def _unavailable(code):
+    error = HistoryError(code)
+    error.args = (f'{code}: native history ABI1 is required. Install the matching '
+                  'application-core library or set NARWHAL_HISTORY_CORE to it; '
+                  'no Python history fallback is available.',)
+    return error
+
+
+def _configure(library):
     abi = getattr(library, "narwhal_history_abi", None)
     call = getattr(library, "narwhal_history_json", None)
-    if abi is None and call is None and optional:
-        return None  # A valid old application core has neither history export.
+
     if abi is None or call is None:
-        raise HistoryError("history_exports_unavailable")
+        raise _unavailable("history_exports_unavailable")
     try:
         abi.argtypes = []
         abi.restype = ctypes.c_uint32
         if abi() != 1:
-            raise HistoryError("history_abi_must_be_1")
+            raise _unavailable("history_abi_must_be_1")
         call.argtypes = [_BYTE_P, ctypes.c_size_t, _BYTE_P, ctypes.c_size_t]
         call.restype = ctypes.c_ssize_t
     except (AttributeError, OSError, TypeError, ctypes.ArgumentError) as exc:
-        raise HistoryError("history_exports_invalid") from exc
+        raise _unavailable("history_exports_invalid") from exc
     return library
 
 
 def try_create(limit=100):
-    """Return None only for an absent default core or an old core without history.
+    """Create required native history or raise before accepting any host snapshots.
 
-    NARWHAL_HISTORY_CORE overrides discovery, including when empty (an error).
-    Otherwise use native_document_session.load_library's existing discovery policy.
-    Present malformed/incompatible libraries and every runtime error are explicit.
+    The historical factory name is retained for callers, not optional behavior.
+    NARWHAL_HISTORY_CORE overrides application-core discovery, even when empty.
     """
     explicit = os.environ.get("NARWHAL_HISTORY_CORE")
     if explicit is not None:
         if not explicit:
-            raise HistoryError("empty_NARWHAL_HISTORY_CORE")
+            raise _unavailable("empty_NARWHAL_HISTORY_CORE")
         try:
             library = ctypes.CDLL(str(Path(explicit).expanduser().resolve()))
         except OSError as exc:
-            raise HistoryError("cannot_load_history_core") from exc
+            raise _unavailable("cannot_load_history_core") from exc
         library = _configure(library)
     else:
         library = _session_module().load_library()
         if library is None:
-            return None
-        library = _configure(library, optional=True)
-        if library is None:
-            return None
+            raise _unavailable("history_core_not_installed")
+        library = _configure(library)
     return NativeUndoStack(limit, library=library)
 
 

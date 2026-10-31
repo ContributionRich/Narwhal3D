@@ -19,6 +19,7 @@ import urllib.request
 import zipfile
 
 from build_linux_native import probe_ui_core
+from check_pure_core import probe_pure_core_parser
 
 OCCT = "b8f597c677811d1f9f4d8a97f5ae2825c0353a42"
 WHEEL = "cadquery_ocp_novtk-8.0.1.0.0-cp313-cp313-macosx_11_0_arm64.whl"
@@ -89,6 +90,8 @@ def reuse_output(root: Path, output: Path) -> bool:
         if any(entry["architecture"] != "arm64" or sha(output / "bin" / name) != entry["sha256"] for name, entry in receipt["components"].items()):
             return False
         if receipt.get("ui_core") != probe_ui_core(output / "bin/libnarwhal_ui_core.dylib"):
+            return False
+        if receipt.get("pure_core_parser") != probe_pure_core_parser(output / "bin/libnarwhal_pure_core.dylib"):
             return False
         libraries = {p.name: sha(p) for p in (output / "bin/occt").glob("*.dylib")}
         return libraries == receipt["occt_libraries"] and bool(libraries)
@@ -206,7 +209,8 @@ print(json.dumps(result))
     if source_inputs(root) != inputs:
         raise SystemExit("native sources changed during compilation")
     ui_core = probe_ui_core(bin_dir / "libnarwhal_ui_core.dylib")
-    receipt = {"ui_core": ui_core, "source_inputs": inputs, "source_revision": subprocess.check_output(["git", "--no-pager", "-C", str(root), "rev-parse", "HEAD"], text=True).strip(),
+    pure_core_parser = probe_pure_core_parser(bin_dir / "libnarwhal_pure_core.dylib")
+    receipt = {"pure_core_parser": pure_core_parser, "ui_core": ui_core, "source_inputs": inputs, "source_revision": subprocess.check_output(["git", "--no-pager", "-C", str(root), "rev-parse", "HEAD"], text=True).strip(),
                "occt_source": OCCT, "occt_wheel_sha256": WHEEL_SHA,
                "occt_libraries": {path.name: sha(path) for path in dylibs}, "components": receipts,
                "unavailable_components": UNAVAILABLE_COMPONENTS,

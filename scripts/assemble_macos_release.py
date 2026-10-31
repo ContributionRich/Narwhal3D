@@ -22,6 +22,7 @@ from build_macos_runtime import inputs as runtime_inputs, BLENDER
 from build_macos_native import source_inputs, COMPONENTS, UNAVAILABLE_COMPONENTS
 from release_policy import validate_preview_version
 from build_linux_native import UI_CORE_IDENTITY, probe_ui_core
+from check_pure_core import probe_pure_core_parser
 
 MACHO = {b"\xcf\xfa\xed\xfe", b"\xfe\xed\xfa\xcf", b"\xce\xfa\xed\xfe", b"\xfe\xed\xfa\xce",
          b"\xca\xfe\xba\xbe", b"\xbe\xba\xfe\xca", b"\xca\xfe\xba\xbf", b"\xbf\xba\xfe\xca"}
@@ -197,6 +198,11 @@ def verify_ui_core(app: Path, python: Path) -> dict:
     return probe_ui_core(adjacent, python)
 
 
+def verify_pure_core(app: Path, python: Path) -> dict:
+    # macOS launcher loads pure-core from the runtime helper directory.
+    return probe_pure_core_parser(app / "runtime/macos-arm64/bin/libnarwhal_pure_core.dylib", python)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ("source", "runtime", "native", "output"):
@@ -304,6 +310,7 @@ def main() -> None:
     run("codesign", "--verify", "--deep", "--strict", str(bundle))
     application_core_abi = verify_application_core(app, python)
     ui_core = verify_ui_core(app, python)
+    pure_core_parser = verify_pure_core(app, python)
     records = inventory(bundle)
     with tempfile.TemporaryDirectory(prefix="narwhal-dmg-", dir=output) as temporary:
         stage = Path(temporary)
@@ -322,6 +329,8 @@ def main() -> None:
                                 mounted_app / python.relative_to(bundle))
         verify_ui_core(mounted_app / "Contents/Resources/app",
                        mounted_app / python.relative_to(bundle))
+        verify_pure_core(mounted_app / "Contents/Resources/app",
+                         mounted_app / python.relative_to(bundle))
         banner = run(str(mounted_app / "Contents/MacOS/Narwhal3D"), env=dict(environment, NARWHAL3D_LAUNCHER_TEST="version"), timeout=60)
         if not banner.startswith("Narwhal 3D 5.2.2"):
             raise ValueError("actual DMG launcher failed its runtime version check")
@@ -332,7 +341,7 @@ def main() -> None:
     receipt = {"schema": 1, "source_revision": args.source_revision, "version": args.version,
                "sha256": digest, "size": dmg.stat().st_size, "signing": "ad-hoc, not notarized",
                "actual_dmg_verified": True, "gui_acceptance": False, "inventory": records,
-               "ui_core": ui_core,
+               "ui_core": ui_core, "pure_core_parser": pure_core_parser,
                "application_core_abi": application_core_abi,
                "application_core_history_abi": 1,
                "application_core_exports": ["narwhal_history_abi", "narwhal_history_json",

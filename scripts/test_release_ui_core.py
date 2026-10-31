@@ -37,11 +37,82 @@ EXPORTS = (
     "narwhal_editor_abi", "narwhal_editor_close", "narwhal_editor_edit", "narwhal_editor_read",
     "narwhal_popup_abi", "narwhal_popup_apply", "narwhal_popup_destroy",
     "narwhal_popup_guards", "narwhal_popup_hit", "narwhal_popup_panel", "narwhal_popup_rows",
+    "narwhal_transcript_abi", "narwhal_transcript_apply", "narwhal_transcript_capabilities",
+    "narwhal_transcript_close", "narwhal_transcript_read", "narwhal_transcript_release",
+    "narwhal_transcript_stats",
 )
-IDENTITY = {"editor_abi": 1, "popup_abi": 1, "state_bytes": 88, "exports": list(EXPORTS)}
+IDENTITY = {"editor_abi": 1, "popup_abi": 1, "state_bytes": 88,
+            "transcript_abi": 1, "transcript_capabilities": 7,
+            "transcript_request_bytes": 40, "transcript_reply_bytes": 56, "exports": list(EXPORTS)}
 
 
-def fake_library(editor=1, popup=1, missing=(), state_bytes=88, edit_status=0, read=0, close=0):
+def add_transcript_fixture(lib, transcript=1, capabilities=7, request_bytes=40, reply_bytes=56, transcript_fault=""):
+    """Fixed binary smoke witness, not the application parser or transcript adapter."""
+    payload = struct.pack("<8I", 2, 3, 65, 0, 0x1f40b, 2, 0xd800, 66)
+    state = dict(owner=False, revision=0, lines=0, token=False)
+    lib.transcript_calls = []
+    lib.narwhal_transcript_abi = lambda: transcript
+    lib.narwhal_transcript_capabilities = lambda: capabilities
+
+    def apply(handle, request, request_size, data, length, output, output_size):
+        if request_size != request_bytes or output_size != reply_bytes:
+            return 0 if transcript_fault == "accept-sizes" else 1
+        r, out = request._obj, output._obj
+        lib.transcript_calls.append(r.op)
+        if transcript_fault == "apply":
+            return 1
+        if r.op == 0:
+            assert (handle, r.flags, r.revision, r.a, r.b, r.c, length) == (0, 2, 0, 4, 0, 0, 0)
+            state.update(owner=True, revision=1, lines=0, token=False)
+        else:
+            assert state["owner"] and handle == 19 and r.revision == state["revision"] and r.flags == 0
+            if r.op == 1:
+                assert ctypes.string_at(data, length) == payload
+                state.update(revision=2, lines=0 if transcript_fault == "append" else 2)
+            else:
+                assert (r.op, r.a, r.b, r.c, length) == (4, 0, 2, 1, 0)
+                state["token"] = True
+                out.token, out.count, out.bytes, out.kind = 23, 2, len(payload), 1
+                if transcript_fault == "huge-bytes": out.bytes = 2**63
+                if transcript_fault == "count": out.count = 0
+        out.handle, out.revision, out.len = 19, state["revision"], state["lines"]
+        if transcript_fault == "owner": out.handle = 0
+        if transcript_fault == "revision": out.revision = 0
+        return 0
+
+    def read(handle, token, revision, output, capacity, needed):
+        assert (handle, token, revision, capacity) == (19, 23, 2, len(payload)) and state["token"]
+        needed._obj.value = len(payload) + (1 if transcript_fault == "needed" else 0)
+        ctypes.memmove(output, payload, len(payload))
+        if transcript_fault == "bytes": output[0] = 99
+        return 1 if transcript_fault == "read" else 0
+
+    def release(handle, token):
+        assert (handle, token) == (19, 23) and state["token"]
+        state["token"] = transcript_fault == "leak"
+        return 1 if transcript_fault == "release" else 0
+
+    def close(handle):
+        assert handle == 19 and state["owner"]
+        state.update(owner=False, lines=0, token=False)
+        return 1 if transcript_fault == "close" else 0
+
+    def stats(output, count):
+        assert count == 4
+        output[:] = (int(state["owner"]), int(state["token"]),
+                     5 if state["lines"] else 0, len(payload) if state["token"] else 0)
+        return 1 if transcript_fault == "stats" else 0
+
+    lib.narwhal_transcript_apply = apply
+    lib.narwhal_transcript_read = read
+    lib.narwhal_transcript_release = release
+    lib.narwhal_transcript_close = close
+    lib.narwhal_transcript_stats = stats
+    return lib
+
+
+def fake_library(editor=1, popup=1, missing=(), state_bytes=88, edit_status=0, read=0, close=0,
+                 transcript=1, capabilities=7, request_bytes=40, reply_bytes=56, transcript_fault=""):
     lib = types.SimpleNamespace(**{name: lambda *args: 0 for name in EXPORTS})
     lib.narwhal_editor_abi = lambda: editor
     lib.narwhal_popup_abi = lambda: popup
@@ -59,6 +130,7 @@ def fake_library(editor=1, popup=1, missing=(), state_bytes=88, edit_status=0, r
     lib.narwhal_editor_edit = edit
     lib.narwhal_editor_read = read_text
     lib.narwhal_editor_close = lambda handle: close
+    add_transcript_fixture(lib, transcript, capabilities, request_bytes, reply_bytes, transcript_fault)
     for name in missing:
         delattr(lib, name)
     return lib
@@ -76,7 +148,7 @@ def execute_probe(command, **kwargs):
     return types.SimpleNamespace(stdout=output.getvalue())
 
 
-def pe_fixture(editor=1, popup=1, missing=(), unknown=False):
+def pe_fixture(editor=1, popup=1, missing=(), unknown=False, transcript=1, capabilities=7):
     """Synthetic mapped PE32+ with distinct, nonoverlapping export tables/code."""
     data = bytearray(0x2200)
     data[:2] = b"MZ"
@@ -90,15 +162,16 @@ def pe_fixture(editor=1, popup=1, missing=(), unknown=False):
     def at(rva):
         return rva - 0x1000 + 0x200
     symbols = [name for name in EXPORTS if name not in missing]
-    struct.pack_into("<IIIII", data, at(0x1000) + 20, len(symbols), len(symbols), 0x1080, 0x1040, 0x10c0)
+    struct.pack_into("<IIIII", data, at(0x1000) + 20, len(symbols), len(symbols), 0x10a0, 0x1040, 0x1100)
     for i, symbol in enumerate(symbols):
-        name_rva, function_rva = 0x1100 + i * 0x30, 0x1600 + i * 0x10
+        name_rva, function_rva = 0x1180 + i * 0x30, 0x1600 + i * 0x10
         struct.pack_into("<I", data, at(0x1040) + 4 * i, name_rva)
-        struct.pack_into("<I", data, at(0x1080) + 4 * i, function_rva)
-        struct.pack_into("<H", data, at(0x10c0) + 2 * i, i)
+        struct.pack_into("<I", data, at(0x10a0) + 4 * i, function_rva)
+        struct.pack_into("<H", data, at(0x1100) + 2 * i, i)
         name = symbol.encode() + b"\0"
         data[at(name_rva):at(name_rva) + len(name)] = name
-        value = popup if symbol == "narwhal_popup_abi" else editor
+        value = {"narwhal_popup_abi": popup, "narwhal_transcript_abi": transcript,
+                 "narwhal_transcript_capabilities": capabilities}.get(symbol, editor)
         data[at(function_rva):at(function_rva) + 6] = b"\xb8" + struct.pack("<I", value) + b"\xc3"
         if unknown and symbol == "narwhal_popup_abi":
             data[at(function_rva)] = 0x90
@@ -130,7 +203,7 @@ def windows_driver():
 class UiPackaging(unittest.TestCase):
     def test_header_and_mandatory_component_sets(self):
         header = (ROOT / "native/ui_core/narwhal_ui_core.h").read_text()
-        self.assertEqual(tuple(sorted(re.findall(r"uint32_t (narwhal_\w+)\(", header))), EXPORTS)
+        self.assertEqual(tuple(sorted(re.findall(r"uint(?:32|64)_t (narwhal_\w+)\(", header))), EXPORTS)
         self.assertEqual(common.UI_CORE_EXPORTS, EXPORTS)
         self.assertEqual(common.UI_CORE_IDENTITY, IDENTITY)
         self.assertEqual(common.COMPONENTS["ui_core"], (SO,))
@@ -148,7 +221,9 @@ class UiPackaging(unittest.TestCase):
     def test_full_source_provenance_and_existing_licenses(self):
         inputs = common.inventory(ROOT, "ui_core")
         for name in ("Cargo.toml", "Cargo.lock", "LICENSE", "narwhal_ui_core.h", "gen_unicode.py",
-                     "src/editor.rs", "src/unicode16.rs", "src/popup.rs", "src/popup_ffi.rs"):
+                     "src/editor.rs", "src/unicode16.rs", "src/popup.rs", "src/popup_ffi.rs",
+                     "TRANSCRIPT.md", "transcript_unicode.py", "src/transcript.rs",
+                     "src/transcript_ffi.rs", "src/transcript_tests.rs"):
             self.assertEqual(inputs["native/ui_core/" + name], common.digest(ROOT / "native/ui_core" / name))
         self.assertFalse(any("/target/" in name or "__pycache__" in name for name in inputs))
         lock = tomllib.loads((ROOT / "native/ui_core/Cargo.lock").read_text())
@@ -167,9 +242,14 @@ class UiPackaging(unittest.TestCase):
             self.assertNotEqual(common.inventory(root, "ui_core"), inputs)
 
     def test_executed_probe_rejects_old_editor_wrong_abis_and_every_missing_export(self):
-        cases = [{}, {"editor": 2}, {"popup": 2}, {"state_bytes": 96}, {"edit_status": 1}, {"read": 1}, {"close": 1},
+        cases = [{}, {"editor": 2}, {"popup": 2}, {"transcript": 2}, {"capabilities": 3},
+                 {"request_bytes": 48}, {"reply_bytes": 64},
+                 {"state_bytes": 96}, {"edit_status": 1}, {"read": 1}, {"close": 1},
                  {"missing": tuple(n for n in EXPORTS if n.startswith("narwhal_popup"))}]
         cases += [{"missing": (name,)} for name in EXPORTS]
+        cases += [{"transcript_fault": fault} for fault in (
+            "apply", "accept-sizes", "append", "huge-bytes", "count", "owner", "revision",
+            "needed", "bytes", "read", "release", "close", "stats", "leak")]
         for options in cases:
             library = fake_library(**options)
             with self.subTest(options=options), patch.object(ctypes, "CDLL", return_value=library), \
@@ -182,11 +262,13 @@ class UiPackaging(unittest.TestCase):
                     self.assertIn("-I", run.call_args.args[0])
                     self.assertIn("-B", run.call_args.args[0])
                     self.assertEqual(run.call_args.kwargs["timeout"], 30)
-                if "editor" in options or "popup" in options or "missing" in options:
+                if any(key in options for key in ("editor", "popup", "transcript", "capabilities", "missing")):
                     self.assertEqual(library.edits, 0, "incompatible library must fail before any editor mutation")
 
     def test_probe_receipt_must_match_executed_identity(self):
-        for key, value in (("editor_abi", 2), ("popup_abi", 2), ("state_bytes", 96), ("exports", [])):
+        for key, value in (("editor_abi", 2), ("popup_abi", 2), ("state_bytes", 96), ("exports", []),
+                           ("transcript_abi", 2), ("transcript_capabilities", 3),
+                           ("transcript_request_bytes", 48), ("transcript_reply_bytes", 64)):
             for omit in (True, False):
                 result = copy.deepcopy(IDENTITY)
                 if omit:
@@ -224,6 +306,33 @@ class UiPackaging(unittest.TestCase):
                     common.verify_ui_core_source(root, ROOT, SO)
                 (root / name).unlink()
 
+    def test_required_sources_cannot_be_omitted_from_rehashed_receipts(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source, binary = root / "source", root / "binary"
+            inputs = common.inventory(ROOT, "ui_core")
+            for name in inputs:
+                put(source / name, (ROOT / name).read_bytes())
+            put(binary / SO)
+            receipt = source_receipt(binary, SO, source)
+            self.assertEqual(len(common.UI_CORE_REQUIRED_SOURCE), 21)
+            for name in common.UI_CORE_REQUIRED_SOURCE:
+                path = source / "native/ui_core" / name
+                data = path.read_bytes()
+                path.unlink()
+                damaged = copy.deepcopy(receipt)
+                del damaged["inputs"]["native/ui_core/" + name]
+                put(binary / common.UI_CORE_SOURCE, json.dumps(damaged).encode())
+                with self.subTest(source=name), self.assertRaisesRegex(ValueError, "missing ui-core source"):
+                    common.verify_ui_core_source(binary, source, SO)
+                path.write_bytes(data)
+            put(binary / common.UI_CORE_SOURCE, json.dumps(receipt).encode())
+            self.assertEqual(common.verify_ui_core_source(binary, source, SO), receipt)
+            # Receipts must not silently omit an added directory through os.walk.
+            (source / "native/ui_core/linked").symlink_to(source / "native/ui_core/src", target_is_directory=True)
+            with self.assertRaisesRegex(ValueError, "symlinked ui-core source"):
+                common.verify_ui_core_source(binary, source, SO)
+
     def test_linux_manifest_copies_and_ui_identity(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -239,6 +348,7 @@ class UiPackaging(unittest.TestCase):
                 records[name]["abi"] = abi
             records["libnarwhal_application_core.so"].update(
                 history_abi=1, exports=list(linux_verify.APPLICATION_CORE_EXPORTS))
+            records["libnarwhal_pure_core.so"].update(linux_verify.PURE_CORE_PARSE_IDENTITY)
             records["narwhal-welcome"]["launch_contract"] = 1
             records[SO].update(IDENTITY)
             records[SO]["source_inputs"] = common.inventory(ROOT, "ui_core")
@@ -375,9 +485,11 @@ class UiPackaging(unittest.TestCase):
             receipt = {"source_inputs": mac_build.source_inputs(source), "components": components,
                        "unavailable_components": mac_build.UNAVAILABLE_COMPONENTS,
                        "occt_source": mac_build.OCCT, "occt_wheel_sha256": mac_build.WHEEL_SHA,
+                       "pure_core_parser": linux_verify.PURE_CORE_PARSE_IDENTITY,
                        "occt_libraries": {occt.name: common.digest(occt)}, "ui_core": IDENTITY}
             path = output / "native-build.json"
-            with patch.object(ctypes, "CDLL", return_value=fake_library()), \
+            with patch.object(mac_build, "probe_pure_core_parser", return_value=linux_verify.PURE_CORE_PARSE_IDENTITY), \
+                 patch.object(ctypes, "CDLL", return_value=fake_library()), \
                  patch.object(common.subprocess, "run", side_effect=execute_probe):
                 put(path, json.dumps(receipt).encode())
                 self.assertTrue(mac_build.reuse_output(source, output))
@@ -392,7 +504,7 @@ class UiPackaging(unittest.TestCase):
                 self.assertFalse(mac_build.reuse_output(source, output))
 
     def test_windows_static_abi_old_editor_missing_exports_and_unknown_codegen(self):
-        cases = [{}, {"editor": 2}, {"popup": 2}, {"unknown": True},
+        cases = [{}, {"editor": 2}, {"popup": 2}, {"transcript": 2}, {"capabilities": 3}, {"unknown": True},
                  {"missing": tuple(n for n in EXPORTS if n.startswith("narwhal_popup"))}]
         cases += [{"missing": (name,)} for name in EXPORTS]
         with tempfile.TemporaryDirectory() as directory:
@@ -557,6 +669,27 @@ def mutation_checks():
             raise AssertionError("missing probe mutation anchor")
         mutants.append((common, "UI_CORE_PROBE", common.UI_CORE_PROBE.replace(old, new, 1),
                         "test_executed_probe_rejects_old_editor_wrong_abis_and_every_missing_export"))
+    for old, new in (
+        (' or result["transcript_abi"] != 1', ''),
+        ('result["transcript_capabilities"] != 7', 'False'),
+        ('or needed.value != len(payload) or bytes(output) != payload', 'or False'),
+        ('lib.narwhal_transcript_release(owner, snapshot.token) != 0',
+         'lib.narwhal_transcript_release(owner, snapshot.token) == 999'),
+        ('lib.narwhal_transcript_close(owner) != 0', 'lib.narwhal_transcript_close(owner) == 999'),
+        ('lib.narwhal_transcript_stats(stats, 4) != 0 or tuple(stats) != expected', 'False'),
+        ('(snapshot.handle, snapshot.revision, snapshot.len, snapshot.count, snapshot.bytes, snapshot.kind) != (owner, 2, 2, 2, len(payload), 1)', 'False'),
+        ('reply_size) != 1', 'reply_size) == 999'),
+    ):
+        if old not in common.UI_CORE_PROBE:
+            raise AssertionError("missing transcript probe mutation anchor: " + old)
+        mutants.append((common, "UI_CORE_PROBE", common.UI_CORE_PROBE.replace(old, new, 1),
+                        "test_executed_probe_rejects_old_editor_wrong_abis_and_every_missing_export"))
+    mutants.append((common, "UI_CORE_REQUIRED_SOURCE", tuple(n for n in common.UI_CORE_REQUIRED_SOURCE if n != "TRANSCRIPT.md"),
+                    "test_required_sources_cannot_be_omitted_from_rehashed_receipts"))
+    for symbol in ('narwhal_transcript_abi', 'narwhal_transcript_capabilities'):
+        mutants.append((windows, "verify_ui_core_identity", changed(windows.verify_ui_core_identity,
+                        '"' + symbol + '": ' + ('1' if symbol.endswith('_abi') else '7') + ',', ''),
+                        "test_windows_static_abi_old_editor_missing_exports_and_unknown_codegen"))
     driver = windows_driver()
     for old, new in (("if json.loads(snapshot.read_text()) != inputs:", "if False:"),
                      ("probe_ui_core(library)", "pass"),
@@ -571,7 +704,10 @@ def mutation_checks():
             result = unittest.TextTestRunner(stream=io.StringIO()).run(UiPackaging(test))
         if result.wasSuccessful():
             raise AssertionError(f"SURVIVED: {module.__name__}.{name}: {test}")
-        print(f"mutation RED: {module.__name__}.{name}: {test}")
+        restored = unittest.TextTestRunner(stream=io.StringIO()).run(UiPackaging(test))
+        if not restored.wasSuccessful():
+            raise AssertionError(f"restored control failed: {test}")
+        print(f"mutation RED / restored GREEN: {module.__name__}.{name}: {test}")
     print(f"{len(mutants)}/{len(mutants)} UI packaging mutations rejected; production objects restored")
 
 

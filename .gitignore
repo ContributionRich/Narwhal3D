@@ -9,6 +9,8 @@
 /rh80-help-en-us.exe
 /bug_reports/
 /artifacts/
+# Locally recoverable retired implementations; never public or packaged.
+/legacy/
 
 # Build and release output
 /dist/

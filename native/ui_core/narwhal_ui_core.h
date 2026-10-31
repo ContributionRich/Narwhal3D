@@ -66,6 +66,29 @@ uint32_t narwhal_popup_hit(uint64_t handle, uint64_t revision, double x, double 
 uint32_t narwhal_popup_guards(uint64_t handle, uint64_t revision, uint8_t *output,
     size_t capacity, size_t *written);
 
+/* Additive transcript ABI 1; independent from editor and popup registries.
+ * Request=40 bytes, Reply=56 bytes on supported 64-bit targets. See TRANSCRIPT.md. */
+typedef struct NarwhalTranscriptRequest {
+    uint32_t op, flags;
+    uint64_t revision;
+    int64_t a, b, c;
+} NarwhalTranscriptRequest;
+typedef struct NarwhalTranscriptReply {
+    uint64_t handle, revision, len, token, count, bytes, kind;
+} NarwhalTranscriptReply;
+uint32_t narwhal_transcript_abi(void);
+uint64_t narwhal_transcript_capabilities(void);
+uint32_t narwhal_transcript_apply(uint64_t handle,
+    const NarwhalTranscriptRequest *request, size_t request_bytes,
+    const uint8_t *input, size_t input_bytes,
+    NarwhalTranscriptReply *output, size_t output_bytes);
+uint32_t narwhal_transcript_read(uint64_t handle, uint64_t token, uint64_t revision,
+    uint8_t *output, size_t capacity, size_t *needed);
+uint32_t narwhal_transcript_release(uint64_t handle, uint64_t token);
+uint32_t narwhal_transcript_close(uint64_t handle);
+/* owners, snapshot tokens, live code points, retained snapshot bytes */
+uint32_t narwhal_transcript_stats(uint64_t *output, size_t count);
+
 #ifdef __cplusplus
 }
 #endif

@@ -15,6 +15,7 @@ import zipfile
 
 from release_policy import validate_preview_version
 from build_linux_native import UI_CORE_EXPORTS, UI_CORE_IDENTITY, UI_CORE_SOURCE, verify_ui_core_source
+from check_pure_core import PURE_CORE_PARSE_EXPORTS, probe_pure_core_parser
 
 PRODUCT = "Narwhal 3D"
 PLATFORM = "windows-x86_64"
@@ -392,9 +393,10 @@ def verify_ui_core_identity(path: Path) -> dict[str, object]:
     # probe and bound through the source receipt, not inferred from PE opcodes.
     identity = inspect_pe_dll(path, constant_exports={
         "narwhal_editor_abi": 1, "narwhal_popup_abi": 1,
+        "narwhal_transcript_abi": 1, "narwhal_transcript_capabilities": 7,
     })
     if identity["exports"] != UI_CORE_EXPORTS:
-        raise VerificationError("Windows ui-core lacks the exact editor/popup ABI exports")
+        raise VerificationError("Windows ui-core lacks the exact editor/popup/transcript ABI exports")
     return identity
 
 
@@ -455,6 +457,28 @@ def verify_application_core_copies(root: Path) -> None:
             raise VerificationError(f"missing regular application-core DLL: {path}")
     if sha256(runtime) != sha256(adjacent):
         raise VerificationError("application-core runtime/adjacent copies differ")
+
+
+def verify_pure_core_identity(path: Path) -> dict[str, object]:
+    """Cross-host PE identity; execute semantics as well on native Windows."""
+    identity = inspect_pe_dll(path, constant_exports={
+        "narwhal_pure_core_abi_version": 1, "narwhal_pure_core_parse_abi": 2,
+    })
+    if any(identity["exports"].count(name) != 1 for name in PURE_CORE_PARSE_EXPORTS):
+        raise VerificationError("Windows pure-core lacks required parser ABI exports")
+    if sys.platform == "win32":
+        try:
+            probe_pure_core_parser(path)
+        except ValueError as exc:
+            raise VerificationError(str(exc)) from exc
+    return identity
+
+
+def pure_core_record(path: Path) -> dict:
+    identity = verify_pure_core_identity(path)
+    # No claim of semantic execution in a cross-host manifest.
+    return {"abi": 1, "parse_abi": 2, "machine": identity["machine"],
+            "exports": list(identity["exports"])}
 
 
 def verify_automation_core_identity(path: Path) -> dict[str, object]:
@@ -527,6 +551,9 @@ def verify_directory(root: Path, args: argparse.Namespace) -> None:
             expected_ui = ui_core_record(root, Path(__file__).resolve().parents[1])
             if any(record.get(key) != value for key, value in expected_ui.items()):
                 raise VerificationError("Windows ui-core manifest identity differs")
+        if filename == "narwhal_pure_core.dll":
+            if any(record.get(key) != value for key, value in pure_core_record(path).items()):
+                raise VerificationError("Windows pure-core parser manifest identity differs")
         if filename == "narwhal_application_core.dll":
             identity = verify_application_core_identity(path)
             if (record.get("abi") != APPLICATION_CORE_ABI

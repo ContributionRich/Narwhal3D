@@ -32,10 +32,11 @@ ROOT_FILES = (
     "docs/reviews/2026-10-31-coordinated-portfolio.md",
     "docs/reviews/2026-10-31-rust-history.md",
     "docs/reviews/2026-10-31-ui-regressions.md",
+    "docs/reviews/2026-10-31-native-only.md",
         "docs/reviews/2026-10-30-agent-v3-integration.md",
 )
 LAUNCH_FILES = (
-    "launch/bootstrap.py", "launch/make_icon.py", "launch/open_arg.py",
+    "launch/bootstrap.py", "launch/check_native.py", "launch/make_icon.py", "launch/open_arg.py",
     "launch/narwhal3d.desktop.in", "launch/narwhal3d-3dm.xml",
     "launch/narwhal3d-project.xml", "launch/narwhal3d.png",
 )
@@ -133,7 +134,13 @@ TEST_FILES = (
     "spike/test_textfield.py", "spike/portfolio_review/test_wrap_progress.py",
     "spike/test_ui_core_editor.py", "spike/test_ui_core_callers.py",
     "spike/test_ui_core_layout.py", "spike/test_ui_core_mutations.py",
-    "spike/fixtures/textfield_168212d4.py",
+    "spike/test_ui_core_golden.py", "spike/test_native_only_policy.py",
+    "spike/test_ui_transcript_abi.py", "spike/test_ui_transcript_model.py",
+    "spike/test_ui_transcript_consumers.py", "spike/test_ui_transcript_stress.py",
+    "spike/test_ui_transcript_gui.py", "spike/test_ui_transcript_unicode.py",
+    "spike/test_ui_transcript_mutations.py", "spike/test_ui_transcript_benchmark.py",
+    "spike/test_command_history.py", "spike/test_desktop_native_startup.py",
+    "spike/fixtures/numparse_golden.json", "spike/test_pure_core_packaging.py",
     "spike/test_ui_core_benchmark.py", "spike/test_ui_core_review_gui.py",
     "spike/test_ui_core_popup.py", "spike/test_ui_core_popup_mutations.py",
     "spike/test_ui_core_popup_gui.py", "spike/test_ui_core_popup_failure.py",
@@ -199,6 +206,11 @@ TEST_FILES = (
     "spike/test_ai_v7_visible.py", "spike/test_ai_v7_roundtrip.py",
     "spike/test_ai_v7_presentation.py", "spike/test_ai_v7_resources.py",
     "spike/test_ai_v7_native.py",
+    "spike/test_ai_v8_exit.py", "spike/test_ai_v8_reachability.py",
+    "spike/test_ai_v8_presentation.py", "spike/test_ai_v8_long_session.py",
+    "spike/test_ai_v8_plans.py", "spike/test_ai_v8_lifetime.py",
+    "spike/test_ai_v8_lifetime_gui.py", "spike/test_ai_v8_settings.py",
+    "spike/test_ai_v8_visible.py", "spike/test_ai_v8_x11.py", "spike/test_ai_v8_native.py",
         "spike/test_ai_plan.py", "spike/test_ai_plan_native.py",
         "spike/test_ai_primitives.py", "spike/test_ai_primitives_native.py",
         "spike/test_ai_sustained_compatibility.py", "spike/test_ai_sustained_lifecycle.py",
@@ -223,6 +235,7 @@ TEST_FILES = (
     "spike/test_preview_responsiveness_gui.py", "spike/test_trim_box_gui.py",
     "spike/test_document_session_abi.py", "spike/test_document_session_integration.py",
     "spike/test_rust_history_abi.py", "spike/test_rust_history_integration.py", "spike/test_rust_history_profile.py",
+    "spike/test_rust_history_trace.py", "spike/test_numparse_owned.py",
     "spike/test_application_core_gate.py", "spike/test_application_core_source.py",
     "spike/test_set_document_user_text.py", "spike/test_get_document_user_text.py",
     "spike/test_narwhal_document.py", "spike/test_document_core_artifacts.py",
@@ -235,6 +248,9 @@ NATIVE_FILES = (
     "native/ui_core/src/allocation_tests.rs", "native/ui_core/src/layout_algorithm.rs",
     "native/ui_core/src/layout_contract.rs", "native/ui_core/src/popup.rs",
     "native/ui_core/src/popup_ffi.rs", "native/ui_core/src/popup_tests.rs",
+    "native/ui_core/TRANSCRIPT.md", "native/ui_core/transcript_unicode.py",
+    "native/ui_core/src/transcript.rs", "native/ui_core/src/transcript_ffi.rs",
+    "native/ui_core/src/transcript_tests.rs",
     "native/application_core/Cargo.toml", "native/application_core/Cargo.lock",
     "native/application_core/README.md", "native/application_core/OPENNURBS_LICENSE",
     "native/application_core/include/narwhal_application_core.h",
@@ -278,6 +294,7 @@ NATIVE_FILES = (
     "native/pure_core/src/lib.rs", "native/pure_core/src/stl.rs",
     "native/pure_core/src/obj.rs", "native/pure_core/src/dxf.rs",
     "native/pure_core/src/numparse.rs", "native/pure_core/src/calc.rs",
+    "native/pure_core/src/numparse_owned.rs",
     "native/pure_core/src/aci_colors.rs", "native/pure_core/src/printwidths.rs",
     "native/pure_core/src/metadata_ffi.rs",
     "native/pure_core/src/bearing.rs", "native/pure_core/src/coords.rs",
@@ -355,6 +372,22 @@ def public_files() -> list[str]:
         paths.update(recursive_files(directory))
     for directory in ("native/vendor/tracedraw",):
         paths.update(recursive_files(directory))
+    # Fail closed rather than silently publishing a copied retirement archive.
+    try:
+        from audit_public_tree import retirement_path_problem
+    except ModuleNotFoundError as exc:
+        if exc.name != 'audit_public_tree':
+            raise
+        # Public tooling is also loaded by file path, without scripts/ on sys.path.
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            '_public_retirement_audit', Path(__file__).with_name('audit_public_tree.py'))
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        retirement_path_problem = module.retirement_path_problem
+    rejected = sorted(path for path in paths if retirement_path_problem(path))
+    if rejected:
+        raise PublicBranchError("retired payload in public selection: " + ", ".join(rejected))
     missing = sorted(path for path in paths if not (ROOT / path).is_file())
     if missing:
         raise PublicBranchError("allowlisted files are missing: " + ", ".join(missing))

@@ -49,13 +49,14 @@ _spec.loader.exec_module(numparse)
 def _native_calc():
     """Lazily resolve the native pure-core adapter, or ``None``.
 
-    Identical to the ``numparse._native_pure()`` accessor: returns the
+    The not-yet-retired expression evaluator returns the
     ``native_pure`` module when it can be imported (production, where this
     file is ``narwhal3d.calc``) or loaded from this directory (spike tests
     load this module by file path, so ``narwhal3d`` is not an importable
     package there). ``None`` means "use the unchanged Python evaluator" --
     the native library is absent, it predates the calculator export, or the
-    adapter cannot be imported.
+    adapter cannot be imported. Its numeric literals still require the native
+    number parser; a missing whole core is an installation error, not emulation.
     """
     try:
         from . import native_pure as _mod  # production package context
@@ -105,15 +106,16 @@ _FUNC_ARITY = {
     "pow": 2,
 }
 
-# # The bare number (whole/decimal/scientific, fraction, mixed). Compiled from
-# numparse's own pattern so the two cannot drift.
-_NUM_RE = re.compile(numparse._BARE)
+# Token boundaries for the not-yet-retired expression evaluator. Numeric values
+# and errors belong to numparse's required Rust parser, not a private regex API.
+_NUMBER_TOKEN = r"(?:\d+-\d+/\d+|\d+/\d+|(?:\d+(?:\.\d+)?|\.\d+)(?:[eE][+-]?\d+)?)"
+_NUM_RE = re.compile(_NUMBER_TOKEN)
 
 # A feet-inches compound (16'5", 1'2-3/4") read as a SINGLE numeric token; the
 # whole thing is valued by numparse (which handles the feet+inches arithmetic).
 # No leading sign here: a sign stays an operator token, as everywhere else.
 _FEET_INCH_RE = re.compile(
-    numparse._BARE + r"'" + numparse._BARE + r"\""
+    _NUMBER_TOKEN + r"'" + _NUMBER_TOKEN + r"\""
 )
 
 

@@ -1,4 +1,4 @@
-"""Shared text editor with persistent Rust ownership and complete Python fallback (no bpy).
+"""Shared text editor with mandatory persistent Rust ownership (no bpy).
 
 This module provides caret placement by click (`index_at`), selection by
 drag or shift+keys (`TextField.anchor` / `select=True`), and the standard
@@ -17,154 +17,8 @@ def _clamp(v, lo, hi):
     return lo if v < lo else hi if v > hi else v
 
 
-class TextField:
-    """Editable text with a caret and an optional selection (anchor..caret)."""
-
-    def __init__(self, text="", multiline=False, max_chars=None):
-        self.multiline = bool(multiline)
-        self.max_chars = max_chars
-        self.text = ""
-        self.caret = 0
-        self.anchor = None
-        self.set_text(text)
-
-    # -- selection -----------------------------------------------------------
-
-    def selection(self):
-        """(lo, hi) with lo < hi, or None when nothing is selected."""
-        if self.anchor is None or self.anchor == self.caret:
-            return None
-        return (min(self.anchor, self.caret), max(self.anchor, self.caret))
-
-    def selected_text(self):
-        sel = self.selection()
-        return self.text[sel[0]:sel[1]] if sel else ""
-
-    def select_all(self):
-        self.anchor = 0
-        self.caret = len(self.text)
-
-    def _delete_selection(self):
-        """Remove the selected text; True if there was a selection."""
-        sel = self.selection()
-        self.anchor = None
-        if not sel:
-            return False
-        lo, hi = sel
-        self.text = self.text[:lo] + self.text[hi:]
-        self.caret = lo
-        return True
-
-    # -- text ----------------------------------------------------------------
-
-    def _normalise(self, s):
-        s = str(s).replace("\r\n", "\n").replace("\r", "\n")
-        s = "".join(ch for ch in s if ch in "\n\t" or ch.isprintable())
-        if not self.multiline:
-            s = s.replace("\n", " ").replace("\t", " ")
-        return s
-
-    def set_text(self, text):
-        """Replace everything; caret to the end, selection cleared.
-
-        Normalised like `insert`, and truncated to `max_chars`."""
-        s = self._normalise(text)
-        if self.max_chars is not None:
-            s = s[:max(0, self.max_chars)]
-        self.text = s
-        self.caret = len(s)
-        self.anchor = None
-
-    def insert(self, s):
-        """Type `s` at the caret, replacing any selection.
-
-        Returns True if at least one character was inserted. False means the
-        field is unchanged: either it is full (`max_chars`) or `s` held nothing
-        insertable (only control characters / empty). A partial fit inserts
-        the leading part that fits and returns True."""
-        s = self._normalise(s)
-        if not s:
-            return False
-        sel = self.selection()
-        if self.max_chars is not None:
-            removed = (sel[1] - sel[0]) if sel else 0
-            room = self.max_chars - (len(self.text) - removed)
-            if room <= 0:
-                return False
-            s = s[:room]
-        self._delete_selection()
-        self.text = self.text[:self.caret] + s + self.text[self.caret:]
-        self.caret += len(s)
-        return True
-
-    def backspace(self):
-        """Delete the selection, else the character before the caret."""
-        if self._delete_selection() or self.caret == 0:
-            return
-        self.text = self.text[:self.caret - 1] + self.text[self.caret:]
-        self.caret -= 1
-
-    def delete(self):
-        """Delete the selection, else the character after the caret."""
-        if self._delete_selection() or self.caret >= len(self.text):
-            return
-        self.text = self.text[:self.caret] + self.text[self.caret + 1:]
-
-    def cut(self):
-        """Return the selected text and delete it ("" if nothing selected)."""
-        t = self.selected_text()
-        if t:
-            self._delete_selection()
-        return t
-
-    # -- caret movement ------------------------------------------------------
-
-    def set_caret(self, index, select=False):
-        """Move the caret to `index` (clamped).
-
-        select=True extends from the existing anchor, or starts a selection at
-        the old caret; select=False clears the selection."""
-        if select:
-            if self.anchor is None:
-                self.anchor = self.caret
-        else:
-            self.anchor = None
-        self.caret = _clamp(int(index), 0, len(self.text))
-
-    def move(self, delta, select=False):
-        """Left/Right by `delta` characters.
-
-        Without shift and with a selection, Left collapses to its start and
-        Right to its end, without moving further (standard editor behaviour)."""
-        if not select:
-            sel = self.selection()
-            if sel and delta:
-                self.set_caret(sel[0] if delta < 0 else sel[1])
-                return
-        self.set_caret(self.caret + delta, select)
-
-    def home(self, select=False):
-        """Start of the current logical line (0 in single-line mode)."""
-        start = 0
-        if self.multiline:
-            start = self.text.rfind("\n", 0, self.caret) + 1
-        self.set_caret(start, select)
-
-    def end(self, select=False):
-        """End of the current logical line (before its \\n)."""
-        stop = len(self.text)
-        if self.multiline:
-            nl = self.text.find("\n", self.caret)
-            if nl != -1:
-                stop = nl
-        self.set_caret(stop, select)
-
-
-# Keep the complete compatibility model for missing libraries and Python values
-# outside the typed editor domain. Layout/font callbacks remain Python-owned.
-_LegacyTextField = TextField
 if __package__:
-    from .native_textfield import facade as _facade
+    from .native_textfield import TextField
 else:
     # File-path consumers (including the existing pure test harness) have no package.
     import importlib.util as _importlib_util
@@ -173,12 +27,11 @@ else:
     _name = "_narwhal_native_textfield"
     if _name not in _sys.modules:
         _spec = _importlib_util.spec_from_file_location(
-            _name, _pathlib.Path(_LegacyTextField.__init__.__code__.co_filename).with_name("native_textfield.py"))
+            _name, _pathlib.Path(__file__).with_name("native_textfield.py"))
         _module = _importlib_util.module_from_spec(_spec)
         _sys.modules[_name] = _module
         _spec.loader.exec_module(_module)
-    _facade = _sys.modules[_name].facade
-TextField = _facade(_LegacyTextField)
+    TextField = _sys.modules[_name].TextField
 
 
 # -- layout helpers (multi-line drawing) --------------------------------------

@@ -255,10 +255,17 @@ class HostTests(unittest.TestCase):
         gc.collect()
         self.assertIsNone(ref(), 'real geometry/metadata snapshot leaked after history clear')
 
-    def test_missing_default_legacy_state_identity_and_explicit_failure(self):
-        with patch.object(undo, '_native_backend', return_value=None):
-            s = undo.UndoStack()
-        self.assertEqual(s.backend, 'legacy')
+    def test_native_required_and_state_identity(self):
+        env = dict(os.environ)
+        env.pop('NARWHAL_HISTORY_CORE', None)
+        with patch.dict(os.environ, env, clear=True), \
+                patch.object(nh._session_module(), 'load_library', return_value=None), \
+                patch.object(nh, '_call') as call:
+            with self.assertRaisesRegex(nh.HistoryError, 'NARWHAL_HISTORY_CORE'):
+                undo.UndoStack()
+            call.assert_not_called()
+        s = self.stack()
+        self.assertEqual(s.backend, 'rust')
         start = s.state_id
         self.commit(s, Payload())
         saved = s.state_id
@@ -961,6 +968,9 @@ def method_mutation(owner, name, old, new):
 def mutation_checks(phase, selected_test=None):
     cases = []
     if phase == 'host':
+        cases.append(('native_required_factory_bypassed',
+            patch.object(undo, '_native_backend', return_value=None),
+            HostTests, 'test_native_required_and_state_identity', 'HistoryError not raised'))
         record = nh.NativeRecord
         cases.append(('record_before_not_delegated',
             patch.object(record, 'before', property(record.before.fget, lambda self, value: None)),

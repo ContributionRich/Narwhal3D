@@ -2,10 +2,10 @@
 
 Python is necessary here for rhino3dm descriptors, model callbacks and file adoption.
 Rust owns native-session keys, edits, generations and immutable snapshot contents.
-Unowned File3dms retain their original native behavior. Missing default application
-core selects the complete legacy File3dm route at adoption, never midway through an
-existing native session. A raw native table changed behind the facade is refused
-at serialization rather than silently merged or overwritten.
+Unowned File3dms retain their original native behavior. Model adoption requires
+application-core ABI1 before projecting or retiring an existing binding. A raw
+native table changed behind the facade is refused at serialization rather than
+silently merged or overwritten.
 """
 from __future__ import annotations
 
@@ -208,56 +208,6 @@ class Binding:
         self.projected, self.projected_state = rows, state
 
 
-class LegacyBinding:
-    """Complete compatibility route chosen only when no default native library exists."""
-    backend = 'legacy-file3dm'
-
-    def __init__(self, model, file):
-        self.file = weakref.ref(file)
-        self.model = weakref.ref(model)
-
-    def change(self, key, value, before_change=None):
-        # Delegate legacy ordinal key semantics to openNURBS, not a second Python
-        # implementation. This route exists only when the native session is absent.
-        table = self.file().Strings
-        probe = r3.File3dm()
-        for name, text in table:
-            probe.Strings[name] = text
-        if value is None:
-            probe.Strings.Delete(key)
-        else:
-            probe.Strings[key] = value
-        if list(probe.Strings) == list(table):
-            return False
-        if before_change is not None:
-            before_change()
-        model = self.model()
-        if model is not None:
-            model._will_change()
-        if value is None:
-            table.Delete(key)
-        else:
-            table[key] = value
-        return True
-
-    def snapshot(self):
-        return list(self.file().Strings)
-
-    def validate_snapshot(self, rows):
-        if isinstance(rows, native.Snapshot):
-            raise native.SessionError('snapshot_owner_mismatch')
-
-    def restore(self, rows):
-        table = self.file().Strings
-        if list(table) != rows:
-            for key, _ in list(table):
-                table.Delete(key)
-            for key, value in rows:
-                table[key] = value
-
-    def materialize(self):
-        pass
-
 
 def adopt(model, file, previous=None, *, preserve=False):
     """Prepare a backing-file adoption; preserve=True is internal round-trip only."""
@@ -272,32 +222,40 @@ def adopt(model, file, previous=None, *, preserve=False):
     existing = hooks['files'].get(file)
     if existing is previous and existing is not None and not existing.retired:
         return existing
-    if existing is not None and not existing.retired:
+    orphan = existing is not None and not existing.retired
+    if orphan:
         if existing.model() is not None:
             raise MetadataError('metadata_file_already_owned')
-        # An escaped File3dm can outlive its model. Transfer its materialized values
-        # into a fresh document session, never steal a live model's authority.
-        existing.materialize()
+        existing.check_projection()
     if previous is not None:
-        previous.materialize()
-    if preserve and isinstance(previous, Binding):
+        previous.check_projection()
+    reuse = preserve and isinstance(previous, Binding)
+    if reuse:
         session = previous.session
-        if tuple(_raw(file)) != previous.projected:
+        session.info()  # Refuse a closed/broken session before any projection.
+    else:
+        # An orphan may have unprojected values. Read its authority without writing
+        # either File3dm; native admission must succeed before host mutation.
+        rows = existing.session.rows() if orphan else list(_raw(file))
+        session = native.Session(rows)
+    try:
+        if orphan:
+            existing.materialize()
+        if previous is not None:
+            previous.materialize()
+        if reuse and tuple(_raw(file)) != previous.projected:
             raise MetadataError('roundtrip_metadata_changed')
         binding = Binding(model, file, session)
-    else:
-        library = native.load_library()
-        if library is None:
-            binding = LegacyBinding(model, file)
-        else:
-            session = native.Session(list(_raw(file)), library=library)
-            binding = Binding(model, file, session)
-    if isinstance(previous, Binding):
+    except BaseException:
+        if not reuse:
+            try:
+                session.close()
+            except native.SessionError:
+                pass  # Preserve the adoption failure; finalization can retry close.
+        raise
+    if previous is not None:
         previous.retired = True
     if existing is not None and existing is not previous:
         existing.retired = True
-    if isinstance(binding, Binding):
-        hooks['files'][file] = binding
-    elif existing is not None:
-        hooks['files'].pop(file, None)
+    hooks['files'][file] = binding
     return binding

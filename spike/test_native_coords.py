@@ -279,7 +279,16 @@ def _():
     _assert_native_ran(before, "rw")
 
 
-@check("fallback: a missing library uses the unchanged Python parser")
+def required_fraction_parser_refuses():
+    try:
+        coords.parse('5/16,1-3/4')
+    except RuntimeError as exc:
+        assert 'Required Rust number parser' in str(exc), str(exc)
+    else:
+        raise AssertionError('coordinate fallback bypassed the required numeric parser')
+
+
+@check("coordinate compatibility retains simple floats but requires native fractions")
 def _():
     _reset()
     real_env = os.environ.get("NARWHAL_PURE_CORE")
@@ -291,8 +300,7 @@ def _():
         # A valid input still works via the Python path (value unchanged).
         got, gw, gr, e = coords.parse("1,2")
         assert e is None and got == (1.0, 2.0, 0.0), (got, e)
-        got, gw, gr, e = coords.parse("5/16,1-3/4")
-        assert e is None and got == (0.3125, 1.75, 0.0), (got, e)
+        required_fraction_parser_refuses()
         # And a rejection keeps its exact public string.
         v, _gw, _gr, e = coords.parse("5")
         assert v is None and "distance constraint" in e, (v, e)
@@ -321,6 +329,7 @@ def _():
     try:
         assert native._coords_binding() is None, \
             "a library without the coords export must make the binding None"
+        required_fraction_parser_refuses()
         before = native._native_coords_calls
         got, gw, gr, e = coords.parse("1,2")
         assert e is None and got == (1.0, 2.0, 0.0), (got, e)

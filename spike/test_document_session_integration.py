@@ -353,35 +353,58 @@ class ModelTests(unittest.TestCase):
         self.assertTrue(original_binding.retired)
         self.assertIsNot(self.session(), orphan.session)
 
-    def test_orphan_to_missing_default_legacy_removes_retired_registry_entry(self):
+    def test_native_admission_precedes_orphan_and_previous_projection(self):
         file, orphan = self._escaped_metadata_file()
-        old_table = orphan.table
-        expected = list(old_table)
+        self.m.file.Strings['destination'] = 'unprojected destination'
+        previous = self.m._document_metadata
+        old_file, old_table = self.m.file, self.m.file.Strings
+        snapshot = self.m.snapshot()
+        revision = self.m.metadata_revision()
+        expected = list(orphan.table)
+        raw_before = (tuple(metadata._raw(file)), tuple(metadata._raw(old_file)))
+        self.assertEqual(raw_before, ((), ()), 'both projections must be stale to expose early writes')
         env = dict(os.environ)
         env.pop('NARWHAL_APPLICATION_CORE', None)
         with patch.dict(os.environ, env, clear=True), patch.object(native, '_ROOT', self.root):
-            self.assertIsNone(native.load_library(), 'both real default discovery candidates are absent')
-            self.m.file = file
-            self.assertEqual(self.m.metadata_backend, 'legacy-file3dm')
-            self.assertIs(self.m.file, file)
-            self.assertNotIn(file, metadata._hooks()['files'], 'legacy adoption retained orphan registry entry')
-            self.assertTrue(orphan.retired)
-            with self.assertRaisesRegex(metadata.MetadataError, 'retired'):
-                old_table['Project']
-            self.assertEqual(self.m.document_user_text(), expected)
-            self.assertEqual(list(metadata._raw(file)), expected)
-            before = self.m.snapshot()
-            self.assertIsInstance(before.strings, list)
-            file.Strings['Project'] = 'legacy direct write'
-            self.assertEqual(metadata._raw(file)['Project'], 'legacy direct write')
-            self.m.restore(before)
-            self.assertEqual(self.m.document_user_text(), expected)
-            target = self.root / 'orphan-legacy.3dm'
-            self.assertTrue(self.m.save(str(target)))
-            self.assertEqual(list(r3.File3dm.Read(str(target)).Strings), expected)
-        self.assertEqual(self.m.metadata_backend, 'legacy-file3dm')
-        self.assertEqual(orphan.session.get('Project', exact=True)['value'], 'unsaved 雪 metadata')
-        EVIDENCE['orphan_legacy_adoption'] = {'registry_removed': True, 'values_preserved': True}
+            with self.assertRaisesRegex(native.SessionUnavailable, 'NARWHAL_APPLICATION_CORE'):
+                self.m.file = file
+        self.assertEqual((tuple(metadata._raw(file)), tuple(metadata._raw(old_file))), raw_before,
+                         'native refusal projected metadata before admission')
+        # Present but incompatible ABI, unloadable explicit binary, and native
+        # create refusal must have the same host-side atomicity as absence.
+        class Function:
+            def __call__(self):
+                return 0
+        class OldCore:
+            narwhal_session_abi = Function()
+        failures = [
+            patch.object(native.ctypes, 'CDLL', return_value=OldCore()),
+            patch.object(native.ctypes, 'CDLL', side_effect=OSError('injected unloadable core')),
+            patch.object(native, '_call', side_effect=native.SessionError('injected_create_failure')),
+        ]
+        for fault in failures:
+            with fault:
+                with self.assertRaises((native.SessionUnavailable, native.SessionError)):
+                    self.m.file = file
+            self.assertEqual((tuple(metadata._raw(file)), tuple(metadata._raw(old_file))), raw_before,
+                             'native refusal projected metadata before admission')
+        self.assertIs(self.m.file, old_file)
+        self.assertIs(self.m._document_metadata, previous)
+        self.assertIs(metadata._hooks()['files'][file], orphan)
+        self.assertIs(metadata._hooks()['files'][old_file], previous)
+        self.assertFalse(orphan.retired)
+        self.assertFalse(previous.retired)
+        self.assertEqual(self.m.metadata_revision(), revision)
+        self.assertEqual(list(orphan.table), expected)
+        self.assertEqual(old_table['destination'], 'unprojected destination')
+        self.m.restore(snapshot)
+        self.m.file = file
+        self.assertEqual(self.m.document_user_text(), expected)
+        self.assertTrue(orphan.retired)
+        self.assertTrue(previous.retired)
+        target = self.root / 'adopted-native.3dm'
+        self.assertTrue(self.m.save(str(target)))
+        self.assertEqual(list(r3.File3dm.Read(str(target)).Strings), expected)
 
     def test_cross_document_snapshot_rejection_precedes_any_document_mutation(self):
         self.m.file.Strings['keep'] = 'live document'
@@ -436,31 +459,57 @@ class ModelTests(unittest.TestCase):
         self.assertTrue(self.m.save(str(target)))
         self.assertEqual(r3.File3dm.Read(str(target)).Strings['owner'], 'rust')
 
-    def test_missing_defaults_complete_legacy_and_explicit_missing_refused(self):
+    def test_missing_defaults_and_explicit_missing_refuse_before_file_mutation(self):
         env = dict(os.environ)
         env.pop('NARWHAL_APPLICATION_CORE', None)
+        incoming = r3.File3dm()
+        incoming.Strings['old-file'] = 'before'
+        target = self.root / 'old-file.3dm'
+        self.assertTrue(incoming.Write(str(target), 8))
+        disk_before = target.read_bytes()
         with patch.dict(os.environ, env, clear=True), patch.object(native, '_ROOT', self.root):
-            self.assertIsNone(native.load_library(), 'both actual default candidates are absent')
-            legacy = Model()
-            self.assertEqual(legacy.metadata_backend, 'legacy-file3dm')
-            legacy.file.Strings['legacy'] = 'before'
-            before = legacy.snapshot()
-            self.assertIsInstance(before.strings, list)
-            legacy.file.Strings['legacy'] = 'after'
-            legacy.restore(before)
-            self.assertEqual(legacy.document_user_text('legacy'), 'before')
-            target = self.root / 'legacy.3dm'
-            self.assertTrue(legacy.save(str(target)))
-            loaded = Model.load(str(target))
-            self.assertEqual(loaded.metadata_backend, 'legacy-file3dm')
-            self.assertEqual(loaded.document_user_text('legacy'), 'before')
-            with patch.dict(os.environ, {'NARWHAL_APPLICATION_CORE': str(self.root / 'absent.so')}):
-                with self.assertRaises(native.SessionUnavailable):
-                    Model()
-            with patch.dict(os.environ, {'NARWHAL_APPLICATION_CORE': ''}):
-                with self.assertRaises(native.SessionUnavailable):
-                    Model()
+            for action in (Model, lambda: Model.load(str(target)),
+                           lambda: setattr(self.m, 'file', incoming)):
+                with self.assertRaisesRegex(native.SessionUnavailable, 'NARWHAL_APPLICATION_CORE'):
+                    action()
+            for path in (str(self.root / 'absent.so'), ''):
+                with patch.dict(os.environ, {'NARWHAL_APPLICATION_CORE': path}):
+                    with self.assertRaises(native.SessionUnavailable):
+                        Model()
+        self.assertEqual(list(incoming.Strings), [('old-file', 'before')])
+        self.assertEqual(target.read_bytes(), disk_before)
         self.assertEqual(self.m.metadata_backend, 'rust')
+        # Old on-disk File3dm strings are still adopted into Rust, not discarded.
+        loaded = Model.load(str(target))
+        self.assertEqual(loaded.metadata_backend, 'rust')
+        self.assertEqual(loaded.document_user_text('old-file'), 'before')
+        before = loaded.snapshot()
+        self.assertIsInstance(before.strings, native.Snapshot)
+        loaded.file.Strings['old-file'] = 'after'
+        loaded.restore(before)
+        self.assertEqual(loaded.document_user_text('old-file'), 'before')
+        self.assertTrue(loaded.save(str(target)))
+        self.assertEqual(list(r3.File3dm.Read(str(target)).Strings), [('old-file', 'before')])
+
+    def test_runtime_prepare_refusal_precedes_callbacks_and_document_mutation(self):
+        self.m.file.Strings['keep'] = 'safe'
+        binding = self.m._document_metadata
+        session = self.session()
+        before = session.info()
+        raw_before = tuple(metadata._raw(self.m.file))
+        with patch.object(session, 'prepare', side_effect=native.SessionError('transport_error')), \
+                patch.object(self.m, '_will_change') as capture, \
+                patch.object(native, 'load_library', side_effect=AssertionError('runtime rediscovery')):
+            from unittest.mock import Mock
+            callback = Mock()
+            with self.assertRaisesRegex(native.SessionError, 'transport_error'):
+                self.m.set_document_user_text('keep', 'lost', callback)
+            callback.assert_not_called()
+            capture.assert_not_called()
+        self.assertEqual(session.info(), before)
+        self.assertEqual(tuple(metadata._raw(self.m.file)), raw_before)
+        self.assertIs(self.m._document_metadata, binding)
+        self.assertEqual(self.m.document_user_text('keep'), 'safe')
 
     def test_runtime_native_error_never_falls_back_and_recovery_is_same_session(self):
         self.m.file.Strings['keep'] = 'safe'
@@ -947,14 +996,14 @@ def suite_for(cls):
     return unittest.TestSuite(cls(name) for name in sorted(cls.__dict__) if name.startswith('test_'))
 
 
-def without_guard(owner, name, guard):
-    """Compile a single guard deletion in memory; all other product code is retained."""
+def without_guard(owner, name, guard, replacement=''):
+    """Compile one in-memory mutation; all other product code is retained."""
     function = getattr(owner, name)
     source = textwrap.dedent(inspect.getsource(function))
     if source.count(guard) != 1:
         raise AssertionError(f'mutation anchor changed: {name}')
     namespace = dict(function.__globals__)
-    exec(compile(source.replace(guard, '', 1), f'<integration mutation {name}>', 'exec'), namespace)
+    exec(compile(source.replace(guard, replacement, 1), f'<integration mutation {name}>', 'exec'), namespace)
     return patch.object(owner, name, namespace[name])
 
 
@@ -968,7 +1017,23 @@ def mutation_checks(mode):
             existing.retired = True
         return real_adopt(model, file, previous, preserve=preserve)
 
+    def premature_projection(model, file, previous=None, *, preserve=False):
+        existing = metadata._hooks()['files'].get(file)
+        if existing is not None and existing.model() is None:
+            existing.materialize()
+        if previous is not None:
+            previous.materialize()
+        return real_adopt(model, file, previous, preserve=preserve)
+
     cases = [
+        ('capture_before_native_prepare', without_guard(metadata.Binding, 'change',
+         '    prepared = self.session.prepare(key, value)',
+         '    self.model()._will_change()\n    prepared = self.session.prepare(key, value)'),
+         ModelTests, 'test_runtime_prepare_refusal_precedes_callbacks_and_document_mutation',
+         'Called 1 times'),
+        ('native_admission_after_projection', patch.object(metadata, 'adopt', premature_projection),
+         ModelTests, 'test_native_admission_precedes_orphan_and_previous_projection',
+         'native refusal projected metadata before admission'),
         ('metadata_restore_removed', patch.object(metadata.Binding, 'restore', lambda *args: None),
          ModelTests, 'test_model_snapshot_restores_metadata_and_geometry_together', 'saved'),
         ('serialization_materialization_removed', patch.object(metadata.Binding, 'materialize', lambda *args: None),
@@ -976,13 +1041,13 @@ def mutation_checks(mode):
         ('internal_session_preservation_removed',
          patch.object(Model, '_replace_backing_file', lambda self, file: setattr(self, 'file', file)),
          ModelTests, 'test_group_and_layer_roundtrips_preserve_session_and_old_snapshots', 'internal round trip'),
-        ('orphan_materialization_removed', without_guard(metadata, 'adopt', '        existing.materialize()\n'),
-         ModelTests, 'test_orphan_file_adoption_materializes_metadata_into_a_new_session', 'orphan metadata was lost'),
+        ('orphan_materialization_removed', without_guard(metadata, 'adopt', '            existing.materialize()\n', '            pass\n'),
+         ModelTests, 'test_orphan_file_adoption_materializes_metadata_into_a_new_session', 'unsaved'),
         ('orphan_retired_before_new_binding_ready', patch.object(metadata, 'adopt', premature_orphan_retirement),
          ModelTests, 'test_failed_orphan_adoption_does_not_retire_either_binding', 'failed orphan adoption retired'),
-        ('orphan_legacy_registry_removal_deleted', without_guard(metadata, 'adopt',
-         "    elif existing is not None:\n        hooks['files'].pop(file, None)\n"),
-         ModelTests, 'test_orphan_to_missing_default_legacy_removes_retired_registry_entry', 'legacy adoption retained orphan registry'),
+        ('orphan_authority_read_removed', without_guard(metadata, 'adopt',
+         'existing.session.rows() if orphan else ', ''),
+         ModelTests, 'test_orphan_file_adoption_materializes_metadata_into_a_new_session', 'orphan metadata was lost'),
     ]
     if mode == 'commands':
         stack_type = type(app.ctx.undo)

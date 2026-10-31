@@ -34,18 +34,11 @@ import time
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def mutate_scroll_tolerance(module):
-    """Restore only the measured bad predicate, in memory; fail if source drifts."""
-    import inspect
-    import textwrap
-    source = textwrap.dedent(inspect.getsource(module.PopupModel.layout))
-    target = 'scrolling = content - body_height > 1e-6 * max(1.0, s)'
-    assert source.count(target) == 1, 'scroll-tolerance mutation target changed'
-    source = source.replace(target, 'scrolling = content > body_height')
-    namespace = {}
-    exec(compile(source, '<visibility_07_no_scroll_tolerance>', 'exec'), vars(module), namespace)
-    module.PopupModel.layout = namespace['layout']
-    return hashlib.sha256(source.encode()).hexdigest()
+def mutate_scroll_tolerance(module=None):
+    """The Python layout mutation is retired, not a successful negative control."""
+    raise RuntimeError(
+        'retired mutation mode no_scroll_tolerance: popup layout is native; '
+        'use the native popup mutation fixture and a qualified mutated UI library')
 
 
 def launch():
@@ -60,6 +53,8 @@ def launch():
     parser.add_argument('--diagnostic-scroll', action='store_true',
                         help='Reveal clipped rows by keyboard; does NOT certify initial row layout')
     args = parser.parse_args()
+    if args.mutation == 'no_scroll_tolerance':
+        mutate_scroll_tolerance()
     # Disk-backed, deliberately short enough for Blender's Unix socket names.
     scratch = ROOT / 'tmp/s07'
     scratch.mkdir(parents=True, exist_ok=True)
@@ -88,6 +83,9 @@ def launch():
             key, value = row.split('=', 1)
             if value:
                 env[key] = value
+        # Retain the harness-qualified UI core across the clean launch environment.
+        if 'NARWHAL_UI_CORE_LIBRARY' in os.environ:
+            env['NARWHAL_UI_CORE_LIBRARY'] = os.environ['NARWHAL_UI_CORE_LIBRARY']
         for key in ('HOME', 'XDG_CONFIG_HOME', 'XDG_CACHE_HOME', 'XDG_DATA_HOME'):
             folder = out / key.lower()
             folder.mkdir()
@@ -126,24 +124,32 @@ def launch():
 
 
 def layout_only():
-    """Focused pure reproduction of the additional measured 0.85-scale defect."""
+    """Focused native-layout reproduction of the measured 0.85-scale defect."""
     import argparse
     import importlib.util
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--layout-only', action='store_true')
     parser.add_argument('--mutation', choices=('no_scroll_tolerance',), default='')
     args = parser.parse_args()
-    spec = importlib.util.spec_from_file_location('visibility_07_popup', ROOT / 'narwhal3d/shell_popup.py')
+    if args.mutation:
+        mutate_scroll_tolerance()
+    # Load the pure adapter without importing the Blender application package.
+    import types
+    package = types.ModuleType('visibility_07_native')
+    package.__path__ = [str(ROOT / 'narwhal3d')]
+    sys.modules[package.__name__] = package
+    spec = importlib.util.spec_from_file_location('visibility_07_native.native_popup', ROOT / 'narwhal3d/native_popup.py')
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
-    if args.mutation:
-        mutate_scroll_tolerance(module)
-    model = module.PopupModel((1600, 1000), .85)
+    model = module.NativePopup((1600, 1000), .85)
+    def intersection(a, b):
+        rect = (max(a[0], b[0]), max(a[1], b[1]), min(a[2], b[2]), min(a[3], b[3]))
+        return rect if rect[0] < rect[2] and rect[1] < rect[3] else None
     model.open([{'label': 'OverlapA', 'action': 0}, {'label': 'OverlapB', 'action': 1}],
                (352, 666), 'Choose object', lambda *args: None)
     panel = model.panels[0]
-    intersections = [module._intersection(rect, panel.body) for rect in panel.row_rects]
+    intersections = [intersection(rect, panel.body) for rect in panel.row_rects]
     print(json.dumps({'scale': model.scale, 'max_scroll': panel.max_scroll,
         'body': panel.body, 'rows': panel.row_rects, 'visible': intersections}, indent=2))
     assert panel.max_scroll <= 1e-6 and panel.up is None and panel.down is None, (
@@ -152,6 +158,7 @@ def layout_only():
     assert all(abs(actual - expected) <= 1e-6
                for visible, row in zip(intersections, panel.row_rects)
                for actual, expected in zip(visible, row)), 'both rows must be fully visible, not clipped'
+    model.dispose()
     print('VISIBILITY_07_LAYOUT PASS')
 
 

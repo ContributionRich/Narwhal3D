@@ -1,8 +1,10 @@
 """Typed persistent editor ABI. No Blender, clipboard, font or layout dependencies.
 
-Python owns FFI/lifetime management and immutable read projections only. Exceptional
-Python values transfer ownership to the unchanged compatibility model before running
-user coercions. A native error is never retried through Python after possible mutation.
+Python owns FFI/lifetime management, host argument coercion and read projections.
+Rust is the only editor authority. Missing/invalid support fails explicitly; edits
+are never replayed. Direct assignments must preserve bounded caret/anchor state:
+invalid states are rejected before mutation, not handed to another implementation.
+Font layout remains in textfield.py; the Rust layout prototype is NOT in production.
 """
 import ctypes as C
 import os
@@ -28,7 +30,7 @@ class State(C.Structure):
 _loaded_library: C.CDLL | None = None
 
 
-def library() -> C.CDLL | None:
+def library() -> C.CDLL:
     global _loaded_library
     if _loaded_library is not None:
         return _loaded_library
@@ -43,7 +45,7 @@ def library() -> C.CDLL | None:
         machine = {'amd64': 'x86_64', 'aarch64': 'arm64'}.get(platform.machine().lower(), platform.machine().lower())
         path = Path(__file__).resolve().parents[1] / 'artifacts/ui-core' / (system + '-' + machine) / name
     if configured is None and not path.is_file():
-        return None
+        raise RuntimeError('required native UI editor core is unavailable')
     if configured == '':
         raise RuntimeError('empty NARWHAL_UI_CORE_LIBRARY path')
     try:
@@ -107,8 +109,12 @@ class Editor:
         handle = 0 if self._state is None else self.state.handle
         self.calls += 1
         self.uploaded += length * 4
-        rc = self.lib.narwhal_editor_edit(handle, op, value, flags, data, length,
-                                         C.byref(out), C.sizeof(out))
+        try:
+            rc = self.lib.narwhal_editor_edit(handle, op, value, flags, data, length,
+                                             C.byref(out), C.sizeof(out))
+        except BaseException:
+            self.failed = True
+            raise  # The native mutation may already have happened; never retry.
         if rc != 0:
             self.failed = True
             raise RuntimeError(f"editor operation failed ({rc}); not replayed")
@@ -148,7 +154,11 @@ class Editor:
             start, end, count = self.patch if self.patch is not None else (0, 0, s.length)
             buf = (C.c_uint32 * max(1, count))()
             self.calls += 1
-            rc = self.lib.narwhal_editor_read(s.handle, s.text_revision, start, buf, count)
+            try:
+                rc = self.lib.narwhal_editor_read(s.handle, s.text_revision, start, buf, count)
+            except BaseException:
+                self.failed = True
+                raise
             if rc != 0:
                 self.failed = True
                 raise RuntimeError(f"editor read failed ({rc}); not replayed")
@@ -179,167 +189,153 @@ class Editor:
         self.finalizer()
 
 
-def facade(Legacy):
-    class TextField(Legacy):
-        def __init__(self, text="", multiline=False, max_chars=None):
-            self._native = None
-            self._backend_reason = "legacy Python value/subclass"
-            lib = library()
-            if (type(self) is TextField and type(text) is str and type(multiline) is bool
-                    and (max_chars is None or integer(max_chars)) and len(text) <= LIMIT
-                    and unicodedata.unidata_version in ("15.1.0", "16.0.0") and lib is not None):
-                self._native = Editor(lib, text, multiline, max_chars)
-                self._backend_reason = "native"
+def _maximum(value):
+    if value is None:
+        return None
+    import operator
+    value = operator.index(value)
+    if not integer(value):
+        raise OverflowError("max_chars exceeds the native signed 64-bit domain")
+    return value
+
+
+def _position(value):
+    return max(I64_MIN, min(I64_MAX, int(value)))
+
+
+class TextField:
+    """Public editor adapter, including subclasses; all mutations belong to Rust.
+
+    set_text/insert use str(), multiline/selection flags use bool(), set_caret
+    uses int(), and max_chars accepts integer-index values (including bool).
+    Direct text assignment is raw, but must leave caret/anchor in range. Invalid
+    direct states and out-of-domain limits are rejected atomically. Failed user
+    coercions no longer leave a partially changed anchor. No Python editor exists.
+    """
+    def __init__(self, text="", multiline=False, max_chars=None):
+        lib = library()
+        if lib is None:
+            raise RuntimeError("required native UI editor core is unavailable")
+        if unicodedata.unidata_version not in ("15.1.0", "16.0.0"):
+            raise RuntimeError("unsupported Unicode version for native editor")
+        multiline, maximum = bool(multiline), _maximum(max_chars)
+        self._native = Editor(lib, "", multiline, maximum)
+        self._backend_reason = "native"
+        # Preserve the public set_text subclass hook with an initialized owner.
+        try:
+            self.set_text(text)
+        except BaseException:
+            self._native.close()
+            raise
+
+    def _get(self, name):
+        n = self._native
+        if n.failed or not n.finalizer.alive:
+            raise RuntimeError("editor is unavailable")
+        if name == "text":
+            return n.text()
+        if name == "caret":
+            return n.state.caret
+        if name == "anchor":
+            return None if n.state.anchor == -1 else n.state.anchor
+        if name == "multiline":
+            return bool(n.state.flags & 1)
+        return n.state.max_chars if n.state.flags & 2 else None
+
+    def _set(self, name, value):
+        n = self._native
+        if name == "text":
+            if not isinstance(value, str):
+                raise TypeError("direct text assignment requires str; use set_text for coercion")
+            value = str(value)
+            if len(value) > LIMIT:
+                raise OverflowError("editor input exceeds native bound")
+            if n.state.caret > len(value) or n.state.anchor > len(value):
+                raise ValueError("direct text assignment would invalidate caret/anchor; use set_text")
+            n.apply(11, text=value)
+        elif name in ("caret", "anchor"):
+            if name == "anchor" and value is None:
+                n.apply(13, flags=1)
+                return
+            import operator
+            value = operator.index(value)
+            if not 0 <= value <= n.state.length:
+                raise ValueError("direct caret/anchor must be within text")
+            n.apply(12 if name == "caret" else 13, value)
+        elif name == "multiline":
+            n.apply(14, int(bool(value)))
+        else:
+            value = _maximum(value)
+            n.apply(15, value or 0, int(value is None))
+
+    def selection(self):
+        anchor, caret = self.anchor, self.caret
+        return None if anchor is None or anchor == caret else (min(anchor, caret), max(anchor, caret))
+
+    def selected_text(self):
+        sel = self.selection()
+        return self.text[sel[0]:sel[1]] if sel else ""
+
+    def set_text(self, text):
+        self._native.apply(1, text=str(text))
+
+    def insert(self, s):
+        return self._native.apply(2, text=str(s))
+
+    def set_caret(self, index, select=False):
+        select, index = bool(select), _position(index)
+        self._native.apply(5, index, int(select))
+
+    def move(self, delta, select=False):
+        select = bool(select)
+        # Python's public move accepts fractional numbers: truncation applies to
+        # caret + delta, NOT delta alone. Native selection-collapse still uses sign.
+        if not isinstance(delta, int):
+            if not select and self.selection() and delta:
+                delta = -1 if delta < 0 else 1
             else:
-                if lib is None:
-                    self._backend_reason = "native library missing"
-                elif unicodedata.unidata_version not in ("15.1.0", "16.0.0"):
-                    self._backend_reason = "unsupported Unicode version"
-                super().__init__(text, multiline, max_chars)
+                return self.set_caret(self.caret + delta, select)
+        self._native.apply(6, _position(delta), int(select))
 
-        def _handover(self):
-            n = self._native
-            if n is not None:
-                # Obtain everything first. A failed read cannot leave split authority.
-                state = dict(text=n.text(), caret=n.state.caret,
-                             anchor=None if n.state.anchor == -1 else n.state.anchor,
-                             multiline=bool(n.state.flags & 1),
-                             max_chars=n.state.max_chars if n.state.flags & 2 else None)
-                n.close()
-                self.__dict__.update(state)
-                self._native = None
-                self._backend_reason = "atomic legacy handover"
+    def home(self, select=False):
+        self._native.apply(7, flags=int(bool(select)))
 
-        def _get(self, name):
-            n = self._native
-            if n is None:
-                return self.__dict__[name]
-            if n.failed or not n.finalizer.alive:
-                raise RuntimeError("editor is unavailable")
-            if name == "text":
-                return n.text()
-            if name == "caret":
-                return n.state.caret
-            if name == "anchor":
-                return None if n.state.anchor == -1 else n.state.anchor
-            if name == "multiline":
-                return bool(n.state.flags & 1)
-            return n.state.max_chars if n.state.flags & 2 else None
+    def end(self, select=False):
+        self._native.apply(8, flags=int(bool(select)))
 
-        def _set(self, name: str, value: object):
-            n = self._native
-            if n is not None:
-                if name == "text" and type(value) is str and len(value) <= LIMIT:
-                    if n.state.caret <= len(value) and n.state.anchor <= len(value):
-                        n.apply(11, text=value)
-                        return
-                elif name in ("caret", "anchor"):
-                    if name == "anchor" and value is None:
-                        n.apply(13, flags=1)
-                        return
-                    if integer(value) and 0 <= value <= n.state.length:
-                        n.apply(12 if name == "caret" else 13, value)
-                        return
-                elif name == "multiline" and type(value) is bool:
-                    n.apply(14, int(value))
-                    return
-                elif name == "max_chars" and (value is None or integer(value)):
-                    n.apply(15, value or 0, int(value is None))
-                    return
-                self._handover()
-            self.__dict__[name] = value
+    def backspace(self):
+        self._native.apply(3)
 
-        def set_text(self, text):
-            if self._native is not None and type(text) is str and len(text) <= LIMIT:
-                self._native.apply(1, text=text)
-            else:
-                self._handover()
-                return Legacy.set_text(self, text)
+    def delete(self):
+        self._native.apply(4)
 
-        def insert(self, s):
-            n = self._native
-            if n is not None and type(s) is str and len(s) + n.state.length <= LIMIT:
-                return n.apply(2, text=s)
-            self._handover()
-            return Legacy.insert(self, s)
+    def select_all(self):
+        self._native.apply(9)
 
-        def set_caret(self, index, select=False):
-            if self._native is not None and type(index) is int and type(select) is bool:
-                self._native.apply(5, max(I64_MIN, min(I64_MAX, index)), int(select))
-            else:
-                self._handover()
-                return Legacy.set_caret(self, index, select)
+    def cut(self):
+        text = self.selected_text()
+        if text:
+            self._native.apply(3)
+        return text
 
-        def move(self, delta, select=False):
-            if self._native is not None and type(delta) is int and type(select) is bool:
-                self._native.apply(6, max(I64_MIN, min(I64_MAX, delta)), int(select))
-            else:
-                self._handover()
-                return Legacy.move(self, delta, select)
+    def _delete_selection(self):
+        return self._native.apply(16)
 
-        def home(self, select=False):
-            if self._native is not None and type(select) is bool:
-                self._native.apply(7, flags=int(select))
-            else:
-                self._handover()
-                return Legacy.home(self, select)
+    def __copy__(self):
+        other = object.__new__(type(self))
+        other.__dict__ = self.__dict__.copy()
+        other._native = self._native.clone()
+        return other
 
-        def end(self, select=False):
-            if self._native is not None and type(select) is bool:
-                self._native.apply(8, flags=int(select))
-            else:
-                self._handover()
-                return Legacy.end(self, select)
+    def __deepcopy__(self, memo):
+        import copy
+        other = object.__new__(type(self))
+        memo[id(self)] = other
+        other.__dict__ = {k: (v.clone() if k == "_native" else copy.deepcopy(v, memo))
+                          for k, v in self.__dict__.items()}
+        return other
 
-        def backspace(self):
-            if self._native is not None:
-                self._native.apply(3)
-            else:
-                return Legacy.backspace(self)
 
-        def delete(self):
-            if self._native is not None:
-                self._native.apply(4)
-            else:
-                return Legacy.delete(self)
-
-        def select_all(self):
-            if self._native is not None:
-                self._native.apply(9)
-            else:
-                return Legacy.select_all(self)
-
-        def cut(self):
-            if self._native is None:
-                return Legacy.cut(self)
-            text = self.selected_text()
-            if text:
-                self._native.apply(3)
-            return text
-
-        def _delete_selection(self):
-            if self._native is None:
-                return Legacy._delete_selection(self)
-            return self._native.apply(16)
-
-        def __copy__(self):
-            other = object.__new__(type(self))
-            other.__dict__ = self.__dict__.copy()
-            if self._native is not None:
-                other._native = self._native.clone()
-            return other
-
-        def __deepcopy__(self, memo):
-            import copy
-            other = object.__new__(type(self))
-            memo[id(self)] = other
-            other.__dict__ = {k: (v.clone() if k == "_native" and v is not None
-                                 else copy.deepcopy(v, memo)) for k, v in self.__dict__.items()}
-            return other
-
-    for name in ("text", "caret", "anchor", "multiline", "max_chars"):
-        setattr(TextField, name, property(lambda self, key=name: self._get(key),
-                                         lambda self, value, key=name: self._set(key, value)))
-    TextField.__module__ = Legacy.__module__
-    TextField.__qualname__ = "TextField"
-    return TextField
+for _name in ("text", "caret", "anchor", "multiline", "max_chars"):
+    setattr(TextField, _name, property(lambda self, key=_name: self._get(key),
+                                     lambda self, value, key=_name: self._set(key, value)))

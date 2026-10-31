@@ -1,14 +1,15 @@
 """Persistent editor qualification. Requires NARWHAL_UI_CORE_LIBRARY, no bpy.
 
-Run python3 -B spike/test_ui_core_editor.py. The legacy class is the retained,
-unchanged implementation, not a second invocation of the native algorithms.
+Run python3 -B spike/test_ui_core_editor.py. Golden DATA was captured from the
+original before retirement; no executable Python editor is used as an oracle.
 """
 import copy
 import ctypes as C
 import gc
 import importlib.util
 from pathlib import Path
-import random
+import hashlib
+from test_ui_core_golden import DATA
 import os
 import sys
 import unicodedata
@@ -31,81 +32,113 @@ def outcome(f, method, args):
     try:
         return "ok", getattr(f, method)(*args)
     except Exception as exc:
-        return "error", type(exc), str(exc)
+        return "error", type(exc).__name__, str(exc)
 
 
 class EditorTests(unittest.TestCase):
-    def pair(self, *args, **kwargs):
-        a, b = tf.TextField(*args, **kwargs), tf._LegacyTextField(*args, **kwargs)
-        self.assertIsNotNone(a._native)
-        self.assertEqual(state(a), state(b))
-        return a, b
+    def field(self, *args, **kwargs):
+        f = tf.TextField(*args, **kwargs)
+        self.assertIsNotNone(f._native)
+        self.assertIsInstance(f.text, str)  # Prime the same read projection as the old pair fixture.
+        return f
 
-    def test_differential_transitions(self):
-        rng = random.Random(601)
-        samples = ["", "abc", "\r\na\r\tb\x00", "😀𐐀e\u0301\ud800\udfff", "a\nb c"]
-        for multiline in (False, True):
-            for limit in (None, -3, 0, 1, 10, 100):
-                a, b = self.pair("abc", multiline, limit)
-                for _ in range(500):
-                    choices = [("insert", (rng.choice(samples),)), ("set_text", (rng.choice(samples),)),
-                               ("set_caret", (rng.randint(-10, 20), rng.choice([True, False]))),
-                               ("move", (rng.randint(-10, 10), rng.choice([True, False]))),
-                               ("home", (rng.choice([True, False]),)), ("end", (rng.choice([True, False]),)),
-                               ("backspace", ()), ("delete", ()), ("cut", ()),
-                               ("select_all", ()), ("_delete_selection", ())]
-                    method, args = rng.choice(choices)
-                    self.assertEqual(outcome(a, method, args), outcome(b, method, args), (method, args))
-                    self.assertEqual(state(a), state(b), (method, args))
-                    self.assertIsNotNone(a._native)
+    def test_golden_transitions(self):
+        for trace in DATA['editor']:
+            f = self.field(*trace['args'])
+            self.assertEqual(list(state(f)), trace['initial'])
+            for method, args, expected, after in trace['steps']:
+                self.assertEqual(list(outcome(f, method, args)), expected, (method, args))
+                self.assertEqual(list(state(f)), after, (method, args))
+                self.assertIsNotNone(f._native)
 
-    def test_assignments_and_atomic_handover(self):
-        cases = [("text", "a\x00\r\ud800z"), ("caret", -1), ("caret", 99),
-                 ("anchor", 99), ("anchor", -1), ("anchor", "1"),
-                 ("multiline", 1), ("multiline", "yes"), ("max_chars", 2.5),
-                 ("max_chars", True), ("max_chars", 2**90), ("text", None),
-                 ("text", ["a"]), ("text", b"abc"), ("text", "x")]
-        for key, value in cases:
-            for method, args in [("insert", ("x",)), ("delete", ()), ("backspace", ()),
-                                 ("set_text", ("abcdef",)), ("home", (True,)), ("end", ())]:
-                a, b = self.pair("abc")
-                setattr(a, key, value)
-                setattr(b, key, value)
-                self.assertEqual(state(a), state(b))
-                self.assertEqual(outcome(a, method, args), outcome(b, method, args), (key, value, method))
-                self.assertEqual(state(a), state(b))
-        a, b = self.pair("abc")
-        n = a._native
-        a.caret = b.caret = 1
-        a.anchor = b.anchor = 2
-        a.text = b.text = "x\x00\r\ud800"
-        a.max_chars = b.max_chars = 2
-        a.multiline = b.multiline = True
-        self.assertIs(a._native, n)
-        self.assertEqual(state(a), state(b))
-        self.assertNotIn("text", a.__dict__)
-        self.assertNotIn("caret", a.__dict__)
+    def test_raw_assignments_remain_native(self):
+        f = self.field('abc')
+        owner = f._native
+        f.caret, f.anchor = 1, 2
+        f.text = 'x\x00\r\ud800'
+        f.max_chars, f.multiline = 2, True
+        self.assertEqual(state(f), ('x\x00\r\ud800', 1, 2, True, 2))
+        self.assertIs(f._native, owner)
+        self.assertNotIn('text', f.__dict__)
+        self.assertNotIn('caret', f.__dict__)
+        f.anchor = None
+        self.assertIsNone(f.selection())
+        f.caret = True
+        f.max_chars = True
+        f.multiline = 0
+        self.assertEqual(state(f)[1:], (1, None, False, 1))
+
+    def test_invalid_assignments_rejected_atomically(self):
+        for key, value, error in [('caret', -1, ValueError), ('caret', 99, ValueError),
+                ('anchor', 99, ValueError), ('anchor', -1, ValueError),
+                ('anchor', '1', TypeError), ('max_chars', 2.5, TypeError),
+                ('max_chars', 2**90, OverflowError), ('text', None, TypeError),
+                ('text', ['a'], TypeError), ('text', b'abc', TypeError), ('text', 'x', ValueError)]:
+            f = self.field('abc')
+            owner, before, calls = f._native, state(f), f._native.calls
+            with self.assertRaises(error, msg=(key, value)):
+                setattr(f, key, value)
+            self.assertEqual(state(f), before)
+            self.assertIs(f._native, owner)
+            self.assertEqual(owner.calls, calls)
+            f.insert('X')
+            self.assertEqual(f.text, 'abcX')
 
     def test_error_order_and_coercions(self):
-        for method, args in [("set_caret", ("bad", True)), ("set_caret", ("bad", False)),
-                             ("move", (1.5,)), ("move", ("1",)), ("move", (2**100,)),
-                             ("insert", (None,)), ("insert", (5,)), ("set_text", (b"x",))]:
-            a, b = self.pair("abcd")
-            a.set_caret(1, True)
-            b.set_caret(1, True)
-            self.assertEqual(outcome(a, method, args), outcome(b, method, args))
-            self.assertEqual(state(a), state(b))
-        for cls in (tf.TextField, tf._LegacyTextField):
-            f = cls("abc")
-            class Coercion:
-                def __str__(self):
-                    f.set_caret(0)
-                    return "X"
-            f.insert(Coercion())
-            self.assertEqual(state(f)[:3], ("Xabc", 1, None))
+        for select in (True, False):
+            f = self.field('abcd')
+            f.set_caret(1, True)
+            before, calls = state(f), f._native.calls
+            with self.assertRaises(ValueError):
+                f.set_caret('bad', select)
+            self.assertEqual(state(f), before)  # OURS: no partial anchor mutation.
+            self.assertEqual(f._native.calls, calls)
+        f = self.field(b'ab', multiline=1, max_chars=True)
+        self.assertEqual(state(f), ('b', 1, None, True, 1))
+        f.max_chars = None
+        f.set_text(None)
+        self.assertEqual(f.text, 'None')
+        f.set_caret('1', 'yes')
+        self.assertEqual(f.selection(), (1, 4))
+        f.insert(5)
+        self.assertEqual(f.text, 'N5')
+        f.set_text('abcd')
+        f.move(-1.5)
+        self.assertEqual(f.caret, 2)
+        f.move(2**100)
+        self.assertEqual(f.caret, 4)
+        f.move(-2**100)
+        self.assertEqual(f.caret, 0)
+        f.set_caret(2, True)
+        f.move(-.5)
+        self.assertEqual((f.caret, f.anchor), (0, None))
+        class Coercion:
+            def __str__(self):
+                f.set_caret(0)
+                return 'X'
+        f.insert(Coercion())
+        self.assertEqual(state(f)[:3], ('Xabcd', 1, None))
+
+    def test_subclasses_and_copy_preserve_public_hooks(self):
+        class Field(tf.TextField):
+            def set_text(self, text):
+                self.label = 'subclass'
+                super().set_text(str(text).upper())
+            def insert(self, text):
+                return super().insert(str(text).upper())
+        f = Field('abc')
+        self.assertEqual(f.text, 'ABC')
+        f.insert('x')
+        for g in (copy.copy(f), copy.deepcopy(f)):
+            self.assertIs(type(g), Field)
+            self.assertEqual((g.text, g.label), ('ABCX', 'subclass'))
+            self.assertNotEqual(g._native.state.handle, f._native.state.handle)
+            g.insert('y')
+            self.assertEqual(g.text, 'ABCXY')
+        self.assertEqual(f.text, 'ABCX')
 
     def test_projection_and_no_upload_on_movement(self):
-        f, _ = self.pair("a" * 100000)
+        f = self.field("a" * 100000)
         n = f._native
         text = f.text
         revision, copied, calls = n.state.text_revision, (n.uploaded, n.downloaded), n.calls
@@ -121,7 +154,7 @@ class EditorTests(unittest.TestCase):
         self.assertGreater(n.state.text_revision, revision)
 
     def test_lazy_delta_projection(self):
-        f, _ = self.pair("a" * 100000)
+        f = self.field("a" * 100000)
         n = f._native
         before = n.downloaded
         f.insert("Z")
@@ -145,7 +178,7 @@ class EditorTests(unittest.TestCase):
         self.assertEqual(f.text, "a😀" + "a" * 99995 + "123")
 
     def test_native_read_and_output_bounds(self):
-        f, _ = self.pair("abc")
+        f = self.field("abc")
         n, out = f._native, adapter.State()
         data = (C.c_uint32 * 1)(88)
         for size in (0, C.sizeof(out)-1, C.sizeof(out)+1):
@@ -156,7 +189,7 @@ class EditorTests(unittest.TestCase):
         self.assertEqual(f.text, "abc")
 
     def test_lifetime_and_copy(self):
-        f, _ = self.pair("abc")
+        f = self.field("abc")
         f.set_caret(1, True)
         for clone in (copy.copy(f), copy.deepcopy(f)):
             self.assertEqual(state(clone), state(f))
@@ -170,7 +203,7 @@ class EditorTests(unittest.TestCase):
         gc.collect()
         self.assertIsNone(ref())
         self.assertEqual(lib.narwhal_editor_close(handle), 2)
-        f, _ = self.pair("closed")
+        f = self.field("closed")
         f._native.close()
         for action in (lambda: f.text, lambda: f.insert("x"), lambda: copy.copy(f)):
             with self.assertRaises(RuntimeError):
@@ -180,12 +213,13 @@ class EditorTests(unittest.TestCase):
         # Chunked exhaustive comparison includes supplementary planes and surrogates.
         for start in range(0, 0x110000, 8192):
             text = "".join(map(chr, range(start, min(start + 8192, 0x110000))))
-            a, b = self.pair(text, True)
-            self.assertEqual(a.text, b.text, (unicodedata.unidata_version, start))
+            f = self.field(text, True)
+            digest = hashlib.sha256(f.text.encode('utf-32-le', 'surrogatepass')).hexdigest()
+            self.assertEqual(digest, DATA['unicode'][unicodedata.unidata_version][start//8192])
 
     def test_hostile_projection_never_replays(self):
         for corruption in ("length", "caret", "anchor", "handle", "revision", "text_revision", "flags", "change_start", "change_end", "inserted"):
-            f, _ = self.pair("abc")
+            f = self.field("abc")
             n = f._native
             real = n.lib
             class Hostile:
@@ -202,7 +236,7 @@ class EditorTests(unittest.TestCase):
                 f.insert("Y")
             self.assertEqual(n.calls, calls)
             self.assertNotIn("text", f.__dict__)
-        f, _ = self.pair("abc")
+        f = self.field("abc")
         class Failure:
             def narwhal_editor_edit(self, *args):
                 return 37
@@ -210,8 +244,44 @@ class EditorTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             f.insert("x")
 
+    def test_transport_exceptions_are_terminal_without_replay(self):
+        for operation in ('edit', 'read'):
+            f = self.field('abc')
+            n, real = f._native, f._native.lib
+            class Transport:
+                def narwhal_editor_edit(self, *args):
+                    real.narwhal_editor_edit(*args)
+                    raise OSError('after native mutation')
+                def narwhal_editor_read(self, *args):
+                    raise OSError('during native read')
+            if operation == 'read':
+                f.insert('X')
+            n.lib = Transport()
+            with self.assertRaises(OSError):
+                f.insert('X') if operation == 'edit' else f.text
+            self.assertTrue(n.failed)
+            self.assertIs(f._native, n)
+            calls = n.calls
+            for action in (lambda: f.insert('Y'), lambda: f.text, lambda: copy.copy(f)):
+                with self.assertRaises(RuntimeError):
+                    action()
+            self.assertEqual(n.calls, calls)
+
+    def test_input_bound_rejection_preserves_owner(self):
+        f = self.field('abc')
+        before, owner, calls = state(f), f._native, f._native.calls
+        with patch.object(adapter, 'LIMIT', 3):
+            for action in (lambda: f.set_text('abcd'), lambda: f.insert('abcd'),
+                           lambda: setattr(f, 'text', 'abcd')):
+                with self.assertRaises(OverflowError):
+                    action()
+                self.assertEqual(state(f), before)
+                self.assertIs(f._native, owner)
+                self.assertEqual(owner.calls, calls)
+        self.assertFalse(owner.failed)
+
     def test_clone_length_bound_before_any_read(self):
-        f, _ = self.pair("abcd")
+        f = self.field("abcd")
         with patch.object(adapter, "LIMIT", 3):
             with self.assertRaises(RuntimeError):
                 copy.copy(f)
@@ -228,13 +298,16 @@ class EditorTests(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 tf.TextField("preserve")
         with patch.object(adapter, "library", return_value=None):
-            f = tf.TextField("a\r\nb")
-            self.assertIsNone(f._native)
-            self.assertEqual(f.text, "a b")
+            with self.assertRaisesRegex(RuntimeError, 'required native'):
+                tf.TextField('a\r\nb')
+        with patch.object(adapter, '_loaded_library', None), patch.object(Path, 'is_file', return_value=False), patch.dict(os.environ, {}, clear=True):
+            with self.assertRaisesRegex(RuntimeError, 'required native'):
+                adapter.library()
+            with self.assertRaisesRegex(RuntimeError, 'required native'):
+                tf.TextField('preserve')
         with patch.object(adapter.unicodedata, "unidata_version", "99.0.0"):
-            f = tf.TextField("abc")
-            self.assertIsNone(f._native)
-            self.assertEqual(f._backend_reason, "unsupported Unicode version")
+            with self.assertRaisesRegex(RuntimeError, 'unsupported Unicode'):
+                tf.TextField('abc')
 
 
 if __name__ == "__main__":

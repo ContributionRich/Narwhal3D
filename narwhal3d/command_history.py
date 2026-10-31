@@ -1,51 +1,42 @@
-"""The Command History window's model. Pure Python, no bpy.
+"""Command History facade on required persistent Rust transcript storage.
 
-the reference CAD application's ``CommandHistory`` command (F2, ``commands/commandhistory``) opens a
-text window that, MEASURED, "lists the last 500 command lines from the current
-the reference CAD application session".  Its right-click menu and command-line options document the
-operations this model covers:
-
-  * a capped buffer -- the last 500 lines (``Clear`` "Deletes all command line
-    history")
-  * ``Copy All`` / ``Save As`` -- "Saves the contents of the window to a text
-    file"
-
-``CommandHistory(limit)`` is a capped, in-order ring buffer of command-line
-text. Its contract is:
-
-  append(line)      add a line; when over ``limit`` the oldest line drops
-  lines(last=None)  all lines in order, or just the last ``last`` of them
-  search(text)      case-insensitive; the indices of the lines containing ``text``
-  save(path)        the whole buffer as plain text, written atomically
-  clear()           drop every line
-
-Implementation choices not specified by the help:
-
-* A line is a ``str``; a non-string is refused by name (never a silent entry).
-* On ``append`` a single trailing newline / CR is stripped, so ``save`` joins
-  lines with one newline each (no blank-line gaps when the caller passes
-  already-newlined text).
-* ``search`` is a case-insensitive substring match (the window is a text view;
-  "search" behaves like a find).  ``text`` must be a non-empty string.
-* ``limit`` must be an integer >= 1 (a history of length 0 is not a history).
-* ``lines(last)`` with ``last == 0`` gives ``[]``; a non-int ``last`` is
-  refused.
-
-The default ``limit=500`` follows the documented command-history limit.
+MEASURED: CommandHistory lists the last 500 command lines of the session.
+OURS: strip all trailing CR/LF, lower-substring search (not casefold), detached
+lines(last), and sibling-temp/write/os.replace save. This does not add an F2 UI.
+Python owns validation, sequence coercion, copying and filesystem integration;
+Rust owns retention, normalization, ordering, search and text projections.
+String-subclass callbacks are explicitly unsupported, never a backend switch.
 """
 
 __all__ = ["CommandHistory"]
 
 
+# Host-only import compatibility for file-path test consumers.
+if __package__:
+    from .command_transcript import Transcript as _Transcript
+else:
+    import importlib.util as _importlib_util
+    import pathlib as _pathlib
+    import sys as _sys
+    _name = '_narwhal_command_transcript'
+    if _name not in _sys.modules:
+        _spec = _importlib_util.spec_from_file_location(
+            _name, _pathlib.Path(__file__).with_name('command_transcript.py'))
+        _module = _importlib_util.module_from_spec(_spec)
+        _sys.modules[_name] = _module
+        _spec.loader.exec_module(_module)
+    _Transcript = _sys.modules[_name].Transcript
+
+
 class CommandHistory:
-    """A capped, in-order ring buffer of command-line text."""
-
+    """Standalone normalized/capped policy, distinct from raw AppState history."""
     def __init__(self, limit=500):
-        limit = _check_limit(limit)
+        if not isinstance(limit, int) or isinstance(limit, bool) or limit < 1:
+            raise ValueError("limit must be an int >= 1; got %r" % (limit,))
+        # Preserve the public value, but admit only its integer payload to Rust.
         self._limit = limit
-        self._lines = []
+        self._lines = _Transcript(limit=int.__index__(limit), normalize=True)
 
-    # -- properties ---------------------------------------------------------
     @property
     def limit(self):
         return self._limit
@@ -53,72 +44,52 @@ class CommandHistory:
     def __len__(self):
         return len(self._lines)
 
-    # -- the documented operations -----------------------------------------
     def append(self, line):
-        """Add one command line; drop the oldest if now over the cap.
-
-        ``line`` must be a string.  A single trailing newline/CR is stripped so
-        ``save`` produces one line per entry.
-        """
         if not isinstance(line, str):
-            raise ValueError(
-                "a history line is a string; got %s" % type(line).__name__)
-        self._lines.append(line.rstrip("\r\n"))
-        if len(self._lines) > self._limit:
-            del self._lines[:len(self._lines) - self._limit]
+            raise ValueError("a history line is a string; got %s" % type(line).__name__)
+        self._lines.append(line)
 
     def lines(self, last=None):
-        """Return a copy of the buffer, or just its last ``last`` lines.
-
-        ``last=None`` -> every line, in order (oldest first).  ``last=0`` ->
-        ``[]``.  ``last`` must be ``None`` or an integer >= 0.
-        """
         if last is None:
-            return list(self._lines)
+            return self._lines[:]
         if not isinstance(last, int) or isinstance(last, bool) or last < 0:
-            raise ValueError(
-                "lines(last) takes None or an int >= 0; got %r" % (last,))
-        if last == 0:
-            return []
-        return list(self._lines[-last:])
+            raise ValueError("lines(last) takes None or an int >= 0; got %r" % (last,))
+        return self._lines.tail(int.__index__(last))
 
     def search(self, text):
-        """Return the indices of the lines that contain ``text`` (case-insensitively).
-
-        ``text`` must be a non-empty string.  Indices are positions in the
-        buffer as ``lines()`` returns them (0 = oldest).
-        """
         if not isinstance(text, str):
-            raise ValueError(
-                "search(text) takes a string; got %s" % type(text).__name__)
+            raise ValueError("search(text) takes a string; got %s" % type(text).__name__)
         if not text:
             raise ValueError("search text must be non-empty")
-        needle = text.lower()
-        return [i for i, ln in enumerate(self._lines) if needle in ln.lower()]
+        return self._lines.search(text)
+
+    def clear(self):
+        self._lines.clear()
 
     def save(self, path):
-        """Write the whole buffer as plain text to ``path`` atomically.
-
-        The lines are joined with newlines and a trailing newline is added
-        (an empty buffer writes an empty file).  A temp file in the same
-        directory is written first and then ``os.replace``d onto ``path``, so
-        a reader never sees a half-written file.
-        """
+        # Rust supplies one immutable, revision-bound text projection. Filesystem
+        # failures preserve the old destination; existing temp-file policy is unchanged.
         import os
-        data = "".join(ln + "\n" for ln in self._lines)
+        data = self._lines.to_text()
         directory = os.path.dirname(os.path.abspath(path))
-        tmp = os.path.join(directory, "." + os.path.basename(path) + ".tmp")
-        with open(tmp, "w", encoding="utf-8") as fh:
+        tmp = os.path.join(directory, '.' + os.path.basename(path) + '.tmp')
+        with open(tmp, 'w', encoding='utf-8') as fh:
             fh.write(data)
         os.replace(tmp, path)
 
-    def clear(self):
-        """Delete every line (the documented ``Clear``)."""
-        self._lines = []
+    def close(self):
+        self._lines.close()
 
+    def __copy__(self):
+        import copy
+        other = object.__new__(type(self))
+        other.__dict__ = self.__dict__.copy()
+        other._lines = copy.copy(self._lines)
+        return other
 
-def _check_limit(limit):
-    if not isinstance(limit, int) or isinstance(limit, bool) or limit < 1:
-        raise ValueError(
-            "limit must be an int >= 1; got %r" % (limit,))
-    return limit
+    def __deepcopy__(self, memo):
+        import copy
+        other = object.__new__(type(self))
+        memo[id(self)] = other
+        other.__dict__ = copy.deepcopy(self.__dict__, memo)
+        return other

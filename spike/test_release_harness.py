@@ -151,7 +151,7 @@ class HarnessTests(unittest.TestCase):
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(fake)
             path.chmod(0o755)
-        for rel in ('vendor/occt-src/src',
+        for rel in ('native/ui_core', 'vendor/occt-src/src',
                     'tools/blender-patched/5.2/python/lib/python3.13/site-packages/cadquery_ocp_novtk.libs'):
             (self.root / rel).mkdir(parents=True, exist_ok=True)
         self.staged = self.root / 'artifacts/automation/linux-x86_64/narwhal-automation'
@@ -165,7 +165,8 @@ class HarnessTests(unittest.TestCase):
                         PYTHONPATH='/fixture/python', LD_LIBRARY_PATH='/fixture/libs',
                         NARWHAL3D_THEME='dark', NARWHAL3D_UI_READY='stale',
                         NARWHAL3D_WELCOME_REQUEST='stale', NARWHAL3D_PRESENT_WATCHDOG='stale',
-                        NARWHAL_PREF_TEST_PHASE='read', NARWHAL3D_SETTINGS_FILE='/never/use/user.json')
+                        NARWHAL_PREF_TEST_PHASE='read', NARWHAL3D_SETTINGS_FILE='/never/use/user.json',
+                        NARWHAL_UI_CORE_GATE_TARGET=str(self.root / 'scratch/ui-core/target'))
 
     def execute(self, rel='spike/v4_live_gui.sh', **env):
         self.calls.unlink(missing_ok=True)
@@ -234,6 +235,23 @@ class HarnessTests(unittest.TestCase):
         server = target + '/debug/narwhal-automation'
         native = [args for args in commands if 'native/automation_core/Cargo.toml' in args]
         self.assertEqual(len(native), 2)
+        ui_target = str(self.root / 'scratch/ui-core/target')
+        ui_library = ui_target + '/release/libnarwhal_ui_core.so'
+        gate = ['scripts/check_ui_core.py', '--target-dir', ui_target]
+        self.assertEqual(commands.count(gate), 1)
+        self.assertEqual(commands.count(['scripts/check_pure_core.py']), 1)
+        self.assertLess(commands.index(['scripts/check_pure_core.py']), commands.index(gate))
+        self.assertLess(commands.index(['scripts/check_application_core.py', '--stage-dev']), commands.index(gate))
+        consumers = [row for row in rows if any(arg.startswith(('spike/test_ui_core_', 'spike/test_ui_transcript_',
+                                                              'spike/test_desktop_native_startup.py'))
+                                               and not arg.endswith('test_ui_core_gate.py') for arg in row['args'])]
+        self.assertTrue(consumers)
+        for row in consumers:
+            self.assertGreater(commands.index(row['args']), commands.index(gate))
+            self.assertEqual(row['env'].get('NARWHAL_UI_CORE_LIBRARY'), ui_library)
+            application = str(self.root / 'artifacts/application-core/linux-x86_64/libnarwhal_application_core.so')
+            self.assertEqual(row['env'].get('NARWHAL_APPLICATION_CORE'), application)
+            self.assertEqual(row['env'].get('NARWHAL_HISTORY_CORE'), application)
         self.assertEqual([args[1] for args in native], ['test', 'build'])
         for args in native:
             self.assertIn('--locked', args)
@@ -279,7 +297,8 @@ class HarnessTests(unittest.TestCase):
         self.assert_host_contract(*self.execute('run_tests.sh', CARGO_BUILD_JOBS='2'))
 
     def test_source_failures_do_not_claim_success(self):
-        for name in ('native/automation_core/Cargo.toml', 'spike/test_automation_mcp.py',
+        for name in ('scripts/check_pure_core.py', 'scripts/check_application_core.py', 'scripts/check_ui_core.py',
+                     'native/automation_core/Cargo.toml', 'spike/test_automation_mcp.py',
                      'spike/test_surfacing_integration.py'):
             with self.subTest(name=name):
                 result, rows = self.execute('run_tests.sh', DISPLAY='', WAYLAND_DISPLAY='', HARNESS_FAIL_SUITE=name)
@@ -287,16 +306,28 @@ class HarnessTests(unittest.TestCase):
                 self.assertNotIn('All public tests passed.', result.stdout)
                 self.assertNotIn(['spike/test_trim_box_gui.py', '--launch', '--baseline'], [r['args'] for r in rows])
 
-    def test_automation_missing_cargo_is_explicit_skip(self):
-        self.mutate('run_tests.sh', 'if command -v cargo >/dev/null 2>&1; then', 'if false; then')
+    def test_missing_cargo_is_explicit_refusal(self):
+        self.mutate('run_tests.sh', 'command -v cargo >/dev/null 2>&1 ||', 'false ||')
         result, rows = self.execute('run_tests.sh', DISPLAY='', WAYLAND_DISPLAY='')
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn('SKIP: Rust automation source/protocol/live checks (cargo is unavailable)', result.stdout)
-        self.assertFalse(any('spike/test_automation_mcp.py' in row['args'] for row in rows))
-        self.assert_pure_contract(result, rows)
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn('ERROR: required native source compiler unavailable', result.stderr)
+        self.assertNotIn('All public tests passed.', result.stdout)
+        for name in ('scripts/check_pure_core.py', 'scripts/check_ui_core.py',
+                     'spike/test_automation_mcp.py', 'spike/test_desktop_native_startup.py'):
+            self.assertFalse(any(name in row['args'] for row in rows), name)
+
+    def test_missing_ui_source_is_explicit_refusal(self):
+        (self.root / 'native/ui_core').rmdir()
+        result, rows = self.execute('run_tests.sh', DISPLAY='', WAYLAND_DISPLAY='')
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn('ERROR: required UI-core source/compiler unavailable', result.stderr)
+        self.assertNotIn('All public tests passed.', result.stdout)
+        self.assertFalse(any('spike/test_desktop_native_startup.py' in row['args'] for row in rows))
 
     def test_new_dispatch_mutations_go_red_then_restore(self):
         mutations = (
+            ('export NARWHAL_UI_CORE_LIBRARY="$UI_CORE_LIBRARY"', 'export NARWHAL_UI_CORE_LIBRARY=/wrong/core.so'),
+            ('run "Rust UI-core source gate" "$PYTHON" scripts/check_ui_core.py --target-dir "$UI_CORE_TARGET"', ':'),
             ('    spike/test_extrude_preview.py\n', ''),
             ('spike/test_surfacing_integration.py --require-native', 'spike/test_surfacing_integration.py'),
             ('--server "$AUTOMATION_SERVER"', '--server "$ROOT/artifacts/automation/linux-x86_64/narwhal-automation"'),
@@ -371,6 +402,10 @@ class HarnessTests(unittest.TestCase):
 
 class PublicManifestTests(unittest.TestCase):
     def test_new_sources_tests_and_every_runner_payload_are_public(self):
+        # runpy does not establish the script's sibling-import directory.
+        scripts = str(ROOT / 'scripts')
+        sys.path.insert(0, scripts)
+        self.addCleanup(sys.path.remove, scripts)
         public = runpy.run_path(str(ROOT / 'scripts/create_public_branch.py'))
         audit = runpy.run_path(str(ROOT / 'scripts/audit_public_tree.py'))
         paths = set(public['public_files']())

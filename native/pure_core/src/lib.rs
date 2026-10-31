@@ -6,9 +6,9 @@
 //! never lets a Rust-owned pointer cross the call boundary: every input is a
 //! caller-owned array, every output is a caller-owned buffer sized by a checked
 //! two-pass query, and all fixed-width types are validated before any slice is
-//! formed. The Python layer owns file I/O and is the complete fallback: when
-//! the library is absent, an export is missing, a call errors, or the output is
-//! malformed, Python runs its unchanged implementation.
+//! formed. Python owns file I/O and ABI orchestration. Some older modules still
+//! retain compatibility paths; native-only number/length parsing requires its
+//! ABI explicitly and never replays a failure through a Python parser.
 //!
 //! `lib.rs` holds export shims only; the implementations live in focused modules
 //! under `src/`.
@@ -28,6 +28,7 @@ pub mod macro_parse;
 pub mod macro_plan;
 mod metadata_ffi;
 pub mod numparse;
+pub mod numparse_owned;
 pub mod obj;
 pub mod printwidths;
 pub mod stl;

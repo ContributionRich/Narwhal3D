@@ -20,6 +20,7 @@ def load():
     package = ModuleType("_shell_input_tests")
     package.__path__ = []
     field = ModuleType(package.__name__ + ".textfield")
+    field.__file__ = str(ROOT / 'textfield.py')
     shell = ModuleType(package.__name__ + ".shell_input")
     shell.__package__ = package.__name__
     modules = {module.__name__: module for module in (package, field, shell)}

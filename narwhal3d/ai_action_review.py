@@ -31,7 +31,12 @@ def layout(review, remaining_ms, rect, measure, scale=1.0):
     wrapped = []
     for row in lines(review, remaining_ms):
         wrapped.extend(row[a:b] for a,b in textfield.wrap_spans(row,width,measure))
-    fits = len(wrapped)*line_h + 4*padding + button_h <= y1-y0
+    # BLF can leave an indivisible glyph wider than the wrap region. Vertical
+    # room alone also says nothing about the two side-by-side decision labels.
+    button_width = (x1-x0)/2 - padding - 3*scale
+    buttons_fit = max(measure('Approve once'), measure('Reject')) + 4*scale <= button_width
+    fits = (len(wrapped)*line_h + 4*padding + button_h <= y1-y0
+            and buttons_fit and all(measure(line.rstrip()) <= width for line in wrapped))
     mid = (x0+x1)/2
     return {'lines':wrapped, 'line_h':line_h, 'x':x0+padding, 'top':y1-padding,
             'fits':fits, 'approve':(x0+padding,y0+padding,mid-3*scale,y0+padding+button_h) if fits else None,

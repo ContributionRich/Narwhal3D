@@ -2,8 +2,9 @@
 """Source-pinned Linux ui_core development gate; never installs or deploys.
 
 Python orchestrates Cargo, filesystem provenance and the existing isolated ctypes
-packaging probe; editor/popup algorithms remain Rust-owned. Default: fmt, strict
-Clippy, Rust tests, release build, editor ABI1/State88 + popup ABI1/all exports.
+packaging probe; editor/popup/transcript algorithms remain Rust-owned. Default:
+fmt, strict Clippy, Rust tests, release build, editor ABI1/State88, popup ABI1,
+transcript ABI1/Request40/Reply56/capabilities7 and all 18 exports.
 The adjacent ui-core-source.json uses the packaging format {inputs, sha256}.
 
 --library verifies an existing binary AND its receipt against the current source;
@@ -31,9 +32,7 @@ import build_linux_native as common
 ROOT = Path(__file__).resolve().parents[1]
 LIBRARY = 'libnarwhal_ui_core.so'
 DEFAULT_TARGET = Path('/var/tmp/nwug/target')
-REQUIRED = ('Cargo.toml', 'Cargo.lock', 'LICENSE', 'narwhal_ui_core.h',
-            'src/lib.rs', 'src/editor.rs', 'src/unicode16.rs',
-            'src/popup.rs', 'src/popup_ffi.rs')
+REQUIRED = common.UI_CORE_REQUIRED_SOURCE
 
 
 def source_inventory(root):

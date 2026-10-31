@@ -37,6 +37,7 @@ run "packaging: assemble Windows release" "$PYTHON" scripts/assemble_windows_rel
 run "packaging: EXE and DMG contracts" "$PYTHON" scripts/test_release_packages.py
 run "packaging: native automation coverage" "$PYTHON" scripts/test_release_automation.py
 run "packaging: application-core coverage" "$PYTHON" scripts/test_release_application_core.py
+run "packaging: native-only parser coverage" "$PYTHON" spike/test_pure_core_packaging.py
 run "packaging: UI-core editor/popup coverage" env TMPDIR="${TMPDIR:-/var/tmp}" \
     "$PYTHON" scripts/test_release_ui_core.py
 run "application-core source/provenance contracts" "$PYTHON" spike/test_application_core_source.py
@@ -46,6 +47,7 @@ run "UI-core source gate contracts + mutations" env TMPDIR="${TMPDIR:-/var/tmp}"
 run "packaging: verify release" "$PYTHON" scripts/verify_linux_release.py --self-check
 run "packaging: cross-platform completeness" "$PYTHON" spike/test_package_completeness.py
 run "packaging: public-tree audit" "$PYTHON" scripts/audit_public_tree.py --self-check
+run "native-only retirement policy + mutations" "$PYTHON" -B spike/test_native_only_policy.py
 run "public project organization" "$PYTHON" spike/test_public_project.py
 run "packaging: bootstrap" scripts/bootstrap_dev_linux.sh --self-check
 run "packaging: Blender build" scripts/build_blender_linux.sh --self-check
@@ -53,6 +55,44 @@ run "packaging: macOS source build" "$PYTHON" spike/test_macos_source.py
 run "packaging: macOS native build contracts" "$PYTHON" scripts/test_macos_runtime.py
 run "native presentation: OpenGL and Metal-only guards" "$PYTHON" scripts/test_present_backends.py
 
+# Required parsers and document sessions must be ready before UI caller imports.
+command -v cargo >/dev/null 2>&1 || { printf 'ERROR: required native source compiler unavailable\n' >&2; exit 2; }
+run "Rust pure-core source gate" "$PYTHON" scripts/check_pure_core.py
+PURE_CORE="$ROOT/native/pure_core/target/x86_64-unknown-linux-gnu/release/libnarwhal_pure_core.so"
+export NARWHAL_PURE_CORE="$PURE_CORE"
+run "Rust application-core source gate" "$PYTHON" scripts/check_application_core.py --stage-dev
+export NARWHAL_APPLICATION_CORE="$ROOT/artifacts/application-core/linux-x86_64/libnarwhal_application_core.so"
+export NARWHAL_HISTORY_CORE="$NARWHAL_APPLICATION_CORE"
+
+# UI core source qualification (no deployment).
+UI_CORE_READY=0
+UI_CORE_TARGET="${NARWHAL_UI_CORE_GATE_TARGET:-/var/tmp/nwug/target}"
+UI_CORE_LIBRARY="$UI_CORE_TARGET/release/libnarwhal_ui_core.so"
+if [[ -d "$ROOT/native/ui_core" ]] && command -v cargo >/dev/null 2>&1; then
+    run "Rust UI-core source gate" "$PYTHON" scripts/check_ui_core.py --target-dir "$UI_CORE_TARGET"
+    # All later host/Blender callers require this same source-qualified core.
+    export NARWHAL_UI_CORE_LIBRARY="$UI_CORE_LIBRARY"
+    for suite in editor popup popup_failure callers layout; do
+        run "Rust UI-core $suite" env NARWHAL_UI_CORE_LIBRARY="$UI_CORE_LIBRARY" \
+            "$PYTHON" -B "spike/test_ui_core_$suite.py"
+    done
+    run "Rust UI-core post-test source binding" "$PYTHON" scripts/check_ui_core.py --library "$UI_CORE_LIBRARY"
+    UI_CORE_READY=1
+else
+    printf '\nERROR: required UI-core source/compiler unavailable; source NOT qualified\n' >&2
+    exit 2
+fi
+# End UI core source qualification.
+
+# Separate transcript qualification preserves the three editor/popup GUI registrations.
+for suite in abi model consumers stress; do
+    run "Rust transcript $suite" "$PYTHON" -B "spike/test_ui_transcript_$suite.py"
+done
+run "desktop native startup/preflight" "$PYTHON" -B spike/test_desktop_native_startup.py
+run "AI generic exit cleanup" "$PYTHON" -B spike/test_ai_v8_exit.py
+run "Rust document-session integration" "$PYTHON" spike/test_document_session_integration.py --launch
+
+# These Blender callers can construct editors and document history during import.
 SELECTION_CORE="$ROOT/artifacts/selection-core/linux-x86_64/libnarwhal_selection_core.so"
 if [[ -f "$SELECTION_CORE" ]]; then
     run "Rust selection-core artifact verification" "$PYTHON" \
@@ -62,36 +102,14 @@ if [[ -f "$SELECTION_CORE" ]]; then
     run "Rust selection adapter/UI" env NARWHAL_SELECTION_CORE="$SELECTION_CORE" \
         "$BLENDER" -b --factory-startup --python-exit-code 1 \
         --python spike/test_native_selection.py
-    run "overlap pick candidates (native/fallback + mutations)" env NARWHAL_SELECTION_CORE="$SELECTION_CORE" \
+    run "overlap pick candidates (native/fallback)" env NARWHAL_SELECTION_CORE="$SELECTION_CORE" \
         "$BLENDER" -b --factory-startup --python-exit-code 1 \
-        --python spike/test_pick_candidates.py -- --mutations
+        --python spike/test_pick_candidates.py
 else
     printf '\nSKIP: Rust selection-core runtime checks (no local artifact)\n'
 fi
 
-# UI core source qualification (no deployment).
-UI_CORE_READY=0
-UI_CORE_TARGET="${NARWHAL_UI_CORE_GATE_TARGET:-/var/tmp/nwug/target}"
-UI_CORE_LIBRARY="$UI_CORE_TARGET/release/libnarwhal_ui_core.so"
-if [[ -d "$ROOT/native/ui_core" ]] && command -v cargo >/dev/null 2>&1; then
-    run "Rust UI-core source gate" "$PYTHON" scripts/check_ui_core.py --target-dir "$UI_CORE_TARGET"
-    # Explicit per-suite override: retained legacy suites keep their original backend.
-    for suite in editor popup popup_failure callers layout; do
-        run "Rust UI-core $suite" env NARWHAL_UI_CORE_LIBRARY="$UI_CORE_LIBRARY" \
-            "$PYTHON" -B "spike/test_ui_core_$suite.py"
-    done
-    run "Rust UI-core post-test source binding" "$PYTHON" scripts/check_ui_core.py --library "$UI_CORE_LIBRARY"
-    UI_CORE_READY=1
-else
-    printf '\nSKIP: UI-core source/native checks (source or cargo unavailable; source NOT qualified)\n'
-fi
-# End UI core source qualification.
-
 if command -v cargo >/dev/null 2>&1; then
-    run "Rust application-core source gate" "$PYTHON" scripts/check_application_core.py --stage-dev
-    export NARWHAL_APPLICATION_CORE="$ROOT/artifacts/application-core/linux-x86_64/libnarwhal_application_core.so"
-    export NARWHAL_HISTORY_CORE="$NARWHAL_APPLICATION_CORE"
-    run "Rust document-session integration" "$PYTHON" spike/test_document_session_integration.py --launch
     # Fixed source target: neither a stale staged product binary nor a private build cache.
     AUTOMATION_TARGET="$ROOT/native/automation_core/target"
     AUTOMATION_SERVER="$AUTOMATION_TARGET/debug/narwhal-automation"
@@ -117,11 +135,17 @@ if command -v cargo >/dev/null 2>&1; then
     run "AI disabled primitive prototype policy" "$PYTHON" spike/test_ai_primitives.py --library "$AUTOMATION_LIBRARY"
     run "AI sustained lifecycle" "$PYTHON" spike/test_ai_sustained_lifecycle.py --library "$AUTOMATION_LIBRARY"
     run "AI UI orchestration" "$PYTHON" spike/test_ai_ui_workflow.py --library "$AUTOMATION_LIBRARY"
-    AI_REVIEW_TARGET="$HOME/.cache/narwhal3d-ai-review-gate"
+    # The finished review drivers discover this exact source-qualified target.
+    AI_REVIEW_TARGET="/tmp/narwhal3d-ai-sustained-v4"
     run "AI accepted-review native fixture" "$PYTHON" spike/test_ai_accepted_review_native.py --target-dir "$AI_REVIEW_TARGET" --build --self-test
     run "AI accepted-review actual publisher" "$PYTHON" spike/test_ai_v5_publisher.py --target-dir "$AI_REVIEW_TARGET"
     run "AI visible-review presentation + mutations" "$PYTHON" spike/test_ai_v7_presentation.py
     run "AI visible-review resource contracts" "$PYTHON" spike/test_ai_v7_resources.py
+    run "AI review reachability" "$PYTHON" -B spike/test_ai_v8_reachability.py
+    run "AI review presentation" "$PYTHON" -B spike/test_ai_v8_presentation.py
+    run "AI canonical replay and bounded display (fixture + normal native)" "$PYTHON" -B spike/test_ai_v8_long_session.py
+    run "AI review plan revisions" "$PYTHON" -B spike/test_ai_v8_plans.py
+    run "AI native lifecycle" "$PYTHON" -B spike/test_ai_v8_lifetime.py
     run "automation source live bridge (background Blender)" timeout --kill-after=5s 120s "$PYTHON" \
         spike/test_automation_mcp.py --server "$AUTOMATION_SERVER" --live "$BLENDER"
 else
@@ -136,11 +160,7 @@ else
 fi
 
 if command -v cargo >/dev/null 2>&1; then
-    run "Rust pure-core source gate" "$PYTHON" scripts/check_pure_core.py
-    PURE_CORE="$ROOT/native/pure_core/target/x86_64-unknown-linux-gnu/release/libnarwhal_pure_core.so"
-    if [[ -f "$PURE_CORE" ]]; then
-        export NARWHAL_PURE_CORE="$PURE_CORE"
-    fi
+
     OCCT_SOURCE="$ROOT/vendor/occt-src"
     OCCT_LIBS="$ROOT/tools/blender-patched/5.2/python/lib/python3.13/site-packages/cadquery_ocp_novtk.libs"
     if [[ -d "$OCCT_SOURCE/src" && -d "$OCCT_LIBS" ]]; then
@@ -421,12 +441,14 @@ if [[ -n "${DISPLAY:-}" || -n "${WAYLAND_DISPLAY:-}" ]]; then
             "$PYTHON" -B spike/test_ui_core_popup_gui.py --launch
         run "Rust UI-core popup failure recovery live" env NARWHAL_UI_CORE_LIBRARY="$UI_CORE_LIBRARY" \
             "$PYTHON" -B spike/test_ui_core_popup_failure_gui.py --launch
-        run "UI-core popup legacy live control" env NARWHAL_UI_CORE_LIBRARY="$UI_CORE_LIBRARY" \
-            "$PYTHON" -B spike/test_ui_core_popup_gui.py --launch --legacy
+
     else
-        printf '\nSKIP: UI-core native GUI checks (no source-qualified library)\n'
+        printf '\nERROR: required UI-core not source-qualified\n' >&2
+        exit 2
     fi
     # End UI core GUI drivers.
+    # This transcript driver reuses the popup launcher's own locks/resource guard.
+    run "Rust transcript actual startup/recall live" "$PYTHON" -B spike/test_ui_transcript_gui.py --launch
     run "AI settings popup live" "$PYTHON" spike/test_ai_settings_popup_gui.py --launch
     if [[ -f "$ROOT/artifacts/automation/linux-x86_64/libnarwhal_automation.so" && -f "$ROOT/artifacts/automation/linux-x86_64/narwhal-automation" ]]; then
         run "installed AI workflow live" "$PYTHON" spike/test_ai_ui_workflow_gui.py --launch
@@ -445,6 +467,12 @@ if [[ -n "${DISPLAY:-}" || -n "${WAYLAND_DISPLAY:-}" ]]; then
     run "gumball release latency and exact geometry" "$PYTHON" spike/test_gumball_release_profile_07.py --run --case all --enforce-budget
     if [[ -n "${AI_REVIEW_TARGET:-}" ]]; then
         run "AI visible approval and fresh geometry round-trip" "$PYTHON" spike/test_ai_v7_visible.py --launch --target-dir "$AI_REVIEW_TARGET"
+        run "AI close-test UI source binding" "$PYTHON" scripts/check_ui_core.py --library "$UI_CORE_LIBRARY"
+        UI_CORE_SHA256=$("$PYTHON" -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())' "$UI_CORE_LIBRARY")
+        for close_case in close_review close_request; do
+            run "AI actual window close: $close_case" "$PYTHON" -B spike/test_ai_v8_visible.py --launch \
+                --case "$close_case" --ui-library "$UI_CORE_LIBRARY" --ui-sha256 "$UI_CORE_SHA256"
+        done
     fi
     run "typed multi-section Sweep1 live" "$PYTHON" spike/test_sweep1_command_gui.py --launch
     run "ordered mouse Sweep1 live" "$PYTHON" spike/test_sweep1_interaction_gui.py --launch

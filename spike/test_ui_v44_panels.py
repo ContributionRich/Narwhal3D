@@ -27,7 +27,7 @@ SOURCES = {name: (ROOT / 'narwhal3d' / (name + '.py')).read_text()
 UI_AST = ast.parse(SOURCES['ui'])
 UI_FUNCTIONS = {n.name: ast.get_source_segment(SOURCES['ui'], n) for n in UI_AST.body
                 if isinstance(n, ast.FunctionDef) and n.name in (
-                    '_draw_ai_panel', '_draw_ai_transcript', '_ai_transcript_event',
+                    '_draw_ai_panel', '_draw_ai_transcript', '_ai_transcript_event', '_ai_review_event',
                     'ai_panel_click', '_shell_chrome_event', '_draw_bug_panel',
                     '_draw_display_panel', '_show_bug_category_menu', '_draw_centered_panel_text')}
 del UI_AST
@@ -68,7 +68,7 @@ class PanelTests(unittest.TestCase):
     def test_roles_alignment_and_literal_text(self):
         layout = self.p.transcript_layout(self.messages(), 208, self.measure)
         a, u, s = layout['items']
-        self.assertEqual([i['label'] for i in (a, u, s)], ['Narwhal AI', 'You', ''])
+        self.assertEqual([i['label'] for i in (a, u, s)], ['AI · unverified', 'You', ''])
         self.assertGreater(u['left'], a['left'])
         self.assertIn('<tag>', ''.join(a['lines']))
         self.assertEqual(''.join(u['lines']), 'Assistant: not a role')
@@ -234,7 +234,7 @@ class PanelTests(unittest.TestCase):
             log.clear()
             ctx['_draw_ai_transcript'](shader, (0,0,208,700), ctx['_ai']['state'], 1)
             texts = [r[1] for r in log if r[0] == 'text']
-            self.assertIn('Narwhal AI', texts)
+            self.assertIn('AI · unverified', texts)
             self.assertIn('You', texts)
             self.assertNotIn('Status', texts)
             self.assertEqual([r[1][0] for r in log if r[0] == 'icon'], ['narwhal-ai-mark.png'])
@@ -253,7 +253,7 @@ class PanelTests(unittest.TestCase):
         texts = [r[1] for r in log if r[0] == 'text']
         self.assertIn('Choose a model in Settings', texts)
         self.assertFalse(state.messages)
-        self.assertNotIn('Narwhal AI', texts)
+        self.assertNotIn('AI · unverified', texts)
 
     def test_actual_report_draw_and_category_popup(self):
         ctx, log, _ = self.ui()
@@ -339,11 +339,28 @@ class PanelTests(unittest.TestCase):
         self.assertFalse(ctx['_ai_transcript_event'](event))
         self.assertFalse(ctx['_ai']['chat_focus'])
 
+    def test_pending_review_uses_actual_helper_before_transcript_browsing(self):
+        ctx, _, _ = self.ui()
+        state = ctx['_ai']['state']
+        pending = {}
+        ctx['_ai'].update(action_pending=pending, review_drawn_pending=pending,
+                          review_view={'fits': True}, chat_layout={'height': 5000}, chat_offset=48)
+        rect = ctx['_ai']['lay']['transcript']
+        event = types.SimpleNamespace(type='WHEELUPMOUSE', value='PRESS',
+                                      mouse_x=450, mouse_y=10+(rect[1]+rect[3])/2)
+        self.assertTrue(ctx['_shell_chrome_event'](event))
+        self.assertEqual(ctx['_ai']['chat_offset'], 48, 'pending review must not scroll hidden chat')
+        state.focus = True
+        event.type = 'TAB'
+        self.assertTrue(ctx['_ai_transcript_event'](event))
+        self.assertEqual(pending.get('keyboard_focus'), 'reject')
+        self.assertFalse(state.focus)
+
 
 MUTATIONS = [
     ('ai_presentation', 'role = message.role', "role = 'assistant'"),
     ('ai_presentation', 'width - inset - outer_width if role == "user" else inset', 'inset'),
-    ('ai_presentation', '"assistant": "Narwhal AI"', '"assistant": "Assistant"'),
+    ('ai_presentation', '"assistant": "AI · unverified"', '"assistant": "Narwhal AI"'),
     ('ai_presentation', 'origin = y1 + max(0.0, layout["height"] - height) - offset', 'origin = y1'),
     ('ai_presentation', '"canvas": (41, 41, 41)', '"canvas": (0, 0, 0)'),
     ('ai_assistant', "'buttons': 32*s", "'buttons': 24*s"),
@@ -358,6 +375,7 @@ MUTATIONS = [
     ('ui', '_draw_shell_icon(ui_icon_data.AI_REPLY_ICON, avatar, 17 * sc)', 'pass'),
     ('ui', 'gpu.state.scissor_set(*clip)', 'pass'),
     ('ui', 'if _ai_transcript_event(event):', 'if False:'),
+    ('ui', 'if _ai_review_event(event):', 'if False:'),
     ('ui', 'state.category = action', 'state.category = "bug"'),
     ('ui', '"submit": "Submit report"', '"submit": "Report"'),
     ('ui', '(rect[1]+rect[3]-height)/2', 'rect[1]+7'),

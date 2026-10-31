@@ -17,6 +17,7 @@ import tempfile
 from typing import Any
 
 from build_linux_native import UI_CORE_IDENTITY, probe_ui_core, inventory as native_source_inventory
+from check_pure_core import PURE_CORE_PARSE_IDENTITY, probe_pure_core_parser
 
 from release_policy import (
     MAX_HOST_GLIBC, format_glibc, glibc_versions, scan_runtime_glibc,
@@ -526,6 +527,9 @@ def verify_native_manifest(appdir: Path, native_components: object) -> None:
     for filename, (_symbol, expected_abi) in NATIVE_LIBRARY_ABIS.items():
         if native_components[filename].get("abi") != expected_abi:
             raise VerificationError(f"native manifest has the wrong {filename} ABI")
+    parser = native_components["libnarwhal_pure_core.so"]
+    if any(parser.get(key) != value for key, value in PURE_CORE_PARSE_IDENTITY.items()):
+        raise VerificationError("native manifest lacks pure-core parser ABI/export evidence")
     application = native_components["libnarwhal_application_core.so"]
     if (application.get("history_abi") != APPLICATION_CORE_HISTORY_ABI
             or application.get("exports") != list(APPLICATION_CORE_EXPORTS)):
@@ -550,6 +554,11 @@ def verify_ui_core_manifest(native_components: dict) -> None:
 def verify_native_library_abis(app_root: Path, python: Path, environment: dict[str, str]) -> None:
     """Execute ABI/export probes against the actual loader slots in the package."""
     native_dir = app_root / NATIVE_COMPONENT_RELATIVE
+    try:
+        probe_pure_core_parser(app_root / "narwhal3d/native/libnarwhal_pure_core.so",
+                               python, env=environment)
+    except ValueError as exc:
+        raise VerificationError(str(exc)) from exc
     abi_probe = (
         "import ctypes,json,sys; "
         "results={}; "

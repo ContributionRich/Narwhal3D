@@ -1,6 +1,7 @@
 """Meaningful popup mutants in a private disk-backed copy, never shared sources.
 
-Requires NARWHAL_UI_CORE_LIBRARY for the initial/final control. One compiler job,
+--python-only / --failure-only reuse NARWHAL_UI_CORE_LIBRARY without a build.
+The full Rust mutation mode uses one compiler job,
 1 GiB/no swap and heavy lock for each build/test. No target/third-party copies.
 """
 import json
@@ -14,6 +15,7 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 RUST = [
     ('fractional_gutter', 'popup.rs', 'content - body_height > 1e-6 * s.max(1.0)', 'content > body_height'),
+    ('height_bound', 'popup.rs', '.min(0.8 * h)', '.min(1.0 * h)'),
     ('anchor', 'popup.rs', 'self.anchor.1 - 3.0 * s', 'self.anchor.1 + 3.0 * s'),
     ('closed_release', 'popup.rs', 'consumed: guarded,', 'consumed: false,'),
     ('release_clear', 'popup.rs', 'self.guards.remove(key);', 'self.guards.contains(key);'),
@@ -37,8 +39,9 @@ PYTHON = [
     ('ffi_exception_live_owner', 'native_popup.py',
      'except BaseException:\n            self._busy = False\n            self.failed = True\n            self.dispose()\n            raise',
      'except BaseException:\n            raise'),
-    ('factory_legacy', 'native_popup.py', 'return NativePopup(window_size, scale, measure, lib=lib)',
-     'return legacy(window_size, scale, measure)'),
+    ('factory_missing', 'native_popup.py',
+     "if lib is None:\n        raise RuntimeError('required native UI popup core is unavailable')\n    return NativePopup",
+     'if lib is None:\n        return None\n    return NativePopup'),
     ('disabled_dispatch', 'native_popup.py', "not row.get('enabled', True) or action is None", 'action is None'),
     ('callback_twice', 'native_popup.py', 'callback(None if unavailable else action, explanation)',
      'callback(None if unavailable else action, explanation); callback(None if unavailable else action, explanation)'),
@@ -51,8 +54,10 @@ PYTHON = [
 def main():
     out = Path(tempfile.mkdtemp(prefix='pm-', dir='/var/tmp/nwp'))
     print('POPUP_MUTATION_EVIDENCE', out, flush=True)
+    python_only = '--python-only' in sys.argv
     crate = out / 'ui_core'
-    shutil.copytree(ROOT / 'native/ui_core', crate, ignore=shutil.ignore_patterns('target', '__pycache__'))
+    if not python_only:
+        shutil.copytree(ROOT / 'native/ui_core', crate, ignore=shutil.ignore_patterns('target', '__pycache__'))
     source = out / 'narwhal3d'
     source.mkdir()
     for file in ('native_popup.py', 'native_textfield.py', 'shell_popup.py'):
@@ -72,7 +77,7 @@ def main():
         return rc, (out / (name + '.log')).read_text()
 
     assert run('initial', test)[0] == 0, out
-    for name, file, old, new in RUST:
+    for name, file, old, new in ([] if python_only else RUST):
         path = crate / 'src' / file
         original = path.read_text()
         assert original.count(old) == 1, (name, 'mutation target not unique')
@@ -100,12 +105,13 @@ def main():
         finally:
             path.write_text(original)
         print(receipts[-1], flush=True)
-    assert run('restored-build', compiler + ['build'] + common)[0] == 0
-    env['NARWHAL_UI_CORE_LIBRARY'] = str(target / 'release/libnarwhal_ui_core.so')
-    assert run('restored-rust', compiler + ['test'] + common)[0] == 0
+    if not python_only:
+        assert run('restored-build', compiler + ['build'] + common)[0] == 0
+        env['NARWHAL_UI_CORE_LIBRARY'] = str(target / 'release/libnarwhal_ui_core.so')
+        assert run('restored-rust', compiler + ['test'] + common)[0] == 0
     assert run('restored-python', test)[0] == 0
     (out / 'results.json').write_text(json.dumps(receipts, indent=2))
-    print(len(receipts), 'mutants RED; restored Rust/Python GREEN', out, flush=True)
+    print(len(receipts), 'mutants RED; restored', 'Python GREEN' if python_only else 'Rust/Python GREEN', out, flush=True)
 
 
 def failure_mutations():

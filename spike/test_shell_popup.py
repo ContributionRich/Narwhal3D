@@ -4,17 +4,28 @@ Compile source directly so mutation probes cannot pick up stale .pyc files.
 No Blender, GPU, package __init__, or display server is needed.
 """
 import io
+import importlib
 from pathlib import Path
 import sys
 from types import ModuleType, SimpleNamespace as NS
 import unittest
 from unittest.mock import patch
 
-SOURCE = Path(__file__).resolve().parents[1] / 'narwhal3d' / 'shell_popup.py'
+import os
+SOURCE = Path(os.environ.get('UI_CORE_POPUP_SOURCE', Path(__file__).resolve().parents[1])) / 'narwhal3d' / 'shell_popup.py'
 
 
 def load(source=None):
-    module = ModuleType('_shell_popup_test_subject')
+    name = '_shell_popup_test_package'
+    package = sys.modules.get(name)
+    if package is None:
+        package = ModuleType(name)
+        package.__path__ = [str(SOURCE.parent)]
+        sys.modules[name] = package
+        # Keep ctypes/module identities stable across per-test sys.modules stubs.
+        importlib.import_module(name + '.native_popup')
+    module = ModuleType(package.__name__ + '.shell_popup')
+    module.__package__ = package.__name__
     sys.modules[module.__name__] = module
     exec(compile(SOURCE.read_text() if source is None else source, str(SOURCE), 'exec'),
          module.__dict__)
@@ -51,7 +62,7 @@ class PopupTests(unittest.TestCase):
                      {'separator': True},
                      {'label': 'Unavailable', 'enabled': False, 'action': 'NeverRun'},
                      {'label': 'Top', 'action': 'ACTION_TOP'}]
-        self.model = popup.PopupModel((1000, 800)).open(
+        self.model = popup._make_model((1000, 800)).open(
             self.rows, (120, 650), 'Perspective', lambda *args: self.calls.append(args))
 
     def click(self, index=0, depth=0):
@@ -80,7 +91,7 @@ class PopupTests(unittest.TestCase):
         def measure(text, size):
             measured.append((text, size))
             return len(text) * 15
-        model = popup.PopupModel((1800, 1200), scale=2, measure=measure)
+        model = popup._make_model((1800, 1200), scale=2, measure=measure)
         model.open([{'label': 'Long label' * 4, 'shortcut': 'Ctrl+Shift+F', 'action': 1}],
                    (150, 1050), '', lambda *a: None)
         panel = model.panels[0]
@@ -403,10 +414,10 @@ class PopupTests(unittest.TestCase):
     def test_invalid_inputs(self):
         for size in [(0, 800), (1000, -1), (float('inf'), 500)]:
             with self.assertRaises(ValueError):
-                popup.PopupModel(size)
+                popup._make_model(size)
         for scale in [0, -1, float('nan')]:
             with self.assertRaises(ValueError):
-                popup.PopupModel((1000, 800), scale)
+                popup._make_model((1000, 800), scale)
         with self.assertRaises(TypeError):
             self.model.open([], (0, 0), '', None)
         with self.assertRaises(ValueError):
@@ -419,21 +430,11 @@ def mutations():
     original = popup
     source = SOURCE.read_text()
     probes = [
-        ('anchor sign', 'self.anchor[1] - ANCHOR_GAP * s', 'self.anchor[1] + ANCHOR_GAP * s',
-         'test_anchor_and_region_translation'),
+        # Core event/layout mutants moved to test_ui_core_popup_mutations.py.
+        # This harness only mutates the remaining Python draw integration.
         ('region translation', 'return rect[0] - x, rect[1] - y, rect[2] - x, rect[3] - y',
          'return rect', 'test_anchor_and_region_translation'),
-        ('outside release shield', 'if not self.is_open:\n            return guarded',
-         'if not self.is_open:\n            return False',
-         'test_every_mouse_button_outside_press_and_release_guard'),
-        ('disabled action refusal', "not row.get('enabled', True) or action is None", 'action is None',
-         'test_separator_checked_and_unavailable_visible'),
-        ('height bound', 'MAX_HEIGHT = 0.8', 'MAX_HEIGHT = 1.0',
-         'test_scroll_height_limit_and_last_row_accessible'),
-        ('scroll clamp', 'panel.offset + delta, 0, panel.max_scroll', 'panel.offset + delta, 0, 0',
-         'test_scroll_height_limit_and_last_row_accessible'),
-        ('submenu adjacency', 'x, top = parent.rect[2],', 'x, top = parent.rect[2] + 10,',
-         'test_hover_click_submenu_adjacency_and_left_flip'),
+
         ('draw coordinate translation', 'x - origin[0], y - origin[1], str(label)',
          'x, y, str(label)', 'test_draw_adapter_translates_clips_and_restores_state'),
         ('GPU state restoration', 'gpu.state.blend_set(previous)',

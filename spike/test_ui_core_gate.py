@@ -23,9 +23,14 @@ ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / 'scripts/check_ui_core.py'
 SOURCE = SCRIPT.read_text()
 sys.path.insert(0, str(ROOT / 'scripts'))
+from test_release_ui_core import add_transcript_fixture
+
 EXPORTS = ('narwhal_editor_abi', 'narwhal_editor_close', 'narwhal_editor_edit', 'narwhal_editor_read',
            'narwhal_popup_abi', 'narwhal_popup_apply', 'narwhal_popup_destroy', 'narwhal_popup_guards',
-           'narwhal_popup_hit', 'narwhal_popup_panel', 'narwhal_popup_rows')
+           'narwhal_popup_hit', 'narwhal_popup_panel', 'narwhal_popup_rows',
+           'narwhal_transcript_abi', 'narwhal_transcript_apply', 'narwhal_transcript_capabilities',
+           'narwhal_transcript_close', 'narwhal_transcript_read', 'narwhal_transcript_release',
+           'narwhal_transcript_stats')
 
 
 def load(source=SOURCE):
@@ -35,7 +40,8 @@ def load(source=SOURCE):
     return module
 
 
-def fake_library(editor=1, popup=1, size=88, missing=(), read_status=0, close_status=0):
+def fake_library(editor=1, popup=1, size=88, missing=(), read_status=0, close_status=0,
+                 transcript=1, capabilities=7, request_bytes=40, reply_bytes=56, transcript_fault=''):
     lib = SimpleNamespace(**{name: lambda *args: 0 for name in EXPORTS})
     lib.narwhal_editor_abi = lambda: editor
     lib.narwhal_popup_abi = lambda: popup
@@ -51,6 +57,7 @@ def fake_library(editor=1, popup=1, size=88, missing=(), read_status=0, close_st
     lib.narwhal_editor_edit = edit
     lib.narwhal_editor_read = read
     lib.narwhal_editor_close = lambda handle: close_status
+    add_transcript_fixture(lib, transcript, capabilities, request_bytes, reply_bytes, transcript_fault)
     for name in missing:
         delattr(lib, name)
     return lib
@@ -129,7 +136,10 @@ class GateTests(unittest.TestCase):
         with self.fixture() as f:
             library, identity = f.build()
             self.assertEqual([x[0] for x in f.calls], ['fmt', 'clippy', 'test', 'build', 'abi'])
-            self.assertEqual(identity, dict(editor_abi=1, popup_abi=1, state_bytes=88, exports=list(EXPORTS)))
+            self.assertEqual(identity, dict(editor_abi=1, popup_abi=1, state_bytes=88,
+                                            transcript_abi=1, transcript_capabilities=7,
+                                            transcript_request_bytes=40, transcript_reply_bytes=56,
+                                            exports=list(EXPORTS)))
             self.assertEqual(library, f.library)
             self.assertEqual(json.loads(f.manifest.read_text()),
                              dict(inputs=f.gate.source_inventory(f.root), sha256=f.gate.common.digest(library)))
@@ -169,7 +179,9 @@ class GateTests(unittest.TestCase):
                 self.assertFalse(f.manifest.exists())
 
     def test_every_missing_export_and_wrong_abi_state_rejected(self):
-        cases = [dict(editor=2), dict(popup=2), dict(size=96), dict(read_status=1), dict(close_status=1)]
+        cases = [dict(editor=2), dict(popup=2), dict(size=96), dict(read_status=1), dict(close_status=1),
+                 dict(transcript=2), dict(capabilities=3), dict(request_bytes=48), dict(reply_bytes=64)]
+        cases += [dict(transcript_fault=kind) for kind in ('append', 'bytes', 'release', 'close', 'huge-bytes')]
         cases += [dict(missing=(name,)) for name in EXPORTS]
         for options in cases:
             with self.subTest(options=options), self.fixture() as f:
@@ -195,7 +207,8 @@ class GateTests(unittest.TestCase):
     def test_inventory_complete_and_ignores_only_build_caches(self):
         with self.fixture() as f:
             before = f.gate.source_inventory(f.root)
-            for name in ('README.md', 'POPUP.md', 'gen_unicode.py', 'src/allocation_tests.rs'):
+            self.assertEqual(len(before), 21)
+            for name in ('EXTRA.md', 'EXTRA2.md', 'extra_generator.py', 'src/extra_tests.rs'):
                 (f.crate / name).write_text('input')
             after = f.gate.source_inventory(f.root)
             self.assertEqual(len(after), len(before) + 4)
@@ -204,6 +217,21 @@ class GateTests(unittest.TestCase):
                 path.parent.mkdir(exist_ok=True)
                 path.write_text('ignored')
             self.assertEqual(after, f.gate.source_inventory(f.root))
+
+    def test_every_required_source_is_mandatory_even_with_rehashed_receipt(self):
+        required = load(self.source).REQUIRED
+        self.assertTrue({'TRANSCRIPT.md', 'transcript_unicode.py', 'src/transcript.rs',
+                         'src/transcript_ffi.rs', 'src/transcript_tests.rs'} <= set(required))
+        for name in required:
+            with self.subTest(source=name), self.fixture() as f:
+                receipt = f.receipt()
+                (f.crate / name).unlink()
+                del receipt['inputs']['native/ui_core/' + name]
+                f.manifest.write_text(json.dumps(receipt))
+                with self.assertRaises(ValueError): f.gate.verify(f.root, f.library)
+                with self.assertRaises(ValueError): f.build()
+                self.assertEqual(f.calls, [])
+                f.slot.assert_not_called()
 
     def test_missing_source_cannot_pass_even_with_empty_receipt(self):
         for empty in (False, True):
@@ -343,28 +371,37 @@ class LockTests(unittest.TestCase):
 
 
 class RegistrationTests(unittest.TestCase):
-    def test_targeted_registration_and_skip_are_executable(self):
+    def test_targeted_registration_and_required_core_are_executable(self):
         text = (ROOT / 'run_tests.sh').read_text()
         block = text.split('# UI core source qualification (no deployment).\n', 1)[1].split('# End UI core source qualification.\n', 1)[0]
         gui = text.split('    # UI core drivers own both locks; no outer flock.\n', 1)[1].split('    # End UI core GUI drivers.\n', 1)[0]
         with tempfile.TemporaryDirectory(prefix='uireg-') as directory:
             root = Path(directory)
-            setup = 'set -eu\nROOT=' + str(root) + '\nPYTHON=python-fixture\nrun() { printf "%s\\n" "$*"; }\ncargo() { :; }\n'
-            for available in (False, True):
-                if available: (root / 'native/ui_core').mkdir(parents=True)
-                output = subprocess.check_output(['bash', '-c', setup + block + gui], text=True, timeout=10)
-                if not available:
-                    self.assertIn('SKIP:', output)
+            setup = 'set -eu\nunset NARWHAL_UI_CORE_LIBRARY\nNARWHAL_UI_CORE_GATE_TARGET=/var/tmp/nwug/target\nROOT=' + str(root) + '\nPYTHON=python-fixture\nrun() { printf "%s\\n" "$*"; }\ncargo() { :; }\n'
+            for available, compiler in ((False, True), (True, False), (True, True)):
+                if available: (root / 'native/ui_core').mkdir(parents=True, exist_ok=True)
+                no_compiler = '' if compiler else 'command() { if [[ "$1" == "-v" && "$2" == "cargo" ]]; then return 1; fi; builtin command "$@"; }\n'
+                result = subprocess.run(['bash', '-c', setup + no_compiler + block + '\nprintf "SOURCE_QUALIFIED\\n"\n' + gui + '\nprintf "CORE=%s\\n" "$NARWHAL_UI_CORE_LIBRARY"\n'],
+                                        text=True, capture_output=True, timeout=10)
+                output = result.stdout + result.stderr
+                if not available or not compiler:
+                    self.assertEqual(result.returncode, 2, output)
+                    self.assertIn('ERROR: required UI-core', output)
+                    self.assertNotIn('SKIP:', output)
+                    self.assertNotIn('SOURCE_QUALIFIED', output)
                     self.assertNotIn('scripts/check_ui_core.py', output)
                     self.assertNotIn('--launch', output)
                 else:
+                    self.assertEqual(result.returncode, 0, output)
+                    self.assertIn('SOURCE_QUALIFIED', output)
+                    self.assertIn('CORE=/var/tmp/nwug/target/release/libnarwhal_ui_core.so', output)
                     for name in ('editor', 'popup', 'popup_failure', 'callers', 'layout'):
                         self.assertIn('spike/test_ui_core_' + name + '.py', output)
                     self.assertIn('scripts/check_ui_core.py --target-dir', output)
                     self.assertIn('scripts/check_ui_core.py --library', output)
-                    self.assertEqual(output.count('--launch'), 4)
+                    self.assertEqual(output.count('--launch'), 3)
                     self.assertIn('spike/test_ui_core_popup_failure_gui.py --launch', output)
-                    self.assertIn('--legacy', output)
+                    self.assertNotIn('--legacy', output)
                     self.assertNotIn('flock', output)
                     self.assertNotIn('--stage-dev', output)
         self.assertEqual(text.count('scripts/test_release_ui_core.py'), 1)
@@ -379,17 +416,20 @@ class MutationTests(unittest.TestCase):
         for old, new in (
             ('editor popup popup_failure callers layout', 'editor popup callers layout'),
             ('spike/test_ui_core_popup_failure_gui.py --launch', 'spike/test_ui_core_popup_gui.py --launch'),
+            ('spike/test_ui_core_popup_gui.py --launch', 'spike/test_ui_core_popup_gui.py --launch --legacy'),
+            ('export NARWHAL_UI_CORE_LIBRARY="$UI_CORE_LIBRARY"', ':'),
+            ('    exit 2\nfi\n# End UI core source qualification.', '    :\nfi\n# End UI core source qualification.'),
         ):
             with self.subTest(registration=old):
                 self.assertIn(old, text)
                 mutated = text.replace(old, new)
                 with patch.object(Path, 'read_text', lambda path, *a, **kw: mutated if path == harness else read(path, *a, **kw)):
                     result = unittest.TestResult()
-                    RegistrationTests('test_targeted_registration_and_skip_are_executable').run(result)
+                    RegistrationTests('test_targeted_registration_and_required_core_are_executable').run(result)
                 self.assertTrue(result.failures, 'missing failure registration survived')
                 self.assertFalse(result.errors)
                 control = unittest.TestResult()
-                RegistrationTests('test_targeted_registration_and_skip_are_executable').run(control)
+                RegistrationTests('test_targeted_registration_and_required_core_are_executable').run(control)
                 self.assertTrue(control.wasSuccessful(), (control.errors, control.failures))
                 print('RED registration mutant / GREEN restored:', old)
 

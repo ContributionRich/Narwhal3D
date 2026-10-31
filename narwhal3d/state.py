@@ -11,6 +11,7 @@ import rhino3dm as r3  # noqa: F401  (re-exported for convenience)
 
 from .commands import COMMANDS, NarwhalContext
 from .model import NarwhalModel
+from .command_transcript import Transcript
 # The document's live layer tree. `layers` is pure (no bpy, no rhino3dm),
 # so importing it here is safe everywhere; AppState keeps it in step with the
 # model's rhino3dm layers (which objects reference by index).
@@ -41,7 +42,7 @@ class AppState:
         self.ctx = NarwhalContext(self.model)
         self.active_command = None      # Command instance or None
         self.input_buffer = ""          # text typed on the command line
-        self.history: list[str] = []    # rendered lines (newest last)
+        self.history = Transcript()    # rendered lines (newest last); session lifetime
         self.last_command: str | None = None  # for Enter/Space repeat (the reference CAD application)
         # Command key -> callable that opens its window and returns whether it did. Registered by the UI; empty headless, so the command line runs.
         self.dialog_openers = {}

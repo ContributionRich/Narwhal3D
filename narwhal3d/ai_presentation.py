@@ -56,7 +56,7 @@ def transcript_layout(messages, width, measure, scale=1.0):
         line_h = 16.72 * s
         bubble_h = 2 * padding + max(1, len(lines)) * line_h
         bubble_left = left + outer_width - bubble_width if role == "user" else left
-        items.append({"message": message, "role": role, "label": {"user": "You", "assistant": "Narwhal AI",
+        items.append({"message": message, "role": role, "label": {"user": "You", "assistant": "AI · unverified",
                                                 "status": ""}[role],
                       "left": left, "top": cursor, "width": outer_width,
                       "bubble": (bubble_left, cursor + meta_h,

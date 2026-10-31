@@ -5702,12 +5702,52 @@ class NARWHAL_OT_ai_settings(Operator):
         return {"FINISHED"}
 
 
+def _ai_review_event(event):
+    """Blender focus/paint integration only; native code still decides authority."""
+    pending = _ai.get('action_pending')
+    if pending is None:
+        return False
+    view = _ai.get('review_view') or {}
+    drawn = _ai.get('review_drawn_pending')
+    visible = drawn is pending and view.get('fits')
+    if not visible:
+        pending.pop('keyboard_focus', None)
+    if event.type in ('LEFTMOUSE', 'RIGHTMOUSE', 'MIDDLEMOUSE'):
+        pending.pop('keyboard_focus', None)
+        _tag_redraw_bands()
+        return False
+    if event.type in ('WHEELUPMOUSE', 'WHEELDOWNMOUSE'):
+        lay = _ai.get('lay')
+        rx, ry = _ai.get('region') or (0, 0)
+        return bool(lay and _inside_box(event.mouse_x-rx, event.mouse_y-ry, lay['transcript']))
+    if event.type not in ('TAB', 'RET', 'NUMPAD_ENTER', 'ESC'):
+        return False
+    if event.value != 'PRESS' or getattr(event, 'is_repeat', False):
+        return True
+    if event.type == 'ESC':
+        pending.pop('keyboard_focus', None)
+        _ai_decide_action_review(False, drawn)
+    elif event.type == 'TAB':
+        if visible:
+            pending['keyboard_focus'] = 'approve' if pending.get('keyboard_focus') == 'reject' else 'reject'
+            _ai['state'].focus = False
+            _ai['chat_focus'] = False
+    elif not _ai['state'].focus:
+        focus = pending.get('keyboard_focus')
+        if visible and focus in ('approve', 'reject') and view.get('drawn_focus') == focus:
+            pending.pop('keyboard_focus', None)  # One fresh focus gesture per decision.
+            _ai_decide_action_review(focus == 'approve', pending)
+    else:
+        return False
+    _tag_redraw_bands()
+    return True
+
+
 def _ai_transcript_event(event):
     """Transcript browsing must never leak wheel/key input into CAD commands."""
     if not ai_panel_open() or event.value not in ('PRESS', 'REPEAT'):
         return False
-    if event.type == 'ESC' and _ai.get('action_pending') is not None:
-        _ai_decide_action_review(False, _ai.get('review_drawn_pending'))
+    if _ai_review_event(event):
         return True
     lay = _ai.get('lay')
     if lay is None:
@@ -5837,6 +5877,9 @@ def _ai_draw_action_review(shader, rect, sc):
     # The click target is the review that was actually painted, not whatever
     # sibling becomes pending after a queued click resolves the previous action.
     _ai['review_drawn_pending'] = pending
+    if not view['fits']:
+        pending.pop('keyboard_focus', None)
+    view['drawn_focus'] = pending.get('keyboard_focus')
     old_clip = gpu.state.scissor_get()
     gpu.state.scissor_set(int(rect[0]), int(rect[1]), max(0,int(rect[2]-rect[0])), max(0,int(rect[3]-rect[1])))
     try:
@@ -5848,7 +5891,9 @@ def _ai_draw_action_review(shader, rect, sc):
             for key, label in (('approve','Approve once'),('reject','Reject')):
                 button = view[key]
                 shader.bind()
-                _draw_round_rect(shader, *button, 5*sc, design.rgb01(design.CHIP_BG), design.rgb01(design.BORDER_STRONG))
+                focused = view['drawn_focus'] == key
+                _draw_round_rect(shader, *button, 5*sc, design.rgb01(design.CHIP_BG),
+                                 design.rgb01(design.ACCENT if focused else design.BORDER_STRONG))
                 _draw_centered_panel_text(button, label, 11*sc, design.rgb01(design.TEXT))
         else:
             _draw_text(view['x'], view['top']-20*sc, 'Enlarge panel to review.', 11*sc, design.rgb01(design.TEXT))
@@ -19013,6 +19058,10 @@ _exit_installed = False
 def _exit_handler(*_args):
     """bpy exit_pre: on ANY exit (even the window's close button, which Python cannot
     intercept) keep unsaved work in a recovery copy. Never raises."""
+    try:
+        _ai_shutdown()
+    except Exception as exc:  # noqa: BLE001 -- cleanup must not suppress document recovery
+        print("[narwhal3d] AI shutdown failed (" + type(exc).__name__ + "); continuing exit recovery")
     from . import file_commands
 
     _remember_preferences(user_preference_snapshot())

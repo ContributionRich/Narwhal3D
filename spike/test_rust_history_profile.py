@@ -35,8 +35,9 @@ def main():
         native = undo.UndoStack()
         if native.backend != 'rust':
             raise RuntimeError('select a reviewed history-enabled application core')
-        legacy = undo.LegacyUndoStack()
-        for label, stack in [('rust', native), ('legacy', legacy)]:
+        # Retired-engine timings are not a portable oracle. Compare native host
+        # controls across opaque payload sizes, retaining all identity assertions.
+        for label, stack in [('rust', native)]:
             def command():
                 stack.begin('Model edit')
                 stack.capture(payload)
@@ -51,7 +52,7 @@ def main():
             results.append({'backend': label, 'payload_bytes': size, 'operation': 'undo/redo',
                             **sample(navigate)})
         native.close()
-        legacy.clear()
+
     print(json.dumps({'scope': 'host history controls only; opaque payload reused, no geometry computation',
                       'samples_per_case': 200, 'results': results}, indent=2))
 

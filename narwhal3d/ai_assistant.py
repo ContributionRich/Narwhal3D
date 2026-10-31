@@ -712,9 +712,14 @@ class WorkflowSession:
         if status == "stale":
             return result
         if status in ("completed", "tool_calls"):
-            text = result["response"]["text"]
+            # Rust owns display bounds/notice; older libraries retain their
+            # original envelope. Python only routes native projection to UI rows.
+            view = result.get("presentation")
+            text = view["text"] if view is not None else result["response"]["text"]
             if text:
                 self._state.add_message("assistant", text)
+            if view is not None and view["notice"]:
+                self._state.add_message("status", view["notice"])
             self._state.status = "connected"
             self._state.extra['last_successful_provider'] = (
                 metadata_permission(self._state.provider), self._state.provider.model)
