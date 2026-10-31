@@ -9,6 +9,7 @@ import ast
 from contextlib import contextmanager
 from dataclasses import replace
 import importlib
+from io import StringIO
 import json
 import os
 from pathlib import Path
@@ -44,7 +45,7 @@ MUTATIONS = (
     ("read_loop", 'if _ai_read_results(workflow, outcome, scope[0]):', 'if False:', "test_shared_read_loop_and_proposals_do_not_modify_document"),
     ("proposal_truth", '"Proposal only — not executed: "', '"Executed: "', "test_shared_read_loop_and_proposals_do_not_modify_document"),
     ("timer_cleanup", 'bpy.app.timers.unregister(callback)', 'pass', "test_shutdown_closes_handle_and_detaches_timers"),
-    ("cleanup_after_error", 'for key in ("transport_output", "transport_thread", "read_grant", "consent_scope", "box_pending"):', 'for key in ():', "test_native_close_error_still_detaches_grants_and_queue"),
+    ("cleanup_after_error", 'for key in ("transport_output", "transport_thread", "read_grant", "consent_scope", "box_pending",\n                            "action_pending", "review_batch", "review_view", "review_drawn_pending", "review_layout_key"):', 'for key in ():', "test_native_close_error_still_detaches_grants_and_queue"),
 )
 
 
@@ -112,7 +113,7 @@ class UIWorkflowTests(unittest.TestCase):
             self.assertEqual(text.count(old), 1, "mutation anchor")
             text = text.replace(old, new, 1)
         names = {"_ai_invalidate", "_ai_scope", "NARWHAL_OT_ai_read_consent", "_ai_transport_worker",
-                 "_ai_start_turn", "_ai_read_results", "_ai_poll_transport", "_ai_send", "_ai_shutdown", "_ai_selection_context",
+                 "_ai_start_turn", "_ai_show_plan_result", "_ai_read_results", "_ai_poll_transport", "_ai_send", "_ai_shutdown", "_ai_selection_context",
                  "_ai_poll_model_discovery", "_apply_ai_settings", "ai_panel_click", "_ai_forget_metadata_permission"}
         tree = ast.parse(text)
         nodes = [n for n in tree.body if isinstance(n, (ast.FunctionDef, ast.ClassDef)) and n.name in names]
@@ -520,6 +521,72 @@ class UIWorkflowTests(unittest.TestCase):
                     driver.compile_command(driver.CRATE, Path("/tmp/test-only"), "build")
 
 
+class MutationResult(unittest.TextTestResult):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.infrastructure_failures = []
+
+    def addFailure(self, test, err):
+        # unittest also calls addFailure for assertions in setUp/tearDown/cleanup.
+        # Only a traceback through the selected test body can qualify a kill.
+        code = getattr(test, test._testMethodName).__func__.__code__
+        tb = err[2]
+        while tb is not None and tb.tb_frame.f_code is not code:
+            tb = tb.tb_next
+        if tb is None:
+            self.infrastructure_failures.append(test.id())
+        super().addFailure(test, err)
+
+
+def mutation_status(result):
+    if (result.testsRun != 1 or result.errors or result.infrastructure_failures
+            or result.skipped or result.expectedFailures or result.unexpectedSuccesses):
+        return 'INFRA'
+    if len(result.failures) == 1:
+        return 'KILLED'
+    return 'SURVIVED' if result.wasSuccessful() else 'INFRA'
+
+
+class MutationHarnessTests(unittest.TestCase):
+    def result_for(self, case):
+        return unittest.TextTestRunner(stream=StringIO(), resultclass=MutationResult).run(case)
+
+    def test_bad_anchor_is_infrastructure(self):
+        mutation = ('bad_anchor', 'missing review07 mutation anchor', 'pass',
+                    'test_native_close_error_still_detaches_grants_and_queue')
+        with patch.dict(globals(), MUTATION=mutation):
+            result = self.result_for(UIWorkflowTests(mutation[3]))
+        self.assertEqual(len(result.failures), 1)
+        self.assertIn('mutation anchor', result.failures[0][1])
+        self.assertEqual(mutation_status(result), 'INFRA')
+
+    def test_setup_and_cleanup_assertions_are_infrastructure(self):
+        class Case(unittest.TestCase):
+            def runTest(self):
+                pass
+        for phase in ('setUp', 'tearDown', 'cleanup'):
+            with self.subTest(phase=phase):
+                case = Case()
+                def fail():
+                    raise AssertionError('fixture infrastructure')
+                if phase == 'cleanup':
+                    case.addCleanup(fail)
+                else:
+                    setattr(case, phase, fail)
+                self.assertEqual(mutation_status(self.result_for(case)), 'INFRA')
+
+    def test_body_failure_survival_and_error_are_distinct(self):
+        class Case(unittest.TestCase):
+            def runTest(self):
+                if outcome == 'KILLED':
+                    self.fail('behavior regression')
+                if outcome == 'INFRA':
+                    raise RuntimeError('fixture failure')
+        for outcome in ('KILLED', 'SURVIVED', 'INFRA'):
+            with self.subTest(outcome=outcome):
+                self.assertEqual(mutation_status(self.result_for(Case())), outcome)
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--library", required=True, type=Path)
@@ -528,16 +595,20 @@ if __name__ == "__main__":
     LIBRARY = args.library.resolve()
     def run(test=None):
         suite = unittest.TestSuite([UIWorkflowTests(test)]) if test else unittest.defaultTestLoader.loadTestsFromTestCase(UIWorkflowTests)
-        return unittest.TextTestRunner(verbosity=2).run(suite)
+        return unittest.TextTestRunner(verbosity=2, resultclass=MutationResult).run(suite)
+    controls = unittest.defaultTestLoader.loadTestsFromTestCase(MutationHarnessTests)
+    if not unittest.TextTestRunner(verbosity=2).run(controls).wasSuccessful():
+        raise SystemExit(1)
     if not run().wasSuccessful():
         raise SystemExit(1)
     if args.mutations:
         for mutation in MUTATIONS:
             MUTATION = mutation
             result = run(mutation[3])
-            if result.errors or not result.failures:
-                raise AssertionError("MUTATION did not fail its intended assertion: " + mutation[0])
-            print("RED confirmed:", mutation[0], flush=True)
+            status = mutation_status(result)
+            if status != 'KILLED':
+                raise AssertionError(status + ': ' + mutation[0])
+            print("KILLED:", mutation[0], flush=True)
         MUTATION = None
         import inspect
         import test_automation_native as driver
@@ -554,9 +625,10 @@ if __name__ == "__main__":
             exec(source.replace(old, new, 1), namespace)
             with patch.object(driver, "compile_command", namespace["compile_command"]):
                 result = run("test_resource_profile_is_capped_single_job_and_headroom_checked")
-                if result.errors or not result.failures:
-                    raise AssertionError("resource mutation survived: " + label)
-            print("RED confirmed: resource", label, flush=True)
+                status = mutation_status(result)
+                if status != 'KILLED':
+                    raise AssertionError(status + ': resource ' + label)
+            print("KILLED: resource", label, flush=True)
         if not run().wasSuccessful():
             raise SystemExit(1)
     print("UI workflow GREEN; mutations:", len(MUTATIONS) + 4 if args.mutations else 0)

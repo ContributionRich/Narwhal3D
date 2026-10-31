@@ -3,6 +3,7 @@
 Compile current source, never package __init__ or bytecode. Exercise the real
 shell PopupModel/public routing; no Blender, drawing, timer or UI integration.
 """
+import importlib
 import io
 from pathlib import Path
 import sys
@@ -32,15 +33,27 @@ def event(key='LEFTMOUSE', value='PRESS', point=(0, 0)):
 
 
 class SelectionMenuTests(unittest.TestCase):
+    native_backend = False
+
     def setUp(self):
         modules = patch.dict(sys.modules)
         modules.start()
         self.addCleanup(modules.stop)
         package = ModuleType('_selection_menu_tests')
-        package.__path__ = []
+        package.__path__ = [str(ROOT)]
         sys.modules[package.__name__] = package
         self.shell = load('shell_popup', package)
         self.menu = load('selection_menu', package)
+        adapter = importlib.import_module(package.__name__ + '.native_popup')
+        if self.native_backend:
+            if adapter.library() is None:
+                self.skipTest('native UI core unavailable; legacy controls still required')
+        else:
+            # These source mutants target the complete Python compatibility model.
+            # Keep that control explicit even when the native core is installed.
+            fallback = patch.object(adapter, 'library', return_value=None)
+            fallback.start()
+            self.addCleanup(fallback.stop)
         self.calls = []
         self.valid = True
         self.candidates = [NS(key=('Curve', 'Object', 0), label='Curve — Curve'),
@@ -161,6 +174,10 @@ class SelectionMenuTests(unittest.TestCase):
         self.assertEqual(self.calls, [])
 
 
+class NativeSelectionMenuTests(SelectionMenuTests):
+    native_backend = True
+
+
 def mutations():
     probes = [
         ('selection_menu', "st['candidates'][index]", "st['candidates'][0]",
@@ -194,6 +211,7 @@ def mutations():
 if __name__ == '__main__':
     if '--mutations' in sys.argv:
         mutations()
-    result = unittest.TextTestRunner(verbosity=2).run(
-        unittest.defaultTestLoader.loadTestsFromTestCase(SelectionMenuTests))
+    suite = unittest.TestSuite(unittest.defaultTestLoader.loadTestsFromTestCase(cls)
+                               for cls in (SelectionMenuTests, NativeSelectionMenuTests))
+    result = unittest.TextTestRunner(verbosity=2).run(suite)
     raise SystemExit(not result.wasSuccessful())

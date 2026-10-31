@@ -18,6 +18,8 @@ import tempfile
 import urllib.request
 import zipfile
 
+from build_linux_native import probe_ui_core
+
 OCCT = "b8f597c677811d1f9f4d8a97f5ae2825c0353a42"
 WHEEL = "cadquery_ocp_novtk-8.0.1.0.0-cp313-cp313-macosx_11_0_arm64.whl"
 WHEEL_SHA = "733c976b2102d9684e4cd3f7fbad8aba8726426322f2b1d547a5cc6aceb0d6fb"
@@ -28,6 +30,7 @@ COMPONENTS = {
     "platform_core": ("libnarwhal_platform_core.dylib",),
     "document_core": ("narwhal-document-core",),
     "application_core": ("libnarwhal_application_core.dylib",),
+    "ui_core": ("libnarwhal_ui_core.dylib",),
     "converter_supervisor": ("narwhal-converter-supervisor", "libnarwhal_worker_policy.dylib"),
     "automation_core": ("libnarwhal_automation.dylib", "narwhal-automation"),
     "geometry_core": ("libnarwhal_geometry_core.dylib",),
@@ -84,6 +87,8 @@ def reuse_output(root: Path, output: Path) -> bool:
             return False
         require_components(receipt["components"], {})
         if any(entry["architecture"] != "arm64" or sha(output / "bin" / name) != entry["sha256"] for name, entry in receipt["components"].items()):
+            return False
+        if receipt.get("ui_core") != probe_ui_core(output / "bin/libnarwhal_ui_core.dylib"):
             return False
         libraries = {p.name: sha(p) for p in (output / "bin/occt").glob("*.dylib")}
         return libraries == receipt["occt_libraries"] and bool(libraries)
@@ -200,7 +205,8 @@ print(json.dumps(result))
     (output / "native-failures.json").unlink(missing_ok=True)
     if source_inputs(root) != inputs:
         raise SystemExit("native sources changed during compilation")
-    receipt = {"source_inputs": inputs, "source_revision": subprocess.check_output(["git", "--no-pager", "-C", str(root), "rev-parse", "HEAD"], text=True).strip(),
+    ui_core = probe_ui_core(bin_dir / "libnarwhal_ui_core.dylib")
+    receipt = {"ui_core": ui_core, "source_inputs": inputs, "source_revision": subprocess.check_output(["git", "--no-pager", "-C", str(root), "rev-parse", "HEAD"], text=True).strip(),
                "occt_source": OCCT, "occt_wheel_sha256": WHEEL_SHA,
                "occt_libraries": {path.name: sha(path) for path in dylibs}, "components": receipts,
                "unavailable_components": UNAVAILABLE_COMPONENTS,

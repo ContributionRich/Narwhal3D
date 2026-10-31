@@ -797,7 +797,40 @@ else:
     raise SystemExit("unknown application-core inventory mode")
 '@ | Set-Content -LiteralPath $ApplicationInputsDriver -Encoding UTF8
 Run-Native $Python @('-B', $ApplicationInputsDriver, $NarwhalSource, 'before', $ApplicationInputsPath) 'record application-core source inventory'
-foreach ($Crate in @("cdr_core", "cdr_multiversion", "welcome", "application_core")) {
+$UiInputsPath = Join-Path $Workspace "ui-core-inputs.json"
+$UiInputsDriver = Join-Path $Workspace "ui_core_inputs.py"
+@'
+# Build/source/ABI orchestration only; UI behavior remains in Rust.
+import json
+from pathlib import Path
+import sys
+source, mode, snapshot = Path(sys.argv[1]), sys.argv[2], Path(sys.argv[3])
+sys.path.insert(0, str(source / "scripts"))
+from build_linux_native import inventory, digest, UI_CORE_SOURCE, probe_ui_core, verify_ui_core_source
+from verify_windows_release import verify_ui_core_identity
+inputs = inventory(source, "ui_core")
+if mode == "before":
+    snapshot.write_text(json.dumps(inputs, sort_keys=True))
+elif mode == "after":
+    if json.loads(snapshot.read_text()) != inputs:
+        raise SystemExit("ui-core source changed during build")
+    library = Path(sys.argv[4])
+    verify_ui_core_identity(library)
+    probe_ui_core(library)
+    library.with_name(UI_CORE_SOURCE).write_text(json.dumps(
+        {"inputs": inputs, "sha256": digest(library)}, sort_keys=True))
+elif mode == "verify":
+    library = Path(sys.argv[4])
+    verify_ui_core_source(library.parent, source, library.name)
+    adjacent = library.parents[3] / "narwhal3d/native" / library.name
+    if not adjacent.is_file() or adjacent.is_symlink() or digest(library) != digest(adjacent):
+        raise SystemExit("ui-core runtime/adjacent copies differ")
+    probe_ui_core(adjacent)
+else:
+    raise SystemExit("unknown ui-core inventory mode")
+'@ | Set-Content -LiteralPath $UiInputsDriver -Encoding UTF8
+Run-Native $Python @('-B', $UiInputsDriver, $NarwhalSource, 'before', $UiInputsPath) 'record ui-core source inventory'
+foreach ($Crate in @("cdr_core", "cdr_multiversion", "welcome", "application_core", "ui_core")) {
     $Manifest = Join-Path $NarwhalSource "native\$Crate\Cargo.toml"
     Run-Native $Cmd @("/d", "/c", $CargoWrapper, "build", "--release", "--locked", "--manifest-path", $Manifest, "--target", "x86_64-pc-windows-msvc") "build $Crate with pinned Rust MSVC" $NarwhalSource
 }
@@ -826,6 +859,7 @@ New-Item -ItemType Directory -Path $NativeComponentDirectory -Force | Out-Null
 New-Item -ItemType Directory -Path $AdjacentNativeDirectory -Force | Out-Null
 foreach ($Component in @(
     @("application_core", "narwhal_application_core.dll"),
+    @("ui_core", "narwhal_ui_core.dll"),
     @("cdr_core", "narwhal_cdr_core.dll"),
     @("cdr_multiversion", "narwhal-cdr-multiversion.exe"),
     @("welcome", "narwhal-welcome.exe")
@@ -833,6 +867,9 @@ foreach ($Component in @(
     $Built = Join-Path $NarwhalSource "native\$($Component[0])\target\x86_64-pc-windows-msvc\release\$($Component[1])"
     Copy-Item -LiteralPath $Built -Destination (Join-Path $NativeComponentDirectory $Component[1])
 }
+$UiCoreTarget = Join-Path $NativeComponentDirectory "narwhal_ui_core.dll"
+Run-Native $Python @('-B', $UiInputsDriver, $NarwhalSource, 'after', $UiInputsPath, $UiCoreTarget) 'verify ui-core source and editor/popup ABI inventory'
+Copy-Item -LiteralPath $UiCoreTarget -Destination (Join-Path $AdjacentNativeDirectory "narwhal_ui_core.dll")
 $ApplicationCoreTarget = Join-Path $NativeComponentDirectory "narwhal_application_core.dll"
 Run-Native $Python @('-B', $ApplicationInputsDriver, $NarwhalSource, 'after', $ApplicationInputsPath, $ApplicationCoreTarget) 'verify application-core source and ABI inventory'
 Copy-Item -LiteralPath $ApplicationCoreTarget -Destination (Join-Path $AdjacentNativeDirectory "narwhal_application_core.dll")
@@ -942,6 +979,7 @@ if (($DependencyResult.python -join ".") -ne "3.13" -or
 Run-Native (Join-Path $RuntimeDirectory 'blender.exe') @(
     '-b', '--factory-startup', '--python-exit-code', '1', '--python', $RuntimeApiProbe
 ) 'verify packaged native UI APIs'
+Run-Native $RuntimePythonPath @('-I', '-B', $UiInputsDriver, $NarwhalSource, 'verify', $UiInputsPath, $UiCoreTarget) 'verify packaged ui-core editor State88 and popup ABI'
 $NativeProbePath = Join-Path $Workspace "verify_packaged_native_cores.py"
 @'
 from __future__ import annotations

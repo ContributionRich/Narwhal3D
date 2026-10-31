@@ -12,6 +12,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 
 IMAGE = "quay.io/pypa/manylinux_2_28_x86_64@sha256:1e7b8460ad8fb3fb0fbe1cd818845159ac896b4fd17452d56e892c291f3b97a8"
 COMPONENTS = {
@@ -24,9 +25,96 @@ COMPONENTS = {
     "cdr_multiversion": ("narwhal-cdr-multiversion",),
     "document_core": ("narwhal-document-core",),
     "application_core": ("libnarwhal_application_core.so",),
+    "ui_core": ("libnarwhal_ui_core.so",),
     "converter_supervisor": ("narwhal-converter-supervisor",),
     "automation_core": ("libnarwhal_automation.so", "narwhal-automation"),
 }
+
+
+# Packaging contract from native/ui_core/narwhal_ui_core.h. Python only loads the
+# C ABI and checks receipts; all editor and popup behavior remains in Rust.
+UI_CORE_EXPORTS = (
+    "narwhal_editor_abi", "narwhal_editor_close", "narwhal_editor_edit", "narwhal_editor_read",
+    "narwhal_popup_abi", "narwhal_popup_apply", "narwhal_popup_destroy",
+    "narwhal_popup_guards", "narwhal_popup_hit", "narwhal_popup_panel", "narwhal_popup_rows",
+)
+UI_CORE_IDENTITY = {"editor_abi": 1, "popup_abi": 1, "state_bytes": 88,
+                    "exports": list(UI_CORE_EXPORTS)}
+UI_CORE_SOURCE = "ui-core-source.json"
+UI_CORE_PROBE = r'''
+import ctypes as c, json, sys
+lib = c.CDLL(sys.argv[1])
+exports = json.loads(sys.argv[2])
+for name in exports:
+    getattr(lib, name)
+result = {"exports": exports}
+for name in ("editor", "popup"):
+    fn = getattr(lib, "narwhal_" + name + "_abi")
+    fn.argtypes = []
+    fn.restype = c.c_uint32
+    result[name + "_abi"] = int(fn())
+if result["editor_abi"] != 1 or result["popup_abi"] != 1:
+    raise RuntimeError("ui-core editor/popup ABI mismatch")
+class State(c.Structure):
+    _fields_ = [(name, c.c_int64 if name in ("anchor", "max_chars") else c.c_uint64)
+                for name in ("handle", "revision", "text_revision", "length", "caret",
+                             "anchor", "max_chars", "flags", "change_start", "change_end", "inserted")]
+result["state_bytes"] = c.sizeof(State)
+if result["state_bytes"] != 88:
+    raise RuntimeError("ui-core editor State must be 88 bytes")
+lib.narwhal_editor_edit.argtypes = [c.c_uint64, c.c_uint32, c.c_int64, c.c_uint32,
+                                   c.POINTER(c.c_uint32), c.c_size_t, c.POINTER(State), c.c_size_t]
+lib.narwhal_editor_edit.restype = c.c_uint32
+lib.narwhal_editor_read.argtypes = [c.c_uint64, c.c_uint64, c.c_size_t, c.POINTER(c.c_uint32), c.c_size_t]
+lib.narwhal_editor_read.restype = c.c_uint32
+lib.narwhal_editor_close.argtypes = [c.c_uint64]
+lib.narwhal_editor_close.restype = c.c_uint32
+state, text = State(), (c.c_uint32 * 1)(65)
+if lib.narwhal_editor_edit(0, 0, 0, 0, text, 1, c.byref(state), c.sizeof(state)) != 0:
+    raise RuntimeError("ui-core rejected editor State88 create")
+if not state.handle:
+    raise RuntimeError("ui-core returned no editor handle")
+try:
+    output = (c.c_uint32 * 1)()
+    if (state.length != 1 or not state.revision or not state.text_revision
+            or lib.narwhal_editor_read(state.handle, state.text_revision, 0, output, 1) != 0
+            or output[0] != 65):
+        raise RuntimeError("ui-core editor State88/read contract differs")
+finally:
+    if lib.narwhal_editor_close(state.handle) != 0:
+        raise RuntimeError("ui-core editor close failed")
+print(json.dumps(result, sort_keys=True))
+'''
+
+
+def probe_ui_core(path: Path, python: Path | str = sys.executable, *, env=None) -> dict:
+    """Execute the actual library in an isolated child, not just inspect symbol strings."""
+    try:
+        completed = subprocess.run(
+            [str(python), "-I", "-B", "-c", UI_CORE_PROBE, str(path), json.dumps(list(UI_CORE_EXPORTS))],
+            env=env, text=True, capture_output=True, check=True, timeout=30)
+        identity = json.loads(completed.stdout)
+    except (OSError, subprocess.SubprocessError, ValueError) as error:
+        raise ValueError(f"cannot verify ui-core ABI/State88: {getattr(error, 'stderr', '') or error}") from error
+    if identity != UI_CORE_IDENTITY:
+        raise ValueError(f"ui-core ABI/State88/export evidence differs: {identity!r}")
+    return identity
+
+
+def verify_ui_core_source(directory: Path, source: Path, library: str) -> dict:
+    """Bind the staged binary to the full crate (including header, tables and license)."""
+    try:
+        receipt = directory / UI_CORE_SOURCE
+        binary = directory / library
+        if any(not path.is_file() or path.is_symlink() for path in (receipt, binary)):
+            raise ValueError("missing regular ui-core source receipt/library")
+        actual = json.loads(receipt.read_text(encoding="utf-8"))
+        expected = {"inputs": inventory(source, "ui_core"), "sha256": digest(binary)}
+        if actual != expected:
+            raise ValueError("ui-core source/binary receipt differs")
+    except (OSError, ValueError) as error:
+        raise ValueError(f"cannot bind ui-core source: {error}") from error
+    return actual
 
 
 def digest(path: Path) -> str:
@@ -120,6 +208,10 @@ def main() -> None:
             if destination.exists() and digest(destination) != digest(source):
                 raise SystemExit(f"refusing to overwrite previously staged {destination}")
             shutil.copy2(source, destination)
+        if args.crate == "ui_core":
+            (out / "bin" / UI_CORE_SOURCE).write_text(json.dumps(
+                {"inputs": before, "sha256": digest(out / "bin/libnarwhal_ui_core.so")},
+                sort_keys=True) + "\n")
     print(f"{args.crate} {mode}: passed; receipt {out / (args.crate + '-' + mode + '-receipt.json')}")
 
 

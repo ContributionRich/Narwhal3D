@@ -272,6 +272,7 @@ with tempfile.TemporaryDirectory(prefix="narwhal_windows_verifier_test_") as tem
     verifier.validate_paths(root, base)
     check(verifier.GENERATED_PACKAGE_FILES == {
         "narwhal3d/native/narwhal_application_core.dll",
+        "narwhal3d/native/narwhal_ui_core.dll",
         "narwhal3d/native/narwhal_geometry_core.dll",
         "narwhal3d/native/narwhal_platform_core.dll",
         "narwhal3d/native/narwhal_pure_core.dll",
@@ -283,6 +284,8 @@ with tempfile.TemporaryDirectory(prefix="narwhal_windows_verifier_test_") as tem
         "app/runtime/windows-x86_64/bin/narwhal-converter-supervisor.exe",
         "app/runtime/windows-x86_64/bin/narwhal-cdr-multiversion.exe",
         "app/runtime/windows-x86_64/bin/narwhal-document-core.exe",
+        "app/runtime/windows-x86_64/bin/narwhal_ui_core.dll",
+        "app/narwhal3d/native/narwhal_ui_core.dll",
         "app/narwhal3d/native/narwhal_geometry_core.dll",
         "app/narwhal3d/native/narwhal_platform_core.dll",
         "app/narwhal3d/native/narwhal_pure_core.dll",

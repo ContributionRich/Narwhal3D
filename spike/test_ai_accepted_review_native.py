@@ -70,7 +70,15 @@ def build_bridge(target=TARGET):
     """One-job, 1024 MiB, offline, locked library/test-only builds. Return exact artifact."""
     target = _target(target)
     with open('/tmp/narwhal3d-heavy-build.lock', 'a') as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        deadline = time.monotonic() + 60
+        while True:
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    raise TimeoutError('Heavy build lock busy; no compiler launched')
+                time.sleep(.1)
         source_hash = _source_hash()
         with patch.dict(os.environ, NARWHAL_AI_BUILD_MIB='1024'):
             command = compile_command(CRATE, target, 'test',
@@ -561,6 +569,22 @@ def self_test(executable, target=TARGET):
                             ('disabled-call', 'narwhal_create_' + shape, args)])
                         self.assertEqual(reply['status'], 'failed', reply)
                         self.assertEqual(reply['code'], 'unsupported_tool', reply)
+
+        def test_visible_expiry_clock_control_is_test_process_only(self):
+            with patch.object(ai, '_load_workflow_library', return_value=self.bridge.library):
+                with lifecycle.session('openai_compatible') as (_state,w):
+                    p=w.prepare(lifecycle.DOC,user_text='clock fixture')
+                    lifecycle.finish(w,p,'openai_compatible',text='',calls=[('clock','narwhal_create_sphere',{'center':[0,0,0],'radius':4})])
+                    current=dict(append=lifecycle.box_context(),undo_top_serial=0,undo_next_serial=1)
+                    w.stage_accepted_review(p.data['token'],'clock',lifecycle.DOC,current)
+                    for bad in (True,-1,3600001):
+                        self.assertEqual(self.bridge.rpc(w._handle,{'op':'fixture_advance_review_ms','delta_ms':bad})['status'],'failed')
+                    self.assertEqual(self.bridge.rpc(w._handle,{'op':'fixture_advance_review_ms','delta_ms':300001})['status'],'fixture_clock_advanced')
+                    self.assertEqual(w.accepted_review_state(p.data['token'],'clock',lifecycle.DOC)['state'],'expired')
+            state=ai.AssistantState(provider=ai.set_provider('openai_compatible','fixture'))
+            with ai.WorkflowSession(state,lifecycle.DOC,library_path=Path(target)/'debug/libnarwhal_automation.so') as w:
+                with self.assertRaisesRegex(ai.WorkflowUnavailable,'invalid_request'):
+                    w._exchange({'op':'fixture_advance_review_ms','delta_ms':300001})
 
         def test_actual_parsers_review_and_unchanged_workflow_gate(self):
             with patch.object(ai, '_load_workflow_library', return_value=self.bridge.library):

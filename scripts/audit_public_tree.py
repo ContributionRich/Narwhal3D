@@ -78,6 +78,36 @@ REQUIRED = {
     "licenses/rhino3dm-MIT.txt",
     "native/brep_writer/main.cpp",
     "native/brep_writer/README.md",
+    "native/ui_core/Cargo.toml", "native/ui_core/Cargo.lock", "native/ui_core/LICENSE",
+    "native/ui_core/README.md", "native/ui_core/POPUP.md", "native/ui_core/gen_unicode.py",
+    "native/ui_core/narwhal_ui_core.h", "native/ui_core/src/lib.rs",
+    "native/ui_core/src/editor.rs", "native/ui_core/src/unicode16.rs",
+    "native/ui_core/src/allocation_tests.rs", "native/ui_core/src/layout_algorithm.rs",
+    "native/ui_core/src/layout_contract.rs", "native/ui_core/src/popup.rs",
+    "native/ui_core/src/popup_ffi.rs", "native/ui_core/src/popup_tests.rs",
+    "narwhal3d/textfield.py", "narwhal3d/native_textfield.py",
+    "narwhal3d/native_popup.py", "narwhal3d/shell_popup.py", "narwhal3d/ui.py",
+    "narwhal3d/bridge.py", "narwhal3d/ai_assistant.py", "narwhal3d/ai_action_review.py",
+    "scripts/check_ui_core.py", "scripts/test_release_ui_core.py",
+    "scripts/build_linux_native.py", "scripts/build_macos_native.py",
+    "scripts/assemble_linux_release.py", "scripts/verify_linux_release.py",
+    "scripts/assemble_macos_release.py", "scripts/test_macos_runtime.py",
+    "spike/test_ui_core_editor.py", "spike/test_ui_core_callers.py",
+    "spike/test_ui_core_layout.py", "spike/test_ui_core_mutations.py",
+    "spike/fixtures/textfield_168212d4.py",
+    "spike/test_ui_core_benchmark.py", "spike/test_ui_core_review_gui.py",
+    "spike/test_ui_core_popup.py", "spike/test_ui_core_popup_mutations.py",
+    "spike/test_ui_core_popup_gui.py", "spike/test_ui_core_popup_failure.py",
+    "spike/test_ui_core_popup_failure_gui.py", "spike/test_ui_core_gate.py",
+    "spike/test_textfield.py", "spike/test_shell_input.py", "spike/test_shell_popup.py",
+    "spike/test_bugreport.py", "spike/test_printdialog.py",
+    "spike/test_selection_visibility_07.py", "spike/test_gumball_release_profile_07.py",
+    "spike/test_move_regression_07.py",
+    "spike/test_ai_accepted_review_native.py", "spike/test_ai_v4_native.py",
+    "spike/test_ai_v7_visible.py", "spike/test_ai_v7_roundtrip.py",
+    "spike/test_ai_v7_presentation.py", "spike/test_ai_v7_resources.py",
+    "spike/test_ai_v7_native.py",
+    "docs/reviews/2026-10-31-ui-regressions.md",
     "native/application_core/Cargo.toml", "native/application_core/Cargo.lock",
     "native/application_core/README.md", "native/application_core/OPENNURBS_LICENSE",
     "native/application_core/include/narwhal_application_core.h",
@@ -731,7 +761,38 @@ def self_check() -> None:
         candidate.update(addition)
         if not audit_entries(candidate):
             raise AuditError(f"self-check failed to reject {label}")
-    print("audit_public_tree.py self-check: OK")
+    # The source closure is mandatory even with every conditional harness removed.
+    # Delete each input independently: an omitted license/test-only module is just
+    # as incomplete as an omitted production module or ctypes adapter.
+    closure = sorted(path for path in REQUIRED if path.startswith("native/ui_core/")
+                     or path.startswith("spike/test_ui_core_") or path in {
+                         "narwhal3d/native_textfield.py", "narwhal3d/native_popup.py",
+                         "scripts/check_ui_core.py", "scripts/test_release_ui_core.py",
+                         "spike/test_shell_popup.py", "spike/test_textfield.py",
+                         "spike/fixtures/textfield_168212d4.py",
+                         "spike/test_ai_v4_native.py", "spike/test_ai_accepted_review_native.py",
+                     })
+    for path in closure:
+        candidate = dict(safe)
+        del candidate[path]
+        expected = f"missing required public file: {path}"
+        if expected not in audit_entries(candidate):
+            raise AuditError(f"self-check failed to reject missing closure input: {path}")
+    # Exercise recursive import discovery with names outside the static manifest.
+    candidate = dict(safe)
+    candidate["spike/test_ui_core_popup_failure.py"] = (
+        "100644", b"import test_public_closure_fixture\n")
+    candidate["spike/test_public_closure_fixture.py"] = (
+        "100644", b"from test_public_closure_leaf import value\n")
+    candidate["spike/test_public_closure_leaf.py"] = ("100644", b"value = 1\n")
+    if audit_entries(candidate):
+        raise AuditError("self-check rejected complete recursive test closure")
+    for path in ("spike/test_public_closure_fixture.py", "spike/test_public_closure_leaf.py"):
+        mutant = dict(candidate)
+        del mutant[path]
+        if f"missing required public file: {path}" not in audit_entries(mutant):
+            raise AuditError(f"self-check failed to reject missing imported test: {path}")
+    print(f"audit_public_tree.py self-check: OK ({len(closure)} closure deletions + 2 import deletions)")
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:

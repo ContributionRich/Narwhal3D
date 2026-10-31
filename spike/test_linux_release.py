@@ -51,12 +51,12 @@ expected_components = (
     "libnarwhal_selection_core.so", "narwhal-converter-supervisor",
     "narwhal-cdr-multiversion", "narwhal-document-core", "narwhal-welcome",
     "libnarwhal_automation.so", "narwhal-automation",
-    "libnarwhal_application_core.so",
+    "libnarwhal_application_core.so", "libnarwhal_ui_core.so",
 )
 expected_accelerators = (
     "libnarwhal_geometry_core.so", "libnarwhal_platform_core.so",
     "libnarwhal_pure_core.so", "libnarwhal_selection_core.so",
-    "libnarwhal_application_core.so",
+    "libnarwhal_application_core.so", "libnarwhal_ui_core.so",
 )
 expected_abis = {
     "libnarwhal_application_core.so": 1,
@@ -178,6 +178,10 @@ with tempfile.TemporaryDirectory(prefix="narwhal-linux-release-test-") as tempor
             record["abi"] = expected_abis[filename]
         if filename == "narwhal-welcome":
             record["launch_contract"] = 1
+        if filename == "libnarwhal_application_core.so":
+            record.update(history_abi=1, exports=list(verify.APPLICATION_CORE_EXPORTS))
+        if filename == "libnarwhal_ui_core.so":
+            record.update(verify.UI_CORE_IDENTITY)
         records[filename] = record
     for filename in expected_accelerators:
         source = runtime_native / filename
@@ -186,7 +190,7 @@ with tempfile.TemporaryDirectory(prefix="narwhal-linux-release-test-") as tempor
     verify.verify_native_manifest(appdir, records)
     check("exact regular native manifest and adjacent files are accepted", True)
     for filename in ("libnarwhal_geometry_core.so", "libnarwhal_platform_core.so",
-                     "libnarwhal_application_core.so"):
+                     "libnarwhal_application_core.so", "libnarwhal_ui_core.so"):
         omitted = dict(records)
         del omitted[filename]
         rejects(f"manifest omission of {filename} is rejected",

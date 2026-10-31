@@ -26,7 +26,8 @@ MEASURED: v4 HTML .popup CSS and title.onclick define the anchor, palette,
 minimum width, padding, radius and height limit. OURS: adjacent stacked submenus,
 keyboard navigation, scroll buttons and click-through protection. Python is
 intentional Blender/UI orchestration: it retains Python action payloads/callbacks
-and uses Blender's font measurement and event objects, not a computational core.
+and Blender font/draw glue. The runtime factory uses persistent Rust popup state
+when ui_core is available; PopupModel remains the complete reference/fallback.
 """
 from __future__ import annotations
 
@@ -168,7 +169,9 @@ class PopupModel:
             header = min(header, height * 0.3)
             inset = min(pad, height * 0.1)
             body_height = max(0.0, height - header - 2 * inset)
-            scrolling = content > body_height
+            # Fractional UI scale can leave a sub-pixel rounding remainder even
+            # when every row fits. Do not add scroll gutters for that remainder.
+            scrolling = content - body_height > 1e-6 * max(1.0, s)
             scroll_h = min(SCROLL_HEIGHT * s, body_height / 4) if scrolling else 0.0
             width = min(panel.width, w - 2 * margin)
             if depth == 0:
@@ -347,9 +350,46 @@ class PopupModel:
         return value in {'PRESS', 'RELEASE', 'CLICK', 'DOUBLE_CLICK'} or guarded
 
 
+def _make_model(window_size, scale, measure):
+    # Standalone source-loaded reference tests intentionally have no package.
+    if not __package__:
+        return PopupModel(window_size, scale, measure)
+    from .native_popup import model
+    return model(window_size, scale, measure, PopupModel)
+
+
 _model = None
 _window = None
 _handlers = []
+# Emergency-only escrow after an owner fails. Normal guards remain Rust-owned.
+_failure_releases = set()
+
+
+def _report_failure(exc):
+    message = f'Popup failed ({type(exc).__name__}: {exc}); not replayed'
+    try:
+        from . import ui
+        ui.app_state.log(message)
+    except Exception:
+        import sys
+        print(message, file=sys.stderr)
+
+
+def _detach_failed(model, releases, exc):
+    global _model
+    # An activation callback may have published a replacement before raising.
+    if _model is model:
+        _model = None
+        _failure_releases.update(releases)
+    try:
+        if hasattr(model, 'dispose'):
+            model.dispose()
+        else:
+            model.close()
+    except Exception:
+        pass  # Reporting/cleanup must not kill the command-input modal either.
+    _report_failure(exc)
+    _redraw()
 
 
 def _redraw():
@@ -369,6 +409,10 @@ def open(rows, anchor, title, callback, *, context=None, window_size=None, scale
         import bpy
         context = bpy.context
     window = getattr(context, 'window', None)
+    if window is not None:
+        # An overlap pick can be the first popup in a fresh session. Do not open
+        # an input-consuming model before its paint handlers exist.
+        register()
     if window_size is None:
         window_size = (window.width, window.height)
     measure = None
@@ -377,11 +421,23 @@ def open(rows, anchor, title, callback, *, context=None, window_size=None, scale
         measure = ui._text_width
         if scale is None:
             scale = uiscale.current()
-    model = PopupModel(window_size, 1.0 if scale is None else scale, measure)
-    model.open(rows, anchor, title, callback)
-    if _model is not None and _window == window:
-        model._releases.update(_model._releases)
+    model = _make_model(window_size, 1.0 if scale is None else scale, measure)
+    try:
+        model.open(rows, anchor, title, callback)
+        if _model is not None and _window == window and not getattr(_model, 'failed', False):
+            if hasattr(model, 'inherit_releases'):
+                model.inherit_releases(_model)
+            else:
+                model._releases.update(_model._releases)
+    except BaseException:
+        if hasattr(model, 'dispose'):
+            model.dispose()
+        raise
     _redraw()
+    if _model is not None and hasattr(_model, 'dispose'):
+        _model.dispose()
+    if _window != window:
+        _failure_releases.clear()
     _model, _window = model, window
     _redraw()
     return model
@@ -392,14 +448,21 @@ def is_open():
 
 
 def close():
-    if _model is not None:
-        _model.close()
-        _redraw()
+    model = _model
+    if model is not None:
+        releases = set()
+        try:
+            releases = set(model._releases)
+            model.close()
+        except Exception as exc:
+            _detach_failed(model, releases, exc)
+        else:
+            _redraw()
 
 
 def handle_event(event, context=None):
     """Call before ANY picker, even when is_open() is false (release shielding)."""
-    if _model is None:
+    if _model is None and not _failure_releases:
         return False
     if _window is not None:
         if context is None:
@@ -407,18 +470,60 @@ def handle_event(event, context=None):
             context = bpy.context
         if context.window != _window:
             return False
-        _model.resize((_window.width, _window.height))
+    guarded = event.type in _failure_releases
+    if event.value == 'RELEASE':
+        _failure_releases.discard(event.type)
+    if event.type == 'WINDOW_DEACTIVATE':
+        _failure_releases.clear()
+    model = _model
+    if model is None:
+        return guarded
+    releases = set()
+    was_open = model.is_open
     try:
-        return _model.handle_event(event)
+        # Snapshot BEFORE resize/event: a native failure destroys the owner, and
+        # its partially mutated state must never be read back or replayed.
+        releases = set(model._releases)
+        if _window is not None:
+            model.resize((_window.width, _window.height))
+        return model.handle_event(event) or guarded
+    except Exception as exc:
+        # The failing press itself also belongs to the popup, even when resize
+        # failed before Rust saw it. Do not pass it (or its release) to a picker.
+        if event.value == 'RELEASE':
+            releases.discard(event.type)
+        elif was_open and event.value in {'PRESS', 'DOUBLE_CLICK'} and not (
+                event.type.startswith(('TIMER', 'WHEEL')) or event.type in {
+                    'WINDOW_DEACTIVATE', 'MOUSEMOVE', 'INBETWEEN_MOUSEMOVE',
+                    'TRACKPADPAN', 'TRACKPADZOOM', 'MOUSEROTATE', 'MOUSESMARTZOOM'}):
+            releases.add(event.type)
+        _detach_failed(model, releases, exc)
+        return True
     finally:
         if event.type not in {'TIMER', 'TIMER0', 'TIMER1', 'TIMER2'}:
             _redraw()
 
 
+def _safe_draw(context, window_level=False):
+    """Contain registered draw-handler failures just like modal-event failures."""
+    model = _model
+    if model is None or (_window is not None and context.window != _window):
+        return
+    releases = set()
+    try:
+        if not model.is_open:
+            return
+        releases = set(model._releases)
+        draw(context, window_level)
+    except Exception as exc:
+        _detach_failed(model, releases, exc)
+
+
 def draw(context, window_level=False):
-    """Paint across the composed window when supported, with a region fallback."""
+    """Low-level painter; registered handlers contain failures in _safe_draw."""
     if not is_open() or (_window is not None and context.window != _window):
         return
+    model = _model
     import blf
     import gpu
     from . import design, ui
@@ -426,7 +531,6 @@ def draw(context, window_level=False):
     if region is None or region.type != 'WINDOW':
         return
 
-    model = _model
     model.resize((region.width, region.height) if window_level else
                  (context.window.width, context.window.height))
     shader = ui._uniform_color_shader()
@@ -513,12 +617,12 @@ def draw(context, window_level=False):
 
 def _draw_current():
     import bpy
-    draw(bpy.context)
+    _safe_draw(bpy.context)
 
 
 def _draw_window():
     import bpy
-    draw(bpy.context, window_level=True)
+    _safe_draw(bpy.context, window_level=True)
 
 
 def register():
@@ -550,4 +654,7 @@ def unregister():
         else:
             space.draw_handler_remove(token, 'WINDOW')
     _handlers.clear()
+    if _model is not None and hasattr(_model, 'dispose'):
+        _model.dispose()
     _model = _window = None
+    _failure_releases.clear()

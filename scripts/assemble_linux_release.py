@@ -17,6 +17,8 @@ import sys
 import tempfile
 from typing import Any
 
+from build_linux_native import probe_ui_core, verify_ui_core_source
+
 from release_policy import (
     MAX_HOST_GLIBC, format_glibc, glibc_versions, scan_runtime_glibc,
     validate_preview_version,
@@ -47,12 +49,12 @@ NATIVE_COMPONENTS = (
     "libnarwhal_selection_core.so", "narwhal-converter-supervisor",
     "narwhal-cdr-multiversion", "narwhal-document-core", "narwhal-welcome",
     "libnarwhal_automation.so", "narwhal-automation",
-    "libnarwhal_application_core.so",
+    "libnarwhal_application_core.so", "libnarwhal_ui_core.so",
 )
 PACKAGED_ACCELERATORS = (
     "libnarwhal_geometry_core.so", "libnarwhal_platform_core.so",
     "libnarwhal_pure_core.so", "libnarwhal_selection_core.so",
-    "libnarwhal_application_core.so",
+    "libnarwhal_application_core.so", "libnarwhal_ui_core.so",
 )
 APPLICATION_CORE_HISTORY_ABI = 1
 APPLICATION_CORE_EXPORTS = (
@@ -703,8 +705,16 @@ def assemble(args: argparse.Namespace) -> tuple[Path, Path, Path]:
     )
     validate_appimagetool(appimagetool, artifacts)
     validate_appimage_runtime(appimage_runtime, artifacts)
-    native_components = validate_native_components(
+    native_records = validate_native_components(
         native_components_dir, document_core_artifacts, runtime_dir / OCCT_LIB_RELATIVE)
+
+    try:
+        ui_source = verify_ui_core_source(native_components_dir, source_root, "libnarwhal_ui_core.so")
+        native_records["libnarwhal_ui_core.so"]["source_inputs"] = ui_source["inputs"]
+        native_records["libnarwhal_ui_core.so"].update(
+            probe_ui_core(native_components_dir / "libnarwhal_ui_core.so"))
+    except ValueError as error:
+        raise ReleaseError(str(error)) from error
 
     launcher = source_root / "narwhal3d.sh"
     package = source_root / "narwhal3d"
@@ -775,6 +785,7 @@ def assemble(args: argparse.Namespace) -> tuple[Path, Path, Path]:
         for filename in PACKAGED_ACCELERATORS:
             copy_file(native_components_dir / filename, packaged_native / filename,
                       f"packaged accelerator {filename}")
+
 
         validate_appdir_paths(appdir)
         manifest = {
@@ -969,13 +980,13 @@ def self_check() -> None:
             "libnarwhal_selection_core.so", "narwhal-converter-supervisor",
             "narwhal-cdr-multiversion", "narwhal-document-core", "narwhal-welcome",
             "libnarwhal_automation.so", "narwhal-automation",
-            "libnarwhal_application_core.so",
+            "libnarwhal_application_core.so", "libnarwhal_ui_core.so",
         ):
             raise ReleaseError("self-check found an incomplete native component set")
         if PACKAGED_ACCELERATORS != (
             "libnarwhal_geometry_core.so", "libnarwhal_platform_core.so",
             "libnarwhal_pure_core.so", "libnarwhal_selection_core.so",
-            "libnarwhal_application_core.so",
+            "libnarwhal_application_core.so", "libnarwhal_ui_core.so",
         ) or {name: abi for name, (_symbol, abi) in NATIVE_LIBRARY_ABIS.items()} != {
             "libnarwhal_application_core.so": 1,
             "libnarwhal_automation.so": 1,

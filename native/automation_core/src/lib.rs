@@ -327,6 +327,44 @@ mod v4_tests {
                 "bridge_frame_limit"
             );
             let request: Request = serde_json::from_slice(&line).expect("bridge_request");
+            // Explicit test-process control, not a normal ABI/JSON operation. It
+            // drives real expiry logic without a five-minute GUI test sleep.
+            let control = std::str::from_utf8(&request.data)
+                .ok()
+                .and_then(|text| crate::json::strict_json(text).ok());
+            if let Some(control) = control.filter(|v| v["op"] == "fixture_advance_review_ms") {
+                let result = (|| {
+                    if control.as_object().is_none_or(|map| map.len() != 2) {
+                        return Err("fixture_clock_request");
+                    }
+                    let delta = control["delta_ms"]
+                        .as_u64()
+                        .ok_or("fixture_clock_request")?;
+                    let mut sessions = SESSIONS
+                        .get()
+                        .ok_or("unknown_session")?
+                        .lock()
+                        .map_err(|_| "session_lock")?;
+                    sessions
+                        .items
+                        .get_mut(&request.handle)
+                        .ok_or("unknown_session")?
+                        .advance_review_fixture_clock(delta)
+                })();
+                let data = match result {
+                    Ok(()) => json!({"status":"fixture_clock_advanced"}),
+                    Err(code) => json!({"status":"failed","code":code}),
+                }
+                .to_string();
+                writeln!(
+                    writer,
+                    "\nNARWHAL_V4_PUBLISHER_JSON:{}",
+                    json!({"size":data.len(),"data":data})
+                )
+                .unwrap();
+                writer.flush().unwrap();
+                continue;
+            }
             let size = unsafe {
                 narwhal_workflow_json(
                     request.handle,
@@ -341,7 +379,7 @@ mod v4_tests {
                 let value: Value = serde_json::from_str(data).unwrap();
                 if value["status"] == "created" {
                     // Creation, parsing and binding validation above are the ordinary flow.
-                    // This is the only fixture intervention; no accepted calls or receipts.
+                    // Test-only catalog admission; no accepted calls or receipts are injected.
                     let handle = value["handle"].as_u64().unwrap();
                     SESSIONS
                         .get()

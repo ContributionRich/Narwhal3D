@@ -14,6 +14,7 @@ import tempfile
 import zipfile
 
 from release_policy import validate_preview_version
+from build_linux_native import UI_CORE_EXPORTS, UI_CORE_IDENTITY, UI_CORE_SOURCE, verify_ui_core_source
 
 PRODUCT = "Narwhal 3D"
 PLATFORM = "windows-x86_64"
@@ -31,7 +32,10 @@ APPLICATION_CORE_EXPORTS = (
 APPLICATION_CORE_ADJACENT = "app/narwhal3d/native/narwhal_application_core.dll"
 APPLICATION_CORE_LICENSE = "licenses/application_core-OPENNURBS.txt"
 APPLICATION_CORE_SOURCE = "app/runtime/windows-x86_64/bin/application-core-source.json"
+UI_CORE_ADJACENT = "app/narwhal3d/native/narwhal_ui_core.dll"
+UI_CORE_SOURCE_PATH = "app/runtime/windows-x86_64/bin/" + UI_CORE_SOURCE
 NATIVE_COMPONENT_PATHS = {
+    "narwhal_ui_core.dll": "app/runtime/windows-x86_64/bin/narwhal_ui_core.dll",
     "narwhal_application_core.dll": "app/runtime/windows-x86_64/bin/narwhal_application_core.dll",
     "narwhal_automation.dll": "app/runtime/windows-x86_64/bin/narwhal_automation.dll",
     "narwhal_cdr_core.dll": "app/runtime/windows-x86_64/bin/narwhal_cdr_core.dll",
@@ -95,6 +99,8 @@ REQUIRED = {
     "app/runtime/windows-x86_64/bin/narwhal-cdr-multiversion.exe",
     "app/runtime/windows-x86_64/bin/narwhal-document-core.exe",
     *NATIVE_COMPONENT_PATHS.values(),
+    UI_CORE_ADJACENT,
+    UI_CORE_SOURCE_PATH,
     APPLICATION_CORE_ADJACENT,
     APPLICATION_CORE_SOURCE,
     "app/" + APPLICATION_CORE_LICENSE,
@@ -103,6 +109,7 @@ REQUIRED = {
 SOURCE_ROOTS = ("narwhal3d", "launch", "licenses")
 SOURCE_FILES = ("LICENSE", "THIRD_PARTY_NOTICES", "CHANGELOG.md", "STATUS.md")
 GENERATED_PACKAGE_FILES = {
+    "narwhal3d/native/narwhal_ui_core.dll",
     "narwhal3d/native/narwhal_application_core.dll",
     "narwhal3d/native/narwhal_geometry_core.dll",
     "narwhal3d/native/narwhal_platform_core.dll",
@@ -380,6 +387,38 @@ def metadata_version(site: Path, distribution: str) -> str | None:
     return None
 
 
+def verify_ui_core_identity(path: Path) -> dict[str, object]:
+    # Static cross-host evidence only; State88 is executed by the Windows build
+    # probe and bound through the source receipt, not inferred from PE opcodes.
+    identity = inspect_pe_dll(path, constant_exports={
+        "narwhal_editor_abi": 1, "narwhal_popup_abi": 1,
+    })
+    if identity["exports"] != UI_CORE_EXPORTS:
+        raise VerificationError("Windows ui-core lacks the exact editor/popup ABI exports")
+    return identity
+
+
+def verify_ui_core_copies(root: Path) -> None:
+    runtime = root / NATIVE_COMPONENT_PATHS["narwhal_ui_core.dll"]
+    adjacent = root / UI_CORE_ADJACENT
+    for path in (runtime, adjacent):
+        if not path.is_file() or path.is_symlink():
+            raise VerificationError(f"missing regular ui-core DLL: {path}")
+    if sha256(runtime) != sha256(adjacent):
+        raise VerificationError("ui-core runtime/adjacent copies differ")
+
+
+def ui_core_record(root: Path, source: Path) -> dict:
+    verify_ui_core_copies(root)
+    library = root / NATIVE_COMPONENT_PATHS["narwhal_ui_core.dll"]
+    try:
+        verify_ui_core_source(library.parent, source, library.name)
+    except ValueError as error:
+        raise VerificationError(str(error)) from error
+    identity = verify_ui_core_identity(library)
+    return {**UI_CORE_IDENTITY, "machine": identity["machine"]}
+
+
 def verify_application_core_identity(path: Path) -> dict[str, object]:
     identity = inspect_pe_dll(path, constant_exports={
         "narwhal_session_abi": APPLICATION_CORE_ABI,
@@ -484,6 +523,10 @@ def verify_directory(root: Path, args: argparse.Namespace) -> None:
                        b"Update ZIP expands beyond the safe limit")
             if record.get("launch_contract") != 1 or not all(marker in data for marker in markers):
                 raise VerificationError("Windows native welcome lacks its launch/request contract")
+        if filename == "narwhal_ui_core.dll":
+            expected_ui = ui_core_record(root, Path(__file__).resolve().parents[1])
+            if any(record.get(key) != value for key, value in expected_ui.items()):
+                raise VerificationError("Windows ui-core manifest identity differs")
         if filename == "narwhal_application_core.dll":
             identity = verify_application_core_identity(path)
             if (record.get("abi") != APPLICATION_CORE_ABI

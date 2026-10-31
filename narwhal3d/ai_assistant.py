@@ -242,6 +242,8 @@ def connection_label(state: AssistantState) -> str:
         return 'Sending...'
     if state.status == 'awaiting_approval':
         return 'Awaiting your approval'
+    if state.status == 'awaiting_review':
+        return 'Awaiting your review'
     if state.status == 'error':
         return 'Request failed'
     key = (metadata_permission(state.provider), state.provider.model)

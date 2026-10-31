@@ -1,4 +1,4 @@
-"""Text-editing model for GPU-drawn text boxes (pure Python, no bpy).
+"""Shared text editor with persistent Rust ownership and complete Python fallback (no bpy).
 
 This module provides caret placement by click (`index_at`), selection by
 drag or shift+keys (`TextField.anchor` / `select=True`), and the standard
@@ -158,6 +158,27 @@ class TextField:
             if nl != -1:
                 stop = nl
         self.set_caret(stop, select)
+
+
+# Keep the complete compatibility model for missing libraries and Python values
+# outside the typed editor domain. Layout/font callbacks remain Python-owned.
+_LegacyTextField = TextField
+if __package__:
+    from .native_textfield import facade as _facade
+else:
+    # File-path consumers (including the existing pure test harness) have no package.
+    import importlib.util as _importlib_util
+    import pathlib as _pathlib
+    import sys as _sys
+    _name = "_narwhal_native_textfield"
+    if _name not in _sys.modules:
+        _spec = _importlib_util.spec_from_file_location(
+            _name, _pathlib.Path(_LegacyTextField.__init__.__code__.co_filename).with_name("native_textfield.py"))
+        _module = _importlib_util.module_from_spec(_spec)
+        _sys.modules[_name] = _module
+        _spec.loader.exec_module(_module)
+    _facade = _sys.modules[_name].facade
+TextField = _facade(_LegacyTextField)
 
 
 # -- layout helpers (multi-line drawing) --------------------------------------

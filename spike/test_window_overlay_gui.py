@@ -235,13 +235,15 @@ def run():
                         {(cx+dx, y) for y in range(hy[0]-pad, hy[1]+pad+1) for dx in (-25, 0, 25)})
 
         def open_popup():
-            model = shell_popup.open([{'label': '', 'action': 'fixture'} for _ in range(12)],
-                                     (cx, cy), 'Overlay seam regression', lambda *_: None)
+            rows = [{'label': '', 'action': 'fixture'} for _ in range(12)]
+            title = 'Overlay seam regression across both viewport boundaries'
+            model = shell_popup.open(rows, (cx, cy), title, lambda *_: None)
             panel = model.panels[0]
-            panel.width = max(200, panel.width)
+            width = panel.rect[2] - panel.rect[0]
             height = panel.rect[3] - panel.rect[1]
-            model.anchor = (cx-panel.width/2, cy+height/2+shell_popup.ANCHOR_GAP*s)
-            model.layout()
+            anchor = (cx-width/2, cy+height/2+shell_popup.ANCHOR_GAP*s)
+            model = shell_popup.open(rows, anchor, title, lambda *_: None)
+            panel = model.panels[0]
             check(all(panel.rect[0]+pad < x < panel.rect[2]-pad and
                       panel.rect[1]+pad < y < panel.body[3]-pad for x, y in points),
                   'popup blank body spans both seams and active outline')

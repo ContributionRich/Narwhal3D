@@ -133,6 +133,9 @@ def native_records(package: Path, source_root: Path | None = None) -> dict[str, 
             if not all(marker in data for marker in markers):
                 raise AssemblyError("Windows native welcome lacks its launch/request contract")
             record["launch_contract"] = 1
+        elif name == "narwhal_ui_core.dll":
+            record.update(verifier.ui_core_record(
+                package, source_root or Path(__file__).resolve().parents[1]))
         elif name == "narwhal_application_core.dll":
             identity = verifier.verify_application_core_identity(path)
             record.update({"abi": verifier.APPLICATION_CORE_ABI,

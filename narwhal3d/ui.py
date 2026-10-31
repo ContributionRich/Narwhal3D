@@ -5706,6 +5706,9 @@ def _ai_transcript_event(event):
     """Transcript browsing must never leak wheel/key input into CAD commands."""
     if not ai_panel_open() or event.value not in ('PRESS', 'REPEAT'):
         return False
+    if event.type == 'ESC' and _ai.get('action_pending') is not None:
+        _ai_decide_action_review(False, _ai.get('review_drawn_pending'))
+        return True
     lay = _ai.get('lay')
     if lay is None:
         return False
@@ -5819,6 +5822,40 @@ def _draw_ai_transcript(shader, rect, st, sc):
                          thumb_y + thumb_h, 1.5 * sc, design.rgb01(design.BORDER_STRONG))
 
 
+def _ai_draw_action_review(shader, rect, sc):
+    from . import ai_action_review
+    import gpu
+    pending = _ai.get('action_pending')
+    if pending is None:
+        return
+    key = (id(pending), (pending['remaining_ms'] + 999) // 1000, tuple(rect), sc)
+    if _ai.get('review_layout_key') != key:
+        _ai['review_view'] = ai_action_review.layout(pending['review'], pending['remaining_ms'], rect,
+                                                    _bug_measure(11 * sc), sc)
+        _ai['review_layout_key'] = key
+    view = _ai['review_view']
+    # The click target is the review that was actually painted, not whatever
+    # sibling becomes pending after a queued click resolves the previous action.
+    _ai['review_drawn_pending'] = pending
+    old_clip = gpu.state.scissor_get()
+    gpu.state.scissor_set(int(rect[0]), int(rect[1]), max(0,int(rect[2]-rect[0])), max(0,int(rect[3]-rect[1])))
+    try:
+        shader.bind()
+        _draw_round_rect(shader, *rect, 7*sc, design.rgb01(design.FIELD_BG), design.rgb01(design.ACCENT))
+        if view['fits']:
+            for i, line in enumerate(view['lines']):
+                _draw_text(view['x'], view['top']-(i+1)*view['line_h'], line, 11*sc, design.rgb01(design.TEXT))
+            for key, label in (('approve','Approve once'),('reject','Reject')):
+                button = view[key]
+                shader.bind()
+                _draw_round_rect(shader, *button, 5*sc, design.rgb01(design.CHIP_BG), design.rgb01(design.BORDER_STRONG))
+                _draw_centered_panel_text(button, label, 11*sc, design.rgb01(design.TEXT))
+        else:
+            _draw_text(view['x'], view['top']-20*sc, 'Enlarge panel to review.', 11*sc, design.rgb01(design.TEXT))
+    finally:
+        gpu.state.scissor_set(*old_clip)
+
+
 def _draw_ai_panel(shader, region, box):
     import gpu
 
@@ -5857,7 +5894,10 @@ def _draw_ai_panel(shader, region, box):
                        fs - 1, muted)
 
 
-        _draw_ai_transcript(shader, lay['transcript'], st, sc)
+        if _ai.get('action_pending') is not None:
+            _ai_draw_action_review(shader, lay['transcript'], sc)
+        else:
+            _draw_ai_transcript(shader, lay['transcript'], st, sc)
 
         input_box = lay["input"]
         if input_box[3] - input_box[1] >= 34 * sc:
@@ -5905,6 +5945,8 @@ def _draw_ai_panel(shader, region, box):
             _draw_round_rect(shader, *rect, 6 * sc, blue if button_id == "send" else pale,
                              blue if button_id == "send" else design.rgb01(design.BORDER))
             label = {"send": "Send", "new": "New Chat", "settings": "Settings"}[button_id]
+            if button_id == 'send' and (st.status == 'sending' or _ai.get('action_pending') is not None):
+                label = 'Cancel'
             _draw_centered_panel_text(rect, label, fs,
                        design.rgb01(design.BAR_TEXT_STRONG) if button_id == "send" else ink)
 
@@ -5912,6 +5954,7 @@ def _draw_ai_panel(shader, region, box):
         status_text = (st.error or {
             "connected": "Selection included automatically · Box creation needs approval",
             "sending": "Waiting for the provider...",
+            "awaiting_review": "Review one action above. Esc rejects; Cancel abandons the request.",
         }.get(st.status, "Box creation needs approval · Other edits unavailable"))
         for index, line in enumerate(bugreport.wrap(
                 status_text, status[2] - status[0],
@@ -5937,7 +5980,8 @@ def _ai_invalidate(reason="cancelled"):
         # Do not let that failure preserve a grant/worker queue during teardown.
         pass
     finally:
-        for key in ("transport_output", "transport_thread", "read_grant", "consent_scope", "box_pending"):
+        for key in ("transport_output", "transport_thread", "read_grant", "consent_scope", "box_pending",
+                            "action_pending", "review_batch", "review_view", "review_drawn_pending", "review_layout_key"):
             _ai.pop(key, None)
 
 
@@ -6030,7 +6074,168 @@ def _ai_start_turn(prepared):
     worker.start()
 
 
+def _ai_show_plan_result(result):
+    from . import ai_action_review
+    text = ai_action_review.plan_text(result.get('output', {}))
+    if text:
+        _ai['state'].add_message('status', text)
+
+
+def _ai_check_review_batch(batch):
+    if batch is not _ai.get('review_batch'):
+        raise ai_assistant.WorkflowUnavailable('review_batch_stale')
+    scope = _ai_scope()
+    if (batch is not _ai.get('review_batch') or scope != batch['scope']
+            or _ai['state'].extra.get('workflow') is not batch['workflow']):
+        raise ai_assistant.WorkflowUnavailable('review_scope_changed')
+    return scope
+
+
+def _ai_begin_review_batch(workflow, outcome, document_context):
+    scope = _ai_scope()
+    if scope[0] != document_context or _ai['state'].extra.get('workflow') is not workflow:
+        raise ai_assistant.WorkflowUnavailable('review_scope_changed')
+    batch = {'workflow':workflow, 'token':outcome['token'], 'calls':outcome['response']['tool_calls'],
+             'scope':scope, 'results':[], 'next':0}
+    _ai['review_batch'] = batch
+    return _ai_advance_review_batch(batch)
+
+
+def _ai_advance_review_batch(batch):
+    from .automation_tools import ApplicationReader
+    from . import ai_primitives, ai_box
+    scope = _ai_check_review_batch(batch)
+    workflow = batch['workflow']
+    reader = ApplicationReader(app_state, os.environ.get('NARWHAL3D_VERSION') or 'unknown')
+    box_count = sum(call['name'] == 'narwhal_create_box' for call in batch['calls'])
+    while batch['next'] < len(batch['calls']):
+        call = batch['calls'][batch['next']]
+        if call['name'] in ('narwhal_create_sphere','narwhal_create_cylinder','narwhal_create_cone'):
+            try:
+                review = workflow.stage_accepted_review(batch['token'], call['id'], scope[0],
+                            ai_primitives.context(app_state, scope[0]))['review']
+            except ai_assistant.WorkflowUnavailable:
+                result = workflow.accepted_review_result(batch['token'], call['id'], scope[0])['result']
+                from . import ai_action_review
+                _ai['state'].add_message('status', ai_action_review.outcome_text(result))
+                batch['results'].append(result); batch['next'] += 1
+                continue
+            pending = {'batch':batch, 'review':review, 'remaining_ms':review['remaining_ms'],
+                       'index':len(batch['results']), 'deciding':False}
+            batch['results'].append(None)
+            batch['next'] += 1
+            _ai['action_pending'] = pending
+            _ai['state'].status = 'awaiting_review'
+            _ai['state'].focus = False
+            _tag_redraw_bands()
+            return False
+        if call['name'] == 'narwhal_create_box':
+            if box_count > 1:
+                result = {'call_id':call['id'], 'is_error':True, 'output':{'code':'one_box_per_approval_request'}}
+            else:
+                proposal = workflow.propose_box(batch['token'], call['id'], scope[0], ai_box.context(app_state, scope[0]))['proposal']
+                _ai['box_pending'] = {'workflow':workflow, 'proposal':proposal, 'scope':scope, 'token':batch['token'],
+                    'index':len(batch['results']), 'results':batch['results'], 'call_id':call['id'], 'batch':batch}
+                batch['results'].append(None); batch['next'] += 1
+                _ai['state'].status = 'awaiting_approval'
+                bpy.ops.narwhal.ai_box_approval('INVOKE_DEFAULT')
+                return False
+        else:
+            try:
+                result = workflow.read_tool_result(batch['token'], call['id'], reader, scope[0])
+            except ai_assistant.WorkflowUnavailable as exc:
+                if str(exc) != 'proposal_requires_review':
+                    raise
+                proposal = workflow.propose_circle(batch['token'], call['id'], scope[0])
+                workflow.review_proposal(proposal['proposal'], scope[0], accepted=False)
+                result = {'call_id':call['id'], 'is_error':True, 'output':{'code':'proposal_only_dispatch_disabled','dispatch_enabled':False}}
+                _ai['state'].add_message('status', 'Circle proposal only; execution is not implemented.')
+        _ai_show_plan_result(result)
+        batch['results'].append(result); batch['next'] += 1
+    _ai_check_review_batch(batch)
+    workflow.record_results(batch['token'], batch['results'], scope[0])
+    _ai.pop('review_batch', None)
+    return True
+
+
+def _ai_resume_review_batch(batch):
+    try:
+        if _ai_advance_review_batch(batch):
+            _ai_start_turn(batch['workflow'].prepare(batch['scope'][0], continuation=True))
+    except Exception:
+        _ai_invalidate('review_continuation_failed')
+        _ai['state'].status = 'error'
+        _ai['state'].error = 'Review continuation failed. Inspect document and native status before retrying.'
+        _ai['state'].add_message('status', _ai['state'].error)
+
+
+def _ai_finish_action_review(pending, result):
+    from . import ai_action_review
+    if pending is not _ai.get('action_pending'):
+        return False
+    batch = pending['batch']
+    _ai_check_review_batch(batch)
+    _ai.pop('action_pending', None)
+    batch['results'][pending['index']] = result  # Native canonical result, unchanged.
+    _ai['state'].add_message('status', ai_action_review.outcome_text(result))
+    _tag_redraw_viewports()
+    _ai_resume_review_batch(batch)
+    _tag_redraw_bands()
+    return True
+
+
+def _ai_decide_action_review(accepted, pending):
+    from . import ai_primitives
+    if pending is None or pending is not _ai.get('action_pending') or pending['deciding']:
+        return False
+    pending['deciding'] = True
+    try:
+        batch = pending['batch']; scope = _ai_check_review_batch(batch); workflow = batch['workflow']
+        review = pending['review']; token = review['token']
+        try:
+            decision = workflow.decide_accepted_review(token, review['action'], scope[0],
+                        ai_primitives.context(app_state, scope[0]), accepted=accepted)
+        except ai_assistant.WorkflowUnavailable:
+            # Expiry/stale supported pins may already have a canonical terminal result.
+            result = workflow.accepted_review_result(token['owner'], token['call_id'], scope[0])['result']
+        else:
+            if decision['state'] == 'approved':
+                def unchanged_scope():
+                    _ai_check_review_batch(batch)
+                    if pending is not _ai.get('action_pending'):
+                        raise ai_assistant.WorkflowUnavailable('review_stale')
+                result = ai_primitives.publish_accepted_review(app_state, workflow, token, scope[0], unchanged_scope)
+            else:
+                result = workflow.accepted_review_result(token['owner'], token['call_id'], scope[0])['result']
+        return _ai_finish_action_review(pending, result)
+    except Exception:
+        if pending is _ai.get('action_pending'):
+            _ai_invalidate('review_failed')
+            _ai['state'].status = 'error'
+            _ai['state'].error = 'Review stopped; publication outcome unavailable. Inspect the document. No automatic retry.'
+            _ai['state'].add_message('status', _ai['state'].error)
+        return False
+
+
+def _ai_poll_action_review(pending):
+    from . import ai_primitives
+    if pending is not _ai.get('action_pending') or pending['deciding']:
+        return
+    batch = pending['batch']; scope = _ai_check_review_batch(batch); workflow = batch['workflow']
+    token = pending['review']['token']
+    state = workflow.accepted_review_state(token['owner'], token['call_id'], scope[0])
+    pending['remaining_ms'] = state['remaining_ms']
+    if state['state'] != 'awaiting_human':
+        result = workflow.accepted_review_result(token['owner'], token['call_id'], scope[0])['result']
+        _ai_finish_action_review(pending, result)
+    elif ai_primitives.context(app_state, scope[0]) != pending['review']['expected']:
+        _ai_decide_action_review(False, pending)
+
+
 def _ai_read_results(workflow, outcome, document_context):
+    if any(call['name'] in ('narwhal_create_sphere','narwhal_create_cylinder','narwhal_create_cone')
+           for call in outcome['response']['tool_calls']):
+        return _ai_begin_review_batch(workflow, outcome, document_context)
     from .automation_tools import ApplicationReader
     reader = ApplicationReader(app_state, os.environ.get("NARWHAL3D_VERSION") or "unknown")
     results = []
@@ -6068,6 +6273,7 @@ def _ai_read_results(workflow, outcome, document_context):
             workflow.review_proposal(proposal["proposal"], document_context, accepted=False)
             result = {"call_id": call["id"], "is_error": True,
                       "output": {"code": "proposal_only_dispatch_disabled", "dispatch_enabled": False}}
+        _ai_show_plan_result(result)
         results.append(result)
     if box_pending is not None:
         _ai['box_pending'] = box_pending
@@ -6104,6 +6310,10 @@ def _ai_complete_box(accepted, pending):
         return False
     _ai.pop('box_pending', None)
     pending['results'][pending['index']] = result
+    if pending.get('batch') is not None:
+        _ai_resume_review_batch(pending['batch'])
+        _tag_redraw_bands()
+        return True
     try:
         workflow.record_results(pending['token'], pending['results'], scope[0])
         _ai_start_turn(workflow.prepare(scope[0], continuation=True))
@@ -6154,6 +6364,10 @@ def _ai_poll_transport():
         if workflow is None:
             _tag_redraw_bands()
             return None
+        if _ai.get('action_pending') is not None:
+            _ai_poll_action_review(_ai['action_pending'])
+            _tag_redraw_bands()
+            return 0.1 if st.extra.get('workflow') is not None else None
         if workflow.poll_timeout()["status"] == "timeout":
             _ai.pop("transport_output", None)
             _ai.pop("transport_thread", None)
@@ -6221,6 +6435,8 @@ def _ai_selection_context(scope):
 def _ai_send():
     st = _ai["state"]
     scope = _ai_scope()
+    if _ai.get('action_pending') is not None:
+        return 'AI Assistant: approve, reject or cancel the pending review first'
     if _ai.get('box_pending') is not None:
         return 'AI Assistant: approve or cancel the pending box first'
     if st.status == "sending":
@@ -6270,6 +6486,13 @@ def ai_panel_click(win_x, win_y, shift=False):
     x, y = win_x - rx, win_y - ry
     hit = ai_assistant.panel_hit(lay, x, y)
     st = _ai["state"]
+    if _ai.get('action_pending') is not None and _inside_box(x, y, lay['transcript']):
+        view = _ai.get('review_view') or {}
+        for key in ('approve','reject'):
+            if view.get(key) is not None and _inside_box(x, y, view[key]):
+                _ai_decide_action_review(key == 'approve', _ai.get('review_drawn_pending'))
+                return 'review:' + key
+        return 'review'
     _ai['chat_focus'] = _inside_box(x, y, lay['transcript'])
     if _ai['chat_focus']:
         st.focus = False
@@ -6291,6 +6514,9 @@ def ai_panel_click(win_x, win_y, shift=False):
         _ai['chat_offset'] = 0
     elif ident == "settings":
         bpy.ops.narwhal.ai_settings("INVOKE_DEFAULT")
+    elif ident == 'send' and (st.status == 'sending' or _ai.get('action_pending') is not None):
+        _ai_invalidate('cancelled')
+        st.add_message('status', 'Request cancelled. Physical HTTP cancellation is not guaranteed; no automatic retry.')
     else:
         _ai_send()
     _tag_redraw_bands()
@@ -14153,7 +14379,10 @@ def warm_geometry_kernel():
     st["called"] = True
     started = time.perf_counter()
     try:
-        st["ready"] = bridge._occt() is not None
+        backend = bridge._occt()
+        st["ready"] = backend is not None and backend.available()
+        if not st["ready"]:
+            st["error"] = "OCCT backend unavailable"
     except Exception as e:  # noqa: BLE001
         st["error"] = repr(e)
         st["ready"] = False
@@ -16067,7 +16296,7 @@ def select_control_point(hit, shift=False, ctrl=False):
     return sorted(_selected_cps)
 
 
-def rebuild_display_keeping_selection():
+def rebuild_display_keeping_selection(changes=None):
     """`ctx.rebuild_display`, but the SELECTION survives it.
 
     `rebuild_display` deletes and recreates Blender objects, and newly created objects
@@ -16093,7 +16322,8 @@ def rebuild_display_keeping_selection():
         active_name = active.name if active is not None else None
     except Exception:  # noqa: BLE001
         keep, active_name = [], None
-    ctx.rebuild_display()
+    if changes is None or not bridge.refresh_display_objects(ctx, changes):
+        ctx.rebuild_display()
     if not keep:
         return 0
     try:
@@ -22773,6 +23003,7 @@ def _extrude_commit(st):
         return f"Gumball extrude: nothing was extruded -- {st.get('ext_why') or 'no input'}"
     ctx = app_state.ctx
     made = []
+    replaced = {}
     for name, part, new in cands:
         if part is not None:
             fobj = _document_object(name)
@@ -22780,11 +23011,13 @@ def _extrude_commit(st):
                 continue
             ctx.note_change("Gumball extrude")
             app_state.model.replace_geometry(fobj.Attributes.Id, new)
+            replaced[str(fobj.Attributes.Id)] = name
             made.append(name)
         else:
             _, display = ctx.add_geometry(new, "Extrusion")
             made.append(display)
-    rebuild_display_keeping_selection()
+    if replaced:
+        rebuild_display_keeping_selection({'removed': replaced, 'added': list(replaced)})
     invalidate_snap_cache()
     clear_subobject_selection()
     return f"Gumball: extruded {st['total']:g} -> {', '.join(made)}"

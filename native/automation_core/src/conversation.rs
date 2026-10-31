@@ -372,6 +372,22 @@ impl Conversation {
         catalog::validate(call)
     }
     #[cfg(test)]
+    pub(crate) fn advance_review_fixture_clock(
+        &mut self,
+        delta_ms: u64,
+    ) -> Result<(), &'static str> {
+        if delta_ms > 3_600_000 {
+            return Err("fixture_clock_limit");
+        }
+        let now = self
+            .review_clock
+            .now_ms()
+            .checked_add(delta_ms)
+            .ok_or("fixture_clock_limit")?;
+        self.review_clock.set_ms(now);
+        Ok(())
+    }
+    #[cfg(test)]
     pub(crate) fn enable_primitive_fixture_catalog(&mut self) {
         assert_eq!(self.turns, 0);
         self.fixture_primitives = true;
@@ -3023,6 +3039,15 @@ mod tests {
                 );
             }
         }
+    }
+    #[test]
+    fn v7_review_clock_fixture_has_a_hard_bound() {
+        let mut c = Conversation::new(7, binding()).unwrap();
+        assert_eq!(
+            c.advance_review_fixture_clock(3_600_001),
+            Err("fixture_clock_limit")
+        );
+        assert!(c.advance_review_fixture_clock(3_600_000).is_ok());
     }
     #[test]
     fn stale_reset_config_document_and_cancel() {

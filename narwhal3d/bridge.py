@@ -4193,6 +4193,14 @@ def move_subobject(geom, kind, sub_id, vector, *, live=False):
     if i < 1 or i > len(table):
         raise SubObjectError(f"{kind} {i} is out of range; this solid has {len(table)} "
                              f"{kind}s numbered 1..{len(table)}")
+    if isinstance(recipe, dict):
+        # A planar source need not stay planar after editing. Try the certified native
+        # engine before the planar-only compatibility path, regardless of recipe family.
+        native_result = _move_modified_box_subobject(
+            geom, shape, kind, i, vector, recipe, base, occt,
+            live=live, native_only=True)
+        if native_result is not None:
+            return native_result
     if kind == "face":
         moved = {j for loop in faces[i - 1] for j in loop}
     else:

@@ -21,6 +21,7 @@ import urllib.request
 from build_macos_runtime import inputs as runtime_inputs, BLENDER
 from build_macos_native import source_inputs, COMPONENTS, UNAVAILABLE_COMPONENTS
 from release_policy import validate_preview_version
+from build_linux_native import UI_CORE_IDENTITY, probe_ui_core
 
 MACHO = {b"\xcf\xfa\xed\xfe", b"\xfe\xed\xfa\xcf", b"\xce\xfa\xed\xfe", b"\xfe\xed\xfa\xce",
          b"\xca\xfe\xba\xbe", b"\xbe\xba\xfe\xca", b"\xca\xfe\xba\xbf", b"\xbf\xba\xfe\xca"}
@@ -175,6 +176,27 @@ def verify_application_core(app: Path, python: Path) -> int:
     return 1
 
 
+def stage_ui_core(native_bin: Path, app: Path) -> None:
+    library = native_bin / "libnarwhal_ui_core.dylib"
+    if not library.is_file() or library.is_symlink():
+        raise ValueError(f"missing regular ui-core input: {library}")
+    adjacent = app / "narwhal3d/native"
+    adjacent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(library, adjacent / library.name)
+
+
+def verify_ui_core(app: Path, python: Path) -> dict:
+    library = app / "runtime/macos-arm64/bin/libnarwhal_ui_core.dylib"
+    adjacent = app / "narwhal3d/native" / library.name
+    for path in (library, adjacent, app / "licenses/GPL-3.0-or-later.txt",
+                 app / "licenses/Native-Rust-Dependencies.txt"):
+        if not path.is_file() or path.is_symlink():
+            raise ValueError(f"missing regular ui-core payload: {path}")
+    if sha(library) != sha(adjacent):
+        raise ValueError("ui-core runtime/adjacent copies differ")
+    return probe_ui_core(adjacent, python)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ("source", "runtime", "native", "output"):
@@ -198,6 +220,8 @@ def main() -> None:
         raise ValueError("native component source inputs differ from frozen source")
     if native_receipt.get("unavailable_components") != UNAVAILABLE_COMPONENTS:
         raise ValueError("native component availability differs from the approved Mac policy")
+    if native_receipt.get("ui_core") != UI_CORE_IDENTITY:
+        raise ValueError("native component receipt lacks ui-core editor/popup qualification")
     expected = {name for names in COMPONENTS.values() for name in names}
     if set(native_receipt["components"]) != expected:
         raise ValueError("incomplete native component receipt")
@@ -236,6 +260,7 @@ def main() -> None:
     for name in expected:
         shutil.copy2(native / "bin" / name, native_bin / name)
     stage_application_core(source, native_bin, app)
+    stage_ui_core(native_bin, app)
     interpreters = list(runtime_app.glob("Contents/Resources/**/python/bin/python3.13"))
     if len(interpreters) != 1:
         raise ValueError("runtime lacks one bundled CPython 3.13")
@@ -278,6 +303,7 @@ def main() -> None:
         run("codesign", "--force", "--sign", "-", str(path))
     run("codesign", "--verify", "--deep", "--strict", str(bundle))
     application_core_abi = verify_application_core(app, python)
+    ui_core = verify_ui_core(app, python)
     records = inventory(bundle)
     with tempfile.TemporaryDirectory(prefix="narwhal-dmg-", dir=output) as temporary:
         stage = Path(temporary)
@@ -294,6 +320,8 @@ def main() -> None:
         run("codesign", "--verify", "--deep", "--strict", str(mounted_app))
         verify_application_core(mounted_app / "Contents/Resources/app",
                                 mounted_app / python.relative_to(bundle))
+        verify_ui_core(mounted_app / "Contents/Resources/app",
+                       mounted_app / python.relative_to(bundle))
         banner = run(str(mounted_app / "Contents/MacOS/Narwhal3D"), env=dict(environment, NARWHAL3D_LAUNCHER_TEST="version"), timeout=60)
         if not banner.startswith("Narwhal 3D 5.2.2"):
             raise ValueError("actual DMG launcher failed its runtime version check")
@@ -304,6 +332,7 @@ def main() -> None:
     receipt = {"schema": 1, "source_revision": args.source_revision, "version": args.version,
                "sha256": digest, "size": dmg.stat().st_size, "signing": "ad-hoc, not notarized",
                "actual_dmg_verified": True, "gui_acceptance": False, "inventory": records,
+               "ui_core": ui_core,
                "application_core_abi": application_core_abi,
                "application_core_history_abi": 1,
                "application_core_exports": ["narwhal_history_abi", "narwhal_history_json",

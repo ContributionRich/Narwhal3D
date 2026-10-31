@@ -16,6 +16,8 @@ import sys
 import tempfile
 from typing import Any
 
+from build_linux_native import UI_CORE_IDENTITY, probe_ui_core, inventory as native_source_inventory
+
 from release_policy import (
     MAX_HOST_GLIBC, format_glibc, glibc_versions, scan_runtime_glibc,
     validate_preview_version,
@@ -45,12 +47,12 @@ NATIVE_COMPONENTS = (
     "libnarwhal_selection_core.so", "narwhal-converter-supervisor",
     "narwhal-cdr-multiversion", "narwhal-document-core", "narwhal-welcome",
     "libnarwhal_automation.so", "narwhal-automation",
-    "libnarwhal_application_core.so",
+    "libnarwhal_application_core.so", "libnarwhal_ui_core.so",
 )
 PACKAGED_ACCELERATORS = (
     "libnarwhal_geometry_core.so", "libnarwhal_platform_core.so",
     "libnarwhal_pure_core.so", "libnarwhal_selection_core.so",
-    "libnarwhal_application_core.so",
+    "libnarwhal_application_core.so", "libnarwhal_ui_core.so",
 )
 APPLICATION_CORE_HISTORY_ABI = 1
 APPLICATION_CORE_EXPORTS = (
@@ -120,6 +122,9 @@ REQUIRED_PATHS = {
     "usr/lib/narwhal3d/tools/blender-patched/blender",
     "usr/lib/narwhal3d/tools/blender-patched/5.2/python/bin/python3.13",
     "usr/lib/narwhal3d/tools/blender-patched/.narwhal3d-native-runtime.json",
+    "usr/lib/narwhal3d/runtime/linux-x86_64/bin/libnarwhal_ui_core.so",
+    "usr/lib/narwhal3d/narwhal3d/native/libnarwhal_ui_core.so",
+
     "usr/lib/narwhal3d/runtime/linux-x86_64/bin/libnarwhal_application_core.so",
     "usr/lib/narwhal3d/narwhal3d/native/libnarwhal_application_core.so",
     "usr/lib/narwhal3d/runtime/linux-x86_64/bin/libnarwhal_automation.so",
@@ -529,6 +534,19 @@ def verify_native_manifest(appdir: Path, native_components: object) -> None:
         raise VerificationError("release manifest lacks native welcome launch-contract evidence")
 
 
+def verify_ui_core_manifest(native_components: dict) -> None:
+    """Check UI source/ABI evidence after verify_native_manifest binds both copies."""
+    record = native_components["libnarwhal_ui_core.so"]
+    if any(record.get(key) != value for key, value in UI_CORE_IDENTITY.items()):
+        raise VerificationError("native manifest lacks ui-core editor/popup ABI/State88/export evidence")
+    try:
+        expected = native_source_inventory(Path(__file__).resolve().parents[1], "ui_core")
+        if record.get("source_inputs") != expected:
+            raise ValueError("ui-core manifest source inputs differ")
+    except (OSError, ValueError) as error:
+        raise VerificationError(str(error)) from error
+
+
 def verify_native_library_abis(app_root: Path, python: Path, environment: dict[str, str]) -> None:
     """Execute ABI/export probes against the actual loader slots in the package."""
     native_dir = app_root / NATIVE_COMPONENT_RELATIVE
@@ -646,6 +664,10 @@ def verify_executables_and_imports(appdir: Path) -> None:
         raise VerificationError("executed native version banner differs from provenance")
     verify_native_library_abis(app_root, python, environment)
     try:
+        probe_ui_core(app_root / "narwhal3d/native/libnarwhal_ui_core.so", python, env=environment)
+    except ValueError as error:
+        raise VerificationError(str(error)) from error
+    try:
         completed = subprocess.run(
             [str(multiversion), "--version"], text=True, capture_output=True,
             timeout=30, check=True)
@@ -734,6 +756,7 @@ def verify_appdir(appdir: Path, args: argparse.Namespace) -> None:
     identity = verify_identity(manifest, args)
     native_components = manifest.get("native_components")
     verify_native_manifest(appdir, native_components)
+    verify_ui_core_manifest(native_components)
     if native_components.get("required_glibc") is None:
         raise VerificationError("release manifest lacks native component provenance")
     supervisor_record = native_components.get("narwhal-converter-supervisor")
@@ -872,13 +895,13 @@ def self_check() -> None:
         "libnarwhal_selection_core.so", "narwhal-converter-supervisor",
         "narwhal-cdr-multiversion", "narwhal-document-core", "narwhal-welcome",
         "libnarwhal_automation.so", "narwhal-automation",
-        "libnarwhal_application_core.so",
+        "libnarwhal_application_core.so", "libnarwhal_ui_core.so",
     ):
         raise VerificationError("self-check found an incomplete native component set")
     if PACKAGED_ACCELERATORS != (
         "libnarwhal_geometry_core.so", "libnarwhal_platform_core.so",
         "libnarwhal_pure_core.so", "libnarwhal_selection_core.so",
-        "libnarwhal_application_core.so",
+        "libnarwhal_application_core.so", "libnarwhal_ui_core.so",
     ) or {name: abi for name, (_symbol, abi) in NATIVE_LIBRARY_ABIS.items()} != {
         "libnarwhal_application_core.so": 1,
         "libnarwhal_automation.so": 1,
