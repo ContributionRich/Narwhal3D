@@ -7,23 +7,29 @@ and the two refusal rules:
 ``rgb_to_aci``: exact match -> ``(idx, True)``; anything else -> NEAREST of 1-9
 by Euclidean RGB -> ``(idx, False)``; never returns 0 or 256.
 """
-import importlib.util
+import argparse
+import importlib
 import os
+from pathlib import Path
 import sys
+import types
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+PACKAGE = "narwhal_aci_review"
 
+p = argparse.ArgumentParser()
+p.add_argument("--library", default=os.environ.get("NARWHAL_PURE_CORE"))
+args = p.parse_args()
+if not args.library:
+    p.error("--library or NARWHAL_PURE_CORE is required; native tests may not silently skip")
+if not Path(args.library).is_file():
+    p.error(f"native library not found: {args.library}")
+os.environ["NARWHAL_PURE_CORE"] = str(Path(args.library).resolve())
 
-def _load(name, filename):
-    spec = importlib.util.spec_from_file_location(
-        name, os.path.join(ROOT, "narwhal3d", filename))
-    mod = importlib.util.module_from_spec(spec)
-    sys.modules[name] = mod
-    spec.loader.exec_module(mod)
-    return mod
-
-
-ac = _load("narwhal_aci_colors", "aci_colors.py")
+package = types.ModuleType(PACKAGE)
+package.__path__ = [os.path.join(ROOT, "narwhal3d")]
+sys.modules[PACKAGE] = package
+ac = importlib.import_module(PACKAGE + ".aci_colors")
 
 results = []
 

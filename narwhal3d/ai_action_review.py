@@ -37,8 +37,10 @@ def layout(review, remaining_ms, rect, measure, scale=1.0):
     buttons_fit = max(measure('Approve once'), measure('Reject')) + 4*scale <= button_width
     fits = (len(wrapped)*line_h + 4*padding + button_h <= y1-y0
             and buttons_fit and all(measure(line.rstrip()) <= width for line in wrapped))
+    refusal = 'Widen panel to review.'
+    refusal_lines = [refusal[a:b] for a,b in textfield.wrap_spans(refusal,width,measure)]
     mid = (x0+x1)/2
-    return {'lines':wrapped, 'line_h':line_h, 'x':x0+padding, 'top':y1-padding,
+    return {'refusal_lines':refusal_lines, 'lines':wrapped, 'line_h':line_h, 'x':x0+padding, 'top':y1-padding,
             'fits':fits, 'approve':(x0+padding,y0+padding,mid-3*scale,y0+padding+button_h) if fits else None,
             'reject':(mid+3*scale,y0+padding,x1-padding,y0+padding+button_h) if fits else None}
 

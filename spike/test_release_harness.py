@@ -269,9 +269,17 @@ class HarnessTests(unittest.TestCase):
                         and 'native/geometry_core/Cargo.toml' in args)
         for args in (integration, ['spike/test_surfacing_parallel.py'], ['spike/test_surfacing_probe.py']):
             self.assertLess(commands.index(geometry), commands.index(args))
-        forbidden = {'--mutations', '--timings', 'spike/test_automation_native.py',
+        forbidden = {'--timings', 'spike/test_automation_native.py',
                      'spike/test_automation_startup.py', 'spike/test_automation_live.py'}
         self.assertFalse(any(forbidden.intersection(args) for args in commands))
+        isolated_mutations = {
+            ('-B', 'scripts/check_document_observer.py', '--stage-dev', '--mutations'),
+            ('-B', 'spike/test_document_registry_model.py', '--mutations'),
+            ('-B', 'spike/test_ai_v9_races.py', '--mutations'),
+        }
+        for args in commands:
+            if '--mutations' in args:
+                self.assertIn(tuple(args), isolated_mutations)
         self.assertEqual(self.staged.read_text(), 'preserve the staged product server')
         source = (self.root / 'run_tests.sh').read_text()
         self.assertIn('timeout --kill-after=5s 180s cargo', source)

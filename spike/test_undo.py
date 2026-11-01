@@ -669,24 +669,34 @@ cw.restore(pre)
 check(c_ids["Line"] in doc_state(cw) and cw.object_count() == len(c_ids),
       "changing a wrapper of a deleted object neither crashes nor leaks into the undo")
 
-# the safety net: a change nobody reported is caught by the object count, and a new
-# File3dm is never shared with
-cw.snapshot()
+# Unreported changes now invalidate the native owner rather than silently accepting
+# an untracked state. Explicit observed-state rebuild is the recovery boundary.
+pre_delete = cw.snapshot()
 real_mark = model._mark
 model._mark = lambda *a, **k: None
+refused = False
 try:
     cw.remove_object(c_ids["Pt"])
+    cw.snapshot()
+except RuntimeError as error:
+    refused = 'unmediated_object_index_write' in str(error)
 finally:
     model._mark = real_mark
-cw.snapshot()
-check(cw.last_snapshot[0] == "full",
-      f"an UNREPORTED deletion is caught (count check) and the record copies everything "
-      f"({cw.last_snapshot})")
+check(refused and not cw.object_registry_revision()['authoritative'],
+      'an UNREPORTED deletion invalidates authority instead of publishing a stale snapshot')
+rebuilt = cw.rebuild_object_registry()
+check(c_ids['Pt'] not in rebuilt.by_id and c_ids['Pt'] in pre_delete.by_id,
+      'explicit rebuild records the actual deletion without mutating the earlier snapshot')
+before_swap = cw.snapshot()
 cw._round_trip()
-cw.snapshot()
-check(cw.last_snapshot[0] == "full",
-      f"a replaced File3dm (layer delete's round trip) is never shared with "
-      f"({cw.last_snapshot})")
+swapped = next(iter(cw.file.Objects))
+swapped_id = str(swapped.Attributes.Id)
+old_name = before_swap.by_id[swapped_id]['attrs']['Name']
+swapped.Attributes.Name = 'BackingFileSwapProbe'
+after_swap = cw.snapshot()
+check(after_swap.by_id[swapped_id]['attrs']['Name'] == 'BackingFileSwapProbe'
+      and before_swap.by_id[swapped_id]['attrs']['Name'] == old_name,
+      'replacement backing-file edits are observed; prior immutable entries do not change')
 
 # undo / redo through the real stack, many steps deep, lands on exact states
 hist = HeadlessCtx()

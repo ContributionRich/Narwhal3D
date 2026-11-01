@@ -1,5 +1,7 @@
 //! Persistent, process-local document-metadata authority. See README.md for ABI v1.
 mod history;
+mod object_registry;
+pub mod observation;
 mod ordinal_map;
 mod session;
 mod table;
@@ -197,6 +199,147 @@ pub unsafe extern "C" fn narwhal_history_json(
     let required = bytes.len();
     if required <= capacity {
         // SAFETY: the input borrow ended; bytes owns nonoverlapping storage.
+        unsafe {
+            std::ptr::copy_nonoverlapping(bytes.as_ptr(), output, required);
+        }
+    }
+    required as isize
+}
+
+static OBJECT_REGISTRY: OnceLock<Mutex<object_registry::Registry>> = OnceLock::new();
+
+fn dispatch_objects(input: &[u8], registry: &Mutex<object_registry::Registry>) -> Vec<u8> {
+    let request = match serde_json::from_slice::<object_registry::Request>(input) {
+        Ok(request) => request,
+        Err(e) => return error(wire::error_code(&e)),
+    };
+    let mut bytes = Vec::with_capacity(MIN_OUTPUT_CAPACITY);
+    let reply = match registry.lock() {
+        Ok(mut registry) => registry.execute(request),
+        Err(_) => return error("registry_poisoned"),
+    };
+    match reply {
+        Ok(mut value) => {
+            value["status"] = serde_json::Value::from("ok");
+            serde_json::to_writer(&mut bytes, &value).expect("closed registry reply");
+            bytes
+        }
+        Err(code) => error(code),
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn narwhal_object_registry_abi() -> u32 {
+    1
+}
+
+/// Additive object registry ABI1. Mutations require at least 4096 output bytes;
+/// only read operations may negotiate a larger reply without side effects.
+///
+/// # Safety
+/// Same buffer validity/nonconcurrent-access contract as narwhal_session_json.
+/// No caller pointers are retained. Input and output may overlap.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn narwhal_object_registry_json(
+    input: *const u8,
+    length: usize,
+    output: *mut u8,
+    capacity: usize,
+) -> isize {
+    if output.is_null() || capacity > MAX_OUTPUT_CAPACITY {
+        return -1;
+    }
+    let bytes = contain(|| {
+        if capacity < MIN_OUTPUT_CAPACITY {
+            return error("output_too_small");
+        }
+        if input.is_null() {
+            return error("null_input");
+        }
+        if length > object_registry::MAX_REQUEST {
+            return error("request_too_large");
+        }
+        // SAFETY: checked descriptors plus the caller's readable-buffer contract.
+        let input = unsafe { std::slice::from_raw_parts(input, length) };
+        dispatch_objects(
+            input,
+            OBJECT_REGISTRY.get_or_init(|| Mutex::new(Default::default())),
+        )
+    });
+    let required = bytes.len();
+    if required <= capacity {
+        // SAFETY: source is owned and input borrow ended before this copy.
+        unsafe {
+            std::ptr::copy_nonoverlapping(bytes.as_ptr(), output, required);
+        }
+    }
+    required as isize
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn narwhal_object_observation_abi() -> u32 {
+    1
+}
+
+/// Submit an observation prepare/check/commit header and a binary NWOBS01 batch.
+/// All operations can mutate state (check invalidates on mismatch); never retry an
+/// unknown result. Replies fit4096 bytes. This does not deserialize geometry.
+///
+/// # Safety
+/// All non-null buffers must be valid for their stated sizes during this call;
+/// callers prevent concurrent buffer access. Input/output may overlap. No borrowed
+/// pointers are retained; admitted witnesses are copied into bounded native state.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn narwhal_object_registry_observe(
+    header: *const u8,
+    header_length: usize,
+    observation: *const u8,
+    observation_length: usize,
+    output: *mut u8,
+    capacity: usize,
+) -> isize {
+    if output.is_null() || capacity > MAX_OUTPUT_CAPACITY {
+        return -1;
+    }
+    let bytes = contain(|| {
+        if capacity < MIN_OUTPUT_CAPACITY {
+            return error("output_too_small");
+        }
+        if header.is_null() || observation.is_null() {
+            return error("null_input");
+        }
+        if header_length > object_registry::MAX_REQUEST
+            || observation_length > observation::MAX_BATCH
+        {
+            return error("request_too_large");
+        }
+        // SAFETY: descriptor limits and caller's readable-buffer contract above.
+        let header = unsafe { std::slice::from_raw_parts(header, header_length) };
+        let observation = unsafe { std::slice::from_raw_parts(observation, observation_length) };
+        let request: object_registry::ObservationRequest = match serde_json::from_slice(header) {
+            Ok(request) => request,
+            Err(e) => return error(wire::error_code(&e)),
+        };
+        let mut bytes = Vec::with_capacity(MIN_OUTPUT_CAPACITY);
+        let reply = match OBJECT_REGISTRY
+            .get_or_init(|| Mutex::new(Default::default()))
+            .lock()
+        {
+            Ok(mut registry) => registry.observe(request, observation),
+            Err(_) => return error("registry_poisoned"),
+        };
+        match reply {
+            Ok(mut value) => {
+                value["status"] = serde_json::Value::from("ok");
+                serde_json::to_writer(&mut bytes, &value).expect("closed observation reply");
+                bytes
+            }
+            Err(code) => error(code),
+        }
+    });
+    let required = bytes.len();
+    if required <= capacity {
+        // SAFETY: owned reply, input borrows ended, output validated by caller.
         unsafe {
             std::ptr::copy_nonoverlapping(bytes.as_ptr(), output, required);
         }

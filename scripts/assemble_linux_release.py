@@ -713,6 +713,9 @@ def assemble(args: argparse.Namespace) -> tuple[Path, Path, Path]:
     validate_appimage_runtime(appimage_runtime, artifacts)
     native_records = validate_native_components(
         native_components_dir, document_core_artifacts, runtime_dir / OCCT_LIB_RELATIVE)
+    if (source_root / 'narwhal3d/native_document_observer.py').is_file():
+        from stage_document_observer import validate as validate_observer
+        validate_observer(source_root, native_components_dir, 'linux-x86_64')
 
     try:
         ui_source = verify_ui_core_source(native_components_dir, source_root, "libnarwhal_ui_core.so")
@@ -791,7 +794,10 @@ def assemble(args: argparse.Namespace) -> tuple[Path, Path, Path]:
         for filename in PACKAGED_ACCELERATORS:
             copy_file(native_components_dir / filename, packaged_native / filename,
                       f"packaged accelerator {filename}")
-
+        if (source_root / 'narwhal3d/native_document_observer.py').is_file():
+            from stage_document_observer import stage as stage_observer
+            native_records['document-observer'] = stage_observer(
+                source_root, native_components_dir, app_root, 'linux-x86_64')
 
         validate_appdir_paths(appdir)
         manifest = {

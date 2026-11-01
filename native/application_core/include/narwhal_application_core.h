@@ -33,6 +33,22 @@ ptrdiff_t narwhal_session_json(const uint8_t *input, size_t length,
 uint32_t narwhal_history_abi(void); /* 1 */
 ptrdiff_t narwhal_history_json(const uint8_t *input, size_t length,
                               uint8_t *output, size_t capacity);
+/* Object registry ABI1: additive, no second Undo history. Input <=32 MiB.
+ * Same buffer/minimum-output/no-mutation-retry contract as session ABI1 above.
+ * Geometry remains host-owned. See ../OBJECT_REGISTRY.md for scope and states.
+ */
+uint32_t narwhal_object_registry_abi(void); /* 1 */
+ptrdiff_t narwhal_object_registry_json(const uint8_t *input, size_t length,
+                                      uint8_t *output, size_t capacity);
+/* Additive observation boundary: header is strict JSON prepare/check/commit;
+ * observation is a bounded NWOBS01 binary batch. Every operation may mutate
+ * (check invalidates on mismatch), replies fit4096 bytes, NEVER retry unknown
+ * outcomes. Header <=32 MiB, observation <=128 MiB. Same pointer contract above.
+ */
+uint32_t narwhal_object_observation_abi(void); /* 1 */
+ptrdiff_t narwhal_object_registry_observe(const uint8_t *header, size_t header_length,
+                                         const uint8_t *observation, size_t observation_length,
+                                         uint8_t *output, size_t capacity);
 #ifdef __cplusplus
 }
 #endif

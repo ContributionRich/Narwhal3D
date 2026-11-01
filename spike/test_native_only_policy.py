@@ -211,6 +211,12 @@ class PolicyTests(unittest.TestCase):
                 b'fn reply(handle: u64, subject: &Transcript) -> Reply { todo!() }\n'
                 b'fn store() { let s = Snapshot {\n    subject: handle,\n}; }\n').replace(b'subject', b'owner'),
         }
+        for path in ('native/application_core/src/live_objects.rs',
+                     'native/application_core/src/object_registry.rs',
+                     'native/application_core/src/object_registry_tests.rs',
+                     'native/application_core/tests/object_registry_protocol.rs'):
+            subjects[path] = (b'fn check(subject: u64) {}\nfn close(subject: &Value) {}\n'
+                              b'let r = Request { subject: owner_id };\n').replace(b'subject', b'owner')
         for path, blob in subjects.items():
             with self.subTest(path=path):
                 self.assertEqual(audit.audit_entries({path: ('100644', blob)}, require_manifest=False), [])
@@ -229,6 +235,12 @@ class PolicyTests(unittest.TestCase):
                 b'# with manager() as subject:\n', b'text = "as subject:"\n',
                 b'with manager() as subject:  # subject: private attribution\n    pass\n',
                 b'def unrelated(subject: int):\n    pass\n'),
+            'native/application_core/src/object_registry.rs': (
+                b'// subject: u64\n', b'/* subject: u64 */',
+                b'const NOTE: &str = "subject: private";',
+                b'const NOTE: &str = r#"subject: private"#;',
+                b'fn check(subject: u64) {} // subject: private\n',
+                b'struct Other { subject: Person }'),
             'native/ui_core/src/transcript_ffi.rs': (
                 b'// subject: u64,\n', b'/* struct Snapshot {\n subject: u64,\n} */',
                 b'/* outer /* nested */ struct Snapshot { subject: u64, } */',
@@ -271,7 +283,16 @@ class PolicyTests(unittest.TestCase):
         for marker in ('scripts/check_pure_core.py', 'scripts/check_application_core.py --stage-dev',
                        'export NARWHAL_PURE_CORE=', 'export NARWHAL_APPLICATION_CORE='):
             self.assertLess(text.index(marker), ui)
-        self.assertNotIn('--mutations', text)
+        # Only reviewed isolated drivers may select mutation mode. Do not pass
+        # the flag through generic caller loops or arbitrary harness commands.
+        allowed_mutations = {
+            'run "document observer source gate" "$PYTHON" -B scripts/check_document_observer.py --stage-dev --mutations',
+            'run "live document registry mutations" "$PYTHON" -B spike/test_document_registry_model.py --mutations',
+            'run "AI canonical publisher races and mutations" "$PYTHON" -B spike/test_ai_v9_races.py --mutations',
+        }
+        for line in text.splitlines():
+            if '--mutations' in line:
+                self.assertIn(line.strip(), allowed_mutations)
         self.assertIn('for suite in abi model consumers stress;', text)
         self.assertIn('spike/test_desktop_native_startup.py', text)
         self.assertIn('spike/test_ai_v8_exit.py', text)

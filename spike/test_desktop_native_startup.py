@@ -13,7 +13,8 @@ import unittest
 
 ROOT=Path(__file__).resolve().parents[1]
 SOURCES=('native_textfield','native_popup','command_transcript','native_transcript',
-         'native_document_session','native_history','undo','numparse','native_pure')
+         'native_document_session','native_object_registry','native_document_observer',
+         'native_history','undo','numparse','native_pure')
 
 
 class DesktopNativeStartup(unittest.TestCase):
@@ -33,6 +34,8 @@ class DesktopNativeStartup(unittest.TestCase):
             'libnarwhal_pure_core.so':Path(os.environ.get('NARWHAL_PURE_CORE',ROOT/'native/pure_core/target/x86_64-unknown-linux-gnu/release/libnarwhal_pure_core.so')),
         }
         for name,source in libraries.items():shutil.copy2(source,self.root/'narwhal3d/native'/name)
+        shutil.copytree(ROOT/'artifacts/document-observer/linux-x86_64',
+                        self.root/'narwhal3d/native/document-observer')
         runtime=self.root/'tools/blender-patched/blender'
         python=runtime.parent/'5.2/python/bin/python3.13'
         python.parent.mkdir(parents=True)
@@ -68,6 +71,43 @@ class DesktopNativeStartup(unittest.TestCase):
         self.assertEqual(result.returncode,2,result.stdout+result.stderr)
         self.assertIn('number parser unavailable',result.stderr)
         self.assertFalse(self.started.exists())
+
+    def test_missing_observer_never_launches_graphical_runtime(self):
+        (self.root/'narwhal3d/native/document-observer/_narwhal_document_observer.so').unlink()
+        result=self.run_launcher()
+        self.assertEqual(result.returncode,2,result.stdout+result.stderr)
+        self.assertIn('observer',result.stderr)
+        self.assertFalse(self.started.exists())
+
+    def test_gui_core_receipt_rejects_wrong_binary_and_source(self):
+        import ast
+        import hashlib
+        import json
+        text=(ROOT/'spike/test_ui_core_review_gui.py').read_text()
+        tree=ast.parse(text)
+        function=next(node for node in tree.body if isinstance(node,ast.FunctionDef)
+                      and node.name=='application_core_source_matches')
+        source=ast.get_source_segment(text,function)
+        namespace=dict(Path=Path,hashlib=hashlib,json=json)
+        exec(compile(source,'<GUI core receipt check>','exec'),namespace)
+        verify=namespace['application_core_source_matches']
+        library=self.root/'probe.so';library.write_bytes(b'qualified binary')
+        item=self.root/'input.rs';item.write_bytes(b'qualified source')
+        receipt={'library_sha256':hashlib.sha256(library.read_bytes()).hexdigest(),
+                 'source_inputs':{'input.rs':hashlib.sha256(item.read_bytes()).hexdigest()}}
+        (self.root/'build.json').write_text(json.dumps(receipt))
+        self.assertTrue(verify(self.root,library))
+        library.write_bytes(b'wrong binary')
+        self.assertFalse(verify(self.root,library))
+        mutant=dict(namespace)
+        exec(compile(source.replace("digest == receipt['library_sha256']",'True'),'<receipt mutant>','exec'),mutant)
+        with self.assertRaises(AssertionError):
+            self.assertFalse(mutant['application_core_source_matches'](self.root,library))
+        library.write_bytes(b'qualified binary')
+        item.write_bytes(b'changed source')
+        self.assertFalse(verify(self.root,library))
+        item.write_bytes(b'qualified source')
+        self.assertTrue(verify(self.root,library))
 
     def test_bypass_mutation_is_detected(self):
         (self.root/'narwhal3d/native/libnarwhal_ui_core.so').unlink()

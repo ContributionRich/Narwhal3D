@@ -146,6 +146,9 @@ def download_wheels(source: Path, cache: Path) -> list[Path]:
 
 def stage_application_core(source: Path, native_bin: Path, app: Path) -> None:
     """The session loader uses the adjacent slot, never an optional runtime fallback."""
+    if (source / 'narwhal3d/native_document_observer.py').is_file():
+        from stage_document_observer import validate as validate_observer
+        validate_observer(source, native_bin, 'macos-arm64')
     library = native_bin / "libnarwhal_application_core.dylib"
     license_source = source / "native/application_core/OPENNURBS_LICENSE"
     for path in (library, license_source, app / "licenses/Native-Rust-Dependencies.txt"):

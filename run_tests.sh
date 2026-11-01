@@ -61,8 +61,17 @@ run "Rust pure-core source gate" "$PYTHON" scripts/check_pure_core.py
 PURE_CORE="$ROOT/native/pure_core/target/x86_64-unknown-linux-gnu/release/libnarwhal_pure_core.so"
 export NARWHAL_PURE_CORE="$PURE_CORE"
 run "Rust application-core source gate" "$PYTHON" scripts/check_application_core.py --stage-dev
+run "Rust object-registry compiled mutations" "$PYTHON" -B spike/test_document_registry_mutations.py
+run "Rust observation decoder mutations" "$PYTHON" -B spike/test_document_registry_mutations.py --observation
+run "Rust witnessed-registry mutations" "$PYTHON" -B spike/test_document_registry_mutations.py --witness
+run "Rust live-registry mutations" "$PYTHON" -B spike/test_document_registry_mutations.py --live
+run "Rust shared-witness mutations" "$PYTHON" -B spike/test_document_registry_mutations.py --sharing
 export NARWHAL_APPLICATION_CORE="$ROOT/artifacts/application-core/linux-x86_64/libnarwhal_application_core.so"
 export NARWHAL_HISTORY_CORE="$NARWHAL_APPLICATION_CORE"
+run "document observer packaging contracts" "$PYTHON" -B spike/test_document_observer_package.py
+run "document observer build-gate contracts" "$PYTHON" -B spike/test_document_observer_gate.py
+run "document observer source gate" "$PYTHON" -B scripts/check_document_observer.py --stage-dev --mutations
+run "live document registry mutations" "$PYTHON" -B spike/test_document_registry_model.py --mutations
 
 # UI core source qualification (no deployment).
 UI_CORE_READY=0
@@ -146,6 +155,11 @@ if command -v cargo >/dev/null 2>&1; then
     run "AI canonical replay and bounded display (fixture + normal native)" "$PYTHON" -B spike/test_ai_v8_long_session.py
     run "AI review plan revisions" "$PYTHON" -B spike/test_ai_v8_plans.py
     run "AI native lifecycle" "$PYTHON" -B spike/test_ai_v8_lifetime.py
+    run "AI display eviction and mutations" "$PYTHON" -B spike/test_ai_v9_eviction.py
+    run "AI narrow review refusal and mutations" "$PYTHON" -B spike/test_ai_v9_refusal.py
+    run "AI Unicode input and mutations" "$PYTHON" -B spike/test_ai_v9_unicode.py
+    run "AI provider adverse protocol and mutations" "$PYTHON" -B spike/test_ai_v9_protocol.py --adverse-mutation
+    run "AI canonical publisher races and mutations" "$PYTHON" -B spike/test_ai_v9_races.py --mutations
     run "automation source live bridge (background Blender)" timeout --kill-after=5s 120s "$PYTHON" \
         spike/test_automation_mcp.py --server "$AUTOMATION_SERVER" --live "$BLENDER"
 else
@@ -234,6 +248,9 @@ PURE_SUITES=(
     spike/test_native_cage_safety.py
     spike/test_cage_boundary.py
     spike/test_undo.py
+    spike/test_document_registry_tracking.py
+    spike/test_document_registry_baseline.py
+    spike/test_document_registry_model.py
     spike/test_kernel.py
     spike/test_local_brep_move.py
     spike/test_native_local_brep_replay.py
@@ -472,6 +489,10 @@ if [[ -n "${DISPLAY:-}" || -n "${WAYLAND_DISPLAY:-}" ]]; then
         for close_case in close_review close_request; do
             run "AI actual window close: $close_case" "$PYTHON" -B spike/test_ai_v8_visible.py --launch \
                 --case "$close_case" --ui-library "$UI_CORE_LIBRARY" --ui-sha256 "$UI_CORE_SHA256"
+        done
+        for ai_case in close_replaced_review close_replaced_request open_pending open_request units_pending unsaved_no_dialog resized_focus eviction_visible editor_after_replies invalid_settings sustained_eviction invalid_dimension long_settings_error long_plan_review normal_box_invalid; do
+            run "AI integrated lifecycle: $ai_case" "$PYTHON" -B spike/test_ai_v8_visible.py --launch \
+                --case "$ai_case" --ui-library "$UI_CORE_LIBRARY" --ui-sha256 "$UI_CORE_SHA256"
         done
     fi
     run "typed multi-section Sweep1 live" "$PYTHON" spike/test_sweep1_command_gui.py --launch

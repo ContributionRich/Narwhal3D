@@ -22,7 +22,9 @@ are refused by name.
 ``rgb_to_aci(rgb)`` always returns one of 1-9 (never 0 or 256): an exact
 match gives that index with ``exact=True``; anything else gives the NEAREST
 of 1-9 by Euclidean RGB distance with ``exact=False``, so the caller can say
-the colour was approximated.
+the colour was approximated. The nearest search is computed only by the
+native pure core; there is no Python reference, so a missing native export
+raises ``RuntimeError`` instead of guessing.
 """
 from __future__ import annotations
 
@@ -86,9 +88,12 @@ def rgb_to_aci(rgb):
     """Return ``(index, exact)`` for an RGB colour.
 
     An exact match to one of the nine standard colours gives that index with
-    ``exact=True``; anything else gives the NEAREST of 1-9 (Euclidean RGB)
-    with ``exact=False``.  Never returns 0 or 256.  Raises ``ValueError`` on
-    a structurally invalid ``rgb`` (wrong arity, non-numeric, out of range).
+    ``exact=True`` without a native call.  Anything else gives the NEAREST of
+    1-9 (Euclidean RGB) with ``exact=False``, computed by the native pure core.
+    Never returns 0 or 256.  Raises ``ValueError`` on a structurally invalid
+    ``rgb`` (wrong arity, non-numeric, out of range) before any native call,
+    and ``RuntimeError`` when a non-exact colour needs the native export and it
+    is unavailable, fails or returns an invalid result.
     """
     r, g, b = _validate_rgb(rgb)
     exact = _EXACT_STANDARD.get((r, g, b))
@@ -96,19 +101,8 @@ def rgb_to_aci(rgb):
         return exact, True
     try:
         from . import native_metadata
-    except ImportError:  # direct-file use retains the complete reference implementation
-        pass
-    else:
-        result = native_metadata.rgb_to_aci(r, g, b)
-        if result is not None:
-            return result
-    for idx in range(1, 10):
-        if (r, g, b) == tuple(float(v) for v in _STANDARD[idx]):
-            return idx, True
-    best_idx, best_d = 1, float("inf")
-    for idx in range(1, 10):
-        tr, tg, tb = (float(v) for v in _STANDARD[idx])
-        d = (r - tr) ** 2 + (g - tg) ** 2 + (b - tb) ** 2
-        if d < best_d:
-            best_d, best_idx = d, idx
-    return best_idx, False
+    except ImportError as error:
+        raise RuntimeError(
+            "ACI nearest-colour conversion requires the narwhal3d native ACI support "
+            "(native_metadata); it cannot run as a standalone file") from error
+    return native_metadata.rgb_to_aci(r, g, b)

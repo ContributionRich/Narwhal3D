@@ -1,8 +1,8 @@
-"""Document model: native geometry plus a persistent document-metadata session.
+"""Exact host geometry with Rust-owned document metadata and object registry.
 
-Objects remain in File3dm and exact kernel masters, with Blender display mirrors.
-When application-core is available it owns document user text; File3dm.Strings is
-its compatibility view and serialized projection, not a second editable authority.
+File3dm/OCCT retain geometry. Rust owns membership/order/name/display associations,
+dirty tracking and immutable snapshot plans; Python keeps exact host payloads and
+Blender integration. Required native components fail explicitly when unavailable.
 """
 from __future__ import annotations
 
@@ -73,24 +73,32 @@ class _Snapshot(list):
 #   (MEASURED: `SegmentCurve` is a live view, moving it moves the document curve), a
 #   brep face, a control-point list;
 # * a mutator called on a registered wrapper marks that document object dirty; on
-#   `ObjectAttributes` it marks `self.Id`; the object table's Add*/Delete mark the id.
-#   A wrapper with no registration was never reachable from a document, so changing it
-#   (a command building new geometry) changes no document. `File3dmObjectTable.Add`
+#   live `ObjectAttributes` it uses the registered document root, not just `self.Id`;
+#   table access associates wrappers with their stable File3dm owner. Known detached
+#   attributes cannot impersonate document objects. Unknown provenance remains
+#   conservative, and retained native setters can still bypass these Python hooks.
+#   Unregistered geometry built by a command is detached; unknown attribute views
+#   are handled conservatively rather than assumed detached. `File3dmObjectTable.Add`
 #   COPIES what it is given (MEASURED), so it does not become reachable later either.
 #
-# A snapshot then copies the dirty objects and SHARES every other entry with the previous
-# snapshot; anything it cannot account for (a new File3dm, an unreadable registration,
-# a count that does not add up) falls back to copying everything, exactly as before.
-# Coverage requires every rhino3dm method to be instrumented or known to return only
-# plain values, with undo equality preserved for every kind of change.
+# These are notifications to the Rust journal, not proof that Python interception
+# is complete. At snapshot boundaries the native observer verifies actual object
+# state. Unnotified changes invalidate authority; explicit rebuild is required.
+# Rust selects immutable payload sharing and keeps logical order independently of
+# the physical table's deferred post-Undo normalization.
 # ---------------------------------------------------------------------------
 
 import weakref as _weakref
 
-#: models that track changes (only those holding a snapshot base get marks)
+#: Live models whose Rust-owned journals receive owner-scoped notifications.
 _WATCHERS = _weakref.WeakSet()
 #: id(wrapper) -> (weakref to the wrapper, the File3dmObject it belongs to)
 _PROV = {}
+# Host wrappers are ephemeral; route notifications through their stable File3dm.
+# Weak keys release the file association when the last borrowed wrapper dies.
+_TABLE_FILES = _weakref.WeakKeyDictionary()
+_OBJECT_FILES = _weakref.WeakKeyDictionary()
+_DETACHED_ATTRIBUTES = _weakref.WeakSet()
 #: True once rhino3dm is instrumented; snapshots never share entries otherwise
 _WATCH = {"installed": False, "error": None, "wrapped": 0, "active": 0}
 
@@ -182,27 +190,25 @@ def journal_since(serial):
     return [(oid, mv > serial) for oid, (s, mv) in _JOURNAL["ids"].items() if s > serial]
 
 
-def _mark(oid, moved=False):
-    """Object `oid` (str) may have changed: every tracking model re-copies it."""
+def _watching(file):
+    return [m for m in _WATCHERS if file is None or m.file is file]
+
+
+def _mark(oid, moved=False, file=None):
+    """Mark owners of `file`; unknown provenance conservatively notifies all."""
     j = _JOURNAL
     j["serial"] += 1
     prev = j["ids"].get(oid)
     j["ids"][oid] = (j["serial"], j["serial"] if moved else (prev[1] if prev else 0))
-    for m in list(_WATCHERS):
-        if m._base is None:
-            continue
-        d = m._dirty
-        if moved:
-            d.pop(oid, None)
-            d[oid] = True
-        elif oid not in d:
-            d[oid] = False
+    for m in _watching(file):
+        m._object_registry.mark([oid], moved=moved)
 
 
-def _mark_all():
+def _mark_all(file=None):
     _JOURNAL["all"] += 1
-    for m in list(_WATCHERS):
+    for m in _watching(file):
         m._base = None
+        m._object_registry.mark_all()
 
 
 class _Ref(_weakref.ref):
@@ -243,19 +249,21 @@ def _touched(obj, attrs_class):
     """A mutator is about to run on `obj`."""
     if not _WATCH["active"] or _SUSPEND[0]:
         return
-    if isinstance(obj, attrs_class):
-        try:
-            _mark(str(obj.Id))
-        except Exception:  # noqa: BLE001
-            _mark_all()
-        return
     root = _root_of(obj)
     if root is None:
-        return                         # never reachable from a document
+        # A retained native getter can return an unregistered live attribute view.
+        # Only wrappers observed being constructed detached are safe to ignore.
+        if isinstance(obj, attrs_class) and obj not in _DETACHED_ATTRIBUTES:
+            try:
+                _mark(str(obj.Id))
+            except Exception:  # noqa: BLE001
+                _mark_all()
+        return
+    file = _OBJECT_FILES.get(root)
     try:
-        _mark(str(root.Attributes.Id))
+        _mark(str(root.Attributes.Id), file=file)
     except Exception:  # noqa: BLE001
-        _mark_all()
+        _mark_all(file)
 
 
 def _inherit(root, result):
@@ -305,12 +313,19 @@ def _registered(x, root):
 
 
 def _install_watch():
-    """Instrument rhino3dm once per process (see the section comment). Never raises: on
-    failure `_WATCH["error"]` says why and every snapshot copies everything."""
+    """Install notifications; `_WATCH['error']` records failures. The independent
+    native observer refuses missed writes rather than treating hooks as authority."""
     if _WATCH["installed"] or _WATCH["error"]:
         return
     try:
         attrs_class = r3.ObjectAttributes
+        attribute_init = attrs_class.__init__
+
+        def detached_attributes(self, *args, **kwargs):
+            attribute_init(self, *args, **kwargs)
+            _DETACHED_ATTRIBUTES.add(self)
+
+        attrs_class.__init__ = detached_attributes
         wrapped = 0
         for cname, cls in list(vars(r3).items()):
             if not isinstance(cls, type) or hasattr(cls, "__members__"):
@@ -326,6 +341,9 @@ def _install_watch():
                     if kind == "instancemethod" and (name.startswith("Add")
                                                      or name == "Delete"):
                         setattr(cls, name, _wrap_table(attr, name))
+                        wrapped += 1
+                    elif name in ('FindId', '__getitem__', '__iter__'):
+                        setattr(cls, name, _wrap_object_access(attr, name))
                         wrapped += 1
                     continue
                 if kind == "property":
@@ -350,6 +368,23 @@ def _install_watch():
                         setattr(cls, name, _wrap_method(attr, name, mutates, propagates,
                                                         attrs_class))
                         wrapped += 1
+        objects = r3.File3dm.Objects
+
+        def table(file):
+            result = objects.fget(file)
+            _TABLE_FILES[result] = file
+            return result
+
+        r3.File3dm.Objects = property(table, None, None, objects.__doc__)
+        attributes = r3.File3dmObject.Attributes
+
+        def object_attributes(obj):
+            result = attributes.fget(obj)
+            if result is not None:
+                _register(result, obj)
+            return result
+
+        r3.File3dmObject.Attributes = property(object_attributes, None, None, attributes.__doc__)
         geo = vars(r3.File3dmObject)["Geometry"]
         real_get = geo.fget
 
@@ -360,7 +395,7 @@ def _install_watch():
             return g
         geometry._narwhal_watch = True
         r3.File3dmObject.Geometry = property(geometry, None, None, geo.__doc__)
-        _WATCH.update(installed=True, wrapped=wrapped + 1)
+        _WATCH.update(installed=True, wrapped=wrapped + 4)
     except Exception as e:  # noqa: BLE001
         _WATCH["error"] = repr(e)
 
@@ -384,12 +419,28 @@ def _mark_moved_batch(oids, model=None):
     ids = j["ids"]
     for oid in oids:
         ids[oid] = (s, s)
-    for m in list(_WATCHERS):
-        if m is model or m._base is None:
-            continue
-        for oid in oids:
-            m._dirty.pop(oid, None)
-            m._dirty[oid] = True
+    for m in _watching(model.file if model is not None else None):
+        if m is not model:
+            m._object_registry.mark(oids, moved=True)
+
+
+def _wrap_object_access(func, name):
+    def associate(obj, file):
+        if obj is not None and file is not None:
+            _OBJECT_FILES[obj] = file
+        return obj
+
+    def access(table, *args, **kwargs):
+        file = _TABLE_FILES.get(table)
+        result = func(table, *args, **kwargs)
+        if name == '__iter__':
+            return (associate(obj, file) for obj in result)
+        return associate(result, file)
+
+    access.__name__ = name
+    access.__doc__ = getattr(func, '__doc__', None)
+    access._narwhal_watch = True
+    return access
 
 
 def _wrap_table(func, name):
@@ -397,17 +448,24 @@ def _wrap_table(func, name):
         def w(self, *a, **k):
             if not _SUSPEND[0]:
                 if a:
-                    _mark(str(a[0]), moved=True)
+                    if self.FindId(a[0]) is not None:
+                        _mark(str(a[0]), moved=True, file=_TABLE_FILES.get(self))
                 elif "id" in k:
-                    _mark(str(k["id"]), moved=True)
+                    if self.FindId(k['id']) is not None:
+                        _mark(str(k["id"]), moved=True, file=_TABLE_FILES.get(self))
                 else:
-                    _mark_all()
+                    _mark_all(_TABLE_FILES.get(self))
             return func(self, *a, **k)
     else:
         def w(self, *a, **k):
-            r = func(self, *a, **k)
-            if r is not None and not _SUSPEND[0]:
-                _mark(str(r), moved=True)
+            try:
+                r = func(self, *a, **k)
+            except BaseException:
+                if not _SUSPEND[0]:
+                    _mark_all(_TABLE_FILES.get(self))
+                raise
+            if r is not None and str(r) != '00000000-0000-0000-0000-000000000000' and not _SUSPEND[0]:
+                _mark(str(r), moved=True, file=_TABLE_FILES.get(self))
             return r
     w.__name__ = name
     w.__doc__ = getattr(func, "__doc__", None)
@@ -416,6 +474,19 @@ def _wrap_table(func, name):
 
 
 _install_watch()
+
+
+def _registry_api():
+    import importlib.util
+    from pathlib import Path
+    name = 'narwhal3d.document_object_registry'
+    module = sys.modules.get(name)
+    if module is None:
+        spec = importlib.util.spec_from_file_location(name, Path(__file__).with_name('document_object_registry.py'))
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[name] = module
+        spec.loader.exec_module(module)
+    return module
 
 
 def _metadata_api():
@@ -439,8 +510,21 @@ class NarwhalModel:
 
     @file.setter
     def file(self, value):
-        binding = _metadata_api().adopt(self, value, getattr(self, '_document_metadata', None))
+        old_registry = getattr(self, '_object_registry', None)
+        candidate = None
+        if old_registry is not None and value is not getattr(self, '_file', None):
+            candidate = _registry_api().Binding(self, value)
+        try:
+            binding = _metadata_api().adopt(self, value, getattr(self, '_document_metadata', None))
+        except BaseException:
+            if candidate is not None:
+                candidate.close()
+            raise
         self._file, self._document_metadata = value, binding
+        if candidate is not None:
+            self._object_registry = candidate
+            self._blender_names = candidate.names
+            old_registry.close()
 
     @property
     def metadata_backend(self):
@@ -472,6 +556,23 @@ class NarwhalModel:
     def _replace_backing_file(self, value):
         binding = _metadata_api().adopt(self, value, self._document_metadata, preserve=True)
         self._file, self._document_metadata = value, binding
+        self._object_registry.file = value
+
+    @property
+    def _dirty(self):
+        """Compatibility diagnostic view of the Rust-owned dirty journal."""
+        return self._object_registry.dirty()
+
+    def object_registry_revision(self):
+        """Registry publication identity, NOT full-document or external-master authority."""
+        return dict(self._object_registry.native.info(), scope='object_registry',
+                    owner=self._object_registry.native.handle)
+
+    def rebuild_object_registry(self):
+        """Explicit recovery from observed current host state; does not create Undo."""
+        out = self._object_registry.snapshot(self._snapshot_document, rebuild=True)
+        self._set_base(out)
+        return out
 
     def __init__(self):
         self.file = r3.File3dm()
@@ -481,8 +582,7 @@ class NarwhalModel:
             layer = r3.Layer()
             layer.Name = STARTING_LAYER
             self.file.Layers.Add(layer)
-        # object id (str uuid) -> blender object name
-        self._blender_names: dict[str, str] = {}
+
         # The layer new objects use when none is supplied. AppState keeps this in step
         # with the live LayerTree's current layer via set_current_layer.
         self.current_layer_index = 0
@@ -507,11 +607,13 @@ class NarwhalModel:
         # changed since (id -> True when the object was re-added, i.e. moved to the end)
         self._base = None
         self._base_file = None
-        self._dirty = {}
         #: what the last `restore` changed: ``{"removed": {id: display name},
         #: "added": [id, ...]}`` (a replaced object is in both), or None = everything
         self.last_restore = None
+        self._object_registry = _registry_api().Binding(self, self.file)
+        self._blender_names = self._object_registry.names
         _WATCHERS.add(self)
+        _WATCH['active'] = 1
 
     def object_texture_path(self, fobj):
         """The image file of `fobj`'s render material's bitmap texture, found on THIS
@@ -898,17 +1000,19 @@ class NarwhalModel:
         of the table, which nothing keys on -- the display maps by Id). Returns False if no
         such object exists."""
         key = str(obj_id)
-        for fobj in self.file.Objects:
-            if str(fobj.Attributes.Id) == key:
-                self._will_change()
-                attrs = fobj.Attributes
-                self.file.Objects.Delete(key)
-                self.file.Objects.Add(geom, attrs)
-                return True
-        return False
+        fobj = self.file.Objects.FindId(key)
+        if fobj is None:
+            return False
+        self._will_change()
+        attrs = fobj.Attributes
+        self.file.Objects.Delete(key)
+        actual_id = self.file.Objects.Add(geom, attrs)
+        if str(actual_id) != key:
+            raise RuntimeError('geometry replacement changed the requested UUID')
+        return True
 
     def object_count(self) -> int:
-        return len(self.file.Objects)
+        return self._object_registry.count()
 
     # ------------------------------------------------------------- materials
 
@@ -960,10 +1064,7 @@ class NarwhalModel:
 
         the reference CAD application names are case-insensitive. Returns None if not found.
         """
-        for fobj in self.file.Objects:
-            if (fobj.Attributes.Name or "").lower() == name.lower():
-                return str(fobj.Attributes.Id)
-        return None
+        return self._object_registry.find_name(name)
 
     def remove_object(self, obj_id) -> bool:
         """Remove an object from the File3dm and clear its stored state.
@@ -982,7 +1083,6 @@ class NarwhalModel:
             return False
         self._will_change()
         self.file.Objects.Delete(key)
-        self._blender_names.pop(key, None)
         return True
 
     # ------------------------------------------------------- undo snapshots
@@ -1007,9 +1107,8 @@ class NarwhalModel:
     # Blender display mapping (`_blender_names`) and selection are keyed on. A
     # restore that minted fresh ids would orphan every display object.
 
-    #: Attribute fields carried across a snapshot. Deliberately explicit: a
-    #: blanket copy would drag along handles to native state that must not be
-    #: resurrected. Add a field here when the document starts using it.
+    #: Compatibility projection used by command/test readers. Complete attributes
+    #: live in each entry's detached native `_attributes` object, not this subset.
     _SNAPSHOT_ATTRS = ("Name", "LayerIndex", "Visible", "ObjectColor",
                        "ColorSource", "Mode", "MaterialIndex", "MaterialSource")
 
@@ -1026,15 +1125,22 @@ class NarwhalModel:
             except Exception:  # noqa: BLE001
                 pass          # not every build exposes every field
         g = fobj.Geometry
-        try:
-            geom = g.Duplicate()
-        except Exception:  # noqa: BLE001
-            geom = g                  # last resort: share it
+        geom = g.Duplicate()
+        if geom is None:
+            raise RuntimeError('exact snapshot geometry duplication failed')
         oid = str(a.Id)
+        holder = self._object_registry.attribute_holder
+        _SUSPEND[0] += 1
+        try:
+            attributes = self._object_registry.observer.copy_attributes(self.file, oid, holder)
+        finally:
+            _SUSPEND[0] -= 1
         return {
             "id": oid,
             "geometry": geom,
             "attrs": attrs,
+            "_attributes": attributes,
+            "_attribute_holder": holder,
             # Attribute User Text is document state but not exposed as settable
             # ObjectAttributes fields. Preserve exact key/value strings (including
             # period-prefixed hidden keys) and replay them during restore.
@@ -1053,12 +1159,15 @@ class NarwhalModel:
     def snapshot(self):
         """A complete, opaque description of the document, for :meth:`restore`.
 
-        Copy-on-write: entries of objects unchanged since the previous snapshot are
-        SHARED with it (entries are never modified, so sharing is safe); only changed
-        objects are copied. Anything the change tracking cannot account for copies
-        everything, as every snapshot used to. `undo.py` treats the value as opaque on
-        purpose, which is what keeps that module pure.
+        Rust selects unchanged immutable payloads from verified native observations.
+        Unaccounted writes refuse until explicitly rebuilt; they never silently share
+        stale entries. The existing Undo owner still treats this snapshot as opaque.
         """
+        out = self._object_registry.snapshot(self._snapshot_document)
+        self._set_base(out)
+        return out
+
+    def _snapshot_document(self, by_id, names):
         out = _Snapshot()
         out.settings = (self.unit_system(), self.absolute_tolerance())
         # Native mode retains an immutable Rust state handle, not a copied table.
@@ -1066,67 +1175,34 @@ class NarwhalModel:
         out.strings = self._document_metadata.snapshot()
         out.layers = self.layer_records()           # layer edits participate in undo
         out.groups = self.group_records()           # preserve table and memberships together
-        names = self._blender_names
-        by_id = self._shared_entries(names)
-        if by_id is None:
-            by_id = {}
-            for fobj in self.file.Objects:
-                e = self._entry(fobj, names)
-                by_id[e["id"]] = e
-            self.last_snapshot = ("full", len(by_id))
         out.extend(by_id.values())
         out.by_id = by_id
         out.names = dict(names)
-        self._set_base(out)
         return out
 
     def _set_base(self, snap):
         """`snap` now describes the document exactly: later snapshots share with it."""
-        self._dirty = {}
-        if _WATCH["installed"] and getattr(snap, "by_id", None) is not None:
+        if getattr(snap, "by_id", None) is not None:
             self._base, self._base_file = snap, self.file
             _WATCH["active"] = 1
         else:
             self._base, self._base_file = None, None
 
-    def _shared_entries(self, names):
-        """`id -> entry` for the document NOW, sharing the base snapshot's entries for
-        every object not changed since -- or None when that cannot be vouched for."""
-        base = self._base
-        if base is None or self._base_file is not self.file or not _WATCH["installed"]:
-            return None
-        dirty = self._dirty
-        table = self.file.Objects
-        try:
-            n_now = len(table)
-        except Exception:  # noqa: BLE001
-            return None
-        if len(dirty) > max(64, n_now // 2):
-            return None                    # most of it changed: one walk is cheaper
-        by_id = dict(base.by_id)
-        copied = 0
-        for oid, moved in list(dirty.items()):
-            fobj = table.FindId(oid)
-            if fobj is None:
-                by_id.pop(oid, None)
-                continue
-            e = self._entry(fobj, names)
-            copied += 1
-            if moved or oid not in by_id:
-                by_id.pop(oid, None)       # re-added: it is at the END of the table now
-            by_id[oid] = e
-        if len(by_id) != n_now:
-            return None                    # something changed that was not reported
-        self.last_snapshot = ("shared", copied)
-        return by_id
 
     def validate_restore(self, snap):
         """Pure restore admission; failure here has not changed any document table."""
         strings = getattr(snap, 'strings', None)
         if strings is not None:
             self._document_metadata.validate_snapshot(strings)
+        self._object_registry.validate_snapshot(snap)
 
     def restore(self, snap) -> int:
+        if snap is None:
+            return self.object_count()
+        self.validate_restore(snap)
+        return self._object_registry.restore(snap, self._restore_objects)
+
+    def _restore_objects(self, snap) -> int:
         """Make the document equal to `snap`. Returns the object count.
 
         Ids are preserved, so display objects and selections still resolve. Only the
@@ -1186,10 +1262,8 @@ class NarwhalModel:
             for entry in target.values():
                 self._add_entry(entry)
         else:
-            now = self.snapshot().by_id    # cheap: shares with the last snapshot
-            removed = {oid: self._blender_names.get(oid)
-                       for oid, e in now.items() if target.get(oid) is not e}
-            added = [oid for oid, e in target.items() if now.get(oid) is not e]
+            changes = self._object_registry.restore_changes
+            removed, added = changes['removed'], changes['added']
             # Only the objects that DIFFER are deleted / re-added; a re-added one lands at
             # the END of the table. Restoring its exact PLACE meant re-adding every object
             # after it. In a large table this can require re-adding thousands of objects
@@ -1206,11 +1280,6 @@ class NarwhalModel:
             finally:
                 _SUSPEND[0] -= 1
                 _mark_moved_batch(list(dict.fromkeys(list(removed) + added)), model=self)
-            # physical order == logical order unless something re-added belongs earlier
-            added_set = set(added)
-            phys_tail = [oid for oid in target if oid in added_set]
-            self._order_dirty = self._order_dirty or (
-                bool(added) and list(target)[-len(phys_tail):] != phys_tail)
             self.last_restore = {"removed": removed, "added": added}
         self._blender_names.clear()
         self._blender_names.update((str(k), v) for k, v in snap_names.items() if v)
@@ -1234,65 +1303,47 @@ class NarwhalModel:
         an idle-time pass would land on whatever the user does next."""
         if not self._order_dirty:
             return 0
-        self._order_dirty = False
-        base = self._base
-        if base is None or self._base_file is not self.file or self._dirty:
-            logical = list(self.snapshot().by_id)
-        else:
-            logical = list(base.by_id)
-        table = self.file.Objects
-        physical = [str(f.Attributes.Id) for f in table]
-        if physical == logical:
+        current = self.snapshot()
+        registry = self._object_registry.native
+        move = registry.normalization_plan()
+        if not move:
+            self._order_dirty = False
             return 0
-        k = 0
-        while k < min(len(physical), len(logical)) and physical[k] == logical[k]:
-            k += 1
-        move = logical[k:]
+        table = self.file.Objects
         live = {}
         for oid in move:
             fobj = table.FindId(oid)
             if fobj is None:
-                return 0                   # cannot account for it: leave the table be
+                registry.invalidate()
+                raise RuntimeError('order normalization lost a document object')
             live[oid] = (fobj.Geometry, fobj.Attributes)
+        ticket = registry.prepare_restore(current.registry)
+        ticket.begin_apply()
         _SUSPEND[0] += 1
         try:
             for oid in move:
                 table.Delete(oid)
             for oid in move:
-                table.Add(*live[oid])      # a copy; the Id is kept
+                if str(table.Add(*live[oid])) != oid:
+                    raise RuntimeError('order normalization changed an object UUID')
+            ticket.commit_observed(self._object_registry.observer.observe(self.file))
+            self._order_dirty = registry.order_pending()
+        except BaseException:
+            registry.invalidate()
+            self._order_dirty = True
+            raise
         finally:
             _SUSPEND[0] -= 1
             _mark_moved_batch(move, model=self)
         return len(move)
 
     def _add_entry(self, entry):
-        attr = r3.ObjectAttributes()
-        for field, value in (entry.get("attrs") or {}).items():
-            try:
-                setattr(attr, field, value)
-            except Exception:  # noqa: BLE001
-                pass
-        # the whole point: keep the original id
-        try:
-            attr.Id = entry["id"]
-        except Exception:  # noqa: BLE001
-            pass
-        for key, value in entry.get("user_strings") or ():
-            try:
-                attr.SetUserString(str(key), str(value))
-            except Exception:  # noqa: BLE001
-                pass
-        for group_index in entry.get("groups") or ():
-            try:
-                attr.AddToGroup(int(group_index))
-            except Exception:  # noqa: BLE001
-                pass
-        geom = entry["geometry"]
-        try:
-            geom = geom.Duplicate()
-        except Exception:  # noqa: BLE001
-            pass       # share it rather than fail the restore
-        self.file.Objects.Add(geom, attr)
+        geom = entry['geometry'].Duplicate()
+        if geom is None:
+            raise RuntimeError('exact restore geometry duplication failed')
+        object_id = self.file.Objects.Add(geom, entry['_attributes'])
+        if str(object_id) != entry['id']:
+            raise RuntimeError('restore changed the requested object UUID')
 
     # ---------------------------------------------------------------- I/O
 
@@ -1325,6 +1376,7 @@ class NarwhalModel:
 
         Real-file import: the names `assign_app_names` gave objects are written back as
         they were in the file (blank, or the shared name), unless the user renamed them."""
+        self.snapshot()                    # refuse unmediated writes before persistence
         self.normalize_order()             # the FILE keeps the document's order
         restore = []
         for fobj in self.file.Objects:

@@ -217,6 +217,17 @@ def exercise(field, mirror, label, multiline):
     capture(label)
 
 
+def application_core_source_matches(root, library):
+    try:
+        receipt = json.loads(Path(library).with_name('build.json').read_text())
+        digest = hashlib.sha256(Path(library).read_bytes()).hexdigest()
+        return (digest == receipt['library_sha256'] and bool(receipt['source_inputs'])
+                and all(hashlib.sha256((root / name).read_bytes()).hexdigest() == expected
+                        for name, expected in receipt['source_inputs'].items()))
+    except (OSError, ValueError, KeyError, TypeError):
+        return False
+
+
 def run():
     from narwhal3d import ui, shell_input, bugreport, ai_assistant, native_document_session
     yield from wait(lambda: os.environ.get("NARWHAL3D_UI_READY") == "1" and ui._preferences_ready
@@ -224,9 +235,8 @@ def run():
                     and len(ui._right_tab_boxes) == 5, "normal visible bootstrap", 50)
     check(not bpy.app.background and ui.app_state.model.object_count() == 0, "visible disposable empty document")
     lib = native_document_session.load_library()
-    digest = hashlib.sha256(Path(lib._name).read_bytes()).hexdigest()
-    check(digest == "b156d9c049aa735e8b5c7c3b66e68fe87a3533cb0ac1eab73369bb02473cea21",
-          "actual resolver loads Main staged application/history b156")
+    check(application_core_source_matches(ROOT, lib._name),
+          "actual resolver loads the current source-qualified application/history core")
     check(ui.app_state.model.metadata_revision()["available"]
           and ui.app_state.ctx.undo.backend == "rust"
           and Path(ui.app_state.ctx.undo._backend._library._name).resolve() == Path(lib._name).resolve(),

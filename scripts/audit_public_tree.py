@@ -130,6 +130,7 @@ REQUIRED = {
     "spike/test_ai_v8_plans.py", "spike/test_ai_v8_lifetime.py",
     "spike/test_ai_v8_lifetime_gui.py", "spike/test_ai_v8_settings.py",
     "spike/test_ai_v8_visible.py", "spike/test_ai_v8_x11.py", "spike/test_ai_v8_native.py",
+    "spike/test_ai_v9_lifecycle_gui.py",
     "docs/reviews/2026-10-31-ui-regressions.md",
     "docs/reviews/2026-10-31-native-only.md",
     "spike/test_rust_history_trace.py", "spike/test_numparse_owned.py",
@@ -844,6 +845,15 @@ def code_provenance_scan(path: str, blob: bytes) -> bytes:
             rb'\bSnapshot\s*\{\s*(owner)\s*:\s*handle\s*,',
         )
         spans = [match.span(1) for pattern in patterns for match in re.finditer(pattern, code)]
+    elif path in {
+        'native/application_core/src/live_objects.rs',
+        'native/application_core/src/object_registry.rs',
+        'native/application_core/src/object_registry_tests.rs',
+        'native/application_core/tests/object_registry_protocol.rs',
+    }:
+        code = _rust_code_mask(blob)
+        pattern = rb'\b(owner)\s*:\s*(?:u64|&Value|owner_id)\b'
+        spans = [match.span(1) for match in re.finditer(pattern, code)]
     elif path in {'narwhal3d/native_transcript.py', 'spike/test_ui_transcript_model.py'}:
         try:
             tree = ast.parse(blob)

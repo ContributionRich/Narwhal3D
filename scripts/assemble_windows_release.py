@@ -63,6 +63,9 @@ def safe_extract(archive_path: Path, destination: Path) -> Path:
 
 def replace_public_source(package: Path, source_root: Path) -> None:
     app = package / "app"
+    if (source_root / 'narwhal3d/native_document_observer.py').is_file():
+        from stage_document_observer import validate as validate_observer
+        validate_observer(source_root, app / 'runtime/windows-x86_64/bin', 'windows-x86_64')
     for name in SOURCE_DIRECTORIES:
         source = source_root / name
         require_file(source / "__init__.py", name) if name == "narwhal3d" else None

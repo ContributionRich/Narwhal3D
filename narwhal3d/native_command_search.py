@@ -17,6 +17,10 @@ _fuzzy_signature = None
 _fuzzy_binding = None
 _pack_cache = {"names": None, "packed": None}
 _MIN_NAMES = 128
+# Admission bounds mirror native/pure_core/src/command_search.rs (OURS); checked before packing.
+_MAX_QUERY_BYTES = 4096
+_MAX_NAMES = 65536
+_MAX_CONCAT_BYTES = 16 * 1024 * 1024
 _native_prefix_calls = 0
 _native_fuzzy_calls = 0
 
@@ -106,16 +110,24 @@ def _fuzzy_binding_for_library():
         return None
 
 
+def _admitted(text, names):
+    return len(text) <= _MAX_QUERY_BYTES and len(names) <= _MAX_NAMES
+
+
 def _pack(names):
     names = tuple(names)
     if _pack_cache["names"] == names:
         return _pack_cache["packed"]
     try:
-        encoded = [name.encode("ascii") for name in names]
-    except (AttributeError, UnicodeEncodeError):
+        lengths = array.array("q", map(len, names))
+    except TypeError:
         return None
-    concat = bytearray().join(encoded)
-    lengths = array.array("q", (len(value) for value in encoded))
+    if sum(lengths) > _MAX_CONCAT_BYTES:
+        return None
+    try:
+        concat = bytearray("".join(names), "ascii")
+    except (TypeError, UnicodeEncodeError):
+        return None
     packed = (
         names,
         concat,
@@ -135,9 +147,13 @@ def prefix_matches(prefix, names, *, force=False):
     names = tuple(names)
     if not force and len(names) < _MIN_NAMES:
         return None
+    if not _admitted(prefix, names):
+        return None
     fn = _prefix_binding()
+    if fn is None:
+        return None
     packed = _pack(names)
-    if fn is None or packed is None:
+    if packed is None:
         return None
     try:
         query = prefix.encode("ascii")
@@ -173,9 +189,13 @@ def fuzzy_matches(typed, names, usage=None, *, force=False):
     names = tuple(names)
     if not force and len(names) < _MIN_NAMES:
         return None
+    if not _admitted(typed, names):
+        return None
     fn = _fuzzy_binding_for_library()
+    if fn is None:
+        return None
     packed = _pack(names)
-    if fn is None or packed is None:
+    if packed is None:
         return None
     try:
         query = typed.encode("ascii")

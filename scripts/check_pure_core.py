@@ -81,6 +81,10 @@ PURE_CORE_PYTESTS = (
     "spike/test_vector_export.py",
     "spike/test_native_vector_export.py",
     "spike/test_native_command_search.py",
+    "spike/test_native_search02_contract.py",
+    "spike/test_native_search02_adapter.py",
+    "spike/test_native_search02_ffi.py",
+    "spike/test_native_search02_consumers.py",
     "spike/test_native_coil.py",
     "spike/test_native_coil_preview.py",
     "spike/test_native_interpolate.py",
@@ -295,7 +299,10 @@ def step_adapter(crate: Path, lib_path: Path) -> dict[str, object]:
         suite_path = ROOT / suite
         if not suite_path.is_file():
             raise GateError(f"missing pure-core suite {suite}")
-        rc, out = _run([python, suite], ROOT, env)
+        command = [python, suite]
+        if suite in ('spike/test_native_search02_ffi.py', 'spike/test_native_search02_consumers.py'):
+            command += ['--library', str(lib_path)]
+        rc, out = _run(command, ROOT, env)
         if rc != 0:
             raise GateError(f"pure-core suite {suite} failed:\n{out.strip()}")
     return {"status": "ok", "suites": list(PURE_CORE_PYTESTS), "python": python}

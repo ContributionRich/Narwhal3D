@@ -1,7 +1,8 @@
 """Check required native application owners before launching the graphical runtime.
 
 Python only orchestrates the application's real loaders/ABI calls. No bpy, document,
-settings or user-file access. A source/library mismatch must not launch bare Blender.
+settings or user-file access (only temporary probe objects). A source/library
+mismatch must not launch bare Blender.
 """
 from pathlib import Path
 import sys
@@ -18,6 +19,9 @@ def check():
     from narwhal3d.native_popup import NativePopup
     from narwhal3d.command_transcript import Transcript
     from narwhal3d.native_document_session import Session
+    from narwhal3d.native_document_observer import load_observer
+    from narwhal3d.native_object_registry import Registry
+    import rhino3dm
     from narwhal3d.undo import UndoStack
     from narwhal3d.numparse import parse_length
 
@@ -36,6 +40,25 @@ def check():
             raise RuntimeError('native transcript did not preserve startup text')
     finally:
         transcript.close()
+    observer = load_observer()
+    registry = Registry()
+    try:
+        registry.track()
+        probe = rhino3dm.File3dm()
+        registry.sync_index(observer.index(probe))
+        ticket = registry.capture(observer.observe(probe))
+        ticket.begin_apply()
+        ticket.commit_observed(observer.observe(probe))
+        if registry.order_pending() or registry.normalization_plan():
+            raise RuntimeError('empty registry has an invalid order plan')
+        snapshot = registry.snapshot()
+        restore = registry.prepare_restore(snapshot)
+        if registry.restore_changes(restore.handle) != {'removed': {}, 'added': []}:
+            raise RuntimeError('empty registry has an invalid restore plan')
+        restore.abort()
+        snapshot.close()
+    finally:
+        registry.close()
     session = Session()
     session.close()
     history = UndoStack()

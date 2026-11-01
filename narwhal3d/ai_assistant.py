@@ -89,6 +89,13 @@ class ChatMessage:
         object.__setattr__(self, "text", clean)
 
 
+# UI-only eviction notice for the existing host list, never provider replay data.
+# Python owns this list's Blender presentation; native conversation bounds are unchanged.
+OMITTED_MESSAGES_NOTICE = (
+    'Earlier chat rows were omitted from this display. This is not the complete '
+    'conversation or evidence of completed work. Native provider replay has separate limits.')
+
+
 @dataclass(frozen=True)
 class ToolProposal:
     """Validated but deliberately non-executable command-line proposal."""
@@ -114,6 +121,8 @@ class AssistantState:
         if self.status not in STATUSES:
             raise ValueError(f"invalid assistant status: {self.status}")
         self.input_text = _clean_text(self.input_text, MAX_INPUT_CHARS)
+        if len(self.messages) > MAX_MESSAGES:
+            self.extra['messages_omitted'] = True
         self.messages = list(self.messages[-MAX_MESSAGES:])
 
     def add_message(self, role: str, text: str) -> ChatMessage:
@@ -121,6 +130,7 @@ class AssistantState:
         self.messages.append(message)
         if len(self.messages) > MAX_MESSAGES:
             del self.messages[:-MAX_MESSAGES]
+            self.extra['messages_omitted'] = True
         return message
 
     def new_chat(self):
@@ -128,6 +138,7 @@ class AssistantState:
         if workflow is not None:
             workflow.invalidate("new_chat")
         self.messages.clear()
+        self.extra.pop('messages_omitted', None)
         self.input_text = ""
         self.error = ""
         self.pending_proposal = None

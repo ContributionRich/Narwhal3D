@@ -428,7 +428,10 @@ class UiPackaging(unittest.TestCase):
             for name in linux.NATIVE_COMPONENTS:
                 put(source / name, name.encode())
 
-            exec(code, dict(vars(linux), app_root=app, native_components_dir=source))
+            # This unit fixture covers the UI/core copy slots. The separate
+            # observer packaging suite covers its source-qualified directory.
+            exec(code, dict(vars(linux), app_root=app, native_components_dir=source,
+                            source_root=root / 'legacy-source', native_records={}))
             for slot in (linux.NATIVE_COMPONENT_RELATIVE, Path("narwhal3d/native")):
                 self.assertEqual((app / slot / SO).read_bytes(), SO.encode())
 

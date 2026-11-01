@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Real in-process boundary parity, fallback tests and end-to-end timings."""
 import argparse
-import ast
 import ctypes
 import importlib
 import json
@@ -32,17 +31,25 @@ sys.modules[package.__name__] = package
 aci = importlib.import_module(package.__name__ + ".aci_colors")
 widths = importlib.import_module(package.__name__ + ".printwidths")
 native = importlib.import_module(package.__name__ + ".native_metadata")
-# Retain the original Python calculation: remove ONLY the newly added optional
-# dispatch from its AST. Expectations also include independent fixed results.
-tree = ast.parse((ROOT / "narwhal3d/aci_colors.py").read_text())
-function = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "rgb_to_aci")
-function.body = [n for n in function.body if not isinstance(n, ast.Try)
-                 and not (isinstance(n, ast.Assign) and any(isinstance(t, ast.Name) and t.id == "exact" for t in n.targets))
-                 and not (isinstance(n, ast.If) and isinstance(n.test, ast.Compare)
-                          and isinstance(n.test.left, ast.Name) and n.test.left.id == "exact")]
-reference_ns = dict(aci.__dict__)
-exec(compile(ast.Module(body=[function], type_ignores=[]), "original-aci-calculation", "exec"), reference_ns)
-reference_rgb = reference_ns["rgb_to_aci"]
+# Independent test-only oracle over the nine fixed standard colours; it is not
+# extracted from production code or from the retired archive.
+STANDARD = {1: (255, 0, 0), 2: (255, 255, 0), 3: (0, 255, 0), 4: (0, 255, 255),
+            5: (0, 0, 255), 6: (255, 0, 255), 7: (255, 255, 255), 8: (128, 128, 128),
+            9: (192, 192, 192)}
+
+
+def reference_rgb(rgb):
+    r, g, b = (float(c) for c in rgb)
+    for index in range(1, 10):
+        if (r, g, b) == tuple(float(v) for v in STANDARD[index]):
+            return index, True
+    best_index, best_distance = 1, float("inf")
+    for index in range(1, 10):
+        tr, tg, tb = (float(v) for v in STANDARD[index])
+        distance = (r - tr) ** 2 + (g - tg) ** 2 + (b - tb) ** 2
+        if distance < best_distance:
+            best_distance, best_index = distance, index
+    return best_index, False
 
 
 class MetadataTests(unittest.TestCase):
@@ -66,12 +73,18 @@ class MetadataTests(unittest.TestCase):
             pass
         class ListSubclass(list):
             pass
-        for rgb in (None, "red", [], [True, 2, 3], [float("nan"), 0, 0], [10**80, 0, 0], [1, 2, "3"]):
-            with self.assertRaises(ValueError) as original:
-                reference_rgb(rgb)
+        for rgb, message in (
+                (None, "rgb must be a 3-tuple, got NoneType"),
+                ("red", "rgb must be a 3-tuple, got str"),
+                ([], "rgb must have exactly 3 components, got 0"),
+                ([True, 2, 3], "rgb components must be numbers, got bool"),
+                ([float("nan"), 0, 0], "rgb component out of range (0-255): nan"),
+                ([10**80, 0, 0], f"rgb component out of range (0-255): {10**80}"),
+                ([1, 2, "3"], "rgb components must be numbers, got str"),
+                ([256, "bad", 0], "rgb component out of range (0-255): 256")):
             with self.assertRaises(ValueError) as current:
                 aci.rgb_to_aci(rgb)
-            self.assertEqual(str(original.exception), str(current.exception))
+            self.assertEqual(str(current.exception), message)
         self.assertEqual(aci.rgb_to_aci(ListSubclass([FloatSubclass(255), 0, 0])), (1, True))
         self.assertEqual(aci.aci_to_rgb(10), (None, "ACI 10-255 not implemented yet"))
 
@@ -103,10 +116,12 @@ class MetadataTests(unittest.TestCase):
 
     def test_missing_or_malformed_native_routes_fall_back(self):
         with patch.object(native, "_bindings", return_value=(None, None, None)):
-            self.assertEqual(aci.rgb_to_aci((160, 160, 160)), (8, False))
+            with self.assertRaises(RuntimeError):
+                aci.rgb_to_aci((160, 160, 160))
             self.assertIsNone(native.widths_from_text("1\n2"))
         with patch.object(native, "_bindings", return_value=(None, lambda *_: 9999, None)):
-            self.assertEqual(aci.rgb_to_aci((160, 160, 160)), (8, False))
+            with self.assertRaises(RuntimeError):
+                aci.rgb_to_aci((160, 160, 160))
         for payload in (struct.pack("<I", 0xffffffff) + b"\x00" * 4,
                         struct.pack("<IdI", 1, float("nan"), 0),
                         struct.pack("<IddI", 2, 2.0, 1.0, 0),

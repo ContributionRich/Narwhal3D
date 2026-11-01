@@ -5796,10 +5796,14 @@ def _draw_ai_transcript(shader, rect, st, sc):
     shader.bind()
     _draw_round_rect(shader, *rect, 8 * sc, palette['canvas'],
                      blue if _ai.get('chat_focus') else design.rgb01(design.BORDER))
-    key = (tuple(id(message) for message in st.messages), max(1, rect[2] - rect[0]), sc)
+    key = (tuple(id(message) for message in st.messages), max(1, rect[2] - rect[0]), sc,
+           bool(st.extra.get('messages_omitted')))
     if _ai.get('chat_cache') != key:
         old = _ai.get('chat_layout')
-        layout = ai_presentation.transcript_layout(st.messages, key[1],
+        messages = st.messages
+        if key[3]:
+            messages = [*messages, ai_assistant.ChatMessage('status', ai_assistant.OMITTED_MESSAGES_NOTICE)]
+        layout = ai_presentation.transcript_layout(messages, key[1],
                                                     _bug_measure(fs), sc)
         if old:
             _ai['chat_offset'] = ai_presentation.anchored_offset(
@@ -5896,7 +5900,10 @@ def _ai_draw_action_review(shader, rect, sc):
                                  design.rgb01(design.ACCENT if focused else design.BORDER_STRONG))
                 _draw_centered_panel_text(button, label, 11*sc, design.rgb01(design.TEXT))
         else:
-            _draw_text(view['x'], view['top']-20*sc, 'Enlarge panel to review.', 11*sc, design.rgb01(design.TEXT))
+            for i, line in enumerate(view['refusal_lines']):
+                baseline = view['top']-(i+1)*view['line_h']
+                if baseline >= rect[1]+5*sc:
+                    _draw_text(view['x'], baseline, line, 11*sc, design.rgb01(design.TEXT))
     finally:
         gpu.state.scissor_set(*old_clip)
 
@@ -8695,9 +8702,9 @@ class NARWHAL_OT_command_input(Operator):
                 kind = "copy" if event.type == "C" else "cut"
             elif event.type == "V" and event.ctrl:
                 kind, ch = "paste", context.window_manager.clipboard or ""
-            elif event.ascii and event.ascii.isprintable() and not event.ctrl \
+            elif event.unicode and event.unicode.isprintable() and not event.ctrl \
                     and not event.alt:
-                kind, ch = "char", event.ascii
+                kind, ch = "char", event.unicode
             if kind is not None:
                 ai_panel_key(kind, ch, shift=event.shift)
                 if kind in ("copy", "cut"):

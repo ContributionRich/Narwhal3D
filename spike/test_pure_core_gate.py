@@ -88,6 +88,8 @@ def _():
         "spike/test_svgpath.py", "spike/test_native_svgpath.py",
         "spike/test_vector_export.py", "spike/test_native_vector_export.py",
         "spike/test_native_command_search.py",
+        "spike/test_native_search02_contract.py", "spike/test_native_search02_adapter.py",
+        "spike/test_native_search02_ffi.py", "spike/test_native_search02_consumers.py",
         "spike/test_native_coil.py",
         "spike/test_native_coil_preview.py",
         "spike/test_native_interpolate.py",

@@ -290,12 +290,13 @@ class HandleInputTests(unittest.TestCase):
                 if replacement == "document":
                     snapshot = ctx.model.snapshot()
                     ctx.model = model.NarwhalModel()
-                    # Explicit document clone: import metadata values, not a foreign
-                    # native snapshot handle. Preserve the object IDs for this test.
+                    # Explicit document clone: copy exact host payloads and metadata,
+                    # never transfer either document's native snapshot handles.
                     for key, value in snapshot.strings:
                         ctx.model.file.Strings[key] = value
-                    snapshot.strings = ctx.model.snapshot().strings
-                    ctx.model.restore(snapshot)  # same object IDs, genuinely new File3dm
+                    for entry in snapshot:
+                        ctx.model._add_entry(entry)
+                    ctx.model.snapshot()  # same IDs, fresh File3dm and native owners
                 else:
                     ctx.model.remove_object(ctx.model.object_id_by_name("Box"))
                     if replacement == "same_name":

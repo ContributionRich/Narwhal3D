@@ -4,6 +4,16 @@ const ERR_NULL: i32 = -1;
 const ERR_INPUT: i32 = -2;
 const ERR_SIZE: i32 = -3;
 
+/// Conservative admission limits (OURS, not reference-application behaviour). They are checked before
+/// any span is formed or buffer is allocated. The name limit bounds the table entry count.
+pub(crate) const MAX_QUERY_BYTES: usize = 4096;
+pub(crate) const MAX_NAMES: usize = 65_536;
+pub(crate) const MAX_CONCAT_BYTES: usize = 16 * 1024 * 1024;
+
+fn admitted(query_len: usize, names_concat_len: usize, name_count: usize) -> bool {
+    query_len <= MAX_QUERY_BYTES && names_concat_len <= MAX_CONCAT_BYTES && name_count <= MAX_NAMES
+}
+
 struct Names<'a> {
     values: Vec<&'a [u8]>,
 }
@@ -41,35 +51,54 @@ fn lower(value: &[u8]) -> Vec<u8> {
     value.iter().map(u8::to_ascii_lowercase).collect()
 }
 
+fn prefix_rank(name: &[u8], query: &[u8], query_low: &[u8], low: &[u8]) -> u8 {
+    if low == query_low {
+        0
+    } else if name.starts_with(query) {
+        1
+    } else {
+        2
+    }
+}
+
+/// Orders entries that already match the prefix. Each rank is computed once; the
+/// original index is the final key, so the order is total even for duplicate names.
+fn ranked_prefix(
+    query: &[u8],
+    query_low: &[u8],
+    names: &Names<'_>,
+    entries: Vec<(usize, &[u8])>,
+) -> Vec<usize> {
+    let mut keyed: Vec<(u8, &[u8], usize)> = entries
+        .into_iter()
+        .map(|(index, low)| {
+            (
+                prefix_rank(names.values[index], query, query_low, low),
+                low,
+                index,
+            )
+        })
+        .collect();
+    keyed.sort_unstable();
+    keyed.into_iter().map(|(_, _, index)| index).collect()
+}
+
 fn prefix_indices(query: &[u8], names: &Names<'_>) -> Vec<usize> {
     let query_low = lower(query);
-    let mut found: Vec<usize> = names
+    let hits: Vec<(usize, Vec<u8>)> = names
         .values
         .iter()
         .enumerate()
-        .filter_map(|(index, name)| {
-            (name.len() >= query.len() && name[..query.len()].eq_ignore_ascii_case(query))
-                .then_some(index)
+        .filter(|(_, name)| {
+            name.len() >= query.len() && name[..query.len()].eq_ignore_ascii_case(query)
         })
+        .map(|(index, name)| (index, lower(name)))
         .collect();
-    found.sort_by(|&a, &b| {
-        let left = names.values[a];
-        let right = names.values[b];
-        let rank = |name: &[u8]| {
-            if lower(name) == query_low {
-                0
-            } else if name.starts_with(query) {
-                1
-            } else {
-                2
-            }
-        };
-        rank(left)
-            .cmp(&rank(right))
-            .then_with(|| lower(left).cmp(&lower(right)))
-            .then_with(|| a.cmp(&b))
-    });
-    found
+    let entries: Vec<(usize, &[u8])> = hits
+        .iter()
+        .map(|(index, low)| (*index, low.as_slice()))
+        .collect();
+    ranked_prefix(query, &query_low, names, entries)
 }
 
 fn fuzzy_score(query_low: &[u8], name_low: &[u8]) -> Option<(usize, usize)> {
@@ -87,9 +116,15 @@ fn fuzzy_score(query_low: &[u8], name_low: &[u8]) -> Option<(usize, usize)> {
 }
 
 fn fuzzy_indices(query: &[u8], names: &Names<'_>, usage: &[i64]) -> (Vec<usize>, Vec<usize>) {
-    let exact = prefix_indices(query, names);
     let query_low = lower(query);
     let lowered: Vec<Vec<u8>> = names.values.iter().map(|name| lower(name)).collect();
+    let exact_entries: Vec<(usize, &[u8])> = lowered
+        .iter()
+        .enumerate()
+        .filter(|(_, low)| low.starts_with(&query_low))
+        .map(|(index, low)| (index, low.as_slice()))
+        .collect();
+    let exact = ranked_prefix(query, &query_low, names, exact_entries);
     let mut inexact: Vec<(usize, usize, usize)> = lowered
         .iter()
         .enumerate()
@@ -140,6 +175,9 @@ pub unsafe extern "C" fn narwhal_pure_core_command_prefix(
     *out_count = 0;
     if query_len == 0 {
         return 0;
+    }
+    if !admitted(query_len, names_concat_len, name_count) {
+        return ERR_SIZE;
     }
     let query = match crate::checked_slice(query, query_len) {
         Some(value) if value.is_ascii() => value,
@@ -194,6 +232,9 @@ pub unsafe extern "C" fn narwhal_pure_core_command_fuzzy(
     if query_len == 0 {
         return 0;
     }
+    if !admitted(query_len, names_concat_len, name_count) {
+        return ERR_SIZE;
+    }
     let query = match crate::checked_slice(query, query_len) {
         Some(value) if value.is_ascii() => value,
         Some(_) => return ERR_INPUT,
@@ -223,6 +264,10 @@ pub unsafe extern "C" fn narwhal_pure_core_command_fuzzy(
     *out_count = total as u64;
     0
 }
+
+#[cfg(test)]
+#[path = "command_search_tests_02.rs"]
+mod tests_02;
 
 #[cfg(test)]
 mod tests {

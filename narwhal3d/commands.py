@@ -1347,6 +1347,9 @@ class NarwhalContext:
             other = after.by_id[oid]
             if entry is other:
                 continue
+            if entry.get('_attributes') is not None and other.get('_attributes') is not None:
+                if entry['_attributes'].Encode() != other['_attributes'].Encode():
+                    return False
             for field in ("attrs", "user_strings", "groups"):
                 if entry[field] != other[field]:
                     return False
@@ -1448,8 +1451,8 @@ class NarwhalContext:
                 if key and kernel.master_key_of(obj.Geometry) == key:
                     oid = str(obj.Attributes.Id)
                     file.Objects.Delete(oid)
-                    if model._blender_names.get(oid) == name:
-                        model._blender_names.pop(oid, None)
+                    # The native object index removes this UUID's display association
+                    # when it observes the deletion; no separate Python map to clean.
             self._remove_publication_allocations(publication["allocations"])
             if self.counters.get(base_name) == counter + 1:
                 if counter:

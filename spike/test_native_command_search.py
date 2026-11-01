@@ -6,9 +6,12 @@ import time
 import types
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-LIB = os.path.join(ROOT, "native", "pure_core", "target",
-                   "x86_64-unknown-linux-gnu", "release",
-                   "libnarwhal_pure_core.so")
+DEFAULT_LIB = os.path.join(ROOT, "native", "pure_core", "target",
+                           "x86_64-unknown-linux-gnu", "release",
+                           "libnarwhal_pure_core.so")
+LIB = os.environ.get("NARWHAL_PURE_CORE") or DEFAULT_LIB
+if "--library" in sys.argv:
+    LIB = os.path.abspath(sys.argv[sys.argv.index("--library") + 1])
 if not os.path.isfile(LIB):
     raise SystemExit("pure-core library is not built")
 os.environ["NARWHAL_PURE_CORE"] = LIB

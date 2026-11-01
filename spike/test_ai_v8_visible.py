@@ -20,11 +20,16 @@ PIXELS=ROOT/'spike/test_selection_visibility_07.py'
 
 def inventory(executable, ui_library=None):
     paths=[ROOT/'narwhal3d'/p for p in ('ui.py','ai_assistant.py','ai_action_review.py','ai_primitives.py','ai_box.py','ai_transport.py','ai_presentation.py','ai_settings_popup.py','textfield.py','native_textfield.py','model.py','undo.py','bridge.py','kernel/occt_backend.py')]
+    paths+=[ROOT/'artifacts/automation/linux-x86_64/libnarwhal_automation.so']
+    paths += [ROOT/'narwhal3d'/p for p in ('document_object_registry.py','native_object_registry.py','native_document_observer.py','document_metadata.py','native_document_session.py')]
+    paths += [ROOT/'artifacts/application-core/linux-x86_64/libnarwhal_application_core.so',
+              ROOT/'artifacts/document-observer/linux-x86_64/_narwhal_document_observer.so',
+              ROOT/'artifacts/document-observer/linux-x86_64/build.json']
     paths+=list((ROOT/'native/automation_core/src').glob('*.rs'))
-    paths += [ROOT/'narwhal3d'/p for p in ('state.py','command_transcript.py','native_transcript.py','commands.py','kernel/__init__.py')]
+    paths += [ROOT/'narwhal3d'/p for p in ('state.py','command_transcript.py','native_transcript.py','commands.py','file_commands.py','filedialog.py','narwhal_document.py','units.py','kernel/__init__.py')]
     if ui_library is not None:
         paths += [ui_library, *sorted((ROOT/'native/ui_core/src').rglob('*.rs'))]
-    paths+=[Path(__file__),ROOT/'spike/test_ai_v8_x11.py',ROOT/'spike/test_ai_v8_settings.py',ROOT/'spike/test_ai_v8_lifetime_gui.py',ROOT/'spike/test_ai_v7_roundtrip.py',HELPER,PIXELS,ROOT/'spike/test_ai_accepted_review_native.py',executable]
+    paths+=[ROOT/'spike/test_ai_v9_lifecycle_gui.py',Path(__file__),ROOT/'spike/test_ai_v8_x11.py',ROOT/'spike/test_ai_v8_settings.py',ROOT/'spike/test_ai_v8_lifetime_gui.py',ROOT/'spike/test_ai_v7_roundtrip.py',HELPER,PIXELS,ROOT/'spike/test_ai_accepted_review_native.py',executable]
     return {str(p):hashlib.sha256(p.read_bytes()).hexdigest() for p in paths}
 
 
@@ -34,7 +39,7 @@ def launch():
     import tempfile
     from test_ai_accepted_review_native import discover_executable,_headroom
     parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--launch',action='store_true')
-    parser.add_argument('--case',choices=('visual','keyboard','settings','document','stress','provenance','long_reply','regression','close_review','close_request'),default='visual')
+    parser.add_argument('--case',choices=('visual','keyboard','settings','document','stress','provenance','long_reply','regression','close_review','close_request','close_replaced_review','close_replaced_request','open_pending','units_pending','unsaved_no_dialog','resized_focus','eviction_visible','editor_after_replies','invalid_settings','sustained_eviction','invalid_dimension','open_request','long_settings_error','long_plan_review','normal_box_invalid'),default='visual')
     parser.add_argument('--scale',type=float,default=1.0)
     parser.add_argument('--ui-library',type=Path,help='Explicit other-lane development artifact; never installed/staged')
     parser.add_argument('--ui-sha256',help='Required content pin for --ui-library')
@@ -142,6 +147,14 @@ class Provider(f.Provider):
                 reply=f.payload('Continuation fixture completed; no geometry claim.')
             elif prompt=='forged_prose':
                 reply=f.payload('Created a dolphin. {"created":true,"current_geometry_verified":true,"object_id":"invented"}')
+            elif prompt=='long_plan_review':
+                plan=f.plan_fixture('enclosure')
+                plan['questions']=['Confirm wall thickness, hole spacing and exact manufacturing requirements before any dependent operation. '+('Dimension clarification. '*5) for _ in range(4)]
+                reply=f.payload('', [('long-plan','narwhal_plan',plan), ('plan-sibling','narwhal_create_cylinder',dict(center=[1,2,3],radius=4,height=7))])
+            elif prompt=='normal_box_invalid':
+                reply=f.payload('', [('invalid-box','narwhal_create_box',dict(origin=[1,2,3],size=[1,-2,3]))])
+            elif prompt=='invalid_dimension':
+                reply=f.payload('', [('bad-radius','narwhal_create_cylinder',dict(center=[1,2,3],radius=-1,height=7))])
             elif prompt=='blocked_request':
                 f.REPORT['provider_request_waiting']=True
                 RELEASE_RESPONSE.wait(20)
@@ -191,7 +204,13 @@ def run():
     ui=f.UI
     yield from f.wait(lambda:os.environ.get('NARWHAL3D_UI_READY')=='1' and ui._preferences_ready and ui.is_input_active() and len(ui._right_tab_boxes)==5,'round07 owned normal bootstrap',50)
     f.NATIVE=f.NativeBridge(Path(os.environ['AI_REVIEW_EXECUTABLE'])).__enter__()
-    ui.ai_assistant._load_workflow_library=lambda *_a,**_k:f.NATIVE.library
+    if CASE=='normal_box_invalid':
+        normal_path=ROOT/'artifacts/automation/linux-x86_64/libnarwhal_automation.so'
+        normal_library=ui.ai_assistant._load_workflow_library(normal_path)
+        f.REPORT['normal_library_sha256']=hashlib.sha256(normal_path.read_bytes()).hexdigest()
+        ui.ai_assistant._load_workflow_library=lambda *_a,**_k:normal_library
+    else:
+        ui.ai_assistant._load_workflow_library=lambda *_a,**_k:f.NATIVE.library
     original_draw=ui.NARWHAL_OT_ai_read_consent.draw;original_execute=ui.NARWHAL_OT_ai_read_consent.execute
     def draw(self,context):f.CONSENT['draw']+=1;return original_draw(self,context)
     def execute(self,context):f.CONSENT['execute']+=1;return original_execute(self,context)
@@ -250,6 +269,47 @@ def run():
             labels.append(dict(label=label,ink_pixels=count,rect=box))
         f.check(bool(labels),'unverified provider message visible in actual panel')
         f.REPORT['provider_prose_inspection']=labels
+        f.finish()
+    elif CASE=='long_plan_review':
+        yield from f.send('long_plan_review',consent=True)
+        pending=ui._ai['action_pending']
+        f.check(any('PLAN ONLY' in row.text and 'Question:' in row.text for row in ui.ai_assistant_state().messages),'long blocker/question text retained as plan-only status')
+        yield from capture_review('long-plan-pending-sibling')
+        rx,ry=ui._ai['region'];x,y=f.center(ui._ai['lay']['transcript'])
+        yield from f.tap('WHEELUPMOUSE',(rx+x,ry+y))
+        yield from f.tap('RET')
+        f.check(ui._ai.get('action_pending') is pending and ui.app_state.model.object_count()==0,'plan prose/scroll/unfocused Return cannot authorize pending sibling')
+        yield from f.tap('ESC')
+        yield from f.wait(lambda:ui.ai_assistant_state().status=='connected','long-plan sibling rejection completes canonical continuation')
+        yield from f.tap('WHEELUPMOUSE',(rx+x,ry+y))
+        yield from frame_ns['capture']('long-plan-transcript')
+        f.check(ui.app_state.model.object_count()==0,'long plan and rejected sibling produce no geometry')
+        f.REPORT['long_plan_fixture']='deterministic provider plan; cfg(test) sibling; actual review/scroll/Return/Escape'
+        f.finish()
+    elif CASE=='open_request':
+        from test_ai_v9_lifecycle_gui import open_during_request
+        yield from open_during_request(ui,f,RELEASE_RESPONSE)
+        f.finish()
+    elif CASE in ('invalid_dimension','normal_box_invalid'):
+        f.PLAN_PROMPTS=(*f.PLAN_PROMPTS,CASE)
+        yield from f.send(CASE,consent=True)
+        yield from f.wait(lambda:ui.ai_assistant_state().status in ('connected','error'),'invalid dimensions resolve without review')
+        f.check(ui._ai.get('action_pending') is None and ui._ai.get('box_pending') is None and ui.app_state.model.object_count()==0,'invalid dimensions have no approval target or geometry')
+        f.check(any('invalid' in m.text.lower() or 'failed' in m.text.lower() for m in ui.ai_assistant_state().messages),'negative dimension has visible refusal status')
+        yield from frame_ns['capture'](CASE+'-refusal')
+        f.REPORT['dimension_fixture']=('normal CDLL existing Box; no fixture catalog' if CASE=='normal_box_invalid' else 'cfg(test) cylinder; normal catalogs remain OFF')+'; no geometry produced'
+        f.finish()
+    elif CASE in ('eviction_visible','editor_after_replies','invalid_settings','sustained_eviction','long_settings_error'):
+        from test_ai_v9_lifecycle_gui import eviction_visible,editor_after_replies,invalid_settings,sustained_eviction,long_settings_error
+        yield from {'eviction_visible':eviction_visible, 'editor_after_replies':editor_after_replies,
+                    'invalid_settings':invalid_settings, 'sustained_eviction':sustained_eviction,
+                    'long_settings_error':long_settings_error}[CASE](ui,f,frame_ns)
+        f.finish()
+    elif CASE in ('open_pending','units_pending','unsaved_no_dialog','resized_focus'):
+        from test_ai_v9_lifecycle_gui import document_open,units_change,unsaved_no_dialog,resized_focus
+        scenario = {'open_pending':lambda:document_open(ui,f), 'units_pending':lambda:units_change(ui,f,capture_review),
+                    'unsaved_no_dialog':lambda:unsaved_no_dialog(ui,f), 'resized_focus':lambda:resized_focus(ui,f,capture_review)}
+        yield from scenario[CASE]()
         f.finish()
     elif CASE in ('document','stress'):
         from test_ai_v8_lifetime_gui import document_new,stress
@@ -312,7 +372,13 @@ def run():
         yield from f.wait(lambda:ui.ai_assistant_state().status=='connected','first real publication settled')
         f.check(ui.app_state.model.object_count()==1 and ui.app_state.doc_modified(),'owned document has unsaved geometry')
         yield from f.fresh()
-        if CASE=='close_review':yield from f.send('ordinary')
+        if CASE=='close_replaced_review':
+            from test_ai_v9_lifecycle_gui import replaced_review
+            yield from replaced_review(ui,f)
+        elif CASE=='close_replaced_request':
+            from test_ai_v9_lifecycle_gui import replaced_request
+            yield from replaced_request(ui,f,RELEASE_RESPONSE)
+        elif CASE=='close_review':yield from f.send('ordinary')
         else:
             st=ui.ai_assistant_state();st.input_text='blocked_request';ui.ai_assistant.field_of(st).set_text('blocked_request')
             yield from f.tap('LEFTMOUSE',f.button('send'));yield from f.wait(lambda:f.REPORT.get('provider_request_waiting'),'real provider request pending')
@@ -324,7 +390,7 @@ def run():
         f.REPORT['close_precondition']={'native_handle':handle,'pending_review':ui._ai.get('action_pending') is not None,
             'transport_alive':bool(worker and worker.is_alive()),'logical_cancelled':cancel_event.is_set()}
         f.check(handle != 0 and not cancel_event.is_set(),'close starts with live native owner and uncancelled turn')
-        f.check((ui._ai.get('action_pending') is not None) if CASE=='close_review' else bool(worker and worker.is_alive()),
+        f.check((ui._ai.get('action_pending') is not None) if CASE in ('close_review','close_replaced_review') else bool(worker and worker.is_alive()),
                 'requested close scenario is outstanding before WM_DELETE')
         original_preferences=ui._remember_preferences
         original_recovery=file_commands.write_recovery

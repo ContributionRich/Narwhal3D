@@ -1,7 +1,9 @@
 """Optional in-process metadata accelerators; Python owns I/O and compatibility.
 
-No subprocess transport or native mutable-object mirror. Missing exports, unsupported
-text domains and invalid responses explicitly return None to the complete reference.
+No subprocess transport or native mutable-object mirror. Missing widths exports,
+unsupported text domains and invalid widths responses explicitly return None to the
+complete reference. RGB ACI has no Python reference: a missing, failing or invalid
+native export raises RuntimeError, because nearest-colour computation is native-only.
 """
 import ctypes
 from functools import lru_cache
@@ -57,20 +59,25 @@ def status():
     return {"routes": dict(_STATUS), "calls": dict(_CALLS)}
 
 
+_RGB_REQUIRED = "ACI nearest-colour conversion requires native export narwhal_pure_core_rgb_to_aci"
+
+
+def _rgb_refused(reason):
+    _STATUS["rgb"] = f"native required: {reason}"
+    return RuntimeError(f"{_RGB_REQUIRED}: {reason}")
+
+
 def rgb_to_aci(r, g, b):
     function = _bindings()[1]
     if function is None:
-        _STATUS["rgb"] = "reference: native export unavailable"
-        return None
+        raise _rgb_refused("export unavailable")
     try:
         value = function(r, g, b)
-    except (OSError, ctypes.ArgumentError):
-        _STATUS["rgb"] = "reference: native call failed"
-        return None
+    except (OSError, ctypes.ArgumentError) as error:
+        raise _rgb_refused("call failed") from error
     index = value & 255
     if not 1 <= index <= 9 or value not in (index, index | 256):
-        _STATUS["rgb"] = "reference: invalid native result"
-        return None
+        raise _rgb_refused("invalid result")
     _CALLS["rgb"] += 1
     _STATUS["rgb"] = "native"
     return index, bool(value & 256)

@@ -26,7 +26,7 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts/check_application_core.py"
 SOURCE = SCRIPT.read_text(encoding="utf-8")
-STEPS = ["fmt", "clippy", "test", "build", "abi", "history"]
+STEPS = ["fmt", "clippy", "test", "build", "abi", "history", "registry"]
 NEW_BINARY = b"synthetic qualified application core\x00\x01"
 OLD_BINARY = b"previous working application core\x00\x02"
 
@@ -105,6 +105,8 @@ class Sandbox:
             step = "abi"
         elif str(self.root / "spike/test_rust_history_abi.py") in command:
             step = "history"
+        elif str(self.root / "spike/test_document_registry_abi.py") in command:
+            step = "registry"
         else:
             raise AssertionError(f"unexpected subprocess: {command}")
         self.calls.append((step, command, kwargs))
@@ -159,6 +161,11 @@ class ApplicationCoreGateTests(unittest.TestCase):
                 self.assertTrue(kwargs["check"])
                 self.assertGreater(kwargs["timeout"], 0)
                 self.assertEqual(kwargs["cwd"], box.root)
+                if step == "registry":
+                    self.assertEqual(command[-5:], ["-B", str(box.root / "spike/test_document_registry_abi.py"),
+                                                     "--library", str(box.library), "--mutations"])
+                    self.assertEqual(kwargs["env"]["NARWHAL_APPLICATION_CORE"], str(box.library))
+                    continue
                 if step in ("abi", "history"):
                     filename, flag = (("test_document_session_abi.py", "--mutation") if step == "abi"
                                       else ("test_rust_history_abi.py", "--mutations"))
@@ -189,7 +196,16 @@ class ApplicationCoreGateTests(unittest.TestCase):
         self.assertEqual(receipt["library_sha256"], hashlib.sha256(NEW_BINARY).hexdigest())
         self.assertEqual(receipt["abi"], 1)
         self.assertEqual(receipt["history_abi"], 1)
+        self.assertEqual(receipt["object_registry_abi"], 1)
         self.assertFalse(box.destination.exists())
+
+    def test_staging_requires_registry_qualification(self):
+        library, receipt = self.gate.build(self.box.target)
+        self.box.prior_binary()
+        receipt.pop('object_registry_abi')
+        with self.assertRaisesRegex(RuntimeError, 'object registry'):
+            self.gate.stage(library, receipt)
+        self.assert_prior_untouched()
 
     def test_main_only_stages_after_all_checks(self):
         def stage(library, receipt):
