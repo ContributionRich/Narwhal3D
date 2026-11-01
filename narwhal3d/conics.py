@@ -130,17 +130,34 @@ def parabola_from_focus(focus, direction, end, half=False):
     return parabola_from_vertex(vertex, focus, projected_end, half=half)
 
 
+class HyperbolaEndOnAxis(ValueError):
+    """The end lies ON the center-focus axis. MEASURED (Research13 #71): the reference CAD application returns to
+    Command: silently there, so the command distinguishes this refusal."""
+
+
 def hyperbola_from_center(center, focus, end):
-    """Exact rational-quadratic finite hyperbola branch."""
+    """Exact rational-quadratic hyperbola branch, symmetric about the transverse axis.
+
+    MEASURED (Research13 #71): the reference CAD application's default Hyperbola (center, focus, end) is ONE
+    degree-2 rational curve with 3 control points that runs from the end mirrored
+    across the axis, through the vertex, to the picked end (center (0,0,0), focus
+    (5,0,0), end (6, 4*sqrt(3)) gave start (6,-6.928), end (6,6.928)).
+
+    For x^2/a^2 - y^2/b^2 = 1 with ends (x, -y) and (x, y), the end tangents meet the
+    axis at x' = a^2 / x, and the middle weight w = x / a puts C(1/2) exactly at the
+    vertex (a, 0) -- w > 1, so the rational quadratic is a true hyperbola, not a
+    sampled approximation.
+    """
     axis = _unit(_sub(focus, center))
     c = math.dist(center, focus)
     delta = _sub(end, center)
     x = _dot(delta, axis)
     side_vector = _sub(delta, tuple(x * component for component in axis))
     y = math.sqrt(_dot(side_vector, side_vector))
-    if x <= 0.0 or y <= 1e-12:
+    if y <= 1e-12:
+        raise HyperbolaEndOnAxis("end must lie off the center-focus axis")
+    if x <= 0.0:
         raise ValueError("end must lie off the center-focus axis on the focus branch")
-    side = _unit(side_vector)
     total = x * x + y * y + c * c
     discriminant = total * total - 4.0 * x * x * c * c
     if discriminant <= 0.0:
@@ -150,17 +167,16 @@ def hyperbola_from_center(center, focus, end):
     if a2 <= 0.0 or b2 <= 0.0:
         raise ValueError("hyperbola coefficients are not positive")
     a, b = math.sqrt(a2), math.sqrt(b2)
-    t = (y / b) / (x / a + 1.0)
-    if not 0.0 < t < 1.0:
-        raise ValueError("hyperbola end parameter is outside the finite branch")
-    vertex = tuple(center[i] + a * axis[i] for i in range(3))
-    control = tuple(center[i] + a * axis[i] + b * t * side[i] for i in range(3))
-    end_weight = 1.0 - t * t
+    if x <= a * (1.0 + 1e-12):
+        raise ValueError("hyperbola end lies at the vertex; no finite branch")
+    mirrored = tuple(end[i] - 2.0 * side_vector[i] for i in range(3))
+    apex = tuple(center[i] + (a2 / x) * axis[i] for i in range(3))
+    weight = x / a
     curve = r3.NurbsCurve(3, True, 3, 3)
-    curve.Points[0] = r3.Point4d(vertex[0], vertex[1], vertex[2], 1.0)
-    curve.Points[1] = r3.Point4d(control[0], control[1], control[2], 1.0)
-    curve.Points[2] = r3.Point4d(end[0] * end_weight, end[1] * end_weight,
-                                end[2] * end_weight, end_weight)
+    curve.Points[0] = r3.Point4d(mirrored[0], mirrored[1], mirrored[2], 1.0)
+    curve.Points[1] = r3.Point4d(apex[0] * weight, apex[1] * weight,
+                                apex[2] * weight, weight)
+    curve.Points[2] = r3.Point4d(end[0], end[1], end[2], 1.0)
     curve.Knots[0] = curve.Knots[1] = 0.0
     curve.Knots[2] = curve.Knots[3] = 1.0
     if not curve.IsValid:

@@ -1149,8 +1149,10 @@ def preview_hyperbola(args, cursor, plane, cmd=None):
     a, b = math.sqrt(a2), math.sqrt(b2)
     u_end = math.acosh(max(1.0, x / a))
     branch = []
+    # The created branch is symmetric about the axis (MEASURED, Research13 #71), so
+    # the preview spans the mirrored end through the vertex to the cursor.
     for index in range(65):
-        u = u_end * index / 64.0
+        u = u_end * (2.0 * index / 64.0 - 1.0)
         branch.append(tuple(center[k] + a * math.cosh(u) * axis[k]
                             + b * math.sinh(u) * side[k] for k in range(3)))
     out = [branch]

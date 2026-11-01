@@ -82,6 +82,14 @@ def bb(m):
     return tuple(round(c, 6) + 0.0 for c in lo + hi)
 
 
+def area(m):
+    from OCP.BRepGProp import BRepGProp
+    from OCP.GProp import GProp_GProps
+    props = GProp_GProps()
+    BRepGProp.SurfaceProperties_s(m, props, 1e-9)
+    return props.Mass()
+
+
 FRONT = cplane.WORLD_FRONT          # x = world X, y = world Z, normal = world -Y
 C = (1.0, 2.0, 3.0)
 
@@ -177,6 +185,27 @@ g, m, msg, c = run("pyramid", ["NumSides=6", "0,0,0", "2", "3"])
 area6 = 6 / 2 * 4 * math.sin(2 * math.pi / 6)
 solid(g, {"PLANE": 7}, area6 * 3 / 3, label=f"Pyramid NumSides=6 ({msg})")
 
+# MEASURED (research_all_13 notes 173 / 174): the reference CAD application's prompt wording.
+for key, want in (("truncatedcone", ["Base of truncated cone", "Radius at base",
+                                      "Top of truncated cone", "Radius at top"]),
+                  ("tube", ["Base of tube", "Radius", "Radius", "End of tube"])):
+    got = [p.rstrip(":") for p, _k in type(commands.COMMANDS[key])().steps]
+    check(got == want, f"{key} prompts are the reference CAD application's ({got})")
+
+# MEASURED (research_all_13 note 119): the reference CAD application Pyramid Solid=No with centre 0, corner 2,
+# apex 4 is ONE "open polysurface with 5 surfaces" -- the five sides, no base.
+g, m, msg, c = run("pyramid", ["Solid=No", "0,0,0", "2,0,0", "4"])
+check(m is not None and ob.face_types(m) == {"PLANE": 5} and not ob.is_airtight(m)
+      and ob.is_valid(m) and kernel.honesty_problem(g) is None
+      and (kernel.recipe_of(g) or {}).get("open") is True,
+      f"Pyramid Solid=No: an OPEN exact polysurface of 5 planes, no base ({msg}; "
+      f"{m is not None and ob.face_types(m)}, airtight={m is not None and ob.is_airtight(m)})")
+check(c.opt.get("Solid") is False, "Pyramid Solid=No: the option stays No")
+open_pyr = bridge.make_pyramid(C, 2.0, 4, 3.0, True, FRONT, solid=False)
+mo = kernel.master_of(open_pyr)
+check(mo is not None and ob.face_types(mo) == {"PLANE": 4} and not ob.is_airtight(mo),
+      "make_pyramid(solid=False): 4 sides of a square pyramid, open")
+
 print("\n-- the COMMANDS, PICKED points --")
 g, m, msg, c = run("torus", ["0,0,0", "5", "6,0,2"])
 check(m is not None and rel(ob.volume(m), 2 * math.pi ** 2 * 5 * 5) < 1e-12,
@@ -208,8 +237,7 @@ check(m is not None and bb(m) == (-3.0, -4.0, -3.0, 3.0, 0.0, 3.0),
       f"the height runs along Front's normal (-Y) ({m is not None and bb(m)})")
 
 print("\n-- options that are not built say so, and build nothing --")
-for key, lines, words in (("pyramid", ["Solid=No"], "not implemented"),
-                          ("truncatedcone", ["Solid=No"], "not implemented"),
+for key, lines, words in (("truncatedcone", ["Solid=No"], "not implemented"),
                           ("torus", ["FixInnerDimension"], "not implemented"),
                           ("tube", ["WallThickness"], "not implemented"),
                           ("ellipsoid", ["FromFoci"], "not implemented"),
@@ -221,8 +249,9 @@ for key, lines, words in (("pyramid", ["Solid=No"], "not implemented"),
 print("\n-- save + reload: every one rebuilds from its recipe --")
 made = [bridge.make_torus(C, 5.0, 1.5, FRONT), bridge.make_ellipsoid(C, 3.0, 2.0, 1.0, FRONT),
         bridge.make_truncated_cone(C, 3.0, 1.0, 4.0), bridge.make_tube(C, 1.0, 3.0, 4.0),
-        bridge.make_pyramid(C, 2.0, 5, 3.0, True, FRONT)]
-want = [(ob.face_types(kernel.master_of(g)), round(ob.volume(kernel.master_of(g)), 7))
+        bridge.make_pyramid(C, 2.0, 5, 3.0, True, FRONT),
+        bridge.make_pyramid(C, 2.0, 5, 3.0, True, FRONT, solid=False)]
+want = [(ob.face_types(kernel.master_of(g)), round(area(kernel.master_of(g)), 7))
         for g in made]
 f3 = r3.File3dm()
 for g in made:
@@ -232,9 +261,11 @@ f3.Write(path, 8)
 kernel.forget_masters()
 back = [o.Geometry for o in r3.File3dm.Read(path).Objects]
 restored, lost = bridge.rehydrate_document(back)
-got = [(ob.face_types(kernel.master_of(g)), round(ob.volume(kernel.master_of(g)), 7))
+got = [(ob.face_types(kernel.master_of(g)), round(area(kernel.master_of(g)), 7))
        if kernel.master_of(g) is not None else None for g in back]
-check(restored == 5 and lost == 0 and got == want, f"all five rebuild ({restored}/{lost})")
+check(restored == 6 and lost == 0 and got == want, f"all six rebuild ({restored}/{lost})")
+check(not ob.is_airtight(kernel.master_of(back[5])),
+      "the reloaded Solid=No pyramid is still open")
 cut = bridge.boolean_occt(back[0], bridge.make_box((-10, -10, 0), (10, 10, 0), 20),
                           "INTERSECT")
 check(cut is not None and kernel.master_of(cut) is not None,

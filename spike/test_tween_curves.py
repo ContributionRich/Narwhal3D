@@ -17,7 +17,7 @@ class Ctx:
     def add_geometry(self,g,base_name,layer_index=None): self.made.append((g,layer_index)); return f"Tween_{len(self.made)}",f"Tween_{len(self.made)}"
     def note_change(self,_label=None): pass
 
-def execute(number=3,flip=False,layer="CurrentLayer",incompatible=False,method="ControlPoint",samples=100):
+def execute(number=3,flip=False,layer="CurrentLayer",incompatible=False,method="None",samples=100):
     ctx=Ctx(incompatible); cmd=commands.TweenCurvesCmd(); cmd.args=["A","B"]; cmd.opt["Number"]=number; cmd.opt["OutputLayer"]=layer; cmd.opt["MatchMethod"]=method; cmd.opt["SampleNumber"]=samples; cmd._flip=flip; msg,done=cmd.execute(ctx); return ctx,cmd,msg,done
 ctx,cmd,msg,done=execute();
 check(done and len(ctx.made)==3 and "3 tween curves" in msg,"Number creates every requested compatible tween")
@@ -44,5 +44,25 @@ fixed=tween.sample_point_tweens(report_a,report_b,1,64)
 check(len(fixed)==1 and fixed[0].Degree==3 and not fixed[0].IsPolyline(),
       "degree/count-incompatible report curves tween successfully with SamplePoints")
 check("tweencurves" in commands.COMMANDS,"TweenCurves is registered")
+# MEASURED (research_all_13 note 175): two preselected lines (y=0, y=4) -> "Press Enter to
+# accept options ( Number=1  OutputLayer=CurrentLayer  MatchMethod=None  Flip ):"; Enter
+# builds ONE tween from (0,2,0) to (4,2,0).
+class FlowCtx(Ctx):
+    def __init__(self):
+        self.model=model.NarwhalModel(); self.made=[]
+        self.model.add_object(r3.LineCurve(r3.Point3d(0,0,0),r3.Point3d(4,0,0)),"L1",0)
+        self.model.add_object(r3.LineCurve(r3.Point3d(0,4,0),r3.Point3d(4,4,0)),"L2",0)
+    def selected_objects(self): return [types.SimpleNamespace(name=n) for n in ("L1","L2")]
+    def select_by_names(self,names): return names
+fctx=FlowCtx(); cmd=commands.TweenCurvesCmd(); msg,done=cmd.begin(fctx)
+check(not done and not fctx.made and cmd.prompt=="Press Enter to accept options ( Number=1  OutputLayer=CurrentLayer  MatchMethod=None  Flip ):",
+      f"preselected curves go straight to the reference CAD application's accept prompt ({cmd.prompt!r})")
+msg,done=cmd.feed("",fctx); g=fctx.made[0][0] if fctx.made else None
+check(done and len(fctx.made)==1 and g.PointAtStart.DistanceTo(r3.Point3d(0,2,0))<1e-12
+      and g.PointAtEnd.DistanceTo(r3.Point3d(4,2,0))<1e-12,f"Enter accepts: one tween at y=2 ({msg!r})")
+fctx=FlowCtx(); cmd=commands.TweenCurvesCmd(); cmd.begin(fctx); cmd.feed("MatchMethod=SamplePoints",fctx)
+check("SampleNumber" in cmd.prompt,f"SampleNumber appears with SamplePoints ({cmd.prompt!r})")
+msg,done=cmd.feed("bogus",fctx)
+check(not done and not fctx.made,f"other text at the accept prompt re-prompts ({msg!r})")
 for ok,label in checks: print(f"[{'PASS' if ok else 'FAIL'}] {label}")
 failed=sum(not x for x,_ in checks); print(f"\n{len(checks)-failed}/{len(checks)} passed"); raise SystemExit(1 if failed else 0)

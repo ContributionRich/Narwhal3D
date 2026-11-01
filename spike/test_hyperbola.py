@@ -71,11 +71,14 @@ curve = ctx.made[0][1] if ctx.made else None
 check(done and curve is not None and curve.Degree == 2 and curve.IsRational
       and len(curve.Points) == 3 and not curve.IsPolyline(),
       "default Center mode creates one exact rational quadratic branch")
+# MEASURED (Research13 #71): the reference CAD application's default branch is SYMMETRIC about the axis --
+# from the mirrored end, through the vertex, to the picked end.
 check(curve is not None
-      and curve.PointAtStart.DistanceTo(r3.Point3d(3, 0, 0)) < 1e-10
+      and curve.PointAtStart.DistanceTo(r3.Point3d(3.75, -3, 0)) < 1e-10
       and curve.PointAtEnd.DistanceTo(r3.Point3d(3.75, 3, 0)) < 1e-10
+      and curve.PointAt(0.5).DistanceTo(r3.Point3d(3, 0, 0)) < 1e-10
       and "A=3" in message and "B=4" in message,
-      "center/focus/end recover the exact A=3 B=4 hyperbola")
+      "center/focus/end recover the exact A=3 B=4 hyperbola, symmetric through the vertex")
 maximum = 0.0
 if curve:
     for index in range(101):
@@ -87,7 +90,8 @@ ctx, command, message, done = run(
     ["BothBranches=Yes", "0,0,0", "5,0,0", "3.75,3,0"])
 branches = [geom for kind, geom in ctx.made if kind == "Hyperbola"]
 check(done and len(branches) == 2
-      and branches[1].PointAtStart.DistanceTo(r3.Point3d(-3, 0, 0)) < 1e-10
+      and branches[1].PointAt(0.5).DistanceTo(r3.Point3d(-3, 0, 0)) < 1e-10
+      and branches[1].PointAtEnd.DistanceTo(r3.Point3d(-3.75, -3, 0)) < 1e-10
       and "2 hyperbola branches" in message,
       "BothBranches creates the centrally reflected exact branch")
 
@@ -102,12 +106,20 @@ ctx, command, message, done = run(["FromCoefficient"])
 check(not done and not ctx.made and "not implemented yet" in message,
       "unbuilt coefficient mode refuses explicitly")
 check("hyperbola" in commands.COMMANDS, "Hyperbola is registered")
+# MEASURED (Research13 #71): the prompts, and an end ON the axis returns silently.
+check([p for p, _k in commands.HyperbolaCmd().steps]
+      == ["Hyperbola center:", "Hyperbola focus:", "Hyperbola end:"], "The reference CAD application's prompts")
+ctx, command, message, done = run(["0,0,0", "5,0,0", "6,0,0"])
+check(done and message is None and not ctx.made,
+      f"an end on the focus axis returns silently, nothing made ({message!r})")
 preview_cmd = commands.HyperbolaCmd()
 preview_cmd.opt["ShowAsymptotes"] = True
 preview_rows = preview.segments(
     "Hyperbola", [(0, 0, 0), (5, 0, 0)], (3.75, 3, 0),
     commands.cplane.WORLD_TOP, cmd=preview_cmd)
 check(len(preview_rows) == 3 and len(preview_rows[0]) == 65
+      and abs(preview_rows[0][0][0] - 3.75) < 1e-10
+      and abs(preview_rows[0][0][1] + 3.0) < 1e-10
       and abs(preview_rows[0][-1][0] - 3.75) < 1e-10
       and abs(preview_rows[0][-1][1] - 3.0) < 1e-10,
       "live Hyperbola preview follows the exact branch and shows asymptotes")

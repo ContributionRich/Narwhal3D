@@ -363,7 +363,7 @@ check(ctx.model.object_count() == 3 and ctx.undo.undo_names() == before,
 
 # walk all the way back
 msgs = [run_zero_step(ctx, "undo") for _ in range(3)]
-check(msgs == ["Undid Polyline", "Undid Rectangle", "Undid Circle"],
+check(msgs == ["Undoing Polyline", "Undoing Rectangle", "Undoing Circle"],
       f"Undo reports what it reversed, newest first ({msgs})")
 check(ctx.model.object_count() == 0,
       f"undoing everything empties the document ({ctx.model.object_count()})")
@@ -372,10 +372,11 @@ check(run_zero_step(ctx, "undo") == "Nothing to undo",
 
 # and forward again
 msgs = [run_zero_step(ctx, "redo") for _ in range(3)]
-check(msgs == ["Redid Circle", "Redid Rectangle", "Redid Polyline"],
+check(msgs == ["Redoing Circle", "Redoing Rectangle", "Redoing Polyline"],
       f"Redo replays in the original order ({msgs})")
 check(ctx.model.object_count() == 3, "redoing everything rebuilds the document")
-check(run_zero_step(ctx, "redo") == "Nothing to redo", "then nothing is left to redo")
+check(run_zero_step(ctx, "redo") == "Nothing to redo.",
+      "then nothing is left to redo (the reference CAD application wording, MEASURED Research13 #123)")
 
 # undo / redo / undo must land on the same document
 run_zero_step(ctx, "undo")

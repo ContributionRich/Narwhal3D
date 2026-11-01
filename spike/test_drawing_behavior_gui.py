@@ -328,7 +328,8 @@ def line_case(area, plane, submitted):
     check(st.active_command is cmd and len(cmd.args) == 1 and st.model.object_count() == len(before),
           label+': scalar retains pending command and publishes no line')
     check(st.input_buffer == ('' if submitted else '4'), label+': submitted/pending buffer state')
-    yield from painted(label+'_pending', 'Point 2', shot=True)
+    # MEASURED (research_all_13 #082): Line's second prompt is "End of line".
+    yield from painted(label+'_pending', 'End of line', shot=True)
     yield from move(pixel(area, world(plane, 9., 6.)))
     raw = unproject(area, POSITION, plane)
     raw_length = math.dist(raw, start)

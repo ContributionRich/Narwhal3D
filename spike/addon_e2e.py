@@ -101,6 +101,7 @@ if not offsets:
 # Exercise the selection-driven path: select the curve and provide only a distance.
 run_command(st, "Select")
 run_command(st, "Circle1")
+run_command(st, "")  # MEASURED (research_all_13 #138): Select stays open until Enter
 before = {o.name for o in bpy.context.scene.objects}
 run_command(st, "ExtrudeCrv")
 run_command(st, "6")
@@ -113,6 +114,7 @@ run_command(st, "SelNone")
 # --- move the box (select it first via Select command)
 run_command(st, "Select")
 run_command(st, "Box1")
+run_command(st, "")  # MEASURED (research_all_13 #138): Select stays open until Enter
 run_command(st, "Move")
 # Move takes two points; use the origin as the base point.
 run_command(st, "0,0,0")
@@ -129,6 +131,7 @@ else:
 # --- delete the sphere
 run_command(st, "Select")
 run_command(st, "Sphere1")
+run_command(st, "")  # MEASURED (research_all_13 #138): Select stays open until Enter
 count_before_delete = model.object_count()
 run_command(st, "Delete")
 if bpy.data.objects.get("Sphere1") is not None:
@@ -187,6 +190,7 @@ def _bounds(ob):
 
 run_command(st, "Select")
 run_command(st, "Box1")
+run_command(st, "")  # MEASURED (research_all_13 #138): Select stays open until Enter
 run_command(st, "Copy")
 # Copy takes two points and remains open for repeated destinations until Enter.
 run_command(st, "0,0,0")
@@ -252,6 +256,7 @@ else:
 # --- linear array: the reference CAD application's count INCLUDES the original, so count=3 -> 2 copies
 run_command(st, "Select")
 run_command(st, "Box1")
+run_command(st, "")  # MEASURED (research_all_13 #138): Select stays open until Enter
 before_arr = {o.name for o in bpy.data.objects if o.name.startswith("Array")}
 run_command(st, "Array")
 run_command(st, "3")         # count (includes the original)
@@ -295,6 +300,7 @@ run_command(st, "4.5,2,0")
 run_command(st, "2")          # -> Box3
 run_command(st, "Select")
 run_command(st, "all")
+run_command(st, "")  # MEASURED (research_all_13 #138): Select stays open until Enter
 # Deselect because this block exercises the typed-name path. BooleanUnion opts into
 # selection fill, so leaving everything selected would make it run on the whole scene
 # -- which includes curves from earlier blocks and is correctly refused as "not a
@@ -452,6 +458,7 @@ roundtrip_name = sorted(
     if (o.Attributes.Name or "").startswith("Box"))[-1]
 run_command(st, "Select")
 run_command(st, roundtrip_name)
+run_command(st, "")  # MEASURED (research_all_13 #138): Select stays open until Enter
 run_command(st, "Move")
 run_command(st, "0,0,0")       # base point
 run_command(st, "30,0,0")      # -> x should now be [30,32]
@@ -506,6 +513,7 @@ else:
     # before the document call that used to raise.
     run_command(st, "Select")
     run_command(st, roundtrip_name)
+    run_command(st, "")  # MEASURED (research_all_13 #138): Select stays open until Enter
     run_command(st, "Move")
     run_command(st, "0,0,0")       # base point
     run_command(st, "5,0,0")
@@ -519,6 +527,7 @@ else:
     count_before = st.model.object_count()
     run_command(st, "Select")
     run_command(st, roundtrip_name)
+    run_command(st, "")  # MEASURED (research_all_13 #138): Select stays open until Enter
     run_command(st, "Delete")
     if st.model.object_count() != count_before - 1:
         failures.append(f"Delete after Open did not remove from the file "

@@ -285,6 +285,8 @@ row("make_tube", "4 faces, 2 curved", lambda: bridge.make_tube((0, 0, 0), 3.0, 1
 row("make_pyramid", "6 planes", lambda: bridge.make_pyramid((0, 0, 0), 2.0, 5, 3.0))
 row("make_cone(solid=False)", "1 curved, open",
     lambda: bridge.make_cone((0, 0, 0), 2.0, 5.0, solid=False), closure="open")
+row("make_pyramid(solid=False)", "5 planes, open",
+    lambda: bridge.make_pyramid((0, 0, 0), 2.0, 5, 3.0, solid=False), closure="open")
 
 # --- constructed solids ---------------------------------------------------
 row("make_extrusion(circle)", "3 faces, 1 curved",

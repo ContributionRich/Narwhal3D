@@ -248,6 +248,19 @@ PURE_SUITES=(
     spike/test_native_cage_safety.py
     spike/test_cage_boundary.py
     spike/test_undo.py
+    spike/test_visibility.py
+    spike/test_isolate.py
+    spike/test_preselect.py
+    spike/test_sel_dup.py
+    spike/test_research13_selection.py
+    spike/test_set_group_name.py
+    spike/test_measure.py
+    spike/test_transform_cmds.py
+    spike/test_line_modes.py
+    spike/test_what.py
+    spike/test_curve_tools.py
+    spike/test_insertknot.py
+    spike/test_join.py
     spike/test_document_registry_tracking.py
     spike/test_document_registry_baseline.py
     spike/test_document_registry_model.py
@@ -399,6 +412,7 @@ BLENDER_SUITES=(
     spike/test_sweep.py
     spike/test_loft.py
     spike/test_interpolate.py
+    spike/test_length_cmd.py
     spike/test_surface_cmds.py
     spike/test_cage_edit.py
     spike/ui_smoke.py

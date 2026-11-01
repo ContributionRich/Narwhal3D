@@ -1498,8 +1498,11 @@ class TruncatedConeCmd(_PrimitiveCmd):
     name = "TruncatedCone"
     base_name = "TruncatedCone"
     description = "Draw a truncated cone: base centre, base radius, height, end radius."
-    steps = [("Base of truncated cone:", POINT), ("Radius:", commands.DISTANCE),
-             ("End of truncated cone:", commands.DISTANCE), ("Radius:", commands.DISTANCE)]
+    # MEASURED (research_all_13 note 173): "Base of truncated cone", "Radius at base",
+    # "Top of truncated cone" (a top point), "Radius at top".
+    steps = [("Base of truncated cone:", POINT), ("Radius at base:", commands.DISTANCE),
+             ("Top of truncated cone:", commands.DISTANCE),
+             ("Radius at top:", commands.DISTANCE)]
     _height_step_index = 2
     options = (opts.Option("Solid", opts.TOGGLE, default=True,
                            help="Caps the top and bottom openings or leave them open."),
@@ -1536,8 +1539,9 @@ class TubeCmd(_PrimitiveCmd):
     name = "Tube"
     base_name = "Tube"
     description = "Draw a tube: base centre, radius, second radius, height."
+    # MEASURED (research_all_13 note 174): the second wall is asked as "Radius" too.
     steps = [("Base of tube:", POINT), ("Radius:", commands.DISTANCE),
-             ("Second radius:", commands.DISTANCE), ("End of tube:", commands.DISTANCE)]
+             ("Radius:", commands.DISTANCE), ("End of tube:", commands.DISTANCE)]
     _height_step_index = 3
     options = _declared(_PrimitiveCmd.not_built + ("WallThickness", "BothSides"))
 
@@ -1552,8 +1556,9 @@ class PyramidCmd(_PrimitiveCmd):
     """Draw a pyramid from a base polygon and apex height.
 
     A picked corner rotates the polygon to place a corner there. ``NumSides``, ``Inscribed``,
-    and ``Circumscribed`` are supported; open output, alternate directions, and star bases
-    are declared but not implemented. ``NumSides`` defaults to 5.
+    and ``Circumscribed`` are supported, and ``Solid=No`` builds the open pyramid (no base,
+    MEASURED research_all_13 note 119); alternate directions and star bases are declared
+    but not implemented. ``NumSides`` defaults to 5.
     """
     name = "Pyramid"
     base_name = "Pyramid"
@@ -1585,9 +1590,6 @@ class PyramidCmd(_PrimitiveCmd):
         return {"Inscribed" if self.inscribed else "Circumscribed"}
 
     def on_option_set(self, option, value, ctx):
-        if option.name == "Solid" and not value:
-            self.opt["Solid"] = True
-            return f"{self.name}: Solid=No (an open pyramid) is not implemented yet", False
         if option.name == "NumSides" and (float(value) < 3 or float(value) != int(value)):
             self.opt["NumSides"] = option.default
             return f"{self.name}: NumSides must be a whole number >= 3", False
@@ -1620,7 +1622,8 @@ class PyramidCmd(_PrimitiveCmd):
                      z[0] * x[1] - z[1] * x[0])
                 frame = types.SimpleNamespace(xaxis=x, yaxis=y, zaxis=z)
         return bridge.make_pyramid(center, float(r), int(self.opt.get("NumSides", 5)),
-                                   float(h), self.inscribed, frame)
+                                   float(h), self.inscribed, frame,
+                                   solid=bool(self.opt.get("Solid", True)))
 
 
 PROVIDED = (FilletEdgeCmd, ChamferEdgeCmd, CapCmd, Sweep1Cmd, Sweep2Cmd, MoveFaceCmd,

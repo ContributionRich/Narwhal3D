@@ -1431,7 +1431,8 @@ def from_recipe(recipe, _depth=0):
             shape = split_piece(base[0], [(c, n) for c, n in recipe["curves"]],
                                 recipe["signature"])
         elif kind == "polyhedron":
-            shape = make_polyhedron(recipe["vertices"], recipe["faces"])
+            shape = make_polyhedron(recipe["vertices"], recipe["faces"],
+                                    open_shell=bool(recipe.get("open", False)))
         elif kind == "local_move":
             base = from_recipe(recipe["a"], _depth + 1)
             component = recipe["component"]
@@ -2102,6 +2103,42 @@ def _newell(points):
     return nx, ny, nz
 
 
+def curve_shape_intersection(profile, shape, tol=1e-7):
+    """Where the serialized curve `profile` meets the faces of `shape`, EXACTLY.
+
+    `BRepAlgoAPI_Section` of the shape and the curve's wire: the result's vertices are the
+    crossings, bounded by the faces' real trims (a hit outside a trim is not one). Returns
+    ``(points, overlap_edges)`` -- de-duplicated world points, and how many section edges
+    came back (the curve lying IN a face), which the caller must not silently drop.
+    """
+    _need()
+    from OCP.BRep import BRep_Tool
+    from OCP.BRepAlgoAPI import BRepAlgoAPI_Section
+    from OCP.TopAbs import TopAbs_EDGE, TopAbs_VERTEX
+    from OCP.TopExp import TopExp_Explorer
+    from OCP.TopoDS import TopoDS
+
+    section = BRepAlgoAPI_Section(shape, wire_from_curve(profile))
+    section.Build()
+    if not section.IsDone():
+        raise KernelError("the curve/shape section failed")
+    result = section.Shape()
+    edges = 0
+    explorer = TopExp_Explorer(result, TopAbs_EDGE)
+    while explorer.More():
+        edges += 1
+        explorer.Next()
+    points = []
+    explorer = TopExp_Explorer(result, TopAbs_VERTEX)
+    while explorer.More():
+        p = BRep_Tool.Pnt_s(TopoDS.Vertex(explorer.Current()))
+        q = (p.X(), p.Y(), p.Z())
+        if all(sum((q[i] - o[i]) ** 2 for i in range(3)) > tol * tol for o in points):
+            points.append(q)
+        explorer.Next()
+    return points, edges
+
+
 def planar_polyhedron(shape):
     """Return `shape` as ``(vertices, faces, edges)``, or raise KernelError.
 
@@ -2183,9 +2220,14 @@ def _face_type_name(face):
         return "not a plane"
 
 
-def make_polyhedron(vertices, faces):
+def make_polyhedron(vertices, faces, open_shell=False):
     """Build a closed, valid solid of planar polygon faces (`planar_polyhedron`'s form:
     each face a list of loops of 1-based vertex indices, outer first, then holes).
+
+    `open_shell` (the recipe's optional `open`) instead returns the sewn SHELL, which must
+    be valid, connected and NOT closed -- Pyramid Solid=No, MEASURED in the reference CAD application as an
+    "open polysurface with 5 surfaces" (research_all_13 note 119). Each face is still an
+    exact PLANE; only the missing face makes it open.
 
     Each face is a real PLANE bounded by straight edges through its own corners. The faces
     are sewn into one shell, and the solid is turned outward if it came back inside-out
@@ -2230,6 +2272,14 @@ def make_polyhedron(vertices, faces):
     sewed = sew.SewedShape()
     if sewed.ShapeType() != TopAbs_ShapeEnum.TopAbs_SHELL:
         raise KernelError("the faces did not sew into a single shell")
+    if open_shell:
+        shell = TopoDS.Shell(sewed)
+        if not is_valid(shell):
+            raise KernelError("the open shell is not valid")
+        if BRepBuilderAPI_MakeSolid(shell).IsDone() and is_airtight(
+                BRepBuilderAPI_MakeSolid(shell).Solid()):
+            raise KernelError("an open polyhedron's faces close into a solid")
+        return shell
     solid = BRepBuilderAPI_MakeSolid(TopoDS.Shell(sewed)).Solid()
     if not is_airtight(solid):
         raise KernelError("the faces do not close into a solid")

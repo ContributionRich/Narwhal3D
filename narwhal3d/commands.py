@@ -806,6 +806,8 @@ class Command:
             # A selection-acting command can opt into cancelling on an empty confirm.
             # Two-set Boolean commands do not opt in, so they continue waiting.
             if getattr(self, "cancel_on_empty_set", False):
+                if getattr(self, "silent_empty_cancel", False):
+                    return None, True
                 return f"{self.name} cancelled", True
             return "Nothing selected", False
 
@@ -1974,16 +1976,39 @@ class SizeStepMixin:
 class LineCmd(Command):
     """`Line` -- the command behavior.
 
-    Documented options: `BothSides` ("Draws the object on both sides of
-    the start point, creating the object twice as long as you indicate") and `Vertical`
-    ("Draws the line vertical to the construction plane... Pick the end of the line or
-    type a length") are built; `Normal`, `Angled`, `FourPoint`, `Bisector`,
-    `Perpendicular`, `Tangent`, `Extension` are declared and say "not implemented yet".
+    Built: `BothSides` ("Draws the object on both sides of the start point"), `Vertical`,
+    `Angled`, `FourPoint` and `Bisector`. `Normal`, `Perpendicular`, `Tangent`,
+    `Extension` are declared and say "not implemented yet".
+
+    MEASURED (research_all_13 note 082), all with typed points:
+
+    * prompts `Start of line` / `End of line`; with BothSides the first is `Middle of line`;
+    * Angled -- `Start of base line`, `End of base line`, `Pivot angle`, `End of line`:
+      the line leaves the base START at the pivot angle (in the CPlane, about its normal)
+      and the end pick is PROJECTED onto that direction (base 0->4x, 45 deg in Front,
+      end -> (1,0,1));
+    * FourPoint -- base start/end, `Start of line`, `End of line`: the line starts at
+      point 3 and runs along the base direction for the projection of point 4 (6 long);
+    * Bisector -- `Start of bisector line`, `Start of angle to bisect`, `End of angle to
+      bisect`, `End of line`: along the bisector of the angle, end projected onto it;
+    * a zero-length line re-prompts `End of line` with NO message.
+
+    The help adds "Pick the end of the line or type a length" for Bisector and Vertical,
+    so a typed number at these end prompts is a length (OURS for Angled / FourPoint).
     """
 
     name = "Line"
     description = "Draw a line segment. Enter two points."
-    steps = [("Point 1:", "point"), ("Point 2:", "point")]
+    steps = [("Start of line:", POINT), ("End of line:", POINT)]
+    _MODE_STEPS = {
+        "Vertical": [("Start of line:", POINT), ("End of line:", DISTANCE)],
+        "Angled": [("Start of base line:", POINT), ("End of base line:", POINT),
+                   ("Pivot angle:", NUMBER), ("End of line:", DISTANCE)],
+        "FourPoint": [("Start of base line:", POINT), ("End of base line:", POINT),
+                      ("Start of line:", POINT), ("End of line:", DISTANCE)],
+        "Bisector": [("Start of bisector line:", POINT), ("Start of angle to bisect:", POINT),
+                     ("End of angle to bisect:", POINT), ("End of line:", DISTANCE)],
+    }
     options = (
         opts.Option("BothSides", opts.TOGGLE, default=False,
                     help="Draws the object on both sides of the start point, creating "
@@ -2005,14 +2030,28 @@ class LineCmd(Command):
     )
 
     def on_mode(self, name, ctx):
-        if name == "Vertical":
+        if name in self._MODE_STEPS:
             if self.args:
-                return "Line: Vertical is chosen before the start point", False
-            # the reference CAD application's prompts in the command UI: "Start of line" / "End of line"
-            self.steps = [("Start of line:", POINT), ("End of line:", DISTANCE)]
-            self._vertical = True
-            return "Line: Vertical mode -- pick the start, then the end or a length.", False
+                return f"Line: {name} is chosen before the start point", False
+            self.steps = list(self._MODE_STEPS[name])
+            self._line_mode = name
+            self._vertical = name == "Vertical"
+            self._sync_middle_prompt()
+            if name == "Vertical":
+                return "Line: Vertical mode -- pick the start, then the end or a length.", False
+            return None, False
         return super().on_mode(name, ctx)
+
+    def on_option_set(self, option, value, ctx):
+        if option.name == "BothSides":
+            self._sync_middle_prompt()
+        return super().on_option_set(option, value, ctx)
+
+    def _sync_middle_prompt(self):
+        # MEASURED: with BothSides the plain line's first prompt is "Middle of line".
+        if getattr(self, "_line_mode", None) is None and not self.args:
+            first = "Middle of line:" if self.opt.get("BothSides") else "Start of line:"
+            self.steps[0] = (first, POINT)
 
     def _normal(self, ctx):
         return tuple(float(c) for c in self._active_cplane(ctx).zaxis)
@@ -2024,26 +2063,73 @@ class LineCmd(Command):
             return None
         return (self.args[0], tuple(float(c) for c in plane.zaxis))
 
+    def _direction(self, ctx):
+        """(origin, unit direction) of the line the END step measures along, or a refusal
+        string. Vertical: the CPlane normal; the others from the inputs so far."""
+        mode = getattr(self, "_line_mode", None)
+        a = self.args
+        if mode == "Vertical":
+            return a[0], self._normal(ctx)
+        if mode in ("Angled", "FourPoint"):
+            base = cplane.normalize(_sub3(a[1], a[0]))
+            if base is None:
+                return "the base line has no length"
+            if mode == "FourPoint":
+                return a[2], base
+            n = self._normal(ctx)
+            t = math.radians(float(a[2]))
+            c, s = math.cos(t), math.sin(t)
+            k = cplane.dot(n, base)
+            cross = (n[1] * base[2] - n[2] * base[1], n[2] * base[0] - n[0] * base[2],
+                     n[0] * base[1] - n[1] * base[0])
+            d = tuple(base[i] * c + cross[i] * s + n[i] * k * (1.0 - c) for i in range(3))
+            return a[0], d
+        if mode == "Bisector":
+            u = cplane.normalize(_sub3(a[1], a[0]))
+            v = cplane.normalize(_sub3(a[2], a[0]))
+            if u is None or v is None:
+                return "an arm of the angle has no length"
+            d = cplane.normalize(tuple(u[i] + v[i] for i in range(3)))
+            if d is None:
+                return "a straight (180 degree) angle has no single bisector"  # OURS
+            return a[0], d
+        return None
+
     def _parse_distance(self, text, ctx):
-        """Vertical's end: a typed length, or the SIGNED projection of a picked point on
-        the CPlane normal (a pick below the CPlane draws downward, as `ExtrudeCrv`)."""
+        """The mode's end: a typed length, or the SIGNED projection of a picked point on the
+        mode's direction (a pick below the CPlane draws Vertical downward, as
+        `ExtrudeCrv`)."""
         stripped = (text or "").strip()
         try:
             return parse_number(stripped)
         except ValueError:
             pass
-        start = self.args[0]
-        p = parse_point(stripped, self._active_cplane(ctx), start)
-        n = self._normal(ctx)
-        return sum((p[i] - start[i]) * n[i] for i in range(3))
+        found = self._direction(ctx)
+        if isinstance(found, str):
+            raise ValueError(f"Line: {found}")
+        origin, d = found
+        p = parse_point(stripped, self._active_cplane(ctx), self._last_point())
+        return sum((p[i] - origin[i]) * d[i] for i in range(3))
+
+    def _reprompt_end(self):
+        # MEASURED: a zero-length line re-prompts "End of line" with no message.
+        self.args.pop()
+        self.step_index = len(self.args)
+        return None, False
 
     def execute(self, ctx: NarwhalContext):
-        p1, p2 = self.args
-        if getattr(self, "_vertical", False):
-            n = self._normal(ctx)
-            p2 = tuple(p1[i] + n[i] * float(p2) for i in range(3))
+        mode = getattr(self, "_line_mode", None)
+        if mode is None:
+            p1, p2 = self.args
+        else:
+            found = self._direction(ctx)
+            if isinstance(found, str):
+                return f"Line: {found}", True
+            p1, d = found
+            length = float(self.args[-1])
+            p2 = tuple(p1[i] + d[i] * length for i in range(3))
         if math.dist(p1, p2) <= 0.0:
-            return "Line: the start and end are the same point", True
+            return self._reprompt_end()
         if self.opt.get("BothSides"):
             p1 = tuple(2 * p1[i] - p2[i] for i in range(3))
         geom = bridge.make_line(p1, p2)
@@ -3932,7 +4018,9 @@ class HyperbolaCmd(Command):
 
     name = "Hyperbola"
     description = "Draw a hyperbola from its center, focus and branch end."
-    steps = [("Center:", POINT), ("Focus:", POINT), ("End:", POINT)]
+    # MEASURED (research_all_13 note 071): the reference CAD application's prompt wording.
+    steps = [("Hyperbola center:", POINT), ("Hyperbola focus:", POINT),
+             ("Hyperbola end:", POINT)]
     options = (
         opts.Option("Default", opts.MODE, help="Use center, focus and end."),
         opts.Option("FromCoefficient", opts.MODE, help="Use A and B coefficients."),
@@ -3957,6 +4045,8 @@ class HyperbolaCmd(Command):
         center, focus, end = self.args
         try:
             curve, a, b = conics.hyperbola_from_center(center, focus, end)
+        except conics.HyperbolaEndOnAxis:
+            return None, True      # MEASURED (#71 item 6): a silent return, nothing made
         except ValueError as exc:
             return f"Hyperbola: {exc}", True
         displays = [ctx.add_geometry(curve, "Hyperbola")[1]]
@@ -4812,12 +4902,23 @@ class CurveThroughSrfControlPtCmd(Command):
 
 
 class TweenCurvesCmd(Command):
-    """Create compatible control-point tween curves between two inputs."""
+    """Create compatible control-point tween curves between two inputs.
+
+    MEASURED (research_all_13 note 175): with two curves PRESELECTED the reference CAD application skips the
+    picks and asks "Press Enter to accept options ( Number=1  OutputLayer=CurrentLayer
+    MatchMethod=None  Flip ):"; Enter builds the tween. `MatchMethod=None` is the
+    control-point matching (the help's first MatchMethod entry), and SampleNumber is not
+    in that prompt -- OURS: it is offered once MatchMethod=SamplePoints, which it governs.
+    """
 
     name = "TweenCurves"
     description = "Create intermediate curves between two compatible curves."
-    steps = [("Select first curve:", OBJECTS), ("Select second curve:", OBJECTS)]
+    ACCEPT_PROMPT = "Press Enter to accept options:"
+    steps = [("Select first curve:", OBJECTS), ("Select second curve:", OBJECTS),
+             (ACCEPT_PROMPT, TEXT)]
     preselect_names = 2
+    _SAMPLE_NUMBER = opts.Option("SampleNumber", opts.VALUE, default=100, value_kind="number",
+                                 help="Sample count for SamplePoints matching.")
     options = (
         opts.Option("Number", opts.VALUE, default=1, value_kind="number",
                     help="Number of curves to create between the inputs."),
@@ -4825,16 +4926,33 @@ class TweenCurvesCmd(Command):
                     choices=("CurrentLayer", "StartCrv", "EndCrv"),
                     default="CurrentLayer", help="Layer for the tween curves."),
         opts.Option("MatchMethod", opts.ENUM,
-                    choices=("ControlPoint", "Refit", "SamplePoints"),
-                    default="ControlPoint", help="Method for matching the curves."),
-        opts.Option("SampleNumber", opts.VALUE, default=100, value_kind="number",
-                    help="Sample count for SamplePoints matching."),
+                    choices=("None", "Refit", "SamplePoints"),
+                    default="None", help="Method for matching the curves."),
         opts.Option("Flip", opts.MODE, help="Reverse the second curve direction."),
     )
 
     def __init__(self):
         super().__init__()
         self._flip = False
+        self.opt.setdefault("SampleNumber", 100)
+
+    def on_option_set(self, option, value, ctx):
+        if option.name == "MatchMethod":
+            base = tuple(o for o in self.options if o.name != "SampleNumber")
+            self.options = base + ((self._SAMPLE_NUMBER,) if value == "SamplePoints" else ())
+        return super().on_option_set(option, value, ctx)
+
+    def _enter_default(self, ctx):
+        if self.step_index == 2:
+            return ""
+        return None
+
+    def _feed(self, text, ctx):
+        stripped = (text or "").strip()
+        if (self.step_index == 2 and stripped and self.pending_option is None
+                and opts.match(stripped, self.options, self.opt).status == opts.NONE):
+            return f"{self.name}: press Enter to accept options", False
+        return super()._feed(text, ctx)
 
     def on_mode(self, name, ctx):
         if name == "Flip":
@@ -4848,11 +4966,11 @@ class TweenCurvesCmd(Command):
         return int(item.Attributes.LayerIndex) if item is not None else None
 
     def execute(self, ctx):
-        first_name, second_name = self.args
+        first_name, second_name = self.args[:2]
         first, second = ctx.geom_by_name(first_name), ctx.geom_by_name(second_name)
         if not isinstance(first, r3.Curve) or not isinstance(second, r3.Curve):
             return "TweenCurves: select two curves", True
-        method = self.opt.get("MatchMethod", "ControlPoint")
+        method = self.opt.get("MatchMethod", "None")
         if method == "Refit":
             return "TweenCurves: MatchMethod=Refit is not implemented yet", True
         number_value = float(self.opt.get("Number", 1))
@@ -5992,11 +6110,30 @@ class Scale1DCmd(_ScaleBase):
     description = "Scale selected objects in one direction."
     steps = ScaleCmd.steps[:2] + [(_ScaleBase.FACTOR_PROMPT, DISTANCE)]
     options = ScaleCmd.options
+    # MEASURED (research_all_13 note 132): after a typed factor the reference CAD application asks "Scale
+    # direction ( Copy=No  Rigid=No  XAxis  YAxis  ZAxis ):", and `XAxis` finished the
+    # command, scaling along X. The axes are offered only at that prompt, as there.
+    # DERIVED: they are the active CPlane's axes -- measured only in the world Top CPlane,
+    # where CPlane X is world X.
+    _AXES = (opts.Option("XAxis", opts.MODE, help="Scale along the CPlane x-axis."),
+             opts.Option("YAxis", opts.MODE, help="Scale along the CPlane y-axis."),
+             opts.Option("ZAxis", opts.MODE, help="Scale along the CPlane z-axis."))
 
     def _next_step(self, args):
         if len(args) == 3 and not _is_point(args[2]):
+            self.options = tuple(ScaleCmd.options) + self._AXES
             return ("Scale direction:", POINT)
         return ("Second reference point:", DISTANCE)
+
+    def on_mode(self, name, ctx):
+        if name in ("XAxis", "YAxis", "ZAxis") and self.step_index < len(self.steps) \
+                and self.steps[self.step_index][0] == "Scale direction:":
+            axis = getattr(self._plane, name[0].lower() + "axis")
+            origin = self.args[1]
+            self.args.append(tuple(float(origin[i]) + float(axis[i]) for i in range(3)))
+            self.step_index += 1
+            return self.execute(ctx)
+        return super().on_mode(name, ctx)
 
     def _compute(self, args, live=False):
         if len(args) < 3:
@@ -7683,6 +7820,19 @@ class _VisibilityCmd(Command):
         return self._message(names), True
 
 
+# MEASURED (Research13 #160, #161, #181, docs/measured/research_all_13/notes): the
+# exact wording of the reference CAD application for the all-object visibility commands.
+NO_HIDDEN_MESSAGE = "No objects are hidden."
+NO_LOCKED_MESSAGE = "No objects are locked."
+
+
+def _counted_message(verb, count, noun):
+    """``Showing one hidden object.`` / ``Unlocking 2 objects.`` (the reference CAD application wording)."""
+    if count == 1:
+        return f"{verb} one {noun}."
+    return f"{verb} {count} {noun}s."
+
+
 class HideCmd(_VisibilityCmd):
     """`Hide` -- conceal the SELECTION from view (the command behavior).
 
@@ -7700,6 +7850,8 @@ class HideCmd(_VisibilityCmd):
     steps = [("Select objects to hide:", OBJECTS_MULTI)]
     preselect_names = 1
     cancel_on_empty_set = True
+    # MEASURED (research_all_13 note 070): Enter at an empty prompt ends silently.
+    silent_empty_cancel = True
     _new_mode = r3.ObjectMode.Hidden
 
     def _targets(self, ctx):
@@ -7709,7 +7861,8 @@ class HideCmd(_VisibilityCmd):
         return names, None
 
     def _message(self, names):
-        return f"Hid {len(names)} object{'s' if len(names) != 1 else ''}"
+        # MEASURED (research_all_13 note 070): a preselected Hide prints nothing.
+        return None
 
 
 class LockCmd(_VisibilityCmd):
@@ -7729,6 +7882,8 @@ class LockCmd(_VisibilityCmd):
     steps = [("Select objects to lock:", OBJECTS_MULTI)]
     preselect_names = 1
     cancel_on_empty_set = True
+    # MEASURED (research_all_13 note 084): Enter at an empty prompt ends silently.
+    silent_empty_cancel = True
     _new_mode = r3.ObjectMode.Locked
 
     def _targets(self, ctx):
@@ -7738,7 +7893,8 @@ class LockCmd(_VisibilityCmd):
         return names, None
 
     def _message(self, names):
-        return f"Locked {len(names)} object{'s' if len(names) != 1 else ''}"
+        # MEASURED (research_all_13 note 084): Lock prints nothing.
+        return None
 
 
 class ShowCmd(_VisibilityCmd):
@@ -7758,11 +7914,11 @@ class ShowCmd(_VisibilityCmd):
         hidden = [f.Attributes.Name for f in ctx.model.file.Objects
                   if f.Attributes.Mode == r3.ObjectMode.Hidden]
         if not hidden:
-            return [], "Show: nothing is hidden"
+            return [], NO_HIDDEN_MESSAGE
         return hidden, None
 
     def _message(self, names):
-        return f"Showed {len(names)} object{'s' if len(names) != 1 else ''}"
+        return _counted_message("Showing", len(names), "hidden object")
 
 
 class UnlockCmd(_VisibilityCmd):
@@ -7781,70 +7937,86 @@ class UnlockCmd(_VisibilityCmd):
         locked = [f.Attributes.Name for f in ctx.model.file.Objects
                   if f.Attributes.Mode == r3.ObjectMode.Locked]
         if not locked:
-            return [], "Unlock: nothing is locked"
+            return [], NO_LOCKED_MESSAGE
         return locked, None
 
     def _message(self, names):
-        return f"Unlocked {len(names)} object{'s' if len(names) != 1 else ''}"
+        return _counted_message("Unlocking", len(names), "object")
 
 
-class ShowSelectedCmd(_VisibilityCmd):
-    """`ShowSelected` -- re-display the SELECTED hidden objects.
+class _SelectedStateCmd(_VisibilityCmd):
+    """ShowSelected / UnlockSelected: PROMPT for the objects in `_from_mode`.
 
-    (the command behavior): the all-objects form is `Show` -- "re-displays
-    ALL hidden objects"; this is the selected-objects form, i.e. `Show` scoped
-    to the selection. A hidden object cannot be re-picked, but the selection
-    survives the hide: `Lock`/`Hide` set `Mode` without touching the selection,
-    and `ui.sync_locked_selectability` only sets `hide_select` (which blocks a
-    later re-pick, not the current selection) -- so the flow select, hide, then
-    ShowSelected brings them back. Scopes to the selected objects that ARE
-    hidden, mirroring how `Show` scopes to the document's hidden ones; selecting
-    a normal object and running this reports that none of the selection is
-    hidden rather than claiming it showed something (the explicit-refusal policy).
+    MEASURED (research_all_13 notes 070, 161, 182): the reference CAD application opens its selection prompt
+    even while a visible/unlocked object is selected -- that selection does not answer
+    it -- and Enter on a set holding none of the target state ends silently.
+    ShowSelected with nothing hidden in the document prints "No objects are hidden."
+    without prompting.
+
+    OURS: the reference CAD application deselects an object as it hides/locks it, so a preselection can never
+    hold one there. Ours survives Hide/Lock (`ui.sync_locked_selectability` blocks only a
+    re-pick), so a preselection that DOES hold hidden/locked objects still runs at once.
+    """
+
+    _from_mode = None
+    _none_in_document = None
+    cancel_on_empty_set = True
+    silent_empty_cancel = True
+
+    def _in_state(self, ctx, names):
+        return [n for n in names if self._mode_of(ctx, n) == self._from_mode]
+
+    def begin(self, ctx):
+        if self._none_in_document is not None and not any(
+                f.Attributes.Mode == self._from_mode for f in ctx.model.file.Objects):
+            return self._none_in_document, True
+        getter = getattr(ctx, "selected_objects", None)
+        picked = [o.name for o in (getter() or [])] if callable(getter) else []
+        if self._in_state(ctx, picked):
+            self.args = [picked]
+            self.step_index = len(self.steps)
+            return self._recorded(ctx, lambda: self.execute(ctx))
+        return None, False
+
+    def _targets(self, ctx):
+        if self.args:
+            names = list(self.args[0])
+        else:
+            names = [ob.name for ob in ctx.selected_objects()]
+        return self._in_state(ctx, names), None
+
+
+class ShowSelectedCmd(_SelectedStateCmd):
+    """`ShowSelected` -- re-display the chosen hidden objects (see `_SelectedStateCmd`).
+
+    (the command behavior): the all-objects form is `Show` -- "re-displays ALL hidden
+    objects"; this is the selected-objects form. A hidden object can be named at the
+    prompt (MEASURED: `_SelLast` picked a hidden line there, note 070).
     """
 
     name = "ShowSelected"
     description = "Show the selected hidden objects."
+    steps = [("Select objects to show:", OBJECTS_MULTI)]
     _new_mode = r3.ObjectMode.Normal
-
-    def _targets(self, ctx):
-        names = [ob.name for ob in ctx.selected_objects()]
-        if not names:
-            return [], "ShowSelected: select objects to show"
-        hidden = [n for n in names if self._mode_of(ctx, n) == r3.ObjectMode.Hidden]
-        if not hidden:
-            return [], "ShowSelected: none of the selected objects are hidden"
-        return hidden, None
+    _from_mode = r3.ObjectMode.Hidden
+    _none_in_document = NO_HIDDEN_MESSAGE
 
     def _message(self, names):
         return f"Showed {len(names)} object{'s' if len(names) != 1 else ''}"
 
 
-class UnlockSelectedCmd(_VisibilityCmd):
-    """`UnlockSelected` -- unlock the SELECTED locked objects.
+class UnlockSelectedCmd(_SelectedStateCmd):
+    """`UnlockSelected` -- unlock the chosen locked objects (see `_SelectedStateCmd`).
 
-    (the command behavior): "Unlock -- unlock all locked objects" / "
-    UnlockSelected -- unlock selected locked objects." This is the all-objects
-    `Unlock` scoped to the selection. A locked object cannot be re-picked
-    (`ui.sync_locked_selectability` sets `hide_select`, which blocks picking but
-    does not deselect), so the flow is: select, lock, the objects stay selected,
-    then UnlockSelected releases them. Scopes to the selected objects that ARE
-    locked, mirroring how `Unlock` scopes to the document's locked ones; a
-    selection with no locked object reports that rather than claiming an unlock.
+    (the command behavior): "UnlockSelected -- unlock selected locked objects." The reference CAD application's
+    message with nothing locked in the document was not measured, so no early exit.
     """
 
     name = "UnlockSelected"
     description = "Unlock the selected locked objects."
+    steps = [("Select objects to unlock:", OBJECTS_MULTI)]
     _new_mode = r3.ObjectMode.Normal
-
-    def _targets(self, ctx):
-        names = [ob.name for ob in ctx.selected_objects()]
-        if not names:
-            return [], "UnlockSelected: select objects to unlock"
-        locked = [n for n in names if self._mode_of(ctx, n) == r3.ObjectMode.Locked]
-        if not locked:
-            return [], "UnlockSelected: none of the selected objects are locked"
-        return locked, None
+    _from_mode = r3.ObjectMode.Locked
 
     def _message(self, names):
         return f"Unlocked {len(names)} object{'s' if len(names) != 1 else ''}"
@@ -7874,18 +8046,30 @@ class IsolateCmd(Command):
 
     name = "Isolate"
     description = "Hide all objects except the selected and locked ones."
-    steps = []
+    # MEASURED (Research13 #77): with nothing selected the reference CAD application asks
+    # "Select objects to isolate:" and an empty Enter cancels with nothing hidden.
+    # A pre-selection fills the step and runs at once. The old zero-step form hid
+    # EVERY unlocked object when nothing was selected.
+    steps = [("Select objects to isolate:", OBJECTS_MULTI)]
+    preselect_names = 1
+    cancel_on_empty_set = True
     records_undo = True        # a Mode change is a document change
 
     def execute(self, ctx: NarwhalContext):
-        # The set to keep visible: the current selection, plus every locked
+        # The set to keep visible: the answered selection, plus every locked
         # object (locked objects stay visible per the wording).
         sel = set()
-        try:
-            for ob in (ctx.selected_objects() or []):
-                sel.add((ob.name or "").lower())
-        except Exception:  # noqa: BLE001
-            pass
+        answered = self.args[0] if self.args and isinstance(self.args[0], list) else None
+        if answered:
+            sel.update((str(n) or "").lower() for n in answered)
+        else:
+            try:
+                for ob in (ctx.selected_objects() or []):
+                    sel.add((ob.name or "").lower())
+            except Exception:  # noqa: BLE001
+                pass
+        if not sel:
+            return "Isolate cancelled", True
 
         keep = set(sel)   # locked objects stay visible
         to_hide = []
@@ -8252,11 +8436,34 @@ class SetGroupNameCmd(Command):
 
     name = "SetGroupName"
     description = "Name the selected group, combining selected groups when needed."
-    steps = [("Select group members:", OBJECTS_MULTI),
+    # MEASURED (research_all_13 note 154): the reference CAD application's prompt is "Select groups to name:",
+    # and TYPED text there is a group name -- an existing one goes on to "New group name:",
+    # anything else (even `_SelLast`) prints "Not a group name." and ends the command.
+    # Picking members then Enter (the selection route) was not measured and is kept.
+    steps = [("Select groups to name:", OBJECTS_MULTI),
              ("New group name:", TEXT)]
     preselect_names = 1
     cancel_on_empty_set = True
     records_undo = True
+
+    def begin(self, ctx):
+        self._typed_groups = None
+        return super().begin(ctx)
+
+    def _feed_objects_multi_step(self, text, ctx):
+        typed = (text or "").strip()
+        if not typed:
+            return super()._feed_objects_multi_step(text, ctx)
+        matches = _group_indices_by_name(ctx.model.file, typed)
+        if not matches:
+            return "Not a group name.", True
+        if len(matches) > 1:
+            return (f"SetGroupName: group name {typed!r} is ambiguous "
+                    f"({len(matches)} matches)"), True
+        self._typed_groups = [matches[0]]
+        self.args.append([])
+        self.step_index += 1
+        return None, False
 
     @staticmethod
     def _selected_groups(ctx, names):
@@ -8282,6 +8489,8 @@ class SetGroupNameCmd(Command):
         if not new_name:
             return "SetGroupName: the group name cannot be blank", True
         group_indices, _selected_objects = self._selected_groups(ctx, selected)
+        if getattr(self, "_typed_groups", None):
+            group_indices = list(self._typed_groups)
         if not group_indices:
             return "SetGroupName: the selection is not in a group", True
 
@@ -9025,10 +9234,10 @@ class LengthCmd(Command):
             label, length, closed = items[0]
             shut = ", closed" if closed else ""
             return f"Length = {length:.10g}{unit}  ({label}{shut})"
-        lines = [f"{label}: Length = {length:.10g}{unit}" for label, length, _c in items]
+        # MEASURED (Research13 #81): for several curves the reference CAD application prints ONLY the
+        # accumulated line ("Cumulative length = 13.283 millimeters for 3 curves").
         total = math.fsum(length for _l, length, _c in items)
-        lines.append(f"Cumulative length = {total:.10g}{unit} for {len(items)} curves")
-        return "\n".join(lines)
+        return f"Cumulative length = {total:.10g}{unit} for {len(items)} curves"
 
 
 class AreaCmd(Command):
@@ -9659,48 +9868,101 @@ class InsertKnotCmd(Command):
     """
 
     name = "InsertKnot"
-    description = "Insert one knot into a curve at the point closest to the pick."
-    # Step 0: the object (the curve, singular as the help says). Step 1: the pick
-    # location, which decides where the knot goes (the closest point on the curve).
-    steps = [("Object:", OBJECTS), ("Pick a location for the knot:", POINT)]
+    description = "Insert knots into a curve at picked points; Enter when done."
+    # MEASURED (research_all_13 note 073): "Select curve or surface for knot insertion"
+    # (nothing selected), then a LOOP "Point on curve to add knot. Press Enter when
+    # done ( Automatic  Midpoints=No  Symmetrical=No ):"; a pick is projected onto the
+    # curve; `Automatic` adds one knot halfway in each interval; `Symmetrical=Yes` adds
+    # the pick and its mirror across the centre (pick 1 on a 0-4 line -> knots 1 and 3).
+    LOOP_PROMPT = "Point on curve to add knot. Press Enter when done:"
+    steps = [("Select curve or surface for knot insertion:", OBJECTS), (LOOP_PROMPT, POINT)]
+    options = (
+        opts.Option("Automatic", opts.MODE,
+                    help="Adds knots halfway between the existing knots."),
+        opts.Option("Midpoints", opts.TOGGLE, default=False,
+                    help="Places markers between existing knots."),
+        opts.Option("Symmetrical", opts.TOGGLE, default=False,
+                    help="Adds knots symmetrically about the centre of the curve."),
+    )
     # preselect_names=1: select the curve first, then run (the reference CAD application's flow); a typed name
     # still works (the selection is a shortcut, not a replacement).
     preselect_names = 1
     records_undo = True         # a knot insertion is a document change
 
-    def execute(self, ctx: NarwhalContext):
+    def on_option_set(self, option, value, ctx):
+        if option.name == "Midpoints" and value:
+            self.opt["Midpoints"] = False
+            return "InsertKnot: Midpoints markers are not implemented yet", False
+        return super().on_option_set(option, value, ctx)
+
+    def _curve(self, ctx):
+        """``(name, curve)`` to insert into, or ``(None, refusal)``."""
         name = self.args[0] if self.args else None
-        loc = self.args[1] if len(self.args) > 1 else None
         if not name and ctx.selected_objects():
             name = ctx.selected_objects()[0].name
         if not name:
-            return "InsertKnot: select a curve to insert a knot into", True
+            return None, "InsertKnot: select a curve to insert a knot into"
         geom = ctx.geom_by_name(name)
         if geom is None:
-            return f"No object named {name!r}", True
+            return None, f"No object named {name!r}"
         if not isinstance(geom, r3.Curve):
             # InsertKnot works on curves. A surface's knot insertion needs a u/v direction
             # (the `Direction`/`Toggle` options), which this command does not take --
             # report it rather than ship something else (the explicit-refusal policy).
-            return (f"InsertKnot: {name!r} is not a curve (knot insertion on surfaces "
-                    "needs a direction, which this command does not take)"), True
+            return None, (f"InsertKnot: {name!r} is not a curve (knot insertion on "
+                          "surfaces needs a direction, which this command does not take)")
         # THE MASTER RULE: refuse a master-bearing curve -- InsertKnot would
         # mutate only the display proxy and leave the OCCT master behind (audit gate 5).
         from . import kernel
 
         if kernel.master_of(geom) is not None:
-            return (f"InsertKnot: {name!r} has an analytic master; inserting a knot into "
-                    "it is not implemented yet -- mutating the proxy alone would leave "
-                    "the master behind"), True
+            return None, (f"InsertKnot: {name!r} has an analytic master; inserting a knot "
+                          "into it is not implemented yet -- mutating the proxy alone would "
+                          "leave the master behind")
+        return name, geom
+
+    def _insert(self, ctx, name, geom, params):
+        ctx.note_change(self.name)      # capture "before" before the mutation
+        for t in params:
+            geom.Knots.InsertKnot(t, 1)
+        self.args = self.args[:1]
+        self.step_index = 1
+        shown = ", ".join(f"{t:g}" for t in params)
+        return f"{name}: knot{'s' if len(params) != 1 else ''} inserted at {shown}", False
+
+    def on_mode(self, name, ctx):
+        if name == "Automatic":
+            if self.step_index != 1:
+                return "InsertKnot: select the curve first", False
+            cname, geom = self._curve(ctx)
+            if cname is None:
+                return geom, True
+            knots = sorted({float(k) for k in geom.Knots})
+            mids = [(a + b) / 2.0 for a, b in zip(knots, knots[1:]) if b > a]
+            return self._insert(ctx, cname, geom, mids)
+        return super().on_mode(name, ctx)
+
+    def _feed(self, text, ctx):
+        if (self.step_index == 1 and not (text or "").strip()
+                and self.pending_option is None):
+            return None, True       # "Press Enter when done"
+        return super()._feed(text, ctx)
+
+    def execute(self, ctx: NarwhalContext):
+        name, geom = self._curve(ctx)
+        if name is None:
+            return geom, True
+        loc = self.args[1] if len(self.args) > 1 else None
         if loc is None:
             return "InsertKnot: pick a location for the knot", True
         t = _closest_param(geom, loc)   # the parameter of the closest point to the pick
-
-        ctx.note_change(self.name)      # capture "before" before the mutation
-
-        geom.Knots.InsertKnot(t, 1)     # one knot at that parameter, in place,
-
-        return f"{name}: knot inserted at parameter {t:g}", True
+        params = [t]
+        if self.opt.get("Symmetrical"):
+            d = geom.Domain
+            mirror = float(d.T0) + float(d.T1) - t   # DERIVED: mirrored in parameter
+            if abs(mirror - t) > 1e-12:
+                params.append(mirror)
+        return self._insert(ctx, name, geom, sorted(params))
 
 
 class _CrvEndCmdBase(Command):
@@ -10232,7 +10494,10 @@ class WhatCmd(Command):
 
     name = "What"
     description = "Show the type, geometry and measurements of the selected object(s)."
-    steps = [("Select objects:", OBJECTS_MULTI)]
+    # MEASURED (research_all_13 note 185): "Select objects for displaying detailed object
+    # properties ( ShowUnits=No ):". ShowUnits is not declared: it was never toggled in
+    # the research, so what it changes is unmeasured.
+    steps = [("Select objects for displaying detailed object properties:", OBJECTS_MULTI)]
     # the reference CAD application selects first, then runs the command; the selection satisfies the step
     # and the command runs on the naming Enter (like `Delete`). A typed name still
     # works -- the step is answered by the selection OR a name.
@@ -10449,6 +10714,33 @@ class RadiusCmd(_CurvatureRadiusCmd):
                     help="Set the units for the length display."),
         opts.Option("SubCrv", opts.MODE, help="Selects part of a curve as input."),
     )
+
+    def begin(self, ctx):
+        # MEASURED (research_all_13 note 120): a PRESELECTED circle of radius 2 runs at
+        # once, no point prompt, printing "Diameter = 4.000 millimeters" then
+        # "Radius = 2.000 millimeters". Only a single circle was measured; any other
+        # preselection keeps the point prompt. Digits follow `Length`'s formatting.
+        try:
+            picked = [o.name for o in (ctx.selected_objects() or [])]
+        except Exception:  # noqa: BLE001
+            picked = []
+        if len(picked) == 1:
+            geom = ctx.geom_by_name(picked[0])
+            circle = None
+            if isinstance(geom, r3.Curve) and geom.IsClosed:
+                try:
+                    circle = geom.TryGetCircle(_document_tolerance(ctx) or 1e-6)
+                except Exception:  # noqa: BLE001
+                    circle = None
+            if circle is not None:
+                try:
+                    unit = " " + ctx.model.unit_system().lower()
+                except Exception:  # noqa: BLE001
+                    unit = ""
+                r = float(circle.Radius)
+                return (f"Diameter = {_num(2.0 * r)}{unit}\n"
+                        f"Radius = {_num(r)}{unit}"), True
+        return super().begin(ctx)
 
 
 class DiameterCmd(_CurvatureRadiusCmd):
@@ -11204,17 +11496,26 @@ class TrimCmd(Command):
 
 
 class IntersectCmd(Command):
-    """`Intersect` (curves) -- the command behavior.
+    """`Intersect` -- the command behavior.
 
     "Select objects. This creates curves or point object at the intersection of
-    the two objects." Every pair of selected CURVES is intersected (`intersect.curve_curve`:
-    Newton-refined to ~1e-12) and a point object placed at each crossing. Declared, not
-    implemented: an OVERLAP (the reference CAD application makes a curve there -- reported, not built), surfaces
-    (skipped by name), `InfinitePlane`, `SubCrv`.
+    the two objects." MEASURED (research_all_13 note 075):
+
+    * two crossing lines -> one POINT, "Found 1 intersection.";
+    * two collinear, overlapping lines -> one new CURVE, the shared part (2,0,0)-(4,0,0),
+      and that overlap counts as 1 intersection;
+    * a line through a planar surface -> one point (2,0,2); a miss -> "Found 0
+      intersections."; the inputs are kept.
+
+    Curve x curve uses `intersect.curve_curve` (Newton-refined to ~1e-12); an overlap is
+    the exact sub-curve of the first curve (`Trim`). Curve x surface is EXACT in OCCT on
+    the surface's own shape (`occt_backend.curve_shape_intersection`, trims honoured).
+    Not implemented, and said so: surface x surface, a curve lying IN a face, surfaces
+    with no exact shape, `InfinitePlane`, `SubCrv`.
     """
 
     name = "Intersect"
-    description = "Place point objects where the selected curves cross."
+    description = "Create points or curves where the selected objects intersect."
     steps = [("Select objects to intersect:", OBJECTS_MULTI)]
     preselect_names = 1
     cancel_on_empty_set = True
@@ -11224,41 +11525,77 @@ class IntersectCmd(Command):
         opts.Option("SubCrv", opts.MODE, help="Selects part of a curve as input."),
     )
 
+    @staticmethod
+    def _surface_hits(curve, shape):
+        from .kernel import occt_backend as ob
+        profile = bridge.curve_recipe(curve)
+        if profile is None:
+            return None, "its curve type cannot be carried to the kernel"
+        try:
+            points, edges = ob.curve_shape_intersection(profile, shape)
+        except Exception as exc:  # noqa: BLE001
+            return None, str(exc)
+        if edges:
+            return None, ("the curve lies in a face -- an overlap curve there is not "
+                          "implemented yet")
+        return points, None
+
     def execute(self, ctx: NarwhalContext):
-        from . import intersect
+        from . import analysis, intersect
 
         names = self.args[0]
-        curves, skipped = [], []
+        curves, surfaces, skipped = [], [], []
         for nm in names:
             g = ctx.geom_by_name(nm)
             if isinstance(g, r3.Curve):
                 curves.append((nm, g))
             elif g is not None:
-                skipped.append(nm)
-        if len(curves) < 2:
-            msg = "Intersect: select at least two curves"
+                shape = analysis.occt_shape_of(g)
+                if shape is None:
+                    skipped.append(f"{nm} (no exact surface)")
+                else:
+                    surfaces.append((nm, shape))
+        if len(curves) + len(surfaces) < 2:
+            msg = "Intersect: select at least two objects"
             if skipped:
-                msg += (f" ({', '.join(skipped)}: intersecting surfaces is not "
-                        f"implemented yet)")
+                msg += f" ({', '.join(skipped)})"
             return msg, True
-        points, overlaps = [], 0
+        points, overlaps, notes = [], [], []
         for i in range(len(curves)):
             for j in range(i + 1, len(curves)):
-                for x in intersect.curve_curve(curves[i][1], curves[j][1]):
-                    if x.overlap:
-                        overlaps += 1
-                    else:
+                a = curves[i][1]
+                for x in intersect.curve_curve(a, curves[j][1]):
+                    if not x.overlap:
                         points.append(tuple(x.point))
-        layer = _layer_index_of(ctx, curves[0][0])
+                        continue
+                    t0, t1 = sorted((float(x.t_a), float(x.t_a_end)))
+                    piece = a.Trim(t0, t1) if t1 > t0 else None
+                    if piece is None:
+                        notes.append(f"an overlap of {curves[i][0]} and {curves[j][0]} "
+                                     f"could not be cut out")
+                    else:
+                        overlaps.append(piece)
+        for cname, curve in curves:
+            for sname, shape in surfaces:
+                hits, why = self._surface_hits(curve, shape)
+                if hits is None:
+                    notes.append(f"{cname} x {sname}: {why}")
+                else:
+                    points.extend(hits)
+        if len(surfaces) > 1:
+            notes.append("surface x surface intersection is not implemented yet")
+        first = (curves or surfaces)[0][0]
+        layer = _layer_index_of(ctx, first)
         for p in points:
             ctx.add_geometry(bridge.make_point(p), "Intersect", layer)
-        msg = f"Intersect: {len(points)} point(s) created"
-        if overlaps:
-            msg += (f"; {overlaps} overlap(s) found -- an overlap curve is not "
-                    f"implemented yet")
+        for piece in overlaps:
+            ctx.add_geometry(piece, "Intersect", layer)
+        n = len(points) + len(overlaps)
+        msg = f"Found {n} intersection{'' if n == 1 else 's'}."
         if skipped:
-            msg += f"; skipped {', '.join(skipped)} (intersecting surfaces is not " \
-                   f"implemented yet)"
+            notes.append(f"skipped {', '.join(skipped)}")
+        if notes:
+            msg += " (" + "; ".join(notes) + ")"
         return msg, True
 
 
@@ -12356,7 +12693,8 @@ class UndoCmd(Command):
         name = ctx.undo_last()
         if name is None:
             return "Nothing to undo", True
-        return f"Undid {name}", True
+        # MEASURED (Research13 #123/#176): "Undoing Line", "Undoing TweenCurves".
+        return f"Undoing {name}", True
 
 
 class RedoCmd(Command):
@@ -12371,12 +12709,13 @@ class RedoCmd(Command):
     records_undo = False
 
     def execute(self, ctx: NarwhalContext):
+        # MEASURED (Research13 #123): "Nothing to redo." / "Redoing Line".
         if not ctx.undo.can_redo:
-            return "Nothing to redo", True
+            return "Nothing to redo.", True
         name = ctx.redo_last()
         if name is None:
-            return "Nothing to redo", True
-        return f"Redid {name}", True
+            return "Nothing to redo.", True
+        return f"Redoing {name}", True
 
 
 class GumballNumericCmd(Command):
@@ -12594,10 +12933,12 @@ class PointsOnCmd(Command):
         if not shown:
             return (f"PointsOn: no control points we can display on "
                     f"{', '.join(empty)} (only NURBS curves so far)"), True
-        msg = f"Control points on for {len(shown)} object(s)"
+        # MEASURED (research_all_13 note 111): with a preselection PointsOn runs with NO
+        # message. Only the honesty note about unsupported objects is printed.
+        msg = None
         if empty:
-            msg += (f"; not supported yet for {', '.join(empty)} "
-                    f"(only NURBS curves so far)")
+            msg = (f"PointsOn: not supported yet for {', '.join(empty)} "
+                   f"(only NURBS curves so far)")
         return msg, True
 
 
@@ -12606,13 +12947,11 @@ class PointsOffCmd(Command):
     # Edit > Control Points > Control Points Off.
     name = "PointsOff"
     description = "Turn off the display of control points."
-    # the command behavior Ask for the selection (a set-step)
-    # instead of the old "no selection -> clear all" (a behaviour change,
-    # documented in the entry); a pre-selection fills it and runs
-    # immediately, an empty confirm cancels.
-    steps = [("Select objects to hide points on:", OBJECTS_MULTI)]
-    preselect_names = 1
-    cancel_on_empty_set = True
+    # MEASURED (Research13 #110): the reference CAD application's PointsOff never asks for objects -- with or
+    # without a selection it runs on the naming Enter. With nothing selected every
+    # object's points go off; a pre-selection limits it to those objects (OURS: the reference CAD application's
+    # scope with a selection was not separately measured).
+    steps = []
     records_undo = False
 
     def execute(self, ctx: NarwhalContext):
@@ -12621,11 +12960,12 @@ class PointsOffCmd(Command):
         except Exception:  # noqa: BLE001
             return "PointsOff: no viewport session", True
         sel = [ob.name for ob in ctx.selected_objects()]
+        # MEASURED (research_all_13 note 110): PointsOff prints nothing.
         if sel:
-            n = ui.set_points_on(sel, False)
-            return f"Control points off for {n} object(s)", True
-        n = ui.clear_points_on()
-        return f"Control points off ({n} object(s))", True
+            ui.set_points_on(sel, False)
+            return None, True
+        ui.clear_points_on()
+        return None, True
 
 
 class SelAllCmd(Command):
@@ -12654,9 +12994,13 @@ class SelAllCmd(Command):
         except Exception:  # noqa: BLE001
             return f"{self.name}: no viewport session", True
         # every NAMED object in the document -- the document is the source of
-        # truth, not the Blender scene, which also holds display-only objects
+        # truth, not the Blender scene, which also holds display-only objects.
+        # MEASURED (Research13 #76/#134): SelAll and Invert only ever select
+        # VISIBLE, unlocked objects; hidden and locked ones are never added.
         all_names = [f.Attributes.Name for f in ctx.model.file.Objects
-                     if f.Attributes.Name]
+                     if f.Attributes.Name
+                     and f.Attributes.Mode not in (r3.ObjectMode.Hidden,
+                                                   r3.ObjectMode.Locked)]
         current = [ob.name for ob in ctx.selected_objects()]
         wanted = fn(all_names, current)
         found = ui.apply_selection(wanted)
@@ -12897,15 +13241,22 @@ class SelDupCmd(Command):
             if fp is None:
                 continue
             groups.setdefault(fp, []).append(name)
+        # MEASURED (Research13 #137): two identical lines -> "Found 1 duplicate."
+        # and ONE curve selected. The reference CAD application leaves one member of each identical set
+        # unselected. OURS: the kept member is the FIRST in document order (the
+        # original); which member the reference CAD application keeps was not measured.
         wanted = [name for names in groups.values() if len(names) >= 2
-                  for name in names]
+                  for name in names[1:]]
         try:
             ctx.select_by_names(wanted)
         except Exception:  # noqa: BLE001 -- headless stubs always provide this
             pass
         n = len(wanted)
-        noun = "object" if n == 1 else "objects"
-        return f"{self.name}: {n} {noun} selected", True
+        if n == 0:
+            return "No duplicates found. Nothing added to the selection.", True
+        noun = "duplicate" if n == 1 else "duplicates"
+        objects = "object" if n == 1 else "objects"
+        return f"Found {n} {noun}. {n} {objects} added to selection.", True
 
 
 class SelNameCmd(Command):
@@ -13310,29 +13661,80 @@ class SelPrevCmd(Command):
         return _apply_selection(ctx, prev, deselect, "SelPrev")
 
 
+def _selection_noun(geom, count):
+    """The reference CAD application's object noun for a selection count. MEASURED (research_all_13 note 138):
+    "3 curves added to selection."; the other nouns are OURS (the reference CAD application's own type names)."""
+    if isinstance(geom, r3.Curve):
+        noun = "curve"
+    elif isinstance(geom, r3.Brep):
+        noun = "surface" if len(geom.Faces) == 1 else "polysurface"
+    elif isinstance(geom, r3.Extrusion):
+        noun = "extrusion"
+    elif isinstance(geom, r3.Mesh):
+        noun = "mesh"
+    elif isinstance(geom, r3.Point):
+        noun = "point"
+    else:
+        noun = "object"
+    if count == 1:
+        return noun
+    return "meshes" if noun == "mesh" else noun + "s"
+
+
 class SelectCmd(Command):
+    """`Select` -- MEASURED (research_all_13 note 138): the prompt is "Select objects:";
+    typing `All` selects every selectable object ("3 curves added to selection.") and the
+    prompt STAYS open until Enter. A typed object name adds that object. `None` clears
+    the selection (OURS: the reference CAD application's selection keyword, not measured in this command)."""
+
     name = "Select"
-    description = "Select all (A), none (N), or a name."
-    steps = [("What? (all/none/name):", "text")]
+    description = "Select objects: All, None, or object names; Enter when done."
+    steps = [("Select objects:", OBJECTS_MULTI)]
+    records_undo = False        # selection is not a document change
+
+    def _selected_names(self, ctx):
+        getter = getattr(ctx, "selected_objects", None)
+        return [o.name for o in (getter() or [])] if callable(getter) else []
+
+    def begin(self, ctx):
+        # OURS, unchanged from the earlier app: Select starts from an empty selection.
+        # How the reference CAD application treats a PRIOR selection was not measured;
+        # within one run every answer adds to the selection ("added to selection").
+        selector = getattr(ctx, "select_by_names", None)
+        if callable(selector):
+            selector([])
+        return super().begin(ctx)
+
+    def _added_message(self, ctx, names):
+        geoms = [ctx.geom_by_name(n) for n in names]
+        if not geoms:
+            return "No objects added to selection."  # OURS: not measured
+        nouns = {_selection_noun(g, 1) for g in geoms}
+        if len(nouns) == 1:
+            return f"{len(geoms)} {_selection_noun(geoms[0], len(geoms))} added to selection."
+        return f"{len(geoms)} objects added to selection."
+
+    def _feed_objects_multi_step(self, text, ctx):
+        word = (text or "").strip()
+        if not word:
+            return None, True
+        current = self._selected_names(ctx)
+        if word.lower() == "all":
+            candidates = [f.Attributes.Name for f in ctx.model.file.Objects
+                          if f.Attributes.Name and f.Attributes.Mode == r3.ObjectMode.Normal]
+        elif word.lower() == "none":
+            ctx.select_by_names([])
+            return None, False
+        else:
+            if ctx.geom_by_name(word) is None:
+                return f"No object named {word!r}", False
+            candidates = [word]
+        added = [n for n in candidates if n not in current]
+        ctx.select_by_names(current + added)
+        return self._added_message(ctx, added), False
 
     def execute(self, ctx: NarwhalContext):
-        import bpy
-
-        what = self.args[0]
-        for ob in bridge.view_layer_selected():
-            ob.select_set(False)
-        if what.lower() in ("all", "a"):
-            for ob in bpy.context.scene.objects:
-                if bridge.display_visible(ob):
-                    ob.select_set(True)
-            return f"Selected {len(ctx.selected_objects())} object(s)", True
-        if what.lower() in ("none", "n"):
-            return "Selection cleared", True
-        ob = ctx.object_by_name(what)
-        if ob is None:
-            return f"No object named {what!r}", True
-        ob.select_set(True)
-        return f"Selected {ob.name}", True
+        return None, True
 
 
 class ZoomCmd(Command):

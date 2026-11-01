@@ -2434,11 +2434,16 @@ def make_ellipsoid(center, rx, ry, rz, plane=None):
     return _occt_primitive("Ellipsoid", {"kind": "sphere", "radius": 1.0, "xform": xf})
 
 
-def make_pyramid(center, radius, side_count, height, inscribed=True, plane=None):
+def make_pyramid(center, radius, side_count, height, inscribed=True, plane=None,
+                 solid=True):
     """a PYRAMID (the command behavior: "Draw the base polygon" -- `make_polygon`'s
     rules, Inscribed or Circumscribed -- then the apex `height` along the plane normal).
     `{PLANE: n + 1}`, volume A_base h / 3. Recipe `polyhedron`  with world vertices,
-    every face wound outward."""
+    every face wound outward.
+
+    `solid=False` is the reference CAD application's Solid=No: MEASURED (research_all_13 note 119) an "open
+    polysurface with 5 surfaces" for a pentagon -- the n side triangles, no base. Recipe
+    `polyhedron` with `open: True`; still `{PLANE: n}`, exact."""
     n = int(side_count)
     r, h = float(radius), float(height)
     if n < 3 or r <= 0.0 or h == 0.0:
@@ -2461,6 +2466,17 @@ def make_pyramid(center, radius, side_count, height, inscribed=True, plane=None)
     base = list(range(n, 0, -1)) if up else list(range(1, n + 1))
     sides = [[i + 1, (i + 1) % n + 1, a] if up else [(i + 1) % n + 1, i + 1, a]
              for i in range(n)]
+    if not solid:
+        occt = _occt()
+        if occt is None:
+            raise ValueError("Pyramid needs the OCCT kernel, which is not installed")
+        recipe = {"kind": "polyhedron", "vertices": pts, "faces": [[s] for s in sides],
+                  "open": True}
+        try:
+            shape = occt.from_recipe(recipe)
+        except Exception as e:  # noqa: BLE001
+            raise ValueError(f"Pyramid: {e}") from e
+        return occt_backed(shape, recipe)
     faces = [[base]] + [[s] for s in sides]
     return _occt_primitive("Pyramid", {"kind": "polyhedron", "vertices": pts, "faces": faces})
 
@@ -8887,24 +8903,56 @@ def _build_polyline_chain(members, geoms, tolerance):
     return r3.PolylineCurve([r3.Point3d(*v) for v in verts])
 
 
-def _build_polycurve_chain(members, geoms):
+def _build_polycurve_chain(members, geoms, tolerance=None):
     """A PolyCurve for a chain, reversing the members that need it.
 
     Every member is `Duplicate`d first: `Reverse` mutates in place,
     and the originals still belong to the document until the command decides the
     join succeeded.
 
+    MEASURED (Research13 #78): joining two end-to-end lines and a free curve gave
+    the reference CAD application's "Open polycurve with 2 curve segments" -- segment 1 an open POLYLINE
+    with 3 points (the two lines merged), segment 2 the NURBS curve. So a run of
+    two or more consecutive straight members becomes ONE polyline segment here,
+    built by the same vertex merge as `_build_polyline_chain`.
+
     `RemoveNesting` is called at the end because appending a PolyCurve into a
     PolyCurve NESTS it -- two curves of 1 and 2 segments append to
     `SegmentCount == 2` with `IsNested == True`, and flatten to 3 afterwards.
     """
     out = r3.PolyCurve()
+    run = []
+
+    def flush():
+        if not run:
+            return True
+        if len(run) >= 2 and tolerance is not None:
+            piece = _build_polyline_chain(list(run), geoms, tolerance)
+            if piece is not None:
+                run.clear()
+                return out.Append(piece)
+        for key, reverse in run:
+            piece = geoms[key].Duplicate()
+            if reverse and not piece.Reverse():
+                return False
+            if not out.Append(piece):
+                return False
+        run.clear()
+        return True
+
     for key, reverse in members:
+        if _polyline_vertices(geoms[key]) is not None:
+            run.append((key, reverse))
+            continue
+        if not flush():
+            return None
         piece = geoms[key].Duplicate()
         if reverse and not piece.Reverse():
             return None
         if not out.Append(piece):
             return None
+    if not flush():
+        return None
     if out.IsNested:
         out.RemoveNesting()
     return out
@@ -8937,7 +8985,7 @@ def join_curves(items, tolerance):
     for chain in joinchain.joinable(segs, tolerance):
         geom = _build_polyline_chain(chain.members, geoms, tolerance)
         if geom is None:
-            geom = _build_polycurve_chain(chain.members, geoms)
+            geom = _build_polycurve_chain(chain.members, geoms, tolerance)
         if geom is not None:
             out.append((chain.keys, geom, chain.closed))
     return out
