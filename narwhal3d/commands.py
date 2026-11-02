@@ -16366,8 +16366,8 @@ class PipeCmd(Command):
 
     Declared, not built (each reports "not implemented yet" by name when used): `Thick`
     (two walls), `Diameter/Radius`, `FitRail`, `Output`, `Multiple` (more
-    than one rail), `ChainEdges`, and a ShapeBlending=Local taper. A ShapeBlending=Global
-    taper (an end radius different from the start) is built exactly. A refused option adds nothing. NEVER fall back to `sweep.pipe`'s loft route
+    than one rail), `ChainEdges`. A taper (an end radius different from the start) is built
+    exactly: Global linear, Local with an S law. A refused option adds nothing. NEVER fall back to `sweep.pipe`'s loft route
     (the geometry integrity rule).
     """
     name = "Pipe"
@@ -16446,8 +16446,8 @@ class PipeCmd(Command):
         # MEASURED (research_all_13 #105): the prompt shows ShapeBlending=Local.
         opts.Option("ShapeBlending", opts.ENUM, choices=("Local", "Global"), default="Local",
                     help="Local: the radius stays constant at the ends and changes in the "
-                         "middle (not implemented yet for a taper). Global: the radius is "
-                         "blended linearly from one end to the other."),
+                         "middle (S-curve law). Global: the radius is blended linearly "
+                         "from one end to the other."),
         opts.Option("Output", opts.MODE, help="Output type."),
         opts.Option("Multiple", opts.MODE, help="Allow selecting more than one curve."),
         opts.Option("ChainEdges", opts.MODE,
@@ -16496,14 +16496,13 @@ class PipeCmd(Command):
         if start <= 0 or end <= 0:
             return "Pipe: the radius must be positive", True
         tapered = abs(start - end) > 1e-9
-        if tapered and self.opt.get("ShapeBlending", "Local") != "Global":
-            # MEASURED (research_preview_14 P52): the reference builds a tapered pipe by
-            # default (ShapeBlending=Local), but the Local radius law is not documented, so
-            # it is refused rather than guessed. Global (linear) is built exactly.
-            return ("Pipe: a tapered pipe with ShapeBlending=Local is not implemented yet "
-                    "-- set ShapeBlending=Global for a linear taper"), True
+        blend = self.opt.get("ShapeBlending", "Local")
+        # MEASURED (research_preview_14 P52): the reference builds a tapered pipe by default
+        # (ShapeBlending=Local). Global is the exact linear taper; Local uses the S law (constant
+        # at the ends, fastest in the middle, as the help describes) -- OURS: its exact law was
+        # not measured, and the message says so.
         out = bridge.pipe_occt(rail, start, cap=(cap == "Flat"),
-                               end_radius=end if tapered else None)
+                               end_radius=end if tapered else None, blend=blend)
         if out is None:
             reason = bridge.last_occt_decline()
             return (f"Pipe: the analytic pipe could not be built "
@@ -16511,8 +16510,9 @@ class PipeCmd(Command):
                     f"(rule 0)"), True
         _, display = ctx.add_geometry(out, "Pipe")
         if tapered:
-            return (f"Created {display} (radius {start:g} to {end:g}, "
-                    f"{cap} cap, linear taper)"), True
+            law = ("linear taper" if blend == "Global"
+                   else "Local S-curve blend, law not yet measured against the reference")
+            return (f"Created {display} (radius {start:g} to {end:g}, {cap} cap, {law})"), True
         return (f"Created {display} (radius {start:g}, "
                 f"{cap} cap, constant)"), True
 

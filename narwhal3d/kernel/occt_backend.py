@@ -1141,7 +1141,7 @@ def _wire_is_straight(wire, start, end, line_type):
     return all(chord.Distance(geom.Pole(i)) <= tol for i in range(1, geom.NbPoles() + 1))
 
 
-def make_pipe_tapered(rail, radius, end_radius):
+def make_pipe_tapered(rail, radius, end_radius, blend="Global"):
     """A round tube whose radius blends LINEARLY from `radius` to `end_radius` along `rail`
     (the reference CAD application's Pipe with ShapeBlending=Global: "The radius is linearly
     blended from one end to the other, creating pipes that taper").
@@ -1155,6 +1155,11 @@ def make_pipe_tapered(rail, radius, end_radius):
     for a taper along a curve, so this smooth B-spline is the geometry (never facets).
     OURS: on a free-form rail the blend follows the rail's normalised parameter; along a line
     or an arc that is the same as arc length.
+
+    ``blend="Local"`` (the reference CAD application's default ShapeBlending): "The pipe radius
+    stays constant at the ends and changes more rapidly in the middle" -- built with OCCT's
+    S law r0 + (r1 - r0)(3t^2 - 2t^3), which has exactly that property (zero slope at both
+    ends). OURS: the reference program's exact Local law was not measured.
     """
     _need()
     from OCP.BRepAdaptor import BRepAdaptor_CompCurve
@@ -1178,13 +1183,17 @@ def make_pipe_tapered(rail, radius, end_radius):
         if tangent.Magnitude() <= 0:
             raise KernelError("the rail has no tangent at its start")
         end = adaptor.Value(t1)
-        if _wire_is_straight(rail_wire, origin, end, GeomAbs_Line):
+        if blend == "Global" and _wire_is_straight(rail_wire, origin, end, GeomAbs_Line):
             length = origin.Distance(end)
             axis = gp_Ax2(origin, gp_Dir(gp_Vec(origin, end)))
             return BRepPrimAPI_MakeCone(axis, r0, r1, length).Cone().LateralFace()
         profile = BRepBuilderAPI_MakeWire(BRepBuilderAPI_MakeEdge(
             Geom_Circle(gp_Ax2(origin, gp_Dir(tangent)), 1.0)).Edge()).Wire()
-        law = Law_Linear()
+        if blend == "Local":
+            from OCP.Law import Law_S
+            law = Law_S()
+        else:
+            law = Law_Linear()
         law.Set(0.0, r0, 1.0, r1)
         ps = BRepOffsetAPI_MakePipeShell(rail_wire)
         ps.SetMode(False)                     # CorrectedFrenet, as `make_sweep1`
@@ -1491,7 +1500,8 @@ def from_recipe(recipe, _depth=0):
         elif kind == "pipe":
             end_radius = recipe.get("end_radius")
             if end_radius is not None and abs(float(end_radius) - float(recipe["radius"])) > 1e-12:
-                shape = make_pipe_tapered(recipe["rail"], recipe["radius"], end_radius)
+                shape = make_pipe_tapered(recipe["rail"], recipe["radius"], end_radius,
+                                          recipe.get("blend", "Global"))
             else:
                 shape = make_pipe(recipe["rail"], recipe["radius"])
         elif kind == "cap":

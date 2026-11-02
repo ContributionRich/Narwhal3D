@@ -441,8 +441,17 @@ print("-- Pipe taper --")
 ctx = Ctx()
 ctx.add(bridge.make_line((0, 0, 0), (10, 0, 0)), "Rail")
 c, msg, done = drive("pipe", ["1", "2", ""], ctx, select=["Rail"])
-check(done and not ctx.added and "Local" in (msg or "") and "not implemented" in (msg or ""),
-      f"ShapeBlending=Local (the measured default) taper is refused by name ({msg!r})")
+m = kernel.master_of(ctx.added[0]) if ctx.added else None
+# pi L * integral_0^1 (1 + 3t^2 - 2t^3)^2 dt = pi 10 * 83/35
+want_local = math.pi * 10 * 83 / 35
+check(done and m is not None and ob.is_airtight(m) and "not yet measured" in (msg or "")
+      and abs(ob.volume(m) - want_local) < 1e-6 * want_local
+      and not ob.face_types(m).get("CONE"),
+      f"ShapeBlending=Local (the measured default): an S-law taper, airtight, volume "
+      f"pi L mean(r^2), and the message says the law is unmeasured "
+      f"({m is not None and ob.volume(m)} vs {want_local:.4f}; {msg!r})")
+ctx = Ctx()
+ctx.add(bridge.make_line((0, 0, 0), (10, 0, 0)), "Rail")
 c, msg, done = drive("pipe", ["ShapeBlending=Global", "1", "2", ""], ctx, select=["Rail"])
 m = kernel.master_of(ctx.added[0]) if ctx.added else None
 frustum = math.pi * 10 / 3 * (1 + 2 + 4)

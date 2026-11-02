@@ -6733,7 +6733,7 @@ def edge_curve_data(geom):
     return occt.edge_curves(master)
 
 
-def pipe_occt(rail, radius, cap=False, end_radius=None):
+def pipe_occt(rail, radius, cap=False, end_radius=None, blend="Global"):
     """An ANALYTIC pipe along `rail`, or None if OCCT cannot carry the rail.
 
     Returns the display proxy with its master registered, like the booleans. a
@@ -6755,6 +6755,8 @@ def pipe_occt(rail, radius, cap=False, end_radius=None):
     recipe = {"kind": "pipe", "rail": profile, "radius": float(radius)}
     if end_radius is not None and abs(float(end_radius) - float(radius)) > 1e-12:
         recipe["end_radius"] = float(end_radius)
+        if blend != "Global":
+            recipe["blend"] = str(blend)
     if cap:
         recipe = {"kind": "cap", "a": recipe}
     try:
