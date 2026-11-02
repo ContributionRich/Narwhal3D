@@ -178,6 +178,8 @@ TEST_FILES = (
     "spike/test_transform_cmds.py", "spike/test_line_modes.py", "spike/test_what.py",
     "spike/test_curve_tools.py", "spike/test_insertknot.py", "spike/test_join.py",
     "spike/test_length_cmd.py",
+    "spike/test_pyramid_preview.py",
+    "spike/test_solid_previews.py",
     "spike/test_handlecurve.py", "spike/test_curve_through_srf_control_pt.py",
     "spike/test_sequential_object_steps.py",
     "spike/test_pure_core_gate.py", "spike/test_vector_export.py",

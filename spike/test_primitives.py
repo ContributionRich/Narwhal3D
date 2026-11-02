@@ -181,7 +181,9 @@ g, m, msg, c = run("truncatedcone", ["0,0,0", "3", "4", "1"])
 solid(g, {"CONE": 1, "PLANE": 2}, math.pi * 4 * 13 / 3, label=f"TruncatedCone ({msg})")
 g, m, msg, c = run("tube", ["0,0,0", "3", "1", "4"])
 solid(g, {"CYLINDER": 2, "PLANE": 2}, math.pi * 4 * 8, label=f"Tube ({msg})")
-g, m, msg, c = run("pyramid", ["NumSides=6", "0,0,0", "2", "3"])
+# MEASURED (research_preview_14 P02): a typed corner radius LOCKS and keeps the prompt;
+# Enter accepts it at the default rotation.
+g, m, msg, c = run("pyramid", ["NumSides=6", "0,0,0", "2", "", "3"])
 area6 = 6 / 2 * 4 * math.sin(2 * math.pi / 6)
 solid(g, {"PLANE": 7}, area6 * 3 / 3, label=f"Pyramid NumSides=6 ({msg})")
 
@@ -205,6 +207,21 @@ open_pyr = bridge.make_pyramid(C, 2.0, 4, 3.0, True, FRONT, solid=False)
 mo = kernel.master_of(open_pyr)
 check(mo is not None and ob.face_types(mo) == {"PLANE": 4} and not ob.is_airtight(mo),
       "make_pyramid(solid=False): 4 sides of a square pyramid, open")
+
+print("\n-- Pyramid's typed-radius lock (MEASURED research_preview_14 P02) --")
+ctx = Ctx()
+c = type(commands.COMMANDS["pyramid"])()
+c.begin(ctx)
+c.feed("0,0,0", ctx)
+msg, done = c.feed("2", ctx)
+check(not done and c.step_index == 1 and c.prompt.startswith("Corner of pyramid")
+      and c._locked_radius == 2.0, f"a typed radius keeps the corner prompt ({c.prompt!r})")
+c.feed("0,5,0", ctx)
+msg, done = c.feed("3", ctx)
+m = kernel.master_of(ctx.added[0]) if ctx.added else None
+lo_hi = bb(m) if m is not None else None
+check(done and m is not None and lo_hi[4] == 2.0 and rel(ob.volume(m), area5 * 3 / 3) < 1e-12,
+      f"the next pick sets only the rotation: a corner on +y at radius 2 ({lo_hi})")
 
 print("\n-- the COMMANDS, PICKED points --")
 g, m, msg, c = run("torus", ["0,0,0", "5", "6,0,2"])

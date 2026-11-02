@@ -315,6 +315,8 @@ REQUIRED = {
     "spike/test_insertknot.py",
     "spike/test_join.py",
     "spike/test_length_cmd.py",
+    "spike/test_pyramid_preview.py",
+    "spike/test_solid_previews.py",
     "spike/test_handlecurve.py",
     "spike/test_curve_through_srf_control_pt.py",
     "spike/test_sequential_object_steps.py",

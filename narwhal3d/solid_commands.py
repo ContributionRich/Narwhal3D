@@ -1578,6 +1578,44 @@ class PyramidCmd(_PrimitiveCmd):
         super().__init__()
         self.inscribed = True
         self._corner = None
+        self._locked_radius = None
+
+    def _feed(self, text, ctx):
+        """The corner prompt's typed-radius LOCK.
+
+        MEASURED (research_preview_14 P02): a number typed at "Corner of pyramid" does
+        not advance -- the prompt stays, the base is drawn at that radius and turns with
+        the cursor, and the next pick sets only the rotation. Enter then accepts the
+        locked radius at the default rotation (DERIVED from Line's measured typed-length
+        commit, research_all_13 #082 item 3).
+        """
+        raw = (text or "").strip()
+        if self.step_index != 1 or self.pending_option is not None:
+            return super()._feed(text, ctx)
+        if raw and self.options and opts.match(raw, self.options, self.opt).status != opts.NONE:
+            return super()._feed(text, ctx)
+        try:
+            value = commands.parse_number(raw) if raw else None
+        except ValueError:
+            value = None
+        if value is not None:
+            if value <= 0.0:
+                return f"{self.name}: the radius must be positive", False
+            self._locked_radius = float(value)
+            return None, False
+        if self._locked_radius is None:
+            return super()._feed(text, ctx)
+        if raw:
+            try:
+                self._corner = commands.parse_point(raw, self._active_cplane(ctx),
+                                                    self.args[0])
+            except ValueError as e:
+                return str(e), False
+        else:
+            self._corner = None
+        self.args.append(self._locked_radius)
+        self.step_index += 1
+        return None, False
 
     def on_mode(self, name, ctx):
         if name in ("Inscribed", "Circumscribed"):

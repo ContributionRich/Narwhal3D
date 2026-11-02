@@ -492,6 +492,207 @@ def preview_polygon(args, cursor, plane, cmd=None):
     return [poly] if poly else []
 
 
+def preview_pyramid(args, cursor, plane, cmd=None):
+    """`Pyramid`: display-only wireframe, never kernel geometry.
+
+    MEASURED (research_preview_14 P02): at "Corner of pyramid" the base polygon is drawn
+    live with a corner (inscribed) on the cursor -- it grows and turns with the mouse; a
+    typed radius (`cmd._locked_radius`) fixes the size while the cursor still turns it.
+    At "End of pyramid" the whole wire pyramid is drawn, the apex on the CPlane normal
+    through the centre at the cursor's height. The polygon follows `bridge.make_pyramid`'s
+    rules (`polygon_polyline` mirrors them), so the preview and the result agree.
+    """
+    if not args or not _is_point(args[0]):
+        return []
+    center = args[0]
+    try:
+        sides = int(float(getattr(cmd, "opt", {}).get("NumSides", 5)))
+    except (TypeError, ValueError):
+        return []
+    if not 3 <= sides <= 10_000:
+        return []
+    inscribed = bool(getattr(cmd, "inscribed", True))
+    cu, cv, _ = plane.from_world(center)
+    if len(args) == 1:
+        pu, pv, _ = plane.from_world(cursor)
+        du, dv = pu - cu, pv - cv
+        locked = getattr(cmd, "_locked_radius", None)
+        radius = float(locked) if locked else math.hypot(du, dv)
+        angle = math.atan2(dv, du) if (du or dv) else 0.0
+        poly = polygon_polyline(plane, center, radius, sides, inscribed=inscribed,
+                                start_angle=angle)
+        return [poly] if poly else []
+    if _is_point(args[1]):
+        return []
+    radius = float(args[1])
+    angle = 0.0
+    corner = getattr(cmd, "_corner", None)
+    if corner is not None:
+        pu, pv, _ = plane.from_world(corner)
+        if pu != cu or pv != cv:
+            angle = math.atan2(pv - cv, pu - cu)
+    base = polygon_polyline(plane, center, radius, sides, inscribed=inscribed,
+                            start_angle=angle)
+    if not base:
+        return []
+    if len(args) > 2:
+        return [base]
+    n = plane.zaxis
+    height = sum((cursor[i] - center[i]) * n[i] for i in range(3))
+    if abs(height) <= 1e-12:
+        return [base]
+    apex = tuple(center[i] + n[i] * height for i in range(3))
+    return [base] + [[base[i], apex] for i in range(sides)]
+
+
+def _ring(center, u, v, radius, segments=CIRCLE_SEGMENTS):
+    """A closed circle of `radius` about `center` in the plane of unit vectors u, v."""
+    if not radius > 0:
+        return []
+    return [tuple(center[k] + radius * (math.cos(a) * u[k] + math.sin(a) * v[k])
+                  for k in range(3))
+            for a in (2.0 * math.pi * i / segments for i in range(segments + 1))]
+
+
+def _along(point, direction, length):
+    return tuple(point[k] + direction[k] * length for k in range(3))
+
+
+def _signed_height(cursor, base, plane):
+    n = plane.zaxis
+    return sum((cursor[k] - base[k]) * n[k] for k in range(3))
+
+
+def _size_and_ring(args, cursor, plane):
+    """The first radius step shared by Torus / Tube / TruncatedCone: a circle about the
+    centre, its radius the cursor's distance from it (as the DISTANCE step measures)."""
+    center = args[0]
+    radius = float(args[1]) if len(args) >= 2 else _length(_sub(cursor, center))
+    return center, radius, circle_polyline(plane, center, radius)
+
+
+def _cardinals(ring):
+    return [ring[i] for i in (0, CIRCLE_SEGMENTS // 4, CIRCLE_SEGMENTS // 2,
+                              3 * CIRCLE_SEGMENTS // 4)]
+
+
+def preview_torus(args, cursor, plane):
+    """`Torus` -- MEASURED (research_preview_14 P06): at "Radius" a live circle of the
+    cursor's distance; at "Second radius" the whole torus wire, the ring fixed at the
+    picked radius and the tube following the cursor. The tube radius is measured from
+    the ring exactly as `TorusCmd._parse_distance` does, so the preview is the result."""
+    if not args or not _is_point(args[0]):
+        return []
+    center, major, ring = _size_and_ring(args, cursor, plane)
+    if len(args) == 1 or not ring:
+        return [ring] if ring else []
+    z = plane.zaxis
+    v = _sub(cursor, center)
+    h = sum(v[k] * z[k] for k in range(3))
+    rho = math.sqrt(max(0.0, sum(c * c for c in v) - h * h))
+    minor = float(args[2]) if len(args) >= 3 else math.hypot(rho - major, h)
+    if not minor > 0:
+        return [ring]
+    out = [ring, circle_polyline(plane, center, major + minor)]
+    if major - minor > 0:
+        out.append(circle_polyline(plane, center, major - minor))
+    out += [circle_polyline(plane, _along(center, z, s * minor), major) for s in (1, -1)]
+    for a in range(4):
+        ang = a * math.pi / 2.0
+        radial = tuple(math.cos(ang) * plane.xaxis[k] + math.sin(ang) * plane.yaxis[k]
+                       for k in range(3))
+        out.append(_ring(_along(center, radial, major), radial, z, minor))
+    return [p for p in out if p]
+
+
+def preview_tube(args, cursor, plane):
+    """`Tube` -- MEASURED (research_preview_14 P07): the outer circle follows the cursor,
+    then the outer stays and a live inner circle follows it, then at "End of tube" the
+    height follows the cursor along the CPlane normal. The full wire at the end step
+    (both walls at the top, four edges) is OURS, matching `preview_cylinder`."""
+    if not args or not _is_point(args[0]):
+        return []
+    center, r1, outer = _size_and_ring(args, cursor, plane)
+    if len(args) == 1 or not outer:
+        return [outer] if outer else []
+    r2 = float(args[2]) if len(args) >= 3 else _length(_sub(cursor, center))
+    inner = circle_polyline(plane, center, r2)
+    rings = [p for p in (outer, inner) if p]
+    if len(args) == 2:
+        return rings
+    h = _signed_height(cursor, center, plane)
+    if abs(h) <= 1e-12:
+        return rings
+    top = _along(center, plane.zaxis, h)
+    tops = [p for p in (circle_polyline(plane, top, r1), circle_polyline(plane, top, r2)) if p]
+    edges = [[a, b] for ring, lid in zip(rings, tops)
+             for a, b in zip(_cardinals(ring), _cardinals(lid))]
+    return rings + tops + edges
+
+
+def preview_truncatedcone(args, cursor, plane):
+    """`TruncatedCone` -- MEASURED (research_preview_14 P08): a live base circle; at "Top
+    of truncated cone" a live cone wire to an apex at the cursor's height on the CPlane
+    normal; at "Radius at top" the top circle (radius from the top centre, as the command
+    measures it) and the frustum edges."""
+    if not args or not _is_point(args[0]):
+        return []
+    center, r1, base = _size_and_ring(args, cursor, plane)
+    if len(args) == 1 or not base:
+        return [base] if base else []
+    z = plane.zaxis
+    h = float(args[2]) if len(args) >= 3 else _signed_height(cursor, center, plane)
+    if abs(h) <= 1e-12:
+        return [base]
+    top_center = _along(center, z, h)
+    if len(args) == 2:
+        return [base] + [[p, top_center] for p in _cardinals(base)]
+    r2 = _length(_sub(cursor, top_center))
+    top = circle_polyline(plane, top_center, r2)
+    if not top:
+        return [base] + [[p, top_center] for p in _cardinals(base)]
+    return [base, top] + [[a, b] for a, b in zip(_cardinals(base), _cardinals(top))]
+
+
+def preview_ellipsoid(args, cursor, plane):
+    """`Ellipsoid` -- MEASURED (research_preview_14 P09): a rubber line from the centre to
+    the cursor at the first axis; a live ellipse at the second; the whole wire at the
+    third. The frame is `EllipsoidCmd._make`'s: the first axis flattened into the CPlane,
+    the second perpendicular to it in the CPlane, the third along the normal; the second
+    and third sizes are the cursor's distance from the centre, as the command measures."""
+    if not args or not _is_point(args[0]):
+        return []
+    center = args[0]
+    if len(args) == 1:
+        return [[center, tuple(cursor)]]
+    z = plane.zaxis
+    v = _sub(args[1], center)
+    k = sum(v[i] * z[i] for i in range(3))
+    v = tuple(v[i] - k * z[i] for i in range(3))
+    a = _length(v)
+    if not a > 0:
+        return []
+    x = tuple(c / a for c in v)
+    y = (z[1] * x[2] - z[2] * x[1], z[2] * x[0] - z[0] * x[2], z[0] * x[1] - z[1] * x[0])
+    b = float(args[2]) if len(args) >= 3 else _length(_sub(cursor, center))
+    if not b > 0:
+        return [[center, args[1]]]
+
+    def ellipse(u, ru, w, rw):
+        return [tuple(center[i] + ru * math.cos(t) * u[i] + rw * math.sin(t) * w[i]
+                      for i in range(3))
+                for t in (2.0 * math.pi * j / CIRCLE_SEGMENTS
+                          for j in range(CIRCLE_SEGMENTS + 1))]
+
+    equator = ellipse(x, a, y, b)
+    if len(args) == 2:
+        return [equator]
+    c = _length(_sub(cursor, center))
+    if not c > 0:
+        return [equator]
+    return [equator, ellipse(x, a, z, c), ellipse(y, b, z, c)]
+
+
 def preview_sphere(args, cursor, plane):
     """`Sphere`: the equator circle (in the CPlane) sized by the radius.
 
@@ -1299,6 +1500,10 @@ PREVIEWS = {
     "box": preview_box,
     "sphere": preview_sphere,
     "cylinder": preview_cylinder,
+    "torus": preview_torus,
+    "tube": preview_tube,
+    "truncatedcone": preview_truncatedcone,
+    "ellipsoid": preview_ellipsoid,
     "cone": preview_cone,
     "rectangle": preview_rectangle,
     "ellipse": preview_ellipse,
@@ -1322,6 +1527,7 @@ PREVIEWS = {
 PREVIEWS_WITH_CMD = {
     "curve": preview_curve,
     "polygon": preview_polygon,
+    "pyramid": preview_pyramid,
     "catenary": preview_catenary,
     "conic": preview_conic,
     "hyperbola": preview_hyperbola,
