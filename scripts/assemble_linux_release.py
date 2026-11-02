@@ -825,7 +825,7 @@ def assemble(args: argparse.Namespace) -> tuple[Path, Path, Path]:
                 "runtime_required_glibc": format_glibc(runtime_glibc),
                 "lock_sha256": lock_sha,
             },
-            "native_components": native_components,
+            "native_components": native_records,
             "excluded_components": ["opennurbs-exact-save-helper", "optional-converters"],
             "inventory": inventory(appdir),
         }

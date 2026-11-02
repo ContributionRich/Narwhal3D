@@ -232,6 +232,12 @@ class PackageTests(unittest.TestCase):
             records["narwhal-welcome"]["launch_contract"] = 1
             pure = records["libnarwhal_pure_core.so"]
             pure.update(gate.PURE_CORE_PARSE_IDENTITY)
+            observer = adjacent / "document-observer"
+            observer.mkdir()
+            (observer / "_narwhal_document_observer.so").write_bytes(b"observer")
+            (observer / "build.json").write_text("{}\n")
+            records["document-observer"] = {"sha256": linux_verify.sha256_file(observer / "_narwhal_document_observer.so"),
+                                            "qualification": "fixture"}
             linux_verify.verify_native_manifest(root, records)
             for key in ("parse_abi", "parser_exports", "reply_bytes"):
                 saved = pure.pop(key)

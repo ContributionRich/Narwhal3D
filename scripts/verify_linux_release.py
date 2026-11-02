@@ -504,7 +504,7 @@ def verify_notice_payload(actual: dict[str, JsonObject]) -> None:
 
 def verify_native_manifest(appdir: Path, native_components: object) -> None:
     """Bind the exact native manifest records to regular packaged files."""
-    expected_keys = {*NATIVE_COMPONENTS, "required_glibc"}
+    expected_keys = {*NATIVE_COMPONENTS, "required_glibc", "document-observer"}
     if not isinstance(native_components, dict) or set(native_components) != expected_keys:
         raise VerificationError("release manifest lacks the exact native component set")
     app_root = appdir / APP_ROOT_RELATIVE
@@ -524,6 +524,13 @@ def verify_native_manifest(appdir: Path, native_components: object) -> None:
                 or adjacent.stat().st_size != record["size"]
                 or sha256_file(adjacent) != record["sha256"]):
             raise VerificationError(f"invalid adjacent packaged accelerator: {filename}")
+    observer = native_components["document-observer"]
+    observer_dir = app_root / "narwhal3d/native/document-observer"
+    observer_library = observer_dir / "_narwhal_document_observer.so"
+    if (not isinstance(observer, dict) or not observer_library.is_file() or observer_library.is_symlink()
+            or not (observer_dir / "build.json").is_file() or (observer_dir / "build.json").is_symlink()
+            or observer.get("sha256") != sha256_file(observer_library)):
+        raise VerificationError("invalid packaged document observer record")
     for filename, (_symbol, expected_abi) in NATIVE_LIBRARY_ABIS.items():
         if native_components[filename].get("abi") != expected_abi:
             raise VerificationError(f"native manifest has the wrong {filename} ABI")

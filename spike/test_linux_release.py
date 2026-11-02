@@ -189,6 +189,12 @@ with tempfile.TemporaryDirectory(prefix="narwhal-linux-release-test-") as tempor
         source = runtime_native / filename
         (adjacent_native / filename).write_bytes(source.read_bytes())
 
+    observer = adjacent_native / "document-observer"
+    observer.mkdir()
+    (observer / "_narwhal_document_observer.so").write_bytes(b"observer")
+    (observer / "build.json").write_text("{}\n")
+    records["document-observer"] = {"sha256": verify.sha256_file(observer / "_narwhal_document_observer.so"),
+                                    "qualification": "fixture"}
     verify.verify_native_manifest(appdir, records)
     check("exact regular native manifest and adjacent files are accepted", True)
     for filename in ("libnarwhal_geometry_core.so", "libnarwhal_platform_core.so",

@@ -162,7 +162,27 @@ class ApplicationPackaging(unittest.TestCase):
             records["libnarwhal_pure_core.so"].update(linux_verify.PURE_CORE_PARSE_IDENTITY)
             records[SO].update(history_abi=1, exports=list(EXPORTS))
             records["narwhal-welcome"]["launch_contract"] = 1
+            observer_dir = app / "narwhal3d/native/document-observer"
+            observer_dir.mkdir(parents=True)
+            observer_library = observer_dir / "_narwhal_document_observer.so"
+            observer_library.write_bytes(b"observer")
+            (observer_dir / "build.json").write_text("{}\n")
+            records["document-observer"] = {"sha256": linux_verify.sha256_file(observer_library),
+                                            "qualification": "fixture"}
             linux_verify.verify_native_manifest(root, records)
+            damaged = copy.deepcopy(records)
+            damaged["document-observer"]["sha256"] = "0" * 64
+            with self.assertRaises(linux_verify.VerificationError):
+                linux_verify.verify_native_manifest(root, damaged)
+            missing = copy.deepcopy(records)
+            del missing["document-observer"]
+            with self.assertRaises(linux_verify.VerificationError):
+                linux_verify.verify_native_manifest(root, missing)
+            observer_data = observer_library.read_bytes()
+            observer_library.unlink()
+            with self.assertRaises(linux_verify.VerificationError):
+                linux_verify.verify_native_manifest(root, records)
+            observer_library.write_bytes(observer_data)
             for relative in (linux_verify.NATIVE_COMPONENT_RELATIVE / SO, Path("narwhal3d/native") / SO):
                 path = app / relative
                 data = path.read_bytes()

@@ -352,6 +352,9 @@ class UiPackaging(unittest.TestCase):
             records["narwhal-welcome"]["launch_contract"] = 1
             records[SO].update(IDENTITY)
             records[SO]["source_inputs"] = common.inventory(ROOT, "ui_core")
+            observer = put(app / "narwhal3d/native/document-observer/_narwhal_document_observer.so", b"observer")
+            put(observer.parent / "build.json", b"{}\n")
+            records["document-observer"] = {"sha256": common.digest(observer), "qualification": "fixture"}
             linux_verify.verify_native_manifest(root, records)
             linux_verify.verify_ui_core_manifest(records)
             damaged = dict(records)
