@@ -112,6 +112,59 @@ def parabola_from_three(start, end, vertex):
     return curve, focus
 
 
+def _cross(a, b):
+    return (a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0])
+
+
+def parabola_through_direction(start, through, end, direction):
+    """Parabola3Pt's default construction -- MEASURED (research_preview_14 R5 Parabola3Pt,
+    exact control points of five direction picks plus one blind prediction): the parabola
+    from `start` to `end` passing through `through`, whose AXIS is parallel to the line from
+    `end` to `direction`. Exact: one non-rational quadratic Bezier (3 control points), as the
+    reference program's result is.
+
+    With M the chord midpoint and u the unit axis, the middle control point is C = M - (s/2) u,
+    so B(t) = start + t (end - start) - s t (1 - t) u; `through` fixes t and s exactly.
+    Returns ``(curve, focus)``."""
+    p0, p1, p2 = (tuple(float(c) for c in p) for p in (start, through, end))
+    d = _sub(p2, p0)
+    w = _sub(p1, p0)
+    normal = _cross(d, w)
+    nn = _dot(normal, normal)
+    if nn <= 1e-24 * max(1.0, _dot(d, d) * _dot(w, w)):
+        raise ValueError("the three points are in a line")
+    u = _sub(tuple(float(c) for c in direction), p2)
+    u = _sub(u, tuple(_dot(u, normal) / nn * c for c in normal))
+    u = _unit(u)
+    e1 = _unit(d)
+    e2 = _unit(_cross(normal, d))
+    a11, a12 = _dot(d, e1), -_dot(u, e1)
+    a21, a22 = _dot(d, e2), -_dot(u, e2)
+    r1, r2 = _dot(w, e1), _dot(w, e2)
+    det = a11 * a22 - a12 * a21
+    if abs(det) <= 1e-12 * math.sqrt(_dot(d, d)):
+        raise ValueError("the direction runs along the chord, so no parabola fits")
+    t = (r1 * a22 - a12 * r2) / det
+    k = (a11 * r2 - a21 * r1) / det
+    if not 0.0 < t < 1.0 or abs(k) <= 1e-12:
+        raise ValueError("no parabola with that direction passes through the point")
+    s = k / (t * (1.0 - t))
+    m = tuple((p0[i] + p2[i]) / 2.0 for i in range(3))
+    c = tuple(m[i] - 0.5 * s * u[i] for i in range(3))
+    curve = _quadratic(p0, c, p2)
+    a = tuple(p0[i] - 2.0 * c[i] + p2[i] for i in range(3))
+    aa = _dot(a, a)
+    tv = -_dot(_sub(c, p0), a) / aa
+    vertex = tuple((1 - tv) ** 2 * p0[i] + 2 * tv * (1 - tv) * c[i] + tv * tv * p2[i]
+                   for i in range(3))
+    half_velocity = tuple(c[i] - p0[i] + tv * a[i] for i in range(3))   # B'(tv) / 2
+    speed2 = 4.0 * _dot(half_velocity, half_velocity)
+    focal = speed2 / (4.0 * math.sqrt(aa))      # 1 / (2 curvature), curvature 2|a| / |B'|^2
+    ua = _unit(a)
+    focus = tuple(vertex[i] + focal * ua[i] for i in range(3))
+    return curve, focus
+
+
 def parabola_from_focus(focus, direction, end, half=False):
     """Exact parabola where focus + direction establish the opening axis."""
     axis = _unit(_sub(direction, focus))

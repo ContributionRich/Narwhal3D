@@ -75,8 +75,10 @@ check(mid is not None and mid.DistanceTo(r3.Point3d(0, 0, 0)) < 1e-10
       and curve.PointAtStart.DistanceTo(r3.Point3d(1, -2, 0)) < 1e-10
       and curve.PointAtEnd.DistanceTo(r3.Point3d(1, 2, 0)) < 1e-10,
       "Focus/direction/end reconstruct the exact symmetric parabola")
-check("focus-to-vertex 1" in message and "exact quadratic" in message,
-      "result reports the defining focal distance and exact representation")
+# MEASURED (research_preview_14 P49): "Focus to vertex distance = 2.18744, length = 24.7567".
+# y^2 = 4x from (1,-2) to (1,2): length 2 (sqrt 2 + asinh 1) = 4.59117.
+check(message == "Focus to vertex distance = 1, length = 4.59117",
+      f"result reports the focal distance and the exact length, as measured ({message!r})")
 
 ctx, command, _message, done = run(["Vertex", "0,0,0", "1,0,0", "1,2,0"])
 curve = ctx.made[0][1] if ctx.made else None

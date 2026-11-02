@@ -36,22 +36,26 @@ def exact(curve):
             and mid.DistanceTo(r3.Point3d(0,0,0))<1e-10
             and curve.PointAtStart.DistanceTo(r3.Point3d(1,-2,0))<1e-10
             and curve.PointAtEnd.DistanceTo(r3.Point3d(1,2,0))<1e-10)
-ctx,cmd,msg,done=run(["1,-2,0","0,0,0","1,2,0"])
+# MEASURED (research_preview_14 P50, R5): start, point on parabola, end, then the direction;
+# the axis runs parallel to end -> direction, so (5,2,0) gives the symmetric y^2 = 4x.
+ctx,cmd,msg,done=run(["1,-2,0","0,0,0","1,2,0","5,2,0"])
 check(done and ctx.made and exact(ctx.made[0][1]) and "exact quadratic" in msg,
-      "default start/vertex/end builds the exact symmetric parabola")
-ctx,cmd,msg,done=run(["PickOrder=EndsFirst","1,-2,0","1,2,0","0,0,0"])
+      "default start/point/end/direction builds the exact parabola")
+ctx,cmd,msg,done=run(["PickOrder=EndsFirst","1,-2,0","1,2,0","0,0,0","5,2,0"])
 check(done and exact(ctx.made[0][1]), "EndsFirst accepts both endpoints before the vertex")
-ctx,cmd,msg,done=run(["PickOrder=EndsLast","0,0,0","1,-2,0","1,2,0"])
+ctx,cmd,msg,done=run(["PickOrder=EndsLast","0,0,0","1,-2,0","1,2,0","5,2,0"])
 check(done and exact(ctx.made[0][1]), "EndsLast accepts the vertex before both endpoints")
-ctx,cmd,msg,done=run(["MarkFocus=Yes","1,-2,0","0,0,0","1,2,0"])
+ctx,cmd,msg,done=run(["MarkFocus=Yes","1,-2,0","0,0,0","1,2,0","5,2,0"])
 points=[g.Location for kind,g in ctx.made if kind=="Point"]
 check(done and len(points)==1 and points[0].DistanceTo(r3.Point3d(1,0,0))<1e-10,
       "MarkFocus adds the analytically derived focus")
 ctx,cmd,msg,done=run(["Mode=Focus"])
 check(not done and not ctx.made and "not implemented yet" in msg, "unsupported Focus mode refuses explicitly")
 check("parabola3pt" in commands.COMMANDS,"Parabola3Pt is registered")
-rows=preview.segments("Parabola3Pt",[(1,-2,0),(0,0,0)],(1,2,0),commands.cplane.WORLD_TOP,cmd=commands.Parabola3PtCmd())
-check(len(rows)==1 and len(rows[0])==65 and abs(rows[0][32][0])<1e-10,
-      "live Parabola3Pt preview follows the exact quadratic")
+rows=preview.segments("Parabola3Pt",[(1,-2,0),(0,0,0),(1,2,0)],(5,2,0),commands.cplane.WORLD_TOP,cmd=commands.Parabola3PtCmd())
+check(len(rows)==3 and len(rows[0])==65 and abs(rows[0][32][0])<1e-10 and rows[1]==[(5,2,0),(1.0,-2.0,0.0)],
+      "live Parabola3Pt preview: the exact parabola for the cursor direction, rubber lines to the ends")
+ctx,cmd,msg,done=run(["Mode=Vertex","1,-2,0","0,0,0","1,2,0"])
+check(done and exact(ctx.made[0][1]), "Mode=Vertex keeps the symmetric start/vertex/end route")
 for passed,label in checks: print(f"[{'PASS' if passed else 'FAIL'}] {label}")
 failed=sum(not p for p,_ in checks); print(f"\n{len(checks)-failed}/{len(checks)} passed"); raise SystemExit(1 if failed else 0)

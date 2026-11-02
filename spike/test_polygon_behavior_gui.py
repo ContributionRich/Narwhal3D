@@ -513,6 +513,8 @@ def run():
     yield from tap('LEFTMOUSE', (region.x+region.width*.7, region.y+15))
     check(ui._console_focus, 'actual click focuses command bar')
     yield from type_text('DisableOsnap')
+    # MEASURED (research_preview_14 R7): DisableOsnap asks "Osnaps are enabled. New value"
+    yield from type_text('Toggle')
     install_mutation()
     from mathutils import Vector
     for plane in (os.environ['POLYGON_GUI_PLANE'],):

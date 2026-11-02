@@ -1554,7 +1554,37 @@ def preview_parabola3pt(args, cursor, plane, cmd=None):
     points = [tuple(value) for value in (args or []) if _is_point(value)]
     if len(points) < 2:
         return [points + [tuple(cursor)]] if points else []
-    order = getattr(cmd, "opt", {}).get("PickOrder", "Default")
+    opt = getattr(cmd, "opt", {}) or {}
+    if opt.get("Mode", "ThroughPoint") == "ThroughPoint":
+        order = opt.get("PickOrder", "Default")
+        if len(points) >= 3:
+            # MEASURED (P50, R5): at "Parabola direction" the exact parabola for the cursor as
+            # the direction, and rubber lines from the cursor to the start and the end.
+            if order == "EndsFirst":
+                start, end, through = points[:3]
+            elif order == "EndsLast":
+                through, start, end = points[:3]
+            else:
+                start, through, end = points[:3]
+            try:
+                from . import conics
+            except ImportError:          # loaded standalone (tests / probes)
+                import conics
+            out = [[tuple(cursor), start], [tuple(cursor), end]]
+            try:
+                curve, _focus = conics.parabola_through_direction(start, through, end, cursor)
+            except ValueError:
+                return out
+            d = curve.Domain
+            return [[(p.X, p.Y, p.Z) for p in (curve.PointAt(d.T0 + (d.T1 - d.T0) * i / 64)
+                                               for i in range(65))]] + out
+        if order == "Default":
+            # OURS: before the direction is known, the circle through the three points stands
+            # in for the curve (measured: a curve from the start through the point to the cursor).
+            arc = _arc_polyline(points[0], tuple(cursor), points[1])
+            return [arc] if arc else [points + [tuple(cursor)]]
+        return [points + [tuple(cursor)]]
+    order = opt.get("PickOrder", "Default")
     if order == "EndsFirst":
         start, end, vertex = points[0], points[1], tuple(cursor)
     elif order == "EndsLast":

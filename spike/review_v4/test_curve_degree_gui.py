@@ -311,6 +311,8 @@ def run():
     region = ui._window_region(ui._cmdbar_area())
     yield from tap('LEFTMOUSE', (region.x + region.width * .7, region.y + 15))
     yield from type_text('DisableOsnap')
+    # MEASURED (research_preview_14 R7): DisableOsnap asks "Osnaps are enabled. New value"
+    yield from type_text('Toggle')
     from mathutils import Vector
     for plane in ('Top', 'Front'):
         area = ui._pane_by_label(plane)

@@ -389,6 +389,7 @@ def run():
     ui.set_grid_snap(False)
     ui.set_ortho(False)
     st.feed_line('DisableOsnap')
+    st.feed_line('Toggle')   # MEASURED (R7): it asks for a New value
     SPACE.region_3d.view_location = Vector((0, 0, 0))
     SPACE.region_3d.view_distance = 45
     SPACE.region_3d.update()

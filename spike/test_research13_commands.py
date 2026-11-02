@@ -921,6 +921,183 @@ check(p1.startswith("Select object to trim, select pressing Shift to extend (")
       and "ExtendCuttingLines=No  ApparentIntersections=Yes" in p1,
       f"R5: Trim's measured trim prompt and option values ({p1!r})")
 
+# --- R6 AddToGroup: objects first, then the group; a new name makes the group -----------
+print("-- R6 AddToGroup --")
+ctx = Ctx(TOP)
+ctx.add(bridge.make_line((0, 0, 0), (1, 0, 0)), "L")
+c, msg, done = drive("addtogroup", [], ctx, select=["L"])
+p0 = base(c.prompt).rstrip(":")
+msg, done = c.feed("Group1", ctx)
+obj = next(o for o in ctx.model.file.Objects if o.Attributes.Name == "L")
+gl = list(obj.Attributes.GetGroupList2() or [])
+check(p0 == "Select group" and done and msg == 'Making a new group called "Group1".\nAdded object to group.'
+      and len(gl) == 1 and ctx.model.file.Groups.FindIndex(gl[0]).Name == "Group1",
+      f"R6: preselected -> 'Select group'; a new name makes the group and adds ({p0!r}, {msg!r})")
+ctx.add(bridge.make_line((0, 2, 0), (1, 2, 0)), "M")
+c, msg, done = drive("addtogroup", ["L"], ctx, select=["M"])
+objm = next(o for o in ctx.model.file.Objects if o.Attributes.Name == "M")
+check(done and list(objm.Attributes.GetGroupList2() or []) == gl,
+      f"...picking a group member chooses that group ({msg!r})")
+
+# --- R6 SelKeyValue / SelValue ---------------------------------------------------------
+c, msg, done = drive("selkeyvalue", [], Ctx(TOP))
+p0 = c.prompt
+c.feed("k", Ctx(TOP))
+p1 = c.prompt
+msg, done = c.feed("v", Ctx(TOP))
+check(p0 == "Enter text key:" and p1 == "Enter text value:" and done
+      and msg == "No objects added to selection.",
+      f"R6: SelKeyValue prompts and the no-match report ({p0!r}, {p1!r}, {msg!r})")
+
+# --- research21: ProjectToCPlane / SetDocumentUserText prompts ------------------------
+ctx = Ctx(TOP)
+ctx.add(bridge.make_line((0, 0, 2), (1, 0, 3)), "L")
+c, msg, done = drive("projecttocplane", [], ctx, select=["L"])
+p1 = c.prompt
+msg, done = c.feed("", ctx)
+check(p1 == "Delete input objects? <No> ( No  Yes ):" and done and ctx.geom_by_name("L") is not None
+      and ctx.added and abs(ctx.added[0].PointAtEnd.Z) < 1e-12,
+      f"ProjectToCPlane asks 'Delete input objects? <No>'; Enter keeps the input ({p1!r}, {msg!r})")
+c, msg, done = drive("setdocumentusertext", [], Ctx(TOP))
+check(base(c.prompt).rstrip(":") == "Document text key", f"SetDocumentUserText key prompt ({c.prompt!r})")
+
+# --- R7 setting commands: "<state>. New value ( ... ):", then the option ----------------
+print("-- R7 New value prompts --")
+
+
+class _FakeUi:
+    def __init__(self):
+        self.snap = False
+        self.ortho = False
+
+    def grid_snap_on(self):
+        return self.snap
+
+    def set_grid_snap(self, v):
+        self.snap = bool(v)
+
+    def ortho_on(self):
+        return self.ortho
+
+    def set_ortho(self, v):
+        self.ortho = bool(v)
+
+
+class _FakeSnap:
+    disabled = False
+    project = False
+    snap_to_locked = True
+
+
+_ui, _snap = _FakeUi(), _FakeSnap()
+_saved = (commands._ui_module, commands._snap_settings)
+commands._ui_module = lambda: _ui
+commands._snap_settings = lambda: _snap
+try:
+    rows = []
+    for key, want in (("setsnap", "Grid snap is off. New value ( On  Off  Toggle ):"),
+                      ("setortho", "Ortho is off. New value ( On  Off  Toggle ):"),
+                      ("disableosnap", "Osnaps are enabled. New value ( Enable  Disable  Toggle ):"),
+                      ("projectosnap",
+                       "Osnap projection is disabled. New value ( Enable  Disable  Toggle ):"),
+                      ("snaptolocked",
+                       "Snap to locked objects enabled. New value ( Enable  Disable  Toggle ):")):
+        c, msg, done = drive(key, [], Ctx(TOP))
+        rows.append((key, not done and c.prompt == want, c.prompt))
+    check(all(ok for _k, ok, _p in rows), f"R7: the measured state prompts ({rows})")
+    c, msg, done = drive("setsnap", ["Toggle"], Ctx(TOP))
+    m2, d2 = None, None
+    c2, m2, d2 = drive("snaptolocked", ["Toggle"], Ctx(TOP))
+    c3, m3, d3 = drive("disableosnap", [""], Ctx(TOP))
+    check(done and msg == "Grid snap is on." and _ui.snap and d2
+          and m2 == "Snapping to locked objects is now disabled." and d3 and not _snap.disabled,
+          f"R7: Toggle reports as measured; Enter keeps the state ({msg!r}, {m2!r})")
+finally:
+    commands._ui_module, commands._snap_settings = _saved
+
+# --- R7 SetUserText / CPlane prompts ----------------------------------------------------
+ctx = Ctx(TOP)
+ctx.add(bridge.make_line((0, 0, 0), (1, 0, 0)), "L")
+c, msg, done = drive("setusertext", [], ctx, select=["L"])
+p1 = c.prompt
+c.feed("k", ctx)
+p2 = c.prompt
+check(p1 == "Text key ( AttachTo=Attributes ):" and p2 == "Text ( AttachTo=Attributes ):",
+      f"R7: SetUserText prompts ({p1!r}, {p2!r})")
+
+
+class _PlaneCtx(Ctx):
+    def __init__(self):
+        super().__init__(TOP)
+        self.set_to = None
+
+    def set_active_cplane(self, plane):
+        self.set_to = plane
+        self.plane = plane
+        return True
+
+
+pctx = _PlaneCtx()
+c, msg, done = drive("cplane", [], pctx)
+p0 = c.prompt
+c.feed("World", pctx)
+p1 = c.prompt
+msg, done = c.feed("Front", pctx)
+c2, m2, d2 = drive("cplane", ["2,2,0"], _PlaneCtx())
+check(p0 == ("CPlane origin <0.000,0.000,0.000> ( All=No  Curve  Elevation  Gumball  Object  "
+             "Rotate  Surface  Through  View  World  3Point  Undo  Redo ):")
+      and p1 == "Choose world CPlane ( Back  Bottom  Front  Left  Right  Top ):"
+      and done and pctx.set_to is cplane.WORLD_CPLANES["Front"] and d2,
+      f"R7: CPlane prompt, World sub-prompt; World and an origin click end it ({p0!r}, {p1!r})")
+
+# --- R8 Osnap / GetUserText / GumballAlignment prompts --------------------------------
+print("-- R8 --")
+_osnap = _load("narwhal3d.osnap", "narwhal3d/osnap.py")
+_cls = next(v for v in vars(_osnap).values()
+            if isinstance(v, type) and hasattr(v, "unimplemented_enabled"))
+_settings = _cls(enabled=())
+_saved = commands._snap_settings
+commands._snap_settings = lambda: _settings
+try:
+    c, msg, done = drive("osnap", [], Ctx(TOP))
+    p0 = c.prompt
+    c.feed("Endpoint", Ctx(TOP))
+    p1 = c.prompt
+    on_end = _osnap.END in _settings.enabled
+    msg, done = c.feed("", Ctx(TOP))
+finally:
+    commands._snap_settings = _saved
+check(p0 == ("Osnap ( Endpoint=Off  Near=Off  Point=Off  Midpoint=Off  Center=Off  "
+             "Intersection=Off  Perpendicular=Off  Tangent=Off  Quadrant=Off  Knot=Off  "
+             "Vertex=Off  None ):") and "Endpoint=On" in p1 and on_end and done,
+      f"R8: Osnap's command-line prompt; Endpoint toggles; Enter ends ({p0!r}, {p1!r})")
+ctx = Ctx(TOP)
+ctx.add(bridge.make_line((0, 0, 0), (1, 0, 0)), "L")
+c, msg, done = drive("getusertext", [], ctx, select=["L"])
+c2, _m, _d = drive("getdocumentusertext", [], Ctx(TOP))
+check(c.prompt == "Text key <All keys>:" and c2.prompt == "Document text key <All document keys>:",
+      f"R8: GetUserText / GetDocumentUserText prompts ({c.prompt!r}, {c2.prompt!r})")
+
+# --- R9 Paste with nothing on the clipboard ---------------------------------------------
+c, msg, done = drive("paste", [], Ctx(TOP))
+check(done and msg == "Unable to paste, no objects, images or text on the clipboard.",
+      f"R9: Paste with an empty clipboard reports it ({msg!r})")
+
+# --- R5 Parabola3Pt: the axis runs parallel to end -> direction (exact control points) ----
+ctx = Ctx(TOP)
+c, msg, done = drive("parabola3pt", [], ctx)
+ps = [base(c.prompt).rstrip(":")]
+for pt in ("-4,4,0", "0,2,0", "4,4,0"):
+    c.feed(pt, ctx)
+    ps.append(base(c.prompt).rstrip(":"))
+msg, done = c.feed("0,7,0", ctx)
+g = ctx.added[0] if ctx.added else None
+mid = g.Points[1] if g is not None else None
+check(ps == ["Parabola start", "Point on parabola", "Parabola end", "Parabola direction"] and done
+      and g.Degree == 2 and not g.IsRational and abs(mid.X - 9.6) < 1e-9 and abs(mid.Y + 3.2) < 1e-9,
+      f"R5: Parabola3Pt prompts; direction (0,7) gives the measured middle control point "
+      f"(9.6,-3.2) ({ps}, {mid and (mid.X, mid.Y)})")
+
 failed = [label for ok, label in checks if not ok]
 print(f"\n{len(checks) - len(failed)}/{len(checks)} passed")
 sys.exit(1 if failed else 0)

@@ -4295,16 +4295,26 @@ class ParabolaCmd(Command):
         _, display = ctx.add_geometry(curve, "Parabola")
         if self.opt.get("MarkFocus"):
             ctx.add_geometry(bridge.make_point(focus), "Point")
-        return (f"Created {display} (exact quadratic; focus-to-vertex "
-                f"{math.dist(focus, vertex):g})"), True
+        from . import arclength
+        # MEASURED (research_preview_14 P49): "Focus to vertex distance = 2.18744, length =
+        # 24.7567" -- six significant figures.
+        return (f"Focus to vertex distance = {math.dist(focus, vertex):.6g}, "
+                f"length = {arclength.length_of(curve):.6g}"), True
 
 
 class Parabola3PtCmd(Command):
-    """Draw an exact symmetric parabola through endpoints and a vertex point."""
+    """Draw an exact parabola: start, a point on it, end, then the axis direction.
+
+    MEASURED (research_preview_14 P50 and R5 Parabola3Pt): "Parabola start", "Point on
+    parabola", "Parabola end", then "Parabola direction ( MarkFocus=No )"; the axis is parallel
+    to end -> direction (`conics.parabola_through_direction`, checked against six exact control
+    points). Mode=Vertex keeps the symmetric start / vertex / end construction (OURS: its
+    prompts were not measured)."""
 
     name = "Parabola3Pt"
-    description = "Draw an exact parabola through two endpoints and a vertex."
-    steps = [("Start point:", POINT), ("Vertex point:", POINT), ("End point:", POINT)]
+    description = "Draw an exact parabola through start, a point and end, aimed by a direction."
+    steps = [("Parabola start:", POINT), ("Point on parabola:", POINT),
+             ("Parabola end:", POINT), ("Parabola direction:", POINT)]
     options = (
         opts.Option("Mode", opts.ENUM, choices=("Focus", "ThroughPoint", "Vertex"),
                     default="ThroughPoint", help="Set the function of the special point."),
@@ -4317,14 +4327,18 @@ class Parabola3PtCmd(Command):
 
     def _refresh_steps(self):
         special = self.opt.get("Mode", "ThroughPoint")
-        label = "Vertex point:" if special in ("ThroughPoint", "Vertex") else "Focus point:"
+        label = {"ThroughPoint": "Point on parabola:", "Vertex": "Vertex point:"}.get(
+            special, "Focus point:")
+        start, end = ("Parabola start:", POINT), ("Parabola end:", POINT)
         order = self.opt.get("PickOrder", "Default")
         if order == "EndsFirst":
-            self.steps = [("Start point:", POINT), ("End point:", POINT), (label, POINT)]
+            self.steps = [start, end, (label, POINT)]
         elif order == "EndsLast":
-            self.steps = [(label, POINT), ("Start point:", POINT), ("End point:", POINT)]
+            self.steps = [(label, POINT), start, end]
         else:
-            self.steps = [("Start point:", POINT), (label, POINT), ("End point:", POINT)]
+            self.steps = [start, (label, POINT), end]
+        if special == "ThroughPoint":
+            self.steps.append(("Parabola direction:", POINT))
 
     def on_option_set(self, option, value, ctx):
         if option.name in ("Mode", "PickOrder"):
@@ -4341,14 +4355,19 @@ class Parabola3PtCmd(Command):
         if mode == "Focus":
             return "Parabola3Pt: Focus mode is not implemented yet", True
         order = self.opt.get("PickOrder", "Default")
+        picks = list(self.args[:3])
         if order == "EndsFirst":
-            start, end, vertex = self.args
+            start, end, special = picks
         elif order == "EndsLast":
-            vertex, start, end = self.args
+            special, start, end = picks
         else:
-            start, vertex, end = self.args
+            start, special, end = picks
         try:
-            curve, focus = conics.parabola_from_three(start, end, vertex)
+            if mode == "ThroughPoint":
+                curve, focus = conics.parabola_through_direction(start, special, end,
+                                                                 self.args[3])
+            else:
+                curve, focus = conics.parabola_from_three(start, end, special)
         except ValueError as exc:
             return f"Parabola3Pt: {exc}", True
         _, display = ctx.add_geometry(curve, "Parabola")
@@ -5332,9 +5351,11 @@ class CurveThroughPtCmd(Command):
 class CurveThroughSrfControlPtCmd(Command):
     """Extract U/V surface control polygons as real curves."""
     name="CurveThroughSrfControlPt";description="Fit curves through a surface control polygon."
-    steps=[("Select surface:",OBJECTS),("Point near control point:",POINT)];preselect_names=1
+    # MEASURED (research_preview_14 P33): "Select point to draw curve through ( CurveType=
+    # Interpolated  Direction=U  Toggle )" -- Interpolated is the default.
+    steps=[("Select surface:",OBJECTS),("Select point to draw curve through:",POINT)];preselect_names=1
     options=(opts.Option("Degree",opts.VALUE,default=3,value_kind="number",help="Output curve degree."),
-             opts.Option("CurveType",opts.ENUM,choices=("ControlPoint","Interpolated"),default="ControlPoint",help="Control or interpolated curve."),
+             opts.Option("CurveType",opts.ENUM,choices=("ControlPoint","Interpolated"),default="Interpolated",help="Control or interpolated curve."),
              opts.Option("Direction",opts.ENUM,choices=("U","V","Both"),default="U",help="Surface control-net direction."),
              opts.Option("Toggle",opts.MODE,help="Toggle between U and V."))
     def on_mode(self,name,ctx):
@@ -8318,13 +8339,36 @@ class ProjectToCPlaneCmd(Command):
     """
     name = "ProjectToCPlane"
     description = "Flatten selected objects onto the active construction plane."
-    steps = [("Select objects to project:", OBJECTS_MULTI)]
+    # MEASURED (research21 tooling probe): after the selection, "Delete input objects? <No>
+    # ( No  Yes ):" -- Enter keeps the inputs.
+    DELETE_PROMPT = "Delete input objects? <No>:"
+    steps = [("Select objects to project:", OBJECTS_MULTI), (DELETE_PROMPT, TEXT)]
     preselect_names = 1
     cancel_on_empty_set = True
     options = (
         opts.Option("DeleteInput", opts.TOGGLE, default=False,
                     help="Delete the input objects after creating their projections."),
     )
+
+    @property
+    def prompt(self):
+        if self.step_index == 1 and self.pending_option is None:
+            return "Delete input objects? <No> ( No  Yes ):"
+        return super().prompt
+
+    def _feed(self, text, ctx):
+        if self.step_index == 1 and self.pending_option is None:
+            raw = (text or "").strip().lower()
+            if raw in ("", "n", "no"):
+                self.opt["DeleteInput"] = False
+            elif raw in ("y", "yes"):
+                self.opt["DeleteInput"] = True
+            else:
+                return "Please answer No or Yes", False
+            self.args.append(raw)
+            self.step_index = 2
+            return self.execute(ctx)
+        return super()._feed(text, ctx)
 
     def _names(self):
         if not self.args:
@@ -9301,78 +9345,58 @@ def _group_index_by_name(file, name):
 
 
 class AddToGroupCmd(Command):
-    """`AddToGroup` -- add selected objects to one existing group.
+    """`AddToGroup` -- add the selected objects to a group.
 
-    The first selection/name identifies the target group.  When the target is
-    selected through a member object, the target member must belong to exactly one
-    group; a typed group name is resolved case-sensitively.  The target selection is
-    then cleared so the second selection is the set of objects to add.
+    MEASURED (research_preview_14 R6 AddToGroup): with an object preselected the prompt is
+    "Select group:"; a typed group name that does not exist MAKES that group ("Making a new
+    group called "Group1".") and then "Added object to group.". So the objects come first
+    (the selection) and the group second. A group is chosen by typing its name or by
+    picking a member of exactly one group. OURS: the objects prompt (nothing preselected)
+    was not measured.
 
-    This command deliberately calls only ``AddToGroup`` on the target group.  It
-    never replaces the membership list, removes other memberships, or deletes a
-    group-table row.  is resolved: the normal command record captures the
-    exact group table and memberships for Undo/Redo.
+    Only ``AddToGroup`` is called on the target group: memberships are never replaced or
+    removed. The normal command record captures the group table for Undo/Redo.
     """
 
     name = "AddToGroup"
-    description = "Add selected objects to an existing group."
-    steps = [("Select group or type its name:", OBJECTS),
-             ("Select objects to add:", OBJECTS_MULTI)]
+    description = "Add the selected objects to a group (a new name makes the group)."
+    steps = [("Select objects to add to group:", OBJECTS_MULTI),
+             ("Select group:", OBJECTS)]
     preselect_names = 1
     cancel_on_empty_set = True
     records_undo = True
 
-    def begin(self, ctx):
-        """Use the current selection as the group target, then ask for additions."""
-        getter = getattr(ctx, "selected_objects", None)
-        try:
-            selected = list(getter()) if callable(getter) else []
-        except Exception:  # noqa: BLE001
-            selected = []
-        if selected:
-            self.args.append(selected[0].name)
-            self.step_index = 1
-            selector = getattr(ctx, "select_by_names", None)
-            if callable(selector):
-                try:
-                    selector([])
-                except Exception:  # noqa: BLE001
-                    pass
-            return None, False
-        return super().begin(ctx)
-
     def _target_group(self, ctx, target):
+        """``(group index | None, error | None, created: bool)``."""
         file = ctx.model.file
         matches = _group_indices_by_name(file, target)
         if len(matches) > 1:
             return None, (f"AddToGroup: group name {target!r} is ambiguous "
-                          f"({len(matches)} matches)"), []
+                          f"({len(matches)} matches)"), False
         if matches:
-            return matches[0], None, []
-
+            return matches[0], None, False
         objects = list(_objects_named(ctx, target))
-        if not objects:
-            return None, f"AddToGroup: group {target!r} was not found", []
-        memberships = sorted({int(g) for obj in objects
-                              for g in (obj.Attributes.GetGroupList2() or [])})
-        if not memberships:
-            return None, f"AddToGroup: {target!r} is not a group or group member", []
-        if len(memberships) > 1:
-            return None, (f"AddToGroup: selected target {target!r} is ambiguous "
-                          f"({len(memberships)} groups)"), []
-        return memberships[0], None, objects
+        if objects:
+            memberships = sorted({int(g) for obj in objects
+                                  for g in (obj.Attributes.GetGroupList2() or [])})
+            if not memberships:
+                return None, f"AddToGroup: {target!r} is not in a group", False
+            if len(memberships) > 1:
+                return None, (f"AddToGroup: {target!r} is in {len(memberships)} groups -- "
+                              f"type the group name"), False
+            return memberships[0], None, False
+        return None, None, True
 
     def execute(self, ctx):
         if len(self.args) < 2:
-            return "AddToGroup: select a group, then select objects to add", True
-        target, additions = self.args[0], self.args[1]
+            return "AddToGroup: select objects, then a group", True
+        additions, target = self.args[0], str(self.args[1])
         if not isinstance(additions, (list, tuple)):
             additions = [additions]
-        gi, error, _target_objects = self._target_group(ctx, str(target))
+        gi, error, create = self._target_group(ctx, target)
         if error:
             return error, True
-        targets = []
-        seen = set()
+        targets, seen = [], set()
         for name in additions:
             for fobj in _objects_named(ctx, name):
                 oid = str(fobj.Attributes.Id)
@@ -9381,14 +9405,24 @@ class AddToGroupCmd(Command):
                     targets.append(fobj)
         if not targets:
             return "AddToGroup: the selection resolves to no objects", True
+        ctx.note_change()
+        lines = []
+        if create:
+            file = ctx.model.file
+            group = r3.Group()
+            group.Name = target
+            file.Groups.Add(group)
+            gi = _group_index_by_name(file, target)
+            lines.append(f'Making a new group called "{target}".')
         to_add = [obj for obj in targets
-                   if gi not in set(obj.Attributes.GetGroupList2() or [])]
+                  if gi not in set(obj.Attributes.GetGroupList2() or [])]
         if not to_add:
             return "AddToGroup: all selected objects are already in the group", True
-        ctx.note_change()
         for fobj in to_add:
             fobj.Attributes.AddToGroup(gi)
-        return f"AddToGroup: added {len(to_add)} object(s)", True
+        lines.append("Added object to group." if len(to_add) == 1
+                     else f"Added {len(to_add)} objects to group.")
+        return "\n".join(lines), True
 
 
 class RemoveFromGroupCmd(Command):
@@ -11559,10 +11593,23 @@ class SetUserTextCmd(Command):
 
     name = "SetUserText"
     description = "Attach a key/value user string to one selected object."
+    # MEASURED (research_preview_14 R7 SetUserText): "Text key ( AttachTo=Attributes ):",
+    # then "Text ( AttachTo=Attributes ):"; silent on success. Only Attributes is built.
     steps = [("Select an object:", OBJECTS),
-             ("Key:", TEXT),
-             ("Value:", TEXT)]
+             ("Text key:", TEXT),
+             ("Text:", TEXT)]
     preselect_names = 1
+    options = (
+        opts.Option("AttachTo", opts.ENUM, choices=("Attributes", "Object"),
+                    default="Attributes",
+                    help="Attributes: the object's attribute user text."),
+    )
+
+    def on_option_set(self, option, value, ctx):
+        if option.name == "AttachTo" and value != "Attributes":
+            self.opt["AttachTo"] = "Attributes"
+            return "SetUserText: AttachTo=Object is not implemented yet", False
+        return super().on_option_set(option, value, ctx)
 
     def execute(self, ctx: NarwhalContext):
         name = self.args[0] if self.args else None
@@ -11599,7 +11646,8 @@ class SetDocumentUserTextCmd(Command):
 
     name = "SetDocumentUserText"
     description = "Attach or remove a key/value string on the current document."
-    steps = [("Key:", TEXT), ("Value:", TEXT)]
+    # MEASURED (research21 tooling probe): "Document text key:", then "Document text:".
+    steps = [("Document text key:", TEXT), ("Document text:", TEXT)]
 
     def execute(self, ctx: NarwhalContext):
         key = self.args[0] if self.args else ""
@@ -11624,7 +11672,8 @@ class GetUserTextCmd(Command):
 
     name = "GetUserText"
     description = "Read user text from one selected object."
-    steps = [("Select an object:", OBJECTS), ("Key (Enter to list):", TEXT)]
+    # MEASURED (research_preview_14 R8 GetUserText): "Text key <All keys>:".
+    steps = [("Select an object:", OBJECTS), ("Text key <All keys>:", TEXT)]
     preselect_names = 1
     records_undo = False
 
@@ -11665,7 +11714,9 @@ class GetDocumentUserTextCmd(Command):
 
     name = "GetDocumentUserText"
     description = "Read user text from the current document."
-    steps = [("Key (Enter to list):", TEXT)]
+    # MEASURED (research_preview_14 R8 GetDocumentUserText): "Document text key <All
+    # document keys>:".
+    steps = [("Document text key <All document keys>:", TEXT)]
     records_undo = False
 
     def _feed(self, text, ctx):
@@ -12980,8 +13031,11 @@ class BlendCrvCmd(Command):
 
     name = "BlendCrv"
     description = "Blend two curve ends with Position/Tangency/Curvature/G3/G4 continuity."
-    steps = [("Select first curve to blend - select near end:", POINT),
-             ("Select second curve to blend - select near end:", POINT)]
+    # MEASURED (research_preview_14 R5 BlendCrv): both picks read "Select curve to blend";
+    # the pick chooses the nearer end. (The reference program then opens an Adjust Curve
+    # Blend dialog, default Curvature at both ends -- here the same choices are options.)
+    steps = [("Select curve to blend:", POINT),
+             ("Select curve to blend:", POINT)]
     options = (
         opts.Option("Continuity1", opts.ENUM, default="Curvature",
                     choices=("Position", "Tangency", "Curvature", "G3", "G4"),
@@ -13505,12 +13559,39 @@ class SnapSizeCmd(Command):
 
     name = "SnapSize"
     description = "Set Grid Snap spacing in model units."
-    steps = [("Grid snap spacing:", DISTANCE)]
+    # MEASURED (research21 tooling probe): "Snap size <1> ( ApplyTo=ActiveViewport ):".
+    steps = [("Snap size:", DISTANCE)]
     records_undo = False
     options = (
         opts.Option("ApplyTo", opts.ENUM, default="ActiveViewport",
                     choices=("ActiveViewport", "AllViewports")),
     )
+
+    def _distance_base(self):
+        return None
+
+    def _current(self, ctx):
+        try:
+            store = GridCmd._store_for(ctx)
+            return float(store.settings_for(store.active_viewport_id).snap_spacing)
+        except Exception:  # noqa: BLE001
+            return None
+
+    def begin(self, ctx):
+        self._shown = self._current(ctx)
+        return super().begin(ctx)
+
+    @property
+    def prompt(self):
+        base = super().prompt
+        value = getattr(self, "_shown", None)
+        if value is not None and self.pending_option is None and base.startswith("Snap size"):
+            return f"Snap size <{_num(value)}>" + base[len("Snap size"):]
+        return base
+
+    def _enter_default(self, ctx):
+        value = getattr(self, "_shown", None)
+        return float(value) if value is not None else None
 
     def execute(self, ctx):
         try:
@@ -13960,6 +14041,9 @@ class PasteCmd(Command):
             return self._recorded(ctx, lambda: self._execute(ctx))
         except (document_clipboard.ClipboardFormatError, RuntimeError) as exc:
             self.pasted_names = ()
+            if "clipboard is empty" in str(exc):
+                # MEASURED (research_preview_14 R9 Paste), with the product name left out
+                return "Unable to paste, no objects, images or text on the clipboard.", True
             return f"Paste: {exc}", True
 
 
@@ -14216,21 +14300,38 @@ class GumballAlignmentCmd(Command):
         opts.Option("View", opts.MODE,
                     help=("Gumball widgets align to the view plane of the "
                           "current viewport.")),
+        opts.Option("Cycle", opts.MODE,
+                    help="Step to the next alignment (CPlane, Object, World)."),
     )
 
+    # MEASURED (research_preview_14 R8): "Gumball alignment <CPlane> ( CPlane  Object  World
+    # View  Cycle ):"; Enter keeps the current alignment.
     def begin(self, ctx):
-        # With no option given, report what is in force -- the same shape as the
-        # osnap commands, which show live state rather than guessing an action.
         try:
             from . import ui
 
-            current = ui.gumball_alignment()
+            self._current = ui.gumball_alignment()
         except Exception:  # noqa: BLE001
             return "GumballAlignment: no viewport session", True
-        return (f"GumballAlignment: aligned to {current} "
-                f"(CPlane / Object / World / View)"), False
+        return None, False
+
+    @property
+    def prompt(self):
+        if self.pending_option is not None:
+            return super().prompt
+        return opts.format_prompt(f"Gumball alignment <{getattr(self, '_current', 'CPlane')}>:",
+                                  self.options, self.opt)
+
+    def _feed(self, text, ctx):
+        if not (text or "").strip() and self.pending_option is None:
+            return None, True
+        return super()._feed(text, ctx)
 
     def on_mode(self, name, ctx):
+        if name == "Cycle":
+            order = ("CPlane", "Object", "World")
+            cur = getattr(self, "_current", "CPlane")
+            name = order[(order.index(cur) + 1) % 3] if cur in order else "CPlane"
         if not gumball.alignment_is_implemented(name):
             return gumball.alignment_not_implemented_message(name), True
         try:
@@ -14771,7 +14872,9 @@ class _SelUserTextCmd(Command):
                 detail = f"key {key!r} and value {value!r}"
             else:
                 detail = f"{self._kind} pattern {key!r}"
-            return f"{self.name}: no visible, unlocked object matching {detail}", True
+            # MEASURED (research_preview_14 R6 SelKeyValue/SelValue): "No objects added to
+            # selection." when nothing matches.
+            return "No objects added to selection.", True
         return _apply_selection(ctx, names, False, self.name)
 
 
@@ -14785,7 +14888,8 @@ class SelKeyCmd(_SelUserTextCmd):
 
     name = "SelKey"
     description = "Select objects by their user attribute key."
-    steps = [("User text key:", TEXT)]
+    # DERIVED from SelKeyValue's measured "Enter text key:" (research_preview_14 R6).
+    steps = [("Enter text key:", TEXT)]
     _kind = "key"
 
 
@@ -14794,7 +14898,8 @@ class SelValueCmd(_SelUserTextCmd):
 
     name = "SelValue"
     description = "Select objects by their user attribute value."
-    steps = [("User text value:", TEXT)]
+    # MEASURED (research_preview_14 R6): "Enter text value:".
+    steps = [("Enter text value:", TEXT)]
     _kind = "value"
 
 
@@ -14807,7 +14912,8 @@ class SelKeyValueCmd(_SelUserTextCmd):
 
     name = "SelKeyValue"
     description = "Select objects by a same-row user attribute key and value."
-    steps = [("User text key:", TEXT), ("User text value:", TEXT)]
+    # MEASURED (research_preview_14 R6): "Enter text key:", then "Enter text value:".
+    steps = [("Enter text key:", TEXT), ("Enter text value:", TEXT)]
     _kind = "keyvalue"
 
 
@@ -15180,7 +15286,34 @@ class ZoomCmd(Command):
         return self._zoom(selected=False)
 
 
-class GumballCmd(Command):
+class _NewValueMixin:
+    """MEASURED (research_preview_14 R7): the setting commands do not act on their own --
+    they show the state and wait: "<state>. New value ( On  Off  Toggle ):" (or Enable /
+    Disable / Toggle). An option sets it; Enter keeps it. Subclasses give `_state_text()`
+    (None when there is no viewport session) and their own report line from `on_mode`."""
+
+    def _state_text(self):
+        raise NotImplementedError
+
+    @property
+    def prompt(self):
+        if self.pending_option is not None:
+            return super().prompt
+        text = self._state_text()
+        return opts.format_prompt(f"{text}. New value:", self.options, self.opt) if text else ""
+
+    def begin(self, ctx):
+        if self._state_text() is None:
+            return f"{self.name}: no viewport session", True
+        return None, False
+
+    def _feed(self, text, ctx):
+        if not (text or "").strip() and self.pending_option is None:
+            return None, True
+        return super()._feed(text, ctx)
+
+
+class GumballCmd(_NewValueMixin, Command):
     # the Gumball transform widget. the command behavior documents the
     # command itself as a visibility switch -- "Click the Gumball pane in the
     # status bar to toggle visibility of the Gumball transform widget" -- with the
@@ -15206,6 +15339,13 @@ class GumballCmd(Command):
                     help="Toggles the Gumball widget between on and off."),
     )
 
+    def _state_text(self):
+        try:
+            from . import ui
+            return f"Gumball is {'on' if ui.gumball_enabled() else 'off'}"
+        except Exception:  # noqa: BLE001
+            return None
+
     def unknown_option_message(self, text: str):
         # the three options are a small fixed set, so naming the valid
         # ones (not just the rejected one) tells the user exactly what to type.
@@ -15228,7 +15368,7 @@ class GumballCmd(Command):
             now = ui.set_gumball(want)
         except Exception:  # noqa: BLE001
             return "Gumball: no viewport to show the widget in", True
-        return f"Gumball {'on' if now else 'off'}", True
+        return None, True                 # MEASURED (R7 Gumball): silent
 
     def on_mode(self, name, ctx):
         if name in ("On", "Off", "Toggle"):
@@ -15256,27 +15396,56 @@ class CPlaneCmd(Command):
                    "option. (World / Elevation implemented.)")
     steps = []
     variable_points = True
+    # MEASURED (research_preview_14 R7 CPlane): "CPlane origin <0.000,0.000,0.000> ( All=No
+    # Curve  Elevation  Gumball  Object  Rotate  Surface  Through  View  World  3Point  Undo
+    # Redo ):"; an origin click ENDS the command; World asks "Choose world CPlane ( Back
+    # Bottom  Front  Left  Right  Top )" and the choice ends it.
+    WORLD_CHOICES = ("Back", "Bottom", "Front", "Left", "Right", "Top")
     options = (
-        # -- implemented: a thin call to a tested cplane.py transformation ----
-        opts.Option("World", opts.ENUM,
-                    choices=("Top", "Bottom", "Front", "Back", "Left", "Right"),
-                    help="Restore one of the six named world construction planes."),
+        opts.Option("All", opts.TOGGLE, default=False,
+                    help="Move the origin of the construction planes in ALL viewports "
+                         "(not implemented yet)."),
+        opts.Option("Curve", opts.MODE, help="Orient the CPlane perpendicular to a curve."),
         opts.Option("Elevation", opts.VALUE, value_kind="number",
                     help="Move the origin along the plane's normal (up positive)."),
-        # -- declared for a faithful prompt; not implemented yet --------------
-        opts.Option("All", opts.MODE,
-                    help="Move the origin of the construction planes in ALL viewports."),
-        opts.Option("Curve", opts.MODE, help="Orient the CPlane perpendicular to a curve."),
         opts.Option("Gumball", opts.MODE, help="Match the gumball of the selected object."),
         opts.Option("Object", opts.MODE, help="Set the CPlane to an object."),
         opts.Option("Rotate", opts.MODE, help="Rotate the construction plane about an axis."),
         opts.Option("Surface", opts.MODE, help="Match a surface (kept tangent)."),
         opts.Option("Through", opts.MODE, help="Move the CPlane so it passes through a point."),
         opts.Option("View", opts.MODE, help="Make the CPlane parallel to the view."),
+        opts.Option("World", opts.MODE,
+                    help="Restore one of the six named world construction planes."),
         opts.Option("3Point", opts.MODE, help="Set the CPlane from three picked points."),
         opts.Option("Undo", opts.MODE, help="Restore the previously used CPlane."),
         opts.Option("Redo", opts.MODE, help="Re-apply the CPlane that was undone."),
     )
+
+    def begin(self, ctx):
+        o = tuple(self._active_cplane(ctx).origin)
+        self._origin_text = ",".join(f"{float(v):.3f}" for v in o)
+        self._choosing_world = False
+        return super().begin(ctx)
+
+    def variable_prompt(self, n):
+        return f"CPlane origin <{getattr(self, '_origin_text', '0.000,0.000,0.000')}>:"
+
+    @property
+    def prompt(self):
+        if getattr(self, "_choosing_world", False) and self.pending_option is None:
+            return "Choose world CPlane ( " + "  ".join(self.WORLD_CHOICES) + " ):"
+        return super().prompt
+
+    def _feed(self, text, ctx):
+        if getattr(self, "_choosing_world", False) and self.pending_option is None:
+            raw = (text or "").strip().lower()
+            hits = [c for c in self.WORLD_CHOICES if raw and c.lower().startswith(raw)]
+            if len(hits) != 1:
+                return "Choose one of: " + ", ".join(self.WORLD_CHOICES), False
+            self._choosing_world = False
+            msg, _done = self._apply(cplane.WORLD_CPLANES[hits[0]], ctx)
+            return msg, True
+        return super()._feed(text, ctx)
 
     def _apply(self, plane, ctx):
         """Make `plane` the active viewport's CPlane, or report that there was no
@@ -15287,13 +15456,9 @@ class CPlaneCmd(Command):
         return None, False
 
     def on_option_set(self, option, value, ctx):
-        # The two documented options we implement, as immediate actions.
-        if option.name == "World":
-            plane = cplane.WORLD_CPLANES.get(value)
-            if plane is None:
-                return (f"World must be one of {', '.join(cplane.WORLD_CPLANES)}",
-                        True)
-            return self._apply(plane, ctx)
+        if option.name == "All" and value:
+            self.opt["All"] = False
+            return "CPlane: All=Yes is not implemented yet", False
         if option.name == "Elevation":
             plane = self._active_cplane(ctx).elevated(value)
             return self._apply(plane, ctx)
@@ -15304,15 +15469,19 @@ class CPlaneCmd(Command):
         # there, keeping orientation, and keep the command running so you can
         # pick again or choose an option.
         plane = self._active_cplane(ctx).moved_to(point)
-        return self._apply(plane, ctx)
+        msg, _done = self._apply(plane, ctx)
+        return msg, True                 # MEASURED (R7): the origin click ends CPlane
 
     def on_mode(self, name, ctx):
+        if name == "World":
+            self._choosing_world = True
+            return None, False
         # Every MODE option we did not implement: say so, change nothing.
         return f"{self.name}: the {name} option is not implemented yet", True
 
     def execute(self, ctx: NarwhalContext):
-        # An empty Enter finishes the command (there is nothing more to pick).
-        return "CPlane finished", True
+        # Enter accepts the shown origin: nothing changes.
+        return None, True
 
 
 class NamedCPlaneCmd(Command):
@@ -15805,16 +15974,33 @@ class OsnapCmd(Command):
     description = ("Show or change the persistent object snaps "
                    "(stand-in for the reference CAD application's Osnap panel).")
     steps = []
+    # MEASURED (research_preview_14 R8 Osnap): the command line shows "Osnap ( Endpoint=Off
+    # Near=Off  Point=Off  Midpoint=Off  Center=Off  Intersection=Off  Perpendicular=Off
+    # Tangent=Off  Quadrant=Off  Knot=Off  Vertex=Off  None ):" -- full names, On/Off, in
+    # this order; `None` turns every snap off.
+    FULL_NAMES = (("Endpoint", osnap.END), ("Near", osnap.NEAR), ("Point", osnap.POINT),
+                  ("Midpoint", osnap.MID), ("Center", osnap.CEN),
+                  ("Intersection", osnap.INT), ("Perpendicular", osnap.PERP),
+                  ("Tangent", osnap.TAN), ("Quadrant", osnap.QUAD), ("Knot", osnap.KNOT),
+                  ("Vertex", osnap.VERTEX))
     options = tuple(
-        opts.Option(mode, opts.TOGGLE, default=False,
-                    help=f"Persistent {mode} object snap.")
-        for mode in osnap.PERSISTENT
+        opts.Option(full, opts.TOGGLE, default=False,
+                    help=f"Persistent {full} object snap.")
+        for full, _mode in FULL_NAMES
     ) + (
+        opts.Option("None", opts.MODE, help="Turn every persistent object snap off."),
         opts.Option("Disable", opts.TOGGLE, default=False,
                     help="Suspend all enabled persistent object snaps."),
         opts.Option("Project", opts.TOGGLE, default=False,
                     help="Project object snaps to the construction plane."),
     )
+
+    @property
+    def prompt(self):
+        if self.pending_option is not None:
+            return super().prompt
+        shown = [f"{full}={'On' if self.opt.get(full) else 'Off'}" for full, _m in self.FULL_NAMES]
+        return "Osnap ( " + "  ".join(shown + ["None"]) + " ):"
 
     def begin(self, ctx):
         settings = _snap_settings()
@@ -15822,11 +16008,27 @@ class OsnapCmd(Command):
             return "Osnap: no viewport session", True
         # reflect the LIVE state into the option defaults, so the prompt shows
         # what is actually on rather than a stale copy
-        for mode in osnap.PERSISTENT:
-            self.opt[mode] = mode in settings.enabled
+        for full, mode in self.FULL_NAMES:
+            self.opt[full] = mode in settings.enabled
         self.opt["Disable"] = settings.disabled
         self.opt["Project"] = settings.project
-        return _snap_state_line(settings), False
+        return None, False
+
+    def _feed(self, text, ctx):
+        if not (text or "").strip() and self.pending_option is None:
+            return None, True
+        return super()._feed(text, ctx)
+
+    def on_mode(self, name, ctx):
+        if name == "None":
+            settings = _snap_settings()
+            if settings is None:
+                return "Osnap: no viewport session", True
+            for full, mode in self.FULL_NAMES:
+                settings.set(mode, False)
+                self.opt[full] = False
+            return None, False
+        return super().on_mode(name, ctx)
 
     def on_option_set(self, option, value, ctx):
         settings = _snap_settings()
@@ -15837,11 +16039,12 @@ class OsnapCmd(Command):
         elif option.name == "Project":
             settings.project = bool(value)
         else:
-            settings.set(option.name, bool(value))
+            mode = dict(self.FULL_NAMES).get(option.name, option.name)
+            settings.set(mode, bool(value))
         return _snap_state_line(settings), False
 
 
-class DisableOsnapCmd(Command):
+class DisableOsnapCmd(_NewValueMixin, Command):
     """the reference CAD application's `DisableOsnap`: "manages the state of persistent object snaps".
 
     Options taken from the sibling `ProjectOsnap` topic, which documents exactly
@@ -15859,12 +16062,11 @@ class DisableOsnapCmd(Command):
         opts.Option("Toggle", opts.MODE, help="Flip the suspended state."),
     )
 
-    def begin(self, ctx):
+    def _state_text(self):
         settings = _snap_settings()
         if settings is None:
-            return "DisableOsnap: no viewport session", True
-        # bare Enter toggles, which is what the control's button does
-        return self.on_mode("Toggle", ctx)
+            return None
+        return f"Osnaps are {'disabled' if settings.disabled else 'enabled'}"
 
     def on_mode(self, name, ctx):
         settings = _snap_settings()
@@ -15880,8 +16082,7 @@ class DisableOsnapCmd(Command):
             settings.disabled = not settings.disabled
         else:
             return f"DisableOsnap: the {name} option is not implemented yet", True
-        state = "suspended" if settings.disabled else "active"
-        return f"Persistent object snaps are {state}", True
+        return None, True                 # MEASURED (R7 DisableOsnap): silent
 
 
 def _ui_module():
@@ -15906,10 +16107,12 @@ class SnapCmd(Command):
         ui = _ui_module()
         if ui is None:
             return "Snap: no viewport session", True
-        return ui.toggle_grid_snap(), True
+        ui.toggle_grid_snap()
+        # MEASURED (research_preview_14 R7 Snap): "GridSnap is On" / "GridSnap is Off".
+        return f"GridSnap is {'On' if ui.grid_snap_on() else 'Off'}", True
 
 
-class SetSnapCmd(Command):
+class SetSnapCmd(_NewValueMixin, Command):
     """Turn Grid Snap on, off, or toggle it."""
 
     name = "SetSnap"
@@ -15922,12 +16125,9 @@ class SetSnapCmd(Command):
         opts.Option("Toggle", opts.MODE, help="Toggles Grid Snap."),
     )
 
-    def begin(self, ctx):
+    def _state_text(self):
         ui = _ui_module()
-        if ui is None:
-            return "SetSnap: no viewport session", True
-        return (f"SetSnap: Grid Snap is {'on' if ui.grid_snap_on() else 'off'} "
-                f"(On / Off / Toggle)"), False
+        return None if ui is None else f"Grid snap is {'on' if ui.grid_snap_on() else 'off'}"
 
     def on_mode(self, name, ctx):
         ui = _ui_module()
@@ -15941,7 +16141,7 @@ class SetSnapCmd(Command):
             ui.set_grid_snap(not ui.grid_snap_on())
         else:
             return f"SetSnap: the {name} option is not implemented yet", True
-        return f"Grid Snap {'on' if ui.grid_snap_on() else 'off'}", True
+        return f"Grid snap is {'on' if ui.grid_snap_on() else 'off'}.", True
 
 
 class OrthoCmd(Command):
@@ -15959,10 +16159,12 @@ class OrthoCmd(Command):
         ui = _ui_module()
         if ui is None:
             return "Ortho: no viewport session", True
-        return ui.toggle_ortho(), True
+        ui.toggle_ortho()
+        # MEASURED (research_preview_14 R7 Ortho): "Ortho is on." / "Ortho is off.".
+        return f"Ortho is {'on' if ui.ortho_on() else 'off'}.", True
 
 
-class SetOrthoCmd(Command):
+class SetOrthoCmd(_NewValueMixin, Command):
     """the reference CAD application's `SetOrtho`: "turns ortho mode on, off, or toggles the current state"
     -- options On / Off / Toggle (the command behavior)."""
 
@@ -15976,12 +16178,9 @@ class SetOrthoCmd(Command):
         opts.Option("Toggle", opts.MODE, help="Toggles ortho mode."),
     )
 
-    def begin(self, ctx):
+    def _state_text(self):
         ui = _ui_module()
-        if ui is None:
-            return "SetOrtho: no viewport session", True
-        return (f"SetOrtho: ortho is {'on' if ui.ortho_on() else 'off'} "
-                f"(On / Off / Toggle)"), False
+        return None if ui is None else f"Ortho is {'on' if ui.ortho_on() else 'off'}"
 
     def on_mode(self, name, ctx):
         ui = _ui_module()
@@ -15995,10 +16194,10 @@ class SetOrthoCmd(Command):
             ui.set_ortho(not ui.ortho_on())
         else:
             return f"SetOrtho: the {name} option is not implemented yet", True
-        return f"Ortho {'on' if ui.ortho_on() else 'off'}", True
+        return None, True                 # MEASURED (R7 SetOrtho): silent
 
 
-class ProjectOsnapCmd(Command):
+class ProjectOsnapCmd(_NewValueMixin, Command):
     """the reference CAD application's `ProjectOsnap`: project snaps onto the construction plane.
 
     "The ProjectOsnap command projects object snaps from the actual snap point to
@@ -16019,8 +16218,11 @@ class ProjectOsnapCmd(Command):
         opts.Option("Toggle", opts.MODE, help="Flip projection on or off."),
     )
 
-    def begin(self, ctx):
-        return self.on_mode("Toggle", ctx)
+    def _state_text(self):
+        settings = _snap_settings()
+        if settings is None:
+            return None
+        return f"Osnap projection is {'enabled' if settings.project else 'disabled'}"
 
     def on_mode(self, name, ctx):
         settings = _snap_settings()
@@ -16034,11 +16236,10 @@ class ProjectOsnapCmd(Command):
             settings.project = not settings.project
         else:
             return f"ProjectOsnap: the {name} option is not implemented yet", True
-        state = "on" if settings.project else "off"
-        return f"Osnap projection is {state}", True
+        return f"Osnap projection is {'enabled' if settings.project else 'disabled'}.", True
 
 
-class SnapToLockedCmd(Command):
+class SnapToLockedCmd(_NewValueMixin, Command):
     """the reference CAD application's `SnapToLocked`: "snaps work on locked objects and on objects on
     locked layers" (the command behavior).
 
@@ -16065,12 +16266,11 @@ class SnapToLockedCmd(Command):
         opts.Option("Toggle", opts.MODE, help="Flip snapping to locked objects."),
     )
 
-    def begin(self, ctx):
+    def _state_text(self):
         settings = _snap_settings()
         if settings is None:
-            return "SnapToLocked: no viewport session", True
-        # bare Enter toggles, matching the menu checkbox.
-        return self.on_mode("Toggle", ctx)
+            return None
+        return f"Snap to locked objects {'enabled' if settings.snap_to_locked else 'disabled'}"
 
     def on_mode(self, name, ctx):
         settings = _snap_settings()
@@ -16084,8 +16284,8 @@ class SnapToLockedCmd(Command):
             settings.snap_to_locked = not settings.snap_to_locked
         else:
             return f"SnapToLocked: the {name} option is not implemented yet", True
-        state = "on" if settings.snap_to_locked else "off"
-        return f"Snap to locked objects is {state}", True
+        state = "enabled" if settings.snap_to_locked else "disabled"
+        return f"Snapping to locked objects is now {state}.", True
 
 
 class ExtractWireframeCmd(Command):

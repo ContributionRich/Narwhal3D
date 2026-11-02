@@ -352,7 +352,9 @@ class PolicyTests(unittest.TestCase):
                  if isinstance(n, ast.FunctionDef) and n.name in names]
         self.assertEqual({n.name for n in nodes}, names)
         digest = hashlib.sha256('\n'.join(ast.dump(n, include_attributes=False) for n in nodes).encode()).hexdigest()
-        self.assertEqual(digest, '449a2a95e68d1b3e7ea32de1277769d6b1ce52641b0558aaddea42affe38dee5')
+        # Re-pinned once: `run` now answers DisableOsnap's measured "New value" prompt with
+        # Toggle (research_preview_14 R7). No event, framebuffer or check line changed.
+        self.assertEqual(digest, '330c7606fc7e1eb6e058fd3b2473a12a6074ca6f78da40fdba247506e75694fa')
 
     def test_required_cores_precede_blender_callers(self):
         text = source('run_tests.sh')
