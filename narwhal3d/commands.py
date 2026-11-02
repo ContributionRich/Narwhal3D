@@ -6214,6 +6214,14 @@ class OrientCmd(_TransformCmd):
                          "uniformly by the target/reference distance ratio."),
     )
 
+    def _enter_default(self, ctx):
+        # MEASURED (research_all_13 #097): the prompt reads "Target point 1 <Reference
+        # point 1>" -- its default is reference point 1, which Enter takes (DERIVED: the
+        # Enter itself was not sent in the research).
+        if self.step_index == 3 and len(self.args) == 3:
+            return self.args[1]
+        return None
+
     def _compute(self, args, live=False):
         pts = args[1:]
         if len(pts) < 3:
@@ -9296,43 +9304,90 @@ class LengthCmd(Command):
 
 
 class AreaCmd(Command):
-    name = "Area"
-    description = "Report the area enclosed by a curve, or the surface area."
-    steps = [("Object:", "name")]
-    # the reference CAD application selects first, then runs the command; the selection
-    # fallback these commands already tried was unreachable, because an
-    # empty answer at a fixed prompt CANCELS (see Command.feed).
-    preselect_names = 1
+    """`Area` -- MEASURED (research_all_13 #004):
 
-    def execute(self, ctx: NarwhalContext):
+    * prompt "Select surfaces, polysurfaces, hatches, closed planar curves or polygon
+      meshes for area calculation"; a preselection runs at once;
+    * a closed circle r=2 -> "Area = 12.566371 (+/- 4.8e-06) square millimeters" -- the
+      EXACT area, now from Green's theorem on the exact NURBS
+      (`analysis.planar_curve_area_centroid`), not a 512-gon (which was 3e-4 short);
+    * several objects -> "Cumulative Area = ... square millimeters for 2 objects";
+    * an open curve is not measured: the prompt is asked again.
+    The `Units` option and the "Calculating Area..." line are not built.
+    """
+
+    name = "Area"
+    description = "Report the area enclosed by curves, or the surface area."
+    steps = [("Select surfaces, polysurfaces, hatches, closed planar curves or polygon "
+              "meshes for area calculation:", OBJECTS_MULTI)]
+    preselect_names = 1
+    cancel_on_empty_set = True
+    records_undo = False
+
+    @staticmethod
+    def _one(geom, name):
+        """``(area, err)``, None for an open curve, or a refusal string."""
         from . import analysis
 
-        name = self.args[0]
-        if not name and ctx.selected_objects():
-            name = ctx.selected_objects()[0].name
-        geom = ctx.geom_by_name(name)
-        if geom is None:
-            return f"No object named {name!r}", True
-        # closed planar curve: the shoelace area of a 512-point polygon in its plane --
-        # value unchanged by; the estimate is Richardson against 1024 points.
         if isinstance(geom, r3.Curve):
+            if not geom.IsClosed:
+                return None
+            exact = analysis.planar_curve_area_centroid(geom)
+            if exact is not None:
+                return abs(exact[0]), exact[1]
             area = analysis.closed_curve_area(geom)
-            if area is not None:
-                finer = analysis.closed_curve_area(geom, n=1024)
-                err = max(abs(finer - area) * 4.0 / 3.0, abs(area) * 1e-12)
-                return _measured("Area", area, err), True
-            length = analysis.curve_length(geom)
-            return f"{name} is an open curve: length {length:.6g}", True
+            if area is None:
+                return f"{name} is not a planar closed curve"
+            finer = analysis.closed_curve_area(geom, n=1024)
+            return area, max(abs(finer - area) * 4.0 / 3.0, abs(area) * 1e-12)
         mp = analysis.exact_mass(geom, solid=False)
         if mp is not None:
-            return _measured("Area", mp["area"], mp["area_err"]), True
+            return mp["area"], mp["area_err"]
         if analysis.is_proxy(geom):
             # A proxy whose master could not be recovered must not have its triangles
             # reported as the answer (the explicit-refusal policy).
             return (f"{name}: its exact geometry is unavailable, so its area cannot be "
-                    f"measured (the display mesh is not the shape)"), True
-        area, err = _grid_measure(geom, analysis.surface_area)
-        return _measured("Area", area, err), True
+                    f"measured (the display mesh is not the shape)")
+        return _grid_measure(geom, analysis.surface_area)
+
+    def execute(self, ctx: NarwhalContext):
+        names = self.args[0] if self.args else []
+        if isinstance(names, str):
+            names = [names]
+        total, total_err, count, notes = 0.0, 0.0, 0, []
+        for name in names:
+            geom = ctx.geom_by_name(name)
+            if geom is None:
+                notes.append(f"No object named {name!r}")
+                continue
+            got = self._one(geom, name)
+            if got is None:
+                continue                    # an open curve: not measured
+            if isinstance(got, str):
+                notes.append(got)
+                continue
+            total += got[0]
+            total_err += got[1]
+            count += 1
+        if count == 0 and not notes:
+            # MEASURED: only open curves -> the object prompt again (they are discarded).
+            self.args, self.step_index = [], 0
+            selector = getattr(ctx, "select_by_names", None)
+            if callable(selector):
+                selector([])
+            return None, False
+        if count == 0:
+            return "\n".join(notes), True
+        try:
+            unit = " square " + ctx.model.unit_system().lower()
+        except Exception:  # noqa: BLE001
+            unit = ""
+        if count == 1:
+            line = _measured("Area", total, total_err) + unit
+        else:
+            line = (_measured("Cumulative Area", total, total_err) + unit
+                    + f" for {count} objects")
+        return "\n".join([line] + notes), True
 
 
 class VolumeCmd(Command):
@@ -9379,14 +9434,31 @@ class VolumeCmd(Command):
 class DistanceCmd(Command):
     name = "Distance"
     description = "Report the distance between two points."
-    steps = [("Point 1:", "point"), ("Point 2:", "point")]
+    # MEASURED (research_all_13 #040): the first prompt, and for w0,0,0 -> w3,4,0 the report
+    #   World angles and deltas: xy = 53.130  elevation = 0.000  dx = 3.000  dy = 4.000  dz = 0.000
+    #   Distance = 5.000 millimeters
+    # The second prompt was not measured and keeps the app's wording.
+    steps = [("First point for distance:", "point"), ("Point 2:", "point")]
 
     def execute(self, ctx: NarwhalContext):
         import math as _math
 
         p1, p2 = self.args
+        dx, dy, dz = (p2[i] - p1[i] for i in range(3))
         d = _math.dist(p1, p2)
-        return f"Distance: {d:.6g}", True
+        xy = _math.degrees(_math.atan2(dy, dx)) if (dx or dy) else 0.0
+        elevation = _math.degrees(_math.atan2(dz, _math.hypot(dx, dy))) if d else 0.0
+        try:
+            unit = " " + ctx.model.unit_system().lower()
+        except Exception:  # noqa: BLE001
+            unit = ""
+
+        def f(v):
+            return f"{v + 0.0:.3f}"            # +0.0: never print -0.000
+
+        return (f"World angles and deltas: xy = {f(xy)}  elevation = {f(elevation)}  "
+                f"dx = {f(dx)}  dy = {f(dy)}  dz = {f(dz)}\n"
+                f"Distance = {f(d)}{unit}"), True
 
 
 class BoundingBoxCmd(Command):
@@ -9645,7 +9717,8 @@ class AngleCmd(Command):
             deg = analysis.angle_between(u, v)
         except ValueError as e:
             return f"Angle: {e}", True
-        return f"Angle = {_num(deg)}", True
+        # MEASURED (research_all_13 #002): three decimals, "Angle = 90.000".
+        return f"Angle = {deg + 0.0:.3f}", True
 
 
 def _flip_refusal(geom):

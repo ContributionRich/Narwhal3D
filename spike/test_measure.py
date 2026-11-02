@@ -125,7 +125,7 @@ def run(ctx, cmd_key, name):
     return msg
 
 
-MEAS = re.compile(r"^(\w+) = ([-0-9.eE+]+) \(\+/- ([0-9.eE+-]+)\)$")
+MEAS = re.compile(r"^(\w+) = ([-0-9.eE+]+) \(\+/- ([0-9.eE+-]+)\)(?: square \w+)?$")
 
 
 def parse(msg):
@@ -297,22 +297,34 @@ check(abs(lo.X) < 1e-12 and abs(hi.X - 8) < 1e-12,
       f"...and its x extent is the end points 0..8 ({lo.X}, {hi.X})")
 
 # ===========================================================================
-# 4. GUARD (unchanged by G-72): a plain no-master closed curve's Area value is the same
-#    512-gon shoelace it always was -- and its +/- now honestly bounds the real error.
+# 4. Closed curves are measured EXACTLY. MEASURED (research_all_13 #004): a circle r=2
+#    reports "Area = 12.566371 (+/- 4.8e-06) square millimeters" -- the exact area, where
+#    the old 512-gon shoelace was 3e-4 short. Value within its printed +/- of 16 pi, and
+#    the +/- itself tight (an honest but loose bound would hide a polygon estimate).
 # ===========================================================================
-print("\n-- curve area unchanged, and honestly labelled --")
+print("\n-- curve area is exact, with the unit --")
 circ = r3.Circle(r3.Point3d(0, 0, 0), 4.0).ToNurbsCurve()
 ctx.add(circ, "Circle1")
 msg = run(ctx, "area", "Circle1")
-val = first_number(msg)
-old = analysis.closed_curve_area(circ)
-check(val is not None and abs(val - old) / old < 1e-5,
-      f"curve Area VALUE unchanged ({val} vs the 512-gon {old!r})")
 pc = parse(msg)
-true_err = abs(16 * math.pi - old)
-check(pc is not None and pc[2] >= true_err,
-      f"its +/- ({pc[2] if pc else None}) is >= the real error vs 16pi "
-      f"({true_err:.3e}) -- a printed accuracy must never be better than the truth")
+check(pc is not None and abs(pc[1] - 16 * math.pi) <= pc[2] and pc[2] < 1e-6,
+      f"curve Area is 16 pi within its +/-, and the +/- is tight ({msg!r})")
+check(msg.endswith(" square " + ctx.model.unit_system().lower()),
+      f"the area names its unit ({msg!r})")
+ctx.add(r3.Circle(r3.Point3d(20, 0, 0), 1.0).ToNurbsCurve(), "Circle2")
+ctx.select_many(["Circle1", "Circle2"])
+c = type(commands.COMMANDS["area"])()
+msg, _done = c.begin(ctx)
+pc = parse(msg.split(" square ")[0].replace("Cumulative Area", "Cumulative"))
+check(msg.startswith("Cumulative Area = ") and msg.endswith(" for 2 objects")
+      and pc is not None and abs(pc[1] - 17 * math.pi) <= pc[2],
+      f"two curves: the measured cumulative line, 17 pi ({msg!r})")
+ctx.add(bridge.make_line((0, 0, 0), (4, 0, 0)), "Open1")
+ctx.select("Open1")
+c = type(commands.COMMANDS["area"])()
+msg, done = c.begin(ctx)
+check(not done and msg is None and c.step_index == 0,
+      f"an open curve is not measured: the prompt is asked again ({msg!r}, {done})")
 
 # ===========================================================================
 # G-73: Angle, Radius, Diameter, AreaCentroid, VolumeCentroid, EvaluatePt.
@@ -354,17 +366,18 @@ def count_objects(ctx):
 # -- Angle: four points, the reference CAD application's prompts and `Angle = %s` -------------------
 c, msgs, done = drive(ctx, "angle", ["0,0,0", "10,0,0", "0,0,0", "5,5,0"])
 check(c is not None and c.prompt == "" or (c and done), "Angle finishes after four picks")
-check(last(msgs) == "Angle = 45", f"two imaginary lines at 45 deg -> `Angle = 45` ({last(msgs)!r})")
+# MEASURED (research_all_13 #002): the report has three decimals ("Angle = 90.000").
+check(last(msgs) == "Angle = 45.000", f"two imaginary lines at 45 deg -> `Angle = 45.000` ({last(msgs)!r})")
 proto = commands.COMMANDS.get("angle")
 check(proto is not None and type(proto)().prompt.startswith("Start of first line"),
       "Angle's first prompt is the reference CAD application's `Start of first line`")
 # a tiny angle: acos(u.v/|u||v|) returns EXACTLY 0 here (the dot rounds to 1.0); atan2 of
 # the cross and dot keeps it. Oracle: atan(1e-9) in degrees.
-_c, msgs, _d = drive(ctx, "angle", ["0,0,0", "1,0,0", "0,0,0", "1,1e-9,0"])
+# The report now prints three decimals (measured), so the precision guard reads the value
+# the command prints FROM -- analysis.angle_between -- with the same oracle and tolerance.
 want = math.degrees(math.atan(1e-9))
-got = first_number(last(msgs))
-check(got is not None and abs(got - want) / want < 1e-9,
-      f"a 1e-9 rad angle is {want:.10g} deg, not 0 ({last(msgs)!r})")
+got = analysis.angle_between((1.0, 0.0, 0.0), (1.0, 1e-9, 0.0))
+check(abs(got - want) / want < 1e-9, f"a 1e-9 rad angle is {want:.10g} deg, not 0 ({got!r})")
 _c, msgs, _d = drive(ctx, "angle", ["0,0,0", "0,0,0", "0,0,0", "1,0,0"])
 check("zero-length" in last(msgs), f"a zero-length line is refused, not 0 ({last(msgs)!r})")
 # TwoObjects: two line OBJECTS (30 deg apart) and a refusal for a circle
@@ -378,6 +391,16 @@ _c, msgs, _d = drive(ctx, "angle", ["TwoObjects", ""], select=["LineA", "Circle1
 check("not a line" in last(msgs), f"TwoObjects refuses a circle by name ({last(msgs)!r})")
 _c, msgs, _d = drive(ctx, "angle", ["SubCrv"])
 check("not implemented yet" in last(msgs), f"Angle SubCrv says so ({last(msgs)!r})")
+
+# MEASURED (research_all_13 #040): w0,0,0 -> w3,4,0 reports angles, deltas and the distance.
+c, msgs, done = drive(ctx, "distance", ["0,0,0", "3,4,0"])
+unit = ctx.model.unit_system().lower()
+check(c.steps[0][0] == "First point for distance:" and done and last(msgs) ==
+      "World angles and deltas: xy = 53.130  elevation = 0.000  dx = 3.000  dy = 4.000  "
+      f"dz = 0.000\nDistance = 5.000 {unit}", f"Distance: the measured report ({last(msgs)!r})")
+c, msgs, done = drive(ctx, "distance", ["0,0,0", "0,0,-2"])
+check("elevation = -90.000" in last(msgs) and "dz = -2.000" in last(msgs),
+      f"Distance: a downward pair gives elevation -90 ({last(msgs)!r})")
 
 # -- Radius / Diameter --------------------------------------------------------
 RAD = re.compile(r"^Radius = ([-0-9.eE+]+)    Diameter = ([-0-9.eE+]+)")

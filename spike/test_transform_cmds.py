@@ -334,6 +334,15 @@ c.feed("5,5,0", ctx)
 msg, done = c.feed("5,7,0", ctx)
 check(done and ends(ctx.geom_by_name("L")) == [(5, 5.5, 0), (5, 6, 0)],
       f"Scale=No: moved and turned onto the target axis, SAME size ({msg!r})")
+# MEASURED (research_all_13 #097): "Target point 1 <Reference point 1>" -- Enter takes
+# reference point 1. Reference (0,0,0)-(4,0,0) to target (0,0,0)-(0,4,0) turns the line.
+ctx = line_ctx((0, 0, 0), (4, 0, 0))
+c = start(ctx, "orient")
+for t in ("0,0,0", "4,0,0", ""):
+    c.feed(t, ctx)
+msg, done = c.feed("0,4,0", ctx)
+check(done and ends(ctx.geom_by_name("L")) == [(0, 0, 0), (0, 4, 0)],
+      f"Orient: Enter at Target point 1 uses reference point 1 ({msg!r})")
 pt = r3.Point(r3.Point3d(0, 0, 1))
 for mode, want in (("3D", (5, 5, 2)), ("1D", (5, 5, 1))):
     ctx = Ctx()

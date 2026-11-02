@@ -151,6 +151,7 @@ if "6.928" not in last:  # |p1-p2| of (1,2,3)->(5,6,7) is sqrt(48)=6.9282
 
 run_command(st, "Area")
 run_command(st, "Circle1")
+run_command(st, "")  # MEASURED (research_all_13 #004): an object set, confirmed by Enter
 last = st.history[-1]
 print("area:", last)
 # 16*pi = 50.2655; the message prints 6 significant digits
