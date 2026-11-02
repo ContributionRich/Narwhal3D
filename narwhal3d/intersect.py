@@ -474,6 +474,13 @@ def split_curve_by(curve, cutters, tol=1e-6):
         for x in curve_curve(curve, cutter, tol):
             if not x.overlap:
                 params.append(x.t_a)
+    return split_curve_at_params(curve, params)
+
+
+def split_curve_at_params(curve, params):
+    """Split `curve` at curve parameters `params` with Split's closed-curve rule (see
+    `split_curve_by`): N cuts of a closed curve give N pieces, unless a cut is ON the
+    seam. One unchanged piece when nothing cuts."""
     params = _dedupe_params(curve, params)
     if not params:
         return [curve]

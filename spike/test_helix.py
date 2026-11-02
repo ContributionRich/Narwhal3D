@@ -69,7 +69,7 @@ def run(lines, plane=cplane.WORLD_TOP):
     return ctx, command, message, done
 
 
-ctx, command, message, done = run(["0,0,0", "0,0,10", "2"])
+ctx, command, message, done = run(["0,0,0", "0,0,10", "2", ""])
 curve = ctx.made[0][1] if ctx.made else None
 check(done and curve is not None and curve.Degree == 3 and not curve.IsPolyline(),
       "default Helix creates one smooth cubic NURBS")
@@ -81,12 +81,12 @@ check("10 turns" in message and "NURBS deviation" in message,
       "result reports turns, pitch and achieved approximation deviation")
 
 ctx, command, message, done = run(
-    ["Pitch=2", "0,0,0", "0,0,10", "2"])
+    ["Pitch=2", "0,0,0", "0,0,10", "2", ""])
 check(done and len(ctx.made) == 1 and "5 turns" in message,
       "Pitch takes precedence and derives the turn count from axis length")
 
 ctx, command, message, done = run(
-    ["Diameter/Radius=Diameter", "0,0,0", "0,0,10", "4"])
+    ["Diameter/Radius=Diameter", "0,0,0", "0,0,10", "4", ""])
 diameter_curve = ctx.made[0][1] if ctx.made else None
 check(done and diameter_curve is not None
       and diameter_curve.PointAtStart.DistanceTo(commands.r3.Point3d(2, 0, 0)) < 1e-9
@@ -95,14 +95,14 @@ check(done and diameter_curve is not None
 
 forward = curve
 ctx, command, _message, done = run(
-    ["ReverseTwist", "0,0,0", "0,0,10", "2"])
+    ["ReverseTwist", "0,0,0", "0,0,10", "2", ""])
 reverse = ctx.made[0][1] if ctx.made else None
 check(done and reverse is not None
       and forward.Points[1].Y > 0.0 and reverse.Points[1].Y < 0.0,
       "ReverseTwist changes winding direction")
 
 ctx, command, _message, done = run(
-    ["Vertical", "0,0,0", "10", "2"], cplane.WORLD_FRONT)
+    ["Vertical", "0,0,0", "10", "", "2", ""], cplane.WORLD_FRONT)
 vertical = ctx.made[0][1] if ctx.made else None
 check(done and vertical is not None
       and vertical.PointAtEnd.DistanceTo(commands.r3.Point3d(2, -10, 0)) < 1e-8,
@@ -125,9 +125,30 @@ check(not done and message == "Number must be bigger than or equal to 1.49012e-0
       and command.pending_option is not None and float(command.opt["Turns"]) == 10.0,
       f"Turns 0 is refused and asked again, the value kept ({message!r})")
 message, done = command.feed("4", ctx)
-for line in ("0,0,0", "0,0,10", "2"):
+for line in ("0,0,0", "0,0,10", "2", ""):
     message, done = command.feed(line, ctx)
 check(done and "4 turns" in (message or ""), f"the re-asked Turns is then used ({message!r})")
+# MEASURED (#068 item 2): a typed radius stays on the radius prompt; Enter commits it.
+ctx = Ctx(cplane.WORLD_TOP)
+command = commands.HelixCmd()
+command.begin(ctx)
+for line in ("0,0,0", "0,0,10"):
+    command.feed(line, ctx)
+message, done = command.feed("2", ctx)
+check(not done and not ctx.made and command.prompt.startswith("Radius"),
+      f"a typed radius keeps the prompt, nothing built yet ({command.prompt!r})")
+message, done = command.feed("", ctx)
+check(done and ctx.made and ctx.made[0][1].PointAtStart.DistanceTo(
+      commands.r3.Point3d(2, 0, 0)) < 1e-9, "the bare Enter commits it: start (2,0,0)")
+command = commands.HelixCmd()
+command.begin(Ctx(cplane.WORLD_TOP))
+command.feed("Vertical", Ctx(cplane.WORLD_TOP))
+check(command.prompt.startswith("Start of axis"), "Vertical: Start of axis first")
+command.feed("0,0,0", Ctx(cplane.WORLD_TOP))
+check(command.prompt.startswith("End of axis"), f"Vertical: then 'End of axis' ({command.prompt!r})")
+message, done = command.feed("5", Ctx(cplane.WORLD_TOP))
+check(not done and command.prompt.startswith("End of axis"),
+      "Vertical: a typed axis length stays on 'End of axis' until Enter (MEASURED #068)")
 ctx, command, message, done = run(["0,0,0", "0,0,0"])
 check(done and message is None and not ctx.made,
       f"a degenerate axis returns silently, nothing made ({message!r})")
@@ -154,7 +175,7 @@ class UndoCtx(commands.NarwhalContext):
 
 
 undo_ctx = UndoCtx()
-for cls, values in ((commands.HelixCmd, ["0,0,0", "0,0,5", "1"]),
+for cls, values in ((commands.HelixCmd, ["0,0,0", "0,0,5", "1", ""]),
                     (commands.SpiralCmd, ["0,0,0", "0,0,5", "1", "2"])):
     instance = cls()
     instance.begin(undo_ctx)

@@ -313,6 +313,13 @@ def preview_circle(args, cursor, plane):
     return [circle, [center, cursor]]
 
 
+def preview_plane(args, cursor, plane):
+    """`Plane`: the live rectangle -- Box's base, including the typed-length route."""
+    segs = preview_box(args[:3] if len(args) >= 3 and not _is_point(args[1]) else args[:2],
+                       cursor, plane)
+    return segs[:1]
+
+
 def preview_box(args, cursor, plane):
     """`Box`: the base rectangle while picking corner 2, then the full wireframe.
 
@@ -333,6 +340,18 @@ def preview_box(args, cursor, plane):
     pts = points_only(args)
     if not pts:
         return []
+    c1 = pts[0]
+    if len(args) >= 2 and not _is_point(args[1]):
+        # MEASURED (research_preview_14 P01): a typed LENGTH, then the Width step. While
+        # the width is picked the cursor rides the far side (the command's axis
+        # constraint), so it IS the opposite corner; afterwards it is length x width.
+        length = float(args[1])
+        if len(args) == 2:
+            return [rectangle_polyline(plane, c1, cursor)]
+        width = float(args[2])
+        corner = tuple(c1[k] + length * plane.xaxis[k] + width * plane.yaxis[k]
+                       for k in range(3))
+        pts = [c1, corner]
     if len(pts) == 1:
         return [rectangle_polyline(plane, pts[0], cursor)]
     base = rectangle_polyline(plane, pts[0], pts[1])
@@ -691,6 +710,18 @@ def preview_ellipsoid(args, cursor, plane):
     if not c > 0:
         return [equator]
     return [equator, ellipse(x, a, z, c), ellipse(y, b, z, c)]
+
+
+def preview_arraypolar(args, cursor, plane):
+    """`ArrayPolar` -- MEASURED (research_preview_14 P29): at "Angle to fill" a live circle
+    about the centre through the cursor, and a guide line from the centre to the cursor.
+    (Where the copies are drawn was unclear in the evidence, so none are drawn.)"""
+    if len(args) != 3 or not _is_point(args[1]):
+        return []
+    center = args[1]
+    radius = _length(_sub(cursor, center))
+    circle = circle_polyline(plane, center, radius)
+    return [circle, [center, tuple(cursor)]] if circle else []
 
 
 def preview_sphere(args, cursor, plane):
@@ -1506,6 +1537,10 @@ PREVIEWS = {
     "ellipsoid": preview_ellipsoid,
     "cone": preview_cone,
     "rectangle": preview_rectangle,
+    # MEASURED (research_preview_14 P53): Plane draws the same live rectangle (and the
+    # same length-then-width route as Box's base).
+    "plane": preview_plane,
+    "arraypolar": preview_arraypolar,
     "ellipse": preview_ellipse,
     "arc": preview_arc,
     "distance": preview_distance,
@@ -1538,7 +1573,18 @@ PREVIEWS_WITH_CMD = {
 }
 
 
+def preview_offset(args, cursor, plane, resolve, cmd=None):
+    """`Offset` -- MEASURED (research_preview_14 P47): at "Side to offset" the offset curve
+    is drawn live on the cursor's side at the Distance, and flips side with the cursor.
+    The running command computes it with the same exact offset as the commit."""
+    fn = getattr(cmd, "preview_curves", None)
+    if not args or not callable(fn):
+        return []
+    return fn(resolve, cursor)
+
+
 PREVIEWS_WITH_DOC = {
+    "offset": preview_offset,
     "extrudecrv": preview_extrudecrv,
     "extrudecrvtapered": preview_extrudecrv,
     "extrudesrf": preview_extrudesrf,

@@ -92,6 +92,7 @@ run_command(st, "SelNone")
 run_command(st, "Offset")
 run_command(st, "Circle1")
 run_command(st, "2")
+run_command(st, "10,0,0")  # MEASURED (research_preview_14 P47): the number sets Distance; a side point offsets
 names = {o.name for o in bpy.context.scene.objects}
 offsets = [n for n in names if n.startswith("Offset")]
 print("offsets:", offsets)
@@ -210,7 +211,8 @@ else:
 run_command(st, "ArrayPolar")
 run_command(st, "5,0,0")   # center
 run_command(st, "4")       # count -- the reference CAD application counts the ORIGINAL, so 3 copies
-run_command(st, "z")
+run_command(st, "")        # fill angle: Enter = 360 (MEASURED research_all_13 #007)
+run_command(st, "")        # accept
 polars = sorted([o for o in bpy.data.objects if o.name.startswith("Array")], key=lambda o: o.name)
 print("polar array:", len(polars), "elements")
 if len(polars) != 3:
@@ -259,9 +261,12 @@ run_command(st, "Select")
 run_command(st, "Box1")
 run_command(st, "")  # MEASURED (research_all_13 #138): Select stays open until Enter
 before_arr = {o.name for o in bpy.data.objects if o.name.startswith("Array")}
-run_command(st, "Array")
-run_command(st, "3")         # count (includes the original)
-run_command(st, "20,0,0")    # direction
+run_command(st, "Array")     # MEASURED (research_all_13 #006): X, Y, Z counts, spacing, accept
+run_command(st, "3")         # X count (includes the original)
+run_command(st, "1")         # Y count
+run_command(st, "1")         # Z count
+run_command(st, "20")        # X spacing, along the CPlane x axis
+run_command(st, "")          # accept
 new_arr = sorted({o.name for o in bpy.data.objects
                   if o.name.startswith("Array")} - before_arr)
 print("linear array:", new_arr)
@@ -283,11 +288,13 @@ else:
 before_arr = {o.name for o in bpy.data.objects if o.name.startswith("Array")}
 run_command(st, "Array")
 run_command(st, "1")
-run_command(st, "5,0,0")
+run_command(st, "1")
+run_command(st, "1")
+run_command(st, "")
 if {o.name for o in bpy.data.objects if o.name.startswith("Array")} != before_arr:
-    failures.append("Array with count=1 created objects")
-if "Count must be 2 or more" not in st.history[-1]:
-    failures.append(f"Array count=1 did not report an error: {st.history[-1]!r}")
+    failures.append("Array 1 x 1 x 1 created objects")
+if "only the original" not in st.history[-1]:
+    failures.append(f"Array 1 x 1 x 1 did not say so: {st.history[-1]!r}")
 
 # --- union of two overlapping boxes ---------------------------------------
 # A [0..3]x[0..2]x[0..2], B [1.5..4.5]x[0..2]x[0..2]; overlap x in [1.5,3].

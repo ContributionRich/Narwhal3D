@@ -330,7 +330,8 @@ class CurveConsumerTests(unittest.TestCase):
         cmd = commands.PlanarSrfCmd()
         msg, done = cmd.feed("", self.ctx)
         self.assertTrue(done)
-        self.assertIn("CLOSED", msg)
+        # MEASURED (research_all_13 #106): the open-curve refusal wording.
+        self.assertEqual(msg, "No faces were made. Curve must be closed and planar.")
         self.assertEqual(cmd.args, [[("segment", "Joined", 0)]])
         self.assertEqual(self.ctx.added, [])
 

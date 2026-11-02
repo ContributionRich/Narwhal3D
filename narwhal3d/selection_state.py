@@ -67,6 +67,26 @@ def record_created(model: Any, name: str) -> None:
     e = _entry(model)
     if name not in e["created"]:
         e["created"].append(name)
+    if e.pop("pending_batch", False) or "batch" not in e:
+        e["batch"] = []
+    if name not in e["batch"]:
+        e["batch"].append(name)
+
+
+def begin_command(model: Any) -> None:
+    """A command started: objects it creates form the new "last created" batch.
+
+    MEASURED (research_all_13 #142): SelLast picks the objects the LAST command created,
+    not every object created this session. The batch starts lazily, at the command's
+    first `record_created`, so a command that creates nothing keeps the previous batch.
+    """
+    _entry(model)["pending_batch"] = True
+
+
+def last_batch(model: Any) -> list:
+    """The names the most recent creating command made (``SelLast``'s target)."""
+    e = _state.get(model, {})
+    return list(e.get("batch", e.get("created", [])))
 
 
 def last_created(model: Any) -> list:

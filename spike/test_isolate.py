@@ -321,7 +321,8 @@ def _():
     assert ctx.mode_of("B") == r3.ObjectMode.Normal, "Unisolate must show B"
     assert ctx.mode_of("C") == r3.ObjectMode.Normal, "Unisolate must show C"
     assert ctx.mode_of("A") == r3.ObjectMode.Normal, "A was never hidden"
-    assert "showed" in (msg or "").lower(), f"the message should report a show, got {msg!r}"
+    # MEASURED (research_all_13 #179): Unisolate reports in Show's words.
+    assert msg == "Showing 2 hidden objects.", f"the message should report a show, got {msg!r}"
 
 
 @check("Unisolate does NOT show a separately-hidden object (only Isolate's set)")

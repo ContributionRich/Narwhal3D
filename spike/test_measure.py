@@ -319,6 +319,20 @@ pc = parse(msg.split(" square ")[0].replace("Cumulative Area", "Cumulative"))
 check(msg.startswith("Cumulative Area = ") and msg.endswith(" for 2 objects")
       and pc is not None and abs(pc[1] - 17 * math.pi) <= pc[2],
       f"two curves: the measured cumulative line, 17 pi ({msg!r})")
+# MEASURED (#004): Units=Inch on 66 mm^2 -> "Area = 0.102300205 (+/- ...) square inches"
+# (the 16 pi circle here: 16 pi / 645.16 in^2); the choice is sticky.
+c = type(commands.COMMANDS["area"])()
+ctx.select("Circle1")
+c.feed("Units=Inch", ctx)
+c2 = type(commands.COMMANDS["area"])()
+check(c2.opt["Units"] == "Inch", "Area Units is sticky across runs (MEASURED)")
+ctx.select("Circle1")
+msg, _d = c2.begin(ctx)
+pc = parse(msg.split(" square ")[0])
+check(msg.endswith(" square inches") and pc is not None
+      and abs(pc[1] - 16 * math.pi / 645.16) <= pc[2] + 1e-15,
+      f"Units=Inch reports square inches, 16 pi / 645.16 ({msg!r})")
+c2.feed("Units=ModelUnits", ctx)
 ctx.add(bridge.make_line((0, 0, 0), (4, 0, 0)), "Open1")
 ctx.select("Open1")
 c = type(commands.COMMANDS["area"])()
@@ -378,8 +392,14 @@ check(proto is not None and type(proto)().prompt.startswith("Start of first line
 want = math.degrees(math.atan(1e-9))
 got = analysis.angle_between((1.0, 0.0, 0.0), (1.0, 1e-9, 0.0))
 check(abs(got - want) / want < 1e-9, f"a 1e-9 rad angle is {want:.10g} deg, not 0 ({got!r})")
-_c, msgs, _d = drive(ctx, "angle", ["0,0,0", "0,0,0", "0,0,0", "1,0,0"])
-check("zero-length" in last(msgs), f"a zero-length line is refused, not 0 ({last(msgs)!r})")
+# MEASURED (research_all_13 #002): an end ON the start re-asks "End of first line:"
+# silently, and the next point is taken instead -- never an angle of 0.
+c, msgs, done = drive(ctx, "angle", ["0,0,0", "0,0,0"])
+check(not done and msgs[-1] is None and c.prompt.startswith("End of first line"),
+      f"a zero-length first line re-asks its end silently ({c.prompt!r})")
+for line in ("1,0,0", "0,0,0", "0,1,0"):
+    msg, done = c.feed(line, ctx)
+check(done and msg == "Angle = 90.000", f"...and the next end is used ({msg!r})")
 # TwoObjects: two line OBJECTS (30 deg apart) and a refusal for a circle
 ctx.add(bridge.make_line((0, 0, 0), (10, 0, 0)), "LineA")
 ctx.add(bridge.make_line((1, 1, 0), (1 + math.cos(math.pi / 6), 1 + math.sin(math.pi / 6), 0)),
@@ -570,9 +590,12 @@ check(pc is not None and last(msgs).startswith("Cumulative Area Centroid = ")
       and pc[2] == " for 2 planar curves",
       f"two curves -> the reference CAD application's `Cumulative ... for 2 planar curves` ({last(msgs)!r})")
 honest(pc, (8, 0, 0), "cumulative centroid of R1 + R2 circles")
-_c, msgs, _d = drive(ctx, "areacentroid", [], select=["LineA"])
-check("not a closed planar curve" in last(msgs) and parse_centroid(last(msgs)) is None,
-      f"an open curve is refused by name ({last(msgs)!r})")
+# MEASURED (research_all_13 #005): an unmeasurable selection (a point there) is discarded
+# and the object prompt is asked again; no centroid, no point.
+before = count_objects(ctx)
+c, msgs, done = drive(ctx, "areacentroid", [], select=["LineA"])
+check(not done and msgs[-1] is None and c.step_index == 0 and count_objects(ctx) == before,
+      f"an open curve is discarded and the prompt asked again ({msgs!r})")
 _c, msgs, done = drive(ctx, "areacentroid", [""])
 check(done, "nothing selected: the command PROMPTS, and an empty Enter ends it")
 

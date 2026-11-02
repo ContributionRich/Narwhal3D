@@ -2705,7 +2705,9 @@ def make_polygon(center, radius, side_count, inscribed=True, plane=None):
         pl = r3.Polyline.CreateInscribedPolygon(circle, int(side_count))
     else:
         pl = r3.Polyline.CreateCircumscribedPolygon(circle, int(side_count))
-    crv = pl.ToNurbsCurve()
+    # MEASURED (research_all_13 #112): the result is a "Closed polyline with 5 points." --
+    # a polyline curve, not a degree-1 NURBS.
+    crv = r3.PolylineCurve([pl[i] for i in range(pl.Count)])
     return to_plane(crv, center, plane)
 
 

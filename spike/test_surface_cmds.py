@@ -156,7 +156,9 @@ up = poly([(0, 0, 5), (3, 0, 5), (3, 3, 5), (0, 3, 5), (0, 0, 5)])
 ctx, msg = run("planarsrf", [("S", SQ), ("U", up)], [""], select=["S", "U"])
 check(not ctx.added and "same plane" in msg, f"curves in two planes are refused ({msg!r})")
 ctx, msg = run("planarsrf", [("L", bridge.make_line((0, 0, 0), (5, 0, 0)))], [""], select=["L"])
-check(not ctx.added and "CLOSED" in msg, f"an open curve is refused ({msg!r})")
+# MEASURED (research_all_13 #106): the open-curve refusal wording.
+check(not ctx.added and msg == "No faces were made. Curve must be closed and planar.",
+      f"an open curve is refused ({msg!r})")
 
 print("\n-- ExtrudeSrf --")
 holed = bridge.make_planar_srf([SQ, HOLE])[0]

@@ -234,25 +234,31 @@ if ctx.added:
     check(abs(bb.Min.X + 4) < 1e-6 and abs(bb.Max.X + 1) < 1e-6,
           f"Mirror: image mirrored across x=0 to [-4,-1] (X[{bb.Min.X:.3g},{bb.Max.X:.3g}])")
 
-# -- Array (linear): count then direction, count-1 copies --------------------
+# -- Array: X/Y/Z counts, spacings, accept (MEASURED research_all_13 #006) ----------
 cmd = fresh("array")
 ctx = FakeCtx()
 ctx.add_input(a_line((0, 0, 0), (1, 0, 0)), "L1")
 cmd.begin(ctx)
-cmd.feed("3", ctx)                                   # count (includes original)
-msg, done = cmd.feed("10,0,0", ctx)                  # direction
-check(done is True, f"Array: finishes after count + direction ({msg!r})")
-check(len(ctx.added) == 2, f"Array: count=3 -> 2 copies ({len(ctx.added)})")
+for line in ("3", "1", "1", "10"):                   # X=3, Y=1, Z=1, X spacing 10
+    cmd.feed(line, ctx)
+check(cmd.prompt == "Press Enter to accept:", f"Array: then the accept prompt ({cmd.prompt!r})")
+msg, done = cmd.feed("", ctx)
+check(done is True, f"Array: Enter accepts ({msg!r})")
+check(len(ctx.added) == 2, f"Array: 3 x 1 x 1 -> 2 copies ({len(ctx.added)})")
 
-# a count below 2 is still refused (arg alignment did not swallow the count)
+# a count below 1 is refused and asked again; 1 x 1 x 1 makes nothing
 cmd = fresh("array")
 ctx = FakeCtx()
 ctx.add_input(a_line(), "L1")
 cmd.begin(ctx)
-cmd.feed("1", ctx)
-msg, done = cmd.feed("5,0,0", ctx)
-check(ctx.added == [] and "2 or more" in (msg or ""),
-      f"Array: count=1 is refused ({msg!r})")
+msg, done = cmd.feed("0", ctx)
+check(not done and msg == "Number must be bigger than or equal to 1",
+      f"Array: a count of 0 is asked again ({msg!r})")
+for line in ("1", "1", "1"):
+    msg, done = cmd.feed(line, ctx)
+msg, done = cmd.feed("", ctx)
+check(ctx.added == [] and done and "only the original" in (msg or ""),
+      f"Array: 1 x 1 x 1 creates nothing and says so ({msg!r})")
 
 # -- ArrayPolar: center, count, axis -> count-1 copies -----------------------
 cmd = fresh("arraypolar")
@@ -261,10 +267,12 @@ ctx.add_input(a_line((1, 0, 0), (2, 0, 0)), "L1")
 cmd.begin(ctx)
 cmd.feed("0,0,0", ctx)                               # center
 cmd.feed("4", ctx)                                   # count
-msg, done = cmd.feed("z", ctx)                        # axis
-check(done is True, f"ArrayPolar: finishes after center+count+axis ({msg!r})")
+cmd.feed("", ctx)                                    # fill angle: Enter = 360
+msg, done = cmd.feed("", ctx)                        # accept
+check(done is True, f"ArrayPolar: finishes after center, count, fill, accept ({msg!r})")
 check(len(ctx.added) == 3, f"ArrayPolar: count=4 -> 3 copies ({len(ctx.added)})")
-check("Z" in (msg or ""), f"ArrayPolar: the message reports the axis ({msg!r})")
+check(len(ctx.added) == 3 and all(abs(a[0].PointAtStart.Z) < 1e-12 for a in ctx.added),
+      "ArrayPolar: about the CPlane normal -- the copies stay in the Top plane")
 # MEASURED (research_all_13 #007): Enter at the centre = CPlane origin; a count below 2
 # is refused with the measured message and asked again; a non-whole count is asked again.
 cmd = fresh("arraypolar")
@@ -283,7 +291,8 @@ msg, done = cmd.feed("2.5", ctx)
 check(not done and msg is None and cmd.prompt.startswith("Number of items"),
       f"ArrayPolar: 2.5 is silently asked again ({msg!r})")
 cmd.feed("3", ctx)
-msg, done = cmd.feed("z", ctx)
+cmd.feed("", ctx)
+msg, done = cmd.feed("", ctx)
 check(done and len(ctx.added) == 2, f"ArrayPolar: then count 3 -> 2 copies ({msg!r})")
 
 # -- Divide: select curves, then the segment count ---------------------------

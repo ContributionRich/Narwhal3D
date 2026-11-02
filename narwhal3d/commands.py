@@ -252,7 +252,7 @@ class Command:
         if self.pending_option is not None:
             return opts.value_prompt(self.pending_option)
         if self.variable_points:
-            base = f"{self.name} Point {len(self.args) + 1}:"
+            base = self.variable_prompt(len(self.args) + 1)
         elif self.step_index < len(self.steps):
             base = self.steps[self.step_index][0]
         else:
@@ -277,6 +277,10 @@ class Command:
             if plane is not None:
                 return plane
         return cplane.WORLD_TOP
+
+    def variable_prompt(self, n):
+        """The prompt for the `n`-th point of a variable-point command."""
+        return f"{self.name} Point {n}:"
 
     def _last_point(self):
         """The previous picked point, for the reference CAD application's relative (``r``/``@``) forms."""
@@ -547,6 +551,11 @@ class Command:
         Hide, Lock, PointsOn, PointsOff) likewise runs immediately when a
         pre-selection is present. Returns (message|None, done:bool).
         """
+        # SelLast's "last created" batch starts with this command (lazily: a command that
+        # creates nothing keeps the previous batch -- MEASURED research_all_13 #142).
+        model = getattr(ctx, "model", None)
+        if model is not None:
+            selection_state.begin_command(model)
         if not self.steps and not self.variable_points:
             # one command is one undo step. The record is only kept if the
             # command actually changed something (`note_change` captures; `end`
@@ -1464,6 +1473,8 @@ class NarwhalContext:
             entry = selection_state._state.get(model)
             if entry is not None and name not in created_before:
                 entry["created"][:] = [n for n in entry["created"] if n != name]
+                if name in entry.get("batch", []):
+                    entry["batch"].remove(name)
             self._settle_failed_publication(record, before, file, baseline)
             kernel.discard_master_binding(key, master)
             raise
@@ -2489,6 +2500,12 @@ class LinesCmd(Command):
     name = "Lines"
     description = "Draw separate line objects. Enter points; empty input finishes."
     variable_points = True
+
+    def variable_prompt(self, n):
+        # MEASURED (research_all_13 #083).
+        if n == 1:
+            return "Start of line:"
+        return "End of line:" if n == 2 else "End of line. Press Enter when done:"
     options = (
         # "Close -- Ends the line segment string at the beginning of
         # the series." the reference CAD application only offers Close once it is meaningful, so the
@@ -2566,6 +2583,11 @@ class PointsCmd(Command):
     name = "Points"
     description = "Draw multiple point objects; an empty Enter finishes."
     variable_points = True
+
+    def variable_prompt(self, n):
+        # MEASURED (research_all_13 #109).
+        return ("Location of point object:" if n == 1
+                else "Location of point object. Press Enter when done:")
     # The one documented command-line option (the command behavior, "Points"
     # section): "Undo -- Removes points in reverse order in the current command
     # session." It is a MODE -- it acts on the points collected so far rather
@@ -2775,7 +2797,79 @@ class InterpCrvCmd(Command):
         return f"Created {display_name}", True
 
 
-class BoxCmd(HeightAxisMixin, Command):
+class _LengthWidthMixin:
+    """A typed LENGTH at the other-corner prompt, then "Width. Press Enter to use length:".
+
+    MEASURED (research_preview_14 P01 Box, P53 Plane): typing a number at "Other corner
+    ... or length" fixes the length along the CPlane x axis and asks for the width; the
+    width follows the cursor's offset along y (the cursor rides the far side), and Enter
+    there uses the length. The same route as `RectangleCmd._parse_other_corner`.
+    Classes using it define OTHER_PROMPT and WIDTH_PROMPT, with OTHER_PROMPT a DISTANCE step.
+    """
+
+    def _current_label(self):
+        return self.steps[self.step_index][0] if self.step_index < len(self.steps) else None
+
+    def _typed_length(self):
+        """The SIGNED length typed at the other-corner prompt, or None (a picked corner)."""
+        if len(self.args) < 2:
+            return None
+        other = self.args[1]
+        return None if isinstance(other, tuple) else float(other)
+
+    def _cursor_sign(self, ctx, axis):
+        return RectangleCmd._cursor_sign(self, ctx, axis)    # toward the live cursor
+
+    def _parse_distance(self, text, ctx):
+        label = self._current_label()
+        if label == self.OTHER_PROMPT:
+            stripped = (text or "").strip()
+            try:
+                value = parse_number(stripped)
+            except ValueError:
+                return parse_point(stripped, self._active_cplane(ctx), self._last_point())
+            if abs(value) < 1e-12:
+                raise ValueError(f"{self.name}: the length must not be zero")
+            self.steps.insert(self.step_index + 1, (self.WIDTH_PROMPT, DISTANCE))
+            return float(value * self._cursor_sign(ctx, self._active_cplane(ctx).xaxis))
+        if label == self.WIDTH_PROMPT:
+            p = self._active_cplane(ctx)
+            stripped = (text or "").strip()
+            try:
+                value = parse_number(stripped) * self._cursor_sign(ctx, p.yaxis)
+            except ValueError:
+                P = parse_point(stripped, p, self._last_point())
+                value = sum((P[k] - self.args[0][k]) * float(p.yaxis[k]) for k in range(3))
+            if abs(value) < 1e-12:
+                raise ValueError(f"{self.name}: the width must not be zero")
+            return value
+        return super()._parse_distance(text, ctx)
+
+    def _width_default(self, ctx):
+        """Enter at the Width step: the length (a square), toward the cursor's side."""
+        if self._current_label() == self.WIDTH_PROMPT and self._typed_length() is not None:
+            plane = self._active_cplane(ctx)
+            return abs(self._typed_length()) * self._cursor_sign(ctx, plane.yaxis)
+        return None
+
+    def axis_constraint(self, plane, resolve=None):
+        length = self._typed_length()
+        if self._current_label() == self.WIDTH_PROMPT and length is not None and plane:
+            c1 = self.args[0]
+            origin = tuple(c1[k] + length * float(plane.xaxis[k]) for k in range(3))
+            return origin, tuple(float(c) for c in plane.yaxis)
+        return super().axis_constraint(plane, resolve)
+
+    def _corner2(self, plane):
+        length = self._typed_length()
+        if length is None:
+            return self.args[1]
+        c1, width = self.args[0], float(self.args[2])
+        return tuple(c1[k] + length * float(plane.xaxis[k]) + width * float(plane.yaxis[k])
+                     for k in range(3))
+
+
+class BoxCmd(_LengthWidthMixin, HeightAxisMixin, Command):
     """Draw a box whose interactive height follows the construction-plane normal.
 
     The third step constrains the cursor through the second base corner, allowing the
@@ -2795,19 +2889,33 @@ class BoxCmd(HeightAxisMixin, Command):
     # the box with the height equal to its WIDTH (corners (0,0)-(3,5) gave height 5).
     # DERIVED: "width" is the extent along the CPlane y axis (the help's length/width
     # naming, consistent with that measurement).
-    steps = [("First corner of base:", POINT), ("Other corner of base or length:", POINT),
-             ("Height. Press Enter to use width:", DISTANCE)]
+    # MEASURED (research_preview_14 P01): a number typed at "Other corner of base or
+    # length" is the LENGTH and Box asks "Width. Press Enter to use length:" before the
+    # height -- the Rectangle route (`RectangleCmd._parse_other_corner`), reused here.
+    OTHER_PROMPT = "Other corner of base or length:"
+    WIDTH_PROMPT = "Width. Press Enter to use length:"
+    HEIGHT_PROMPT = "Height. Press Enter to use width:"
+    steps = [("First corner of base:", POINT), (OTHER_PROMPT, DISTANCE),
+             (HEIGHT_PROMPT, DISTANCE)]
+    @property
+    def _height_step_index(self):
+        return len(self.steps) - 1
 
     def _enter_default(self, ctx):
-        if self.step_index != 2 or len(self.args) != 2:
-            return None
         plane = self._active_cplane(ctx)
+        label = self._current_label()
+        width = self._width_default(ctx)
+        if width is not None:
+            return width
+        if label != self.HEIGHT_PROMPT or len(self.args) != self.step_index:
+            return None
         y = tuple(float(c) for c in plane.yaxis)
-        width = abs(sum((self.args[1][i] - self.args[0][i]) * y[i] for i in range(3)))
+        c2 = self._corner2(plane)
+        width = abs(sum((c2[i] - self.args[0][i]) * y[i] for i in range(3)))
         return width if width > 0 else None
 
     def execute(self, ctx: NarwhalContext):
-        c1, c2, h = self.args
+        c1, c2, h = self.args[0], self._corner2(self._active_cplane(ctx)), self.args[-1]
         if h <= 0:
             return "Height must be positive", True
         geom = bridge.make_box(c1, c2, h, self._active_cplane(ctx))
@@ -3336,7 +3444,7 @@ class RectangleCmd(Command):
         return f"Created {display_name}", True
 
 
-class PlaneCmd(Command):
+class PlaneCmd(_LengthWidthMixin, Command):
     # `Plane` (the command behavior) -- draw a rectangle in the active CPlane
     # and cap it into a PLANAR SURFACE. This is the surface twin of `Rectangle`:
     # same two-opposite-corners pick, same `bridge.make_rectangle` boundary, but the
@@ -3360,8 +3468,14 @@ class PlaneCmd(Command):
     description = ("Draw a planar surface: pick two opposite corners of a "
                    "rectangle in the construction plane.")
     FIRST_PROMPT = "First corner of plane:"
-    OTHER_PROMPT = "Other corner of plane:"
-    steps = [(FIRST_PROMPT, POINT), (OTHER_PROMPT, POINT)]
+    # MEASURED (research_all_13 #107, research_preview_14 P53): "Other corner or length";
+    # a typed length asks "Width. Press Enter to use length:" (`_LengthWidthMixin`).
+    OTHER_PROMPT = "Other corner or length:"
+    WIDTH_PROMPT = "Width. Press Enter to use length:"
+    steps = [(FIRST_PROMPT, POINT), (OTHER_PROMPT, DISTANCE)]
+
+    def _enter_default(self, ctx):
+        return self._width_default(ctx)
     # (the command behavior, "Command-line options"). MODE options -- each
     # branches the drawing. None is in the command-coverage COMMANDS table (Plane's
     # help lists them, but only the default is built), so they are declared for
@@ -3394,7 +3508,7 @@ class PlaneCmd(Command):
 
         # args = [corner1, corner2] (two OPPOSITE corners, the default mode).
         p = self._active_cplane(ctx)
-        c1, c2 = self.args[0], self.args[1]
+        c1, c2 = self.args[0], self._corner2(p)
         u1, v1, _w1 = p.from_world(c1)
         u2, v2, _w2 = p.from_world(c2)
         if abs(u1 - u2) < 1e-9 and abs(v1 - v2) < 1e-9:
@@ -3924,7 +4038,10 @@ class ParabolaCmd(Command):
     description = "Draw a parabola by focus/direction/end or vertex/focus/end."
     # OURS: the retained help does not state the startup mode; the authored
     # toolbar's primary action is "Parabola by focus", so Focus is the default.
-    steps = [("Focus:", POINT), ("Open direction:", POINT), ("End:", POINT)]
+    # MEASURED (research_all_13 #101): the Focus construction's prompts.
+    FOCUS_STEPS = [("Parabola focus:", POINT), ("Parabola direction:", POINT),
+                   ("Parabola end:", POINT)]
+    steps = FOCUS_STEPS
     options = (
         opts.Option("MarkFocus", opts.TOGGLE, default=False,
                     help="Place a point object at the focus."),
@@ -3945,7 +4062,7 @@ class ParabolaCmd(Command):
             if self.args:
                 return f"Parabola: {name} must be chosen before picking points", False
             self._construction = name
-            self.steps = ([("Focus:", POINT), ("Open direction:", POINT), ("End:", POINT)]
+            self.steps = (list(self.FOCUS_STEPS)
                           if name == "Focus" else
                           [("Vertex:", POINT), ("Focus:", POINT), ("End:", POINT)])
             return f"Parabola: {name} construction", False
@@ -4280,7 +4397,45 @@ class HelixCmd(_CoilCmd):
     _radius_step_index = 2
     _radius_prompt = "Radius:"
 
+    def on_mode(self, name, ctx):
+        result = super().on_mode(name, ctx)
+        if name == "Vertical" and self._vertical:
+            # MEASURED (research_all_13 #068 item 7): Vertical asks "End of axis:".
+            self.steps[1] = ("End of axis:", DISTANCE)
+        return result
+
     def _feed(self, text, ctx):
+        raw = (text or "").strip()
+        # MEASURED (#068 item 7): with Vertical, a number typed at "End of axis" stays on
+        # that prompt; the next bare Enter takes it and moves on to the radius.
+        if (self._vertical and self.step_index == 1 and self.pending_option is None
+                and len(self.args) == 1):
+            if raw:
+                try:
+                    self._locked_axis = parse_number(raw)
+                    return None, False
+                except ValueError:
+                    pass
+            elif getattr(self, "_locked_axis", None) is not None:
+                text = repr(self._locked_axis)
+        # MEASURED (research_all_13 #068 item 2): a number typed at the radius prompt
+        # stays on that prompt (a preview); a second, bare Enter commits it -- `2`,
+        # Enter, Enter gave a helix starting at (2,0,0). A pick after it also commits.
+        raw = (text or "").strip()
+        if (self.step_index == self._radius_step_index and self.pending_option is None
+                and len(self.args) == self._radius_step_index):
+            if raw and not (self.options and opts.match(raw, self.options, self.opt).status
+                            != opts.NONE):
+                try:
+                    value = parse_number(raw)
+                except ValueError:
+                    value = None
+                if value is not None:
+                    self._locked_radius = value
+                    return None, False
+            if getattr(self, "_locked_radius", None) is not None and (
+                    not raw or "," in raw or "<" in raw):
+                text = repr(self._locked_radius)
         result = super()._feed(text, ctx)
         # MEASURED (research_all_13 #068 item 8): an axis end ON the start returns to
         # Command: silently -- no radius prompt, no object, no message.
@@ -4813,18 +4968,19 @@ class PlanarSrfCmd(Command):
             return f"PlanarSrf: {exc}", True
         if not curves:
             return "PlanarSrf: select planar curves", True
+        if not any(g.IsClosed for _n, g in curves):
+            # MEASURED (research_all_13 #106): an open curve alone.
+            return "No faces were made. Curve must be closed and planar.", True
         try:
             pieces = bridge.make_planar_srf([g for _n, g in curves])
         except ValueError as e:
             return f"PlanarSrf: {e}", True
-        made = [ctx.add_geometry(g, "Surface")[1] for g in pieces]
-        holes = sum(len(g.Faces[0].Loops) - 1 for g in pieces if len(g.Faces) == 1)
-        msg = f"Created {len(made)} planar surface(s): {', '.join(made)}"
-        if holes:
-            msg += f" ({holes} hole(s))"
+        for g in pieces:
+            ctx.add_geometry(g, "Surface")
+        # MEASURED (#106): a successful PlanarSrf prints nothing.
         if bad:
-            msg += f". Not curves, ignored: {', '.join(bad)}"
-        return msg, True
+            return f"Not curves, ignored: {', '.join(bad)}", True
+        return None, True
 
 
 class EdgeSrfCmd(Command):
@@ -5208,13 +5364,22 @@ class OffsetSrfCmd(Command):
     (the help gives no default), DeleteInput No."""
     name = "OffsetSrf"
     description = "Offset a surface along its normal; Solid=Yes makes the solid between them."
-    steps = [("Select surfaces or polysurfaces to offset:", OBJECTS),
-             ("Signed offset distance:", NUMBER)]
+    # MEASURED (research_all_13 #093): with the surface preselected the prompt is "Select
+    # object to flip direction. Press Enter when done ( Distance=1 ... Solid=Yes ...
+    # DeleteInput=Yes ... )"; Enter offsets at once by the sticky Distance (no distance
+    # prompt), giving a closed solid and deleting the input surface. Corner's measured
+    # default (Round) is not built, so Sharp stays the default. OURS: naming the surface
+    # at the flip prompt flips its direction; a typed number is a signed distance.
+    FLIP_PROMPT = "Select object to flip direction. Press Enter when done:"
+    steps = [("Select surfaces or polysurfaces to offset:", OBJECTS), (FLIP_PROMPT, TEXT)]
     preselect_names = 1
+    _sticky_distance = [1.0]
     options = (
-        opts.Option("Solid", opts.TOGGLE, default=False,
+        opts.Option("Distance", opts.VALUE, value_kind="number", default=1.0,
+                    help="The offset distance."),
+        opts.Option("Solid", opts.TOGGLE, default=True,
                     help="Makes a closed solid from the input and offset surfaces."),
-        opts.Option("DeleteInput", opts.TOGGLE, default=False,
+        opts.Option("DeleteInput", opts.TOGGLE, default=True,
                     help="Controls whether the original geometry is deleted."),
         opts.Option("Corner", opts.ENUM, choices=("Sharp", "Round"), default="Sharp",
                     help="How offset corner continuity is handled."),
@@ -5228,7 +5393,40 @@ class OffsetSrfCmd(Command):
                     help="Draws the offset on both sides of the original."),
     )
 
+    def __init__(self):
+        super().__init__()
+        self.opt["Distance"] = OffsetSrfCmd._sticky_distance[0]
+        self._flip = False
+
+    def on_mode(self, name, ctx):
+        if name == "FlipAll":
+            self._flip = not self._flip
+            return None, False
+        return super().on_mode(name, ctx)
+
+    def _feed(self, text, ctx):
+        raw = (text or "").strip()
+        if self.step_index == 1 and self.pending_option is None:
+            if not raw:
+                self.args.append(None)
+                self.step_index += 1
+                return self.execute(ctx)
+            if self.args and raw.lower() == str(self.args[0]).lower():
+                self._flip = not self._flip
+                return None, False
+        return super()._feed(text, ctx)
+
     def on_option_set(self, option, value, ctx):
+        if option.name == "Distance":
+            try:
+                d = float(value)
+            except (TypeError, ValueError):
+                d = 0.0
+            if not d > 0.0:
+                self.opt["Distance"] = OffsetSrfCmd._sticky_distance[0]
+                return "OffsetSrf: the distance must be positive", False
+            OffsetSrfCmd._sticky_distance[0] = d
+            return None
         if option.name in ("Corner", "Loose", "Tolerance", "BothSides") and value:
             if option.name == "Corner" and value == "Sharp":
                 return super().on_option_set(option, value, ctx)
@@ -5237,7 +5435,14 @@ class OffsetSrfCmd(Command):
         return super().on_option_set(option, value, ctx)
 
     def execute(self, ctx: NarwhalContext):
-        name, distance = self.args[0], float(self.args[1])
+        name, typed = self.args[0], self.args[1]
+        if typed is None:
+            distance = float(self.opt.get("Distance", 1.0)) * (-1.0 if self._flip else 1.0)
+        else:
+            try:
+                distance = parse_number(str(typed))
+            except ValueError:
+                return f"OffsetSrf: {typed!r} is not a distance", True
         geom = ctx.geom_by_name(name) if name else None
         if not isinstance(geom, r3.Brep):
             return f"OffsetSrf: {name!r} is not a surface", True
@@ -5271,23 +5476,39 @@ class OffsetSrfCmd(Command):
 
 class RevolveCmd(Command):
     name = "Revolve"
-    description = "Revolve a curve about an axis. Curve, axis point 1, axis point 2, angle."
-    steps = [("Curve:", "name"), ("Axis Point 1:", "point"),
-             ("Axis Point 2:", "point"), ("Angle (deg):", "number")]
+    description = "Revolve a curve about an axis: axis start, axis end, start angle, angle."
+    # MEASURED (research_all_13 #126): "Start of revolve axis:", then "End of revolve axis
+    # (Press Enter to use CPlane z-axis direction):", "Start angle <0>" (Enter = 0) and
+    # "Revolution angle <360>" (Enter = 360); the profile is kept. Output, DeleteInput,
+    # FullCircle, SplitAtTangents and Deformable were listed but not exercised: not built.
+    steps = [("Curve:", "name"), ("Start of revolve axis:", "point"),
+             ("End of revolve axis (Press Enter to use CPlane z-axis direction):", "point"),
+             ("Start angle <0>:", "number"), ("Revolution angle <360>:", "number")]
     # the reference CAD application selects first, then runs the command; the selection
     # fallback these commands already tried was unreachable, because an
     # empty answer at a fixed prompt CANCELS (see Command.feed).
     preselect_names = 1
 
+    def _enter_default(self, ctx):
+        if self.step_index == 2 and len(self.args) == 2:
+            z = self._active_cplane(ctx).zaxis
+            return tuple(self.args[1][i] + float(z[i]) for i in range(3))
+        if self.step_index == 3:
+            return 0.0
+        if self.step_index == 4:
+            return 360.0
+        return None
+
     def execute(self, ctx: NarwhalContext):
-        name, a1, a2, angle = self.args
+        name, a1, a2, start, angle = self.args
         if not name and ctx.selected_objects():
             name = ctx.selected_objects()[0].name
         geom = ctx.geom_by_name(name)
         if geom is None or not isinstance(geom, r3.Curve):
             return f"No curve named {name!r}", True
         try:
-            solid = bridge.make_revolve(geom, a1, a2, 0.0, angle)
+            solid = bridge.make_revolve(geom, a1, a2, float(start),
+                                        float(start) + float(angle))
         except ValueError as e:
             return str(e), True
         _, display_name = ctx.add_geometry(solid, "Revolved")
@@ -5349,11 +5570,24 @@ class OffsetCmd(Command):
     # ThroughPoint). the command behavior: "Move the mouse cursor to decide the
     # offset direction, and click." and "ThroughPoint -- Offsets through a
     # picked point instead of at a distance."
-    steps = [("Select curve:", OBJECTS), ("Distance:", DISTANCE)]
+    # MEASURED (research_all_13 #092): a preselected curve goes straight to "Side to offset
+    # ( Distance=1 ... )"; a point there picks the SIDE and the curve is offset by Distance
+    # (line (0,0,0)-(4,0,0), side w2,1,0 -> (0,1,0)-(4,1,0)); `Distance` asks "Offset
+    # distance <1.000>" and is sticky. MEASURED (research_preview_14 P47): a number typed
+    # at the side prompt SETS that Distance and keeps the prompt; the live preview is the
+    # offset on the cursor's side.
+    steps = [("Select curve:", OBJECTS), ("Side to offset:", DISTANCE)]
     # the reference CAD application selects first, then runs the command; the selection
     # fallback these commands already tried was unreachable, because an
     # empty answer at a fixed prompt CANCELS (see Command.feed).
     preselect_names = 1
+    #: the sticky Distance (MEASURED: it stays at the last value until changed).
+    _sticky_distance = [1.0]
+
+    def __init__(self):
+        super().__init__()
+        self.opt["Distance"] = OffsetCmd._sticky_distance[0]
+        self._side_point = None
     # the top-level options the the reference CAD application 8 help documents for Offset
     # (the command behavior).  Sub-options (Yes/No under Loose, Sharp/Round/
     # Smooth/Chamfer under Corner, Flat/Round under Cap, Current/Input under
@@ -5366,6 +5600,8 @@ class OffsetCmd(Command):
     # Loose, Trim, Cap and OutputLayer/SubCrv need geometry or machinery we do
     # not have and are refused by name, never silently ignored.
     options = (
+        opts.Option("Distance", opts.VALUE, value_kind="number", default=1.0,
+                    help="The offset distance used with a picked side."),
         opts.Option("Loose", opts.TOGGLE, default=False,
                     help="Yes: offset by moving edit points (segments break at "
                          "corners).  No: offset the curve shape within Tolerance."),
@@ -5403,6 +5639,16 @@ class OffsetCmd(Command):
         in-use in the prompt (``Loose=Yes``) -- exactly the dishonesty the
         framework exists to prevent.  Reset to the default on refusal so the
         prompt reflects what is actually in effect."""
+        if option.name == "Distance":
+            try:
+                d = float(value)
+            except (TypeError, ValueError):
+                d = 0.0
+            if not d > 0.0:
+                self.opt["Distance"] = OffsetCmd._sticky_distance[0]
+                return "Offset: the distance must be positive", False
+            OffsetCmd._sticky_distance[0] = d
+            return None
         if option.name == "Loose":
             self.opt[option.name] = option.default
             return ("Offset: the Loose option (offset by moving edit points) is "
@@ -5420,6 +5666,48 @@ class OffsetCmd(Command):
             return (f"Offset: the {value} corner style is not implemented yet "
                     f"(Sharp and Chamfer are)", False)
         return None
+
+    def _feed(self, text, ctx):
+        raw = (text or "").strip()
+        if self.step_index == 1 and raw and self.pending_option is None:
+            try:
+                value = parse_number(raw)
+            except ValueError:
+                value = None
+            if value is not None:
+                option = next(o for o in self.options if o.name == "Distance")
+                self.opt["Distance"] = value
+                hook = self.on_option_set(option, value, ctx)
+                return hook if hook is not None else (None, False)
+        return super()._feed(text, ctx)
+
+    def preview_curves(self, ctx_or_resolve, cursor):
+        """The live offset toward `cursor` (display only), as point lists."""
+        name = self.args[0] if self.args else None
+        resolve = ctx_or_resolve if callable(ctx_or_resolve) else None
+        geom = resolve(name) if (resolve and name) else None
+        if not isinstance(geom, r3.Curve):
+            return []
+        dist = float(self.opt.get("Distance", 1.0))
+        best = None
+        for d in (dist, -dist):
+            try:
+                res = bridge.offset_curve(geom, d, corner=self.opt.get("Corner", "Sharp"),
+                                          tolerance=self.opt.get("Tolerance", 1e-3) or 1e-3)
+            except ValueError:
+                continue
+            if res.curve is None:
+                continue
+            gap = bridge.distance_to_curve(res.curve, tuple(cursor))
+            if best is None or gap < best[0]:
+                best = (gap, res.curve)
+        if best is None:
+            return []
+        curve = best[1]
+        dom = curve.Domain
+        n = 2 if curve.IsLinear() else 96
+        pts = [curve.PointAt(dom.T0 + (dom.T1 - dom.T0) * i / n) for i in range(n + 1)]
+        return [[(p.X, p.Y, p.Z) for p in pts]]
 
     def on_mode(self, name, ctx):
         """OutputLayer and SubCrv need machinery (layer management, sub-curve
@@ -5448,6 +5736,23 @@ class OffsetCmd(Command):
         corner = self.opt.get("Corner", "Sharp")
         tol = self.opt.get("Tolerance", 1e-3) or self._document_tolerance(ctx)
         plane_normal = self._offset_plane_normal(ctx)
+        if self._side_point is not None and not self.opt.get("BothSides"):
+            # The side is whichever signed offset lands nearer the picked point.
+            best = None
+            for d in (dist, -dist):
+                try:
+                    res = bridge.offset_curve(geom, d, plane_normal=plane_normal,
+                                              corner=corner, tolerance=tol)
+                except ValueError:
+                    continue
+                if res.curve is None:
+                    continue
+                gap = bridge.distance_to_curve(res.curve, self._side_point)
+                if best is None or gap < best[0]:
+                    best = (gap, d)
+            if best is None:
+                return "Offset failed (degenerate)", True
+            dist = best[1]
         results = []
         for d in ([dist, -dist] if self.opt.get("BothSides") else [dist]):
             try:
@@ -5489,18 +5794,14 @@ class OffsetCmd(Command):
         from `_distance_base`) does not apply here.
         """
         stripped = (text or "").strip()
-        try:
-            return parse_number(stripped)
-        except ValueError:
-            pass                       # not a number -> it should be a location
         name = self.args[0] if self.args else None
         if not name and ctx.selected_objects():
             name = ctx.selected_objects()[0].name
         geom = ctx.geom_by_name(name)
         if geom is None or not isinstance(geom, r3.Curve):
-            raise ValueError("there is no curve to offset through that point")
-        point = parse_point(stripped, self._active_cplane(ctx), self._last_point())
-        return bridge.distance_to_curve(geom, point)
+            raise ValueError("there is no curve to offset to that side")
+        self._side_point = parse_point(stripped, self._active_cplane(ctx), self._last_point())
+        return float(self.opt.get("Distance", 1.0))
 
 
 # ---------------------------------------------------------------------------
@@ -6515,88 +6816,181 @@ class CopyCmd(_FromToTransformCmd):
 
 
 class ArrayLinearCmd(Command):
+    """`Array` -- a rectangular X x Y x Z array in the active CPlane.
+
+    MEASURED (research_all_13 #006), preselected object:
+    "Number in X direction", "Number in Y direction", "Number in Z direction", then
+    "X spacing or first reference point" (Y = 1) or "Unit cell or X spacing" (Y > 1),
+    "Y spacing or first reference point" (Y > 1), "Press Enter to accept"; Enter creates.
+    XNumber 3, YNumber 2, XSpacing 2, YSpacing 3 in the FRONT CPlane gave circles at
+    x = 0, 2, 4 and world z = 0, 3 -- the spacings run along the CPlane axes, and the
+    counts include the original. DERIVED: a Z spacing (asked only when Z > 1) runs along
+    the CPlane normal; its prompt was not measured. OURS: the first counts default to
+    2 x 1 x 1 and then remember the last values (MEASURED: the default is the last
+    value); spacings are typed numbers -- reference-point picks and the unit cell are
+    refused by name.
+    """
     name = "Array"
-    description = "Linear array of selected objects. Count then direction vector."
-    # (the command behavior) "Select the objects..." leads.
+    description = "Rectangular array of selected objects: X, Y, Z counts and spacings."
+    ACCEPT = "Press Enter to accept:"
     steps = [("Select objects to array:", OBJECTS_MULTI),
-             ("Count:", "number"), ("Direction:", "point")]
+             ("Number in X direction:", NUMBER), ("Number in Y direction:", NUMBER),
+             ("Number in Z direction:", NUMBER)]
     preselect_names = 1
     cancel_on_empty_set = True
+    _last_counts = [2, 1, 1]
+
+    def _count_index(self):
+        return self.step_index - 1 if 1 <= self.step_index <= 3 else None
+
+    @property
+    def prompt(self):
+        i = self._count_index()
+        if i is not None and self.pending_option is None and self.step_index < len(self.steps):
+            return f"{self.steps[self.step_index][0][:-1]} <{self._last_counts[i]}>:"
+        return super().prompt
+
+    def _enter_default(self, ctx):
+        i = self._count_index()
+        if i is not None:
+            return float(self._last_counts[i])
+        if self.step_index < len(self.steps) and self.steps[self.step_index][0] == self.ACCEPT:
+            return ""
+        return None
+
+    def _feed(self, text, ctx):
+        raw = (text or "").strip()
+        i = self._count_index()
+        if i is not None and raw and self.pending_option is None:
+            try:
+                value = parse_number(raw)
+            except ValueError:
+                return f"{raw!r} is not a number", False
+            if value != int(value) or value < 1:
+                return "Number must be bigger than or equal to 1", False
+        if (self.step_index > 3 and self.step_index < len(self.steps) and raw
+                and self.steps[self.step_index][1] == NUMBER and self.pending_option is None):
+            try:
+                parse_number(raw)
+            except ValueError:
+                return ("Array: reference-point spacing and the unit cell are not "
+                        "implemented yet -- type the spacing"), False
+        if self.step_index == len(self.steps) - 1 and self.steps[-1][0] == self.ACCEPT and raw:
+            return "Array: press Enter to accept", False
+        if i == 2 and self.pending_option is None and (
+                not raw or not (self.options and opts.match(raw, self.options, self.opt).status
+                                != opts.NONE)):
+            # the last count: the spacing steps depend on all three, so add them before
+            # moving on (the base `_feed` would run `execute` at the end of `steps`).
+            self.args.append(float(parse_number(raw)) if raw else float(self._last_counts[2]))
+            self.step_index += 1
+            self._add_spacing_steps()
+            return None, False
+        return super()._feed(text, ctx)
+
+    def _add_spacing_steps(self):
+        nx, ny, nz = (int(v) for v in self.args[1:4])
+        ArrayLinearCmd._last_counts[:] = [nx, ny, nz]
+        extra = []
+        if nx > 1:
+            extra.append(("Unit cell or X spacing:" if ny > 1
+                          else "X spacing or first reference point:", NUMBER))
+        if ny > 1:
+            extra.append(("Y spacing or first reference point:", NUMBER))
+        if nz > 1:
+            extra.append(("Z spacing or first reference point:", NUMBER))
+        extra.append((self.ACCEPT, TEXT))
+        self.steps = self.steps[:4] + extra
 
     def execute(self, ctx: NarwhalContext):
-        count, direction = self.args[1:]
         if not ctx.selected_objects():
             return "Nothing selected", True
-        count = int(count)
-        if count < 2:
-            return "Count must be 2 or more", True
-        dx, dy, dz = direction
+        nx, ny, nz = (int(v) for v in self.args[1:4])
+        spacings = iter(float(v) for v in self.args[4:-1])
+        sx = next(spacings) if nx > 1 else 0.0
+        sy = next(spacings) if ny > 1 else 0.0
+        sz = next(spacings) if nz > 1 else 0.0
+        if nx * ny * nz < 2:
+            return "Array: 1 x 1 x 1 is only the original -- nothing was created", True
+        plane = self._active_cplane(ctx)
+        x, y, z = (tuple(float(c) for c in a) for a in (plane.xaxis, plane.yaxis, plane.zaxis))
         made = []
         for ob in ctx.selected_objects():
-            # the reference CAD application's count INCLUDES the original, so we add count-1 copies
-            for i in range(1, count):
-                xform = r3.Transform.Translation(dx * i, dy * i, dz * i)
-                name = _duplicate_with_transform(ctx, ob.name, xform, "Array")
-                if name:
-                    made.append(name)
+            for k in range(nz):
+                for j in range(ny):
+                    for i in range(nx):
+                        if i == j == k == 0:
+                            continue          # the count includes the original
+                        d = [i * sx * x[c] + j * sy * y[c] + k * sz * z[c] for c in range(3)]
+                        name = _duplicate_with_transform(ctx, ob.name,
+                                                         r3.Transform.Translation(*d), "Array")
+                        if name:
+                            made.append(name)
         return f"Created {len(made)} array element(s)", True
 
 
 class ArrayPolarCmd(Command):
     name = "ArrayPolar"
-    description = "Polar array of selected objects. Center, count, axis (x/y/z)."
-    # (the command behavior) "Select the objects. Pick the
-    # center of the array. Type the number of items..." -- selection leads.
-    # MEASURED (research_all_13 #007): the centre prompt, Enter there = the CPlane
-    # origin; at "Number of items" a count below 2 prints "Number must be bigger than or
-    # equal to 2" and asks again, and a non-whole count is silently asked again.
+    description = "Polar array of selected objects about the CPlane normal."
+    # MEASURED (research_all_13 #007): the centre prompt, Enter there = the CPlane origin;
+    # at "Number of items" a count below 2 prints "Number must be bigger than or equal to
+    # 2" and asks again, a non-whole count is silently asked again; then "Angle to fill or
+    # first reference point <360>", Enter = 360, then "Press Enter to accept", Enter
+    # creates. There is no axis question: the default axis is the CPlane normal through the
+    # centre. Only the full 360 fill was measured; other fill angles are refused by name.
     steps = [("Select objects to array:", OBJECTS_MULTI),
-             ("Center of polar array. Press Enter to use the CPlane origin:", "point"),
-             ("Number of items:", "number"), ("Axis (x/y/z):", "text")]
+             ("Center of polar array. Press Enter to use the CPlane origin:", POINT),
+             ("Number of items:", NUMBER),
+             ("Angle to fill or first reference point <360>:", NUMBER),
+             ("Press Enter to accept:", TEXT)]
     preselect_names = 1
     cancel_on_empty_set = True
 
     def _enter_default(self, ctx):
         if self.step_index == 1:
             return tuple(float(c) for c in self._active_cplane(ctx).origin)
+        if self.step_index == 3:
+            return 360.0
+        if self.step_index == 4:
+            return ""
         return None
 
     def _feed(self, text, ctx):
         raw = (text or "").strip()
-        if self.step_index == 2 and raw and self.pending_option is None:
-            try:
-                value = parse_number(raw)
-            except ValueError:
-                value = None
-            if value is not None and value != int(value):
-                return None, False
-            if value is not None and value < 2:
-                return "Number must be bigger than or equal to 2", False
+        if self.pending_option is None and raw:
+            if self.step_index == 2:
+                try:
+                    value = parse_number(raw)
+                except ValueError:
+                    value = None
+                if value is not None and value != int(value):
+                    return None, False
+                if value is not None and value < 2:
+                    return "Number must be bigger than or equal to 2", False
+            if self.step_index == 4:
+                return "ArrayPolar: press Enter to accept", False
         return super()._feed(text, ctx)
 
     def execute(self, ctx: NarwhalContext):
-        center, count, axis = self.args[1:]
+        center, count, fill = self.args[1:4]
         if not ctx.selected_objects():
             return "Nothing selected", True
-        ax = {"x": r3.Vector3d(1, 0, 0), "y": r3.Vector3d(0, 1, 0),
-              "z": r3.Vector3d(0, 0, 1)}.get(axis.lower())
-        if ax is None:
-            return "Axis must be x, y or z", True
+        if abs(float(fill) - 360.0) > 1e-12:
+            return ("ArrayPolar: a fill angle other than 360 is not implemented yet. "
+                    "Nothing was created."), True
         count = int(count)
-        if count < 2:
-            return "Count must be 2 or more", True
+        axis = r3.Vector3d(*(float(c) for c in self._active_cplane(ctx).zaxis))
         step = math.radians(360.0 / count)
         made = []
         for ob in ctx.selected_objects():
-            # the reference CAD application's count INCLUDES the original. Going to range(1, count+1)
-            # would end at a full 360 deg turn, i.e. a duplicate sitting exactly
-            # on top of the original.
+            # the count INCLUDES the original; going to count+1 would put a copy back on
+            # top of the original after a full turn.
             for i in range(1, count):
-                xform = r3.Transform.Rotation(step * i, ax, r3.Point3d(*center))
+                xform = r3.Transform.Rotation(step * i, axis, r3.Point3d(*center))
                 name = _duplicate_with_transform(ctx, ob.name, xform, "Array")
                 if name:
                     made.append(name)
-        return f"Created {len(made)} array element(s) about {axis.upper()}", True
+        return f"Created {len(made)} array element(s)", True
 
 
 # ---------------------------------------------------------------------------
@@ -8187,7 +8581,8 @@ class UnisolateCmd(Command):
                 if fobj.Attributes.Mode == r3.ObjectMode.Hidden:
                     fobj.Attributes.Mode = r3.ObjectMode.Normal
                     restored += 1
-        return f"Unisolate -- showed {restored} object(s)", True
+        # MEASURED (research_all_13 #179): the Show wording.
+        return _counted_message("Showing", restored, "hidden object"), True
 
 
 def _expanded_group_names(model, names):
@@ -8378,7 +8773,7 @@ class RemoveFromGroupCmd(Command):
     name = "RemoveFromGroup"
     description = "Remove selected objects from one existing group."
     steps = [("Select group or type its name:", OBJECTS),
-             ("Select objects to remove:", OBJECTS_MULTI)]
+             ("Select objects to remove from group:", OBJECTS_MULTI)]
     preselect_names = 1
     cancel_on_empty_set = True
     records_undo = True
@@ -8738,8 +9133,7 @@ class UngroupAllCmd(Command):
                     if index not in component:
                         fobj.Attributes.AddToGroup(index)
                 removed += 1
-        return (f"UngroupAll: removed {len(component)} group(s) from "
-                f"{removed} object(s)"), True
+        return None, True             # MEASURED (research_all_13 #178): silent
 
 
 class UngroupCmd(Command):
@@ -8790,7 +9184,7 @@ class UngroupCmd(Command):
         ctx.note_change()
         for fobj in targets:
             fobj.Attributes.RemoveFromAllGroups()
-        return f"Ungroup: removed the group status from {len(targets)} object(s)", True
+        return None, True             # MEASURED (research_all_13 #177): silent
 
 
 def _selected_surface_edges(ctx, only_closed):
@@ -9323,6 +9717,44 @@ class AreaCmd(Command):
     preselect_names = 1
     cancel_on_empty_set = True
     records_undo = False
+    # MEASURED (research_all_13 #004): `Units <ModelUnits> ( ModelUnits  Micron ...  Mile )`,
+    # sticky; Units=Inch on a 66 mm^2 box -> "Area = 0.102300205 ... square inches".
+    # Liter is listed by the reference but is not an area unit -- refused by name.
+    UNIT_CHOICES = ("ModelUnits", "Micron", "Millimeter", "Centimeter", "Liter",
+                    "Decimeter", "Meter", "Kilometer", "Microinch", "Mil", "Inch",
+                    "Foot", "Yard", "Mile")
+    _UNIT_KEYS = {"Micron": "Microns", "Millimeter": "Millimeters",
+                  "Centimeter": "Centimeters", "Decimeter": "Decimeters",
+                  "Meter": "Meters", "Kilometer": "Kilometers",
+                  "Microinch": "Microinches", "Mil": "Mils", "Inch": "Inches",
+                  "Foot": "Feet", "Yard": "Yards", "Mile": "Miles"}
+    _sticky_units = ["ModelUnits"]
+    options = (opts.Option("Units", opts.ENUM, choices=UNIT_CHOICES, default="ModelUnits",
+                           help="The units the area is reported in."),)
+
+    def __init__(self):
+        super().__init__()
+        self.opt["Units"] = AreaCmd._sticky_units[0]
+
+    def on_option_set(self, option, value, ctx):
+        if option.name == "Units":
+            if value == "Liter":
+                self.opt["Units"] = AreaCmd._sticky_units[0]
+                return "Area: Liter is a volume unit, not an area unit", False
+            AreaCmd._sticky_units[0] = value
+        return super().on_option_set(option, value, ctx)
+
+    def _report_unit(self, ctx):
+        """``(factor, plural unit name)``: model length -> report length."""
+        from . import units as _units
+        try:
+            model_unit = ctx.model.unit_system()
+        except Exception:  # noqa: BLE001
+            model_unit = None
+        chosen = self._UNIT_KEYS.get(self.opt.get("Units", "ModelUnits"))
+        if chosen is None or model_unit is None:
+            return 1.0, (model_unit or "").lower()
+        return _units.scale_factor(model_unit, chosen), chosen.lower()
 
     @staticmethod
     def _one(geom, name):
@@ -9378,10 +9810,9 @@ class AreaCmd(Command):
             return None, False
         if count == 0:
             return "\n".join(notes), True
-        try:
-            unit = " square " + ctx.model.unit_system().lower()
-        except Exception:  # noqa: BLE001
-            unit = ""
+        factor, unit_name = self._report_unit(ctx)
+        total, total_err = total * factor * factor, total_err * factor * factor
+        unit = " square " + unit_name if unit_name else ""
         if count == 1:
             line = _measured("Area", total, total_err) + unit
         else:
@@ -9675,6 +10106,17 @@ class AngleCmd(Command):
             return None, False
         return super().on_mode(name, ctx)
 
+    def _feed(self, text, ctx):
+        result = super()._feed(text, ctx)
+        # MEASURED (research_all_13 #002): an end ON the start (w0,0,0 twice) re-asks
+        # "End of first line:" with no message; DERIVED for the second line likewise.
+        if (self.steps and self.steps[0][1] == POINT and len(self.args) == 2
+                and math.dist(self.args[0], self.args[1]) <= 0.0):
+            self.args.pop()
+            self.step_index = len(self.args)
+            return None, False
+        return result
+
     @staticmethod
     def _direction(geom):
         """A line's start->end vector, a planar surface's normal, or None."""
@@ -9711,6 +10153,10 @@ class AngleCmd(Command):
             u, v = dirs
         else:
             p1, p2, p3, p4 = self.args
+            if math.dist(p3, p4) <= 0.0:
+                self.args.pop()                  # DERIVED from #002: re-ask silently
+                self.step_index = 3
+                return None, False
             u = tuple(b - a for a, b in zip(p1, p2))
             v = tuple(b - a for a, b in zip(p3, p4))
         try:
@@ -10915,6 +11361,14 @@ class _CentroidCmd(Command):
             parts.append(res)
             curves += isinstance(geom, r3.Curve)
         if not parts:
+            if not self.solid and all(ctx.geom_by_name(nm) is not None for nm in names):
+                # MEASURED (research_all_13 #005): a selection with nothing measurable (a
+                # point) is discarded and the object prompt is asked again.
+                self.args, self.step_index = [], 0
+                selector = getattr(ctx, "select_by_names", None)
+                if callable(selector):
+                    selector([])
+                return None, False
             return f"{self.name}: " + "; ".join(skipped or ["nothing to measure"]), True
         from . import analysis
 
@@ -11473,11 +11927,70 @@ class SplitCmd(Command):
     """
 
     name = "Split"
-    description = "Split curves where cutting curves cross them."
+    description = "Split curves where cutting curves cross them, or at picked points."
+    # MEASURED (research_all_13 #167): with a preselected line the prompt is "Select
+    # cutting objects ( Point ):"; `Point` asks "Point to split curve. Press Enter when
+    # done:" and a point (3,0,0) on (0,0,0)-(6,0,0) then Enter splits it in two, the first
+    # piece (0,0,0)-(3,0,0). A pick off the curve is projected to its closest point (OURS).
+    POINT_PROMPT = "Point to split curve. Press Enter when done:"
     steps = [("Select objects to split. Press Enter when done:", OBJECTS_MULTI),
-             ("Select cutting objects. Press Enter when done:", OBJECTS_MULTI)]
+             ("Select cutting objects:", OBJECTS_MULTI)]
     preselect_names = 1
     cancel_on_empty_set = True
+
+    def __init__(self):
+        super().__init__()
+        self._split_points = None
+
+    def on_mode(self, name, ctx):
+        if name == "Point":
+            if self.step_index != 1:
+                return "Split: select the curves to split first", False
+            targets = self.args[0] if self.args else []
+            if not targets or not all(isinstance(ctx.geom_by_name(n), r3.Curve)
+                                      for n in targets):
+                return "Split: Point splits curves only", False
+            self._split_points = []
+            self.steps[1] = (self.POINT_PROMPT, POINT)
+            self.options = ()             # MEASURED: the point prompt lists no options
+            return None, False
+        return super().on_mode(name, ctx)
+
+    def _feed(self, text, ctx):
+        if self._split_points is None or self.step_index != 1 or self.pending_option:
+            return super()._feed(text, ctx)
+        raw = (text or "").strip()
+        if raw:
+            try:
+                self._split_points.append(parse_point(raw, self._active_cplane(ctx),
+                                                      self._last_point()))
+            except ValueError as e:
+                return str(e), False
+            return None, False
+        if not self._split_points:
+            return "Split cancelled", True
+        return self._split_at_points(ctx)
+
+    def _split_at_points(self, ctx):
+        from . import intersect, nearest
+
+        report, done = [], 0
+        tol = _document_tolerance(ctx)
+        for nm in self.args[0]:
+            g = ctx.geom_by_name(nm)
+            if not isinstance(g, r3.Curve):
+                continue
+            params = [nearest.closest_point_on_curve(g, p, tolerance=tol).t
+                      for p in self._split_points]
+            pieces = intersect.split_curve_at_params(g, params)
+            if len(pieces) < 2:
+                report.append(f"{nm}: the points are at its ends")
+                continue
+            new = _replace_curve(ctx, nm, pieces)
+            done += 1
+            report.append(f"{nm} -> {len(new)} pieces")
+        head = f"Split {done} curve(s)" if done else "Split: nothing was split"
+        return head + (" (" + "; ".join(report) + ")" if report else ""), True
     options = (
         opts.Option("Point", opts.MODE,
                     help="(Curves only) Pick locations on the curve."),
@@ -13132,8 +13645,9 @@ class SelAllCmd(Command):
         current = [ob.name for ob in ctx.selected_objects()]
         wanted = fn(all_names, current)
         found = ui.apply_selection(wanted)
-        n = len(found)
-        return f"{self.name}: {n} object{'s' if n != 1 else ''} selected", True
+        if self.sel_key == "selnone":
+            return None, True
+        return _added_to_selection(ctx, list(found), current), True
 
 
 class SelNoneCmd(SelAllCmd):
@@ -13223,13 +13737,12 @@ class _SelKindCmd(Command):
                 continue
             if self._kinds and (self._kinds & self._classify(fobj.Geometry)):
                 wanted.append(name)
+        before = [ob.name for ob in ctx.selected_objects()]
         try:
             ctx.select_by_names(wanted)
         except Exception:  # noqa: BLE001 -- headless stubs always provide this
             pass
-        n = len(wanted)
-        noun = "object" if n == 1 else "objects"
-        return f"{self.name}: {n} {noun} selected", True
+        return _added_to_selection(ctx, wanted, before), True
 
 
 class SelCrvCmd(_SelKindCmd):
@@ -13668,16 +14181,16 @@ def _apply_selection(ctx, names, deselect: bool, base: str):
     through `ctx.select_by_names`, the single choke point that also records the
     change for `SelPrev`.
     """
+    current = []
+    getter = getattr(ctx, "selected_objects", None)
+    if callable(getter):
+        try:
+            current = [o.name for o in getter()]
+        except Exception:  # noqa: BLE001 -- headless: no current selection
+            current = []
     if deselect:
         wanted = [str(n) for n in names]
     else:
-        current = []
-        getter = getattr(ctx, "selected_objects", None)
-        if callable(getter):
-            try:
-                current = [o.name for o in getter()]
-            except Exception:  # noqa: BLE001 -- headless: no current selection
-                current = []
         seen = {str(c).lower() for c in current}
         wanted = [str(c) for c in current]
         wanted += [str(n) for n in names if str(n).lower() not in seen]
@@ -13685,10 +14198,9 @@ def _apply_selection(ctx, names, deselect: bool, base: str):
         found = ctx.select_by_names(wanted)
     except Exception:  # noqa: BLE001 -- headless stubs always provide this
         found = list(wanted)
-    n = len(wanted)
-    noun = "object" if n == 1 else "objects"
-    verb = "replaced selection with" if deselect else "selected"
-    return f"{base}: {verb} {n} {noun}", True
+    # MEASURED (research_all_13 #142, #148): "1 curve added to selection.".
+    return _added_to_selection(ctx, [str(n) for n in names],
+                               [] if deselect else current), True
 
 
 class SelLastCmd(Command):
@@ -13734,7 +14246,7 @@ class SelLastCmd(Command):
                 f"(option: DeselectOthersBeforeSelect)")
 
     def execute(self, ctx: NarwhalContext):
-        created = selection_state.last_created(ctx.model)
+        created = selection_state.last_batch(ctx.model)
         if not created:
             return ("SelLast: nothing has been created this session to select "
                     "(the 'last created objects' set is empty)"), True
@@ -13809,6 +14321,27 @@ def _selection_noun(geom, count):
     return "meshes" if noun == "mesh" else noun + "s"
 
 
+def _added_to_selection(ctx, names, before=()):
+    """The selection report for the objects in `names` that were NOT already selected.
+
+    MEASURED (research_all_13 #134, #136, #138, #142, #148, #150): "3 curves added to
+    selection.", "1 surface added to selection.", "No objects added to selection.". Mixed
+    kinds use "objects" (OURS)."""
+    prior = {n.lower() for n in before}
+    new = [n for n in names if n.lower() not in prior]
+    lookup = getattr(ctx, "geom_by_name", None)
+    if not callable(lookup):
+        if not new:
+            return "No objects added to selection."
+        return f"{len(new)} object{'s' if len(new) != 1 else ''} added to selection."
+    geoms = [g for g in (lookup(n) for n in new) if g is not None]
+    if not geoms:
+        return "No objects added to selection."
+    if len({_selection_noun(g, 1) for g in geoms}) == 1:
+        return f"{len(geoms)} {_selection_noun(geoms[0], len(geoms))} added to selection."
+    return f"{len(geoms)} objects added to selection."
+
+
 class SelectCmd(Command):
     """`Select` -- MEASURED (research_all_13 note 138): the prompt is "Select objects:";
     typing `All` selects every selectable object ("3 curves added to selection.") and the
@@ -13834,13 +14367,7 @@ class SelectCmd(Command):
         return super().begin(ctx)
 
     def _added_message(self, ctx, names):
-        geoms = [ctx.geom_by_name(n) for n in names]
-        if not geoms:
-            return "No objects added to selection."  # OURS: not measured
-        nouns = {_selection_noun(g, 1) for g in geoms}
-        if len(nouns) == 1:
-            return f"{len(geoms)} {_selection_noun(geoms[0], len(geoms))} added to selection."
-        return f"{len(geoms)} objects added to selection."
+        return _added_to_selection(ctx, names)
 
     def _feed_objects_multi_step(self, text, ctx):
         word = (text or "").strip()
@@ -14933,9 +15460,14 @@ class PipeCmd(Command):
     """
     name = "Pipe"
     description = "Build an exact constant-radius pipe along a curve."
+    # MEASURED (research_all_13 #105): "Start radius <1.000>" (Enter = 1), "End radius
+    # <1.000>" (Enter = the start radius), then "Point for next radius. Press Enter for
+    # none:" -- Enter ends it and builds the pipe; the input curve is kept. A point there
+    # (an intermediate radius) is not implemented and says so.
     steps = [("Select curves to pipe:", OBJECTS),
-             ("Start radius:", NUMBER),
-             ("End radius:", NUMBER)]
+             ("Start radius <1.000>:", NUMBER),
+             ("End radius:", NUMBER),
+             ("Point for next radius. Press Enter for none:", TEXT)]
     preselect_names = 1
     options = (
         opts.Option("Cap", opts.ENUM, choices=("None", "Flat", "Round"), default="Flat",
@@ -14958,9 +15490,19 @@ class PipeCmd(Command):
         # The end radius defaults to the start radius (Enter accepts it) -- the
         # constant-radius pipe is the default flow, so an empty Enter at the "End radius:"
         # step takes the value already given at "Start radius:".
-        if self.step_index == len(self.steps) - 1 and len(self.args) >= 2:
+        if self.step_index == 1:
+            return 1.0
+        if self.step_index == 2 and len(self.args) >= 2:
             return float(self.args[1])
+        if self.step_index == 3:
+            return ""
         return None
+
+    def _feed(self, text, ctx):
+        if self.step_index == 3 and (text or "").strip() and self.pending_option is None:
+            return ("Pipe: a radius at a point along the rail is not implemented yet -- "
+                    "press Enter for none"), False
+        return super()._feed(text, ctx)
 
     def execute(self, ctx: NarwhalContext):
         name = self.args[0] if self.args else None
