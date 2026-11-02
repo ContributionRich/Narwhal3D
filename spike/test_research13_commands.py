@@ -1107,6 +1107,29 @@ check(ps == ["Parabola start", "Point on parabola", "Parabola end", "Parabola di
       f"R5: Parabola3Pt prompts; direction (0,7) gives the measured middle control point "
       f"(9.6,-3.2) ({ps}, {mid and (mid.X, mid.Y)})")
 
+# --- P46 MoveFace: a selected face answers "Select faces" at once ----------------------
+ctx = Ctx(TOP)
+ctx.add(bridge.make_box((0, 0, 0), (4, 4, 0), 3), "B")
+top_id = bridge.faces_at_points(ctx.geom_by_name("B"), [(2, 2, 3)])[0]
+ctx.selected_subobjects = lambda: [("B", "Face", top_id)]
+ctx.clear_subobject_selection = lambda: None
+c, msg, done = drive("moveface", [], ctx)
+p0 = base(c.prompt)
+msg, done = c.feed("2,2,3", ctx)
+msg, done = c.feed("2,2,5", ctx)
+m = kernel.master_of(ctx.geom_by_name("B")) if ctx.geom_by_name("B") is not None else None
+lo, hi = ob.tight_bbox(m) if m is not None else ((0,) * 3, (0,) * 3)
+check(p0 == "Point to move from" and done and abs(hi[2] - 5) < 1e-9,
+      f"P46: a selected face skips the part prompt; the move is exact ({p0!r}, {msg!r}, top z {hi[2]})")
+del ctx.selected_subobjects
+c, msg, done = drive("moveedge", [], Ctx(TOP))
+check(base(c.prompt) == "Select edges", f"P45: MoveEdge's first prompt ({c.prompt!r})")
+
+check(all(isinstance(commands.COMMANDS[k], commands._NewValueMixin)
+          for k in ("setsnap", "setortho", "disableosnap", "projectosnap", "snaptolocked",
+                    "gumball")),
+      "the setting commands share the New value prompt (their menu rows answer Toggle)")
+
 failed = [label for ok, label in checks if not ok]
 print(f"\n{len(checks) - len(failed)}/{len(checks)} passed")
 sys.exit(1 if failed else 0)

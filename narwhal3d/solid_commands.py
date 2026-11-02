@@ -723,10 +723,58 @@ class _MoveSubObjectCmd(Command):
     """
     kind = "face"
     preselect_names = 1
+    # MEASURED (research_preview_14 P45/P46): the first prompt picks the PART -- "Select
+    # edges:" / "Select faces:". A selected edge/face (Ctrl+Shift pick, or one selected before
+    # the command) answers it at once; picking the whole solid instead still works and asks
+    # for a point on the part.
+    accepts_subobjects = True
 
     def __init__(self):
         super().__init__()
         self._sub_id = None
+
+    def _picked_parts(self, ctx):
+        getter = getattr(ctx, "selected_subobjects", None)
+        if not callable(getter):
+            try:
+                from . import ui
+                getter = ui.selected_subobjects
+            except Exception:  # noqa: BLE001
+                getter = None
+        try:
+            keys = list(getter() or []) if callable(getter) else []
+        except Exception:  # noqa: BLE001
+            keys = []
+        return [k for k in keys if str(k[1]).lower() == self.kind]
+
+    def _take_part(self, ctx):
+        """Answer the part prompt from a selected edge/face. (message, done) or None."""
+        parts = self._picked_parts(ctx)
+        if not parts:
+            return None
+        if len(parts) > 1:
+            return (f"{self.name}: moving more than one {self.kind} at once is not "
+                    f"implemented yet -- select one"), False
+        name, _kind, index = parts[0]
+        self.args = [name, None]
+        self._sub_id = int(index)
+        self.step_index = 2
+        clearer = getattr(ctx, "clear_subobject_selection", None)
+        try:
+            if callable(clearer):
+                clearer()
+            else:
+                from . import ui
+                ui.clear_subobject_selection()
+        except Exception:  # noqa: BLE001
+            pass
+        return None, False
+
+    def begin(self, ctx):
+        taken = self._take_part(ctx)
+        if taken is not None:
+            return taken
+        return super().begin(ctx)
 
     def _solid(self, ctx):
         name = self.args[0] if self.args else None
@@ -737,6 +785,10 @@ class _MoveSubObjectCmd(Command):
 
     def _feed(self, text, ctx):
         raw = (text or "").strip()
+        if self.step_index == 0 and self.pending_option is None and not raw:
+            taken = self._take_part(ctx)
+            if taken is not None:
+                return taken
         if self.step_index == 1 and self.pending_option is None and raw \
                 and opts.match(raw, self.options, self.opt).status == opts.NONE:
             name, geom = self._solid(ctx)
@@ -869,7 +921,7 @@ class MoveFaceCmd(_MoveSubObjectCmd):
     kind = "face"
     # MEASURED (research_preview_14 P46): after the face pick, "Point to move from", then
     # "To point"; a live deformed solid follows the cursor (not drawn here yet).
-    steps = [("Select the polysurface:", OBJECTS), ("Select a face:", POINT),
+    steps = [("Select faces:", OBJECTS), ("Select a face:", POINT),
              ("Point to move from:", POINT), ("To point:", POINT)]
     options = (
         opts.Option("DirectionConstraint", opts.ENUM, choices=("None", "Normal"),
@@ -905,7 +957,7 @@ class MoveEdgeCmd(_MoveSubObjectCmd):
     description = "Move an edge of a solid; the faces on either side follow, exactly."
     kind = "edge"
     # MEASURED (research_preview_14 P45): "Point to move from", then "To point".
-    steps = [("Select the polysurface:", OBJECTS), ("Select an edge:", POINT),
+    steps = [("Select edges:", OBJECTS), ("Select an edge:", POINT),
              ("Point to move from:", POINT), ("To point:", POINT)]
     options = (
         opts.Option("DirectionConstraint", opts.ENUM,

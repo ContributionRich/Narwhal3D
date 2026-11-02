@@ -10583,6 +10583,10 @@ def _draw_menu_items(layout, path):
             # the resource row carries no command name; the reference CAD application's is Exit
             command = "Exit"
         if command and command.lower() in COMMANDS:
+            if not option and isinstance(COMMANDS[command.lower()], commands._NewValueMixin):
+                # The setting commands now ask "<state>. New value"; their menu rows
+                # flip the setting, so they answer Toggle (the reference menu passes it too).
+                option = "Toggle"
             if option:
                 op = layout.operator("narwhal.run_command_option", text=text)
                 op.command = COMMANDS[command.lower()].name
