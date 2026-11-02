@@ -114,6 +114,24 @@ check(not done and not ctx.made and "not implemented yet" in message,
 check("helix" in commands.COMMANDS and isinstance(commands.COMMANDS["helix"], commands.HelixCmd),
       "Helix is registered as a runnable command")
 
+# MEASURED (research_all_13 #068): Turns 0 is refused with this message and asked again,
+# leaving the old value; an axis end ON the start returns silently, nothing made.
+ctx = Ctx(cplane.WORLD_TOP)
+command = commands.HelixCmd()
+command.begin(ctx)
+message, done = command.feed("Turns", ctx)
+message, done = command.feed("0", ctx)
+check(not done and message == "Number must be bigger than or equal to 1.49012e-08"
+      and command.pending_option is not None and float(command.opt["Turns"]) == 10.0,
+      f"Turns 0 is refused and asked again, the value kept ({message!r})")
+message, done = command.feed("4", ctx)
+for line in ("0,0,0", "0,0,10", "2"):
+    message, done = command.feed(line, ctx)
+check(done and "4 turns" in (message or ""), f"the re-asked Turns is then used ({message!r})")
+ctx, command, message, done = run(["0,0,0", "0,0,0"])
+check(done and message is None and not ctx.made,
+      f"a degenerate axis returns silently, nothing made ({message!r})")
+
 
 class UndoCtx(commands.NarwhalContext):
     def __init__(self):

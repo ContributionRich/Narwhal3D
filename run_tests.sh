@@ -259,6 +259,7 @@ PURE_SUITES=(
     spike/test_line_modes.py
     spike/test_pyramid_preview.py
     spike/test_solid_previews.py
+    spike/test_t117.py
     spike/test_what.py
     spike/test_curve_tools.py
     spike/test_insertknot.py

@@ -208,6 +208,20 @@ mo = kernel.master_of(open_pyr)
 check(mo is not None and ob.face_types(mo) == {"PLANE": 4} and not ob.is_airtight(mo),
       "make_pyramid(solid=False): 4 sides of a square pyramid, open")
 
+print("\n-- Box: the prompts and Enter = width (MEASURED research_all_13 #013) --")
+check([p for p, _k in type(commands.COMMANDS["box"])().steps]
+      == ["First corner of base:", "Other corner of base or length:",
+          "Height. Press Enter to use width:"], "Box prompts")
+check(type(commands.COMMANDS["point"])().prompt == "Location of point object:",
+      "Point's prompt (MEASURED research_all_13 #108)")
+check(type(commands.COMMANDS["sphere"])().steps[0][0] == "Center of sphere:",
+      "Sphere's centre prompt (MEASURED research_all_13 #165)")
+g, m, msg, c = run("box", ["0,0,0", "3,5,0", ""])
+box_bb = g.GetBoundingBox() if g is not None else None
+box_hi = (box_bb.Max.X, box_bb.Max.Y, box_bb.Max.Z) if box_bb is not None else None
+check(box_hi is not None and max(abs(a - b) for a, b in zip(box_hi, (3, 5, 5))) < 1e-9,
+      f"Enter at the height uses the width: a 3 x 5 base -> height 5 ({msg}; {box_hi})")
+
 print("\n-- Pyramid's typed-radius lock (MEASURED research_preview_14 P02) --")
 ctx = Ctx()
 c = type(commands.COMMANDS["pyramid"])()

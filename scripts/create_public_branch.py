@@ -180,6 +180,7 @@ TEST_FILES = (
     "spike/test_length_cmd.py",
     "spike/test_pyramid_preview.py",
     "spike/test_solid_previews.py",
+    "spike/test_t117.py",
     "spike/test_handlecurve.py", "spike/test_curve_through_srf_control_pt.py",
     "spike/test_sequential_object_steps.py",
     "spike/test_pure_core_gate.py", "spike/test_vector_export.py",

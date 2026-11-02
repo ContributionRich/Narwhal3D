@@ -2146,7 +2146,8 @@ class PointCmd(Command):
     # point (already resolved it in the active CPlane).
     name = "Point"
     description = "Draw a single point object at a location."
-    steps = [("Location:", POINT)]
+    # MEASURED (research_all_13 #108): the measured prompt.
+    steps = [("Location of point object:", POINT)]
 
     def execute(self, ctx: NarwhalContext):
         (location,) = self.args
@@ -2790,7 +2791,20 @@ class BoxCmd(HeightAxisMixin, Command):
     # note that used to live here ("make_box builds the height straight up
     # world-Z, so a picked height is most meaningful on the Top plane") described
     # the bug the user hit and no longer applies.
-    steps = [("Corner 1:", POINT), ("Corner 2:", POINT), ("Height:", DISTANCE)]
+    # MEASURED (research_all_13 #013): the prompts, and Enter at the height prompt builds
+    # the box with the height equal to its WIDTH (corners (0,0)-(3,5) gave height 5).
+    # DERIVED: "width" is the extent along the CPlane y axis (the help's length/width
+    # naming, consistent with that measurement).
+    steps = [("First corner of base:", POINT), ("Other corner of base or length:", POINT),
+             ("Height. Press Enter to use width:", DISTANCE)]
+
+    def _enter_default(self, ctx):
+        if self.step_index != 2 or len(self.args) != 2:
+            return None
+        plane = self._active_cplane(ctx)
+        y = tuple(float(c) for c in plane.yaxis)
+        width = abs(sum((self.args[1][i] - self.args[0][i]) * y[i] for i in range(3)))
+        return width if width > 0 else None
 
     def execute(self, ctx: NarwhalContext):
         c1, c2, h = self.args
@@ -2808,7 +2822,8 @@ class SphereCmd(SizeStepMixin, Command):
     # the command behavior: "Radius -- Creates a sphere by picking the center
     # point and a radius point." A picked radius location is from the
     # centre (the last picked point), exactly as Circle's radius is.
-    steps = [("Center:", POINT), ("Radius:", DISTANCE)]
+    # MEASURED (research_all_13 #165): the centre prompt is "Center of sphere".
+    steps = [("Center of sphere:", POINT), ("Radius:", DISTANCE)]
     # the radius-equivalent options. (the command behavior):
     # Sphere's `Diameter`, `Circumference`, `Area` are listed as top-level
     # command-line options and all LINK to the shared page
@@ -4235,12 +4250,21 @@ class _CoilCmd(Command):
                     diameter if self.size_mode == "diameter" else original, kind)
             return f"{self.name}: size input is {self.size_mode}", False
         if option.name in ("Turns", "Pitch"):
+            previous = getattr(self, "_last_good", {}).get(option.name, option.default)
             try:
                 number = float(value)
             except (TypeError, ValueError):
-                return f"{self.name}: {option.name} must be a number", False
+                number = float("nan")
             if not math.isfinite(number) or number <= 0.0:
+                # The refused value must not stay stored (it used to, and the build then
+                # failed later). MEASURED (research_all_13 #068): Turns 0 prints this
+                # and asks for the number of turns again.
+                self.opt[option.name] = previous
+                if option.name == "Turns":
+                    self.pending_option = option
+                    return "Number must be bigger than or equal to 1.49012e-08", False
                 return f"{self.name}: {option.name} must be greater than zero", False
+            self._last_good = dict(getattr(self, "_last_good", {}), **{option.name: number})
             self._coil_mode = option.name
             return f"{self.name}: {option.name}={number:g} takes precedence", False
         return super().on_option_set(option, value, ctx)
@@ -4255,6 +4279,15 @@ class HelixCmd(_CoilCmd):
              ("Radius:", DISTANCE)]
     _radius_step_index = 2
     _radius_prompt = "Radius:"
+
+    def _feed(self, text, ctx):
+        result = super()._feed(text, ctx)
+        # MEASURED (research_all_13 #068 item 8): an axis end ON the start returns to
+        # Command: silently -- no radius prompt, no object, no message.
+        if (not self._vertical and len(self.args) == 2 and _is_point(self.args[1])
+                and math.dist(self.args[0], self.args[1]) <= 1e-12):
+            return None, True
+        return result
 
     def execute(self, ctx):
         try:
@@ -6506,10 +6539,32 @@ class ArrayPolarCmd(Command):
     description = "Polar array of selected objects. Center, count, axis (x/y/z)."
     # (the command behavior) "Select the objects. Pick the
     # center of the array. Type the number of items..." -- selection leads.
+    # MEASURED (research_all_13 #007): the centre prompt, Enter there = the CPlane
+    # origin; at "Number of items" a count below 2 prints "Number must be bigger than or
+    # equal to 2" and asks again, and a non-whole count is silently asked again.
     steps = [("Select objects to array:", OBJECTS_MULTI),
-             ("Center:", "point"), ("Count:", "number"), ("Axis (x/y/z):", "text")]
+             ("Center of polar array. Press Enter to use the CPlane origin:", "point"),
+             ("Number of items:", "number"), ("Axis (x/y/z):", "text")]
     preselect_names = 1
     cancel_on_empty_set = True
+
+    def _enter_default(self, ctx):
+        if self.step_index == 1:
+            return tuple(float(c) for c in self._active_cplane(ctx).origin)
+        return None
+
+    def _feed(self, text, ctx):
+        raw = (text or "").strip()
+        if self.step_index == 2 and raw and self.pending_option is None:
+            try:
+                value = parse_number(raw)
+            except ValueError:
+                value = None
+            if value is not None and value != int(value):
+                return None, False
+            if value is not None and value < 2:
+                return "Number must be bigger than or equal to 2", False
+        return super()._feed(text, ctx)
 
     def execute(self, ctx: NarwhalContext):
         center, count, axis = self.args[1:]
