@@ -1130,6 +1130,86 @@ check(all(isinstance(commands.COMMANDS[k], commands._NewValueMixin)
                     "gumball")),
       "the setting commands share the New value prompt (their menu rows answer Toggle)")
 
+# --- P52 Pipe: Esc at the last prompt builds the pipe ---------------------------------------
+ctx = Ctx()
+ctx.add(bridge.make_line((0, 0, 0), (4, 0, 0)), "Rail")
+c, msg, done = drive("pipe", ["", ""], ctx, select=["Rail"])
+check(c.escape_commits() and not type(commands.COMMANDS["line"])().escape_commits(),
+      "P52: Esc at 'Point for next radius' commits (other commands still cancel on Esc)")
+
+# --- P16 Polygon prompt; workspace buttons' Mode=Circumscribed ---------------------------
+c, msg, done = drive("polygon", [], Ctx(TOP))
+p0 = c.prompt
+c.feed("Mode=Circumscribed", Ctx(TOP))
+check(p0.endswith("( NumSides=5  Mode=Inscribed  Edge  Star  Vertical  AroundCurve ):")
+      and "Mode=Circumscribed" in c.prompt and c.prompt.startswith("Center of circumscribed polygon"),
+      f"P16: Polygon's option list; Mode=Circumscribed switches the construction ({p0!r}, {c.prompt!r})")
+
+# --- R10 Line Perpendicular / Tangent to a picked curve ----------------------------------
+ctx = Ctx(TOP)
+ctx.add(bridge.make_line((-5, -4, 0), (5, -4, 0)), "F")
+c, msg, done = drive("line", ["Perpendicular", "2,2,0", "3,-4,0"], ctx)
+g = ctx.added[0] if ctx.added else None
+check(done and g is not None and g.PointAtEnd.DistanceTo(r3.Point3d(2, -4, 0)) < 1e-9,
+      f"R10: Line Perpendicular from (2,2) to the line y=-4 ends at its foot (2,-4) ({msg!r})")
+ctx = Ctx(TOP)
+ctx.add(r3.Circle(r3.Point3d(0, 0, 0), 3).ToNurbsCurve(), "C")
+c, msg, done = drive("line", ["Tangent", "6,0,0", "1.5,2.6,0"], ctx)
+g = ctx.added[0] if ctx.added else None
+check(done and g is not None and g.PointAtEnd.DistanceTo(r3.Point3d(1.5, 1.5 * math.sqrt(3), 0)) < 1e-7,
+      f"R10: Line Tangent from (6,0) to the r3 circle ends at (1.5, 2.598) "
+      f"({g and (g.PointAtEnd.X, g.PointAtEnd.Y)})")
+
+# --- R10 Circle Vertical / Ellipse Diameter, FromFoci / Rectangle, Plane Vertical / Star ---
+print("-- R10 variants --")
+ctx = Ctx(TOP)
+c, msg, done = drive("circle", ["Vertical", "0,0,0", "3"], ctx)
+stay = not done and c.step_index == 1
+msg, done = c.feed("0,4,0", ctx)
+g = ctx.added[0] if ctx.added else None
+ok_plane = g is not None and all(abs(g.PointAt(t).X) < 1e-9 for t in
+                                 [g.Domain.T0 + (g.Domain.T1 - g.Domain.T0) * k / 7 for k in range(8)])
+zmax = max(g.PointAt(g.Domain.T0 + (g.Domain.T1 - g.Domain.T0) * k / 64).Z for k in range(65)) if g else 0
+check(stay and done and ok_plane and abs(zmax - 3) < 1e-6,
+      f"R10: Circle Vertical -- typed 3 stays; the pick at (0,4) sets the plane (YZ), radius 3 ({msg!r})")
+ctx = Ctx(TOP)
+c, msg, done = drive("ellipse", ["Diameter", "-4,0,0", "4,0,0", "0,2,0"], ctx)
+check(done and "a=4" in msg and "b=2" in msg, f"R10: Ellipse Diameter -- radii 4 and 2 ({msg!r})")
+c, msg, done = drive("ellipse", ["FromFoci", "-1.5,0,0", "1.5,0,0", "0,2,0"], ctx)
+check(done and "b=2" in msg and "a=2.5" in msg, f"R10: Ellipse FromFoci -- a = 2.5, b = 2 ({msg!r})")
+ctx = Ctx(TOP)
+c, msg, done = drive("rectangle", ["Vertical", "-4,0,0", "4,0,0", "3"], ctx)
+p3 = base(c.prompt)
+msg, done = c.feed("0,0,1", ctx)
+g = ctx.added[0] if ctx.added else None
+zs = sorted({round(g.Point(i).Z, 9) for i in range(g.PointCount)}) if g is not None else []
+check(p3 == "Choose rectangle" and done and zs == [0.0, 3.0] and abs(g.GetLength() - 22) < 1e-9
+      if g is not None and hasattr(g, "GetLength") else (p3 == "Choose rectangle" and done and zs == [0.0, 3.0]),
+      f"R10: Rectangle Vertical -- edge, typed height 3, the side pick: 8 x 3 in XZ ({p3!r}, {zs})")
+c, msg, done = drive("plane", ["Vertical", "-4,0,0", "4,0,0", "3", "0,0,-1"], Ctx(TOP))
+check(done and "area 24" in (msg or ""), f"R10: Plane Vertical -- an 8 x 3 vertical surface ({msg!r})")
+ctx = Ctx(TOP)
+c, msg, done = drive("polygon", ["Star", "0,0,0", "4,0,0", "1.5"], ctx)
+g = ctx.added[0] if ctx.added else None
+radii = sorted({round(math.hypot(g.Point(i).X, g.Point(i).Y), 9) for i in range(g.PointCount)}) if g else []
+check(done and g is not None and g.PointCount == 11 and g.IsClosed and radii == [1.5, 4.0],
+      f"R10: Polygon Star -- 10 alternating points, radii 4 and 1.5 ({radii}; {msg!r})")
+
+c, msg, done = drive("circle", ["Vertical", "0,0,0"], Ctx(TOP))
+segs = preview.segments("circle", c.args, (0, 3, 0), TOP, cmd=c)
+check(segs and all(abs(p[0]) < 1e-9 for p in segs[0]) and max(p[2] for p in segs[0]) > 2.99,
+      "R10: Circle Vertical previews a circle in the vertical plane through the cursor")
+c, msg, done = drive("polygon", ["Star", "0,0,0", "4,0,0"], Ctx(TOP))
+segs = preview.segments("polygon", c.args, (1.5, 0, 0), TOP, cmd=c)
+check(segs and len(segs[0]) == 11, "R10: Polygon Star previews the star with the cursor's inner radius")
+
+c, msg, done = drive("plane", ["3Point", "0,0,0", "4,0,0", "0,3,0"], Ctx(TOP))
+check(done and "area 12" in (msg or ""), f"Plane 3Point builds the 4 x 3 surface ({msg!r})")
+c, msg, done = drive("circle", ["Vertical", "Diameter", "0,0,0", "4", "0,5,0"], Ctx(TOP))
+check(done and "r=2" in (msg or ""), f"Circle Vertical + Diameter: a typed 4 is a diameter ({msg!r})")
+c, msg, done = drive("line", ["Perpendicular", "Point"], Ctx(TOP))
+check(not done and base(c.prompt) == "Start of line", f"Line Perpendicular's Point route ({c.prompt!r})")
+
 failed = [label for ok, label in checks if not ok]
 print(f"\n{len(checks) - len(failed)}/{len(checks)} passed")
 sys.exit(1 if failed else 0)

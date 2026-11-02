@@ -7796,8 +7796,13 @@ def sidebar_click(btn, right=False):
         return f"{label} is not implemented yet"
     app_state.start_command(cmd)
     for argument in lines[1:]:
+        if app_state.active_command is None:
+            break
         app_state.feed_line(argument)
     _ensure_input_open()
+    if tbar.activation_has_rest(btn, right=right):
+        return (f"{label}: the part of this button after the first pick is not replayed "
+                f"yet -- set the remaining options at the prompt")
     return None
 
 
@@ -8870,7 +8875,7 @@ class NARWHAL_OT_command_input(Operator):
             # of it -- selection, the Gumball, control points, sub-objects, pane
             # activation, the title's double-click -- is handled in this modal, and
             # there is no LEFTMOUSE keymap item to restart it.
-            st.cancel()
+            _escape_command(st)
             clear_subobject_selection()
             clear_control_point_selection()
             self._clear_transient()
@@ -9826,7 +9831,7 @@ class NARWHAL_OT_cancel(Operator):
                 return {"FINISHED"}
             # nothing of ours to cancel -> let Esc do its normal Blender job
             return {"PASS_THROUGH"}
-        app_state.cancel()
+        _escape_command(app_state)
         app_state.input_buffer = ""
         redraw_cmdbar()
         return {"FINISHED"}
@@ -11550,6 +11555,8 @@ class NARWHAL_OT_toolbar_button(Operator):
 
     command: StringProperty(default="")
     label: StringProperty(default="")
+    # the button's command-variant answers (its macro, e.g. Line + BothSides), one per line
+    answers: StringProperty(default="")
 
     @classmethod
     def description(cls, context, props):
@@ -11563,6 +11570,11 @@ class NARWHAL_OT_toolbar_button(Operator):
             redraw_cmdbar()
             return {"FINISHED"}
         app_state.start_command(self.command)
+        if self.answers:
+            for answer in self.answers.split("\n"):
+                if app_state.active_command is None:
+                    break
+                app_state.feed_line(answer)
         _ensure_input_open()
         redraw_cmdbar()
         return {"FINISHED"}
@@ -11610,6 +11622,7 @@ def _draw_narwhal_toolbar(self, context):
                             text=(button.text or button.label)[:10]))
         op.command = button.left or ""
         op.label = button.hover_text() or button.label
+        op.answers = "\n".join(tbar.activation_lines(button)[1:])
 
 
 #: The stock INFO header draw, kept so `_uninstall_toolbar` can restore it.
@@ -12184,6 +12197,23 @@ class NARWHAL_OT_menu_todo(Operator):
         app_state.log(f"{what} is not implemented yet")
         redraw_cmdbar()
         return {"FINISHED"}
+
+
+def _escape_command(st):
+    """Esc on a running command: finish it where the command says Esc commits there
+    (`Command.escape_commits` -- MEASURED for Pipe's last prompt), else cancel it."""
+    cmd = st.active_command
+    try:
+        commits = bool(cmd is not None and cmd.escape_commits())
+    except Exception:  # noqa: BLE001
+        commits = False
+    if commits:
+        st.input_buffer = ""
+        st.feed_line("")
+        if st.active_command is cmd:
+            st.cancel()
+        return
+    st.cancel()
 
 
 class NARWHAL_OT_run_command_option(Operator):
@@ -22467,6 +22497,7 @@ class NARWHAL_MT_sidebar_flyout(bpy.types.Menu):
                           strip.operator("narwhal.toolbar_button", text=item.label[:3]))
                     op.command = item.left or ""
                     op.label = label
+                    op.answers = "\n".join(tbar.activation_lines(item)[1:])
 
 
 class NARWHAL_MT_layer_context(bpy.types.Menu):

@@ -10,6 +10,7 @@ import os
 
 from . import flyout_icon_data
 from . import toolbar_data
+from . import toolbar_macro_data
 from . import ui_icon_data
 
 ICON_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "icons")
@@ -88,10 +89,11 @@ class Button:
     """
 
     __slots__ = ("text", "tooltip", "left", "right", "right_tooltip", "icon",
-                 "link", "enabled", "right_enabled", "preset")
+                 "link", "enabled", "right_enabled", "preset", "macros")
 
     def __init__(self, text, tooltip, left, right, right_tooltip, icon,
-                 enabled, right_enabled, link=None, preset=()):
+                 enabled, right_enabled, link=None, preset=(), macros=(None, None)):
+        self.macros = tuple(macros or (None, None))
         self.text = text
         self.tooltip = tooltip
         self.left = left
@@ -130,6 +132,47 @@ class Button:
         return f"Button({self.label!r}{mark})"
 
 
+def _macros_for(record):
+    key = (record.get("text") or "", record.get("command"), record.get("right_command"))
+    return toolbar_macro_data.MACROS.get(key) or (None, None)
+
+
+def macro_lines(macro, command):
+    """The command-line answers a button macro gives AFTER starting `command`.
+
+    ``"! _Line _BothSides"`` -> ``["BothSides"]``: the button is the Line command with its
+    BothSides option -- "Line: from midpoint". Returns None when the macro does not start
+    `command` (it is some other macro), and ``(answers, rest)`` otherwise, where ``rest`` is
+    True when the macro continues after a Pause (that part waits for the user, and is not
+    replayed here)."""
+    if not macro or not command:
+        return None
+    try:
+        from . import macro as _macro
+        steps = _macro.tokenize(macro)
+    except Exception:  # noqa: BLE001 -- an unreadable macro is treated as absent
+        return None
+    steps = [st for st in steps if st.get("kind") != "cancel"]
+    if not steps or steps[0].get("kind") != "command" \
+            or str(steps[0].get("name", "")).lower() != command.lower():
+        return None
+    answers = []
+    for i, st in enumerate(steps[1:], 1):
+        kind = st.get("kind")
+        if kind == "pause":
+            return answers, any(x.get("kind") != "pause" for x in steps[i + 1:])
+        if kind == "command":
+            answers.append(str(st.get("name")))
+        elif kind == "option":
+            answers.append(f"{str(st.get('name')).lstrip('_-')}={str(st.get('value')).lstrip('_')}")
+        elif kind == "text":
+            # an English-prefixed word that starts with a digit (`_3Point`) is read as text
+            answers.append(str(st.get("value")).lstrip("_"))
+        elif kind == "enter":
+            answers.append("")
+    return answers, False
+
+
 def _button(record, implemented):
     left = record.get("command")
     right = record.get("right_command")
@@ -144,6 +187,7 @@ def _button(record, implemented):
         bool(right and right in implemented),
         record.get("link"),
         record.get("preset") or (),
+        _macros_for(record),
     )
 
 
@@ -285,7 +329,22 @@ def activation_lines(button, right=False):
     command = button.right if right else button.left
     if not command:
         return ()
-    return (command,) if right else (command, *button.preset)
+    if not right and button.preset:
+        return (command, *button.preset)
+    planned = macro_lines(button.macros[1 if right else 0], command)
+    if planned is not None:
+        return (command, *planned[0])
+    return (command,)
+
+
+def activation_has_rest(button, right=False):
+    """True when the button's macro continues after a Pause -- that part (it waits for the
+    user's pick) is not replayed, and the caller says so."""
+    if button is None or (not right and button.preset):
+        return False
+    command = button.right if right else button.left
+    planned = macro_lines(button.macros[1 if right else 0], command)
+    return bool(planned and planned[1])
 
 
 def button_key(button):

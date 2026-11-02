@@ -172,6 +172,20 @@ check(all(len(rows) == len({row.icon for row in rows})
 check(all(row.icon == variant_icons.icon_for(name, row.text)
           for name, rows in mapped_rows.items() for row in rows),
       "flyout rows apply only their exact authored slot mapping")
+# The owner's report: "Line: from midpoint" ran a plain Line. Every flyout and toolbar button
+# now carries its workspace macro, so a command-variant button answers its option(s).
+lines_button = types.SimpleNamespace(link="Lines")
+by_text = {row.text: row for row in toolbars.sidebar_flyout_rows(lines_button, implemented)}
+check(toolbars.activation_lines(by_text["Line: from midpoint"]) == ("line", "BothSides")
+      and toolbars.activation_lines(by_text["Line: Vertical to CPlane"]) == ("line", "Vertical")
+      and toolbars.activation_lines(by_text["Line"]) == ("line",)
+      and toolbars.activation_lines(by_text["Line: Vertical to CPlane"], right=True)
+      == ("line", "Vertical")
+      and toolbars.activation_has_rest(by_text["Line: Vertical to CPlane"], right=True),
+      "Line flyout variants answer their macro's option; a part after a Pause is flagged")
+check(toolbars.macro_lines("! _Circle _Diameter", "circle") == (["Diameter"], False)
+      and toolbars.macro_lines("! _Arc", "line") is None,
+      "macro_lines reads a button macro, and ignores one for another command")
 line_rows = mapped_rows["Lines"]
 check(toolbars.sidebar_tooltip_lines(line_rows[2], "flyout")
       == ("Line: Normal To Surface", "right-click: Surface normal, both sides")

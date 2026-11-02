@@ -983,6 +983,12 @@ class Command:
             return self.execute(ctx)
         return None, False
 
+    def escape_commits(self):
+        """True when Esc at the current prompt should FINISH the command (like Enter)
+        instead of cancelling it. The default is False: Esc cancels. The UI's Esc
+        handler asks this first."""
+        return False
+
     def _enter_default(self, ctx):
         """Value to substitute when the user presses Enter at the current fixed
         step, or None to keep the default behaviour (cancel the command).
@@ -2085,6 +2091,55 @@ class SizeStepMixin:
                f"accepts a {m} value.", False
 
 
+def _curve_near(ctx, point):
+    """The document curve nearest `point` (the one a pick on a curve means), or None."""
+    from . import nearest
+    best = None
+    for fobj in ctx.model.file.Objects:
+        g = fobj.Geometry
+        if not isinstance(g, r3.Curve):
+            continue
+        try:
+            d = nearest.distance_to_curve(g, tuple(point))
+        except ValueError:
+            continue
+        if best is None or d < best[0]:
+            best = (d, g)
+    return best[1] if best is not None else None
+
+
+def _solve_on_curve(curve, start_point, pick, condition):
+    """Newton on curve parameter t from the point nearest `pick`, to make
+    `condition(C(t) - start, C'(t))` zero. Returns C(t) or None."""
+    from . import nearest
+    t = nearest.closest_point_on_curve(curve, tuple(pick)).t
+    dom = curve.Domain
+    h = 1e-6 * (dom.T1 - dom.T0)
+
+    def at(u):
+        p = curve.PointAt(u)
+        return (p.X, p.Y, p.Z)
+
+    def f(u):
+        a, b = at(min(u + h, dom.T1)), at(max(u - h, dom.T0))
+        d = tuple((a[i] - b[i]) for i in range(3))
+        n = math.sqrt(cplane.dot(d, d)) or 1.0
+        return condition(_sub3(at(u), start_point), tuple(c / n for c in d))
+
+    for _ in range(60):
+        v = f(t)
+        dv = (f(min(t + h, dom.T1)) - f(max(t - h, dom.T0))) / (
+            min(t + h, dom.T1) - max(t - h, dom.T0))
+        if dv == 0:
+            break
+        step = v / dv
+        t = min(max(t - step, dom.T0), dom.T1)
+        if abs(step) <= 1e-15 * max(1.0, abs(t)):
+            break
+    reach = math.dist(at(t), tuple(start_point))
+    return at(t) if abs(f(t)) <= 1e-9 * max(1.0, reach) else None
+
+
 class LineCmd(Command):
     """`Line` -- the command behavior.
 
@@ -2142,6 +2197,25 @@ class LineCmd(Command):
     )
 
     def on_mode(self, name, ctx):
+        if name in ("Perpendicular", "Tangent"):
+            # MEASURED (research_preview_14 R10 Line Perpendicular / Tangent): "Start of line
+            # ( BothSides  Point  PointOnCurve  2Curves )", then "End of line" -- a pick on a
+            # curve ends the line at the foot of the perpendicular / the tangent point.
+            # OURS: the PointOnCurve and 2Curves routes are not built.
+            if self.args:
+                return f"Line: {name} is chosen before the start point", False
+            self._to_curve = name
+            self.steps = [("Start of line:", POINT), ("End of line:", POINT)]
+            keep = tuple(o for o in self.options if o.name == "BothSides")
+            self.options = keep + (
+                opts.Option("Point", opts.MODE, help="Start from a picked point (the default)."),
+                opts.Option("PointOnCurve", opts.MODE,
+                            help="Start on a curve (not implemented yet)."),
+                opts.Option("2Curves", opts.MODE,
+                            help="Between two curves (not implemented yet)."))
+            return None, False
+        if getattr(self, "_to_curve", None) is not None and name == "Point":
+            return None, False
         if name in self._MODE_STEPS:
             if self.args:
                 return f"Line: {name} is chosen before the start point", False
@@ -2231,7 +2305,21 @@ class LineCmd(Command):
 
     def execute(self, ctx: NarwhalContext):
         mode = getattr(self, "_line_mode", None)
-        if mode is None:
+        to_curve = getattr(self, "_to_curve", None)
+        if to_curve is not None:
+            p1, pick = self.args
+            curve = _curve_near(ctx, pick)
+            if curve is None:
+                return "Line: pick a curve for the end of the line", True
+            if to_curve == "Perpendicular":
+                cond = lambda v, d: cplane.dot(v, d)            # noqa: E731
+            else:
+                n = tuple(self._active_cplane(ctx).zaxis)
+                cond = lambda v, d: cplane.dot(cplane.cross(v, d), n)   # noqa: E731
+            p2 = _solve_on_curve(curve, p1, pick, cond)
+            if p2 is None:
+                return f"Line: no {to_curve.lower()} point on that curve near the pick", True
+        elif mode is None:
             p1, p2 = self.args
         else:
             found = self._direction(ctx)
@@ -2394,6 +2482,16 @@ class CircleCmd(_StickySizeMixin, SizeStepMixin, Command):
                               ("Third point:", POINT)]
             self._points_mode = name
             return f"Circle: {name} mode", False
+        if name == "Vertical":
+            # MEASURED (research_preview_14 R10 Circle Vertical): the circle stands in the
+            # vertical plane through the centre that contains the CPlane normal and the
+            # direction to the pick; a typed radius STAYS locked (`<r>`) and the pick then only
+            # sets that direction; Enter keeps the prompt.
+            if self.args:
+                return "Circle: Vertical is chosen before the first point", False
+            self._vertical_circle = True
+            self._locked_radius = None
+            return None, False
         if name == "Tangent":
             if self.args:
                 return "Circle: Tangent is chosen before the first point", False
@@ -2410,7 +2508,48 @@ class CircleCmd(_StickySizeMixin, SizeStepMixin, Command):
         hit = _tangent_radius_input(self, text)
         if hit is not None:
             return hit
+        raw = (text or "").strip()
+        if self.pending_option is None and raw.lower() in ("diameter", "radius"):
+            option = next(o for o in self.options if o.name == "Radius/Diameter")
+            value = "Diameter" if raw.lower() == "diameter" else "Radius"
+            self.opt[option.name] = value
+            hook = self.on_option_set(option, value, ctx)
+            return hook if hook is not None else (None, False)
+        if (getattr(self, "_vertical_circle", False) and self.step_index == 1
+                and self.pending_option is None
+                and not (raw and opts.match(raw, self.options, self.opt).status != opts.NONE)):
+            if not raw:
+                return None, False                      # MEASURED: Enter keeps the prompt
+            try:
+                self._locked_radius = parse_number(raw)
+                return None, False                      # MEASURED: a typed radius STAYS
+            except ValueError:
+                pass
+            try:
+                pick = parse_point(raw, self._active_cplane(ctx), self.args[0])
+            except ValueError as e:
+                return str(e), False
+            return self._vertical_circle_at(pick, ctx)
         return super()._feed(text, ctx)
+
+    def _vertical_circle_at(self, pick, ctx):
+        center = self.args[0]
+        n = tuple(self._active_cplane(ctx).zaxis)
+        d = _sub3(pick, center)
+        d = tuple(d[i] - cplane.dot(d, n) * n[i] for i in range(3))
+        u = cplane.normalize(d)
+        if u is None:
+            return "Circle: pick away from the centre to set the circle's direction", False
+        r = (self._locked_radius if self._locked_radius is not None
+             else math.dist(center, pick))
+        r = self.radius_from(r, self.size_mode)
+        if not r > 0:
+            return "Radius must be positive", False
+        geom = bridge.make_circle(center, r, cplane.CPlane(center, u, n))
+        self.args.append(r)
+        self.step_index = len(self.steps)
+        _, display_name = ctx.add_geometry(geom, "Circle")
+        return f"Created {display_name} (vertical, r={_num(r)})", True
 
     def _enter_default(self, ctx):
         # "Third tangent curve. Press Enter to draw circle from first two points"
@@ -3277,7 +3416,44 @@ class ConeCmd(_StickySizeMixin, HeightAxisMixin, SizeStepMixin, Command):
         return f"Created {display_name}", True
 
 
-class RectangleCmd(Command):
+class _VerticalRectMixin:
+    """`Rectangle Vertical` / `Plane Vertical` -- MEASURED (research_preview_14 R10): "Start of
+    edge", "End of edge", "Height. Press Enter to use width" (a typed height locks it), then
+    "Choose rectangle" -- the click picks the side along the CPlane normal (above or below
+    the edge). Exact: `bridge.make_rectangle_3point` with the edge and the height."""
+
+    VERT_STEPS = [("Start of edge:", POINT), ("End of edge:", POINT),
+                  ("Height. Press Enter to use width:", DISTANCE), ("Choose rectangle:", POINT)]
+
+    def _start_vertical(self):
+        if self.args:
+            return f"{self.name}: Vertical is chosen before the first point", False
+        self._vertical_rect = True
+        self.steps = list(self.VERT_STEPS)
+        return None, False
+
+    def _vertical_enter(self, ctx):
+        if getattr(self, "_vertical_rect", False) and self.step_index == 2 and len(self.args) == 2:
+            return math.dist(self.args[0], self.args[1])          # Enter uses the width
+        return None
+
+    def _vertical_boundary(self, ctx):
+        a, b, h, pick = self.args[:4]
+        n = tuple(self._active_cplane(ctx).zaxis)
+        sign = -1.0 if cplane.dot(_sub3(pick, a), n) < 0 else 1.0
+        h = abs(float(h))
+        if math.dist(a, b) <= 1e-12 or h <= 1e-12:
+            return f"{self.name}: the edge and the height must not be zero"
+        side = tuple(a[i] + sign * h * n[i] for i in range(3))
+        e = _sub3(b, a)
+        e = cplane.normalize(tuple(e[i] - cplane.dot(e, n) * n[i] for i in range(3)))
+        if e is None:
+            return f"{self.name}: the edge must not run along the construction plane normal"
+        # the vertical plane through the edge: x along the edge, y along the CPlane normal
+        return bridge.make_rectangle_3point(a, b, side, cplane.CPlane(a, e, n))
+
+
+class RectangleCmd(_VerticalRectMixin, Command):
     # `Rectangle` -- two OPPOSITE corners (the command behavior,
     # "(Default) Draws the rectangle using two opposite corners."). Built in the
     # active CPlane as a closed polyline, so a rectangle drawn on Front stands up
@@ -3323,6 +3499,8 @@ class RectangleCmd(Command):
     )
 
     def on_mode(self, name, ctx):
+        if name == "Vertical":
+            return self._start_vertical()
         if name == "Center":
             # (the command behavior): "Center -- Draws the
             # rectangle from the center point and a corner." The result is an
@@ -3471,6 +3649,9 @@ class RectangleCmd(Command):
 
     def _enter_default(self, ctx):
         """"Width. Press Enter to use length" -- Enter makes a square."""
+        vertical = self._vertical_enter(ctx)
+        if vertical is not None:
+            return vertical
         length = self._typed_length()
         if self._current_label() == self.WIDTH_PROMPT and length is not None:
             return abs(length) * self._cursor_sign(ctx, self._active_cplane(ctx).yaxis)
@@ -3553,6 +3734,12 @@ class RectangleCmd(Command):
         return bridge.make_rectangle(c1, c2, p)
 
     def execute(self, ctx: NarwhalContext):
+        if getattr(self, "_vertical_rect", False):
+            geom = self._vertical_boundary(ctx)
+            if isinstance(geom, str):
+                return geom, True
+            _, display_name = ctx.add_geometry(geom, "Rectangle")
+            return f"Created {display_name}", True
         if self._rounded:
             geom = self._plain_rectangle(ctx)
             if isinstance(geom, str):
@@ -3610,7 +3797,7 @@ class RectangleCmd(Command):
         return f"Created {display_name}", True
 
 
-class PlaneCmd(_LengthWidthMixin, Command):
+class PlaneCmd(_VerticalRectMixin, _LengthWidthMixin, Command):
     # `Plane` (the command behavior) -- draw a rectangle in the active CPlane
     # and cap it into a PLANAR SURFACE. This is the surface twin of `Rectangle`:
     # same two-opposite-corners pick, same `bridge.make_rectangle` boundary, but the
@@ -3641,6 +3828,9 @@ class PlaneCmd(_LengthWidthMixin, Command):
     steps = [(FIRST_PROMPT, POINT), (OTHER_PROMPT, DISTANCE)]
 
     def _enter_default(self, ctx):
+        vertical = self._vertical_enter(ctx)
+        if vertical is not None:
+            return vertical
         return self._width_default(ctx)
     # (the command behavior, "Command-line options"). MODE options -- each
     # branches the drawing. None is in the command-coverage COMMANDS table (Plane's
@@ -3667,10 +3857,46 @@ class PlaneCmd(_LengthWidthMixin, Command):
         # rectangle, none of which `make_planar_srf` + `make_rectangle` express in
         # this build. Refuse by name (the explicit-refusal policy) rather than draw the default and
         # call it the picked option.
+        if name == "Vertical":
+            return self._start_vertical()
+        if name == "3Point":
+            # OURS: the same three picks as Rectangle 3Point (two adjacent corners, then the
+            # opposite side); the result is the planar surface of that rectangle.
+            if self.args:
+                return "Plane: 3Point is chosen before the first point", False
+            self._three_point = True
+            self.steps = [("Corner 1:", POINT), ("Corner 2:", POINT),
+                          ("Opposite side:", POINT)]
+            return None, False
         return f"Plane: the {name} option is not implemented yet", False
 
     def execute(self, ctx: NarwhalContext):
         from . import analysis
+
+        if getattr(self, "_three_point", False):
+            try:
+                boundary = bridge.make_rectangle_3point(*self.args[:3],
+                                                        self._active_cplane(ctx))
+            except ValueError as e:
+                return f"Plane: {e}", True
+            try:
+                geom = bridge.make_planar_srf([boundary])[0]
+            except ValueError as e:
+                return f"Plane: {e}", True
+            _, display_name = ctx.add_geometry(geom, "Plane")
+            return (f"Created {display_name} "
+                    f"(planar surface, area {analysis.surface_area(geom):g})"), True
+        if getattr(self, "_vertical_rect", False):
+            boundary = self._vertical_boundary(ctx)
+            if isinstance(boundary, str):
+                return boundary, True
+            try:
+                geom = bridge.make_planar_srf([boundary])[0]
+            except ValueError as e:
+                return f"Plane: {e}", True
+            _, display_name = ctx.add_geometry(geom, "Plane")
+            return (f"Created {display_name} "
+                    f"(planar surface, area {analysis.surface_area(geom):g})"), True
 
         # args = [corner1, corner2] (two OPPOSITE corners, the default mode).
         p = self._active_cplane(ctx)
@@ -3749,7 +3975,19 @@ class EllipseCmd(Command):
 
     def on_mode(self, name, ctx):
         """`Corner` ("Draws the ellipse from the corners of an enclosing
-        rectangle") is built; prompts "First corner" / "Other corner" in the command UI."""
+        rectangle") is built; prompts "First corner" / "Other corner" in the command UI.
+        MEASURED (research_preview_14 R10): `Diameter` -- "Start of first axis", "End of first
+        axis", "End of second axis" (the first axis is a whole diameter); `FromFoci` -- "First
+        focus", "Second focus", "Point on ellipse"."""
+        if name in ("Diameter", "FromFoci"):
+            if self.args:
+                return f"Ellipse: {name} is chosen before the first point", False
+            self._flow = name
+            self.steps = ([("Start of first axis:", POINT), ("End of first axis:", POINT),
+                           ("End of second axis:", POINT)] if name == "Diameter" else
+                          [("First focus:", POINT), ("Second focus:", POINT),
+                           ("Point on ellipse:", POINT)])
+            return None, False
         if name == "Corner":
             if self.args:
                 return "Ellipse: Corner is chosen before the first point", False
@@ -3771,6 +4009,28 @@ class EllipseCmd(Command):
             cu, cv = (u1 + u2) / 2, (v1 + v2) / 2
             self.args = [p.to_world(cu, cv, w1), p.to_world(max(u1, u2), cv, w1),
                          p.to_world(cu, max(v1, v2), w1)]
+        flow = getattr(self, "_flow", None)
+        if flow == "Diameter":
+            s0, s1, a2 = self.args
+            center = tuple((s0[i] + s1[i]) / 2 for i in range(3))
+            self.args = [center, tuple(s1), a2]
+        elif flow == "FromFoci":
+            f1, f2, on = self.args
+            center = tuple((f1[i] + f2[i]) / 2 for i in range(3))
+            c = math.dist(f1, f2) / 2
+            a = (math.dist(on, f1) + math.dist(on, f2)) / 2
+            u = cplane.normalize(_sub3(f2, f1))
+            if u is None or not a > c:
+                return "Ellipse: the foci must differ and the point lie off the focal segment", True
+            n = cplane.normalize(cplane.cross(_sub3(f2, f1), _sub3(on, f1))) or \
+                tuple(self._active_cplane(ctx).zaxis)
+            v = cplane.cross(n, u)
+            b = math.sqrt(a * a - c * c)
+            self.args = [center, tuple(center[i] + a * u[i] for i in range(3)),
+                         tuple(center[i] + b * v[i] for i in range(3))]
+            if self.opt.get("MarkFoci"):
+                for f in (f1, f2):
+                    ctx.add_geometry(bridge.make_point(f), "Point")
         center, a1, a2 = self.args
         a2 = self.second_axis_end(center, a1, a2)
         la = math.dist(center, a1)
@@ -3813,7 +4073,21 @@ class PolygonCmd(Command):
         opts.Option("Automatic", opts.TOGGLE, default=False,
                     help=("For 5 or more sides, creates a star where the size "
                           "of the outer and inner points are equal.")),
+        # MEASURED (research_preview_14 P16): the prompt shows "Mode=Inscribed"; the
+        # workspace buttons answer "Mode=Circumscribed". Inscribed / Circumscribed above stay
+        # typeable as the same choice.
+        opts.Option("Mode", opts.ENUM, choices=("Inscribed", "Circumscribed"),
+                    default="Inscribed", help="Corners or side midpoints on the radius."),
     )
+    #: MEASURED (P16): "( NumSides=5  Mode=Inscribed  Edge  Star  Vertical  AroundCurve )"
+    SHOWN_OPTIONS = ("NumSides", "Mode", "Edge", "Star", "Vertical", "AroundCurve")
+
+    @property
+    def prompt(self):
+        if self.pending_option is not None or self.step_index >= len(self.steps):
+            return super().prompt
+        shown = tuple(o for name in self.SHOWN_OPTIONS for o in self.options if o.name == name)
+        return opts.format_prompt(self.steps[self.step_index][0], shown, self.opt)
 
     # OURS: bound interactive allocation rather than accept an unbounded count.
     MAX_SIDES = 10_000
@@ -3841,6 +4115,8 @@ class PolygonCmd(Command):
         return int(count)
 
     def on_option_set(self, option, value, ctx):
+        if option.name == 'Mode':
+            return self.on_mode(str(value), ctx)
         if option.name != 'NumSides':
             return super().on_option_set(option, value, ctx)
         try:
@@ -3887,6 +4163,7 @@ class PolygonCmd(Command):
         polygon", "Center of circumscribed polygon", "Start of edge" / "End of edge"."""
         if name in ("Inscribed", "Circumscribed"):
             self._inscribed = name == "Inscribed"
+            self.opt["Mode"] = name
             if not self._edge:
                 self.steps[1] = ("Corner of polygon:" if self._inscribed else
                                  "Midpoint of polygon edge:", POINT)
@@ -3894,6 +4171,16 @@ class PolygonCmd(Command):
                     self.steps[0] = (f"Center of {name.lower()} polygon:", POINT)
             return f"Polygon: {name} -- the radius reaches the " + (
                 "corners" if self._inscribed else "midpoints of the sides"), False
+        if name == "Star":
+            # MEASURED (research_preview_14 R10 Polygon Star): "Center of star", "Corner of
+            # star", "Second star radius. Press Enter for automatic"; a typed inner radius
+            # finishes. Result: one closed polyline alternating outer corners and inner points.
+            if self.args:
+                return "Polygon: Star is chosen before the first point", False
+            self._star = True
+            self.steps = [("Center of star:", POINT), ("Corner of star:", POINT),
+                          ("Second star radius. Press Enter for automatic:", DISTANCE)]
+            return None, False
         if name == "Edge":
             if self.args:
                 return "Polygon: Edge is chosen before the first point", False
@@ -3925,7 +4212,48 @@ class PolygonCmd(Command):
             cv += s * math.sin(ang + k * turn)
         return bridge.make_polyline(pts + [pts[0]], degree=1)
 
+    def _distance_base(self):
+        if getattr(self, "_star", False) and self.args:
+            return self.args[0]                       # the inner radius is from the centre
+        return super()._distance_base()
+
+    def _enter_default(self, ctx):
+        if getattr(self, "_star", False) and self.step_index == 2 and len(self.args) == 2:
+            # DERIVED (help: Automatic "creates a star where the size of the outer and inner
+            # points are equal"): the regular star {n/2}, r2 = r1 cos(2 pi/n) / cos(pi/n).
+            # OURS: Enter's result was not measured.
+            n = int(self._num_sides)
+            r1 = math.dist(self.args[0], self.args[1])
+            return r1 * math.cos(2 * math.pi / n) / math.cos(math.pi / n) if n >= 5 else None
+        return super()._enter_default(ctx)
+
+    def _star_polygon(self, ctx):
+        center, corner, inner = self.args[:3]
+        n = int(self._num_sides)
+        plane = self._active_cplane(ctx)
+        cu, cv, _ = plane.from_world(center)
+        pu, pv, _ = plane.from_world(corner)
+        r1 = math.hypot(pu - cu, pv - cv)
+        r2 = abs(float(inner))
+        if n < 3 or r1 <= 0 or r2 <= 0:
+            return "Polygon: a star needs 3 or more sides and two non-zero radii"
+        a0 = math.atan2(pv - cv, pu - cu)
+        pts = []
+        for k in range(2 * n):
+            r = r1 if k % 2 == 0 else r2
+            a = a0 + math.pi * k / n
+            pts.append(plane.to_world(cu + r * math.cos(a), cv + r * math.sin(a), 0.0))
+        pts.append(pts[0])
+        return r3.PolylineCurve([r3.Point3d(*q) for q in pts])
+
     def execute(self, ctx: NarwhalContext):
+        if getattr(self, "_star", False):
+            geom = self._star_polygon(ctx)
+            if isinstance(geom, str):
+                return geom, True
+            _, display_name = ctx.add_geometry(geom, "Polygon")
+            self._published_num_sides = self._num_sides
+            return f"Created {display_name} ({self._num_sides}-point star)", True
         if self._edge:
             geom = self._edge_polygon(ctx)
             if isinstance(geom, str):
@@ -16414,7 +16742,8 @@ class PipeCmd(Command):
         resolve = (ctx_or_resolve if callable(ctx_or_resolve)
                    else getattr(ctx_or_resolve, "geom_by_name", None))
         rail = resolve(name) if (resolve and name) else None
-        return bridge.distance_to_curve(rail, tuple(point))
+        from . import nearest
+        return nearest.distance_to_curve(rail, tuple(point))     # solved, not sampled
 
     def preview_circles(self, resolve, cursor):
         """The live radius circle(s), across the rail at its start (and end)."""
@@ -16465,6 +16794,10 @@ class PipeCmd(Command):
         if self.step_index == 3:
             return ""
         return None
+
+    def escape_commits(self):
+        # MEASURED (research_preview_14 P52): Esc at "Point for next radius" BUILT the pipe.
+        return self.step_index == 3 and self.pending_option is None
 
     def _feed(self, text, ctx):
         if self.step_index == 3 and (text or "").strip() and self.pending_option is None:

@@ -284,8 +284,10 @@ check(bb is not None and near(xyz(bb[0]), (0, 0, 0)) and near(xyz(bb[1]), (8, 6,
 print("\n-- unbuilt options still say so --")
 # Circle/Arc Tangent are covered in spike/test_tangent_circle.py; AroundCurve and
 # Midpoint remain the explicit unbuilt pins here.
-for key, opt in (("line", "Normal"), ("line", "Tangent"), ("circle", "AroundCurve"),
-                 ("arc", "Midpoint"), ("rectangle", "EdgeMidpoint"), ("polygon", "Star"),
+# Line Tangent and Polygon Star are now built from their measured flows
+# (research_preview_14 R10; covered in spike/test_research13_commands.py).
+for key, opt in (("line", "Normal"), ("circle", "AroundCurve"),
+                 ("arc", "Midpoint"), ("rectangle", "EdgeMidpoint"),
                  ("ellipse", "Vertical")):
     cmd = type(commands.COMMANDS[key])()
     m, _d = cmd.feed(opt, None)

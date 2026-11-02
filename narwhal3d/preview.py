@@ -494,6 +494,83 @@ def polygon_polyline(plane, center, radius, sides, inscribed=True, *,
     return pts
 
 
+def _variant_preview(name, args, cursor, plane, cmd):
+    """Previews of the measured command variants (research_preview_14 R10), or None when the
+    running command is not in one. Display only."""
+    pts = [tuple(a) for a in args if _is_point(a)]
+    cur = tuple(cursor)
+    if name == "circle" and getattr(cmd, "_vertical_circle", False) and pts:
+        # a rubber circle in the vertical plane holding the CPlane normal and the cursor
+        center = pts[0]
+        n = tuple(plane.zaxis)
+        d = _sub(cur, center)
+        d = tuple(d[i] - dot(d, n) * n[i] for i in range(3))
+        u = _unit3(d)
+        if u is None:
+            return []
+        locked = getattr(cmd, "_locked_radius", None)
+        r = float(locked) if locked is not None else _length(_sub(cur, center))
+        return [_ring(center, u, n, r), [center, cur]]
+    if name == "ellipse" and getattr(cmd, "_flow", None) in ("Diameter", "FromFoci") and pts:
+        if len(pts) == 1:
+            return [[pts[0], cur]]
+        if cmd._flow == "Diameter":
+            center = tuple((pts[0][i] + pts[1][i]) / 2 for i in range(3))
+            a_end, w = pts[1], _sub(pts[2] if len(pts) > 2 else cur, center)
+            u = _sub(a_end, center)
+            uu = dot(u, u) or 1.0
+            v = tuple(w[i] - dot(w, u) / uu * u[i] for i in range(3))
+        else:
+            f1, f2, on = pts[0], pts[1], (pts[2] if len(pts) > 2 else cur)
+            center = tuple((f1[i] + f2[i]) / 2 for i in range(3))
+            c = _length(_sub(f2, f1)) / 2
+            a = (_length(_sub(on, f1)) + _length(_sub(on, f2))) / 2
+            e = _unit3(_sub(f2, f1))
+            if e is None or a <= c:
+                return [[f1, f2]]
+            n = _unit3(_cross3(_sub(f2, f1), _sub(on, f1))) or tuple(plane.zaxis)
+            u = tuple(a * e[i] for i in range(3))
+            v = tuple(math.sqrt(a * a - c * c) * x for x in _cross3(n, e))
+        ring = [tuple(center[i] + u[i] * math.cos(t) + v[i] * math.sin(t) for i in range(3))
+                for t in (2 * math.pi * k / CIRCLE_SEGMENTS for k in range(CIRCLE_SEGMENTS + 1))]
+        return [ring]
+    if name in ("rectangle", "plane") and getattr(cmd, "_vertical_rect", False) and pts:
+        if len(pts) == 1:
+            return [[pts[0], cur]]                     # MEASURED: a rubber line along the edge
+        a, b = pts[0], pts[1]
+        n = tuple(plane.zaxis)
+        if len(args) >= 3 and not _is_point(args[2]):
+            h = abs(float(args[2])) * (-1.0 if dot(_sub(cur, a), n) < 0 else 1.0)
+        else:
+            h = dot(_sub(cur, a), n)
+        top = [tuple(p[i] + h * n[i] for i in range(3)) for p in (b, a)]
+        return [[a, b, top[0], top[1], a]]
+    if name == "polygon" and getattr(cmd, "_star", False) and pts:
+        if len(pts) == 1:
+            outer = cur
+        else:
+            outer = pts[1]
+        n = int(getattr(cmd, "_num_sides", 5))
+        cu, cv, _ = plane.from_world(pts[0])
+        pu, pv, _ = plane.from_world(outer)
+        r1 = math.hypot(pu - cu, pv - cv)
+        if r1 <= 1e-12:
+            return []
+        a0 = math.atan2(pv - cv, pu - cu)
+        if len(pts) == 1:                                # MEASURED: the live polygon first
+            ring = [plane.to_world(cu + r1 * math.cos(a0 + 2 * math.pi * k / n),
+                                   cv + r1 * math.sin(a0 + 2 * math.pi * k / n), 0.0)
+                    for k in range(n + 1)]
+            return [ring]
+        cw = plane.from_world(cur)
+        r2 = math.hypot(cw[0] - cu, cw[1] - cv)
+        ring = [plane.to_world(cu + (r1 if k % 2 == 0 else r2) * math.cos(a0 + math.pi * k / n),
+                               cv + (r1 if k % 2 == 0 else r2) * math.sin(a0 + math.pi * k / n),
+                               0.0) for k in range(2 * n + 1)]
+        return [ring]
+    return None
+
+
 def preview_polygon(args, cursor, plane, cmd=None):
     """Display the running Polygon's draft count/mode, never build kernel geometry.
 
@@ -1909,7 +1986,11 @@ def segments(name, args, cursor, plane, resolve=None, cmd=None):
     if fn is None and cmd_fn is None and doc_fn is None:
         return []
     try:
-        if cmd_fn is not None:
+        variant = (_variant_preview(key, list(args or []), cursor, plane, cmd)
+                   if cmd is not None else None)
+        if variant is not None:
+            out = variant
+        elif cmd_fn is not None:
             out = cmd_fn(args or [], tuple(cursor), plane, cmd=cmd)
         elif doc_fn is not None:
             # No resolver supplied (a unit test, or a caller with no document) means there is
