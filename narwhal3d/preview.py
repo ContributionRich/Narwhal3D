@@ -210,6 +210,18 @@ def preview_polyline(args, cursor, plane):
     return [pts + [cursor]]
 
 
+def preview_srfpt(args, cursor, plane):
+    """`SrfPt` -- MEASURED (research_preview_14 P56): at corner 2 a rubber line from corner 1
+    to the cursor; at corner 3 the triangle 1-2-cursor; at corner 4 the outline 1-2-3-cursor
+    closed back to corner 1."""
+    pts = points_only(args)[:3]
+    if not pts:
+        return []
+    if len(pts) == 1:
+        return [[pts[0], cursor]]
+    return [pts + [cursor, pts[0]]]
+
+
 #: How many straight segments to draw per control-point SPAN when previewing a
 #: smooth curve. A span is one piece of the B-spline between interior knots,
 #: so the total rises with the number of picks: the smallest cubic (four picks, one
@@ -295,6 +307,31 @@ def preview_curve(args, cursor, plane, cmd=None):
     degree = int(getattr(cmd, "opt", {}).get("Degree", "3"))
     smooth = control_point_curve_polyline(pts + [cursor], max_degree=degree)
     return [smooth] if smooth else []
+
+
+def preview_interpcrv(args, cursor, plane):
+    """`InterpCrv` -- MEASURED (research_preview_14 P18): one point gives a straight rubber
+    line; from two points the curve passes THROUGH every placed point and on to the cursor.
+    It is the commit's own interpolation (`bridge.make_interpolated_curve`) with the cursor
+    as the next point -- `preview_curve` showed a control-point curve, which misses them."""
+    pts = points_only(args)
+    if not pts:
+        return []
+    if len(pts) == 1:
+        return [[pts[0], tuple(cursor)]]
+    try:
+        from . import bridge
+    except ImportError:          # loaded standalone (tests / probes)
+        import bridge
+    through = pts + [tuple(cursor)]
+    if any(_length(_sub(a, b)) <= 1e-9 for a, b in zip(through, through[1:])):
+        through = pts
+    try:
+        curve = bridge.make_interpolated_curve(through, degree=3)
+    except Exception:  # noqa: BLE001
+        return [pts + [tuple(cursor)]]
+    samples = bridge.sample_curve(curve, 24 * (len(through) - 1))
+    return [[(p.X, p.Y, p.Z) for p in samples]] if samples else []
 
 
 def preview_circle(args, cursor, plane):
@@ -408,12 +445,16 @@ def preview_ellipse(args, cursor, plane):
     if len(pts) == 1:
         # only the centre is fixed; the first semi-axis follows the cursor
         return [[center, cursor]]
-    if len(pts) == 2:
-        # centre + first axis end fixed; the second semi-axis follows the cursor
-        return [[center, pts[1]], [center, cursor]]
-    # both axes fixed: the full ellipse
+    # MEASURED (research_preview_14 P14): at "End of second axis" the whole ellipse is live,
+    # its second semi-axis perpendicular to the first with the cursor's distance from the
+    # first axis, plus a construction line from the centre to the cursor.
     u = _sub(pts[1], center)
-    v = _sub(pts[2], center)
+    w = _sub(pts[2] if len(pts) > 2 else cursor, center)
+    uu = dot(u, u)
+    k = dot(w, u) / uu if uu > 1e-24 else 0.0
+    v = tuple(w[i] - k * u[i] for i in range(3))
+    if len(pts) == 2 and _length(v) <= 1e-12:
+        return [[center, pts[1]], [center, cursor]]
     out = []
     for i in range(CIRCLE_SEGMENTS + 1):
         a = 2.0 * math.pi * i / CIRCLE_SEGMENTS
@@ -421,6 +462,8 @@ def preview_ellipse(args, cursor, plane):
         out.append((center[0] + u[0] * c + v[0] * s,
                     center[1] + u[1] * c + v[1] * s,
                     center[2] + u[2] * c + v[2] * s))
+    if len(pts) == 2:
+        return [out, [center, tuple(cursor)]]
     return [out]
 
 
@@ -744,9 +787,20 @@ def preview_sphere(args, cursor, plane):
     circle = circle_polyline(plane, center, radius)
     if not circle:
         return []
-    if len(args) == 1:
-        return [circle, [center, cursor]]
-    return [circle]
+    # MEASURED (research_preview_14 P05): at the radius prompt a live WIRE sphere -- the
+    # equator through the cursor, latitudes at +-45 degrees (one inner circle at 0.71 r seen
+    # from Top) and four meridian great circles 45 degrees apart (four diameters in Top).
+    x, y, n = tuple(plane.xaxis), tuple(plane.yaxis), tuple(plane.zaxis)
+    out = [circle]
+    s = math.sqrt(0.5)
+    for sign in (1.0, -1.0):
+        c = tuple(center[i] + sign * radius * s * n[i] for i in range(3))
+        out.append(_ring(c, x, y, radius * s))
+    for k in range(4):
+        a = math.pi * k / 4
+        u = tuple(math.cos(a) * x[i] + math.sin(a) * y[i] for i in range(3))
+        out.append(_ring(center, u, n, radius))
+    return out
 
 
 def preview_cylinder(args, cursor, plane):
@@ -846,12 +900,15 @@ def _arc_polyline(start, end, through, segments=CIRCLE_SEGMENTS):
         return []                       # collinear: no arc
     n = (n[0] / nl, n[1] / nl, n[2] / nl)
     # an in-plane basis, u along start->end, v completing the right-hand frame
-    u = (ab[0] / nl, ab[1] / nl, ab[2] / nl)
+    # (u was once ab / |ab x ac|, which is a unit vector only by coincidence)
+    L = _length(ab)
+    if L < 1e-12:
+        return []
+    u = (ab[0] / L, ab[1] / L, ab[2] / L)
     v = _cross(n, u)
     # circumcentre: solve for O in the plane with |O-A|==|O-B|==|O-C|.
     # O = A + s*u + t*v. From |O-A|^2 == |O-B|^2:  -2*B.A' + |B|^2 ... in 2D
     # in-plane coords (a=0), b=(L,0), c=(cx,cy): O=(L/2, (cx^2+cy^2-2*cx*L/2)/(2*cy))
-    L = _length(ab)
     cx = dot(ac, u)
     cy = dot(ac, v)
     if abs(cy) < 1e-9:
@@ -900,21 +957,52 @@ def _arc_polyline(start, end, through, segments=CIRCLE_SEGMENTS):
     return pts
 
 
-def preview_arc(args, cursor, plane):
-    """`Arc`: the two fixed endpoints plus the live point on the arc.
+def _center_arc_preview(center, start, cursor, plane):
+    """The counter-clockwise arc about `center` from `start` to the cursor's angle, in the
+    CPlane (as `ArcCmd._center_arc` builds it), plus the two construction lines."""
+    z = tuple(plane.zaxis)
+    d0 = _sub(start, center)
+    d0 = tuple(d0[i] - dot(d0, z) * z[i] for i in range(3))
+    r = _length(d0)
+    if r <= 1e-12:
+        return []
+    u = tuple(c / r for c in d0)
+    v = _cross3(z, u)
+    de = _sub(cursor, center)
+    phi = math.atan2(dot(de, v), dot(de, u)) % (2 * math.pi)
+    if phi <= 1e-9:
+        return [[center, start]]
+    n = max(2, int(CIRCLE_SEGMENTS * phi / (2 * math.pi)) + 1)
+    arc = [tuple(center[i] + r * (math.cos(phi * k / n) * u[i] + math.sin(phi * k / n) * v[i])
+                 for i in range(3)) for k in range(n + 1)]
+    return [arc, [center, start], [center, tuple(cursor)]]
 
-    One point (the start) -- a rubber band to the cursor. Two points (start +
-    end) -- both endpoints and the live through-point. Three points -- the
-    actual arc through all three, sampled by _arc_polyline (the committed curve
-    is bridge.make_arc; the preview is its faithful wireframe).
+
+def preview_arc(args, cursor, plane, cmd=None):
+    """`Arc`, by route.
+
+    Centre route (the default, MEASURED research_preview_14 P13 item 8): after the centre a
+    radius line to the cursor (OURS: that prompt was not captured); after the start, a
+    rubber arc from the start to the cursor's angle with construction lines from the centre.
+    StartPoint route (MEASURED items 4-6): a straight rubber line at "End of arc", then the
+    arc through the start, the end and the cursor at "Point on arc". Three points -- the
+    actual arc through all three (the committed curve is bridge.make_arc).
     """
     pts = points_only(args)
     if not pts:
         return []
+    flow = getattr(cmd, "_flow", "StartPoint") if cmd is not None else "StartPoint"
+    if flow == "Center" and len(pts) <= 2:
+        if len(pts) == 1:
+            return [[pts[0], cursor]]
+        return _center_arc_preview(pts[0], pts[1], cursor, plane)
+    if flow in ("Tangent", "Direction") and len(pts) == 2:
+        return [[pts[0], pts[1]], [pts[1], cursor]]
     if len(pts) == 1:
         return [[pts[0], cursor]]
     if len(pts) == 2:
-        return [[pts[0], pts[1]], [pts[1], cursor]]
+        live = _arc_polyline(pts[0], pts[1], tuple(cursor))
+        return [live] if live else [[pts[0], pts[1]], [pts[1], cursor]]
     arc = _arc_polyline(pts[0], pts[1], pts[2])
     if arc:
         return [arc]
@@ -1152,27 +1240,84 @@ def preview_picture(args, cursor, plane):
     return [rectangle_polyline(plane, pts[0], opposite)]
 
 
-def preview_revolve(args, cursor, plane):
-    """`Revolve`: the axis, from axis point 1 to the cursor while it is aimed.
-
-    MEASURED (commands/revolve.htm): "Select curves. Pick start of revolve
-    axis. Pick end of revolve axis." The curve name (first step) and the angle
-    number (last step) are not points, so `points_only` leaves exactly the two
-    axis points -- and the axis IS the thing the curve revolves about, so a
-    segment from point 1 to the cursor is the whole preview.
-
-    WHAT THIS IS NOT, the same deliberate gap as `preview_mirror`: the reference CAD application also
-    ghosts the revolved surface as the cursor moves. That needs the curve's
-    geometry, which `segments(name, args, cursor, plane)` is not handed; the
-    axis is the part that can be drawn without it, and the shortfall is
-    recorded rather than implied.
+def preview_revolve(args, cursor, plane, resolve=None, cmd=None):
+    """`Revolve` -- MEASURED (research_preview_14 P54): nothing at the axis start; at the
+    axis end a rubber line from the start to the cursor; at both angle prompts the axis
+    stays and a circle about the axis passes through the cursor (edge-on in Top it reads as
+    a line symmetric about the axis, the cursor's Y ignored). A guide runs from the axis to
+    the cursor's projection. The swept surface itself was too faint to measure: not drawn.
     """
-    pts = points_only(args)
+    pts = [a for a in args[1:3] if _is_point(a)]
     if not pts:
         return []
     if len(pts) == 1:
         return [[pts[0], cursor]]
-    return [[pts[0], pts[1]]]
+    out = [[pts[0], pts[1]]]
+    frame_fn = getattr(cmd, "angle_frame", None)
+    frame = frame_fn(resolve, plane) if callable(frame_fn) and len(args) >= 3 else None
+    if frame is None:
+        return out
+    # The circle lies in the plane through the axis START (the readout at cursor (2,2) in
+    # Top was y 0 for an axis along Y): the cursor is projected into that plane.
+    origin, axis, _ref = frame
+    return out + _axis_circle(origin, axis, cursor)
+
+
+def _axis_circle(origin, axis, cursor):
+    """The angle guide of Revolve / Rotate / Rotate3D: a circle about the axis through
+    `origin`, in the plane through `origin` perpendicular to the axis, passing through the
+    cursor's projection, plus the radius line to that projection."""
+    a = _unit3(axis)
+    if a is None:
+        return []
+    v = _sub(cursor, origin)
+    k = dot(v, a)
+    radial = tuple(v[i] - k * a[i] for i in range(3))
+    radius = _length(radial)
+    if radius <= 1e-9:
+        return []
+    u = tuple(c / radius for c in radial)
+    w = _cross3(a, u)
+    return [_ring(tuple(origin), u, w, radius),
+            [tuple(origin), tuple(origin[i] + radial[i] for i in range(3))]]
+
+
+def preview_rotate(args, cursor, plane):
+    """`Rotate` -- MEASURED (research_preview_14 P22): at "Angle or first reference point" a
+    reference circle about the centre through the cursor and a line from the centre to the
+    cursor; the selection does NOT move there. OURS: after a first reference point, the
+    reference line and the line to the cursor (the live rotation is the transform ghost)."""
+    pts = points_only(args)
+    if not pts:
+        return []
+    if len(pts) == 1:
+        return _axis_circle(pts[0], tuple(plane.zaxis), cursor)
+    return [[pts[0], pts[1]], [pts[0], tuple(cursor)]]
+
+
+def preview_scale(args, cursor, plane):
+    """`Scale` / `Scale1D` / `Scale2D` -- MEASURED (research_preview_14 P24-P26): at the factor
+    prompt only a line from the base point to the cursor (no live copy); the live scaled copy
+    at "Second reference point" / "Scale direction" is the transform ghost, with the same line."""
+    pts = points_only(args)
+    if not pts:
+        return []
+    return [[pts[0], tuple(cursor)]]
+
+
+def preview_rotate3d(args, cursor, plane):
+    """`Rotate3D` -- MEASURED (research_preview_14 P23): at "End of rotation axis" a rubber
+    axis from its start to the cursor; at the angle prompt the axis-perpendicular circle
+    through the cursor (edge-on in Top: a line from the axis start to the cursor and a
+    reference line opposite it); no live copy there."""
+    pts = points_only(args)
+    if not pts:
+        return []
+    if len(pts) == 1:
+        return [[pts[0], tuple(cursor)]]
+    if len(pts) == 2:
+        return [[pts[0], pts[1]]] + _axis_circle(pts[0], _sub(pts[1], pts[0]), cursor)
+    return [[pts[0], pts[1]], [pts[0], pts[2]], [pts[0], tuple(cursor)]]
 
 
 def _unit3(value):
@@ -1232,16 +1377,21 @@ def preview_coil(args, cursor, plane, cmd=None, spiral=False):
         return [[start, end]]
 
     divisor = 2.0 if getattr(cmd, "size_mode", "radius") == "diameter" else 1.0
+    # MEASURED (research_preview_14 P40 Helix, P55 Spiral): a radius typed at the first radius
+    # prompt stays LOCKED -- the coil keeps that radius while the cursor still turns it.
+    locked = getattr(cmd, "_locked_radius", None) if len(args) == 2 else None
     if spiral:
         if len(args) < 3 or not isinstance(args[2], (int, float)):
-            radius0 = _length(_sub(cursor, start)) / divisor
+            radius0 = (float(locked) if locked is not None
+                       else _length(_sub(cursor, start))) / divisor
             radius1 = radius0
         else:
             radius0 = float(args[2]) / divisor
             radius1 = (_length(_sub(cursor, end)) / divisor
                        if len(args) < 4 else float(args[3]) / divisor)
     else:
-        radius0 = radius1 = _length(_sub(cursor, start)) / divisor
+        radius0 = radius1 = (float(locked) if locked is not None
+                             else _length(_sub(cursor, start))) / divisor
     if radius0 <= 0.0 or radius1 <= 0.0:
         return [[start, end]]
 
@@ -1477,6 +1627,10 @@ def preview_conic(args, cursor, plane, cmd=None):
     points = [tuple(value) for value in (args or []) if _is_point(value)]
     if not points:
         return []
+    if len(points) == 2 and not getattr(cmd, "_apex_first", False):
+        # MEASURED (research_preview_14 P31): at "Apex" two rubber lines, from the start and
+        # from the end to the cursor -- no chord, no arc yet.
+        return [[points[0], tuple(cursor), points[1]]]
     if len(points) < 3:
         return [points + [tuple(cursor)]]
     if getattr(cmd, "_apex_first", False):
@@ -1521,11 +1675,12 @@ def preview_spiral(args, cursor, plane, cmd=None):
 PREVIEWS = {
     "line": preview_line,
     "polyline": preview_polyline,
+    "srfpt": preview_srfpt,
     # These two used to map to `preview_polyline`, showing the control polygon while
     # `bridge.make_polyline(args, degree=3)` committed a smooth cubic. `InterpCrv`
     # shares the preview because it uses the same builder.
     "curve": preview_curve,
-    "interpcrv": preview_curve,
+    "interpcrv": preview_interpcrv,
     "handlecurve": preview_handlecurve,
     "circle": preview_circle,
     "box": preview_box,
@@ -1542,17 +1697,19 @@ PREVIEWS = {
     "plane": preview_plane,
     "arraypolar": preview_arraypolar,
     "ellipse": preview_ellipse,
-    "arc": preview_arc,
     "distance": preview_distance,
     "mirror": preview_mirror,
     # Move/Copy are two-point commands, so the from-point-to-cursor
     # vector is a real preview (it was a documented gap while they took a delta).
     "move": preview_move,
-    "copy": preview_move,
     # Additional cursor-driven command previews.
     "angle": preview_angle,
     "picture": preview_picture,
-    "revolve": preview_revolve,
+    "rotate": preview_rotate,
+    "rotate3d": preview_rotate3d,
+    "scale": preview_scale,
+    "scale1d": preview_scale,
+    "scale2d": preview_scale,
 }
 
 
@@ -1560,6 +1717,7 @@ PREVIEWS = {
 #: so the twenty existing `(args, cursor, plane)` functions keep their signature -- adding a
 #: fourth parameter to all of them to serve one command would be the wrong trade.
 PREVIEWS_WITH_CMD = {
+    "arc": preview_arc,
     "curve": preview_curve,
     "polygon": preview_polygon,
     "pyramid": preview_pyramid,
@@ -1583,7 +1741,118 @@ def preview_offset(args, cursor, plane, resolve, cmd=None):
     return fn(resolve, cursor)
 
 
+def preview_pipe(args, cursor, plane, resolve, cmd=None):
+    """`Pipe`: the radius circle(s) across the rail, the live one following the cursor
+    (the owner's observation of the reference program). Display only."""
+    fn = getattr(cmd, "preview_circles", None)
+    if not args or not callable(fn):
+        return []
+    out = []
+    for center, tangent, r in fn(resolve, cursor):
+        t = _unit3(tangent) if _length(tangent) > 0 else None
+        if t is None or not r > 0:
+            continue
+        helper = (0.0, 0.0, 1.0) if abs(t[2]) < 0.9 else (1.0, 0.0, 0.0)
+        u = _unit3(_cross3(t, helper))
+        v = _cross3(t, u)
+        out.append(_ring(center, u, v, r))
+        last_center = center
+    if out and cmd is not None and len(args) == cmd.step_index:
+        out.append([last_center, tuple(cursor)])      # the radius guide to the cursor
+    return out
+
+
+#: Copies drawn at most by `preview_array` -- a 100 x 100 array is still a real command, but
+#: re-drawing ten thousand wireframes per mouse move is not a preview.
+ARRAY_PREVIEW_COPIES = 400
+
+
+def _object_wires(resolve, names, cache=None):
+    """The wireframe of each named object as point lists (curves sampled, solids by their
+    exact edges). `cache` (a dict on the running command) keeps it across mouse moves."""
+    key = tuple(names)
+    if cache is not None and cache.get("key") == key:
+        return cache["wires"]
+    try:
+        from . import bridge
+    except ImportError:          # loaded standalone (tests / probes)
+        import bridge
+    wires = []
+    for name in names:
+        geom = resolve(name) if name else None
+        if geom is None:
+            continue
+        curves = [geom] if hasattr(geom, "PointAtStart") else bridge.extract_wireframe(geom)[0]
+        for curve in curves:
+            n = 2 if getattr(curve, "IsLinear", lambda: False)() else 48
+            pts = bridge.sample_curve(curve, n)
+            if pts and len(pts) >= 2:
+                wires.append([(p.X, p.Y, p.Z) for p in pts])
+        loc = getattr(geom, "Location", None)
+        if loc is not None and not curves:
+            wires.append([(loc.X, loc.Y, loc.Z), (loc.X, loc.Y, loc.Z)])
+    if cache is not None:
+        cache["key"], cache["wires"] = key, wires
+    return wires
+
+
+def preview_array(args, cursor, plane, resolve, cmd=None):
+    """`Array` -- MEASURED (research_preview_14 P28): nothing at "Unit cell or X spacing";
+    after the first cell corner, the cell rectangle from it to the cursor; at "Press Enter to
+    accept" the copies of the selection at their places. (Dashed marks seen beside the cell
+    were not identified, so they are not drawn.)"""
+    if cmd is None:
+        return []
+    label = cmd._step_label() if hasattr(cmd, "_step_label") else None
+    corner = getattr(cmd, "_cell_corner", None)
+    if label == getattr(cmd, "OTHER_CORNER", None) and corner is not None:
+        return [rectangle_polyline(plane, tuple(corner), tuple(cursor))]
+    if label != getattr(cmd, "ACCEPT", None) or not args:
+        return []
+    names = list(args[0]) if isinstance(args[0], (list, tuple)) else [args[0]]
+    if not hasattr(cmd, "_preview_cache"):
+        cmd._preview_cache = {}
+    wires = _object_wires(resolve, names, cmd._preview_cache)
+    out = []
+    for d in cmd.offsets(plane)[:ARRAY_PREVIEW_COPIES]:
+        for wire in wires:
+            out.append([(p[0] + d[0], p[1] + d[1], p[2] + d[2]) for p in wire])
+    return out
+
+
+def preview_copy(args, cursor, plane, resolve, cmd=None):
+    """`Copy` -- MEASURED (research_preview_14 P32): a rubber line from the from-point to the
+    cursor (the live copy at the cursor is the transform ghost), and every copy already
+    placed stays drawn while the command waits for more (the command builds them all at
+    Enter, as one undo step, so they are shown here)."""
+    if len(args) < 2 or not _is_point(args[1]):
+        return []
+    out = [[tuple(args[1]), tuple(cursor)]]
+    placed = [d for d in args[2:] if _is_point(d)]
+    names = args[0] if isinstance(args[0], (list, tuple)) else []
+    if placed and names:
+        if cmd is not None and not hasattr(cmd, "_preview_cache"):
+            cmd._preview_cache = {}
+        wires = _object_wires(resolve, list(names), getattr(cmd, "_preview_cache", None))
+        for d in placed[:ARRAY_PREVIEW_COPIES]:
+            for wire in wires:
+                out.append([(p[0] + d[0], p[1] + d[1], p[2] + d[2]) for p in wire])
+    return out
+
+
+def preview_move_subobject(args, cursor, plane, resolve, cmd=None):
+    """`MoveEdge` / `MoveFace`: the running command's live stretched wireframe."""
+    fn = getattr(cmd, "preview_wires", None)
+    return fn(resolve, cursor) if callable(fn) else []
+
+
 PREVIEWS_WITH_DOC = {
+    "moveedge": preview_move_subobject,
+    "moveface": preview_move_subobject,
+    "copy": preview_copy,
+    "array": preview_array,
+    "revolve": preview_revolve,
+    "pipe": preview_pipe,
     "offset": preview_offset,
     "extrudecrv": preview_extrudecrv,
     "extrudecrvtapered": preview_extrudecrv,

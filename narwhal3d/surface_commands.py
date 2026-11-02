@@ -20,7 +20,9 @@ class SrfPtCmd(Command):
     description = "Create a surface from 3 or 4 corner points."
     steps = [("First corner of surface:", POINT), ("Second corner of surface:", POINT),
              ("Third corner of surface:", POINT),
-             ("Fourth corner of surface. Press Enter for a triangular surface:", POINT)]
+             # MEASURED (research_preview_14 P56): the fourth prompt reads only "Fourth
+             # corner of surface" -- Enter there still makes the triangle.
+             ("Fourth corner of surface:", POINT)]
 
     def _feed(self, text, ctx):
         if self.step_index == 3 and not (text or "").strip():

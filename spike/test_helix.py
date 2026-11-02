@@ -90,7 +90,7 @@ ctx, command, message, done = run(
 diameter_curve = ctx.made[0][1] if ctx.made else None
 check(done and diameter_curve is not None
       and diameter_curve.PointAtStart.DistanceTo(commands.r3.Point3d(2, 0, 0)) < 1e-9
-      and "Diameter:" in command.steps[2][0],
+      and "Diameter" in command.steps[2][0] and "Radius" not in command.steps[2][0],
       "Diameter mode uses half the entered value and keeps the prompt truthful")
 
 forward = curve
@@ -176,7 +176,7 @@ class UndoCtx(commands.NarwhalContext):
 
 undo_ctx = UndoCtx()
 for cls, values in ((commands.HelixCmd, ["0,0,0", "0,0,5", "1", ""]),
-                    (commands.SpiralCmd, ["0,0,0", "0,0,5", "1", "2"])):
+                    (commands.SpiralCmd, ["0,0,0", "0,0,5", "1", "", "2"])):
     instance = cls()
     instance.begin(undo_ctx)
     for value in values:

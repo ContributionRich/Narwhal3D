@@ -758,6 +758,73 @@ class _MoveSubObjectCmd(Command):
         """The move vector after the DirectionConstraint option, or ValueError."""
         return vec
 
+    def _preview_parts(self, resolve):
+        """``(wires, moved_points)`` for the live preview, built once per run: the solid's
+        exact edges sampled to point lists, and the end points of the picked part's edges."""
+        key = (self.args[0] if self.args else None, self._sub_id)
+        cache = getattr(self, "_preview_cache", None)
+        if cache is not None and cache[0] == key:
+            return cache[1]
+        result = ([], [])
+        geom = resolve(key[0]) if (resolve and key[0]) else None
+        occt = bridge._occt()
+        if geom is not None and occt is not None and self._sub_id is not None:
+            try:
+                curves, _src = bridge.extract_wireframe(geom)
+                wires = []
+                for c in curves:
+                    n = 2 if c.IsLinear() else 32
+                    pts = bridge.sample_curve(c, n)
+                    if pts and len(pts) >= 2:
+                        wires.append([(p.X, p.Y, p.Z) for p in pts])
+                shape = bridge._occt_operand(geom)
+                parts = (occt.unique_faces(shape) if self.kind == "face"
+                         else occt._unique_edges(shape))
+                part = parts[int(self._sub_id) - 1]
+                moved = []
+                for d in occt.edge_curves(part):
+                    c = bridge.curve_from_recipe(d)
+                    for p in (c.PointAtStart, c.PointAtEnd):
+                        moved.append((p.X, p.Y, p.Z))
+                result = (wires, moved)
+            except Exception:  # noqa: BLE001 -- a preview never breaks the command
+                result = ([], [])
+        self._preview_cache = (key, result)
+        return result
+
+    def preview_wires(self, resolve, cursor):
+        """MEASURED (research_preview_14 P45 MoveEdge, P46 MoveFace): at "To point" the
+        solid follows the cursor -- the picked part translated, its neighbours stretched.
+        Display only and APPROXIMATE for curved neighbours: each edge touching the part is
+        drawn with its displacement blended along it (exact for straight edges). The commit
+        is the exact `bridge.move_subobject`."""
+        if self.step_index != 3 or len(self.args) != 3:
+            return []
+        wires, moved = self._preview_parts(resolve)
+        if not wires:
+            return []
+        a = self.args[2]
+        vec = tuple(float(cursor[i]) - a[i] for i in range(3))
+        try:
+            geom = resolve(self.args[0])
+            vec = self._constrain(vec, geom, None)
+        except Exception:  # noqa: BLE001
+            pass
+
+        def is_moved(p):
+            return any(math.dist(p, q) <= 1e-6 for q in moved)
+
+        out = [[tuple(a), tuple(cursor)]]
+        for w in wires:
+            s, e = is_moved(w[0]), is_moved(w[-1])
+            if not (s or e):
+                out.append(w)
+                continue
+            n = len(w) - 1
+            out.append([tuple(p[i] + vec[i] * ((1 - k / n) * s + (k / n) * e) for i in range(3))
+                        for k, p in enumerate(w)])
+        return out
+
     def execute(self, ctx):
         name, geom = self._solid(ctx)
         if geom is None or self._sub_id is None or len(self.args) < 4:
@@ -800,8 +867,10 @@ class MoveFaceCmd(_MoveSubObjectCmd):
     name = "MoveFace"
     description = "Move a face of a solid; the surrounding faces follow, exactly."
     kind = "face"
+    # MEASURED (research_preview_14 P46): after the face pick, "Point to move from", then
+    # "To point"; a live deformed solid follows the cursor (not drawn here yet).
     steps = [("Select the polysurface:", OBJECTS), ("Select a face:", POINT),
-             ("Point to move from:", POINT), ("Point to move to:", POINT)]
+             ("Point to move from:", POINT), ("To point:", POINT)]
     options = (
         opts.Option("DirectionConstraint", opts.ENUM, choices=("None", "Normal"),
                     default="None", help="Restrict the move to the face normal."),
@@ -835,8 +904,9 @@ class MoveEdgeCmd(_MoveSubObjectCmd):
     name = "MoveEdge"
     description = "Move an edge of a solid; the faces on either side follow, exactly."
     kind = "edge"
+    # MEASURED (research_preview_14 P45): "Point to move from", then "To point".
     steps = [("Select the polysurface:", OBJECTS), ("Select an edge:", POINT),
-             ("Point to move from:", POINT), ("Point to move to:", POINT)]
+             ("Point to move from:", POINT), ("To point:", POINT)]
     options = (
         opts.Option("DirectionConstraint", opts.ENUM,
                     choices=("None", "FirstFaceNormal", "SecondFaceNormal",

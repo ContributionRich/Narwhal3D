@@ -232,6 +232,20 @@ lo2, hi2 = ob.tight_bbox(m2) if m2 is not None else ((0,) * 3, (0,) * 3)
 check(m is not None and m2 is not None and round(lo[2] + hi[2], 9) == -round(lo2[2] + hi2[2], 9),
       f"naming the surface at the flip prompt flips the side ({lo[2]}..{hi[2]} vs {lo2[2]}..{hi2[2]})")
 type(commands.COMMANDS["offsetsrf"])().feed("Distance=1", ctx)
+# MEASURED (research_preview_14 P48): a typed 2 at the flip prompt sets Distance and stays.
+ctx = Ctx()
+ctx.add(square_srf(), "S")
+c, msg, done = drive("offsetsrf", ["2"], ctx, select=["S"])
+check(not done and not ctx.added and c.opt["Distance"] == 2.0 and "Distance=2" in c.prompt
+      and c.prompt.startswith("Select object to flip direction"),
+      f"P48: typed 2 at the flip prompt sets Distance=2 and keeps the prompt ({c.prompt!r})")
+msg, done = c.feed("", ctx)
+m = kernel.master_of(ctx.added[0]) if ctx.added else None
+check(done and m is not None and abs(ob.volume(m) - 32.0) < 1e-9,
+      f"...then Enter offsets by 2: a 4 x 4 x 2 solid ({msg!r})")
+c, msg, done = drive("offsetsrf", ["-1"], ctx, select=["S"])
+check(not done and c.opt["Distance"] == 2.0, f"a non-positive typed distance is refused ({msg!r})")
+type(commands.COMMANDS["offsetsrf"])().feed("Distance=1", ctx)
 
 # --- 007 ArrayPolar: the axis is the CPlane normal -------------------------------------
 print("-- 007 ArrayPolar --")
@@ -402,6 +416,510 @@ m = kernel.master_of(ctx.added[0]) if ctx.added else None
 check(done and m is not None and abs(ob.volume(m) - math.pi * 4) < 1e-9
       and ctx.geom_by_name("Rail") is not None,
       f"Enter at the next-radius prompt builds the radius-1 pipe; rail kept ({msg!r})")
+
+# --- Pipe: the live radius circle (owner's live observation of the reference program) ---
+print("-- Pipe preview --")
+ctx = Ctx()
+ctx.add(bridge.make_line((0, 0, 0), (4, 0, 0)), "Rail")
+c, msg, done = drive("pipe", [], ctx, select=["Rail"])
+segs = preview.segments("pipe", c.args, (1, 0, 2), TOP, resolve=ctx.geom_by_name, cmd=c)
+ring = segs[0] if segs else []
+check(len(segs) == 2 and ring and all(abs(p[0]) < 1e-9 and abs(math.hypot(p[1], p[2]) - 2.0) < 1e-9
+                                      for p in ring),
+      "start radius: a circle across the rail at its start, radius = the cursor's distance")
+msg, done = c.feed("2,2.5,0", ctx)
+check(not done and abs(c.args[1] - 2.5) < 1e-9,
+      f"MEASURED (P52): a click at (2,2.5) gives its distance from the CURVE, 2.5 ({c.args})")
+c.args[1] = 3.0
+segs = preview.segments("pipe", c.args, (4, 1, 0), TOP, resolve=ctx.geom_by_name, cmd=c)
+check(len(segs) == 3 and all(abs(p[0] - 4.0) < 1e-9 and abs(math.hypot(p[1], p[2]) - 1.0) < 1e-9
+                             for p in segs[1]),
+      "end radius: the start circle stays, a live one follows the cursor at the end")
+
+# --- Pipe: a tapered pipe (P52: the reference builds start != end) -------------------
+print("-- Pipe taper --")
+ctx = Ctx()
+ctx.add(bridge.make_line((0, 0, 0), (10, 0, 0)), "Rail")
+c, msg, done = drive("pipe", ["1", "2", ""], ctx, select=["Rail"])
+check(done and not ctx.added and "Local" in (msg or "") and "not implemented" in (msg or ""),
+      f"ShapeBlending=Local (the measured default) taper is refused by name ({msg!r})")
+c, msg, done = drive("pipe", ["ShapeBlending=Global", "1", "2", ""], ctx, select=["Rail"])
+m = kernel.master_of(ctx.added[0]) if ctx.added else None
+frustum = math.pi * 10 / 3 * (1 + 2 + 4)
+check(done and m is not None and ob.face_types(m) == {"CONE": 1, "PLANE": 2}
+      and ob.is_airtight(m) and abs(ob.volume(m) - frustum) < 1e-9,
+      f"Global taper on a line: one exact CONE face, capped, frustum volume "
+      f"({ob.face_types(m) if m is not None else None}, {msg!r})")
+recipe = kernel.recipe_of(ctx.added[0]) if ctx.added else None
+rebuilt = ob.from_recipe(recipe) if recipe else None
+check(rebuilt is not None and abs(ob.volume(rebuilt) - frustum) < 1e-9,
+      "...its recipe rebuilds the same taper (save/reload)")
+ctx = Ctx()
+ctx.add(bridge.make_arc((10, 0, 0), (10 * math.cos(math.pi / 4), 10 * math.sin(math.pi / 4), 0),
+                        (0, 10, 0)), "Arc")
+c, msg, done = drive("pipe", ["ShapeBlending=Global", "1", "2", ""], ctx, select=["Arc"])
+m = kernel.master_of(ctx.added[0]) if ctx.added else None
+length = 10 * math.pi / 2
+want = math.pi * length * (1 + 2 + 4) / 3
+faces = ob.face_types(m) if m is not None else {}
+check(done and m is not None and ob.is_airtight(m) and faces.get("PLANE") == 2
+      and len(faces) == 2 and abs(ob.volume(m) - want) < 1e-6 * want,
+      f"Global taper on a quarter arc: one smooth swept face + 2 caps, airtight, "
+      f"pi*L*(r0^2+r0 r1+r1^2)/3 ({faces}, {ob.volume(m) if m is not None else None} vs {want})")
+
+# --- P56 SrfPt: prompts and the live outline -------------------------------------------
+print("-- P56 SrfPt --")
+_load("narwhal3d.surface_commands", "narwhal3d/surface_commands.py")
+ctx = Ctx()
+c, msg, done = drive("srfpt", ["0,0,0", "4,0,0", "4,4,0"], ctx)
+check(c.prompt == "Fourth corner of surface:", f"P56: the fourth prompt wording ({c.prompt!r})")
+check(preview.segments("srfpt", [(0.0, 0.0, 0.0)], (3, -1, 0), TOP) == [[(0.0, 0.0, 0.0), (3, -1, 0)]],
+      "corner 2: a rubber line from corner 1 to the cursor")
+check(preview.segments("srfpt", [(0.0, 0.0, 0.0), (4.0, 0.0, 0.0)], (4, 4, 0), TOP)
+      == [[(0.0, 0.0, 0.0), (4.0, 0.0, 0.0), (4, 4, 0), (0.0, 0.0, 0.0)]],
+      "corner 3: the triangle 1-2-cursor")
+check(preview.segments("srfpt", list(c.args), (0, 4, 0), TOP)
+      == [[(0.0, 0.0, 0.0), (4.0, 0.0, 0.0), (4.0, 4.0, 0.0), (0, 4, 0), (0.0, 0.0, 0.0)]],
+      "corner 4: the outline closes through the cursor back to corner 1")
+msg, done = c.feed("", ctx)
+check(done and ctx.added, f"Enter at the fourth prompt: the triangular surface ({msg!r})")
+
+# --- P54 Revolve: angle previews and picked angles --------------------------------------
+print("-- P54 Revolve --")
+ctx = Ctx(TOP)
+ctx.add(bridge.make_line((1, 0, 0), (2, 0, 0)), "Prof")
+c, msg, done = drive("revolve", ["0,0,0"], ctx, select=["Prof"])
+segs = preview.segments("revolve", c.args, (0, 3, 0), TOP, resolve=ctx.geom_by_name, cmd=c)
+check(segs == [[(0.0, 0.0, 0.0), (0, 3, 0)]], f"axis end: a rubber line from the start ({segs})")
+msg, done = c.feed("0,3,0", ctx)
+segs = preview.segments("revolve", c.args, (2, 2, 0), TOP, resolve=ctx.geom_by_name, cmd=c)
+ring = segs[1] if len(segs) == 3 else []
+check(len(segs) == 3 and segs[0] == [(0.0, 0.0, 0.0), (0.0, 3.0, 0.0)] and ring
+      and all(abs(p[1]) < 1e-9 and abs(math.hypot(p[0], p[2]) - 2.0) < 1e-9 for p in ring)
+      and max(p[0] for p in ring) > 1.99 and min(p[0] for p in ring) < -1.99,
+      "start angle: the axis stays; a circle about it in the plane of the axis start, through "
+      "the cursor's projection (edge-on in Top: x -2..2 at y 0)")
+msg, done = c.feed("30", ctx)
+check(not done and c.prompt.startswith("Revolution angle <360>") and c.args[3] == 30.0,
+      f"P54: a typed start angle 30 advances ({c.prompt!r})")
+msg, done = c.feed("4,0,0", ctx)
+m = kernel.master_of(ctx.added[0]) if ctx.added else None
+annulus = math.pi * (4 - 1)
+area = ob.mass_properties(m, solid=False)["area"] if m is not None else 0.0
+check(done and m is not None and abs(c.args[4] + 30.0) < 1e-9
+      and abs(area - annulus * 30 / 360) < 1e-9,
+      f"P54: a click at (4,0) finishes; the angle is measured from the start (-30) "
+      f"({c.args[3:]}, area {area} vs {annulus / 12}; {msg!r})")
+c, msg, done = drive("revolve", ["0,0,0", "0,3,0", "0,1,0"], ctx, select=["Prof"])
+check(not done and len(c.args) == 3, f"a pick on the axis is refused ({msg!r})")
+
+# --- P28 Array: the unit cell route ---------------------------------------------------
+print("-- P28 Array --")
+ctx = Ctx(TOP)
+ctx.add(r3.Point(r3.Point3d(0, 0, 0)), "P")
+c, msg, done = drive("array", ["3", "2", "1"], ctx, select=["P"])
+check(base(c.prompt).rstrip(":") == "Unit cell or X spacing"
+      and preview.segments("array", c.args, (2, 0, 0), TOP, resolve=ctx.geom_by_name, cmd=c) == [],
+      f"counts 3 x 2 x 1, then 'Unit cell or X spacing' with nothing drawn ({c.prompt!r})")
+msg, done = c.feed("2,0,0", ctx)
+check(not done and base(c.prompt).rstrip(":") == "Other corner or length",
+      f"P28: a click there is the unit cell's first corner ({c.prompt!r})")
+segs = preview.segments("array", c.args, (4, 2, 0), TOP, resolve=ctx.geom_by_name, cmd=c)
+check(len(segs) == 1 and {(round(p[0], 9), round(p[1], 9)) for p in segs[0]}
+      == {(2.0, 0.0), (4.0, 0.0), (4.0, 2.0), (2.0, 2.0)},
+      f"'Other corner': the cell rectangle from the corner to the cursor ({segs})")
+msg, done = c.feed("5", ctx)
+check(not done and "not implemented" in (msg or ""), f"a typed cell length says so ({msg!r})")
+msg, done = c.feed("4,2.5,0", ctx)
+check(not done and base(c.prompt).rstrip(":") == "Press Enter to accept"
+      and c.args[4:6] == [2.0, 2.5], f"the second corner gives XSpacing 2, YSpacing 2.5 ({c.args})")
+segs = preview.segments("array", c.args, (9, 9, 0), TOP, resolve=ctx.geom_by_name, cmd=c)
+spots = sorted((round(s[0][0], 9), round(s[0][1], 9)) for s in segs)
+check(spots == [(0.0, 2.5), (2.0, 0.0), (2.0, 2.5), (4.0, 0.0), (4.0, 2.5)],
+      f"accept: the five copies are previewed at their places ({spots})")
+msg, done = c.feed("", ctx)
+locs = sorted((round(g.Location.X, 9), round(g.Location.Y, 9)) for g in ctx.added)
+check(done and locs == spots, f"Enter creates them ({locs}; {msg!r})")
+c, msg, done = drive("array", ["2", "2", "1", "0,0,0", "-2,3,0", ""], Ctx(TOP), select=["P"])
+check(done and c.args[4:6] == [-2.0, 3.0], f"a corner toward -X arrays toward -X ({c.args})")
+
+# --- P04 Cone / P05 Sphere / Circle / Cylinder: prompts and sticky size defaults -------
+print("-- P04 P05 sticky size defaults --")
+ctx = Ctx(TOP)
+c, msg, done = drive("cone", [], ctx)
+p0 = base(c.prompt)
+c.feed("0,0,0", ctx)
+p1 = base(c.prompt)
+c.feed("2", ctx)
+p2 = base(c.prompt)
+check((p0, p1, p2) == ("Base of cone", "Radius <1.000>", "End of cone <10.000>"),
+      f"P04: Cone prompts with their defaults ({p0!r}, {p1!r}, {p2!r})")
+msg, done = c.feed("5", ctx)
+check(done and ctx.added, f"P04: a typed height completes ({msg!r})")
+c, msg, done = drive("cone", ["0,0,0"], ctx)
+p1 = base(c.prompt)
+msg, done = c.feed("", ctx)
+p2 = base(c.prompt)
+check(p1 == "Radius <2.000>" and p2 == "End of cone <5.000>" and c.args[1] == 2.0,
+      f"P04: both defaults are sticky; Enter accepts the radius ({p1!r}, {p2!r})")
+c.feed("", ctx)
+c, msg, done = drive("sphere", [], ctx)
+p0 = base(c.prompt)
+c.feed("0,0,0", ctx)
+p1 = base(c.prompt)
+msg, done = c.feed("4.028,0,0", ctx)
+c2, _m, _d = drive("sphere", ["1,1,0"], ctx)
+check(p0 == "Center of sphere" and p1 == "Radius <1.000>" and done
+      and base(c2.prompt) == "Radius <4.028>",
+      f"P05: a picked radius 4.028 becomes the next default ({p1!r} -> {c2.prompt!r})")
+c3, _m, _d = drive("circle", [], ctx)
+check(base(c3.prompt) == "Center of circle", f"Circle: 'Center of circle' ({c3.prompt!r})")
+c3.feed("0,0,0", ctx)
+check(base(c3.prompt) == "Radius <1.000>", f"Circle: 'Radius <1.000>' ({c3.prompt!r})")
+c4, _m, _d = drive("cylinder", [], ctx)
+q0 = base(c4.prompt)
+c4.feed("0,0,0", ctx)
+c4.feed("3", ctx)
+q2 = base(c4.prompt)
+check(q0 == "Base of cylinder" and q2 == "End of cylinder <5.000>",
+      f"Cylinder: 'Base of cylinder', 'End of cylinder <5.000>' ({q0!r}, {q2!r})")
+segs = preview.segments("sphere", [(0.0, 0.0, 0.0)], (4, 0, 0), TOP)
+radii = sorted(round(max(math.hypot(p[0], p[1]) for p in s), 6) for s in segs)
+zs = sorted(round(s[0][2], 6) for s in segs[:3])
+check(len(segs) == 7 and radii[:2] == [round(4 * math.sqrt(0.5), 6)] * 2
+      and radii[2:] == [4.0] * 5 and zs == [round(-4 * math.sqrt(0.5), 6), 0.0, round(4 * math.sqrt(0.5), 6)],
+      f"P05: the live wire sphere: equator, +-45 degree latitudes, 4 meridians ({radii}, {zs})")
+
+# --- P13 Arc: centre-first default, typed angle; StartPoint preview ----------------------
+print("-- P13 Arc --")
+ctx = Ctx(TOP)
+c, msg, done = drive("arc", [], ctx)
+ps = [base(c.prompt)]
+c.feed("1,1,0", ctx)
+ps.append(base(c.prompt))
+segs = preview.segments("arc", c.args, (4, 1, 0), TOP, cmd=c)
+c.feed("4,1,0", ctx)
+ps.append(base(c.prompt))
+check(ps == ["Center of arc", "Start of arc", "End point or angle"]
+      and segs == [[(1.0, 1.0, 0.0), (4, 1, 0)]], f"P13: centre-first prompts ({ps})")
+segs = preview.segments("arc", c.args, (1, 5, 0), TOP, cmd=c)
+arc = segs[0] if segs else []
+check(len(segs) == 3 and all(abs(math.dist(p, (1, 1, 0)) - 3) < 1e-9 for p in arc)
+      and abs(arc[-1][0] - 1) < 1e-9 and arc[-1][1] > 3.99,
+      "P13 item 8: a rubber arc from the start to the cursor's angle + lines from the centre")
+msg, done = c.feed("90", ctx)
+g = ctx.added[0] if ctx.added else None
+check(done and g is not None and g.PointAtEnd.DistanceTo(r3.Point3d(1, 4, 0)) < 1e-9
+      and g.PointAt(0.5 * (g.Domain.T0 + g.Domain.T1)).DistanceTo(r3.Point3d(1 + 3 * math.sqrt(0.5), 1 + 3 * math.sqrt(0.5), 0)) < 1e-9,
+      f"P13 item 9: typed 90 completes a CCW quarter arc (4,1)->(1,4) ({msg!r})")
+c, msg, done = drive("arc", ["StartPoint", "-3,-3,0"], ctx)
+ps = [base(c.prompt)]
+c.feed("4,0,0", ctx)
+ps.append(base(c.prompt))
+segs = preview.segments("arc", c.args, (0, 4, 0), TOP, cmd=c)
+live = segs[0] if segs else []
+centre = (-0.1, -0.1, 0.0)        # equidistant from (-3,-3), (4,0) and (0,4)
+check(ps == ["End of arc", "Point on arc"] and len(segs) == 1 and len(live) > 3
+      and all(abs(math.dist(p, centre) - math.dist((4, 0, 0), centre)) < 1e-9 for p in live)
+      and min(math.dist(p, (0, 4, 0)) for p in live) < 0.3,
+      f"P13 item 5: at 'Point on arc' the arc through start, end and cursor ({ps})")
+
+# --- P11 Polyline prompts ---------------------------------------------------------------
+print("-- P11 Polyline --")
+c, msg, done = drive("polyline", [], Ctx(TOP))
+ps = [base(c.prompt)]
+for pt in ("1,1,0", "4,0,0", "4,4,0"):
+    c.feed(pt, ctx)
+    ps.append(c.prompt)
+check(ps[0] == "Start of polyline" and base(ps[1]) == "Next point of polyline"
+      and base(ps[2]) == "Next point of polyline. Press Enter when done" and "Close" not in ps[2]
+      and "Close" in ps[3], f"P11: Polyline prompts; Close only from 3 points ({ps})")
+
+# --- P14 Ellipse --------------------------------------------------------------------------
+print("-- P14 Ellipse --")
+ctx = Ctx(TOP)
+c, msg, done = drive("ellipse", [], ctx)
+p0 = base(c.prompt)
+c.feed("1,1,0", ctx)
+c.feed("4,1,0", ctx)
+segs = preview.segments("ellipse", c.args, (2, 5, 0), TOP)
+ring = segs[0] if segs else []
+check(p0 == "Ellipse center" and len(segs) == 2 and ring
+      and max(p[1] for p in ring) - 5.0 < 1e-9 and abs(max(p[1] for p in ring) - 5.0) < 1e-6
+      and abs(max(p[0] for p in ring) - 4.0) < 1e-6,
+      f"P14: 'Ellipse center'; the live ellipse has perpendicular axes, b = the offset from "
+      f"the first axis ({p0!r})")
+msg, done = c.feed("2,5,0", ctx)
+g = ctx.added[0] if ctx.added else None
+check(done and g is not None and "b=4" in msg
+      and g.PointAt(g.Domain.T0 + (g.Domain.T1 - g.Domain.T0) / 4).DistanceTo(r3.Point3d(1, 5, 0)) < 1e-9,
+      f"...and the built ellipse has the same perpendicular axes ({msg!r})")
+
+# --- P17 Curve / P18 InterpCrv prompts, Close, the InterpCrv preview ------------------
+print("-- P17 Curve, P18 InterpCrv --")
+for key in ("curve", "interpcrv"):
+    ctx = Ctx(TOP)
+    c, msg, done = drive(key, [], ctx)
+    ps = [c.prompt]
+    for pt in ("0,0,0", "4,0,0", "4,4,0"):
+        c.feed(pt, ctx)
+        ps.append(c.prompt)
+    check([base(p) for p in ps] == ["Start of curve", "Next point",
+                                    "Next point. Press Enter when done",
+                                    "Next point. Press Enter when done"]
+          and "Close" not in ps[2] and "Close" in ps[3],
+          f"{key}: the measured prompts; Close from three points ({[base(p) for p in ps]})")
+    msg, done = c.feed("Close", ctx)
+    g = ctx.added[0] if ctx.added else None
+    check(done and g is not None and g.IsClosed, f"{key}: Close closes and ends ({msg!r})")
+segs = preview.segments("interpcrv", [(0.0, 0.0, 0.0), (4.0, 0.0, 0.0), (4.0, 4.0, 0.0)],
+                        (0, 4, 0), TOP)
+live = segs[0] if segs else []
+check(len(segs) == 1 and all(min(math.dist(p, q) for p in live) < 0.05
+                             for q in ((4, 0, 0), (4, 4, 0)))
+      and math.dist(live[0], (0, 0, 0)) < 1e-9 and math.dist(live[-1], (0, 4, 0)) < 1e-9,
+      "P18: the InterpCrv preview passes THROUGH the placed points and on to the cursor")
+
+# --- P22 Rotate / P23 Rotate3D angle guides --------------------------------------------
+print("-- P22 Rotate, P23 Rotate3D --")
+segs = preview.segments("rotate", [["L"], (0.0, 0.0, 0.0)], (0, 4, 0), TOP)
+check(len(segs) == 2 and all(abs(math.hypot(p[0], p[1]) - 4) < 1e-9 and p[2] == 0 for p in segs[0])
+      and segs[1] == [(0.0, 0.0, 0.0), (0.0, 4.0, 0.0)],
+      "P22: at the angle prompt a reference circle through the cursor + the line to it")
+segs = preview.segments("rotate3d", [["L"], (0.0, 0.0, 0.0)], (4, 0, 0), TOP)
+check(segs == [[(0.0, 0.0, 0.0), (4, 0, 0)]], "P23: a rubber axis from its start to the cursor")
+segs = preview.segments("rotate3d", [["L"], (0.0, 0.0, 0.0), (4.0, 0.0, 0.0)], (1, 5, 0), TOP)
+ring = segs[1] if len(segs) == 3 else []
+check(len(segs) == 3 and ring and all(abs(p[0]) < 1e-9 and abs(math.hypot(p[1], p[2]) - 5) < 1e-9
+                                      for p in ring),
+      "P23: at the angle prompt the circle about the axis, in the plane of its start")
+ctx = Ctx(TOP)
+ctx.add(bridge.make_line((1, 1, 0), (4, 1, 0)), "L")
+c, msg, done = drive("orient", ["0,0,0", "4,0,0"], ctx, select=["L"])
+check(base(c.prompt) == "Target point 1 <Reference point 1>" and c.live_xform((-3, -3, 0)) is None,
+      f"P20: 'Target point 1 <Reference point 1>', nothing moves there ({c.prompt!r})")
+
+# --- P24 Scale / P30 Catenary / P31 Conic ---------------------------------------------
+print("-- P24 Scale, P30 Catenary, P31 Conic --")
+ctx = Ctx(TOP)
+ctx.add(bridge.make_line((1, 1, 0), (4, 1, 0)), "L")
+c, msg, done = drive("scale", [], ctx, select=["L"])
+p0 = c.prompt
+c.feed("0,0,0", ctx)
+p1 = base(c.prompt)
+segs = preview.segments("scale", c.args, (4, 4, 0), TOP)
+check(p0.startswith("Base point. Press Enter for automatic. (") and p1 == "Scale factor or first reference point <1>"
+      and segs == [[(0.0, 0.0, 0.0), (4, 4, 0)]] and c.live_xform((4, 4, 0)) is None,
+      f"P24: prompts with <1>; the factor prompt draws base->cursor, no live copy ({p0!r}, {p1!r})")
+msg, done = c.feed("2", ctx)
+c2, _m, _d = drive("scale", ["0,0,0"], ctx, select=["L"])
+check(done and base(c2.prompt) == "Scale factor or first reference point <2>",
+      f"P24: a typed 2 completes and becomes the next default ({c2.prompt!r})")
+msg, done = c2.feed("", ctx)
+g = ctx.geom_by_name("L")
+check(done and g is not None and g.PointAtEnd.DistanceTo(r3.Point3d(16, 4, 0)) < 1e-9,
+      f"...and Enter takes it (scaled by 2 again: (16,4) end) ({msg!r})")
+type(commands.COMMANDS["scale"])._sticky_factor.clear()
+ctx = Ctx(TOP)
+c, msg, done = drive("catenary", ["-3,0,0", "4,0,0"], ctx)
+p2 = base(c.prompt)
+msg, done = c.feed("", ctx)
+check(p2 == "Catenary axis direction. Press Enter for default" and not done
+      and base(c.prompt) == "Point on catenary" and c.args[2][1] > 0 and abs(c.args[2][0] - 0.5) < 1e-9
+      and "PointCount=20" in c.prompt,
+      f"P30: Enter at the axis prompt takes the in-plane default (+y side); PointCount 20 ({c.args})")
+c, msg, done = drive("conic", ["-3,0,0"], ctx)
+p1 = base(c.prompt)
+c.feed("4,0,0", ctx)
+p2 = base(c.prompt)
+segs = preview.segments("conic", c.args, (0, 4, 0), TOP, cmd=c)
+c.feed("0,4,0", ctx)
+p3 = base(c.prompt)
+msg, done = c.feed("", ctx)
+check((p1, p2, p3) == ("End of conic", "Apex", "Curvature point or rho <0.500>")
+      and segs == [[(-3.0, 0.0, 0.0), (0, 4, 0), (4.0, 0.0, 0.0)]] and done and ctx.added,
+      f"P31: prompts; at 'Apex' two lines to the cursor; Enter takes rho 0.5 ({(p1, p2, p3)}, {msg!r})")
+
+# --- P32 Copy: prompts and the placed copies -------------------------------------------
+print("-- P32 Copy --")
+ctx = Ctx(TOP)
+ctx.add(bridge.make_line((0, 0, 0), (1, 0, 0)), "L")
+c, msg, done = drive("copy", [], ctx, select=["L"])
+p0 = base(c.prompt)
+c.feed("0,0,0", ctx)
+p1 = base(c.prompt)
+c.feed("0,2,0", ctx)
+p2 = base(c.prompt)
+segs = preview.segments("copy", c.args, (0, 4, 0), TOP, resolve=ctx.geom_by_name, cmd=c)
+check((p0, p1, p2) == ("Point to copy from. Press Enter to use bounding box center",
+                       "Point to copy to", "Point to copy to. Press Enter when done")
+      and [(0.0, 0.0, 0.0), (0, 4, 0)] in segs
+      and any(abs(s[0][1] - 2) < 1e-9 and abs(s[-1][0] - 1) < 1e-9 for s in segs),
+      f"P32: prompts; the placed copy at y 2 stays drawn with the rubber line ({(p0, p1, p2)})")
+
+# --- P34 Distance / P36-P38 extrusions / P39 HandleCurve / P40 Helix ------------------
+print("-- P34 P36-P40 --")
+c, msg, done = drive("distance", ["0,0,0"], Ctx(TOP))
+check(base(c.prompt).rstrip(":") == "Second point for distance", f"P34: the second prompt ({c.prompt!r})")
+ctx = Ctx(TOP)
+ctx.add(r3.Circle(r3.Point3d(0, 0, 0), 2).ToNurbsCurve(), "C")
+type(commands.COMMANDS["extrudecrv"])._sticky_values.clear()
+c, msg, done = drive("extrudecrv", [], ctx, select=["C"])
+p0 = c.prompt
+msg, done = c.feed("3", ctx)
+m = kernel.master_of(ctx.added[0]) if ctx.added else None
+check(base(p0) == "Extrusion distance <0>" and "Solid=No" in p0 and done and m is not None
+      and ob.face_types(m) == {"CYLINDER": 1} and not ob.is_airtight(m),
+      f"P36: 'Extrusion distance <0> ( ... Solid=No ...)'; typed 3 completes an OPEN tube "
+      f"({p0!r}; {m is not None and ob.face_types(m)})")
+c, msg, done = drive("extrudecrv", [], ctx, select=["C"])
+p1 = base(c.prompt)
+msg, done = c.feed("", ctx)
+check(p1 == "Extrusion distance <3>" and done and len(ctx.added) == 2,
+      f"P36: the default is sticky (<3>) and Enter takes it ({p1!r}, {msg!r})")
+c, msg, done = drive("extrudecrvtapered", [], ctx, select=["C"])
+check(base(c.prompt) == "Extrusion distance <1>" and "DraftAngle=5" in c.prompt,
+      f"P37: ExtrudeCrvTapered first-use <1>, DraftAngle=5 ({c.prompt!r})")
+c, msg, done = drive("extrudesrf", [], Ctx(TOP))
+check(base(c.prompt) == "Select surfaces to Extrude" and "Solid=No" in c.prompt,
+      f"P38: ExtrudeSrf prompt and Solid=No ({c.prompt!r})")
+c, msg, done = drive("handlecurve", [], Ctx(TOP))
+check(base(c.prompt) == "Curve point", f"P39: 'Curve point' ({c.prompt!r})")
+c, msg, done = drive("helix", ["0,0,0", "0,0,5"], Ctx(TOP))
+check(base(c.prompt).startswith("Radius and start point <"), f"P40: the radius prompt ({c.prompt!r})")
+
+# --- P44 Move / P55 Spiral / P40 Helix lock / P45-P46 MoveEdge, MoveFace ---------------
+print("-- P44 P55 P40 P45 P46 --")
+ctx = Ctx(TOP)
+ctx.add(bridge.make_line((0, 0, 0), (4, 0, 0)), "L")
+c, msg, done = drive("move", [], ctx, select=["L"])
+check(base(c.prompt) == "Point to move from. Press Enter to use bounding box center",
+      f"P44: Move's from prompt ({c.prompt!r})")
+c, msg, done = drive("spiral", [], Ctx(TOP))
+ps = [base(c.prompt)]
+c.feed("0,0,0", ctx)
+ps.append(base(c.prompt).rstrip(":"))
+c.feed("0,0,5", ctx)
+ps.append(base(c.prompt))
+msg, done = c.feed("2", ctx)
+segs = preview.segments("spiral", c.args, (4, 0, 0), TOP, cmd=c)
+locked_r = max((math.hypot(p[0], p[1]) for s in segs for p in s), default=0)
+stay = (not done and len(c.args) == 2 and base(c.prompt).startswith("First radius and start point"))
+msg, done = c.feed("", ctx)
+p3 = base(c.prompt)
+msg, done = c.feed("3", ctx)
+check(ps == ["Start of axis", "End of axis", "First radius and start point <1.000>"] and stay
+      and abs(locked_r - 2) < 1e-6 and p3 == "Second radius <0.000>" and done,
+      f"P55: Spiral prompts; typed first radius 2 STAYS locked (preview r {locked_r:.3f}), "
+      f"Enter advances, typed second radius completes ({ps}, {p3!r}, {msg!r})")
+c, msg, done = drive("helix", ["0,0,0", "0,0,5", "2"], Ctx(TOP))
+segs = preview.segments("helix", c.args, (4, 0, 0), TOP, cmd=c)
+r = max((math.hypot(p[0], p[1]) for s in segs for p in s), default=0)
+check(not done and abs(r - 2) < 1e-6, f"P40: Helix's typed radius 2 locks the live coil ({r:.3f})")
+_load("narwhal3d.solid_commands", "narwhal3d/solid_commands.py")
+ctx = Ctx(TOP)
+ctx.add(bridge.make_box((0, 0, 0), (4, 4, 0), 3), "B")
+c, msg, done = drive("moveface", ["2,2,3", "2,2,3"], ctx, select=["B"])
+segs = preview.segments("moveface", c.args, (2, 2, 5), TOP, resolve=ctx.geom_by_name, cmd=c)
+tops = [s for s in segs[1:] if all(abs(p[2] - 5) < 1e-9 for p in s)]
+verticals = [s for s in segs[1:] if abs(s[0][2] - 0) < 1e-9 and abs(s[-1][2] - 5) < 1e-9
+             or abs(s[-1][2] - 0) < 1e-9 and abs(s[0][2] - 5) < 1e-9]
+check(base(c.prompt) == "To point" and len(tops) == 4 and len(verticals) == 4,
+      f"P46: MoveFace 'To point'; the top face follows the cursor to z 5, sides stretch "
+      f"({c.prompt!r}, {len(tops)} top, {len(verticals)} vertical)")
+msg, done = c.feed("2,2,5", ctx)
+check(done and "Moved face" in (msg or ""), f"...and the commit is the exact move ({msg!r})")
+
+# --- R5 Fillet / Chamfer: option display and sticky values ------------------------------
+print("-- R5 Fillet, Chamfer --")
+ctx = Ctx(TOP)
+ctx.add(bridge.make_line((0, 0, 0), (4, 0, 0)), "A")
+ctx.add(bridge.make_line((0, 0, 0), (0, 4, 0)), "B")
+c, msg, done = drive("fillet", ["Radius=2"], ctx)
+p = c.prompt
+c2, _m, _d = drive("fillet", [], ctx)
+check("ExtendArcsBy=Arc  ExtendOtherCurvesBy=Line  Dynamic=No" in p and "Radius=2" in c2.prompt,
+      f"R5: Fillet shows the measured option values; Radius is sticky ({c2.prompt!r})")
+type(commands.COMMANDS["fillet"])._sticky_radius[0] = 1.0
+c, msg, done = drive("chamfer", [], ctx)
+p0 = c.prompt
+c.feed("Distances", ctx)
+p1 = base(c.prompt)
+c.feed("2", ctx)
+p2 = base(c.prompt)
+c.feed("3", ctx)
+p3 = c.prompt
+c2, _m, _d = drive("chamfer", [], ctx)
+check("( Distances=1,1  Join=No" in p0 and p1 == "First chamfer distance <1.000>"
+      and p2 == "Second chamfer distance <2.000>" and "Distances=2,3" in p3
+      and "Distances=2,3" in c2.prompt,
+      f"R5: Chamfer 'Distances=1,1', the measured sub-prompts, sticky 2,3 ({p1!r}, {p2!r}, {c2.prompt!r})")
+type(commands.COMMANDS["chamfer"])._sticky_distances[:] = [1.0, 1.0]
+
+# --- R5 Extend: boundary objects, or a typed length; then the curves ---------------------
+print("-- R5 Extend --")
+ctx = Ctx(TOP)
+ctx.add(bridge.make_line((0, 4, 0), (4, 4, 0)), "A")
+ctx.add(bridge.make_line((6, 0, 0), (6, 8, 0)), "B")
+ctx.add(bridge.make_arc((-1, 0, 0), (0, 1, 0), (1, 0, 0)), "C")
+ctx.add(bridge.make_line((-5, -0.5, 0), (5, -0.5, 0)), "D")
+c, msg, done = drive("extend", [], ctx)
+p0 = c.prompt
+c.feed("B", ctx)
+c.feed("D", ctx)
+c.feed("", ctx)
+p1 = c.prompt
+c.pick_points = {1: (3.5, 4.0, 0.0)}
+c.feed("A", ctx)
+p2 = c.prompt
+c.pick_points = {1: (0.9, 0.3, 0.0)}
+c.feed("C", ctx)
+msg, done = c.feed("", ctx)
+ends = sorted((round(g.PointAtStart.X, 9), round(g.PointAtStart.Y, 9), round(g.PointAtEnd.X, 9),
+               round(g.PointAtEnd.Y, 9)) for g in ctx.added)
+arc = next((g for g in ctx.added if not g.IsLinear()), None)
+check(p0.startswith("Select boundary objects or enter extension length. Press Enter for dynamic "
+                    "extend ( Type=Natural  Join=Merge")
+      and base(p1) == "Select curve to extend"
+      and base(p2) == "Select curve to extend. Press Enter when done" and done
+      and (0.0, 4.0, 6.0, 4.0) in ends,
+      f"R5: boundaries first, then curves; the line runs exactly to the boundary x=6 ({ends}; {msg!r})")
+check(arc is not None and abs(arc.PointAtEnd.Y + 0.5) < 1e-9
+      and abs(arc.PointAtEnd.X - math.sqrt(0.75)) < 1e-9 and abs(arc.PointAtStart.X + 1) < 1e-12,
+      f"...the arc's picked end runs on its own circle exactly to the boundary y=-0.5 "
+      f"({arc and (arc.PointAtEnd.X, arc.PointAtEnd.Y)})")
+ctx = Ctx(TOP)
+ctx.add(bridge.make_line((0, 4, 0), (4, 4, 0)), "A")
+c, msg, done = drive("extend", ["2"], ctx)
+p1 = c.prompt
+c.pick_points = {1: (0.2, 4.0, 0.0)}
+c.feed("A", ctx)
+msg, done = c.feed("", ctx)
+g = ctx.added[0] if ctx.added else None
+check("ExtensionLength=2" in p1 and done and g is not None
+      and abs(g.PointAtStart.X + 2) < 1e-9 and abs(g.PointAtEnd.X - 4) < 1e-9,
+      f"R5: typed 2 sets ExtensionLength=2; the end nearest the pick (start) grows by 2 ({p1!r}, {msg!r})")
+c, msg, done = drive("extend", [""], Ctx(TOP))
+check(not done and "dynamic extend is not implemented" in (msg or ""), f"dynamic extend says so ({msg!r})")
+
+# --- R5 Lines / Trim prompts -------------------------------------------------------------
+print("-- R5 Lines, Trim --")
+c, msg, done = drive("lines", [], Ctx(TOP))
+ps = [base(c.prompt).rstrip(":")]
+for pt in ("0,0,0", "1,0,0", "1,1,0"):
+    c.feed(pt, ctx)
+    ps.append(c.prompt)
+check(ps[0] == "Start of line" and base(ps[1]) == "End of line"
+      and base(ps[2]) == "End of line. Press Enter when done" and "Close" in ps[3] and "Close" not in ps[2],
+      f"R5: Lines prompts; Close from the third point ({ps})")
+ctx = Ctx(TOP)
+ctx.add(bridge.make_line((0, 0, 0), (4, 0, 0)), "A")
+ctx.add(bridge.make_line((2, -2, 0), (2, 2, 0)), "B")
+c, msg, done = drive("trim", ["B", ""], ctx)
+p1 = c.prompt
+check(p1.startswith("Select object to trim, select pressing Shift to extend (")
+      and "ExtendCuttingLines=No  ApparentIntersections=Yes" in p1,
+      f"R5: Trim's measured trim prompt and option values ({p1!r})")
 
 failed = [label for ok, label in checks if not ok]
 print(f"\n{len(checks) - len(failed)}/{len(checks)} passed")

@@ -186,7 +186,7 @@ check(not msg, f"no prompt is raised for the pre-selected curve  (got {msg!r})")
 check(cmd.args and cmd.args[0] == ["Circle01"],
       f"the selected curve set filled args[0]  (args={cmd.args})")
 # the command is now sitting on the Distance step, not the Curve step
-check(cmd.step_index < len(cmd.steps) and cmd.steps[cmd.step_index][0] == "Distance:",
+check(cmd.step_index < len(cmd.steps) and cmd.steps[cmd.step_index][0] == "Extrusion distance:",
       f"it is now on the Distance step, not the Curve step")
 
 # ===========================================================================
@@ -275,6 +275,9 @@ ctx = FakeCtx()
 ctx.add_input(bridge.make_circle((0, 0, 0), 5), "Circle01")
 ctx.select("Circle01")
 cmd = fresh("extrudecrv")
+# MEASURED (research_preview_14 P36): Enter takes the sticky "Extrusion distance <d>"; with the
+# first-use <0> there is nothing to extrude, so the empty Enter still cancels.
+type(cmd)._sticky_values.pop("ExtrudeCrv", None)
 cmd.begin(ctx)                       # pre-selects the curve, now on Distance:
 check(cmd.step_index == 1, "premise: ExtrudeCrv is on its Distance (number) step")
 msg, done = cmd.feed("", ctx)        # empty Enter on the number step

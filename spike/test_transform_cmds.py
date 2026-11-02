@@ -328,9 +328,14 @@ c = start(ctx, "orient")
 for t in ("0,0,0", "1,0,0"):
     c.feed(t, ctx)
 lx = c.live_xform((5, 5, 0))
-check(lx is not None and apply(lx, (0, 0, 0)) == (5, 5, 0),
-      "live at Target point 1: the objects follow as a translation")
+# MEASURED (research_preview_14 P20): nothing moves at "Target point 1"; the rotated copy
+# follows the cursor only at "Target point 2".
+check(lx is None, "no live copy at Target point 1 (P20)")
 c.feed("5,5,0", ctx)
+lx = c.live_xform((5, 7, 0))
+check(lx is not None and apply(lx, (0, 0, 0)) == (5, 5, 0)
+      and apply(lx, (1, 0, 0)) == (5, 6, 0),
+      "live at Target point 2: the rotated copy follows the cursor (P20)")
 msg, done = c.feed("5,7,0", ctx)
 check(done and ends(ctx.geom_by_name("L")) == [(5, 5.5, 0), (5, 6, 0)],
       f"Scale=No: moved and turned onto the target axis, SAME size ({msg!r})")

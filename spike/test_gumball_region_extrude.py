@@ -194,6 +194,9 @@ def selected_extrusion(command=False):
     if command:
         cmd = commands.ExtrudeCmd()
         cmd.begin(ctx)
+        # MEASURED (research_preview_14 P36): the typed command defaults to Solid=No; this
+        # control compares against the capped Gumball solid, so it asks for Solid=Yes.
+        cmd.feed("Solid=Yes", ctx)
         msg, done = cmd.feed("5", ctx)
         check(done, "ExtrudeCrv control completes", msg)
     else:

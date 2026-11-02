@@ -163,25 +163,27 @@ check(not ctx.added and msg == "No faces were made. Curve must be closed and pla
 print("\n-- ExtrudeSrf --")
 holed = bridge.make_planar_srf([SQ, HOLE])[0]
 V = (100 - 4 * math.pi) * 3
-ctx, msg = run("extrudesrf", [("holed_srf", holed)], ["holed_srf", "3"])
+# MEASURED (research_preview_14 P38): the typed command defaults to Solid=No, so the solid
+# cases say Solid=Yes, as the reference menu macro does.
+ctx, msg = run("extrudesrf", [("holed_srf", holed)], ["holed_srf", "3"], opts_=[("Solid", True)])
 e = ctx.added[0] if ctx.added else None
 em = kernel.master_of(e) if e is not None else None
 check(em is not None and ob.face_types(em) == {"PLANE": 6, "CYLINDER": 1} and ob.is_airtight(em)
       and rel(ob.volume(em), V) < 1e-12,
       f"the holed square by 3: {{PLANE: 6, CYLINDER: 1}}, airtight, volume (100 - 4pi) 3 "
       f"({em is not None and ob.volume(em)!r}; {msg!r})")
-ctx, msg = run("extrudesrf", [("holed_srf", holed)], ["holed_srf", "3"], opts_=[("BothSides", True)])
+ctx, msg = run("extrudesrf", [("holed_srf", holed)], ["holed_srf", "3"], opts_=[("BothSides", True), ("Solid", True)])
 bm = kernel.master_of(ctx.added[0]) if ctx.added else None
 lo, hi = ob.tight_bbox(bm) if bm is not None else ((0, 0, 0), (0, 0, 0))
 check(bm is not None and rel(ob.volume(bm), 2 * V) < 1e-12 and abs(lo[2] + 3) < 1e-9
       and abs(hi[2] - 3) < 1e-9,
       f"BothSides: twice as long, -3 .. 3 ({lo[2]:g} .. {hi[2]:g})")
-ctx, msg = run("extrudesrf", [("holed_srf", holed)], ["holed_srf", "3"], opts_=[("Solid", False)])
+ctx, msg = run("extrudesrf", [("holed_srf", holed)], ["holed_srf", "3"])
 om = kernel.master_of(ctx.added[0]) if ctx.added else None
 check(om is not None and ob.face_types(om) == {"PLANE": 4, "CYLINDER": 1}
       and not ob.is_airtight(om),
-      f"Solid=No: only the side surfaces, open ({om is not None and ob.face_types(om)})")
-ctx, msg = run("extrudesrf", [("holed_srf", holed)], ["holed_srf", "w0,0,5"])
+      f"Solid=No (the measured default): only the side surfaces, open ({om is not None and ob.face_types(om)})")
+ctx, msg = run("extrudesrf", [("holed_srf", holed)], ["holed_srf", "w0,0,5"], opts_=[("Solid", True)])
 pm = kernel.master_of(ctx.added[0]) if ctx.added else None
 check(pm is not None and rel(ob.volume(pm), (100 - 4 * math.pi) * 5) < 1e-12,
       f"a PICKED point 5 above the surface extrudes 5 ({msg!r})")
@@ -193,7 +195,7 @@ check(dm is not None and bridge.last_occt_decline() is None
 L = bridge.make_line
 twist = bridge.make_edge_srf([L((0, 0, 0), (1, 0, 0)), L((1, 0, 0), (1, 1, 1)),
                               L((1, 1, 1), (0, 1, 0)), L((0, 1, 0), (0, 0, 0))])
-ctx, msg = run("extrudesrf", [("twist_srf", twist)], ["twist_srf", "2"])
+ctx, msg = run("extrudesrf", [("twist_srf", twist)], ["twist_srf", "2"], opts_=[("Solid", True)])
 tm = kernel.master_of(ctx.added[0]) if ctx.added else None
 check(tm is not None and ob.is_airtight(tm) and rel(ob.volume(tm), 2.0) < 1e-9,
       f"a NON-planar surface (z = xy) goes along the CPlane Z: volume = 1 x 1 x 2 "

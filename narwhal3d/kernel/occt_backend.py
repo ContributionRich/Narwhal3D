@@ -199,7 +199,8 @@ RECIPE_KINDS = {
     # unioning two extruded circles falls back to the mesh route and yields 3260 facets.
     "extrusion": ("profile", "dir"),
     # A round tube along a rail, and closing a shape's planar ends. `pipe` carries the
-    # rail as a serialized curve; `cap` nests its operand like the booleans do.
+    # rail as a serialized curve; `cap` nests its operand like the booleans do. An optional
+    # `end_radius` makes it a linear taper (`make_pipe_tapered`).
     "pipe": ("rail", "radius"),
     "cap": ("a",),
     # One face of another solid -- what Explode makes of a master-backed polysurface.
@@ -1105,6 +1106,100 @@ def make_pipe(rail, radius):
         raise KernelError(f"pipe failed: {e}") from e
 
 
+def _wire_is_straight(wire, start, end, line_type):
+    """True when `wire` is one straight edge from `start` to `end`: an OCCT line, or a
+    B-spline/Bezier whose every pole lies on that chord (the convex-hull property makes the
+    curve itself straight then -- this is a proof, not a sample)."""
+    from OCP.BRepAdaptor import BRepAdaptor_Curve
+    from OCP.GeomAbs import GeomAbs_BezierCurve, GeomAbs_BSplineCurve
+    from OCP.TopAbs import TopAbs_EDGE
+    from OCP.TopExp import TopExp_Explorer
+    from OCP.TopoDS import TopoDS
+    from OCP.gp import gp_Lin, gp_Dir, gp_Vec
+
+    edges = []
+    ex = TopExp_Explorer(wire, TopAbs_EDGE)
+    while ex.More():
+        edges.append(TopoDS.Edge_s(ex.Current()) if hasattr(TopoDS, "Edge_s")
+                     else TopoDS.Edge(ex.Current()))
+        ex.Next()
+    length = start.Distance(end)
+    if len(edges) != 1 or length <= 1e-12:
+        return False
+    c = BRepAdaptor_Curve(edges[0])
+    kind = c.GetType()
+    if kind == line_type:
+        return True
+    if kind == GeomAbs_BSplineCurve:
+        geom = c.BSpline()
+    elif kind == GeomAbs_BezierCurve:
+        geom = c.Bezier()
+    else:
+        return False
+    chord = gp_Lin(start, gp_Dir(gp_Vec(start, end)))
+    tol = 1e-12 * max(1.0, length)
+    return all(chord.Distance(geom.Pole(i)) <= tol for i in range(1, geom.NbPoles() + 1))
+
+
+def make_pipe_tapered(rail, radius, end_radius):
+    """A round tube whose radius blends LINEARLY from `radius` to `end_radius` along `rail`
+    (the reference CAD application's Pipe with ShapeBlending=Global: "The radius is linearly
+    blended from one end to the other, creating pipes that taper").
+
+    A LINE rail gives an exact CONE face (`BRepPrimAPI_MakeCone`) -- a straight taper is a
+    cone, so nothing is fitted. Any other rail goes through `BRepOffsetAPI_MakePipeShell`
+    with a linear `Law_Linear` on the circular section, at the same 1e-7 tolerance as
+    `make_sweep1`: MEASURED, a r 1 -> 2 taper along a quarter arc R 10 is one B-spline
+    face within 4.0e-9 of the true linear radius, and capped its volume matches
+    pi*L*(r0^2 + r0*r1 + r1^2)/3 to 1e-12 relative. There is no closed-form analytic surface
+    for a taper along a curve, so this smooth B-spline is the geometry (never facets).
+    OURS: on a free-form rail the blend follows the rail's normalised parameter; along a line
+    or an arc that is the same as arc length.
+    """
+    _need()
+    from OCP.BRepAdaptor import BRepAdaptor_CompCurve
+    from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeEdge, BRepBuilderAPI_MakeWire
+    from OCP.BRepOffsetAPI import BRepOffsetAPI_MakePipeShell
+    from OCP.BRepPrimAPI import BRepPrimAPI_MakeCone
+    from OCP.GeomAbs import GeomAbs_Line
+    from OCP.Geom import Geom_Circle
+    from OCP.gp import gp_Ax2, gp_Dir, gp_Pnt, gp_Vec
+    from OCP.Law import Law_Linear
+
+    r0, r1 = float(radius), float(end_radius)
+    if r0 <= 0 or r1 <= 0:
+        raise KernelError(f"a pipe radius must be positive (got {r0}, {r1})")
+    rail_wire = wire_from_curve(rail)
+    try:
+        adaptor = BRepAdaptor_CompCurve(rail_wire)
+        t0, t1 = adaptor.FirstParameter(), adaptor.LastParameter()
+        origin, tangent = gp_Pnt(), gp_Vec()
+        adaptor.D1(t0, origin, tangent)
+        if tangent.Magnitude() <= 0:
+            raise KernelError("the rail has no tangent at its start")
+        end = adaptor.Value(t1)
+        if _wire_is_straight(rail_wire, origin, end, GeomAbs_Line):
+            length = origin.Distance(end)
+            axis = gp_Ax2(origin, gp_Dir(gp_Vec(origin, end)))
+            return BRepPrimAPI_MakeCone(axis, r0, r1, length).Cone().LateralFace()
+        profile = BRepBuilderAPI_MakeWire(BRepBuilderAPI_MakeEdge(
+            Geom_Circle(gp_Ax2(origin, gp_Dir(tangent)), 1.0)).Edge()).Wire()
+        law = Law_Linear()
+        law.Set(0.0, r0, 1.0, r1)
+        ps = BRepOffsetAPI_MakePipeShell(rail_wire)
+        ps.SetMode(False)                     # CorrectedFrenet, as `make_sweep1`
+        ps.SetTolerance(SWEEP_TOLERANCE, SWEEP_TOLERANCE, 1e-4)
+        ps.SetLaw(profile, law, False, False)
+        ps.Build()
+        if not ps.IsDone():
+            raise KernelError("the tapered pipe could not be built along that rail")
+        return ps.Shape()
+    except KernelError:
+        raise
+    except Exception as e:  # noqa: BLE001
+        raise KernelError(f"tapered pipe failed: {e}") from e
+
+
 def cap_planar_holes(shape):
     """Close a shape's PLANAR free boundaries and return a solid. ANALYTIC.
 
@@ -1394,7 +1489,11 @@ def from_recipe(recipe, _depth=0):
             else:
                 shape = make_extrusion(recipe["profile"], recipe["dir"])
         elif kind == "pipe":
-            shape = make_pipe(recipe["rail"], recipe["radius"])
+            end_radius = recipe.get("end_radius")
+            if end_radius is not None and abs(float(end_radius) - float(recipe["radius"])) > 1e-12:
+                shape = make_pipe_tapered(recipe["rail"], recipe["radius"], end_radius)
+            else:
+                shape = make_pipe(recipe["rail"], recipe["radius"])
         elif kind == "cap":
             shape = cap_planar_holes(from_recipe(recipe["a"], _depth + 1))
         elif kind == "face":

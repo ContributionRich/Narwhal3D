@@ -6733,13 +6733,17 @@ def edge_curve_data(geom):
     return occt.edge_curves(master)
 
 
-def pipe_occt(rail, radius, cap=False):
+def pipe_occt(rail, radius, cap=False, end_radius=None):
     """An ANALYTIC pipe along `rail`, or None if OCCT cannot carry the rail.
 
     Returns the display proxy with its master registered, like the booleans. a
     circular profile along a quarter-circle rail is **exactly one TORUS face**, and capped the
     volume matches an exact quarter-torus to 1.4e-14 % -- against a skinned loft that missed
     the ideal by 3.8e-05 and could never be exact, because its stations are samples.
+
+    `end_radius` (different from `radius`) is the linear taper, ShapeBlending=Global: an
+    exact CONE face on a line rail, a smooth B-spline law sweep otherwise
+    (`occt_backend.make_pipe_tapered`). The recipe records it, so it rebuilds on reload.
     """
     occt = _occt()
     if occt is None:
@@ -6749,6 +6753,8 @@ def pipe_occt(rail, radius, cap=False):
         _decline("the rail could not be serialized for the kernel")
         return None
     recipe = {"kind": "pipe", "rail": profile, "radius": float(radius)}
+    if end_radius is not None and abs(float(end_radius) - float(radius)) > 1e-12:
+        recipe["end_radius"] = float(end_radius)
     if cap:
         recipe = {"kind": "cap", "a": recipe}
     try:

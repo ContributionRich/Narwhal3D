@@ -57,6 +57,8 @@ class Ctx:
         return []
 
 
+# MEASURED (research_preview_14 P55): a typed FIRST radius stays locked until Enter (or a
+# pick), so each typed first radius below is followed by "".
 def run(lines, plane=cplane.WORLD_TOP):
     ctx = Ctx(plane)
     command = commands.SpiralCmd()
@@ -68,7 +70,7 @@ def run(lines, plane=cplane.WORLD_TOP):
     return ctx, command, message, done
 
 
-ctx, command, message, done = run(["0,0,0", "0,0,4", "1", "3"])
+ctx, command, message, done = run(["0,0,0", "0,0,4", "1", "", "3"])
 curve = ctx.made[0][1] if ctx.made else None
 check(done and curve is not None and curve.Degree == 3 and not curve.IsPolyline(),
       "default Spiral creates one smooth cubic NURBS")
@@ -80,22 +82,22 @@ check("radii 1->3" in message and "NURBS deviation" in message,
       "result reports radii and achieved approximation deviation")
 
 ctx, command, message, done = run(
-    ["Pitch=2", "0,0,0", "0,0,10", "1", "2"])
+    ["Pitch=2", "0,0,0", "0,0,10", "1", "", "2"])
 check(done and "5 turns" in message,
       "Pitch precedence derives Spiral turn count")
 
 ctx, command, _message, done = run(
-    ["Diameter/Radius=Diameter", "0,0,0", "0,0,4", "2", "6"])
+    ["Diameter/Radius=Diameter", "0,0,0", "0,0,4", "2", "", "6"])
 diameter = ctx.made[0][1] if ctx.made else None
 check(done and diameter is not None
       and diameter.PointAtStart.DistanceTo(commands.r3.Point3d(1, 0, 0)) < 1e-9
       and diameter.PointAtEnd.DistanceTo(commands.r3.Point3d(3, 0, 4)) < 1e-8
-      and command.steps[2][0] == "First diameter:"
+      and command.steps[2][0] == "First diameter and start point:"
       and command.steps[3][0] == "Second diameter:",
       "Diameter mode applies to both radii and both prompts")
 
 ctx, command, message, done = run(
-    ["Flat", "Turns=2", "0,0,0", "0,0,5", "1", "4"])
+    ["Flat", "Turns=2", "0,0,0", "0,0,5", "1", "", "4"])
 flat = ctx.made[0][1] if ctx.made else None
 check(done and flat is not None
       and abs(flat.PointAtStart.Z) < 1e-12 and abs(flat.PointAtEnd.Z) < 1e-12
@@ -104,13 +106,13 @@ check(done and flat is not None
       "Flat creates a truly planar variable-radius spiral")
 
 ctx, command, _message, done = run(
-    ["ReverseTwist", "0,0,0", "0,0,4", "1", "3"])
+    ["ReverseTwist", "0,0,0", "0,0,4", "1", "", "3"])
 reverse = ctx.made[0][1] if ctx.made else None
 check(done and reverse is not None and curve.Points[1].Y > 0.0 and reverse.Points[1].Y < 0.0,
       "ReverseTwist reverses Spiral winding")
 
 ctx, command, _message, done = run(
-    ["Vertical", "0,0,0", "4", "1", "3"], cplane.WORLD_RIGHT)
+    ["Vertical", "0,0,0", "4", "1", "", "3"], cplane.WORLD_RIGHT)
 vertical = ctx.made[0][1] if ctx.made else None
 check(done and vertical is not None
       and vertical.PointAtEnd.DistanceTo(commands.r3.Point3d(4, 3, 0)) < 1e-8,

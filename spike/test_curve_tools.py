@@ -160,6 +160,12 @@ ctx.add(line((0, 0, 0), (10, 0, 0)), "LX")
 ctx.add(line((0, 0, 0), (0, 10, 0)), "LY")
 c, msgs, done = drive(ctx, "fillet", ["Radius=2", "LX", "LY"])
 proto = commands.COMMANDS.get("fillet")
+# MEASURED (research_preview_14 R5 Fillet): Radius is sticky, so the 2 above would carry
+# over -- the first-use default is checked from a reset state.
+check(proto is not None and "Radius=2" in type(proto)().prompt,
+      "the typed Radius=2 carries to the next Fillet (sticky)")
+if proto is not None:
+    type(proto)._sticky_radius[0] = 1.0
 check(proto is not None and type(proto)().prompt.startswith("Select first curve to fillet"),
       "Fillet's prompt is the reference CAD application's `Select first curve to fillet`")
 check(proto is not None and "Radius=1" in type(proto)().prompt
