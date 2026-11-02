@@ -1,11 +1,11 @@
-"""G-72: Area / Volume / BoundingBox measure the GEOMETRY, not the display proxy.
+"""Area / Volume / BoundingBox measure the GEOMETRY, not the display proxy.
 
 Rule 0: a solid may be a MASTER (the geometry) + a triangulated PROXY (display only).
 `Volume` used to integrate the proxy's triangles and label the answer "exact" --
 MEASURED on box-union-cylinder: 1140.84494 for a true 1000+45*pi = 1141.37167, -4.6e-4.
-That is the number the owner sends to manufacture.
+That is the number sent to manufacture.
 
-Every gate below FAILS on the pre-G-72 code (named per gate). The OCCT gates are SKIPPED,
+Every gate below FAILS on the code before this change (named per gate). The OCCT gates are SKIPPED,
 not failed, when `vendor/occt` is absent, like spike/test_kernel.py.
 
 Run: tools/blender-5.2.2-linux-x64/5.2/python/bin/python3.13 spike/test_measure.py
@@ -95,7 +95,7 @@ class FakeCtx:
     def note_change(self, label=None):
         pass
 
-    # G-73: commands that ADD objects (centroid points, MarkRadius) and select sets
+    # commands that ADD objects (centroid points, MarkRadius) and select sets
     added = 0
 
     def add_geometry(self, geom, base_name, layer_index=None):
@@ -140,7 +140,7 @@ def first_number(msg):
 
 
 # Reached through getattr so this suite FAILS CLEANLY (rather than crashing) when run
-# against the pre-G-72 analysis.py -- which is how every gate below was watched go RED.
+# against the pre-analysis.py -- which is how every gate below was watched go RED.
 exact_mass = getattr(analysis, "exact_mass", lambda *a, **k: None)
 occt_shape_of = getattr(analysis, "occt_shape_of", lambda *a, **k: None)
 
@@ -159,7 +159,7 @@ ctx = FakeCtx()
 #        cylinder opens in the x=10 face (60), plus the outer half wall (pi*3*10 = 30pi),
 #        plus the two outer half-discs on top and bottom (2 * 9pi/2 = 9pi)
 #      = 540 + 39*pi
-#    PRE-G-72: Volume printed 1140.84 "exact" (-4.6e-4) -> RED.
+#    Before the fix, Volume printed 1140.84 "exact" (-4.6e-4) -> RED.
 # ===========================================================================
 print("\n-- box-union-cylinder: master, not proxy --")
 V_BU = 1000 + 45 * math.pi
@@ -207,7 +207,7 @@ else:
 #    GProp at explicit eps is wrong by up to 8.5e-3 on it and does not converge
 #    (MEASURED, probe_measure_bspline.py). Oracle: area(profile) * h, the area by Green's
 #    theorem with Gauss-Legendre on the EXACT curve -- independent of every code path here.
-#    PRE-G-72: the proxy. -> RED. Also the gate on _nurbs_where_needed.
+#    Before the fix: the proxy. -> RED. Also the gate on _nurbs_where_needed.
 # ===========================================================================
 print("\n-- a NURBS extrusion: the face GProp mis-integrates --")
 GL = [(-0.9739065285171717, 0.0666713443086881), (-0.8650633666889845, 0.1494513491505806),
@@ -261,7 +261,7 @@ else:
 # 3. BoundingBox: a master-backed cylinder's box is [c-r, c+r] EXACTLY.
 #    cylinder r=3 at (10,5), h=10, unioned with a box wholly inside it -> one master
 #    whose proxy box sits INSIDE the truth by the chord (MEASURED y 2.0084..7.9916).
-#    PRE-G-72: the proxy box. -> RED.
+#    Before the fix: the proxy box. -> RED.
 # ===========================================================================
 print("\n-- BoundingBox of a master is tight --")
 if have_occt:
@@ -341,10 +341,10 @@ check(not done and msg is None and c.step_index == 0,
       f"an open curve is not measured: the prompt is asked again ({msg!r}, {done})")
 
 # ===========================================================================
-# G-73: Angle, Radius, Diameter, AreaCentroid, VolumeCentroid, EvaluatePt.
-# PRE-G-73 none of the six exists, so every gate below is RED (COMMANDS.get -> None).
+# Angle, Radius, Diameter, AreaCentroid, VolumeCentroid, EvaluatePt.
+# Before the fix, none of the six exists, so every gate below is RED (COMMANDS.get -> None).
 # ===========================================================================
-print("\n-- G-73: the measuring set --")
+print("\n-- the measuring set --")
 G73 = ("angle", "radius", "diameter", "areacentroid", "volumecentroid", "evaluatept")
 for key in G73:
     check(key in commands.COMMANDS, f"`{key}` is a registered command")
@@ -654,4 +654,4 @@ if failures:
     for f in failures:
         print("FAIL:", f)
     sys.exit(1)
-print("MEASURE (G-72, G-73) PASSED")
+print("MEASURE PASSED")

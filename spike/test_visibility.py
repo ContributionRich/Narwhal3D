@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""T-103: the `Hide` / `Show` / `Lock` / `Unlock` visibility commands.
+"""the `Hide` / `Show` / `Lock` / `Unlock` visibility commands.
 
 Run:
   tools/blender-5.2.2-linux-x64/5.2/python/bin/python3.13 spike/test_visibility.py
@@ -33,9 +33,9 @@ Covered (per the task):
 
 The DISPLAY half is intentionally NOT tested here: a hidden object must
 disappear from the viewport and a locked one must stay visible but
-unselectable, but that lives in bridge.py (the geometry agent) and ui.py (the
-frontier), neither of which honours Mode yet. This suite pins the document
-half; see docs/CURRENT_ROUND.md T-103 for the recorded gap.
+unselectable, but that lives in bridge.py (the geometry module) and ui.py (the
+shell), neither of which honours Mode yet. This suite pins the document
+half; see the recorded gap in the test history.
 
 Loaded by file path (no Blender): the same trick as spike/test_explode.py.
 """
@@ -156,7 +156,7 @@ for name in ("Hide", "Show", "Lock", "Unlock"):
     if cmd is not None:
         check(cmd.name == name, f"{key} -> name is {name}")
         if name in ("Hide", "Lock"):
-            # T-116: these now ASK for the selection (one objects_multi set-step)
+            # these now ASK for the selection (one objects_multi set-step)
             # instead of refusing -- a pre-selection runs them, an empty Enter
             # cancels. The all-objects forms below keep their zero-step shape.
             check([k for _p, k in cmd.steps] == [commands.OBJECTS_MULTI],
@@ -282,13 +282,13 @@ check(ctx2.modes("A") == [r3.ObjectMode.Hidden], "Unlock left the hidden A alone
 check(msg == "Unlocking one object.", f"it reports only B was unlocked  ({msg})")
 
 # ===========================================================================
-# T-108: Mode survives undo -- the REAL NarwhalContext path, not FakeCtx
+# Mode survives undo -- the REAL NarwhalContext path, not FakeCtx
 # ===========================================================================
 # FakeCtx has no undo stack, so it cannot exercise the snapshot/restore path
 # that this bug lives in. The real path is: command.execute -> note_change
 # (captures `before`) -> mutate Mode -> undo_last/redo_last -> model.restore.
 #
-# MEASURED, the trap (see T-108 finding): `restore` re-Adds the object from
+# MEASURED, the trap (see finding): `restore` re-Adds the object from
 # the snapshot's attrs dict. A fresh ObjectAttributes() defaults to Normal, so
 #   * UNDO  (restore `before`, captured while Mode was already Normal) is
 #     NON-discriminating -- it passes even when `Mode` is absent from
@@ -341,7 +341,7 @@ def run_undo_redo(cmd_key, want_mode):
 
 
 print()
-print("T-108: Mode survives undo/redo (real context path)")
+print("Mode survives undo/redo (real context path)")
 # Hide then Undo restores Normal and the object is selectable again.
 a0, a1, a2 = run_undo_redo("hide", r3.ObjectMode.Hidden)
 check(a0 == r3.ObjectMode.Hidden, f"Hide -> Mode==Hidden  ({a0})")
@@ -358,7 +358,7 @@ check(b2 == r3.ObjectMode.Locked,
       f"Redo re-applies the lock (Mode==Locked)  ({b2})")
 
 # ===========================================================================
-# T-112: ShowSelected and UnlockSelected -- the selected-objects forms.
+# ShowSelected and UnlockSelected -- the selected-objects forms.
 # ===========================================================================
 # MEASURED (command_list.htm): the reference CAD application ships FOUR distinct commands, not two --
 #   Show           -- re-displays ALL hidden objects
@@ -373,7 +373,7 @@ check(b2 == r3.ObjectMode.Locked,
 # UnlockSelected releases them. The last two checks pin that the all-objects
 # forms are UNCHANGED -- the guard against collapsing four commands into two.
 print()
-print("T-112: the two selected-objects commands are registered")
+print("the two selected-objects commands are registered")
 for name in ("ShowSelected", "UnlockSelected"):
     key = name.lower()
     check(key in commands.COMMANDS, f"{name} is registered")
@@ -411,7 +411,7 @@ ctx.select("A", "B")
 fresh("hide").execute(ctx)
 msg, done = fresh("show").execute(ctx)
 check(ctx.count_mode(r3.ObjectMode.Hidden) == 0,
-      "Show (all-objects) re-displays BOTH -- unchanged by T-112")
+      "Show (all-objects) re-displays BOTH -- unchanged by the selected-objects forms")
 check(msg == "Showing 2 hidden objects.", f"Show reports both, the reference CAD application wording  ({msg})")
 
 print()
@@ -437,7 +437,7 @@ ctx.select("A", "B")
 fresh("lock").execute(ctx)
 msg, done = fresh("unlock").execute(ctx)
 check(ctx.count_mode(r3.ObjectMode.Locked) == 0,
-      "Unlock (all-objects) releases BOTH -- unchanged by T-112")
+      "Unlock (all-objects) releases BOTH -- unchanged by the selected-objects forms")
 check(msg == "Unlocking 2 objects.", f"Unlock reports both, the reference CAD application wording  ({msg})")
 
 print()

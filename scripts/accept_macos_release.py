@@ -53,7 +53,7 @@ try:
     profile.mkdir()
     env.update(HOME=str(profile), TMPDIR=str(work), PYTHONDONTWRITEBYTECODE="1", PYTHONPATH=str(app),
                NARWHAL3D_SETTINGS_FILE=str(profile / "preferences.json"),
-               BLENDER_USER_CONFIG=str(profile / "blender"), NARWHAL3D_VERSION="0.4.8",
+               BLENDER_USER_CONFIG=str(profile / "blender"), NARWHAL3D_VERSION="0.4.9",
                NARWHAL3D_DISABLE_UPDATE_CHECK="1", NARWHAL3D_NO_DIALOGS="1",
                NARWHAL3D_DEFER_FIRST_PRESENT="1", NARWHAL3D_STATUSBAR_HEIGHT="37")
     for core in ("pure", "selection", "geometry", "platform", "cdr"):

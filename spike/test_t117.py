@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
-"""T-117: the remaining selection-driven commands ASK for their first input.
+"""the remaining selection-driven commands ASK for their first input.
 
 Run:
   tools/blender-5.2.2-linux-x64/5.2/python/bin/python3.13 spike/test_t117.py
 
-OWNER-REPORTED (via T-116): "command behavior seems wrong ... it should either
+REPORTED: "command behavior seems wrong ... it should either
 take whatever i have selected as the first command, or ask for input."
 
-T-116 fixed five pure-selection commands (Delete/Hide/Lock/PointsOn/PointsOff).
-T-117 does the rest that read `ctx.selected_objects()` but could not prompt:
+fixed five pure-selection commands (Delete/Hide/Lock/PointsOn/PointsOff).
+does the rest that read `ctx.selected_objects()` but could not prompt:
 Rotate, Scale, Array, ArrayPolar, Mirror (selection + geometry inputs), and
 Join, Explode, Divide (selection, like Delete). Each gains a LEADING
 `objects_multi` set-step with `preselect_names=1` and `cancel_on_empty_set=True`.
@@ -337,7 +337,7 @@ try:
     ctx.add_input(a_line(), "L1")
     cmd.begin(ctx)                                   # object step prefilled
     cmd.feed("0,0,0", ctx)                           # center
-    # G-77: the reference Rotate has NO axis prompt ("Pick the center of rotation. Type the
+    # the reference Rotate has NO axis prompt ("Pick the center of rotation. Type the
     # angle, or pick two reference points" -- the axis is the CPlane normal), so the
     # angle finishes it. The old typed x/y/z step is gone.
     msg, done = cmd.feed("90", ctx)                  # angle
@@ -350,7 +350,7 @@ finally:
 
 # ===========================================================================
 print()
-print("Scale: flow (G-77 made it headless; spike/test_transform_cmds.py runs it for real)")
+print("Scale: flow (made it headless; spike/test_transform_cmds.py runs it for real)")
 # ===========================================================================
 cmd = fresh("scale")
 ctx = FakeCtx()
@@ -358,7 +358,7 @@ ctx.add_input(a_line(), "L1")
 cmd.begin(ctx)
 check(cmd.args and cmd.args[0] == ["L1"] and cmd.step_index == 1,
       f"Scale: object step consumed, now at the next step ({cmd.args[:1]}, i={cmd.step_index})")
-# G-77: the reference Scale picks a BASE POINT next ("Pick a base point, or press Enter to use
+# the reference Scale picks a BASE POINT next ("Pick a base point, or press Enter to use
 # the center of the bounding box") -- the factor follows it.
 check(cmd.steps[cmd.step_index][1] == commands.POINT
       and cmd.steps[cmd.step_index][0].startswith("Base point"),
@@ -372,4 +372,4 @@ if failures:
     for f in failures:
         print(f"  - {f}")
     sys.exit(1)
-print(f"T-117 TESTS PASSED ({checks} checks)")
+print(f"TESTS PASSED ({checks} checks)")

@@ -2,14 +2,14 @@
 
 This directory defines the fail-closed AppImage scaffold for the public Narwhal 3D source branch.
 
-## Current0.4.8 pipeline
+## Current 0.4.9 pipeline
 
 Use [RELEASING.md](RELEASING.md) for current Linux AppImage, Windows managed EXE
 and compatibility ZIP preparation. macOS will be added separately only after its
-worker-containment and app/DMG gates pass. The0.4.7 measurements and commands below
+worker-containment and app/DMG gates pass. The 0.4.7 measurements and commands below
 are preserved historical evidence, not certification of a new package.
 
-## Historical0.4.7 early-prerelease version and host baseline
+## Historical 0.4.7 early-prerelease version and host baseline
 
 Narwhal 3D remains an extremely early prerelease. The assembler and verifier accept only `0.4.x` package versions until the project owner explicitly lifts that cap; this release is `0.4.7`, not `0.5.0`. Its Linux asset is `Narwhal_3D-0.4.7-x86_64.AppImage`. Final shipping-asset gates passed for both platforms; Windows build and acceptance evidence is recorded separately in [the Windows guide](../docs/windows-build.md).
 

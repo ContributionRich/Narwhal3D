@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""T-105: a command's first input should take the selection, or let you make one.
+"""a command's first input should take the selection, or let you make one.
 
 Run:
   tools/blender-5.2.2-linux-x64/5.2/python/bin/python3.13 spike/test_preselect.py
 
-Owner-reported: "when running extrude ... i must have my object selected first
+Reported: "when running extrude ... i must have my object selected first
 right now. the way it should work is for all commands, the first input they
 require will be auto filled if already selected, or can be selected after, and
 confirmed with enter or right click."
@@ -12,7 +12,7 @@ confirmed with enter or right click."
 `preselect_names` only covered the FIRST half (consume an existing selection).
 The second half -- nothing selected -> the command PROMPTS, you select, and
 Enter confirms -- was missing, because an empty answer at a fixed prompt CANCELS
-the command (a load-bearing rule for the other step kinds). T-105 adds a new
+the command (a load-bearing rule for the other step kinds). This adds a new
 step kind, `objects`, with its own branch in `Command._feed`, so that rule is
 untouched for every other step.
 
@@ -22,10 +22,10 @@ Covered (per the task):
   * Enter with nothing selected reports it and does NOT run;
   * Esc (the cancel path, `state.cancel`) still cancels;
   * a fixed first step (a point) command is UNCHANGED -- the guard against the
-    global relaxation T-105 forbids;
-  * and the owner's example, `ExtrudeCrv`, driven end to end.
+    global relaxation that the rule forbids;
+  * and the `ExtrudeCrv` example, driven end to end.
 
-`ExtrudeCrv` is the owner's example, so it is the command driven end to end
+`ExtrudeCrv` is the reported example, so it is the command driven end to end
 (it was the first command converted to an `objects` step. `Offset` now follows
 the same click-after-start contract; `Revolve` retains its separate typed-name
 behavior until converted and tested.
@@ -108,7 +108,7 @@ class FakeCtx:
         return [FakeObj(n) for n in self._selected]
 
     def select_by_names(self, names):
-        """Replace the selection. F-17 needs this: an `objects_multi` step CLEARS the
+        """Replace the selection. A multi-object step needs this: an `objects_multi` step CLEARS the
         selection after confirming a set, so a two-set command's second prompt starts
         empty instead of silently re-taking the first set."""
         self._selected = [str(n) for n in names]
@@ -160,7 +160,7 @@ check(first_kind == commands.OBJECTS_MULTI,
 check(cls.steps[0][1] != "name",
       f"{cls.name}: the first step is not a typed `name` step")
 # and its siblings, which keep the typed `name` step, are UNTOUCHED -- the
-# conversion is the framework's job, applied to the owner's example, not a
+# conversion is the framework's job, applied to the ExtrudeCrv example, not a
 # blanket rewrite (their existing suites pin the `name` step)
 scls = commands.COMMANDS["revolve"]
 check(scls.steps[0][1] == "name",
@@ -209,7 +209,7 @@ check(cmd.args == [], "the curve step was not filled")
 
 # ===========================================================================
 print()
-print("nothing selected, then select + Enter proceeds (the owner's flow)")
+print("nothing selected, then select + Enter proceeds (the reported flow)")
 # ===========================================================================
 ctx = FakeCtx()
 ctx.add_input(bridge.make_circle((0, 0, 0), 5), "Circle01")
@@ -263,7 +263,7 @@ print()
 print("the global cancel rule is UNCHANGED for a fixed (point) step")
 # ===========================================================================
 # `Line`'s first step is a `point`, not `objects`. An empty Enter there must
-# STILL cancel -- this is the guard against T-105 relaxing the rule globally.
+# STILL cancel -- this is the guard against relaxing the rule globally.
 ctx = FakeCtx()
 cmd = fresh("line")
 msg, done = cmd.feed("", ctx)
@@ -289,7 +289,7 @@ print()
 print("Esc (the cancel path) still cancels a running objects-step command")
 # ===========================================================================
 # Esc is handled by `ui` / `state.cancel`, not by `feed` -- so this drives the
-# real cancel path that the modal's ESC handler takes, and proves T-105 did not
+# real cancel path that the modal's ESC handler takes, and proves did not
 # break it for the new step kind.
 st = state.AppState()
 ctx = FakeCtx()
@@ -305,13 +305,13 @@ check(ctx.added == [], "a cancelled run created no geometry")
 
 print()
 print("=" * 60)
-print("F-17: an `objects_multi` step -- \"Select the objects and press Enter\"")
+print("Multi-object step: an `objects_multi` step -- \"Select the objects and press Enter\"")
 print("=" * 60)
-# OWNER-REPORTED: "behvaior of boolean union command isnt right. after i select and
+# REPORTED: "behvaior of boolean union command isnt right. after i select and
 # object and hit enter/ right click to confirm it just ends the command. more commands
 # maybe have this issue."
 #
-# T-105's `objects` step takes `selected[0].name` -- ONE object -- so a command built
+# 's `objects` step takes `selected[0].name` -- ONE object -- so a command built
 # on it silently ignores the rest of your selection, and Boolean (which wanted two
 # TYPED NAMES) fell through to a prompt where empty Enter cancels. `objects_multi`
 # takes the whole set, and Enter CONFIRMS it.
@@ -368,7 +368,7 @@ msg, done = cmd.feed("", ctx)
 check(not done and ctx.ran is None and "Nothing selected" in (msg or ""),
       "Enter with nothing selected REPORTS it and stays running -- it does not "
       f"cancel and does not run (done={done}, msg={msg!r})")
-# ...now select and press Enter, which is the owner's "confirmed with enter"
+# ...now select and press Enter, which is the reported "confirmed with enter"
 ctx.select("A")
 msg, done = cmd.feed("", ctx)
 check(done and ctx.ran == [["A"]],
@@ -479,7 +479,7 @@ check(offset.args == ["Circle01"],
 # ===========================================================================
 print()
 print("=" * 60)
-print("T-116: a command must ASK for its first input, not just refuse")
+print("a command must ASK for its first input, not just refuse")
 print("=" * 60)
 
 # --- stubs for the bpy / ui surface the five commands touch (headless) ---

@@ -1,4 +1,4 @@
-"""T-153: the `InsertKnot` command -- add one knot to a curve at the closest point.
+"""the `InsertKnot` command -- add one knot to a curve at the closest point.
 
 MEASURED (the command reference InsertKnot`): Steps: "Select the object. Pick a location
 for the knot." Options: `Automatic` (add halfway between existing knots), `Midpoints`
@@ -13,7 +13,7 @@ point and keeps the shape (MEASURED: a circle 9 -> 10 and a line 2 -> 3, both wi
 shape unchanged to ~1e-15). `t` is the parameter of the point on the curve CLOSEST to
 the picked location (sampled -- rhino3dm has no `ClosestPoint`).
 
-THE MASTER RULE (T-153, as with T-151/T-152): a curve with an analytic master is
+THE MASTER RULE (as with the other curve edits): a curve with an analytic master is
 refused by name -- `Knots.InsertKnot` would change only the display proxy and leave
 the OCCT master at the old knot structure (audit gate 5).
 
@@ -297,4 +297,4 @@ if failures:
     for f_ in failures:
         print("FAIL:", f_)
     sys.exit(1)
-print("T-153 (InsertKnot) PASSED")
+print("(InsertKnot) PASSED")

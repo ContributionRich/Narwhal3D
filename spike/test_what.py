@@ -1,9 +1,9 @@
-"""T-147: the `What` command -- report the object's details.
+"""the `What` command -- report the object's details.
 
 MEASURED (commands/what.htm): "Select objects. Information about the object and
 its layer will display." One OBJECTS_MULTI step; the report is TEXT -- the same
 rows the Properties panel's Details button shows, built by `bridge.object_details`
-(G-101) from the EXACT geometry (master or recipe), never the display proxy.
+from the EXACT geometry (master or recipe), never the display proxy.
 
 This drives it through `WhatCmd` (test_pipe_cmd.py's `Ctx`/`run` shape) on a box
 and a circle: the report contains `Faces: 6` for the box, and the circle's degree
@@ -158,4 +158,4 @@ if failures:
     for f_ in failures:
         print("FAIL:", f_)
     sys.exit(1)
-print("T-147 (What command) PASSED")
+print("(What command) PASSED")

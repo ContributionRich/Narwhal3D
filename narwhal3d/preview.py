@@ -1850,7 +1850,7 @@ def preview_offset(args, cursor, plane, resolve, cmd=None):
 
 def preview_pipe(args, cursor, plane, resolve, cmd=None):
     """`Pipe`: the radius circle(s) across the rail, the live one following the cursor
-    (the owner's observation of the reference program). Display only."""
+    (a recorded observation of the reference program). Display only."""
     fn = getattr(cmd, "preview_circles", None)
     if not args or not callable(fn):
         return []

@@ -2,14 +2,14 @@
 
 Narwhal 3D is an extremely early public prerelease. This page records what currently works and what remains incomplete so visible UI does not imply unsupported behavior. Package versions remain on the `0.4.x` line until the project owner explicitly lifts that cap.
 
-## Current source and0.4.8 feature set
+## Current source and 0.4.9 feature set
 
-This section describes the current source. Consult the GitHub release for published packages and their validation receipts. Linux, Windows and the first Apple Silicon Mac preview are available for0.4.8. The Mac addition has its own audited portability source revision and documented signing/Corel limitations.
+This section describes the current source. Consult the GitHub release for published packages and their validation receipts. Linux AppImage, Windows portable EXE and the Apple Silicon Mac DMG are published for 0.4.9. The earlier 0.4.8 platform builds remain on their own release page. The Mac build has its own audited portability source revision and documented signing/Corel limitations.
 
 - The in-app AI uses a bounded native read-tool workflow with explicit metadata consent, correlated callbacks and lifetime invalidation. Selected-object metadata is included automatically with each message. Sharing permission can be remembered for the provider/endpoint across chats and launches and revoked in Settings. Active-view/CPlane, command-phase and inherited layer-state snapshots are available; nonempty canonical component identity remains explicitly unavailable.
 - A tool-capable model can request **one new world-aligned box/cube**, created only after a separate human approval. Rust validates and consumes the approval; the existing analytic kernel and publication/Undo path create a six-face solid. Cancellation, stale destination state, replay, publication failure and Undo/Redo are checked. This does not enable unrestricted commands, edits to selected objects, other primitive execution or arbitrary model generation. OpenAI Responses is an explicit provider option alongside the existing APIs.
 - The revised welcome window shows installed version and actual update status. The AI panel uses role-aware messages, truthful request status and centered action labels; Bug Report uses a category dropdown and one full-width Submit report action.
-- The read-only MCP entrypoint supports both protocol eras (2025-11-25 and 2026-07-28) and nine bounded metadata tools. Build/stage matching native automation components for source use; old0.4.7 binaries do not gain these features automatically. The Windows package includes the in-app automation library, not the Unix-only external MCP transport.
+- The read-only MCP entrypoint supports both protocol eras (2025-11-25 and 2026-07-28) and nine bounded metadata tools. Build/stage matching native automation components for source use; old 0.4.7 binaries do not gain these features automatically. The Windows package includes the in-app automation library, not the Unix-only external MCP transport.
 - **Source-only with the optional exact-Brep writer:** bounded multi-section Freeform `Sweep1` accepts 2–4 compatible open rational quadratic sections entered by name or by individually ordered whole-curve picks, with direction-alignment markers. It uses physical station mapping, exact NURBS document representation, source-identity checks and one undoable result. Fitting remains tolerance-qualified; this is not arbitrary-profile or private-algorithm parity. Unordered batch picks, multi-section components and multi-section Roadlike refuse explicitly. The existing single-section component route is retained; hybrid typed/mouse construction consumes the validated UUID geometry even after a rename. The optional exact writer is not redistributed, so the bounded multi-section publication route refuses in the current binary packages rather than using an approximate document face.
 - New surface publication and failure paths preserve existing documents/displays/history; exact project round trips and imported STEP geometry are tested. This is source validation, not a newly certified release package.
 - A source check is not package certification: published assets require the frozen-source and extracted-package gates documented in `packaging/RELEASING.md`. CageEdit remains an explicitly limited mode, not full deformation parity. The Mac document worker has final-image memory containment and forbids fork/exec before parsing. The separate Corel multiversion helper remains unavailable on Mac.
@@ -72,9 +72,9 @@ Artwork published with Narwhal must be original or have clearly documented GPL-c
 
 ## Platform and architecture roadmap
 
-### Historical0.4.7 package qualification
+### Historical 0.4.7 package qualification
 
-The following preserved record describes0.4.7, not the pending/new0.4.8 packages.
+The following preserved record describes 0.4.7, not the pending or new packages.
 
 **Release: 0.4.7.** Both shipping assets use public source revision `94534c954dc77f1f1d22f2be6064bedcc8cd1f5b`, source epoch `1793144099`; the release tag retains that asset-build revision, not this documentation follow-up. See [release checksums and sizes](docs/technical-reference.md#release-source-and-integrity).
 

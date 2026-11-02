@@ -4,18 +4,38 @@ All notable public changes will be recorded here. Narwhal 3D is an extremely ear
 
 ## Unreleased
 
+## 0.4.9 — 2026-11-02
+
+Changes since the published 0.4.8 release. The Linux AppImage, Windows portable EXE and Apple Silicon DMG are built from this source. The Windows release publishes only the EXE; earlier ZIP installations need a one-time manual download of the EXE. The Mac build is ad-hoc-signed and not notarized, and Corel multiversion conversion is unavailable on Mac.
+
+### Command behaviour
+
+- Fixed behaviour and live previews across a large set of commands, including Box, Point, Sphere, ArrayPolar, Helix, Angle, Distance, Orient, Area, Array, Offset, Revolve, Split, drawing, selection and setting commands.
+- Added live previews for Pyramid, Torus, Tube, TruncatedCone and Ellipsoid.
+- Tapered Pipe builds an exact cone, or an exact swept face with the default blend. The default blend's S-curve law is a Narwhal 3D choice that has not yet been verified against the target CAD behaviour.
+- Toolbar and flyout variants now run their command macros; for example, Line from midpoint runs Line with BothSides.
+- Setting menu items toggle or prompt for a new value.
+- MoveEdge and MoveFace take a selected edge or face; Extend works to boundary objects; Fillet and Chamfer behaviour was corrected.
+- AddToGroup, Parabola3Pt direction rules, Polygon Star and Mode, Circle Vertical, Ellipse Diameter and FromFoci, Rectangle and Plane Vertical, Plane 3Point, and Line Perpendicular or Tangent to picked curves.
+- Thirteen toolbar variants still report "not implemented": Line normal, Line perpendicular to two curves, Line tangent to two curves, Conic tangent and perpendicular, Circle around curve, Ellipse around curve, Circle through fitted points, loose Project, and BlendCrv Edges. CPlane View, Rotate, Object, Undo and Redo are also not built.
+
+### Other changes
+
+- Move document registry and snapshot tracking into the Rust application core.
+- Retire duplicate Python engines and require qualified native application cores.
+- Introduce persistent Rust document-session ownership for user text.
 - Reviewed in-process Rust acceleration for nearest ACI colour queries and larger
   print-width files, preserving Python validation/I/O and complete compatibility
   fallbacks. Tiny files and cheap exact-colour lookups avoid FFI overhead.
 - Refuse text wrapping that cannot progress instead of growing spans indefinitely.
 - Keep unregistered native experiments out of exported UI source bundles.
-- Track verified command-behavior findings and remaining exact Divide/Rotate/Arc
+- Track verified command-behaviour findings and remaining exact Divide/Rotate/Arc
   gaps in [the review](docs/reviews/2026-10-30-rust-research.md); these are not all
-  implemented commands or changes to existing0.4.8 release assets.
+  implemented commands or changes to existing 0.4.8 release assets.
 
 ## 0.4.8
 
-Changes since the published0.4.7 release. Linux and Windows shipped first; an Apple Silicon Mac DMG was added to the same release on2026-10-30. There was no0.4.7 Mac release. See the GitHub release for platform-specific source revisions and qualification notes.
+Changes since the published 0.4.7 release. Linux and Windows shipped first; an Apple Silicon Mac DMG was added to the same release on 2026-10-30. There was no 0.4.7 Mac release. See the GitHub release for platform-specific source revisions and qualification notes.
 
 ### Release highlights
 

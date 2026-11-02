@@ -1,12 +1,12 @@
-"""G-74: the curve tools whose kernels already existed -- Fillet, Chamfer, Split, Trim,
+"""the curve tools whose kernels already existed -- Fillet, Chamfer, Split, Trim,
 Intersect -- wired as commands.
 
-G-49 found "the kernel is ahead of the wiring": `fillet.fillet_curves`, `chamfer_curves`,
+found "the kernel is ahead of the wiring": `fillet.fillet_curves`, `chamfer_curves`,
 `intersect.split_curve_by` / `trim_curve_by` / `curve_curve` were built and tested, and no
 command reached them. Every gate below drives the COMMAND through `begin` / `feed` on a
 real `NarwhalModel`, and checks the DOCUMENT afterwards against a closed form.
 
-Every gate FAILS on the pre-G-74 code (none of the five commands existed: `drive` returns
+Every gate FAILS on the code before this change (none of the five commands existed: `drive` returns
 no command and each check is RED -- watched).
 
 Rule 0: a fillet arc and a split circle must stay real arcs (rational degree 2), and a
@@ -398,4 +398,4 @@ if failures:
     for f in failures:
         print("FAIL:", f)
     sys.exit(1)
-print("CURVE TOOLS (G-74) PASSED")
+print("CURVE TOOLS PASSED")

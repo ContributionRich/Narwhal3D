@@ -417,7 +417,7 @@ check(done and m is not None and abs(ob.volume(m) - math.pi * 4) < 1e-9
       and ctx.geom_by_name("Rail") is not None,
       f"Enter at the next-radius prompt builds the radius-1 pipe; rail kept ({msg!r})")
 
-# --- Pipe: the live radius circle (owner's live observation of the reference program) ---
+# --- Pipe: the live radius circle (live observation of the reference program) ---
 print("-- Pipe preview --")
 ctx = Ctx()
 ctx.add(bridge.make_line((0, 0, 0), (4, 0, 0)), "Rail")

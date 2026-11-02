@@ -172,7 +172,7 @@ check(all(len(rows) == len({row.icon for row in rows})
 check(all(row.icon == variant_icons.icon_for(name, row.text)
           for name, rows in mapped_rows.items() for row in rows),
       "flyout rows apply only their exact authored slot mapping")
-# The owner's report: "Line: from midpoint" ran a plain Line. Every flyout and toolbar button
+# The reported problem: "Line: from midpoint" ran a plain Line. Every flyout and toolbar button
 # now carries its workspace macro, so a command-variant button answers its option(s).
 lines_button = types.SimpleNamespace(link="Lines")
 by_text = {row.text: row for row in toolbars.sidebar_flyout_rows(lines_button, implemented)}

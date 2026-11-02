@@ -1,4 +1,4 @@
-"""Toolbar button command macros, from the owner's workspace file (More_Data/rui_file.rui).
+"""Toolbar button command macros, from a workspace file (rui_file.rui).
 
 Generated: {(button text, left command, right command): (left macro, right macro)}. A button
 that runs a command VARIANT (Line: from midpoint = Line + BothSides) carries the variant here;

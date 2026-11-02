@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Q-11: SetGroupName rename/combine, safe memberships, and Undo/Redo."""
+"""SetGroupName rename/combine, safe memberships, and Undo/Redo."""
 import importlib.util
 import os
 import sys

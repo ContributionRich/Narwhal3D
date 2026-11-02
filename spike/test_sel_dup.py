@@ -1,4 +1,4 @@
-"""T-163: the `SelDup` command -- select objects duplicated onto themselves.
+"""the `SelDup` command -- select objects duplicated onto themselves.
 
 =============================================================================
 What this pins
@@ -319,4 +319,4 @@ if failures:
     for f_ in failures:
         print("FAIL:", f_)
     sys.exit(1)
-print("T-163 (SelDup) PASSED")
+print("(SelDup) PASSED")

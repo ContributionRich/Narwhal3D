@@ -1,11 +1,11 @@
-"""G-77: the transform commands, the reference CAD application's steps -- and `live_xform` for the ghost.
+"""the transform commands, the reference CAD application's steps -- and `live_xform` for the ghost.
 
 Rotate, Rotate3D, Scale, Scale1D, Scale2D, Mirror, Orient, Orient3Pt and Move Vertical,
 each driven through the command on a real `NarwhalModel`, with the DOCUMENT geometry
 checked against a hand-worked result; and `live_xform(cursor)` (the contract the
-frontier's ghost draws through) tested directly for every one, plus Move and Copy.
+shell's ghost draws through) tested directly for every one, plus Move and Copy.
 
-Every gate FAILS on the pre-G-77 code: Rotate asked for a typed x/y/z axis and an angle
+Every gate FAILS on the code before this change: Rotate asked for a typed x/y/z axis and an angle
 only, Scale only took a typed factor about the Blender bbox centre (and needed bpy),
 Mirror hard-wired world Z, and Rotate3D / Scale1D / Scale2D / Orient / Orient3Pt /
 Move Vertical / `live_xform` did not exist.
@@ -223,7 +223,7 @@ check(done and ends(ctx.geom_by_name("L")) == [(3.5, 0, 0), (7, 3.5, 0)],
       f"a TYPED new size 7 for a reference length 2 -> factor 3.5 (\"Type the new size for "
       f"the second reference point\") ({msg!r})")
 # Enter at the base point: the selection's TIGHT bounding-box centre. An S-curve's hull
-# centre is not its box centre (G-72), so scaling about the right centre keeps it fixed.
+# centre is not its box centre (), so scaling about the right centre keeps it fixed.
 wave = r3.NurbsCurve.CreateControlPointCurve(
     [r3.Point3d(0, 0, 0), r3.Point3d(2, 6, 0), r3.Point3d(5, -4, 0), r3.Point3d(8, 0, 0)], 3)
 ctx = Ctx()
@@ -441,4 +441,4 @@ if failures:
     for f in failures:
         print("FAIL:", f)
     sys.exit(1)
-print("TRANSFORM COMMANDS (G-77) PASSED")
+print("TRANSFORM COMMANDS PASSED")

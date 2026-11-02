@@ -36,7 +36,7 @@ jobs:
           python3 - <<'PY'
           import hashlib,json,os,pathlib,subprocess,sys
           root=pathlib.Path(os.environ['RUNNER_TEMP'])
-          matches=list((root/'mac-artifact').rglob('Narwhal_3D-0.4.8-macOS-arm64.dmg'))
+          matches=list((root/'mac-artifact').rglob('Narwhal_3D-0.4.9-macOS-arm64.dmg'))
           assert len(matches)==1
           dmg=matches[0]; receipt=json.loads(pathlib.Path(str(dmg)+'.build.json').read_text())
           with dmg.open('rb') as f: digest=hashlib.file_digest(f,'sha256').hexdigest()

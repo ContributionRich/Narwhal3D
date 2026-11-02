@@ -1,4 +1,4 @@
-"""Bug report #43: "length command not working. I should be able to pick a curve or ctrl
+"""Reported: "length command not working. I should be able to pick a curve or ctrl
 shift click a segment and have it tell me the length. or have it selected before typing
 length and it will tell me".
 
@@ -150,7 +150,7 @@ try:
     check(done and number_after(msgs[0], "Length =") == 7.0 == ui_len
           and "segment 2 of P" in msgs[0] and "Cumulative" not in msgs[0],
           "segment 2 (numbered as the UI numbers it) is 7 -- and replaces its whole "
-          "curve, which the owner also had selected", msgs[0])
+          "curve, which the reporter also had selected", msgs[0])
     ctx = Ctx([("S", SQ)], subobjects=[("S", "Segment", 3)])
     cmd, msgs, done = run(ctx)
     check(done and number_after(msgs[0], "Length =") == 2.0,

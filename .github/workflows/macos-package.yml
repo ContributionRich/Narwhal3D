@@ -1,4 +1,4 @@
-name: macOS 0.4.8 app and DMG qualification
+name: macOS 0.4.9 app and DMG qualification
 
 on:
   workflow_dispatch:
@@ -83,11 +83,11 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/mac-evidence"
           set -o pipefail
-          python3 -u scripts/assemble_macos_release.py --source "$GITHUB_WORKSPACE" --source-revision "$SOURCE_REF" --version 0.4.8 --runtime "$RUNNER_TEMP/narwhal-runtime" --native "$HOME/narwhal-native/output" --output "$RUNNER_TEMP/mac-package" 2>&1 | tee "$RUNNER_TEMP/mac-evidence/assembly.log"
+          python3 -u scripts/assemble_macos_release.py --source "$GITHUB_WORKSPACE" --source-revision "$SOURCE_REF" --version 0.4.9 --runtime "$RUNNER_TEMP/narwhal-runtime" --native "$HOME/narwhal-native/output" --output "$RUNNER_TEMP/mac-package" 2>&1 | tee "$RUNNER_TEMP/mac-evidence/assembly.log"
       - name: Qualify actual DMG geometry and native UI after relocation
         run: |
           set -o pipefail
-          python3 -u scripts/accept_macos_release.py --dmg "$RUNNER_TEMP/mac-package/Narwhal_3D-0.4.8-macOS-arm64.dmg" --source "$GITHUB_WORKSPACE" --work "$RUNNER_TEMP/mac-acceptance" 2>&1 | tee "$RUNNER_TEMP/mac-evidence/acceptance.log"
+          python3 -u scripts/accept_macos_release.py --dmg "$RUNNER_TEMP/mac-package/Narwhal_3D-0.4.9-macOS-arm64.dmg" --source "$GITHUB_WORKSPACE" --work "$RUNNER_TEMP/mac-acceptance" 2>&1 | tee "$RUNNER_TEMP/mac-evidence/acceptance.log"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()
         with:

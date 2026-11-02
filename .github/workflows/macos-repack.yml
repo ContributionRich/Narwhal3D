@@ -38,7 +38,7 @@ jobs:
           python3 -u - <<'PY'
           import hashlib,os,pathlib,subprocess,sys
           root=pathlib.Path(os.environ['RUNNER_TEMP'])
-          matches=list((root/'mac-input').rglob('Narwhal_3D-0.4.8-macOS-arm64.dmg'))
+          matches=list((root/'mac-input').rglob('Narwhal_3D-0.4.9-macOS-arm64.dmg'))
           assert len(matches)==1
           for name in ('test_narwhal_document.py','test_render_quality_gui.py','test_gumball_extrude_scale_gui.py'):
               path='spike/'+name

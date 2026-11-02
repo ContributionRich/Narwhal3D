@@ -5,7 +5,7 @@ Run:
   tools/blender-5.2.2-linux-x64/5.2/python/bin/python3.13 spike/test_join.py
 
 Two halves, both tested here because a perfect chainer feeding a broken builder
-joins nothing (the T-71 lesson):
+joins nothing (the lesson):
 
 * `joinchain.chains` / `.joinable` -- pure. Order, reversal, closure, and the
   fact that a curve joining nothing comes back alone.

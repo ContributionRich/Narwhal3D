@@ -1,4 +1,4 @@
-"""T-160: the `Isolate` / `Unisolate` commands.
+"""the `Isolate` / `Unisolate` commands.
 
 =============================================================================
 What this pins
