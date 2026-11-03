@@ -1,7 +1,7 @@
 #!/bin/sh
 # Build Narwhal's source-only ONBREP 1 helper against one exact official
 # openNURBS source archive. This is an explicit developer command: the app never
-# downloads or compiles it at runtime, and release assembly does not include it.
+# downloads or compiles it at runtime; Linux release assembly takes this output explicitly.
 set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)

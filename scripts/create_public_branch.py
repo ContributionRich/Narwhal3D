@@ -59,7 +59,7 @@ PATCH_FILES = (
 )
 SCRIPT_FILES = (
     "scripts/assemble_windows_exe.py", "scripts/assemble_macos_release.py",
-    "scripts/accept_macos_release.py", "scripts/smoke_macos_launcher.py", "scripts/repack_macos_bytecode.py",
+    "scripts/accept_macos_release.py", "scripts/accept_linux_release_geometry.py", "scripts/smoke_macos_launcher.py", "scripts/repack_macos_bytecode.py",
     "scripts/build_linux_native.py", "scripts/build_macos_runtime.py", "scripts/build_macos_native.py",
     "scripts/test_release_packages.py", "scripts/test_release_automation.py",
     "scripts/test_macos_runtime.py", "scripts/test_present_backends.py",

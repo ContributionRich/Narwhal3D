@@ -73,10 +73,6 @@
   ],
   "excluded_components": [
     {
-      "id": "opennurbs-exact-save-helper",
-      "reason": "Redistribution clearance is unresolved; it must not be bundled."
-    },
-    {
       "id": "optional-converters",
       "reason": "Optional converter runtimes are not part of the initial public source release."
     }

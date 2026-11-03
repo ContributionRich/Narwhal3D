@@ -83,8 +83,13 @@ assert "narwhal-welcome.exe" in windows_launcher and "launch_program = welcome" 
 linux_source = (ROOT / "scripts/assemble_linux_release.py").read_text(encoding="utf-8")
 linux_verifier = (ROOT / "scripts/verify_linux_release.py").read_text(encoding="utf-8")
 windows_verifier = (ROOT / "scripts/verify_windows_release.py").read_text(encoding="utf-8")
-for exclusion in ("opennurbs-exact-save-helper", "optional-converters"):
-    assert exclusion in linux_source and exclusion in linux_verifier
+assert "optional-converters" in linux_source and "optional-converters" in linux_verifier
+assert linux.EXCLUDED_COMPONENTS == ["optional-converters"]
+assert "opennurbs-exact-save-helper" not in linux_verifier
+assert 'manifest.get("excluded_components") != ["optional-converters"]' in linux_verifier
+assert linux.EXACT_SAVE_HELPER == "brep_writer-linux-x86_64"
+assert "--exact-save-helper-dir" in linux_source and "def validate_exact_save_helper(" in linux_source
+assert "def verify_exact_save_helper(" in linux_verifier
 for exclusion in windows_assembler.EXCLUDED_COMPONENTS:
     assert exclusion in windows_verifier
 assert '"physical_gpu_real_window": False' in (ROOT / "scripts/assemble_windows_release.py").read_text(encoding="utf-8")

@@ -76,6 +76,10 @@ EXCLUDED_APP_FILES = {
     PurePosixPath("usr/lib/narwhal3d/narwhal3d/kernel/brep_writer.cpp"),
 }
 EXCLUDED_APP_TREE = PurePosixPath("usr/lib/narwhal3d/narwhal3d/kernel/bin")
+#: The only file allowed below kernel/bin: the exact-save helper, bound to its manifest record.
+EXACT_SAVE_HELPER = EXCLUDED_APP_TREE / "brep_writer-linux-x86_64"
+EXACT_SAVE_LICENSE = PurePosixPath("usr/lib/narwhal3d/licenses/openNURBS-LICENSE.txt")
+EXACT_SAVE_PROTOCOL = "brep_writer ONBREP 1"
 DISTRIBUTIONS = {
     "rhino3dm": "8.35.0",
     "cadquery-ocp-novtk": "8.0.1.0.0",
@@ -96,6 +100,7 @@ REQUIRED_NOTICE_PATHS = {
     "usr/lib/narwhal3d/licenses/LGPL-2.1-or-later.txt",
     "usr/lib/narwhal3d/licenses/OCCT-exception-1.0.txt",
     "usr/lib/narwhal3d/licenses/AppImage-MIT.txt",
+    "usr/lib/narwhal3d/licenses/openNURBS-LICENSE.txt",
     "usr/lib/narwhal3d/licenses/TraceDraw-MIT.txt",
     "usr/lib/narwhal3d/licenses/TraceDraw-Rust-Dependencies.txt",
     "usr/lib/narwhal3d/licenses/Native-Rust-Dependencies.txt",
@@ -113,6 +118,7 @@ REQUIRED_PATHS = {
     "usr/lib/narwhal3d/narwhal3d.sh",
     "usr/lib/narwhal3d/narwhal3d",
     "usr/lib/narwhal3d/launch/bootstrap.py",
+    "usr/lib/narwhal3d/narwhal3d/kernel/bin/brep_writer-linux-x86_64",
     "usr/lib/narwhal3d/launch/check_native.py",
     "usr/lib/narwhal3d/launch/open_arg.py",
     "usr/lib/narwhal3d/launch/narwhal3d.desktop.in",
@@ -192,7 +198,7 @@ def read_json(path: Path, description: str) -> JsonObject:
 def is_excluded_app_payload(path: PurePosixPath) -> bool:
     """Return whether an AppDir-relative path is forbidden private payload."""
     return path in EXCLUDED_APP_FILES or (
-        path != EXCLUDED_APP_TREE and path.is_relative_to(EXCLUDED_APP_TREE)
+        path not in {EXCLUDED_APP_TREE, EXACT_SAVE_HELPER} and path.is_relative_to(EXCLUDED_APP_TREE)
     )
 
 
@@ -323,7 +329,7 @@ def verify_identity(manifest: JsonObject, args: argparse.Namespace) -> JsonObjec
     build_timestamp = identity.get("runtime_build_timestamp_utc")
     if not isinstance(build_timestamp, str) or not build_timestamp.endswith("Z"):
         raise VerificationError("release identity has an invalid native runtime build timestamp")
-    if manifest.get("excluded_components") != ["opennurbs-exact-save-helper", "optional-converters"]:
+    if manifest.get("excluded_components") != ["optional-converters"]:
         raise VerificationError("release exclusion policy is absent or altered")
     return identity
 
@@ -795,6 +801,28 @@ def verify_appdir(appdir: Path, args: argparse.Namespace) -> None:
             raise VerificationError(f"inventory metadata/hash mismatch: {path}")
     verify_lock_and_markers(appdir, identity)
     verify_executables_and_imports(appdir)
+    verify_exact_save_helper(appdir, manifest.get("exact_save_helper"))
+
+
+def verify_exact_save_helper(appdir: Path, record: object) -> None:
+    """The packaged exact-save helper matches its record and speaks the ONBREP protocol."""
+    helper = appdir / EXACT_SAVE_HELPER
+    license_text = appdir / EXACT_SAVE_LICENSE
+    if (not isinstance(record, dict) or not helper.is_file() or helper.is_symlink()
+            or not os.access(helper, os.X_OK) or not license_text.is_file() or license_text.is_symlink()
+            or record.get("size") != helper.stat().st_size
+            or record.get("sha256") != sha256_file(helper)
+            or record.get("license_sha256") != sha256_file(license_text)):
+        raise VerificationError("invalid packaged exact-save helper record")
+    try:
+        answer = subprocess.run([str(helper), "--version"], text=True, capture_output=True,
+                                timeout=30, check=True).stdout.strip()
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise VerificationError(f"packaged exact-save helper does not run: {exc}") from exc
+    if answer != EXACT_SAVE_PROTOCOL and not answer.startswith(EXACT_SAVE_PROTOCOL + " "):
+        raise VerificationError(f"packaged exact-save helper protocol is wrong: {answer!r}")
+    if record.get("protocol") != answer:
+        raise VerificationError("packaged exact-save helper protocol differs from its record")
 
 
 def verify_appimage_checksum(appimage: Path) -> None:
@@ -929,6 +957,8 @@ def self_check() -> None:
         "libnarwhal_selection_core.so": 1,
     }:
         raise VerificationError("self-check found an incomplete accelerator ABI contract")
+    if is_excluded_app_payload(EXACT_SAVE_HELPER):
+        raise VerificationError("self-check rejected the packaged exact-save helper")
     for excluded in (*expected_excluded_files, EXCLUDED_APP_TREE / "helper"):
         if not is_excluded_app_payload(excluded):
             raise VerificationError(f"self-check accepted excluded application payload: {excluded}")
@@ -982,6 +1012,7 @@ def self_check() -> None:
         "usr/lib/narwhal3d/licenses/LGPL-2.1-or-later.txt",
         "usr/lib/narwhal3d/licenses/OCCT-exception-1.0.txt",
         "usr/lib/narwhal3d/licenses/AppImage-MIT.txt",
+        "usr/lib/narwhal3d/licenses/openNURBS-LICENSE.txt",
         "usr/lib/narwhal3d/licenses/TraceDraw-MIT.txt",
         "usr/lib/narwhal3d/licenses/TraceDraw-Rust-Dependencies.txt",
         "usr/lib/narwhal3d/licenses/Native-Rust-Dependencies.txt",

@@ -55,10 +55,15 @@ Where a published crate omits a license file, the collection identifies the upst
 repository revision supplying its license text. Font license texts are included too.
 Pillow used by icon-generation tests is a build-only tool, not added to the application.
 
-8. Components not included in the public bundle
+8. openNURBS (exact-Brep helper, Linux package)
+-----------------------------------------------
+Use: Narwhal's own ONBREP helper (`narwhal3d/kernel/bin/brep_writer-linux-x86_64`, source `native/brep_writer/main.cpp`, GPL-3.0-or-later) is statically linked with openNURBS to store exact multi-face solids in `.3dm` and in the live document. It runs as a separate process.
+Source: https://github.com/mcneel/opennurbs at revision `eb92af3ba1806b0a34a99aba0d3bda83e3d46083`, built by `scripts/build_brep_writer_source.sh` in the pinned manylinux container.
+License: the openNURBS license text, including its bundled zlib notice, is in `licenses/openNURBS-LICENSE.txt`. The official openNURBS documentation describes use as unrestricted while the repository `LICENSE` file says "All Rights Reserved"; the project owner decided on 2026-11-02 to redistribute the helper on the basis of the official documentation. Windows and macOS packages do not include the helper yet.
+
+9. Components not included in the public bundle
 ------------------------------------------------
 
-- Narwhal's independently authored exact-Brep helper source and pinned developer build recipe are published, but no linked helper binary or openNURBS source is bundled. The official openNURBS documentation says commercial use is encouraged and that there are no restrictions, while the repository `LICENSE` says “All Rights Reserved” without an explicit permission grant. Binary redistribution remains disabled until that conflict is explicitly cleared. Narwhal reports the resulting packaged `.3dm` limitation and directs users to STEP for exact solid interchange. Repository source: https://github.com/mcneel/opennurbs at revision `eb92af3ba1806b0a34a99aba0d3bda83e3d46083`.
 - CDR generations outside the embedded range can still use an optional local TraceDraw CLI fallback. Development runtime staging pins and verifies the same revision, but the executable is not bundled.
 - Inkscape, Poppler, Ghostscript, LibreOffice, and the TraceDraw CLI are not included. Features requiring them report the missing optional dependency; they do not claim those tools are bundled.
 

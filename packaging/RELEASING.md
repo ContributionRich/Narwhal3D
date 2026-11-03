@@ -151,11 +151,11 @@ Use targeted tests and mutation checks during implementation. Do not restart the
 entire product suite after each fix. Close all known failures, freeze the candidate,
 then run the complete `./run_tests.sh` gate. An interrupted run is not a pass and
 partial runs cannot be added together to claim one. Source-development exact-Brep
-suites need the explicitly configured local `NARWHAL3D_BREP_WRITER`; record its hash
-and never copy it into packages. The package gates must run without that override
-and verify exact masters/native document persistence and honest refusals. In
-particular, bounded multi-section Sweep1 presently requires that unredistributed
-writer and must not be advertised as active in the binary packages.
+suites need the explicitly configured local `NARWHAL3D_BREP_WRITER`; record its hash.
+The Linux package ships the helper from `scripts/build_brep_writer_source.sh` output via
+`--exact-save-helper-dir`, never from the source tree. Package gates must run without the
+override and against the packaged helper: a 0.4.9 AppImage without it stored large solids as
+triangulated stand-ins that broke document observation. Windows/macOS do not ship it yet.
 
 Do not wrap the entire suite in the heavy/GUI locks: several launchers acquire them
 internally and would wait on their own parent. Coordinate resources, and use the

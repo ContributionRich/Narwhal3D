@@ -94,7 +94,7 @@ def _unavailable_reason():
         "the B-rep writer is not built into this installation: "
         f"{override}; no compatible packaged helper was found at {SHIPPED!r}. "
         f"Set {ENV_VAR} to a compatible executable or install the packaged helper. "
-        "The helper and its build toolchain are not included in this release."
+        "This installation does not include the helper or its build toolchain."
     )
 
 
@@ -116,7 +116,7 @@ def available():
 def build():
     """Compatibility entry point; source building is unavailable in public releases."""
     message = (
-        "The B-rep writer build toolchain is not included in this release. "
+        "The B-rep writer build toolchain is not included in this installation. "
         f"Set {ENV_VAR} to a compatible executable or install the packaged helper at "
         f"{SHIPPED}."
     )

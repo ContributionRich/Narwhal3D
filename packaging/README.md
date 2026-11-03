@@ -71,7 +71,7 @@ The native Blender build does not download Python wheels. Before assembly, the t
 
 ## AppImage assembly
 
-`scripts/assemble_linux_release.py` accepts only a native runtime whose marker and binary match the current public patch inputs. Before copying anything, it requires a sanitized public `narwhal3d/` package. The reviewed built-in `cdr_reader.py` and `cdr_writer.py` are included; private `kernel/brep_writer.cpp` and every file or symlink below `kernel/bin/` are forbidden. Their presence is an error, never an ignore rule or silent omission. It stages:
+`scripts/assemble_linux_release.py` accepts only a native runtime whose marker and binary match the current public patch inputs. Before copying anything, it requires a sanitized public `narwhal3d/` package. The reviewed built-in `cdr_reader.py` and `cdr_writer.py` are included; private `kernel/brep_writer.cpp` and every file or symlink below `kernel/bin/` are forbidden in the source package. Their presence is an error, never an ignore rule or silent omission. The exact-save helper is staged into `kernel/bin/` only from the separate `--exact-save-helper-dir` input. It stages:
 
 - root `AppRun`, `narwhal3d.desktop`, `narwhal3d.png`, and `.DirIcon`;
 - the launcher, `narwhal3d/` package, launch assets, native runtime at `tools/blender-patched`, packaging provenance, and notices under `usr/lib/narwhal3d/`;

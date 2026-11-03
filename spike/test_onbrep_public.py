@@ -68,7 +68,7 @@ try:
         check(not onbrep.ensure(), "ensure fails closed instead of installing anything")
         reason = onbrep.last_error() or ""
         check("NARWHAL3D_BREP_WRITER" in reason and missing in reason
-              and "not included in this release" in reason,
+              and "This installation does not include the helper or its build toolchain." in reason,
               f"the unavailable reason gives both supported remedies ({reason!r})")
 
         print("\n-- protocol and candidate order --")
@@ -119,7 +119,8 @@ try:
               and "narwhal3d/kernel/bin" not in build_source,
               "developer build pins openNURBS and cannot populate packaged runtime paths")
         check("does **not** determine or resolve" in boundary_readme
-              and "does not add the binary to a release" in boundary_readme,
+              and "Release assembly takes that output as an" in boundary_readme
+              and "`--exact-save-helper-dir` input for the Linux package; nothing copies it into the" in boundary_readme,
               "source boundary refuses to claim linked-binary redistribution clearance")
         with open(os.path.join(ROOT, "README.md"), encoding="utf-8") as stream:
             root_readme = stream.read()
@@ -129,8 +130,11 @@ try:
             status_text = stream.read()
         check("Some solids cannot yet be exported as exact `.3dm` geometry" in root_readme
               and "docs/technical-reference.md#geometry-model" in root_readme
-              and "still do **not** bundle" in technical_reference
-              and "Published binaries do not bundle" in status_text,
+              and "The Linux release (0.4.10 onward) bundles the linked helper" in technical_reference
+              and "Windows and macOS packages do not bundle it yet" in technical_reference
+              and "The Linux package bundles the linked openNURBS helper" in status_text
+              and "`licenses/openNURBS-LICENSE.txt`" in status_text
+              and "Windows and macOS packages do not yet" in status_text,
               "README summarizes exact-save limits and links the preserved helper disclosure")
         self_check = subprocess.run(
             [BUILD_PATH, "--self-check"], capture_output=True, text=True, timeout=20)
@@ -155,7 +159,7 @@ try:
 
         onbrep.subprocess.run = subprocess_forbidden
         ok, message = onbrep.build()
-        check(not ok and "not included in this release" in message,
+        check(not ok and "The B-rep writer build toolchain is not included in this installation." in message,
               "build() is a fail-closed compatibility entry point")
 
         print("\n-- public source audit --")

@@ -490,9 +490,17 @@ class ApplicationPackaging(unittest.TestCase):
             native.mkdir()
             for name in linux.NATIVE_COMPONENTS:
                 (native / name).write_bytes(name.encode())
+            exact = root / "exact-save"
+            exact.mkdir()
+            (exact / linux.EXACT_SAVE_HELPER).write_bytes(b"helper")
+            (exact / linux.EXACT_SAVE_LICENSE).write_bytes(b"opennurbs license")
+            record = {"sha256": linux.sha256_file(exact / linux.EXACT_SAVE_HELPER)}
             namespace = dict(vars(linux), licenses=licenses, source_root=source,
-                             app_root=app, runtime_dir=runtime, native_components_dir=native)
+                             app_root=app, runtime_dir=runtime, native_components_dir=native,
+                             exact_save_dir=exact, exact_save_record=record)
             exec(code, namespace)
+            self.assertEqual((app / linux.EXACT_SAVE_RELATIVE).read_bytes(), b"helper")
+            self.assertEqual((app / "licenses" / linux.EXACT_SAVE_LICENSE).read_bytes(), b"opennurbs license")
             self.assertEqual((app / linux.NATIVE_COMPONENT_RELATIVE / SO).read_bytes(), SO.encode())
             self.assertEqual((app / "narwhal3d/native" / SO).read_bytes(), SO.encode())
             self.assertEqual((app / "licenses" / LICENSE).read_bytes(), b"maintained license")

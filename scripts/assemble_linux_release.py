@@ -44,6 +44,14 @@ NATIVE_COMPONENT_RELATIVE = Path("runtime/linux-x86_64/bin")
 OCCT_LIB_RELATIVE = Path("5.2/python/lib/python3.13/site-packages/cadquery_ocp_novtk.libs")
 CDR_MULTIVERSION_PROTOCOL = "narwhal-cdr-multiversion 1 tracedraw 821ba154 read 16-18 write 17"
 DOCUMENT_CORE_PROTOCOL = "narwhal-document-core 1"
+#: The exact-save helper ships from an explicit, separately built input -- never from the
+#: source package, whose kernel/bin tree must stay empty. Without it, OCCT solids fall back
+#: to triangulated document stand-ins that can exceed the document observer limits.
+EXACT_SAVE_HELPER = "brep_writer-linux-x86_64"
+EXACT_SAVE_PROTOCOL = "brep_writer ONBREP 1"
+EXACT_SAVE_LICENSE = "openNURBS-LICENSE.txt"
+EXACT_SAVE_RELATIVE = Path("narwhal3d/kernel/bin") / EXACT_SAVE_HELPER
+EXCLUDED_COMPONENTS = ["optional-converters"]
 NATIVE_COMPONENTS = (
     "libnarwhal_cdr_core.so", "libnarwhal_geometry_core.so",
     "libnarwhal_platform_core.so", "libnarwhal_pure_core.so",
@@ -567,6 +575,30 @@ def validate_native_components(
     return records
 
 
+def validate_exact_save_helper(directory: Path) -> JsonObject:
+    """Admit the separately built exact-save helper and its openNURBS license."""
+    if not directory.is_dir() or directory.is_symlink():
+        raise ReleaseError(f"exact-save helper directory is missing or symlinked: {directory}")
+    helper = directory / EXACT_SAVE_HELPER
+    license_text = directory / EXACT_SAVE_LICENSE
+    require_regular_file(helper, "exact-save helper")
+    require_regular_file(license_text, "exact-save helper openNURBS license")
+    if not os.access(helper, os.X_OK):
+        raise ReleaseError("exact-save helper is not executable")
+    try:
+        answer = subprocess.run([str(helper), "--version"], text=True, capture_output=True,
+                                timeout=30, check=True).stdout.strip()
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise ReleaseError(f"cannot execute exact-save helper: {exc}") from exc
+    if answer != EXACT_SAVE_PROTOCOL and not answer.startswith(EXACT_SAVE_PROTOCOL + " "):
+        raise ReleaseError(f"wrong exact-save helper protocol: {answer!r}")
+    required_glibc, _path = scan_runtime_glibc(directory)
+    if required_glibc > MAX_HOST_GLIBC:
+        raise ReleaseError(f"exact-save helper requires GLIBC_{format_glibc(required_glibc)}")
+    return {"size": helper.stat().st_size, "sha256": sha256_file(helper), "protocol": answer,
+            "license_sha256": sha256_file(license_text)}
+
+
 def copy_file(source: Path, target: Path, description: str) -> None:
     require_regular_file(source, description)
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -702,6 +734,7 @@ def assemble(args: argparse.Namespace) -> tuple[Path, Path, Path]:
     output_dir = args.output_dir.resolve()
     native_components_dir = args.native_components_dir.resolve()
     document_core_artifacts = args.document_core_artifacts.resolve()
+    exact_save_dir = args.exact_save_helper_dir.resolve()
     if not source_root.is_dir():
         raise ReleaseError(f"source root does not exist: {source_root}")
     lock_path = source_root / SOURCE_LOCK_RELATIVE
@@ -714,6 +747,7 @@ def assemble(args: argparse.Namespace) -> tuple[Path, Path, Path]:
     validate_appimage_runtime(appimage_runtime, artifacts)
     native_records = validate_native_components(
         native_components_dir, document_core_artifacts, runtime_dir / OCCT_LIB_RELATIVE)
+    exact_save_record = validate_exact_save_helper(exact_save_dir)
     if (source_root / 'narwhal3d/native_document_observer.py').is_file():
         from stage_document_observer import validate as validate_observer
         validate_observer(source_root, native_components_dir, 'linux-x86_64')
@@ -783,6 +817,8 @@ def assemble(args: argparse.Namespace) -> tuple[Path, Path, Path]:
         copy_file(source_root / "native/application_core/OPENNURBS_LICENSE",
                   app_root / "licenses/application_core-OPENNURBS.txt",
                   "application-core openNURBS ordinal mapping license")
+        copy_file(exact_save_dir / EXACT_SAVE_LICENSE, app_root / "licenses" / EXACT_SAVE_LICENSE,
+                  "exact-save helper openNURBS license")
         (app_root / "tools").mkdir(mode=0o755)
         shutil.copytree(runtime_dir, app_root / RUNTIME_RELATIVE, symlinks=True)
         native_target = app_root / NATIVE_COMPONENT_RELATIVE
@@ -800,6 +836,10 @@ def assemble(args: argparse.Namespace) -> tuple[Path, Path, Path]:
             native_records['document-observer'] = stage_observer(
                 source_root, native_components_dir, app_root, 'linux-x86_64')
 
+        copy_file(exact_save_dir / EXACT_SAVE_HELPER, app_root / EXACT_SAVE_RELATIVE,
+                  "exact-save helper")
+        if sha256_file(app_root / EXACT_SAVE_RELATIVE) != exact_save_record["sha256"]:
+            raise ReleaseError("packaged exact-save helper differs from its verified input")
         validate_appdir_paths(appdir)
         manifest = {
             "schema": 1,
@@ -827,7 +867,8 @@ def assemble(args: argparse.Namespace) -> tuple[Path, Path, Path]:
                 "lock_sha256": lock_sha,
             },
             "native_components": native_records,
-            "excluded_components": ["opennurbs-exact-save-helper", "optional-converters"],
+            "exact_save_helper": exact_save_record,
+            "excluded_components": EXCLUDED_COMPONENTS,
             "inventory": inventory(appdir),
         }
         manifest_path = appdir / MANIFEST_RELATIVE
@@ -1038,6 +1079,8 @@ def build_parser() -> argparse.ArgumentParser:
                         help="verified native component directory")
     parser.add_argument("--document-core-artifacts", type=Path,
                         help="source-bound Linux/Windows document-core artifact directory")
+    parser.add_argument("--exact-save-helper-dir", type=Path,
+                        help="directory from scripts/build_brep_writer_source.sh (helper + license)")
     parser.add_argument("--appimagetool", type=Path, help="locked appimagetool 1.9.1 executable")
     parser.add_argument("--appimage-runtime", type=Path, help="locked type2 runtime 20251108 file")
     parser.add_argument("--output-dir", type=Path, help="new release output directory")
@@ -1060,6 +1103,7 @@ def main(argv: list[str] | None = None) -> int:
                 ("--runtime-dir", args.runtime_dir),
                 ("--native-components-dir", args.native_components_dir),
                 ("--document-core-artifacts", args.document_core_artifacts),
+                ("--exact-save-helper-dir", args.exact_save_helper_dir),
                 ("--appimagetool", args.appimagetool),
                 ("--appimage-runtime", args.appimage_runtime),
                 ("--output-dir", args.output_dir),

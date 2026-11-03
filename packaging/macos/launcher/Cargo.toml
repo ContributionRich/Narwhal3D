@@ -1,6 +1,6 @@
 [package]
 name = "narwhal-macos-launcher"
-version = "0.4.9"
+version = "0.4.10"
 edition = "2021"
 license = "GPL-3.0-or-later"
 publish = false

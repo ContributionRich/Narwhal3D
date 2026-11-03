@@ -18,7 +18,9 @@ and satisfy the applicable openNURBS and GPL requirements separately.
 
 `scripts/build_brep_writer_source.sh` is the pinned Linux developer build recipe. It
 fetches exact official openNURBS commit `eb92af3ba1806b0a34a99aba0d3bda83e3d46083`
-and writes its local result under `artifacts/`; it does not add the binary to a release.
+and writes its local result under `artifacts/`. Release assembly takes that output as an
+explicit `--exact-save-helper-dir` input for the Linux package; nothing copies it into the
+source tree.
 
 ## Interface
 

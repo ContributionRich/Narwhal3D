@@ -433,8 +433,14 @@ class UiPackaging(unittest.TestCase):
 
             # This unit fixture covers the UI/core copy slots. The separate
             # observer packaging suite covers its source-qualified directory.
+            # The exact-save helper is copied in the same block from its own input.
+            exact = root / "exact-save"
+            put(exact / linux.EXACT_SAVE_HELPER, b"helper")
             exec(code, dict(vars(linux), app_root=app, native_components_dir=source,
-                            source_root=root / 'legacy-source', native_records={}))
+                            source_root=root / 'legacy-source', native_records={},
+                            exact_save_dir=exact,
+                            exact_save_record={"sha256": common.digest(exact / linux.EXACT_SAVE_HELPER)}))
+            self.assertEqual((app / linux.EXACT_SAVE_RELATIVE).read_bytes(), b"helper")
             for slot in (linux.NATIVE_COMPONENT_RELATIVE, Path("narwhal3d/native")):
                 self.assertEqual((app / slot / SO).read_bytes(), SO.encode())
 
