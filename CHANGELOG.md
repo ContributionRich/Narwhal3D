@@ -6,7 +6,7 @@ All notable public changes will be recorded here. Narwhal 3D is an extremely ear
 
 ## 0.4.9 — 2026-11-02
 
-Changes since the published 0.4.8 release. The Linux AppImage, Windows portable EXE and Apple Silicon DMG are built from this source. The Windows release publishes only the EXE; earlier ZIP installations need a one-time manual download of the EXE. The Mac build is ad-hoc-signed and not notarized, and Corel multiversion conversion is unavailable on Mac.
+Changes since the published 0.4.8 release. The Linux AppImage is published for 0.4.9. Windows and Apple Silicon Mac packages for this source are not published yet: the document-observer runtime qualification exists for Linux only, and the release packaging refuses to assemble Windows or Mac without it. The 0.4.8 Windows and Mac packages stay on their release page and are unchanged.
 
 ### Command behaviour
 

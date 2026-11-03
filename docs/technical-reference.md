@@ -4,7 +4,7 @@
 
 Build commands below run from the repository root. For a quick introduction and current workspace screenshots, see the main README.
 
-For the 0.4.9 Linux/Windows/Mac pipeline, use
+For the Linux, Windows and Mac release pipeline, use
 [the current release procedure](../packaging/RELEASING.md). The detailed 0.4.7 asset
 hashes, commands and acceptance results below are historical baselines, not proof
 that a newly assembled package passed those gates.

@@ -71,6 +71,10 @@ check("assembler has the exact Linux native component set",
       assemble.NATIVE_COMPONENTS == expected_components, assemble.NATIVE_COMPONENTS)
 check("verifier has the exact Linux native component set",
       verify.NATIVE_COMPONENTS == expected_components, verify.NATIVE_COMPONENTS)
+check("assembler and verifier carry the launcher's native startup check",
+      "check_native.py" in assemble.LAUNCH_FILES
+      and "usr/lib/narwhal3d/launch/check_native.py" in verify.REQUIRED_PATHS,
+      "launch/check_native.py is packaged and verified because narwhal3d.sh requires it")
 check("assembler packages the exact adjacent accelerator set",
       assemble.PACKAGED_ACCELERATORS == expected_accelerators, assemble.PACKAGED_ACCELERATORS)
 check("verifier requires the exact adjacent accelerator set",

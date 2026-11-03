@@ -73,6 +73,7 @@ NATIVE_LIBRARY_ABIS = {
 }
 LAUNCH_FILES = (
     "bootstrap.py",
+    "check_native.py",
     "open_arg.py",
     "narwhal3d.desktop.in",
     "narwhal3d-3dm.xml",

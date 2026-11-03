@@ -252,10 +252,11 @@ check("GPL-3.0-or-later" in readme, "README identifies the project GPL license")
 check(re.search(r"early\s+(?:preview|prerelease|pre-release)", readme, re.I),
       "README warns that the application is an early preview")
 check(re.search(r"View\W+Theme\b", readme), "README explains the View → Theme switch")
-for asset in ("Narwhal_3D-0.4.9-x86_64.AppImage", "Narwhal_3D-0.4.9-Windows-x86_64.exe",
-              "Narwhal_3D-0.4.9-macOS-arm64.dmg"):
+for asset in ("Narwhal_3D-0.4.9-x86_64.AppImage",):
     check(f"https://github.com/ContributionRich/Narwhal3D/releases/download/v0.4.9/{asset}"
           in readme_links, f"README offers a direct Markdown download for {asset}")
+check("https://github.com/ContributionRich/Narwhal3D/releases/tag/v0.4.8" in readme_links,
+      "README points Windows and macOS downloads at the published 0.4.8 release")
 check(not any("/releases/download/" in link and "/v0.4.9/" not in link
               for link in readme_links), "README has no stale release download targets")
 check("docs/readme-command-loft.gif" not in readme_images,

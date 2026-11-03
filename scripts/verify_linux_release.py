@@ -113,6 +113,7 @@ REQUIRED_PATHS = {
     "usr/lib/narwhal3d/narwhal3d.sh",
     "usr/lib/narwhal3d/narwhal3d",
     "usr/lib/narwhal3d/launch/bootstrap.py",
+    "usr/lib/narwhal3d/launch/check_native.py",
     "usr/lib/narwhal3d/launch/open_arg.py",
     "usr/lib/narwhal3d/launch/narwhal3d.desktop.in",
     "usr/lib/narwhal3d/launch/narwhal3d-3dm.xml",

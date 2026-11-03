@@ -78,7 +78,7 @@ check("launcher exports host-native runtime component paths",
           "NARWHAL_CDR_CORE", "NARWHAL_DOCUMENT_CORE")))
 check("guide distinguishes the published ARM64 package from the legacy helper",
       all(value in guide for value in (
-          "Apple Silicon DMG", "Narwhal_3D-0.4.9-macOS-arm64.dmg",
+          "Apple Silicon DMG", "Narwhal_3D-0.4.8-macOS-arm64.dmg",
           "not a supported release recipe", "unsigned", "unnotarized",
           "does not create a universal application")))
 check("guide records measured wheel and OS constraints",

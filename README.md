@@ -8,9 +8,9 @@
 
 Draw with the mouse, type a command, or choose a tool from the sidebar. Work in four views at once, shape your model with on-screen handles, and choose a light or dark workspace.
 
-**[Download for Linux](https://github.com/ContributionRich/Narwhal3D/releases/download/v0.4.9/Narwhal_3D-0.4.9-x86_64.AppImage)** · **[Download for Windows](https://github.com/ContributionRich/Narwhal3D/releases/download/v0.4.9/Narwhal_3D-0.4.9-Windows-x86_64.exe)** · **[Download for macOS Apple Silicon](https://github.com/ContributionRich/Narwhal3D/releases/download/v0.4.9/Narwhal_3D-0.4.9-macOS-arm64.dmg)** · [What's new](CHANGELOG.md)
+**[Download for Linux](https://github.com/ContributionRich/Narwhal3D/releases/download/v0.4.9/Narwhal_3D-0.4.9-x86_64.AppImage)** · **[Windows and macOS builds: 0.4.8 release](https://github.com/ContributionRich/Narwhal3D/releases/tag/v0.4.8)** · [What's new](CHANGELOG.md)
 
-> **Check the release page for available builds.** The 0.4.9 release fixes command behaviour and live previews across many commands, including Pyramid, Torus, Tube, Pipe, Extend, Fillet and Chamfer. The 0.4.8 source included the revised welcome/inspector UI, automatic AI selection context, remembered provider permissions, explicitly approved box creation, newer read-only MCP support and source-only bounded multi-section Sweep1 work. The first Apple Silicon Mac preview is now available, with the platform limitations below. See [current source status](STATUS.md).
+> **Check the release page for available builds.** The 0.4.9 Linux build fixes command behaviour and live previews across many commands, including Pyramid, Torus, Tube, Pipe, Extend, Fillet and Chamfer. Windows and Mac packages for 0.4.9 are not published yet, because their document-observer qualification is incomplete; the 0.4.8 Windows and Mac packages remain on the 0.4.8 release page. The 0.4.8 source included the revised welcome/inspector UI, automatic AI selection context, remembered provider permissions, explicitly approved box creation, newer read-only MCP support and source-only bounded multi-section Sweep1 work. The first Apple Silicon Mac preview is now available, with the platform limitations below. See [current source status](STATUS.md).
 
 > **An early preview, built in the open.** Narwhal is still growing, and some tools are incomplete. Save important work often and verify dimensions and exported geometry before manufacturing. [See what works and what's still missing →](docs/gaps.md)
 
@@ -60,15 +60,15 @@ The application is bundled—no separate Blender installation is needed. The dow
 
 ### Windows
 
-For 0.4.9, the **portable EXE** manages its payload in a private per-user cache; no manual extraction is required. Its first launch prepares that cache. Keep user documents outside the replaceable application cache.
+The 0.4.8 **portable EXE** (on the 0.4.8 release page) manages its payload in a private per-user cache; no manual extraction is required. Its first launch prepares that cache. Keep user documents outside the replaceable application cache.
 
-The existing 0.4.8 **portable ZIP** remains on the 0.4.8 release page unchanged for compatibility; the 0.4.9 Windows release publishes only the EXE and checksum. Older ZIP installations need a one-time manual download of the EXE.
+A 0.4.9 Windows build is not published yet. The 0.4.8 portable ZIP stays on the 0.4.8 release page unchanged for compatibility; future Windows releases will publish only the EXE and its checksum.
 
 This is an **unsigned early preview**, so Windows may display a SmartScreen warning. There is no installer yet, and testing on physical Windows GPUs remains limited. [Windows details](docs/windows-build.md)
 
 ### macOS
 
-Download the **Apple Silicon DMG**, open it and drag **Narwhal 3D.app** to Applications. No separate Blender or Python installation is needed. The build targets **macOS14+** and was tested on macOS15; Intel Macs are not supported by this package.
+Download the **Apple Silicon DMG** from the 0.4.8 release page (a 0.4.9 Mac package is not published yet), open it and drag **Narwhal 3D.app** to Applications. No separate Blender or Python installation is needed. The build targets **macOS14+** and was tested on macOS15; Intel Macs are not supported by this package.
 
 This preview is ad-hoc-signed, **not Developer ID-signed or notarized**. Gatekeeper requires explicit approval: follow Apple’s Privacy & Security instructions for opening an app you trust, rather than disabling Gatekeeper globally. Corel multiversion conversion remains unavailable on Mac. [Mac installation/build details](docs/macos-build.md).
 
