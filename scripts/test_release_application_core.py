@@ -40,6 +40,12 @@ LICENSE = "application_core-OPENNURBS.txt"
 
 EXPORTS = ("narwhal_history_abi", "narwhal_history_json",
            "narwhal_session_abi", "narwhal_session_json")
+REGISTRY_EXPORTS = ("narwhal_object_observation_abi", "narwhal_object_registry_abi",
+                    "narwhal_object_registry_json", "narwhal_object_registry_observe")
+# The measured Windows DLL export list (dumpbin), sorted as inspect_pe_dll returns it.
+WINDOWS_EXPORTS = ("narwhal_history_abi", "narwhal_history_json", "narwhal_object_observation_abi",
+                   "narwhal_object_registry_abi", "narwhal_object_registry_json",
+                   "narwhal_object_registry_observe", "narwhal_session_abi", "narwhal_session_json")
 
 
 def fake_library(abi=1, history_abi=1, missing=()):
@@ -64,7 +70,7 @@ def execute_probe(command, **kwargs):
     return types.SimpleNamespace(stdout=output.getvalue())
 
 
-def pe_fixture(abi=1, history_abi=1, missing=()):
+def pe_fixture(abi=1, history_abi=1, missing=(), registry_abi=1, observation_abi=1):
     """Small mapped x86-64 DLL with real export RVAs, ordinals and imports."""
     data = bytearray(0x1200)
     data[:2] = b"MZ"
@@ -77,16 +83,18 @@ def pe_fixture(abi=1, history_abi=1, missing=()):
     struct.pack_into("<IIII", data, 0x188 + 8, 0x1000, 0x1000, 0x1000, 0x200)
     def at(rva):
         return rva - 0x1000 + 0x200
-    symbols = [name for name in EXPORTS if name not in missing]
-    struct.pack_into("<IIIII", data, at(0x1000) + 20, len(symbols), len(symbols), 0x1050, 0x1040, 0x1060)
+    results = {"narwhal_history_abi": history_abi, "narwhal_object_registry_abi": registry_abi,
+               "narwhal_object_observation_abi": observation_abi}
+    symbols = [name for name in WINDOWS_EXPORTS if name not in missing]
+    struct.pack_into("<IIIII", data, at(0x1000) + 20, len(symbols), len(symbols), 0x1060, 0x1040, 0x1080)
     for index, symbol in enumerate(symbols):
-        name_rva, function_rva = 0x1080 + 0x20 * index, 0x1200 + 0x20 * index
+        name_rva, function_rva = 0x1200 + 0x20 * index, 0x1400 + 0x20 * index
         struct.pack_into("<I", data, at(0x1040) + 4 * index, name_rva)
-        struct.pack_into("<I", data, at(0x1050) + 4 * index, function_rva)
-        struct.pack_into("<H", data, at(0x1060) + 2 * index, index)
+        struct.pack_into("<I", data, at(0x1060) + 4 * index, function_rva)
+        struct.pack_into("<H", data, at(0x1080) + 2 * index, index)
         value = symbol.encode() + b"\0"
         data[at(name_rva):at(name_rva) + len(value)] = value
-        result = history_abi if symbol == "narwhal_history_abi" else abi
+        result = results.get(symbol, abi)
         data[at(function_rva):at(function_rva) + 6] = b"\xb8" + struct.pack("<I", result) + b"\xc3"
     for rva, value in ((0x1180, b"KERNEL32.dll\0"), (0x11a2, b"Sleep\0")):
         data[at(rva):at(rva) + len(value)] = value
@@ -348,11 +356,14 @@ class ApplicationPackaging(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             dll = Path(directory) / DLL
             dll.write_bytes(pe_fixture())
+            self.assertEqual(WINDOWS_EXPORTS, tuple(sorted(EXPORTS + REGISTRY_EXPORTS)))
             self.assertEqual(windows.verify_application_core_identity(dll)["exports"],
-                             EXPORTS)
+                             WINDOWS_EXPORTS)
             for data in (pe_fixture(2), pe_fixture(history_abi=2),
+                         pe_fixture(registry_abi=2), pe_fixture(observation_abi=2),
                          pe_fixture(missing=("narwhal_history_abi", "narwhal_history_json")),
-                         *(pe_fixture(missing=(symbol,)) for symbol in EXPORTS),
+                         pe_fixture(missing=REGISTRY_EXPORTS),
+                         *(pe_fixture(missing=(symbol,)) for symbol in WINDOWS_EXPORTS),
                          pe_fixture().replace(b"\xb8\x01\0\0\0\xc3", b"\x90" * 6)):
                 dll.write_bytes(data)
                 with self.assertRaises(windows.VerificationError):
@@ -415,7 +426,7 @@ class ApplicationPackaging(unittest.TestCase):
             with patch.object(windows, "NATIVE_COMPONENT_PATHS", {DLL: windows.NATIVE_COMPONENT_PATHS[DLL]}):
                 record = windows_assemble.native_records(root, ROOT)[DLL]
             self.assertEqual(record, {"size": runtime.stat().st_size, "sha256": windows.sha256(runtime),
-                                      "abi": 1, "history_abi": 1, "exports": list(EXPORTS),
+                                      "abi": 1, "history_abi": 1, "exports": list(WINDOWS_EXPORTS),
                                       "machine": "pe32plus-x86-64"})
             # Execute the actual verifier's application-core manifest branch only.
             tree = ast.parse(textwrap.dedent(inspect.getsource(windows.verify_directory)))
@@ -423,7 +434,7 @@ class ApplicationPackaging(unittest.TestCase):
                           and ast.unparse(node.test) == "filename == 'narwhal_application_core.dll'")
             code = compile(ast.Module(body=branch.body, type_ignores=[]), "windows-app-manifest", "exec")
             exec(code, dict(vars(windows), path=runtime, record=record))
-            for key, value in (("abi", 2), ("history_abi", 2), ("exports", list(EXPORTS)[1:])):
+            for key, value in (("abi", 2), ("history_abi", 2), ("exports", list(WINDOWS_EXPORTS)[1:])):
                 for omit in (True, False):
                     damaged = dict(record)
                     if omit:
@@ -651,7 +662,13 @@ def mutation_checks():
         ("Windows history constant proof omitted", mutated_function(windows, "verify_application_core_identity",
             '"narwhal_history_abi": APPLICATION_CORE_HISTORY_ABI,', ''), "test_windows_pe_wrong_abi_and_missing_export"),
         ("Windows missing history JSON export accepted", mutated_function(windows, "verify_application_core_identity",
-            'if identity["exports"] != APPLICATION_CORE_EXPORTS:', 'if False:'), "test_windows_pe_wrong_abi_and_missing_export"),
+            'if identity["exports"] != expected:', 'if False:'), "test_windows_pe_wrong_abi_and_missing_export"),
+        ("Windows session/history-only exports accepted", mutated_function(windows, "verify_application_core_identity",
+            'if identity["exports"] != expected:', 'if identity["exports"] != APPLICATION_CORE_EXPORTS:'), "test_windows_pe_wrong_abi_and_missing_export"),
+        ("Windows registry ABI unchecked", mutated_function(windows, "verify_application_core_identity",
+            '"narwhal_object_registry_abi": APPLICATION_CORE_REGISTRY_ABI,', ''), "test_windows_pe_wrong_abi_and_missing_export"),
+        ("Windows observation ABI unchecked", mutated_function(windows, "verify_application_core_identity",
+            '"narwhal_object_observation_abi": APPLICATION_CORE_OBSERVATION_ABI,', ''), "test_windows_pe_wrong_abi_and_missing_export"),
         ("Windows history manifest ABI unchecked", mutated_function(windows, "verify_directory",
             'or record.get("history_abi") != APPLICATION_CORE_HISTORY_ABI', ''), "test_windows_native_receipt_requires_both_services"),
         ("Windows history manifest receipt omitted", mutated_function(windows_assemble, "native_records",

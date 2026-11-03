@@ -30,6 +30,12 @@ APPLICATION_CORE_EXPORTS = (
     "narwhal_history_abi", "narwhal_history_json",
     "narwhal_session_abi", "narwhal_session_json",
 )
+APPLICATION_CORE_REGISTRY_ABI = 1
+APPLICATION_CORE_OBSERVATION_ABI = 1
+APPLICATION_CORE_REGISTRY_EXPORTS = (
+    "narwhal_object_observation_abi", "narwhal_object_registry_abi",
+    "narwhal_object_registry_json", "narwhal_object_registry_observe",
+)
 APPLICATION_CORE_ADJACENT = "app/narwhal3d/native/narwhal_application_core.dll"
 APPLICATION_CORE_LICENSE = "licenses/application_core-OPENNURBS.txt"
 APPLICATION_CORE_SOURCE = "app/runtime/windows-x86_64/bin/application-core-source.json"
@@ -438,9 +444,18 @@ def verify_application_core_identity(path: Path) -> dict[str, object]:
     identity = inspect_pe_dll(path, constant_exports={
         "narwhal_session_abi": APPLICATION_CORE_ABI,
         "narwhal_history_abi": APPLICATION_CORE_HISTORY_ABI,
+        "narwhal_object_registry_abi": APPLICATION_CORE_REGISTRY_ABI,
+        "narwhal_object_observation_abi": APPLICATION_CORE_OBSERVATION_ABI,
     })
-    if identity["exports"] != APPLICATION_CORE_EXPORTS:
-        raise VerificationError("Windows application core lacks the exact session/history ABI exports")
+    expected = tuple(sorted(APPLICATION_CORE_EXPORTS + APPLICATION_CORE_REGISTRY_EXPORTS))
+    if identity["exports"] != expected:
+        found = set(identity["exports"])
+        missing = sorted(set(expected) - found)
+        unexpected = sorted(found - set(expected))
+        detail = (f"missing {missing}, unexpected {unexpected}" if missing or unexpected
+                  else "duplicate export names")
+        raise VerificationError(
+            f"Windows application core lacks the exact session/history/registry ABI exports ({detail})")
     return identity
 
 
