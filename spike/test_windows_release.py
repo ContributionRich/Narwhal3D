@@ -2,6 +2,7 @@
 """Pure Windows launcher and portable-release verifier regression checks."""
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import inspect
 import json
@@ -241,6 +242,183 @@ check("b8f597c677811d1f9f4d8a97f5ae2825c0353a42" in build_script
       and "narwhal_geometry_core.dll" in build_script
       and '"geometry_move": "airtight"' in build_script,
       "Windows build compiles, packages and executes exact Rust geometry against pinned OCCT")
+
+OBSERVER_PHASE_MARKER = "# Document observer: qualified here"
+OBSERVER_SAVE_OPEN = '$PackagedDocumentTest = Join-Path'
+OBSERVER_REMOVE = "Remove-Item -LiteralPath $PackagedObserverDirectory -Recurse -Force\n"
+OBSERVER_SDIST_SHA256 = "8315ec0c177ad4c69e8cc4e6d331c584110e8e8cc9bad294f121f18b4b7ec81a"
+
+
+def observer_phase_ok(script: str) -> bool:
+    """Structural contract for the document-observer phase; every observer_mutants() case must fail it."""
+    if script.count(OBSERVER_PHASE_MARKER) != 1 or script.count(OBSERVER_SAVE_OPEN) != 1:
+        return False
+    start = script.index(OBSERVER_PHASE_MARKER)
+    save_open = script.index(OBSERVER_SAVE_OPEN)
+    phase = script[start:save_open]
+    required = (
+        '[string]$ObserverSdist = ""',
+        f'$ObserverSdistSha256 = "{OBSERVER_SDIST_SHA256}"',
+        'Join-Path $Workspace "inputs\\rhino3dm-8.35.0.tar.gz"',
+        "$ObserverSdistActual -ne $ObserverSdistSha256",
+        '"-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreadedDLL"',
+        '"-DCMAKE_POLICY_VERSION_MINIMUM=3.5"',
+        '"--target", "opennurbsStatic", "zlib"',
+        'Join-Path $BlenderSource "lib\\windows_x64\\python\\313\\include"',
+        'Join-Path $BlenderSource "lib\\windows_x64\\python\\313\\libs\\python313.lib"',
+        '"--example", "observation_check"',
+        '$ObserverDecoder = Join-Path $ObserverDecoderTarget "debug\\examples\\observation_check.exe"',
+        'Join-Path $NarwhalSource "native\\document_observer\\qualify.py"',
+        '"--mutations"',
+        '"--core", $ApplicationCoreTarget',
+        '"--vcvars", $Vcvars64',
+        '"--rust-check", $ObserverDecoder',
+        '"--sdist", $ObserverSdist',
+        '"--opennurbs-lib-dir", $ObserverLibraries',
+        '"--python-lib", $ObserverPythonLib',
+        "'^OBSERVER_RECEIPT (.+)$'",
+        '$Restored.label -ne "restored" -or $Restored.status -ne "GREEN"',
+        'stage(source, native, app, "windows-x86_64", observer_directory=observer, core_path=core)',
+        '$ReturnInputs += $ObserverReturnDirectory',
+        '"Narwhal_3D-$Version-Windows-x86_64-document-observer"',
+    )
+    try:
+        ordering = (
+            script.index('"install locked geometry wheels"') < start,
+            script.index("$ApplicationCoreTarget = Join-Path") < start,
+            start < script.index('"qualify document observer against the exact packaged application core"') < save_open,
+            start < script.index('"stage qualified document observer into the packaged application"') < save_open,
+            start < script.index("$ObserverReturnDirectory = Join-Path") < save_open,
+            save_open < script.index('"run packaged native-document Save/Open round trip"'),
+            script.index('"run packaged native-document Save/Open round trip"')
+            < script.rindex(OBSERVER_REMOVE) < script.index('"create engineering package archive"'),
+        )
+    except ValueError:
+        return False
+    return (all(token in script for token in required) and all(ordering)
+            and "$LibraryDirectory" not in phase and "$DependencyPython" not in phase)
+
+
+def observer_mutants(script: str):
+    def once(old, new):
+        count = script.count(old)
+        if count != 1:
+            raise AssertionError(f"mutation anchor must be unique, found {count}: {old[:60]!r}")
+        return script.replace(old, new, 1)
+
+    start = script.index(OBSERVER_PHASE_MARKER)
+    phase = script[start:script.index(OBSERVER_SAVE_OPEN)]
+    yield ("phase moved after the packaged Save/Open round trip",
+           script.replace(phase, "", 1).replace("$Launcher = Join-Path", phase + "$Launcher = Join-Path", 1))
+    yield ("sdist hash pin altered", once(f'"{OBSERVER_SDIST_SHA256}"', '"' + "0" * 64 + '"'))
+    yield ("sdist SHA-256 check bypassed", once("if ($ObserverSdistActual -ne $ObserverSdistSha256) {", "if ($false) {"))
+    yield ("MultiThreaded instead of MultiThreadedDLL",
+           once('"-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreadedDLL"', '"-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded"'))
+    yield ("decoder built without the observation_check example",
+           once('"--example", "observation_check"', '"--bin", "observation_check"'))
+    yield ("qualification run without --mutations",
+           once('"--output-root", $ObserverQualification, "--mutations")', '"--output-root", $ObserverQualification)'))
+    yield ("qualification without the exact packaged core", once('"--core", $ApplicationCoreTarget, ', ""))
+    yield ("qualification receipt not required to end GREEN restored",
+           once('if ($Restored.label -ne "restored" -or $Restored.status -ne "GREEN") {', "if ($false) {"))
+    yield ("observer staged for the wrong platform",
+           once('"windows-x86_64", observer_directory=observer', '"linux-x86_64", observer_directory=observer'))
+    yield ("observer folder not returned in the artifact ZIP", once("$ReturnInputs += $ObserverReturnDirectory\n", ""))
+    index = script.rindex(OBSERVER_REMOVE)
+    yield ("post-Save/Open observer cleanup removed",
+           script[:index] + script[index + len(OBSERVER_REMOVE):])
+    yield ("phase reads a variable defined only on the clean-build path",
+           once(OBSERVER_PHASE_MARKER, OBSERVER_PHASE_MARKER + "\n$null = $LibraryDirectory"))
+
+
+check(observer_phase_ok(build_script),
+      "Windows build qualifies and stages the document observer before the packaged Save/Open round trip")
+for label, mutant in observer_mutants(build_script):
+    check(not observer_phase_ok(mutant), f"MUTATION RED: {label}")
+
+qualify_help = subprocess.run([sys.executable, "-B", str(ROOT / "native/document_observer/qualify.py"), "--help"],
+                              capture_output=True, text=True, timeout=60, check=True).stdout
+qualify_flags = set(re.findall(r"--[a-z][a-z-]*", qualify_help))
+qualify_call = build_script[build_script.index("$QualifyArguments = @("):build_script.index("$QualifyLines = ")]
+used_flags = set(re.findall(r'"(--[a-z][a-z-]*)"', qualify_call))
+check(used_flags and used_flags <= qualify_flags,
+      "Windows qualification passes only flags that native/document_observer/qualify.py accepts")
+check((ROOT / "native/application_core/examples/observation_check.rs").is_file()
+      and "observation_check.exe" in build_script,
+      "Windows observer decoder is built from the real application-core example")
+
+stage_spec = importlib.util.spec_from_file_location("observer_stage_contract",
+                                                    ROOT / "scripts/stage_document_observer.py")
+assert stage_spec is not None and stage_spec.loader is not None
+stage_contract = importlib.util.module_from_spec(stage_spec)
+stage_spec.loader.exec_module(stage_contract)
+driver_match = re.search(r'\$ObserverStageDriver = Join-Path \$Workspace "stage_document_observer_package\.py"\n@\'\n'
+                         r"(.*?)\n'@ \| Set-Content", build_script, re.S)
+check(driver_match is not None, "observer staging driver is embedded in the Windows build")
+if driver_match is not None:
+    driver_text = driver_match.group(1)
+    with tempfile.TemporaryDirectory(prefix="narwhal_observer_driver_") as temporary:
+        root = Path(temporary)
+        source = root / "source"
+        for relative, data in {
+            "native/document_observer/observer.cpp": b"observer\n",
+            "narwhal3d/native_object_registry.py": b"registry\n",
+            "narwhal3d/native_document_observer.py": b"loader\n",
+        }.items():
+            (source / relative).parent.mkdir(parents=True, exist_ok=True)
+            (source / relative).write_bytes(data)
+        (source / "scripts").mkdir()
+        shutil.copy(ROOT / "scripts/stage_document_observer.py", source / "scripts/stage_document_observer.py")
+        native = root / "runtime-bin"
+        native.mkdir()
+        core = native / "narwhal_application_core.dll"
+        core.write_bytes(b"core")
+        observer = root / "stage-input"
+        observer.mkdir()
+        library = b"observer-pyd"
+        (observer / "_narwhal_document_observer.pyd").write_bytes(library)
+
+        def digest(data):
+            return hashlib.sha256(data).hexdigest()
+
+        receipt = {
+            "upstream_sdist_sha256": stage_contract._SDIST, "scope": "fixture", "pid": 1,
+            "source_sha256": digest(b"observer\n"),
+            "host": {"version": "8.35.0", "sha256": stage_contract._HOSTS["windows-x86_64"],
+                     "cache_tag": "cpython-313", "soabi": "cp313-win_amd64", "extension": "fixture"},
+            "entries": [{"label": "control", "status": "GREEN", "sha256": digest(library), "library": "x"},
+                        {"label": "restored", "status": "GREEN", "sha256": digest(library), "library": "x"}],
+            "integration": {"loader": {"status": "GREEN"}, "registry": {"status": "GREEN"},
+                            "core_sha256": digest(b"core"), "adapter_sha256": digest(b"registry\n"),
+                            "loader_sha256": digest(b"loader\n")},
+        }
+        (observer / "build.json").write_text(json.dumps(receipt), encoding="utf-8")
+        driver = root / "driver.py"
+        driver.write_text(driver_text, encoding="utf-8")
+
+        def stage_with(driver_path, app):
+            # Same argument order as the PowerShell call: source, native, app, observer, core.
+            return subprocess.run([sys.executable, "-B", str(driver_path), str(source), str(native),
+                                   str(app), str(observer), str(core)],
+                                  capture_output=True, text=True, timeout=60)
+
+        app = root / "app"
+        result = stage_with(driver, app)
+        staged = app / "narwhal3d/native/document-observer"
+        staged_build = json.loads((staged / "build.json").read_text(encoding="utf-8")) if result.returncode == 0 else {}
+        check(result.returncode == 0 and (staged / "_narwhal_document_observer.pyd").read_bytes() == library
+              and "pid" not in staged_build and "scope" not in staged_build
+              and staged_build.get("host", {}).get("sha256") == stage_contract._HOSTS["windows-x86_64"],
+              "embedded observer driver stages the pair into the packaged app with the PowerShell argument order")
+        wrong = driver_text.replace('"windows-x86_64", observer_directory=observer',
+                                    '"linux-x86_64", observer_directory=observer', 1)
+        check(wrong != driver_text, "MUTATION anchor present: observer driver platform")
+        wrong_driver = root / "wrong_driver.py"
+        wrong_driver.write_text(wrong, encoding="utf-8")
+        wrong_app = root / "wrong-app"
+        wrong_result = stage_with(wrong_driver, wrong_app)
+        check(wrong_result.returncode != 0 and not (wrong_app / "narwhal3d/native/document-observer").exists(),
+              "MUTATION RED: observer driver staged for the wrong platform is refused")
 
 powershell_build = (ROOT / "scripts/build_brep_writer_windows.ps1").read_text(encoding="utf-8")
 check(re.search(r'ArchiveSha256 = "1a8bb8dbe363f4969f679f11810251433416b62e595a6f02c447381a9f2128fa"', powershell_build)

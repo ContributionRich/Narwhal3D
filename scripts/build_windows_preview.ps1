@@ -25,7 +25,8 @@ param(
     [ValidatePattern('^[0-9]+\.[0-9]+(\.[0-9]+)?$')]
     [string]$MsvcToolsetVersion = "14.44",
     [ValidatePattern('^$|^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$')]
-    [string]$WindowsSdkVersion = ""
+    [string]$WindowsSdkVersion = "",
+    [string]$ObserverSdist = ""
 )
 
 Set-StrictMode -Version 2.0
@@ -942,6 +943,136 @@ $GeometryCoreTarget = Join-Path $AdjacentNativeDirectory "narwhal_geometry_core.
 if (-not (Test-Path -LiteralPath $GeometryCoreSource -PathType Leaf)) { throw "Windows geometry core build produced no DLL" }
 Copy-Item -LiteralPath $GeometryCoreSource -Destination $GeometryCoreTarget
 
+# Document observer: qualified here against the exact application core built above, because
+# Windows cargo output is not byte-reproducible. The package copy exists only for the packaged
+# Save/Open round trip and is removed afterwards so assemble_windows_release.py can stage the
+# returned pair itself (stage() refuses an existing destination).
+if (-not $ObserverSdist) { $ObserverSdist = Join-Path $Workspace "inputs\rhino3dm-8.35.0.tar.gz" }
+$ObserverSdist = [IO.Path]::GetFullPath($ObserverSdist)
+if (-not (Test-Path -LiteralPath $ObserverSdist -PathType Leaf)) {
+    throw "rhino3dm 8.35.0 source distribution is required for the document observer: $ObserverSdist"
+}
+$ObserverSdistSha256 = "8315ec0c177ad4c69e8cc4e6d331c584110e8e8cc9bad294f121f18b4b7ec81a"
+$ObserverSdistActual = (Get-FileHash -Algorithm SHA256 -LiteralPath $ObserverSdist).Hash.ToLowerInvariant()
+if ($ObserverSdistActual -ne $ObserverSdistSha256) {
+    throw "rhino3dm 8.35.0 source distribution SHA-256 mismatch: expected $ObserverSdistSha256, got $ObserverSdistActual"
+}
+$ObserverWork = Join-Path $Workspace "document-observer"
+Assert-NoReparseAncestor $ObserverWork
+New-Item -ItemType Directory -Path $ObserverWork -Force | Out-Null
+$ObserverSource = Join-Path $ObserverWork "rhino3dm-8.35.0"
+if (-not (Test-Path -LiteralPath $ObserverSource -PathType Container)) {
+    Run-Native $Tar @("-xzf", $ObserverSdist, "-C", $ObserverWork) "extract pinned rhino3dm 8.35.0 source distribution"
+} else {
+    Log "Using existing extracted rhino3dm 8.35.0 source distribution"
+}
+$ObserverOpenNurbsSource = Join-Path $ObserverSource "src\lib\opennurbs"
+if (-not (Test-Path -LiteralPath (Join-Path $ObserverOpenNurbsSource "CMakeLists.txt") -PathType Leaf)) {
+    throw "rhino3dm sdist lacks openNURBS CMake sources: $ObserverOpenNurbsSource"
+}
+$ObserverPythonInclude = Join-Path $BlenderSource "lib\windows_x64\python\313\include"
+$ObserverPythonLib = Join-Path $BlenderSource "lib\windows_x64\python\313\libs\python313.lib"
+if (-not (Test-Path -LiteralPath (Join-Path $ObserverPythonInclude "Python.h") -PathType Leaf)) {
+    throw "Python 3.13 headers are missing for the document observer: $ObserverPythonInclude"
+}
+if (-not (Test-Path -LiteralPath $ObserverPythonLib -PathType Leaf)) {
+    throw "Python 3.13 import library is missing for the document observer: $ObserverPythonLib"
+}
+$ObserverOpenNurbsBuild = Join-Path $ObserverWork "on-md"
+$ObserverCMakeWrapper = Join-Path $Workspace "run_observer_cmake_with_msvc.cmd"
+@"
+@echo off
+call "$Vcvars64" >nul
+if errorlevel 1 exit /b 1
+"$CMake" %*
+exit /b %errorlevel%
+"@ | Set-Content -LiteralPath $ObserverCMakeWrapper -Encoding ASCII
+# MultiThreadedDLL matches the /MD rhino3dm extension. The exact-save helper is a separate /MT build.
+Run-Native $Cmd @("/d", "/c", $ObserverCMakeWrapper, "-S", $ObserverOpenNurbsSource, "-B", $ObserverOpenNurbsBuild,
+    "-G", "Ninja", "-DCMAKE_BUILD_TYPE=Release", "-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreadedDLL",
+    "-DCMAKE_POLICY_VERSION_MINIMUM=3.5") "configure openNURBS for the MSVC /MD document observer" $ObserverSource
+Run-Native $Cmd @("/d", "/c", $ObserverCMakeWrapper, "--build", $ObserverOpenNurbsBuild,
+    "--target", "opennurbsStatic", "zlib", "--parallel", [string]$Jobs) "build openNURBS and zlib for the MSVC /MD document observer" $ObserverSource
+$ObserverLibraryFiles = @(Get-ChildItem -LiteralPath $ObserverOpenNurbsBuild -Recurse -File -Filter "opennurbsStatic.lib")
+$ObserverZlibFiles = @(Get-ChildItem -LiteralPath $ObserverOpenNurbsBuild -Recurse -File -Filter "zlib.lib")
+if ($ObserverLibraryFiles.Count -ne 1 -or $ObserverZlibFiles.Count -ne 1) {
+    throw "Expected exactly one opennurbsStatic.lib and one zlib.lib under $ObserverOpenNurbsBuild; found $($ObserverLibraryFiles.Count) and $($ObserverZlibFiles.Count)"
+}
+$ObserverLibraries = Join-Path $ObserverWork "libs"
+if (Test-Path -LiteralPath $ObserverLibraries) { Remove-Item -LiteralPath $ObserverLibraries -Recurse -Force }
+New-Item -ItemType Directory -Path $ObserverLibraries | Out-Null
+$ObserverOpenNurbsLibrary = $ObserverLibraryFiles[0].FullName
+$ObserverZlibLibrary = $ObserverZlibFiles[0].FullName
+Copy-Item -LiteralPath $ObserverOpenNurbsLibrary -Destination (Join-Path $ObserverLibraries "opennurbsStatic.lib")
+Copy-Item -LiteralPath $ObserverZlibLibrary -Destination (Join-Path $ObserverLibraries "zlib.lib")
+Log "Staged MSVC /MD openNURBS and zlib libraries for the document observer"
+
+$ObserverDecoderTarget = Join-Path $ObserverWork "target"
+$ObserverCargoManifest = Join-Path $NarwhalSource "native\application_core\Cargo.toml"
+Run-Native $Cmd @("/d", "/c", $CargoWrapper, "build", "--locked", "--manifest-path", $ObserverCargoManifest,
+    "--target-dir", $ObserverDecoderTarget, "--example", "observation_check") "build observation decoder for document observer qualification" $NarwhalSource
+$ObserverDecoder = Join-Path $ObserverDecoderTarget "debug\examples\observation_check.exe"
+if (-not (Test-Path -LiteralPath $ObserverDecoder -PathType Leaf)) {
+    throw "observation decoder build produced no executable: $ObserverDecoder"
+}
+
+$ObserverQualification = Join-Path $ObserverWork "qualification"
+New-Item -ItemType Directory -Path $ObserverQualification -Force | Out-Null
+$QualificationLog = Join-Path $ReturnDirectory "document-observer-qualification.log"
+$QualifyArguments = @(
+    "-B", (Join-Path $NarwhalSource "native\document_observer\qualify.py"),
+    "--source-tree", $ObserverSource, "--sdist", $ObserverSdist,
+    "--python", $RuntimePythonPath, "--python-include", $ObserverPythonInclude, "--python-lib", $ObserverPythonLib,
+    "--opennurbs-lib-dir", $ObserverLibraries, "--vcvars", $Vcvars64, "--rust-check", $ObserverDecoder,
+    "--core", $ApplicationCoreTarget, "--output-root", $ObserverQualification, "--mutations")
+$QualifyLines = @(Capture-Native $Python $QualifyArguments "qualify document observer against the exact packaged application core" $NarwhalSource)
+Set-Content -LiteralPath $QualificationLog -Value $QualifyLines -Encoding UTF8
+$ReceiptLines = @($QualifyLines | Where-Object { $_ -match '^OBSERVER_RECEIPT (.+)$' })
+if ($ReceiptLines.Count -ne 1) { throw "observer qualification must print exactly one OBSERVER_RECEIPT line" }
+$ObserverReceiptPath = [regex]::Match($ReceiptLines[0], '^OBSERVER_RECEIPT (.+)$').Groups[1].Value.Trim()
+if (-not (Test-Path -LiteralPath $ObserverReceiptPath -PathType Leaf)) { throw "observer receipt is missing: $ObserverReceiptPath" }
+$ObserverReceipt = [IO.File]::ReadAllText($ObserverReceiptPath) | ConvertFrom-Json
+$ObserverEntries = @($ObserverReceipt.entries)
+$Restored = $ObserverEntries[-1]
+if ($Restored.label -ne "restored" -or $Restored.status -ne "GREEN") {
+    throw "observer qualification did not end with a GREEN restored build: $($Restored.label) $($Restored.status)"
+}
+$QualifiedLibrary = [string]$Restored.library
+if (-not (Test-Path -LiteralPath $QualifiedLibrary -PathType Leaf) -or
+    (Get-FileHash -Algorithm SHA256 -LiteralPath $QualifiedLibrary).Hash.ToLowerInvariant() -ne ([string]$Restored.sha256).ToLowerInvariant()) {
+    throw "qualified observer library is missing or differs from its receipt"
+}
+Log ("Document observer receipt: " + $ObserverReceiptPath)
+$ObserverStageInput = Join-Path $ObserverWork "stage-input"
+if (Test-Path -LiteralPath $ObserverStageInput) { Remove-Item -LiteralPath $ObserverStageInput -Recurse -Force }
+New-Item -ItemType Directory -Path $ObserverStageInput | Out-Null
+Copy-Item -LiteralPath $QualifiedLibrary -Destination (Join-Path $ObserverStageInput "_narwhal_document_observer.pyd")
+Copy-Item -LiteralPath $ObserverReceiptPath -Destination (Join-Path $ObserverStageInput "build.json")
+
+$PackagedObserverDirectory = Join-Path $ApplicationDirectory "narwhal3d\native\document-observer"
+if (Test-Path -LiteralPath $PackagedObserverDirectory) {
+    Log "Removing document observer package folder left by an earlier attempt in this run"
+    Remove-Item -LiteralPath $PackagedObserverDirectory -Recurse -Force
+}
+$ObserverStageDriver = Join-Path $Workspace "stage_document_observer_package.py"
+@'
+# Packaging orchestration only; the observer pair was qualified by native/document_observer/qualify.py.
+from pathlib import Path
+import sys
+sys.path.insert(0, str(Path(sys.argv[1]) / "scripts"))
+from stage_document_observer import stage
+source, native, app, observer, core = (Path(item) for item in sys.argv[1:6])
+print(stage(source, native, app, "windows-x86_64", observer_directory=observer, core_path=core))
+'@ | Set-Content -LiteralPath $ObserverStageDriver -Encoding UTF8
+Run-Native $Python @('-B', $ObserverStageDriver, $NarwhalSource, $NativeComponentDirectory, $ApplicationDirectory,
+    $ObserverStageInput, $ApplicationCoreTarget) "stage qualified document observer into the packaged application"
+
+$ObserverReturnDirectory = Join-Path $ReturnDirectory "Narwhal_3D-$Version-Windows-x86_64-document-observer"
+if (Test-Path -LiteralPath $ObserverReturnDirectory) { Remove-Item -LiteralPath $ObserverReturnDirectory -Recurse -Force }
+Copy-Item -LiteralPath $ObserverStageInput -Destination $ObserverReturnDirectory -Recurse
+Copy-Item -LiteralPath $QualificationLog -Destination (Join-Path $ObserverReturnDirectory "document-observer-qualification.log")
+Log ("Returning document observer inputs: " + $ObserverReturnDirectory)
+
 $PackagedTestDirectory = Join-Path $ApplicationDirectory "spike"
 New-Item -ItemType Directory -Path $PackagedTestDirectory -Force | Out-Null
 $PackagedDocumentTest = Join-Path $PackagedTestDirectory "test_narwhal_document.py"
@@ -953,6 +1084,8 @@ try {
 } finally {
     Remove-Item -LiteralPath $PackagedTestDirectory -Recurse -Force -ErrorAction SilentlyContinue
 }
+Log "Removing the packaged document observer after the Save/Open round trip; the host assembler stages it from the return artifacts"
+Remove-Item -LiteralPath $PackagedObserverDirectory -Recurse -Force
 
 $Launcher = Join-Path $PackageDirectory "Narwhal3D.cmd"
 @'
@@ -1181,6 +1314,7 @@ $Result | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $ResultPath -Encodi
 Log "Windows engineering build completed"
 $ReturnZip = $ReturnDirectory + ".zip"
 $ReturnInputs = @(Get-ChildItem -LiteralPath $ReturnDirectory -File | ForEach-Object { $_.FullName })
+$ReturnInputs += $ObserverReturnDirectory
 Compress-Archive -LiteralPath $ReturnInputs -DestinationPath $ReturnZip -CompressionLevel Optimal
 Write-Host ""
 Write-Host "Narwhal 3D Windows engineering build completed." -ForegroundColor Green
