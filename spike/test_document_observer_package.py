@@ -8,10 +8,12 @@ import io
 import importlib.util
 import json
 from pathlib import Path
+import shutil
 import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
+SCRATCH = '/var/tmp' if Path('/var/tmp').is_dir() else None
 spec = importlib.util.spec_from_file_location('stage_observer', ROOT / 'scripts/stage_document_observer.py')
 stage = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(stage)
@@ -19,7 +21,7 @@ spec.loader.exec_module(stage)
 
 class PackageTests(unittest.TestCase):
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(prefix='observer-package-', dir='/var/tmp')
+        self.temp = tempfile.TemporaryDirectory(prefix='observer-package-', dir=SCRATCH)
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         self.source, self.native, self.app = [self.root / name for name in ('source', 'native', 'app')]
@@ -65,7 +67,7 @@ class PackageTests(unittest.TestCase):
         self.assertFalse(self.app.exists())
 
     def test_unqualified_platform_refuses_before_output(self):
-        for platform in ('windows-x86_64', 'macos-arm64'):
+        for platform in ('freebsd-x86_64', 'macos-arm64'):
             with self.assertRaisesRegex(ValueError, 'not runtime-qualified'):
                 stage.stage(self.source, self.native, self.app, platform)
         self.assertFalse(self.app.exists())
@@ -112,6 +114,75 @@ class PackageTests(unittest.TestCase):
         (self.native / 'libnarwhal_application_core.so').write_bytes(b'different core')
         with self.assertRaisesRegex(ValueError, 'pair differs'):
             stage.validate(self.source, self.native, 'linux-x86_64')
+
+    def windows_pair(self):
+        directory = self.root / 'windows-observer'
+        directory.mkdir()
+        library = directory / '_narwhal_document_observer.pyd'
+        library.write_bytes(b'windows packaging fixture; NOT a native library')
+        core = self.root / 'runtime/narwhal_application_core.dll'
+        core.parent.mkdir(parents=True)
+        core.write_bytes(b'windows core packaging fixture')
+        record = dict(upstream_sdist_sha256=stage._SDIST, source_sha256=self.record['source_sha256'],
+            host=dict(version='8.35.0', sha256=stage._HOSTS['windows-x86_64'], cache_tag='cpython-313',
+                      soabi='cp313-win_amd64', extension='C:/private/path'),
+            entries=[dict(label='control', status='GREEN', sha256=stage.digest(library), library='C:/private/build')],
+            integration=dict(loader={'status': 'GREEN'}, registry={'status': 'GREEN'},
+                             core_sha256=stage.digest(core), adapter_sha256=self.record['integration']['adapter_sha256'],
+                             loader_sha256=self.record['integration']['loader_sha256']))
+        (directory / 'build.json').write_text(json.dumps(record))
+        return directory, core
+
+    def test_hosts_and_names_cover_exactly_linux_and_windows(self):
+        self.assertEqual(stage._HOSTS, {
+            'linux-x86_64': 'd5fed4447838a0645bfc82cf6ccc684e1c6ca6d4568533e044adf9754de169d4',
+            'windows-x86_64': '1b59225812361ffd89e48eb1caf64a9f505aa1613da2058479b0b766fa976ce7'})
+        self.assertEqual(stage._LIBRARY, {'linux-x86_64': '_narwhal_document_observer.so',
+                                          'windows-x86_64': '_narwhal_document_observer.pyd'})
+        self.assertEqual(stage._CORE, {'linux-x86_64': 'libnarwhal_application_core.so',
+                                       'windows-x86_64': 'narwhal_application_core.dll'})
+
+    def test_linux_defaults_still_read_the_native_directory(self):
+        library, _ = stage.validate(self.source, self.native, 'linux-x86_64')
+        self.assertEqual(library, self.native / 'document-observer' / '_narwhal_document_observer.so')
+
+    def test_windows_defaults_read_the_native_directory_and_core_name(self):
+        directory, core = self.windows_pair()
+        target = self.native / 'document-observer'
+        shutil.copy2(directory / '_narwhal_document_observer.pyd', target / '_narwhal_document_observer.pyd')
+        shutil.copy2(directory / 'build.json', target / 'build.json')
+        shutil.copy2(core, self.native / 'narwhal_application_core.dll')
+        library, _ = stage.validate(self.source, self.native, 'windows-x86_64')
+        self.assertEqual(library, target / '_narwhal_document_observer.pyd')
+
+    def test_windows_default_refuses_when_pyd_is_absent(self):
+        with self.assertRaisesRegex(ValueError, 'missing regular document observer input: _narwhal_document_observer.pyd'):
+            stage.validate(self.source, self.native, 'windows-x86_64')
+
+    def test_windows_pair_stages_from_explicit_directories(self):
+        directory, core = self.windows_pair()
+        result = stage.stage(self.source, self.native, self.app, 'windows-x86_64',
+                             observer_directory=directory, core_path=core)
+        destination = self.app / 'narwhal3d/native/document-observer'
+        self.assertEqual(result['sha256'], stage.digest(directory / '_narwhal_document_observer.pyd'))
+        self.assertEqual((destination / '_narwhal_document_observer.pyd').read_bytes(),
+                         (directory / '_narwhal_document_observer.pyd').read_bytes())
+        self.assertFalse((destination / '_narwhal_document_observer.so').exists())
+        self.assertNotIn('C:/private', (destination / 'build.json').read_text())
+
+    def test_windows_receipt_with_linux_host_refuses(self):
+        directory, core = self.windows_pair()
+        record = json.loads((directory / 'build.json').read_text())
+        record['host']['sha256'] = stage._HOSTS['linux-x86_64']
+        (directory / 'build.json').write_text(json.dumps(record))
+        with self.assertRaisesRegex(ValueError, 'dependency/host pair'):
+            stage.validate(self.source, self.native, 'windows-x86_64', observer_directory=directory, core_path=core)
+
+    def test_windows_core_override_must_match_the_qualified_core(self):
+        directory, core = self.windows_pair()
+        core.write_bytes(b'different core')
+        with self.assertRaisesRegex(ValueError, 'pair differs'):
+            stage.validate(self.source, self.native, 'windows-x86_64', observer_directory=directory, core_path=core)
 
 
 if __name__ == '__main__':

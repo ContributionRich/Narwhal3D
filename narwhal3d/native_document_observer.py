@@ -22,8 +22,13 @@ import rhino3dm._rhino3dm as host
 _MODULE = '_narwhal_document_observer'
 _SDIST = '8315ec0c177ad4c69e8cc4e6d331c584110e8e8cc9bad294f121f18b4b7ec81a'
 # MEASURED: installed extension is byte-identical to the official8.35.0 CPython313
-# manylinux x86_64 wheel (wheel SHA256783db09d...61229c7a4). Other pairs must qualify.
-_HOST = 'd5fed4447838a0645bfc82cf6ccc684e1c6ca6d4568533e044adf9754de169d4'
+# manylinux x86_64 wheel (wheel SHA256783db09d...61229c7a4). The Windows entry is the
+# cp313-win_amd64 host extension from the pinned 8.35.0 wheel. Other pairs must qualify.
+_HOSTS = {
+    'linux-x86_64': 'd5fed4447838a0645bfc82cf6ccc684e1c6ca6d4568533e044adf9754de169d4',
+    'windows-x86_64': '1b59225812361ffd89e48eb1caf64a9f505aa1613da2058479b0b766fa976ce7',
+}
+_LIBRARY_SUFFIX = {'linux-x86_64': '.so', 'windows-x86_64': '.pyd'}
 _LOCK = threading.RLock()
 _loaded: tuple[str, ModuleType] | None = None
 
@@ -46,13 +51,22 @@ def _unique(pairs: list[tuple[str, object]]) -> dict[str, object]:
     return value
 
 
+def _platform_tag() -> str:
+    system = 'windows' if sys.platform == 'win32' else sys.platform
+    machine = platform.machine().lower()
+    return f"{system}-{'x86_64' if machine == 'amd64' else machine}"
+
+
 def load_observer() -> Observer:
     """Load a qualified installed pair; never search scratch directories or build."""
     root = Path(__file__).resolve().parents[1]
-    tag = f'{sys.platform}-{platform.machine().lower()}'
+    tag = _platform_tag()
+    suffix = _LIBRARY_SUFFIX.get(tag)
+    if suffix is None:
+        raise ObservationUnavailable('qualified native document observer is not installed')
     for directory in (root / 'narwhal3d/native/document-observer',
                       root / 'artifacts/document-observer' / tag):
-        library = directory / '_narwhal_document_observer.so'
+        library = directory / f'_narwhal_document_observer{suffix}'
         receipt = directory / 'build.json'
         if library.exists() or receipt.exists():
             return load_candidate(library, receipt)
@@ -69,6 +83,9 @@ def load_candidate(library: str | Path, receipt: str | Path) -> Observer:
     with _LOCK:
         library, receipt = Path(library).resolve(), Path(receipt).resolve()
         try:
+            tag = _platform_tag()
+            if tag not in _HOSTS:
+                raise ObservationUnavailable('native document observer is not qualified for this platform')
             if receipt.stat().st_size > 4 * 1024 * 1024:
                 raise ObservationUnavailable('qualification receipt too large')
             evidence = json.loads(receipt.read_text(), object_pairs_hook=_unique)
@@ -80,7 +97,7 @@ def load_candidate(library: str | Path, receipt: str | Path) -> Observer:
                     or runtime['version'] != getattr(r3, '__version__', None)
                     or runtime['cache_tag'] != sys.implementation.cache_tag
                     or runtime['soabi'] != sysconfig.get_config_var('SOABI')
-                    or runtime['sha256'] != _HOST or _sha(host_path) != _HOST):
+                    or runtime['sha256'] != _HOSTS[tag] or _sha(host_path) != _HOSTS[tag]):
                 raise ObservationUnavailable('unqualified rhino3dm binary/ABI pair')
             expected = _sha(library)
             controls = [entry for entry in evidence['entries'] if entry['label'] in ('control', 'restored')

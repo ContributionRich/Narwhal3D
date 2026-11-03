@@ -53,6 +53,7 @@ REQUIRED = {
     "scripts/collect_windows_build_info.ps1",
     "scripts/build_windows_preview.ps1",
     "scripts/build_brep_writer_source.sh",
+    "scripts/build_brep_writer_windows.ps1",
     "scripts/verify_brep_writer.py",
     "scripts/build_document_core.py",
     "scripts/verify_document_core.py",

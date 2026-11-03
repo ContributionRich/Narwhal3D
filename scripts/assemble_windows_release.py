@@ -9,6 +9,7 @@ import os
 from pathlib import Path, PurePosixPath
 import shutil
 import stat
+import subprocess
 import sys
 import tempfile
 import zipfile
@@ -22,6 +23,11 @@ SOURCE_DIRECTORIES = ("narwhal3d", "launch", "licenses")
 SOURCE_FILES = ("LICENSE", "THIRD_PARTY_NOTICES", "CHANGELOG.md", "STATUS.md")
 REMOVE_SUFFIXES = {".pyc", ".pyo", ".pdb", ".lib", ".exp"}
 REMOVE_NAMES = {"datatoc.exe", "makesdna.exe", "makesrna.exe"}
+EXACT_SAVE_HELPER_NAME = "brep_writer-win32-amd64.exe"
+EXACT_SAVE_LICENSE_NAME = "openNURBS-LICENSE.txt"
+#: Private helper payload must never reach the source package, which is copied verbatim.
+EXCLUDED_SOURCE_FILES = {PurePosixPath("kernel/brep_writer.cpp")}
+EXCLUDED_SOURCE_TREE = PurePosixPath("kernel/bin")
 
 
 class AssemblyError(RuntimeError):
@@ -61,11 +67,21 @@ def safe_extract(archive_path: Path, destination: Path) -> Path:
     return destination / roots.pop()
 
 
+def validate_source_package(source_root: Path) -> None:
+    """Refuse private helper payload in the source; it is never deleted silently."""
+    package = source_root / "narwhal3d"
+    for path in package.rglob("*"):
+        relative = PurePosixPath(path.relative_to(package).as_posix())
+        if relative in EXCLUDED_SOURCE_FILES or (
+                relative != EXCLUDED_SOURCE_TREE and relative.is_relative_to(EXCLUDED_SOURCE_TREE)):
+            raise AssemblyError(f"excluded private payload is present in source package: narwhal3d/{relative}")
+        if relative == EXCLUDED_SOURCE_TREE and path.is_symlink():
+            raise AssemblyError("excluded kernel/bin path must not be a symlink")
+
+
 def replace_public_source(package: Path, source_root: Path) -> None:
+    validate_source_package(source_root)
     app = package / "app"
-    if (source_root / 'narwhal3d/native_document_observer.py').is_file():
-        from stage_document_observer import validate as validate_observer
-        validate_observer(source_root, app / 'runtime/windows-x86_64/bin', 'windows-x86_64')
     for name in SOURCE_DIRECTORIES:
         source = source_root / name
         require_file(source / "__init__.py", name) if name == "narwhal3d" else None
@@ -92,11 +108,6 @@ def replace_public_source(package: Path, source_root: Path) -> None:
 
 
 def remove_forbidden_payload(package: Path) -> None:
-    private_kernel = package / "app/narwhal3d/kernel/bin"
-    if private_kernel.exists():
-        shutil.rmtree(private_kernel)
-    private_source = package / "app/narwhal3d/kernel/brep_writer.cpp"
-    private_source.unlink(missing_ok=True)
     for path in sorted(package.rglob("*"), reverse=True):
         if path.is_symlink():
             raise AssemblyError(f"package contains a symlink: {path.relative_to(package)}")
@@ -118,6 +129,68 @@ def copy_native_inputs(package: Path, launcher: Path, cdr_core: Path,
                  runtime_native / "narwhal-cdr-multiversion.exe")
     shutil.copy2(require_file(welcome, "Windows native welcome"),
                  runtime_native / "narwhal-welcome.exe")
+
+
+def run_exact_save_helper(helper: Path) -> str | None:
+    """Return the --version line, or None when this host cannot execute a Windows helper."""
+    if sys.platform == "win32":
+        command = [str(helper)]
+    elif shutil.which("wine"):
+        command = ["wine", str(helper)]
+    else:
+        return None
+    try:
+        answer = subprocess.run([*command, "--version"], text=True, capture_output=True,
+                                timeout=60, check=False)
+    except (OSError, subprocess.SubprocessError) as exc:
+        if sys.platform == "win32":
+            raise AssemblyError(f"cannot execute exact-save helper: {exc}") from exc
+        return None
+    if answer.returncode != 0:
+        raise AssemblyError(f"exact-save helper --version exited {answer.returncode}")
+    lines = answer.stdout.strip().splitlines()
+    line = lines[0] if lines else ""
+    if line != verifier.EXACT_SAVE_PROTOCOL and not line.startswith(verifier.EXACT_SAVE_PROTOCOL + " "):
+        raise AssemblyError(f"wrong exact-save helper protocol: {line!r}")
+    return line
+
+
+def validate_exact_save_helper(directory: Path) -> dict[str, object]:
+    """Admit the separately built Windows exact-save helper and its openNURBS license."""
+    if not directory.is_dir() or directory.is_symlink():
+        raise AssemblyError(f"exact-save helper directory is missing or symlinked: {directory}")
+    helper = require_file(directory / EXACT_SAVE_HELPER_NAME, "exact-save helper")
+    license_text = require_file(directory / EXACT_SAVE_LICENSE_NAME, "exact-save helper openNURBS license")
+    with helper.open("rb") as stream:
+        if stream.read(2) != b"MZ":
+            raise AssemblyError("exact-save helper is not a Windows executable")
+    return {"size": helper.stat().st_size, "sha256": verifier.sha256(helper),
+            "license_sha256": verifier.sha256(license_text),
+            "protocol": run_exact_save_helper(helper)}
+
+
+def install_exact_save_helper(package: Path, directory: Path, record: dict[str, object]) -> None:
+    """Copy the verified helper and license into the package; kernel/bin must start empty."""
+    helper_target = package / verifier.EXACT_SAVE_HELPER
+    if helper_target.parent.exists() and any(helper_target.parent.iterdir()):
+        raise AssemblyError("package already contains kernel/bin payload before exact-save helper installation")
+    helper_target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(require_file(directory / EXACT_SAVE_HELPER_NAME, "exact-save helper"), helper_target)
+    license_target = package / verifier.EXACT_SAVE_LICENSE
+    license_target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(require_file(directory / EXACT_SAVE_LICENSE_NAME, "exact-save helper openNURBS license"),
+                 license_target)
+    if (verifier.sha256(helper_target) != record["sha256"]
+            or verifier.sha256(license_target) != record["license_sha256"]):
+        raise AssemblyError("packaged exact-save helper differs from its verified input")
+
+
+def stage_document_observer(package: Path, source_root: Path, observer_directory: Path) -> dict[str, object]:
+    """Validate and stage the observer pair against the packaged application core."""
+    from stage_document_observer import stage as stage_observer
+    return stage_observer(source_root, package / "app/runtime/windows-x86_64/bin", package / "app",
+                          "windows-x86_64", observer_directory=observer_directory,
+                          core_path=package / verifier.NATIVE_COMPONENT_PATHS["narwhal_application_core.dll"])
 
 
 def native_records(package: Path, source_root: Path | None = None) -> dict[str, dict[str, object]]:
@@ -173,14 +246,13 @@ def native_records(package: Path, source_root: Path | None = None) -> dict[str, 
     return records
 
 
-EXCLUDED_COMPONENTS = [
-    "opennurbs-exact-save-helper",
-    "optional-converters",
-    "installer-file-associations",
-]
+EXCLUDED_COMPONENTS = ["optional-converters", "installer-file-associations"]
 
 
-def write_manifest(package: Path, source_root: Path, version: str, revision: str) -> None:
+def write_manifest(package: Path, source_root: Path, version: str, revision: str,
+                   observer_record: dict[str, object], exact_save_record: dict[str, object]) -> None:
+    native_components = native_records(package, source_root)
+    native_components[verifier.DOCUMENT_OBSERVER_RECORD] = observer_record
     manifest = {
         "schema": 1,
         "product": verifier.PRODUCT,
@@ -193,7 +265,8 @@ def write_manifest(package: Path, source_root: Path, version: str, revision: str
         "runtime_binary_sha256": verifier.sha256(package / "runtime/blender.exe"),
         "launcher_sha256": verifier.sha256(package / "Narwhal3D.exe"),
         "launcher_source_sha256": verifier.sha256(source_root / "packaging/windows/narwhal3d_launcher.c"),
-        "native_components": native_records(package, source_root),
+        "native_components": native_components,
+        "exact_save_helper": exact_save_record,
         "excluded_components": EXCLUDED_COMPONENTS,
         "validation": {
             "windows_packaged_headless_bootstrap": True,
@@ -241,22 +314,49 @@ def assemble(args: argparse.Namespace) -> tuple[Path, Path]:
     sidecar = output_dir / f"{name}.zip.sha256"
     if any(path.exists() for path in (package, archive, sidecar)):
         raise AssemblyError("refusing to overwrite an existing Windows release output")
+    exact_save_dir = args.exact_save_helper_dir.resolve()
+    exact_save_record = validate_exact_save_helper(exact_save_dir)
     with tempfile.TemporaryDirectory(prefix="narwhal-windows-assemble-") as temporary:
         engineering = safe_extract(require_file(args.engineering_zip.resolve(), "engineering ZIP"),
                                    Path(temporary))
         shutil.move(str(engineering), package)
-    replace_public_source(package, source_root)
-    copy_native_inputs(package, args.launcher.resolve(), args.cdr_core.resolve(),
-                       args.cdr_multiversion.resolve(), args.welcome.resolve(), args.version)
-    (package / "README-FIRST.txt").write_text(
-        f"Narwhal 3D {args.version} early prerelease\n\n"
-        "Extract the complete folder and run Narwhal3D.exe. Keep app and runtime beside it.\n"
-        "This build is unsigned; Windows SmartScreen may warn. Physical-GPU acceptance is pending.\n",
-        encoding="utf-8")
-    remove_forbidden_payload(package)
-    write_manifest(package, source_root, args.version, args.source_revision)
-    write_zip(package, archive, args.source_date_epoch)
+    try:
+        replace_public_source(package, source_root)
+        copy_native_inputs(package, args.launcher.resolve(), args.cdr_core.resolve(),
+                           args.cdr_multiversion.resolve(), args.welcome.resolve(), args.version)
+        observer_record = stage_document_observer(package, source_root, args.document_observer_dir.resolve())
+        (package / "README-FIRST.txt").write_text(
+            f"Narwhal 3D {args.version} early prerelease\n\n"
+            "Extract the complete folder and run Narwhal3D.exe. Keep app and runtime beside it.\n"
+            "This build is unsigned; Windows SmartScreen may warn. Physical-GPU acceptance is pending.\n",
+            encoding="utf-8")
+        remove_forbidden_payload(package)
+        install_exact_save_helper(package, exact_save_dir, exact_save_record)
+        write_manifest(package, source_root, args.version, args.source_revision,
+                       observer_record, exact_save_record)
+        write_zip(package, archive, args.source_date_epoch)
+    except Exception:
+        shutil.rmtree(package, ignore_errors=True)
+        archive.unlink(missing_ok=True)
+        sidecar.unlink(missing_ok=True)
+        raise
     return package, archive
+
+
+def refused(action) -> bool:
+    try:
+        action()
+    except AssemblyError:
+        return True
+    return False
+
+
+def refusal(action) -> str:
+    try:
+        action()
+    except AssemblyError as exc:
+        return str(exc)
+    return ""
 
 
 def self_check() -> None:
@@ -265,9 +365,8 @@ def self_check() -> None:
     assert "narwhal_geometry_core.dll" in verifier.NATIVE_COMPONENT_PATHS
     assert "narwhal_platform_core.dll" in verifier.NATIVE_COMPONENT_PATHS
     assert "narwhal-welcome.exe" in verifier.NATIVE_COMPONENT_PATHS
-    assert EXCLUDED_COMPONENTS == [
-        "opennurbs-exact-save-helper", "optional-converters", "installer-file-associations",
-    ]
+    assert EXCLUDED_COMPONENTS == ["optional-converters", "installer-file-associations"]
+    assert verifier.EXACT_SAVE_HELPER == "app/narwhal3d/kernel/bin/" + EXACT_SAVE_HELPER_NAME
     with tempfile.TemporaryDirectory(prefix="windows-assembler-self-check-") as temporary:
         root = Path(temporary)
         source = root / "source"
@@ -291,6 +390,30 @@ def self_check() -> None:
         replace_public_source(package, source)
         assert {(native / name).read_bytes() for name in expected} == set(expected.values())
         assert (package / "app/narwhal3d/__init__.py").read_text() == "# public source\n"
+        for index, payload in enumerate(("kernel/bin/helper.exe", "kernel/bin/nested/helper.exe",
+                                         "kernel/brep_writer.cpp")):
+            poisoned = root / f"poisoned-{index}"
+            shutil.copytree(source, poisoned)
+            (poisoned / "narwhal3d" / payload).parent.mkdir(parents=True, exist_ok=True)
+            (poisoned / "narwhal3d" / payload).write_bytes(b"private payload")
+            assert refused(lambda: validate_source_package(poisoned)), f"accepted source payload {payload}"
+        helper_dir = root / "helper"
+        helper_dir.mkdir()
+        (helper_dir / EXACT_SAVE_LICENSE_NAME).write_text("license\n", encoding="utf-8")
+        (helper_dir / EXACT_SAVE_HELPER_NAME).write_bytes(b"not a Windows program")
+        assert "not a Windows executable" in refusal(lambda: validate_exact_save_helper(helper_dir)), \
+            "non-MZ exact-save helper was not refused before execution"
+        (helper_dir / EXACT_SAVE_HELPER_NAME).write_bytes(b"MZ")
+        (helper_dir / EXACT_SAVE_LICENSE_NAME).unlink()
+        assert refused(lambda: validate_exact_save_helper(helper_dir)), "accepted helper without license"
+        (helper_dir / EXACT_SAVE_LICENSE_NAME).write_text("license\n", encoding="utf-8")
+        stale = package / "app/narwhal3d/kernel/bin"
+        stale.mkdir(parents=True)
+        (stale / "stale.exe").write_bytes(b"MZ")
+        valid_record = {"sha256": verifier.sha256(helper_dir / EXACT_SAVE_HELPER_NAME),
+                        "license_sha256": verifier.sha256(helper_dir / EXACT_SAVE_LICENSE_NAME)}
+        assert refused(lambda: install_exact_save_helper(package, helper_dir, valid_record)), \
+            "installed the helper over existing kernel/bin payload"
     print("assemble_windows_release.py self-check: OK")
 
 
@@ -305,6 +428,8 @@ def main() -> int:
     parser.add_argument("--cdr-core", type=Path)
     parser.add_argument("--cdr-multiversion", type=Path)
     parser.add_argument("--welcome", type=Path)
+    parser.add_argument("--document-observer-dir", type=Path)
+    parser.add_argument("--exact-save-helper-dir", type=Path)
     parser.add_argument("--output-dir", type=Path)
     parser.add_argument("--self-check", action="store_true")
     args = parser.parse_args()
@@ -314,7 +439,8 @@ def main() -> int:
             return 0
         required = (args.engineering_zip, args.source_root, args.source_revision,
                     args.source_date_epoch, args.version, args.launcher,
-                    args.cdr_core, args.cdr_multiversion, args.welcome, args.output_dir)
+                    args.cdr_core, args.cdr_multiversion, args.welcome, args.output_dir,
+                    args.document_observer_dir, args.exact_save_helper_dir)
         if any(value is None for value in required):
             raise AssemblyError("all release assembly arguments are required")
         package, archive = assemble(args)

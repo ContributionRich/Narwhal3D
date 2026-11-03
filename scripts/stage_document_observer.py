@@ -10,8 +10,13 @@ import json
 from pathlib import Path
 import shutil
 
-_HOSTS = {'linux-x86_64': 'd5fed4447838a0645bfc82cf6ccc684e1c6ca6d4568533e044adf9754de169d4'}
+_HOSTS = {
+    'linux-x86_64': 'd5fed4447838a0645bfc82cf6ccc684e1c6ca6d4568533e044adf9754de169d4',
+    'windows-x86_64': '1b59225812361ffd89e48eb1caf64a9f505aa1613da2058479b0b766fa976ce7',
+}
 _SDIST = '8315ec0c177ad4c69e8cc4e6d331c584110e8e8cc9bad294f121f18b4b7ec81a'
+_LIBRARY = {'linux-x86_64': '_narwhal_document_observer.so', 'windows-x86_64': '_narwhal_document_observer.pyd'}
+_CORE = {'linux-x86_64': 'libnarwhal_application_core.so', 'windows-x86_64': 'narwhal_application_core.dll'}
 
 
 def digest(path):
@@ -19,11 +24,11 @@ def digest(path):
         return hashlib.file_digest(stream, 'sha256').hexdigest()
 
 
-def validate(source_root, native_directory, platform):
+def validate(source_root, native_directory, platform, *, observer_directory=None, core_path=None):
     if platform not in _HOSTS:
         raise ValueError(f'document observer pair is not runtime-qualified for {platform}; no incomplete package may be assembled')
-    directory = Path(native_directory) / 'document-observer'
-    library = directory / '_narwhal_document_observer.so'
+    directory = Path(observer_directory) if observer_directory is not None else Path(native_directory) / 'document-observer'
+    library = directory / _LIBRARY[platform]
     receipt = directory / 'build.json'
     if directory.is_symlink() or not directory.is_dir():
         raise ValueError('qualified document-observer directory is required')
@@ -50,14 +55,15 @@ def validate(source_root, native_directory, platform):
     for key, fields, relative in expected:
         if fields.get(key) != digest(Path(source_root) / relative):
             raise ValueError(f'observer qualified source mismatch: {relative}')
-    core = Path(native_directory) / 'libnarwhal_application_core.so'
+    core = Path(core_path) if core_path is not None else Path(native_directory) / _CORE[platform]
     if not core.is_file() or core.is_symlink() or integration.get('core_sha256') != digest(core):
         raise ValueError('observer/application-core pair differs from qualified inputs')
     return library, record
 
 
-def stage(source_root, native_directory, app_root, platform):
-    library, record = validate(source_root, native_directory, platform)
+def stage(source_root, native_directory, app_root, platform, *, observer_directory=None, core_path=None):
+    library, record = validate(source_root, native_directory, platform,
+                               observer_directory=observer_directory, core_path=core_path)
     destination = Path(app_root) / 'narwhal3d/native/document-observer'
     if destination.exists():
         raise ValueError('observer package destination already exists')

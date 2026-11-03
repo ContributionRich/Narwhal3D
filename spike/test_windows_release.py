@@ -3,13 +3,20 @@
 from __future__ import annotations
 
 import importlib.util
+import inspect
+import json
+import re
 import runpy
+import shutil
 import struct
+import subprocess
+import types
 import zlib
 from pathlib import Path
 import sys
 import tempfile
 import zipfile
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
@@ -235,6 +242,19 @@ check("b8f597c677811d1f9f4d8a97f5ae2825c0353a42" in build_script
       and '"geometry_move": "airtight"' in build_script,
       "Windows build compiles, packages and executes exact Rust geometry against pinned OCCT")
 
+powershell_build = (ROOT / "scripts/build_brep_writer_windows.ps1").read_text(encoding="utf-8")
+check(re.search(r'ArchiveSha256 = "1a8bb8dbe363f4969f679f11810251433416b62e595a6f02c447381a9f2128fa"', powershell_build)
+      and re.search(r'ArchiveDigest -ne \x24ArchiveSha256', powershell_build)
+      and re.search(r'\[switch\]\x24SelfCheck', powershell_build),
+      "exact-save helper build pins the openNURBS archive hash and fails closed on mismatch")
+check(re.search(r'CmakeOptions = @\([^\n]*"-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded"\)', powershell_build)
+      and re.search(r'CompileOptions = @\([^\n]*"/MT"[^\n]*"/DNOMINMAX"\)', powershell_build)
+      and 'ProtocolPrefix = "brep_writer ONBREP 1"' in powershell_build,
+      "exact-save helper build uses the MultiThreaded runtime, /DNOMINMAX and the ONBREP 1 identity")
+check("narwhal3d\\kernel\\bin" not in powershell_build.lower()
+      and "narwhal3d/kernel/bin" not in powershell_build.lower(),
+      "exact-save helper build never references the source kernel/bin tree")
+
 chooser_routes = {
     "Open/Save": ROOT / "narwhal3d/file_commands.py",
     "Import": ROOT / "narwhal3d/import_commands.py",
@@ -292,7 +312,6 @@ with tempfile.TemporaryDirectory(prefix="narwhal_windows_verifier_test_") as tem
         "app/narwhal3d/native/narwhal_selection_core.dll")),
     "Windows release requires CDR, document, platform and Rust accelerator components")
     for bad in (
-        "app/narwhal3d/kernel/bin/helper.exe",
         "runtime/blender.pdb", "app/launch/__pycache__/open_arg.pyc",
         "runtime/makesrna.exe", "bug_" + "reports/private.txt",
     ):
@@ -303,6 +322,259 @@ with tempfile.TemporaryDirectory(prefix="narwhal_windows_verifier_test_") as tem
         else:
             refused = False
         check(refused, f"Windows verifier refuses private/cache/debug/build payload: {bad}")
+
+    def refuses(action, error=verifier.VerificationError) -> bool:
+        try:
+            action()
+        except error:
+            return True
+        return False
+
+    check(verifier.EXACT_SAVE_HELPER == "app/narwhal3d/kernel/bin/brep_writer-win32-amd64.exe"
+          and verifier.EXACT_SAVE_LICENSE in {item["path"] for item in base},
+          "Windows release requires the exact-save helper path and its openNURBS license")
+    check(not refuses(lambda: verifier.validate_paths(root, base)),
+          "Windows verifier admits the exact-save helper below kernel/bin")
+    for bad in (
+        "app/narwhal3d/kernel/bin/helper.exe",
+        "app/narwhal3d/kernel/bin/brep_writer-win32-amd64.exe.bak",
+        "app/narwhal3d/kernel/bin/nested/brep_writer-win32-amd64.exe",
+        "app/narwhal3d/kernel/bin/.gitignore",
+        "app/other/kernel/bin/brep_writer-win32-amd64.exe",
+        "app/narwhal3d/kernel/brep_writer.cpp",
+    ):
+        check(refuses(lambda bad=bad: verifier.validate_paths(
+            root, base + [{"path": bad, "size": 1, "sha256": "0" * 64}])),
+            f"Windows verifier refuses kernel payload other than the bound helper: {bad}")
+
+    with tempfile.TemporaryDirectory(prefix="narwhal_exact_save_fixture_") as fixture_text:
+        fixture = Path(fixture_text)
+        helper_file = fixture / verifier.EXACT_SAVE_HELPER
+        license_file = fixture / verifier.EXACT_SAVE_LICENSE
+        helper_file.parent.mkdir(parents=True)
+        license_file.parent.mkdir(parents=True)
+        helper_bytes = b"MZ" + verifier.EXACT_SAVE_PROTOCOL.encode("ascii") + b" helper"
+        helper_file.write_bytes(helper_bytes)
+        license_file.write_text("openNURBS license\n", encoding="utf-8")
+        record = {"size": len(helper_bytes), "sha256": verifier.sha256(helper_file),
+                  "license_sha256": verifier.sha256(license_file), "protocol": None}
+        check(not refuses(lambda: verifier.verify_exact_save_helper(fixture, record)),
+              "exact-save helper is accepted only when bound to its matching record and license")
+        helper_file.write_bytes(helper_bytes[:-1] + b"X")
+        check(refuses(lambda: verifier.verify_exact_save_helper(fixture, record)),
+              "tampered exact-save helper is refused by its manifest hash")
+        identity_less = b"MZ no protocol identity"
+        helper_file.write_bytes(identity_less)
+        check(refuses(lambda: verifier.verify_exact_save_helper(fixture, {
+                  **record, "size": len(identity_less), "sha256": verifier.sha256(helper_file)})),
+              "exact-save helper without the ONBREP 1 identity is refused")
+        helper_file.write_bytes(helper_bytes)
+        license_file.unlink()
+        check(refuses(lambda: verifier.verify_exact_save_helper(fixture, record)),
+              "exact-save helper without its openNURBS license is refused")
+        license_file.write_text("openNURBS license\n", encoding="utf-8")
+        check(refuses(lambda: verifier.verify_exact_save_helper(fixture, None)),
+              "exact-save helper without a manifest record is refused")
+        check(refuses(lambda: verifier.verify_exact_save_helper(
+                  fixture, {**record, "license_sha256": "0" * 64})),
+              "exact-save helper with a mismatched license hash is refused")
+        check(refuses(lambda: verifier.verify_exact_save_helper(
+                  fixture, {**record, "protocol": "brep_writer ONBREP 2"})),
+              "exact-save helper record naming another protocol is refused")
+
+        observer_file = fixture / verifier.DOCUMENT_OBSERVER_LIBRARY
+        receipt_file = fixture / verifier.DOCUMENT_OBSERVER_RECEIPT
+        observer_file.parent.mkdir(parents=True)
+        observer_file.write_bytes(b"MZ observer")
+        receipt_file.write_text("{}\n", encoding="utf-8")
+        observer_record = {"sha256": verifier.sha256(observer_file)}
+        real_inspector = verifier.inspect_pe_dll
+        try:
+            verifier.inspect_pe_dll = lambda _path: {"exports": (verifier.DOCUMENT_OBSERVER_EXPORT,)}
+            check(not refuses(lambda: verifier.verify_document_observer(fixture, observer_record)),
+                  "document observer is accepted when its library matches the manifest record")
+            check(refuses(lambda: verifier.verify_document_observer(fixture, None)),
+                  "document observer without a manifest record is refused")
+            check(refuses(lambda: verifier.verify_document_observer(fixture, {"sha256": "0" * 64})),
+                  "document observer with a mismatched manifest hash is refused")
+            verifier.inspect_pe_dll = lambda _path: {"exports": ("PyInit_other",)}
+            check(refuses(lambda: verifier.verify_document_observer(fixture, observer_record)),
+                  "document observer without its Python module export is refused")
+        finally:
+            verifier.inspect_pe_dll = real_inspector
+        observer_file.unlink()
+        check(refuses(lambda: verifier.verify_document_observer(fixture, observer_record)),
+              "missing document observer library is refused")
+    for required in (verifier.DOCUMENT_OBSERVER_LIBRARY, verifier.DOCUMENT_OBSERVER_RECEIPT):
+        check(refuses(lambda required=required: verifier.validate_paths(
+            root, [row for row in base if row["path"] != required])),
+            f"Windows release requires the packaged observer file: {required}")
+    verify_directory_source = inspect.getsource(verifier.verify_directory)
+    check("verify_document_observer(root," in verify_directory_source
+          and "verify_exact_save_helper(root," in verify_directory_source
+          and "DOCUMENT_OBSERVER_RECORD}" in verify_directory_source,
+          "Windows directory verification binds the observer and exact-save helper to the manifest")
+
+    with tempfile.TemporaryDirectory(prefix="narwhal_windows_assembler_test_") as assembly_text:
+        assembly = Path(assembly_text)
+        source = assembly / "source"
+        for directory in assembler.SOURCE_DIRECTORIES:
+            (source / directory).mkdir(parents=True)
+        (source / "narwhal3d/__init__.py").write_text("# public source\n", encoding="utf-8")
+        (source / "native/application_core").mkdir(parents=True)
+        (source / "native/application_core/OPENNURBS_LICENSE").write_text("ordinal license\n", encoding="utf-8")
+        for filename in assembler.SOURCE_FILES:
+            (source / filename).write_text(filename + "\n", encoding="utf-8")
+        check(assembler.validate_source_package(source) is None,
+              "clean public source passes the private-payload guard")
+        for payload in ("kernel/bin/helper.exe", "kernel/bin/nested/helper.exe", "kernel/brep_writer.cpp"):
+            poisoned = source / "narwhal3d" / payload
+            poisoned.parent.mkdir(parents=True, exist_ok=True)
+            poisoned.write_bytes(b"private payload")
+            check(refuses(lambda: assembler.validate_source_package(source), assembler.AssemblyError),
+                  f"Windows assembler refuses private source payload instead of deleting it: {payload}")
+            poisoned.unlink()
+        poisoned = source / "narwhal3d/kernel/bin/helper.exe"
+        poisoned.parent.mkdir(parents=True, exist_ok=True)
+        poisoned.write_bytes(b"private payload")
+        check(refuses(lambda: assembler.replace_public_source(assembly / "poisoned-package", source),
+                      assembler.AssemblyError),
+              "Windows assembler refuses to copy private source payload into the package")
+        poisoned.unlink()
+
+        package = assembly / "package"
+        (package / "app/narwhal3d/kernel/bin").mkdir(parents=True)
+        kept = package / "app/narwhal3d/kernel/bin/keep.exe"
+        kept.write_bytes(b"MZ")
+        assembler.remove_forbidden_payload(package)
+        check(kept.is_file(), "package-side kernel/bin payload is no longer silently deleted")
+
+        helper_dir = assembly / "helper"
+        helper_dir.mkdir()
+        helper_bytes = b"MZ" + verifier.EXACT_SAVE_PROTOCOL.encode("ascii") + b" helper"
+        (helper_dir / assembler.EXACT_SAVE_HELPER_NAME).write_bytes(helper_bytes)
+        (helper_dir / assembler.EXACT_SAVE_LICENSE_NAME).write_text("openNURBS license\n", encoding="utf-8")
+        exact_record = {"size": len(helper_bytes),
+                        "sha256": verifier.sha256(helper_dir / assembler.EXACT_SAVE_HELPER_NAME),
+                        "license_sha256": verifier.sha256(helper_dir / assembler.EXACT_SAVE_LICENSE_NAME),
+                        "protocol": None}
+        installed = assembly / "installed"
+        (installed / "app").mkdir(parents=True)
+        assembler.install_exact_save_helper(installed, helper_dir, exact_record)
+        stale_package = assembly / "stale-package"
+        (stale_package / "app/narwhal3d/kernel/bin").mkdir(parents=True)
+        (stale_package / "app/narwhal3d/kernel/bin/stale.exe").write_bytes(b"MZ")
+        check(refuses(lambda: assembler.install_exact_save_helper(stale_package, helper_dir, exact_record),
+                      assembler.AssemblyError),
+              "exact-save helper install refuses a package that already holds kernel/bin payload")
+        check((installed / verifier.EXACT_SAVE_HELPER).read_bytes() == helper_bytes
+              and (installed / verifier.EXACT_SAVE_LICENSE).read_bytes() == b"openNURBS license\n",
+              "exact-save helper and openNURBS license are copied from the verified directory")
+        mismatched = assembly / "mismatched"
+        (mismatched / "app").mkdir(parents=True)
+        check(refuses(lambda: assembler.install_exact_save_helper(
+                  mismatched, helper_dir, {**exact_record, "sha256": "0" * 64}), assembler.AssemblyError),
+              "exact-save helper install refuses a copy that differs from its verified record")
+
+        if shutil.which("x86_64-w64-mingw32-g++") and shutil.which("wine"):
+            wine_dir = assembly / "wine"
+            wine_dir.mkdir()
+            source_text = ('#include <cstdio>\n#include <cstring>\n'
+                           'int main(int argc, char** argv) {\n'
+                           '  if (argc == 2 && std::strcmp(argv[1], "--version") == 0) {\n'
+                           '    std::puts("brep_writer ONBREP 1 opennurbs 8");\n    return 0;\n  }\n'
+                           '  return 2;\n}\n')
+            (wine_dir / "helper.cpp").write_text(source_text, encoding="utf-8")
+            subprocess.run(["x86_64-w64-mingw32-g++", "-O2", "-static", "-static-libgcc", "-static-libstdc++",
+                            "-o", str(wine_dir / assembler.EXACT_SAVE_HELPER_NAME),
+                            str(wine_dir / "helper.cpp")], check=True, timeout=300, capture_output=True)
+            (wine_dir / assembler.EXACT_SAVE_LICENSE_NAME).write_text("license\n", encoding="utf-8")
+            wine_record = assembler.validate_exact_save_helper(wine_dir)
+            check(wine_record["protocol"] == "brep_writer ONBREP 1 opennurbs 8",
+                  "Windows assembler executes the exact-save helper under wine and records its protocol")
+            wrong_dir = assembly / "wrong"
+            wrong_dir.mkdir()
+            (wrong_dir / "helper.cpp").write_text('#include <cstdio>\nint main() { std::puts("not the helper"); return 0; }\n',
+                                                  encoding="utf-8")
+            subprocess.run(["x86_64-w64-mingw32-g++", "-O2", "-static", "-static-libgcc", "-static-libstdc++",
+                            "-o", str(wrong_dir / assembler.EXACT_SAVE_HELPER_NAME),
+                            str(wrong_dir / "helper.cpp")], check=True, timeout=300, capture_output=True)
+            (wrong_dir / assembler.EXACT_SAVE_LICENSE_NAME).write_text("license\n", encoding="utf-8")
+            check(refuses(lambda: assembler.validate_exact_save_helper(wrong_dir), assembler.AssemblyError),
+                  "Windows assembler refuses an executed exact-save helper with the wrong protocol")
+        else:
+            print("  SKIP  wine execution of the exact-save helper (mingw or wine unavailable)")
+
+        stub = types.ModuleType("stage_document_observer")
+        staged = {}
+        observer_result = {"sha256": "f" * 64, "qualification": "test fixture"}
+
+        def fake_stage(source_root, native_directory, app_root, platform, *,
+                       observer_directory=None, core_path=None):
+            staged.update(source_root=source_root, native_directory=native_directory, app_root=app_root,
+                          platform=platform, observer_directory=observer_directory, core_path=core_path)
+            return observer_result
+
+        stub.stage = fake_stage
+        observer_dir = assembly / "observer"
+        with patch.dict(sys.modules, {"stage_document_observer": stub}):
+            returned = assembler.stage_document_observer(package, source, observer_dir)
+        check(returned == observer_result and staged["platform"] == "windows-x86_64"
+              and staged["observer_directory"] == observer_dir
+              and staged["core_path"] == package / "app/runtime/windows-x86_64/bin/narwhal_application_core.dll"
+              and staged["app_root"] == package / "app",
+              "Windows assembler stages the observer through the platform interface with explicit inputs")
+
+        pkg = assembly / "manifest-package"
+        (pkg / "runtime").mkdir(parents=True)
+        (pkg / "runtime/blender.exe").write_bytes(b"blender")
+        (pkg / "Narwhal3D.exe").write_bytes(b"launcher")
+        (source / "packaging/windows").mkdir(parents=True)
+        (source / "packaging/windows/narwhal3d_launcher.c").write_text("// launcher\n", encoding="utf-8")
+        with patch.object(assembler, "native_records", return_value={}):
+            assembler.write_manifest(pkg, source, "0.4.10", "a" * 40, observer_record | {"qualification": "x"},
+                                     exact_record)
+        manifest = json.loads((pkg / "windows-release-manifest.json").read_text(encoding="utf-8"))
+        check(manifest["native_components"]["document-observer"] == {**observer_record, "qualification": "x"}
+              and manifest["exact_save_helper"] == exact_record
+              and manifest["excluded_components"] == ["optional-converters", "installer-file-associations"],
+              "Windows manifest records the staged observer, exact-save helper and exact exclusions")
+
+    public_root = Path(tempfile.mkdtemp(prefix="narwhal_windows_public_source_"))
+    try:
+        app = public_root / "app"
+        git_files = {
+            "narwhal3d/__init__.py": b"# public\n", "launch/bootstrap.py": b"# launch\n",
+            "licenses/GPL-3.0-or-later.txt": b"gpl\n", "LICENSE": b"license\n",
+            "THIRD_PARTY_NOTICES": b"notices\n", "CHANGELOG.md": b"changes\n", "STATUS.md": b"status\n",
+        }
+        packaged = {relative: b"packaged only\n" for relative in verifier.PACKAGED_ONLY_FILES}
+        for relative, data in {**git_files, **packaged}.items():
+            (app / relative).parent.mkdir(parents=True, exist_ok=True)
+            (app / relative).write_bytes(data)
+
+        def fake_git(args, **_):
+            relative = args[-1].split(":", 1)[1]
+            if relative in packaged:
+                raise subprocess.CalledProcessError(128, args)
+            return subprocess.CompletedProcess(args, 0, stdout=git_files[relative])
+
+        with patch.object(verifier.subprocess, "run", fake_git):
+            check(not refuses(lambda: verifier.verify_public_source(public_root, "a" * 40)),
+                  "public source comparison exempts only the packaged-only exact-save and observer files")
+            (app / "launch/bootstrap.py").write_bytes(b"edited\n")
+            check(refuses(lambda: verifier.verify_public_source(public_root, "a" * 40)),
+                  "public source comparison still refuses an edited maintained source file")
+    finally:
+        shutil.rmtree(public_root, ignore_errors=True)
+
+    cli = subprocess.run([sys.executable, str(ROOT / "scripts/assemble_windows_release.py"), "--self-check"],
+                         text=True, capture_output=True, timeout=120)
+    check(cli.returncode == 0 and "self-check: OK" in cli.stdout,
+          "Windows assembler self-check passes")
+    check(all(flag in (ROOT / "scripts/assemble_windows_release.py").read_text(encoding="utf-8")
+              for flag in ("--exact-save-helper-dir", "--document-observer-dir")),
+          "Windows assembler exposes the exact-save helper and document observer inputs")
 
     good_zip = root / "good.zip"
     with zipfile.ZipFile(good_zip, "w") as archive:

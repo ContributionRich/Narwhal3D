@@ -44,9 +44,7 @@ assert set(windows_assembler.SOURCE_DIRECTORIES) == {"narwhal3d", "launch", "lic
 assert set(windows_assembler.SOURCE_FILES) == {
     "LICENSE", "THIRD_PARTY_NOTICES", "CHANGELOG.md", "STATUS.md",
 }
-assert windows_assembler.EXCLUDED_COMPONENTS == [
-    "opennurbs-exact-save-helper", "optional-converters", "installer-file-associations",
-]
+assert windows_assembler.EXCLUDED_COMPONENTS == ["optional-converters", "installer-file-associations"]
 assert {
     "Narwhal3D.exe", "Narwhal3D.cmd", "README-FIRST.txt",
     "runtime/blender.exe", "runtime/5.2/python/bin/python.exe",
@@ -92,6 +90,9 @@ assert "--exact-save-helper-dir" in linux_source and "def validate_exact_save_he
 assert "def verify_exact_save_helper(" in linux_verifier
 for exclusion in windows_assembler.EXCLUDED_COMPONENTS:
     assert exclusion in windows_verifier
+windows_assembler_source = (ROOT / "scripts/assemble_windows_release.py").read_text(encoding="utf-8")
+assert "--exact-save-helper-dir" in windows_assembler_source and "--document-observer-dir" in windows_assembler_source
+assert 'manifest.get("excluded_components") != ["optional-converters", "installer-file-associations"]' in windows_verifier
 assert '"physical_gpu_real_window": False' in (ROOT / "scripts/assemble_windows_release.py").read_text(encoding="utf-8")
 assert '"code_signed": False' in (ROOT / "scripts/assemble_windows_release.py").read_text(encoding="utf-8")
 print("package completeness: Linux 13/13 native, Windows 12/12 native, source/launch/licenses/runtime and exclusions complete")

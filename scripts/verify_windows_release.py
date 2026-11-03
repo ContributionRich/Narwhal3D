@@ -35,6 +35,14 @@ APPLICATION_CORE_LICENSE = "licenses/application_core-OPENNURBS.txt"
 APPLICATION_CORE_SOURCE = "app/runtime/windows-x86_64/bin/application-core-source.json"
 UI_CORE_ADJACENT = "app/narwhal3d/native/narwhal_ui_core.dll"
 UI_CORE_SOURCE_PATH = "app/runtime/windows-x86_64/bin/" + UI_CORE_SOURCE
+#: The one file allowed below kernel/bin: the separately built exact-save helper, bound by record.
+EXACT_SAVE_HELPER = "app/narwhal3d/kernel/bin/brep_writer-win32-amd64.exe"
+EXACT_SAVE_LICENSE = "app/licenses/openNURBS-LICENSE.txt"
+EXACT_SAVE_PROTOCOL = "brep_writer ONBREP 1"
+DOCUMENT_OBSERVER_RECORD = "document-observer"
+DOCUMENT_OBSERVER_LIBRARY = "app/narwhal3d/native/document-observer/_narwhal_document_observer.pyd"
+DOCUMENT_OBSERVER_RECEIPT = "app/narwhal3d/native/document-observer/build.json"
+DOCUMENT_OBSERVER_EXPORT = "PyInit__narwhal_document_observer"
 NATIVE_COMPONENT_PATHS = {
     "narwhal_ui_core.dll": "app/runtime/windows-x86_64/bin/narwhal_ui_core.dll",
     "narwhal_application_core.dll": "app/runtime/windows-x86_64/bin/narwhal_application_core.dll",
@@ -106,6 +114,8 @@ REQUIRED = {
     APPLICATION_CORE_SOURCE,
     "app/" + APPLICATION_CORE_LICENSE,
     "app/licenses/Native-Rust-Dependencies.txt",
+    EXACT_SAVE_HELPER, EXACT_SAVE_LICENSE,
+    DOCUMENT_OBSERVER_LIBRARY, DOCUMENT_OBSERVER_RECEIPT,
 }
 SOURCE_ROOTS = ("narwhal3d", "launch", "licenses")
 SOURCE_FILES = ("LICENSE", "THIRD_PARTY_NOTICES", "CHANGELOG.md", "STATUS.md")
@@ -117,6 +127,9 @@ GENERATED_PACKAGE_FILES = {
     "narwhal3d/native/narwhal_pure_core.dll",
     "narwhal3d/native/narwhal_selection_core.dll",
 }
+#: Packaged-only inputs bound by manifest records rather than compared with maintained source.
+PACKAGED_ONLY_FILES = frozenset(path.removeprefix("app/") for path in (
+    EXACT_SAVE_HELPER, EXACT_SAVE_LICENSE, DOCUMENT_OBSERVER_LIBRARY, DOCUMENT_OBSERVER_RECEIPT))
 SHA_RE = re.compile(r"[0-9a-f]{64}\Z")
 CDR_MULTIVERSION_PROTOCOL = "narwhal-cdr-multiversion 1 tracedraw 821ba154 read 16-18 write 17"
 DOCUMENT_CORE_PROTOCOL = "narwhal-document-core 1"
@@ -167,7 +180,7 @@ def validate_paths(root: Path, actual: list[dict[str, object]]) -> None:
             raise VerificationError(f"cache/debug/private file is forbidden: {shown}")
         if "__pycache__" in path.parts or path.name in FORBIDDEN_RUNTIME_TOOLS:
             raise VerificationError(f"cache/build tool is forbidden: {shown}")
-        if any(part == "kernel" for part in path.parts) and "bin" in path.parts:
+        if shown != EXACT_SAVE_HELPER and any(part == "kernel" for part in path.parts) and "bin" in path.parts:
             raise VerificationError(f"private kernel helper tree is forbidden: {shown}")
 
 
@@ -181,7 +194,7 @@ def verify_public_source(root: Path, revision: str) -> None:
         )
     paths.extend(SOURCE_FILES)
     for relative in paths:
-        if relative in GENERATED_PACKAGE_FILES:
+        if relative in GENERATED_PACKAGE_FILES or relative in PACKAGED_ONLY_FILES:
             continue
         package_path = root / "app" / relative
         try:
@@ -488,6 +501,39 @@ def verify_automation_core_identity(path: Path) -> dict[str, object]:
     return identity
 
 
+def verify_exact_save_helper(root: Path, record: object) -> None:
+    """The packaged exact-save helper is bound to its manifest record and openNURBS license."""
+    helper = root / EXACT_SAVE_HELPER
+    license_text = root / EXACT_SAVE_LICENSE
+    for path in (helper, license_text):
+        if not path.is_file() or path.is_symlink():
+            raise VerificationError(f"missing regular exact-save helper input: {path.name}")
+    data = helper.read_bytes()
+    if (not isinstance(record, dict) or record.get("size") != len(data)
+            or record.get("sha256") != sha256(helper)
+            or record.get("license_sha256") != sha256(license_text)):
+        raise VerificationError("invalid packaged exact-save helper record")
+    if not data.startswith(b"MZ") or EXACT_SAVE_PROTOCOL.encode("ascii") not in data:
+        raise VerificationError("packaged exact-save helper lacks the ONBREP 1 identity")
+    protocol = record.get("protocol")
+    if protocol is not None and (not isinstance(protocol, str) or not (
+            protocol == EXACT_SAVE_PROTOCOL or protocol.startswith(EXACT_SAVE_PROTOCOL + " "))):
+        raise VerificationError("exact-save helper record names the wrong protocol")
+
+
+def verify_document_observer(root: Path, record: object) -> None:
+    """The packaged document observer is a PE module bound to its manifest record."""
+    library = root / DOCUMENT_OBSERVER_LIBRARY
+    receipt = root / DOCUMENT_OBSERVER_RECEIPT
+    for path in (library, receipt):
+        if not path.is_file() or path.is_symlink():
+            raise VerificationError(f"missing regular document observer file: {path.name}")
+    if not isinstance(record, dict) or record.get("sha256") != sha256(library):
+        raise VerificationError("document observer record does not match the packaged library")
+    if DOCUMENT_OBSERVER_EXPORT not in inspect_pe_dll(library)["exports"]:
+        raise VerificationError("packaged document observer lacks its Python module export")
+
+
 def verify_directory(root: Path, args: argparse.Namespace) -> None:
     manifest_path = root / "windows-release-manifest.json"
     try:
@@ -509,7 +555,8 @@ def verify_directory(root: Path, args: argparse.Namespace) -> None:
     if manifest.get("inventory") != actual:
         raise VerificationError("Windows package inventory/hash manifest does not match")
     native_components = manifest.get("native_components")
-    if not isinstance(native_components, dict) or set(native_components) != set(NATIVE_COMPONENT_PATHS):
+    if not isinstance(native_components, dict) or set(native_components) != {
+            *NATIVE_COMPONENT_PATHS, DOCUMENT_OBSERVER_RECORD}:
         raise VerificationError("Windows manifest lacks the exact native component set")
     for field in ("runtime_binary_sha256", "launcher_sha256", "launcher_source_sha256"):
         if not isinstance(manifest.get(field), str) or not SHA_RE.fullmatch(manifest[field]):
@@ -607,6 +654,8 @@ def verify_directory(root: Path, args: argparse.Namespace) -> None:
                 raise VerificationError(f"cannot bind document-core source: {exc}") from exc
             if record.get("source_aggregate_sha256") != expected_source:
                 raise VerificationError("Windows document core is not bound to current source")
+    verify_document_observer(root, native_components.get(DOCUMENT_OBSERVER_RECORD))
+    verify_exact_save_helper(root, manifest.get("exact_save_helper"))
     require_bytes(
         root / "runtime/blender.exe",
         (b"Narwhal 3D quit", b" - Narwhal 3D"),
@@ -620,9 +669,7 @@ def verify_directory(root: Path, args: argparse.Namespace) -> None:
     for name, version in expected_distributions.items():
         if metadata_version(site, name) != version:
             raise VerificationError(f"wrong or missing bundled distribution: {name} {version}")
-    if manifest.get("excluded_components") != [
-        "opennurbs-exact-save-helper", "optional-converters", "installer-file-associations",
-    ]:
+    if manifest.get("excluded_components") != ["optional-converters", "installer-file-associations"]:
         raise VerificationError("Windows release exclusion policy is absent or altered")
     validation = manifest.get("validation")
     if not isinstance(validation, dict) or validation.get("windows_packaged_headless_bootstrap") is not True:

@@ -70,6 +70,7 @@ export NARWHAL_APPLICATION_CORE="$ROOT/artifacts/application-core/linux-x86_64/l
 export NARWHAL_HISTORY_CORE="$NARWHAL_APPLICATION_CORE"
 run "document observer packaging contracts" "$PYTHON" -B spike/test_document_observer_package.py
 run "document observer build-gate contracts" "$PYTHON" -B spike/test_document_observer_gate.py
+run "document observer qualify command shapes" "$PYTHON" -B spike/test_document_observer_qualify.py
 run "document observer source gate" "$PYTHON" -B scripts/check_document_observer.py --stage-dev --mutations
 run "live document registry mutations" "$PYTHON" -B spike/test_document_registry_model.py --mutations
 

@@ -12,8 +12,10 @@ Pinned rhino3dm8.35.0 source distribution SHA256:
 
 The current Linux CPython3.13 extension matches the official wheel byte-for-byte:
 `d5fed4447838a0645bfc82cf6ccc684e1c6ca6d4568533e044adf9754de169d4`.
-`narwhal3d/native_document_observer.py` requires that host hash, its Python ABI, and
-a qualified observer hash before loading C++. It never builds or falls back at runtime.
+`narwhal3d/native_document_observer.py` requires the platform's host hash (`_HOSTS`),
+its Python ABI, and a qualified observer hash before loading C++. It never builds or
+falls back at runtime. The Windows x86_64 host (`cp313-win_amd64`) is recorded in
+`_HOSTS` as `1b59225812361ffd89e48eb1caf64a9f505aa1613da2058479b0b766fa976ce7`.
 
 The official pybind11 conduit checks platform ABI/type and lends `BND_ONXModel` only
 for the call. No pointer escapes; the GIL stays held. Matched source provenance is
@@ -78,16 +80,36 @@ outside the project; `NARWHAL_OBSERVER_WORK` selects a reusable disk-backed dire
 One compiler job, shared build lock, bounded runtime,1GiB/no-swap compiler scopes
 and a4GiB desktop reserve are enforced. Neither Blender nor its wheel is rebuilt.
 
+Windows x86_64 uses the same qualification with the Windows inputs instead of
+`--pic-build`. The script calls `vcvars64.bat` itself and builds each variant with MSVC
+`/MD`, so openNURBS and zlib must be built `/MD` as well
+(`-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreadedDLL`):
+
+```
+python -B native\document_observer\qualify.py --source-tree <sdist>\rhino3dm-8.35.0 --sdist <sdist.tar.gz> --vcvars "<VS>\VC\Auxiliary\Build\vcvars64.bat" --opennurbs-lib-dir <dir with opennurbsStatic.lib and zlib.lib> --python-lib <CPython 3.13 libs>\python313.lib --python <python.exe> --python-include <CPython 3.13 include> --rust-check <rust check> --core <narwhal_application_core.dll> --output-root <scratch dir> --mutations [--stage-dev]
+```
+
+Each variant produces `_narwhal_document_observer.pyd` and receives the same control,
+mutation and restored checks as Linux, with identical anchors and RED/GREEN rules. The
+loader and registry integration checks follow. Linux requires `--pic-build`; Windows
+requires the three Windows options and refuses `--pic-build`. `--stage-dev` installs
+into `artifacts/document-observer/windows-x86_64/`.
+
+`windows-x86_64` is a qualified platform once a receipt exists for the pinned host and a
+matching library. macOS remains refused until its own pair is qualified.
+
 Development staging keeps prior directories. Normal discovery uses
-`artifacts/document-observer/linux-x86_64/`; packaged discovery uses
+`artifacts/document-observer/<platform>/` (`linux-x86_64` with `_narwhal_document_observer.so`,
+`windows-x86_64` with `_narwhal_document_observer.pyd`); packaged discovery uses
 `narwhal3d/native/document-observer/`. Source launch preflight exercises required
 registry operations before any graphical runtime is launched.
 
 Release assembly requires a separately supplied, source-bound observer/core pair
 and retains existing portability checks. Host development qualification is NOT a
-portable release claim. Current Windows/macOS source assembly refuses this new
-required component until those pairs are runtime-qualified. Existing released
-packages/assets are unchanged.
+portable release claim. `scripts/stage_document_observer.py` admits `linux-x86_64` and
+`windows-x86_64` pairs (library `.so` / `.pyd`, core `libnarwhal_application_core.so` /
+`narwhal_application_core.dll`); macOS is still refused. Existing released packages/assets
+are unchanged.
 
 ## Evidence and limits
 
