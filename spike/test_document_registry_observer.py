@@ -11,6 +11,7 @@ import base64
 import importlib.util
 import json
 import subprocess
+import os
 import tempfile
 from pathlib import Path
 import struct
@@ -238,7 +239,9 @@ class ObserverTests(unittest.TestCase):
         first = self.add(name='海🐋')
         second = self.add(r3.Sphere(r3.Point3d(0, 0, 0), 2).ToBrep(), name='sphere')
         data = observer.observe(self.file)
-        with tempfile.TemporaryDirectory(prefix='nw-observation-', dir='/var/tmp') as directory:
+        # /var/tmp keeps Linux scratch off a small tmpfs; Windows has no /var/tmp.
+        scratch = '/var/tmp' if os.path.isdir('/var/tmp') else None
+        with tempfile.TemporaryDirectory(prefix='nw-observation-', dir=scratch) as directory:
             path = Path(directory) / 'batch.bin'
             path.write_bytes(data)
             result = subprocess.run([str(rust_check), str(path)], capture_output=True, timeout=15)
