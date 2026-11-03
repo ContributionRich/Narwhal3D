@@ -103,7 +103,7 @@ def windows_compile_command(candidate_source, library, *, vcvars, python_include
                 source_tree / 'src/lib/opennurbs']
     libraries = [opennurbs_lib_dir / 'opennurbsStatic.lib', opennurbs_lib_dir / 'zlib.lib', python_lib]
     system_libraries = ['shlwapi.lib', 'usp10.lib', 'shell32.lib', 'ole32.lib', 'rpcrt4.lib',
-                        'advapi32.lib', 'user32.lib']
+                        'advapi32.lib', 'user32.lib', 'gdi32.lib']
     command = ['cmd /d /c call', f'"{vcvars}"', '&&', 'cl', *flags,
                *(f'"/I{path}"' for path in includes),
                f'"{candidate_source}"', f'"/Fo{library.with_suffix(".obj")}"',

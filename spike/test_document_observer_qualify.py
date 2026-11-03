@@ -22,7 +22,7 @@ SOURCE_TREE = PureWindowsPath(r'C:\narwhal\sdist\rhino3dm-8.35.0')
 WORK = PureWindowsPath(r'C:\work\control')
 OPENNURBS = PureWindowsPath(r'C:\build\opennurbs')
 PYTHON_LIB = PureWindowsPath(r'C:\Py\libs\python313.lib')
-SYSTEM_LIBS = ('shlwapi.lib', 'usp10.lib', 'shell32.lib', 'ole32.lib', 'rpcrt4.lib', 'advapi32.lib', 'user32.lib')
+SYSTEM_LIBS = ('shlwapi.lib', 'usp10.lib', 'shell32.lib', 'ole32.lib', 'rpcrt4.lib', 'advapi32.lib', 'user32.lib', 'gdi32.lib')
 
 
 class WindowsCommandTests(unittest.TestCase):

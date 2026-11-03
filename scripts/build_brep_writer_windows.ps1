@@ -26,7 +26,7 @@ $ArchiveSha256 = "1a8bb8dbe363f4969f679f11810251433416b62e595a6f02c447381a9f2128
 # /MT and the MultiThreaded CMake runtime link the static MSVC runtime into both libraries and helper.
 $CmakeOptions = @("-G", "Ninja", "-DCMAKE_BUILD_TYPE=Release", "-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded")
 $CompileOptions = @("/nologo", "/O2", "/EHsc", "/std:c++17", "/MT", "/DNOMINMAX")
-$SystemLibraries = @("shlwapi.lib", "usp10.lib", "shell32.lib")
+$SystemLibraries = @("shlwapi.lib", "usp10.lib", "shell32.lib", "ole32.lib", "advapi32.lib", "user32.lib", "rpcrt4.lib", "gdi32.lib")
 $HelperName = "brep_writer-win32-amd64.exe"
 $LicenseName = "openNURBS-LICENSE.txt"
 $ProtocolPrefix = "brep_writer ONBREP 1"
