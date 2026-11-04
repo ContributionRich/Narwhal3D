@@ -34,6 +34,10 @@ _ALLOWED_ENV = (
     "PATH", "HOME", "USERPROFILE", "TMPDIR", "TEMP", "TMP", "LANG", "LC_ALL",
     "LC_CTYPE", "XDG_DATA_HOME", "XDG_CONFIG_HOME", "FONTCONFIG_PATH", "FONTCONFIG_FILE",
     "LD_LIBRARY_PATH",
+    # Windows system identity, not secrets: without PROCESSOR_ARCHITECTURE a child's
+    # platform.machine() is empty (MEASURED: the document worker then refused the
+    # qualified observer), and CPython needs SYSTEMROOT for its OS services.
+    "SYSTEMROOT", "WINDIR", "PROCESSOR_ARCHITECTURE", "PROCESSOR_ARCHITEW6432", "PATHEXT", "COMSPEC",
 )
 
 

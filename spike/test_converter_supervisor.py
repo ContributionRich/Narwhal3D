@@ -133,6 +133,22 @@ try:
               "converter receives explicit additions but not unrelated application secrets")
         os.environ.pop("NARWHAL_TEST_SECRET", None)
 
+        saved_identity = {name: os.environ.get(name) for name in ("PROCESSOR_ARCHITECTURE", "SYSTEMROOT")}
+        os.environ.update(PROCESSOR_ARCHITECTURE="AMD64", SYSTEMROOT=r"C:\Windows",
+                          NARWHAL_TEST_SECRET="must-not-leak")
+        try:
+            child = converter_process._environment(None)
+        finally:
+            os.environ.pop("NARWHAL_TEST_SECRET", None)
+            for name, value in saved_identity.items():
+                if value is None:
+                    os.environ.pop(name, None)
+                else:
+                    os.environ[name] = value
+        check(child.get("PROCESSOR_ARCHITECTURE") == "AMD64" and child.get("SYSTEMROOT") == r"C:\Windows"
+              and "NARWHAL_TEST_SECRET" not in child,
+              "Windows system identity reaches child workers so platform.machine() is not empty")
+
         failure = script(work / "failure.sh", "printf 'specific failure' >&2; exit 7\n")
         result = converter_process.run([str(failure)], timeout=2)
         check(result.native and result.returncode == 7 and result.stderr == "specific failure",
