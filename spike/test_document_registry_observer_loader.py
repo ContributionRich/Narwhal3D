@@ -94,7 +94,8 @@ class PlatformAdmissionTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix='nw-observer-platform-', dir=SCRATCH)
         self.addCleanup(self.temp.cleanup)
-        self.root = Path(self.temp.name)
+        # resolve(): Windows temp paths may be 8.3 short names, and discovery resolves its root.
+        self.root = Path(self.temp.name).resolve()
         self.library = self.root / 'candidate' / '_narwhal_document_observer.pyd'
         self.library.parent.mkdir()
         self.library.write_bytes(b'synthetic candidate bytes; never loaded')
@@ -154,7 +155,11 @@ class PlatformAdmissionTests(unittest.TestCase):
             self.refuse(self.evidence(LINUX_HOST), 'binary/ABI pair')
 
     def test_windows_receipt_must_match_the_actual_host_bytes(self):
-        with self.simulated('win32', 'AMD64'):
+        # The receipt names the pinned Windows host; the loaded host extension hashes differently.
+        # Patch the measured bytes so this holds on Linux AND on a real Windows host.
+        real = loader._sha
+        with self.simulated('win32', 'AMD64'), patch.object(loader, '_sha', side_effect=lambda path: (
+                'f' * 64 if str(path) == loader.host.__file__ else real(path))):
             self.refuse(self.evidence(WINDOWS_HOST), 'binary/ABI pair')
 
     def test_windows_admission_uses_the_windows_host_hash(self):
