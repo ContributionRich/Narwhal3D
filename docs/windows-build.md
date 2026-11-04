@@ -1,12 +1,12 @@
 # Windows build preparation
 
-## Current 0.4.9 preparation
+## Current 0.4.10 Windows release
 
-The current pipeline adds a managed single-EXE package while retaining ZIP updates
-for existing users. See [the release procedure](../packaging/RELEASING.md) for cache
-reuse, source freeze, assembly and actual-package acceptance. Build completion is
-not GUI/update qualification. The 0.4.7 record below is historical and must not be
-reused as proof for a new artifact.
+The 0.4.10 **portable EXE**, `Narwhal_3D-0.4.10-Windows-x86_64.exe`, is published on the v0.4.10 GitHub release with its `.sha256` checksum. Only the EXE and checksum are published for this line; no ZIP is published for 0.4.10. It was built from source commit `f1ca720d65b93d7da73199aadda9b60d2c7abedc`, which adds Windows packaging on top of the Linux 0.4.10 source with the same application behaviour. The package includes the qualified Windows document observer and the exact-save helper `narwhal3d/kernel/bin/brep_writer-win32-amd64.exe`; its openNURBS license is `licenses/openNURBS-LICENSE.txt`.
+
+Acceptance ran in a Windows 11 virtual machine with a software OpenGL driver, **not on a physical GPU**. The EXE is unsigned, so SmartScreen may warn. It manages its payload in a per-user cache. Users of the 0.4.8 ZIP download the EXE once; the 0.4.8 ZIP stays on the 0.4.8 release page unchanged.
+
+See [the release procedure](../packaging/RELEASING.md) for cache reuse, source freeze, assembly and actual-package acceptance. Build completion is not GUI/update qualification. The 0.4.7 record below is historical and must not be reused as proof for a new artifact.
 
 ## Historical 0.4.7 baseline
 

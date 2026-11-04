@@ -6,11 +6,12 @@ All notable public changes will be recorded here. Narwhal 3D is an extremely ear
 
 ## 0.4.10 — 2026-11-02
 
-Linux patch release for 0.4.9. Windows and Apple Silicon Mac packages are still not published for the 0.4.9 line; the 0.4.8 packages remain on their release page.
+Linux and Windows patch release for 0.4.9. The Linux AppImage and the Windows portable EXE are published for 0.4.10. No Apple Silicon Mac build has been made for this line; the 0.4.8 DMG remains on its release page.
 
 - Fixed: in the 0.4.9 AppImage, a large solid such as a Torus stopped every following command (for example Curve) with `native observation serialization failed or exceeded limit`. The package lacked the exact-save helper, so solids were stored as triangulated stand-ins that exceeded the document observer's limits.
 - The Linux AppImage now includes Narwhal's exact-save helper, statically linked with openNURBS. Solids are stored as exact Breps in the document and in saved `.3dm` files, and the bounded multi-section Sweep1 route works in the package. The openNURBS license text ships in `licenses/openNURBS-LICENSE.txt`.
 - The Linux package gates now verify the packaged helper, and release acceptance exercises a large solid in the extracted AppImage without any developer override.
+- Windows: the portable EXE was added to the 0.4.10 release on 2026-11-04 from source f1ca720d…, with the qualified document observer and the exact-save helper.
 
 ## 0.4.9 — 2026-11-02
 

@@ -8,9 +8,9 @@
 
 Draw with the mouse, type a command, or choose a tool from the sidebar. Work in four views at once, shape your model with on-screen handles, and choose a light or dark workspace.
 
-**[Download for Linux](https://github.com/ContributionRich/Narwhal3D/releases/download/v0.4.10/Narwhal_3D-0.4.10-x86_64.AppImage)** · **[Windows and macOS builds: 0.4.8 release](https://github.com/ContributionRich/Narwhal3D/releases/tag/v0.4.8)** · [What's new](CHANGELOG.md)
+**[Download for Linux](https://github.com/ContributionRich/Narwhal3D/releases/download/v0.4.10/Narwhal_3D-0.4.10-x86_64.AppImage)** · **[Download for Windows](https://github.com/ContributionRich/Narwhal3D/releases/download/v0.4.10/Narwhal_3D-0.4.10-Windows-x86_64.exe)** · **[macOS Apple Silicon: 0.4.8 release](https://github.com/ContributionRich/Narwhal3D/releases/tag/v0.4.8)** · [What's new](CHANGELOG.md)
 
-> **Check the release page for available builds.** The 0.4.10 Linux build (a patch release for 0.4.9) fixes command behaviour and live previews across many commands, including Pyramid, Torus, Tube, Pipe, Extend, Fillet and Chamfer. Windows and Mac packages for this line are not published yet, because their document-observer qualification is incomplete; the 0.4.8 Windows and Mac packages remain on the 0.4.8 release page. The 0.4.8 source included the revised welcome/inspector UI, automatic AI selection context, remembered provider permissions, explicitly approved box creation, newer read-only MCP support and source-only bounded multi-section Sweep1 work. The first Apple Silicon Mac preview is now available, with the platform limitations below. See [current source status](STATUS.md).
+> **Check the release page for available builds.** The 0.4.10 Linux AppImage and Windows portable EXE are published. The 0.4.10 Linux build (a patch release for 0.4.9) fixes command behaviour and live previews across many commands, including Pyramid, Torus, Tube, Pipe, Extend, Fillet and Chamfer. The Windows EXE was built from source commit `f1ca720d65b93d7da73199aadda9b60d2c7abedc`, with the same application behaviour as the Linux 0.4.10 source; it includes the qualified document observer and exact-save helper. Its acceptance ran in a Windows 11 virtual machine with a software OpenGL driver, not on a physical GPU. No Mac build has been made for this line; the 0.4.8 Apple Silicon DMG remains on the 0.4.8 release page. The 0.4.8 source included the revised welcome/inspector UI, automatic AI selection context, remembered provider permissions, explicitly approved box creation, newer read-only MCP support and source-only bounded multi-section Sweep1 work. The first Apple Silicon Mac preview is now available, with the platform limitations below. See [current source status](STATUS.md).
 
 > **An early preview, built in the open.** Narwhal is still growing, and some tools are incomplete. Save important work often and verify dimensions and exported geometry before manufacturing. [See what works and what's still missing →](docs/gaps.md)
 
@@ -60,15 +60,15 @@ The application is bundled—no separate Blender installation is needed. The dow
 
 ### Windows
 
-The 0.4.8 **portable EXE** (on the 0.4.8 release page) manages its payload in a private per-user cache; no manual extraction is required. Its first launch prepares that cache. Keep user documents outside the replaceable application cache.
+The 0.4.10 **portable EXE**, `Narwhal_3D-0.4.10-Windows-x86_64.exe`, manages its payload in a private per-user cache; no manual extraction is required. Its first launch prepares that cache. Keep user documents outside the replaceable application cache. Compare its download with the published `.sha256` checksum.
 
-A Windows build for this line is not published yet. The 0.4.8 portable ZIP stays on the 0.4.8 release page unchanged for compatibility; future Windows releases will publish only the EXE and its checksum.
+The v0.4.10 release publishes only the EXE and its checksum. The 0.4.8 portable ZIP stays on the 0.4.8 release page unchanged for compatibility; if you installed that ZIP, download the 0.4.10 EXE once. Future Windows releases will also publish only the EXE and its checksum.
 
-This is an **unsigned early preview**, so Windows may display a SmartScreen warning. There is no installer yet, and testing on physical Windows GPUs remains limited. [Windows details](docs/windows-build.md)
+This is an **unsigned early preview**, so Windows may display a SmartScreen warning. The EXE was accepted in a Windows 11 virtual machine using a software OpenGL driver, not a physical GPU, and testing on physical Windows GPUs remains limited. There is no installer yet. [Windows details](docs/windows-build.md)
 
 ### macOS
 
-Download the **Apple Silicon DMG** from the 0.4.8 release page (a Mac package for this line is not published yet), open it and drag **Narwhal 3D.app** to Applications. No separate Blender or Python installation is needed. The build targets **macOS14+** and was tested on macOS15; Intel Macs are not supported by this package.
+Download the **Apple Silicon DMG** from the 0.4.8 release page (no Mac build has been made for this line yet), open it and drag **Narwhal 3D.app** to Applications. No separate Blender or Python installation is needed. The build targets **macOS14+** and was tested on macOS15; Intel Macs are not supported by this package.
 
 This preview is ad-hoc-signed, **not Developer ID-signed or notarized**. Gatekeeper requires explicit approval: follow Apple’s Privacy & Security instructions for opening an app you trust, rather than disabling Gatekeeper globally. Corel multiversion conversion remains unavailable on Mac. [Mac installation/build details](docs/macos-build.md).
 
@@ -86,7 +86,7 @@ This preview is ad-hoc-signed, **not Developer ID-signed or notarized**. Gatekee
 - **STEP** is the recommended interchange format for exact solid geometry.
 - Other supported formats include **`.3dm`, DXF, SVG, OBJ, STL, and CorelDRAW**, with different capabilities and limitations for each.
 
-Some solids cannot yet be exported as exact `.3dm` geometry in packaged builds. Use STEP for exact solid exchange, and check the [format and geometry details](docs/technical-reference.md#geometry-model) before depending on a particular workflow.
+Some solids cannot yet be exported as exact `.3dm` geometry, and the macOS package does not include the exact-save helper yet. Use STEP for exact solid exchange, and check the [format and geometry details](docs/technical-reference.md#geometry-model) before depending on a particular workflow.
 
 ## Help shape Narwhal
 

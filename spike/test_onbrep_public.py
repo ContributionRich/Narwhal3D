@@ -130,12 +130,27 @@ try:
             status_text = stream.read()
         check("Some solids cannot yet be exported as exact `.3dm` geometry" in root_readme
               and "docs/technical-reference.md#geometry-model" in root_readme
-              and "The Linux release (0.4.10 onward) bundles the linked helper" in technical_reference
-              and "Windows and macOS packages do not bundle it yet" in technical_reference
-              and "The Linux package bundles the linked openNURBS helper" in status_text
+              and "The Linux and Windows releases (0.4.10 onward) bundle the linked helper" in technical_reference
+              and "The macOS package does not bundle it yet" in technical_reference
+              and "`narwhal3d/kernel/bin/brep_writer-win32-amd64.exe`" in technical_reference
+              and "`licenses/openNURBS-LICENSE.txt`" in technical_reference
+              and "The Linux and Windows packages bundle the linked openNURBS helper" in status_text
               and "`licenses/openNURBS-LICENSE.txt`" in status_text
-              and "Windows and macOS packages do not yet" in status_text,
+              and "The macOS package does not yet" in status_text
+              and "Windows and macOS packages do not" not in technical_reference + status_text,
               "README summarizes exact-save limits and links the preserved helper disclosure")
+        with open(os.path.join(ROOT, "packaging", "NOTICES.md"), encoding="utf-8") as stream:
+            notices_text = stream.read()
+        with open(os.path.join(ROOT, "THIRD_PARTY_NOTICES"), encoding="utf-8") as stream:
+            third_party_text = stream.read()
+        check("`narwhal3d/kernel/bin/brep_writer-win32-amd64.exe`" in notices_text
+              and "built by `scripts/build_brep_writer_windows.ps1` against the same pinned openNURBS revision, with its license text at `licenses/openNURBS-LICENSE.txt`" in notices_text
+              and "The macOS package does not include it yet." in notices_text
+              and "`narwhal3d/kernel/bin/brep_writer-win32-amd64.exe`" in third_party_text
+              and "`licenses/openNURBS-LICENSE.txt`" in third_party_text
+              and "The macOS package does not include the helper yet." in third_party_text
+              and "Windows and macOS packages do not" not in notices_text + third_party_text,
+              "packaging and third-party notices bundle the helper on Linux and Windows only, with the license location")
         self_check = subprocess.run(
             [BUILD_PATH, "--self-check"], capture_output=True, text=True, timeout=20)
         verifier_check = subprocess.run(

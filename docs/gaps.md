@@ -184,7 +184,7 @@ Viewport layout/state-machine work is deferred until it has dedicated integratio
 | Area | Status | Remaining work |
 |---|---|---|
 | `.narwhal` project | Initial v1 | Exact masters, metadata, checksums and atomic Save/Open are built in; compression, embedded external picture assets and forward migration tooling remain |
-| `.3dm` interchange | Partial | Read/Open/Import/Export remain; the Linux package bundles the exact multi-face helper; Windows/macOS packages do not yet, and broader metadata policy remains |
+| `.3dm` interchange | Partial | Read/Open/Import/Export remain; the Linux and Windows packages bundle the exact multi-face helper; the macOS package does not yet, and broader metadata policy remains |
 | STEP | Partial | Curves, wires, shells, surfaces, assemblies, colors/layers, broader round trips |
 | DXF | Partial | Blocks, text, bulges, styles, richer entities, surfaces/solids, options |
 | SVG/PDF/AI | Partial | Page selection, fill/text policy, portable converter availability |
@@ -194,7 +194,7 @@ Viewport layout/state-machine work is deferred until it has dedicated integratio
 
 ## Platform and packaging
 
-Current release target: Linux x86_64 AppImage. Windows has an unsigned portable preview. macOS has an experimental macOS 14+ native-architecture source-build recipe, but no published or accepted package.
+Current release targets: Linux x86_64 AppImage and Windows x86_64 portable EXE, both 0.4.10. The Windows EXE is an unsigned portable preview, accepted in a Windows 11 virtual machine with a software OpenGL driver rather than on a physical GPU. macOS has an experimental macOS 14+ native-architecture source-build recipe; no Mac build has been made or accepted for this line (the 0.4.8 Apple Silicon DMG remains on its release page).
 
 Missing:
 
