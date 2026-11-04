@@ -292,6 +292,9 @@ def observer_phase_ok(script: str) -> bool:
             save_open < script.index('"run packaged native-document Save/Open round trip"'),
             script.index('"run packaged native-document Save/Open round trip"')
             < script.rindex(OBSERVER_REMOVE) < script.index('"create engineering package archive"'),
+            # Packaged-runtime probes import narwhal3d, which loads the observer: remove it after all of them.
+            max(script.rindex("$RuntimePythonPath @("), script.rindex("verify_packaged_native_cores.py"))
+            < script.rindex(OBSERVER_REMOVE),
         )
     except ValueError:
         return False
@@ -327,6 +330,11 @@ def observer_mutants(script: str):
     index = script.rindex(OBSERVER_REMOVE)
     yield ("post-Save/Open observer cleanup removed",
            script[:index] + script[index + len(OBSERVER_REMOVE):])
+    save_open_end = script.index('"run packaged native-document Save/Open round trip"')
+    save_open_end = script.index("\n}\n", script.index("} finally {", save_open_end)) + 3
+    yield ("observer removed before the packaged-runtime probes",
+           script[:save_open_end] + OBSERVER_REMOVE
+           + script[save_open_end:index] + script[index + len(OBSERVER_REMOVE):])
     yield ("phase reads a variable defined only on the clean-build path",
            once(OBSERVER_PHASE_MARKER, OBSERVER_PHASE_MARKER + "\n$null = $LibraryDirectory"))
 

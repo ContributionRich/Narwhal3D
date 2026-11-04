@@ -1084,8 +1084,6 @@ try {
 } finally {
     Remove-Item -LiteralPath $PackagedTestDirectory -Recurse -Force -ErrorAction SilentlyContinue
 }
-Log "Removing the packaged document observer after the Save/Open round trip; the host assembler stages it from the return artifacts"
-Remove-Item -LiteralPath $PackagedObserverDirectory -Recurse -Force
 
 $Launcher = Join-Path $PackageDirectory "Narwhal3D.cmd"
 @'
@@ -1283,6 +1281,10 @@ $Result = [ordered]@{
     code_signed = $false
 }
 
+# Every packaged-runtime probe above imports narwhal3d, which needs the observer. Remove it only
+# now, before archiving: the host assembler stages it from the return artifacts.
+Log "Removing the packaged document observer before archiving; the host assembler stages it from the return artifacts"
+Remove-Item -LiteralPath $PackagedObserverDirectory -Recurse -Force
 $PackageZip = Join-Path $Desktop ($PackageName + ".zip")
 $TemporaryPackageZip = $PackageZip + ".part.zip"
 Remove-Item -LiteralPath $TemporaryPackageZip -Force -ErrorAction SilentlyContinue
