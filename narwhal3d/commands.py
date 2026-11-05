@@ -9492,6 +9492,63 @@ class UnlockSelectedCmd(_SelectedStateCmd):
         return f"Unlocked {len(names)} object{'s' if len(names) != 1 else ''}"
 
 
+def _plural(count, noun):
+    return f"{count} {noun}{'s' if count != 1 else ''}"
+
+
+class _SwapModeCmd(Command):
+    """HideSwap: exchange two `Mode` states across the whole document.
+
+    Zero-prompt and document-driven like `Show`/`Unlock`. Every object in `_mode_a`
+    goes to `_mode_b` and every object in `_mode_b` goes to `_mode_a`; objects in any
+    other Mode are left alone. It walks the file objects themselves, not names, so
+    two objects sharing a name are each swapped from their own state. Only `Mode` is
+    written: IDs, geometry, names, layers, groups and the selection are untouched.
+    `Mode` is in the undo snapshot, so the whole swap is one Undo step.
+    """
+
+    steps = []
+    records_undo = True        # a Mode change is a document change
+    _mode_a = None
+    _mode_b = None
+    _empty_message = None
+
+    def _message(self, to_b, to_a):
+        raise NotImplementedError
+
+    def execute(self, ctx):
+        a, b = self._mode_a, self._mode_b
+        to_b = [f for f in ctx.model.file.Objects if f.Attributes.Mode == a]
+        to_a = [f for f in ctx.model.file.Objects if f.Attributes.Mode == b]
+        if not to_b and not to_a:
+            return self._empty_message, True
+        ctx.note_change(self.name)
+        for fobj in to_b:
+            fobj.Attributes.Mode = b
+        for fobj in to_a:
+            fobj.Attributes.Mode = a
+        return self._message(len(to_b), len(to_a)), True
+
+
+class HideSwapCmd(_SwapModeCmd):
+    """`HideSwap` -- hide every visible object and show every hidden one.
+
+    Locked objects stay Locked: they are neither Normal nor Hidden, so the swap
+    does not see them.
+    """
+
+    name = "HideSwap"
+    description = "Hide the visible objects and show the hidden ones."
+    _mode_a = r3.ObjectMode.Normal
+    _mode_b = r3.ObjectMode.Hidden
+    # OURS: the reference CAD application's wording was not measured.
+    _empty_message = "No visible or hidden objects to swap."
+
+    def _message(self, to_b, to_a):
+        # OURS: wording not measured.
+        return f"Hid {_plural(to_b, 'object')}, showed {_plural(to_a, 'object')}."
+
+
 class IsolateCmd(Command):
     """`Isolate` -- hide everything except the selected and locked objects.
 
@@ -16875,7 +16932,7 @@ def _build_registry():
                 SelGroupCmd, SelKeyCmd, SelValueCmd, SelKeyValueCmd, SelLayerCmd,
                 SelLastCmd, SelPrevCmd,
                 HideCmd, ShowCmd, LockCmd, UnlockCmd,
-                ShowSelectedCmd, UnlockSelectedCmd,
+                ShowSelectedCmd, UnlockSelectedCmd, HideSwapCmd,
                 IsolateCmd, UnisolateCmd, AddToGroupCmd, RemoveFromGroupCmd,
                 SetGroupNameCmd, GroupCmd, UngroupCmd, UngroupAllCmd,
                 DupEdgeCmd, DupBorderCmd,

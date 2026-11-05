@@ -110,6 +110,7 @@ _CORE_MENUS = (
             _item("Hide Selected", "hide"),
             _item("Show All", "show"),
             _item("Show Selected Hidden Objects", "showselected"),
+            _item("Swap Hidden and Visible", "hideswap"),
             _item("Isolate Selected", "isolate"),
             _item("End Isolation", "unisolate"),
             _sep(),
