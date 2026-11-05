@@ -89,6 +89,7 @@ class Ctx:
         self.model = model.NarwhalModel()
         self._selected = [Stub(nm) for nm in selected]
         self.changes = []
+        self.added = []
         for nm, g in named:
             self.model.add_object(g, nm, 0)
 
@@ -103,6 +104,12 @@ class Ctx:
 
     def note_change(self, label=None):
         self.changes.append(label)
+
+    def add_geometry(self, geom, base_name, layer_index=None):
+        name = f"{base_name}{len(self.added) + 1:02d}"
+        self.added.append(geom)
+        self.model.add_object(geom, name, 0)
+        return name, name
 
 
 def fresh(name):
@@ -291,6 +298,81 @@ c.feed("1,0,0", ctx)
 knots = sorted({round(float(k), 9) for k in ctx.geom_by_name("L").Knots})
 check(len(ctx.geom_by_name("L").Points) == 4 and knots == [0.0, 1.0, 3.0, 4.0],
       f"Symmetrical: pick 1 -> knots at 1 and 3, 2 -> 4 points ({knots})")
+
+# ===========================================================================
+print()
+print("Midpoints=Yes places one marker per span and leaves the curve alone (#50)")
+# ===========================================================================
+
+
+def knotted_curve():
+    """Degree 2, knots 0 0 1 3 3: distinct knot values 0, 1 and 3."""
+    c = r3.NurbsCurve(3, False, 3, 4)
+    for i, (x, y) in enumerate([(0, 0), (1, 2), (3, 2), (4, 0)]):
+        c.Points[i] = r3.Point4d(x, y, 0, 1)
+    for i, k in enumerate([0, 0, 1, 3, 3]):
+        c.Knots[i] = k
+    return c
+
+
+def curve_state(g):
+    return ([float(k) for k in g.Knots],
+            [(p.X, p.Y, p.Z, p.W) for p in g.Points])
+
+
+def marker_check(ctx, msg, done, label):
+    g = ctx.geom_by_name("K")
+    want = [g.PointAt(0.5), g.PointAt(2.0)]
+    got = [m.Location for m in ctx.added]
+    check(done and msg == "InsertKnot: 2 midpoint markers placed",
+          f"{label}: finishes with the marker count ({msg!r}, done={done})")
+    check(len(got) == 2 and all(isinstance(m, r3.Point) for m in ctx.added),
+          f"{label}: two point objects were added ({len(got)})")
+    check(len(got) == 2 and all(dist(a, b) <= 1e-12 for a, b in zip(got, want)),
+          f"{label}: the markers sit at PointAt(0.5) and PointAt(2.0)")
+    check(curve_state(g) == base_state, f"{label}: knots and control points are unchanged")
+    check(ctx.changes == ["InsertKnot"], f"{label}: one note_change, so one Undo step ({ctx.changes})")
+
+
+base_state = curve_state(knotted_curve())
+check(sorted({k for k in base_state[0]}) == [0.0, 1.0, 3.0], "fixture: distinct knots 0, 1, 3")
+
+# preselected: Midpoints=Yes at the knot-point prompt runs at once
+ctx = Ctx([("K", knotted_curve())], ("K",))
+c = fresh("insertknot")
+c.begin(ctx)
+msg, done = c.feed("Midpoints=Yes", ctx)
+marker_check(ctx, msg, done, "preselected")
+check("not implemented" not in (msg or ""), "the old refusal is gone")
+
+# typed: set the toggle at the object prompt, then name the curve
+ctx = Ctx([("K", knotted_curve())])
+c = fresh("insertknot")
+c.begin(ctx)
+msg, done = c.feed("Midpoints=Yes", ctx)
+check(not done and c.opt.get("Midpoints") is True and not ctx.added,
+      f"at the object prompt the toggle is stored and nothing is placed yet ({msg!r})")
+msg, done = c.feed("K", ctx)
+marker_check(ctx, msg, done, "typed")
+
+# a master-bearing curve is still refused by the shared curve check
+mc = bridge.make_circle((0, 0, 0), 6.0)
+kernel.register_master(mc, "TEST_MASTER")
+ctx = Ctx([("M", mc)], ("M",))
+c = fresh("insertknot")
+c.begin(ctx)
+msg, done = c.feed("Midpoints=Yes", ctx)
+check(done and "analytic master" in msg and not ctx.added and ctx.changes == [],
+      f"Midpoints on a master-bearing curve is refused by name ({msg!r})")
+kernel.drop_master(mc)
+
+# Midpoints=No keeps the knot-point loop
+ctx = Ctx([("K", knotted_curve())], ("K",))
+c = fresh("insertknot")
+c.begin(ctx)
+msg, done = c.feed("Midpoints=No", ctx)
+check(not done and not ctx.added and c.step_index == 1,
+      f"Midpoints=No changes nothing and stays in the loop ({msg!r})")
 
 print(f"\n{checks - len(failures)}/{checks} checks passed")
 if failures:

@@ -11427,9 +11427,9 @@ class InsertKnotCmd(Command):
     (place guide markers), `Symmetrical` (both sides of the centre), `Undo`, `Direction`
     / `Toggle` (surfaces only), `SubCrv`. This command is the BASE form -- one curve,
     one picked location -- so the curve gets exactly ONE knot at the parameter closest to
-    the pick, as the implementation requires. The `Automatic`/`Midpoints`/`Symmetrical`/`SubCrv`
-    options are not implemented and are therefore not declared, so they report "not
-    implemented yet" rather than silently ignoring them (the explicit-refusal policy).
+    the pick, as the implementation requires. `Automatic`, `Midpoints` and `Symmetrical` are
+    built; `SubCrv` and the surface options are not declared, so they report "not
+    implemented yet" rather than being silently ignored (the explicit-refusal policy).
 
     The mutation is `NurbsCurve.Knots.InsertKnot(t, 1)` (present, mutates in
     place): inserting at a parameter that is not already a knot adds exactly one control
@@ -11467,10 +11467,15 @@ class InsertKnotCmd(Command):
     records_undo = True         # a knot insertion is a document change
 
     def on_option_set(self, option, value, ctx):
-        if option.name == "Midpoints" and value:
-            self.opt["Midpoints"] = False
-            return "InsertKnot: Midpoints markers are not implemented yet", False
+        if option.name == "Midpoints" and value and self.step_index == 1:
+            return self._mark_midpoints(ctx)
         return super().on_option_set(option, value, ctx)
+
+    def begin(self, ctx):
+        out = super().begin(ctx)
+        if self.step_index == 1 and self.opt.get("Midpoints"):
+            return self._recorded(ctx, lambda: self._mark_midpoints(ctx))
+        return out
 
     def _curve(self, ctx):
         """``(name, curve)`` to insert into, or ``(None, refusal)``."""
@@ -11498,6 +11503,24 @@ class InsertKnotCmd(Command):
                           "leave the master behind")
         return name, geom
 
+    def _mark_midpoints(self, ctx):
+        """`Midpoints=Yes`: a point object midway along each span between distinct knots.
+
+        The curve is only read (`PointAt` is an exact evaluation), so no knot is
+        inserted. OURS (#50): the command finishes here instead of entering the
+        knot-point loop.
+        """
+        name, geom = self._curve(ctx)
+        if name is None:
+            return geom, True
+        knots = sorted({float(k) for k in geom.Knots})
+        mids = [(a + b) / 2.0 for a, b in zip(knots, knots[1:]) if b > a]
+        ctx.note_change(self.name)
+        for t in mids:
+            p = geom.PointAt(t)
+            ctx.add_geometry(bridge.make_point((p.X, p.Y, p.Z)), "Point")
+        return f"InsertKnot: {len(mids)} midpoint markers placed", True
+
     def _insert(self, ctx, name, geom, params):
         ctx.note_change(self.name)      # capture "before" before the mutation
         for t in params:
@@ -11523,7 +11546,11 @@ class InsertKnotCmd(Command):
         if (self.step_index == 1 and not (text or "").strip()
                 and self.pending_option is None):
             return None, True       # "Press Enter when done"
-        return super()._feed(text, ctx)
+        before = self.step_index
+        out = super()._feed(text, ctx)
+        if before == 0 and self.step_index == 1 and self.opt.get("Midpoints"):
+            return self._mark_midpoints(ctx)   # the curve was just chosen
+        return out
 
     def execute(self, ctx: NarwhalContext):
         name, geom = self._curve(ctx)
