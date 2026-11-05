@@ -204,6 +204,8 @@ REQUIRED = {
     "spike/test_sweep1_interaction_checks.py",
     "spike/test_sweep1_interaction_gui.py",
     "spike/test_undo.py",
+    "spike/test_fast_checks.py",
+    "scripts/fast_checks.sh",
     "spike/test_surfacing_parallel.py",
     "spike/test_surfacing_probe.py",
     "spike/test_surfacing_integration.py",
