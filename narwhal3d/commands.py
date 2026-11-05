@@ -9497,7 +9497,7 @@ def _plural(count, noun):
 
 
 class _SwapModeCmd(Command):
-    """HideSwap: exchange two `Mode` states across the whole document.
+    """HideSwap / LockSwap: exchange two `Mode` states across the whole document.
 
     Zero-prompt and document-driven like `Show`/`Unlock`. Every object in `_mode_a`
     goes to `_mode_b` and every object in `_mode_b` goes to `_mode_a`; objects in any
@@ -9547,6 +9547,28 @@ class HideSwapCmd(_SwapModeCmd):
     def _message(self, to_b, to_a):
         # OURS: wording not measured.
         return f"Hid {_plural(to_b, 'object')}, showed {_plural(to_a, 'object')}."
+
+
+class LockSwapCmd(_SwapModeCmd):
+    """`LockSwap` -- lock every unlocked object and unlock every locked one.
+
+    Hidden objects stay Hidden. Viewport pickability follows the document: the
+    pickers re-read `Mode` through `ui._locked_names_cached` and
+    `ui.sync_locked_selectability`, keyed on the document state this recorded
+    command moves, so a newly locked object stops being pickable and a newly
+    unlocked one becomes pickable on the next click without extra work here.
+    """
+
+    name = "LockSwap"
+    description = "Lock the unlocked objects and unlock the locked ones."
+    _mode_a = r3.ObjectMode.Normal
+    _mode_b = r3.ObjectMode.Locked
+    # OURS: the reference CAD application's wording was not measured.
+    _empty_message = "No unlocked or locked objects to swap."
+
+    def _message(self, to_b, to_a):
+        # OURS: wording not measured.
+        return f"Locked {_plural(to_b, 'object')}, unlocked {_plural(to_a, 'object')}."
 
 
 class IsolateCmd(Command):
@@ -16932,7 +16954,7 @@ def _build_registry():
                 SelGroupCmd, SelKeyCmd, SelValueCmd, SelKeyValueCmd, SelLayerCmd,
                 SelLastCmd, SelPrevCmd,
                 HideCmd, ShowCmd, LockCmd, UnlockCmd,
-                ShowSelectedCmd, UnlockSelectedCmd, HideSwapCmd,
+                ShowSelectedCmd, UnlockSelectedCmd, HideSwapCmd, LockSwapCmd,
                 IsolateCmd, UnisolateCmd, AddToGroupCmd, RemoveFromGroupCmd,
                 SetGroupNameCmd, GroupCmd, UngroupCmd, UngroupAllCmd,
                 DupEdgeCmd, DupBorderCmd,

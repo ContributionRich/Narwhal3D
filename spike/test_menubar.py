@@ -55,7 +55,7 @@ EXPECTED_MENUS = (
 )
 EXPECTED_RUNNABLE_COUNTS = {
     "File": 8,
-    "Edit": 48,
+    "Edit": 49,
     "View": 14,
     "Curve": 47,
     "Surface": 13,
@@ -103,7 +103,7 @@ def walk_rows(rows, path=()):
 
 
 print("\n-- live registry and authored structure --")
-check(len(REGISTERED) == 187, "the bare-package live registry has 187 commands",
+check(len(REGISTERED) == 188, "the bare-package live registry has 188 commands",
       repr(len(REGISTERED)))
 check(SIBLING_PINS <= REGISTERED,
       "commands unique to every sibling provider are present",
@@ -149,7 +149,7 @@ toolbar_commands = {
     for tab in resource.toolbar_data.TABS for record in tab["buttons"]
     if record.get("command")
 }
-check(len(todos) == 364 and EXPECTED_SERVICE_TODOS <= todo_payloads
+check(len(todos) == 363 and EXPECTED_SERVICE_TODOS <= todo_payloads
       and toolbar_commands - REGISTERED <= todo_payloads,
       "all public toolbar-only commands and service gaps are explicit menu leaves",
       repr({"todos": len(todos),
