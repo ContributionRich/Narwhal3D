@@ -18,6 +18,8 @@ import sys
 import tempfile
 import time
 
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import runtime_paths
 ROOT = Path(__file__).resolve().parents[2]
 HELPER = ROOT / 'spike/test_drawing_behavior_gui.py'
 
@@ -39,7 +41,7 @@ def launch():
         env=dict(env, NARWHAL3D_LAUNCHER_TEST='native-paths'), text=True, timeout=10)
     native = dict(row.split('=', 1) for row in paths.splitlines() if row)
     env.update({k: v for k, v in native.items() if v})
-    runtime = ROOT / 'tools/blender-patched/blender'
+    runtime = runtime_paths.blender(ROOT)
     if not os.access(runtime, os.X_OK):
         runtime = ROOT / 'tools/blender-5.2.2-linux-x64/blender'
     if not os.access(runtime, os.X_OK):

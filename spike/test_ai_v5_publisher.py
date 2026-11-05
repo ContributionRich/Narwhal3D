@@ -12,6 +12,9 @@ from pathlib import Path
 import subprocess
 import tempfile
 import time
+import sys
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import runtime_paths
 from test_automation_native import ROOT
 from test_ai_accepted_review_native import TARGET, discover_executable, _headroom
 
@@ -27,14 +30,14 @@ def run(target, legacy=False):
         _headroom(2048)
         env=os.environ.copy()
         env.update(PYTHONPATH=str(ROOT/'vendor/occt'),
-                   LD_LIBRARY_PATH=str(ROOT/'tools/blender-patched/5.2/python/lib/python3.13/site-packages/cadquery_ocp_novtk.libs'),
+                   LD_LIBRARY_PATH=str(runtime_paths.occt_libs(ROOT)),
                    BLENDER_USER_CONFIG=settings,NARWHAL3D_SETTINGS_FILE=settings+'/preferences.json',
                    PYTHONDONTWRITEBYTECODE='1',OMP_NUM_THREADS='1',NARWHAL3D_OPEN_WORKERS='0')
         script=ROOT/'spike'/('test_ai_primitives.py' if legacy else 'test_ai_accepted_review.py')
         args=['--library',str(Path(target)/'debug/libnarwhal_automation.so'),'--geometry','--publisher-mutations'] if legacy else ['--native-executable',str(executable),'--mutations']
         command=['systemd-run','--user','--scope','-p','MemoryMax=2048M','-p','MemorySwapMax=0',
                  'timeout','--signal=TERM','--kill-after=5s','150s',
-                 str(ROOT/'tools/blender-patched/blender'),'-b','--factory-startup','-t','1',
+                 str(runtime_paths.blender(ROOT)),'-b','--factory-startup','-t','1',
                  '--python-exit-code','1','--python',str(script),'--',*args]
         started=time.monotonic()
         result=subprocess.run(command,cwd=ROOT,env=env,capture_output=True,text=True,timeout=165)

@@ -2,17 +2,37 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-BLENDER="$ROOT/tools/blender-patched/blender"
-PYTHON="$ROOT/tools/blender-patched/5.2/python/bin/python3.13"
+# Prefer the patched runtime; a source checkout uses the bootstrapped official runtime.
+RUNTIME_ROOT="$ROOT/tools/blender-patched"
+if [[ ! -x "$RUNTIME_ROOT/blender" || ! -x "$RUNTIME_ROOT/5.2/python/bin/python3.13" ]]; then
+    RUNTIME_ROOT="$ROOT/tools/blender-5.2.2-linux-x64"
+fi
+BLENDER="$RUNTIME_ROOT/blender"
+PYTHON="$RUNTIME_ROOT/5.2/python/bin/python3.13"
 
-[[ -x "$BLENDER" ]] || { echo "error: missing executable $BLENDER" >&2; exit 2; }
-[[ -x "$PYTHON" ]] || { echo "error: missing executable $PYTHON" >&2; exit 2; }
+[[ -x "$BLENDER" && -x "$PYTHON" ]] || {
+    echo "error: no runtime found at $ROOT/tools/blender-patched or $ROOT/tools/blender-5.2.2-linux-x64;" \
+         "run scripts/bootstrap_dev_linux.sh and scripts/setup_dev_native.sh" >&2
+    exit 2
+}
+echo "runtime: $RUNTIME_ROOT"
+# Exact-Brep suites need the openNURBS helper; use the one scripts/setup_dev_native.sh built.
+DEV_BREP_WRITER="$ROOT/artifacts/brep-writer/linux-x86_64/brep_writer-linux-x86_64"
+if [[ -z "${NARWHAL3D_BREP_WRITER:-}" && -x "$DEV_BREP_WRITER" ]]; then
+    export NARWHAL3D_BREP_WRITER="$DEV_BREP_WRITER"
+fi
+# Icon fixtures need an isolated Pillow interpreter; scripts/setup_dev_native.sh creates one.
+ICON_TEST_PYTHON="${XDG_CACHE_HOME:-$HOME/.cache}/narwhal3d/icon-test-venv/bin/python"
+if [[ -z "${NARWHAL3D_TEST_PYTHON:-}" && -x "$ICON_TEST_PYTHON" ]]; then
+    export NARWHAL3D_TEST_PYTHON="$ICON_TEST_PYTHON"
+fi
+export NARWHAL_RUNTIME_ROOT="$RUNTIME_ROOT"
 
 cd "$ROOT"
 export PYTHONDONTWRITEBYTECODE=1
 # Backend suites and their child processes need the same exact-geometry runtime as GUI tests.
 export PYTHONPATH="$ROOT/vendor/occt${PYTHONPATH:+:$PYTHONPATH}"
-export LD_LIBRARY_PATH="$ROOT/tools/blender-patched/5.2/python/lib/python3.13/site-packages/cadquery_ocp_novtk.libs${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+export LD_LIBRARY_PATH="$RUNTIME_ROOT/5.2/python/lib/python3.13/site-packages/cadquery_ocp_novtk.libs${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 export NARWHAL_PURE_CORE="${NARWHAL_PURE_CORE:-$ROOT/native/pure_core/target/x86_64-unknown-linux-gnu/release/libnarwhal_pure_core.so}"
 export NARWHAL_GEOMETRY_CORE="${NARWHAL_GEOMETRY_CORE:-$ROOT/native/geometry_core/target/release/libnarwhal_geometry_core.so}"
 
@@ -50,6 +70,7 @@ run "packaging: public-tree audit" "$PYTHON" scripts/audit_public_tree.py --self
 run "native-only retirement policy + mutations" "$PYTHON" -B spike/test_native_only_policy.py
 run "public project organization" "$PYTHON" spike/test_public_project.py
 run "packaging: bootstrap" scripts/bootstrap_dev_linux.sh --self-check
+run "development setup: runtime, headers and pinned inputs" "$PYTHON" -B spike/test_dev_setup.py
 run "packaging: Blender build" scripts/build_blender_linux.sh --self-check
 run "packaging: macOS source build" "$PYTHON" spike/test_macos_source.py
 run "packaging: macOS native build contracts" "$PYTHON" scripts/test_macos_runtime.py
@@ -177,7 +198,7 @@ fi
 if command -v cargo >/dev/null 2>&1; then
 
     OCCT_SOURCE="$ROOT/vendor/occt-src"
-    OCCT_LIBS="$ROOT/tools/blender-patched/5.2/python/lib/python3.13/site-packages/cadquery_ocp_novtk.libs"
+    OCCT_LIBS="$RUNTIME_ROOT/5.2/python/lib/python3.13/site-packages/cadquery_ocp_novtk.libs"
     if [[ -d "$OCCT_SOURCE/src" && -d "$OCCT_LIBS" ]]; then
         run "Rust geometry-core format" cargo fmt --manifest-path native/geometry_core/Cargo.toml --check
         mkdir -p "$ROOT/tmp"

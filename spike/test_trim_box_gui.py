@@ -21,6 +21,8 @@ import sys
 import tempfile
 import time
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import runtime_paths
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -65,7 +67,7 @@ def launch():
                 time.sleep(.25)
         cmd = ['systemd-run', '--user', '--scope', '--quiet', '-p', 'MemoryMax=3G',
                '-p', 'MemorySwapMax=0', 'timeout', '--signal=TERM', '--kill-after=5s', '150s',
-               str(ROOT / 'tools/blender-patched/blender'), '--factory-startup',
+               str(runtime_paths.blender(ROOT)), '--factory-startup',
                '--enable-event-simulate', '--python-exit-code', '1',
                '--python', str(Path(__file__).resolve()),
                '--python', str(ROOT / 'launch/bootstrap.py')]

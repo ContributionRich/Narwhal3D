@@ -22,6 +22,24 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_LOCK = ROOT / "packaging" / "linux-x86_64.lock.json"
+#: Development-only native inputs (never release artifacts): CPython headers source for the
+#: document observer and the pinned rhino3dm source distribution it compiles against.
+DEV_LOCK = ROOT / "packaging" / "linux-x86_64-dev.lock.json"
+EXPECTED_DEV_LOCKS = {
+    "cpython-source": (
+        "https://www.python.org/ftp/python/3.13.13/Python-3.13.13.tar.xz",
+        "2ab91ff401783ccca64f75d10c882e957bdfd60e2bf5a72f8421793729b78a71",
+    ),
+    "rhino3dm-sdist": (
+        "https://files.pythonhosted.org/packages/f6/0a/b60de8b663fb898b7a9bc7f8a3b93c5fa32733defccbafb70d0b0bad8e4b/rhino3dm-8.35.0.tar.gz",
+        "8315ec0c177ad4c69e8cc4e6d331c584110e8e8cc9bad294f121f18b4b7ec81a",
+    ),
+    # The patched application runtime, taken from a published AppImage for source checkouts.
+    "narwhal-appimage-runtime": (
+        "https://github.com/ContributionRich/Narwhal3D/releases/download/v0.4.10/Narwhal_3D-0.4.10-x86_64.AppImage",
+        "bf0e5d29bc83ecfd017f21657e2e03f45cbd0f39049e1a3cf1c9af346b2e8451",
+    ),
+}
 SHA256_RE = re.compile(r"[0-9a-f]{64}\Z")
 JsonObject = dict[str, Any]
 EXPECTED_LOCKS = {
@@ -120,7 +138,7 @@ def load_lock(path: Path) -> tuple[JsonObject, dict[str, JsonObject]]:
             raise PackagingError(f"artifact {artifact_id} version is absent from its filename and URL path")
         if not isinstance(expected, str) or not SHA256_RE.fullmatch(expected):
             raise PackagingError(f"artifact {artifact_id} has an invalid SHA-256")
-        if artifact.get("kind") not in {"wheel", "tar.xz", "appimage", "appimage-runtime"}:
+        if artifact.get("kind") not in {"wheel", "sdist", "tar.xz", "appimage", "appimage-runtime"}:
             raise PackagingError(f"artifact {artifact_id} has an unsupported kind")
         if artifact.get("kind") == "appimage" and artifact.get("executable") is not True:
             raise PackagingError(f"AppImage artifact {artifact_id} must be marked executable")
@@ -306,6 +324,15 @@ def self_check() -> None:
             "release-assets.githubusercontent.com"
         ]:
             raise PackagingError(f"{artifact_id} redirect host policy changed")
+    dev_lock, dev_artifacts = load_lock(DEV_LOCK)
+    if dev_lock.get("purpose") != "development-native-inputs-only":
+        raise PackagingError("development native lock must stay development-only")
+    if set(dev_artifacts) != set(EXPECTED_DEV_LOCKS):
+        raise PackagingError(f"development lock ids differ: {sorted(dev_artifacts)}")
+    for artifact_id, (expected_url, expected_sha256) in EXPECTED_DEV_LOCKS.items():
+        artifact = dev_artifacts[artifact_id]
+        if artifact["url"] != expected_url or artifact["sha256"] != expected_sha256:
+            raise PackagingError(f"development lock URL or SHA-256 changed: {artifact_id}")
     assert _normalized_archive_path("root/bin/tool") == PurePosixPath("root/bin/tool")
     for unsafe in ("../escape", "/absolute", "root/../../escape", "root\\escape"):
         try:

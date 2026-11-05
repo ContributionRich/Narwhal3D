@@ -13,6 +13,8 @@ import sys
 import tempfile
 import time
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import runtime_paths
 ROOT = Path(__file__).resolve().parents[1]
 SOURCES = ('launch/bootstrap.py', 'narwhal3d/ui.py', 'narwhal3d/state.py',
            'narwhal3d/commands.py', 'narwhal3d/solid_commands.py', 'narwhal3d/bridge.py',
@@ -72,7 +74,7 @@ def launch():
             child_env.update(SWEEP1_GUI_OUT=str(case), SWEEP1_GUI_MODE=mode,
                 NARWHAL3D_SETTINGS_FILE=str(case/'preferences.json'), PYTHONDONTWRITEBYTECODE='1',
                 PYTHONPYCACHEPREFIX=str(case/'bytecode'), PYTHONPATH=str(ROOT/'vendor/occt'),
-                LD_LIBRARY_PATH=str(ROOT/'tools/blender-patched/5.2/python/lib/python3.13/site-packages/cadquery_ocp_novtk.libs'),
+                LD_LIBRARY_PATH=str(runtime_paths.occt_libs(ROOT)),
                 NARWHAL3D_NO_DIALOGS='1', NARWHAL3D_DEFER_FIRST_PRESENT='1',
                 NARWHAL3D_STATUSBAR_HEIGHT='37', GHOST_BACKEND='X11',
                 OMP_NUM_THREADS='1', OPENBLAS_NUM_THREADS='1')
@@ -83,7 +85,7 @@ def launch():
                 '-p', 'MemorySwapMax=0', '-p', 'CPUQuota=100%', 'timeout', '--signal=TERM',
                 '--kill-after=5s', '180s', 'bwrap', '--ro-bind', '/', '/', '--dev-bind', '/dev', '/dev',
                 '--proc', '/proc', '--bind', str(case), str(case), '--unshare-net', '--die-with-parent',
-                str(ROOT/'tools/blender-patched/blender'), '--factory-startup', '-t', '1',
+                str(runtime_paths.blender(ROOT)), '--factory-startup', '-t', '1',
                 '-p', '40', '40', '1440', '1000', '--enable-event-simulate', '--python-exit-code', '1',
                 '--python', str(Path(__file__).resolve()), '--python', str(ROOT/'launch/bootstrap.py')]
             before = {p: hashlib.sha256((ROOT/p).read_bytes()).hexdigest() for p in SOURCES}
@@ -104,9 +106,9 @@ def launch():
                         run.returncode == 0 and report.get('status') == 'passed')
             readers = []
             if mode not in EXPECTED_MUTATIONS and expected:
-                prefix = cmd[:cmd.index(str(ROOT/'tools/blender-patched/blender'))]
+                prefix = cmd[:cmd.index(str(runtime_paths.blender(ROOT)))]
                 for suffix in ('.narwhal', '.3dm'):
-                    reader = prefix + [str(ROOT/'tools/blender-patched/5.2/python/bin/python3.13'),
+                    reader = prefix + [str(runtime_paths.python(ROOT)),
                         '-B', str(ROOT/'spike/test_sweep1_command_integration.py'), '--read', str(case/('mouse'+suffix))]
                     with (case/('reader'+suffix+'.log')).open('w') as log:
                         read = subprocess.run(reader,cwd=ROOT,env=child_env,stdout=log,stderr=subprocess.STDOUT,timeout=190)

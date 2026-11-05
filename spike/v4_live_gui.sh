@@ -11,7 +11,9 @@ export NARWHAL3D_DEFER_FIRST_PRESENT=1 NARWHAL3D_STATUSBAR_HEIGHT=37
 export NARWHAL3D_NO_DIALOGS=1 PYTHONDONTWRITEBYTECODE=1
 unset NARWHAL3D_UI_READY NARWHAL3D_PRESENT_WATCHDOG NARWHAL3D_THEME NARWHAL3D_WELCOME_REQUEST || true
 export PYTHONPATH="$ROOT/vendor/occt${PYTHONPATH:+:$PYTHONPATH}"
-export LD_LIBRARY_PATH="$ROOT/tools/blender-patched/5.2/python/lib/python3.13/site-packages/cadquery_ocp_novtk.libs${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+RUNTIME_ROOT="${NARWHAL_RUNTIME_ROOT:-$ROOT/tools/blender-patched}"
+[ -x "$RUNTIME_ROOT/blender" ] || RUNTIME_ROOT="${NARWHAL_RUNTIME_ROOT:-$ROOT/tools/blender-5.2.2-linux-x64}"
+export LD_LIBRARY_PATH="$RUNTIME_ROOT/5.2/python/lib/python3.13/site-packages/cadquery_ocp_novtk.libs${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 export NARWHAL_PURE_CORE="${NARWHAL_PURE_CORE:-$ROOT/native/pure_core/target/x86_64-unknown-linux-gnu/release/libnarwhal_pure_core.so}"
 export NARWHAL_GEOMETRY_CORE="${NARWHAL_GEOMETRY_CORE:-$ROOT/native/geometry_core/target/release/libnarwhal_geometry_core.so}"
 export NARWHAL_SELECTION_CORE="${NARWHAL_SELECTION_CORE:-$ROOT/artifacts/selection-core/linux-x86_64/libnarwhal_selection_core.so}"
@@ -34,7 +36,7 @@ run_gui() {
   if [[ "$order" == before-bootstrap ]]; then
     scripts=(--python "$ROOT/$suite" --python "$bootstrap")
   fi
-  timeout 200 "$ROOT/tools/blender-patched/blender" --enable-event-simulate --factory-startup \
+  timeout 200 "$RUNTIME_ROOT/blender" --enable-event-simulate --factory-startup \
     --python-exit-code 1 "${scripts[@]}" >"$LOG" 2>&1 || status=$?
   # Preferences includes phase before status in its JSON; do not require status to be first.
   if [[ $status -ne 0 ]] || ! grep -q "^${marker} {.*\"status\": \"passed\"" "$LOG" \
@@ -71,7 +73,7 @@ run_gui spike/test_gumball_extrude_scale_gui.py GUMBALL_GUI_RESULT before-bootst
 rm -f "$NARWHAL3D_SETTINGS_FILE"
 # This offscreen shader oracle needs a real GPU context, but no app bootstrap or events.
 status=0
-timeout --kill-after=5s 120s "$ROOT/tools/blender-patched/blender" --factory-startup \
+timeout --kill-after=5s 120s "$RUNTIME_ROOT/blender" --factory-startup \
   --threads 2 --python-exit-code 1 --python "$ROOT/spike/test_extrude_preview_gpu.py" \
   >"$LOG" 2>&1 || status=$?
 if [[ $status -ne 0 ]] || ! grep -qx 'EXTRUDE PREVIEW GPU PASSED' "$LOG" \

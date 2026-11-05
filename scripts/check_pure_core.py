@@ -178,7 +178,9 @@ def _cargo(*args: str, crate: Path) -> list[str]:
 def _bundled_python() -> str:
     """The CPython the app ships (matches ``run_tests.sh``); fall back to the
     interpreter running the gate. The pure-core suites need only the stdlib."""
-    candidate = ROOT / "tools" / "blender-patched" / "5.2" / "python" / "bin" / "python3.13"
+    sys.path.insert(0, str(ROOT / "spike"))
+    import runtime_paths
+    candidate = runtime_paths.python(ROOT)
     return str(candidate) if candidate.is_file() else sys.executable
 
 

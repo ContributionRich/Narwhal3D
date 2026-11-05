@@ -78,7 +78,10 @@ Requirements: Python 3, Bash, HTTPS access, a C/C++ build toolchain, CMake, Ninj
 
 ```bash
 ./scripts/bootstrap_dev_linux.sh
+./scripts/setup_dev_native.sh
 ```
+
+`setup_dev_native.sh` builds the native development components (CPython headers, Rust cores, the document observer, the exact-save helper) and extracts the patched runtime from the pinned published AppImage into `tools/blender-patched/`, so a source checkout can launch and run `./run_tests.sh`. See [the contributor guide](contributing-with-ai.md#3-set-up-a-working-copy-linux-x86_64).
 
 This development bootstrap downloads only SHA-256-locked artifacts and installs the locked wheels into an official development runtime. That runtime is useful for iteration but is deliberately rejected by release assembly because it is not natively branded.
 

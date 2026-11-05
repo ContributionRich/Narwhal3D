@@ -14,6 +14,8 @@ import sys
 import tempfile
 import time
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import runtime_paths
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -48,7 +50,7 @@ def launch():
         "-p", "MemorySwapMax=0", "-p", "CPUQuota=100%", "timeout", "--signal=TERM", "--kill-after=5s", "180s",
         "bwrap", "--ro-bind", "/", "/", "--dev-bind", "/dev", "/dev", "--proc", "/proc",
         "--bind", str(out), str(out), "--unshare-net", "--die-with-parent",
-        str(ROOT / "tools/blender-patched/blender"), "--factory-startup", "-t", "1",
+        str(runtime_paths.blender(ROOT)), "--factory-startup", "-t", "1",
         "-p", "40", "40", "1440", "1000", "--enable-event-simulate", "--python-exit-code", "1",
         "--python", str(Path(__file__).resolve()), "--python", str(ROOT / "launch/bootstrap.py")]
     print("UI_CORE_REVIEW_EVIDENCE", out, flush=True)

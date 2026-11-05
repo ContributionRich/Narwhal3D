@@ -11,6 +11,8 @@ import sys
 import tempfile
 import types
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import runtime_paths
 ROOT = Path(__file__).resolve().parents[1]
 failures = []
 passes = 0
@@ -315,7 +317,7 @@ check(0 <= prepare_pos < hide_pos
       and '"open",\n                                Some(path.to_string_lossy().as_ref())' in rust,
       "New, Open and Recent hide before delayed publication and recover publication failure")
 
-blender = ROOT / "tools" / "blender-patched" / "blender"
+blender = runtime_paths.blender(ROOT)
 probe = (
     "import sys; "
     f"sys.path.insert(0, {str(ROOT)!r}); "

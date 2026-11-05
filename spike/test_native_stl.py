@@ -26,9 +26,10 @@ import subprocess
 import sys
 import tempfile
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import runtime_paths
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-PYTHON = os.path.join(ROOT, "tools", "blender-patched", "5.2", "python",
-                      "bin", "python3.13")
+PYTHON = str(runtime_paths.python(ROOT))
 LIB_CANDIDATES = [
     os.environ.get("NARWHAL_PURE_CORE", ""),
     os.path.join(ROOT, "native", "pure_core", "target",

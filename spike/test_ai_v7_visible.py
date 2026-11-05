@@ -10,6 +10,8 @@ import os
 from pathlib import Path
 import sys
 import time
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import runtime_paths
 ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(Path(__file__).resolve().parent))
 
@@ -51,7 +53,7 @@ def launch():
     command=['systemd-run','--user','--scope','--quiet','-p','MemoryMax=2048M','-p','MemorySwapMax=0',
         'timeout','--signal=TERM','--kill-after=5s','210s','bwrap','--ro-bind','/','/','--dev-bind','/dev','/dev',
         '--proc','/proc','--bind',str(out),str(out),'--unshare-net','--cap-add','CAP_NET_ADMIN','--die-with-parent',
-        'python3','-c',loopback,str(ROOT/'tools/blender-patched/blender'),'--factory-startup','-t','1','-p','40','40','1440','1000',
+        'python3','-c',loopback,str(runtime_paths.blender(ROOT)),'--factory-startup','-t','1','-p','40','40','1440','1000',
         '--enable-event-simulate','--python-exit-code','1','--python',str(Path(__file__).resolve()),'--python',str(ROOT/'launch/bootstrap.py')]
     print('REVIEW06_EVIDENCE',out,flush=True)
     with open('/tmp/narwhal3d_gui.lock','a') as lock:
@@ -64,8 +66,8 @@ def launch():
         report=json.loads((out/'result.json').read_text()) if (out/'result.json').exists() else {}
         if result.returncode==0 and report.get('status')=='passed':
             _headroom(2048)
-            follow=command[:command.index(str(ROOT/'tools/blender-patched/blender'))]+[
-                str(ROOT/'tools/blender-patched/blender'),'-b','--factory-startup','-t','1','--python-exit-code','1',
+            follow=command[:command.index(str(runtime_paths.blender(ROOT)))]+[
+                str(runtime_paths.blender(ROOT)),'-b','--factory-startup','-t','1','--python-exit-code','1',
                 '--python',str(ROOT/'spike/test_ai_v7_roundtrip.py'),'--',str(out/'result.json')]
             with (out/'roundtrip.log').open('w') as log:
                 reopened=subprocess.run(follow,cwd=ROOT,env=env,stdout=log,stderr=subprocess.STDOUT,timeout=220)

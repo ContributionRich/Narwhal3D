@@ -54,37 +54,52 @@ Feature status lives in [`STATUS.md`](../STATUS.md) and [`docs/gaps.md`](gaps.md
 
 ## 3. Set up a working copy (Linux x86_64)
 
-Measured on a fresh clone in November 2026: about 455 MB of downloads, 2.4 GB on disk, under two
-minutes plus cargo builds. You need `git`, Python 3, `curl`, and Rust via `rustup` with the pinned
-toolchain (`rustup toolchain install 1.95.0`).
+Measured on a fresh clone in November 2026: about 900 MB of downloads, about 5 GB on disk, and
+roughly five minutes on a fast connection. You need `git`, `curl`, Python 3 with `venv`, CMake,
+`make`, a C and C++ compiler, Rust via `rustup` with the pinned toolchain
+(`rustup toolchain install 1.95.0 --component rustfmt clippy`), and a desktop Linux session with
+systemd (the native gates use `systemd-run --user`). podman or docker is used when available.
 
 ```bash
 git clone https://github.com/ContributionRich/Narwhal3D.git
 cd Narwhal3D
-./scripts/bootstrap_dev_linux.sh        # official Blender 5.2.2 runtime + pinned rhino3dm/OCP wheels
-R=$PWD
-for c in pure_core selection_core platform_core application_core ui_core document_core; do
-  cargo +1.95.0 build --release --locked --manifest-path native/$c/Cargo.toml
-done
-export NARWHAL_PURE_CORE=$R/native/pure_core/target/release/libnarwhal_pure_core.so
-export NARWHAL_SELECTION_CORE=$R/native/selection_core/target/release/libnarwhal_selection_core.so
-export NARWHAL_PLATFORM_CORE=$R/native/platform_core/target/release/libnarwhal_platform_core.so
-export NARWHAL_APPLICATION_CORE=$R/native/application_core/target/release/libnarwhal_application_core.so
-export NARWHAL_UI_CORE_LIBRARY=$R/native/ui_core/target/release/libnarwhal_ui_core.so
-export NARWHAL_DOCUMENT_CORE=$R/native/document_core/target/release/narwhal-document-core
-export LD_LIBRARY_PATH=$R/tools/blender-5.2.2-linux-x64/5.2/python/lib/python3.13/site-packages/cadquery_ocp_novtk.libs
-P=$R/tools/blender-5.2.2-linux-x64/5.2/python/bin/python3.13    # Python with rhino3dm + OCCT
-B=$R/tools/blender-5.2.2-linux-x64/blender                      # headless runner: $B -b --factory-startup --python-exit-code 1 --python <file>
+./scripts/bootstrap_dev_linux.sh   # official Blender 5.2.2 runtime + pinned rhino3dm/OCP wheels
+./scripts/setup_dev_native.sh      # native components: see below
+./narwhal3d.sh                     # launch the app
+./run_tests.sh                     # the full gate (about an hour; GUI suites need a display)
 ```
 
-### Known setup gaps (fixing these is the most valuable work right now)
+`setup_dev_native.sh` downloads only hash-pinned inputs (`packaging/linux-x86_64-dev.lock.json`)
+and stages everything in gitignored paths:
 
-A clean clone **cannot yet** build the *document observer*, a small C++ extension that every
-document-based suite and the app itself need. The official runtime ships no CPython 3.13 headers.
-Until that is fixed, the full `./run_tests.sh` gate, the GUI launch and most command suites cannot
-run in a clean clone. These issues carry the label
-[`area: onboarding`](https://github.com/ContributionRich/Narwhal3D/issues?q=is%3Aissue+is%3Aopen+label%3A%22area%3A+onboarding%22);
-start there if you can.
+- CPython 3.13.13 headers (`tools/cpython-3.13-include`), configured from the python.org source;
+- the patched application runtime (`tools/blender-patched`), extracted from the pinned published
+  AppImage, so GUI suites behave like the released app;
+- the pinned OCCT source (`vendor/occt-src`) and the Rust geometry core;
+- the Rust cores, the application core, the UI core and the automation library;
+- the qualified document observer (`artifacts/document-observer`);
+- the exact-save helper (`artifacts/brep-writer`) and a Pillow environment for icon tests.
+
+It ends by running the application's own native startup checks. It is safe to re-run; finished
+steps are skipped. `run_tests.sh` and `narwhal3d.sh` find all of these without extra variables.
+
+For quick iteration you can run one suite with the runtime's Python or headless Blender:
+
+```bash
+P=tools/blender-patched/5.2/python/bin/python3.13
+B=tools/blender-patched/blender
+$P spike/test_macro.py
+$B -b --factory-startup --python-exit-code 1 --python spike/test_boolean.py
+```
+
+Look in `run_tests.sh` for the exact arguments and environment each suite expects.
+
+### Known setup limits
+
+- Linux x86_64 only for now. Containers without a systemd user session cannot run the native gates
+  yet (they bound compiler memory with `systemd-run --user`).
+- There is no automatic CI on pull requests yet; run the checks locally (see
+  [`area: onboarding`](https://github.com/ContributionRich/Narwhal3D/issues?q=is%3Aissue+is%3Aopen+label%3A%22area%3A+onboarding%22)).
 
 ## 4. Choose a task
 
@@ -131,11 +146,10 @@ Run the narrowest suite first.
 | What | Command (after section 3) |
 |---|---|
 | Rust crate tests | `cargo +1.95.0 test --manifest-path native/<crate>/Cargo.toml --locked` |
-| Public-tree and docs checks | `$P spike/test_public_project.py` |
-| Pure suites (examples) | `$P spike/test_macro.py`, `$P spike/test_coords.py`, `$P spike/test_numparse.py`, `$P spike/test_toolbars.py` |
-| Blender geometry suites (examples) | `$B -b --factory-startup --python-exit-code 1 --python spike/test_boolean.py` (also `test_sweep.py`, `test_loft.py`, `test_tessellate.py`) |
-| Document-based command suites | Need the document observer (see section 3). If you cannot run them, say so in the pull request; never claim they passed. |
-| Full gate (maintainers, or once onboarding is fixed) | `./run_tests.sh` |
+| One Python suite | `tools/blender-patched/5.2/python/bin/python3.13 spike/<suite>.py` |
+| One Blender-backed suite | `tools/blender-patched/blender -b --factory-startup --python-exit-code 1 --python spike/<suite>.py` |
+| Public-tree and docs checks | `tools/blender-patched/5.2/python/bin/python3.13 spike/test_public_project.py` |
+| Full gate | `./run_tests.sh` (stops at the first failing suite) |
 
 Look in `run_tests.sh` for the exact arguments and environment each suite expects.
 

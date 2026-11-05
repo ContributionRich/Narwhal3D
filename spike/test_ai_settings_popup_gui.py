@@ -14,6 +14,8 @@ import sys
 import tempfile
 import time
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import runtime_paths
 ROOT = Path(__file__).resolve().parents[1]
 EVIDENCE = ROOT / 'artifacts/ai_settings_integration'
 
@@ -57,7 +59,7 @@ def launch():
     scope = ['systemd-run', '--user', '--scope', '--quiet', '-p', 'MemoryMax=3G', '-p', 'MemorySwapMax=0']
     width, height = (900, 640) if mode == 'narrow' else (1440, 1000)
     cmd = scope + ['timeout', '--signal=TERM', '--kill-after=5s', '180s'] + sandbox + [
-        str(ROOT/'tools/blender-patched/blender'), '--factory-startup', '-t', '2',
+        str(runtime_paths.blender(ROOT)), '--factory-startup', '-t', '2',
         '-p', '40', '40', str(width), str(height), '--enable-event-simulate', '--python-exit-code', '1',
         '--python', str(Path(__file__).resolve()), '--python', str(ROOT/'launch/bootstrap.py')]
     (out/'launch.json').write_text(json.dumps({'command': cmd, 'scratch': str(scratch),

@@ -8,8 +8,9 @@
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-RUNTIME="${ROOT}/tools/blender-patched/blender"
-[ -x "$RUNTIME" ] || RUNTIME="${ROOT}/tools/blender-5.2.2-linux-x64/blender"
+RUNTIME_ROOT="${NARWHAL_RUNTIME_ROOT:-${ROOT}/tools/blender-patched}"
+[ -x "$RUNTIME_ROOT/blender" ] || RUNTIME_ROOT="${NARWHAL_RUNTIME_ROOT:-${ROOT}/tools/blender-5.2.2-linux-x64}"
+RUNTIME="$RUNTIME_ROOT/blender"
 
 if [[ -z "${DISPLAY:-}" ]]; then
   echo "SKIP: no X11 display; the welcome's X11 launch route cannot be exercised."
@@ -21,7 +22,7 @@ export NARWHAL3D_DEFER_FIRST_PRESENT=1
 unset NARWHAL3D_UI_READY NARWHAL3D_PRESENT_WATCHDOG || true
 # The same deliberately missing socket the welcome window sets (native_stacking.rs).
 export WAYLAND_DISPLAY="narwhal3d-force-x11-$$"
-OCCT_LIBS="${ROOT}/tools/blender-patched/5.2/python/lib/python3.13/site-packages/cadquery_ocp_novtk.libs"
+OCCT_LIBS="$RUNTIME_ROOT/5.2/python/lib/python3.13/site-packages/cadquery_ocp_novtk.libs"
 [ -d "$OCCT_LIBS" ] && export LD_LIBRARY_PATH="$OCCT_LIBS"
 PURE_CORE="${ROOT}/native/pure_core/target/x86_64-unknown-linux-gnu/release/libnarwhal_pure_core.so"
 if [[ -z "${NARWHAL_PURE_CORE:-}" && -f "$PURE_CORE" ]]; then

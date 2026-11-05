@@ -11,6 +11,8 @@ import subprocess
 import sys
 import tempfile
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import runtime_paths
 ROOT=Path(__file__).resolve().parents[1]
 CRATE=ROOT/'native/geometry_core'
 TEST=ROOT/'spike/test_surfacing_freeform.py'
@@ -64,7 +66,7 @@ def worker():
         for name in ['Cargo.toml','Cargo.lock','build.rs']: shutil.copy2(CRATE/name,crate/name)
         env=os.environ.copy(); env['CARGO_TARGET_DIR']=str(base/'target')
         env['NARWHAL_OCCT_SOURCE_DIR']=str(ROOT/'vendor/occt-src')
-        env['NARWHAL_OCCT_LIB_DIR']=str(ROOT/'tools/blender-patched/5.2/python/lib/python3.13/site-packages/cadquery_ocp_novtk.libs')
+        env['NARWHAL_OCCT_LIB_DIR']=str(runtime_paths.occt_libs(ROOT))
         env['LD_LIBRARY_PATH']=env['NARWHAL_OCCT_LIB_DIR']
         env['NARWHAL_GEOMETRY_CORE']=str(base/'target/debug/libnarwhal_geometry_core.so')
         for name,path,old,new,test,reason in MUTANTS:

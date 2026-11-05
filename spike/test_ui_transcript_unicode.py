@@ -9,6 +9,9 @@ import subprocess
 import sys
 import unicodedata
 
+import os
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import runtime_paths
 ROOT = Path(__file__).resolve().parents[1]
 GENERATOR = ROOT / 'native/ui_core/transcript_unicode.py'
 START = '// BEGIN TRANSCRIPT UNICODE TABLES'
@@ -29,7 +32,7 @@ if __name__ == '__main__':
         assert unicodedata.unidata_version in ('15.1.0', '16.0.0')
         print(block())
     elif '--generate' in sys.argv or '--check' in sys.argv:
-        interpreters = [('unicode15', ROOT / 'tools/blender-patched/5.2/python/bin/python3.13'),
+        interpreters = [('unicode15', runtime_paths.python(ROOT)),
                         ('unicode16', Path(sys.executable))]
         chunks = []
         for module, interpreter in interpreters:

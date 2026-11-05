@@ -19,6 +19,8 @@ import tempfile
 import time
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / 'spike'))
+import runtime_paths
 CRATE = ROOT / 'native/application_core'
 LIBRARY = 'libnarwhal_application_core.so'
 
@@ -71,7 +73,7 @@ def build(target):
         checked(prefix + ['cargo', '+1.95.0', 'build', *common, '--release', '--locked', '--offline',
                           '--target-dir', str(target)], env=env)
     library = target / 'release' / LIBRARY
-    python = ROOT / 'tools/blender-patched/5.2/python/bin/python3.13'
+    python = runtime_paths.python(ROOT)
     if not python.is_file():
         python = Path(sys.executable)
     env = dict(os.environ, NARWHAL_APPLICATION_CORE=str(library),
@@ -114,9 +116,14 @@ def stage(library, receipt):
     print('Staged development application core:', destination, flush=True)
 
 
+def default_target_dir():
+    cache = os.environ.get('XDG_CACHE_HOME') or str(Path.home() / '.cache')
+    return Path(cache) / 'narwhal3d-application-core/target'
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--target-dir', type=Path, default=Path.home() / '.cache/narwhal3d-application-core/target')
+    parser.add_argument('--target-dir', type=Path, default=default_target_dir())
     parser.add_argument('--stage-dev', action='store_true')
     args = parser.parse_args()
     library, receipt = build(args.target_dir)

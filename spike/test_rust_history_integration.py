@@ -39,6 +39,8 @@ from contextlib import ExitStack
 from types import SimpleNamespace
 from unittest.mock import patch
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import runtime_paths
 ROOT = Path(__file__).resolve().parents[1]
 SELF = Path(__file__).resolve()
 CORE = '/tmp/narwhal3d-history-core/target/release/libnarwhal_application_core.so'
@@ -1102,7 +1104,7 @@ def launch(args):
                PYTHONPYCACHEPREFIX=str(out / 'bytecode'), PYTHONPATH=str(ROOT / 'vendor/occt'),
                NARWHAL3D_OPEN_WORKERS='0', NARWHAL3D_SETTINGS_FILE=str(out / 'settings.json'),
                OMP_NUM_THREADS='1', OPENBLAS_NUM_THREADS='1', LP_NUM_THREADS='1')
-    runtime = ROOT / 'tools/blender-patched'
+    runtime = runtime_paths.runtime_root(ROOT)
     env['LD_LIBRARY_PATH'] = str(runtime / '5.2/python/lib/python3.13/site-packages/cadquery_ocp_novtk.libs')
     phases = ('host', 'blender') if args.phase == 'all' else (args.phase,)
     statuses = []

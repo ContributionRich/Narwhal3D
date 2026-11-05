@@ -144,3 +144,4 @@ temporary.replace(marker_path)
 PY
 
 echo "Narwhal 3D development-only official runtime is ready: $RUNTIME_DIR"
+echo "Next: scripts/setup_dev_native.sh builds the native components needed to launch and test."

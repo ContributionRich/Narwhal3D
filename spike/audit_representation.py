@@ -13,6 +13,8 @@ import sys
 import types
 from collections import Counter
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import runtime_paths
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 pkg = types.ModuleType("narwhal3d")
 pkg.__path__ = [os.path.join(ROOT, "narwhal3d")]
@@ -1001,7 +1003,10 @@ try:
     import subprocess as _sp
 
     _helper = os.path.join(ROOT, "spike", "_roundtrip_reader.py")
-    _blender = os.path.join(ROOT, "tools", "blender-patched", "blender")
+    # The patched runtime when built, else the bootstrapped runtime of a source checkout.
+    _blender = str(runtime_paths.blender(ROOT))
+    if not os.access(_blender, os.X_OK):
+        _blender = os.path.join(ROOT, "tools", "blender-5.2.2-linux-x64", "blender")
     _tpath = os.path.join(ROOT, "artifacts", "audit_roundtrip_kinds.3dm")
     _opath = os.path.join(ROOT, "artifacts", "audit_roundtrip_other.3dm")
 

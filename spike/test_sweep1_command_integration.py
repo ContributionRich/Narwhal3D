@@ -14,8 +14,10 @@ import sys
 import tempfile
 import time
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import runtime_paths
 ROOT = Path(__file__).resolve().parents[1]
-PYTHON = ROOT / 'tools/blender-patched/5.2/python/bin/python3.13'
+PYTHON = runtime_paths.python(ROOT)
 SOURCES = ('narwhal3d/bridge.py', 'narwhal3d/solid_commands.py', 'narwhal3d/commands.py',
            'narwhal3d/kernel/__init__.py', 'narwhal3d/surfacing_backend.py',
            'native/geometry_core/target/release/libnarwhal_geometry_core.so',
@@ -36,14 +38,14 @@ def launch():
         folder = out/key.lower(); folder.mkdir(); env[key] = str(folder)
     env.update(SWEEP1_COMMAND_OUT=str(out), PYTHONDONTWRITEBYTECODE='1',
         PYTHONPYCACHEPREFIX=str(out/'bytecode'), PYTHONPATH=str(ROOT/'vendor/occt'),
-        LD_LIBRARY_PATH=str(ROOT/'tools/blender-patched/5.2/python/lib/python3.13/site-packages/cadquery_ocp_novtk.libs'),
+        LD_LIBRARY_PATH=str(runtime_paths.occt_libs(ROOT)),
         OMP_NUM_THREADS='1', OPENBLAS_NUM_THREADS='1', NARWHAL3D_NO_DIALOGS='1',
         NARWHAL3D_SETTINGS_FILE=str(out/'preferences.json'))
     mode = '--regressions' if '--regressions' in sys.argv else '--inside'
     if mode == '--regressions':
         child = [str(PYTHON), '-B', str(Path(__file__).resolve()), mode]
     else:
-        child = [str(ROOT/'tools/blender-patched/blender'), '-b', '--factory-startup', '-t', '1',
+        child = [str(runtime_paths.blender(ROOT)), '-b', '--factory-startup', '-t', '1',
                  '--python-exit-code', '1', '--python', str(Path(__file__).resolve()), '--', mode]
         if '--mutations' in sys.argv:
             child.append('--mutations')
@@ -98,7 +100,7 @@ if '--regressions' in sys.argv:
         start = time.monotonic()
         # Match run_tests.sh: Sweep includes Blender display gates and is not
         # scheduled under the plain interpreter in the production harness.
-        argv = ([str(ROOT/'tools/blender-patched/blender'), '-b', '--factory-startup', '-t', '1',
+        argv = ([str(runtime_paths.blender(ROOT)), '-b', '--factory-startup', '-t', '1',
                  '--python-exit-code', '1', '--python', str(ROOT/'spike'/suite)]
                 if suite == 'test_sweep.py' else [str(PYTHON), '-B', str(ROOT/'spike'/suite), *args])
         run = subprocess.run(argv, timeout=180)

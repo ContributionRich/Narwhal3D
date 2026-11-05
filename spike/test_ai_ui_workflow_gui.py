@@ -13,6 +13,8 @@ import sys
 import tempfile
 import time
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import runtime_paths
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -48,7 +50,7 @@ def launch():
            "timeout", "--signal=TERM", "--kill-after=5s", "230s", "bwrap",
            "--ro-bind", "/", "/", "--dev-bind", "/dev", "/dev", "--proc", "/proc",
            "--bind", str(out), str(out), "--unshare-net", "--cap-add", "CAP_NET_ADMIN", "--die-with-parent",
-           "python3", "-c", loopback, str(ROOT / "tools/blender-patched/blender"),
+           "python3", "-c", loopback, str(runtime_paths.blender(ROOT)),
            "--factory-startup", "-t", "1", "-p", "40", "40", "1440", "1000", "--enable-event-simulate",
            "--python-exit-code", "1", "--python", str(Path(__file__).resolve()),
            "--python", str(ROOT / "launch/bootstrap.py")]

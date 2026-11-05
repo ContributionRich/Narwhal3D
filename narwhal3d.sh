@@ -98,6 +98,12 @@ set_native_library NARWHAL_SELECTION_CORE "${native_prefix}narwhal_selection_cor
 set_native_library NARWHAL_CDR_CORE "${native_prefix}narwhal_cdr_core${native_suffix}" cdr_core
 set_native_library NARWHAL_GEOMETRY_CORE "${native_prefix}narwhal_geometry_core${native_suffix}" geometry_core
 set_native_library NARWHAL_PLATFORM_CORE "${native_prefix}narwhal_platform_core${native_suffix}" platform_core
+# A source checkout uses the exact-save helper built by scripts/setup_dev_native.sh; packages ship
+# their own in narwhal3d/kernel/bin, which onbrep.py finds without this variable.
+dev_brep_writer="$ROOT/artifacts/brep-writer/${runtime_platform}-${runtime_arch}/brep_writer-${runtime_platform}-${runtime_arch}"
+if [[ -z "${NARWHAL3D_BREP_WRITER:-}" && -x "$dev_brep_writer" ]]; then
+  export NARWHAL3D_BREP_WRITER="$dev_brep_writer"
+fi
 
 if [[ "${NARWHAL3D_LAUNCHER_TEST:-}" == native-paths ]]; then
   printf 'NARWHAL_PURE_CORE=%s\n' "${NARWHAL_PURE_CORE:-}"
@@ -105,6 +111,7 @@ if [[ "${NARWHAL3D_LAUNCHER_TEST:-}" == native-paths ]]; then
   printf 'NARWHAL_CDR_CORE=%s\n' "${NARWHAL_CDR_CORE:-}"
   printf 'NARWHAL_GEOMETRY_CORE=%s\n' "${NARWHAL_GEOMETRY_CORE:-}"
   printf 'NARWHAL_PLATFORM_CORE=%s\n' "${NARWHAL_PLATFORM_CORE:-}"
+  printf 'NARWHAL3D_BREP_WRITER=%s\n' "${NARWHAL3D_BREP_WRITER:-}"
   exit 0
 fi
 BOOTSTRAP="${ROOT}/launch/bootstrap.py"

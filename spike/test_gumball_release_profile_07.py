@@ -40,6 +40,8 @@ import time
 import traceback
 from typing import Any
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import runtime_paths
 ROOT = Path(__file__).resolve().parents[1]
 MARKER = 'GUMBALL_RELEASE_07_RESULT'
 
@@ -95,7 +97,7 @@ def public_run():
                 env[key] = str(directory)
             env.update(TMPDIR=tmp, PYTHONDONTWRITEBYTECODE='1',
                        PYTHONPATH=str(ROOT / 'vendor/occt'),
-                       LD_LIBRARY_PATH=str(ROOT / 'tools/blender-patched/5.2/python/lib/python3.13/site-packages/cadquery_ocp_novtk.libs'),
+                       LD_LIBRARY_PATH=str(runtime_paths.occt_libs(ROOT)),
                        NARWHAL3D_SETTINGS_FILE=str(scratch / 'preferences.json'),
                        NARWHAL3D_DEFER_FIRST_PRESENT='1', NARWHAL3D_NO_DIALOGS='1',
                        OMP_NUM_THREADS='2', OPENBLAS_NUM_THREADS='2',
@@ -105,7 +107,7 @@ def public_run():
             cmd = ['systemd-run', '--user', '--scope', '--quiet',
                    '-p', 'MemoryMax=2G', '-p', 'MemorySwapMax=0',
                    'timeout', '--kill-after=3', '140s',
-                   str(ROOT / 'tools/blender-patched/blender'), '--threads', '2',
+                   str(runtime_paths.blender(ROOT)), '--threads', '2',
                    '--factory-startup', '--window-geometry', '0', '0', '1600', '1000',
                    '--enable-event-simulate', '--python-exit-code', '1',
                    '--python', str(Path(__file__).resolve()),

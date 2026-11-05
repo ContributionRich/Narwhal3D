@@ -44,9 +44,11 @@ When a command creates or modifies solids:
 
 ## Running the checks
 
-Set up as described in [docs/contributing-with-ai.md](docs/contributing-with-ai.md#3-set-up-a-working-copy-linux-x86_64). A clean clone cannot yet run the full gate (the document observer and the patched runtime are not built by the bootstrap; see the [`area: onboarding`](https://github.com/ContributionRich/Narwhal3D/issues?q=is%3Aissue+is%3Aopen+label%3A%22area%3A+onboarding%22) issues). Where the full environment exists:
+Set up as described in [docs/contributing-with-ai.md](docs/contributing-with-ai.md#3-set-up-a-working-copy-linux-x86_64). In short:
 
 ```bash
+./scripts/bootstrap_dev_linux.sh
+./scripts/setup_dev_native.sh
 ./run_tests.sh
 ./uishot.sh
 ```

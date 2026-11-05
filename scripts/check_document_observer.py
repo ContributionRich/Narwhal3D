@@ -55,14 +55,24 @@ def run(command, seconds=180, heavy=True):
     subprocess.run([*prefix, *map(str, command)], cwd=ROOT, env=env, check=True, timeout=seconds + 140)
 
 
+def default_python_include():
+    """Explicit env, else headers made by scripts/setup_dev_native.sh, else a Blender source tree."""
+    explicit = os.environ.get('NARWHAL_PYTHON_INCLUDE')
+    if explicit:
+        return Path(explicit)
+    for candidate in (ROOT / 'tools/cpython-3.13-include/python3.13',
+                      ROOT / 'tools/blender-src/lib/linux_x64/python/include/python3.13'):
+        if (candidate / 'Python.h').is_file():
+            return candidate
+    return ROOT / 'tools/cpython-3.13-include/python3.13'
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--work-dir', type=Path,
                         default=Path(os.environ.get('NARWHAL_OBSERVER_WORK', '/var/tmp/nw-document-observer')))
     parser.add_argument('--python', type=Path, default=ROOT / 'tools/blender-5.2.2-linux-x64/5.2/python/bin/python3.13')
-    parser.add_argument('--python-include', type=Path,
-                        default=Path(os.environ.get('NARWHAL_PYTHON_INCLUDE',
-                            str(ROOT / 'tools/blender-src/lib/linux_x64/python/include/python3.13'))))
+    parser.add_argument('--python-include', type=Path, default=default_python_include())
     parser.add_argument('--stage-dev', action='store_true')
     parser.add_argument('--mutations', action='store_true')
     args = parser.parse_args()

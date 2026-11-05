@@ -10,8 +10,11 @@ import subprocess
 import sys
 import tempfile
 
+import os
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import runtime_paths
 ROOT = Path(__file__).resolve().parents[1]
-PYTHON = ROOT / "tools/blender-patched/5.2/python/bin/python3.13"
+PYTHON = runtime_paths.python(ROOT)
 BUILD = ROOT / "scripts/build_selection_core.py"
 VERIFY = ROOT / "scripts/verify_selection_core.py"
 

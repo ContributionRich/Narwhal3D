@@ -7,6 +7,8 @@ from pathlib import Path
 import shutil
 import sys
 import tempfile
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import runtime_paths
 from test_automation_native import ROOT, CRATE, checked, compile_crate
 
 MUTATIONS=[
@@ -56,9 +58,9 @@ def run(target, mutations, geometry, mutation_filter=None):
                 checked(['systemd-run','--user','--scope','-p','MemoryMax=1536M','-p','MemorySwapMax=0',
                     'timeout','--kill-after=5s','90s','env','PYTHONDONTWRITEBYTECODE=1','OMP_NUM_THREADS=1','NARWHAL3D_OPEN_WORKERS=0',
                     'PYTHONPATH='+str(ROOT/'vendor/occt'),
-                    'LD_LIBRARY_PATH='+str(ROOT/'tools/blender-patched/5.2/python/lib/python3.13/site-packages/cadquery_ocp_novtk.libs'),
+                    'LD_LIBRARY_PATH='+str(runtime_paths.occt_libs(ROOT)),
                     'BLENDER_USER_CONFIG='+settings,'NARWHAL3D_SETTINGS_FILE='+settings+'/preferences.json',
-                    str(ROOT/'tools/blender-patched/blender'),'-b','--factory-startup','--threads','1','--python-exit-code','1',
+                    str(runtime_paths.blender(ROOT)),'-b','--factory-startup','--threads','1','--python-exit-code','1',
                     '--python',str(ROOT/'spike/test_ai_primitives.py'),'--','--library',library,'--geometry','--publisher-mutations'],timeout=105)
         print('Prototype gate GREEN; live activation remains OFF')
 

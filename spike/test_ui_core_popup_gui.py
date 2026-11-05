@@ -14,6 +14,8 @@ import sys
 import tempfile
 import time
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import runtime_paths
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -39,7 +41,7 @@ def launch(script=None):
         env[key] = str(folder)
     env.update(TMPDIR=str(out), PYTHONDONTWRITEBYTECODE='1',
         PYTHONPATH=str(ROOT / 'vendor/occt'),
-        LD_LIBRARY_PATH=str(ROOT / 'tools/blender-patched/5.2/python/lib/python3.13/site-packages/cadquery_ocp_novtk.libs'),
+        LD_LIBRARY_PATH=str(runtime_paths.occt_libs(ROOT)),
         NARWHAL3D_SETTINGS_FILE=str(out / 'preferences.json'), NARWHAL3D_DEFER_FIRST_PRESENT='1',
         NARWHAL3D_NO_DIALOGS='1', NARWHAL_UI_CORE_LIBRARY=str(library),
         OMP_NUM_THREADS='1', OPENBLAS_NUM_THREADS='1',
@@ -49,7 +51,7 @@ def launch(script=None):
         '-p', 'MemorySwapMax=0', 'timeout', '--signal=TERM', '--kill-after=5s', '140s',
         'bwrap', '--ro-bind', '/', '/', '--dev-bind', '/dev', '/dev', '--proc', '/proc',
         '--bind', str(out), str(out), '--unshare-net', '--die-with-parent',
-        str(ROOT / 'tools/blender-patched/blender'), '--threads', '1', '--factory-startup',
+        str(runtime_paths.blender(ROOT)), '--threads', '1', '--factory-startup',
         '--window-geometry', '0', '0', '1600', '1000', '--enable-event-simulate',
         '--python-exit-code', '1', '--python', str(script),
         '--python', str(ROOT / 'launch/bootstrap.py')]

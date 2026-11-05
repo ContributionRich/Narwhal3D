@@ -1,0 +1,37 @@
+{
+  "schema": 1,
+  "product": "Narwhal 3D",
+  "platform": "linux-x86_64",
+  "purpose": "development-native-inputs-only",
+  "artifacts": [
+    {
+      "id": "cpython-source",
+      "kind": "tar.xz",
+      "version": "3.13.13",
+      "filename": "Python-3.13.13.tar.xz",
+      "url": "https://www.python.org/ftp/python/3.13.13/Python-3.13.13.tar.xz",
+      "sha256": "2ab91ff401783ccca64f75d10c882e957bdfd60e2bf5a72f8421793729b78a71",
+      "archive_root": "Python-3.13.13"
+    },
+    {
+      "id": "rhino3dm-sdist",
+      "kind": "sdist",
+      "version": "8.35.0",
+      "filename": "rhino3dm-8.35.0.tar.gz",
+      "url": "https://files.pythonhosted.org/packages/f6/0a/b60de8b663fb898b7a9bc7f8a3b93c5fa32733defccbafb70d0b0bad8e4b/rhino3dm-8.35.0.tar.gz",
+      "sha256": "8315ec0c177ad4c69e8cc4e6d331c584110e8e8cc9bad294f121f18b4b7ec81a"
+    },
+    {
+      "id": "narwhal-appimage-runtime",
+      "kind": "appimage",
+      "version": "0.4.10",
+      "filename": "Narwhal_3D-0.4.10-x86_64.AppImage",
+      "url": "https://github.com/ContributionRich/Narwhal3D/releases/download/v0.4.10/Narwhal_3D-0.4.10-x86_64.AppImage",
+      "sha256": "bf0e5d29bc83ecfd017f21657e2e03f45cbd0f39049e1a3cf1c9af346b2e8451",
+      "executable": true,
+      "allowed_redirect_hosts": [
+        "release-assets.githubusercontent.com"
+      ]
+    }
+  ]
+}

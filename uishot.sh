@@ -3,8 +3,9 @@
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-RUNTIME="${ROOT}/tools/blender-patched/blender"
-[ -x "$RUNTIME" ] || RUNTIME="${ROOT}/tools/blender-5.2.2-linux-x64/blender"
+RUNTIME_ROOT="${NARWHAL_RUNTIME_ROOT:-${ROOT}/tools/blender-patched}"
+[ -x "$RUNTIME_ROOT/blender" ] || RUNTIME_ROOT="${NARWHAL_RUNTIME_ROOT:-${ROOT}/tools/blender-5.2.2-linux-x64}"
+RUNTIME="$RUNTIME_ROOT/blender"
 BOOTSTRAP="${ROOT}/launch/bootstrap.py"
 REPORTER="${ROOT}/spike/public_ui_report.py"
 TIMEOUT_SECONDS=90
