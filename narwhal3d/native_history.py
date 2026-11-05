@@ -731,10 +731,15 @@ class NativeUndoStack:
         return self._navigate("redo", current, restore, failure_state)
 
     def clear(self):
+        """Drop every record; return the public counts that were cleared."""
         with self._lock:
+            info = self._info()
+            cleared = {"undo_count": int(info["undo_count"]),
+                       "redo_count": int(info["redo_count"])}
             self._request("clear")
             self._cache.clear()
             self._drain()
+            return cleared
 
     def close(self):
         with self._lock:
