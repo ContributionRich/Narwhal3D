@@ -57,7 +57,7 @@ Feature status lives in [`STATUS.md`](../STATUS.md) and [`docs/gaps.md`](gaps.md
 Measured on a fresh clone in November 2026: about 900 MB of downloads, about 5 GB on disk, and
 roughly five minutes on a fast connection. You need `git`, `curl`, Python 3 with `venv`, CMake,
 `make`, a C and C++ compiler, Rust via `rustup` with the pinned toolchain
-(`rustup toolchain install 1.95.0 --component rustfmt clippy`), and a desktop Linux session with
+(`rustup toolchain install 1.95.0 --component rustfmt,clippy`), and a desktop Linux session with
 systemd (the native gates use `systemd-run --user`). podman or docker is used when available.
 
 ```bash
