@@ -10,7 +10,8 @@ Pins the invariants a laser-cutter / CNC reader depends on:
 * a LINE/CIRCLE/ARC/POLYLINE round-trips: parse our own output back into
   (code, value) pairs and check every entity's values;
 * a REAL reader accepts it: ``inkscape`` converts the file to SVG with exit 0
-  and empty stderr, and the SVG carries geometry for every entity we wrote --
+  and no stderr from the DXF import (GLib/GTK desktop-session warnings such as
+  theme parse errors are ignored), and the SVG carries geometry for every entity we wrote --
   skipped with a printed SKIP if inkscape is not on PATH.
 
 """
@@ -238,6 +239,27 @@ def _():
     assert len([1 for code, _value in block if code == "10"]) == 7
 
 
+# GLib's log format, "(inkscape:PID): Gtk-WARNING **: ..." or "** (inkscape:PID): WARNING **:
+# ...": the host desktop session (GTK theme, Pango font map), not the DXF import.
+_GLIB_LOG = re.compile(r"^(\*\* )?\(inkscape:\d+\): ([\w-]+-)?(WARNING|CRITICAL|Message) \*\*:")
+
+
+def _import_stderr(stderr):
+    """inkscape's stderr without GLib desktop-session log lines."""
+    return "\n".join(line for line in stderr.splitlines()
+                     if line.strip() and not _GLIB_LOG.match(line.strip())).strip()
+
+
+@check("inkscape stderr filter drops only GLib session warnings")
+def _():
+    noise = ("\n(inkscape:9): Gtk-WARNING **: 15:26:16.946: Theme parsing error: gtk.css:3:1\n"
+             "\n** (inkscape:9): WARNING **: 15:25:04.575: Failed to wrap object of type "
+             "'PangoFT2FontMap'.\n")
+    assert _import_stderr(noise) == "", _import_stderr(noise)
+    real = "dxf_input.py: unknown entity type 3DFACE"
+    assert _import_stderr(noise + real + "\n") == real
+
+
 @check("a real reader accepts it: inkscape -> SVG with geometry per entity")
 def _():
     if not shutil.which("inkscape"):
@@ -251,7 +273,7 @@ def _():
         ["inkscape", "--export-type=svg", "--export-filename=" + svg, p],
         capture_output=True, text=True, timeout=60)
     assert out.returncode == 0, (out.returncode, out.stderr)
-    assert out.stderr.strip() == "", out.stderr
+    assert _import_stderr(out.stderr) == "", out.stderr
     s = re.sub(r"\s+", " ", open(svg).read())
     # inkscape renders every DXF entity (line/circle/arc/polyline) as <path>.
     # A real reader therefore emits at least one <path> per entity we wrote.
