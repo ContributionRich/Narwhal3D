@@ -127,10 +127,11 @@ impl BoundedTransport {
                 } else {
                     write(&mut stdout, &pending.value).await
                 };
-                if result.is_ok() && pending.admitted {
-                    if let Some(id) = pending.value.get("id") {
-                        writer_gate.lock().unwrap().active.remove(&id.to_string());
-                    }
+                if result.is_ok()
+                    && pending.admitted
+                    && let Some(id) = pending.value.get("id")
+                {
+                    writer_gate.lock().unwrap().active.remove(&id.to_string());
                 }
                 let failed = result.is_err();
                 let _ = pending.done.send(result);
@@ -333,14 +334,12 @@ impl Reader {
                     if let Some(id) = value
                         .get("id")
                         .and_then(|v| serde_json::from_value(v.clone()).ok())
-                    {
-                        if self
+                        && self
                             .error(Some(id), -32602, "Invalid method parameters")
                             .await
                             .is_err()
-                        {
-                            return None;
-                        }
+                    {
+                        return None;
                     }
                 }
             }

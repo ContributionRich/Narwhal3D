@@ -200,11 +200,13 @@ impl ServerHandler for Server {
                 None,
             ));
         }
-        let mut result = ListToolsResult::default();
-        result.tools = tool_list();
-        result.meta =
-            response_meta(context.meta.protocol_version() == Some(ProtocolVersion::V_2026_07_28));
-        Ok(result)
+        Ok(ListToolsResult {
+            tools: tool_list(),
+            meta: response_meta(
+                context.meta.protocol_version() == Some(ProtocolVersion::V_2026_07_28),
+            ),
+            ..Default::default()
+        })
     }
     async fn call_tool(
         &self,

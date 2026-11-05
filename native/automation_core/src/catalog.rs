@@ -104,33 +104,29 @@ pub fn validate_read(name: &str, args: &Map<String, Value>) -> Result<(), &'stat
     if !READS.iter().any(|(n, _, _)| *n == name) {
         return Err("tool_not_allowed");
     }
-    match name {
+    let valid = match name {
         "narwhal.object_summary" => {
-            if args.len() != 1
-                || !args
+            args.len() == 1
+                && args
                     .get("object_id")
                     .and_then(Value::as_str)
                     .is_some_and(uuid)
-            {
-                return Err("invalid_arguments");
-            }
         }
         "narwhal.objects" | "narwhal.layers" => {
-            if args.len() != 2
-                || !args
+            args.len() == 2
+                && args
                     .get("offset")
                     .and_then(Value::as_u64)
                     .is_some_and(|n| n <= 10000)
-                || !args
+                && args
                     .get("limit")
                     .and_then(Value::as_u64)
                     .is_some_and(|n| (1..=32).contains(&n))
-            {
-                return Err("invalid_arguments");
-            }
         }
-        _ if !args.is_empty() => return Err("invalid_arguments"),
-        _ => {}
+        _ => args.is_empty(),
+    };
+    if !valid {
+        return Err("invalid_arguments");
     }
     Ok(())
 }

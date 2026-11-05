@@ -52,16 +52,16 @@ fn key_valid(key: &str, require_prefix: bool) -> bool {
         None if !require_prefix => (None, key),
         None => return false,
     };
-    if let Some(prefix) = prefix {
-        if !prefix.split('.').all(|label| {
+    if let Some(prefix) = prefix
+        && !prefix.split('.').all(|label| {
             let b = label.as_bytes();
             !b.is_empty()
                 && b[0].is_ascii_alphabetic()
                 && b[b.len() - 1].is_ascii_alphanumeric()
                 && b.iter().all(|c| c.is_ascii_alphanumeric() || *c == b'-')
-        }) {
-            return false;
-        }
+        })
+    {
+        return false;
     }
     let b = name.as_bytes();
     b.is_empty()
@@ -121,10 +121,10 @@ fn modern_metadata(v: &Value) -> Result<(), ErrorData> {
         return Err(invalid("Invalid nested capability declaration"));
     }
     let capabilities = meta.client_capabilities().unwrap();
-    if let Some(extensions) = capabilities.extensions {
-        if extensions.keys().any(|key| !key_valid(key, true)) {
-            return Err(invalid("Invalid extension identifier"));
-        }
+    if let Some(extensions) = capabilities.extensions
+        && extensions.keys().any(|key| !key_valid(key, true))
+    {
+        return Err(invalid("Invalid extension identifier"));
     }
     let version = meta.protocol_version().unwrap();
     if version == ProtocolVersion::V_2025_11_25 {
@@ -176,10 +176,10 @@ impl Gate {
         {
             return Err(request_error("Invalid request envelope"));
         }
-        if let Some(id) = object.get("id") {
-            if !(id.is_i64() || id.as_str().is_some_and(|s| s.len() <= 128)) {
-                return Err(request_error("Invalid request ID"));
-            }
+        if let Some(id) = object.get("id")
+            && !(id.is_i64() || id.as_str().is_some_and(|s| s.len() <= 128))
+        {
+            return Err(request_error("Invalid request ID"));
         }
         if object.contains_key("params") && !v["params"].is_object() {
             return Err(invalid("Expected object parameters"));
