@@ -4,6 +4,8 @@ All notable public changes will be recorded here. Narwhal 3D is an extremely ear
 
 ## Unreleased
 
+- Honor `XDG_CACHE_HOME` for the application-core qualification build cache, falling back to `HOME/.cache` when unset or empty. An explicit `--target-dir` still takes precedence.
+
 ## 0.4.10 — 2026-11-02
 
 Linux and Windows patch release for 0.4.9. The Linux AppImage and the Windows portable EXE are published for 0.4.10. No Apple Silicon Mac build has been made for this line; the 0.4.8 DMG remains on its release page.

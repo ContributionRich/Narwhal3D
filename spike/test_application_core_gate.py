@@ -15,6 +15,7 @@ import hashlib
 import importlib.util
 import io
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -146,6 +147,31 @@ class ApplicationCoreGateTests(unittest.TestCase):
         self.box = Sandbox(self.gate_source).__enter__()
         self.addCleanup(self.box.__exit__, None, None, None)
         self.gate = self.box.gate
+
+    def test_main_target_directory_selection(self):
+        base = self.box.target.parent
+        home = base / "synthetic home"
+        cache = base / "synthetic cache"
+        suffix = Path("narwhal3d-application-core/target")
+        for xdg in (str(cache), "", None):
+            for explicit in (False, True):
+                with self.subTest(xdg=xdg, explicit=explicit):
+                    env = {"HOME": str(home)}
+                    if xdg is not None:
+                        env["XDG_CACHE_HOME"] = xdg
+                    argv = [str(SCRIPT)]
+                    expected = (cache if xdg else home / ".cache") / suffix
+                    if explicit:
+                        argv += ["--target-dir", str(self.box.target)]
+                        expected = self.box.target
+                    with (mock.patch.dict(os.environ, env, clear=True),
+                          mock.patch.object(sys, "argv", argv),
+                          mock.patch.object(self.gate, "build", return_value=(
+                              self.box.library, {"library_sha256": "synthetic"})) as build,
+                          mock.patch.object(self.gate, "stage") as stage):
+                        self.gate.main()
+                    build.assert_called_once_with(expected)
+                    stage.assert_not_called()
 
     def assert_prior_untouched(self):
         self.assertEqual(self.box.destination.read_bytes(), OLD_BINARY)
@@ -405,6 +431,12 @@ class MutationTests(unittest.TestCase):
         self.assertEqual(result.testsRun, 1)
         self.assertEqual(result.errors, [], "mutation must fail a behavior assertion, not crash")
         self.assertEqual(len(result.failures), 1, "mutant survived its regression test")
+
+    def test_ignoring_xdg_cache_home_goes_red(self):
+        self.assert_mutant_is_red(
+            "Path(os.environ.get('XDG_CACHE_HOME') or Path.home() / '.cache')",
+            "Path.home() / '.cache'",
+            "test_main_target_directory_selection")
 
     def test_dropping_strict_clippy_goes_red(self):
         self.assert_mutant_is_red("'--', '-D', 'warnings'", "'--'",

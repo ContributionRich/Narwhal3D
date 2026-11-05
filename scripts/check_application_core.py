@@ -116,7 +116,9 @@ def stage(library, receipt):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--target-dir', type=Path, default=Path.home() / '.cache/narwhal3d-application-core/target')
+    cache_home = Path(os.environ.get('XDG_CACHE_HOME') or Path.home() / '.cache')
+    parser.add_argument('--target-dir', type=Path,
+                        default=cache_home / 'narwhal3d-application-core/target')
     parser.add_argument('--stage-dev', action='store_true')
     args = parser.parse_args()
     library, receipt = build(args.target_dir)
