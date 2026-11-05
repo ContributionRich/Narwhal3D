@@ -343,6 +343,131 @@ check(bridge.explode_curve(line((0, 0, 0), (1, 0, 0))) is None,
 check(bridge.explode_curve(bridge.make_circle((0, 0, 0), 3)) is None,
       "and neither does a circle")
 
+# ===========================================================================
+print()
+print("JoinCopy: Join's result, with every input kept (#3)")
+# ===========================================================================
+# The commands run on a REAL NarwhalContext and undo stack. Only the Blender
+# surface is stubbed: a bpy module with no active object (so the order is the
+# selection order), no display objects and no scene to remove from.
+_bpy = types.ModuleType("bpy")
+_bpy.context = types.SimpleNamespace(
+    view_layer=types.SimpleNamespace(objects=types.SimpleNamespace(active=None)))
+sys.modules.setdefault("bpy", _bpy)
+model = _load("narwhal3d.model", "narwhal3d/model.py")
+_load("narwhal3d.options", "narwhal3d/options.py")
+commands = _load("narwhal3d.commands", "narwhal3d/commands.py")
+bridge.refresh_display_objects = lambda ctx, changes: True   # no display to refresh
+
+
+class _Sel:
+    def __init__(self, name):
+        self.name = name
+
+
+def join_ctx(curves, layers=None):
+    """A document holding `curves` [(name, geom)], all selected in that order."""
+    ctx = commands.NarwhalContext(model.NarwhalModel())
+    for index in range(1, 1 + max(layers or [0])):
+        layer = r3.Layer()
+        layer.Name = f"L{index}"
+        ctx.model.file.Layers.Add(layer)
+    for i, (name, geom) in enumerate(curves):
+        ctx.model.add_object(geom, name, (layers or [0] * len(curves))[i])
+    names = [name for name, _ in curves]
+    ctx.selected_objects = lambda: [_Sel(n) for n in names]
+    ctx.object_by_name = lambda name: None
+    ctx.rebuild_display = lambda: None
+    ctx.select_by_names = lambda names: None
+    ctx._make_display_object = lambda *a, **k: object()
+    return ctx
+
+
+def doc(ctx):
+    """id -> (name, layer, mode, exact geometry) for every document object."""
+    out = {}
+    for f in ctx.model.file.Objects:
+        a = f.Attributes
+        out[str(a.Id)] = (a.Name, int(a.LayerIndex), int(a.Mode),
+                          str(f.Geometry.Encode()))
+    return out
+
+
+def run_cmd(key, ctx):
+    cmd = type(commands.COMMANDS[key])()
+    return cmd.begin(ctx)
+
+
+def touching():
+    return [("A", line((0, 0, 0), (5, 0, 0))),
+            ("B", line((5, 0, 0), (5, 5, 0))),
+            ("C", bridge.make_circle((20, 0, 0), 1.0).Trim(0.0, 3.0))]
+
+
+def touching_mixed():
+    arc = r3.Arc(P(5, 5, 0), P(7, 7, 0), P(9, 5, 0)).ToNurbsCurve()
+    return [("A", line((0, 0, 0), (5, 0, 0))),
+            ("B", line((5, 0, 0), (5, 5, 0))),
+            ("Arc", arc)]
+
+
+check("joincopy" in commands.COMMANDS and commands.COMMANDS["joincopy"].name == "JoinCopy",
+      "JoinCopy is registered")
+check(commands.COMMANDS["joincopy"].steps == commands.COMMANDS["join"].steps,
+      "JoinCopy asks for the selection the way Join does")
+
+for label, make in (("polyline", touching), ("polycurve", touching_mixed)):
+    jctx, cctx = join_ctx(make(), [1, 0, 0]), join_ctx(make(), [1, 0, 0])
+    before = doc(cctx)
+    jmsg, _ = run_cmd("join", jctx)
+    cmsg, cdone = run_cmd("joincopy", cctx)
+    after = doc(cctx)
+    new = {k: v for k, v in after.items() if k not in before}
+    joined = [v for k, v in doc(jctx).items() if v[0] not in ("A", "B", "C", "Arc")]
+    check(cdone and len(new) == 1, f"{label}: JoinCopy adds exactly one object ({cmsg!r})")
+    check(all(after.get(k) == v for k, v in before.items()),
+          f"{label}: every input keeps its id, name, layer, mode and exact geometry")
+    check(len(joined) == 1 and new and list(new.values())[0][3] == joined[0][3],
+          f"{label}: the copy's geometry is exactly what Join creates")
+    check(new and list(new.values())[0][1] == 1 == (joined[0][1] if joined else None),
+          f"{label}: the result takes the first selected curve's layer, as Join's does")
+    check(cmsg.startswith("Joined copies of 2 curves into 1:") if label == "polyline"
+          else cmsg.startswith("Joined copies of 3 curves into 1:"),
+          f"{label}: the report says copies were joined ({cmsg!r})")
+
+ctx = join_ctx(touching())
+before = doc(ctx)
+depth = len(ctx.undo._undo)
+run_cmd("joincopy", ctx)
+joined = doc(ctx)
+check(len(ctx.undo._undo) == depth + 1, "one Undo record")
+ctx.undo_last()
+check(doc(ctx) == before, "Undo removes only the result; the inputs are untouched")
+ctx.redo_last()
+check(doc(ctx) == joined, "Redo restores the result without touching the inputs")
+
+ctx = join_ctx([("A", line((0, 0, 0), (1, 0, 0))), ("B", line((3, 0, 0), (4, 0, 0)))])
+before = doc(ctx)
+msg, done = run_cmd("joincopy", ctx)
+check(done and msg.startswith("JoinCopy: those curves do not touch end-to-end")
+      and doc(ctx) == before, f"disjoint curves: refused by name, nothing added ({msg!r})")
+
+pt = r3.Point(P(9, 9, 9))
+ctx = join_ctx(touching()[:2] + [("Pt", pt)])
+before = doc(ctx)
+msg, done = run_cmd("joincopy", ctx)
+check("Not joined (1): only curves can be joined yet" in msg
+      and all(doc(ctx).get(k) == v for k, v in before.items()) and len(doc(ctx)) == 4,
+      f"mixed input: the curves are joined, the point is reported and kept ({msg!r})")
+ctx = join_ctx([("A", line((0, 0, 0), (1, 0, 0))), ("Pt", pt)])
+msg, done = run_cmd("joincopy", ctx)
+check(msg.startswith("JoinCopy: only curves can be joined yet"),
+      f"one curve and a point: refused by name ({msg!r})")
+ctx = join_ctx(touching()[:2])
+msg, done = run_cmd("join", ctx)
+check(len(doc(ctx)) == 1 and msg.startswith("Joined 2 curves into 1:"),
+      f"Join itself still replaces its inputs ({msg!r})")
+
 print()
 print("=" * 64)
 if failures:

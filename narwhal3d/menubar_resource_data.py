@@ -141,6 +141,7 @@ _CORE_MENUS = (
         )),
         _popup("Structure and Direction", (
             _item("Join", "join"),
+            _item("Join Copy", "joincopy"),
             _item("Explode", "explode"),
             _item("Reverse Geometry Direction", "flip"),
         )),
