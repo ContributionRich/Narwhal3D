@@ -49,6 +49,17 @@ Use namespaced labels so issues remain searchable:
 - `platform: windows`
 - `platform: macos`
 
+### Contributor and AI-agent labels
+
+- `agent-ready`: fully specified; expected behaviour, files and the test to extend are in the issue
+- `status: needs-info`: post a short design (inputs, prompts, defaults, result, test) before implementing
+- `area: onboarding`: clean-clone setup, tests and CI
+- `type: rust-port`: move computation from Python into a Rust crate
+- `area: ai-mcp`: in-app AI assistant and MCP server
+- `size: S`, `size: M`, `size: L`: rough effort
+
+See [the AI contributor guide](contributing-with-ai.md) and the pinned "Start here" issue.
+
 ### Workflow
 
 - `status: needs-triage`

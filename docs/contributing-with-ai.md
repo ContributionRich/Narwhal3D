@@ -88,6 +88,8 @@ start there if you can.
 
 ## 4. Choose a task
 
+The pinned issue [#101 "Start here"](https://github.com/ContributionRich/Narwhal3D/issues/101) lists the current priority order.
+
 - **[`agent-ready`](https://github.com/ContributionRich/Narwhal3D/issues?q=is%3Aissue+is%3Aopen+label%3Aagent-ready)**:
   fully specified. Expected behaviour, files to read and the test to extend are in the issue. An
   agent can complete these autonomously.
