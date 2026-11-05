@@ -190,6 +190,25 @@ def _():
         assert command not in registered, (menu, command)
 
 
+@check("a registered toolbar command generates a runnable row")
+def _():
+    generated = [row for rows in data._toolbar_groups(frozenset()).values()
+                 for row in rows]
+    candidate = next(row[3] for row in generated
+                     if row[3] not in registered
+                     and row[1].endswith(data.TODO_SUFFIX))
+    assert candidate
+    baseline = data._expanded_menus(frozenset())
+    todo_row = next(row for _menu, rows in baseline for _path, row in flat(rows)
+                    if row[0] == "item" and row[3] == candidate)
+    assert todo_row[1].endswith(data.TODO_SUFFIX), todo_row
+    promoted = data._expanded_menus(registered | {candidate})
+    live_row = next(row for _menu, rows in promoted for _path, row in flat(rows)
+                    if row[0] == "item" and row[3] == candidate)
+    assert not live_row[1].endswith(data.TODO_SUFFIX), live_row
+    assert live_row[1] == todo_row[1][:-len(data.TODO_SUFFIX)], (todo_row, live_row)
+
+
 @check("implemented and TODO category counts are pinned")
 def _():
     runnable = collections.Counter()
