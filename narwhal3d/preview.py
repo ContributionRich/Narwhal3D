@@ -1632,6 +1632,11 @@ def preview_parabola3pt(args, cursor, plane, cmd=None):
     if len(points) < 2:
         return [points + [tuple(cursor)]] if points else []
     opt = getattr(cmd, "opt", {}) or {}
+    if opt.get("Mode") == "Focus":
+        # focus, direction, then the cursor as the end: the Parabola Focus preview.
+        proxy = type("ParabolaPreviewState", (), {
+            "_construction": "Focus", "opt": {"Half": False}})()
+        return preview_parabola(points[:2], tuple(cursor), plane, cmd=proxy)
     if opt.get("Mode", "ThroughPoint") == "ThroughPoint":
         order = opt.get("PickOrder", "Default")
         if len(points) >= 3:
