@@ -125,7 +125,7 @@ fn exchange(handle: u64, input: &str) -> Result<Value, &'static str> {
             proposal,
             current,
             accepted,
-        } => conversation.review_proposal(binding, proposal, current, accepted),
+        } => conversation.review_proposal(binding, *proposal, current, accepted),
         Input::CheckProposal {
             binding,
             id,
@@ -207,6 +207,13 @@ pub extern "C" fn narwhal_workflow_abi() -> u32 {
 /// Caller owns valid nonoverlapping buffers. The full fixed output capacity is
 /// required BEFORE running an operation, so a too-small buffer cannot consume a
 /// request and induce an ambiguous retry. No allocation/pointer crosses the ABI.
+///
+/// # Safety
+///
+/// `input` must be valid for reads of `length` bytes and `output` valid for
+/// writes of `capacity` bytes, and the two ranges must not overlap. Null
+/// pointers, `length > MAX_INPUT` and `capacity < OUTPUT_CAPACITY` are refused
+/// with -1 before either buffer is touched.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn narwhal_workflow_json(
     handle: u64,
