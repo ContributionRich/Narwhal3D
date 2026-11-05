@@ -2,6 +2,8 @@
 
 Narwhal 3D welcomes focused fixes, tests, documentation, and one-command feature contributions.
 
+**AI coding agents, and people directing one:** start with [docs/contributing-with-ai.md](docs/contributing-with-ai.md). It has the measured setup steps, the checks that run in a clean clone, the rules every change must follow, and how to pick an issue.
+
 ## Licence
 
 Narwhal 3D project code is **GPL-3.0-or-later**. By submitting a contribution, you agree that it may be distributed under that licence. Contributions and new dependencies must be GPL-compatible. Third-party components keep their own licences and must be recorded in `THIRD_PARTY_NOTICES` and `licenses/` when applicable.
@@ -42,7 +44,7 @@ When a command creates or modifies solids:
 
 ## Running the checks
 
-After bootstrapping the locked development runtime:
+Set up as described in [docs/contributing-with-ai.md](docs/contributing-with-ai.md#3-set-up-a-working-copy-linux-x86_64). A clean clone cannot yet run the full gate (the document observer and the patched runtime are not built by the bootstrap; see the [`area: onboarding`](https://github.com/ContributionRich/Narwhal3D/issues?q=is%3Aissue+is%3Aopen+label%3A%22area%3A+onboarding%22) issues). Where the full environment exists:
 
 ```bash
 ./run_tests.sh

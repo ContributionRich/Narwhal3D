@@ -13,6 +13,9 @@
 /legacy/
 
 # Build and release output
+/native/*/target
+/packaging/*/target
+/packaging/*/*/target
 /dist/
 /build/
 /tmp/

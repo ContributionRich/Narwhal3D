@@ -24,7 +24,7 @@ ROOT_FILES = (
     "docs/readme-command-loft.gif", "docs/images/bugreport.png",
     "docs/technical-reference.md", "docs/images/workspace-light.png",
     "docs/images/workspace-dark.png", "docs/images/workspace-capture.json",
-    "docs/gaps.md", "docs/github-project.md", "docs/windows-build.md", "docs/macos-build.md",
+    "docs/gaps.md", "docs/github-project.md", "docs/contributing-with-ai.md", "docs/windows-build.md", "docs/macos-build.md",
     "narwhal3d.sh", "run_tests.sh", "uishot.sh", "Build-Narwhal3D-macOS.command",
     "pyrightconfig.json", "docs/UI_DESIGNER_BUNDLE.md",
     "docs/reviews/2026-10-30-rust-research.md", "docs/application-core-packaging.md",

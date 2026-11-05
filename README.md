@@ -94,6 +94,8 @@ Some solids cannot yet be exported as exact `.3dm` geometry, and the macOS packa
 
 **Have an idea or want to contribute?** Feedback, testing, documentation, design, and code are welcome. Start with the [contribution guide](CONTRIBUTING.md) or [support information](SUPPORT.md).
 
+**Using an AI coding assistant?** Point it at this repository and at the [AI contributor guide](docs/contributing-with-ai.md). Issues labelled [`agent-ready`](https://github.com/ContributionRich/Narwhal3D/issues?q=is%3Aissue+is%3Aopen+label%3Aagent-ready) are fully specified for autonomous work.
+
 ### For developers and curious readers
 
 [Build instructions, checksums, and technical details](docs/technical-reference.md) · [Packaging guide](packaging/README.md) · [Compatibility](COMPATIBILITY.md) · [Security](SECURITY.md)

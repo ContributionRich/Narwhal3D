@@ -41,6 +41,7 @@ REQUIRED = {
     "docs/images/bugreport.png",
     "docs/gaps.md",
     "docs/github-project.md",
+    "docs/contributing-with-ai.md",
     "docs/windows-build.md",
     "docs/macos-build.md",
     "artwork/icons/README.md",

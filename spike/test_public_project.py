@@ -169,7 +169,7 @@ required_docs = (
     "README.md", "STATUS.md", "COMPATIBILITY.md", "ROADMAP.md", "CHANGELOG.md", "CONTRIBUTING.md",
     "SECURITY.md", "SUPPORT.md", "GOVERNANCE.md", "CODE_OF_CONDUCT.md",
     "docs/gaps.md", "docs/github-project.md", "docs/windows-build.md", "docs/macos-build.md",
-    "docs/technical-reference.md",
+    "docs/technical-reference.md", "docs/contributing-with-ai.md",
 )
 check(all((ROOT / path).is_file() for path in required_docs),
       "the public project and governance document set is complete")
