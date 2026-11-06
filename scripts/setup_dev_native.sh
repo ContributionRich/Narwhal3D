@@ -125,6 +125,12 @@ if [[ ! -d "$OCCT_SOURCE/src" ]] || [[ "$(git -C "$OCCT_SOURCE" rev-parse HEAD 2
     echo "error: OCCT checkout is not the pinned revision" >&2; exit 1; }
 fi
 
+step "Rust targets"
+# The gate cross-checks the pure core and builds the platform core for Windows.
+if command -v rustup >/dev/null 2>&1; then
+  rustup target add --toolchain "$TOOLCHAIN" x86_64-pc-windows-gnu
+fi
+
 step "Rust cores"
 cargo +"$TOOLCHAIN" build --release --locked --manifest-path "$ROOT/native/pure_core/Cargo.toml" --target "$TRIPLE"
 for crate in selection_core platform_core cdr_core document_core; do
