@@ -343,6 +343,33 @@ bb = analysis.bounding_box(g) if g is not None else None
 check(bb is not None and near(xyz(bb[0]), (0, 0, 0)) and near(xyz(bb[1]), (8, 6, 0)),
       "...touching all four sides of the rectangle (its box IS the rectangle)")
 
+# ---------------------------------------------------------------- 10b. Ellipse Vertical (#37)
+print("\n-- 10b. Ellipse Vertical --")
+
+
+def samples(g, n=64):
+    d = g.Domain
+    return [xyz(g.PointAt(d.T0 + (d.T1 - d.T0) * k / n)) for k in range(n + 1)]
+
+
+# centre (1,2,0); first axis toward (5,2,0): a=4 along +x; the second pick (1,5,0) is 3
+# off that axis, so b=3 -- along the CPlane normal +z, in the vertical plane y=2
+g, msg, c = draw("ellipse", ["Vertical", "1,2,0", "5,2,0", "1,5,0"])
+pts = samples(g) if g is not None else []
+xs, zs = [p[0] for p in pts], [p[2] for p in pts]
+check(g is not None and g.IsClosed and all(abs(p[1] - 2.0) < 1e-9 for p in pts)
+      and abs(max(xs) - 5.0) < 1e-9 and abs(min(xs) + 3.0) < 1e-9
+      and abs(max(zs) - 3.0) < 1e-9 and abs(min(zs) + 3.0) < 1e-9
+      and all(abs(((p[0] - 1) / 4) ** 2 + (p[2] / 3) ** 2 - 1) < 1e-9 for p in pts),
+      f"Vertical: the a=4, b=3 ellipse stands in the plane y=2, its normal (0,1,0) "
+      f"perpendicular to the CPlane normal ({msg!r})")
+g, msg, c = draw("ellipse", ["Vertical", "0,0,0", "3,4,0", "0,0,0"])
+check(g is None and "non-zero" in (msg or ""),
+      f"Vertical: a second pick on the first axis gives b=0 and is refused ({msg!r})")
+g, msg, c = draw("ellipse", ["0,0,0", "Vertical"])
+check("before the first point" in (msg or ""),
+      f"Vertical after the centre is refused by name ({msg!r})")
+
 # ---------------------------------------------------------------- the rest stay honest
 print("\n-- unbuilt options still say so --")
 # Circle/Arc Tangent are covered in spike/test_tangent_circle.py; AroundCurve
@@ -350,8 +377,7 @@ print("\n-- unbuilt options still say so --")
 # Line Tangent and Polygon Star are now built from their measured flows
 # (research_preview_14 R10; covered in spike/test_research13_commands.py).
 for key, opt in (("line", "Normal"), ("circle", "AroundCurve"),
-                 ("rectangle", "EdgeMidpoint"),
-                 ("ellipse", "Vertical")):
+                 ("rectangle", "EdgeMidpoint")):
     cmd = type(commands.COMMANDS[key])()
     m, _d = cmd.feed(opt, None)
     check("not implemented yet" in (m or ""), f"{key} {opt}: {m!r}")
