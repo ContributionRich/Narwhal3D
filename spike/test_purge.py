@@ -9,10 +9,13 @@ history; only the Blender display hooks are stubbed.
 
 Covered:
   * Layers: an empty layer is purged, a layer with objects and the current layer
-    are kept;
-  * one Undo restores a purged layer even when the purge renumbered other objects'
+    are kept; one Undo restores it even when the purge renumbered other objects'
     layers, and Redo purges it again;
-  * the unbuilt types refuse by name, nothing removed.
+  * Groups: a group with no members is purged, groups with members are kept and
+    every remaining object is still in the same groups (by name);
+  * one Undo restores the purged group and its table position, Redo purges again;
+  * a second Purge with nothing unused says so and records nothing;
+  * Block Definitions and the other unbuilt types refuse by name, nothing removed.
 
 Loaded by file path (no Blender): the same trick as spike/test_visibility.py.
 """
@@ -147,15 +150,51 @@ check(redone == ["Default", "Full"] and layer_of_p(ctx) == "Full",
       f"Redo purges it again ({redone})")
 
 print()
-print("the unbuilt types refuse by name")
+print("Groups: only a group with no members goes")
+ctx = grouped_doc()
+before = memberships(ctx)
+depth = len(ctx.undo._undo)
+msg, done = purge(ctx, "Groups")
+check(done and msg == "Purged 2 unused group(s)", f"two memberless groups are purged ({msg!r})")
+check(group_names(ctx) == ["Used1", "Used2"], f"the used groups remain, in order ({group_names(ctx)})")
+check(memberships(ctx) == before,
+      f"every object is still in the same groups by name ({memberships(ctx)})")
+check(len(ctx.undo._undo) == depth + 1, "one Undo record")
+try:
+    ctx.undo_last()
+    undone = group_names(ctx)
+except Exception as exc:  # noqa: BLE001 -- a registry refusal must report, not crash
+    undone = f"{type(exc).__name__}: {exc}"
+check(undone == ["Used1", "Empty", "Used2", "Spare"] and memberships(ctx) == before,
+      f"Undo restores the purged groups and every membership ({undone})")
+try:
+    ctx.redo_last()
+    redone = group_names(ctx)
+except Exception as exc:  # noqa: BLE001
+    redone = f"{type(exc).__name__}: {exc}"
+check(redone == ["Used1", "Used2"] and memberships(ctx) == before,
+      f"Redo purges them again ({redone})")
+depth = len(ctx.undo._undo)
+msg, done = purge(ctx, "Groups")
+check(done and msg == "Purge Groups: no unused groups to delete" and len(ctx.undo._undo) == depth,
+      f"nothing unused: says so, records nothing ({msg!r})")
+ctx = real_ctx()
+msg, done = purge(ctx, "Groups")
+check(done and "no unused groups" in msg, f"an empty group table: nothing to do ({msg!r})")
+
+print()
+print("Block Definitions and the unbuilt types refuse by name")
 for option in ("Block Definitions", "Annotation Styles", "Bitmaps", "Environments",
-               "Groups",
                "Hatch Patterns", "Linetypes", "Materials", "Textures"):
     ctx = grouped_doc()
     msg, done = purge(ctx, option)
     check(done and f"the {option} option is not implemented yet" in msg
           and group_names(ctx) == ["Used1", "Empty", "Used2", "Spare"],
           f"{option}: refused by name, nothing removed ({msg!r})")
+ctx = grouped_doc()
+msg, _done = purge(ctx, "Block Definitions")
+check("cannot delete" in msg, f"Block Definitions says why ({msg!r})")
+
 print()
 print("=" * 60)
 if failures:
