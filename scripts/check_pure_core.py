@@ -89,6 +89,7 @@ PURE_CORE_PYTESTS = (
     "spike/test_native_coil_preview.py",
     "spike/test_preview_curve_native.py",
     "spike/test_native_tessellate.py",
+    "spike/test_native_unit_table.py",
     "spike/test_native_interpolate.py",
     "spike/test_native_tween.py",
 )

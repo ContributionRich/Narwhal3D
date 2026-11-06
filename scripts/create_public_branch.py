@@ -197,6 +197,7 @@ TEST_FILES = (
     "spike/test_native_search02_profile.py", "spike/fixtures/native_search02.json",
     "spike/test_native_coil_preview.py", "spike/test_preview_curve_native.py",
     "spike/test_native_tessellate.py",
+    "spike/test_native_unit_table.py",
     "spike/test_native_interpolate.py", "spike/test_native_tween.py",
     "spike/test_tracedraw.py", "spike/test_cdr.py", "spike/test_native_cdr.py",
     "spike/test_embedded_cdr.py",
