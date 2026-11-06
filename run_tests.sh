@@ -200,7 +200,7 @@ if command -v cargo >/dev/null 2>&1; then
     OCCT_SOURCE="$ROOT/vendor/occt-src"
     OCCT_LIBS="$RUNTIME_ROOT/5.2/python/lib/python3.13/site-packages/cadquery_ocp_novtk.libs"
     if [[ -d "$OCCT_SOURCE/src" && -d "$OCCT_LIBS" ]]; then
-        run "Rust geometry-core format" cargo fmt --manifest-path native/geometry_core/Cargo.toml --check
+        run "Rust geometry-core format" cargo +1.95.0 fmt --manifest-path native/geometry_core/Cargo.toml --check
         mkdir -p "$ROOT/tmp"
         GEOMETRY_BUILD_TEST="$ROOT/tmp/geometry-core-build-tests-$$"
         run "Rust geometry-core build-script tests" rustc +1.95.0 --edition=2021 --test \
@@ -209,13 +209,13 @@ if command -v cargo >/dev/null 2>&1; then
         rm -f "$GEOMETRY_BUILD_TEST"
         run "Rust geometry-core Clippy" env NARWHAL_OCCT_SOURCE_DIR="$OCCT_SOURCE" \
             NARWHAL_OCCT_LIB_DIR="$OCCT_LIBS" LD_LIBRARY_PATH="$OCCT_LIBS" \
-            cargo clippy --manifest-path native/geometry_core/Cargo.toml --all-targets -- -D warnings
+            cargo +1.95.0 clippy --manifest-path native/geometry_core/Cargo.toml --all-targets -- -D warnings
         run "Rust geometry-core tests" env NARWHAL_OCCT_SOURCE_DIR="$OCCT_SOURCE" \
             NARWHAL_OCCT_LIB_DIR="$OCCT_LIBS" LD_LIBRARY_PATH="$OCCT_LIBS" \
-            cargo test --manifest-path native/geometry_core/Cargo.toml
+            cargo +1.95.0 test --manifest-path native/geometry_core/Cargo.toml
         run "Rust geometry-core release" env NARWHAL_OCCT_SOURCE_DIR="$OCCT_SOURCE" \
             NARWHAL_OCCT_LIB_DIR="$OCCT_LIBS" LD_LIBRARY_PATH="$OCCT_LIBS" \
-            cargo build --release --manifest-path native/geometry_core/Cargo.toml
+            cargo +1.95.0 build --release --manifest-path native/geometry_core/Cargo.toml
         run "Rust geometry-core Python boundary" env \
             NARWHAL_GEOMETRY_CORE="$ROOT/native/geometry_core/target/release/libnarwhal_geometry_core.so" \
             LD_LIBRARY_PATH="$OCCT_LIBS" "$PYTHON" spike/test_native_geometry.py
@@ -249,13 +249,13 @@ if command -v cargo >/dev/null 2>&1; then
         run "Rust geometry-core surface movability (every open surface, every part)" env \
             NARWHAL_GEOMETRY_CORE="$ROOT/native/geometry_core/target/release/libnarwhal_geometry_core.so" \
             LD_LIBRARY_PATH="$OCCT_LIBS" "$PYTHON" spike/test_surface_movability.py
-        run "Rust platform-core format" cargo fmt --manifest-path native/platform_core/Cargo.toml --check
-        run "Rust platform-core Clippy" cargo clippy \
+        run "Rust platform-core format" cargo +1.95.0 fmt --manifest-path native/platform_core/Cargo.toml --check
+        run "Rust platform-core Clippy" cargo +1.95.0 clippy \
             --manifest-path native/platform_core/Cargo.toml --all-targets -- -D warnings
-        run "Rust platform-core tests" cargo test --manifest-path native/platform_core/Cargo.toml
-        run "Rust platform-core Linux release" cargo build --release \
+        run "Rust platform-core tests" cargo +1.95.0 test --manifest-path native/platform_core/Cargo.toml
+        run "Rust platform-core Linux release" cargo +1.95.0 build --release \
             --manifest-path native/platform_core/Cargo.toml
-        run "Rust platform-core Windows release" cargo build --release \
+        run "Rust platform-core Windows release" cargo +1.95.0 build --release \
             --target x86_64-pc-windows-gnu --manifest-path native/platform_core/Cargo.toml
         run "Rust platform-core Python boundary" "$PYTHON" spike/test_native_platform.py
     else
