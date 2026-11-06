@@ -14852,9 +14852,11 @@ class ClearUndoCmd(Command):
             return "ClearUndo: answer Yes or No", False
         if not answer:
             return "Undo history kept.", True
-        cleared = ctx.undo.clear()
-        undo_count = cleared["undo_count"]
-        redo_count = cleared["redo_count"]
+        # Count first: UndoStack.clear() keeps its None contract (the history
+        # ABI trace pins it).
+        undo_count = len(ctx.undo.undo_names())
+        redo_count = len(ctx.undo.redo_names())
+        ctx.undo.clear()
         return (f"Cleared {undo_count} undo record{'s' if undo_count != 1 else ''} and "
                 f"{redo_count} redo record{'s' if redo_count != 1 else ''}."), True
 

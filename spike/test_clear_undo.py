@@ -15,7 +15,7 @@ Covered:
   * Enter and "No" keep every record;
   * invalid text re-prompts and clears nothing;
   * "Yes" clears both sides and reports both counts;
-  * UndoStack.clear returns the cleared counts;
+  * UndoStack.clear still returns None, as the history ABI trace expects;
   * the document is identical before and after.
 
 Loaded by file path (no Blender): the same trick as spike/test_visibility.py.
@@ -179,11 +179,10 @@ c, msg, done = run(ctx, "yes")
 check(msg == "Cleared 1 undo record and 0 redo records.", f"singular wording ({msg!r})")
 
 print()
-print("UndoStack.clear returns the public counts")
+print("UndoStack.clear keeps its contract")
 ctx = history(real_ctx(), 2, 1)
-check(ctx.undo.clear() == {"undo_count": 2, "redo_count": 1},
-      "clear() returns {'undo_count': 2, 'redo_count': 1}")
-check(ctx.undo.clear() == {"undo_count": 0, "redo_count": 0}, "and zeros once empty")
+check(ctx.undo.clear() is None, "clear() still returns None (the history ABI trace)")
+check(counts(ctx) == (0, 0), "and empties both sides")
 
 print()
 print("=" * 60)
