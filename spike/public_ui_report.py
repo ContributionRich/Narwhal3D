@@ -155,7 +155,7 @@ def _inspect(layout_was_ready):
           f"{len(menu_names)}: {', '.join(menu_names)}")
     menu_enabled, menu_total = menubar.coverage(set(ui.COMMANDS))
     check("menu actions are runnable or explicitly marked TODO",
-          (menu_enabled, menu_total) == (186, 552), f"{menu_enabled}/{menu_total}")
+          (menu_enabled, menu_total) == (188, 552), f"{menu_enabled}/{menu_total}")
     file_labels = [row[1] for row in menubar.resource_rows("File") if row[0] != "sep"]
     help_groups = {row[1] for row in menubar.resource_rows("Help")
                    if row[0] == "popup"}
@@ -218,7 +218,7 @@ def _inspect(layout_was_ready):
           f"{len(boxes)} buttons, dead: {', '.join(dead[:6]) or 'none'}")
     toolbar_enabled, toolbar_total = toolbars.coverage(set(ui.COMMANDS))
     check("toolbar actions are runnable or explicitly unavailable",
-          (toolbar_enabled, toolbar_total) == (120, 525),
+          (toolbar_enabled, toolbar_total) == (122, 525),
           f"{toolbar_enabled}/{toolbar_total}")
 
     class RepeatState:
