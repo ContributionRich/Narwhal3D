@@ -12,6 +12,7 @@ working directory.
 """
 import io
 import os
+import shutil
 from pathlib import Path
 import subprocess
 import sys
@@ -159,6 +160,32 @@ class RealChildren(unittest.TestCase):
                                 capture_output=True, text=True, timeout=60, env=env)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("MemoryError", result.stderr)
+
+    def verify_in_child(self, *prefix_args, env):
+        code = ("import sys; sys.path.insert(0, %r); import memory_bound\n"
+                "try: print(memory_bound.verify_bound('512M')['bound'])\n"
+                "except RuntimeError as e: print('REFUSED', e)" % str(Path(HELPER).parent))
+        result = subprocess.run([*prefix_args, sys.executable, "-c", code],
+                                capture_output=True, text=True, timeout=60, env=env)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return result.stdout.strip()
+
+    def test_a_worker_can_prove_it_is_bounded_under_the_fallback(self):
+        env = dict(os.environ, **{memory_bound.MODE_ENV: "rlimit"})
+        self.assertEqual(self.verify_in_child(sys.executable, HELPER, "--max", "512M", "--", env=env), "rlimit")
+
+    def test_an_unbounded_worker_is_refused(self):
+        env = {k: v for k, v in os.environ.items() if k != memory_bound.MODE_ENV}
+        self.assertTrue(self.verify_in_child(env=env).startswith("REFUSED"))
+        # A looser address-space limit than the bound allows is not the bound either.
+        loose = str(8 * 512 * 1024 ** 2)
+        self.assertTrue(self.verify_in_child("prlimit", f"--as={loose}", "--", env=env).startswith("REFUSED")
+                        if shutil.which("prlimit") else True)
+
+    @unittest.skipUnless(memory_bound._user_scope_works(), "no systemd user session here")
+    def test_a_worker_can_prove_it_is_bounded_under_a_user_scope(self):
+        env = dict(os.environ, **{memory_bound.MODE_ENV: "systemd"})
+        self.assertEqual(self.verify_in_child(sys.executable, HELPER, "--max", "512M", "--", env=env), "systemd")
 
     def test_without_a_user_session_auto_mode_uses_rlimit(self):
         # What a container looks like to systemd-run: no session bus, no runtime dir.

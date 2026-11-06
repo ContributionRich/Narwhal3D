@@ -143,6 +143,33 @@ def prefix(memory_max, *, swap_max="0", properties=(), quiet=True, scope=True):
     return argv + ["--"]
 
 
+def verify_bound(memory_max):
+    """Evidence that THIS process runs under the bound :func:`prefix` gives ``memory_max``.
+
+    For a worker that must refuse to run unbounded. Under a systemd scope its cgroup has
+    ``memory.max`` equal to ``memory_max`` and ``memory.swap.max`` 0; under the fallback
+    ``RLIMIT_AS`` is at most :data:`ADDRESS_SPACE_FACTOR` times ``memory_max``. Returns
+    ``{"bound": "systemd", "path", "memory.max", "memory.swap.max"}`` or
+    ``{"bound": "rlimit", "RLIMIT_AS"}``; raises RuntimeError when neither holds.
+    """
+    import resource
+
+    expected = size_bytes(memory_max)
+    limits = {}
+    try:
+        relative = Path("/proc/self/cgroup").read_text().strip().split("::", 1)[1].lstrip("/")
+        group = Path("/sys/fs/cgroup") / relative
+        limits = {name: (group / name).read_text().strip() for name in ("memory.max", "memory.swap.max")}
+    except (OSError, IndexError):
+        group = None
+    if limits == {"memory.max": str(expected), "memory.swap.max": "0"}:
+        return {"bound": "systemd", "path": str(group), **limits}
+    address_space = resource.getrlimit(resource.RLIMIT_AS)[0]
+    if address_space != resource.RLIM_INFINITY and address_space <= ADDRESS_SPACE_FACTOR * expected:
+        return {"bound": "rlimit", "RLIMIT_AS": address_space}
+    raise RuntimeError(f"refusing unbounded worker: cgroup {limits}, RLIMIT_AS {address_space}")
+
+
 def _exec_under_rlimit(memory_max, cwd, command):
     import resource
 

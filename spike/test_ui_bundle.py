@@ -31,6 +31,7 @@ def require_key(case, name, inventory):
 
 
 class DiagnosticTests(unittest.TestCase):
+    @patch.dict('os.environ', {'NARWHAL_MEMORY_BOUND': 'systemd'})  # the systemd command shape, anywhere
     def test_builder_caps_entire_service_lifetime(self):
         with patch.object(sys, "argv", ["build_ui_bundle.py"]), \
                 patch.object(b.subprocess, "run") as launch:

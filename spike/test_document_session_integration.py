@@ -1114,16 +1114,18 @@ def mutation_checks(mode):
 
 def worker(mode, report, mutations):
     initialize(mode)
-    group = Path('/sys/fs/cgroup') / Path('/proc/self/cgroup').read_text().strip().split('::', 1)[1].lstrip('/')
-    limits = {name: (group / name).read_text().strip() for name in ('memory.max', 'memory.swap.max')}
-    if limits != {'memory.max': str(2 * 1024**3), 'memory.swap.max': '0'}:
-        raise RuntimeError(f'refusing unbounded test worker: {limits}')
-    EVIDENCE['cgroup'] = dict(path=str(group), **limits)
+    # A 2 GiB/no-swap systemd scope, or the RLIMIT_AS fallback; never unbounded.
+    EVIDENCE['cgroup'] = memory_bound.verify_bound('2G')
     result = unittest.TextTestRunner(verbosity=2).run(suite_for(ModelTests if mode == 'model' else CommandTests))
     mutations_report = mutation_checks(mode) if mutations else []
     ok = result.wasSuccessful() and all(r['killed'] and r['restored_green'] for r in mutations_report)
-    EVIDENCE['cgroup_usage'] = {name: (group / name).read_text().strip()
-                                for name in ('memory.peak', 'memory.swap.current')}
+    bound = EVIDENCE['cgroup']
+    if bound['bound'] == 'systemd':
+        EVIDENCE['cgroup_usage'] = {name: (Path(bound['path']) / name).read_text().strip()
+                                    for name in ('memory.peak', 'memory.swap.current')}
+    else:  # RLIMIT_AS fallback: no scope to read, so this process's own peak resident set
+        import resource
+        EVIDENCE['cgroup_usage'] = {'ru_maxrss': str(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * 1024)}
     payload = {'ok': ok, 'phase': mode, 'tests': result.testsRun,
                'failures': result.failures, 'errors': result.errors,
                'evidence': EVIDENCE, 'mutations': mutations_report}

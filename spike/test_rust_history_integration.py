@@ -1057,15 +1057,20 @@ def mutation_checks(phase, selected_test=None):
 
 
 def cgroup():
-    path = Path('/sys/fs/cgroup') / Path('/proc/self/cgroup').read_text().strip().split('::', 1)[1].lstrip('/')
-    limits = {key: (path / key).read_text().strip() for key in ('memory.max', 'memory.swap.max')}
-    if limits != {'memory.max': str(2 * 1024**3), 'memory.swap.max': '0'}:
-        raise RuntimeError('refusing unbounded worker: ' + repr(limits))
-    return path, limits
+    """The 2 GiB/no-swap systemd scope, or the RLIMIT_AS fallback; never unbounded."""
+    return memory_bound.verify_bound('2G')
+
+
+def peak(bound):
+    """The scope's memory.peak, or this process's own peak resident set under RLIMIT_AS."""
+    if bound['bound'] == 'systemd':
+        return (Path(bound['path']) / 'memory.peak').read_text().strip()
+    import resource
+    return str(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * 1024)
 
 
 def worker(args):
-    group, limits = cgroup()
+    bound = cgroup()
     initialize(args.worker)
     cls = HostTests if args.worker == 'host' else BlenderTests
     suite = (unittest.TestSuite([cls(args.test)]) if args.test else unittest.defaultTestLoader.loadTestsFromTestCase(cls))
@@ -1074,8 +1079,7 @@ def worker(args):
     ok = result.wasSuccessful() and all(m['killed'] and m['restored_green'] for m in mutants)
     report = dict(ok=ok, phase=args.worker, tests=result.testsRun, failures=result.failures,
                   errors=result.errors, mutations=mutants, evidence=EVIDENCE,
-                  cgroup=dict(path=str(group), **limits,
-                              peak=(group / 'memory.peak').read_text().strip()))
+                  cgroup=dict(bound, peak=peak(bound)))
     args.report.write_text(json.dumps(report, indent=2, default=str))
     print('HISTORY_INTEGRATION', args.report, 'PASS' if ok else 'FAIL', flush=True)
     return int(not ok)
