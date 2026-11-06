@@ -83,16 +83,19 @@ and stages everything in gitignored paths:
 It ends by running the application's own native startup checks. It is safe to re-run; finished
 steps are skipped. `run_tests.sh` and `narwhal3d.sh` find all of these without extra variables.
 
-For quick iteration you can run one suite with the runtime's Python or headless Blender:
+For quick iteration run one suite with `scripts/run_suite.sh`. It exports the environment
+`run_tests.sh` gives the suites (the Rust cores, the application core, the exact-geometry
+runtime) and runs the suite in headless Blender when `run_tests.sh` does, else in the runtime's
+Python:
 
 ```bash
-P=tools/blender-patched/5.2/python/bin/python3.13
-B=tools/blender-patched/blender
-$P spike/test_macro.py
-$B -b --factory-startup --python-exit-code 1 --python spike/test_boolean.py
+scripts/run_suite.sh spike/test_macro.py
+scripts/run_suite.sh spike/test_boolean.py       # a BLENDER_SUITES entry: runs in Blender
 ```
 
-Look in `run_tests.sh` for the exact arguments and environment each suite expects.
+Run with the bare interpreter, suites that need a Rust core fail instead (for example
+`spike/test_numparse.py`: "Required Rust number parser unavailable"). Look in `run_tests.sh`
+for any extra arguments a suite expects.
 
 ### Known setup limits
 
@@ -146,13 +149,12 @@ Run the narrowest suite first.
 | What | Command (after section 3) |
 |---|---|
 | Rust crate tests | `cargo +1.95.0 test --manifest-path native/<crate>/Cargo.toml --locked` |
-| One Python suite | `tools/blender-patched/5.2/python/bin/python3.13 spike/<suite>.py` |
-| One Blender-backed suite | `tools/blender-patched/blender -b --factory-startup --python-exit-code 1 --python spike/<suite>.py` |
+| One suite (Python or Blender-backed) | `scripts/run_suite.sh spike/<suite>.py` |
 | Public-tree and docs checks | `tools/blender-patched/5.2/python/bin/python3.13 spike/test_public_project.py` |
 | Fast checks (bootstrap only) | `./scripts/fast_checks.sh` |
 | Full gate | `./run_tests.sh` (stops at the first failing suite) |
 
-Look in `run_tests.sh` for the exact arguments and environment each suite expects.
+Look in `run_tests.sh` for any extra arguments a suite expects.
 
 ## 7. Open the pull request
 

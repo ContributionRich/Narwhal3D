@@ -53,7 +53,7 @@ Set up as described in [docs/contributing-with-ai.md](docs/contributing-with-ai.
 ./uishot.sh
 ```
 
-During development, run the narrowest relevant test first. The full suite includes the manufacturing representation audit and a real-window UI acceptance report.
+During development, run the narrowest relevant test first: `scripts/run_suite.sh spike/<suite>.py` runs one suite with the environment `./run_tests.sh` gives it. The full suite includes the manufacturing representation audit and a real-window UI acceptance report.
 
 For a quick check that needs only `./scripts/bootstrap_dev_linux.sh` and the pinned Rust toolchain, run `./scripts/fast_checks.sh`. It builds the pure-core library, runs the packaging self-checks, the pure-core source gate and the suites that work without the patched runtime or the document observer, prints each step's name and exits non-zero if any step fails. It is a subset of `./run_tests.sh`, not a replacement.
 

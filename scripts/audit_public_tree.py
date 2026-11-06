@@ -225,6 +225,8 @@ REQUIRED = {
     "spike/test_native_geometry.py",
     "spike/test_local_brep_move.py",
     "spike/test_native_platform.py",
+    "spike/test_run_suite.py",
+    "scripts/run_suite.sh",
     "spike/test_ai_assistant.py",
     "spike/test_ai_transport.py",
     "spike/test_ai_workflow.py",
