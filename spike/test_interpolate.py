@@ -297,13 +297,36 @@ try:
         (0, R, 0))
     circle = r3.NurbsCurve.CreateFromCircle(r3.Circle(r_sec))
 
+    # `sweep1` now builds in OCCT like `pipe` below: the returned Brep is the display
+    # triangulation (degree 1, hundreds of flat faces -- correct for a render mesh), and
+    # the geometry is the MASTER. So the smoothness is read off the master.
+    from OCP.BRepAdaptor import BRepAdaptor_Surface
+    from OCP.GeomAbs import GeomAbs_CurveType, GeomAbs_SurfaceType
+    from OCP.TopAbs import TopAbs_ShapeEnum
+    from OCP.TopExp import TopExp_Explorer
+    from OCP.TopoDS import TopoDS
+
+    def master_faces(shape):
+        out = []
+        exp = TopExp_Explorer(shape, TopAbs_ShapeEnum.TopAbs_FACE)
+        while exp.More():
+            out.append(BRepAdaptor_Surface(TopoDS.Face(exp.Current())))
+            exp.Next()
+        return out
+
     swept = sweep.sweep1(arc, circle)
-    ns = swept.Faces[0].UnderlyingSurface().ToNurbsSurface()
-    check(ns.Degree(1) >= 2,
-          f"sweep1 along an ARC is degree {ns.Degree(1)} in V -- SMOOTH. It was degree 1 "
+    swept_master = bridge._kernel().master_of(swept)
+    faces = master_faces(swept_master) if swept_master is not None else []
+    revolved = (len(faces) == 1
+                and faces[0].GetType() == GeomAbs_SurfaceType.GeomAbs_SurfaceOfRevolution)
+    check(revolved,
+          f"sweep1 along an ARC is ONE exact surface of revolution "
+          f"({[f.GetType() for f in faces]}) -- SMOOTH along the sweep. It was degree 1 "
           f"(a fan of flat strips), which the project rules rule 0 forbids")
-    check(ns.Degree(0) == 2,
-          "and still degree 2 in U, so the circular section stays an exact circle")
+    section = faces[0].BasisCurve() if revolved else None
+    check(section is not None and section.GetType() == GeomAbs_CurveType.GeomAbs_Circle
+          and abs(section.Circle().Radius() - r_sec) < 1e-12,
+          "and the swept section is still an exact circle of the radius it was given")
 
     # A circle swept along a circular arc is a TORUS, so every point satisfies
     # (sqrt(x^2+y^2) - R)^2 + z^2 == r^2. Measuring the surface against that equation is
@@ -336,11 +359,6 @@ try:
               f"one. The loft route gave a degree-3 B-spline that missed the ideal by 0.0114 "
               f"units mid-strip")
         # the torus's OWN radii, which is what analytic geometry means
-        from OCP.BRepAdaptor import BRepAdaptor_Surface
-        from OCP.TopAbs import TopAbs_ShapeEnum
-        from OCP.TopExp import TopExp_Explorer
-        from OCP.TopoDS import TopoDS
-
         exp = TopExp_Explorer(master, TopAbs_ShapeEnum.TopAbs_FACE)
         tor = BRepAdaptor_Surface(TopoDS.Face(exp.Current())).Torus()
         check(abs(tor.MajorRadius() - R) < 1e-12
@@ -352,17 +370,14 @@ try:
     # a STRAIGHT rail must stay exact -- the fix must not make the easy case worse
     straight = r3.LineCurve(r3.Point3d(0, 0, 0), r3.Point3d(0, 0, 10)).ToNurbsCurve()
     sw2 = sweep.sweep1(straight, circle)
-    sns = sw2.Faces[0].UnderlyingSurface().ToNurbsSurface()
-    worst_cyl = 0.0
-    sdu, sdv = sns.Domain(0), sns.Domain(1)
-    for a in range(17):
-        for b in range(17):
-            u = sdu.T0 + (sdu.T1 - sdu.T0) * a / 16.0
-            v = sdv.T0 + (sdv.T1 - sdv.T0) * b / 16.0
-            p = sns.PointAt(u, v)
-            worst_cyl = max(worst_cyl, abs(math.hypot(p.X, p.Y) - r_sec))
-    check(worst_cyl < 1e-9,
-          f"a sweep along a STRAIGHT rail is still EXACTLY a cylinder ({worst_cyl:.2e}) "
+    sw2_master = bridge._kernel().master_of(sw2)
+    cyl_faces = master_faces(sw2_master) if sw2_master is not None else []
+    cyl_radius = (cyl_faces[0].Cylinder().Radius()
+                  if len(cyl_faces) == 1
+                  and cyl_faces[0].GetType() == GeomAbs_SurfaceType.GeomAbs_Cylinder
+                  else None)
+    check(cyl_radius is not None and abs(cyl_radius - r_sec) < 1e-12,
+          f"a sweep along a STRAIGHT rail is still EXACTLY a cylinder (radius {cyl_radius}) "
           f"-- the fix did not trade the easy case away")
 
     # the Smooth loft style passes through its sections; Straight/Loose still work
