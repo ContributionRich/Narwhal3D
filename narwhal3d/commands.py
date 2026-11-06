@@ -3020,11 +3020,9 @@ class InterpCrvCmd(Command):
     # (user_interface/keyboard the command behavior, the Alt key):
     #   "Suspends `Polyline`, `Curve`, and `InterpCrv` autoclose."
     # The Alt-key help NAMES `InterpCrv` as a command that HAS autoclose, so this
-    # command exists and closes on the start point. It is built as a curve through
-    # the points (same `make_polyline` builder `Curve` uses); the difference from
-    # `Curve` is the honest name -- flagged for the geometry detail, since the
-    # help documents the command name and the autoclose but not the interpolation
-    # method.
+    # command exists and closes on the start point. Open or closed, the curve is
+    # an exact cubic interpolation THROUGH the picks (`bridge.make_interpolated_curve`),
+    # where `Curve` treats them as control points.
     name = "InterpCrv"
     description = "Draw a curve through points. Empty input finishes."
     variable_points = True
@@ -3064,24 +3062,14 @@ class InterpCrvCmd(Command):
         if len(self.args) < 2:
             return "Need at least 2 points", True
         if self._autoclosed:
-            # same AUTOclose build as `Curve` (see CurveCmd.execute) --
-            # the smooth periodic closed curve from the unique points. The
-            # difference from `Curve` remains the honest name (the help
-            # documents the command and its autoclose, not the method).
-            #
-            # this CLOSED path is a smooth periodic CONTROL-POINT curve, so unlike
-            # the open path below it does NOT pass through the picked points -- periodic
-            # interpolation is not implemented (`bridge.make_interpolated_curve` refuses
-            # it by name). The user is TOLD that, rather than left to assume, which is
-            # the whole lesson of the bug fixed below.
+            # Close / autoclose: the closed periodic cubic THROUGH every unique pick
+            # (the repeated start point is dropped), C2 across the seam.
             try:
-                geom = bridge.make_polyline(self.args[:-1], degree=3, closed=True)
+                geom = bridge.make_interpolated_curve(self.args[:-1], degree=3, closed=True)
             except ValueError as e:
                 return str(e), True
             _, display_name = ctx.add_geometry(geom, "InterpCrv")
-            return (f"Created {display_name} -- closed curves are built as a smooth "
-                    f"periodic curve through the CONTROL points; periodic "
-                    f"interpolation is not implemented yet"), True
+            return f"Created {display_name}", True
         # TRUE INTERPOLATION. (the command behavior): InterpCrv "draws a
         # curve THROUGH selected locations in space... Curve matches input." This used to
         # call `make_polyline`, i.e. CreateControlPointCurve, which treats the picks as

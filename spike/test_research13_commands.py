@@ -681,6 +681,22 @@ for key in ("curve", "interpcrv"):
     msg, done = c.feed("Close", ctx)
     g = ctx.added[0] if ctx.added else None
     check(done and g is not None and g.IsClosed, f"{key}: Close closes and ends ({msg!r})")
+# #43: a closed InterpCrv passes THROUGH every pick (it used to be a control-point curve)
+interp = _load("narwhal3d.interpolate", "narwhal3d/interpolate.py")
+picks = [(0.0, 0.0, 0.0), (5.0, 1.0, 0.0), (6.0, 4.0, 0.0), (2.0, 6.0, 0.0), (-1.0, 3.0, 0.0)]
+ctx = Ctx(TOP)
+c, msg, done = drive("interpcrv", [], ctx)
+for pt in picks:
+    c.feed(",".join(str(v) for v in pt), ctx)
+msg, done = c.feed("Close", ctx)
+g = ctx.added[0] if ctx.added else None
+us = interp.closed_parameters(picks)
+worst = (max(math.dist(tuple(getattr(g.PointAt(g.Domain.T0 + (g.Domain.T1 - g.Domain.T0) * u), a)
+                             for a in "XYZ"), q) for u, q in zip(us, picks))
+         if g is not None else math.inf)
+check(done and g is not None and g.IsClosed and g.IsPeriodic and worst < 1e-9
+      and "not implemented" not in msg,
+      f"InterpCrv Close: a periodic curve through every pick ({worst:.1e}, {msg!r})")
 segs = preview.segments("interpcrv", [(0.0, 0.0, 0.0), (4.0, 0.0, 0.0), (4.0, 4.0, 0.0)],
                         (0, 4, 0), TOP)
 live = segs[0] if segs else []

@@ -53,7 +53,6 @@ Remaining work includes:
 - fitted/smoothed/fair curves;
 
 - curve tweening and symmetry;
-- complete periodic/closed interpolation;
 - rail-based revolve and planar curve-region operations.
 
 ## Curve editing
