@@ -70,6 +70,8 @@ REQUIRED = {
     "spike/test_windows_build.py",
     "scripts/validate_windows_icon.py",
     "spike/test_package_completeness.py",
+    "spike/test_fast_checks.py",
+    "scripts/fast_checks.sh",
     "spike/test_release_policy.py",
     "spike/test_macos_source.py",
     "launch/narwhal3d.desktop.in",

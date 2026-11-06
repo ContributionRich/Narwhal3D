@@ -149,6 +149,7 @@ Run the narrowest suite first.
 | One Python suite | `tools/blender-patched/5.2/python/bin/python3.13 spike/<suite>.py` |
 | One Blender-backed suite | `tools/blender-patched/blender -b --factory-startup --python-exit-code 1 --python spike/<suite>.py` |
 | Public-tree and docs checks | `tools/blender-patched/5.2/python/bin/python3.13 spike/test_public_project.py` |
+| Fast checks (bootstrap only) | `./scripts/fast_checks.sh` |
 | Full gate | `./run_tests.sh` (stops at the first failing suite) |
 
 Look in `run_tests.sh` for the exact arguments and environment each suite expects.
