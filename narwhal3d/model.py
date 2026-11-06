@@ -949,6 +949,11 @@ class NarwhalModel:
         current_id = str(self.file.Layers[self.current_layer_index].Id)
         self.file.Layers.Delete(str(self.file.Layers[index].Id))
         self._round_trip()
+        # The rewrite renumbers the LayerIndex of every object above the deleted layer
+        # without passing an attribute setter, so tell the object registry every row may
+        # have changed. Without it the next snapshot (Undo) refused the document as an
+        # unmediated object write.
+        _mark_all(self.file)
         for i in range(len(self.file.Layers)):
             if str(self.file.Layers[i].Id) == current_id:
                 self.current_layer_index = i
