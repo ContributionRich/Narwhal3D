@@ -2248,6 +2248,23 @@ def curve_shape_intersection(profile, shape, tol=1e-7):
     return points, edges
 
 
+def infinite_plane_face(face):
+    """The UNBOUNDED face on the plane of the planar `face` (Intersect's InfinitePlane).
+
+    Built from the face's own `gp_Pln`, so it is exact; a section against it is not
+    limited by the original face's trims. Raises KernelError for a non-planar face.
+    """
+    _need()
+    from OCP.BRepAdaptor import BRepAdaptor_Surface
+    from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeFace
+    from OCP.GeomAbs import GeomAbs_Plane
+
+    surf = BRepAdaptor_Surface(face)
+    if surf.GetType() != GeomAbs_Plane:
+        raise KernelError("the face is not planar")
+    return BRepBuilderAPI_MakeFace(surf.Plane()).Face()
+
+
 def planar_polyhedron(shape):
     """Return `shape` as ``(vertices, faces, edges)``, or raise KernelError.
 
