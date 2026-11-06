@@ -21710,7 +21710,7 @@ def _gumball_handles(area, space, region):
     if size is None:
         return None, []
     # The view direction decides which Move-2D plane handles are face-on enough to show.
-    return (origin, plane, size), gumball.build(
+    return (origin, plane, size), gumball.build_cached(
         origin, plane, size, view_dir=_view_direction(rv3d),
         extrude=_extrude_handle_available())
 
@@ -21724,14 +21724,60 @@ def _gumball_projected(handles, region, rv3d):
     return out
 
 
+#: ``(handles, points, offsets, owners)``: the hot polylines of the last handle list
+#: packed for `selection_core`. `gumball.build_cached` keeps the list's identity
+#: while the widget is unchanged, so a mouse move normally repacks nothing.
+_gumball_hot_pack = None
+
+
+def _gumball_native_scored(handles, region, rv3d, mouse):
+    """``(handle, distance)`` per handle from `selection_core`, or None for Python.
+
+    Rust projects the cached world polylines and measures them in one call, with the
+    same projection as `_project_2d` and the same distance as
+    `gumball.polyline_distance_2d`. Measured per mouse move with a 15-handle widget
+    (after `gumball.build_cached`): 224 us projecting and picking in Python, 43 us here.
+    """
+    global _gumball_hot_pack
+    try:
+        import numpy as np
+
+        pack = _gumball_hot_pack
+        if pack is None or pack[0] is not handles:
+            flat, offsets, owners = [], [0], []
+            for index, handle in enumerate(handles):
+                for polyline in handle.hot:
+                    flat.extend(polyline)
+                    offsets.append(len(flat))
+                    owners.append(index)
+            pack = (handles, np.array(flat, dtype=np.float64).reshape(-1, 3),
+                    np.array(offsets, dtype=np.uint64), owners)
+            _gumball_hot_pack = pack
+        distances = native_selection.gumball_polyline_distances(
+            pack[1], pack[2], np.asarray(rv3d.perspective_matrix, dtype=np.float64),
+            region.width, region.height, mouse)
+        if distances is None:
+            return None
+        best = [math.inf] * len(handles)
+        for owner, distance in zip(pack[3], distances.tolist()):
+            if distance < best[owner]:
+                best[owner] = distance
+        return list(zip(handles, best))
+    except Exception:  # noqa: BLE001 -- the Python projection and pick remain the fallback
+        return None
+
+
 def _gumball_hit(area, space, region, mouse_x, mouse_y):
     """The handle under the window-space mouse position, or None."""
     _frame, handles = _gumball_handles(area, space, region)
     if not handles:
         return None
     rv3d = space.region_3d
-    return gumball.pick(_gumball_projected(handles, region, rv3d),
-                        (mouse_x - region.x, mouse_y - region.y))
+    mouse = (mouse_x - region.x, mouse_y - region.y)
+    scored = _gumball_native_scored(handles, region, rv3d, mouse)
+    if scored is not None:
+        return gumball.pick_scored(scored)
+    return gumball.pick(_gumball_projected(handles, region, rv3d), mouse)
 
 
 def _area_by_pane_key(key):

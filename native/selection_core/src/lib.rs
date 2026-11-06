@@ -1482,6 +1482,120 @@ pub unsafe extern "C" fn narwhal_nearest_screen_polyline_f64(
     1
 }
 
+/// Project grouped f64 world polylines and return each one's Gumball hit distance.
+///
+/// Mirrors `gumball.polyline_distance_2d` applied to `_project_2d` output: every
+/// point is projected exactly as Blender's `location_3d_to_region_2d` does, points
+/// that do not project are DROPPED and their neighbours joined (not split into
+/// hidden segments), and a curve with fewer than two projected points scores
+/// `+inf`. Segment distances use the same formula and degenerate cutoff as
+/// `gumball._point_segment_distance_2d`. Handle tolerances and tie-breaking stay in
+/// Python. Display-only: the inputs are copies of widget polylines, never document
+/// geometry.
+///
+/// # Safety
+///
+/// The caller must provide 16 readable matrix values, `point_count * 3` readable
+/// coordinates, `curve_count + 1` readable offsets, two readable mouse coordinates,
+/// and `curve_count` writable distances. Point buffers may be null only for zero
+/// points; offsets and distances may be null only for zero curves. All buffers must
+/// be correctly aligned and non-overlapping.
+#[no_mangle]
+pub unsafe extern "C" fn narwhal_gumball_polyline_distances_f64(
+    matrix_ptr: *const f64,
+    points_ptr: *const f64,
+    point_count: usize,
+    offsets_ptr: *const u64,
+    curve_count: usize,
+    width: f64,
+    height: f64,
+    mouse_ptr: *const f64,
+    out_distance_ptr: *mut f64,
+) -> i32 {
+    if curve_count > 0 && out_distance_ptr.is_null() {
+        return ERR_NULL;
+    }
+    let point_values = match point_count.checked_mul(3) {
+        Some(value) if valid_slice_len::<f64>(value) => value,
+        _ => return ERR_SIZE,
+    };
+    if !valid_slice_len::<f64>(curve_count) {
+        return ERR_SIZE;
+    }
+    let offset_count = match curve_count.checked_add(1) {
+        Some(value) if valid_slice_len::<u64>(value) => value,
+        _ => return ERR_SIZE,
+    };
+    for index in 0..curve_count {
+        ptr::write(out_distance_ptr.add(index), f64::INFINITY);
+    }
+    if matrix_ptr.is_null()
+        || mouse_ptr.is_null()
+        || (point_count > 0 && points_ptr.is_null())
+        || (curve_count > 0 && offsets_ptr.is_null())
+    {
+        return ERR_NULL;
+    }
+    let matrix = slice::from_raw_parts(matrix_ptr, 16);
+    let mouse_slice = slice::from_raw_parts(mouse_ptr, 2);
+    let mouse = [mouse_slice[0], mouse_slice[1]];
+    if !valid_matrix(matrix)
+        || !valid_dimensions(width, height)
+        || !mouse.iter().all(|value| value.is_finite())
+    {
+        return ERR_INPUT;
+    }
+    if curve_count == 0 {
+        return if point_count == 0 { 0 } else { ERR_INPUT };
+    }
+    let point_count_u64 = match u64::try_from(point_count) {
+        Ok(value) => value,
+        Err(_) => return ERR_SIZE,
+    };
+    let points = if point_values == 0 {
+        &[]
+    } else {
+        slice::from_raw_parts(points_ptr, point_values)
+    };
+    if !points.iter().all(|value| value.is_finite()) {
+        return ERR_INPUT;
+    }
+    let offsets = slice::from_raw_parts(offsets_ptr, offset_count);
+    if offsets[0] != 0 || offsets[curve_count] != point_count_u64 {
+        return ERR_INPUT;
+    }
+    for pair in offsets.windows(2) {
+        if pair[0] > pair[1] || pair[1] > point_count_u64 {
+            return ERR_INPUT;
+        }
+    }
+    let display_matrix = display_matrix_f32(matrix);
+    let out_distances = slice::from_raw_parts_mut(out_distance_ptr, curve_count);
+    for (curve_index, out) in out_distances.iter_mut().enumerate() {
+        let start = offsets[curve_index] as usize;
+        let end = offsets[curve_index + 1] as usize;
+        let mut previous: Option<[f64; 2]> = None;
+        let mut best = f64::INFINITY;
+        for point_index in start..end {
+            let projected = project_display_point_prepared(
+                &display_matrix,
+                &points[point_index * 3..point_index * 3 + 3],
+                width,
+                height,
+            );
+            if let Some((x, y)) = projected {
+                let pixel = [x, y];
+                if let Some(a) = previous {
+                    best = best.min(screen_point_segment_distance(mouse, a, pixel));
+                }
+                previous = Some(pixel);
+            }
+        }
+        *out = best;
+    }
+    0
+}
+
 /// Project grouped f64 world polylines and return each one's nearest screen segment.
 ///
 /// Outputs are one local segment index, clamped segment parameter, CPython-matched
@@ -3961,6 +4075,58 @@ mod tests {
         assert_eq!((pixels[0], pixels[1]), expected);
         assert_eq!(visible, [1, 0]);
         assert!(pixels[2].is_nan() && pixels[3].is_nan());
+    }
+
+    fn gumball_distances(points: &[f64], offsets: &[u64], mouse: [f64; 2]) -> (i32, Vec<f64>) {
+        // Orthographic: x, y in [-1, 1] map onto a 200 x 100 region; w = 1 - z / 10.
+        let matrix = [
+            1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, -0.1, 1.0,
+        ];
+        let curves = offsets.len() - 1;
+        let mut out = vec![f64::NAN; curves];
+        let code = unsafe {
+            narwhal_gumball_polyline_distances_f64(
+                matrix.as_ptr(),
+                points.as_ptr(),
+                points.len() / 3,
+                offsets.as_ptr(),
+                curves,
+                200.0,
+                100.0,
+                mouse.as_ptr(),
+                out.as_mut_ptr(),
+            )
+        };
+        (code, out)
+    }
+
+    #[test]
+    fn gumball_distances_join_across_points_that_do_not_project() {
+        // Pixels: (100, 50) -> hidden (w = 0 at z = 10) -> (200, 50). The hidden
+        // point is dropped and its neighbours joined, as gumball.polyline_distance_2d does.
+        let points = [0.0, 0.0, 0.0, 0.5, 0.5, 10.0, 1.0, 0.0, 0.0];
+        let (code, out) = gumball_distances(&points, &[0, 3], [150.0, 53.0]);
+        assert_eq!(code, 0);
+        assert_eq!(out, vec![3.0]);
+    }
+
+    #[test]
+    fn gumball_distances_score_short_and_empty_curves_as_infinite() {
+        let points = [0.0, 0.0, 0.0, 0.0, 0.0, 10.0, 0.5, 0.0, 0.0];
+        // Empty, one projected point, one projected plus one hidden.
+        let (code, out) = gumball_distances(&points, &[0, 0, 1, 3], [100.0, 50.0]);
+        assert_eq!(code, 0);
+        assert_eq!(out, vec![f64::INFINITY; 3]);
+    }
+
+    #[test]
+    fn gumball_distances_reject_bad_input_and_leave_infinity() {
+        let points = [0.0, 0.0, 0.0, f64::NAN, 0.0, 0.0];
+        let (code, out) = gumball_distances(&points, &[0, 2], [0.0, 0.0]);
+        assert_eq!(code, ERR_INPUT);
+        assert_eq!(out, vec![f64::INFINITY]);
+        let (code, _) = gumball_distances(&[0.0; 6], &[0, 1], [0.0, 0.0]);
+        assert_eq!(code, ERR_INPUT);
     }
 
     #[test]

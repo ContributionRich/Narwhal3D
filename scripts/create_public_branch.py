@@ -210,7 +210,7 @@ TEST_FILES = (
     "spike/test_windows_build.py", "spike/test_release_harness.py", "spike/test_solid_commands.py",
     "spike/test_linux_release.py", "spike/test_package_completeness.py", "spike/test_release_policy.py", "spike/test_macos_source.py",
     "spike/test_rust_selection_core.py", "spike/test_native_selection.py",
-    "spike/test_selection_core_packaging.py",
+    "spike/test_selection_core_packaging.py", "spike/test_gumball_native_pick.py",
     "spike/test_native_geometry.py", "spike/test_native_platform.py",
     "spike/test_native_gridsnap.py",
     "spike/test_public_project.py", "spike/public_ui_report.py",

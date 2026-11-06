@@ -136,6 +136,9 @@ if [[ -f "$SELECTION_CORE" ]]; then
     run "overlap pick candidates (native/fallback)" env NARWHAL_SELECTION_CORE="$SELECTION_CORE" \
         "$BLENDER" -b --factory-startup --python-exit-code 1 \
         --python spike/test_pick_candidates.py
+    run "Gumball handle picking (native/Python parity)" env NARWHAL_SELECTION_CORE="$SELECTION_CORE" \
+        "$BLENDER" -b --factory-startup --python-exit-code 1 \
+        --python spike/test_gumball_native_pick.py
 else
     printf '\nSKIP: Rust selection-core runtime checks (no local artifact)\n'
 fi
