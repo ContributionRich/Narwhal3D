@@ -499,6 +499,64 @@ if ob.available():
 else:
     print("  skip  Scale Rigid (no OCCT)")
 
+
+# A mixed selection: display-only objects (no document row) before and after a
+# document object. Each must get its OWN rigid offset, from its display box --
+# not the unscaled matrix (first) nor the previous object's offset (after).
+class _Matrix:
+    """Just enough of mathutils.Matrix: row-major rows, `@`, and m[i][j]."""
+
+    def __init__(self, rows):
+        self.rows = [list(map(float, r)) for r in rows]
+
+    def __getitem__(self, i):
+        return self.rows[i]
+
+    def __matmul__(self, other):
+        return _Matrix([[sum(self[i][k] * other[k][j] for k in range(4)) for j in range(4)]
+                        for i in range(4)])
+
+
+def _translate(x, y, z):
+    return _Matrix([(1, 0, 0, x), (0, 1, 0, y), (0, 0, 1, z), (0, 0, 0, 1)])
+
+
+class DisplayObj(FakeObj):
+    def __init__(self, name, at):
+        super().__init__(name)
+        self.matrix_world = _translate(*at)
+        self.bound_box = [(x, y, z) for x in (0, 2) for y in (0, 2) for z in (0, 2)]
+
+
+class MixedCtx(Ctx):
+    def __init__(self):
+        super().__init__()
+        self.objs = []
+
+    def selected_objects(self):
+        return list(self.objs)
+
+
+sys.modules["mathutils"] = types.SimpleNamespace(Matrix=_Matrix)
+try:
+    ctx = MixedCtx()
+    ctx.model.add_object(r3.LineCurve(r3.Point3d(0, 0, 0), r3.Point3d(2, 2, 2)), "L", 0)
+    ghost_first, ghost_after = DisplayObj("GhostA", (10, 0, 0)), DisplayObj("GhostB", (0, 10, 0))
+    ctx.objs = [ghost_first, FakeObj("L"), ghost_after]
+    c, msg, done = run(ctx, "scale", ["Rigid=Yes", "0,0,0", "2"])
+    check(done and ends(ctx.geom_by_name("L")) == [(1, 1, 1), (3, 3, 3)],
+          f"mixed Rigid: the document line moves by (1,1,1), unscaled "
+          f"({ends(ctx.geom_by_name('L'))}, {msg!r})")
+    # GhostA's box centre (11,1,1) goes to (22,2,2); GhostB's (1,11,1) to (2,22,2).
+    check(ghost_first.matrix_world.rows == _translate(21, 1, 1).rows,
+          f"a display-only object FIRST gets its own offset, not the x2 matrix "
+          f"({ghost_first.matrix_world.rows})")
+    check(ghost_after.matrix_world.rows == _translate(1, 21, 1).rows,
+          f"a display-only object AFTER a document row gets its own offset, not the "
+          f"previous object's ({ghost_after.matrix_world.rows})")
+finally:
+    del sys.modules["mathutils"]
+
 # ===========================================================================
 print("\n-- Mirror Object (#61) --")
 if ob.available():

@@ -6659,9 +6659,10 @@ def _apply_transform_to_selection(ctx: NarwhalContext, xform: r3.Transform,
                                   per_object=None):
     """Apply a rhino3dm Transform to selected objects, in the document and the view.
 
-    `per_object`, when given, maps each object's document geometry to the transform
-    used for that object instead of `xform` (Scale's `Rigid` moves each object by its
-    own offset).
+    `per_object`, when given, is called as ``per_object(geometry, ob)`` for EVERY
+    selected object and returns the transform used for that object instead of
+    `xform` (Scale's `Rigid` moves each object by its own offset). `geometry` is
+    the document geometry, or None for a display-only object.
 
     The transform is **baked into the stored File3dm geometry**. ``fobj.Geometry``
     is a live reference, so
@@ -6703,9 +6704,12 @@ def _apply_transform_to_selection(ctx: NarwhalContext, xform: r3.Transform,
         # names) without scanning the complete document for every display object.
         fobj = _first_document_object(document_index, ob.name)
         refused = False
-        if fobj is not None and per_object is not None:
-            xform = per_object(fobj.Geometry)
-            mm = display_matrix(xform)
+        obj_xform, obj_mm = xform, mm
+        if per_object is not None:
+            # Every object gets its own transform, display-only ones included;
+            # never reuse the previous object's.
+            obj_xform = per_object(fobj.Geometry if fobj is not None else None, ob)
+            obj_mm = display_matrix(obj_xform)
         if fobj is not None:
             # bake into the document first, so a kernel failure can't leave the
             # viewport showing a move the saved file doesn't have
@@ -6716,7 +6720,7 @@ def _apply_transform_to_selection(ctx: NarwhalContext, xform: r3.Transform,
             # a hole that was never asked for. See bridge.transform_geometry.
             old = fobj.Geometry
             try:
-                new = bridge.transform_geometry(old, xform)
+                new = bridge.transform_geometry(old, obj_xform)
             except bridge.NonUniformTransformError as e:
                 # never a wrong solid -- the object stays as it was, and says so
                 from .state import app_state
@@ -6729,11 +6733,23 @@ def _apply_transform_to_selection(ctx: NarwhalContext, xform: r3.Transform,
                     ctx.model.replace_geometry(fobj.Attributes.Id, new)
         if refused:
             continue
-        if mm is not None and hasattr(ob, "matrix_world"):
-            ob.matrix_world = mm @ ob.matrix_world
+        if obj_mm is not None and hasattr(ob, "matrix_world"):
+            ob.matrix_world = obj_mm @ ob.matrix_world
             bridge.note_display_changed(ob.name)
         moved.append(ob.name)
     return moved
+
+
+def _display_bbox_center(ob):
+    """World centre of a display object's bounding box, or None without one."""
+    corners = getattr(ob, "bound_box", None)
+    m = getattr(ob, "matrix_world", None)
+    if not corners or m is None:
+        return None
+    pts = [[sum(m[i][j] * c[j] for j in range(3)) + m[i][3] for i in range(3)]
+           for c in corners]
+    return r3.Point3d(*((min(p[i] for p in pts) + max(p[i] for p in pts)) / 2
+                        for i in range(3)))
 
 
 def apply_transform(ctx: NarwhalContext, xform):
@@ -7279,13 +7295,21 @@ class _ScaleBase(_TransformCmd):
         return self._build(args, f)
 
     @staticmethod
-    def _rigid(xform, geom):
+    def _rigid(xform, geom, ob=None):
         """`Rigid`: the translation that carries `geom`'s bounding-box centre where
-        `xform` would put it -- the object moves, its shape and size do not."""
+        `xform` would put it -- the object moves, its shape and size do not.
+
+        A display-only object (`geom` None) uses its display bounding box; one
+        with no box at all stays where it is."""
         from . import analysis
 
-        lo, hi = analysis.bounding_box(geom)
-        c = r3.Point3d((lo.X + hi.X) / 2, (lo.Y + hi.Y) / 2, (lo.Z + hi.Z) / 2)
+        if geom is not None:
+            lo, hi = analysis.bounding_box(geom)
+            c = r3.Point3d((lo.X + hi.X) / 2, (lo.Y + hi.Y) / 2, (lo.Z + hi.Z) / 2)
+        else:
+            c = _display_bbox_center(ob)
+            if c is None:
+                return _translation((0.0, 0.0, 0.0))
         p = r3.Point3d(c.X, c.Y, c.Z)
         p.Transform(xform)
         return _translation((p.X - c.X, p.Y - c.Y, p.Z - c.Z))
@@ -7304,7 +7328,7 @@ class _ScaleBase(_TransformCmd):
                 for nm in names) if n]
             return f"Moved {len(made)} copy(ies) rigidly: {', '.join(made)}", True
         moved = _apply_transform_to_selection(ctx, xform,
-                                              per_object=lambda g: self._rigid(xform, g))
+                                              per_object=lambda g, o: self._rigid(xform, g, o))
         return f"Moved {len(moved)} object(s) rigidly", True
 
 
