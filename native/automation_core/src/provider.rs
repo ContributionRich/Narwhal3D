@@ -380,10 +380,10 @@ fn parse_responses(root: &Value, reply: &mut Reply, cap: u64) -> Result<(), &'st
                 if string(item, "role")? != "assistant" {
                     return Err("invalid_response");
                 }
-                if let Some(phase) = item.get("phase").filter(|v| !v.is_null()) {
-                    if !matches!(phase.as_str(), Some("commentary" | "final_answer")) {
-                        return Err("unsupported_response_field");
-                    }
+                if let Some(phase) = item.get("phase").filter(|v| !v.is_null())
+                    && !matches!(phase.as_str(), Some("commentary" | "final_answer"))
+                {
+                    return Err("unsupported_response_field");
                 }
                 for block in array(item, "content")? {
                     match string(block, "type")? {
@@ -577,7 +577,7 @@ pub fn parse(provider: Provider, raw: &str, max_output_tokens: u64) -> Result<Re
         }
         reply.output_tokens = usage(&root, "completion_tokens", max_output_tokens)?;
     }
-    if expects_calls != !reply.tool_calls.is_empty() {
+    if expects_calls == reply.tool_calls.is_empty() {
         return Err("inconsistent_finish_reason");
     }
     if reply.tool_calls.is_empty() && reply.text.trim().is_empty() {

@@ -454,6 +454,107 @@ impl Evidence {
         }
     }
 }
+impl Plan {
+    pub fn preflight(&self, evidence: &Evidence) -> Result<Value, &'static str> {
+        self.validate()?;
+        if self.scope_requirement == ScopeRequirement::CurrentSelection {
+            return Err("authoritative_selection_unavailable");
+        }
+        let catalog = crate::actions::operations();
+        let mut steps = vec![];
+        let mut upstream_blocked = BTreeMap::new();
+        for step in &self.steps {
+            let operation = step.action.operation();
+            let available =
+                matches!(step.action, Action::Read { .. })
+                    || catalog["operations"].as_array().unwrap().iter().any(|row| {
+                        row["operation"] == operation && row["execution_available"] == true
+                    });
+            let blocked_dependency = step
+                .depends_on
+                .iter()
+                .any(|id| upstream_blocked.get(id).copied().unwrap_or(true));
+            let planned_inputs = step
+                .inputs
+                .iter()
+                .any(|input| matches!(input, InputRef::Step(_)));
+            let mut blockers: Vec<&str> = vec![];
+            if blocked_dependency {
+                blockers.push("upstream_step_blocked");
+            }
+            if planned_inputs {
+                blockers.push("planned_outputs_not_available");
+            }
+            if !available {
+                blockers.push("executor_not_integrated");
+            }
+            if !matches!(step.action, Action::Read { .. }) {
+                if !fixed_scale_unit(&self.units) {
+                    blockers.push("unit_scale_unavailable");
+                }
+                if self.intent == Intent::Advice {
+                    blockers.push("geometry_intent_requires_clarification");
+                }
+                if evidence.units.as_deref() != Some(self.units.as_str()) {
+                    blockers.push("workspace_units_missing_or_changed");
+                }
+                if evidence.idle != Some(true) {
+                    blockers.push("command_idle_not_verified");
+                }
+                if evidence.layer_available != Some(true) {
+                    blockers.push("destination_layer_unavailable");
+                }
+                if !self.questions.is_empty() || self.intent == Intent::Unspecified {
+                    blockers.push("clarification_required");
+                }
+                if available {
+                    blockers.push("separate_explicit_action_approval_required");
+                }
+            }
+            for input in &step.inputs {
+                if let InputRef::Object(id) = input {
+                    if !evidence.objects.contains(&id.to_ascii_lowercase()) {
+                        blockers.push("object_not_inspected_in_current_turn");
+                    }
+                    // Existing metadata cannot prove canonical topology or contents.
+                    blockers.push("fresh_geometry_and_scope_verification_required");
+                }
+            }
+            blockers.sort_unstable();
+            blockers.dedup();
+            upstream_blocked.insert(step.id.clone(), !available || !blockers.is_empty());
+            let requirements: std::collections::BTreeSet<_> = step
+                .verify
+                .iter()
+                .map(|predicate| match predicate {
+                    Predicate::ObjectCount { .. } => "fresh_object_ids_and_authoritative_revision",
+                    Predicate::Continuity { .. } => "bounded_kernel_continuity_and_revision",
+                    _ => "bounded_authoritative_geometry_and_revision",
+                })
+                .collect();
+            steps.push(json!({"id":step.id,"operation":operation,"depends_on":step.depends_on,
+                "expected":step.expected,"verification_predicates":step.verify,
+                                "verification_requirements":requirements,"verification_available":false,"verification_checked":false,
+                "executor_available":available,"execution_available":available && !blocked_dependency,"dataflow_ready":!blocked_dependency && !planned_inputs,
+                                "can_execute_now":false,"executed":false,"blockers":blockers,
+                "unsupported_need":if let Action::Unsupported{need}=&step.action {Some(need)} else {None}}));
+        }
+        let unavailable = steps
+            .iter()
+            .filter(|step| step["executor_available"] == false)
+            .count();
+        let summary = format!(
+            "Plan only: {} steps, {unavailable} without live executors. No geometry created or verified. Resolve stated blockers; each available action still needs its own explicit approval.",
+            steps.len()
+        );
+        Ok(
+            json!({"status":"plan_preflight","summary":summary,"steps":steps,"questions":self.questions,
+            "executed":false,"approved":false,"created_object_ids":[],"verification_status":"not_performed",
+            "geometry_substitution":false,"consistency":"live_metadata_not_revision_snapshot",
+            "requires_fresh_scope_before_action":true}),
+        )
+    }
+}
 #[cfg(test)]
 mod v4_tests {
     use super::*;
@@ -598,106 +699,5 @@ mod v4_tests {
                 .unwrap()
                 .contains(&json!("scope_requirement"))
         );
-    }
-}
-impl Plan {
-    pub fn preflight(&self, evidence: &Evidence) -> Result<Value, &'static str> {
-        self.validate()?;
-        if self.scope_requirement == ScopeRequirement::CurrentSelection {
-            return Err("authoritative_selection_unavailable");
-        }
-        let catalog = crate::actions::operations();
-        let mut steps = vec![];
-        let mut upstream_blocked = BTreeMap::new();
-        for step in &self.steps {
-            let operation = step.action.operation();
-            let available =
-                matches!(step.action, Action::Read { .. })
-                    || catalog["operations"].as_array().unwrap().iter().any(|row| {
-                        row["operation"] == operation && row["execution_available"] == true
-                    });
-            let blocked_dependency = step
-                .depends_on
-                .iter()
-                .any(|id| upstream_blocked.get(id).copied().unwrap_or(true));
-            let planned_inputs = step
-                .inputs
-                .iter()
-                .any(|input| matches!(input, InputRef::Step(_)));
-            let mut blockers: Vec<&str> = vec![];
-            if blocked_dependency {
-                blockers.push("upstream_step_blocked");
-            }
-            if planned_inputs {
-                blockers.push("planned_outputs_not_available");
-            }
-            if !available {
-                blockers.push("executor_not_integrated");
-            }
-            if !matches!(step.action, Action::Read { .. }) {
-                if !fixed_scale_unit(&self.units) {
-                    blockers.push("unit_scale_unavailable");
-                }
-                if self.intent == Intent::Advice {
-                    blockers.push("geometry_intent_requires_clarification");
-                }
-                if evidence.units.as_deref() != Some(self.units.as_str()) {
-                    blockers.push("workspace_units_missing_or_changed");
-                }
-                if evidence.idle != Some(true) {
-                    blockers.push("command_idle_not_verified");
-                }
-                if evidence.layer_available != Some(true) {
-                    blockers.push("destination_layer_unavailable");
-                }
-                if !self.questions.is_empty() || self.intent == Intent::Unspecified {
-                    blockers.push("clarification_required");
-                }
-                if available {
-                    blockers.push("separate_explicit_action_approval_required");
-                }
-            }
-            for input in &step.inputs {
-                if let InputRef::Object(id) = input {
-                    if !evidence.objects.contains(&id.to_ascii_lowercase()) {
-                        blockers.push("object_not_inspected_in_current_turn");
-                    }
-                    // Existing metadata cannot prove canonical topology or contents.
-                    blockers.push("fresh_geometry_and_scope_verification_required");
-                }
-            }
-            blockers.sort_unstable();
-            blockers.dedup();
-            upstream_blocked.insert(step.id.clone(), !available || !blockers.is_empty());
-            let requirements: std::collections::BTreeSet<_> = step
-                .verify
-                .iter()
-                .map(|predicate| match predicate {
-                    Predicate::ObjectCount { .. } => "fresh_object_ids_and_authoritative_revision",
-                    Predicate::Continuity { .. } => "bounded_kernel_continuity_and_revision",
-                    _ => "bounded_authoritative_geometry_and_revision",
-                })
-                .collect();
-            steps.push(json!({"id":step.id,"operation":operation,"depends_on":step.depends_on,
-                "expected":step.expected,"verification_predicates":step.verify,
-                                "verification_requirements":requirements,"verification_available":false,"verification_checked":false,
-                "executor_available":available,"execution_available":available && !blocked_dependency,"dataflow_ready":!blocked_dependency && !planned_inputs,
-                                "can_execute_now":false,"executed":false,"blockers":blockers,
-                "unsupported_need":if let Action::Unsupported{need}=&step.action {Some(need)} else {None}}));
-        }
-        let unavailable = steps
-            .iter()
-            .filter(|step| step["executor_available"] == false)
-            .count();
-        let summary = format!(
-            "Plan only: {} steps, {unavailable} without live executors. No geometry created or verified. Resolve stated blockers; each available action still needs its own explicit approval.",
-            steps.len()
-        );
-        Ok(
-            json!({"status":"plan_preflight","summary":summary,"steps":steps,"questions":self.questions,
-            "executed":false,"approved":false,"created_object_ids":[],"verification_status":"not_performed",
-            "geometry_substitution":false,"consistency":"live_metadata_not_revision_snapshot",
-            "requires_fresh_scope_before_action":true}),
-        )
     }
 }

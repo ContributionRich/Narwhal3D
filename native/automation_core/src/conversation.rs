@@ -405,8 +405,8 @@ impl Conversation {
         self.fixture_primitives = true;
     }
     fn accept_reply(&mut self, token: &Token, reply: Reply) -> Result<Reply, &'static str> {
-        if !reply.tool_calls.is_empty()
-            && !(self.binding.allow_reads && self.binding.config.include_selection)
+        if !(reply.tool_calls.is_empty()
+            || self.binding.allow_reads && self.binding.config.include_selection)
         {
             return Err("tools_not_authorized");
         }
@@ -1034,7 +1034,7 @@ pub enum Input {
     },
     ReviewProposal {
         binding: Binding,
-        proposal: Proposal,
+        proposal: Box<Proposal>,
         current: Option<Preconditions>,
         accepted: bool,
     },
