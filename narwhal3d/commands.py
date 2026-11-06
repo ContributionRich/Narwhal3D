@@ -10700,6 +10700,19 @@ class LengthCmd(Command):
         return f"Cumulative length = {total:.10g}{unit} for {len(items)} curves"
 
 
+def _report_unit(ctx, choice):
+    """``(factor, plural unit name)`` from model length to the `Units` choice (Area's names)."""
+    from . import units as _units
+    try:
+        model_unit = ctx.model.unit_system()
+    except Exception:  # noqa: BLE001
+        model_unit = None
+    chosen = AreaCmd._UNIT_KEYS.get(choice)
+    if chosen is None or model_unit is None:
+        return 1.0, (model_unit or "").lower()
+    return _units.scale_factor(model_unit, chosen), chosen.lower()
+
+
 class AreaCmd(Command):
     """`Area` -- MEASURED (research_all_13 #004):
 
@@ -10749,15 +10762,7 @@ class AreaCmd(Command):
 
     def _report_unit(self, ctx):
         """``(factor, plural unit name)``: model length -> report length."""
-        from . import units as _units
-        try:
-            model_unit = ctx.model.unit_system()
-        except Exception:  # noqa: BLE001
-            model_unit = None
-        chosen = self._UNIT_KEYS.get(self.opt.get("Units", "ModelUnits"))
-        if chosen is None or model_unit is None:
-            return 1.0, (model_unit or "").lower()
-        return _units.scale_factor(model_unit, chosen), chosen.lower()
+        return _report_unit(ctx, self.opt.get("Units", "ModelUnits"))
 
     @staticmethod
     def _one(geom, name):
@@ -12146,7 +12151,8 @@ class _CurvatureRadiusCmd(Command):
 
     Options: `SelectCurve` (built: asks for the curve, then the picks are limited to it),
     `MarkRadius`/`MarkDiameter` (built: a point object at the evaluated point and the
-    curvature circle through it), `Units`, `SubCrv` (declared, not implemented).
+    curvature circle through it), `Units` (built: Area's unit choices; converts only the
+    reported numbers), `SubCrv` (declared, not implemented).
 
     Which object a pick means (as we have no pick ray at a POINT step): the
     preselected curve/solid if there is one, else the nearest visible curve or solid --
@@ -12170,6 +12176,12 @@ class _CurvatureRadiusCmd(Command):
             self.step_index = 0
             return None, False
         return super().on_mode(name, ctx)
+
+    def on_option_set(self, option, value, ctx):
+        if option.name == "Units" and value == "Liter":
+            self.opt["Units"] = "ModelUnits"
+            return f"{self.name}: Liter is a volume unit, not a length unit", False
+        return super().on_option_set(option, value, ctx)
 
     def _feed(self, text, ctx):
         # "Press Enter when done": after at least one report, Enter FINISHES (it is not a
@@ -12260,13 +12272,20 @@ class _CurvatureRadiusCmd(Command):
                     f"there"), False
         if _m.isinf(r):
             return "Radius of curvature is infinite.", False
-        msg = self._report(r)
+        msg = self._report(r, ctx)
         if self.opt.get("Mark" + self.primary):
             msg += self._mark(ctx, nm, foot, r, center, normal)
         return msg, False
 
-    def _report(self, r):
-        rad, dia = f"Radius = {_num(r)}", f"Diameter = {_num(2.0 * r)}"
+    def _report(self, r, ctx=None):
+        # OURS (#62): with Units other than ModelUnits the numbers are converted and the
+        # unit is named; ModelUnits keeps the report exactly as before. The measured
+        # radius itself is never changed.
+        unit = ""
+        if self.opt.get("Units", "ModelUnits") != "ModelUnits" and ctx is not None:
+            factor, name = _report_unit(ctx, self.opt["Units"])
+            r, unit = r * factor, f" {name}"
+        rad, dia = f"Radius = {_num(r)}{unit}", f"Diameter = {_num(2.0 * r)}{unit}"
         # "The diameter and radius report": both, the command's own first (order)
         return f"{rad}    {dia}" if self.primary == "Radius" else f"{dia}    {rad}"
 
@@ -12304,7 +12323,7 @@ class RadiusCmd(_CurvatureRadiusCmd):
         opts.Option("MarkRadius", opts.TOGGLE, default=False,
                     help="Places a point object at the evaluated point on a curve and "
                          "creates a curvature circle through that point."),
-        opts.Option("Units", opts.MODE,
+        opts.Option("Units", opts.ENUM, choices=AreaCmd.UNIT_CHOICES, default="ModelUnits",
                     help="Set the units for the length display."),
         opts.Option("SubCrv", opts.MODE, help="Selects part of a curve as input."),
     )
@@ -12349,7 +12368,7 @@ class DiameterCmd(_CurvatureRadiusCmd):
         opts.Option("MarkDiameter", opts.TOGGLE, default=False,
                     help="Places a point object at the evaluated point on a curve and "
                          "creates a curvature circle through that point."),
-        opts.Option("Units", opts.MODE,
+        opts.Option("Units", opts.ENUM, choices=AreaCmd.UNIT_CHOICES, default="ModelUnits",
                     help="Set the units for the length display."),
         opts.Option("SubCrv", opts.MODE, help="Selects part of a curve as input."),
     )

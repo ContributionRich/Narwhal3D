@@ -487,8 +487,37 @@ ok_mark = (len(pts) == 1 and len(circles) == 1
            and abs(circles[0].TryGetArc().Plane.ZAxis.Z) > 1 - 1e-9)
 check(ok_mark, "MarkRadius adds the point and the OSCULATING circle (R1.5, centre (4.5,0), "
       f"in the ellipse's plane) ({[type(g).__name__ for g in new]})")
-_c, msgs, _d = drive(ctx, "radius", ["Units"])
-check("not implemented yet" in last(msgs), f"Radius Units says so ({last(msgs)!r})")
+# Units (#62): Area's choices; converts only the reported numbers
+check(ctx.model.unit_system() == "Millimeters", "premise: the model is in millimetres")
+c, msgs, _d = drive(ctx, "radius", ["3,3,0"], select=["Arc3"])
+check(c is not None and c.opt.get("Units") == "ModelUnits" and last(msgs) == "Radius = 3    Diameter = 6",
+      f"Radius Units defaults to ModelUnits and the report is unchanged ({last(msgs)!r})")
+_c, msgs, _d = drive(ctx, "radius", ["Units=Meter", "3,3,0"], select=["Arc3"])
+check(last(msgs) == "Radius = 0.003 meters    Diameter = 0.006 meters",
+      f"Radius Units=Meter: 3 mm -> 0.003 meters ({last(msgs)!r})")
+_c, msgs, _d = drive(ctx, "radius", ["Units=Inch", "3,3,0"], select=["Arc3"])
+m = re.match(r"^Radius = ([-0-9.eE+]+) inches    Diameter = ([-0-9.eE+]+) inches$", last(msgs))
+check(m is not None and abs(float(m.group(1)) - 3 / 25.4) < 1e-9
+      and abs(float(m.group(2)) - 6 / 25.4) < 1e-9,
+      f"Radius Units=Inch: 3 mm -> 3/25.4 inches ({last(msgs)!r})")
+_c, msgs, _d = drive(ctx, "diameter", ["Units=Millimeter", "3,3,0"], select=["Arc3"])
+check(last(msgs) == "Diameter = 6 millimeters    Radius = 3 millimeters",
+      f"Diameter Units=Millimeter names the unit, its own value first ({last(msgs)!r})")
+_c, msgs, _d = drive(ctx, "diameter", ["Units=Liter"])
+check(last(msgs) == "Diameter: Liter is a volume unit, not a length unit"
+      and _c.opt.get("Units") == "ModelUnits",
+      f"Diameter Units=Liter is refused by name ({last(msgs)!r})")
+before = count_objects(ctx)
+_c, msgs, _d = drive(ctx, "radius", ["Units=Meter", "MarkRadius=Yes", "6,0,0"], select=["Ellipse1"])
+marked = [o.Geometry for o in list(ctx.model.file.Objects)[before:]
+          if isinstance(o.Geometry, r3.Curve) and o.Geometry.TryGetArc() is not None]
+check(len(marked) == 1 and abs(marked[0].TryGetArc().Radius - 1.5) < 1e-9
+      and last(msgs).startswith("Radius = 0.0015 meters"),
+      f"Units changes the display only: the marked circle is still R1.5 mm ({last(msgs)!r})")
+for key, opt in (("radius", "SubCrv"), ("diameter", "SubCrv"), ("angle", "SubCrv"),
+                 ("evaluatept", "Label")):
+    _c, msgs, _d = drive(ctx, key, [opt])
+    check("not implemented yet" in last(msgs), f"{key} {opt} still refuses by name ({last(msgs)!r})")
 if have_occt:
     ctx.add(bridge.make_cylinder((20, 0, 0), 4.0, 10.0), "CylR4")
     _c, msgs, _d = drive(ctx, "radius", ["24,0,5"], select=["CylR4"])
