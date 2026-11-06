@@ -15,6 +15,7 @@
 
 pub mod aci_colors;
 pub mod bearing;
+pub mod bspline;
 pub mod cage;
 pub mod calc;
 pub mod coil;

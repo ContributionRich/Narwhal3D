@@ -412,6 +412,7 @@ PURE_SUITES=(
     spike/test_native_command_search.py
     spike/test_native_coil.py
     spike/test_native_coil_preview.py
+    spike/test_preview_curve_native.py
     spike/test_native_interpolate.py
     spike/test_native_tween.py
     spike/test_tracedraw.py
