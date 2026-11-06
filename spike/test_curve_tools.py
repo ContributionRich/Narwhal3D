@@ -393,6 +393,28 @@ c, msgs, done = drive(ctx, "intersect", [], select=["Outside", "Box"])
 check(last(msgs) == "Found 0 intersections.",
       f"a line past the box's faces finds nothing -- trims are honoured ({last(msgs)!r})")
 
+# InfinitePlane (#47): the planar surface's plane, unbounded
+ctx = FakeCtx()
+flat = bridge.make_planar_srf([bridge.make_rectangle((0, 0, 0), (4, 4, 0))])
+flat = flat[0] if isinstance(flat, (list, tuple)) else flat
+ctx.add(flat, "Flat")
+ctx.add(line((10, 0, 5), (10, 0, -5)), "Far")
+ctx.add(bridge.make_box((20, 0, 0), (22, 2, 0), 2.0), "Box2")
+c, msgs, done = drive(ctx, "intersect", [], select=["Far", "Flat"])
+check(points(ctx) == [] and last(msgs) == "Found 0 intersections.",
+      f"premise: the bounded surface misses the line at x=10 ({last(msgs)!r})")
+c, msgs, done = drive(ctx, "intersect", ["InfinitePlane=Yes", "Far", "Flat", ""])
+check(points(ctx) == [(10.0, 0.0, 0.0)] and last(msgs) == "Found 1 intersection.",
+      f"InfinitePlane: the line meets the plane z=0 at (10,0,0), outside the surface "
+      f"({points(ctx)}; {last(msgs)!r})")
+before = points(ctx)
+c, msgs, done = drive(ctx, "intersect", ["InfinitePlane=Yes", "Far", "Box2", ""])
+check(points(ctx) == before and "InfinitePlane needs a planar surface" in last(msgs)
+      and "Box2" in last(msgs),
+      f"InfinitePlane with a non-planar object is refused by name ({last(msgs)!r})")
+c, msgs, done = drive(ctx, "intersect", ["SubCrv"])
+check("not implemented yet" in last(msgs), f"SubCrv still refuses by name ({last(msgs)!r})")
+
 print(f"\n{checks - len(failures)}/{checks} checks passed")
 if failures:
     for f in failures:

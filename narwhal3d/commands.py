@@ -13242,8 +13242,10 @@ class IntersectCmd(Command):
     Curve x curve uses `intersect.curve_curve` (Newton-refined to ~1e-12); an overlap is
     the exact sub-curve of the first curve (`Trim`). Curve x surface is EXACT in OCCT on
     the surface's own shape (`occt_backend.curve_shape_intersection`, trims honoured).
-    Not implemented, and said so: surface x surface, a curve lying IN a face, surfaces
-    with no exact shape, `InfinitePlane`, `SubCrv`.
+    `InfinitePlane=Yes` intersects curves with the UNBOUNDED plane of each selected
+    planar surface instead, so hits beyond the surface's boundary count; any other
+    object is then refused by name. Not implemented, and said so: surface x surface, a
+    curve lying IN a face, surfaces with no exact shape, `SubCrv`.
     """
 
     name = "Intersect"
@@ -13252,7 +13254,7 @@ class IntersectCmd(Command):
     preselect_names = 1
     cancel_on_empty_set = True
     options = (
-        opts.Option("InfinitePlane", opts.MODE,
+        opts.Option("InfinitePlane", opts.TOGGLE, default=False,
                     help="Use an infinite plane through a planar object."),
         opts.Option("SubCrv", opts.MODE, help="Selects part of a curve as input."),
     )
@@ -13276,11 +13278,21 @@ class IntersectCmd(Command):
         from . import analysis, intersect
 
         names = self.args[0]
+        infinite = bool(self.opt.get("InfinitePlane"))
         curves, surfaces, skipped = [], [], []
         for nm in names:
             g = ctx.geom_by_name(nm)
             if isinstance(g, r3.Curve):
                 curves.append((nm, g))
+            elif g is not None and infinite:
+                # OURS (#47): a "planar object" is a single planar surface; its plane is
+                # taken unbounded and intersected by the same kernel path.
+                face = bridge.planar_face_shape(g) if bridge.is_planar_surface(g) else None
+                if face is None:
+                    return (f"Intersect: InfinitePlane needs a planar surface, and {nm} "
+                            f"is not one; nothing was created"), True
+                from .kernel import occt_backend as ob
+                surfaces.append((nm, ob.infinite_plane_face(face)))
             elif g is not None:
                 shape = analysis.occt_shape_of(g)
                 if shape is None:
