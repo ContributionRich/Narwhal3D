@@ -8268,7 +8268,9 @@ class MirrorCmd(_TransformCmd):
     Third point of mirror plane" in the command UI. Options built: `Copy` (default Yes --
     the mirror IMAGE, as before), `3Point`, `XAxis` ("across the CPlane x axis (xz
     plane)"), `YAxis` (yz plane), `ZAxis` ("across the CPlane (xy plane)") -- the last
-    three act at once, through the CPlane origin. Declared: `Object`, `SubCrv`.
+    three act at once, through the CPlane origin. `Object` ("Select a planar surface as
+    the mirror plane") asks for one planar surface after the selection and mirrors across
+    its exact plane; any other object is refused by name. Declared: `SubCrv`.
     """
 
     name = "Mirror"
@@ -8291,8 +8293,17 @@ class MirrorCmd(_TransformCmd):
     def __init__(self):
         super().__init__()
         self._three = False
+        self._object = False
 
     def on_mode(self, name, ctx):
+        if name == "Object":
+            if not self.args:
+                return "Mirror: select the objects before Object", False
+            if len(self.args) > 1:
+                return "Mirror: Object is chosen before the first plane point", False
+            self._object = True
+            self.steps[1:] = [("Select planar surface for the mirror plane:", OBJECTS)]
+            return None, False
         if name == "3Point":
             if len(self.args) > 1:
                 return "Mirror: 3Point is chosen before the first plane point", False
@@ -8309,7 +8320,24 @@ class MirrorCmd(_TransformCmd):
             return self._commit(ctx, _mirror_xform(tuple(p.origin), tuple(normal)))
         return super().on_mode(name, ctx)
 
+    def execute(self, ctx: NarwhalContext):
+        if not self._object:
+            return super().execute(ctx)
+        name = self.args[1]
+        geom = ctx.geom_by_name(name)
+        face = bridge.planar_face_shape(geom) if geom is not None else None
+        frame = bridge._occt().face_plane(face) if face is not None else None
+        if frame is None:
+            return f"Mirror: {name} is not a planar surface, so it gives no mirror plane", True
+        origin, _x, _y, normal = frame
+        x = _mirror_xform(tuple(origin), tuple(normal))
+        if x is None:
+            return f"Mirror: {name} gives no mirror plane", True
+        return self._commit(ctx, x)
+
     def _compute(self, args, live=False):
+        if self._object:
+            return None                       # resolved in `execute`, which has the ctx
         pts = args[1:]
         if self._three:
             if len(pts) < 3:

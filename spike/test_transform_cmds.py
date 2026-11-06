@@ -500,9 +500,36 @@ else:
     print("  skip  Scale Rigid (no OCCT)")
 
 # ===========================================================================
+print("\n-- Mirror Object (#61) --")
+if ob.available():
+    def mirror_ctx():
+        ctx = line_ctx((1, 2, 0), (2, 3, 0))
+        wall = bridge.make_planar_srf([bridge.make_rectangle((0, 0, 0), (4, 0, 4),
+                                                             plane=cplane.WORLD_FRONT)])
+        ctx.model.add_object(wall[0] if isinstance(wall, (list, tuple)) else wall, "Wall", 0)
+        ctx.model.add_object(bridge.make_sphere((0, 9, 0), 1.0), "Ball", 0)
+        return ctx
+
+    ctx = mirror_ctx()
+    c, msg, done = run(ctx, "mirror", ["Copy=No", "Object", "Wall"])
+    check(done and ends(ctx.geom_by_name("L")) == [(1, -2, 0), (2, -3, 0)],
+          f"Mirror Object: across the planar surface's plane y=0, beyond its edges "
+          f"({ends(ctx.geom_by_name('L'))}, {msg!r})")
+    ctx = mirror_ctx()
+    c, msg, done = run(ctx, "mirror", ["Copy=No", "Object", "Ball"])
+    check(done and "Ball is not a planar surface" in msg
+          and ends(ctx.geom_by_name("L")) == [(1, 2, 0), (2, 3, 0)],
+          f"Mirror Object with a sphere is refused by name, nothing moves ({msg!r})")
+    ctx = mirror_ctx()
+    c, msg, done = run(ctx, "mirror", ["0,0,0", "Object"])
+    check(not done and "before the first plane point" in (msg or ""),
+          f"Object after a plane point is refused by name ({msg!r})")
+else:
+    print("  skip  Mirror Object (no OCCT)")
+
+# ===========================================================================
 print("\n-- options the help lists and we do not build still say so --")
-for key, opt in (("rotate3d", "SurfaceNormal"),
-                 ("mirror", "Object"), ("move", "Normal")):
+for key, opt in (("rotate3d", "SurfaceNormal"), ("move", "Normal")):
     ctx = line_ctx((0, 0, 0), (1, 0, 0))
     c = start(ctx, key)
     m, _d = c.feed(opt, ctx) if c else ("(no command)", True)
