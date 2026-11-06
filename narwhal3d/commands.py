@@ -9136,8 +9136,14 @@ class DivideCmd(Command):
     default step asks for the number of SEGMENTS (n+1 points). The `Length`
     and `EqualChordLength` MODE options change what the typed number means
     (arc length vs. chord length); the pure arithmetic lives in the `divide`
-    module. `Split` / `DeleteRemainder` / `MarkEnds`
-    / `GroupOutput` / `SubCrv` are not implemented yet and report honestly.
+    module.
+
+    `Split` cuts each curve at exact arc-length parameters instead of placing points
+    (`EqualChordLength` with `Split` is refused by name); `DeleteRemainder` then drops
+    a Length run's final, shorter piece. `MarkEnds` adds a point at each end of each
+    curve (one for a closed curve) unless a division point is already there, and
+    `GroupOutput` puts everything one run creates into one new group. `SubCrv` is not
+    implemented yet and reports honestly.
     """
 
     name = "Divide"
@@ -9156,14 +9162,14 @@ class DivideCmd(Command):
                          "Measurement starts from the natural start of the curve."),
         opts.Option("EqualChordLength", opts.MODE,
                     help="Divides the curve at equal CHORD (straight-line) lengths."),
-        opts.Option("Split", opts.MODE,
+        opts.Option("Split", opts.TOGGLE, default=False,
                     help="Splits the curve instead of placing point objects."),
-        opts.Option("DeleteRemainder", opts.MODE,
+        opts.Option("DeleteRemainder", opts.TOGGLE, default=False,
                     help="Deletes the last segment when the curve length cannot "
                          "be divided evenly (Split=Yes only)."),
-        opts.Option("MarkEnds", opts.MODE,
+        opts.Option("MarkEnds", opts.TOGGLE, default=False,
                     help="Places a point at the ends of the curve."),
-        opts.Option("GroupOutput", opts.MODE,
+        opts.Option("GroupOutput", opts.TOGGLE, default=False,
                     help="Groups the resulting objects."),
         opts.Option("SubCrv", opts.MODE,
                     help="Selects part of a curve as input."),
@@ -9183,8 +9189,51 @@ class DivideCmd(Command):
                     break
             return (f"Divide: mode is now {name} -- type a value at the "
                     f"next prompt.", False)
-        # Split / DeleteRemainder / MarkEnds / GroupOutput / SubCrv: honest.
+        # SubCrv: honest.
         return super().on_mode(name, ctx)
+
+    def _split_params(self, curve, mode, value):
+        """Cut parameters for Split at exact arc length, and whether a remainder is left.
+
+        A closed curve is also cut at its seam, so n cuts give n pieces. With a Length,
+        the last piece is the remainder when the length does not divide the curve.
+        """
+        from . import arclength
+
+        total = arclength.length_of(curve)
+        if total <= 1e-12:
+            raise ValueError("the curve has zero length")
+        if mode == "Length":
+            step = float(value)
+            if step <= 0:
+                raise ValueError(f"length must be positive (got {value!r})")
+            if step > total + 1e-9:
+                raise ValueError(f"length ({step:g}) is longer than the curve ({total:g})")
+            count = int(math.floor(total / step + 1e-9))
+            stations = [k * step for k in range(1, count + 1) if k * step < total - 1e-9]
+            remainder = total - count * step > 1e-9
+        else:
+            stations = [total * k / value for k in range(1, value)]
+            remainder = False
+        params = [arclength.parameter_at_length(curve, s) for s in stations]
+        if bridge.curve_ends(curve) is not None and curve.IsClosed:
+            params.insert(0, curve.Domain.T0)
+        return params, remainder
+
+    def _group_output(self, ctx, display_names):
+        """Put the objects named `display_names` into one new group; returns its name."""
+        file = ctx.model.file
+        n = 0
+        while _group_index_by_name(file, f"Group{n}") is not None:
+            n += 1
+        group = r3.Group()
+        group.Name = f"Group{n}"
+        file.Groups.Add(group)
+        gi = _group_index_by_name(file, group.Name)
+        for display in display_names:
+            for fobj in _objects_named(ctx, display):
+                fobj.Attributes.AddToGroup(gi)
+        return group.Name
 
     def execute(self, ctx: NarwhalContext):
         mode = getattr(self, "_divide_mode", None) or "count"
@@ -9224,39 +9273,70 @@ class DivideCmd(Command):
         def _samples(geom):
             return [(p.X, p.Y, p.Z) for p in bridge.sample_curve(geom, 64)]
 
+        split = bool(self.opt.get("Split"))
+        if split and mode == "EqualChordLength":
+            return ("Divide: Split with EqualChordLength is not implemented yet; "
+                    "use the segment count or Length"), True
+
         # validate before mutating
-
+        plans = []
         for name, geom in curves:
-
-            pts = _samples(geom)
             try:
+                if split:
+                    plans.append(self._split_params(geom, mode, value))
+                    continue
+                pts = _samples(geom)
                 if mode == "Length":
-                    divide.by_length(pts, value)
+                    plans.append(divide.by_length(pts, value))
                 elif mode == "EqualChordLength":
-                    divide.by_chord(pts, value)
+                    plans.append(divide.by_chord(pts, value))
                 else:
-                    divide.by_count(pts, value)
+                    plans.append(divide.by_count(pts, value))
             except ValueError as e:
                 return f"Divide: {e}", True
 
         ctx.note_change("Divide")
+        from . import intersect
 
-        total_points = 0
-
-        for name, geom in curves:
-
-            pts = _samples(geom)
-            if mode == "Length":
-                positions = divide.by_length(pts, value)
-            elif mode == "EqualChordLength":
-                positions = divide.by_chord(pts, value)
-            else:
-                positions = divide.by_count(pts, value)
+        created, total_points, pieces_made, deleted = [], 0, 0, 0
+        for (name, geom), plan in zip(curves, plans):
             layer_index = _layer_index_of(ctx, name)
-            for pos in positions:
-                ctx.add_geometry(bridge.make_point(pos), "Divide", layer_index)
-                total_points += 1
-        msg = f"Placed {total_points} point(s) on {len(curves)} curve(s)"
+            ends = bridge.curve_ends(geom) or ()
+            ends = ends[:1] if geom.IsClosed else ends
+            if split:
+                params, remainder = plan
+                pieces = intersect.split_curve_at_params(geom, params)
+                if remainder and self.opt.get("DeleteRemainder") and len(pieces) > 1:
+                    pieces = pieces[:-1]
+                    deleted += 1
+                created.extend(_replace_curve(ctx, name, pieces))
+                pieces_made += len(pieces)
+                placed = []
+            else:
+                for pos in plan:
+                    created.append(ctx.add_geometry(bridge.make_point(pos), "Divide",
+                                                    layer_index)[1])
+                    total_points += 1
+                placed = plan
+            if self.opt.get("MarkEnds"):
+                for end in ends:
+                    if any(math.dist(end, p) <= 1e-9 for p in placed):
+                        continue
+                    created.append(ctx.add_geometry(bridge.make_point(end), "Divide",
+                                                    layer_index)[1])
+                    total_points += 1
+        if split:
+            msg = f"Split {len(curves)} curve(s) into {pieces_made} piece(s)"
+            if deleted:
+                msg += f"; deleted the shorter remainder piece of {deleted} curve(s)"
+            if total_points:
+                msg += f"; marked {total_points} end point(s)"
+        else:
+            msg = f"Placed {total_points} point(s) on {len(curves)} curve(s)"
+        if self.opt.get("DeleteRemainder") and not split:
+            msg += " (DeleteRemainder applies only with Split=Yes)"
+        if self.opt.get("GroupOutput") and created:
+            msg += f"; grouped {len(created)} object(s) as {self._group_output(ctx, created)}"
         if non_curves:
             msg += f" ({len(non_curves)} non-curve(s) skipped)"
         return msg, True
