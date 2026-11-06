@@ -4699,7 +4699,8 @@ class Parabola3PtCmd(Command):
     parabola", "Parabola end", then "Parabola direction ( MarkFocus=No )"; the axis is parallel
     to end -> direction (`conics.parabola_through_direction`, checked against six exact control
     points). Mode=Vertex keeps the symmetric start / vertex / end construction (OURS: its
-    prompts were not measured)."""
+    prompts were not measured). Mode=Focus is the Parabola command's focus / direction /
+    end construction; PickOrder does not apply to it and is refused by name."""
 
     name = "Parabola3Pt"
     description = "Draw an exact parabola through start, a point and end, aimed by a direction."
@@ -4717,6 +4718,10 @@ class Parabola3PtCmd(Command):
 
     def _refresh_steps(self):
         special = self.opt.get("Mode", "ThroughPoint")
+        if special == "Focus":
+            # The Parabola command's Focus construction; no start point is asked.
+            self.steps = list(ParabolaCmd.FOCUS_STEPS)
+            return
         label = {"ThroughPoint": "Point on parabola:", "Vertex": "Vertex point:"}.get(
             special, "Focus point:")
         start, end = ("Parabola start:", POINT), ("Parabola end:", POINT)
@@ -4734,16 +4739,30 @@ class Parabola3PtCmd(Command):
         if option.name in ("Mode", "PickOrder"):
             if self.args:
                 return f"Parabola3Pt: {option.name} must be set before picking points", False
+            if option.name == "PickOrder" and self.opt.get("Mode") == "Focus":
+                # OURS (#39): Focus picks focus, direction, end; there is no order to choose.
+                self.opt["PickOrder"] = "Default"
+                return "Parabola3Pt: PickOrder is not available with Mode=Focus", False
+            note = ""
+            if option.name == "Mode" and value == "Focus" \
+                    and self.opt.get("PickOrder", "Default") != "Default":
+                self.opt["PickOrder"] = "Default"
+                note = " (PickOrder reset to Default; it does not apply to Focus)"
             self._refresh_steps()
-            if option.name == "Mode" and value == "Focus":
-                return "Parabola3Pt: Focus mode is not implemented yet", False
-            return f"Parabola3Pt: {option.name}={value}", False
+            return f"Parabola3Pt: {option.name}={value}{note}", False
         return super().on_option_set(option, value, ctx)
 
     def execute(self, ctx):
         mode = self.opt.get("Mode", "ThroughPoint")
         if mode == "Focus":
-            return "Parabola3Pt: Focus mode is not implemented yet", True
+            try:
+                curve, _vertex, focus = conics.parabola_from_focus(*self.args[:3])
+            except ValueError as exc:
+                return f"Parabola3Pt: {exc}", True
+            _, display = ctx.add_geometry(curve, "Parabola")
+            if self.opt.get("MarkFocus"):
+                ctx.add_geometry(bridge.make_point(focus), "Point")
+            return f"Created {display} (exact quadratic)", True
         order = self.opt.get("PickOrder", "Default")
         picks = list(self.args[:3])
         if order == "EndsFirst":
