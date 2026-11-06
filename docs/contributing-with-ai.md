@@ -77,6 +77,8 @@ and stages everything in gitignored paths:
   AppImage, so GUI suites behave like the released app;
 - the pinned OCCT source (`vendor/occt-src`) and the Rust geometry core;
 - the Rust cores, the application core, the UI core and the automation library;
+- the verified selection core (`artifacts/selection-core`), without which `run_tests.sh` skips
+  the selection-core suites;
 - the qualified document observer (`artifacts/document-observer`);
 - the exact-save helper (`artifacts/brep-writer`) and a Pillow environment for icon tests.
 
