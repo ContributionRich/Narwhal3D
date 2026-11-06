@@ -265,7 +265,7 @@ class HarnessTests(unittest.TestCase):
             self.assertLess(commands.index(native[-1]), commands.index(args))
         integration = ['spike/test_surfacing_integration.py', '--require-native']
         self.assertEqual(commands.count(integration), 1)
-        geometry = next(args for args in commands if args[:2] == ['build', '--release']
+        geometry = next(args for args in commands if args[:3] == ['+1.95.0', 'build', '--release']
                         and 'native/geometry_core/Cargo.toml' in args)
         for args in (integration, ['spike/test_surfacing_parallel.py'], ['spike/test_surfacing_probe.py']):
             self.assertLess(commands.index(geometry), commands.index(args))
