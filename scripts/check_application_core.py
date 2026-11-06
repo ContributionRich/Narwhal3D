@@ -20,7 +20,9 @@ import time
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'spike'))
+sys.path.insert(0, str(ROOT / 'scripts'))
 import runtime_paths
+import memory_bound
 CRATE = ROOT / 'native/application_core'
 LIBRARY = 'libnarwhal_application_core.so'
 
@@ -62,8 +64,8 @@ def build(target):
         if available < 5 * 1024**2:
             raise RuntimeError('need 4 GiB desktop reserve plus 1 GiB compiler allowance')
         env = dict(os.environ, CARGO_BUILD_JOBS='1', CARGO_INCREMENTAL='0')
-        prefix = ['systemd-run', '--user', '--scope', '--quiet', '-p', 'MemoryMax=1024M',
-                  '-p', 'MemorySwapMax=0', 'timeout', '--kill-after=5s', '180s']
+        prefix = memory_bound.bounded_prefix('1024M', quiet=True, swap_max=0) + [
+            'timeout', '--kill-after=5s', '180s']
         common = ['--manifest-path', str(CRATE / 'Cargo.toml')]
         checked(prefix + ['cargo', '+1.95.0', 'fmt', *common, '--check'], env=env)
         checked(prefix + ['cargo', '+1.95.0', 'clippy', *common, '--locked', '--offline',

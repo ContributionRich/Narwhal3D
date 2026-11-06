@@ -18,6 +18,8 @@ import time
 import urllib.request
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / 'scripts'))
+import memory_bound
 SDIST_SHA256 = '8315ec0c177ad4c69e8cc4e6d331c584110e8e8cc9bad294f121f18b4b7ec81a'
 SDIST_URL = ('https://files.pythonhosted.org/packages/f6/0a/'
              'b60de8b663fb898b7a9bc7f8a3b93c5fa32733defccbafb70d0b0bad8e4b/rhino3dm-8.35.0.tar.gz')
@@ -46,8 +48,8 @@ def verify_sources(archive, tree):
 
 
 def run(command, seconds=180, heavy=True):
-    prefix = ['systemd-run', '--user', '--scope', '--quiet', '-p', 'MemoryMax=1024M',
-              '-p', 'MemorySwapMax=0', 'timeout', '--kill-after=5s', f'{seconds}s']
+    prefix = memory_bound.bounded_prefix('1024M', quiet=True, swap_max=0) + [
+        'timeout', '--kill-after=5s', f'{seconds}s']
     if heavy:
         prefix = ['flock', '-w', '120', '/tmp/narwhal3d-heavy-build.lock'] + prefix
     env = dict(os.environ, CARGO_BUILD_JOBS='1', CMAKE_BUILD_PARALLEL_LEVEL='1')

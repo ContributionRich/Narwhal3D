@@ -28,6 +28,7 @@ import tempfile
 import time
 
 import build_linux_native as common
+import memory_bound
 
 ROOT = Path(__file__).resolve().parents[1]
 LIBRARY = 'libnarwhal_ui_core.so'
@@ -140,8 +141,8 @@ def build(root, target):
             env = dict(os.environ, CARGO_BUILD_JOBS='1', CARGO_INCREMENTAL='0',
                        CARGO_TARGET_DIR=str(target), TMPDIR=temporary)
             env.pop('CARGO_BUILD_TARGET', None)
-            prefix = ['systemd-run', '--user', '--scope', '--quiet', '-p', 'MemoryMax=1G',
-                      '-p', 'MemorySwapMax=0', 'timeout', '--kill-after=5s', '180s', 'cargo', '+1.95.0']
+            prefix = memory_bound.bounded_prefix('1G', quiet=True, swap_max=0) + [
+                'timeout', '--kill-after=5s', '180s', 'cargo', '+1.95.0']
             manifest = ['--manifest-path', str(root / 'native/ui_core/Cargo.toml')]
             cargo = [*manifest, '--locked', '--offline', '--target-dir', str(target), '-j', '1']
             checked([*prefix, 'fmt', *manifest, '--check'], root, env)

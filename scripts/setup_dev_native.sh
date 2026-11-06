@@ -35,7 +35,7 @@ After scripts/bootstrap_dev_linux.sh, build the native development components:
 then check that the application's required native startup checks pass.
 
 Needs: python3 (with venv), git, curl, rustup with toolchain 1.95.0 (rustfmt and clippy), cmake,
-make, a C and C++ compiler, a systemd user session (systemd-run --user), and about 4 GB of disk.
+make, a C and C++ compiler, a memory bounding mechanism (systemd-run, prlimit, or ulimit), and about 4 GB of disk.
 podman or docker is used for the exact-save helper when available.
 USAGE
 }
@@ -51,7 +51,7 @@ esac
 if ((SELF_CHECK)); then
   [[ -f "$DEV_LOCK" && -f "$FETCHER" ]] || { echo "development lock or fetcher is missing" >&2; exit 2; }
   python3 "$FETCHER" --self-check >/dev/null
-  for script in check_application_core.py check_ui_core.py check_document_observer.py; do
+  for script in check_application_core.py check_ui_core.py check_document_observer.py memory_bound.py; do
     [[ -f "$ROOT/scripts/$script" ]] || { echo "missing scripts/$script" >&2; exit 2; }
   done
   echo "setup_dev_native.sh self-check: OK"
@@ -71,11 +71,10 @@ need cmake "builds openNURBS for the document observer"
 need make "builds CPython configuration and openNURBS"
 need cc "C compiler"
 need c++ "C++ compiler"
-need systemd-run "the native gates bound compiler memory with a systemd user scope"
+python3 "$ROOT/scripts/memory_bound.py" --probe >/dev/null || {
+  echo "error: no memory bounding mechanism available (systemd-run, prlimit, or ulimit)" >&2; exit 2; }
 cargo +"$TOOLCHAIN" --version >/dev/null 2>&1 || {
   echo "error: Rust $TOOLCHAIN is not installed: rustup toolchain install $TOOLCHAIN --component rustfmt clippy" >&2; exit 2; }
-systemd-run --user --scope --quiet true 2>/dev/null || {
-  echo "error: 'systemd-run --user --scope' does not work here (no systemd user session)" >&2; exit 2; }
 "$PYTHON" -c 'import sys; sys.exit(sys.version_info[:3] != (3, 13, 13))' || {
   echo "error: the bootstrapped runtime is not CPython 3.13.13; headers would not match" >&2; exit 2; }
 mkdir -p "$CACHE/artifacts"
