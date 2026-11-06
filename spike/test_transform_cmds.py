@@ -428,8 +428,37 @@ else:
     print("  skip  master rotation (no OCCT)")
 
 # ===========================================================================
+print("\n-- UseLastCenter / UseLastAxis (#61) --")
+commands._AngleCmd._last_axis_points.clear()
+c, msg, done = run(line_ctx((1, 0, 0), (2, 0, 0)), "rotate", ["UseLastCenter"])
+check(not done and "no previous center" in (msg or ""),
+      f"Rotate UseLastCenter before any Rotate is refused by name ({msg!r})")
+run(line_ctx((1, 0, 0), (2, 0, 0)), "rotate", ["5,5,0", "30"])     # remembers (5,5,0)
+ctx = line_ctx((6, 5, 0), (7, 5, 0))
+c, msg, done = run(ctx, "rotate", ["UseLastCenter", "90"])
+check(done and ends(ctx.geom_by_name("L")) == [(5, 6, 0), (5, 7, 0)],
+      f"Rotate UseLastCenter: 90 about the last centre (5,5): (6,5)-(7,5) -> (5,6)-(5,7) "
+      f"({ends(ctx.geom_by_name('L'))}, {msg!r})")
+ctx = line_ctx((6, 5, 0), (7, 5, 0))
+c, msg, done = run(ctx, "rotate", ["UseLastCenter", "180"])
+check(done and ends(ctx.geom_by_name("L")) == [(4, 5, 0), (3, 5, 0)],
+      "repeated UseLastCenter keeps the same centre")
+c, msg, done = run(line_ctx((1, 0, 0), (2, 0, 0)), "rotate", ["0,0,0", "UseLastCenter"])
+check(not done and "answers the center of rotation prompt" in (msg or ""),
+      f"UseLastCenter after the centre is refused by name ({msg!r})")
+c, msg, done = run(line_ctx((0, 1, 0), (0, 2, 0)), "rotate3d", ["UseLastAxis"])
+check(not done and "no previous rotation axis" in (msg or ""),
+      f"Rotate3D UseLastAxis before any Rotate3D is refused by name ({msg!r})")
+run(line_ctx((0, 1, 0), (0, 2, 0)), "rotate3d", ["0,0,3", "1,0,3", "10"])   # x axis at z=3
+ctx = line_ctx((0, 1, 3), (0, 2, 3))
+c, msg, done = run(ctx, "rotate3d", ["UseLastAxis", "90"])
+check(done and ends(ctx.geom_by_name("L")) == [(0, 0, 4), (0, 0, 5)],
+      f"Rotate3D UseLastAxis: 90 about the last axis (x through z=3): "
+      f"(0,1,3)-(0,2,3) -> (0,0,4)-(0,0,5) ({ends(ctx.geom_by_name('L'))}, {msg!r})")
+
+# ===========================================================================
 print("\n-- options the help lists and we do not build still say so --")
-for key, opt in (("rotate", "UseLastCenter"), ("rotate3d", "SurfaceNormal"),
+for key, opt in (("rotate3d", "SurfaceNormal"),
                  ("scale", "Rigid"), ("mirror", "Object"), ("move", "Normal")):
     ctx = line_ctx((0, 0, 0), (1, 0, 0))
     c = start(ctx, key)

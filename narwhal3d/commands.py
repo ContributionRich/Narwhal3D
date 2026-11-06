@@ -7055,6 +7055,28 @@ class _AngleCmd(_TransformCmd):
 
     verb = "Rotated"
     ANGLE_PROMPT = "Angle or first reference point:"
+    #: The axis-defining points of the last committed rotation, per command name, for
+    #: `UseLastCenter` / `UseLastAxis` (this session only).
+    _last_axis_points = {}
+    #: The option that reuses them, and what it is called in a refusal.
+    _reuse_option, _reuse_noun = None, None
+
+    def on_mode(self, name, ctx):
+        if name != self._reuse_option:
+            return super().on_mode(name, ctx)
+        if self.step_index != 1:
+            return f"{self.name}: {name} answers the {self._reuse_noun} prompt", False
+        last = _AngleCmd._last_axis_points.get(self.name)
+        if last is None:
+            return f"{self.name}: there is no previous {self._reuse_noun} yet", False
+        self.args.extend(last)
+        self.step_index += len(last)
+        return None, False
+
+    def _commit(self, ctx, xform):
+        _AngleCmd._last_axis_points[self.name] = [
+            tuple(p) for p in self.args[1:1 + self._n_axis_args]]
+        return super()._commit(ctx, xform)
 
     def _parse_distance(self, text, ctx):
         stripped = (text or "").strip()
@@ -7104,7 +7126,8 @@ class RotateCmd(_AngleCmd):
     the centre; a positive angle is counterclockwise ("Positive angular measurement is
     counterclockwise", the command behavior). Prompts: "Center of rotation",
     "Angle or first reference point", "Second reference point" in the command UI.
-    Options: `Copy` built; `UseLastCenter` declared.
+    Options: `Copy` and `UseLastCenter` built (the centre of the last Rotate this
+    session answers the centre prompt).
     """
 
     name = "Rotate"
@@ -7119,6 +7142,7 @@ class RotateCmd(_AngleCmd):
                     help="Uses the previously selected center point for the rotation."),
     )
     _n_axis_args = 1
+    _reuse_option, _reuse_noun = "UseLastCenter", "center of rotation"
 
     def _axis_and_origin(self, args):
         return self._z, args[1]
@@ -7128,7 +7152,8 @@ class Rotate3DCmd(_AngleCmd):
     """`Rotate3D` -- the command behavior. steps: "Select the objects. Pick the
     start of the rotation axis. Pick the end of the rotation axis. Type the angle, or pick
     two reference points." Positive is right-handed about start -> end (the help
-    does not say). Options: `Copy` built; `SurfaceNormal`, `UseLastAxis`, `SubCrv`
+    does not say). Options: `Copy` and `UseLastAxis` built (the start and end of the
+    last Rotate3D axis this session answer both axis prompts); `SurfaceNormal`, `SubCrv`
     declared."""
 
     name = "Rotate3D"
@@ -7145,6 +7170,7 @@ class Rotate3DCmd(_AngleCmd):
         opts.Option("SubCrv", opts.MODE, help="Selects part of a curve as input."),
     )
     _n_axis_args = 2
+    _reuse_option, _reuse_noun = "UseLastAxis", "rotation axis"
 
     def _axis_and_origin(self, args):
         axis = cplane.normalize(_sub3(args[2], args[1]))
