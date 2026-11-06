@@ -4335,7 +4335,7 @@ class ArcCmd(Command):
     )
 
     def on_mode(self, name, ctx):
-        """`Center`, `StartPoint` and `Direction` are built, with the reference CAD application's prompts
+        """`Center`, `StartPoint`, `Direction`, `Midpoint` and `ThroughPoint` are built, with the reference CAD application's prompts
         in the command UI: "Center of arc" / "Start of arc" / "End point", "Start of arc"
         / "End of arc" / a through point, "Start of arc" / "Direction at start" / "End of
         arc"."""
@@ -4347,6 +4347,12 @@ class ArcCmd(Command):
                            ("Point on arc:", POINT)],
             "Direction": [("Start of arc:", POINT), ("Direction at start:", POINT),
                           ("End of arc:", POINT)],
+            # OURS (#36): the pick sequence is not documented. Like Line's BothSides
+            # ("Middle of line"), the first pick is the middle: the point halfway ALONG
+            # the arc. The end and a point on the arc then fix the circle, and the start
+            # is the end mirrored across the diameter through the midpoint.
+            "Midpoint": [("Midpoint of arc:", POINT), ("End of arc:", POINT),
+                         ("Point on arc:", POINT)],
         }
         if name in flows:
             if self.args:
@@ -4354,6 +4360,15 @@ class ArcCmd(Command):
             self.steps = list(flows[name])
             self._flow = name
             return f"Arc: {name} mode", False
+        if name == "ThroughPoint":
+            # OURS (#36): ThroughPoint continues StartPoint ("Start of arc", "End of arc",
+            # "Point on arc"), which is the flow the "start, end, point on arc" macro
+            # `_StartPoint _Pause _ThroughPoint` expects; on its own it is refused.
+            if self._flow != "StartPoint":
+                return "Arc: ThroughPoint follows StartPoint; choose StartPoint first", False
+            if self.step_index > 1:
+                return "Arc: ThroughPoint is chosen before the end of the arc", False
+            return "Arc: ThroughPoint -- pick the end, then a point the arc passes through", False
         if name == "Tangent":
             if self.args:
                 return "Arc: Tangent is chosen before the first point", False
@@ -4480,6 +4495,29 @@ class ArcCmd(Command):
         return (tuple(start), self._sweep(center, u, t, r, theta),
                 self._sweep(center, u, t, r, 2 * theta))
 
+    def _midpoint_arc(self):
+        """Midpoint mode -> ``(start, mid, end)``: the symmetric arc whose midpoint and end
+        were picked, on the circle through the midpoint, the end and the point on the arc."""
+        mid, end, on_arc = self.args
+        try:
+            circle = r3.Arc(r3.Point3d(*mid), r3.Point3d(*on_arc), r3.Point3d(*end))
+            center = (circle.Center.X, circle.Center.Y, circle.Center.Z)
+        except Exception:  # noqa: BLE001 -- rhino3dm reports a degenerate arc by raising
+            center = None
+        if center is None or not circle.IsValid:
+            return "Arc: the midpoint, end and point on arc must not be collinear"
+        u = cplane.normalize(tuple(mid[i] - center[i] for i in range(3)))
+        e = tuple(end[i] - center[i] for i in range(3))
+        r = math.sqrt(cplane.dot(e, e))
+        along = cplane.dot(e, u)
+        if along <= -r * (1.0 - 1e-12):
+            return "Arc: the end is opposite the midpoint, so the arc would be a whole circle"
+        start = tuple(center[i] + 2.0 * along * u[i] - e[i] for i in range(3))
+        p = tuple(on_arc[i] - center[i] for i in range(3))
+        if cplane.dot(p, u) < along - 1e-9 * r:
+            return "Arc: the point on arc must lie between the start and the end of the arc"
+        return start, tuple(mid), tuple(end)
+
     def execute(self, ctx: NarwhalContext):
         flow = getattr(self, "_flow", None)
         if flow == "Tangent":
@@ -4493,8 +4531,9 @@ class ArcCmd(Command):
                 return f"Arc: {e}", True
             _, display_name = ctx.add_geometry(geom, "Arc")
             return f"Created {display_name} tangent to {', '.join(names)}", True
-        if flow in ("Center", "Direction"):
-            res = self._center_arc(ctx) if flow == "Center" else self._direction_arc()
+        if flow in ("Center", "Direction", "Midpoint"):
+            res = (self._center_arc(ctx) if flow == "Center" else
+                   self._direction_arc() if flow == "Direction" else self._midpoint_arc())
             if isinstance(res, str):
                 return res, True
             start, on_arc, end = res

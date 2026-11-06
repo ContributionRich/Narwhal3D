@@ -240,6 +240,69 @@ a = arc_of(g)
 check(a is not None and abs(a.Radius - 5) < 1e-12 and abs(length(g) - 5 * math.pi) < 1e-9,
       f"StartPoint: (0,0) -> (10,0) through (5,5) is the R5 half circle ({msg!r})")
 
+# -- Arc ThroughPoint and Midpoint (#36) ---------------------------------------
+_g, tp_msg, _c = draw("arc", ["StartPoint", "0,0,0", "ThroughPoint"])
+check("not implemented" not in tp_msg and "ThroughPoint" in tp_msg,
+      f"Arc ThroughPoint after StartPoint is accepted, not refused ({tp_msg!r})")
+g, msg, c = draw("arc", ["StartPoint", "0,0,0", "ThroughPoint", "10,0,0", "5,5,0"])
+a = arc_of(g)
+check(a is not None and true_arc(g) and near(xyz(g.PointAtStart), (0, 0, 0))
+      and near(xyz(g.PointAtEnd), (10, 0, 0)) and abs(a.Radius - 5.0) < 1e-9
+      and near(xyz(a.Center), (5, 0, 0)),
+      f"Arc ThroughPoint after StartPoint: the semicircle through (5,5,0) ({msg})")
+g, msg, c = draw("arc", ["ThroughPoint"])
+check(g is None and "choose StartPoint first" in (msg or ""),
+      f"Arc ThroughPoint before StartPoint is refused by name ({msg!r})")
+# the "Arc: start, end, point on arc" right-click macro, driven step by step
+macro = _load("narwhal3d.macro", "narwhal3d/macro.py")
+text = next(v[1] for k, v in _load("narwhal3d.toolbar_macro_data",
+                                   "narwhal3d/toolbar_macro_data.py").MACROS.items()
+            if k[0] == "Arc: start, end, point on arc")
+picks = iter(["2,1,0", "8,1,0", "5,4,0"])
+ctx = FakeCtx()
+cmd, msg, done = None, None, False
+replies = []
+for step in macro.tokenize(text):
+    if step["kind"] == "command" and cmd is None:
+        cmd = type(commands.COMMANDS[step["name"].lower()])()
+        msg, done = cmd.begin(ctx)
+    elif step["kind"] == "command":
+        msg, done = cmd.feed(step["name"], ctx)
+        replies.append(msg or "")
+    elif step["kind"] == "pause":
+        msg, done = cmd.feed(next(picks), ctx)
+for line in picks:
+    if not done:
+        msg, done = cmd.feed(line, ctx)
+g = ctx.geoms()[0] if len(ctx.geoms()) == 1 else None
+a = arc_of(g)
+check(not any("not implemented" in r or "first" in r for r in replies),
+      f"every option word in the macro is accepted ({replies})")
+check(a is not None and abs(math.dist(xyz(a.Center), (5, 4, 0)) - a.Radius) < 1e-9
+      and near(xyz(g.PointAtStart), (2, 1, 0)) and near(xyz(g.PointAtEnd), (8, 1, 0)),
+      f"the 'Arc: start, end, point on arc' macro draws the arc through its third pick ({msg})")
+
+# Midpoint: the semicircle of radius 5 whose midpoint is (0,5,0) and end (5,0,0)
+g, msg, c = draw("arc", ["Midpoint", "0,5,0", "5,0,0", "-3,4,0"])
+a = arc_of(g)
+d = g.Domain if g is not None else None
+check(a is not None and true_arc(g) and "not implemented" not in msg
+      and near(xyz(g.PointAtStart), (-5, 0, 0)) and near(xyz(g.PointAtEnd), (5, 0, 0))
+      and near(xyz(g.PointAt((d.T0 + d.T1) / 2)), (0, 5, 0))
+      and near(xyz(a.Center), (0, 0, 0)) and abs(a.Radius - 5.0) < 1e-9,
+      f"Arc Midpoint: start mirrored to (-5,0,0), the pick is halfway along ({msg})")
+g, msg, c = draw("arc", ["Midpoint", "0,5,0", "4,3,0", "-4,3,0"])
+check(g is not None and near(xyz(g.PointAtStart), (-4, 3, 0)) and near(xyz(g.PointAtEnd), (4, 3, 0)),
+      f"Arc Midpoint: a third point exactly at the mirrored start is still on the arc ({msg})")
+g, msg, c = draw("arc", ["Midpoint", "0,5,0", "4,3,0", "0,-5,0"])
+check(g is None and "between the start and the end" in (msg or ""),
+      f"Arc Midpoint: a third point off the arc is refused by name ({msg!r})")
+g, msg, c = draw("arc", ["Midpoint", "0,5,0", "0,-5,0", "5,0,0"])
+check(g is None and "whole circle" in (msg or ""),
+      f"Arc Midpoint: an end opposite the midpoint is refused ({msg!r})")
+g, msg, c = draw("arc", ["Midpoint", "0,0,0", "1,0,0", "2,0,0"])
+check(g is None and "collinear" in (msg or ""), f"Arc Midpoint: collinear picks refused ({msg!r})")
+
 # ---------------------------------------------------------------- 8. Polygon Circumscribed
 print("\n-- 8. Polygon Circumscribed --")
 g, msg, c = draw("polygon", ["NumSides=6", "Circumscribed", "0,0,0", "5,0,0"])
@@ -282,12 +345,12 @@ check(bb is not None and near(xyz(bb[0]), (0, 0, 0)) and near(xyz(bb[1]), (8, 6,
 
 # ---------------------------------------------------------------- the rest stay honest
 print("\n-- unbuilt options still say so --")
-# Circle/Arc Tangent are covered in spike/test_tangent_circle.py; AroundCurve and
-# Midpoint remain the explicit unbuilt pins here.
+# Circle/Arc Tangent are covered in spike/test_tangent_circle.py; AroundCurve
+# remains an explicit unbuilt pin here (Arc Midpoint is built and checked above).
 # Line Tangent and Polygon Star are now built from their measured flows
 # (research_preview_14 R10; covered in spike/test_research13_commands.py).
 for key, opt in (("line", "Normal"), ("circle", "AroundCurve"),
-                 ("arc", "Midpoint"), ("rectangle", "EdgeMidpoint"),
+                 ("rectangle", "EdgeMidpoint"),
                  ("ellipse", "Vertical")):
     cmd = type(commands.COMMANDS[key])()
     m, _d = cmd.feed(opt, None)
