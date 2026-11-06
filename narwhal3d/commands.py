@@ -14824,6 +14824,43 @@ class RedoCmd(Command):
         return f"Redoing {name}", True
 
 
+class ClearUndoCmd(Command):
+    # the command behavior: "The ClearUndo command purges the undo buffer." It
+    # frees the memory the history holds; the document itself is not touched.
+    name = "ClearUndo"
+    description = "Discard all undo and redo history."
+    # OURS: the confirmation wording is not measured. Enter keeps the history,
+    # because clearing cannot be undone.
+    steps = [("Clear all undo and redo history? This cannot be undone. (Yes/No) <No>:", TEXT)]
+    #: Like Undo, this works on the history itself and must run outside a record.
+    records_undo = False
+
+    def begin(self, ctx):
+        if not ctx.undo.can_undo and not ctx.undo.can_redo:
+            # OURS: nothing to clear, so do not ask a question with no effect.
+            return "No undo history to clear.", True
+        return super().begin(ctx)
+
+    def _enter_default(self, ctx):
+        return "No"
+
+    def execute(self, ctx: NarwhalContext):
+        answer = opts.parse_bool(self.args[-1])
+        if answer is None:
+            self.args.pop()
+            self.step_index = 0
+            return "ClearUndo: answer Yes or No", False
+        if not answer:
+            return "Undo history kept.", True
+        # Count first: UndoStack.clear() keeps its None contract (the history
+        # ABI trace pins it).
+        undo_count = len(ctx.undo.undo_names())
+        redo_count = len(ctx.undo.redo_names())
+        ctx.undo.clear()
+        return (f"Cleared {undo_count} undo record{'s' if undo_count != 1 else ''} and "
+                f"{redo_count} redo record{'s' if redo_count != 1 else ''}."), True
+
+
 class GumballNumericCmd(Command):
     """The Gumball's numeric entry: a handle was CLICKED, so type a value.
 
@@ -17209,7 +17246,7 @@ def _build_registry():
                 ArrayPolarCmd, MirrorCmd, DeleteCmd, JoinCmd, ExplodeCmd, CloseCrvCmd,
                 ProjectCmd, ProjectToCPlaneCmd, ExtendCmd, DivideCmd, ExtractWireframeCmd,
                 SelectCmd, ZoomCmd,
-                UndoCmd, RedoCmd, PointsOnCmd, PointsOffCmd,
+                UndoCmd, RedoCmd, ClearUndoCmd, PointsOnCmd, PointsOffCmd,
                 SelAllCmd, SelNoneCmd, InvertCmd,
                 SelCrvCmd, SelSrfCmd, SelPolysrfCmd, SelPtCmd,
                 SelClosedCrvCmd, SelOpenCrvCmd, SelDupCmd, SelNameCmd, SetObjectNameCmd,

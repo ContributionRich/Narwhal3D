@@ -271,6 +271,7 @@ PURE_SUITES=(
     spike/test_native_cage_safety.py
     spike/test_cage_boundary.py
     spike/test_undo.py
+    spike/test_clear_undo.py
     spike/test_visibility.py
     spike/test_isolate.py
     spike/test_preselect.py

@@ -18,11 +18,10 @@ This section describes the current source. Consult the GitHub release for publis
 
 Narwhal 3D is **not yet at full command parity with established NURBS CAD workflows**. It has a substantial working command set, but many commands, advanced options, selection routes, dialogs, and viewport tools remain missing or incomplete. A registered command name means that command is runnable; it does not guarantee every advanced option or interaction path is complete.
 
-The authored menu hierarchy exposes all 188 commands currently registered by Narwhal, plus Recent Files and 363 individually named unavailable commands with `(Not implemented)` labels. File includes recent/recovery, template, and document groups; Help includes learning/reference and support groups. The desktop toolbar workspace contains 582 top-strip slots across fifteen tabs plus the 37-cell left tool palette and its 28 linked flyouts. Of the 525 non-separator top slots, 122 currently invoke registered commands; every unavailable action remains visible, identifies itself on hover, and explains the gap when clicked.
+The authored menu hierarchy exposes all 189 commands currently registered by Narwhal, plus Recent Files and 363 individually named unavailable commands with `(Not implemented)` labels. File includes recent/recovery, template, and document groups; Help includes learning/reference and support groups. The desktop toolbar workspace contains 582 top-strip slots across fifteen tabs plus the 37-cell left tool palette and its 28 linked flyouts. Of the 525 non-separator top slots, 122 currently invoke registered commands; every unavailable action remains visible, identifies itself on hover, and explains the gap when clicked.
 
 The issue tracker is the live source for bounded contribution work. Current one-command starter tasks include:
 
-- [ClearUndo](https://github.com/ContributionRich/Narwhal3D/issues/4)
 - [JoinCopy](https://github.com/ContributionRich/Narwhal3D/issues/3)
 
 Axis-based `Helix`, variable-radius `Spiral`, exact `Conic`, `Parabola`, `Hyperbola`, polyline/point-to-curve conversion, compatible `TweenCurves`, tolerance-qualified `Catenary`, C1 `HandleCurve`, and surface-control-polygon extraction now create real curve geometry with live previews where point-driven; planar `Flat` Spiral is supported. Sweep1 and Sweep2 rail prompts accept exact Ctrl+Shift-selected surface/solid edges as well as standalone curve objects. `AroundCurve` remains explicitly unavailable until its moving-frame convention is measured.
