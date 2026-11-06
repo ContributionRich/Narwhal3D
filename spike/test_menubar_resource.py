@@ -65,7 +65,7 @@ EXPECTED_MENUS = [
 ]
 EXPECTED_RUNNABLE_COUNTS = {
     "File": 8,
-    "Edit": 48,
+    "Edit": 49,
     "View": 14,
     "Curve": 47,
     "Surface": 13,
@@ -82,7 +82,7 @@ EXPECTED_RUNNABLE_COUNTS = {
 }
 EXPECTED_TODO_COUNTS = {
     "File": 10,
-    "Edit": 39,
+    "Edit": 38,
     "View": 60,
     "Curve": 33,
     "Surface": 35,
@@ -137,14 +137,14 @@ def _():
 
 @check("live bare-package registry includes all sibling providers")
 def _():
-    assert len(registered) == 187, len(registered)
+    assert len(registered) == 188, len(registered)
     assert {
         "import", "filletedge", "saveas", "print", "export", "setdisplaymode",
         "changelayer",
     } <= registered
 
 
-@check("all 187 registered commands appear exactly once")
+@check("all 188 registered commands appear exactly once")
 def _():
     runnable = [command for _menu, _path, _label, command in leaves()
                 if command in registered]
@@ -179,7 +179,7 @@ def _():
         for tab in data.toolbar_data.TABS for record in tab["buttons"]
         if record.get("command")
     }
-    assert len(todos) == 364, len(todos)
+    assert len(todos) == 363, len(todos)
     assert EXPECTED_SERVICE_TODOS <= payloads
     assert toolbar_commands - registered <= payloads
     for menu, label, command in todos:

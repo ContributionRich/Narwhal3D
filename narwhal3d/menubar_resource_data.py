@@ -120,6 +120,7 @@ _CORE_MENUS = (
             _item("Lock Selected", "lock"),
             _item("Unlock All", "unlock"),
             _item("Unlock Selected", "unlockselected"),
+            _item("Swap Locked and Unlocked", "lockswap"),
         )),
         _popup("Groups", (
             _item("Group", "group"),

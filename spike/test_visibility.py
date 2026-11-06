@@ -488,7 +488,7 @@ for key in ("hide", "lock"):
           f"{key}: Enter at the empty prompt ends silently (#070/#084)  ({msg!r})")
 
 # ===========================================================================
-# HideSwap -- exchange two Mode states across the whole document.
+# HideSwap and LockSwap -- exchange two Mode states across the whole document.
 # ===========================================================================
 N, H, L = r3.ObjectMode.Normal, r3.ObjectMode.Hidden, r3.ObjectMode.Locked
 
@@ -515,13 +515,13 @@ def doc_rows(ctx):
 
 
 print()
-print("HideSwap is registered and zero-prompt")
-for name in ("HideSwap",):
+print("HideSwap and LockSwap are registered and zero-prompt")
+for name in ("HideSwap", "LockSwap"):
     cmd = commands.COMMANDS.get(name.lower())
     check(cmd is not None and cmd.name == name, f"{name} is registered")
     check(cmd is not None and list(cmd.steps) == [], f"{name} has no prompts")
 
-for key, other, other_mode in (("hideswap", "locked", L),):
+for key, other, other_mode in (("hideswap", "locked", L), ("lockswap", "hidden", H)):
     a_mode, b_mode = (N, H) if key == "hideswap" else (N, L)
     print()
     print(f"{key}: mixed document swaps both directions and leaves the third state alone")
