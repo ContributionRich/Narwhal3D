@@ -243,6 +243,32 @@ msg, done = c.feed("", ctx)
 m = kernel.master_of(ctx.added[0]) if ctx.added else None
 check(done and m is not None and abs(ob.volume(m) - 32.0) < 1e-9,
       f"...then Enter offsets by 2: a 4 x 4 x 2 solid ({msg!r})")
+# ThroughPoint (#54): the signed normal distance to a picked point is the offset
+sticky_before = type(commands.COMMANDS["offsetsrf"])().opt["Distance"]
+for pick, want_z, want_vol in (("1,1,3", (0.0, 3.0), 48.0), ("9,9,-1.5", (-1.5, 0.0), 24.0)):
+    ctx = Ctx()
+    ctx.add(square_srf(), "S")
+    c, msg, done = drive("offsetsrf", ["ThroughPoint", pick], ctx, select=["S"])
+    m = kernel.master_of(ctx.added[0]) if ctx.added else None
+    lo, hi = ob.tight_bbox(m) if m is not None else ((0,) * 3, (0,) * 3)
+    check(done and m is not None and abs(ob.volume(m) - want_vol) < 1e-9
+          and (round(lo[2], 9), round(hi[2], 9)) == want_z and ctx.geom_by_name("S") is None,
+          f"ThroughPoint {pick}: a solid from z={want_z[0]} to {want_z[1]}, volume {want_vol} "
+          f"({msg!r})")
+check(type(commands.COMMANDS["offsetsrf"])().opt["Distance"] == sticky_before,
+      f"ThroughPoint leaves the sticky Distance unchanged ({sticky_before})")
+ctx = Ctx()
+ctx.add(square_srf(), "S")
+c, msg, done = drive("offsetsrf", ["Solid=No", "ThroughPoint", "2,2,2.5"], ctx, select=["S"])
+g = ctx.added[0] if ctx.added else None
+check(done and g is not None and abs(g.GetBoundingBox().Min.Z - 2.5) < 1e-9
+      and abs(g.GetBoundingBox().Max.Z - 2.5) < 1e-9,
+      f"ThroughPoint with Solid=No: the offset surface passes through z=2.5 ({msg!r})")
+ctx = Ctx()
+ctx.add(square_srf(), "S")
+c, msg, done = drive("offsetsrf", ["ThroughPoint", "3,1,0"], ctx, select=["S"])
+check(done and not ctx.added and "lies on the surface" in msg and ctx.geom_by_name("S") is not None,
+      f"ThroughPoint on the surface is refused, nothing changes ({msg!r})")
 c, msg, done = drive("offsetsrf", ["-1"], ctx, select=["S"])
 check(not done and c.opt["Distance"] == 2.0, f"a non-positive typed distance is refused ({msg!r})")
 type(commands.COMMANDS["offsetsrf"])().feed("Distance=1", ctx)
