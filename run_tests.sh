@@ -271,12 +271,12 @@ PURE_SUITES=(
     spike/test_cage_boundary.py
     spike/test_undo.py
     spike/test_visibility.py
-    spike/test_purge.py
     spike/test_isolate.py
     spike/test_preselect.py
     spike/test_sel_dup.py
     spike/test_research13_selection.py
     spike/test_set_group_name.py
+    spike/test_purge.py
     spike/test_measure.py
     spike/test_transform_cmds.py
     spike/test_line_modes.py
