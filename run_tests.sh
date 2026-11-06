@@ -267,7 +267,6 @@ fi
 
 PURE_SUITES=(
     spike/test_geometry.py
-    spike/test_run_suite.py
     spike/test_native_cage_safety.py
     spike/test_cage_boundary.py
     spike/test_undo.py
@@ -278,6 +277,7 @@ PURE_SUITES=(
     spike/test_research13_selection.py
     spike/test_set_group_name.py
     spike/test_measure.py
+    spike/test_run_suite.py
     spike/test_transform_cmds.py
     spike/test_line_modes.py
     spike/test_pyramid_preview.py
