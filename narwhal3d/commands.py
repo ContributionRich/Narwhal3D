@@ -6655,8 +6655,14 @@ def _first_document_object(index, name):
     return rows[0] if rows else None
 
 
-def _apply_transform_to_selection(ctx: NarwhalContext, xform: r3.Transform):
+def _apply_transform_to_selection(ctx: NarwhalContext, xform: r3.Transform,
+                                  per_object=None):
     """Apply a rhino3dm Transform to selected objects, in the document and the view.
+
+    `per_object`, when given, is called as ``per_object(geometry, ob)`` for EVERY
+    selected object and returns the transform used for that object instead of
+    `xform` (Scale's `Rigid` moves each object by its own offset). `geometry` is
+    the document geometry, or None for a display-only object.
 
     The transform is **baked into the stored File3dm geometry**. ``fobj.Geometry``
     is a live reference, so
@@ -6677,16 +6683,19 @@ def _apply_transform_to_selection(ctx: NarwhalContext, xform: r3.Transform):
     # Both rhino3dm.Transform.Mij and mathutils.Matrix are row-major with the
     # translation in column 3, so map row-for-row (transposing here would put
     # the translation in the bottom row and silently do nothing).
-    try:
-        from mathutils import Matrix
-        mm = Matrix([
-            (xform.M00, xform.M01, xform.M02, xform.M03),
-            (xform.M10, xform.M11, xform.M12, xform.M13),
-            (xform.M20, xform.M21, xform.M22, xform.M23),
-            (xform.M30, xform.M31, xform.M32, xform.M33),
+    def display_matrix(x):
+        try:
+            from mathutils import Matrix
+        except ImportError:
+            return None
+        return Matrix([
+            (x.M00, x.M01, x.M02, x.M03),
+            (x.M10, x.M11, x.M12, x.M13),
+            (x.M20, x.M21, x.M22, x.M23),
+            (x.M30, x.M31, x.M32, x.M33),
         ])
-    except ImportError:
-        mm = None
+
+    mm = display_matrix(xform)
     moved = []
     document_index = _document_name_index(ctx.model.file.Objects)
     for ob in ctx.selected_objects():
@@ -6695,6 +6704,12 @@ def _apply_transform_to_selection(ctx: NarwhalContext, xform: r3.Transform):
         # names) without scanning the complete document for every display object.
         fobj = _first_document_object(document_index, ob.name)
         refused = False
+        obj_xform, obj_mm = xform, mm
+        if per_object is not None:
+            # Every object gets its own transform, display-only ones included;
+            # never reuse the previous object's.
+            obj_xform = per_object(fobj.Geometry if fobj is not None else None, ob)
+            obj_mm = display_matrix(obj_xform)
         if fobj is not None:
             # bake into the document first, so a kernel failure can't leave the
             # viewport showing a move the saved file doesn't have
@@ -6705,7 +6720,7 @@ def _apply_transform_to_selection(ctx: NarwhalContext, xform: r3.Transform):
             # a hole that was never asked for. See bridge.transform_geometry.
             old = fobj.Geometry
             try:
-                new = bridge.transform_geometry(old, xform)
+                new = bridge.transform_geometry(old, obj_xform)
             except bridge.NonUniformTransformError as e:
                 # never a wrong solid -- the object stays as it was, and says so
                 from .state import app_state
@@ -6718,11 +6733,23 @@ def _apply_transform_to_selection(ctx: NarwhalContext, xform: r3.Transform):
                     ctx.model.replace_geometry(fobj.Attributes.Id, new)
         if refused:
             continue
-        if mm is not None and hasattr(ob, "matrix_world"):
-            ob.matrix_world = mm @ ob.matrix_world
+        if obj_mm is not None and hasattr(ob, "matrix_world"):
+            ob.matrix_world = obj_mm @ ob.matrix_world
             bridge.note_display_changed(ob.name)
         moved.append(ob.name)
     return moved
+
+
+def _display_bbox_center(ob):
+    """World centre of a display object's bounding box, or None without one."""
+    corners = getattr(ob, "bound_box", None)
+    m = getattr(ob, "matrix_world", None)
+    if not corners or m is None:
+        return None
+    pts = [[sum(m[i][j] * c[j] for j in range(3)) + m[i][3] for i in range(3)]
+           for c in corners]
+    return r3.Point3d(*((min(p[i] for p in pts) + max(p[i] for p in pts)) / 2
+                        for i in range(3)))
 
 
 def apply_transform(ctx: NarwhalContext, xform):
@@ -7055,6 +7082,28 @@ class _AngleCmd(_TransformCmd):
 
     verb = "Rotated"
     ANGLE_PROMPT = "Angle or first reference point:"
+    #: The axis-defining points of the last committed rotation, per command name, for
+    #: `UseLastCenter` / `UseLastAxis` (this session only).
+    _last_axis_points = {}
+    #: The option that reuses them, and what it is called in a refusal.
+    _reuse_option, _reuse_noun = None, None
+
+    def on_mode(self, name, ctx):
+        if name != self._reuse_option:
+            return super().on_mode(name, ctx)
+        if self.step_index != 1:
+            return f"{self.name}: {name} answers the {self._reuse_noun} prompt", False
+        last = _AngleCmd._last_axis_points.get(self.name)
+        if last is None:
+            return f"{self.name}: there is no previous {self._reuse_noun} yet", False
+        self.args.extend(last)
+        self.step_index += len(last)
+        return None, False
+
+    def _commit(self, ctx, xform):
+        _AngleCmd._last_axis_points[self.name] = [
+            tuple(p) for p in self.args[1:1 + self._n_axis_args]]
+        return super()._commit(ctx, xform)
 
     def _parse_distance(self, text, ctx):
         stripped = (text or "").strip()
@@ -7104,7 +7153,8 @@ class RotateCmd(_AngleCmd):
     the centre; a positive angle is counterclockwise ("Positive angular measurement is
     counterclockwise", the command behavior). Prompts: "Center of rotation",
     "Angle or first reference point", "Second reference point" in the command UI.
-    Options: `Copy` built; `UseLastCenter` declared.
+    Options: `Copy` and `UseLastCenter` built (the centre of the last Rotate this
+    session answers the centre prompt).
     """
 
     name = "Rotate"
@@ -7119,6 +7169,7 @@ class RotateCmd(_AngleCmd):
                     help="Uses the previously selected center point for the rotation."),
     )
     _n_axis_args = 1
+    _reuse_option, _reuse_noun = "UseLastCenter", "center of rotation"
 
     def _axis_and_origin(self, args):
         return self._z, args[1]
@@ -7128,7 +7179,8 @@ class Rotate3DCmd(_AngleCmd):
     """`Rotate3D` -- the command behavior. steps: "Select the objects. Pick the
     start of the rotation axis. Pick the end of the rotation axis. Type the angle, or pick
     two reference points." Positive is right-handed about start -> end (the help
-    does not say). Options: `Copy` built; `SurfaceNormal`, `UseLastAxis`, `SubCrv`
+    does not say). Options: `Copy` and `UseLastAxis` built (the start and end of the
+    last Rotate3D axis this session answer both axis prompts); `SurfaceNormal`, `SubCrv`
     declared."""
 
     name = "Rotate3D"
@@ -7145,6 +7197,7 @@ class Rotate3DCmd(_AngleCmd):
         opts.Option("SubCrv", opts.MODE, help="Selects part of a curve as input."),
     )
     _n_axis_args = 2
+    _reuse_option, _reuse_noun = "UseLastAxis", "rotation axis"
 
     def _axis_and_origin(self, args):
         axis = cplane.normalize(_sub3(args[2], args[1]))
@@ -7241,6 +7294,43 @@ class _ScaleBase(_TransformCmd):
             return f
         return self._build(args, f)
 
+    @staticmethod
+    def _rigid(xform, geom, ob=None):
+        """`Rigid`: the translation that carries `geom`'s bounding-box centre where
+        `xform` would put it -- the object moves, its shape and size do not.
+
+        A display-only object (`geom` None) uses its display bounding box; one
+        with no box at all stays where it is."""
+        from . import analysis
+
+        if geom is not None:
+            lo, hi = analysis.bounding_box(geom)
+            c = r3.Point3d((lo.X + hi.X) / 2, (lo.Y + hi.Y) / 2, (lo.Z + hi.Z) / 2)
+        else:
+            c = _display_bbox_center(ob)
+            if c is None:
+                return _translation((0.0, 0.0, 0.0))
+        p = r3.Point3d(c.X, c.Y, c.Z)
+        p.Transform(xform)
+        return _translation((p.X - c.X, p.Y - c.Y, p.Z - c.Z))
+
+    def _commit(self, ctx, xform):
+        if not self.opt.get("Rigid"):
+            return super()._commit(ctx, xform)
+        # OURS (#61): an object's position is its bounding-box centre.
+        names = list(self.args[0]) if self.args and isinstance(self.args[0], list) else \
+            [o.name for o in ctx.selected_objects()]
+        if not names:
+            return "Nothing selected", True
+        if self.opt.get("Copy", False):
+            made = [n for n in (_duplicate_with_transform(
+                ctx, nm, self._rigid(xform, ctx.geom_by_name(nm)), self.name)
+                for nm in names) if n]
+            return f"Moved {len(made)} copy(ies) rigidly: {', '.join(made)}", True
+        moved = _apply_transform_to_selection(ctx, xform,
+                                              per_object=lambda g, o: self._rigid(xform, g, o))
+        return f"Moved {len(moved)} object(s) rigidly", True
+
 
 class ScaleCmd(_ScaleBase):
     name = "Scale"
@@ -7252,7 +7342,7 @@ class ScaleCmd(_ScaleBase):
              (_ScaleBase.FACTOR_PROMPT, DISTANCE)]
     options = (
         _copy_option(False),
-        opts.Option("Rigid", opts.MODE,
+        opts.Option("Rigid", opts.TOGGLE, default=False,
                     help="Individual objects will not change, only their positions."),
         opts.Option("SubCrv", opts.MODE, help="Selects part of a curve as input."),
     )
@@ -8202,7 +8292,9 @@ class MirrorCmd(_TransformCmd):
     Third point of mirror plane" in the command UI. Options built: `Copy` (default Yes --
     the mirror IMAGE, as before), `3Point`, `XAxis` ("across the CPlane x axis (xz
     plane)"), `YAxis` (yz plane), `ZAxis` ("across the CPlane (xy plane)") -- the last
-    three act at once, through the CPlane origin. Declared: `Object`, `SubCrv`.
+    three act at once, through the CPlane origin. `Object` ("Select a planar surface as
+    the mirror plane") asks for one planar surface after the selection and mirrors across
+    its exact plane; any other object is refused by name. Declared: `SubCrv`.
     """
 
     name = "Mirror"
@@ -8225,8 +8317,17 @@ class MirrorCmd(_TransformCmd):
     def __init__(self):
         super().__init__()
         self._three = False
+        self._object = False
 
     def on_mode(self, name, ctx):
+        if name == "Object":
+            if not self.args:
+                return "Mirror: select the objects before Object", False
+            if len(self.args) > 1:
+                return "Mirror: Object is chosen before the first plane point", False
+            self._object = True
+            self.steps[1:] = [("Select planar surface for the mirror plane:", OBJECTS)]
+            return None, False
         if name == "3Point":
             if len(self.args) > 1:
                 return "Mirror: 3Point is chosen before the first plane point", False
@@ -8243,7 +8344,24 @@ class MirrorCmd(_TransformCmd):
             return self._commit(ctx, _mirror_xform(tuple(p.origin), tuple(normal)))
         return super().on_mode(name, ctx)
 
+    def execute(self, ctx: NarwhalContext):
+        if not self._object:
+            return super().execute(ctx)
+        name = self.args[1]
+        geom = ctx.geom_by_name(name)
+        face = bridge.planar_face_shape(geom) if geom is not None else None
+        frame = bridge._occt().face_plane(face) if face is not None else None
+        if frame is None:
+            return f"Mirror: {name} is not a planar surface, so it gives no mirror plane", True
+        origin, _x, _y, normal = frame
+        x = _mirror_xform(tuple(origin), tuple(normal))
+        if x is None:
+            return f"Mirror: {name} gives no mirror plane", True
+        return self._commit(ctx, x)
+
     def _compute(self, args, live=False):
+        if self._object:
+            return None                       # resolved in `execute`, which has the ctx
         pts = args[1:]
         if self._three:
             if len(pts) < 3:

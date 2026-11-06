@@ -428,9 +428,166 @@ else:
     print("  skip  master rotation (no OCCT)")
 
 # ===========================================================================
+print("\n-- UseLastCenter / UseLastAxis (#61) --")
+commands._AngleCmd._last_axis_points.clear()
+c, msg, done = run(line_ctx((1, 0, 0), (2, 0, 0)), "rotate", ["UseLastCenter"])
+check(not done and "no previous center" in (msg or ""),
+      f"Rotate UseLastCenter before any Rotate is refused by name ({msg!r})")
+run(line_ctx((1, 0, 0), (2, 0, 0)), "rotate", ["5,5,0", "30"])     # remembers (5,5,0)
+ctx = line_ctx((6, 5, 0), (7, 5, 0))
+c, msg, done = run(ctx, "rotate", ["UseLastCenter", "90"])
+check(done and ends(ctx.geom_by_name("L")) == [(5, 6, 0), (5, 7, 0)],
+      f"Rotate UseLastCenter: 90 about the last centre (5,5): (6,5)-(7,5) -> (5,6)-(5,7) "
+      f"({ends(ctx.geom_by_name('L'))}, {msg!r})")
+ctx = line_ctx((6, 5, 0), (7, 5, 0))
+c, msg, done = run(ctx, "rotate", ["UseLastCenter", "180"])
+check(done and ends(ctx.geom_by_name("L")) == [(4, 5, 0), (3, 5, 0)],
+      "repeated UseLastCenter keeps the same centre")
+c, msg, done = run(line_ctx((1, 0, 0), (2, 0, 0)), "rotate", ["0,0,0", "UseLastCenter"])
+check(not done and "answers the center of rotation prompt" in (msg or ""),
+      f"UseLastCenter after the centre is refused by name ({msg!r})")
+c, msg, done = run(line_ctx((0, 1, 0), (0, 2, 0)), "rotate3d", ["UseLastAxis"])
+check(not done and "no previous rotation axis" in (msg or ""),
+      f"Rotate3D UseLastAxis before any Rotate3D is refused by name ({msg!r})")
+run(line_ctx((0, 1, 0), (0, 2, 0)), "rotate3d", ["0,0,3", "1,0,3", "10"])   # x axis at z=3
+ctx = line_ctx((0, 1, 3), (0, 2, 3))
+c, msg, done = run(ctx, "rotate3d", ["UseLastAxis", "90"])
+check(done and ends(ctx.geom_by_name("L")) == [(0, 0, 4), (0, 0, 5)],
+      f"Rotate3D UseLastAxis: 90 about the last axis (x through z=3): "
+      f"(0,1,3)-(0,2,3) -> (0,0,4)-(0,0,5) ({ends(ctx.geom_by_name('L'))}, {msg!r})")
+
+# ===========================================================================
+print("\n-- Scale Rigid (#61) --")
+
+
+def box_of(g):
+    lo, hi = analysis.bounding_box(g)
+    return tuple(round(v, 9) + 0.0 for v in (lo.X, lo.Y, lo.Z, hi.X, hi.Y, hi.Z))
+
+
+if ob.available():
+    for key, base, want_box, want_sphere in (
+            ("scale", "0,0,0", (1, 1, 1, 3, 3, 3), (19, -1, -1, 21, 1, 1)),
+            ("scale2d", "0,0,0", (1, 1, 0, 3, 3, 2), (19, -1, -1, 21, 1, 1))):
+        ctx = Ctx()
+        ctx.add(bridge.make_box((0, 0, 0), (2, 2, 0), 2.0), "Box")
+        ctx.add(bridge.make_sphere((10, 0, 0), 1.0), "Ball")
+        c, msg, done = run(ctx, key, ["Rigid=Yes", base, "2"])
+        gb, gs = ctx.geom_by_name("Box"), ctx.geom_by_name("Ball")
+        check(done and box_of(gb) == want_box and box_of(gs) == want_sphere
+              and "rigidly" in msg,
+              f"{key} Rigid x2 about 0: the box keeps size 2, its centre goes to "
+              f"{tuple((a + b) / 2 for a, b in zip(want_box[:3], want_box[3:]))}; the "
+              f"radius-1 ball moves to x=20 ({box_of(gb)}, {box_of(gs)}, {msg!r})")
+        recipe = bridge._kernel().recipe_of(gs) or {}
+        check(recipe.get("kind") == "sphere" and recipe.get("radius") == 1.0
+              and [round(v, 9) + 0.0 for v in recipe.get("xform", [])]
+              == [1, 0, 0, 20, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1],
+              f"{key} Rigid: the ball's exact recipe is a radius-1 sphere translated to "
+              f"x=20, never scaled ({recipe})")
+    ctx = Ctx()
+    ctx.add(bridge.make_box((0, 0, 0), (2, 2, 0), 2.0), "Box")
+    c, msg, done = run(ctx, "scale", ["Rigid=Yes", "Copy=Yes", "0,0,0", "3"])
+    copies = [o.Geometry for o in ctx.model.file.Objects if o.Attributes.Name != "Box"]
+    check(done and box_of(ctx.geom_by_name("Box")) == (0, 0, 0, 2, 2, 2) and len(copies) == 1
+          and box_of(copies[0]) == (2, 2, 2, 4, 4, 4),
+          f"Rigid with Copy leaves the original and adds a moved, unscaled copy ({msg!r})")
+    ctx = Ctx()
+    ctx.add(bridge.make_box((0, 0, 0), (2, 2, 0), 2.0), "Box")
+    run(ctx, "scale", ["0,0,0", "2"])
+    check(box_of(ctx.geom_by_name("Box")) == (0, 0, 0, 4, 4, 4), "without Rigid Scale still scales")
+else:
+    print("  skip  Scale Rigid (no OCCT)")
+
+
+# A mixed selection: display-only objects (no document row) before and after a
+# document object. Each must get its OWN rigid offset, from its display box --
+# not the unscaled matrix (first) nor the previous object's offset (after).
+class _Matrix:
+    """Just enough of mathutils.Matrix: row-major rows, `@`, and m[i][j]."""
+
+    def __init__(self, rows):
+        self.rows = [list(map(float, r)) for r in rows]
+
+    def __getitem__(self, i):
+        return self.rows[i]
+
+    def __matmul__(self, other):
+        return _Matrix([[sum(self[i][k] * other[k][j] for k in range(4)) for j in range(4)]
+                        for i in range(4)])
+
+
+def _translate(x, y, z):
+    return _Matrix([(1, 0, 0, x), (0, 1, 0, y), (0, 0, 1, z), (0, 0, 0, 1)])
+
+
+class DisplayObj(FakeObj):
+    def __init__(self, name, at):
+        super().__init__(name)
+        self.matrix_world = _translate(*at)
+        self.bound_box = [(x, y, z) for x in (0, 2) for y in (0, 2) for z in (0, 2)]
+
+
+class MixedCtx(Ctx):
+    def __init__(self):
+        super().__init__()
+        self.objs = []
+
+    def selected_objects(self):
+        return list(self.objs)
+
+
+sys.modules["mathutils"] = types.SimpleNamespace(Matrix=_Matrix)
+try:
+    ctx = MixedCtx()
+    ctx.model.add_object(r3.LineCurve(r3.Point3d(0, 0, 0), r3.Point3d(2, 2, 2)), "L", 0)
+    ghost_first, ghost_after = DisplayObj("GhostA", (10, 0, 0)), DisplayObj("GhostB", (0, 10, 0))
+    ctx.objs = [ghost_first, FakeObj("L"), ghost_after]
+    c, msg, done = run(ctx, "scale", ["Rigid=Yes", "0,0,0", "2"])
+    check(done and ends(ctx.geom_by_name("L")) == [(1, 1, 1), (3, 3, 3)],
+          f"mixed Rigid: the document line moves by (1,1,1), unscaled "
+          f"({ends(ctx.geom_by_name('L'))}, {msg!r})")
+    # GhostA's box centre (11,1,1) goes to (22,2,2); GhostB's (1,11,1) to (2,22,2).
+    check(ghost_first.matrix_world.rows == _translate(21, 1, 1).rows,
+          f"a display-only object FIRST gets its own offset, not the x2 matrix "
+          f"({ghost_first.matrix_world.rows})")
+    check(ghost_after.matrix_world.rows == _translate(1, 21, 1).rows,
+          f"a display-only object AFTER a document row gets its own offset, not the "
+          f"previous object's ({ghost_after.matrix_world.rows})")
+finally:
+    del sys.modules["mathutils"]
+
+# ===========================================================================
+print("\n-- Mirror Object (#61) --")
+if ob.available():
+    def mirror_ctx():
+        ctx = line_ctx((1, 2, 0), (2, 3, 0))
+        wall = bridge.make_planar_srf([bridge.make_rectangle((0, 0, 0), (4, 0, 4),
+                                                             plane=cplane.WORLD_FRONT)])
+        ctx.model.add_object(wall[0] if isinstance(wall, (list, tuple)) else wall, "Wall", 0)
+        ctx.model.add_object(bridge.make_sphere((0, 9, 0), 1.0), "Ball", 0)
+        return ctx
+
+    ctx = mirror_ctx()
+    c, msg, done = run(ctx, "mirror", ["Copy=No", "Object", "Wall"])
+    check(done and ends(ctx.geom_by_name("L")) == [(1, -2, 0), (2, -3, 0)],
+          f"Mirror Object: across the planar surface's plane y=0, beyond its edges "
+          f"({ends(ctx.geom_by_name('L'))}, {msg!r})")
+    ctx = mirror_ctx()
+    c, msg, done = run(ctx, "mirror", ["Copy=No", "Object", "Ball"])
+    check(done and "Ball is not a planar surface" in msg
+          and ends(ctx.geom_by_name("L")) == [(1, 2, 0), (2, 3, 0)],
+          f"Mirror Object with a sphere is refused by name, nothing moves ({msg!r})")
+    ctx = mirror_ctx()
+    c, msg, done = run(ctx, "mirror", ["0,0,0", "Object"])
+    check(not done and "before the first plane point" in (msg or ""),
+          f"Object after a plane point is refused by name ({msg!r})")
+else:
+    print("  skip  Mirror Object (no OCCT)")
+
+# ===========================================================================
 print("\n-- options the help lists and we do not build still say so --")
-for key, opt in (("rotate", "UseLastCenter"), ("rotate3d", "SurfaceNormal"),
-                 ("scale", "Rigid"), ("mirror", "Object"), ("move", "Normal")):
+for key, opt in (("rotate3d", "SurfaceNormal"), ("move", "Normal")):
     ctx = line_ctx((0, 0, 0), (1, 0, 0))
     c = start(ctx, key)
     m, _d = c.feed(opt, ctx) if c else ("(no command)", True)
