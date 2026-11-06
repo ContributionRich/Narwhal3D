@@ -35,6 +35,7 @@ catches an arg-index misalignment from prepending the object step. The real
 Blender bake of Array/ArrayPolar/Mirror is also covered by spike/addon_e2e.py.
 """
 import importlib.util
+import math
 import os
 import sys
 import types
@@ -315,6 +316,79 @@ check(any(p == "Length:" for p, _k in cmd.steps),
 msg, done = cmd.feed("2.5", ctx)
 check(done is True and len(ctx.added) == 5,
       f"Divide: Length=2.5 on a 10-unit line -> 5 points ({len(ctx.added)})")
+
+# -- Divide Split / DeleteRemainder / MarkEnds / GroupOutput (#49) -------------
+
+
+def divide_run(lines, curve=None):
+    cmd = fresh("divide")
+    ctx = FakeCtx()
+    ctx.add_input(curve if curve is not None else a_line((0, 0, 0), (10, 0, 0)), "L1")
+    cmd.begin(ctx)
+    msg, done = None, False
+    for line in lines:
+        msg, done = cmd.feed(line, ctx)
+        if done:
+            break
+    return ctx, msg, done
+
+
+def curve_lengths(ctx):
+    import importlib
+    arclength = importlib.import_module("narwhal3d.arclength")
+    return [arclength.length_of(g) for g, base, _l, _d in ctx.added if base == "Curve"]
+
+
+ctx, msg, done = divide_run(["Split=Yes", "5"])
+lens = curve_lengths(ctx)
+check(done and len(lens) == 5 and all(abs(x - 2.0) < 1e-9 for x in lens)
+      and ctx.geom_by_name("L1") is None and not any(b == "Divide" for _g, b, _l, _d in ctx.added),
+      f"Divide Split, count 5 on a 10-unit line: five exact pieces of 2, the line replaced "
+      f"({lens}, {msg!r})")
+
+ctx, msg, done = divide_run(["Split=Yes", "DeleteRemainder=Yes", "Length", "3"])
+lens = curve_lengths(ctx)
+check(done and len(lens) == 3 and all(abs(x - 3.0) < 1e-9 for x in lens)
+      and "deleted the shorter remainder" in msg,
+      f"Divide Split Length 3 + DeleteRemainder: three pieces of 3, remainder deleted "
+      f"({lens}, {msg!r})")
+ctx, msg, done = divide_run(["Split=Yes", "Length", "3"])
+lens = curve_lengths(ctx)
+check(done and sorted(round(x, 9) for x in lens) == [1.0, 3.0, 3.0, 3.0],
+      f"Divide Split Length 3 without DeleteRemainder keeps the 1-unit remainder ({lens})")
+ctx, msg, done = divide_run(["Split=Yes", "DeleteRemainder=Yes", "5"])
+check(done and len(curve_lengths(ctx)) == 5 and "deleted" not in msg,
+      f"Divide Split by count never deletes a piece ({msg!r})")
+
+circle = bridge.make_circle((0, 0, 0), 2.0)
+ctx, msg, done = divide_run(["Split=Yes", "4"], circle)
+lens = curve_lengths(ctx)
+check(done and len(lens) == 4 and all(abs(x - math.pi) < 1e-6 for x in lens),
+      f"Divide Split, count 4 on a closed circle: four equal arcs ({lens})")
+
+ctx, msg, done = divide_run(["Split=Yes", "EqualChordLength", "3"])
+check(done and "not implemented yet" in msg and ctx.geom_by_name("L1") is not None,
+      f"Divide Split with EqualChordLength is refused by name ({msg!r})")
+
+ctx, msg, done = divide_run(["MarkEnds=Yes", "Split=Yes", "2"])
+ends = sorted((g.Location.X, g.Location.Y, g.Location.Z)
+              for g, base, _l, _d in ctx.added if base == "Divide")
+check(done and ends == [(0.0, 0.0, 0.0), (10.0, 0.0, 0.0)],
+      f"Divide MarkEnds on an open line: points exactly at both ends ({ends})")
+ctx, msg, done = divide_run(["MarkEnds=Yes", "Split=Yes", "3"], bridge.make_circle((0, 0, 0), 2.0))
+check(done and sum(1 for _g, b, _l, _d in ctx.added if b == "Divide") == 1,
+      "Divide MarkEnds on a closed curve: one point, its ends coincide")
+ctx, msg, done = divide_run(["MarkEnds=Yes", "4"])
+check(done and sum(1 for _g, b, _l, _d in ctx.added if b == "Divide") == 5,
+      "Divide MarkEnds with point output adds nothing where a division point already is")
+
+ctx, msg, done = divide_run(["GroupOutput=Yes", "MarkEnds=Yes", "Split=Yes", "3"])
+groups = {tuple(f.Attributes.GetGroupList2() or []) for f in ctx.model.file.Objects}
+check(done and len(ctx.model.file.Groups) == 1 and groups == {(0,)}
+      and len(ctx.model.file.Objects) == 5 and "grouped 5 object(s)" in msg,
+      f"Divide GroupOutput: the 3 pieces and 2 end points are in one new group ({msg!r})")
+ctx, msg, done = divide_run(["4"])
+check(len(ctx.model.file.Groups) == 0, "Divide without GroupOutput makes no group")
 
 
 # ===========================================================================
