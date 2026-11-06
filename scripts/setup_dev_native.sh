@@ -135,6 +135,11 @@ OCCT_LIBS="$PATCHED/5.2/python/lib/python3.13/site-packages/cadquery_ocp_novtk.l
 NARWHAL_OCCT_SOURCE_DIR="$OCCT_SOURCE" NARWHAL_OCCT_LIB_DIR="$OCCT_LIBS" LD_LIBRARY_PATH="$OCCT_LIBS" \
   cargo +"$TOOLCHAIN" build --release --locked --manifest-path "$ROOT/native/geometry_core/Cargo.toml"
 
+step "Welcome window (staged in artifacts/welcome)"
+cargo +"$TOOLCHAIN" build --release --locked --manifest-path "$ROOT/native/welcome/Cargo.toml"
+mkdir -p "$ROOT/artifacts/welcome/linux-x86_64"
+cp "$ROOT/native/welcome/target/release/narwhal-welcome" "$ROOT/artifacts/welcome/linux-x86_64/"
+
 step "Automation library and server (staged in artifacts/automation)"
 cargo +"$TOOLCHAIN" build --release --locked --manifest-path "$ROOT/native/automation_core/Cargo.toml"
 mkdir -p "$ROOT/artifacts/automation/linux-x86_64"

@@ -153,6 +153,11 @@ check(all(name in setup for name in ids), "setup_dev_native.sh fetches every dev
 check("OCCT_REVISION=b8f597c677811d1f9f4d8a97f5ae2825c0353a42" in setup
       and 'if [[ ! -x "$PATCHED/blender" ]]' in setup,
       "setup pins the OCCT revision and never replaces an existing patched runtime")
+welcome_dest = 'artifacts/welcome/linux-x86_64/'
+check("native/welcome/Cargo.toml" in setup and welcome_dest in setup
+      and f'WELCOME="${{ROOT}}/{welcome_dest.replace("linux-x86_64/", "${runtime_platform}-${runtime_arch}/")}narwhal-welcome"'
+      in (ROOT / "narwhal3d.sh").read_text(encoding="utf-8"),
+      "setup stages the welcome window where the launcher looks for it")
 self_check = subprocess.run([str(ROOT / "scripts/setup_dev_native.sh"), "--self-check"],
                             capture_output=True, text=True)
 check(self_check.returncode == 0 and "self-check: OK" in self_check.stdout,
