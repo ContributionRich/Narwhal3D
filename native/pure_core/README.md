@@ -16,6 +16,7 @@ Current production routing:
 | calculator | Rust | about 2.5× faster |
 | coordinate parsing | Rust | about 1.05× faster |
 | macro tokenize / plan | Rust only at 240 / 192 UTF-8 bytes | long workloads measured 1.32× / 1.58× faster |
+| closed (periodic) curve interpolation | Rust from 3 points | 1.4× faster end to end at 4 points, 3.3× at 64 |
 | STL decode API | Python | generic triangle-tuple reshaping was 24.9% slower |
 | STL Import parse+weld | Rust at ≥50 kB | fused indexed output measured 3.8–4.3× faster at 1k–100k triangles |
 | OBJ encode | Python | native path was 2.18× slower |

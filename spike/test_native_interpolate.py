@@ -34,5 +34,17 @@ for style in interp.KNOT_STYLES:
 for k,width,reps in ((8,8,100),(16,16,30),(32,32,5)):
  data=sections(k,width);interp.NATIVE_SKIN_MIN_VALUES=0;nt=best(lambda:interp.skin_control_net(data,3,"Chord"),reps);interp.NATIVE_SKIN_MIN_VALUES=10**9;pt=best(lambda:interp.skin_control_net(data,3,"Chord"),reps);ratio=nt/pt;print(f"  [perf] skin values={k*width} native={nt:.5f}s python={pt:.5f}s ratio={ratio:.3f}");check(ratio<=.90,f"native skinning wins by 10% at {k*width} points")
 interp.NATIVE_SKIN_MIN_VALUES=64;native._reset_for_tests();before=native._native_skin_calls;interp.skin_control_net(sections(8,8),3,"Chord");check(native._native_skin_calls==before+1,"production skinning routes through Rust at crossover")
+# closed (periodic) interpolation, #43: Rust and Python agree, and Rust is routed
+def ring(n):return [(math.cos(2*math.pi*k/n)*(10+3*math.sin(k*1.7)),math.sin(2*math.pi*k/n)*(10+2*math.cos(k*.9)),math.sin(k*.4)) for k in range(n)]
+for style in interp.KNOT_STYLES:
+ for n in (3,6,40):
+  data=ring(n);interp.NATIVE_PERIODIC_MIN_POINTS=10**9;want=interp.interpolate_points_periodic(data,style);got=native.interpolate_periodic(data,style)
+  error=max(abs(a-b) for pa,pb in zip(want[0],got[0]) for a,b in zip(pa,pb)) if got else math.inf;kerror=max(abs(a-b) for a,b in zip(want[1],got[1])) if got else math.inf
+  check(got is not None and got[2]==3 and len(got[0])==n+3 and len(got[1])==n+7 and error<1e-9 and kerror<1e-12,f"native closed {style} n={n} matches Python ({error:.1e})")
+check(native.interpolate_periodic(ring(2),"Chord") is None and native.interpolate_periodic(ring(5)+[ring(5)[0]],"Chord") is None,"native closed refuses two points and a repeated first point")
+interp.NATIVE_PERIODIC_MIN_POINTS=3;native._reset_for_tests();interp.interpolate_points_periodic(ring(4),"Chord");check(native._native_periodic_calls==1,"production closed interpolation routes through Rust from 3 points")
+for n,reps in ((4,400),(16,200),(64,50)):
+ p=ring(n);interp.NATIVE_PERIODIC_MIN_POINTS=3;nt=best(lambda:interp.interpolate_points_periodic(p,"Chord"),reps);interp.NATIVE_PERIODIC_MIN_POINTS=10**9;pt=best(lambda:interp.interpolate_points_periodic(p,"Chord"),reps);ratio=nt/pt;print(f"  [perf] closed interpolate n={n} native={nt:.5f}s python={pt:.5f}s ratio={ratio:.3f}");check(ratio<=.90,f"native closed interpolation wins by 10% at {n} points")
+interp.NATIVE_PERIODIC_MIN_POINTS=3
 for ok,label in checks:print(f"[{'PASS' if ok else 'FAIL'}] {label}")
 failed=sum(not x for x,_ in checks);print(f"\n{len(checks)-failed}/{len(checks)} passed");raise SystemExit(1 if failed else 0)
