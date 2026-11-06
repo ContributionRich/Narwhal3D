@@ -88,7 +88,40 @@ const SUFFIX_MM: [(&str, f64); 33] = [
     ("miles", 1_609_344.0),
 ];
 
-/// Millimetres per canonical model unit, case-insensitive.
+/// Millimetres per unit for every fixed-scale unit system, keyed by the canonical
+/// `UnitSystem` member name. This is the ONE definition of these scales:
+/// `narwhal3d/units.py` reads it through `narwhal_pure_core_unit_table` (its own
+/// literal is only the no-library fallback, checked equal by
+/// `spike/test_native_unit_table.py`), and `model_mm` below reads it too.
+pub const UNIT_SYSTEM_MM: [(&str, f64); 24] = [
+    ("Angstroms", 1e-7),
+    ("Nanometers", 1e-6),
+    ("Microns", 1e-3),
+    ("Millimeters", 1.0),
+    ("Centimeters", 10.0),
+    ("Decimeters", 100.0),
+    ("Meters", 1000.0),
+    ("Dekameters", 10_000.0),
+    ("Hectometers", 100_000.0),
+    ("Kilometers", 1_000_000.0),
+    ("Megameters", 1_000_000_000.0),
+    ("Gigameters", 1_000_000_000_000.0),
+    ("Microinches", 25.4e-6),
+    ("Mils", 25.4e-3),
+    ("Inches", 25.4),
+    ("Feet", 304.8),
+    ("Yards", 914.4),
+    ("Miles", 1_609_344.0),
+    ("PrinterPoints", 25.4 / 72.0),
+    ("PrinterPicas", 25.4 / 12.0),
+    ("NauticalMiles", 1_852_000.0),
+    ("AstronomicalUnits", 1.495978707e11),
+    ("LightYears", 9.4607304725808e15),
+    ("Parsecs", 3.085677581491367e16),
+];
+
+/// The unit systems a typed length may name as its MODEL unit (case-insensitive).
+/// Their scales come from `UNIT_SYSTEM_MM`.
 const MODEL_UNITS: [&str; 9] = [
     "millimeters",
     "centimeters",
@@ -157,22 +190,61 @@ pub(crate) fn suffix_mm(suffix: &str) -> Option<f64> {
 
 /// Look up a model unit (case-insensitive) in `MODEL_UNITS`.
 pub(crate) fn model_mm(unit: &str) -> Option<f64> {
-    let name = unit.to_ascii_lowercase();
-    let mm = match name.as_str() {
-        "millimeters" => 1.0,
-        "centimeters" => 10.0,
-        "meters" => 1000.0,
-        "kilometers" => 1_000_000.0,
-        "microns" => 0.001,
-        "inches" => 25.4,
-        "feet" => 304.8,
-        "yards" => 914.4,
-        "miles" => 1_609_344.0,
-        _ => return None,
+    if !MODEL_UNITS.iter().any(|name| eq_ci(name, unit)) {
+        return None;
+    }
+    unit_system_mm(unit)
+}
+
+/// Millimetres per `unit` (case-insensitive) from `UNIT_SYSTEM_MM`.
+pub fn unit_system_mm(unit: &str) -> Option<f64> {
+    UNIT_SYSTEM_MM
+        .iter()
+        .find(|(name, _)| eq_ci(name, unit))
+        .map(|(_, mm)| *mm)
+}
+
+/// Copy `UNIT_SYSTEM_MM` out: names as `\n`-separated ASCII, scales in the same order.
+///
+/// `out_names_len` and `out_count` always receive the sizes the full table needs;
+/// with too little capacity nothing else is written and `-3` is returned.
+///
+/// # Safety
+/// `names` is writable for `names_capacity` bytes, `values` for `values_capacity`
+/// values, and both outputs are writable.
+#[no_mangle]
+pub unsafe extern "C" fn narwhal_pure_core_unit_table(
+    names: *mut u8,
+    names_capacity: usize,
+    values: *mut f64,
+    values_capacity: usize,
+    out_names_len: *mut u64,
+    out_count: *mut u64,
+) -> i32 {
+    if out_names_len.is_null() || out_count.is_null() {
+        return -1;
+    }
+    let joined = UNIT_SYSTEM_MM
+        .iter()
+        .map(|(name, _)| *name)
+        .collect::<Vec<_>>()
+        .join("\n");
+    *out_names_len = joined.len() as u64;
+    *out_count = UNIT_SYSTEM_MM.len() as u64;
+    if names_capacity < joined.len() || values_capacity < UNIT_SYSTEM_MM.len() {
+        return -3;
+    }
+    let (Some(name_out), Some(value_out)) = (
+        crate::checked_slice_mut(names, joined.len()),
+        crate::checked_slice_mut(values, UNIT_SYSTEM_MM.len()),
+    ) else {
+        return -1;
     };
-    // Keep the table in one place for the "is this a known unit" check.
-    debug_assert!(MODEL_UNITS.contains(&name.as_str()), "unit table drift");
-    Some(mm)
+    name_out.copy_from_slice(joined.as_bytes());
+    for (slot, (_, mm)) in value_out.iter_mut().zip(UNIT_SYSTEM_MM.iter()) {
+        *slot = *mm;
+    }
+    0
 }
 
 /// Parse a mixed number `whole-num/den` (e.g. `1-3/4`). All three parts are
@@ -631,5 +703,59 @@ mod tests {
             unsafe { narwhal_pure_core_number(b"1".as_ptr(), 1, out) },
             NP_OUT
         );
+    }
+
+    #[test]
+    fn model_units_keep_their_scales_from_the_unit_table() {
+        let expected = [
+            ("millimeters", 1.0),
+            ("centimeters", 10.0),
+            ("meters", 1000.0),
+            ("kilometers", 1_000_000.0),
+            ("microns", 0.001),
+            ("inches", 25.4),
+            ("feet", 304.8),
+            ("yards", 914.4),
+            ("miles", 1_609_344.0),
+        ];
+        for (name, mm) in expected {
+            assert_eq!(model_mm(name), Some(mm), "{name}");
+            assert_eq!(model_mm(&name.to_ascii_uppercase()), Some(mm), "{name}");
+        }
+        // Units in the table that are not model units stay rejected as model units.
+        assert_eq!(model_mm("Parsecs"), None);
+        assert_eq!(unit_system_mm("parsecs"), Some(3.085677581491367e16));
+    }
+
+    #[test]
+    fn unit_table_export_reports_sizes_and_copies_the_table() {
+        let (mut names_len, mut count) = (0_u64, 0_u64);
+        let rc = unsafe {
+            narwhal_pure_core_unit_table(
+                std::ptr::null_mut(),
+                0,
+                std::ptr::null_mut(),
+                0,
+                &mut names_len,
+                &mut count,
+            )
+        };
+        assert_eq!((rc, count), (-3, 24));
+        let mut names = vec![0_u8; names_len as usize];
+        let mut values = vec![0.0_f64; 24];
+        let rc = unsafe {
+            narwhal_pure_core_unit_table(
+                names.as_mut_ptr(),
+                names.len(),
+                values.as_mut_ptr(),
+                values.len(),
+                &mut names_len,
+                &mut count,
+            )
+        };
+        assert_eq!(rc, 0);
+        let text = String::from_utf8(names).unwrap();
+        let pairs: Vec<(&str, f64)> = text.split('\n').zip(values).collect();
+        assert_eq!(pairs, UNIT_SYSTEM_MM.to_vec());
     }
 }

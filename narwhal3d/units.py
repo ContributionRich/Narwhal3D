@@ -71,7 +71,12 @@ RUNTIME_UNITS = frozenset({"CustomUnits"})
 #:   astronomical unit, lightyear, parsec -- their IAU values (the lightyear and
 #:     parsec use the exact metre values of the second and the light-year);
 #:     see each inline note.
-UNIT_SCALE_MM = {
+#:
+#: The ONE definition of these scales is Rust's ``UNIT_SYSTEM_MM``
+#: (``native/pure_core/src/numparse.rs``), which the typed-length parser also reads.
+#: This literal is the fallback for when the pure-core library is not loaded;
+#: ``spike/test_native_unit_table.py`` fails if the two ever differ.
+_PYTHON_UNIT_SCALE_MM = {
     "Angstroms":        1e-7,        # 1e-10 m
     "Nanometers":       1e-6,        # 1e-9 m
     "Microns":          1e-3,        # 1e-6 m (a micron is a micrometre)
@@ -97,6 +102,22 @@ UNIT_SCALE_MM = {
     "LightYears":       9.4607304725808e15, # c * 1 Julian year (m) * 1000
     "Parsecs":          3.0856775814913673e16, # 1 pc (m) * 1000
 }
+
+
+def _unit_scales():
+    """``(scales, source)``: Rust's unit table when it loads and names exactly these
+    units, else the Python copy. Every name keeps its place in the Python order."""
+    try:
+        from . import native_pure
+        table = native_pure.unit_table()
+    except Exception:  # noqa: BLE001 -- loaded outside the package, or no library
+        table = None
+    if table is None or set(table) != set(_PYTHON_UNIT_SCALE_MM):
+        return dict(_PYTHON_UNIT_SCALE_MM), "python"
+    return {name: table[name] for name in _PYTHON_UNIT_SCALE_MM}, "rust"
+
+
+UNIT_SCALE_MM, UNIT_SCALE_SOURCE = _unit_scales()
 
 #: Angle-unit factors, in RADIANS per one unit. Degrees is the base the reference CAD application
 #: assumes when an angle is typed with no unit ("If no units are specified,

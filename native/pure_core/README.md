@@ -28,6 +28,11 @@ Current production routing:
 The slower Rust implementations remain directly tested for correctness and future ABI work,
 but they are not allowed to slow production.
 
+Unit scales have one definition: `UNIT_SYSTEM_MM` in `src/numparse.rs` (all 24 fixed-scale
+unit systems). The typed-length parser's model units read it, and `narwhal3d/units.py` builds
+`UNIT_SCALE_MM` from it through `narwhal_pure_core_unit_table`; its Python literal is only the
+no-library fallback, held identical by `spike/test_native_unit_table.py`.
+
 The CPython adapter is `narwhal3d/native_pure.py`. It loads the crate only from
 the `NARWHAL_PURE_CORE` environment path or an adjacent packaged slot. Every active
 native route has a complete Python fallback. The crate is an opt-in production
