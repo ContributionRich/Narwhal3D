@@ -6,6 +6,7 @@ import hashlib
 import importlib.util
 import inspect
 import json
+import os
 import re
 import runpy
 import shutil
@@ -663,6 +664,12 @@ with tempfile.TemporaryDirectory(prefix="narwhal_windows_verifier_test_") as tem
               "exact-save helper install refuses a copy that differs from its verified record")
 
         if shutil.which("x86_64-w64-mingw32-g++") and shutil.which("wine"):
+            # A private Wine prefix: the check must neither depend on nor write to the
+            # user's default prefix (which may not exist, or be redirected away on purpose:
+            # with ~/.wine -> /dev/null wine exits 1 before running anything).
+            saved_wine_env = {k: os.environ.get(k) for k in ("WINEPREFIX", "WINEDEBUG")}
+            os.environ["WINEPREFIX"] = str(assembly / "wine-prefix")
+            os.environ["WINEDEBUG"] = "-all"
             wine_dir = assembly / "wine"
             wine_dir.mkdir()
             source_text = ('#include <cstdio>\n#include <cstring>\n'
@@ -688,6 +695,12 @@ with tempfile.TemporaryDirectory(prefix="narwhal_windows_verifier_test_") as tem
             (wrong_dir / assembler.EXACT_SAVE_LICENSE_NAME).write_text("license\n", encoding="utf-8")
             check(refuses(lambda: assembler.validate_exact_save_helper(wrong_dir), assembler.AssemblyError),
                   "Windows assembler refuses an executed exact-save helper with the wrong protocol")
+            subprocess.run(["wineserver", "-k"], check=False, timeout=60, capture_output=True)
+            for key, value in saved_wine_env.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
         else:
             print("  SKIP  wine execution of the exact-save helper (mingw or wine unavailable)")
 
