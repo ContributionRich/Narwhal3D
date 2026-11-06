@@ -153,6 +153,15 @@ def _binding():
                 except AttributeError:
                     pass
                 try:
+                    gumball_distances = library.narwhal_gumball_polyline_distances_f64
+                    gumball_distances.argtypes = [
+                        _DoubleP, _DoubleP, ctypes.c_size_t, _UInt64P, ctypes.c_size_t,
+                        ctypes.c_double, ctypes.c_double, _DoubleP, _DoubleP,
+                    ]
+                    gumball_distances.restype = ctypes.c_int
+                except AttributeError:
+                    pass
+                try:
                     aabb_rects = library.narwhal_screen_rects_from_aabbs_f64
                     aabb_rects.argtypes = [
                         _DoubleP, _DoubleP, _DoubleP, ctypes.c_size_t,
@@ -1197,6 +1206,53 @@ def nearest_screen_polyline(pixels, visible, offsets, mouse, max_distance):
         return int(curve_index.value), float(distance.value)
     except Exception as exc:  # noqa: BLE001 -- optimization failure preserves hover
         _status = f"native selection screen-polyline query raised: {exc}"
+        return None
+
+
+def gumball_polyline_distances(points, offsets, matrix, width, height, mouse):
+    """Each packed world polyline's Gumball hit distance in pixels, or ``None``.
+
+    Rust projects every point as ``ui._project_2d`` does and scores the result as
+    ``gumball.polyline_distance_2d`` does: points that do not project are dropped and
+    their neighbours joined, and fewer than two projected points scores ``inf``.
+    ``points`` is ``(N, 3)`` and ``offsets`` the ``curve_count + 1`` point offsets.
+    ``None`` requests the Python projection and distance path.
+    """
+    global _status
+    binding = _binding()
+    if binding is None:
+        return None
+    library, *_unused, path = binding
+    query = getattr(library, "narwhal_gumball_polyline_distances_f64", None)
+    if query is None:
+        _status = f"native selection Gumball distance query unavailable: {path}"
+        return None
+    try:
+        import numpy as np
+
+        view = np.ascontiguousarray(matrix, dtype=np.float64)
+        packed = np.ascontiguousarray(points, dtype=np.float64)
+        packed_offsets = np.ascontiguousarray(offsets, dtype=np.uint64)
+        cursor = np.ascontiguousarray(mouse, dtype=np.float64)
+        if (view.shape != (4, 4) or packed.ndim != 2 or packed.shape[1:] != (3,)
+                or packed_offsets.ndim != 1 or len(packed_offsets) < 1
+                or cursor.shape != (2,)):
+            _status = "native selection input rejected: Gumball arrays have the wrong shape"
+            return None
+        count = len(packed_offsets) - 1
+        distances = np.empty(count, dtype=np.float64)
+        code = query(
+            view.ctypes.data_as(_DoubleP), packed.ctypes.data_as(_DoubleP), len(packed),
+            packed_offsets.ctypes.data_as(_UInt64P), count, float(width), float(height),
+            cursor.ctypes.data_as(_DoubleP), distances.ctypes.data_as(_DoubleP),
+        )
+        if code != 0 or bool(np.isnan(distances).any()) or bool((distances < 0.0).any()):
+            _status = f"native selection Gumball distance query failed with code {code}: {path}"
+            return None
+        _status = f"ready: {path}"
+        return distances
+    except Exception as exc:  # noqa: BLE001 -- optimization failure preserves picking
+        _status = f"native selection Gumball distance query raised: {exc}"
         return None
 
 

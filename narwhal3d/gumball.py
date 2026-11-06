@@ -1049,6 +1049,39 @@ def build(origin, plane, size, view_dir=None, proportions=None,
     return handles
 
 
+#: How many distinct widgets :func:`build_cached` remembers (one per pane is typical).
+_BUILD_CACHE_SIZE = 8
+_build_cache = {}
+
+
+def build_cached(origin, plane, size, view_dir=None, extrude=False):
+    """:func:`build`, returning the SAME handle list while its inputs are unchanged.
+
+    The widget is rebuilt on every hover and press, and the build was about 80% of
+    the time spent per mouse move (811 of 1000 us measured with a 15-handle widget),
+    though it only changes when the frame, zoom, view or proportions do. The key is
+    every input `build` reads, including a snapshot of :data:`PROPORTIONS`. Handles
+    are never mutated after building, so sharing them is safe; the stable identity
+    also lets `ui` reuse the packed hit-test arrays. Inputs that cannot be keyed
+    fall back to a plain build.
+    """
+    try:
+        key = (tuple(map(float, origin)),
+               tuple(tuple(map(float, axis)) for axis in plane_axes(plane)),
+               float(size), None if view_dir is None else tuple(map(float, view_dir)),
+               bool(extrude), tuple(PROPORTIONS.items()))
+        hash(key)
+    except (TypeError, ValueError, AttributeError):
+        return build(origin, plane, size, view_dir=view_dir, extrude=extrude)
+    handles = _build_cache.pop(key, None)
+    if handles is None:
+        handles = build(origin, plane, size, view_dir=view_dir, extrude=extrude)
+        while len(_build_cache) >= _BUILD_CACHE_SIZE:
+            _build_cache.pop(next(iter(_build_cache)))
+    _build_cache[key] = handles
+    return handles
+
+
 # ---------------------------------------------------------------------------
 # hit-testing (2-D, because that is where the cursor lives)
 # ---------------------------------------------------------------------------
@@ -1133,11 +1166,23 @@ def pick(projected, mouse, tolerance=PICK_TOLERANCE_PX, size_px=None):
     """
     if mouse is None:
         return None
+    return pick_scored(
+        [(handle, min((polyline_distance_2d(mouse, pl) for pl in (polylines or [])),
+                      default=math.inf))
+         for handle, polylines in projected or []],
+        tolerance, size_px)
+
+
+def pick_scored(scored, tolerance=PICK_TOLERANCE_PX, size_px=None):
+    """:func:`pick`'s choice from ``(handle, distance)`` pairs in :func:`build` order.
+
+    The distance is the handle's nearest hot polyline in pixels (``inf`` for none).
+    `ui` gets these from `selection_core` when it is loaded; the tolerances and the
+    earlier-handle tie-break stay here so both paths choose identically.
+    """
     menu_tol = menu_pick_tolerance_px(size_px)
     best, best_d, best_tol = None, math.inf, tolerance
-    for handle, polylines in projected or []:
-        d = min((polyline_distance_2d(mouse, pl) for pl in (polylines or [])),
-                default=math.inf)
+    for handle, d in scored:
         tol = menu_tol if handle.kind == MENU else tolerance
         # Compare each candidate against ITS OWN tolerance before letting it win,
         # not afterwards. Picking the globally-nearest handle and only then testing

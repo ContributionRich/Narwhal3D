@@ -337,6 +337,7 @@ REQUIRED = {
     "spike/test_native_selection.py",
     "spike/test_selection_core_packaging.py",
     "spike/test_pick_candidates.py",
+    "spike/test_gumball_native_pick.py",
     "spike/test_selection_menu.py",
     "spike/test_selection_menu_gui.py",
     "spike/test_ai_ui_workflow_gui.py",
