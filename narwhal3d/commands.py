@@ -6065,7 +6065,9 @@ class OffsetSrfCmd(Command):
     between all of the matching edges") EXACTLY for a single surface -- OCCT
     MakeThickSolidBySimple; "When a plane, torus, sphere, open cylinder, or open cone surface
     is offset, the resulting surface is exact". Solid=No (the offset surface alone) uses the
-    existing `offset.surface_offset`. Declared, not built: Corner, ThroughPoint, FlipAll,
+    existing `offset.surface_offset`. `ThroughPoint` (at the flip prompt) asks for a point
+    and offsets by its signed distance from the surface along the normal at the closest
+    point, without changing the sticky Distance. Declared, not built: Corner, FlipAll,
     Loose, Tolerance, BothSides. Polysurfaces are refused by name. Solid defaults No
     (the help gives no default), DeleteInput No."""
     name = "OffsetSrf"
@@ -6105,8 +6107,15 @@ class OffsetSrfCmd(Command):
         super().__init__()
         self.opt["Distance"] = OffsetSrfCmd._sticky_distance[0]
         self._flip = False
+        self._through = False
 
     def on_mode(self, name, ctx):
+        if name == "ThroughPoint":
+            if self.step_index != 1:
+                return "OffsetSrf: choose ThroughPoint after selecting the surface", False
+            self._through = True
+            self.steps[1] = ("Point to offset through:", POINT)
+            return None, False
         if name == "FlipAll":
             self._flip = not self._flip
             return None, False
@@ -6114,7 +6123,7 @@ class OffsetSrfCmd(Command):
 
     def _feed(self, text, ctx):
         raw = (text or "").strip()
-        if self.step_index == 1 and self.pending_option is None:
+        if self.step_index == 1 and self.pending_option is None and not self._through:
             if not raw:
                 self.args.append(None)
                 self.step_index += 1
@@ -6151,9 +6160,29 @@ class OffsetSrfCmd(Command):
             return f"OffsetSrf: the {option.name} option is not implemented yet", False
         return super().on_option_set(option, value, ctx)
 
+    @staticmethod
+    def _through_distance(geom, point):
+        """ThroughPoint: `point`'s signed distance from the surface, along the normal at
+        the closest point. Both offset routes take positive along the underlying
+        surface's own normal (MEASURED, also on a flipped face), so that normal signs it."""
+        from . import nearest
+
+        ns = geom.Faces[0].ToNurbsSurface()
+        foot = nearest.closest_point_on_surface(ns, point)
+        n = ns.NormalAt(foot.u, foot.v)
+        n = cplane.normalize((n.X, n.Y, n.Z))
+        return cplane.dot(_sub3(point, foot.point), n) if n is not None else 0.0
+
     def execute(self, ctx: NarwhalContext):
         name, typed = self.args[0], self.args[1]
-        if typed is None:
+        if self._through:
+            geom = ctx.geom_by_name(name) if name else None
+            if not isinstance(geom, r3.Brep) or not bridge.is_single_surface(geom):
+                return f"OffsetSrf: ThroughPoint needs a single surface; {name!r} is not one", True
+            distance = self._through_distance(geom, typed)
+            if abs(distance) <= _document_tolerance(ctx):
+                return "OffsetSrf: the point lies on the surface, so the offset would be zero", True
+        elif typed is None:
             distance = float(self.opt.get("Distance", 1.0)) * (-1.0 if self._flip else 1.0)
         else:
             try:
