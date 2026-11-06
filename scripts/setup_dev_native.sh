@@ -131,6 +131,11 @@ for crate in selection_core platform_core cdr_core document_core; do
   cargo +"$TOOLCHAIN" build --release --locked --manifest-path "$ROOT/native/$crate/Cargo.toml"
 done
 
+step "Selection core (verified and staged in artifacts/selection-core)"
+# run_tests.sh runs the selection-core ABI, adapter and pick suites only when this
+# artifact exists; without it they were silently skipped on a fresh clone.
+"$PYTHON" "$ROOT/scripts/build_selection_core.py"
+
 OCCT_LIBS="$PATCHED/5.2/python/lib/python3.13/site-packages/cadquery_ocp_novtk.libs"
 NARWHAL_OCCT_SOURCE_DIR="$OCCT_SOURCE" NARWHAL_OCCT_LIB_DIR="$OCCT_LIBS" LD_LIBRARY_PATH="$OCCT_LIBS" \
   cargo +"$TOOLCHAIN" build --release --locked --manifest-path "$ROOT/native/geometry_core/Cargo.toml"
