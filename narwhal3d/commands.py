@@ -2995,9 +2995,19 @@ class HandleCurveCmd(Command):
         base=("Curve point:" if not self.args else
               "Handle location:" if len(self.args)%2 else "Next curve point:")
         return opts.format_prompt(base,self.options,self.opt)
-    def on_option_set(self,option,value,ctx):
-        if option.name=="AutoClose" and value:return "HandleCurve: AutoClose is not implemented yet",False
-        return super().on_option_set(option,value,ctx)
+    def _feed(self,text,ctx):
+        # OURS (#42) AutoClose: a new CURVE POINT within the document tolerance of the
+        # first one closes the curve exactly as Close does; that pick is not kept as an
+        # anchor, so the seam reuses the first anchor's handle and stays C1.
+        raw=(text or "").strip()
+        if (self.opt.get("AutoClose") and raw and self.pending_option is None
+                and len(self.args)>=4 and len(self.args)%2==0
+                and opts.match(raw,self.options,self.opt).status==opts.NONE):
+            try:pick=parse_point(raw,self._active_cplane(ctx),self._last_point())
+            except ValueError:pick=None
+            if pick is not None and math.dist(pick,self.args[0])<=_document_tolerance(ctx):
+                self._close=True;return self.execute(ctx)
+        return super()._feed(text,ctx)
     def on_mode(self,name,ctx):
         if name=="Undo":
             if self.args:self.args.pop();return "HandleCurve: reversed last pick",False

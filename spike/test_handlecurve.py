@@ -28,6 +28,21 @@ check(done and not ctx.made and "handle for every" in msg,"Undo reverses the las
 ctx,cmd,msg,done=run(["0,0,0","1,0,0","3,2,0","4,2,0","Close"])
 check(done and ctx.made and ctx.made[0].IsClosed,"Close creates a closed handle curve")
 ctx,cmd,msg,done=run(["PersistentClose"]);check(not done and "not implemented yet" in msg,"PersistentClose refuses explicitly")
+# AutoClose (#42): a curve point within the document tolerance of the first closes it
+ctx,cmd,msg,done=run(["AutoClose=Yes","0,0,0","1,0,0","3,2,0","4,2,0","6,0,0","7,0,0","0.000001,0,0"])
+c=ctx.made[0] if ctx.made else None
+check(done and c is not None and c.IsClosed and "not implemented" not in msg,f"AutoClose: an anchor on the first one closes the curve ({msg!r})")
+check(c is not None and len(c.Points)==10,"AutoClose: the closing pick is not kept, three anchors give three spans")
+if c is not None:
+ a=c.DerivativeAt(c.Domain.T0,1)[1];b=c.DerivativeAt(c.Domain.T1,1)[1]
+ check(a.DistanceTo(b)<1e-9,"AutoClose: the seam reuses the first handle and is C1, as Close is")
+ctx,cmd,msg,done=run(["AutoClose=Yes","0,0,0","1,0,0","3,2,0","4,2,0","0.5,0,0"])
+check(not done and not ctx.made,"AutoClose: a curve point away from the first just continues")
+ctx,cmd,msg,done=run(["0,0,0","1,0,0","3,2,0","4,2,0","0,0,0","1,1,0",""])
+check(done and ctx.made and len(ctx.made[0].Points)==7,"without AutoClose that pick is kept as a third anchor: two spans, not a C1 loop")
+ctx,cmd,msg,done=run(["AutoClose=Yes","0,0,0","0,0,0"])
+check(not done and not ctx.made,"AutoClose: a HANDLE on the first anchor does not close")
+ctx,cmd,msg,done=run(["Sharp"]);check(not done and "not implemented yet" in msg,"Sharp still refuses explicitly")
 check("handlecurve" in commands.COMMANDS,"HandleCurve is registered")
 rows=preview.segments("HandleCurve",[(0,0,0),(1,0,0),(3,2,0),(4,2,0)],(6,0,0),commands.cplane.WORLD_TOP)
 check(len(rows)==2 and len(rows[1])==17 and rows[1][0]==(0.0,0.0,0.0),"live HandleCurve preview shows the committed Bézier span and next pick guide")
