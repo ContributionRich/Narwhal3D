@@ -3988,6 +3988,11 @@ class EllipseCmd(Command):
                           [("First focus:", POINT), ("Second focus:", POINT),
                            ("Point on ellipse:", POINT)])
             return None, False
+        if name == "Vertical":
+            if self.args:
+                return "Ellipse: Vertical is chosen before the first point", False
+            self._flow = name
+            return "Ellipse: Vertical mode -- the ellipse stands on the construction plane", False
         if name == "Corner":
             if self.args:
                 return "Ellipse: Corner is chosen before the first point", False
@@ -4014,6 +4019,24 @@ class EllipseCmd(Command):
             s0, s1, a2 = self.args
             center = tuple((s0[i] + s1[i]) / 2 for i in range(3))
             self.args = [center, tuple(s1), a2]
+        elif flow == "Vertical":
+            # OURS (#37), after Circle Vertical: the ellipse stands in the vertical plane
+            # through the centre that contains the CPlane normal and the direction to the
+            # first pick. The first semi-axis is the distance to that pick, along its
+            # direction in the CPlane; the second runs along the normal, as long as the
+            # second pick's offset from the first axis (the default flow's rule).
+            center, p1, p2 = self.args
+            n = tuple(self._active_cplane(ctx).zaxis)
+            d = _sub3(p1, center)
+            u = cplane.normalize(tuple(d[i] - cplane.dot(d, n) * n[i] for i in range(3)))
+            if u is None:
+                return ("Ellipse: pick the first axis away from the centre along the "
+                        "construction plane"), True
+            w = _sub3(p2, center)
+            off = tuple(w[i] - cplane.dot(w, u) * u[i] for i in range(3))
+            a, b = math.dist(center, p1), math.sqrt(cplane.dot(off, off))
+            self.args = [center, tuple(center[i] + a * u[i] for i in range(3)),
+                         tuple(center[i] + b * n[i] for i in range(3))]
         elif flow == "FromFoci":
             f1, f2, on = self.args
             center = tuple((f1[i] + f2[i]) / 2 for i in range(3))
