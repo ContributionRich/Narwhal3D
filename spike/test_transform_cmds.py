@@ -457,9 +457,52 @@ check(done and ends(ctx.geom_by_name("L")) == [(0, 0, 4), (0, 0, 5)],
       f"(0,1,3)-(0,2,3) -> (0,0,4)-(0,0,5) ({ends(ctx.geom_by_name('L'))}, {msg!r})")
 
 # ===========================================================================
+print("\n-- Scale Rigid (#61) --")
+
+
+def box_of(g):
+    lo, hi = analysis.bounding_box(g)
+    return tuple(round(v, 9) + 0.0 for v in (lo.X, lo.Y, lo.Z, hi.X, hi.Y, hi.Z))
+
+
+if ob.available():
+    for key, base, want_box, want_sphere in (
+            ("scale", "0,0,0", (1, 1, 1, 3, 3, 3), (19, -1, -1, 21, 1, 1)),
+            ("scale2d", "0,0,0", (1, 1, 0, 3, 3, 2), (19, -1, -1, 21, 1, 1))):
+        ctx = Ctx()
+        ctx.add(bridge.make_box((0, 0, 0), (2, 2, 0), 2.0), "Box")
+        ctx.add(bridge.make_sphere((10, 0, 0), 1.0), "Ball")
+        c, msg, done = run(ctx, key, ["Rigid=Yes", base, "2"])
+        gb, gs = ctx.geom_by_name("Box"), ctx.geom_by_name("Ball")
+        check(done and box_of(gb) == want_box and box_of(gs) == want_sphere
+              and "rigidly" in msg,
+              f"{key} Rigid x2 about 0: the box keeps size 2, its centre goes to "
+              f"{tuple((a + b) / 2 for a, b in zip(want_box[:3], want_box[3:]))}; the "
+              f"radius-1 ball moves to x=20 ({box_of(gb)}, {box_of(gs)}, {msg!r})")
+        recipe = bridge._kernel().recipe_of(gs) or {}
+        check(recipe.get("kind") == "sphere" and recipe.get("radius") == 1.0
+              and [round(v, 9) + 0.0 for v in recipe.get("xform", [])]
+              == [1, 0, 0, 20, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1],
+              f"{key} Rigid: the ball's exact recipe is a radius-1 sphere translated to "
+              f"x=20, never scaled ({recipe})")
+    ctx = Ctx()
+    ctx.add(bridge.make_box((0, 0, 0), (2, 2, 0), 2.0), "Box")
+    c, msg, done = run(ctx, "scale", ["Rigid=Yes", "Copy=Yes", "0,0,0", "3"])
+    copies = [o.Geometry for o in ctx.model.file.Objects if o.Attributes.Name != "Box"]
+    check(done and box_of(ctx.geom_by_name("Box")) == (0, 0, 0, 2, 2, 2) and len(copies) == 1
+          and box_of(copies[0]) == (2, 2, 2, 4, 4, 4),
+          f"Rigid with Copy leaves the original and adds a moved, unscaled copy ({msg!r})")
+    ctx = Ctx()
+    ctx.add(bridge.make_box((0, 0, 0), (2, 2, 0), 2.0), "Box")
+    run(ctx, "scale", ["0,0,0", "2"])
+    check(box_of(ctx.geom_by_name("Box")) == (0, 0, 0, 4, 4, 4), "without Rigid Scale still scales")
+else:
+    print("  skip  Scale Rigid (no OCCT)")
+
+# ===========================================================================
 print("\n-- options the help lists and we do not build still say so --")
 for key, opt in (("rotate3d", "SurfaceNormal"),
-                 ("scale", "Rigid"), ("mirror", "Object"), ("move", "Normal")):
+                 ("mirror", "Object"), ("move", "Normal")):
     ctx = line_ctx((0, 0, 0), (1, 0, 0))
     c = start(ctx, key)
     m, _d = c.feed(opt, ctx) if c else ("(no command)", True)

@@ -6655,8 +6655,13 @@ def _first_document_object(index, name):
     return rows[0] if rows else None
 
 
-def _apply_transform_to_selection(ctx: NarwhalContext, xform: r3.Transform):
+def _apply_transform_to_selection(ctx: NarwhalContext, xform: r3.Transform,
+                                  per_object=None):
     """Apply a rhino3dm Transform to selected objects, in the document and the view.
+
+    `per_object`, when given, maps each object's document geometry to the transform
+    used for that object instead of `xform` (Scale's `Rigid` moves each object by its
+    own offset).
 
     The transform is **baked into the stored File3dm geometry**. ``fobj.Geometry``
     is a live reference, so
@@ -6677,16 +6682,19 @@ def _apply_transform_to_selection(ctx: NarwhalContext, xform: r3.Transform):
     # Both rhino3dm.Transform.Mij and mathutils.Matrix are row-major with the
     # translation in column 3, so map row-for-row (transposing here would put
     # the translation in the bottom row and silently do nothing).
-    try:
-        from mathutils import Matrix
-        mm = Matrix([
-            (xform.M00, xform.M01, xform.M02, xform.M03),
-            (xform.M10, xform.M11, xform.M12, xform.M13),
-            (xform.M20, xform.M21, xform.M22, xform.M23),
-            (xform.M30, xform.M31, xform.M32, xform.M33),
+    def display_matrix(x):
+        try:
+            from mathutils import Matrix
+        except ImportError:
+            return None
+        return Matrix([
+            (x.M00, x.M01, x.M02, x.M03),
+            (x.M10, x.M11, x.M12, x.M13),
+            (x.M20, x.M21, x.M22, x.M23),
+            (x.M30, x.M31, x.M32, x.M33),
         ])
-    except ImportError:
-        mm = None
+
+    mm = display_matrix(xform)
     moved = []
     document_index = _document_name_index(ctx.model.file.Objects)
     for ob in ctx.selected_objects():
@@ -6695,6 +6703,9 @@ def _apply_transform_to_selection(ctx: NarwhalContext, xform: r3.Transform):
         # names) without scanning the complete document for every display object.
         fobj = _first_document_object(document_index, ob.name)
         refused = False
+        if fobj is not None and per_object is not None:
+            xform = per_object(fobj.Geometry)
+            mm = display_matrix(xform)
         if fobj is not None:
             # bake into the document first, so a kernel failure can't leave the
             # viewport showing a move the saved file doesn't have
@@ -7267,6 +7278,35 @@ class _ScaleBase(_TransformCmd):
             return f
         return self._build(args, f)
 
+    @staticmethod
+    def _rigid(xform, geom):
+        """`Rigid`: the translation that carries `geom`'s bounding-box centre where
+        `xform` would put it -- the object moves, its shape and size do not."""
+        from . import analysis
+
+        lo, hi = analysis.bounding_box(geom)
+        c = r3.Point3d((lo.X + hi.X) / 2, (lo.Y + hi.Y) / 2, (lo.Z + hi.Z) / 2)
+        p = r3.Point3d(c.X, c.Y, c.Z)
+        p.Transform(xform)
+        return _translation((p.X - c.X, p.Y - c.Y, p.Z - c.Z))
+
+    def _commit(self, ctx, xform):
+        if not self.opt.get("Rigid"):
+            return super()._commit(ctx, xform)
+        # OURS (#61): an object's position is its bounding-box centre.
+        names = list(self.args[0]) if self.args and isinstance(self.args[0], list) else \
+            [o.name for o in ctx.selected_objects()]
+        if not names:
+            return "Nothing selected", True
+        if self.opt.get("Copy", False):
+            made = [n for n in (_duplicate_with_transform(
+                ctx, nm, self._rigid(xform, ctx.geom_by_name(nm)), self.name)
+                for nm in names) if n]
+            return f"Moved {len(made)} copy(ies) rigidly: {', '.join(made)}", True
+        moved = _apply_transform_to_selection(ctx, xform,
+                                              per_object=lambda g: self._rigid(xform, g))
+        return f"Moved {len(moved)} object(s) rigidly", True
+
 
 class ScaleCmd(_ScaleBase):
     name = "Scale"
@@ -7278,7 +7318,7 @@ class ScaleCmd(_ScaleBase):
              (_ScaleBase.FACTOR_PROMPT, DISTANCE)]
     options = (
         _copy_option(False),
-        opts.Option("Rigid", opts.MODE,
+        opts.Option("Rigid", opts.TOGGLE, default=False,
                     help="Individual objects will not change, only their positions."),
         opts.Option("SubCrv", opts.MODE, help="Selects part of a curve as input."),
     )
