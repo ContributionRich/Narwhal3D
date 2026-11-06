@@ -277,6 +277,7 @@ PURE_SUITES=(
     spike/test_sel_dup.py
     spike/test_research13_selection.py
     spike/test_set_group_name.py
+    spike/test_purge.py
     spike/test_measure.py
     spike/test_transform_cmds.py
     spike/test_line_modes.py

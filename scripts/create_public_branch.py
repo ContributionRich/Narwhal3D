@@ -105,6 +105,7 @@ TEST_FILES = (
     "spike/test_native_cage_safety.py", "spike/test_cage_boundary.py",
     "spike/test_spiral.py", "spike/test_coil_preview.py",
     "spike/test_boolean.py", "spike/test_boolean_extrusion.py",
+    "spike/test_purge.py",
     "spike/test_tessellate.py", "spike/test_trim.py", "spike/test_trim_drag.py",
     "spike/test_sweep.py", "spike/test_loft.py", "spike/test_interpolate.py",
     "spike/test_surface_cmds.py", "spike/test_cage_edit.py",

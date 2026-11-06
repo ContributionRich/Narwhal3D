@@ -235,6 +235,7 @@ REQUIRED = {
     "spike/test_ai_workflow_transport.py",
     "spike/test_ai_ui_workflow.py",
     "spike/test_ai_cad.py",
+    "spike/test_purge.py",
     "spike/test_ai_box.py", "spike/test_ai_box_native.py", "narwhal3d/ai_box.py",
     "spike/test_ai_cad_native.py",
     "native/automation_core/Cargo.toml",

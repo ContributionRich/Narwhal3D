@@ -10561,10 +10561,14 @@ class DupBorderCmd(Command):
 class PurgeCmd(Command):
     """Purge -- remove unused entries from the document.
 
-    the `Layers` option only. The other nine options are DECLARED (so the
+    the `Layers` and `Groups` options. The other eight options are DECLARED (so the
     command's option list is faithful) but NOT built: picking one REFUSES
     by name (the explicit-refusal policy -- an unimplemented thing must never look implemented) rather
     than silently purging nothing or purging the wrong thing.
+
+    `Groups`: an unused group is one with no members (`model.purge_unused_groups`).
+    `Block Definitions` refuses with its reason: the block definition table has no
+    delete here.
 
     (the command reference Purge -> the command behavior): the command-line options
     are exactly
@@ -10581,7 +10585,7 @@ class PurgeCmd(Command):
     """
 
     name = "Purge"
-    description = "Purge unused layers (the other unused types are not implemented)."
+    description = "Purge unused layers or groups (the other unused types are not implemented)."
     steps = []
     records_undo = True        # deleting layers is a document change
     options = (
@@ -10613,18 +10617,30 @@ class PurgeCmd(Command):
         return ("Purge: choose what to purge "
                 "(Annotation Styles / Bitmaps / Block Definitions / Environments / "
                 "Groups / Hatch Patterns / Layers / Linetypes / Materials / Textures). "
-                "Only Layers is implemented."), False
+                "Only Layers and Groups are implemented."), False
 
     def execute(self, ctx):
         # A bare Enter with no option: nothing was chosen. Say so by name rather
         # than guessing (the explicit-refusal policy) -- a bare `Purge` must not purge everything.
-        return ("Purge: no type chosen; the Layers option is the only one implemented "
+        return ("Purge: no type chosen; only the Layers and Groups options are implemented "
                 "(the other types are not built yet)"), True
 
     def on_mode(self, name, ctx):
-        if name != "Layers":
-            return f"Purge: the {name} option is not implemented yet", True
-        return self._purge_layers(ctx)
+        if name == "Layers":
+            return self._purge_layers(ctx)
+        if name == "Groups":
+            return self._purge_groups(ctx)
+        if name == "Block Definitions":
+            return ("Purge: the Block Definitions option is not implemented yet -- the "
+                    "block definition table cannot delete entries in this document "
+                    "model"), True
+        return f"Purge: the {name} option is not implemented yet", True
+
+    def _purge_groups(self, ctx):
+        if not ctx.model.unused_group_ids():
+            return "Purge Groups: no unused groups to delete", True
+        ctx.note_change(self.name)
+        return f"Purged {ctx.model.purge_unused_groups()} unused group(s)", True
 
     def _purge_layers(self, ctx):
         m = ctx.model

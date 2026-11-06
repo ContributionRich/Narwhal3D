@@ -949,10 +949,39 @@ class NarwhalModel:
         current_id = str(self.file.Layers[self.current_layer_index].Id)
         self.file.Layers.Delete(str(self.file.Layers[index].Id))
         self._round_trip()
+        # The rewrite renumbers the LayerIndex of every object above the deleted layer
+        # without passing an attribute setter, so tell the object registry every row may
+        # have changed. Without it the next snapshot (Undo) refused the document as an
+        # unmediated object write.
+        _mark_all(self.file)
         for i in range(len(self.file.Layers)):
             if str(self.file.Layers[i].Id) == current_id:
                 self.current_layer_index = i
         return True, f"Deleted layer {name!r}"
+
+    def unused_group_ids(self):
+        """Ids of the groups no object belongs to, in table order."""
+        used = {int(g) for o in self.file.Objects
+                for g in (o.Attributes.GetGroupList2() or [])}
+        return [str(self.file.Groups[i].Id) for i in range(len(self.file.Groups))
+                if i not in used]
+
+    def purge_unused_groups(self):
+        """Delete every group with no members; returns how many were deleted.
+
+        The rows are deleted and the document rewritten (`_round_trip`): a bare `Delete`
+        leaves this rhino3dm build's group table unusable, and the openNURBS writer
+        remaps the kept groups' indices in every object's memberships (MEASURED: groups
+        A, B, C with an object in C; deleting B leaves the object in C).
+        """
+        unused = self.unused_group_ids()
+        if not unused:
+            return 0
+        for gid in unused:
+            self.file.Groups.Delete(gid)
+        self._round_trip()
+        _mark_all(self.file)                # memberships were renumbered by the rewrite
+        return len(unused)
 
     def set_layer_visible(self, index: int, visible: bool):
         self.file.Layers[index].Visible = bool(visible)
