@@ -66,14 +66,14 @@ need() { command -v "$1" >/dev/null 2>&1 || { echo "error: '$1' is required ($2)
 need python3 "runs the locked fetcher"
 need git "fetches the pinned OCCT source"
 need curl "downloads the pinned openNURBS source for the exact-save helper"
-need cargo "install rustup, then: rustup toolchain install $TOOLCHAIN --component rustfmt clippy"
+need cargo "install rustup, then: rustup toolchain install $TOOLCHAIN --component rustfmt,clippy"
 need cmake "builds openNURBS for the document observer"
 need make "builds CPython configuration and openNURBS"
 need cc "C compiler"
 need c++ "C++ compiler"
 need systemd-run "the native gates bound compiler memory with a systemd user scope"
 cargo +"$TOOLCHAIN" --version >/dev/null 2>&1 || {
-  echo "error: Rust $TOOLCHAIN is not installed: rustup toolchain install $TOOLCHAIN --component rustfmt clippy" >&2; exit 2; }
+  echo "error: Rust $TOOLCHAIN is not installed: rustup toolchain install $TOOLCHAIN --component rustfmt,clippy" >&2; exit 2; }
 systemd-run --user --scope --quiet true 2>/dev/null || {
   echo "error: 'systemd-run --user --scope' does not work here (no systemd user session)" >&2; exit 2; }
 "$PYTHON" -c 'import sys; sys.exit(sys.version_info[:3] != (3, 13, 13))' || {
