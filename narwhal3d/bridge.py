@@ -2223,21 +2223,18 @@ def make_interpolated_curve(points, degree: int = 3, style=None, closed: bool = 
     rhino3dm has no interpolation primitive, so the algorithm lives in
     `narwhal3d/interpolate.py`.
 
-    `closed=True` is NOT interpolation yet -- see below -- and says so.
+    `closed=True` builds the closed periodic cubic through every point (pass the
+    distinct points; do not repeat the first). Only degree 3 is built closed.
     """
     interp = _interpolate()
     if style is None:
         style = interp.DEFAULT_KNOT_STYLE
     if closed:
-        # PERIODIC interpolation is not implemented. Rather than silently hand back a
-        # curve that does not pass through the points (the very bug being fixed), this
-        # refuses by name. The caller may explicitly fall back to the smooth periodic
-        # control-point curve from ``make_polyline(..., closed=True)``, but it must
-        # choose that knowingly.
-        raise ValueError(
-            "InterpCrv: closed (periodic) interpolation is not implemented yet; a closed "
-            "curve is currently built as a smooth periodic control-point curve, which "
-            "does NOT pass through the picked points")
+        if int(degree) != 3:
+            raise ValueError(
+                f"InterpCrv: closed interpolation at degree {degree} is not implemented "
+                f"yet; closed curves are built at degree 3")
+        return interp.interpolate_closed_curve(points, style=style)
     return interp.interpolate_curve(points, degree=degree, style=style)
 
 

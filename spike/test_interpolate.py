@@ -279,6 +279,75 @@ except ImportError:
     print("  .. rhino3dm unavailable; builder checks skipped")
 
 # --------------------------------------------------------------------------
+print("\n-- CLOSED (periodic) interpolation (#43) --")
+# The Python solver itself: the native route is pinned against it in test_native_interpolate.
+interp.NATIVE_PERIODIC_MIN_POINTS = 10 ** 9
+RING = [(0, 0, 0), (4, 1, 0), (7, 5, 1), (3, 9, 0), (-2, 6, 2), (-3, 2, 0)]
+for style in interp.KNOT_STYLES:
+    us = interp.closed_parameters(RING, style)
+    check(len(us) == len(RING) + 1 and us[0] == 0.0 and us[-1] == 1.0,
+          f"{style}: closed parameters run once around, closing segment included")
+check(abs(interp.closed_parameters(RING, "Chord")[-2] - (1 - math.dist(RING[-1], RING[0])
+      / sum(math.dist(RING[k], RING[(k + 1) % 6]) for k in range(6)))) < 1e-15,
+      "Chord: the closing segment's share is its chord length")
+try:
+    interp.closed_parameters(RING + [RING[0]])
+    check(False, "a repeated first point is refused")
+except interp.InterpolationError as e:
+    check("coincident" in str(e), f"a repeated first point is refused by name ({e})")
+try:
+    interp.interpolate_points_periodic(RING[:2])
+    check(False, "two points cannot close")
+except interp.InterpolationError as e:
+    check("at least 3" in str(e), f"two points are refused by name ({e})")
+
+# the cyclic solver against the dense LU on the same wrapped system
+import random
+random.seed(5)
+for n in (3, 4, 9):
+    sub = [random.uniform(0.05, 0.3) for _ in range(n)]
+    sup = [random.uniform(0.05, 0.3) for _ in range(n)]
+    diag = [1.0 - a - c for a, c in zip(sub, sup)]
+    rhs = [(random.random(), random.random(), random.random()) for _ in range(n)]
+    dense = [[0.0] * n for _ in range(n)]
+    for i in range(n):
+        dense[i][(i - 1) % n] += sub[i]
+        dense[i][i] += diag[i]
+        dense[i][(i + 1) % n] += sup[i]
+    want = interp.lu_solve(*interp.lu_factor(dense), rhs)
+    got = interp.cyclic_tridiagonal_solve(sub, diag, sup, rhs)
+    check(max(abs(a - b) for ra, rb in zip(want, got) for a, b in zip(ra, rb)) < 1e-12,
+          f"the O(n) cyclic solve equals the dense LU (n={n})")
+
+try:
+    import rhino3dm
+
+    for style in interp.KNOT_STYLES:
+        crv = interp.interpolate_closed_curve(RING, style)
+        dom = crv.Domain
+        us = interp.closed_parameters(RING, style)
+        worst = max(math.dist(tuple(getattr(crv.PointAt(dom.T0 + (dom.T1 - dom.T0) * u), a)
+                                    for a in "XYZ"), q) for u, q in zip(us, RING))
+        check(crv.IsClosed and crv.IsPeriodic and crv.Degree == 3,
+              f"{style}: a closed, periodic cubic")
+        check(worst < 1e-9, f"{style}: it passes through all 6 irregular points ({worst:.2e})")
+        check(crv.PointAtStart.DistanceTo(crv.PointAtEnd) < 1e-12,
+              f"{style}: PointAtStart equals PointAtEnd")
+        d0, d1 = crv.DerivativeAt(dom.T0, 2), crv.DerivativeAt(dom.T1, 2)
+        for order in (1, 2):
+            a, b = d0[order], d1[order]
+            rel = a.DistanceTo(b) / max(1.0, math.sqrt(a.X ** 2 + a.Y ** 2 + a.Z ** 2))
+            check(rel < 1e-7, f"{style}: derivative {order} matches across the seam ({rel:.1e})")
+    # what Close used to build: the periodic CONTROL-POINT curve, which misses the picks
+    cpc = rhino3dm.NurbsCurve.Create(True, 3, [rhino3dm.Point3d(*p) for p in RING])
+    miss = max(min(cpc.PointAt(cpc.Domain.T0 + (cpc.Domain.T1 - cpc.Domain.T0) * i / 4000)
+                   .DistanceTo(rhino3dm.Point3d(*q)) for i in range(4001)) for q in RING)
+    check(miss > 0.1, f"while the old periodic control-point curve misses them by {miss:.3f}")
+except ImportError:
+    print("  .. rhino3dm unavailable; closed builder checks skipped")
+interp.NATIVE_PERIODIC_MIN_POINTS = 3
+
+# --------------------------------------------------------------------------
 print("\n-- THE SWEEP REGRESSION: smooth along a CURVED rail --")
 # This is the check whose ABSENCE let the bug live. The representation audit swept along a
 # STRAIGHT rail, where degree 1 in V is exact, so it could not fail. A curved rail is the

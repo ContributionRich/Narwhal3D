@@ -158,6 +158,112 @@ fn solve(points: &[[f64; 3]], degree: usize, style: u8) -> Result<Interpolation,
     Ok((y, k, p))
 }
 
+/// Closed-polygon parameters: `n + 1` values on [0, 1], the closing segment included.
+fn closed_parameters(points: &[[f64; 3]], style: u8) -> Result<Vec<f64>, i32> {
+    let n = points.len();
+    if n < 3 || style > 2 {
+        return Err(ERR_INPUT);
+    }
+    let mut deltas = Vec::with_capacity(n);
+    for k in 0..n {
+        let (a, b) = (points[k], points[(k + 1) % n]);
+        let d = a
+            .iter()
+            .zip(b)
+            .map(|(a, b)| (b - a) * (b - a))
+            .sum::<f64>()
+            .sqrt();
+        if d <= 0.0 || !d.is_finite() {
+            return Err(ERR_INPUT);
+        }
+        deltas.push(match style {
+            0 => 1.0,
+            2 => d.sqrt(),
+            _ => d,
+        });
+    }
+    let total: f64 = deltas.iter().sum();
+    let mut out = vec![0.0];
+    let mut acc = 0.0;
+    for d in deltas {
+        acc += d;
+        out.push(acc / total);
+    }
+    *out.last_mut().unwrap() = 1.0;
+    Ok(out)
+}
+
+/// Thomas algorithm for one tridiagonal system; `None` on a vanishing pivot.
+fn thomas(sub: &[f64], diag: &[f64], sup: &[f64], rhs: &[[f64; 3]]) -> Option<Vec<[f64; 3]>> {
+    let n = diag.len();
+    let mut cp = vec![0.0; n];
+    let mut dp = vec![[0.0; 3]; n];
+    for i in 0..n {
+        let denom = if i == 0 {
+            diag[0]
+        } else {
+            diag[i] - sub[i] * cp[i - 1]
+        };
+        if denom.abs() < 1e-14 {
+            return None;
+        }
+        cp[i] = sup[i] / denom;
+        for d in 0..3 {
+            let prev = if i == 0 { 0.0 } else { sub[i] * dp[i - 1][d] };
+            dp[i][d] = (rhs[i][d] - prev) / denom;
+        }
+    }
+    for i in (0..n - 1).rev() {
+        let next = dp[i + 1];
+        for (value, below) in dp[i].iter_mut().zip(next) {
+            *value -= cp[i] * below;
+        }
+    }
+    Some(dp)
+}
+
+/// The periodic cubic through `points`, as in `interpolate_points_periodic`:
+/// `n + 3` wrapped controls and the full unclamped knot vector (`n + 7`).
+fn solve_periodic(points: &[[f64; 3]], style: u8) -> Result<Interpolation, i32> {
+    let n = points.len();
+    if !(3..=MAX_POINTS).contains(&n) {
+        return Err(ERR_INPUT);
+    }
+    let params = closed_parameters(points, style)?;
+    let k: Vec<f64> = (-3..n as i64 + 4)
+        .map(|i| params[i.rem_euclid(n as i64) as usize] + i.div_euclid(n as i64) as f64)
+        .collect();
+    let (mut sub, mut diag, mut sup) = (vec![0.0; n], vec![0.0; n], vec![0.0; n]);
+    for row in 0..n {
+        let v = basis(row + 3, params[row], 3, &k);
+        (sub[row], diag[row], sup[row]) = (v[0], v[1], v[2]);
+    }
+    // Sherman-Morrison: corners are sub[0] (row 0, col n-1) and sup[n-1] (row n-1, col 0).
+    let (alpha, beta, gamma) = (sup[n - 1], sub[0], -diag[0]);
+    let mut bb = diag.clone();
+    bb[0] = diag[0] - gamma;
+    bb[n - 1] = diag[n - 1] - alpha * beta / gamma;
+    let x = thomas(&sub, &bb, &sup, points).ok_or(ERR_SINGULAR)?;
+    let mut u = vec![[0.0; 3]; n];
+    u[0][0] = gamma;
+    u[n - 1][0] = alpha;
+    let z = thomas(&sub, &bb, &sup, &u).ok_or(ERR_SINGULAR)?;
+    let denom = 1.0 + z[0][0] + beta * z[n - 1][0] / gamma;
+    let mut shifted = x.clone();
+    for d in 0..3 {
+        let fact = (x[0][d] + beta * x[n - 1][d] / gamma) / denom;
+        for i in 0..n {
+            shifted[i][d] = x[i][d] - fact * z[i][0];
+        }
+    }
+    let mut ctrl: Vec<[f64; 3]> = (0..n).map(|i| shifted[(i + n - 1) % n]).collect();
+    ctrl.extend_from_within(0..3);
+    if ctrl.iter().flatten().any(|v| !v.is_finite()) {
+        return Err(ERR_SINGULAR);
+    }
+    Ok((ctrl, k, 3))
+}
+
 #[allow(clippy::needless_range_loop)]
 fn skin(
     sections: &[[f64; 3]],
@@ -408,6 +514,68 @@ pub unsafe extern "C" fn narwhal_pure_core_interpolate(
     0
 }
 
+/// Closed (periodic) cubic interpolation of packed distinct xyz points into
+/// caller-owned controls (`n + 3`, the last three repeating the first) and the full
+/// unclamped knot vector (`n + 7`).
+/// # Safety
+/// Input/output spans are valid for declared capacities and do not overlap.
+#[allow(clippy::too_many_arguments)]
+#[no_mangle]
+pub unsafe extern "C" fn narwhal_pure_core_interpolate_periodic(
+    points: *const f64,
+    point_count: usize,
+    style: u8,
+    controls: *mut f64,
+    control_capacity: usize,
+    out_knots: *mut f64,
+    knot_capacity: usize,
+    out_control_count: *mut u64,
+    out_knot_count: *mut u64,
+) -> i32 {
+    if out_control_count.is_null() || out_knot_count.is_null() {
+        return ERR_NULL;
+    }
+    *out_control_count = 0;
+    *out_knot_count = 0;
+    if point_count > MAX_POINTS {
+        return ERR_SIZE;
+    }
+    let coord_count = match point_count.checked_mul(3) {
+        Some(value) => value,
+        None => return ERR_SIZE,
+    };
+    let flat = match crate::checked_slice(points, coord_count) {
+        Some(v) => v,
+        None => return ERR_NULL,
+    };
+    if flat.len() != coord_count || flat.iter().any(|v| !v.is_finite()) {
+        return ERR_INPUT;
+    }
+    let pts: Vec<[f64; 3]> = flat.chunks_exact(3).map(|v| [v[0], v[1], v[2]]).collect();
+    let (ctrl, k, _) = match solve_periodic(&pts, style) {
+        Ok(v) => v,
+        Err(e) => return e,
+    };
+    if control_capacity < ctrl.len() * 3 || knot_capacity < k.len() {
+        return ERR_SIZE;
+    }
+    let co = match crate::checked_slice_mut(controls, control_capacity) {
+        Some(v) => v,
+        None => return ERR_NULL,
+    };
+    let ko = match crate::checked_slice_mut(out_knots, knot_capacity) {
+        Some(v) => v,
+        None => return ERR_NULL,
+    };
+    for (i, p) in ctrl.iter().enumerate() {
+        co[3 * i..3 * i + 3].copy_from_slice(p)
+    }
+    ko[..k.len()].copy_from_slice(&k);
+    *out_control_count = ctrl.len() as u64;
+    *out_knot_count = k.len() as u64;
+    0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -445,5 +613,49 @@ mod tests {
             solve(&[[0., 0., 0.], [0., 0., 0.]], 3, 1).err(),
             Some(ERR_INPUT)
         );
+    }
+
+    fn eval(ctrl: &[[f64; 3]], k: &[f64], u: f64) -> [f64; 3] {
+        let s = span(ctrl.len(), 3, u, k);
+        let b = basis(s, u, 3, k);
+        let mut out = [0.0; 3];
+        for (j, v) in b.iter().enumerate() {
+            for d in 0..3 {
+                out[d] += v * ctrl[s - 3 + j][d];
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn periodic_passes_through_irregular_points() {
+        let p = [
+            [0., 0., 0.],
+            [4., 1., 0.],
+            [7., 5., 1.],
+            [3., 9., 0.],
+            [-2., 6., 2.],
+            [-3., 2., 0.],
+        ];
+        for style in 0..3 {
+            let (c, k, d) = solve_periodic(&p, style).unwrap();
+            assert_eq!((d, c.len(), k.len()), (3, 9, 13));
+            assert_eq!(&c[6..], &c[..3]);
+            let params = closed_parameters(&p, style).unwrap();
+            for (u, q) in params.iter().zip(p.iter()) {
+                let e = eval(&c, &k, *u);
+                for dim in 0..3 {
+                    assert!((e[dim] - q[dim]).abs() < 1e-12, "{e:?} vs {q:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn periodic_rejects_short_and_duplicate_input() {
+        let p = [[0., 0., 0.], [1., 0., 0.]];
+        assert_eq!(solve_periodic(&p, 1).err(), Some(ERR_INPUT));
+        let q = [[0., 0., 0.], [1., 0., 0.], [0., 1., 0.], [0., 0., 0.]];
+        assert_eq!(solve_periodic(&q, 1).err(), Some(ERR_INPUT));
     }
 }

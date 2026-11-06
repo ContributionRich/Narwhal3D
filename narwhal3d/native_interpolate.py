@@ -4,6 +4,7 @@ import array, ctypes, math, os, sys, threading
 from pathlib import Path
 _ABI=1; _ENV="NARWHAL_PURE_CORE"; _MAX_POINTS=2048
 _lock=threading.Lock(); _signature=None; _binding=None; _skin_signature=None; _skin_binding=None; _native_calls=0; _native_skin_calls=0
+_periodic_signature=None; _periodic_binding=None; _native_periodic_calls=0
 STYLE={"Uniform":0,"Chord":1,"SqrtChrd":2}
 def _name():
     return "narwhal_pure_core.dll" if sys.platform=="win32" else "libnarwhal_pure_core.dylib" if sys.platform=="darwin" else "libnarwhal_pure_core.so"
@@ -40,6 +41,42 @@ def _skin_fn():
    _skin_binding=fn;return fn
   return None
 
+def _periodic_fn():
+    global _periodic_signature,_periodic_binding
+    explicit=os.environ.get(_ENV); signature=explicit or "<packaged>"
+    if _periodic_signature==signature:return _periodic_binding
+    with _lock:
+        if _periodic_signature==signature:return _periodic_binding
+        _periodic_signature,_periodic_binding=signature,None
+        packaged=Path(__file__).resolve().parent/"native"/_name()
+        for path in ((Path(explicit).expanduser(),) if explicit else (packaged,)):
+            if not path.is_file():continue
+            try:
+                lib=ctypes.CDLL(str(path)); version=lib.narwhal_pure_core_abi_version; version.argtypes=[]; version.restype=ctypes.c_uint32
+                if version()!=_ABI:continue
+                fn=lib.narwhal_pure_core_interpolate_periodic
+                fn.argtypes=[ctypes.POINTER(ctypes.c_double),ctypes.c_size_t,ctypes.c_ubyte,ctypes.POINTER(ctypes.c_double),ctypes.c_size_t,ctypes.POINTER(ctypes.c_double),ctypes.c_size_t,ctypes.POINTER(ctypes.c_uint64),ctypes.POINTER(ctypes.c_uint64)]; fn.restype=ctypes.c_int32
+            except (AttributeError,OSError):continue
+            _periodic_binding=fn;return fn
+        return None
+def interpolate_periodic(points,style):
+    """Closed cubic through distinct points: ``(n+3 controls, n+7 knots, 3)`` or None."""
+    global _native_periodic_calls
+    fn=_periodic_fn(); points=list(points); n=len(points)
+    if fn is None or n<3 or n>_MAX_POINTS or style not in STYLE:return None
+    try:
+        flat=array.array("d",(float(c) for p in points for c in p[:3]))
+        if len(flat)!=3*n or any(not math.isfinite(v) for v in flat):return None
+        controls=array.array("d",[0.0])*(3*(n+3)); knots=array.array("d",[0.0])*(n+7)
+        fv=(ctypes.c_double*len(flat)).from_buffer(flat); cv=(ctypes.c_double*len(controls)).from_buffer(controls); kv=(ctypes.c_double*len(knots)).from_buffer(knots)
+        oc=ctypes.c_uint64(); ok=ctypes.c_uint64()
+        code=fn(fv,n,STYLE[style],cv,len(controls),kv,len(knots),ctypes.byref(oc),ctypes.byref(ok))
+    except Exception:return None
+    count,kcount=int(oc.value),int(ok.value)
+    if code!=0 or count!=n+3 or kcount!=n+7:return None
+    ctrl=[tuple(controls[3*i:3*i+3]) for i in range(count)]; full=list(knots[:kcount])
+    if any(not math.isfinite(v) for row in ctrl for v in row) or full!=sorted(full):return None
+    _native_periodic_calls+=1;return ctrl,full,3
 def interpolate(points,degree,style):
     global _native_calls
     fn=_fn(); points=list(points); n=len(points)
@@ -74,4 +111,7 @@ def skin_control_net(sections,degree,style):
 
 def _reset_for_tests():
     global _signature,_binding,_skin_signature,_skin_binding,_native_calls,_native_skin_calls
-    with _lock:_signature=None;_binding=None;_skin_signature=None;_skin_binding=None;_native_calls=0;_native_skin_calls=0
+    global _periodic_signature,_periodic_binding,_native_periodic_calls
+    with _lock:
+        _signature=None;_binding=None;_skin_signature=None;_skin_binding=None;_native_calls=0;_native_skin_calls=0
+        _periodic_signature=None;_periodic_binding=None;_native_periodic_calls=0
