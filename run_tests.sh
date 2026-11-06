@@ -267,6 +267,7 @@ fi
 
 PURE_SUITES=(
     spike/test_geometry.py
+    spike/test_run_suite.py
     spike/test_native_cage_safety.py
     spike/test_cage_boundary.py
     spike/test_undo.py

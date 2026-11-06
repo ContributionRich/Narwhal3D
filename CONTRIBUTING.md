@@ -53,7 +53,7 @@ Set up as described in [docs/contributing-with-ai.md](docs/contributing-with-ai.
 ./uishot.sh
 ```
 
-During development, run the narrowest relevant test first. The full suite includes the manufacturing representation audit and a real-window UI acceptance report.
+During development, run the narrowest relevant test first: `scripts/run_suite.sh spike/<suite>.py` runs one suite with the environment `./run_tests.sh` gives it. The full suite includes the manufacturing representation audit and a real-window UI acceptance report.
 
 Before submitting:
 
