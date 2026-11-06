@@ -22,6 +22,8 @@ import tempfile
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / 'spike'))
+import memory_bound  # noqa: E402
 BLENDER = ROOT / "tools/blender-patched/blender"
 NAME = "Narwhal3D-UI-Designer"
 MAX_FILE = 16 * 1024 * 1024
@@ -416,10 +418,9 @@ def main():
     parser.add_argument("--under-cap", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args()
     if not args.under_cap:
-        command = ["systemd-run", "--user", "--quiet", "--wait", "--pipe",
-                   "-p", "MemoryMax=3G", "-p", "MemorySwapMax=0", "-p", "TasksMax=128",
-                   "-p", "RuntimeMaxSec=330", "-p", "TimeoutStopSec=3",
-                   "-p", "KillMode=control-group", "-p", "WorkingDirectory=" + str(ROOT),
+        command = [*memory_bound.prefix("3G", scope=False, properties=(
+                       "TasksMax=128", "RuntimeMaxSec=330", "TimeoutStopSec=3",
+                       "KillMode=control-group", "WorkingDirectory=" + str(ROOT))),
                    sys.executable, "-B", str(Path(__file__).resolve()), *sys.argv[1:], "--under-cap"]
         raise SystemExit(subprocess.run(command, timeout=360).returncode)
     with tempfile.TemporaryDirectory(prefix="narwhal-ui-bundle-") as tmp:

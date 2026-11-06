@@ -260,7 +260,7 @@ TEST_FILES = (
     "spike/test_document_registry_tracking.py", "spike/test_document_registry_baseline.py", "spike/test_document_registry_observer.py",
     "spike/test_document_registry_observer_loader.py", "spike/test_document_registry_observed_abi.py",
     "spike/test_document_registry_workload.py", "spike/test_document_registry_model.py",
-    "spike/test_document_observer_gate.py", "spike/test_document_observer_package.py", "spike/test_dev_setup.py", "spike/runtime_paths.py", "spike/test_document_observer_qualify.py",
+    "spike/test_document_observer_gate.py", "spike/test_document_observer_package.py", "spike/test_dev_setup.py", "spike/runtime_paths.py", "spike/memory_bound.py", "spike/test_memory_bound.py", "spike/test_document_observer_qualify.py",
     "spike/test_rust_history_abi.py", "spike/test_rust_history_integration.py", "spike/test_rust_history_profile.py",
     "spike/test_rust_history_trace.py", "spike/test_numparse_owned.py",
     "spike/test_application_core_gate.py", "spike/test_application_core_source.py",

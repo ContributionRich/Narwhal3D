@@ -50,6 +50,7 @@ class GateTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, 'modified/missing'):
                 gate.verify_sources(self.archive, self.tree)
 
+    @patch.dict('os.environ', {'NARWHAL_MEMORY_BOUND': 'systemd'})  # the systemd command shape, anywhere
     def test_compiler_has_memory_time_and_shared_lock_bounds(self):
         with patch.object(gate.subprocess, 'run') as run:
             gate.run(['compiler', 'input'], seconds=30)

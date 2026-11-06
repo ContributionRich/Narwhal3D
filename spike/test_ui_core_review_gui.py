@@ -15,6 +15,7 @@ import tempfile
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import memory_bound
 import runtime_paths
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -46,8 +47,7 @@ def launch():
         "narwhal3d/shell_input.py", "artifacts/application-core/linux-x86_64/libnarwhal_application_core.so")]
     sources.append(library)
     before = {str(p): hashlib.sha256(p.read_bytes()).hexdigest() for p in sources}
-    cmd = ["systemd-run", "--user", "--scope", "--quiet", "-p", "MemoryMax=2048M",
-        "-p", "MemorySwapMax=0", "-p", "CPUQuota=100%", "timeout", "--signal=TERM", "--kill-after=5s", "180s",
+    cmd = [*memory_bound.prefix("2048M", properties=("CPUQuota=100%",)), "timeout", "--signal=TERM", "--kill-after=5s", "180s",
         "bwrap", "--ro-bind", "/", "/", "--dev-bind", "/dev", "/dev", "--proc", "/proc",
         "--bind", str(out), str(out), "--unshare-net", "--die-with-parent",
         str(runtime_paths.blender(ROOT)), "--factory-startup", "-t", "1",

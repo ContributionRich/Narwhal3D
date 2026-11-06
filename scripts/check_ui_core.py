@@ -30,6 +30,8 @@ import time
 import build_linux_native as common
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / 'spike'))
+import memory_bound  # noqa: E402
 LIBRARY = 'libnarwhal_ui_core.so'
 DEFAULT_TARGET = Path('/var/tmp/nwug/target')
 REQUIRED = common.UI_CORE_REQUIRED_SOURCE
@@ -140,8 +142,7 @@ def build(root, target):
             env = dict(os.environ, CARGO_BUILD_JOBS='1', CARGO_INCREMENTAL='0',
                        CARGO_TARGET_DIR=str(target), TMPDIR=temporary)
             env.pop('CARGO_BUILD_TARGET', None)
-            prefix = ['systemd-run', '--user', '--scope', '--quiet', '-p', 'MemoryMax=1G',
-                      '-p', 'MemorySwapMax=0', 'timeout', '--kill-after=5s', '180s', 'cargo', '+1.95.0']
+            prefix = [*memory_bound.prefix('1G'), 'timeout', '--kill-after=5s', '180s', 'cargo', '+1.95.0']
             manifest = ['--manifest-path', str(root / 'native/ui_core/Cargo.toml')]
             cargo = [*manifest, '--locked', '--offline', '--target-dir', str(target), '-j', '1']
             checked([*prefix, 'fmt', *manifest, '--check'], root, env)

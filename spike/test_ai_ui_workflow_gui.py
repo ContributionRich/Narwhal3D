@@ -14,6 +14,7 @@ import tempfile
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import memory_bound
 import runtime_paths
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -46,7 +47,7 @@ def launch():
     # Bring up only the new namespace's loopback. No route to paid/remote providers.
     loopback = ('import socket,fcntl,struct,os,sys; s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM); '
                 'fcntl.ioctl(s,0x8914,struct.pack("16sh",b"lo",0x49)); s.close(); os.execv(sys.argv[1],sys.argv[1:])')
-    cmd = ["systemd-run", "--user", "--scope", "--quiet", "-p", "MemoryMax=2048M", "-p", "MemorySwapMax=0",
+    cmd = [*memory_bound.prefix("2048M"),
            "timeout", "--signal=TERM", "--kill-after=5s", "230s", "bwrap",
            "--ro-bind", "/", "/", "--dev-bind", "/dev", "/dev", "--proc", "/proc",
            "--bind", str(out), str(out), "--unshare-net", "--cap-add", "CAP_NET_ADMIN", "--die-with-parent",

@@ -15,6 +15,7 @@ import tempfile
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import memory_bound
 import runtime_paths
 ROOT = Path(__file__).resolve().parents[1]
 PYTHON = runtime_paths.python(ROOT)
@@ -49,8 +50,7 @@ def launch():
                  '--python-exit-code', '1', '--python', str(Path(__file__).resolve()), '--', mode]
         if '--mutations' in sys.argv:
             child.append('--mutations')
-    cmd = ['systemd-run', '--user', '--scope', '--quiet', '-p', 'MemoryMax=2048M',
-        '-p', 'MemorySwapMax=0', '-p', 'CPUQuota=100%', 'timeout', '--signal=TERM',
+    cmd = [*memory_bound.prefix('2048M', properties=('CPUQuota=100%',)), 'timeout', '--signal=TERM',
         '--kill-after=5s', '600s', 'bwrap', '--ro-bind', '/', '/', '--dev-bind', '/dev', '/dev',
         '--proc', '/proc', '--bind', str(out), str(out), '--unshare-net', '--die-with-parent'] + child
     locks = []

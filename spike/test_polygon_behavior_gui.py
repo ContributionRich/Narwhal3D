@@ -17,6 +17,7 @@ import tempfile
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import memory_bound
 import runtime_paths
 ROOT = Path(__file__).resolve().parents[1]
 SOURCES = ('launch/bootstrap.py', 'narwhal3d.sh', 'narwhal3d/ui.py',
@@ -113,8 +114,7 @@ def launch():
                 NARWHAL3D_NO_DIALOGS='1', NARWHAL3D_DEFER_FIRST_PRESENT='1',
                 NARWHAL3D_STATUSBAR_HEIGHT='37', GHOST_BACKEND='X11',
                 OMP_NUM_THREADS='1', OPENBLAS_NUM_THREADS='1')
-            cmd = ['systemd-run', '--user', '--scope', '--quiet', '-p', 'MemoryMax=1536M',
-                '-p', 'MemorySwapMax=0', '-p', 'CPUQuota=100%', 'timeout', '--signal=TERM',
+            cmd = [*memory_bound.prefix('1536M', properties=('CPUQuota=100%',)), 'timeout', '--signal=TERM',
                 '--kill-after=5s', '180s', 'bwrap', '--ro-bind', '/', '/', '--dev-bind', '/dev', '/dev',
                 '--proc', '/proc', '--bind', str(case), str(case), '--unshare-net', '--die-with-parent',
                 str(runtime), '--factory-startup', '-t', '1', '-p', '40', '40', '1440', '1000',

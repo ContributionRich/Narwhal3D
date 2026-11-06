@@ -10,6 +10,8 @@ import sys
 ROOT=Path(__file__).resolve().parents[1]
 
 
+sys.path.insert(0, str(ROOT / 'spike'))
+import memory_bound  # noqa: E402
 def worker():
     assert int(next(l.split()[1] for l in Path('/proc/meminfo').read_text().splitlines() if l.startswith('MemAvailable:')))>=6144*1024
     mutations=[
@@ -44,6 +46,5 @@ def worker():
 if __name__=='__main__':
     if '--worker' in sys.argv: worker()
     else:
-        args=['flock','-w','120','/tmp/narwhal3d-heavy-build.lock','systemd-run','--user','--scope',
-              '-p','MemoryMax=2G','-p','MemorySwapMax=0','-p','CPUQuota=200%',sys.executable,'-B',__file__,'--worker']
+        args=['flock','-w','120','/tmp/narwhal3d-heavy-build.lock',*memory_bound.prefix('2G', properties=('CPUQuota=200%',), quiet=False),sys.executable,'-B',__file__,'--worker']
         raise SystemExit(subprocess.run(args,cwd=ROOT,timeout=480).returncode)

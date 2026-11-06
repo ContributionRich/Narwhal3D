@@ -36,6 +36,8 @@ fn main() {
         !scratch.starts_with(project),
         "Artifacts must be outside the project"
     );
+    // A systemd user scope (MemoryMax=1024M) when one works, else RLIMIT_AS.
+    let memory_bound = project.join("spike/memory_bound.py").display().to_string();
     let mutants = [
         Mutant { name:"document_count_all_rows", file:"table.rs", old:r".filter(|(key, _)| key.contains('\\'))", new:".filter(|_| true)", test:"document_user_text_count_matches_native_and_is_read_only" },
         Mutant { name:"document_count_forward_slash", file:"table.rs", old:r".filter(|(key, _)| key.contains('\\'))", new:".filter(|(key, _)| key.contains('/'))", test:"document_user_text_count_matches_native_and_is_read_only" },
@@ -104,13 +106,11 @@ fn main() {
                 "-w",
                 "30",
                 "/tmp/narwhal3d-heavy-build.lock",
-                "systemd-run",
-                "--user",
-                "--scope",
-                "-p",
-                "MemoryMax=1024M",
-                "-p",
-                "MemorySwapMax=0",
+                "python3",
+                &memory_bound,
+                "--max",
+                "1024M",
+                "--",
                 "timeout",
                 "--kill-after=5s",
                 "90s",

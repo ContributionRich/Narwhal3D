@@ -22,6 +22,7 @@ import tempfile
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import memory_bound
 import runtime_paths
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -65,8 +66,7 @@ def launch():
                 if time.monotonic() > deadline:
                     raise TimeoutError('Shared GUI lock busy for 60s; no GUI launched')
                 time.sleep(.25)
-        cmd = ['systemd-run', '--user', '--scope', '--quiet', '-p', 'MemoryMax=3G',
-               '-p', 'MemorySwapMax=0', 'timeout', '--signal=TERM', '--kill-after=5s', '150s',
+        cmd = [*memory_bound.prefix('3G'), 'timeout', '--signal=TERM', '--kill-after=5s', '150s',
                str(runtime_paths.blender(ROOT)), '--factory-startup',
                '--enable-event-simulate', '--python-exit-code', '1',
                '--python', str(Path(__file__).resolve()),

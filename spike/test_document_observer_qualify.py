@@ -74,6 +74,7 @@ class WindowsCommandTests(unittest.TestCase):
         self.assertIn('cmd /d /c call "C:\\Program Files\\VS\\vcvars64.bat" &&', command)
 
 
+@patch.dict('os.environ', {'NARWHAL_MEMORY_BOUND': 'systemd'})  # the systemd command shape, anywhere
 class LinuxCommandTests(unittest.TestCase):
     def test_gcc_compile_command_is_unchanged(self):
         base = Path('/opt/nw-observer-fixture')

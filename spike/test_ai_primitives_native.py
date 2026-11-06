@@ -8,6 +8,7 @@ import shutil
 import sys
 import tempfile
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import memory_bound
 import runtime_paths
 from test_automation_native import ROOT, CRATE, checked, compile_crate
 
@@ -55,7 +56,7 @@ def run(target, mutations, geometry, mutation_filter=None):
             assert memory >= (4096+1536)*1024,'desktop reserve plus Blender cap not available'
             with open('/tmp/narwhal3d_gui.lock','a') as gui, tempfile.TemporaryDirectory(prefix='narwhal-ai-prototype-settings-') as settings:
                 fcntl.flock(gui,fcntl.LOCK_EX|fcntl.LOCK_NB)
-                checked(['systemd-run','--user','--scope','-p','MemoryMax=1536M','-p','MemorySwapMax=0',
+                checked([*memory_bound.prefix('1536M', quiet=False),
                     'timeout','--kill-after=5s','90s','env','PYTHONDONTWRITEBYTECODE=1','OMP_NUM_THREADS=1','NARWHAL3D_OPEN_WORKERS=0',
                     'PYTHONPATH='+str(ROOT/'vendor/occt'),
                     'LD_LIBRARY_PATH='+str(runtime_paths.occt_libs(ROOT)),

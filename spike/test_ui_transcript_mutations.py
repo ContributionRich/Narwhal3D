@@ -9,6 +9,8 @@ import sys
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / 'spike'))
+import memory_bound  # noqa: E402
 RUST = [
     ('point_alignment', 'transcript.rs', '!input.len().is_multiple_of(4)', 'false'),
     ('release_owner', 'transcript_ffi.rs', 'reg.snapshots.get(&token).is_none_or(|s| s.owner != handle)', '!reg.snapshots.contains_key(&token)'),
@@ -68,7 +70,7 @@ def main():
     test = [sys.executable, '-B', str(ROOT / 'spike/test_ui_transcript_model.py')]
     assert run('control', test)[0] == 0
     common = ['--manifest-path', str(crate / 'Cargo.toml'), '--target-dir', str(evidence / 'target'), '-j', '1']
-    compiler = ['systemd-run', '--user', '--scope', '--quiet', '-p', 'MemoryMax=1G', '-p', 'MemorySwapMax=0',
+    compiler = [*memory_bound.prefix('1G'),
                 'flock', '-w', '60', '/tmp/narwhal3d-heavy-build.lock', 'cargo']
     for label, filename, old, new in ([] if '--python-only' in sys.argv else RUST):
         path = crate / 'src' / filename

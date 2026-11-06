@@ -12,6 +12,7 @@ import sys
 import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import memory_bound
 import runtime_paths
 ROOT=Path(__file__).resolve().parents[1]
 CRATE=ROOT/'native/geometry_core'
@@ -105,6 +106,5 @@ def worker():
 if __name__=='__main__':
     if '--worker' in sys.argv: worker()
     else:
-        args=['flock','-w','120','/tmp/narwhal3d-heavy-build.lock','systemd-run','--user','--scope',
-              '-p','MemoryMax=2G','-p','MemorySwapMax=0','-p','CPUQuota=200%',sys.executable,'-B',__file__,'--worker'] + sys.argv[1:]
+        args=['flock','-w','120','/tmp/narwhal3d-heavy-build.lock',*memory_bound.prefix('2G', properties=('CPUQuota=200%',), quiet=False),sys.executable,'-B',__file__,'--worker'] + sys.argv[1:]
         raise SystemExit(subprocess.run(args,cwd=ROOT,timeout=900).returncode)

@@ -13,6 +13,7 @@ from pathlib import Path
 import sys
 import time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import memory_bound
 import runtime_paths
 ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(Path(__file__).resolve().parent))
@@ -67,7 +68,7 @@ def launch():
     if ui_library is not None:env['NARWHAL_UI_CORE_LIBRARY']=str(ui_library)
     loopback=('import socket,fcntl,struct,os,sys; s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM); '
         'fcntl.ioctl(s,0x8914,struct.pack("16sh",b"lo",0x49)); s.close(); os.execv(sys.argv[1],sys.argv[1:])')
-    command=['systemd-run','--user','--scope','--quiet','-p','MemoryMax=2048M','-p','MemorySwapMax=0',
+    command=[*memory_bound.prefix('2048M'),
         'timeout','--signal=TERM','--kill-after=5s','180s','bwrap','--ro-bind','/','/','--dev-bind','/dev','/dev','--proc','/proc',
         '--bind',str(out),str(out),'--unshare-net','--cap-add','CAP_NET_ADMIN','--die-with-parent','python3','-c',loopback,
         str(runtime_paths.blender(ROOT)),'--factory-startup','-t','1','-p','40','40','1440','1000','--enable-event-simulate',

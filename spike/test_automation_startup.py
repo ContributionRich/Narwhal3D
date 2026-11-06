@@ -28,6 +28,8 @@ import threading
 import time
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / 'spike'))
+import memory_bound  # noqa: E402
 HERE = Path(__file__).resolve()
 CLI = ROOT / "scripts/narwhal_mcp.py"
 BOOT = ROOT / "launch/bootstrap.py"
@@ -663,8 +665,7 @@ def main():
         output = Path(tempfile.mkdtemp(prefix="narwhal-startup-"))
         print("Evidence: " + str(output), flush=True)
         print("MemAvailable bytes: " + str(available()), flush=True)
-        command = ["systemd-run", "--user", "--scope", "--quiet", "-p", "MemoryMax=2G",
-                   "-p", "MemorySwapMax=0", "-p", "CPUQuota=200%",
+        command = [*memory_bound.prefix("2G", properties=("CPUQuota=200%",)),
                    "timeout", "--signal=TERM", "--kill-after=5s", "160s", sys.executable,
                    "-B", str(HERE), "--worker", str(output), "--era", args.era]
         result = subprocess.run(command, timeout=175)

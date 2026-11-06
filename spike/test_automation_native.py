@@ -16,6 +16,8 @@ import sys
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / 'spike'))
+import memory_bound  # noqa: E402
 CRATE = ROOT / "native/automation_core"
 MUTATIONS = (
     ("read_tool_allowlist", "catalog.rs", "if !READS.iter().any", "if false && !READS.iter().any", "test_permission_boundary"),
@@ -64,7 +66,7 @@ def compile_command(crate, target, action, extra=()):
                       if line.startswith("MemAvailable:")))
     assert memory >= (4096 + cap) * 1024, f"Insufficient headroom: reserve 4 GiB desktop + {cap} MiB compiler cap"
     # timeout lives inside the scope so killing a driver cannot orphan a compiler.
-    return ["systemd-run", "--user", "--scope", "-p", f"MemoryMax={cap}M", "-p", "MemorySwapMax=0",
+    return [*memory_bound.prefix(f"{cap}M", quiet=False),
             "timeout", "--signal=TERM", "--kill-after=5s", "170s",
             "env", "CARGO_TARGET_DIR=" + str(target), "cargo", action, "--locked", "--offline",
             "--manifest-path", str(crate / "Cargo.toml"), "-j", "1", *extra]

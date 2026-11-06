@@ -32,6 +32,7 @@ import tempfile
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import memory_bound
 import runtime_paths
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -101,8 +102,7 @@ def launch():
                    VISIBILITY_07_OUTPUT=str(out), VISIBILITY_07_FIRST=args.first,
                    VISIBILITY_07_MUTATION=args.mutation,
                    VISIBILITY_07_DIAGNOSTIC_SCROLL=str(int(args.diagnostic_scroll)))
-        cmd = ['systemd-run', '--user', '--scope', '--quiet',
-               '-p', 'MemoryMax=2G', '-p', 'MemorySwapMax=0',
+        cmd = [*memory_bound.prefix('2G'),
                'timeout', '--signal=TERM', '--kill-after=5s', '140s',
                str(runtime_paths.blender(ROOT)), '--threads', '2',
                '--factory-startup', '--window-geometry', '0', '0', '1600', '1000',

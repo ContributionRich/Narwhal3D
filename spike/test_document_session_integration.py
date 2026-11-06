@@ -38,6 +38,8 @@ from typing import Any
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / 'spike'))
+import memory_bound  # noqa: E402
 SELF = Path(__file__).resolve()
 EVIDENCE = {}
 # Loaded only inside bounded workers; host Python need not have bpy/rhino3dm.
@@ -1168,8 +1170,7 @@ def launch(args):
                                  if line.startswith('MemAvailable:')))
             if available < 6 * 1024**2:
                 raise RuntimeError('need 6 GiB available: 2 GiB cap + 4 GiB desktop reserve')
-            command = ['systemd-run', '--user', '--scope', '--quiet', '-p', 'MemoryMax=2G',
-                       '-p', 'MemorySwapMax=0', '-p', 'CPUQuota=100%',
+            command = [*memory_bound.prefix('2G', properties=('CPUQuota=100%',)),
                        'timeout', '--signal=TERM', '--kill-after=5s', '240s',
                        'bwrap', '--ro-bind', '/', '/', '--dev-bind', '/dev', '/dev', '--proc', '/proc',
                        '--bind', str(out), str(out), '--unshare-net', '--die-with-parent']

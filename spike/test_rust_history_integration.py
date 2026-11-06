@@ -40,6 +40,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import memory_bound
 import runtime_paths
 ROOT = Path(__file__).resolve().parents[1]
 SELF = Path(__file__).resolve()
@@ -1126,8 +1127,7 @@ def launch(args):
                                  if line.startswith('MemAvailable:')))
             if available < 6 * 1024**2:
                 raise RuntimeError('need 6 GiB available: 2 GiB cap + 4 GiB desktop reserve')
-            command = ['systemd-run', '--user', '--scope', '--quiet', '-p', 'MemoryMax=2G',
-                       '-p', 'MemorySwapMax=0', '-p', 'CPUQuota=100%',
+            command = [*memory_bound.prefix('2G', properties=('CPUQuota=100%',)),
                        'timeout', '--signal=TERM', '--kill-after=5s', '240s',
                        'bwrap', '--ro-bind', '/', '/', '--dev-bind', '/dev', '/dev', '--proc', '/proc',
                        '--bind', str(out), str(out), '--unshare-net', '--die-with-parent']

@@ -31,6 +31,7 @@ import traceback
 
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import memory_bound
 import runtime_paths
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -90,8 +91,7 @@ def public_run():
                        OMP_NUM_THREADS='2', OPENBLAS_NUM_THREADS='2',
                        PREVIEW_RESP_OUTPUT=str(output), PREVIEW_RESP_MUTATION=args.mutation,
                        PREVIEW_RESP_CASE=args.case)
-            command = ['systemd-run', '--user', '--scope', '--quiet',
-                       '-p', 'MemoryMax=3G', '-p', 'MemorySwapMax=0',
+            command = [*memory_bound.prefix('3G'),
                        'timeout', '--kill-after=3', '190s',
                        str(runtime_paths.blender(ROOT)), '--threads', '2',
                        '--factory-startup', '--window-geometry', '0', '0', '1600', '1000',
