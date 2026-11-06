@@ -328,6 +328,9 @@ else:
 native_icons_result = subprocess.run(
     [os.environ.get("NARWHAL3D_TEST_PYTHON", sys.executable), "-B",
      os.path.join(ROOT, "spike", "test_native_window_icons.py")],
+    # The icon interpreter is a self-contained Pillow venv; the gate's PYTHONPATH
+    # (vendor/occt, built for the runtime's Python) must not shadow its Pillow.
+    env={k: v for k, v in os.environ.items() if k != "PYTHONPATH"},
     timeout=60, check=False)
 check(native_icons_result.returncode == 0, "native window icon fixtures/mutations failed")
 
