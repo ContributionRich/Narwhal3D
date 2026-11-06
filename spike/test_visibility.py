@@ -487,6 +487,128 @@ for key in ("hide", "lock"):
     check(done and msg is None and ctx.changes == [],
           f"{key}: Enter at the empty prompt ends silently (#070/#084)  ({msg!r})")
 
+# ===========================================================================
+# HideSwap -- exchange two Mode states across the whole document.
+# ===========================================================================
+N, H, L = r3.ObjectMode.Normal, r3.ObjectMode.Hidden, r3.ObjectMode.Locked
+
+
+def swap_doc(ctx, states):
+    """Add one object per (name, mode) and write its Mode straight to the table."""
+    for name, mode in states:
+        ctx.model.add_object(seg(), name)
+    for fobj in ctx.model.file.Objects:
+        for name, mode in states:
+            if fobj.Attributes.Name == name:
+                fobj.Attributes.Mode = mode
+    return ctx
+
+
+def doc_rows(ctx):
+    """Everything the swap must leave alone, plus Mode, keyed by object id."""
+    out = {}
+    for f in ctx.model.file.Objects:
+        a = f.Attributes
+        out[str(a.Id)] = (a.Name, int(a.LayerIndex), list(a.GetGroupList2() or []),
+                          f.Geometry.GetBoundingBox().Max.X, a.Mode)
+    return out
+
+
+print()
+print("HideSwap is registered and zero-prompt")
+for name in ("HideSwap",):
+    cmd = commands.COMMANDS.get(name.lower())
+    check(cmd is not None and cmd.name == name, f"{name} is registered")
+    check(cmd is not None and list(cmd.steps) == [], f"{name} has no prompts")
+
+for key, other, other_mode in (("hideswap", "locked", L),):
+    a_mode, b_mode = (N, H) if key == "hideswap" else (N, L)
+    print()
+    print(f"{key}: mixed document swaps both directions and leaves the third state alone")
+    ctx = swap_doc(FakeCtx(), [("A", a_mode), ("A2", a_mode), ("B", b_mode),
+                               ("C", other_mode)])
+    group = r3.Group()
+    group.Name = "G"
+    ctx.model.file.Groups.Add(group)
+    for f in ctx.model.file.Objects:
+        if f.Attributes.Name == "A":
+            f.Attributes.AddToGroup(0)
+    ctx.select("A", "C")
+    before = doc_rows(ctx)
+    msg, done = fresh(key).execute(ctx)
+    after = doc_rows(ctx)
+    check(done is True, f"{key} completes")
+    check(ctx.modes("A") == [b_mode] and ctx.modes("A2") == [b_mode],
+          f"{key}: both Normal objects moved to the other state ({ctx.modes('A')}, {ctx.modes('A2')})")
+    check(ctx.modes("B") == [a_mode], f"{key}: the swapped-state object became Normal ({ctx.modes('B')})")
+    check(ctx.modes("C") == [other_mode], f"{key}: the {other} object is untouched ({ctx.modes('C')})")
+    check(set(before) == set(after)
+          and all(before[k][:4] == after[k][:4] for k in before),
+          f"{key}: ids, names, layers, groups and geometry are unchanged")
+    check(after[[k for k in after if after[k][0] == "A"][0]][2] == [0],
+          f"{key}: group membership survives")
+    check(ctx._selected == ["A", "C"], f"{key}: the selection records are untouched")
+    check(ctx.changes == [fresh(key).name], f"{key}: one note_change before mutating ({ctx.changes})")
+    check(isinstance(msg, str) and "2 objects" in msg and "1 object" in msg,
+          f"{key}: the message counts both directions ({msg!r})")
+
+    print()
+    print(f"{key}: nothing eligible is a reported no-op with no undo record")
+    for states in ([], [("C", other_mode)]):
+        ctx = swap_doc(FakeCtx(), states)
+        msg, done = fresh(key).execute(ctx)
+        check(done and ctx.changes == [] and "No" in (msg or ""),
+              f"{key} on {[m for _n, m in states]}: no change, says so ({msg!r})")
+        check(ctx.modes("C") == ([other_mode] if states else []),
+              f"{key}: the {other} object stays {other}")
+
+    print()
+    print(f"{key}: only one direction available")
+    ctx = swap_doc(FakeCtx(), [("A", a_mode)])
+    fresh(key).execute(ctx)
+    check(ctx.modes("A") == [b_mode], f"{key}: a lone Normal object is swapped ({ctx.modes('A')})")
+    ctx = swap_doc(FakeCtx(), [("B", b_mode)])
+    fresh(key).execute(ctx)
+    check(ctx.modes("B") == [a_mode], f"{key}: a lone swapped-state object returns ({ctx.modes('B')})")
+
+    print()
+    print(f"{key}: objects sharing a name are swapped from their own state")
+    ctx = FakeCtx()
+    ctx.model.add_object(seg(), "Dup")
+    ctx.model.add_object(seg(), "Dup")
+    list(ctx.model.file.Objects)[1].Attributes.Mode = b_mode
+    fresh(key).execute(ctx)
+    check(sorted(int(m) for m in ctx.modes("Dup")) == sorted([int(a_mode), int(b_mode)]),
+          f"{key}: one Dup each way, not both set alike ({ctx.modes('Dup')})")
+
+    print()
+    print(f"{key}: one Undo record, exact Redo, and the file round-trip (real context)")
+    ctx = real_ctx([])
+    swap_doc(ctx, [("A", a_mode), ("B", b_mode), ("C", other_mode)])
+    start = doc_rows(ctx)
+    depth = len(ctx.undo._undo)
+    cmd = fresh(key)
+    cmd.begin(ctx)
+    swapped = doc_rows(ctx)
+    check(len(ctx.undo._undo) == depth + 1, f"{key}: exactly one Undo record is added")
+    check([swapped[k][4] for k in sorted(swapped)]
+          == [{a_mode: b_mode, b_mode: a_mode}.get(start[k][4], start[k][4]) for k in sorted(start)],
+          f"{key}: begin() runs the swap")
+    ctx.undo_last()
+    check(doc_rows(ctx) == start, f"{key}: ONE Undo restores every Mode exactly")
+    ctx.redo_last()
+    check(doc_rows(ctx) == swapped, f"{key}: Redo reproduces the swap exactly")
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmp:
+        path = os.path.join(tmp, f"{key}.3dm")
+        saved = ctx.model.save(path)
+        back = {}
+        if saved:
+            for f in r3.File3dm.Read(path).Objects:
+                back[str(f.Attributes.Id)] = (f.Attributes.Name, f.Attributes.Mode)
+        check(saved and back == {k: (v[0], v[4]) for k, v in swapped.items()},
+              f"{key}: the swapped Mode survives save and reload ({back})")
+
 print()
 print("=" * 60)
 if failures:

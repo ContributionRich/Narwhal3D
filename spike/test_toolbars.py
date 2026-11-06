@@ -94,7 +94,7 @@ check(sum(len(tab["buttons"]) for tab in data.TABS) == 582,
 
 implemented = live_command_names()
 rows = [button for name in names for button in toolbars.tab_rows(name, implemented)]
-check(len(implemented) == 186, "the app-equivalent registry has 186 commands", len(implemented))
+check(len(implemented) == 187, "the app-equivalent registry has 187 commands", len(implemented))
 check(len(rows) == 582, "every top slot reaches the stable Button API")
 check(sum(button.is_separator for button in rows) == 57,
       "57 intentional top-toolbar spacers remain real separators")
@@ -108,7 +108,7 @@ check(len(parametric) == 1 and parametric[0].tooltip == "Parametric tools"
       and not parametric[0].enabled,
       "the generic parametric slot remains vendor-neutral and explicitly unavailable")
 enabled, total = toolbars.coverage(implemented)
-check((enabled, total) == (120, 525),
+check((enabled, total) == (121, 525),
       "coverage counts repeated runnable slots and explicit unavailable slots", (enabled, total))
 
 print("\n2. Exact 37-cell left palette and linked flyouts")
