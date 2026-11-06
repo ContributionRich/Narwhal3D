@@ -8272,8 +8272,11 @@ class JoinCmd(Command):
     joined rather than quietly ignored (the explicit-refusal policy). The documented options
     (`Undo`, `JoinDisjointMeshes`, `SubDJoinedEdges`, `SelChain`, `JoinCopy`) are
     likewise not declared, because declaring an option we cannot honour would make
-    it look implemented.
+    it look implemented. The separate `JoinCopy` command keeps the inputs.
     """
+
+    #: JoinCopy sets this: add the joined result and leave every input in place.
+    _keep_inputs = False
 
     name = "Join"
     description = ("Join selected curves that touch end-to-end into a polyline "
@@ -8317,7 +8320,7 @@ class JoinCmd(Command):
     def execute(self, ctx: NarwhalContext):
         names = self._ordered_selection(ctx)
         if len(names) < 2:
-            return "Join: select at least two objects to join", True
+            return f"{self.name}: select at least two objects to join", True
 
         items, non_curves = [], []
         for name in names:
@@ -8329,23 +8332,23 @@ class JoinCmd(Command):
 
         if len(items) < 2:
             if non_curves:
-                return ("Join: only curves can be joined yet -- joining "
+                return (f"{self.name}: only curves can be joined yet -- joining "
                         "surfaces, polysurfaces and meshes is not implemented"), True
-            return "Join: select at least two curves", True
+            return f"{self.name}: select at least two curves", True
 
         tol = self._tolerance(ctx)
         chains = bridge.join_curves(items, tol)
         if not chains:
-            return ("Join: those curves do not touch end-to-end "
+            return (f"{self.name}: those curves do not touch end-to-end "
                     f"(within {tol:g})"), True
 
-        ctx.note_change("Join")
+        ctx.note_change(self.name)
         made = []
         for keys, geom, closed in chains:
             # The FIRST key of the chain is the earliest selected member, so its
             # layer is the one the help says the result inherits.
             layer_index = _layer_index_of(ctx, keys[0])
-            for name in keys:
+            for name in ([] if self._keep_inputs else keys):
                 ob = ctx.object_by_name(name)
                 if ob is not None:
                     _remove_object_from_scene(ob)
@@ -8358,11 +8361,27 @@ class JoinCmd(Command):
 
         left = sum(len(keys) for keys, _, _ in chains)
         parts = [f"{d} ({n} curves{', closed' if c else ''})" for d, n, c in made]
-        msg = f"Joined {left} curves into {len(made)}: " + "; ".join(parts)
+        verb = "Joined copies of" if self._keep_inputs else "Joined"   # OURS: JoinCopy wording
+        msg = f"{verb} {left} curves into {len(made)}: " + "; ".join(parts)
         if non_curves:
             msg += (f". Not joined ({len(non_curves)}): only curves can be joined "
                     f"yet -- surfaces, polysurfaces and meshes are not implemented")
         return msg, True
+
+
+class JoinCopyCmd(JoinCmd):
+    """`JoinCopy` -- `Join`, keeping the inputs.
+
+    Same selection order, document tolerance, chains, result type and layer rule as
+    `Join` (`bridge.join_curves` duplicates its members, so the inputs are only read);
+    the joined result is added and no input is deleted or changed. One Undo step
+    removes only the result.
+    """
+
+    name = "JoinCopy"
+    description = "Join copies of curves that touch end-to-end, keeping the originals."
+    steps = [("Select objects to join:", OBJECTS_MULTI)]
+    _keep_inputs = True
 
 
 class CloseCrvCmd(Command):
@@ -17243,7 +17262,7 @@ def _build_registry():
                 MoveCmd, RotateCmd, ScaleCmd, CopyCmd, ArrayLinearCmd,
                 CopyToClipboardCmd, CutCmd, PasteCmd,
                 Rotate3DCmd, Scale1DCmd, Scale2DCmd, OrientCmd, Orient3PtCmd,
-                ArrayPolarCmd, MirrorCmd, DeleteCmd, JoinCmd, ExplodeCmd, CloseCrvCmd,
+                ArrayPolarCmd, MirrorCmd, DeleteCmd, JoinCmd, JoinCopyCmd, ExplodeCmd, CloseCrvCmd,
                 ProjectCmd, ProjectToCPlaneCmd, ExtendCmd, DivideCmd, ExtractWireframeCmd,
                 SelectCmd, ZoomCmd,
                 UndoCmd, RedoCmd, ClearUndoCmd, PointsOnCmd, PointsOffCmd,

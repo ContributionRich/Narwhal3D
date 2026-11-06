@@ -55,7 +55,7 @@ EXPECTED_MENUS = (
 )
 EXPECTED_RUNNABLE_COUNTS = {
     "File": 8,
-    "Edit": 50,
+    "Edit": 51,
     "View": 14,
     "Curve": 47,
     "Surface": 13,
@@ -103,7 +103,7 @@ def walk_rows(rows, path=()):
 
 
 print("\n-- live registry and authored structure --")
-check(len(REGISTERED) == 189, "the bare-package live registry has 189 commands",
+check(len(REGISTERED) == 190, "the bare-package live registry has 190 commands",
       repr(len(REGISTERED)))
 check(SIBLING_PINS <= REGISTERED,
       "commands unique to every sibling provider are present",
