@@ -10,7 +10,10 @@ Every registered command appears exactly once. Future-facing command rows are ex
 clickable TODO actions: their labels end in ``(Not implemented)`` and their payloads are
 canonical command keys which are intentionally absent from the live registry. The menu
 renderer sends those leaves to ``narwhal.menu_todo``, which explains the missing feature.
-Labels, grouping, and order are original project-authored information architecture.
+A menu row generated from a toolbar button follows the live registry: while its command
+is unregistered it stays a TODO row, and once that command is registered the same row is
+a normal runnable item. Labels, grouping, and order are original project-authored
+information architecture.
 """
 
 from . import toolbar_data
@@ -427,7 +430,13 @@ def _walk_commands(rows):
             yield from _walk_commands(row[3])
 
 
-def _toolbar_groups():
+def _toolbar_groups(registered):
+    """Generate the menu groups for toolbar commands absent from the authored rows.
+
+    ``registered`` is the set of live command keys. A generated row is runnable when
+    its command is registered, and an explicit TODO row otherwise, so a finished
+    command never keeps advertising itself as missing.
+    """
     used = {command for _menu, rows in _CORE_MENUS
             for command in _walk_commands(rows)}
     used.update(command for rows in _SERVICE_GROUPS.values()
@@ -456,13 +465,14 @@ def _toolbar_groups():
                 label = alternate if alternate.casefold() not in seen_labels \
                     else f"{label} [{command}]"
             seen_labels.add(label.casefold())
-            grouped.setdefault((target, group_name), []).append(_todo(label, command))
+            row = _item(label, command) if command in registered else _todo(label, command)
+            grouped.setdefault((target, group_name), []).append(row)
             used.add(command)
     return grouped
 
 
-def _expanded_menus():
-    toolbar_groups = _toolbar_groups()
+def _expanded_menus(registered):
+    toolbar_groups = _toolbar_groups(registered)
     expanded = []
     for menu, rows in _CORE_MENUS:
         additions = list(_SERVICE_GROUPS.get(menu, ()))
@@ -477,7 +487,23 @@ def _expanded_menus():
     return tuple(expanded)
 
 
-MENUS = _expanded_menus()
+def _registered_command_keys():
+    """Return the live command keys for the generated rows.
+
+    Imported lazily: ``commands`` is a heavy module and importing it from here at
+    module scope is what would create an import cycle once a caller imports the menu
+    data first. The registry is only consulted to label generated rows.
+    """
+    try:
+        from . import commands
+    except Exception as error:  # noqa: BLE001 - a broken registry must not hide the menus
+        print(f"[narwhal3d] menu generation cannot read the command registry: "
+              f"{type(error).__name__}: {error}")
+        return frozenset()
+    return frozenset(commands.COMMANDS)
+
+
+MENUS = _expanded_menus(_registered_command_keys())
 
 
 def _counts():
