@@ -11,6 +11,7 @@ import hashlib
 import os
 from pathlib import Path
 import platform
+import ssl
 import subprocess
 import sys
 import tarfile
@@ -21,6 +22,31 @@ ROOT = Path(__file__).resolve().parents[1]
 SDIST_SHA256 = '8315ec0c177ad4c69e8cc4e6d331c584110e8e8cc9bad294f121f18b4b7ec81a'
 SDIST_URL = ('https://files.pythonhosted.org/packages/f6/0a/'
              'b60de8b663fb898b7a9bc7f8a3b93c5fa32733defccbafb70d0b0bad8e4b/rhino3dm-8.35.0.tar.gz')
+
+
+# Where Linux distributions keep the system CA bundle (Debian/Ubuntu/Arch, Fedora/RHEL,
+# openSUSE). The bundled runtime's OpenSSL is built with no CA store of its own.
+SYSTEM_CA_BUNDLES = ('/etc/ssl/certs/ca-certificates.crt',
+                     '/etc/pki/tls/certs/ca-bundle.crt',
+                     '/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem',
+                     '/etc/ssl/ca-bundle.pem')
+
+
+def _tls_context():
+    """A verifying TLS context: the default trust store, else the system CA bundle.
+
+    The bundled runtime's Python reports no default CA file or directory, so every
+    HTTPS download failed with CERTIFICATE_VERIFY_FAILED. Verification is never
+    turned off; the archive is also checked against SDIST_SHA256 after download.
+    """
+    context = ssl.create_default_context()
+    paths = ssl.get_default_verify_paths()
+    if not (os.environ.get(paths.openssl_cafile_env) or os.environ.get(paths.openssl_capath_env)
+            or paths.cafile or paths.capath):
+        bundle = next((p for p in SYSTEM_CA_BUNDLES if os.path.isfile(p)), None)
+        if bundle is not None:
+            context.load_verify_locations(cafile=bundle)
+    return context
 
 
 def sha(path):
@@ -92,7 +118,8 @@ def main():
     if not archive.is_file():
         download = archive.with_suffix('.download')
         deadline = time.monotonic() + 120
-        with urllib.request.urlopen(SDIST_URL, timeout=20) as response, download.open('wb') as output:
+        with urllib.request.urlopen(SDIST_URL, timeout=20, context=_tls_context()) as response, \
+                download.open('wb') as output:
             total = 0
             while block := response.read(1024 * 1024):
                 if time.monotonic() > deadline:
