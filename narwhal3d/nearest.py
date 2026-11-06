@@ -202,6 +202,79 @@ def distance_to_curve(curve, point, tolerance=None):
     return closest_point_on_curve(curve, point, tolerance).distance
 
 
+class NearCache:
+    """What :func:`near_point` reuses for one curve: its analytic kind and its packed
+    NURBS form. Built once per snap target; the target is rebuilt on every edit."""
+
+    __slots__ = ("analytic", "packed", "knot_sampled")
+
+    def __init__(self, curve):
+        # Rust samples the knot breakpoints of the NURBS form. `_search` samples the
+        # curve's own knots, or `SpanCount` uniform spans when it has none (a poly
+        # curve, say), so the two seed the same parameters -- and find the same
+        # minimum on a multi-modal curve -- only for a curve with a knot vector.
+        self.knot_sampled = _knots(curve) is not None
+        circle = _try(curve, "TryGetCircle")
+        arc = None if circle is not None else _try(curve, "TryGetArc")
+        if circle is not None:
+            self.analytic = ("circle", circle)
+        elif arc is not None:
+            self.analytic = ("arc", arc)
+        elif _is_linear(curve):
+            self.analytic = ("line", None)
+        else:
+            self.analytic = None
+        try:
+            from . import native_nearest
+        except ImportError:                   # loaded directly, without a package
+            import native_nearest
+        self.packed = native_nearest.pack(curve)
+
+
+def near_point(curve, point, cache, tolerance=None):
+    """The Near snap's point: :func:`closest_point_on_curve`'s ``.point``, searched in Rust.
+
+    Follows the same route: the analytic target (line, arc, circle) comes from the
+    same primitives, an on-axis query returns the domain start, and the target is
+    verified on the curve before it is trusted. Only the search runs in Rust, on the
+    curve's NURBS form from `cache` (a :class:`NearCache`). Returns None when the
+    library or the packed curve is unavailable, so the caller uses the Python search.
+
+    A curve without a knot vector is searched natively only for a verified analytic
+    target: that target lies ON the curve, so the minimum is unique whatever the
+    seeds. Its general search stays in Python (None) so seeding cannot differ.
+    """
+    if cache.packed is None:
+        return None
+    try:
+        from . import native_nearest
+    except ImportError:                       # loaded directly, without a package
+        import native_nearest
+    tol = default_tolerance() if tolerance is None else float(tolerance)
+    p = _pt(point)
+    if cache.analytic is not None:
+        kind, primitive = cache.analytic
+        if kind == "circle":
+            exact = _circle_target(primitive, p, tol)
+        elif kind == "arc":
+            exact = _arc_target(primitive, p, tol)
+        else:
+            exact = _line_target(curve, p)
+        if exact is not None:
+            _method, target, ambiguous = exact
+            if ambiguous:
+                return _eval(curve, _domain(curve)[0])
+            res = native_nearest.search(cache.packed, target)
+            if res is None:
+                return None
+            if _dist(res[1], target) <= tol:
+                return res[1]
+    if not cache.knot_sampled:
+        return None
+    res = native_nearest.search(cache.packed, p)
+    return None if res is None else res[1]
+
+
 # ---------------------------------------------------------------------------
 # the analytic routes: they supply an exact TARGET, not an answer
 # ---------------------------------------------------------------------------
