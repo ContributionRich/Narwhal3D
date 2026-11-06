@@ -189,7 +189,7 @@ class SnapTarget:
     """
 
     __slots__ = ("points", "vertices", "knots", "center", "closed", "is_point",
-                 "name", "curve", "locked", "_mids", "_quad")
+                 "name", "curve", "locked", "_mids", "_quad", "_near")
 
     def __init__(self, points=(), vertices=(), knots=(), center=None,
                  closed=False, is_point=False, name="", curve=None, locked=False):
@@ -204,6 +204,7 @@ class SnapTarget:
         self.locked = bool(locked)
         self._mids = None            # `_target_mids`' answer, once computed
         self._quad = None            # (plane key, `quadrant_points`' answer)
+        self._near = None            # `nearest.NearCache` for the exact Near point
 
     @classmethod
     def from_floats(cls, points, vertices, center=None, closed=False, name="",
@@ -224,6 +225,7 @@ class SnapTarget:
         t.locked = bool(locked)
         t._mids = None
         t._quad = None
+        t._near = None
         return t
 
     @classmethod
@@ -434,14 +436,36 @@ def _nearest_on_target(target, cursor):
     curve = getattr(target, "curve", None)
     if curve is not None:
         try:
-            try:
-                from . import nearest
-            except ImportError:  # loaded directly, without a package
-                import nearest
-            return nearest.closest_point_on_curve(curve, cursor).point
+            return _exact_near(target, curve, cursor)
         except Exception:  # noqa: BLE001
             pass  # any trouble -> fall back to the polyline, never silently fail
     return nearest_on_polyline(target.points, cursor)
+
+
+def _exact_near(target, curve, point):
+    """The exact Near point on `curve`: `nearest.near_point` (the search in Rust, on a
+    NURBS form cached on the target) or, without the library, the Python
+    `closest_point_on_curve`. Both return the same point, bit for bit.
+
+    The cache lives on the target like `_mids` and `_quad`: targets are rebuilt from
+    the document whenever an edit invalidates the snap cache, so it never outlives
+    the curve it was packed from.
+    """
+    try:
+        from . import nearest
+    except ImportError:  # loaded directly, without a package
+        import nearest
+    cache = getattr(target, "_near", None)
+    if cache is None:
+        cache = nearest.NearCache(curve)
+        try:
+            target._near = cache
+        except AttributeError:  # a duck-typed target without the slot: no reuse
+            pass
+    point_on_curve = nearest.near_point(curve, point, cache)
+    if point_on_curve is not None:
+        return point_on_curve
+    return nearest.closest_point_on_curve(curve, point).point
 
 
 def _project_on_segment(a, b, p):
@@ -993,11 +1017,7 @@ def _refine_near(target, point):
     curve = getattr(target, "curve", None)
     if curve is not None:
         try:
-            try:
-                from . import nearest
-            except ImportError:  # loaded directly, without a package
-                import nearest
-            return nearest.closest_point_on_curve(curve, point).point
+            return _exact_near(target, curve, point)
         except Exception:  # noqa: BLE001
             pass
     return point

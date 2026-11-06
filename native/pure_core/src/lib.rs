@@ -29,6 +29,7 @@ pub mod joinchain;
 pub mod macro_parse;
 pub mod macro_plan;
 mod metadata_ffi;
+pub mod nearest;
 pub mod numparse;
 pub mod numparse_owned;
 pub mod obj;

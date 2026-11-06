@@ -202,6 +202,70 @@ def distance_to_curve(curve, point, tolerance=None):
     return closest_point_on_curve(curve, point, tolerance).distance
 
 
+class NearCache:
+    """What :func:`near_point` reuses for one curve: its analytic kind and its packed
+    NURBS data. Built once per snap target; the target is rebuilt on every edit."""
+
+    __slots__ = ("analytic", "packed")
+
+    def __init__(self, curve):
+        circle = _try(curve, "TryGetCircle")
+        arc = None if circle is not None else _try(curve, "TryGetArc")
+        if circle is not None:
+            self.analytic = ("circle", circle)
+        elif arc is not None:
+            self.analytic = ("arc", arc)
+        elif _is_linear(curve):
+            self.analytic = ("line", None)
+        else:
+            self.analytic = None
+        try:
+            from . import native_nearest
+        except ImportError:                   # loaded directly, without a package
+            import native_nearest
+        # None unless `curve` is a NurbsCurve: see `native_nearest.pack`.
+        self.packed = native_nearest.pack(curve)
+
+
+def near_point(curve, point, cache, tolerance=None):
+    """The Near snap's point: :func:`closest_point_on_curve`'s ``.point``, searched in Rust.
+
+    Follows the same route: the analytic target (line, arc, circle) comes from the
+    same primitives, an on-axis query returns the domain start, and the target is
+    verified on the curve before it is trusted. Only `_search` runs in Rust, on the
+    `NurbsCurve` packed in `cache` (a :class:`NearCache`), and its point is
+    bit-identical to the Python one. Returns None when the library is missing or the
+    curve is not a `NurbsCurve`, so the caller uses the Python search.
+    """
+    if cache.packed is None:
+        return None
+    try:
+        from . import native_nearest
+    except ImportError:                       # loaded directly, without a package
+        import native_nearest
+    tol = default_tolerance() if tolerance is None else float(tolerance)
+    p = _pt(point)
+    if cache.analytic is not None:
+        kind, primitive = cache.analytic
+        if kind == "circle":
+            exact = _circle_target(primitive, p, tol)
+        elif kind == "arc":
+            exact = _arc_target(primitive, p, tol)
+        else:
+            exact = _line_target(curve, p)
+        if exact is not None:
+            _method, target, ambiguous = exact
+            if ambiguous:
+                return _eval(curve, _domain(curve)[0])
+            res = native_nearest.search(cache.packed, target)
+            if res is None:
+                return None
+            if _dist(res[1], target) <= tol:
+                return res[1]
+    res = native_nearest.search(cache.packed, p)
+    return None if res is None else res[1]
+
+
 # ---------------------------------------------------------------------------
 # the analytic routes: they supply an exact TARGET, not an answer
 # ---------------------------------------------------------------------------
