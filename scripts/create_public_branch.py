@@ -181,7 +181,7 @@ TEST_FILES = (
     "spike/test_sel_dup.py", "spike/test_research13_selection.py",
     "spike/test_set_group_name.py", "spike/test_measure.py",
     "spike/test_transform_cmds.py", "spike/test_line_modes.py", "spike/test_what.py",
-    "spike/test_curve_tools.py", "spike/test_insertknot.py", "spike/test_join.py",
+    "spike/test_curve_tools.py", "spike/test_insertknot.py", "spike/test_join.py", "spike/test_explode.py",
     "spike/test_length_cmd.py",
     "spike/test_pyramid_preview.py",
     "spike/test_solid_previews.py",

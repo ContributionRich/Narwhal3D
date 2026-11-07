@@ -295,6 +295,7 @@ PURE_SUITES=(
     spike/test_curve_tools.py
     spike/test_insertknot.py
     spike/test_join.py
+    spike/test_explode.py
     spike/test_document_registry_tracking.py
     spike/test_document_registry_baseline.py
     spike/test_document_registry_model.py

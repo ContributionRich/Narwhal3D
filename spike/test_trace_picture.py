@@ -189,7 +189,7 @@ def run(lines, selected="Picture_1"):
 unit = model.NarwhalModel().unit_system()
 check(unit == "Millimeters", f"test model is in millimeters ({unit})")
 ctx, cmd, msg, done = run(["InnerCuts=No", "Offset=0.5", ""])
-check(done and len(ctx.made) == 1 and all(isinstance(g, r3.NurbsCurve) and g.IsClosed for g in ctx.made),
+check(done and len(ctx.made) == 1 and all(isinstance(g, r3.PolyCurve) and g.IsClosed for g in ctx.made),
       f"Enter adds the closed cut curves ({msg})")
 ctx, cmd, msg, done = run([])
 check(not done and abs(cmd.opt["Offset"] - 1.27) < 1e-9,
@@ -208,6 +208,25 @@ ctx, cmd, msg, done = run(["ColorTolerance=80"])
 check(not done and "between 0 and 60" in msg, "ColorTolerance is limited to 0-60 percent")
 ctx, cmd, msg, done = run([], selected="Line_1")
 check(done and not ctx.made and "Picture" in msg, f"a non-Picture is refused by name ({msg})")
+
+# Explode must retain cubic segments, including old packed traces (bug #113).
+joined = tp.bezier_loop(r3, outer)
+parts = joined.Explode()
+check(joined.IsClosed and len(parts) == spans and all(p.Degree == 3 for p in parts),
+      "new traces retain their exact cubic segments for Explode")
+legacy = tp.legacy_bezier_segments(r3, curve)
+check(legacy is not None and len(legacy) == spans,
+      "old packed cubic traces split into their constituent Bezier curves")
+def xyz(point):
+    return point.X, point.Y, point.Z
+
+
+check(all(math.dist(xyz(curve.PointAt(i + 0.37)),
+                    xyz(p.PointAt(p.Domain.T0 + 0.37 * (p.Domain.T1 - p.Domain.T0)))) < 1e-9
+          for i, p in enumerate(legacy)),
+      "legacy pieces reproduce the original exactly, without fitting")
+check(tp.legacy_bezier_segments(r3, r3.Circle(r3.Point3d(0, 0, 0), 2).ToNurbsCurve()) is None,
+      "ordinary rational circles are not exploded into arbitrary spans")
 
 failed = [label for ok, label in checks if not ok]
 print(f"\n{len(checks) - len(failed)}/{len(checks)} TracePicture checks passed")

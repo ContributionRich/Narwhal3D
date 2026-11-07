@@ -206,3 +206,32 @@ def nurbs_curve(r3, ctrl):
     for i, k in enumerate(knots(spans)):
         curve.Knots[i] = k
     return curve
+
+
+def bezier_loop(r3, ctrl):
+    """Preserve a traced loop's exact cubic segments as an explodable PolyCurve."""
+    curve = r3.PolyCurve()
+    for start in range(0, len(ctrl) - 1, 3):
+        if not curve.Append(nurbs_curve(r3, ctrl[start:start + 4])):
+            raise TraceError("could not assemble the traced cubic segments")
+    return curve
+
+
+def legacy_bezier_segments(r3, curve):
+    """Exact compatibility for the packed, clamped cubic chains used by older traces.
+
+    OURS: only full-multiplicity internal knots qualify, not ordinary smooth NURBS
+    curves. Python only coordinates native openNURBS trimming; no curve fitting.
+    """
+    if not isinstance(curve, r3.NurbsCurve) or curve.Degree != 3:
+        return None
+    knots_ = list(curve.Knots)
+    if len(knots_) < 9 or len(knots_) % 3:
+        return None
+    breaks = knots_[::3]
+    if any(knots_[i:i + 3] != [knots_[i]] * 3 for i in range(0, len(knots_), 3)):
+        return None
+    if any(a >= b for a, b in zip(breaks, breaks[1:])):
+        return None
+    parts = [curve.Trim(a, b) for a, b in zip(breaks, breaks[1:])]
+    return parts if all(part is not None and part.IsValid for part in parts) else None

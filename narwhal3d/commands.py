@@ -8696,6 +8696,9 @@ class ExplodeCmd(Command):
             if geom is not None and bridge.curve_ends(geom) is not None:
                 pieces = bridge.explode_curve(geom)
                 if pieces is None:
+                    from .trace_picture import legacy_bezier_segments
+                    pieces = legacy_bezier_segments(r3, geom)
+                if pieces is None:
                     already_single.append(name)
                 else:
                     exploded.append((name, pieces, "segments"))
@@ -14470,7 +14473,7 @@ class TracePictureCmd(Command):
             return "TracePicture: no artwork was found. Nothing was created.", True
         made = []
         for ctrl in loops:
-            _, display_name = ctx.add_geometry(tp.nurbs_curve(r3, ctrl), "Curve")
+            _, display_name = ctx.add_geometry(tp.bezier_loop(r3, ctrl), "Curve")
             made.append(display_name)
         return f"Created {len(made)} cut curve(s) from {name}", True
 
