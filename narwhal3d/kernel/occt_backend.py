@@ -1733,6 +1733,44 @@ def tessellate_with_edges(shape, deflection=DISPLAY_DEFLECTION, angle=DISPLAY_ED
     return _tessellate_with_retry(shape, deflection, angle, True, tangent_angle)
 
 
+#: Interior refinement for a linear-extrusion face's DISPLAY mesh, as multiples of the
+#: requested deflection and as an angle. Such a face is straight along its direction, so its
+#: edges (meshed at the full deflection and angle) already carry all of its curvature.
+#: MEASURED (bug #111): a traced 44-span profile with straight spans and 11 corners,
+#: extruded, meshed its side in 12 s to 294k vertices with OCCT's surface-deflection
+#: control; with that control off and these interior limits, 0.14 s and 5.8k vertices.
+EXTRUSION_INTERIOR_DEFLECTION_SCALE = 50.0
+EXTRUSION_INTERIOR_ANGLE = 1.0
+
+
+def _premesh_extrusion_faces(shape, deflection, angle):
+    """Mesh every linear-extrusion face of `shape` for DISPLAY before the whole shape.
+
+    The whole-shape mesher then reuses these face meshes and their edge polygons, so caps
+    and side stay welded. Display only: the shape's geometry is untouched."""
+    from OCP.BRepAdaptor import BRepAdaptor_Surface
+    from OCP.BRepMesh import BRepMesh_IncrementalMesh
+    from OCP.GeomAbs import GeomAbs_SurfaceType
+    from OCP.IMeshTools import IMeshTools_Parameters
+    from OCP.TopAbs import TopAbs_ShapeEnum
+    from OCP.TopExp import TopExp_Explorer
+    from OCP.TopoDS import TopoDS
+
+    params = IMeshTools_Parameters()
+    params.Deflection = float(deflection)
+    params.Angle = float(angle)
+    params.InParallel = True
+    params.ControlSurfaceDeflection = False
+    params.DeflectionInterior = float(deflection) * EXTRUSION_INTERIOR_DEFLECTION_SCALE
+    params.AngleInterior = max(float(angle), EXTRUSION_INTERIOR_ANGLE)
+    exp = TopExp_Explorer(shape, TopAbs_ShapeEnum.TopAbs_FACE)
+    while exp.More():
+        face = TopoDS.Face(exp.Current())
+        if BRepAdaptor_Surface(face).GetType() == GeomAbs_SurfaceType.GeomAbs_SurfaceOfExtrusion:
+            BRepMesh_IncrementalMesh(face, params)
+        exp.Next()
+
+
 def _tessellate(shape, deflection, angle, want_edges, tangent_angle=None):
     """The mesher behind `tessellate` / `tessellate_with_edges`. Never the geometry.
 
@@ -1759,6 +1797,7 @@ def _tessellate(shape, deflection, angle, want_edges, tangent_angle=None):
     # first drawn at. `BRepTools.Clean_s` drops the cached mesh so the deflection actually
     # applies. Two successive density requests must therefore produce distinct meshes.
     BRepTools.Clean_s(shape)
+    _premesh_extrusion_faces(shape, deflection, angle)
     BRepMesh_IncrementalMesh(shape, float(deflection), False, float(angle), True)
     verts = []
     tris = []

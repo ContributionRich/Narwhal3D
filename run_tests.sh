@@ -437,6 +437,7 @@ BLENDER_SUITES=(
     spike/audit_representation.py
     spike/test_boolean.py
     spike/test_tessellate.py
+    spike/test_extrusion_display_mesh.py
     spike/test_trim.py
     spike/test_trim_drag.py
     spike/test_picture.py
