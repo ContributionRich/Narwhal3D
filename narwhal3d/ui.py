@@ -18547,6 +18547,32 @@ def _draw_transform_ghost(cmd, shader, gpu, batch_for_shader):
         gpu.matrix.pop()
 
 
+_LAYER_COLOR_PREVIEW_COMMANDS = frozenset({
+    "line", "polyline", "curve", "interpcrv", "handlecurve", "arc", "circle",
+    "ellipse", "rectangle", "polygon", "parabola", "parabola3pt", "conic",
+    "spiral", "helix", "tracepicture",
+})
+
+
+def command_preview_color(cmd):
+    """Sketch curves use their destination layer's wire colour, just like completed curves.
+
+    Black layers use the theme wire; operation highlights retain their distinct preview
+    colour. Read the live layer so changing it mid-command updates the preview as well.
+    """
+    if str(getattr(cmd, "name", "")).lower() not in _LAYER_COLOR_PREVIEW_COMMANDS:
+        return PREVIEW_COLOR
+    model = getattr(app_state, "model", None)
+    if model is None:
+        return WIRE_COLOR + (1.0,)
+    for layer in model.layers():
+        if layer["index"] == model.current_layer_index:
+            rgb = tuple(layer["color"][:3])
+            return (tuple(c / 255.0 for c in rgb) + (1.0,)
+                    if rgb != (0, 0, 0) else WIRE_COLOR + (1.0,))
+    return WIRE_COLOR + (1.0,)
+
+
 def draw_command_preview():
     """POST_VIEW draw handler: the running command's dynamic preview.
 
@@ -18646,7 +18672,7 @@ def draw_command_preview():
                 coords = [point for pair in zip(poly, poly[1:]) for point in pair]
                 if coords:
                     _line_batch(shader, aa, coords).draw(shader)
-        shader.uniform_float("color", PREVIEW_COLOR)
+        shader.uniform_float("color", command_preview_color(cmd))
         for poly in polylines or ():
             # Feed endpoint pairs to the same AA stroke builder as completed curves.
             coords = []
