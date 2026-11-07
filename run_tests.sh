@@ -328,6 +328,7 @@ PURE_SUITES=(
     spike/test_tween_curves.py
     spike/test_sequential_object_steps.py
     spike/test_handlecurve.py
+    spike/test_trace_picture.py
     spike/test_curve_through_srf_control_pt.py
     spike/test_conic.py
     spike/test_parabola.py

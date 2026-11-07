@@ -1,0 +1,35 @@
+VectorCraft upstream: https://github.com/storytold/vectorcraft
+Pinned release: 0.10.0
+Pinned commit: dbd2497b820c83ca8ea2cd79a31e709e0999f415
+Commit date: 2026-10-14
+Subject: Merge pull request #1632 from sanyamsingh001/codex/r61-screens-tiff
+Previous known-good branch: coco-known-good-0.6.0
+
+The checkout lives in ./vectorcraft and is excluded from the Coco workspace.
+Update deliberately: review upstream changes, advance this file and the checkout
+together, then build/test on macOS, Windows and Linux.
+
+0.6.0 -> 0.10.0 migration notes:
+- VectorCraft shape creation commands now accept geometry only. Coco creates
+  ellipse/rectangle geometry first, then applies fill, stroke and stroke weight
+  with paint.setFill, paint.setStroke and stroke.set.
+- select.all now excludes hidden and locked artwork. Coco's source capture uses
+  this behavior intentionally, so hidden/locked production helpers are not
+  accidentally adopted as new source art.
+- layer.move can deselect artwork moved into hidden or locked layers. Coco's
+  generated Cut, Bleed, White and Varnish layers remain visible and unlocked,
+  and affected operations explicitly restore the intended selection.
+- Coco calls vectorcraft_trace::trace_mask directly for cut generation. The new
+  UI Image Trace scaling behavior therefore does not alter Coco's fixed 288 PPI
+  cut pipeline.
+- The 0.10.0 upgrade requires Rust 1.95 and adds upstream craft-ui/craft-print
+  dependencies. Coco's focused format, strict Clippy and test suites pass at
+  this pin.
+
+Local PDF export fixes (2026-10-27; retain when updating upstream):
+- Spot ink with a white alternate color must not lose overprint under
+  discard_white_overprint; that setting is for process white.
+- Non-isolated opacity groups with overprinting contents must preserve the
+  backdrop rather than knocking out underlying process separations.
+- Regressions live in pdf/src/tests_layers.rs, engine/src/cmd/fileio/tests_pdflayers.rs,
+  and Coco's production_ink_exports_* PDF/AI tests (including Ghostscript separations).

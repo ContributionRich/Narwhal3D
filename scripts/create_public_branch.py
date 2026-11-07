@@ -187,7 +187,7 @@ TEST_FILES = (
     "spike/test_solid_previews.py",
     "spike/test_t117.py",
     "spike/test_research13_commands.py",
-    "spike/test_handlecurve.py", "spike/test_curve_through_srf_control_pt.py",
+    "spike/test_handlecurve.py", "spike/test_trace_picture.py", "spike/test_curve_through_srf_control_pt.py",
     "spike/test_sequential_object_steps.py",
     "spike/test_pure_core_gate.py", "spike/test_vector_export.py",
     "spike/test_native_joinchain.py", "spike/test_native_vector_export.py",
@@ -406,7 +406,7 @@ def public_files() -> list[str]:
                 + PATCH_FILES + SCRIPT_FILES + TEST_FILES)
     for directory in ("narwhal3d", "packaging", "licenses", ".github", "artwork"):
         paths.update(recursive_files(directory))
-    for directory in ("native/vendor/tracedraw",):
+    for directory in ("native/vendor/tracedraw", "native/cutline"):
         paths.update(recursive_files(directory))
     # Fail closed rather than silently publishing a copied retirement archive.
     try:

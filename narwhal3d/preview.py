@@ -1868,6 +1868,13 @@ def preview_offset(args, cursor, plane, resolve, cmd=None):
     return fn(resolve, cursor)
 
 
+def preview_trace_picture(args, cursor, plane, resolve, cmd=None):
+    """`TracePicture` (OURS): the cut lines for the current options, drawn on the picture
+    while the options are adjusted. The running command traces once per option change."""
+    fn = getattr(cmd, "preview_curves", None)
+    return fn(resolve, cursor) if callable(fn) else []
+
+
 def preview_pipe(args, cursor, plane, resolve, cmd=None):
     """`Pipe`: the radius circle(s) across the rail, the live one following the cursor
     (a recorded observation of the reference program). Display only."""
@@ -1981,6 +1988,7 @@ PREVIEWS_WITH_DOC = {
     "revolve": preview_revolve,
     "pipe": preview_pipe,
     "offset": preview_offset,
+    "tracepicture": preview_trace_picture,
     "extrudecrv": preview_extrudecrv,
     "extrudecrvtapered": preview_extrudecrv,
     "extrudesrf": preview_extrudesrf,

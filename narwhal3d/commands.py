@@ -6,6 +6,7 @@ the reference CAD application's command-line behavior.
 """
 from __future__ import annotations
 
+import json
 import math
 import os
 
@@ -14239,6 +14240,238 @@ class PictureCmd(Command):
 # Grid -- document/viewport settings backend; display wiring is deferred
 # ---------------------------------------------------------------------------
 
+class TracePictureCmd(Command):
+    """`TracePicture` -- closed cut lines around the artwork in a placed Picture.
+
+    OURS: the reference CAD application has no such command. The flow follows its command
+    conventions: select a Picture, adjust options on the command line while the cut previews
+    on the picture, press Enter to add the curves (one Undo step). The tracing is the Rust
+    `coco-cutline` helper (`native/cutline`); `trace_picture` maps its cubic Beziers onto the
+    Picture's frame as exact closed degree-3 NURBS curves.
+
+    Background: Auto detects transparency or a solid border colour; Transparent uses only
+    transparency; Color removes the colour in `Color` (typed #rrggbb, or PickColor to click
+    it on the picture) within ColorTolerance percent. Offset and MinHoleArea are in model
+    units; InnerCuts=No cuts only outer outlines.
+    """
+
+    name = "TracePicture"
+    description = "Trace closed cut curves around the artwork in a placed picture."
+    SELECT = "Select picture to trace:"
+    ACCEPT = "Press Enter to accept:"
+    PICK = "Pick the background color on the picture:"
+    steps = [(SELECT, OBJECTS), (ACCEPT, TEXT)]
+    preselect_names = 1
+    cancel_on_empty_set = True
+    options = (
+        opts.Option("Offset", opts.VALUE, value_kind="number", default=None,
+                    help="Distance from the artwork to the cut, in model units; negative "
+                         "cuts inside the artwork."),
+        opts.Option("Background", opts.ENUM, choices=("Auto", "Transparent", "Color"),
+                    default="Auto",
+                    help="What counts as background: Auto (transparency or a solid border "
+                         "colour), Transparent, or the Color below."),
+        opts.Option("Color", opts.VALUE, value_kind="text", default="#ffffff",
+                    help="The background colour to remove with Background=Color (#rrggbb)."),
+        opts.Option("PickColor", opts.MODE,
+                    help="Click the picture to take the background colour from it."),
+        opts.Option("ColorTolerance", opts.VALUE, value_kind="number", default=12.0,
+                    help="How close a pixel must be to the background colour, 0-60 percent."),
+        opts.Option("InnerCuts", opts.TOGGLE, default=True,
+                    help="Also cut holes (windows) inside the artwork."),
+        opts.Option("MinHoleArea", opts.VALUE, value_kind="number", default=None,
+                    help="Holes smaller than this area (model units squared) are not cut."),
+        opts.Option("Smoothness", opts.VALUE, value_kind="number", default=60.0,
+                    help="Rounding of the bridges joining separate islands, 0-100."),
+    )
+    #: sticky option values across runs (model-unit values are set on first use).
+    _sticky: dict = {}
+
+    def __init__(self):
+        super().__init__()
+        self.opt.update(TracePictureCmd._sticky)
+        self._cache_key = None
+        self._cache = None
+        self._error = None
+
+    def begin(self, ctx):
+        self._defaults(ctx)
+        out = super().begin(ctx)
+        self._name = self._picture_name(ctx) if self.step_index >= 1 else None
+        if self.step_index >= 1 and self._frame_of(
+                ctx.geom_by_name(self._picture_name(ctx))) is None:
+            return "TracePicture: select a Picture object (place one with Picture)", True
+        return out
+
+    # -- helpers ----------------------------------------------------------------------
+    def _unit(self, ctx):
+        model = getattr(ctx, "model", None)
+        try:
+            return model.unit_system() if model is not None else "Millimeters"
+        except Exception:  # noqa: BLE001
+            return "Millimeters"
+
+    def _defaults(self, ctx):
+        from . import trace_picture as tp, units
+        unit = self._unit(ctx)
+        self._preview_unit = unit
+        if self.opt.get("Offset") is None:
+            self.opt["Offset"] = units.convert(tp.DEFAULT_OFFSET_IN, "Inches", unit)
+        if self.opt.get("MinHoleArea") is None:
+            side = units.convert(1.0, "Inches", unit)
+            self.opt["MinHoleArea"] = tp.DEFAULT_MIN_HOLE_IN2 * side * side
+
+    def _enter_default(self, ctx):
+        if self.step_index < len(self.steps) and self.steps[self.step_index][0] == self.ACCEPT:
+            return ""
+        return super()._enter_default(ctx)
+
+    def _picture_name(self, ctx=None):
+        name = self.args[0] if self.args else getattr(self, "_name", None)
+        if not name and ctx is not None and hasattr(ctx, "selected_objects"):
+            selected = ctx.selected_objects()
+            name = selected[0].name if selected else None
+        return name
+
+    @staticmethod
+    def _frame_of(geom):
+        return bridge.picture_frame(geom) if geom is not None else None
+
+    def _settings(self):
+        return {"offset": float(self.opt["Offset"]), "min_hole": float(self.opt["MinHoleArea"]),
+                "inner_cuts": bool(self.opt["InnerCuts"]),
+                "background": self.opt["Background"], "color": self.opt["Color"],
+                "color_tolerance": float(self.opt["ColorTolerance"]),
+                "smoothness": float(self.opt["Smoothness"])}
+
+    def _controls(self, frame, unit):
+        """The traced loops' world control points for the current options (cached)."""
+        from . import picture, trace_picture as tp, units
+        helper = tp.helper_path()
+        if helper is None:
+            raise tp.TraceError("the trace helper is not built (run scripts/setup_dev_native.sh)")
+        image = frame["image"]
+        if not os.path.isfile(image):
+            raise tp.TraceError(f"the picture's image file {image} cannot be found")
+        settings = self._settings()
+        key = (image, os.path.getmtime(image), json.dumps(frame, sort_keys=True), unit,
+               json.dumps(settings, sort_keys=True))
+        if key != self._cache_key:
+            info = picture.read_image_info(image)
+            args = tp.helper_args(image, info.width, frame,
+                                  units.convert(1.0, unit, "Inches"), settings)
+            self._cache_key, self._cache = key, tp.loop_controls(tp.trace(helper, args), frame)
+        return self._cache
+
+    # -- options ----------------------------------------------------------------------
+    def on_option_set(self, option, value, ctx):
+        from . import trace_picture as tp
+        limits = {"ColorTolerance": (0.0, 60.0), "Smoothness": (0.0, 100.0)}
+        if option.name in limits:
+            lo, hi = limits[option.name]
+            if not lo <= float(value) <= hi:
+                self.opt[option.name] = TracePictureCmd._sticky.get(option.name, option.default)
+                return f"TracePicture: {option.name} must be between {lo:g} and {hi:g}", False
+        if option.name == "MinHoleArea" and float(value) < 0:
+            self.opt[option.name] = TracePictureCmd._sticky.get(option.name)
+            return "TracePicture: MinHoleArea cannot be negative", False
+        if option.name == "Color":
+            color = tp.hex_color(value)
+            if color is None:
+                self.opt["Color"] = TracePictureCmd._sticky.get("Color", option.default)
+                return "TracePicture: Color must look like #ffffff", False
+            self.opt["Color"] = color
+            self.opt["Background"] = "Color"
+        TracePictureCmd._sticky.update({k: self.opt[k] for k in (
+            "Offset", "Background", "Color", "ColorTolerance", "InnerCuts", "MinHoleArea",
+            "Smoothness") if self.opt.get(k) is not None})
+        return None
+
+    def on_mode(self, name, ctx):
+        if name != "PickColor":
+            return super().on_mode(name, ctx)
+        if self.step_index < 1:
+            return "TracePicture: select the picture first", False
+        if self.steps[self.step_index][0] != self.PICK:
+            self.steps = self.steps[:self.step_index] + [(self.PICK, POINT), (self.ACCEPT, TEXT)]
+        return None, False
+
+    # -- input ------------------------------------------------------------------------
+    def _feed(self, text, ctx):
+        from . import picture, trace_picture as tp
+        raw = (text or "").strip()
+        label = self.steps[self.step_index][0] if self.step_index < len(self.steps) else None
+        if label == self.PICK and raw and self.pending_option is None:
+            opt_match = opts.match(raw, self.options, self.opt)
+            if opt_match.status == opts.NONE:
+                try:
+                    point = parse_point(raw, self._active_cplane(ctx), None)
+                except ValueError as e:
+                    return str(e), False
+                frame = self._frame_of(ctx.geom_by_name(self._picture_name(ctx)))
+                helper = tp.helper_path()
+                if frame is None or helper is None:
+                    return "TracePicture: the picture or the trace helper is unavailable", True
+                info = picture.read_image_info(frame["image"])
+                pixel = tp.pixel_at(frame, picture.uv_of(frame, point), (info.width, info.height))
+                if pixel is None:
+                    return "TracePicture: pick a point on the picture", False
+                try:
+                    color = tp.sample_color(helper, frame["image"], *pixel)
+                except tp.TraceError as e:
+                    return f"TracePicture: {e}", False
+                self.opt["Color"], self.opt["Background"] = color, "Color"
+                TracePictureCmd._sticky.update(Color=color, Background="Color")
+                self.steps = self.steps[:self.step_index] + [(self.ACCEPT, TEXT)]
+                return f"Background color {color}", False
+        if label == self.ACCEPT and raw and self.pending_option is None \
+                and opts.match(raw, self.options, self.opt).status == opts.NONE:
+            return "TracePicture: press Enter to accept", False
+        before = self.step_index
+        out = super()._feed(text, ctx)
+        if before == 0 and self.step_index == 1:
+            self._defaults(ctx)
+            self._name = self._picture_name(ctx)
+            if self._frame_of(ctx.geom_by_name(self._picture_name(ctx))) is None:
+                return ("TracePicture: select a Picture object (place one with Picture)", True)
+        return out
+
+    def preview_curves(self, resolve, cursor):
+        """The cut lines for the current options, drawn on the picture (display only)."""
+        from . import trace_picture as tp
+        if self.step_index < 1 or not callable(resolve):
+            return []
+        frame = self._frame_of(resolve(self._picture_name()))
+        if frame is None:
+            return []
+        unit = getattr(self, "_preview_unit", None) or "Millimeters"
+        try:
+            loops = self._controls(frame, unit)
+        except (tp.TraceError, OSError, ValueError) as e:
+            self._error = str(e)
+            return []
+        return [tp.bezier_points(ctrl) for ctrl in loops]
+
+    def execute(self, ctx: NarwhalContext):
+        from . import trace_picture as tp
+        self._defaults(ctx)
+        name = self._picture_name(ctx)
+        frame = self._frame_of(ctx.geom_by_name(name)) if name else None
+        if frame is None:
+            return "TracePicture: select a Picture object (place one with Picture)", True
+        try:
+            loops = self._controls(frame, self._unit(ctx))
+        except (tp.TraceError, OSError) as e:
+            return f"TracePicture: {e}. Nothing was created.", True
+        if not loops:
+            return "TracePicture: no artwork was found. Nothing was created.", True
+        made = []
+        for ctrl in loops:
+            _, display_name = ctx.add_geometry(tp.nurbs_curve(r3, ctrl), "Curve")
+            made.append(display_name)
+        return f"Created {len(made)} cut curve(s) from {name}", True
+
+
 class GridCmd(Command):
     """Set Grid properties without drawing.
 
@@ -17407,7 +17640,7 @@ def _build_registry():
                 ExtractPtCmd, ExtractControlPolygonCmd,
                 FilletCmd, ChamferCmd, SplitCmd, TrimCmd, IntersectCmd,
                 SetUserTextCmd, GetUserTextCmd, SetDocumentUserTextCmd, GetDocumentUserTextCmd,
-                GridCmd, SnapSizeCmd, UnitsCmd, PictureCmd, BlendCrvCmd, RebuildCmd,
+                GridCmd, SnapSizeCmd, UnitsCmd, PictureCmd, TracePictureCmd, BlendCrvCmd, RebuildCmd,
                 PlanarSrfCmd, EdgeSrfCmd, ExtrudeSrfCmd,
                 ExtrudeCrvTaperedCmd,
                 ShellCmd, OffsetSrfCmd, PipeCmd,

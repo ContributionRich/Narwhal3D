@@ -146,6 +146,11 @@ OCCT_LIBS="$PATCHED/5.2/python/lib/python3.13/site-packages/cadquery_ocp_novtk.l
 NARWHAL_OCCT_SOURCE_DIR="$OCCT_SOURCE" NARWHAL_OCCT_LIB_DIR="$OCCT_LIBS" LD_LIBRARY_PATH="$OCCT_LIBS" \
   cargo +"$TOOLCHAIN" build --release --locked --manifest-path "$ROOT/native/geometry_core/Cargo.toml"
 
+step "Picture tracer (staged in artifacts/cutline)"
+cargo +"$TOOLCHAIN" build --release --locked --manifest-path "$ROOT/native/cutline/Cargo.toml"
+mkdir -p "$ROOT/artifacts/cutline/linux-x86_64"
+cp "$ROOT/native/cutline/target/release/coco-cutline" "$ROOT/artifacts/cutline/linux-x86_64/"
+
 step "Welcome window (staged in artifacts/welcome)"
 cargo +"$TOOLCHAIN" build --release --locked --manifest-path "$ROOT/native/welcome/Cargo.toml"
 mkdir -p "$ROOT/artifacts/welcome/linux-x86_64"

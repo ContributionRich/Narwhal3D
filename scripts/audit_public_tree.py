@@ -548,6 +548,9 @@ PROVENANCE_SCAN_EXEMPT = {
     # Exact upstream source has a local Rust variable named `owner`; its bytes are
     # independently pinned by SOURCE_MANIFEST.json and spike/test_public_project.py.
     "native/vendor/tracedraw/core/src/document.rs",
+    # VectorCraft upstream source (native/cutline) also has local Rust variables named `owner`.
+    "native/cutline/crates/vectorcraft-pathops/src/pathfinder.rs",
+    "native/cutline/crates/vectorcraft-trace/src/logo/pipeline.rs",
 }
 REQUIRED_EXECUTABLES = {
     "narwhal3d.sh",

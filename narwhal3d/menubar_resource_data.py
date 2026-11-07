@@ -284,6 +284,7 @@ _CORE_MENUS = (
     ("Drafting", (
         _popup("Reference", (
             _item("Place Picture", "picture"),
+            _item("Trace Picture", "tracepicture"),
         )),
         _todo("Text, Dimensions, and Leaders", "annotation"),
         _todo("Hatches, Layouts, and Detail Views", "layout"),

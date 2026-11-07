@@ -38,6 +38,11 @@ Use: appimagetool 1.9.1 assembles the release, and the pinned Type-2 runtime tag
 Sources: https://github.com/AppImage/appimagetool and https://github.com/AppImage/type2-runtime
 License: MIT for the Type-2 runtime, with its statically linked component notices. See `licenses/AppImage-MIT.txt`. appimagetool is a build-time input and is not embedded as the application runtime.
 
+6a. VectorCraft 0.10.0 (vectorcraft-geom, -pathops, -trace)
+--------------------------------
+Use: vendored in `native/cutline` and statically compiled into the `coco-cutline` helper that the TracePicture command runs.
+License: MIT OR Apache-2.0; the upstream license and notice texts are in `native/cutline/LICENSES/`. The `coco-cut` and `coco-cutline` crates beside them are contributed by their author under this project's license.
+
 6. TraceDraw 0.9.0-dev.821ba15
 --------------------------------
 Use: the vendored `tracedraw-core` and `tracedraw-cdr` Rust crates are statically compiled into Narwhal's bundled, supervised CDR helper for version 16 through 18 Import/Open and opt-in version 17 Export/Print.

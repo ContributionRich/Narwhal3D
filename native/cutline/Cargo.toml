@@ -1,0 +1,37 @@
+# Standalone workspace for the coco-cutline picture tracer (Coco Production 1.2).
+[workspace]
+resolver = "3"
+members = ["crates/coco-cutline"]
+default-members = ["crates/coco-cutline"]
+
+[workspace.package]
+version = "1.2.0"
+edition = "2024"
+rust-version = "1.95"
+
+[workspace.dependencies]
+coco-cut = { path = "crates/coco-cut" }
+vectorcraft-geom = { path = "crates/vectorcraft-geom" }
+vectorcraft-pathops = { path = "crates/vectorcraft-pathops" }
+vectorcraft-trace = { path = "crates/vectorcraft-trace" }
+kurbo = { version = "0.13", features = ["serde"] }
+linesweeper = "0.5"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif", "tiff", "bmp"] }
+serde = { version = "1", features = ["derive", "rc"] }
+thiserror = "2"
+serde_json = { version = "1", features = ["float_roundtrip"] }
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+
+[workspace.lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+todo = "deny"
+unimplemented = "deny"
+unreachable = "deny"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1

@@ -1,0 +1,25 @@
+[package]
+name = "coco-cutline"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+description = "Cut lines (closed Bezier outlines with offset) around the artwork in an image, from Coco Production"
+
+[lints]
+workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "coco-cutline"
+path = "src/main.rs"
+
+[dependencies]
+coco-cut = { workspace = true }
+vectorcraft-geom = { workspace = true }
+vectorcraft-trace = { workspace = true }
+vectorcraft-pathops = { workspace = true }
+image = { version = "0.25", default-features = false, features = ["png"] }
+serde_json = { workspace = true }

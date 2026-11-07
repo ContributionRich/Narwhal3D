@@ -1,0 +1,10 @@
+[package]
+name = "coco-cut"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]

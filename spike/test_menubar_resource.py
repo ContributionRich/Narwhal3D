@@ -72,7 +72,7 @@ EXPECTED_RUNNABLE_COUNTS = {
     "SubD": 0,
     "Solid": 18,
     "Mesh": 0,
-    "Drafting": 1,
+    "Drafting": 2,
     "Transform": 16,
     "Analyze": 13,
     "Render": 0,
@@ -137,14 +137,14 @@ def _():
 
 @check("live bare-package registry includes all sibling providers")
 def _():
-    assert len(registered) == 190, len(registered)
+    assert len(registered) == 191, len(registered)
     assert {
         "import", "filletedge", "saveas", "print", "export", "setdisplaymode",
         "changelayer",
     } <= registered
 
 
-@check("all 190 registered commands appear exactly once")
+@check("all 191 registered commands appear exactly once")
 def _():
     runnable = [command for _menu, _path, _label, command in leaves()
                 if command in registered]
@@ -285,7 +285,7 @@ def _():
         "menus": len(EXPECTED_MENUS),
         "source": "original",
     }, (data.REPORT, counts)
-    assert counts == {"items": 554, "separators": 21, "popups": 57}, counts
+    assert counts == {"items": 555, "separators": 21, "popups": 57}, counts
 
 
 @check("resource source retains original provenance")
