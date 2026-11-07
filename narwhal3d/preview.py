@@ -514,6 +514,23 @@ def _variant_preview(name, args, cursor, plane, cmd):
     running command is not in one. Display only."""
     pts = [tuple(a) for a in args if _is_point(a)]
     cur = tuple(cursor)
+    if name == "circle" and getattr(cmd, "_points_mode", None) in ("2Point", "3Point"):
+        needed = 1 if cmd._points_mode == "2Point" else 2
+        if len(pts) < needed:
+            # OURS: an endpoint guide until enough points define the circle. Mouse
+            # feedback at this stage was not recorded in the reference evidence.
+            return [[pts[0], cur]] if pts else []
+        # Reuse the exact commit solver rather than a second circumcircle formula.
+        # Python here only coordinates existing geometry and viewport sampling.
+        import copy
+        from types import SimpleNamespace
+        candidate = copy.copy(cmd)
+        candidate.args = pts[:needed] + [cur]
+        result = candidate._two_or_three_point(SimpleNamespace(active_cplane=lambda: plane))
+        if isinstance(result, str):
+            return []
+        center, radius, frame = result
+        return [_ring(center, frame.xaxis, frame.yaxis, radius)]
     if name == "circle" and getattr(cmd, "_vertical_circle", False) and pts:
         # a rubber circle in the vertical plane holding the CPlane normal and the cursor
         center = pts[0]

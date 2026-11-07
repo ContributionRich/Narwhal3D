@@ -382,6 +382,39 @@ for key, opt in (("line", "Normal"), ("circle", "AroundCurve"),
     m, _d = cmd.feed(opt, None)
     check("not implemented yet" in (m or ""), f"{key} {opt}: {m!r}")
 
+# Circle variants must preview the SAME geometry as the exact commit solver.
+preview = _load("narwhal3d.preview", "narwhal3d/preview.py")
+from types import SimpleNamespace
+for mode, picks, cursor in (
+        ("3Point", [(0, 0, 0), (2, 0, 0)], (0, 2, 0)),
+        ("3Point", [(0, 0, 0), (2, 0, 0)], (0, -2, 0)),
+        ("3Point", [(0, 0, 0), (2, 0, 0)], (0, 2, 3)),
+        ("2Point", [(0, 0, 0)], (6, 8, 0))):
+    cmd = type(commands.COMMANDS["circle"])()
+    cmd.feed(mode, None)
+    cmd.args = list(picks)
+    candidate = type(cmd)()
+    candidate._points_mode = mode
+    candidate.args = list(picks) + [cursor]
+    center, radius, frame = candidate._two_or_three_point(
+        SimpleNamespace(active_cplane=lambda: cplane.WORLD_TOP))
+    ring = preview.segments("circle", cmd.args, cursor, cplane.WORLD_TOP, cmd=cmd)
+    normal = cplane.cross(frame.xaxis, frame.yaxis)
+    check(len(ring) == 1 and len(ring[0]) > 16 and all(
+        abs(math.dist(point, center) - radius) < 1e-9 and
+        abs(cplane.dot(tuple(point[i] - center[i] for i in range(3)), normal)) < 1e-9
+        for point in ring[0]),
+        f"{mode} preview matches committed centre, radius and 3D plane at {cursor}")
+cmd = type(commands.COMMANDS["circle"])()
+cmd.feed("3Point", None)
+cmd.args = [(0, 0, 0), (2, 0, 0)]
+check(preview.segments("circle", cmd.args, (4, 0, 0), cplane.WORLD_TOP, cmd=cmd) == [],
+      "a collinear third point previews no impossible circle")
+cmd.args = [(0, 0, 0)]
+check(preview.segments("circle", cmd.args, (2, 0, 0), cplane.WORLD_TOP, cmd=cmd)
+      == [[(0, 0, 0), (2, 0, 0)]],
+      "before three points exist, show an endpoint guide instead of a centre-radius circle")
+
 print(f"\n{checks - len(failures)}/{checks} checks passed")
 if failures:
     for f in failures:

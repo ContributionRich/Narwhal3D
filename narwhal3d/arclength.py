@@ -22,6 +22,7 @@ because they provide an independent exact path.
 Tolerance comes from `units.py` (the document's absolute tolerance), never a
 literal.
 """
+import bisect
 import math
 
 import rhino3dm as r3
@@ -72,13 +73,44 @@ def length_of(curve, t0=None, t1=None, tolerance=None):
 def parameter_at_length(curve, s, tolerance=None):
     """The parameter at arc length `s` measured from the curve's start.
 
-    Newton on ``length_of(t0, t) - s``, whose derivative is ``|C'(t)|``. `s` must
+    Newton on ``length_of(t0, t) - s`` whose derivative is ``|C'(t)|``. `s` must
     be within ``[0, length_of(curve)]``; a value outside is REFUSED (ValueError),
-    not silently clamped.
+    not silently clamped. To invert many lengths on one curve, use
+    :class:`PreparedLength`, which computes the span integrals once.
     """
+    return PreparedLength(curve).parameter_at(s, tolerance)
+
+
+class PreparedLength:
+    """Arc length of one curve, prepared once for many :meth:`parameter_at` queries.
+
+    The span integrals are computed when the object is made. It works on a private copy
+    of the curve, so later edits to `curve` cannot change its answers: they equal
+    :func:`parameter_at_length` on the curve as it was when prepared. Nothing is cached
+    beyond the object, which belongs to one operation.
+    """
+
+    __slots__ = ("_curve", "_table")
+
+    def __init__(self, curve):
+        self._curve = curve.Duplicate()
+        self._table = _prepare(self._curve)
+
+    @property
+    def total(self):
+        """The arc length of the whole curve, as :func:`length_of` gives it."""
+        return self._table.total
+
+    def parameter_at(self, s, tolerance=None):
+        """The parameter at arc length `s`; see :func:`parameter_at_length`."""
+        return _invert(self._curve, self._table, s, tolerance)
+
+
+def _invert(curve, table, s, tolerance):
     tol = default_tolerance() if tolerance is None else float(tolerance)
     d = curve.Domain
-    total = length_of(curve)
+    total = table.total
+    length_to = lambda t: _length_to(curve, table, t)
     if s < -tol or s > total + tol:
         raise ValueError(f"arc length {s} is outside the curve [0, {total}]")
     s = min(max(s, 0.0), total)
@@ -92,7 +124,7 @@ def parameter_at_length(curve, s, tolerance=None):
     lo, hi = d.T0, d.T1
     t = d.T0 + (d.T1 - d.T0) * (s / total)
     for _ in range(60):
-        f = length_of(curve, d.T0, t) - s
+        f = length_to(t) - s
         if abs(f) <= tol * 1e-3:
             break
         if f > 0:
@@ -159,6 +191,55 @@ def _speed(curve, t):
     d = curve.DerivativeAt(t, 1)
     v = d[1]
     return math.sqrt(v.X * v.X + v.Y * v.Y + v.Z * v.Z)
+
+
+# ---------------------------------------------------------------------------
+# prepared inversion tables (NURBS curves)
+# ---------------------------------------------------------------------------
+
+
+class _Table:
+    """One NURBS curve's span integrals, summed in `length_of`'s order."""
+
+    __slots__ = ("t0", "t1", "knots", "cuts", "cum", "total")
+
+    def __init__(self, t0, t1, knots, cuts, cum, total):
+        self.t0, self.t1, self.knots, self.cuts = t0, t1, knots, cuts
+        self.cum, self.total = cum, total
+
+
+
+def _prepare(curve):
+    """The Gauss integral of each knot span, accumulated in the order `_spans` uses.
+
+    ``cum[k]`` is the sum of the first ``k`` spans, so a partial length is one prefix sum
+    plus one partial span, with the same floating-point additions as `length_of`.
+    """
+    d = curve.Domain
+    t0, t1 = d.T0, d.T1
+    knots = [k for k in _interior_knots(curve) if t0 + _PARAM_EPS < k < t1 - _PARAM_EPS]
+    cuts = [t0] + knots + [t1]
+    cum = [0.0]
+    for lo, hi in zip(cuts[:-1], cuts[1:]):
+        cum.append(cum[-1] + _gauss_span(curve, lo, hi))
+    if t1 - t0 <= _PARAM_EPS:
+        total = length_of(curve)
+    else:
+        # length_of's whole-curve sum is these same span integrals, in the same order
+        exact = _analytic_length(curve)
+        total = cum[-1] if exact is None else exact
+    return _Table(t0, t1, knots, cuts, cum, total)
+
+
+def _length_to(curve, table, t):
+    """``length_of(curve, table.t0, t)``, from the table where it applies.
+
+    The edge and reversed cases take `length_of` itself, which handles them.
+    """
+    if not (t - table.t0 > _PARAM_EPS and abs(t - table.t1) > _PARAM_EPS):
+        return length_of(curve, table.t0, t)
+    k = bisect.bisect_left(table.knots, t - _PARAM_EPS)
+    return table.cum[k] + _gauss_span(curve, table.cuts[k], t)
 
 
 def _gauss_legendre(n):

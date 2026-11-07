@@ -423,6 +423,7 @@ PURE_SUITES=(
     spike/test_native_tessellate.py
     spike/test_native_unit_table.py
     spike/test_native_nearest.py
+    spike/test_rebuild_performance.py
     spike/test_native_interpolate.py
     spike/test_native_tween.py
     spike/test_tracedraw.py
@@ -448,6 +449,8 @@ BLENDER_SUITES=(
     spike/test_trim_drag.py
     spike/test_picture.py
     spike/test_picture_display.py
+    spike/test_rebuild_dialog.py
+    spike/test_group_pick.py
     spike/test_gumball_region_extrude.py
     spike/test_bug102_live.py
     spike/test_control_point_osnap.py

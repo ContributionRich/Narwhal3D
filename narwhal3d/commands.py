@@ -13918,7 +13918,7 @@ class BlendCrvCmd(Command):
 class RebuildCmd(Command):
     """`Rebuild` (curves) -- the command behavior (`rebuild.py` holds the fit).
 
-    the reference CAD application's Rebuild is a dialog; this is its command-line form. Prompt and report are
+    The graphical Rebuild opens a dialog after selection; -Rebuild retains these prompts. Prompt and report are
     the command UI's: "Select curves to rebuild", "Maximum deviation = %g". Options:
     `PointCount`, `Degree` (up to 11; "Point count = Degree + 1" kept automatically --
     whichever was set last wins, as the help describes), `DeleteInput`, `CurrentLayer`,
@@ -13982,6 +13982,10 @@ class RebuildCmd(Command):
         from . import rebuild
 
         names = self.args[0] if self.args else []
+        opener = getattr(self, "_dialog_opener", None)
+        if callable(opener):
+            self._dialog_opener = None
+            return opener(self, ctx)
         done, worst, skipped, notes, made = 0, 0.0, [], [], []
         for nm in names:
             geom = ctx.geom_by_name(nm)

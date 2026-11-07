@@ -169,6 +169,38 @@ def closest_point_on_curve(curve, point, tolerance=None):
 
     Raises ValueError when `curve` has no usable domain.
     """
+    return _closest(curve, point, tolerance, _PACK_ON_DEMAND)
+
+
+#: `packed` sentinel: pack the curve for the native search when a query first needs it.
+_PACK_ON_DEMAND = object()
+
+
+class PreparedCurve:
+    """A curve prepared for many closest-point queries, e.g. the samples of one fit.
+
+    The object works on a private copy of the curve and packs it for the native search
+    once, so each query costs no control-point read. Its answers equal
+    :func:`closest_point_on_curve` on the curve as it was when prepared; later edits to
+    `curve` cannot change them. The object belongs to one operation and is not cached.
+    """
+
+    __slots__ = ("_curve", "_packed")
+
+    def __init__(self, curve):
+        self._curve = curve.Duplicate()
+        self._packed = _native_pack(self._curve)
+
+    def closest(self, point, tolerance=None):
+        """The closest point, as :func:`closest_point_on_curve` gives it."""
+        return _closest(self._curve, point, tolerance, self._packed)
+
+
+def _closest(curve, point, tolerance, packed):
+    """The search behind :func:`closest_point_on_curve`.
+
+    `packed` is `_PACK_ON_DEMAND`, the curve's native packing, or None when there is none.
+    """
     tol = default_tolerance() if tolerance is None else float(tolerance)
     p = _pt(point)
     t0, t1 = _domain(curve)
@@ -189,7 +221,46 @@ def closest_point_on_curve(curve, point, tolerance=None):
             return ClosestPoint(res.t, res.point, _dist(res.point, p), method,
                                 res.at_end, False)
 
+    if packed is _PACK_ON_DEMAND:
+        packed = _native_pack(curve)
+    native = _native_search(packed, p)
+    if native is not None:
+        t, q, dist, at_end = native
+        return ClosestPoint(t, q, dist, "nurbs", at_end, False)
     return _search(curve, p, tol, "nurbs")
+
+
+def _native_pack(curve):
+    """The curve's packing for the Rust NURBS search, or None.
+
+    None when `curve` is not a `NurbsCurve` or the native library is unavailable. The
+    control points are read here, so the packing is a snapshot of the curve as it is now.
+    """
+    if not isinstance(curve, r3.NurbsCurve):
+        return None
+    native_nearest = _native_module()
+    if not native_nearest.available():
+        return None
+    cvs = []
+    for cv in curve.Points:
+        cvs.extend((cv.X, cv.Y, cv.Z, cv.W))
+    return native_nearest.PackedCurve(int(curve.Order), list(curve.Knots.ToList()), cvs,
+                                      bool(curve.IsRational), _is_closed(curve))
+
+
+def _native_search(packed, p):
+    """``(t, point, distance, at_end)`` from the Rust NURBS search, or None."""
+    if packed is None:
+        return None
+    return _native_module().search(packed, p)
+
+
+def _native_module():
+    try:                                  # normal import, inside the addon package
+        from . import native_nearest
+    except ImportError:                   # supports direct file-path loading
+        import native_nearest
+    return native_nearest
 
 
 def distance_to_curve(curve, point, tolerance=None):

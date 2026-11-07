@@ -157,6 +157,41 @@ The [read-tool catalog](../native/automation_core/src/catalog.rs#L8-L54) defines
 - `narwhal.components`
 - `narwhal.operations`
 
+## Sketch previews and grouped picking
+
+Curve-sketch previews follow the current layer's colour, with the same theme-wire fallback
+as completed curves on black layers. Circle 2Point and 3Point previews use the exact commit
+solver, including tilted three-point planes; a collinear third point draws no circle.
+The preliminary endpoint guide is application-defined because no captured hover evidence
+covered that stage.
+
+An ordinary click selects a group as one unit, and overlapping members of that group are
+one overlap-menu choice. Unrelated overlapping objects remain distinct choices. Shift-click
+selects individual group members as an application-specific shortcut; the existing
+Ctrl+Shift sub-object route remains available. Selecting members never dissolves the group.
+
+## Curve Rebuild dialog
+
+`Rebuild` opens a curve-rebuild window after selection (a preselected curve opens it
+immediately); `-Rebuild` retains the command-line workflow. The window has point count,
+degree, Delete input, Create new object on current layer, Preserve end tangent directions,
+Preview, maximum deviation, OK and Cancel. Point count and degree adjust each other so
+point count is at least degree + 1. Preview is display-only, Cancel makes no document change,
+and OK uses the same fitting implementation and single document Undo history as the command
+line. Changing the document while the window is open invalidates it.
+
+Point count 10 and degree 3 were observed in a captured dialog; they are starting values,
+not a claim about factory defaults. Checkbox starting states are application defaults.
+Master-curve selection, SubD-friendly rebuilding and surface rebuilding are not implemented;
+the window says so explicitly. Live remeasurement of the reference dialog was blocked by
+the VM's memory admission limit; the controls follow the recorded dialog and offline help.
+
+Rebuild prepares immutable, per-operation arc-length and closest-point data instead of
+re-integrating and repacking each sample. NURBS closest-point searches reuse the Rust core;
+analytic and missing-core compatibility routes remain available. The prepared objects do
+not retain stale geometry after edits. Fit control points, knots and deviation are compared
+bit-for-bit against the previous pipeline in the regression suite.
+
 ## Tests
 
 Fast public model tests can be run with the bundled interpreter after bootstrap. The full application and UI suites use the bundled runtime:

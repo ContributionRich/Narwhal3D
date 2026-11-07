@@ -112,12 +112,13 @@ def _xyz(p):
 
 def _samples(curve, m, closed):
     """``[(original_parameter, point)]`` at `m` positions uniform in ARC LENGTH."""
-    total = arclength.length_of(curve)
+    length = arclength.PreparedLength(curve)
+    total = length.total
     count = m if closed else m + 1
     out = []
     for i in range(count):
         s = total * i / m
-        t = arclength.parameter_at_length(curve, s) if 0 < i < m else (
+        t = length.parameter_at(s) if 0 < i < m else (
             curve.Domain.T0 if i == 0 else curve.Domain.T1)
         out.append((t, _xyz(curve.PointAt(t))))
     return out
@@ -145,8 +146,8 @@ def rebuild_curve(curve, point_count, degree, preserve_tangents=False, samples=N
         # PARAMETER CORRECTION: each sample's parameter becomes that of its closest point on
         # the current fit, then refit. A fit that is already exact is unchanged by it.
         dom = out.Domain
-        params = [(nearest.closest_point_on_curve(out, q).t - dom.T0) / (dom.T1 - dom.T0)
-                  for _t, q in pts]
+        fit = nearest.PreparedCurve(out)           # `out` is final: pack it once for all samples
+        params = [(fit.closest(q).t - dom.T0) / (dom.T1 - dom.T0) for _t, q in pts]
         if not closed:
             params[0], params[-1] = 0.0, 1.0
     if not out.IsValid:
@@ -240,6 +241,7 @@ def max_deviation(a, b, samples=200):
     exact closest points at `samples` arc-length-uniform positions on each."""
     worst = 0.0
     for src, dst in ((a, b), (b, a)):
+        target = nearest.PreparedCurve(dst)
         for _t, q in _samples(src, samples, bool(src.IsClosed)):
-            worst = max(worst, nearest.closest_point_on_curve(dst, q).distance)
+            worst = max(worst, target.closest(q).distance)
     return worst

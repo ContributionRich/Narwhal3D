@@ -195,7 +195,7 @@ TEST_FILES = (
     "spike/test_native_search02_contract.py", "spike/test_native_search02_adapter.py",
     "spike/test_native_search02_ffi.py", "spike/test_native_search02_consumers.py",
     "spike/test_native_search02_profile.py", "spike/fixtures/native_search02.json",
-    "spike/test_native_coil_preview.py", "spike/test_preview_curve_native.py", "spike/test_preview_layer_color.py",
+    "spike/test_native_coil_preview.py", "spike/test_preview_curve_native.py", "spike/test_preview_layer_color.py", "spike/test_rebuild_dialog.py", "spike/test_group_pick.py", "spike/test_rebuild_performance.py",
     "spike/test_native_tessellate.py",
     "spike/test_native_unit_table.py",
     "spike/test_native_nearest.py",

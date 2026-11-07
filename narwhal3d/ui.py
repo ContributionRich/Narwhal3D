@@ -12385,6 +12385,205 @@ def _unit_items(self, context):
     return [(u, u, "") for u in _units.UNIT_SCALE_MM]
 
 
+# MEASURED: official Rebuild help and the captured Rebuild dialog (point count 10,
+# degree 3). Checkbox defaults below remain OURS; the capture did not record their state.
+_rebuild_window = None
+_rebuild_last = dict(PointCount=10, Degree=3, DeleteInput=True,
+                     CurrentLayer=False, PreserveTangents=False)
+
+
+def _rebuild_counts_changed(self, context, last_set):
+    from . import rebuild
+    if getattr(self, "_adjusting_counts", False):
+        return
+    self._adjusting_counts = True
+    try:
+        n, p = rebuild.normalize_counts(self.point_count, self.degree, last_set)
+        self.point_count, self.degree = n, p
+        if _rebuild_window is not None:
+            _rebuild_window["preview"] = ()
+            _rebuild_window["message"] = "Settings changed; click Preview"
+        _tag_redraw_viewports()
+    finally:
+        self._adjusting_counts = False
+
+
+def _rebuild_options(operator):
+    return dict(PointCount=operator.point_count, Degree=operator.degree,
+                DeleteInput=operator.delete_input, CurrentLayer=operator.current_layer,
+                PreserveTangents=operator.preserve_tangents)
+
+
+def _rebuild_source_current():
+    return _rebuild_window is not None and _rebuild_window["key"] == _doc_key()
+
+
+def _clear_rebuild_window():
+    global _rebuild_window
+    _rebuild_window = None
+    _tag_redraw_viewports()
+
+
+def _queue_rebuild_window(command, ctx):
+    global _rebuild_window
+    import rhino3dm as r3
+    names = command.args[0] if command.args else []
+    if not names or any(not isinstance(ctx.geom_by_name(name), r3.Curve) for name in names):
+        return "Rebuild: the dialog supports curves only; rebuilding surfaces is not implemented yet", True
+    counts = [command._own_counts(ctx.geom_by_name(name)) for name in names]
+    _rebuild_window = dict(command=command, key=_doc_key(), preview=(),
+                           counts=counts, closed=all(ctx.geom_by_name(name).IsClosed for name in names),
+                           message="Click Preview to measure maximum deviation")
+
+    def show():
+        if _rebuild_source_current():
+            bpy.ops.narwhal.rebuild_dialog("INVOKE_DEFAULT")
+        else:
+            _clear_rebuild_window()
+        return None
+    bpy.app.timers.register(show, first_interval=0.01)
+    return None, True
+
+
+def _open_rebuild_dialog():
+    """Start the ordinary selection prompt, then open the measured curve Rebuild window."""
+    if bpy.app.background:
+        return False
+    app_state.start_command("-Rebuild")
+    cmd = app_state.active_command
+    if cmd is None:
+        return False
+    cmd._dialog_opener = _queue_rebuild_window
+    if app_state.ctx.selected_objects():
+        app_state.feed_line("")
+    return True
+
+
+class NARWHAL_OT_rebuild_preview(Operator):
+    bl_idname = "narwhal.rebuild_preview"
+    bl_label = "Preview"
+    bl_options = {"INTERNAL"}
+
+    def execute(self, context):
+        from . import rebuild
+        if not _rebuild_source_current():
+            self.report({"ERROR"}, "Document changed; cancel and restart Rebuild")
+            return {"CANCELLED"}
+        operator = _rebuild_window.get("operator")
+        if operator is None:
+            return {"CANCELLED"}
+        options = _rebuild_options(operator)
+        cmd = _rebuild_window["command"]
+        polylines, deviation = [], 0.0
+        try:
+            for name in cmd.args[0]:
+                curve, info = rebuild.rebuild_curve(
+                    app_state.ctx.geom_by_name(name), options["PointCount"],
+                    options["Degree"], options["PreserveTangents"])
+                polylines.extend(ghost_polylines(curve))
+                deviation = max(deviation, info["deviation"])
+        except ValueError as error:
+            _rebuild_window["preview"] = ()
+            _rebuild_window["message"] = str(error)
+            self.report({"ERROR"}, str(error))
+            return {"CANCELLED"}
+        _rebuild_window["preview"] = tuple(polylines)
+        _rebuild_window["message"] = f"Maximum deviation: {deviation:g} model units"
+        _tag_redraw_viewports()
+        return {"FINISHED"}
+
+
+class NARWHAL_OT_rebuild_dialog(Operator):
+    """Curve Rebuild window; UI glue reuses the existing fit and single Undo stack."""
+    bl_idname = "narwhal.rebuild_dialog"
+    bl_label = "Rebuild"
+    bl_options = {"INTERNAL"}
+
+    point_count: bpy.props.IntProperty(name="Point count", default=10, min=2, max=10000,
+        update=lambda self, context: _rebuild_counts_changed(self, context, "PointCount"))
+    degree: bpy.props.IntProperty(name="Degree", default=3, min=1, max=11,
+        update=lambda self, context: _rebuild_counts_changed(self, context, "Degree"))
+    delete_input: BoolProperty(name="Delete input", default=True)
+    current_layer: BoolProperty(name="Create new object on current layer", default=False)
+    preserve_tangents: BoolProperty(name="Preserve end tangent directions", default=False)
+
+    def invoke(self, context, event):
+        if not _rebuild_source_current():
+            return {"CANCELLED"}
+        self._adjusting_counts = True
+        self.point_count = _rebuild_last["PointCount"]
+        self.degree = _rebuild_last["Degree"]
+        self.delete_input = _rebuild_last["DeleteInput"]
+        self.current_layer = _rebuild_last["CurrentLayer"]
+        self.preserve_tangents = _rebuild_last["PreserveTangents"]
+        self._adjusting_counts = False
+        _rebuild_window["operator"] = self
+        return context.window_manager.invoke_props_dialog(self, width=380)
+
+    def draw(self, context):
+        col = self.layout.column()
+        if _rebuild_window is None:
+            col.label(text="Rebuild was cancelled")
+            return
+        counts = _rebuild_window["counts"]
+        current_n = str(counts[0][0]) if all(c[0] == counts[0][0] for c in counts) else "varies"
+        current_p = str(counts[0][1]) if all(c[1] == counts[0][1] for c in counts) else "varies"
+        col.prop(self, "point_count", text=f"Point count ({current_n})")
+        col.prop(self, "degree", text=f"Degree ({current_p})")
+        col.prop(self, "delete_input")
+        col.prop(self, "current_layer")
+        col.prop(self, "preserve_tangents")
+        col.label(text=f"Span count: {self.point_count if _rebuild_window["closed"] else max(1, self.point_count - self.degree)}")
+        col.label(text=_rebuild_window["message"])
+        col.operator("narwhal.rebuild_preview", text="Preview")
+        col.label(text="Master curve / SubD-friendly / surface rebuild:")
+        col.label(text="Not implemented yet", icon="INFO")
+
+    def execute(self, context):
+        if not _rebuild_source_current():
+            self.report({"ERROR"}, "Document changed; cancel and restart Rebuild")
+            _clear_rebuild_window()
+            return {"CANCELLED"}
+        cmd = _rebuild_window["command"]
+        cmd.opt.update(_rebuild_options(self))
+        _rebuild_last.update(cmd.opt)
+        try:
+            message, _done = cmd._recorded(app_state.ctx, lambda: cmd.execute(app_state.ctx))
+            if message:
+                app_state.log(message)
+        finally:
+            _clear_rebuild_window()
+            redraw_cmdbar()
+        return {"FINISHED"}
+
+    def cancel(self, context):
+        _clear_rebuild_window()
+
+
+def draw_rebuild_preview():
+    """Display-only candidate curves; Preview and Cancel never enter document history."""
+    if not _rebuild_source_current() or not _rebuild_window.get("preview"):
+        return
+    import gpu
+    shader, aa = _line_shader()
+    if shader is None:
+        return
+    previous_blend = gpu.state.blend_get()
+    previous_width = gpu.state.line_width_get()
+    gpu.state.blend_set("ALPHA")
+    try:
+        _line_begin(shader, aa)
+        _line_width(shader, aa, CURVE_WIRE_WIDTH)
+        shader.uniform_float("color", PREVIEW_COLOR)
+        for poly in _rebuild_window["preview"]:
+            coords = [p for pair in zip(poly, poly[1:]) for p in pair]
+            if coords:
+                _line_batch(shader, aa, coords).draw(shader)
+    finally:
+        gpu.state.blend_set(previous_blend)
+        gpu.state.line_width_set(previous_width)
+
+
 class NARWHAL_OT_units_dialog(Operator):
     """Show document unit and tolerance settings.
 
@@ -12770,6 +12969,8 @@ CLASSES = (
     NARWHAL_OT_run_command_option,
     NARWHAL_OT_maximize_viewport,
     NARWHAL_OT_units_dialog,
+    NARWHAL_OT_rebuild_dialog,
+    NARWHAL_OT_rebuild_preview,
     NARWHAL_OT_ai_refresh_models,
     NARWHAL_OT_ai_settings,
     NARWHAL_OT_ai_read_consent,
@@ -18594,6 +18795,7 @@ def draw_command_preview():
     """
     import bpy
 
+    draw_rebuild_preview()
     cmd = app_state.active_command
     if cmd is None:
         return
@@ -20593,7 +20795,9 @@ def _select_object_hit(hit, shift=False, ctrl=False, area=None):
     # Expand the HIT before modifier semantics so Ctrl removes the whole clicked group;
     # expanding only the final selection would immediately re-add the clicked member from
     # its still-selected partners.
-    if hits:
+    # OURS: Shift-click may select an individual grouped object, as requested;
+    # ordinary clicks and Ctrl-removal still treat the whole group as one unit.
+    if hits and not shift:
         hits = app_state.ctx.expand_group_names(hits)
     cmd = _sweep_selection_command()
     pick = None
@@ -21575,10 +21779,37 @@ def _select_control_points_in_rect(region, rv3d, rect, shift=False, ctrl=False):
     return sorted(_selected_cps)
 
 
+def grouped_pick_candidates(candidates):
+    """One overlap-menu candidate per selectable group, not one per member.
+
+    Group membership comes from the document; hit geometry remains display-only.
+    Unrelated objects stay separate choices, and Shift/sub-object picks bypass this.
+    """
+    from dataclasses import replace
+    result, positions = [], {}
+    for candidate in candidates:
+        names = frozenset(app_state.ctx.expand_group_names([candidate.key[0]]))
+        if len(names) <= 1:
+            result.append(candidate)
+            continue
+        if names not in positions:
+            positions[names] = len(result)
+            result.append(replace(candidate, label=f"Group ({len(names)} objects)"))
+        else:
+            index = positions[names]
+            first = result[index]
+            result[index] = replace(first, lines=first.lines + candidate.lines,
+                                    triangles=first.triangles + candidate.triangles,
+                                    points=first.points + candidate.points)
+    return result
+
+
 def _open_selection_choices(area, space, region, rx, ry, mode, shift=False, ctrl=False):
     """Defer ambiguous picks without changing selection, command phase or history."""
     import sys
     candidates = pick_candidates.at(sys.modules[__name__], area, space, region, rx, ry, mode)
+    if mode == "object" and not shift:
+        candidates = grouped_pick_candidates(candidates)
     if len(candidates) < 2:
         return False
     cmd = app_state.active_command
@@ -24012,6 +24243,7 @@ def register():
             # `Units` opens its window (`-Units` stays on the command line).
             # Looked up by name at call time, so the harness can stand in for it.
             app_state.dialog_openers["units"] = lambda: globals()["_open_units_dialog"]()
+            app_state.dialog_openers["rebuild"] = lambda: globals()["_open_rebuild_dialog"]()
             # the reference CAD application's status bar replaces Blender's. Done here rather than in
             # register so a failure cannot stop the classes registering.
             _install_statusbar()
