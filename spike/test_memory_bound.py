@@ -8,7 +8,9 @@ Covers the selection logic (forced modes, a working user scope, no systemd-run, 
 systemd-run whose user scope fails, and neither bound available, which must refuse
 rather than run unbounded), the exact argv of both modes, the one-line notice, and real
 children: under the fallback a child sees RLIMIT_AS = 4 x MemoryMax and the right
-working directory.
+working directory. Also runs scripts/setup_dev_native.sh's preamble in a copied tree with
+stubbed tools: without a user session it names the RLIMIT_AS fallback and carries on, with
+one it names the scope, and with no bound at all it stops.
 """
 import io
 import os
@@ -16,6 +18,7 @@ import shutil
 from pathlib import Path
 import subprocess
 import sys
+import tempfile
 import unittest
 from unittest.mock import patch
 
@@ -195,6 +198,66 @@ class RealChildren(unittest.TestCase):
         limit, _cwd, err = self.run_child("--max", "512M", env=env)
         self.assertEqual(limit, 4 * 512 * 1024 ** 2)
         self.assertIn("no systemd user session", err)
+
+
+# Runs scripts/setup_dev_native.sh's real preamble in a copied tree. The runtime Python is a
+# shim that runs memory_bound.py for real and fails the CPython version check that follows,
+# so the script stops right after the memory-bound step and never builds or downloads.
+RUNTIME_SHIM = f"""#!/bin/sh
+[ "$1" = -c ] && exit 1
+exec "{sys.executable}" "$@"
+"""
+# systemd-run as a container has it (STUB_SYSTEMD=fail: no user session) or as a desktop
+# has it (runs the command after its options).
+SYSTEMD_RUN_STUB = """#!/bin/sh
+[ "$STUB_SYSTEMD" = fail ] && { echo "Failed to create bus connection" >&2; exit 1; }
+while [ $# -gt 0 ]; do case $1 in -p) shift 2;; -*) shift;; *) break;; esac; done
+exec "$@"
+"""
+
+
+class SetupPreamble(unittest.TestCase):
+    def setUp(self):
+        root = Path(__file__).resolve().parents[1]
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.root = Path(temp.name)
+        for name in ("scripts/setup_dev_native.sh", "spike/memory_bound.py"):
+            (self.root / name).parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(root / name, self.root / name)
+        python = self.root / "tools/blender-5.2.2-linux-x64/5.2/python/bin/python3.13"
+        stubs = self.root / "bin"
+        python.parent.mkdir(parents=True)
+        stubs.mkdir()
+        scripts = {python: RUNTIME_SHIM, stubs / "systemd-run": SYSTEMD_RUN_STUB}
+        for tool in ("python3", "git", "curl", "cargo", "cmake", "make", "cc", "c++"):
+            scripts[stubs / tool] = "#!/bin/sh\nexit 0\n"
+        for path, text in scripts.items():
+            path.write_text(text)
+            path.chmod(0o755)
+        self.env = {k: v for k, v in os.environ.items() if k != memory_bound.MODE_ENV}
+        self.env.update(PATH=f"{stubs}:{os.environ['PATH']}", XDG_CACHE_HOME=str(self.root / "cache"))
+
+    def setup(self, **env):
+        return subprocess.run([str(self.root / "scripts/setup_dev_native.sh")], env=dict(self.env, **env),
+                              capture_output=True, text=True, timeout=60)
+
+    def test_without_a_user_session_setup_continues_under_rlimit(self):
+        done = self.setup(STUB_SYSTEMD="fail")
+        self.assertIn("memory bound: no systemd user session; RLIMIT_AS=4096M", done.stderr)
+        self.assertIn("not CPython 3.13.13", done.stderr, "setup went past the memory-bound step")
+        self.assertNotIn("does not work here", done.stderr)
+
+    def test_with_a_user_session_setup_names_the_scope(self):
+        done = self.setup()
+        self.assertIn("memory bound: systemd user scope, MemoryMax=1024M", done.stderr)
+        self.assertIn("not CPython 3.13.13", done.stderr, "setup went past the memory-bound step")
+
+    def test_setup_stops_when_no_bound_can_be_chosen(self):
+        done = self.setup(**{memory_bound.MODE_ENV: "none"})
+        self.assertEqual(done.returncode, 2)
+        self.assertIn("no memory bound is available for the native gates", done.stderr)
+        self.assertNotIn("not CPython 3.13.13", done.stderr)
 
 
 if __name__ == "__main__":
