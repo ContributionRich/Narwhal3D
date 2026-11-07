@@ -15,6 +15,7 @@ import tempfile
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import memory_bound
 import runtime_paths
 ROOT = Path(__file__).resolve().parents[1]
 EVIDENCE = ROOT / 'artifacts/ai_settings_integration'
@@ -56,7 +57,7 @@ def launch():
     sandbox = ['bwrap', '--ro-bind', '/', '/', '--dev-bind', '/dev', '/dev', '--proc', '/proc',
                '--bind', str(scratch), str(scratch), '--bind', str(out), str(out),
                '--unshare-net', '--die-with-parent']
-    scope = ['systemd-run', '--user', '--scope', '--quiet', '-p', 'MemoryMax=3G', '-p', 'MemorySwapMax=0']
+    scope = [*memory_bound.prefix('3G')]
     width, height = (900, 640) if mode == 'narrow' else (1440, 1000)
     cmd = scope + ['timeout', '--signal=TERM', '--kill-after=5s', '180s'] + sandbox + [
         str(runtime_paths.blender(ROOT)), '--factory-startup', '-t', '2',

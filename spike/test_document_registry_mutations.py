@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Compile registry mutants in a private copied crate; never break shared source."""
 from __future__ import annotations
+import sys
 import argparse
 import hashlib
 import json
@@ -11,6 +12,8 @@ import subprocess
 import tempfile
 
 ROOT=Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / 'spike'))
+import memory_bound  # noqa: E402
 CRATE=ROOT/'native/application_core'
 SCRATCH=CRATE/'target/main09'
 
@@ -76,7 +79,7 @@ def run(observation=False, witness=False, live=False, sharing=False):
                        if line.startswith('MemAvailable:')))
     if available < 5*1024**2:raise RuntimeError('need 4 GiB desktop reserve plus compiler allowance')
     command=['flock','-w','120','/tmp/narwhal3d-heavy-build.lock',
-             'systemd-run','--user','--scope','--quiet','-p','MemoryMax=1024M','-p','MemorySwapMax=0',
+             *memory_bound.prefix('1024M'),
              'timeout','--kill-after=5s','120s',
              'cargo','test','--offline','--lib',
                           'observation::tests' if observation else 'object_registry::tests','--','--test-threads=1']

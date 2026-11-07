@@ -13,6 +13,8 @@ import sys
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / 'spike'))
+import memory_bound  # noqa: E402
 RUST = [
     ('fractional_gutter', 'popup.rs', 'content - body_height > 1e-6 * s.max(1.0)', 'content > body_height'),
     ('height_bound', 'popup.rs', '.min(0.8 * h)', '.min(1.0 * h)'),
@@ -66,8 +68,7 @@ def main():
     control = env['NARWHAL_UI_CORE_LIBRARY']
     target = out / 'target'
     common = ['--release', '--manifest-path', str(crate / 'Cargo.toml'), '--target-dir', str(target), '-j', '1']
-    compiler = ['systemd-run', '--user', '--scope', '--quiet', '-p', 'MemoryMax=1G',
-                '-p', 'MemorySwapMax=0', 'flock', '-w', '60', '/tmp/narwhal3d-heavy-build.lock', 'cargo']
+    compiler = [*memory_bound.prefix('1G'), 'flock', '-w', '60', '/tmp/narwhal3d-heavy-build.lock', 'cargo']
     test = [sys.executable, '-B', str(ROOT / 'spike/test_ui_core_popup.py')]
     receipts = []
 

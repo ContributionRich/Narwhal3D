@@ -132,6 +132,7 @@ class GateTests(unittest.TestCase):
     def fixture(self):
         return Fixture(self.source)
 
+    @patch.dict('os.environ', {'NARWHAL_MEMORY_BOUND': 'systemd'})  # the systemd command shape, anywhere
     def test_build_order_resources_and_manifest(self):
         with self.fixture() as f:
             library, identity = f.build()
@@ -438,7 +439,7 @@ class MutationTests(unittest.TestCase):
             ('strict-clippy', "'--all-targets', '--', '-D', 'warnings'", "'--all-targets'", 'test_build_order_resources_and_manifest'),
             ('offline', "'--locked', '--offline', '--target-dir'", "'--locked', '--target-dir'", 'test_build_order_resources_and_manifest'),
             ('one-worker', "CARGO_BUILD_JOBS='1'", "CARGO_BUILD_JOBS='8'", 'test_build_order_resources_and_manifest'),
-            ('no-swap', "'MemorySwapMax=0'", "'MemorySwapMax=1G'", 'test_build_order_resources_and_manifest'),
+            ('no-swap', "memory_bound.prefix('1G')", "memory_bound.prefix('1G', swap_max='1G')", 'test_build_order_resources_and_manifest'),
             ('source-pin', "if source_inventory(root) != receipt['inputs']:", 'if False:', 'test_source_and_binary_drift_during_build'),
             ('binary-pin', "if common.digest(library) != receipt['sha256']:", 'if False:', 'test_source_and_binary_drift_during_build'),
             ('probe-omitted', 'identity = abi_probe(library)', 'identity = common.UI_CORE_IDENTITY', 'test_every_missing_export_and_wrong_abi_state_rejected'),

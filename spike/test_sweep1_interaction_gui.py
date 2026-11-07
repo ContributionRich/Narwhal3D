@@ -14,6 +14,7 @@ import tempfile
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import memory_bound
 import runtime_paths
 ROOT = Path(__file__).resolve().parents[1]
 SOURCES = ('launch/bootstrap.py', 'narwhal3d/ui.py', 'narwhal3d/state.py',
@@ -81,8 +82,7 @@ def launch():
             available = int(next(l.split()[1] for l in Path('/proc/meminfo').read_text().splitlines()
                                  if l.startswith('MemAvailable:')))
             assert available >= 5*1024*1024, 'Need 4 GiB desktop reserve plus 1 GiB test cap'
-            cmd = ['systemd-run', '--user', '--scope', '--quiet', '-p', 'MemoryMax=1024M',
-                '-p', 'MemorySwapMax=0', '-p', 'CPUQuota=100%', 'timeout', '--signal=TERM',
+            cmd = [*memory_bound.prefix('1024M', properties=('CPUQuota=100%',)), 'timeout', '--signal=TERM',
                 '--kill-after=5s', '180s', 'bwrap', '--ro-bind', '/', '/', '--dev-bind', '/dev', '/dev',
                 '--proc', '/proc', '--bind', str(case), str(case), '--unshare-net', '--die-with-parent',
                 str(runtime_paths.blender(ROOT)), '--factory-startup', '-t', '1',

@@ -15,6 +15,8 @@ import tracemalloc
 import types
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / 'spike'))
+import memory_bound  # noqa: E402
 pkg = types.ModuleType('narwhal3d'); pkg.__path__ = [str(ROOT / 'narwhal3d')]
 sys.modules['narwhal3d'] = pkg
 module = importlib.import_module('narwhal3d.command_transcript')
@@ -127,7 +129,7 @@ fn main() {
 }
 '''
     probe.write_text(code.replace('@MODEL@', str(ROOT/'native/ui_core/src/transcript.rs')).replace('@FFI@', str(ROOT/'native/ui_core/src/transcript_ffi.rs')))
-    command = ['systemd-run', '--user', '--scope', '--quiet', '-p', 'MemoryMax=1G', '-p', 'MemorySwapMax=0',
+    command = [*memory_bound.prefix('1G'),
                'flock', '-w', '60', '/tmp/narwhal3d-heavy-build.lock', 'rustc', '--edition', '2021', '-O', str(probe), '-o', str(out/'allocations')]
     with (out/'build.log').open('w') as log:
         subprocess.run(command, stdout=log, stderr=subprocess.STDOUT, check=True, timeout=90)

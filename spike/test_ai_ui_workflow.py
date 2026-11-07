@@ -507,6 +507,7 @@ class UIWorkflowTests(unittest.TestCase):
         self.assertEqual(self.st.status, "error")
         self.assertFalse(self.st.messages)
 
+    @patch.dict('os.environ', {'NARWHAL_MEMORY_BOUND': 'systemd'})  # the systemd command shape, anywhere
     def test_resource_profile_is_capped_single_job_and_headroom_checked(self):
         import test_automation_native as driver
         for cap in (1024, 1536):

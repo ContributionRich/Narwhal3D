@@ -57,8 +57,10 @@ Feature status lives in [`STATUS.md`](../STATUS.md) and [`docs/gaps.md`](gaps.md
 Measured on a fresh clone in November 2026: about 900 MB of downloads, about 5 GB on disk, and
 roughly five minutes on a fast connection. You need `git`, `curl`, Python 3 with `venv`, CMake,
 `make`, a C and C++ compiler, Rust via `rustup` with the pinned toolchain
-(`rustup toolchain install 1.95.0 --component rustfmt,clippy`), and a desktop Linux session with
-systemd (the native gates use `systemd-run --user`). podman or docker is used when available.
+(`rustup toolchain install 1.95.0 --component rustfmt,clippy`). A systemd user session is
+optional: the native gates bound memory with `systemd-run --user` when one works, and otherwise
+with an address-space limit (`spike/memory_bound.py` prints which). podman or docker is used when
+available.
 
 ```bash
 git clone https://github.com/ContributionRich/Narwhal3D.git
@@ -101,8 +103,9 @@ for any extra arguments a suite expects.
 
 ### Known setup limits
 
-- Linux x86_64 only for now. Containers without a systemd user session cannot run the native gates
-  yet (they bound compiler memory with `systemd-run --user`).
+- Linux x86_64 only for now. Without a systemd user session (containers, WSL without systemd, some CI
+  runners) the native gates use an address-space limit of 4 × each `MemoryMax` instead of a systemd
+  scope. That bounds virtual memory, not resident memory, so it is looser.
 - There is no automatic CI on pull requests yet; run the checks locally (see
   [`area: onboarding`](https://github.com/ContributionRich/Narwhal3D/issues?q=is%3Aissue+is%3Aopen+label%3A%22area%3A+onboarding%22)).
 

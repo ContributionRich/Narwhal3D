@@ -71,6 +71,7 @@ run "native-only retirement policy + mutations" "$PYTHON" -B spike/test_native_o
 run "public project organization" "$PYTHON" spike/test_public_project.py
 run "packaging: bootstrap" scripts/bootstrap_dev_linux.sh --self-check
 run "development setup: runtime, headers and pinned inputs" "$PYTHON" -B spike/test_dev_setup.py
+run "memory bound: systemd user scope or RLIMIT_AS" "$PYTHON" -B spike/test_memory_bound.py
 run "packaging: Blender build" scripts/build_blender_linux.sh --self-check
 run "packaging: macOS source build" "$PYTHON" spike/test_macos_source.py
 run "packaging: macOS native build contracts" "$PYTHON" scripts/test_macos_runtime.py

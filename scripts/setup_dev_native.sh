@@ -35,7 +35,9 @@ After scripts/bootstrap_dev_linux.sh, build the native development components:
 then check that the application's required native startup checks pass.
 
 Needs: python3 (with venv), git, curl, rustup with toolchain 1.95.0 (rustfmt and clippy), cmake,
-make, a C and C++ compiler, a systemd user session (systemd-run --user), and about 4 GB of disk.
+make, a C and C++ compiler, and about 4 GB of disk. The native gates bound compiler and test
+memory with a systemd user scope when one works, else an address-space limit
+(spike/memory_bound.py), so a container without a systemd user session works too.
 podman or docker is used for the exact-save helper when available.
 USAGE
 }
@@ -71,11 +73,11 @@ need cmake "builds openNURBS for the document observer"
 need make "builds CPython configuration and openNURBS"
 need cc "C compiler"
 need c++ "C++ compiler"
-need systemd-run "the native gates bound compiler memory with a systemd user scope"
 cargo +"$TOOLCHAIN" --version >/dev/null 2>&1 || {
   echo "error: Rust $TOOLCHAIN is not installed: rustup toolchain install $TOOLCHAIN --component rustfmt,clippy" >&2; exit 2; }
-systemd-run --user --scope --quiet true 2>/dev/null || {
-  echo "error: 'systemd-run --user --scope' does not work here (no systemd user session)" >&2; exit 2; }
+# Say which memory bound the native gates will use: a systemd user scope, else RLIMIT_AS.
+"$PYTHON" -I "$ROOT/spike/memory_bound.py" --max 1024M -- true || {
+  echo "error: no memory bound is available for the native gates" >&2; exit 2; }
 "$PYTHON" -c 'import sys; sys.exit(sys.version_info[:3] != (3, 13, 13))' || {
   echo "error: the bootstrapped runtime is not CPython 3.13.13; headers would not match" >&2; exit 2; }
 mkdir -p "$CACHE/artifacts"

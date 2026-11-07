@@ -32,6 +32,8 @@ fn main() {
     let target = fs::canonicalize(&args[3]).unwrap();
     let project = source.parent().unwrap().parent().unwrap();
     assert!(!scratch.starts_with(project) && !target.starts_with(project));
+    // A systemd user scope (MemoryMax=1024M) when one works, else RLIMIT_AS.
+    let memory_bound = project.join("spike/memory_bound.py").display().to_string();
     let mutants = [
         Mutant {
             name: "disabled_begin_nests",
@@ -315,13 +317,11 @@ fn main() {
                 "-c",
                 "awk '/MemAvailable:/ { if ($2 < 5242880) exit 1 }' /proc/meminfo && exec \"$@\"",
                 "history-build",
-                "systemd-run",
-                "--user",
-                "--scope",
-                "-p",
-                "MemoryMax=1024M",
-                "-p",
-                "MemorySwapMax=0",
+                "python3",
+                &memory_bound,
+                "--max",
+                "1024M",
+                "--",
                 "timeout",
                 "--kill-after=5s",
                 "90s",

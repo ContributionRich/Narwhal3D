@@ -70,18 +70,26 @@ def platform_tag():
     return f"{system}-{'x86_64' if machine == 'amd64' else machine}"
 
 
+def _memory_prefix(memory_max):
+    """The Linux memory bound (`spike/memory_bound.py`): a systemd user scope, else RLIMIT_AS.
+    Imported here so the Windows route needs nothing from `spike/`."""
+    sys.path.insert(0, str(ROOT / 'spike'))
+    import memory_bound
+
+    return memory_bound.prefix(memory_max)
+
+
 def bounded(seconds, command):
     """Linux: memory-capped systemd scope plus timeout. Windows: execute()'s subprocess timeout bounds it."""
     if WINDOWS:
         return list(command)
-    return ['systemd-run', '--user', '--scope', '--quiet', '-p', 'MemoryMax=1024M', '-p', 'MemorySwapMax=0',
+    return [*_memory_prefix('1024M'),
             'timeout', '--kill-after=5s', f'{seconds}s', *command]
 
 
 def linux_compile_command(candidate_source, library, *, python_include, source_tree, archives):
     return [
-        'flock', '-w', '120', '/tmp/narwhal3d-heavy-build.lock', 'systemd-run', '--user', '--scope', '--quiet',
-        '-p', 'MemoryMax=1024M', '-p', 'MemorySwapMax=0', 'timeout', '--kill-after=5s', '120s',
+        'flock', '-w', '120', '/tmp/narwhal3d-heavy-build.lock', *_memory_prefix('1024M'), 'timeout', '--kill-after=5s', '120s',
         'g++', '-std=c++17', '-O2', '-fPIC', '-shared', '-fvisibility=hidden',
         '-Wl,--exclude-libs,ALL', '-I' + str(python_include.resolve()),
         '-I' + str((source_tree / 'src/bindings').resolve()),

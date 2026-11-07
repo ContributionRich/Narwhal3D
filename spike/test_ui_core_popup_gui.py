@@ -15,6 +15,7 @@ import tempfile
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import memory_bound
 import runtime_paths
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -47,8 +48,7 @@ def launch(script=None):
         OMP_NUM_THREADS='1', OPENBLAS_NUM_THREADS='1',
         VISIBILITY_07_OUTPUT=str(out), VISIBILITY_07_FIRST='object',
         VISIBILITY_07_MUTATION='', VISIBILITY_07_DIAGNOSTIC_SCROLL='0')
-    command = ['systemd-run', '--user', '--scope', '--quiet', '-p', 'MemoryMax=2G',
-        '-p', 'MemorySwapMax=0', 'timeout', '--signal=TERM', '--kill-after=5s', '140s',
+    command = [*memory_bound.prefix('2G'), 'timeout', '--signal=TERM', '--kill-after=5s', '140s',
         'bwrap', '--ro-bind', '/', '/', '--dev-bind', '/dev', '/dev', '--proc', '/proc',
         '--bind', str(out), str(out), '--unshare-net', '--die-with-parent',
         str(runtime_paths.blender(ROOT)), '--threads', '1', '--factory-startup',

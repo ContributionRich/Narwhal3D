@@ -41,6 +41,7 @@ import traceback
 from typing import Any
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import memory_bound
 import runtime_paths
 ROOT = Path(__file__).resolve().parents[1]
 MARKER = 'GUMBALL_RELEASE_07_RESULT'
@@ -104,8 +105,7 @@ def public_run():
                        RELEASE_07_OUTPUT=str(output), RELEASE_07_PROFILE=str(int(args.profile)),
                        RELEASE_07_MUTATION=args.mutation, RELEASE_07_CASE=args.case,
                        RELEASE_07_ENFORCE=str(int(args.enforce_budget)))
-            cmd = ['systemd-run', '--user', '--scope', '--quiet',
-                   '-p', 'MemoryMax=2G', '-p', 'MemorySwapMax=0',
+            cmd = [*memory_bound.prefix('2G'),
                    'timeout', '--kill-after=3', '140s',
                    str(runtime_paths.blender(ROOT)), '--threads', '2',
                    '--factory-startup', '--window-geometry', '0', '0', '1600', '1000',

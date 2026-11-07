@@ -17,6 +17,8 @@ from unittest.mock import patch
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / 'spike'))
+import memory_bound  # noqa: E402
 spec = importlib.util.spec_from_file_location("ui_bundle_builder", ROOT / "scripts/build_ui_bundle.py")
 b = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(b)
@@ -29,6 +31,7 @@ def require_key(case, name, inventory):
 
 
 class DiagnosticTests(unittest.TestCase):
+    @patch.dict('os.environ', {'NARWHAL_MEMORY_BOUND': 'systemd'})  # the systemd command shape, anywhere
     def test_builder_caps_entire_service_lifetime(self):
         with patch.object(sys, "argv", ["build_ui_bundle.py"]), \
                 patch.object(b.subprocess, "run") as launch:
@@ -279,11 +282,10 @@ class BundleTests(unittest.TestCase):
 
 if __name__ == "__main__":
     if "--under-cap" not in sys.argv:
-        result = subprocess.run(["systemd-run", "--user", "--quiet", "--wait", "--pipe",
-                                 "-p", "MemoryMax=768M", "-p", "MemorySwapMax=0",
-                                 "-p", "TasksMax=16", "-p", "RuntimeMaxSec=60",
-                                 "-p", "TimeoutStopSec=2", "-p", "KillMode=control-group",
-                                 "-p", "WorkingDirectory=" + str(ROOT),
+        result = subprocess.run([*memory_bound.prefix(
+                                     "768M", scope=False, properties=(
+                                         "TasksMax=16", "RuntimeMaxSec=60", "TimeoutStopSec=2",
+                                         "KillMode=control-group", "WorkingDirectory=" + str(ROOT))),
                                  sys.executable, "-B", str(Path(__file__).resolve()),
                                  "--under-cap", *sys.argv[1:]], timeout=70)
         raise SystemExit(result.returncode)
