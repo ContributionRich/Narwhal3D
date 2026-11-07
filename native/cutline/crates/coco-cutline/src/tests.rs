@@ -195,6 +195,86 @@ fn artwork_sizes_ignore_transparent_padding() {
     assert!((size.width_pt - size.height_pt).abs() < 1.0e-9);
 }
 
+/// Largest distance (pixels) from the cut to the nearest boundary of `inside`.
+fn worst_deviation_px(
+    cut: &Cut,
+    width: usize,
+    height: usize,
+    inside: impl Fn(usize, usize) -> bool,
+    px_per_pt: f64,
+) -> f64 {
+    let mut boundary = Vec::new();
+    for y in 0..height {
+        for x in 0..width {
+            if inside(x, y)
+                && (x == 0
+                    || y == 0
+                    || x + 1 == width
+                    || y + 1 == height
+                    || !inside(x - 1, y)
+                    || !inside(x + 1, y)
+                    || !inside(x, y - 1)
+                    || !inside(x, y + 1))
+            {
+                boundary.push((x as f64 + 0.5, y as f64 + 0.5));
+            }
+        }
+    }
+    cut.polylines(0.25)
+        .iter()
+        .flatten()
+        .map(|p| {
+            let (px, py) = (p.x * px_per_pt, p.y * px_per_pt);
+            boundary
+                .iter()
+                .map(|(bx, by)| (bx - px).hypot(by - py))
+                .fold(f64::INFINITY, f64::min)
+        })
+        .fold(0.0, f64::max)
+}
+
+/// Bug report mw5rege5: where a long straight edge met a curve (a pineapple on a shelf), the
+/// zero-offset cut bowed off the art, because straight boundary runs reached the curve fitter
+/// as just their two end corners.
+#[test]
+fn zero_offset_cut_follows_straight_edges_next_to_curves() -> TestResult {
+    // 1500 px at 300 dpi is exactly the processing size, so nothing is resampled.
+    let (width, height) = (1500_usize, 1000_usize);
+    let inside = |x: usize, y: usize| {
+        let (px, py) = (x as f64 + 0.5, y as f64 + 0.5);
+        // A shelf with rounded ends, so no corner splits the fit between its straight top
+        // edge and the curve around its end (as in the reported artwork).
+        let radius = 30.0;
+        let cx = px.clamp(100.0 + radius, 1400.0 - radius);
+        let cy = py.clamp(800.0 + radius, 900.0 - radius);
+        let shelf = (px - cx).hypot(py - cy) <= radius;
+        let body = ((px - 700.0) / 420.0).powi(2) + ((py - 420.0) / 420.0).powi(2) <= 1.0;
+        shelf || (body && py < 800.0)
+    };
+    let mut rgba = Vec::with_capacity(width * height * 4);
+    for y in 0..height {
+        for x in 0..width {
+            rgba.extend_from_slice(if inside(x, y) { &RED } else { &CLEAR });
+        }
+    }
+    let image = Image::new(width as u32, height as u32, rgba)?;
+    let settings = CutSettings {
+        offset_pt: 0.0,
+        ..CutSettings::default()
+    };
+    let cut = generate_cut(&image, ArtworkSize::from_dpi(&image, 300.0), &settings)?;
+    assert_eq!(cut.loops.len(), 1);
+    let px_per_pt = 300.0 / 72.0;
+    let worst = worst_deviation_px(&cut, width, height, inside, px_per_pt);
+    // Fitting tolerance plus the half pixel between a boundary pixel's centre and its edge.
+    let allowed = settings.tolerance_pt * px_per_pt + 1.0;
+    assert!(
+        worst <= allowed,
+        "cut strays {worst:.2} px from the art (allowed {allowed:.2})"
+    );
+    Ok(())
+}
+
 #[test]
 fn polylines_follow_the_loops() -> TestResult {
     let image = discs(300, CLEAR, RED, &[(150.0, 150.0, 100.0)]);

@@ -581,39 +581,233 @@ fn smooth_staircase(points: &mut Vec<Point>, corner_flags: &[bool]) {
     *points = smoothed;
 }
 
+/// A straight stretch of the dense loop from `start` to `end` (indices; it may wrap).
+#[derive(Clone, Copy, Debug)]
+struct StraightRun {
+    start: usize,
+    end: usize,
+    direction: Point,
+}
+
+impl StraightRun {
+    /// The best-fit line through the run's points, with its ends projected onto it.
+    /// A line through the two end samples instead tilts by their staircase error.
+    fn fitted(&self, points: &[Point]) -> (Point, Point, Point) {
+        let count = points.len();
+        let span = (self.end + count - self.start) % count;
+        let run: Vec<Point> = (0..=span)
+            .map(|offset| points[(self.start + offset) % count])
+            .collect();
+        let n = run.len() as f64;
+        let centre = run.iter().fold(Point::default(), |sum, &p| sum + p) * (1.0 / n);
+        let (mut xx, mut xy, mut yy) = (0.0, 0.0, 0.0);
+        for &p in &run {
+            let d = p - centre;
+            xx += d.x * d.x;
+            xy += d.x * d.y;
+            yy += d.y * d.y;
+        }
+        let angle = 0.5 * (2.0 * xy).atan2(xx - yy);
+        let mut direction = Point::new(angle.cos(), angle.sin());
+        if direction.dot(self.direction) < 0.0 {
+            direction = direction * -1.0;
+        }
+        let project = |p: Point| centre + direction * (p - centre).dot(direction);
+        (
+            project(points[self.start]),
+            project(points[self.end]),
+            direction,
+        )
+    }
+}
+
+fn median_step(points: &[Point]) -> f64 {
+    let mut steps: Vec<f64> = (0..points.len())
+        .map(|index| (points[(index + 1) % points.len()] - points[index]).length())
+        .collect();
+    steps.sort_by(f64::total_cmp);
+    steps.get(steps.len() / 2).copied().unwrap_or(0.0)
+}
+
+/// Where a loop without corners bends most, so straight runs never straddle its start.
+fn sharpest_bend(points: &[Point], step: f64) -> usize {
+    let count = points.len();
+    let window = ((2.0 / step).ceil() as usize).clamp(1, count / 3);
+    (0..count)
+        .max_by(|&a, &b| {
+            let bend = |index: usize| {
+                turn_angle(
+                    points[(index + count - window) % count],
+                    points[index],
+                    points[(index + window) % count],
+                )
+            };
+            bend(a).total_cmp(&bend(b))
+        })
+        .unwrap_or(0)
+}
+
+/// How far a straight line from offset `first` can reach, keeping every point between
+/// within `band` of it. Tracks the cone of directions from the first point that pass within
+/// `band` of every later point, so each point is visited once.
+fn straight_reach(at: &impl Fn(usize) -> Point, first: usize, last: usize, band: f64) -> usize {
+    let origin = at(first);
+    let mut reference = None;
+    let (mut low, mut high) = (0.0_f64, 0.0_f64);
+    let mut reach = first;
+    for offset in (first + 1)..=last {
+        let delta = at(offset) - origin;
+        let distance = delta.length();
+        if distance <= band {
+            continue;
+        }
+        let angle = delta.y.atan2(delta.x);
+        let half = (band / distance).asin();
+        let Some(base) = reference else {
+            reference = Some(angle);
+            (low, high) = (-half, half);
+            reach = offset;
+            continue;
+        };
+        let mut relative = angle - base;
+        if relative > PI {
+            relative -= 2.0 * PI;
+        } else if relative <= -PI {
+            relative += 2.0 * PI;
+        }
+        if relative < low || relative > high {
+            break;
+        }
+        reach = offset;
+        low = low.max(relative - half);
+        high = high.min(relative + half);
+        if low > high {
+            break;
+        }
+    }
+    reach
+}
+
+/// Long straight stretches of a dense (pixel-step) loop. Fitting these with curves makes the
+/// cut swing by the full tolerance on either side of a flat edge.
+///
+/// Any arc looks straight over a short enough distance. A run must stay within `band` of a
+/// line for 160 pixel steps, which only a very large arc can do (radius over 2,000 steps),
+/// and such an arc is itself within `band` (at most half the tolerance) of the line.
+fn straight_runs(points: &[Point], corner_flags: &[bool], tolerance: f64) -> Vec<StraightRun> {
+    let count = points.len();
+    let step = median_step(points);
+    // Only traced pixel outlines are dense enough to tell straight from curved.
+    if count < 8 || !(step > 1.0e-9 && step <= 0.6) {
+        return Vec::new();
+    }
+    // Resampled anti-aliased edges flip between two pixel rows where they cross the alpha
+    // threshold, so a straight edge must be allowed a full pixel (1.5 smoothed steps) of
+    // noise. Half the fitting tolerance caps it: a run within the band is within tolerance.
+    let band = (1.5 * step).min(tolerance * 0.5);
+    let min_length = 160.0 * step;
+    let mut starts: Vec<usize> = corner_flags
+        .iter()
+        .enumerate()
+        .filter_map(|(index, &corner)| corner.then_some(index))
+        .collect();
+    if starts.is_empty() {
+        starts.push(sharpest_bend(points, step));
+    }
+
+    let mut runs = Vec::new();
+    for (position, &start) in starts.iter().enumerate() {
+        let end = starts[(position + 1) % starts.len()];
+        let span = match (end + count - start) % count {
+            0 => count,
+            span => span,
+        };
+        let at = |offset: usize| points[(start + offset) % count];
+        let mut first = 0;
+        while first < span {
+            let reach = straight_reach(&at, first, span, band);
+            let chord = at(reach) - at(first);
+            if chord.length() >= min_length {
+                runs.push(StraightRun {
+                    start: (start + first) % count,
+                    end: (start + reach) % count,
+                    direction: chord.normalized(),
+                });
+                first = reach;
+            } else {
+                first += 1;
+            }
+        }
+    }
+
+    runs
+}
+
 fn fit_closed_runs(
     points: &[Point],
     corner_flags: &[bool],
     tolerance: f64,
 ) -> Result<Vec<CubicNode>, ContourError> {
-    let mut corner_indices: Vec<usize> = corner_flags
-        .iter()
-        .enumerate()
-        .filter_map(|(index, &corner)| corner.then_some(index))
+    let count = points.len();
+    let lines = straight_runs(points, corner_flags, tolerance);
+    let mut line_end_at = vec![None; count];
+    let mut line_into = vec![None; count];
+    let mut line_out_of = vec![None; count];
+    // Line ends move onto their fitted lines (by at most the straightness band); the curves
+    // beside them start from the moved points, so the outline stays connected.
+    let mut points = points.to_vec();
+    let mut moved = Vec::with_capacity(lines.len() * 2);
+    for line in &lines {
+        let (start, end, direction) = line.fitted(&points);
+        moved.push((line.start, start));
+        moved.push((line.end, end));
+        line_end_at[line.start] = Some(line.end);
+        line_out_of[line.start] = Some(direction);
+        line_into[line.end] = Some(direction);
+    }
+    for (index, point) in moved {
+        points[index] = point;
+    }
+    let points = points.as_slice();
+    let mut breaks: Vec<usize> = (0..count)
+        .filter(|&index| {
+            corner_flags[index] || line_out_of[index].is_some() || line_into[index].is_some()
+        })
         .collect();
-    let single_run = corner_indices.is_empty();
+    let single_run = breaks.is_empty();
     if single_run {
-        corner_indices.push(0);
+        breaks.push(0);
     }
 
     let mut segments = Vec::new();
     let mut corner_starts = Vec::new();
-    for position in 0..corner_indices.len() {
-        let start = corner_indices[position];
-        let end = corner_indices[(position + 1) % corner_indices.len()];
+    for position in 0..breaks.len() {
+        let start = breaks[position];
+        let end = breaks[(position + 1) % breaks.len()];
+        if line_end_at[start] == Some(end) {
+            segments.push([points[start], points[start], points[end], points[end]]);
+            corner_starts.push(corner_flags[start]);
+            continue;
+        }
         let mut run = vec![points[start]];
         let mut cursor = start;
         while {
-            cursor = (cursor + 1) % points.len();
+            cursor = (cursor + 1) % count;
             cursor != end
         } {
             run.push(points[cursor]);
         }
         run.push(points[end]);
-        let run_segments = fit_run(&run, tolerance);
+        // Beside a straight segment, continue its direction so the join stays smooth.
+        let run_segments = fit_run(
+            &run,
+            tolerance,
+            line_into[start],
+            line_out_of[end].map(|direction| direction * -1.0),
+        );
         for (index, segment) in run_segments.into_iter().enumerate() {
             segments.push(straighten(segment));
-            corner_starts.push(index == 0 && !single_run);
+            corner_starts.push(index == 0 && !single_run && corner_flags[start]);
         }
     }
     if segments.is_empty() {
@@ -635,14 +829,20 @@ fn fit_closed_runs(
     Ok(nodes)
 }
 
-fn fit_run(points: &[Point], tolerance: f64) -> Vec<Cubic> {
+fn fit_run(
+    points: &[Point],
+    tolerance: f64,
+    start_tangent: Option<Point>,
+    end_tangent: Option<Point>,
+) -> Vec<Cubic> {
     let mut output = Vec::new();
     if points.len() < 2 {
         return output;
     }
     let window = tangent_window(points);
-    let start_tangent = tangent_at(points, 0, 0, window);
-    let end_tangent = tangent_at(points, points.len() - 1, window, 0) * -1.0;
+    let start_tangent = start_tangent.unwrap_or_else(|| tangent_at(points, 0, 0, window));
+    let end_tangent =
+        end_tangent.unwrap_or_else(|| tangent_at(points, points.len() - 1, window, 0) * -1.0);
     fit_cubic(
         points,
         start_tangent,
@@ -990,6 +1190,122 @@ mod tests {
         assert!(nodes.len() <= 16, "{} nodes", nodes.len());
         let corners = nodes.iter().filter(|node| node.corner).count();
         assert_eq!(corners, 0, "invented corners");
+        Ok(())
+    }
+
+    /// A stadium (a long flat-sided rectangle with semicircular ends) on a 0.24 pt pixel
+    /// grid, rotated by `degrees`, traced one pixel step at a time.
+    fn stadium(degrees: f64) -> (Vec<Point>, f64) {
+        let (half_length, radius, grid) = (120.0, 20.0, 0.24);
+        let (sin, cos) = degrees.to_radians().sin_cos();
+        let mut dense = Vec::new();
+        let perimeter = 4.0 * half_length + 2.0 * PI * radius;
+        let steps = (perimeter / (grid * 0.5)) as usize;
+        let (side, arc) = (2.0 * half_length, PI * radius);
+        for step in 0..steps {
+            let s = step as f64 * perimeter / steps as f64;
+            let local = if s < side {
+                Point::new(-half_length + s, -radius)
+            } else if s < side + arc {
+                let angle = -PI / 2.0 + (s - side) / radius;
+                Point::new(half_length + radius * angle.cos(), radius * angle.sin())
+            } else if s < 2.0 * side + arc {
+                Point::new(half_length - (s - side - arc), radius)
+            } else {
+                let angle = PI / 2.0 + (s - 2.0 * side - arc) / radius;
+                Point::new(-half_length + radius * angle.cos(), radius * angle.sin())
+            };
+            let rotated = Point::new(local.x * cos - local.y * sin, local.x * sin + local.y * cos);
+            let snapped = Point::new(
+                (rotated.x / grid).round() * grid,
+                (rotated.y / grid).round() * grid,
+            );
+            if dense.last() != Some(&snapped) {
+                dense.push(snapped);
+            }
+        }
+        (dense, radius)
+    }
+
+    /// Largest distance of the fitted curve from the stadium's top flat side, sampled
+    /// along its middle 80%.
+    fn flat_side_wobble(nodes: &[CubicNode], degrees: f64, radius: f64) -> f64 {
+        let (sin, cos) = degrees.to_radians().sin_cos();
+        let mut worst: f64 = 0.0;
+        for index in 0..nodes.len() {
+            let node = nodes[index];
+            let next = nodes[(index + 1) % nodes.len()];
+            let cubic = [node.anchor, node.out_handle, next.in_handle, next.anchor];
+            for sample in 0..=50 {
+                let point = bezier(cubic, f64::from(sample) / 50.0);
+                // Back into the unrotated frame.
+                let x = point.x * cos + point.y * sin;
+                let y = -point.x * sin + point.y * cos;
+                if x.abs() <= 96.0 && y < 0.0 {
+                    worst = worst.max((y + radius).abs());
+                }
+            }
+        }
+        worst
+    }
+
+    #[test]
+    fn large_gentle_curves_are_not_mistaken_for_straight_lines() -> Result<(), ContourError> {
+        // A 5-inch circle on the 300 ppi processing grid: its sides look nearly straight.
+        let dense = circle(7_500, Some(0.24))
+            .into_iter()
+            .map(|point| point * 1.8)
+            .collect::<Vec<_>>();
+        let nodes = simplify_closed_loop(&dense, settings())?;
+        assert!(nodes.len() <= 16, "{} nodes", nodes.len());
+        let straight = nodes
+            .iter()
+            .filter(|node| node.out_handle == node.anchor)
+            .count();
+        assert_eq!(straight, 0, "a circle has no straight segments");
+        Ok(())
+    }
+
+    #[test]
+    fn long_straight_edges_fit_as_straight_lines_without_wobble() -> Result<(), ContourError> {
+        // Bug report mw5rege5: the flat base of a sticker was fitted with curves that
+        // swung by the full tolerance above and below the straight edge.
+        for degrees in [0.0, 1.5, 30.0] {
+            let (dense, radius) = stadium(degrees);
+            let nodes = simplify_closed_loop(&dense, settings())?;
+            let wobble = flat_side_wobble(&nodes, degrees, radius);
+
+            // A pixel staircase is within half a grid step of the true edge.
+            assert!(
+                wobble <= 0.15,
+                "{degrees}°: flat side wobbles {wobble:.3} pt (nodes {})",
+                nodes.len()
+            );
+            assert!(fitted_deviation(&nodes, &dense) <= 0.6);
+            assert!(nodes.len() <= 16, "{degrees}°: {} nodes", nodes.len());
+            // A stadium has no corners: every node, including where a flat side meets a
+            // round end, continues the curve in the same direction.
+            for (index, node) in nodes.iter().enumerate() {
+                let previous = nodes[(index + nodes.len() - 1) % nodes.len()].anchor;
+                let next = nodes[(index + 1) % nodes.len()].anchor;
+                let incoming = if node.in_handle == node.anchor {
+                    node.anchor - previous
+                } else {
+                    node.anchor - node.in_handle
+                };
+                let outgoing = if node.out_handle == node.anchor {
+                    next - node.anchor
+                } else {
+                    node.out_handle - node.anchor
+                };
+                let kink = turn_angle(node.anchor - incoming, node.anchor, node.anchor + outgoing);
+                assert!(
+                    kink < 5.0,
+                    "{degrees}°: {kink:.1}° kink at {:?}",
+                    node.anchor
+                );
+            }
+        }
         Ok(())
     }
 

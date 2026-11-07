@@ -173,6 +173,23 @@ It builds for Linux, Windows and macOS. Image resampling uses a bilinear filter.
 Coco Production renders placed images with VectorCraft's renderer instead, so a cut can
 differ from the app's by a fraction of a point along anti-aliased edges.
 
+## Changes
+
+**Fix for bug report mw5rege5 (2026-11-07).** Cuts now follow artwork that has long
+straight edges next to curves.
+
+- `fit_loop` (in `pipeline.rs`) now gives the curve fitter a sample at every pixel step.
+  Before, a long straight edge reached it as only its two end corners, so the cut could
+  bulge off the art where that edge met a curve (by up to 1.8 pt on the reported image).
+- The curve fitter (`coco-cut/src/contour.rs`) now fits long straight edges, 160 pixel
+  steps or more within about a pixel of a line, as exact straight segments, with smooth
+  joins to the curves beside them. Flat edges such as a sticker's base no longer wobble
+  by the full tolerance. On the reported image the base varied by 2.4 px before and
+  0.44 px after.
+
+The settings, API and output format are unchanged. Cuts can have a few more or fewer
+nodes than before.
+
 ## Dependencies and licences
 
 - `coco-cut`: Coco Production's mask and curve-fitting code, with no dependencies.

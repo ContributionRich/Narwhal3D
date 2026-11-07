@@ -394,7 +394,27 @@ pub fn apply_vector_offset(path: &PathData, offset_pt: f64) -> Result<PathData, 
     Ok(offset)
 }
 
+/// Every pixel corner along a traced loop. `trace_mask` returns only the corners where the
+/// boundary turns, so a straight edge arrives as two points however long it is.
+fn pixel_steps(corners: &[(i32, i32)]) -> Vec<(i32, i32)> {
+    let mut dense = Vec::with_capacity(corners.len() * 2);
+    for (index, &(x0, y0)) in corners.iter().enumerate() {
+        let (x1, y1) = corners[(index + 1) % corners.len()];
+        let steps = (x1 - x0).abs().max((y1 - y0).abs()).max(1);
+        for step in 0..steps {
+            // Boundary edges are axis-aligned; integer division keeps any other edge exact
+            // at its ends and evenly split between them.
+            dense.push((x0 + (x1 - x0) * step / steps, y0 + (y1 - y0) * step / steps));
+        }
+    }
+    dense
+}
+
 /// Fits smooth curves to one traced pixel-corner loop and maps it to points.
+///
+/// The curve fitter needs a sample at every pixel step: with only the corners of a long
+/// straight edge it can neither measure how far a curve strays along that edge nor estimate
+/// a local tangent next to it, and the fitted curve bulges away from the art there.
 pub fn fit_loop(
     pixels: &[(i32, i32)],
     sx: f64,
@@ -404,9 +424,9 @@ pub fn fit_loop(
     processing_scale: f64,
     settings: SimplifySettings,
 ) -> Result<SubPath, CutError> {
-    let dense: Vec<CutPoint> = pixels
-        .iter()
-        .map(|&(x, y)| {
+    let dense: Vec<CutPoint> = pixel_steps(pixels)
+        .into_iter()
+        .map(|(x, y)| {
             CutPoint::new(
                 f64::from(x) * sx * processing_scale,
                 f64::from(y) * sy * processing_scale,
