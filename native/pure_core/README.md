@@ -18,12 +18,15 @@ Current production routing:
 | macro tokenize / plan | Rust only at 240 / 192 UTF-8 bytes | long workloads measured 1.32× / 1.58× faster |
 | closed (periodic) curve interpolation | Rust from 3 points | 1.4× faster end to end at 4 points, 3.3× at 64 |
 | Curve control-point preview sampling | Rust from 3 points | 5× faster per redraw at 4 points, 23× at 30; bit-identical samples |
+| planar face ear clipping (display) | Rust for concave loops from 6 points, any loop from 64 | concave 3.6× faster at 12 points, 40× at 100; convex 1.8× at 360; identical triangles |
 | STL decode API | Python | generic triangle-tuple reshaping was 24.9% slower |
 | STL Import parse+weld | Rust at ≥50 kB | fused indexed output measured 3.8–4.3× faster at 1k–100k triangles |
 | OBJ encode | Python | native path was 2.18× slower |
 | DXF encode | Python | two-pass output build never reached a stable 10% win |
 | standalone number / bearing parsing | Python | FFI cost erased the tiny-parser gain |
 | SVG path parsing | Python | JSON ABI was slower through the 1 MiB input limit |
+| display segment counts (`screen_segments_for`) | Python | 0.5 µs per call, below one ctypes call; not ported |
+| short convex face loops (under 64 points) | Python | the linear fan beats packing (3.4× slower at 3 points) |
 
 The slower Rust implementations remain directly tested for correctness and future ABI work,
 but they are not allowed to slow production.

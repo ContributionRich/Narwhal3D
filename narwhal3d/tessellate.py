@@ -78,6 +78,32 @@ def _convex_fan(poly, idx):
     return [(anchor, idx[i], idx[i + 1]) for i in range(1, n - 1)]
 
 
+#: Loops at least this long go straight to the Rust ear clipper (`native_tessellate`).
+#: Measured end to end including packing: a convex 72-point loop takes 0.83x the Python
+#: fan's time and 1024 points 0.49x; below about 64 the Python fan is cheaper.
+NATIVE_EAR_CLIP_MIN_POINTS = 64
+
+#: Shorter CONCAVE loops (after the Python convex check) go to Rust from this many
+#: points: 0.70x at 6, 0.22x at 12, 0.10x at 20. Larger concave loops gain far more
+#: (0.027x at 100, 0.015x at 1000, where Python takes 0.23 s).
+NATIVE_CONCAVE_MIN_POINTS = 6
+
+
+def _native_ear_clip(poly):
+    """The Rust ear clipper's triangles, or None when the library is not available."""
+    try:
+        from . import native_tessellate
+    except ImportError:  # loaded as a plain module (bridge's direct-file fallback)
+        try:
+            import native_tessellate
+        except ImportError:
+            return None
+    try:
+        return native_tessellate.ear_clip(poly)
+    except Exception:  # noqa: BLE001 -- the Python ear clipper remains the fallback
+        return None
+
+
 def ear_clip(poly):
     """Triangulate a simple 2-D polygon by ear clipping.
 
@@ -90,10 +116,18 @@ def ear_clip(poly):
     clipping stalls, the triangles found so far are returned rather than looping
     forever -- the caller treats an incomplete result (len != n-2) as a failure
     and falls back to the grid.
+
+    With the pure-core library loaded, long loops and short concave ones are clipped
+    in Rust (see :data:`NATIVE_EAR_CLIP_MIN_POINTS`), which repeats this algorithm
+    step for step and returns the same triangles in the same order.
     """
     n = len(poly)
     if n < 3:
         return []
+    if n >= NATIVE_EAR_CLIP_MIN_POINTS:
+        native = _native_ear_clip(poly)
+        if native is not None:
+            return native
     idx = list(range(n))
     if signed_area(poly) < 0:
         idx.reverse()
@@ -101,6 +135,10 @@ def ear_clip(poly):
     fast = _convex_fan(poly, idx)
     if fast is not None:
         return fast
+    if NATIVE_CONCAVE_MIN_POINTS <= n < NATIVE_EAR_CLIP_MIN_POINTS:
+        native = _native_ear_clip(poly)
+        if native is not None:
+            return native
 
     triangles = []
     guard = 0
