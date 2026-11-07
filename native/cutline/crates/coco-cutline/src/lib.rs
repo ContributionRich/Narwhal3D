@@ -41,7 +41,8 @@ pub enum Background {
 pub struct CutSettings {
     /// Distance from the artwork to the cut, in points. Negative cuts inside the art.
     pub offset_pt: f64,
-    /// Maximum curve-fitting error, in points.
+    /// Maximum curve-fitting error, in points at the normalized processing size.
+    /// `with_smoothness` sets it from the outline smoothness.
     pub tolerance_pt: f64,
     /// Also cut out holes inside the artwork.
     pub keep_inner_cuts: bool,
@@ -50,21 +51,40 @@ pub struct CutSettings {
     pub background: Background,
     /// How close (0–60%) a colour must be to the background colour to count as background.
     pub background_tolerance_percent: f64,
-    /// 0–1: how rounded the bridges are when separate islands are joined into one cut.
+    /// 0 (Detailed) to 1 (Smooth). Sets `tolerance_pt` through `with_smoothness`, and how
+    /// rounded the bridges are when separate islands are joined into one cut.
     pub outline_smoothness: f64,
+}
+
+impl CutSettings {
+    /// These settings with outline smoothness `smoothness` (0 Detailed to 1 Smooth) and the
+    /// matching curve-fitting tolerance, as Coco Production's Outline smoothness slider.
+    #[must_use]
+    pub fn with_smoothness(self, smoothness: f64) -> Self {
+        Self {
+            outline_smoothness: if smoothness.is_finite() {
+                smoothness.clamp(0.0, 1.0)
+            } else {
+                0.5
+            },
+            tolerance_pt: pipeline::smoothness_tolerance_pt(smoothness),
+            ..self
+        }
+    }
 }
 
 impl Default for CutSettings {
     fn default() -> Self {
         Self {
             offset_pt: 0.05 * POINTS_PER_INCH,
-            tolerance_pt: 0.576,
+            tolerance_pt: 0.0,
             keep_inner_cuts: true,
             ignore_holes_under_pt2: 0.07 * POINTS_PER_INCH * POINTS_PER_INCH,
             background: Background::Auto,
             background_tolerance_percent: 12.0,
-            outline_smoothness: 0.6,
+            outline_smoothness: 0.0,
         }
+        .with_smoothness(0.4)
     }
 }
 

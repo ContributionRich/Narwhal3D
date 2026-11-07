@@ -239,7 +239,7 @@ msg, done = fresh_cmd().execute(ctx)
 check(len(ctx.added) == 2,
       f"only the polyline explodes (into 2)  ({len(ctx.added)})")
 check(ctx.changes == ["Explode"], "the mixed run is a single undo record")
-# RE-EXPRESSED (G-71): this used to match the phrase "not an explodable curve". Once
+# RE-EXPRESSED (regression): this used to match the phrase "not an explodable curve". Once
 # polysurfaces became explodable that wording was no longer TRUE -- a point is not excluded for
 # being "not a curve" but for being something Explode does not handle -- so the message now
 # says "not explodable". The check still demands that BOTH objects are accounted for, which is
@@ -254,7 +254,7 @@ check(ctx.model.object_id_by_name("Polyline01") is None,
 
 # ===========================================================================
 print()
-print("G-71: a POLYSURFACE explodes into SURFACES")
+print("regression: a POLYSURFACE explodes into SURFACES")
 # ===========================================================================
 # MEASURED (commands/explode.htm): "Polysurface -- Surfaces." Earlier rounds recorded this as
 # BLOCKED because rhino3dm cannot construct a trimmed face. That was only true of one route:
@@ -357,7 +357,7 @@ else:
           "in the same PLACE -- a face of the same type somewhere else would also match on "
           "faces alone, which is why the centroid is checked")
 
-    # -- 5. moving a piece moves its master AND its recipe (G-56 + G-71a)
+    # -- 5. moving a piece moves its master AND its recipe (regression + regression)
     piece = pieces[0]
     before = occt.surface_centroid(k.master_of(piece))
     bridge.transform_geometry(piece, r3.Transform.Translation(50.0, 0.0, 0.0))
@@ -367,7 +367,7 @@ else:
           "moving an exploded piece moves its master")
     check(abs(after_recipe[0] - before[0] - 50.0) < 1e-9,
           f"AND its recipe, so it would reopen where it was moved to (x {after_recipe[0]:.3f})"
-          f" -- a `face` recipe has no xform of its own, the case G-71a fixed")
+          f" -- a `face` recipe has no xform of its own, the case regression fixed")
 
     # -- 6. a single piece cannot be exploded again
     ctx = FakeCtx()

@@ -14287,8 +14287,9 @@ class TracePictureCmd(Command):
                     help="Also cut holes (windows) inside the artwork."),
         opts.Option("MinHoleArea", opts.VALUE, value_kind="number", default=None,
                     help="Holes smaller than this area (model units squared) are not cut."),
-        opts.Option("Smoothness", opts.VALUE, value_kind="number", default=60.0,
-                    help="Rounding of the bridges joining separate islands, 0-100."),
+        opts.Option("Smoothness", opts.VALUE, value_kind="number", default=40.0,
+                    help="0: detailed outline; 100: smoother outline with fewer points. "
+                         "Also rounds the bridges joining separate islands."),
     )
     #: sticky option values across runs (model-unit values are set on first use).
     _sticky: dict = {}

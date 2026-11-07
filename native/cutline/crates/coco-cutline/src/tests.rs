@@ -2,16 +2,31 @@ use super::*;
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 
-/// `size`-pixel image with discs `(cx, cy, r)` of `ink` on `paper`.
+/// `size`-pixel image with antialiased discs `(cx, cy, r)` of `ink` on `paper`, as real
+/// artwork is drawn (4 x 4 coverage samples per pixel).
 fn discs(size: u32, paper: [u8; 4], ink: [u8; 4], shapes: &[(f64, f64, f64)]) -> Image {
     let mut rgba = Vec::with_capacity((size * size * 4) as usize);
     for y in 0..size {
         for x in 0..size {
-            let (px, py) = (f64::from(x) + 0.5, f64::from(y) + 0.5);
-            let inside = shapes
-                .iter()
-                .any(|(cx, cy, r)| (px - cx).hypot(py - cy) <= *r);
-            rgba.extend_from_slice(if inside { &ink } else { &paper });
+            let mut covered = 0;
+            for sy in 0..4 {
+                for sx in 0..4 {
+                    let px = f64::from(x) + (f64::from(sx) + 0.5) / 4.0;
+                    let py = f64::from(y) + (f64::from(sy) + 0.5) / 4.0;
+                    if shapes
+                        .iter()
+                        .any(|(cx, cy, r)| (px - cx).hypot(py - cy) <= *r)
+                    {
+                        covered += 1;
+                    }
+                }
+            }
+            let coverage = f64::from(covered) / 16.0;
+            for channel in 0..4 {
+                let mixed = f64::from(paper[channel])
+                    + (f64::from(ink[channel]) - f64::from(paper[channel])) * coverage;
+                rgba.push(mixed.round() as u8);
+            }
         }
     }
     Image::new(size, size, rgba).unwrap_or_else(|_| Image {
@@ -37,7 +52,12 @@ fn disc_on_white_gives_one_round_loop_offset_outward() -> TestResult {
     assert!(((x1 - x0) - expected).abs() < 1.0, "width {}", x1 - x0);
     assert!(((y1 - y0) - expected).abs() < 1.0, "height {}", y1 - y0);
     assert!((((x0 + x1) / 2.0) - 72.0).abs() < 0.5);
-    assert!(cut.loops[0].nodes.len() < 40, "a disc needs few nodes");
+    assert!(cut.loops[0].nodes.len() < 30, "a disc needs few nodes");
+    let smooth = generate_cut(&image, size, &CutSettings::default().with_smoothness(1.0))?;
+    assert!(
+        smooth.loops[0].nodes.len() < 20,
+        "Smooth needs very few nodes"
+    );
     let svg = cut.to_svg_document();
     assert!(svg.contains("width=\"2in\"") && svg.contains("stroke=\"#ff0000\""));
     Ok(())
@@ -262,17 +282,85 @@ fn zero_offset_cut_follows_straight_edges_next_to_curves() -> TestResult {
         offset_pt: 0.0,
         ..CutSettings::default()
     };
-    let cut = generate_cut(&image, ArtworkSize::from_dpi(&image, 300.0), &settings)?;
-    assert_eq!(cut.loops.len(), 1);
-    let px_per_pt = 300.0 / 72.0;
-    let worst = worst_deviation_px(&cut, width, height, inside, px_per_pt);
-    // Fitting tolerance plus the half pixel between a boundary pixel's centre and its edge.
-    let allowed = settings.tolerance_pt * px_per_pt + 1.0;
-    assert!(
-        worst <= allowed,
-        "cut strays {worst:.2} px from the art (allowed {allowed:.2})"
-    );
+    // Straight edges stay straight at every smoothness.
+    for smoothness in [0.0, 0.4, 1.0] {
+        let settings = settings.with_smoothness(smoothness);
+        let cut = generate_cut(&image, ArtworkSize::from_dpi(&image, 300.0), &settings)?;
+        assert_eq!(cut.loops.len(), 1);
+        let px_per_pt = 300.0 / 72.0;
+        let worst = worst_deviation_px(&cut, width, height, inside, px_per_pt);
+        // Fitting tolerance (never below the ~1 px noise of a resampled edge) plus the half
+        // pixel between a boundary pixel's centre and its edge.
+        let allowed = settings.tolerance_pt.max(0.25) * px_per_pt + 1.0;
+        assert!(
+            worst <= allowed,
+            "smoothness {smoothness}: cut strays {worst:.2} px from the art (allowed {allowed:.2})"
+        );
+    }
     Ok(())
+}
+
+/// Bug report mw6vn2tn: the Outline smoothness slider only affected art made of separate
+/// islands. It now sets how closely every cut follows the art.
+#[test]
+fn smoothness_trades_points_for_closeness_on_every_cut() -> TestResult {
+    // One wavy blob: a single island, where the slider used to do nothing.
+    let (width, height) = (1200_usize, 1200_usize);
+    let inside = |x: usize, y: usize| {
+        let (dx, dy) = (x as f64 + 0.5 - 600.0, y as f64 + 0.5 - 600.0);
+        let angle = dy.atan2(dx);
+        dx.hypot(dy) <= 420.0 + 40.0 * (7.0 * angle).sin() + 15.0 * (19.0 * angle).cos()
+    };
+    let mut rgba = Vec::with_capacity(width * height * 4);
+    for y in 0..height {
+        for x in 0..width {
+            rgba.extend_from_slice(if inside(x, y) { &RED } else { &CLEAR });
+        }
+    }
+    let image = Image::new(width as u32, height as u32, rgba)?;
+    let size = ArtworkSize::from_dpi(&image, 300.0);
+    let px_per_pt = 300.0 / 72.0;
+    let mut previous: Option<(usize, f64)> = None;
+    for smoothness in [0.0, 0.4, 1.0] {
+        let settings = CutSettings {
+            offset_pt: 0.0,
+            ..CutSettings::default()
+        }
+        .with_smoothness(smoothness);
+        let cut = generate_cut(&image, size, &settings)?;
+        let nodes: usize = cut.loops.iter().map(|l| l.nodes.len()).sum();
+        let worst = worst_deviation_px(&cut, width, height, inside, px_per_pt);
+        assert!(
+            worst <= settings.tolerance_pt.max(0.25) * px_per_pt + 1.0,
+            "smoothness {smoothness}: {worst:.2} px from the art"
+        );
+        if let Some((more_nodes, closer)) = previous {
+            assert!(
+                nodes * 3 < more_nodes * 2,
+                "smoothness {smoothness}: {nodes} nodes, not clearly fewer than {more_nodes}"
+            );
+            assert!(worst >= closer - 0.1);
+        }
+        previous = Some((nodes, worst));
+    }
+    Ok(())
+}
+
+#[test]
+fn smoothness_maps_to_a_tolerance_range() {
+    let detailed = CutSettings::default().with_smoothness(0.0).tolerance_pt;
+    let default = CutSettings::default().tolerance_pt;
+    let smooth = CutSettings::default().with_smoothness(1.0).tolerance_pt;
+    assert!((detailed - 0.1).abs() < 1.0e-12);
+    assert!((smooth - 0.6).abs() < 1.0e-12);
+    assert!(detailed < default && default < smooth);
+    assert_eq!(CutSettings::default().outline_smoothness, 0.4);
+    assert_eq!(
+        CutSettings::default()
+            .with_smoothness(f64::NAN)
+            .tolerance_pt,
+        pipeline::smoothness_tolerance_pt(0.5)
+    );
 }
 
 #[test]

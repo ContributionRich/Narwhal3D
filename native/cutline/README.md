@@ -2,8 +2,8 @@
 
 The Rust helper behind the `TracePicture` command. Given an image and its size, it returns
 closed cubic Bezier cut lines around the artwork, offset outward (or inward), as JSON.
-`narwhal3d/trace_picture.py` runs it and maps each loop onto the Picture's frame as one exact
-closed degree-3 NURBS curve.
+`narwhal3d/trace_picture.py` runs it and maps each loop onto the Picture's frame as one closed PolyCurve of exact cubic NURBS
+segments, preserving its pieces for Explode.
 
 - `crates/coco-cut`, `crates/coco-cutline`: contributed by their author under this project's
   license. `coco-cutline` adds `--sample-pixel X Y` for the command's PickColor option.

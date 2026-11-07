@@ -20,6 +20,19 @@ pub const PROCESSING_LONGEST_SIDE_PT: f64 = 5.0 * POINTS_PER_INCH;
 pub const PROCESSING_PPI: f64 = 300.0;
 const MAX_CUT_PIXELS: f64 = 32.0 * 1024.0 * 1024.0;
 
+/// Curve-fitting tolerance (points, at the normalized processing size) for an outline
+/// smoothness of 0 (Detailed: 0.1 pt, many nodes) to 1 (Smooth: 0.6 pt, few nodes).
+/// Each step of the slider changes the tolerance by the same factor.
+#[must_use]
+pub fn smoothness_tolerance_pt(smoothness: f64) -> f64 {
+    let smoothness = if smoothness.is_finite() {
+        smoothness.clamp(0.0, 1.0)
+    } else {
+        0.5
+    };
+    0.1 * 6.0_f64.powf(smoothness)
+}
+
 /// Scale from real size to the normalized processing size.
 #[must_use]
 pub fn processing_scale(width_pt: f64, height_pt: f64) -> f64 {

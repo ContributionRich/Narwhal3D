@@ -16,12 +16,14 @@ Size (pick one; default --dpi 300):
 
 Cut:
   --offset-in D              distance from the art to the cut (default 0.05; negative = inside)
-  --tolerance-pt T           curve-fitting tolerance in points (default 0.576)
+  --smoothness P             0 (detailed: closest fit, more points) to 100 (smooth: fewer
+                             points); default 40. Also rounds bridges joining islands
+  --tolerance-pt T           exact curve-fitting tolerance in points (overrides --smoothness)
   --no-inner-cuts            do not cut holes inside the art
   --ignore-holes-under-in2 A skip holes smaller than A square inches (default 0.07)
   --background MODE          auto (default), transparent, or a colour like #ffffff
   --background-tolerance P   colour match tolerance in percent, 0-60 (default 12)
-  --smoothness P             rounding of bridges joining separate islands, 0-100 (default 60)
+
 
 Output:
   -o, --output FILE          write here instead of standard output
@@ -84,6 +86,7 @@ fn parse(args: &[String]) -> Result<Options, String> {
         sample: None,
         settings: CutSettings::default(),
     };
+    let mut tolerance = None;
     let mut iter = args.iter();
     while let Some(arg) = iter.next() {
         match arg.as_str() {
@@ -107,7 +110,7 @@ fn parse(args: &[String]) -> Result<Options, String> {
             "--width-in" => options.width_in = Some(number(iter.next(), arg)?),
             "--height-in" => options.height_in = Some(number(iter.next(), arg)?),
             "--offset-in" => options.settings.offset_pt = number(iter.next(), arg)? * 72.0,
-            "--tolerance-pt" => options.settings.tolerance_pt = number(iter.next(), arg)?,
+            "--tolerance-pt" => tolerance = Some(number(iter.next(), arg)?),
             "--no-inner-cuts" => options.settings.keep_inner_cuts = false,
             "--ignore-holes-under-in2" => {
                 options.settings.ignore_holes_under_pt2 = number(iter.next(), arg)? * 72.0 * 72.0;
@@ -116,7 +119,11 @@ fn parse(args: &[String]) -> Result<Options, String> {
                 options.settings.background_tolerance_percent = number(iter.next(), arg)?;
             }
             "--smoothness" => {
-                options.settings.outline_smoothness = number(iter.next(), arg)? / 100.0;
+                let smoothness = number(iter.next(), arg)?;
+                if !(0.0..=100.0).contains(&smoothness) {
+                    return Err("--smoothness must be 0 to 100".into());
+                }
+                options.settings = options.settings.with_smoothness(smoothness / 100.0);
             }
             "--background" => {
                 let value = iter.next().ok_or("--background needs a value")?;
@@ -132,6 +139,12 @@ fn parse(args: &[String]) -> Result<Options, String> {
         }
     }
     options.input = input.ok_or("missing input image")?;
+    if let Some(tolerance) = tolerance {
+        if tolerance <= 0.0 {
+            return Err("--tolerance-pt must be positive".into());
+        }
+        options.settings.tolerance_pt = tolerance;
+    }
     if [options.dpi, options.width_in, options.height_in]
         .iter()
         .filter(|value| value.is_some())

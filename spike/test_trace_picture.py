@@ -192,8 +192,8 @@ ctx, cmd, msg, done = run(["InnerCuts=No", "Offset=0.5", ""])
 check(done and len(ctx.made) == 1 and all(isinstance(g, r3.PolyCurve) and g.IsClosed for g in ctx.made),
       f"Enter adds the closed cut curves ({msg})")
 ctx, cmd, msg, done = run([])
-check(not done and abs(cmd.opt["Offset"] - 1.27) < 1e-9,
-      "the default Offset is 0.05 in, shown in model units (1.27 mm)")
+check(not done and cmd.opt["Offset"] == 0.0 and cmd.opt["Smoothness"] == 40.0,
+      "the default Offset is zero and Smoothness is 40")
 check(len(cmd.preview_curves(ctx.geom_by_name, (0, 0, 0))) == 1,
       "the preview draws the cut before Enter (the default MinHoleArea, 0.07 in^2, skips the window)")
 ctx, cmd, msg, done = run(["Offset=0", "MinHoleArea=1"])

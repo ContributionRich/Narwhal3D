@@ -552,29 +552,28 @@ fn smooth_staircase(points: &mut Vec<Point>, corner_flags: &[bool]) {
             (-(offset * step).powi(2) / (2.0 * sigma * sigma)).exp()
         })
         .collect();
-    let guard = (1.0 / step).round().max(1.0) as usize;
-    let mut fixed = vec![false; count];
-    for (corner, &is_corner) in corner_flags.iter().enumerate() {
-        if is_corner {
-            for offset in 0..=(2 * guard) {
-                let index = (corner + count + offset % count - guard % count) % count;
-                fixed[index] = true;
-            }
-        }
-    }
-
+    // Corners stay exactly where they are, and the average never reaches across one: each
+    // side is smoothed right up to its corner. (Freezing the pixels beside a corner instead
+    // left their staircase in place, which a tight fit then followed as a zigzag.)
+    let reach = radius.min(count.saturating_sub(1) / 2);
     let mut smoothed = vec![Point::default(); count];
     for index in 0..count {
-        if fixed[index] {
+        if corner_flags[index] {
             smoothed[index] = points[index];
             continue;
         }
-        let mut weighted = Point::default();
-        let mut total_weight = 0.0;
-        for (weight_index, &weight) in weights.iter().enumerate() {
-            let sample = (index + count + weight_index % count - radius % count) % count;
-            weighted = weighted + points[sample] * weight;
-            total_weight += weight;
+        let mut weighted = points[index] * weights[radius];
+        let mut total_weight = weights[radius];
+        for direction in [1, count - 1] {
+            for offset in 1..=reach {
+                let sample = (index + direction * offset) % count;
+                let weight = weights[radius + offset];
+                weighted = weighted + points[sample] * weight;
+                total_weight += weight;
+                if corner_flags[sample] {
+                    break;
+                }
+            }
         }
         smoothed[index] = weighted * (1.0 / total_weight);
     }
@@ -691,10 +690,10 @@ fn straight_reach(at: &impl Fn(usize) -> Point, first: usize, last: usize, band:
 /// Long straight stretches of a dense (pixel-step) loop. Fitting these with curves makes the
 /// cut swing by the full tolerance on either side of a flat edge.
 ///
-/// Any arc looks straight over a short enough distance. A run must stay within `band` of a
-/// line for 160 pixel steps, which only a very large arc can do (radius over 2,000 steps),
-/// and such an arc is itself within `band` (at most half the tolerance) of the line.
-fn straight_runs(points: &[Point], corner_flags: &[bool], tolerance: f64) -> Vec<StraightRun> {
+/// Any arc looks straight over a short enough distance. A run must stay within `band`
+/// (1.5 pixel steps) of a line for 160 pixel steps, which only an arc of radius over 2,000
+/// steps can do: larger than the whole normalized artwork.
+fn straight_runs(points: &[Point], corner_flags: &[bool]) -> Vec<StraightRun> {
     let count = points.len();
     let step = median_step(points);
     // Only traced pixel outlines are dense enough to tell straight from curved.
@@ -703,8 +702,9 @@ fn straight_runs(points: &[Point], corner_flags: &[bool], tolerance: f64) -> Vec
     }
     // Resampled anti-aliased edges flip between two pixel rows where they cross the alpha
     // threshold, so a straight edge must be allowed a full pixel (1.5 smoothed steps) of
-    // noise. Half the fitting tolerance caps it: a run within the band is within tolerance.
-    let band = (1.5 * step).min(tolerance * 0.5);
+    // noise. This is pixel noise, not shape, so it doesn't shrink with the fitting
+    // tolerance: a tight tolerance would otherwise follow that noise as a wobble.
+    let band = 1.5 * step;
     let min_length = 160.0 * step;
     let mut starts: Vec<usize> = corner_flags
         .iter()
@@ -749,7 +749,7 @@ fn fit_closed_runs(
     tolerance: f64,
 ) -> Result<Vec<CubicNode>, ContourError> {
     let count = points.len();
-    let lines = straight_runs(points, corner_flags, tolerance);
+    let lines = straight_runs(points, corner_flags);
     let mut line_end_at = vec![None; count];
     let mut line_into = vec![None; count];
     let mut line_out_of = vec![None; count];

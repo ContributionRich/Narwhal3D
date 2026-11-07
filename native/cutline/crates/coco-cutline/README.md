@@ -51,12 +51,14 @@ Size (pick one; default --dpi 300):
                              as Coco Production sizes it)
 Cut:
   --offset-in D              distance from the art to the cut (default 0.05; negative = inside)
-  --tolerance-pt T           curve-fitting tolerance in points (default 0.576)
+  --smoothness P             0 (detailed: closest fit, more points) to 100 (smooth: fewer
+                             points); default 40. Also rounds bridges joining islands
+  --tolerance-pt T           exact curve-fitting tolerance in points (overrides --smoothness)
   --no-inner-cuts            do not cut holes inside the art
   --ignore-holes-under-in2 A skip holes smaller than A square inches (default 0.07)
   --background MODE          auto (default), transparent, or a colour like #ffffff
   --background-tolerance P   colour match tolerance in percent, 0-60 (default 12)
-  --smoothness P             rounding of bridges joining separate islands, 0-100 (default 60)
+
 Output:
   -o, --output FILE          write here instead of standard output
   --format svg|json          default svg; json lists every Bezier node in points
@@ -139,12 +141,12 @@ The other ways to size art are `ArtworkSize::points`, `from_dpi`, `from_width_in
 | Field | Default | Meaning |
 |---|---|---|
 | `offset_pt` | 3.6 (0.05 in) | Distance from art to cut; negative cuts inside the art |
-| `tolerance_pt` | 0.576 | Maximum curve-fitting error |
+| `tolerance_pt` | 0.205 | Maximum curve-fitting error (set by `with_smoothness`) |
 | `keep_inner_cuts` | `true` | Also cut holes inside the art |
 | `ignore_holes_under_pt2` | 362.88 (0.07 in²) | Smaller holes are not cut |
 | `background` | `Auto` | `Auto`, `TransparencyOnly` or `Color([r, g, b])` |
 | `background_tolerance_percent` | 12 | Colour match tolerance, 0–60 |
-| `outline_smoothness` | 0.6 | 0–1, rounding of bridges between joined islands |
+| `outline_smoothness` | 0.4 | 0 (Detailed) – 1 (Smooth); also rounds bridges between joined islands |
 
 `Auto` detects a solid border colour, as Coco Production does when an image is opened.
 In every mode, transparent pixels and a near-uniform opaque border region connected to
@@ -174,6 +176,20 @@ Coco Production renders placed images with VectorCraft's renderer instead, so a 
 differ from the app's by a fraction of a point along anti-aliased edges.
 
 ## Changes
+
+**Outline smoothness and closer fits, bug report mw6vn2tn (2026-11-07).**
+
+- New `CutSettings::with_smoothness(0.0..=1.0)` and CLI `--smoothness 0-100`: 0 (Detailed)
+  follows the art closely with more nodes, 1 (Smooth) uses few nodes and rounder curves.
+  It sets `tolerance_pt` from 0.1 to 0.6 pt. Before, smoothness only changed how
+  separate islands were joined. `--tolerance-pt` still sets an exact value.
+- **The default changes** to smoothness 0.4 (tolerance 0.205 pt, was 0.576 pt). Cuts
+  follow the art about twice as closely, with roughly 1.5-2x the nodes. Use
+  `with_smoothness(1.0)` / `--smoothness 100` for output close to the old one.
+- Straight edges stay exact lines at every smoothness (the straight-edge test no longer
+  depends on the tolerance).
+- The staircase smoothing no longer leaves pixel steps unsmoothed beside corners, which
+  a tight fit traced as a zigzag at sharp tips.
 
 **Fix for bug report mw5rege5 (2026-11-07).** Cuts now follow artwork that has long
 straight edges next to curves.

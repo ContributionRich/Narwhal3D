@@ -7,9 +7,9 @@ the helper is a separate process (crash-isolated, like the exact-save helper) an
 is a handful of affine operations per control point.
 
 The helper returns closed loops of cubic Beziers in points (1/72 in), origin at the image's
-top-left, y down. An affine map preserves a Bezier exactly, so each loop becomes ONE closed
-degree-3 NURBS curve whose spans ARE the cubics (knots of multiplicity 3) -- exact geometry,
-never a polyline.
+top-left, y down. An affine map preserves a Bezier exactly, so each loop becomes a closed PolyCurve of exact cubic NURBS segments -- editable and
+explodable without flattening to a polyline. The packed NURBS helper remains available for
+compatibility with older saved traces.
 """
 from __future__ import annotations
 
@@ -24,10 +24,10 @@ ROOT = Path(__file__).resolve().parents[1]
 TIMEOUT_S = 120
 
 #: The helper's own defaults, in inches (Coco Production's values).
-DEFAULT_OFFSET_IN = 0.05
+DEFAULT_OFFSET_IN = 0.0
 DEFAULT_MIN_HOLE_IN2 = 0.07
 DEFAULT_TOLERANCE_PCT = 12.0
-DEFAULT_SMOOTHNESS = 60.0
+DEFAULT_SMOOTHNESS = 40.0
 BACKGROUNDS = ("Auto", "Transparent", "Color")
 
 
