@@ -113,6 +113,15 @@ xs = [v[0] for v in verts]
 check(abs(min(xs) - min(p.X for p in samples)) < 0.05 and abs(max(xs) - max(p.X for p in samples)) < 0.05,
       "the display mesh spans the exact profile's extent")
 
+# Bug #112: sub-object picking (Gumball extrude ghost, selection highlight) meshes the
+# master through its own route; it must not over-refine either.
+start = time.perf_counter()
+parts = bridge.subobject_parts(geom)
+elapsed = time.perf_counter() - start
+check(parts is not None and len(parts["faces"]) == 3 and len(parts["edges"]) == 3,
+      "sub-object parts are the exact topology: 3 faces, 3 edges")
+check(elapsed < 2.0, f"sub-object parts build quickly ({elapsed:.2f} s; was ~17 s)")
+
 print(f"\n{checks - len(failures)}/{checks} checks passed")
 if failures:
     sys.exit(1)

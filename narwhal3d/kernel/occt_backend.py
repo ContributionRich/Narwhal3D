@@ -1771,6 +1771,19 @@ def _premesh_extrusion_faces(shape, deflection, angle):
         exp.Next()
 
 
+def _display_mesh(shape, deflection, angle):
+    """(Re)mesh `shape` for DISPLAY and hit-testing: drop any cached triangulation, mesh the
+    linear-extrusion faces first (see `_premesh_extrusion_faces`), then the rest. Every
+    display/pick mesher goes through here, so no route over-refines an extrusion (bug #111/#112:
+    `subobject_topology` still took 17 s on one when only `_tessellate` had the fix)."""
+    from OCP.BRepMesh import BRepMesh_IncrementalMesh
+    from OCP.BRepTools import BRepTools
+
+    BRepTools.Clean_s(shape)
+    _premesh_extrusion_faces(shape, deflection, angle)
+    BRepMesh_IncrementalMesh(shape, float(deflection), False, float(angle), True)
+
+
 def _tessellate(shape, deflection, angle, want_edges, tangent_angle=None):
     """The mesher behind `tessellate` / `tessellate_with_edges`. Never the geometry.
 
@@ -1796,9 +1809,7 @@ def _tessellate(shape, deflection, angle, want_edges, tangent_angle=None):
     # zooming in never refines the display, and the shape keeping whatever density it was
     # first drawn at. `BRepTools.Clean_s` drops the cached mesh so the deflection actually
     # applies. Two successive density requests must therefore produce distinct meshes.
-    BRepTools.Clean_s(shape)
-    _premesh_extrusion_faces(shape, deflection, angle)
-    BRepMesh_IncrementalMesh(shape, float(deflection), False, float(angle), True)
+    _display_mesh(shape, deflection, angle)
     verts = []
     tris = []
     edges = []
@@ -2496,8 +2507,7 @@ def subobject_topology(shape, deflection=DISPLAY_DEFLECTION, angle=DISPLAY_ANGLE
 
     # the mesh is cached on the shape and `tessellate` cleans it before every use, so this
     # cannot leave the display at the wrong density
-    BRepTools.Clean_s(shape)
-    BRepMesh_IncrementalMesh(shape, float(deflection), False, float(angle), True)
+    _display_mesh(shape, deflection, angle)
     faces = []
     for index, face in enumerate(unique_faces(shape), start=1):
         loc = TopLoc_Location()
