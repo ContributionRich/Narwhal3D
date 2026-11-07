@@ -599,6 +599,46 @@ def _fixed_vec3(values):
         return None
 
 
+def unit_table():
+    """``{UnitSystem name: millimetres per unit}`` from Rust's ``UNIT_SYSTEM_MM``.
+
+    The single definition of the fixed unit scales; ``units.py`` builds
+    ``UNIT_SCALE_MM`` from it. ``None`` when the library or export is unavailable
+    or the reply is malformed, and ``units.py`` then uses its Python copy.
+    """
+    explicit = os.environ.get(_ENV_PATH)
+    candidates = (Path(explicit).expanduser(),) if explicit else (_PACKAGED_LIBRARY,)
+    for path in candidates:
+        if not path.is_file():
+            continue
+        try:
+            library = ctypes.CDLL(str(path))
+            function = library.narwhal_pure_core_unit_table
+            function.argtypes = [_ByteP, ctypes.c_size_t, _DoubleP, ctypes.c_size_t,
+                                 ctypes.POINTER(ctypes.c_uint64),
+                                 ctypes.POINTER(ctypes.c_uint64)]
+            function.restype = ctypes.c_int32
+            names_len, count = ctypes.c_uint64(), ctypes.c_uint64()
+            function(None, 0, None, 0, ctypes.byref(names_len), ctypes.byref(count))
+            if not 0 < count.value <= 256 or not 0 < names_len.value <= 64 * 256:
+                return None
+            names = (ctypes.c_ubyte * names_len.value)()
+            values = (ctypes.c_double * count.value)()
+            code = function(names, names_len.value, values, count.value,
+                            ctypes.byref(names_len), ctypes.byref(count))
+            if code != 0:
+                return None
+            keys = bytes(names).decode("ascii").split("\n")
+        except (AttributeError, OSError, UnicodeDecodeError):
+            continue
+        scales = list(values)
+        if (len(keys) != len(scales) or len(set(keys)) != len(keys)
+                or not all(math.isfinite(v) and v > 0.0 for v in scales)):
+            return None
+        return dict(zip(keys, scales))
+    return None
+
+
 def grid_snap(point, origin, x_axis, y_axis, z_axis, spacing):
     """Return the Rust-computed snapped world point, or ``None``.
 
