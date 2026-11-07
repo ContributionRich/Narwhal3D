@@ -135,6 +135,28 @@ python3 scripts/verify_linux_release.py \
 
 Assembly fails closed unless the native binary identity, patch hashes, source commit, Python dependencies, notices, paths, and symlinks all pass. It emits the AppImage, a SHA-256 sidecar, and a retained AppDir for diagnostics.
 
+## AI assistant and MCP
+
+The in-app assistant accepts four provider identifiers: `openai`, `anthropic`, `openai_compatible`, and `openai_responses`. See the [provider registry](../narwhal3d/ai_assistant.py#L23-L29).
+
+Sharing workspace metadata requires explicit consent for the configured recipient. The assistant includes bounded selected-object metadata with each message. To revoke remembered consent, open AI Settings and choose **Forget workspace-sharing permission**. See the [permission model](../SECURITY.md#ai-permissions-in-current-source) and [settings control](../narwhal3d/ai_settings_popup.py#L353).
+
+A tool-capable model can request one new world-aligned box or cube. Creating it requires a separate, one-use human approval in the app. Circle is proposal-only. Sphere, cylinder and cone are disabled, and the assistant has no executor for curve, loft, pipe or Boolean operations. It cannot edit selected objects. Logical cancellation invalidates stale responses, but physical HTTP cancellation is not guaranteed. See the [source status](../STATUS.md#current-source-and-0410-feature-set), [disabled action catalog](../native/automation_core/src/catalog.rs) and [changelog](../CHANGELOG.md).
+
+The external MCP launcher uses Unix stdio and requires `--read-only`. It starts one new app instance per launch and supports metadata reads only. It cannot attach to an existing app or execute modeling actions. See the [launcher](../scripts/narwhal_mcp.py) and [source status](../STATUS.md#current-source-and-0410-feature-set).
+
+The [read-tool catalog](../native/automation_core/src/catalog.rs#L8-L54) defines these nine dotted MCP names:
+
+- `narwhal.application_info`
+- `narwhal.document_summary`
+- `narwhal.selection_summary`
+- `narwhal.object_summary`
+- `narwhal.objects`
+- `narwhal.layers`
+- `narwhal.workspace`
+- `narwhal.components`
+- `narwhal.operations`
+
 ## Tests
 
 Fast public model tests can be run with the bundled interpreter after bootstrap. The full application and UI suites use the bundled runtime:
