@@ -1078,6 +1078,9 @@ def _picture_display_material(image_path):
         app_state.log(f"Picture: the image file {path} cannot be read; shown untextured")
     if bsdf is not None:
         mat.node_tree.links.new(tex.outputs["Color"], bsdf.inputs["Base Color"])
+        # a PNG's transparency is part of the picture: without this its clear pixels
+        # render as their stored colour (usually black).
+        mat.node_tree.links.new(tex.outputs["Alpha"], bsdf.inputs["Alpha"])
     return mat
 
 

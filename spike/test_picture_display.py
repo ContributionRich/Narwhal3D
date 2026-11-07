@@ -199,6 +199,47 @@ finally:
     ui._build_picture_draw = real_builder
     ui._picture_batch_cache.clear()
 
+# Transparent PNGs: the Picture pass must alpha-blend. Drawn for real in an offscreen
+# buffer: a Picture whose left half is fully transparent (stored black) over a grey model,
+# and a half-transparent right half. Unblended, the clear half paints black (the bug).
+import gpu  # noqa: E402
+from gpu_extras.batch import batch_for_shader  # noqa: E402
+
+try:
+    gpu.init()
+except Exception:  # noqa: BLE001 - already initialised in a GUI session
+    pass
+import tempfile  # noqa: E402
+
+made = bpy.data.images.new("narwhal_alpha_probe", 4, 1, alpha=True)
+made.pixels = [0, 0, 0, 0] * 2 + [1, 1, 1, 0.5] * 2
+probe_png = os.path.join(tempfile.mkdtemp(prefix="narwhal-alpha-"), "probe.png")
+made.filepath_raw, made.file_format = probe_png, "PNG"
+made.save()
+probe = bpy.data.images.load(probe_png)       # a real transparent PNG, as Picture loads it
+probe.colorspace_settings.name = "Non-Color"
+shader = ui._picture_shader()
+texture = gpu.texture.from_image(probe)
+batch = batch_for_shader(shader, "TRIS", {
+    "pos": [(-1, -1, 0), (1, -1, 0), (1, 1, 0), (-1, -1, 0), (1, 1, 0), (-1, 1, 0)],
+    "texCoord": [(0, 0), (1, 0), (1, 1), (0, 0), (1, 1), (0, 1)]})
+offscreen = gpu.types.GPUOffScreen(4, 1, format="RGBA32F")
+with offscreen.bind():
+    fb = gpu.state.active_framebuffer_get()
+    fb.clear(color=(0.5, 0.5, 0.5, 1.0))
+    with gpu.matrix.push_pop():
+        gpu.matrix.load_matrix(Matrix.Identity(4))
+        gpu.matrix.load_projection_matrix(Matrix.Identity(4))
+        ui.draw_picture_batches([(texture, batch)], shader)
+    pixels = fb.read_color(0, 0, 4, 1, 4, 0, "FLOAT")
+    pixels.dimensions = 16
+offscreen.free()
+clear, half = pixels[0], pixels[12]
+check(abs(clear - 0.5) < 0.01,
+      f"a fully transparent Picture pixel shows the model behind it, not black ({clear:.3f})")
+check(abs(half - 0.75) < 0.02,
+      f"a half-transparent pixel composites once over the model ({half:.3f}, expected 0.75)")
+
 print(f"\n{checks - len(failures)}/{checks} checks passed")
 if failures:
     for failure in failures:

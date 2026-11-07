@@ -515,6 +515,9 @@ if HAVE_BMESH:
           and tuple(img[0].size) == (400, 200),
           f"the display material loads the image ({img and img[0] and img[0].filepath}) into "
           f"the base colour")
+    check(any(lk.from_socket.name == "Alpha" and lk.to_socket.name == "Alpha"
+              for lk in dm.node_tree.links),
+          "the display material carries the image's transparency (Alpha linked)")
 else:
     print("\n  (display-mesh UV gates run under blender -b)")
 

@@ -18166,7 +18166,7 @@ def draw_picture_ghost():
         return
     img = _ghost_image(path)
     try:
-        gpu.state.blend_set("ALPHA")
+        gpu.state.blend_set(PICTURE_BLEND)
         if img is not None:
             shader = _picture_shader()
             if shader is None:
@@ -18326,16 +18326,34 @@ def draw_rendered_pictures():
     gpu.state.depth_test_set("LESS_EQUAL")
     gpu.state.depth_mask_set(False)
     try:
-        for texture, batch in _picture_draws(obs, shader):
-            shader.bind()
-            shader.uniform_sampler("image", texture)
-            batch.draw(shader)
+        draw_picture_batches(_picture_draws(obs, shader), shader)
     except Exception as e:  # noqa: BLE001
         print(f"[narwhal3d] rendered picture draw failed: {e!r}")
     finally:
         gpu.matrix.pop()
         gpu.state.depth_test_set("NONE")
         gpu.state.depth_mask_set(True)
+
+
+#: A Picture's transparent pixels must blend, or they paint their stored colour (black) over
+#: the model. MEASURED (Blender 5.2, GPUOffScreen): `gpu.texture.from_image` holds STRAIGHT
+#: linear colour -- an edge pixel (sRGB 0.565, a 0.408) drew 0.279 unblended, 0.410 over grey
+#: 0.5 with ALPHA (the correct straight-alpha composite) and 0.575 with ALPHA_PREMULT (a halo).
+PICTURE_BLEND = "ALPHA"
+
+
+def draw_picture_batches(draws, shader):
+    """Draw cached Picture ``(texture, batch)`` pairs, blended so transparency shows."""
+    import gpu
+
+    gpu.state.blend_set(PICTURE_BLEND)
+    try:
+        for texture, batch in draws:
+            shader.bind()
+            shader.uniform_sampler("image", texture)
+            batch.draw(shader)
+    finally:
+        gpu.state.blend_set("NONE")
 
 
 def _detach_point_handler():
