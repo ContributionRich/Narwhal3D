@@ -194,8 +194,10 @@ fn exact_power_of_two(exponent: i32) -> f64 {
     }
 }
 
-fn python_vector_norm2(mut values: [f64; 2], maximum: f64) -> f64 {
-    if maximum.is_infinite() || maximum == 0.0 {
+/// CPython's `vector_norm` (Modules/mathmodule.c), behind `math.hypot` and
+/// `math.dist`, for finite non-negative `values` whose largest is `maximum`.
+fn python_vector_norm<const N: usize>(mut values: [f64; N], maximum: f64) -> f64 {
+    if maximum.is_infinite() || maximum == 0.0 || N <= 1 {
         return maximum;
     }
     let maximum_exponent = frexp_exponent(maximum);
@@ -203,7 +205,7 @@ fn python_vector_norm2(mut values: [f64; 2], maximum: f64) -> f64 {
         for value in &mut values {
             *value /= f64::MIN_POSITIVE;
         }
-        return f64::MIN_POSITIVE * python_vector_norm2(values, maximum / f64::MIN_POSITIVE);
+        return f64::MIN_POSITIVE * python_vector_norm(values, maximum / f64::MIN_POSITIVE);
     }
     let scale = exact_power_of_two(-maximum_exponent);
     let mut compensated_sum = 1.0_f64;
@@ -231,7 +233,56 @@ fn python_vector_norm2(mut values: [f64; 2], maximum: f64) -> f64 {
 #[inline]
 fn python_hypot2(x: f64, y: f64) -> f64 {
     let values = [x.abs(), y.abs()];
-    python_vector_norm2(values, values[0].max(values[1]))
+    python_vector_norm(values, values[0].max(values[1]))
+}
+
+/// `math.dist` for a 3-D difference `(x, y, z)`, bit for bit.
+#[inline]
+fn python_norm3(x: f64, y: f64, z: f64) -> f64 {
+    let values = [x.abs(), y.abs(), z.abs()];
+    python_vector_norm(values, values[0].max(values[1]).max(values[2]))
+}
+
+/// CPython 3.12+'s `sum()` of floats from the int start 0: Neumaier compensated
+/// summation, the compensation added once at the end when nonzero and finite.
+struct PythonFloatSum {
+    total: f64,
+    compensation: f64,
+    started: bool,
+}
+
+impl PythonFloatSum {
+    fn new() -> Self {
+        Self {
+            total: 0.0,
+            compensation: 0.0,
+            started: false,
+        }
+    }
+
+    fn add(&mut self, value: f64) {
+        if !self.started {
+            // `0 + value`: exact, except that -0.0 becomes 0.0.
+            self.total = 0.0 + value;
+            self.started = true;
+            return;
+        }
+        let sum = self.total + value;
+        if self.total.abs() >= value.abs() {
+            self.compensation += (self.total - sum) + value;
+        } else {
+            self.compensation += (value - sum) + self.total;
+        }
+        self.total = sum;
+    }
+
+    fn value(&self) -> f64 {
+        if self.compensation != 0.0 && self.compensation.is_finite() {
+            self.total + self.compensation
+        } else {
+            self.total
+        }
+    }
 }
 
 #[cfg(test)]
@@ -568,17 +619,40 @@ fn segment_intersection_point(
     t = t.clamp(0.0, 1.0);
     let pa = std::array::from_fn::<_, 3, _>(|axis| a1[axis] + d1[axis] * s);
     let pb = std::array::from_fn::<_, 3, _>(|axis| b1[axis] + d2[axis] * t);
-    let distance = finite_norm3(pa[0] - pb[0], pa[1] - pb[1], pa[2] - pb[2]);
+    let distance = python_norm3(pa[0] - pb[0], pa[1] - pb[1], pa[2] - pb[2]);
     (distance <= tol).then(|| std::array::from_fn(|axis| (pa[axis] + pb[axis]) * 0.5))
 }
 
 fn intersection_snaps(points: &[f64], offsets: &[u64], tol: f64) -> Vec<IntersectionSnap> {
     let target_count = offsets.len().saturating_sub(1);
     let mut found: Vec<IntersectionSnap> = Vec::new();
+    // Each target's box. Every segment box lies inside its target's, so two
+    // targets whose boxes are not within `tol` have no segment pair that passes
+    // `segment_boxes_overlap`: skipping them changes neither result nor order.
+    let boxes: Vec<([f64; 3], [f64; 3])> = (0..target_count)
+        .map(|target| {
+            let mut lo = [f64::INFINITY; 3];
+            let mut hi = [f64::NEG_INFINITY; 3];
+            for index in offsets[target] as usize..offsets[target + 1] as usize {
+                let point = point3(points, index);
+                for axis in 0..3 {
+                    lo[axis] = lo[axis].min(point[axis]);
+                    hi[axis] = hi[axis].max(point[axis]);
+                }
+            }
+            (lo, hi)
+        })
+        .collect();
     for target_i in 0..target_count {
         let start_i = offsets[target_i] as usize;
         let end_i = offsets[target_i + 1] as usize;
         for target_j in (target_i + 1)..target_count {
+            let (lo_i, hi_i) = boxes[target_i];
+            let (lo_j, hi_j) = boxes[target_j];
+            if !(0..3).all(|axis| lo_i[axis] <= hi_j[axis] + tol && lo_j[axis] <= hi_i[axis] + tol)
+            {
+                continue;
+            }
             let start_j = offsets[target_j] as usize;
             let end_j = offsets[target_j + 1] as usize;
             for segment_i in start_i..end_i.saturating_sub(1) {
@@ -594,7 +668,7 @@ fn intersection_snaps(points: &[f64], offsets: &[u64], tol: f64) -> Vec<Intersec
                         continue;
                     };
                     if found.iter().any(|prior| {
-                        finite_norm3(
+                        python_norm3(
                             point[0] - prior.point[0],
                             point[1] - prior.point[1],
                             point[2] - prior.point[2],
@@ -628,7 +702,7 @@ fn push_dynamic_unique(found: &mut Vec<DynamicSnap>, point: [f64; 3], target: us
     if found.iter().any(|prior| {
         prior.target == target
             && prior.kind == kind
-            && finite_norm3(
+            && python_norm3(
                 point[0] - prior.point[0],
                 point[1] - prior.point[1],
                 point[2] - prior.point[2],
@@ -693,7 +767,7 @@ fn tangent_snaps(
         return;
     }
     if closed
-        && finite_norm3(
+        && python_norm3(
             points[start * 3] - points[(end - 1) * 3],
             points[start * 3 + 1] - points[(end - 1) * 3 + 1],
             points[start * 3 + 2] - points[(end - 1) * 3 + 2],
@@ -2786,12 +2860,14 @@ fn sampled_arc_midpoint(points: &[f64], start: usize, end: usize) -> Option<[f64
     if end.saturating_sub(start) < 2 {
         return None;
     }
-    let mut total = 0.0;
+    // `sum(map(math.dist, points[:-1], points[1:]))`
+    let mut sum = PythonFloatSum::new();
     for index in start..end - 1 {
         let a = point3(points, index);
         let b = point3(points, index + 1);
-        total += finite_norm3(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+        sum.add(python_norm3(a[0] - b[0], a[1] - b[1], a[2] - b[2]));
     }
+    let total = sum.value();
     if total <= 0.0 {
         return None;
     }
@@ -2800,7 +2876,7 @@ fn sampled_arc_midpoint(points: &[f64], start: usize, end: usize) -> Option<[f64
     for index in start..end - 1 {
         let a = point3(points, index);
         let b = point3(points, index + 1);
-        let length = finite_norm3(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+        let length = python_norm3(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
         if length <= 0.0 {
             continue;
         }
@@ -2898,7 +2974,7 @@ fn static_snap_survivors(
             {
                 let a = point3(vertices, vertex_end - 1);
                 let b = point3(vertices, vertex_start);
-                if finite_norm3(a[0] - b[0], a[1] - b[1], a[2] - b[2]) > 1.0e-12 {
+                if python_norm3(a[0] - b[0], a[1] - b[1], a[2] - b[2]) > 1.0e-12 {
                     let midpoint = std::array::from_fn(|axis| (a[axis] + b[axis]) / 2.0);
                     mids.push(midpoint);
                     push_static_survivor(
@@ -2916,7 +2992,7 @@ fn static_snap_survivors(
             }
             if let Some(midpoint) = sampled_arc_midpoint(points, point_start, point_end) {
                 let duplicate = mids.iter().any(|prior| {
-                    finite_norm3(
+                    python_norm3(
                         midpoint[0] - prior[0],
                         midpoint[1] - prior[1],
                         midpoint[2] - prior[2],
@@ -2993,7 +3069,7 @@ fn static_snap_survivors(
             let mut unique: Vec<[f64; 3]> = Vec::new();
             for point in [umin.1, umax.1, vmin.1, vmax.1] {
                 if unique.iter().any(|prior| {
-                    finite_norm3(
+                    python_norm3(
                         point[0] - prior[0],
                         point[1] - prior[1],
                         point[2] - prior[2],
@@ -4818,6 +4894,143 @@ mod tests {
         };
         assert_eq!(result, ERR_INPUT);
         assert_eq!(inside, [0, 0, 0]);
+    }
+
+    #[test]
+    fn python_norm3_matches_cpython_math_dist() {
+        // math.dist values from CPython 3.13; the scaled sqrt norm misses each by 1 ULP.
+        let bits = f64::from_bits;
+        for (x, y, z, expected) in [
+            (
+                0x40f1a36842d8fd87,
+                0xbf5213849ea6809c,
+                0xbf1a1f1089ce9060,
+                0x40f1a36842d8fd88,
+            ),
+            (
+                0x3fb693f5ec99488d,
+                0x40575405f048277a,
+                0xc01018cda9c8c7c0,
+                0x40575993acb321e2,
+            ),
+        ] {
+            let norm = python_norm3(bits(x), bits(y), bits(z));
+            assert_eq!(norm.to_bits(), expected);
+            assert_ne!(finite_norm3(bits(x), bits(y), bits(z)).to_bits(), expected);
+            assert_eq!(python_norm3(-bits(x), bits(y), -bits(z)), norm);
+        }
+        assert_eq!(python_norm3(0.0, 0.0, 0.0), 0.0);
+        assert_eq!(python_norm3(-3.0, 0.0, 0.0), 3.0);
+        assert_eq!(python_norm3(f64::INFINITY, 1.0, 0.0), f64::INFINITY);
+        assert_eq!(python_norm3(3e-320, 4e-320, 0.0), 5e-320);
+    }
+
+    #[test]
+    fn python_float_sum_matches_cpython_compensated_sum() {
+        // sum() of these floats in CPython 3.13 (Neumaier); a plain loop rounds differently.
+        let values = [
+            0x415b683bd55f71c8_u64,
+            0x3f500d693de7419b,
+            0x3ed6b58fbf5866ea,
+            0x3f1d0d98df641571,
+            0x3e69e9a778f4deb4,
+            0x4079f7d61d32a90a,
+            0x3e99857c083ea012,
+            0x3fae3767214ed56c,
+        ]
+        .map(f64::from_bits);
+        let mut sum = PythonFloatSum::new();
+        let mut naive = 0.0;
+        for value in values {
+            sum.add(value);
+            naive += value;
+        }
+        assert_eq!(sum.value().to_bits(), 0x415b68a3b890ca3b);
+        assert_ne!(naive.to_bits(), 0x415b68a3b890ca3b);
+        let mut single = PythonFloatSum::new();
+        single.add(-0.0);
+        assert!(single.value().is_sign_positive());
+        assert_eq!(PythonFloatSum::new().value(), 0.0);
+    }
+
+    #[test]
+    fn sampled_arc_midpoint_matches_python_arc_length_midpoint() {
+        // osnap.arc_length_midpoint on this polyline, from CPython 3.13.
+        let points = [
+            -2.5, -3.5, 4.0, -4.0, 1.5, 2.5, -2.0, -4.5, 3.5, -3.5, -4.0, -4.0,
+        ];
+        let midpoint = sampled_arc_midpoint(&points, 0, 4).unwrap();
+        assert_eq!(
+            midpoint.map(f64::to_bits),
+            [0xc00535a3da24e442, 0xc0045f147191533a, 0x4009652e12ed8ddf]
+        );
+        assert_eq!(sampled_arc_midpoint(&points, 0, 1), None);
+        assert_eq!(
+            sampled_arc_midpoint(&[1.0, 2.0, 3.0, 1.0, 2.0, 3.0], 0, 2),
+            None
+        );
+    }
+
+    #[test]
+    fn intersection_target_box_cull_keeps_every_row_in_order() {
+        // The culled search against the plain all-pairs search, on scattered
+        // polylines with touching boxes, shared ends and the inclusive tolerance.
+        fn brute(points: &[f64], offsets: &[u64], tol: f64) -> Vec<IntersectionSnap> {
+            let mut found: Vec<IntersectionSnap> = Vec::new();
+            let count = offsets.len() - 1;
+            for i in 0..count {
+                for j in i + 1..count {
+                    for si in offsets[i] as usize..offsets[i + 1] as usize - 1 {
+                        for sj in offsets[j] as usize..offsets[j + 1] as usize - 1 {
+                            let (a, b) = (point3(points, si), point3(points, si + 1));
+                            let (c, d) = (point3(points, sj), point3(points, sj + 1));
+                            if !segment_boxes_overlap(a, b, c, d, tol) {
+                                continue;
+                            }
+                            let Some(point) = segment_intersection_point(a, b, c, d, tol) else {
+                                continue;
+                            };
+                            if found.iter().any(|prior| {
+                                python_norm3(
+                                    point[0] - prior.point[0],
+                                    point[1] - prior.point[1],
+                                    point[2] - prior.point[2],
+                                ) < 1.0e-9
+                            }) {
+                                continue;
+                            }
+                            found.push(IntersectionSnap { point, target: i });
+                        }
+                    }
+                }
+            }
+            found
+        }
+        let mut state = 0x2545_f491_4f6c_dd1d_u64;
+        let mut next = || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            ((state >> 11) as f64 / (1_u64 << 53) as f64) * 8.0 - 4.0
+        };
+        let (mut points, mut offsets) = (Vec::new(), vec![0_u64]);
+        for target in 0..60 {
+            let (x, y) = (next(), next());
+            for _ in 0..(2 + target % 5) {
+                points.extend([x + next() * 0.4, y + next() * 0.4, 0.0]);
+            }
+            offsets.push((points.len() / 3) as u64);
+        }
+        // a curve that only touches another's box edge, at the tolerance
+        points.extend([
+            10.0, 0.0, 0.0, 12.0, 0.0, 0.0, 12.5, 0.0, 0.0, 12.5, 2.0, 0.0,
+        ]);
+        offsets.extend([offsets.last().unwrap() + 2, offsets.last().unwrap() + 4]);
+        for tol in [0.0, 1.0e-6, 0.5] {
+            let culled = intersection_snaps(&points, &offsets, tol);
+            assert!(!culled.is_empty());
+            assert_eq!(culled, brute(&points, &offsets, tol));
+        }
     }
 
     #[test]
