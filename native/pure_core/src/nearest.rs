@@ -290,6 +290,23 @@ fn basis_derivatives(order: usize, knot: &[f64], der_count: usize, n: &mut [f64]
     }
 }
 
+/// Run `f` on a zeroed basis table of exactly `order * order` values.
+///
+/// Zeroing the table for the largest order (`MAX_ORDER`², 8 KiB) on every evaluation
+/// cost about as much as the evaluation of a cubic; a small order gets a small table.
+/// The values are the same either way: `basis` writes every entry it and
+/// `basis_derivatives` read, and the slice bounds would catch a read past them.
+fn with_basis_scratch<R>(order: usize, f: impl FnOnce(&mut [f64]) -> R) -> R {
+    let len = order * order;
+    if len <= 16 {
+        f(&mut [0.0_f64; 16][..len])
+    } else if len <= 64 {
+        f(&mut [0.0_f64; 64][..len])
+    } else {
+        f(&mut [0.0_f64; MAX_ORDER * MAX_ORDER][..len])
+    }
+}
+
 /// `ON_EvaluateNurbsNonRationalSpan` on `cvdim` coordinates (4 for the homogeneous
 /// numerator of a rational span); rows of `v` are `CV_STRIDE` apart.
 fn evaluate_span(
@@ -302,19 +319,20 @@ fn evaluate_span(
     v: &mut [f64],
 ) {
     let der = der_count.min(order - 1);
-    let mut n = [0.0_f64; MAX_ORDER * MAX_ORDER];
-    basis(order, knot, t, &mut n);
-    if der > 0 {
-        basis_derivatives(order, knot, der, &mut n);
-    }
-    for i in 0..=der {
-        for j in 0..order {
-            let a = n[i * order + j];
-            for k in 0..cvdim {
-                v[i * CV_STRIDE + k] += a * cv[j * CV_STRIDE + k];
+    with_basis_scratch(order, |n| {
+        basis(order, knot, t, n);
+        if der > 0 {
+            basis_derivatives(order, knot, der, n);
+        }
+        for i in 0..=der {
+            for j in 0..order {
+                let a = n[i * order + j];
+                for k in 0..cvdim {
+                    v[i * CV_STRIDE + k] += a * cv[j * CV_STRIDE + k];
+                }
             }
         }
-    }
+    });
     if order == 2 {
         // openNURBS: keep a constant coordinate exact on a linear span.
         for i in 0..cvdim {
@@ -658,6 +676,39 @@ mod tests {
             .flat_map(|(p, w)| [p[0] * w, p[1] * w, 0.0, *w])
             .collect();
         (knots, cvs)
+    }
+
+    #[test]
+    fn the_sized_basis_table_gives_the_full_tables_values_at_every_order() {
+        // Orders 2-12 cover all three table sizes (16, 64 and MAX_ORDER^2 values).
+        for order in 2..=12 {
+            let d = order - 1;
+            let knot: Vec<f64> = (0..2 * d)
+                .map(|i| i as f64 * 0.75 + (i % 3) as f64 * 0.1)
+                .collect();
+            let t = 0.5 * (knot[d - 1] + knot[d]) + 0.01;
+            for der in 0..=2.min(d) {
+                let mut full = [0.0_f64; MAX_ORDER * MAX_ORDER];
+                basis(order, &knot, t, &mut full);
+                if der > 0 {
+                    basis_derivatives(order, &knot, der, &mut full);
+                }
+                let sized = with_basis_scratch(order, |n| {
+                    basis(order, &knot, t, n);
+                    if der > 0 {
+                        basis_derivatives(order, &knot, der, n);
+                    }
+                    n.to_vec()
+                });
+                assert_eq!(sized.len(), order * order);
+                let rows = (der + 1) * order;
+                assert_eq!(
+                    &sized[..rows],
+                    &full[..rows],
+                    "order {order}, derivative {der}"
+                );
+            }
+        }
     }
 
     #[test]
