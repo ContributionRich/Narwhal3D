@@ -740,6 +740,60 @@ def _segments_cross(a1, a2, b1, b2, tol):
     return None
 
 
+def _int_targets(targets):
+    """The targets `Int` intersects: curves with at least one segment."""
+    return [t for t in targets or () if not t.is_point and len(t.points) >= 2]
+
+
+def _native_intersections(curve_targets, tol=1e-6):
+    """`Int`'s ``(point, target)`` rows from selection_core, or None to compute
+    them in Python. Rows keep the native order, which is the Python pair order."""
+    if native_selection is None:
+        return None
+    try:
+        native = native_selection.intersection_points(
+            tuple(target.points for target in curve_targets), tol)
+        if native is None:
+            return None
+        rows = []
+        for point, target_index in native:
+            if (not isinstance(target_index, numbers.Integral)
+                    or not 0 <= int(target_index) < len(curve_targets)
+                    or len(point) != 3
+                    or not all(math.isfinite(float(value)) for value in point)):
+                raise ValueError("invalid native intersection row")
+            rows.append((point, curve_targets[int(target_index)]))
+        return rows
+    except Exception:  # noqa: BLE001 -- complete scalar intersection fallback
+        return None
+
+
+def _native_perp_tan(targets, wanted, base):
+    """`Perp`/`Tan` points from selection_core as one ``{PERP: [...], TAN: [...]}``
+    per target, or None to compute them in Python."""
+    if native_selection is None:
+        return None
+    try:
+        dynamic = native_selection.perpendicular_tangent_points(
+            tuple(target.points for target in targets),
+            tuple(target.closed for target in targets), base,
+            perp=PERP in wanted, tan=TAN in wanted)
+        if dynamic is None:
+            return None
+        by_target = [{PERP: [], TAN: []} for _target in targets]
+        for point, target_index, mode in dynamic:
+            if (not isinstance(target_index, numbers.Integral)
+                    or not 0 <= int(target_index) < len(targets)
+                    or mode not in (PERP, TAN) or mode not in wanted
+                    or len(point) != 3
+                    or not all(math.isfinite(float(value)) for value in point)):
+                raise ValueError("invalid native Perp/Tan row")
+            by_target[int(target_index)][mode].append(point)
+        return by_target
+    except Exception:  # noqa: BLE001 -- complete scalar dynamic-snap fallback
+        return None
+
+
 def intersection_targets(targets, cursor, tol=1e-6):
     """The `Int` snaps: where any TWO of `targets` cross, as a list of Snap.
 
@@ -752,30 +806,12 @@ def intersection_targets(targets, cursor, tol=1e-6):
     line correctly yields none.
     """
     found = []
-    curve_targets = [t for t in targets or () if not t.is_point and len(t.points) >= 2]
+    curve_targets = _int_targets(targets)
     if len(curve_targets) < 2:
         return found
-    native = None
-    if native_selection is not None:
-        try:
-            native = native_selection.intersection_points(
-                tuple(target.points for target in curve_targets), tol)
-        except Exception:  # noqa: BLE001 -- complete scalar intersection fallback
-            native = None
+    native = _native_intersections(curve_targets, tol)
     if native is not None:
-        try:
-            rows = []
-            for point, target_index in native:
-                if (not isinstance(target_index, numbers.Integral)
-                        or not 0 <= int(target_index) < len(curve_targets)
-                        or len(point) != 3
-                        or not all(math.isfinite(float(value)) for value in point)):
-                    raise ValueError("invalid native intersection row")
-                rows.append(Snap(point, INT, _dist(point, cursor),
-                                 curve_targets[int(target_index)]))
-            return rows
-        except Exception:  # noqa: BLE001 -- malformed optional output falls back
-            pass
+        return [Snap(point, INT, _dist(point, cursor), target) for point, target in native]
     segs = []
     for t in curve_targets:
         out = []
@@ -867,28 +903,9 @@ def candidates(targets, cursor, modes, plane=None, *, base=None):
     if not wanted:
         return found
     targets = tuple(targets or ())
-    dynamic = None
     dynamic_by_target = None
-    if (base is not None and native_selection is not None
-            and (PERP in wanted or TAN in wanted)):
-        try:
-            dynamic = native_selection.perpendicular_tangent_points(
-                tuple(target.points for target in targets),
-                tuple(target.closed for target in targets), base,
-                perp=PERP in wanted, tan=TAN in wanted)
-            if dynamic is not None:
-                dynamic_by_target = [{PERP: [], TAN: []} for _target in targets]
-                for point, target_index, mode in dynamic:
-                    if (not isinstance(target_index, numbers.Integral)
-                            or not 0 <= int(target_index) < len(targets)
-                            or mode not in (PERP, TAN) or mode not in wanted
-                            or len(point) != 3
-                            or not all(math.isfinite(float(value)) for value in point)):
-                        raise ValueError("invalid native Perp/Tan row")
-                    dynamic_by_target[int(target_index)][mode].append(point)
-        except Exception:  # noqa: BLE001 -- complete scalar dynamic-snap fallback
-            dynamic = None
-            dynamic_by_target = None
+    if base is not None and (PERP in wanted or TAN in wanted):
+        dynamic_by_target = _native_perp_tan(targets, wanted, base)
 
     for target_index, target in enumerate(targets):
         if target.is_point:
@@ -1052,6 +1069,56 @@ def _near_on_screen(target, project, mouse):
     return None if best3 is None else _refine_near(target, best3)
 
 
+def _native_dynamic_scored(targets, wanted, base, mouse, radius_px,
+                           project_distance_batch):
+    """The `Perp`, `Tan` and `Int` snaps within `radius_px`, scored in pixels by
+    `project_distance_batch`, all from selection_core; None when any part cannot
+    run natively.
+
+    Rows are in :func:`candidates`' order for each mode (Perp, then Tan, by target;
+    then Int), which is the order :func:`best_on_screen`'s ``min`` breaks an exact
+    tie in, so the chosen snap matches the Python pipeline's.
+    """
+    world = []
+    if base is not None and (PERP in wanted or TAN in wanted):
+        by_target = _native_perp_tan(targets, wanted, base)
+        if by_target is None:
+            return None
+        for mode in (PERP, TAN):
+            if mode in wanted:
+                for target, points in zip(targets, by_target):
+                    world.extend((point, mode, target) for point in points[mode])
+    if INT in wanted:
+        curve_targets = _int_targets(targets)
+        if len(curve_targets) >= 2:
+            rows = _native_intersections(curve_targets)
+            if rows is None:
+                return None
+            world.extend((point, INT, target) for point, target in rows)
+    if not world:
+        return []
+    if project_distance_batch is None:
+        return None
+    indices, distances = project_distance_batch(
+        tuple(point for point, _mode, _target in world), mouse, radius_px)
+    if len(indices) != len(distances) or len(indices) > len(world):
+        raise ValueError("projected snap-distance survivor lengths differ")
+    scored = []
+    previous = -1
+    for raw_index, raw_distance in zip(indices, distances):
+        if not isinstance(raw_index, numbers.Integral):
+            raise ValueError("snap-distance candidate index must be integral")
+        index = int(raw_index)
+        distance = float(raw_distance)
+        if (index <= previous or index >= len(world)
+                or not math.isfinite(distance) or not 0.0 <= distance <= radius_px):
+            raise ValueError("projected snap-distance survivor is invalid")
+        point, mode, target = world[index]
+        scored.append(Snap(point, mode, distance, target))
+        previous = index
+    return scored
+
+
 def best_on_screen(targets, cursor, modes, project, radius_px, plane=None, *,
                    base=None, snap_to_locked=False, project_batch=None,
                    project_near_batch=None, project_distance_batch=None,
@@ -1077,28 +1144,34 @@ def best_on_screen(targets, cursor, modes, project, radius_px, plane=None, *,
     found = None
     dynamic_modes = {INT, NEAR, PERP, TAN}
     static_wanted = tuple(mode for mode in wanted if mode not in dynamic_modes)
-    # Near is a fallback, so its presence must not disable the fused static Rust
-    # stage. Int/Perp/Tan still use the established combined path because they
-    # must compete with static modes before Near can be skipped.
+    # Near is a fallback, so its presence must not disable the fused Rust stage.
+    # Int/Perp/Tan join it through `_native_dynamic_scored`; any part that cannot
+    # run natively sends every mode back to `candidates`.
     if (discrete_batch is not None and radius_px is not None and plane is not None
-            and static_wanted and not (set(wanted) & {INT, PERP, TAN})):
+            and (static_wanted or set(wanted) & {INT, PERP, TAN})):
         try:
-            rows = discrete_batch(targets, static_wanted, plane, mouse, radius_px)
-            if rows is not None:
-                native_found = []
-                for point, target_index, mode, distance in rows:
-                    if (not isinstance(target_index, numbers.Integral)
-                            or not 0 <= int(target_index) < len(targets)
-                            or mode not in static_wanted or mode in dynamic_modes
-                            or len(point) != 3
-                            or not all(math.isfinite(float(value)) for value in point)
-                            or not math.isfinite(float(distance))
-                            or not 0.0 <= float(distance) <= radius_px):
-                        raise ValueError("invalid native discrete snap row")
-                    native_found.append(Snap(
-                        point, mode, distance, targets[int(target_index)]))
-                found = native_found
-                native_static = True
+            native_found = []
+            rows = (discrete_batch(targets, static_wanted, plane, mouse, radius_px)
+                    if static_wanted else ())
+            if rows is None:
+                raise ValueError("native discrete snaps unavailable")
+            for point, target_index, mode, distance in rows:
+                if (not isinstance(target_index, numbers.Integral)
+                        or not 0 <= int(target_index) < len(targets)
+                        or mode not in static_wanted or mode in dynamic_modes
+                        or len(point) != 3
+                        or not all(math.isfinite(float(value)) for value in point)
+                        or not math.isfinite(float(distance))
+                        or not 0.0 <= float(distance) <= radius_px):
+                    raise ValueError("invalid native discrete snap row")
+                native_found.append(Snap(
+                    point, mode, distance, targets[int(target_index)]))
+            dynamic = _native_dynamic_scored(targets, wanted, base, mouse, radius_px,
+                                             project_distance_batch)
+            if dynamic is None:
+                raise ValueError("native Int/Perp/Tan snaps unavailable")
+            found = native_found + dynamic
+            native_static = True
         except Exception:  # noqa: BLE001 -- complete candidate fallback
             found = None
     if native_static and found:
