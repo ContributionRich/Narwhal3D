@@ -242,7 +242,8 @@ def _display_samples(curve, tolerance: float):
     """(params, points) of `_display_params`.
 
     With the pure-core library loaded a `NurbsCurve` is tessellated in Rust
-    (`native_display`), which repeats `_python_display_samples` bit for bit.
+    (`native_display`), which repeats `_python_display_samples` bit for bit on
+    Linux/glibc, the only runtime where that is measured (other runtimes keep Python).
     MEASURED (i7-9700K, 301 open cubics of 4-20 points): 3.0 ms per curve in Python,
     most of it rhino3dm evaluations. Other curves keep the Python route."""
     try:

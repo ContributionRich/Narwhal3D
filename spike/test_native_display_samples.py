@@ -16,6 +16,7 @@ Other curves keep the Python route.
 import importlib.util
 import math
 import os
+import platform
 import random
 import sys
 import time
@@ -97,6 +98,11 @@ def compare(curve, tol):
 
 
 check(native.available(), f"the pure-core library loads ({LIBRARY})")
+# Production routes only on a qualified runtime (Linux/glibc). Parity is MEASURED here on
+# whatever runtime runs this suite, so it is also how another platform gets qualified.
+QUALIFIED = native.QUALIFIED_RUNTIME
+native.QUALIFIED_RUNTIME = True
+print(f"  (this runtime: {sys.platform}, {platform.libc_ver()}; qualified for production: {QUALIFIED})")
 
 print("\n-- parity: native (params, points) == _python_display_samples, bit for bit --")
 for name, curve in NURBS.items():
@@ -178,6 +184,21 @@ try:
           "without the library the Python route answers, with the same samples")
 finally:
     os.environ["NARWHAL_PURE_CORE"] = LIBRARY
+
+print("\n-- an unqualified runtime keeps the Python route --")
+native.QUALIFIED_RUNTIME = False
+try:
+    before = native._native_calls
+    curve = NURBS["open cubic, 40 points"]
+    tol = bridge.display_tolerance(curve)
+    check(native.display_samples(curve, tol) is None
+          and bridge._display_samples(curve, tol) == bridge._python_display_samples(curve, tol)
+          and native._native_calls == before,
+          "with QUALIFIED_RUNTIME False (Windows, macOS) the display stays in Python")
+finally:
+    native.QUALIFIED_RUNTIME = True
+check(QUALIFIED == (sys.platform.startswith("linux") and platform.libc_ver()[0] == "glibc"),
+      f"production routes natively only on Linux/glibc (here: {QUALIFIED})")
 
 print("\n-- timing (best of 3, display tolerance) --")
 

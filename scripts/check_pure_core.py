@@ -241,6 +241,29 @@ def step_release_build(crate: Path) -> dict[str, object]:
     return {"status": "ok", "artifact": str(lib), "command": "cargo build --release"}
 
 
+def _probe_curve_display_samples(lib) -> str:
+    """Known answers from `narwhal_pure_core_curve_display_samples` that hold on every
+    libm: a straight cubic is its two end points, and a short buffer reports the count."""
+    name = "narwhal_pure_core_curve_display_samples"
+    D = ctypes.POINTER(ctypes.c_double)
+    fn = getattr(lib, name)
+    fn.argtypes = [ctypes.c_size_t, D, ctypes.c_size_t, D, ctypes.c_size_t, ctypes.c_ubyte,
+                   ctypes.c_double, ctypes.c_double, ctypes.c_double, D, D, ctypes.c_size_t,
+                   ctypes.POINTER(ctypes.c_size_t)]
+    fn.restype = ctypes.c_int32
+    knots = (ctypes.c_double * 6)(0.0, 0.0, 0.0, 1.0, 1.0, 1.0)
+    cvs = (ctypes.c_double * 16)(*[c for i in range(4) for c in (float(i), 0.0, 0.0, 1.0)])
+    params, points, count = (ctypes.c_double * 8)(), (ctypes.c_double * 24)(), ctypes.c_size_t()
+    if fn(4, knots, 6, cvs, 4, 0, 0.0, 1.0, 0.01, params, points, 8, ctypes.byref(count)) != 0:
+        raise GateError(f"{name}: a straight cubic failed")
+    if count.value != 2 or list(params[:2]) != [0.0, 1.0] or list(points[:6]) != [0.0, 0.0, 0.0, 3.0, 0.0, 0.0]:
+        raise GateError(f"{name}: a straight cubic is not its two end points")
+    if fn(4, knots, 6, cvs, 4, 0, 0.0, 1.0, 0.01, params, points, 1, ctypes.byref(count)) != -3 \
+            or count.value != 2:
+        raise GateError(f"{name}: a short buffer did not report the vertex count")
+    return name
+
+
 def step_direct_abi(lib_path: Path) -> dict[str, object]:
     """Load the built library and exercise both stable and additive C ABIs."""
     try:
@@ -293,8 +316,12 @@ def step_direct_abi(lib_path: Path) -> dict[str, object]:
     bad_ptr = (ctypes.c_double * 9).from_buffer(bad)
     if int(size(bad_ptr, 1, name_arr, len(name), 1)) >= 0:
         raise GateError("direct ABI size query accepted a NaN coordinate")
+    try:
+        geometry = [_probe_curve_display_samples(lib)]
+    except (AttributeError, OSError) as exc:
+        raise GateError(f"cannot bind a pure-core geometry export: {exc}") from exc
     return {"status": "ok", "abi_version": ABI_VERSION, "parser": parser_identity,
-                "command": "ctypes ABI probe"}
+                "geometry_exports": geometry, "command": "ctypes ABI probe"}
 
 
 def step_adapter(crate: Path, lib_path: Path) -> dict[str, object]:

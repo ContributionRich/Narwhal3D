@@ -15,8 +15,12 @@
 //! `pow(x, 2)` differs from `x * x` in about 1 of 1500 values), `math.atan2` keeps
 //! CPython's special cases before libm's `atan2`, `sum()` is CPython's compensated
 //! sum, and `min` / `max` keep Python's first-argument-on-tie rule. So the parameters
-//! and points are bit-identical to the Python route on the same platform libm. The
-//! output is display vertices only; it never creates or changes document geometry.
+//! and points are bit-identical to the Python route where both use the same libm,
+//! which is measured on Linux/glibc only: under Wine, msvcrt's `pow` gave three of 586
+//! reference cases different values (up to 227 ulp). `narwhal3d/native_display.py`
+//! therefore routes here only on Linux/glibc; elsewhere the Python route stays until
+//! parity against that platform's CPython runtime is measured. The output is display
+//! vertices only; it never creates or changes document geometry.
 
 use crate::nearest::Nurbs;
 
@@ -482,6 +486,9 @@ mod tests {
         assert_eq!(py_min(1.0, f64::NAN), 1.0);
     }
 
+    // glibc's pow; the expected value is not true of msvcrt (measured under Wine), and
+    // other platform libms are unmeasured.
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
     #[test]
     fn square_is_libm_pow_not_a_multiply() {
         // CPython 3.13 on glibc: 157.14081462969125 ** 2 == 24693.235622482985, while

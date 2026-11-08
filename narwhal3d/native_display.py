@@ -11,6 +11,7 @@ import array
 import ctypes
 import os
 from pathlib import Path
+import platform
 import sys
 import threading
 
@@ -21,6 +22,11 @@ _ERR_SIZE = -3
 #: points the first call has room for; a larger curve reports its count and is
 #: called once more with exactly that room
 _FIRST_CAPACITY = 256
+#: Exact parity with the Python route depends on the platform libm (`x ** 2` is libm
+#: `pow`, `math.atan2` libm `atan2`), and it is measured on Linux/glibc only: under
+#: Wine, msvcrt's `pow` gave three of 586 reference display cases different values. Every
+#: other runtime keeps the Python route until it is qualified (native/pure_core/README.md).
+QUALIFIED_RUNTIME = sys.platform.startswith("linux") and platform.libc_ver()[0] == "glibc"
 _lock = threading.Lock()
 _signature = None
 _binding = None
@@ -72,10 +78,13 @@ def available():
 def display_samples(curve, tolerance):
     """``(params, points)`` of `bridge._display_samples(curve, tolerance)`, or ``None``.
 
-    Only a `NurbsCurve`. ``None`` (any other curve, no library, a curve openNURBS
-    cannot evaluate, or input the Python would raise on) keeps the Python route.
+    Only a `NurbsCurve`, and only on a qualified runtime (`QUALIFIED_RUNTIME`).
+    ``None`` (any other curve or runtime, no library, a curve openNURBS cannot
+    evaluate, or input the Python would raise on) keeps the Python route.
     """
     global _native_calls
+    if not QUALIFIED_RUNTIME:
+        return None
     fn = _display_binding()
     if fn is None or not isinstance(curve, r3.NurbsCurve):
         return None
