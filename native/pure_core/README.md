@@ -30,6 +30,17 @@ Current production routing:
 | display segment counts (`screen_segments_for`) | Python | 0.5 µs per call, below one ctypes call; not ported |
 | short convex face loops (under 64 points) | Python | the linear fan beats packing (3.4× slower at 3 points) |
 
+**Math-library parity.** Curve display tessellation (`src/display.rs`) is bit-identical
+to the Python only because both call the same platform math library. CPython's float
+`x ** 2` is libm `pow(|x|, 2.0)`, not `x * x`: on glibc the two differ by one ulp in about
+1 of 1500 values (1,942 of ~3M measured), so Rust calls libm `pow` too, with an opaque
+exponent so the compiler cannot fold it back to `x * x`. `math.atan2` likewise reaches libm
+`atan2` after CPython's special cases. Parity is measured on Linux glibc only. On another
+libm (Windows UCRT or MinGW, macOS) the two routes may differ by one ulp in rare values;
+that changes at most where a display vertex lands or a segment count, never document
+geometry. Re-measure `spike/test_native_display_samples.py` on that platform before
+relying on exact equality there.
+
 The slower Rust implementations remain directly tested for correctness and future ABI work,
 but they are not allowed to slow production.
 
