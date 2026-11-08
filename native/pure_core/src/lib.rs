@@ -23,6 +23,7 @@ pub mod command_search;
 pub mod coords;
 pub mod dxf;
 pub mod earclip;
+pub mod fit;
 pub mod gridsnap;
 pub mod interpolate;
 pub mod joinchain;

@@ -20,6 +20,7 @@ Current production routing:
 | Curve control-point preview sampling | Rust from 3 points | 5× faster per redraw at 4 points, 23× at 30; bit-identical samples |
 | planar face ear clipping (display) | Rust for concave loops from 6 points, any loop from 64 | concave 3.6× faster at 12 points, 40× at 100; convex 1.8× at 360; identical triangles |
 | Near snap nearest point on a curve | Rust for a `NurbsCurve` (its analytic line/arc/circle targets included); other curves stay in Python | 8× faster on a circle, 45× on a 4-point cubic, 44× at 40 points; bit-identical point (openNURBS evaluation order) |
+| Rebuild least-squares fit (`rebuild._fit`) | Rust; the Python fit is the no-library fallback | 30× faster per fit (40 points, 801 samples: 21.7 → 0.73 ms); bit-identical control points |
 | STL decode API | Python | generic triangle-tuple reshaping was 24.9% slower |
 | STL Import parse+weld | Rust at ≥50 kB | fused indexed output measured 3.8–4.3× faster at 1k–100k triangles |
 | OBJ encode | Python | native path was 2.18× slower |
