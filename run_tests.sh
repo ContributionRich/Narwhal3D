@@ -429,6 +429,7 @@ PURE_SUITES=(
     spike/test_native_tessellate.py
     spike/test_native_unit_table.py
     spike/test_native_nearest.py
+    spike/test_native_display_samples.py
     spike/test_rebuild_performance.py
     spike/test_native_interpolate.py
     spike/test_native_tween.py
