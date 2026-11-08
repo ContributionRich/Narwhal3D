@@ -21036,7 +21036,8 @@ def object_pick_location(area, space, region, rx, ry, name):
 
 def _answer_edge_prompt_with_click(area, space, region, rx, ry,
                                    shift=False, ctrl=False, hit=None):
-    """Give a command-capability edge picker one exact viewport edge hit."""
+    """Give a command-capability edge picker one exact viewport edge hit. A picker that
+    answers None declines the click (not its edge prompt), which then falls through."""
     cmd = app_state.active_command
     picker = getattr(cmd, "pick_edge", None)
     if not callable(picker) or getattr(cmd, "pending_option", None) is not None:
@@ -21058,7 +21059,10 @@ def _answer_edge_prompt_with_click(area, space, region, rx, ry,
         point = polyline[len(polyline) // 2]
     # Ctrl+Shift is the component-pick chord, not Ctrl-only removal.
     action = "shift" if shift else "ctrl" if ctrl else "plain"
-    message, done = picker(name, edge_id, point, action, app_state.ctx)
+    answer = picker(name, edge_id, point, action, app_state.ctx)
+    if answer is None:
+        return False
+    message, done = answer
     app_state.history.append(f"> {action} edge {edge_id} of {name}")
     if message:
         app_state.log(message)

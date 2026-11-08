@@ -135,6 +135,7 @@ TEST_FILES = (
     "spike/test_component_fillet_gui.py", "spike/test_variable_edge_fillet.py",
     "spike/test_fillet_handle_input.py", "spike/test_fillet_mouse_gui.py",
     "spike/test_face_pick_gui.py",
+    "spike/test_edge_pick_gui.py",
     "spike/test_curve_inputs.py", "spike/test_curve_consumer_inputs.py", "spike/test_colordialog.py",
     "spike/test_statusbar_height_patch.py", "spike/test_native_runtime_provenance.py",
     "spike/test_rightpanel.py", "spike/test_glyphs.py", "spike/test_statusbar.py", "spike/test_aliases.py",

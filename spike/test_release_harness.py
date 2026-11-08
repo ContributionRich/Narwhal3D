@@ -32,6 +32,7 @@ LIVE_SUITES = (
     'test_component_fillet_gui.py', 'test_fillet_mouse_gui.py', 'test_preferences_gui.py',
     'test_preferences_gui.py', 'test_window_overlay_gui.py', 'test_gumball_extrude_scale_gui.py',
     'test_face_pick_gui.py',
+    'test_edge_pick_gui.py',
 )
 GPU_SUITE = 'test_extrude_preview_gpu.py'
 HOST_SUITES = (
@@ -115,6 +116,7 @@ if live or gpu:
         'test_preferences_gui.py': 'PREFERENCES_GUI_RESULT',
         'test_window_overlay_gui.py': 'WINDOW_OVERLAY_RESULT',
         'test_gumball_extrude_scale_gui.py': 'GUMBALL_GUI_RESULT',
+        'test_edge_pick_gui.py': 'EDGE_PICK_RESULT',
     }[suite]
     mode = env.get('HARNESS_FAILURE', '') if suite == env.get('HARNESS_FAIL_SUITE') else ''
     if mode != 'missing-marker':

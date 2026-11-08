@@ -1238,6 +1238,43 @@ check(c.pick_face("B", top_id, None, ctx) is None, "MoveEdge ignores face clicks
 c, msg, done = drive("moveedge", [], Ctx(TOP))
 check(base(c.prompt) == "Select edges", f"P45: MoveEdge's first prompt ({c.prompt!r})")
 
+# --- MoveEdge: a viewport click answers the edge prompts with the EDGE under the cursor
+# (`pick_edge`, given a point on that edge), not the CPlane point behind it.
+print("-- MoveEdge edge clicks --")
+ctx = Ctx(TOP)
+ctx.add(bridge.make_box((0, 0, 0), (4, 4, 0), 3), "B")
+ctx.add(bridge.make_box((10, 0, 0), (4, 4, 0), 3), "Other")
+c, msg, done = drive("moveedge", [], ctx)
+p0 = base(c.prompt)
+answer = c.pick_edge("B", 99, (2, 0, 3), "plain", ctx)
+p2 = base(c.prompt)
+expected = c._resolve(ctx.geom_by_name("B"), (2, 0, 3), ctx)
+later = c.pick_edge("B", 99, (2, 0, 3), "plain", ctx)
+msg, done = c.feed("2,0,3", ctx)
+msg, done = c.feed("2,0,5", ctx)
+m = kernel.master_of(ctx.geom_by_name("B")) if ctx.geom_by_name("B") is not None else None
+lo, hi = ob.tight_bbox(m) if m is not None else ((9,) * 3, (0,) * 3)
+check(p0 == "Select edges" and answer == (f"edge {expected} of B selected", False)
+      and p2 == "Point to move from" and later is None and done and abs(hi[2] - 5) < 1e-9,
+      f"MoveEdge: a click on an edge at 'Select edges' picks the solid AND that edge, and "
+      f"the move is exact ({answer}, {p2!r}, {msg!r}, top z {hi[2]})")
+ctx = Ctx(TOP)
+ctx.add(bridge.make_box((0, 0, 0), (4, 4, 0), 3), "B")
+ctx.add(bridge.make_box((10, 0, 0), (4, 4, 0), 3), "Other")
+c, msg, done = drive("moveedge", [], ctx, select=["B"])
+answers = [c.pick_edge("Other", 1, (12, 0, 3), "plain", ctx),
+           c.pick_edge("B", 1, (2, 2, 3), "plain", ctx),
+           c.pick_edge("B", 1, (2, 0, 3), "shift", ctx)]
+c.feed("DirectionConstraint", ctx)
+pending = c.pick_edge("B", 1, (2, 0, 3), "plain", ctx)
+check(c.step_index == 1 and "belongs to Other" in answers[0][0] and not answers[0][1]
+      and "not on an edge" in answers[1][0] and not answers[1][1]
+      and answers[2] is None and pending is None,
+      f"MoveEdge: another solid's edge and a face point are refused at 'Select an edge'; "
+      f"Shift and a pending option decline ({answers}, {pending})")
+check(not hasattr(commands.COMMANDS["moveface"], "pick_edge"),
+      "MoveFace offers no edge picker (its clicks stay object picks)")
+
 check(all(isinstance(commands.COMMANDS[k], commands._NewValueMixin)
           for k in ("setsnap", "setortho", "disableosnap", "projectosnap", "snaptolocked",
                     "gumball")),
