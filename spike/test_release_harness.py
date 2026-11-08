@@ -31,6 +31,7 @@ LIVE_SUITES = (
     'test_v4_live.py', 'test_shell_fixes_gui.py', 'test_render_quality_gui.py',
     'test_component_fillet_gui.py', 'test_fillet_mouse_gui.py', 'test_preferences_gui.py',
     'test_preferences_gui.py', 'test_window_overlay_gui.py', 'test_gumball_extrude_scale_gui.py',
+    'test_face_pick_gui.py',
 )
 GPU_SUITE = 'test_extrude_preview_gpu.py'
 HOST_SUITES = (
@@ -110,6 +111,7 @@ if live or gpu:
         'test_render_quality_gui.py': 'RENDER_QUALITY_RESULT',
         'test_component_fillet_gui.py': 'COMPONENT_FILLET_RESULT',
         'test_fillet_mouse_gui.py': 'FILLET_MOUSE_RESULT',
+        'test_face_pick_gui.py': 'FACE_PICK_RESULT',
         'test_preferences_gui.py': 'PREFERENCES_GUI_RESULT',
         'test_window_overlay_gui.py': 'WINDOW_OVERLAY_RESULT',
         'test_gumball_extrude_scale_gui.py': 'GUMBALL_GUI_RESULT',

@@ -6022,12 +6022,30 @@ class ShellCmd(Command):
     def __init__(self):
         super().__init__()
         self._picks = []
+        self._faces = []
+
+    def _picked(self):
+        return len(self._picks) + len(self._faces)
+
+    def pick_face(self, name, face_id, point, ctx):
+        """A viewport click at the face prompt: the face under the cursor, never the
+        CPlane point behind it. None when this is not the face prompt."""
+        if self.step_index != 1 or self.pending_option is not None:
+            return None
+        if name is None:
+            return "Shell: there is no face of the solid under the cursor", False
+        if name != (self.args[0] if self.args else None):
+            return f"Shell: that face belongs to {name}, not to the solid being shelled", False
+        if face_id in self._faces:
+            return f"Shell: face {face_id} is already picked", False
+        self._faces.append(face_id)
+        return f"{self._picked()} face(s) picked -- press Enter when done", False
 
     def _feed(self, text, ctx):
         if self.step_index == 1 and self.pending_option is None:
             raw = (text or "").strip()
             if not raw:
-                if not self._picks:
+                if not self._picked():
                     return "Shell: pick at least one face to remove", False
                 return self.execute(ctx)
             is_option = (not self._numeric_input_wins(raw)
@@ -6038,7 +6056,7 @@ class ShellCmd(Command):
                 except ValueError as e:
                     return str(e), False
                 self._picks.append(point)
-                return f"{len(self._picks)} face(s) picked -- press Enter when done", False
+                return f"{self._picked()} face(s) picked -- press Enter when done", False
         return super()._feed(text, ctx)
 
     def execute(self, ctx: NarwhalContext):
@@ -6047,7 +6065,8 @@ class ShellCmd(Command):
         if geom is None:
             return f"Shell: no object named {name!r}", True
         try:
-            out = bridge.shell_occt(geom, self._picks, float(self.opt.get("Thickness", 1.0)))
+            out = bridge.shell_occt(geom, self._picks, float(self.opt.get("Thickness", 1.0)),
+                                    remove_faces=self._faces)
         except ValueError as e:
             return f"Shell: {e}", True
         if self.opt.get("DeleteInput", True):
@@ -6059,7 +6078,7 @@ class ShellCmd(Command):
                 ctx.model.remove_object(oid)
         _, display = ctx.add_geometry(out, "Shell")
         return (f"Created {display} (thickness {_num(self.opt.get('Thickness', 1.0))}, "
-                f"{len(self._picks)} face(s) removed)"), True
+                f"{self._picked()} face(s) removed)"), True
 
 
 class OffsetSrfCmd(Command):

@@ -9267,6 +9267,10 @@ class NARWHAL_OT_command_input(Operator):
                             shift=event.shift, ctrl=event.ctrl):
                         self._redraw()
                         return {"RUNNING_MODAL"}
+                    # Face prompts (Shell, MoveFace) take the face under the cursor.
+                    if _answer_face_prompt_with_click(area, sp, region, rx, ry):
+                        self._redraw()
+                        return {"RUNNING_MODAL"}
                     axis_constraint = _command_axis_constraint(cmd, area)
                     pt = pick_point(area, sp, region, rx, ry,
                                     constraint=axis_constraint)
@@ -17825,8 +17829,10 @@ def _hover_target(cmd, area, space, region, rx, ry):
     args = getattr(cmd, "args", None) or []
     if kind == commands.POINT and ("edge" in prompt or "face" in prompt):
         owner = args[0] if args and isinstance(args[0], str) else None
-        hit = pick_brep_part(area, space, region, rx, ry)
         want = subobject.EDGE if "edge" in prompt else subobject.FACE
+        hit = pick_brep_part(area, space, region, rx, ry,
+                             faces_only=callable(getattr(cmd, "pick_face", None))
+                             and want == subobject.FACE)
         if hit is not None and hit[1] == want and (owner is None or hit[0] == owner):
             return ("part", hit)
         return None
@@ -17915,11 +17921,14 @@ def draw_hover_pick(region, rv3d, shader, batch_for_shader):
         batch_for_shader(shader, "LINES", {"pos": segs}).draw(shader)
 
 
-def pick_brep_part(area, space, region, rx, ry, tolerance=SUBOBJECT_PICK_PX):
+def pick_brep_part(area, space, region, rx, ry, tolerance=SUBOBJECT_PICK_PX,
+                   faces_only=False):
     """The face / edge / vertex of a solid under region pixel (rx, ry), or None.
 
     All visible solids are tested together, so an edge of one solid hidden behind a
     face of another is not pickable in Shaded/Rendered (`subobject.pick_part`).
+    `faces_only` answers a face prompt: the front face under the cursor, even within
+    `tolerance` of one of its edges or vertices.
     """
     rv3d = getattr(space, "region_3d", None) if space is not None else None
     if rv3d is None or region is None:
@@ -17933,6 +17942,8 @@ def pick_brep_part(area, space, region, rx, ry, tolerance=SUBOBJECT_PICK_PX):
                 if None not in c:
                     pt.append(tuple(c))
             faces.append(((name, fid), pt))
+        if faces_only:
+            continue
         for eid, pl in parts.get("edges", ()):
             edges.append(((name, eid), [_project_with_depth(region, rv3d, p) for p in pl]))
         for vid, p in parts.get("vertices", ()):
@@ -20973,6 +20984,58 @@ def _answer_edge_prompt_with_click(area, space, region, rx, ry,
     if done:
         app_state.active_command = None
     redraw_cmdbar()
+    return True
+
+
+def _ray_point_on_face(region, rv3d, rx, ry, tris):
+    """Where the cursor ray at region pixel (rx, ry) meets the nearest of `tris`
+    (world triangles of one face), or None."""
+    try:
+        import bpy_extras.view3d_utils as v3u
+        from mathutils import Vector
+        from mathutils.geometry import intersect_ray_tri
+        origin = v3u.region_2d_to_origin_3d(region, rv3d, (rx, ry))
+        direction = v3u.region_2d_to_vector_3d(region, rv3d, (rx, ry))
+    except Exception:  # noqa: BLE001
+        return None
+    best = None
+    for tri in tris:
+        a, b, c = (Vector(p) for p in tri)
+        hit = intersect_ray_tri(a, b, c, direction, origin, False)
+        if hit is not None:
+            d = (hit - origin).dot(direction)
+            if best is None or d < best[0]:
+                best = (d, hit)
+    return None if best is None else tuple(float(v) for v in best[1])
+
+
+def _answer_face_prompt_with_click(area, space, region, rx, ry):
+    """Give a command-capability face picker (`pick_face`) the front face under the
+    cursor, instead of the CPlane point a face prompt would otherwise get. True when
+    the click was consumed."""
+    cmd = app_state.active_command
+    picker = getattr(cmd, "pick_face", None)
+    if not callable(picker) or getattr(cmd, "pending_option", None) is not None:
+        return False
+    hit = pick_brep_part(area, space, region, rx, ry, faces_only=True)
+    point = None
+    if hit is not None:
+        name, _kind, face_id = hit
+        tris = next((ts for ident, ts in _brep_parts_all().get(name, {}).get("faces", ())
+                     if ident == face_id), ())
+        point = _ray_point_on_face(region, getattr(space, "region_3d", None), rx, ry, tris)
+    answer = picker(hit[0] if hit else None, hit[2] if hit else None, point, app_state.ctx)
+    if answer is None:
+        return False
+    message, done = answer
+    if hit is not None:
+        app_state.history.append(f"> face {hit[2]} of {hit[0]}")
+    if message:
+        app_state.log(message)
+    if done:
+        app_state.active_command = None
+    redraw_cmdbar()
+    _tag_redraw_viewports()
     return True
 
 
