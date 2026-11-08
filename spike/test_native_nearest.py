@@ -210,6 +210,34 @@ check(math.dist(got, (4.0, 0.0, 0.0)) < 1e-9, f"uneven linear cubic: the perpend
 got = nearest.near_point(line, (-5.0, 1.0, 0.0), nearest.NearCache(line), TOL)
 check(got == (0.0, 0.0, 0.0), "off the end: the end point")
 
+print("\n-- closest_point_on_curve: an analytic target's verification search runs in Rust --")
+
+
+def all_fields(c):
+    return (c.t, c.point, c.distance, c.method, c.at_end, c.ambiguous)
+
+
+rng_verify = random.Random(41)
+for name in ("circle", "arc", "tilted arc", "uneven linear cubic", "LineCurve"):
+    curve = FIXTURES[name]
+    queries = queries_for(curve, 60)
+    before = native._native_calls
+    got = [all_fields(nearest.closest_point_on_curve(curve, q)) for q in queries]
+    calls = native._native_calls - before
+    real = nearest._native_pack
+    nearest._native_pack = lambda curve: None
+    try:
+        want = [all_fields(nearest.closest_point_on_curve(curve, q)) for q in queries]
+    finally:
+        nearest._native_pack = real
+    native_route = isinstance(curve, r3.NurbsCurve)
+    check(got == want and (calls >= len(queries) if native_route else calls == 0),
+          f"{name}: {len(queries)} answers equal the Python verification, "
+          f"{calls} native searches")
+on_axis = nearest.closest_point_on_curve(FIXTURES["circle"], (1.0, 2.0, 7.0))
+check(on_axis.ambiguous and on_axis.t == FIXTURES["circle"].Domain.T0,
+      "an on-axis query is still the ambiguous domain start")
+
 print("\n-- two equal minima --")
 twin = cpc([(0, 5, 0), (2, -5, 0), (5, 8, 0), (8, -5, 0), (10, 5, 0)])
 for label, q in (("mirror dips, query on the axis", (5.0, -20.0, 0.0)),
