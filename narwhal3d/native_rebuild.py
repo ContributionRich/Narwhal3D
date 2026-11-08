@@ -17,6 +17,8 @@ import threading
 _ENV = "NARWHAL_PURE_CORE"
 #: the export's code for a singular system: Python's "use fewer points" refusal
 ERR_SINGULAR = -4
+#: the export's code for a fit past its unknown bound, refused before allocating
+ERR_TOO_LARGE = -5
 _lock = threading.Lock()
 _signature = None
 _binding = None
@@ -65,31 +67,60 @@ def available():
     return _fit_binding() is not None
 
 
+def _xyz_rows(rows):
+    """``[(x, y, z)]`` floats from `rows`, or None unless every row has three finite-able
+    coordinates (a shorter row would leave the native buffer short)."""
+    out = []
+    for row in rows:
+        if len(row) < 3:
+            return None
+        out.append((float(row[0]), float(row[1]), float(row[2])))
+    return out
+
+
 def fit(points, params, n, p, closed, ends):
-    """``(control_points, knots)`` of `rebuild._fit`, ``"singular"``, or ``None``.
+    """``(control_points, knots)`` of `rebuild._fit`, ``"singular"``, ``"too large"``,
+    or ``None``.
 
     `points` are the samples' xyz, `params` their normalised parameters. For an open
     fit `ends` is ``(start, end)`` or ``(start, end, t0, t1)`` with the end tangents;
     for a closed one it is empty. ``"singular"`` is where the Python raises its
-    singular-fit error; ``None`` (no library, or a failure) keeps the Python fit.
+    singular-fit error; ``"too large"`` is a fit past the export's unknown bound,
+    refused before any allocation (the caller refuses it too, rather than solving it
+    in Python). ``None`` (no library, inputs the export cannot take, or a failure)
+    keeps the Python fit.
+
+    Every count the export reads is checked here first: one parameter per sample,
+    three coordinates per sample and end vector, and the end data an open fit needs.
     """
     global _native_calls
     fn = _fit_binding()
     if fn is None:
         return None
     try:
-        flat = array.array("d", (float(c) for q in points for c in q[:3]))
-        prm = array.array("d", (float(u) for u in params))
+        n, p, closed = int(n), int(p), bool(closed)
+        samples = _xyz_rows(points)
+        prm = [float(u) for u in params]
+        end_rows = _xyz_rows(ends)
+        if samples is None or end_rows is None or not samples or len(prm) != len(samples):
+            return None
+        if p < 1 or (closed and (ends or n < 3 or p > n)) or (
+                not closed and (len(end_rows) not in (2, 4) or n < p + 1)):
+            return None
+        tangent = len(end_rows) == 4
+        if tangent and (n < 4 or p < 2):
+            return None
+        flat = array.array("d", (c for q in samples for c in q))
+        prm_buf = array.array("d", prm)
         # never empty: a closed fit passes no ends, and ctypes needs a buffer
-        end_values = array.array("d", (float(c) for v in ends for c in v[:3])) or array.array("d", [0.0])
-        count = len(prm)
-        cv_room = n + p
-        ctrl = array.array("d", bytes(24 * cv_room))
+        end_values = array.array("d", (c for v in end_rows for c in v)) or array.array("d", [0.0])
+        count = len(prm_buf)
+        ctrl = array.array("d", bytes(24 * (n + p)))
         knots = array.array("d", bytes(8 * (n + 2 * p)))
         cv_count = ctypes.c_size_t()
         code = fn((ctypes.c_double * len(flat)).from_buffer(flat),
-                  (ctypes.c_double * count).from_buffer(prm), count, int(n), int(p),
-                  int(bool(closed)), int(len(ends) == 4),
+                  (ctypes.c_double * count).from_buffer(prm_buf), count, n, p,
+                  int(closed), int(tangent),
                   (ctypes.c_double * len(end_values)).from_buffer(end_values),
                   (ctypes.c_double * len(ctrl)).from_buffer(ctrl),
                   (ctypes.c_double * len(knots)).from_buffer(knots),
@@ -98,6 +129,8 @@ def fit(points, params, n, p, closed, ends):
         return None
     if code == ERR_SINGULAR:
         return "singular"
+    if code == ERR_TOO_LARGE:
+        return "too large"
     if code != 0:
         return None
     _native_calls += 1

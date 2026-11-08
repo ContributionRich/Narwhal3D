@@ -186,6 +186,8 @@ def _fit(crv, pts, params, n, p, closed, preserve_tangents, notes):
     native = _native_fit(pts, params, n, p, closed, ends)
     if native == "singular":
         raise ValueError(_SINGULAR)
+    if native == "too large":
+        raise ValueError(f"a rebuild to {n} points is too large to solve -- use fewer points")
     if native is not None:
         ctrl, knots = native
     elif closed:

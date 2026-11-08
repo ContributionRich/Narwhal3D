@@ -178,6 +178,83 @@ try:
 finally:
     os.environ["NARWHAL_PURE_CORE"] = LIBRARY
 
+print("\n-- input safety: each risky call runs in a subprocess, so a crash fails a check --")
+import json  # noqa: E402
+import subprocess  # noqa: E402
+
+
+def isolated(body):
+    """Run `body` in a fresh interpreter; ``(exit code, last stdout line as JSON)``."""
+    script = (
+        "import ctypes, json, sys, types, importlib.util, os\n"
+        f"ROOT = {ROOT!r}\n"
+        "pkg = types.ModuleType('narwhal3d'); pkg.__path__ = [os.path.join(ROOT, 'narwhal3d')]\n"
+        "sys.modules['narwhal3d'] = pkg\n"
+        "def load(name):\n"
+        "    spec = importlib.util.spec_from_file_location('narwhal3d.' + name, os.path.join(ROOT, 'narwhal3d', name + '.py'))\n"
+        "    mod = importlib.util.module_from_spec(spec); sys.modules[spec.name] = mod; setattr(pkg, name, mod)\n"
+        "    spec.loader.exec_module(mod); return mod\n"
+        + body)
+    proc = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True,
+                          env=dict(os.environ), timeout=120)
+    lines = proc.stdout.strip().splitlines()
+    return proc.returncode, (json.loads(lines[-1]) if lines else None)
+
+
+direct = isolated(
+    "lib = ctypes.CDLL(os.environ['NARWHAL_PURE_CORE'])\n"
+    "fn = lib.narwhal_pure_core_rebuild_fit\n"
+    "D = ctypes.POINTER(ctypes.c_double)\n"
+    "fn.argtypes = [D, D, ctypes.c_size_t, ctypes.c_size_t, ctypes.c_size_t, ctypes.c_ubyte,\n"
+    "               ctypes.c_ubyte, D, D, D, ctypes.POINTER(ctypes.c_size_t)]\n"
+    "fn.restype = ctypes.c_int32\n"
+    "import math\n"
+    "def call(n, p, samples=40):\n"
+    "    prm = [i / samples for i in range(samples)]\n"
+    "    pts = [c for u in prm for c in (math.cos(6.283185307179586 * u), math.sin(6.283185307179586 * u), 0.0)]\n"
+    "    P = (ctypes.c_double * len(pts))(*pts); U = (ctypes.c_double * samples)(*prm)\n"
+    "    C = (ctypes.c_double * (3 * (n + p)))(); K = (ctypes.c_double * (n + 2 * p))(); m = ctypes.c_size_t()\n"
+    "    return fn(P, U, samples, n, p, 1, 0, (ctypes.c_double * 1)(), C, K, ctypes.byref(m)), m.value\n"
+    "print(json.dumps({'degree above count': call(3, 5), 'degree equals count': call(3, 3),\n"
+    "                  'too large': call(1366, 3, 4)}))\n")
+check(direct[0] == 0 and direct[1] == {"degree above count": [-2, 0], "degree equals count": [0, 6],
+                                       "too large": [-5, 0]},
+      f"direct ABI: a closed degree-5 fit of 3 points is refused, degree == count fits, "
+      f"1366 closed points are refused before allocating, no crash ({direct})")
+
+adapter = isolated(
+    "native = load('native_rebuild')\n"
+    "pts = [(float(i), float(i % 3), 0.0) for i in range(30)]\n"
+    "prm = [i / 29 for i in range(30)]\n"
+    "ends = ((0.0, 0.0, 0.0), (29.0, 2.0, 0.0))\n"
+    "cases = {\n"
+    "  'fewer parameters than samples': native.fit(pts, prm[:-5], 6, 3, False, ends),\n"
+    "  'more parameters than samples': native.fit(pts[:-5], prm, 6, 3, False, ends),\n"
+    "  'two-coordinate samples': native.fit([q[:2] for q in pts], prm, 6, 3, False, ends),\n"
+    "  'open fit without ends': native.fit(pts, prm, 6, 3, False, ()),\n"
+    "  'open fit with one end': native.fit(pts, prm, 6, 3, False, ends[:1]),\n"
+    "  'two-coordinate end': native.fit(pts, prm, 6, 3, False, ((0.0, 0.0), (29.0, 2.0))),\n"
+    "  'closed fit given ends': native.fit(pts, prm, 6, 3, True, ends),\n"
+    "  'closed degree above count': native.fit(pts, prm, 3, 5, True, ()),\n"
+    "  'tangents at degree 1': native.fit(pts, prm, 6, 1, False, ends + ends),\n"
+    "}\n"
+    "ok = native.fit(pts, prm, 6, 3, False, ends)\n"
+    "print(json.dumps({'refused': {k: v is None for k, v in cases.items()},\n"
+    "                  'valid call answers': isinstance(ok, tuple)}))\n")
+refused = (adapter[1] or {}).get("refused", {})
+check(adapter[0] == 0 and refused and all(refused.values()) and adapter[1]["valid call answers"],
+      f"the adapter refuses {sum(refused.values())} of 9 malformed calls before ctypes and still "
+      f"answers a valid one (exit {adapter[0]}; not refused: {[k for k, v in refused.items() if not v]})")
+
+pts = [(0.0, (math.cos(i / 8), math.sin(i / 8), 0.0)) for i in range(50)]
+try:
+    rebuild._fit(None, pts, [i / 50 for i in range(50)], 1366, 3, True, False, [])
+    too_large = None
+except ValueError as exc:
+    too_large = str(exc)
+check(too_large is not None and "too large" in too_large,
+      f"a fit past the bound is refused by name, not solved in Python ({too_large!r})")
+
 print("\n-- timing (best of 3) --")
 
 

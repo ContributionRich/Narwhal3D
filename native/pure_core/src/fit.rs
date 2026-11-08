@@ -18,8 +18,15 @@ const ERR_NULL: i32 = -1;
 const ERR_INPUT: i32 = -2;
 /// The normal equations are singular: Python's "use fewer points" refusal.
 const ERR_SINGULAR: i32 = -4;
+/// The fit has more unknowns than [`MAX_UNKNOWNS`]: refused before any allocation.
+const ERR_TOO_LARGE: i32 = -5;
 const MAX_POINTS: usize = 4096;
 const MAX_SAMPLES: usize = 1 << 20;
+/// Most unknowns a fit may solve for. The normal matrix and its augmented copy are
+/// `k * k` doubles each, so this bounds the solve at about 268 MB (a 1365-point
+/// closed fit). Larger requests are refused by name, not diverted to Python, whose
+/// fit would allocate as much and more.
+const MAX_UNKNOWNS: usize = 4096;
 
 type P3 = [f64; 3];
 
@@ -284,7 +291,9 @@ fn fit_open(
 /// points then, when `tangent == 1`, the start and end tangents (12 values). Knots
 /// are rhino3dm's (`cv_count + degree - 1`). `out_ctrl` must hold `(point_count +
 /// degree) * 3` values and `out_knots` `point_count + 2 * degree - 1`. Returns
-/// `ERR_SINGULAR` where the Python raises its singular-fit `ValueError`.
+/// `ERR_SINGULAR` where the Python raises its singular-fit `ValueError`, and
+/// `ERR_TOO_LARGE`, before allocating, for more than [`MAX_UNKNOWNS`] unknowns. A
+/// closed fit needs `3 <= point_count` and `degree <= point_count`.
 ///
 /// # Safety
 /// Every pointer is valid for the counts above.
@@ -314,11 +323,23 @@ pub unsafe extern "C" fn narwhal_pure_core_rebuild_fit(
         || n > MAX_POINTS
         || sample_count > MAX_SAMPLES
         || sample_count == 0
-        || (closed == 1 && n < 3)
+        || (closed == 1 && (n < 3 || p > n))
         || (closed == 0 && n < p + 1)
-        || (tangent == 1 && (closed == 1 || n < 4))
+        || (tangent == 1 && (closed == 1 || n < 4 || p < 2))
     {
         return ERR_INPUT;
+    }
+    // `_fit`'s unknowns: 3 per control point (closed), or 3 per free point plus the
+    // two tangent lengths (open).
+    let unknowns = if closed == 1 {
+        3 * n
+    } else if tangent == 1 {
+        2 + 3 * (n - 4)
+    } else {
+        3 * (n - 2)
+    };
+    if unknowns > MAX_UNKNOWNS {
+        return ERR_TOO_LARGE;
     }
     let end_count = if closed == 1 {
         0
@@ -439,6 +460,74 @@ mod tests {
         for (i, c) in ctrl.chunks_exact(3).enumerate() {
             assert!((c[0] - i as f64).abs() < 1e-12 && c[1] == 0.0, "{c:?}");
         }
+    }
+
+    fn closed_call(n: usize, p: usize) -> (i32, usize) {
+        let params: Vec<f64> = (0..40).map(|i| i as f64 / 40.0).collect();
+        let pts: Vec<f64> = params
+            .iter()
+            .flat_map(|&u| {
+                let a = u * std::f64::consts::TAU;
+                [a.cos(), a.sin(), 0.0]
+            })
+            .collect();
+        let mut ctrl = vec![0.0; (n + p) * 3];
+        let mut knots = vec![0.0; n + 2 * p];
+        let mut count = 0;
+        let code = unsafe {
+            narwhal_pure_core_rebuild_fit(
+                pts.as_ptr(),
+                params.as_ptr(),
+                params.len(),
+                n,
+                p,
+                1,
+                0,
+                std::ptr::null(),
+                ctrl.as_mut_ptr(),
+                knots.as_mut_ptr(),
+                &mut count,
+            )
+        };
+        (code, count)
+    }
+
+    #[test]
+    fn a_closed_fit_needs_degree_at_most_point_count() {
+        assert_eq!(closed_call(3, 5).0, ERR_INPUT, "degree above point count");
+        assert_eq!(closed_call(2, 2).0, ERR_INPUT, "fewer than three points");
+        assert_eq!(
+            closed_call(3, 3),
+            (0, 6),
+            "degree == point count still fits"
+        );
+        assert_eq!(closed_call(8, 3), (0, 11));
+    }
+
+    #[test]
+    fn a_fit_past_the_unknown_bound_is_refused_before_allocating() {
+        // 1366 closed points need 4098 unknowns: refused without building a matrix.
+        let pts = [0.0; 3];
+        let params = [0.0];
+        let mut count = 0;
+        let code = unsafe {
+            narwhal_pure_core_rebuild_fit(
+                pts.as_ptr(),
+                params.as_ptr(),
+                1,
+                1366,
+                3,
+                1,
+                0,
+                std::ptr::null(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                &mut count,
+            )
+        };
+        assert_eq!((code, count), (ERR_TOO_LARGE, 0));
+        // the bound itself reaches the solve (40 samples cannot determine 1365 points)
+        assert_eq!(closed_call(1365, 3).0, ERR_SINGULAR);
     }
 
     #[test]
