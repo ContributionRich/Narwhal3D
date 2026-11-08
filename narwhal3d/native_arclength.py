@@ -1,7 +1,8 @@
 """Optional Rust inversion of arc length on a NURBS curve (`arclength.PreparedLength`).
 
 Rust repeats `arclength._invert` on the prepared span table, evaluating the curve with
-the Near snap's port of openNURBS, so each parameter is bit-identical to the Python's.
+the Near snap's port of openNURBS, so each parameter is bit-identical to the Python's
+(measured on Linux/glibc; the Windows and macOS runtimes are unmeasured).
 A length the Python must answer (a refusal, or the table's end branch) comes back
 marked, and the caller answers it in Python. The parameters are positions along an
 existing curve; this never changes document geometry.

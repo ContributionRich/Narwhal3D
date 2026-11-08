@@ -110,7 +110,8 @@ class PreparedLength:
         """:meth:`parameter_at` for each of `lengths`, in one native call when it can.
 
         With the pure-core library loaded a `NurbsCurve` is inverted in Rust
-        (`native_arclength`), which repeats `_invert` bit for bit. MEASURED (i7-9700K,
+        (`native_arclength`), which repeats `_invert` bit for bit (measured on Linux/glibc).
+        MEASURED (i7-9700K,
         a 30-point cubic): 1.15 ms per length in Python, most of it the `DerivativeAt`
         calls of each Newton step's span integral. A length Rust hands back (outside
         the curve, or the table's end branch) is answered by `_invert` here, so its

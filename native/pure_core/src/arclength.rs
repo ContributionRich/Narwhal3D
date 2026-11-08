@@ -6,7 +6,9 @@
 //! Gauss-Legendre integral of the partial span (`_length_to`, `_gauss_span`) and the
 //! Newton slope is `|C'(t)|` (`_speed`). The curve is evaluated with the Near snap's
 //! port of openNURBS (`DerivativeAt(t, 1)`), and every arithmetic step repeats the
-//! Python's order, so each parameter is bit-identical to the Python's.
+//! Python's order, so each parameter is bit-identical to the Python's. The arithmetic is
+//! `+ - * /` and `sqrt` only (no libm transcendental), but parity is measured on
+//! Linux/glibc; it is unmeasured against the Windows and macOS CPython runtimes.
 //!
 //! The table (interior knots, prefix sums, total) and the Gauss-Legendre nodes and
 //! weights come from Python as computed there, so nothing is re-derived here. A

@@ -241,6 +241,35 @@ def step_release_build(crate: Path) -> dict[str, object]:
     return {"status": "ok", "artifact": str(lib), "command": "cargo build --release"}
 
 
+def _probe_parameters_at_lengths(lib) -> str:
+    """Known answers from `narwhal_pure_core_parameters_at_lengths`: on a cubic that runs
+    along x at unit speed, length s is parameter s, and an out-of-range length is
+    handed back to Python."""
+    name = "narwhal_pure_core_parameters_at_lengths"
+    D = ctypes.POINTER(ctypes.c_double)
+    fn = getattr(lib, name)
+    fn.argtypes = [ctypes.c_size_t, D, ctypes.c_size_t, D, ctypes.c_size_t, ctypes.c_ubyte,
+                   ctypes.c_double, ctypes.c_double, D, ctypes.c_size_t, D, ctypes.c_double,
+                   D, D, ctypes.c_size_t, ctypes.c_double, D, ctypes.c_size_t, D,
+                   ctypes.POINTER(ctypes.c_ubyte)]
+    fn.restype = ctypes.c_int32
+    knots = (ctypes.c_double * 7)(0.0, 0.0, 0.0, 1.0, 2.0, 2.0, 2.0)
+    xs = (0.0, 1.0 / 3.0, 1.0, 5.0 / 3.0, 2.0)
+    cvs = (ctypes.c_double * 20)(*[c for x in xs for c in (x, 0.0, 0.0, 1.0)])
+    node = 1.0 / 3.0 ** 0.5
+    nodes, weights = (ctypes.c_double * 2)(-node, node), (ctypes.c_double * 2)(1.0, 1.0)
+    table, cum = (ctypes.c_double * 1)(1.0), (ctypes.c_double * 3)(0.0, 1.0, 2.0)
+    lengths = (ctypes.c_double * 3)(0.5, 1.25, 9.0)
+    out, status = (ctypes.c_double * 3)(), (ctypes.c_ubyte * 3)()
+    code = fn(4, knots, 7, cvs, 5, 0, 0.0, 2.0, table, 1, cum, 2.0, nodes, weights, 2,
+              1e-9, lengths, 3, out, status)
+    if code != 0 or list(status) != [0, 0, 1]:
+        raise GateError(f"{name}: unexpected status {code} {list(status)}")
+    if abs(out[0] - 0.5) > 1e-9 or abs(out[1] - 1.25) > 1e-9:
+        raise GateError(f"{name}: unit-speed lengths are not their parameters ({out[0]}, {out[1]})")
+    return name
+
+
 def step_direct_abi(lib_path: Path) -> dict[str, object]:
     """Load the built library and exercise both stable and additive C ABIs."""
     try:
@@ -293,8 +322,12 @@ def step_direct_abi(lib_path: Path) -> dict[str, object]:
     bad_ptr = (ctypes.c_double * 9).from_buffer(bad)
     if int(size(bad_ptr, 1, name_arr, len(name), 1)) >= 0:
         raise GateError("direct ABI size query accepted a NaN coordinate")
+    try:
+        geometry = [_probe_parameters_at_lengths(lib)]
+    except (AttributeError, OSError) as exc:
+        raise GateError(f"cannot bind a pure-core geometry export: {exc}") from exc
     return {"status": "ok", "abi_version": ABI_VERSION, "parser": parser_identity,
-                "command": "ctypes ABI probe"}
+                "geometry_exports": geometry, "command": "ctypes ABI probe"}
 
 
 def step_adapter(crate: Path, lib_path: Path) -> dict[str, object]:
