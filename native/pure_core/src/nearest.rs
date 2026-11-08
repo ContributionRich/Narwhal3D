@@ -147,7 +147,7 @@ impl<'a> Nurbs<'a> {
 
 /// `ON_SearchMonotoneArray`: -1 below, `i` with `a[i] <= t < a[i+1]`, `len-1` at the
 /// last value, `len` above.
-fn search_monotone(a: &[f64], t: f64) -> isize {
+pub(crate) fn search_monotone(a: &[f64], t: f64) -> isize {
     let length = a.len() - 1;
     if t < a[0] {
         return -1;

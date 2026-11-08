@@ -92,6 +92,7 @@ def _():
         "spike/test_native_search02_contract.py", "spike/test_native_search02_adapter.py",
         "spike/test_native_search02_ffi.py", "spike/test_native_search02_consumers.py",
         "spike/test_native_coil.py",
+        "spike/test_native_intersect.py",
         "spike/test_native_coil_preview.py",
         "spike/test_preview_curve_native.py",
         "spike/test_native_tessellate.py",

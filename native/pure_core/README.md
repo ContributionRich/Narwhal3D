@@ -23,6 +23,7 @@ Current production routing:
 | STL decode API | Python | generic triangle-tuple reshaping was 24.9% slower |
 | STL Import parse+weld | Rust at ≥50 kB | fused indexed output measured 3.8–4.3× faster at 1k–100k triangles |
 | OBJ encode | Python | native path was 2.18× slower |
+| curve/curve intersection recursion (`intersect.curve_curve` after its overlap test) | Rust for two valid `NurbsCurve`s; other curves and the overlap test stay in Python | 56-97× faster (two 20-point cubics 54.9 → 0.66 ms); bit-identical hits (`Split`, `GetBoundingBox`, `Intersection.LineLine` ported from the openNURBS rhino3dm 8.35.0 pins) |
 | DXF encode | Python | two-pass output build never reached a stable 10% win |
 | standalone number / bearing parsing | Python | FFI cost erased the tiny-parser gain |
 | SVG path parsing | Python | JSON ABI was slower through the 1 MiB input limit |
