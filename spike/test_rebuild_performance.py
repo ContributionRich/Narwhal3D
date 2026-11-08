@@ -134,6 +134,9 @@ class ReferenceLength:
     def parameter_at(self, s, tolerance=None):
         return reference_parameter_at_length(self._curve, s, tolerance)
 
+    def parameters_at(self, lengths, tolerance=None):
+        return [self.parameter_at(s, tolerance) for s in lengths]
+
 
 class ReferencePrepared:
     """Stands in for nearest.PreparedCurve in the reference rebuild pipeline."""
@@ -400,7 +403,9 @@ curve = closed_43_spans()
 check(curve.SpanCount == 43, "fixture: the closed curve has the saved trace's 43 spans")
 total = arclength.length_of(curve)
 s_values = [total * (i + 0.5) / 60 for i in range(60)]
-with Count(arclength, "_speed") as fast_speed:
+# The Python route's table gate: Rust inversion (spike/test_native_arclength.py) is off here.
+with Count(arclength, "_speed") as fast_speed, \
+        Patch(arclength, "_native_pack", lambda curve, table: None):
     prepared = arclength.PreparedLength(curve)
     new_out = [prepared.parameter_at(s) for s in s_values]
 with Count(arclength, "_speed") as ref_speed:

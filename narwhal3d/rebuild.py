@@ -115,11 +115,10 @@ def _samples(curve, m, closed):
     length = arclength.PreparedLength(curve)
     total = length.total
     count = m if closed else m + 1
+    inner = iter(length.parameters_at([total * i / m for i in range(1, m)]))
     out = []
     for i in range(count):
-        s = total * i / m
-        t = length.parameter_at(s) if 0 < i < m else (
-            curve.Domain.T0 if i == 0 else curve.Domain.T1)
+        t = next(inner) if 0 < i < m else (curve.Domain.T0 if i == 0 else curve.Domain.T1)
         out.append((t, _xyz(curve.PointAt(t))))
     return out
 

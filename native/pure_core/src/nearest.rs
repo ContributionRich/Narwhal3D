@@ -120,6 +120,17 @@ impl<'a> Nurbs<'a> {
         self.evaluate(t, 0)[0]
     }
 
+    /// `[C, C']` at `t`, as `DerivativeAt(t, 1)`.
+    pub fn point_and_tangent(&self, t: f64) -> [[f64; 3]; 2] {
+        let [p, d, _] = self.evaluate(t, 1);
+        [p, d]
+    }
+
+    /// The openNURBS degree (`order - 1`) and knots (`cv_count + order - 2` values).
+    pub fn degree_and_knots(&self) -> (usize, &'a [f64]) {
+        (self.order - 1, self.knots)
+    }
+
     /// `nearest._breakpoints` with the curve's knots.
     fn breakpoints(&self, t0: f64, t1: f64) -> Vec<f64> {
         let span = t1 - t0;
