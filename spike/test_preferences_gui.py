@@ -27,6 +27,7 @@ import time
 import traceback
 from contextlib import ExitStack
 from copy import deepcopy
+from types import SimpleNamespace
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -44,6 +45,19 @@ EXPECTED = dict(theme='dark', show_unavailable=False, toolbar='Transform',
 AI = dict(provider_id='openai_compatible', model='test-model', endpoint='http://localhost:11434',
           credential_env='LOCAL_AI_KEY', allow_insecure_remote=False)
 PRINT = dict(size='A4', orientation='Portrait', scale='1:2', view='Top')
+SCALE = 110  # View > Interface Scale, percent
+
+
+class _MenuLayout:
+    def __init__(self):
+        self.texts = []
+
+    def label(self, text='', icon=None):
+        self.texts.append(text)
+
+    def operator(self, idname, text='', icon=None):
+        self.texts.append(text)
+        return SimpleNamespace()
 SECRET = 'preferences-gui-fixture-secret-NOT-A-REAL-KEY'
 
 
@@ -103,6 +117,9 @@ def restored():
     subset(vars(ui._ai['state'].provider), AI, 'restored.ai')
     check(ui._ai['state'].provider.credential_configured, 'fake credential fixture recognized')
     subset(preferences.get('print_settings'), PRINT, 'restored.print')
+    equal(ui.interface_scale_percent(), SCALE, 'restored interface scale choice')
+    if PHASE == 'read':
+        equal(ui.uiscale.current(), SCALE / 100, 'fresh restart applies the saved interface scale')
     equal(document(), ('Inches', .037), 'document units/tolerance untouched')
 
 
@@ -320,6 +337,7 @@ def run():
         yield .1
     check(RESULT.get('before_ready_observed'), 'observed restore before first ready frame')
     win = bpy.context.window_manager.windows[0]
+    scale_before = ui.uiscale.current()
     if PHASE == 'write':
         ui.set_shell_theme('dark')
         subset(disk(), {'theme': 'dark'}, 'disk')  # First negative-control mismatch.
@@ -341,7 +359,24 @@ def run():
         for key, value in PRINT.items():
             print_choice(key, value)
         ui.close_print_dialog()
+        equal(bpy.ops.narwhal.interface_scale(percent=SCALE), {'FINISHED'}, 'Interface Scale operator')
+        equal(ui.uiscale.current(), scale_before, 'the running scale is unchanged until restart')
+        reports = []
+        equal(ui.NARWHAL_OT_interface_scale.execute(
+                  SimpleNamespace(percent=SCALE, report=lambda kind, text: reports.append((set(kind), text))),
+                  bpy.context), {'FINISHED'}, 'Interface Scale operator reports')
+        check(reports == [({'INFO'}, 'Interface scale saved; restart Narwhal to apply.')],
+              f'the operator says a restart applies it ({reports})')
+        layout = _MenuLayout()
+        ui.NARWHAL_MT_interface_scale.draw(SimpleNamespace(layout=layout), bpy.context)
+        check('Applies after restart' in layout.texts and f'{SCALE}%' in layout.texts,
+              'View > Interface Scale says it applies after restart and lists the saved choice')
     restored()
+    equal(disk()['interface_scale'], SCALE, 'disk interface scale')
+    check(ui.interface_scale_for_window(win.width, win.height) == ui.uiscale.current(),
+          'the next resize keeps the running scale')
+    check(ui.interface_scale_for_window(win.width, win.height, 0)
+          == ui.uiscale.auto_scale(win.width, win.height), 'Automatic follows the window')
     check(ui.ai_assistant_state().include_selection, 'selection context is automatic after restore')
     subset(disk(), EXPECTED, 'disk')
     equal(disk()['ai_config'], AI, 'disk AI whitelist only')
@@ -390,6 +425,7 @@ try:
     check(SETTINGS.exists() == (PHASE == 'read'), 'write needs fresh path; read needs previous write file')
     INITIAL_BYTES = SETTINGS.read_bytes() if SETTINGS.exists() else None
     check(os.environ.get('NARWHAL3D_DEFER_FIRST_PRESENT') == '1', 'require deferred ready signal')
+    check(not os.environ.get('NARWHAL3D_UI_SCALE'), 'refuse scale environment override hiding persistence')
     check(not os.environ.get('NARWHAL3D_THEME'), 'refuse theme environment override hiding persistence')
     os.environ['LOCAL_AI_KEY'] = SECRET
     import bpy

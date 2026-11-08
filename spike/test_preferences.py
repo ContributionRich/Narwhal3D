@@ -53,6 +53,7 @@ class PreferencesTests(unittest.TestCase):
             "theme": "light", "show_unavailable": True, "toolbar": "Standard",
             "inspector": "Layers", "grid_snap": False, "ortho": False,
             "gumball": True, "gumball_alignment": "CPlane", "viewport_tabs": True,
+            "interface_scale": 0,
             "osnap_modes": ["End", "Point", "Mid", "Cen", "Quad"],
             "osnap_disabled": False, "osnap_project": False,
             "ai_config": {}, "ai_include_selection": True, "ai_metadata_permission": {}, "print_settings": {},
@@ -165,6 +166,30 @@ class PreferencesTests(unittest.TestCase):
         self.assertEqual(prefs.get("osnap_modes"), list(prefs._OSNAP_MODES))
         prefs.update({"osnap_modes": []})
         self.assertEqual(prefs.get("osnap_modes"), [])
+
+    def test_interface_scale_is_automatic_or_a_menu_grid_percentage(self):
+        uiscale = importlib.import_module(PACKAGE + ".uiscale")
+        for percent in (0, 60, 95, 250) + uiscale.CHOICES:
+            prefs.update({"interface_scale": percent})
+            self.assertEqual(prefs.get("interface_scale"), percent)
+        for bad in (55, 37, 123, 255, -100, 125.0, "125", True, None):
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                prefs.update({"interface_scale": bad})
+        self.assertEqual(prefs.get("interface_scale"), 200)
+        self.write({"interface_scale": 37, "theme": "dark"})
+        values = prefs.load()
+        self.assertEqual((values["interface_scale"], values["theme"]), (0, "dark"))
+        self.assertTrue(all(uiscale.valid_percent(p) and p for p in uiscale.CHOICES))
+
+    def test_interface_scale_choice_overrides_the_window_size(self):
+        uiscale = importlib.import_module(PACKAGE + ".uiscale")
+        # A 1366x768 laptop window scales itself down to 70%; a choice replaces that.
+        self.assertEqual(uiscale.auto_scale(1366, 740), 0.7)
+        self.assertEqual(uiscale.chosen_scale(0, 1366, 740), 0.7)
+        self.assertEqual(uiscale.chosen_scale(150, 1366, 740), 1.5)
+        self.assertEqual(uiscale.chosen_scale(125, 3840, 2096), 1.25)
+        self.assertEqual(uiscale.chosen_scale(37, 1920, 1048), 1.0)
+        self.assertEqual(uiscale.chosen_scale(125.0, 1920, 1048), 1.0)
 
     def test_ai_whitelist_and_endpoint_normalization(self):
         config = {"provider_id": "openai", "model": " gpt-example ",

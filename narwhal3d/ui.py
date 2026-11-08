@@ -10533,9 +10533,46 @@ class NARWHAL_MT_shell_theme(bpy.types.Menu):
                 icon='CHECKMARK' if name == design.THEME else 'BLANK1').theme = name
 
 
+INTERFACE_SCALE_RESTART_NOTE = 'Interface scale saved; restart Narwhal to apply.'
+
+
+class NARWHAL_OT_interface_scale(Operator):
+    bl_idname = 'narwhal.interface_scale'
+    bl_label = 'Interface Scale'
+    bl_description = ('Save the interface scale; it applies after restarting Narwhal. '
+                      'Automatic follows the window size')
+    percent: bpy.props.IntProperty(min=0, max=round(uiscale.MAX_SCALE * 100))
+
+    def execute(self, context):
+        try:
+            set_interface_scale(self.percent)
+        except ValueError as exc:
+            self.report({'ERROR'}, str(exc))
+            return {'CANCELLED'}
+        self.report({'INFO'}, INTERFACE_SCALE_RESTART_NOTE)
+        return {'FINISHED'}
+
+
+class NARWHAL_MT_interface_scale(bpy.types.Menu):
+    bl_idname = 'NARWHAL_MT_interface_scale'
+    bl_label = 'Interface Scale'
+
+    def draw(self, context):
+        chosen = interface_scale_percent()
+        self.layout.label(text='Applies after restart')
+        win = context.window
+        auto = round(uiscale.auto_scale(getattr(win, "width", 1920), getattr(win, "height", 1048)) * 100)
+        self.layout.operator('narwhal.interface_scale', text=f'Automatic ({auto}%)',
+            icon='CHECKMARK' if chosen == 0 else 'BLANK1').percent = 0
+        for percent in uiscale.CHOICES:
+            self.layout.operator('narwhal.interface_scale', text=f'{percent}%',
+                icon='CHECKMARK' if percent == chosen else 'BLANK1').percent = percent
+
+
 def _draw_view_preferences(layout):
     layout.separator()
     layout.menu('NARWHAL_MT_shell_theme', text='Theme')
+    layout.menu('NARWHAL_MT_interface_scale', text='Interface Scale')
     # v7's check marks its filtered state (hide-unavailable), despite the label.
     layout.operator('narwhal.show_unavailable', text='Show Unavailable',
                     icon='CHECKMARK' if not _show_unavailable else 'BLANK1')
@@ -12979,6 +13016,8 @@ CLASSES = (
     NARWHAL_OT_shell_theme,
     NARWHAL_OT_show_unavailable,
     NARWHAL_MT_shell_theme,
+    NARWHAL_OT_interface_scale,
+    NARWHAL_MT_interface_scale,
     NARWHAL_OT_status_units,
     NARWHAL_MT_status_units,
     NARWHAL_OT_status_tolerance,
@@ -17921,8 +17960,7 @@ def draw_hover_pick(region, rv3d, shader, batch_for_shader):
         batch_for_shader(shader, "LINES", {"pos": segs}).draw(shader)
 
 
-def pick_brep_part(area, space, region, rx, ry, tolerance=SUBOBJECT_PICK_PX,
-                   faces_only=False):
+def pick_brep_part(area, space, region, rx, ry, tolerance=None, faces_only=False):
     """The face / edge / vertex of a solid under region pixel (rx, ry), or None.
 
     All visible solids are tested together, so an edge of one solid hidden behind a
@@ -17930,6 +17968,8 @@ def pick_brep_part(area, space, region, rx, ry, tolerance=SUBOBJECT_PICK_PX,
     `faces_only` answers a face prompt: the front face under the cursor, even within
     `tolerance` of one of its edges or vertices.
     """
+    if tolerance is None:
+        tolerance = SUBOBJECT_PICK_PX  # read now: the interface scale rewrites it at runtime
     rv3d = getattr(space, "region_3d", None) if space is not None else None
     if rv3d is None or region is None:
         return None
@@ -19140,16 +19180,55 @@ def _fpx(size):
     return float(size) * uiscale.current()
 
 
-def interface_scale_for_window(w, h):
+def interface_scale_for_window(w, h, percent=None):
     """$NARWHAL3D_UI_SCALE if set (an explicit choice, and how the harness tests other
-    scales), else `uiscale.auto_scale` for this window."""
+    scales), else `percent` if given (a preview), else the scale this session started
+    with, else the saved View > Interface Scale percentage; `uiscale.auto_scale` for
+    Automatic."""
     env = os.environ.get("NARWHAL3D_UI_SCALE")
     if env:
         try:
             return max(uiscale.MIN_SCALE, min(uiscale.MAX_SCALE, float(env)))
         except ValueError:
             pass
-    return uiscale.auto_scale(w, h)
+    if percent is None:
+        percent = _interface_scale_session_choice[0]
+        if percent is None:
+            percent = interface_scale_percent()
+    return uiscale.chosen_scale(percent, w, h)
+
+
+#: The View > Interface Scale choice saved this session (the desired one, for the next
+#: start); it still holds when saving it to disk failed.
+_interface_scale_choice = [None]
+#: The scale the running session uses, frozen at its first choice: a choice applies at the next start.
+_interface_scale_session_choice = [None]
+
+
+def interface_scale_percent():
+    """The chosen interface scale in percent, 0 for Automatic. Background runs never
+    read the user's file, so they scale automatically unless a choice was made."""
+    if _interface_scale_choice[0] is not None:
+        return _interface_scale_choice[0]
+    if bpy.app.background:
+        return 0
+    try:
+        return preferences.get('interface_scale')
+    except OSError:
+        return 0
+
+
+def set_interface_scale(percent):
+    """Save `percent` (0 = Automatic) for the next start. The running scale does not
+    change: a live rescale would resize the chrome but not re-carve the panels.
+    Returns the scale in use now."""
+    if not uiscale.valid_percent(percent):
+        raise ValueError(f"invalid interface scale: {percent!r}")
+    if _interface_scale_session_choice[0] is None:
+        _interface_scale_session_choice[0] = interface_scale_percent()
+    _interface_scale_choice[0] = percent
+    _remember_preferences({'interface_scale': percent})
+    return uiscale.current()
 
 
 def apply_interface_scale(scale=None):
