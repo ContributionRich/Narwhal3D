@@ -136,7 +136,8 @@ def run():
           and st.model.absolute_tolerance() == .001, 'menu decimals bypass float32 rounding')
     st.start_command('Undo')
     check(st.model.absolute_tolerance() == old, 'decimal preset undo restores tolerance')
-    for cls in (ui.NARWHAL_MT_status_tolerance, ui.NARWHAL_MT_status_units, ui.NARWHAL_MT_shell_theme):
+    for cls in (ui.NARWHAL_MT_status_tolerance, ui.NARWHAL_MT_status_units, ui.NARWHAL_MT_shell_theme,
+                ui.NARWHAL_MT_interface_scale):
         check(issubclass(cls, bpy.types.Menu) and getattr(bpy.types, cls.__name__, None) is cls, cls.__name__ + ' registered native Menu')
         drawn, original = [], cls.draw
         def draw(menu, context):

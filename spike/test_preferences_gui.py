@@ -44,6 +44,7 @@ EXPECTED = dict(theme='dark', show_unavailable=False, toolbar='Transform',
 AI = dict(provider_id='openai_compatible', model='test-model', endpoint='http://localhost:11434',
           credential_env='LOCAL_AI_KEY', allow_insecure_remote=False)
 PRINT = dict(size='A4', orientation='Portrait', scale='1:2', view='Top')
+SCALE = 110  # View > Interface Scale, percent
 SECRET = 'preferences-gui-fixture-secret-NOT-A-REAL-KEY'
 
 
@@ -103,6 +104,8 @@ def restored():
     subset(vars(ui._ai['state'].provider), AI, 'restored.ai')
     check(ui._ai['state'].provider.credential_configured, 'fake credential fixture recognized')
     subset(preferences.get('print_settings'), PRINT, 'restored.print')
+    equal(ui.interface_scale_percent(), SCALE, 'restored interface scale choice')
+    equal(ui.uiscale.current(), SCALE / 100, 'chosen interface scale applied')
     equal(document(), ('Inches', .037), 'document units/tolerance untouched')
 
 
@@ -341,7 +344,13 @@ def run():
         for key, value in PRINT.items():
             print_choice(key, value)
         ui.close_print_dialog()
+        equal(bpy.ops.narwhal.interface_scale(percent=SCALE), {'FINISHED'}, 'Interface Scale operator')
     restored()
+    equal(disk()['interface_scale'], SCALE, 'disk interface scale')
+    check(ui.interface_scale_for_window(win.width, win.height) == SCALE / 100,
+          'resize watch keeps the chosen scale')
+    check(ui.interface_scale_for_window(win.width, win.height, 0)
+          == ui.uiscale.auto_scale(win.width, win.height), 'Automatic follows the window')
     check(ui.ai_assistant_state().include_selection, 'selection context is automatic after restore')
     subset(disk(), EXPECTED, 'disk')
     equal(disk()['ai_config'], AI, 'disk AI whitelist only')
@@ -390,6 +399,7 @@ try:
     check(SETTINGS.exists() == (PHASE == 'read'), 'write needs fresh path; read needs previous write file')
     INITIAL_BYTES = SETTINGS.read_bytes() if SETTINGS.exists() else None
     check(os.environ.get('NARWHAL3D_DEFER_FIRST_PRESENT') == '1', 'require deferred ready signal')
+    check(not os.environ.get('NARWHAL3D_UI_SCALE'), 'refuse scale environment override hiding persistence')
     check(not os.environ.get('NARWHAL3D_THEME'), 'refuse theme environment override hiding persistence')
     os.environ['LOCAL_AI_KEY'] = SECRET
     import bpy

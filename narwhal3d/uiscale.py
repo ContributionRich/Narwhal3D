@@ -25,6 +25,28 @@ REFERENCE = (1920.0, 1048.0)
 MIN_SCALE = 0.6
 MAX_SCALE = 2.5
 STEP = 0.05
+#: The percentages the View > Interface Scale menu offers; 0 there means Automatic.
+CHOICES = (75, 90, 100, 110, 125, 150, 175, 200)
+
+
+def valid_percent(percent):
+    """True for a saved interface-scale preference: 0 (Automatic) or a percentage on
+    the STEP grid within MIN_SCALE..MAX_SCALE."""
+    if type(percent) is not int:
+        return False
+    if percent == 0:
+        return True
+    step = round(STEP * 100)
+    return (round(MIN_SCALE * 100) <= percent <= round(MAX_SCALE * 100)
+            and percent % step == 0)
+
+
+def chosen_scale(percent, window_w, window_h):
+    """The scale for a saved preference: `auto_scale` for 0 (Automatic) or an invalid
+    value, else the percentage as a factor."""
+    if not valid_percent(percent) or percent == 0:
+        return auto_scale(window_w, window_h)
+    return percent / 100.0
 
 
 def auto_scale(window_w, window_h):

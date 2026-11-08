@@ -160,6 +160,7 @@ class ThemeBindingsTests(unittest.TestCase):
             namespace['_show_unavailable'] = show
             namespace['_draw_view_preferences'](layout)
             self.assertEqual(calls, [(('NARWHAL_MT_shell_theme',), {'text': 'Theme'}),
+                (('NARWHAL_MT_interface_scale',), {'text': 'Interface Scale'}),
                 (('narwhal.show_unavailable',), {'text': 'Show Unavailable', 'icon': 'BLANK1' if show else 'CHECKMARK'})])
 
     def test_status_draw_retains_disabled_cells(self):

@@ -26,7 +26,7 @@ from copy import deepcopy
 import math
 import re
 
-from . import ai_assistant, toolbar_data, user_settings
+from . import ai_assistant, toolbar_data, uiscale, user_settings
 from .user_settings import settings_path
 
 # MEASURED app defaults: design.DEFAULT_THEME, UI toggles and DialogState. Keep
@@ -41,6 +41,8 @@ DEFAULTS = {
     "gumball": True,
     "gumball_alignment": "CPlane",
     "viewport_tabs": True,
+    # Percent; 0 is Automatic (uiscale.auto_scale from the window size).
+    "interface_scale": 0,
     "osnap_modes": ["End", "Point", "Mid", "Cen", "Quad"],
     "osnap_disabled": False,
     "osnap_project": False,
@@ -127,6 +129,8 @@ def _validate(key, value):
         raise ValueError(f"invalid preference type: {key}")
     if key in _ENUMS and value not in _ENUMS[key]:
         raise ValueError(f"invalid preference choice: {key}")
+    if key == "interface_scale" and not uiscale.valid_percent(value):
+        raise ValueError("invalid interface scale")
     if key == "osnap_modes":
         if any(type(mode) is not str or mode not in _OSNAP_MODES for mode in value):
             raise ValueError("invalid osnap mode")

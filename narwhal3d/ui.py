@@ -10529,9 +10529,39 @@ class NARWHAL_MT_shell_theme(bpy.types.Menu):
                 icon='CHECKMARK' if name == design.THEME else 'BLANK1').theme = name
 
 
+class NARWHAL_OT_interface_scale(Operator):
+    bl_idname = 'narwhal.interface_scale'
+    bl_label = 'Interface Scale'
+    bl_description = 'Scale the whole interface; Automatic follows the window size'
+    percent: bpy.props.IntProperty(min=0, max=round(uiscale.MAX_SCALE * 100))
+
+    def execute(self, context):
+        try:
+            set_interface_scale(self.percent)
+        except ValueError as exc:
+            self.report({'ERROR'}, str(exc))
+            return {'CANCELLED'}
+        return {'FINISHED'}
+
+
+class NARWHAL_MT_interface_scale(bpy.types.Menu):
+    bl_idname = 'NARWHAL_MT_interface_scale'
+    bl_label = 'Interface Scale'
+
+    def draw(self, context):
+        chosen = interface_scale_percent()
+        auto = round(uiscale.auto_scale(context.window.width, context.window.height) * 100)
+        self.layout.operator('narwhal.interface_scale', text=f'Automatic ({auto}%)',
+            icon='CHECKMARK' if chosen == 0 else 'BLANK1').percent = 0
+        for percent in uiscale.CHOICES:
+            self.layout.operator('narwhal.interface_scale', text=f'{percent}%',
+                icon='CHECKMARK' if percent == chosen else 'BLANK1').percent = percent
+
+
 def _draw_view_preferences(layout):
     layout.separator()
     layout.menu('NARWHAL_MT_shell_theme', text='Theme')
+    layout.menu('NARWHAL_MT_interface_scale', text='Interface Scale')
     # v7's check marks its filtered state (hide-unavailable), despite the label.
     layout.operator('narwhal.show_unavailable', text='Show Unavailable',
                     icon='CHECKMARK' if not _show_unavailable else 'BLANK1')
@@ -12975,6 +13005,8 @@ CLASSES = (
     NARWHAL_OT_shell_theme,
     NARWHAL_OT_show_unavailable,
     NARWHAL_MT_shell_theme,
+    NARWHAL_OT_interface_scale,
+    NARWHAL_MT_interface_scale,
     NARWHAL_OT_status_units,
     NARWHAL_MT_status_units,
     NARWHAL_OT_status_tolerance,
@@ -19129,16 +19161,54 @@ def _fpx(size):
     return float(size) * uiscale.current()
 
 
-def interface_scale_for_window(w, h):
+def interface_scale_for_window(w, h, percent=None):
     """$NARWHAL3D_UI_SCALE if set (an explicit choice, and how the harness tests other
-    scales), else `uiscale.auto_scale` for this window."""
+    scales), else `percent` or the saved View > Interface Scale percentage, else
+    `uiscale.auto_scale` for this window."""
     env = os.environ.get("NARWHAL3D_UI_SCALE")
     if env:
         try:
             return max(uiscale.MIN_SCALE, min(uiscale.MAX_SCALE, float(env)))
         except ValueError:
             pass
-    return uiscale.auto_scale(w, h)
+    if percent is None:
+        percent = interface_scale_percent()
+    return uiscale.chosen_scale(percent, w, h)
+
+
+#: The View > Interface Scale choice made this session; it still holds when saving it failed.
+_interface_scale_choice = [None]
+
+
+def interface_scale_percent():
+    """The chosen interface scale in percent, 0 for Automatic. Background runs never
+    read the user's file, so they scale automatically unless a choice was made."""
+    if _interface_scale_choice[0] is not None:
+        return _interface_scale_choice[0]
+    if bpy.app.background:
+        return 0
+    try:
+        return preferences.get('interface_scale')
+    except OSError:
+        return 0
+
+
+def set_interface_scale(percent):
+    """Save `percent` (0 = Automatic) and rescale now. Returns the applied scale."""
+    if not uiscale.valid_percent(percent):
+        raise ValueError(f"invalid interface scale: {percent!r}")
+    _interface_scale_choice[0] = percent
+    _remember_preferences({'interface_scale': percent})
+    win = getattr(bpy.context, "window", None)
+    if win is None:
+        wm = bpy.context.window_manager
+        win = wm.windows[0] if wm is not None and len(wm.windows) else None
+    size = (getattr(win, "width", 1920), getattr(win, "height", 1048))
+    scale = apply_interface_scale(interface_scale_for_window(*size, percent))
+    for w in bpy.context.window_manager.windows:
+        for a in w.screen.areas:
+            a.tag_redraw()
+    return scale
 
 
 def apply_interface_scale(scale=None):
