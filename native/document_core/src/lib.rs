@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 pub mod container;
+pub mod proxy;
 pub mod sha256;
 
 use std::ffi::OsString;
@@ -22,6 +23,30 @@ where
         return 0;
     }
 
+    if args.len() == 1 && args[0] == "--capabilities" {
+        return if writeln!(stdout, "display-proxy-equivalence-v1").is_ok() {
+            0
+        } else {
+            1
+        };
+    }
+    if let [command, left, right] = args.as_slice() {
+        if command == "compare-display-proxies" {
+            return match proxy::compare_files(&PathBuf::from(left), &PathBuf::from(right)) {
+                Ok(equal) => {
+                    if writeln!(stdout, "{}", if equal { "equal" } else { "different" }).is_ok() {
+                        0
+                    } else {
+                        1
+                    }
+                }
+                Err(error) => {
+                    let _ = writeln!(stderr, "display-proxy comparison: {error}");
+                    1
+                }
+            };
+        }
+    }
     let result = match args.as_slice() {
         [command, staging, target] if command == "pack" => {
             container::pack(&PathBuf::from(staging), &PathBuf::from(target))
@@ -35,7 +60,7 @@ where
         _ => {
             let _ = writeln!(
                 stderr,
-                "usage: {PROGRAM_NAME} --version | pack <staging-dir> <target-file> | unpack <source-file> <output-dir> | inspect <source-file>"
+                "usage: {PROGRAM_NAME} --version | pack <staging-dir> <target-file> | unpack <source-file> <output-dir> | inspect <source-file> | --capabilities | compare-display-proxies <saved.bin> <canonical.bin>"
             );
             return 2;
         }

@@ -1784,7 +1784,47 @@ def _display_mesh(shape, deflection, angle):
     BRepMesh_IncrementalMesh(shape, float(deflection), False, float(angle), True)
 
 
-def _tessellate(shape, deflection, angle, want_edges, tangent_angle=None):
+def document_proxy_tessellation(shape, codec=1):
+    """Frozen schema-1 proxy codecs. Never tune these when changing viewport quality.
+
+    Codec 1 is the original OCCT 0.02/0.3 mesher. Codec 2 preserves the extrusion
+    refinement policy added later. Codecs 3/4 preserve their original 0.08 retry mesh.
+    All decode old display caches; exact masters and
+    recipes are verified independently. These meshes never become document geometry.
+    """
+    vertices, triangles, _edges = _tessellate(
+        shape, 0.08 if codec in (3, 4) else 0.02, 0.3, False, document_codec=codec)
+    return vertices, triangles
+
+
+def _document_proxy_mesh(shape, codec):
+    from OCP.BRepTools import BRepTools
+    from OCP.BRepMesh import BRepMesh_IncrementalMesh
+    if codec not in (1, 2, 3, 4):
+        raise KernelError(f"unsupported document proxy codec {codec}")
+    deflection = 0.08 if codec in (3, 4) else 0.02
+    BRepTools.Clean_s(shape)
+    if codec in (2, 4):
+        from OCP.BRepAdaptor import BRepAdaptor_Surface
+        from OCP.GeomAbs import GeomAbs_SurfaceType
+        from OCP.IMeshTools import IMeshTools_Parameters
+        from OCP.TopAbs import TopAbs_ShapeEnum
+        from OCP.TopExp import TopExp_Explorer
+        from OCP.TopoDS import TopoDS
+        params = IMeshTools_Parameters()
+        params.Deflection, params.Angle, params.InParallel = deflection, 0.3, True
+        params.ControlSurfaceDeflection = False
+        params.DeflectionInterior, params.AngleInterior = deflection * 50.0, 1.0
+        exp = TopExp_Explorer(shape, TopAbs_ShapeEnum.TopAbs_FACE)
+        while exp.More():
+            face = TopoDS.Face(exp.Current())
+            if BRepAdaptor_Surface(face).GetType() == GeomAbs_SurfaceType.GeomAbs_SurfaceOfExtrusion:
+                BRepMesh_IncrementalMesh(face, params)
+            exp.Next()
+    BRepMesh_IncrementalMesh(shape, deflection, False, 0.3, True)
+
+
+def _tessellate(shape, deflection, angle, want_edges, tangent_angle=None, *, document_codec=None):
     """The mesher behind `tessellate` / `tessellate_with_edges`. Never the geometry.
 
     Tessellation is legitimate for viewport rendering, but it must never replace the
@@ -1809,7 +1849,10 @@ def _tessellate(shape, deflection, angle, want_edges, tangent_angle=None):
     # zooming in never refines the display, and the shape keeping whatever density it was
     # first drawn at. `BRepTools.Clean_s` drops the cached mesh so the deflection actually
     # applies. Two successive density requests must therefore produce distinct meshes.
-    _display_mesh(shape, deflection, angle)
+    if document_codec is None:
+        _display_mesh(shape, deflection, angle)
+    else:
+        _document_proxy_mesh(shape, document_codec)
     verts = []
     tris = []
     edges = []
@@ -2148,6 +2191,107 @@ def volume(shape):
     props = GProp_GProps()
     BRepGProp.VolumeProperties_s(shape, props, 1e-13)
     return props.Mass()
+
+
+def document_current_binary_format():
+    """Current kernel binary encoding; admission/writer policy lives in document_compat."""
+    _need()
+    from OCP.BinTools import BinTools_FormatVersion
+    return int(BinTools_FormatVersion.BinTools_FormatVersion_CURRENT.value)
+
+
+def document_schema1_volume(shape):
+    """Frozen historical summary measurement, NOT the application's mass-properties API.
+
+    Keep this explicit epsilon and representation when improving normal measurement
+    commands. Exact-proxy correlation compares NURBS to NURBS separately. A future
+    summary algorithm needs its own codec, not a reinterpretation of saved numbers.
+    """
+    from OCP.BRepGProp import BRepGProp
+    from OCP.GProp import GProp_GProps
+    properties = GProp_GProps()
+    BRepGProp.VolumeProperties_s(shape, properties, 1e-13)
+    return properties.Mass()
+
+
+def document_exclusive_volume(shape_a, shape_b):
+    """Exact volume of ``shape_a - shape_b`` without rejecting an empty result."""
+    from OCP.BRepAlgoAPI import BRepAlgoAPI_Cut as cut
+
+    builder = cut(shape_a, shape_b)
+    if not builder.IsDone():
+        builder.Build()
+    if not builder.IsDone():
+        raise RuntimeError("exact proxy correlation Boolean failed")
+    result = builder.Shape()
+    return 0.0 if result.IsNull() else abs(float(document_schema1_volume(result)))
+
+
+def document_exclusive_volume_pair(shape_a, shape_b):
+    """Exact A-minus-B and B-minus-A, sharing the expensive intersection calculation.
+
+    No approximation or relaxed comparison: OCCT reuses one non-destructive pave
+    filler for both cuts. Previously each direction built its intersections twice.
+    """
+    from OCP.BRepAlgoAPI import BRepAlgoAPI_Cut
+    from OCP.BOPAlgo import BOPAlgo_PaveFiller
+    from OCP.collections import List_TopoDS_Shape
+    if shape_a.IsEqual(shape_b):
+        return (0.0, 0.0)
+    arguments = List_TopoDS_Shape()
+    arguments.Append(shape_a)
+    arguments.Append(shape_b)
+    filler = BOPAlgo_PaveFiller()
+    filler.SetArguments(arguments)
+    filler.SetNonDestructive(True)
+    filler.Perform()
+    if filler.HasErrors():
+        raise RuntimeError("exact proxy correlation intersections failed")
+    volumes = []
+    for source, tool in ((shape_a, shape_b), (shape_b, shape_a)):
+        sources, tools = List_TopoDS_Shape(), List_TopoDS_Shape()
+        sources.Append(source)
+        tools.Append(tool)
+        builder = BRepAlgoAPI_Cut(filler)
+        builder.SetArguments(sources)
+        builder.SetTools(tools)
+        builder.SetNonDestructive(True)
+        builder.Build()
+        if not builder.IsDone():
+            raise RuntimeError("exact proxy correlation Boolean failed")
+        result = builder.Shape()
+        volumes.append(0.0 if result.IsNull() else abs(float(document_schema1_volume(result))))
+    return tuple(volumes)
+
+
+def document_planar_normalized_types(shape, tolerance):
+    """Recognition-only labels at the recipe's original sewing tolerance.
+
+    A transformed planar patch can decode as PLANE in a saved master and as a
+    near-planar BSPLINE when its recipe is replayed. Never alter either surface.
+    """
+    from OCP.BRep import BRep_Tool
+    from OCP.BRepAdaptor import BRepAdaptor_Surface
+    from OCP.GeomAbs import GeomAbs_SurfaceType
+    from OCP.GeomLib import GeomLib_IsPlanarSurface
+    from OCP.TopAbs import TopAbs_ShapeEnum
+    from OCP.TopExp import TopExp_Explorer
+    from OCP.TopoDS import TopoDS
+    counts = {}
+    exp = TopExp_Explorer(shape, TopAbs_ShapeEnum.TopAbs_FACE)
+    while exp.More():
+        face = TopoDS.Face(exp.Current())
+        kind = BRepAdaptor_Surface(face).GetType()
+        if kind == GeomAbs_SurfaceType.GeomAbs_BSplineSurface:
+            surface = BRep_Tool.Surface_s(face)
+            label = "PLANE" if GeomLib_IsPlanarSurface(surface, tolerance).IsPlanar() else "BSPLINE"
+        elif kind == GeomAbs_SurfaceType.GeomAbs_Plane:
+            label = "PLANE"
+        else:
+            label = str(kind)
+        counts[label] = counts.get(label, 0) + 1
+        exp.Next()
+    return counts
 
 
 def face_types(shape):
@@ -4677,7 +4821,7 @@ def shape_from_brep_data(data, sew_tolerance=1e-6,
     return sewn
 
 
-def shape_to_bytes(shape, triangles=True):
+def shape_to_bytes(shape, triangles=True, *, format_version=None):
     """`shape` in OCCT's own BINARY BRep format, for handing a master from a worker
     process to the application (`bridge.prefetch_document`). It is not a public file format.
 
@@ -4696,11 +4840,12 @@ def shape_to_bytes(shape, triangles=True):
     from OCP.BinTools import BinTools, BinTools_FormatVersion
 
     buf = io.BytesIO()
-    if triangles:
+    if triangles and format_version is None:
         BinTools.Write_s(shape, buf)
     else:
-        BinTools.Write_s(shape, buf, False, False,
-                         BinTools_FormatVersion.BinTools_FormatVersion_CURRENT)
+        version = (BinTools_FormatVersion.BinTools_FormatVersion_CURRENT
+                   if format_version is None else BinTools_FormatVersion(format_version))
+        BinTools.Write_s(shape, buf, bool(triangles), False, version)
     return buf.getvalue()
 
 

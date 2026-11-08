@@ -132,3 +132,18 @@ The Cargo manifest has no dependencies. Linux builds omit the linker build ID an
 GNU builds disable PE timestamp insertion for deterministic packaged artifacts. Build
 output remains under the ignored local `target/` directory; this source tree does not
 contain packaged binaries.
+
+
+## Display-proxy compatibility capability
+
+The container protocol remains version 1. `--capabilities` additionally advertises
+`display-proxy-equivalence-v1`; `compare-display-proxies saved.bin canonical.bin` compares
+whole oriented display surfaces and returns `equal` or `different`. Inputs have an eight-byte
+`NWPX0001` header, a little-endian u64 triangle count, and nine little-endian f64 coordinates
+per triangle. Size is exact, finite coordinates are required, and one million triangles is
+the maximum. The comparison ignores face numbering and diagonals internal to coplanar
+patches, not missing faces, changed curved facets, winding or duplicate triangles.
+
+This is DISPLAY validation only. Exact manufacturing masters retain independent hashes,
+recipes and kernel validation. The fixed legacy float32 rounding budget is never applied
+to those masters. See `docs/technical-reference.md` for the permanent reader contract.

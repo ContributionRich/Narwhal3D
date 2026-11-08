@@ -171,8 +171,9 @@ try:
           "two segments + another selected curve: 3 + 4 + 12 = 19", msgs[0])
     ctx = Ctx([], subobjects=[("Solid", "Edge", 4)])
     cmd, msgs, done = run(ctx)
-    check("not implemented yet" in (msgs[0] or ""),
-          "a solid's EDGE says 'not implemented yet' rather than a wrong number", msgs[0])
+    check(done and "owner no longer exists" in (msgs[0] or "")
+          and "Length =" not in (msgs[0] or ""),
+          "a stale solid EDGE is refused rather than reporting a wrong number", msgs[0])
 
     # --- THE REAL APP PATH: app_state + the UI's own sub-object set ------------------
     app_state.set_model(model_mod.NarwhalModel())

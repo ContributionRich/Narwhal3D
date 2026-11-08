@@ -36,10 +36,10 @@ def _candidates() -> tuple[Path, ...]:
     return tuple(candidates)
 
 
-_probe_cache: dict[tuple[str, int], bool] = {}
+_probe_cache: dict[tuple[str, int, str | None], bool] = {}
 
 
-def executable() -> Path | None:
+def executable(feature: str | None = None) -> Path | None:
     """Return the first executable that identifies the exact v1 protocol."""
     for path in _candidates():
         try:
@@ -48,30 +48,36 @@ def executable() -> Path | None:
             stamp = path.stat().st_mtime_ns
         except OSError:
             continue
-        key = (str(path), stamp)
+        key = (str(path), stamp, feature)
         valid = _probe_cache.get(key)
         if valid is None:
             result = converter_process.run(
                 (str(path), "--version"), timeout=10, max_output=4096)
             valid = (result.returncode == 0 and not result.timed_out
                      and result.stdout.strip() == PROTOCOL)
+            if valid and feature is not None:
+                capabilities = converter_process.run(
+                    (str(path), "--capabilities"), timeout=10, max_output=4096)
+                valid = (capabilities.returncode == 0 and not capabilities.timed_out
+                         and feature in capabilities.stdout.splitlines())
             _probe_cache[key] = valid
         if valid:
             return path
     return None
 
 
-def require() -> Path:
-    path = executable()
+def require(feature: str | None = None) -> Path:
+    path = executable(feature)
     if path is None:
         raise DocumentCoreError(
             "the built-in Narwhal document core is unavailable; reinstall the application "
-            f"or set {ENV_VAR} to a compatible {PROTOCOL!r} executable")
+            f"or set {ENV_VAR} to a compatible {PROTOCOL!r} executable"
+            + (f" with {feature}" if feature else ""))
     return path
 
 
-def _run(arguments: tuple[str, ...], timeout: float) -> str:
-    path = require()
+def _run(arguments: tuple[str, ...], timeout: float, feature: str | None = None) -> str:
+    path = require(feature)
     result = converter_process.run(
         (str(path), *arguments), timeout=timeout, max_output=65536)
     if result.returncode != 0 or result.timed_out or result.error:
@@ -118,3 +124,12 @@ def inspect(source: str | os.PathLike) -> tuple[tuple[str, int, str], ...]:
             raise DocumentCoreError("document core returned a negative member size")
         rows.append((parts[0], size, parts[2]))
     return tuple(rows)
+
+
+def compare_display_proxies(left: Path, right: Path) -> bool:
+    """Qualified Rust comparison of schema-1 display surfaces, not manufacturing geometry."""
+    answer = _run(("compare-display-proxies", os.fspath(left), os.fspath(right)),
+                  timeout=120, feature="display-proxy-equivalence-v1").strip()
+    if answer not in ("equal", "different"):
+        raise DocumentCoreError("invalid display-proxy comparison response")
+    return answer == "equal"

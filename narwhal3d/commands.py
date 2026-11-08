@@ -10994,7 +10994,7 @@ class LengthCmd(Command):
     Preselected curves and Ctrl+Shift segments are measured immediately, including a
     cumulative total for multiple items. At the prompt, a clicked curve or typed name is
     measured directly, while Enter measures the current selection. A selected segment
-    takes precedence over its parent curve. Solid-edge measurement is not implemented.
+    takes precedence over its parent curve. Selected solid edges are resolved from exact kernel curves, never display polylines.
 
     rhino3dm has no ``Curve.GetLength`` member. Polyline lengths are exact sums of straight
     segments; curved geometry uses Gauss-Legendre integration through
@@ -11093,8 +11093,14 @@ class LengthCmd(Command):
                 items.append((f"segment {index} of {name}", length, False))
                 owners.add(name)
             elif kind == "Edge":
-                notes.append(f"edge {index} of {name}: measuring a solid's edge is "
-                             f"not implemented yet")
+                try:
+                    curve = curve_inputs.resolve(ctx, ("edge", name, index))
+                    length = self._curve_length(curve)
+                except (curve_inputs.CurveInputError, ValueError) as error:
+                    notes.append(f"edge {index} of {name}: {error}")
+                    continue
+                items.append((f"edge {index} of {name}", length, curve.IsClosed))
+                owners.add(name)
         try:
             selected = list(ctx.selected_objects())
         except Exception:  # noqa: BLE001

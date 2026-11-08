@@ -1533,27 +1533,29 @@ class ImportCmd(commands.Command):
     name = "Import"
     description = ("Import objects from a .3dm, .step, .dxf, .svg, .cdr, .pdf, .ai, .obj or .stl "
                    "file into the current model.")
-    steps = [("Press Enter to choose the file, or type a file name:", TEXT)]
+    steps = [("File name to import:", TEXT)]
 
-    def _enter_default(self, ctx):
-        return ""
+    def begin(self, ctx):
+        """Open the file browser at once, as Open does. The typed-name prompt is the
+        fallback when no dialog tool exists; a typed name never opens a second dialog."""
+        # Base begin starts the SelLast batch; a text-only command takes nothing from the selection.
+        super().begin(ctx)
+        try:
+            from .state import app_state
+            start = filedialog.start_dir(app_state.doc_path)
+        except Exception:  # noqa: BLE001
+            start = os.path.expanduser("~")
+        status, target = filedialog.ask_open_path("Import", start, IMPORT_FILTERS)
+        if status == filedialog.OK:
+            return self._recorded(ctx, lambda: self._import(ctx, target))
+        if status == filedialog.CANCEL:
+            return "Import cancelled", True
+        return f"{filedialog.unavailable_hint()} Formats: {' '.join(FORMATS)}.", False
 
     def execute(self, ctx):
-        target = self.args[0] if self.args else ""
-        if not target:
-            try:
-                from .state import app_state
-                start = filedialog.start_dir(app_state.doc_path)
-            except Exception:  # noqa: BLE001
-                start = os.path.expanduser("~")
-            status, target = filedialog.ask_open_path("Import", start, IMPORT_FILTERS)
-            if status == filedialog.CANCEL:
-                return "Import cancelled", True
-            if status == filedialog.UNAVAILABLE:
-                self.args = []
-                self.step_index = 0
-                return ("No file dialog is available (kdialog / zenity) -- type the file "
-                        "name (" + " ".join(FORMATS) + ")."), False
+        return self._import(ctx, self.args[0])
+
+    def _import(self, ctx, target):
         ok, msg = import_into(ctx, target)
         return msg, True
 

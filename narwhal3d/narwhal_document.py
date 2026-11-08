@@ -6,6 +6,7 @@ import importlib
 import json
 import math
 import os
+import shutil
 from pathlib import Path
 import sys
 import tempfile
@@ -15,6 +16,7 @@ import rhino3dm as r3
 
 from . import converter_process, kernel, native_document
 from .kernel import occt_backend
+from .document_compat import schema1_volume
 
 FORMAT = "Narwhal 3D Document"
 SCHEMA = 1
@@ -46,7 +48,8 @@ def _format_contract() -> tuple[str, int]:
     ocp = importlib.import_module("OCP")
     bin_tools = importlib.import_module("OCP.BinTools")
     current = bin_tools.BinTools_FormatVersion.BinTools_FormatVersion_CURRENT
-    return str(ocp.__version__), int(current.value)
+    from .document_compat import writer_bintools_format
+    return str(ocp.__version__), writer_bintools_format(int(current.value))
 
 
 def _shape_record(file_object, shape, member: str, digest: str) -> dict:
@@ -60,7 +63,7 @@ def _shape_record(file_object, shape, member: str, digest: str) -> dict:
     if not all(math.isfinite(value) for value in bounds):
         raise NarwhalDocumentError("exact OCCT master has non-finite bounds")
     airtight = bool(occt_backend.is_airtight(shape))
-    volume = float(occt_backend.volume(shape)) if airtight else None
+    volume = float(schema1_volume(shape)) if airtight else None
     if volume is not None and not math.isfinite(volume):
         raise NarwhalDocumentError("exact OCCT master has non-finite volume")
     return {
@@ -119,7 +122,8 @@ def save_model(model, target: str | os.PathLike) -> bool:
                         f"{file_object.Attributes.Name or '(unnamed)'} has an exact master "
                         "but no reconstruction recipe")
                 try:
-                    data = bytes(occt_backend.shape_to_bytes(master, triangles=False))
+                    data = bytes(occt_backend.shape_to_bytes(
+                        master, triangles=False, format_version=bintools_format))
                 except Exception as exc:  # noqa: BLE001
                     raise NarwhalDocumentError(
                         f"could not serialize exact master for "
@@ -159,6 +163,7 @@ def save_model(model, target: str | os.PathLike) -> bool:
         manifest = {
             "format": FORMAT,
             "schema": SCHEMA,
+            "summary_codec": "schema1-v1",
             "document_member": "document.3dm",
             "master_encoding": MASTER_ENCODING,
             "occt_version": occt_version,
@@ -170,6 +175,10 @@ def save_model(model, target: str | os.PathLike) -> bool:
         if len(manifest_data) > MAX_MANIFEST:
             raise NarwhalDocumentError("native document manifest exceeds 16 MiB")
         (root / "manifest.json").write_bytes(manifest_data)
+        # Admit the staged geometry with the SAME reader checks before replacing any
+        # existing project. A serialization/reader disagreement cannot destroy a good save.
+        validated = _validate_in_worker(root, len(records))
+        shutil.rmtree(validated)  # worker output is inside this function's private staging dir
         try:
             native_document.pack(root, target)
         except native_document.DocumentCoreError as exc:
@@ -185,15 +194,10 @@ def _read_manifest(path: Path) -> dict:
         value = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         raise NarwhalDocumentError(f"invalid native document manifest: {exc}") from exc
-    occt_version, bintools_format = _format_contract()
-    if (not isinstance(value, dict) or value.get("format") != FORMAT
-            or value.get("schema") != SCHEMA
-            or value.get("document_member") != "document.3dm"
-            or value.get("master_encoding") != MASTER_ENCODING
-            or value.get("occt_version") != occt_version
-            or value.get("bintools_format") != bintools_format
-            or not isinstance(value.get("masters"), list)):
-        raise NarwhalDocumentError("unsupported native document or OCCT/BinTools version")
+    from .document_compat import supported_manifest
+    _producer, bintools_format = _format_contract()
+    if not supported_manifest(value, bintools_format):
+        raise NarwhalDocumentError("unsupported native document schema or binary encoding")
     if len(value["masters"]) > MAX_MASTERS:
         raise NarwhalDocumentError("native document has more than 10,000 exact masters")
     return value
@@ -332,7 +336,7 @@ def load_model(source: str | os.PathLike):
             face_types = {str(key): int(value)
                           for key, value in sorted(occt_backend.face_types(shape).items())}
             airtight = bool(occt_backend.is_airtight(shape))
-            volume = float(occt_backend.volume(shape)) if airtight else None
+            volume = float(schema1_volume(shape)) if airtight else None
             if (face_types != record.get("face_types")
                     or airtight != record.get("airtight")
                     or (volume is not None and not math.isfinite(volume))):

@@ -192,6 +192,75 @@ analytic and missing-core compatibility routes remain available. The prepared ob
 not retain stale geometry after edits. Fit control points, knots and deviation are compared
 bit-for-bit against the previous pipeline in the regression suite.
 
+The Rebuild window uses the application's themed popup and native-backed text editing;
+this styling does not change fit limits, Preview, Cancel, or the single Undo callback.
+
+## Selection, Import and Print
+
+- `Length` measures selected solid edges using their exact kernel curves, including
+  circular edges, not the sampled display polyline. Shift-click can pick an edge on an
+  already-selected ungrouped solid or during the Length selection prompt. Group-member
+  Shift selection and the existing component-selection chord remain available.
+- `Import` opens the file browser immediately. Inline filenames still work; a typed
+  filename prompt remains available when no native browser can be opened. Cancel does
+  not modify the document; successful imports use one Undo record.
+- Print labels and dropdowns use measured text widths and stay within the pane at the
+  supported dialog sizes. Perspective printing remains explicitly unsupported; select
+  a parallel view such as Top, Front or Right in the Print dialog.
+
+## Native saved-file compatibility contract
+
+A saved `.narwhal` project is a permanent wire format, not a snapshot of the current
+viewport renderer. New readers must retain schema-1/container-1 support. A release may
+add a schema only with an explicit reader/migration and permanent historical fixtures;
+never reinterpret or silently overwrite an older format. Unknown future encodings fail
+explicitly, leaving the source file and active document unchanged.
+
+- Application and OCCT **producer versions are metadata**, not equality locks on reading.
+  The actual supported binary encoding controls admission. BinTools versions 1, 2, 3 and 4
+  are exercised with real encoded exact solids, not only modified version labels.
+- OCCT masters are authoritative. Container/master hashes, stable object IDs, recipes,
+  topology, closure, bounds and volume are validated in the isolated worker before the
+  candidate document is published. No master is replaced by display triangles.
+- Historical triangulated proxies are compared as oriented piecewise-planar surfaces by
+  the dependency-free Rust document core. Face/edge numbering and coplanar diagonals do
+  not change a surface. Changed nonplanar faces, missing/duplicate faces and reversed
+  winding do. The fixed float32 precision budget belongs only to legacy render vertices,
+  never to manufacturing geometry. Proxy codecs 1 and 2 are frozen separately from
+  viewport tessellation settings and must be retained, as must their historical coarse
+  retry profiles (codecs 3 and 4).
+- Exact-proxy correlation compares matching NURBS representations. OCCT's integral of
+  an extrusion surface can differ from that of its exact NURBS form; this must not be
+  mistaken for file corruption. The stored master and its historical summary are retained.
+- Older additive boxes that omitted the document-form marker are admitted only after
+  full exact-proxy correlation, then receive the explicit exact marker in the candidate.
+  New assistant boxes write that marker at publication, including for exit recovery.
+  Unknown nonempty form markers remain refused.
+- A narrow legacy planar/BSpline recognition migration uses the original bounded sewing
+  tolerance and independently correlates both representations with the saved proxy.
+  It never converts or simplifies the authoritative saved surfaces.
+- Writers pin a tested binary encoding rather than blindly adopting a newer kernel's
+  CURRENT value. Historical summary measurements have a frozen `schema1-v1` codec,
+  independent of changes to normal measurement commands.
+- Save runs the reader's admission checks on private staging **before** atomic replacement,
+  so a newly serialized unreadable document cannot replace a previous good save.
+  Open validates into an inert candidate; failed validation
+  cannot partially install geometry or replace the current document.
+
+`spike/fixtures/document_schema1_historical.json` contains fixed, SHA-256-pinned bytes from
+an earlier writer with synthetic moved-display and analytic-extrusion cases. **Do not
+regenerate it when implementation changes.** Append fixtures for new formats instead.
+`spike/test_document_compatibility.py` is part of the full gate, alongside the unchanged
+corruption and same-bounds/volume substitution tests in `spike/test_narwhal_document.py`.
+The native comparator capability is qualified before use; an old pack/unpack helper cannot
+silently satisfy the new hook.
+
+Open shares the exact intersection preparation for reciprocal solid-correlation checks
+and avoids rebuilding already-completed cuts. Both directional checks remain mandatory.
+A measured eight-master project opened in about 11 seconds cold, versus 20 seconds before
+this change; timing depends on geometry and hardware. Isolated exact validation remains
+part of Open and is deliberately not bypassed for speed.
+
 ## Tests
 
 Fast public model tests can be run with the bundled interpreter after bootstrap. The full application and UI suites use the bundled runtime:

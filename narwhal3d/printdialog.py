@@ -56,6 +56,39 @@ ROW_LABELS = {rid: label for rid, label, _k in ROWS}
 ROW_KINDS = {rid: kind for rid, _l, kind in ROWS}
 BUTTONS = (("print", "Print"), ("close", "Close"))
 
+# Advance widths in em of Blender's bundled UI font (blf font 0), MEASURED on Blender
+# 5.2.2 as blf.dimensions at size 1000 / 1000 for U+0020..U+007E, then U+2713 (the
+# check mark) and U+25BE (the dropdown arrow). The pure layout cannot call blf.
+_EM_ASCII = (
+    0.269, 0.220, 0.403, 0.600, 0.614, 0.844, 0.609, 0.254, 0.391, 0.391,
+    0.645, 0.645, 0.269, 0.645, 0.269, 0.325, 0.645, 0.645, 0.645, 0.645,
+    0.645, 0.645, 0.645, 0.645, 0.645, 0.645, 0.269, 0.269, 0.645, 0.645,
+    0.645, 0.524, 0.974, 0.653, 0.638, 0.722, 0.689, 0.580, 0.554, 0.730,
+    0.708, 0.339, 0.535, 0.634, 0.535, 0.857, 0.710, 0.749, 0.612, 0.749,
+    0.632, 0.614, 0.610, 0.703, 0.653, 0.949, 0.646, 0.643, 0.613, 0.391,
+    0.325, 0.391, 0.438, 0.455, 0.241, 0.518, 0.565, 0.523, 0.565, 0.536,
+    0.306, 0.565, 0.547, 0.206, 0.234, 0.510, 0.230, 0.839, 0.547, 0.549,
+    0.565, 0.565, 0.322, 0.475, 0.311, 0.547, 0.512, 0.752, 0.507, 0.512,
+    0.479, 0.391, 0.296, 0.391, 0.645,
+)
+_ADVANCE_EM = {chr(32 + i): w for i, w in enumerate(_EM_ASCII)}
+_ADVANCE_EM.update({"\u2713": 0.850, "\u25be": 0.370})
+#: Summed advances run up to 7 % UNDER the drawn width (kerning), and blf rounds each
+#: glyph's advance to whole pixels at small sizes. The margin and the half pixel per glyph
+#: keep every estimate on the wide side: MEASURED to bound blf for every string the dialog
+#: draws, at scales 0.6 to 2.5.
+_TEXT_MARGIN = 1.10
+_GLYPH_PX = 0.5
+#: Glyphs the dialog never draws are costed as wide.
+_DEFAULT_EM = 0.70
+
+
+def text_width(text, size=13.0):
+    """Estimated drawn width in px of `text` at font `size` px (a conservative upper bound)."""
+    text = text or ""
+    return (sum(_ADVANCE_EM.get(c, _DEFAULT_EM) for c in text) * float(size) * _TEXT_MARGIN
+            + _GLYPH_PX * len(text))
+
 
 @dataclass
 class DialogState:
@@ -197,13 +230,47 @@ class Layout:
     scale: float = 1.0
 
 
+#: Layout figures at scale 1 (each is multiplied by the interface scale).
+LABEL_GAP = 12
+#: Right edge of a value box kept clear for its dropdown arrow (16 px glyph + gap).
+ARROW_ZONE = 20
+ROW_H, ROW_MIN_H = 30, 24
+ITEM_H, LIST_MIN_W = 24, 300
+#: Height kept free under the rows for the status text (two lines).
+NOTES_RESERVE = 62
+#: The smallest region (at scale 1) the dialog is laid out for without clipping. It
+#: scales with the interface, as every figure here does.
+MIN_REGION = (680.0, 480.0)
+
+
+def _column_needs(state, s):
+    """``(label, value)`` widths in px: the longest label, and the widest value box any
+    row needs for its options or current text. Taken over EVERY row, so the columns do
+    not move when a setting changes."""
+    fs = 13.0 * s
+    label = max(text_width(text, fs) for _rid, text, _kind in ROWS)
+    value = 16.0 * s                                  # a check box
+    for rid, _text, kind in ROWS:
+        if kind == "check":
+            continue
+        if kind == "field":
+            texts = ["0" * FIELD_MAX_CHARS]
+        else:
+            texts = [state.label_of(rid, o) for o in state.choices(rid)] + [state.shown(rid)]
+        widest = max(text_width(t, fs) for t in texts)
+        value = max(value, widest + (FIELD_TEXT_PAD + ARROW_ZONE) * s)
+    return label, value
+
+
 def layout(region_w, region_h, ui_scale=1.0, state=None):
     """Where everything goes in a region of this size. Pure arithmetic.
 
-    The panel takes most of the region, centred; controls in a left column (38 %),
-    the preview on the right, and buttons along the bottom. With
-    a `state`, only its visible rows are laid out and its open dropdown's list is
-    placed (below the box, or above it when there is no room below).
+    The panel takes most of the region, centred. The controls form a left column whose
+    label and value columns are as wide as their measured text (`text_width`), so no
+    label runs under its value box; the preview takes the rest of the right; buttons run
+    along the bottom. Rows shrink (to `ROW_MIN_H`) before they reach the status text.
+    With a `state`, only its visible rows are laid out and its open dropdown's list is
+    placed by `dropdown_items`.
     """
     s = max(0.5, float(ui_scale))
     pw = min(region_w - 40 * s, 1100 * s)
@@ -215,17 +282,17 @@ def layout(region_w, region_h, ui_scale=1.0, state=None):
     title = Rect(px, py + ph - title_h, pw, title_h)
     pad = 14 * s
     btn_h = 30 * s
-    # Keep value boxes wide enough for labels such as "Letter  (215.9 x 279.4 mm)".
-    left_w = pw * 0.44
-    row_h = 30 * s
+    label_need, value_need = _column_needs(state if state is not None else DialogState(), s)
+    label_col = pad + label_need + LABEL_GAP * s
+    left_w = max(pw * 0.44, label_col + value_need + pad)
     top = py + ph - title_h - pad
-    label_w = left_w * 0.40
     vis = state.visible_rows() if state is not None else list(ROWS)
+    row_h = min(ROW_H * s, max(ROW_MIN_H * s, (top - py - NOTES_RESERVE * s) / len(vis)))
     rows = []
     for i, (rid, _label, _kind) in enumerate(vis):
         y = top - (i + 1) * row_h
-        rows.append((rid, Rect(px + pad, y, label_w - pad, row_h - 4 * s),
-                     Rect(px + label_w, y, left_w - label_w - pad, row_h - 4 * s)))
+        rows.append((rid, Rect(px + pad, y, label_col - pad, row_h - 4 * s),
+                     Rect(px + label_col, y, left_w - label_col - pad, row_h - 4 * s)))
     buttons = []
     bw = 110 * s
     for j, (bid, _label) in enumerate(reversed(BUTTONS)):
@@ -233,42 +300,66 @@ def layout(region_w, region_h, ui_scale=1.0, state=None):
         buttons.append((bid, Rect(bx, py + pad, bw, btn_h)))
     buttons.reverse()
     prev_x = px + left_w + pad
-    preview = Rect(prev_x, py + pad + btn_h + pad,
-                   px + pw - pad - prev_x, ph - title_h - 3 * pad - btn_h)
+    preview = Rect(prev_x, py + pad + btn_h + pad, max(0.0, px + pw - pad - prev_x),
+                   ph - title_h - 3 * pad - btn_h)
     lay = Layout(panel, title, rows, preview, buttons, [], s)
     if state is not None and state.open_dropdown:
-        lay.dropdown = dropdown_items(lay, state.open_dropdown,
-                                      len(state.choices(state.open_dropdown)),
-                                      region_h)
+        rid = state.open_dropdown
+        opts = state.choices(rid)
+        lay.dropdown = dropdown_items(lay, rid, len(opts), region_h,
+                                      [state.label_of(rid, o) for o in opts])
     return lay
 
 
-def dropdown_items(lay, rid, n, region_h):
-    """``[(index, rect)]`` for an open list of `n` items under (or over) row `rid`."""
+def dropdown_items(lay, rid, n, region_h, labels=None):
+    """``[(index, rect)]`` for an open list of `n` items under (or over) row `rid`.
+
+    The list opens on the side with room for every item at full height; if neither side
+    has it, the list takes the larger side and its items shrink to fit. It never leaves
+    the panel's content area. `labels` (the items' text) widen the list to fit them.
+    """
     box = next((vr for r, _l, vr in lay.rows if r == rid), None)
     if box is None:
         return []
-    item_h = 24 * lay.scale
-    # at least wide enough for the longest label ("Letter  (215.9 x 279.4 mm)")
-    width = max(box.w, 300 * lay.scale)
-    total = n * item_h
-    below = box.y - 2 * lay.scale
-    downward = below - total >= 0 or below >= region_h - (box.y + box.h)
+    s = lay.scale
+    pad = 14 * s
+    lo = lay.panel.y + pad
+    hi = min(lay.title.y, region_h)
+    below = box.y - lo
+    above = hi - (box.y + box.h)
+    item_h = ITEM_H * s
+    if n * item_h <= below:
+        downward = True
+    elif n * item_h <= above:
+        downward = False
+    else:
+        downward = below >= above
+        item_h = max(0.0, max(below, above)) / max(1, n)
+    width = max(box.w, LIST_MIN_W * s)
+    if labels:
+        # the item text is drawn 6 px in from the left and must end 6 px short of the right
+        width = max(width, max(text_width("    " + t, 13.0 * s) for t in labels) + 12 * s)
+    x = box.x
+    right = lay.panel.x + lay.panel.w - pad
+    if x + width > right:
+        x = max(lay.panel.x + pad, right - width)
     out = []
     for i in range(n):
         if downward:
             y = box.y - (i + 1) * item_h
         else:
             y = box.y + box.h + (n - 1 - i) * item_h
-        out.append((i, Rect(box.x, y, width, item_h)))
+        out.append((i, Rect(x, y, width, item_h)))
     return out
 
 
 def notes_rect(lay):
-    """The free space under the controls, where the status / NOTE text goes."""
+    """The free space under the controls, where the status / NOTE text goes. It stops
+    short of the preview AND of the buttons on the bottom row."""
     last = min((vr.y for _r, _l, vr in lay.rows), default=lay.panel.y + lay.panel.h)
     left = lay.panel.x + 14 * lay.scale
-    return Rect(left, lay.panel.y + 14 * lay.scale, lay.preview.x - left - 14 * lay.scale,
+    right = min([lay.preview.x] + [b.x for _bid, b in lay.buttons])
+    return Rect(left, lay.panel.y + 14 * lay.scale, right - 14 * lay.scale - left,
                 last - lay.panel.y - 28 * lay.scale)
 
 

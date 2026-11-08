@@ -52,4 +52,29 @@ assert ui.selection_names() == [one], "Shift selects only the clicked group memb
 ui._select_object_hit(two, shift=True)
 assert set(ui.selection_names()) == {one, two}, "Shift can add another member"
 assert ctx.expand_group_names([one]) == [one, two], "picking members never dissolves the group"
-print("PASS: grouped overlap picks, unrelated ambiguity, plain/Ctrl group selection and Shift member selection")
+# Shift edge convenience must not steal group-member selection or other commands.
+old_pick = ui.pick_subobject
+try:
+    _, solid = ctx.add_geometry(bridge.make_box((0, 0, 0), (3, 4, 0), 5), "Box")
+    ui.apply_selection([solid], already_expanded=True)
+    ui.pick_subobject = lambda *args: (solid, "Edge", 0)
+    can_pick = lambda **kw: ui._shift_length_component_pick(None, None, None, 0, 0, **kw)
+    assert can_pick(shift=True), "Shift picks an edge on a selected ungrouped solid"
+    assert not can_pick() and not can_pick(shift=True, ctrl=True)
+    ui.pick_subobject = lambda *args: (one, "Edge", 0)
+    ui.apply_selection([one], already_expanded=True)
+    assert not can_pick(shift=True), "group-member Shift selection has priority"
+    ui.app_state.active_command = commands.LengthCmd()
+    ui.apply_selection([], already_expanded=True)
+    assert can_pick(shift=True), "Length may pick an edge before selecting its owner"
+    ui.pick_subobject = lambda *args: (one, "Segment", 0)
+    assert can_pick(shift=True), "Length also accepts an exact curve segment"
+    ui.pick_subobject = lambda *args: (solid, "Face", 0)
+    assert not can_pick(shift=True), "Length does not measure a face"
+    ui.app_state.active_command = commands.LineCmd()
+    ui.pick_subobject = lambda *args: (solid, "Edge", 0)
+    assert not can_pick(shift=True), "do not steal input from unrelated commands"
+finally:
+    ui.pick_subobject = old_pick
+    ui.app_state.active_command = None
+print("PASS: grouped picks, Shift members and exact Length edge-pick convenience")

@@ -284,6 +284,7 @@ PURE_SUITES=(
     spike/test_set_group_name.py
     spike/test_purge.py
     spike/test_measure.py
+    spike/test_edge_length.py
     spike/test_run_suite.py
     spike/test_transform_cmds.py
     spike/test_line_modes.py
@@ -388,6 +389,8 @@ PURE_SUITES=(
     spike/test_automation_host.py
     spike/test_open_arg.py
     spike/test_printdialog.py
+    spike/test_printdialog_layout.py
+    spike/test_import_dialog.py
     spike/test_dxf_reader.py
     spike/test_dxf_writer.py
     spike/test_native_dxf.py
@@ -450,6 +453,7 @@ BLENDER_SUITES=(
     spike/test_picture.py
     spike/test_picture_display.py
     spike/test_rebuild_dialog.py
+    spike/test_rebuild_popup.py
     spike/test_group_pick.py
     spike/test_gumball_region_extrude.py
     spike/test_bug102_live.py
@@ -495,6 +499,9 @@ DOCUMENT_CORE="$ROOT/native/document_core/target/release/narwhal-document-core"
 run "native document round trip" env PYTHONPATH="$ROOT/vendor/occt" \
     NARWHAL_DOCUMENT_CORE="$DOCUMENT_CORE" "$BLENDER" -b --factory-startup --python-exit-code 1 \
     --python spike/test_narwhal_document.py
+run "native document historical compatibility" env PYTHONPATH="$ROOT/vendor/occt" \
+    NARWHAL_DOCUMENT_CORE="$DOCUMENT_CORE" "$BLENDER" -b --factory-startup --python-exit-code 1 \
+    --python spike/test_document_compatibility.py
 run "Rust unified history integration" "$PYTHON" spike/test_rust_history_integration.py --launch
 run "Exact polygon component movement" "$BLENDER" -b -t 1 --factory-startup \
     --python-exit-code 1 --python spike/test_move_regression_07.py

@@ -491,8 +491,16 @@ class NativeIntegrationTests(unittest.TestCase):
                     model = NarwhalModel()
                     model.add_object(candidate, 'mismatched surface', 0)
                     target = root/(side+'-'+kind+'.narwhal')
-                    self.assertTrue(nd.save_model(model, target))
                     retained = kernel.master_registry_snapshot()
+                    with self.assertRaisesRegex(nd.NarwhalDocumentError, 'proxy bounds'):
+                        nd.save_model(model, target)
+                    self.assertFalse(target.exists(), 'refused Save must not publish a corrupt archive')
+                    self.assertEqual(kernel.master_registry_snapshot(), retained)
+                    # Deliberately bypass only Save admission to construct an adversarial
+                    # archive. The real worker and independent parent Open checks below
+                    # must still reject it, even though normal Save cannot create it.
+                    with patch.object(nd, '_validate_in_worker', side_effect=bypass_worker):
+                        self.assertTrue(nd.save_model(model, target))
                     payload = root/(side+'-'+kind+'-payload')
                     native_document.unpack(target, payload)
                     # Exercise the REAL worker separately, so a passing parent guard

@@ -8591,6 +8591,10 @@ class NARWHAL_OT_command_input(Operator):
 
     def modal(self, context, event):
         st = app_state
+        import sys
+        from . import rebuild_popup
+        if rebuild_popup.handle_event(sys.modules[__name__], event, context):
+            return {"RUNNING_MODAL"}
         if ai_settings_popup.handle_event(event, context):
             return {'RUNNING_MODAL'}
         if selection_menu.handle_event(event, context):
@@ -9454,8 +9458,9 @@ class NARWHAL_OT_command_input(Operator):
                 # deselects a sub-object part, so it toggles. It is checked before
                 # anything else so the combination can never fall through to the
                 # object rules, where Ctrl means REMOVE.
-                if subobject.is_subobject_chord(shift=event.shift,
-                                                ctrl=event.ctrl):
+                if (subobject.is_subobject_chord(shift=event.shift, ctrl=event.ctrl)
+                        or _shift_length_component_pick(area, sp, region, rx, ry,
+                                                        shift=event.shift, ctrl=event.ctrl)):
                     if _open_selection_choices(area, sp, region, rx, ry, 'part',
                                                shift=event.shift, ctrl=event.ctrl):
                         self._redraw()
@@ -9501,7 +9506,10 @@ class NARWHAL_OT_command_input(Operator):
             # the pick location was lost and the step never advanced on the click.
             if (st.active_command is not None and region is not None
                     and _at_selection_step(st.active_command)
-                    and subobject.is_subobject_chord(shift=event.shift, ctrl=event.ctrl)):
+                    and (subobject.is_subobject_chord(shift=event.shift, ctrl=event.ctrl)
+                         or _shift_length_component_pick(
+                             area, sp, region, event.mouse_x - region.x,
+                             event.mouse_y - region.y, shift=event.shift, ctrl=event.ctrl))):
                 component_route = getattr(st.active_command, 'begin_component_pick', None)
                 if (callable(getattr(st.active_command, 'begin_mouse_pick', None))
                         and not (callable(component_route) and component_route())):
@@ -12420,6 +12428,9 @@ def _rebuild_source_current():
 
 def _clear_rebuild_window():
     global _rebuild_window
+    import sys
+    from . import rebuild_popup
+    rebuild_popup.close(sys.modules[__name__])
     _rebuild_window = None
     _tag_redraw_viewports()
 
@@ -12437,7 +12448,11 @@ def _queue_rebuild_window(command, ctx):
 
     def show():
         if _rebuild_source_current():
-            bpy.ops.narwhal.rebuild_dialog("INVOKE_DEFAULT")
+            import sys
+            from . import rebuild_popup
+            if not rebuild_popup.open(sys.modules[__name__]):
+                app_state.log("Rebuild: no active viewport is available for the window")
+                _clear_rebuild_window()
         else:
             _clear_rebuild_window()
         return None
@@ -20784,6 +20799,26 @@ def narwhal_click_select(area, space, region, rx, ry, shift=False, ctrl=False):
     return _select_object_hit(hit, shift=shift, ctrl=ctrl, area=area)
 
 
+def _shift_length_component_pick(area, space, region, rx, ry, shift=False, ctrl=False):
+    """OURS: Shift may pick a measurable edge on the selected solid, or during Length."""
+    if not shift or ctrl:
+        return False
+    cmd = app_state.active_command
+    measuring = cmd is not None and str(getattr(cmd, "name", "")).lower() == "length"
+    if cmd is not None and not measuring:
+        return False
+    selected = set(selection_names())
+    if not measuring and not selected:
+        return False
+    hit = pick_subobject(area, space, region, rx, ry)
+    if hit is None or hit[1] not in ("Edge", "Segment"):
+        return False
+    if measuring:
+        return True
+    return (hit[1] == "Edge" and hit[0] in selected
+            and len(app_state.ctx.expand_group_names([hit[0]])) == 1)
+
+
 def _select_object_hit(hit, shift=False, ctrl=False, area=None):
     global _last_click_hit
     if not (shift or ctrl):
@@ -24272,6 +24307,9 @@ def unregister():
     global _window_chrome_handle
     _ai_shutdown()
     ai_settings_popup.close()
+    import sys
+    from . import rebuild_popup
+    rebuild_popup.close(sys.modules[__name__])
     selection_menu.close()
     pick_candidates.clear()
     edge_handles._drop_drag()

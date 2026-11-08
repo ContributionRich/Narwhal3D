@@ -53,6 +53,10 @@ def publish(app, approved, scope_check):
     if not geom.IsSolid or not occt.is_airtight(shape) or occt.face_types(shape) != {'PLANE': 6}:
         raise ai_assistant.WorkflowUnavailable('box_geometry_verification_failed')
     volume = occt.volume(shape)
+    # This producer keeps the original exact openNURBS box, not a render proxy.
+    # Persist its form explicitly so saved/recovery readers can correlate the master.
+    if geom.SetUserString(kernel.DOCUMENT_FORM_KEY, 'exact') is False:
+        raise ai_assistant.WorkflowUnavailable('box_document_form_unavailable')
     key = kernel.register_master(geom, shape)
     try:
         check()
