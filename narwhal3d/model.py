@@ -99,6 +99,7 @@ _PROV = {}
 _TABLE_FILES = _weakref.WeakKeyDictionary()
 _OBJECT_FILES = _weakref.WeakKeyDictionary()
 _DETACHED_ATTRIBUTES = _weakref.WeakSet()
+_LIFETIME_ROOTS = _weakref.WeakSet()
 #: True once rhino3dm is instrumented; snapshots never share entries otherwise
 _WATCH = {"installed": False, "error": None, "wrapped": 0, "active": 0}
 
@@ -224,8 +225,31 @@ def _forget(ref):
         del _PROV[ref.key]
 
 
+def _own_file_wrappers(root):
+    """Qualified pinned-wheel cleanup follows the actual Python parent lifetime.
+
+    The wheel's File3dmObject allocates two child BND wrappers but owns neither
+    destructor. Native qualification proves reference_internal keeps this parent
+    alive while either child is borrowed. Unsupported hosts do nothing here.
+    """
+    if root is None or root in _LIFETIME_ROOTS:
+        return
+    import threading
+    if threading.current_thread() is not threading.main_thread():
+        return  # Unknown/background ownership stays conservative, never guessed.
+    try:
+        from . import kernel
+    except ImportError:  # Direct file-path compatibility tests have no package.
+        return
+    lifetime = kernel.master_lifetime()
+    if lifetime is not None:
+        lifetime.file_owner(root)
+        _LIFETIME_ROOTS.add(root)
+
+
 def _register(obj, root):
     """Remember that `obj` is part of document object `root` (a File3dmObject)."""
+    _own_file_wrappers(root)
     key = id(obj)
     e = _PROV.get(key)
     if e is not None and e[0]() is obj:
@@ -426,6 +450,7 @@ def _mark_moved_batch(oids, model=None):
 
 def _wrap_object_access(func, name):
     def associate(obj, file):
+        _own_file_wrappers(obj)
         if obj is not None and file is not None:
             _OBJECT_FILES[obj] = file
         return obj

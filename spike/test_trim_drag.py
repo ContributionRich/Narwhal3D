@@ -39,6 +39,11 @@ real_trim_drag = ui._trim_drag
 patched = {}
 
 
+def counted_trim():
+    """A successful Trim feed: the command's own success counter moves."""
+    trim._trimmed += 1
+
+
 def patch(name, value):
     if name not in patched:
         patched[name] = getattr(ui, name)
@@ -53,10 +58,10 @@ try:
     ui._area_by_pane_key = lambda _key: (area, space, region)
     ui._pane_key = lambda _area: "trim-pane"
 
-    def curve_at(_area, _space, _region, rx, _ry):
-        if 7.0 <= rx <= 13.0:
+    def curve_at(_area, _space, _region, rx, _ry, exclude=()):
+        if 7.0 <= rx <= 13.0 and "CurveA" not in exclude:
             return "CurveA"
-        if 27.0 <= rx <= 33.0:
+        if 27.0 <= rx <= 33.0 and "CurveB" not in exclude:
             return "CurveB"
         return None
 
@@ -64,7 +69,7 @@ try:
     ui.object_pick_location = (
         lambda _area, _space, _region, rx, _ry, _name: (float(rx), 0.0, 0.0))
     ui.app_state.history = []
-    ui.app_state.feed_line = lambda text: feeds.append(text)
+    ui.app_state.feed_line = lambda text: (feeds.append(text), counted_trim())
     trim = commands.TrimCmd()
     trim.step_index = 1
     ui.app_state.active_command = trim
@@ -154,7 +159,7 @@ try:
           "the production point press arms Trim and its click release is not replayed")
 
     feeds.clear()
-    ui.pick_curve_object = lambda *_args: None  # surface/empty: no curve latch
+    ui.pick_curve_object = lambda *_args, **_kwargs: None  # surface/empty: no curve latch
     ui.app_state.active_command = trim
     ui.NARWHAL_OT_command_input.modal(operator, context, press)
     ui.NARWHAL_OT_command_input.modal(operator, context, release)
@@ -204,7 +209,7 @@ try:
     ui._trim_drag_update(region.x + 12.0, region.y)
     check(ui._trim_drag is None,
           "a command ending during a swept pick releases mouse ownership immediately")
-    ui.app_state.feed_line = lambda text: feeds.append(text)
+    ui.app_state.feed_line = lambda text: (feeds.append(text), counted_trim())
     ui.app_state.active_command = trim
 
     feeds.clear()
@@ -223,6 +228,29 @@ try:
           and len(feeds) == 2 and ui._trim_drag is None,
           "the production modal routes held movement and release through Trim drag-over")
     check(redraws, "modal Trim drag-over repaints after document changes")
+
+    trim.step_index = 1
+    trim.args = [["CurveA"]]
+    check(ui._trim_drag_excluded(trim) == frozenset({"CurveA"}),
+          "a lone cutter is the one curve the held sweep must not pick")
+    trim.args = [["CurveA", "CurveB"]]
+    check(ui._trim_drag_excluded(trim) == frozenset(),
+          "with two cutters each may be trimmed, so the sweep excludes nothing")
+    trim.args = [["CurveA"]]
+    feeds.clear()
+    ui._trim_drag_begin(area, space, region, 0.0, 0.0, latched=False)
+    changed = ui._trim_drag_update(region.x + 40.0, region.y)
+    check(changed and len(feeds) == 1 and float(feeds[0].split(",")[0].removeprefix("w")) > 25.0,
+          "a held sweep over a lone cutter passes it and trims the curve beneath", repr(feeds))
+    ui._trim_drag_end()
+    trim.args = [["CurveA", "CurveB"]]
+    ui.app_state.feed_line = lambda text: feeds.append(text)   # refused: nothing trims
+    feeds.clear()
+    ui._trim_drag_begin(area, space, region, 0.0, 0.0, latched=False)
+    changed = ui._trim_drag_update(region.x + 40.0, region.y)
+    check(not changed and ui._trim_drag["trimmed"] == 0 and len(feeds) == 2,
+          "a refused feed is not counted as a trim", repr(feeds))
+    ui._trim_drag_end()
 finally:
     ui._trim_drag = real_trim_drag
     ui._area_by_pane_key = real_area_lookup

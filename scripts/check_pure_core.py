@@ -91,6 +91,8 @@ PURE_CORE_PYTESTS = (
     "spike/test_native_tessellate.py",
     "spike/test_native_unit_table.py",
     "spike/test_native_nearest.py",
+    "spike/test_pure_core_nearest_batch_gate.py",
+    "spike/test_rebuild_performance.py",
     "spike/test_native_interpolate.py",
     "spike/test_native_tween.py",
 )
@@ -154,6 +156,82 @@ def probe_pure_core_parser(path: Path, python: Path | str = sys.executable, *, e
         raise ValueError(f"cannot verify pure-core parser ABI/semantics: {getattr(error, 'stderr', '') or error}") from error
     if identity != PURE_CORE_PARSE_IDENTITY:
         raise ValueError(f"pure-core parser ABI/export evidence differs: {identity!r}")
+    return identity
+
+
+# Additive batch closest-point export. Qualified separately from the parser ABI above, so a
+# library without it (or on a platform not yet qualified) loses only the batch route.
+PURE_CORE_NEAREST_BATCH_EXPORT = "narwhal_pure_core_nearest_on_nurbs_many"
+# The platforms whose artifact has passed this qualification. narwhal3d/native_nearest.py must
+# carry the same set (spike/test_pure_core_nearest_batch_gate.py); Windows joins only with its own record.
+PURE_CORE_BATCH_QUALIFIED_PLATFORMS = frozenset({"linux"})
+# The digest pins the exact bits of the witness answers: a qualifying platform must produce
+# the same answers as every other, not merely close ones.
+PURE_CORE_NEAREST_BATCH_IDENTITY = {
+    "single_export": "narwhal_pure_core_nearest_on_nurbs",
+    "batch_export": PURE_CORE_NEAREST_BATCH_EXPORT,
+    "targets": 5, "matches_single": True, "non_finite_target": "nan_filled",
+    "null_out_status": -1, "bad_order_status": -2,
+    "answers_sha256": "e03299994401c7cb1e53f9dd071c429b470c34aed4b7493f405922c67cb2a35b",
+}
+PURE_CORE_NEAREST_BATCH_PROBE = r'''
+import ctypes as c, hashlib, json, math, struct, sys
+lib = c.CDLL(sys.argv[1])
+D, U = c.POINTER(c.c_double), c.POINTER(c.c_ubyte)
+single = lib.narwhal_pure_core_nearest_on_nurbs
+batch = lib.narwhal_pure_core_nearest_on_nurbs_many
+single.argtypes = [c.c_size_t, D, c.c_size_t, D, c.c_size_t, c.c_ubyte, c.c_ubyte, D, D, U]
+single.restype = c.c_int32
+batch.argtypes = [c.c_size_t, D, c.c_size_t, D, c.c_size_t, c.c_ubyte, c.c_ubyte, D, c.c_size_t, D, U]
+batch.restype = c.c_int32
+# One clamped cubic Bezier span: order 4, 4 homogeneous control points, 6 knots.
+knots = (c.c_double * 6)(0, 0, 0, 1, 1, 1)
+cvs = (c.c_double * 16)(0, 0, 0, 1, 1, 0, 0, 1, 0, 1, 0, 1, 1, 1, 0, 1)
+targets = [(0.5, 0.2, 0.1), (2.0, 3.0, 4.0), (float("nan"), 0.0, 0.0), (-1.0, 0.0, 0.5), (0.5, 0.5, 0.5)]
+count = len(targets)
+flat = (c.c_double * (3 * count))(*[v for t in targets for v in t])
+out = (c.c_double * (5 * count))()
+ends = (c.c_ubyte * count)()
+if batch(4, knots, 6, cvs, 4, 0, 0, flat, count, out, ends) != 0:
+    raise RuntimeError("batch export refused the witness")
+for i, target in enumerate(targets):
+    slot = [out[5 * i + k] for k in range(5)]
+    if any(math.isnan(v) for v in target):
+        if not all(math.isnan(v) for v in slot) or ends[i] != 0:
+            raise RuntimeError("non-finite target must be NaN-filled with end flag 0")
+        if single(4, knots, 6, cvs, 4, 0, 0, (c.c_double * 3)(*target), (c.c_double * 5)(), c.byref(c.c_ubyte())) == 0:
+            raise RuntimeError("single export accepted a non-finite target")
+        continue
+    one, end = (c.c_double * 5)(), c.c_ubyte()
+    if single(4, knots, 6, cvs, 4, 0, 0, (c.c_double * 3)(*target), one, c.byref(end)) != 0:
+        raise RuntimeError("single export refused a witness target")
+    if struct.pack("<5d", *one) != struct.pack("<5d", *slot) or end.value != ends[i]:
+        raise RuntimeError("batch answer differs from the single export")
+if batch(4, knots, 6, cvs, 4, 0, 0, flat, 1, None, None) != -1:
+    raise RuntimeError("null output must be ERR_NULL")
+if batch(33, knots, 6, cvs, 4, 0, 0, flat, 1, out, ends) != -2:
+    raise RuntimeError("order 33 must be ERR_INPUT")
+digest = hashlib.sha256(struct.pack("<%dd" % len(out), *out) + bytes(ends)).hexdigest()
+print(json.dumps({"single_export": "narwhal_pure_core_nearest_on_nurbs",
+                  "batch_export": "narwhal_pure_core_nearest_on_nurbs_many", "targets": count,
+                  "matches_single": True, "non_finite_target": "nan_filled",
+                  "null_out_status": -1, "bad_order_status": -2, "answers_sha256": digest}, sort_keys=True))
+'''
+
+
+def probe_pure_core_nearest_batch(path: Path, python: Path | str = sys.executable, *, env=None) -> dict:
+    """Require the batch export to answer exactly as the single export does, bit for bit."""
+    if not path.is_file() or path.is_symlink():
+        raise ValueError(f"missing regular pure-core library: {path}")
+    try:
+        completed = subprocess.run(
+            [str(python), "-I", "-B", "-c", PURE_CORE_NEAREST_BATCH_PROBE, str(path.resolve())],
+            env=env, text=True, capture_output=True, check=True, timeout=30)
+        identity = json.loads(completed.stdout)
+    except (OSError, subprocess.SubprocessError, ValueError) as error:
+        raise ValueError(f"cannot verify pure-core batch nearest export: {getattr(error, 'stderr', '') or error}") from error
+    if identity != PURE_CORE_NEAREST_BATCH_IDENTITY:
+        raise ValueError(f"pure-core batch nearest evidence differs: {identity!r}")
     return identity
 
 
@@ -296,6 +374,15 @@ def step_direct_abi(lib_path: Path) -> dict[str, object]:
                 "command": "ctypes ABI probe"}
 
 
+def step_nearest_batch(lib_path: Path) -> dict[str, object]:
+    """Qualify the batch closest-point export; required for the library to carry it."""
+    try:
+        identity = probe_pure_core_nearest_batch(lib_path)
+    except ValueError as exc:
+        raise GateError(str(exc)) from exc
+    return {"status": "ok", "nearest_batch": identity, "command": "ctypes batch probe"}
+
+
 def step_adapter(crate: Path, lib_path: Path) -> dict[str, object]:
     """Run the dedicated pure-core Python suites against the built library."""
     python = _bundled_python()
@@ -372,6 +459,7 @@ def run_gate(crate_rel: str) -> dict[str, object]:
     steps["release_build"] = step_release_build(crate)
     lib = _release_lib(crate)
     steps["direct_abi"] = step_direct_abi(lib)
+    steps["nearest_batch"] = step_nearest_batch(lib)
     steps["adapter"] = step_adapter(crate, lib)
     steps["windows_check"] = step_windows_check(crate)
 
@@ -410,7 +498,7 @@ def main(argv: list[str]) -> int:
     else:
         print(f"pure-core source gate: OK (crate {report['crate']})")
         for name in ("fmt", "clippy", "tests", "release_build",
-                     "direct_abi", "adapter", "windows_check"):
+                     "direct_abi", "nearest_batch", "adapter", "windows_check"):
             step = report["steps"][name]
             detail = step.get("passed", step.get("suites", step.get("reason", "")))
             print(f"  [{name}] {step['status']}"

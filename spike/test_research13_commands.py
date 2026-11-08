@@ -819,15 +819,43 @@ c, msg, done = drive("extrudecrv", [], ctx, select=["C"])
 p0 = c.prompt
 msg, done = c.feed("3", ctx)
 m = kernel.master_of(ctx.added[0]) if ctx.added else None
-check(base(p0) == "Extrusion distance <0>" and "Solid=No" in p0 and done and m is not None
-      and ob.face_types(m) == {"CYLINDER": 1} and not ob.is_airtight(m),
-      f"P36: 'Extrusion distance <0> ( ... Solid=No ...)'; typed 3 completes an OPEN tube "
+# MEASURED: P36's reference prompt had Solid=No. OURS (report 121): the app
+# deliberately defaults Solid=Yes; test_report121_124.py pins this owner request.
+# Keep the measured distance/default protocol, but assert the current app geometry.
+check(base(p0) == "Extrusion distance <0>" and "Solid=Yes" in p0 and done
+      and len(ctx.added) == 1 and m is not None
+      and ob.face_types(m) == {"CYLINDER": 1, "PLANE": 2} and ob.is_airtight(m)
+      and abs(ob.mass_properties(m)["volume"] - 12 * math.pi) < 1e-9,
+      f"P36 / OURS report121: Solid=Yes; typed 3 completes an exact capped R2 cylinder "
       f"({p0!r}; {m is not None and ob.face_types(m)})")
 c, msg, done = drive("extrudecrv", [], ctx, select=["C"])
 p1 = base(c.prompt)
 msg, done = c.feed("", ctx)
 check(p1 == "Extrusion distance <3>" and done and len(ctx.added) == 2,
       f"P36: the default is sticky (<3>) and Enter takes it ({p1!r}, {msg!r})")
+# Explicit No retains the measured open-tube behavior, not merely a prompt toggle.
+ctx_no = Ctx(TOP)
+ctx_no.add(r3.Circle(r3.Point3d(0, 0, 0), 2).ToNurbsCurve(), "C")
+c, msg, done = drive("extrudecrv", ["Solid=No", "3"], ctx_no, select=["C"])
+m_no = kernel.master_of(ctx_no.added[0]) if ctx_no.added else None
+check(done and c.opt["Solid"] is False and len(ctx_no.added) == 1 and m_no is not None
+      and ob.face_types(m_no) == {"CYLINDER": 1} and not ob.is_airtight(m_no)
+      and abs(ob.mass_properties(m_no, solid=False)["area"] - 12 * math.pi) < 1e-9
+      and ctx_no.geom_by_name("C") is not None,
+      f"P36: toggled Solid=No completes the exact open R2 tube, input kept ({msg!r})")
+# Help: Solid caps CLOSED planar profiles. An open line must remain a surface
+# under either setting; Yes must not manufacture caps for an open boundary.
+for solid in ("Yes", "No"):
+    ctx_open = Ctx(TOP)
+    ctx_open.add(bridge.make_line((0, 0, 0), (4, 0, 0)), "Profile")
+    c, msg, done = drive("extrudecrv", [f"Solid={solid}", "3"], ctx_open, select=["Profile"])
+    m_open = kernel.master_of(ctx_open.added[0]) if ctx_open.added else None
+    check(done and len(ctx_open.added) == 1 and m_open is not None
+          and ob.face_types(m_open) == {"PLANE": 1} and not ob.is_airtight(m_open)
+          and abs(ob.mass_properties(m_open, solid=False)["area"] - 12) < 1e-9
+          and ob.tight_bbox(m_open) == ((0.0, 0.0, 0.0), (4.0, 0.0, 3.0))
+          and ctx_open.geom_by_name("Profile") is not None,
+          f"P36: open profile with Solid={solid} completes a 4x3 uncapped surface ({msg!r})")
 c, msg, done = drive("extrudecrvtapered", [], ctx, select=["C"])
 check(base(c.prompt) == "Extrusion distance <1>" and "DraftAngle=5" in c.prompt,
       f"P37: ExtrudeCrvTapered first-use <1>, DraftAngle=5 ({c.prompt!r})")
@@ -1237,6 +1265,74 @@ c = type(commands.COMMANDS["moveedge"])()
 check(c.pick_face("B", top_id, None, ctx) is None, "MoveEdge ignores face clicks")
 c, msg, done = drive("moveedge", [], Ctx(TOP))
 check(base(c.prompt) == "Select edges", f"P45: MoveEdge's first prompt ({c.prompt!r})")
+
+# --- MoveEdge: a viewport click answers the edge prompts with the EDGE under the cursor
+# (`pick_edge`, given a point on that edge), not the CPlane point behind it.
+print("-- MoveEdge edge clicks --")
+ctx = Ctx(TOP)
+ctx.add(bridge.make_box((0, 0, 0), (4, 4, 0), 3), "B")
+ctx.add(bridge.make_box((10, 0, 0), (4, 4, 0), 3), "Other")
+changes = []
+ctx.note_change = lambda label=None: changes.append(label)
+c, msg, done = drive("moveedge", [], ctx)
+p0 = base(c.prompt)
+answer = c.pick_edge("B", 99, (2, 0, 3), "plain", ctx)
+p2 = base(c.prompt)
+expected = c._resolve(ctx.geom_by_name("B"), (2, 0, 3), ctx)
+args_after_pick = list(c.args)
+later = c.pick_edge("B", 99, (2, 0, 3), "plain", ctx)
+no_change_yet = not changes
+msg, done = c.feed("2,0,3", ctx)
+msg, done = c.feed("2,0,5", ctx)
+m = kernel.master_of(ctx.geom_by_name("B")) if ctx.geom_by_name("B") is not None else None
+lo, hi = ob.tight_bbox(m) if m is not None else ((9,) * 3, (0,) * 3)
+check(args_after_pick == ["B", None] and c._sub_id == expected and c.args == ["B", None, (2, 0, 3), (2, 0, 5)],
+      f"MoveEdge: the edge pick stores ['B', None] (no sampled point), the exact edge id, "
+      f"and the typed moves fill args [from, to] ({args_after_pick}, {c.args}, {c._sub_id})")
+moved = ctx.geom_by_name("B")
+rec = kernel.recipe_of(moved)
+rebuilt = ob.from_recipe(rec) if rec else None
+rebuilt_top = ob.tight_bbox(rebuilt)[1][2] if rebuilt is not None else None
+check(no_change_yet and len(changes) == 1 and changes[0] == "MoveEdge" and m is not None
+      and ob.is_airtight(m) and abs(hi[2] - 5) < 1e-9
+      and rebuilt_top is not None and abs(rebuilt_top - 5) < 1e-9,
+      f"MoveEdge: the pick changes nothing; the move is ONE undo step, exact, airtight and "
+      f"its recipe rebuilds the same top ({changes}, airtight {m is not None and ob.is_airtight(m)}, "
+      f"top z {hi[2]}, recipe top z {rebuilt_top})")
+check(p0 == "Select edges" and answer == (f"edge {expected} of B selected", False)
+      and p2 == "Point to move from" and later is None and done and abs(hi[2] - 5) < 1e-9,
+      f"MoveEdge: a click on an edge at 'Select edges' picks the solid AND that edge, and "
+      f"the move is exact ({answer}, {p2!r}, {msg!r}, top z {hi[2]})")
+ctx = Ctx(TOP)
+ctx.add(bridge.make_box((0, 0, 0), (4, 4, 0), 3), "B")
+ctx.add(bridge.make_box((10, 0, 0), (4, 4, 0), 3), "Other")
+c, msg, done = drive("moveedge", [], ctx, select=["B"])
+answers = [c.pick_edge("Other", 1, (12, 0, 3), "plain", ctx),
+           c.pick_edge("B", 1, (2, 2, 3), "plain", ctx),
+           c.pick_edge("B", 1, (2, 0, 3), "shift", ctx)]
+c.feed("DirectionConstraint", ctx)
+pending = c.pick_edge("B", 1, (2, 0, 3), "plain", ctx)
+check(c.step_index == 1 and "belongs to Other" in answers[0][0] and not answers[0][1]
+      and "not on an edge" in answers[1][0] and not answers[1][1]
+      and answers[2] is None and pending is None,
+      f"MoveEdge: another solid's edge and a face point are refused at 'Select an edge'; "
+      f"Shift and a pending option decline ({answers}, {pending})")
+check(not hasattr(commands.COMMANDS["moveface"], "pick_edge"),
+      "MoveFace offers no edge picker (its clicks stay object picks)")
+# The stored args never hold the viewport point: a different point on the SAME edge picks the
+# same exact edge id, and "Select an edge" stores [owner, None] too.
+ctx = Ctx(TOP)
+ctx.add(bridge.make_box((0, 0, 0), (4, 4, 0), 3), "B")
+c, msg, done = drive("moveedge", [], ctx, select=["B"])
+c.pick_edge("B", 1, (2, 0, 3), "plain", ctx)
+ids = [c._sub_id]
+args_one = list(c.args)
+c2, _m, _d = drive("moveedge", [], ctx, select=["B"])
+c2.pick_edge("B", 1, (3.5, 0, 3), "plain", ctx)
+check(c2.args == ["B", None] and c2._sub_id == ids[0] == c._resolve(ctx.geom_by_name("B"), (2, 0, 3), ctx)
+      and args_one == ["B", None] and c2.step_index == 2,
+      f"MoveEdge 'Select an edge': args stay ['B', None]; another point on the same edge picks "
+      f"edge {ids[0]} ({c2.args}, {c2._sub_id})")
 
 check(all(isinstance(commands.COMMANDS[k], commands._NewValueMixin)
           for k in ("setsnap", "setortho", "disableosnap", "projectosnap", "snaptolocked",

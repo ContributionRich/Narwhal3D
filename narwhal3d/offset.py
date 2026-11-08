@@ -181,12 +181,18 @@ def _offset_polyline(verts, distance, n, corner):
 def _offset_free_form_approx(curve, distance, n, tolerance, max_samples=512):
     """Approximate a free-form NURBS offset and report the achieved deviation.
 
-    The offset is generally not a NURBS curve (the offset of a cubic is not a polynomial
-    curve), so no
-    exact route exists in any kernel -- the reference CAD application fits one to a tolerance too. Exact points ON
-    the true offset are fitted with a cubic, doubling the sample count until the MEASURED
-    max deviation from the true offset locus is within `tolerance`. The result says
-    `exact=False` and reports the deviation it achieved."""
+    A general cubic offset is not polynomial. Smooth single NURBS curves first
+    use a compact cubic interpolant, refined against true offset targets. If that
+    route declines, retain the complete legacy control-polygon refinement and its
+    native/compatibility nearest validation. Results remain honestly approximate."""
+    compact = _compact_offset(curve, distance, n, tolerance)
+    if compact is not None:
+        return compact
+    return _offset_control_polygon_approx(curve, distance, n, tolerance, max_samples)
+
+
+def _offset_control_polygon_approx(curve, distance, n, tolerance, max_samples=512):
+    """Compatibility route; sampling points are control points, not interpolation data."""
     d = curve.Domain
     count = 48
     best = None
@@ -207,12 +213,239 @@ def _offset_free_form_approx(curve, distance, n, tolerance, max_samples=512):
                         f"offset approximated to {dev:.3e} > tolerance {tolerance}")
 
 
+def _compact_offset(curve, distance, n, tolerance):
+    """OURS: refine a Rust-backed cubic interpolant of TRUE offset targets.
+
+    This is not Rebuild of an already approximate offset. Uniform interpolation
+    parameters retain a correspondence with the source; pointwise error bounds
+    both directions of the sampled locus (unlike one-sided nearest distances).
+    Python only orchestrates existing interpolation/rhino3dm APIs. Their complete
+    compatibility implementation is retained when the qualified native ABI declines.
+
+    Do not fit across joined pieces. C0 knots and kinked seams are fitted
+    independently, with explicit one-sided constraints, never periodicised.
+    Rational INPUT is never rebuilt/mutated; a general offset is non-rational and
+    approximate. Exact primitive paths never reach here.
+    """
+    if not isinstance(curve, r3.NurbsCurve) or curve.Degree < 2:
+        return None
+    d = curve.Domain
+    knots = list(curve.Knots)
+    boundaries = sorted(k for k in set(knots)
+                        if d.T0 < k < d.T1 and knots.count(k) >= curve.Degree)
+    kinked_seam = (curve.IsClosed and
+                   _dist(_pt(curve.TangentAtStart), _pt(curve.TangentAtEnd)) > 1e-8)
+    if boundaries or kinked_seam:
+        try:
+            compact = _compact_offset_boundaries(curve, distance, n, tolerance, boundaries)
+        except ValueError:  # existing interpolation can decline degenerate samples
+            compact = None
+        if compact is not None:
+            return compact
+        # The legacy whole-curve fit would erase these known tangent boundaries.
+        # Refuse explicitly rather than make an unqualified smooth replacement.
+        return OffsetResult(None, False, 0.0,
+                            "boundary-preserving free-form offset could not meet tolerance; "
+                            "larger sharp-corner treatment is not implemented yet")
+    try:
+        from . import interpolate
+    except ImportError:
+        import interpolate
+    # Leave headroom for unsampled extrema; never increase the caller's tolerance.
+    limit = tolerance * 0.8
+    for count in (16, 24, 36, 54, 64, 81, 122):
+        pts = [_offset_point(curve, d.T0 + (d.T1 - d.T0) * i / count,
+                             distance, n)
+               for i in range(count + (not curve.IsClosed))]
+        try:
+            fit = (interpolate.interpolate_closed_curve(pts, "Uniform")
+                   if curve.IsClosed else
+                   interpolate.interpolate_curve(pts, style="Uniform"))
+        except (ValueError, interpolate.InterpolationError):
+            return None
+        if bool(fit.IsClosed) != bool(curve.IsClosed):
+            continue
+        fit.Domain = r3.Interval(d.T0, d.T1)
+        dev = _offset_correspondence_error(curve, fit, distance, n, 256)
+        if not math.isfinite(dev) or dev > limit:
+            continue
+        dev = _offset_correspondence_error(curve, fit, distance, n, 4096)
+        if math.isfinite(dev) and dev <= limit:
+            return OffsetResult(fit, False, dev, "")
+    return None
+
+
+def _compact_offset_boundaries(curve, distance, n, tolerance, boundaries):
+    """Fit independently on either side of full-multiplicity source knots.
+
+    OURS: small sharp-corner miters may move the one-sided offset endpoints by
+    at most 20% of the requested tolerance. This is NOT an angle-based licence
+    to smooth: endpoints meet on their own tangent lines and each side keeps
+    its tangent. Larger corners decline by name, never to a smooth whole-curve
+    replacement. Dense TRUE-target
+    validation includes both one-sided limits after all endpoint constraints.
+    """
+    breaks = [curve.Domain.T0] + boundaries + [curve.Domain.T1]
+    spans = [curve.Trim(a, b) for a, b in zip(breaks, breaks[1:])]
+    if any(s is None for s in spans):
+        return None
+    ends = [[_offset_point(s, s.Domain.T0, distance, n),
+             _offset_point(s, s.Domain.T1, distance, n)] for s in spans]
+    joins = len(spans) if curve.IsClosed else len(spans) - 1
+    for i in range(joins):
+        j = (i + 1) % len(spans)
+        a, b = ends[i][1], ends[j][0]
+        u, v = _pt(spans[i].TangentAtEnd), _pt(spans[j].TangentAtStart)
+        if _dist(a, b) < 1e-12:
+            meet = _scale(_add(a, b), 0.5)
+        else:
+            meet = _line_line_point(a, _add(a, u), b, _add(b, v))
+        if (meet is None or not all(math.isfinite(x) for x in meet)
+                or max(_dist(meet, a), _dist(meet, b)) > tolerance * 0.2
+                or _dist_point_to_line(meet, a, u) > 1e-10
+                or _dist_point_to_line(meet, b, v) > 1e-10):
+            return None
+        ends[i][1] = ends[j][0] = meet
+    fits, worst = [], 0.0
+    try:
+        from . import interpolate, native_interpolate
+    except ImportError:
+        import interpolate
+        import native_interpolate
+    for source, (start, end) in zip(spans, ends):
+        d = source.Domain
+        accepted = None
+        for count in (3, 5, 8, 12, 16, 24, 36):
+            pts = [_offset_point(source, d.T0 + (d.T1-d.T0)*i/count, distance, n)
+                   for i in range(count + 1)]
+            # Small independent spans need fewer than the public interpolator's
+            # native crossover of 16 points. Reuse the SAME existing ABI directly;
+            # no new solver, binary or global crossover setting is introduced.
+            native = native_interpolate.interpolate(pts, 3, "Uniform")
+            if native is None:
+                fit = interpolate.interpolate_curve(pts, style="Uniform")
+            else:
+                ctrl, knots, degree = native
+                fit = r3.NurbsCurve(3, False, degree + 1, len(ctrl))
+                for k, p in enumerate(ctrl):
+                    fit.Points[k] = r3.Point4d(*p, 1.0)
+                for k, value in enumerate(knots[1:-1]):
+                    fit.Knots[k] = value
+            fit.Domain = r3.Interval(d.T0, d.T1)
+            # Keep each one-sided tangent explicitly. Moving its adjacent control
+            # to the endpoint tangent line constrains direction, not just position.
+            for endpoint, adjacent, target, tangent in (
+                    (0, 1, start, _pt(source.TangentAtStart)),
+                    (len(fit.Points)-1, len(fit.Points)-2, end, _pt(source.TangentAtEnd))):
+                old_end = _pt(fit.Points[endpoint])
+                arm = _dot(_sub(_pt(fit.Points[adjacent]), old_end), tangent)
+                if (endpoint == 0 and arm <= 0) or (endpoint != 0 and arm >= 0):
+                    break  # reversed/cusped span: do not invent a tangent direction
+                fit.Points[endpoint] = r3.Point4d(*target, 1.0)
+                fit.Points[adjacent] = r3.Point4d(*_add(target, _scale(tangent, arm)), 1.0)
+            else:
+                dev = _offset_correspondence_error(source, fit, distance, n, 256)
+                if math.isfinite(dev) and dev <= tolerance * 0.8:
+                    # Keep at least 256 checks per span and at least the smooth
+                    # route's 4096 checks over the full source domain, rather than
+                    # paying 4096 checks for EACH tiny imported Bezier span.
+                    checks = max(256, math.ceil(4096 * (d.T1-d.T0) /
+                                                (curve.Domain.T1-curve.Domain.T0)))
+                    dev = _offset_correspondence_error(source, fit, distance, n, checks)
+                    if math.isfinite(dev) and dev <= tolerance * 0.8:
+                        accepted = fit
+                        worst = max(worst, dev)
+                        break
+        if accepted is None:
+            return None
+        fits.append(accepted)
+    # Concatenate clamped cubic control nets WITHOUT a fit across the joins.
+    # Shared positions, multiplicity-three knots: C0 topology with the measured
+    # one-sided directions intact, including the closed nonperiodic seam.
+    controls = list(fits[0].Points)
+    knots = list(fits[0].Knots)
+    for fit in fits[1:]:
+        controls.extend(list(fit.Points)[1:])
+        knots.extend(list(fit.Knots)[3:])
+    out = r3.NurbsCurve(3, False, 4, len(controls))
+    for i, point in enumerate(controls):
+        out.Points[i] = point
+    for i, knot in enumerate(knots):
+        out.Knots[i] = knot
+    if not out.IsValid or bool(out.IsClosed) != bool(curve.IsClosed):
+        return None
+    return OffsetResult(out, False, worst, "")
+
+
+def _dist_point_to_line(point, origin, tangent):
+    return _dist(_sub(point, origin), _scale(tangent, _dot(_sub(point, origin), tangent)))
+
+
+def _offset_correspondence_error(curve, fit, distance, n, samples):
+    """Conservative sampled pointwise error, including short source/fit knot spans.
+
+    Uniform samples alone can miss a feature on a highly nonuniform source.
+    Check inside every knot span as well, independently of fitting data sites.
+    The value is measured, not a certified continuous supremum.
+    """
+    d = curve.Domain
+    params = {d.T0 + (d.T1 - d.T0) * i / samples
+              for i in range(samples + 1)}
+    for crv in (curve, fit):
+        breaks = sorted({d.T0, d.T1} | {
+            k for k in crv.Knots if d.T0 < k < d.T1})
+        for a, b in zip(breaks, breaks[1:]):
+            params.update(a + (b - a) * i / 16 for i in range(17))
+    worst = 0.0
+    for t in params:
+        error = _dist(_offset_point(curve, t, distance, n), _pt(fit.PointAt(t)))
+        if not math.isfinite(error):
+            return math.inf
+        worst = max(worst, error)
+    return worst
+
+
 def _offset_deviation(curve, fit, distance, n, samples=200):
+    native = _native_deviation(curve, fit, distance, n, samples)
+    if native is not None:
+        return native
     d = curve.Domain
     worst = 0.0
     for i in range(samples + 1):
         target = _offset_point(curve, d.T0 + (d.T1 - d.T0) * i / samples, distance, n)
         worst = max(worst, _dist_point_to_curve(fit, target))
+    return worst
+
+
+def _native_deviation(curve, fit, distance, n, samples):
+    """The same max deviation, each nearest point found by the Rust search on the fit's NURBS
+    form: one `nearest.PreparedCurve(fit)` per check, one native query per target.
+
+    OURS (correctness): the native distance is to `fit.PointAt(t)` at the point it finds, which
+    is the global nearest, so it can be LOWER than the legacy scan's where that scan settled in
+    a farther basin (a cusp). A lower deviation is a truer one, not a relaxed tolerance, and the
+    sampling, the tolerance and the refinement schedule are unchanged. A cusp can therefore be
+    accepted with fewer samples.
+
+    Returns None, so the caller runs the legacy scan for the whole check, when the native library
+    is missing or any query declines: a partly native measurement is not the same measurement.
+    """
+    try:
+        from . import nearest, native_nearest
+    except ImportError:  # support direct-file loading outside the package
+        import nearest
+        import native_nearest
+    if not isinstance(fit, r3.NurbsCurve) or not native_nearest.available():
+        return None
+    before = native_nearest._native_calls
+    prepared = nearest.PreparedCurve(fit)
+    d = curve.Domain
+    worst = 0.0
+    for i in range(samples + 1):
+        target = _offset_point(curve, d.T0 + (d.T1 - d.T0) * i / samples, distance, n)
+        worst = max(worst, prepared.closest(target).distance)
+        if native_nearest._native_calls - before != i + 1:
+            return None
     return worst
 
 

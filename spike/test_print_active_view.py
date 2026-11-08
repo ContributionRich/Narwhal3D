@@ -54,6 +54,14 @@ with patch.object(ui, "_view3d_areas", return_value=panes), \
         assert points and max(p[0] for p in points) - min(p[0] for p in points) > 100
         print("PASS: active Top produces a visible selected-curve preview and retains paper/scale settings")
 
+        st.selected_only = False
+        ui._print_dialog_apply("toggled:selected_only")
+        assert len(ui._print_dialog["page"].strokes) == 2
+        st.selected_only = True
+        ui._print_dialog_apply("toggled:selected_only")
+        assert len(ui._print_dialog["page"].strokes) == 1
+        print("PASS: toggling Only selected objects immediately rebuilds the actual preview page")
+
         # View selection inside the current dialog remains explicit and effective.
         st.view = "Perspective"
         ui._print_dialog_refresh()

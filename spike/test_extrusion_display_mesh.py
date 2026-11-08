@@ -4,7 +4,8 @@ OCCT's surface-deflection control over-refined the extrusion's side wall: 294k d
 vertices for a 3-face solid. The side is straight along its direction, so its edges already
 carry the curvature; `occt_backend._premesh_extrusion_faces` meshes it without that control.
 This pins the speed, and that the faster mesh is still a closed, faithful display mesh while
-the solid itself stays the exact 3-face extrusion.
+the solid itself retains exact extrusion surfaces. New versioned recipes split real
+G1 creases; the legacy three-face representation remains covered separately.
 
 Run: tools/blender-patched/blender -b --factory-startup --python spike/test_extrusion_display_mesh.py
 """
@@ -73,11 +74,26 @@ def closed_mesh(tris):
 curve = traced_outline()
 geom = bridge.extrude_curve(curve, -52.0)
 master = kernel.master_of(geom)
-faces = ob.face_types(master) if hasattr(ob, "face_types") else None
+print("PUBLIC_LOADED_BRIDGE", bridge.__file__)
+print("PUBLIC_LOADED_BACKEND", ob.__file__)
+# Independent fixture construction: eleven rotated handles at knots 1,5,...,41,
+# plus the straight span's stationary start at knot 20. Its end at 21 is already
+# one of the rotated handles. The domain seam is smooth but remains a wire seam.
+expected_kinks = set(range(1, 44, 4)) | {20}
+from OCP.BRep import BRep_Tool
+from OCP.BRepAdaptor import BRepAdaptor_Curve, BRepAdaptor_Surface
+source_wire = ob.wire_from_curve(bridge.curve_recipe(curve))
+source_edge = ob._unique_edges(source_wire)[0]
+adaptor = BRepAdaptor_Curve(source_edge)
+source_curve = BRep_Tool.Curve_s(source_edge, adaptor.FirstParameter(), adaptor.LastParameter())
+check(set(ob.extrusion_kink_parameters(source_curve)) == expected_kinks,
+      "all twelve exact trace creases survive stationary span endpoints")
+side_faces = len(expected_kinks) + 1
+faces = ob.face_types(master)
 check(master is not None and ob.is_airtight(master),
       "the extruded traced outline is an exact, airtight solid")
-if faces is not None:
-    check(sum(faces.values()) == 3, f"it is 3 faces: side wall and two caps ({faces})")
+check(faces == {"EXTRUSION": side_faces, "PLANE": 2},
+      f"new topology is thirteen exact curved patches and two caps ({faces})")
 
 start = time.perf_counter()
 verts, tris, edges = bridge.display_tessellation(master)
@@ -118,9 +134,36 @@ check(abs(min(xs) - min(p.X for p in samples)) < 0.05 and abs(max(xs) - max(p.X 
 start = time.perf_counter()
 parts = bridge.subobject_parts(geom)
 elapsed = time.perf_counter() - start
-check(parts is not None and len(parts["faces"]) == 3 and len(parts["edges"]) == 3,
-      "sub-object parts are the exact topology: 3 faces, 3 edges")
+check(parts is not None and len(parts["faces"]) == side_faces + 2
+      and len(parts["edges"]) == 3 * side_faces,
+      "sub-object parts are the exact new topology: 15 faces, 39 edges")
 check(elapsed < 2.0, f"sub-object parts build quickly ({elapsed:.2f} s; was ~17 s)")
+
+# Keep the original bug #111 workload too: old recipes are not reinterpreted
+# into new topology, and their single creased side must still mesh efficiently.
+legacy_recipe = {"kind": "extrusion", "profile": bridge.curve_recipe(curve),
+                 "dir": [0, 0, -52.0], "solid": True}
+legacy_master = ob.from_recipe(legacy_recipe)
+legacy_geom = bridge.occt_backed(legacy_master, legacy_recipe)
+check(ob.face_types(legacy_master) == {"EXTRUSION": 1, "PLANE": 2}
+      and ob.is_airtight(legacy_master), "legacy traced extrusion remains exact, airtight and three-faced")
+legacy_side = next(face for face in ob.unique_faces(legacy_master)
+                   if hasattr(BRepAdaptor_Surface(face).Surface().Surface(), "BasisCurve"))
+legacy_basis = BRepAdaptor_Surface(legacy_side).Surface().Surface().BasisCurve()
+check(set(ob.extrusion_kink_parameters(legacy_basis)) == expected_kinks,
+      "valid stationary legacy surface retains all twelve exact G1 break parameters")
+start = time.perf_counter()
+legacy_verts, legacy_tris, _legacy_edges = bridge.display_tessellation(legacy_master)
+elapsed = time.perf_counter() - start
+check(elapsed < 2.0, f"legacy three-face display mesh still builds quickly ({elapsed:.2f} s)")
+check(len(legacy_verts) < 40000, f"legacy mesh is not over-refined ({len(legacy_verts)} vertices)")
+check(closed_mesh(legacy_tris), "legacy cap and side meshes remain welded closed")
+start = time.perf_counter()
+legacy_parts = bridge.subobject_parts(legacy_geom)
+elapsed = time.perf_counter() - start
+check(legacy_parts is not None and len(legacy_parts["faces"]) == 3
+      and len(legacy_parts["edges"]) == 3, "legacy sub-object topology stays three faces and three edges")
+check(elapsed < 2.0, f"legacy sub-object parts still build quickly ({elapsed:.2f} s)")
 
 print(f"\n{checks - len(failures)}/{checks} checks passed")
 if failures:

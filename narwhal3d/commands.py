@@ -5248,7 +5248,8 @@ def extrude_planar_profile_regions(profiles, distance, direction, both=False, so
     if not faces:
         raise ValueError("the profiles did not define a planar region")
     return [bridge.make_extrude_srf(face, distance, direction=direction,
-                                    both=bool(both), solid=bool(solid))
+                                    both=bool(both), solid=bool(solid),
+                                    split_profile_kinks=True)
             for face in faces]
 
 
@@ -5277,9 +5278,8 @@ class ExtrudeCmd(_StickyDistanceMixin, Command):
     preselect_names = 1
     # the documented options (the command behavior). Built: Direction, BothSides,
     # Solid, DeleteInput. Declared, reported not implemented: Output=SubD, ToBoundary,
-    # SplitAtTangents, SetBasePoint. Solid defaults No -- MEASURED twice (research_all_13
-    # and research_preview_14 P36: "Solid=No" in the typed command's prompt); the reference
-    # menu macro `!_ExtrudeCrv _Pause _Solid=_Yes` sets it on explicitly.
+    # SplitAtTangents, SetBasePoint. OURS: Solid defaults Yes at the reported request
+    # (report 121), unlike the measured reference typed-command default of No.
     options = (
         opts.Option("Output", opts.ENUM, choices=("Surface", "SubD"), default="Surface",
                     help="Create an extrusion or a surface object, or a SubD object."),
@@ -5287,7 +5287,7 @@ class ExtrudeCmd(_StickyDistanceMixin, Command):
                                                  "direction."),
         opts.Option("BothSides", opts.TOGGLE, default=False,
                     help="Extrude towards the both sides of the input curve."),
-        opts.Option("Solid", opts.TOGGLE, default=False,
+        opts.Option("Solid", opts.TOGGLE, default=True,
                     help="Cap a closed planar profile into a closed polysurface."),
         opts.Option("DeleteInput", opts.TOGGLE, default=False,
                     help="Controls whether the original geometry is deleted."),
@@ -5430,6 +5430,25 @@ class ExtrudeCmd(_StickyDistanceMixin, Command):
         start = geom.PointAtStart
         return ((start.X, start.Y, start.Z), normal)
 
+    def update_extrusion_hover(self, point, axis):
+        """Remember the un-sized hover side, never the typed preview's position.
+
+        Blender supplies the constrained point and axis; geometry/projection remain in
+        the existing native picker. A zero projection retains the last usable side.
+        """
+        if point is None or axis is None:
+            return
+        origin, direction = axis
+        projection = sum((point[i] - origin[i]) * direction[i] for i in range(3))
+        if abs(projection) > 1e-9:
+            self._extrusion_hover_sign = -1 if projection < 0 else 1
+
+    def extrusion_typed_distance(self, value):
+        # MEASURED commands/extrudecrv.htm: preview defines positive distance.
+        # Owner report 121: explicitly negative input keeps its signed meaning.
+        return (value * getattr(self, "_extrusion_hover_sign", 1)
+                if value > 0 else value)
+
     def _parse_distance(self, text, ctx):
         """ExtrudeCrv's distance: a typed number, or a PICKED location.
 
@@ -5446,7 +5465,7 @@ class ExtrudeCmd(_StickyDistanceMixin, Command):
         """
         stripped = (text or "").strip()
         try:
-            return parse_number(stripped)
+            return self.extrusion_typed_distance(parse_number(stripped))
         except ValueError:
             pass                       # not a number -> it should be a location
         geom = self._extrude_curve(ctx)
@@ -6408,6 +6427,23 @@ class LoftCmd(Command):
         return f"Created {display_name} ({style}, {len(curves)} curves)", True
 
 
+def _offset_input_key(geom):
+    """The data an offset depends on, as an immutable value: type, closed flag, domain, degree,
+    order, knots, and control points with weights. Equal keys give equal offsets, so the Offset
+    preview may reuse one. None means "do not cache"."""
+    try:
+        nurbs = geom.ToNurbsCurve()
+        if nurbs is None:
+            return None
+        dom = geom.Domain
+        return (type(geom).__name__, bool(geom.IsClosed), float(dom.T0), float(dom.T1),
+                int(nurbs.Degree), int(nurbs.Order), bool(nurbs.IsRational),
+                tuple(float(k) for k in nurbs.Knots.ToList()),
+                tuple((float(p.X), float(p.Y), float(p.Z), float(p.W)) for p in nurbs.Points))
+    except Exception:  # noqa: BLE001 -- an unreadable curve is simply not cached
+        return None
+
+
 class OffsetCmd(Command):
     name = "Offset"
     description = "Offset a curve by a distance."
@@ -6428,11 +6464,14 @@ class OffsetCmd(Command):
     preselect_names = 1
     #: the sticky Distance (MEASURED: it stays at the last value until changed).
     _sticky_distance = [1.0]
+    #: the live preview's memo keeps this many (input, options) entries, then drops the oldest.
+    _PREVIEW_MEMO_LIMIT = 4
 
     def __init__(self):
         super().__init__()
         self.opt["Distance"] = OffsetCmd._sticky_distance[0]
         self._side_point = None
+        self._preview_memo = {}
     # the top-level options the the reference CAD application 8 help documents for Offset
     # (the command behavior).  Sub-options (Yes/No under Loose, Sharp/Round/
     # Smooth/Chamfer under Corner, Flat/Round under Cap, Current/Input under
@@ -6526,6 +6565,34 @@ class OffsetCmd(Command):
                 return hook if hook is not None else (None, False)
         return super()._feed(text, ctx)
 
+    def _preview_offset_pair(self, geom, dist):
+        """The +dist and -dist offsets of `geom` for the live preview, as independent duplicates
+        (None where an offset is refused).
+
+        Memoised on THIS command instance only. The key is the input's data (`_offset_input_key`)
+        plus everything the offset depends on: distance, Corner, Tolerance and InCPlane. A new
+        command starts empty, so nothing is shared between commands. Returning duplicates means a
+        caller cannot change what the memo holds.
+        """
+        corner = self.opt.get("Corner", "Sharp")
+        tol = self.opt.get("Tolerance", 1e-3) or 1e-3
+        source = _offset_input_key(geom)
+        key = None if source is None else (source, dist, corner, tol, bool(self.opt.get("InCPlane")))
+        pair = self._preview_memo.get(key) if key is not None else None
+        if pair is None:
+            pair = []
+            for d in (dist, -dist):
+                try:
+                    res = bridge.offset_curve(geom, d, corner=corner, tolerance=tol)
+                except ValueError:
+                    res = None
+                pair.append(None if res is None or res.curve is None else res.curve)
+            if key is not None:
+                if len(self._preview_memo) >= self._PREVIEW_MEMO_LIMIT:
+                    self._preview_memo.pop(next(iter(self._preview_memo)))
+                self._preview_memo[key] = pair
+        return [None if c is None else c.Duplicate() for c in pair]
+
     def preview_curves(self, ctx_or_resolve, cursor):
         """The live offset toward `cursor` (display only), as point lists."""
         name = self.args[0] if self.args else None
@@ -6535,17 +6602,12 @@ class OffsetCmd(Command):
             return []
         dist = float(self.opt.get("Distance", 1.0))
         best = None
-        for d in (dist, -dist):
-            try:
-                res = bridge.offset_curve(geom, d, corner=self.opt.get("Corner", "Sharp"),
-                                          tolerance=self.opt.get("Tolerance", 1e-3) or 1e-3)
-            except ValueError:
+        for curve_d in self._preview_offset_pair(geom, dist):
+            if curve_d is None:
                 continue
-            if res.curve is None:
-                continue
-            gap = bridge.distance_to_curve(res.curve, tuple(cursor))
+            gap = bridge.distance_to_curve(curve_d, tuple(cursor))
             if best is None or gap < best[0]:
-                best = (gap, res.curve)
+                best = (gap, curve_d)
         if best is None:
             return []
         curve = best[1]
@@ -8949,25 +9011,46 @@ class ProjectToCPlaneCmd(Command):
                     help="Delete the input objects after creating their projections."),
     )
 
+    def _delete_default(self):
+        return "Yes" if self.opt.get("DeleteInput") else "No"
+
+    def _sync_delete_question(self):
+        # OURS (#114): the bar's label shows the live DeleteInput value, so the option
+        # button and the <default> that Enter takes always agree.
+        self.steps[1] = (f"Delete input objects? <{self._delete_default()}>:", TEXT)
+
+    def begin(self, ctx):
+        self._sync_delete_question()
+        return super().begin(ctx)
+
     @property
     def prompt(self):
         if self.step_index == 1 and self.pending_option is None:
-            return "Delete input objects? <No> ( No  Yes ):"
+            return f"Delete input objects? <{self._delete_default()}> ( No  Yes ):"
         return super().prompt
 
     def _feed(self, text, ctx):
         if self.step_index == 1 and self.pending_option is None:
-            raw = (text or "").strip().lower()
-            if raw in ("", "n", "no"):
-                self.opt["DeleteInput"] = False
-            elif raw in ("y", "yes"):
-                self.opt["DeleteInput"] = True
-            else:
-                return "Please answer No or Yes", False
-            self.args.append(raw)
-            self.step_index = 2
-            return self.execute(ctx)
+            raw = (text or "").strip()
+            answer = raw.lower()
+            if answer in ("y", "yes", "n", "no"):
+                self.opt["DeleteInput"] = answer in ("y", "yes")
+                return self._confirm_delete(answer, ctx)
+            if not raw:
+                return self._confirm_delete("", ctx)     # Enter keeps the current value
+            # a click on the option button, or DeleteInput=Yes/No: toggle and stay here
+            m = opts.match(raw, self.options, self.opt)
+            if m.status != opts.NONE:
+                result = self._apply_option(m, ctx)
+                self._sync_delete_question()
+                return result
+            return "Please answer No or Yes", False
         return super()._feed(text, ctx)
+
+    def _confirm_delete(self, answer, ctx):
+        self.args.append(answer)
+        self.step_index = 2
+        return self.execute(ctx)
 
     def _names(self):
         if not self.args:
@@ -13109,29 +13192,56 @@ def _curve_under_pick(ctx, point, names=None, pick_fraction=0.05):
     as `Radius`: a POINT step carries no pick ray, so the nearest visible curve is
     taken, and refused when the pick is farther from it than `pick_fraction` of its size.
     """
-    import math as _m
-
-    from . import analysis, nearest
+    from . import nearest
 
     best = None
+    tol = _document_tolerance(ctx)
     for nm in (names if names is not None else _visible_names(ctx)):
         geom = ctx.geom_by_name(nm)
         if not isinstance(geom, r3.Curve):
             continue
         try:
-            d = nearest.closest_point_on_curve(
-                geom, point, tolerance=_document_tolerance(ctx)).distance
+            d = nearest.closest_point_on_curve(geom, point, tolerance=tol).distance
         except Exception:  # noqa: BLE001
             continue
         if best is None or d < best[0]:
-            lo, hi = analysis.bounding_box(geom)
-            best = (d, nm, geom, _m.dist((lo.X, lo.Y, lo.Z), (hi.X, hi.Y, hi.Z)))
+            best = (d, nm, geom)
     if best is None:
         return None, "there is no curve to pick"
-    d, nm, geom, size = best
-    if d > max(pick_fraction * size, 1e-9):
+    d, nm, geom = best
+    if not _within_pick_range(geom, d, pick_fraction):
         return None, f"that point is not on a curve (nearest is {nm}, {_num(d)} away)"
     return nm, geom
+
+
+def _within_pick_range(geom, d, pick_fraction):
+    """``d <= max(pick_fraction * size, 1e-9)``, with `size` the diagonal of the curve's tight box.
+
+    The tight box is slow (analysis.curve_bounding_box), so two bounds decide first: the extent
+    of sampled points is at most the true size, and the control-hull box is at least it. The
+    tight box is measured only when those bounds disagree, so the answer is the tight-box test.
+    """
+    import math as _m
+
+    from . import analysis
+
+    def diagonal(lo, hi):
+        return _m.dist((lo[0], lo[1], lo[2]), (hi[0], hi[1], hi[2]))
+
+    dom = geom.Domain
+    samples = [geom.PointAt(dom.T0 + (dom.T1 - dom.T0) * i / 64) for i in range(65)]
+    xs = [p.X for p in samples]
+    ys = [p.Y for p in samples]
+    zs = [p.Z for p in samples]
+    sampled = diagonal((min(xs), min(ys), min(zs)), (max(xs), max(ys), max(zs)))
+    if d <= max(pick_fraction * sampled, 1e-9):
+        return True
+    box = geom.GetBoundingBox()
+    hull = diagonal((box.Min.X, box.Min.Y, box.Min.Z), (box.Max.X, box.Max.Y, box.Max.Z))
+    if d > max(pick_fraction * hull, 1e-9):
+        return False
+    lo, hi = analysis.bounding_box(geom)
+    return d <= max(pick_fraction * diagonal((lo.X, lo.Y, lo.Z), (hi.X, hi.Y, hi.Z)), 1e-9)
 
 
 class _TwoCurveCmd(Command):
@@ -13623,6 +13733,7 @@ class SplitCmd(Command):
         return head + (" (" + "; ".join(report) + ")" if report else ""), True
 
 
+
 class TrimCmd(Command):
     """`Trim` (curves) -- the command behavior.
 
@@ -13714,9 +13825,11 @@ class TrimCmd(Command):
         mine = [c for c in mine if c is not None]
         if not mine:
             return f"Trim: {name} is the only cutting object -- it cannot cut itself", False
-        if len(bridge.split_curve(geom, mine)) < 2:
+        # One split: bridge.trim_curve would intersect the curve with the cutters a second time.
+        pieces = bridge.split_curve(geom, mine)
+        if len(pieces) < 2:
             return f"Trim: the cutting objects do not cross {name}", False
-        pieces = bridge.trim_curve(geom, mine, pick)
+        pieces = bridge.trim_curve(geom, mine, pick, pieces=pieces)
         new = _replace_curve(ctx, name, pieces, keep_selection=True)
         # a trimmed CUTTER keeps cutting (the reference CAD application trims "the cutting objects themselves")
         if any(n.lower() == name.lower() for n in cutters):

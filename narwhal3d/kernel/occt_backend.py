@@ -321,6 +321,108 @@ def _knot_arrays(flat):
     return ka, ma
 
 
+def extrusion_kink_parameters(curve, angle_radians=math.pi / 180.0):
+    """Exact interior G1 breaks, including stationary knot parametrizations.
+
+    MEASURED reference API Curve.GetNextDiscontinuity: default G1 angle is one
+    degree. OCCT evaluates each one-sided derivative at the knot itself. If D1
+    vanishes, the first nonzero Dk defines the limiting tangent; on the LEFT its
+    sign is (-1) ** (k - 1). No nearby samples or angular tolerance changes.
+    """
+    from OCP.Geom import Geom_BSplineCurve
+
+    if not isinstance(curve, Geom_BSplineCurve):
+        return []
+
+    def one_sided_tangent(u, first, last, left_side):
+        for order in range(1, curve.Degree() + 1):
+            tangent = curve.LocalDN(u, first, last, order)
+            if tangent.Magnitude() > 0.0:
+                if left_side and order % 2 == 0:
+                    tangent.Reverse()
+                return tangent
+        raise KernelError(f"extrusion profile has an undefined tangent at {u:g}")
+
+    out = []
+    for i in range(2, curve.NbKnots()):
+        u = curve.Knot(i)
+        # Wrapped/unclamped splines have support knots outside their active
+        # domain. Those are not profile joins and cannot bound native edges.
+        if not curve.FirstParameter() < u < curve.LastParameter():
+            continue
+        # Even a C1 knot can be a geometric cusp when its first derivative is
+        # zero; multiplicity alone cannot establish G1 continuity there.
+        left = one_sided_tangent(u, i - 1, i, True)
+        right = one_sided_tangent(u, i, i + 1, False)
+        if left.Angle(right) >= angle_radians:
+            out.append(u)
+    return out
+
+
+def extrusion_crease_curves(shape):
+    """Exact snap-only crease isocurves, clipped to oriented native face trims.
+
+    UV hatching intersects the actual trim pcurves, including holes, without
+    projecting onto a surface whose profile derivative may vanish at the crease.
+    The master and recipe stay untouched; these curves have no editable edge IDs.
+    """
+    _need()
+    from OCP.BRepAdaptor import BRepAdaptor_Surface, BRepAdaptor_Curve2d
+    from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeEdge
+    from OCP.BRepTools import BRepTools
+    from OCP.Geom import Geom_SurfaceOfLinearExtrusion
+    from OCP.Geom2d import Geom2d_Line
+    from OCP.Geom2dAdaptor import Geom2dAdaptor_Curve
+    from OCP.Geom2dHatch import Geom2dHatch_Hatcher, Geom2dHatch_Intersector
+    from OCP.TopAbs import TopAbs_FORWARD, TopAbs_EDGE
+    from OCP.TopExp import TopExp_Explorer
+    from OCP.TopoDS import TopoDS
+    from OCP.gp import gp_Pnt2d, gp_Dir2d
+
+    out = []
+    for original_face in unique_faces(shape):
+        adaptor = BRepAdaptor_Surface(original_face)
+        surface = adaptor.Surface().Surface()
+        if not isinstance(surface, Geom_SurfaceOfLinearExtrusion):
+            continue
+        u0, u1, _v0, _v1 = BRepTools.UVBounds_s(original_face)
+        parameters = [u for u in extrusion_kink_parameters(surface.BasisCurve())
+                      if u0 < u < u1]
+        if not parameters:
+            continue
+        # Orient a handle, not the master. Preserve wire orientation and BOTH
+        # occurrences of seam edges: unique-edge traversal loses a trim boundary.
+        face = TopoDS.Face(original_face.Oriented(TopAbs_FORWARD))
+        hatcher = Geom2dHatch_Hatcher(
+            Geom2dHatch_Intersector(1e-9, 1e-9), 1e-9, 1e-7)
+        explorer = TopExp_Explorer(face, TopAbs_EDGE)
+        while explorer.More():
+            edge = TopoDS.Edge(explorer.Current())
+            hatcher.AddElement(BRepAdaptor_Curve2d(edge, face), edge.Orientation())
+            explorer.Next()
+        for u in parameters:
+            index = hatcher.AddHatching(Geom2dAdaptor_Curve(
+                Geom2d_Line(gp_Pnt2d(u, 0), gp_Dir2d(0, 1))))
+            hatcher.Trim(index)
+            hatcher.ComputeDomains(index)
+            if not hatcher.IsDone(index):
+                raise KernelError(
+                    f"could not clip extrusion crease at {u:g}: {hatcher.Status(index)}")
+            for i in range(1, hatcher.NbDomains(index) + 1):
+                domain = hatcher.Domain(index, i)
+                if not domain.HasFirstPoint() or not domain.HasSecondPoint():
+                    raise KernelError(f"unbounded extrusion crease trim at {u:g}")
+                first = domain.FirstPoint().Parameter()
+                last = domain.SecondPoint().Parameter()
+                curve = surface.UIso(u).Transformed(adaptor.Trsf())
+                edge = BRepBuilderAPI_MakeEdge(curve, first, last).Edge()
+                for record in edge_curves(edge):
+                    record.pop("index", None)
+                    record["snap_feature"] = "crease-isocurve"
+                    out.append(record)
+    return out
+
+
 def wire_from_curve(profile):
     """A `TopoDS_Wire` for a serialized profile curve. Raises KernelError if unsupported."""
     _need()
@@ -405,6 +507,21 @@ def wire_from_curve(profile):
         # Telling OCCT `periodic=True` with those poles raised "# Poles and degree
         # mismatch", so the flag is not passed on.
         curve = Geom_BSplineCurve(pa, wa, ka, ma, int(profile["degree"]), False)
+        # Versioned at the PROFILE, so nested planar-face/prism recipes replay
+        # identically. Missing/zero keeps the historical one-edge interpretation.
+        version = profile.get("extrusion_kinks", 0)
+        if type(version) is not int or version not in (0, 1):
+            raise KernelError(f"unsupported extrusion kink recipe version {version!r}")
+        if version == 1:
+            parameters = [curve.FirstParameter(), *extrusion_kink_parameters(curve),
+                          curve.LastParameter()]
+            if len(parameters) > 2:
+                maker = BRepBuilderAPI_MakeWire()
+                for first, last in zip(parameters, parameters[1:]):
+                    maker.Add(BRepBuilderAPI_MakeEdge(curve, first, last).Edge())
+                if not maker.IsDone():
+                    raise KernelError("could not join the exact G1 extrusion pieces")
+                return maker.Wire()
         return BRepBuilderAPI_MakeWire(BRepBuilderAPI_MakeEdge(curve).Edge()).Wire()
     except KernelError:
         raise
@@ -2193,6 +2310,31 @@ def volume(shape):
     return props.Mass()
 
 
+def document_kernel_binding():
+    """Actual loaded kernel version and native extension path, not a search candidate."""
+    _need()
+    import OCP
+    from OCP import OCP as binding
+    return (str(OCP.__version__), binding.__file__)
+
+
+def document_kernel_identity():
+    """Identity of the loaded kernel used for process-local admission receipts."""
+    _need()
+    binding = sys.modules.get("OCP.OCP", _ocp)
+    path = getattr(binding, "__file__", None)
+    stat = os.stat(path) if path else None
+    return (str(_ocp.__version__), path,
+            (stat.st_size, stat.st_mtime_ns) if stat is not None else None)
+
+
+def document_validation_threads():
+    """Bound exact validation's native parallel work to two threads in its worker."""
+    _need()
+    from OCP.OSD import OSD_ThreadPool
+    OSD_ThreadPool.DefaultPool_s().Init(2)
+
+
 def document_current_binary_format():
     """Current kernel binary encoding; admission/writer policy lives in document_compat."""
     _need()
@@ -2227,41 +2369,342 @@ def document_exclusive_volume(shape_a, shape_b):
     return 0.0 if result.IsNull() else abs(float(document_schema1_volume(result)))
 
 
-def document_exclusive_volume_pair(shape_a, shape_b):
-    """Exact A-minus-B and B-minus-A, sharing the expensive intersection calculation.
+# Bounds facts are ephemeral worker output, never part of a project/archive.
+from contextlib import contextmanager as _bounds_contextmanager
+from contextvars import ContextVar as _BoundsContextVar
 
-    No approximation or relaxed comparison: OCCT reuses one non-destructive pave
-    filler for both cuts. Previously each direction built its intersections twice.
+MAX_DOCUMENT_BOUNDS_FACTS = 256
+MAX_DOCUMENT_BOUNDS_JSON = 256 * 1024
+MAX_DOCUMENT_BOUNDS_OUTPUTS = 257
+MAX_DOCUMENT_BOUNDS_SHAPE = 256 * 1024 * 1024
+_DOCUMENT_BOUNDS_FILE = "bounds-facts.json"
+_DOCUMENT_BOUNDS_ALGORITHM = "occt-tight-bounds-v1"
+_DOCUMENT_BOUNDS_WRAPPERS = frozenset((
+    "TopoDS_Shape", "TopoDS_Compound", "TopoDS_CompSolid", "TopoDS_Solid",
+    "TopoDS_Shell", "TopoDS_Face", "TopoDS_Wire", "TopoDS_Edge", "TopoDS_Vertex"))
+_document_bounds_active = _BoundsContextVar("document_bounds", default=None)
+
+
+def _document_bounds_identity():
+    from .. import document_admission
+    return document_admission.contract()
+
+
+def _document_bounds_key(shape, encoding):
+    import hashlib
+    wrapper = type(shape).__name__
+    if wrapper not in _DOCUMENT_BOUNDS_WRAPPERS:
+        return None
+    enum = int(shape.ShapeType().value)
+    if not 0 <= enum <= 7:
+        return None
+    data = bytes(shape_to_bytes(shape, triangles=False, format_version=encoding))
+    if not 0 < len(data) <= MAX_DOCUMENT_BOUNDS_SHAPE:
+        return None
+    return (wrapper, enum, len(data), hashlib.sha256(data).hexdigest())
+
+
+def _document_bounds_value(value):
+    if (not isinstance(value, (list, tuple)) or len(value) != 2
+            or any(not isinstance(point, (list, tuple)) or len(point) != 3 for point in value)
+            or any(type(v) not in (int, float) or not math.isfinite(v) for point in value for v in point)):
+        raise ValueError("invalid native bounds fact")
+    result = tuple(tuple(float(v) for v in point) for point in value)
+    if any(a > b for a, b in zip(*result)):
+        raise ValueError("reversed native bounds fact")
+    return result
+
+
+def _document_bounds_digest(path, limit):
+    import hashlib
+    import os
+    import stat
+    if path.is_symlink():
+        raise ValueError("bounds output is a symlink")
+    digest = hashlib.sha256()
+    with os.fdopen(os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)), "rb") as stream:
+        info = os.fstat(stream.fileno())
+        if not stat.S_ISREG(info.st_mode) or not 0 < info.st_size <= limit:
+            raise ValueError("bounds output has unsupported size/type")
+        total = 0
+        while chunk := stream.read(128 * 1024):
+            total += len(chunk)
+            if total > limit:
+                raise ValueError("bounds output exceeded its limit")
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+class DocumentBoundsFacts:
+    """One worker invocation's fresh native measurements; no lookup/reuse here."""
+    def __init__(self, identity):
+        self.identity = identity
+        self.encoding = document_current_binary_format()
+        self.rows = {}
+
+
+def document_measure_bounds(shape, facts, *, parallel=True):
+    """Measure natively even when called from an embedded worker in a parent context."""
+    try:
+        key = (_document_bounds_key(shape, facts.encoding)
+               if len(facts.rows) < MAX_DOCUMENT_BOUNDS_FACTS else None)
+    except Exception:
+        key = None
+    token = _document_bounds_active.set(None)
+    try:
+        value = tight_bbox(shape, parallel=parallel)
+    finally:
+        _document_bounds_active.reset(token)
+    try:
+        if (key is not None and len(facts.rows) < MAX_DOCUMENT_BOUNDS_FACTS
+                and key == _document_bounds_key(shape, facts.encoding)):
+            facts.rows[key] = _document_bounds_value(value)
+    except Exception:
+        pass  # Optional accounting must not change the native measurement's behavior.
+    return value
+
+
+def document_publish_bounds(output, facts, members):
+    """Called ONLY after every worker proof and canonical output has succeeded."""
+    import hashlib
+    import json
+    try:
+        if not facts.rows or not 0 < len(members) <= MAX_DOCUMENT_BOUNDS_OUTPUTS:
+            return None
+        outputs = {name: _document_bounds_digest(output / name, 512 * 1024 * 1024)
+                   for name in members}
+        data = json.dumps({"algorithm": _DOCUMENT_BOUNDS_ALGORITHM,
+                           "identity": facts.identity, "encoding": facts.encoding,
+                           "outputs": outputs,
+                           "facts": [{"key": key, "bounds": value} for key, value in facts.rows.items()]},
+                          allow_nan=False, sort_keys=True, separators=(",", ":")).encode()
+        if len(data) > MAX_DOCUMENT_BOUNDS_JSON:
+            return None
+        (output / _DOCUMENT_BOUNDS_FILE).write_bytes(data)
+        return {"sha256": hashlib.sha256(data).hexdigest(), "bytes": len(data),
+                "identity": facts.identity}
+    except Exception:
+        return None  # Valid projects remain readable without this optimization.
+
+
+@_bounds_contextmanager
+def document_bounds_context():
+    """An empty, bounded Open-local context, cleared on every success/failure/return."""
+    state = {"entries": {}, "identity": None, "encoding": None, "hits": 0, "misses": 0}
+    token = _document_bounds_active.set(state)
+    try:
+        yield state
+    finally:
+        state["entries"].clear()
+        _document_bounds_active.reset(token)
+
+
+def document_accept_bounds(state, output, completion):
+    """Admit facts only at the parent's successful supervised-worker return boundary.
+
+    Completion comes from that process's report, NOT a manifest, environment hint,
+    saved receipt, or a file discovered outside its private validated output.
     """
+    import hashlib
+    import json
+    import os
+    import stat
+    import uuid
+    try:
+        if state is not _document_bounds_active.get():
+            return False
+        state["entries"].clear()
+        if (not isinstance(completion, dict) or set(completion) != {"sha256", "bytes", "identity"}
+                or type(completion["bytes"]) is not int
+                or not 0 < completion["bytes"] <= MAX_DOCUMENT_BOUNDS_JSON):
+            return False
+        path = output / _DOCUMENT_BOUNDS_FILE
+        if path.is_symlink():
+            return False
+        info = path.stat()
+        if not stat.S_ISREG(info.st_mode) or info.st_size != completion["bytes"]:
+            return False
+        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+        with os.fdopen(os.open(path, flags), "rb") as stream:
+            info = os.fstat(stream.fileno())
+            if not stat.S_ISREG(info.st_mode) or info.st_size != completion["bytes"]:
+                return False
+            data = stream.read(MAX_DOCUMENT_BOUNDS_JSON + 1)
+        if (len(data) != completion["bytes"]
+                or hashlib.sha256(data).hexdigest() != completion["sha256"]):
+            return False
+        def unique(pairs):
+            result = {}
+            for key, value in pairs:
+                if key in result:
+                    raise ValueError("duplicate bounds JSON field")
+                result[key] = value
+            return result
+        body = json.loads(data, object_pairs_hook=unique)
+        identity = _document_bounds_identity()
+        if (set(body) != {"algorithm", "identity", "encoding", "outputs", "facts"}
+                or body["algorithm"] != _DOCUMENT_BOUNDS_ALGORITHM
+                or body["identity"] != identity or completion["identity"] != identity
+                or type(body["encoding"]) is not int
+                or body["encoding"] != document_current_binary_format()):
+            return False
+        outputs, rows = body["outputs"], body["facts"]
+        if (not isinstance(outputs, dict) or "document.3dm" not in outputs
+                or not 0 < len(outputs) <= MAX_DOCUMENT_BOUNDS_OUTPUTS
+                or not isinstance(rows, list) or not 0 < len(rows) <= MAX_DOCUMENT_BOUNDS_FACTS):
+            return False
+        for name, digest in outputs.items():
+            if name != "document.3dm" and name != str(uuid.UUID(name[:-5])) + ".brep":
+                return False
+            if _document_bounds_digest(output / name, 512 * 1024 * 1024) != digest:
+                return False
+        entries = {}
+        for row in rows:
+            if not isinstance(row, dict) or set(row) != {"key", "bounds"}:
+                return False
+            key = row["key"]
+            if (not isinstance(key, list) or len(key) != 4
+                    or key[0] not in _DOCUMENT_BOUNDS_WRAPPERS
+                    or type(key[1]) is not int or not 0 <= key[1] <= 7
+                    or type(key[2]) is not int or not 0 < key[2] <= MAX_DOCUMENT_BOUNDS_SHAPE
+                    or not isinstance(key[3], str) or len(key[3]) != 64
+                    or any(c not in "0123456789abcdef" for c in key[3])):
+                return False
+            key = tuple(key)
+            if key in entries:
+                return False
+            entries[key] = _document_bounds_value(row["bounds"])
+        state.update(entries=entries, identity=identity, encoding=body["encoding"])
+        return True
+    except Exception:
+        return False  # Bad/old/missing facts are misses, never a new file-format refusal.
+
+
+def _document_bounds_lookup(shape):
+    state = _document_bounds_active.get()
+    if state is None or not state["entries"]:
+        return None
+    try:
+        if state["identity"] != _document_bounds_identity():
+            state["entries"].clear()
+            return None
+        key = _document_bounds_key(shape, state["encoding"])
+        result = state["entries"].get(key)
+        if result is not None:
+            state["hits"] += 1
+            return tuple(tuple(v for v in point) for point in result)
+    except Exception:
+        pass
+    state["misses"] += 1
+    return None
+
+
+class _DocumentBooleanInvalidResult(KernelError):
+    """A completed native cut returned nonempty invalid geometry, not a proof."""
+
+
+def _document_empty_result(shape):
+    """Only null or an actually empty compound is unconditionally an empty result."""
+    from OCP.TopAbs import TopAbs_COMPOUND
+    from OCP.TopoDS import TopoDS_Iterator
+    return (shape.IsNull() or (shape.ShapeType() == TopAbs_COMPOUND
+                              and not TopoDS_Iterator(shape).More()))
+
+
+def _document_difference_pair(shape_a, shape_b, *, shared=True):
+    """Native bidirectional differences; normally share one intersection filler."""
     from OCP.BRepAlgoAPI import BRepAlgoAPI_Cut
     from OCP.BOPAlgo import BOPAlgo_PaveFiller
     from OCP.collections import List_TopoDS_Shape
-    if shape_a.IsEqual(shape_b):
-        return (0.0, 0.0)
-    arguments = List_TopoDS_Shape()
-    arguments.Append(shape_a)
-    arguments.Append(shape_b)
-    filler = BOPAlgo_PaveFiller()
-    filler.SetArguments(arguments)
-    filler.SetNonDestructive(True)
-    filler.Perform()
-    if filler.HasErrors():
-        raise RuntimeError("exact proxy correlation intersections failed")
-    volumes = []
+    if shared:
+        arguments = List_TopoDS_Shape()
+        arguments.Append(shape_a)
+        arguments.Append(shape_b)
+        filler = BOPAlgo_PaveFiller()
+        filler.SetArguments(arguments)
+        filler.SetNonDestructive(True)
+        filler.SetRunParallel(True)
+        filler.SetUseOBB(True)
+        filler.Perform()
+        if filler.HasErrors():
+            raise RuntimeError("exact proxy correlation intersections failed")
+    results = []
     for source, tool in ((shape_a, shape_b), (shape_b, shape_a)):
         sources, tools = List_TopoDS_Shape(), List_TopoDS_Shape()
         sources.Append(source)
         tools.Append(tool)
-        builder = BRepAlgoAPI_Cut(filler)
+        builder = BRepAlgoAPI_Cut(filler) if shared else BRepAlgoAPI_Cut()
         builder.SetArguments(sources)
         builder.SetTools(tools)
         builder.SetNonDestructive(True)
+        builder.SetRunParallel(True)
+        if not shared:
+            builder.SetUseOBB(True)
         builder.Build()
         if not builder.IsDone():
             raise RuntimeError("exact proxy correlation Boolean failed")
         result = builder.Shape()
-        volumes.append(0.0 if result.IsNull() else abs(float(document_schema1_volume(result))))
-    return tuple(volumes)
+        if not result.IsNull() and not is_valid(result):
+            if not _document_empty_result(result):
+                raise _DocumentBooleanInvalidResult(
+                    "exact correspondence Boolean returned invalid geometry")
+        results.append(result)
+    return tuple(results)
+
+
+def _document_correspondence_differences(shape_a, shape_b):
+    """Retry an invalid cut with exact NURBS copies and independent intersections.
+
+    MEASURED: historical Polysurface31 has valid native operands but invalid cuts;
+    conversion alone with a shared filler still leaves an invalid second result.
+    Fresh non-destructive cuts of exact NURBS copies prove both differences empty.
+    This is another complete native proof, never an acceptance of the failed one.
+    No healing, fuzzy tolerance, meshing, or persisted-master modification occurs.
+    """
+    try:
+        return _document_difference_pair(shape_a, shape_b)
+    except _DocumentBooleanInvalidResult:
+        converted = tuple(_nurbs_convert(shape) for shape in (shape_a, shape_b))
+        for original, candidate in zip((shape_a, shape_b), converted):
+            if (candidate.IsNull() or not is_valid(candidate)
+                    or candidate.ShapeType() != original.ShapeType()
+                    or candidate.Orientation() != original.Orientation()
+                    or face_count(candidate) != face_count(original)):
+                raise KernelError("exact correspondence NURBS conversion failed")
+        return _document_difference_pair(*converted, shared=False)
+
+
+def document_exclusive_volume_pair(shape_a, shape_b):
+    """Exact A-minus-B and B-minus-A volumes with shared native intersections."""
+    if shape_a.IsEqual(shape_b):
+        return (0.0, 0.0)
+    return tuple(0.0 if result.IsNull() else abs(float(document_schema1_volume(result)))
+                 for result in _document_correspondence_differences(shape_a, shape_b))
+
+
+def document_same_open_support(shape_a, shape_b):
+    """Prove complete surface/edge/point support by two empty native differences.
+
+    Volume (or area/length alone) cannot prove correspondence for open geometry.
+    No residual face, edge or vertex is discarded, however small. OCCT uses its
+    original shape tolerances: no sampling, meshing, fuzzy tolerance or healing.
+    Unsupported mixed-dimensional operations raise rather than claiming a proof.
+    """
+    from OCP.TopAbs import TopAbs_FACE, TopAbs_EDGE, TopAbs_VERTEX, TopAbs_COMPOUND
+    from OCP.TopExp import TopExp_Explorer
+    from OCP.TopoDS import TopoDS_Iterator
+    if shape_a.IsEqual(shape_b):
+        return True
+    for result in _document_correspondence_differences(shape_a, shape_b):
+        if result.IsNull():
+            continue
+        if any(TopExp_Explorer(result, kind).More()
+               for kind in (TopAbs_FACE, TopAbs_EDGE, TopAbs_VERTEX)):
+            return False
+        # Only an actually empty compound is an established empty Boolean result.
+        if result.ShapeType() != TopAbs_COMPOUND or TopoDS_Iterator(result).More():
+            raise KernelError("exact open correspondence returned an unrecognized residual")
+    return True
 
 
 def document_planar_normalized_types(shape, tolerance):
@@ -4875,7 +5318,7 @@ def shape_from_bytes(data, as_type="TopoDS_Shape"):
     return shape
 
 
-def tight_bbox(shape):
+def tight_bbox(shape, *, parallel=False):
     """``((xmin, ymin, zmin), (xmax, ymax, zmax))`` of `shape`, TIGHT on its surfaces.
 
     MEASURED on box-union-cylinder (truth 0..13 x 0..10 x 0..10): `BRepBndLib.Add_s`
@@ -4893,8 +5336,13 @@ def tight_bbox(shape):
     cone, sphere, torus), each of the six bounds is MEASURED exactly instead: the distance
     (`BRepExtrema_DistShapeShape`) from a plane parallel to that side, placed well outside,
     gives the extreme point on that side. Elementary-only shapes keep the fast path, which
-    was measured exact for them.
+    was measured exact for them. ``parallel`` opts into native distance-query
+    threading only; callers must first bound OCCT's worker pool. The default
+    remains serial and both paths measure the same six extrema.
     """
+    reused = _document_bounds_lookup(shape)
+    if reused is not None:
+        return reused
     _need()
     from OCP.Bnd import Bnd_Box
     from OCP.BRepBndLib import BRepBndLib
@@ -4906,14 +5354,14 @@ def tight_bbox(shape):
     lo, hi = [a.X(), a.Y(), a.Z()], [b.X(), b.Y(), b.Z()]
     if set(face_types(shape)) <= set(ELEMENTARY_FACE_TYPES):
         return tuple(lo), tuple(hi)
-    return _exact_bounds(shape, lo, hi)
+    return _exact_bounds(shape, lo, hi, parallel=parallel)
 
 
 #: Face types whose `AddOptimal_s` box is exact (MEASURED, see `tight_bbox`).
 ELEMENTARY_FACE_TYPES = ("PLANE", "CYLINDER", "CONE", "SPHERE", "TORUS")
 
 
-def _exact_bounds(shape, lo, hi):
+def _exact_bounds(shape, lo, hi, *, parallel=False):
     """The six bounds of `shape`, each the exact distance to a far plane (see `tight_bbox`).
     `lo`/`hi` is a first estimate; the planes are placed a full span beyond it, so an
     estimate that is short (the defect being fixed) cannot put a plane inside the shape."""
@@ -4921,6 +5369,12 @@ def _exact_bounds(shape, lo, hi):
     from OCP.BRepExtrema import BRepExtrema_DistShapeShape
     from OCP.gp import gp_Dir, gp_Pln, gp_Pnt
 
+    # The document worker explicitly opts in after bounding OCCT's native pool.
+    # Reuse only this invocation's loaded source; each plane is still solved exactly.
+    if parallel:
+        distance = BRepExtrema_DistShapeShape()
+        distance.SetMultiThread(True)
+        distance.LoadS1(shape)
     span = max(h - l for l, h in zip(lo, hi)) + 1.0
     mid = [(l + h) / 2.0 for l, h in zip(lo, hi)]
     out_lo, out_hi = list(lo), list(hi)
@@ -4933,8 +5387,14 @@ def _exact_bounds(shape, lo, hi):
             normal[ax] = 1.0
             face = BRepBuilderAPI_MakeFace(gp_Pln(gp_Pnt(*origin), gp_Dir(*normal)),
                                            -4 * span, 4 * span, -4 * span, 4 * span).Face()
-            ext = BRepExtrema_DistShapeShape(shape, face)
-            ext.Perform()
+            if parallel:
+                distance.LoadS2(face)
+                distance.Perform()
+                ext = distance
+            else:
+                ext = BRepExtrema_DistShapeShape(shape, face)
+            if not ext.IsDone():
+                ext.Perform()
             if not ext.IsDone():
                 continue                     # keep the estimate for this side
             if sign < 0:

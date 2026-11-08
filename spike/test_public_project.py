@@ -11,7 +11,9 @@ import re
 import struct
 import subprocess
 import sys
+import tempfile
 import tomllib
+from unittest.mock import patch
 from urllib.parse import unquote, urlsplit
 import zlib
 
@@ -122,9 +124,34 @@ def public_completeness_checks():
           missing_checks)
     check(not any(path.startswith(("docs/agent_tasks/", "docs/automation/", "docs/surfacing/",
                                   "tmp/", "artifacts/", "vendor/", "tools/"))
-                  or "/target/" in path or path.endswith((".so", ".dll", ".exe", ".pyc"))
+                  or "/target/" in path
+                  or path.endswith((".so", ".dll", ".dylib", ".pyd", ".exe", ".pyc", ".receipt.json"))
+                  or (path.startswith("narwhal3d/native/") and path != "narwhal3d/native/.gitignore")
                   for path in public),
           "native closure does not admit private notes, scratch data or runtime binaries")
+    # Temporary tree shaped like the release runtime directory. The real binaries are
+    # never read, moved or deleted: the walk is pointed at the fixture alone.
+    with tempfile.TemporaryDirectory(prefix="narwhal3d-export-fixture-") as fixture_directory:
+        fixture = Path(fixture_directory)
+        fixture_files = (
+            "narwhal3d/commands.py", "narwhal3d/native/.gitignore",
+            "narwhal3d/native/libfake_pure_core.so", "narwhal3d/native/fake_selection_core.dll",
+            "narwhal3d/native/libfake_pure_core.dylib", "narwhal3d/native/fake_core.pyd",
+            "narwhal3d/native/libfake_pure_core.receipt.json",
+            "narwhal3d/native/document-observer/_fake_observer.so",
+            "narwhal3d/native/document-observer/manifest.json",
+            "narwhal3d/kernel/bin/brep_writer-linux-x86_64",
+            "narwhal3d/stray/fake.so", "narwhal3d/stray/fake.dll", "narwhal3d/stray/fake.dylib",
+            "narwhal3d/stray/fake.pyd", "narwhal3d/stray/fake.receipt.json",
+        )
+        for relative in fixture_files:
+            (fixture / relative).parent.mkdir(parents=True, exist_ok=True)
+            (fixture / relative).write_bytes(b"fake\n")
+        with patch.object(builder, "ROOT", fixture):
+            exported = builder.recursive_files("narwhal3d")
+    check(set(exported) == {"narwhal3d/commands.py", "narwhal3d/native/.gitignore"},
+          "export walk keeps sources and the native ignore policy, never runtime outputs",
+          sorted(exported))
     # Exercise source references that are NOT already in either static manifest.
     # This prevents a new conditional suite or transitive fixture from escaping
     # merely because the harness audit and this caller share discovery code.

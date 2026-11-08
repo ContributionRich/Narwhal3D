@@ -317,6 +317,95 @@ RECIPE_KEY = "Narwhal3D:Recipe"
 #: healthy. STEP export would have shipped the wrong part. A stale key must be able to resolve
 #: to NOTHING, never to something else, and only a globally unique id guarantees that.
 _MASTERS = {}
+_MASTER_MANAGED = set()
+_MASTER_PINNED = set()
+_LIFETIME_UNSET = object()
+_MASTER_LIFETIME = _LIFETIME_UNSET
+_MASTER_LIFETIME_REASON = 'not queried'
+
+
+def master_lifetime():
+    """Qualified native ownership, or conservative strong retention (never weak GC).
+
+    Python bridges the host/OCCT lifetimes; only the pinned native host can observe
+    C++ copies and destruction. Windows and missing/old receipts keep strong masters.
+    """
+    import threading
+    global _MASTER_LIFETIME, _MASTER_LIFETIME_REASON
+    if _MASTER_LIFETIME is _LIFETIME_UNSET:
+        if threading.current_thread() is not threading.main_thread():
+            return None
+        try:
+            from .. import native_document_observer
+            observer = native_document_observer.load_observer()
+            _MASTER_LIFETIME = observer.master_lifetime()
+            _MASTER_LIFETIME_REASON = observer.master_lifetime_status()['reason']
+        except Exception as exc:  # Unsupported hosts must retain, never guess ownership.
+            _MASTER_LIFETIME = None
+            _MASTER_LIFETIME_REASON = 'NOT_QUALIFIED: ' + type(exc).__name__
+    return _MASTER_LIFETIME
+
+
+def master_lifetime_status():
+    lifetime = master_lifetime()
+    return {'available': lifetime is not None, 'reason': _MASTER_LIFETIME_REASON,
+            'masters': len(_MASTERS), 'managed': len(_MASTER_MANAGED),
+            'conservative': len(_MASTER_PINNED),
+            'native': lifetime.stats() if lifetime is not None else None}
+
+
+def collect_masters():
+    """Drain native last-owner notifications on the main thread only.
+
+    No document scan, count eviction, Python-wrapper weakrefs, or unknown-key pruning.
+    OCCT shapes are destroyed here, never from a native userdata destructor.
+    """
+    import threading
+    if threading.current_thread() is not threading.main_thread():
+        return 0
+    lifetime = master_lifetime()
+    if lifetime is None:
+        return 0
+    removed = 0
+    for key in lifetime.drain():
+        if key in _MASTER_MANAGED and key not in _MASTER_PINNED:
+            removed += _MASTERS.pop(key, None) is not None
+        _MASTER_MANAGED.discard(key)
+    _MASTER_PINNED.intersection_update(_MASTERS)
+    return removed
+
+
+def _bind_master_owner(proxy, key):
+    import threading
+    lifetime = master_lifetime()
+    if lifetime is None or threading.current_thread() is not threading.main_thread():
+        _MASTER_PINNED.add(key)
+        return
+    # A non-Brep/custom compatibility object has no qualified native route.
+    # Never turn that lack of evidence into permission to reclaim its master.
+    import rhino3dm
+    if type(proxy) is not rhino3dm.Brep:
+        _MASTER_PINNED.add(key)
+        return
+    lifetime.bind(proxy, key)
+    _MASTER_MANAGED.add(key)
+
+
+class _MasterRegistrySnapshot(dict):
+    """Rollback values also explicitly own managed master leases, not just tags."""
+
+    def __init__(self):
+        super().__init__(_MASTERS)
+        self._owners = []
+        lifetime = master_lifetime()
+        if lifetime is not None:
+            for key in self:
+                if key in _MASTER_MANAGED:
+                    owner = lifetime.hold_key(key)
+                    if owner is None:
+                        _MASTER_PINNED.add(key)
+                    else:
+                        self._owners.append(owner)
 
 
 def record_recipe(geom, recipe):
@@ -365,6 +454,7 @@ def register_master(proxy, shape):
     """
     import uuid
 
+    collect_masters()
     key = f"m-{uuid.uuid4().hex}"
     _MASTERS[key] = shape
     setter = getattr(proxy, "SetUserString", None)
@@ -373,13 +463,15 @@ def register_master(proxy, shape):
             setter(MASTER_KEY, key)
             setter(REPRESENTATION_KEY, ANALYTIC_MASTER)
         except Exception:  # noqa: BLE001
-            pass
+            _MASTER_PINNED.add(key)
+            return key
+    _bind_master_owner(proxy, key)
     return key
 
 
 def master_registry_snapshot():
     """Opaque copy used to roll back a failed document publication."""
-    return dict(_MASTERS)
+    return _MasterRegistrySnapshot()
 
 
 def discard_master_binding(key, shape):
@@ -390,23 +482,26 @@ def discard_master_binding(key, shape):
     """
     if key and _MASTERS.get(key) is shape:
         del _MASTERS[key]
+        _MASTER_MANAGED.discard(key)
+        _MASTER_PINNED.discard(key)
         return True
     return False
 
 
 def restore_master_registry(snapshot):
     """Restore a snapshot produced by :func:`master_registry_snapshot`."""
-    _MASTERS.clear()
+    # Rollback must not invalidate an independently retained model or copy.
     _MASTERS.update(dict(snapshot or {}))
+    collect_masters()
 
 
 def replace_document_masters(bindings):
-    """Atomically replace the process registry after a candidate document validates.
+    """Atomically publish a validated document without invalidating other owners.
 
     ``bindings`` contains ``(proxy, exact_shape)`` pairs from one complete document.
-    Candidate proxy tags are prepared first; only when every setter succeeds is the
-    global registry swapped in one operation. The prior document remains authoritative
-    throughout failed Open attempts.
+    Candidate tags and native ownership are prepared before publishing the new keys.
+    Prior models, copies and history keep their bindings until native last-owner release.
+    Unsupported hosts retain those prior bindings conservatively.
     """
     import uuid
 
@@ -426,8 +521,12 @@ def replace_document_masters(bindings):
             raise RuntimeError(f"could not prepare exact master binding: {exc}") from exc
         prepared.append((proxy, key))
         fresh[key] = shape
-    _MASTERS.clear()
+    # Native geometry copies, other models, and Undo may still own prior keys.
+    # Prepare all ownership before publication, retaining unknown hosts strongly.
+    for proxy, key in prepared:
+        _bind_master_owner(proxy, key)
     _MASTERS.update(fresh)
+    collect_masters()
     return len(prepared)
 
 
@@ -453,7 +552,16 @@ def master_of(geom):
         return None
     if not key:
         return None
-    return _MASTERS.get(key)
+    shape = _MASTERS.get(key)
+    if shape is not None and key in _MASTER_MANAGED:
+        import threading
+        lifetime = master_lifetime()
+        if (lifetime is None or threading.current_thread() is not threading.main_thread()
+                or lifetime.key(geom) != key):
+            # Encode/Decode and file reads intentionally lose nonpersisted userdata.
+            # Such an unowned alias is not evidence that the master may be reclaimed.
+            _MASTER_PINNED.add(key)
+    return shape
 
 
 def drop_master(geom):
@@ -472,8 +580,10 @@ def drop_master(geom):
     if not callable(setter):
         return False
     key = master_key_of(geom)
-    if key is not None:
-        _MASTERS.pop(key, None)
+    lifetime = master_lifetime()
+    if lifetime is not None and key in _MASTER_MANAGED:
+        lifetime.unbind(geom)
+    # Detaching this proxy must not invalidate another copy with the same key.
     try:
         setter(MASTER_KEY, "")
         setter(REPRESENTATION_KEY, MESH_DERIVED if looks_tessellated(geom) else ANALYTIC)
@@ -483,8 +593,10 @@ def drop_master(geom):
 
 
 def forget_masters():
-    """Drop every registered master (a new/closed document). Tests use it too."""
+    """Explicit destructive process-reset for round-trip tests, NOT document-close GC."""
     _MASTERS.clear()
+    _MASTER_MANAGED.clear()
+    _MASTER_PINNED.clear()
 
 
 #: The user-string key on a master-backed document object saying which FORM the .3dm

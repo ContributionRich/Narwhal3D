@@ -31,6 +31,7 @@ EXPECTED_EXPORTS = (
     "narwhal_intersection_snaps_f64",
     "narwhal_nearest_projected_curve_f32",
     "narwhal_nearest_projected_point_f64",
+    "narwhal_nearest_projected_polylines_clipped_f64",
     "narwhal_nearest_projected_polylines_f64",
     "narwhal_nearest_projected_sample_f64",
     "narwhal_nearest_screen_polyline_f64",

@@ -188,8 +188,11 @@ def _newton(ca, cb, t_a, t_b, iters=20):
         if step is None:
             break                       # singular (parallel) -> tangency
         dta, dtb = step
-        t_a = _clamp(t_a - dta, da.T0, da.T1)
-        t_b = _clamp(t_b - dtb, db.T0, db.T1)
+        next_a = _clamp(t_a - dta, da.T0, da.T1)
+        next_b = _clamp(t_b - dtb, db.T0, db.T1)
+        if next_a == t_a and next_b == t_b:
+            break                       # fixed point: the remaining iterations would repeat it
+        t_a, t_b = next_a, next_b
     Pa, Pb = ca.PointAt(t_a), cb.PointAt(t_b)
     gap = math.dist((Pa.X, Pa.Y, Pa.Z), (Pb.X, Pb.Y, Pb.Z))
     mid = ((Pa.X + Pb.X) / 2, (Pa.Y + Pb.Y) / 2, (Pa.Z + Pb.Z) / 2)
@@ -236,6 +239,32 @@ def _velocity(c, t):
 # overlap detection
 # ---------------------------------------------------------------------------
 
+def _beyond_box(p, box, tol):
+    """True when `p` lies more than `tol` outside `box` along some axis.
+
+    `box` is rhino3dm's ``GetBoundingBox`` of a curve, which contains the whole curve (for a
+    NURBS curve it is the control hull). Such a point is therefore more than `tol` from the
+    curve, and the closest-point solve would also answer "not on it".
+    """
+    lo, hi = box.Min, box.Max
+    return (p.X < lo.X - tol or p.X > hi.X + tol or p.Y < lo.Y - tol or p.Y > hi.Y + tol
+            or p.Z < lo.Z - tol or p.Z > hi.Z + tol)
+
+
+def _prepared(curve):
+    """A `nearest.PreparedCurve` of `curve`, packed once for one operation's many queries.
+
+    None when the exact solver is unavailable; the callers then take the sampled route.
+    """
+    near = _nearest()
+    if near is None:
+        return None
+    try:
+        return near.PreparedCurve(curve)
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def _detect_overlap(a, b, tol, samples=120, run=3):
     """Return one overlap CurveX if a contiguous run of `a` lies on `b`, else None.
 
@@ -244,11 +273,16 @@ def _detect_overlap(a, b, tol, samples=120, run=3):
     mere touch. Short overlaps below the sample spacing are missed (documented).
     """
     da = a.Domain
+    prepared = _prepared(b)
+    box = b.GetBoundingBox()
     on = []
     for i in range(samples + 1):
         t = da.T0 + (da.T1 - da.T0) * i / samples
         p = a.PointAt(t)
-        on.append(_dist_point_to_curve(b, (p.X, p.Y, p.Z)) <= tol)
+        if _beyond_box(p, box, tol):
+            on.append(False)            # too far from b to lie on it: no closest-point solve
+            continue
+        on.append(_dist_point_to_curve(b, (p.X, p.Y, p.Z), prepared=prepared) <= tol)
     # longest contiguous run of True
     best_i = best_len = cur_i = cur_len = 0
     for i, flag in enumerate(on):
@@ -265,23 +299,25 @@ def _detect_overlap(a, b, tol, samples=120, run=3):
     t0 = da.T0 + (da.T1 - da.T0) * best_i / samples
     t1 = da.T0 + (da.T1 - da.T0) * (best_i + best_len - 1) / samples
     pa0 = a.PointAt(t0)
-    tb0 = _closest_param(b, (pa0.X, pa0.Y, pa0.Z))
+    tb0 = _closest_param(b, (pa0.X, pa0.Y, pa0.Z), prepared=prepared)
     pa1 = a.PointAt(t1)
-    tb1 = _closest_param(b, (pa1.X, pa1.Y, pa1.Z))
+    tb1 = _closest_param(b, (pa1.X, pa1.Y, pa1.Z), prepared=prepared)
     return CurveX((pa0.X, pa0.Y, pa0.Z), t0, tb0, overlap=True,
                   t_a_end=t1, t_b_end=tb1)
 
 
-def _dist_point_to_curve(curve, p, samples=200):
+def _dist_point_to_curve(curve, p, samples=200, prepared=None):
     """Distance from `p` to the closest point on `curve`.
 
     Uses the exact solver `nearest.closest_point_on_curve`, whose tolerance comes from
     `units.py`; the old coarse-sample estimate survives only as a fallback if that route
-    raises.
+    raises. `prepared` is `_prepared(curve)`, the same solver with the curve packed once.
     """
     near = _nearest()
     if near is not None:
         try:
+            if prepared is not None:
+                return prepared.closest(p).distance
             return near.closest_point_on_curve(curve, p).distance
         except Exception:  # noqa: BLE001
             pass
@@ -289,18 +325,20 @@ def _dist_point_to_curve(curve, p, samples=200):
     return math.dist(p, (q.X, q.Y, q.Z))
 
 
-def _closest_param(curve, p, samples=200):
+def _closest_param(curve, p, samples=200, prepared=None):
     """Parameter of the closest point on `curve` to `p`.
 
     Delegates to the exact `nearest.closest_point_on_curve`. The old
     coarse-sample-then-golden-section estimate below seeded both this function and the
     overlap detector from 200 uniform samples, which can bracket the wrong local minimum
     when the true closest point falls between samples. It survives only as a fallback
-    when the exact route raises.
+    when the exact route raises. `prepared` is as for :func:`_dist_point_to_curve`.
     """
     near = _nearest()
     if near is not None:
         try:
+            if prepared is not None:
+                return prepared.closest(p).t
             return near.closest_point_on_curve(curve, p).t
         except Exception:  # noqa: BLE001
             pass
@@ -500,15 +538,17 @@ def split_curve_at_params(curve, params):
     return pieces
 
 
-def trim_curve_by(curve, cutters, keep_point, tol=1e-6):
+def trim_curve_by(curve, cutters, keep_point, tol=1e-6, pieces=None):
     """the reference CAD application's Trim: split by `cutters`, then DISCARD the piece the user clicked.
 
     `keep_point` is the location clicked to "trim away" (commands/trim.htm: "Select
     the parts ... to trim away"), so the piece nearest it is removed and the rest
     returned. Returns the curve unchanged (single-element list) when nothing cut
-    it.
+    it. `pieces`, when given, is ``split_curve_by(curve, cutters, tol)`` already computed
+    for these arguments; passing it skips a second intersection pass.
     """
-    pieces = split_curve_by(curve, cutters, tol)
+    if pieces is None:
+        pieces = split_curve_by(curve, cutters, tol)
     if len(pieces) <= 1:
         return pieces
     drop = min(range(len(pieces)),

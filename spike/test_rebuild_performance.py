@@ -145,6 +145,9 @@ class ReferencePrepared:
         with python_only():
             return nearest.closest_point_on_curve(self._curve, point, tolerance)
 
+    def closest_many(self, points, tolerance=None):
+        return [self.closest(q, tolerance) for q in points]
+
 
 def circle_nurbs():
     return r3.Circle(r3.Point3d(1, 2, 0), 5.0).ToNurbsCurve()
@@ -415,19 +418,45 @@ check(fast_speed.calls <= MAX_DERIVATIVES_FOR_60_INVERSIONS,
 print("\n-- rebuild: 100 points on a 43-span closed curve, operation counts and time --")
 curve = closed_43_spans()
 samples = 2000                                         # max(20 * 100, 400)
+class CountTargets(Patch):
+    """Count the targets passed to `native.search_many` while still running it."""
+
+    def __init__(self):
+        self.calls = self.targets = 0
+        super().__init__(native, "search_many", None)
+
+    def __enter__(self):
+        self.saved = native.search_many
+
+        def counted(packed, targets):
+            targets = list(targets)
+            self.calls += 1
+            self.targets += len(targets)
+            return self.saved(packed, targets)
+
+        native.search_many = counted
+        return self
+
+
 with Count(arclength, "_prepare") as tables, Count(nearest, "_native_pack") as packs, \
-        Count(native, "search") as searches:
+        Count(native, "search") as searches, CountTargets() as batches:
     started = time.perf_counter()
     rebuilt, info = rebuild.rebuild_curve(curve, 100, 3)
     elapsed = time.perf_counter() - started
 fits = rebuild.PARAM_ITERATIONS + 1
-print(f"       {tables.calls} arc-length tables, {packs.calls} packs, {searches.calls} native searches, "
-      f"{elapsed:.2f} s")
+print(f"       {tables.calls} arc-length tables, {packs.calls} packs, {batches.targets} native searches "
+      f"in {batches.calls} batches ({searches.calls} single), {elapsed:.2f} s")
 check(tables.calls == 3, "one arc-length table for the samples, one per max_deviation direction")
 check(packs.calls == fits + 2,
       f"one pack per fit ({fits}) plus one per max_deviation direction, none per sample")
-check(searches.calls == fits * samples + 2 * 200,
-      "every closest query of the fits and the deviation check reaches the native search")
+if native.batch_capability() == "qualified":
+    check(searches.calls == 0 and batches.calls == fits + 2
+      and batches.targets == fits * samples + 2 * 200,
+      "every closest query of the fits and the deviation check reaches the native search, "
+      "one batch per prepared curve")
+else:
+    check(searches.calls == fits * samples + 2 * 200,
+          "off the qualified platform every closest query is a single native search")
 check(rebuilt.IsValid and info["point_count"] == 100, "the 100-point rebuild is valid")
 check(elapsed < 10.0, f"100-point rebuild under 10 s ({elapsed:.2f} s)")
 

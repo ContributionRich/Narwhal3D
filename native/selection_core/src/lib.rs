@@ -6,6 +6,8 @@
 
 use std::{collections::HashSet, mem, ptr, slice};
 
+mod snap_clip;
+
 const ABI_VERSION: u32 = 1;
 const ERR_NULL: i32 = -1;
 const ERR_INPUT: i32 = -2;

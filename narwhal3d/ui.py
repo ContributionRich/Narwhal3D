@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import math
 import os
+import sys
 
 import bpy
 from bpy.props import BoolProperty, EnumProperty, StringProperty
@@ -45,6 +46,7 @@ from . import coords
 from . import pickconstraint
 from . import ortho
 from . import printdialog
+from . import workspace_overlay
 from . import bugreport
 from . import ai_assistant
 from . import ai_presentation
@@ -3043,6 +3045,29 @@ def right_band_present():
     return right_band_area() is not None
 
 
+#: Right clicks the right dock has claimed (PRESS and RELEASE). Read by the GUI suite
+#: `spike/test_right_dock_rmb_gui.py`.
+_right_dock_rmb_claims = 0
+
+
+def claim_right_dock_click(event):
+    """True, and counted, when a right click lands on the right dock band.
+
+    The dock has no context menu of its own, so Blender's native one must never open
+    on its empty space. Viewports are untouched: only the band's WINDOW region counts.
+    """
+    global _right_dock_rmb_claims
+    if event.type != "RIGHTMOUSE":
+        return False
+    area = right_band_area()
+    region = next((r for r in area.regions if r.type == "WINDOW"), None) if area else None
+    if region is None or not (region.x <= event.mouse_x < region.x + region.width
+                              and region.y <= event.mouse_y < region.y + region.height):
+        return False
+    _right_dock_rmb_claims += 1
+    return True
+
+
 def right_tab_index():
     """Which of `rightpanel.TABS` is showing."""
     return _right_tab
@@ -4953,9 +4978,9 @@ def draw_curves():
             gpu.state.depth_mask_set(True)
 
 
-def pick_curve_object(area, space, region, rx, ry, tolerance=CURVE_PICK_PX):
+def pick_curve_object(area, space, region, rx, ry, tolerance=CURVE_PICK_PX, exclude=()):
     """The name of the curve whose DRAWN polyline passes nearest region pixel (rx, ry)
-    within `tolerance` pixels, or None.
+    within `tolerance` pixels, or None. Curves named in `exclude` are not candidates.
 
     Blender's `view3d.select` cannot hit a curve any more (Blender does not draw them),
     so curves get their own picker. It tests the very coordinates `draw_curves`
@@ -4993,10 +5018,10 @@ def pick_curve_object(area, space, region, rx, ry, tolerance=CURVE_PICK_PX):
                                  mouse, tolerance)
         for i in np.flatnonzero(keep):
             n = names[i]
-            if n not in dirty and n not in locked:
+            if n not in dirty and n not in locked and n not in exclude:
                 cands.append((n, st["recs"].get(n)))
     for n in dirty:
-        if n not in hidden and n not in locked:
+        if n not in hidden and n not in locked and n not in exclude:
             cands.append((n, _curve_record(bpy.data.objects.get(n))))
     measurable = [(n, rec) for n, rec in cands if rec is not None and rec["n"]]
     native_pick = native_selection.nearest_projected_curve(
@@ -7620,6 +7645,7 @@ def _overlay_paint_region(window_level):
 def _draw_window_chrome():
     draw_sidebar_tooltip_overlay(window_level=True)
     draw_sidebar_flyout_overlay(window_level=True)
+    draw_print_dialog()
 
 
 def draw_sidebar_tooltip_overlay(window_level=False):
@@ -8474,7 +8500,8 @@ def _command_hover(cmd, mouse_x, mouse_y, alt=False, shift=False):
                           first_point=_snap_base(cmd) is None,
                           suspend=alt,
                           base=_snap_base(cmd),
-                          grid_axis=axis_constraint)
+                          grid_axis=axis_constraint,
+                          mouse_region=(mouse_x - region.x, mouse_y - region.y))
         changed = set_active_snap(snapped,
                                   _pane_key(area) if area else None)
         # the preview should follow the SNAPPED point, or it would show
@@ -8485,6 +8512,9 @@ def _command_hover(cmd, mouse_x, mouse_y, alt=False, shift=False):
         # remember the unconstrained marker, then constrain it
         _constraint_cursor = effective
         effective = constrain_pick(cmd, effective)
+        extrusion_hover = getattr(cmd, "update_extrusion_hover", None)
+        if callable(extrusion_hover):
+            extrusion_hover(effective, axis_constraint)
         # a size being TYPED shapes the preview too
         sized = typed_size_cursor(cmd, effective, area)
         if sized is not None:
@@ -8682,6 +8712,8 @@ class NARWHAL_OT_command_input(Operator):
                 if inside:
                     return {"RUNNING_MODAL"}
                 sidebar_flyout_close()
+        if claim_right_dock_click(event):
+            return {"RUNNING_MODAL"}
         # Chat/report text fields own drags and keyboard while focused; input never
         # falls through into commands or viewport interaction.
         if _ai["state"].extra.get("dragging") and ai_panel_open():
@@ -9274,6 +9306,12 @@ class NARWHAL_OT_command_input(Operator):
                     axis_constraint = _command_axis_constraint(cmd, area)
                     pt = pick_point(area, sp, region, rx, ry,
                                     constraint=axis_constraint)
+                    snapped = snap_at(area, sp, region, pt,
+                                      first_point=_snap_base(cmd) is None,
+                                      suspend=event.alt, base=_snap_base(cmd),
+                                      grid_axis=axis_constraint, mouse_region=(rx, ry))
+                    if snapped is not None:
+                        pt = snapped.point
                     if pt is not None:
                         trim_drag_latched = (_trim_drag_command(cmd)
                                              and pick_curve_object(
@@ -9282,11 +9320,6 @@ class NARWHAL_OT_command_input(Operator):
                         # "the object snaps constrain the marker to an exact
                         # location on an object". Alt suspends snapping for this
                         # pick, per the reference CAD application documentation.
-                        snapped = snap_at(area, sp, region, pt,
-                                          first_point=_snap_base(cmd) is None,
-                                          suspend=event.alt,
-                                          base=_snap_base(cmd),
-                                          grid_axis=axis_constraint)
                         if snapped is not None:
                             pt = snapped.point
                         else:
@@ -12451,7 +12484,7 @@ def _rebuild_counts_changed(self, context, last_set):
         self.point_count, self.degree = n, p
         if _rebuild_window is not None:
             _rebuild_window["preview"] = ()
-            _rebuild_window["message"] = "Settings changed; click Preview"
+            _rebuild_window["message"] = "Settings changed"
         _tag_redraw_viewports()
     finally:
         self._adjusting_counts = False
@@ -14011,6 +14044,9 @@ def typed_size_cursor(cmd, cursor, area=None):
     axis = _command_axis_constraint(cmd, area or active_pane_area())
     if axis is not None:
         (ox, oy, oz), d = axis
+        extrusion_distance = getattr(cmd, "extrusion_typed_distance", None)
+        if callable(extrusion_distance):
+            value = extrusion_distance(value)
         return (ox + d[0] * value, oy + d[1] * value, oz + d[2] * value)
     base_fn = getattr(cmd, "_distance_base", None)
     base = base_fn() if callable(base_fn) else None
@@ -15759,7 +15795,8 @@ def _grid_snap_axis_point(cursor, axis_constraint, spacing):
 
 
 def snap_at(area, space, region, cursor_world, first_point=False, suspend=False,
-            exclude_names=(), base=None, grid_axis=None, grid_3d=False):
+            exclude_names=(), base=None, grid_axis=None, grid_3d=False,
+            mouse_region=None):
     """The snap for a cursor at `cursor_world` in this pane, or None.
 
     Ties the pieces together: the pane's CPlane decides `Quad` and `Project`, the
@@ -15774,7 +15811,7 @@ def snap_at(area, space, region, cursor_world, first_point=False, suspend=False,
     grab: it made the second click of a `Line` jump back onto the first.
     """
     modes = _snap_settings.active(suspend=suspend, first_point=first_point)
-    if cursor_world is None or suspend:
+    if suspend or (cursor_world is None and mouse_region is None):
         return None
     plane = get_cplane(area)
     rv3d = getattr(space, "region_3d", None) if space is not None else None
@@ -15789,6 +15826,15 @@ def snap_at(area, space, region, cursor_world, first_point=False, suspend=False,
         from mathutils import Vector
     except Exception:  # noqa: BLE001
         return None
+
+    # A visible object can be snapped even when its mouse ray is parallel to
+    # the CPlane (or intersects that plane behind the eye). The viewport API
+    # supplies a point on the same ray solely for screen scoring, never a pick.
+    plane_cursor = cursor_world
+    if cursor_world is None:
+        anchor = v3u.region_2d_to_location_3d(
+            region, rv3d, mouse_region, rv3d.view_location)
+        cursor_world = tuple(anchor)
 
     def project(point):
         q = v3u.location_3d_to_region_2d(region, rv3d, Vector(point))
@@ -15820,7 +15866,7 @@ def snap_at(area, space, region, cursor_world, first_point=False, suspend=False,
 
             matrix = np.asarray(rv3d.perspective_matrix, dtype=np.float64)
             return native_selection.nearest_projected_polylines(
-                polylines, matrix, region.width, region.height, mouse)
+                polylines, matrix, region.width, region.height, mouse, clipped=True)
         except Exception:  # noqa: BLE001 -- scalar Near remains authoritative
             return None
 
@@ -15838,7 +15884,7 @@ def snap_at(area, space, region, cursor_world, first_point=False, suspend=False,
     # Only objects whose extent projects within the radius can snap, so only those are
     # sampled and handed to the engine (see `_snap_reach`). No mouse -> no cull, and
     # `best_on_screen` returns None for it anyway.
-    mouse = project(cursor_world)
+    mouse = mouse_region if mouse_region is not None else project(cursor_world)
     reach = None
     if mouse is not None and _snap_settings.radius_px is not None:
         try:
@@ -15857,11 +15903,11 @@ def snap_at(area, space, region, cursor_world, first_point=False, suspend=False,
                                     project_batch=project_batch,
                                     project_near_batch=project_near_batch,
                                     project_distance_batch=project_distance_batch,
-                                    discrete_batch=discrete_batch)
+                                    discrete_batch=discrete_batch, mouse=mouse)
     projected = osnap.apply_projection(snap, plane, _snap_settings.project)
     if projected is not None:
         return projected
-    if not grid_snap_on():
+    if plane_cursor is None or not grid_snap_on():
         return None
     settings = grid_settings_for_area(area)
     if settings is None:
@@ -18965,7 +19011,7 @@ def draw_command_preview():
 # Print uses a settings dialog with a live preview pane.
 # A Blender props dialog cannot do the "constantly updating" half (Verified: its
 # layout is built once -- see `printdialog`), so the dialog is drawn by us, in the
-# ACTIVE viewport, from the pure model in `printdialog`.
+# combined modeling workspace, from the pure model in `printdialog`.
 #
 # Interaction (application-defined -- the reference CAD application's dropdowns are native widgets): click a value (or turn
 # the wheel over it) for the next choice, right-click for the previous one; Print asks
@@ -19019,8 +19065,11 @@ def _print_dialog_refresh():
 
 
 def open_print_dialog():
-    """Open the dialog over the active viewport. Returns True when it opened."""
+    """Open over the modeling workspace, printing the active view by default."""
     global _print_dialog
+    if not hasattr(bpy.types.Window, 'draw_handler_add'):
+        app_state.log('Print: the centered dialog requires native window overlay support')
+        return False
     areas = _view3d_areas()
     if not areas:
         return False
@@ -19041,7 +19090,7 @@ def open_print_dialog():
         if key != 'view':
             setattr(st, key, value)
     _print_dialog = {"state": st, "views": views, "pane": _pane_key(active),
-                     "page": None}
+                     "window_key": workspace_overlay.window_key(), "page": None}
     _print_dialog_refresh()
     _tag_redraw_viewports()
     return True
@@ -19095,10 +19144,9 @@ def print_dialog_print(path=None):
 
 
 def _print_dialog_region():
-    area = _print_dialog_area()
-    if area is None:
+    if _print_dialog is None or not workspace_overlay.belongs_to(_print_dialog.get('window_key')):
         return None
-    return next((r for r in area.regions if r.type == "WINDOW"), None)
+    return workspace_overlay.region(sys.modules[__name__])
 
 
 def _print_dialog_layout(region):
@@ -19110,7 +19158,7 @@ def _print_dialog_apply(result):
     """Act on what `printdialog.click` / `key` reported. Returns the result."""
     if result is None:
         return None
-    if result.startswith("chose:"):
+    if result.startswith(("chose:", "toggled:")):
         _print_dialog_refresh()
     elif result == "button:close":
         close_print_dialog()
@@ -19302,13 +19350,9 @@ def start_window_scale_watch():
 
 
 def draw_print_dialog():
-    """POST_PIXEL: the dialog, in the viewport it was opened over."""
-    if _print_dialog is None:
-        return
-    context = bpy.context
-    area = getattr(context, "area", None)
-    region = getattr(context, "region", None)
-    if area is None or region is None or _pane_key(area) != _print_dialog["pane"]:
+    """Native window POST_PIXEL: one dialog centered above all modeling panes."""
+    region = _print_dialog_region()
+    if region is None:
         return
     try:
         import gpu
@@ -19325,30 +19369,37 @@ def draw_print_dialog():
     ink = design.rgb01(design.TEXT)
     blue = design.rgb01(design.ACCENT)
 
+    def paint_rect(shader, x0, y0, x1, y1, color):
+        _draw_rect(shader, x0 + region.x, y0 + region.y,
+                   x1 + region.x, y1 + region.y, color)
+
+    def paint_text(x, y, text, size, color):
+        _draw_text(x + region.x, y + region.y, text, size, color)
+
     def box(r, fill, border=design.rgb01(design.BORDER_STRONG)):
         shader.bind()
-        _draw_rect(shader, r.x - 1, r.y - 1, r.x + r.w + 1, r.y + r.h + 1, border)
-        _draw_rect(shader, r.x, r.y, r.x + r.w, r.y + r.h, fill)
+        paint_rect(shader, r.x - 1, r.y - 1, r.x + r.w + 1, r.y + r.h + 1, border)
+        paint_rect(shader, r.x, r.y, r.x + r.w, r.y + r.h, fill)
 
     gpu.state.blend_set("ALPHA")
     try:
         shader.bind()
-        _draw_rect(shader, 0, 0, region.width, region.height, (0, 0, 0, 0.35))
+        paint_rect(shader, 0, 0, region.width, region.height, (0, 0, 0, 0.35))
         p = lay.panel
-        _draw_rect(shader, p.x, p.y, p.x + p.w, p.y + p.h, design.rgb01(design.PANEL_BG))
+        paint_rect(shader, p.x, p.y, p.x + p.w, p.y + p.h, design.rgb01(design.PANEL_BG))
         t = lay.title
-        _draw_rect(shader, t.x, t.y, t.x + t.w, t.y + t.h, design.rgb01(design.PANEL_HEADER_BG))
-        _draw_text(t.x + 10 * sc, t.y + 9 * sc, "Print Setup", fs + 1, ink)
+        paint_rect(shader, t.x, t.y, t.x + t.w, t.y + t.h, design.rgb01(design.PANEL_HEADER_BG))
+        paint_text(t.x + 10 * sc, t.y + 9 * sc, "Print Setup", fs + 1, ink)
         for rid, lr, vr in lay.rows:
             kind = printdialog.ROW_KINDS[rid]
-            _draw_text(lr.x, lr.y + 8 * sc, printdialog.ROW_LABELS[rid], fs,
+            paint_text(lr.x, lr.y + 8 * sc, printdialog.ROW_LABELS[rid], fs,
                        design.rgb01(design.TEXT))
             if kind == "check":
                 cb = printdialog.Rect(vr.x, vr.y + (vr.h - 16 * sc) / 2, 16 * sc,
                                       16 * sc)
                 box(cb, blue if st.selected_only else design.rgb01(design.FIELD_BG))
                 if st.selected_only:
-                    _draw_text(cb.x + 3 * sc, cb.y + 3 * sc, "\u2713", fs,
+                    paint_text(cb.x + 3 * sc, cb.y + 3 * sc, "\u2713", fs,
                                (1, 1, 1, 1))
                 continue
             focused = kind == "field" and st.focus == rid
@@ -19363,37 +19414,37 @@ def draw_print_dialog():
                 sel = fld.selection()
                 if sel is not None:
                     shader.bind()
-                    _draw_rect(shader, tx0 + meas(text[:sel[0]]), vr.y + 4 * sc,
+                    paint_rect(shader, tx0 + meas(text[:sel[0]]), vr.y + 4 * sc,
                                tx0 + meas(text[:sel[1]]), vr.y + vr.h - 4 * sc,
                                design.rgb01(design.ACCENT_SOFT))
-            _draw_text(tx0, vr.y + 8 * sc, text, fs, ink)
+            paint_text(tx0, vr.y + 8 * sc, text, fs, ink)
             if focused:
                 cx = tx0 + meas(text[:fld.caret])
                 shader.bind()
-                _draw_rect(shader, cx, vr.y + 5 * sc, cx + 1.5 * sc,
+                paint_rect(shader, cx, vr.y + 5 * sc, cx + 1.5 * sc,
                            vr.y + vr.h - 5 * sc, ink)
             if kind == "choice":
-                _draw_text(vr.x + vr.w - 16 * sc, vr.y + 8 * sc, "\u25be", fs,
+                paint_text(vr.x + vr.w - 16 * sc, vr.y + 8 * sc, "\u25be", fs,
                            design.rgb01(design.TEXT_MUTED))
         pv = lay.preview
         shader.bind()
-        _draw_rect(shader, pv.x, pv.y, pv.x + pv.w, pv.y + pv.h, design.rgb01(design.APP_BG))
+        paint_rect(shader, pv.x, pv.y, pv.x + pv.w, pv.y + pv.h, design.rgb01(design.APP_BG))
         page = _print_dialog.get("page")
         if page is not None:
             sheet = printdialog.page_rect(pv, page.width_mm, page.height_mm)
-            _draw_rect(shader, sheet.x + 4, sheet.y - 4, sheet.x + sheet.w + 4,
+            paint_rect(shader, sheet.x + 4, sheet.y - 4, sheet.x + sheet.w + 4,
                        sheet.y + sheet.h - 4, (0.3, 0.3, 0.3, 1))
-            _draw_rect(shader, sheet.x, sheet.y, sheet.x + sheet.w, sheet.y + sheet.h,
+            paint_rect(shader, sheet.x, sheet.y, sheet.x + sheet.w, sheet.y + sheet.h,
                        (1, 1, 1, 1))
             gpu.state.scissor_test_set(True)
-            gpu.state.scissor_set(int(sheet.x), int(sheet.y), int(sheet.w) + 1,
+            gpu.state.scissor_set(int(sheet.x + region.x), int(sheet.y + region.y), int(sheet.w) + 1,
                                   int(sheet.h) + 1)
             try:
                 for pts, rgb, _wpx in printdialog.preview_lines(page, sheet):
                     coords = []
                     for a_, b_ in zip(pts, pts[1:]):
-                        coords.append(a_)
-                        coords.append(b_)
+                        coords.append((a_[0] + region.x, a_[1] + region.y))
+                        coords.append((b_[0] + region.x, b_[1] + region.y))
                     if not coords:
                         continue
                     batch = batch_for_shader(shader, "LINES", {"pos": coords})
@@ -19412,15 +19463,15 @@ def draw_print_dialog():
             for ln in lines:
                 if y_ < nr.y:
                     break
-                _draw_text(nr.x, y_, ln, fs - 1, design.rgb01(design.TEXT_MUTED))
+                paint_text(nr.x, y_, ln, fs - 1, design.rgb01(design.TEXT_MUTED))
                 y_ -= line_h
         for bid, b in lay.buttons:
             shader.bind()
             fill = blue if bid == "print" else design.rgb01(design.CHIP_BG)
-            _draw_rect(shader, b.x, b.y, b.x + b.w, b.y + b.h, fill)
+            paint_rect(shader, b.x, b.y, b.x + b.w, b.y + b.h, fill)
             label = dict(printdialog.BUTTONS)[bid]
             col = (1, 1, 1, 1) if bid == "print" else ink
-            _draw_text(b.x + (b.w - _text_width(label, fs)) / 2, b.y + 9 * sc,
+            paint_text(b.x + (b.w - _text_width(label, fs)) / 2, b.y + 9 * sc,
                        label, fs, col)
         # the open dropdown LAST, so it sits over everything it overlaps
         if st.open_dropdown and lay.dropdown:
@@ -19435,10 +19486,10 @@ def draw_print_dialog():
             for i, r in lay.dropdown:
                 if i == st.hover:
                     shader.bind()
-                    _draw_rect(shader, r.x, r.y, r.x + r.w, r.y + r.h, blue)
+                    paint_rect(shader, r.x, r.y, r.x + r.w, r.y + r.h, blue)
                 col = (1, 1, 1, 1) if i == st.hover else ink
                 mark = "\u2713 " if opts[i] == cur else "    "
-                _draw_text(r.x + 6 * sc, r.y + 6 * sc,
+                paint_text(r.x + 6 * sc, r.y + 6 * sc,
                            mark + st.label_of(rid, opts[i]), fs, col)
     except Exception as e:  # noqa: BLE001
         print(f"[narwhal3d] print dialog draw failed: {e!r}")
@@ -19555,10 +19606,7 @@ def _attach_preview_handler():
     gs_id = bpy.types.SpaceView3D.draw_handler_add(
         draw_ground_shadow, (), "WINDOW", "POST_VIEW")
     _preview_handlers.append((bpy.types.SpaceView3D, gs_id))
-    # the Print dialog is pixel-space chrome over a viewport
-    dlg_id = bpy.types.SpaceView3D.draw_handler_add(
-        draw_print_dialog, (), "WINDOW", "POST_PIXEL")
-    _preview_handlers.append((bpy.types.SpaceView3D, dlg_id))
+    # The Print dialog is painted by the native window-level chrome handler.
     if not bpy.app.background:
         from . import print_commands
 
@@ -21036,7 +21084,8 @@ def object_pick_location(area, space, region, rx, ry, name):
 
 def _answer_edge_prompt_with_click(area, space, region, rx, ry,
                                    shift=False, ctrl=False, hit=None):
-    """Give a command-capability edge picker one exact viewport edge hit."""
+    """Give a command-capability edge picker one exact viewport edge hit. A picker that
+    answers None declines the click (not its edge prompt), which then falls through."""
     cmd = app_state.active_command
     picker = getattr(cmd, "pick_edge", None)
     if not callable(picker) or getattr(cmd, "pending_option", None) is not None:
@@ -21058,7 +21107,10 @@ def _answer_edge_prompt_with_click(area, space, region, rx, ry,
         point = polyline[len(polyline) // 2]
     # Ctrl+Shift is the component-pick chord, not Ctrl-only removal.
     action = "shift" if shift else "ctrl" if ctrl else "plain"
-    message, done = picker(name, edge_id, point, action, app_state.ctx)
+    answer = picker(name, edge_id, point, action, app_state.ctx)
+    if answer is None:
+        return False
+    message, done = answer
     app_state.history.append(f"> {action} edge {edge_id} of {name}")
     if message:
         app_state.log(message)
@@ -21788,6 +21840,17 @@ def _trim_drag_command(cmd):
     return isinstance(cmd, commands.TrimCmd) and getattr(cmd, "step_index", -1) == 1
 
 
+def _trim_drag_excluded(cmd):
+    """The curves a held Trim sweep must not pick.
+
+    A lone cutting object cannot cut itself (TrimCmd refuses it), so while it is the only
+    cutter the sweep passes over it to the curves beneath. The press still reports the refusal.
+    """
+    cutters = cmd.args[0] if getattr(cmd, "args", None) else []
+    names = {n for n in cutters if isinstance(n, str)}
+    return frozenset(names) if len(names) == 1 else frozenset()
+
+
 def _trim_drag_begin(area, space, region, rx, ry, latched=False):
     """Keep the already-processed Trim press alive for drag-over curve picks."""
     global _trim_drag
@@ -21827,24 +21890,27 @@ def _trim_drag_update(mouse_x, mouse_y):
     for index in range(1, steps + 1):
         rx = x0 + dx * index / steps
         ry = y0 + dy * index / steps
-        hit = pick_curve_object(area, space, region, rx, ry)
+        cmd = app_state.active_command
+        if not _trim_drag_command(cmd):
+            _trim_drag = None
+            return changed
+        hit = pick_curve_object(area, space, region, rx, ry,
+                                exclude=_trim_drag_excluded(cmd))
         if hit is None:
             st["latched"] = False
             continue
         if st["latched"]:
             continue
         st["latched"] = True
-        cmd = app_state.active_command
-        if not _trim_drag_command(cmd):
-            _trim_drag = None
-            return changed
         point = object_pick_location(area, space, region, rx, ry, hit)
         if point is None:
             continue
         app_state.history.append("> " + coords.format_world(point))
+        before = getattr(cmd, "_trimmed", 0)
         app_state.feed_line(coords.format_world(point))
-        st["trimmed"] += 1
-        changed = True
+        if getattr(cmd, "_trimmed", 0) > before:
+            st["trimmed"] += 1
+            changed = True
         if not _trim_drag_command(app_state.active_command):
             _trim_drag = None
             return changed

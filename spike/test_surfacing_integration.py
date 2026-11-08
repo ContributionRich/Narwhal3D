@@ -187,7 +187,10 @@ class BridgeContractTests(unittest.TestCase):
                 self.assertEqual(bridge.last_occt_decline(), decline)
         self._check_worker_environment()
 
-    def _check_worker_environment(self):
+    def test_open_worker_clears_ambient_admission_hints(self):
+        self._check_worker_environment(ambient_hints="/untrusted/ambient-admission-hints")
+
+    def _check_worker_environment(self, ambient_hints=None):
         from narwhal3d import narwhal_document as nd
         cp = nd.converter_process
         with tempfile.TemporaryDirectory(prefix='surfacing-worker-env-') as tmp:
@@ -202,6 +205,8 @@ class BridgeContractTests(unittest.TestCase):
                 with self.subTest(process_selection=selected):
                     environment = {'PATH': os.defpath, 'UNRELATED_SECRET': 'synthetic-secret',
                                    'PYTHONPATH': 'untrusted-python-path'}
+                    if ambient_hints is not None:
+                        environment['NARWHAL_DOCUMENT_ADMISSION_HINTS'] = ambient_hints
                     if selected is not None:
                         environment['NARWHAL_GEOMETRY_CORE'] = selected
                     result = cp.Result(0, 'NARWHAL-DOCUMENT-WORKER {"count": 0}\n', '')
@@ -214,7 +219,7 @@ class BridgeContractTests(unittest.TestCase):
                         argv, timeout, forwarded, limit, memory = spawn.call_args.args
                         self.assertEqual(argv, nd._worker_command(root))
                         self.assertEqual((timeout, limit, memory), (600, 65536, 4096))
-                        expected = {'PATH': os.defpath}
+                        expected = {'PATH': os.defpath, 'NARWHAL_DOCUMENT_ADMISSION_HINTS': ''}
                         if selected:
                             expected['NARWHAL_GEOMETRY_CORE'] = selected
                         self.assertEqual(forwarded, expected)
@@ -454,7 +459,7 @@ class NativeIntegrationTests(unittest.TestCase):
         candidate = nd.load_model(coherent_path)
         self.assertEqual(candidate.rehydrated, (1, 0))
 
-        def bypass_worker(payload, count):
+        def bypass_worker(payload, count, **_kwargs):
             # Test the parent's independent defense, not an alternative load route.
             self.assertEqual(count, 1)
             validated = payload/'validated'
@@ -617,6 +622,10 @@ def inject_mutation(name):
     if name == 'native-bit-ignored':
         ng.sweep1_parallel_available = lambda: True
         return 'BridgeContractTests.test_capability_additive_and_missing_symbol'
+    if name == 'worker-admission-clear-loss':
+        from narwhal3d import narwhal_document as nd
+        mutate_function('_validate_in_worker', 'extra_env.update(hint_env)', 'pass', module=nd)
+        return 'BridgeContractTests.test_open_worker_clears_ambient_admission_hints'
     if name in ('worker-selection-loss', 'worker-env-leak'):
         from narwhal3d import narwhal_document as nd
         replacement = 'extra_env=None' if name == 'worker-selection-loss' else 'extra_env=dict(os.environ)'
@@ -685,7 +694,7 @@ if __name__ == '__main__':
         names = ['solid-gate', 'open-refused', 'invalid-open', 'proxy-only', 'recipe-loss',
                  'publish-before-recipe', 'publish-original-input', 'drop-weights',
                  'unregistered-producer', 'native-bit-ignored',
-                 'worker-selection-loss', 'worker-env-leak']
+                 'worker-selection-loss', 'worker-env-leak', 'worker-admission-clear-loss']
         if HAS_NATIVE:
             names += ['shared-original-master', 'native-replay-loss',
                       'parent-raw-bounds', 'parent-circular-bounds',

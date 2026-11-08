@@ -104,6 +104,87 @@ def pack(curve):
         return None
 
 
+_many_signature = None
+_many_binding = None
+_native_many_calls = 0
+# Platforms whose qualified library carries the batch export. A platform joins only after
+# scripts/check_pure_core.py qualifies its artifact; elsewhere Near answers query by query.
+BATCH_QUALIFIED_PLATFORMS = frozenset({"linux"})
+
+
+def _search_many_binding():
+    """`narwhal_pure_core_nearest_on_nurbs_many`, or None (no library, or one without it)."""
+    global _many_signature, _many_binding
+    explicit = os.environ.get(_ENV)
+    signature = explicit or "<packaged>"
+    if _many_signature == signature:
+        return _many_binding
+    with _lock:
+        if _many_signature == signature:
+            return _many_binding
+        _many_signature, _many_binding = signature, None
+        packaged = Path(__file__).resolve().parent / "native" / _library_name()
+        candidates = (Path(explicit).expanduser(),) if explicit else (packaged,)
+        if sys.platform not in BATCH_QUALIFIED_PLATFORMS:
+            candidates = ()
+        for path in candidates:
+            if not path.is_file():
+                continue
+            try:
+                fn = ctypes.CDLL(str(path)).narwhal_pure_core_nearest_on_nurbs_many
+            except (AttributeError, OSError):
+                continue
+            fn.argtypes = [ctypes.c_size_t, ctypes.POINTER(ctypes.c_double), ctypes.c_size_t,
+                           ctypes.POINTER(ctypes.c_double), ctypes.c_size_t, ctypes.c_ubyte,
+                           ctypes.c_ubyte, ctypes.POINTER(ctypes.c_double), ctypes.c_size_t,
+                           ctypes.POINTER(ctypes.c_double), ctypes.POINTER(ctypes.c_ubyte)]
+            fn.restype = ctypes.c_int32
+            _many_binding = fn
+            return fn
+        return None
+
+
+def batch_capability():
+    """``"qualified"`` when the batch export is live, otherwise the reason it is not."""
+    if sys.platform not in BATCH_QUALIFIED_PLATFORMS:
+        return f"not qualified on {sys.platform}; Near searches each query"
+    if _search_many_binding() is None:
+        return "batch export unavailable; Near searches each query"
+    return "qualified"
+
+
+def search_many(packed, targets):
+    """:func:`search` for each of `targets` in one native call, or None.
+
+    An entry is None where :func:`search` would give None (a non-finite answer), so the
+    caller answers that target in Python.
+    """
+    global _native_many_calls
+    fn = _search_many_binding()
+    if fn is None or packed is None:
+        return None
+    try:
+        flat = array.array("d", (float(c) for q in targets for c in q[:3]))
+        n = len(flat) // 3
+        out = array.array("d", bytes(40 * n))
+        at_end = (ctypes.c_ubyte * max(1, n))()
+        code = fn(packed.order, packed.knots, len(packed.knots), packed.cvs, packed.cv_count,
+                  int(packed.rational), int(packed.closed),
+                  (ctypes.c_double * len(flat)).from_buffer(flat), n,
+                  (ctypes.c_double * len(out)).from_buffer(out), at_end)
+    except Exception:  # noqa: BLE001 -- the Python search remains the fallback
+        return None
+    if code != 0:
+        return None
+    _native_many_calls += 1
+    rows = []
+    for i in range(n):
+        v = out[5 * i:5 * i + 5]
+        rows.append((v[0], (v[1], v[2], v[3]), v[4], bool(at_end[i]))
+                    if all(math.isfinite(x) for x in v) else None)
+    return rows
+
+
 def search(packed, target):
     """``(t, point, distance, at_end)`` of `nearest._search` on the NURBS form, or None.
 

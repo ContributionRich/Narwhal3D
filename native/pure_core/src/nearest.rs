@@ -290,6 +290,23 @@ fn basis_derivatives(order: usize, knot: &[f64], der_count: usize, n: &mut [f64]
     }
 }
 
+/// Run `f` on a zeroed basis table of exactly `order * order` values.
+///
+/// Zeroing the table for the largest order (`MAX_ORDER`², 8 KiB) on every evaluation
+/// cost about as much as the evaluation of a cubic; a small order gets a small table.
+/// The values are the same either way: `basis` writes every entry it and
+/// `basis_derivatives` read, and the slice bounds would catch a read past them.
+fn with_basis_scratch<R>(order: usize, f: impl FnOnce(&mut [f64]) -> R) -> R {
+    let len = order * order;
+    if len <= 16 {
+        f(&mut [0.0_f64; 16][..len])
+    } else if len <= 64 {
+        f(&mut [0.0_f64; 64][..len])
+    } else {
+        f(&mut [0.0_f64; MAX_ORDER * MAX_ORDER][..len])
+    }
+}
+
 /// `ON_EvaluateNurbsNonRationalSpan` on `cvdim` coordinates (4 for the homogeneous
 /// numerator of a rational span); rows of `v` are `CV_STRIDE` apart.
 fn evaluate_span(
@@ -302,19 +319,20 @@ fn evaluate_span(
     v: &mut [f64],
 ) {
     let der = der_count.min(order - 1);
-    let mut n = [0.0_f64; MAX_ORDER * MAX_ORDER];
-    basis(order, knot, t, &mut n);
-    if der > 0 {
-        basis_derivatives(order, knot, der, &mut n);
-    }
-    for i in 0..=der {
-        for j in 0..order {
-            let a = n[i * order + j];
-            for k in 0..cvdim {
-                v[i * CV_STRIDE + k] += a * cv[j * CV_STRIDE + k];
+    with_basis_scratch(order, |n| {
+        basis(order, knot, t, n);
+        if der > 0 {
+            basis_derivatives(order, knot, der, n);
+        }
+        for i in 0..=der {
+            for j in 0..order {
+                let a = n[i * order + j];
+                for k in 0..cvdim {
+                    v[i * CV_STRIDE + k] += a * cv[j * CV_STRIDE + k];
+                }
             }
         }
-    }
+    });
     if order == 2 {
         // openNURBS: keep a constant coordinate exact on a linear span.
         for i in 0..cvdim {
@@ -544,6 +562,75 @@ pub fn search(curve: &Nurbs, target: [f64; 3], closed: bool) -> Closest {
     }
 }
 
+/// [`narwhal_pure_core_nearest_on_nurbs`] for each of `target_count` targets.
+///
+/// One call answers every closest-point query of a prepared curve (a Rebuild fit
+/// queries every sample). Each target's five values (t, x, y, z, distance) and end
+/// flag are exactly what the single-target export writes for it; a non-finite target
+/// gets NaN values, which the caller answers in Python.
+///
+/// # Safety
+/// As for the single-target export, with `targets` readable for `target_count * 3`
+/// values, `out_values` writable for `target_count * 5` and `out_at_end` for
+/// `target_count` bytes.
+#[allow(clippy::too_many_arguments)]
+#[no_mangle]
+pub unsafe extern "C" fn narwhal_pure_core_nearest_on_nurbs_many(
+    order: usize,
+    knots: *const f64,
+    knot_count: usize,
+    cvs: *const f64,
+    cv_count: usize,
+    rational: u8,
+    closed: u8,
+    targets: *const f64,
+    target_count: usize,
+    out_values: *mut f64,
+    out_at_end: *mut u8,
+) -> i32 {
+    if cv_count > MAX_CVS || rational > 1 || closed > 1 {
+        return ERR_INPUT;
+    }
+    let (Some(knot_values), Some(cv_values), Some(points)) = (
+        crate::checked_slice(knots, knot_count),
+        crate::checked_slice(cvs, cv_count * 4),
+        crate::checked_slice(targets, target_count * 3),
+    ) else {
+        return ERR_NULL;
+    };
+    if !knot_values.iter().chain(cv_values).all(|v| v.is_finite()) {
+        return ERR_INPUT;
+    }
+    let Some(curve) = Nurbs::new(order, knot_values, cv_values, rational == 1) else {
+        return ERR_INPUT;
+    };
+    let (t0, t1) = curve.domain();
+    if t1 <= t0 {
+        return ERR_INPUT;
+    }
+    let (Some(out), Some(ends)) = (
+        crate::checked_slice_mut(out_values, target_count * 5),
+        crate::checked_slice_mut(out_at_end, target_count),
+    ) else {
+        return ERR_NULL;
+    };
+    for ((point, slot), end) in points
+        .chunks_exact(3)
+        .zip(out.chunks_exact_mut(5))
+        .zip(ends)
+    {
+        if !point.iter().all(|v| v.is_finite()) {
+            slot.fill(f64::NAN);
+            *end = 0;
+            continue;
+        }
+        let r = search(&curve, [point[0], point[1], point[2]], closed == 1);
+        slot.copy_from_slice(&[r.t, r.point[0], r.point[1], r.point[2], r.distance]);
+        *end = u8::from(r.at_end);
+    }
+    0
+}
+
 /// Nearest point of a NURBS curve to `target`.
 ///
 /// Writes the parameter, the point (xyz), the distance and the open-end flag.
@@ -661,6 +748,39 @@ mod tests {
     }
 
     #[test]
+    fn the_sized_basis_table_gives_the_full_tables_values_at_every_order() {
+        // Orders 2-12 cover all three table sizes (16, 64 and MAX_ORDER^2 values).
+        for order in 2..=12 {
+            let d = order - 1;
+            let knot: Vec<f64> = (0..2 * d)
+                .map(|i| i as f64 * 0.75 + (i % 3) as f64 * 0.1)
+                .collect();
+            let t = 0.5 * (knot[d - 1] + knot[d]) + 0.01;
+            for der in 0..=2.min(d) {
+                let mut full = [0.0_f64; MAX_ORDER * MAX_ORDER];
+                basis(order, &knot, t, &mut full);
+                if der > 0 {
+                    basis_derivatives(order, &knot, der, &mut full);
+                }
+                let sized = with_basis_scratch(order, |n| {
+                    basis(order, &knot, t, n);
+                    if der > 0 {
+                        basis_derivatives(order, &knot, der, n);
+                    }
+                    n.to_vec()
+                });
+                assert_eq!(sized.len(), order * order);
+                let rows = (der + 1) * order;
+                assert_eq!(
+                    &sized[..rows],
+                    &full[..rows],
+                    "order {order}, derivative {der}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn rational_circle_points_lie_on_the_circle() {
         let (knots, cvs) = circle();
         let curve = Nurbs::new(3, &knots, &cvs, true).unwrap();
@@ -669,6 +789,69 @@ mod tests {
             let p = curve.point(t);
             assert!((p[0].hypot(p[1]) - 5.0).abs() < 1e-12, "{t}: {p:?}");
         }
+    }
+
+    #[test]
+    fn the_batch_answers_each_target_as_the_single_export_does() {
+        let (knots, cvs) = cubic();
+        let targets = [
+            3.0,
+            4.0,
+            0.0,
+            -2.0,
+            1.0,
+            0.5,
+            f64::NAN,
+            0.0,
+            0.0,
+            20.0,
+            0.0,
+            0.0,
+        ];
+        let mut out = [0.0; 20];
+        let mut ends = [9u8; 4];
+        let code = unsafe {
+            narwhal_pure_core_nearest_on_nurbs_many(
+                4,
+                knots.as_ptr(),
+                7,
+                cvs.as_ptr(),
+                5,
+                0,
+                0,
+                targets.as_ptr(),
+                4,
+                out.as_mut_ptr(),
+                ends.as_mut_ptr(),
+            )
+        };
+        assert_eq!(code, 0);
+        for (i, target) in targets.chunks_exact(3).enumerate() {
+            let slot = &out[i * 5..i * 5 + 5];
+            if target[0].is_nan() {
+                assert!(slot.iter().all(|v| v.is_nan()) && ends[i] == 0);
+                continue;
+            }
+            let mut single = [0.0; 5];
+            let mut end = 0u8;
+            let code = unsafe {
+                narwhal_pure_core_nearest_on_nurbs(
+                    4,
+                    knots.as_ptr(),
+                    7,
+                    cvs.as_ptr(),
+                    5,
+                    0,
+                    0,
+                    target.as_ptr(),
+                    single.as_mut_ptr(),
+                    &mut end,
+                )
+            };
+            assert_eq!(code, 0);
+            assert_eq!((slot, ends[i]), (&single[..], end));
+        }
+        assert_eq!(ends[3], 1, "past the open end");
     }
 
     #[test]

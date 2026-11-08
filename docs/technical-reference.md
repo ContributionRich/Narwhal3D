@@ -175,10 +175,11 @@ Ctrl+Shift sub-object route remains available. Selecting members never dissolves
 `Rebuild` opens a curve-rebuild window after selection (a preselected curve opens it
 immediately); `-Rebuild` retains the command-line workflow. The window has point count,
 degree, Delete input, Create new object on current layer, Preserve end tangent directions,
-Preview, maximum deviation, OK and Cancel. Point count and degree adjust each other so
-point count is at least degree + 1. Preview is display-only, Cancel makes no document change,
-and OK uses the same fitting implementation and single document Undo history as the command
-line. Changing the document while the window is open invalidates it.
+OK and Cancel. Point count and degree adjust each other so point count is at least degree
++ 1. Editing settings does not run a fit. Cancel makes no document change, and OK uses the
+same fitting implementation and single document Undo history as the command line.
+The dialog intentionally has no Preview section. Changing the document while the window
+is open invalidates it.
 
 Point count 10 and degree 3 were observed in a captured dialog; they are starting values,
 not a claim about factory defaults. Checkbox starting states are application defaults.
@@ -195,7 +196,11 @@ bit-for-bit against the previous pipeline in the regression suite.
 The Rebuild window uses the application's themed popup and native-backed text editing.
 The Point count and Degree fields show separate **Current** readouts for the input curves;
 mixed selections show **varies**. These stay distinct from the requested output settings.
-Styling does not change fit limits, Preview, Cancel, or the single Undo callback.
+Rebuild and Print are centered over the combined modeling workspace, not inside one pane.
+They use the existing native window-overlay bridge above editor dividers; the viewport
+layout and cameras are not rearranged. Dialog input uses the same window coordinates as
+painting, including controls that lie over different panes. A runtime without the native
+window-overlay capability reports that explicitly rather than pretending to open a dialog.
 
 View > Interface Scale saves a percentage or Automatic for the next startup. The menu
 and confirmation state that a restart is required: changing only fonts and hit targets
@@ -213,8 +218,9 @@ override still takes precedence.
   filename prompt remains available when no native browser can be opened. Cancel does
   not modify the document; successful imports use one Undo record.
 - Print starts from the active pane rather than a previous dialog's remembered view;
-  saved paper and scale settings remain available. Labels and dropdowns use measured
-  text widths and stay within the pane at the supported dialog sizes. With Area set to
+  saved paper and scale settings remain available. Toggling Only selected objects updates
+  the preview page immediately. Labels and dropdowns use measured text widths and stay
+  within the combined workspace at supported dialog sizes. With Area set to
   Viewport, Fit fits that view; use Extents and Only selected objects to fit a selection.
   Perspective printing remains explicitly unsupported; select
   a parallel view such as Top, Front or Right in the Print dialog.

@@ -997,6 +997,32 @@ class MoveEdgeCmd(_MoveSubObjectCmd):
             raise LookupError("that object has no exact solid, so its edges cannot be moved")
         return _edge_at(operand, point, commands._document_tolerance(ctx))
 
+    def pick_edge(self, name, edge_id, interior_point, action, ctx):
+        """A plain viewport click on an edge at "Select edges" or "Select an edge": that
+        edge, never the CPlane point behind it. The edge is identified from
+        `interior_point` (a point on it) the same way as a typed pick. None declines the
+        click: a later prompt, a pending option, or a Shift/Ctrl selection chord."""
+        if (self.step_index not in (0, 1) or self.pending_option is not None
+                or (action or "plain") != "plain"):
+            return None
+        solid_name = name if self.step_index == 0 else self.args[0]
+        if name != solid_name:
+            return f"{self.name}: that edge belongs to {name}, not to {solid_name}", False
+        geom = ctx.geom_by_name(solid_name)
+        if not isinstance(geom, (r3.Brep, r3.Extrusion)):
+            return f"{self.name}: {solid_name!r} is not a polysurface", True
+        point = tuple(float(c) for c in interior_point)
+        try:
+            self._sub_id = self._resolve(geom, point, ctx)
+        except LookupError as e:
+            return f"{self.name}: {e}. Nothing was changed.", True
+        except ValueError as e:
+            return f"{self.name}: {e}", False
+        # The viewport point only identifies the edge and is never stored; the exact id is the target.
+        self.args = [solid_name, None]
+        self.step_index = 2
+        return f"{self.kind} {self._sub_id} of {solid_name} selected", False
+
     def _constrain(self, vec, geom, ctx):
         if self.opt.get("DirectionConstraint") != "Vertical":
             return vec

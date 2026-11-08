@@ -117,7 +117,7 @@ with tempfile.TemporaryDirectory(prefix="narwhal-compat-") as temporary:
     original_validate = document._validate_in_worker
     refused = False
     try:
-        def refusal(*_args):
+        def refusal(*_args, **_kwargs):
             raise document.NarwhalDocumentError("injected reader admission failure")
         document._validate_in_worker = refusal
         try:

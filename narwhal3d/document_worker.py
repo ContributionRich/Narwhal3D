@@ -12,7 +12,7 @@ import uuid
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from narwhal3d import bridge, kernel  # noqa: E402
+from narwhal3d import bridge, kernel, document_admission  # noqa: E402
 from narwhal3d.kernel import occt_backend  # noqa: E402
 from narwhal3d.document_compat import schema1_volume  # noqa: E402
 import rhino3dm as r3  # noqa: E402
@@ -38,6 +38,34 @@ def _exclusive_volume(shape_a, shape_b):
 
 def _exclusive_volume_pair(shape_a, shape_b):
     return occt_backend.document_exclusive_volume_pair(shape_a, shape_b)
+
+
+def _corresponds(shape, other, airtight, volume, proofs):
+    """Record-local proofs keyed only by fresh exact native serialization.
+
+    Neither archive digests nor summary/recipe claims authorize reuse. The cache
+    lives for this record only, with the same runtime and comparison policy, and
+    non-destructive native cuts cannot invalidate the byte witnesses.
+    """
+    witnesses = tuple(sorted(bytes(occt_backend.shape_to_bytes(item, triangles=False))
+                             for item in (shape, other)))
+    if not all(witnesses):
+        raise RuntimeError("exact correspondence could not serialize its witnesses")
+    if witnesses[0] == witnesses[1]:
+        return True
+    # Keep the existing relative Boolean-volume allowance, but do not let a
+    # file-supplied model tolerance authorize moving/removing material. Its cubic
+    # allowance could hide a displaced cavity even when bounds and volume agree.
+    exclusive_tolerance = abs(volume) * 1.0e-9 if airtight else None
+    key = (airtight, exclusive_tolerance, witnesses)
+    if key not in proofs:
+        if airtight:
+            pair = _exclusive_volume_pair(shape, other)
+            proofs[key] = all(math.isfinite(value) and 0.0 <= value <= exclusive_tolerance
+                              for value in pair) and len(pair) == 2
+        else:
+            proofs[key] = occt_backend.document_same_open_support(shape, other)
+    return proofs[key]
 
 
 def _planar_normalized_types(shape, tolerance):
@@ -140,6 +168,12 @@ def main():
                     if isinstance(record, dict)}
     if expected_exact != manifest_ids:
         fail("metadata and manifest exact-master coverage differs")
+    occt_backend.document_validation_threads()
+    decoder = document_admission.contract()
+    bounds_facts = occt_backend.DocumentBoundsFacts(decoder)
+    hints = document_admission.read_hints()
+    receipts = []
+    reused = 0
     total = 0
     canonical_total = 0
     seen = set()
@@ -165,6 +199,23 @@ def main():
             data = path.read_bytes()
             if hashlib.sha256(data).hexdigest() != record.get("sha256"):
                 fail(f"master {object_id} digest binding changed")
+            metadata_object = document_objects.get(object_id)
+            if metadata_object is None:
+                fail(f"master {object_id} has no metadata object")
+            proxy = metadata_object.Geometry
+            receipt = document_admission.key(
+                proxy, record, tolerance, manifest["bintools_format"], decoder)
+            if receipt is not None and receipt in hints:
+                # Same serialized master, proxy, recipe, summaries and decoder as a
+                # completed earlier admission. The staged metadata was still read,
+                # master coverage checked and every payload digest checked above.
+                canonical_total += len(data)
+                if canonical_total > MAX_TOTAL:
+                    fail("canonical master payloads exceed 2 GiB")
+                (output / f"{object_id}.brep").write_bytes(data)
+                receipts.append(receipt)
+                reused += 1
+                continue
             shape = occt_backend.shape_from_bytes(data, record.get("wrapper_type"))
         except Exception as exc:  # noqa: BLE001
             fail(f"master {object_id} cannot be decoded: {exc}")
@@ -173,7 +224,7 @@ def main():
         shape_enum = int(shape.ShapeType().value)
         face_types = {str(key): int(value)
                       for key, value in sorted(occt_backend.face_types(shape).items())}
-        lower, upper = occt_backend.tight_bbox(shape)
+        lower, upper = occt_backend.document_measure_bounds(shape, bounds_facts, parallel=True)
         bounds = [float(value) for point in (lower, upper) for value in point]
         if not all(math.isfinite(value) for value in bounds):
             fail(f"master {object_id} has non-finite bounds")
@@ -198,10 +249,6 @@ def main():
                           or abs(volume - float(expected_volume))
                           > 1.0e-10 * max(1.0, abs(float(expected_volume)))):
             fail(f"master {object_id} volume changed")
-        metadata_object = document_objects.get(object_id)
-        if metadata_object is None:
-            fail(f"master {object_id} has no metadata object")
-        proxy = metadata_object.Geometry
         getter = getattr(proxy, "GetUserString", None)
         document_form = getter(kernel.DOCUMENT_FORM_KEY) if callable(getter) else None
         legacy_missing_form = document_form in (None, "")
@@ -209,6 +256,7 @@ def main():
             # Older additive boxes omitted the marker. Prove exact correspondence
             # below before canonicalizing it; a missing marker never skips a check.
             document_form = "exact"
+        proofs = {}  # never carried across records, archives, or Open operations
         try:
             if document_form == "triangulated":
                 from narwhal3d import document_proxy
@@ -220,7 +268,7 @@ def main():
                 if (not occt_backend.is_valid(proxy_shape)
                         or bool(occt_backend.is_airtight(proxy_shape)) != airtight):
                     fail(f"master {object_id} does not match its exact proxy")
-                proxy_lower, proxy_upper = occt_backend.tight_bbox(proxy_shape)
+                proxy_lower, proxy_upper = occt_backend.document_measure_bounds(proxy_shape, bounds_facts, parallel=True)
                 proxy_shape_bounds = [
                     float(value) for point in (proxy_lower, proxy_upper) for value in point]
                 if any(abs(a - b) > max(1.0e-7, tolerance * 10.0)
@@ -237,13 +285,13 @@ def main():
                             or abs(proxy_volume - correlation_volume)
                             > max(1.0e-9, tolerance ** 3) * max(1.0, abs(correlation_volume))):
                         fail(f"master {object_id} does not match its exact proxy volume")
-                    exclusive = max(_exclusive_volume_pair(correlation_shape, proxy_shape))
-                    exclusive_tolerance = max(
-                        abs(volume) * 1.0e-9,
-                        tolerance ** 3 * 1000.0,
-                    )
-                    if not math.isfinite(exclusive) or exclusive > exclusive_tolerance:
+                    # Normalize only for volume integration, not intersections.
+                    # Invalid native cuts still receive the exact backend retry.
+                    if not _corresponds(shape, proxy_shape, True,
+                                        volume, proofs):
                         fail(f"master {object_id} differs geometrically from its exact proxy")
+                elif not _corresponds(shape, proxy_shape, False, None, proofs):
+                    fail(f"master {object_id} differs geometrically from its exact proxy")
             else:
                 fail(f"master {object_id} has no recognized document proxy form")
         except SystemExit:
@@ -260,7 +308,7 @@ def main():
         recipe_types = {str(key): int(value)
                         for key, value in sorted(occt_backend.face_types(recipe_shape).items())}
         recipe_airtight = bool(occt_backend.is_airtight(recipe_shape))
-        recipe_lower, recipe_upper = occt_backend.tight_bbox(recipe_shape)
+        recipe_lower, recipe_upper = occt_backend.document_measure_bounds(recipe_shape, bounds_facts, parallel=True)
         recipe_bounds = [float(value) for point in (recipe_lower, recipe_upper) for value in point]
         compatible_types = (recipe_types == face_types or _compatible_recipe_types(
             shape, recipe_shape, recipe, proxy, document_form))
@@ -274,6 +322,13 @@ def main():
             if (not math.isfinite(recipe_volume)
                     or abs(recipe_volume - volume) > 1.0e-10 * max(1.0, abs(volume))):
                 fail(f"master {object_id} volume differs from its recipe")
+        try:
+            if not _corresponds(shape, recipe_shape, airtight, volume, proofs):
+                fail(f"master {object_id} differs geometrically from its reconstruction recipe")
+        except SystemExit:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            fail(f"master {object_id} recipe correspondence cannot be established: {exc}")
         if document_form == "exact":
             # Compare equivalent bounds. These came from the proxy's OWN stored
             # faces/edges/loops above, not its registered master or replay recipe.
@@ -317,9 +372,18 @@ def main():
         if legacy_missing_form:
             if proxy.SetUserString(kernel.DOCUMENT_FORM_KEY, "exact") is False:
                 fail(f"master {object_id} proxy form cannot be canonicalized")
+        receipts.append(receipt)
+        receipts.append(document_admission.canonical_key(
+            proxy, record, canonical, tolerance, current_format, decoder))
     if not document.Write(str(output / "document.3dm"), 8):
         fail("metadata document cannot be canonicalized")
-    print("NARWHAL-DOCUMENT-WORKER " + json.dumps({"count": len(seen)}, sort_keys=True))
+    document_admission.publish(output, receipts)
+    # Facts are eligible only after the entire candidate and every canonical reread
+    # have passed. Their digest travels over this supervised completion channel.
+    bounds_completion = occt_backend.document_publish_bounds(
+        output, bounds_facts, ["document.3dm"] + [f"{key}.brep" for key in sorted(seen)])
+    print("NARWHAL-DOCUMENT-WORKER " + json.dumps(
+        {"count": len(seen), "reused": reused, "bounds_facts": bounds_completion}, sort_keys=True))
 
 
 if __name__ == "__main__":

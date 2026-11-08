@@ -19,20 +19,31 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 PURE_ADDITIONS = (
+    'test_project_to_cplane_delete.py',
+    'test_offset_fit_native.py',
+    'test_offset_compact.py',
+    'test_report121_124.py',
+    'test_extrusion_creases.py',
+
+    'test_document_runtime_identity.py',
     'test_curve_inputs.py', 'test_curve_consumer_inputs.py',
     'test_variable_edge_fillet.py', 'test_solid_commands.py', 'test_fillet_handle_input.py',
     'test_colordialog.py', 'test_preferences.py', 'test_user_settings.py', 'test_window_overlay_patch.py',
     'test_windows_build.py', 'test_release_harness.py', 'test_meshed_master_transform.py',
     'test_automation_bridge.py', 'test_automation_host.py', 'test_ai_settings_popup.py',
     'test_extrude_preview.py', 'test_fillet_preview_latency.py',
-    'test_surfacing_parallel.py', 'test_surfacing_probe.py',
+    'test_surfacing_parallel.py', 'test_surfacing_probe.py', 'test_workspace_overlay.py',
 )
 LIVE_SUITES = (
     'test_v4_live.py', 'test_shell_fixes_gui.py', 'test_render_quality_gui.py',
     'test_component_fillet_gui.py', 'test_fillet_mouse_gui.py', 'test_preferences_gui.py',
     'test_preferences_gui.py', 'test_window_overlay_gui.py', 'test_gumball_extrude_scale_gui.py',
     'test_face_pick_gui.py',
+    'test_edge_pick_gui.py', 'test_workspace_dialogs_gui.py',
 )
+BUG_LIVE = ('test_right_dock_rmb_gui.py', 'test_project_to_cplane_gui.py',
+            'test_report121_124_gui.py', 'test_trim_live_performance_gui.py')
+LIVE_SUITES += BUG_LIVE
 GPU_SUITE = 'test_extrude_preview_gpu.py'
 HOST_SUITES = (
     ['spike/test_ai_settings_popup_gui.py', '--launch'],
@@ -40,6 +51,22 @@ HOST_SUITES = (
     ['spike/test_trim_box_gui.py', '--launch', '--baseline'],
 )
 NEW_TESTS = (
+    "pure_core_nearest_batch_gate", "rebuild_performance",
+    "document_correspondence", "document_runtime_identity",
+    'right_dock_rmb_gui',
+    'project_to_cplane_delete',
+    'project_to_cplane_gui',
+    'offset_fit_native',
+    'offset_compact',
+    'trim_split_once',
+    'trim_live_performance_gui',
+    'report121_124',
+    'report121_124_gui',
+    'extrusion_creases',
+    'document_admission',
+    'document_shape_summary',
+    'document_exact_work', 'document_worker_bounds',
+
     'automation_bridge', 'automation_mcp', 'automation_live', 'automation_native',
     'automation_host', 'automation_startup', 'surfacing_parallel', 'surfacing_probe',
     'surfacing_integration', 'ai_settings_popup', 'ai_settings_popup_gui',
@@ -47,6 +74,15 @@ NEW_TESTS = (
     'preview_responsiveness_gui', 'trim_box_gui',
 )
 NEW_SOURCES = (
+    "native/document_observer/lifetime_fixture.py",
+    "native/pure_core/src/nearest.rs", "narwhal3d/nearest.py", "narwhal3d/native_nearest.py",
+    "narwhal3d/rebuild.py",
+    "native/document_observer/qualify_lifetime.py",
+    'native/document_observer/test_master_lifetime.py',
+    'native/document_observer/test_master_lifetime_admission.py',
+    'native/document_observer/test_master_lifetime_product.py',
+    "spike/snap_clip_abi_witness.c",
+
     'native/automation_core/Cargo.toml', 'native/automation_core/Cargo.lock',
     'native/automation_core/src/main.rs', 'native/automation_core/src/protocol.rs',
     'native/geometry_core/src/surfacing.rs', 'native/geometry_core/cpp/sweep_adapter.inc',
@@ -115,8 +151,18 @@ if live or gpu:
         'test_preferences_gui.py': 'PREFERENCES_GUI_RESULT',
         'test_window_overlay_gui.py': 'WINDOW_OVERLAY_RESULT',
         'test_gumball_extrude_scale_gui.py': 'GUMBALL_GUI_RESULT',
+        'test_edge_pick_gui.py': 'EDGE_PICK_RESULT',
+        'test_workspace_dialogs_gui.py': 'WORKSPACE_DIALOGS_RESULT',
+        'test_right_dock_rmb_gui.py': 'RIGHT_DOCK_RMB_RESULT',
+        'test_project_to_cplane_gui.py': 'PROJECT_TO_CPLANE_GUI_RESULT',
+        'test_report121_124_gui.py': 'WORKSPACE_DIALOGS_RESULT',
+        'test_trim_live_performance_gui.py': 'TRIM_LIVE_RESULT',
     }[suite]
     mode = env.get('HARNESS_FAILURE', '') if suite == env.get('HARNESS_FAIL_SUITE') else ''
+    if suite == 'test_trim_live_performance_gui.py':
+        if mode != 'missing-marker':
+            print('TRIM_LIVE_RESULT ' + ('failed checks 1 failures 1' if mode == 'failed-result' else 'passed checks 1 failures 0'))
+        sys.exit(7 if mode == 'exit-error' else 0)
     if mode != 'missing-marker':
         print((marker if mode != 'failed-result' else 'GPU FAILED') if gpu else
               marker + ' ' + json.dumps(dict(phase=phase, status='failed' if mode == 'failed-result' else 'passed')))
@@ -218,6 +264,12 @@ class HarnessTests(unittest.TestCase):
             self.assert_geometry_env(row['env'])
             for key, rel in CORES.items():
                 self.assertEqual(row['env'][key], str(self.root / rel))
+        bug_rows = [r for r in rows if r['suite'] in BUG_LIVE]
+        self.assertEqual(len({r['prefs'] for r in bug_rows}), len(BUG_LIVE))
+        for row in bug_rows:
+            self.assertEqual(Path(row['env']['HARNESS_OUT']).parent, Path(row['prefs']).parent)
+            self.assertNotIn('WORKSPACE_DIALOGS_MUTATION', row['env'])
+            self.assertNotIn('TRIM_LIVE_SNAPSHOT', row['env'])
         self.assertEqual(rows[5]['prefs'], rows[6]['prefs'])
         self.assertEqual(json.loads(rows[6]['previous']), dict(suite='test_preferences_gui.py', phase='write'))
         self.assertFalse(list((self.root / 'scratch').glob('*.log')))
@@ -354,6 +406,81 @@ class HarnessTests(unittest.TestCase):
                     (self.root / 'run_tests.sh').write_text(original)
         self.assert_host_contract(*self.execute('run_tests.sh', CARGO_BUILD_JOBS='2'))
 
+    def test_bug_batch_registrations_and_mutations(self):
+        self.assert_host_contract(*self.execute('run_tests.sh', CARGO_BUILD_JOBS='2'))
+        for name in ('trim_split_once', 'document_admission', 'document_shape_summary', 'document_exact_work',
+                     'document_worker_bounds'):
+            result, rows = self.execute('run_tests.sh', DISPLAY='', WAYLAND_DISPLAY='')
+            matches = [r for r in rows if 'spike/test_' + name + '.py' in r['args']]
+            self.assertEqual(len(matches), 1, name)
+            self.assertIn('--factory-startup', matches[0]['args'])
+            self.assertIn('-b', matches[0]['args'])
+        for name in PURE_ADDITIONS[:5]:
+            original = self.mutate('run_tests.sh', '    spike/' + name + '\n', '')
+            try:
+                with self.assertRaises(AssertionError):
+                    self.assert_pure_contract(*self.execute('run_tests.sh', DISPLAY='', WAYLAND_DISPLAY=''))
+            finally:
+                (self.root / 'run_tests.sh').write_text(original)
+        for suite in BUG_LIVE:
+            for mode in ('missing-marker', 'failed-result', 'exit-error'):
+                result, rows = self.execute(HARNESS_FAILURE=mode, HARNESS_FAIL_SUITE=suite)
+                self.assertNotEqual(result.returncode, 0, suite + mode)
+                self.assertEqual(rows[-1]['suite'], suite)
+        original = self.mutate('spike/v4_live_gui.sh', 'before-bootstrap 330', 'after-bootstrap 330')
+        try:
+            with self.assertRaises(AssertionError):
+                self.assert_live_contract(*self.execute())
+        finally:
+            (self.root / 'spike/v4_live_gui.sh').write_text(original)
+        self.assert_live_contract(*self.execute())
+
+    def assert_document_closure(self, result, rows):
+        self.assert_source_contract(result, rows)
+        calls = [row['args'] for row in rows]
+        source_gate = ['-B', 'scripts/check_document_observer.py', '--stage-dev', '--mutations']
+        for name in ('test_master_lifetime.py', 'test_master_lifetime_product.py'):
+            args = ['native/document_observer/' + name]
+            self.assertEqual(calls.count(args), 1, name)
+            self.assertGreater(calls.index(args), calls.index(source_gate))
+            row = rows[calls.index(args)]
+            self.assertEqual(row['executable'], str(self.root / 'tools/blender-patched/5.2/python/bin/python3.13'))
+            self.assert_geometry_env(row['env'])
+        self.assertEqual(calls.count(['native/document_observer/test_master_lifetime_admission.py']), 1)
+        self.assertEqual(calls.count(['-B', 'spike/test_document_observer_package.py']), 1)
+        for name in ('test_document_correspondence.py', 'test_document_compatibility.py'):
+            matches = [row for row in rows if 'spike/' + name in row['args']]
+            self.assertEqual(len(matches), 1, name)
+            self.assertIn('-b', matches[0]['args'])
+            self.assertIn('--python-exit-code', matches[0]['args'])
+
+    def test_document_closure_and_required_failure_mutations(self):
+        def execute():
+            return self.execute('run_tests.sh', DISPLAY='', WAYLAND_DISPLAY='')
+        self.assert_document_closure(*execute())
+        for old in (
+            '    spike/test_document_runtime_identity.py\n',
+            '    spike/test_document_correspondence.py\n',
+            'run "document observer native master lifetime" "$PYTHON" native/document_observer/test_master_lifetime.py\n',
+            'run "document observer product master lifetime" "$PYTHON" native/document_observer/test_master_lifetime_product.py\n',
+        ):
+            with self.subTest(omission=old):
+                original = self.mutate('run_tests.sh', old, '')
+                try:
+                    with self.assertRaises(AssertionError):
+                        self.assert_document_closure(*execute())
+                finally:
+                    (self.root / 'run_tests.sh').write_text(original)
+        for payload in ('native/document_observer/test_master_lifetime.py',
+                        'native/document_observer/test_master_lifetime_product.py',
+                        'spike/test_document_runtime_identity.py', 'spike/test_document_correspondence.py'):
+            with self.subTest(failure=payload):
+                result, rows = self.execute('run_tests.sh', DISPLAY='', WAYLAND_DISPLAY='',
+                                            HARNESS_FAIL_SUITE=payload)
+                self.assertEqual(result.returncode, 7)
+                self.assertNotIn('All public tests passed.', result.stdout)
+        self.assert_document_closure(*execute())
+
     def test_gpu_verdict_is_required(self):
         for mode in ('exit-error', 'missing-marker', 'failed-result', 'draw-error'):
             with self.subTest(mode=mode):
@@ -423,7 +550,7 @@ class PublicManifestTests(unittest.TestCase):
         self.assertTrue(expected <= paths, sorted(expected - paths))
         self.assertTrue(expected <= audit['REQUIRED'], sorted(expected - audit['REQUIRED']))
         for runner in ('run_tests.sh', 'spike/v4_live_gui.sh'):
-            payloads = set(re.findall(r'spike/[a-zA-Z0-9_]+\.(?:py|sh)', (ROOT / runner).read_text()))
+            payloads = set(re.findall(r'(?:spike|native/document_observer)/[a-zA-Z0-9_]+\.(?:py|sh)', (ROOT / runner).read_text()))
             self.assertTrue(payloads <= paths, sorted(payloads - paths))
         self.assertFalse(any('/target/' in path or path.startswith('artifacts/') for path in paths))
         self.assertNotIn('native/automation_core/README.md', paths)
@@ -440,6 +567,21 @@ class PublicManifestTests(unittest.TestCase):
             path for path in public['NATIVE_FILES'] if path != 'native/geometry_core/cpp/sweep_adapter.inc')
         with self.assertRaises(AssertionError):
             self.assertTrue(expected <= set(public['public_files']()))
+
+    def test_lifetime_suites_follow_requalification_after_stage_dev(self):
+        # The ordinary observer gate replaces the staged receipt without lifetime proof.
+        # Lifetime suites may run only after the qualifier re-issues it and the guard passes.
+        text = (ROOT / 'run_tests.sh').read_text()
+        gate = text.index('scripts/check_document_observer.py --stage-dev --mutations')
+        qualify = text.index('native/document_observer/qualify_lifetime.py')
+        guard = text.index('document observer lifetime proof present')
+        native = text.index('native/document_observer/test_master_lifetime.py')
+        product = text.index('native/document_observer/test_master_lifetime_product.py')
+        self.assertLess(gate, qualify)
+        self.assertLess(qualify, guard)
+        self.assertLess(guard, native)
+        self.assertLess(native, product)
+        self.assertIn('--stage-dev', text[qualify:guard])
 
 
 if __name__ == '__main__':

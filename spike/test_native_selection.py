@@ -977,7 +977,8 @@ try:
         or (np.array((0,), dtype=np.uint64), np.array((0.0,))))
     native_near_calls = []
     ui.native_selection.nearest_projected_polylines = (
-        lambda *args: native_near_calls.append(args) or ((0.5, 0.0, 0.0),))
+        lambda *args, **kwargs: native_near_calls.append((args, kwargs))
+        or ((0.5, 0.0, 0.0),))
     native_discrete_calls = []
     ui.native_selection.discrete_snap_survivors = (
         lambda *args: native_discrete_calls.append(args)
@@ -1009,6 +1010,7 @@ try:
           and routed_snap_batches[0][0] == ("target", "native-snap-reach")
           and routed_snap_batches[0][5] == (400.0, 300.0)
           and len(native_snap_calls) == 1 and len(native_near_calls) == 1
+          and native_near_calls[0][1] == {"clipped": True}
           and len(native_distance_calls) == 1
           and routed_snap_batches[0][7] == ((0.5, 0.0, 0.0),)
           and tuple(routed_snap_batches[0][8][0]) == (0,)
@@ -1027,8 +1029,8 @@ try:
     ui.osnap.best_on_screen = capture_decline
     ui.native_selection.project_display_points = lambda *_args: (_ for _ in ()).throw(
         RuntimeError("native projector unavailable"))
-    ui.native_selection.nearest_projected_polylines = lambda *_args: (_ for _ in ()).throw(
-        RuntimeError("native Near unavailable"))
+    ui.native_selection.nearest_projected_polylines = lambda *_args, **_kwargs: (
+        _ for _ in ()).throw(RuntimeError("native Near unavailable"))
     ui.native_selection.projected_snap_distances = lambda *_args: (_ for _ in ()).throw(
         RuntimeError("native snap distance unavailable"))
     declined_snap = ui.snap_at(

@@ -93,7 +93,25 @@ export NARWHAL_HISTORY_CORE="$NARWHAL_APPLICATION_CORE"
 run "document observer packaging contracts" "$PYTHON" -B spike/test_document_observer_package.py
 run "document observer build-gate contracts" "$PYTHON" -B spike/test_document_observer_gate.py
 run "document observer qualify command shapes" "$PYTHON" -B spike/test_document_observer_qualify.py
+run "document observer lifetime admission" "$PYTHON" native/document_observer/test_master_lifetime_admission.py
 run "document observer source gate" "$PYTHON" -B scripts/check_document_observer.py --stage-dev --mutations
+# The ordinary gate above replaces the staged receipt WITHOUT lifetime proof. Re-qualify the
+# freshly staged pair (observed RED/GREEN runs, then production admission) before any lifetime suite.
+OBSERVER_DIR="$ROOT/artifacts/document-observer/linux-x86_64"
+OBSERVER_INCLUDE="${NARWHAL_PYTHON_INCLUDE:-$ROOT/tools/cpython-3.13-include/python3.13}"
+[[ -f "$OBSERVER_INCLUDE/Python.h" ]] || OBSERVER_INCLUDE="$ROOT/tools/blender-src/lib/linux_x64/python/include/python3.13"
+OBSERVER_WORK="${NARWHAL_OBSERVER_WORK:-/var/tmp/nw-document-observer}"
+OBSERVER_TARGET="${NARWHAL_OBSERVER_PROBE_TARGET:-$OBSERVER_WORK/target}"
+run "document observer lifetime qualification" "$PYTHON" -B native/document_observer/qualify_lifetime.py \
+    --receipt "$OBSERVER_DIR/build.json" --library "$OBSERVER_DIR/_narwhal_document_observer.so" \
+    --python "$PYTHON" --python-include "$OBSERVER_INCLUDE" --core "$NARWHAL_APPLICATION_CORE" \
+    --rust-check "$OBSERVER_TARGET/debug/examples/observation_check" \
+    --output "$OBSERVER_WORK/lifetime-qualification-$$" --stage-dev
+# Lifetime suites run only against the proof-bearing pair; a receipt without proof is refused, never skipped.
+run "document observer lifetime proof present" "$PYTHON" -c \
+    'import json,sys; sys.exit(0 if "master_lifetime" in json.load(open(sys.argv[1])) else 1)' "$OBSERVER_DIR/build.json"
+run "document observer native master lifetime" "$PYTHON" native/document_observer/test_master_lifetime.py
+run "document observer product master lifetime" "$PYTHON" native/document_observer/test_master_lifetime_product.py
 run "live document registry mutations" "$PYTHON" -B spike/test_document_registry_model.py --mutations
 
 # UI core source qualification (no deployment).
@@ -307,7 +325,13 @@ PURE_SUITES=(
     spike/test_local_brep_move.py
     spike/test_native_local_brep_replay.py
     spike/test_meshed_master_transform.py
+    spike/test_document_runtime_identity.py
     spike/test_curve_inputs.py
+    spike/test_project_to_cplane_delete.py
+    spike/test_offset_fit_native.py
+    spike/test_offset_compact.py
+    spike/test_report121_124.py
+    spike/test_extrusion_creases.py
     spike/test_sweep1_mouse_inputs.py
     spike/test_curve_consumer_inputs.py
     spike/test_variable_edge_fillet.py
@@ -393,6 +417,7 @@ PURE_SUITES=(
     spike/test_open_arg.py
     spike/test_printdialog.py
     spike/test_printdialog_layout.py
+    spike/test_workspace_overlay.py
     spike/test_import_dialog.py
     spike/test_dxf_reader.py
     spike/test_dxf_writer.py
@@ -429,6 +454,7 @@ PURE_SUITES=(
     spike/test_native_tessellate.py
     spike/test_native_unit_table.py
     spike/test_native_nearest.py
+    spike/test_pure_core_nearest_batch_gate.py
     spike/test_rebuild_performance.py
     spike/test_native_interpolate.py
     spike/test_native_tween.py
@@ -453,6 +479,7 @@ BLENDER_SUITES=(
     spike/test_extrusion_display_mesh.py
     spike/test_trim.py
     spike/test_trim_drag.py
+    spike/test_trim_split_once.py
     spike/test_picture.py
     spike/test_picture_display.py
     spike/test_rebuild_dialog.py
@@ -476,6 +503,11 @@ BLENDER_SUITES=(
     spike/test_export_cmd.py
     spike/test_print_cmd.py
     spike/test_print_active_view.py
+    spike/test_document_admission.py
+    spike/test_document_shape_summary.py
+    spike/test_document_correspondence.py
+    spike/test_document_exact_work.py
+    spike/test_document_worker_bounds.py
 )
 
 run "native CDR core build" cargo +1.95.0 build --release --locked \

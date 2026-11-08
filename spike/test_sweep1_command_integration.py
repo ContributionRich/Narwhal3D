@@ -586,9 +586,20 @@ class CommandIntegrationTests(unittest.TestCase):
     def test_external_replacement_is_not_rolled_back(self):
         self.setup_case(); self.enter_sources()
         old_model = self.ctx.model
+        self.assertTrue(kernel.master_lifetime_status()['available'])
+        detached = bridge.make_box((10, 0, 0), (12, 3, 0), 4)
+        detached_shape = ob.make_box(2, 3, 4)
+        detached_key = kernel.register_master(detached, detached_shape)
+        retained_copy = detached.Duplicate()
+        del detached
+        kernel.collect_masters()
+        self.assertIs(kernel.master_of(retained_copy), detached_shape)
         new_model = NarwhalModel()
         external = bridge.make_box((0, 0, 0), (2, 3, 0), 4)
         external_shape = ob.make_box(2, 3, 4)
+        kernel.collect_masters()
+        # Plain dict: the oracle must not itself acquire native ownership leases.
+        retained = dict(kernel.master_registry_snapshot())
         real = self.ctx.model.register_blender_object
         def replace(*args):
             real(*args)
@@ -604,7 +615,16 @@ class CommandIntegrationTests(unittest.TestCase):
         self.assertIsNotNone(bpy.data.objects.get('external'))
         self.assertEqual(old_model.object_count(), 4)
         self.assertIs(kernel.master_of(external), external_shape)
-        self.assertEqual(len(kernel.master_registry_snapshot()), 1)
+        kernel.collect_masters()
+        expected = dict(retained)
+        expected[kernel.master_key_of(external)] = external_shape
+        self.assertEqual(dict(kernel.master_registry_snapshot()), expected)
+        self.assertIs(kernel.master_of(retained_copy), detached_shape)
+        del retained_copy
+        kernel.collect_masters()
+        del expected[detached_key]
+        self.assertEqual(dict(kernel.master_registry_snapshot()), expected)
+        self.assertIs(kernel.master_of(external), external_shape)
         self.assertEqual(self.ctx.undo.undo_names(), [])
 
     def test_before_insert_file_switch_preserves_replacement(self):
@@ -680,6 +700,12 @@ def mutations():
 
     cls = solid_commands.Sweep1Cmd
     cases = [
+        ('external-owner-retention', kernel, 'replace_document_masters',
+         '_MASTERS.update(fresh)', '_MASTERS.clear(); _MASTERS.update(fresh)',
+         'test_external_replacement_is_not_rolled_back'),
+        ('last-owner-reclamation', kernel, 'collect_masters',
+         '_MASTERS.pop(key, None)', '_MASTERS.get(key)',
+         'test_external_replacement_is_not_rolled_back'),
         ('late-content', cls, '_resolve_accepted_sources',
          'if bridge._freeform_source_hash(curve) != fingerprint:', 'if False:',
          'test_identity_capture_and_same_id_content'),

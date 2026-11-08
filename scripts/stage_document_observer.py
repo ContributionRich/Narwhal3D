@@ -24,6 +24,32 @@ def digest(path):
         return hashlib.file_digest(stream, 'sha256').hexdigest()
 
 
+_LIFETIME_CHECKS = {
+    'control': 'GREEN', 'history': 'GREEN', 'observer': 'GREEN',
+    'loader': 'GREEN', 'registry': 'GREEN', 'unload': 'GREEN',
+    'capability': 'GREEN', 'mutation-retention': 'RED',
+    'mutation-premature': 'RED', 'mutation-copy': 'RED', 'mutation-unload': 'RED',
+}
+
+
+def validate_lifetime(record, actual, platform):
+    """Assembly is pure Python; mirror the runtime's source-bound opt-in gate.
+
+    Absence is deliberately conservative. A supplied invalid proof is an assembly
+    error, never silently stripped or promoted. Windows lifetime is not qualified.
+    """
+    if 'master_lifetime' not in record:
+        return
+    proof = record['master_lifetime']
+    expected = dict(abi=1, platform=platform, library_sha256=actual,
+                    host_sha256=_HOSTS[platform], source_sha256=record['source_sha256'],
+                    loader_sha256=record['integration']['loader_sha256'],
+                    checks=_LIFETIME_CHECKS)
+    if (platform != 'linux-x86_64' or not isinstance(proof, dict)
+            or any(proof.get(key) != value for key, value in expected.items())):
+        raise ValueError('invalid or unsupported master lifetime qualification proof')
+
+
 def validate(source_root, native_directory, platform, *, observer_directory=None, core_path=None):
     if platform not in _HOSTS:
         raise ValueError(f'document observer pair is not runtime-qualified for {platform}; no incomplete package may be assembled')
@@ -58,6 +84,7 @@ def validate(source_root, native_directory, platform, *, observer_directory=None
     core = Path(core_path) if core_path is not None else Path(native_directory) / _CORE[platform]
     if not core.is_file() or core.is_symlink() or integration.get('core_sha256') != digest(core):
         raise ValueError('observer/application-core pair differs from qualified inputs')
+    validate_lifetime(record, actual, platform)
     return library, record
 
 
@@ -72,6 +99,11 @@ def stage(source_root, native_directory, app_root, platform, *, observer_directo
     # Keep relocation-safe qualification fields; do not ship private scratch paths
     # or the full third-party source inventory as an application runtime dependency.
     compact = {key: record[key] for key in ('upstream_sdist_sha256', 'source_sha256', 'integration')}
+    if 'master_lifetime' in record:
+        proof = record['master_lifetime']
+        compact['master_lifetime'] = {key: proof[key] for key in (
+            'abi', 'platform', 'library_sha256', 'host_sha256', 'source_sha256',
+            'loader_sha256', 'checks')}
     compact['host'] = {key: record['host'][key] for key in ('version', 'sha256', 'cache_tag', 'soabi')}
     compact['entries'] = [{key: item[key] for key in ('label', 'status', 'sha256')} for item in record['entries']]
     (destination / 'build.json').write_text(json.dumps(compact, sort_keys=True, indent=2) + '\n')

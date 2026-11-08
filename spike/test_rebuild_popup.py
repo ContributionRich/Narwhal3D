@@ -170,14 +170,13 @@ try:
     assert rp.parse_count("12", rp.DEGREE_MIN, rp.DEGREE_MAX, "Degree") == (None, DEGREE_ERROR)
     assert rp.parse_count("0", rp.DEGREE_MIN, rp.DEGREE_MAX, "Degree") == (None, DEGREE_ERROR)
     assert (rp.DEGREE_MIN, rp.DEGREE_MAX) == (1, rebuild.MAX_DEGREE) == (1, 11)
-    assert rp.span_count(10, 3, False) == 7 and rp.span_count(4, 3, False) == 1
-    assert rp.span_count(10, 3, True) == 10, "a closed curve has one span per point"
+
     print("PASS: numeric coercion accepts whole numbers only, within the engine's limits")
 
     # ------------------------------------------------------------ layout (pure, real font)
     for scale in (0.6, 1.0, 1.25, 1.5, 2.0, 2.5):
         for w, h in ((1280, 900), (900, 640), (640, 480), (420, 360), (300, 260)):
-            lay = rp.layout(w, h, scale, measure, "7", "Maximum deviation: 0.1", 0.0)
+            lay = rp.layout(w, h, scale, measure, "Maximum deviation: 0.1", 0.0)
             d = lay.dialog
             assert d.x >= -1e-6 and d.y >= -1e-6 and d.right <= w + 1e-6 and d.top <= h + 1e-6, (scale, w, h)
             for name in ("close", "cancel", "ok"):
@@ -189,26 +188,27 @@ try:
                     assert d.x <= r.x and r.right <= d.right, (name, scale, w, h)
             if h >= lay.content_h + rp.HEADER_H * scale + rp.FOOTER_H * scale + 2 * rp.EDGE_Y * scale:
                 assert lay.max_scroll == 0, ("fits without scrolling", scale, w, h)
-    comfortable = rp.layout(1280, 900, 1.0, measure, "7", "", 0.0)
+    comfortable = rp.layout(1280, 900, 1.0, measure, "", 0.0)
     assert comfortable.max_scroll == 0 and comfortable.dialog.w == rp.DIALOG_W
     for scale in (1.0, 1.5, 2.0):
-        lay = rp.layout(1280, 900, scale, measure, "7", "", 0.0)
+        lay = rp.layout(1280, 900, scale, measure, "", 0.0)
         for rid, (_attr, label) in rp.CHECKS.items():
             row = lay.rects[rid]
             assert measure(label, rp.FS["label"] * scale) <= row.w - 24 * scale, ("clipped", label, scale)
-    short = rp.layout(420, 360, 1.0, measure, "7", "", 0.0)
+    short = rp.layout(420, 240, 1.0, measure, "", 0.0)
     assert short.max_scroll > 0, "a short viewport scrolls the body rather than clipping the dialog"
-    below = short.targets["preview"]
-    assert not (short.body.y <= below.y and below.top <= short.body.top), "Preview starts below the fold"
-    shown = rp.layout(420, 360, 1.0, measure, "7", "", rp.scroll_for(short, "preview"))
-    t = shown.targets["preview"]
-    assert shown.body.y <= t.y and t.top <= shown.body.top, "focusing Preview scrolls it into view"
-    bottom = rp.layout(420, 360, 1.0, measure, "7", "", 1e9)
+    below = short.targets["tangent"]
+    assert not (short.body.y <= below.y and below.top <= short.body.top), "the last option starts below the fold"
+    shown = rp.layout(420, 240, 1.0, measure, "", rp.scroll_for(short, "tangent"))
+    t = shown.targets["tangent"]
+    assert shown.body.y <= t.y and t.top <= shown.body.top, "focusing the last option scrolls it into view"
+    bottom = rp.layout(420, 240, 1.0, measure, "", 1e9)
     assert bottom.scroll == short.max_scroll
     assert rp.scroll_for(bottom, "point") == bottom.spans["point"][0], "focusing a field above the view scrolls up to it"
-    tiny = rp.layout(120, 90, 2.5, measure, "7", "x", 0.0)
+    tiny = rp.layout(120, 90, 2.5, measure, "x", 0.0)
     assert tiny.dialog.x >= 0 and tiny.dialog.y >= 0 and tiny.dialog.right <= 120 and tiny.dialog.top <= 90
-    assert len(rp.layout(900, 900, 1.0, measure, "7", "word " * 60).feedback) > 1, "feedback wraps"
+    assert len(rp.layout(900, 900, 1.0, measure, "word " * 60).feedback) > 1, "feedback wraps"
+    assert rp.layout(900, 900, 1.0, measure, "").feedback == [] and "feedback" not in rp.layout(900, 900, 1.0, measure, "").rects, "no error, no feedback box"
     print("PASS: layout stays inside the viewport at 0.6-2.5 scale, scrolls when short, fits labels")
 
     # ---------------------------------------------------------------- palette / theme
@@ -283,15 +283,13 @@ try:
     send([ev("A", ctrl=True)] + typed("9") + [ev("TAB")])
     assert (rp._popup.draft.point_count, rp._popup.draft.degree) == (10, 9), "Point count = Degree + 1, last set wins"
     assert rp._popup.fields["point"].text == "10" and ui._rebuild_window["preview"] == ()
-    assert ui._rebuild_window["message"] == "Settings changed; click Preview"
-    assert layout_now().span_text == "1"
+    assert ui._rebuild_window["message"] == "Settings changed"
     click("point_box")
     send([ev("A", ctrl=True)] + typed("1.5") + [ev("TAB")])
     assert rp._popup.draft.point_count == 10, "a bad value never reaches the draft"
     assert rp._popup.field_error == ("point", POINT_ERROR)
-    assert rp.feedback(rp._popup, ui) == (POINT_ERROR, True)
-    click("preview")
-    assert ui._rebuild_window["preview"] == (), "Preview is blocked while a value is invalid"
+    assert rp.feedback(rp._popup) == (POINT_ERROR, True)
+    assert "preview" not in layout_now().targets and "preview" not in rp.FOCUS_ORDER
     click("ok")
     assert rp.is_open() and undo_count(app) == 0, "OK is blocked while a value is invalid"
     assert app.ctx.geom_by_name("Input").Encode() == before
@@ -302,27 +300,27 @@ try:
     assert (rp._popup.draft.point_count, rp._popup.draft.degree) == (7, 6), "a lowered Point count lowers Degree"
     click("point_box")
     send([ev("A", ctrl=True)] + typed("8") + [ev("RET")])
-    assert rp._popup.draft.point_count == 8 and ui._rebuild_window["message"].startswith("Maximum deviation:")
-    assert ui._rebuild_window["preview"] and app.ctx.geom_by_name("Input").Encode() == before
-    assert undo_count(app) == 0, "Preview is display only"
+    assert rp._popup.draft.point_count == 8 and rp._popup.focus == "point", "Enter commits the count only"
+    assert ui._rebuild_window["preview"] == () and app.ctx.geom_by_name("Input").Encode() == before
+    assert undo_count(app) == 0, "Enter computes no fit"
     click("degree_box")
     send([ev("A", ctrl=True)] + typed("1234567890123456"))
     assert len(rp._popup.fields["degree"].text) <= 12, "the count field takes at most 12 characters"
     send([ev("A", ctrl=True)] + typed("9") + [ev("TAB")])
     assert rp._popup.draft.degree == 9 and rp._popup.draft.point_count == 10
     rp.close(ui)
-    print("PASS: typed counts are validated on commit, coupled by the operator, and gate Preview")
+    print("PASS: typed counts are validated on commit, coupled by the operator, and gate acceptance")
 
     # a short viewport scrolls a new error into view, so a rejected value is never hidden
     begin(app)
-    REGION.height = 400
+    REGION.height = 340
     try:
         click("point_box")
         send([ev("A", ctrl=True)] + typed("1.5") + [ev("TAB")])
         lay = layout_now()
         fb = lay.rects["feedback"]
         assert lay.scroll > 0 and lay.body.y <= fb.y and fb.top <= lay.body.top, "the error is scrolled into view"
-        assert rp.feedback(rp._popup, ui) == (POINT_ERROR, True)
+        assert rp.feedback(rp._popup) == (POINT_ERROR, True)
     finally:
         REGION.height = 640
     rp.close(ui)
@@ -356,7 +354,7 @@ try:
     ui._rebuild_window["preview"] = ((0, 0), (1, 1))
     click("tangent")
     assert rp._popup.draft.preserve_tangents is True and ui._rebuild_window["preview"] == ()
-    assert ui._rebuild_window["message"] == "Settings changed; click Preview"
+    assert ui._rebuild_window["message"] == "Settings changed"
     click("tangent")
     assert rp._popup.draft.preserve_tangents is False
     rp.close(ui)
@@ -368,14 +366,14 @@ try:
 
     rebuild.rebuild_curve = failing
     try:
-        click("preview")
+        result = ui.NARWHAL_OT_rebuild_preview.execute(rp._popup.draft, None)
     finally:
         rebuild.rebuild_curve = real_rebuild_curve
-    assert rp._popup.error == "forced fit failure"
-    assert rp.feedback(rp._popup, ui) == ("forced fit failure", True)
+    assert result == {"CANCELLED"} and ui._rebuild_window["message"] == "forced fit failure"
     assert ui._rebuild_window["preview"] == () and app.ctx.geom_by_name("Input").Encode() == before
+    assert rp.feedback(rp._popup) == ("", False), "the popup shows no Preview result"
     rp.close(ui)
-    print("PASS: a failing Preview shows its error in the feedback line and changes nothing")
+    print("PASS: the Preview operator still reports a failing fit and changes nothing; the popup shows no Preview")
 
     for label, action in (
         ("Cancel button", lambda: click("cancel")),
@@ -400,6 +398,61 @@ try:
     assert app.ctx.undo_last() == "Rebuild" and app.ctx.geom_by_name("Input").Encode() == before
     print("PASS: OK runs the existing operator: one Undo step; the popup closes after it")
 
+    # ------------------------------------------------ contract: editing never fits, OK fits once
+    fits = []
+
+    def counting(geom, points, degree, tangents):
+        fits.append((points, degree, bool(tangents)))
+        return real_rebuild_curve(geom, points, degree, tangents)
+
+    begin(app)
+    rebuild.rebuild_curve = counting
+    try:
+        click("point_box")
+        send([ev("A", ctrl=True)] + typed("8") + [ev("RET")])
+        click("degree_box")
+        send([ev("A", ctrl=True)] + typed("2") + [ev("TAB")])
+        click("delete")
+        click("create")
+        click("tangent")
+        click("tangent")
+        click("point_box")
+        send([ev("A", ctrl=True)] + typed("9") + [ev("TAB")])
+    finally:
+        rebuild.rebuild_curve = real_rebuild_curve
+    assert fits == [], "editing never runs a fit"
+    assert rp._popup.draft.point_count == 9 and rp._popup.draft.degree == 2
+    assert ui._rebuild_window["preview"] == () and undo_count(app) == 0
+    assert app.ctx.geom_by_name("Input").Encode() == before
+    click("cancel")
+    assert not rp.is_open() and ui._rebuild_window is None and fits == []
+    assert app.ctx.geom_by_name("Input").Encode() == before and undo_count(app) == 0
+    assert ui._rebuild_last["PointCount"] == 10, "Cancel keeps the remembered settings"
+    print("PASS: editing and Cancel never fit or change the document; Cancel keeps the last settings")
+
+    begin(app)
+    expected = real_rebuild_curve(app.ctx.geom_by_name("Input"), 8, 3, False)[0].Encode()
+    fits.clear()
+    rebuild.rebuild_curve = counting
+    try:
+        click("point_box")
+        send([ev("A", ctrl=True)] + typed("8") + [ev("RET")])
+        assert fits == [], "Enter in a count computes nothing"
+        send([ev("TAB", shift=True), ev("TAB", shift=True)])
+        assert rp._popup.focus == "ok"
+        send([ev("RET")])
+    finally:
+        rebuild.rebuild_curve = real_rebuild_curve
+    assert not rp.is_open() and ui._rebuild_window is None
+    assert fits == [(8, 3, False)], "OK runs one fit, with the committed settings"
+    rebuilt = curve_names(app.model)
+    rebuilt_geom = app.ctx.geom_by_name(rebuilt[0])
+    assert rebuilt == ["Curve_rebuilt"] and len(rebuilt_geom.Points) == 8 and rebuilt_geom.Degree == 3
+    assert rebuilt_geom.Encode() == expected, "OK applies the exact fit the Preview would show"
+    assert undo_count(app) == 1 and app.ctx.undo_last() == "Rebuild"
+    assert app.ctx.geom_by_name("Input").Encode() == before
+    print("PASS: Enter in a count fits nothing; Enter on OK applies one exact fit as one Undo step")
+
     # -------------------------------------------------------------------- paint (draw only)
     design.set_theme("light")
     begin(app, last=DEFAULTS)
@@ -420,9 +473,11 @@ try:
     texts = [op[2] for op in ops if op[0] == "text"]
     for label in ("Rebuild", "Point count", "Degree", "Delete input",
                   "Create new object on current layer", "Preserve end tangent directions",
-                  "Preview curve", "Cancel", "OK", rp.UNIMPLEMENTED, rp.UNIMPLEMENTED_STATE,
-                  "CURVE SETTINGS", "PREVIEW", "Span count: 7", "Min. 2", "Min. 1", DEGREE_ERROR):
+                  "Cancel", "OK", rp.UNIMPLEMENTED, rp.UNIMPLEMENTED_STATE,
+                  "CURVE SETTINGS", "Min. 2", "Min. 1", DEGREE_ERROR):
         assert label in texts, label
+    assert not any("Preview" in t or "PREVIEW" in t or "Span" in t or "deviation" in t
+                   for t in texts), texts
     lay = layout_now()
     d = lay.dialog
     for op in ops:
@@ -482,11 +537,10 @@ try:
     click("point_box")
     send([ev("A", ctrl=True)] + typed("4") + [ev("TAB")])
     assert st.draft.point_count == 4
-    click("preview")
     assert texts(readouts(painted(st), layout_now())) == [["Current: varies"], ["Current: 3"]]
     assert ui._rebuild_window["counts"] == [(6, 3), (9, 3)] and undo_count(app) == 0
     rp.close(ui)
-    print("PASS: editing and Preview change the requested settings, never the Current readouts")
+    print("PASS: editing changes the requested settings, never the Current readouts")
 
     for theme in ("light", "dark"):
         design.set_theme(theme)

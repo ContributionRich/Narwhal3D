@@ -60,6 +60,84 @@ class PackageTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'already exists'):
             stage.stage(self.source, self.native, self.app, 'linux-x86_64')
 
+    def lifetime_proof(self):
+        return dict(abi=1, platform='linux-x86_64', library_sha256=stage.digest(self.library),
+                    host_sha256=stage._HOSTS['linux-x86_64'],
+                    source_sha256=self.record['source_sha256'],
+                    loader_sha256=self.record['integration']['loader_sha256'],
+                    checks=dict(stage._LIFETIME_CHECKS))
+
+    def test_matching_lifetime_proof_survives_compaction(self):
+        self.record['master_lifetime'] = self.lifetime_proof()
+        self.save()
+        stage.stage(self.source, self.native, self.app, 'linux-x86_64')
+        compact = json.loads((self.app / 'narwhal3d/native/document-observer/build.json').read_text())
+        self.assertEqual(compact.get('master_lifetime'), self.record['master_lifetime'])
+
+    def test_absent_proof_stays_conservative(self):
+        stage.stage(self.source, self.native, self.app, 'linux-x86_64')
+        compact = json.loads((self.app / 'narwhal3d/native/document-observer/build.json').read_text())
+        self.assertNotIn('master_lifetime', compact)
+
+    def test_tampered_or_partial_lifetime_proof_refuses(self):
+        import copy
+        proof = self.lifetime_proof()
+        for key in proof:
+            for removal in (True, False):
+                with self.subTest(key=key, removal=removal):
+                    changed = copy.deepcopy(proof)
+                    if removal: del changed[key]
+                    else: changed[key] = 'tampered'
+                    self.record['master_lifetime'] = changed
+                    self.save()
+                    with self.assertRaisesRegex(ValueError, 'master lifetime qualification'):
+                        stage.validate(self.source, self.native, 'linux-x86_64')
+        for key in proof['checks']:
+            changed = copy.deepcopy(proof)
+            del changed['checks'][key]
+            self.record['master_lifetime'] = changed
+            self.save()
+            with self.assertRaisesRegex(ValueError, 'master lifetime qualification'):
+                stage.validate(self.source, self.native, 'linux-x86_64')
+        self.assertFalse(self.app.exists())
+
+    def test_windows_cannot_package_lifetime_proof(self):
+        directory, core = self.windows_pair()
+        receipt = directory / 'build.json'
+        record = json.loads(receipt.read_text())
+        record['master_lifetime'] = self.lifetime_proof()
+        receipt.write_text(json.dumps(record))
+        with self.assertRaisesRegex(ValueError, 'master lifetime qualification'):
+            stage.validate(self.source, self.native, 'windows-x86_64',
+                           observer_directory=directory, core_path=core)
+
+    def test_lifetime_staging_mutations_are_red(self):
+        original = stage.validate_lifetime
+        stage.validate_lifetime = lambda *args: None
+        try:
+            result = unittest.TextTestRunner(stream=io.StringIO()).run(unittest.TestSuite([
+                PackageTests('test_tampered_or_partial_lifetime_proof_refuses')]))
+            self.assertFalse(result.errors)
+            self.assertTrue(result.failures)
+        finally:
+            stage.validate_lifetime = original
+        print('RED assertion: tampered lifetime proof guard removed')
+        original_stage = stage.stage
+        source = inspect.getsource(original_stage)
+        tree = ast.parse(source)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.If) and ast.unparse(node.test) == "'master_lifetime' in record":
+                node.body = [ast.Pass()]
+        try:
+            exec(compile(ast.fix_missing_locations(tree), '<dropped-lifetime-proof>', 'exec'), stage.__dict__)
+            result = unittest.TextTestRunner(stream=io.StringIO()).run(unittest.TestSuite([
+                PackageTests('test_matching_lifetime_proof_survives_compaction')]))
+            self.assertEqual(result.errors, [])
+            self.assertEqual(len(result.failures), 1)
+        finally:
+            stage.stage = original_stage
+        print('RED: valid lifetime proof dropped during compaction')
+
     def test_changed_binary_refuses(self):
         self.library.write_bytes(b'changed')
         with self.assertRaisesRegex(ValueError, 'qualified control'):

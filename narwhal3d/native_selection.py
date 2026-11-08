@@ -143,6 +143,16 @@ def _binding():
                 except AttributeError:
                     pass
                 try:
+                    clipped_polylines = library.narwhal_nearest_projected_polylines_clipped_f64
+                    clipped_polylines.argtypes = [
+                        _DoubleP, _DoubleP, ctypes.c_size_t, _UInt64P, ctypes.c_size_t,
+                        ctypes.c_double, ctypes.c_double, _DoubleP,
+                        _UInt64P, _DoubleP, _DoubleP, _ByteP,
+                    ]
+                    clipped_polylines.restype = ctypes.c_int
+                except AttributeError:
+                    pass
+                try:
                     screen_polyline = library.narwhal_nearest_screen_polyline_f64
                     screen_polyline.argtypes = [
                         _DoubleP, _ByteP, ctypes.c_size_t,
@@ -1256,7 +1266,8 @@ def gumball_polyline_distances(points, offsets, matrix, width, height, mouse):
         return None
 
 
-def nearest_projected_polylines(polylines, matrix, width, height, mouse, *, with_distances=False):
+def nearest_projected_polylines(polylines, matrix, width, height, mouse, *,
+                                with_distances=False, clipped=False):
     """Return coarse world points, optionally paired with Rust's pixel distances.
 
     ``with_distances`` serves the overlap picker without redoing hit-test math in
@@ -1267,9 +1278,11 @@ def nearest_projected_polylines(polylines, matrix, width, height, mouse, *, with
     if binding is None:
         return None
     library, _project, _rect_query, _batch_query, _nearest_curve, path = binding
-    query = getattr(library, "narwhal_nearest_projected_polylines_f64", None)
+    symbol = ("narwhal_nearest_projected_polylines_clipped_f64" if clipped
+              else "narwhal_nearest_projected_polylines_f64")
+    query = getattr(library, symbol, None)
     if query is None:
-        _status = f"native selection projected-polyline query unavailable: {path}"
+        _status = f"native selection projected-polyline query {symbol} unavailable: {path}"
         return None
     try:
         import numpy as np

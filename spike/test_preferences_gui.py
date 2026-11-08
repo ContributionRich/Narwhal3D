@@ -149,8 +149,9 @@ def inspector(name):
     redraw()
 
 
-def rect_tuple(rect):
-    return (rect.x, rect.y, rect.x + rect.w, rect.y + rect.h)
+def rect_tuple(rect, origin=(0, 0)):
+    ox, oy = origin
+    return (rect.x + ox, rect.y + oy, rect.x + rect.w + ox, rect.y + rect.h + oy)
 
 
 def print_choice(key, value):
@@ -195,15 +196,19 @@ def draw_checks(name):
         fill('_draw_ai_panel', ui._ai['lay']['input'], design.rgb01(design.FIELD_BG))
         check(ui.open_print_dialog(), 'Print opens for real draw')
         redraw()
-        lay = ui._print_dialog_layout(ui._print_dialog_region())
-        fill('draw_print_dialog', rect_tuple(lay.panel), design.rgb01(design.PANEL_BG))
+        # Print is a native window overlay: its layout is region-local, but the painter
+        # draws in window pixels, so the probe offsets its rectangles by the region origin.
+        region = ui._print_dialog_region()
+        origin = (region.x, region.y)
+        lay = ui._print_dialog_layout(region)
+        fill('draw_print_dialog', rect_tuple(lay.panel, origin), design.rgb01(design.PANEL_BG))
         for rid, _, rect in lay.rows:
             if rid in PRINT:
-                fill('draw_print_dialog', rect_tuple(rect), design.rgb01(design.FIELD_BG))
+                fill('draw_print_dialog', rect_tuple(rect, origin), design.rgb01(design.FIELD_BG))
         page = ui._print_dialog['page']
         check(page is not None, 'real physical Print page exists: ' + ui.print_dialog_state().message)
         sheet = ui.printdialog.page_rect(lay.preview, page.width_mm, page.height_mm)
-        fill('draw_print_dialog', rect_tuple(sheet), (1, 1, 1, 1))
+        fill('draw_print_dialog', rect_tuple(sheet, origin), (1, 1, 1, 1))
         for key, record in records.items():
             colors = [color for _, color in record['text']]
             check(design.rgb01(design.TEXT) in colors and design.rgb01(design.TEXT_MUTED) in colors,

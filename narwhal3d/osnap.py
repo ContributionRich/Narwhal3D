@@ -1122,18 +1122,22 @@ def _native_dynamic_scored(targets, wanted, base, mouse, radius_px,
 def best_on_screen(targets, cursor, modes, project, radius_px, plane=None, *,
                    base=None, snap_to_locked=False, project_batch=None,
                    project_near_batch=None, project_distance_batch=None,
-                   discrete_batch=None):
+                   discrete_batch=None, mouse=None):
     """:func:`best`, with distance measured in SCREEN PIXELS. See the block comment.
 
     `project` maps a world point to ``(x, y)`` pixels, or None when it cannot be seen
-    (behind a perspective camera). `cursor` is the cursor's world point; its
-    projection IS the mouse position, so no separate mouse argument can disagree
-    with it. ``project_batch`` may return packed ``(pixels, visibility)`` for all
+    (behind a perspective camera). `mouse`, when supplied by the actual input
+    event, is authoritative; otherwise the world `cursor` is projected. This
+    avoids reprojecting an ill-conditioned CPlane hit at a perspective horizon.
+    ``project_batch`` may return packed ``(pixels, visibility)`` for all
     candidate points; malformed or failed batches rerun the scalar projector for
     every candidate. Every other rule -- `Near` as a fallback, ties broken by mode
     order, locked targets dropped -- is :func:`best`'s, unchanged.
     """
-    mouse = project(cursor) if cursor is not None else None
+    # The real event position is authoritative. At a CPlane horizon the world
+    # intersection can be enormous, and projecting it back loses the mouse at
+    # close zoom. Pure callers may still supply only a world cursor.
+    mouse = mouse if mouse is not None else project(cursor) if cursor is not None else None
     if mouse is None:
         return None
     targets = tuple(targets or ())

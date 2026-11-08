@@ -73,6 +73,36 @@ def load_observer() -> Observer:
     raise ObservationUnavailable('qualified native document observer is not installed')
 
 
+def _lifetime_allowed(evidence, digest, tag):
+    """Separate opt-in admission: ordinary observer receipts never enable cleanup.
+
+    Windows retains conservative strong ownership until its own pinned-runtime
+    lifetime qualification exists. A MinGW object probe is not that qualification.
+    """
+    if tag != 'linux-x86_64':
+        return False
+    proof = evidence.get('master_lifetime')
+    if not isinstance(proof, dict):
+        return False
+    expected = {
+        'control': 'GREEN', 'history': 'GREEN', 'observer': 'GREEN',
+        'loader': 'GREEN', 'registry': 'GREEN', 'unload': 'GREEN',
+        'capability': 'GREEN', 'mutation-retention': 'RED',
+        'mutation-premature': 'RED', 'mutation-copy': 'RED', 'mutation-unload': 'RED',
+    }
+    root = Path(__file__).resolve().parents[1]
+    try:
+        return (proof.get('abi') == 1 and proof.get('platform') == tag
+                and proof.get('library_sha256') == digest
+                and proof.get('host_sha256') == _HOSTS[tag]
+                and proof.get('source_sha256') == evidence.get('source_sha256')
+                and proof.get('source_sha256') == _sha(root / 'native/document_observer/observer.cpp')
+                and proof.get('loader_sha256') == _sha(__file__)
+                and proof.get('checks') == expected)
+    except OSError:
+        return False
+
+
 def load_candidate(library: str | Path, receipt: str | Path) -> Observer:
     """Admit one explicitly selected tested binary pair.
 
@@ -108,7 +138,7 @@ def load_candidate(library: str | Path, receipt: str | Path) -> Observer:
                 digest, module = _loaded
                 if digest != expected:
                     raise ObservationUnavailable('different observer already loaded; use a fresh process')
-                return Observer(module)
+                return Observer(module, lifetime=_lifetime_allowed(evidence, expected, tag))
             if _MODULE in sys.modules:
                 raise ObservationUnavailable('observer was loaded outside the qualified boundary')
             spec = importlib.util.spec_from_file_location(_MODULE, library)
@@ -120,18 +150,50 @@ def load_candidate(library: str | Path, receipt: str | Path) -> Observer:
                 raise ObservationUnavailable('observer entry point missing')
             sys.modules[_MODULE] = module
             _loaded = (expected, module)
-            return Observer(module)
+            return Observer(module, lifetime=_lifetime_allowed(evidence, expected, tag))
         except ObservationUnavailable:
             raise
         except (OSError, ValueError, KeyError, TypeError, ImportError) as error:
             raise ObservationUnavailable('valid qualified observer pair required') from error
 
 
+class MasterLifetime:
+    """Opaque host ownership glue; no geometry, timeline or eviction policy here."""
+
+    def __init__(self, module):
+        self.bind = module.lease_bind
+        self.key = module.lease_key
+        self.unbind = module.lease_unbind
+        self.hold = module.lease_hold
+        self.hold_key = module.lease_hold_key
+        self.drain = module.lease_drain
+        self.file_owner = module.file_owner
+        self.stats = module.lease_stats
+
+
 class Observer:
-    def __init__(self, module: ModuleType) -> None:
+    def __init__(self, module: ModuleType, *, lifetime=False) -> None:
         self._observe: Callable[[r3.File3dm], bytes] = module.observe
         self._index: Callable[[r3.File3dm], bytes] = module.index
         self._copy_attributes = module.copy_attributes
+        self._master_lifetime = None
+        required = ('lease_bind', 'lease_key', 'lease_unbind', 'lease_hold',
+                    'lease_hold_key', 'lease_drain', 'file_owner', 'lease_stats')
+        if (lifetime and _platform_tag() == 'linux-x86_64'
+                and all(callable(getattr(module, name, None)) for name in required)
+                and callable(getattr(module, 'master_lifetime_abi', None))
+                and module.master_lifetime_abi() == 1):
+            self._master_lifetime = MasterLifetime(module)
+
+    def master_lifetime(self):
+        """None means retain strong masters and never activate native cleanup."""
+        return self._master_lifetime
+
+    def master_lifetime_status(self):
+        return {'available': self._master_lifetime is not None,
+                'platform': _platform_tag(),
+                'reason': ('qualified pinned Linux wheel' if self._master_lifetime is not None
+                           else 'NOT_QUALIFIED: conservative strong master ownership')}
 
     def index(self, file: r3.File3dm) -> bytes:
         if type(file) is not r3.File3dm:

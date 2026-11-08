@@ -5,25 +5,27 @@ Light/Dark control. Every colour is a `design` token read at draw time, so the p
 follows the app's active theme and nothing else. Nothing here writes global theme,
 layout or viewport state.
 
-Behaviour is NOT here. Preview, OK and Cancel call the existing operators in `ui.py`
-(`NARWHAL_OT_rebuild_preview.execute`, `NARWHAL_OT_rebuild_dialog.execute` and
-`.cancel`) against this module's draft, an object that carries the operator's settings
-and a `report(level, text)` method. Count coupling is `ui._rebuild_counts_changed`.
-Drawing (`paint_popup`) only reads state. Events (`handle_event`) edit the draft and
-call those callbacks. No document is written until the OK callback runs.
+Behaviour is NOT here. OK and Cancel call the existing operators in `ui.py`
+(`NARWHAL_OT_rebuild_dialog.execute` and `.cancel`) against this module's draft, an
+object that carries the operator's settings and a `report(level, text)` method. Count
+coupling is `ui._rebuild_counts_changed`. Drawing (`paint_popup`) only reads state.
+Events (`handle_event`) edit the draft and call those callbacks. Editing never computes
+a fit or changes geometry: the rebuild runs once, when OK is accepted, as a single Undo
+step. The existing internal Preview operator stays in `ui.py` but is not part of this popup.
 
 Lifetime: `open(ui)` attaches one POST_PIXEL draw handler to the 3D viewport that is
 active at that moment; `handle_event(ui, event, context)` consumes input while open;
 `close(ui)` removes the handler and forgets the draft.
 
 Editing uses `textfield.TextField`, the native-backed editor. Point count and degree are
-whole numbers, checked on commit (Enter, Tab, a click elsewhere, Preview or OK). A bad
-value is shown in the feedback line and blocks Preview and OK until it is fixed.
+whole numbers, checked on commit (Enter, Tab, a click elsewhere, or OK). A bad value is
+shown in the feedback line and blocks OK until it is fixed.
 
 Keys: Tab / Shift+Tab / Up / Down move focus; Space or Enter activates a button or
-toggles a checkbox; Enter in a count commits it and runs Preview; Esc cancels.
+toggles a checkbox; Enter in a count commits that count only; Enter on OK applies the
+rebuild; Esc cancels.
 
-Coordinates: region pixels, origin bottom-left. Layout is written in CSS pixels and
+Coordinates: workspace-local pixels, origin bottom-left. Layout is written in CSS pixels and
 multiplied by the interface scale (`ui._ui_scale()`).
 
 The design's min labels are illustrative: keep the existing rebuild engine's supported
@@ -37,7 +39,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
-from . import design, glyphs, printdialog, rebuild, textfield
+from . import design, glyphs, printdialog, rebuild, textfield, workspace_overlay
 
 POINT_MIN, POINT_MAX = 2, 10000
 DEGREE_MIN, DEGREE_MAX = 1, rebuild.MAX_DEGREE
@@ -45,7 +47,7 @@ MAX_FIELD_CHARS = 12
 
 #: Tab order. "close" and the footer buttons are focusable; the advanced row is not.
 FOCUS_ORDER = ("close", "point", "degree", "delete", "create", "tangent",
-               "preview", "cancel", "ok")
+               "cancel", "ok")
 #: (operator attribute, label, minimum, maximum, last-set key for count coupling)
 FIELDS = {
     "point": ("point_count", "Point count", POINT_MIN, POINT_MAX, "PointCount"),
@@ -57,16 +59,13 @@ CHECKS = {
     "create": ("current_layer", "Create new object on current layer"),
     "tangent": ("preserve_tangents", "Preserve end tangent directions"),
 }
-BODY_TARGETS = ("point", "degree", "delete", "create", "tangent", "preview")
+BODY_TARGETS = ("point", "degree", "delete", "create", "tangent")
 HOVERABLE = BODY_TARGETS + ("close", "cancel", "ok")
 SUBTITLE = "Refine the selected curve's structure."
-INSTRUCTION = "Click Preview to measure maximum deviation."
+
 UNIMPLEMENTED = "Master curve / SubD-friendly / surface rebuild"
 UNIMPLEMENTED_STATE = "Not implemented yet"
-#: The status `ui._queue_rebuild_window` sets before any Preview. Shown as "No preview
-#: yet." rather than repeating the instruction line above it.
-INITIAL_STATUS = "Click Preview to measure maximum deviation"
-NO_PREVIEW = "No preview yet."
+
 
 #: OURS: the AI settings popup's error tokens, light and dark (design has none).
 ERROR_INK = {"light": (0xAC, 0x57, 0x1E), "dark": (0xF1, 0xB8, 0x78)}
@@ -85,12 +84,11 @@ OPTION_H = 17.0
 OPTION_GAP = 10.0
 CHECK = 15.0
 BUTTON_H = 31.0
-PREVIEW_H = 33.0
 LINE = 1.45
 TEXT_BASE = 0.36          # baseline offset below a text line's centre, in font sizes
 SCROLL_STEP = 40.0
 FS = {"title": 15.0, "sub": 10.5, "mini": 10.0, "label": 11.5, "hint": 10.0,
-      "field": 12.0, "chip": 10.5, "instr": 11.0, "feedback": 10.5, "adv_title": 11.0,
+      "field": 12.0, "feedback": 10.5, "adv_title": 11.0,
       "adv_state": 10.5, "button": 11.5}
 
 MOUSE_TYPES = frozenset(("MOUSEMOVE", "INBETWEEN_MOUSEMOVE", "LEFTMOUSE", "RIGHTMOUSE",
@@ -146,15 +144,6 @@ def parse_count(text, lo, hi, label):
     return value, None
 
 
-def span_count(point_count, degree, closed):
-    """The span readout. The same formula `ui.NARWHAL_OT_rebuild_dialog.draw` uses."""
-    return point_count if closed else max(1, point_count - degree)
-
-
-def span_label(span_text):
-    """The chip's text. Layout measures this exact string, so the chip is never too small."""
-    return f"Span count: {span_text}"
-
 
 def current_labels(counts):
     """The "Current:" readouts for (point count, degree) of the queued selection.
@@ -175,16 +164,13 @@ def current_labels(counts):
     return tuple(labels)
 
 
-def feedback(st, ui):
-    """``(text, is_error)`` for the feedback line. Read-only."""
+def feedback(st):
+    """``(text, is_error)`` for the feedback line: an error only, never a status. Read-only."""
     if st.field_error is not None:
         return st.field_error[1], True
     if st.error:
         return st.error, True
-    message = (ui._rebuild_window or {}).get("message") or ""
-    if not message or message == INITIAL_STATUS:
-        return NO_PREVIEW, False
-    return message, False
+    return "", False
 
 
 # ---------------------------------------------------------------------------
@@ -224,13 +210,12 @@ class Layout:
     content_h: float
     max_scroll: float
     scroll: float
-    feedback: list    # word-wrapped feedback lines
-    span_text: str
+    feedback: list    # word-wrapped feedback lines; empty when there is no error
     current: tuple    # the "Current:" label under the point count and under the degree
 
 
-def layout(region_w, region_h, scale, measure, span_text="", feedback_text="",
-           scroll=0.0, current=("", "")):
+def layout(region_w, region_h, scale, measure, feedback_text="", scroll=0.0,
+           current=("", "")):
     """Where everything goes in a region of this size, at this interface scale.
 
     `measure(text, px) -> width` is the drawing font's width. The dialog is centred and
@@ -267,23 +252,12 @@ def layout(region_w, region_h, scale, measure, span_text="", feedback_text="",
         items[rid] = (x_in, y, inner, OPTION_H * s)
         y += OPTION_H * s + OPTION_GAP * s
     y += 17 * s - OPTION_GAP * s
-    items["rule"] = (x_in, y, inner, s)
-    y += s + 14 * s
-    chip_h = lh("chip") + 8 * s
-    chip_w = measure(span_label(span_text), FS["chip"] * s) + 18 * s
-    items["mini_preview"] = (x_in, y, inner - chip_w, chip_h)
-    items["span"] = (x_in + inner - chip_w, y, chip_w, chip_h)
-    y += chip_h + 5 * s
-    items["instr"] = (x_in, y, inner, lh("instr"))
-    y += lh("instr") + 11 * s
-    items["preview"] = (x_in, y, inner, PREVIEW_H * s)
-    y += PREVIEW_H * s + 8 * s
-    text_w = inner - 20 * s
-    lines = printdialog.wrap(feedback_text, text_w,
-                             lambda t: measure(t, FS["feedback"] * s)) or [""]
-    fb_h = len(lines) * lh("feedback") + 18 * s
-    items["feedback"] = (x_in, y, inner, fb_h)
-    y += fb_h + 15 * s
+    lines = printdialog.wrap(feedback_text, inner - 20 * s,
+                             lambda t: measure(t, FS["feedback"] * s))
+    if lines:
+        fb_h = len(lines) * lh("feedback") + 18 * s
+        items["feedback"] = (x_in, y, inner, fb_h)
+        y += fb_h + 15 * s
     adv_h = 2 * s + 20 * s + lh("adv_title") + 5 * s + lh("adv_state")
     items["advanced"] = (x_in, y, inner, adv_h)
     content_h = y + adv_h + 13 * s
@@ -314,7 +288,9 @@ def layout(region_w, region_h, scale, measure, span_text="", feedback_text="",
         if name in items:
             targets[name] = rects[name]
             spans[name] = (items[name][1], items[name][1] + items[name][3])
-    spans["feedback"] = (items["feedback"][1], items["feedback"][1] + items["feedback"][3])
+    if "feedback" in items:
+        spans["feedback"] = (items["feedback"][1],
+                             items["feedback"][1] + items["feedback"][3])
     title_top = header.top - 15 * s
     icon = Rect(left + PAD_X * s, title_top - 34 * s, 34 * s, 34 * s)
     text_x = icon.right + 10 * s
@@ -336,7 +312,7 @@ def layout(region_w, region_h, scale, measure, span_text="", feedback_text="",
                            BUTTON_H * s)
     targets["ok"], targets["cancel"] = rects["ok"], rects["cancel"]
     return Layout(s, dialog, header, body, footer, rects, targets, spans, body_h,
-                  content_h, max_scroll, scroll, lines, span_text, tuple(current))
+                  content_h, max_scroll, scroll, lines, tuple(current))
 
 
 def hit(lay, x, y):
@@ -384,6 +360,7 @@ def fit(text, width, size, measure):
 class _Popup:
     def __init__(self, pane_key, draft, handler):
         self.pane_key = pane_key
+        self.window_key = workspace_overlay.window_key()
         self.draft = draft
         self.handler = handler
         self.fields = {rid: textfield.TextField(str(getattr(draft, spec[0])),
@@ -394,7 +371,7 @@ class _Popup:
         self.drag = False
         self.scroll = 0.0
         self.field_error = None     # (rid, message) for a value that did not commit
-        self.error = ""             # the last Preview / OK failure
+        self.error = ""             # the last OK failure
 
 
 def is_open():
@@ -416,12 +393,13 @@ def _window_region(area):
 
 
 def _pane_region(ui, key):
-    area = next((a for a in ui._view3d_areas() if ui._pane_key(a) == key), None)
-    return _window_region(area)
+    if not any(ui._pane_key(area) == key for area in ui._view3d_areas()):
+        return None
+    return workspace_overlay.region(ui)
 
 
 def open(ui):
-    """Open the popup over the active viewport, for the Rebuild window `ui` has queued.
+    """Open the popup over the modeling workspace, for the Rebuild window `ui` has queued.
 
     Returns True when it opened. The window must be current (same document); a stale
     window is cleared and reported as False. Nothing in the document changes."""
@@ -440,7 +418,10 @@ def open(ui):
         return False
     draft = Draft(ui._rebuild_last)
     window["operator"] = draft
-    handler = bpy.types.SpaceView3D.draw_handler_add(_draw, (ui,), "WINDOW", "POST_PIXEL")
+    if not hasattr(bpy.types.Window, "draw_handler_add"):
+        ui.app_state.log("Rebuild: the centered dialog requires native window overlay support")
+        return False
+    handler = bpy.types.Window.draw_handler_add(_draw, (ui,), "POST_PIXEL")
     _release_pending[0] = False
     _popup = _Popup(ui._pane_key(area), draft, handler)
     ui._tag_redraw_viewports()
@@ -456,7 +437,7 @@ def close(ui):
     _popup = None
     import bpy
 
-    bpy.types.SpaceView3D.draw_handler_remove(st.handler, "WINDOW")
+    bpy.types.Window.draw_handler_remove(st.handler)
     window = ui._rebuild_window
     if window is not None and window.get("operator") is st.draft:
         window["operator"] = None
@@ -464,11 +445,9 @@ def close(ui):
 
 
 def _layout(st, ui, region_w, region_h, scroll=None):
-    span = span_count(st.draft.point_count, st.draft.degree,
-                      bool((ui._rebuild_window or {}).get("closed")))
-    text, _bad = feedback(st, ui)
+    text, _bad = feedback(st)
     counts = (ui._rebuild_window or {}).get("counts")
-    return layout(region_w, region_h, ui._ui_scale(), ui._text_width, str(span), text,
+    return layout(region_w, region_h, ui._ui_scale(), ui._text_width, text,
                   st.scroll if scroll is None else scroll, current_labels(counts))
 
 
@@ -536,17 +515,8 @@ def _toggle(st, ui, rid):
     if rid == "tangent" and ui._rebuild_window is not None:
         # The preserved tangents change the fit, so the shown preview is stale.
         ui._rebuild_window["preview"] = ()
-        ui._rebuild_window["message"] = "Settings changed; click Preview"
+        ui._rebuild_window["message"] = "Settings changed"
 
-
-def _preview(st, ui):
-    _leave(st, ui)
-    if st.field_error is not None:
-        return
-    st.draft.last_report = ""
-    ui._rebuild_window["operator"] = st.draft
-    result = ui.NARWHAL_OT_rebuild_preview.execute(st.draft, None)
-    st.error = "" if result == {"FINISHED"} else (st.draft.last_report or "Preview failed.")
 
 
 def _ok(st, ui, context):
@@ -572,8 +542,6 @@ def _cancel(st, ui):
 def _activate(st, ui, context, rid):
     if rid in ("close", "cancel"):
         _cancel(st, ui)
-    elif rid == "preview":
-        _preview(st, ui)
     elif rid == "ok":
         _ok(st, ui, context)
     elif rid in CHECKS:
@@ -595,7 +563,7 @@ def _click(st, ui, context, lay, x, y, shift):
         st.fields[target].set_caret(_caret_index(st, ui, lay, target, x),
                                     select=shift and was_focused)
         st.drag = True
-    elif target in CHECKS or target in ("preview", "ok"):
+    elif target in CHECKS or target == "ok":
         _focus(st, ui, target)
         _activate(st, ui, context, target)
     elif target in ("close", "cancel", "scrim"):
@@ -625,8 +593,7 @@ def _set_clipboard(context, text):
 def _field_key(st, ui, context, rid, kind, ch, shift):
     field = st.fields[rid]
     if kind == "enter":
-        if _commit(st, ui, rid):
-            _preview(st, ui)
+        _commit(st, ui, rid)
     elif kind in ("char", "paste", "space"):
         text = " " if kind == "space" else "".join(c for c in ch if c.isprintable())
         if text:
@@ -703,6 +670,8 @@ def handle_event(ui, event, context=None):
         return False
     if ui._rebuild_window is None or not ui._rebuild_source_current():
         close(ui)
+        return False
+    if not workspace_overlay.belongs_to(st.window_key):
         return False
     if etype.startswith(("TIMER", "WINDOW_", "FILE_")) or etype in MODIFIER_TYPES:
         return False
@@ -903,24 +872,6 @@ def _paint_check(lay, st, pal, p, rid):
            colour)
 
 
-def _paint_preview(lay, st, pal, p):
-    s = lay.scale
-    r = lay.rects["preview"]
-    if st.focus == "preview":
-        _ring(p, r, 6 * s, pal["panel"], pal["accent"], s)
-    hovered = st.hover == "preview"
-    p.round(r.x, r.y, r.right, r.top, 6 * s, pal["tool_hover"] if hovered else pal["chip"],
-            pal["accent"] if hovered else pal["border_strong"], s)
-    size, icon, gap = FS["button"] * s, 13 * s, 7 * s
-    label = "Preview curve"
-    text_w = p.text_width(label, size)
-    x0 = r.x + (r.w - (icon + gap + text_w)) / 2
-    f = _svg(x0 + icon / 2, r.y + r.h / 2, icon / 24)
-    p.glyph(glyphs.polyline([f(9, 5.5), f(18, 12), f(9, 18.5)], 1.9 * icon / 24,
-                            closed=True), pal["accent"])
-    p.text(x0 + icon + gap, r.y + r.h / 2 - TEXT_BASE * size, label, size,
-           pal["text_strong"])
-
 
 def _paint_body(lay, st, pal, p, ui):
     s = lay.scale
@@ -938,16 +889,7 @@ def _paint_body(lay, st, pal, p, ui):
                    pal["text_muted"])
     for rid in CHECKS:
         _paint_check(lay, st, pal, p, rid)
-    rule = lay.rects["rule"]
-    p.rect(rule.x, rule.y, rule.right, rule.top, pal["border"])
-    _label(p, lay.rects["mini_preview"], "PREVIEW", FS["mini"] * s, pal["text_muted"])
-    chip = lay.rects["span"]
-    p.round(chip.x, chip.y, chip.right, chip.top, chip.h / 2, pal["chip"], pal["border"], s)
-    _label(p, chip, span_label(lay.span_text), FS["chip"] * s,
-           pal["text_muted"], align="center")
-    _label(p, lay.rects["instr"], INSTRUCTION, FS["instr"] * s, pal["text_muted"])
-    _paint_preview(lay, st, pal, p)
-    _paint_feedback(lay, st, pal, p, ui)
+    _paint_feedback(lay, st, pal, p)
     _paint_advanced(lay, pal, p)
     if lay.max_scroll > 0:
         thumb = max(18 * s, lay.body_h ** 2 / lay.content_h)
@@ -957,10 +899,12 @@ def _paint_body(lay, st, pal, p, ui):
                pal["text_muted"])
 
 
-def _paint_feedback(lay, st, pal, p, ui):
+def _paint_feedback(lay, st, pal, p):
+    if "feedback" not in lay.rects:
+        return
     s = lay.scale
     r = lay.rects["feedback"]
-    _text, bad = feedback(st, ui)
+    _text, bad = feedback(st)
     p.round(r.x, r.y, r.right, r.top, 5 * s, pal["list"], pal["border"], s)
     size, line_h = FS["feedback"] * s, FS["feedback"] * LINE * s
     colour = pal["error"] if bad else pal["text_muted"]
@@ -1041,9 +985,10 @@ def paint_popup(ui, st, region_w, region_h, p):
 class _GpuPainter:
     """The real painter: the `ui` GPU helpers, with alpha blending and scissoring."""
 
-    def __init__(self, ui):
+    def __init__(self, ui, origin=(0, 0)):
         import gpu
 
+        self.x, self.y = origin
         self.ui = ui
         self.gpu = gpu
         self.shader = ui._uniform_color_shader()
@@ -1058,19 +1003,20 @@ class _GpuPainter:
 
     def rect(self, x0, y0, x1, y1, colour):
         self.shader.bind()
-        self.ui._draw_rect(self.shader, x0, y0, x1, y1, colour)
+        self.ui._draw_rect(self.shader, x0 + self.x, y0 + self.y,
+                                   x1 + self.x, y1 + self.y, colour)
 
     def round(self, x0, y0, x1, y1, radius, fill, border=None, border_width=1.0):
         self.shader.bind()
-        self.ui._draw_round_rect(self.shader, x0, y0, x1, y1, radius, fill, border,
-                                 border_width)
+        self.ui._draw_round_rect(self.shader, x0 + self.x, y0 + self.y,
+                                 x1 + self.x, y1 + self.y, radius, fill, border, border_width)
 
     def glyph(self, tris, colour):
-        self.ui._draw_glyph(self.shader, tris, colour)
+        self.ui._draw_glyph(self.shader, [(x + self.x, y + self.y) for x, y in tris], colour)
         self.gpu.state.blend_set("ALPHA")
 
     def text(self, x, y, text, size, colour):
-        self.ui._draw_text(x, y, text, size, colour)
+        self.ui._draw_text(x + self.x, y + self.y, text, size, colour)
         self.gpu.state.blend_set("ALPHA")   # blf.draw switches blending off
 
     def text_width(self, text, size):
@@ -1078,7 +1024,7 @@ class _GpuPainter:
 
     def clip(self, x0, y0, x1, y1):
         self.gpu.state.scissor_test_set(True)
-        self.gpu.state.scissor_set(int(x0), int(y0), max(0, int(math.ceil(x1 - x0))),
+        self.gpu.state.scissor_set(int(x0 + self.x), int(y0 + self.y), max(0, int(math.ceil(x1 - x0))),
                                    max(0, int(math.ceil(y1 - y0))))
 
     def unclip(self):
@@ -1086,21 +1032,20 @@ class _GpuPainter:
 
 
 def _draw(ui):
-    """POST_PIXEL: draw only, in the one viewport the popup was opened over."""
+    """Native window POST_PIXEL: one dialog above the combined viewport workspace."""
     st = _popup
     if st is None:
         return
     import bpy
 
-    context = bpy.context
-    area = getattr(context, "area", None)
-    region = getattr(context, "region", None)
-    if (area is None or region is None or region.type != "WINDOW"
-            or ui._pane_key(area) != st.pane_key):
+    if not workspace_overlay.belongs_to(st.window_key):
+        return
+    region = _pane_region(ui, st.pane_key)
+    if region is None:
         return
     if ui._rebuild_window is None or not ui._rebuild_source_current():
         return
     try:
-        paint_popup(ui, st, region.width, region.height, _GpuPainter(ui))
+        paint_popup(ui, st, region.width, region.height, _GpuPainter(ui, (region.x, region.y)))
     except Exception as exc:  # noqa: BLE001
         print(f"[narwhal3d] rebuild popup draw failed: {exc!r}")

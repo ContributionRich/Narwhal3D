@@ -30,16 +30,20 @@ exec 9>"${TMPDIR:-/tmp}/narwhal3d_gui.lock"
 flock 9
 
 run_gui() {
-  local suite=$1 marker=$2 order=$3 status=0
+  local suite=$1 marker=$2 order=$3 limit=${4:-200} status=0
+  local verdict="^${marker} {.*\"status\": \"passed\""
+  if [[ "$marker" == TRIM_LIVE_RESULT ]]; then
+    verdict="^TRIM_LIVE_RESULT passed checks [0-9]+ failures 0$"
+  fi
   local bootstrap="$ROOT/launch/bootstrap.py"
   local scripts=(--python "$bootstrap" --python "$ROOT/$suite")
   if [[ "$order" == before-bootstrap ]]; then
     scripts=(--python "$ROOT/$suite" --python "$bootstrap")
   fi
-  timeout 200 "$RUNTIME_ROOT/blender" --enable-event-simulate --factory-startup \
+  timeout --kill-after=5s "$limit" "$RUNTIME_ROOT/blender" --enable-event-simulate --factory-startup \
     --python-exit-code 1 "${scripts[@]}" >"$LOG" 2>&1 || status=$?
   # Preferences includes phase before status in its JSON; do not require status to be first.
-  if [[ $status -ne 0 ]] || ! grep -q "^${marker} {.*\"status\": \"passed\"" "$LOG" \
+  if [[ $status -ne 0 ]] || ! grep -qE "$verdict" "$LOG" \
       || grep -qE 'Traceback|draw failed|panel failed|viewport setup .*failed' "$LOG"; then
     cat "$LOG"
     echo "FAIL: $suite${NARWHAL_PREF_TEST_PHASE:+ ($NARWHAL_PREF_TEST_PHASE)} (exit $status)" >&2
@@ -72,6 +76,30 @@ rm -f "$NARWHAL3D_SETTINGS_FILE"
 run_gui spike/test_gumball_extrude_scale_gui.py GUMBALL_GUI_RESULT before-bootstrap
 rm -f "$NARWHAL3D_SETTINGS_FILE"
 run_gui spike/test_face_pick_gui.py FACE_PICK_RESULT before-bootstrap
+rm -f "$NARWHAL3D_SETTINGS_FILE"
+run_gui spike/test_edge_pick_gui.py EDGE_PICK_RESULT before-bootstrap
+rm -f "$NARWHAL3D_SETTINGS_FILE"
+run_gui spike/test_workspace_dialogs_gui.py WORKSPACE_DIALOGS_RESULT before-bootstrap
+rm -f "$NARWHAL3D_SETTINGS_FILE"
+# Each independent bug regression gets fresh preferences and a separate result directory.
+unset WORKSPACE_DIALOGS_MUTATION TRIM_LIVE_SNAPSHOT || true
+export HARNESS_OUT="$PREFS_DIR/right_dock_rmb_gui"
+mkdir -p "$HARNESS_OUT"
+export NARWHAL3D_SETTINGS_FILE="$PREFS_DIR/right_dock_rmb_gui.json"
+run_gui spike/test_right_dock_rmb_gui.py RIGHT_DOCK_RMB_RESULT before-bootstrap 200
+export HARNESS_OUT="$PREFS_DIR/project_to_cplane_gui"
+mkdir -p "$HARNESS_OUT"
+export NARWHAL3D_SETTINGS_FILE="$PREFS_DIR/project_to_cplane_gui.json"
+run_gui spike/test_project_to_cplane_gui.py PROJECT_TO_CPLANE_GUI_RESULT before-bootstrap 200
+export HARNESS_OUT="$PREFS_DIR/report121_124_gui"
+mkdir -p "$HARNESS_OUT"
+export NARWHAL3D_SETTINGS_FILE="$PREFS_DIR/report121_124_gui.json"
+run_gui spike/test_report121_124_gui.py WORKSPACE_DIALOGS_RESULT before-bootstrap 200
+export HARNESS_OUT="$PREFS_DIR/trim_live_performance_gui"
+mkdir -p "$HARNESS_OUT"
+export NARWHAL3D_SETTINGS_FILE="$PREFS_DIR/trim_live_performance_gui.json"
+run_gui spike/test_trim_live_performance_gui.py TRIM_LIVE_RESULT before-bootstrap 330
+unset HARNESS_OUT
 rm -f "$NARWHAL3D_SETTINGS_FILE"
 # This offscreen shader oracle needs a real GPU context, but no app bootstrap or events.
 status=0

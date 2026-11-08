@@ -1,6 +1,8 @@
 """Built-in `.narwhal` project save/load with exact analytic OCCT masters."""
 from __future__ import annotations
 
+from collections import OrderedDict
+from copy import deepcopy
 import hashlib
 import importlib
 import json
@@ -27,6 +29,8 @@ MAX_MANIFEST = 16 * 1024 * 1024
 MAX_MASTER = 256 * 1024 * 1024
 MAX_MASTERS = 10_000
 MAX_EXACT_TOTAL = 2 * 1024 * 1024 * 1024
+MAX_SHAPE_SUMMARIES = 256
+_shape_summaries = OrderedDict()
 _SHAPE_TYPES = {
     "TopoDS_Shape", "TopoDS_Compound", "TopoDS_CompSolid", "TopoDS_Solid",
     "TopoDS_Shell", "TopoDS_Face", "TopoDS_Wire", "TopoDS_Edge", "TopoDS_Vertex",
@@ -52,8 +56,34 @@ def _format_contract() -> tuple[str, int]:
     return str(ocp.__version__), writer_bintools_format(int(current.value))
 
 
-def _shape_record(file_object, shape, member: str, digest: str) -> dict:
+def _shape_summary_contract():
+    """Process-local native/runtime and summary-source identity, never archive metadata."""
+    root = Path(__file__).resolve().parent
+    source = hashlib.sha256()
+    for name in ("narwhal_document.py", "document_compat.py", "kernel/occt_backend.py"):
+        source.update((root / name).read_bytes())
+    from . import document_admission
+    return ("schema1-v1", _format_contract(),
+            document_admission.runtime_identity(), source.digest())
+
+
+def _shape_record(file_object, shape, member: str, digest: str, *,
+                  reuse_save_summary: bool = False) -> dict:
+    """Measure a master; Save alone may reuse its freshly serialized SHA witness.
+
+    The opt-in requires the digest of this shape's just-produced BinTools bytes.
+    Arbitrary callers (including archive/load paths) always measure independently.
+    Python only coordinates the native measurements; no geometry is approximated.
+    """
     wrapper_type = type(shape).__name__
+    key = None
+    if reuse_save_summary:
+        key = (_shape_summary_contract(), digest, wrapper_type, int(shape.ShapeType().value))
+        cached = _shape_summaries.get(key)
+        if cached is not None:
+            _shape_summaries.move_to_end(key)
+            return dict(deepcopy(cached), object_id=_object_uuid(file_object),
+                        member=member, sha256=digest)
     if wrapper_type not in _SHAPE_TYPES or not occt_backend.is_valid(shape):
         raise NarwhalDocumentError(f"unsupported or invalid exact OCCT shape {wrapper_type!r}")
     face_types = {str(key): int(value)
@@ -66,10 +96,7 @@ def _shape_record(file_object, shape, member: str, digest: str) -> dict:
     volume = float(schema1_volume(shape)) if airtight else None
     if volume is not None and not math.isfinite(volume):
         raise NarwhalDocumentError("exact OCCT master has non-finite volume")
-    return {
-        "object_id": _object_uuid(file_object),
-        "member": member,
-        "sha256": digest,
+    summary = {
         "wrapper_type": wrapper_type,
         "shape_enum": int(shape.ShapeType().value),
         "airtight": airtight,
@@ -77,6 +104,12 @@ def _shape_record(file_object, shape, member: str, digest: str) -> dict:
         "bounds": bounds,
         "volume": volume,
     }
+    if key is not None:
+        _shape_summaries[key] = deepcopy(summary)
+        _shape_summaries.move_to_end(key)
+        while len(_shape_summaries) > MAX_SHAPE_SUMMARIES:
+            _shape_summaries.popitem(last=False)
+    return dict(summary, object_id=_object_uuid(file_object), member=member, sha256=digest)
 
 
 def save_model(model, target: str | os.PathLike) -> bool:
@@ -137,7 +170,8 @@ def save_model(model, target: str | os.PathLike) -> bool:
                 digest = hashlib.sha256(data).hexdigest()
                 member = f"masters/{object_id}.brep"
                 (root / member).write_bytes(data)
-                records.append(_shape_record(file_object, master, member, digest))
+                records.append(_shape_record(
+                    file_object, master, member, digest, reuse_save_summary=True))
                 geometry = file_object.Geometry
                 getter = getattr(geometry, "GetUserString", None)
                 setter = getattr(geometry, "SetUserString", None)
@@ -177,7 +211,7 @@ def save_model(model, target: str | os.PathLike) -> bool:
         (root / "manifest.json").write_bytes(manifest_data)
         # Admit the staged geometry with the SAME reader checks before replacing any
         # existing project. A serialization/reader disagreement cannot destroy a good save.
-        validated = _validate_in_worker(root, len(records))
+        validated = _validate_in_worker(root, len(records), reuse_proofs=True)
         shutil.rmtree(validated)  # worker output is inside this function's private staging dir
         try:
             native_document.pack(root, target)
@@ -225,14 +259,17 @@ def _worker_command(root: Path) -> tuple[str, ...]:
     return _worker_argv(executable, worker, root)
 
 
-def _validate_in_worker(root: Path, count: int) -> Path:
+def _validate_in_worker(root: Path, count: int, *, reuse_proofs=False, bounds_scope=None) -> Path:
     # Preserve the trusted launcher's kernel selection for recipe replay, not any
     # document-supplied path or the rest of the parent's (possibly secret) environment.
     selected_core = os.environ.get("NARWHAL_GEOMETRY_CORE")
     extra_env = {"NARWHAL_GEOMETRY_CORE": selected_core} if selected_core else {}
-    result = converter_process.run(
-        _worker_command(root), timeout=600, max_output=65536, memory_mib=4096,
-        extra_env=extra_env)
+    from . import document_admission
+    with document_admission.hints(reuse_proofs) as hint_env:
+        extra_env.update(hint_env)
+        result = converter_process.run(
+            _worker_command(root), timeout=600, max_output=65536, memory_mib=4096,
+            extra_env=extra_env)
     marker = next((line for line in reversed(result.stdout.splitlines())
                    if line.startswith("NARWHAL-DOCUMENT-WORKER ")), None)
     report = None
@@ -252,6 +289,9 @@ def _validate_in_worker(root: Path, count: int) -> Path:
     output = root / "validated"
     if not output.is_dir() or output.is_symlink():
         raise NarwhalDocumentError("exact-master worker produced no safe output directory")
+    document_admission.remember(output)
+    if bounds_scope is not None:
+        occt_backend.document_accept_bounds(bounds_scope, output, report.get("bounds_facts"))
     return output
 
 
@@ -262,7 +302,8 @@ def load_model(source: str | os.PathLike):
         raise FileNotFoundError(source)
     if not occt_backend.available():
         raise NarwhalDocumentError("the built-in OCCT kernel is unavailable")
-    with tempfile.TemporaryDirectory(prefix="narwhal-open-") as directory:
+    with (tempfile.TemporaryDirectory(prefix="narwhal-open-") as directory,
+          occt_backend.document_bounds_context() as bounds_scope):
         payload = Path(directory) / "payload"
         try:
             native_document.unpack(source, payload)
@@ -292,7 +333,7 @@ def load_model(source: str | os.PathLike):
         if actual_members != expected_members:
             raise NarwhalDocumentError("native container members do not match its manifest")
 
-        validated = _validate_in_worker(payload, len(records))
+        validated = _validate_in_worker(payload, len(records), bounds_scope=bounds_scope)
         document_path = validated / "document.3dm"
         raw = r3.File3dm.Read(str(document_path))
         if raw is None:

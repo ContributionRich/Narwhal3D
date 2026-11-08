@@ -740,7 +740,7 @@ def _inspect(layout_was_ready):
     if top_view is not None and top_region is not None:
         try:
             import bpy_extras.view3d_utils as fillet_view3d
-            from mathutils import Vector as FilletVector
+            from mathutils import Euler as FilletEuler, Vector as FilletVector
 
             if app_state.active_command is not None:
                 app_state.cancel()
@@ -749,7 +749,8 @@ def _inspect(layout_was_ready):
             ui.set_active_pane(top_view)
             top_space = next(space for space in top_view.spaces if space.type == "VIEW_3D")
             fillet_view = (top_space.region_3d.view_location.copy(),
-                           top_space.region_3d.view_distance)
+                           top_space.region_3d.view_distance,
+                           top_space.region_3d.view_rotation.copy())
             before_names = {obj.name for obj in bpy.data.objects}
             for line in ("Box", "w300,300,0", "w320,320,0", "10"):
                 app_state.feed_line(line)
@@ -757,6 +758,9 @@ def _inspect(layout_was_ready):
             box_name = fillet_names[0] if fillet_names else None
             top_space.region_3d.view_location = FilletVector((310.0, 310.0, 0.0))
             top_space.region_3d.view_distance = 60.0
+            # In wireframe, Top projects upper and lower box edges onto each other.
+            # A slight tilt makes this a genuine unambiguous one-click edge pick.
+            top_space.region_3d.view_rotation = FilletEuler((0.35, 0.25, 0.0)).to_quaternion()
             top_space.region_3d.update()
             parts = ui._brep_parts_all().get(box_name, {}) if box_name else {}
             top_edges = [
@@ -774,16 +778,13 @@ def _inspect(layout_was_ready):
                                             float(screen_point.x), float(screen_point.y))
                           if screen_point is not None else None)
             app_state.feed_line("FilletEdge")
-            helper_eligible = False
+            click_candidates = []
             if screen_point is not None:
                 click = (float(screen_point.x), float(screen_point.y))
-                helper_eligible = ui._answer_edge_prompt_with_click(
-                    top_view, top_space, top_region, *click)
-                if helper_eligible:
-                    # Recreate the command so the click-release route, not the direct
-                    # diagnostic call above, is what the assertion judges.
-                    app_state.cancel()
-                    app_state.feed_line("FilletEdge")
+                # Inspect without accepting a diagnostic pick: only release below may
+                # bind the owner. Overlapping edges correctly require a choice menu.
+                click_candidates = [candidate.key for candidate in ui.pick_candidates.at(
+                    ui, top_view, top_space, top_region, *click, mode="edge")]
                 ui._sel_drag = {"pane": ui._pane_key(top_view), "start": click,
                                 "now": click, "shift": False, "ctrl": False,
                                 "active": False}
@@ -814,6 +815,7 @@ def _inspect(layout_was_ready):
             picked_args = list(getattr(fillet_cmd, "args", ()))
             owner_name = getattr(fillet_cmd, "_owner_name", None)
             selected_ok = (box_name is not None and edge_id is not None
+                           and click_candidates == [(box_name, "Edge", edge_id)]
                            and getattr(fillet_cmd, "name", None) == "FilletEdge"
                            and picked_args == [] and owner_name == box_name
                            and picked_edges == [edge_id] and not selected_whole
@@ -921,7 +923,7 @@ def _inspect(layout_was_ready):
                          and airtight and result_types.get("CYLINDER", 0) >= 1
                          and contour_exposed)
             fillet_detail = (f"box={box_name}, expected edge={edge_id}, "
-                             f"screen hit={screen_hit}, helper={helper_eligible}, "
+                             f"screen hit={screen_hit}, candidates={click_candidates}, "
                              f"owner={owner_name}, args={picked_args}, edges={picked_edges}, "
                              f"whole selection={selected_whole}, yellow={selected_edge_yellow}, "
                              f"radius label ink={handle_label_white}, edit={edit_phase}, "
@@ -941,6 +943,7 @@ def _inspect(layout_was_ready):
             if fillet_view is not None:
                 top_space.region_3d.view_location = fillet_view[0]
                 top_space.region_3d.view_distance = fillet_view[1]
+                top_space.region_3d.view_rotation = fillet_view[2]
                 top_space.region_3d.update()
     check("FilletEdge selects a viable 3-D edge in one click without preselecting its solid",
           fillet_ok, fillet_detail)

@@ -91,6 +91,25 @@ SCRIPT_FILES = (
     "scripts/ui_bundle/fonts/README.md",
 )
 TEST_FILES = (
+    'spike/test_document_correspondence.py',
+    'spike/test_document_runtime_identity.py',
+
+    'spike/test_right_dock_rmb_gui.py',
+    'spike/test_project_to_cplane_delete.py',
+    'spike/test_project_to_cplane_gui.py',
+    'spike/test_offset_fit_native.py',
+    'spike/test_offset_compact.py',
+    'spike/test_trim_split_once.py',
+    'spike/test_trim_live_performance_gui.py',
+    'spike/test_report121_124.py',
+    'spike/test_report121_124_gui.py',
+    'spike/test_extrusion_creases.py',
+    'spike/test_document_admission.py',
+    'spike/test_document_shape_summary.py',
+    'spike/test_document_exact_work.py',
+    'spike/test_document_worker_bounds.py',
+    'spike/snap_clip_abi_witness.c',
+
     "spike/audit_representation.py", "spike/_roundtrip_reader.py",
     "spike/test_geometry.py", "spike/test_local_brep_move.py",
     "spike/test_native_local_brep_replay.py", "spike/test_meshed_master_transform.py",
@@ -135,6 +154,7 @@ TEST_FILES = (
     "spike/test_component_fillet_gui.py", "spike/test_variable_edge_fillet.py",
     "spike/test_fillet_handle_input.py", "spike/test_fillet_mouse_gui.py",
     "spike/test_face_pick_gui.py",
+    "spike/test_edge_pick_gui.py", "spike/test_workspace_dialogs_gui.py",
     "spike/test_curve_inputs.py", "spike/test_curve_consumer_inputs.py", "spike/test_colordialog.py",
     "spike/test_statusbar_height_patch.py", "spike/test_native_runtime_provenance.py",
     "spike/test_rightpanel.py", "spike/test_glyphs.py", "spike/test_statusbar.py", "spike/test_aliases.py",
@@ -160,7 +180,7 @@ TEST_FILES = (
     "spike/test_file_commands.py", "spike/test_sessionlog.py",
     "spike/test_bugreport.py",
     "spike/test_import.py", "spike/test_import_dialog.py", "spike/test_export_cmd.py",
-    "spike/test_print_cmd.py", "spike/test_print_active_view.py", "spike/test_printdialog.py", "spike/test_printdialog_layout.py",
+    "spike/test_print_cmd.py", "spike/test_print_active_view.py", "spike/test_printdialog.py", "spike/test_printdialog_layout.py", "spike/test_workspace_overlay.py",
     "spike/test_dxf_reader.py", "spike/test_dxf_writer.py", "spike/test_native_dxf.py",
     "spike/test_obj_reader.py", "spike/test_obj_writer.py", "spike/test_native_obj.py",
     "spike/test_stl_writer.py", "spike/test_native_stl.py",
@@ -199,7 +219,7 @@ TEST_FILES = (
     "spike/test_native_coil_preview.py", "spike/test_preview_curve_native.py", "spike/test_preview_layer_color.py", "spike/test_rebuild_dialog.py", "spike/test_rebuild_popup.py", "spike/test_group_pick.py", "spike/test_rebuild_performance.py",
     "spike/test_native_tessellate.py",
     "spike/test_native_unit_table.py",
-    "spike/test_native_nearest.py",
+    "spike/test_native_nearest.py", "spike/test_pure_core_nearest_batch_gate.py",
     "spike/test_native_interpolate.py", "spike/test_native_tween.py",
     "spike/test_tracedraw.py", "spike/test_cdr.py", "spike/test_native_cdr.py",
     "spike/test_embedded_cdr.py",
@@ -274,6 +294,13 @@ TEST_FILES = (
     "spike/test_document_compatibility.py", "spike/fixtures/document_schema1_historical.json",
 )
 NATIVE_FILES = (
+    'native/document_observer/lifetime_fixture.py',
+    'native/document_observer/qualify_lifetime.py',
+
+    'native/document_observer/test_master_lifetime.py',
+    'native/document_observer/test_master_lifetime_admission.py',
+    'native/document_observer/test_master_lifetime_product.py',
+
     "native/ui_core/Cargo.toml", "native/ui_core/Cargo.lock", "native/ui_core/LICENSE",
     "native/ui_core/README.md", "native/ui_core/POPUP.md", "native/ui_core/gen_unicode.py",
     "native/ui_core/narwhal_ui_core.h", "native/ui_core/src/lib.rs",
@@ -367,6 +394,8 @@ NATIVE_FILES = (
     "native/selection_core/Cargo.lock", "native/selection_core/Cargo.toml",
     "native/selection_core/rust-toolchain.toml", "native/selection_core/README.md",
     "native/selection_core/src/lib.rs",
+    "native/selection_core/qualify_snap_activation.py",
+    "native/selection_core/src/snap_clip.rs",
 )
 RUNTIME_FILES = ("runtime/README.md", "runtime/manifest.json")
 PACKAGE_EXCLUDES = {"narwhal3d/kernel/brep_writer.cpp"}
@@ -405,6 +434,12 @@ def recursive_files(directory: str) -> list[str]:
         if relative in PACKAGE_EXCLUDES:
             continue
         if relative.startswith("narwhal3d/kernel/bin/"):
+            continue
+        # Built runtimes are ignored by narwhal3d/native/.gitignore, the one file that
+        # policy publishes. Release assembly stages these binaries separately.
+        if relative.startswith("narwhal3d/native/") and relative != "narwhal3d/native/.gitignore":
+            continue
+        if relative.endswith((".so", ".dll", ".dylib", ".pyd", ".receipt.json")):
             continue
         files.append(relative)
     return files

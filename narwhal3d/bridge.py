@@ -614,13 +614,14 @@ def split_curve(curve, cutters, tol: float = 1e-6):
     return _intersect().split_curve_by(curve, cutters, tol)
 
 
-def trim_curve(curve, cutters, keep_point, tol: float = 1e-6):
+def trim_curve(curve, cutters, keep_point, tol: float = 1e-6, pieces=None):
     """Thin wrapper over `intersect.trim_curve_by` (the reference CAD application's Trim).
 
     Splits `curve` by `cutters` and discards the piece nearest `keep_point` (the
-    clicked "trim away" part). Returns the remaining pieces.
+    clicked "trim away" part). Returns the remaining pieces. `pieces` is the split
+    already computed by :func:`split_curve` for the same arguments, if the caller has it.
     """
-    return _intersect().trim_curve_by(curve, cutters, keep_point, tol)
+    return _intersect().trim_curve_by(curve, cutters, keep_point, tol, pieces)
 
 
 def _intersect():
@@ -2887,21 +2888,35 @@ def _polycurve_segment_recipes(crv):
     return out
 
 
+def _version_extrusion_profiles(record):
+    """Copy a NEW extrusion recipe tree with explicit G1-split profile version.
+
+    Existing recipes/masters are never upgraded in place. This is serialization
+    glue; exact discontinuity evaluation and trimming run inside OCCT.
+    """
+    if isinstance(record, list):
+        return [_version_extrusion_profiles(value) for value in record]
+    if not isinstance(record, dict):
+        return record
+    out = {key: _version_extrusion_profiles(value) for key, value in record.items()}
+    if out.get("ctype") == "nurbs":
+        out["extrusion_kinks"] = 1
+    return out
+
+
 def make_extrusion(profile_curve, height):
     """Extrude a closed planar curve straight up by `height`.
 
     Records an OCCT recipe so subsequent Boolean operations remain analytic instead of
     falling back to a heavily faceted display-derived result.
     """
-    e = r3.Extrusion.Create(profile_curve, float(height), True)
-    brep = e.ToBrep(False)
-    profile = curve_recipe(profile_curve)
     normal = profile_normal(profile_curve)
-    if profile is not None and normal is not None:
-        h = float(height)
-        _record(brep, "extrusion", r3.Transform.Identity(), profile=profile,
-                dir=[normal[0] * h, normal[1] * h, normal[2] * h])
-    return brep
+    if normal is None or not profile_curve.IsClosed:
+        raise ValueError("a closed planar extrusion profile is required")
+    # MEASURED on saved Curve29: openNURBS ToBrep(True) gives 21 faces,
+    # while G1-only splitting gives 9. Use ONE exact builder for the new
+    # object and its versioned replay recipe, rather than divergent topology.
+    return extrude_curve(profile_curve, float(height), direction=normal, solid=True)
 
 
 def extrude_curve(curve, distance, direction=None, both=False, solid=True, draft_deg=None,
@@ -2929,8 +2944,8 @@ def extrude_curve(curve, distance, direction=None, both=False, solid=True, draft
     if d == 0.0:
         raise ValueError("the extrusion distance must not be zero")
     vec = [direction[0] * d, direction[1] * d, direction[2] * d]
-    recipe = {"kind": "extrusion", "profile": profile, "dir": vec, "both": bool(both),
-              "solid": bool(solid)}
+    recipe = {"kind": "extrusion", "profile": _version_extrusion_profiles(profile),
+              "dir": vec, "both": bool(both), "solid": bool(solid)}
     if draft_deg not in (None, 0, 0.0):
         recipe.update(draft=float(draft_deg), corners=str(corners), flip=bool(flip))
     try:
@@ -6851,7 +6866,8 @@ def make_planar_srf(curves):
     return pieces
 
 
-def make_extrude_srf(geom, distance, direction=None, both=False, solid=True):
+def make_extrude_srf(geom, distance, direction=None, both=False, solid=True,
+                     split_profile_kinks=False):
     """ExtrudeSrf -- a surface (or one face) extruded straight into a SOLID.
 
     (the command behavior): "A planar surface extrudes vertically to the
@@ -6886,6 +6902,11 @@ def make_extrude_srf(geom, distance, direction=None, both=False, solid=True):
     if abs(d) <= 0.0:
         raise ValueError("the extrusion distance must not be zero")
     vec = [direction[0] * d, direction[1] * d, direction[2] * d]
+    if split_profile_kinks:
+        if base.get("kind") != "planar_face":
+            raise ValueError("profile kink splitting requires an exact planar region recipe")
+        base = _version_extrusion_profiles(base)
+        shape = occt.from_recipe(base)
     recipe = {"kind": "prism", "a": base, "dir": vec, "both": bool(both),
               "solid": bool(solid)}
     try:
@@ -7840,6 +7861,23 @@ def _polycurve_snap_targets(polycurve, name="", samples=SNAP_SAMPLES):
     return out
 
 
+def _analytic_snap_curves(geom):
+    """Master boundary edges plus exact snap-only legacy crease isocurves.
+
+    Creases are NOT inserted in ExtractWireframe's edge map and receive no edge
+    IDs. Their temporary curve tag distinguishes them from editable topology.
+    """
+    curves, source = extract_wireframe(geom)
+    if source != "master":
+        raise ValueError("analytic snap edges are unavailable for this solid")
+    master = _kernel().master_of(geom)
+    for record in _occt().extrusion_crease_curves(master):
+        curve = curve_from_recipe(record)
+        curve.SetUserString("Narwhal3D:SnapFeature", "crease-isocurve")
+        curves.append(curve)
+    return curves
+
+
 def geometry_snap_targets(geom, name="", samples=SNAP_SAMPLES):
     """Every `osnap.SnapTarget` one piece of geometry offers.
 
@@ -7857,6 +7895,19 @@ def geometry_snap_targets(geom, name="", samples=SNAP_SAMPLES):
     location = getattr(geom, "Location", None)
     if location is not None and hasattr(location, "X"):
         return [osnap.SnapTarget.point(_xyz(location), name=name)]
+
+    # A master-backed Brep may contain display triangles. Even an exact proxy
+    # is subordinate to its master. Reuse the exact OCCT -> openNURBS edge
+    # conversion; all scoring/search stays
+    # in the existing native selection/nearest engines. No new numerical fallback.
+    if _kernel().master_of(geom) is not None:
+        return [target for curve in _analytic_snap_curves(geom)
+                if (target := curve_snap_target(curve, name=name, samples=samples))
+                is not None]
+
+    # Native extrusion objects expose their exact boundary through ToBrep, not Edges.
+    if isinstance(geom, r3.Extrusion):
+        geom = geom.ToBrep(True)
 
     # a Brep: snap to its edges (and therefore its corners)
     edges = getattr(geom, "Edges", None)
@@ -9180,6 +9231,13 @@ def object_snap_sources(geom):
     location = getattr(geom, "Location", None)
     if location is not None and hasattr(location, "X"):
         return [(geom, False, _safe_extent(_point_extent, geom))]
+    # The live UI uses this lazy index rather than geometry_snap_targets directly.
+    # Its extents AND targets must come from the same authoritative edge curves.
+    if _kernel().master_of(geom) is not None:
+        return [(curve, True, _safe_extent(_curve_extent, curve))
+                for curve in _analytic_snap_curves(geom)]
+    if isinstance(geom, r3.Extrusion):
+        geom = geom.ToBrep(True)
     edges = getattr(geom, "Edges", None)
     if edges is not None:
         try:

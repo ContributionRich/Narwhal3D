@@ -1,5 +1,6 @@
-// Read-only openNURBS host glue. Rust consumes the framed observation; this module
-// owns no document registry, geometry, history, or persistent native pointers.
+// openNURBS host glue. Rust owns the document registry and single history.
+// Optional qualified lifetime tokens own no geometry or OCCT shapes; their native
+// destructors only flag releases. Pinned-wheel file-wrapper cleanup is opt-in.
 // Compile ONLY against the pinned rhino3dm source and matching openNURBS headers.
 #include "bindings.h"
 #include <pybind11/conduit/pybind11_conduit_v1.h>
@@ -10,6 +11,15 @@
 #include <memory>
 #include <stdexcept>
 #include <vector>
+#include <map>
+#include <atomic>
+#include <thread>
+#include <set>
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <dlfcn.h>
+#endif
 
 namespace {
 constexpr size_t max_batch = 128 * 1024 * 1024;
@@ -220,7 +230,292 @@ PyObject* copy_attributes(PyObject*, PyObject* args) {
     }
 }
 
+
+
+// Native lease: no Python calls, geometry pointers or allocations on release.
+struct LeaseEntry { std::string key; std::atomic<bool> released{false}; std::weak_ptr<struct Lease> weak; };
+struct Lease {
+    LeaseEntry* entry;
+    explicit Lease(LeaseEntry* value):entry(value){}
+    ~Lease() noexcept { entry->released.store(true,std::memory_order_release); }
+};
+struct LeaseState { std::map<std::string,std::unique_ptr<LeaseEntry>> entries; };
+LeaseState& leases() { static auto* value=new LeaseState; return *value; }
+const ON_UUID lease_uuid=ON_UuidFromString("ce3bc21d-7639-439b-8535-635f2c5b7d51");
+class MasterLeaseData : public ON_UserData {
+public:
+    std::shared_ptr<Lease> lease;
+    const ON_ClassId* host_userdata_class=nullptr;
+    MasterLeaseData() { m_userdata_uuid=lease_uuid; m_userdata_copycount=1; m_application_uuid=ON_nil_uuid; }
+    MasterLeaseData(const MasterLeaseData& other):ON_UserData(other),lease(other.lease),host_userdata_class(other.host_userdata_class){}
+    // Unregistered, nonarchived subclass. The wheel's native CopyUserData must
+    // recognize its OWN ON_UserData base; the observer's separate registry cannot.
+    const ON_ClassId* ClassId() const override { return host_userdata_class; }
+    ON_Object* Internal_DeepCopy() const override { return new MasterLeaseData(*this); }
+    bool Archive() const override { return false; }
+    bool Transform(const ON_Xform&) override { return true; }
+};
+
+ON_Geometry* exact_brep(PyObject* obj) {
+    auto type=py::module_::import("rhino3dm").attr("Brep");
+    if (reinterpret_cast<PyObject*>(Py_TYPE(obj))!=type.ptr())
+        throw std::runtime_error("exact Brep required");
+    auto* info=py::detail::get_type_info(Py_TYPE(obj));
+    if (!info || !info->cpptype) throw std::runtime_error("registered native type unavailable");
+    auto* pointer=pybind11_conduit_v1::get_raw_pointer_ephemeral(obj,info->cpptype);
+    if (!pointer) throw py::error_already_set();
+    auto* geometry=static_cast<BND_Brep*>(pointer)->GeometryPointer();
+    if (!geometry || !dynamic_cast<const ON_Brep*>(geometry))
+        throw std::runtime_error("native Brep unavailable");
+    return const_cast<ON_Geometry*>(geometry);
+}
+void pin_address(const void* address) {
+    static auto* pinned=new std::set<const void*>;
+    if(pinned->count(address))return;
+
+#ifdef _WIN32
+    HMODULE module;
+    if(!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|GET_MODULE_HANDLE_EX_FLAG_PIN,
+        reinterpret_cast<LPCWSTR>(address),&module))throw std::runtime_error("cannot pin native ownership library");
+#else
+    Dl_info info{};
+    if(!dladdr(address,&info) || !info.dli_fname ||
+       !dlopen(info.dli_fname,RTLD_NOW|RTLD_NODELETE))throw std::runtime_error("cannot pin native ownership library");
+#endif
+
+    pinned->insert(address);
+}
+void require_main_thread() {
+#ifdef _WIN32
+    throw std::runtime_error("native master lifetime is NOT_QUALIFIED on Windows; retain strong ownership");
+#endif
+    auto ident=py::module_::import("threading").attr("main_thread")().attr("ident");
+    if(PyLong_AsUnsignedLongLong(ident.ptr())!=PyThread_get_thread_ident())
+        throw std::runtime_error("master lifetime operations require the main thread");
+}
+PyObject* lease_bind(PyObject*,PyObject* args) {
+    PyObject* obj;const char* id;
+    if(!PyArg_ParseTuple(args,"Os",&obj,&id))return nullptr;
+    try {
+        if(!id[0] || std::strlen(id)>128)throw std::runtime_error("invalid lease id");
+        require_main_thread();
+        auto* geometry=exact_brep(obj);
+        auto data=std::make_unique<MasterLeaseData>();
+        for(auto* item=geometry->FirstUserData();item && !data->host_userdata_class;item=item->Next()) {
+            if(dynamic_cast<MasterLeaseData*>(item)) continue;
+            for(auto* cls=item->ClassId();cls;cls=cls->BaseClass()) {
+                if(std::strcmp(cls->ClassName(),"ON_UserData")==0) {
+                    data->host_userdata_class=cls;break;
+                }
+            }
+        }
+        if(!data->host_userdata_class)throw std::runtime_error("host-native userdata base unavailable");
+        pin_address(reinterpret_cast<const void*>(&pin_address));
+        pin_address(data->host_userdata_class);
+        auto& entries=leases().entries;
+        auto found=entries.find(id);
+        if(found!=entries.end()) {
+            data->lease=found->second->weak.lock();
+            if(!data->lease)throw std::runtime_error("released lease cannot be resurrected");
+        } else {
+            auto entry=std::make_unique<LeaseEntry>();entry->key=id;
+            data->lease=std::make_shared<Lease>(entry.get());entry->weak=data->lease;
+            entries.emplace(id,std::move(entry));
+        }
+        auto* old=geometry->GetUserData(lease_uuid);
+        if(old && !dynamic_cast<MasterLeaseData*>(old))throw std::runtime_error("foreign ownership userdata");
+        if(old && !geometry->DetachUserData(old))throw std::runtime_error("ownership detach refused");
+        if(!geometry->AttachUserData(data.get())) {
+            if(old)geometry->AttachUserData(old);
+            throw std::runtime_error("ownership attach refused");
+        }
+        data.release();delete old;
+        Py_RETURN_NONE;
+    } catch(py::error_already_set& error){error.restore();return nullptr;}
+      catch(const std::exception& error){PyErr_SetString(PyExc_RuntimeError,error.what());return nullptr;}
+}
+PyObject* lease_count(PyObject*,PyObject* obj) {
+    try {
+        require_main_thread();
+        auto* geometry=exact_brep(obj);
+        auto* data=dynamic_cast<MasterLeaseData*>(geometry->GetUserData(lease_uuid));
+        return PyLong_FromLong(data?data->lease.use_count():0);
+    } catch(py::error_already_set& error){error.restore();return nullptr;}
+      catch(const std::exception& error){PyErr_SetString(PyExc_RuntimeError,error.what());return nullptr;}
+}
+PyObject* lease_drain(PyObject*,PyObject*) {
+    try {
+        require_main_thread();
+        auto output=py::list();auto& entries=leases().entries;
+        for(auto it=entries.begin();it!=entries.end();) {
+            if(it->second->released.load(std::memory_order_acquire)) {
+                output.append(py::str(it->first));it=entries.erase(it);
+            }else ++it;
+        }
+        return output.release().ptr();
+    } catch(py::error_already_set& error){error.restore();return nullptr;}
+      catch(const std::exception& error){PyErr_SetString(PyExc_RuntimeError,error.what());return nullptr;}
+}
+constexpr const char* capsule_name="Narwhal3D.MasterLease.v1";
+void capsule_release(PyObject* capsule) noexcept {
+    auto* held=static_cast<std::shared_ptr<Lease>*>(PyCapsule_GetPointer(capsule,capsule_name));
+    if(held)delete held;
+    else PyErr_Clear();
+}
+PyObject* lease_hold(PyObject*,PyObject* obj) {
+    try {
+        require_main_thread();
+        auto* data=dynamic_cast<MasterLeaseData*>(exact_brep(obj)->GetUserData(lease_uuid));
+        if(!data || !data->lease)throw std::runtime_error("native master ownership is missing");
+        auto held=std::make_unique<std::shared_ptr<Lease>>(data->lease);
+        auto* capsule=PyCapsule_New(held.get(),capsule_name,capsule_release);
+        if(capsule)held.release();
+        return capsule;
+    } catch(py::error_already_set& error){error.restore();return nullptr;}
+      catch(const std::exception& error){PyErr_SetString(PyExc_RuntimeError,error.what());return nullptr;}
+}
+
+constexpr const char* native_capsule_name="Narwhal3D.NativeMasterOwner.v1";
+void native_capsule_release(PyObject* capsule) noexcept {
+    auto* held=static_cast<std::unique_ptr<ON_Object>*>(PyCapsule_GetPointer(capsule,native_capsule_name));
+    if(held)delete held;else PyErr_Clear();
+}
+PyObject* lease_hold_native(PyObject*,PyObject* obj) {
+    try {
+        require_main_thread();auto* geometry=exact_brep(obj);
+        if(!dynamic_cast<MasterLeaseData*>(geometry->GetUserData(lease_uuid)))throw std::runtime_error("native master ownership is missing");
+        auto held=std::make_unique<std::unique_ptr<ON_Object>>(geometry->Duplicate());
+        if(!*held || !dynamic_cast<MasterLeaseData*>((*held)->GetUserData(lease_uuid)))throw std::runtime_error("native ownership did not survive original-runtime duplicate");
+        auto* capsule=PyCapsule_New(held.get(),native_capsule_name,native_capsule_release);
+        if(capsule)held.release();return capsule;
+    } catch(py::error_already_set& error){error.restore();return nullptr;}
+      catch(const std::exception& error){PyErr_SetString(PyExc_RuntimeError,error.what());return nullptr;}
+}
+PyObject* lease_thread_release(PyObject*,PyObject* capsule) {
+    try {
+        require_main_thread();
+        if(PyCapsule_IsValid(capsule,native_capsule_name)) {
+            auto* held=static_cast<std::unique_ptr<ON_Object>*>(PyCapsule_GetPointer(capsule,native_capsule_name));
+            std::thread worker([value=std::move(*held)]() mutable {value.reset();});
+            {py::gil_scoped_release release;worker.join();}
+            Py_RETURN_NONE;
+        }
+        auto* held=static_cast<std::shared_ptr<Lease>*>(PyCapsule_GetPointer(capsule,capsule_name));
+        if(!held)return nullptr;
+        auto owned=std::move(*held);
+        std::thread worker([value=std::move(owned)]() mutable { value.reset(); });
+        {py::gil_scoped_release release;worker.join();}
+        Py_RETURN_NONE;
+    } catch(py::error_already_set& error){error.restore();return nullptr;}
+      catch(const std::exception& error){PyErr_SetString(PyExc_RuntimeError,error.what());return nullptr;}
+}
+
+// The pinned wheel allocates both child BND wrappers in FileObjectFromCompRef,
+// returns them reference_internal, but BND_FileObject has no owning destructor.
+// Claim the otherwise-leaked wrappers only after the Python parent is dead.
+struct FileOwner {
+    BND_FileObject* identity;
+    BND_GeometryBase* geometry;
+    BND_3dmObjectAttributes* attributes;
+    PyObject* weak;
+};
+std::set<BND_FileObject*>& claimed_files(){static auto* p=new std::set<BND_FileObject*>;return *p;}
+constexpr const char* file_owner_name="Narwhal3D.FileObjectOwner.v1";
+void file_owner_release(PyObject* capsule) noexcept {
+    auto* owner=static_cast<FileOwner*>(PyCapsule_GetPointer(capsule,file_owner_name));
+    if(!owner){PyErr_Clear();return;}
+    // Manual/detached finalizer invocation while its parent is alive must never
+    // free a child still reachable through the parent. Conservatively leak then.
+    PyObject* parent=nullptr;
+    const int alive=PyWeakref_GetRef(owner->weak,&parent);
+    if(alive==0){delete owner->geometry;delete owner->attributes;}
+    else if(alive<0)PyErr_Clear();
+    Py_XDECREF(parent);
+    claimed_files().erase(owner->identity);
+    Py_DECREF(owner->weak);delete owner;
+}
+PyObject* file_owner(PyObject*,PyObject* obj) {
+    try {
+        require_main_thread();
+        auto type=py::module_::import("rhino3dm").attr("File3dmObject");
+        if(reinterpret_cast<PyObject*>(Py_TYPE(obj))!=type.ptr())throw std::runtime_error("exact File3dmObject required");
+        auto* bound=pybind11_conduit_v1::get_type_pointer_ephemeral<BND_FileObject>(obj);
+        if(!bound)return nullptr;
+        if(claimed_files().count(bound))Py_RETURN_NONE;
+        if(!bound->m_geometry || !bound->m_attributes)throw std::runtime_error("native file-object children unavailable");
+        pin_address(reinterpret_cast<const void*>(&pin_address));
+        pin_address(bound->m_geometry->GeometryPointer()->ClassId());
+        auto* weak=PyWeakref_NewRef(obj,nullptr);if(!weak)return nullptr;
+        auto owner=std::make_unique<FileOwner>(FileOwner{bound,bound->m_geometry,bound->m_attributes,weak});
+        auto* raw=PyCapsule_New(owner.get(),file_owner_name,file_owner_release);
+        if(!raw){Py_DECREF(weak);return nullptr;}
+        owner.release();py::object capsule=py::reinterpret_steal<py::object>(raw);
+        claimed_files().insert(bound);
+        auto finalizer=py::module_::import("weakref").attr("finalize")(py::handle(obj),py::module_::import("builtins").attr("id"),capsule);
+        finalizer.attr("atexit")=false;
+        Py_RETURN_NONE;
+    } catch(py::error_already_set& error){error.restore();return nullptr;}
+      catch(const std::exception& error){PyErr_SetString(PyExc_RuntimeError,error.what());return nullptr;}
+}
+
+PyObject* lease_key(PyObject*,PyObject* obj) {
+    try {
+        require_main_thread();
+        auto* data=dynamic_cast<MasterLeaseData*>(exact_brep(obj)->GetUserData(lease_uuid));
+        if(!data)Py_RETURN_NONE;
+        return PyUnicode_FromString(data->lease->entry->key.c_str());
+    } catch(py::error_already_set& error){error.restore();return nullptr;}
+      catch(const std::exception& error){PyErr_SetString(PyExc_RuntimeError,error.what());return nullptr;}
+}
+PyObject* lease_unbind(PyObject*,PyObject* obj) {
+    try {
+        require_main_thread();auto* geometry=exact_brep(obj);
+        auto* data=geometry->GetUserData(lease_uuid);
+        if(data && !dynamic_cast<MasterLeaseData*>(data))throw std::runtime_error("foreign master lifetime userdata");
+        if(data){if(!geometry->DetachUserData(data))throw std::runtime_error("master lifetime detach refused");delete data;}
+        Py_RETURN_NONE;
+    } catch(py::error_already_set& error){error.restore();return nullptr;}
+      catch(const std::exception& error){PyErr_SetString(PyExc_RuntimeError,error.what());return nullptr;}
+}
+PyObject* lease_hold_key(PyObject*,PyObject* obj) {
+    try {
+        require_main_thread();auto key=py::cast<std::string>(py::handle(obj));
+        auto found=leases().entries.find(key);if(found==leases().entries.end())Py_RETURN_NONE;
+        auto lease=found->second->weak.lock();if(!lease)Py_RETURN_NONE;
+        auto held=std::make_unique<std::shared_ptr<Lease>>(std::move(lease));
+        auto* capsule=PyCapsule_New(held.get(),capsule_name,capsule_release);
+        if(capsule)held.release();return capsule;
+    } catch(py::error_already_set& error){error.restore();return nullptr;}
+      catch(const std::exception& error){PyErr_SetString(PyExc_RuntimeError,error.what());return nullptr;}
+}
+PyObject* lease_stats(PyObject*,PyObject*) {
+    try {
+        require_main_thread();size_t pending=0;long owners=0;
+        for(const auto& entry:leases().entries){pending+=entry.second->released.load(std::memory_order_acquire);owners+=entry.second->weak.use_count();}
+        return Py_BuildValue("{sK,sK,sK,sL}","entries",static_cast<unsigned long long>(leases().entries.size()),"pending",static_cast<unsigned long long>(pending),"file_owners",static_cast<unsigned long long>(claimed_files().size()),"owners",static_cast<long long>(owners));
+    } catch(py::error_already_set& error){error.restore();return nullptr;}
+      catch(const std::exception& error){PyErr_SetString(PyExc_RuntimeError,error.what());return nullptr;}
+}
+PyObject* master_lifetime_abi(PyObject*,PyObject*) {
+#ifdef _WIN32
+    return PyLong_FromLong(0);
+#else
+    return PyLong_FromLong(1);
+#endif
+}
 PyMethodDef methods[] = {
+    {"master_lifetime_abi", master_lifetime_abi, METH_NOARGS, "Master lifetime ABI; zero on unqualified platforms."},
+    {"lease_key", lease_key, METH_O, "Native ownership identity, independent of persisted tags."},
+    {"lease_unbind", lease_unbind, METH_O, "Detach only this geometry ownership token."},
+    {"lease_hold_key", lease_hold_key, METH_O, "Explicit owner for opaque registry rollback payload."},
+    {"lease_stats", lease_stats, METH_NOARGS, "Native lifetime inventory; no geometry serialization."},
+    {"lease_hold_native", lease_hold_native, METH_O, "Qualified lifetime: explicit native-copy owner; tests original-runtime destruction."},
+    {"file_owner", file_owner, METH_O, "Qualified lifetime: own pinned wheel file-object wrappers until parent GC."},
+    {"lease_hold", lease_hold, METH_O, "Qualified lifetime: explicit owner for serialized payload."},
+    {"lease_thread_release", lease_thread_release, METH_O, "Qualified lifetime: release on native thread without GIL."},
+    {"lease_bind", lease_bind, METH_VARARGS, "Qualified lifetime: bind native lease."},
+    {"lease_count", lease_count, METH_O, "Qualified lifetime: native ownership count."},
+    {"lease_drain", lease_drain, METH_NOARGS, "Qualified lifetime: drain native releases."},
     {"raw_observe", raw_observe, METH_O, "Test-only raw native archives, not registry witnesses."},
     {"index", index, METH_O, "Read UUID/name index only; does not serialize geometry."},
     {"copy_attributes", copy_attributes, METH_VARARGS, "Copy complete attributes into a private native holder."},
