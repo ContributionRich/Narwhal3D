@@ -239,6 +239,60 @@ try:
 finally:
     os.environ["NARWHAL_PURE_CORE"] = LIBRARY
 
+print("\n-- PreparedCurve.closest_many: one native call, the same answers as closest --")
+
+
+def fields(c):
+    return (c.t, c.point, c.distance, c.method, c.at_end, c.ambiguous)
+
+
+rng_many = random.Random(31)
+for name, curve in FIXTURES.items():
+    prepared = nearest.PreparedCurve(curve)
+    queries = queries_for(curve, 40) + [(float("nan"), 0.0, 0.0)]
+    before = native._native_many_calls
+    got = [fields(c) for c in prepared.closest_many(queries[:-1])]
+    batched = native._native_many_calls - before
+    want = [fields(prepared.closest(q)) for q in queries[:-1]]
+    general = isinstance(curve, r3.NurbsCurve) and nearest._is_general_nurbs(curve)
+    check(got == want and batched == int(general),
+          f"{name}: {len(want)} answers equal closest, {'one batch' if general else 'per point'}")
+total, differ = 0, 0
+for _ in range(40):
+    curve = random_curve(rng_many)
+    if not curve.IsValid:
+        continue
+    prepared = nearest.PreparedCurve(curve)
+    queries = queries_for(curve, 25)
+    total += len(queries)
+    differ += [fields(c) for c in prepared.closest_many(queries)] != [fields(prepared.closest(q)) for q in queries]
+check(total > 500 and differ == 0, f"{total} random queries in batches: {differ} batches differ")
+cubic = nearest.PreparedCurve(FIXTURES["open cubic, 12 points"])
+mixed = [(1.0, 2.0, 0.0), (float("nan"), 1.0, 0.0), (5.0, -1.0, 0.0)]
+
+
+def outcome(fn):
+    try:
+        return ("value", fn())
+    except Exception as exc:  # noqa: BLE001 -- the error itself is compared
+        return ("error", type(exc).__name__)
+
+
+got = outcome(lambda: [fields(c) for c in cubic.closest_many(mixed)])
+check(got == outcome(lambda: [fields(cubic.closest(q)) for q in mixed]) and got[0] == "error",
+      f"a non-finite point goes to closest itself, which raises as before ({got[1]})")
+check([fields(c) for c in cubic.closest_many(mixed[::2])] == [fields(cubic.closest(q)) for q in mixed[::2]],
+      "the finite points are answered by the batch")
+os.environ["NARWHAL_PURE_CORE"] = os.path.join(ROOT, "no-such-library.so")
+try:
+    before = native._native_many_calls
+    plain = nearest.PreparedCurve(FIXTURES["open cubic, 12 points"])
+    got = [fields(c) for c in plain.closest_many(mixed[::2])]
+    check(native._native_many_calls == before and got == [fields(plain.closest(q)) for q in mixed[::2]],
+          "without the library closest_many answers point by point in Python")
+finally:
+    os.environ["NARWHAL_PURE_CORE"] = LIBRARY
+
 print("\n-- per-query Near timing (best of 3, cache built once) --")
 
 

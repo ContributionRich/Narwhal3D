@@ -147,7 +147,7 @@ def rebuild_curve(curve, point_count, degree, preserve_tangents=False, samples=N
         # the current fit, then refit. A fit that is already exact is unchanged by it.
         dom = out.Domain
         fit = nearest.PreparedCurve(out)           # `out` is final: pack it once for all samples
-        params = [(fit.closest(q).t - dom.T0) / (dom.T1 - dom.T0) for _t, q in pts]
+        params = [(c.t - dom.T0) / (dom.T1 - dom.T0) for c in fit.closest_many(q for _t, q in pts)]
         if not closed:
             params[0], params[-1] = 0.0, 1.0
     if not out.IsValid:
@@ -242,6 +242,6 @@ def max_deviation(a, b, samples=200):
     worst = 0.0
     for src, dst in ((a, b), (b, a)):
         target = nearest.PreparedCurve(dst)
-        for _t, q in _samples(src, samples, bool(src.IsClosed)):
-            worst = max(worst, target.closest(q).distance)
+        for hit in target.closest_many(q for _t, q in _samples(src, samples, bool(src.IsClosed))):
+            worst = max(worst, hit.distance)
     return worst
