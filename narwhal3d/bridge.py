@@ -7089,9 +7089,10 @@ def faces_at_points(geom, points):
     return sorted(set(out))
 
 
-def shell_occt(geom, remove_points, thickness):
+def shell_occt(geom, remove_points, thickness, remove_faces=()):
     """Shell -- `geom`'s exact solid hollowed inward to `thickness`, the faces under
-    `remove_points` removed. Exact (OCCT MakeThickSolid), recipe `shell`. Raises ValueError
+    `remove_points` and the 1-based `unique_faces` indices `remove_faces` (a viewport
+    face pick) removed. Exact (OCCT MakeThickSolid), recipe `shell`. Raises ValueError
     by name."""
     occt = _occt()
     if occt is None:
@@ -7106,7 +7107,14 @@ def shell_occt(geom, remove_points, thickness):
     if occt.solid_count(shape) != 1:
         raise ValueError("Shell works on a closed solid (\"Shell only operates on simple, "
                          "solid, manifold polysurfaces\")")
-    remove = faces_at_points(geom, remove_points)
+    count = len(occt.unique_faces(shape))
+    bad = [f for f in remove_faces if type(f) is not int or not 1 <= f <= count]
+    if bad:
+        raise ValueError(f"face {bad[0]!r} is not a face of the solid")
+    remove = sorted(set(faces_at_points(geom, remove_points) if remove_points else ())
+                    | set(remove_faces))
+    if len(remove) >= count:
+        raise ValueError("leave at least one face unselected")
     recipe = {"kind": "shell", "a": base, "remove": remove, "thickness": float(thickness)}
     try:
         out = occt.from_recipe(recipe)

@@ -1130,7 +1130,10 @@ check(c.prompt == "Text key <All keys>:" and c2.prompt == "Document text key <Al
       f"R8: GetUserText / GetDocumentUserText prompts ({c.prompt!r}, {c2.prompt!r})")
 
 # --- R9 Paste with nothing on the clipboard ---------------------------------------------
-c, msg, done = drive("paste", [], Ctx(TOP))
+# An authoritative empty test input must not read or alter the user's desktop clipboard.
+paste_ctx = Ctx(TOP)
+paste_ctx.get_clipboard_text = lambda: ""
+c, msg, done = drive("paste", [], paste_ctx)
 check(done and msg == "Unable to paste, no objects, images or text on the clipboard.",
       f"R9: Paste with an empty clipboard reports it ({msg!r})")
 
@@ -1164,6 +1167,74 @@ lo, hi = ob.tight_bbox(m) if m is not None else ((0,) * 3, (0,) * 3)
 check(p0 == "Point to move from" and done and abs(hi[2] - 5) < 1e-9,
       f"P46: a selected face skips the part prompt; the move is exact ({p0!r}, {msg!r}, top z {hi[2]})")
 del ctx.selected_subobjects
+
+# --- Shell / MoveFace: a viewport click answers the face prompt with the FACE under the
+# cursor (`pick_face`), not the CPlane point behind it. Looking down on a box resting on
+# the CPlane, that point is on the BOTTOM face; from any other view it is off the solid.
+print("-- Shell / MoveFace face clicks --")
+ctx = Ctx(TOP)
+ctx.add(bridge.make_box((0, 0, 0), (4, 4, 0), 3), "B")
+ctx.add(bridge.make_box((10, 0, 0), (4, 4, 0), 3), "Other")
+box = ctx.geom_by_name("B")
+# (`faces_at_points` returns its indices sorted, so one call per pick.)
+top_id = bridge.faces_at_points(box, [(2, 2, 3)])[0]
+bottom_id = bridge.faces_at_points(box, [(2, 2, 0)])[0]
+c0, _m, _d = drive("shell", [], ctx)
+before = c0.pick_face("B", top_id, (2, 2, 3), ctx) if c0.step_index == 0 else "skipped step 0"
+c, msg, done = drive("shell", [], ctx, select=["B"])
+c2, _m, _d = drive("shell", [], ctx, select=["B"])
+c2.feed("Thickness", ctx)
+pending = c2.pick_face("B", top_id, (2, 2, 3), ctx)
+answers = [c.pick_face("B", top_id, (2, 2, 3), ctx),
+           c.pick_face("B", top_id, (2, 2, 3), ctx),
+           c.pick_face("Other", 1, (12, 2, 3), ctx),
+           c.pick_face(None, None, None, ctx)]
+check(before is None and pending is None and c.step_index == 1
+      and answers[0] == ("1 face(s) picked -- press Enter when done", False)
+      and "already picked" in answers[1][0] and "belongs to Other" in answers[2][0]
+      and "no face" in answers[3][0] and c._faces == [top_id],
+      f"Shell: a face click is taken only at the face prompt, once, from the solid being "
+      f"shelled ({answers})")
+msg, done = c.feed("", ctx)
+out = ctx.added[-1] if ctx.added else None
+rec = kernel.recipe_of(out) if out is not None else None
+check(done and rec is not None and rec.get("remove") == [top_id] and top_id != bottom_id
+      and ctx.geom_by_name("B") is None,
+      f"...and Enter shells with the TOP face removed, not the bottom ({msg!r}, "
+      f"{rec and rec.get('remove')}, top {top_id}, bottom {bottom_id})")
+ctx = Ctx(TOP)
+ctx.add(bridge.make_box((0, 0, 0), (4, 4, 0), 3), "B")
+c, msg, done = drive("shell", [], ctx, select=["B"])
+for f in range(1, 7):
+    c.pick_face("B", f, None, ctx)
+msg, done = c.feed("", ctx)
+check(done and "leave at least one face unselected" in msg and not ctx.added,
+      f"Shell: removing every face is refused, as the prompt says ({msg!r})")
+try:
+    bridge.shell_occt(ctx.geom_by_name("B"), [], 1.0, remove_faces=[7])
+    bad = "no error"
+except ValueError as e:
+    bad = str(e)
+check("not a face of the solid" in bad, f"shell_occt refuses a face index the solid lacks ({bad!r})")
+ctx = Ctx(TOP)
+ctx.add(bridge.make_box((0, 0, 0), (4, 4, 0), 3), "B")
+c, msg, done = drive("moveface", [], ctx, select=["B"])
+p0 = base(c.prompt)
+answer = c.pick_face("B", top_id, (2, 2, 3), ctx)
+p1 = base(c.prompt)
+late = c.pick_face("B", bottom_id, (2, 2, 0), ctx)
+msg, done = c.feed("2,2,3", ctx)
+msg, done = c.feed("2,2,5", ctx)
+m = kernel.master_of(ctx.geom_by_name("B")) if ctx.geom_by_name("B") is not None else None
+lo, hi = ob.tight_bbox(m) if m is not None else ((9,) * 3, (0,) * 3)
+check(p0 == "Select a face" and answer == (f"face {top_id} of B selected", False)
+      and c.args[:2] == ["B", None]
+      and p1 == "Point to move from" and late is None and done
+      and abs(hi[2] - 5) < 1e-9 and abs(lo[2]) < 1e-9,
+      f"MoveFace: a face click picks the top face and the move is exact ({p0!r}, {answer}, "
+      f"{p1!r}, z {lo[2]}..{hi[2]})")
+c = type(commands.COMMANDS["moveedge"])()
+check(c.pick_face("B", top_id, None, ctx) is None, "MoveEdge ignores face clicks")
 c, msg, done = drive("moveedge", [], Ctx(TOP))
 check(base(c.prompt) == "Select edges", f"P45: MoveEdge's first prompt ({c.prompt!r})")
 

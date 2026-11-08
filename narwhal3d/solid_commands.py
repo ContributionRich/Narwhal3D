@@ -783,6 +783,25 @@ class _MoveSubObjectCmd(Command):
     def _resolve(self, geom, point, ctx):
         raise NotImplementedError
 
+    def pick_face(self, name, face_id, point, ctx):
+        """A viewport click at MoveFace's face prompt: the face under the cursor, never
+        the CPlane point behind it. None when this is not that prompt."""
+        if self.kind != "face" or self.step_index != 1 or self.pending_option is not None:
+            return None
+        solid_name, geom = self._solid(ctx)
+        if name is None:
+            return f"{self.name}: there is no face of the solid under the cursor", False
+        if name != solid_name:
+            return f"{self.name}: that face belongs to {name}, not to {solid_name}", False
+        if bridge._occt_operand(geom) is None:
+            return (f"{self.name}: that object has no exact solid, so its faces cannot be "
+                    f"moved. Nothing was changed."), True
+        self._sub_id = int(face_id)
+        # The viewport point is display-only and never stored; the exact face id is the target.
+        self.args.append(None)
+        self.step_index += 1
+        return f"{self.kind} {self._sub_id} of {solid_name} selected", False
+
     def _feed(self, text, ctx):
         raw = (text or "").strip()
         if self.step_index == 0 and self.pending_option is None and not raw:

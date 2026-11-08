@@ -71,6 +71,8 @@ run_gui spike/test_window_overlay_gui.py WINDOW_OVERLAY_RESULT before-bootstrap
 rm -f "$NARWHAL3D_SETTINGS_FILE"
 run_gui spike/test_gumball_extrude_scale_gui.py GUMBALL_GUI_RESULT before-bootstrap
 rm -f "$NARWHAL3D_SETTINGS_FILE"
+run_gui spike/test_face_pick_gui.py FACE_PICK_RESULT before-bootstrap
+rm -f "$NARWHAL3D_SETTINGS_FILE"
 # This offscreen shader oracle needs a real GPU context, but no app bootstrap or events.
 status=0
 timeout --kill-after=5s 120s "$RUNTIME_ROOT/blender" --factory-startup \
