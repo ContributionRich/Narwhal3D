@@ -10,6 +10,10 @@
 //! openNURBS's own algorithms in its operation order, so every step, and the
 //! answer, is bit-identical to the Python search on the same `NurbsCurve`. The
 //! answer is a snap location only; it never creates or changes document geometry.
+//!
+//! `narwhal_pure_core_sample_nurbs` uses the same evaluator for the uniform samples
+//! of `bridge.sample_curve`, which draw previews and wireframes; they are display
+//! points only.
 
 const ERR_NULL: i32 = -1;
 const ERR_INPUT: i32 = -2;
@@ -609,6 +613,74 @@ pub unsafe extern "C" fn narwhal_pure_core_nearest_on_nurbs(
     0
 }
 
+/// Most samples [`narwhal_pure_core_sample_nurbs`] writes in one call.
+const MAX_SAMPLE_SEGMENTS: usize = 1 << 20;
+
+/// `bridge.sample_curve` on a NURBS curve: `segments + 1` points of `C(t)` at
+/// `t = t0 + (t1 - t0) * i / segments`, each as `PointAt(t)` gives it.
+///
+/// `t0` and `t1` are the curve's `Domain`, passed in so the parameters repeat the
+/// Python expression on the same values. Fails (`ERR_INPUT`) rather than writing a
+/// point openNURBS could not evaluate, so the caller keeps its own sampling.
+///
+/// # Safety
+/// `knots` is readable for `knot_count` values and `cvs` for `cv_count * 4`
+/// homogeneous values; `out_points` is writable for `out_capacity` values, at least
+/// `(segments + 1) * 3`.
+#[allow(clippy::too_many_arguments)]
+#[no_mangle]
+pub unsafe extern "C" fn narwhal_pure_core_sample_nurbs(
+    order: usize,
+    knots: *const f64,
+    knot_count: usize,
+    cvs: *const f64,
+    cv_count: usize,
+    rational: u8,
+    t0: f64,
+    t1: f64,
+    segments: usize,
+    out_points: *mut f64,
+    out_capacity: usize,
+) -> i32 {
+    if cv_count > MAX_CVS
+        || rational > 1
+        || !(1..=MAX_SAMPLE_SEGMENTS).contains(&segments)
+        || !t0.is_finite()
+        || !t1.is_finite()
+    {
+        return ERR_INPUT;
+    }
+    let needed = (segments + 1) * 3;
+    if out_capacity < needed {
+        return ERR_INPUT;
+    }
+    let (Some(knot_values), Some(cv_values)) = (
+        crate::checked_slice(knots, knot_count),
+        crate::checked_slice(cvs, cv_count * CV_STRIDE),
+    ) else {
+        return ERR_NULL;
+    };
+    if !knot_values.iter().chain(cv_values).all(|v| v.is_finite()) {
+        return ERR_INPUT;
+    }
+    let Some(curve) = Nurbs::new(order, knot_values, cv_values, rational == 1) else {
+        return ERR_INPUT;
+    };
+    let Some(out) = crate::checked_slice_mut(out_points, needed) else {
+        return ERR_NULL;
+    };
+    let span = t1 - t0;
+    for (i, slot) in out.chunks_exact_mut(3).enumerate() {
+        // The same operations as Python's `T0 + (T1 - T0) * i / n`.
+        let p = curve.point(t0 + span * i as f64 / segments as f64);
+        if !p.iter().all(|v| v.is_finite()) {
+            return ERR_INPUT;
+        }
+        slot.copy_from_slice(&p);
+    }
+    0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -815,5 +887,79 @@ mod tests {
             )
         };
         assert_eq!(bad_flag, ERR_INPUT);
+    }
+
+    fn sample(
+        order: usize,
+        knots: &[f64],
+        cvs: &[f64],
+        rational: u8,
+        t: (f64, f64),
+        n: usize,
+    ) -> (i32, Vec<f64>) {
+        let mut out = vec![f64::NAN; (n + 1) * 3];
+        let code = unsafe {
+            narwhal_pure_core_sample_nurbs(
+                order,
+                knots.as_ptr(),
+                knots.len(),
+                cvs.as_ptr(),
+                cvs.len() / 4,
+                rational,
+                t.0,
+                t.1,
+                n,
+                out.as_mut_ptr(),
+                out.len(),
+            )
+        };
+        (code, out)
+    }
+
+    #[test]
+    fn samples_are_point_at_uniform_parameters() {
+        let (knots, cvs) = cubic();
+        let curve = Nurbs::new(4, &knots, &cvs, false).unwrap();
+        let (code, out) = sample(4, &knots, &cvs, 0, (0.0, 2.0), 7);
+        assert_eq!(code, 0);
+        for (i, p) in out.chunks_exact(3).enumerate() {
+            assert_eq!(p, curve.point(0.0 + 2.0 * i as f64 / 7.0));
+        }
+        // A clamped curve starts and ends exactly on its end control points.
+        assert_eq!(&out[..3], &[0.0, 0.0, 0.0]);
+        assert_eq!(&out[out.len() - 3..], &[12.0, 0.0, 0.0]);
+
+        let (knots, cvs) = circle();
+        let (code, out) = sample(3, &knots, &cvs, 1, (0.0, 2.0 * std::f64::consts::PI), 24);
+        assert_eq!(code, 0);
+        for p in out.chunks_exact(3) {
+            assert!((p[0].hypot(p[1]) - 5.0).abs() < 1e-12, "{p:?}");
+        }
+    }
+
+    #[test]
+    fn sampling_refuses_bad_input_without_a_partial_answer() {
+        let (knots, cvs) = cubic();
+        assert_eq!(sample(4, &knots, &cvs, 0, (0.0, 2.0), 0).0, ERR_INPUT);
+        assert_eq!(sample(4, &knots, &cvs, 0, (0.0, f64::NAN), 4).0, ERR_INPUT);
+        assert_eq!(sample(4, &knots, &cvs, 2, (0.0, 2.0), 4).0, ERR_INPUT);
+        assert_eq!(sample(4, &knots[..6], &cvs, 0, (0.0, 2.0), 4).0, ERR_INPUT);
+        let mut short = vec![0.0; 3 * 4];
+        let code = unsafe {
+            narwhal_pure_core_sample_nurbs(
+                4,
+                knots.as_ptr(),
+                knots.len(),
+                cvs.as_ptr(),
+                5,
+                0,
+                0.0,
+                2.0,
+                4,
+                short.as_mut_ptr(),
+                short.len(),
+            )
+        };
+        assert_eq!(code, ERR_INPUT);
     }
 }

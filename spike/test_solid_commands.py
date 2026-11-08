@@ -325,7 +325,7 @@ msg, done = c.set_handle_radius(scalar_id, 0.9, cx)
 check(not done and "current phase" in msg and c._edge_radii[eid] == (0.5, 0.5),
       "the scalar selection id cannot accidentally edit both endpoints in EDIT_HANDLES")
 
-real_sections, real_sample = bridge.bevel_edge_sections_occt, bridge.sample_curve
+real_sections, real_sample = bridge.bevel_edge_sections_occt, bridge.sample_curve_xyz
 section_calls, sample_calls, build_calls = [], [], []
 def counted_sections(*args, **kwargs):
     section_calls.append(kwargs)
@@ -339,7 +339,7 @@ def edit_counted_bevel(*args, **kwargs):
     build_calls.append(kwargs)
     return real_bevel(*args, **kwargs)
 bridge.bevel_edge_sections_occt = counted_sections
-bridge.sample_curve = counted_sample
+bridge.sample_curve_xyz = counted_sample
 bridge.bevel_edges_occt = edit_counted_bevel
 try:
     msg0, _ = c.set_handle_radius(ids[0], 0.3, cx)
@@ -380,7 +380,7 @@ try:
 finally:
     bridge.bevel_edges_occt = real_bevel
     bridge.bevel_edge_sections_occt = real_sections
-    bridge.sample_curve = real_sample
+    bridge.sample_curve_xyz = real_sample
 recipe = kernel.recipe_of(candidate) if candidate is not None else None
 master = kernel.master_of(candidate) if candidate is not None else None
 rebuilt = ob.from_recipe(recipe) if recipe is not None else None
