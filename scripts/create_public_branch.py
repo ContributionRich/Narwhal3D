@@ -160,7 +160,7 @@ TEST_FILES = (
     "spike/test_file_commands.py", "spike/test_sessionlog.py",
     "spike/test_bugreport.py",
     "spike/test_import.py", "spike/test_import_dialog.py", "spike/test_export_cmd.py",
-    "spike/test_print_cmd.py", "spike/test_printdialog.py", "spike/test_printdialog_layout.py",
+    "spike/test_print_cmd.py", "spike/test_print_active_view.py", "spike/test_printdialog.py", "spike/test_printdialog_layout.py",
     "spike/test_dxf_reader.py", "spike/test_dxf_writer.py", "spike/test_native_dxf.py",
     "spike/test_obj_reader.py", "spike/test_obj_writer.py", "spike/test_native_obj.py",
     "spike/test_stl_writer.py", "spike/test_native_stl.py",

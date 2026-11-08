@@ -19036,7 +19036,9 @@ def open_print_dialog():
                                  view=pane_label(active) if pane_label(active)
                                  in views else (labels[0] if labels else ""))
     for key, value in preferences.get('print_settings').items():
-        if key != 'view' or value in labels:
+        # View is contextual: a previous dialog must not override the active pane.
+        # Paper, output and scale settings remain persistent.
+        if key != 'view':
             setattr(st, key, value)
     _print_dialog = {"state": st, "views": views, "pane": _pane_key(active),
                      "page": None}

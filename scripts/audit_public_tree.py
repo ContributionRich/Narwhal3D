@@ -123,7 +123,7 @@ REQUIRED = {
     "spike/test_ui_core_popup_gui.py", "spike/test_ui_core_popup_failure.py",
     "spike/test_ui_core_popup_failure_gui.py", "spike/test_ui_core_gate.py",
     "spike/test_textfield.py", "spike/test_shell_input.py", "spike/test_shell_popup.py",
-    "spike/test_bugreport.py", "spike/test_printdialog.py",
+    "spike/test_bugreport.py", "spike/test_printdialog.py", "spike/test_print_active_view.py",
     "spike/test_selection_visibility_07.py", "spike/test_gumball_release_profile_07.py",
     "spike/test_move_regression_07.py",
     "spike/test_ai_accepted_review_native.py", "spike/test_ai_v4_native.py",

@@ -192,8 +192,16 @@ analytic and missing-core compatibility routes remain available. The prepared ob
 not retain stale geometry after edits. Fit control points, knots and deviation are compared
 bit-for-bit against the previous pipeline in the regression suite.
 
-The Rebuild window uses the application's themed popup and native-backed text editing;
-this styling does not change fit limits, Preview, Cancel, or the single Undo callback.
+The Rebuild window uses the application's themed popup and native-backed text editing.
+The Point count and Degree fields show separate **Current** readouts for the input curves;
+mixed selections show **varies**. These stay distinct from the requested output settings.
+Styling does not change fit limits, Preview, Cancel, or the single Undo callback.
+
+View > Interface Scale saves a percentage or Automatic for the next startup. The menu
+and confirmation state that a restart is required: changing only fonts and hit targets
+without resizing panel areas would clip the running interface. Window resizing keeps
+the current session's choice until restart. An explicit `NARWHAL3D_UI_SCALE` environment
+override still takes precedence.
 
 ## Selection, Import and Print
 
@@ -204,8 +212,11 @@ this styling does not change fit limits, Preview, Cancel, or the single Undo cal
 - `Import` opens the file browser immediately. Inline filenames still work; a typed
   filename prompt remains available when no native browser can be opened. Cancel does
   not modify the document; successful imports use one Undo record.
-- Print labels and dropdowns use measured text widths and stay within the pane at the
-  supported dialog sizes. Perspective printing remains explicitly unsupported; select
+- Print starts from the active pane rather than a previous dialog's remembered view;
+  saved paper and scale settings remain available. Labels and dropdowns use measured
+  text widths and stay within the pane at the supported dialog sizes. With Area set to
+  Viewport, Fit fits that view; use Extents and Only selected objects to fit a selection.
+  Perspective printing remains explicitly unsupported; select
   a parallel view such as Top, Front or Right in the Print dialog.
 
 ## Native saved-file compatibility contract

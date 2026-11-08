@@ -475,6 +475,7 @@ BLENDER_SUITES=(
     spike/test_import.py
     spike/test_export_cmd.py
     spike/test_print_cmd.py
+    spike/test_print_active_view.py
 )
 
 run "native CDR core build" cargo +1.95.0 build --release --locked \

@@ -80,6 +80,7 @@ FOOTER_H = 57.0
 PAD_X = 17.0
 COL_GAP = 11.0
 FIELD_H = 33.0
+CURRENT_GAP = 5.0
 OPTION_H = 17.0
 OPTION_GAP = 10.0
 CHECK = 15.0
@@ -155,6 +156,25 @@ def span_label(span_text):
     return f"Span count: {span_text}"
 
 
+def current_labels(counts):
+    """The "Current:" readouts for (point count, degree) of the queued selection.
+
+    The rule `ui.NARWHAL_OT_rebuild_dialog.draw` applies: the value when every selected
+    curve agrees, "varies" when they differ, and no label when nothing is selected. The
+    counts come from the window the command queued, so editing the draft never moves them."""
+    labels = []
+    for index in (0, 1):
+        values = {c[index] for c in counts or ()}
+        if len(values) == 1:
+            value = str(values.pop())
+        elif values:
+            value = "varies"
+        else:
+            value = ""
+        labels.append(f"Current: {value}" if value else "")
+    return tuple(labels)
+
+
 def feedback(st, ui):
     """``(text, is_error)`` for the feedback line. Read-only."""
     if st.field_error is not None:
@@ -206,10 +226,11 @@ class Layout:
     scroll: float
     feedback: list    # word-wrapped feedback lines
     span_text: str
+    current: tuple    # the "Current:" label under the point count and under the degree
 
 
 def layout(region_w, region_h, scale, measure, span_text="", feedback_text="",
-           scroll=0.0):
+           scroll=0.0, current=("", "")):
     """Where everything goes in a region of this size, at this interface scale.
 
     `measure(text, px) -> width` is the drawing font's width. The dialog is centred and
@@ -235,10 +256,13 @@ def layout(region_w, region_h, scale, measure, span_text="", feedback_text="",
     y += lh("mini") + 9 * s
     for rid, cx in zip(FIELDS, col_x):
         title_h = lh("label")
+        box_top = y + title_h + 6 * s
         items[rid + "_title"] = (cx, y, col, title_h)
-        items[rid + "_box"] = (cx, y + title_h + 6 * s, col, FIELD_H * s)
+        items[rid + "_box"] = (cx, box_top, col, FIELD_H * s)
         items[rid] = (cx, y, col, title_h + 6 * s + FIELD_H * s)
-    y += lh("label") + 6 * s + FIELD_H * s + 17 * s
+        items[rid + "_current"] = (cx, box_top + FIELD_H * s + CURRENT_GAP * s, col,
+                                   lh("hint"))
+    y += lh("label") + 6 * s + FIELD_H * s + CURRENT_GAP * s + lh("hint") + 17 * s
     for rid in CHECKS:
         items[rid] = (x_in, y, inner, OPTION_H * s)
         y += OPTION_H * s + OPTION_GAP * s
@@ -312,7 +336,7 @@ def layout(region_w, region_h, scale, measure, span_text="", feedback_text="",
                            BUTTON_H * s)
     targets["ok"], targets["cancel"] = rects["ok"], rects["cancel"]
     return Layout(s, dialog, header, body, footer, rects, targets, spans, body_h,
-                  content_h, max_scroll, scroll, lines, span_text)
+                  content_h, max_scroll, scroll, lines, span_text, tuple(current))
 
 
 def hit(lay, x, y):
@@ -443,8 +467,9 @@ def _layout(st, ui, region_w, region_h, scroll=None):
     span = span_count(st.draft.point_count, st.draft.degree,
                       bool((ui._rebuild_window or {}).get("closed")))
     text, _bad = feedback(st, ui)
+    counts = (ui._rebuild_window or {}).get("counts")
     return layout(region_w, region_h, ui._ui_scale(), ui._text_width, str(span), text,
-                  st.scroll if scroll is None else scroll)
+                  st.scroll if scroll is None else scroll, current_labels(counts))
 
 
 def _measure(ui, size):
@@ -900,7 +925,7 @@ def _paint_preview(lay, st, pal, p):
 def _paint_body(lay, st, pal, p, ui):
     s = lay.scale
     _label(p, lay.rects["mini"], "CURVE SETTINGS", FS["mini"] * s, pal["text_muted"])
-    for rid, spec in FIELDS.items():
+    for index, (rid, spec) in enumerate(FIELDS.items()):
         title_rect = lay.rects[rid + "_title"]
         hint = f"Min. {spec[2]}"
         hint_w = p.text_width(hint, FS["hint"] * s)
@@ -908,6 +933,9 @@ def _paint_body(lay, st, pal, p, ui):
                max_w=title_rect.w - hint_w - 6 * s)
         _label(p, title_rect, hint, FS["hint"] * s, pal["text_muted"], align="right")
         _paint_field(lay, st, pal, p, rid, ui)
+        if lay.current[index]:
+            _label(p, lay.rects[rid + "_current"], lay.current[index], FS["hint"] * s,
+                   pal["text_muted"])
     for rid in CHECKS:
         _paint_check(lay, st, pal, p, rid)
     rule = lay.rects["rule"]

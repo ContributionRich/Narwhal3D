@@ -441,6 +441,74 @@ try:
     design.set_theme(saved_theme)
     rp.close(ui)
     print("PASS: paint writes nothing, stays inside the dialog, shows the specified controls and theme")
+
+    # ------------------------------------------- current readouts (the original counts)
+    def painted(st, width=REGION.width, height=REGION.height):
+        rec = Recorder()
+        rp.paint_popup(ui, st, width, height, rec)
+        return rec
+
+    def readouts(rec, lay):
+        """Per field, the "Current:" text ops drawn in that field's readout slot."""
+        found = []
+        for rid in rp.FIELDS:
+            x = lay.rects[rid + "_current"].x
+            found.append([op for op in rec.ops if op[0] == "text" and op[2].startswith("Current")
+                          and op[1][0] == x])
+        return found
+
+    def texts(groups):
+        return [[op[2] for op in group] for group in groups]
+
+    cases = (
+        ("one curve", [(6, 3)], "Current: 6", "Current: 3"),
+        ("equal counts", [(6, 3), (6, 3), (6, 3)], "Current: 6", "Current: 3"),
+        ("mixed point counts", [(6, 3), (9, 3)], "Current: varies", "Current: 3"),
+        ("mixed degrees", [(6, 3), (6, 2)], "Current: 6", "Current: varies"),
+        ("mixed both", [(6, 3), (9, 2)], "Current: varies", "Current: varies"),
+    )
+    assert rp.current_labels([]) == ("", "") and rp.current_labels(None) == ("", "")
+    design.set_theme("light")
+    for label, counts, want_n, want_p in cases:
+        begin(app)
+        ui._rebuild_window["counts"] = counts
+        assert texts(readouts(painted(rp._popup), layout_now())) == [[want_n], [want_p]], label
+        rp.close(ui)
+    print("PASS: the Current readouts show the original count, or varies when the selection disagrees")
+
+    begin(app)
+    ui._rebuild_window["counts"] = [(6, 3), (9, 3)]
+    st = rp._popup
+    click("point_box")
+    send([ev("A", ctrl=True)] + typed("4") + [ev("TAB")])
+    assert st.draft.point_count == 4
+    click("preview")
+    assert texts(readouts(painted(st), layout_now())) == [["Current: varies"], ["Current: 3"]]
+    assert ui._rebuild_window["counts"] == [(6, 3), (9, 3)] and undo_count(app) == 0
+    rp.close(ui)
+    print("PASS: editing and Preview change the requested settings, never the Current readouts")
+
+    for theme in ("light", "dark"):
+        design.set_theme(theme)
+        muted = tuple(rp._palette()["text_muted"])
+        for width, height in ((300, 260), (420, 360), (1280, 900)):
+            for label, counts, want_n, want_p in cases:
+                begin(app)
+                ui._rebuild_window["counts"] = counts
+                st = rp._popup
+                lay = rp._layout(st, ui, width, height)
+                groups = readouts(painted(st, width, height), lay)
+                assert texts(groups) == [[want_n], [want_p]], (theme, width, label)
+                for rid, group in zip(rp.FIELDS, groups):
+                    cur, box = lay.rects[rid + "_current"], lay.rects[rid + "_box"]
+                    assert cur.top <= box.y + 1e-6 and cur.y >= lay.rects["delete"].top - 1e-6, (rid, label)
+                    assert lay.dialog.x <= cur.x and cur.right <= lay.dialog.right, (rid, label)
+                    op = group[0]
+                    assert "…" not in op[2] and measure(op[2], op[3]) <= cur.w + 1e-6, (width, label)
+                    assert op[4] == muted, (theme, rid)
+                rp.close(ui)
+    design.set_theme(saved_theme)
+    print("PASS: Current readouts fit their columns in small and large panes, in both themes")
 finally:
     if rp.is_open():
         rp.close(ui)

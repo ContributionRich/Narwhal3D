@@ -384,6 +384,8 @@ def run():
     before_draws = SETTINGS.read_bytes()
     yield .3
     equal(SETTINGS.read_bytes(), before_draws, 'idle ready frame does not overwrite settings')
+    # Theme/page probes need an explicitly active parallel pane, not a remembered view.
+    ui.set_active_pane(next(a for a in ui._view3d_areas() if ui.pane_label(a) == 'Top'))
     check(ui.open_print_dialog(), 'Print reopens')
     subset(vars(ui.print_dialog_state()), PRINT, 'reopened Print')
     ui.close_print_dialog()
