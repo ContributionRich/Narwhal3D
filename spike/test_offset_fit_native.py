@@ -316,10 +316,15 @@ check(worst_over > 1e-4, f"cusp: the frozen legacy scan reports up to {worst_ove
 # ---------------------------------------------------------------------------
 # 4. the offset result on the cusp reports the native deviation, not the legacy one
 # ---------------------------------------------------------------------------
-print("4. cusp: the offset result uses the native deviation")
+print("4. cusp: the smooth legacy fit is out of tolerance; the offset keeps the cusps")
+# The smooth single fit cannot follow a true offset cusp (native deviation above the 1e-3
+# tolerance). The public offset (report #127) splits at the cusps and fits each piece.
+check(native_dev > 1e-3, f"cusp: the smooth legacy fit deviates {native_dev:.3e} > 1e-3")
 res_cusp = off.curve_offset(CUSP, 0.2, CUSP_NORMAL, "Sharp", 1e-3)
-check(abs(res_cusp.max_deviation - native_dev) <= 1e-9,
-      f"cusp: max_deviation {res_cusp.max_deviation:.6e} == native {native_dev:.6e}")
+check(res_cusp.curve is not None and res_cusp.max_deviation <= 1e-3,
+      f"cusp: the offset is within tolerance ({res_cusp.max_deviation:.6e})")
+check(len(off._cusp_parameters(CUSP, 0.2, CUSP_NORMAL)) > 0,
+      "cusp: the offset side has true cusp parameters")
 
 # ---------------------------------------------------------------------------
 # 5. fallbacks: a missing native library, and a mid-run decline, both give the legacy result
@@ -353,7 +358,8 @@ def _declining_search(packed, target):
 native_nearest.search = _declining_search
 try:
     ref_fit, ref_dev, _ = legacy_fit(CUSP, 0.2, CUSP_NORMAL)
-    res = off.curve_offset(CUSP, 0.2, CUSP_NORMAL, "Sharp", 1e-3)
+    # The legacy control-polygon fit (still the route for non-cusp free-form pieces).
+    res = off._offset_control_polygon_approx(CUSP, 0.2, CUSP_NORMAL, 1e-3)
     check(abs(res.max_deviation - ref_dev) <= 1e-12,
           f"mid-run decline, cusp: legacy deviation {ref_dev:.6e} (not the Python search's value)")
 finally:

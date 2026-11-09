@@ -112,8 +112,193 @@ def _shape_record(file_object, shape, member: str, digest: str, *,
     return dict(summary, object_id=_object_uuid(file_object), member=member, sha256=digest)
 
 
+#: Worker refusals that mean an object's construction RECIPE can no longer be proven to
+#: be its master. The master is the geometry, so Save re-bases the recipe on it exactly.
+_RECIPE_REFUSALS = ("recipe correspondence cannot be established",
+                    "differs geometrically from its reconstruction recipe",
+                    "differs from its reconstruction recipe", "volume differs from its recipe",
+                    "recipe cannot be rebuilt", "has no reconstruction recipe")
+#: Refusals that mean the DISPLAY proxy no longer matches the master (it only draws).
+_PROXY_REFUSALS = ("does not match its triangulated proxy", "does not match its exact proxy",
+                   "differs geometrically from its exact proxy",
+                   "has no recognized document proxy form", "proxy cannot be validated",
+                   "does not match proxy bounds")
+
+
+def _refused_master(message):
+    import re
+    match = re.search(r"master ([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}) ",
+                      str(message))
+    if match is None:
+        return None, None
+    text = str(message)
+    if any(reason in text for reason in _PROXY_REFUSALS):
+        return match.group(1), "proxy"
+    if any(reason in text for reason in _RECIPE_REFUSALS):
+        return match.group(1), "recipe"
+    return match.group(1), None
+
+
+def _rebase_recipe(geometry, master):
+    """Make the exact master itself the recipe (`native_master`). Never approximates."""
+    if not kernel.record_recipe(geometry, occt_backend.native_master_recipe(master)):
+        raise NarwhalDocumentError("the exact master could not be recorded as its recipe")
+
+
+def _rebuild_proxy(model, file_object, master):
+    """A fresh display proxy derived from the master, keeping the object's identity and
+    every user string. The proxy only draws; the master stays the geometry."""
+    from . import bridge
+    old = file_object.Geometry
+    proxy = bridge._proxy_from_occt(master)
+    form = proxy.GetUserString(kernel.DOCUMENT_FORM_KEY)
+    for key, value in old.GetUserStrings():
+        if key not in (kernel.DOCUMENT_FORM_KEY, kernel.MASTER_KEY):
+            proxy.SetUserString(key, value)
+    proxy.SetUserString(kernel.DOCUMENT_FORM_KEY, form)
+    # Bind first, then hand it to the table -- the same order every producer uses.
+    kernel.register_master(proxy, master)
+    object_id = str(file_object.Attributes.Id)
+    if not model.replace_geometry(object_id, proxy):
+        raise NarwhalDocumentError("the display proxy could not be replaced")
+    stored = model.file.Objects.FindId(object_id)
+    if stored is None or kernel.master_of(stored.Geometry) is None:
+        raise NarwhalDocumentError("the exact master could not be re-bound to its display copy")
+
+
+def _replace_with(model, file_object, geometry):
+    object_id = str(file_object.Attributes.Id)
+    if not model.replace_geometry(object_id, geometry):
+        raise NarwhalDocumentError("the document object could not be updated for saving")
+    return model.file.Objects.FindId(object_id)
+
+
+def _demote(model, file_object, why):
+    """LAST RESORT for one object: keep its visible geometry, honestly marked as NOT
+    exact (`kernel.drop_master` tags it mesh-derived), so the rest of the document still
+    saves. Never claims exactness it no longer has."""
+    geometry = file_object.Geometry.Duplicate()
+    kernel.drop_master(geometry)
+    _replace_with(model, file_object, geometry)
+    name = file_object.Attributes.Name or file_object.Attributes.Id
+    if kernel.representation_of(geometry) == kernel.ANALYTIC:
+        # The document object is the exact openNURBS polysurface; only the separate
+        # kernel solid (and its editable construction history) is set aside.
+        return (f"{name}: saved as its exact NURBS polysurface; its kernel solid could not "
+                f"be validated ({why}), so its construction history was not kept.")
+    return (f"{name}: saved as display geometry only -- its exact solid could not be "
+            f"validated ({why}). Undo and save again, or rebuild this object, to keep it exact.")
+
+
+def _prepare_for_save(model, notes):
+    """Repair declaration problems that would otherwise refuse the whole Save."""
+    for file_object in list(model.file.Objects):
+        geometry = file_object.Geometry
+        problem = kernel.honesty_problem(geometry)
+        master = kernel.master_of(geometry)
+        declared = kernel.representation_of(geometry)
+        mismatch = master is not None and declared != kernel.ANALYTIC_MASTER
+        if problem is None and not mismatch:
+            continue
+        name = file_object.Attributes.Name or str(file_object.Attributes.Id)
+        fixed = geometry.Duplicate()
+        if master is None:
+            recipe = kernel.recipe_of(geometry)
+            try:
+                master = occt_backend.from_recipe(recipe) if recipe else None
+            except Exception:  # noqa: BLE001 -- an unrebuildable recipe cannot restore it
+                master = None
+        if master is not None:
+            kernel.register_master(fixed, master)
+            stored = _replace_with(model, file_object, fixed)
+            if stored is not None and kernel.honesty_problem(stored.Geometry) is None:
+                notes.append(f"{name}: exact solid re-attached before saving")
+                continue
+            file_object = stored or file_object
+        notes.append(_demote(model, file_object, problem or "declaration mismatch"))
+
+
+def _emergency_copy(model, target):
+    """Write the whole document as an interchange copy beside `target` (recipes kept)."""
+    base, _ext = os.path.splitext(os.path.abspath(os.fspath(target)))
+    path = base + " (emergency copy).3dm"
+    try:
+        return path if model.save(path) and os.path.getsize(path) > 0 else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+#: Worker failures that are about resources, not the document.
+_RESOURCE_FAILURES = ("timed out", "timeout", "memory", "Killed", "signal", "MemoryError")
+
+
 def save_model(model, target: str | os.PathLike) -> bool:
-    """Atomically save ``model`` as a self-contained exact `.narwhal` container."""
+    """Atomically save ``model`` as a self-contained exact `.narwhal` container.
+
+    Saving must never be blocked by one object. When the validator cannot prove an
+    object's stored construction RECIPE or display PROXY matches its exact master, that
+    object is repaired from the master (recipe re-based on the master's exact bytes, or
+    proxy re-derived) and the whole archive is validated again. If an object's exact solid
+    still cannot be validated, it is kept as its visible geometry, honestly marked as not
+    exact, and reported -- the rest of the document saves exactly. A worker that runs out
+    of time/memory is retried with larger limits. If the archive still cannot be written,
+    an interchange copy is written beside it so no work is lost, and the error says where.
+    """
+    notes = []
+    _prepare_for_save(model, notes)
+    attempts = {}
+    limits = {}
+    while True:
+        try:
+            ok = _save_once(model, target, **limits)
+        except NarwhalDocumentError as exc:
+            text = str(exc)
+            # MEASURED: one worker run per refused object made a 4-object Gumball move
+            # on a 44-object file take 180 s to save. The worker now reports every
+            # refusal of a run, so all of them are repaired before ONE re-validation.
+            refused = []
+            for message in getattr(exc, "errors", None) or [text]:
+                object_id, kind = _refused_master(message)
+                file_object = model.file.Objects.FindId(object_id) if object_id else None
+                if file_object is None:
+                    refused = None
+                    break
+                refused.append((object_id, kind, file_object, message))
+            if not refused:
+                if not limits and any(word in text for word in _RESOURCE_FAILURES):
+                    limits = {"timeout": 1800, "memory_mib": 8192}
+                    notes.append("validation needed more time/memory; retried with larger limits")
+                    continue
+                emergency = _emergency_copy(model, target)
+                if emergency:
+                    raise NarwhalDocumentError(
+                        f"{text}. Your work was saved as an interchange copy: {emergency}") from exc
+                raise
+            for object_id, kind, file_object, message in refused:
+                # A proxy rebuild replaces the table object; never repair a stale one.
+                file_object = model.file.Objects.FindId(object_id) or file_object
+                name = file_object.Attributes.Name or object_id
+                master = kernel.master_of(file_object.Geometry)
+                tried = attempts.setdefault(object_id, set())
+                if master is not None and kind == "recipe" and "recipe" not in tried:
+                    _rebase_recipe(file_object.Geometry, master)
+                    notes.append(f"{name}: construction history re-based on its exact geometry "
+                                 f"(the old recipe could not be verified)")
+                elif master is not None and kind == "proxy" and "proxy" not in tried:
+                    _rebuild_proxy(model, file_object, master)
+                    notes.append(f"{name}: display copy rebuilt from its exact geometry")
+                elif "demote" not in tried:
+                    kind = "demote"
+                    notes.append(_demote(model, file_object, message.split(": ", 1)[-1][:200]))
+                else:
+                    raise
+                tried.add(kind)
+            continue
+        model.last_save_warnings = notes
+        return ok
+
+
+def _save_once(model, target: str | os.PathLike, *, timeout=600, memory_mib=4096) -> bool:
     target = os.path.abspath(os.fspath(target))
     folder = os.path.dirname(target)
     if not os.path.isdir(folder):
@@ -151,9 +336,8 @@ def save_model(model, target: str | os.PathLike) -> bool:
                 if master is None:
                     continue
                 if kernel.recipe_of(geometry) is None:
-                    raise NarwhalDocumentError(
-                        f"{file_object.Attributes.Name or '(unnamed)'} has an exact master "
-                        "but no reconstruction recipe")
+                    # The master is the geometry; it becomes its own exact recipe.
+                    _rebase_recipe(geometry, master)
                 try:
                     data = bytes(occt_backend.shape_to_bytes(
                         master, triangles=False, format_version=bintools_format))
@@ -211,13 +395,14 @@ def save_model(model, target: str | os.PathLike) -> bool:
         (root / "manifest.json").write_bytes(manifest_data)
         # Admit the staged geometry with the SAME reader checks before replacing any
         # existing project. A serialization/reader disagreement cannot destroy a good save.
-        validated = _validate_in_worker(root, len(records), reuse_proofs=True)
+        validated = _validate_in_worker(root, len(records), reuse_proofs=True,
+                                        timeout=timeout, memory_mib=memory_mib,
+                                        collect_errors=True)
         shutil.rmtree(validated)  # worker output is inside this function's private staging dir
         try:
             native_document.pack(root, target)
         except native_document.DocumentCoreError as exc:
             raise NarwhalDocumentError(f"native container writer failed: {exc}") from exc
-    model.last_save_warnings = []
     return True
 
 
@@ -259,16 +444,23 @@ def _worker_command(root: Path) -> tuple[str, ...]:
     return _worker_argv(executable, worker, root)
 
 
-def _validate_in_worker(root: Path, count: int, *, reuse_proofs=False, bounds_scope=None) -> Path:
+def _validate_in_worker(root: Path, count: int, *, reuse_proofs=False, bounds_scope=None,
+                        timeout=600, memory_mib=4096, collect_errors=False) -> Path:
     # Preserve the trusted launcher's kernel selection for recipe replay, not any
     # document-supplied path or the rest of the parent's (possibly secret) environment.
-    selected_core = os.environ.get("NARWHAL_GEOMETRY_CORE")
-    extra_env = {"NARWHAL_GEOMETRY_CORE": selected_core} if selected_core else {}
+    # The document core too: MEASURED, without it the worker resolved a different
+    # default binary, so its admission identity never matched the parent's and every
+    # worker-measured bounds fact was discarded.
+    extra_env = {name: os.environ[name]
+                 for name in ("NARWHAL_GEOMETRY_CORE", "NARWHAL_DOCUMENT_CORE")
+                 if os.environ.get(name)}
+    if collect_errors:
+        extra_env["NARWHAL_DOCUMENT_COLLECT_ERRORS"] = "1"
     from . import document_admission
     with document_admission.hints(reuse_proofs) as hint_env:
         extra_env.update(hint_env)
         result = converter_process.run(
-            _worker_command(root), timeout=600, max_output=65536, memory_mib=4096,
+            _worker_command(root), timeout=timeout, max_output=65536, memory_mib=memory_mib,
             extra_env=extra_env)
     marker = next((line for line in reversed(result.stdout.splitlines())
                    if line.startswith("NARWHAL-DOCUMENT-WORKER ")), None)
@@ -279,8 +471,12 @@ def _validate_in_worker(root: Path, count: int, *, reuse_proofs=False, bounds_sc
         except json.JSONDecodeError as exc:
             raise NarwhalDocumentError("exact-master worker returned malformed output") from exc
         if isinstance(report, dict) and report.get("error"):
-            raise NarwhalDocumentError(
+            error = NarwhalDocumentError(
                 f"exact-master validation worker failed: {report['error']}")
+            errors = report.get("errors")
+            error.errors = ([str(item) for item in errors]
+                            if isinstance(errors, list) else [str(report["error"])])
+            raise error
     if result.returncode != 0 or result.timed_out or result.error or marker is None:
         detail = result.error or result.stderr[-2000:] or result.stdout[-2000:]
         raise NarwhalDocumentError(f"exact-master validation worker failed: {detail}")

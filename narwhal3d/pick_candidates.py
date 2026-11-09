@@ -18,6 +18,9 @@ class Candidate:
     points: tuple = ()
     tree: object = None
     bounds: object = None
+    # (segments, triangle corners, segment array), derived once by `_packed` and kept with the
+    # candidate, so a candidate reused by a later collect is not converted again.
+    packed: object = None
 
 
 def _polyline(points):
@@ -43,10 +46,30 @@ def _candidate(key, label, lines=(), triangles=(), points=()):
 
 
 _cache = {}
+#: ``{(name, mode, blocked): (parts, candidates)}``: an object's candidates built from ITS parts.
+#: Reused while `ui._brep_parts_all` returns the same parts object, which it does for an
+#: analytic master until that master changes. `clear` leaves it alone for that reason.
+_objects = {}
 
 
 def clear():
     _cache.clear()
+
+
+def _packed(candidate):
+    if candidate.packed is None:
+        import numpy as np
+        spans = list(candidate.lines)
+        spans.extend((p, p) for p in candidate.points)
+        # Face boundaries within the aperture remain selectable beside an edge.
+        spans.extend(t + (t[0],) for t in candidate.triangles)
+        # Keep separate hit witnesses for separate drawn segments. A hidden
+        # nearest branch must not erase another visible branch in the aperture.
+        segments = tuple((a, b) for points in spans for a, b in zip(points, points[1:]))
+        corners = tuple(p for t in candidate.triangles for p in t)
+        array = np.asarray(segments, dtype=np.float64).reshape(-1, 2, 3)
+        candidate.packed = (segments, corners, array)
+    return candidate.packed
 
 
 def _mesh_display(ob):
@@ -71,48 +94,64 @@ def collect(ui, mode):
     # object on every click. Minimal compatibility hosts without it still verify
     # visibility explicitly below.
     dg = getattr(ui, '_curve_dg', None)
-    revision = ((ui._doc_key(), id(rows), len(rows), frozenset(blocked), mode,
-                 dg['serial'], bpy.context.view_layer.as_pointer()) if dg is not None else None)
-    if revision is not None and _cache.get('revision') == revision:
-        return _cache['candidates']
     visible = tuple(row for row in rows
                     if (ob := bpy.data.objects.get(row[0])) is not None
                     and ui.bridge.display_visible(ob))
+    # Read on every call: Hide reports only the Scene, so no serial stands for the visible set.
     signature = (ui._doc_key(), tuple((row[0], str(row[4].Id)) for row in visible),
                  frozenset(blocked), mode)
-    if dg is None and _cache.get('rows') is rows and _cache.get('signature') == signature:
-        _cache['revision'] = revision
+    # Geometry and visibility serials, NOT `dg['serial']`: every depsgraph update moves that, and
+    # a click's own selection change is one, so it forced a full rebuild on the next click.
+    revision = ((id(rows), dg.get('vis', 0), max(dg.get('changed', {}).values(), default=0),
+                 bpy.context.view_layer.as_pointer()) if dg is not None else None)
+    if (_cache.get('rows') is rows and _cache.get('signature') == signature
+            and _cache.get('revision') == revision):
         return _cache['candidates']
     parts_by_name = None
     out = []
+    previous, current = _objects, {}
     for name, _state, _layer, geom, _attrs in visible:
-        if isinstance(geom, r3.Curve):
-            if name in blocked:
+        if isinstance(geom, (r3.Curve, r3.Point)):
+            # Curves and points depend only on their document geometry, so they are reused by
+            # identity exactly as brep parts are (`rows` keep the geometry objects of unchanged rows).
+            key = (name, mode, 'geometry', name in blocked)
+            known = previous.get(key)
+            if known is not None and known[0] is geom:
+                out.extend(known[1])
+                current[key] = known
                 continue
-            if mode == 'object':
-                out.append(_candidate((name, 'Object', 0), name + ' — Curve',
-                                      lines=(ui._curve_points(geom),)))
-            elif mode == 'part':
-                for index, points, _grips in ui.bridge.curve_segments(geom):
-                    out.append(_candidate((name, 'Segment', index),
-                        f'{name} — Segment {index + 1}', lines=(points,)))
-            continue
-        if isinstance(geom, r3.Point):
-            if name in blocked:
-                continue
-            if mode == 'object':
+            start = len(out)
+            if isinstance(geom, r3.Curve):
+                if name not in blocked:
+                    if mode == 'object':
+                        out.append(_candidate((name, 'Object', 0), name + ' — Curve',
+                                              lines=(ui._curve_points(geom),)))
+                    elif mode == 'part':
+                        for index, points, _grips in ui.bridge.curve_segments(geom):
+                            out.append(_candidate((name, 'Segment', index),
+                                f'{name} — Segment {index + 1}', lines=(points,)))
+            elif name not in blocked and mode == 'object':
                 out.append(_candidate((name, 'Object', 0), name + ' — Point',
                                       points=((geom.Location.X, geom.Location.Y, geom.Location.Z),)))
+            current[key] = (geom, out[start:])
             continue
         if parts_by_name is None:
             parts_by_name = ui._brep_parts_all()
         parts = parts_by_name.get(name) or {}
+        key = (name, mode, name in blocked)
+        known = previous.get(key)
+        if parts and known is not None and known[0] is parts:
+            out.extend(known[1])
+            current[key] = known
+            continue
+        start, mesh_used = len(out), False
         if mode == 'object' or name in blocked:
             lines = [points for _index, points in parts.get('edges', ())]
             triangles = [t for _index, ts in parts.get('faces', ()) for t in ts]
             if not lines and not triangles:
                 # Mesh/Picture display data are already Blender-native. They do
                 # not imply analytic geometry or editable BRep subobjects.
+                mesh_used = True
                 lines, triangles = _mesh_display(bpy.data.objects.get(name))
             if lines or triangles:
                 kind = 'Occluder' if name in blocked else 'Object'
@@ -122,6 +161,7 @@ def collect(ui, mode):
             if not parts.get('faces'):
                 # Pictures/meshes still obscure curve segments and BRep parts,
                 # even when they expose no selectable exact subobjects.
+                mesh_used = True
                 _lines, triangles = _mesh_display(bpy.data.objects.get(name))
                 if triangles:
                     out.append(_candidate((name, 'Occluder', 0), '', triangles=triangles))
@@ -138,31 +178,30 @@ def collect(ui, mode):
                     out.append(_candidate((name, 'Face', index), f'{name} — Face {index + 1}', triangles=ts))
                 for index, point in parts.get('vertices', ()):
                     out.append(_candidate((name, 'Vertex', index), f'{name} — Vertex {index + 1}', points=(point,)))
+        if parts and not mesh_used:
+            current[key] = (parts, out[start:])
+    _objects.clear()
+    _objects.update(current)
     # Stable identities let the native adapter reuse its packed input buffers.
-    polylines, indices = [], []
+    polylines, indices, vertices, arrays = [], [], [], []
     for index, candidate in enumerate(out):
+        segments, corners, array = _packed(candidate)
+        vertices.extend(corners)
         if candidate.key[1] == 'Occluder':
             continue
-        spans = list(candidate.lines)
-        spans.extend((p, p) for p in candidate.points)
-        # Face boundaries within the aperture remain selectable beside an edge.
-        spans.extend(t + (t[0],) for t in candidate.triangles)
-        # Keep separate hit witnesses for separate drawn segments. A hidden
-        # nearest branch must not erase another visible branch in the aperture.
-        spans = tuple((a, b) for points in spans for a, b in zip(points, points[1:]))
-        polylines.extend(spans)
-        indices.extend([index] * len(spans))
+        polylines.extend(segments)
+        indices.extend([index] * len(segments))
+        arrays.append(array)
     # Blender's C BVH owns depth traversal, including locked opaque objects.
     # Cache construction is Blender/display orchestration, never document geometry.
     from mathutils.bvhtree import BVHTree
     import numpy as np
-    vertices = [p for candidate in out for triangle in candidate.triangles for p in triangle]
     depth_tree = (BVHTree.FromPolygons(vertices,
         [(i, i + 1, i + 2) for i in range(0, len(vertices), 3)], all_triangles=True)
         if vertices else None)
     lower = np.asarray([c.bounds[0] for c in out], dtype=np.float64).reshape(-1, 3)
     upper = np.asarray([c.bounds[1] for c in out], dtype=np.float64).reshape(-1, 3)
-    packed_segments = np.asarray(polylines, dtype=np.float64).reshape(-1, 2, 3)
+    packed_segments = (np.concatenate(arrays) if arrays else np.zeros((0, 2, 3)))
     result = (tuple(out), tuple(polylines), tuple(indices))
     _cache.update(rows=rows, revision=revision, signature=signature, candidates=result, depth_tree=depth_tree,
                   lower=lower, upper=upper, surface_view=None, local_key=None,

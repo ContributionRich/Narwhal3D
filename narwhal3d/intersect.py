@@ -100,7 +100,12 @@ def curve_curve(a, b, tol=1e-6, max_depth=40):
     overlap = _detect_overlap(a, b, tol)
     if overlap is not None:
         return [overlap]
+    return _point_hits(a, b, tol, max_depth)
 
+
+def _point_hits(a, b, tol, max_depth):
+    """Every point crossing of `a` and `b`, with no overlap check: the native solver when it
+    applies, else the Python subdivision."""
     native = _native_point_hits(a, b, tol, max_depth)
     if native is not None:
         return [CurveX(point, t_a, t_b) for point, t_a, t_b in native]
@@ -283,12 +288,16 @@ def _prepared(curve):
         return None
 
 
-def _detect_overlap(a, b, tol, samples=120, run=3):
+_OVERLAP_SAMPLES = 120
+
+
+def _detect_overlap(a, b, tol, samples=_OVERLAP_SAMPLES, run=3):
     """Return one overlap CurveX if a contiguous run of `a` lies on `b`, else None.
 
     A crossing or a tangency touches `b` at an isolated parameter (a run of 1),
     so requiring a run of >= `run` samples distinguishes a genuine overlap from a
     mere touch. Short overlaps below the sample spacing are missed (documented).
+    The overlap ends are sample parameters, each within one sample step of the true end.
     """
     da = a.Domain
     prepared = _prepared(b)
@@ -527,10 +536,51 @@ def split_curve_by(curve, cutters, tol=1e-6):
     """
     params = []
     for cutter in cutters:
-        for x in curve_curve(curve, cutter, tol):
-            if not x.overlap:
-                params.append(x.t_a)
+        hits = curve_curve(curve, cutter, tol)
+        overlap = next((x for x in hits if x.overlap), None)
+        if overlap is None:
+            params.extend(x.t_a for x in hits)
+        else:
+            params.extend(_overlap_cut_params(curve, cutter, overlap, tol))
     return split_curve_at_params(curve, params)
+
+
+def _overlap_cut_params(curve, cutter, overlap, tol):
+    """Cut parameters on `curve` for a `cutter` that partly overlaps it.
+
+    Every genuine crossing of the pair is kept, and so are the two overlap ends, where the
+    curve leaves the cutter and Trim must cut. `_detect_overlap` only knows those ends to one
+    sample step `h`, so each departure is located in [lo - h, lo] at the start and [hi, hi + h]
+    at the end. Where a cutter END lies on the curve (the usual case) that end is projected onto
+    the curve with the nearest solver, which is exact. Otherwise the point solver decides: the
+    smallest hit in the start window and the largest in the end window, and hits strictly inside
+    the overlap (the solver reporting the shared stretch) are dropped. Approximate: that solver
+    candidate is only as accurate as the point solver's leaves, and if the solver has no hit in a
+    window the sampled end is used, which is one sample step (`h`) from the true departure.
+    Caveat: a genuine crossing lying inside one of those windows is indistinguishable from a
+    departure and is not kept separately.
+    """
+    d = curve.Domain
+    h = (d.T1 - d.T0) / _OVERLAP_SAMPLES
+    lo, hi = overlap.t_a, overlap.t_a_end
+    hits = [x.t_a for x in _point_hits(curve, cutter, tol, 40)]
+    keep = [t for t in hits if t < lo - h or t > hi + h]
+    starts = [t for t in hits if lo - h <= t <= lo]
+    ends = [t for t in hits if hi <= t <= hi + h]
+    keep.append(_departure(curve, cutter, lo - h, lo, min(starts) if starts else lo, tol))
+    keep.append(_departure(curve, cutter, hi, hi + h, max(ends) if ends else hi, tol))
+    return keep
+
+
+def _departure(curve, cutter, window_lo, window_hi, solver_t, tol):
+    """Exact parameter where a cutter END lies on `curve` inside the window, else `solver_t`."""
+    for p in (cutter.PointAtStart, cutter.PointAtEnd):
+        pt = (p.X, p.Y, p.Z)
+        if _dist_point_to_curve(curve, pt) <= tol:
+            t = _closest_param(curve, pt)
+            if window_lo <= t <= window_hi:
+                return t
+    return solver_t
 
 
 def split_curve_at_params(curve, params):

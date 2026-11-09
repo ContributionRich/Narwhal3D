@@ -5253,6 +5253,51 @@ def extrude_planar_profile_regions(profiles, distance, direction, both=False, so
             for face in faces]
 
 
+def _is_planar_profile(curve):
+    """Closed and in one plane: a profile a planar region or a capped solid can use.
+
+    `profile_normal` always returns a fitted normal, so planarity is asked of the curve at
+    the 1e-7 tolerance `bridge.make_planar_srf` enforces.
+    """
+    return bool(curve.IsClosed) and bool(curve.IsPlanar(1e-7))
+
+
+def extrude_profile_curves(profiles, distance, direction, both=False, solid=True):
+    """Extrude a set of curve profiles along one direction, all or nothing.
+
+    Two or more closed coplanar profiles form one region group (nested loops become holes,
+    see `extrude_planar_profile_regions`). Every other curve is extruded on its own with
+    `bridge.extrude_curve`: an open curve gives an exact surface, and a lone closed planar
+    profile a capped solid when `solid`. An open curve is never closed here, however small
+    its end gap. A closed NON-planar profile cannot be capped, so with `solid` the set is
+    refused by name rather than silently made into a surface.
+
+    Raises:
+        ValueError: If no profile is supplied, a closed profile is not planar while
+            `solid`, or an exact bridge operation refuses. Nothing is returned unless
+            every part succeeded.
+    """
+    profiles = list(profiles)
+    if not profiles:
+        raise ValueError("select curves to extrude")
+    if solid and any(c.IsClosed and not _is_planar_profile(c) for c in profiles):
+        raise ValueError("a closed profile must be planar to be capped as a solid")
+    region_group = [c for c in profiles if _is_planar_profile(c)]
+    if len(region_group) < 2:
+        region_group = []
+    results = []
+    if region_group:
+        results.extend(extrude_planar_profile_regions(
+            region_group, distance, direction, both=both, solid=solid))
+    for curve in profiles:
+        if region_group and _is_planar_profile(curve):
+            continue
+        results.append(bridge.extrude_curve(
+            curve, distance, direction=direction, both=bool(both),
+            solid=bool(solid) and _is_planar_profile(curve)))
+    return results
+
+
 class ExtrudeCmd(_StickyDistanceMixin, Command):
     # the reference CAD application has no `Extrude` -- the real name for extruding a *curve*
     # profile is `ExtrudeCrv` (surfaces use `ExtrudeSrf`). We extrude a closed
@@ -5267,7 +5312,8 @@ class ExtrudeCmd(_StickyDistanceMixin, Command):
     #
     # OURS (owner-required extension to the singular help-page wording): two or more
     # closed coplanar profiles are treated as planar regions. Nested loops become holes
-    # and disjoint outer loops become separate exact solids.
+    # and disjoint outer loops become separate exact solids. Open curves in the same set
+    # extrude individually as exact surfaces (report 131), as the reference does.
     # MEASURED (research_preview_14 P36): "Select curves to Extrude", "Extrusion distance
     # <0> ( Output=Surface  Direction  BothSides=No  Solid=No ... )".
     steps = [("Select curves to Extrude:", OBJECTS_MULTI), ("Extrusion distance:", DISTANCE)]
@@ -5368,10 +5414,23 @@ class ExtrudeCmd(_StickyDistanceMixin, Command):
         return names
 
     def _extrude_curve(self, ctx):
-        """The first curve, used as the common direction/distance reference."""
+        """The curve the direction and distance are measured on (see `_reference_curve`)."""
         names = self._profile_names(ctx)
-        geom = ctx.geom_by_name(names[0]) if names else None
-        return geom if isinstance(geom, r3.Curve) else None
+        return self._reference_curve([ctx.geom_by_name(name) for name in names])
+
+    @staticmethod
+    def _reference_curve(geoms):
+        """The first closed planar profile of the set, else the first curve.
+
+        Its plane sets the extrusion direction. An open curve has no plane normal of its
+        own, so a set that starts with one must not fall back to the CPlane while its closed
+        profiles lie in another plane.
+        """
+        curves = [g for g in geoms if isinstance(g, r3.Curve)]
+        for curve in curves:
+            if _is_planar_profile(curve):
+                return curve
+        return curves[0] if curves else None
 
     @staticmethod
     def default_direction(geom, plane):
@@ -5418,7 +5477,7 @@ class ExtrudeCmd(_StickyDistanceMixin, Command):
         geom = None
         if resolve is not None:
             names = self._profile_names()
-            geom = resolve(names[0]) if names else None
+            geom = self._reference_curve([resolve(name) for name in names])
         if geom is None:
             return None
         # Direction mode: the axis is the PICKED direction, which is what `_parse_distance`
@@ -5505,8 +5564,8 @@ class ExtrudeCmd(_StickyDistanceMixin, Command):
         if invalid:
             if len(names) == 1:
                 return f"No curve named {names[0]!r}", True
-            return (f"{self.name}: multiple-profile regions require only closed coplanar "
-                    f"curves; unsupported or missing: {', '.join(invalid)}"), True
+            return (f"{self.name}: multiple-profile extrusions require only curves; "
+                    f"unsupported or missing: {', '.join(invalid)}"), True
 
         if len(profiles) == 1:
             # Preserve the established one-profile behavior exactly: open curves, taper,
@@ -5540,12 +5599,12 @@ class ExtrudeCmd(_StickyDistanceMixin, Command):
                 return (f"{self.name}: tapered extrusion of multiple profiles is not "
                         f"implemented yet"), True
             try:
-                results = extrude_planar_profile_regions(
+                results = extrude_profile_curves(
                     profiles, height, self.extrusion_direction(ctx),
                     both=bool(self.opt.get("BothSides")),
                     solid=bool(self.opt.get("Solid", True)))
             except ValueError as e:
-                return f"{self.name}: multiple-profile region refused: {e}", True
+                return f"{self.name}: {e}", True
 
         if self.opt.get("DeleteInput"):
             self._delete_profiles(ctx, names)
@@ -6646,19 +6705,23 @@ class OffsetCmd(Command):
         if self._side_point is not None and not self.opt.get("BothSides"):
             # The side is whichever signed offset lands nearer the picked point.
             best = None
+            reasons = []
             for d in (dist, -dist):
                 try:
                     res = bridge.offset_curve(geom, d, plane_normal=plane_normal,
                                               corner=corner, tolerance=tol)
-                except ValueError:
+                except ValueError as e:
+                    reasons.append(str(e))
                     continue
                 if res.curve is None:
+                    reasons.append(getattr(res, "warning", None) or "no curve")
                     continue
                 gap = bridge.distance_to_curve(res.curve, self._side_point)
                 if best is None or gap < best[0]:
                     best = (gap, d)
             if best is None:
-                return "Offset failed (degenerate)", True
+                why = "; ".join(dict.fromkeys(r for r in reasons if r))
+                return "Offset failed" + (f": {why}" if why else " (degenerate)"), True
             dist = best[1]
         results = []
         for d in ([dist, -dist] if self.opt.get("BothSides") else [dist]):
@@ -6669,7 +6732,8 @@ class OffsetCmd(Command):
             except ValueError as e:
                 return f"Offset: {e}", True
             if res.curve is None:
-                return "Offset failed (degenerate)", True
+                why = getattr(res, "warning", None)
+                return "Offset failed" + (f": {why}" if why else " (degenerate)"), True
             results.append(res)
         if len(results) == 2:
             # BothSides: add both curves, report both
@@ -8266,7 +8330,7 @@ class _BooleanCmd(Command):
             # hook refuses the contradictory setting, and this guard also keeps a
             # direct execute caller from silently deleting cutters.
             delete_names = names if delete_input else []
-            if delete_input and not bool(self.opt.get("DeleteCutters", True)):
+            if delete_input and not bool(self.opt.get("DeleteCutters", False)):
                 delete_names = names[:1]
         else:
             delete_names = names if delete_input else []
@@ -8325,7 +8389,9 @@ class BooleanDifferenceCmd(_BooleanCmd):
         # documents the toggle but not its initial value.
         opts.Option("DeleteInput", opts.TOGGLE, default=True,
                     help="Controls whether the original geometry is deleted."),
-        opts.Option("DeleteCutters", opts.TOGGLE, default=True,
+        # OURS (owner report #129): cutters are KEPT by default; the target is still
+        # replaced by the result. DeleteCutters=Yes restores the delete-everything path.
+        opts.Option("DeleteCutters", opts.TOGGLE, default=False,
                     help="When DeleteInput=Yes, deletes the objects used to subtract."),
     )
 
@@ -13734,6 +13800,23 @@ class SplitCmd(Command):
 
 
 
+_TRIM_EVIDENCE_NAMES = 8
+
+
+def _trim_evidence(pick, target, cutters, removed):
+    """One transcript fragment for a curve Trim (#128): the click, the cutters used, and the
+    removed piece's end points, so a bug report shows which piece the pick chose."""
+    px, py, pz = (pick.X, pick.Y, pick.Z) if hasattr(pick, "X") else (float(c) for c in pick)
+    shown = ", ".join(cutters[:_TRIM_EVIDENCE_NAMES])
+    if len(cutters) > _TRIM_EVIDENCE_NAMES:
+        shown += f" (+{len(cutters) - _TRIM_EVIDENCE_NAMES} more)"
+    ends = "; ".join(
+        f"({a.X:.3f}, {a.Y:.3f}, {a.Z:.3f}) to ({b.X:.3f}, {b.Y:.3f}, {b.Z:.3f})"
+        for a, b in ((p.PointAtStart, p.PointAtEnd) for p in removed)) or "none"
+    return (f" | pick ({px:.3f}, {py:.3f}, {pz:.3f}) on {target}; cutters {shown or 'none'}; "
+            f"removed {ends}")
+
+
 class TrimCmd(Command):
     """`Trim` (curves) -- the command behavior.
 
@@ -13826,16 +13909,19 @@ class TrimCmd(Command):
         if not mine:
             return f"Trim: {name} is the only cutting object -- it cannot cut itself", False
         # One split: bridge.trim_curve would intersect the curve with the cutters a second time.
-        pieces = bridge.split_curve(geom, mine)
-        if len(pieces) < 2:
+        split = bridge.split_curve(geom, mine)
+        if len(split) < 2:
             return f"Trim: the cutting objects do not cross {name}", False
-        pieces = bridge.trim_curve(geom, mine, pick, pieces=pieces)
+        pieces = bridge.trim_curve(geom, mine, pick, pieces=split)
+        removed = [p for p in split if not any(p is kept for kept in pieces)]
         new = _replace_curve(ctx, name, pieces, keep_selection=True)
         # a trimmed CUTTER keeps cutting (the reference CAD application trims "the cutting objects themselves")
         if any(n.lower() == name.lower() for n in cutters):
             self.args = [[n for n in cutters if n.lower() != name.lower()] + new]
         self._trimmed += 1
-        return f"Trimmed {name} -> {', '.join(new) if new else 'nothing left'}", False
+        used = [n for n in cutters if n.lower() != name.lower()]
+        return (f"Trimmed {name} -> {', '.join(new) if new else 'nothing left'}"
+                + _trim_evidence(pick, name, used, removed)), False
 
 
 class IntersectCmd(Command):

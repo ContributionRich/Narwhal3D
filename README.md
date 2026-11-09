@@ -8,9 +8,9 @@
 
 Draw with the mouse, type a command, or choose a tool from the sidebar. Work in four views at once, shape your model with on-screen handles, and choose a light or dark workspace.
 
-**[Download for Linux](https://github.com/ContributionRich/Narwhal3D/releases/download/v0.4.10/Narwhal_3D-0.4.10-x86_64.AppImage)** · **[Download for Windows](https://github.com/ContributionRich/Narwhal3D/releases/download/v0.4.10/Narwhal_3D-0.4.10-Windows-x86_64.exe)** · **[macOS Apple Silicon: 0.4.8 release](https://github.com/ContributionRich/Narwhal3D/releases/tag/v0.4.8)** · [What's new](CHANGELOG.md)
+**[Download for Linux](https://github.com/ContributionRich/Narwhal3D/releases/download/v0.4.11/Narwhal_3D-0.4.11-x86_64.AppImage)** · **[Download for Windows](https://github.com/ContributionRich/Narwhal3D/releases/download/v0.4.11/Narwhal_3D-0.4.11-Windows-x86_64.exe)** · **[macOS Apple Silicon: 0.4.8 release](https://github.com/ContributionRich/Narwhal3D/releases/tag/v0.4.8)** · [What's new](CHANGELOG.md)
 
-> **Check the release page for available builds.** The 0.4.10 Linux AppImage and Windows portable EXE are published. The 0.4.10 Linux build (a patch release for 0.4.9) fixes command behaviour and live previews across many commands, including Pyramid, Torus, Tube, Pipe, Extend, Fillet and Chamfer. The Windows EXE was built from source commit `f1ca720d65b93d7da73199aadda9b60d2c7abedc`, with the same application behaviour as the Linux 0.4.10 source; it includes the qualified document observer and exact-save helper. Its acceptance ran in a Windows 11 virtual machine with a software OpenGL driver, not on a physical GPU. No Mac build has been made for this line; the 0.4.8 Apple Silicon DMG remains on the 0.4.8 release page. The 0.4.8 source included the revised welcome/inspector UI, automatic AI selection context, remembered provider permissions, explicitly approved box creation, newer read-only MCP support and source-only bounded multi-section Sweep1 work. The first Apple Silicon Mac preview is now available, with the platform limitations below. See [current source status](STATUS.md).
+> **Check the release page for available builds.** The 0.4.11 Linux AppImage and Windows portable EXE are published, both built from the tagged v0.4.11 source. 0.4.11 makes saving reliable (a `.narwhal` Save no longer refuses a document; an object it cannot prove exact is repaired or kept and named), stops a crash when a file dialog closed, adds FilletEdge ChainEdges, the curve Rebuild window and Interface Scale (TracePicture is in source builds only for now), makes clicks select only what is visible under the cursor, and speeds up snapping, picking, Open and Save; see [What's new](CHANGELOG.md). The Windows EXE is unsigned, and its acceptance ran in a Windows 11 virtual machine with a software OpenGL driver, not on a physical GPU. No Mac build has been made for this line; the 0.4.8 Apple Silicon DMG remains on the 0.4.8 release page. See [current source status](STATUS.md).
 
 > **An early preview, built in the open.** Narwhal is still growing, and some tools are incomplete. Save important work often and verify dimensions and exported geometry before manufacturing. [See what works and what's still missing →](docs/gaps.md)
 
@@ -52,17 +52,17 @@ Switch at any time with **View → Theme**. Your choice is remembered the next t
 Download the **AppImage** above. In your file manager, open its properties, allow it to run as a program, and launch it. Or, from the folder containing the download:
 
 ```bash
-chmod +x Narwhal_3D-0.4.10-x86_64.AppImage
-./Narwhal_3D-0.4.10-x86_64.AppImage
+chmod +x Narwhal_3D-0.4.11-x86_64.AppImage
+./Narwhal_3D-0.4.11-x86_64.AppImage
 ```
 
 The application is bundled—no separate Blender installation is needed. The download is for **x86_64 Linux**; desktop and graphics-driver compatibility still varies. [Platform details](docs/technical-reference.md#install-on-linux-x86_64)
 
 ### Windows
 
-The 0.4.10 **portable EXE**, `Narwhal_3D-0.4.10-Windows-x86_64.exe`, manages its payload in a private per-user cache; no manual extraction is required. Its first launch prepares that cache. Keep user documents outside the replaceable application cache. Compare its download with the published `.sha256` checksum.
+The 0.4.11 **portable EXE**, `Narwhal_3D-0.4.11-Windows-x86_64.exe`, manages its payload in a private per-user cache; no manual extraction is required. Its first launch prepares that cache. Keep user documents outside the replaceable application cache. Compare its download with the published `.sha256` checksum.
 
-The v0.4.10 release publishes only the EXE and its checksum. The 0.4.8 portable ZIP stays on the 0.4.8 release page unchanged for compatibility; if you installed that ZIP, download the 0.4.10 EXE once. Future Windows releases will also publish only the EXE and its checksum.
+The v0.4.11 release publishes only the EXE and its checksum. The 0.4.8 portable ZIP stays on the 0.4.8 release page unchanged for compatibility; if you installed that ZIP, download the 0.4.11 EXE once. Future Windows releases will also publish only the EXE and its checksum.
 
 This is an **unsigned early preview**, so Windows may display a SmartScreen warning. The EXE was accepted in a Windows 11 virtual machine using a software OpenGL driver, not a physical GPU, and testing on physical Windows GPUs remains limited. There is no installer yet. [Windows details](docs/windows-build.md)
 

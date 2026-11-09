@@ -10575,6 +10575,11 @@ def _restore_user_preferences():
     global _grid_snap_on, _ortho_on, _gumball_enabled, _gumball_alignment, _tabs_visible
     if _preferences_ready or bpy.app.background:
         return
+    try:
+        from . import x11_errors
+        x11_errors.install()
+    except Exception as exc:  # noqa: BLE001
+        print(f"[narwhal3d] X error handler not installed: {exc!r}")
     stored = preferences.load()
     _toolbar_tab = stored['toolbar']
     _right_tab = next(i for i, tab in enumerate(rightpanel.TABS) if tab.name == stored['inspector'])
@@ -14780,17 +14785,46 @@ def _snap_index_entries():
 #: The from-scratch build of the snap index, resumable: ``{"key": the `_doc_key` it
 #: is for, "rows", "pos", "groups", "counts", "entries"}``.
 _snap_build = {"key": None, "rows": None, "pos": 0, "groups": {}, "counts": {},
-               "entries": []}
+               "entries": [], "memo": {}}
 #: True while `_snap_prebuild_tick` is registered.
 _snap_prebuild_armed = [False]
 #: application-defined -- the idle-time snap-index build's slice length (as `RETESS_SLICE_S`).
 SNAP_BUILD_SLICE_S = 0.012
+#: ``{master id: snap sources}`` of the last complete build. A master id names one immutable
+#: shape (a changed shape registers a fresh id), so its sources stay exact while the id is
+#: live. Without this, every rebuild after ANY edit re-derived the edges of every analytic
+#: master, one object at a time (`_snap_build_step`'s slices never split an object).
+_snap_sources_memo = {}
+#: ``{(object name, id(source)): (source, targets)}`` for the sources in `_snap_sources_memo` only.
+#: Those are master-derived and never mutated, so their identity stands for their content. A plain
+#: curve IS mutated in place by a transform (`commands._apply_transform_to_selection` keeps the same
+#: object), so its targets are never memoized. The source is held here, so its id cannot be
+#: recycled while the entry lives; `_snap_build_step` prunes entries no index uses.
+_snap_targets_memo = {}
+_snap_owned_sources = frozenset()
+
+
+def _snap_sources_for(geom, previous, current):
+    """`bridge.object_snap_sources(geom)`, reused from `previous` or `current` when `geom` is
+    an analytic master whose id is already known (see `_snap_sources_memo`)."""
+    from .kernel import master_key_of, master_of
+    key = master_key_of(geom) if master_of(geom) is not None else None
+    if key is None:
+        return bridge.object_snap_sources(geom)
+    sources = current.get(key)
+    if sources is None:
+        sources = previous.get(key)
+    if sources is None:
+        sources = bridge.object_snap_sources(geom)
+    current[key] = sources
+    return sources
 
 
 def _snap_build_step(budget_s):
     """Advance the from-scratch build of the snap index by about `budget_s` seconds
     (None: to the end). True once the index for the current document state is
     installed. Entries come out in TABLE order, exactly as a one-go build made them."""
+    global _snap_sources_memo, _snap_targets_memo, _snap_owned_sources
     import time
 
     key = _doc_key()
@@ -14803,13 +14837,13 @@ def _snap_build_step(budget_s):
         counts = {}
         for row in rows:
             counts[row[0]] = counts.get(row[0], 0) + 1
-        b.update(key=key, rows=rows, pos=0, groups={}, counts=counts, entries=[])
+        b.update(key=key, rows=rows, pos=0, groups={}, counts=counts, entries=[], memo={})
     rows = b["rows"]
     t0 = time.perf_counter()
     while b["pos"] < len(rows):
         name, _mode, _layer, geom, _attrs = rows[b["pos"]]
         group = [[name, src, ext, None, None, None, is_edge]
-                 for src, is_edge, ext in bridge.object_snap_sources(geom)]
+                 for src, is_edge, ext in _snap_sources_for(geom, _snap_sources_memo, b["memo"])]
         b["groups"][name] = group
         b["entries"].extend(group)
         b["pos"] += 1
@@ -14820,7 +14854,12 @@ def _snap_build_step(budget_s):
     idx.update(key=key, entries=b["entries"], stale=set(), groups=b["groups"],
                counts=b["counts"])
     idx["builds"] = idx.get("builds", 0) + 1
-    b.update(key=None, rows=None, pos=0, groups={}, counts={}, entries=[])
+    _snap_sources_memo = b["memo"]
+    _snap_owned_sources = frozenset(id(s[0]) for sources in _snap_sources_memo.values()
+                                    for s in sources)
+    _snap_targets_memo = {k: v for k, v in _snap_targets_memo.items()
+                          if id(v[0]) in _snap_owned_sources}
+    b.update(key=None, rows=None, pos=0, groups={}, counts={}, entries=[], memo={})
     return True
 
 
@@ -14947,13 +14986,24 @@ def _snap_prebuild_tick():
 
 
 def _entry_targets(entry):
-    """One index entry's `osnap.SnapTarget`s, sampled on first use and kept."""
+    """One index entry's `osnap.SnapTarget`s, sampled on first use and kept.
+
+    Targets depend on the source, its edge flag and the object name, so a rebuilt index reuses
+    them for every master-derived source it shares with the previous one (`_snap_targets_memo`)."""
     if entry[3] is None:
+        owned = id(entry[1]) in _snap_owned_sources
+        memo_key = (entry[0], id(entry[1]))
+        known = _snap_targets_memo.get(memo_key) if owned else None
+        if known is not None and known[0] is entry[1]:
+            entry[3] = known[1]
+            return entry[3]
         try:
             entry[3] = bridge.snap_source_targets(entry[1], entry[6], name=entry[0])
         except Exception as e:  # noqa: BLE001
             print(f"[narwhal3d] snap target extraction failed for {entry[0]!r}: {e!r}")
             entry[3] = []
+        if owned:
+            _snap_targets_memo[memo_key] = (entry[1], entry[3])
     return entry[3]
 
 
@@ -17786,18 +17836,25 @@ _brep_parts_cache = {"serial": object(), "parts": {}}
 
 def _brep_parts_all():
     """``{name: parts}`` for every visible solid / polysurface, re-read when the
-    document changes -- and, then, brep sub-objects already selected are dropped: 
-    ids are only valid for an UNCHANGED object."""
+    document changes -- and, then, brep sub-objects already selected are dropped:
+    ids are only valid for an UNCHANGED object.
+
+    An analytic master's parts depend only on its master id (`kernel.master_key_of`), which
+    names one immutable shape, so they are kept across edits to OTHER objects. Dropping every
+    object's parts on each undo serial made each click after an edit re-tessellate every brep
+    (about 0.4 s on a 44-object document, the stall after Delete / Move / Boolean)."""
+    from .kernel import master_key_of, master_of
     serial = _undo_serial()
     cache = _brep_parts_cache
     if cache["serial"] != serial:
-        cache["serial"], cache["parts"] = serial, {}
+        cache["serial"] = serial
         stale = {k for k in _selected_subobjects if k[1] in _BREP_KINDS}
         _selected_subobjects.difference_update(stale)
     model = getattr(app_state, "model", None)
     file3dm = getattr(model, "file", None)
     if file3dm is None:
         return {}
+    previous, current = cache["parts"], {}
     out = {}
     for fobj in file3dm.Objects:
         name = fobj.Attributes.Name or ""
@@ -17809,13 +17866,22 @@ def _brep_parts_all():
                 continue
         except Exception:  # noqa: BLE001
             continue
-        if name not in cache["parts"]:
+        geom = fobj.Geometry
+        key = master_key_of(geom) if master_of(geom) is not None else None
+        known = previous.get(name)
+        if known is not None and key is not None and known[0] == key:
+            parts = known[2]
+        elif known is not None and key is None and known[1] == serial:
+            parts = known[2]
+        else:
             try:
-                cache["parts"][name] = bridge.subobject_parts(fobj.Geometry)
+                parts = bridge.subobject_parts(geom)
             except Exception:  # noqa: BLE001
-                cache["parts"][name] = None
-        if cache["parts"][name]:
-            out[name] = cache["parts"][name]
+                parts = None
+        current[name] = (key, serial, parts)
+        if parts:
+            out[name] = parts
+    cache["parts"] = current
     return out
 
 
@@ -18100,6 +18166,66 @@ def draw_hover_pick(region, rv3d, shader, batch_for_shader):
         batch_for_shader(shader, "LINES", {"pos": segs}).draw(shader)
 
 
+#: Culling index for `pick_brep_part`. Each solid's face triangles, edges and vertices are kept as
+#: world-space items while that solid's parts object is unchanged; their screen rectangles are cached
+#: per view, and the native rectangle query returns only the items that can reach the cursor.
+#: Rejection only: `subobject.pick_part` still decides, on the same projected numbers as before.
+_brep_pick = {"key": None, "refs": (), "items": None, "view": None, "rects": None}
+
+
+def _brep_pick_items(parts_by_name):
+    import numpy as np
+    items = {"faces": [], "edges": [], "vertices": []}
+    for name, parts in parts_by_name.items():
+        for fid, tris in parts.get("faces", ()):
+            items["faces"].extend(((name, fid), tri) for tri in tris)
+        items["edges"].extend(((name, eid), pl) for eid, pl in parts.get("edges", ()) if len(pl))
+        items["vertices"].extend(((name, vid), p) for vid, p in parts.get("vertices", ()))
+    bounds = {}
+    faces = np.asarray([tri for _key, tri in items["faces"]], dtype=np.float64).reshape(-1, 3, 3)
+    bounds["faces"] = (faces.min(axis=1), faces.max(axis=1))
+    edge_points = [p for _key, pl in items["edges"] for p in pl]
+    starts = np.cumsum([0] + [len(pl) for _key, pl in items["edges"]])[:-1]
+    points = np.asarray(edge_points, dtype=np.float64).reshape(-1, 3)
+    bounds["edges"] = ((np.minimum.reduceat(points, starts), np.maximum.reduceat(points, starts))
+                       if len(starts) else (points[:0], points[:0]))
+    vertices = np.asarray([p for _key, p in items["vertices"]], dtype=np.float64).reshape(-1, 3)
+    bounds["vertices"] = (vertices, vertices)
+    return items, bounds
+
+
+def _brep_pick_index(parts_by_name, rv3d, region):
+    key = tuple((name, id(parts)) for name, parts in parts_by_name.items())
+    if _brep_pick["key"] != key:
+        items, bounds = _brep_pick_items(parts_by_name)
+        # The references keep each parts object alive, so its id cannot be recycled.
+        _brep_pick.update(key=key, refs=tuple(parts_by_name.values()), items=(items, bounds),
+                          view=None, rects=None)
+    matrix = rv3d.perspective_matrix
+    view = (tuple(tuple(row) for row in matrix), region.width, region.height)
+    if _brep_pick["view"] != view:
+        _items, bounds = _brep_pick["items"]
+        rects = {kind: native_selection.screen_rects_from_aabbs(low, high, matrix,
+                                                               region.width, region.height)
+                 for kind, (low, high) in bounds.items()}
+        _brep_pick.update(view=view, rects=rects)
+    return _brep_pick
+
+
+def _brep_pick_reached(index, kind, cursor, radius):
+    """Indices of the items of `kind` whose screen rectangle can reach `cursor` (ascending).
+    Without the native rectangle query every item is returned, which is the old behaviour."""
+    import numpy as np
+    items, _bounds = index["items"]
+    count = len(items[kind])
+    rects = index["rects"][kind]
+    if rects is None:
+        return range(count)
+    reached = native_selection.reached_screen_rect_indices(
+        rects, np.ones(count, dtype=np.uint8), cursor, radius, margin=0.0)
+    return range(count) if reached is None else reached
+
+
 def pick_brep_part(area, space, region, rx, ry, tolerance=None, faces_only=False):
     """The face / edge / vertex of a solid under region pixel (rx, ry), or None.
 
@@ -18107,29 +18233,35 @@ def pick_brep_part(area, space, region, rx, ry, tolerance=None, faces_only=False
     face of another is not pickable in Shaded/Rendered (`subobject.pick_part`).
     `faces_only` answers a face prompt: the front face under the cursor, even within
     `tolerance` of one of its edges or vertices.
+
+    Only the items whose cached screen rectangle can reach the cursor are projected, so a
+    hover costs what is near the cursor, not every triangle of every solid.
     """
     if tolerance is None:
         tolerance = SUBOBJECT_PICK_PX  # read now: the interface scale rewrites it at runtime
     rv3d = getattr(space, "region_3d", None) if space is not None else None
     if rv3d is None or region is None:
         return None
-    faces, edges, verts = [], [], []
-    for name, parts in _brep_parts_all().items():
-        for fid, tris in parts.get("faces", ()):
-            pt = []
-            for tri in tris:
-                c = [_project_with_depth(region, rv3d, p) for p in tri]
-                if None not in c:
-                    pt.append(tuple(c))
-            faces.append(((name, fid), pt))
-        if faces_only:
-            continue
-        for eid, pl in parts.get("edges", ()):
-            edges.append(((name, eid), [_project_with_depth(region, rv3d, p) for p in pl]))
-        for vid, p in parts.get("vertices", ()):
-            verts.append(((name, vid), _project_with_depth(region, rv3d, p)))
+    index = _brep_pick_index(_brep_parts_all(), rv3d, region)
+    items, _bounds = index["items"]
+    cursor = (rx, ry)
+    faces = {}
+    for i in _brep_pick_reached(index, "faces", cursor, 0.0):
+        key, tri = items["faces"][i]
+        c = [_project_with_depth(region, rv3d, p) for p in tri]
+        if None not in c:
+            faces.setdefault(key, []).append(tuple(c))
+    edges, verts = [], []
+    if not faces_only:
+        for i in _brep_pick_reached(index, "edges", cursor, tolerance):
+            key, pl = items["edges"][i]
+            edges.append((key, [_project_with_depth(region, rv3d, p) for p in pl]))
+        for i in _brep_pick_reached(index, "vertices", cursor, tolerance):
+            key, p = items["vertices"][i]
+            verts.append((key, _project_with_depth(region, rv3d, p)))
     occlude = getattr(getattr(space, "shading", None), "type", "SOLID") != "WIREFRAME"
-    got = subobject.pick_part(faces, edges, verts, (rx, ry), tolerance, occlude=occlude)
+    got = subobject.pick_part(list(faces.items()), edges, verts, cursor, tolerance,
+                              occlude=occlude)
     if got is None:
         return None
     kind, (name, sid) = got
@@ -23665,7 +23797,7 @@ def _extrude_compute(st, force=False):
             if all(fobj is not None and isinstance(fobj.Geometry, r3.Curve)
                    for name, fobj in rows):
                 try:
-                    regions = commands.extrude_planar_profile_regions(
+                    regions = commands.extrude_profile_curves(
                         [fobj.Geometry for _name, fobj in rows], d,
                         direction=st["axis_dir"])
                 except Exception as e:  # noqa: BLE001

@@ -138,6 +138,9 @@ class _EdgeBevelCmd(Command):
         self._candidate_error = None
         self._edge_radii = {}        # edge id -> (radius at anchor 0, radius at anchor 1)
         self._edge_endpoints = {}    # exact source anchors, retained across radius edits
+        self._chain_open = False     # ChainEdges was entered; its sub-options are shown
+        self._chain_continuity_kept = "Tangency"  # last ChainContinuity that was accepted
+        self._last_chain = None      # what the most recent pick's chain added
         self._sections = {}
         self._section_curves = ()
         self._section_lines = ()
@@ -163,6 +166,8 @@ class _EdgeBevelCmd(Command):
         if self.phase == self.SELECT_EDGES:
             base = f"Select edges to {self.verb}. Press Enter when done:"
             visible = {self.show_option, self.size_option, "ChainEdges", "FaceEdges", "Preview", "Edit"}
+            if self._chain_open:
+                visible |= set(_CHAIN_SUBOPTIONS)
         else:
             noun = "chamfer distance" if self.chamfer else "fillet"
             base = f"Select {noun} handle to edit. Press Enter when done:"
@@ -477,16 +482,17 @@ class _EdgeBevelCmd(Command):
                 # Validate every pick, not only the first one. Retain anchors for already
                 # selected edges so a re-pick never reverses an edited endpoint law.
                 self._bind_owner(name, edge_id, ctx)
-                anchors = bridge.bevel_edge_endpoints_occt(self._owner_geom, [edge_id])[edge_id]
                 point = tuple(float(v) for v in interior_point)
                 if len(point) != 3 or not all(math.isfinite(v) for v in point):
                     raise ValueError("edge pick must be a finite XYZ point")
+                picks = self._chain_picks(edge_id, point, ctx)
             except (LookupError, ValueError, RuntimeError) as e:
                 return f"{self.name}: {e}. Nothing was changed.", isinstance(e, LookupError)
-            self._edge_points[edge_id] = point
-            self._edge_endpoints.setdefault(edge_id, tuple(tuple(p) for p in anchors))
-            size = float(self.opt[self.size_option])
-            self._edge_radii.setdefault(edge_id, (size, size))
+            for picked, handle, anchors in picks:
+                self._edge_points[picked] = handle
+                self._edge_endpoints.setdefault(picked, tuple(tuple(p) for p in anchors))
+                size = float(self.opt[self.size_option])
+                self._edge_radii.setdefault(picked, (size, size))
         self._sync_pick_mirrors()
         self._invalidate_candidate()
         self._refresh_sections()
@@ -502,7 +508,52 @@ class _EdgeBevelCmd(Command):
         warning = f"; endpoint sections unavailable: {self._section_error}" if self._section_error else ""
         if self._candidate_error:
             warning += f"; {self._candidate_error}"
-        return f"{selected} edge(s) selected{extra}{warning} -- press Enter when done", False
+        if self._last_chain is None:
+            head = f"{selected} edge(s) selected"
+        else:
+            head = (f"{selected} edge(s) selected by chain (this pick added "
+                    f"{self._last_chain['added']})")
+            if self._last_chain["branches"]:
+                head += f"; the chain stopped at {self._last_chain['branches']} branch(es)"
+        return f"{head}{extra}{warning} -- press Enter when done", False
+
+    def _chain_picks(self, edge_id, point, ctx):
+        """Every edge one pick adds, as ``(edge id, handle point, endpoints)``.
+
+        Without an open ChainEdges, or with AutoChain=No, that is the picked edge alone. With
+        it, the picked edge's whole chain. The picked edge keeps the viewport point as its
+        handle; each other edge's handle is its exact curve midpoint, because a chord midpoint
+        lies off an arc.
+        """
+        from .kernel import KernelError
+
+        self._last_chain = None
+        occt = bridge._occt()
+        if not (self._chain_open and self.opt["AutoChain"]):
+            anchors = bridge.bevel_edge_endpoints_occt(self._owner_geom, [edge_id])[edge_id]
+            return [(edge_id, point, anchors)]
+        continuity, direction, angle, gap = self._chain_settings(ctx)
+        report = {}
+        try:
+            ids = occt.edge_chain(self._operand, edge_id, continuity=continuity,
+                                  angle_tolerance_deg=angle, gap_tolerance=gap,
+                                  direction=direction, report=report)
+            anchors = bridge.bevel_edge_endpoints_occt(self._owner_geom, ids)
+            handles = {k: point if k == edge_id else tuple(occt.edge_midpoint(self._operand, k))
+                       for k in ids}
+        except (KernelError, RuntimeError) as e:
+            raise ValueError(f"the chain could not be followed: {e}") from e
+        self._last_chain = {"added": len(ids),
+                            "branches": len(report.get("branch_points", ()))}
+        return [(k, handles[k], anchors[k]) for k in ids]
+
+    def _chain_settings(self, ctx):
+        """Effective ``(continuity, direction, angle degrees, gap)``: an unset tolerance falls
+        back to the document's."""
+        angle, gap = self.opt["AngleTolerance"], self.opt["GapTolerance"]
+        return (self.opt["ChainContinuity"], self.opt["Direction"],
+                _document_angle_deg(ctx) if angle is None else float(angle),
+                commands._document_tolerance(ctx) if gap is None else float(gap))
 
     def on_mode(self, name, ctx):
         if self.handle_input_active():
@@ -510,9 +561,33 @@ class _EdgeBevelCmd(Command):
         if name == "SelectEdges":
             self.phase = self.SELECT_EDGES
             return "Select more edges. Press Enter when done.", False
+        if name == "ChainEdges":
+            if self.phase != self.SELECT_EDGES:
+                return f"{self.name}: choose SelectEdges first", False
+            self._chain_open = True
+            if self.opt["AngleTolerance"] is None:
+                self.opt["AngleTolerance"] = _document_angle_deg(ctx)
+            if self.opt["GapTolerance"] is None:
+                self.opt["GapTolerance"] = commands._document_tolerance(ctx)
+            return (f"{self.name}: AutoChain={'Yes' if self.opt['AutoChain'] else 'No'}, "
+                    f"ChainContinuity={self.opt['ChainContinuity']}, "
+                    f"Direction={self.opt['Direction']} -- pick an edge to add its chain"), False
         return super().on_mode(name, ctx)
 
     def on_option_set(self, option, value, ctx):
+        if option.name == "ChainContinuity":
+            if value == "Curvature":
+                self.opt["ChainContinuity"] = self._chain_continuity_kept
+                return (f"{self.name}: ChainContinuity=Curvature is not implemented yet -- "
+                        f"kept {self._chain_continuity_kept}"), False
+            self._chain_continuity_kept = value
+        if option.name in ("AngleTolerance", "GapTolerance"):
+            limit = 180.0 if option.name == "AngleTolerance" else math.inf
+            if not (math.isfinite(float(value)) and 0.0 <= float(value) <= limit):
+                self.opt[option.name] = None
+                need = "between 0 and 180 degrees" if limit == 180.0 else "zero or positive"
+                return (f"{self.name}: {option.name} must be {need} (got {_num(value)}); "
+                        f"the document value is used"), False
         if option.name == self.size_option and (not math.isfinite(float(value)) or float(value) <= 0.0):
             self.opt[option.name] = option.default
             self._invalidate_candidate()
@@ -602,12 +677,48 @@ def _not_built(names):
     return tuple(opts.Option(n, opts.MODE, help="Not implemented yet.") for n in names)
 
 
+#: ChainEdges sub-options. They are offered only while ChainEdges is open.
+_CHAIN_SUBOPTIONS = ("AutoChain", "ChainContinuity", "Direction", "AngleTolerance",
+                     "GapTolerance")
+
+
+def _chain_options():
+    return (
+        opts.Option("ChainEdges", opts.MODE,
+                    help="Chain each picked edge through the edges connected to it."),
+        opts.Option("AutoChain", opts.TOGGLE, default=True,
+                    help="Yes: a picked edge adds its whole chain. No: single edges "
+                         "(double-click chaining is not implemented yet)."),
+        opts.Option("ChainContinuity", opts.ENUM, default="Tangency",
+                    choices=("Position", "Tangency", "Curvature"),
+                    help="Continuity required between chained edges. Curvature is not "
+                         "implemented yet."),
+        opts.Option("Direction", opts.ENUM, default="Both",
+                    choices=("Forward", "Backward", "Both"),
+                    help="Chain from the picked edge's last end, first end, or both."),
+        opts.Option("AngleTolerance", opts.VALUE, value_kind="number",
+                    help="Tangency: largest angle in degrees still counted as continuous. "
+                         "Default: the document angle tolerance."),
+        opts.Option("GapTolerance", opts.VALUE, value_kind="number",
+                    help="Largest gap in model units that chaining bridges. Default: the "
+                         "document absolute tolerance."),
+    )
+
+
+def _document_angle_deg(ctx):
+    """The document's angle tolerance in degrees (the reference application's default is one degree)."""
+    try:
+        return math.degrees(float(ctx.model.file.Settings.ModelAngleToleranceRadians))
+    except (AttributeError, TypeError, ValueError):
+        return 1.0
+
+
 def _edge_options(show_name, size_name, size_help):
     return (
         opts.Option(show_name, opts.TOGGLE, default=True,
                     help="Show size handles in the viewport."),
         opts.Option(size_name, opts.VALUE, default=1.0, value_kind="number", help=size_help),
-    ) + _not_built(("ChainEdges", "FaceEdges", "PreviousEdgeSelection")) + (
+    ) + _chain_options() + _not_built(("FaceEdges", "PreviousEdgeSelection")) + (
         opts.Option("Preview", opts.TOGGLE, default=False,
                     help="Display the cached exact result while editing."),
     ) + _not_built(("Edit", "TrimAndJoin", "History")) + (

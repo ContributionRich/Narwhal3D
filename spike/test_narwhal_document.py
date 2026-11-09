@@ -92,17 +92,20 @@ with tempfile.TemporaryDirectory(prefix="narwhal-document-") as directory:
         else:
             os.environ["NARWHAL3D_BREP_WRITER"] = old_writer
 
+    # OURS (owner policy: Save is never blocked by one object): a proxy whose declaration
+    # disagrees with its registered master is RE-DECLARED from the master and saved exact.
     exact_proxy = model.file.Objects.FindId(str(exact_id)).Geometry
     kernel.tag(exact_proxy, kernel.MESH_DERIVED)
-    wrong_tag_rejected = False
-    try:
-        narwhal_document.save_model(model, root / "wrong-tag.narwhal")
-    except narwhal_document.NarwhalDocumentError as exc:
-        wrong_tag_rejected = "has an exact master but declares" in str(exc)
-    finally:
-        kernel.register_master(exact_proxy, source_master)
-    check(wrong_tag_rejected,
-          "native save refuses an exact master whose proxy declares another representation")
+    narwhal_document.save_model(model, root / "wrong-tag.narwhal")
+    repaired_item = model.file.Objects.FindId(str(exact_id))
+    reloaded = narwhal_document.load_model(root / "wrong-tag.narwhal")
+    check(any("re-attached" in note for note in model.last_save_warnings)
+          and kernel.representation_of(repaired_item.Geometry) == kernel.ANALYTIC_MASTER
+          and kernel.master_of(repaired_item.Geometry) is not None
+          and any(str(geometry_owner.Attributes.Id) == str(exact_id)
+                  for geometry_owner in reloaded.file.Objects)
+          and len(reloaded._native_master_bindings) >= 1,
+          "native save re-declares an exact master whose proxy declared another representation")
 
     class RefusingGeometry:
         def GetUserString(self, _key):
@@ -145,13 +148,14 @@ with tempfile.TemporaryDirectory(prefix="narwhal-document-") as directory:
     kernel.tag(faceted, kernel.ANALYTIC)
     dishonest_model = NarwhalModel()
     dishonest_model.add_object(faceted, "DishonestSolid", 0)
-    dishonest_save_rejected = False
-    try:
-        narwhal_document.save_model(dishonest_model, root / "dishonest-save.narwhal")
-    except narwhal_document.NarwhalDocumentError as exc:
-        dishonest_save_rejected = "tagged 'analytic' but measures as a tessellation" in str(exc)
-    check(dishonest_save_rejected,
-          "native save refuses faceted geometry falsely tagged analytic")
+    # The facets are saved, but never as exact: they are honestly re-tagged mesh-derived.
+    narwhal_document.save_model(dishonest_model, root / "dishonest-save.narwhal")
+    saved_dishonest = next(iter(narwhal_document.load_model(
+        root / "dishonest-save.narwhal").file.Objects)).Geometry
+    check(kernel.representation_of(saved_dishonest) == kernel.MESH_DERIVED
+          and kernel.honesty_problem(saved_dishonest) is None
+          and any("display geometry only" in note for note in dishonest_model.last_save_warnings),
+          "native save keeps faceted geometry falsely tagged analytic, honestly as mesh-derived")
 
     inventory = native_document.inspect(target)
     names = [row[2] for row in inventory]

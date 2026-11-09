@@ -308,15 +308,20 @@ mixed, mixed_m, mixed_msg, mixed_ctx = run(
                    ("Point", bridge.make_point((0, 0, 0)))], ["5"],
     selected=("Outer", "Point"))
 check(mixed is None and mixed_m is None and not mixed_ctx.added
-      and "only closed coplanar curves" in (mixed_msg or ""),
+      and "require only curves" in (mixed_msg or ""),
       f"a mixed curve/non-curve set is explicitly refused ({mixed_msg!r})")
 
 _open, _open_m, open_msg, open_ctx = run(
     "extrudecrv", [("Outer", OUTER.Duplicate()),
                    ("Open", bridge.make_line((20, 0, 0), (25, 0, 0)))], ["5"],
     selected=("Outer", "Open"))
-check(not open_ctx.added and "CLOSED curves" in (open_msg or ""),
-      f"a mixed closed/open profile set is explicitly refused ({open_msg!r})")
+open_masters = [kernel.master_of(g_) for g_ in open_ctx.added]
+check(len(open_masters) == 2 and open_masters[0] is not None
+      and ob.is_airtight(open_masters[0])
+      and ob.face_types(open_masters[0]) == {"CYLINDER": 1, "PLANE": 2}
+      and open_masters[1] is not None and not ob.is_airtight(open_masters[1]),
+      f"a mixed closed/open profile set extrudes both: the circle a solid, the open "
+      f"line a surface ({open_msg!r})")
 
 noncoplanar, noncoplanar_m, noncoplanar_msg, noncoplanar_ctx = run(
     "extrudecrv", [("Outer", OUTER.Duplicate()),

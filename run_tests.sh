@@ -158,12 +158,21 @@ if [[ -f "$SELECTION_CORE" ]]; then
     run "click-local selection (native/fallback/mutations)" env NARWHAL_SELECTION_CORE="$SELECTION_CORE" \
         "$BLENDER" -b --factory-startup --python-exit-code 1 \
         --python spike/test_pick_click_local.py -- --mutations
+    run "solid part hover culling (exact/budget/fresh)" env NARWHAL_SELECTION_CORE="$SELECTION_CORE" \
+        "$BLENDER" -b --factory-startup --python-exit-code 1 \
+        --python spike/test_brep_pick_culling.py
     run "Gumball handle picking (native/Python parity)" env NARWHAL_SELECTION_CORE="$SELECTION_CORE" \
         "$BLENDER" -b --factory-startup --python-exit-code 1 \
         --python spike/test_gumball_native_pick.py
     run "object snaps (native/Python parity)" env NARWHAL_SELECTION_CORE="$SELECTION_CORE" \
         "$BLENDER" -b --factory-startup --python-exit-code 1 \
         --python spike/test_osnap_native_parity.py
+    run "snap index master-source reuse (exact/bounded)" \
+        "$BLENDER" -b --factory-startup --python-exit-code 1 \
+        --python spike/test_snap_source_memo.py
+    run "snap cache exactness (gumball release, undo, transforms)" \
+        "$BLENDER" -b --factory-startup --python-exit-code 1 \
+        --python spike/test_snap_cache.py
 else
     printf '\nSKIP: Rust selection-core runtime checks (no local artifact)\n'
 fi
@@ -333,6 +342,7 @@ PURE_SUITES=(
     spike/test_project_to_cplane_delete.py
     spike/test_offset_fit_native.py
     spike/test_offset_compact.py
+    spike/test_offset_report127.py
     spike/test_report121_124.py
     spike/test_extrusion_creases.py
     spike/test_sweep1_mouse_inputs.py
@@ -340,6 +350,7 @@ PURE_SUITES=(
     spike/test_variable_edge_fillet.py
     spike/test_fillet_handle_input.py
     spike/test_fillet_preview_latency.py
+    spike/test_fillet_chain_edges.py
     spike/test_solid_commands.py
     spike/test_primitives.py
     spike/test_picture.py
@@ -370,6 +381,7 @@ PURE_SUITES=(
     spike/test_catenary.py
     spike/test_coil_preview.py
     spike/test_boolean_extrusion.py
+    spike/test_boolean_delete_input.py
     spike/branding_test.py
     spike/test_deferred_present_patch.py
     spike/test_statusbar_height_patch.py
@@ -409,6 +421,7 @@ PURE_SUITES=(
     spike/test_sessionlog.py
     spike/test_bugreport.py
     spike/test_usage_monitor.py
+    spike/test_x11_errors.py
     spike/test_ai_assistant.py
     spike/review_v4/test_ai_evidence.py
     spike/test_ai_responses_settings.py
@@ -486,12 +499,14 @@ BLENDER_SUITES=(
     spike/test_trim.py
     spike/test_trim_drag.py
     spike/test_trim_split_once.py
+    spike/test_trim_report128.py
     spike/test_picture.py
     spike/test_picture_display.py
     spike/test_rebuild_dialog.py
     spike/test_rebuild_popup.py
     spike/test_group_pick.py
     spike/test_gumball_region_extrude.py
+    spike/test_extrude_mixed_profiles.py
     spike/test_bug102_live.py
     spike/test_control_point_osnap.py
     spike/test_sweep.py
@@ -513,6 +528,8 @@ BLENDER_SUITES=(
     spike/test_document_shape_summary.py
     spike/test_document_correspondence.py
     spike/test_document_native_encoding_identity.py
+    spike/test_document_save_repair.py
+    spike/test_document_save_never_blocked.py
     spike/test_document_exact_work.py
     spike/test_document_worker_bounds.py
 )

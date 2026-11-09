@@ -4,6 +4,51 @@ All notable public changes will be recorded here. Narwhal 3D is an extremely ear
 
 ## Unreleased
 
+## 0.4.11 — 2026-11-09
+
+Linux and Windows release. The Linux AppImage and the Windows portable EXE are both built from the tagged v0.4.11 source. No Apple Silicon Mac build has been made for this line; the 0.4.8 DMG remains on its release page. Changes since 0.4.10:
+
+### Saving, opening and stability
+
+- Saving a `.narwhal` project no longer refuses the document. If an object's stored construction history or display copy can no longer be proven to match its exact solid (for example after Gumball moves, scaling or a viewport redraw), Save rebuilds that history or display copy from the exact solid and saves. An object whose solid still cannot be validated is kept as its visible geometry, honestly marked as not exact, and named in the Save message. If the project still cannot be written, an interchange `.3dm` copy is written beside it and named in the error.
+- Every object Save has to repair is fixed in one pass rather than one at a time (measured: the first Save after moving four solids in a 44-object project, 180 s → 64 s). Open no longer repeats a runtime-identity check for every solid (13 s of a 44-object Open).
+- Fixed a crash: closing a Save As dialog on X11 could raise a `BadWindow` error that terminated the application. X11 protocol errors are now logged instead.
+- Older projects, including ones saved by earlier 0.4.x builds, continue to open.
+
+### Commands
+
+- FilletEdge gains ChainEdges (AutoChain, ChainContinuity, Direction, AngleTolerance and GapTolerance). Curvature continuity is not built yet and says so.
+- New TracePicture: trace cut curves around a placed picture's artwork, with transparency or a picked background colour, an offset (default 0), and a minimum hole size. Its tracing helper is built by the source setup but is not in the AppImage or EXE yet; there the command says so and does nothing.
+- New curve Rebuild window showing the original point count and degree.
+- New commands and options: JoinCopy, ClearUndo, HideSwap, LockSwap, Mirror Object, Scale Rigid (per object), Rotate UseLastCenter and Rotate3D UseLastAxis, OffsetSrf ThroughPoint, Purge Groups, HandleCurve AutoClose, Intersect InfinitePlane, Ellipse Vertical, Arc ThroughPoint and Midpoint, the Units option on Radius and Diameter, Divide's Split, DeleteRemainder, MarkEnds and GroupOutput, Parabola3Pt Mode=Focus, and InsertKnot Midpoints.
+- Offset handles cusps and sharp corners on fitted curves and reports why an offset is refused.
+- Trim cuts at the ends of overlapping curves and records how each cut was chosen.
+- BooleanDifference keeps the cutting objects by default (DeleteCutters=No).
+- ExtrudeCrv and Gumball extrusion accept a mix of closed and open curves: closed curves become solids and open curves become surfaces.
+- InterpCrv closes through its picked points.
+- MoveEdge, MoveFace and Shell pick the edge or face under the cursor.
+- Sketch curve previews draw in the current layer colour, and Circle previews were corrected.
+
+### Selection, display and interface
+
+- A click selects only what is inside the pick area and visible at that pixel. Objects hidden behind other geometry, or visible elsewhere in the view, no longer appear in the selection popup.
+- Clicking a group selects the whole group without a popup; Shift-click still reaches its members.
+- Pictures with PNG transparency draw transparent instead of black.
+- New View > Interface Scale setting, remembered for the next start.
+- Bug Report gains "Monitor usage (local)", off by default: it records command durations, failures and interface stalls to a local file. Nothing is uploaded, and no geometry or document content is recorded.
+- The welcome window shows again for source launches.
+
+### Performance
+
+- Faster snapping, hover and clicks on large solids: snap sources and solid parts are cached per exact solid, hover culls hidden parts (measured 214 ms → 4 ms), and clicks after a selection change reuse their candidates (about 580 ms → 35 ms).
+- Moved into Rust: NURBS curve-pair intersection (Trim, Split, Fillet, CurveBoolean, Extend; 50–100× faster), the Near snap's nearest-point search and the closest-point checks on circles, arcs and lines, batch closest-point queries for Rebuild, closed periodic interpolation, planar face fills, unit scales, discrete object snaps, Gumball handle picking and the Curve control-point preview.
+- Display meshes for extruded traced outlines are much faster (13 s → 0.2 s).
+
+### For contributors
+
+- A fresh clone can be set up, launched and tested (`scripts/bootstrap_dev_linux.sh`, `scripts/setup_dev_native.sh`), with `scripts/run_suite.sh` to run one suite and `scripts/fast_checks.sh` for a quick check.
+- An AI contributor guide and assistant/MCP capability notes were added.
+
 ## 0.4.10 — 2026-11-02
 
 Linux and Windows patch release for 0.4.9. The Linux AppImage and the Windows portable EXE are published for 0.4.10. No Apple Silicon Mac build has been made for this line; the 0.4.8 DMG remains on its release page.

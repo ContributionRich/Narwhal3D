@@ -590,7 +590,8 @@ msg, done = c.feed("", ctx)
 check(not done and c.phase == c.SELECT_EDGES and not ctx.added,
       f"Enter with no edge selected stays in selection, nothing changed ({msg!r})")
 msg, done = c.feed("ChainEdges", ctx)
-check("not implemented" in (msg or ""), f"ChainEdges says so ({msg!r})")
+check("AutoChain=Yes" in (msg or "") and c._chain_open,
+      f"ChainEdges opens its sub-prompt, no longer a refusal ({msg!r})")
 ctx = Ctx([("Box", BOX)])
 c = type(commands.COMMANDS["chamferedge"])()
 c.begin(ctx)

@@ -22,8 +22,9 @@ circle/arc -> a concentric circle/arc with radius +/- d, a polyline -> a polylin
 with the chosen corner), and the general NURBS case is a fitted approximation
 whose ACHIEVED maximum deviation from the true offset locus is measured and
 reported. `Round`/`Smooth` corner fills are not implemented and are reported, not
-faked. An inward offset larger than the radius of curvature (self-intersecting) is
-reported, not silently returned.
+faked. Where an offset runs past the radius of curvature it cusps at the parameters where
+the radius equals the distance; those cusps are kept as kinks and the offset may doubled
+back on itself, as the reference's Trim=No does.
 """
 import math
 
@@ -233,11 +234,13 @@ def _compact_offset(curve, distance, n, tolerance):
     knots = list(curve.Knots)
     boundaries = sorted(k for k in set(knots)
                         if d.T0 < k < d.T1 and knots.count(k) >= curve.Degree)
+    cusps = _cusp_parameters(curve, distance, n)
+    boundaries = sorted(set(boundaries) | set(cusps))
     kinked_seam = (curve.IsClosed and
                    _dist(_pt(curve.TangentAtStart), _pt(curve.TangentAtEnd)) > 1e-8)
     if boundaries or kinked_seam:
         try:
-            compact = _compact_offset_boundaries(curve, distance, n, tolerance, boundaries)
+            compact = _compact_offset_boundaries(curve, distance, n, tolerance, boundaries, cusps)
         except ValueError:  # existing interpolation can decline degenerate samples
             compact = None
         if compact is not None:
@@ -275,15 +278,19 @@ def _compact_offset(curve, distance, n, tolerance):
     return None
 
 
-def _compact_offset_boundaries(curve, distance, n, tolerance, boundaries):
+def _compact_offset_boundaries(curve, distance, n, tolerance, boundaries, cusps=()):
     """Fit independently on either side of full-multiplicity source knots.
 
-    OURS: small sharp-corner miters may move the one-sided offset endpoints by
-    at most 20% of the requested tolerance. This is NOT an angle-based licence
-    to smooth: endpoints meet on their own tangent lines and each side keeps
-    its tangent. Larger corners decline by name, never to a smooth whole-curve
-    replacement. Dense TRUE-target
-    validation includes both one-sided limits after all endpoint constraints.
+    OURS: a Sharp corner is the apex where the two offset tangent lines meet (the reference
+    application's Sharp: extend the adjacent offset segments). The apex must lie within 20% of the
+    tolerance of the true offset of the corner vertex; a larger corner declines by name,
+    never to a smooth whole-curve replacement. Within that band a small miter moves the
+    one-sided endpoints along their tangents; a larger miter is realised exactly: an outer
+    corner by two straight tangent segments, an inner corner by trimming each span where
+    it crosses the apex. Cusps are boundaries too: a piece between boundaries runs one way
+    (its offset speed keeps one sign), and its endpoint tangents carry that direction, so
+    the cusp is a true kink. Dense TRUE-target validation includes both one-sided limits
+    after all endpoint constraints.
     """
     breaks = [curve.Domain.T0] + boundaries + [curve.Domain.T1]
     spans = [curve.Trim(a, b) for a, b in zip(breaks, breaks[1:])]
@@ -292,31 +299,57 @@ def _compact_offset_boundaries(curve, distance, n, tolerance, boundaries):
     ends = [[_offset_point(s, s.Domain.T0, distance, n),
              _offset_point(s, s.Domain.T1, distance, n)] for s in spans]
     joins = len(spans) if curve.IsClosed else len(spans) - 1
+    fills, trim_end, trim_start = {}, {}, {}
     for i in range(joins):
         j = (i + 1) % len(spans)
         a, b = ends[i][1], ends[j][0]
         u, v = _pt(spans[i].TangentAtEnd), _pt(spans[j].TangentAtStart)
-        if _dist(a, b) < 1e-12:
+        if _dist(a, b) < 1e-9:
             meet = _scale(_add(a, b), 0.5)
         else:
             meet = _line_line_point(a, _add(a, u), b, _add(b, v))
         if (meet is None or not all(math.isfinite(x) for x in meet)
-                or max(_dist(meet, a), _dist(meet, b)) > tolerance * 0.2
                 or _dist_point_to_line(meet, a, u) > 1e-10
                 or _dist_point_to_line(meet, b, v) > 1e-10):
             return None
-        ends[i][1] = ends[j][0] = meet
+        vertex = _pt(spans[i].PointAtEnd)
+        if abs(_dist(meet, vertex) - abs(distance)) > tolerance * 0.2:
+            return None
+        if max(_dist(meet, a), _dist(meet, b)) <= tolerance * 0.2:
+            ends[i][1] = ends[j][0] = meet
+            continue
+        along_a = _dot(_sub(meet, a), u)
+        along_b = _dot(_sub(meet, b), v)
+        if along_a >= 0.0 and along_b <= 0.0:
+            fills[i] = (a, meet, b)
+        elif along_a <= 0.0 and along_b >= 0.0:
+            ta = _inner_trim_param(spans[i], meet, distance, n, True, tolerance)
+            tb = _inner_trim_param(spans[j], meet, distance, n, False, tolerance)
+            if ta is None or tb is None:
+                return None
+            trim_end[i], trim_start[j] = ta, tb
+            ends[i][1] = ends[j][0] = meet
+        else:
+            return None
+    for k, t in trim_end.items():
+        spans[k] = spans[k].Trim(spans[k].Domain.T0, t)
+    for k, t in trim_start.items():
+        spans[k] = spans[k].Trim(t, spans[k].Domain.T1)
+    if any(s is None for s in spans):
+        return None
     fits, worst = [], 0.0
     try:
         from . import interpolate, native_interpolate
     except ImportError:
         import interpolate
         import native_interpolate
-    for source, (start, end) in zip(spans, ends):
+    for k, (source, (start, end)) in enumerate(zip(spans, ends)):
         d = source.Domain
         accepted = None
-        for count in (3, 5, 8, 12, 16, 24, 36):
-            pts = [_offset_point(source, d.T0 + (d.T1-d.T0)*i/count, distance, n)
+        direction = _offset_direction(source, distance, n)
+        cusp_start, cusp_end = breaks[k] in cusps, breaks[k + 1] in cusps
+        for count in (3, 5, 8, 12, 16, 24, 36, 48, 64, 96):
+            pts = [_offset_point(source, d.T0 + (d.T1 - d.T0) * i / count, distance, n)
                    for i in range(count + 1)]
             # Small independent spans need fewer than the public interpolator's
             # native crossover of 16 points. Reuse the SAME existing ABI directly;
@@ -334,12 +367,15 @@ def _compact_offset_boundaries(curve, distance, n, tolerance, boundaries):
             fit.Domain = r3.Interval(d.T0, d.T1)
             # Keep each one-sided tangent explicitly. Moving its adjacent control
             # to the endpoint tangent line constrains direction, not just position.
-            for endpoint, adjacent, target, tangent in (
-                    (0, 1, start, _pt(source.TangentAtStart)),
-                    (len(fit.Points)-1, len(fit.Points)-2, end, _pt(source.TangentAtEnd))):
+            for endpoint, adjacent, target, tangent, at_cusp in (
+                    (0, 1, start, _scale(_pt(source.TangentAtStart), direction), cusp_start),
+                    (len(fit.Points)-1, len(fit.Points)-2, end,
+                     _scale(_pt(source.TangentAtEnd), direction), cusp_end)):
                 old_end = _pt(fit.Points[endpoint])
                 arm = _dot(_sub(_pt(fit.Points[adjacent]), old_end), tangent)
-                if (endpoint == 0 and arm <= 0) or (endpoint != 0 and arm >= 0):
+                if at_cusp:
+                    arm = 0.0  # zero offset speed at a cusp: the handle collapses onto the end
+                elif (endpoint == 0 and arm <= 0) or (endpoint != 0 and arm >= 0):
                     break  # reversed/cusped span: do not invent a tangent direction
                 fit.Points[endpoint] = r3.Point4d(*target, 1.0)
                 fit.Points[adjacent] = r3.Point4d(*_add(target, _scale(tangent, arm)), 1.0)
@@ -362,11 +398,22 @@ def _compact_offset_boundaries(curve, distance, n, tolerance, boundaries):
     # Concatenate clamped cubic control nets WITHOUT a fit across the joins.
     # Shared positions, multiplicity-three knots: C0 topology with the measured
     # one-sided directions intact, including the closed nonperiodic seam.
-    controls = list(fits[0].Points)
-    knots = list(fits[0].Knots)
-    for fit in fits[1:]:
-        controls.extend(list(fit.Points)[1:])
-        knots.extend(list(fit.Knots)[3:])
+    pieces = []
+    for k, fit in enumerate(fits):
+        pieces.append(fit)
+        if k in fills:
+            a, m, b = fills[k]
+            pieces.extend((_line_piece(a, m), _line_piece(m, b)))
+    s = curve.Domain.T0
+    for piece in pieces:
+        length = piece.Domain.T1 - piece.Domain.T0
+        piece.Domain = r3.Interval(s, s + length)
+        s += length
+    controls = list(pieces[0].Points)
+    knots = list(pieces[0].Knots)
+    for piece in pieces[1:]:
+        controls.extend(list(piece.Points)[1:])
+        knots.extend(list(piece.Knots)[3:])
     out = r3.NurbsCurve(3, False, 4, len(controls))
     for i, point in enumerate(controls):
         out.Points[i] = point
@@ -374,7 +421,109 @@ def _compact_offset_boundaries(curve, distance, n, tolerance, boundaries):
         out.Knots[i] = knot
     if not out.IsValid or bool(out.IsClosed) != bool(curve.IsClosed):
         return None
+    out.Domain = r3.Interval(curve.Domain.T0, curve.Domain.T1)
     return OffsetResult(out, False, worst, "")
+
+
+def _line_piece(a, b):
+    """OURS: the straight segment a-b as an exact cubic (collinear control points)."""
+    seg = r3.NurbsCurve(3, False, 4, 4)
+    for k in range(4):
+        seg.Points[k] = r3.Point4d(*_add(a, _scale(_sub(b, a), k / 3.0)), 1.0)
+    for k, value in enumerate((0.0, 0.0, 0.0, 1.0, 1.0, 1.0)):
+        seg.Knots[k] = value
+    seg.Domain = r3.Interval(0.0, _dist(a, b))
+    return seg
+
+
+def _inner_trim_param(span, point, distance, n, end, tolerance):
+    """OURS: the source parameter at which an inner corner's offset reaches `point`.
+
+    On the inner side the two offset pieces overlap, and Sharp trims each back to the
+    apex. Searches inward from the span's end (or start) for the crossing of the apex's
+    tangent plane, and accepts it only if the offset point there is within 20% of the
+    tolerance of `point`; otherwise None.
+    """
+    d = span.Domain
+    edge = d.T1 if end else d.T0
+    direction = _pt(span.TangentAtEnd if end else span.TangentAtStart)
+    step = -1.0 if end else 1.0
+    span_len = d.T1 - d.T0
+
+    def side(t):
+        return _dot(_sub(_offset_point(span, t, distance, n), point), direction)
+
+    at_edge = side(edge)
+    if at_edge == 0.0:
+        return None
+    w = span_len / 64.0
+    while True:
+        t = edge + step * w
+        if side(t) * at_edge <= 0.0:
+            break
+        if w >= span_len:
+            return None
+        w = min(2.0 * w, span_len)
+    outside, inside = edge, t
+    for _ in range(80):
+        mid = 0.5 * (outside + inside)
+        if side(mid) * at_edge > 0.0:
+            outside = mid
+        else:
+            inside = mid
+    if not d.T0 < inside < d.T1:
+        return None
+    if _dist(_offset_point(span, inside, distance, n), point) > tolerance * 0.2:
+        return None
+    return inside
+
+
+def _offset_speed(curve, t, distance, n):
+    """OURS: 1 - distance * kappa_s at t, kappa_s the curvature toward the offset side.
+
+    With N = n x T the offset's derivative is C'(t) * (1 - distance * kappa_s), so the sign
+    is the direction the offset runs, and a zero is a cusp: |distance| equals the radius of
+    curvature on that side. The offset is the true parallel curve and is never refused here.
+    """
+    normal = _unit(_cross(n, _pt(curve.TangentAt(t))))
+    k = curve.CurvatureAt(t)
+    return 1.0 - distance * _dot((k.X, k.Y, k.Z), normal)
+
+
+def _offset_direction(curve, distance, n):
+    """+1 where the offset runs with the curve, -1 where it doubles back between two cusps."""
+    d = curve.Domain
+    return 1.0 if _offset_speed(curve, 0.5 * (d.T0 + d.T1), distance, n) >= 0.0 else -1.0
+
+
+def _cusp_parameters(curve, distance, n, per_span=32):
+    """OURS: parameters where the offset cusps, found per knot span.
+
+    The sign of `_offset_speed` is sampled on a fixed grid of `per_span` steps in each span
+    (rhino3dm CurvatureAt only), and every sign change is bisected to full precision. A cusp
+    pair closer together than the grid is not bracketed: the piece that holds it then fails
+    the validated tolerance rather than passing silently.
+    """
+    d = curve.Domain
+    breaks = sorted({d.T0, d.T1} | {k for k in curve.Knots if d.T0 < k < d.T1})
+    cusps = []
+    for a, b in zip(breaks, breaks[1:]):
+        xs = [a + (b - a) * i / per_span for i in range(per_span + 1)]
+        vals = [_offset_speed(curve, x, distance, n) for x in xs]
+        for i in range(per_span):
+            if vals[i] * vals[i + 1] >= 0.0:
+                continue
+            lo, hi = xs[i], xs[i + 1]
+            for _ in range(60):
+                mid = 0.5 * (lo + hi)
+                if _offset_speed(curve, mid, distance, n) * vals[i] > 0.0:
+                    lo = mid
+                else:
+                    hi = mid
+            cusp = 0.5 * (lo + hi)
+            if min(cusp - a, b - cusp) > 1e-9 * (b - a):
+                cusps.append(cusp)
+    return cusps
 
 
 def _dist_point_to_line(point, origin, tangent):

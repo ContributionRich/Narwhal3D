@@ -195,7 +195,7 @@ Viewport layout/state-machine work is deferred until it has dedicated integratio
 
 ## Platform and packaging
 
-Current release targets: Linux x86_64 AppImage and Windows x86_64 portable EXE, both 0.4.10. The Windows EXE is an unsigned portable preview, accepted in a Windows 11 virtual machine with a software OpenGL driver rather than on a physical GPU. macOS has an experimental macOS 14+ native-architecture source-build recipe; no Mac build has been made or accepted for this line (the 0.4.8 Apple Silicon DMG remains on its release page).
+Current release targets: Linux x86_64 AppImage and Windows x86_64 portable EXE, both 0.4.11. The Windows EXE is an unsigned portable preview, accepted in a Windows 11 virtual machine with a software OpenGL driver rather than on a physical GPU. macOS has an experimental macOS 14+ native-architecture source-build recipe; no Mac build has been made or accepted for this line (the 0.4.8 Apple Silicon DMG remains on its release page).
 
 Missing:
 

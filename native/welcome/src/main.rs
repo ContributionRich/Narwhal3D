@@ -1922,7 +1922,7 @@ mod tests {
         assert_eq!(parse_version("0.5.0"), None);
         assert_eq!(parse_version("0.4"), None);
         assert_eq!(parse_version("0.4.5.1"), None);
-        assert_eq!(env!("CARGO_PKG_VERSION"), "0.4.10");
+        assert_eq!(env!("CARGO_PKG_VERSION"), "0.4.11");
         assert!(UPDATE_USER_AGENT.contains(env!("CARGO_PKG_VERSION")));
     }
 

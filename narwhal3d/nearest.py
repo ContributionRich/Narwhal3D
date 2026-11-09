@@ -237,7 +237,9 @@ def _closest(curve, point, tolerance, packed):
         if ambiguous:
             q = _eval(curve, t0)
             return ClosestPoint(t0, q, _dist(q, p), method, False, True)
-        res = _search(curve, target, tol, method)
+        if packed is _PACK_ON_DEMAND:
+            packed = _native_pack(curve)
+        res = _search_target(curve, target, tol, method, packed)
         # Run-time verification: the analytic point must really be ON the curve.
         # If it is not (a curve that reports IsLinear but doubles back past its
         # own chord, say) the shortcut is abandoned rather than trusted.
@@ -252,6 +254,22 @@ def _closest(curve, point, tolerance, packed):
         t, q, dist, at_end = native
         return ClosestPoint(t, q, dist, "nurbs", at_end, False)
     return _search(curve, p, tol, "nurbs")
+
+
+def _search_target(curve, target, tol, method, packed):
+    """`_search(curve, target, tol, method)`, in Rust when `curve` is packed.
+
+    The native search returns `_search`'s parameter, point, distance and end flag bit
+    for bit (spike/test_native_nearest.py); `method` only labels the result. This is
+    the verification search of an analytic target (circle, arc, line), which ran in
+    Python on every query. MEASURED (i7-9700K): a `closest_point_on_curve` call on a
+    circle, packing included, 0.45 ms -> 0.20 ms.
+    """
+    native = _native_search(packed, target)
+    if native is not None:
+        t, q, dist, at_end = native
+        return ClosestPoint(t, q, dist, method, at_end, False)
+    return _search(curve, target, tol, method)
 
 
 def _native_pack(curve):

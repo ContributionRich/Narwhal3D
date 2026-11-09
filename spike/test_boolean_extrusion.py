@@ -150,8 +150,9 @@ if res is not None:
     vol = ob.volume(m) if m is not None else float("nan")
     check(abs(vol - BOX_MINUS_EXT) / BOX_MINUS_EXT <= REL_TOL,
           f"volume is 216 - 24 pi = {BOX_MINUS_EXT:.6f} (measured {vol:.6f})")
-    check(ctx.names() == ["Boolean_1"],
-          f"both inputs are removed, only the result remains (now: {ctx.names()})")
+    # OURS (report #129): BooleanDifference keeps its cutters by default.
+    check(ctx.names() == ["ext", "Boolean_1"],
+          f"the target is replaced and the cutter is kept (now: {ctx.names()})")
 
 print("\n-- reversed: extrusion - box --")
 msg, ctx, res = drive([("ext", capped_ext()),
@@ -164,7 +165,8 @@ if res is not None:
     vol = ob.volume(m) if m is not None else float("nan")
     check(abs(vol - EXT_MINUS_BOX) / EXT_MINUS_BOX <= REL_TOL,
           f"volume is 72 pi = {EXT_MINUS_BOX:.6f} (measured {vol:.6f})")
-    check(ctx.names() == ["Boolean_1"], "both inputs are removed, only the result remains")
+    check(ctx.names() == ["box", "Boolean_1"],
+          f"the target is replaced and the cutter is kept (now: {ctx.names()})")
 
 print("\n-- an UNCAPPED extrusion is refused by name, nothing deleted --")
 open_ext = r3.Extrusion.Create(bridge.make_circle((SIDE, SIDE, 0), R), H, False)

@@ -221,6 +221,10 @@ RECIPE_KINDS = {
     # A surface/polysurface given by its own exact faces (`brep_data`) -- what a Loft or
     # Sweep2 produces, recorded as the result so it rebuilds bit-for-bit.
     "brep_data": ("data",),
+    # OURS: the exact master itself (base64 OCCT BinTools, triangles omitted). Save uses it
+    # when an older construction recipe can no longer be PROVEN identical to the master the
+    # user is looking at; the master is the geometry, so it becomes the recipe. Exact.
+    "native_master": ("data",),
     # A shape extruded straight (ExtrudeSrf): `a` is the operand's recipe, `dir` the
     # full extrusion vector; `both` = BothSides, `solid` = Solid (a face -> a closed solid).
     "prism": ("a", "dir"),
@@ -1689,6 +1693,9 @@ def from_recipe(recipe, _depth=0):
         elif kind == "brep_data":
             shape = shape_from_brep_data(recipe["data"],
                                          sew_tolerance=recipe.get("tolerance", 1e-6))
+        elif kind == "native_master":
+            shape = shape_from_bytes(native_master_bytes(recipe),
+                                     recipe.get("wrapper_type") or "TopoDS_Shape")
         elif kind in ("fillet", "chamfer"):
             base = from_recipe(recipe["a"], _depth + 1)
             indices = recipe.get("edges")
@@ -2335,6 +2342,37 @@ def document_validation_threads():
     OSD_ThreadPool.DefaultPool_s().Init(2)
 
 
+def native_master_recipe(shape):
+    """A `native_master` recipe holding `shape` exactly (see RECIPE_KINDS)."""
+    import base64
+
+    data = bytes(shape_to_bytes(shape, triangles=False,
+                                format_version=document_current_binary_format()))
+    if not data:
+        raise KernelError("the exact master could not be serialized")
+    return {"kind": "native_master", "encoding": "OCCT BinTools",
+            "wrapper_type": type(shape).__name__,
+            "data": base64.b64encode(data).decode("ascii")}
+
+
+def native_master_bytes(recipe):
+    """The exact BinTools bytes a `native_master` recipe holds; KernelError if malformed."""
+    import base64
+    import binascii
+
+    if not isinstance(recipe, dict) or recipe.get("kind") != "native_master":
+        raise KernelError("not a native_master recipe")
+    if recipe.get("encoding", "OCCT BinTools") != "OCCT BinTools":
+        raise KernelError(f"unsupported native_master encoding {recipe.get('encoding')!r}")
+    try:
+        data = base64.b64decode(str(recipe["data"]).encode("ascii"), validate=True)
+    except (KeyError, ValueError, binascii.Error) as exc:
+        raise KernelError(f"native_master data is not valid base64: {exc}") from exc
+    if not data:
+        raise KernelError("native_master data is empty")
+    return data
+
+
 def document_clear_cache_flags(shape):
     """Clear OCCT's per-TShape analysis-cache flags on a caller-owned copy.
 
@@ -2612,9 +2650,14 @@ def _document_bounds_lookup(shape):
     if state is None or not state["entries"]:
         return None
     try:
-        if state["identity"] != _document_bounds_identity():
-            state["entries"].clear()
-            return None
+        # MEASURED: contract() hashes the decoder sources and every loaded library
+        # (~46 ms); per lookup it cost 13 s on a 44-object Open. Re-verify once per
+        # Open scope -- facts were admitted against this identity moments earlier.
+        if not state.get("identity_verified"):
+            if state["identity"] != _document_bounds_identity():
+                state["entries"].clear()
+                return None
+            state["identity_verified"] = True
         key = _document_bounds_key(shape, state["encoding"])
         result = state["entries"].get(key)
         if result is not None:
@@ -3168,6 +3211,198 @@ def edge_at(shape, index):
     if BRep_Tool.Degenerated_s(edges[i - 1]):
         raise KernelError(f"edge {i} is degenerated (a singular point, not a curve)")
     return _edge_recipe(edges[i - 1])
+
+
+#: ChainContinuity levels `edge_chain` knows. Curvature (G2) is named but NOT built:
+#: the chain walk refuses it by name rather than approximating it with tangency.
+CHAIN_CONTINUITIES = ("Position", "Tangency", "Curvature")
+CHAIN_DIRECTIONS = ("Forward", "Backward", "Both")
+
+
+def _xyz(p):
+    return (p.X(), p.Y(), p.Z())
+
+
+def _unit(vec):
+    """``(x, y, z)`` unit tuple of a gp_Vec, or None when it is numerically zero."""
+    n = vec.Magnitude()
+    if n <= 1e-12:
+        return None
+    return (vec.X() / n, vec.Y() / n, vec.Z() / n)
+
+
+def _neg(t):
+    return None if t is None else tuple(-c for c in t)
+
+
+def _turn_degrees(a, b):
+    """Angle between two unit tuples, in degrees. atan2 keeps it accurate near 0 and 180."""
+    cx = a[1] * b[2] - a[2] * b[1]
+    cy = a[2] * b[0] - a[0] * b[2]
+    cz = a[0] * b[1] - a[1] * b[0]
+    dot = a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+    return math.degrees(math.atan2(math.sqrt(cx * cx + cy * cy + cz * cz), dot))
+
+
+def edge_chain(shape, start_index, continuity="Tangency", angle_tolerance_deg=1.0,
+               gap_tolerance=0.0, direction="Both", report=None):
+    """Ordered 1-based edge indices of the chain through edge `start_index` (the numbering
+    of `edge_curves`), walking from edge to edge through shared vertices.
+
+    ``Position``: the next edge must meet the junction -- share its vertex, or have an
+    endpoint within `gap_tolerance` of it. ``Tangency``: as Position, and the direction of
+    travel leaving the current edge must agree with the direction of travel entering the
+    next one within `angle_tolerance_deg`. Both directions come from ``BRepAdaptor_Curve``
+    D1 at the junction, with each edge's orientation taken into account. ``Curvature`` is
+    refused by name.
+
+    ``Direction`` ``Forward`` leaves the start edge at its last parameter, ``Backward`` at
+    its first, ``Both`` both ways. Seam and degenerate edges are never chained. A junction
+    with MORE than one qualifying continuation is a branch: the walk stops there and nothing
+    is guessed. If `report` is a dict it receives ``"branch_points"``, the junctions where
+    the walk stopped on a branch. Only endpoint and derivative evaluations are used.
+    """
+    _need()
+    from OCP.BRep import BRep_Tool
+    from OCP.BRepAdaptor import BRepAdaptor_Curve
+    from OCP.TopAbs import TopAbs_EDGE, TopAbs_FACE, TopAbs_VERTEX
+    from OCP.TopExp import TopExp
+    from OCP.TopoDS import TopoDS
+    from OCP.collections import (
+        IndexedDataMap_TopoDS_Shape_List_TopoDS_Shape_TopTools_ShapeMapHasher as _Ancestors,
+        IndexedMap_TopoDS_Shape_TopTools_ShapeMapHasher as _Map)
+    from OCP.gp import gp_Pnt, gp_Vec
+
+    if continuity == "Curvature":
+        raise KernelError("ChainContinuity=Curvature is not implemented yet -- "
+                          "use Position or Tangency")
+    if continuity not in CHAIN_CONTINUITIES[:2]:
+        raise KernelError(f"unknown ChainContinuity {continuity!r}")
+    if direction not in CHAIN_DIRECTIONS:
+        raise KernelError(f"unknown chain Direction {direction!r}")
+    angle_limit = float(angle_tolerance_deg)
+    gap = float(gap_tolerance)
+    if not (math.isfinite(angle_limit) and 0.0 <= angle_limit <= 180.0):
+        raise KernelError(f"AngleTolerance must be between 0 and 180 degrees "
+                          f"(got {angle_tolerance_deg})")
+    if not (math.isfinite(gap) and gap >= 0.0):
+        raise KernelError(f"GapTolerance must be zero or positive (got {gap_tolerance})")
+
+    emap = _Map()
+    TopExp.MapShapes_s(shape, TopAbs_EDGE, emap)
+    count = emap.Extent()
+    start = int(start_index)
+    if start != start_index or not 1 <= start <= count:
+        raise KernelError(f"edge index {start_index} out of range; this shape has {count} "
+                          f"edges numbered 1..{count}")
+    vmap = _Ancestors()
+    TopExp.MapShapesAndAncestors_s(shape, TopAbs_VERTEX, TopAbs_EDGE, vmap)
+    fmap = _Ancestors()
+    TopExp.MapShapesAndAncestors_s(shape, TopAbs_EDGE, TopAbs_FACE, fmap)
+    cache = {}
+
+    def tangent_at(adaptor, u):
+        point, d1 = gp_Pnt(), gp_Vec()
+        adaptor.D1(u, point, d1)
+        return _unit(d1)
+
+    def record(k):
+        """Vertices, points and unit tangents at both ends of edge k; None if seam or degenerate."""
+        if k not in cache:
+            edge = TopoDS.Edge(emap.FindKey(k))
+            faces = ([TopoDS.Face(f) for f in fmap.FindFromKey(edge)]
+                     if fmap.Contains(edge) else [])
+            rec = None
+            if not BRep_Tool.Degenerated_s(edge) and not any(
+                    BRep_Tool.IsClosed_s(edge, f) for f in faces):
+                adaptor = BRepAdaptor_Curve(edge)
+                u0, u1 = adaptor.FirstParameter(), adaptor.LastParameter()
+                rec = {"vertices": (TopExp.FirstVertex_s(edge, False),
+                                    TopExp.LastVertex_s(edge, False)),
+                       "points": (_xyz(adaptor.Value(u0)), _xyz(adaptor.Value(u1))),
+                       "tangents": (tangent_at(adaptor, u0), tangent_at(adaptor, u1))}
+            cache[k] = rec
+        return cache[k]
+
+    def reached(vertex, point):
+        """Edge numbers meeting the junction: sharing `vertex`, or with an end within the gap."""
+        found = set()
+        if vmap.Contains(vertex):
+            found.update(emap.FindIndex(TopoDS.Edge(e)) for e in vmap.FindFromKey(vertex))
+        if gap > 0.0:
+            for k in range(1, count + 1):
+                rec = record(k)
+                if rec is not None and any(math.dist(p, point) <= gap for p in rec["points"]):
+                    found.add(k)
+        return found
+
+    def entry_end(rec, vertex, point):
+        """0 or 1 when exactly one end of the edge meets the junction, else None."""
+        ends = [e for e in (0, 1) if rec["vertices"][e].IsSame(vertex)
+                or (gap > 0.0 and math.dist(rec["points"][e], point) <= gap)]
+        return ends[0] if len(ends) == 1 else None
+
+    branch_points = []
+
+    def walk(k, leave, out_dir, visited):
+        """Edges chained on from edge `k`, which is left at end `leave` travelling `out_dir`."""
+        chain = []
+        while True:
+            rec = record(k)
+            vertex, point = rec["vertices"][leave], rec["points"][leave]
+            options = []
+            for n in sorted(reached(vertex, point) - visited):
+                nxt = record(n)
+                enter = None if nxt is None else entry_end(nxt, vertex, point)
+                if enter is None:
+                    continue
+                if enter == 0:
+                    entering, next_leave = nxt["tangents"][0], 1
+                    next_out = nxt["tangents"][1]
+                else:
+                    entering, next_leave = _neg(nxt["tangents"][1]), 0
+                    next_out = _neg(nxt["tangents"][0])
+                joins = (continuity == "Position" or (
+                    out_dir is not None and entering is not None
+                    and _turn_degrees(out_dir, entering) <= angle_limit))
+                if joins:
+                    options.append((n, next_leave, next_out))
+            if not options:
+                return chain
+            if len(options) > 1:
+                branch_points.append(point)
+                return chain
+            k, leave, out_dir = options[0]
+            visited.add(k)
+            chain.append(k)
+
+    first = record(start)
+    if first is None:
+        raise KernelError(f"edge {start} is a seam or degenerate edge and cannot start a chain")
+    visited = {start}
+    forward, backward = [], []
+    if direction in ("Forward", "Both"):
+        forward = walk(start, 1, first["tangents"][1], visited)
+    if direction in ("Backward", "Both"):
+        backward = walk(start, 0, _neg(first["tangents"][0]), visited)
+    if report is not None:
+        report["branch_points"] = list(branch_points)
+    return list(reversed(backward)) + [start] + forward
+
+
+def edge_midpoint(shape, index):
+    """``(x, y, z)`` at the parameter midpoint of the `index`-th edge. It lies ON the curve;
+    the midpoint of a chord does not, for an arc."""
+    _need()
+    from OCP.BRepAdaptor import BRepAdaptor_Curve
+
+    edges = _unique_edges(shape)
+    i = int(index)
+    if i != index or not 1 <= i <= len(edges):
+        raise KernelError(f"edge index {index} out of range; this shape has {len(edges)} "
+                          f"edges numbered 1..{len(edges)}")
+    adaptor = BRepAdaptor_Curve(edges[i - 1])
+    return _xyz(adaptor.Value(0.5 * (adaptor.FirstParameter() + adaptor.LastParameter())))
 
 
 def vertex_at(shape, index):

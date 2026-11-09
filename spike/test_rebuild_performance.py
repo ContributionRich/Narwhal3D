@@ -313,15 +313,29 @@ for name, make in FIXTURES.items():
     curve = make()
     queries = queries_near(curve, 40, seed=len(name))
     tol = nearest.default_tolerance()
-    expected_native = sum(1 for q in queries
-                          if nearest._analytic_target(curve, nearest._pt(q), tol) is None)
+
+    def native_searches(q):
+        """One search for a general query; for an analytic one, its verification
+        search, plus the general search when the target is not on the curve; none for
+        an ambiguous (on-axis) query."""
+        exact = nearest._analytic_target(curve, nearest._pt(q), tol)
+        if exact is None:
+            return 1
+        method, target, ambiguous = exact
+        if ambiguous:
+            return 0
+        res = nearest._search(curve, target, tol, method)
+        return 1 if nearest._dist(res.point, target) <= tol else 2
+
+    expected_native = sum(native_searches(q) for q in queries)
     with Count(native, "search") as calls:
         got = [closest_fields(nearest.closest_point_on_curve(curve, q)) for q in queries]
     with python_only():
         want = [closest_fields(nearest.closest_point_on_curve(curve, q)) for q in queries]
     check(got == want, f"{name}: {len(queries)} closest points bit-identical to the Python search")
     check(calls.calls == expected_native,
-          f"{name}: {calls.calls} native searches for {expected_native} non-analytic queries")
+          f"{name}: {calls.calls} native searches, {expected_native} expected "
+          "(analytic targets are verified natively too)")
 
 print("\n-- prepared closest queries: packed once, snapshot, analytic routes kept --")
 curve = closed_43_spans()

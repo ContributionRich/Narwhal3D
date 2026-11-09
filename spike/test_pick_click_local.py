@@ -208,7 +208,7 @@ def mutations():
          'test_offset_hit_visible_while_center_ray_is_occluded'),
         ('with_distances=True, clipped=True)', 'with_distances=True, clipped=False)',
          'test_perspective_hit_has_correct_world_depth'),
-        ("dg['serial'], bpy.context.view_layer.as_pointer()", '0, bpy.context.view_layer.as_pointer()',
+        ("and _cache.get('signature') == signature", 'and True',
          'test_display_revision_invalidates_visibility_without_doc_change'),
         ('origin, end = a.xyz / a.w, b.xyz / b.w',
          'origin, end = 2 * a.xyz / a.w - b.xyz / b.w, b.xyz / b.w',

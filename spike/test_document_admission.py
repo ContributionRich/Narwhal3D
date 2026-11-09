@@ -73,13 +73,15 @@ with tempfile.TemporaryDirectory(prefix="narwhal-admission-test-") as folder, \
     check(abs(occt.volume(changed_master) - occt.volume(master)) < 1e-10,
           "adversarial proxy retains the exact master's volume")
     check(model.replace_geometry(object_id, changed), "attack preserves the document object UUID")
-    try:
-        document.save_model(model, target)
-    except document.NarwhalDocumentError as error:
-        check("proxy" in str(error), "changed proxy with the old master cannot reuse admission")
-    else:
-        raise AssertionError("same-bounds/volume proxy substitution was admitted")
-    check(target.read_bytes() == previous, "refused save leaves the previous good archive untouched")
+    # OURS (owner policy): Save is never blocked. The substituted display proxy is NOT
+    # admitted -- it is re-derived from the exact master, then the archive is validated.
+    attacked = bridge.brep_data(changed)
+    document.save_model(model, target)
+    saved_proxy = next(o.Geometry for o in model.file.Objects if str(o.Attributes.Id) == object_id)
+    check(any("display copy rebuilt" in note for note in model.last_save_warnings)
+          and bridge.brep_data(saved_proxy) != attacked,
+          "changed proxy with the old master cannot reuse admission; it is rebuilt from the master")
+    check(target.read_bytes() != previous, "the repaired document still saves")
     check(model.replace_geometry(object_id, original), "restore the original geometry")
     document.save_model(model, target)
     check(reports[-1].get("reused") == 1, "a failed candidate cannot poison valid receipts")

@@ -10,6 +10,7 @@ Box triangles are viewport data only, never substituted for document geometry.
 Known edge-only shaded occlusion regression is a hard assertion, not an xfail.
 """
 import io
+import time
 from pathlib import Path
 import sys
 from types import ModuleType, SimpleNamespace as NS
@@ -51,6 +52,7 @@ class DisplayAdapter:
 
     def __init__(self):
         self.rows, self.parts, self.objects, self.meshes = [], {}, [], []
+        self.key = 0
         self.bridge = NS(display_visible=lambda ob: not ob.hide_viewport and not ob.hide_get(),
                          curve_segments=lambda curve: [(0, self._curve_points(curve), ())])
 
@@ -58,7 +60,7 @@ class DisplayAdapter:
         return self.rows
 
     def _doc_key(self):
-        return id(self)
+        return id(self), self.key
 
     def _unpickable_names_cached(self):
         return {ob.name for ob in self.objects if ob.hide_select}
@@ -255,6 +257,64 @@ class PickCandidateTests(unittest.TestCase):
         for hit, distance in zip(measured, (6.0, 4.0)):
             self.assertAlmostEqual(hit[1], distance, places=5)
 
+    @staticmethod
+    def _signature(result):
+        candidates, polylines, indices = result
+        return ([(c.key, c.label, c.lines, c.triangles, c.points) for c in candidates],
+                polylines, indices)
+
+    def test_selection_only_depsgraph_update_reuses_candidates(self):
+        for i in range(12):
+            self.ui.box(f'sel{i}', low=(i * 1.5 - 9, -.4, -.4), high=(i * 1.5 - 8.2, .4, 0.0))
+        self.ui.line('sel_line')
+        self.ui._curve_dg = {'serial': 0, 'vis': 0, 'scene': 0, 'changed': {}}
+        first = picker.collect(self.ui, 'object')
+        dg = self.ui._curve_dg
+        dg['serial'] += 1
+        dg['scene'] = dg['serial']          # a click's selection change: the Scene only
+        with patch.object(picker, '_candidate', wraps=picker._candidate) as built:
+            second = picker.collect(self.ui, 'object')
+        self.assertIs(second, first, 'a selection-only update must reuse the cached result')
+        self.assertEqual(built.call_count, 0)
+
+    def test_unrelated_edit_rebuilds_only_the_new_object(self):
+        for i in range(12):
+            self.ui.box(f'edit{i}', low=(i * 1.5 - 9, -.4, -.4), high=(i * 1.5 - 8.2, .4, 0.0))
+        started = time.perf_counter()
+        picker.collect(self.ui, 'object')
+        cold = time.perf_counter() - started
+        self.ui.key += 1                    # a recorded document change...
+        self.ui.line('edit_added')          # ...that adds one unrelated object
+        with patch.object(picker, '_candidate', wraps=picker._candidate) as built:
+            started = time.perf_counter()
+            warm = picker.collect(self.ui, 'object')
+            warm_seconds = time.perf_counter() - started
+        self.assertEqual(built.call_count, 1, 'only the added line may be rebuilt')
+        self.assertLessEqual(warm_seconds, 0.5 * cold + 0.002,
+                             f'warm {warm_seconds * 1e3:.2f} ms vs cold {cold * 1e3:.2f} ms')
+        picker.clear()
+        picker._objects.clear()
+        self.assertEqual(self._signature(warm), self._signature(picker.collect(self.ui, 'object')))
+
+    def test_changed_parts_are_rebuilt_and_match_fresh(self):
+        boxes = [self.ui.box(f'chg{i}', low=(i * 1.5 - 9, -.4, -.4), high=(i * 1.5 - 8.2, .4, 0.0))
+                 for i in range(4)]
+        before = picker.collect(self.ui, 'object')
+        old = self.ui.parts[boxes[1].name]
+        shift = lambda p: (p[0] + 3.0, p[1], p[2])  # noqa: E731
+        self.ui.parts[boxes[1].name] = {
+            'edges': [(i, tuple(shift(p) for p in pts)) for i, pts in old['edges']],
+            'faces': [(i, tuple(tuple(shift(p) for p in t) for t in ts)) for i, ts in old['faces']],
+            'vertices': [(i, shift(p)) for i, p in old['vertices']],
+        }
+        self.ui.key += 1
+        after = picker.collect(self.ui, 'object')
+        picker.clear()
+        picker._objects.clear()
+        fresh = picker.collect(self.ui, 'object')
+        self.assertEqual(self._signature(after), self._signature(fresh))
+        self.assertNotEqual(self._signature(after), self._signature(before))
+
 
 def mutations():
     global picker, native
@@ -276,6 +336,12 @@ def mutations():
          'test_shaded_objects_parts_and_segments_obey_owner_visibility_policy'),
         ('native_selection', '(world, distance) if with_distances else world', 'world',
          'test_native_distance_contract_keeps_default_world_points'),
+        ('pick_candidates', 'if parts and known is not None and known[0] is parts:',
+         'if False:', 'test_unrelated_edit_rebuilds_only_the_new_object'),
+        ('pick_candidates', 'if parts and known is not None and known[0] is parts:',
+         'if known is not None:', 'test_changed_parts_are_rebuilt_and_match_fresh'),
+        ('pick_candidates', "max(dg.get('changed', {}).values(), default=0)", "dg['serial']",
+         'test_selection_only_depsgraph_update_reuses_candidates'),
     ]
     controls = unittest.TestSuite(PickCandidateTests(test) for test in dict.fromkeys(
         probe[3] for probe in probes))

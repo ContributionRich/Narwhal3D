@@ -90,6 +90,8 @@ def write_document(path):
     app.mark_saved(target)
     app.suggested_name = None
     recent_add(target)
+    for note in getattr(app.model, "last_save_warnings", None) or ():
+        app.log(f"Save note: {note}")
     return True, f"Saved {target}"
 
 

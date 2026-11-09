@@ -496,11 +496,32 @@ class NativeIntegrationTests(unittest.TestCase):
                     model = NarwhalModel()
                     model.add_object(candidate, 'mismatched surface', 0)
                     target = root/(side+'-'+kind+'.narwhal')
+                    # Save never refuses a document (save-never-blocked policy). The
+                    # MASTER is the geometry; a disagreeing display proxy is re-derived
+                    # from it, the repair is named, and what is saved is exactly the
+                    # master -- never the drifted proxy and never an approximation.
+                    repaired = NarwhalModel()
+                    repaired_id, _ = repaired.add_object(candidate.Duplicate(), 'mismatched surface', 0)
+                    live = kernel.master_of(repaired.file.Objects.FindId(repaired_id).Geometry)
+                    self.assertIs(live, candidate_master)
+                    repaired_path = root/(side+'-'+kind+'-repaired.narwhal')
+                    self.assertTrue(nd.save_model(repaired, repaired_path))
+                    self.assertTrue(any('display copy rebuilt' in note
+                                        for note in repaired.last_save_warnings),
+                                    repaired.last_save_warnings)
+                    reopened = nd.load_model(repaired_path)
+                    nd.commit_masters(reopened)
+                    reread = kernel.master_of(reopened.file.Objects.FindId(repaired_id).Geometry)
+                    want = ob.tight_bbox(candidate_master)
+                    got = ob.tight_bbox(reread)
+                    for a, b in zip(want[0]+want[1], got[0]+got[1]):
+                        self.assertAlmostEqual(a, b, places=9)
+                    self.assertEqual(dict(ob.face_types(reread)), dict(ob.face_types(candidate_master)))
+                    stored = ob.tight_bbox(ob.shape_from_brep_data(bridge.brep_data(
+                        reopened.file.Objects.FindId(repaired_id).Geometry), sew_tolerance=1e-6))
+                    for a, b in zip(want[0]+want[1], stored[0]+stored[1]):
+                        self.assertAlmostEqual(a, b, places=6)
                     retained = kernel.master_registry_snapshot()
-                    with self.assertRaisesRegex(nd.NarwhalDocumentError, 'proxy bounds'):
-                        nd.save_model(model, target)
-                    self.assertFalse(target.exists(), 'refused Save must not publish a corrupt archive')
-                    self.assertEqual(kernel.master_registry_snapshot(), retained)
                     # Deliberately bypass only Save admission to construct an adversarial
                     # archive. The real worker and independent parent Open checks below
                     # must still reject it, even though normal Save cannot create it.
