@@ -48,13 +48,19 @@ def _export_route(path):
     return ext if ext == INTERCHANGE_EXT else None
 
 
-def write_document(path):
+def write_document(path, background=False):
     """Write the model to `path` (atomically). Returns ``(ok, message)``.
 
     `.3dm` writes a whole-document interchange copy without replacing the active native
     project. Other formats belong to Export or Print and are refused here rather than
     silently discarding unsupported document content.
+
+    ``background=True`` (Save / SaveAs in the app) hands a native save to `save_queue`
+    when the app installed it: the message is then "Saving ..." and the result is logged
+    when the save finishes. Otherwise -- and always for New/Open/Exit's "Save changes?"
+    -- the save completes before this returns, after any background save has finished.
     """
+    from . import save_queue
     app = _app()
     if _export_route(path):
         import tempfile
@@ -79,6 +85,9 @@ def write_document(path):
     folder = os.path.dirname(target)
     if not os.path.isdir(folder):
         return False, f"the folder {folder!r} does not exist -- nothing was saved"
+    if background and save_queue.enabled():
+        return save_queue.request_save(target)
+    save_queue.drain()               # never write alongside a background save
     try:
         from . import narwhal_document
         ok = narwhal_document.save_model(app.model, target)
@@ -148,6 +157,12 @@ class _FileCommand(commands.Command):
         """Before New/Open: ask about unsaved changes. Returns None to go on, or the
         ``(message, done)`` that ends the command."""
         app = _app()
+        from . import save_queue
+
+        if save_queue.busy():
+            # A save in progress may already hold these changes: finish it first.
+            app.log("Finishing the save in progress\u2026")
+            save_queue.drain()
         if not app.doc_modified():
             return None
         status, answer = filedialog.ask_yes_no_cancel(
@@ -177,18 +192,22 @@ class SaveCmd(_FileCommand):
     steps = [("File name to save:", TEXT)]
 
     def begin(self, ctx):
+        from . import save_queue
+
         app = _app()
-        if app.doc_path:
-            return write_document(app.doc_path)[1], True
+        # A SaveAs still in progress decides where this document's file now is.
+        current = save_queue.intended_path() or app.doc_path
+        if current:
+            return write_document(current, background=True)[1], True
         status, path = self._ask_save_path(self.name)
         if status == filedialog.OK:
-            return write_document(path)[1], True
+            return write_document(path, background=True)[1], True
         if status == filedialog.CANCEL:
             return f"{self.name} cancelled", True
         return filedialog.unavailable_hint(), False
 
     def execute(self, ctx):
-        return write_document(self.args[0])[1], True
+        return write_document(self.args[0], background=True)[1], True
 
 
 class SaveAsCmd(SaveCmd):
@@ -198,7 +217,7 @@ class SaveAsCmd(SaveCmd):
     def begin(self, ctx):
         status, path = self._ask_save_path("Save As")
         if status == filedialog.OK:
-            return write_document(path)[1], True
+            return write_document(path, background=True)[1], True
         if status == filedialog.CANCEL:
             return f"{self.name} cancelled", True
         return filedialog.unavailable_hint(), False
@@ -292,6 +311,17 @@ class OpenCmd(_FileCommand):
             narwhal_document.commit_model(app, model, p)
         except (FileNotFoundError, narwhal_document.NarwhalDocumentError) as e:
             return f"Could not open {p}: {e}", True
+        if is_recovery_copy(p):
+            # OURS: a recovery copy is not the user's file. Saving back into the recovery
+            # folder would hide the work where pruning deletes it, so the document opens
+            # Untitled and modified: Save asks where to keep it (named after the original).
+            app.doc_path = None
+            model.path = None
+            app.suggested_name = os.path.join(filedialog.start_dir(), recovered_name(p) + EXT)
+            app._saved_history_state = _NEVER_SAVED  # see AppState.doc_modified
+            drawn = _rebuild_display()
+            return (f"Opened the recovered copy {p} ({model.object_count()} objects, "
+                    f"{drawn} drawn) -- Save asks where to keep it"), True
         drawn = _rebuild_display()
         recent_add(p)
         return f"Opened {p} ({model.object_count()} objects, {drawn} drawn)", True
@@ -385,9 +415,14 @@ def _prune_native_recovery(folder, keep=10):
             pass
 
 
-def write_recovery():
+def write_recovery(background=False):
     """Write the model to a recovery copy IF it has unsaved changes. Returns the path,
-    or None (nothing to protect, or the write failed -- never raises at exit)."""
+    or None (nothing to protect, or the write failed -- never raises at exit).
+
+    ``background=True`` (AutoSave) starts the copy in `save_queue` when the app
+    installed it and returns its path at once (the result is logged when it finishes),
+    or False when a save is already running (try again later). Exit always writes
+    synchronously."""
     from . import autosave
 
     app = _app()
@@ -397,6 +432,11 @@ def write_recovery():
         folder = recovery_dir()
         os.makedirs(folder, exist_ok=True)
         path = os.path.splitext(autosave.autosave_path(folder, app.doc_path))[0] + EXT
+        if background:
+            from . import save_queue
+
+            if save_queue.enabled():
+                return path if save_queue.request_autosave(path) else False
         from . import narwhal_document
         if not narwhal_document.save_model(app.model, path):
             return None
@@ -424,6 +464,204 @@ def recovery_notice():
     newest = found[0][0]
     return (f"Unsaved work from an earlier session was kept: {newest} "
             f"({len(found)} recovery file(s)) -- Open it to continue")
+
+
+def finish_saves(timeout=None):
+    """Exit: finish any background save synchronously (bounded by `timeout` seconds).
+    True when none is left running."""
+    from . import save_queue
+
+    return save_queue.drain(timeout)
+
+
+#: never equal to a history state id: a recovered document is unsaved
+_NEVER_SAVED = object()
+
+
+def is_recovery_copy(path):
+    """True for a file inside the recovery folder."""
+    try:
+        return (os.path.dirname(os.path.realpath(path))
+                == os.path.realpath(recovery_dir()))
+    except (OSError, ValueError):
+        return False
+
+
+def recovered_name(path):
+    """The document name a recovery copy was written for (see `autosave.autosave_path`):
+    ``part_autosave.narwhal`` -> ``part``; ``Untitled_autosave_<stamp>`` -> ``Untitled``."""
+    base = os.path.splitext(os.path.basename(path))[0]
+    if base.startswith("Untitled_autosave_"):
+        return "Untitled"
+    if base.endswith("_autosave") and len(base) > len("_autosave"):
+        return base[:-len("_autosave")]
+    return base
+
+
+# ---------------------------------------------------------------------------
+# Crash detection: a session marker per running app, removed by a clean exit
+# ---------------------------------------------------------------------------
+#
+# OURS: `begin_session` writes `session-<pid>.json` (pid, start time, the OS's own
+# process start stamp) in the recovery folder; the exit handler's `end_session` removes
+# it. A marker whose process is gone -- or whose pid now belongs to a different process
+# -- is a session that ended without a clean exit. Several apps may run at once, so
+# each has its own marker and a LIVE session's marker is never touched.
+
+_SESSION_PREFIX = "session-"
+
+
+def _session_marker(pid=None):
+    return os.path.join(recovery_dir(), f"{_SESSION_PREFIX}{pid or os.getpid()}.json")
+
+
+def _process_start(pid):
+    """The kernel's start stamp for `pid` (Linux /proc), or None where unavailable."""
+    try:
+        with open(f"/proc/{int(pid)}/stat", "rb") as handle:
+            data = handle.read()
+        return int(data.rsplit(b")", 1)[1].split()[19])   # field 22: starttime
+    except (OSError, ValueError, IndexError):
+        return None
+
+
+def _pid_alive(pid):
+    if pid <= 0:
+        return False
+    if os.name == "nt":
+        # os.kill on Windows TERMINATES the process -- query it instead.
+        import ctypes
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        handle = kernel32.OpenProcess(0x1000, False, int(pid))  # QUERY_LIMITED_INFORMATION
+        if not handle:
+            return ctypes.get_last_error() == 5                # access denied: it exists
+        try:
+            code = ctypes.c_ulong()
+            return bool(kernel32.GetExitCodeProcess(handle, ctypes.byref(code))) \
+                and code.value == 259                           # STILL_ACTIVE
+        finally:
+            kernel32.CloseHandle(handle)
+    try:
+        os.kill(int(pid), 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+    return True
+
+
+def _session_alive(info):
+    pid = int(info.get("pid", 0))
+    if not _pid_alive(pid):
+        return False
+    recorded = info.get("proc_start")
+    current = _process_start(pid)
+    # A reused pid has a different start stamp: that session is gone.
+    return recorded is None or current is None or recorded == current
+
+
+def begin_session():
+    """Record this session; return the markers (dicts) of earlier sessions that ended
+    WITHOUT a clean exit. Their markers are removed, so each crash is reported once.
+    Never raises."""
+    import json
+    import time
+
+    crashed = []
+    try:
+        folder = recovery_dir()
+        os.makedirs(folder, exist_ok=True)
+        own = os.path.abspath(_session_marker())
+        for name in os.listdir(folder):
+            if not (name.startswith(_SESSION_PREFIX) and name.endswith(".json")):
+                continue
+            path = os.path.join(folder, name)
+            try:
+                with open(path, encoding="utf-8") as handle:
+                    info = json.load(handle)
+                info = {"pid": int(info["pid"]), "started": float(info["started"]),
+                        "proc_start": info.get("proc_start")}
+            except (OSError, ValueError, KeyError, TypeError):
+                continue        # unreadable: never guess a crash from it
+            if _session_alive(info):
+                continue        # a live app (this one, or another window)
+            crashed.append(info)
+            if os.path.abspath(path) != own:
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
+        marker = {"pid": os.getpid(), "started": time.time(),
+                  "proc_start": _process_start(os.getpid())}
+        temporary = own + ".tmp"
+        with open(temporary, "w", encoding="utf-8") as handle:
+            json.dump(marker, handle)
+        os.replace(temporary, own)
+    except Exception:  # noqa: BLE001 -- crash detection must never stop the app starting
+        pass
+    return crashed
+
+
+def end_session():
+    """The clean-exit half: remove this session's marker. Never raises."""
+    try:
+        os.remove(_session_marker())
+    except OSError:
+        pass
+
+
+def crash_recovery_candidate(crashed):
+    """The newest recovery copy written during a crashed session, as ``(path, mtime)``,
+    or None. OURS: copies older than every crashed session belong to an earlier one and
+    are left to the command-line notice."""
+    from . import autosave
+
+    if not crashed:
+        return None
+    since = min(info["started"] for info in crashed) - 1.0
+    found = []
+    for folder in _recovery_dirs():
+        try:
+            found.extend(autosave.recovery_candidates(folder))
+            found.extend(_native_recovery_candidates(folder))
+        except Exception:  # noqa: BLE001
+            continue
+    found = [row for row in found if row[1] >= since]
+    if not found:
+        return None
+    return max(found, key=lambda row: row[1])
+
+
+def offer_crash_recovery(crashed):
+    """After an unclean exit: ask to open the newest recovery copy of that session.
+
+    Returns "opened", "declined", "logged" (no dialog possible) or None (nothing to
+    offer). Opening goes through the Open command, like File > Open."""
+    import datetime
+
+    found = crash_recovery_candidate(crashed)
+    if found is None:
+        return None
+    path, mtime = found
+    app = _app()
+    name = recovered_name(path)
+    when = datetime.datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M")
+    question = (f"Narwhal 3D closed unexpectedly. Open the recovered copy of {name} "
+                f"(autosaved {when})?")
+    if os.environ.get("NARWHAL3D_NO_DIALOGS"):
+        app.log(f"{question} -- it is {path}; Open it to continue")
+        return "logged"
+    status, answer = filedialog.ask_yes_no_cancel("Narwhal 3D", question)
+    if status == filedialog.UNAVAILABLE:     # headless: nobody to ask
+        app.log(f"{question} -- it is {path}; Open it to continue")
+        return "logged"
+    if status == filedialog.OK and answer == "yes":
+        app.start_command("Open", path)
+        return "opened"
+    return "declined"
 
 
 class ExitCmd(_FileCommand):

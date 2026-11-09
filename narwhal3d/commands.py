@@ -7736,6 +7736,54 @@ def _duplicate_with_transform(ctx: NarwhalContext, name: str, xform: r3.Transfor
     return display_name
 
 
+def _group_copies(ctx: NarwhalContext, pairs):
+    """Give one copy set NEW groups that mirror its originals' groups.
+
+    MEASURED (the reference CAD application's Copy help): "If the selected objects are in a group, a new
+    group is created from the copied objects. The copied objects are not added to the
+    original group." ``pairs`` is ``[(original name, copy name), ...]`` for ONE copy
+    set: each original group reached by the set maps to exactly one new group, so
+    members grouped together stay together among the copies, two groups stay two,
+    and ungrouped originals give ungrouped copies. Returns the new group count.
+
+    Called inside the caller's open undo record; `note_change` before the table edit
+    keeps it in that same step (a no-op once the record has captured).
+    """
+    model = ctx.model
+    file = model.file
+    if not len(file.Groups):
+        return 0                       # nothing can be grouped: skip the lookups
+    plan = []
+    for source, copy in pairs:
+        if not copy:
+            continue
+        sid, cid = model.object_id_by_name(source), model.object_id_by_name(copy)
+        sobj = file.Objects.FindId(sid) if sid is not None else None
+        cobj = file.Objects.FindId(cid) if cid is not None else None
+        if sobj is None or cobj is None:
+            continue
+        groups = [int(g) for g in (sobj.Attributes.GetGroupList2() or [])]
+        if groups:
+            plan.append((cobj, groups))
+    mapping = {}
+    for cobj, groups in plan:
+        for g in groups:
+            if g not in mapping:
+                n = 0
+                while _group_index_by_name(file, f"Group{n}") is not None:
+                    n += 1
+                ctx.note_change("Copy")
+                group = r3.Group()
+                group.Name = f"Group{n}"
+                index = len(file.Groups)
+                file.Groups.Add(group)
+                if len(file.Groups) != index + 1:
+                    raise RuntimeError(f"Copy: could not create group {group.Name!r}")
+                mapping[g] = index
+            cobj.Attributes.AddToGroup(mapping[g])
+    return len(mapping)
+
+
 class CopyCmd(_FromToTransformCmd):
     name = "Copy"
     description = ("Copy selected objects: a point to copy from, then a point to "
@@ -7783,8 +7831,8 @@ class CopyCmd(_FromToTransformCmd):
     # objects. The copied objects are not added to the original group.").
     # `_duplicate_with_transform` -> `ctx.add_geometry` ->
     # `model.add_object` wraps the copy in a FRESH `ObjectAttributes`, so the
-    # copy never carries the original's group membership -- the copy is never
-    # added to the original group.
+    # copy never joins the original group; `_group_copies` then gives each copy
+    # set its own NEW groups (spike/test_group_copy.py).
     #
     # `complete_after_first` is an internal completion override: when True the command
     # finishes after the first destination instead of staying open for more, and
@@ -7915,10 +7963,13 @@ class CopyCmd(_FromToTransformCmd):
         for displacement in to_points:       # one independent copy set per to-point
             dx, dy, dz = displacement
             xform = r3.Transform.Translation(dx, dy, dz)
+            pairs = []
             for ob in ctx.selected_objects():
                 name = _duplicate_with_transform(ctx, ob.name, xform, "Copy")
                 if name:
                     made.append(name)
+                    pairs.append((ob.name, name))
+            _group_copies(ctx, pairs)
         return f"Created {len(made)} copy(ies): {', '.join(made)}", True
 
 
@@ -8267,8 +8318,28 @@ class _BooleanCmd(Command):
                     out.append(n)
         return out
 
+    def _difference_sets(self):
+        """(targets, cutters) for BooleanDifference, or None for a fold-left command.
+
+        Two `OBJECTS_MULTI` steps give the two sets directly. A flat positional call
+        (macros, direct callers) keeps its old meaning: the first name is the target and
+        every later name is a cutter.
+        """
+        if self.operation != "DIFFERENCE":
+            return None
+        if (len(self.args) >= 2 and all(isinstance(a, (list, tuple)) for a in self.args[:2])):
+            targets = list(dict.fromkeys(self.args[0]))
+            cutters = [n for n in dict.fromkeys(self.args[1]) if n not in targets]
+        else:
+            names = self._operand_names()
+            targets, cutters = names[:1], names[1:]
+        return targets, cutters
+
     def execute(self, ctx: NarwhalContext):
         names = self._operand_names()
+        sets = self._difference_sets()
+        if sets is not None and len(sets[0]) > 1:
+            return self._execute_multi_difference(ctx, *sets)
         if len(names) < 2:
             # the reference CAD application needs at least two operands. Report the count rather than
             # failing obscurely inside the solver.
@@ -8344,7 +8415,77 @@ class _BooleanCmd(Command):
                 ctx.model.remove_object(oid)
 
         _, display_name = ctx.add_geometry(result, "Boolean", layer_index)
+        return f"Created {display_name}{self._faceted_note(result)}", True
 
+    def _solid(self, ctx, name):
+        """(brep, None) for a usable solid operand, or (None, refusal message)."""
+        geom = _world_geom(ctx, name)
+        if geom is None:
+            return None, f"No solid named {name!r}"
+        if isinstance(geom, r3.Extrusion):
+            if not (geom.IsCappedAtTop and geom.IsCappedAtBottom):
+                return None, f"{name} is not a solid (an uncapped extrusion)"
+            geom = _solid_brep_from_extrusion(geom)
+            if geom is None:
+                return None, f"{name} could not be used as a solid"
+        elif not isinstance(geom, r3.Brep):
+            return None, f"{name} is not a solid (brep)"
+        return geom, None
+
+    def _execute_multi_difference(self, ctx, targets, cutters):
+        """Subtract the SAME cutters from EACH target: one result per target.
+
+        Report #132: two solids and one cutter used to fold left as (A1 - A2) - C,
+        subtracting the second target from the first. Each target now gets its own
+        exact result, A1 - C and A2 - C. Every result is computed before the document
+        changes, so a failure leaves everything untouched; it is one undo step.
+        """
+        if not cutters:
+            return (f"{self.name} needs at least one object to subtract with "
+                    f"(0 given)"), True
+        cutter_geoms = []
+        for name in cutters:
+            geom, refusal = self._solid(ctx, name)
+            if refusal:
+                return refusal, True
+            cutter_geoms.append(geom)
+        results = []
+        for name in targets:
+            geom, refusal = self._solid(ctx, name)
+            if refusal:
+                return refusal, True
+            try:
+                result = geom
+                for cutter in cutter_geoms:
+                    result = bridge.boolean_brep(result, cutter, self.operation)
+            except RuntimeError as e:
+                return f"Boolean failed on {name}: {e} -- nothing changed", True
+            results.append((name, result, _layer_index_of(ctx, name)))
+
+        note_change = getattr(ctx, "note_change", None)
+        if callable(note_change):
+            note_change(self.name)
+        delete_input = bool(self.opt.get("DeleteInput", True))
+        delete_names = list(targets) if delete_input else []
+        if delete_input and bool(self.opt.get("DeleteCutters", False)):
+            delete_names += cutters
+        for name in delete_names:
+            ob = ctx.object_by_name(name)
+            if ob is not None:
+                _remove_object_from_scene(ob)
+            oid = ctx.model.object_id_by_name(name)
+            if oid is not None:
+                ctx.model.remove_object(oid)
+        made = []
+        notes = ""
+        for _name, result, layer in results:
+            _, display = ctx.add_geometry(result, "Boolean", layer)
+            made.append(display)
+            notes += self._faceted_note(result)
+        return f"Created {', '.join(made)}{notes}", True
+
+    @staticmethod
+    def _faceted_note(result):
         # Derive the note from the actual result rather than a fixed representation claim.
         # ``kernel.describe`` reads the representation tag and verifies proxy masters, so
         # the message remains consistent with the geometry.
@@ -8361,7 +8502,7 @@ class _BooleanCmd(Command):
                           "solver.")
         except Exception:  # noqa: BLE001
             note = ""
-        return f"Created {display_name}{note}", True
+        return note
 
 
 class BooleanUnionCmd(_BooleanCmd):
@@ -9132,10 +9273,15 @@ class ProjectToCPlaneCmd(Command):
         # current when the command ends (the reference CAD application's wording).
         plane = self._active_cplane(ctx)
         plan = []
+        # OURS (#133): one object that cannot be projected (say a vertical line, which
+        # collapses to a point) is skipped and NAMED; it no longer cancels the other
+        # seventeen. A skipped object is never deleted by DeleteInput.
+        skipped = []
         for name in names:
             geom = ctx.geom_by_name(name)
             if geom is None:
-                return f"ProjectToCPlane: no object named {name!r} -- nothing projected", True
+                skipped.append(f"{name}: no such object")
+                continue
             prepared = geom
             if isinstance(geom, r3.Brep) and bridge.picture_frame(geom) is None:
                 source = next((fobj for fobj in ctx.model.file.Objects
@@ -9146,15 +9292,18 @@ class ProjectToCPlaneCmd(Command):
                 if frame is not None:
                     prepared = geom.Duplicate()
                     if prepared is None:
-                        return (f"ProjectToCPlane: {name}: Picture could not be duplicated "
-                                "-- nothing projected"), True
+                        skipped.append(f"{name}: Picture could not be duplicated")
+                        continue
                     from . import picture
 
                     prepared.SetUserString("Narwhal3D:Picture", picture.frame_to_json(frame))
             out, msg = bridge.project_to_cplane_geometry(prepared, plane)
             if out is None:
-                return f"ProjectToCPlane: {name}: {msg} -- nothing projected", True
+                skipped.append(f"{name}: {msg}")
+                continue
             plan.append((name, out, _layer_index_of(ctx, name)))
+        if not plan:
+            return ("ProjectToCPlane: nothing projected -- " + "; ".join(skipped)), True
 
         ctx.note_change(self.name)
         if self.opt.get("DeleteInput"):
@@ -9170,7 +9319,11 @@ class ProjectToCPlaneCmd(Command):
             _i, display = ctx.add_geometry(out, "Projection", layer)
             made.append(display)
         extra = "; inputs deleted" if self.opt.get("DeleteInput") else "; inputs kept"
-        return f"Projected {len(made)} object(s) to the construction plane{extra}", True
+        message = f"Projected {len(made)} object(s) to the construction plane{extra}"
+        if skipped:
+            message += (f". Not projected ({len(skipped)}, kept as they were): "
+                        + "; ".join(skipped))
+        return message, True
 
 
 class ExtendCmd(Command):
@@ -13912,8 +14065,8 @@ class TrimCmd(Command):
         split = bridge.split_curve(geom, mine)
         if len(split) < 2:
             return f"Trim: the cutting objects do not cross {name}", False
-        pieces = bridge.trim_curve(geom, mine, pick, pieces=split)
-        removed = [p for p in split if not any(p is kept for kept in pieces)]
+        # only the picked piece goes; the rest stays whole, so later picks still cross (#128)
+        pieces, removed = bridge.trim_split_pieces(geom, split, pick)
         new = _replace_curve(ctx, name, pieces, keep_selection=True)
         # a trimmed CUTTER keeps cutting (the reference CAD application trims "the cutting objects themselves")
         if any(n.lower() == name.lower() for n in cutters):

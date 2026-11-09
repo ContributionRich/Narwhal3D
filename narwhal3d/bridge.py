@@ -615,13 +615,76 @@ def split_curve(curve, cutters, tol: float = 1e-6):
 
 
 def trim_curve(curve, cutters, keep_point, tol: float = 1e-6, pieces=None):
-    """Thin wrapper over `intersect.trim_curve_by` (the reference CAD application's Trim).
+    """the reference CAD application's Trim of one curve: see :func:`trim_split_pieces`.
 
-    Splits `curve` by `cutters` and discards the piece nearest `keep_point` (the
-    clicked "trim away" part). Returns the remaining pieces. `pieces` is the split
-    already computed by :func:`split_curve` for the same arguments, if the caller has it.
+    Discards the piece nearest `keep_point` (the clicked "trim away" part) and returns what
+    remains. `pieces` is the split already computed by :func:`split_curve` for the same
+    arguments, if the caller has it.
     """
-    return _intersect().trim_curve_by(curve, cutters, keep_point, tol, pieces)
+    if pieces is None:
+        pieces = split_curve(curve, cutters, tol)
+    return trim_split_pieces(curve, pieces, keep_point)[0]
+
+
+def trim_split_pieces(curve, pieces, keep_point):
+    """``(kept, removed)``: remove the piece of `pieces` under `keep_point`, and ONLY it.
+
+    `pieces` is ``split_curve(curve, ...)``. Trim cuts at the two crossings that bracket the
+    pick; every other crossing is left uncut, so what remains is ONE curve on each side of
+    the removed piece (open curve: up to two; closed curve: one, running across the seam).
+    DERIVED (commands/trim.htm "Select the parts ... to trim away", one pick per part, and
+    report #128): keeping every split piece as its own object left the other parts
+    bounded by crossings only at their ENDS, so picking them next answered "the cutting
+    objects do not cross" and the user had to delete them by hand.
+
+    The remainder is cut from `curve` itself with `Curve.Trim`, which keeps the exact NURBS
+    (no approximation). Python, not Rust: it only orchestrates rhino3dm curve objects.
+    The removed piece is chosen as before, by `intersect.trim_curve_by` (nearest piece).
+    """
+    pieces = list(pieces)
+    if len(pieces) <= 1:
+        return pieces, []
+    survivors = _intersect().trim_curve_by(curve, [], keep_point, pieces=pieces)
+    drop = next(i for i, p in enumerate(pieces) if not any(p is s for s in survivors))
+    removed = pieces[drop]
+
+    dom = curve.Domain
+    t0, t1 = dom.T0, dom.T1
+    eps = (t1 - t0) * 1e-9
+    box = curve.GetBoundingBox()
+    near = 1e-9 * max(1.0, box.Min.DistanceTo(box.Max))
+
+    def own_span(piece):
+        """The piece's interval on `curve`'s own parameters, or None (the rejoined seam piece)."""
+        a, b = piece.Domain.T0, piece.Domain.T1
+        if not (t0 - eps <= a < b <= t1 + eps):
+            return None
+        on = (curve.PointAt(a).DistanceTo(piece.PointAtStart) <= near
+              and curve.PointAt(b).DistanceTo(piece.PointAtEnd) <= near)
+        return (max(a, t0), min(b, t1)) if on else None
+
+    spans = [own_span(p) for p in pieces]
+    sub = curve.Trim
+    if not bool(curve.IsClosed):
+        if any(s is None for s in spans):
+            raise ValueError("Trim: a split piece is not on the curve's own parameters")
+        lo, hi = spans[drop]
+        kept = [sub(a, b) for a, b in ((t0, lo), (hi, t1)) if b - a > eps]
+        return kept, [removed]
+    known = [s for s in spans if s is not None]
+    if not known:
+        raise ValueError("Trim: no split piece is on the curve's own parameters")
+    if spans[drop] is None:
+        # the removed piece runs across the seam: the rest is one span inside the domain
+        return [sub(min(a for a, _ in known), max(b for _, b in known))], [removed]
+    lo, hi = spans[drop]
+    parts = [sub(a, b) for a, b in ((hi, t1), (t0, lo)) if b - a > eps]
+    if len(parts) == 1:
+        return parts, [removed]
+    joined = r3.PolyCurve()               # across the seam, as split_curve rejoins it
+    for part in parts:
+        joined.Append(part)
+    return [joined], [removed]
 
 
 def _intersect():

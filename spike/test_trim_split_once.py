@@ -115,8 +115,11 @@ check(len(calls) == 2,
 check(sorted(ends(c) for c in added) == expected_ends,
       "the surviving pieces are exactly the pieces bridge.trim_curve keeps",
       f"got {sorted(ends(c) for c in added)}, want {expected_ends}")
-check(expected_ends == [(3.0, 7.0), (7.0, 10.0)],
-      "the fixture's closed-form pieces are [3,7] and [7,10]", repr(expected_ends))
+# Report #128: Trim removes only the picked piece; the rest is ONE curve, not a piece
+# per crossing (a leftover piece touching the cutters only at its ends could not be
+# trimmed again).
+check(expected_ends == [(3.0, 10.0)],
+      "the fixture's closed-form remainder is the single curve [3,10]", repr(expected_ends))
 check(message.startswith("Trimmed Target"), "the command reports the trimmed target", message)
 
 intersect.curve_curve = counting_curve_curve

@@ -36,14 +36,25 @@ WIDTHS = ("Hairline",) + tuple(f"{w:.2f}" for w in print2d.PRINT_WIDTHS_MM)
 SIZES = tuple(print2d.PAGE_SIZES_MM) + (print2d.CUSTOM,)
 #: Largest accepted custom sheet; 5 m accommodates large-format plotters.
 MAX_CUSTOM_MM = 5000.0
+#: Typed custom sizes are shown to this many decimals of the paper unit.
+FIELD_DIGITS = 4
+#: The Custom sheet a document starts with, per paper unit (mm): A4 for metric, Letter
+#: (8.5 x 11 in) for inch. OURS -- no reference help page says what a custom sheet defaults to.
+DEFAULT_CUSTOM_MM = {"Millimeters": (210.0, 297.0), "Centimeters": (210.0, 297.0),
+                     "Inches": (215.9, 279.4)}
+
+
+def default_custom_mm(unit):
+    """``(width, height)`` in mm of the default Custom sheet for document `unit`."""
+    return DEFAULT_CUSTOM_MM[print2d.paper_unit(unit)[0]]
 
 #: (id, label, kind) -- kind: "choice" (a dropdown), "check", "field"
 ROWS = (
     ("destination", "Printer", "choice"),
     ("cdr_version", "CorelDRAW version", "choice"),
     ("size", "Size", "choice"),
-    ("custom_w", "  Width (mm)", "field"),
-    ("custom_h", "  Height (mm)", "field"),
+    ("custom_w", "  Width", "field"),        # + the paper unit: DialogState.row_label
+    ("custom_h", "  Height", "field"),
     ("orientation", "Orientation", "choice"),
     ("color", "Output color", "choice"),
     ("view", "View", "choice"),
@@ -83,6 +94,24 @@ _GLYPH_PX = 0.5
 _DEFAULT_EM = 0.70
 
 
+def restore_settings(state, saved):
+    """Apply remembered dialog settings (`preferences` 'print_settings') to `state`.
+
+    The View is contextual and never restored. A remembered Custom size that is exactly
+    a DEFAULT sheet (the dialog saves the size whether or not Custom was used) is not a
+    choice, so the document's own default stands: Letter on an inch document, A4 on a
+    mm one. Any other remembered size is restored as typed.
+    """
+    saved = {k: v for k, v in dict(saved).items() if k not in ("view", "unit")}
+    pair = (saved.get("custom_w"), saved.get("custom_h"))
+    if pair in DEFAULT_CUSTOM_MM.values():
+        saved.pop("custom_w", None)
+        saved.pop("custom_h", None)
+    for key, value in saved.items():
+        setattr(state, key, value)
+    return state
+
+
 def text_width(text, size=13.0):
     """Estimated drawn width in px of `text` at font `size` px (a conservative upper bound)."""
     text = text or ""
@@ -103,8 +132,12 @@ class DialogState:
     scale: str = "Fit"
     width: str = f"{print2d.DEFAULT_WIDTH_MM:.2f}"
     selected_only: bool = False
-    custom_w: float = 210.0
-    custom_h: float = 297.0
+    custom_w: float | None = None    # ALWAYS mm; shown and typed in the paper unit;
+    custom_h: float | None = None    # None = the document's default (`default_custom_mm`)
+    #: the DOCUMENT's unit system; page lengths are shown in its paper unit
+    #: (`print2d.paper_unit`). Line widths stay mm -- MEASURED, commands/print.htm:
+    #: "normal drafting widths (in millimeters)".
+    unit: str = "Millimeters"
     message: str = ""
     # interaction state
     open_dropdown: str | None = None
@@ -112,6 +145,13 @@ class DialogState:
     focus: str | None = None
     edit_text: str = ""
     extra: dict = field(default_factory=dict)
+
+    def __post_init__(self):
+        w, h = default_custom_mm(self.unit)
+        if self.custom_w is None:
+            self.custom_w = w
+        if self.custom_h is None:
+            self.custom_h = h
 
     # -- rows ---------------------------------------------------------------
     def visible_rows(self):
@@ -124,6 +164,32 @@ class DialogState:
                 continue
             out.append((rid, label, kind))
         return out
+
+    def paper(self):
+        """``(unit system, abbreviation, mm per unit)`` page lengths are shown in."""
+        return print2d.paper_unit(self.unit)
+
+    def row_label(self, rid):
+        """The drawn label of row `rid`; the size fields name the paper unit."""
+        if ROW_KINDS[rid] == "field":
+            return f"{ROW_LABELS[rid]} ({self.paper()[1]})"
+        return ROW_LABELS[rid]
+
+    def _size_text(self, w_mm, h_mm):
+        return (f"{print2d.show_length(w_mm, self.unit)} x "
+                f"{print2d.show_length(h_mm, self.unit)} {self.paper()[1]}")
+
+    def field_text(self, rid):
+        """A committed custom size (mm) as typed text in the paper unit."""
+        return self._typed(getattr(self, rid))
+
+    def _typed(self, mm):
+        text = f"{mm / self.paper()[2]:.{FIELD_DIGITS}f}"
+        return text.rstrip("0").rstrip(".") if "." in text else text
+
+    def page_text(self, page):
+        """The status line's page size, in the paper unit."""
+        return self._size_text(page.width_mm, page.height_mm)
 
     def choices(self, rid):
         return {
@@ -149,21 +215,22 @@ class DialogState:
             return "Custom..."
         if rid == "size":
             w, h = print2d.PAGE_SIZES_MM[value]
-            return f"{value}  ({w:g} x {h:g} mm)"
+            return f"{value}  ({self._size_text(w, h)})"
         return str(value) or "--"
 
     def shown(self, rid):
         if rid in ("custom_w", "custom_h"):
             if self.focus == rid:
                 return self.edit_text
-            return f"{getattr(self, rid):g}"
+            return self.field_text(rid)
         v = getattr(self, rid)
         if rid == "selected_only":
             return "Yes" if v else "No"
         if rid == "orientation" and self.size == print2d.CUSTOM:
             return "(from width x height)"
         if rid == "size" and v == print2d.CUSTOM:
-            return f"Custom  ({self.custom_w:g} x {self.custom_h:g} mm)"
+            return (f"Custom  ({self._typed(self.custom_w)} x {self._typed(self.custom_h)} "
+                    f"{self.paper()[1]})")
         return self.label_of(rid, v)
 
     # -- what the settings mean --------------------------------------------
@@ -182,7 +249,7 @@ class DialogState:
         """A valid size as it is typed, otherwise the last committed value."""
         if self.focus == rid:
             try:
-                v = float(self.edit_text)
+                v = float(self.edit_text) * self.paper()[2]
             except ValueError:
                 v = None
             if v is not None and 0 < v <= MAX_CUSTOM_MM:
@@ -248,7 +315,7 @@ def _column_needs(state, s):
     row needs for its options or current text. Taken over EVERY row, so the columns do
     not move when a setting changes."""
     fs = 13.0 * s
-    label = max(text_width(text, fs) for _rid, text, _kind in ROWS)
+    label = max(text_width(state.row_label(rid), fs) for rid, _text, _kind in ROWS)
     value = 16.0 * s                                  # a check box
     for rid, _text, kind in ROWS:
         if kind == "check":
@@ -401,7 +468,7 @@ def hit(lay, x, y):
 
 #: where a field's text starts inside its box, at scale 1 (ui.py draws it there)
 FIELD_TEXT_PAD = 6
-#: Maximum character count for a size in millimetres.
+#: Maximum character count for a typed size (in the paper unit).
 FIELD_MAX_CHARS = 12
 
 
@@ -420,7 +487,7 @@ def field_of(state):
 
 
 def _focus_field(state, rid):
-    state.focus, state.edit_text = rid, f"{getattr(state, rid):g}"
+    state.focus, state.edit_text = rid, state.field_text(rid)
     f = field_of(state)
     # focusing by Tab or by choosing Custom selects the number, so typing replaces it
     # (the desktop convention); a click then puts the caret where it landed instead
@@ -448,14 +515,15 @@ def commit_field(state):
     state.focus = None
     text = state.edit_text.strip()
     state.edit_text = ""
+    _unit, abbr, unit_mm = state.paper()
     try:
-        value = float(text)
+        value = float(text) * unit_mm          # typed in the paper unit, kept in mm
     except ValueError:
         state.message = f"{ROW_LABELS[rid].strip()}: {text!r} is not a number"
         return False
     if not (0 < value <= MAX_CUSTOM_MM):
         state.message = (f"{ROW_LABELS[rid].strip()}: must be more than 0 and at most "
-                         f"{MAX_CUSTOM_MM:g} mm")
+                         f"{state._typed(MAX_CUSTOM_MM)} {abbr}")
         return False
     changed = value != getattr(state, rid)
     setattr(state, rid, value)

@@ -35,6 +35,12 @@ except ImportError:  # the module is absent -> no aliases, which is honest
 # parse) raises ValueError from alias_table and must stay LOUD -- swallowing it
 # would disable all aliases invisibly.
 
+#: Commands that never become the Enter/Space/right-click repeat target. MEASURED
+#: (options/general): the reference application has a "Never repeat these commands"
+#: list; its default contents are not documented. OURS: the user asked that Undo, Redo
+#: and Delete never be repeated by a right-click.
+NEVER_REPEAT = frozenset({"undo", "redo", "delete"})
+
 
 class AppState:
     def __init__(self):
@@ -274,7 +280,8 @@ class AppState:
         if opener is not None and not (rest or "").strip():
             try:
                 if opener():
-                    self.last_command = name
+                    if key not in NEVER_REPEAT:
+                        self.last_command = name
                     return None
             except Exception as e:  # noqa: BLE001
                 self.log(f"{name}: the window could not open ({e!r}); using the "
@@ -294,8 +301,10 @@ class AppState:
 
         cmd = copy.deepcopy(cmd_cls)
         self.active_command = cmd
-        # remembered for Enter/Space repeat; store the canonical key
-        self.last_command = key
+        # remembered for Enter/Space/right-click repeat; store the canonical key. A
+        # never-repeat command keeps the PREVIOUS command as the repeat target.
+        if key not in NEVER_REPEAT:
+            self.last_command = key
         self.input_buffer = ""
         self.log(f"{cmd.name}: {cmd.description}")
 

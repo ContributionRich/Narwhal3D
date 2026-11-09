@@ -192,6 +192,34 @@ check(ctx.names() == ["Boolean_1"],
 check(ctx.change_calls == 1 and ctx.undo.undo_names() == ["BooleanDifference"],
       "BooleanDifference deletion is one undo record")
 
+
+print("-- report #132: several targets, one cutter --")
+# Two separate boxes and one bar crossing both. Each target gets its OWN result (A - C,
+# B - C). The old fold-left subtracted the second target from the first.
+cutter = bridge.make_box((-1, 0.5, 0.5), (8, 1.5, 0), 1.0)
+_, ctx, result = run(commands.BooleanDifferenceCmd,
+                     [("a", box(0, 2)), ("b", box(4, 6)), ("c", cutter)],
+                     [["a", "b"], ["c"]], {"DeleteInput": True}, recorded=True)
+check(set(ctx.names()) == {"c", "Boolean_1", "Boolean_2"} and len(ctx.added) == 2,
+      f"two targets give two results and keep the cutter ({ctx.names()}, {result})")
+volumes = sorted(round(occt.volume(kernel.master_of(g)), 9) for g in ctx.added)
+check(volumes == [6.0, 6.0] and all(analytic_solid(g) for g in ctx.added),
+      f"each result is its own box minus the bar, exact and airtight ({volumes})")
+check(ctx.change_calls == 1 and ctx.undo.undo_names() == ["BooleanDifference"]
+      and ctx.undo_last() == "BooleanDifference" and set(ctx.names()) == {"a", "b", "c"},
+      "the whole multi-target difference is one undo record")
+_, ctx, result = run(commands.BooleanDifferenceCmd,
+                     [("a", box(0, 2)), ("b", box(4, 6)), ("c", cutter)],
+                     [["a", "b"], ["c"]], {"DeleteInput": False}, recorded=True)
+check(set(ctx.names()) == {"a", "b", "c", "Boolean_1", "Boolean_2"},
+      "DeleteInput=No keeps both targets and the cutter")
+_, ctx, result = run(commands.BooleanDifferenceCmd,
+                     [("a", box(0, 2)), ("b", box(4, 6)), ("c", cutter)],
+                     [["a", "b"], ["c"]], {"DeleteInput": True, "DeleteCutters": True},
+                     recorded=True)
+check(set(ctx.names()) == {"Boolean_1", "Boolean_2"},
+      "DeleteCutters=Yes deletes both targets and the cutter")
+
 print()
 if failures:
     print(f"{checks - len(failures)}/{checks} checks passed")

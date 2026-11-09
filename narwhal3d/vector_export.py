@@ -344,18 +344,19 @@ def write_ai(path, strokes, page_w_mm, page_h_mm, title="") -> int:
 # SVG
 # ---------------------------------------------------------------------------
 
-def _svg_path(stroke, page_h_mm) -> str:
+def _svg_path(stroke, page_h_mm, num=_f4_svg) -> str:
     """Build an SVG path ``d`` for one stroke.
 
     SVG's y axis points DOWN, so we flip: ``y_svg = H - y``. A point at
-    ``y = 0`` mm therefore lands at ``y = H``.
+    ``y = 0`` mm therefore lands at ``y = H``. `num` formats a millimetre value
+    (into the file's unit).
     """
     if not stroke.beziers:
         return ""
     H = page_h_mm
 
     def xy(p):
-        return _f4_svg(p[0]) + " " + _f4_svg(H - p[1])
+        return num(p[0]) + " " + num(H - p[1])
 
     x0, y0 = stroke.beziers[0][0]
     parts = ["M " + xy((x0, y0))]
@@ -367,23 +368,28 @@ def _svg_path(stroke, page_h_mm) -> str:
     return " ".join(parts)
 
 
-def _svg_path_element(s, page_h_mm) -> str:
+def _svg_path_element(s, page_h_mm, num=_f4_svg) -> str:
     """One ``<path .../>`` line for *s* (two-space indent, as before)."""
     r, g, b = s.rgb
-    d = _svg_path(s, page_h_mm)
+    d = _svg_path(s, page_h_mm, num)
     return (
         '  <path d="%s" stroke="rgb(%d,%d,%d)" '
         'stroke-width="%s" fill="none"/>\n'
         % (d, int(round(r * 255)), int(round(g * 255)), int(round(b * 255)),
-           _f4_svg(s.width_mm))
+           num(s.width_mm))
     )
 
 
-def write_svg(path, strokes, page_w_mm, page_h_mm) -> int:
+def write_svg(path, strokes, page_w_mm, page_h_mm, unit=None) -> int:
     """Write *strokes* to *path* as an SVG document.
 
     Width/height and viewBox are in millimetres; y is flipped (``H - y``).
     Returns the number of bytes written.
+
+    `unit` = ``(css_abbreviation, mm_per_unit, decimals)`` writes every length in
+    that unit and DECLARES it on width/height (``width="11.000000in"``), so the
+    page has its physical size in any viewer. Without it (the legacy form) width and
+    height carry no unit, which SVG reads as CSS px (1/96 in), not millimetres.
 
     When any stroke has a non-empty ``layer``, each distinct layer
     becomes ``<g id="layer-N" inkscape:groupmode="layer" inkscape:label="name">``
@@ -393,6 +399,18 @@ def write_svg(path, strokes, page_w_mm, page_h_mm) -> int:
     """
     strokes = list(strokes)
     native = _native_pdf_module()
+    if unit is not None:
+        # the Rust one-pass encoder writes the same bytes past the measured crossover
+        if native is not None and getattr(native, "_svg_unit_native_active", None) \
+                is not None and native._svg_unit_native_active(strokes):
+            result = native._native_svg_unit_encode_into(
+                strokes, page_w_mm, page_h_mm, *unit)
+            if result is not None:
+                data, written = result
+                with open(path, "wb") as fh:
+                    fh.write(memoryview(data)[:written])
+                return written
+        return _write_svg_in_unit(path, strokes, page_w_mm, page_h_mm, *unit)
     if native is not None and getattr(native, "_native_svg_encode_into", None) \
             is not None and native._svg_vector_native_active(strokes):
         result = native._native_svg_encode_into(strokes, page_w_mm, page_h_mm)
@@ -437,6 +455,38 @@ def write_svg(path, strokes, page_w_mm, page_h_mm) -> int:
         )
         for s in strokes:
             out.append(_svg_path_element(s, H))
+    out.append("</svg>\n")
+    data = "".join(out).encode("utf-8")
+    with open(path, "wb") as fh:
+        fh.write(data)
+    return len(data)
+
+
+def _write_svg_in_unit(path, strokes, page_w_mm, page_h_mm, abbr, unit_mm, digits):
+    """`write_svg` with every length in `abbr` (`unit_mm` mm each), declared on
+    width/height. The complete fallback for, and byte-identical to, Rust
+    ``narwhal_pure_core_svg_encode_unit_into``."""
+    fmt = "%." + str(int(digits)) + "f"
+
+    def num(mm):
+        return fmt % (mm / unit_mm)
+
+    W, H = page_w_mm, page_h_mm
+    layers = []
+    for s in strokes:
+        if s.layer and s.layer not in layers:
+            layers.append(s.layer)
+    ns = ('xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape" '
+          if layers else "")
+    out = ['<?xml version="1.0" encoding="UTF-8"?>\n',
+           '<svg xmlns="http://www.w3.org/2000/svg" %swidth="%s%s" height="%s%s" '
+           'viewBox="0 0 %s %s">\n' % (ns, num(W), abbr, num(H), abbr, num(W), num(H))]
+    for i, name in enumerate(layers):
+        out.append('  <g id="layer-%d" inkscape:groupmode="layer" '
+                   'inkscape:label="%s">\n' % (i, _xml_escape(name)))
+        out.extend(_svg_path_element(s, H, num) for s in strokes if s.layer == name)
+        out.append('  </g>\n')
+    out.extend(_svg_path_element(s, H, num) for s in strokes if not s.layer)
     out.append("</svg>\n")
     data = "".join(out).encode("utf-8")
     with open(path, "wb") as fh:

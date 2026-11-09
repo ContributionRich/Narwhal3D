@@ -3488,6 +3488,7 @@ def _reset_for_tests() -> None:
     global _stlm_signature, _stlm_binding
     global _pdfp_signature, _pdfp_binding, _native_pdf_calls
     global _svgvp_signature, _svgvp_binding, _native_svg_vector_calls
+    global _svgup_signature, _svgup_binding, _native_svg_unit_calls
     global _gs_signature, _gs_binding, _native_gridsnap_calls
     global _gs3_signature, _gs3_binding, _native_gridsnap3_calls
     with _lock:
@@ -3503,6 +3504,9 @@ def _reset_for_tests() -> None:
         _native_decode_dxf_calls = 0
         _native_pdf_calls = 0
         _native_svg_vector_calls = 0
+        _native_svg_unit_calls = 0
+        _svgup_signature = None
+        _svgup_binding = None
         _gs_signature = None
         _gs_binding = None
         _native_gridsnap_calls = 0
@@ -3571,6 +3575,9 @@ _pdfp_signature: str | None = None
 _pdfp_binding: Any = None  # narwhal_pure_core_pdf_encode_into or None
 _svgvp_signature: str | None = None
 _svgvp_binding: Any = None  # narwhal_pure_core_svg_encode_into or None
+_svgup_signature: str | None = None
+_svgup_binding: Any = None  # narwhal_pure_core_svg_encode_unit_into or None
+_native_svg_unit_calls = 0
 
 # Q117-07 crossover: the one-pass native route is active only for inputs at or
 # above this many strokes; below it the unchanged Python writer stays active so
@@ -3689,6 +3696,50 @@ def _svg_encode_into_binding():
                 continue
             _svgvp_binding = enc_into
             return _svgvp_binding
+        return None
+
+
+def _svg_unit_encode_into_binding():
+    """Return the optional unit-aware one-pass SVG encoder
+    (``narwhal_pure_core_svg_encode_unit_into``, additive to ABI 1), or ``None``
+    -- a library built before it keeps the unit SVG on the Python writer."""
+    global _svgup_signature, _svgup_binding
+    explicit = os.environ.get(_ENV_PATH)
+    signature = explicit or "<packaged>"
+    if _svgup_signature == signature:
+        return _svgup_binding
+    with _lock:
+        if _svgup_signature == signature:
+            return _svgup_binding
+        _svgup_signature = signature
+        _svgup_binding = None
+        candidates = ((Path(explicit).expanduser(),) if explicit
+                      else (_PACKAGED_LIBRARY,))
+        for path in candidates:
+            if not path.is_file():
+                continue
+            try:
+                library = ctypes.CDLL(str(path))
+                version = library.narwhal_pure_core_abi_version
+                version.argtypes = []
+                version.restype = ctypes.c_uint32
+                if version() != _ABI_VERSION:
+                    continue
+                enc_into = library.narwhal_pure_core_svg_encode_unit_into
+                _i64p = ctypes.POINTER(ctypes.c_int64)
+                _i32p = ctypes.POINTER(ctypes.c_int32)
+                enc_into.argtypes = [
+                    _DoubleP, ctypes.c_int64, _i64p, _i32p,
+                    _DoubleP, _DoubleP, _ByteP, _i64p,
+                    ctypes.c_double, ctypes.c_double, ctypes.c_int64,
+                    _ByteP, ctypes.c_int64, ctypes.c_double, ctypes.c_int32,
+                    _ByteP, ctypes.c_size_t, _i64p,
+                ]
+                enc_into.restype = ctypes.c_int32
+            except (AttributeError, OSError):
+                continue
+            _svgup_binding = enc_into
+            return _svgup_binding
         return None
 
 
@@ -3968,6 +4019,83 @@ def _svg_vector_native_active(strokes):
 
 def encode_svg(strokes, page_w_mm, page_h_mm) -> Optional[bytes]:
     result = _native_svg_encode_into(strokes, page_w_mm, page_h_mm)
+    if result is None:
+        return None
+    out, written = result
+    return bytes(memoryview(out)[:written])
+
+
+def _svg_unit_capacity_bound(stroke_count, total_segments, layer_concat_len, digits):
+    """Mirror of Rust ``svg_capacity_bound_in``: 28 + digits bytes per float."""
+    return (2048 + 256 * stroke_count + (8 * (28 + digits) + 32) * total_segments
+            + 6 * layer_concat_len)
+
+
+def _native_svg_unit_encode_into(strokes, page_w_mm, page_h_mm, suffix, unit_mm, digits):
+    """Unit-aware one-pass native SVG bytes in caller-owned storage, or ``None``.
+
+    Byte-for-byte ``vector_export.write_svg(unit=(suffix, unit_mm, digits))``."""
+    global _native_svg_unit_calls
+    enc_into = _svg_unit_encode_into_binding()
+    if enc_into is None:
+        return None
+    try:
+        unit = str(suffix).encode("ascii")
+        digits = int(digits)
+        unit_mm = float(unit_mm)
+    except (UnicodeEncodeError, TypeError, ValueError):
+        return None
+    packed = _pack_pdf(strokes, page_w_mm, page_h_mm, "",
+                       _layer_encoding="utf-8")
+    if packed is None:
+        return None
+    (bez_view, seg_view, closed_view, rgb_view, widths_view,
+     layer_view, layer_lens_view) = packed["views"]
+    _raw = packed["raw"]
+    total_segments = packed["total_segments"]
+    stroke_count = packed["stroke_count"]
+    derived = _svg_unit_capacity_bound(
+        stroke_count, total_segments, packed["layer_concat_len"], max(digits, 0))
+    if derived > _MAX_NATIVE_OUTPUT_BYTES or derived > sys.maxsize:
+        return None
+    unit_buf = (ctypes.c_ubyte * max(len(unit), 1)).from_buffer_copy(unit or b"\0")
+    out = bytearray(derived)
+    out_view = (ctypes.c_ubyte * derived).from_buffer(out)
+    written = ctypes.c_int64(0)
+    try:
+        rc = enc_into(
+            bez_view, total_segments, seg_view, closed_view,
+            rgb_view, widths_view, layer_view, layer_lens_view,
+            page_w_mm, page_h_mm, stroke_count,
+            unit_buf, len(unit), unit_mm, digits,
+            out_view, derived, ctypes.byref(written),
+        )
+    except Exception:  # noqa: BLE001 -- preserve the Python fallback
+        return None
+    w = written.value
+    if rc != 0 or not isinstance(w, int) or not (0 <= w <= derived):
+        return None
+    try:
+        memoryview(out)[:w].tobytes().decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+    _native_svg_unit_calls += 1
+    return out, w
+
+
+def _svg_unit_native_active(strokes):
+    """The unit SVG route uses the same measured crossover as the legacy SVG."""
+    if _svg_unit_encode_into_binding() is None:
+        return False
+    try:
+        return len(strokes) >= _SVG_VECTOR_NATIVE_MIN_STROKES
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def encode_svg_unit(strokes, page_w_mm, page_h_mm, suffix, unit_mm, digits) -> Optional[bytes]:
+    result = _native_svg_unit_encode_into(strokes, page_w_mm, page_h_mm,
+                                          suffix, unit_mm, digits)
     if result is None:
         return None
     out, written = result

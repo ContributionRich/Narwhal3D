@@ -167,13 +167,20 @@ class PrintCmd(commands.Command):
             print2d.write(path, page, title)
         except ValueError as e:
             return f"Print: {e}", True
+        unit, abbr, unit_mm = print2d.paper_unit(page.unit)
+        w = print2d.show_length(page.width_mm, unit)
+        h = print2d.show_length(page.height_mm, unit)
         msg = (f"Printed {len(page.strokes)} curve(s) to {path} -- {setup.size} "
-               f"{setup.orientation}, {setup.area}, {_describe_scale(scale)}"
-               + (f" (= {page.scale:g} mm per unit)" if scale == "Fit" else ""))
+               f"{setup.orientation} ({w} x {h} {abbr}), {setup.area}, "
+               f"{_describe_scale(scale)}"
+               + (f" (= {page.scale / unit_mm:g} {abbr} on paper per model unit)"
+                  if scale == "Fit" else ""))
         if ext == ".cdr":
             msg += ", native CorelDRAW v15 (2015/X7 compatible)"
         elif ext == ".dxf":
-            msg += ", exact degree-3 DXF SPLINE output in millimetres"
+            msg += f", exact degree-3 DXF SPLINE output in {unit.lower()}"
+        elif ext == ".svg":
+            msg += f", SVG in {unit.lower()}"
         if page.notes:
             msg += ". NOTE: " + "; ".join(page.notes)
         return msg, True

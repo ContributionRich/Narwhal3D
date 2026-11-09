@@ -113,6 +113,52 @@ class IdentityTests(unittest.TestCase):
                 self.assertEqual(len(candidate._native_master_bindings), 1)
                 self.assertEqual(encoded(candidate._native_master_bindings[0][1]), decoded)
 
+    def test_open_replays_only_recipes_the_worker_proved_identical(self):
+        # MEASURED: a 33-object project's Open replayed 13.7 s of construction history in
+        # the app and discarded every result, because the worker had already shown those
+        # replays differ from the stored masters. The worker now lists the identical ones
+        # and the app replays only those; the masters it binds are unchanged either way.
+        self.assertEqual(doc.RECIPE_IDENTITY_FILE, worker.RECIPE_IDENTITY_FILE)
+        identical = bridge.make_cylinder((0, 0, 0), 2, 4)
+        kernel.register_master(identical, ob.from_recipe(kernel.recipe_of(identical)))
+        identical.SetUserString(kernel.DOCUMENT_FORM_KEY, 'exact')
+        model = NarwhalModel()
+        object_id, _ = model.add_object(identical, 'Identical', 0)
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / 'hint.narwhal'
+            self.assertTrue(doc.save_model(model, target))
+            payload = payloads(target, Path(directory) / 'payload')
+            hints = []
+            real_hint = doc._recipe_identity_hint
+            def observed(validated):
+                value = real_hint(validated)
+                hints.append(value)
+                return value
+            replays = []
+            original = ob.from_recipe
+            def counted(item, _depth=0):
+                if _depth == 0:
+                    replays.append(item.get('kind'))
+                return original(item, _depth)
+            with patch.object(doc, '_recipe_identity_hint', side_effect=observed), \
+                    patch.object(ob, 'from_recipe', side_effect=counted):
+                candidate = doc.load_model(target)
+            self.assertEqual(hints, [frozenset({object_id})])
+            self.assertEqual(replays, ['cylinder'])
+            # Not proven identical: no replay at all, and the bound master is still the
+            # worker-validated exact geometry.
+            for hint in (frozenset(), None):
+                replays.clear()
+                with patch.object(doc, '_recipe_identity_hint', return_value=hint), \
+                        patch.object(ob, 'from_recipe', side_effect=counted):
+                    candidate = doc.load_model(target)
+                self.assertEqual(replays, [] if hint is not None else ['cylinder'])
+                (data,) = payload.values()
+                expected = data if hint is None else encoded(
+                    ob.shape_from_bytes(data, 'TopoDS_Solid'))
+                self.assertEqual([encoded(shape) for _g, shape in candidate._native_master_bindings],
+                                 [expected])
+
     def test_full_data_and_declared_format_not_digest(self):
         shape = ob.make_box(2, 3, 4)
         current = ob.document_current_binary_format()

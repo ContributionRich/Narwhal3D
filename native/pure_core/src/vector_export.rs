@@ -181,11 +181,37 @@ struct PdfInput<'a> {
     stroke_count: usize,
 }
 
-/// An SVG mm value printed with 4 decimals (SVG coordinates are already in mm,
-/// no pt conversion). Matches Python `f"{mm:.4f}"` (both use round-half-to-even
-/// on the IEEE-754 double, so the decimal expansion is identical).
-fn f4_svg(val: f64) -> String {
-    format!("{:.4}", val)
+/// The unit an SVG document's lengths are written in. Mirrors the Python
+/// `vector_export.write_svg(unit=(suffix, mm_per_unit, digits))`: every length
+/// (width/height, viewBox, coordinates, stroke width) is `mm / mm_per_unit`
+/// printed with `digits` decimals, and `suffix` is declared on width/height.
+/// The legacy document is `SVG_LEGACY` -- no suffix, millimetres, 4 decimals --
+/// and dividing by exactly 1.0 leaves every value bit-identical.
+#[derive(Clone, Copy)]
+struct SvgUnit<'a> {
+    suffix: &'a str,
+    mm_per_unit: f64,
+    digits: usize,
+}
+
+const SVG_LEGACY: SvgUnit<'static> = SvgUnit {
+    suffix: "",
+    mm_per_unit: 1.0,
+    digits: 4,
+};
+
+/// Longest accepted unit suffix (CSS absolute units are two letters).
+const SVG_UNIT_MAX_LEN: usize = 4;
+/// Most decimals accepted for a unit (the Python writer uses at most 6).
+const SVG_UNIT_MAX_DIGITS: i32 = 12;
+
+impl SvgUnit<'_> {
+    /// A millimetre value in this unit with `digits` decimals. Matches Python
+    /// `"%.Nf" % (mm / k)`: the same IEEE-754 division, and both formatters
+    /// print the exact decimal expansion rounded half-to-even.
+    fn num(&self, mm: f64) -> String {
+        format!("{:.*}", self.digits, mm / self.mm_per_unit)
+    }
 }
 
 /// Escape a value for use inside an XML attribute value. Mirrors
@@ -227,12 +253,13 @@ fn svg_path(
     seg_count: usize,
     closed: bool,
     page_h_mm: f64,
+    unit: &SvgUnit,
 ) -> String {
     if seg_count == 0 {
         return String::new();
     }
     let h = page_h_mm;
-    let xy = |x: f64, y: f64| format!("{} {}", f4_svg(x), f4_svg(h - y));
+    let xy = |x: f64, y: f64| format!("{} {}", unit.num(x), unit.num(h - y));
     let x0 = beziers[seg_base * 8];
     let y0 = beziers[seg_base * 8 + 1];
     let mut parts = Vec::with_capacity(seg_count + 2);
@@ -263,6 +290,7 @@ fn svg_path(
 
 /// One `<path .../>` line for a stroke (two-space indent). Mirrors
 /// `vector_export._svg_path_element` byte-for-byte.
+#[allow(clippy::too_many_arguments)]
 fn svg_path_element(
     beziers: &[f64],
     seg_base: usize,
@@ -271,15 +299,16 @@ fn svg_path_element(
     rgb: &[f64],
     width_mm: f64,
     page_h_mm: f64,
+    unit: &SvgUnit,
 ) -> String {
-    let d = svg_path(beziers, seg_base, seg_count, closed, page_h_mm);
+    let d = svg_path(beziers, seg_base, seg_count, closed, page_h_mm, unit);
     format!(
         "  <path d=\"{}\" stroke=\"rgb({},{},{})\" stroke-width=\"{}\" fill=\"none\"/>\n",
         d,
         rgb_255(rgb[0]),
         rgb_255(rgb[1]),
         rgb_255(rgb[2]),
-        f4_svg(width_mm),
+        unit.num(width_mm),
     )
 }
 
@@ -290,7 +319,13 @@ fn svg_path_element(
 /// tracked as a running offset (the same pattern `build_content` uses) so
 /// each stroke's per-segment control points are read from the correct slice
 /// of the flat `beziers` array.
+#[cfg(test)]
 fn build_svg(input: &PdfInput) -> Vec<u8> {
+    build_svg_in(input, &SVG_LEGACY)
+}
+
+/// `build_svg` with every length in `unit` (Python `write_svg(unit=...)`).
+fn build_svg_in(input: &PdfInput, unit: &SvgUnit) -> Vec<u8> {
     let page_h_mm = input.page_h_mm;
     let page_w_mm = input.page_w_mm;
     let stroke_count = input.stroke_count;
@@ -311,8 +346,9 @@ fn build_svg(input: &PdfInput) -> Vec<u8> {
     out.push_str("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
     if n_layers > 0 {
         out.push_str(&format!(
-            "<svg xmlns=\"http://www.w3.org/2000/svg\" xmlns:inkscape=\"http://www.inkscape.org/namespaces/inkscape\" width=\"{}\" height=\"{}\" viewBox=\"0 0 {} {}\">\n",
-            f4_svg(page_w_mm), f4_svg(page_h_mm), f4_svg(page_w_mm), f4_svg(page_h_mm),
+            "<svg xmlns=\"http://www.w3.org/2000/svg\" xmlns:inkscape=\"http://www.inkscape.org/namespaces/inkscape\" width=\"{}{}\" height=\"{}{}\" viewBox=\"0 0 {} {}\">\n",
+            unit.num(page_w_mm), unit.suffix, unit.num(page_h_mm), unit.suffix,
+            unit.num(page_w_mm), unit.num(page_h_mm),
         ));
         for (i, name) in layer_names.iter().enumerate() {
             let name_escaped = xml_escape(name);
@@ -332,6 +368,7 @@ fn build_svg(input: &PdfInput) -> Vec<u8> {
                         &input.rgb[s * 3..s * 3 + 3],
                         input.widths[s],
                         page_h_mm,
+                        unit,
                     ));
                 }
             }
@@ -349,13 +386,15 @@ fn build_svg(input: &PdfInput) -> Vec<u8> {
                     &input.rgb[s * 3..s * 3 + 3],
                     input.widths[s],
                     page_h_mm,
+                    unit,
                 ));
             }
         }
     } else {
         out.push_str(&format!(
-            "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{}\" height=\"{}\" viewBox=\"0 0 {} {}\">\n",
-            f4_svg(page_w_mm), f4_svg(page_h_mm), f4_svg(page_w_mm), f4_svg(page_h_mm),
+            "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{}{}\" height=\"{}{}\" viewBox=\"0 0 {} {}\">\n",
+            unit.num(page_w_mm), unit.suffix, unit.num(page_h_mm), unit.suffix,
+            unit.num(page_w_mm), unit.num(page_h_mm),
         ));
         for (s, &seg_base) in seg_bases.iter().enumerate() {
             let seg_count = input.seg_counts[s] as usize;
@@ -367,6 +406,7 @@ fn build_svg(input: &PdfInput) -> Vec<u8> {
                 &input.rgb[s * 3..s * 3 + 3],
                 input.widths[s],
                 page_h_mm,
+                unit,
             ));
         }
     }
@@ -379,15 +419,22 @@ fn build_svg(input: &PdfInput) -> Vec<u8> {
 /// at most six (`&quot;`). Thirty-two bytes safely bounds fixed-4 formatting for
 /// the practical coordinate range; if an extreme value exceeds the bound, the
 /// export returns ERR_SIZE and Python remains the complete fallback.
+#[cfg(test)]
 fn svg_capacity_bound(input: &PdfInput) -> usize {
-    const FLOAT_MAX: usize = 32;
+    svg_capacity_bound_in(input, SVG_LEGACY.digits)
+}
+
+/// `svg_capacity_bound` for `digits` decimals: 28 + digits bytes per float (32
+/// at the legacy 4 decimals). Mirrored by `native_pure._svg_unit_capacity_bound`.
+fn svg_capacity_bound_in(input: &PdfInput, digits: usize) -> usize {
+    let float_max: usize = 28 + digits;
     let total_seg = input
         .seg_counts
         .iter()
         .fold(0usize, |a, n| a.saturating_add(*n as usize));
     2048usize
         .saturating_add(input.stroke_count.saturating_mul(256))
-        .saturating_add(total_seg.saturating_mul(8 * FLOAT_MAX + 32))
+        .saturating_add(total_seg.saturating_mul(8 * float_max + 32))
         .saturating_add(input.layer_concat.len().saturating_mul(6))
 }
 
@@ -750,9 +797,6 @@ pub unsafe extern "C" fn narwhal_pure_core_svg_encode_into(
     out_capacity: usize,
     out_written: *mut i64,
 ) -> i32 {
-    if out_written.is_null() {
-        return ERR_NULL;
-    }
     let raw = RawInput {
         beziers,
         total_segments,
@@ -768,18 +812,113 @@ pub unsafe extern "C" fn narwhal_pure_core_svg_encode_into(
         page_h_mm,
         stroke_count,
     };
-    let input = match prepare(&raw) {
+    unsafe { svg_encode(&raw, &SVG_LEGACY, out, out_capacity, out_written) }
+}
+
+/// One-pass SVG encode with every length in a paper UNIT (additive export; the
+/// legacy `narwhal_pure_core_svg_encode_into` and ABI 1 are unchanged). Mirrors
+/// Python `vector_export.write_svg(unit=(suffix, mm_per_unit, digits))` byte for
+/// byte: `suffix` (at most 4 ASCII lowercase letters, e.g. `in`) is declared on
+/// width/height, and width/height, viewBox, coordinates and stroke widths are
+/// `mm / mm_per_unit` with `digits` (0..=12) decimals. A non-finite or
+/// non-positive `mm_per_unit`, or an invalid suffix or digit count, is
+/// `ERR_INPUT`; `*out_written` is published only on complete success.
+///
+/// # Safety
+///
+/// As `narwhal_pure_core_svg_encode_into`; `unit` is readable for `unit_len`
+/// bytes (null allowed only when `unit_len` is 0).
+#[allow(clippy::too_many_arguments)]
+#[no_mangle]
+pub unsafe extern "C" fn narwhal_pure_core_svg_encode_unit_into(
+    beziers: *const f64,
+    total_segments: i64,
+    seg_counts: *const i64,
+    closed: *const i32,
+    rgb: *const f64,
+    widths: *const f64,
+    layer_concat: *const u8,
+    layer_lens: *const i64,
+    page_w_mm: f64,
+    page_h_mm: f64,
+    stroke_count: i64,
+    unit: *const u8,
+    unit_len: i64,
+    mm_per_unit: f64,
+    digits: i32,
+    out: *mut u8,
+    out_capacity: usize,
+    out_written: *mut i64,
+) -> i32 {
+    if !(0..=SVG_UNIT_MAX_LEN as i64).contains(&unit_len)
+        || !(0..=SVG_UNIT_MAX_DIGITS).contains(&digits)
+        || !mm_per_unit.is_finite()
+        || mm_per_unit <= 0.0
+    {
+        return ERR_INPUT;
+    }
+    let suffix = match unsafe { crate::checked_slice(unit, unit_len as usize) } {
+        Some(s) => s,
+        None => return ERR_NULL,
+    };
+    if !suffix.iter().all(u8::is_ascii_lowercase) {
+        return ERR_INPUT;
+    }
+    let suffix = match std::str::from_utf8(suffix) {
+        Ok(s) => s,
+        Err(_) => return ERR_INPUT,
+    };
+    let raw = RawInput {
+        beziers,
+        total_segments,
+        seg_counts,
+        closed,
+        rgb,
+        widths,
+        layer_concat,
+        layer_lens,
+        title: std::ptr::null(),
+        title_len: 0,
+        page_w_mm,
+        page_h_mm,
+        stroke_count,
+    };
+    let unit = SvgUnit {
+        suffix,
+        mm_per_unit,
+        digits: digits as usize,
+    };
+    unsafe { svg_encode(&raw, &unit, out, out_capacity, out_written) }
+}
+
+/// The shared body of both SVG exports: validate, bound, serialize once, copy.
+///
+/// # Safety
+///
+/// `raw` satisfies the crate slice invariants, `out` is writable for
+/// `out_capacity` bytes, and `out_written` is null or a valid `i64` slot.
+unsafe fn svg_encode(
+    raw: &RawInput,
+    unit: &SvgUnit,
+    out: *mut u8,
+    out_capacity: usize,
+    out_written: *mut i64,
+) -> i32 {
+    if out_written.is_null() {
+        return ERR_NULL;
+    }
+    let input = match prepare(raw) {
         Ok(input) => input,
         Err(code) => return code,
     };
     if std::str::from_utf8(input.layer_concat).is_err() {
         return ERR_INPUT;
     }
-    let bound = svg_capacity_bound(&input);
+    let bound = svg_capacity_bound_in(&input, unit.digits);
     if out_capacity < bound {
         return ERR_SIZE;
     }
-    let bytes = build_svg(&input);
+    let bytes = build_svg_in(&input, unit);
     if bytes.len() > out_capacity {
         return ERR_SIZE;
     }
@@ -1228,5 +1367,101 @@ mod tests {
         };
         assert_eq!(rc, 0);
         assert_eq!(&buf[..written as usize], build_svg(&inp));
+    }
+
+    const INCH: SvgUnit<'static> = SvgUnit {
+        suffix: "in",
+        mm_per_unit: 25.4,
+        digits: 6,
+    };
+
+    #[test]
+    fn svg_in_inches_declares_the_unit_and_converts_every_length() {
+        let strokes = vec![StrokeSpec {
+            segs: vec![[0., 0., 25.4, 50.8, 50.8, 50.8, 76.2, 0.]],
+            closed: false,
+            rgb: [0.0, 0.0, 0.0],
+            width_mm: 0.254,
+            layer: "",
+        }];
+        let got = build_svg_in(&input(&strokes, b"", 279.4, 215.9), &INCH);
+        let text = std::str::from_utf8(&got).unwrap();
+        assert!(
+            text.contains(
+                "width=\"11.000000in\" height=\"8.500000in\" viewBox=\"0 0 11.000000 8.500000\""
+            ),
+            "{text}"
+        );
+        assert!(
+            text.contains(
+                "d=\"M 0.000000 8.500000 C 1.000000 6.500000 2.000000 6.500000 3.000000 8.500000\""
+            ),
+            "{text}"
+        );
+        assert!(text.contains("stroke-width=\"0.010000\""), "{text}");
+        // the legacy unit is the old document, byte for byte
+        let inp = input(&ref_strokes(), b"", 210.0, 297.0);
+        assert_eq!(build_svg_in(&inp, &SVG_LEGACY), build_svg(&inp));
+    }
+
+    fn encode_unit(
+        inp: &PdfInput,
+        unit: &[u8],
+        mm: f64,
+        digits: i32,
+        buf: &mut [u8],
+    ) -> (i32, i64) {
+        let mut written = -1i64;
+        let rc = unsafe {
+            narwhal_pure_core_svg_encode_unit_into(
+                inp.beziers.as_ptr(),
+                inp.seg_counts.iter().sum(),
+                inp.seg_counts.as_ptr(),
+                inp.closed.as_ptr(),
+                inp.rgb.as_ptr(),
+                inp.widths.as_ptr(),
+                inp.layer_concat.as_ptr(),
+                inp.layer_lens.as_ptr(),
+                inp.page_w_mm,
+                inp.page_h_mm,
+                inp.stroke_count as i64,
+                unit.as_ptr(),
+                unit.len() as i64,
+                mm,
+                digits,
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut written,
+            )
+        };
+        (rc, written)
+    }
+
+    #[test]
+    fn svg_encode_unit_into_publishes_or_refuses_without_writing() {
+        let strokes = ref_strokes();
+        let inp = input(&strokes, b"", 279.4, 215.9);
+        let mut buf = vec![0u8; svg_capacity_bound_in(&inp, 6)];
+        let (rc, written) = encode_unit(&inp, b"in", 25.4, 6, &mut buf);
+        assert_eq!(rc, 0);
+        assert_eq!(&buf[..written as usize], build_svg_in(&inp, &INCH));
+        for (unit, mm, digits) in [
+            (&b"IN"[..], 25.4, 6),
+            (&b"in\""[..], 25.4, 6),
+            (&b"inchs"[..], 25.4, 6),
+            (&b"in"[..], 0.0, 6),
+            (&b"in"[..], f64::NAN, 6),
+            (&b"in"[..], f64::INFINITY, 6),
+            (&b"in"[..], 25.4, 13),
+            (&b"in"[..], 25.4, -1),
+        ] {
+            let (rc, written) = encode_unit(&inp, unit, mm, digits, &mut buf);
+            assert_eq!((rc, written), (ERR_INPUT, -1), "{unit:?} {mm} {digits}");
+        }
+        let mut small = vec![0u8; 16];
+        assert_eq!(
+            encode_unit(&inp, b"in", 25.4, 6, &mut small),
+            (ERR_SIZE, -1)
+        );
     }
 }

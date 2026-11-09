@@ -21,13 +21,15 @@ Formats, and how exact each is:
   (this mesh is an output, never the document geometry). Model units; STL/OBJ carry none.
 * **.dxf** -- the curves: lines, circles and arcs EXACT as LINE / CIRCLE / ARC,
   polylines as POLYLINE; anything else as a POLYLINE within the tolerance, and the
-  message NAMES it approximate. Written in millimetres (the writer's `$INSUNITS` = 4),
-  so an inch model is scaled by 25.4 rather than mislabelled.
+  message NAMES it approximate. Written in the MODEL's units, which the header declares
+  (`$INSUNITS` 1 for inches, 4 for millimetres...) -- MEASURED, the reference application does the same
+  (fileio/autocad_dwg_dxf_import_export.htm). Nothing is rescaled.
 * **.cdr / .ai / .pdf / .svg** -- a 2-D snapshot of
   the ACTIVE parallel viewport at 1:1 on a page the size of the drawing, through the
   same pipeline as Print (`print2d`; exact for polynomial curves, <= 0.001 mm for
   circles; silhouettes and perspective refused by name). A perspective viewport cannot
-  preserve drawing scale and units.
+  preserve drawing scale and units. SVG and the page-size message use the document's
+  paper unit (`print2d.paper_unit`); PDF/AI/CDR are physical sizes (points, CDR units).
 
 Not built: the per-format options dialogs, .dwg, IGES; DXF of surfaces and solids.
 """
@@ -225,7 +227,7 @@ def _approx_points(curve, tol, t0, t1, depth=0):
 
 
 def _dxf_entities(curve, tol, k):
-    """``(entities, exact)`` for one curve, coordinates scaled by `k` (to millimetres)."""
+    """``(entities, exact)`` for one curve, coordinates scaled by `k`."""
     import rhino3dm as r3
 
     def P(p):
@@ -282,7 +284,7 @@ def _export_dxf(model, objs, path, tolerance):
 
     from . import dxf_writer
 
-    unit_mm, unit = print2d.model_unit_mm(model)
+    _unit_mm, unit = print2d.model_unit_mm(model)
     entities, approx, skipped, layers = [], [], [], {}
     for obj in objs:
         geom = obj.Geometry
@@ -290,7 +292,7 @@ def _export_dxf(model, objs, path, tolerance):
         if not isinstance(geom, r3.Curve):
             skipped.append(name)
             continue
-        es, exact = _dxf_entities(geom, float(tolerance), unit_mm)
+        es, exact = _dxf_entities(geom, float(tolerance), 1.0)
         try:
             layer_record = model.file.Layers[int(obj.Attributes.LayerIndex)]
             layer = layer_record.Name or "0"
@@ -315,11 +317,12 @@ def _export_dxf(model, objs, path, tolerance):
         raise ValueError("nothing to export -- DXF export writes curves, and no curve "
                          "was selected (surfaces and solids are not written to DXF yet)")
     tmp = f"{path}.saving-{os.getpid()}.tmp"
-    dxf_writer.write_dxf(tmp, entities, layers=layers)
+    dxf_writer.write_dxf(tmp, entities, layers=layers, units=unit)
     os.replace(tmp, path)
     msg = f"Exported {len(entities)} DXF entit{'y' if len(entities) == 1 else 'ies'} to {path}"
-    if unit != "Millimeters":
-        msg += f" (in millimetres: {unit} scaled by {unit_mm:g})"
+    insunits, _measurement = dxf_writer.unit_header(unit)
+    msg += (f" (in {unit.lower()}, $INSUNITS {insunits})" if insunits
+            else f" (in {unit.lower()}; DXF has no code for it, so the file is unitless)")
     if approx:
         msg += (f". APPROXIMATE (polyline within {tolerance:g} {unit.lower()}): "
                 + ", ".join(approx))
@@ -342,8 +345,10 @@ def _export_2d(model, objs, path, hairline=False, cdr_version=15):
         raise ValueError("nothing in the export prints as curves")
     print2d.write(path, page, os.path.splitext(os.path.basename(path))[0],
                   hairline=hairline, cdr_version=cdr_version)
+    w, h, abbr = page.size_in_unit()
     msg = (f"Exported {len(page.strokes)} curve(s) to {path} at 1:1 "
-           f"({page.width_mm:.2f} x {page.height_mm:.2f} mm)")
+           f"({w:.{print2d.PAPER_DIGITS[page.unit] - 2}f} x "
+           f"{h:.{print2d.PAPER_DIGITS[page.unit] - 2}f} {abbr})")
     if path.lower().endswith(".cdr"):
         msg += " as native CorelDRAW v15 (2015/X7 compatible)"
 

@@ -68,6 +68,37 @@ UNIT_MM = {
     "Feet": 304.8, "Microns": 0.001, "Kilometers": 1.0e6, "Yards": 914.4,
 }
 
+#: PAPER units: what page lengths are shown and written in. The document's own unit
+#: when it is a paper unit (mm, cm, in); otherwise the paper unit of the same
+#: measuring system -- OURS: the reference application lets the user pick "On paper" units (MEASURED,
+#: commands/print.htm) but no page we hold says which it defaults to for a feet or a
+#: metre model, and SVG/CSS has no ft or m unit to write anyway.
+PAPER_UNITS = {"Millimeters": ("mm", 1.0), "Centimeters": ("cm", 10.0),
+               "Inches": ("in", 25.4)}
+_IMPERIAL = frozenset({"Microinches", "Mils", "Inches", "Feet", "Yards", "Miles",
+                       "PrinterPoints", "PrinterPicas"})
+#: decimals that keep a paper length within PAGE_TOL_MM when written to a file
+PAPER_DIGITS = {"Millimeters": 4, "Centimeters": 5, "Inches": 6}
+#: decimals a paper length is SHOWN with (Letter = 215.9 mm = 8.5 in, A4 = 8.27 in)
+SHOW_DIGITS = {"Millimeters": 1, "Centimeters": 2, "Inches": 2}
+
+
+def paper_unit(unit):
+    """``(unit system name, abbreviation, mm per unit)`` of the PAPER unit for a
+    document unit-system name (or a model)."""
+    if not isinstance(unit, str):
+        unit = model_unit_mm(unit)[1]
+    if unit not in PAPER_UNITS:
+        unit = "Inches" if unit in _IMPERIAL else "Millimeters"
+    abbr, mm = PAPER_UNITS[unit]
+    return unit, abbr, mm
+
+
+def show_length(mm, unit):
+    """A paper length given in mm, as text in the paper unit of `unit` (no suffix)."""
+    name, _abbr, k = paper_unit(unit)
+    return f"{round(mm / k, SHOW_DIGITS[name]):g}"
+
 
 @dataclass
 class View:
@@ -107,6 +138,12 @@ class Page:
     notes: list = field(default_factory=list)
     scale: float = 1.0               # page mm per model unit actually used
     cdr_version: int = 15
+    unit: str = "Millimeters"        # the PAPER unit files are written in (`paper_unit`)
+
+    def size_in_unit(self):
+        """``(width, height, abbreviation)`` of the page in its paper unit."""
+        _name, abbr, mm = paper_unit(self.unit)
+        return self.width_mm / mm, self.height_mm / mm, abbr
 
 
 # ---------------------------------------------------------------------------
@@ -247,9 +284,15 @@ def _wire_curves(geom):
     return [], type(geom).__name__
 
 
-def _outlines(objs, view):
+def _outlines(objs, view, cache=None):
     """Per object: its visible outline curves, or None to fall back to its edges.
-    Breps and extrusions are hidden TOGETHER, so one hides another."""
+    Breps and extrusions are hidden TOGETHER, so one hides another.
+
+    `cache` (a dict the caller owns, e.g. for one open Print dialog) reuses the hidden-
+    line result. MEASURED: it is ~1.2 s of every 1.25 s page rebuild, and it depends only
+    on WHICH solids and the view direction -- never on paper, scale, colour or width.
+    The caller must drop the cache when the document can have changed.
+    """
     out = [None] * len(objs)
     idx = [i for i, o in enumerate(objs) if isinstance(o.Geometry, (r3.Brep, r3.Extrusion))]
     if not idx:
@@ -257,10 +300,15 @@ def _outlines(objs, view):
     ux, uy = view.xaxis, view.yaxis
     normal = (ux[1] * uy[2] - ux[2] * uy[1], ux[2] * uy[0] - ux[0] * uy[2],
               ux[0] * uy[1] - ux[1] * uy[0])        # toward the eye: right x up
+    key = (tuple(str(objs[i].Attributes.Id) for i in idx), tuple(ux), tuple(uy))
+    got = cache.get(key) if cache is not None else None
     try:
-        from . import bridge
+        if got is None:
+            from . import bridge
 
-        got = bridge.visible_outline_curves([objs[i].Geometry for i in idx], normal, ux)
+            got = bridge.visible_outline_curves([objs[i].Geometry for i in idx], normal, ux)
+            if cache is not None:
+                cache[key] = got
     except Exception:  # noqa: BLE001
         return out          # the edges print instead, and the page says so
     for i, curves in zip(idx, got):
@@ -360,7 +408,7 @@ def page_size(setup):
     return w, h
 
 
-def build_page(model, view, setup, objects=None):
+def build_page(model, view, setup, objects=None, outline_cache=None):
     """Lay the (visible, printable) objects out on a page. Returns a :class:`Page`.
 
     `objects` defaults to every object in the model. Raises ValueError, worded for the
@@ -385,7 +433,7 @@ def build_page(model, view, setup, objects=None):
     items, notes = [], set()
     printable = [obj for obj in objs if _visible(model, obj)
                  and _width(model, obj, setup.default_width_mm) is not None]
-    outlines = _outlines(printable, view)
+    outlines = _outlines(printable, view, outline_cache)
     for i, obj in enumerate(printable):
         width = _width(model, obj, setup.default_width_mm)
         if outlines[i] is not None:
@@ -396,8 +444,32 @@ def build_page(model, view, setup, objects=None):
             notes.add(note)
         rgb = _rgb(model, obj, setup.color)
         lname = _layer_name(model, obj)
-        for crv in curves:
-            items.append((crv, rgb, width, lname))
+        # Fitted cubics are memoised while the caller's cache lives (the caller drops it
+        # whenever the document can have changed). Outline curves are held by the cache,
+        # so their identity is a stable key; a document curve is keyed by its object's
+        # UUID -- never the nil UUID, which unsaved scratch files may give every object.
+        oid = str(obj.Attributes.Id)
+        for j, crv in enumerate(curves):
+            if outline_cache is None:
+                key = None
+            elif outlines[i] is not None:
+                key = ("outline", id(crv))
+            elif oid != "00000000-0000-0000-0000-000000000000":
+                key = ("object", oid, j)
+            else:
+                key = None
+            items.append((crv, rgb, width, lname, key))
+
+    def _cubics(crv, tol, cached):
+        """`curve_cubics`, memoised per (object, curve) and tolerance (MEASURED: the
+        rational fit was ~0.2 s of each page rebuild; colour/width changes keep it)."""
+        if cached is None:
+            return curve_cubics(crv, tol)
+        key = ("cubics", cached, tol)
+        value = outline_cache.get(key)
+        if value is None:
+            value = outline_cache[key] = curve_cubics(crv, tol)
+        return value
 
     unit_mm, _unit = model_unit_mm(model)
     avail_w = pw - 2 * setup.margin_mm
@@ -410,8 +482,8 @@ def build_page(model, view, setup, objects=None):
         # a larger rectangle than the drawing for anything not axis-aligned.
         xs, ys = [], []
         coarse = 1e-4 * max(view.width, view.height, 1e-9)
-        for crv, _rgb_, _w, _ln in items:
-            for c in curve_cubics(crv, coarse):
+        for crv, _rgb_, _w, _ln, cached in items:
+            for c in _cubics(crv, coarse, cached):
                 for i in range(17):
                     u, v = to_view(_cubic_at(c, i / 16.0))
                     xs.append(u)
@@ -443,6 +515,7 @@ def build_page(model, view, setup, objects=None):
     page = Page(pw, ph)
     page.scale = s
     page.cdr_version = setup.cdr_version
+    page.unit = paper_unit(_unit)[0]
     ox, oy = pw / 2.0, ph / 2.0                # centred on the output page
 
     def to_page(p):
@@ -450,8 +523,8 @@ def build_page(model, view, setup, objects=None):
         return (ox + (u - cu) * s, oy + (v - cv) * s)
 
     world_tol = PAGE_TOL_MM / s if s > 0 else PAGE_TOL_MM
-    for crv, rgb, width, lname in items:
-        cubics = curve_cubics(crv, world_tol)
+    for crv, rgb, width, lname, cached in items:
+        cubics = _cubics(crv, world_tol, cached)
         if not cubics:
             continue
         bez = tuple(tuple(to_page(p) for p in c) for c in cubics)
@@ -470,11 +543,16 @@ def write(path, page, title="", hairline=False, cdr_version=None):
         return vx.write_pdf(path, page.strokes, page.width_mm, page.height_mm, title)
     if low.endswith(".ai"):
         return vx.write_ai(path, page.strokes, page.width_mm, page.height_mm, title)
+    unit, abbr, unit_mm = paper_unit(page.unit)
     if low.endswith(".svg"):
-        return vx.write_svg(path, page.strokes, page.width_mm, page.height_mm)
+        # SVG declares its unit on width/height; viewBox and coordinates use it too
+        return vx.write_svg(path, page.strokes, page.width_mm, page.height_mm,
+                            unit=(abbr, unit_mm, PAPER_DIGITS[unit]))
     if low.endswith(".dxf"):
         from . import dxf_writer
 
+        # page coordinates in the paper unit, which $INSUNITS declares
+        k = 1.0 / unit_mm
         entities = []
         layers = {}
         for stroke in page.strokes:
@@ -484,15 +562,16 @@ def write(path, page, title="", hairline=False, cdr_version=None):
             rgb = tuple(max(0, min(255, round(value * 255))) for value in stroke.rgb)
             true_color = (rgb[0] << 16) | (rgb[1] << 8) | rgb[2]
             layers.setdefault(layer, 0x1000000 + true_color)
-            controls = [(*stroke.beziers[0][0], 0.0)]
+            p0 = stroke.beziers[0][0]
+            controls = [(p0[0] * k, p0[1] * k, 0.0)]
             for _p0, p1, p2, p3 in stroke.beziers:
-                controls.extend(((*p1, 0.0), (*p2, 0.0), (*p3, 0.0)))
+                controls.extend((p[0] * k, p[1] * k, 0.0) for p in (p1, p2, p3))
             entities.append({"type": "SPLINE", "control_points": controls,
                              "closed": stroke.closed, "layer": layer,
                              "true_color": true_color})
         if not entities:
             raise ValueError("nothing to write to DXF")
-        return dxf_writer.write_dxf(path, entities, layers=layers)
+        return dxf_writer.write_dxf(path, entities, layers=layers, units=unit)
     if low.endswith(".cdr"):
         version = int(cdr_version if cdr_version is not None else page.cdr_version)
         if version == 15:

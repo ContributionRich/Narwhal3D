@@ -463,6 +463,7 @@ PURE_SUITES=(
     spike/test_pure_core_gate.py
     spike/test_vector_export.py
     spike/test_native_vector_export.py
+    spike/test_print_export_units.py
     spike/test_native_command_search.py
     spike/test_native_coil.py
     spike/test_native_intersect.py
@@ -505,6 +506,7 @@ BLENDER_SUITES=(
     spike/test_rebuild_dialog.py
     spike/test_rebuild_popup.py
     spike/test_group_pick.py
+    spike/test_group_copy.py
     spike/test_gumball_region_extrude.py
     spike/test_extrude_mixed_profiles.py
     spike/test_bug102_live.py
@@ -530,6 +532,8 @@ BLENDER_SUITES=(
     spike/test_document_native_encoding_identity.py
     spike/test_document_save_repair.py
     spike/test_document_save_never_blocked.py
+    spike/test_save_queue.py
+    spike/test_crash_recovery.py
     spike/test_document_exact_work.py
     spike/test_document_worker_bounds.py
 )

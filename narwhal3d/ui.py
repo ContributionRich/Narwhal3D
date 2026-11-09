@@ -19263,6 +19263,11 @@ def _print_dialog_area():
     return next((a for a in _view3d_areas() if _pane_key(a) == key), None)
 
 
+#: Hidden-line outlines for printing, kept across dialog opens while the document is
+#: unchanged (keyed by the undo history state; any edit, undo or new document drops it).
+_print_outline_cache = {}
+
+
 def _print_dialog_refresh():
     """Rebuild the page from the current settings -- the preview IS this page."""
     d = _print_dialog
@@ -19278,15 +19283,27 @@ def _print_dialog_refresh():
         names = {n.lower() for n in selected_display_names()}
         objs = [o for o in app_state.model.file.Objects
                 if (o.Attributes.Name or "").lower() in names]
+    # The hidden-line outlines depend only on the solids and the view, not on paper,
+    # scale, colour or width; reuse them while the document is unchanged (MEASURED:
+    # ~1.2 s of each 1.25 s rebuild, so every setting click froze the UI).
     try:
-        page = print2d.build_page(app_state.model, view, st.setup(), objects=objs)
+        undo = app_state.ctx.undo
+        doc_state = (id(app_state.model), undo.top_serial, undo.state_id)
+    except Exception:  # noqa: BLE001 -- unknown history: never reuse
+        doc_state = None
+    if doc_state is None or _print_outline_cache.get("state") != doc_state:
+        _print_outline_cache.clear()
+        _print_outline_cache.update(state=doc_state, cache={})
+    try:
+        page = print2d.build_page(app_state.model, view, st.setup(), objects=objs,
+                                  outline_cache=_print_outline_cache["cache"] if doc_state else None)
     except ValueError as e:
         st.message = str(e)
         return
     d["page"] = page
     note = "; ".join(page.notes)
-    st.message = (f"{len(page.strokes)} curve(s), {page.width_mm:.1f} x "
-                  f"{page.height_mm:.1f} mm" + (f".  NOTE: {note}" if note else ""))
+    st.message = (f"{len(page.strokes)} curve(s), {st.page_text(page)}"
+                  + (f".  NOTE: {note}" if note else ""))
     _tag_redraw_viewports()
 
 
@@ -19309,12 +19326,11 @@ def open_print_dialog():
     labels = tuple(views)
     st = printdialog.DialogState(views=labels,
                                  view=pane_label(active) if pane_label(active)
-                                 in views else (labels[0] if labels else ""))
-    for key, value in preferences.get('print_settings').items():
-        # View is contextual: a previous dialog must not override the active pane.
-        # Paper, output and scale settings remain persistent.
-        if key != 'view':
-            setattr(st, key, value)
+                                 in views else (labels[0] if labels else ""),
+                                 unit=print2d.model_unit_mm(app_state.model)[1])
+    # View is contextual: a previous dialog must not override the active pane.
+    # Paper, output and scale settings remain persistent.
+    printdialog.restore_settings(st, preferences.get('print_settings'))
     _print_dialog = {"state": st, "views": views, "pane": _pane_key(active),
                      "window_key": workspace_overlay.window_key(), "page": None}
     _print_dialog_refresh()
@@ -19618,7 +19634,7 @@ def draw_print_dialog():
         paint_text(t.x + 10 * sc, t.y + 9 * sc, "Print Setup", fs + 1, ink)
         for rid, lr, vr in lay.rows:
             kind = printdialog.ROW_KINDS[rid]
-            paint_text(lr.x, lr.y + 8 * sc, printdialog.ROW_LABELS[rid], fs,
+            paint_text(lr.x, lr.y + 8 * sc, st.row_label(rid), fs,
                        design.rgb01(design.TEXT))
             if kind == "check":
                 cb = printdialog.Rect(vr.x, vr.y + (vr.h - 16 * sc) / 2, 16 * sc,
@@ -19666,14 +19682,23 @@ def draw_print_dialog():
             gpu.state.scissor_set(int(sheet.x + region.x), int(sheet.y + region.y), int(sheet.w) + 1,
                                   int(sheet.h) + 1)
             try:
-                for pts, rgb, _wpx in printdialog.preview_lines(page, sheet):
-                    coords = []
-                    for a_, b_ in zip(pts, pts[1:]):
-                        coords.append((a_[0] + region.x, a_[1] + region.y))
-                        coords.append((b_[0] + region.x, b_[1] + region.y))
-                    if not coords:
-                        continue
-                    batch = batch_for_shader(shader, "LINES", {"pos": coords})
+                # MEASURED: rebuilding ~190 line batches (37k segments) took ~50 ms on
+                # EVERY redraw, so hovering the dialog lagged. One batch per colour,
+                # rebuilt only when the page or where it is drawn changes.
+                key = (id(page), round(sheet.x, 2), round(sheet.y, 2), round(sheet.w, 2),
+                       round(sheet.h, 2), region.x, region.y)
+                cached = _print_dialog.get("preview_batches")
+                if cached is None or cached[0] != key:
+                    by_color = {}
+                    for pts, rgb, _wpx in printdialog.preview_lines(page, sheet):
+                        coords = by_color.setdefault(tuple(rgb[:3]), [])
+                        for a_, b_ in zip(pts, pts[1:]):
+                            coords.append((a_[0] + region.x, a_[1] + region.y))
+                            coords.append((b_[0] + region.x, b_[1] + region.y))
+                    cached = (key, [(batch_for_shader(shader, "LINES", {"pos": coords}), rgb)
+                                    for rgb, coords in by_color.items() if coords])
+                    _print_dialog["preview_batches"] = cached
+                for batch, rgb in cached[1]:
                     shader.uniform_float("color", (rgb[0], rgb[1], rgb[2], 1.0))
                     batch.draw(shader)
             finally:
@@ -19736,11 +19761,25 @@ def _exit_handler(*_args):
     from . import file_commands
 
     _remember_preferences(user_preference_snapshot())
+    try:
+        # A background save in progress may hold the latest work: let it finish (bounded)
+        # rather than start a second one. If it cannot, the recovery copy below keeps it.
+        if not file_commands.finish_saves(_EXIT_SAVE_WAIT):
+            print("[narwhal3d] a save was still running at exit; writing a recovery copy")
+    except Exception as failure:  # noqa: BLE001 -- never stops the recovery copy
+        print("[narwhal3d] could not finish the save in progress ("
+              + type(failure).__name__ + ")")
     path = file_commands.write_recovery()
     if path:
         print(f"[narwhal3d] unsaved changes kept in {path}")
+    try:
+        file_commands.end_session()   # a clean exit: the next start offers no crash recovery
+    except Exception:  # noqa: BLE001
+        pass
 
 
+#: seconds the exit handler waits for a background save before writing a recovery copy
+_EXIT_SAVE_WAIT = 600.0
 _autosave_last = [None]
 
 
@@ -19752,7 +19791,7 @@ def _autosave_tick():
     """
     import datetime
 
-    from . import autosave, file_commands
+    from . import autosave, file_commands, save_queue
 
     try:
         minutes = float(os.environ.get("NARWHAL3D_AUTOSAVE_MINUTES", "20"))
@@ -19762,9 +19801,12 @@ def _autosave_tick():
         if _autosave_last[0] is None:
             _autosave_last[0] = now
         elif autosave.due(now, _autosave_last[0], minutes):
-            path = file_commands.write_recovery()
-            _autosave_last[0] = now
-            if path:
+            # In the background (the result is logged when it finishes); False means a
+            # save is running, so try again at the next tick.
+            path = file_commands.write_recovery(background=True)
+            if path is not False:
+                _autosave_last[0] = now
+            if path and not save_queue.enabled():
                 app_state.log(f"Autosaved to {path}")
                 redraw_cmdbar()
     except Exception as e:  # noqa: BLE001
@@ -19791,11 +19833,34 @@ def _install_exit_handling():
         pass
     if _exit_handler not in bpy.app.handlers.exit_pre:
         bpy.app.handlers.exit_pre.append(_exit_handler)
+    from . import save_queue
+
+    # Save / SaveAs / AutoSave validate in the background; the UI keeps running.
+    save_queue.install(lambda poll: bpy.app.timers.register(
+        poll, first_interval=save_queue.POLL_INTERVAL, persistent=True))
+    save_queue.on_change = redraw_cmdbar
     if not bpy.app.timers.is_registered(_autosave_tick):
         bpy.app.timers.register(_autosave_tick, first_interval=60.0, persistent=True)
+    crashed = file_commands.begin_session()
     note = file_commands.recovery_notice()
     if note:
         app_state.log(note)
+    if crashed:
+        # After the window is up: a modal question before it would have no parent.
+        bpy.app.timers.register(lambda: _offer_crash_recovery(crashed), first_interval=1.5)
+
+
+def _offer_crash_recovery(crashed):
+    """One-shot timer: the previous session crashed -- offer its newest recovery copy."""
+    from . import file_commands
+
+    try:
+        if file_commands.offer_crash_recovery(crashed) == "opened":
+            _ensure_input_open()
+        redraw_cmdbar()
+    except Exception as e:  # noqa: BLE001
+        print(f"[narwhal3d] crash recovery prompt failed: {e!r}")
+    return None
 
 
 def _attach_preview_handler():
@@ -23341,10 +23406,14 @@ def _gumball_toggle_copy():
     made = []
     try:
         ctx = app_state.ctx
+        pairs = []
         for ob in bridge.selected_display_objects():
             name = commands._duplicate_with_transform(ctx, ob.name, back, "Copy")
             if name:
                 made.append(name)
+                pairs.append((ob.name, name))
+        # the same rule as the Copy command: copied groups become NEW groups
+        commands._group_copies(ctx, pairs)
     except Exception as e:  # noqa: BLE001
         st["copy"] = False
         return f"Gumball: copy failed ({e!r})"

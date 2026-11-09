@@ -310,6 +310,82 @@ def probe_pure_core_curve_hits(path: Path, python: Path | str = sys.executable, 
     return identity
 
 
+# Additive unit-aware SVG export (vector_export.write_svg(unit=...)): ABI 1 and the legacy
+# narwhal_pure_core_svg_encode_into are unchanged, so a library without it loses only the
+# native route for unit SVGs. Formatting is IEEE division + Rust's exact decimal printing, no
+# libm, so no per-platform qualification set is kept (the same posture as the legacy SVG).
+PURE_CORE_SVG_UNIT_EXPORT = "narwhal_pure_core_svg_encode_unit_into"
+# The digest pins the exact bytes of the inch and millimetre witness documents; it is also
+# the digest of the Python writer (`vector_export._write_svg_in_unit`) on the same strokes.
+PURE_CORE_SVG_UNIT_IDENTITY = {
+    "export": PURE_CORE_SVG_UNIT_EXPORT,
+    "legacy_identical": True, "inch_header": True,
+    "bad_suffix_status": -2, "bad_digits_status": -2, "bad_scale_status": -2,
+    "small_buffer_status": -3, "null_written_status": -1,
+    "documents_sha256": "4e117558b35790976103f235f7c5d12a141b1c4e190ee12f45001f283f250c97",
+}
+PURE_CORE_SVG_UNIT_PROBE = r'''
+import ctypes as c, hashlib, json, sys
+lib = c.CDLL(sys.argv[1])
+D, Q, I, B = c.POINTER(c.c_double), c.POINTER(c.c_int64), c.POINTER(c.c_int32), c.POINTER(c.c_ubyte)
+strokes = c.c_int64
+head = [D, c.c_int64, Q, I, D, D, B, Q, c.c_double, c.c_double, c.c_int64]
+legacy = lib.narwhal_pure_core_svg_encode_into
+legacy.argtypes = head + [B, c.c_size_t, Q]
+legacy.restype = c.c_int32
+unit = lib.narwhal_pure_core_svg_encode_unit_into
+unit.argtypes = head + [B, c.c_int64, c.c_double, c.c_int32, B, c.c_size_t, Q]
+unit.restype = c.c_int32
+# Two strokes: a closed cubic on layer "cut" and an open one with no layer, on Letter landscape.
+bez = (c.c_double * 16)(0, 0, 25.4, 50.8, 50.8, 50.8, 76.2, 0,
+                        10, 20, 30, 40, 50, 60, 70, 80)
+segs, closed = (c.c_int64 * 2)(1, 1), (c.c_int32 * 2)(1, 0)
+rgb, widths = (c.c_double * 6)(1, 0, 0, 0.1, 0.2, 0.3), (c.c_double * 2)(0.254, 0.13)
+layers, lens = (c.c_ubyte * 3)(*b"cut"), (c.c_int64 * 2)(3, 0)
+args = [bez, 2, segs, closed, rgb, widths, layers, lens, 279.4, 215.9, 2]
+def run(suffix, mm, digits, cap=1 << 16, written=True):
+    out, n = (c.c_ubyte * cap)(), c.c_int64(-1)
+    s = (c.c_ubyte * max(len(suffix), 1))(*(suffix or b"\0"))
+    rc = unit(*args, s, len(suffix), mm, digits, out, cap, c.byref(n) if written else None)
+    return rc, bytes(out[:max(n.value, 0)])
+out, n = (c.c_ubyte * (1 << 16))(), c.c_int64(-1)
+if legacy(*args, out, 1 << 16, c.byref(n)) != 0:
+    raise RuntimeError("the legacy SVG export refused the witness")
+old = bytes(out[:n.value])
+rc_mm, plain = run(b"", 1.0, 4)
+rc_in, inch = run(b"in", 25.4, 6)
+rc_m, mm = run(b"mm", 1.0, 4)
+if (rc_mm, rc_in, rc_m) != (0, 0, 0):
+    raise RuntimeError("the unit SVG export refused a witness unit")
+print(json.dumps({"export": "narwhal_pure_core_svg_encode_unit_into",
+                  "legacy_identical": plain == old,
+                  "inch_header": b'width="11.000000in" height="8.500000in" viewBox="0 0 11.000000 8.500000"' in inch,
+                  "bad_suffix_status": run(b"IN", 25.4, 6)[0],
+                  "bad_digits_status": run(b"in", 25.4, 13)[0],
+                  "bad_scale_status": run(b"in", 0.0, 6)[0],
+                  "small_buffer_status": run(b"in", 25.4, 6, cap=16)[0],
+                  "null_written_status": run(b"in", 25.4, 6, written=False)[0],
+                  "documents_sha256": hashlib.sha256(inch + b"\0" + mm).hexdigest()},
+                 sort_keys=True))
+'''
+
+
+def probe_pure_core_svg_unit(path: Path, python: Path | str = sys.executable, *, env=None) -> dict:
+    """Require the unit SVG export to write the pinned witness bytes and refusals."""
+    if not path.is_file() or path.is_symlink():
+        raise ValueError(f"missing regular pure-core library: {path}")
+    try:
+        completed = subprocess.run(
+            [str(python), "-I", "-B", "-c", PURE_CORE_SVG_UNIT_PROBE, str(path.resolve())],
+            env=env, text=True, capture_output=True, check=True, timeout=30)
+        identity = json.loads(completed.stdout)
+    except (OSError, subprocess.SubprocessError, ValueError) as error:
+        raise ValueError(f"cannot verify pure-core unit SVG export: {getattr(error, 'stderr', '') or error}") from error
+    if identity != PURE_CORE_SVG_UNIT_IDENTITY:
+        raise ValueError(f"pure-core unit SVG evidence differs: {identity!r}")
+    return identity
+
+
 class GateError(RuntimeError):
     """A mandatory pure-core source check failed."""
 
@@ -467,6 +543,15 @@ def step_curve_hits(lib_path: Path) -> dict[str, object]:
     return {"status": "ok", "curve_hits": identity, "command": "ctypes curve/curve probe"}
 
 
+def step_svg_unit(lib_path: Path) -> dict[str, object]:
+    """Qualify the unit-aware SVG export; required for the library to carry it."""
+    try:
+        identity = probe_pure_core_svg_unit(lib_path)
+    except ValueError as exc:
+        raise GateError(str(exc)) from exc
+    return {"status": "ok", "svg_unit": identity, "command": "ctypes unit SVG probe"}
+
+
 def step_adapter(crate: Path, lib_path: Path) -> dict[str, object]:
     """Run the dedicated pure-core Python suites against the built library."""
     python = _bundled_python()
@@ -545,6 +630,7 @@ def run_gate(crate_rel: str) -> dict[str, object]:
     steps["direct_abi"] = step_direct_abi(lib)
     steps["nearest_batch"] = step_nearest_batch(lib)
     steps["curve_hits"] = step_curve_hits(lib)
+    steps["svg_unit"] = step_svg_unit(lib)
     steps["adapter"] = step_adapter(crate, lib)
     steps["windows_check"] = step_windows_check(crate)
 
@@ -583,7 +669,8 @@ def main(argv: list[str]) -> int:
     else:
         print(f"pure-core source gate: OK (crate {report['crate']})")
         for name in ("fmt", "clippy", "tests", "release_build",
-                     "direct_abi", "nearest_batch", "curve_hits", "adapter", "windows_check"):
+                     "direct_abi", "nearest_batch", "curve_hits", "svg_unit", "adapter",
+                     "windows_check"):
             step = report["steps"][name]
             detail = step.get("passed", step.get("suites", step.get("reason", "")))
             print(f"  [{name}] {step['status']}"

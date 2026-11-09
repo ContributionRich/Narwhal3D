@@ -24,9 +24,33 @@ group code sits on its own line with the value on the next. ``$INSUNITS = 4``
 (millimetres). ARC angles are degrees, counter-clockwise from +X. Colors are
 AutoCAD Color Index (1 red, 5 blue, 7 black/white) unless exact RGB group 420
 is supplied; the default is ACI 7.
+
+``units`` (a unit-system name such as ``"Inches"``) declares the unit the
+coordinates are in: ``$INSUNITS`` from :data:`INSUNITS` and ``$MEASUREMENT``
+(0 English, 1 metric). MEASURED (fileio/autocad_dwg_dxf_import_export.htm): the reference application
+"sets that variable based on the document unit system to 1 for inches, 4 for
+millimeters, etc." A unit with no AutoCAD code is written unitless (0). Without
+``units`` the legacy header (``$INSUNITS = 4`` only) is written byte-for-byte.
 """
 
 import os
+
+#: Unit-system name -> AutoCAD ``$INSUNITS`` code (the same table the DXF import reads).
+INSUNITS = {"Inches": 1, "Feet": 2, "Miles": 3, "Millimeters": 4, "Centimeters": 5,
+            "Meters": 6, "Kilometers": 7, "Microinches": 8, "Mils": 9, "Yards": 10,
+            "Angstroms": 11, "Nanometers": 12, "Microns": 13, "Decimeters": 14,
+            "Dekameters": 15, "Hectometers": 16, "Gigameters": 17}
+_ENGLISH = frozenset({"Inches", "Feet", "Miles", "Microinches", "Mils", "Yards"})
+
+
+def unit_header(units):
+    """``(insunits, measurement)`` for a unit-system name; measurement None = omit."""
+    if units is None:
+        return 4, None
+    code = INSUNITS.get(units, 0)
+    if code == 0:
+        return 0, None
+    return code, 0 if units in _ENGLISH else 1
 
 
 def _num(x):
@@ -53,7 +77,7 @@ def _merged_layers(entities, layers):
     return list(out.items())
 
 
-def build_dxf_bytes(entities, layers=None) -> bytes:
+def build_dxf_bytes(entities, layers=None, units=None) -> bytes:
     """Build the complete R12 ASCII DXF file bytes for *entities*.
 
     Pure byte building (no I/O): the same HEADER / TABLES / ENTITIES / EOF
@@ -76,8 +100,12 @@ def build_dxf_bytes(entities, layers=None) -> bytes:
     modern = (any(e.get("type") == "SPLINE" or "true_color" in e for e in entities)
               or any(int(color) > 0xFFFFFF for _name, color in merged))
     emit(1, "AC1027" if modern else "AC1009")
+    insunits, measurement = unit_header(units)
     emit(9, "$INSUNITS")
-    emit(70, 4)  # 4 = millimetres
+    emit(70, insunits)  # 4 = millimetres, 1 = inches
+    if measurement is not None:
+        emit(9, "$MEASUREMENT")
+        emit(70, measurement)
     emit(0, "ENDSEC")
 
     # --- TABLES ----------------------------------------------------------
@@ -143,7 +171,7 @@ def _native_dxf():
         return None
 
 
-def write_dxf(path, entities, layers=None) -> int:
+def write_dxf(path, entities, layers=None, units=None) -> int:
     """Write *entities* to *path* as an AutoCAD R12 ASCII DXF file.
 
     Structure: HEADER (``$ACADVER = AC1009``, ``$INSUNITS = 4``), a TABLES
@@ -174,14 +202,15 @@ def write_dxf(path, entities, layers=None) -> int:
     # One-pass native route (Q117-02): active only when the one-pass export is
     # available and the materialized input clears the measured crossover.
     _native = _native_dxf()
-    if _native is not None and _native._dxf_native_active(materialized):
+    # the native encoder writes the legacy millimetre header only
+    if units is None and _native is not None and _native._dxf_native_active(materialized):
         result = _native._native_dxf_encode_into(materialized, layers)
         if result is not None:
             out, written = result
             with open(path, "wb") as fh:
                 fh.write(memoryview(out)[:written])
             return written
-    data = build_dxf_bytes(materialized, layers)
+    data = build_dxf_bytes(materialized, layers, units)
     with open(path, "wb") as fh:
         fh.write(data)
     return len(data)

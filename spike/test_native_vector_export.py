@@ -291,6 +291,94 @@ def _():
     assert native._native_svg_vector_calls == before + 1
 
 
+UNITS = (("mm", 1.0, 4), ("in", 25.4, 6), ("cm", 10.0, 5))
+
+
+def _escaped():
+    return [ve.Stroke(beziers=(((0, 0), (1, 2), (3, 4), (5, 6)),), closed=True,
+                      rgb=(0.5, 0.0, 1.0), width_mm=0.25, layer='cut & <etch> "Ω"')]
+
+
+def _py_unit(strokes, w, h, unit, label):
+    p = os.path.join(TMP, "svg_unit_ref_" + label + ".svg")
+    ve._write_svg_in_unit(p, strokes, w, h, *unit)
+    return open(p, "rb").read()
+
+
+def _many(n=1000):
+    return [ve.Stroke(beziers=(((float(i), 0.3), (1.7, 2), (3, 4.1), (5, 6)),),
+                      rgb=(0.1, 0.5, 0.9), width_mm=0.25, layer="cut" if i % 2 else "")
+            for i in range(n)]
+
+
+@check("native UNIT SVG is byte-identical to the Python writer (mm, in, cm; all shapes)")
+def _():
+    _reset()
+    assert native._svg_unit_encode_into_binding() is not None, \
+        "narwhal_pure_core_svg_encode_unit_into must be resolvable"
+    for unit in UNITS:
+        for label, strokes in (("plain", _strokes_simple()), ("layered", _strokes_layered()),
+                               ("empty", []), ("empty-stroke", _strokes_empty_stroke()),
+                               ("escaped", _escaped())):
+            want = _py_unit(strokes, 279.4, 215.9, unit, label)
+            before = native._native_svg_unit_calls
+            got = native.encode_svg_unit(strokes, 279.4, 215.9, *unit)
+            assert got == want, (unit, label, len(got or b""), len(want))
+            assert native._native_svg_unit_calls == before + 1, (unit, label)
+        assert (b'width="%s%s"' % (("%.*f" % (unit[2], 279.4 / unit[1])).encode(),
+                                    unit[0].encode())) in got, got[:200]
+    # the legacy (unitless mm) document is the unit encoder's ("", 1.0, 4) case
+    assert native.encode_svg_unit(_strokes_layered(), 210, 297, "", 1.0, 4) \
+        == native.encode_svg(_strokes_layered(), 210, 297)
+
+
+@check("production unit SVG takes the Rust route past the crossover, same bytes")
+def _():
+    _reset()
+    strokes = _many()
+    for unit in UNITS:
+        before = native._native_svg_unit_calls
+        p = os.path.join(TMP, "svg_unit_prod_%s.svg" % unit[0])
+        n = ve.write_svg(p, strokes, 279.4, 215.9, unit=unit)
+        got = open(p, "rb").read()
+        assert n == len(got)
+        assert native._native_svg_unit_calls == before + 1, unit
+        assert got == _py_unit(strokes, 279.4, 215.9, unit, "prod"), unit
+    small = os.path.join(TMP, "svg_unit_small.svg")
+    before = native._native_svg_unit_calls
+    ve.write_svg(small, _strokes_simple(), 279.4, 215.9, unit=UNITS[1])
+    assert native._native_svg_unit_calls == before, "small files stay on Python"
+
+
+@check("fallback: a library without the unit export writes the same unit SVG in Python")
+def _():
+    _reset()
+    real = native._svg_unit_encode_into_binding
+    native._svg_unit_encode_into_binding = lambda: None
+    try:
+        before = native._native_svg_unit_calls
+        p = os.path.join(TMP, "svg_unit_fb.svg")
+        ve.write_svg(p, _many(), 279.4, 215.9, unit=UNITS[1])
+        assert open(p, "rb").read() == _py_unit(_many(), 279.4, 215.9, UNITS[1], "fb")
+        assert native._native_svg_unit_calls == before
+    finally:
+        native._svg_unit_encode_into_binding = real
+
+
+@check("the pure-core gate probe accepts the built library and refuses a missing one")
+def _():
+    from pathlib import Path
+    sys.path.insert(0, os.path.join(ROOT, "scripts"))
+    import check_pure_core as gate
+    assert gate.probe_pure_core_svg_unit(Path(_LIB)) == gate.PURE_CORE_SVG_UNIT_IDENTITY
+    try:
+        gate.probe_pure_core_svg_unit(Path(TMP) / "no_such_lib.so")
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("a missing library must be refused")
+
+
 if __name__ == "__main__":
     for name, status, err in results:
         print("[%s] %s%s" % (status, name, (" -- " + err) if err else ""))

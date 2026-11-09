@@ -52,6 +52,9 @@ class ConsumerTests(unittest.TestCase):
     def test_state_lease_preserves_all_other_ast(self):
         # Golden normalized AST digest measured from 50267dd6 before retirement.
         # Retains whole-file lease coverage without requiring Git/retired source.
+        # Re-pinned once, deliberately: NEVER_REPEAT (Undo/Redo/Delete never become the
+        # repeat target) was added to state.py at the user's request. Any OTHER change
+        # to state.py still fails here.
         tree = ast.parse((ROOT / 'narwhal3d/state.py').read_text())
         def normalized(tree):
             tree.body = [n for n in tree.body if not (isinstance(n, ast.ImportFrom) and n.module == 'command_transcript')]
@@ -63,7 +66,7 @@ class ConsumerTests(unittest.TestCase):
             init.body = [n for n in init.body if not history_assignment(n)]
             return ast.dump(tree, include_attributes=False)
         self.assertEqual(hashlib.sha256(normalized(tree).encode()).hexdigest(),
-                         '9a1ed58cf733ca026b8f94b5def179ec363f221963499244f66b890d05c096c0')
+                         '874b1911394eff29938cd9f3d971215bff394dae04bb758283dd22c43be5f32b')
 
     def test_visible_completion_and_recent_bug_context(self):
         st = self.st

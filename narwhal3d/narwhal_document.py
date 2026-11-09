@@ -252,53 +252,93 @@ def save_model(model, target: str | os.PathLike) -> bool:
         try:
             ok = _save_once(model, target, **limits)
         except NarwhalDocumentError as exc:
-            text = str(exc)
-            # MEASURED: one worker run per refused object made a 4-object Gumball move
-            # on a 44-object file take 180 s to save. The worker now reports every
-            # refusal of a run, so all of them are repaired before ONE re-validation.
-            refused = []
-            for message in getattr(exc, "errors", None) or [text]:
-                object_id, kind = _refused_master(message)
-                file_object = model.file.Objects.FindId(object_id) if object_id else None
-                if file_object is None:
-                    refused = None
-                    break
-                refused.append((object_id, kind, file_object, message))
-            if not refused:
-                if not limits and any(word in text for word in _RESOURCE_FAILURES):
-                    limits = {"timeout": 1800, "memory_mib": 8192}
-                    notes.append("validation needed more time/memory; retried with larger limits")
-                    continue
-                emergency = _emergency_copy(model, target)
-                if emergency:
-                    raise NarwhalDocumentError(
-                        f"{text}. Your work was saved as an interchange copy: {emergency}") from exc
-                raise
-            for object_id, kind, file_object, message in refused:
-                # A proxy rebuild replaces the table object; never repair a stale one.
-                file_object = model.file.Objects.FindId(object_id) or file_object
-                name = file_object.Attributes.Name or object_id
-                master = kernel.master_of(file_object.Geometry)
-                tried = attempts.setdefault(object_id, set())
-                if master is not None and kind == "recipe" and "recipe" not in tried:
-                    _rebase_recipe(file_object.Geometry, master)
-                    notes.append(f"{name}: construction history re-based on its exact geometry "
-                                 f"(the old recipe could not be verified)")
-                elif master is not None and kind == "proxy" and "proxy" not in tried:
-                    _rebuild_proxy(model, file_object, master)
-                    notes.append(f"{name}: display copy rebuilt from its exact geometry")
-                elif "demote" not in tried:
-                    kind = "demote"
-                    notes.append(_demote(model, file_object, message.split(": ", 1)[-1][:200]))
-                else:
-                    raise
-                tried.add(kind)
+            limits = _recover_from_refusal(model, target, exc, notes, attempts, limits)
             continue
         model.last_save_warnings = notes
         return ok
 
 
+def _recover_from_refusal(model, target, exc, notes, attempts, limits):
+    """One step of Save's repair loop, on the CURRENT model (it mutates it, so it runs on
+    the main thread). Returns the worker limits for the next attempt, or raises: `exc`
+    itself, or an error naming the emergency interchange copy written beside `target`.
+    Shared by `save_model` and the background save (`save_queue`)."""
+    text = str(exc)
+    # MEASURED: one worker run per refused object made a 4-object Gumball move
+    # on a 44-object file take 180 s to save. The worker now reports every
+    # refusal of a run, so all of them are repaired before ONE re-validation.
+    refused = []
+    for message in getattr(exc, "errors", None) or [text]:
+        object_id, kind = _refused_master(message)
+        file_object = model.file.Objects.FindId(object_id) if object_id else None
+        if file_object is None:
+            refused = None
+            break
+        refused.append((object_id, kind, file_object, message))
+    if not refused:
+        if not limits and any(word in text for word in _RESOURCE_FAILURES):
+            notes.append("validation needed more time/memory; retried with larger limits")
+            return {"timeout": 1800, "memory_mib": 8192}
+        emergency = _emergency_copy(model, target)
+        if emergency:
+            raise NarwhalDocumentError(
+                f"{text}. Your work was saved as an interchange copy: {emergency}") from exc
+        raise exc
+    for object_id, kind, file_object, message in refused:
+        # A proxy rebuild replaces the table object; never repair a stale one.
+        file_object = model.file.Objects.FindId(object_id) or file_object
+        name = file_object.Attributes.Name or object_id
+        master = kernel.master_of(file_object.Geometry)
+        tried = attempts.setdefault(object_id, set())
+        if master is not None and kind == "recipe" and "recipe" not in tried:
+            _rebase_recipe(file_object.Geometry, master)
+            notes.append(f"{name}: construction history re-based on its exact geometry "
+                         f"(the old recipe could not be verified)")
+        elif master is not None and kind == "proxy" and "proxy" not in tried:
+            _rebuild_proxy(model, file_object, master)
+            notes.append(f"{name}: display copy rebuilt from its exact geometry")
+        elif "demote" not in tried:
+            kind = "demote"
+            notes.append(_demote(model, file_object, message.split(": ", 1)[-1][:200]))
+        else:
+            raise exc
+        tried.add(kind)
+    return limits
+
+
 def _save_once(model, target: str | os.PathLike, *, timeout=600, memory_mib=4096) -> bool:
+    staged = _stage(model, target)
+    try:
+        _validate_and_pack(staged, timeout=timeout, memory_mib=memory_mib)
+    finally:
+        staged.cleanup()
+    return True
+
+
+class StagedSave:
+    """Every byte of one save, written to a private directory by `_stage`.
+
+    Nothing in it refers back to the live model, so edits made after staging can never
+    leak into the file, and `_validate_and_pack` may run it on another thread.
+    """
+
+    def __init__(self, directory, target, count):
+        self._directory = directory
+        self.root = Path(directory.name)
+        self.target = target
+        self.count = count
+
+    def cleanup(self):
+        try:
+            self._directory.cleanup()
+        except OSError:
+            pass
+
+
+def _stage(model, target: str | os.PathLike) -> StagedSave:
+    """The main-thread half of a save: serialize every master, document.3dm and the
+    manifest into a private directory. May rebase a recipe-less master's recipe (as
+    Save always has); never validates (the slow part)."""
     target = os.path.abspath(os.fspath(target))
     folder = os.path.dirname(target)
     if not os.path.isdir(folder):
@@ -307,8 +347,9 @@ def _save_once(model, target: str | os.PathLike, *, timeout=600, memory_mib=4096
         raise NarwhalDocumentError("the built-in OCCT kernel is unavailable")
     occt_version, bintools_format = _format_contract()
     model.normalize_order()  # established file-order normalization; logical state is unchanged
-    with tempfile.TemporaryDirectory(prefix="narwhal-save-") as directory:
-        root = Path(directory)
+    directory = tempfile.TemporaryDirectory(prefix="narwhal-save-")
+    try:
+        root = Path(directory.name)
         (root / "masters").mkdir()
         records = []
         exact_total = 0
@@ -393,17 +434,25 @@ def _save_once(model, target: str | os.PathLike, *, timeout=600, memory_mib=4096
         if len(manifest_data) > MAX_MANIFEST:
             raise NarwhalDocumentError("native document manifest exceeds 16 MiB")
         (root / "manifest.json").write_bytes(manifest_data)
-        # Admit the staged geometry with the SAME reader checks before replacing any
-        # existing project. A serialization/reader disagreement cannot destroy a good save.
-        validated = _validate_in_worker(root, len(records), reuse_proofs=True,
-                                        timeout=timeout, memory_mib=memory_mib,
-                                        collect_errors=True)
-        shutil.rmtree(validated)  # worker output is inside this function's private staging dir
-        try:
-            native_document.pack(root, target)
-        except native_document.DocumentCoreError as exc:
-            raise NarwhalDocumentError(f"native container writer failed: {exc}") from exc
-    return True
+    except BaseException:
+        directory.cleanup()
+        raise
+    return StagedSave(directory, target, len(records))
+
+
+def _validate_and_pack(staged: StagedSave, *, timeout=600, memory_mib=4096) -> None:
+    """The slow half of a save. Reads only the staged directory -- never the model -- so
+    the background save runs it off the main thread (the worker wait releases the GIL)."""
+    # Admit the staged geometry with the SAME reader checks before replacing any
+    # existing project. A serialization/reader disagreement cannot destroy a good save.
+    validated = _validate_in_worker(staged.root, staged.count, reuse_proofs=True,
+                                    timeout=timeout, memory_mib=memory_mib,
+                                    collect_errors=True)
+    shutil.rmtree(validated)  # worker output is inside the private staging dir
+    try:
+        native_document.pack(staged.root, staged.target)
+    except native_document.DocumentCoreError as exc:
+        raise NarwhalDocumentError(f"native container writer failed: {exc}") from exc
 
 
 def _read_manifest(path: Path) -> dict:
@@ -560,6 +609,7 @@ def load_model(source: str | os.PathLike):
         model.adopted = (0, [])
         objects = {_object_uuid(item): item for item in model.file.Objects}
         bindings = []
+        replay_ids = _recipe_identity_hint(validated)
         for object_id, record in record_by_id.items():
             path = validated / f"{object_id}.brep"
             try:
@@ -633,7 +683,7 @@ def load_model(source: str | os.PathLike):
             # Retaining the constructor avoids another gp_Dir normalization on
             # every Open/Save, without redefining any persisted geometry.
             recipe = kernel.recipe_of(proxy)
-            if recipe is not None:
+            if recipe is not None and (replay_ids is None or object_id in replay_ids):
                 try:
                     recipe_shape = occt_backend.from_recipe(recipe)
                     recipe_data = bytes(occt_backend.shape_to_bytes(
@@ -649,6 +699,29 @@ def load_model(source: str | os.PathLike):
         model.rehydrated = (len(bindings), 0)
         model.last_save_warnings = []
         return model
+
+
+#: Written by the worker (document_worker.RECIPE_IDENTITY_FILE; a test holds them equal).
+RECIPE_IDENTITY_FILE = "recipe-identity.json"
+
+
+def _recipe_identity_hint(validated: Path):
+    """Object ids the worker found byte-identical to their recipe replay, or None.
+
+    Only an optimization hint: an id listed here is still replayed and compared byte for
+    byte below; an id left out keeps the worker-validated decoded master, which is the
+    exact geometry either way. A missing or malformed hint replays everything.
+    """
+    path = validated / RECIPE_IDENTITY_FILE
+    try:
+        if path.is_symlink() or path.stat().st_size > 4 * 1024 * 1024:
+            return None
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+        return None
+    return frozenset(value)
 
 
 def commit_masters(model) -> int:

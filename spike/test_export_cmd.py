@@ -2,6 +2,7 @@
 
 Outputs are reopened to verify analytic solids, STEP surfaces, and 1:1 vector geometry.
 """
+import math
 import os
 import re
 import shutil
@@ -220,10 +221,17 @@ def run():
     dxf_spans = [model.file.Objects[0].Geometry.GetBoundingBox().Max.X
                  - model.file.Objects[0].Geometry.GetBoundingBox().Min.X
                  for model in dxf_models]
-    check(dxf_radii == [25.4, 25.4] and all(abs(span - 50.8) < 1e-9
-                                             for span in dxf_spans),
-          "identical mm/inch DXF exports reopen at the same physical size",
-          f"radii={dxf_radii}, spans={dxf_spans}")
+    # Each file is in its document's unit, declared by $INSUNITS (the reference application's behaviour,
+    # fileio/autocad_dwg_dxf_import_export.htm): 25.4 mm and 1 inch are one size.
+    dxf_units = [drawing.get("insunits") for drawing in dxf_drawings]
+    unit_mm = {4: 1.0, 1: 25.4}
+    physical_radii = [r * unit_mm.get(u, math.nan) for r, u in zip(dxf_radii, dxf_units)]
+    check(dxf_radii == [25.4, 1.0] and dxf_units == [4, 1]
+          and all(abs(r - 25.4) < 1e-9 for r in physical_radii)
+          and all(abs(span - 50.8) < 1e-9 for span in dxf_spans),
+          "mm/inch DXF exports are in their document units and reopen at the same "
+          "physical size",
+          f"radii={dxf_radii}, insunits={dxf_units}, spans={dxf_spans}")
     check(all(drawing["layer_true_colors"].get("Cut") == 0xFF0000
               and drawing["entities"][0].get("true_color") == 0xFF0000
               for drawing in dxf_drawings),

@@ -223,7 +223,12 @@ def project_curve(curve, plane, direction=None, tolerance=None):
     before = _bbox_diagonal(out)
     out.Transform(xf)
     after = _bbox_diagonal(out)
-    if after <= tol:
+    # Only a curve that the projection COLLAPSES is refused. MEASURED (report #133): a
+    # wireframe of a real solid held 0.00023-inch edge curves lying flat in the plane;
+    # they were already smaller than the tolerance, projected to the same size, and were
+    # refused as "perpendicular". A curve already within tolerance is projected exactly
+    # like any other -- every control point onto the plane, structure kept.
+    if after <= tol and (before > tol or after <= before * 1e-6):
         raise ValueError(
             f"the curve is perpendicular to the plane: projecting it collapses "
             f"it from a bounding-box diagonal of {before:.6g} to {after:.6g}, "

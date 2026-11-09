@@ -27,6 +27,8 @@ MAX_MASTERS = 10_000
 MEMORY_LIMIT = 4 * 1024 * 1024 * 1024
 
 
+#: Object ids whose canonical master is byte-identical to its recipe replay.
+RECIPE_IDENTITY_FILE = "recipe-identity.json"
 #: Env flag set only by Save: report every per-object refusal instead of the first.
 COLLECT_ERRORS_ENV = "NARWHAL_DOCUMENT_COLLECT_ERRORS"
 MAX_COLLECTED_ERRORS = 1000
@@ -236,6 +238,7 @@ def main():
     canonical_total = 0
     seen = set()
     record_errors = []
+    identity_ids = []
     global _collecting
     _collecting = os.environ.get(COLLECT_ERRORS_ENV) == "1"
     for record in manifest["masters"]:
@@ -447,6 +450,8 @@ def main():
                         > 1.0e-10 * max(1.0, abs(volume))):
                     fail(f"canonical master {object_id} volume changed during reread")
             (output / f"{object_id}.brep").write_bytes(canonical)
+            if recipe_identity:
+                identity_ids.append(object_id)
             if legacy_missing_form:
                 if proxy.SetUserString(kernel.DOCUMENT_FORM_KEY, "exact") is False:
                     fail(f"master {object_id} proxy form cannot be canonicalized")
@@ -468,6 +473,10 @@ def main():
     if not document.Write(str(output / "document.3dm"), 8):
         fail("metadata document cannot be canonicalized")
     document_admission.publish(output, receipts)
+    # Which canonical masters ARE their recipe's own encoding. The parent replays only
+    # these to keep the constructor shape (MEASURED: replaying the others cost 13.7 s of
+    # a 48 s Open, and every result was discarded). Absent file: the parent replays all.
+    (output / RECIPE_IDENTITY_FILE).write_text(json.dumps(sorted(identity_ids)))
     # Facts are eligible only after the entire candidate and every canonical reread
     # have passed. Their digest travels over this supervised completion channel.
     bounds_completion = occt_backend.document_publish_bounds(
