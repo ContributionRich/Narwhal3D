@@ -6,7 +6,7 @@ All notable public changes will be recorded here. Narwhal 3D is an extremely ear
 
 ## 0.4.11 — 2026-11-09
 
-Linux and Windows release. The Linux AppImage and the Windows portable EXE are both built from the tagged v0.4.11 source. No Apple Silicon Mac build has been made for this line; the 0.4.8 DMG remains on its release page. Changes since 0.4.10:
+Linux and Windows release. The Linux AppImage is built from the tagged v0.4.11 source; the Windows portable EXE from commit 25572ef7…, which adds one Windows-only Save fix. No Apple Silicon Mac build has been made for this line; the 0.4.8 DMG remains on its release page. Changes since 0.4.10:
 
 ### Saving, opening and stability
 

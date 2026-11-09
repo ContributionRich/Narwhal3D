@@ -2,7 +2,7 @@
 
 ## Current 0.4.11 Windows release
 
-The 0.4.11 **portable EXE**, `Narwhal_3D-0.4.11-Windows-x86_64.exe`, is published on the v0.4.11 GitHub release with its `.sha256` checksum. Only the EXE and checksum are published for this line; no ZIP is published. It was built from the tagged v0.4.11 source, the same source as the Linux AppImage. The package includes the qualified Windows document observer and the exact-save helper `narwhal3d/kernel/bin/brep_writer-win32-amd64.exe`; its openNURBS license is `licenses/openNURBS-LICENSE.txt`.
+The 0.4.11 **portable EXE**, `Narwhal_3D-0.4.11-Windows-x86_64.exe`, is published on the v0.4.11 GitHub release with its `.sha256` checksum. Only the EXE and checksum are published for this line; no ZIP is published. It was built from source commit `25572ef7f70acc5e3361ec8c1d614631e9e0f6ba`: the tagged v0.4.11 source plus one Windows-only fix (the Save admission check compared a Windows creation time that `os.stat` and `os.fstat` report differently, so every packaged Save refused). Application behaviour is otherwise the same as the Linux AppImage. The package includes the qualified Windows document observer and the exact-save helper `narwhal3d/kernel/bin/brep_writer-win32-amd64.exe`; its openNURBS license is `licenses/openNURBS-LICENSE.txt`.
 
 Acceptance ran in a Windows 11 virtual machine with a software OpenGL driver, **not on a physical GPU**. The EXE is unsigned, so SmartScreen may warn. It manages its payload in a per-user cache. Users of the 0.4.8 ZIP download the EXE once; the 0.4.8 ZIP stays on the 0.4.8 release page unchanged.
 
