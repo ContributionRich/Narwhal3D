@@ -94,6 +94,34 @@ class PackageTests(unittest.TestCase):
                     windows.verify_executable(exe, Path("/packer"), "0.4.8", "b" * 40)
                 self.assertEqual(verify.call_count, 1)
 
+    def test_linux_picture_tracer_must_actually_trace(self):
+        # 0.4.11 shipped without the TracePicture helper; presence alone is not enough.
+        import os
+        import stat
+        root = Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory() as folder:
+            def fake(body):
+                path = Path(folder) / "fake-tracer"
+                path.write_text("#!/bin/sh\n" + body + "\n")
+                path.chmod(path.stat().st_mode | stat.S_IXUSR)
+                return path
+            for body in ("exit 2", "echo not-json", "echo '{\"loops\": []}'",
+                         "echo '{\"loops\": [{\"closed\": false, \"nodes\": [1, 2, 3, 4]}]}'"):
+                with self.assertRaises(linux.ReleaseError, msg=body):
+                    linux.probe_picture_trace(fake(body))
+            real = Path(os.environ.get("NARWHAL3D_PICTURE_TRACE") or
+                        root / "native/picture_trace/target/release/narwhal-picture-trace")
+            if not real.is_file():
+                self.skipTest("picture tracer not built (scripts/setup_dev_native.sh)")
+            result = linux.probe_picture_trace(real)
+            self.assertEqual(result["loops"], 1)
+            self.assertGreaterEqual(result["nodes"], 4)
+        self.assertIn("narwhal-picture-trace", linux.NATIVE_COMPONENTS)
+        for name in ("PictureTrace-Rust-Dependencies.txt", "VectorCraft-MIT.txt",
+                     "VectorCraft-Apache-2.0.txt", "VectorCraft-NOTICE.txt"):
+            self.assertIn(name, linux.REQUIRED_LICENSE_FILES)
+            self.assertTrue((root / "licenses" / name).is_file(), name)
+
 
 if __name__ == "__main__":
     unittest.main()

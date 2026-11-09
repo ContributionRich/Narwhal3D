@@ -1,10 +1,10 @@
 [package]
-name = "coco-cutline"
+name = "narwhal-picture-trace"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 publish = false
-description = "Cut lines (closed Bezier outlines with offset) around the artwork in an image, from Coco Production"
+description = "Cut lines (closed Bezier outlines with offset) around the artwork in an image, for Narwhal 3D TracePicture"
 
 [lints]
 workspace = true
@@ -13,11 +13,11 @@ workspace = true
 path = "src/lib.rs"
 
 [[bin]]
-name = "coco-cutline"
+name = "narwhal-picture-trace"
 path = "src/main.rs"
 
 [dependencies]
-coco-cut = { workspace = true }
+narwhal-trace-core = { workspace = true }
 vectorcraft-geom = { workspace = true }
 vectorcraft-trace = { workspace = true }
 vectorcraft-pathops = { workspace = true }

@@ -1,0 +1,15 @@
+VectorCraft upstream: https://github.com/storytold/vectorcraft
+Pinned release: 0.10.0
+Pinned commit: dbd2497b820c83ca8ea2cd79a31e709e0999f415
+Commit date: 2026-10-14
+Subject: Merge pull request #1632 from sanyamsingh001/codex/r61-screens-tiff
+
+Vendored here: vectorcraft-geom, vectorcraft-pathops and vectorcraft-trace only, in
+crates/, with their upstream license and notice texts in LICENSES/. Update deliberately:
+review upstream changes, advance this file and the vendored crates together, then build
+and test the picture tracer on Linux, Windows and macOS.
+
+0.10.0 notes relevant to the picture tracer:
+- The tracer calls vectorcraft_trace::trace_mask directly for cut generation, so
+  VectorCraft's UI Image Trace scaling behaviour does not alter its fixed 288 PPI pipeline.
+- 0.10.0 requires Rust 1.95.

@@ -48,14 +48,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4e7648175b45a9a48536d676f68d918270699102aa8dab5496df06904c914600"
 
 [[package]]
-name = "coco-cut"
+name = "narwhal-trace-core"
 version = "1.2.0"
 
 [[package]]
-name = "coco-cutline"
+name = "narwhal-picture-trace"
 version = "1.2.0"
 dependencies = [
- "coco-cut",
+ "narwhal-trace-core",
  "image",
  "serde_json",
  "vectorcraft-geom",

@@ -1,21 +1,21 @@
-# coco-cutline
+# narwhal-picture-trace
 
-The cut generator from **Coco Production**, packaged so another program can use it.
+The Narwhal 3D picture tracer behind the **TracePicture** command, packaged so another
+program can use it.
 Give it an image and its printed size. It returns closed Bézier cut lines around the
 artwork, offset outward, ready for a vinyl, laser or print-and-cut machine.
 
-It is the same code Coco Production runs for **Generate Cut**. Coco Production calls the
-`pipeline` module of this crate directly, and its test suite checks that this package and
-the app produce the same cut for real artwork at several sizes.
+Narwhal 3D runs this binary for TracePicture and maps its Bézier loops onto the picture.
+The `pipeline` module exposes the same steps to callers that render artwork themselves.
 
 You can use it two ways:
 
-- **Command line** (any language): `coco-cutline image.png --width-in 4 -o cut.svg`
-- **Rust library**: `coco_cutline::generate_cut(&image, size, &settings)`
+- **Command line** (any language): `narwhal-picture-trace image.png --width-in 4 -o cut.svg`
+- **Rust library**: `narwhal_picture_trace::generate_cut(&image, size, &settings)`
 
 ## What it does
 
-1. **Trims** fully transparent padding (as Coco Production does when artwork is opened).
+1. **Trims** fully transparent padding.
 2. **Finds the background**: transparency, plus a solid border colour that is detected
    automatically, or one you give it.
 3. **Normalizes** the art so its longest side is processed as 5 inches at 300 ppi
@@ -41,14 +41,14 @@ fill rule gives the cut shape.
 ## Command line
 
 ```text
-coco-cutline IMAGE [options]
+narwhal-picture-trace IMAGE [options]
 
 Size (pick one; default --dpi 300):
   --dpi N                    image pixels per inch
   --width-in W               artwork width in inches (keeps aspect ratio)
   --height-in H              artwork height in inches (keeps aspect ratio)
                              (artwork = the image without fully transparent padding,
-                             as Coco Production sizes it)
+                             the size TracePicture uses)
 Cut:
   --offset-in D              distance from the art to the cut (default 0.05; negative = inside)
   --smoothness P             0 (detailed: closest fit, more points) to 100 (smooth: fewer
@@ -70,7 +70,7 @@ on success and 2 on any error, with the reason printed to standard error. A one-
 also goes to standard error, so standard output carries only the SVG or JSON.
 
 **SVG output** is sized in inches with a `viewBox` in points, and draws the cut as a red
-0.5 pt hairline, as Coco Production does. It opens 1:1 in Illustrator, Inkscape or CorelDRAW.
+0.5 pt hairline. It opens 1:1 in Illustrator, Inkscape or CorelDRAW.
 
 **JSON output:**
 
@@ -96,7 +96,7 @@ Example, from another program:
 
 ```python
 import json, subprocess
-out = subprocess.run(["coco-cutline", "sticker.png", "--width-in", "3", "--format", "json"],
+out = subprocess.run(["narwhal-picture-trace", "sticker.png", "--width-in", "3", "--format", "json"],
                      check=True, capture_output=True, text=True).stdout
 cut = json.loads(out)
 ```
@@ -107,11 +107,11 @@ Add it as a path dependency (it and its dependencies are in this source tree):
 
 ```toml
 [dependencies]
-coco-cutline = { path = "crates/coco-cutline" }
+narwhal-picture-trace = { path = "crates/narwhal-picture-trace" }
 ```
 
 ```rust
-use coco_cutline::{ArtworkSize, Background, CutSettings, Image, generate_cut};
+use narwhal_picture_trace::{ArtworkSize, Background, CutSettings, Image, generate_cut};
 
 let image = Image::decode(&std::fs::read("sticker.png")?)?;
 // Or from pixels you already have: Image::new(width, height, rgba_bytes)?
@@ -129,14 +129,14 @@ for cut_loop in &cut.loops {
 let svg_d = cut.to_svg_path_data();          // path data only
 let svg = cut.to_svg_document();              // standalone SVG
 let lines = cut.polylines(0.5);               // flattened, ~0.5 pt steps
-let clean = coco_cutline::remove_background(&image, &settings)?; // art with background removed
+let clean = narwhal_picture_trace::remove_background(&image, &settings)?; // art with background removed
 ```
 
 The other ways to size art are `ArtworkSize::points`, `from_dpi`, `from_width_inches` and
 `from_height_inches` (the last two measure the whole image, padding included), plus
 `from_artwork_height_inches`.
 
-### Settings (defaults match Coco Production)
+### Settings and defaults
 
 | Field | Default | Meaning |
 |---|---|---|
@@ -148,7 +148,7 @@ The other ways to size art are `ArtworkSize::points`, `from_dpi`, `from_width_in
 | `background_tolerance_percent` | 12 | Colour match tolerance, 0–60 |
 | `outline_smoothness` | 0.4 | 0 (Detailed) – 1 (Smooth); also rounds bridges between joined islands |
 
-`Auto` detects a solid border colour, as Coco Production does when an image is opened.
+`Auto` detects a solid border colour, as when an image is opened.
 In every mode, transparent pixels and a near-uniform opaque border region connected to
 the image edge count as background.
 
@@ -157,9 +157,9 @@ no artwork found, or an inset offset that leaves nothing.
 
 ### Lower-level steps
 
-`coco_cutline::pipeline` exposes the individual steps (`foreground_mask`,
-`detect_background`, `trace_base`, `apply_vector_offset`, `fit_loop`, …) that Coco
-Production calls with artwork it renders itself. They use the VectorCraft geometry types.
+`narwhal_picture_trace::pipeline` exposes the individual steps (`foreground_mask`,
+`detect_background`, `trace_base`, `apply_vector_offset`, `fit_loop`, …) for callers
+that render artwork themselves. They use the VectorCraft geometry types.
 Most programs only need `generate_cut`.
 
 ## Building
@@ -167,13 +167,13 @@ Most programs only need `generate_cut`.
 Rust 1.95 or newer:
 
 ```sh
-cargo build --release -p coco-cutline     # binary at target/release/coco-cutline
-cargo test -p coco-cutline
+cargo build --release -p narwhal-picture-trace     # binary at target/release/narwhal-picture-trace
+cargo test -p narwhal-picture-trace
 ```
 
 It builds for Linux, Windows and macOS. Image resampling uses a bilinear filter.
-Coco Production renders placed images with VectorCraft's renderer instead, so a cut can
-differ from the app's by a fraction of a point along anti-aliased edges.
+A caller that renders images with another renderer can see a cut differ by a fraction of
+a point along anti-aliased edges.
 
 ## Changes
 
@@ -197,7 +197,7 @@ straight edges next to curves.
 - `fit_loop` (in `pipeline.rs`) now gives the curve fitter a sample at every pixel step.
   Before, a long straight edge reached it as only its two end corners, so the cut could
   bulge off the art where that edge met a curve (by up to 1.8 pt on the reported image).
-- The curve fitter (`coco-cut/src/contour.rs`) now fits long straight edges, 160 pixel
+- The curve fitter (`narwhal-trace-core/src/contour.rs`) now fits long straight edges, 160 pixel
   steps or more within about a pixel of a line, as exact straight segments, with smooth
   joins to the curves beside them. Flat edges such as a sticker's base no longer wobble
   by the full tolerance. On the reported image the base varied by 2.4 px before and
@@ -208,9 +208,9 @@ nodes than before.
 
 ## Dependencies and licences
 
-- `coco-cut`: Coco Production's mask and curve-fitting code, with no dependencies.
+- `narwhal-trace-core`: the mask and curve-fitting code, with no dependencies.
 - `vectorcraft-geom`, `vectorcraft-pathops`, `vectorcraft-trace`: from VectorCraft 0.10.0,
   under MIT OR Apache-2.0 (see `LICENSES/`). They bring in `kurbo`, `linesweeper` and `image`.
 
-The Coco crates are part of Coco Production and carry no separate licence. Add one before
-distributing them outside your own projects.
+`narwhal-trace-core` and `narwhal-picture-trace` are contributed by their author under
+Narwhal 3D's license (GPL-3.0-or-later).

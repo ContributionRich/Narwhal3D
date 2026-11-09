@@ -1,9 +1,9 @@
-//! `coco-cutline`: write the Coco Production cut for an image as SVG or JSON.
-use coco_cutline::{ArtworkSize, Background, Cut, CutSettings, Image, generate_cut};
+//! `narwhal-picture-trace`: write the traced cut for an image as SVG or JSON.
+use narwhal_picture_trace::{ArtworkSize, Background, Cut, CutSettings, Image, generate_cut};
 use serde_json::json;
 use std::path::PathBuf;
 
-const USAGE: &str = "Usage: coco-cutline IMAGE [options]
+const USAGE: &str = "Usage: narwhal-picture-trace IMAGE [options]
 
 Writes closed cut lines around the artwork in IMAGE (PNG, JPEG, WebP, GIF, TIFF, BMP).
 
@@ -12,7 +12,7 @@ Size (pick one; default --dpi 300):
   --width-in W               artwork width in inches (keeps aspect ratio)
   --height-in H              artwork height in inches (keeps aspect ratio)
                              (artwork = the image without fully transparent padding,
-                             as Coco Production sizes it)
+                             the size TracePicture uses)
 
 Cut:
   --offset-in D              distance from the art to the cut (default 0.05; negative = inside)
@@ -178,7 +178,7 @@ fn parse_hex(value: &str) -> Result<[u8; 3], String> {
 }
 
 fn to_json(cut: &Cut) -> String {
-    let point = |p: coco_cutline::Point| json!([p.x, p.y]);
+    let point = |p: narwhal_picture_trace::Point| json!([p.x, p.y]);
     json!({
         "units": "pt",
         "points_per_inch": 72,
@@ -225,7 +225,7 @@ fn run(args: &[String]) -> Result<(), String> {
         None => print!("{text}"),
     }
     if let Some(path) = &options.cleaned {
-        let cleaned = coco_cutline::remove_background(&image, &options.settings)?;
+        let cleaned = narwhal_picture_trace::remove_background(&image, &options.settings)?;
         image::save_buffer(
             path,
             cleaned.rgba(),
@@ -239,7 +239,7 @@ fn run(args: &[String]) -> Result<(), String> {
         .visible_box()
         .map_or((image.width(), image.height()), |(_, _, w, h)| (w, h));
     eprintln!(
-        "coco-cutline: {} loop(s) for {:.3} x {:.3} in artwork",
+        "narwhal-picture-trace: {} loop(s) for {:.3} x {:.3} in artwork",
         cut.loops.len(),
         size.width_pt / f64::from(image.width()) * f64::from(art_width) / 72.0,
         size.height_pt / f64::from(image.height()) * f64::from(art_height) / 72.0
@@ -256,7 +256,7 @@ fn main() -> std::process::ExitCode {
             std::process::ExitCode::SUCCESS
         }
         Err(error) => {
-            eprintln!("coco-cutline: {error}\n\n{USAGE}");
+            eprintln!("narwhal-picture-trace: {error}\n\n{USAGE}");
             std::process::ExitCode::from(2)
         }
     }

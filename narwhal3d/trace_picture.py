@@ -1,7 +1,7 @@
 """`TracePicture` support: run the cut-line tracer on a placed Picture and map its result.
 
 OURS: the reference CAD application has no command that traces a picture. The tracing itself
-is Rust (`native/cutline`, the `coco-cutline` helper); this module only builds the helper's
+is Rust (`native/picture_trace`, the `narwhal-picture-trace` helper); this module only builds the helper's
 arguments, runs it, and maps its answer onto the Picture's frame. Python is used here because
 the helper is a separate process (crash-isolated, like the exact-save helper) and the mapping
 is a handful of affine operations per control point.
@@ -23,7 +23,7 @@ import subprocess
 ROOT = Path(__file__).resolve().parents[1]
 TIMEOUT_S = 120
 
-#: The helper's own defaults, in inches (Coco Production's values).
+#: The helper's own defaults, in inches.
 DEFAULT_OFFSET_IN = 0.0
 DEFAULT_MIN_HOLE_IN2 = 0.07
 DEFAULT_TOLERANCE_PCT = 12.0
@@ -45,15 +45,15 @@ def _platform_tag():
 
 
 def helper_path():
-    """The `coco-cutline` executable, or None when it has not been built."""
-    configured = os.environ.get("NARWHAL3D_CUTLINE")
+    """The `narwhal-picture-trace` executable, or None when it has not been built."""
+    configured = os.environ.get("NARWHAL3D_PICTURE_TRACE")
     if configured:
         return Path(configured) if Path(configured).is_file() else None
     tag = _platform_tag()
-    exe = "coco-cutline.exe" if tag.startswith("windows") else "coco-cutline"
-    for candidate in (ROOT / "artifacts" / "cutline" / tag / exe,
+    exe = "narwhal-picture-trace.exe" if tag.startswith("windows") else "narwhal-picture-trace"
+    for candidate in (ROOT / "artifacts" / "picture-trace" / tag / exe,
                       ROOT / "runtime" / tag / "bin" / exe,
-                      ROOT / "native" / "cutline" / "target" / "release" / exe):
+                      ROOT / "native" / "picture_trace" / "target" / "release" / exe):
         if candidate.is_file():
             return candidate
     return None
@@ -119,7 +119,7 @@ def run(helper, args):
         raise TraceError(f"the trace helper could not start ({exc})") from exc
     if done.returncode != 0:
         reason = [line for line in (done.stderr or "").splitlines() if line.strip()]
-        text = reason[0].removeprefix("coco-cutline:").strip() if reason else ""
+        text = reason[0].removeprefix("narwhal-picture-trace:").strip() if reason else ""
         raise TraceError(text or f"the trace helper failed ({done.returncode})")
     return done.stdout
 

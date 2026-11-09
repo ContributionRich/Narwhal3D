@@ -1,6 +1,6 @@
 # macOS download and historical source-build helper
 
-A published **Apple Silicon DMG** is available in [v0.4.8](https://github.com/ContributionRich/Narwhal3D/releases/tag/v0.4.8): `Narwhal_3D-0.4.8-macOS-arm64.dmg`. A Mac package for the 0.4.9–0.4.11 line is not published yet. Open it and copy **Narwhal 3D.app** to Applications. The self-contained package targets macOS14+; native qualification ran on macOS15 with Apple Paravirtual/Metal graphics. It is not an Intel/universal package.
+A published **Apple Silicon DMG** is available in [v0.4.8](https://github.com/ContributionRich/Narwhal3D/releases/tag/v0.4.8): `Narwhal_3D-0.4.8-macOS-arm64.dmg`. A Mac package for the 0.4.9–0.4.12 line is not published yet. Open it and copy **Narwhal 3D.app** to Applications. The self-contained package targets macOS14+; native qualification ran on macOS15 with Apple Paravirtual/Metal graphics. It is not an Intel/universal package.
 
 The Mac preview is **ad-hoc-signed and unnotarized**, not Developer ID-signed. Gatekeeper assessment rejects this unsigned-publisher preview without explicit user approval. Follow Apple’s Privacy & Security instructions for opening a trusted download; do not disable Gatekeeper globally. Interactive downloaded-file approval and broad physical-Mac coverage are not certified. Corel multiversion conversion is unavailable.
 

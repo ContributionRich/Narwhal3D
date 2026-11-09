@@ -59,7 +59,7 @@ def block(x, y):
 
 
 helper = tp.helper_path()
-check(helper is not None, "the coco-cutline helper is built (scripts/setup_dev_native.sh)")
+check(helper is not None, "the narwhal-picture-trace helper is built (scripts/setup_dev_native.sh)")
 if helper is None:
     raise SystemExit(1)
 

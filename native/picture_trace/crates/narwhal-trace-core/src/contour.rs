@@ -1,6 +1,6 @@
 //! Dense closed-contour simplification and cubic fitting.
 //!
-//! This is a dependency-free Rust port of Coco's proven Illustrator contour
+//! A dependency-free Rust contour fitter, ported from a proven production
 //! fitter. Coordinates and tolerances are in document points.
 
 use std::f64::consts::PI;

@@ -1,5 +1,5 @@
 [package]
-name = "coco-cut"
+name = "narwhal-trace-core"
 version.workspace = true
 edition.workspace = true
 publish = false

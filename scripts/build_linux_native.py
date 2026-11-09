@@ -31,6 +31,7 @@ COMPONENTS = {
     "ui_core": ("libnarwhal_ui_core.so",),
     "converter_supervisor": ("narwhal-converter-supervisor",),
     "automation_core": ("libnarwhal_automation.so", "narwhal-automation"),
+    "picture_trace": ("narwhal-picture-trace",),
 }
 
 

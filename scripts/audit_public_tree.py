@@ -573,6 +573,9 @@ FORBIDDEN_TEXT = (
     b"docs/kernel" + b".md",
     b"docs/geometry",
     b"coco" + b"ville",
+    b"coco" + b" production",
+    b"coco" + b"-cut",
+    b"coco" + b"_cut",
     b"example" + b"photos/",
     b"more_" + b"data/",
     b"bug_" + b"reports/",
@@ -604,9 +607,9 @@ PROVENANCE_SCAN_EXEMPT = {
     # Exact upstream source has a local Rust variable named `owner`; its bytes are
     # independently pinned by SOURCE_MANIFEST.json and spike/test_public_project.py.
     "native/vendor/tracedraw/core/src/document.rs",
-    # VectorCraft upstream source (native/cutline) also has local Rust variables named `owner`.
-    "native/cutline/crates/vectorcraft-pathops/src/pathfinder.rs",
-    "native/cutline/crates/vectorcraft-trace/src/logo/pipeline.rs",
+    # VectorCraft upstream source (native/picture_trace) also has local Rust variables named `owner`.
+    "native/picture_trace/crates/vectorcraft-pathops/src/pathfinder.rs",
+    "native/picture_trace/crates/vectorcraft-trace/src/logo/pipeline.rs",
 }
 REQUIRED_EXECUTABLES = {
     "narwhal3d.sh",
@@ -1095,6 +1098,7 @@ def self_check() -> None:
     cases = (
         ("private path", {"bug_" + "reports/report.md": ("100644", b"x")}),
         ("legacy product", {"notes.txt": ("100644", b"Coco " + b"CAD")}),
+        ("former tracer name", {"native/picture_trace/Cargo.toml": ("100644", b"members = [\"crates/coco" + b"-cutline\"]\n")}),
         ("personal path", {"notes.txt": ("100644", b"/home/" + b"nathaniel/model.3dm")}),
         ("private attribution", {"notes.py": ("100644", b"# " + b"Owner's words\n")}),
         ("Rust private attribution", {"native/automation_core/src/primitives.rs":

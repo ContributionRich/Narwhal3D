@@ -229,7 +229,7 @@ check("[Parameter(Mandatory=$true)]" in build_script
       and "[ValidatePattern('^[0-9a-f]{40}$')]" in build_script
       and "[string]$NarwhalRevision" in build_script
       and '$NarwhalRevision = "' not in build_script
-      and "[string]$Version = \"0.4.11\"" in build_script
+      and "[string]$Version = \"0.4.12\"" in build_script
       and "[ValidatePattern('^0\\.4\\.[0-9]+$')]" in build_script,
       "Windows build requires immutable source and a validated 0.4.x version")
 check("native\\converter_supervisor\\Cargo.toml" in build_script

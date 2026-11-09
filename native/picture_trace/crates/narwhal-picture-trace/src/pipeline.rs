@@ -1,10 +1,10 @@
 //! The individual steps of cut generation, in document points (1/72 inch, y down).
 //!
-//! Coco Production calls these directly with artwork it renders itself; [`crate::generate_cut`]
+//! Callers that render artwork themselves can call these directly; [`crate::generate_cut`]
 //! chains them for a plain image. Both therefore produce the same cut from the same mask.
 
 use crate::{CutError, CutSettings};
-use coco_cut::{
+use narwhal_trace_core::{
     BinaryMask, CleanupSettings, OffsetSettings, Point as CutPoint, SimplifySettings, cleanup_mask,
     connected_components, dilate, drop_small_pieces, erode, offset_mask, pad_mask,
     simplify_closed_loop, union_masks,
@@ -66,7 +66,7 @@ fn check_rgba(rgba: &[u8], width: usize, height: usize) -> Result<(), CutError> 
 }
 
 /// The solid colour around an image's border, if the border is mostly opaque.
-/// Coco Production uses this to pick a background colour when an image is opened.
+/// Used to pick a background colour when an image is opened.
 pub fn detect_background(
     rgba: &[u8],
     width: usize,
@@ -394,7 +394,7 @@ pub fn trace_base(
     })
 }
 
-/// Offsets the cut at full size with round joins, as Coco Production's Offset Path does.
+/// Offsets the cut at full size with round joins (an offset-path operation).
 pub fn apply_vector_offset(path: &PathData, offset_pt: f64) -> Result<PathData, CutError> {
     if offset_pt.abs() <= 1.0e-9 {
         return Ok(path.clone());

@@ -15,7 +15,7 @@ param(
     [ValidatePattern('^[0-9a-f]{40}$')]
     [string]$NarwhalRevision,
     [ValidatePattern('^0\.4\.[0-9]+$')]
-    [string]$Version = "0.4.11",
+    [string]$Version = "0.4.12",
     [string]$Workspace = "C:\Narwhal3D-build",
     [ValidateRange(1, 8)][int]$Jobs = 4,
     [switch]$ResumePackaging,
@@ -831,7 +831,7 @@ else:
     raise SystemExit("unknown ui-core inventory mode")
 '@ | Set-Content -LiteralPath $UiInputsDriver -Encoding UTF8
 Run-Native $Python @('-B', $UiInputsDriver, $NarwhalSource, 'before', $UiInputsPath) 'record ui-core source inventory'
-foreach ($Crate in @("cdr_core", "cdr_multiversion", "welcome", "application_core", "ui_core")) {
+foreach ($Crate in @("cdr_core", "cdr_multiversion", "welcome", "application_core", "picture_trace", "ui_core")) {
     $Manifest = Join-Path $NarwhalSource "native\$Crate\Cargo.toml"
     Run-Native $Cmd @("/d", "/c", $CargoWrapper, "build", "--release", "--locked", "--manifest-path", $Manifest, "--target", "x86_64-pc-windows-msvc") "build $Crate with pinned Rust MSVC" $NarwhalSource
 }
@@ -863,7 +863,8 @@ foreach ($Component in @(
     @("ui_core", "narwhal_ui_core.dll"),
     @("cdr_core", "narwhal_cdr_core.dll"),
     @("cdr_multiversion", "narwhal-cdr-multiversion.exe"),
-    @("welcome", "narwhal-welcome.exe")
+    @("welcome", "narwhal-welcome.exe"),
+    @("picture_trace", "narwhal-picture-trace.exe")
 )) {
     $Built = Join-Path $NarwhalSource "native\$($Component[0])\target\x86_64-pc-windows-msvc\release\$($Component[1])"
     Copy-Item -LiteralPath $Built -Destination (Join-Path $NativeComponentDirectory $Component[1])

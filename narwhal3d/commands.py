@@ -14480,7 +14480,7 @@ class TracePictureCmd(Command):
     OURS: the reference CAD application has no such command. The flow follows its command
     conventions: select a Picture, adjust options on the command line while the cut previews
     on the picture, press Enter to add the curves (one Undo step). The tracing is the Rust
-    `coco-cutline` helper (`native/cutline`); `trace_picture` maps its cubic Beziers onto the
+    `narwhal-picture-trace` helper (`native/picture_trace`); `trace_picture` maps its cubic Beziers onto the
     Picture's frame as exact closed degree-3 NURBS curves.
 
     Background: Auto detects transparency or a solid border colour; Transparent uses only

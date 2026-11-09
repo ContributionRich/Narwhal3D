@@ -1,8 +1,8 @@
-# Standalone workspace for the coco-cutline picture tracer (Coco Production 1.2).
+# Standalone workspace for the Narwhal 3D picture tracer (narwhal-picture-trace) behind TracePicture.
 [workspace]
 resolver = "3"
-members = ["crates/coco-cutline"]
-default-members = ["crates/coco-cutline"]
+members = ["crates/narwhal-picture-trace"]
+default-members = ["crates/narwhal-picture-trace"]
 
 [workspace.package]
 version = "1.2.0"
@@ -10,7 +10,7 @@ edition = "2024"
 rust-version = "1.95"
 
 [workspace.dependencies]
-coco-cut = { path = "crates/coco-cut" }
+narwhal-trace-core = { path = "crates/narwhal-trace-core" }
 vectorcraft-geom = { path = "crates/vectorcraft-geom" }
 vectorcraft-pathops = { path = "crates/vectorcraft-pathops" }
 vectorcraft-trace = { path = "crates/vectorcraft-trace" }

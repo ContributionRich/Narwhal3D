@@ -28,7 +28,7 @@ linux_native = {
     "libnarwhal_selection_core.so", "narwhal-converter-supervisor",
     "narwhal-cdr-multiversion", "narwhal-document-core", "narwhal-welcome",
     "libnarwhal_automation.so", "narwhal-automation", "libnarwhal_application_core.so",
-    "libnarwhal_ui_core.so",
+    "libnarwhal_ui_core.so", "narwhal-picture-trace",
 }
 windows_native = {
     "narwhal_cdr_core.dll", "narwhal_geometry_core.dll",
@@ -36,7 +36,7 @@ windows_native = {
     "narwhal_selection_core.dll", "narwhal-converter-supervisor.exe",
     "narwhal-cdr-multiversion.exe", "narwhal-document-core.exe",
     "narwhal-welcome.exe", "narwhal_automation.dll", "narwhal_application_core.dll",
-    "narwhal_ui_core.dll",
+    "narwhal_ui_core.dll", "narwhal-picture-trace.exe",
 }
 assert set(linux.NATIVE_COMPONENTS) == linux_native
 assert set(windows.NATIVE_COMPONENT_PATHS) == windows_native
@@ -51,7 +51,11 @@ assert {
     "app/launch/bootstrap.py", "app/narwhal3d/__init__.py",
     "app/licenses/GPL-3.0-or-later.txt", "app/licenses/OCP-Apache-2.0.txt",
     "app/licenses/OCCT-exception-1.0.txt", "windows-release-manifest.json",
+    "app/licenses/PictureTrace-Rust-Dependencies.txt", "app/licenses/VectorCraft-MIT.txt",
+    "app/licenses/VectorCraft-Apache-2.0.txt", "app/licenses/VectorCraft-NOTICE.txt",
 } <= windows.REQUIRED
+assert {"PictureTrace-Rust-Dependencies.txt", "VectorCraft-MIT.txt", "VectorCraft-Apache-2.0.txt",
+        "VectorCraft-NOTICE.txt"} <= set(linux.REQUIRED_LICENSE_FILES)
 assert set(windows.GENERATED_PACKAGE_FILES) == {
     "narwhal3d/native/narwhal_application_core.dll",
     "narwhal3d/native/narwhal_ui_core.dll",
@@ -71,6 +75,7 @@ for source, names in {
     "embedded_cdr.py": ("narwhal-cdr-multiversion",),
     "converter_process.py": ("narwhal-converter-supervisor",),
     "ai_assistant.py": ("libnarwhal_automation.so", "narwhal_automation.dll"),
+    "trace_picture.py": ("narwhal-picture-trace", "narwhal-picture-trace.exe", "runtime"),
 }.items():
     text = (ROOT / "narwhal3d" / source).read_text(encoding="utf-8")
     assert all(name in text for name in names), (source, names)

@@ -1,10 +1,10 @@
-//! Cut lines from images: the Coco Production cut generator as a standalone library.
+//! Cut lines from images: the Narwhal 3D picture tracer as a standalone library.
 //!
 //! Give it an image and its printed size; it returns closed Bézier loops around the artwork,
 //! offset outward by the requested distance, ready for a vinyl or laser cutter.
 //!
 //! ```no_run
-//! use coco_cutline::{ArtworkSize, CutSettings, Image, generate_cut};
+//! use narwhal_picture_trace::{ArtworkSize, CutSettings, Image, generate_cut};
 //!
 //! let image = Image::decode(&std::fs::read("sticker.png")?)?;
 //! let size = ArtworkSize::from_artwork_width_inches(&image, 4.0);
@@ -18,7 +18,7 @@
 
 pub mod pipeline;
 
-pub use coco_cut::{CubicNode, Point};
+pub use narwhal_trace_core::{CubicNode, Point};
 use pipeline::{POINTS_PER_INCH, PROCESSING_PPI};
 use std::fmt;
 use vectorcraft_geom::{AnchorKind, BezPath, PathData, Rect};
@@ -27,7 +27,7 @@ use vectorcraft_geom::{AnchorKind, BezPath, PathData, Rect};
 /// background, and so is a near-uniform opaque border connected to the image edge.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Background {
-    /// Detect a solid border colour and remove it everywhere (Coco Production's default for
+    /// Detect a solid border colour and remove it everywhere (the default for
     /// opened images). Transparent-bordered images use transparency only.
     Auto,
     /// Use transparency (and the connected border region) only.
@@ -36,7 +36,7 @@ pub enum Background {
     Color([u8; 3]),
 }
 
-/// Cut settings. Defaults match Coco Production.
+/// Cut settings, with the tracer's defaults.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct CutSettings {
     /// Distance from the artwork to the cut, in points. Negative cuts inside the art.
@@ -58,7 +58,7 @@ pub struct CutSettings {
 
 impl CutSettings {
     /// These settings with outline smoothness `smoothness` (0 Detailed to 1 Smooth) and the
-    /// matching curve-fitting tolerance, as Coco Production's Outline smoothness slider.
+    /// matching curve-fitting tolerance, like an Outline smoothness slider.
     #[must_use]
     pub fn with_smoothness(self, smoothness: f64) -> Self {
         Self {
@@ -139,7 +139,7 @@ impl Image {
     }
 
     /// The box `(x, y, width, height)` of pixels that aren't fully transparent: the artwork
-    /// Coco Production sizes and cuts after trimming transparent padding.
+    /// Artwork is sized and cut after trimming transparent padding.
     #[must_use]
     pub fn visible_box(&self) -> Option<(u32, u32, u32, u32)> {
         let (mut x0, mut y0, mut x1, mut y1) = (self.width, self.height, 0, 0);
@@ -224,7 +224,7 @@ impl ArtworkSize {
     }
 
     /// The image printed so its visible artwork (transparent padding excluded) is `inches`
-    /// wide, as when sizing artwork in Coco Production.
+    /// wide, as when sizing artwork for a cut.
     #[must_use]
     pub fn from_artwork_width_inches(image: &Image, inches: f64) -> Self {
         let visible = image.visible_box().map_or(image.width, |(_, _, w, _)| w);
@@ -317,7 +317,7 @@ impl Cut {
         self.bez_path().to_svg()
     }
 
-    /// A standalone SVG sized in inches, drawn as Coco Production draws cuts (red hairline).
+    /// A standalone SVG sized in inches, with the cut drawn as a red hairline.
     #[must_use]
     pub fn to_svg_document(&self) -> String {
         let (width, height) = (self.artwork.width_pt, self.artwork.height_pt);
@@ -384,7 +384,7 @@ impl Cut {
 
 /// Generates the cut around `image`, printed at `size`.
 ///
-/// As in Coco Production, fully transparent padding is trimmed first, the art is resampled to
+/// Fully transparent padding is trimmed first, the art is resampled to
 /// the normalized processing resolution, cleaned up, traced, fitted with curves and offset at
 /// full size. Coordinates in the result are relative to the untrimmed image.
 pub fn generate_cut(
@@ -432,7 +432,7 @@ pub fn generate_cut(
         resampled = Image::new(target_width, target_height, resized.into_raw())?;
         &resampled
     };
-    let mask = coco_cut::BinaryMask::new(
+    let mask = narwhal_trace_core::BinaryMask::new(
         render.width as usize,
         render.height as usize,
         pipeline::foreground_mask(
@@ -451,8 +451,8 @@ pub fn generate_cut(
     Ok(Cut::from_path(&path, size, base.unified_join_pt))
 }
 
-/// A copy of `image` with its background made transparent, as Coco Production cleans an
-/// opened image before clipping it to the cut.
+/// A copy of `image` with its background made transparent, as an opened image
+/// is cleaned before clipping it to the cut.
 pub fn remove_background(image: &Image, settings: &CutSettings) -> Result<Image, CutError> {
     let background = image.background_color(settings)?;
     let mask = pipeline::foreground_mask(
@@ -478,8 +478,8 @@ pub enum CutError {
     NothingToTrace,
     NoUsablePath,
     OffsetRemovedEverything,
-    Mask(coco_cut::MaskError),
-    Contour(coco_cut::ContourError),
+    Mask(narwhal_trace_core::MaskError),
+    Contour(narwhal_trace_core::ContourError),
 }
 
 impl fmt::Display for CutError {
@@ -502,14 +502,14 @@ impl fmt::Display for CutError {
 
 impl std::error::Error for CutError {}
 
-impl From<coco_cut::MaskError> for CutError {
-    fn from(error: coco_cut::MaskError) -> Self {
+impl From<narwhal_trace_core::MaskError> for CutError {
+    fn from(error: narwhal_trace_core::MaskError) -> Self {
         Self::Mask(error)
     }
 }
 
-impl From<coco_cut::ContourError> for CutError {
-    fn from(error: coco_cut::ContourError) -> Self {
+impl From<narwhal_trace_core::ContourError> for CutError {
+    fn from(error: narwhal_trace_core::ContourError) -> Self {
         Self::Contour(error)
     }
 }

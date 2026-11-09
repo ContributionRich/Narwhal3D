@@ -39,6 +39,36 @@ m.add_object(bridge.make_polyline([(0, 20, 0), (5, 25, 0), (10, 20, 0), (15, 24,
 m.snapshot()
 print("ACCEPT snapshot ok objects", len(m.file.Objects))
 assert len(m.file.Objects) == 3
+# TracePicture: the PACKAGED helper must be found and must trace a placed picture into
+# closed curves. 0.4.11 shipped without it, so the command only said it was missing.
+import struct, tempfile, zlib
+import rhino3dm as r3
+from narwhal3d import picture, trace_picture as tp
+tracer = os.path.join(root, "runtime", "linux-x86_64", "bin", "narwhal-picture-trace")
+found = tp.helper_path()
+print("ACCEPT tracer", found)
+assert found and os.path.realpath(found) == os.path.realpath(tracer), (found, tracer)
+size = 64
+rows = b"".join(b"\x00" + b"".join(
+    bytes((30, 30, 30, 255)) if (x - 31.5) ** 2 + (y - 31.5) ** 2 <= 400 else bytes(4)
+    for x in range(size)) for y in range(size))
+def chunk(kind, data):
+    return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data))
+image = os.path.join(tempfile.mkdtemp(), "disc.png")
+with open(image, "wb") as stream:
+    stream.write(b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", size, size, 8, 6, 0, 0, 0))
+                 + chunk(b"IDAT", zlib.compress(rows)) + chunk(b"IEND", b""))
+frame = picture.make_frame(image, (0.0, 0.0, 0.0), (64.0, 0.0, 0.0), (0.0, 64.0, 0.0))
+settings = {"offset": 0.0, "min_hole": 1.0, "inner_cuts": True, "background": "Auto",
+            "color": "#ffffff", "color_tolerance": 12.0, "smoothness": 40.0}
+cut = tp.trace(found, tp.helper_args(image, size, frame, 1 / 25.4, settings))
+controls = tp.loop_controls(cut, frame)
+curves = [tp.bezier_loop(r3, ctrl) for ctrl in controls]
+print("ACCEPT trace loops", len(curves), "closed", [c.IsClosed for c in curves])
+assert len(curves) == 1 and curves[0].IsClosed
+box = curves[0].GetBoundingBox()
+assert abs((box.Max.X - box.Min.X) - 40.0) < 2.0 and abs((box.Max.Y - box.Min.Y) - 40.0) < 2.0, box
+print("ACCEPT_TRACE_PASSED")
 print("ACCEPT_GEOMETRY_PASSED")
 '''
 

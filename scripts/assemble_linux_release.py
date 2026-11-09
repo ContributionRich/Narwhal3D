@@ -59,6 +59,7 @@ NATIVE_COMPONENTS = (
     "narwhal-cdr-multiversion", "narwhal-document-core", "narwhal-welcome",
     "libnarwhal_automation.so", "narwhal-automation",
     "libnarwhal_application_core.so", "libnarwhal_ui_core.so",
+    "narwhal-picture-trace",
 )
 PACKAGED_ACCELERATORS = (
     "libnarwhal_geometry_core.so", "libnarwhal_platform_core.so",
@@ -99,6 +100,10 @@ REQUIRED_LICENSE_FILES = (
     "TraceDraw-MIT.txt",
     "TraceDraw-Rust-Dependencies.txt",
     "Native-Rust-Dependencies.txt",
+    "PictureTrace-Rust-Dependencies.txt",
+    "VectorCraft-MIT.txt",
+    "VectorCraft-Apache-2.0.txt",
+    "VectorCraft-NOTICE.txt",
 )
 DISTRIBUTIONS = {
     "rhino3dm": "8.35.0",
@@ -451,6 +456,49 @@ def validate_appimage_runtime(path: Path, artifacts: dict[str, JsonObject]) -> N
         raise ReleaseError(f"AppImage runtime SHA-256 mismatch: expected {APPIMAGE_RUNTIME_SHA256}, got {actual}")
 
 
+def disc_png(size: int = 48, radius: float = 16.0) -> bytes:
+    """A small RGBA PNG: one opaque disc on a transparent background (no image library)."""
+    import struct
+    import zlib
+    rows = bytearray()
+    centre = (size - 1) / 2.0
+    for y in range(size):
+        rows.append(0)
+        for x in range(size):
+            inside = (x - centre) ** 2 + (y - centre) ** 2 <= radius * radius
+            rows += bytes((20, 20, 20, 255)) if inside else bytes((0, 0, 0, 0))
+
+    def chunk(kind: bytes, data: bytes) -> bytes:
+        return (struct.pack(">I", len(data)) + kind + data
+                + struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF))
+    header = struct.pack(">IIBBBBB", size, size, 8, 6, 0, 0, 0)
+    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", header)
+            + chunk(b"IDAT", zlib.compress(bytes(rows))) + chunk(b"IEND", b""))
+
+
+def probe_picture_trace(tracer: Path) -> dict[str, int]:
+    """Run the packaged TracePicture helper on a real image; it must return one closed cut.
+
+    A release once shipped without this helper, so TracePicture only reported it missing.
+    Presence is not enough: the binary must actually trace.
+    """
+    with tempfile.TemporaryDirectory(prefix="narwhal-trace-probe-") as temporary:
+        image = Path(temporary) / "disc.png"
+        image.write_bytes(disc_png())
+        try:
+            completed = subprocess.run(
+                [str(tracer), str(image), "--dpi", "72", "--offset-in", "0", "--format", "json"],
+                text=True, capture_output=True, timeout=60, check=True)
+            result = json.loads(completed.stdout)
+        except (OSError, subprocess.SubprocessError, ValueError) as exc:
+            raise ReleaseError(f"bundled picture tracer cannot trace: {exc}") from exc
+    loops = result.get("loops") if isinstance(result, dict) else None
+    if (not isinstance(loops, list) or len(loops) != 1 or not loops[0].get("closed")
+            or len(loops[0].get("nodes", ())) < 4):
+        raise ReleaseError(f"bundled picture tracer returned no closed cut: {str(result)[:200]}")
+    return {"loops": len(loops), "nodes": len(loops[0]["nodes"])}
+
+
 def probe_supervisor_memory(supervisor: Path) -> None:
     """Require an executed child under the memory-limit protocol used by native Open."""
     try:
@@ -571,6 +619,8 @@ def validate_native_components(
     if document_version != DOCUMENT_CORE_PROTOCOL:
         raise ReleaseError(f"wrong Narwhal document-core protocol: {document_version!r}")
     records["narwhal-document-core"]["protocol"] = document_version
+    records["narwhal-picture-trace"]["trace_probe"] = probe_picture_trace(
+        directory / "narwhal-picture-trace")
     records["required_glibc"] = format_glibc(required_glibc)
     return records
 
@@ -976,6 +1026,10 @@ def self_check() -> None:
         "TraceDraw-MIT.txt",
         "TraceDraw-Rust-Dependencies.txt",
         "Native-Rust-Dependencies.txt",
+        "PictureTrace-Rust-Dependencies.txt",
+        "VectorCraft-MIT.txt",
+        "VectorCraft-Apache-2.0.txt",
+        "VectorCraft-NOTICE.txt",
     }
     if set(REQUIRED_LICENSE_FILES) != expected_licenses:
         raise ReleaseError("self-check found an incomplete required license set")
@@ -1035,6 +1089,7 @@ def self_check() -> None:
             "narwhal-cdr-multiversion", "narwhal-document-core", "narwhal-welcome",
             "libnarwhal_automation.so", "narwhal-automation",
             "libnarwhal_application_core.so", "libnarwhal_ui_core.so",
+            "narwhal-picture-trace",
         ):
             raise ReleaseError("self-check found an incomplete native component set")
         if PACKAGED_ACCELERATORS != (

@@ -40,8 +40,8 @@ License: MIT for the Type-2 runtime, with its statically linked component notice
 
 6a. VectorCraft 0.10.0 (vectorcraft-geom, -pathops, -trace)
 --------------------------------
-Use: vendored in `native/cutline` and statically compiled into the `coco-cutline` helper that the TracePicture command runs.
-License: MIT OR Apache-2.0; the upstream license and notice texts are in `native/cutline/LICENSES/`. The `coco-cut` and `coco-cutline` crates beside them are contributed by their author under this project's license.
+Use: vendored in `native/picture_trace` and statically compiled into the `narwhal-picture-trace` helper that the TracePicture command runs; the Linux AppImage and Windows EXE ship that helper from 0.4.12.
+License: MIT OR Apache-2.0; the upstream license and notice texts are in `native/picture_trace/LICENSES/` and ship as `licenses/VectorCraft-MIT.txt`, `licenses/VectorCraft-Apache-2.0.txt` and `licenses/VectorCraft-NOTICE.txt`; the helper's other statically linked Rust crates are listed with their license texts in `licenses/PictureTrace-Rust-Dependencies.txt`. The `narwhal-trace-core` and `narwhal-picture-trace` crates beside them are contributed by their author under this project's license.
 
 6. TraceDraw 0.9.0-dev.821ba15
 --------------------------------

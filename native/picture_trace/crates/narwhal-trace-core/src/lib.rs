@@ -1,4 +1,4 @@
-//! Platform-neutral binary-mask processing for Coco cut generation.
+//! Platform-neutral binary-mask processing for Narwhal 3D picture tracing.
 //!
 //! Distances are measured between pixel centers. Morphological operations use
 //! exact squared Euclidean distances and intentionally treat only in-bounds

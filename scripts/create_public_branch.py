@@ -464,7 +464,7 @@ def public_files() -> list[str]:
                 + PATCH_FILES + SCRIPT_FILES + TEST_FILES)
     for directory in ("narwhal3d", "packaging", "licenses", ".github", "artwork"):
         paths.update(recursive_files(directory))
-    for directory in ("native/vendor/tracedraw", "native/cutline"):
+    for directory in ("native/vendor/tracedraw", "native/picture_trace"):
         paths.update(recursive_files(directory))
     # Fail closed rather than silently publishing a copied retirement archive.
     try:

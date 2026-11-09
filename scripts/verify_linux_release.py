@@ -49,6 +49,7 @@ NATIVE_COMPONENTS = (
     "narwhal-cdr-multiversion", "narwhal-document-core", "narwhal-welcome",
     "libnarwhal_automation.so", "narwhal-automation",
     "libnarwhal_application_core.so", "libnarwhal_ui_core.so",
+    "narwhal-picture-trace",
 )
 PACKAGED_ACCELERATORS = (
     "libnarwhal_geometry_core.so", "libnarwhal_platform_core.so",
@@ -104,6 +105,10 @@ REQUIRED_NOTICE_PATHS = {
     "usr/lib/narwhal3d/licenses/TraceDraw-MIT.txt",
     "usr/lib/narwhal3d/licenses/TraceDraw-Rust-Dependencies.txt",
     "usr/lib/narwhal3d/licenses/Native-Rust-Dependencies.txt",
+    "usr/lib/narwhal3d/licenses/PictureTrace-Rust-Dependencies.txt",
+    "usr/lib/narwhal3d/licenses/VectorCraft-MIT.txt",
+    "usr/lib/narwhal3d/licenses/VectorCraft-Apache-2.0.txt",
+    "usr/lib/narwhal3d/licenses/VectorCraft-NOTICE.txt",
     "usr/lib/narwhal3d/licenses/application_core-OPENNURBS.txt",
 }
 REQUIRED_PATHS = {
@@ -941,6 +946,7 @@ def self_check() -> None:
         "narwhal-cdr-multiversion", "narwhal-document-core", "narwhal-welcome",
         "libnarwhal_automation.so", "narwhal-automation",
         "libnarwhal_application_core.so", "libnarwhal_ui_core.so",
+        "narwhal-picture-trace",
     ):
         raise VerificationError("self-check found an incomplete native component set")
     if PACKAGED_ACCELERATORS != (
@@ -1016,6 +1022,10 @@ def self_check() -> None:
         "usr/lib/narwhal3d/licenses/TraceDraw-MIT.txt",
         "usr/lib/narwhal3d/licenses/TraceDraw-Rust-Dependencies.txt",
         "usr/lib/narwhal3d/licenses/Native-Rust-Dependencies.txt",
+        "usr/lib/narwhal3d/licenses/PictureTrace-Rust-Dependencies.txt",
+        "usr/lib/narwhal3d/licenses/VectorCraft-MIT.txt",
+        "usr/lib/narwhal3d/licenses/VectorCraft-Apache-2.0.txt",
+        "usr/lib/narwhal3d/licenses/VectorCraft-NOTICE.txt",
         "usr/lib/narwhal3d/licenses/application_core-OPENNURBS.txt",
     }
     if REQUIRED_NOTICE_PATHS != expected_notices or not expected_notices.issubset(REQUIRED_PATHS):

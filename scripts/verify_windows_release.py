@@ -58,6 +58,7 @@ NATIVE_COMPONENT_PATHS = {
     "narwhal-cdr-multiversion.exe": "app/runtime/windows-x86_64/bin/narwhal-cdr-multiversion.exe",
     "narwhal-document-core.exe": "app/runtime/windows-x86_64/bin/narwhal-document-core.exe",
     "narwhal-welcome.exe": "app/runtime/windows-x86_64/bin/narwhal-welcome.exe",
+    "narwhal-picture-trace.exe": "app/runtime/windows-x86_64/bin/narwhal-picture-trace.exe",
     "narwhal_geometry_core.dll": "app/narwhal3d/native/narwhal_geometry_core.dll",
     "narwhal_platform_core.dll": "app/narwhal3d/native/narwhal_platform_core.dll",
     "narwhal_pure_core.dll": "app/narwhal3d/native/narwhal_pure_core.dll",
@@ -109,6 +110,8 @@ REQUIRED = {
     "app/licenses/OCP-Apache-2.0.txt", "app/licenses/LGPL-2.1-or-later.txt",
     "app/licenses/OCCT-exception-1.0.txt", "app/licenses/TraceDraw-MIT.txt",
     "app/licenses/TraceDraw-Rust-Dependencies.txt", "windows-release-manifest.json",
+    "app/licenses/PictureTrace-Rust-Dependencies.txt", "app/licenses/VectorCraft-MIT.txt",
+    "app/licenses/VectorCraft-Apache-2.0.txt", "app/licenses/VectorCraft-NOTICE.txt",
     "app/runtime/windows-x86_64/bin/narwhal_cdr_core.dll",
     "app/runtime/windows-x86_64/bin/narwhal-converter-supervisor.exe",
     "app/runtime/windows-x86_64/bin/narwhal-cdr-multiversion.exe",
@@ -654,6 +657,10 @@ def verify_directory(root: Path, args: argparse.Namespace) -> None:
                 record.get("protocol") != CDR_MULTIVERSION_PROTOCOL
                 or CDR_MULTIVERSION_PROTOCOL.encode("ascii") not in data):
             raise VerificationError("Windows multi-version CDR helper has the wrong protocol")
+        if filename == "narwhal-picture-trace.exe" and (
+                b"narwhal-picture-trace: " not in data or b"--offset-in" not in data):
+            # TracePicture runs this helper; 0.4.11 shipped without it.
+            raise VerificationError("Windows picture tracer is missing or not the TracePicture helper")
         if (filename == "narwhal-converter-supervisor.exe"
                 and record.get("memory_limit_probe_mib") != 64):
             raise VerificationError(

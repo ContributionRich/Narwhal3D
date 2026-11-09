@@ -326,7 +326,7 @@ class PolicyTests(unittest.TestCase):
     def test_public_selection_rejects_nested_archive_without_copying_root_archive(self):
         with tempfile.TemporaryDirectory(prefix='native-publish-') as tmp:
             root = Path(tmp)
-            for path in ('narwhal3d', 'packaging', 'licenses', '.github', 'artwork', 'native/vendor/tracedraw', 'native/cutline', 'legacy'):
+            for path in ('narwhal3d', 'packaging', 'licenses', '.github', 'artwork', 'native/vendor/tracedraw', 'native/picture_trace', 'legacy'):
                 (root / path).mkdir(parents=True)
             (root / 'legacy/old.py').write_text('local only\n')
             lists = {key: () for key in ('ROOT_FILES', 'LAUNCH_FILES', 'WELCOME_FILES', 'NATIVE_FILES',
