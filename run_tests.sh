@@ -475,6 +475,7 @@ PURE_SUITES=(
     spike/test_native_unit_table.py
     spike/test_native_nearest.py
     spike/test_pure_core_nearest_batch_gate.py
+    spike/test_native_curve_samples.py
     spike/test_rebuild_performance.py
     spike/test_native_interpolate.py
     spike/test_native_tween.py

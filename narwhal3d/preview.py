@@ -345,8 +345,8 @@ def preview_interpcrv(args, cursor, plane):
         curve = bridge.make_interpolated_curve(through, degree=3)
     except Exception:  # noqa: BLE001
         return [pts + [tuple(cursor)]]
-    samples = bridge.sample_curve(curve, 24 * (len(through) - 1))
-    return [[(p.X, p.Y, p.Z) for p in samples]] if samples else []
+    samples = bridge.sample_curve_xyz(curve, 24 * (len(through) - 1))
+    return [samples] if samples else []
 
 
 def preview_circle(args, cursor, plane):
@@ -1188,13 +1188,11 @@ def preview_extrudecrv(args, cursor, plane, resolve, cmd=None):
         geom = resolve(name)
         if geom is None:
             continue
-        # MEASURED: `bridge.sample_curve` returns rhino3dm `Point3d` objects, which are NOT
-        # subscriptable -- everything else in this module works on plain (x, y, z) tuples, so
-        # they are converted here rather than making the vector helpers polymorphic.
-        sampled = bridge.sample_curve(geom, 96)
+        # Plain (x, y, z) tuples, as everything else in this module uses.
+        sampled = bridge.sample_curve_xyz(geom, 96)
         if sampled and len(sampled) >= 2:
             geoms.append(geom)
-            profiles.append([(p.X, p.Y, p.Z) for p in sampled])
+            profiles.append(sampled)
     if not profiles:
         return []
 
@@ -1936,9 +1934,9 @@ def _object_wires(resolve, names, cache=None):
         curves = [geom] if hasattr(geom, "PointAtStart") else bridge.extract_wireframe(geom)[0]
         for curve in curves:
             n = 2 if getattr(curve, "IsLinear", lambda: False)() else 48
-            pts = bridge.sample_curve(curve, n)
+            pts = bridge.sample_curve_xyz(curve, n)
             if pts and len(pts) >= 2:
-                wires.append([(p.X, p.Y, p.Z) for p in pts])
+                wires.append(pts)
         loc = getattr(geom, "Location", None)
         if loc is not None and not curves:
             wires.append([(loc.X, loc.Y, loc.Z), (loc.X, loc.Y, loc.Z)])

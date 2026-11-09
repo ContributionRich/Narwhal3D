@@ -95,6 +95,7 @@ PURE_CORE_PYTESTS = (
     "spike/test_native_nearest.py",
     "spike/test_pure_core_nearest_batch_gate.py",
     "spike/test_rebuild_performance.py",
+    "spike/test_native_curve_samples.py",
     "spike/test_native_interpolate.py",
     "spike/test_native_tween.py",
 )
@@ -469,6 +470,27 @@ def step_release_build(crate: Path) -> dict[str, object]:
     return {"status": "ok", "artifact": str(lib), "command": "cargo build --release"}
 
 
+def _probe_sample_nurbs(lib) -> str:
+    """Known answers from `narwhal_pure_core_sample_nurbs`: a degree-1 segment from
+    (0, 0, 0) to (2, 0, 0) sampled at quarter parameters, and zero segments refused."""
+    name = "narwhal_pure_core_sample_nurbs"
+    D = ctypes.POINTER(ctypes.c_double)
+    fn = getattr(lib, name)
+    fn.argtypes = [ctypes.c_size_t, D, ctypes.c_size_t, D, ctypes.c_size_t, ctypes.c_ubyte,
+                   ctypes.c_double, ctypes.c_double, ctypes.c_size_t, D, ctypes.c_size_t]
+    fn.restype = ctypes.c_int32
+    knots = (ctypes.c_double * 2)(0.0, 1.0)
+    cvs = (ctypes.c_double * 8)(0.0, 0.0, 0.0, 1.0, 2.0, 0.0, 0.0, 1.0)
+    out = (ctypes.c_double * 15)()
+    if fn(2, knots, 2, cvs, 2, 0, 0.0, 1.0, 4, out, 15) != 0:
+        raise GateError(f"{name}: sampling a segment failed")
+    if [out[3 * i] for i in range(5)] != [0.0, 0.5, 1.0, 1.5, 2.0]:
+        raise GateError(f"{name}: the segment's samples are wrong ({list(out)})")
+    if fn(2, knots, 2, cvs, 2, 0, 0.0, 1.0, 0, out, 15) == 0:
+        raise GateError(f"{name}: zero segments were not refused")
+    return name
+
+
 def step_direct_abi(lib_path: Path) -> dict[str, object]:
     """Load the built library and exercise both stable and additive C ABIs."""
     try:
@@ -521,8 +543,12 @@ def step_direct_abi(lib_path: Path) -> dict[str, object]:
     bad_ptr = (ctypes.c_double * 9).from_buffer(bad)
     if int(size(bad_ptr, 1, name_arr, len(name), 1)) >= 0:
         raise GateError("direct ABI size query accepted a NaN coordinate")
+    try:
+        geometry = [_probe_sample_nurbs(lib)]
+    except (AttributeError, OSError) as exc:
+        raise GateError(f"cannot bind a pure-core geometry export: {exc}") from exc
     return {"status": "ok", "abi_version": ABI_VERSION, "parser": parser_identity,
-                "command": "ctypes ABI probe"}
+                "geometry_exports": geometry, "command": "ctypes ABI probe"}
 
 
 def step_nearest_batch(lib_path: Path) -> dict[str, object]:

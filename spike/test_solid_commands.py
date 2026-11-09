@@ -325,21 +325,28 @@ msg, done = c.set_handle_radius(scalar_id, 0.9, cx)
 check(not done and "current phase" in msg and c._edge_radii[eid] == (0.5, 0.5),
       "the scalar selection id cannot accidentally edit both endpoints in EDIT_HANDLES")
 
-real_sections, real_sample = bridge.bevel_edge_sections_occt, bridge.sample_curve
-section_calls, sample_calls, build_calls = [], [], []
+real_sections, real_sample = bridge.bevel_edge_sections_occt, bridge.sample_curve_xyz
+real_direct_sample = bridge.sample_curve
+section_calls, sample_calls, direct_sample_calls, build_calls = [], [], [], []
 def counted_sections(*args, **kwargs):
     section_calls.append(kwargs)
     return real_sections(*args, **kwargs)
 def counted_sample(*args, **kwargs):
     sample_calls.append(1)
     return real_sample(*args, **kwargs)
+def counted_direct_sample(*args, **kwargs):
+    # direct `sample_curve` too (sample_curve_xyz's own Python route calls it), so a
+    # getter that samples directly cannot pass the zero-work check below
+    direct_sample_calls.append(1)
+    return real_direct_sample(*args, **kwargs)
 def edit_counted_bevel(*args, **kwargs):
     check(c._candidate is None and c.preview_geometry() is None,
           "candidate is invalidated BEFORE the geometry producer runs")
     build_calls.append(kwargs)
     return real_bevel(*args, **kwargs)
 bridge.bevel_edge_sections_occt = counted_sections
-bridge.sample_curve = counted_sample
+bridge.sample_curve_xyz = counted_sample
+bridge.sample_curve = counted_direct_sample
 bridge.bevel_edges_occt = edit_counted_bevel
 try:
     msg0, _ = c.set_handle_radius(ids[0], 0.3, cx)
@@ -350,14 +357,15 @@ try:
           and tuple(record["id"] for record in c.handle_records()) == ids,
           f"endpoint 1 changes independently without moving handle identity ({msg1})")
     section_curves, lines = c.preview_section_curves(), c.preview_lines()
-    counts = (len(build_calls), len(section_calls), len(sample_calls))
+    counts = (len(build_calls), len(section_calls), len(sample_calls), len(direct_sample_calls))
     for _ in range(10):
         c.handle_records()
         check(c.preview_geometry() is None and c.preview_section_curves() is section_curves
               and c.preview_lines() is lines,
               "Preview=No getters retain the section cache but hide solid preview")
-    check(counts == (2, 2, 4)
-          and counts == (len(build_calls), len(section_calls), len(sample_calls)),
+    check(counts[:3] == (2, 2, 4)
+          and counts == (len(build_calls), len(section_calls), len(sample_calls),
+                         len(direct_sample_calls)),
           "two radius edits build twice; every draw getter performs ZERO OCCT/sampling work")
     check(len(section_curves) == 2 and all(g.ToNurbsCurve().IsRational for g in section_curves)
           and len(lines) == 2 and all(len(line) > 2 for line in lines)
@@ -380,7 +388,8 @@ try:
 finally:
     bridge.bevel_edges_occt = real_bevel
     bridge.bevel_edge_sections_occt = real_sections
-    bridge.sample_curve = real_sample
+    bridge.sample_curve_xyz = real_sample
+    bridge.sample_curve = real_direct_sample
 recipe = kernel.recipe_of(candidate) if candidate is not None else None
 master = kernel.master_of(candidate) if candidate is not None else None
 rebuilt = ob.from_recipe(recipe) if recipe is not None else None

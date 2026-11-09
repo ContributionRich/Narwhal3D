@@ -353,8 +353,7 @@ class _EdgeBevelCmd(Command):
                            for records in sections.values() for section in records)
             # Python is UI/OCCT orchestration only. Reuse the bridge's existing display
             # sampler; these polylines NEVER become document geometry or recipes.
-            lines = tuple(tuple((p.X, p.Y, p.Z) for p in bridge.sample_curve(curve))
-                          for curve in curves)
+            lines = tuple(tuple(bridge.sample_curve_xyz(curve)) for curve in curves)
             self._sections, self._section_curves, self._section_lines = sections, curves, lines
         except (ValueError, RuntimeError) as exc:
             self._section_error = str(exc)
@@ -956,9 +955,9 @@ class _MoveSubObjectCmd(Command):
                 wires = []
                 for c in curves:
                     n = 2 if c.IsLinear() else 32
-                    pts = bridge.sample_curve(c, n)
+                    pts = bridge.sample_curve_xyz(c, n)
                     if pts and len(pts) >= 2:
-                        wires.append([(p.X, p.Y, p.Z) for p in pts])
+                        wires.append(pts)
                 shape = bridge._occt_operand(geom)
                 parts = (occt.unique_faces(shape) if self.kind == "face"
                          else occt._unique_edges(shape))

@@ -355,6 +355,7 @@ REQUIRED = {
     "narwhal3d/nearest.py",
     "narwhal3d/native_nearest.py",
     "narwhal3d/rebuild.py",
+    "spike/test_native_curve_samples.py",
     "spike/test_native_interpolate.py",
     "spike/test_native_tween.py",
     "spike/test_curve_options.py",

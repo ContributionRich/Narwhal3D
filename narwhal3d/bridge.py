@@ -27,6 +27,24 @@ def sample_curve(curve, n: int = 64):
     return [curve.PointAt(d.T0 + (d.T1 - d.T0) * i / n) for i in range(n + 1)]
 
 
+def sample_curve_xyz(curve, n: int = 64):
+    """`sample_curve` as ``(x, y, z)`` tuples, the form previews and wireframes draw.
+
+    With the pure-core library loaded a `NurbsCurve` is sampled in Rust
+    (`native_nearest.sample`), bit-identical to `PointAt`. MEASURED (i7-9700K): one
+    `PointAt` costs about 9 us, so a 10-point InterpCrv preview's 217 samples took
+    1.9 ms per redraw, 0.17 ms through Rust. Other curves keep `sample_curve`.
+    """
+    try:
+        from . import native_nearest
+    except ImportError:          # loaded standalone (tests / probes)
+        import native_nearest
+    native = native_nearest.sample(curve, n)
+    if native is not None:
+        return native
+    return [(p.X, p.Y, p.Z) for p in sample_curve(curve, n)]
+
+
 def distance_to_curve(curve, point, n: int = 256):
     """The shortest distance from `point` to `curve`, by sampling.
 
@@ -4993,7 +5011,7 @@ def overlay_curve_points(curve):
         except Exception:  # noqa: BLE001
             n = 64
         n = max(8, min(n, 512))
-        return [(q.X, q.Y, q.Z) for q in sample_curve(curve, n)]
+        return sample_curve_xyz(curve, n)
     except Exception:  # noqa: BLE001
         return []
 

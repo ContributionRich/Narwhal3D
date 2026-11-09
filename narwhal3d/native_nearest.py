@@ -5,6 +5,9 @@
 knots and control points, evaluating them with openNURBS's algorithms in the same
 operation order, so its point is bit-identical to the Python search's. The answer
 is a snap location only; it never changes document geometry.
+
+`sample` uses the same evaluator for `bridge.sample_curve_xyz`: a `NurbsCurve`'s
+uniform samples, bit-identical to `PointAt`, for previews and wireframes only.
 """
 from __future__ import annotations
 
@@ -22,7 +25,9 @@ _ENV = "NARWHAL_PURE_CORE"
 _lock = threading.Lock()
 _signature = None
 _binding = None
+_sample_binding = None
 _native_calls = 0
+_native_sample_calls = 0
 
 
 def _library_name():
@@ -33,23 +38,25 @@ def _library_name():
     return "libnarwhal_pure_core.so"
 
 
-def _nearest_binding():
-    global _signature, _binding
+def _bindings():
+    """``(nearest, sample)`` from the pure-core library; either is None when missing."""
+    global _signature, _binding, _sample_binding
     explicit = os.environ.get(_ENV)
     signature = explicit or "<packaged>"
     if _signature == signature:
-        return _binding
+        return _binding, _sample_binding
     with _lock:
         if _signature == signature:
-            return _binding
-        _signature, _binding = signature, None
+            return _binding, _sample_binding
+        _signature, _binding, _sample_binding = signature, None, None
         packaged = Path(__file__).resolve().parent / "native" / _library_name()
         candidates = (Path(explicit).expanduser(),) if explicit else (packaged,)
         for path in candidates:
             if not path.is_file():
                 continue
             try:
-                fn = ctypes.CDLL(str(path)).narwhal_pure_core_nearest_on_nurbs
+                lib = ctypes.CDLL(str(path))
+                fn = lib.narwhal_pure_core_nearest_on_nurbs
             except (AttributeError, OSError):
                 continue
             fn.argtypes = [ctypes.c_size_t, ctypes.POINTER(ctypes.c_double), ctypes.c_size_t,
@@ -58,8 +65,20 @@ def _nearest_binding():
                            ctypes.POINTER(ctypes.c_ubyte)]
             fn.restype = ctypes.c_int32
             _binding = fn
-            return fn
-        return None
+            sample_fn = getattr(lib, "narwhal_pure_core_sample_nurbs", None)
+            if sample_fn is not None:
+                sample_fn.argtypes = [ctypes.c_size_t, ctypes.POINTER(ctypes.c_double), ctypes.c_size_t,
+                                      ctypes.POINTER(ctypes.c_double), ctypes.c_size_t, ctypes.c_ubyte,
+                                      ctypes.c_double, ctypes.c_double, ctypes.c_size_t,
+                                      ctypes.POINTER(ctypes.c_double), ctypes.c_size_t]
+                sample_fn.restype = ctypes.c_int32
+                _sample_binding = sample_fn
+            return _binding, _sample_binding
+        return None, None
+
+
+def _nearest_binding():
+    return _bindings()[0]
 
 
 def available():
@@ -206,3 +225,39 @@ def search(packed, target):
         return None
     _native_calls += 1
     return out[0], (out[1], out[2], out[3]), out[4], bool(at_end.value)
+
+
+def sample(curve, n):
+    """``bridge.sample_curve(curve, n)`` as ``(x, y, z)`` tuples, or ``None``.
+
+    Only a `NurbsCurve`, evaluated from its own knots and control points: each point
+    is bit-identical to ``curve.PointAt`` at the same parameter. ``None`` (any other
+    curve, no library, or a point openNURBS could not evaluate) keeps the caller's
+    Python sampling.
+    """
+    global _native_sample_calls
+    fn = _bindings()[1]
+    if fn is None or not isinstance(curve, r3.NurbsCurve):
+        return None
+    try:
+        n = int(n)
+        if n < 1:
+            return None
+        cvs = array.array("d")
+        for cv in curve.Points:
+            cvs.extend((cv.X, cv.Y, cv.Z, cv.W))   # homogeneous, as openNURBS stores them
+        knots = array.array("d", curve.Knots.ToList())
+        domain = curve.Domain
+        out = array.array("d", bytes(8 * 3 * (n + 1)))
+        c_knots = (ctypes.c_double * len(knots)).from_buffer(knots)
+        c_cvs = (ctypes.c_double * len(cvs)).from_buffer(cvs)
+        c_out = (ctypes.c_double * len(out)).from_buffer(out)
+        code = fn(int(curve.Order), c_knots, len(knots), c_cvs, len(cvs) // 4,
+                  int(bool(curve.IsRational)), float(domain.T0), float(domain.T1), n,
+                  c_out, len(out))
+    except Exception:  # noqa: BLE001 -- the Python sampling remains the fallback
+        return None
+    if code != 0:
+        return None
+    _native_sample_calls += 1
+    return list(zip(out[0::3], out[1::3], out[2::3]))
