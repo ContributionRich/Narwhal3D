@@ -432,6 +432,22 @@ def load_model(source: str | os.PathLike):
                            for a, b in zip(proxy_bounds, actual_bounds))):
                 raise NarwhalDocumentError(
                     f"exact master {object_id} does not match its document proxy bounds")
+            # Independently prove full native value identity; neither the worker's
+            # receipt nor an archive digest authorizes replacing the decoded shape.
+            # Retaining the constructor avoids another gp_Dir normalization on
+            # every Open/Save, without redefining any persisted geometry.
+            recipe = kernel.recipe_of(proxy)
+            if recipe is not None:
+                try:
+                    recipe_shape = occt_backend.from_recipe(recipe)
+                    recipe_data = bytes(occt_backend.shape_to_bytes(
+                        recipe_shape, triangles=False,
+                        format_version=occt_backend.document_current_binary_format()))
+                    if data == recipe_data:
+                        shape = recipe_shape
+                except Exception as exc:  # noqa: BLE001
+                    raise NarwhalDocumentError(
+                        f"exact master {object_id} recipe identity cannot be checked: {exc}") from exc
             bindings.append((file_object.Geometry, shape))
         model._native_master_bindings = tuple(bindings)
         model.rehydrated = (len(bindings), 0)

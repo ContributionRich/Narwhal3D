@@ -224,7 +224,7 @@ class PickCandidateTests(unittest.TestCase):
         rear = self.ui.box('rear', low=(-.3, 0, -1.4), high=(.3, .6, -1))
         return front, rear, (rear.name, 'Edge', 4)
 
-    def test_shaded_parts_occluded_but_objects_and_segments_remain_offered(self):
+    def test_shaded_objects_parts_and_segments_obey_owner_visibility_policy(self):
         front, rear, edge = self.occlusion_scene()
         curve = self.ui.line('behind_curve', z=-2)
         self.assertIn(edge, self.keys('part'))
@@ -233,8 +233,8 @@ class PickCandidateTests(unittest.TestCase):
         self.assertIn((front.name, 'Face', 1), keys)
         self.assertNotIn(edge, keys)
         self.assertFalse(any(key[0] == rear.name for key in keys))
-        self.assertIn((curve.name, 'Segment', 0), keys)
-        self.assertEqual({key[0] for key in self.keys()}, {front.name, rear.name, curve.name})
+        self.assertNotIn((curve.name, 'Segment', 0), keys)
+        self.assertEqual({key[0] for key in self.keys()}, {front.name})
 
     def test_shaded_edge_only_still_uses_face_occluders(self):
         _front, _rear, edge = self.occlusion_scene()
@@ -262,16 +262,18 @@ def mutations():
     probes = [
         ('pick_candidates', "hasattr(point, 'X')", 'False',
          'test_component_samples_accept_native_point3d'),
-        ('pick_candidates', "if row[0] not in blocked", 'if True',
+        ('pick_candidates', 'blocked = ui._unpickable_names_cached()', 'blocked = set()',
          'test_hidden_locked_and_missing_display_objects_filtered_after_cache'),
         ('pick_candidates', 'and ui.bridge.display_visible(ob)', 'and True',
          'test_hidden_locked_and_missing_display_objects_filtered_after_cache'),
-        ('pick_candidates', 'tree = None\n    if triangles:', 'tree = None\n    if False:',
+        ('pick_candidates', '    if triangles:\n        tree = BVHTree.FromPolygons',
+                 '    if False:\n        tree = BVHTree.FromPolygons',
          'test_face_interior_uses_actual_bvh_not_boundary_distance'),
         ('pick_candidates', "spans.extend(t + (t[0],) for t in candidate.triangles)", 'pass',
          'test_edge_and_both_adjacent_faces_inside_aperture'),
-        ('pick_candidates', "occlude = mode != 'object' and", 'occlude = False and',
-         'test_shaded_parts_occluded_but_objects_and_segments_remain_offered'),
+        ('pick_candidates', "depth_tree = _cache['depth_tree'] if space.shading.type != 'WIREFRAME' else None",
+         'depth_tree = None',
+         'test_shaded_objects_parts_and_segments_obey_owner_visibility_policy'),
         ('native_selection', '(world, distance) if with_distances else world', 'world',
          'test_native_distance_contract_keeps_default_world_points'),
     ]

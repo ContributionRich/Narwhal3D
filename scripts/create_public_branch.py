@@ -92,6 +92,7 @@ SCRIPT_FILES = (
 )
 TEST_FILES = (
     'spike/test_document_correspondence.py',
+    'spike/test_document_native_encoding_identity.py',
     'spike/test_document_runtime_identity.py',
 
     'spike/test_right_dock_rmb_gui.py',
@@ -145,7 +146,7 @@ TEST_FILES = (
     "spike/test_menubar.py", "spike/test_menubar_resource.py", "spike/test_design.py",
     "spike/test_views.py", "spike/test_v4_assets.py", "spike/test_v4_live.py",
     "spike/v4_live_gui.sh", "spike/test_shell_popup.py", "spike/test_shell_input.py",
-    "spike/test_pick_candidates.py", "spike/test_selection_menu.py",
+    "spike/test_pick_candidates.py", "spike/test_pick_click_local.py", "spike/test_selection_menu.py",
     "spike/test_selection_menu_gui.py", "spike/test_ui_bundle.py",
     "spike/portfolio_review/test_bundle_drafts.py",
     "spike/test_theme_bindings.py", "spike/test_grid_render.py", "spike/test_render_quality_gui.py",
@@ -178,7 +179,7 @@ TEST_FILES = (
     "spike/test_selection_visibility_07.py", "spike/test_gumball_release_profile_07.py",
     "spike/test_move_regression_07.py",
     "spike/test_file_commands.py", "spike/test_sessionlog.py",
-    "spike/test_bugreport.py",
+    "spike/test_bugreport.py", "spike/test_usage_monitor.py",
     "spike/test_import.py", "spike/test_import_dialog.py", "spike/test_export_cmd.py",
     "spike/test_print_cmd.py", "spike/test_print_active_view.py", "spike/test_printdialog.py", "spike/test_printdialog_layout.py", "spike/test_workspace_overlay.py",
     "spike/test_dxf_reader.py", "spike/test_dxf_writer.py", "spike/test_native_dxf.py",
@@ -213,6 +214,8 @@ TEST_FILES = (
     "spike/test_pure_core_gate.py", "spike/test_vector_export.py",
     "spike/test_native_joinchain.py", "spike/test_native_vector_export.py",
     "spike/test_native_command_search.py", "spike/test_native_coil.py",
+    "spike/test_native_intersect.py",
+    "spike/test_pure_core_curve_hits_gate.py",
     "spike/test_native_search02_contract.py", "spike/test_native_search02_adapter.py",
     "spike/test_native_search02_ffi.py", "spike/test_native_search02_consumers.py",
     "spike/test_native_search02_profile.py", "spike/fixtures/native_search02.json",
@@ -375,6 +378,7 @@ NATIVE_FILES = (
     "native/pure_core/src/nearest.rs",
     "native/pure_core/src/interpolate.rs",
     "native/pure_core/src/tween.rs", "native/pure_core/src/surface.rs",
+    "native/pure_core/src/curvex.rs",
     "native/pure_core/src/cage.rs",
     "native/pure_core/src/gridsnap.rs",
     "native/geometry_core/.gitignore", "native/geometry_core/Cargo.lock",

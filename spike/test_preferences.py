@@ -57,6 +57,7 @@ class PreferencesTests(unittest.TestCase):
             "osnap_modes": ["End", "Point", "Mid", "Cen", "Quad"],
             "osnap_disabled": False, "osnap_project": False,
             "ai_config": {}, "ai_include_selection": True, "ai_metadata_permission": {}, "print_settings": {},
+            "usage_monitor": False,
         }
         self.assertEqual(prefs.load(), expected)
         self.assertEqual({key: prefs.get(key) for key in expected}, expected)

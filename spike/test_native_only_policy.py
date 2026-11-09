@@ -289,6 +289,7 @@ class PolicyTests(unittest.TestCase):
             'run "document observer source gate" "$PYTHON" -B scripts/check_document_observer.py --stage-dev --mutations',
             'run "live document registry mutations" "$PYTHON" -B spike/test_document_registry_model.py --mutations',
             'run "AI canonical publisher races and mutations" "$PYTHON" -B spike/test_ai_v9_races.py --mutations',
+            '--python spike/test_pick_click_local.py -- --mutations',
         }
         for line in text.splitlines():
             if '--mutations' in line:

@@ -48,6 +48,7 @@ from . import ortho
 from . import printdialog
 from . import workspace_overlay
 from . import bugreport
+from . import usage_monitor
 from . import ai_assistant
 from . import ai_presentation
 from . import ui_icon_data
@@ -6709,8 +6710,8 @@ def _draw_bug_panel(shader, region, box):
         # the screenshot, the session log and the file are optional
         log_ok = sessionlog.available()
         for cid, r in lay.get("checks", ()):
-            on = {"shot": st.include_shot, "file": st.include_file}.get(
-                cid, st.include_log and log_ok)
+            on = {"shot": st.include_shot, "file": st.include_file,
+                  "usage": st.monitor_usage}.get(cid, st.include_log and log_ok)
             enabled = cid != "log" or log_ok
             sq = 12 * sc
             qx0, qy0 = r[0], r[1] + (r[3] - r[1] - sq) / 2
@@ -6743,6 +6744,90 @@ def _draw_bug_panel(shader, region, box):
                        design.rgb01(design.TEXT_MUTED))
     finally:
         gpu.state.blend_set(prev)
+
+
+def _usage_folder():
+    return os.path.join(bugreport.report_dir(_ROOT), "usage")
+
+
+def _usage_context():
+    """Cheap context for a stall record; never document geometry."""
+    cmd = app_state.active_command
+    try:
+        objects = len(app_state.model.file.Objects)
+    except Exception:  # noqa: BLE001
+        objects = None
+    try:
+        selected = len(selection_names())
+    except Exception:  # noqa: BLE001
+        selected = None
+    return {"active_command": getattr(cmd, "name", None),
+            "step": getattr(cmd, "step_index", None),
+            "last_command": app_state.last_command,
+            "last_line": app_state.history[-1] if app_state.history else None,
+            "objects": objects, "selected": selected,
+            "modified": bool(getattr(app_state, "doc_modified", lambda: False)())}
+
+
+def _usage_heartbeat():
+    monitor = usage_monitor.monitor
+    if not monitor.enabled:
+        return None
+    monitor.heartbeat(_usage_context)
+    return 0.1
+
+
+def set_usage_monitor(on, remember=True):
+    """Turn the opt-in local usage monitor on/off. Returns the state in force."""
+    monitor = usage_monitor.monitor
+    st = _bug["state"]
+    if on:
+        try:
+            head = subprocess_build_label()
+            path = monitor.enable(_usage_folder(), build=head, pid=os.getpid(),
+                                  window=_window_size_label())
+        except OSError as exc:
+            st.monitor_usage = False
+            st.message = f"Usage monitor could not start: {exc}"
+            return False
+        usage_monitor.instrument(app_state)
+        if monitor.observe_output not in sessionlog.listeners:
+            sessionlog.listeners.append(monitor.observe_output)
+        if not bpy.app.timers.is_registered(_usage_heartbeat):
+            bpy.app.timers.register(_usage_heartbeat, first_interval=0.1, persistent=True)
+        st.monitor_usage = True
+        st.message = f"Monitoring usage locally: {path}. Nothing is uploaded."
+        app_state.log(f"Usage monitor on: {path}")
+    else:
+        monitor.disable()
+        usage_monitor.uninstrument(app_state)
+        if monitor.observe_output in sessionlog.listeners:
+            sessionlog.listeners.remove(monitor.observe_output)
+        if bpy.app.timers.is_registered(_usage_heartbeat):
+            bpy.app.timers.unregister(_usage_heartbeat)
+        st.monitor_usage = False
+        st.message = "Usage monitor off."
+    if remember:
+        _remember_preferences({'usage_monitor': st.monitor_usage})
+    _tag_redraw_bands()
+    return st.monitor_usage
+
+
+def subprocess_build_label():
+    import subprocess
+    try:
+        return subprocess.run(["git", "-C", _ROOT, "log", "-1", "--format=%h %s"],
+                              capture_output=True, text=True, timeout=5).stdout.strip() or "unknown"
+    except Exception:  # noqa: BLE001
+        return "unknown"
+
+
+def _window_size_label():
+    try:
+        window = bpy.context.window_manager.windows[0]
+        return f"{window.width} x {window.height}"
+    except Exception:  # noqa: BLE001
+        return "?"
 
 
 def _bug_measure(fs):
@@ -6798,6 +6883,11 @@ def _bug_context():
         ctx.append(("Build", "unknown"))
     ctx.append(("Window", f"{bpy.context.window.width} x {bpy.context.window.height}"
                 if bpy.context.window else "?"))
+    # Looked up rather than imported here: this function must also run when
+    # evaluated outside the package (transcript consumer contract test).
+    monitoring = globals().get("usage_monitor")
+    if monitoring is not None and monitoring.monitor.enabled:
+        ctx.append(("Usage monitor (local only)", monitoring.monitor.summary()))
     return ctx, datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
@@ -6914,6 +7004,8 @@ def bug_panel_click(win_x, win_y, shift=False):
                           log_ok=sessionlog.available())
     if did == "category_menu":
         _show_bug_category_menu()
+    elif did == "check:usage":
+        set_usage_monitor(_bug["state"].monitor_usage)
     elif did == "submit":
         submit_bug_report()
     if did is not None:
@@ -10498,6 +10590,8 @@ def _restore_user_preferences():
         _ai['state'].provider = ai_assistant.credential_status(
             ai_assistant.set_provider(**stored['ai_config']), os.environ)
     _preferences_ready = True
+    if stored.get('usage_monitor'):
+        set_usage_monitor(True, remember=False)
     _tag_redraw_bands()
     _tag_redraw_viewports()
 
@@ -20915,28 +21009,14 @@ def narwhal_click_select(area, space, region, rx, ry, shift=False, ctrl=False):
     and clicking away deselects; Shift ADDS; Ctrl REMOVES. Blender does none of
     those three the same way, which is why this is ours.
 
-    POINT OBJECTS are tried first. They have no extent, so their Blender mesh is a
-    single vertex with no faces and `view3d.select` cannot hit one -- a point drew
-    but could not be clicked. They are also drawn on top of everything, so a click
-    within a few pixels of a point marker means the point, not whatever solid is
-    behind it.
-
-    CURVES next: Blender does not draw them (`draw_curves` does), so `view3d.select`
-    cannot hit them; `pick_curve_object` tests the drawn polylines, and a curve within
-    its tolerance wins over a surface (see there).
+    Direct callers use the same aperture/visibility filter and deferred ambiguity
+    menu as modal mouse selection. Never retry a rejected point/curve through a
+    legacy picker. A deferred menu leaves selection unchanged until confirmation.
     """
-    # Locked objects must not be pickable, and marking them unselectable here (rather
-    # than discarding the hit afterwards) is what lets the click reach whatever is
-    # BEHIND one. See `sync_locked_selectability`. FIRST, before any picker: a stale
-    # `hide_select` left by an earlier click would also block selecting an object
-    # that has since been unlocked (Verified with a curve: Lock, click, Unlock, click).
     sync_locked_selectability()
-    hit = pick_point_object(area, space, region, rx, ry)
-    if hit is None:
-        hit = pick_curve_object(area, space, region, rx, ry)
-    if hit is None:
-        hit = _pick_object_at(area, space, region, rx, ry)
-    return _select_object_hit(hit, shift=shift, ctrl=ctrl, area=area)
+    _open_selection_choices(area, space, region, rx, ry, 'object',
+                            shift=shift, ctrl=ctrl)
+    return selection_names()
 
 
 def _shift_length_component_pick(area, space, region, rx, ry, shift=False, ctrl=False):
@@ -22022,32 +22102,22 @@ def grouped_pick_candidates(candidates):
 
 
 def _open_selection_choices(area, space, region, rx, ry, mode, shift=False, ctrl=False):
-    """Defer ambiguous picks without changing selection, command phase or history."""
+    """Resolve click-local candidates; defer only genuine visible ambiguity."""
     import sys
     candidates = pick_candidates.at(sys.modules[__name__], area, space, region, rx, ry, mode)
+    cmd = app_state.active_command
+    if mode == "edge" and (not candidates or shift or ctrl):
+        # An edge-capable command can still be asking for its owner solid.
+        # Resolve that surface hit through the same visibility filter, never a
+        # legacy picker. Modified owner clicks select without answering OBJECTS.
+        steps = getattr(cmd, 'steps', None) or []
+        index = getattr(cmd, 'step_index', 0)
+        if (getattr(cmd, 'pending_option', None) is None and index < len(steps)
+                and steps[index][1] == commands.OBJECTS):
+            mode = 'object'
+            candidates = pick_candidates.at(sys.modules[__name__], area, space, region, rx, ry, mode)
     if mode == "object" and not shift:
         candidates = grouped_pick_candidates(candidates)
-    if len(candidates) < 2:
-        return False
-    cmd = app_state.active_command
-    phase = (getattr(cmd, 'step_index', None), getattr(cmd, 'pending_option', None))
-    model = app_state.model
-    key = _doc_key()
-    pane = _pane_key(area)
-    view = tuple(tuple(row) for row in space.region_3d.perspective_matrix)
-    size = (region.width, region.height)
-    objects = tuple(selection_names())
-    parts = tuple(selected_subobjects())
-
-    def valid():
-        a, s, r = _area_by_pane_key(pane)
-        return (app_state.model is model and _doc_key() == key
-                and app_state.active_command is cmd
-                and (getattr(cmd, 'step_index', None), getattr(cmd, 'pending_option', None)) == phase
-                and tuple(selection_names()) == objects and tuple(selected_subobjects()) == parts
-                and r is not None and s is not None and (r.width, r.height) == size
-                and tuple(tuple(row) for row in s.region_3d.perspective_matrix) == view)
-
     def choose(hit):
         if mode == 'edge':
             _answer_edge_prompt_with_click(area, space, region, rx, ry,
@@ -22069,6 +22139,32 @@ def _open_selection_choices(area, space, region, rx, ry, mode, shift=False, ctrl
         _tag_redraw_viewports()
 
     globals()['_hover_pick'] = None
+    if len(candidates) < 2:
+        # Do not fall through to the legacy point/curve/Blender picker: doing
+        # so would reintroduce candidates rejected by aperture/depth filtering.
+        if candidates:
+            choose(candidates[0].key)
+        elif mode == 'object':
+            _select_object_hit(None, shift=shift, ctrl=ctrl, area=area)
+        return True
+    phase = (getattr(cmd, 'step_index', None), getattr(cmd, 'pending_option', None))
+    model = app_state.model
+    key = _doc_key()
+    pane = _pane_key(area)
+    view = tuple(tuple(row) for row in space.region_3d.perspective_matrix)
+    size = (region.width, region.height)
+    objects = tuple(selection_names())
+    parts = tuple(selected_subobjects())
+
+    def valid():
+        a, s, r = _area_by_pane_key(pane)
+        return (app_state.model is model and _doc_key() == key
+                and app_state.active_command is cmd
+                and (getattr(cmd, 'step_index', None), getattr(cmd, 'pending_option', None)) == phase
+                and tuple(selection_names()) == objects and tuple(selected_subobjects()) == parts
+                and r is not None and s is not None and (r.width, r.height) == size
+                and tuple(tuple(row) for row in s.region_3d.perspective_matrix) == view)
+
     return selection_menu.open(candidates, (region.x + rx + 8, region.y + ry - 8),
                                choose, valid, context=bpy.context, scale=_ui_scale())
 

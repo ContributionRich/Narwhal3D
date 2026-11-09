@@ -2335,6 +2335,33 @@ def document_validation_threads():
     OSD_ThreadPool.DefaultPool_s().Init(2)
 
 
+def document_clear_cache_flags(shape):
+    """Clear OCCT's per-TShape analysis-cache flags on a caller-owned copy.
+
+    MEASURED: viewport meshing (BRepMesh) clears `Checked` on every meshed face of
+    a live master, and BinTools writes that flag even with triangles omitted, so
+    otherwise identical exact geometry no longer encodes identically. `Checked` and
+    `Modified` are kernel bookkeeping, not geometry; orientation, closure, convexity
+    and every geometric/topological field are untouched. Returns `shape`.
+    """
+    _need()
+    from OCP.TopAbs import (TopAbs_COMPOUND, TopAbs_COMPSOLID, TopAbs_EDGE, TopAbs_FACE,
+                            TopAbs_SHELL, TopAbs_SOLID, TopAbs_VERTEX, TopAbs_WIRE)
+    from OCP.TopExp import TopExp_Explorer
+
+    shape.Checked(False)
+    shape.Modified(False)
+    for kind in (TopAbs_COMPOUND, TopAbs_COMPSOLID, TopAbs_SOLID, TopAbs_SHELL,
+                 TopAbs_FACE, TopAbs_WIRE, TopAbs_EDGE, TopAbs_VERTEX):
+        explorer = TopExp_Explorer(shape, kind)
+        while explorer.More():
+            item = explorer.Current()
+            item.Checked(False)
+            item.Modified(False)
+            explorer.Next()
+    return shape
+
+
 def document_current_binary_format():
     """Current kernel binary encoding; admission/writer policy lives in document_compat."""
     _need()

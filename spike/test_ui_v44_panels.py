@@ -148,7 +148,8 @@ class PanelTests(unittest.TestCase):
     def test_report_preserves_categories_and_attachments(self):
         lay = self.br.layout((0, 0, 208, 700), measure=self.measure)
         self.assertNotIn('chips', lay)
-        self.assertEqual({c for c, _ in lay['checks']}, {'shot', 'file', 'log'})
+        # OURS (owner request): the opt-in local usage monitor joins the attachments.
+        self.assertEqual({c for c, _ in lay['checks']}, {'shot', 'file', 'log', 'usage'})
         self.assertEqual({b for b, _ in lay['buttons']}, {'submit'})
         rect = lay['category']
         self.assertEqual(rect[0] >= 11 and rect[2] <= 197, True)

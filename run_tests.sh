@@ -155,6 +155,9 @@ if [[ -f "$SELECTION_CORE" ]]; then
     run "overlap pick candidates (native/fallback)" env NARWHAL_SELECTION_CORE="$SELECTION_CORE" \
         "$BLENDER" -b --factory-startup --python-exit-code 1 \
         --python spike/test_pick_candidates.py
+    run "click-local selection (native/fallback/mutations)" env NARWHAL_SELECTION_CORE="$SELECTION_CORE" \
+        "$BLENDER" -b --factory-startup --python-exit-code 1 \
+        --python spike/test_pick_click_local.py -- --mutations
     run "Gumball handle picking (native/Python parity)" env NARWHAL_SELECTION_CORE="$SELECTION_CORE" \
         "$BLENDER" -b --factory-startup --python-exit-code 1 \
         --python spike/test_gumball_native_pick.py
@@ -405,6 +408,7 @@ PURE_SUITES=(
     spike/review_v4/test_document_import.py
     spike/test_sessionlog.py
     spike/test_bugreport.py
+    spike/test_usage_monitor.py
     spike/test_ai_assistant.py
     spike/review_v4/test_ai_evidence.py
     spike/test_ai_responses_settings.py
@@ -448,6 +452,8 @@ PURE_SUITES=(
     spike/test_native_vector_export.py
     spike/test_native_command_search.py
     spike/test_native_coil.py
+    spike/test_native_intersect.py
+    spike/test_pure_core_curve_hits_gate.py
     spike/test_native_coil_preview.py
     spike/test_preview_curve_native.py
     spike/test_preview_layer_color.py
@@ -506,6 +512,7 @@ BLENDER_SUITES=(
     spike/test_document_admission.py
     spike/test_document_shape_summary.py
     spike/test_document_correspondence.py
+    spike/test_document_native_encoding_identity.py
     spike/test_document_exact_work.py
     spike/test_document_worker_bounds.py
 )
@@ -580,6 +587,7 @@ if [[ -n "${DISPLAY:-}" || -n "${WAYLAND_DISPLAY:-}" ]]; then
     run "Polygon direction and constraints live" "$PYTHON" spike/test_polygon_behavior_gui.py --launch
     run "Trim box live" "$PYTHON" spike/test_trim_box_gui.py --launch --baseline
     run "overlap selection menu live" "$PYTHON" spike/test_selection_menu_gui.py --launch
+    run "click-local selection menu live" "$PYTHON" spike/test_selection_menu_gui.py --launch --scenario click-local
     for first in vertex edge face object; do
         run "first overlap chooser visible: $first" "$PYTHON" spike/test_selection_visibility_07.py --launch --first "$first"
     done

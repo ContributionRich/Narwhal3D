@@ -50,6 +50,8 @@ DEFAULTS = {
     "ai_include_selection": True,
     "ai_metadata_permission": {},
     "print_settings": {},
+    # OURS: opt-in local diagnostics from the Bug Report panel; never uploaded.
+    "usage_monitor": False,
 }
 _ENUMS = {
     "theme": ("light", "dark"),

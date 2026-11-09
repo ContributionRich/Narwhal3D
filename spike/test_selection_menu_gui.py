@@ -32,7 +32,11 @@ def launch():
 
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--launch', action='store_true')
-    parser.add_argument('--mutation', choices=('no_open', 'no_highlight'), default='')
+    parser.add_argument('--mutation', choices=('no_open', 'no_highlight', 'no_depth',
+                                               'center_depth', 'legacy_singleton', 'distant_tol',
+                                               'legacy_direct'), default='')
+    parser.add_argument('--pick-view', choices=('Top', 'Perspective', 'both'), default='both')
+    parser.add_argument('--scenario', choices=('original', 'click-local'), default='original')
     args = parser.parse_args()
     out = Path(tempfile.mkdtemp(prefix='selection-menu-gui-'))
     print('SELECTION_MENU_OUTPUT', out, flush=True)
@@ -53,6 +57,7 @@ def launch():
         folder.mkdir()
         env[key] = str(folder)
     env.update(SELECTION_MENU_OUTPUT=str(out), SELECTION_MENU_MUTATION=args.mutation,
+               SELECTION_MENU_SCENARIO=args.scenario, SELECTION_MENU_PICK_VIEW=args.pick_view,
                PYTHONDONTWRITEBYTECODE='1', NARWHAL3D_SETTINGS_FILE=str(out / 'preferences.json'),
                NARWHAL3D_NO_DIALOGS='1', NARWHAL3D_DEFER_FIRST_PRESENT='1',
                NARWHAL3D_STATUSBAR_HEIGHT='37', PYTHONPATH=str(ROOT / 'vendor/occt'))
@@ -172,7 +177,7 @@ def screen_point(world):
     xy = (round(REGION.x + p[0]), round(REGION.y + p[1]))
     check(REGION.x + 20 < xy[0] < REGION.x + REGION.width - 20
           and REGION.y + 20 < xy[1] < REGION.y + REGION.height - 35,
-          'fixture point inside Top viewport')
+          'fixture point inside active viewport')
     return xy
 
 
@@ -388,7 +393,9 @@ try:
     check(settings.parent == OUT and not settings.exists() and OUT.is_relative_to(Path(tempfile.gettempdir())),
           'fresh isolated temporary settings')
     check('narwhal3d' not in sys.modules and not os.environ.get('NARWHAL3D_UI_READY'), 'test precedes bootstrap')
-    check(RESULT['mutation'] in ('', 'no_open', 'no_highlight'), 'known process-local mutation')
+    check(RESULT['mutation'] in ('', 'no_open', 'no_highlight', 'no_depth',
+                                 'center_depth', 'legacy_singleton', 'distant_tol',
+                                 'legacy_direct'), 'known process-local mutation')
     sys.dont_write_bytecode = True
     sys.path.insert(0, str(ROOT))
     import bpy
@@ -397,14 +404,21 @@ try:
     from narwhal3d import ui, bridge, commands, selection_menu, shell_popup
     check(not bpy.app.background, 'real window required')
     ORIGINAL_HOVER = ui.draw_hover_pick
-    ui.draw_hover_pick = observed_hover
+    # The original scenario observes line/triangle GPU calls. Its shader proxy
+    # is not a GPUShader accepted by Blender's point-marker drawing API.
+    if os.environ.get('SELECTION_MENU_SCENARIO') != 'click-local':
+        ui.draw_hover_pick = observed_hover
     if RESULT['mutation'] == 'no_open':
         selection_menu.open = lambda *args, **kwargs: False
     elif RESULT['mutation'] == 'no_highlight':
         ui.draw_hover_pick = lambda *args, **kwargs: None
     RESULT['source_sha256'] = {name: hashlib.sha256((ROOT / 'narwhal3d' / name).read_bytes()).hexdigest()
                                for name in ('ui.py', 'selection_menu.py', 'pick_candidates.py')}
-    STEPS = run()
+    if os.environ.get('SELECTION_MENU_SCENARIO') == 'click-local':
+        from test_pick_click_local import gui_run
+        STEPS = gui_run(sys.modules[__name__])
+    else:
+        STEPS = run()
     bpy.app.timers.register(tick, first_interval=.1)
 except BaseException:
     finish(traceback.format_exc())

@@ -68,6 +68,41 @@ def _corresponds(shape, other, airtight, volume, proofs):
     return proofs[key]
 
 
+def _clear_cache_state(shape):
+    """Worker-local copy with only OCCT cache-state flags cleared (see the backend)."""
+    return occt_backend.document_clear_cache_flags(shape)
+
+
+def _recipe_encoding_matches(data, recipe_shape, wire_format, wrapper_type="TopoDS_Shape"):
+    """Exact native value witness, including the declared serialization format.
+
+    First the full raw bytes. Otherwise both streams are decoded once, in this
+    worker only, their cache-state flags cleared and re-encoded at the same format:
+    every geometric double, every type and all topology must still match exactly.
+    """
+    if not data:
+        return False
+    expected = bytes(occt_backend.shape_to_bytes(
+        recipe_shape, triangles=False, format_version=wire_format))
+    if data == expected:
+        return True
+    # The canonical comparison must not reinterpret a different wire version.
+    # Cache-state flags occupy fixed bytes, so an equal-length stream is required
+    # as well as the same header line.
+    header = expected.split(b"\n", 1)[0]
+    if (len(data) != len(expected) or len(header) > 128
+            or not data.startswith(header + b"\n")):
+        return False
+    try:
+        def canonical(stream):
+            local = _clear_cache_state(occt_backend.shape_from_bytes(stream, wrapper_type))
+            return bytes(occt_backend.shape_to_bytes(
+                local, triangles=False, format_version=wire_format))
+        return canonical(data) == canonical(expected)
+    except Exception:  # noqa: BLE001 -- an unreadable stream proves nothing
+        return False
+
+
 def _planar_normalized_types(shape, tolerance):
     return occt_backend.document_planar_normalized_types(shape, tolerance)
 
@@ -322,8 +357,14 @@ def main():
             if (not math.isfinite(recipe_volume)
                     or abs(recipe_volume - volume) > 1.0e-10 * max(1.0, abs(volume))):
                 fail(f"master {object_id} volume differs from its recipe")
+        # Compare the original native encoding, not a decode/re-encode: reading
+        # gp_Dir normalizes it again and need not have a byte fixed point. Full
+        # constructor encoding equality proves correspondence without an unstable
+        # self-Boolean. Digests and geometric summaries never authorize this path.
+        recipe_identity = _recipe_encoding_matches(
+            data, recipe_shape, manifest["bintools_format"], record.get("wrapper_type"))
         try:
-            if not _corresponds(shape, recipe_shape, airtight, volume, proofs):
+            if not recipe_identity and not _corresponds(shape, recipe_shape, airtight, volume, proofs):
                 fail(f"master {object_id} differs geometrically from its reconstruction recipe")
         except SystemExit:
             raise
@@ -343,7 +384,9 @@ def main():
                        for a, b in zip(proxy_bounds, bounds))):
             fail(f"master {object_id} does not match proxy bounds")
         try:
-            canonical = bytes(occt_backend.shape_to_bytes(shape, triangles=False))
+            canonical = bytes(occt_backend.shape_to_bytes(
+                recipe_shape if recipe_identity else shape,
+                triangles=False, format_version=current_format))
         except Exception as exc:  # noqa: BLE001
             fail(f"master {object_id} cannot be canonicalized: {exc}")
         if not canonical or len(canonical) > MAX_MASTER:

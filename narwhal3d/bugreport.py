@@ -36,6 +36,8 @@ class ReportState:
     include_log: bool = False
     #: Document copies are opt-in because model files can be large.
     include_file: bool = False
+    #: OURS: local usage monitoring is opt-in and persists as a preference.
+    monitor_usage: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -190,7 +192,7 @@ def chip_rows(width, labels, measure, gap, label_pad):
 
 #: (id, label) for the optional attachments above the buttons.
 CHECKS = (("shot", "Include screenshot"), ("log", "Include session log"),
-          ("file", "Include current file"))
+          ("file", "Include current file"), ("usage", "Monitor usage (local)"))
 
 
 def layout(body, scale=1.0, measure=None):
@@ -306,6 +308,8 @@ def click(state, lay, x, y, view=None, measure=None, shift=False, log_ok=True):
             state.include_shot = not state.include_shot
         elif ident == "file":
             state.include_file = not state.include_file
+        elif ident == "usage":
+            state.monitor_usage = not state.monitor_usage
         elif log_ok:
             state.include_log = not state.include_log
         return f"check:{ident}"

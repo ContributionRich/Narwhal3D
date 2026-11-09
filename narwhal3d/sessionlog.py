@@ -34,6 +34,10 @@ def log_path():
     return os.path.join(log_dir(), LOG_NAME)
 
 
+#: Optional observers of logged text (the opt-in usage monitor). Each receives raw text.
+listeners = []
+
+
 class _Tee:
     """A text stream that writes to the original stream AND the log file."""
 
@@ -46,6 +50,11 @@ class _Tee:
             self._fh.flush()
         except Exception:  # noqa: BLE001  (a full disk must not take the app down)
             pass
+        for listener in tuple(listeners):
+            try:
+                listener(s)
+            except Exception:  # noqa: BLE001  (an observer must never break printing)
+                pass
         return self._stream.write(s) if self._stream is not None else len(s)
 
     def flush(self):
