@@ -97,6 +97,7 @@ PURE_CORE_PYTESTS = (
     "spike/test_rebuild_performance.py",
     "spike/test_native_curve_samples.py",
     "spike/test_native_display_samples.py",
+    "spike/test_native_rebuild_fit.py",
     "spike/test_native_interpolate.py",
     "spike/test_native_tween.py",
 )
@@ -515,6 +516,31 @@ def _probe_curve_display_samples(lib) -> str:
     return name
 
 
+def _probe_rebuild_fit(lib) -> str:
+    """Known answers from `narwhal_pure_core_rebuild_fit`: a line is fitted exactly, and
+    a closed degree-5 fit of 3 points and an over-bound fit are refused, not crashed."""
+    name = "narwhal_pure_core_rebuild_fit"
+    D = ctypes.POINTER(ctypes.c_double)
+    fn = getattr(lib, name)
+    fn.argtypes = [D, D, ctypes.c_size_t, ctypes.c_size_t, ctypes.c_size_t, ctypes.c_ubyte,
+                   ctypes.c_ubyte, D, D, D, ctypes.POINTER(ctypes.c_size_t)]
+    fn.restype = ctypes.c_int32
+    params = [i / 20 for i in range(21)]
+    pts = (ctypes.c_double * 63)(*[c for u in params for c in (3.0 * u, 0.0, 0.0)])
+    prm = (ctypes.c_double * 21)(*params)
+    ends = (ctypes.c_double * 6)(0.0, 0.0, 0.0, 3.0, 0.0, 0.0)
+    ctrl, knots, count = (ctypes.c_double * 24)(), (ctypes.c_double * 10)(), ctypes.c_size_t()
+    if fn(pts, prm, 21, 4, 3, 0, 0, ends, ctrl, knots, ctypes.byref(count)) != 0 or count.value != 4:
+        raise GateError(f"{name}: the line fit failed")
+    if any(abs(ctrl[3 * i] - i) > 1e-12 for i in range(4)):
+        raise GateError(f"{name}: the line fit's control points are wrong")
+    if fn(pts, prm, 21, 3, 5, 1, 0, ends, ctrl, knots, ctypes.byref(count)) != -2:
+        raise GateError(f"{name}: a closed fit with degree above point count was not refused")
+    if fn(pts, prm, 21, 1366, 3, 1, 0, ends, None, None, ctypes.byref(count)) != -5:
+        raise GateError(f"{name}: an over-bound fit was not refused before allocating")
+    return name
+
+
 def step_direct_abi(lib_path: Path) -> dict[str, object]:
     """Load the built library and exercise both stable and additive C ABIs."""
     try:
@@ -568,7 +594,7 @@ def step_direct_abi(lib_path: Path) -> dict[str, object]:
     if int(size(bad_ptr, 1, name_arr, len(name), 1)) >= 0:
         raise GateError("direct ABI size query accepted a NaN coordinate")
     try:
-        geometry = [_probe_sample_nurbs(lib), _probe_curve_display_samples(lib)]
+        geometry = [_probe_sample_nurbs(lib), _probe_curve_display_samples(lib), _probe_rebuild_fit(lib)]
     except (AttributeError, OSError) as exc:
         raise GateError(f"cannot bind a pure-core geometry export: {exc}") from exc
     return {"status": "ok", "abi_version": ABI_VERSION, "parser": parser_identity,
