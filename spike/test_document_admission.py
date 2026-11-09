@@ -148,3 +148,19 @@ with tempfile.TemporaryDirectory() as folder:
     admission.remember(output)
 check(len(admission._receipts) == admission.MAX_RECEIPTS, "receipt retention remains bounded")
 admission._receipts.clear()
+
+# MEASURED on Windows 11 / CPython 3.13: os.stat() and os.fstat() of one unchanged DLL
+# disagree on st_ctime_ns (~67 ms), so every packaged Save refused with "runtime binary
+# changed before hashing". Windows compares the real ChangeTime separately and leaves
+# st_ctime out of the stamp; POSIX st_ctime is a change time and still counts.
+from types import SimpleNamespace  # noqa: E402
+stat_view = SimpleNamespace(st_dev=1, st_ino=2, st_size=3, st_mtime_ns=4, st_ctime_ns=5)
+fstat_view = SimpleNamespace(st_dev=1, st_ino=2, st_size=3, st_mtime_ns=4, st_ctime_ns=6)
+with patch.object(admission.sys, "platform", "win32"):
+    check(admission._stamp(stat_view) == admission._stamp(fstat_view),
+          "Windows: a stat/fstat st_ctime disagreement is not a binary change")
+    check(admission._stamp(stat_view) != admission._stamp(SimpleNamespace(**dict(vars(stat_view), st_mtime_ns=9))),
+          "Windows: a modification time change is still a binary change")
+with patch.object(admission.sys, "platform", "linux"):
+    check(admission._stamp(stat_view) != admission._stamp(fstat_view),
+          "POSIX: st_ctime (metadata change time) still guards the cache")

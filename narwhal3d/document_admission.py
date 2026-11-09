@@ -39,8 +39,12 @@ MAX_BINARY_HASHES = 512
 
 
 def _stamp(value):
-    return (value.st_dev, value.st_ino, value.st_size,
-            value.st_mtime_ns, value.st_ctime_ns)
+    # Windows st_ctime is not a change time, and MEASURED (CPython 3.13, Windows 11)
+    # os.stat() and os.fstat() of the same unchanged DLL disagree on it by ~67 ms, so
+    # every packaged Save refused with "runtime binary changed". The real ChangeTime is
+    # compared separately there (`_change_time`), so Windows leaves st_ctime out.
+    ctime = None if sys.platform == "win32" else value.st_ctime_ns
+    return (value.st_dev, value.st_ino, value.st_size, value.st_mtime_ns, ctime)
 
 
 def _change_time(path):
