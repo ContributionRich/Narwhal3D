@@ -21,6 +21,7 @@ Current production routing:
 | planar face ear clipping (display) | Rust for concave loops from 6 points, any loop from 64 | concave 3.6× faster at 12 points, 40× at 100; convex 1.8× at 360; identical triangles |
 | Near snap nearest point on a curve | Rust for a `NurbsCurve` (its analytic line/arc/circle targets included); other curves stay in Python | 8× faster on a circle, 45× on a 4-point cubic, 44× at 40 points; bit-identical point (openNURBS evaluation order) |
 | uniform curve samples for previews and wireframes (`bridge.sample_curve_xyz`) | Rust for a `NurbsCurve`; other curves stay in Python | 5.7× faster at 49 samples, 11× at 217, 14× at 553 (InterpCrv preview); bit-identical to `PointAt` |
+| curve display tessellation (`bridge._display_samples`) | Rust for a `NurbsCurve` on Linux/glibc only; other curves, Windows and macOS stay in Python | 11.9× faster over 300 open cubics, 5.7× on a circle, 14.8× on a 40-point zigzag; bit-identical parameters and points on Linux/glibc (libm `pow`/`atan2` as CPython calls them); unqualified elsewhere, see below |
 | STL decode API | Python | generic triangle-tuple reshaping was 24.9% slower |
 | STL Import parse+weld | Rust at ≥50 kB | fused indexed output measured 3.8–4.3× faster at 1k–100k triangles |
 | OBJ encode | Python | native path was 2.18× slower |
@@ -30,6 +31,20 @@ Current production routing:
 | SVG path parsing | Python | JSON ABI was slower through the 1 MiB input limit |
 | display segment counts (`screen_segments_for`) | Python | 0.5 µs per call, below one ctypes call; not ported |
 | short convex face loops (under 64 points) | Python | the linear fan beats packing (3.4× slower at 3 points) |
+
+**Math-library parity.** Curve display tessellation (`src/display.rs`) is bit-identical
+to the Python only because both call the same platform math library. CPython's float
+`x ** 2` is libm `pow(|x|, 2.0)`, not `x * x`: on glibc the two differ by one ulp in about
+1 of 1500 values (1,942 of ~3M measured), so Rust calls libm `pow` too, with an opaque
+exponent so the compiler cannot fold it back to `x * x`. `math.atan2` likewise reaches libm
+`atan2` after CPython's special cases. Parity is measured on Linux glibc only, so
+`narwhal3d/native_display.py` routes the display there only. Elsewhere it is NOT
+assumed: the Windows GNU DLL under Wine (msvcrt) gave three of 586 reference display
+cases different values (up to 227 ulp), and the shipped Windows CPython/UCRT and macOS
+are unmeasured. There the complete Python route runs until
+`spike/test_native_display_samples.py` passes against that platform's CPython runtime.
+A difference would only move a display vertex or change a segment count, never
+document geometry.
 
 The slower Rust implementations remain directly tested for correctness and future ABI work,
 but they are not allowed to slow production.

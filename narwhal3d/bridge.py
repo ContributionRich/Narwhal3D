@@ -257,7 +257,25 @@ def _display_params(curve, tolerance: float):
 
 
 def _display_samples(curve, tolerance: float):
-    """(params, points) of `_display_params`. The probe samples are REUSED as display
+    """(params, points) of `_display_params`.
+
+    With the pure-core library loaded a `NurbsCurve` is tessellated in Rust
+    (`native_display`), which repeats `_python_display_samples` bit for bit on
+    Linux/glibc, the only runtime where that is measured (other runtimes keep Python).
+    MEASURED (i7-9700K, 301 open cubics of 4-20 points): 3.0 ms per curve in Python,
+    most of it rhino3dm evaluations. Other curves keep the Python route."""
+    try:
+        from . import native_display
+    except ImportError:          # loaded standalone (tests / probes)
+        import native_display
+    native = native_display.display_samples(curve, tolerance)
+    if native is not None:
+        return native
+    return _python_display_samples(curve, tolerance)
+
+
+def _python_display_samples(curve, tolerance: float):
+    """The Python `_display_samples`. The probe samples are REUSED as display
     vertices wherever the count lines up (n divides the probe count), so a piece that
     needs 1, 2, 4 or 8 segments costs no evaluation beyond its probe -- rhino3dm
     evaluations dominate the cost on large files."""

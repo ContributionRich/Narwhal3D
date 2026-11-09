@@ -22,6 +22,7 @@ pub mod coil;
 pub mod command_search;
 pub mod coords;
 pub mod curvex;
+pub mod display;
 pub mod dxf;
 pub mod earclip;
 pub mod gridsnap;
