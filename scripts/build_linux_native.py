@@ -14,7 +14,8 @@ import shutil
 import subprocess
 import sys
 
-from check_pure_core import probe_pure_core_nearest_batch, probe_pure_core_parser
+from check_pure_core import (probe_pure_core_curve_hits, probe_pure_core_nearest_batch,
+                             probe_pure_core_parser)
 
 IMAGE = "quay.io/pypa/manylinux_2_28_x86_64@sha256:1e7b8460ad8fb3fb0fbe1cd818845159ac896b4fd17452d56e892c291f3b97a8"
 COMPONENTS = {
@@ -307,6 +308,7 @@ def main() -> None:
         if args.crate == "pure_core":
             receipt["pure_core_parser"] = probe_pure_core_parser(target / "release/libnarwhal_pure_core.so")
             receipt["pure_core_nearest_batch"] = probe_pure_core_nearest_batch(target / "release/libnarwhal_pure_core.so")
+            receipt["pure_core_curve_hits"] = probe_pure_core_curve_hits(target / "release/libnarwhal_pure_core.so")
             (out / f"{args.crate}-{mode}-receipt.json").write_text(json.dumps(receipt, indent=2) + "\n")
         (out / "bin").mkdir(exist_ok=True)
         for name in COMPONENTS[args.crate]:

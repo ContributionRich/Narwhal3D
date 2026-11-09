@@ -29,6 +29,9 @@ const ERR_INPUT: i32 = -2;
 const ERR_SIZE: i32 = -3;
 const MAX_CVS: usize = 1 << 16;
 const MAX_ORDER: usize = 32;
+/// The deepest recursion the export runs; `curve_curve` asks for 40. A deeper request is
+/// left to the Python, so the native stack stays small on any caller's thread.
+const MAX_DEPTH: usize = 64;
 const S: usize = 4; // homogeneous stride of every stored control point
 
 // openNURBS's literals, kept verbatim
@@ -494,6 +497,8 @@ impl Piece<'_> {
 
     /// `_velocity`.
     fn velocity(&self, t: f64) -> P3 {
+        #[cfg(test)]
+        tests::VELOCITY_CALLS.with(|n| n.set(n.get() + 1));
         let mut h = (self.t1 - self.t0) * 1e-6;
         if h <= 0.0 {
             h = 1e-9;
@@ -757,20 +762,32 @@ struct Hit {
 }
 
 /// `_newton`: `(t_a, t_b, gap, point)`.
-fn newton(ca: &Piece, cb: &Piece, mut t_a: f64, mut t_b: f64) -> (f64, f64, f64, P3) {
+fn newton(ca: &Piece, cb: &Piece, mut t_a: f64, mut t_b: f64) -> Option<(f64, f64, f64, P3)> {
     for _ in 0..20 {
+        // A NaN parameter (an overflowed step on huge coordinates) leaves the domain
+        // arithmetic of `PointAt`; the Python answers such a pair.
+        if t_a.is_nan() || t_b.is_nan() {
+            return None;
+        }
         let (pa, pb) = (ca.point(t_a), cb.point(t_b));
         let (fx, fy, fz) = (pa[0] - pb[0], pa[1] - pb[1], pa[2] - pb[2]);
         let gap = (fx * fx + fy * fy + fz * fz).sqrt();
         if gap <= 1e-14 {
-            return (t_a, t_b, gap, pa);
+            return Some((t_a, t_b, gap, pa));
         }
         let (va, vb) = (ca.velocity(t_a), cb.velocity(t_b));
         let Some((dta, dtb)) = solve2(va, vb, [fx, fy, fz]) else {
             break;
         };
-        t_a = clamp(t_a - dta, ca.t0, ca.t1);
-        t_b = clamp(t_b - dtb, cb.t0, cb.t1);
+        let next_a = clamp(t_a - dta, ca.t0, ca.t1);
+        let next_b = clamp(t_b - dtb, cb.t0, cb.t1);
+        if next_a == t_a && next_b == t_b {
+            break; // fixed point: the remaining iterations would repeat it
+        }
+        (t_a, t_b) = (next_a, next_b);
+    }
+    if t_a.is_nan() || t_b.is_nan() {
+        return None;
     }
     let (pa, pb) = (ca.point(t_a), cb.point(t_b));
     let gap = py_dist(pa, pb);
@@ -779,11 +796,12 @@ fn newton(ca: &Piece, cb: &Piece, mut t_a: f64, mut t_b: f64) -> (f64, f64, f64,
         (pa[1] + pb[1]) / 2.0,
         (pa[2] + pb[2]) / 2.0,
     ];
-    (t_a, t_b, gap, mid)
+    Some((t_a, t_b, gap, mid))
 }
 
-/// `_base_case`.
-fn base_case(ca: &Piece, cb: &Piece, tol: f64) -> Option<Hit> {
+/// `_base_case`: `Some(None)` when the pair does not meet, `None` when the Python must
+/// answer (see `newton`).
+fn base_case(ca: &Piece, cb: &Piece, tol: f64) -> Option<Option<Hit>> {
     let (a0, a1) = (ca.point(ca.t0), ca.point(ca.t1));
     let (b0, b1) = (cb.point(cb.t0), cb.point(cb.t1));
     let in01 = |x: f64| (-1e-9..=1.0 + 1e-9).contains(&x); // `_in01`
@@ -795,11 +813,11 @@ fn base_case(ca: &Piece, cb: &Piece, tol: f64) -> Option<Hit> {
     };
     let t_a = ca.t0 + (ca.t1 - ca.t0) * u;
     let t_b = cb.t0 + (cb.t1 - cb.t0) * v;
-    let (t_a, t_b, gap, point) = newton(ca, cb, t_a, t_b);
+    let (t_a, t_b, gap, point) = newton(ca, cb, t_a, t_b)?;
     if gap > py_max(tol, 1e-9) {
-        return None;
+        return Some(None);
     }
-    Some(Hit { point, t_a, t_b })
+    Some(Some(Hit { point, t_a, t_b }))
 }
 
 /// `_boxes_overlap`.
@@ -818,6 +836,8 @@ fn subdivide(
     out: &mut Vec<Hit>,
 ) -> Option<()> {
     let (pa, pb) = (ca.piece()?, cb.piece()?);
+    #[cfg(test)]
+    tests::DEEPEST.with(|d| d.set(d.get().max(depth)));
     if !boxes_overlap(ca.bbox()?, cb.bbox()?, tol) {
         return Some(());
     }
@@ -825,7 +845,7 @@ fn subdivide(
     let b_lin = pb.is_linear_enough(tol);
     let forced = depth >= max_depth;
     if (a_lin && b_lin) || forced {
-        out.extend(base_case(&pa, &pb, tol));
+        out.extend(base_case(&pa, &pb, tol)?);
         return Some(());
     }
     let a_parts = if a_lin {
@@ -839,7 +859,7 @@ fn subdivide(
         cb.split(0.5 * (pb.t0 + pb.t1))
     };
     if a_parts.is_none() && b_parts.is_none() {
-        out.extend(base_case(&pa, &pb, tol));
+        out.extend(base_case(&pa, &pb, tol)?);
         return Some(());
     }
     let xs: Vec<&Curve> = match &a_parts {
@@ -910,7 +930,10 @@ unsafe fn read_curve(
         cvs: c.to_vec(),
         knots: k.to_vec(),
     };
-    curve.piece().ok_or(ERR_INPUT)?;
+    let piece = curve.piece().ok_or(ERR_INPUT)?;
+    if piece.t0 >= piece.t1 {
+        return Err(ERR_INPUT); // an empty domain: `IsValid` refuses it, and so does `Split`
+    }
     Ok(curve)
 }
 
@@ -949,7 +972,7 @@ pub unsafe extern "C" fn narwhal_pure_core_curve_curve_hits(
         return ERR_NULL;
     }
     *out_count = 0;
-    if !tol.is_finite() || max_depth > 1000 {
+    if !tol.is_finite() || max_depth > MAX_DEPTH {
         return ERR_INPUT;
     }
     let a = match read_curve(
@@ -1085,6 +1108,361 @@ mod tests {
             assert!((h.point[1] - 0.5).abs() < 1e-9);
         }
         assert!(hits.windows(2).all(|w| w[0].t_a <= w[1].t_a));
+    }
+
+    /// A small deterministic generator for the malformed-input sweep.
+    struct Lcg(u64);
+
+    impl Lcg {
+        fn next(&mut self) -> u64 {
+            self.0 = self
+                .0
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            self.0 >> 11
+        }
+
+        fn below(&mut self, n: u64) -> usize {
+            (self.next() % n) as usize
+        }
+
+        fn unit(&mut self) -> f64 {
+            self.next() as f64 / (1u64 << 53) as f64
+        }
+
+        /// A value from the awkward ones: zeros, repeats, negatives, huge and tiny.
+        fn awkward(&mut self) -> f64 {
+            match self.below(8) {
+                0 => 0.0,
+                1 => -1.0,
+                2 => 1.0,
+                3 => 1e300 * (self.unit() - 0.5),
+                4 => 1e-300 * self.unit(),
+                _ => 10.0 * (self.unit() - 0.5),
+            }
+        }
+    }
+
+    /// One curve's ABI arguments: order, knots, control points (stride 4), rational.
+    fn malformed_curve(rng: &mut Lcg) -> (usize, Vec<f64>, Vec<f64>, u8) {
+        let plausible = rng.below(2) == 0; // right counts, sorted knots, positive weights
+        let order = if plausible {
+            2 + rng.below(4)
+        } else {
+            1 + rng.below(6)
+        };
+        let cv_count = if plausible {
+            order + rng.below(4)
+        } else {
+            rng.below(8)
+        };
+        let mut knot_count = (order + cv_count).saturating_sub(2);
+        if !plausible && rng.below(4) == 0 {
+            knot_count = rng.below(12); // a count that disagrees with the curve
+        }
+        let mut knots: Vec<f64> = (0..knot_count).map(|_| rng.awkward()).collect();
+        if plausible || rng.below(2) == 0 {
+            knots.sort_by(f64::total_cmp); // nondecreasing, often with a degenerate domain
+        }
+        let mut cvs: Vec<f64> = (0..cv_count * S).map(|_| rng.awkward()).collect();
+        if plausible || rng.below(2) == 0 {
+            for w in cvs.iter_mut().skip(3).step_by(S) {
+                *w = 1.0;
+            }
+        }
+        (order, knots, cvs, rng.below(3) as u8)
+    }
+
+    #[test]
+    fn malformed_abi_input_is_refused_without_a_panic() {
+        let mut rng = Lcg(0x5eed);
+        let mut out = vec![0.0; 5 * 64];
+        let mut answered = 0;
+        for _ in 0..200000 {
+            let (ao, ak, ac, ar) = malformed_curve(&mut rng);
+            let (bo, bk, bc, br) = malformed_curve(&mut rng);
+            let tol = [1e-6, 0.0, -1.0, 1e300, 0.5][rng.below(5)];
+            let depth = rng.below(10);
+            let mut count = 0;
+            let code = unsafe {
+                narwhal_pure_core_curve_curve_hits(
+                    ao,
+                    ak.as_ptr(),
+                    ak.len(),
+                    ac.as_ptr(),
+                    ac.len() / S,
+                    ar,
+                    bo,
+                    bk.as_ptr(),
+                    bk.len(),
+                    bc.as_ptr(),
+                    bc.len() / S,
+                    br,
+                    tol,
+                    depth,
+                    out.as_mut_ptr(),
+                    64,
+                    &mut count,
+                )
+            };
+            assert!([0, ERR_INPUT, ERR_SIZE].contains(&code), "{code}");
+            answered += usize::from(code == 0);
+        }
+        assert!(
+            answered > 5000,
+            "the sweep reaches the recursion: {answered}"
+        );
+    }
+
+    thread_local! {
+        pub(super) static VELOCITY_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+        pub(super) static DEEPEST: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    }
+
+    fn line(a: P3, b: P3) -> Curve {
+        Curve {
+            order: 2,
+            cv_count: 2,
+            rational: false,
+            cvs: vec![a[0], a[1], a[2], 1.0, b[0], b[1], b[2], 1.0],
+            knots: vec![0.0, 1.0],
+        }
+    }
+
+    /// `_newton` without its fixed-point exit, as `test_trim_split_once.py` keeps it.
+    fn reference_newton(ca: &Piece, cb: &Piece, mut t_a: f64, mut t_b: f64) -> (f64, f64, f64, P3) {
+        for _ in 0..20 {
+            let (pa, pb) = (ca.point(t_a), cb.point(t_b));
+            let (fx, fy, fz) = (pa[0] - pb[0], pa[1] - pb[1], pa[2] - pb[2]);
+            let gap = (fx * fx + fy * fy + fz * fz).sqrt();
+            if gap <= 1e-14 {
+                return (t_a, t_b, gap, pa);
+            }
+            let (va, vb) = (ca.velocity(t_a), cb.velocity(t_b));
+            let Some((dta, dtb)) = solve2(va, vb, [fx, fy, fz]) else {
+                break;
+            };
+            t_a = clamp(t_a - dta, ca.t0, ca.t1);
+            t_b = clamp(t_b - dtb, cb.t0, cb.t1);
+        }
+        let (pa, pb) = (ca.point(t_a), cb.point(t_b));
+        let mid = [
+            (pa[0] + pb[0]) / 2.0,
+            (pa[1] + pb[1]) / 2.0,
+            (pa[2] + pb[2]) / 2.0,
+        ];
+        (t_a, t_b, py_dist(pa, pb), mid)
+    }
+
+    #[test]
+    fn newton_stops_at_a_fixed_point_with_the_same_answer() {
+        // The witness of `test_trim_split_once.py`: a skew pair of lines never meets, and
+        // the iterate settles at a clamp after one step.
+        let a = line([0.0, 0.0, 0.0], [10.0, 0.0, 0.0]);
+        let b = line([5.0, 1.0, 0.0], [5.0, 11.0, 0.0]);
+        let (pa, pb) = (a.piece().unwrap(), b.piece().unwrap());
+        VELOCITY_CALLS.with(|n| n.set(0));
+        let settled = newton(&pa, &pb, 0.5, 0.0).unwrap();
+        let calls = VELOCITY_CALLS.with(|n| n.get());
+        assert!(calls <= 4, "{calls} velocity evaluations");
+        assert_eq!(settled, reference_newton(&pa, &pb, 0.5, 0.0));
+        // The exit changes no answer: a wavy pair from many starts.
+        let wave_a = cubic(&[
+            [0.0, 0.0, 0.0],
+            [2.0, 4.0, 0.0],
+            [4.0, -4.0, 0.0],
+            [6.0, 0.0, 0.0],
+        ]);
+        let wave_b = cubic(&[
+            [0.0, 0.5, 0.0],
+            [2.0, -3.0, 0.0],
+            [4.0, 3.0, 0.0],
+            [6.0, 0.5, 0.0],
+        ]);
+        let (wa, wb) = (wave_a.piece().unwrap(), wave_b.piece().unwrap());
+        for i in 0..=5 {
+            for j in 0..=5 {
+                let (s, t) = (i as f64 / 5.0, j as f64 / 5.0);
+                assert_eq!(
+                    newton(&wa, &wb, s, t).unwrap(),
+                    reference_newton(&wa, &wb, s, t)
+                );
+            }
+        }
+    }
+
+    unsafe fn hits_of(
+        a: &Curve,
+        b: &Curve,
+        tol: f64,
+        depth: usize,
+        out: &mut [f64],
+    ) -> (i32, usize) {
+        let mut count = 0;
+        let code = narwhal_pure_core_curve_curve_hits(
+            a.order,
+            a.knots.as_ptr(),
+            a.knots.len(),
+            a.cvs.as_ptr(),
+            a.cv_count,
+            u8::from(a.rational),
+            b.order,
+            b.knots.as_ptr(),
+            b.knots.len(),
+            b.cvs.as_ptr(),
+            b.cv_count,
+            u8::from(b.rational),
+            tol,
+            depth,
+            out.as_mut_ptr(),
+            out.len() / 5,
+            &mut count,
+        );
+        (code, count)
+    }
+
+    #[test]
+    fn the_export_refuses_what_it_cannot_answer() {
+        let a = line([0.0, -1.0, 0.0], [0.0, 1.0, 0.0]);
+        let b = line([-1.0, 0.0, 0.0], [1.0, 0.0, 0.0]);
+        let mut out = [0.0; 5];
+        unsafe {
+            assert_eq!(hits_of(&a, &b, 1e-6, 40, &mut out), (0, 1));
+            assert_eq!(&out[..3], &[0.0, 0.0, 0.0]);
+            assert_eq!(hits_of(&a, &b, 1e-6, MAX_DEPTH, &mut out), (0, 1));
+            assert_eq!(hits_of(&a, &b, 1e-6, MAX_DEPTH + 1, &mut out).0, ERR_INPUT);
+            assert_eq!(hits_of(&a, &b, f64::NAN, 40, &mut out).0, ERR_INPUT);
+            assert_eq!(hits_of(&a, &b, f64::INFINITY, 40, &mut out).0, ERR_INPUT);
+            // no room: the count comes back for a second call
+            assert_eq!(hits_of(&a, &b, 1e-6, 40, &mut []), (ERR_SIZE, 1));
+            let mut bad = |edit: &dyn Fn(&mut Curve)| {
+                let mut c = a.clone();
+                edit(&mut c);
+                hits_of(&c, &b, 1e-6, 40, &mut out).0
+            };
+            assert_eq!(
+                bad(&|c| c.knots = vec![1.0, 0.0]),
+                ERR_INPUT,
+                "decreasing knots"
+            );
+            assert_eq!(
+                bad(&|c| c.knots = vec![1.0, 1.0]),
+                ERR_INPUT,
+                "an empty domain"
+            );
+            // Each guard on its own: an empty domain is refused on entry (a NaN
+            // parameter on one would run the knot search off its end), and Newton hands
+            // a NaN iterate back to the Python instead of evaluating it.
+            let empty = read_curve(2, [1.0, 1.0].as_ptr(), 2, a.cvs.as_ptr(), 2, 0);
+            assert_eq!(empty.err(), Some(ERR_INPUT));
+            let (pa, pb) = (a.piece().unwrap(), b.piece().unwrap());
+            assert!(newton(&pa, &pb, f64::NAN, 0.5).is_none());
+            assert!(newton(&pa, &pb, 0.5, f64::NAN).is_none());
+            assert_eq!(bad(&|c| c.knots[1] = f64::NAN), ERR_INPUT, "a NaN knot");
+            assert_eq!(
+                bad(&|c| c.cvs[0] = f64::INFINITY),
+                ERR_INPUT,
+                "an infinite point"
+            );
+            assert_eq!(bad(&|c| c.cvs[3] = 0.0), ERR_INPUT, "a zero weight");
+            assert_eq!(bad(&|c| c.cvs[7] = -1.0), ERR_INPUT, "a negative weight");
+            assert_eq!(bad(&|c| c.knots.push(2.0)), ERR_INPUT, "a knot too many");
+            assert_eq!(bad(&|c| c.order = 1), ERR_INPUT, "order 1");
+            assert_eq!(bad(&|c| c.order = 3), ERR_INPUT, "more order than points");
+            assert_eq!(bad(&|c| c.order = MAX_ORDER + 1), ERR_INPUT, "order 33");
+            let mut count = 7;
+            let nulls = narwhal_pure_core_curve_curve_hits(
+                2,
+                std::ptr::null(),
+                2,
+                std::ptr::null(),
+                2,
+                0,
+                2,
+                b.knots.as_ptr(),
+                2,
+                b.cvs.as_ptr(),
+                2,
+                0,
+                1e-6,
+                40,
+                std::ptr::null_mut(),
+                4,
+                &mut count,
+            );
+            assert_eq!((nulls, count), (ERR_NULL, 0));
+            let no_count = narwhal_pure_core_curve_curve_hits(
+                2,
+                a.knots.as_ptr(),
+                2,
+                a.cvs.as_ptr(),
+                2,
+                0,
+                2,
+                b.knots.as_ptr(),
+                2,
+                b.cvs.as_ptr(),
+                2,
+                0,
+                1e-6,
+                40,
+                out.as_mut_ptr(),
+                1,
+                std::ptr::null_mut(),
+            );
+            assert_eq!(no_count, ERR_NULL);
+            // a hit with nowhere to write it
+            let mut count = 0;
+            let no_out = narwhal_pure_core_curve_curve_hits(
+                2,
+                a.knots.as_ptr(),
+                2,
+                a.cvs.as_ptr(),
+                2,
+                0,
+                2,
+                b.knots.as_ptr(),
+                2,
+                b.cvs.as_ptr(),
+                2,
+                0,
+                1e-6,
+                40,
+                std::ptr::null_mut(),
+                1,
+                &mut count,
+            );
+            assert_eq!(no_out, ERR_NULL);
+        }
+    }
+
+    #[test]
+    fn a_deep_recursion_fits_a_small_thread_stack() {
+        // tol 0: a curved piece is straight enough only once its halves are too short to
+        // bend in floating point, so crossing cubics recurse about as deep as halving
+        // allows. MEASURED: these 40 levels fit a 64 KiB stack in a release build (about
+        // 1.6 KiB a level, so MAX_DEPTH needs about 100 KiB) and 256 KiB in a debug one.
+        let worker = std::thread::Builder::new().stack_size(256 << 10).spawn(|| {
+            let a = cubic(&[
+                [0.0, 0.0, 0.0],
+                [2.0, 4.0, 0.0],
+                [4.0, -4.0, 0.0],
+                [6.0, 0.0, 0.0],
+            ]);
+            let b = cubic(&[
+                [0.0, 0.5, 0.0],
+                [6.0, 0.5, 0.0],
+                [12.0, 0.5, 0.0],
+                [18.0, 0.5, 0.0],
+            ]);
+            let mut out = vec![0.0; 5 * 64];
+            DEEPEST.with(|d| d.set(0));
+            let (code, count) = unsafe { hits_of(&a, &b, 0.0, MAX_DEPTH, &mut out) };
+            (code, count, DEEPEST.with(|d| d.get()))
+        });
+        let (code, count, deepest) = worker.unwrap().join().unwrap();
+        assert_eq!((code, count), (0, 2));
+        assert!(deepest >= 40, "{deepest} levels");
     }
 
     #[test]

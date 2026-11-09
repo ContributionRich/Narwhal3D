@@ -210,6 +210,150 @@ try:
 finally:
     os.environ["NARWHAL_PURE_CORE"] = LIBRARY
 
+print("\n-- Newton's fixed-point exit (main's witness) --")
+# Main's `_newton` stops once an iterate repeats; the Rust loop mirrors it. The skew lines
+# of test_trim_split_once.py never meet, and their iterate settles at a clamp after one
+# step. With tol 2 the boxes overlap, so the recursion reaches Newton on them (curve_curve's
+# overlap test would claim the pair first, so the recursion is called directly).
+skew_a, skew_b = line((0, 0, 0), (10, 0, 0)), line((5, 1, 0), (5, 11, 0))
+calls = 0
+real_velocity = ix._velocity
+
+
+def counting_velocity(c, t):
+    global calls
+    calls += 1
+    return real_velocity(c, t)
+
+
+ix._velocity = counting_velocity
+try:
+    python_skew = []
+    ix._subdivide(skew_a, skew_b, 2.0, 0, 40, python_skew)
+    python_skew = [(h.point, h.t_a, h.t_b) for h in ix._dedupe(python_skew, 2.0)]
+finally:
+    ix._velocity = real_velocity
+rust_skew = native.point_hits(skew_a, skew_b, 2.0, 40)
+check(len(python_skew) == 1 and rust_skew == python_skew and 0 < calls <= 4,
+      f"skew lines 1 apart at tol 2: one hit, the same through Rust, and the Python stops "
+      f"at the fixed point ({calls} velocity evaluations; {rust_skew} vs {python_skew})")
+
+print("\n-- input safety: each risky call runs in a subprocess, so a crash fails a check --")
+import json  # noqa: E402
+import subprocess  # noqa: E402
+
+
+def isolated(body):
+    """Run `body` in a fresh interpreter; ``(exit code, last stdout line as JSON)``."""
+    script = (
+        "import ctypes, json, math, sys, types, importlib.util, os\n"
+        f"ROOT = {ROOT!r}\n"
+        "pkg = types.ModuleType('narwhal3d'); pkg.__path__ = [os.path.join(ROOT, 'narwhal3d')]\n"
+        "sys.modules['narwhal3d'] = pkg\n"
+        "def load(name):\n"
+        "    spec = importlib.util.spec_from_file_location('narwhal3d.' + name, os.path.join(ROOT, 'narwhal3d', name + '.py'))\n"
+        "    mod = importlib.util.module_from_spec(spec); sys.modules[spec.name] = mod; setattr(pkg, name, mod)\n"
+        "    spec.loader.exec_module(mod); return mod\n"
+        + body)
+    proc = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True,
+                          env=dict(os.environ), timeout=120)
+    lines = proc.stdout.strip().splitlines()
+    try:
+        return proc.returncode, (json.loads(lines[-1]) if lines else None)
+    except ValueError:
+        return proc.returncode, None
+
+
+# Two crossing lines in openNURBS form; each case changes one argument of the first.
+direct = isolated(
+    "lib = ctypes.CDLL(os.environ['NARWHAL_PURE_CORE'])\n"
+    "fn = lib.narwhal_pure_core_curve_curve_hits\n"
+    "D = ctypes.POINTER(ctypes.c_double); Z = ctypes.c_size_t\n"
+    "curve = [Z, D, Z, D, Z, ctypes.c_ubyte]\n"
+    "fn.argtypes = curve + curve + [ctypes.c_double, Z, D, Z, ctypes.POINTER(Z)]\n"
+    "fn.restype = ctypes.c_int32\n"
+    "def arr(v): return (ctypes.c_double * len(v))(*v) if v is not None else None\n"
+    "B = (2, arr([0.0, 1.0]), 2, arr([-1.0, 0, 0, 1, 1, 0, 0, 1]), 2, 0)\n"
+    "def call(order=2, knots=(0.0, 1.0), cvs=(0, -1, 0, 1, 0, 1, 0, 1), rational=0,\n"
+    "         knot_count=None, cv_count=None, tol=1e-6, depth=40, out=5, cap=1, count=True):\n"
+    "    k = arr(list(knots) if knots is not None else None)\n"
+    "    c = arr([float(x) for x in cvs] if cvs is not None else None)\n"
+    "    n = ctypes.c_size_t(99)\n"
+    "    code = fn(order, k, len(knots or ()) if knot_count is None else knot_count, c,\n"
+    "              len(cvs or ()) // 4 if cv_count is None else cv_count, rational, *B, tol, depth,\n"
+    "              arr([0.0] * out) if out else None, cap, ctypes.byref(n) if count else None)\n"
+    "    return code\n"
+    "inf, nan = math.inf, math.nan\n"
+    "cases = {\n"
+    "  'decreasing knots': call(knots=(1.0, 0.0)),\n"
+    "  'an empty domain': call(knots=(1.0, 1.0)),\n"
+    "  'a NaN knot': call(knots=(0.0, nan)),\n"
+    "  'an infinite control point': call(cvs=(inf, -1, 0, 1, 0, 1, 0, 1)),\n"
+    "  'a zero weight': call(cvs=(0, -1, 0, 0, 0, 1, 0, 1), rational=1),\n"
+    "  'a negative weight': call(cvs=(0, -1, 0, 1, 0, 1, 0, -1), rational=1),\n"
+    "  'a knot too many': call(knots=(0.0, 1.0, 2.0)),\n"
+    "  'a knot count past the buffer': call(knot_count=1 << 40),\n"
+    "  'a point count past the buffer': call(cv_count=1 << 40),\n"
+    "  'order 1': call(order=1, knots=()),\n"
+    "  'more order than points': call(order=3, knots=(0.0, 0.0, 1.0)),\n"
+    "  'order 33': call(order=33),\n"
+    "  'rational flag 2': call(rational=2),\n"
+    "  'max_depth 65': call(depth=65),\n"
+    "  'max_depth 2**63': call(depth=1 << 63),\n"
+    "  'a NaN tolerance': call(tol=nan),\n"
+    "  'an infinite tolerance': call(tol=inf),\n"
+    "  'null knots with a count': call(knots=None, knot_count=2),\n"
+    "  'null points with a count': call(cvs=None, cv_count=2),\n"
+    "  'no count pointer': call(count=False),\n"
+    "  'a hit with nowhere to write it': call(out=0, cap=1),\n"
+    "}\n"
+    "print(json.dumps({'cases': cases, 'valid': call(), 'depth 64': call(depth=64),\n"
+    "                  'no room': call(cap=0)}))\n")
+expected = {"decreasing knots": -2, "an empty domain": -2, "a NaN knot": -2,
+            "an infinite control point": -2, "a zero weight": -2, "a negative weight": -2,
+            "a knot too many": -2, "a knot count past the buffer": -2,
+            "a point count past the buffer": -2, "order 1": -2, "more order than points": -2,
+            "order 33": -2, "rational flag 2": -2, "max_depth 65": -2, "max_depth 2**63": -2,
+            "a NaN tolerance": -2, "an infinite tolerance": -2, "null knots with a count": -1,
+            "null points with a count": -1, "no count pointer": -1,
+            "a hit with nowhere to write it": -1}
+got = (direct[1] or {}).get("cases", {})
+wrong = {k: got.get(k) for k in expected if got.get(k) != expected[k]}
+check(direct[0] == 0 and not wrong and direct[1]["valid"] == 0 and direct[1]["depth 64"] == 0
+      and direct[1]["no room"] == -3,
+      f"direct ABI: {len(expected)} malformed calls are refused, a valid one (and depth 64) "
+      f"answers, a full buffer reports its size, no crash (exit {direct[0]}; wrong: {wrong})")
+
+adapter = isolated(
+    "import rhino3dm as r3\n"
+    "native = load('native_intersect')\n"
+    "def line(p, q): return r3.LineCurve(r3.Point3d(*p), r3.Point3d(*q)).ToNurbsCurve()\n"
+    "a, b = line((0, -1, 0), (0, 1, 0)), line((-1, 0, 0), (1, 0, 0))\n"
+    "broken = r3.NurbsCurve(3, False, 3, 4)\n"
+    "cases = {\n"
+    "  'max_depth -1': native.point_hits(a, b, 1e-6, -1),\n"
+    "  'max_depth 65': native.point_hits(a, b, 1e-6, 65),\n"
+    "  'max_depth 2**70': native.point_hits(a, b, 1e-6, 2 ** 70),\n"
+    "  'max_depth 40.5': native.point_hits(a, b, 1e-6, 40.5),\n"
+    "  'max_depth \"40\"': native.point_hits(a, b, 1e-6, '40'),\n"
+    "  'max_depth None': native.point_hits(a, b, 1e-6, None),\n"
+    "  'tol NaN': native.point_hits(a, b, math.nan, 40),\n"
+    "  'tol inf': native.point_hits(a, b, math.inf, 40),\n"
+    "  'tol \"x\"': native.point_hits(a, b, 'x', 40),\n"
+    "  'tol None': native.point_hits(a, b, None, 40),\n"
+    "  'a point, not a curve': native.point_hits(r3.Point3d(0, 0, 0), b, 1e-6, 40),\n"
+    "  'an invalid NurbsCurve': native.point_hits(broken, b, 1e-6, 40),\n"
+    "}\n"
+    "ok = native.point_hits(a, b, 1e-6, 40)\n"
+    "print(json.dumps({'refused': {k: v is None for k, v in cases.items()},\n"
+    "                  'valid call answers': ok == [((0.0, 0.0, 0.0), 1.0, 1.0)]}))\n")
+refused = (adapter[1] or {}).get("refused", {})
+check(adapter[0] == 0 and len(refused) == 12 and all(refused.values())
+      and adapter[1]["valid call answers"],
+      f"the adapter refuses {sum(refused.values())} of 12 malformed calls before ctypes and "
+      f"still answers a valid one (exit {adapter[0]}; not refused: "
+      f"{[k for k, v in refused.items() if not v]})")
+
 print("\n-- timing: the recursion alone (best of 3) --")
 
 

@@ -214,6 +214,7 @@ TEST_FILES = (
     "spike/test_native_joinchain.py", "spike/test_native_vector_export.py",
     "spike/test_native_command_search.py", "spike/test_native_coil.py",
     "spike/test_native_intersect.py",
+    "spike/test_pure_core_curve_hits_gate.py",
     "spike/test_native_search02_contract.py", "spike/test_native_search02_adapter.py",
     "spike/test_native_search02_ffi.py", "spike/test_native_search02_consumers.py",
     "spike/test_native_search02_profile.py", "spike/fixtures/native_search02.json",

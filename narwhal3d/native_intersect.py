@@ -4,11 +4,17 @@ Rust repeats `_subdivide` and `_dedupe`, with `Curve.Split`, `GetBoundingBox`,
 `PointAt` and `Intersection.LineLine` ported from the openNURBS rhino3dm 8.35.0 pins,
 so every hit is bit-identical to the Python's. The hits are intersection parameters
 and points on existing curves; this never changes document geometry.
+
+The route is live only on a platform in `QUALIFIED_PLATFORMS` (measured: Linux/glibc).
+It reaches libm only through `sqrt` and `fma`, but another platform joins only once
+scripts/check_pure_core.py has qualified its artifact against the pinned witness hits.
 """
 from __future__ import annotations
 
 import array
 import ctypes
+import math
+import operator
 import os
 from pathlib import Path
 import sys
@@ -19,6 +25,10 @@ import rhino3dm as r3
 _ENV = "NARWHAL_PURE_CORE"
 _ERR_SIZE = -3
 _FIRST_CAPACITY = 64
+_MAX_DEPTH = 64          # the export's recursion bound; a deeper request stays in Python
+# Platforms whose qualified library carries the export. A platform joins only after
+# scripts/check_pure_core.py qualifies its artifact; elsewhere the Python recursion answers.
+QUALIFIED_PLATFORMS = frozenset({"linux"})
 _lock = threading.Lock()
 _signature = None
 _binding = None
@@ -47,6 +57,8 @@ def _hits_binding():
         _signature, _binding = signature, None
         packaged = Path(__file__).resolve().parent / "native" / _library_name()
         candidates = (Path(explicit).expanduser(),) if explicit else (packaged,)
+        if sys.platform not in QUALIFIED_PLATFORMS:
+            candidates = ()
         for path in candidates:
             if not path.is_file():
                 continue
@@ -67,6 +79,15 @@ def available():
     return _hits_binding() is not None
 
 
+def capability():
+    """``"qualified"`` when the export is live, otherwise the reason it is not."""
+    if sys.platform not in QUALIFIED_PLATFORMS:
+        return f"not qualified on {sys.platform}; curve_curve recurses in Python"
+    if _hits_binding() is None:
+        return "curve/curve export unavailable; curve_curve recurses in Python"
+    return "qualified"
+
+
 def _pack(curve):
     """``(args, keep)`` for one curve, or None when it is not a valid `NurbsCurve`.
 
@@ -79,8 +100,11 @@ def _pack(curve):
     for cv in curve.Points:
         cvs.extend((cv.X, cv.Y, cv.Z, cv.W))   # homogeneous, as openNURBS stores them
     knots = array.array("d", curve.Knots.ToList())
-    args = (int(curve.Order), (ctypes.c_double * len(knots)).from_buffer(knots), len(knots),
-            (ctypes.c_double * len(cvs)).from_buffer(cvs), len(cvs) // 4,
+    order, count = int(curve.Order), len(cvs) // 4
+    if order < 2 or count < order or len(knots) != order + count - 2:
+        return None
+    args = (order, (ctypes.c_double * len(knots)).from_buffer(knots), len(knots),
+            (ctypes.c_double * len(cvs)).from_buffer(cvs), count,
             int(bool(curve.IsRational)))
     return args, (knots, cvs)
 
@@ -89,11 +113,20 @@ def point_hits(a, b, tol, max_depth):
     """``[(point, t_a, t_b)]`` of `_dedupe(_subdivide(a, b, ...))`, or None.
 
     None (either curve not a valid `NurbsCurve`, no library, or a case the port does
-    not cover) keeps the Python recursion.
+    not cover) keeps the Python recursion. So does a `tol` that is not a finite number
+    or a `max_depth` that is not an integer from 0 to 64: everything the export is
+    given is checked here first.
     """
     global _native_calls
     fn = _hits_binding()
     if fn is None:
+        return None
+    try:
+        depth = operator.index(max_depth)
+        tol = float(tol)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if not (0 <= depth <= _MAX_DEPTH and math.isfinite(tol)):
         return None
     try:
         pa, pb = _pack(a), _pack(b)
@@ -103,7 +136,7 @@ def point_hits(a, b, tol, max_depth):
         capacity = _FIRST_CAPACITY
         for _attempt in range(2):
             out = array.array("d", bytes(40 * capacity))
-            code = fn(*pa[0], *pb[0], float(tol), int(max_depth),
+            code = fn(*pa[0], *pb[0], tol, depth,
                       (ctypes.c_double * len(out)).from_buffer(out), capacity,
                       ctypes.byref(count))
             if code != _ERR_SIZE:

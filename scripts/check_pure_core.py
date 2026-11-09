@@ -87,6 +87,7 @@ PURE_CORE_PYTESTS = (
     "spike/test_native_search02_consumers.py",
     "spike/test_native_coil.py",
     "spike/test_native_intersect.py",
+    "spike/test_pure_core_curve_hits_gate.py",
     "spike/test_native_coil_preview.py",
     "spike/test_preview_curve_native.py",
     "spike/test_native_tessellate.py",
@@ -233,6 +234,79 @@ def probe_pure_core_nearest_batch(path: Path, python: Path | str = sys.executabl
         raise ValueError(f"cannot verify pure-core batch nearest export: {getattr(error, 'stderr', '') or error}") from error
     if identity != PURE_CORE_NEAREST_BATCH_IDENTITY:
         raise ValueError(f"pure-core batch nearest evidence differs: {identity!r}")
+    return identity
+
+
+# Additive curve/curve intersection export (intersect.curve_curve's recursion), qualified like
+# the batch export above: a library without it, or a platform not yet qualified, keeps the
+# Python recursion.
+PURE_CORE_CURVE_HITS_EXPORT = "narwhal_pure_core_curve_curve_hits"
+# narwhal3d/native_intersect.py must carry the same set (spike/test_pure_core_curve_hits_gate.py).
+# The export reaches libm only through sqrt and fma; Windows joins with its own record.
+PURE_CORE_CURVE_HITS_QUALIFIED_PLATFORMS = frozenset({"linux"})
+# The digest pins the exact bits of every witness hit; it is also the digest of the Python
+# recursion's hits (`_dedupe(_subdivide(...))`) on the same curves.
+PURE_CORE_CURVE_HITS_IDENTITY = {
+    "export": PURE_CORE_CURVE_HITS_EXPORT,
+    "hits": [1, 2, 1], "small_buffer_status": -3, "empty_domain_status": -2,
+    "deep_request_status": -2, "null_count_status": -1,
+    "hits_sha256": "2026c8b8c27d50195edbca80fdcf337725e50254662e0dd219112c0add05c8c0",
+}
+PURE_CORE_CURVE_HITS_PROBE = r'''
+import ctypes as c, hashlib, json, struct, sys
+fn = c.CDLL(sys.argv[1]).narwhal_pure_core_curve_curve_hits
+D, Z = c.POINTER(c.c_double), c.c_size_t
+curve = [Z, D, Z, D, Z, c.c_ubyte]
+fn.argtypes = curve + curve + [c.c_double, Z, D, Z, c.POINTER(Z)]
+fn.restype = c.c_int32
+def arr(values): return (c.c_double * len(values))(*values)
+def nurbs(order, knots, cvs, rational=0):
+    return (order, arr(knots), len(knots), arr([float(v) for v in cvs]), len(cvs) // 4, rational)
+# Crossing lines; a cubic Bezier crossing a horizontal line twice; a rational quadratic arc
+# (a quarter circle of radius 2) crossed once by the line y = x. Control points are homogeneous.
+w = 0.5 ** 0.5
+pairs = [
+    (nurbs(2, [0, 1], [0, -1, 0, 1, 0, 1, 0, 1]), nurbs(2, [0, 1], [-1, 0, 0, 1, 1, 0, 0, 1])),
+    (nurbs(4, [0, 0, 0, 1, 1, 1], [0, 0, 0, 1, 2, 4, 0, 1, 4, -4, 0, 1, 6, 0, 0, 1]),
+     nurbs(2, [0, 1], [-1, 0.5, 0, 1, 7, 0.5, 0, 1])),
+    (nurbs(3, [0, 0, 1, 1], [2, 0, 0, 1, 2 * w, 2 * w, 0, w, 0, 2, 0, 1], 1),
+     nurbs(2, [0, 1], [0, 0, 0, 1, 2, 2, 0, 1])),
+]
+counts, bits = [], b""
+for a, b in pairs:
+    out, n = (c.c_double * 50)(), Z()
+    if fn(*a, *b, 1e-6, 40, out, 10, c.byref(n)) != 0:
+        raise RuntimeError("the export refused a witness pair")
+    counts.append(n.value)
+    bits += struct.pack("<%dd" % (5 * n.value), *out[:5 * n.value])
+a, b = pairs[1]
+n = Z()
+small = fn(*a, *b, 1e-6, 40, (c.c_double * 5)(), 1, c.byref(n))
+if n.value != 2:
+    raise RuntimeError("a full buffer must still report the hit count")
+empty = nurbs(2, [1, 1], [0, -1, 0, 1, 0, 1, 0, 1])
+print(json.dumps({"export": "narwhal_pure_core_curve_curve_hits", "hits": counts,
+                  "small_buffer_status": small,
+                  "empty_domain_status": fn(*empty, *b, 1e-6, 40, (c.c_double * 50)(), 10, c.byref(n)),
+                  "deep_request_status": fn(*a, *b, 1e-6, 65, (c.c_double * 50)(), 10, c.byref(n)),
+                  "null_count_status": fn(*a, *b, 1e-6, 40, (c.c_double * 50)(), 10, None),
+                  "hits_sha256": hashlib.sha256(bits).hexdigest()}, sort_keys=True))
+'''
+
+
+def probe_pure_core_curve_hits(path: Path, python: Path | str = sys.executable, *, env=None) -> dict:
+    """Require the curve/curve export to give the pinned witness hits, bit for bit."""
+    if not path.is_file() or path.is_symlink():
+        raise ValueError(f"missing regular pure-core library: {path}")
+    try:
+        completed = subprocess.run(
+            [str(python), "-I", "-B", "-c", PURE_CORE_CURVE_HITS_PROBE, str(path.resolve())],
+            env=env, text=True, capture_output=True, check=True, timeout=30)
+        identity = json.loads(completed.stdout)
+    except (OSError, subprocess.SubprocessError, ValueError) as error:
+        raise ValueError(f"cannot verify pure-core curve/curve export: {getattr(error, 'stderr', '') or error}") from error
+    if identity != PURE_CORE_CURVE_HITS_IDENTITY:
+        raise ValueError(f"pure-core curve/curve evidence differs: {identity!r}")
     return identity
 
 
@@ -384,6 +458,15 @@ def step_nearest_batch(lib_path: Path) -> dict[str, object]:
     return {"status": "ok", "nearest_batch": identity, "command": "ctypes batch probe"}
 
 
+def step_curve_hits(lib_path: Path) -> dict[str, object]:
+    """Qualify the curve/curve intersection export; required for the library to carry it."""
+    try:
+        identity = probe_pure_core_curve_hits(lib_path)
+    except ValueError as exc:
+        raise GateError(str(exc)) from exc
+    return {"status": "ok", "curve_hits": identity, "command": "ctypes curve/curve probe"}
+
+
 def step_adapter(crate: Path, lib_path: Path) -> dict[str, object]:
     """Run the dedicated pure-core Python suites against the built library."""
     python = _bundled_python()
@@ -461,6 +544,7 @@ def run_gate(crate_rel: str) -> dict[str, object]:
     lib = _release_lib(crate)
     steps["direct_abi"] = step_direct_abi(lib)
     steps["nearest_batch"] = step_nearest_batch(lib)
+    steps["curve_hits"] = step_curve_hits(lib)
     steps["adapter"] = step_adapter(crate, lib)
     steps["windows_check"] = step_windows_check(crate)
 
@@ -499,7 +583,7 @@ def main(argv: list[str]) -> int:
     else:
         print(f"pure-core source gate: OK (crate {report['crate']})")
         for name in ("fmt", "clippy", "tests", "release_build",
-                     "direct_abi", "nearest_batch", "adapter", "windows_check"):
+                     "direct_abi", "nearest_batch", "curve_hits", "adapter", "windows_check"):
             step = report["steps"][name]
             detail = step.get("passed", step.get("suites", step.get("reason", "")))
             print(f"  [{name}] {step['status']}"
