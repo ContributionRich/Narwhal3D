@@ -913,14 +913,22 @@ unsafe fn read_curve(
     if !(2..=MAX_ORDER).contains(&order) || cv_count > MAX_CVS || rational > 1 || cv_count < order {
         return Err(ERR_INPUT);
     }
+    // Every length is settled from the bounded counts before any slice is formed, so a
+    // caller's count larger than its buffer never becomes a slice.
+    let expected_knots = order.checked_add(cv_count).and_then(|n| n.checked_sub(2));
+    let (Some(expected_knots), Some(cv_len)) = (expected_knots, cv_count.checked_mul(S)) else {
+        return Err(ERR_INPUT);
+    };
+    if knot_count != expected_knots {
+        return Err(ERR_INPUT);
+    }
     let (Some(k), Some(c)) = (
-        crate::checked_slice(knots, knot_count),
-        crate::checked_slice(cvs, cv_count * S),
+        crate::checked_slice(knots, expected_knots),
+        crate::checked_slice(cvs, cv_len),
     ) else {
         return Err(ERR_NULL);
     };
-    if knot_count != Curve::knot_count(order, cv_count) || !k.iter().chain(c).all(|v| v.is_finite())
-    {
+    if !k.iter().chain(c).all(|v| v.is_finite()) {
         return Err(ERR_INPUT);
     }
     let curve = Curve {
@@ -1370,6 +1378,34 @@ mod tests {
             assert_eq!(bad(&|c| c.order = 1), ERR_INPUT, "order 1");
             assert_eq!(bad(&|c| c.order = 3), ERR_INPUT, "more order than points");
             assert_eq!(bad(&|c| c.order = MAX_ORDER + 1), ERR_INPUT, "order 33");
+            // A count past its buffer is refused before any slice of the buffer is formed:
+            // a misaligned pointer (never read) would refuse as ERR_NULL if it were sliced.
+            let misaligned = (a.knots.as_ptr() as *const u8).wrapping_add(1) as *const f64;
+            for (knot_count, cv_count) in
+                [(1 << 40, 2), (usize::MAX, 2), (2, 1 << 40), (2, usize::MAX)]
+            {
+                let mut count = 0;
+                let code = narwhal_pure_core_curve_curve_hits(
+                    2,
+                    misaligned,
+                    knot_count,
+                    misaligned,
+                    cv_count,
+                    0,
+                    2,
+                    b.knots.as_ptr(),
+                    2,
+                    b.cvs.as_ptr(),
+                    2,
+                    0,
+                    1e-6,
+                    40,
+                    out.as_mut_ptr(),
+                    1,
+                    &mut count,
+                );
+                assert_eq!(code, ERR_INPUT, "counts {knot_count}, {cv_count}");
+            }
             let mut count = 7;
             let nulls = narwhal_pure_core_curve_curve_hits(
                 2,
@@ -1440,8 +1476,9 @@ mod tests {
     fn a_deep_recursion_fits_a_small_thread_stack() {
         // tol 0: a curved piece is straight enough only once its halves are too short to
         // bend in floating point, so crossing cubics recurse about as deep as halving
-        // allows. MEASURED: these 40 levels fit a 64 KiB stack in a release build (about
-        // 1.6 KiB a level, so MAX_DEPTH needs about 100 KiB) and 256 KiB in a debug one.
+        // allows (40 levels). This debug build needs a 256 KiB thread for them;
+        // test_native_intersect.py runs the same pair through the release library on a
+        // 64 KiB thread.
         let worker = std::thread::Builder::new().stack_size(256 << 10).spawn(|| {
             let a = cubic(&[
                 [0.0, 0.0, 0.0],

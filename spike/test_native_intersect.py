@@ -307,6 +307,15 @@ direct = isolated(
     "  'no count pointer': call(count=False),\n"
     "  'a hit with nowhere to write it': call(out=0, cap=1),\n"
     "}\n"
+    "# A count past its buffer must be refused before the buffer is sliced: these pointers are\n"
+    "# misaligned and never read, so a slice attempt would refuse them as ERR_NULL instead.\n"
+    "mis = ctypes.cast(ctypes.addressof(arr([0.0] * 8)) + 1, D)\n"
+    "def oversized(knot_count, cv_count):\n"
+    "    return fn(2, mis, knot_count, mis, cv_count, 0, *B, 1e-6, 40, arr([0.0] * 5), 1,\n"
+    "              ctypes.byref(ctypes.c_size_t()))\n"
+    "cases['an oversized knot count on a short buffer'] = oversized(1 << 40, 2)\n"
+    "cases['a knot count of SIZE_MAX'] = oversized(2 ** 64 - 1, 2)\n"
+    "cases['an oversized point count on a short buffer'] = oversized(2, 1 << 40)\n"
     "print(json.dumps({'cases': cases, 'valid': call(), 'depth 64': call(depth=64),\n"
     "                  'no room': call(cap=0)}))\n")
 expected = {"decreasing knots": -2, "an empty domain": -2, "a NaN knot": -2,
@@ -316,13 +325,39 @@ expected = {"decreasing knots": -2, "an empty domain": -2, "a NaN knot": -2,
             "order 33": -2, "rational flag 2": -2, "max_depth 65": -2, "max_depth 2**63": -2,
             "a NaN tolerance": -2, "an infinite tolerance": -2, "null knots with a count": -1,
             "null points with a count": -1, "no count pointer": -1,
-            "a hit with nowhere to write it": -1}
+            "a hit with nowhere to write it": -1,
+            "an oversized knot count on a short buffer": -2, "a knot count of SIZE_MAX": -2,
+            "an oversized point count on a short buffer": -2}
 got = (direct[1] or {}).get("cases", {})
 wrong = {k: got.get(k) for k in expected if got.get(k) != expected[k]}
 check(direct[0] == 0 and not wrong and direct[1]["valid"] == 0 and direct[1]["depth 64"] == 0
       and direct[1]["no room"] == -3,
       f"direct ABI: {len(expected)} malformed calls are refused, a valid one (and depth 64) "
       f"answers, a full buffer reports its size, no crash (exit {direct[0]}; wrong: {wrong})")
+
+# The deepest recursion seen (tol 0 on crossing cubics: about 40 levels, where halving runs
+# out of floating point) on a 64 KiB thread, through the built library. MEASURED: it also
+# fits 48 KiB, and overflows 32 KiB.
+deep = isolated(
+    "import threading\n"
+    "fn = ctypes.CDLL(os.environ['NARWHAL_PURE_CORE']).narwhal_pure_core_curve_curve_hits\n"
+    "D, Z = ctypes.POINTER(ctypes.c_double), ctypes.c_size_t\n"
+    "curve = [Z, D, Z, D, Z, ctypes.c_ubyte]\n"
+    "fn.argtypes = curve + curve + [ctypes.c_double, Z, D, Z, ctypes.POINTER(Z)]\n"
+    "fn.restype = ctypes.c_int32\n"
+    "def arr(v): return (ctypes.c_double * len(v))(*map(float, v))\n"
+    "def cubic(pts): return (4, arr([0, 0, 0, 1, 1, 1]), 6, arr([c for p in pts for c in (*p, 1)]), 4, 0)\n"
+    "a = cubic([(0, 0, 0), (2, 4, 0), (4, -4, 0), (6, 0, 0)])\n"
+    "b = cubic([(0, 0.5, 0), (6, 0.5, 0), (12, 0.5, 0), (18, 0.5, 0)])\n"
+    "res = []\n"
+    "def run():\n"
+    "    n = Z(); out = arr([0] * 320)\n"
+    "    res.append([fn(*a, *b, 0.0, 64, out, 64, ctypes.byref(n)), n.value])\n"
+    "threading.stack_size(64 << 10)\n"
+    "t = threading.Thread(target=run); t.start(); t.join()\n"
+    "print(json.dumps(res[0]))\n")
+check(deep == (0, [0, 2]),
+      f"the deepest recursion runs on a 64 KiB thread through the built library, no crash ({deep})")
 
 adapter = isolated(
     "import rhino3dm as r3\n"
