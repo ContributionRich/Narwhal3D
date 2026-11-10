@@ -14,6 +14,7 @@
 //! under `src/`.
 
 pub mod aci_colors;
+pub mod arclength;
 pub mod bearing;
 pub mod bspline;
 pub mod cage;

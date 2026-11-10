@@ -23,6 +23,7 @@ Current production routing:
 | uniform curve samples for previews and wireframes (`bridge.sample_curve_xyz`) | Rust for a `NurbsCurve`; other curves stay in Python | 5.7× faster at 49 samples, 11× at 217, 14× at 553 (InterpCrv preview); bit-identical to `PointAt` |
 | curve display tessellation (`bridge._display_samples`) | Rust for a `NurbsCurve` on Linux/glibc only; other curves, Windows and macOS stay in Python | 11.9× faster over 300 open cubics, 5.7× on a circle, 14.8× on a 40-point zigzag; bit-identical parameters and points on Linux/glibc (libm `pow`/`atan2` as CPython calls them); unqualified elsewhere, see below |
 | Rebuild least-squares fit (`rebuild._fit`) | Rust; the Python fit is the no-library fallback | 30× faster per fit (40 points, 801 samples: 21.7 → 0.73 ms); bit-identical control points |
+| point at arc length (`arclength.PreparedLength.parameters_at`) | Rust for a `NurbsCurve`; other curves, refusals and the table's end branch stay in Python | 58× faster for 799 lengths on a 30-point cubic; Rebuild to 40 points 2.0 s → 0.64 s; bit-identical parameters, measured on Linux/glibc (only `+ − × ÷` and `sqrt`, no libm transcendental; Windows/macOS runtime parity unmeasured) |
 | STL decode API | Python | generic triangle-tuple reshaping was 24.9% slower |
 | STL Import parse+weld | Rust at ≥50 kB | fused indexed output measured 3.8–4.3× faster at 1k–100k triangles |
 | OBJ encode | Python | native path was 2.18× slower |
