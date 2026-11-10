@@ -49,11 +49,24 @@ _cache = {}
 #: ``{(name, mode, blocked): (parts, candidates)}``: an object's candidates built from ITS parts.
 #: Reused while `ui._brep_parts_all` returns the same parts object, which it does for an
 #: analytic master until that master changes. `clear` leaves it alone for that reason.
+#: Curve/point entries are ``(geometry, candidates, display stamp)``: a document row keeps
+#: its LIVE rhino3dm wrapper across an in-place transform (Gumball, grip drag), so identity
+#: alone cannot tell a moved curve from an unchanged one.
 _objects = {}
 
 
 def clear():
     _cache.clear()
+
+
+def forget(names):
+    """Drop the reusable candidates of objects whose geometry changed in place."""
+    low = {str(name).lower() for name in names}
+    if not low:
+        return
+    _cache.clear()
+    for key in [key for key in _objects if str(key[0]).lower() in low]:
+        del _objects[key]
 
 
 def _packed(candidate):
@@ -104,6 +117,7 @@ def collect(ui, mode):
     # a click's own selection change is one, so it forced a full rebuild on the next click.
     revision = ((id(rows), dg.get('vis', 0), max(dg.get('changed', {}).values(), default=0),
                  bpy.context.view_layer.as_pointer()) if dg is not None else None)
+    changed = dg.get('changed', {}) if dg is not None else {}
     if (_cache.get('rows') is rows and _cache.get('signature') == signature
             and _cache.get('revision') == revision):
         return _cache['candidates']
@@ -112,11 +126,13 @@ def collect(ui, mode):
     previous, current = _objects, {}
     for name, _state, _layer, geom, _attrs in visible:
         if isinstance(geom, (r3.Curve, r3.Point)):
-            # Curves and points depend only on their document geometry, so they are reused by
-            # identity exactly as brep parts are (`rows` keep the geometry objects of unchanged rows).
+            # Curves and points depend only on their document geometry. `rows` keep the
+            # geometry objects of unchanged rows, but ALSO of rows transformed in place, so
+            # reuse additionally requires the object's display-change stamp to be unchanged.
             key = (name, mode, 'geometry', name in blocked)
+            stamp = changed.get(name, 0)
             known = previous.get(key)
-            if known is not None and known[0] is geom:
+            if known is not None and known[0] is geom and known[2] == stamp:
                 out.extend(known[1])
                 current[key] = known
                 continue
@@ -133,7 +149,7 @@ def collect(ui, mode):
             elif name not in blocked and mode == 'object':
                 out.append(_candidate((name, 'Object', 0), name + ' — Point',
                                       points=((geom.Location.X, geom.Location.Y, geom.Location.Z),)))
-            current[key] = (geom, out[start:])
+            current[key] = (geom, out[start:], stamp)
             continue
         if parts_by_name is None:
             parts_by_name = ui._brep_parts_all()
@@ -253,6 +269,19 @@ def _fallback_hits(lines, matrix, width, height, cursor):
         yield best
 
 
+def _view_ray(inverse, region, xy):
+    """``(origin, direction, length)`` of the view ray through region pixel ``xy``."""
+    from mathutils import Vector
+    # Mathutils owns unprojection. Start at the near clip plane, not behind
+    # clipped foreground geometry; the far plane bounds traversal too.
+    nx, ny = xy[0] * 2 / region.width - 1, xy[1] * 2 / region.height - 1
+    a = inverse @ Vector((nx, ny, -1, 1))
+    b = inverse @ Vector((nx, ny, 1, 1))
+    origin, end = a.xyz / a.w, b.xyz / b.w
+    delta = end - origin
+    return origin, delta.normalized(), delta.length
+
+
 def at(ui, area, space, region, x, y, mode='object'):
     """OURS (owner policy): aperture intersection AND visibility at that hit.
 
@@ -304,14 +333,7 @@ def at(ui, area, space, region, x, y, mode='object'):
     inverse = rv.perspective_matrix.inverted()
 
     def ray_at(xy):
-        # Mathutils owns unprojection. Start at the near clip plane, not behind
-        # clipped foreground geometry; the far plane bounds traversal too.
-        nx, ny = xy[0] * 2 / region.width - 1, xy[1] * 2 / region.height - 1
-        a = inverse @ Vector((nx, ny, -1, 1))
-        b = inverse @ Vector((nx, ny, 1, 1))
-        origin, end = a.xyz / a.w, b.xyz / b.w
-        delta = end - origin
-        return origin, delta.normalized(), delta.length
+        return _view_ray(inverse, region, xy)
 
     def record(index, point, distance):
         projected = ui._project_with_depth(region, rv, point)
@@ -349,3 +371,51 @@ def at(ui, area, space, region, x, y, mode='object'):
     hits = [(index, distance, depth) for index, (distance, depth) in distances.items()]
     hits.sort(key=lambda row: (priority[candidates[row[0]].key[1]], row[1], row[2], row[0]))
     return [candidates[index] for index, _distance, _depth in hits]
+
+
+def rect_crossings(ui, region, rv, names, rect):
+    """OURS: the ``names`` whose DRAWN surface/mesh display touches screen ``rect``.
+
+    A crossing rectangle selects what it touches, the same display edges and faces a
+    click can hit -- never an object's bounding box, which for a ring, a tilted plate or
+    any curved solid covers screen area the object does not (#134). Edges and every
+    display triangle's boundary go through the existing Rust batch rectangle query; a
+    rectangle lying wholly inside one face touches no boundary, and is caught by
+    Blender's BVH ray at the rectangle's centre. Depth is deliberately ignored: a
+    crossing reaches occluded objects too, exactly like curve crossing.
+
+    Order is preserved. A name with no surface/mesh display candidate (curves, points,
+    annotations) is kept, as is everything when the native query is unavailable or
+    a candidate cannot be projected -- unavailable evidence never hides an object.
+    """
+    from . import native_selection
+    names = list(names)
+    if not names or not region.width or not region.height:
+        return names
+    candidates = collect(ui, 'object')[0]
+    wanted = set(names)
+    shapes = {}
+    for candidate in candidates:
+        name = candidate.key[0]
+        if (name in wanted and candidate.key[1] == 'Object' and candidate.triangles
+                and name not in shapes):
+            shapes[name] = candidate
+    if not shapes:
+        return names
+    order = list(shapes)
+    statuses = native_selection.projected_curves_rect_query(
+        [_packed(shapes[name])[2] for name in order], rv.perspective_matrix,
+        region.width, region.height, rect)
+    if statuses is None or len(statuses) != len(order):
+        return names
+    x0, y0, x1, y1 = rect
+    origin, direction, limit = _view_ray(
+        rv.perspective_matrix.inverted(), region, ((x0 + x1) / 2, (y0 + y1) / 2))
+    missed = set()
+    for name, status in zip(order, statuses):
+        if status != native_selection.RECT_MISS:
+            continue
+        tree = shapes[name].tree
+        if tree is None or tree.ray_cast(origin, direction, limit)[0] is None:
+            missed.add(name)
+    return [name for name in names if name not in missed]

@@ -13654,11 +13654,11 @@ class FilletCmd(_TwoCurveCmd):
         picked = self._picked_segment(geom, 0)
         if picked is None:
             return f"{self.name}: select two DIFFERENT curves"
-        segments, i = picked
+        segments, _i = picked
         p0, p1 = self.pick_points[0], self.pick_points[1]
-        j = _fillet.segment_near(segments, p1)
         near = tuple((a + b) / 2.0 for a, b in zip(p0, p1))
         try:
+            i, j = _fillet.corner_for_picks(segments, bool(geom.IsClosed), p0, p1)
             arc, pieces = _fillet.fillet_adjacent_segments(
                 segments, bool(geom.IsClosed), i, j, radius, trim, near)
         except ValueError as e:

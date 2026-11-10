@@ -349,11 +349,13 @@ PURE_SUITES=(
     spike/test_curve_consumer_inputs.py
     spike/test_variable_edge_fillet.py
     spike/test_fillet_handle_input.py
+    spike/test_fillet_segments.py
     spike/test_fillet_preview_latency.py
     spike/test_fillet_chain_edges.py
     spike/test_solid_commands.py
     spike/test_primitives.py
     spike/test_picture.py
+    spike/test_picture_edge_midpoint.py
     spike/test_cmdbar_hits.py
     spike/test_extrude_distance.py
     spike/test_extrude_preview.py

@@ -116,6 +116,28 @@ class DisplayAdapter:
         }
         return ob
 
+    def frame(self, label):
+        """A flat square frame: four display bars around an EMPTY square hole."""
+        outer, inner = .4, .2
+        vertices = ((-outer, -outer, 0), (outer, -outer, 0), (outer, outer, 0), (-outer, outer, 0),
+                    (-inner, -inner, 0), (inner, -inner, 0), (inner, inner, 0), (-inner, inner, 0))
+        faces = ((0, 1, 5, 4), (1, 2, 6, 5), (2, 3, 7, 6), (3, 0, 4, 7))
+        edges = ((0, 1), (1, 2), (2, 3), (3, 0), (4, 5), (5, 6), (6, 7), (7, 4))
+        mesh = bpy.data.meshes.new('PickTest_frame')
+        self.meshes.append(mesh)
+        mesh.from_pydata(vertices, [], faces)
+        mesh.update()
+        mesh.calc_loop_triangles()
+        ob = self.add(label, r3.Mesh(), mesh)
+        self.parts[ob.name] = {
+            'edges': [(i, tuple(vertices[j] for j in edge)) for i, edge in enumerate(edges)],
+            'faces': [(i, tuple(tuple(vertices[j] for j in t.vertices)
+                              for t in mesh.loop_triangles if t.polygon_index == i))
+                      for i in range(len(faces))],
+            'vertices': list(enumerate(vertices)),
+        }
+        return ob
+
     def close(self):
         for ob in self.objects:
             bpy.data.objects.remove(ob, do_unlink=True)
@@ -296,6 +318,62 @@ class PickCandidateTests(unittest.TestCase):
         picker._objects.clear()
         self.assertEqual(self._signature(warm), self._signature(picker.collect(self.ui, 'object')))
 
+    def _move_in_place(self, ob, dx):
+        """What a Gumball commit does: the SAME live wrapper now holds moved geometry."""
+        row = next(row for row in self.ui.rows if row[0] == ob.name)
+        self.assertTrue(row[3].Transform(r3.Transform.Translation(r3.Vector3d(dx, 0, 0))))
+        self.ui.key += 1
+        return row[3]
+
+    def test_curve_moved_in_place_is_picked_at_its_new_place(self):
+        # #134: after a Gumball move the document row keeps its wrapper, so identity reuse
+        # left the click candidates where the curve USED to be.
+        curve = self.ui.line('moved')
+        self.ui._curve_dg = {'serial': 1, 'vis': 0, 'scene': 0, 'changed': {}}
+        self.assertEqual(self.keys(), [(curve.name, 'Object', 0)])
+        self._move_in_place(curve, .5)                # +200 px
+        dg = self.ui._curve_dg
+        dg['serial'] += 1
+        dg['changed'][curve.name] = dg['serial']    # the display-change notification
+        self.assertEqual(self.keys(xy=(600, 300)), [(curve.name, 'Object', 0)],
+                         'the moved curve must be picked where it is drawn now')
+        self.assertEqual(self.keys(), [], 'nothing is left at the old place')
+
+    def test_forget_drops_in_place_candidates_without_a_display_stamp(self):
+        curve = self.ui.line('forgotten')
+        self.assertEqual(self.keys(), [(curve.name, 'Object', 0)])
+        self._move_in_place(curve, .5)
+        picker.forget([curve.name.upper()])           # names are matched case-insensitively
+        self.assertEqual(self.keys(xy=(600, 300)), [(curve.name, 'Object', 0)])
+        self.assertEqual(self.keys(), [])
+
+    def crossing(self, names, rect):
+        return picker.rect_crossings(self.ui, self.region, self.rv, names, rect)
+
+    def test_crossing_uses_drawn_faces_not_the_bounding_box(self):
+        # #134: a solid/surface was crossing-selected whenever the rectangle met its
+        # bounding box. Pixels: x = (X + 1) * 400, y = (Y + 1) * 300.
+        frame = self.ui.frame('frame')
+        name = frame.name
+        self.assertEqual(self.crossing([name], (390, 290, 410, 310)), [],
+                         'a rectangle in the empty hole touches nothing drawn')
+        self.assertEqual(self.crossing([name], (550, 290, 570, 310)), [name],
+                         'a rectangle across the outer edge touches it')
+        # Inside the top bar, clear of every edge and both triangle diagonals (y=380 px at
+        # x=400), so only the face-interior ray can establish the hit.
+        self.assertEqual(self.crossing([name], (398, 392, 402, 396)), [name],
+                         'a rectangle wholly inside a drawn face touches it')
+
+    def test_crossing_keeps_names_without_display_evidence_in_order(self):
+        frame = self.ui.frame('order_frame')
+        curve = self.ui.line('order_curve', y=.9)
+        names = ['PickTest_unknown', frame.name, curve.name]
+        self.assertEqual(self.crossing(names, (390, 290, 410, 310)),
+                         ['PickTest_unknown', curve.name])
+        with patch.object(native, 'projected_curves_rect_query', return_value=None):
+            self.assertEqual(self.crossing(names, (390, 290, 410, 310)), names,
+                             'an unavailable native query keeps the broad-phase result')
+
     def test_changed_parts_are_rebuilt_and_match_fresh(self):
         boxes = [self.ui.box(f'chg{i}', low=(i * 1.5 - 9, -.4, -.4), high=(i * 1.5 - 8.2, .4, 0.0))
                  for i in range(4)]
@@ -342,6 +420,14 @@ def mutations():
          'if known is not None:', 'test_changed_parts_are_rebuilt_and_match_fresh'),
         ('pick_candidates', "max(dg.get('changed', {}).values(), default=0)", "dg['serial']",
          'test_selection_only_depsgraph_update_reuses_candidates'),
+        ('pick_candidates', 'known[0] is geom and known[2] == stamp', 'known[0] is geom',
+         'test_curve_moved_in_place_is_picked_at_its_new_place'),
+        ('pick_candidates', '        del _objects[key]', '        pass',
+         'test_forget_drops_in_place_candidates_without_a_display_stamp'),
+        ('pick_candidates', '            missed.add(name)', '            pass',
+         'test_crossing_uses_drawn_faces_not_the_bounding_box'),
+        ('pick_candidates', 'tree.ray_cast(origin, direction, limit)[0] is None',
+         'True', 'test_crossing_uses_drawn_faces_not_the_bounding_box'),
     ]
     controls = unittest.TestSuite(PickCandidateTests(test) for test in dict.fromkeys(
         probe[3] for probe in probes))

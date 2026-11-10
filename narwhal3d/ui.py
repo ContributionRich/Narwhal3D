@@ -14627,6 +14627,7 @@ def invalidate_snap_cache(names=None):
         if _snap_index["entries"] is not None:
             _snap_index["stale"] |= low
         _layer_curve_cache["stale"] |= low
+        pick_candidates.forget(low)
     _point_loc_cache["key"] = None
     _polygon_cache["key"] = None
     _selection_projection_cache["entries"].clear()
@@ -14649,6 +14650,10 @@ def _note_objects_changed(names, before, in_place=False):
     low = {str(n).lower() for n in names}
     # the shared rows hold each object's geometry: re-read exactly the changed objects
     _patch_doc_rows(low, before, now, in_place=in_place)
+    # Those rows keep their live geometry wrappers, so click/hover candidates keyed on
+    # wrapper identity would still hold the old shape (#134: a moved curve picked only
+    # where it used to be).
+    pick_candidates.forget(low)
     if before is None or now is None:
         invalidate_snap_cache()
         return
@@ -21730,8 +21735,32 @@ def _rectangle_selection_hits(candidates, rect, mode, curve_crosses=None,
     return hits
 
 
+def _displays_cross_selection_rect(names, region, rv3d, rect):
+    """Refine non-curve crossing hits by their drawn faces/edges, not their bbox (#134).
+
+    Curves are app-drawn and already refined by their strokes; points are exact. Every
+    other broad-phase hit is checked against its click-pick display candidate.
+    """
+    names = list(names)
+    # One collection walk, not `users_collection` per hit (the #76 release cost).
+    coll = bpy.data.collections.get(bridge.CURVE_COLLECTION)
+    app = set(coll.objects.keys()) if coll is not None else set()
+    objects = bpy.data.objects
+    display = [name for name in names if name not in app and objects.get(name) is not None]
+    if not display:
+        return names
+    import sys
+    try:
+        kept = set(pick_candidates.rect_crossings(
+            sys.modules[__name__], region, rv3d, display, rect))
+    except Exception as exc:  # noqa: BLE001 -- missing evidence keeps the bbox result
+        print(f"[narwhal3d] crossing display refinement failed: {exc!r}")
+        return names
+    return [name for name in names if name in kept or name not in display]
+
+
 def _object_rectangle_hits(area, space, region, rv3d, projection, rect, mode):
-    """Broad native hit mask followed by unchanged curve/group refinement."""
+    """Broad native hit mask followed by curve/display/group refinement."""
     preclassified = None
     if projection is None or projection.get("boxes") is None:
         points, slices = _selection_world_box_inputs(projection)
@@ -21743,8 +21772,9 @@ def _object_rectangle_hits(area, space, region, rv3d, projection, rect, mode):
         candidates, rect, mode,
         curve_crosses=lambda name: _curve_crosses_selection_rect(
             name, region, rv3d, rect, projection),
-        curve_crosses_many=lambda names: _curves_cross_selection_rect(
-            names, region, rv3d, rect, projection),
+        curve_crosses_many=lambda names: _displays_cross_selection_rect(
+            _curves_cross_selection_rect(names, region, rv3d, rect, projection),
+            region, rv3d, rect),
         expand_groups=app_state.ctx.expand_group_names,
         preclassified=preclassified)
 

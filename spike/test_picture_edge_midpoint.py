@@ -125,6 +125,53 @@ try:
     check(abs(bb2.Min.X - 0.0) < 1e-9 and abs(bb2.Max.X - 4.0) < 1e-9, "side above X extent is [0, 4]")
     check(abs(bb2.Min.Y - 0.0) < 1e-9 and abs(bb2.Max.Y - 2.0) < 1e-9, "side above Y extent is [0, 2]")
 
+    # Oblique edge and reversed endpoint: expectations computed from first
+    # principles (independent of the code under test). For an image of aspect A,
+    # corner A = 2*M-E and edge e = 2*(E-M). The left-perpendicular unit vector is
+    # L = (-e.y, e.x)/|e| and the height vector up = d*(|e|/A), where d = L if the
+    # third point S falls to the left of the edge (dot((S-A),L) > 0) and d = -L
+    # otherwise (the frame is drawn on whichever side S is on). The four corners are
+    # {A, A+e, A+e+up, A+up}; the bbox is their min/max.
+    def _em_bbox(M, E, S, aspect):
+        import math as _m
+        A = (2*M[0]-E[0], 2*M[1]-E[1])
+        e = (2*(E[0]-M[0]), 2*(E[1]-M[1]))
+        le = _m.hypot(e[0], e[1])
+        L = (-e[1]/le, e[0]/le)
+        side = (S[0]-A[0])*L[0] + (S[1]-A[1])*L[1]
+        d = L if side > 0 else (-L[0], -L[1])
+        up = (d[0]*le/aspect, d[1]*le/aspect)
+        pts = [A, (A[0]+e[0], A[1]+e[1]), (A[0]+e[0]+up[0], A[1]+e[1]+up[1]), (A[0]+up[0], A[1]+up[1])]
+        xs = [p[0] for p in pts]; ys = [p[1] for p in pts]
+        return (min(xs), min(ys), max(xs), max(ys))
+
+    # Oblique: M=(1,1), E=(3,2), S=(2,1) -> S is to the RIGHT of the edge, frame flips.
+    cmd_ob = commands.PictureCmd()
+    ctx_ob = MockCtx()
+    cmd_ob.begin(ctx_ob)
+    cmd_ob.on_mode("EdgeMidpoint", ctx_ob)
+    cmd_ob._feed("1,1,0", ctx_ob)
+    cmd_ob._feed("3,2,0", ctx_ob)
+    cmd_ob._feed("2,1,0", ctx_ob)
+    check(len(ctx_ob.added) == 1, "oblique edge picture added")
+    bbo = ctx_ob.added[0][0].GetBoundingBox()
+    ex = _em_bbox((1.0,1.0), (3.0,2.0), (2.0,1.0), 2.0)
+    check(abs(bbo.Min.X-ex[0])<1e-9 and abs(bbo.Max.X-ex[2])<1e-9 and abs(bbo.Min.Y-ex[1])<1e-9 and abs(bbo.Max.Y-ex[3])<1e-9,
+          f"oblique bbox matches first-principles ({bbo.Min.X},{bbo.Min.Y})-({bbo.Max.X},{bbo.Max.Y}) expected {ex[0]},{ex[1]},{ex[2]},{ex[3]}")
+
+    # Reversed endpoint: M=(2,0), E=(0,0) left of midpoint, S=(1,1) -> frame above.
+    cmd_rev = commands.PictureCmd()
+    ctx_rev = MockCtx()
+    cmd_rev.begin(ctx_rev)
+    cmd_rev.on_mode("EdgeMidpoint", ctx_rev)
+    cmd_rev._feed("2,0,0", ctx_rev)
+    cmd_rev._feed("0,0,0", ctx_rev)
+    cmd_rev._feed("1,1,0", ctx_rev)
+    check(len(ctx_rev.added) == 1, "reversed-endpoint picture added")
+    bbr = ctx_rev.added[0][0].GetBoundingBox()
+    exr = _em_bbox((2.0,0.0), (0.0,0.0), (1.0,1.0), 2.0)
+    check(abs(bbr.Min.X-exr[0])<1e-9 and abs(bbr.Max.X-exr[2])<1e-9 and abs(bbr.Min.Y-exr[1])<1e-9 and abs(bbr.Max.Y-exr[3])<1e-9,
+          f"reversed-endpoint bbox matches first-principles ({bbr.Min.X},{bbr.Min.Y})-({bbr.Max.X},{bbr.Max.Y}) expected {exr[0]},{exr[1]},{exr[2]},{exr[3]}")
     # Check UV coordinates
     frame = bridge.picture_frame(ctx2.added[0][0])
     check(picture.uv_of(frame, (0, 0, 0)) == (0.0, 0.0), "UV at (0,0,0) is (0,0)")

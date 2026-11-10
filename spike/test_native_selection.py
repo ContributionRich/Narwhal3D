@@ -1512,6 +1512,64 @@ try:
     ui._object_screen_bboxes = real_object_screen_bboxes
     ui._rectangle_selection_hits = real_rectangle_selection_hits
 
+    # #134: crossing hits that are not app-drawn curves are refined by their drawn
+    # display (pick_candidates.rect_crossings), never accepted on their bounding box.
+    real_curves_cross = ui._curves_cross_selection_rect
+    real_rect_crossings = ui.pick_candidates.rect_crossings
+    block_app_drawn = ui.bridge.is_app_drawn
+    ui.bridge.is_app_drawn = lambda ob: False   # Blender-drawn surfaces/meshes
+    display_objects = [bpy.data.objects.get(item) or bpy.data.objects.new(item, None)
+                       for item in ("CrossRing134", "CrossPlate134")]
+    curve_calls, display_calls = [], []
+    ui._selection_world_box_inputs = lambda _projection: (tuple(box_points), tuple(box_slices))
+    ui._native_selection_rect_names = lambda *_args: [
+        "CrossRing134", "CrossMissing134", "CrossPlate134"]
+    ui._curves_cross_selection_rect = (
+        lambda names, *_args: curve_calls.append(tuple(names)) or list(names))
+    ui.pick_candidates.rect_crossings = (
+        lambda _ui, _region, _rv3d, names, rect: display_calls.append((tuple(names), rect))
+        or [item for item in names if item != "CrossRing134"])
+    ui._rectangle_selection_hits = (
+        lambda _candidates, _rect, _mode, **kwargs:
+        list(kwargs["curve_crosses_many"](kwargs["preclassified"])))
+    crossing_hits = ui._object_rectangle_hits(
+        None, types.SimpleNamespace(region_3d=rv3d), region, rv3d,
+        {"boxes": None, "box_inputs": None},
+        (390.0, 290.0, 410.0, 310.0), ui.select.CROSSING)
+    check(crossing_hits == ["CrossMissing134", "CrossPlate134"]
+          and curve_calls == [("CrossRing134", "CrossMissing134", "CrossPlate134")]
+          and display_calls == [(("CrossRing134", "CrossPlate134"),
+                                 (390.0, 290.0, 410.0, 310.0))],
+          "crossing refines non-curve hits by drawn display, keeping unknown names",
+          repr((crossing_hits, curve_calls, display_calls)))
+    ui.pick_candidates.rect_crossings = lambda *_args: (_ for _ in ()).throw(
+        RuntimeError("display evidence unavailable"))
+    check(ui._displays_cross_selection_rect(
+        ["CrossRing134", "CrossPlate134"], region, rv3d, (0.0, 0.0, 1.0, 1.0))
+          == ["CrossRing134", "CrossPlate134"],
+          "a failed display refinement keeps the broad-phase crossing result")
+    ui.pick_candidates.rect_crossings = real_rect_crossings
+    ui._curves_cross_selection_rect = real_curves_cross
+    ui._selection_world_box_inputs = real_selection_box_inputs
+    ui._native_selection_rect_names = real_native_rect_names
+    ui._rectangle_selection_hits = real_rectangle_selection_hits
+    ui.bridge.is_app_drawn = block_app_drawn
+    for item in display_objects:
+        bpy.data.objects.remove(item)
+
+    # #134: the Gumball/grip commit keeps each row's live geometry wrapper, so it must
+    # tell the click candidates exactly which objects changed.
+    real_forget = ui.pick_candidates.forget
+    forgotten = []
+    ui.pick_candidates.forget = lambda names: forgotten.append(set(names))
+    try:
+        ui._note_objects_changed({"MovedCurve134"}, ui._doc_key())
+        ui.invalidate_snap_cache(["EditedCurve134"])
+    finally:
+        ui.pick_candidates.forget = real_forget
+    check(forgotten == [{"movedcurve134"}, {"editedcurve134"}],
+          "reported in-place changes drop those objects' click candidates", repr(forgotten))
+
     clip_route_calls = []
     ui.native_selection.screen_boxes_from_world = lambda *_args: None
     ui.native_selection.screen_boxes_from_clip = (

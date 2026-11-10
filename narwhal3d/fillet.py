@@ -719,6 +719,42 @@ def segment_near(segments, point):
     return best[1]
 
 
+def corner_for_picks(segments, closed, p0, p1):
+    """``(i, j)``: the two segments of ONE joined curve that meet at the corner the picks
+    `p0` and `p1` mean.
+
+    OURS: nearest-common-end disambiguation for same-segment picks, not a measured
+    compatibility rule. Python orchestrates the existing openNURBS segment API;
+    the exact fillet construction is unchanged.
+
+    Each pick sits ON the curve, so its segment is the one it lies on. Two picks on
+    DIFFERENT segments are that pair. Two picks on the SAME segment mean the corner at the
+    end of it they both lie nearest to, with the segment across that end as the other one:
+    a click just either side of a corner, or both clicks at the corner itself, must not
+    resolve to one segment. Picks nearest DIFFERENT ends of one segment name no corner, and
+    a segment with no neighbour at that end (an open curve's ends) names none either; both
+    are refused, as `fillet_adjacent_segments` refuses the same segment twice.
+    """
+    n = len(segments)
+    i, j = segment_near(segments, p0), segment_near(segments, p1)
+    if i != j:
+        return i, j
+    seg = segments[i]
+    start, end = _pt(seg.PointAtStart), _pt(seg.PointAtEnd)
+    sides = {_dist(p, start) <= _dist(p, end) for p in (p0, p1)}
+    if len(sides) != 1:
+        raise ValueError("both picks are on the same segment -- pick the two segments on "
+                         "either side of the corner")
+    if sides.pop():
+        k = i - 1 if i > 0 else (n - 1 if closed else None)
+    else:
+        k = i + 1 if i < n - 1 else (0 if closed else None)
+    if k is None:
+        raise ValueError("both picks are on the same segment -- pick the two segments on "
+                         "either side of the corner")
+    return i, k
+
+
 def fillet_adjacent_segments(segments, closed, i, j, radius, trim=True, near=None):
     """Fillet the corner between segments `i` and `j` of ONE joined curve.
 
