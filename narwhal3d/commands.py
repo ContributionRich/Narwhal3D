@@ -14417,8 +14417,8 @@ class PictureCmd(Command):
     length", "Center of picture", "Corner or length".
 
     The file comes from the file dialog (`filedialog.ask_open_path`), else a typed path.
-    Options built: (Default) two corners, `3Point`, `Vertical`, `Center`, `1to1`;
-    declared: `EdgeMidpoint`, `AroundCurve`.
+    Options built: (Default) two corners, `3Point`, `EdgeMidpoint`, `Vertical`, `Center`, `1to1`;
+    declared: `AroundCurve`.
 
     The surface is EXACT (one planar face). The image FRAME is stored on it
     (`picture.KEY`) so the texture stays registered after a trim, and a Picture material
@@ -14454,6 +14454,8 @@ class PictureCmd(Command):
         None: [("First corner of picture:", POINT), ("Other corner or length:", DISTANCE)],
         "3Point": [("First corner of picture:", POINT), ("Second corner:", POINT),
                    ("Opposite side:", POINT)],
+        "EdgeMidpoint": [("Midpoint of first edge:", POINT), ("End of first edge:", POINT),
+                         ("Opposite side:", POINT)],
         "Vertical": [("First corner of picture:", POINT),
                      ("Other corner or length:", DISTANCE)],
         "Center": [("Center of picture:", POINT), ("Corner or length:", DISTANCE)],
@@ -14527,19 +14529,31 @@ class PictureCmd(Command):
         if self._flow == "1to1":
             wd, ht = picture.print_size(info, ctx.model.unit_system(), units.convert)
             return picks[0], vec(x, wd), vec(y, ht)
-        if self._flow == "3Point":
+        if self._flow in ("3Point", "EdgeMidpoint"):
             a, b, s = picks
             au, av, aw = p.from_world(a)
             bu, bv, _ = p.from_world(b)
             su, sv, _ = p.from_world(s)
-            eu, ev = bu - au, bv - av
-            width = math.hypot(eu, ev)
-            if width <= 1e-12:
-                return "the two corners are the same point"
+            if self._flow == "EdgeMidpoint":
+                # OURS (#71): The midpoint and one end define the first edge.
+                # Corner A is mirrored across midpoint M, width is 2 * dist(M, end).
+                hu, hv = bu - au, bv - av
+                width = 2.0 * math.hypot(hu, hv)
+                if width <= 1e-12:
+                    return "the midpoint and end are the same point"
+                au, av = au - hu, av - hv
+                eu, ev = 2.0 * hu, 2.0 * hv
+            else:
+                eu, ev = bu - au, bv - av
+                width = math.hypot(eu, ev)
+                if width <= 1e-12:
+                    return "the two corners are the same point"
             pu, pv = -ev / width, eu / width              # left perpendicular
             side = (su - au) * pu + (sv - av) * pv
             if abs(side) <= 1e-12:
-                return "the third point is on the line through the two corners"
+                return ("the third point is on the line through the edge"
+                        if self._flow == "EdgeMidpoint" else
+                        "the third point is on the line through the two corners")
             height = width / aspect
             u_vec = tuple(eu * x[i] + ev * y[i] for i in range(3))
             up = tuple((pu * x[i] + pv * y[i]) * height for i in range(3))

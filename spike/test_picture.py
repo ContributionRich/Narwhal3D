@@ -213,6 +213,26 @@ check(g4 is not None and extent(g4) == (-5, -2.5, 0, 5, 2.5, 0),
 _c, g5, msg5, _d = draw(["3Point", "0,0,0", "4,0,0", "1,-1,0"])
 check(g5 is not None and extent(g5) == (0, -2, 0, 4, 0, 0),
       f"3Point (0,0)-(4,0), side below: 4 x 2 on that side ({g5 and extent(g5)})")
+# EdgeMidpoint (#71): midpoint (2,0,0), end (4,0,0), side below (1,-1,0): edge is (0,0)-(4,0), 4 x 2 on that side
+_c, g5b, msg5b, _d = draw(["EdgeMidpoint", "2,0,0", "4,0,0", "1,-1,0"])
+check(g5b is not None and extent(g5b) == (0, -2, 0, 4, 0, 0),
+      f"EdgeMidpoint (2,0) + end (4,0), side below: 4 x 2 ({g5b and extent(g5b)})")
+# EdgeMidpoint with side above (1,1,0): extent (0, 0, 0, 4, 2, 0)
+_c, g5c, msg5c, _d = draw(["EdgeMidpoint", "2,0,0", "4,0,0", "1,1,0"])
+check(g5c is not None and extent(g5c) == (0, 0, 0, 4, 2, 0),
+      f"EdgeMidpoint (2,0) + end (4,0), side above: 4 x 2 ({g5c and extent(g5c)})")
+# EdgeMidpoint degenerate: midpoint and end are the same point
+_c, g5d, msg5d, _d = draw(["EdgeMidpoint", "2,0,0", "2,0,0", "1,1,0"])
+check(g5d is None and "same point" in (msg5d or ""),
+      f"EdgeMidpoint midpoint and end same point refused ({msg5d!r})")
+# EdgeMidpoint collinear: third point on edge line
+_c, g5e, msg5e, _d = draw(["EdgeMidpoint", "2,0,0", "4,0,0", "6,0,0"])
+check(g5e is None and "on the line" in (msg5e or ""),
+      f"EdgeMidpoint third point on edge line refused ({msg5e!r})")
+# EdgeMidpoint chosen after first pick is refused by name
+ctx_after, g_after, msg_after, _ = draw(["0,0,0", "EdgeMidpoint"])
+check("before the first corner" in (msg_after or ""),
+      f"EdgeMidpoint after the first corner is refused by name ({msg_after!r})")
 _c, g6, msg6, _d = draw(["Vertical", "0,0,0", "6,0,0"])
 check(g6 is not None and extent(g6) == (0, 0, 0, 6, 0, 3),
       f"Vertical: standing up the CPlane normal, 6 x 3 ({g6 and extent(g6)})")
