@@ -803,6 +803,50 @@ def _():
     assert "OURS" in near, "the arrow's pixel sizes must be flagged OURS"
 
 
+# --- Zoom 1to1 view distance calculation (#64) -----------------------------
+@check("zoom_1to1_distance: 96 DPI in Millimeters gives exact closed-form distance")
+def _():
+    expected = 1000.0 / (2.0 * (96.0 / 25.4))
+    d = views.zoom_1to1_distance(1920, 1000, unit_scale_to_mm=1.0, dpi=96.0)
+    assert abs(d - expected) < 1e-9, f"expected {expected}, got {d}"
+
+
+@check("zoom_1to1_distance: Inches and Meters scale proportionally")
+def _():
+    expected_in = 1000.0 / (2.0 * 96.0)
+    d_in = views.zoom_1to1_distance(1920, 1000, unit_scale_to_mm=25.4, dpi=96.0)
+    assert abs(d_in - expected_in) < 1e-9, f"expected {expected_in}, got {d_in}"
+
+    expected_m = 1000.0 / (2.0 * 1000.0 * (96.0 / 25.4))
+    d_m = views.zoom_1to1_distance(1920, 1000, unit_scale_to_mm=1000.0, dpi=96.0)
+    assert abs(d_m - expected_m) < 1e-9, f"expected {expected_m}, got {d_m}"
+
+
+@check("zoom_1to1_distance: portrait vs landscape uses minimum dimension")
+def _():
+    d_land = views.zoom_1to1_distance(1920, 1080, unit_scale_to_mm=1.0, dpi=96.0)
+    d_port = views.zoom_1to1_distance(1080, 1920, unit_scale_to_mm=1.0, dpi=96.0)
+    assert abs(d_land - d_port) < 1e-9, "landscape and portrait with same min dimension should match"
+
+
+@check("zoom_1to1_distance: invalid or non-positive inputs fall back safely")
+def _():
+    assert views.zoom_1to1_distance(0, 1000) == views.ORTHO_DISTANCE
+    assert views.zoom_1to1_distance(1000, -100) == views.ORTHO_DISTANCE
+    assert views.zoom_1to1_distance(1000, 1000, unit_scale_to_mm=0) == views.ORTHO_DISTANCE
+    assert views.zoom_1to1_distance(1000, 1000, dpi=0) == views.ORTHO_DISTANCE
+    assert views.zoom_1to1_distance(None, "bad") == views.ORTHO_DISTANCE
+
+
+@check("zoom_1to1_distance is flagged OURS in views.py")
+def _():
+    src = open(os.path.join(ROOT, "narwhal3d", "views.py"), encoding="utf-8").read()
+    lines = src.splitlines()
+    idx = next(n for n, l in enumerate(lines) if "def zoom_1to1_distance" in l)
+    near = "\n".join(lines[idx:idx + 10])
+    assert "OURS" in near, "zoom_1to1_distance must be flagged OURS"
+
+
 # ---------------------------------------------------------------- report
 print(f"\n{'=' * 54}")
 print(" view and viewport-control tests (pure, bpy-free)")

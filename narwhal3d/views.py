@@ -175,6 +175,34 @@ def clip_range_for(view_distance, view_location, scene_radius, scene_center=(0, 
     return start, end
 
 
+def zoom_1to1_distance(region_w, region_h, unit_scale_to_mm=1.0, dpi=96.0):
+    """Return the view_distance for a 1:1 screen scale in an orthographic viewport.
+
+    OURS (#64): the view scale is set so one model unit covers the same physical
+    length on the display as one unit of the physical size (1:1 screen scale).
+      pixels_per_mm = dpi / 25.4
+      pixels_per_unit = unit_scale_to_mm * pixels_per_mm
+    In Blender's orthographic projection, the base visible world span across the
+    minimum dimension (``min(region_w, region_h)``) is ``2.0 * view_distance``.
+    Therefore:
+      view_distance = min(region_w, region_h) / (2.0 * pixels_per_unit)
+
+    Non-positive inputs or invalid scales fall back safely to ORTHO_DISTANCE.
+    """
+    try:
+        w, h = float(region_w), float(region_h)
+        scale = float(unit_scale_to_mm)
+        d = float(dpi)
+    except (TypeError, ValueError):
+        return ORTHO_DISTANCE
+    if w <= 0.0 or h <= 0.0 or scale <= 0.0 or d <= 0.0:
+        return ORTHO_DISTANCE
+    pixels_per_mm = d / 25.4
+    pixels_per_unit = scale * pixels_per_mm
+    base_dim = min(w, h)
+    return base_dim / (2.0 * pixels_per_unit)
+
+
 #: Padding around title text; the chip follows the measured glyph extent.
 TITLE_CHIP_PAD_X = design.TITLE_CHIP_PAD_X
 TITLE_CHIP_PAD_Y = design.TITLE_CHIP_PAD_Y
