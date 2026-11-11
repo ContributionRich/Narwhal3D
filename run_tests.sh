@@ -407,6 +407,7 @@ PURE_SUITES=(
     spike/test_textfield.py
     spike/portfolio_review/test_wrap_progress.py
     spike/test_views.py
+    spike/test_zoom_options.py
     spike/test_menubar_resource.py
     spike/test_rightpanel.py
     spike/test_colordialog.py

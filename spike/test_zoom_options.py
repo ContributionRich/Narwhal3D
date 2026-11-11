@@ -88,15 +88,16 @@ class FakeRegion3D:
 
 
 class FakeSpace:
-    def __init__(self, perspective="ORTHO", distance=31.494):
+    def __init__(self, perspective="ORTHO", distance=31.494, lens=50.0):
         self.region_3d = FakeRegion3D(perspective, distance)
+        self.lens = lens
 
 
 class FakeArea:
-    def __init__(self, width=1920, height=1000, perspective="ORTHO", distance=31.494):
+    def __init__(self, width=1920, height=1000, perspective="ORTHO", distance=31.494, lens=50.0):
         self.type = "VIEW_3D"
         self.regions = [FakeRegion(width, height)]
-        sp = FakeSpace(perspective, distance)
+        sp = FakeSpace(perspective, distance, lens)
         self.spaces = types.SimpleNamespace(active=sp)
 
 
@@ -150,9 +151,9 @@ def _():
 # --- 1to1 option checks ---------------------------------------------------
 @check("Zoom 1to1 on parallel view sets view_distance to exact 1:1 scale")
 def _():
-    # 1920x1000, 96 DPI, Millimeters
-    # expected distance: 1000 / (2 * (96 / 25.4)) = 132.2916666...
-    area = FakeArea(1920, 1000, "ORTHO", 31.494)
+    # 1920x1000, 96 DPI, Millimeters, default 50mm lens and 36mm sensor
+    # expected distance: (1920 / (2 * (96 / 25.4))) * (50 / 36) = 352.7777...
+    area = FakeArea(1920, 1000, "ORTHO", 31.494, lens=50.0)
     fake_bpy = FakeBpy([area], dpi=96.0)
     sys.modules["bpy"] = fake_bpy
     try:
@@ -161,7 +162,26 @@ def _():
         msg, done = cmd.on_mode("1to1", ctx)
         assert done is True
         assert msg == "Zoomed to 1:1", msg
-        expected = 1000.0 / (2.0 * (96.0 / 25.4))
+        expected = (1920.0 / (2.0 * (96.0 / 25.4))) * (50.0 / 36.0)
+        actual = area.spaces.active.region_3d.view_distance
+        assert abs(actual - expected) < 1e-9, f"expected {expected}, got {actual}"
+    finally:
+        sys.modules.pop("bpy", None)
+
+
+@check("Zoom 1to1 accounts for viewport lens focal length")
+def _():
+    # 1920x1000, 96 DPI, Millimeters, 35mm lens
+    area = FakeArea(1920, 1000, "ORTHO", 31.494, lens=35.0)
+    fake_bpy = FakeBpy([area], dpi=96.0)
+    sys.modules["bpy"] = fake_bpy
+    try:
+        cmd = commands_mod.ZoomCmd()
+        ctx = FakeContext("Millimeters")
+        msg, done = cmd.on_mode("1to1", ctx)
+        assert done is True
+        assert msg == "Zoomed to 1:1", msg
+        expected = (1920.0 / (2.0 * (96.0 / 25.4))) * (35.0 / 36.0)
         actual = area.spaces.active.region_3d.view_distance
         assert abs(actual - expected) < 1e-9, f"expected {expected}, got {actual}"
     finally:
@@ -170,10 +190,10 @@ def _():
 
 @check("Zoom 1to1 converts model units (Inches) correctly")
 def _():
-    # 1920x1000, 96 DPI, Inches
+    # 1920x1000, 96 DPI, Inches, 50mm lens
     # In Inches: scale_to_mm = 25.4, so pixels_per_unit = 25.4 * (96/25.4) = 96
-    # expected distance = 1000 / (2 * 96) = 5.2083333...
-    area = FakeArea(1920, 1000, "ORTHO", 31.494)
+    # expected distance = (1920 / (2 * 96)) * (50 / 36) = 13.8888...
+    area = FakeArea(1920, 1000, "ORTHO", 31.494, lens=50.0)
     fake_bpy = FakeBpy([area], dpi=96.0)
     sys.modules["bpy"] = fake_bpy
     try:
@@ -182,11 +202,40 @@ def _():
         msg, done = cmd.on_mode("1to1", ctx)
         assert done is True
         assert msg == "Zoomed to 1:1", msg
-        expected = 1000.0 / (2.0 * 96.0)
+        expected = (1920.0 / (2.0 * 96.0)) * (50.0 / 36.0)
         actual = area.spaces.active.region_3d.view_distance
         assert abs(actual - expected) < 1e-9, f"expected {expected}, got {actual}"
     finally:
         sys.modules.pop("bpy", None)
+
+
+@check("Zoom 1to1 projected pixel separation verified at two lens settings and aspect ratios")
+def _():
+    # Test projected pixel separation in an orthographic viewport for two lens settings
+    # (50mm and 35mm) and two aspect ratios (landscape 16:9 and portrait 9:16).
+    for winx, winy in ((1920, 1080), (1080, 1920)):
+        for lens in (50.0, 35.0):
+            area = FakeArea(winx, winy, "ORTHO", 31.494, lens=lens)
+            fake_bpy = FakeBpy([area], dpi=96.0)
+            sys.modules["bpy"] = fake_bpy
+            try:
+                cmd = commands_mod.ZoomCmd()
+                ctx = FakeContext("Millimeters")
+                msg, done = cmd.on_mode("1to1", ctx)
+                assert done is True
+                dist = area.spaces.active.region_3d.view_distance
+
+                # Project two points separated by 25.4 mm (1 physical inch)
+                p1_x, p1_y = views_mod.project_ortho_point(0.0, 0.0, 0.0, winx, winy, dist, lens_mm=lens)
+                p2_x, p2_y = views_mod.project_ortho_point(25.4, 0.0, 0.0, winx, winy, dist, lens_mm=lens)
+                sep_x = abs(p2_x - p1_x)
+                assert abs(sep_x - 96.0) < 1e-9, f"win={winx}x{winy} lens={lens}: expected 96px, got {sep_x}"
+
+                p3_x, p3_y = views_mod.project_ortho_point(0.0, 25.4, 0.0, winx, winy, dist, lens_mm=lens)
+                sep_y = abs(p3_y - p1_y)
+                assert abs(sep_y - 96.0) < 1e-9, f"win={winx}x{winy} lens={lens}: expected 96px, got {sep_y}"
+            finally:
+                sys.modules.pop("bpy", None)
 
 
 @check("Zoom 1to1 on perspective view reports refusal and leaves view untouched")
@@ -208,8 +257,8 @@ def _():
 
 @check("Zoom All 1to1 zooms all parallel views and skips perspective views")
 def _():
-    top_area = FakeArea(960, 500, "ORTHO", 31.494)
-    front_area = FakeArea(960, 500, "ORTHO", 31.494)
+    top_area = FakeArea(960, 500, "ORTHO", 31.494, lens=50.0)
+    front_area = FakeArea(960, 500, "ORTHO", 31.494, lens=35.0)
     persp_area = FakeArea(960, 500, "PERSP", 146.058)
     fake_bpy = FakeBpy([top_area, front_area, persp_area], dpi=96.0)
     sys.modules["bpy"] = fake_bpy
@@ -220,9 +269,10 @@ def _():
         msg, done = cmd.on_mode("1to1", ctx)
         assert done is True
         assert msg == "Zoomed all parallel viewports to 1:1", msg
-        expected = 500.0 / (2.0 * (96.0 / 25.4))
-        assert abs(top_area.spaces.active.region_3d.view_distance - expected) < 1e-9
-        assert abs(front_area.spaces.active.region_3d.view_distance - expected) < 1e-9
+        expected_top = (960.0 / (2.0 * (96.0 / 25.4))) * (50.0 / 36.0)
+        expected_front = (960.0 / (2.0 * (96.0 / 25.4))) * (35.0 / 36.0)
+        assert abs(top_area.spaces.active.region_3d.view_distance - expected_top) < 1e-9
+        assert abs(front_area.spaces.active.region_3d.view_distance - expected_front) < 1e-9
         assert abs(persp_area.spaces.active.region_3d.view_distance - 146.058) < 1e-9
     finally:
         sys.modules.pop("bpy", None)

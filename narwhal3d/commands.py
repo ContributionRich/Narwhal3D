@@ -16746,11 +16746,10 @@ class ZoomCmd(Command):
         except Exception:  # noqa: BLE001
             scale_to_mm = 1.0
 
-        dpi = 96.0
-        try:
-            dpi = float(bpy.context.preferences.system.dpi)
-        except Exception:  # noqa: BLE001
-            dpi = 96.0
+        # OURS (#64): Use calibrated/assumed display density (default 96.0 DPI).
+        # Blender's preferences.system.dpi reflects UI interface scaling rather than
+        # physical monitor dot pitch.
+        dpi = views.ASSUMED_SCREEN_DPI
 
         scaled_count = 0
         for area in areas:
@@ -16764,8 +16763,9 @@ class ZoomCmd(Command):
                            if r.type == "WINDOW" and r.alignment == "NONE"), None)
             if region is None:
                 continue
+            lens_mm = getattr(sp, "lens", views.DEFAULT_VIEWPORT_LENS_MM)
             r3d.view_distance = views.zoom_1to1_distance(
-                region.width, region.height, scale_to_mm, dpi)
+                region.width, region.height, scale_to_mm, dpi, lens_mm=lens_mm)
             scaled_count += 1
 
         if not scaled_count:

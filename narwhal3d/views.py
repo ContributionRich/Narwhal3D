@@ -175,17 +175,96 @@ def clip_range_for(view_distance, view_location, scene_radius, scene_center=(0, 
     return start, end
 
 
-def zoom_1to1_distance(region_w, region_h, unit_scale_to_mm=1.0, dpi=96.0):
+#: Assumed display pixel density (pixels per inch).
+#:
+#: OURS (#64): The Blender viewport environment does not expose a qualified physical
+#: monitor pixel density (`bpy.context.preferences.system.dpi` represents UI widget/font
+#: scaling rather than physical panel dot pitch). In accordance with the #64 maintainer
+#: review, Zoom 1to1 uses an explicitly documented assumed/calibrated display DPI
+#: (default 96.0 DPI, standard desktop CSS/reference pixel density).
+ASSUMED_SCREEN_DPI = 96.0
+
+#: Standard Blender viewport camera parameters for orthographic views.
+#: Matches Blender's BKE_camera_params_from_view3d (camera.cc) and DNA_camera_types.h.
+DEFAULT_SENSOR_WIDTH_MM = 36.0
+DEFAULT_VIEWPORT_LENS_MM = 50.0
+
+
+def ortho_pixsize(region_w, region_h, view_distance,
+                  lens_mm=DEFAULT_VIEWPORT_LENS_MM,
+                  sensor_size_mm=DEFAULT_SENSOR_WIDTH_MM):
+    """World-space size of one screen pixel in an orthographic viewport.
+
+    OURS (#64): Derived from Blender's projection kernel
+    (``BKE_camera_params_from_view3d`` and ``BKE_camera_params_compute_viewplane``
+    in ``source/blender/blenkernel/intern/camera.cc``):
+      ortho_scale = view_distance * sensor_size_mm / lens_mm
+      viewfac = max(region_w, region_h)
+      pixsize = (ortho_scale / viewfac) * 2.0
+    """
+    try:
+        w, h = float(region_w), float(region_h)
+        dist = float(view_distance)
+        lens = float(lens_mm)
+        sensor = float(sensor_size_mm)
+    except (TypeError, ValueError):
+        return 0.0
+    if w <= 0.0 or h <= 0.0 or dist <= 0.0 or lens <= 0.0 or sensor <= 0.0:
+        return 0.0
+    viewfac = max(w, h)
+    ortho_scale = dist * sensor / lens
+    return (ortho_scale / viewfac) * 2.0
+
+
+def project_ortho_point(x, y, z, region_w, region_h, view_distance,
+                        lens_mm=DEFAULT_VIEWPORT_LENS_MM,
+                        sensor_size_mm=DEFAULT_SENSOR_WIDTH_MM):
+    """Project a point in view coordinates to 2D region window pixel coordinates.
+
+    OURS (#64): Matches Blender's ``GPU_matrix_ortho_set`` + ``location_3d_to_region_2d``
+    (view coordinates with origin centered, X right, Y up, screen pixels origin bottom-left).
+    """
+    pixsize = ortho_pixsize(region_w, region_h, view_distance, lens_mm, sensor_size_mm)
+    if pixsize <= 0.0:
+        return 0.0, 0.0
+    px = (float(region_w) * 0.5) + (float(x) / pixsize)
+    py = (float(region_h) * 0.5) + (float(y) / pixsize)
+    return px, py
+
+
+def zoom_1to1_distance(region_w, region_h, unit_scale_to_mm=1.0,
+                       dpi=ASSUMED_SCREEN_DPI,
+                       lens_mm=DEFAULT_VIEWPORT_LENS_MM,
+                       sensor_size_mm=DEFAULT_SENSOR_WIDTH_MM):
     """Return the view_distance for a 1:1 screen scale in an orthographic viewport.
 
-    OURS (#64): the view scale is set so one model unit covers the same physical
-    length on the display as one unit of the physical size (1:1 screen scale).
-      pixels_per_mm = dpi / 25.4
-      pixels_per_unit = unit_scale_to_mm * pixels_per_mm
-    In Blender's orthographic projection, the base visible world span across the
-    minimum dimension (``min(region_w, region_h)``) is ``2.0 * view_distance``.
-    Therefore:
-      view_distance = min(region_w, region_h) / (2.0 * pixels_per_unit)
+    OURS (#64): Sets parallel/orthographic viewport scale so 1 model unit covers the
+    same physical length on the display as 1 unit of physical size, based on an
+    assumed or calibrated display pixel density (default 96.0 DPI).
+
+    Derivation from Blender's projection kernel:
+    In Blender (see ``BKE_camera_params_from_view3d`` and
+    ``BKE_camera_params_compute_viewplane`` in ``source/blender/blenkernel/intern/camera.cc``,
+    as well as ``ED_view3d_radius_to_dist_ortho`` in ``view3d_utils.cc``):
+      1. For orthographic viewports with default auto sensor fit:
+           sensor_size = sensor_size_mm (default DEFAULT_SENSOR_WIDTH = 36.0 mm)
+           ortho_scale = view_distance * sensor_size / lens_mm
+           zoom = 2.0
+      2. In the viewplane calculation with aspect ratio winy / winx:
+           viewfac = max(region_w, region_h)
+           pixsize = (ortho_scale / viewfac) * zoom
+                   = (view_distance * sensor_size / lens_mm) * (2.0 / max(region_w, region_h))
+         where ``pixsize`` is the 3D world span covered by a single screen pixel.
+      3. For 1:1 scale at display pixel density ``dpi`` (dots per inch):
+           pixels_per_mm = dpi / 25.4
+           pixels_per_unit = unit_scale_to_mm * pixels_per_mm
+         Since each pixel covers ``pixsize`` world units, the projected pixel density is:
+           projected_pixels_per_unit = 1.0 / pixsize
+         Equating projected_pixels_per_unit to target pixels_per_unit yields:
+           pixsize = 1.0 / pixels_per_unit
+           (view_distance * sensor_size / lens_mm) * (2.0 / max(region_w, region_h)) = 1.0 / pixels_per_unit
+         Solving for view_distance:
+           view_distance = (max(region_w, region_h) / (2.0 * pixels_per_unit)) * (lens_mm / sensor_size)
 
     Non-positive inputs or invalid scales fall back safely to ORTHO_DISTANCE.
     """
@@ -193,14 +272,16 @@ def zoom_1to1_distance(region_w, region_h, unit_scale_to_mm=1.0, dpi=96.0):
         w, h = float(region_w), float(region_h)
         scale = float(unit_scale_to_mm)
         d = float(dpi)
+        lens = float(lens_mm)
+        sensor = float(sensor_size_mm)
     except (TypeError, ValueError):
         return ORTHO_DISTANCE
-    if w <= 0.0 or h <= 0.0 or scale <= 0.0 or d <= 0.0:
+    if w <= 0.0 or h <= 0.0 or scale <= 0.0 or d <= 0.0 or lens <= 0.0 or sensor <= 0.0:
         return ORTHO_DISTANCE
     pixels_per_mm = d / 25.4
     pixels_per_unit = scale * pixels_per_mm
-    base_dim = min(w, h)
-    return base_dim / (2.0 * pixels_per_unit)
+    max_dim = max(w, h)
+    return (max_dim / (2.0 * pixels_per_unit)) * (lens / sensor)
 
 
 #: Padding around title text; the chip follows the measured glyph extent.
