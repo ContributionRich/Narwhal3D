@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import math
 
+from . import native_pickconstraint
+
 #: Default Ortho angle in degrees.
 DEFAULT_ANGLE = 90.0
 
@@ -29,11 +31,15 @@ def constrain(base, point, plane, angle_deg=DEFAULT_ANGLE):
     if base is None or point is None or plane is None:
         return point
     try:
-        step = math.radians(float(angle_deg))
+        angle_deg = float(angle_deg)
+        step = math.radians(angle_deg)
     except (TypeError, ValueError):
         return point
     if not step > 0.0:
         return point
+    native = native_pickconstraint.ortho(base, point, plane, angle_deg)
+    if native is not native_pickconstraint.UNAVAILABLE:
+        return native
     bu, bv, bw = plane.from_world(base)
     pu, pv, _pw = plane.from_world(point)
     du, dv = pu - bu, pv - bv

@@ -16700,13 +16700,14 @@ class ZoomCmd(Command):
     name = "Zoom"
     description = ("Frame objects in the viewport. "
                    "Options: Extents / Selected / All / 1to1 / Dynamic "
-                   "(Extents and Selected implemented).")
+                   "(Extents, Selected, and 1to1 implemented).")
     steps = []
+    records_undo = False        # view change only, no document change
     options = (
         opts.Option("Extents", opts.MODE, help="Frame all objects."),
         opts.Option("Selected", opts.MODE, help="Frame the selected objects."),
         opts.Option("All", opts.MODE, help="Zoom all viewports."),
-        opts.Option("1to1", opts.MODE, help="Set a 1:1 screen scale."),
+        opts.Option("1to1", opts.MODE, help="Parallel screen scale at assumed 96 DPI, not monitor-calibrated."),
         opts.Option("Dynamic", opts.MODE, help="Interactive zoom."),
     )
 
@@ -16715,12 +16716,94 @@ class ZoomCmd(Command):
             # (the command behavior): "All -- Zooms all viewports", with its own
             # Extents / Selected /... sub-options (ZEA = '_Zoom _All _Extents).
             self._all = True
-            return "Zoom: all viewports -- Extents or Selected", False
+            return "Zoom: all viewports -- Extents, Selected or 1to1", False
         if name == "Extents":
             return self._zoom(selected=False)
         if name == "Selected":
             return self._zoom(selected=True)
+        if name == "1to1":
+            return self._zoom_1to1(ctx)
+        if name == "Dynamic":
+            # OURS (#64): interactive dynamic drag zoom requires modal viewport input
+            # handling which is not built yet; keep refusing explicitly by name.
+            return "Zoom: the Dynamic option is not implemented yet", True
         return f"Zoom: the {name} option is not implemented yet", True
+
+    def _zoom_1to1(self, ctx: NarwhalContext):
+        """Set a 1:1 screen scale on the active viewport (or all parallel viewports if All).
+
+        OURS (#64): target ASSUMED 96 DPI reference pixels, not calibrated physical
+        monitor size. Parallel viewport projection only; camera/perspective views
+        are not changed. This is display-only and does not edit document geometry.
+        """
+        import bpy
+        from . import views
+
+        every = getattr(self, "_all", False)
+        try:
+            from . import ui
+            areas = ui._view3d_areas() if every else [ui.active_pane_area()]
+        except Exception:  # noqa: BLE001
+            areas = [a for a in bpy.context.screen.areas if a.type == "VIEW_3D"]
+            if not every:
+                areas = areas[:1]
+        areas = [a for a in areas if a is not None]
+        if not areas:
+            return "No 3D viewport", True
+
+        try:
+            unit_name = ctx.model.unit_system()
+            from . import units
+            scale_to_mm = units.scale_factor(unit_name, "Millimeters")
+        except Exception:  # noqa: BLE001
+            return "Zoom 1to1: model unit scale is unavailable; view unchanged", True
+
+        # OURS (#64): Explicitly assumed reference density, not monitor calibration.
+        # Blender's preferences.system.dpi reflects UI interface scaling rather than
+        # physical monitor dot pitch.
+        dpi = views.ASSUMED_SCREEN_DPI
+
+        scaled_count = invalid_count = camera_count = perspective_count = 0
+        for area in areas:
+            sp = area.spaces.active if area.spaces else None
+            r3d = getattr(sp, "region_3d", None)
+            if r3d is None:
+                continue
+            if getattr(r3d, "view_perspective", "") == "CAMERA":
+                camera_count += 1
+                continue
+            if getattr(r3d, "view_perspective", "") == "PERSP" or getattr(r3d, "is_perspective", False):
+                perspective_count += 1
+                continue
+            region = next((r for r in area.regions
+                           if r.type == "WINDOW" and r.alignment == "NONE"), None)
+            if region is None:
+                continue
+            lens_mm = getattr(sp, "lens", views.DEFAULT_VIEWPORT_LENS_MM)
+            try:
+                distance = views.zoom_1to1_distance(
+                    region.width, region.height, scale_to_mm, dpi, lens_mm=lens_mm, strict=True)
+            except ValueError:
+                invalid_count += 1
+                continue
+            r3d.view_distance = distance
+            area.tag_redraw()
+            scaled_count += 1
+
+        if not scaled_count:
+            if invalid_count:
+                return "Zoom 1to1: invalid scale or viewport parameters; view unchanged", True
+            if not every and camera_count:
+                return "Zoom 1to1: camera views are not implemented yet; view unchanged", True
+            if not every and perspective_count:
+                return ("Zoom 1to1: active view is perspective; "
+                        "1:1 scale applies to parallel views only"), True
+            return "Unable to zoom 1to1 - no usable parallel viewport found", True
+
+        what = "Zoomed all parallel viewports to 1:1" if every else "Zoomed to 1:1"
+        if invalid_count:
+            what = f"Zoomed {scaled_count} parallel viewport(s) to 1:1; skipped {invalid_count} invalid view(s)"
+        return f"{what} (assumed {float(dpi):g} DPI; not monitor-calibrated)", True
 
     def _zoom(self, selected: bool):
         """Frame the selection or all visible objects in the active viewport.
@@ -16742,7 +16825,9 @@ class ZoomCmd(Command):
             from . import ui
             areas = ui._view3d_areas() if every else [ui.active_pane_area()]
         except Exception:  # noqa: BLE001
-            areas = [a for a in bpy.context.screen.areas if a.type == "VIEW_3D"][:1]
+            areas = [a for a in bpy.context.screen.areas if a.type == "VIEW_3D"]
+            if not every:
+                areas = areas[:1]
         areas = [a for a in areas if a is not None]
         if not areas:
             return "No 3D viewport", True

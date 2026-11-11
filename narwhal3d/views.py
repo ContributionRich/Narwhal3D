@@ -175,6 +175,135 @@ def clip_range_for(view_distance, view_location, scene_radius, scene_center=(0, 
     return start, end
 
 
+#: Assumed display pixel density (pixels per inch).
+#:
+#: OURS (#64): The Blender viewport environment does not expose a qualified physical
+#: monitor pixel density (`bpy.context.preferences.system.dpi` represents UI widget/font
+#: scaling rather than physical panel dot pitch). In accordance with the #64 maintainer
+#: review, Zoom 1to1 uses an explicitly ASSUMED 96 DPI reference pixel density.
+#: No monitor calibration is available; this is not a measured physical-size guarantee.
+ASSUMED_SCREEN_DPI = 96.0
+
+#: Standard Blender viewport camera parameters for orthographic views.
+#: Matches Blender's BKE_camera_params_from_view3d (camera.cc) and DNA_camera_types.h.
+DEFAULT_SENSOR_WIDTH_MM = 36.0
+DEFAULT_VIEWPORT_LENS_MM = 50.0
+
+
+def ortho_pixsize(region_w, region_h, view_distance,
+                  lens_mm=DEFAULT_VIEWPORT_LENS_MM,
+                  sensor_size_mm=DEFAULT_SENSOR_WIDTH_MM):
+    """World-space size of one screen pixel in an orthographic viewport.
+
+    OURS (#64): Derived from Blender's projection kernel
+    (``BKE_camera_params_from_view3d`` and ``BKE_camera_params_compute_viewplane``
+    in ``source/blender/blenkernel/intern/camera.cc``):
+      ortho_scale = view_distance * sensor_size_mm / lens_mm
+      viewfac = max(region_w, region_h)
+      pixsize = (ortho_scale / viewfac) * 2.0
+    """
+    import math
+    try:
+        w, h = float(region_w), float(region_h)
+        dist = float(view_distance)
+        lens = float(lens_mm)
+        sensor = float(sensor_size_mm)
+    except (TypeError, ValueError, OverflowError):
+        return 0.0
+    if not all(math.isfinite(v) and v > 0.0 for v in (w, h, dist, lens, sensor)):
+        return 0.0
+    viewfac = max(w, h)
+    ortho_scale = dist * sensor / lens
+    result = (ortho_scale / viewfac) * 2.0
+    return result if math.isfinite(result) and result > 0.0 else 0.0
+
+
+def project_ortho_point(x, y, z, region_w, region_h, view_distance,
+                        lens_mm=DEFAULT_VIEWPORT_LENS_MM,
+                        sensor_size_mm=DEFAULT_SENSOR_WIDTH_MM):
+    """Project a point in view coordinates to 2D region window pixel coordinates.
+
+    OURS (#64): Analytical prediction, not a measurement of a live viewport
+    (view coordinates with origin centered, X right, Y up, screen pixels origin bottom-left).
+    The independent GUI regression reads Blender's actual perspective_matrix.
+    """
+    import math
+    try:
+        x, y, z = float(x), float(y), float(z)
+    except (TypeError, ValueError, OverflowError):
+        return 0.0, 0.0
+    if not all(math.isfinite(v) for v in (x, y, z)):
+        return 0.0, 0.0
+    pixsize = ortho_pixsize(region_w, region_h, view_distance, lens_mm, sensor_size_mm)
+    if pixsize <= 0.0:
+        return 0.0, 0.0
+    px = (float(region_w) * 0.5) + (x / pixsize)
+    py = (float(region_h) * 0.5) + (y / pixsize)
+    return (px, py) if math.isfinite(px) and math.isfinite(py) else (0.0, 0.0)
+
+
+def zoom_1to1_distance(region_w, region_h, unit_scale_to_mm=1.0,
+                       dpi=ASSUMED_SCREEN_DPI,
+                       lens_mm=DEFAULT_VIEWPORT_LENS_MM,
+                       sensor_size_mm=DEFAULT_SENSOR_WIDTH_MM, *, strict=False):
+    """Return view_distance for an assumed-DPI scale in an orthographic viewport.
+
+    OURS (#64): Targets the requested reference pixel density (default ASSUMED 96 DPI).
+    This does not measure monitor dot pitch or guarantee calibrated physical size.
+
+    Derivation from Blender's projection kernel:
+    In Blender (see ``BKE_camera_params_from_view3d`` and
+    ``BKE_camera_params_compute_viewplane`` in ``source/blender/blenkernel/intern/camera.cc``,
+    as well as ``ED_view3d_radius_to_dist_ortho`` in ``view3d_utils.cc``):
+      1. For orthographic viewports with default auto sensor fit:
+           sensor_size = sensor_size_mm (default DEFAULT_SENSOR_WIDTH = 36.0 mm)
+           ortho_scale = view_distance * sensor_size / lens_mm
+           zoom = 2.0
+      2. In the viewplane calculation with aspect ratio winy / winx:
+           viewfac = max(region_w, region_h)
+           pixsize = (ortho_scale / viewfac) * zoom
+                   = (view_distance * sensor_size / lens_mm) * (2.0 / max(region_w, region_h))
+         where ``pixsize`` is the 3D world span covered by a single screen pixel.
+      3. For 1:1 scale at display pixel density ``dpi`` (dots per inch):
+           pixels_per_mm = dpi / 25.4
+           pixels_per_unit = unit_scale_to_mm * pixels_per_mm
+         Since each pixel covers ``pixsize`` world units, the projected pixel density is:
+           projected_pixels_per_unit = 1.0 / pixsize
+         Equating projected_pixels_per_unit to target pixels_per_unit yields:
+           pixsize = 1.0 / pixels_per_unit
+           (view_distance * sensor_size / lens_mm) * (2.0 / max(region_w, region_h)) = 1.0 / pixels_per_unit
+         Solving for view_distance:
+           view_distance = (max(region_w, region_h) / (2.0 * pixels_per_unit)) * (lens_mm / sensor_size)
+
+    Invalid/unrepresentable values fall back to ORTHO_DISTANCE. With ``strict=True``
+    they raise ValueError so the command can refuse without changing the viewport.
+    """
+    import math
+
+    def invalid():
+        if strict:
+            raise ValueError("Zoom 1to1 needs finite positive dimensions, scale, DPI and lens with a representable distance")
+        return ORTHO_DISTANCE
+
+    try:
+        w, h = float(region_w), float(region_h)
+        scale = float(unit_scale_to_mm)
+        d = float(dpi)
+        lens = float(lens_mm)
+        sensor = float(sensor_size_mm)
+    except (TypeError, ValueError, OverflowError):
+        return invalid()
+    if not all(math.isfinite(v) and v > 0.0 for v in (w, h, scale, d, lens, sensor)):
+        return invalid()
+    pixels_per_mm = d / 25.4
+    pixels_per_unit = scale * pixels_per_mm
+    denominator = 2.0 * pixels_per_unit
+    if not math.isfinite(denominator) or denominator <= 0.0:
+        return invalid()
+    result = (max(w, h) / denominator) * (lens / sensor)
+    return result if math.isfinite(result) and result > 0.0 else invalid()
+
+
 #: Padding around title text; the chip follows the measured glyph extent.
 TITLE_CHIP_PAD_X = design.TITLE_CHIP_PAD_X
 TITLE_CHIP_PAD_Y = design.TITLE_CHIP_PAD_Y

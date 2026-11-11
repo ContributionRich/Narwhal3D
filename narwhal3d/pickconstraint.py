@@ -39,7 +39,7 @@ from __future__ import annotations
 
 import math
 
-from . import coords
+from . import coords, native_pickconstraint
 
 #: lock states, in the order successive Tab taps step through them
 LOCK_NONE = None
@@ -106,6 +106,7 @@ class PickConstraint:
         self.reset()
 
     def reset(self):
+        self._native_solver = None
         self.key = None            # which prompt this was armed for
         self.base = None           # the last picked point (world)
         self.plane = None          # the active CPlane when armed
@@ -162,13 +163,17 @@ class PickConstraint:
         """
         if self.key != key or self.lock is LOCK_NONE:
             self._arm(key, base, plane)
-            d = _unit(_sub(marker, self.base))
+            d = native_pickconstraint.constraint(self, 2, marker)
+            if d is native_pickconstraint.UNAVAILABLE:
+                d = _unit(_sub(marker, self.base))
             if d is None:
                 return self.lock
             self.lock, self.lock_dir = LOCK_DIRECTION, d
         elif self.lock == LOCK_DIRECTION:
-            r = math.dist(marker, self.base)
-            if r < 1e-12:
+            r = native_pickconstraint.constraint(self, 3, marker)
+            if r is native_pickconstraint.UNAVAILABLE:
+                r = math.dist(marker, self.base)
+            if r is None or r < 1e-12:
                 return self.lock
             self.lock, self.lock_radius = LOCK_CIRCLE, r
         else:
@@ -184,9 +189,12 @@ class PickConstraint:
 
     def fixed_point(self):
         """The one point the constraints pin down, or None when they leave freedom."""
-        if self.distance is None or self.incremental:
+        if self.distance is None or self.incremental or (self.angle is None and self.lock != LOCK_DIRECTION):
             return None
         if self.angle is not None:
+            native = native_pickconstraint.constraint(self, 1)
+            if native is not native_pickconstraint.UNAVAILABLE:
+                return native
             return _add(self.base, _scale(self._angle_dir(), self.distance))
         if self.lock == LOCK_DIRECTION:
             return _add(self.base, _scale(self.lock_dir, self.distance))
@@ -196,9 +204,21 @@ class PickConstraint:
         """Constrain a world `cursor` point. Returns the point the pick would land on."""
         if cursor is None or self.base is None:
             return cursor
-        fixed = self.fixed_point()
-        if fixed is not None:
-            return fixed
+        # OURS: performance-qualified routing. A ctypes crossing costs more than
+        # a lone distance/line/circle constraint. Keep those complete Python
+        # paths (including a fixed direction); native benefits angle+distance
+        # and Ortho, and is comparable for circle+distance. No failed native
+        # execution is replayed: this choice happens before calling native.
+        if self.distance is not None:
+            if self.angle is not None or self.lock == LOCK_CIRCLE:
+                native = native_pickconstraint.constraint(self, 0, cursor)
+                if native is not native_pickconstraint.UNAVAILABLE:
+                    return native
+                fixed = self.fixed_point()
+                if fixed is not None:
+                    return fixed
+            elif self.lock == LOCK_DIRECTION and not self.incremental:
+                return _add(self.base, _scale(self.lock_dir, self.distance))
         base = self.base
         p = tuple(cursor)
         if self.angle is not None:

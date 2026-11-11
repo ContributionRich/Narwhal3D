@@ -16,6 +16,7 @@
 pub mod aci_colors;
 pub mod arclength;
 pub mod bearing;
+pub mod blend;
 pub mod bspline;
 pub mod cage;
 pub mod calc;
@@ -37,6 +38,7 @@ pub mod nearest;
 pub mod numparse;
 pub mod numparse_owned;
 pub mod obj;
+pub mod pickconstraint;
 pub mod printwidths;
 pub mod stl;
 pub mod surface;

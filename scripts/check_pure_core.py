@@ -72,6 +72,8 @@ PURE_CORE_PYTESTS = (
     "spike/test_native_bearing.py",
     "spike/test_coords.py",
     "spike/test_native_coords.py",
+    "spike/test_native_pickconstraint.py",
+    "spike/test_native_blend.py",
     "spike/test_macro.py",
     "spike/test_native_macro.py",
     "spike/test_macro_plan.py",

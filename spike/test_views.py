@@ -803,6 +803,111 @@ def _():
     assert "OURS" in near, "the arrow's pixel sizes must be flagged OURS"
 
 
+# --- Zoom 1to1 view distance calculation (#64) -----------------------------
+@check("zoom_1to1_distance: 96 DPI in Millimeters gives exact closed-form distance")
+def _():
+    # 1920x1080, max dimension is 1920, default 50mm lens and 36mm sensor:
+    expected = (1920.0 / (2.0 * (96.0 / 25.4))) * (50.0 / 36.0)
+    d = views.zoom_1to1_distance(1920, 1080, unit_scale_to_mm=1.0, dpi=96.0,
+                                 lens_mm=50.0, sensor_size_mm=36.0)
+    assert abs(d - expected) < 1e-9, f"expected {expected}, got {d}"
+
+
+@check("zoom_1to1_distance: scales with viewport lens focal length")
+def _():
+    d_50 = views.zoom_1to1_distance(1920, 1080, lens_mm=50.0)
+    d_35 = views.zoom_1to1_distance(1920, 1080, lens_mm=35.0)
+    # view_distance is proportional to lens_mm / sensor_size
+    assert abs(d_35 / d_50 - 35.0 / 50.0) < 1e-9, f"expected 0.7, got {d_35 / d_50}"
+
+
+@check("zoom_1to1_distance: Inches and Meters scale proportionally")
+def _():
+    expected_in = (1920.0 / (2.0 * 96.0)) * (50.0 / 36.0)
+    d_in = views.zoom_1to1_distance(1920, 1080, unit_scale_to_mm=25.4, dpi=96.0)
+    assert abs(d_in - expected_in) < 1e-9, f"expected {expected_in}, got {d_in}"
+
+    expected_m = (1920.0 / (2.0 * 1000.0 * (96.0 / 25.4))) * (50.0 / 36.0)
+    d_m = views.zoom_1to1_distance(1920, 1080, unit_scale_to_mm=1000.0, dpi=96.0)
+    assert abs(d_m - expected_m) < 1e-9, f"expected {expected_m}, got {d_m}"
+
+
+@check("zoom_1to1_distance: portrait vs landscape uses maximum fitting dimension")
+def _():
+    d_land = views.zoom_1to1_distance(1920, 1080, unit_scale_to_mm=1.0, dpi=96.0)
+    d_port = views.zoom_1to1_distance(1080, 1920, unit_scale_to_mm=1.0, dpi=96.0)
+    assert abs(d_land - d_port) < 1e-9, "landscape and portrait with same max dimension should match"
+
+
+@check("zoom_1to1_distance: analytical helper predicts assumed-DPI separation across lenses and aspect ratios")
+def _():
+    # Test projected pixel separation in an orthographic viewport for two lens settings
+    # (50mm and 35mm) and two aspect ratios (landscape 16:9 and portrait 9:16).
+    for winx, winy in ((1920, 1080), (1080, 1920)):
+        for lens in (50.0, 35.0):
+            dist = views.zoom_1to1_distance(winx, winy, unit_scale_to_mm=1.0, dpi=96.0, lens_mm=lens)
+            # Two points separated by 25.4 mm (1 physical inch)
+            p1_x, _ = views.project_ortho_point(0.0, 0.0, 0.0, winx, winy, dist, lens_mm=lens)
+            p2_x, _ = views.project_ortho_point(25.4, 0.0, 0.0, winx, winy, dist, lens_mm=lens)
+            sep = abs(p2_x - p1_x)
+            assert abs(sep - 96.0) < 1e-9, f"at {winx}x{winy} lens={lens}: expected 96 px, got {sep}"
+
+            # Two points separated by 1.0 mm
+            p1_y, p1_y2 = views.project_ortho_point(0.0, 0.0, 0.0, winx, winy, dist, lens_mm=lens)
+            p2_y, p2_y2 = views.project_ortho_point(0.0, 1.0, 0.0, winx, winy, dist, lens_mm=lens)
+            sep_mm = abs(p2_y2 - p1_y2)
+            expected_sep_mm = 96.0 / 25.4
+            assert abs(sep_mm - expected_sep_mm) < 1e-9, f"expected {expected_sep_mm}, got {sep_mm}"
+
+
+@check("zoom_1to1_distance: invalid or non-positive inputs fall back safely")
+def _():
+    assert views.zoom_1to1_distance(0, 1000) == views.ORTHO_DISTANCE
+    assert views.zoom_1to1_distance(1000, -100) == views.ORTHO_DISTANCE
+    assert views.zoom_1to1_distance(1000, 1000, unit_scale_to_mm=0) == views.ORTHO_DISTANCE
+    assert views.zoom_1to1_distance(1000, 1000, dpi=0) == views.ORTHO_DISTANCE
+    assert views.zoom_1to1_distance(1000, 1000, lens_mm=0) == views.ORTHO_DISTANCE
+    assert views.zoom_1to1_distance(1000, 1000, sensor_size_mm=0) == views.ORTHO_DISTANCE
+    assert views.zoom_1to1_distance(None, "bad") == views.ORTHO_DISTANCE
+
+
+@check("zoom_1to1_distance and constants are flagged OURS in views.py")
+def _():
+    src = open(os.path.join(ROOT, "narwhal3d", "views.py"), encoding="utf-8").read()
+    lines = src.splitlines()
+    for needle in ("ASSUMED_SCREEN_DPI = ", "def ortho_pixsize", "def zoom_1to1_distance"):
+        idx = next(n for n, l in enumerate(lines) if needle in l)
+        near = "\n".join(lines[max(0, idx - 5):idx + 15])
+        assert "OURS" in near, f"{needle} must be flagged OURS"
+
+
+@check("Zoom helpers reject NaN/Inf and unrepresentable finite calculations")
+def _():
+    for value in (float("nan"), float("inf"), -float("inf"), 10**400):
+        for key in ("region_w", "region_h", "unit_scale_to_mm", "dpi", "lens_mm", "sensor_size_mm"):
+            args = dict(region_w=1920, region_h=1080)
+            args[key] = value
+            assert views.zoom_1to1_distance(**args) == views.ORTHO_DISTANCE, (key, value)
+            try:
+                views.zoom_1to1_distance(**args, strict=True)
+            except ValueError:
+                pass
+            else:
+                raise AssertionError((key, value, "strict mode accepted invalid input"))
+        for key in ("region_w", "region_h", "view_distance", "lens_mm", "sensor_size_mm"):
+            args = dict(region_w=1920, region_h=1080, view_distance=31.494)
+            args[key] = value
+            assert views.ortho_pixsize(**args) == 0.0, (key, value)
+        for axis in range(3):
+            point = [0., 0., 0.]
+            point[axis] = value
+            assert views.project_ortho_point(*point, 1920, 1080, 31.494) == (0., 0.)
+    for kwargs in (dict(unit_scale_to_mm=1e308), dict(dpi=1e-323),
+                   dict(lens_mm=1e308, sensor_size_mm=1e-308)):
+        assert views.zoom_1to1_distance(1920, 1080, **kwargs) == views.ORTHO_DISTANCE
+    assert views.ortho_pixsize(1920, 1080, 1e308, sensor_size_mm=1e308) == 0.0
+
+
 # ---------------------------------------------------------------- report
 print(f"\n{'=' * 54}")
 print(" view and viewport-control tests (pure, bpy-free)")

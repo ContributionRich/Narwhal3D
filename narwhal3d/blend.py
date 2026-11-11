@@ -68,6 +68,41 @@ def end_derivatives(curve, at_end, count, outward=True):
     return [_mul(v, (-1.0) ** j if flip else 1.0) for j, v in enumerate(vals)]
 
 
+#: measured break-even: the native control-point solve only wins once the degree is
+#: high enough (k0 + k1 >= 4). Position (0) and Tangency (2) are SLOWER through the
+#: ctypes boundary than the pure-Python loop, so those stay in Python; Curvature (4) and
+#: above go native. See spike/test_native_blend.py --benchmark.
+_NATIVE_MIN_ORDER = 4
+
+
+def _blend_native(p0_derivs, p1_derivs, k0, k1, lam0, lam1):
+    """The Rust control points (a list of ``(x, y, z)`` tuples), or ``None`` when no
+    usable native binding is present (missing, stale ABI, or no blend symbol) -- the
+    caller then uses the Python loop below.
+
+    The native route is used only for the higher orders where it wins (k0 + k1 >=
+    `_NATIVE_MIN_ORDER`); the low orders (Position, Tangency) stay on the unchanged
+    Python loop because the ctypes boundary costs more than it saves there.
+
+    Raises `native_blend.NativeBlendError` if a loaded library rejects the (validated)
+    inputs or fails to run; that is a real defect (a stale or mismatched build) and is
+    deliberately NOT replayed through the Python loop.
+    """
+    if k0 > 4 or k1 > 4:
+        return None
+    if k0 + k1 < _NATIVE_MIN_ORDER:
+        return None
+    try:
+        from . import native_blend
+    except ImportError:               # direct file-path loading, without a package
+        import native_blend
+    flat0 = [v for d in p0_derivs[:k0 + 1] for v in d]
+    flat1 = [v for d in p1_derivs[:k1 + 1] for v in d]
+    if len(flat0) != 3 * (k0 + 1) or len(flat1) != 3 * (k1 + 1):
+        return None
+    return native_blend.blend_bezier_points(flat0, flat1, k0, k1, lam0, lam1)
+
+
 def blend_bezier_points(p0_derivs, p1_derivs, k0, k1, lam0, lam1):
     """The Bezier control points matching `k0` scaled derivatives at t=0 and `k1` at t=1.
 
@@ -75,7 +110,15 @@ def blend_bezier_points(p0_derivs, p1_derivs, k0, k1, lam0, lam1):
     (oriented INTO curve 2). Degree n = k0 + k1 + 1. Solved from the Bezier end-derivative
     identities B^(j)(0) = n!/(n-j)! * Delta^j P_0 (forward differences), and the mirror
     image at t = 1.
+
+    With the pure-core library loaded the same algebra runs in Rust
+    (`native_blend`); the loop below is the unchanged Python implementation and the
+    fallback for a missing or stale library (a native execution failure raises rather
+    than being replayed here).
     """
+    native = _blend_native(p0_derivs, p1_derivs, k0, k1, lam0, lam1)
+    if native is not None:
+        return native
     n = k0 + k1 + 1
     pts = [None] * (n + 1)
     pts[0] = p0_derivs[0]

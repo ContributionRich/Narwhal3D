@@ -84,6 +84,7 @@ def _():
         "spike/portfolio_review/test_metadata.py",
         "spike/test_bearing.py", "spike/test_native_bearing.py",
         "spike/test_coords.py", "spike/test_native_coords.py",
+        "spike/test_native_pickconstraint.py", "spike/test_native_blend.py",
         "spike/test_macro.py", "spike/test_native_macro.py",
         "spike/test_macro_plan.py", "spike/test_native_macro_plan.py",
         "spike/test_svgpath.py", "spike/test_native_svgpath.py",
@@ -108,7 +109,8 @@ def _():
         "spike/test_native_interpolate.py",
         "spike/test_native_tween.py",
     }
-    assert set(gate.PURE_CORE_PYTESTS) == expected
+    actual = set(gate.PURE_CORE_PYTESTS)
+    assert actual == expected, f"missing suites: {sorted(expected - actual)}; unexpected suites: {sorted(actual - expected)}"
 
 
 @check("the real gate is green on the live crate")

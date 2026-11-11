@@ -34,6 +34,7 @@ ROOT_FILES = (
     "docs/reviews/2026-10-31-ui-regressions.md",
     "docs/reviews/2026-10-31-rust-document-registry.md",
     "docs/reviews/2026-10-31-native-only.md",
+    "docs/reviews/2026-11-11-rust-interaction-blend.md",
         "docs/reviews/2026-10-30-agent-v3-integration.md",
 )
 LAUNCH_FILES = (
@@ -168,6 +169,8 @@ TEST_FILES = (
     "spike/test_component_fillet_gui.py", "spike/test_variable_edge_fillet.py",
     "spike/test_fillet_handle_input.py", "spike/test_fillet_mouse_gui.py",
     "spike/test_fillet_segments.py",
+    "spike/test_native_pickconstraint.py", "spike/test_native_blend.py",
+    "spike/test_zoom_options.py", "spike/test_zoom_projection_gui.py",
     "spike/test_face_pick_gui.py",
     "spike/test_edge_pick_gui.py", "spike/test_workspace_dialogs_gui.py",
     "spike/test_curve_inputs.py", "spike/test_curve_consumer_inputs.py", "spike/test_colordialog.py",
@@ -402,6 +405,7 @@ NATIVE_FILES = (
     "native/pure_core/src/curvex.rs",
     "native/pure_core/src/cage.rs",
     "native/pure_core/src/gridsnap.rs",
+    "native/pure_core/src/pickconstraint.rs", "native/pure_core/src/blend.rs",
     "native/geometry_core/.gitignore", "native/geometry_core/Cargo.lock",
     "native/geometry_core/Cargo.toml", "native/geometry_core/README.md",
     "native/geometry_core/build.rs", "native/geometry_core/cpp/occt_adapter.cpp",

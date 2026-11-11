@@ -409,6 +409,7 @@ PURE_SUITES=(
     spike/test_textfield.py
     spike/portfolio_review/test_wrap_progress.py
     spike/test_views.py
+    spike/test_zoom_options.py
     spike/test_menubar_resource.py
     spike/test_rightpanel.py
     spike/test_colordialog.py
@@ -454,6 +455,8 @@ PURE_SUITES=(
     spike/test_native_bearing.py
     spike/test_coords.py
     spike/test_native_coords.py
+    spike/test_native_pickconstraint.py
+    spike/test_native_blend.py
     spike/test_native_gridsnap.py
     spike/test_macro.py
     spike/test_native_macro.py
@@ -610,6 +613,7 @@ if [[ -n "${DISPLAY:-}" || -n "${WAYLAND_DISPLAY:-}" ]]; then
     fi
     run "preview responsiveness live" "$PYTHON" spike/test_preview_responsiveness_gui.py --run integration
     run "drawing constraints live" "$PYTHON" spike/test_drawing_behavior_gui.py --launch
+    run "Zoom reference-scale actual projection live" "$PYTHON" spike/test_zoom_projection_gui.py --launch
     run "Curve degree and AI evidence live" "$PYTHON" spike/review_v4/test_curve_degree_gui.py --launch
     run "Polygon direction and constraints live" "$PYTHON" spike/test_polygon_behavior_gui.py --launch
     run "Trim box live" "$PYTHON" spike/test_trim_box_gui.py --launch --baseline
