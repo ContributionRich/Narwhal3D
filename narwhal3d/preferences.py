@@ -56,7 +56,7 @@ DEFAULTS = {
 _ENUMS = {
     "theme": ("light", "dark"),
     "toolbar": tuple(tab["name"] for tab in toolbar_data.TABS),
-    "inspector": ("Layers", "Properties", "Display", "Bug Report", "AI Assistant"),
+    "inspector": ("Layers", "Properties", "Display", "Bug Report", "Library", "AI Assistant"),
     # Object alignment is declared but not implemented by gumball.ALIGNMENTS.
     "gumball_alignment": ("CPlane", "World", "View"),
 }

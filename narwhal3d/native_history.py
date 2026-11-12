@@ -376,6 +376,13 @@ class NativeUndoStack:
     def backend(self):
         return "rust"
 
+    @property
+    def native_identity(self):
+        """Stable Rust-issued history owner ID; never a recyclable Python address."""
+        if self._closed or self._broken:
+            raise HistoryError('history_owner_unavailable')
+        return self._handle
+
     def _request(self, op, **fields):
         with self._lock:
             if self._closed:

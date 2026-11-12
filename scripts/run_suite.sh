@@ -45,6 +45,7 @@ export NARWHAL_PURE_CORE="${NARWHAL_PURE_CORE:-$ROOT/native/pure_core/target/x86
 export NARWHAL_GEOMETRY_CORE="${NARWHAL_GEOMETRY_CORE:-$ROOT/native/geometry_core/target/release/libnarwhal_geometry_core.so}"
 export NARWHAL_APPLICATION_CORE="${NARWHAL_APPLICATION_CORE:-$ROOT/artifacts/application-core/linux-x86_64/libnarwhal_application_core.so}"
 export NARWHAL_HISTORY_CORE="${NARWHAL_HISTORY_CORE:-$NARWHAL_APPLICATION_CORE}"
+export NARWHAL_LIBRARY_CORE="${NARWHAL_LIBRARY_CORE:-$ROOT/native/library_core/target/release/narwhal-library-core}"
 # The CDR import helpers, when this checkout has built them (run_tests.sh builds them).
 for pair in "NARWHAL_CDR_CORE=native/cdr_core/target/release/libnarwhal_cdr_core.so" \
             "NARWHAL_CDR_MULTIVERSION=native/cdr_multiversion/target/release/narwhal-cdr-multiversion" \

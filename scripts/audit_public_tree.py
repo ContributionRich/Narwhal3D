@@ -543,6 +543,9 @@ V44_ICON_STEMS = (
     'narwhal-ai-mark',
 )
 ALLOWED_IMAGES = (
+    # Approved Library handoff icon only, not a generated-artwork wildcard.
+    "artwork/icons/generated-panel-library.svg", "artwork/icons/generated-panel-library.png",
+    "narwhal3d/icons/generated-panel-library.svg", "narwhal3d/icons/generated-panel-library.png",
     *(f"narwhal3d/icons/{stem}.{extension}" for stem in V44_ICON_STEMS for extension in ("png", "svg")),
     "launch/narwhal3d.png",
     "docs/readme-command-loft.gif",

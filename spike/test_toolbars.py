@@ -362,7 +362,7 @@ expected_v4 = {
 }
 check(toolbars.V4_ICON_NAMES == expected_v4, "v4 allowlist is exactly the five approved icons")
 expected_v44 = set(toolbars.ui_icon_data.PNG_NAMES)
-check(len(expected_v44) == 83, "v4.4 adds exactly 82 pictograms plus the narwhal reply mark")
+check(len(expected_v44) == 84, "v4.4 includes 82 pictograms, the narwhal reply mark and Library icon")
 check(bundled == set(data.ICON_NAMES) | expected_v4 | expected_v44,
       "runtime icons exactly match legacy, v4 and approved v4.4 manifests",
       sorted(bundled ^ (set(data.ICON_NAMES) | expected_v4 | expected_v44)))

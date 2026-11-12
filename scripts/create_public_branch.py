@@ -35,6 +35,7 @@ ROOT_FILES = (
     "docs/reviews/2026-10-31-rust-document-registry.md",
     "docs/reviews/2026-10-31-native-only.md",
     "docs/reviews/2026-11-11-rust-interaction-blend.md",
+    "docs/LIBRARY.md", "docs/FILE_IO.md",
         "docs/reviews/2026-10-30-agent-v3-integration.md",
 )
 LAUNCH_FILES = (
@@ -76,6 +77,7 @@ SCRIPT_FILES = (
     "scripts/collect_windows_build_info.ps1", "scripts/build_windows_preview.ps1",
     "scripts/build_brep_writer_source.sh", "scripts/build_brep_writer_windows.ps1", "scripts/verify_brep_writer.py",
     "scripts/build_document_core.py", "scripts/verify_document_core.py",
+    "scripts/build_library_core.py",
     "scripts/check_application_core.py", "scripts/test_release_application_core.py",
     "scripts/check_document_observer.py", "scripts/stage_document_observer.py",
     "scripts/check_ui_core.py", "scripts/test_release_ui_core.py",
@@ -170,6 +172,8 @@ TEST_FILES = (
     "spike/test_fillet_handle_input.py", "spike/test_fillet_mouse_gui.py",
     "spike/test_fillet_segments.py",
     "spike/test_native_pickconstraint.py", "spike/test_native_blend.py",
+    "spike/test_library_store.py", "spike/test_library_geometry.py", "spike/test_library_gui.py",
+    "spike/test_background_load.py", "spike/test_native_load_jobs.py",
     "spike/test_zoom_options.py", "spike/test_zoom_projection_gui.py",
     "spike/test_face_pick_gui.py",
     "spike/test_edge_pick_gui.py", "spike/test_workspace_dialogs_gui.py",
@@ -318,6 +322,9 @@ TEST_FILES = (
     "spike/test_document_compatibility.py", "spike/fixtures/document_schema1_historical.json",
 )
 NATIVE_FILES = (
+    "native/library_core/Cargo.toml", "native/library_core/Cargo.lock",
+    "native/library_core/.gitignore", "native/library_core/README.md",
+    "native/library_core/src/main.rs", "native/library_core/src/archive.rs",
     'native/document_observer/lifetime_fixture.py',
     'native/document_observer/qualify_lifetime.py',
 
@@ -339,6 +346,7 @@ NATIVE_FILES = (
     "native/application_core/README.md", "native/application_core/OPENNURBS_LICENSE",
     "native/application_core/include/narwhal_application_core.h",
     "native/application_core/src/lib.rs", "native/application_core/src/session.rs",
+    "native/application_core/src/load_jobs.rs", "native/application_core/src/save_jobs.rs",
     "native/application_core/src/table.rs", "native/application_core/src/wire.rs",
     "native/application_core/src/ordinal_map.rs", "native/application_core/tests/protocol.rs",
     "native/application_core/OBJECT_REGISTRY.md",

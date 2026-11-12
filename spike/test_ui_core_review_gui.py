@@ -234,7 +234,7 @@ def run():
     from narwhal3d import ui, shell_input, bugreport, ai_assistant, native_document_session
     yield from wait(lambda: os.environ.get("NARWHAL3D_UI_READY") == "1" and ui._preferences_ready
                     and not ui._viewports_in_progress and ui.is_input_active()
-                    and len(ui._right_tab_boxes) == 5, "normal visible bootstrap", 50)
+                    and len(ui._right_tab_boxes) == len(ui.rightpanel.TABS), "normal visible bootstrap", 50)
     check(not bpy.app.background and ui.app_state.model.object_count() == 0, "visible disposable empty document")
     lib = native_document_session.load_library()
     check(application_core_source_matches(ROOT, lib._name),
@@ -253,8 +253,8 @@ def run():
     yield from tap("BACK_SPACE")
     check(ui.app_state.input_buffer == "", "console cleared without submitting")
     for label, tab, panel, module, state, textkey in (
-        ("report", 3, ui._bug, bugreport, ui.bug_report_state(), "text"),
-        ("chat", 4, ui._ai, ai_assistant, ui.ai_assistant_state(), "input_text")):
+        ("report", ui.rightpanel.tab_names().index("Bug Report"), ui._bug, bugreport, ui.bug_report_state(), "text"),
+        ("chat", ui.rightpanel.tab_names().index("AI Assistant"), ui._ai, ai_assistant, ui.ai_assistant_state(), "input_text")):
         yield from tap("LEFTMOUSE", center(ui._right_tab_boxes[tab]))
         yield from wait(lambda: panel.get("view") is not None, label + " drawn input")
         box = panel["lay"]["box" if label == "report" else "input"]

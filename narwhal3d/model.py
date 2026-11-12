@@ -46,6 +46,8 @@ class _Snapshot(list):
     settings = None
     layers = None
     groups = None
+    materials = None
+    material_layers = None
     by_id = None
     names = None
 
@@ -1221,6 +1223,40 @@ class NarwhalModel:
         self._set_base(out)
         return out
 
+    def material_records(self):
+        """Detached openNURBS definitions in index order, including material IDs.
+
+        Host API glue only: native history retains the opaque snapshot.
+        """
+        return tuple(material.Encode() for material in self.file.Materials)
+
+    def _replace_material_table(self, records):
+        decoded = [r3.CommonObject.Decode(record) for record in records]
+        if any(not isinstance(material, r3.Material) for material in decoded):
+            raise ValueError('snapshot contains an invalid material definition')
+        import os
+        import tempfile
+
+        # Work on a private host file: a writer/decode/add failure must not leave
+        # the live material table half-deleted. Deleted slots are tombstones;
+        # compact BEFORE adding so replayed indices address the original records.
+        fresh = r3.File3dm.Decode(self.file.Encode())
+        for material_id in [material.Id for material in fresh.Materials]:
+            fresh.Materials.Delete(material_id)
+        with tempfile.TemporaryDirectory(prefix='narwhal-material-restore-') as folder:
+            path = os.path.join(folder, 'document.3dm')
+            if not fresh.Write(path, 8):
+                raise RuntimeError('could not compact the material table')
+            fresh = r3.File3dm.Read(path)
+        if fresh is None:
+            raise RuntimeError('could not read the compacted material table')
+        for index, material in enumerate(decoded):
+            if fresh.Materials.Add(material) != index:
+                raise RuntimeError('restore changed the requested material index')
+            if fresh.Materials[index].Id != material.Id:
+                raise RuntimeError('restore changed the requested material UUID')
+        self._replace_backing_file(fresh)
+
     def _snapshot_document(self, by_id, names):
         out = _Snapshot()
         out.settings = (self.unit_system(), self.absolute_tolerance())
@@ -1229,6 +1265,9 @@ class NarwhalModel:
         out.strings = self._document_metadata.snapshot()
         out.layers = self.layer_records()           # layer edits participate in undo
         out.groups = self.group_records()           # preserve table and memberships together
+        out.materials = self.material_records()
+        out.material_layers = tuple((str(layer.Id), layer.RenderMaterialIndex)
+                                    for layer in self.file.Layers)
         out.extend(by_id.values())
         out.by_id = by_id
         out.names = dict(names)
@@ -1249,6 +1288,11 @@ class NarwhalModel:
         if strings is not None:
             self._document_metadata.validate_snapshot(strings)
         self._object_registry.validate_snapshot(snap)
+        materials = getattr(snap, 'materials', None)
+        if materials is not None:
+            for record in materials:
+                if not isinstance(r3.CommonObject.Decode(record), r3.Material):
+                    raise ValueError('snapshot contains an invalid material definition')
 
     def restore(self, snap) -> int:
         if snap is None:
@@ -1293,6 +1337,20 @@ class NarwhalModel:
             # Group indices are positional. Re-add every object from the target so
             # each entry's recorded memberships are replayed against that exact table.
             whole = True
+        materials = getattr(snap, 'materials', None)
+        if materials is not None and materials != self.material_records():
+            self._replace_material_table(materials)
+            whole = True
+        material_layers = getattr(snap, 'material_layers', None)
+        if material_layers is not None:
+            current = tuple((str(layer.Id), layer.RenderMaterialIndex)
+                            for layer in self.file.Layers)
+            if material_layers != current:
+                whole = True  # layer-sourced materials affect unchanged objects too
+            indices = dict(material_layers)
+            for layer in self.file.Layers:
+                if str(layer.Id) in indices:
+                    layer.RenderMaterialIndex = indices[str(layer.Id)]
         strings = getattr(snap, "strings", None)
         if strings is not None:
             self._document_metadata.restore(strings)

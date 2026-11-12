@@ -29,9 +29,9 @@ REFERENCE = Path(os.environ['NARWHAL_UI_REFERENCE_DIR']) if os.environ.get('NARW
 RASTER_CHECK = "--raster-check" in sys.argv
 # Independently measured from the approved CSV and exact supplied SVG bytes.
 MAPPING_SHA = "67a7a212cad30fbc0cdf3586627863edbe95681e3c03ef486a2c2ea8e01a76ae"
-SVG_SHA = "711f724f77f100f2c67f68b9c41a981531617190f7b94224a95033ff1e10c812"
+SVG_SHA = "1dc0262d7f00675f2a08aadc42d441f7fa42ef4c8910f2bcef00ff53ec48d480"
 # Raster receipt: librsvg 2.62.4 / cairo 1.18.6, transparent 96px output.
-PNG_SHA = "2ddf65531d06a5b6333146bfff25814262a33ccd256067f020c900531dd3a41c"
+PNG_SHA = "881b1f12ce2ff9d54a466fc998a8879b94d9ea0ef55e45a371459b2f8e885bde"
 
 
 def load_modules(mutation=None):
@@ -96,8 +96,8 @@ class IconTests(unittest.TestCase):
             self.assertEqual((button.text, button.icon), (row["command_label"], expected_png))
         source = REFERENCE / "app/assets/icons"
         self.assertEqual({p.name for p in source.glob("generated-*.svg")},
-                         icons.SVG_NAMES - {"narwhal-ai-mark.svg"})
-        for name in icons.SVG_NAMES:
+                         icons.SVG_NAMES - {"narwhal-ai-mark.svg", "generated-panel-library.svg"})
+        for name in icons.SVG_NAMES - {"generated-panel-library.svg"}:
             self.assertEqual((source / name).read_bytes(),
                              (ROOT / "narwhal3d/icons" / name).read_bytes(), name)
 
@@ -198,7 +198,7 @@ class IconTests(unittest.TestCase):
         self.assertEqual(icons.INSPECTOR_ICONS, {
             "Layers": "generated-panel-layers.png", "Properties": "generated-panel-properties.png",
             "Display": "generated-panel-display.png", "Bug Report": "generated-panel-bug-report.png",
-            "AI Assistant": "generated-panel-ai-assistant.png"})
+            "Library": "generated-panel-library.png", "AI Assistant": "generated-panel-ai-assistant.png"})
         self.assertEqual(icons.AI_REPLY_ICON, "narwhal-ai-mark.png")
         svg = ET.parse(ROOT / "narwhal3d/icons/narwhal-ai-mark.svg").getroot()
         self.assertEqual(svg.attrib["viewBox"], "0 0 24 24")
@@ -207,8 +207,8 @@ class IconTests(unittest.TestCase):
         self.assertEqual(set(svg[0].attrib), {"fill", "d"})
 
     def test_asset_receipts_and_png_integrity(self):
-        self.assertEqual(len(icons.SVG_NAMES), 83)
-        self.assertEqual(len(icons.PNG_NAMES), 83)
+        self.assertEqual(len(icons.SVG_NAMES), 84)
+        self.assertEqual(len(icons.PNG_NAMES), 84)
         self.assertEqual(digest_assets(icons.SVG_NAMES), SVG_SHA)
         self.assertEqual(digest_assets(icons.PNG_NAMES), PNG_SHA)
         for name in icons.PNG_NAMES:

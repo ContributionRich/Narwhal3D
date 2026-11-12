@@ -440,3 +440,17 @@ to this slice. End-to-end host restoration remains Main's integration gate.
   `history_mutations.rs`, additive `src/lib.rs`/C header exports and this README.
   No Cargo dependency/manifests, existing metadata implementation/tests,
   installed library, staging, commit or other-agent files were changed.
+
+
+## Native file-job coordination (additive ABI1)
+
+`src/load_jobs.rs` and `src/save_jobs.rs` own persistent load/save scheduling.
+See [file I/O architecture and job protocol](../../docs/FILE_IO.md).
+The ABI pairs are `narwhal_{load,save}_jobs_{abi,json}`. JSON is bounded to64KiB;
+normal mutation output is at least4096 bytes and replies always fit that minimum.
+No geometry or host callback pointer crosses these interfaces. Queues are bounded
+to64 live owners, each with at most one active and one pending payload ID.
+Load guards are checked during incremental hydration and again before commit;
+a successful file worker is not permission to replace an edited document.
+Save never replaces its active job; busy AutoSave declines and newest pending
+user Save wins. Repairs/revalidation retain the same active save job.

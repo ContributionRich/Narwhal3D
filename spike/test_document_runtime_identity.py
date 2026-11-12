@@ -93,6 +93,16 @@ class RuntimeTests(unittest.TestCase):
         path.write_bytes(b"X" * stamp.st_size)
         os.utime(path, ns=(stamp.st_atime_ns, stamp.st_mtime_ns))
 
+    def test_worker_image_witnesses_only_loaded_threading_runtime(self):
+        runtime=self.root/'libtbb.so.12'
+        runtime.write_bytes(b'threading-runtime')
+        with patch.object(admission,'_loaded_library_paths',return_value={str(runtime),str(self.unrelated)}):
+            witnesses=json.loads(admission.worker_runtime_images())
+            self.assertEqual(witnesses,[[str(runtime),admission._binary_identity(runtime)[1]]])
+            with patch.object(admission,'_loaded_identity',return_value=(str(runtime),'a'*64,'b'*64)):
+                with self.assertRaisesRegex(RuntimeError,'changed on disk'):
+                    admission.worker_runtime_images()
+
     def test_decoder_same_version_changes(self):
         before = self.identity()
         self.rewrite(self.decoder)

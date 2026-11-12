@@ -26,7 +26,7 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts/check_application_core.py"
 SOURCE = SCRIPT.read_text(encoding="utf-8")
-STEPS = ["fmt", "clippy", "test", "build", "abi", "history", "registry"]
+STEPS = ["fmt", "clippy", "test", "build", "abi", "history", "io_jobs", "registry"]
 NEW_BINARY = b"synthetic qualified application core\x00\x01"
 OLD_BINARY = b"previous working application core\x00\x02"
 
@@ -105,6 +105,8 @@ class Sandbox:
             step = "abi"
         elif str(self.root / "spike/test_rust_history_abi.py") in command:
             step = "history"
+        elif str(self.root / "spike/test_native_load_jobs.py") in command:
+            step = "io_jobs"
         elif str(self.root / "spike/test_document_registry_abi.py") in command:
             step = "registry"
         else:
@@ -161,6 +163,10 @@ class ApplicationCoreGateTests(unittest.TestCase):
                 self.assertTrue(kwargs["check"])
                 self.assertGreater(kwargs["timeout"], 0)
                 self.assertEqual(kwargs["cwd"], box.root)
+                if step == "io_jobs":
+                    self.assertEqual(command[-2:],["-B",str(box.root / "spike/test_native_load_jobs.py")])
+                    self.assertEqual(kwargs["env"]["NARWHAL_APPLICATION_CORE"],str(box.library))
+                    continue
                 if step == "registry":
                     self.assertEqual(command[-5:], ["-B", str(box.root / "spike/test_document_registry_abi.py"),
                                                      "--library", str(box.library), "--mutations"])
@@ -197,6 +203,8 @@ class ApplicationCoreGateTests(unittest.TestCase):
         self.assertEqual(receipt["abi"], 1)
         self.assertEqual(receipt["history_abi"], 1)
         self.assertEqual(receipt["object_registry_abi"], 1)
+        self.assertEqual(receipt["load_jobs_abi"],1)
+        self.assertEqual(receipt["save_jobs_abi"],1)
         self.assertFalse(box.destination.exists())
 
     def test_staging_requires_registry_qualification(self):

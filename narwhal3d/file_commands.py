@@ -28,6 +28,163 @@ def _app():
     return app_state
 
 
+def _load_guard():
+    app = _app()
+    undo = app.ctx.undo
+    return dict(model=app.model._object_registry.native.handle, context=undo.native_identity, serial=int(undo.top_serial or 0),
+                state=int(undo.state_id), generation=int(undo.generation) if undo.uncertain else None,
+                path=str(app.doc_path) if app.doc_path is not None else None)
+
+
+class _LoadHost:
+    """Blender scheduling and opaque payload lifetimes; Rust decides every action."""
+    def __init__(self, scheduler, changed, paused=None):
+        from .native_document import LoadJobs
+        self.native = LoadJobs()
+        self.scheduler, self.changed = scheduler, changed
+        self.host_paused = paused or (lambda:False)
+        self.payloads = {}
+        self.polling, self.closed = False, False
+
+    def _dispose(self, job, notify=True):
+        item = self.payloads.pop(job, None)
+        if item is not None:
+            if item['hydration'] is not None:
+                item['hydration'].close()
+            if item['prepared'] is not None:
+                item['prepared'].cleanup()
+            if notify and item['done'] is not None:
+                item['done']()
+
+    def request(self, path, apply, strict, done):
+        if self.closed:
+            raise RuntimeError('Native background loading has stopped; restart the application')
+        reply = self.native.request('request', guard=_load_guard(), strict=strict)
+        if reply['replaced'] is not None:
+            self._dispose(reply['replaced'])
+        job = reply['job']
+        self.payloads[job] = dict(path=os.path.abspath(os.fspath(path)), apply=apply,
+                                  done=done, prepared=None, hydration=None, candidate=None, error=None)
+        if not self.polling:
+            self.polling = True
+            try:
+                self.scheduler(self.poll)
+            except BaseException:
+                self.close()
+                raise
+        self.changed()
+        return True, f"Loading {os.path.basename(os.fspath(path))}…"
+
+    def _work(self, job, item):
+        from . import narwhal_document
+        try:
+            item['prepared'] = narwhal_document.prepare_load(item['path'])
+        except Exception as exc:
+            item['error'] = exc
+        try:
+            reply = self.native.request('complete', job=job, success=item['error'] is None)
+            if reply['action'] == 'discard' or self.closed:
+                self._dispose(job, notify=False)
+        except Exception as exc:
+            item['error'] = exc
+            if self.closed:
+                self._dispose(job, notify=False)
+
+    def poll(self):
+        if self.closed:
+            return None
+        app = _app()
+        from . import save_queue
+        try:
+            reply = self.native.request('tick', guard=_load_guard(),
+                paused=bool(app.active_command is not None or app.ctx.undo.recording or save_queue.busy() or self.host_paused()))
+            action, job = reply['action'], reply['job']
+            if action == 'start':
+                import threading
+                item = self.payloads[job]
+                try:
+                    threading.Thread(target=self._work,args=(job,item),name='narwhal-load',daemon=True).start()
+                except Exception as exc:
+                    item['error'] = exc
+                    self.native.request('complete',job=job,success=False)
+            elif action == 'hydrate':
+                from . import narwhal_document
+                item = self.payloads[job]
+                try:
+                    if item['hydration'] is None:
+                        item['hydration'] = narwhal_document.begin_load(item['prepared'])
+                    candidate = item['hydration'].step()
+                    if candidate is not None:
+                        item['candidate'] = candidate
+                        self.native.request('hydrated',job=job,success=True)
+                except Exception as exc:
+                    item['error'] = exc
+                    self.native.request('hydrated',job=job,success=False)
+            elif action in ('commit', 'error', 'cancel'):
+                item = self.payloads[job]
+                try:
+                    if action == 'commit':
+                        item['prepared'].check_source()
+                        message = item['apply'](item['candidate'],item['path'])
+                        if message:
+                            app.log(message)
+                    elif action == 'error':
+                        app.log(f"Could not load {item['path']}: {item['error']}")
+                    else:
+                        app.log('Load cancelled: superseded, or the current document changed')
+                except Exception as exc:
+                    app.log(f"Could not load {item['path']}: {exc}")
+                finally:
+                    self._dispose(job)
+                self.changed()
+            elif action == 'idle':
+                self.polling = False
+                return None
+        except Exception as exc:
+            app.log(f'Background load failed: {exc}; no request was replayed')
+            self.changed()
+            try:
+                self.close()
+            except Exception:
+                pass
+            return None
+        return .05
+
+    def close(self):
+        if self.closed:
+            return
+        self.closed = True
+        reply = self.native.request('close')
+        for job in (reply['replaced'],reply['job']):
+            if job is not None:
+                self._dispose(job)
+
+
+_load_host = None
+
+
+def install_background_loading(scheduler, changed, paused=None):
+    global _load_host
+    if _load_host is None or _load_host.closed:
+        _load_host = _LoadHost(scheduler,changed,paused)
+
+
+def background_loading_enabled():
+    # An installed-but-failed native path must refuse, not fall back to sync loading.
+    return _load_host is not None
+
+
+def background_load(path, apply, *, strict=True, done=None):
+    if not background_loading_enabled():
+        raise RuntimeError('Native background loading is not installed')
+    return _load_host.request(path,apply,strict,done)
+
+
+def stop_background_loads():
+    if _load_host is not None:
+        _load_host.close()
+
+
 def _normalise(path):
     """A typed/picked path -> an absolute native document path, or a refusal."""
     p = os.path.abspath(os.path.expanduser((path or "").strip().strip('"')))
@@ -305,12 +462,23 @@ class OpenCmd(_FileCommand):
             _rebuild_display()
             recent_add(p)
             return msg, True
+        if background_loading_enabled():
+            try:
+                return background_load(p, self._publish)[1], True
+            except Exception as exc:
+                return f"Could not start native load: {exc}", True
         try:
             from . import narwhal_document
             model = narwhal_document.load_model(p)
-            narwhal_document.commit_model(app, model, p)
+            return self._publish(model,p), True
         except (FileNotFoundError, narwhal_document.NarwhalDocumentError) as e:
             return f"Could not open {p}: {e}", True
+
+    @staticmethod
+    def _publish(model, p):
+        from . import narwhal_document
+        app = _app()
+        narwhal_document.commit_model(app, model, p)
         if is_recovery_copy(p):
             # OURS: a recovery copy is not the user's file. Saving back into the recovery
             # folder would hide the work where pruning deletes it, so the document opens
@@ -321,10 +489,10 @@ class OpenCmd(_FileCommand):
             app._saved_history_state = _NEVER_SAVED  # see AppState.doc_modified
             drawn = _rebuild_display()
             return (f"Opened the recovered copy {p} ({model.object_count()} objects, "
-                    f"{drawn} drawn) -- Save asks where to keep it"), True
+                    f"{drawn} drawn) -- Save asks where to keep it")
         drawn = _rebuild_display()
         recent_add(p)
-        return f"Opened {p} ({model.object_count()} objects, {drawn} drawn)", True
+        return f"Opened {p} ({model.object_count()} objects, {drawn} drawn)"
 
 
 # ---------------------------------------------------------------------------

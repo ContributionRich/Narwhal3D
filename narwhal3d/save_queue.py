@@ -17,8 +17,11 @@ while everything that touches the model stays on the main thread:
      `narwhal_document._recover_from_refusal` on the current model, exactly as
      `save_model` does, then re-staged and validated again in the background.
 
-One save is in flight at a time; a request made meanwhile is queued and the newest one
-wins. AutoSave never queues behind a user save (the caller retries later). EXIT stays
+Rust application-core owns request order: one active save and one newest pending
+user save. Busy AutoSave declines natively. Python retains only opaque host payloads,
+Blender scheduling and exact-kernel repair callbacks. There is no Python queue policy.
+The original Python coordinator is backed up outside application imports.
+AutoSave never queues behind a user save (the caller retries later). EXIT stays
 synchronous: `drain` finishes the in-flight save (bounded) on the calling thread.
 
 Headless (no `install`) nothing here runs: `file_commands` saves synchronously.
@@ -41,7 +44,8 @@ MAX_RESTAGES = 3
 _scheduler = None
 _polling = False
 _job = None
-_pending = None
+_coordinator = None
+_payloads = {}
 #: optional UI hook (redraw the command line) after a save starts or finishes
 on_change = None
 
@@ -55,15 +59,21 @@ def _app():
 def install(scheduler):
     """Enable background saving; `scheduler(fn)` must call `fn` on the main thread
     repeatedly (every returned interval) until it returns None."""
-    global _scheduler, _polling
+    global _scheduler, _polling, _coordinator
+    if _coordinator is None:
+        from .native_document import SaveJobs
+        _coordinator = SaveJobs()
     _scheduler = scheduler
     _polling = False
 
 
 def uninstall():
     """Disable background saving (tests). Any save in flight is finished first."""
-    global _scheduler
+    global _scheduler, _coordinator
     drain()
+    if _coordinator is not None:
+        _coordinator.request('close')
+        _coordinator = None
     _scheduler = None
 
 
@@ -72,15 +82,15 @@ def enabled():
 
 
 def busy():
-    return _job is not None or _pending is not None
+    return _coordinator is not None and _coordinator.request('info')['action']=='busy'
 
 
 def intended_path():
     """Where the newest queued or running USER save will write, or None."""
-    for item in (_pending, _job):
-        if item is not None and item.kind == USER and item.target:
-            return item.target
-    return None
+    if _coordinator is None:
+        return None
+    job = _coordinator.request('intended')['job']
+    return _payloads[job].target if job is not None else None
 
 
 class _Job:
@@ -159,13 +169,18 @@ def request_save(target, kind=USER):
     background. Returns ``(ok, message)`` for the command line; ok is False only when
     the save failed before it could go to the background. A save already running makes
     this the queued request (replacing any older queued one)."""
-    global _pending
+    if _coordinator is None:
+        raise RuntimeError('Native background-save coordination is not installed')
+    decision = _coordinator.request('enqueue',autosave=kind==AUTOSAVE)
+    if decision['action']=='declined':
+        return False, None
     job = _Job(kind, target)
+    job.native_id = decision['job']
+    _payloads[job.native_id] = job
+    if decision['replaced'] is not None:
+        _payloads.pop(decision['replaced'])
     name = os.path.basename(target)
-    if busy():
-        if kind == AUTOSAVE:
-            return False, None
-        _pending = job
+    if decision['action']=='queued':
         _ensure_polling()
         return True, f"Save queued: {name} is saved when the save in progress finishes"
     job.defer_log = True
@@ -186,10 +201,8 @@ def request_save(target, kind=USER):
 def request_autosave(target):
     """Start a background recovery copy. False when a save is already running (try
     again later); True once attempted (a failure is logged, as a sync autosave's is)."""
-    if busy():
-        return False
-    request_save(target, AUTOSAVE)
-    return True
+    ok, message = request_save(target, AUTOSAVE)
+    return ok or message is not None
 
 
 def _start(job):
@@ -337,14 +350,18 @@ def _fail(job, exc):
 def _end(job):
     global _job
     if _job is job:
+        _coordinator.request('finish',job=job.native_id)
+        _payloads.pop(job.native_id)
         _job = None
     _changed()
 
 
 def _start_pending():
-    global _pending
-    job, _pending = _pending, None
-    if job is not None:
+    if _coordinator is None:
+        return
+    decision = _coordinator.request('next')
+    if decision['action']=='start':
+        job = _payloads[decision['job']]
         if job.kind == USER:
             _app().log(f"Saving {os.path.basename(job.target)}\u2026")
         _start(job)
@@ -357,13 +374,13 @@ def poll():
         job = _job
         if job is not None and job.thread is not None and not job.thread.is_alive():
             _complete(job)
-        if _job is None and _pending is not None:
+        if _job is None:
             _start_pending()
     except Exception as exc:  # noqa: BLE001 -- the poller must never die with a save open
         print(f"[narwhal3d] background save failed: {exc!r}")
         if _job is not None and (_job.thread is None or not _job.thread.is_alive()):
             _fail(_job, exc)
-    if _job is None and _pending is None:
+    if not busy():
         _polling = False
         return None
     return POLL_INTERVAL
@@ -371,14 +388,10 @@ def poll():
 
 def drain(timeout=None):
     """Finish every save on THIS (the main) thread: the running one, any repair and
-    re-validation it needs, then a queued USER save. A queued autosave is dropped (the
-    caller is about to save or exit). Returns False if `timeout` seconds pass first --
+    re-validation it needs, then a queued USER save. Rust never queues an AutoSave behind busy work. Returns False if `timeout` seconds pass first --
     the running save is then left to finish on its own; nothing is half-written."""
-    global _pending
-    if _pending is not None and _pending.kind == AUTOSAVE:
-        _pending = None
     deadline = None if timeout is None else time.monotonic() + timeout
-    while _job is not None or _pending is not None:
+    while busy():
         job = _job
         if job is None:
             _start_pending()

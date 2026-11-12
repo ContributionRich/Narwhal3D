@@ -286,6 +286,8 @@ def draw(context, window_level=False):
                 available = row.get('enabled', True) and (row.get('children') or row.get('action') is not None)
                 ink = color('TEXT_DISABLED' if not available else
                             'BAR_TEXT_STRONG' if selected else 'TEXT')
+                if available and row.get('danger'):
+                    ink = (1.0, 0.85, 0.87, 1.0) if selected else (208/255, 77/255, 93/255, 1.0)
                 baseline = box[1] + 6*s
                 right = x1 - 14*s
                 if row.get('children'):

@@ -167,8 +167,41 @@ def _seal_macos_worker():
         fail(f"macOS document-worker containment failed: {exc}")
 
 
+_runtime_images = []
+
+
+def _match_parent_runtime_images():
+    """Load witnessed host runtime images before the unchanged identity check."""
+    import ctypes
+    encoded = os.environ.pop(document_admission.WORKER_IMAGES_ENV, None)
+    if encoded is None:
+        return
+    try:
+        if len(encoded.encode('utf-8'))>65536:
+            raise ValueError('runtime image inventory exceeds limit')
+        images = json.loads(encoded)
+        if not isinstance(images,list) or len(images)>16:
+            raise ValueError('invalid runtime image inventory')
+        seen = set()
+        for item in images:
+            if not isinstance(item,list) or len(item)!=2 or not all(isinstance(value,str) for value in item):
+                raise ValueError('invalid runtime image witness')
+            path, expected = item
+            if (not Path(path).is_absolute() or path in seen
+                    or not Path(path).name.lower().startswith(('libtbb','tbb'))
+                    or len(expected)!=64):
+                raise ValueError('invalid runtime image path/digest')
+            if document_admission._binary_identity(path)[1]!=expected:
+                raise ValueError('runtime image changed before worker launch')
+            seen.add(path)
+            _runtime_images.append(ctypes.CDLL(path))
+    except Exception as exc:
+        fail(f'worker threading-runtime qualification failed: {exc}')
+
+
 def main():
     _seal_macos_worker()
+    _match_parent_runtime_images()
     args = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
     if len(args) != 1:
         fail("usage: document_worker.py -- <extracted-root>")

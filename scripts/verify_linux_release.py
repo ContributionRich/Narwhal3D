@@ -49,7 +49,7 @@ NATIVE_COMPONENTS = (
     "narwhal-cdr-multiversion", "narwhal-document-core", "narwhal-welcome",
     "libnarwhal_automation.so", "narwhal-automation",
     "libnarwhal_application_core.so", "libnarwhal_ui_core.so",
-    "narwhal-picture-trace",
+    "narwhal-picture-trace", "narwhal-library-core",
 )
 PACKAGED_ACCELERATORS = (
     "libnarwhal_geometry_core.so", "libnarwhal_platform_core.so",
@@ -60,6 +60,8 @@ APPLICATION_CORE_HISTORY_ABI = 1
 APPLICATION_CORE_EXPORTS = (
     "narwhal_history_abi", "narwhal_history_json",
     "narwhal_session_abi", "narwhal_session_json",
+    "narwhal_load_jobs_abi", "narwhal_load_jobs_json",
+    "narwhal_save_jobs_abi", "narwhal_save_jobs_json",
 )
 NATIVE_LIBRARY_ABIS = {
     "libnarwhal_application_core.so": ("narwhal_session_abi", 1),
@@ -597,6 +599,10 @@ def verify_native_library_abis(app_root: Path, python: Path, environment: dict[s
     ]
     abi_specs.append(("application_core_history", str(app_root / "narwhal3d/native/libnarwhal_application_core.so"),
                       "narwhal_history_abi", APPLICATION_CORE_EXPORTS))
+    for job_kind in ("load", "save"):
+        abi_specs.append((f"application_core_{job_kind}_jobs",
+                          str(app_root / "narwhal3d/native/libnarwhal_application_core.so"),
+                          f"narwhal_{job_kind}_jobs_abi", APPLICATION_CORE_EXPORTS))
     try:
         completed = subprocess.run(
             [str(python), "-I", "-c", abi_probe, json.dumps(abi_specs)],
@@ -608,6 +614,7 @@ def verify_native_library_abis(app_root: Path, python: Path, environment: dict[s
         raise VerificationError(f"cannot load packaged native accelerators: {detail or exc}") from exc
     expected_abis = {name: expected for name, (_symbol, expected) in NATIVE_LIBRARY_ABIS.items()}
     expected_abis["application_core_history"] = APPLICATION_CORE_HISTORY_ABI
+    expected_abis.update(application_core_load_jobs=1,application_core_save_jobs=1)
     if actual_abis != expected_abis:
         raise VerificationError(
             f"packaged native accelerator ABIs: expected {expected_abis}, got {actual_abis}")
@@ -946,7 +953,7 @@ def self_check() -> None:
         "narwhal-cdr-multiversion", "narwhal-document-core", "narwhal-welcome",
         "libnarwhal_automation.so", "narwhal-automation",
         "libnarwhal_application_core.so", "libnarwhal_ui_core.so",
-        "narwhal-picture-trace",
+        "narwhal-picture-trace", "narwhal-library-core",
     ):
         raise VerificationError("self-check found an incomplete native component set")
     if PACKAGED_ACCELERATORS != (

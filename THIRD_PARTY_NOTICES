@@ -76,3 +76,9 @@ Trademarks
 ----------
 
 Narwhal 3D is an independent project. Blender, CorelDRAW, Adobe Illustrator, AutoCAD, Open CASCADE, and other names belong to their respective owners and are used only to identify third-party software or file formats.
+
+Library native helper
+---------------------
+Use: user asset catalogue, validation, ZIP interchange and panel layout.
+The source-locked Rust dependency inventory and full upstream license texts are
+in licenses/Library-Rust-Dependencies.txt. Project helper code is GPL-3.0-or-later.

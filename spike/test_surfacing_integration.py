@@ -191,7 +191,7 @@ class BridgeContractTests(unittest.TestCase):
         self._check_worker_environment(ambient_hints="/untrusted/ambient-admission-hints")
 
     def _check_worker_environment(self, ambient_hints=None):
-        from narwhal3d import narwhal_document as nd
+        from narwhal3d import narwhal_document as nd, document_admission
         cp = nd.converter_process
         with tempfile.TemporaryDirectory(prefix='surfacing-worker-env-') as tmp:
             root = Path(tmp)
@@ -214,12 +214,14 @@ class BridgeContractTests(unittest.TestCase):
                     # is stubbed; the full round-trip below uses the actual worker.
                     with patch.dict(os.environ, environment, clear=True), \
                             patch.object(cp, '_supervisor', return_value=None), \
+                            patch.object(document_admission, 'worker_runtime_images', return_value='[]'), \
                             patch.object(cp, '_python_run', return_value=result) as spawn:
                         self.assertEqual(nd._validate_in_worker(root, 0), root/'validated')
                         argv, timeout, forwarded, limit, memory = spawn.call_args.args
                         self.assertEqual(argv, nd._worker_command(root))
                         self.assertEqual((timeout, limit, memory), (600, 65536, 4096))
-                        expected = {'PATH': os.defpath, 'NARWHAL_DOCUMENT_ADMISSION_HINTS': ''}
+                        expected = {'PATH': os.defpath, 'NARWHAL_DOCUMENT_ADMISSION_HINTS': '',
+                                    'NARWHAL_DOCUMENT_RUNTIME_IMAGES': '[]'}
                         if selected:
                             expected['NARWHAL_GEOMETRY_CORE'] = selected
                         self.assertEqual(forwarded, expected)

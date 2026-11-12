@@ -633,7 +633,7 @@ def negative_controls():
 def run():
     deadline = time.monotonic()+45
     while not (os.environ.get('NARWHAL3D_UI_READY') == '1' and ui._preferences_ready and
-               not ui._viewports_in_progress and ui.is_input_active() and len(ui._right_tab_boxes) == 5):
+               not ui._viewports_in_progress and ui.is_input_active() and len(ui._right_tab_boxes) == len(ui.rightpanel.TABS)):
         if time.monotonic() > deadline:
             raise RuntimeError('Bootstrap not ready within 45s')
         yield .1
@@ -648,7 +648,7 @@ def run():
     yield from settle()
     RESULT['window'] = [window().width, window().height]
     RESULT['scale'] = ui._ui_scale()
-    yield from tap('LEFTMOUSE', center(ui._right_tab_boxes[4]))
+    yield from tap('LEFTMOUSE', center(ui._right_tab_boxes[ui.rightpanel.tab_names().index("AI Assistant")]))
     check(ui.ai_panel_open(), 'actual existing AI tab click selects assistant')
     yield from settle()
     if MODE == 'paint-regression':

@@ -49,6 +49,17 @@ uint32_t narwhal_object_observation_abi(void); /* 1 */
 ptrdiff_t narwhal_object_registry_observe(const uint8_t *header, size_t header_length,
                                          const uint8_t *observation, size_t observation_length,
                                          uint8_t *output, size_t capacity);
+/* Load/save jobs ABI1: Rust scheduling only, no geometry or host pointers.
+ * JSON input/output <=64 KiB, minimum output4096; compact mutations never retry.
+ * Load guard validation runs before hydration and again before publication.
+ * Save never cancels its active job; queued user requests replace only pending work.
+ */
+uint32_t narwhal_load_jobs_abi(void);
+ptrdiff_t narwhal_load_jobs_json(const uint8_t *input, size_t length,
+                                uint8_t *output, size_t capacity);
+uint32_t narwhal_save_jobs_abi(void);
+ptrdiff_t narwhal_save_jobs_json(const uint8_t *input, size_t length,
+                                uint8_t *output, size_t capacity);
 #ifdef __cplusplus
 }
 #endif

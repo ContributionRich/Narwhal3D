@@ -831,7 +831,7 @@ else:
     raise SystemExit("unknown ui-core inventory mode")
 '@ | Set-Content -LiteralPath $UiInputsDriver -Encoding UTF8
 Run-Native $Python @('-B', $UiInputsDriver, $NarwhalSource, 'before', $UiInputsPath) 'record ui-core source inventory'
-foreach ($Crate in @("cdr_core", "cdr_multiversion", "welcome", "application_core", "picture_trace", "ui_core")) {
+foreach ($Crate in @("cdr_core", "cdr_multiversion", "welcome", "application_core", "picture_trace", "library_core", "ui_core")) {
     $Manifest = Join-Path $NarwhalSource "native\$Crate\Cargo.toml"
     Run-Native $Cmd @("/d", "/c", $CargoWrapper, "build", "--release", "--locked", "--manifest-path", $Manifest, "--target", "x86_64-pc-windows-msvc") "build $Crate with pinned Rust MSVC" $NarwhalSource
 }
@@ -864,7 +864,8 @@ foreach ($Component in @(
     @("cdr_core", "narwhal_cdr_core.dll"),
     @("cdr_multiversion", "narwhal-cdr-multiversion.exe"),
     @("welcome", "narwhal-welcome.exe"),
-    @("picture_trace", "narwhal-picture-trace.exe")
+    @("picture_trace", "narwhal-picture-trace.exe"),
+    @("library_core", "narwhal-library-core.exe")
 )) {
     $Built = Join-Path $NarwhalSource "native\$($Component[0])\target\x86_64-pc-windows-msvc\release\$($Component[1])"
     Copy-Item -LiteralPath $Built -Destination (Join-Path $NativeComponentDirectory $Component[1])
@@ -1151,6 +1152,13 @@ application.narwhal_history_abi.restype = ctypes.c_uint32
 if application.narwhal_history_abi() != 1:
     raise SystemExit("application-core history ABI mismatch")
 getattr(application, "narwhal_history_json")
+for job_kind in ("load", "save"):
+    abi = getattr(application, f"narwhal_{job_kind}_jobs_abi")
+    abi.argtypes = []
+    abi.restype = ctypes.c_uint32
+    if abi() != 1:
+        raise SystemExit(f"application-core {job_kind} jobs ABI mismatch")
+    getattr(application, f"narwhal_{job_kind}_jobs_json")
 if (native / "narwhal_application_core.dll").read_bytes() != (app / "runtime/windows-x86_64/bin/narwhal_application_core.dll").read_bytes():
     raise SystemExit("application-core runtime/adjacent copies differ")
 platform = ctypes.WinDLL(str(native / "narwhal_platform_core.dll"))

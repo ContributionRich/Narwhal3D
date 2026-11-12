@@ -66,18 +66,18 @@ check("and gives the full 100 px width increase to the panel body",
       (_wide["body"][2] - _wide["body"][0])
       - (_narrow["body"][2] - _narrow["body"][0]) == 100)
 
-print("\n== the five tabs in display order ==")
-check("there are exactly five tabs", len(rp.TABS) == 5)
-check("AI Assistant is directly beneath Bug Report",
+print("\n== the six tabs in display order ==")
+check("there are exactly six tabs", len(rp.TABS) == 6)
+check("Library sits between Bug Report and AI Assistant",
       rp.tab_names() == ("Layers", "Properties", "Display", "Bug Report",
-                         "AI Assistant"))
+                         "Library", "AI Assistant"))
 check("Layers is the authored default",
       rp.DEFAULT_TAB == 0 and rp.TABS[rp.DEFAULT_TAB].name == "Layers")
 panel_icons = {t.icon for t in rp.TABS}
 check("tabs use the exact approved v4.4 inspector icons",
       panel_icons == {"generated-panel-layers.png", "generated-panel-bug-report.png",
                       "generated-panel-properties.png", "generated-panel-display.png",
-                      "generated-panel-ai-assistant.png"}
+                      "generated-panel-library.png", "generated-panel-ai-assistant.png"}
       and all(rp.toolbars.icon_path(name) for name in panel_icons))
 check("icon filenames are distinct",
       len(panel_icons) == len(rp.TABS))
@@ -86,8 +86,8 @@ print("\n== honesty: which panel bodies exist, and which say they do not (rule 4
 # Pin the set of implemented bodies independently from the visible tab list.
 built = {t.name for t in rp.TABS if t.built}
 
-check(f"all five panel bodies now exist (built={sorted(built)})",
-      built == {"Layers", "Properties", "Display", "Bug Report", "AI Assistant"})
+check(f"all six panel bodies now exist (built={sorted(built)})",
+      built == {"Layers", "Properties", "Display", "Bug Report", "Library", "AI Assistant"})
 check("every UNBUILT tab still says WHY, by name",
       all(t.reason for t in rp.TABS if not t.built))
 check("and no BUILT tab carries a stale 'not built because' reason",
@@ -237,7 +237,7 @@ check("the body is below the caption row", by1 == H - rp.TITLE_H)
 
 print("\n== the tabs run TOP-DOWN (descending y), not bottom-up ==")
 tabs = box["tabs"]
-check("all five tabs fit in an 800 px band", len(tabs) == 5)
+check("all six tabs fit in an 800 px band", len(tabs) == 6)
 tops = [t[3] for t in tabs]
 check("tab tops strictly DESCEND (index 0 is the topmost)",
       all(tops[i] > tops[i + 1] for i in range(len(tops) - 1)))
@@ -274,7 +274,7 @@ check("title_h=0 gives a zero-height caption box",
       hosted["title"][3] - hosted["title"][1] == 0)
 check("title_h=0 gives the strip the full height", hosted["strip"][3] == H)
 check("title_h=0 gives the body the full height", hosted["body"][3] == H)
-check("title_h=0 still lays out five tabs", len(hosted["tabs"]) == 5)
+check("title_h=0 still lays out six tabs", len(hosted["tabs"]) == 6)
 check("title_h=0 puts the first tab at the very top",
       hosted["tabs"][0][3] == H)
 check("a title_h taller than the band is clamped",

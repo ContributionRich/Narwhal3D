@@ -139,6 +139,9 @@ for crate in selection_core platform_core cdr_core document_core; do
   cargo +"$TOOLCHAIN" build --release --locked --manifest-path "$ROOT/native/$crate/Cargo.toml"
 done
 
+step "Rust Library helper"
+"$PYTHON" "$ROOT/scripts/build_library_core.py" --stage
+
 step "Selection core (verified and staged in artifacts/selection-core)"
 # run_tests.sh runs the selection-core ABI, adapter and pick suites only when this
 # artifact exists; without it they were silently skipped on a fresh clone.

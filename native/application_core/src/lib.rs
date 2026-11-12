@@ -1,8 +1,10 @@
 //! Persistent, process-local document-metadata authority. See README.md for ABI v1.
 mod history;
+mod load_jobs;
 mod object_registry;
 pub mod observation;
 mod ordinal_map;
+mod save_jobs;
 mod session;
 mod table;
 mod wire;

@@ -242,7 +242,7 @@ def ui_mutant(name,old,new):
 
 def run():
     global NATIVE,SERVER
-    yield from wait(lambda:os.environ.get('NARWHAL3D_UI_READY')=='1' and UI._preferences_ready and UI.is_input_active() and len(UI._right_tab_boxes)==5,'normal owned GUI ready',50)
+    yield from wait(lambda:os.environ.get('NARWHAL3D_UI_READY')=='1' and UI._preferences_ready and UI.is_input_active() and len(UI._right_tab_boxes)==len(UI.rightpanel.TABS),'normal owned GUI ready',50)
     check(not bpy.app.background and UI.app_state.model.object_count()==0,'real visible empty disposable document')
     NATIVE=NativeBridge(Path(os.environ['AI_REVIEW_EXECUTABLE'])).__enter__()
     UI.ai_assistant._load_workflow_library=lambda *_a,**_kw:NATIVE.library
@@ -256,7 +256,7 @@ def run():
     SERVER=ThreadingHTTPServer(('127.0.0.1',0),Provider);threading.Thread(target=SERVER.serve_forever,daemon=True).start()
     endpoint='http://127.0.0.1:'+str(SERVER.server_port)+'/v1'
     check(UI._apply_ai_settings(UI.ai_assistant.set_provider('openai_compatible','visible-review-fixture',endpoint)) is None,'fixture recipient configured in disposable settings')
-    yield from tap('LEFTMOUSE',center(UI._right_tab_boxes[4]));yield .2
+    yield from tap('LEFTMOUSE',center(UI._right_tab_boxes[UI.rightpanel.tab_names().index("AI Assistant")]));yield .2
     check(UI.ai_panel_open(),'AI panel opened by actual event')
     yield from send('sphere',consent=True)
     check(UI.app_state.model.object_count()==0,'no creation before human approval')
@@ -306,7 +306,7 @@ def run():
     check(UI._ai.get('action_pending') is pending,'closing Settings did not approve or reject')
     yield from tap('LEFTMOUSE',center(UI._right_tab_boxes[0]));yield .2
     check(UI._ai.get('action_pending') is pending,'tab blur retains pending review without approval')
-    yield from tap('LEFTMOUSE',center(UI._right_tab_boxes[4]));yield .2
+    yield from tap('LEFTMOUSE',center(UI._right_tab_boxes[UI.rightpanel.tab_names().index("AI Assistant")]));yield .2
     yield from tap('ESC');yield from wait(lambda:UI.ai_assistant_state().status=='connected','Escape in review rejects via native result')
     yield from fresh();yield from send('changed_pins');old_tol=UI.app_state.model.file.Settings.ModelAbsoluteTolerance
     UI.app_state.model.file.Settings.ModelAbsoluteTolerance=old_tol*2

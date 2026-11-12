@@ -130,7 +130,7 @@ class PanelTests(unittest.TestCase):
     def test_inspector_and_display_wrapping(self):
         self.assertEqual([t.icon for t in self.rp.TABS], [
             'generated-panel-' + n + '.png' for n in
-            ('layers', 'properties', 'display', 'bug-report', 'ai-assistant')])
+            ('layers', 'properties', 'display', 'bug-report', 'library', 'ai-assistant')])
         for width in (160, 208, 400):
             lay = self.rp.display_panel_layout((0, 0, width, 700),
                                                ['Top', 'Front', 'Right'], ['Wireframe', 'Shaded', 'Rendered'])
@@ -209,6 +209,7 @@ class PanelTests(unittest.TestCase):
                            'region': (400, 10)},
             'ai_assistant': self.ai, 'ai_presentation': self.p, 'ui_icon_data': icons,
             'design': design, 'bugreport': self.br, 'textfield': pkg.textfield,
+            'library_panel': types.SimpleNamespace(handle_event=lambda event: False),
             '_ui_scale': lambda: 1, '_text_width': lambda text, fs: self.measure(text),
             '_bug_measure': lambda fs: self.measure,
             '_fit_panel_text': lambda text, width, fs: text,

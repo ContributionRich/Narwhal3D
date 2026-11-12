@@ -128,6 +128,7 @@ from . import views
 from . import viewport_menu_data
 from . import design
 from . import rightpanel
+from . import library_panel
 from .object_properties import ObjectProperties
 from .views import (
     VIEW_TOP, VIEW_FRONT, VIEW_RIGHT, VIEW_PERSP,
@@ -3318,6 +3319,8 @@ def draw_right_band():
             print(f"[narwhal3d] bug report panel failed: {e!r}")
     else:
         _bug["lay"] = None
+    if rightpanel.TABS[_right_tab].name == "Library":
+        library_panel.draw(sys.modules[__name__], shader, region, box)
     if rightpanel.TABS[_right_tab].name == "AI Assistant":
         try:
             _draw_ai_panel(shader, region, box)
@@ -11259,6 +11262,8 @@ def _tool_scroll_event(event):
 
 def _shell_chrome_event(event):
     """UI gets first refusal: a title/control click is never a modeling point."""
+    if library_panel.handle_event(event):
+        return True
     if _tool_scroll_event(event):
         return True
     if _ai_transcript_event(event):
@@ -19764,6 +19769,10 @@ def _exit_handler(*_args):
     except Exception as exc:  # noqa: BLE001 -- cleanup must not suppress document recovery
         print("[narwhal3d] AI shutdown failed (" + type(exc).__name__ + "); continuing exit recovery")
     from . import file_commands
+    try:
+        file_commands.stop_background_loads()
+    except Exception as exc:
+        print(f"[narwhal3d] load cancellation failed: {exc}")
 
     _remember_preferences(user_preference_snapshot())
     try:
@@ -19844,6 +19853,10 @@ def _install_exit_handling():
     save_queue.install(lambda poll: bpy.app.timers.register(
         poll, first_interval=save_queue.POLL_INTERVAL, persistent=True))
     save_queue.on_change = redraw_cmdbar
+    file_commands.install_background_loading(
+        lambda poll: bpy.app.timers.register(poll, first_interval=.05, persistent=True),
+        lambda: (redraw_cmdbar(), _tag_redraw_bands(), _tag_redraw_viewports()),
+        paused=lambda: bpy.app.is_job_running('RENDER'))
     if not bpy.app.timers.is_registered(_autosave_tick):
         bpy.app.timers.register(_autosave_tick, first_interval=60.0, persistent=True)
     crashed = file_commands.begin_session()
@@ -24814,6 +24827,7 @@ def register():
 
 def unregister():
     global _window_chrome_handle
+    library_panel.close()
     _ai_shutdown()
     ai_settings_popup.close()
     import sys

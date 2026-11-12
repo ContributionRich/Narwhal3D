@@ -79,6 +79,11 @@ run "native presentation: OpenGL and Metal-only guards" "$PYTHON" scripts/test_p
 
 # Required parsers and document sessions must be ready before UI caller imports.
 command -v cargo >/dev/null 2>&1 || { printf 'ERROR: required native source compiler unavailable\n' >&2; exit 2; }
+run "Rust library-core format" cargo +1.95.0 fmt --manifest-path native/library_core/Cargo.toml --check
+run "Rust library-core Clippy" cargo +1.95.0 clippy --manifest-path native/library_core/Cargo.toml --all-targets --offline --locked -- -D warnings
+run "Rust library-core tests" cargo +1.95.0 test --manifest-path native/library_core/Cargo.toml --offline --locked
+run "Rust library-core build" cargo +1.95.0 build --release --manifest-path native/library_core/Cargo.toml --offline --locked
+export NARWHAL_LIBRARY_CORE="$ROOT/native/library_core/target/release/narwhal-library-core"
 run "Rust pure-core source gate" "$PYTHON" scripts/check_pure_core.py
 PURE_CORE="$ROOT/native/pure_core/target/x86_64-unknown-linux-gnu/release/libnarwhal_pure_core.so"
 export NARWHAL_PURE_CORE="$PURE_CORE"
@@ -412,6 +417,7 @@ PURE_SUITES=(
     spike/test_zoom_options.py
     spike/test_menubar_resource.py
     spike/test_rightpanel.py
+    spike/test_library_store.py
     spike/test_colordialog.py
     spike/test_glyphs.py
     spike/test_statusbar.py
@@ -502,6 +508,7 @@ PURE_SUITES=(
 )
 
 BLENDER_SUITES=(
+    spike/test_library_geometry.py
     spike/audit_representation.py
     spike/test_boolean.py
     spike/test_tessellate.py
@@ -531,6 +538,7 @@ BLENDER_SUITES=(
     spike/addon_e2e.py
     spike/test_app_drawn.py
     spike/test_file_commands.py
+    spike/test_background_load.py
     spike/test_import.py
     spike/test_export_cmd.py
     spike/test_print_cmd.py
@@ -612,6 +620,7 @@ if [[ -n "${DISPLAY:-}" || -n "${WAYLAND_DISPLAY:-}" ]]; then
         printf '\nSKIP: installed AI GUI acceptance (stage reviewed automation executable/library first)\n'
     fi
     run "preview responsiveness live" "$PYTHON" spike/test_preview_responsiveness_gui.py --run integration
+    run "Library actual capture, insertion, drag and Undo" "$PYTHON" spike/test_library_gui.py --launch
     run "drawing constraints live" "$PYTHON" spike/test_drawing_behavior_gui.py --launch
     run "Zoom reference-scale actual projection live" "$PYTHON" spike/test_zoom_projection_gui.py --launch
     run "Curve degree and AI evidence live" "$PYTHON" spike/review_v4/test_curve_degree_gui.py --launch

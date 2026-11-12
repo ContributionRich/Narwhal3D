@@ -29,6 +29,8 @@ APPLICATION_CORE_HISTORY_ABI = 1
 APPLICATION_CORE_EXPORTS = (
     "narwhal_history_abi", "narwhal_history_json",
     "narwhal_session_abi", "narwhal_session_json",
+    "narwhal_load_jobs_abi", "narwhal_load_jobs_json",
+    "narwhal_save_jobs_abi", "narwhal_save_jobs_json",
 )
 APPLICATION_CORE_REGISTRY_ABI = 1
 APPLICATION_CORE_OBSERVATION_ABI = 1
@@ -59,6 +61,7 @@ NATIVE_COMPONENT_PATHS = {
     "narwhal-document-core.exe": "app/runtime/windows-x86_64/bin/narwhal-document-core.exe",
     "narwhal-welcome.exe": "app/runtime/windows-x86_64/bin/narwhal-welcome.exe",
     "narwhal-picture-trace.exe": "app/runtime/windows-x86_64/bin/narwhal-picture-trace.exe",
+    "narwhal-library-core.exe": "app/runtime/windows-x86_64/bin/narwhal-library-core.exe",
     "narwhal_geometry_core.dll": "app/narwhal3d/native/narwhal_geometry_core.dll",
     "narwhal_platform_core.dll": "app/narwhal3d/native/narwhal_platform_core.dll",
     "narwhal_pure_core.dll": "app/narwhal3d/native/narwhal_pure_core.dll",
@@ -112,6 +115,7 @@ REQUIRED = {
     "app/licenses/TraceDraw-Rust-Dependencies.txt", "windows-release-manifest.json",
     "app/licenses/PictureTrace-Rust-Dependencies.txt", "app/licenses/VectorCraft-MIT.txt",
     "app/licenses/VectorCraft-Apache-2.0.txt", "app/licenses/VectorCraft-NOTICE.txt",
+    "app/licenses/Library-Rust-Dependencies.txt",
     "app/runtime/windows-x86_64/bin/narwhal_cdr_core.dll",
     "app/runtime/windows-x86_64/bin/narwhal-converter-supervisor.exe",
     "app/runtime/windows-x86_64/bin/narwhal-cdr-multiversion.exe",
@@ -447,6 +451,8 @@ def verify_application_core_identity(path: Path) -> dict[str, object]:
     identity = inspect_pe_dll(path, constant_exports={
         "narwhal_session_abi": APPLICATION_CORE_ABI,
         "narwhal_history_abi": APPLICATION_CORE_HISTORY_ABI,
+        "narwhal_load_jobs_abi": 1,
+        "narwhal_save_jobs_abi": 1,
         "narwhal_object_registry_abi": APPLICATION_CORE_REGISTRY_ABI,
         "narwhal_object_observation_abi": APPLICATION_CORE_OBSERVATION_ABI,
     })

@@ -68,6 +68,24 @@ def exact_box(width=4):
 
 
 class WorkerBoundsTests(unittest.TestCase):
+    def test_thread_runtime_images_are_digest_qualified_before_loading(self):
+        import os
+        from narwhal3d import document_admission
+        with tempfile.TemporaryDirectory() as directory:
+            image=Path(directory)/'libtbb-fixture.so'
+            image.write_bytes(b'qualified fixture, never executed')
+            digest=hashlib.sha256(image.read_bytes()).hexdigest()
+            original=list(worker._runtime_images)
+            try:
+                with patch.dict(os.environ,{document_admission.WORKER_IMAGES_ENV:json.dumps([[str(image),digest]])}), patch('ctypes.CDLL',return_value=object()) as load:
+                    worker._match_parent_runtime_images()
+                    load.assert_called_once_with(str(image))
+                for value in ([[str(image),'0'*64]],[[str(image.with_name('unrelated.so')),digest]],{},[[str(image),digest]]*17):
+                    with self.subTest(value=str(value)[:80]), patch.dict(os.environ,{document_admission.WORKER_IMAGES_ENV:json.dumps(value)}), patch('ctypes.CDLL') as load:
+                        with self.assertRaises(SystemExit):worker._match_parent_runtime_images()
+                        load.assert_not_called()
+            finally:worker._runtime_images[:]=original
+
     def test_fresh_witness_hit_independent_returns_and_lifetime(self):
         shape = ob._nurbs_convert(ob.make_sphere(2))
         native = ob.tight_bbox(shape)

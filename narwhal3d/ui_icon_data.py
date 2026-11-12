@@ -96,6 +96,7 @@ INSPECTOR_ICONS = {
     "Properties": "generated-panel-properties.png",
     "Display": "generated-panel-display.png",
     "Bug Report": "generated-panel-bug-report.png",
+    "Library": "generated-panel-library.png",
     "AI Assistant": "generated-panel-ai-assistant.png",
 }
 AI_REPLY_ICON = "narwhal-ai-mark.png"

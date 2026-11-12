@@ -28,7 +28,7 @@ linux_native = {
     "libnarwhal_selection_core.so", "narwhal-converter-supervisor",
     "narwhal-cdr-multiversion", "narwhal-document-core", "narwhal-welcome",
     "libnarwhal_automation.so", "narwhal-automation", "libnarwhal_application_core.so",
-    "libnarwhal_ui_core.so", "narwhal-picture-trace",
+    "libnarwhal_ui_core.so", "narwhal-picture-trace", "narwhal-library-core",
 }
 windows_native = {
     "narwhal_cdr_core.dll", "narwhal_geometry_core.dll",
@@ -36,7 +36,7 @@ windows_native = {
     "narwhal_selection_core.dll", "narwhal-converter-supervisor.exe",
     "narwhal-cdr-multiversion.exe", "narwhal-document-core.exe",
     "narwhal-welcome.exe", "narwhal_automation.dll", "narwhal_application_core.dll",
-    "narwhal_ui_core.dll", "narwhal-picture-trace.exe",
+    "narwhal_ui_core.dll", "narwhal-picture-trace.exe", "narwhal-library-core.exe",
 }
 assert set(linux.NATIVE_COMPONENTS) == linux_native
 assert set(windows.NATIVE_COMPONENT_PATHS) == windows_native
@@ -56,6 +56,8 @@ assert {
 } <= windows.REQUIRED
 assert {"PictureTrace-Rust-Dependencies.txt", "VectorCraft-MIT.txt", "VectorCraft-Apache-2.0.txt",
         "VectorCraft-NOTICE.txt"} <= set(linux.REQUIRED_LICENSE_FILES)
+assert "Library-Rust-Dependencies.txt" in linux.REQUIRED_LICENSE_FILES
+assert "app/licenses/Library-Rust-Dependencies.txt" in windows.REQUIRED
 assert set(windows.GENERATED_PACKAGE_FILES) == {
     "narwhal3d/native/narwhal_application_core.dll",
     "narwhal3d/native/narwhal_ui_core.dll",
@@ -75,6 +77,7 @@ for source, names in {
     "embedded_cdr.py": ("narwhal-cdr-multiversion",),
     "converter_process.py": ("narwhal-converter-supervisor",),
     "ai_assistant.py": ("libnarwhal_automation.so", "narwhal_automation.dll"),
+    "native_library.py": ("narwhal-library-core", "narwhal-library-core.exe", "runtime"),
     "trace_picture.py": ("narwhal-picture-trace", "narwhal-picture-trace.exe", "runtime"),
 }.items():
     text = (ROOT / "narwhal3d" / source).read_text(encoding="utf-8")
@@ -100,4 +103,4 @@ assert "--exact-save-helper-dir" in windows_assembler_source and "--document-obs
 assert 'manifest.get("excluded_components") != ["optional-converters", "installer-file-associations"]' in windows_verifier
 assert '"physical_gpu_real_window": False' in (ROOT / "scripts/assemble_windows_release.py").read_text(encoding="utf-8")
 assert '"code_signed": False' in (ROOT / "scripts/assemble_windows_release.py").read_text(encoding="utf-8")
-print("package completeness: Linux 13/13 native, Windows 12/12 native, source/launch/licenses/runtime and exclusions complete")
+print(f"package completeness: Linux {len(linux_native)} native, Windows {len(windows_native)} native, source/launch/licenses/runtime and exclusions complete")

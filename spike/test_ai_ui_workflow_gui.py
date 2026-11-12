@@ -346,7 +346,7 @@ def mutations():
 
 def run():
     yield from wait(lambda: os.environ.get("NARWHAL3D_UI_READY") == "1" and ui._preferences_ready and
-        not ui._viewports_in_progress and ui.is_input_active() and len(ui._right_tab_boxes) == 5,
+        not ui._viewports_in_progress and ui.is_input_active() and len(ui._right_tab_boxes) == len(ui.rightpanel.TABS),
         "normal visible bootstrap ready", 45)
     check(not bpy.app.background and ui.app_state.model.object_count() == 0, "visible disposable empty document")
     for line in ("Line", "0,0,0", "10,0,0"):
@@ -360,7 +360,7 @@ def run():
     before = ui.app_state.model.file.Encode()
     undo = ui.app_state.ctx.undo.top_serial
     yield .3
-    yield from tap("LEFTMOUSE", center(ui._right_tab_boxes[4]))
+    yield from tap("LEFTMOUSE", center(ui._right_tab_boxes[ui.rightpanel.tab_names().index("AI Assistant")]))
     check(ui.ai_panel_open(), "actual AI tab clicked")
     yield .3
     check(ui._apply_ai_settings(ai.set_provider("openai_compatible", "visible-fixture", ENDPOINT)) is None, "disposable settings committed")
@@ -408,7 +408,7 @@ def run():
         check(ui.bug_report_state().category == 'missing', 'real category popup keyboard selects Missing feature')
         check([name for name, _ in ui._bug['lay']['buttons']] == ['submit'], 'one full-width report submit action')
         capture('bug_v44_' + theme)
-        yield from tap('LEFTMOUSE', center(ui._right_tab_boxes[4]))
+        yield from tap('LEFTMOUSE', center(ui._right_tab_boxes[ui.rightpanel.tab_names().index("AI Assistant")]))
         yield .2
     ui.set_shell_theme('light')
 

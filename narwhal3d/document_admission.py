@@ -192,6 +192,33 @@ def _runtime_image(path):
         ("_rhino3dm.", "ocp.", "libnarwhal_geometry_core.", "narwhal_geometry_core.")))
 
 
+WORKER_IMAGES_ENV = "NARWHAL_DOCUMENT_RUNTIME_IMAGES"
+
+
+def worker_runtime_images():
+    """Host-loader witnesses for Blender's TBB images, not document-supplied paths.
+
+    A standalone bundled Python lacks Blender's preloaded threading/allocator
+    images. Loading the same images preserves the full existing runtime identity;
+    removing them from the identity would silently weaken admission.
+    """
+    images = []
+    seen = set()
+    for path in sorted(_loaded_library_paths()):
+        if Path(path).name.lower().startswith(('libtbb', 'tbb')):
+            absolute = str(Path(path).resolve(strict=True))
+            if absolute in seen:
+                continue
+            seen.add(absolute)
+            _path, loaded, current = _loaded_identity(absolute)
+            if loaded != current:
+                raise RuntimeError('loaded threading runtime changed on disk')
+            images.append([absolute,current])
+    if len(images)>16:
+        raise RuntimeError('threading runtime image inventory exceeds limit')
+    return json.dumps(images,separators=(',',':'))
+
+
 def runtime_identity():
     """Hash actual decoder/kernel/replay binaries for admission and Save summaries.
 

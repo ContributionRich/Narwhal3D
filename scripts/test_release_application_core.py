@@ -40,12 +40,12 @@ LICENSE = "application_core-OPENNURBS.txt"
 
 EXPORTS = ("narwhal_history_abi", "narwhal_history_json",
            "narwhal_session_abi", "narwhal_session_json")
+JOB_EXPORTS = ("narwhal_load_jobs_abi", "narwhal_load_jobs_json",
+               "narwhal_save_jobs_abi", "narwhal_save_jobs_json")
 REGISTRY_EXPORTS = ("narwhal_object_observation_abi", "narwhal_object_registry_abi",
                     "narwhal_object_registry_json", "narwhal_object_registry_observe")
-# The measured Windows DLL export list (dumpbin), sorted as inspect_pe_dll returns it.
-WINDOWS_EXPORTS = ("narwhal_history_abi", "narwhal_history_json", "narwhal_object_observation_abi",
-                   "narwhal_object_registry_abi", "narwhal_object_registry_json",
-                   "narwhal_object_registry_observe", "narwhal_session_abi", "narwhal_session_json")
+# Historical Windows exports plus required additive load/save job exports; synthetic PE qualification only.
+WINDOWS_EXPORTS = tuple(sorted(EXPORTS + REGISTRY_EXPORTS + JOB_EXPORTS))
 
 
 def fake_library(abi=1, history_abi=1, missing=()):
@@ -53,6 +53,9 @@ def fake_library(abi=1, history_abi=1, missing=()):
                                     narwhal_session_json=lambda: None,
                                     narwhal_history_abi=lambda: history_abi,
                                     narwhal_history_json=lambda: None)
+    for kind in ("load","save"):
+        setattr(library,f"narwhal_{kind}_jobs_abi",lambda:1)
+        setattr(library,f"narwhal_{kind}_jobs_json",lambda:None)
     for symbol in missing:
         delattr(library, symbol)
     return library
@@ -86,12 +89,12 @@ def pe_fixture(abi=1, history_abi=1, missing=(), registry_abi=1, observation_abi
     results = {"narwhal_history_abi": history_abi, "narwhal_object_registry_abi": registry_abi,
                "narwhal_object_observation_abi": observation_abi}
     symbols = [name for name in WINDOWS_EXPORTS if name not in missing]
-    struct.pack_into("<IIIII", data, at(0x1000) + 20, len(symbols), len(symbols), 0x1060, 0x1040, 0x1080)
+    struct.pack_into("<IIIII", data, at(0x1000) + 20, len(symbols), len(symbols), 0x1080, 0x1040, 0x10c0)
     for index, symbol in enumerate(symbols):
         name_rva, function_rva = 0x1200 + 0x20 * index, 0x1400 + 0x20 * index
         struct.pack_into("<I", data, at(0x1040) + 4 * index, name_rva)
-        struct.pack_into("<I", data, at(0x1060) + 4 * index, function_rva)
-        struct.pack_into("<H", data, at(0x1080) + 2 * index, index)
+        struct.pack_into("<I", data, at(0x1080) + 4 * index, function_rva)
+        struct.pack_into("<H", data, at(0x10c0) + 2 * index, index)
         value = symbol.encode() + b"\0"
         data[at(name_rva):at(name_rva) + len(value)] = value
         result = results.get(symbol, abi)
@@ -114,7 +117,7 @@ class ApplicationPackaging(unittest.TestCase):
             self.assertEqual(module.NATIVE_LIBRARY_ABIS[SO], ("narwhal_session_abi", 1))
         for module in (linux, linux_verify, windows):
             self.assertEqual(module.APPLICATION_CORE_HISTORY_ABI, 1)
-            self.assertEqual(module.APPLICATION_CORE_EXPORTS, EXPORTS)
+            self.assertEqual(module.APPLICATION_CORE_EXPORTS, EXPORTS + JOB_EXPORTS)
         self.assertEqual(linux.NATIVE_COMPONENTS, linux_verify.NATIVE_COMPONENTS)
         self.assertIn("usr/lib/narwhal3d/runtime/linux-x86_64/bin/" + SO, linux_verify.REQUIRED_PATHS)
         self.assertIn("usr/lib/narwhal3d/narwhal3d/native/" + SO, linux_verify.REQUIRED_PATHS)
@@ -168,7 +171,7 @@ class ApplicationPackaging(unittest.TestCase):
             for name, (_, abi) in linux_verify.NATIVE_LIBRARY_ABIS.items():
                 records[name]["abi"] = abi
             records["libnarwhal_pure_core.so"].update(linux_verify.PURE_CORE_PARSE_IDENTITY)
-            records[SO].update(history_abi=1, exports=list(EXPORTS))
+            records[SO].update(history_abi=1, exports=list(EXPORTS + JOB_EXPORTS))
             records["narwhal-welcome"]["launch_contract"] = 1
             observer_dir = app / "narwhal3d/native/document-observer"
             observer_dir.mkdir(parents=True)
@@ -234,7 +237,7 @@ class ApplicationPackaging(unittest.TestCase):
             root = Path(directory)
             for options in ({}, {"abi": 2}, {"history_abi": 2},
                             {"missing": ("narwhal_history_abi", "narwhal_history_json")},
-                            *({"missing": (symbol,)} for symbol in EXPORTS)):
+                            *({"missing": (symbol,)} for symbol in EXPORTS + JOB_EXPORTS)):
                 library = fake_library(**options)
                 def load(path):
                     if Path(path).name == SO:
@@ -261,16 +264,17 @@ class ApplicationPackaging(unittest.TestCase):
                     else:
                         exec(code, namespace)
                         self.assertEqual(namespace["records"][SO],
-                                         {"abi": 1, "history_abi": 1, "exports": list(EXPORTS)})
+                                         {"abi": 1, "history_abi": 1, "exports": list(EXPORTS + JOB_EXPORTS)})
                         loaded.reset_mock()
                         linux_verify.verify_native_library_abis(root, Path("python"), {})
                         paths = [call.args[0] for call in loaded.call_args_list if Path(call.args[0]).name == SO]
-                        self.assertEqual(paths, [str(root / "narwhal3d/native" / SO)] * 2)
+                        self.assertEqual(paths, [str(root / "narwhal3d/native" / SO)] * 4)
                         self.assertEqual(library.narwhal_history_abi.argtypes, [])
                         self.assertIs(library.narwhal_history_abi.restype, ctypes.c_uint32)
 
     def test_linux_packaged_history_receipt_must_match_executed_probe(self):
         expected = {name: abi for name, (_, abi) in linux_verify.NATIVE_LIBRARY_ABIS.items()}
+        expected.update(application_core_load_jobs=1,application_core_save_jobs=1)
         for history in (None, 2, 1):
             result = dict(expected)
             if history is not None:
@@ -356,7 +360,7 @@ class ApplicationPackaging(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             dll = Path(directory) / DLL
             dll.write_bytes(pe_fixture())
-            self.assertEqual(WINDOWS_EXPORTS, tuple(sorted(EXPORTS + REGISTRY_EXPORTS)))
+            self.assertEqual(WINDOWS_EXPORTS, tuple(sorted(EXPORTS + REGISTRY_EXPORTS + JOB_EXPORTS)))
             self.assertEqual(windows.verify_application_core_identity(dll)["exports"],
                              WINDOWS_EXPORTS)
             for data in (pe_fixture(2), pe_fixture(history_abi=2),
@@ -585,7 +589,7 @@ class ApplicationPackaging(unittest.TestCase):
             (runtime / DLL).write_bytes(b"fixture")
             for options in ({}, {"abi": 2}, {"history_abi": 2},
                             {"missing": ("narwhal_history_abi", "narwhal_history_json")},
-                            *({"missing": (symbol,)} for symbol in EXPORTS)):
+                            *({"missing": (symbol,)} for symbol in EXPORTS + JOB_EXPORTS)):
                 library = fake_library(**options)
                 with self.subTest(options=options), patch.object(ctypes, "CDLL", return_value=library):
                     env = dict(ctypes=ctypes, native=native, app=app)

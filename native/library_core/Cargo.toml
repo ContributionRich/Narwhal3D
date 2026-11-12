@@ -1,0 +1,17 @@
+[package]
+name = "narwhal-library-core"
+version = "1.0.0"
+edition = "2021"
+license = "GPL-3.0-or-later"
+publish = false
+
+[dependencies]
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = "=1.0.154"
+sha2 = "=0.10.9"
+zip = { version = "=2.6.1", default-features = false, features = ["deflate"] }
+
+[profile.release]
+codegen-units = 1
+lto = "thin"
+strip = "symbols"

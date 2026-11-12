@@ -113,7 +113,7 @@ with tempfile.TemporaryDirectory(prefix="narwhal-admission-test-") as folder, \
                       "document_worker.main()\n")
     def changed_decoder(extracted):
         argv = list(original_command(extracted))
-        argv[argv.index("--python") + 1] = str(script)
+        argv[argv.index("--") - 1] = str(script)
         return tuple(argv)
     with patch.object(document, "_worker_command", side_effect=changed_decoder):
         document.save_model(model, target)

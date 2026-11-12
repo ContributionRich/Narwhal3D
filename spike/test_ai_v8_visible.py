@@ -205,7 +205,7 @@ def run():
         yield from BASE_RUN()
         return
     ui=f.UI
-    yield from f.wait(lambda:os.environ.get('NARWHAL3D_UI_READY')=='1' and ui._preferences_ready and ui.is_input_active() and len(ui._right_tab_boxes)==5,'round07 owned normal bootstrap',50)
+    yield from f.wait(lambda:os.environ.get('NARWHAL3D_UI_READY')=='1' and ui._preferences_ready and ui.is_input_active() and len(ui._right_tab_boxes)==len(ui.rightpanel.TABS),'round07 owned normal bootstrap',50)
     f.NATIVE=f.NativeBridge(Path(os.environ['AI_REVIEW_EXECUTABLE'])).__enter__()
     if CASE=='normal_box_invalid':
         normal_path=ROOT/'artifacts/automation/linux-x86_64/libnarwhal_automation.so'
@@ -221,7 +221,7 @@ def run():
     f.SERVER=f.ThreadingHTTPServer(('127.0.0.1',0),Provider);threading.Thread(target=f.SERVER.serve_forever,daemon=True).start()
     endpoint='http://127.0.0.1:'+str(f.SERVER.server_port)+'/v1'
     ui._apply_ai_settings(ui.ai_assistant.set_provider('openai_compatible','review07',endpoint))
-    yield from f.tap('LEFTMOUSE',f.center(ui._right_tab_boxes[4]));yield .2
+    yield from f.tap('LEFTMOUSE',f.center(ui._right_tab_boxes[ui.rightpanel.tab_names().index("AI Assistant")]));yield .2
     if CASE=='long_reply':
         f.PLAN_PROMPTS=(*f.PLAN_PROMPTS,'long_reply','continuation_probe')
         yield from f.send('long_reply',consent=True)

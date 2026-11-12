@@ -133,3 +133,64 @@ def compare_display_proxies(left: Path, right: Path) -> bool:
     if answer not in ("equal", "different"):
         raise DocumentCoreError("invalid display-proxy comparison response")
     return answer == "equal"
+
+
+class _FileJobs:
+    """Opaque ABI adapter; Rust owns every queue transition and commit decision."""
+    def __init__(self, kind):
+        import ctypes as c
+        from .native_document_session import load_library
+        self.library = load_library()
+        try:
+            abi = getattr(self.library, f'narwhal_{kind}_jobs_abi')
+            abi.argtypes, abi.restype = [], c.c_uint32
+            if abi() != 1:
+                raise DocumentCoreError(f'native {kind}-jobs ABI1 is required')
+            self.call = getattr(self.library, f'narwhal_{kind}_jobs_json')
+            self.call.argtypes = [c.POINTER(c.c_ubyte), c.c_size_t,
+                                  c.POINTER(c.c_ubyte), c.c_size_t]
+            self.call.restype = c.c_ssize_t
+        except AttributeError as exc:
+            raise DocumentCoreError(f'matching application-core {kind}-jobs ABI1 is required; rebuild the native core') from exc
+        self.queue = None
+        self.queue = self.request('create')['queue']
+
+    def request(self, op, **arguments):
+        import ctypes as c
+        import json
+        request = dict(arguments, op=op)
+        if self.queue is not None:
+            request['queue'] = self.queue
+        data = json.dumps(request, allow_nan=False).encode()
+        if len(data)>65536:
+            raise DocumentCoreError('native load request exceeds 64KiB')
+        source = (c.c_ubyte*len(data)).from_buffer_copy(data)
+        output = (c.c_ubyte*4096)()
+        size = self.call(source,len(data),output,len(output))
+        if not 0<size<=len(output):
+            raise DocumentCoreError('invalid native load reply size; request was not replayed')
+        try:
+            reply = json.loads(bytes(output[:size]))
+        except ValueError as exc:
+            raise DocumentCoreError('invalid native load reply; request was not replayed') from exc
+        if not isinstance(reply,dict) or reply.get('status')!='ok':
+            raise DocumentCoreError(str(reply.get('code','invalid native load reply')) if isinstance(reply,dict) else 'invalid native load reply')
+        if set(reply)!={'status','action','queue','job','replaced'} or reply['queue']!=self.queue and op!='create':
+            raise DocumentCoreError('unexpected native file-job reply; request was not replayed')
+        if (type(reply['queue']) is not int or not 0<reply['queue']<1<<64
+                or any(value is not None and (type(value) is not int or not 0<value<1<<64)
+                       for value in (reply['job'],reply['replaced']))
+                or reply['action'] not in ('created','queued','start','wait','hydrate','hydrated','commit',
+                    'cancel','error','idle','completed','discard','cancelled','closed','declined','finished','busy','intended')):
+            raise DocumentCoreError('invalid native file-job reply values; request was not replayed')
+        return reply
+
+
+class LoadJobs(_FileJobs):
+    def __init__(self):
+        super().__init__('load')
+
+
+class SaveJobs(_FileJobs):
+    def __init__(self):
+        super().__init__('save')

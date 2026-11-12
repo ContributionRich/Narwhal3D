@@ -59,7 +59,7 @@ NATIVE_COMPONENTS = (
     "narwhal-cdr-multiversion", "narwhal-document-core", "narwhal-welcome",
     "libnarwhal_automation.so", "narwhal-automation",
     "libnarwhal_application_core.so", "libnarwhal_ui_core.so",
-    "narwhal-picture-trace",
+    "narwhal-picture-trace", "narwhal-library-core",
 )
 PACKAGED_ACCELERATORS = (
     "libnarwhal_geometry_core.so", "libnarwhal_platform_core.so",
@@ -70,6 +70,8 @@ APPLICATION_CORE_HISTORY_ABI = 1
 APPLICATION_CORE_EXPORTS = (
     "narwhal_history_abi", "narwhal_history_json",
     "narwhal_session_abi", "narwhal_session_json",
+    "narwhal_load_jobs_abi", "narwhal_load_jobs_json",
+    "narwhal_save_jobs_abi", "narwhal_save_jobs_json",
 )
 NATIVE_LIBRARY_ABIS = {
     "libnarwhal_application_core.so": ("narwhal_session_abi", 1),
@@ -104,6 +106,7 @@ REQUIRED_LICENSE_FILES = (
     "VectorCraft-MIT.txt",
     "VectorCraft-Apache-2.0.txt",
     "VectorCraft-NOTICE.txt",
+    "Library-Rust-Dependencies.txt",
 )
 DISTRIBUTIONS = {
     "rhino3dm": "8.35.0",
@@ -594,6 +597,9 @@ def validate_native_components(
     application["history_abi"] = probe_native_library_abi(
         directory / "libnarwhal_application_core.so", "narwhal_history_abi",
         APPLICATION_CORE_HISTORY_ABI, occt_library_dir, APPLICATION_CORE_EXPORTS)
+    for job_kind in ("load", "save"):
+        probe_native_library_abi(directory / "libnarwhal_application_core.so",
+                                 f"narwhal_{job_kind}_jobs_abi", 1, occt_library_dir)
     application["exports"] = list(APPLICATION_CORE_EXPORTS)
     try:
         records["libnarwhal_pure_core.so"].update(probe_pure_core_parser(
@@ -619,6 +625,11 @@ def validate_native_components(
     if document_version != DOCUMENT_CORE_PROTOCOL:
         raise ReleaseError(f"wrong Narwhal document-core protocol: {document_version!r}")
     records["narwhal-document-core"]["protocol"] = document_version
+    version = subprocess.run([str(directory / "narwhal-library-core"), "--version"],
+                             text=True, capture_output=True, timeout=10, check=True).stdout.strip()
+    if version != "narwhal-library-core 1":
+        raise ReleaseError("unsupported Library helper protocol")
+    records["narwhal-library-core"]["protocol"] = version
     records["narwhal-picture-trace"]["trace_probe"] = probe_picture_trace(
         directory / "narwhal-picture-trace")
     records["required_glibc"] = format_glibc(required_glibc)
@@ -1030,6 +1041,7 @@ def self_check() -> None:
         "VectorCraft-MIT.txt",
         "VectorCraft-Apache-2.0.txt",
         "VectorCraft-NOTICE.txt",
+    "Library-Rust-Dependencies.txt",
     }
     if set(REQUIRED_LICENSE_FILES) != expected_licenses:
         raise ReleaseError("self-check found an incomplete required license set")
@@ -1089,7 +1101,7 @@ def self_check() -> None:
             "narwhal-cdr-multiversion", "narwhal-document-core", "narwhal-welcome",
             "libnarwhal_automation.so", "narwhal-automation",
             "libnarwhal_application_core.so", "libnarwhal_ui_core.so",
-            "narwhal-picture-trace",
+            "narwhal-picture-trace", "narwhal-library-core",
         ):
             raise ReleaseError("self-check found an incomplete native component set")
         if PACKAGED_ACCELERATORS != (

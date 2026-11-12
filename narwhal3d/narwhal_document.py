@@ -475,12 +475,20 @@ def _worker_argv(executable: Path, worker: Path, root: Path) -> tuple[str, ...]:
     if "blender" in executable.name.lower():
         return (str(executable), "-b", "--factory-startup", "--python-exit-code", "1",
                 "--python", str(worker), "--", str(root))
-    return (str(executable), str(worker), "--", str(root))
+    return (str(executable), "-P", str(worker), "--", str(root))
 
 
 def _worker_command(root: Path) -> tuple[str, ...]:
     worker = Path(__file__).resolve().with_name("document_worker.py")
     executable = Path(sys.executable).resolve()
+    # The validator needs OCCT/openNURBS, not a Blender UI/process. Stay within
+    # this runtime's bundled Python; never select an arbitrary PATH interpreter.
+    prefix = Path(sys.prefix).resolve()
+    if sys.platform != 'darwin' and prefix.name.lower() == 'python':
+        names = ('bin/python.exe', 'python.exe') if sys.platform == 'win32' else (f'bin/python{sys.version_info.major}.{sys.version_info.minor}',)
+        bundled = next((prefix / name for name in names if (prefix / name).is_file()), None)
+        if bundled is not None:
+            return _worker_argv(bundled, worker, root)
     if "blender" not in executable.name.lower():
         project = Path(__file__).resolve().parents[1]
         candidates = (
@@ -494,7 +502,7 @@ def _worker_command(root: Path) -> tuple[str, ...]:
 
 
 def _validate_in_worker(root: Path, count: int, *, reuse_proofs=False, bounds_scope=None,
-                        timeout=600, memory_mib=4096, collect_errors=False) -> Path:
+                        timeout=600, memory_mib=4096, collect_errors=False, report_out=None) -> Path:
     # Preserve the trusted launcher's kernel selection for recipe replay, not any
     # document-supplied path or the rest of the parent's (possibly secret) environment.
     # The document core too: MEASURED, without it the worker resolved a different
@@ -506,6 +514,7 @@ def _validate_in_worker(root: Path, count: int, *, reuse_proofs=False, bounds_sc
     if collect_errors:
         extra_env["NARWHAL_DOCUMENT_COLLECT_ERRORS"] = "1"
     from . import document_admission
+    extra_env[document_admission.WORKER_IMAGES_ENV] = document_admission.worker_runtime_images()
     with document_admission.hints(reuse_proofs) as hint_env:
         extra_env.update(hint_env)
         result = converter_process.run(
@@ -535,170 +544,264 @@ def _validate_in_worker(root: Path, count: int, *, reuse_proofs=False, bounds_sc
     if not output.is_dir() or output.is_symlink():
         raise NarwhalDocumentError("exact-master worker produced no safe output directory")
     document_admission.remember(output)
+    if report_out is not None:
+        report_out.update(report)
     if bounds_scope is not None:
         occt_backend.document_accept_bounds(bounds_scope, output, report.get("bounds_facts"))
     return output
 
 
-def load_model(source: str | os.PathLike):
-    """Load a validated `.narwhal` project and atomically install every exact master."""
-    source = os.path.abspath(os.fspath(source))
-    if not os.path.isfile(source):
-        raise FileNotFoundError(source)
-    if not occt_backend.available():
-        raise NarwhalDocumentError("the built-in OCCT kernel is unavailable")
-    with (tempfile.TemporaryDirectory(prefix="narwhal-open-") as directory,
-          occt_backend.document_bounds_context() as bounds_scope):
-        payload = Path(directory) / "payload"
+class PreparedLoad:
+    """Private, fully validated files; no live model or Blender handles cross threads."""
+    def __init__(self, source):
+        self.source = os.path.abspath(os.fspath(source))
+        self.directory = tempfile.TemporaryDirectory(prefix="narwhal-open-")
+        self.payload = Path(self.directory.name) / "payload"
+        self.report = {}
         try:
-            native_document.unpack(source, payload)
-        except native_document.DocumentCoreError as exc:
-            raise NarwhalDocumentError(f"invalid native container: {exc}") from exc
-        manifest = _read_manifest(payload / "manifest.json")
-        records = manifest["masters"]
-        record_by_id = {}
-        expected_members = {"manifest.json", "document.3dm"}
-        for record in records:
-            if not isinstance(record, dict):
-                raise NarwhalDocumentError("native master record is not an object")
+            before = os.stat(self.source)
+            self.stamp = (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns, before.st_ctime_ns)
+            if not occt_backend.available():
+                raise NarwhalDocumentError("the built-in OCCT kernel is unavailable")
             try:
-                object_id = str(uuid.UUID(str(record["object_id"])))
-            except (KeyError, ValueError) as exc:
-                raise NarwhalDocumentError("native master record has an invalid object UUID") from exc
-            member = record.get("member")
-            digest = record.get("sha256")
-            if (member != f"masters/{object_id}.brep" or object_id in record_by_id
-                    or not isinstance(digest, str) or len(digest) != 64):
-                raise NarwhalDocumentError("native master mapping is duplicate or noncanonical")
-            expected_members.add(member)
-            record_by_id[object_id] = record
-        actual_members = {
-            path.relative_to(payload).as_posix() for path in payload.rglob("*") if path.is_file()
-        }
-        if actual_members != expected_members:
-            raise NarwhalDocumentError("native container members do not match its manifest")
+                native_document.unpack(self.source, self.payload)
+            except native_document.DocumentCoreError as exc:
+                raise NarwhalDocumentError(f"invalid native container: {exc}") from exc
+            self.manifest = _read_manifest(self.payload / "manifest.json")
+            self.records = self.manifest["masters"]
+            self.record_by_id = {}
+            expected_members = {"manifest.json", "document.3dm"}
+            for record in self.records:
+                if not isinstance(record, dict):
+                    raise NarwhalDocumentError("native master record is not an object")
+                try:
+                    object_id = str(uuid.UUID(str(record["object_id"])))
+                except (KeyError, ValueError) as exc:
+                    raise NarwhalDocumentError("native master record has an invalid object UUID") from exc
+                member, digest = record.get("member"), record.get("sha256")
+                if (member != f"masters/{object_id}.brep" or object_id in self.record_by_id
+                        or not isinstance(digest, str) or len(digest) != 64):
+                    raise NarwhalDocumentError("native master mapping is duplicate or noncanonical")
+                expected_members.add(member)
+                self.record_by_id[object_id] = record
+            actual_members = {path.relative_to(self.payload).as_posix()
+                              for path in self.payload.rglob("*") if path.is_file()}
+            if actual_members != expected_members:
+                raise NarwhalDocumentError("native container members do not match its manifest")
+            self.validated = _validate_in_worker(self.payload, len(self.records), report_out=self.report)
+            # Hash/qualify the parent's loaded runtime while file work is already
+            # off-thread. Main still rechecks identities before accepting facts.
+            from . import document_admission
+            document_admission.contract()
+            after = os.stat(self.source)
+            if self.stamp != (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns):
+                raise NarwhalDocumentError("source file changed while loading; reopen it")
+        except BaseException:
+            self.cleanup()
+            raise
 
-        validated = _validate_in_worker(payload, len(records), bounds_scope=bounds_scope)
-        document_path = validated / "document.3dm"
-        raw = r3.File3dm.Read(str(document_path))
-        if raw is None:
-            raise NarwhalDocumentError("native metadata document is unreadable")
-        raw_ids = [_object_uuid(item) for item in raw.Objects]
-        if len(raw_ids) != len(set(raw_ids)):
-            raise NarwhalDocumentError("native metadata contains duplicate object UUIDs")
-        expected_exact = set()
-        for item in raw.Objects:
-            if kernel.representation_of(item.Geometry) != kernel.ANALYTIC_MASTER:
-                continue
-            object_id = _object_uuid(item)
-            expected_exact.add(object_id)
-            getter = getattr(item.Geometry, "GetUserString", None)
-            digest = getter(MASTER_DIGEST_KEY) if callable(getter) else None
-            record = record_by_id.get(object_id)
-            if record is None or digest != record.get("sha256"):
-                raise NarwhalDocumentError("native proxy/master digest binding is missing or changed")
-        if expected_exact != set(record_by_id):
-            raise NarwhalDocumentError("native document is missing or inventing exact master payloads")
+    def check_source(self):
+        current = os.stat(self.source)
+        if self.stamp != (current.st_dev, current.st_ino, current.st_size, current.st_mtime_ns, current.st_ctime_ns):
+            raise NarwhalDocumentError("source file changed before load publication; reopen it")
 
-        from .model import NarwhalModel
-        model = NarwhalModel()
-        model.file = raw
-        model.path = source
-        model.import_renamed = model.assign_app_names()
-        model.rehydrated = (0, 0)
-        model.adopted = (0, [])
-        objects = {_object_uuid(item): item for item in model.file.Objects}
-        bindings = []
-        replay_ids = _recipe_identity_hint(validated)
-        for object_id, record in record_by_id.items():
-            path = validated / f"{object_id}.brep"
+    def cleanup(self):
+        self.directory.cleanup()
+
+
+def prepare_load(source):
+    """Read/unpack/validate frozen files; safe for a file-only background worker."""
+    return PreparedLoad(source)
+
+
+class LoadHydration:
+    """Step main-thread host construction without leaking its bounds context."""
+    def __init__(self, prepared):
+        import contextvars
+        self.context = contextvars.copy_context()
+        self.iterator = _load_steps(prepared)
+        self.finished = False
+
+    def step(self):
+        if self.finished:
+            raise NarwhalDocumentError('load hydration already finished')
+        try:
+            self.context.run(next, self.iterator)
+        except StopIteration as result:
+            self.finished = True
+            return result.value
+        return None
+
+    def close(self):
+        if not self.finished:
+            self.context.run(self.iterator.close)
+        self.finished = True
+
+
+def begin_load(prepared):
+    import threading
+    if threading.current_thread() is not threading.main_thread():
+        raise NarwhalDocumentError('native document hydration requires the main thread')
+    return LoadHydration(prepared)
+
+
+def finish_load(prepared):
+    """Synchronous host construction; UI callers step the same checks between frames."""
+    hydration = begin_load(prepared)
+    try:
+        while True:
+            model = hydration.step()
+            if model is not None:
+                return model
+    finally:
+        hydration.close()
+
+
+def _load_steps(prepared):
+    """Construct an inert host candidate on main; caller still explicitly commits it."""
+    import threading
+    if threading.current_thread() is not threading.main_thread():
+        raise NarwhalDocumentError("native document hydration requires the main thread")
+    prepared.check_source()
+    with occt_backend.document_bounds_context() as bounds_scope:
+        occt_backend.document_accept_bounds(bounds_scope, prepared.validated, prepared.report.get("bounds_facts"))
+        model = yield from _hydrate_load(prepared)
+    prepared.check_source()
+    return model
+
+
+def load_model(source: str | os.PathLike):
+    """Synchronous/headless entry point, with the same staged admission as the UI."""
+    prepared = prepare_load(source)
+    try:
+        return finish_load(prepared)
+    finally:
+        prepared.cleanup()
+
+
+def _hydrate_load(prepared):
+    source, validated, record_by_id = prepared.source, prepared.validated, prepared.record_by_id
+    document_path = validated / "document.3dm"
+    raw = r3.File3dm.Read(str(document_path))
+    if raw is None:
+        raise NarwhalDocumentError("native metadata document is unreadable")
+    raw_ids = [_object_uuid(item) for item in raw.Objects]
+    if len(raw_ids) != len(set(raw_ids)):
+        raise NarwhalDocumentError("native metadata contains duplicate object UUIDs")
+    expected_exact = set()
+    for item in raw.Objects:
+        if kernel.representation_of(item.Geometry) != kernel.ANALYTIC_MASTER:
+            continue
+        object_id = _object_uuid(item)
+        expected_exact.add(object_id)
+        getter = getattr(item.Geometry, "GetUserString", None)
+        digest = getter(MASTER_DIGEST_KEY) if callable(getter) else None
+        record = record_by_id.get(object_id)
+        if record is None or digest != record.get("sha256"):
+            raise NarwhalDocumentError("native proxy/master digest binding is missing or changed")
+    if expected_exact != set(record_by_id):
+        raise NarwhalDocumentError("native document is missing or inventing exact master payloads")
+
+    from .model import NarwhalModel
+    model = NarwhalModel()
+    model.file = raw
+    model.path = source
+    model.import_renamed = model.assign_app_names()
+    model.rehydrated = (0, 0)
+    model.adopted = (0, [])
+    objects = {_object_uuid(item): item for item in model.file.Objects}
+    bindings = []
+    replay_ids = _recipe_identity_hint(validated)
+    for object_id, record in record_by_id.items():
+        path = validated / f"{object_id}.brep"
+        try:
+            data = path.read_bytes()
+            shape = occt_backend.shape_from_bytes(data, record.get("wrapper_type"))
+        except Exception as exc:  # noqa: BLE001
+            raise NarwhalDocumentError(f"validated exact master {object_id} is unreadable: {exc}") from exc
+        if (not occt_backend.is_valid(shape)
+                or int(shape.ShapeType().value) != record.get("shape_enum")):
+            raise NarwhalDocumentError(f"validated exact master {object_id} changed")
+        face_types = {str(key): int(value)
+                      for key, value in sorted(occt_backend.face_types(shape).items())}
+        airtight = bool(occt_backend.is_airtight(shape))
+        volume = float(schema1_volume(shape)) if airtight else None
+        if (face_types != record.get("face_types")
+                or airtight != record.get("airtight")
+                or (volume is not None and not math.isfinite(volume))):
+            raise NarwhalDocumentError(f"validated exact master {object_id} topology changed")
+        if airtight:
+            expected_volume = record.get("volume")
+            if (not isinstance(expected_volume, (int, float))
+                    or not math.isfinite(float(expected_volume))
+                    or abs(volume - float(expected_volume))
+                    > 1.0e-10 * max(1.0, abs(float(expected_volume)))):
+                raise NarwhalDocumentError(f"validated exact master {object_id} volume changed")
+        lower, upper = occt_backend.tight_bbox(shape)
+        actual_bounds = [float(value) for point in (lower, upper) for value in point]
+        expected_bounds = record.get("bounds")
+        if (not isinstance(expected_bounds, list) or len(expected_bounds) != 6
+                or any(not isinstance(value, (int, float))
+                       or not math.isfinite(float(value)) for value in expected_bounds)
+                or any(abs(actual - float(expected))
+                       > 1.0e-9 * max(1.0, abs(float(expected)))
+                       for actual, expected in zip(actual_bounds, expected_bounds))):
+            raise NarwhalDocumentError(f"validated exact master {object_id} bounds changed")
+        file_object = objects.get(object_id)
+        if file_object is None:
+            raise NarwhalDocumentError(f"exact master {object_id} has no document object")
+        document_tolerance = float(model.file.Settings.ModelAbsoluteTolerance)
+        if not math.isfinite(document_tolerance) or document_tolerance <= 0.0:
+            raise NarwhalDocumentError("native metadata has invalid model tolerance")
+        proxy = file_object.Geometry
+        if proxy.GetUserString(kernel.DOCUMENT_FORM_KEY) == "exact":
+            from . import bridge
+
+            # Independently reconstruct the stored proxy, never _occt_operand
+            # (which resolves back to the master/recipe being checked).
             try:
-                data = path.read_bytes()
-                shape = occt_backend.shape_from_bytes(data, record.get("wrapper_type"))
+                proxy_shape = occt_backend.shape_from_brep_data(
+                    bridge.brep_data(proxy), sew_tolerance=document_tolerance)
+                if (not occt_backend.is_valid(proxy_shape)
+                        or bool(occt_backend.is_airtight(proxy_shape)) != airtight):
+                    raise ValueError("proxy validity/closure differs")
+                proxy_bounds = [float(value) for point in
+                                occt_backend.tight_bbox(proxy_shape) for value in point]
             except Exception as exc:  # noqa: BLE001
-                raise NarwhalDocumentError(f"validated exact master {object_id} is unreadable: {exc}") from exc
-            if (not occt_backend.is_valid(shape)
-                    or int(shape.ShapeType().value) != record.get("shape_enum")):
-                raise NarwhalDocumentError(f"validated exact master {object_id} changed")
-            face_types = {str(key): int(value)
-                          for key, value in sorted(occt_backend.face_types(shape).items())}
-            airtight = bool(occt_backend.is_airtight(shape))
-            volume = float(schema1_volume(shape)) if airtight else None
-            if (face_types != record.get("face_types")
-                    or airtight != record.get("airtight")
-                    or (volume is not None and not math.isfinite(volume))):
-                raise NarwhalDocumentError(f"validated exact master {object_id} topology changed")
-            if airtight:
-                expected_volume = record.get("volume")
-                if (not isinstance(expected_volume, (int, float))
-                        or not math.isfinite(float(expected_volume))
-                        or abs(volume - float(expected_volume))
-                        > 1.0e-10 * max(1.0, abs(float(expected_volume)))):
-                    raise NarwhalDocumentError(f"validated exact master {object_id} volume changed")
-            lower, upper = occt_backend.tight_bbox(shape)
-            actual_bounds = [float(value) for point in (lower, upper) for value in point]
-            expected_bounds = record.get("bounds")
-            if (not isinstance(expected_bounds, list) or len(expected_bounds) != 6
-                    or any(not isinstance(value, (int, float))
-                           or not math.isfinite(float(value)) for value in expected_bounds)
-                    or any(abs(actual - float(expected))
-                           > 1.0e-9 * max(1.0, abs(float(expected)))
-                           for actual, expected in zip(actual_bounds, expected_bounds))):
-                raise NarwhalDocumentError(f"validated exact master {object_id} bounds changed")
-            file_object = objects.get(object_id)
-            if file_object is None:
-                raise NarwhalDocumentError(f"exact master {object_id} has no document object")
-            document_tolerance = float(model.file.Settings.ModelAbsoluteTolerance)
-            if not math.isfinite(document_tolerance) or document_tolerance <= 0.0:
-                raise NarwhalDocumentError("native metadata has invalid model tolerance")
-            proxy = file_object.Geometry
-            if proxy.GetUserString(kernel.DOCUMENT_FORM_KEY) == "exact":
-                from . import bridge
-
-                # Independently reconstruct the stored proxy, never _occt_operand
-                # (which resolves back to the master/recipe being checked).
-                try:
-                    proxy_shape = occt_backend.shape_from_brep_data(
-                        bridge.brep_data(proxy), sew_tolerance=document_tolerance)
-                    if (not occt_backend.is_valid(proxy_shape)
-                            or bool(occt_backend.is_airtight(proxy_shape)) != airtight):
-                        raise ValueError("proxy validity/closure differs")
-                    proxy_bounds = [float(value) for point in
-                                    occt_backend.tight_bbox(proxy_shape) for value in point]
-                except Exception as exc:  # noqa: BLE001
-                    raise NarwhalDocumentError(
-                        f"exact master {object_id} document proxy cannot be measured: {exc}") from exc
-            else:
-                proxy_box = proxy.GetBoundingBox()
-                proxy_bounds = [proxy_box.Min.X, proxy_box.Min.Y, proxy_box.Min.Z,
-                                proxy_box.Max.X, proxy_box.Max.Y, proxy_box.Max.Z]
-            tolerance = max(1.0e-7, document_tolerance * 10.0)
-            if (not all(math.isfinite(float(value)) for value in proxy_bounds)
-                    or any(abs(float(a) - float(b)) > tolerance
-                           for a, b in zip(proxy_bounds, actual_bounds))):
                 raise NarwhalDocumentError(
-                    f"exact master {object_id} does not match its document proxy bounds")
-            # Independently prove full native value identity; neither the worker's
-            # receipt nor an archive digest authorizes replacing the decoded shape.
-            # Retaining the constructor avoids another gp_Dir normalization on
-            # every Open/Save, without redefining any persisted geometry.
-            recipe = kernel.recipe_of(proxy)
-            if recipe is not None and (replay_ids is None or object_id in replay_ids):
-                try:
-                    recipe_shape = occt_backend.from_recipe(recipe)
-                    recipe_data = bytes(occt_backend.shape_to_bytes(
-                        recipe_shape, triangles=False,
-                        format_version=occt_backend.document_current_binary_format()))
-                    if data == recipe_data:
-                        shape = recipe_shape
-                except Exception as exc:  # noqa: BLE001
-                    raise NarwhalDocumentError(
-                        f"exact master {object_id} recipe identity cannot be checked: {exc}") from exc
-            bindings.append((file_object.Geometry, shape))
-        model._native_master_bindings = tuple(bindings)
-        model.rehydrated = (len(bindings), 0)
-        model.last_save_warnings = []
-        return model
+                    f"exact master {object_id} document proxy cannot be measured: {exc}") from exc
+        else:
+            proxy_box = proxy.GetBoundingBox()
+            proxy_bounds = [proxy_box.Min.X, proxy_box.Min.Y, proxy_box.Min.Z,
+                            proxy_box.Max.X, proxy_box.Max.Y, proxy_box.Max.Z]
+        tolerance = max(1.0e-7, document_tolerance * 10.0)
+        if (not all(math.isfinite(float(value)) for value in proxy_bounds)
+                or any(abs(float(a) - float(b)) > tolerance
+                       for a, b in zip(proxy_bounds, actual_bounds))):
+            raise NarwhalDocumentError(
+                f"exact master {object_id} does not match its document proxy bounds")
+        # Independently prove full native value identity; neither the worker's
+        # receipt nor an archive digest authorizes replacing the decoded shape.
+        # Retaining the constructor avoids another gp_Dir normalization on
+        # every Open/Save, without redefining any persisted geometry.
+        recipe = kernel.recipe_of(proxy)
+        if recipe is not None and (replay_ids is None or object_id in replay_ids):
+            try:
+                recipe_shape = occt_backend.from_recipe(recipe)
+                recipe_data = bytes(occt_backend.shape_to_bytes(
+                    recipe_shape, triangles=False,
+                    format_version=occt_backend.document_current_binary_format()))
+                if data == recipe_data:
+                    shape = recipe_shape
+            except Exception as exc:  # noqa: BLE001
+                raise NarwhalDocumentError(
+                    f"exact master {object_id} recipe identity cannot be checked: {exc}") from exc
+        bindings.append((file_object.Geometry, shape))
+        yield None  # UI may process events between independent exact masters.
+    model._native_master_bindings = tuple(bindings)
+    model.rehydrated = (len(bindings), 0)
+    model.last_save_warnings = []
+    return model
 
 
 #: Written by the worker (document_worker.RECIPE_IDENTITY_FILE; a test holds them equal).

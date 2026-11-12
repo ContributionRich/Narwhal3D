@@ -4,18 +4,28 @@ The application is distributed with its own private runtime and starts directly
 in the Narwhal 3D workspace. Exact document geometry is kept separate from the
 tessellated viewport representation.
 """
-from . import ui as _ui
+
+
+def __getattr__(name):
+    if name in ('_ui','ui'):
+        from importlib import import_module
+        module = import_module('.ui', __name__)
+        globals()[name] = module
+        return module
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 def register():
-    _ui.register()
+    from . import ui
+    ui.register()
 
 
 def unregister():
     from . import automation_host
 
     automation_host.close()
-    _ui.unregister()
+    from . import ui
+    ui.unregister()
 
 
 bl_info = {

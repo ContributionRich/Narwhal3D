@@ -80,6 +80,23 @@ This preview is ad-hoc-signed, **not Developer ID-signed or notarized**. Gatekee
 4. Use the gumball handles to move, rotate, or scale the result.
 5. Save your project as **`.narwhal`**.
 
+## Reuse assets with Library
+
+**Available in current source; included in the next packaged release.**
+
+The Library tab sits between Bug Report and AI Assistant. Organize exact assets
+into categories, capture selected geometry, import files, and click or drag tiles
+to insert independent copies with ordinary Undo/Redo. Share collections as
+`.narwhallib` packages. See [Library usage and fidelity limits](docs/LIBRARY.md).
+
+Native project Open and cold Library placement prepare/validate files in the
+background, keeping the current document active until a candidate is ready.
+Rust owns the load and Save/AutoSave queues as well as native container I/O;
+exact geometry, recovery and the ordinary Undo history are preserved.
+See [background file I/O, scope and remaining host work](docs/FILE_IO.md).
+These are source changes for the next packaged release.
+
+
 ## Save and share your work
 
 - **`.narwhal`** is the native project format. Use it to save and reopen your work.

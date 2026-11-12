@@ -249,7 +249,7 @@ def curve_case(plane, degree):
 def evidence_case():
     ui._draw_text = observe_draw
     st = ui.ai_assistant_state()
-    box = ui._right_tab_boxes[4]
+    box = ui._right_tab_boxes[ui.rightpanel.tab_names().index("AI Assistant")]
     yield from tap('LEFTMOUSE', ((box[0] + box[2]) / 2, (box[1] + box[3]) / 2))
     check(ui.ai_panel_open(), 'actual AI tab click opens visible transcript')
     before = ui.app_state.model.file.Encode(), ui.app_state.ctx.undo.top_serial

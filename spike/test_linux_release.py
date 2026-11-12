@@ -52,7 +52,7 @@ expected_components = (
     "narwhal-cdr-multiversion", "narwhal-document-core", "narwhal-welcome",
     "libnarwhal_automation.so", "narwhal-automation",
     "libnarwhal_application_core.so", "libnarwhal_ui_core.so",
-    "narwhal-picture-trace",
+    "narwhal-picture-trace", "narwhal-library-core",
 )
 expected_accelerators = (
     "libnarwhal_geometry_core.so", "libnarwhal_platform_core.so",

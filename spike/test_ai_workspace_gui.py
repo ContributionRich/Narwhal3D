@@ -539,7 +539,7 @@ def run():
     from narwhal3d.cplane import CPlane
     import rhino3dm as r3
     yield from wait(lambda: ui._preferences_ready and not ui._viewports_in_progress and
-                    ui.is_input_active() and len(ui._right_tab_boxes) == 5, "initialized visible input and panels")
+                    ui.is_input_active() and len(ui._right_tab_boxes) == len(ui.rightpanel.TABS), "initialized visible input and panels")
     check(not bpy.app.background and not os.environ.get("NARWHAL3D_PRESENT_WATCHDOG"), "normal visible app, not presentation watchdog")
     areas = {ui.pane_label(a): a for a in window().screen.areas if a.type == "VIEW_3D"}
     check(set(areas) == set(FRAMES), "four actual standard panes")
@@ -588,7 +588,7 @@ def run():
         parent = model.file.Layers[index].Id
         layer_ids.append(str(parent))
     model.set_current_layer(index)
-    yield from tap("LEFTMOUSE", center(ui._right_tab_boxes[4]))
+    yield from tap("LEFTMOUSE", center(ui._right_tab_boxes[ui.rightpanel.tab_names().index("AI Assistant")]))
     check(ui.ai_panel_open(), "actual AI tab opened by event")
     config = (ai.set_provider("openai_responses", "workspace-fixture", ENDPOINT, credential_env="NARWHAL_TEST_KEY")
               if API == "responses" else ai.set_provider("openai_compatible", "workspace-fixture", ENDPOINT))

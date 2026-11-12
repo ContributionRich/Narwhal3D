@@ -27,6 +27,7 @@ COMPONENTS = {
     "cdr_core": ("libnarwhal_cdr_core.so",),
     "cdr_multiversion": ("narwhal-cdr-multiversion",),
     "document_core": ("narwhal-document-core",),
+    "library_core": ("narwhal-library-core",),
     "application_core": ("libnarwhal_application_core.so",),
     "ui_core": ("libnarwhal_ui_core.so",),
     "converter_supervisor": ("narwhal-converter-supervisor",),

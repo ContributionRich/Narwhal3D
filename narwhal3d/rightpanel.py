@@ -1,6 +1,6 @@
 """Pure layout and content model for Narwhal 3D's right dock.
 
-The dock has five working panels—Layers, Properties, Display, Bug Report, and AI
+The dock has six working panels—Layers, Properties, Display, Bug Report, Library, and AI
 Assistant—in a fixed vertical tab strip. Sizes and colors are project UI constants. The panel body
 uses all remaining live width so resizing the dock expands useful content rather than
 scaling icons. Unsupported controls are omitted instead of being drawn as dead chrome.
@@ -110,6 +110,7 @@ TABS = (
     Tab("Properties", ui_icon_data.INSPECTOR_ICONS["Properties"], built=True, reason=""),
     Tab("Display", ui_icon_data.INSPECTOR_ICONS["Display"], built=True, reason=""),
     Tab("Bug Report", ui_icon_data.INSPECTOR_ICONS["Bug Report"], built=True, reason=""),
+    Tab("Library", ui_icon_data.INSPECTOR_ICONS["Library"], built=True, reason=""),
     Tab("AI Assistant", ui_icon_data.INSPECTOR_ICONS["AI Assistant"], built=True, reason=""),
 )
 

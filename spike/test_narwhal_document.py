@@ -55,7 +55,7 @@ with tempfile.TemporaryDirectory(prefix="narwhal-document-") as directory:
         Path("C:/runtime/python.exe"), worker_script, worker_probe)
     blender_worker = narwhal_document._worker_argv(
         Path("C:/runtime/blender.exe"), worker_script, worker_probe)
-    check(python_worker == (str(Path("C:/runtime/python.exe")), str(worker_script),
+    check(python_worker == (str(Path("C:/runtime/python.exe")), "-P", str(worker_script),
                             "--", str(worker_probe))
           and "--factory-startup" not in python_worker,
           "embedded Windows Python receives Python arguments, not Blender flags")

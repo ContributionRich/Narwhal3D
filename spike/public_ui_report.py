@@ -27,7 +27,7 @@ EXPECTED_TOOLBARS = (
     "Visibility", "Transform", "Curve Tools", "Surface Tools", "Solid Tools",
     "SubD Tools", "Mesh Tools", "Render", "Drafting",
 )
-EXPECTED_RIGHT_TABS = ("Layers", "Properties", "Display", "Bug Report", "AI Assistant")
+EXPECTED_RIGHT_TABS = ("Layers", "Properties", "Display", "Bug Report", "Library", "AI Assistant")
 EXPECTED_VIEWS = ("Top", "Front", "Perspective", "Right")
 
 
