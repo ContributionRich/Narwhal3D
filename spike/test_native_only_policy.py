@@ -127,6 +127,21 @@ class PolicyTests(unittest.TestCase):
         for name in ('test_rust_history_abi', 'test_rust_history_profile', 'test_ui_core_editor'):
             assert_retired_absent(self, source('spike/' + name + '.py'))
 
+    def test_width_format_macro_python_engines_are_retired(self):
+        forbidden = {
+            'printwidths': {'math', 'sorted', 'set'},
+            'unitformat': {'Decimal', '_decimal', '_fractional', '_feet_inch', '_gcd'},
+            'macro': {'_split_tokens', '_classify', '_strip_flags', '_command_step',
+                      'NATIVE_MACRO_MIN_BYTES', 'NATIVE_MACRO_JSON_MAX_BYTES'},
+        }
+        for module, names in forbidden.items():
+            text = source('narwhal3d/' + module + '.py')
+            tree = ast.parse(text)
+            used = {node.id for node in ast.walk(tree) if isinstance(node, ast.Name)}
+            used.update(node.name for node in ast.walk(tree) if isinstance(node, ast.FunctionDef))
+            self.assertFalse(used & names, (module, used & names))
+            self.assertNotIn('legacy/', text)
+
     def test_admission_cannot_return_optional_backend(self):
         for name, functions in (
             ('native_document_session', ('load_library',)),

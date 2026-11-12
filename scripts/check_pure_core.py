@@ -66,6 +66,10 @@ PURE_CORE_PYTESTS = (
     "spike/test_calc.py",
     "spike/test_native_calc.py",
     "spike/test_aci_colors.py",
+    "spike/test_printwidths_contract.py",
+    "spike/test_printwidths_owned.py",
+    "spike/test_unitformat_contract.py",
+    "spike/test_unitformat_owned.py",
 
     "spike/portfolio_review/test_metadata.py",
     "spike/test_bearing.py",
@@ -76,6 +80,7 @@ PURE_CORE_PYTESTS = (
     "spike/test_native_blend.py",
     "spike/test_macro.py",
     "spike/test_native_macro.py",
+    "spike/test_macro_owned.py",
     "spike/test_macro_plan.py",
     "spike/test_native_macro_plan.py",
     "spike/test_svgpath.py",
@@ -109,6 +114,9 @@ PURE_CORE_PYTESTS = (
 # Additive parser ABI: core ABI 1 and all its existing exports remain unchanged.
 PURE_CORE_PARSE_EXPORTS = (
     "narwhal_pure_core_parse_abi", "narwhal_pure_core_parse_v2",
+    "narwhal_pure_core_printwidths",
+    "narwhal_pure_core_macro_size", "narwhal_pure_core_macro_encode",
+    "narwhal_pure_core_unitformat_resolve_mode", "narwhal_pure_core_unitformat_format",
 )
 PURE_CORE_PARSE_IDENTITY = {
     "abi": 1, "parse_abi": 2, "reply_bytes": 24,
@@ -146,8 +154,47 @@ for text, model, length, code, value in (("1/2", "", 0, 0, 0.5),
                    c.byref(reply), c.sizeof(reply))
     if status != 0 or reply.code != code or reply.reserved != 0 or reply.value != value:
         raise RuntimeError("pure-core parser semantic probe failed: " + repr(text))
+macro_size = lib.narwhal_pure_core_macro_size
+macro_size.argtypes = [c.c_char_p, c.c_size_t, c.c_ubyte]
+macro_size.restype = c.c_int64
+macro_encode = lib.narwhal_pure_core_macro_encode
+macro_encode.argtypes = [c.c_char_p, c.c_size_t, c.c_ubyte, c.c_void_p, c.c_size_t]
+macro_encode.restype = c.c_int32
+for text, expected in ((b"!123", [{"kind": "text", "value": "!123"}]),
+                       (b"a\x1cb", [{"kind": "text", "value": "a"}, {"kind": "text", "value": "b"}])):
+    needed = macro_size(text, len(text), 0)
+    if not 0 < needed <= 4096:
+        raise RuntimeError("macro size witness differs")
+    output = c.create_string_buffer(needed)
+    if macro_encode(text, len(text), 0, output, needed) != 0 or json.loads(output.raw) != expected:
+        raise RuntimeError("macro witness differs")
+resolve = lib.narwhal_pure_core_unitformat_resolve_mode
+resolve.argtypes = [c.c_char_p, c.c_size_t]
+resolve.restype = c.c_int32
+fmt = lib.narwhal_pure_core_unitformat_format
+fmt.argtypes = [c.c_double, c.c_uint32, c.c_int64, c.c_uint32,
+                c.c_void_p, c.c_size_t, c.POINTER(c.c_size_t)]
+fmt.restype = c.c_int32
+if resolve(b" Fractional ", 12) != 1 or resolve(b"bogus", 5) != 13:
+    raise RuntimeError("unit-format mode probe failed")
+for value, mode, prec, ctx, expected in ((1.75, 1, 16, 28, b"1-3/4"),
+                                        (0.0936, 1, 16, 2, b"1/8"),
+                                        (30.5, 2, 16, 28, b"2'-6 1/2\"")):
+    output, needed = c.create_string_buffer(4096), c.c_size_t(9999)
+    if fmt(value, mode, prec, ctx, output, len(output), c.byref(needed)) != 0:
+        raise RuntimeError("unit-format witness refused")
+    if output.raw[:needed.value] != expected or needed.value != len(expected):
+        raise RuntimeError("unit-format witness differs")
+widths = lib.narwhal_pure_core_printwidths
+widths.argtypes = [c.c_char_p, c.c_size_t, c.c_void_p, c.c_size_t, c.POINTER(c.c_size_t)]
+widths.restype = c.c_int32
+import struct
+text = b"2\n1\n2"
+output, needed = c.create_string_buffer(64), c.c_size_t()
+if widths(text, len(text), output, len(output), c.byref(needed)) != 0 or output.raw[:needed.value] != struct.pack("<IddI", 2, 1.0, 2.0, 0):
+    raise RuntimeError("print-widths witness differs")
 print(json.dumps({"abi": 1, "parse_abi": 2, "reply_bytes": c.sizeof(Reply),
-                  "parser_exports": ["narwhal_pure_core_parse_abi", "narwhal_pure_core_parse_v2"]}, sort_keys=True))
+                  "parser_exports": ["narwhal_pure_core_parse_abi", "narwhal_pure_core_parse_v2", "narwhal_pure_core_printwidths", "narwhal_pure_core_macro_size", "narwhal_pure_core_macro_encode", "narwhal_pure_core_unitformat_resolve_mode", "narwhal_pure_core_unitformat_format"]}, sort_keys=True))
 '''
 
 

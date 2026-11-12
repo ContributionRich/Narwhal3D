@@ -1,9 +1,8 @@
-"""Optional in-process metadata accelerators; Python owns I/O and compatibility.
+"""Checked native metadata adapters; Python owns file/ABI orchestration only.
 
-No subprocess transport or native mutable-object mirror. Missing widths exports,
-unsupported text domains and invalid widths responses explicitly return None to the
-complete reference. RGB ACI has no Python reference: a missing, failing or invalid
-native export raises RuntimeError, because nearest-colour computation is native-only.
+Width failures return None plus a recorded reason to the native-only host,
+which raises explicitly. No caller may replay a Python width parser.
+RGB nearest-color conversion also requires the native export.
 """
 import ctypes
 from functools import lru_cache
@@ -85,22 +84,22 @@ def rgb_to_aci(r, g, b):
 
 def widths_from_text(text):
     if type(text) is not str:
-        _STATUS["widths"] = "reference: non-exact string"
+        _STATUS["widths"] = "native required: non-exact string"
         return None
     if unicodedata.unidata_version != "15.1.0" and not text.isascii():
-        _STATUS["widths"] = "reference: Unicode table version mismatch"
+        _STATUS["widths"] = "native required: Unicode table version mismatch"
         return None
     try:
         data = text.encode("utf-8")
     except UnicodeEncodeError:
-        _STATUS["widths"] = "reference: surrogate text"
+        _STATUS["widths"] = "native required: surrogate text"
         return None
     if len(data) > _MAX_INPUT:
-        _STATUS["widths"] = "reference: native size bound"
+        _STATUS["widths"] = "native required: native size bound"
         return None
     function = _bindings()[2]
     if function is None:
-        _STATUS["widths"] = "reference: native export unavailable"
+        _STATUS["widths"] = "native required: native export unavailable"
         return None
     capacity = min(_MAX_OUTPUT, max(64, len(data) * 64 + 64))
     output = ctypes.create_string_buffer(capacity)
@@ -135,7 +134,7 @@ def widths_from_text(text):
         if offset != len(packed):
             raise ValueError("trailing native report bytes")
     except (OSError, ValueError, UnicodeError, struct.error, ctypes.ArgumentError):
-        _STATUS["widths"] = "reference: rejected native report"
+        _STATUS["widths"] = "native required: rejected native report"
         return None
     _CALLS["widths"] += 1
     _STATUS["widths"] = "native"

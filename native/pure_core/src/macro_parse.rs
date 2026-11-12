@@ -345,10 +345,11 @@ fn classify_steps(token: &str, lossless: bool) -> Vec<Step> {
         && name
             .chars()
             .next()
-            .map(|c| c.is_alphabetic())
+            .map(crate::python_text::is_alpha)
             .unwrap_or(false))
     {
-        // 6. anything else is a value / keyword argument, kept exactly as written
+        // Prefix punctuation on a value is text, not a cancellation command.
+        out.clear();
         out.push(Step::Text {
             value: token.to_string(),
         });
@@ -429,7 +430,7 @@ fn split_tokens(macro_str: &str) -> Vec<String> {
             }
             continue;
         }
-        if ch.is_whitespace() {
+        if crate::python_text::is_space(ch) {
             if !cur.is_empty() {
                 tokens.push(cur.iter().collect());
                 cur.clear();
@@ -881,6 +882,23 @@ mod tests {
 
     fn lt(macro_str: &str) -> String {
         tokenize_json(macro_str, true)
+    }
+
+    #[test]
+    fn native_only_python_character_contract() {
+        for token in ["!123", "!3Point", "!&", "!-15", "_Ⅰ", "_\u{345}"] {
+            assert_eq!(tokenize_steps(token, false).len(), 1);
+            assert!(
+                matches!(&tokenize_steps(token, false)[0], Step::Text { value } if value == token)
+            );
+        }
+        for separator in ['\u{1c}', '\u{1d}', '\u{1e}', '\u{1f}'] {
+            assert_eq!(
+                t(&format!("a{separator}b")),
+                r#"[{"kind":"text","value":"a"},{"kind":"text","value":"b"}]"#
+            );
+        }
+        assert_eq!(t("_=x"), r#"[{"kind":"option","name":"","value":"x"}]"#);
     }
 
     #[test]

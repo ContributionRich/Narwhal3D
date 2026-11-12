@@ -52,11 +52,30 @@ def reference_rgb(rgb):
     return best_index, False
 
 
+def reference_widths(text):
+    """Independent test oracle; production contains no Python width parser."""
+    values, warnings = [], []
+    for number, line in enumerate(text.splitlines(), 1):
+        word = line.strip()
+        if not word or word.startswith((";", "//")):
+            continue
+        try:
+            value = float(word)
+        except ValueError:
+            warnings.append(f"line {number}: {word!r} is not a number")
+            continue
+        if not math.isfinite(value) or value <= 0:
+            warnings.append(f"line {number}: {value!r} is not a finite number larger than 0")
+        else:
+            values.append(value)
+    return sorted(set(values)), warnings
+
+
 class MetadataTests(unittest.TestCase):
     def test_native_exports_are_really_used(self):
         before = native.status()["calls"]
         self.assertEqual(aci.rgb_to_aci((160, 160, 160)), (8, False))
-        self.assertEqual(native.widths_from_text("2\n1\n2\nNaN"), widths._widths_from_text("2\n1\n2\nNaN"))
+        self.assertEqual(native.widths_from_text("2\n1\n2\nNaN"), reference_widths("2\n1\n2\nNaN"))
         after = native.status()["calls"]
         self.assertEqual(after["rgb"], before["rgb"] + 1)
         self.assertEqual(after["widths"], before["widths"] + 1)
@@ -97,19 +116,19 @@ class MetadataTests(unittest.TestCase):
             actual = native.widths_from_text(text)
             if actual is None and not text.isascii() and native.unicodedata.unidata_version != "15.1.0":
                 continue
-            self.assertEqual(actual, widths._widths_from_text(text), repr(text))
+            self.assertEqual(actual, reference_widths(text), repr(text))
         self.assertIsNone(native.widths_from_text("\ud800"))
 
-    def test_file_io_newlines_decoding_and_threshold(self):
+    def test_file_io_newlines_decoding_and_native_only(self):
         with tempfile.TemporaryDirectory() as directory:
             file = Path(directory) / "widths.txt"
             file.write_bytes(b";comment\r\n" * 30 + b"2\r1\r\n0\r\nbad")
             before = native.status()["calls"]["widths"]
-            self.assertEqual(widths.read_widths(file), widths._widths_from_text(file.read_text()))
+            self.assertEqual(widths.read_widths(file), reference_widths(file.read_text()))
             self.assertEqual(native.status()["calls"]["widths"], before + 1)
             file.write_bytes(b"1\n2")
             self.assertEqual(widths.read_widths(file), ([1.0, 2.0], []))
-            self.assertEqual(native.status()["calls"]["widths"], before + 1)
+            self.assertEqual(native.status()["calls"]["widths"], before + 2)
             file.write_bytes(b"\xff")
             with self.assertRaises(UnicodeDecodeError): widths.read_widths(file)
             with self.assertRaises(FileNotFoundError): widths.read_widths(file.with_name("absent"))
@@ -156,7 +175,7 @@ if args.bench:
             text = "; standard widths\n0.13\n0.18\n0.25\n0.35\n0.5\n0.7\n1\n2\n" * repetitions
             file.write_text(text)
             def baseline():
-                with file.open(encoding="utf-8") as f: return widths._widths_from_text(f.read())
+                with file.open(encoding="utf-8") as f: return reference_widths(f.read())
             loops = max(3, 1500 // repetitions)
             records.append(dict(case="file-" + str(len(text)), python_ns=median_ns(baseline, loops),
                                 native_ns=median_ns(lambda: widths.read_widths(file), loops)))

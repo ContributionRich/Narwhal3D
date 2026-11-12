@@ -1,35 +1,49 @@
-"""Native command-macro tokenizer: direct ABI proof + route activation + fallbacks.
+"""Native command-macro tokenizer: direct ABI proof + native-only policy.
 
-Complements ``spike/test_macro.py`` (which pins the raw-token grammar, the step
-contract, flags, quotes, comments, specials, the ``_3Point`` text rule and the
-non-string refusal on the Python path) by proving the *native* route is the one
-actually running for valid input, and that every fallback scenario runs the
-*unchanged* Python tokenizer with the exact same step list and with the native
-counter NOT incremented.
+Complements ``spike/test_macro.py`` (which pins the raw-token grammar, the
+step contract, flags, quotes, comments, specials, the ``_3Point`` text rule
+and the non-string refusal on the Python path) and
+``spike/test_macro_owned.py`` (the differential gate for the native-only
+retirement) by proving, on the production module:
 
-* the Rust ABI is present and ``_macro_binding()`` is not ``None``;
-* ``macro.tokenize`` activates the native route (the ``_native_macro_calls``
-  counter must move) and, on the SAME input, returns the same step list the
-  pure-Python tokenizer does (the "native matches the Python reference"
-  invariant, including the lossless ``prefixes`` tuples);
-* a non-string macro is STILL refused with ``MacroError`` (the native route is
-  only ever reached for a string) and does not move the native counter;
-* the three fallback scenarios (missing library, an old library without the
-  macro export, a malformed native output) all run the *unchanged Python
-  tokenizer* with the exact same step list and with the counter NOT incremented;
-* a performance guard: on the *same* valid input the native success path must
-  not be *materially* slower than the pure-Python tokenizer (the "never slower"
-  rule -- a regression leaves a DECISION NEEDED note for the owner).
+* the Rust ABI is present, and the direct JSON and packed ABIs resolve and
+  convert through the module's host converters (``_steps_from_json`` /
+  ``_steps_from_packed``) to the exact Python step contract;
+* the tokenizer is NATIVE-ONLY: every length -- SHORT included -- moves the
+  adapter's ``_native_macro_calls`` counter (there is no "short stays Python"
+  band any more), and on the SAME input the native route returns the same
+  step list the independent pure-Python reference produces (the "native ==
+  Python reference" invariant, including the lossless ``prefixes`` tuples);
+* a non-string macro is STILL refused with ``MacroError`` (the native route
+  is only ever reached for a string) and does not move the counter;
+* a DECLINED native result -- a missing library, a library without the macro
+  exports, or an adapter that returns ``None`` (refused / malformed) -- is
+  raised as ``RuntimeError`` with the counter UNMOVED: there is NO Python
+  replay (the retired tokenizer must not be reachable);
+* a performance REPORT: the native route is benchmarked against the
+  independent pure-Python reference on the same valid input (reported, not
+  asserted -- the owner deliberately consolidates on the native route rather
+  than claiming every tiny call is faster, so there is no routing guard).
 
-The suite is green with or without a prebuilt ``.so``: if the library is not
-present it builds the crate once (offline, pinned toolchain) and rechecks.
+The pure-Python reference for the parity and performance checks is
+``spike/macro_reference.py`` -- a frozen, independent copy of the
+pre-retirement tokenizer with its native accessor forced off -- NOT a product
+fallback. ``_force_oracle`` temporarily patches ``macro.tokenize`` to that
+reference so a check can compare the native route against it without the
+reference ever being a production code path.
+
+STATUS BEFORE ACTIVATION: the production ``narwhal3d/macro.py`` still carries
+the Python fallback (pre-retirement), so the native-only checks -- the short
+counter and the four declined-native ``RuntimeError`` checks -- are EXPECTED
+TO FAIL until Main activates the retired module. That is the point of this
+suite: it is the post-activation gate. The direct-ABI, parity and
+non-string checks stay green either way.
 """
 import ctypes
 import importlib.util
 import os
 import subprocess
 import sys
-import tempfile
 import time
 from contextlib import contextmanager
 
@@ -85,15 +99,28 @@ def _load(name, filename):
     return mod
 
 
+# The independent pure-Python reference (the frozen pre-retirement tokenizer,
+# native accessor forced off) -- the parity and performance baseline.
+def _load_oracle():
+    spec = importlib.util.spec_from_file_location(
+        "native_test_macro_oracle",
+        os.path.join(ROOT, "spike", "macro_reference.py"))
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules["native_test_macro_oracle"] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
+
+ORACLE = _load_oracle()
+
 macro = _load("narwhal_native_test_macro", "macro.py")
 tokenize = macro.tokenize
 MacroError = macro.MacroError
 # Resolve the SAME native module the tokenizer uses, so we can inspect its
-# counter and monkeypatch it in the fallback tests.
+# counter and monkeypatch it in the declined-native tests.
 native = macro._native_macro()
 
 results = []
-TMP = tempfile.mkdtemp(prefix="native_macro_")
 
 
 def check(name):
@@ -121,31 +148,25 @@ def _assert_native_ran(before, label):
 
 
 @contextmanager
-def _force_python():
-    """Temporarily make BOTH native routes report unavailable so the tokenizer
-    runs its UNCHANGED Python path (the "native == Python" baseline and the
-    malformed-output fallback). The packed one-pass route (Q117-04) runs first
-    for >=240-byte inputs, so it must be disabled alongside the legacy JSON
-    route or the "Python baseline" would still be native."""
-    if native is None:
-        yield
-        return
-    real_packed = native._native_macro_packed
-    real_macro = native._native_macro
-    native._native_macro_packed = lambda *a, **k: None
-    native._native_macro = lambda *a, **k: None
+def _force_oracle():
+    """Temporarily patch ``macro.tokenize`` to the INDEPENDENT pure-Python
+    reference so a parity/performance check can compare against it. The
+    reference is a test-only baseline (a frozen copy with its native accessor
+    forced off), NOT a product fallback: the production module's own code path
+    is never re-entered through this."""
+    real = macro.tokenize
+    macro.tokenize = ORACLE.tokenize
     try:
         yield
     finally:
-        native._native_macro_packed = real_packed
-        native._native_macro = real_macro
+        macro.tokenize = real
 
 
 # The valid macros: (macro, lossless). The expected value is NOT hardcoded --
-# it is asserted to be identical to the pure-Python result (the check below),
-# which is the real invariant. These cover every step kind, the flag set,
-# quotes, comments, specials, the _3Point text rule, both lossless modes and
-# the empty / whitespace edge.
+# it is asserted to be identical to the independent pure-Python reference
+# (the checks below), which is the real invariant. These cover every step
+# kind, the flag set, quotes, comments, specials, the _3Point text rule,
+# both lossless modes and the empty / whitespace edge.
 VALID_MACROS = [
     ("! _Line _Pause 0,0 _Enter", False),
     ("! _Line _Pause 0,0 _Enter", True),
@@ -190,11 +211,20 @@ VALID_MACROS = [
     ("_Move !", False),
     ("!_Move", False),
 ]
+# A SHORT macro: the native-only policy routes it through the native ABI too
+# (no "short stays Python" band any more).
+SHORT_MACRO = "_Line"
 LONG_MACRO = ("! _Line _Pause 0,0 _Enter " * 10).strip()
-# A macro clearly at/above the packed-tier crossover (>=8192 bytes): the packed
-# one-pass route is the production native route for this one.
+# A macro clearly at/above the old packed-tier crossover: the production
+# native route for this one (JSON or packed, either way it counts as native).
 LARGE_MACRO = ("! _Line _Pause 0,0 _Enter '*Zoom -_SelName \"A 01\" "
-                "_Mode=_Shaded _Points=10 " * 120).strip()
+               "_Mode=_Shaded _Points=10 " * 120).strip()
+
+# A leading ``!`` attached to a word that is NOT a command stays TEXT (the
+# fourth measured parity case) -- asserted against the independent reference.
+# The oracle emits the token as a single TEXT step (no cancel step); the
+# native route currently emits a spurious CANCEL step + text.
+TEXT_CANCEL = ["!123", "!3Point", "!&", "!-15"]
 
 
 @check("native library is built, discovered, and exposes the macro ABI")
@@ -220,28 +250,35 @@ def _():
         "a non-string is never a packed-route candidate"
 
 
-@check("tokenize routes only measured-winning long macros through Rust")
+@check("a SHORT macro is native (the counter moves) -- no 'short stays Python' band")
 def _():
     _reset()
     before = native._native_macro_calls
-    assert isinstance(tokenize("_Line"), list)
-    assert native._native_macro_calls == before, "short macro must stay on Python"
+    assert isinstance(tokenize(SHORT_MACRO), list)
+    assert native._native_macro_calls == before + 1, \
+        ("short macro must be native: counter %d -> %d" %
+         (before, native._native_macro_calls))
+
+
+@check("a LONG macro is native (the counter moves)")
+def _():
+    _reset()
+    before = native._native_macro_calls
     assert isinstance(tokenize(LONG_MACRO, lossless=True), list)
     _assert_native_ran(before, "long macro")
 
 
-@check("native equals the pure-Python tokenizer on the SAME valid input")
+@check("native equals the pure-Python reference on the SAME valid input")
 def _():
     _reset()
     for text, lossless in VALID_MACROS:
         got_native = tokenize(text, lossless=lossless)
-        with _force_python():
-            got_py = tokenize(text, lossless=lossless)
-        assert got_py is not None, (text, lossless, got_py)
+        got_ref = ORACLE.tokenize(text, lossless=lossless)
+        assert got_ref is not None, (text, lossless, got_ref)
         # Byte-for-byte the Python contract: the step dicts (with their
         # ``prefixes`` tuples) must be exactly equal.
-        assert got_native == got_py, \
-            (text, lossless, got_native, "expected", got_py)
+        assert got_native == got_ref, \
+            (text, lossless, got_native, "expected", got_ref)
 
 
 @check("lossless native prefixes are TUPLES (the Python contract)")
@@ -256,9 +293,9 @@ def _():
 
 
 # >=240-byte macros (the packed route fires for these). Each is asserted to be
-# byte-for-byte the forced-pure-Python result in BOTH lossless modes -- the
-# real packed-route invariant, covering commands with the full flag set, a
-# leading-`!` cancel, specials, options, and quoted values.
+# byte-for-byte the independent pure-Python reference result in BOTH lossless
+# modes -- the real long-macro invariant, covering commands with the full flag
+# set, a leading-`!` cancel, specials, options, and quoted values.
 LONG_MACROS = [
     LONG_MACRO,
     ('!&_Delete *_Circle ~_Line "My Layer 01" "Table 01:: New" '
@@ -268,19 +305,18 @@ LONG_MACROS = [
 ]
 
 
-@check("packed native equals the pure-Python tokenizer on >=240-byte inputs")
+@check("long native equals the pure-Python reference on >=240-byte inputs")
 def _():
     _reset()
     for text in LONG_MACROS:
         for lossless in (False, True):
             got_native = tokenize(text, lossless=lossless)
-            with _force_python():
-                got_py = tokenize(text, lossless=lossless)
-            assert got_native == got_py, \
-                (text[:40], lossless, got_native[:3], "expected", got_py[:3])
+            got_ref = ORACLE.tokenize(text, lossless=lossless)
+            assert got_native == got_ref, \
+                (text[:40], lossless, got_native[:3], "expected", got_ref[:3])
 
 
-@check("the _3Point text rule holds on the packed route")
+@check("the _3Point text rule holds on the packed route (host converter)")
 def _():
     # A flagged word whose name starts with a digit is TEXT, not a command.
     # If the Rust `name[0].isalpha()` requirement were loosened to also accept
@@ -295,27 +331,22 @@ def _():
         [{"kind": "text", "value": "_3Point"}]
 
 
-@check("a library without the packed export falls back to the JSON route")
+@check("the _3Point text rule holds on the native route (mutation target)")
 def _():
-    # Resolve the packed binding as absent (a library built before Q117-04):
-    # the >=240-byte macro must still be tokenized correctly via the legacy
-    # two-pass JSON ABI, with the counter moving and the exact step list.
+    # A flagged word whose name starts with a digit is TEXT, not a command.
+    # If the Rust ``name[0].isalpha()`` requirement were loosened to also
+    # accept a leading digit, this would go RED (native would emit a command
+    # step).
     _reset()
-    real_resolver = native._macro_packed_binding
-    native._macro_packed_binding = lambda: None
-    try:
-        before = native._native_macro_calls
-        assert native._native_macro_packed(LONG_MACRO, True) is None, \
-            "with the packed export absent the packed call must report None"
-        got = tokenize(LONG_MACRO, lossless=True)
-        with _force_python():
-            expected = tokenize(LONG_MACRO, lossless=True)
-        assert got == expected
-        assert native._native_macro_calls > before, \
-            "the JSON fallback must count as a native success"
-    finally:
-        native._macro_packed_binding = real_resolver
-        _reset()
+    before = native._native_macro_calls
+    payload = native._native_macro("_3Point", False)
+    assert payload is not None
+    assert macro._steps_from_json(payload) == \
+        [{"kind": "text", "value": "_3Point"}]
+    _assert_native_ran(before, "direct macro _3Point")
+    assert tokenize("-15,0,0") == [{"kind": "text", "value": "-15,0,0"}]
+    assert tokenize("_Points=10") == [{"kind": "option",
+                                       "name": "Points", "value": "10"}]
 
 
 @check("a non-string macro is still refused with MacroError (counter unmoved)")
@@ -335,44 +366,37 @@ def _():
          before, native._native_macro_calls)
 
 
-@check("the _3Point text rule holds on the native route (mutation target)")
+@check("a leading-! non-command stays TEXT, no spurious cancel (native == reference)")
 def _():
-    # A flagged word whose name starts with a digit is TEXT, not a command.
-    # If the Rust ``name[0].isalpha()`` requirement were loosened to also accept
-    # a leading digit, this would go RED (native would emit a command step).
     _reset()
-    before = native._native_macro_calls
-    payload = native._native_macro("_3Point", False)
-    assert payload is not None
-    assert macro._steps_from_json(payload) == [{"kind": "text", "value": "_3Point"}]
-    _assert_native_ran(before, "direct macro _3Point")
-    assert tokenize("-15,0,0") == [{"kind": "text", "value": "-15,0,0"}]
-    assert tokenize("_Points=10") == [{"kind": "option",
-                                       "name": "Points", "value": "10"}]
+    for text in TEXT_CANCEL:
+        got_native = tokenize(text)
+        got_ref = ORACLE.tokenize(text)
+        assert got_native == got_ref, \
+            (text, got_native, "expected", got_ref)
+        # the oracle shape: ONE text step, the token verbatim, NO cancel step
+        assert got_native == [{"kind": "text", "value": text}], \
+            (text, got_native)
 
 
-@check("fallback: a missing library uses the unchanged Python tokenizer")
+@check("declined native (missing library) -> RuntimeError, counter unmoved")
 def _():
     _reset()
     real_env = os.environ.get("NARWHAL_PURE_CORE")
-    os.environ["NARWHAL_PURE_CORE"] = os.path.join(TMP, "no_such_lib.so")
+    os.environ["NARWHAL_PURE_CORE"] = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "no_such_lib.so")
     try:
         assert native._macro_binding() is None, \
             "a missing library must make the binding None"
         before = native._native_macro_calls
-        # A valid macro still works via the Python path (value unchanged).
-        assert tokenize("! _Line _Pause 0,0 _Enter") == [
-            {"kind": "cancel"},
-            {"kind": "command", "name": "Line", "dash": False,
-             "underscore": True, "transparent": False},
-            {"kind": "pause"},
-            {"kind": "text", "value": "0,0"},
-            {"kind": "enter"},
-        ]
-        assert tokenize("_3Point") == [{"kind": "text", "value": "_3Point"}]
-        # The native counter must NOT have moved (the Python tokenizer ran).
+        try:
+            tokenize("! _Line _Pause 0,0 _Enter")
+            raise AssertionError(
+                "expected RuntimeError (no Python replay) for a missing library")
+        except RuntimeError:
+            pass
         assert native._native_macro_calls == before, \
-            ("missing-lib fallback must not touch the native counter",
+            ("missing-lib refusal must not touch the native counter",
              before, native._native_macro_calls)
     finally:
         if real_env is None:
@@ -382,29 +406,30 @@ def _():
         _reset()
 
 
-@check("fallback: an old library without the macro exports uses Python")
+@check("declined native (stale library) -> RuntimeError, counter unmoved")
 def _():
     # A real file that is not a valid shared library models "old symbol":
-    # CDLL fails (OSError) so the binding is None and the Python tokenizer runs
-    # with the same step list and an unchanged counter.
-    old = os.path.join(TMP, "empty.so")
-    open(old, "wb").close()
+    # CDLL fails (OSError) so the binding is None and the module must raise
+    # RuntimeError -- the retired Python tokenizer must NOT be reachable.
+    import tempfile
+    stale = os.path.join(tempfile.gettempdir(), "native_macro_stale.so")
+    with open(stale, "w", encoding="utf-8") as f:
+        f.write("not a shared object\n")
     _reset()
     real_env = os.environ.get("NARWHAL_PURE_CORE")
-    os.environ["NARWHAL_PURE_CORE"] = old
+    os.environ["NARWHAL_PURE_CORE"] = stale
     try:
         assert native._macro_binding() is None, \
             "a library without the macro export must make the binding None"
         before = native._native_macro_calls
-        assert tokenize("!&_Delete") == [
-            {"kind": "cancel"},
-            {"kind": "command", "name": "Delete", "dash": False,
-             "underscore": True, "transparent": False,
-             "history_lock_off": True},
-        ]
-        assert tokenize("_3Point") == [{"kind": "text", "value": "_3Point"}]
+        try:
+            tokenize("!&_Delete")
+            raise AssertionError(
+                "expected RuntimeError (no Python replay) for a stale library")
+        except RuntimeError:
+            pass
         assert native._native_macro_calls == before, \
-            ("old-symbol fallback must not touch the native counter",
+            ("stale-lib refusal must not touch the native counter",
              before, native._native_macro_calls)
     finally:
         if real_env is None:
@@ -414,35 +439,34 @@ def _():
         _reset()
 
 
-@check("fallback: a malformed native output (None) uses the Python tokenizer")
+@check("declined native (adapter returns None) -> RuntimeError, counter unmoved")
 def _():
     _reset()
     assert native is not None and native._macro_binding() is not None
     real_macro = native._native_macro
-    native._native_macro = lambda *a, **k: None  # simulate a failed call
+    native._native_macro = lambda *a, **k: None  # simulate a failed/refused call
     try:
         before = native._native_macro_calls
-        # The Python tokenizer still produces the correct step list.
-        assert tokenize("! _Line _Pause 0,0 _Enter") == [
-            {"kind": "cancel"},
-            {"kind": "command", "name": "Line", "dash": False,
-             "underscore": True, "transparent": False},
-            {"kind": "pause"},
-            {"kind": "text", "value": "0,0"},
-            {"kind": "enter"},
-        ]
-        assert tokenize("_3Point") == [{"kind": "text", "value": "_3Point"}]
-        # The native counter must NOT have incremented (the fallback ran).
+        try:
+            tokenize("! _Line _Pause 0,0 _Enter")
+            raise AssertionError(
+                "expected RuntimeError (no Python replay) when the "
+                "adapter returns None")
+        except RuntimeError:
+            pass
         assert native._native_macro_calls == before, \
-            ("malformed-output fallback must not touch the native counter",
+            ("a refused native result must not touch the native counter",
              before, native._native_macro_calls)
     finally:
         native._native_macro = real_macro
         _reset()
 
 
-@check("malformed successful macro JSON falls back without counting")
+@check("malformed successful macro JSON -> RuntimeError (no Python replay)")
 def _():
+    # A binding that "succeeds" (rc==0) but emits a payload the strict
+    # validator refuses: the adapter reports ``None``, and the native-only
+    # module must raise RuntimeError -- not re-run the retired tokenizer.
     _reset()
     payload = (b'[{"kind":"command","name":"Move","dash":0,'
                b'"underscore":true,"transparent":false}]')
@@ -461,55 +485,19 @@ def _():
         before = native._native_macro_calls
         assert native._native_macro("_Move", False) is None
         assert native._native_macro_calls == before
-        assert tokenize("_Move") == [{"kind": "command", "name": "Move",
-                                      "dash": False, "underscore": True,
-                                      "transparent": False}]
+        try:
+            tokenize("_Move")
+            raise AssertionError(
+                "expected RuntimeError (no Python replay) for a malformed "
+                "native output")
+        except RuntimeError:
+            pass
+        assert native._native_macro_calls == before, \
+            ("a malformed native output must not count as a native success",
+             before, native._native_macro_calls)
     finally:
         native._macro_binding = real_binding
         _reset()
-
-
-@check("the active native win band is >=10% faster; packed stays inactive")
-def _():
-    # The "never slower" rule, tier by tier: on the *same* valid input, the
-    # ROUTED native route (the JSON two-pass ABI below the packed crossover,
-    # the packed one-pass ABI at/above it) must be faster than the unchanged
-    # Python tokenizer. We measure the same public function twice -- once with
-    # the native route active, once forced onto the pure-Python path
-    # (``_force_python`` disables BOTH native routes) -- so the comparison
-    # isolates tokenizing cost, not grammar. A regression (routed native slower
-    # than Python) is a DECISION NEEDED for the owner, not a silent slowdown:
-    # the assertion fails and the measured numbers are printed.
-    if native is None or native._macro_binding() is None:
-        print("  [perf] SKIPPED -- native macro binding not available")
-        return
-    assert macro.NATIVE_MACRO_JSON_MAX_BYTES == 4096
-    assert macro.NATIVE_MACRO_PACKED_MIN_BYTES > 1024 * 1024
-    tiers = [("json-tier (259B, the 240B crossover)", LONG_MACRO)]
-
-    def _best(fn, N):
-        best = float("inf")
-        for _ in range(3):
-            t0 = time.perf_counter()
-            for _ in range(N):
-                fn()
-            best = min(best, time.perf_counter() - t0)
-        return best
-
-    for label, text in tiers:
-        N = max(2000, 200000 // max(1, len(text.encode())))
-        _reset()
-        t_native = _best(lambda: tokenize(text, lossless=True), N)
-        with _force_python():
-            _reset()
-            t_py = _best(lambda: tokenize(text, lossless=True), N)
-        r = t_native / max(t_py, 1e-9)
-        print("  [perf] macro.tokenize %s native=%.5fs python=%.5fs "
-              "ratio=%.2fx (%d calls)" % (label, t_native, t_py, r, N))
-        assert r <= 0.90, \
-            ("routed native macro workload (%s) lacks the required 10%% win: "
-             "native %.5fs vs python %.5fs (ratio %.2fx)" %
-             (label, t_native, t_py, r))
 
 
 @check("packed macro validator rejects invalid UTF-8, gaps, and trailing bytes")
@@ -524,10 +512,53 @@ def _():
                                       bytearray(b"xy")) is False
 
 
+@check("performance REPORT: native vs the pure-Python reference (not asserted)")
+def _():
+    # The owner deliberately consolidates on the native route rather than
+    # claiming every tiny call is faster, so this is a REPORT, not a routing
+    # guard: measure the same valid input on the native route and on the
+    # independent pure-Python reference, and print the numbers. A slow native
+    # route is surfaced (DECISION NEEDED), never silently accepted as a win.
+    if native is None or native._macro_binding() is None:
+        print("  [perf] SKIPPED -- native macro binding not available")
+        return
+    tiers = [("short (5B)", SHORT_MACRO),
+             ("json-tier (259B, the old 240B crossover)", LONG_MACRO)]
+
+    def _best(fn, N):
+        best = float("inf")
+        for _ in range(3):
+            t0 = time.perf_counter()
+            for _ in range(N):
+                fn()
+            best = min(best, time.perf_counter() - t0)
+        return best
+
+    for label, text in tiers:
+        N = max(2000, 200000 // max(1, len(text.encode())))
+        _reset()
+        t_native = _best(lambda: tokenize(text, lossless=True), N)
+        with _force_oracle():
+            _reset()
+            t_py = _best(lambda: ORACLE.tokenize(text, lossless=True), N)
+        r = t_native / max(t_py, 1e-9)
+        print("  [perf] macro.tokenize %s native=%.5fs python=%.5fs "
+              "ratio=%.2fx (%d calls)" % (label, t_native, t_py, r, N))
+        if r > 1.0:
+            print("  [perf] NOTE: native route is slower than the Python "
+                  "reference here (ratio %.2fx) -- DECISION NEEDED for the "
+                  "owner (reported, not asserted)" % r)
+
+
 failed = 0
 for name, status, detail in results:
     print(f"[{status}] {name}" + (f"  -- {detail}" if detail else ""))
     if status == "FAIL":
         failed += 1
 print(f"\n{len(results) - failed}/{len(results)} passed")
+if failed:
+    print("NOTE: before the retirement activates, the native-only checks "
+          "(short counter, the four declined-native RuntimeError checks) are "
+          "EXPECTED red; the direct-ABI, parity and non-string checks stay "
+          "green either way.")
 sys.exit(1 if failed else 0)

@@ -56,10 +56,38 @@ def library(mutant=""):
         reply.value = value + 1 if mutant == "wrong-value" else value
         reply.start, reply.end = 0, length
         return 1 if mutant == "transport" else 0
+    def macro_payload(text, length, flag):
+        assert flag == 0
+        return {b"!123": b'[{"kind":"text","value":"!123"}]',
+                b"a\x1cb": b'[{"kind":"text","value":"a"},{"kind":"text","value":"b"}]'}[text[:length]]
+    def macro_encode(text, length, flag, output, capacity):
+        witness = macro_payload(text, length, flag)
+        assert capacity == len(witness)
+        c.memmove(output, witness, len(witness))
+        return 0
+    def resolve(text, length):
+        return {b" Fractional ": 1, b"bogus": 13}[text[:length]]
+    def fmt(value, mode, precision, context, output, capacity, needed):
+        witness = {(1.75, 1, 16, 28): b"1-3/4", (0.0936, 1, 16, 2): b"1/8",
+                   (30.5, 2, 16, 28): b"2'-6 1/2\""}[(value, mode, precision, context)]
+        c.memmove(output, witness, len(witness))
+        c.cast(needed, c.POINTER(c.c_size_t))[0] = len(witness)
+        return 0
+    def widths(text, length, output, capacity, needed):
+        assert text[:length] == b"2\n1\n2"
+        witness = struct.pack("<IddI", 2, 1.0, 2.0, 0)
+        c.memmove(output, witness, len(witness))
+        c.cast(needed, c.POINTER(c.c_size_t))[0] = len(witness)
+        return 0
     result = SimpleNamespace(
         narwhal_pure_core_abi_version=Mock(return_value=9 if mutant == "old-abi" else 1),
         narwhal_pure_core_parse_abi=Mock(return_value=1 if mutant == "parser-abi" else 2),
-        narwhal_pure_core_parse_v2=Mock(side_effect=parse))
+        narwhal_pure_core_parse_v2=Mock(side_effect=parse),
+        narwhal_pure_core_printwidths=Mock(side_effect=widths),
+        narwhal_pure_core_macro_size=Mock(side_effect=lambda *args: len(macro_payload(*args))),
+        narwhal_pure_core_macro_encode=Mock(side_effect=macro_encode),
+        narwhal_pure_core_unitformat_resolve_mode=Mock(side_effect=resolve),
+        narwhal_pure_core_unitformat_format=Mock(side_effect=fmt))
     if mutant in gate.PURE_CORE_PARSE_EXPORTS:
         delattr(result, mutant)
     return result

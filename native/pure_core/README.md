@@ -1,9 +1,10 @@
 # Narwhal pure-core
 
 This dependency-free Rust crate contains checked implementations for Narwhal 3D's
-pure interchange and parsing modules. A Rust symbol is not automatically a production
-fast path: the Python adapter enables it only when complete end-to-end measurements,
-including packing and result conversion, beat the established Python path.
+pure interchange and parsing modules. Optional accelerators are performance-qualified.
+Owner-approved native-only retirements additionally consolidate complete computation and
+rejection ownership in Rust; their small-call FFI costs are reported, never hidden behind
+a duplicate Python implementation. See `docs/RUST_RETIREMENT_11.md`.
 
 Current production routing:
 
@@ -15,7 +16,10 @@ Current production routing:
 | length parsing | Rust | about 1.14× faster |
 | calculator | Rust | about 2.5× faster |
 | coordinate parsing | Rust | about 1.05× faster |
-| macro tokenize / plan | Rust only at 240 / 192 UTF-8 bytes | long workloads measured 1.32× / 1.58× faster |
+| macro tokenize | Rust only at every supported length | Python tokenizer retired; ~259-byte probe about 1.4× faster, tiny 5-byte repeated probe about 3.6× slower (~8 µs versus ~2 µs), not a universal speedup |
+| macro plan | Rust from 192 UTF-8 bytes; smaller plans orchestrate native tokenization | planner policy fallback still present, not retired |
+| print-width file parsing | Rust only | short-file Python bypass and parser retired; Python retains file decoding |
+| length display formatting | Rust only | decimal/fraction/feet-inch rounding, reduction, rendering and rejection in Rust; Python retains coercion/exception mapping |
 | closed (periodic) curve interpolation | Rust from 3 points | 1.4× faster end to end at 4 points, 3.3× at 64 |
 | Curve control-point preview sampling | Rust from 3 points | 5× faster per redraw at 4 points, 23× at 30; bit-identical samples |
 | planar face ear clipping (display) | Rust for concave loops from 6 points, any loop from 64 | concave 3.6× faster at 12 points, 40× at 100; convex 1.8× at 360; identical triangles |
@@ -29,7 +33,7 @@ Current production routing:
 | OBJ encode | Python | native path was 2.18× slower |
 | curve/curve intersection recursion (`intersect.curve_curve` after its overlap test) | Rust for two valid `NurbsCurve`s on a qualified platform (Linux; `check_pure_core.py` pins the witness hits); other curves, other platforms and the overlap test stay in Python | 56-97× faster (two 20-point cubics 54.9 → 0.66 ms); bit-identical hits on Linux/glibc (`Split`, `GetBoundingBox`, `Intersection.LineLine` ported from the openNURBS rhino3dm 8.35.0 pins) |
 | DXF encode | Python | two-pass output build never reached a stable 10% win |
-| standalone number / bearing parsing | Python | FFI cost erased the tiny-parser gain |
+| standalone number parsing / bearing parsing | Rust only / Python | numbers require the owned parser ABI; bearing retirement not complete |
 | SVG path parsing | Python | JSON ABI was slower through the 1 MiB input limit |
 | display segment counts (`screen_segments_for`) | Python | 0.5 µs per call, below one ctypes call; not ported |
 | short convex face loops (under 64 points) | Python | the linear fan beats packing (3.4× slower at 3 points) |
@@ -48,8 +52,9 @@ are unmeasured. There the complete Python route runs until
 A difference would only move a display vertex or change a segment count, never
 document geometry.
 
-The slower Rust implementations remain directly tested for correctness and future ABI work,
-but they are not allowed to slow production.
+Optional slower Rust prototypes remain directly tested but inactive. Native-only retirement
+choices above intentionally remove duplicate engines; consult their measured cost rather
+than treating all Rust routes as performance wins.
 
 Unit scales have one definition: `UNIT_SYSTEM_MM` in `src/numparse.rs` (all 24 fixed-scale
 unit systems). The typed-length parser's model units read it, and `narwhal3d/units.py` builds

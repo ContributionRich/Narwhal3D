@@ -206,7 +206,7 @@ def _validate_macro_json(payload: bytes, lossless: bool) -> bool:
             expected = {"kind", "name", "value", "prefixes"} if lossless else {
                 "kind", "name", "value"}
             if (set(step) != expected or not isinstance(step["name"], str)
-                    or not step["name"] or not isinstance(step["value"], str)):
+                    or not isinstance(step["value"], str)):
                 return False
             if lossless and not _valid_prefixes(step["prefixes"]):
                 return False
@@ -1105,13 +1105,7 @@ def _native_parse(text, model_unit):
 
 
 def _macro_binding():
-    """Return ``(narwhal_pure_core_macro_size, narwhal_pure_core_macro_encode)``.
-
-    Resolved as OPTIONAL (``None`` when absent) so a library built before the
-    macro export keeps every existing route and only the macro route falls back
-    to Python. (The state globals are ``_m_*`` -- distinct from this function's
-    name, as ``_co_*`` are distinct from ``_coords_binding``.)
-    """
+    """Resolve the required native macro ABI, or None for explicit host refusal."""
     global _m_signature, _m_binding
     explicit = os.environ.get(_ENV_PATH)
     signature = explicit or "<packaged>"
@@ -1151,15 +1145,7 @@ def _macro_binding():
 
 
 def _native_macro(text, lossless):
-    """Native ``macro.tokenize`` -> the JSON step list, or ``None``.
-
-    ``None`` means "use the unchanged Python tokenizer" -- the library is
-    unavailable, it predates the macro export, the input was rejected (over the
-    byte cap or not valid UTF-8), or the output buffer was mis-sized. The Python
-    hook converts the JSON back to the exact step-list contract (including the
-    lossless ``prefixes`` tuples), so a successful native route is
-    byte-for-byte the Python result.
-    """
+    """Return checked native JSON or None; the host refuses, never reparses."""
     global _native_macro_calls
     binding = _macro_binding()
     if binding is None:
@@ -1180,7 +1166,7 @@ def _native_macro(text, lossless):
         if rc != 0:
             return None
         out = bytes(buf)
-    except Exception:  # noqa: BLE001 -- any failure degrades to the fallback
+    except Exception:  # noqa: BLE001 -- host turns refusal into an explicit error
         return None
     if not _valid_macro_json(out, bool(lossless)):
         return None
