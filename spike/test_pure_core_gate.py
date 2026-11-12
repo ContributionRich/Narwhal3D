@@ -80,6 +80,8 @@ def _():
         "spike/test_numparse.py", "spike/test_numparse_owned.py", "spike/test_native_numparse.py",
         "spike/test_pure_core_packaging.py",
         "spike/test_calc.py", "spike/test_native_calc.py",
+        "spike/test_calc_owned.py", "spike/test_bearing_owned.py",
+        "spike/test_native_parser_cache.py", "spike/test_macro_plan_owned.py",
         "spike/test_aci_colors.py",
         "spike/test_macro_owned.py", "spike/test_printwidths_contract.py",
         "spike/test_printwidths_owned.py", "spike/test_unitformat_contract.py",

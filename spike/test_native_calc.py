@@ -1,29 +1,15 @@
-"""Native calculator parser/evaluator: direct ABI proof + route activation + fallbacks.
+"""Required calculator routing plus explicitly separate compatibility ABI tests.
 
-Complements ``spike/test_calc.py`` (which pins the grammar and the exact public
-error strings on the Python path) by proving the *native* route is the one
-actually running for valid input. The expression compatibility evaluator still
-uses the required Rust numeric parser; missing whole-core installations refuse.
-
-* the Rust ABI is present and ``_calc_binding()`` is not ``None``;
-* ``evaluate`` activates the native route (the ``_native_calc_calls`` counter
-  must move) and, on the SAME input, returns the same value the pure-Python
-  evaluator does (the "native matches the Python reference" invariant);
-* every rejection falls back to the *unchanged* Python evaluator, so the public
-  ``(None, error)`` is byte-for-byte identical to the pure-Python result and the
-  native counter is NOT incremented (a native success that should have been a
-  rejection would make these RED);
-* missing/unloadable whole-core scenarios explicitly refuse numeric parsing;
-  a declined calculator call with the required numeric parser still available
-  preserves expression values/error strings without a native calculator success;
-* a performance guard: on the *same* valid input the native success path must
-  not be *materially* slower than the pure-Python evaluator (the "never slower"
-  rule -- a regression leaves a DECISION NEEDED note for the owner).
-
-The suite is green with or without a prebuilt ``.so``: if the library is not
-present it builds the crate once (offline, pinned toolchain) and rechecks.
+The production adapter owns successful AND rejected formulas. The independent
+calc_reference oracle never calls either native expression evaluator (its
+numeric literals still use the required native number parser). Missing/stale
+calculator ABIs or malformed replies raise RuntimeError, never replay Python.
+Legacy native_pure._native_calc tests below qualify compatibility only.
+Small-input performance is reported, not gated on a universal speed ratio.
 """
+import ctypes
 import importlib.util
+import math
 import os
 import shutil
 import subprocess
@@ -31,6 +17,7 @@ import sys
 import tempfile
 import time
 from contextlib import contextmanager
+from unittest.mock import patch
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import runtime_paths
@@ -47,47 +34,56 @@ LIB_CANDIDATES = [
 
 
 def _locate_lib():
-    for cand in LIB_CANDIDATES:
-        if cand and os.path.isfile(cand):
-            return cand
+    for candidate in LIB_CANDIDATES:
+        if candidate and os.path.isfile(candidate):
+            return candidate
     return None
 
 
 def _ensure_lib():
-    """Return the ``.so`` path, building the crate once if it is not present."""
-    lib = _locate_lib()
-    if lib is not None:
-        return lib
+    """Retain the existing offline build path when no library is present."""
+    library = _locate_lib()
+    if library is not None:
+        return library
     manifest = os.path.join(ROOT, "native", "pure_core", "Cargo.toml")
     if not os.path.isfile(manifest):
-        return None
+        raise RuntimeError("Required pure_core manifest is missing")
     subprocess.run(
         ["cargo", "+1.95.0", "build", "--release", "--locked", "--offline",
          "--manifest-path", manifest, "--target", "x86_64-unknown-linux-gnu"],
         cwd=ROOT, check=True,
     )
-    return _locate_lib()
+    library = _locate_lib()
+    if library is None:
+        raise RuntimeError("Required pure_core library was not built")
+    return library
 
 
-# Make the native library discoverable before the adapter is first imported.
 _LIB = _ensure_lib()
-if _LIB is not None:
-    os.environ["NARWHAL_PURE_CORE"] = _LIB
+os.environ["NARWHAL_PURE_CORE"] = _LIB
 
 
 def _load(name, filename):
     spec = importlib.util.spec_from_file_location(
         name, os.path.join(ROOT, "narwhal3d", filename))
-    mod = importlib.util.module_from_spec(spec)
-    sys.modules[name] = mod
-    spec.loader.exec_module(mod)
-    return mod
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module
 
 
 calc = _load("narwhal_native_test_calc", "calc.py")
-# Resolve the SAME native module the evaluator uses, so we can inspect its
-# counter and monkeypatch it in the fallback tests.
-native = calc._native_calc()
+if hasattr(calc, "native_calc"):
+    native = calc.native_calc
+elif hasattr(calc, "_adapter"):
+    native = calc._adapter()
+else:
+    raise RuntimeError("Required native_calc production candidate is not activated")
+compat = _load("narwhal_native_test_calc_compat", "native_pure.py")
+reference_spec = importlib.util.spec_from_file_location(
+    "narwhal_native_test_calc_reference", os.path.join(ROOT, "spike", "calc_reference.py"))
+reference = importlib.util.module_from_spec(reference_spec)
+reference_spec.loader.exec_module(reference)
 
 results = []
 TMP = tempfile.mkdtemp(prefix="native_calc_")
@@ -98,44 +94,45 @@ def check(name):
         try:
             fn()
             results.append((name, "PASS", ""))
-        except Exception as e:  # noqa: BLE001
-            results.append((name, "FAIL", repr(e)))
+        except Exception as error:  # collect every independent check
+            results.append((name, "FAIL", repr(error)))
     return deco
 
 
 def _reset():
-    """Forget discovery + counter state so a check can re-point the binding."""
-    if native is not None:
-        native._reset_for_tests()
+    """Reset only test-visible discovery state; no production reset API needed."""
+    with native._lock:
+        native._signature = native._binding = native._library = None
+        native._native_calc_calls = 0
+    compat._reset_for_tests()
 
 
-def _assert_native_ran(before, label):
-    """Tripwire: the counter must have moved (the native route actually ran)."""
-    assert native is not None, "adapter did not resolve the native module"
-    assert native._native_calc_calls > before, \
-        (label, "native route did not run (%d -> %d)" %
-         (before, native._native_calc_calls))
+def _assert_native_ran(before, count, label):
+    assert native._native_calc_calls == before + count, (
+        label, "each admitted formula must make one native call", before,
+        native._native_calc_calls, count)
 
 
 @contextmanager
-def _force_python():
-    """Temporarily make the native route report unavailable so ``evaluate``
-    runs its UNCHANGED Python evaluator (the "native == Python" baseline and
-    the malformed-output fallback)."""
-    if native is None:
-        yield
-        return
-    real = native._native_calc
-    native._native_calc = lambda *a, **k: None
+def _library_path(path):
+    with patch.dict(os.environ, {"NARWHAL_PURE_CORE": path}):
+        _reset()
+        try:
+            yield
+        finally:
+            _reset()
+
+
+def _runtime_error(fn):
     try:
-        yield
-    finally:
-        native._native_calc = real
+        fn()
+    except RuntimeError as error:
+        assert str(error), "installation/protocol errors must be actionable"
+    else:
+        raise AssertionError("required calculator failure was silently bypassed")
 
 
-# The valid formulas: (text, model_unit, expected). The expected values are the
-# plain-Python results; the native route must agree to 1e-9 relative (a libm
-# 1-ulp difference is allowed, a wrong value is not).
+# Preserve the existing success and rejection corpus and numerical tolerances.
 VALID = [
     ("1+2*3", "Millimeters", 7.0),
     ("(1+2)*3", "Millimeters", 9.0),
@@ -202,211 +199,227 @@ REJECTED = [
 ]
 
 
-@check("native library is built, discovered, and exposes the calculator ABI")
+@check("required ABI resolves through the production adapter; oracle is independent")
 def _():
-    assert _LIB is not None, "pure_core .so not present and build failed"
-    assert native is not None, "adapter did not resolve the native module"
-    binding = native._calc_binding()
-    assert binding is not None and callable(binding), \
-        "the calculator binding must be resolvable"
-    # The counter is a real attribute (the tripwire target).
+    assert _LIB is not None
+    assert callable(native._required_binding())
     assert hasattr(native, "_native_calc_calls")
+    if hasattr(calc, "native_calc"):
+        assert calc.native_calc is native
+    else:
+        assert calc._adapter() is native
+    assert reference._native_calc() is None
 
 
-@check("evaluate activates the native route and matches the Python reference")
+@check("all successful evaluate cases are native-owned and retain expected values")
 def _():
     _reset()
     before = native._native_calc_calls
-    for text, mu, want in VALID:
-        v, e = calc.evaluate(text, mu)
-        assert e is None and v is not None, (text, mu, v, e)
-        assert abs(v - want) <= 1e-9 * max(1.0, abs(want)), (text, v, want)
-    _assert_native_ran(before, "evaluate")
+    with patch.object(compat, "_native_calc", side_effect=AssertionError("legacy route used")):
+        for text, unit, want in VALID:
+            value, error = calc.evaluate(text, unit)
+            assert error is None and value is not None, (text, unit, value, error)
+            assert math.isfinite(value), (text, value)
+            assert abs(value - want) <= 1e-9 * max(1.0, abs(want)), (text, value, want)
+    _assert_native_ran(before, len(VALID), "valid evaluate")
+    assert compat._native_calc_calls == 0, "production must not call compatibility ABI"
 
 
-@check("native evaluate equals the pure-Python evaluate on the SAME valid input")
+@check("native evaluate equals the independent reference on the SAME valid inputs")
 def _():
     _reset()
-    for text, mu, _ in VALID:
-        v_native, e_native = calc.evaluate(text, mu)
-        with _force_python():
-            v_py, e_py = calc.evaluate(text, mu)
-        assert e_py is None and v_py is not None, (text, mu, v_py, e_py)
-        assert e_native is None and v_native is not None, (text, mu, v_native,
-                                                           e_native)
-        assert abs(v_native - v_py) <= 1e-9 * max(1.0, abs(v_py)), \
-            (text, mu, v_native, v_py)
+    for text, unit, _ in VALID:
+        before = native._native_calc_calls
+        expected = reference.evaluate(text, unit)
+        assert native._native_calc_calls == before, "oracle used production expression adapter"
+        actual = calc.evaluate(text, unit)
+        assert expected[1] is None and expected[0] is not None, (text, expected)
+        assert actual[1] is None and actual[0] is not None, (text, actual)
+        assert abs(actual[0] - expected[0]) <= 1e-9 * max(1.0, abs(expected[0])), (
+            text, unit, actual, expected)
+        _assert_native_ran(before, 1, text)
 
 
-@check("every rejection is byte-identical to the Python result, counter unmoved")
+@check("every rejected formula is native-owned with byte-identical reference errors")
 def _():
     _reset()
-    before = native._native_calc_calls
-    for text, mu in REJECTED:
-        with _force_python():
-            v_py, e_py = calc.evaluate(text, mu)
-        assert v_py is None and isinstance(e_py, str) and e_py, \
-            (text, mu, "reference must be an error", v_py, e_py)
-        v_nat, e_nat = calc.evaluate(text, mu)
-        assert v_nat is None, (text, mu, "must be a rejection", v_nat)
-        assert e_nat == e_py, (text, mu, e_nat, "expected", e_py)
-    # None of the rejections may have counted as a native SUCCESS.
-    assert native._native_calc_calls == before, \
-        ("rejections must not increment the native counter",
-         before, native._native_calc_calls)
+    with patch.object(compat, "_native_calc", side_effect=AssertionError("legacy route used")):
+        for text, unit in REJECTED:
+            before = native._native_calc_calls
+            expected = reference.evaluate(text, unit)
+            assert expected[0] is None and isinstance(expected[1], str) and expected[1], (
+                text, "reference must be an error", expected)
+            assert native._native_calc_calls == before, "oracle used production expression adapter"
+            actual = calc.evaluate(text, unit)
+            assert actual == expected, (text, unit, actual, "expected", expected)
+            _assert_native_ran(before, 1, text)
+    assert compat._native_calc_calls == 0
 
 
-@check("a documented rejection keeps its EXACT public string (contract pin)")
+@check("documented rejection strings remain EXACT and increment native ownership counter")
 def _():
     _reset()
-    # A representative pin of the public contract (these strings embed the
-    # input and come from the unchanged Python evaluator).
-    for text, want in [
+    pins = [
         ("1 + 2", "no spaces in formulas"),
         ("1/0", "bad number: '1/0'"),
         ("5/(3-3)", "division by zero"),
         ("1+*2", "unexpected token: '*'"),
         ("pow(2)", "pow takes 2 argument(s), got 1"),
         ("", "empty formula"),
-    ]:
-        v, e = calc.evaluate(text)
-        assert v is None and e == want, (text, v, e, "expected", want)
-    assert native._native_calc_calls == 0, \
-        ("contract-pin rejections must not touch the native counter",
-         native._native_calc_calls)
+    ]
+    for text, want in pins:
+        assert calc.evaluate(text) == (None, want), (text, want)
+    _assert_native_ran(0, len(pins), "contract pins")
 
 
-def required_parser_refuses(text, model_unit='Millimeters'):
-    try:
-        calc.evaluate(text, model_unit)
-    except RuntimeError as exc:
-        assert 'Required Rust number parser' in str(exc), str(exc)
-    else:
-        raise AssertionError('missing mandatory numeric parser was silently bypassed')
-
-
-@check("missing whole core refuses the mandatory numeric-parser dependency")
+@check("domain/overflow/arity/nonfinite rejections retain native ownership and parity")
 def _():
     _reset()
-    real_env = os.environ.get("NARWHAL_PURE_CORE")
-    os.environ["NARWHAL_PURE_CORE"] = os.path.join(TMP, "no_such_lib.so")
-    try:
-        assert native._calc_binding() is None, \
-            "a missing library must make the binding None"
+    texts = ["sin()", "sin(1,2)", "atan2(1)", "pow(1,2,3)", "sinh(1000)",
+             "cosh(1000)", "pow(1e308,2)", "pow(-1e308,1.5)", "1e308*2",
+             "sin(1e308*2)", "ln(1e308*2)", "1e999", "sqrt(-1)@"]
+    for text in texts:
+        expected = reference.evaluate(text)
+        assert expected[0] is None and expected[1], (text, expected)
         before = native._native_calc_calls
-        # The expression fallback still needs its required native numeric parser.
-        required_parser_refuses('1+2*3')
-        required_parser_refuses('27cm', 'Meters')
-        required_parser_refuses('1/0')
-        # No native calculator call was made on this admission failure.
-        assert native._native_calc_calls == before, \
-            ("missing-lib fallback must not touch the native counter",
-             before, native._native_calc_calls)
-    finally:
-        if real_env is None:
-            os.environ.pop("NARWHAL_PURE_CORE", None)
-        else:
-            os.environ["NARWHAL_PURE_CORE"] = real_env
-        _reset()
+        assert calc.evaluate(text) == expected, (text, expected)
+        _assert_native_ran(before, 1, text)
 
 
-@check("unloadable whole core refuses instead of emulating numeric parsing")
+@check("missing and unloadable required ABIs raise RuntimeError without Python replay")
 def _():
-    # A real file that is not a valid shared library models "old symbol":
-    # CDLL fails (OSError) so the binding is None and the Python evaluator
-    # runs with the exact strings and an unchanged counter.
-    old = os.path.join(TMP, "empty.so")
-    open(old, "wb").close()
+    empty = os.path.join(TMP, "empty.so")
+    with open(empty, "wb"):
+        pass
+    for path in [os.path.join(TMP, "no_such_lib.so"), empty]:
+        with _library_path(path):
+            for text, unit in [("pi", "Millimeters"), ("1+2*3", "Millimeters"),
+                               ("27cm", "Meters"), ("1/0", "Millimeters"),
+                               ("sqrt(-1)", "Millimeters"), ("", "Millimeters")]:
+                _runtime_error(lambda: calc.evaluate(text, unit))
+            assert native._native_calc_calls == 0
+
+
+@check("stale identity or missing calculator export raises RuntimeError, never replay")
+def _():
+    class Identity:
+        def __init__(self, value):
+            self.value = value
+        def __call__(self):
+            return self.value
+    class Stale:
+        narwhal_pure_core_abi_version = Identity(1)
+        narwhal_pure_core_calc_abi2 = Identity(1)
+    class Missing:
+        narwhal_pure_core_abi_version = Identity(1)
+    for library in [Stale(), Missing()]:
+        with _library_path(os.path.join(TMP, "stale.so")):
+            with patch.object(native.ctypes, "CDLL", return_value=library):
+                for text in ["1+2*3", "1/0", "pi", "sqrt(-1)"]:
+                    _runtime_error(lambda: calc.evaluate(text))
+                assert native._native_calc_calls == 0
+
+
+@check("unwritten, invalid, nonfinite or failed native replies raise RuntimeError")
+def _():
+    def fault(**changes):
+        def call(*args):
+            reply = ctypes.cast(args[-2], ctypes.POINTER(native.CalcReply)).contents
+            reply.code = 0
+            for key, value in changes.items():
+                if key != "rc":
+                    setattr(reply, key, value)
+            return changes.get("rc", 0)
+        return call
+    def broken(*args):
+        raise OSError("injected native call failure")
+    faults = [lambda *args: 0, broken, fault(rc=1), fault(code=100), fault(reserved=1),
+              fault(value=float("nan")), fault(value=float("inf")),
+              fault(start=2, end=1), fault(end=100), fault(aux=1),
+              fault(code=3, value=1, start=0, end=1), fault(code=5, start=0, end=0)]
     _reset()
-    real_env = os.environ.get("NARWHAL_PURE_CORE")
-    os.environ["NARWHAL_PURE_CORE"] = old
-    try:
-        assert native._calc_binding() is None, \
-            "a library without the calc export must make the binding None"
-        before = native._native_calc_calls
-        required_parser_refuses('1+2*3')
-        required_parser_refuses('1/0')
-        assert native._native_calc_calls == before, \
-            ("old-symbol fallback must not touch the native counter",
-             before, native._native_calc_calls)
-    finally:
-        if real_env is None:
-            os.environ.pop("NARWHAL_PURE_CORE", None)
-        else:
-            os.environ["NARWHAL_PURE_CORE"] = real_env
-        _reset()
+    for binding in faults:
+        with patch.object(native, "_required_binding", return_value=binding):
+            for text in ["1+2*3", "1/0"]:
+                _runtime_error(lambda: calc.evaluate(text))
+    assert native._native_calc_calls == 0, "invalid replies must not count as classified results"
 
 
-@check("fallback: a malformed native output (None) uses the Python evaluator")
+@check("compatibility ONLY: legacy direct success ABI retains values and finite results")
 def _():
-    _reset()
-    assert native is not None and native._calc_binding() is not None
-    real = native._native_calc
-    native._native_calc = lambda *a, **k: None  # simulate a failed native call
-    try:
-        before = native._native_calc_calls
-        v, e = calc.evaluate("1+2*3")
-        # The Python evaluator still produces the correct value.
-        assert v == 7.0 and e is None, (v, e)
-        v, e = calc.evaluate("1/0")
-        assert v is None and e == "bad number: '1/0'", (v, e)
-        # The native counter must NOT have incremented (the fallback ran).
-        assert native._native_calc_calls == before, \
-            ("malformed-output fallback must not touch the native counter",
-             before, native._native_calc_calls)
-    finally:
-        native._native_calc = real
-        _reset()
+    compat._reset_for_tests()
+    assert callable(compat._calc_binding()), "compatibility calculator ABI missing"
+    before = compat._native_calc_calls
+    for text, unit, want in VALID:
+        value = compat._native_calc(text, unit)
+        assert value is not None and math.isfinite(value), (text, value)
+        assert abs(value - want) <= 1e-9 * max(1.0, abs(want)), (text, value, want)
+    assert compat._native_calc_calls == before + len(VALID)
 
 
-@check("production native calculator is faster than the Python evaluator")
+@check("compatibility ONLY: legacy direct ABI declines errors, domains and bad arities")
 def _():
-    # The "never slower" rule: on the *same* valid input, the native success
-    # path must not be materially slower than the unchanged Python evaluator.
-    # We measure the same public function twice -- once with the native route
-    # active, once forced onto the pure-Python path (``_force_python``) -- so
-    # the comparison isolates evaluation cost, not grammar.
-    #
-    # A material regression (native > 2x Python) is a DECISION NEEDED for the
-    # owner, not a silent slowdown: the assertion fails and the measured
-    # numbers are printed so the owner can decide whether to change the ABI.
-    #
-    # The comparison is HONEST: only on inputs the native route *accepts* (its
-    # success path), never on rejections (a rejection + Python fallback is
-    # double work and would falsely look like a native slowdown).
-    perf_inputs = [(t, mu) for (t, mu, _w) in VALID]
-    N = 30000
+    compat._reset_for_tests()
+    texts = [(text, unit) for text, unit in REJECTED]
+    texts += [(text, "Millimeters") for text in ["sin()", "sin(1,2)", "atan2(1)",
+              "pow(1,2,3)", "1e308*2", "sinh(1000)", "cosh(1000)", "1e999"]]
+    for text, unit in texts:
+        assert compat._native_calc(text, unit) is None, (text, unit)
+    assert compat._native_calc_calls == 0
 
-    def _best(fn):
-        best = float("inf")
+
+@check("compatibility ONLY: malformed ABI spans clear finite outputs and reject")
+def _():
+    binding = compat._calc_binding()
+    assert callable(binding)
+    model = b"Millimeters"
+    for text, size in [(None, 1), (b"1", 1025), (b"\xff", 1)]:
+        out = ctypes.c_double(42)
+        status = binding(text, size, model, len(model), ctypes.byref(out))
+        assert status != 0, (text, size, status)
+        assert out.value == 0.0 and math.isfinite(out.value), (text, out.value)
+    assert binding(b"1", 1, model, len(model), None) != 0
+    out = ctypes.c_double(42)
+    assert binding(b"1", 1, None, 1, ctypes.byref(out)) != 0
+    assert out.value == 0.0 and math.isfinite(out.value)
+
+
+@check("performance report: small-input and mixed-corpus native/reference timings")
+def _():
+    # Consolidation is owner-authorized even when ctypes admission dominates
+    # tiny expressions. Report actual costs; correctness/ownership gates above
+    # remain strict, but there is deliberately no universal speed-ratio guard.
+    def best(fn, count):
+        result = float("inf")
         for _ in range(3):
-            t0 = time.perf_counter()
-            for _ in range(N):
+            start = time.perf_counter()
+            for _ in range(count):
                 fn()
-            best = min(best, time.perf_counter() - t0)
-        return best
+            result = min(result, time.perf_counter() - start)
+        return result
+    for text in ["1", "1+2", "1/0", "sin(30d)"]:
+        assert calc.evaluate(text) == reference.evaluate(text)
+        count = 5000
+        t_native = best(lambda: calc.evaluate(text), count)
+        t_reference = best(lambda: reference.evaluate(text), count)
+        print("  [perf] %r native=%.3fus reference=%.3fus ratio=%.2fx (%d calls)" % (
+            text, t_native * 1e6 / count, t_reference * 1e6 / count,
+            t_native / max(t_reference, 1e-9), count))
+    inputs = [(text, unit) for text, unit, _ in VALID]
+    def cycle(evaluate):
+        index = [0]
+        def call():
+            text, unit = inputs[index[0] % len(inputs)]
+            index[0] += 1
+            evaluate(text, unit)
+        return call
+    count = 30000
+    t_native = best(cycle(calc.evaluate), count)
+    t_reference = best(cycle(reference.evaluate), count)
+    print("  [perf] mixed native=%.5fs reference=%.5fs ratio=%.2fx (%d formulas)" % (
+        t_native, t_reference, t_native / max(t_reference, 1e-9), count))
 
-    i = [0]
 
-    def _cycle():
-        i[0] += 1
-        t, mu = perf_inputs[i[0] % len(perf_inputs)]
-        calc.evaluate(t, mu)
-
-    _reset()
-    t_native = _best(_cycle)
-    with _force_python():
-        _reset()
-        t_py = _best(_cycle)
-    r = t_native / max(t_py, 1e-9)
-    print("  [perf] evaluate native=%.5fs python=%.5fs ratio=%.2fx (%d formulas)"
-          % (t_native, t_py, r, N))
-    assert t_native < t_py, \
-        ("native evaluate is slower than the Python evaluator: native %.5fs "
-         "vs python %.5fs (ratio %.2fx)" % (t_native, t_py, r))
-
-
-# ---------------------------------------------------------------------------
 failed = 0
 for name, status, detail in results:
     print(f"[{status}] {name}" + (f"  -- {detail}" if detail else ""))

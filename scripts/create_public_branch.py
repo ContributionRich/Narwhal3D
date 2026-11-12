@@ -35,7 +35,7 @@ ROOT_FILES = (
     "docs/reviews/2026-10-31-rust-document-registry.md",
     "docs/reviews/2026-10-31-native-only.md",
     "docs/reviews/2026-11-11-rust-interaction-blend.md",
-    "docs/LIBRARY.md", "docs/FILE_IO.md", "docs/RUST_RETIREMENT_11.md",
+    "docs/LIBRARY.md", "docs/FILE_IO.md", "docs/RUST_RETIREMENT_11.md", "docs/RUST_PARSER_OWNERSHIP.md",
         "docs/reviews/2026-10-30-agent-v3-integration.md",
 )
 LAUNCH_FILES = (
@@ -319,6 +319,8 @@ TEST_FILES = (
     "spike/test_printwidths_owned.py", "spike/test_unitformat_owned.py",
     "spike/test_printwidths_contract.py", "spike/test_unitformat_contract.py",
     "spike/unitformat_reference.py", "spike/test_macro_owned.py", "spike/macro_reference.py",
+    "spike/test_calc_owned.py", "spike/calc_reference.py", "spike/test_bearing_owned.py", "spike/bearing_reference.py",
+    "spike/test_macro_plan_owned.py", "spike/macro_plan_reference.py", "spike/test_native_parser_cache.py",
     "spike/test_application_core_gate.py", "spike/test_application_core_source.py",
     "spike/test_set_document_user_text.py", "spike/test_get_document_user_text.py",
     "spike/test_narwhal_document.py", "spike/test_document_core_artifacts.py",
@@ -398,6 +400,7 @@ NATIVE_FILES = (
     "native/pure_core/src/obj.rs", "native/pure_core/src/dxf.rs",
     "native/pure_core/src/numparse.rs", "native/pure_core/src/calc.rs",
     "native/pure_core/src/numparse_owned.rs",
+    "native/pure_core/src/calc_owned.rs", "native/pure_core/src/bearing_owned.rs",
     "native/pure_core/src/unitformat.rs", "native/pure_core/src/python_text.rs",
     "native/pure_core/src/aci_colors.rs", "native/pure_core/src/printwidths.rs",
     "native/pure_core/src/metadata_ffi.rs",

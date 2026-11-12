@@ -131,6 +131,8 @@ class PolicyTests(unittest.TestCase):
         forbidden = {
             'printwidths': {'math', 'sorted', 'set'},
             'unitformat': {'Decimal', '_decimal', '_fractional', '_feet_inch', '_gcd'},
+            'calc': {'re', '_tokenize', '_parse_expr', '_apply_func', '_number_token'},
+            'bearing': {'re', '_ANGLE_RE', '_BEARING_RE', '_angle_degrees', '_QUADRANT_BASE'},
             'macro': {'_split_tokens', '_classify', '_strip_flags', '_command_step',
                       'NATIVE_MACRO_MIN_BYTES', 'NATIVE_MACRO_JSON_MAX_BYTES'},
         }
@@ -141,6 +143,15 @@ class PolicyTests(unittest.TestCase):
             used.update(node.name for node in ast.walk(tree) if isinstance(node, ast.FunctionDef))
             self.assertFalse(used & names, (module, used & names))
             self.assertNotIn('legacy/', text)
+
+    def test_string_planner_does_not_replay_public_token_builder(self):
+        tree = ast.parse(source('narwhal3d/macro_plan.py'))
+        function = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == 'plan_macro')
+        names = {node.id for node in ast.walk(function) if isinstance(node, ast.Name)}
+        self.assertFalse(names & {'tokenize', 'build_plan', '_native_macro_plan'})
+        for statement in tree.body:
+            if isinstance(statement, ast.Assign):
+                self.assertFalse(any(isinstance(target, ast.Name) and target.id.startswith('NATIVE_MACRO_PLAN_') for target in statement.targets))
 
     def test_admission_cannot_return_optional_backend(self):
         for name, functions in (

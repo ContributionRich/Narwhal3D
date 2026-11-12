@@ -1,439 +1,295 @@
-"""Native surveyor bearing parser: direct ABI proof + route activation + fallbacks.
+"""Required native bearing routes, independent oracle, and compatibility ABI.
 
-Complements ``spike/test_bearing.py`` (which pins the quadrants, DMS, 0/90
-boundaries and the exact public error strings on the Python path) by proving the
-*native* route is the one actually running for valid input, and that every
-fallback scenario runs the *unchanged* Python parser with the exact error strings
-and with the native counter NOT incremented.
-
-* the Rust ABI is present and ``_bearing_binding()`` is not ``None``;
-* ``bearing_angle`` / ``parse_surveyor`` activate the native route (the
-  ``_native_bearing_calls`` counter must move) and, on the SAME input, return the
-  same value(s) the pure-Python parser does (the "native matches the Python
-  reference" invariant);
-* every rejection falls back to the *unchanged* Python parser, so the public
-  ``(None, error)`` is byte-for-byte identical to the pure-Python result and the
-  native counter is NOT incremented (a native success that should have been a
-  rejection would make these RED);
-* the three fallback scenarios (missing library, an old library without the
-  bearing exports, a malformed native output) all run the *unchanged Python
-  parser* with correct values/strings and with the counter NOT incremented;
-* a performance guard: on the *same* valid input the native success path must not
-  be *materially* slower than the pure-Python parser (the "never slower" rule --
-  a regression leaves a DECISION NEEDED note for the owner).
-
-The suite is green with or without a prebuilt ``.so``: if the library is not
-present it builds the crate once (offline, pinned toolchain) and rechecks.
+Default: qualify live bearing.py with NARWHAL_PURE_CORE. For pre-activation
+qualification pass --module tmp/rust12-bearing-candidate.py and an external
+scratch library. Missing/stale/broken native routes must NEVER replay Python.
+Timing is reported, not used to select a Python/native routing band.
 """
+import argparse
+import ctypes
 import importlib.util
 import os
-import shutil
-import subprocess
+from pathlib import Path
 import sys
-import tempfile
 import time
 from contextlib import contextmanager
+from unittest.mock import patch
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import runtime_paths
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-PY = str(runtime_paths.python(ROOT))
-LIB_CANDIDATES = [
-    os.environ.get("NARWHAL_PURE_CORE", ""),
-    os.path.join(ROOT, "native", "pure_core", "target",
-                 "x86_64-unknown-linux-gnu", "release",
-                 "libnarwhal_pure_core.so"),
-    os.path.join(ROOT, "native", "pure_core", "target", "release",
-                 "libnarwhal_pure_core.so"),
-]
+ROOT = Path(__file__).resolve().parents[1]
 
 
-def _locate_lib():
-    for cand in LIB_CANDIDATES:
-        if cand and os.path.isfile(cand):
-            return cand
-    return None
-
-
-def _ensure_lib():
-    """Return the ``.so`` path, building the crate once if it is not present."""
-    lib = _locate_lib()
-    if lib is not None:
-        return lib
-    manifest = os.path.join(ROOT, "native", "pure_core", "Cargo.toml")
-    if not os.path.isfile(manifest):
-        return None
-    subprocess.run(
-        ["cargo", "+1.95.0", "build", "--release", "--locked", "--offline",
-         "--manifest-path", manifest, "--target", "x86_64-unknown-linux-gnu"],
-        cwd=ROOT, check=True,
-    )
-    return _locate_lib()
-
-
-# Make the native library discoverable before the adapter is first imported.
-_LIB = _ensure_lib()
-if _LIB is not None:
-    os.environ["NARWHAL_PURE_CORE"] = _LIB
-
-
-def _load(name, filename):
-    spec = importlib.util.spec_from_file_location(
-        name, os.path.join(ROOT, "narwhal3d", filename))
+def _load(name, path):
+    spec = importlib.util.spec_from_file_location(name, path)
     mod = importlib.util.module_from_spec(spec)
     sys.modules[name] = mod
     spec.loader.exec_module(mod)
     return mod
 
 
-brg = _load("narwhal_native_test_bearing", "bearing.py")
-# Resolve the SAME native module the parser uses, so we can inspect its counter
-# and monkeypatch it in the fallback tests.
-native = brg._native_bearing()
-
+args = argparse.ArgumentParser(description=__doc__)
+args.add_argument('--module', type=Path, default=ROOT / 'narwhal3d/bearing.py')
+options = args.parse_args()
+brg = _load('narwhal_native_test_bearing', options.module.resolve())
+reference = _load('narwhal_native_bearing_reference', ROOT / 'spike/bearing_reference.py')
+native = getattr(brg, 'native_bearing', None)
+if native is None:
+    native = brg._adapter()
+compat = _load('narwhal_native_bearing_compat', ROOT / 'narwhal3d/native_pure.py')
 results = []
-TMP = tempfile.mkdtemp(prefix="native_bearing_")
 
 
 def check(name):
     def deco(fn):
         try:
             fn()
-            results.append((name, "PASS", ""))
-        except Exception as e:  # noqa: BLE001
-            results.append((name, "FAIL", repr(e)))
+            results.append((name, 'PASS', ''))
+        except Exception as error:
+            results.append((name, 'FAIL', repr(error)))
     return deco
 
 
 def _reset():
-    """Forget discovery + counter state so a check can re-point the binding."""
-    if native is not None:
-        native._reset_for_tests()
-
-
-def _assert_native_ran(before, label):
-    """Tripwire: the counter must have moved (the native route actually ran)."""
-    assert native is not None, "adapter did not resolve the native module"
-    assert native._native_bearing_calls > before, \
-        (label, "native route did not run (%d -> %d)" %
-         (before, native._native_bearing_calls))
+    # Owned adapter caches its library/binding; no changes to production helpers.
+    native._binding = native._signature = native._library = None
 
 
 @contextmanager
-def _force_python():
-    """Temporarily make the native route report unavailable so the parser runs
-    its UNCHANGED Python path (the "native == Python" baseline and the
-    malformed-output fallback)."""
-    if native is None:
+def _native_calls(expected):
+    """Count actual ABI calls even if a future adapter drops its debug counter."""
+    binding = native._required_binding()
+    calls = []
+    before = getattr(native, '_native_bearing_calls', None)
+
+    def counted(*args):
+        calls.append(1)
+        return binding(*args)
+
+    with patch.object(native, '_required_binding', return_value=counted):
         yield
-        return
-    real_ang = native._native_bearing_angle
-    real_sur = native._native_parse_surveyor
-    native._native_bearing_angle = lambda *a, **k: None
-    native._native_parse_surveyor = lambda *a, **k: None
+    assert len(calls) == expected, ('ABI call count', len(calls), expected)
+    if before is not None:
+        assert native._native_bearing_calls - before == expected, (
+            'native classified-reply counter', before, native._native_bearing_calls, expected)
+
+
+def _runtime_error(fn, text):
     try:
-        yield
-    finally:
-        native._native_bearing_angle = real_ang
-        native._native_parse_surveyor = real_sur
+        fn(text)
+    except RuntimeError as error:
+        assert 'replayed' in str(error), str(error)
+    else:
+        raise AssertionError(('required RuntimeError, not Python replay', text))
 
 
 DMS = 30.0 + 22.0 / 60.0 + 54.43 / 3600.0
-
-# The valid bearings: (text, expected CCW degrees). Expected values are the
-# plain-Python results; the native route must agree to 1e-9 relative (a libm
-# 1-ulp difference is allowed, a wrong value is not).
 VALID_BEARING = [
-    ("N0E", 90.0),
-    ("N90E", 0.0),
-    ("N90W", 180.0),
-    ("S0W", 270.0),
-    ("S90E", 0.0),
-    ("n30e", 60.0),
-    ("n30w", 120.0),
-    ("s30e", 300.0),
-    ("s30w", 240.0),
-    ("N45W", 135.0),
-    ("S45W", 225.0),
-    ("S45E", 315.0),
-    ("N30W", 120.0),
-    ("N30.5E", 59.5),
-    ("N 30 E", 60.0),
-    ("S 45 W", 225.0),
+    ('N0E', 90.0), ('N90E', 0.0), ('N90W', 180.0), ('S0W', 270.0),
+    ('S90E', 0.0), ('n30e', 60.0), ('n30w', 120.0), ('s30e', 300.0),
+    ('s30w', 240.0), ('N45W', 135.0), ('S45W', 225.0), ('S45E', 315.0),
+    ('N30W', 120.0), ('N30.5E', 59.5), ('N 30 E', 60.0), ('S 45 W', 225.0),
     ("N30d22'W", 90.0 + 30.0 + 22.0 / 60.0),
-    ("N30d22'54.43\"W", 90.0 + DMS),
+    ('N30d22\'54.43"W', 90.0 + DMS),
 ]
-
-# The valid surveyor coordinates: (text, distance, expected CCW degrees).
 VALID_SURVEYOR = [
-    ("11<N30d22'54.43\"W", 11.0, 90.0 + DMS),
-    ("5<N45E", 5.0, 45.0),
-    ("2.5<S30W", 2.5, 240.0),
+    ('11<N30d22\'54.43"W', 11.0, 90.0 + DMS),
+    ('5<N45E', 5.0, 45.0), ('2.5<S30W', 2.5, 240.0),
 ]
-
-# The rejected inputs. The two functions have different domains, so the
-# rejection sets are split (mirroring ``test_bearing.py``'s ``badb`` / ``badp``):
-# a *bearing* that is valid on its own (e.g. ``N30E`` = 60 deg) is still a
-# *surveyor* rejection (no distance before the ``<``). The exact error string is
-# NOT hardcoded here -- it is asserted to be byte-for-byte identical to the
-# pure-Python result (see the check below), which is the real invariant.
-BEARING_REJECTED = [
-    "N95E",
-    "E30N",
-    "N30",
-    "30W",
-    "N-5E",
-    "NabcE",
-    "N30wE",
-    "N E",
-    "",
-]
-
-SURVEYOR_REJECTED = [
-    "5<N95E",
-    "5<E30N",
-    "5<N30",
-    "5<30W",
-    "N30E",
-    "11<",
-    "",
-]
+BEARING_REJECTED = ['N95E', 'E30N', 'N30', '30W', 'N-5E', 'NabcE', 'N30wE', 'N E', '']
+SURVEYOR_REJECTED = ['5<N95E', '5<E30N', '5<N30', '5<30W', 'N30E', '11<', '']
+LONG_BEARING = ' ' * 124 + 'N30E'
 
 
-@check("native library is built, discovered, and exposes the bearing ABI")
-def _():
-    assert _LIB is not None, "pure_core .so not present and build failed"
-    assert native is not None, "adapter did not resolve the native module"
-    binding = native._bearing_binding()
-    assert binding is not None and len(binding) == 2, \
-        "the bearing binding must be resolvable"
-    assert callable(binding[0]) and callable(binding[1]), \
-        "both bearing and surveyor exports must be callable"
-    # The counter is a real attribute (the tripwire target).
-    assert hasattr(native, "_native_bearing_calls")
-
-
-LONG_BEARING = " " * 124 + "N30E"
-
-
-@check("bearing Rust stays direct/internal while standalone production stays Python")
+@check('required core ABI 1 and bearing ABI 2 are present, with real parse results')
 def _():
     _reset()
-    before = native._native_bearing_calls
-    assert native._native_bearing_angle("N30E") == 60.0
-    assert native._native_parse_surveyor("5<N45E") == (5.0, 45.0)
-    _assert_native_ran(before, "direct bearing ABI")
-    _reset()
-    before = native._native_bearing_calls
-    assert brg.bearing_angle("N30E") == (60.0, None)
-    assert brg.bearing_angle(LONG_BEARING) == (60.0, None)
-    assert brg.parse_surveyor("5<N45E") == ((5.0, 45.0), None)
-    assert native._native_bearing_calls == before
+    binding = native._required_binding()
+    assert ctypes.sizeof(native.BearingReply) == 32
+    reply = native.BearingReply(code=99)
+    source = (ctypes.c_uint32 * 4)(*map(ord, 'N30E'))
+    assert binding(source, 4, 0, 151, ctypes.byref(reply), 32) == 0
+    assert (reply.code, reply.value, reply.distance, reply.reserved,
+            reply.start, reply.end) == (0, 60.0, 0.0, 0, 0, 0)
 
 
-@check("native equals the pure-Python parser on the SAME valid input")
+@check('standalone short/long bearings and surveyor all require native calls')
 def _():
-    _reset()
-    for text, _want in VALID_BEARING:
-        v_native, e_native = brg.bearing_angle(text)
-        with _force_python():
-            v_py, e_py = brg.bearing_angle(text)
-        assert e_py is None and v_py is not None, (text, v_py, e_py)
-        assert e_native is None and v_native is not None, (text, v_native,
-                                                           e_native)
-        assert abs(v_native - v_py) <= 1e-9 * max(1.0, abs(v_py)), \
-            (text, v_native, v_py)
-    for text, dist, _want in VALID_SURVEYOR:
-        val_native, e_native = brg.parse_surveyor(text)
-        with _force_python():
-            val_py, e_py = brg.parse_surveyor(text)
-        assert e_py is None and val_py is not None, (text, val_py, e_py)
-        assert e_native is None and val_native is not None, (text, val_native,
-                                                             e_native)
-        d_nat, a_nat = val_native
-        d_py, a_py = val_py
-        assert abs(d_nat - d_py) <= 1e-9 * max(1.0, abs(d_py)), (text, d_nat,
-                                                                 d_py)
-        assert abs(a_nat - a_py) <= 1e-9 * max(1.0, abs(a_py)), (text, a_nat,
-                                                                 a_py)
+    with _native_calls(3):
+        assert brg.bearing_angle('N30E') == (60.0, None)
+        assert brg.bearing_angle(LONG_BEARING) == (60.0, None)
+        assert brg.parse_surveyor('5<N45E') == ((5.0, 45.0), None)
 
 
-@check("every rejection is byte-identical to the Python result, counter unmoved")
+@check('native successes exactly match independent Python oracle and quadrant pins')
 def _():
-    _reset()
-    before = native._native_bearing_calls
+    with _native_calls(len(VALID_BEARING) + len(VALID_SURVEYOR)):
+        for text, want in VALID_BEARING:
+            actual = brg.bearing_angle(text)
+            expected = reference.bearing_angle(text)
+            assert expected[0] is not None and expected[1] is None, (text, expected)
+            assert actual == expected, (text, actual, expected)
+            assert actual[0].hex() == expected[0].hex(), (text, actual, expected)
+            # Historical hand-computed DMS pin uses a different addition order.
+            assert abs(actual[0] - want) <= 1e-12, (text, actual, want)
+        for text, dist, want in VALID_SURVEYOR:
+            actual = brg.parse_surveyor(text)
+            expected = reference.parse_surveyor(text)
+            assert expected[0] is not None and expected[1] is None, (text, expected)
+            assert actual == expected, (text, actual, expected)
+            assert actual[0][0].hex() == expected[0][0].hex()
+            assert actual[0][1].hex() == expected[0][1].hex()
+            assert actual[0][0] == dist and abs(actual[0][1] - want) <= 1e-12
+
+
+@check('all grammar rejections match independent oracle and execute native')
+def _():
+    with _native_calls(len(BEARING_REJECTED) + len(SURVEYOR_REJECTED)):
+        for name, texts in [('bearing_angle', BEARING_REJECTED),
+                            ('parse_surveyor', SURVEYOR_REJECTED)]:
+            for text in texts:
+                expected = getattr(reference, name)(text)
+                assert expected[0] is None and isinstance(expected[1], str) and expected[1]
+                actual = getattr(brg, name)(text)
+                assert actual == expected, (name, text, actual, expected)
+
+
+@check('exact error contract and Unicode/capture edge cases require native')
+def _():
+    pins = [
+        ('N95E', 'quadrant angle must be in [0, 90]: 95'),
+        ('N30', "not a bearing (need N/S + angle + E/W): 'N30'"),
+        ('NabcE', "not an angle: 'abc'"), ('N-5E', "not an angle: '-5'"),
+        ('N  bad  E', "not an angle: 'bad  '"),
+    ]
+    extra = ['ſ30E', '\u2003N٣٠E\u0085', 'N30d22\'"W', 'N\nE']
+    surveyor = ['1<N30E\n', '1<N30E\n\n', '1<\n ', '1< N bad E  ']
+    with _native_calls(len(pins) + len(extra) + len(surveyor)):
+        for text, want in pins:
+            assert brg.bearing_angle(text) == (None, want), (text, want)
+        for text in extra:
+            assert brg.bearing_angle(text) == reference.bearing_angle(text), text
+        for text in surveyor:
+            assert brg.parse_surveyor(text) == reference.parse_surveyor(text), repr(text)
+
+
+@check('legacy native_pure direct ABI remains compatibility-only, not public routing')
+def _():
+    compat._reset_for_tests()
+    assert compat._bearing_binding() is not None, 'old exports required for coords compatibility'
+    before = compat._native_bearing_calls
+    for text, want in VALID_BEARING:
+        value = compat._native_bearing_angle(text)
+        assert value is not None and abs(value - want) <= 1e-12, (text, value, want)
+    for text, distance, want in VALID_SURVEYOR:
+        value = compat._native_parse_surveyor(text)
+        assert value is not None and value[0] == distance and abs(value[1] - want) <= 1e-12
+    assert compat._native_bearing_calls - before == len(VALID_BEARING) + len(VALID_SURVEYOR)
+    before = compat._native_bearing_calls
     for text in BEARING_REJECTED:
-        with _force_python():
-            v_py, e_py = brg.bearing_angle(text)
-        assert v_py is None and isinstance(e_py, str) and e_py, \
-            (text, "reference must be an error", v_py, e_py)
-        v_nat, e_nat = brg.bearing_angle(text)
-        assert v_nat is None, (text, "must be a rejection", v_nat)
-        assert e_nat == e_py, (text, e_nat, "expected", e_py)
+        assert compat._native_bearing_angle(text) is None, text
     for text in SURVEYOR_REJECTED:
-        with _force_python():
-            sv_py, se_py = brg.parse_surveyor(text)
-        assert sv_py is None and isinstance(se_py, str) and se_py, \
-            (text, "surveyor reference must be an error", sv_py, se_py)
-        sv_nat, se_nat = brg.parse_surveyor(text)
-        assert sv_nat is None, (text, "surveyor must be a rejection", sv_nat)
-        assert se_nat == se_py, (text, se_nat, "expected", se_py)
-    # None of the rejections may have counted as a native SUCCESS.
-    assert native._native_bearing_calls == before, \
-        ("rejections must not increment the native counter",
-         before, native._native_bearing_calls)
+        assert compat._native_parse_surveyor(text) is None, text
+    assert compat._native_bearing_calls == before
+    with _native_calls(2):
+        assert brg.bearing_angle('N30E') == (60.0, None)
+        assert brg.parse_surveyor('5<N45E') == ((5.0, 45.0), None)
+    assert compat._native_bearing_calls == before, 'public API used compatibility parser'
 
 
-@check("a documented rejection keeps its EXACT public string (contract pin)")
+def _failure_inputs():
+    return [(brg.bearing_angle, 'n30e'), (brg.bearing_angle, 'N95E'),
+            (brg.parse_surveyor, '5<N45E'), (brg.parse_surveyor, '5<N95E')]
+
+
+@check('missing library raises RuntimeError for successes and grammar rejections')
 def _():
     _reset()
-    # Representative pins of the public contract (these strings embed the input
-    # and come from the unchanged Python parser).
-    for text, want in [
-        ("N95E", "quadrant angle must be in [0, 90]: 95"),
-        ("N30", "not a bearing (need N/S + angle + E/W): 'N30'"),
-        ("NabcE", "not an angle: 'abc'"),
-        ("N-5E", "not an angle: '-5'"),
-    ]:
-        v, e = brg.bearing_angle(text)
-        assert v is None and e == want, (text, v, e, "expected", want)
-    assert native._native_bearing_calls == 0, \
-        ("contract-pin rejections must not touch the native counter",
-         native._native_bearing_calls)
-
-
-@check("fallback: a missing library uses the unchanged Python parser")
-def _():
-    _reset()
-    real_env = os.environ.get("NARWHAL_PURE_CORE")
-    os.environ["NARWHAL_PURE_CORE"] = os.path.join(TMP, "no_such_lib.so")
+    before = getattr(native, '_native_bearing_calls', None)
     try:
-        assert native._bearing_binding() is None, \
-            "a missing library must make the binding None"
-        before = native._native_bearing_calls
-        # A valid input still works via the Python path (value unchanged).
-        v, e = brg.bearing_angle("n30e")
-        assert v == 60.0 and e is None, (v, e)
-        val, e = brg.parse_surveyor("5<N45E")
-        assert e is None and val == (5.0, 45.0), (val, e)
-        # And a rejection keeps its exact public string.
-        v, e = brg.bearing_angle("N95E")
-        assert v is None and e == "quadrant angle must be in [0, 90]: 95", \
-            (v, e)
-        # The native counter must NOT have moved (the Python parser ran).
-        assert native._native_bearing_calls == before, \
-            ("missing-lib fallback must not touch the native counter",
-             before, native._native_bearing_calls)
+        with patch.dict(os.environ, NARWHAL_PURE_CORE='/no/such/native-bearing-library.so'):
+            for fn, text in _failure_inputs():
+                _runtime_error(fn, text)
+        assert getattr(native, '_native_bearing_calls', None) == before
     finally:
-        if real_env is None:
-            os.environ.pop("NARWHAL_PURE_CORE", None)
-        else:
-            os.environ["NARWHAL_PURE_CORE"] = real_env
         _reset()
 
 
-@check("fallback: an old library without the bearing exports uses Python")
+@check('missing symbols and stale core/specific ABI raise RuntimeError, never replay')
 def _():
-    # A real file that is not a valid shared library models "old symbol":
-    # CDLL fails (OSError) so the binding is None and the Python parser runs
-    # with the exact strings and an unchanged counter.
-    old = os.path.join(TMP, "empty.so")
-    open(old, "wb").close()
-    _reset()
-    real_env = os.environ.get("NARWHAL_PURE_CORE")
-    os.environ["NARWHAL_PURE_CORE"] = old
+    class Function:
+        def __init__(self, value): self.value = value
+        def __call__(self): return self.value
+
+    class FakeLibrary:
+        def __init__(self, core, bearing):
+            self.narwhal_pure_core_abi_version = Function(core)
+            self.narwhal_pure_core_bearing_abi2 = Function(bearing)
+
+    before = getattr(native, '_native_bearing_calls', None)
     try:
-        assert native._bearing_binding() is None, \
-            "a library without the bearing exports must make the binding None"
-        before = native._native_bearing_calls
-        v, e = brg.bearing_angle("n30e")
-        assert v == 60.0 and e is None, (v, e)
-        v, e = brg.bearing_angle("N95E")
-        assert v is None and e == "quadrant angle must be in [0, 90]: 95", \
-            (v, e)
-        assert native._native_bearing_calls == before, \
-            ("old-symbol fallback must not touch the native counter",
-             before, native._native_bearing_calls)
+        for library in [object(), FakeLibrary(0, 2), FakeLibrary(1, 1), FakeLibrary(1, 2)]:
+            with patch.object(native.ctypes, 'CDLL', return_value=library):
+                for fn, text in _failure_inputs():
+                    _reset()
+                    _runtime_error(fn, text)
+        assert getattr(native, '_native_bearing_calls', None) == before
     finally:
-        if real_env is None:
-            os.environ.pop("NARWHAL_PURE_CORE", None)
-        else:
-            os.environ["NARWHAL_PURE_CORE"] = real_env
         _reset()
 
 
-@check("fallback: a malformed native output (None) uses the Python parser")
+@check('injected call failures and invalid replies raise RuntimeError, never replay')
 def _():
-    _reset()
-    assert native is not None and native._bearing_binding() is not None
-    real_ang = native._native_bearing_angle
-    real_sur = native._native_parse_surveyor
-    native._native_bearing_angle = lambda *a, **k: None  # simulate a failed call
-    native._native_parse_surveyor = lambda *a, **k: None
-    try:
-        before = native._native_bearing_calls
-        # The Python parser still produces the correct value.
-        v, e = brg.bearing_angle("n30e")
-        assert v == 60.0 and e is None, (v, e)
-        v, e = brg.bearing_angle("N95E")
-        assert v is None and e == "quadrant angle must be in [0, 90]: 95", \
-            (v, e)
-        # The native counter must NOT have incremented (the fallback ran).
-        assert native._native_bearing_calls == before, \
-            ("malformed-output fallback must not touch the native counter",
-             before, native._native_bearing_calls)
-    finally:
-        native._native_bearing_angle = real_ang
-        native._native_parse_surveyor = real_sur
-        _reset()
+    def bad_reply(field, value):
+        def call(source, length, mode, unicode, out, size):
+            reply = ctypes.cast(out, ctypes.POINTER(native.BearingReply)).contents
+            reply.code = 0
+            setattr(reply, field, value)
+            return 0
+        return call
+
+    def failed(*args): return 2
+    def missing(*args): return None
+    def exploded(*args): raise OSError('injected native failure')
+
+    cases = [failed, missing, exploded, bad_reply('code', 99),
+             bad_reply('value', float('nan')), bad_reply('value', float('inf')),
+             bad_reply('value', 360.0), bad_reply('reserved', 1),
+             bad_reply('end', 4097), bad_reply('start', 1)]
+    before = getattr(native, '_native_bearing_calls', None)
+    for binding in cases:
+        with patch.object(native, '_required_binding', return_value=binding):
+            for fn, text in _failure_inputs():
+                _runtime_error(fn, text)
+    assert getattr(native, '_native_bearing_calls', None) == before
 
 
-@check("standalone bearing workflows never cross the slower FFI boundary")
+@check('measured native/reference costs; no speed threshold or routing exemption')
 def _():
-    # The "never slower" rule: on the *same* valid input, the native success
-    # path must not be materially slower than the unchanged Python parser. We
-    # measure the same public function twice -- once with the native route
-    # active, once forced onto the pure-Python path (``_force_python``) -- so the
-    # comparison isolates parsing cost, not grammar.
-    #
-    # A material regression (native > 2x Python) is a DECISION NEEDED for the
-    # owner, not a silent slowdown: the assertion fails and the measured numbers
-    # are printed so the owner can decide whether to change the ABI.
-    #
-    # The comparison is HONEST: only on inputs the native route *accepts* (its
-    # success path), never on rejections (a rejection + Python fallback is double
-    # work and would falsely look like a native slowdown).
-    perf_inputs = ["5<N45E", "12.5<S30W", "100<N0E", "1.25<S90E"]
-    N = 5000
-
-    def _best(fn):
-        best = float("inf")
-        for _ in range(3):
-            t0 = time.perf_counter()
-            for _ in range(N):
-                fn()
-            best = min(best, time.perf_counter() - t0)
-        return best
-
-    i = [0]
-
-    def _cycle():
-        i[0] += 1
-        brg.parse_surveyor(perf_inputs[i[0] % len(perf_inputs)])
-
-    _reset()
-    before = native._native_bearing_calls
-    elapsed = _best(_cycle)
-    print("  [perf] standalone Python surveyor=%.5fs (%d calls)" % (elapsed, N))
-    assert native._native_bearing_calls == before
+    count = 3000
+    for name, texts in [('bearing_angle', ['N30E', LONG_BEARING, 'S45W', 'N95E']),
+                        ('parse_surveyor', ['5<N45E', '12.5<S30W', '100<N0E', '5<N95E'])]:
+        def measure(fn):
+            best = float('inf')
+            for _ in range(3):
+                start = time.perf_counter()
+                for i in range(count):
+                    fn(texts[i % len(texts)])
+                best = min(best, time.perf_counter() - start)
+            return best
+        # Do not include the monkeypatch/Mock overhead in the timing sample.
+        with _native_calls(1):
+            getattr(brg, name)(texts[0])
+        before = getattr(native, '_native_bearing_calls', None)
+        elapsed = measure(getattr(brg, name))
+        if before is not None:
+            assert native._native_bearing_calls - before == 3 * count
+        baseline = measure(getattr(reference, name))
+        print('  [perf] %s: required-native %.3f us/call; reference %.3f us/call; ratio %.2fx'
+              % (name, elapsed * 1e6 / count, baseline * 1e6 / count, elapsed / baseline))
 
 
-# ---------------------------------------------------------------------------
 failed = 0
 for name, status, detail in results:
-    print(f"[{status}] {name}" + (f"  -- {detail}" if detail else ""))
-    if status == "FAIL":
-        failed += 1
-shutil.rmtree(TMP, ignore_errors=True)
-print(f"\n{len(results) - failed}/{len(results)} passed")
+    print('[%s] %s%s' % (status, name, ' -- ' + detail if detail else ''))
+    failed += status == 'FAIL'
+print('\n%d/%d passed (%s)' % (len(results) - failed, len(results), options.module))
 sys.exit(1 if failed else 0)

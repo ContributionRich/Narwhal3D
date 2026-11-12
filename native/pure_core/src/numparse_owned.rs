@@ -41,7 +41,7 @@ const NEW_ZEROS: &[u32] = &[
     0x10d40, 0x116d0, 0x116da, 0x11bf0, 0x16130, 0x16d70, 0x1ccf0, 0x1e5f1,
 ];
 
-fn normalized(input: &[u32], unicode: u32) -> String {
+pub(crate) fn normalized(input: &[u32], unicode: u32) -> String {
     input
         .iter()
         .map(|&cp| {
@@ -310,6 +310,16 @@ fn parse(input: &[u32], model: &[u32], length: bool, unicode: u32) -> Reply {
         return error(SUFFIX, k, n);
     };
     value(finite(number * factor / unit), 0, n)
+}
+
+/// Bounded reusable literal grammar for native formula owners. Same classification,
+/// rounding and finite-value policy as parse_v2; never invokes legacy parse_bare
+/// for fractions. No public ABI or existing admission rule is changed.
+pub(crate) fn owned_literal(input: &[u32], model: &[u32], length: bool, unicode: u32) -> Reply {
+    if input.len() > LIMIT || model.len() > LIMIT {
+        return error(BOUND, 0, 0);
+    }
+    parse(input, model, length, unicode)
 }
 
 #[no_mangle]

@@ -65,6 +65,8 @@ PURE_CORE_PYTESTS = (
     "spike/test_pure_core_packaging.py",
     "spike/test_calc.py",
     "spike/test_native_calc.py",
+    "spike/test_calc_owned.py",
+    "spike/test_native_parser_cache.py",
     "spike/test_aci_colors.py",
     "spike/test_printwidths_contract.py",
     "spike/test_printwidths_owned.py",
@@ -74,6 +76,7 @@ PURE_CORE_PYTESTS = (
     "spike/portfolio_review/test_metadata.py",
     "spike/test_bearing.py",
     "spike/test_native_bearing.py",
+    "spike/test_bearing_owned.py",
     "spike/test_coords.py",
     "spike/test_native_coords.py",
     "spike/test_native_pickconstraint.py",
@@ -83,6 +86,7 @@ PURE_CORE_PYTESTS = (
     "spike/test_macro_owned.py",
     "spike/test_macro_plan.py",
     "spike/test_native_macro_plan.py",
+    "spike/test_macro_plan_owned.py",
     "spike/test_svgpath.py",
     "spike/test_native_svgpath.py",
     "spike/test_vector_export.py",
@@ -117,6 +121,9 @@ PURE_CORE_PARSE_EXPORTS = (
     "narwhal_pure_core_printwidths",
     "narwhal_pure_core_macro_size", "narwhal_pure_core_macro_encode",
     "narwhal_pure_core_unitformat_resolve_mode", "narwhal_pure_core_unitformat_format",
+    "narwhal_pure_core_calc_abi2", "narwhal_pure_core_calc_v2",
+    "narwhal_pure_core_bearing_abi2", "narwhal_pure_core_bearing_v2",
+    "narwhal_pure_core_macro_plan_checked",
 )
 PURE_CORE_PARSE_IDENTITY = {
     "abi": 1, "parse_abi": 2, "reply_bytes": 24,
@@ -154,6 +161,44 @@ for text, model, length, code, value in (("1/2", "", 0, 0, 0.5),
                    c.byref(reply), c.sizeof(reply))
     if status != 0 or reply.code != code or reply.reserved != 0 or reply.value != value:
         raise RuntimeError("pure-core parser semantic probe failed: " + repr(text))
+class CalcReply(c.Structure):
+    _fields_ = [("code", c.c_uint32), ("aux", c.c_uint32), ("value", c.c_double),
+                ("start", c.c_uint32), ("end", c.c_uint32), ("reserved", c.c_uint64)]
+class BearingReply(c.Structure):
+    _fields_ = [("code", c.c_uint32), ("reserved", c.c_uint32), ("value", c.c_double),
+                ("distance", c.c_double), ("start", c.c_uint32), ("end", c.c_uint32)]
+for symbol in ("narwhal_pure_core_calc_abi2", "narwhal_pure_core_bearing_abi2"):
+    identity = getattr(lib, symbol)
+    identity.argtypes, identity.restype = [], c.c_uint32
+    if identity() != 2:
+        raise RuntimeError(symbol + " ABI mismatch")
+if c.sizeof(CalcReply) != 32 or c.sizeof(BearingReply) != 32:
+    raise RuntimeError("owned parser reply layout mismatch")
+calc = lib.narwhal_pure_core_calc_v2
+calc.argtypes = [c.POINTER(c.c_uint32), c.c_size_t, c.POINTER(c.c_uint32), c.c_size_t,
+                 c.c_uint32, c.c_uint32, c.POINTER(CalcReply), c.c_size_t]
+calc.restype = c.c_uint32
+for text, code, value, start, end in (("1+2", 0, 3.0, 0, 0), ("sqrt(-1)", 18, 0.0, 0, 4)):
+    points = (c.c_uint32 * len(text))(*map(ord, text))
+    reply = CalcReply(99, 99, 99, 99, 99, 99)
+    if calc(points, len(text), None, 0, 1, 151, c.byref(reply), 32) != 0 or (reply.code, reply.value, reply.start, reply.end, reply.aux, reply.reserved) != (code, value, start, end, 0, 0):
+        raise RuntimeError("owned calculator semantic witness differs")
+bearing = lib.narwhal_pure_core_bearing_v2
+bearing.argtypes = [c.POINTER(c.c_uint32), c.c_size_t, c.c_uint32, c.c_uint32,
+                    c.POINTER(BearingReply), c.c_size_t]
+bearing.restype = c.c_uint32
+for text, code, value, start, end in (("N30E", 0, 60.0, 0, 0), ("NbadE", 3, 0.0, 1, 4)):
+    points = (c.c_uint32 * len(text))(*map(ord, text))
+    reply = BearingReply(99, 99, 99, 99, 99, 99)
+    if bearing(points, len(text), 0, 151, c.byref(reply), 32) != 0 or (reply.code, reply.value, reply.start, reply.end, reply.distance, reply.reserved) != (code, value, start, end, 0, 0):
+        raise RuntimeError("owned bearing semantic witness differs")
+checked_plan = lib.narwhal_pure_core_macro_plan_checked
+checked_plan.argtypes = [c.c_char_p, c.c_size_t, c.c_void_p, c.c_size_t, c.POINTER(c.c_int64)]
+checked_plan.restype = c.c_int32
+for text, code, payload in ((b"'_Box", -4, b'"Box"'), (b"=value", -5, b'')):
+    output, needed = c.create_string_buffer(1024), c.c_int64(-1)
+    if checked_plan(text, len(text), output, len(output), c.byref(needed)) != code or needed.value != len(payload) or output.raw[:needed.value] != payload:
+        raise RuntimeError("checked planner typed refusal witness differs")
 macro_size = lib.narwhal_pure_core_macro_size
 macro_size.argtypes = [c.c_char_p, c.c_size_t, c.c_ubyte]
 macro_size.restype = c.c_int64
@@ -194,7 +239,7 @@ output, needed = c.create_string_buffer(64), c.c_size_t()
 if widths(text, len(text), output, len(output), c.byref(needed)) != 0 or output.raw[:needed.value] != struct.pack("<IddI", 2, 1.0, 2.0, 0):
     raise RuntimeError("print-widths witness differs")
 print(json.dumps({"abi": 1, "parse_abi": 2, "reply_bytes": c.sizeof(Reply),
-                  "parser_exports": ["narwhal_pure_core_parse_abi", "narwhal_pure_core_parse_v2", "narwhal_pure_core_printwidths", "narwhal_pure_core_macro_size", "narwhal_pure_core_macro_encode", "narwhal_pure_core_unitformat_resolve_mode", "narwhal_pure_core_unitformat_format"]}, sort_keys=True))
+                  "parser_exports": ["narwhal_pure_core_parse_abi", "narwhal_pure_core_parse_v2", "narwhal_pure_core_printwidths", "narwhal_pure_core_macro_size", "narwhal_pure_core_macro_encode", "narwhal_pure_core_unitformat_resolve_mode", "narwhal_pure_core_unitformat_format", "narwhal_pure_core_calc_abi2", "narwhal_pure_core_calc_v2", "narwhal_pure_core_bearing_abi2", "narwhal_pure_core_bearing_v2", "narwhal_pure_core_macro_plan_checked"]}, sort_keys=True))
 '''
 
 

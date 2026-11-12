@@ -284,7 +284,7 @@ def required_fraction_parser_refuses():
     try:
         coords.parse('5/16,1-3/4')
     except RuntimeError as exc:
-        assert 'Required Rust number parser' in str(exc), str(exc)
+        assert 'Required Rust calculator' in str(exc), str(exc)
     else:
         raise AssertionError('coordinate fallback bypassed the required numeric parser')
 

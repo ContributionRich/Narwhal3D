@@ -1,45 +1,22 @@
-"""Native macro execution planner: direct ABI proof + native-only posture.
+"""Required checked macro planner routing and legacy ABI compatibility.
 
-Complements ``spike/test_macro_plan.py`` (which pins the action contract, the
-nestable allow-list, the transparent-command refusal, the Pause/Enter spelling
-rules and the hand-built-token refusals) by proving the *native* route is the
-one actually running for valid input, and that the native-only posture is
-honoured: a missing/stale/refused native route is an EXPLICIT ``RuntimeError``
-(an explicit native requirement -- there is no Python tokenizer to replay into)
-while the planner's typed errors (``NonNestableCommandError``) are preserved.
-
-The independent pure-Python baseline is ``spike/macro_reference.py`` -- a frozen
-copy of the pre-retirement tokenizer whose native accessor is forced to
-``None``. It feeds the shared ``build_plan`` (``python_reference`` below) and
-is NEVER on the native code path, so it is a genuinely independent reference for
-the "native == Python" parity invariant.
-
-* the Rust ABI is present and ``_macro_plan_binding()`` is not ``None``;
-* ``macro_plan.plan_macro`` activates the native route (the
-  ``_native_macro_plan_calls`` counter must move) and, on the SAME input,
-  returns the same action list the pure-Python planner does (the "native
-  matches the Python reference" invariant, including the ``prefixes`` tuples);
-* a transparent command outside the measured nestable allow-list (``'_Box``)
-  is STILL refused with ``NonNestableCommandError`` naming the command, and
-  the native counter is NOT incremented (the refusal is a rejection, not a
-  success -- the mutation target);
-* the three "native route unavailable" scenarios (missing library, an old
-  library without the planner export, a malformed native output) each raise an
-  explicit ``RuntimeError`` (no Python replay) and leave the counter unmoved;
-* the performance comparison is a REPORT (not a routing guard): the owner
-  deliberately wants native consolidation, not a claim that every tiny call is
-  faster, so a material regression is surfaced loudly (DECISION NEEDED).
-
-The suite is green with or without a prebuilt ``.so``: if the library is not
-present it builds the crate once (offline, pinned toolchain) and rechecks.
+Every string uses native_macro_plan, including short/empty inputs and typed
+semantic refusals. No result may invoke production tokenize/build_plan.
+The TEST-ONLY baseline uses macro_reference.tokenize + product build_plan;
+legacy JSON/packed exports and converters are checked separately, not routed.
+Performance is reported without thresholds or a universal speed-ratio gate.
 """
 import ctypes
 import importlib.util
+import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
 import time
+from contextlib import contextmanager, ExitStack
+from unittest.mock import patch
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import runtime_paths
@@ -48,78 +25,49 @@ PY = str(runtime_paths.python(ROOT))
 LIB_CANDIDATES = [
     os.environ.get("NARWHAL_PURE_CORE", ""),
     os.path.join(ROOT, "native", "pure_core", "target",
-                 "x86_64-unknown-linux-gnu", "release",
-                 "libnarwhal_pure_core.so"),
-    os.path.join(ROOT, "native", "pure_core", "target", "release",
-                 "libnarwhal_pure_core.so"),
+                 "x86_64-unknown-linux-gnu", "release", "libnarwhal_pure_core.so"),
+    os.path.join(ROOT, "native", "pure_core", "target", "release", "libnarwhal_pure_core.so"),
 ]
 
 
-def _locate_lib():
-    for cand in LIB_CANDIDATES:
-        if cand and os.path.isfile(cand):
-            return cand
-    return None
-
-
 def _ensure_lib():
-    """Return the ``.so`` path, building the crate once if it is not present."""
-    lib = _locate_lib()
-    if lib is not None:
-        return lib
-    manifest = os.path.join(ROOT, "native", "pure_core", "Cargo.toml")
-    if not os.path.isfile(manifest):
-        return None
+    for candidate in LIB_CANDIDATES:
+        if candidate and os.path.isfile(candidate):
+            return candidate
     subprocess.run(
         ["cargo", "+1.95.0", "build", "--release", "--locked", "--offline",
-         "--manifest-path", manifest, "--target", "x86_64-unknown-linux-gnu"],
-        cwd=ROOT, check=True,
-    )
-    return _locate_lib()
+         "--manifest-path", os.path.join(ROOT, "native", "pure_core", "Cargo.toml"),
+         "--target", "x86_64-unknown-linux-gnu"], cwd=ROOT, check=True)
+    for candidate in LIB_CANDIDATES:
+        if candidate and os.path.isfile(candidate):
+            return candidate
+    raise RuntimeError("Required native macro planner library was not built")
 
 
-# Make the native library discoverable before the adapter is first imported.
 _LIB = _ensure_lib()
-if _LIB is not None:
-    os.environ["NARWHAL_PURE_CORE"] = _LIB
+os.environ["NARWHAL_PURE_CORE"] = _LIB
 
 
-def _load(name, filename):
-    spec = importlib.util.spec_from_file_location(
-        name, os.path.join(ROOT, "narwhal3d", filename))
-    mod = importlib.util.module_from_spec(spec)
-    sys.modules[name] = mod
-    spec.loader.exec_module(mod)
-    return mod
+def _load(name, directory, filename):
+    spec = importlib.util.spec_from_file_location(name, os.path.join(ROOT, directory, filename))
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module
 
 
-macro = _load("narwhal_native_test_macro_for_plan", "macro.py")
-# Expose the dependency under the fallback name used by file-path loading.
+macro = _load("narwhal_native_test_macro_for_plan", "narwhal3d", "macro.py")
 sys.modules["macro"] = macro
-plan_mod = _load("narwhal_native_test_macro_plan", "macro_plan.py")
+plan_mod = _load("narwhal_native_test_macro_plan", "narwhal3d", "macro_plan.py")
 plan_macro = plan_mod.plan_macro
 MacroPlanError = plan_mod.MacroPlanError
 NonNestableCommandError = plan_mod.NonNestableCommandError
-# Resolve the SAME native module the planner uses, so we can inspect its
-# counter and monkeypatch it in the fallback tests.
-native = plan_mod._native_macro_plan()
-
-# Independent pure-Python oracle (test-only). ``spike/macro_reference.py`` is a
-# frozen, byte-faithful copy of the pre-retirement tokenizer that OVERRIDES its
-# native accessor to ``None`` -- it can NEVER touch the product adapter, so it
-# is the only safe "pure-Python" baseline now that the production tokenizer is
-# native-only. Loaded by file path (it is not part of the shipped package).
-def _load_spike(name, filename):
-    spec = importlib.util.spec_from_file_location(
-        name, os.path.join(ROOT, "spike", filename))
-    mod = importlib.util.module_from_spec(spec)
-    sys.modules[name] = mod
-    spec.loader.exec_module(mod)
-    return mod
-oracle = _load_spike("narwhal_test_macro_reference", "macro_reference.py")
-# The oracle must be pure-Python (its native accessor forced to None); guard it.
-assert oracle._native_macro() is None, "the oracle must never resolve native"
-
+if not hasattr(plan_mod, "_native_macro_plan_adapter"):
+    raise RuntimeError("Required checked macro planner production candidate is not activated")
+native = plan_mod._native_macro_plan_adapter()
+compat = plan_mod._native_macro_plan()
+oracle = _load("narwhal_test_macro_reference", "spike", "macro_reference.py")
+assert oracle._native_macro() is None, "oracle must never resolve a native tokenizer"
 results = []
 TMP = tempfile.mkdtemp(prefix="native_macro_plan_")
 
@@ -129,42 +77,56 @@ def check(name):
         try:
             fn()
             results.append((name, "PASS", ""))
-        except Exception as e:  # noqa: BLE001
-            results.append((name, "FAIL", repr(e)))
+        except Exception as error:
+            results.append((name, "FAIL", repr(error)))
     return deco
 
 
 def _reset():
-    """Forget discovery + counter state so a check can re-point the binding."""
-    if native is not None:
-        native._reset_for_tests()
+    native._reset_for_tests()
+    compat._reset_for_tests()
 
 
 def _assert_native_ran(before, label):
-    """Tripwire: the counter must have moved (the native route actually ran)."""
-    assert native is not None, "adapter did not resolve the native module"
-    assert native._native_macro_plan_calls > before, \
-        (label, "native route did not run (%d -> %d)" %
-         (before, native._native_macro_plan_calls))
+    assert native._native_macro_plan_calls > before, (
+        label, "checked native call did not run", before, native._native_macro_plan_calls)
 
 
 def python_reference(text):
-    """Independent pure-Python planner baseline (test-only, never production).
-
-    The frozen oracle tokenizer feeds the shared production ``build_plan``.
-    Neither side is on the native code path (the oracle's native accessor is
-    forced to ``None``), so this is the "native == Python reference" invariant
-    with a genuinely independent baseline. It replaces the retired
-    ``_force_python`` context, which no longer works: the production tokenizer
-    is native-only and raises ``RuntimeError`` when the native route is off.
-    """
+    """Independent tokenizer + distinct compatibility builder; TEST-ONLY."""
     return plan_mod.build_plan(oracle.tokenize(text, lossless=True))
 
 
-# The valid (accepted) macros: the planner's full action surface -- cancel,
-# transparent nestable commands, extra flags, specials, options, text.
-# Rejected macros are deliberately NOT in this set: a rejection + Python
-# fallback is double work and would pollute the performance comparison.
+@contextmanager
+def _no_python_replay():
+    """Load-bearing guard: success, typed refusal and faults cannot replay."""
+    with ExitStack() as stack:
+        for module, name in [(plan_mod, "tokenize"), (plan_mod, "build_plan"),
+                             (macro, "tokenize"), (compat, "_native_macro_plan"),
+                             (compat, "_native_macro_plan_packed")]:
+            stack.enter_context(patch.object(module, name, side_effect=AssertionError(
+                "production Python/legacy planner replay: " + name), create=True))
+        yield
+
+
+@contextmanager
+def _library_path(path):
+    with patch.dict(os.environ, {"NARWHAL_PURE_CORE": path}):
+        _reset()
+        try:
+            yield
+        finally:
+            _reset()
+
+
+def _raises(kind, fn):
+    try:
+        fn()
+    except kind as error:
+        return error
+    raise AssertionError("expected " + kind.__name__)
+
+
 VALID_MACROS = [
     "! '-_Zoom",
     "'_Zoom '_CPlane",
@@ -186,50 +148,66 @@ VALID_MACROS = [
 ]
 LONG_MACRO = ("! _Line _Pause 0,0 _Enter " * 8).strip()
 
+CASEFOLD_MACROS = ["'_ſnap", "'_selcroßing"]
+NON_NESTABLE = ["'_Box", "'_Box _Pause", "'_Circle 5,5 10"]
+INVALID_OPTIONS = ["=value", "_Zoom =value", "=value '_Box"]
 
-@check("native library is built, discovered, and exposes the planner ABI")
+
+@check("required checked ABI resolves; legacy resolver remains compatibility only")
 def _():
-    assert _LIB is not None, "pure_core .so not present and build failed"
-    assert native is not None, "adapter did not resolve the native module"
-    binding = native._macro_plan_binding()
-    assert binding is not None and len(binding) == 2 and \
-        callable(binding[0]) and callable(binding[1]), \
-        "the planner binding must resolve (size, encode)"
-    # The counter is a real attribute (the tripwire target).
-    assert hasattr(native, "_native_macro_plan_calls")
+    assert callable(native._checked_binding()), "checked planner export is required"
+    assert plan_mod._native_macro_plan_adapter() is native
+    assert compat is not native
+    assert callable(compat._macro_plan_binding()[0])
+    assert callable(compat._macro_plan_packed_binding())
 
 
-@check("plan_macro routes only measured-winning long macros through Rust")
-def _():
-    _reset()
-    before = native._native_macro_plan_calls
-    assert isinstance(plan_macro("_Line"), list)
-    assert native._native_macro_plan_calls == before, "short plan must stay on Python"
-    assert isinstance(plan_macro(LONG_MACRO), list)
-    _assert_native_ran(before, "long macro plan")
-
-
-@check("native equals the pure-Python planner on the SAME valid input")
+@check("empty, short, long and beyond-former-ceiling strings all call checked Rust")
 def _():
     _reset()
-    for text in VALID_MACROS:
-        got_native = plan_macro(text)
-        got_py = python_reference(text)
-        assert got_py is not None, (text, got_py)
-        # Byte-for-byte the Python contract: the action dicts (with their
-        # ``prefixes`` tuples) must be exactly equal.
-        assert got_native == got_py, \
-            (text, got_native, "expected", got_py)
+    texts = ["", "_Line", LONG_MACRO, "_Line " * 1000]
+    expected = [python_reference(text) for text in texts]
+    real = native._checked_binding()
+    calls = []
+    def counted(*args):
+        calls.append(args)
+        return real(*args)
+    with patch.object(native, "_checked_binding", return_value=counted), _no_python_replay():
+        for text, want in zip(texts, expected):
+            before = native._native_macro_plan_calls
+            count_before = len(calls)
+            assert plan_macro(text) == want, text
+            _assert_native_ran(before, repr(text[:40]))
+            assert native._native_macro_plan_calls - before == len(calls) - count_before
+            if text in ("", "_Line"):
+                assert len(calls) - count_before == 1
+    assert native._native_macro_plan_calls == len(calls)
+    assert compat._native_macro_plan_calls == 0
 
 
-@check("native plan prefixes are TUPLES (the Python contract)")
+@check("checked planner equals independent baseline for the full valid corpus")
 def _():
     _reset()
-    before = native._native_macro_plan_calls
-    for action in plan_macro(LONG_MACRO):
-        if "prefixes" in action:
-            assert isinstance(action["prefixes"], tuple), action
-    _assert_native_ran(before, "macro_plan prefixes")
+    for text in VALID_MACROS + [LONG_MACRO] + CASEFOLD_MACROS:
+        before = native._native_macro_plan_calls
+        expected = python_reference(text)
+        assert native._native_macro_plan_calls == before, "oracle touched product planner"
+        with _no_python_replay():
+            actual = plan_macro(text)
+        assert actual == expected, (text, actual, "expected", expected)
+        _assert_native_ran(before, text)
+
+
+@check("native plan prefixes remain tuples on short and long string routes")
+def _():
+    _reset()
+    with _no_python_replay():
+        for text in VALID_MACROS + [LONG_MACRO]:
+            before = native._native_macro_plan_calls
+            for action in plan_macro(text):
+                if "prefixes" in action:
+                    assert isinstance(action["prefixes"], tuple), action
+            _assert_native_ran(before, text)
 
 
 @check("the exact action structure holds on the native route")
@@ -260,327 +238,224 @@ def _():
     ], got
 
 
-@check("a transparent geometry command is still refused (mutation target)")
-def _():
-    # The safety boundary: ``'_Box`` (transparent, not in the measured
-    # NESTABLE_COMMANDS allow-list) must be refused with the exact
-    # NonNestableCommandError naming the command, and the refusal must NOT
-    # count as a native success. If the Rust ``is_nestable`` check were
-    # loosened (or dropped), ``plan_macro("'_Box")`` would return an action
-    # list and this check goes RED.
-    _reset()
-    before = native._native_macro_plan_calls
-    assert native._native_macro_plan("'_Box") is None
-    for bad in ("'_Box", "'_Box _Pause", "'_Circle 5,5 10"):
-        try:
-            plan_macro(bad)
-            raise AssertionError("transparent command must be refused: %r"
-                                 % bad)
-        except NonNestableCommandError as exc:
-            assert "Box" in str(exc) or "Circle" in str(exc), str(exc)
-    assert native._native_macro_plan_calls == before, \
-        ("refusals must not touch the native counter",
-         before, native._native_macro_plan_calls)
-
-
-@check("a non-string macro is still refused (counter unmoved)")
+@check("transparent geometry remains typed NonNestableCommandError, native-owned")
 def _():
     _reset()
-    before = native._native_macro_plan_calls
-    for bad in (None, 5, ["_Move"]):
-        try:
-            plan_macro(bad)
-            raise AssertionError("expected MacroPlanError for %r" % (bad,))
-        except MacroPlanError:
-            pass
-    # The native route is only ever reached for a string, so none of these may
-    # have counted as a native SUCCESS.
-    assert native._native_macro_plan_calls == before, \
-        ("non-string rejections must not touch the native counter",
-         before, native._native_macro_plan_calls)
-
-
-@check("fallback: a missing library is an explicit native requirement")
-def _():
-    # The production tokenizer is native-only: with the WHOLE library absent,
-    # the tokenizer cannot run for ANY input, so ``plan_macro`` raises
-    # ``RuntimeError`` (an explicit native requirement) for both a valid macro
-    # and a non-nestable command -- it never silently replays in Python, and
-    # the typed ``NonNestableCommandError`` is unreachable (the tokenizer
-    # never gets to classify the command). The native counter must not have
-    # moved (nothing succeeded).
-    _reset()
-    real_env = os.environ.get("NARWHAL_PURE_CORE")
-    os.environ["NARWHAL_PURE_CORE"] = os.path.join(TMP, "no_such_lib.so")
-    try:
-        assert native._macro_plan_binding() is None, \
-            "a missing library must make the binding None"
+    for text in NON_NESTABLE + ["'_Box " + LONG_MACRO]:
+        expected = _raises(NonNestableCommandError, lambda: python_reference(text))
         before = native._native_macro_plan_calls
-        for text in ("! '_Zoom", "'_Box"):
-            try:
-                plan_macro(text)
-                raise AssertionError(
-                    "expected RuntimeError (native required) for %r" % text)
-            except RuntimeError:
-                pass
-        assert native._native_macro_plan_calls == before, \
-            ("missing-lib must not touch the native counter",
-             before, native._native_macro_plan_calls)
-    finally:
-        if real_env is None:
-            os.environ.pop("NARWHAL_PURE_CORE", None)
-        else:
-            os.environ["NARWHAL_PURE_CORE"] = real_env
-        _reset()
-
-
-@check("old library (no planner export) is an explicit native requirement")
-def _():
-    # A real file that is not a valid shared library models "old symbol":
-    # CDLL fails (OSError) so the binding is None. With the whole tokenizer
-    # gone, the tokenizer is the explicit native requirement for ANY input --
-    # so both a valid macro and a non-nestable command raise ``RuntimeError``
-    # (no Python replay; the typed error is unreachable). The native counter
-    # must not have moved.
-    old = os.path.join(TMP, "empty.so")
-    open(old, "wb").close()
-    _reset()
-    real_env = os.environ.get("NARWHAL_PURE_CORE")
-    os.environ["NARWHAL_PURE_CORE"] = old
-    try:
-        assert native._macro_plan_binding() is None, \
-            "a library without the planner export must make the binding None"
+        with _no_python_replay():
+            actual = _raises(NonNestableCommandError, lambda: plan_macro(text))
+        assert type(actual) is type(expected) and str(actual) == str(expected), (text, actual, expected)
+        _assert_native_ran(before, text)
+    for text, name in [("'_Box", "Box"), ("'_Circle", "Circle")]:
         before = native._native_macro_plan_calls
-        for text in ("!&_Delete", "'_Box"):
-            try:
-                plan_macro(text)
-                raise AssertionError(
-                    "expected RuntimeError (native required) for %r" % text)
-            except RuntimeError:
-                pass
-        assert native._native_macro_plan_calls == before, \
-            ("old-symbol must not touch the native counter",
-             before, native._native_macro_plan_calls)
-    finally:
-        if real_env is None:
-            os.environ.pop("NARWHAL_PURE_CORE", None)
-        else:
-            os.environ["NARWHAL_PURE_CORE"] = real_env
-        _reset()
+        error = _raises(native.NativeMacroPlanError, lambda: native.plan_macro(text))
+        assert (error.code, error.name) == (-4, name), (error.code, error.name)
+        _assert_native_ran(before, text)
 
 
-@check("planner refused but tokenizer available: valid succeeds, refusal preserved")
+@check("empty option names preserve MacroPlanError and native first-error order")
 def _():
-    # Only the PLANNER export is refused (returns None); the native tokenizer
-    # is AVAILABLE. ``plan_macro`` therefore serves the valid macro through the
-    # native tokenizer + the shared ``build_plan`` (not a Python *replay* -- the
-    # tokenizer is still native), and a non-nestable transparent command is
-    # STILL refused with the typed ``NonNestableCommandError`` (the planner's
-    # error contract is preserved). The planner counter must NOT have moved
-    # (the native planner call did not succeed).
     _reset()
-    assert native is not None and native._macro_plan_binding() is not None
-    real_plan = native._native_macro_plan
-    native._native_macro_plan = lambda *a, **k: None  # simulate a refused call
-    try:
+    for text in INVALID_OPTIONS + ["'_Box =value", LONG_MACRO + " =value"]:
+        expected = _raises(MacroPlanError, lambda: python_reference(text))
         before = native._native_macro_plan_calls
-        # The valid macro still works (native tokenizer + shared build_plan).
-        assert plan_macro("! '_Zoom") == [
-            {"action": "cancel", "prefixes": ("!",)},
-            {"action": "command", "name": "Zoom",
-             "prefixes": ("'", "_"), "dash": False,
-             "underscore": True, "transparent": True},
-        ]
-        # The typed refusal is preserved (naming the command).
-        try:
-            plan_macro("'_Box")
-            raise AssertionError("expected NonNestableCommandError")
-        except NonNestableCommandError as exc:
-            assert "Box" in str(exc), str(exc)
-        assert native._native_macro_plan_calls == before, \
-            ("planner refusal must not touch the native counter",
-             before, native._native_macro_plan_calls)
-    finally:
-        native._native_macro_plan = real_plan
-        _reset()
+        with _no_python_replay():
+            actual = _raises(MacroPlanError, lambda: plan_macro(text))
+        assert type(actual) is type(expected) and str(actual) == str(expected), (text, actual, expected)
+        _assert_native_ran(before, text)
+    error = _raises(native.NativeMacroPlanError, lambda: native.plan_macro("=value"))
+    assert (error.code, error.name) == (-5, None)
 
 
-@check("malformed successful planner JSON falls back without counting")
+@check("non-string macro is refused before any native call")
+def _():
+    _reset()
+    for value in (None, 5, ["_Move"]):
+        with _no_python_replay():
+            _raises(MacroPlanError, lambda: plan_macro(value))
+    assert native._native_macro_plan_calls == 0
+
+
+@check("public build_plan(tokens) remains a separate explicit compatibility API")
+def _():
+    _reset()
+    tokens = oracle.tokenize("! '-_Zoom", lossless=True)
+    expected = python_reference("! '-_Zoom")
+    with patch.object(native, "plan_macro", side_effect=AssertionError("builder called string planner")):
+        assert plan_mod.build_plan(tokens) == expected
+    assert native._native_macro_plan_calls == 0
+
+
+@check("missing/unloadable whole core refuses every string without replay")
+def _():
+    empty = os.path.join(TMP, "empty.so")
+    with open(empty, "wb"):
+        pass
+    for path in [os.path.join(TMP, "missing.so"), empty]:
+        with _library_path(path), _no_python_replay():
+            assert native._checked_binding() is None
+            for text in ["", "_Line", LONG_MACRO, "'_Box", "=value"]:
+                _raises(RuntimeError, lambda: plan_macro(text))
+            assert native._native_macro_plan_calls == 0
+
+
+@check("stale core identity or absent checked export refuses every string")
+def _():
+    class Identity:
+        def __init__(self, value):
+            self.value = value
+        def __call__(self):
+            return self.value
+    class Stale:
+        narwhal_pure_core_abi_version = Identity(999)
+        narwhal_pure_core_macro_plan_checked = Identity(0)
+    class Missing:
+        narwhal_pure_core_abi_version = Identity(1)
+    for library in [Stale(), Missing()]:
+        # Existing path ensures this exercises symbol/identity checks, not exists().
+        with _library_path(_LIB), patch.object(native.ctypes, "CDLL", return_value=library):
+            with _no_python_replay():
+                for text in ["", "_Line", LONG_MACRO, "'_Box", "=value"]:
+                    _raises(RuntimeError, lambda: plan_macro(text))
+                assert native._native_macro_plan_calls == 0
+
+
+@check("checked binding None never invokes tokenize/build_plan even if tokenizer works")
+def _():
+    _reset()
+    assert macro.tokenize("_Zoom", lossless=True)
+    with patch.object(native, "_checked_binding", return_value=None), _no_python_replay():
+        for text in ["", "_Zoom", LONG_MACRO, "'_Box", "=value"]:
+            _raises(RuntimeError, lambda: plan_macro(text))
+    assert native._native_macro_plan_calls == 0
+
+
+@check("invalid checked JSON/status/framing raises RuntimeError, no valid fallback")
+def _():
+    def reply(payload, status=0, needed=None):
+        def call(_text, _length, out, capacity, out_needed):
+            size = len(payload) if needed is None else needed
+            ctypes.cast(out_needed, ctypes.POINTER(ctypes.c_int64))[0] = size
+            if payload and len(payload) <= capacity:
+                ctypes.memmove(out, payload, len(payload))
+            return status
+        return call
+    malformed = (b'[{"action":"command","name":"Zoom","prefixes":["_"],'
+                 b'"dash":0,"underscore":true,"transparent":false}]')
+    cases = [reply(b"not json"), reply(b"{}"), reply(malformed), reply(b"[]", status=-1),
+             reply(b"[]", needed=0), reply(b"", status=1, needed=1),
+             reply(b"{}", status=-4), reply(b'""', status=-4),
+             reply(b"", status=-5, needed=1)]
+    _reset()
+    for binding in cases:
+        with patch.object(native, "_checked_binding", return_value=binding), _no_python_replay():
+            for text in ["_Zoom", "'_Box", "=value", ""]:
+                before = native._native_macro_plan_calls
+                _raises(RuntimeError, lambda: plan_macro(text))
+                assert native._native_macro_plan_calls == before + 1, "attempted ABI calls count"
+
+
+@check("compatibility ONLY: legacy JSON ABI equals independent planner on valid corpus")
+def _():
+    _reset()
+    assert compat._macro_plan_binding() is not None
+    for text in VALID_MACROS + [LONG_MACRO] + CASEFOLD_MACROS:
+        before = compat._native_macro_plan_calls
+        payload = compat._native_macro_plan(text)
+        assert payload is not None, text
+        assert plan_mod._actions_from_json(payload) == python_reference(text), text
+        assert compat._native_macro_plan_calls == before + 1
+    assert native._native_macro_plan_calls == 0
+
+
+@check("compatibility ONLY: legacy JSON and packed ABIs retain all semantic refusals")
+def _():
+    _reset()
+    for direct in [compat._native_macro_plan, compat._native_macro_plan_packed]:
+        for text in NON_NESTABLE + INVALID_OPTIONS:
+            assert direct(text) is None, (direct.__name__, text)
+    assert compat._native_macro_plan_calls == 0
+    assert native._native_macro_plan_calls == 0
+
+
+@check("compatibility ONLY: malformed successful JSON is declined without counting")
 def _():
     _reset()
     payload = (b'[{"action":"command","name":"Zoom","prefixes":["_"],'
                b'"dash":0,"underscore":true,"transparent":false}]')
-    real_binding = native._macro_plan_binding
-
     def size_fn(_text, _length):
         return len(payload)
-
-    def encode_fn(_text, _length, out, out_len):
-        assert out_len == len(payload)
+    def encode_fn(_text, _length, out, capacity):
+        assert capacity == len(payload)
         ctypes.memmove(out, payload, len(payload))
         return 0
-
-    native._macro_plan_binding = lambda: (size_fn, encode_fn)
-    try:
-        before = native._native_macro_plan_calls
-        assert native._native_macro_plan("_Zoom") is None
-        assert native._native_macro_plan_calls == before
-        # The planner is refused, but the native tokenizer is available, so a
-        # valid macro is served through native tokenize + the shared
-        # ``build_plan`` (the exact Python action contract), not a Python
-        # replay. The counter must stay put (the native planner did not run).
-        assert plan_macro("_Zoom") == [
-            {"action": "command", "name": "Zoom", "prefixes": ("_",),
-             "dash": False, "underscore": True, "transparent": False},
-        ]
-        # The typed refusal is preserved (naming the command).
-        try:
-            plan_macro("'_Box")
-            raise AssertionError("expected NonNestableCommandError")
-        except NonNestableCommandError as exc:
-            assert "Box" in str(exc), str(exc)
-        assert native._native_macro_plan_calls == before, \
-            ("refused planner must not touch the native counter",
-             before, native._native_macro_plan_calls)
-    finally:
-        native._macro_plan_binding = real_binding
-        _reset()
+    with patch.object(compat, "_macro_plan_binding", return_value=(size_fn, encode_fn)):
+        assert compat._native_macro_plan("_Zoom") is None
+    assert compat._native_macro_plan_calls == 0
 
 
-@check("packed planner ABI is present and its counter moves only on success")
+@check("compatibility ONLY: packed ABI counter, refusals and raw converters remain exact")
 def _():
-    assert native is not None and hasattr(native, "_native_macro_plan_packed"), \
-        "the adapter must expose the packed planner entry point"
-    assert native._macro_plan_packed_binding() is not None, \
-        "the packed planner export must resolve in this library"
     _reset()
-    before = native._native_macro_plan_calls
-    # A valid macro packs and moves the counter exactly once.
-    r = native._native_macro_plan_packed("! '-_Zoom")
-    assert r is not None and r[6] == 2, r
-    assert native._native_macro_plan_calls == before + 1, \
-        ("packed success must move the counter", before,
-         native._native_macro_plan_calls)
-    # A transparent non-nestable command is refused and does NOT count.
-    assert native._native_macro_plan_packed("'_Box") is None
-    assert native._native_macro_plan_calls == before + 1, \
-        "a packed refusal must not touch the native counter"
+    assert compat._macro_plan_packed_binding() is not None
+    packed = compat._native_macro_plan_packed("! '-_Zoom")
+    assert packed is not None and packed[6] == 2, packed
+    assert compat._native_macro_plan_calls == 1
+    assert compat._native_macro_plan_packed("'_Box") is None
+    assert compat._native_macro_plan_calls == 1
+    for text in VALID_MACROS + [LONG_MACRO] + CASEFOLD_MACROS:
+        packed = compat._native_macro_plan_packed(text)
+        assert packed is not None, text
+        actual = plan_mod._actions_from_packed(packed)
+        assert actual == python_reference(text), (text, actual)
+        for action in actual:
+            if "prefixes" in action:
+                assert isinstance(action["prefixes"], tuple), action
+    assert native._native_macro_plan_calls == 0
 
 
-@check("packed planner equals the pure-Python planner (byte-for-byte)")
+@check("checked raw ABI: short buffers do not write, typed refusals and spans stay distinct")
 def _():
-    # Directly compare the packed native route against the pure-Python
-    # reference (tokenize lossless + build_plan), including a >=192B macro so
-    # the comparison is non-trivial. This is the named equivalence invariant.
-    _reset()
-    cases = list(VALID_MACROS) + [LONG_MACRO]
-    for text in cases:
-        packed = native._native_macro_plan_packed(text)
-        if packed is None:
-            raise AssertionError("packed route unexpectedly refused %r" % text)
-        got_packed = plan_mod._actions_from_packed(packed)
-        got_py = python_reference(text)
-        assert got_packed == got_py, (text, got_packed, "expected", got_py)
+    binding = native._checked_binding()
+    needed = ctypes.c_int64(-1)
+    data = b"_Zoom"
+    output = (ctypes.c_ubyte * 512)(*([0xa5] * 512))
+    assert binding(data, len(data), output, 1, ctypes.byref(needed)) == 1
+    assert needed.value > 1 and bytes(output) == b"\xa5" * 512
+    assert binding(data, len(data), output, 512, ctypes.byref(needed)) == 0
+    assert isinstance(json.loads(bytes(output[:needed.value])), list)
+    for data, status in [(b"'_Box", -4), (b"=value", -5), (b"\xff", -2)]:
+        result = binding(data, len(data), output, 512, ctypes.byref(needed))
+        assert result == status, (data, result, status)
+        if status == -4:
+            assert json.loads(bytes(output[:needed.value])) == "Box"
+        else:
+            assert needed.value == 0
+    assert binding(None, 1, output, 512, ctypes.byref(needed)) == -1
+    assert binding(b"_Zoom", 5, output, 512, None) == -1
 
 
-@check("packed planner refuses transparent geometry (mutation target)")
+@check("performance REPORT: small and long checked plans vs independent baseline")
 def _():
-    # The same safety boundary as the JSON route: a transparent command outside
-    # the measured allow-list is refused (None) and does not count as a native
-    # success. If the Rust is_nestable check were loosened (allow transparent
-    # Box), the packed route would return an action list and this goes RED.
-    _reset()
-    before = native._native_macro_plan_calls
-    assert native._native_macro_plan_packed("'_Box") is None
-    assert native._native_macro_plan_packed("'_Circle 5,5 10") is None
-    assert native._native_macro_plan_calls == before, \
-        ("packed refusals must not touch the native counter", before,
-         native._native_macro_plan_calls)
-
-
-@check("a missing packed export falls back to the active JSON route")
-def _():
-    # Model "old library without the packed export": with the (inactive in
-    # production) packed threshold lowered, a None-returning packed entry point
-    # must let the active JSON route serve the macro, and the JSON route must
-    # actually have run (counter moved).
-    _reset()
-    saved = plan_mod.NATIVE_MACRO_PLAN_PACKED_MIN_BYTES
-    plan_mod.NATIVE_MACRO_PLAN_PACKED_MIN_BYTES = 8  # force the packed attempt
-    real_pp = native._native_macro_plan_packed
-    native._native_macro_plan_packed = lambda *a, **k: None  # simulate missing
-    try:
-        before = native._native_macro_plan_calls
-        got = plan_macro(LONG_MACRO)
-        got_py = python_reference(LONG_MACRO)
-        assert got == got_py, (got, "expected", got_py)
-        assert native._native_macro_plan_calls > before, \
-            "the JSON route must have run when the packed export is missing"
-    finally:
-        native._native_macro_plan_packed = real_pp
-        plan_mod.NATIVE_MACRO_PLAN_PACKED_MIN_BYTES = saved
-        _reset()
-
-
-@check("production posture: packed tier is proven-but-inactive above the ceiling")
-def _():
-    # Q117-05 DECISION (NEVER-slower order): the packed route is at parity with
-    # Python (not a >=10% win), so production keeps the 192B JSON floor and a
-    # measured ceiling, and the packed threshold sits above the ceiling so the
-    # hook never routes to it. This pins that posture.
-    assert plan_mod.NATIVE_MACRO_PLAN_MIN_BYTES == 192
-    assert plan_mod.NATIVE_MACRO_PLAN_MAX_BYTES >= 4096
-    assert plan_mod.NATIVE_MACRO_PLAN_PACKED_MIN_BYTES > \
-        plan_mod.NATIVE_MACRO_PLAN_MAX_BYTES
-
-
-@check("perf report: native planner workload vs the independent Python reference")
-def _():
-    # PERFORMANCE REPORT (not a routing guard). On the *same* valid (accepted)
-    # input we measure the native route and the independent pure-Python
-    # reference (``python_reference``: the frozen oracle tokenizer + the shared
-    # ``build_plan``), each N single calls, and print the ratio.
-    #
-    # The owner deliberately wants native consolidation, not a claim that every
-    # tiny call is faster -- so this is a measured number, NOT an assertion,
-    # and it must not gate the suite. A material regression (native > 2x the
-    # reference) is still surfaced loudly (DECISION NEEDED) so a real slowdown
-    # is never hidden.
-    #
-    # The comparison is HONEST: only on inputs the native route *accepts*
-    # (its success path), never on rejections (a rejection + refusal is double
-    # work and would falsely look like a native slowdown).
-    if native is None or native._macro_plan_binding() is None:
-        print("  [perf] SKIPPED -- native planner binding not available")
-        return
-    perf_input = LONG_MACRO
-    N = 5000
-
-    def _best(one_call):
-        """Best of 3 reps, each rep doing N single calls of ``one_call``."""
-        best = float("inf")
+    assert callable(native._checked_binding()), "performance cannot skip native qualification"
+    def best(fn, count):
+        elapsed = float("inf")
         for _ in range(3):
-            t0 = time.perf_counter()
-            for _ in range(N):
-                one_call()
-            best = min(best, time.perf_counter() - t0)
-        return best
-
-    _reset()
-    t_native = _best(lambda: plan_macro(perf_input))
-    _reset()
-    t_py = _best(lambda: python_reference(perf_input))
-    r = t_native / max(t_py, 1e-9)
-    # PERFORMANCE REPORT (not a routing guard): the owner deliberately wants
-    # native consolidation, not a claim that every tiny call is faster, so this
-    # is a measured number, not an assertion. A material regression (native
-    # > 2x the independent Python reference) is surfaced loudly (DECISION
-    # NEEDED) rather than hidden, but it does not fail the suite.
-    print("  [perf] macro_plan.plan_macro native=%.5fs python=%.5fs "
-          "ratio=%.2fx (%d calls)" % (t_native, t_py, r, N))
-    if r > 2.0:
-        print("  [perf] DECISION NEEDED: native is %.2fx slower than the "
-              "pure-Python reference -- owner to decide the ABI posture" % r)
+            start = time.perf_counter()
+            for _ in range(count):
+                fn()
+            elapsed = min(elapsed, time.perf_counter() - start)
+        return elapsed
+    for text in ["", "_Line", "! '-_Zoom", LONG_MACRO]:
+        assert plan_macro(text) == python_reference(text)
+        count = 2000
+        t_native = best(lambda: plan_macro(text), count)
+        t_python = best(lambda: python_reference(text), count)
+        print("  [perf] %dB native=%.3fus reference=%.3fus ratio=%.2fx (%d calls)" % (
+            len(text.encode("utf-8")), t_native * 1e6 / count, t_python * 1e6 / count,
+            t_native / max(t_python, 1e-9), count))
 
 
 failed = 0
@@ -588,5 +463,6 @@ for name, status, detail in results:
     print(f"[{status}] {name}" + (f"  -- {detail}" if detail else ""))
     if status == "FAIL":
         failed += 1
+shutil.rmtree(TMP, ignore_errors=True)
 print(f"\n{len(results) - failed}/{len(results)} passed")
 sys.exit(1 if failed else 0)

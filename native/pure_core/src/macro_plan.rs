@@ -26,12 +26,92 @@ use crate::macro_parse::{
 };
 use crate::macro_parse::{ERR_INPUT, ERR_NULL, ERR_SIZE};
 
-/// True when the lower-cased command name is one the reference CAD application
+/// Stable planner rejection codes (negative) for the checked single-pass ABI.
+/// `-4` is the existing `PLAN_ERR_NON_NESTABLE`; `-5` is the new code for an
+/// option step whose name is empty (the Python `MacroPlanError('option action
+/// has an invalid name')`).
+pub(crate) const PLAN_ERR_INVALID_OPTION: i32 = -5;
+
+/// The two semantic planner refusals the checked ABI can return. The first
+/// error in token order wins, so a macro with an empty option *before* a
+/// non-nestable command reports the empty option, not the command.
+#[derive(Debug)]
+pub(crate) enum PlannerError {
+    /// A transparent command outside the measured nestable allow-list.
+    /// The payload is the exact command name (the Python
+    /// `NonNestableCommandError` message embeds it).
+    NonNestable(String),
+    /// An option step whose name is empty.
+    InvalidOptionName,
+}
+
+impl PlannerError {
+    /// The stable negative code for this error (the checked ABI return).
+    pub(crate) fn code(&self) -> i32 {
+        match self {
+            PlannerError::NonNestable(_) => PLAN_ERR_NON_NESTABLE,
+            PlannerError::InvalidOptionName => PLAN_ERR_INVALID_OPTION,
+        }
+    }
+}
+
+/// Case-fold `c` to the same string Python's `str.casefold()` produces for it.
+///
+/// The live Python planner (`macro_plan.py`) uses `name.casefold()` to test
+/// against the nestable allow-list, and CPython's casefold does a small set of
+/// one-to-many mappings that Rust's `char::to_lowercase` does NOT do:
+///
+/// | char | casefold | to_lowercase |
+/// |------|----------|--------------|
+/// | U+017F `ſ` (long s)   | `s`      | `ſ` (identity) |
+/// | U+00DF `ß` (sharp s)  | `ss`     | `ß` (identity) |
+/// | U+1E9E `ẞ` (caps sharp s)| `ss`    | `ß` |
+/// | U+FB00 `ﬀ`            | `ff`     | `ﬀ` (identity) |
+/// | U+FB01 `ﬁ`            | `fi`     | `ﬁ` (identity) |
+/// | U+FB02 `ﬂ`            | `fl`     | `ﬂ` (identity) |
+/// | U+FB03 `ﬃ`            | `ffi`    | `ﬃ` (identity) |
+/// | U+FB04 `ﬄ`            | `ffl`    | `ﬄ` (identity) |
+/// | U+FB05 `ﬅ`            | `st`     | `ﬅ` (identity) |
+/// | U+FB06 `ﬆ`            | `st`     | `ﬆ` (identity) |
+///
+/// The Kelvin sign (U+212A) already folds to `k` via `to_lowercase`,
+/// so it needs no special case. Unknown non-ASCII characters remain mapped
+/// through `to_lowercase`, so they are still refused when they do not land on
+/// an allow-list name.
+fn casefold_char(c: char) -> String {
+    match c {
+        '\u{017F}' => "s".to_string(),
+        '\u{00DF}' | '\u{1E9E}' => "ss".to_string(),
+        '\u{FB00}' => "ff".to_string(),
+        '\u{FB01}' => "fi".to_string(),
+        '\u{FB02}' => "fl".to_string(),
+        '\u{FB03}' => "ffi".to_string(),
+        '\u{FB04}' => "ffl".to_string(),
+        '\u{FB05}' | '\u{FB06}' => "st".to_string(),
+        c => c.to_lowercase().to_string(),
+    }
+}
+
+/// Case-fold `s` the way CPython's `str.casefold()` does (the one-to-many
+/// mappings above plus `to_lowercase` for everything else).
+fn casefold(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        out.push_str(&casefold_char(c));
+    }
+    out
+}
+
+/// True when the case-folded command name is one the reference CAD application
 /// documents as nestable (view / construction-plane / object-snap style).
 /// MEASURED from `information/cad_scripting`, "Naming conventions".
+///
+/// The live Python planner uses `name.casefold()`, so this mirrors it exactly
+/// (see [`casefold_char`] for the one-to-many mappings Rust's
+/// `to_lowercase` would miss).
 fn is_nestable(name: &str) -> bool {
     matches!(
-        name.to_lowercase().as_str(),
+        casefold(name).as_str(),
         "cplane"
             | "namedcplane"
             | "namedview"
@@ -58,9 +138,14 @@ fn is_nestable(name: &str) -> bool {
 /// Render one lossless step as its action JSON object (no surrounding array),
 /// mirroring `macro_plan.build_plan` exactly: same keys, same order, and the
 /// extra command flags present only when set.
-fn action_json(step: &Step) -> Option<String> {
+///
+/// Returns `Err(PlannerError)` when the step is one the planner must refuse:
+/// a transparent command outside the measured allow-list, or an option step
+/// whose name is empty. The caller (or the checked ABI) reports the first such
+/// error in token order.
+fn action_json(step: &Step) -> Result<String, PlannerError> {
     match step {
-        Step::Cancel => Some(r#"{"action":"cancel","prefixes":["!"]}"#.to_string()),
+        Step::Cancel => Ok(r#"{"action":"cancel","prefixes":["!"]}"#.to_string()),
         Step::Command {
             name,
             dash,
@@ -77,7 +162,7 @@ fn action_json(step: &Step) -> Option<String> {
             // allow-list is refused, not planned (Python raises the exact
             // NonNestableCommandError on its fallback path).
             if *transparent && !is_nestable(name) {
-                return None;
+                return Err(PlannerError::NonNestable(name.clone()));
             }
             let mut s = String::from("{\"action\":\"command\",\"name\":");
             json_escape(name, &mut s);
@@ -106,7 +191,7 @@ fn action_json(step: &Step) -> Option<String> {
                 s.push_str(",\"history_off\":true");
             }
             s.push('}');
-            Some(s)
+            Ok(s)
         }
         Step::Pause { special, prefixes } => {
             // Lossless input always carries the original spelling.
@@ -116,7 +201,7 @@ fn action_json(step: &Step) -> Option<String> {
             s.push_str(",\"prefixes\":");
             s.push_str(&flags_json(prefixes.as_deref().unwrap_or(&[])));
             s.push('}');
-            Some(s)
+            Ok(s)
         }
         Step::Enter { special, prefixes } => {
             let special = special.as_deref().unwrap_or("Enter");
@@ -125,19 +210,27 @@ fn action_json(step: &Step) -> Option<String> {
             s.push_str(",\"prefixes\":");
             s.push_str(&flags_json(prefixes.as_deref().unwrap_or(&[])));
             s.push('}');
-            Some(s)
+            Ok(s)
         }
         Step::Text { value } => {
             let mut s = String::from("{\"action\":\"text\",\"value\":");
             json_escape(value, &mut s);
             s.push('}');
-            Some(s)
+            Ok(s)
         }
         Step::Option {
             name,
             value,
             prefixes,
         } => {
+            // The live Python planner (`macro_plan.build_plan`) refuses an
+            // option whose name is empty; the old Rust `action_json` erroneously
+            // accepted it. Report the exact stable error code so the checked
+            // ABI can classify it (`-5`), distinct from a non-nestable command
+            // (`-4`).
+            if name.is_empty() {
+                return Err(PlannerError::InvalidOptionName);
+            }
             let mut s = String::from("{\"action\":\"option\",\"name\":");
             json_escape(name, &mut s);
             s.push_str(",\"value\":");
@@ -145,19 +238,21 @@ fn action_json(step: &Step) -> Option<String> {
             s.push_str(",\"prefixes\":");
             s.push_str(&flags_json(prefixes.as_deref().unwrap_or(&[])));
             s.push('}');
-            Some(s)
+            Ok(s)
         }
     }
 }
 
-/// Build the bounded JSON action list for a lossless macro, or `None` when the
-/// macro contains a transparent command outside the measured allow-list.
-fn plan_json(macro_str: &str) -> Option<String> {
-    let mut parts: Vec<String> = Vec::new();
-    for step in tokenize_steps(macro_str, true) {
-        parts.push(action_json(&step)?);
+/// Build the bounded JSON action list for a lossless macro, or the first
+/// semantic error in token order (an empty option name or a transparent
+/// command outside the measured allow-list).
+fn plan_json(macro_str: &str) -> Result<String, PlannerError> {
+    let steps = tokenize_steps(macro_str, true);
+    let mut parts: Vec<String> = Vec::with_capacity(steps.len());
+    for step in &steps {
+        parts.push(action_json(step)?);
     }
-    Some(format!("[{}]", parts.join(",")))
+    Ok(format!("[{}]", parts.join(",")))
 }
 
 /// Packed action kinds for the one-pass planner ABI (Q117-05). The Python
@@ -284,14 +379,19 @@ fn pack_actions(steps: &[Step]) -> Option<Vec<PackedAction>> {
                 name,
                 value,
                 prefixes,
-            } => out.push(PackedAction {
-                kind: ACT_OPTION,
-                flags: 0,
-                s0: name.clone(),
-                s1: value.clone(),
-                // The planner always emits `prefixes` on an option.
-                s2: prefixes_string(prefixes),
-            }),
+            } => {
+                if name.is_empty() {
+                    return None;
+                }
+                out.push(PackedAction {
+                    kind: ACT_OPTION,
+                    flags: 0,
+                    s0: name.clone(),
+                    s1: value.clone(),
+                    // The planner always emits `prefixes` on an option.
+                    s2: prefixes_string(prefixes),
+                });
+            }
         }
     }
     Some(out)
@@ -520,8 +620,8 @@ pub unsafe extern "C" fn narwhal_pure_core_macro_plan_size(
         Err(_) => return ERR_INPUT as i64,
     };
     match plan_json(macro_str) {
-        Some(json) => json.len() as i64,
-        None => PLAN_ERR_NON_NESTABLE as i64,
+        Ok(json) => json.len() as i64,
+        Err(e) => e.code() as i64,
     }
 }
 
@@ -554,8 +654,8 @@ pub unsafe extern "C" fn narwhal_pure_core_macro_plan_encode(
         Err(_) => return ERR_INPUT,
     };
     let json = match plan_json(macro_str) {
-        Some(j) => j,
-        None => return PLAN_ERR_NON_NESTABLE,
+        Ok(j) => j,
+        Err(e) => return e.code(),
     };
     if out_len != json.len() {
         return ERR_SIZE;
@@ -571,12 +671,185 @@ pub unsafe extern "C" fn narwhal_pure_core_macro_plan_encode(
     0
 }
 
+/// Checked single-pass planner ABI (RUST-PLAN-12). The production replacement
+/// for the two-pass `size` + `encode` route: one call plans the macro and
+/// classifies the FIRST semantic error in token order, so the host no longer
+/// replays the Python tokenizer/planner on a rejection.
+///
+/// Status (return value):
+/// * `0`  -- success. `out` holds the exact action-list JSON and `*out_needed`
+///   is its byte length.
+/// * `1`  -- short buffer. The output buffer is too small to hold the result
+///   (the success JSON, or the non-nestable command-name payload). No
+///   output is written; `*out_needed` carries the required length so the
+///   caller can retry with a large enough buffer.
+/// * `-1` -- bad span (a required pointer is null/misaligned for the given
+///   length). No output is written.
+/// * `-2` -- invalid input (oversized, or not valid UTF-8). No output written.
+/// * `-4` -- non-nestable command (a transparent command outside the measured
+///   allow-list). `out` holds the command name as a JSON string (via
+///   the shared `json_escape`); `*out_needed` is its length.
+/// * `-5` -- invalid option name (an option step with an empty name). No
+///   output is written.
+///
+/// A capacity-0 + null-output call is a pure size query: it returns `1` (or the
+/// stable error code) with `*out_needed` set and writes nothing, so the caller
+/// can safely two-pass without a separate size export.
+///
+/// # Safety
+///
+/// `text` must be readable for `text_len` bytes (null only when `text_len ==
+/// 0`). `out` must be writable for `out_len` bytes (null only when `out_len
+/// == 0`). `out_needed` must be a valid pointer. No pointer is retained after
+/// the call returns.
+#[no_mangle]
+pub unsafe extern "C" fn narwhal_pure_core_macro_plan_checked(
+    text: *const u8,
+    text_len: usize,
+    out: *mut u8,
+    out_len: usize,
+    out_needed: *mut i64,
+) -> i32 {
+    // `out_needed` is part of the atomic output contract; a null pointer is a
+    // bad span before anything else is inspected.
+    let Some(needed) = (unsafe { crate::checked_slice_mut(out_needed, 1) }) else {
+        return ERR_NULL;
+    };
+    needed[0] = 0;
+    if out_len > 64 * 1024 * 1024 {
+        return ERR_INPUT;
+    }
+    // Oversized input is refused before reading any bytes.
+    if text_len > MACRO_MAX_INPUT_BYTES {
+        needed[0] = 0;
+        return ERR_INPUT;
+    }
+    let slice = match byte_span(text, text_len) {
+        Some(s) => s,
+        None => {
+            needed[0] = 0;
+            return ERR_NULL;
+        }
+    };
+    let macro_str = match std::str::from_utf8(slice) {
+        Ok(s) => s,
+        Err(_) => {
+            needed[0] = 0;
+            return ERR_INPUT;
+        }
+    };
+    match plan_json(macro_str) {
+        Ok(json) => write_checked_result(out, out_len, out_needed, json.as_bytes(), 0),
+        Err(PlannerError::NonNestable(name)) => {
+            let mut payload = String::new();
+            json_escape(&name, &mut payload);
+            write_checked_result(
+                out,
+                out_len,
+                out_needed,
+                payload.as_bytes(),
+                PLAN_ERR_NON_NESTABLE,
+            )
+        }
+        Err(PlannerError::InvalidOptionName) => {
+            needed[0] = 0;
+            PLAN_ERR_INVALID_OPTION
+        }
+    }
+}
+
+/// Shared tail for the checked ABI: publish the byte result into the caller
+/// buffer, or report a short buffer / bad span without writing. Returns the
+/// status code to hand back.
+///
+/// # Safety
+///
+/// `out` must be writable for `out_len` bytes when `out_len > 0` and `out`
+/// non-null; `out_needed` must be a valid pointer.
+unsafe fn write_checked_result(
+    out: *mut u8,
+    out_len: usize,
+    out_needed: *mut i64,
+    payload: &[u8],
+    success_code: i32,
+) -> i32 {
+    let Some(required) = (unsafe { crate::checked_slice_mut(out_needed, 1) }) else {
+        return ERR_NULL;
+    };
+    if payload.len() > 64 * 1024 * 1024 || out_len > 64 * 1024 * 1024 {
+        required[0] = 0;
+        return ERR_INPUT;
+    }
+    let needed = payload.len() as i64;
+    if out_len < payload.len() {
+        required[0] = needed;
+        return 1;
+    }
+    let dest = match unsafe { crate::checked_slice_mut(out, out_len) } {
+        Some(d) => d,
+        None => {
+            required[0] = needed;
+            return ERR_NULL;
+        }
+    };
+    dest[..payload.len()].copy_from_slice(payload);
+    required[0] = needed;
+    success_code
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    #[test]
+    fn checked_output_metadata_is_admitted_before_dereference() {
+        let mut words = [0u64; 4];
+        let misaligned = unsafe { words.as_mut_ptr().cast::<u8>().add(1).cast::<i64>() };
+        assert_eq!(
+            unsafe {
+                narwhal_pure_core_macro_plan_checked(
+                    std::ptr::null(),
+                    0,
+                    std::ptr::null_mut(),
+                    0,
+                    misaligned,
+                )
+            },
+            ERR_NULL
+        );
+        let mut needed = 99i64;
+        assert_eq!(
+            unsafe {
+                narwhal_pure_core_macro_plan_checked(
+                    std::ptr::null(),
+                    0,
+                    std::ptr::null_mut(),
+                    usize::MAX,
+                    &mut needed,
+                )
+            },
+            ERR_INPUT
+        );
+        assert_eq!(needed, 0);
+        assert!(pack_actions(&tokenize_steps("=value", true)).is_none());
+    }
+
     fn p(macro_str: &str) -> Option<String> {
-        plan_json(macro_str)
+        plan_json(macro_str).ok()
+    }
+
+    /// Plan and return the exact `(code, payload)` the checked ABI would
+    /// publish, so a test can assert the first semantic error in token order.
+    fn checked(macro_str: &str) -> (i32, String) {
+        match plan_json(macro_str) {
+            Ok(json) => (0, json),
+            Err(PlannerError::NonNestable(name)) => {
+                let mut payload = String::new();
+                json_escape(&name, &mut payload);
+                (PLAN_ERR_NON_NESTABLE, payload)
+            }
+            Err(PlannerError::InvalidOptionName) => (PLAN_ERR_INVALID_OPTION, String::new()),
+        }
     }
 
     /// One decoded packed action row: `(kind, flags, s0, s1, s2)`.
@@ -1006,5 +1279,269 @@ mod tests {
             ERR_NULL
         );
         assert_eq!(out, [0xA5; 8]);
+    }
+
+    // ------------------------------------------------------------------
+    // RUST-PLAN-12: casefold (not to_lowercase) is the nestable check.
+    // ------------------------------------------------------------------
+
+    /// The one-to-many casefold mappings that Rust's `to_lowercase` would miss.
+    /// Each of these casefolds to a name on the measured nestable allow-list, so
+    /// the live Python planner (which uses `casefold`) accepts a transparent
+    /// form. A `to_lowercase` implementation would refuse them -- that is the
+    /// regression this test pins down.
+    #[test]
+    fn casefold_mappings_are_nestable() {
+        for (input, folded) in [
+            ("\u{017F}nap", "snap"),                          // ſ -> s
+            ("selcro\u{00DF}ing", "selcrossing"),             // ß -> ss
+            ("selcro\u{1E9E}ing", "selcrossing"),             // ẞ -> ss
+            ("curvaturegrapho\u{FB00}", "curvaturegraphoff"), // ﬀ -> ff
+            ("\u{017F}elwindow", "selwindow"),                // ſ -> s
+        ] {
+            let cf = casefold(input);
+            assert_eq!(cf, folded, "casefold({input:?})");
+            assert!(is_nestable(input), "is_nestable({input:?}) via {folded}");
+        }
+    }
+
+    /// The other ligatures (U+FB01..=FB06) fold to names that are NOT on the
+    /// allow-list, so they remain refused. Unknown non-ASCII stays refused too.
+    #[test]
+    fn non_allowlist_casefolds_remain_refused() {
+        for input in [
+            "curvaturegrapho\u{FB01}", // ﬁ -> fi
+            "curvaturegrapho\u{FB02}", // ﬂ -> fl
+            "curvaturegrapho\u{FB03}", // ﬃ -> ffi
+            "curvaturegrapho\u{FB04}", // ﬄ -> ffl
+            "curvaturegrapho\u{FB05}", // ﬅ -> st
+            "curvaturegrapho\u{FB06}", // ﬆ -> st
+            "\u{017F}\u{017F}snap",    // ſſ -> ssnap
+        ] {
+            assert!(!is_nestable(input), "is_nestable({input:?}) must be false");
+        }
+        // Kelvin already folds to 'k' via to_lowercase and is not an allow-list name.
+        assert!(!is_nestable("\u{212A}ELVIN"));
+        assert!(!is_nestable("k"));
+    }
+
+    /// A transparent command whose name casefolds to an allow-list entry is
+    /// accepted end-to-end through the planner (not just `is_nestable`).
+    #[test]
+    fn casefold_nestable_is_planned() {
+        for m in [
+            "'\u{017F}nap",
+            "'_selcro\u{00DF}ing",
+            "'_curvaturegrapho\u{FB00}",
+        ] {
+            assert!(p(m).is_some(), "{m:?} must be planned");
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // RUST-PLAN-12: empty option name is now refused (the old Rust accepted it).
+    // ------------------------------------------------------------------
+
+    /// An option step whose name is empty is the stable `-5` error, matching the
+    /// Python `MacroPlanError('option action has an invalid name')`.
+    #[test]
+    fn empty_option_name_is_refused() {
+        // `=value` tokenizes to an option with an empty name (name="", value="value").
+        assert_eq!(checked("=value"), (PLAN_ERR_INVALID_OPTION, String::new()));
+        // The legacy size/encode routes now report the same stable code.
+        let bad = "=value".as_bytes();
+        assert_eq!(
+            unsafe { narwhal_pure_core_macro_plan_size(bad.as_ptr(), bad.len()) },
+            PLAN_ERR_INVALID_OPTION as i64
+        );
+        assert_eq!(
+            unsafe {
+                narwhal_pure_core_macro_plan_encode(
+                    bad.as_ptr(),
+                    bad.len(),
+                    std::ptr::null_mut(),
+                    0,
+                )
+            },
+            PLAN_ERR_INVALID_OPTION
+        );
+    }
+
+    /// A non-empty option still plans (only the empty name is refused).
+    #[test]
+    fn nonempty_option_still_plans() {
+        assert!(p("_Mode=_Shaded").is_some());
+    }
+
+    // ------------------------------------------------------------------
+    // RUST-PLAN-12: the FIRST semantic error in token order wins.
+    // ------------------------------------------------------------------
+
+    /// An empty option BEFORE a non-nestable command reports the empty option
+    /// (`-5`), not the command (`-4`).
+    #[test]
+    fn empty_option_beats_later_nonnestable() {
+        assert_eq!(
+            checked("=value '_Box"),
+            (PLAN_ERR_INVALID_OPTION, String::new())
+        );
+    }
+
+    /// A non-nestable command BEFORE an empty option reports the command (`-4`)
+    /// with its name payload, not the empty option.
+    #[test]
+    fn nonnestable_beats_later_empty_option() {
+        assert_eq!(
+            checked("'_Box =value"),
+            (PLAN_ERR_NON_NESTABLE, r#""Box""#.to_string())
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // RUST-PLAN-12: the checked single-pass ABI.
+    // ------------------------------------------------------------------
+
+    fn run_checked(macro_str: &str, out_len: usize) -> (i32, Vec<u8>, i64) {
+        let bytes = macro_str.as_bytes();
+        let mut out = vec![0xA5u8; out_len];
+        let mut needed: i64 = -999;
+        let rc = unsafe {
+            narwhal_pure_core_macro_plan_checked(
+                bytes.as_ptr(),
+                bytes.len(),
+                out.as_mut_ptr(),
+                out_len,
+                &mut needed,
+            )
+        };
+        (rc, out, needed)
+    }
+
+    #[test]
+    fn checked_success_writes_json_and_needed() {
+        let m = "'_Zoom _Mode=_Shaded 10";
+        let expected = p(m).expect("the planner accepted it");
+        let (rc, out, needed) = run_checked(m, expected.len());
+        assert_eq!(rc, 0);
+        assert_eq!(needed as usize, expected.len());
+        assert_eq!(String::from_utf8(out).expect("utf-8"), expected);
+    }
+
+    #[test]
+    fn checked_short_buffer_reports_needed_and_writes_nothing() {
+        let m = "'_Zoom";
+        let expected = p(m).expect("accepted");
+        // A buffer one byte too small: the sentinel must survive (no write),
+        // and `needed` must carry the exact required length so a retry works.
+        let (rc, out, needed) = run_checked(m, expected.len() - 1);
+        assert_eq!(rc, 1);
+        assert_eq!(needed as usize, expected.len());
+        assert!(
+            out.iter().all(|v| *v == 0xA5),
+            "short buffer must not be written"
+        );
+        // A retry with the reported length succeeds and is byte-exact.
+        let (rc2, out2, needed2) = run_checked(m, needed as usize);
+        assert_eq!(rc2, 0);
+        assert_eq!(needed2, needed);
+        assert_eq!(String::from_utf8(out2).expect("utf-8"), expected);
+    }
+
+    #[test]
+    fn checked_capacity_zero_is_a_size_query() {
+        let m = "'_Zoom";
+        let expected = p(m).expect("accepted");
+        // out_len == 0 with a null out pointer is a pure query: status 1 (short
+        // buffer), `needed` set, and no write attempted.
+        let mut needed: i64 = -999;
+        let rc = unsafe {
+            narwhal_pure_core_macro_plan_checked(
+                m.as_ptr(),
+                m.len(),
+                std::ptr::null_mut(),
+                0,
+                &mut needed,
+            )
+        };
+        assert_eq!(rc, 1);
+        assert_eq!(needed as usize, expected.len());
+    }
+
+    #[test]
+    fn checked_nonnestable_publishes_name_payload() {
+        let m = "'_Box";
+        let payload = r#""Box""#;
+        let (rc, out, needed) = run_checked(m, payload.len());
+        assert_eq!(rc, PLAN_ERR_NON_NESTABLE);
+        assert_eq!(needed as usize, payload.len());
+        assert_eq!(String::from_utf8(out).expect("utf-8"), payload);
+        // A short buffer on a rejection also reports the required length.
+        let (rc2, out2, needed2) = run_checked(m, 1);
+        assert_eq!(rc2, 1);
+        assert_eq!(needed2 as usize, payload.len());
+        assert_eq!(out2[0], 0xA5, "no write on a short rejection buffer");
+    }
+
+    #[test]
+    fn checked_empty_option_is_code_minus_five_no_write() {
+        let (rc, out, needed) = run_checked("=value", 8);
+        assert_eq!(rc, PLAN_ERR_INVALID_OPTION);
+        assert_eq!(needed, 0, "no payload on an empty-option refusal");
+        assert!(
+            out.iter().all(|v| *v == 0xA5),
+            "no write on an empty-option refusal"
+        );
+    }
+
+    #[test]
+    fn checked_null_out_needed_and_bad_input() {
+        // null `out_needed` is a bad span before anything else.
+        let m = "_Zoom";
+        let mut out = [0u8; 16];
+        let rc = unsafe {
+            narwhal_pure_core_macro_plan_checked(
+                m.as_ptr(),
+                m.len(),
+                out.as_mut_ptr(),
+                out.len(),
+                std::ptr::null_mut(),
+            )
+        };
+        assert_eq!(rc, ERR_NULL);
+        // Non-UTF-8 input is an invalid input, `needed` reset to 0.
+        let bad = [0xFFu8, 0xFE];
+        let mut needed: i64 = -999;
+        let rc = unsafe {
+            narwhal_pure_core_macro_plan_checked(
+                bad.as_ptr(),
+                bad.len(),
+                std::ptr::null_mut(),
+                0,
+                &mut needed,
+            )
+        };
+        assert_eq!(rc, ERR_INPUT);
+        assert_eq!(needed, 0);
+        // Oversized input is refused before any read.
+        let big = vec![b'a'; MACRO_MAX_INPUT_BYTES + 1];
+        let rc = unsafe {
+            narwhal_pure_core_macro_plan_checked(
+                big.as_ptr(),
+                big.len(),
+                std::ptr::null_mut(),
+                0,
+                &mut needed,
+            )
+        };
+        assert_eq!(rc, ERR_INPUT);
+        assert_eq!(needed, 0);
+    }
+
+    #[test]
+    fn checked_empty_macro_successes_to_empty_list() {
+        let (rc, out, needed) = run_checked("", 2);
+        assert_eq!(rc, 0);
+        assert_eq!(needed, 2);
+        assert_eq!(String::from_utf8(out).expect("utf-8"), "[]");
     }
 }

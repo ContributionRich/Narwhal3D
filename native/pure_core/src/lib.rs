@@ -16,10 +16,12 @@
 pub mod aci_colors;
 pub mod arclength;
 pub mod bearing;
+pub mod bearing_owned;
 pub mod blend;
 pub mod bspline;
 pub mod cage;
 pub mod calc;
+pub mod calc_owned;
 pub mod coil;
 pub mod command_search;
 pub mod coords;

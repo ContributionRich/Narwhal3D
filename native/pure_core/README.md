@@ -14,10 +14,10 @@ Current production routing:
 | OBJ decode | Rust | 1.67× faster on a 1.8 MB file |
 | DXF decode | Rust | 3.23× faster on 20k entities |
 | length parsing | Rust | about 1.14× faster |
-| calculator | Rust | about 2.5× faster |
+| calculator | Rust only, including grammar errors and domain/overflow classification | exact owned literals; no Python expression replay; mixed corpus faster, tiny literals retain FFI overhead |
 | coordinate parsing | Rust | about 1.05× faster |
 | macro tokenize | Rust only at every supported length | Python tokenizer retired; ~259-byte probe about 1.4× faster, tiny 5-byte repeated probe about 3.6× slower (~8 µs versus ~2 µs), not a universal speedup |
-| macro plan | Rust from 192 UTF-8 bytes; smaller plans orchestrate native tokenization | planner policy fallback still present, not retired |
+| macro string plan | checked Rust at every size and semantic refusal | no tokenization/build-plan replay; separate public hand-built-token compatibility API remains |
 | print-width file parsing | Rust only | short-file Python bypass and parser retired; Python retains file decoding |
 | length display formatting | Rust only | decimal/fraction/feet-inch rounding, reduction, rendering and rejection in Rust; Python retains coercion/exception mapping |
 | closed (periodic) curve interpolation | Rust from 3 points | 1.4× faster end to end at 4 points, 3.3× at 64 |
@@ -33,7 +33,7 @@ Current production routing:
 | OBJ encode | Python | native path was 2.18× slower |
 | curve/curve intersection recursion (`intersect.curve_curve` after its overlap test) | Rust for two valid `NurbsCurve`s on a qualified platform (Linux; `check_pure_core.py` pins the witness hits); other curves, other platforms and the overlap test stay in Python | 56-97× faster (two 20-point cubics 54.9 → 0.66 ms); bit-identical hits on Linux/glibc (`Split`, `GetBoundingBox`, `Intersection.LineLine` ported from the openNURBS rhino3dm 8.35.0 pins) |
 | DXF encode | Python | two-pass output build never reached a stable 10% win |
-| standalone number parsing / bearing parsing | Rust only / Python | numbers require the owned parser ABI; bearing retirement not complete |
+| standalone number / bearing / surveyor parsing | Rust only | grammar and rejection classification owned natively; host type/error presentation only |
 | SVG path parsing | Python | JSON ABI was slower through the 1 MiB input limit |
 | display segment counts (`screen_segments_for`) | Python | 0.5 µs per call, below one ctypes call; not ported |
 | short convex face loops (under 64 points) | Python | the linear fan beats packing (3.4× slower at 3 points) |
