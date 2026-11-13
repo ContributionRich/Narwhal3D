@@ -72,63 +72,50 @@ RUNTIME_UNITS = frozenset({"CustomUnits"})
 #:     parsec use the exact metre values of the second and the light-year);
 #:     see each inline note.
 #:
-#: The ONE definition of these scales is Rust's ``UNIT_SYSTEM_MM``
-#: (``native/pure_core/src/numparse.rs``), which the typed-length parser also reads.
-#: This literal is the fallback for when the pure-core library is not loaded;
-#: ``spike/test_native_unit_table.py`` fails if the two ever differ.
-_PYTHON_UNIT_SCALE_MM = {
-    "Angstroms":        1e-7,        # 1e-10 m
-    "Nanometers":       1e-6,        # 1e-9 m
-    "Microns":          1e-3,        # 1e-6 m (a micron is a micrometre)
-    "Millimeters":      1.0,         # 1e-3 m
-    "Centimeters":      10.0,        # 1e-2 m
-    "Decimeters":       100.0,       # 1e-1 m
-    "Meters":           1000.0,      # 1 m
-    "Dekameters":       10_000.0,    # 1e1 m
-    "Hectometers":      100_000.0,   # 1e2 m
-    "Kilometers":       1_000_000.0, # 1e3 m
-    "Megameters":       1_000_000_000.0,   # 1e6 m
-    "Gigameters":       1_000_000_000_000.0, # 1e9 m
-    "Microinches":      25.4e-6,     # 1e-6 inch
-    "Mils":             25.4e-3,     # 1/1000 inch
-    "Inches":           25.4,        # exact
-    "Feet":             304.8,       # 12 inches
-    "Yards":            914.4,       # 3 feet
-    "Miles":            1_609_344.0, # 5280 feet
-    "PrinterPoints":    25.4 / 72.0, # 1/72 inch
-    "PrinterPicas":     25.4 / 12.0, # 1/12 inch
-    "NauticalMiles":    1_852_000.0, # 1852 m (exact)
-    "AstronomicalUnits": 1.495978707e11, # IAU 2012 exact AU (m) * 1000 -> mm
-    "LightYears":       9.4607304725808e15, # c * 1 Julian year (m) * 1000
-    "Parsecs":          3.0856775814913673e16, # 1 pc (m) * 1000
-}
+# Fixed scales and angle factors have one numeric definition, in Rust.
+# Python retains public names and host/model admission, not duplicate values.
+_UNIT_SCALE_NAMES = UNIT_MEMBERS[1:25]
+_adapters = {}
+
+
+def _unit_adapter(name):
+    adapter = _adapters.get(name)
+    if adapter is not None:
+        return adapter
+    import importlib
+    if __package__:
+        adapter = importlib.import_module("." + name, __package__)
+    else:
+        import importlib.util
+        import sys
+        from pathlib import Path
+        canonical = "narwhal3d_" + name
+        adapter = sys.modules.get(canonical)
+        if adapter is None:
+            path = Path(__file__).resolve().parent / (name + ".py")
+            spec = importlib.util.spec_from_file_location(canonical, path)
+            adapter = importlib.util.module_from_spec(spec)
+            sys.modules[canonical] = adapter
+            try:
+                spec.loader.exec_module(adapter)
+            except BaseException:
+                sys.modules.pop(canonical, None)
+                raise
+    _adapters[name] = adapter
+    return adapter
 
 
 def _unit_scales():
-    """``(scales, source)``: Rust's unit table when it loads and names exactly these
-    units, else the Python copy. Every name keeps its place in the Python order."""
-    try:
-        from . import native_pure
-        table = native_pure.unit_table()
-    except Exception:  # noqa: BLE001 -- loaded outside the package, or no library
-        table = None
-    if table is None or set(table) != set(_PYTHON_UNIT_SCALE_MM):
-        return dict(_PYTHON_UNIT_SCALE_MM), "python"
-    return {name: table[name] for name in _PYTHON_UNIT_SCALE_MM}, "rust"
+    result = _unit_adapter("native_unit_table").unit_table()
+    if result["names"] != _UNIT_SCALE_NAMES:
+        raise RuntimeError("native unit-table names/order mismatch; not replayed")
+    return result["table"], "rust"
 
 
 UNIT_SCALE_MM, UNIT_SCALE_SOURCE = _unit_scales()
-
-#: Angle-unit factors, in RADIANS per one unit. Degrees is the base the reference CAD application
-#: assumes when an angle is typed with no unit ("If no units are specified,
-#: then degrees are assumed" -- documentproperties/units.htm). Radians and
-#: gradians are documented on the same page (1πr = 180°, 100g = 90°).
-ANGLE_FACTORS = {
-    "degrees":  1.0 / 180.0 * 3.141592653589793,  # pi / 180
-    "radians":  1.0,
-    "gradians": 1.0 / 100.0 * 1.5707963267948966,  # pi / 200
-}
-ANGLE_UNITS = tuple(ANGLE_FACTORS)
+ANGLE_UNITS = ("degrees", "radians", "gradians")
+ANGLE_FACTORS = {name: _unit_adapter("native_unit_ops").angle_factor(name)
+                 for name in ANGLE_UNITS}
 
 # ---------------------------------------------------------------------------
 # tolerance settings
@@ -176,7 +163,7 @@ def _resolve(name, meters_per_custom=None):
             raise ValueError(
                 "CustomUnits has no fixed scale; pass meters_per_custom "
                 "(the user's 'meters per custom unit')")
-        return float(meters_per_custom) * 1000.0  # m -> mm
+        return _unit_adapter("native_unit_ops").scale(float(meters_per_custom), 1000.0, 1.0)
     if name in NON_UNITS:
         raise ValueError(f"{name!r} is not a unit system (it is a placeholder)")
     valid = ", ".join(UNIT_SCALE_MM) + ", CustomUnits"
@@ -203,7 +190,7 @@ def convert(value, from_unit, to_unit, meters_per_custom=None):
     """
     sf = _resolve(from_unit, meters_per_custom)
     st = _resolve(to_unit, meters_per_custom)
-    return float(value) * sf / st
+    return _unit_adapter("native_unit_ops").scale(float(value), sf, st)
 
 
 def convert_angle(value, from_unit, to_unit):
@@ -212,13 +199,7 @@ def convert_angle(value, from_unit, to_unit):
     Degrees is the base; goes through radians. Accepts the three documented
     units (degrees, radians, gradians), case-insensitively.
     """
-    def factor(name):
-        key = str(name).strip().lower()
-        if key in ANGLE_FACTORS:
-            return ANGLE_FACTORS[key]
-        raise ValueError(
-            f"unknown angle unit {name!r}; valid: {', '.join(ANGLE_UNITS)}")
-    return float(value) * factor(from_unit) / factor(to_unit)
+    return _unit_adapter("native_unit_ops").convert_angle(value, from_unit, to_unit)
 
 
 def list_units(include_runtime=True):
@@ -241,6 +222,7 @@ def list_units(include_runtime=True):
 #: units" -- MEASURED: `1.2mic`, `1.2micron(s)`, `1.2mm`, `1.2c`, `1.2cm`, `1.2m`, `1.2km`,
 #: `1.2microinch(es)`, `1.2mil(s)`, `1"`, `1in`, `1inch(es)`, `1'`, `1ft`, `1foot`, `1feet`,
 #: `1mi`, `1mile(s)`). Every other unit is typed by its name.
+# Public compatibility metadata; Rust owns the executable matching grammar.
 UNIT_ABBREVIATIONS = {
     "mic": "Microns", "micron": "Microns", "microns": "Microns",
     "mm": "Millimeters", "millimeter": "Millimeters",
@@ -263,24 +245,7 @@ def parse_unit(text):
     ("Nautical mile" -> NauticalMiles), then a UNIQUE prefix of a canonical name. An
     ambiguous prefix is refused with the candidates, never guessed.
     """
-    raw = str(text or "").strip()
-    key = raw.lower()
-    if not key:
-        raise ValueError("no unit given")
-    if key in UNIT_ABBREVIATIONS:
-        return UNIT_ABBREVIATIONS[key]
-    squashed = key.replace(" ", "")
-    names = list_units()
-    for name in names:
-        low = name.lower()
-        if squashed in (low, low.rstrip("s")):
-            return name
-    hits = [n for n in names if n.lower().startswith(squashed)]
-    if len(hits) == 1:
-        return hits[0]
-    if hits:
-        raise ValueError(f"{raw!r} is ambiguous: {', '.join(hits)}")
-    raise ValueError(f"unknown unit system {raw!r}; valid: {', '.join(names)}")
+    return _unit_adapter("native_unit_ops").parse_unit(text, tuple(list_units()))
 
 
 def scale_factor(from_unit, to_unit):

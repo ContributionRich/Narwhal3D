@@ -61,8 +61,10 @@ than treating all Rust routes as performance wins.
 
 Unit scales have one definition: `UNIT_SYSTEM_MM` in `src/numparse.rs` (all 24 fixed-scale
 unit systems). The typed-length parser's model units read it, and `narwhal3d/units.py` builds
-`UNIT_SCALE_MM` from it through `narwhal_pure_core_unit_table`; its Python literal is only the
-no-library fallback, held identical by `spike/test_native_unit_table.py`.
+`UNIT_SCALE_MM` through the required `native_unit_table` adapter; no Python scale literal
+or no-library fallback remains. Typed unit matching, angle factors and conversion
+arithmetic are required Rust operations too; `spike/test_native_unit_table.py` and
+`spike/test_unit_ops_owned.py` retain independent exact fixtures.
 
 The CPython adapter is `narwhal3d/native_pure.py`. It loads the crate only from
 the `NARWHAL_PURE_CORE` environment path or an adjacent packaged slot. Every active

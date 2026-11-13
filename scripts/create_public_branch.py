@@ -35,7 +35,7 @@ ROOT_FILES = (
     "docs/reviews/2026-10-31-rust-document-registry.md",
     "docs/reviews/2026-10-31-native-only.md",
     "docs/reviews/2026-11-11-rust-interaction-blend.md",
-    "docs/LIBRARY.md", "docs/FILE_IO.md", "docs/RUST_RETIREMENT_11.md", "docs/RUST_PARSER_OWNERSHIP.md", "docs/RUST_COORDINATE_JOIN_OWNERSHIP.md", "docs/RUST_SVG_ALIAS_OWNERSHIP.md", "docs/RUST_REBUILD_BLEND_OWNERSHIP.md",
+    "docs/LIBRARY.md", "docs/FILE_IO.md", "docs/RUST_RETIREMENT_11.md", "docs/RUST_PARSER_OWNERSHIP.md", "docs/RUST_COORDINATE_JOIN_OWNERSHIP.md", "docs/RUST_SVG_ALIAS_OWNERSHIP.md", "docs/RUST_REBUILD_BLEND_OWNERSHIP.md", "docs/RUST_UNIT_OWNERSHIP.md",
         "docs/reviews/2026-10-30-agent-v3-integration.md",
 )
 LAUNCH_FILES = (
@@ -245,6 +245,7 @@ TEST_FILES = (
     "spike/test_native_coil_preview.py", "spike/test_preview_curve_native.py", "spike/test_preview_layer_color.py", "spike/test_rebuild_dialog.py", "spike/test_rebuild_popup.py", "spike/test_group_pick.py", "spike/test_group_copy.py", "spike/test_rebuild_performance.py",
     "spike/test_native_tessellate.py",
     "spike/test_native_unit_table.py",
+    "spike/test_unit_ops_owned.py", "spike/test_unit_table_owned.py", "spike/units_reference.py",
     "spike/test_native_nearest.py", "spike/test_pure_core_nearest_batch_gate.py",
     "spike/test_native_curve_samples.py",
     "spike/test_native_display_samples.py",
@@ -419,7 +420,7 @@ NATIVE_FILES = (
     "native/pure_core/src/earclip.rs",
     "native/pure_core/src/nearest.rs",
     "native/pure_core/src/display.rs",
-    "native/pure_core/src/fit.rs",
+    "native/pure_core/src/fit.rs", "native/pure_core/src/unit_ops.rs",
     "native/pure_core/src/arclength.rs",
     "native/pure_core/src/interpolate.rs",
     "native/pure_core/src/tween.rs", "native/pure_core/src/surface.rs",

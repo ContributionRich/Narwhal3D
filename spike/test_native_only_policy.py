@@ -139,6 +139,7 @@ class PolicyTests(unittest.TestCase):
             'alias_table': {'re', '_MACRO_RE'},
             'rebuild': {'_basis', '_solve', '_least_squares', '_fit_open', '_fit_closed'},
             'blend': {'_blend_native', '_NATIVE_MIN_ORDER', '_add'},
+            'units': {'_PYTHON_UNIT_SCALE_MM', 'squashed', 'hits'},
             'macro': {'_split_tokens', '_classify', '_strip_flags', '_command_step',
                       'NATIVE_MACRO_MIN_BYTES', 'NATIVE_MACRO_JSON_MAX_BYTES'},
         }

@@ -107,6 +107,7 @@ def _():
         "spike/test_preview_curve_native.py",
         "spike/test_native_tessellate.py",
         "spike/test_native_unit_table.py",
+        "spike/test_unit_ops_owned.py", "spike/test_unit_table_owned.py",
         "spike/test_native_nearest.py",
         "spike/test_pure_core_nearest_batch_gate.py",
         "spike/test_rebuild_performance.py",

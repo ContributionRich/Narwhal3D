@@ -50,6 +50,7 @@ pub mod stl;
 pub mod surface;
 pub mod svgpath;
 pub mod tween;
+pub mod unit_ops;
 pub mod unitformat;
 pub mod vector_export;
 

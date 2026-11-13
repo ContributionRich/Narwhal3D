@@ -107,6 +107,7 @@ PURE_CORE_PYTESTS = (
     "spike/test_preview_curve_native.py",
     "spike/test_native_tessellate.py",
     "spike/test_native_unit_table.py",
+    "spike/test_unit_table_owned.py", "spike/test_unit_ops_owned.py",
     "spike/test_native_nearest.py",
     "spike/test_pure_core_nearest_batch_gate.py",
     "spike/test_rebuild_performance.py",
@@ -131,6 +132,8 @@ PURE_CORE_PARSE_EXPORTS = (
     "narwhal_pure_core_coords_owned_abi1", "narwhal_pure_core_coords_owned_v1",
     "narwhal_pure_core_svgpath_owned_version", "narwhal_pure_core_svgpath_owned",
     "narwhal_pure_core_alias_identity", "narwhal_pure_core_alias_parse", "narwhal_pure_core_alias_options",
+    "narwhal_pure_core_unit_table", "narwhal_pure_core_unit_ops_parse",
+    "narwhal_pure_core_unit_ops_angle", "narwhal_pure_core_unit_ops_scale",
     "narwhal_pure_core_rebuild_fit", "narwhal_pure_core_blend_bezier_points",
     "narwhal_pure_core_coords_split_v1", "narwhal_pure_core_norm_v1", "narwhal_pure_core_joinchain",
 )
@@ -322,6 +325,60 @@ for length, scale, capacity, expected in ((5,2.,30,-1),(6,float('nan'),30,-1),(6
     status = blend(p0,length,p1,6,1,1,scale,1.,output,capacity)
     if status != expected or list(output) != [99.]*30:
         raise RuntimeError("owned blend classified refusal differs")
+# Stable core-ABI-1 unit ownership: fixed independent ordering/scale witnesses.
+unit_names = b"Angstroms\nNanometers\nMicrons\nMillimeters\nCentimeters\nDecimeters\nMeters\nDekameters\nHectometers\nKilometers\nMegameters\nGigameters\nMicroinches\nMils\nInches\nFeet\nYards\nMiles\nPrinterPoints\nPrinterPicas\nNauticalMiles\nAstronomicalUnits\nLightYears\nParsecs"
+unit_scales = [1e-7,1e-6,1e-3,1.,10.,100.,1000.,10000.,100000.,1000000.,1e9,1e12,25.4e-6,25.4e-3,25.4,304.8,914.4,1609344.,25.4/72.,25.4/12.,1852000.,1.495978707e11,9.4607304725808e15,3.085677581491367e16]
+table = lib.narwhal_pure_core_unit_table
+table.argtypes = [c.POINTER(c.c_ubyte),c.c_size_t,D,c.c_size_t,c.POINTER(c.c_uint64),c.POINTER(c.c_uint64)]
+table.restype = c.c_int32
+names, scales, name_len, table_count = (c.c_ubyte*len(unit_names))(), (c.c_double*24)(), c.c_uint64(), c.c_uint64()
+status = table(names,0,scales,0,c.byref(name_len),c.byref(table_count))
+if status != -3 or (name_len.value,table_count.value) != (len(unit_names),24):
+    raise RuntimeError("owned unit table query metadata differs")
+status = table(names,len(names),scales,24,c.byref(name_len),c.byref(table_count))
+if status != 0 or (name_len.value,table_count.value) != (len(unit_names),24) or bytes(names) != unit_names or list(scales) != unit_scales:
+    raise RuntimeError("owned unit table values/order differs")
+uparse = lib.narwhal_pure_core_unit_ops_parse
+uparse.argtypes = [c.c_char_p,c.c_size_t,c.POINTER(c.c_uint32),c.POINTER(c.c_uint32),c.POINTER(c.c_ubyte),c.c_size_t,c.POINTER(c.c_size_t)]
+uparse.restype = c.c_int32
+# Space removal is after alias matching: 'm i' ambiguously prefixes Microns,
+# Millimeters, Microinches, Mils and Miles rather than using the 'mi' alias.
+for text, expected_status, expected_id, expected_mask, expected_raw in ((" Km ",0,9,0,"Km".encode()),("m i",3,0,143372,b"m i"),("bogus",2,0,0,b"bogus"),(" ",1,0,0,b"")):
+    word = text.encode()
+    uid, mask, raw_len, raw = c.c_uint32(99), c.c_uint32(99), c.c_size_t(99), (c.c_ubyte*32)(*[85]*32)
+    status = uparse(word,len(word),c.byref(uid),c.byref(mask),raw,32,c.byref(raw_len))
+    if status != expected_status or (uid.value,mask.value,raw_len.value) != (expected_id,expected_mask,len(expected_raw)) or bytes(raw[:raw_len.value]) != expected_raw:
+        raise RuntimeError("owned unit parse status/span witness differs")
+# Reject short output and malformed UTF-8 without writing metadata or bytes.
+for word, capacity in ((b"mm",1),(b"\xff",32)):
+    uid, mask, raw_len, raw = c.c_uint32(99), c.c_uint32(99), c.c_size_t(99), (c.c_ubyte*32)(*[85]*32)
+    status = uparse(word,len(word),c.byref(uid),c.byref(mask),raw,capacity,c.byref(raw_len))
+    if status != 5 or (uid.value,mask.value,raw_len.value) != (99,99,99) or bytes(raw) != b"U"*32:
+        raise RuntimeError("owned unit parse ABI refusal differs")
+angle = lib.narwhal_pure_core_unit_ops_angle
+angle.argtypes, angle.restype = [c.c_char_p,c.c_size_t,D], c.c_int32
+factor = c.c_double(99)
+status = angle(b"gradians",8,c.byref(factor))
+if status != 0 or factor.value != (1./100.)*(math.pi/2.):
+    raise RuntimeError("owned unit angle exact witness differs")
+factor.value = 99
+status = angle(b"bad",3,c.byref(factor))
+if status != 2 or factor.value != 99:
+    raise RuntimeError("owned unit angle refusal differs")
+scale = lib.narwhal_pure_core_unit_ops_scale
+scale.argtypes, scale.restype = [c.c_double,c.c_double,c.c_double,D], c.c_int32
+for value, sf, st, expected in ((3.,2.,4.,1.5),(1e308,2.,2.,math.inf),(math.inf,1.,math.inf,math.nan)):
+    answer = c.c_double(99)
+    status = scale(value,sf,st,c.byref(answer))
+    if status != 0 or not (math.isnan(answer.value) if math.isnan(expected) else answer.value == expected):
+        raise RuntimeError("owned unit scale order/nonfinite witness differs")
+for zero in (0.,-0.):
+    answer = c.c_double(99)
+    status = scale(1.,2.,zero,c.byref(answer))
+    if status != 6 or answer.value != 99:
+        raise RuntimeError("owned unit zero division refusal differs")
+if scale(1.,2.,3.,None) != 5:
+    raise RuntimeError("owned unit scalar ABI refusal differs")
 macro_size = lib.narwhal_pure_core_macro_size
 macro_size.argtypes = [c.c_char_p, c.c_size_t, c.c_ubyte]
 macro_size.restype = c.c_int64
@@ -362,7 +419,7 @@ output, needed = c.create_string_buffer(64), c.c_size_t()
 if widths(text, len(text), output, len(output), c.byref(needed)) != 0 or output.raw[:needed.value] != struct.pack("<IddI", 2, 1.0, 2.0, 0):
     raise RuntimeError("print-widths witness differs")
 print(json.dumps({"abi": 1, "parse_abi": 2, "reply_bytes": c.sizeof(Reply),
-                  "parser_exports": ["narwhal_pure_core_parse_abi", "narwhal_pure_core_parse_v2", "narwhal_pure_core_printwidths", "narwhal_pure_core_macro_size", "narwhal_pure_core_macro_encode", "narwhal_pure_core_unitformat_resolve_mode", "narwhal_pure_core_unitformat_format", "narwhal_pure_core_calc_abi2", "narwhal_pure_core_calc_v2", "narwhal_pure_core_bearing_abi2", "narwhal_pure_core_bearing_v2", "narwhal_pure_core_macro_plan_checked", "narwhal_pure_core_coords_owned_abi1", "narwhal_pure_core_coords_owned_v1", "narwhal_pure_core_svgpath_owned_version", "narwhal_pure_core_svgpath_owned", "narwhal_pure_core_alias_identity", "narwhal_pure_core_alias_parse", "narwhal_pure_core_alias_options", "narwhal_pure_core_rebuild_fit", "narwhal_pure_core_blend_bezier_points", "narwhal_pure_core_coords_split_v1", "narwhal_pure_core_norm_v1", "narwhal_pure_core_joinchain"]}, sort_keys=True))
+                  "parser_exports": ["narwhal_pure_core_parse_abi", "narwhal_pure_core_parse_v2", "narwhal_pure_core_printwidths", "narwhal_pure_core_macro_size", "narwhal_pure_core_macro_encode", "narwhal_pure_core_unitformat_resolve_mode", "narwhal_pure_core_unitformat_format", "narwhal_pure_core_calc_abi2", "narwhal_pure_core_calc_v2", "narwhal_pure_core_bearing_abi2", "narwhal_pure_core_bearing_v2", "narwhal_pure_core_macro_plan_checked", "narwhal_pure_core_coords_owned_abi1", "narwhal_pure_core_coords_owned_v1", "narwhal_pure_core_svgpath_owned_version", "narwhal_pure_core_svgpath_owned", "narwhal_pure_core_alias_identity", "narwhal_pure_core_alias_parse", "narwhal_pure_core_alias_options", "narwhal_pure_core_unit_table", "narwhal_pure_core_unit_ops_parse", "narwhal_pure_core_unit_ops_angle", "narwhal_pure_core_unit_ops_scale", "narwhal_pure_core_rebuild_fit", "narwhal_pure_core_blend_bezier_points", "narwhal_pure_core_coords_split_v1", "narwhal_pure_core_norm_v1", "narwhal_pure_core_joinchain"]}, sort_keys=True))
 '''
 
 

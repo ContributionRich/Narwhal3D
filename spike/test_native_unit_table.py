@@ -5,11 +5,15 @@ Run (the library defaults to the gate's release build):
   NARWHAL_PURE_CORE=$PWD/native/pure_core/target/x86_64-unknown-linux-gnu/release/libnarwhal_pure_core.so \
       python3 spike/test_native_unit_table.py
 
-Enumerates every name in the Rust table and in units.py's Python fallback and fails
-if a name is missing from either or a shared name has a different value; checks
-that units.py takes its scales from Rust when the library loads and from the
-identical fallback when it does not; and that every unit name units.py accepted
-before still resolves to the same scale.
+Compares the Rust unit table (read through the required native adapter
+``narwhal3d/native_unit_table.py``) against the independent BEFORE fixture in
+``spike/units_reference.py`` — the frozen original units.py, kept separately so
+this comparison never reads a value the code under test produced.  Fails if a
+name is missing from either table or a shared name has a different value, that
+the count is checked against the 24 fixed NAMES (not the values), and that
+units.py takes its scales from Rust (source ``'rust'``) in order.  The required
+adapter itself must RAISE when the library is missing or stale — it has no
+Python fallback to compare against.
 """
 import importlib.util
 import os
@@ -25,18 +29,43 @@ pkg.__path__ = [os.path.join(ROOT, "narwhal3d")]
 sys.modules["narwhal3d"] = pkg
 
 
-def load(name):
-    spec = importlib.util.spec_from_file_location(
-        f"narwhal3d.{name}", os.path.join(ROOT, "narwhal3d", f"{name}.py"))
+def load(name, path=None, standalone=False):
+    """Load a module by file path.
+
+    ``standalone=False`` (default): load under the ``narwhal3d`` package so
+    relative imports resolve into the package.  Used for ``native_unit_table``
+    and ``units`` (the code under test).
+
+    ``standalone=True``: load as a top-level module (no package).  The
+    module's relative imports (``from . import …``) fail with ImportError,
+    forcing any fallback logic to use its own local data.  Used for
+    ``units_reference`` so its ``_unit_scales`` falls back to its own
+    ``_PYTHON_UNIT_SCALE_MM`` literal, keeping the oracle independent of the
+    real package.
+    """
+    if path is None:
+        path = os.path.join(ROOT, "narwhal3d", f"{name}.py")
+    module_name = name if standalone else f"narwhal3d.{name}"
+    spec = importlib.util.spec_from_file_location(module_name, path)
     module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    setattr(pkg, name, module)
+    sys.modules[module_name] = module
+    if not standalone:
+        setattr(pkg, name, module)
     spec.loader.exec_module(module)
     return module
 
 
-native_pure = load("native_pure")
+adapter = load("native_unit_table")
 units = load("units")
+# Independent BEFORE fixture: the frozen original units.py, kept OUTSIDE the
+# package so its ``_PYTHON_UNIT_SCALE_MM`` literal is an independent oracle and
+# is never read from the module under test.
+# Independent BEFORE fixture: the frozen original units.py, loaded STANDALONE
+# (top-level, no package) so its ``from . import native_pure`` fails and
+# ``_unit_scales`` falls back to its own ``_PYTHON_UNIT_SCALE_MM`` literal.
+# This keeps the oracle independent of the real ``narwhal3d`` package.
+reference = load("units_reference", os.path.join(ROOT, "spike", "units_reference.py"),
+                 standalone=True)
 checks = []
 
 
@@ -45,48 +74,66 @@ def check(ok, label):
     print(f"  {'ok  ' if ok else 'FAIL'} {label}")
 
 
-# The 24 fixed-scale names units.py accepted before this change, with their values.
-BEFORE = {
-    "Angstroms": 1e-7, "Nanometers": 1e-6, "Microns": 1e-3, "Millimeters": 1.0,
-    "Centimeters": 10.0, "Decimeters": 100.0, "Meters": 1000.0, "Dekameters": 10_000.0,
-    "Hectometers": 100_000.0, "Kilometers": 1_000_000.0, "Megameters": 1_000_000_000.0,
-    "Gigameters": 1_000_000_000_000.0, "Microinches": 25.4e-6, "Mils": 25.4e-3,
-    "Inches": 25.4, "Feet": 304.8, "Yards": 914.4, "Miles": 1_609_344.0,
-    "PrinterPoints": 25.4 / 72.0, "PrinterPicas": 25.4 / 12.0, "NauticalMiles": 1_852_000.0,
-    "AstronomicalUnits": 1.495978707e11, "LightYears": 9.4607304725808e15,
-    "Parsecs": 3.0856775814913673e16,
-}
+# The 24 fixed-scale names and values, read from the independent BEFORE fixture.
+BEFORE = dict(reference._PYTHON_UNIT_SCALE_MM)
+BEFORE_ORDER = list(reference._PYTHON_UNIT_SCALE_MM)
 
-print("-- both tables, name by name --")
-rust = native_pure.unit_table()
-python = units._PYTHON_UNIT_SCALE_MM
-check(rust is not None, f"the Rust unit table loads ({LIBRARY})")
-rust = rust or {}
-only_rust = sorted(set(rust) - set(python))
-only_python = sorted(set(python) - set(rust))
-check(not only_rust and not only_python,
-      f"the same {len(rust)} names in both (only Rust: {only_rust}, only Python: {only_python})")
-differ = {name: (rust[name], python[name]) for name in set(rust) & set(python)
-          if rust[name] != python[name]}
+print("-- Rust table (via required adapter) vs independent BEFORE fixture --")
+result = adapter.unit_table()
+rust = result["table"]
+check(result["status"] == "ok" and result["count"] == 24,
+      f"the Rust unit table loads via the adapter ({LIBRARY})")
+only_rust = sorted(set(rust) - set(BEFORE))
+only_before = sorted(set(BEFORE) - set(rust))
+check(not only_rust and not only_before,
+      f"the same {len(rust)} names in both (only Rust: {only_rust}, only BEFORE: {only_before})")
+differ = {name: (rust[name], BEFORE[name]) for name in set(rust) & set(BEFORE)
+          if rust[name] != BEFORE[name]}
 check(not differ, f"every shared name has the identical value {differ}")
-check(list(rust) == list(python), "and the same order")
+check(list(rust) == BEFORE_ORDER, "and the same order")
+# Count is checked against the NAMES list (24), not the value count.
+check(result["count"] == len(BEFORE_ORDER) and len(result["names"]) == len(BEFORE_ORDER),
+      f"count {result['count']} equals the {len(BEFORE_ORDER)} fixed NAMES (names, not values)")
 
 print("\n-- units.py reads Rust when it can --")
-check(units.UNIT_SCALE_SOURCE == "rust", f"with the library: source is {units.UNIT_SCALE_SOURCE!r}")
-check(units.UNIT_SCALE_MM == BEFORE and list(units.UNIT_SCALE_MM) == list(BEFORE),
+check(units.UNIT_SCALE_SOURCE == "rust",
+      f"with the library: source is {units.UNIT_SCALE_SOURCE!r}")
+check(units.UNIT_SCALE_MM == BEFORE and list(units.UNIT_SCALE_MM) == BEFORE_ORDER,
       "every name units.py accepted still resolves to the same scale, in the same order")
 check(all(units.unit_scale_mm(name) == mm for name, mm in BEFORE.items()),
       "unit_scale_mm agrees for all 24")
-check(all(units.convert(2.5, a, b) == 2.5 * BEFORE[a] / BEFORE[b] for a in BEFORE for b in BEFORE),
-      f"all {len(BEFORE) ** 2} conversions are bit-identical to the old table's")
+check(all(units.convert(2.5, a, b) == 2.5 * BEFORE[a] / BEFORE[b]
+          for a in BEFORE for b in BEFORE),
+      f"all {len(BEFORE) ** 2} conversions are bit-identical to the BEFORE table's")
+check(len(units.UNIT_MEMBERS) == 27, "UNIT_MEMBERS still has 27 public names")
 
+print("\n-- the required adapter has no Python fallback --")
+# 1) Missing library (env set to a non-existent path) must raise.
 os.environ["NARWHAL_PURE_CORE"] = os.path.join(ROOT, "no-such-library.so")
 try:
-    fallback = load("units")
+    adapter2 = load("native_unit_table")
+    adapter2._binding = None
+    raised = False
+    try:
+        adapter2.unit_table()
+    except RuntimeError:
+        raised = True
+    check(raised, "missing library: the required adapter raises (not replayed in Python)")
 finally:
     os.environ["NARWHAL_PURE_CORE"] = LIBRARY
-check(fallback.UNIT_SCALE_SOURCE == "python" and fallback.UNIT_SCALE_MM == BEFORE,
-      "without the library the Python copy gives the same scales")
+
+# 2) Empty env must refuse — never fall through to packaged.
+os.environ["NARWHAL_PURE_CORE"] = ""
+try:
+    adapter3 = load("native_unit_table")
+    raised = False
+    try:
+        adapter3.unit_table()
+    except RuntimeError:
+        raised = True
+    check(raised, "empty NARWHAL_PURE_CORE: the required adapter refuses (no packaged fallback)")
+finally:
+    os.environ["NARWHAL_PURE_CORE"] = LIBRARY
 
 failed = sum(not ok for ok, _ in checks)
 print(f"\n{len(checks) - failed}/{len(checks)} passed")

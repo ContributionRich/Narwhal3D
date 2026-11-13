@@ -195,6 +195,58 @@ def library(mutant=""):
         if mutant == 'blend-value': out[4] = 9
         if mutant == 'blend-malformed': out[29] = 1
         return 0
+    def unit_table(names,capacity,values,vcap,nlen,count):
+        payload = b"Angstroms\nNanometers\nMicrons\nMillimeters\nCentimeters\nDecimeters\nMeters\nDekameters\nHectometers\nKilometers\nMegameters\nGigameters\nMicroinches\nMils\nInches\nFeet\nYards\nMiles\nPrinterPoints\nPrinterPicas\nNauticalMiles\nAstronomicalUnits\nLightYears\nParsecs"
+        scales = [1e-7,1e-6,1e-3,1.,10.,100.,1000.,10000.,100000.,1000000.,1e9,1e12,25.4e-6,25.4e-3,25.4,304.8,914.4,1609344.,25.4/72.,25.4/12.,1852000.,1.495978707e11,9.4607304725808e15,3.085677581491367e16]
+        c.cast(nlen,c.POINTER(c.c_uint64))[0] = len(payload)
+        c.cast(count,c.POINTER(c.c_uint64))[0] = 25 if mutant == 'unit-table-count' else 24
+        if capacity == 0:
+            assert vcap == 0
+            return 0 if mutant == 'unit-table-query' else -3
+        assert capacity == len(payload) and vcap == 24
+        names[:] = payload
+        values[:] = scales
+        if mutant == 'unit-table-name': names[0] = 88
+        if mutant == 'unit-table-order': values[0],values[1] = values[1],values[0]
+        if mutant == 'unit-table-nan': values[0] = float('nan')
+        return 1 if mutant == 'unit-table-status' else 0
+    def unit_parse(text,length,uid,mask,raw,capacity,nlen):
+        word = text[:length]
+        if capacity == 1 or word == b"\xff":
+            if mutant == 'unit-parse-refusal-write': raw[0] = 0
+            return 2 if mutant == 'unit-parse-abi' else 5
+        assert capacity == 32
+        status,i,m,payload = {
+            ' Km '.encode(): (0,9,0,'Km'.encode()),
+            b'm i': (3,0,143372,b'm i'),
+            b'bogus': (2,0,0,b'bogus'), b' ': (1,0,0,b''),
+        }[word]
+        c.cast(uid,c.POINTER(c.c_uint32))[0] = i + (1 if mutant == 'unit-parse-id' else 0)
+        c.cast(mask,c.POINTER(c.c_uint32))[0] = m + (1 if mutant == 'unit-parse-mask' else 0)
+        c.cast(nlen,c.POINTER(c.c_size_t))[0] = len(payload) + (1 if mutant == 'unit-parse-span' else 0)
+        for j,v in enumerate(payload): raw[j] = v
+        if mutant == 'unit-parse-raw': raw[0] = 0
+        return 0 if mutant == 'unit-parse-status' else status
+    def unit_angle(text,length,out):
+        if text[:length] == b'bad':
+            if mutant == 'unit-angle-write': c.cast(out,c.POINTER(c.c_double))[0] = 0
+            return 0 if mutant == 'unit-angle-refusal' else 2
+        import math
+        assert text[:length] == b'gradians'
+        c.cast(out,c.POINTER(c.c_double))[0] = math.nextafter((1./100.)*(math.pi/2.),0.) if mutant == 'unit-angle-value' else (1./100.)*(math.pi/2.)
+        return 0
+    def unit_scale(value,sf,st,out):
+        import math
+        if out is None:
+            return 0 if mutant == 'unit-scale-abi' else 5
+        answer = c.cast(out,c.POINTER(c.c_double))
+        if st == 0:
+            if mutant == 'unit-zero-write': answer[0] = 0
+            return 0 if mutant == 'unit-zero-status' else 6
+        result = value*(sf/st) if mutant == 'unit-scale-order' else (value*sf)/st
+        if mutant == 'unit-scale-nonfinite' and not math.isfinite(result): result = 0
+        answer[0] = result
+        return 1 if mutant == 'unit-scale-status' else 0
     result = SimpleNamespace(
         narwhal_pure_core_abi_version=Mock(return_value=9 if mutant == "old-abi" else 1),
         narwhal_pure_core_parse_abi=Mock(return_value=1 if mutant == "parser-abi" else 2),
@@ -220,7 +272,11 @@ def library(mutant=""):
         narwhal_pure_core_alias_parse=Mock(side_effect=alias),
         narwhal_pure_core_alias_options=Mock(side_effect=alias_options),
         narwhal_pure_core_rebuild_fit=Mock(side_effect=fit),
-        narwhal_pure_core_blend_bezier_points=Mock(side_effect=blend))
+        narwhal_pure_core_blend_bezier_points=Mock(side_effect=blend),
+        narwhal_pure_core_unit_table=Mock(side_effect=unit_table),
+        narwhal_pure_core_unit_ops_parse=Mock(side_effect=unit_parse),
+        narwhal_pure_core_unit_ops_angle=Mock(side_effect=unit_angle),
+        narwhal_pure_core_unit_ops_scale=Mock(side_effect=unit_scale))
     if mutant in gate.PURE_CORE_PARSE_EXPORTS:
         delattr(result, mutant)
     return result
@@ -285,7 +341,11 @@ class ParserProbeTests(unittest.TestCase):
                        "svg-abi", "alias-abi", "svg-geometry", "svg-error",
                        "alias-prefix", "alias-error", "alias-options",
                        "rebuild-malformed", "rebuild-value", "rebuild-nan", "rebuild-knots", "rebuild-refusal", "rebuild-refusal-write",
-                       "blend-value", "blend-malformed", "blend-input", "blend-refusal", "blend-refusal-write"):
+                       "blend-value", "blend-malformed", "blend-input", "blend-refusal", "blend-refusal-write",
+                       "unit-table-count", "unit-table-query", "unit-table-name", "unit-table-order", "unit-table-nan", "unit-table-status",
+                       "unit-parse-refusal-write", "unit-parse-abi", "unit-parse-mask", "unit-parse-id", "unit-parse-span", "unit-parse-raw", "unit-parse-status",
+                       "unit-angle-write", "unit-angle-refusal", "unit-angle-value",
+                       "unit-scale-abi", "unit-scale-order", "unit-scale-nonfinite", "unit-scale-status", "unit-zero-write", "unit-zero-status"):
             with self.subTest(mutant=mutant), self.assertRaises((AttributeError, RuntimeError)):
                 execute_probe(mutant)
         self.assertEqual(execute_probe(), gate.PURE_CORE_PARSE_IDENTITY)
@@ -307,6 +367,15 @@ class ParserProbeTests(unittest.TestCase):
 
     def test_owned_semantic_guards_are_mutation_sensitive(self):
         guards = (
+            ('unit-table-query', 'if status != -3 or (name_len.value'),
+            ('unit-table-order', 'if status != 0 or (name_len.value'),
+            ('unit-parse-status', 'if status != expected_status'),
+            ('unit-parse-refusal-write', 'if status != 5 or (uid.value'),
+            ('unit-angle-value', 'if status != 0 or factor.value'),
+            ('unit-angle-write', 'if status != 2 or factor.value'),
+            ('unit-scale-order', 'if status != 0 or not (math.isnan'),
+            ('unit-zero-write', 'if status != 6 or answer.value'),
+            ('unit-scale-abi', 'if scale(1.,2.,3.,None)'),
             ('rebuild-value', 'if status != 0 or count.value'),
             ('rebuild-refusal', 'if status != expected or count.value'),
             ('blend-value', 'if status != 0 or list(output)'),

@@ -500,7 +500,7 @@ def verify_application_core_copies(root: Path) -> None:
 def verify_pure_core_identity(path: Path) -> dict[str, object]:
     """Require owned exports cross-host; execute semantics on native Windows.
 
-    Stable core-ABI-1 rebuild/blend functions are required exports, not constant
+    Stable core-ABI-1 rebuild/blend/unit functions are required exports, not constant
     identity leaves. Only actual version functions belong in constant_exports.
     """
     identity = inspect_pe_dll(path, constant_exports={
