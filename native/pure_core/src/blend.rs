@@ -10,10 +10,9 @@
 //! This is the SAME forward / backward Bezier end-derivative algebra the Python
 //! reference uses (the `n!/(n-j)! Delta^j P_0` identities and their mirror at
 //! `t = 1`), so on a supported platform it returns the control points bit for
-//! bit. It is a transparent accelerator: `blend.py` keeps its UNCHANGED Python
-//! loop as the fallback for a missing / stale library, and the exact public
-//! behavior (control points, `bezier_curve`, `end_derivatives`, the `ValueError`
-//! contract of `blend_curves`) all stay in Python. The openNURBS extraction
+//! bit. It is required for every supported continuity pair; the redundant Python
+//! endpoint solver is retired. Missing/stale support and native execution failures
+//! are explicit errors, never Python replay. The openNURBS extraction
 //! (`DerivativeAt`) and the `NurbsCurve` construction stay in Python -- this
 //! module never samples, meshes or approximates, it only does exact arithmetic
 //! on already-extracted finite values.

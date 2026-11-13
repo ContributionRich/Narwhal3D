@@ -165,17 +165,31 @@ for name, curve in (("a LineCurve", line), ("a PolyCurve", poly)):
     check(p._packed is None and p.parameters_at(lengths) == python_params(p, lengths, None),
           f"{name} (not a NurbsCurve) keeps the Python inversion")
 
-print("\n-- Rebuild is unchanged, and falls back without the library --")
+print("\n-- Rebuild parity with Python inversion; missing fit explicitly refuses --")
 source = FIXTURES["open cubic, 30 points"]
 before = native._native_calls
 with_rust = rebuild.rebuild_curve(source, 12, 3)
 calls = native._native_calls - before
 os.environ["NARWHAL_PURE_CORE"] = os.path.join(ROOT, "no-such-library.so")
 try:
-    plain = rebuild.rebuild_curve(source, 12, 3)
     check(arclength.PreparedLength(source)._packed is None, "without the library nothing is packed")
+    from narwhal3d import native_rebuild
+    try:
+        rebuild.rebuild_curve(source, 12, 3)
+    except native_rebuild.NativeRebuildError as error:
+        check("unavailable" in str(error), "missing library explicitly refuses native-only fitting")
+    else:
+        check(False, "missing library must not replay Python fitting")
 finally:
     os.environ["NARWHAL_PURE_CORE"] = LIBRARY
+
+# Isolate inversion parity without disabling the now-required numeric fit.
+real_pack = arclength._native_pack
+arclength._native_pack = lambda curve, table: None
+try:
+    plain = rebuild.rebuild_curve(source, 12, 3)
+finally:
+    arclength._native_pack = real_pack
 
 
 def cvs(curve):

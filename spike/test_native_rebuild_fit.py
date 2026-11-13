@@ -2,7 +2,7 @@
 """Rebuild's least-squares fit in Rust: the same control points as `rebuild._fit`.
 
 Run with the bundled runtime (it carries rhino3dm); the library defaults to the
-gate's release build:
+adjacent packaged build unless explicitly selected:
   NARWHAL_PURE_CORE=$PWD/native/pure_core/target/x86_64-unknown-linux-gnu/release/libnarwhal_pure_core.so \\
       tools/blender-patched/5.2/python/bin/python3.13 spike/test_native_rebuild_fit.py
 
@@ -21,11 +21,13 @@ import time
 import types
 
 import rhino3dm as r3
+import rebuild_reference as reference
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-LIBRARY = os.environ.setdefault("NARWHAL_PURE_CORE", os.path.join(
-    ROOT, "native", "pure_core", "target", "x86_64-unknown-linux-gnu", "release",
-    "libnarwhal_pure_core.so"))
+LIBRARY = os.environ.get("NARWHAL_PURE_CORE", os.path.join(
+    ROOT, "narwhal3d", "native", {
+        "win32": "narwhal_pure_core.dll", "darwin": "libnarwhal_pure_core.dylib"
+    }.get(sys.platform, "libnarwhal_pure_core.so")))
 pkg = types.ModuleType("narwhal3d")
 pkg.__path__ = [os.path.join(ROOT, "narwhal3d")]
 sys.modules["narwhal3d"] = pkg
@@ -67,9 +69,9 @@ def ends_of(crv, n, p, tangent):
 def python_fit(pts, params, n, p, closed, ends):
     try:
         if closed:
-            ctrl, knots = rebuild._fit_closed(pts, params, n, p)
+            ctrl, knots = reference._fit_closed(pts, params, n, p)
         else:
-            ctrl, knots = rebuild._fit_open(pts, params, n, p, ends)
+            ctrl, knots = reference._fit_open(pts, params, n, p, ends)
         return [tuple(c) for c in ctrl], list(knots)
     except ValueError as exc:
         return ("error", str(exc))
@@ -150,7 +152,7 @@ for closed, ends in ((False, ((0.0, 0.0, 0.0), (5.0, 0.0, 0.0))), (True, ())):
     check(want[0] == "error" and native_fit(*args) == want,
           f"{'closed' if closed else 'open'}, all samples at one parameter: {want[1]!r}")
 
-print("\n-- rebuild_curve is unchanged, and falls back without the library --")
+print("\n-- rebuild_curve matches the independent oracle; missing native refuses --")
 
 
 def cvs(curve):
@@ -163,7 +165,7 @@ for name, crv in SOURCES.items():
         got = rebuild.rebuild_curve(crv, count, 3, preserve_tangents=tangents)
         calls = native._native_calls - before
         real = rebuild._native_fit
-        rebuild._native_fit = lambda *a: None
+        rebuild._native_fit = lambda pts, params, n, p, closed, ends: (reference._fit_closed(pts, params, n, p) if closed else reference._fit_open(pts, params, n, p, ends))
         try:
             want = rebuild.rebuild_curve(crv, count, 3, preserve_tangents=tangents)
         finally:
@@ -173,8 +175,12 @@ for name, crv in SOURCES.items():
               f"identical curve and report through {calls} native fits")
 os.environ["NARWHAL_PURE_CORE"] = os.path.join(ROOT, "no-such-library.so")
 try:
-    check(native.fit([(0, 0, 0)], [0.0], 4, 3, False, ((0, 0, 0), (1, 0, 0))) is None,
-          "without the library the Python fit runs")
+    try:
+        native.fit([(0, 0, 0)], [0.0], 4, 3, False, ((0, 0, 0), (1, 0, 0)))
+    except native.NativeRebuildError as exc:
+        check("unavailable" in str(exc), "missing library is explicitly unavailable")
+    else:
+        check(False, "missing library must refuse")
 finally:
     os.environ["NARWHAL_PURE_CORE"] = LIBRARY
 
@@ -227,19 +233,22 @@ adapter = isolated(
     "pts = [(float(i), float(i % 3), 0.0) for i in range(30)]\n"
     "prm = [i / 29 for i in range(30)]\n"
     "ends = ((0.0, 0.0, 0.0), (29.0, 2.0, 0.0))\n"
+    "def refused(*args):\n"
+    "    try: native.fit(*args); return False\n"
+    "    except (ValueError, native.NativeRebuildError): return True\n"
     "cases = {\n"
-    "  'fewer parameters than samples': native.fit(pts, prm[:-5], 6, 3, False, ends),\n"
-    "  'more parameters than samples': native.fit(pts[:-5], prm, 6, 3, False, ends),\n"
-    "  'two-coordinate samples': native.fit([q[:2] for q in pts], prm, 6, 3, False, ends),\n"
-    "  'open fit without ends': native.fit(pts, prm, 6, 3, False, ()),\n"
-    "  'open fit with one end': native.fit(pts, prm, 6, 3, False, ends[:1]),\n"
-    "  'two-coordinate end': native.fit(pts, prm, 6, 3, False, ((0.0, 0.0), (29.0, 2.0))),\n"
-    "  'closed fit given ends': native.fit(pts, prm, 6, 3, True, ends),\n"
-    "  'closed degree above count': native.fit(pts, prm, 3, 5, True, ()),\n"
-    "  'tangents at degree 1': native.fit(pts, prm, 6, 1, False, ends + ends),\n"
+    "  'fewer parameters than samples': refused(pts, prm[:-5], 6, 3, False, ends),\n"
+    "  'more parameters than samples': refused(pts[:-5], prm, 6, 3, False, ends),\n"
+    "  'two-coordinate samples': refused([q[:2] for q in pts], prm, 6, 3, False, ends),\n"
+    "  'open fit without ends': refused(pts, prm, 6, 3, False, ()),\n"
+    "  'open fit with one end': refused(pts, prm, 6, 3, False, ends[:1]),\n"
+    "  'two-coordinate end': refused(pts, prm, 6, 3, False, ((0.0, 0.0), (29.0, 2.0))),\n"
+    "  'closed fit given ends': refused(pts, prm, 6, 3, True, ends),\n"
+    "  'closed degree above count': refused(pts, prm, 3, 5, True, ()),\n"
+    "  'tangents at degree 1': refused(pts, prm, 6, 1, False, ends + ends),\n"
     "}\n"
     "ok = native.fit(pts, prm, 6, 3, False, ends)\n"
-    "print(json.dumps({'refused': {k: v is None for k, v in cases.items()},\n"
+    "print(json.dumps({'refused': cases,\n"
     "                  'valid call answers': isinstance(ok, tuple)}))\n")
 refused = (adapter[1] or {}).get("refused", {})
 check(adapter[0] == 0 and refused and all(refused.values()) and adapter[1]["valid call answers"],
@@ -255,33 +264,34 @@ except ValueError as exc:
 check(too_large is not None and "too large" in too_large,
       f"a fit past the bound is refused by name, not solved in Python ({too_large!r})")
 
-print("\n-- timing (best of 3) --")
+if "--no-benchmark" not in sys.argv:
+    print("\n-- timing (best of 3) --")
 
 
-def best(fn):
-    out = math.inf
-    for _ in range(3):
-        start = time.perf_counter()
-        fn()
-        out = min(out, time.perf_counter() - start)
-    return out
+    def best(fn):
+        out = math.inf
+        for _ in range(3):
+            start = time.perf_counter()
+            fn()
+            out = min(out, time.perf_counter() - start)
+        return out
 
 
-args = case(SOURCES["open cubic, 30 points"], 40, 3, False, False, 800)
-python = best(lambda: python_fit(*args))
-rust = best(lambda: native_fit(*args))
-print(f"  one 40-point fit of 801 samples: python {python * 1e3:6.1f} ms, rust {rust * 1e3:5.2f} ms "
-      f"({python / rust:.0f}x)")
-crv = SOURCES["open cubic, 30 points"]
-fast = best(lambda: rebuild.rebuild_curve(crv, 40, 3))
-real = rebuild._native_fit
-rebuild._native_fit = lambda *a: None
-try:
-    slow = best(lambda: rebuild.rebuild_curve(crv, 40, 3))
-finally:
-    rebuild._native_fit = real
-print(f"  rebuild_curve to 40 points: python fit {slow * 1e3:6.0f} ms, rust fit {fast * 1e3:6.0f} ms")
-check(rust < python and fast < slow, "the Rust fit is faster end to end")
+    args = case(SOURCES["open cubic, 30 points"], 40, 3, False, False, 800)
+    python = best(lambda: python_fit(*args))
+    rust = best(lambda: native_fit(*args))
+    print(f"  one 40-point fit of 801 samples: python {python * 1e3:6.1f} ms, rust {rust * 1e3:5.2f} ms "
+          f"({python / rust:.0f}x)")
+    crv = SOURCES["open cubic, 30 points"]
+    fast = best(lambda: rebuild.rebuild_curve(crv, 40, 3))
+    real = rebuild._native_fit
+    rebuild._native_fit = lambda pts, params, n, p, closed, ends: (reference._fit_closed(pts, params, n, p) if closed else reference._fit_open(pts, params, n, p, ends))
+    try:
+        slow = best(lambda: rebuild.rebuild_curve(crv, 40, 3))
+    finally:
+        rebuild._native_fit = real
+    print(f"  rebuild_curve to 40 points: python fit {slow * 1e3:6.0f} ms, rust fit {fast * 1e3:6.0f} ms")
+    print("  timing is informational, not a correctness gate")
 
 passed = sum(ok for ok, _ in checks)
 print(f"\n{passed}/{len(checks)} passed")

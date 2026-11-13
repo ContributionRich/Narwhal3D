@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Native Bezier endpoint-derivative solver: parity and correctness.
+"""Native Bezier endpoint-derivative solver: parity and correctness (native at every order).
 
 Runs `blend.blend_bezier_points` and proves it against two independent
 standards, using a SOURCE-BUILT pure-core library (no scratch / oracle files):
@@ -9,19 +9,21 @@ standards, using a SOURCE-BUILT pure-core library (no scratch / oracle files):
      applied forward, not the solver's difference solve), reproduce the requested
      endpoint derivatives `lambda^j D_j` at t=0 and t=1 for ALL 25 continuity
      pairs (k0,k1 in 0..=4), i.e. up to G4. This checks the math, not the code.
-  2. BIT-FOR-BIT DIFFERENTIAL -- the native route returns the control points a
+  2. BIT-FOR-BIT DIFFERENTIAL -- the public wrapper returns the control points a
      test-only PURE-PYTHON reference (the saved original loop, embedded below so
      this file never imports a private oracle) returns, bit for bit, over seeded
      random derivative lists, reversed / oriented ends, and negative / zero speed
      scales.
-  3. DISPATCH THRESHOLD -- the public wrapper routes to native only for
-     k0 + k1 >= 4 (the measured break-even), so low-order blends stay on the
-     Python loop and high-order blends run native; a native execution failure
-     still raises and is never replayed through Python.
+  3. ALL-ORDER NATIVE DISPATCH -- the public wrapper routes EVERY supported
+     order (all 25 (k0,k1) pairs, k0,k1 in 0..=4) through the native binding;
+     the retired Python endpoint loop is gone, so a missing / stale / refused
+     library or a rejected input is an explicit NativeBlendError and is NEVER
+     silently replayed through Python.
 
 The openNURBS derivative extraction and `NurbsCurve` construction stay in Python
 (this never samples, meshes or approximates). A malformed / non-finite input is
-refused by the native layer with NO partial output.
+refused by the native layer with NO partial output, and that refusal is EXPLICIT
+(a raised NativeBlendError), never a silent fallback.
 
 The library under test must export the ABI version symbol (returning 1) and the
 blend symbol; the source build of `native/pure_core` provides both. Run:
@@ -30,8 +32,9 @@ blend symbol; the source build of `native/pure_core` provides both. Run:
       tools/blender-5.2.2-linux-x64/5.2/python/bin/python3.13 spike/test_native_blend.py
 
 Benchmarks are off by default; pass `--benchmark` to time the public wrapper
-against the pure-Python reference.
+against the pure-Python reference (an honest per-order cost comparison).
 """
+import ctypes
 import importlib.util
 import math
 import os
@@ -234,9 +237,10 @@ class StubFunction:
         return self.result
 
 
-# Missing/wrong ABI or missing export must choose compatibility before execution.
-for version, has_solver, admitted in ((None, True, False), (2, True, False),
-                                     (1, False, False), (1, True, True)):
+# Missing / wrong-ABI / missing-solver libraries must be EXPLICIT: the solver is
+# native-only, so a refused library is a raised NativeBlendError -- never a
+# silent "unavailable" or a Python replay.
+for version, has_solver in ((None, True), (2, True), (1, False)):
     library = types.SimpleNamespace()
     if version is not None:
         library.narwhal_pure_core_abi_version = StubFunction(version)
@@ -246,11 +250,126 @@ for version, has_solver, admitted in ((None, True, False), (2, True, False),
         with patch.dict(os.environ, {"NARWHAL_PURE_CORE": f"/fake-blend-{version}-{has_solver}"}), \
                 patch.object(native.Path, "is_file", return_value=True), \
                 patch.object(native.ctypes, "CDLL", return_value=library):
-            check(native.available() is admitted,
-                  f"loader qualification: version={version}, solver={has_solver}")
+            try:
+                native.available()
+                refused = False
+            except native.NativeBlendError:
+                refused = True
+        check(refused,
+              f"refused library (version={version}, solver={has_solver}) "
+              "is an explicit NativeBlendError, never a silent fallback")
     finally:
-        native._signature, native._binding = None, None
-check(native.available(), "real source library requalified after loader probes")
+        native._record = None
+check(native.available(), "real source library requalified after the refused-library probes")
+
+# a packaged / env-resolved library that is simply ABSENT is explicit too (no silent None)
+try:
+    with patch.dict(os.environ, {"NARWHAL_PURE_CORE": "/definitely/not/a/library.so"}), \
+            patch.object(native.Path, "is_file", return_value=False):
+        try:
+            native.available()
+            absent_explicit = False
+        except native.NativeBlendError:
+            absent_explicit = True
+    check(absent_explicit, "an absent library is an explicit NativeBlendError, never None")
+finally:
+    native._record = None
+check(native.available(), "real source library requalified after the absent probe")
+
+
+# ---------------------------------------------------------------------------
+# 0b. the binding cache: the signature is a TUPLE (no collision), the warm cache
+#     is served before any Path / lock work, the CDLL is retained inside the
+#     record (a switch replaces the whole record, never a dangling fn), and a
+#     set-but-empty env is refused -- it is never collapsed onto the packaged
+#     default (the old `explicit or "<packaged>"` string signature would have).
+# ---------------------------------------------------------------------------
+PACKAGED_SIG = ("packaged", None)
+
+
+def reset():
+    native._record = None
+
+
+def _raised_native():
+    try:
+        native.available()
+    except native.NativeBlendError:
+        return True
+    return False
+
+
+# (collision) the env value "<packaged>" is a DISTINCT signature: it must be
+# refused, and must NOT be served from a cached packaged record. The old string
+# signature `explicit or "<packaged>"` would have matched this literal env value
+# onto the unset-env packaged record.
+reset()
+native._record = native._Record(PACKAGED_SIG, types.SimpleNamespace(), StubFunction(0))
+with patch.dict(os.environ, {"NARWHAL_PURE_CORE": "<packaged>"}):
+    collided = _raised_native() and native._record is not None \
+        and native._record.signature == PACKAGED_SIG
+check(collided,
+      "env value '<packaged>' is a distinct refused signature, not served from the packaged record")
+reset()
+
+# (warm) a matching cached record is served before any Path / lock work: with the
+# env unchanged, a second call returns the same result without touching Path/CDLL
+# (the fast path consults the record before it ever resolves a path).
+reset()
+p0f, p1f = [0.0, 0.0, 0.0], [1.0, 0.0, 0.0]
+first = native.blend_bezier_points(p0f, p1f, 0, 0, 1.0, 1.0)   # resolves + caches
+with patch.object(native.Path, "is_file", side_effect=AssertionError("Path touched on a warm hit")), \
+        patch.object(native.ctypes, "CDLL", side_effect=AssertionError("CDLL touched on a warm hit")):
+    second = native.blend_bezier_points(p0f, p1f, 0, 0, 1.0, 1.0)
+check(first == second,
+      "the warm cache is served before any Path / lock work (same result, no re-resolution)")
+reset()
+
+# (retained CDLL) the record keeps (signature, CDLL, fn) together; a binding
+# switch replaces the whole record (never a dangling fn without its library), and
+# only ONE record is held at a time (no unbounded per-signature cache).
+reset()
+libA, libB = types.SimpleNamespace(tag="A"), types.SimpleNamespace(tag="B")
+fnA, fnB = StubFunction(0), StubFunction(0)
+native._record = native._Record(("env", "/a.so"), libA, fnA)
+switched = native._Record(("env", "/b.so"), libB, fnB)
+native._record = switched                     # the switch
+check(native._record is switched
+      and native._record.library is libB
+      and native._record.fn is fnB
+      and native._record.signature == ("env", "/b.so"),
+      "a binding switch replaces the record whole (CDLL + fn retained together), one record at a time")
+reset()
+
+# (empty env refused) a set-but-empty NARWHAL_PURE_CORE is a real, distinct
+# signature: it must be refused, and the packaged path must never be consulted.
+reset()
+asked = []
+
+
+class _FakePath:
+    """A Path stand-in: records every constructed path; nothing is a file."""
+
+    def __init__(self, *parts):
+        asked.append(os.path.join(*parts))
+
+    def expanduser(self):
+        return self
+
+    def resolve(self):
+        return self
+
+    def is_file(self):
+        return False
+
+
+with patch.dict(os.environ, {"NARWHAL_PURE_CORE": ""}), \
+        patch.object(native, "Path", _FakePath):
+    empty_refused = _raised_native()
+packaged_base = os.path.join(os.path.dirname(os.path.abspath(native.__file__)), "native")
+check(empty_refused and all(packaged_base not in a for a in asked) and native._record is None,
+      f"an empty NARWHAL_PURE_CORE is a refused signature (never the packaged default); constructed {asked!r}")
+reset()
 
 
 def direct_native(p0, p1, k0, k1, lam0, lam1):
@@ -338,9 +457,10 @@ check(pos != neg and bits_match(pos, _reference_blend(p0, p1, 1, 1, 1.0, 1.0))
       "a negative speed scale changes the blend and still matches the reference")
 
 # ---------------------------------------------------------------------------
-# 4. DISPATCH THRESHOLD -- native only for k0+k1 >= 4; low order stays Python
+# 4. ALL-ORDER NATIVE DISPATCH -- every supported (k0,k1) pair routes through
+#    the native binding; the retired Python endpoint loop is gone.
 # ---------------------------------------------------------------------------
-print("\n-- dispatch threshold: native used only for k0+k1 >= 4 (the measured break-even) --")
+print("\n-- all-order native dispatch: every supported (k0,k1) pair calls the native binding --")
 _real_native = native.blend_bezier_points
 _native_hits = {"n": 0}
 
@@ -358,21 +478,32 @@ def _native_called(p0, p1, k0, k1, lam0=1.0, lam1=1.0):
     return _native_hits["n"]
 
 
-good2 = [(0.0, 0.0, 0.0), (1.0, 0.0, 0.0)]
-good4 = [(0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (0.0, 2.0, 0.0), (0.0, 0.0, 3.0), (0.0, 0.0, 0.5)]
-check(not _native_called(good2, good2, 0, 0),
-      "Position/Position (k0+k1=0) is routed to the Python loop, not native")
-check(not _native_called(good2, good2, 1, 1),
-      "Tangency/Tangency (k0+k1=2) is routed to the Python loop, not native")
-check(_native_called(good4, good4, 2, 2) >= 1,
-      "Curvature/Curvature (k0+k1=4) is routed to native")
-check(_native_called(good4, good4, 4, 4) >= 1,
-      "G4/G4 (k0+k1=8) is routed to native")
+def _case(k):
+    """k+1 oriented endpoint derivative vectors [P, D1, ..., Dk], distinct and finite."""
+    return [(float(i), 0.0, 0.0) if i == 0 else (0.0, float(i), 0.0) for i in range(k + 1)]
+
+
+low_hit = mid_hit = high_hit = bad = 0
+for k0 in range(5):
+    for k1 in range(5):
+        n = _native_called(_case(k0), _case(k1), k0, k1)
+        if n < 1:
+            bad += 1
+            continue
+        if k0 + k1 < 4:
+            low_hit += 1
+        elif k0 + k1 < 8:
+            mid_hit += 1
+        else:
+            high_hit += 1
+check(bad == 0,
+      f"all 25 supported (k0,k1) pairs route through the native binding: "
+      f"{low_hit} low + {mid_hit} mid + {high_hit} high, {bad} not routed")
 
 # ---------------------------------------------------------------------------
-# 5. malformed / non-finite: refused, NO partial output, and it RAISES (no replay)
+# 5. malformed / non-finite: refused EXPLICITLY (raised), NO partial output, no replay
 # ---------------------------------------------------------------------------
-print("\n-- malformed / non-finite inputs: refused without partial output --")
+print("\n-- malformed / non-finite inputs: refused explicitly (raised), never a silent fallback --")
 good = [(0.0, 0.0, 0.0), (1.0, 0.0, 0.0)]
 
 
@@ -380,36 +511,105 @@ def flat(p):
     return [v for d in p for v in d]
 
 
-# k beyond the supported maximum -> native declines (the Python loop may still answer)
-check(native.blend_bezier_points(flat(good), flat(good), 5, 1, 1.0, 1.0) is None,
-      "k=5 (beyond G4) is declined by the native route")
-# negative k -> declined, never a ctypes out-of-range crash
-check(native.blend_bezier_points(flat(good), flat(good), -1, 1, 1.0, 1.0) is None,
-      "negative k is declined by the native route")
-# non-integer k -> declined, never a ctypes out-of-range crash
-check(native.blend_bezier_points(flat(good), flat(good), 1.0, 1, 1.0, 1.0) is None,
-      "a non-integer k is declined by the native route")
-# wrong span length -> declined
-check(native.blend_bezier_points([0.0, 0.0, 0.0, 1.0], flat(good), 1, 1, 1.0, 1.0) is None,
-      "a wrong derivative-list length is declined by the native route")
-# non-finite lambda -> the native route refuses, and blend raises (never silently
-# replays the failure through the Python loop) -- but only when it is actually
-# routed to native (k0+k1 >= 4); below the threshold the Python loop is used.
-bad_p0 = [(0.0, float("nan"), 0.0), (1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 2.0)]
-nan_raised = False
-try:
-    blend.blend_bezier_points(bad_p0, good4, 2, 2, 1.0, 1.0)   # k0+k1=4 -> native
-except native.NativeBlendError:
-    nan_raised = True
-check(nan_raised, "a non-finite derivative at native order raises (never replayed through Python)")
-with patch.object(native, "_blend_binding", return_value=StubFunction(-99)):
+def _raised(fn):
     try:
-        blend.blend_bezier_points(good4, good4, 2, 2, 1.0, 1.0)
+        fn()
     except native.NativeBlendError:
-        execution_raised = True
-    else:
+        return True
+    return False
+
+
+# k beyond the supported maximum -> explicit refusal (the solver is native-only)
+check(_raised(lambda: native.blend_bezier_points(flat(good), flat(good), 5, 1, 1.0, 1.0)),
+      "k=5 (beyond G4) is an explicit NativeBlendError")
+check(_raised(lambda: blend.blend_bezier_points(good, good, 5, 1, 1.0, 1.0)),
+      "k=5 (beyond G4) is an explicit NativeBlendError through the public wrapper")
+# negative k -> explicit refusal, never a ctypes out-of-range crash
+check(_raised(lambda: native.blend_bezier_points(flat(good), flat(good), -1, 1, 1.0, 1.0)),
+      "negative k is an explicit NativeBlendError")
+check(_raised(lambda: blend.blend_bezier_points(good, good, -1, 1, 1.0, 1.0)),
+      "negative k is an explicit NativeBlendError through the public wrapper")
+# non-integer k -> explicit refusal, never a ctypes out-of-range crash
+check(_raised(lambda: native.blend_bezier_points(flat(good), flat(good), 1.0, 1, 1.0, 1.0)),
+      "a non-integer k is an explicit NativeBlendError")
+check(_raised(lambda: blend.blend_bezier_points(good, good, 1.0, 1, 1.0, 1.0)),
+      "a non-integer k is an explicit NativeBlendError through the public wrapper")
+# wrong span length -> explicit refusal
+check(_raised(lambda: native.blend_bezier_points([0.0, 0.0, 0.0, 1.0], flat(good), 1, 1, 1.0, 1.0)),
+      "a wrong derivative-list length is an explicit NativeBlendError")
+# a span whose vector count does not match k -> explicit refusal through the public wrapper
+short_p0 = [(0.0, 0.0, 0.0)]          # only P, but k0=1 needs P and D1
+check(_raised(lambda: blend.blend_bezier_points(short_p0, good, 1, 1, 1.0, 1.0)),
+      "a derivative list shorter than k+1 is an explicit NativeBlendError through the public wrapper")
+
+# non-finite input -> the native layer refuses, and blend RAISES (never silently
+# replays the failure through the retired Python loop).
+good4 = [(0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (0.0, 2.0, 0.0), (0.0, 0.0, 3.0), (0.0, 0.0, 0.5)]
+bad_p0 = [(0.0, float("nan"), 0.0), (1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 2.0)]
+check(_raised(lambda: blend.blend_bezier_points(bad_p0, good4, 2, 2, 1.0, 1.0)),
+      "a non-finite derivative at native order raises (never replayed through Python)")
+check(_raised(lambda: blend.blend_bezier_points(bad_p0, good, 0, 0, 1.0, 1.0)),
+      "a non-finite derivative at Position order raises (never replayed through Python)")
+# a loaded library that rejects the call (non-zero status) is explicit, never replayed
+_status99 = native._Record(PACKAGED_SIG, types.SimpleNamespace(), StubFunction(-99))
+try:
+    with patch.object(native, "_blend_binding", return_value=_status99):
+        blend.blend_bezier_points(good4, good4, 2, 2, 1.0, 1.0)
         execution_raised = False
-check(execution_raised, "native execution failure raises without Python replay")
+except native.NativeBlendError:
+    execution_raised = True
+check(execution_raised, "native execution failure (status -99) raises without Python replay")
+
+# FAULT INJECTION: a library that reports SUCCESS (status 0) but writes a non-finite
+# control component must be refused with a NativeBlendError -- non-finite geometry
+# is never returned, and no count is reported for it. The guard checks the RETURNED
+# control points, so an immutable record does not protect against this.
+class _NonFiniteSuccessFn:
+    """status 0 (success) but corrupts one output component to NaN / inf."""
+    def __call__(self, *args):
+        out = args[8]                 # the fixed 30-double output buffer
+        out[0] = float("nan")         # first control point, x
+        out[1] = float("inf")         # first control point, y
+        return 0                      # reports success
+_nonfinite_rec = native._Record(PACKAGED_SIG, types.SimpleNamespace(), _NonFiniteSuccessFn())
+try:
+    with patch.object(native, "_blend_binding", return_value=_nonfinite_rec):
+        blend.blend_bezier_points(good, good, 0, 0, 1.0, 1.0)
+        nonfinite_raised = False
+except native.NativeBlendError:
+    nonfinite_raised = True
+check(nonfinite_raised,
+      "a success (status 0) with a non-finite control component raises NativeBlendError, "
+      "never returns non-finite geometry (fault injection)")
+
+# a native INVOCATION that raises a bare ctypes.ArgumentError (a direct Exception
+# subclass, NOT OSError/ValueError) or a bare ValueError must be wrapped by name
+# into a NativeBlendError -- the solver is native-only, so no bare exception escapes.
+class _RaisesArgumentErrorFn:
+    def __call__(self, *a):
+        raise ctypes.ArgumentError("bad argument conversion")
+
+class _RaisesValueErrorFn:
+    def __call__(self, *a):
+        raise ValueError("malformed output buffer")
+
+
+def _wraps(fn):
+    rec = native._Record(PACKAGED_SIG, types.SimpleNamespace(), fn)
+    try:
+        with patch.object(native, "_blend_binding", return_value=rec):
+            blend.blend_bezier_points(good, good, 0, 0, 1.0, 1.0)
+        return False                  # did not raise at all
+    except native.NativeBlendError:
+        return True                   # wrapped by name
+    except Exception as exc:          # a bare (unwrapped) exception escaped
+        return ("ESCAPED:" + type(exc).__name__)   # mark the failure distinctly
+
+check(_wraps(_RaisesArgumentErrorFn()) is True,
+      "a bare ctypes.ArgumentError from the native invocation is wrapped into NativeBlendError")
+check(_wraps(_RaisesValueErrorFn()) is True,
+      "a bare ValueError from the native invocation is wrapped into NativeBlendError")
+
 # and the reference still answers the *finite* case, so the refusal is the NaN path
 check(_reference_blend(good, good, 1, 1, 1.0, 1.0) is not None,
       "the pure-Python reference still answers the finite case")
@@ -431,10 +631,10 @@ for c1, c2 in (("Position", "Position"), ("Tangency", "Curvature"),
           f"blend_curves {c1}/{c2}: degree {info['degree']}, control points and knots match")
 
 # ---------------------------------------------------------------------------
-# 7. benchmark (opt-in via --benchmark): public wrapper vs the pure-Python loop
+# 7. benchmark (opt-in via --benchmark): public wrapper (native) vs the pure-Python loop
 # ---------------------------------------------------------------------------
 if BENCHMARK:
-    print("\n-- benchmark (best of 3; the pure control-point solve only) --")
+    print("\n-- benchmark (best of 3; the pure control-point solve only; native at every order) --")
 
     def best(fn, reps=400):
         out = math.inf

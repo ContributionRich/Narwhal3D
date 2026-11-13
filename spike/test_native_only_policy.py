@@ -137,6 +137,8 @@ class PolicyTests(unittest.TestCase):
             'joinchain': {'math', '_near', '_ends', '_find', '_find_before'},
             'svgpath': {'math', '_tokenize', '_arc_to_cubics', '_line', '_CMD_ARITY'},
             'alias_table': {'re', '_MACRO_RE'},
+            'rebuild': {'_basis', '_solve', '_least_squares', '_fit_open', '_fit_closed'},
+            'blend': {'_blend_native', '_NATIVE_MIN_ORDER', '_add'},
             'macro': {'_split_tokens', '_classify', '_strip_flags', '_command_step',
                       'NATIVE_MACRO_MIN_BYTES', 'NATIVE_MACRO_JSON_MAX_BYTES'},
         }

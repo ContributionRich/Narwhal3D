@@ -11,7 +11,8 @@ the working tree. It runs, in order:
 5. a direct ctypes ABI probe — the built library answers the stable C ABI
    (version + a real encode) without going through the Python adapter.
 6. the *dedicated* pure-core Python suites — adapters, route activation,
-   compatibility paths, native-only parser and packaging contracts.
+   optional compatibility paths where retained, mandatory native-only ownership
+   routes, and packaging contracts (including stable core-ABI-1 rebuild/blend).
 
 The Python suites are an **explicit manifest**, never a ``test_native_*.py``
 glob: a glob would also capture the selection-core and CDR suites, which are a
@@ -111,7 +112,7 @@ PURE_CORE_PYTESTS = (
     "spike/test_rebuild_performance.py",
     "spike/test_native_curve_samples.py",
     "spike/test_native_display_samples.py",
-    "spike/test_native_rebuild_fit.py",
+    "spike/test_native_rebuild_fit.py", "spike/test_rebuild_owned.py",
     "spike/test_native_arclength.py",
     "spike/test_native_interpolate.py",
     "spike/test_native_tween.py",
@@ -130,6 +131,7 @@ PURE_CORE_PARSE_EXPORTS = (
     "narwhal_pure_core_coords_owned_abi1", "narwhal_pure_core_coords_owned_v1",
     "narwhal_pure_core_svgpath_owned_version", "narwhal_pure_core_svgpath_owned",
     "narwhal_pure_core_alias_identity", "narwhal_pure_core_alias_parse", "narwhal_pure_core_alias_options",
+    "narwhal_pure_core_rebuild_fit", "narwhal_pure_core_blend_bezier_points",
     "narwhal_pure_core_coords_split_v1", "narwhal_pure_core_norm_v1", "narwhal_pure_core_joinchain",
 )
 PURE_CORE_PARSE_IDENTITY = {
@@ -289,6 +291,37 @@ for text, expected in (("'_Zoom _Extents __", (0,0,0,1,2,6,2)), ("!!", (1,0,0,0,
         spans = (c.c_uint32*4)()
         if options(points,len(text),2,spans,4) != 0 or list(spans) != [8,15,18,18]:
             raise RuntimeError("owned alias options witness differs")
+# Stable core-ABI-1 ownership: no invented per-export identity markers.
+fit = lib.narwhal_pure_core_rebuild_fit
+fit.argtypes = [D,D,c.c_size_t,c.c_size_t,c.c_size_t,c.c_ubyte,c.c_ubyte,D,D,D,c.POINTER(c.c_size_t)]
+fit.restype = c.c_int32
+params = (c.c_double*21)(*[i/20 for i in range(21)])
+samples = (c.c_double*63)(*[v for u in params for v in (3*u,6*u,-3*u)])
+ends = (c.c_double*6)(0,0,0,3,6,-3)
+ctrl, knots, count = (c.c_double*21)(), (c.c_double*9)(), c.c_size_t()
+status = fit(samples,params,21,4,3,0,0,ends,ctrl,knots,c.byref(count))
+if status != 0 or count.value != 4 or any(not math.isfinite(ctrl[j]) or abs(ctrl[j]-v)>1e-12 for j,v in enumerate([0,0,0,1,2,-1,2,4,-2,3,6,-3])) or list(knots[:6]) != [0,0,0,1,1,1]:
+    raise RuntimeError("owned rebuild numeric witness differs")
+for n, degree, closed, sample_count, expected in ((3,5,1,21,-2),(1366,3,1,21,-5),(4,3,0,1,-4)):
+    ctrl[:] = [99.]*21
+    knots[:] = [99.]*9
+    count.value = 99
+    status = fit(samples,params,sample_count,n,degree,closed,0,ends,ctrl,knots,c.byref(count))
+    if status != expected or count.value != 0 or list(ctrl) != [99.]*21 or list(knots) != [99.]*9:
+        raise RuntimeError("owned rebuild classified refusal differs")
+blend = lib.narwhal_pure_core_blend_bezier_points
+blend.argtypes = [D,c.c_size_t,D,c.c_size_t,c.c_uint32,c.c_uint32,c.c_double,c.c_double,D,c.c_size_t]
+blend.restype = c.c_int32
+p0, p1 = (c.c_double*6)(0,0,0,3,6,0), (c.c_double*6)(6,3,0,3,-3,0)
+output = (c.c_double*30)()
+status = blend(p0,6,p1,6,1,1,2.,1.,output,30)
+if status != 0 or list(output) != [0.,0.,0.,2.,4.,0.,5.,4.,0.,6.,3.,0.]+[0.]*18:
+    raise RuntimeError("owned blend numeric witness differs")
+for length, scale, capacity, expected in ((5,2.,30,-1),(6,float('nan'),30,-1),(6,2.,29,-2)):
+    output[:] = [99.]*30
+    status = blend(p0,length,p1,6,1,1,scale,1.,output,capacity)
+    if status != expected or list(output) != [99.]*30:
+        raise RuntimeError("owned blend classified refusal differs")
 macro_size = lib.narwhal_pure_core_macro_size
 macro_size.argtypes = [c.c_char_p, c.c_size_t, c.c_ubyte]
 macro_size.restype = c.c_int64
@@ -329,7 +362,7 @@ output, needed = c.create_string_buffer(64), c.c_size_t()
 if widths(text, len(text), output, len(output), c.byref(needed)) != 0 or output.raw[:needed.value] != struct.pack("<IddI", 2, 1.0, 2.0, 0):
     raise RuntimeError("print-widths witness differs")
 print(json.dumps({"abi": 1, "parse_abi": 2, "reply_bytes": c.sizeof(Reply),
-                  "parser_exports": ["narwhal_pure_core_parse_abi", "narwhal_pure_core_parse_v2", "narwhal_pure_core_printwidths", "narwhal_pure_core_macro_size", "narwhal_pure_core_macro_encode", "narwhal_pure_core_unitformat_resolve_mode", "narwhal_pure_core_unitformat_format", "narwhal_pure_core_calc_abi2", "narwhal_pure_core_calc_v2", "narwhal_pure_core_bearing_abi2", "narwhal_pure_core_bearing_v2", "narwhal_pure_core_macro_plan_checked", "narwhal_pure_core_coords_owned_abi1", "narwhal_pure_core_coords_owned_v1", "narwhal_pure_core_svgpath_owned_version", "narwhal_pure_core_svgpath_owned", "narwhal_pure_core_alias_identity", "narwhal_pure_core_alias_parse", "narwhal_pure_core_alias_options", "narwhal_pure_core_coords_split_v1", "narwhal_pure_core_norm_v1", "narwhal_pure_core_joinchain"]}, sort_keys=True))
+                  "parser_exports": ["narwhal_pure_core_parse_abi", "narwhal_pure_core_parse_v2", "narwhal_pure_core_printwidths", "narwhal_pure_core_macro_size", "narwhal_pure_core_macro_encode", "narwhal_pure_core_unitformat_resolve_mode", "narwhal_pure_core_unitformat_format", "narwhal_pure_core_calc_abi2", "narwhal_pure_core_calc_v2", "narwhal_pure_core_bearing_abi2", "narwhal_pure_core_bearing_v2", "narwhal_pure_core_macro_plan_checked", "narwhal_pure_core_coords_owned_abi1", "narwhal_pure_core_coords_owned_v1", "narwhal_pure_core_svgpath_owned_version", "narwhal_pure_core_svgpath_owned", "narwhal_pure_core_alias_identity", "narwhal_pure_core_alias_parse", "narwhal_pure_core_alias_options", "narwhal_pure_core_rebuild_fit", "narwhal_pure_core_blend_bezier_points", "narwhal_pure_core_coords_split_v1", "narwhal_pure_core_norm_v1", "narwhal_pure_core_joinchain"]}, sort_keys=True))
 '''
 
 

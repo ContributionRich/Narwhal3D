@@ -167,6 +167,34 @@ def library(mutant=""):
         spans[:] = [8,15,18,18]
         if mutant == 'alias-options': spans[0] = 7
         return 0
+    def fit(samples,params,sample_count,n,degree,closed,tangent,ends,ctrl,knots,count):
+        assert tangent == 0
+        c.cast(count,c.POINTER(c.c_size_t))[0] = 0
+        expected = {(3,5,1,21):-2, (1366,3,1,21):-5, (4,3,0,1):-4}.get((n,degree,closed,sample_count))
+        if expected is not None:
+            if mutant == 'rebuild-refusal-write': ctrl[0] = 0
+            return 0 if mutant == 'rebuild-refusal' else expected
+        assert (sample_count,n,degree,closed) == (21,4,3,0)
+        assert list(ends) == [0,0,0,3,6,-3]
+        ctrl[:12] = [0,0,0,1,2,-1,2,4,-2,3,6,-3]
+        knots[:6] = [0,0,0,1,1,1]
+        c.cast(count,c.POINTER(c.c_size_t))[0] = 3 if mutant == 'rebuild-malformed' else 4
+        if mutant == 'rebuild-value': ctrl[4] = 9
+        if mutant == 'rebuild-nan': ctrl[4] = float('nan')
+        if mutant == 'rebuild-knots': knots[3] = 2
+        return 0
+    def blend(p0,l0,p1,l1,k0,k1,scale0,scale1,out,capacity):
+        assert (l1,k0,k1,scale1) == (6,1,1,1.)
+        if mutant == 'blend-refusal-write': out[0] = 0
+        if capacity == 29:
+            return 0 if mutant == 'blend-refusal' else -2
+        if l0 == 5 or scale0 != scale0:
+            return -2 if mutant == 'blend-input' else -1
+        assert list(p0) == [0,0,0,3,6,0] and list(p1) == [6,3,0,3,-3,0]
+        out[:] = [0.,0.,0.,2.,4.,0.,5.,4.,0.,6.,3.,0.]+[0.]*18
+        if mutant == 'blend-value': out[4] = 9
+        if mutant == 'blend-malformed': out[29] = 1
+        return 0
     result = SimpleNamespace(
         narwhal_pure_core_abi_version=Mock(return_value=9 if mutant == "old-abi" else 1),
         narwhal_pure_core_parse_abi=Mock(return_value=1 if mutant == "parser-abi" else 2),
@@ -190,7 +218,9 @@ def library(mutant=""):
         narwhal_pure_core_svgpath_owned=Mock(side_effect=svg),
         narwhal_pure_core_alias_identity=Mock(return_value=14 if mutant == 'alias-abi' else 1),
         narwhal_pure_core_alias_parse=Mock(side_effect=alias),
-        narwhal_pure_core_alias_options=Mock(side_effect=alias_options))
+        narwhal_pure_core_alias_options=Mock(side_effect=alias_options),
+        narwhal_pure_core_rebuild_fit=Mock(side_effect=fit),
+        narwhal_pure_core_blend_bezier_points=Mock(side_effect=blend))
     if mutant in gate.PURE_CORE_PARSE_EXPORTS:
         delattr(result, mutant)
     return result
@@ -230,6 +260,7 @@ def pe_fixture(*, parser_abi=2, missing="", svg_abi=14, alias_abi=1):
         encoded = name.encode() + b"\0"
         data[offset(cursor):offset(cursor) + len(encoded)] = encoded
         cursor += len(encoded)
+        assert cursor <= 0x1a00, "PE export names overlap the import table"
         value = parser_abi if name == "narwhal_pure_core_parse_abi" else (2 if name in {"narwhal_pure_core_calc_abi2", "narwhal_pure_core_bearing_abi2"} else 1)
         if name == "narwhal_pure_core_svgpath_owned_version": value = svg_abi
         if name == "narwhal_pure_core_alias_identity": value = alias_abi
@@ -252,7 +283,9 @@ class ParserProbeTests(unittest.TestCase):
                        "planner-error", "calc-abi", "bearing-abi",
                        "coords-value", "coords-error", "norm-value", "join-boundary",
                        "svg-abi", "alias-abi", "svg-geometry", "svg-error",
-                       "alias-prefix", "alias-error", "alias-options"):
+                       "alias-prefix", "alias-error", "alias-options",
+                       "rebuild-malformed", "rebuild-value", "rebuild-nan", "rebuild-knots", "rebuild-refusal", "rebuild-refusal-write",
+                       "blend-value", "blend-malformed", "blend-input", "blend-refusal", "blend-refusal-write"):
             with self.subTest(mutant=mutant), self.assertRaises((AttributeError, RuntimeError)):
                 execute_probe(mutant)
         self.assertEqual(execute_probe(), gate.PURE_CORE_PARSE_IDENTITY)
@@ -274,6 +307,10 @@ class ParserProbeTests(unittest.TestCase):
 
     def test_owned_semantic_guards_are_mutation_sensitive(self):
         guards = (
+            ('rebuild-value', 'if status != 0 or count.value'),
+            ('rebuild-refusal', 'if status != expected or count.value'),
+            ('blend-value', 'if status != 0 or list(output)'),
+            ('blend-refusal', 'if status != expected or list(output)'),
             ('svg-geometry', 'if status != 0 or list(report)'),
             ('svg-error', 'elif status != 2 or (error.kind'),
             ('alias-prefix', 'if alias(points,len(text)'),

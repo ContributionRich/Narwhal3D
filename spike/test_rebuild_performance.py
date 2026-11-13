@@ -404,11 +404,16 @@ try:
     check([closest_fields(snap_prepared.closest(q)) for q in snap_queries] == snap_before,
           "without the native core, a prepared curve ignores later edits")
     cubic = cubic_open()
-    fallback_curve, _info = rebuild.rebuild_curve(cubic, 6, 3)
-    with Patch(arclength, "PreparedLength", ReferenceLength), Patch(nearest, "PreparedCurve", ReferencePrepared):
-        reference_curve, _info = rebuild.rebuild_curve(cubic, 6, 3)
-    check(rebuilt_equal(fallback_curve, reference_curve),
-          "fallback rebuild (no native core) is bit-identical to the reference pipeline")
+    # Search may retain its qualified fallback, but fitting is now native-only.
+    # Complete fitted-curve parity remains checked below and by the fit oracle suite.
+    fit_host = load("native_rebuild")
+    try:
+        rebuild.rebuild_curve(cubic, 6, 3)
+    except fit_host.NativeRebuildError as error:
+        check("unavailable" in str(error),
+              "missing core explicitly refuses Rebuild fitting without Python replay")
+    else:
+        check(False, "missing core must not silently reconstruct a curve")
 finally:
     if saved_env is None:
         os.environ.pop("NARWHAL_PURE_CORE", None)

@@ -498,7 +498,11 @@ def verify_application_core_copies(root: Path) -> None:
 
 
 def verify_pure_core_identity(path: Path) -> dict[str, object]:
-    """Cross-host PE identity; execute semantics as well on native Windows."""
+    """Require owned exports cross-host; execute semantics on native Windows.
+
+    Stable core-ABI-1 rebuild/blend functions are required exports, not constant
+    identity leaves. Only actual version functions belong in constant_exports.
+    """
     identity = inspect_pe_dll(path, constant_exports={
         "narwhal_pure_core_abi_version": 1, "narwhal_pure_core_parse_abi": 2,
         "narwhal_pure_core_calc_abi2": 2, "narwhal_pure_core_bearing_abi2": 2,

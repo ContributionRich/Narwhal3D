@@ -11,6 +11,16 @@ derivatives at one end and m at the other fixes k + m + 2 control points, so the
 k + m + 1: Position (k=0) both ends -> 1 (a line), Tangency (1) -> 3, Curvature (2) -> 5,
 G3 -> 7, and G4 -> 9.
 
+THE SOLVE -- the endpoint-derivative control-point solve is NATIVE at every supported
+order: `blend_bezier_points` runs the exact Rust solver in the pure-core library
+(`native_blend`, the `narwhal_pure_core_blend_bezier_points` export) for all 25
+`(k0, k1)` pairs up to G4. The retired pure-Python endpoint solver and the
+break-even dispatch threshold are retired (see the native ownership document): a
+missing / stale / refused library, or a library that rejects validated inputs, is an
+explicit `native_blend.NativeBlendError` -- never a silent Python replay. What stays
+Python is the host glue -- the openNURBS `DerivativeAt` extraction, the `NurbsCurve`
+construction and the `blend_curves` continuity / flip / scale logic.
+
 The blend B(t), t in [0, 1], takes the input curve's derivatives SCALED by a reparameter-
 isation with constant speed factor lambda: B^(j)(0) = lambda^j C^(j). A reparameterisation
 with phi'' = phi''' = ... = 0 leaves the tangent direction, the curvature vector and its
@@ -35,10 +45,6 @@ ORDER = {name: i for i, name in enumerate(CONTINUITIES)}     # derivatives match
 
 def _xyz(v):
     return (v.X, v.Y, v.Z)
-
-
-def _add(a, b):
-    return tuple(x + y for x, y in zip(a, b))
 
 
 def _sub(a, b):
@@ -68,41 +74,6 @@ def end_derivatives(curve, at_end, count, outward=True):
     return [_mul(v, (-1.0) ** j if flip else 1.0) for j, v in enumerate(vals)]
 
 
-#: measured break-even: the native control-point solve only wins once the degree is
-#: high enough (k0 + k1 >= 4). Position (0) and Tangency (2) are SLOWER through the
-#: ctypes boundary than the pure-Python loop, so those stay in Python; Curvature (4) and
-#: above go native. See spike/test_native_blend.py --benchmark.
-_NATIVE_MIN_ORDER = 4
-
-
-def _blend_native(p0_derivs, p1_derivs, k0, k1, lam0, lam1):
-    """The Rust control points (a list of ``(x, y, z)`` tuples), or ``None`` when no
-    usable native binding is present (missing, stale ABI, or no blend symbol) -- the
-    caller then uses the Python loop below.
-
-    The native route is used only for the higher orders where it wins (k0 + k1 >=
-    `_NATIVE_MIN_ORDER`); the low orders (Position, Tangency) stay on the unchanged
-    Python loop because the ctypes boundary costs more than it saves there.
-
-    Raises `native_blend.NativeBlendError` if a loaded library rejects the (validated)
-    inputs or fails to run; that is a real defect (a stale or mismatched build) and is
-    deliberately NOT replayed through the Python loop.
-    """
-    if k0 > 4 or k1 > 4:
-        return None
-    if k0 + k1 < _NATIVE_MIN_ORDER:
-        return None
-    try:
-        from . import native_blend
-    except ImportError:               # direct file-path loading, without a package
-        import native_blend
-    flat0 = [v for d in p0_derivs[:k0 + 1] for v in d]
-    flat1 = [v for d in p1_derivs[:k1 + 1] for v in d]
-    if len(flat0) != 3 * (k0 + 1) or len(flat1) != 3 * (k1 + 1):
-        return None
-    return native_blend.blend_bezier_points(flat0, flat1, k0, k1, lam0, lam1)
-
-
 def blend_bezier_points(p0_derivs, p1_derivs, k0, k1, lam0, lam1):
     """The Bezier control points matching `k0` scaled derivatives at t=0 and `k1` at t=1.
 
@@ -111,40 +82,28 @@ def blend_bezier_points(p0_derivs, p1_derivs, k0, k1, lam0, lam1):
     identities B^(j)(0) = n!/(n-j)! * Delta^j P_0 (forward differences), and the mirror
     image at t = 1.
 
-    With the pure-core library loaded the same algebra runs in Rust
-    (`native_blend`); the loop below is the unchanged Python implementation and the
-    fallback for a missing or stale library (a native execution failure raises rather
-    than being replayed here).
+    The solve runs NATIVE for every supported order (all 25 (k0, k1) pairs, each end
+    0..4 / G4): `native_blend.blend_bezier_points` is the exact Rust implementation of
+    that algebra, bit-for-bit the retired pure-Python loop. There is no Python
+    endpoint solver left to fall back to: a missing / stale / refused library, or a
+    library that rejects validated inputs, raises `native_blend.NativeBlendError`
+    (explicit, by name) -- it is never silently replayed through Python.
     """
-    native = _blend_native(p0_derivs, p1_derivs, k0, k1, lam0, lam1)
-    if native is not None:
-        return native
-    n = k0 + k1 + 1
-    pts = [None] * (n + 1)
-    pts[0] = p0_derivs[0]
-    pts[n] = p1_derivs[0]
+    try:
+        from . import native_blend
+    except ImportError:               # direct file-path loading, without a package
+        import native_blend
 
-    def falling(j):
-        out = 1.0
-        for i in range(j):
-            out *= (n - i)
-        return out
-
-    for j in range(1, k0 + 1):
-        target = _mul(p0_derivs[j], lam0 ** j / falling(j))    # = Delta^j P_0
-        # Delta^j P_0 = sum_i (-1)^(j-i) C(j,i) P_i  ->  solve for P_j
-        acc = target
-        for i in range(j):
-            acc = _sub(acc, _mul(pts[i], (-1.0) ** (j - i) * math.comb(j, i)))
-        pts[j] = acc
-    for j in range(1, k1 + 1):
-        target = _mul(p1_derivs[j], lam1 ** j / falling(j))    # = nabla^j P_n
-        # nabla^j P_n = sum_i (-1)^i C(j,i) P_(n-i)  ->  solve for P_(n-j)
-        acc = target
-        for i in range(j):
-            acc = _sub(acc, _mul(pts[n - i], (-1.0) ** i * math.comb(j, i)))
-        pts[n - j] = _mul(acc, (-1.0) ** j)
-    return pts
+    # the flatten below slices with k+1, so a non-int order must be refused HERE, by
+    # name, instead of dying with a bare TypeError -- the native layer is the single
+    # validation authority for the solve.
+    for k in (k0, k1):
+        if not isinstance(k, int) or isinstance(k, bool):
+            raise native_blend.NativeBlendError(
+                f"unsupported blend order k={k!r}; only integer orders 0..4 (G0..G4) are supported")
+    flat0 = [v for d in p0_derivs[:k0 + 1] for v in d]
+    flat1 = [v for d in p1_derivs[:k1 + 1] for v in d]
+    return native_blend.blend_bezier_points(flat0, flat1, k0, k1, lam0, lam1)
 
 
 def bezier_curve(points):

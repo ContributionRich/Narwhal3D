@@ -112,7 +112,7 @@ def _():
         "spike/test_rebuild_performance.py",
         "spike/test_native_curve_samples.py",
         "spike/test_native_display_samples.py",
-        "spike/test_native_rebuild_fit.py",
+        "spike/test_native_rebuild_fit.py", "spike/test_rebuild_owned.py",
         "spike/test_native_arclength.py",
         "spike/test_native_interpolate.py",
         "spike/test_native_tween.py",
