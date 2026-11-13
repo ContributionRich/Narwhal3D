@@ -1,29 +1,32 @@
-"""RUST-ALIAS-14 differential qualification.
+"""RUST-ALIAS-17: host admission, bound, fault-injection and live-CRUD
+qualification for the native alias grammar.
 
-Runs with bundled CPython 3.13. Compares the native alias-grammar host
-(``narwhal3d.native_alias.parse_macro``) against the independent reference
-(``spike/alias_reference.py`` — pure Python, no native hook) on the live
-``narwhal3d.alias_table`` module. The optional candidate
-(``tmp/rust14-alias-candidate.py`` — whole module with the native grammar) is
-compared when ``--candidate`` is given.
+Runs with bundled CPython 3.13. The grammar differential (5364 cases: corner,
+Unicode predicates, seeded random) was archived into the Rust golden test
+``native/pure_core/tests/alias_golden.rs`` and the lossless fixture
+``native/pure_core/tests/fixtures/alias_golden.txt`` — no Python reference
+engine remains in this test. What is retained here is what the Rust test
+cannot see: the HOST (``narwhal3d/native_alias.py``) admission, the 4096-codepoint
+bound, the malformed-reply and fault-injection rejections, the live
+``narwhal3d.alias_table`` CRUD surface, and a small set of
+fixture-derived representative parity anchors (expected tuples captured from
+the ORIGINAL oracle before it was retired).
 
 The test never skips a missing real-native library. By default it loads the
 packaged adjacent library (``narwhal3d/native/libnarwhal_pure_core.<so|dylib|dll>``)
 or ``NARWHAL_PURE_CORE``; no scratch compiler is required in the public gate.
-``--library`` qualifies an explicit integrated build; ``--candidate`` enables the
-optional candidate comparison; ``--mutations`` builds two external source copies
-and requires each to fail the same Rust tests (prefix handling and option trimming).
+``--library`` qualifies an explicit integrated build; ``--candidate``
+(optionally) compares the candidate module (``tmp/rust14-alias-candidate.py``)
+against the same native expectations.
 """
 import argparse
 import ast
 import ctypes
-import hashlib
 import importlib.util
 import json
 import os
 from pathlib import Path
 import sys
-import random
 import subprocess
 import tempfile
 import unittest
@@ -84,9 +87,7 @@ class AliasGrammarOwned(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.native = load('rust14_native_alias', ROOT / 'narwhal3d/native_alias.py')
-        cls.reference = load('rust14_alias_reference', ROOT / 'spike/alias_reference.py')
         cls.live = load('rust14_alias_live', ROOT / 'narwhal3d/alias_table.py')
-        cls.comparisons = 0
 
     def _reject_allocation(self, record):
         """Test-owned allocation trap (production keeps only host glue).
@@ -110,99 +111,41 @@ class AliasGrammarOwned(unittest.TestCase):
         reply.command_end = 5
         return 0
 
-    def compare(self, macro):
-        """Compare native, reference and live parse_macro on one input."""
-        expected = self.reference.parse_macro(macro)
-        actual = self.native.parse_macro(macro)
-        live = self.live.parse_macro(macro)
-        type(self).comparisons += 1
-        self.assertEqual(actual, expected, (repr(macro), actual, expected))
-        self.assertEqual(live, expected, (repr(macro), live, expected))
-        return expected
-
-    def test_grammar_corner_cases(self):
+    def test_representative_fixture_parity(self):
+        # Representative anchors of the archived 5364-case differential. Each
+        # expected tuple was captured from the ORIGINAL oracle
+        # (spike/alias_reference.py, retired into legacy/retired-rust17/)
+        # before the native grammar qualified against it; the Rust golden test
+        # (native/pure_core/tests/alias_golden.rs) replays the full capture
+        # against the real ABI. Here the host and the live module must agree
+        # with those captured expectations.
         cases = [
-            # literal prefix corner cases
-            "_", "__", "___", "____", "_____", "______",
-            "'_", "'__", "'___", "'____", "'______",
-            "!_", "!__", "!___", "!____", "!______",
-            "_ x", "_  x", "_ _", "_ _ x", "_ _ _", "_ _ _ x",
-            "'_ x", "'__ x", "!_ x", "!__ x",
-            "' _", "'__ _", "!_ _", "!__ _",
-            "_\tZoom", "'\t_Zoom", "'\t_ x", "'\nZoom All",
-            "Zoom_", "_Zoom_", "_a_b", "Zoom _A", "Zoom _", "Zoom ___", "Zoom __",
-            "a__", "__a", "___a", "a___", "a__ b", "'a__", "!a__",
-            # defaults (22 macros)
-            "'_Zoom", "'_Zoom _Extents", "'_Zoom _Target", "'_Zoom _All _Extents",
-            "'_Zoom _Selected", "'_Zoom _All _Selected", "'_Snap", "'_Ortho",
-            "'_Planar", "! _Move", "_Undo", "! _PointsOn", "! _PointsOff",
-            "'_SelCrossing", "'_SelWindow", "'_CurvatureGraph",
-            "'_CurvatureGraphOff", "! _DeleteSubCrv", "'_SelPolysrf",
-            "! _OptionsPage _PlugIns", "! _OptionsPage _DisplayModes",
-            # whitespace / control / newline
-            "Zoom\n", "Zoom\n\n", "Zoom\n\n\n", "Zoom \n", "Zoom  \n",
-            "Zoom A\n", "Zoom A B\n", "Zoom A\n\n", "Zoom Ext\nMore",
-            "Zoom x\ny", "a\nb", "Zoom \n x", "Zoom\nx", "Zoom\n A", "Zoom\nA B",
-            "Zoom\x0bA", "Zoom \r A", "Zoom\r\nA", "Zoom A\rB",
-            "Zoom\xa0A", "Zoom\u2028A", "Zoom A\u2028B", "Zoom\x0c", "Zoom\u2029A",
-            "Zoom A\u1680B", "Zoom A\u2000B", "Zoom A\u3000B", "Zoom\x85A",
-            "Zoom \x01 A", "Zoom\t", "Zoom \t ", "Zoom A B",
-            # Unicode word characters
-            "Zöom", "½", "Ⅻ", "١٢٣", "Zoom½", "½Zoom", "ｚoom", "𝕌nicode",
-            "Zoom²", "fooᢅ", "一", "Z©", "Zoom©", "Zo\u0308m",
-            # invalid
-            "", "   ", "\t", "\n", " _", "' ", "'  ", "_!", "__!", "!!", "''",
-            "'!", "! ", "_!_", "Zoom A\n\n", "Zoom Ext\nMore", "Zoom x\ny",
-            # option trimming
-            "Zoom _A", "Zoom _B", "Zoom ___", "Zoom _A___B", "Zoom A_B",
-            "Zoom  _A  _B  ", "a _", "Zoom _A _B", "Zoom _A\u2028_B",
+            ("'Zoom", ("'", 'Zoom', ())),
+            ("'_Zoom", ("'", 'Zoom', ())),
+            ("'_Zoom _Extents", ("'", 'Zoom', ('Extents',))),
+            ("Zoom A B", (None, 'Zoom', ('A', 'B'))),
+            ("Zoom A\n", (None, 'Zoom', ('A',))),
+            ("Zoom A\n\n", (None, None, None)),
+            ("!!", (None, None, None)),
+            ("", (None, None, None)),
+            ("   ", (None, None, None)),
+            ("Zoom _A", (None, 'Zoom', ('A',))),
+            ("Zoom _A___B", (None, 'Zoom', ('A___B',))),
+            ("Zöom", (None, 'Zöom', ())),
+            ("_ x", ('_', 'x', ())),
+            ("'_SelWindow", ("'", 'SelWindow', ())),
+            ("Zoom\n", (None, 'Zoom', ())),
         ]
-        for c in cases:
-            self.compare(c)
-
-    def test_unicode_word_and_whitespace_predicates(self):
-        # Word characters: alnum (alpha | numeric) + underscore.
-        for cp in [0x2070, 0x2071, 0x2074, 0x24ea, 0x2160, 0xb2, 0xb3, 0xb9,
-                   0xbc, 0x661, 0x110f, 0x136a, 0x301, 0x308, 0x900, 0xb7,
-                   0x2027, 0x2038, 0x1100, 0x1101, 0x1102, 0x1103, 0x1104,
-                   0x1105, 0x1106, 0x1107, 0x1108, 0x1109, 0x110a]:
-            c = chr(cp)
-            self.compare(c)
-            self.compare('foo' + c)
-            self.compare(c + 'foo')
-        # Whitespace: is_space (includes \xa0, \u2028, \u2000, \u1680, \x85, etc.)
-        for cp in [0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x20, 0x85, 0xa0, 0x1680,
-                   0x2000, 0x2001, 0x2002, 0x2003, 0x2004, 0x2005, 0x2006,
-                   0x2007, 0x2008, 0x2009, 0x200a, 0x2028, 0x2029, 0x202f,
-                   0x205f, 0x3000, 0x1c, 0x1d, 0x1e, 0x1f]:
-            c = chr(cp)
-            self.compare('Zoom' + c + 'A')
-            self.compare('Zoom ' + c + ' A')
-            self.compare(c + 'Zoom')
-            self.compare('Zoom' + c)
-        # Non-word, non-space: control chars, surrogates, null.
-        for cp in [0x00, 0x01, 0x7f, 0xad, 0x200b, 0xfeff, 0x2060, 0x180e,
-                   0x200c, 0x200d]:
-            c = chr(cp)
-            self.compare('Zoom' + c + 'A')
-            self.compare('Zoom ' + c + ' A')
-
-    def test_seeded_random(self):
-        rng = random.Random(14)
-        # A small alphabet covering word, space, control, prefix and marker chars.
-        alphabet = list("abcXYZ_zoom") + list(" \t\n\r\u2028\xa0\u1680\u2000") + \
-                   list("'!_") + list("½Ⅻ²ᢅ一١𝕌©\u0308\x0b\x0c\x85\x01")
-        for _ in range(5000):
-            length = rng.randint(0, 12)
-            macro = ''.join(rng.choice(alphabet) for _ in range(length))
-            self.compare(macro)
+        for macro, expected in cases:
+            self.assertEqual(self.native.parse_macro(macro), expected, macro)
+            self.assertEqual(self.live.parse_macro(macro), expected, macro)
 
     def test_default_table_and_crud_unchanged(self):
         # The 22 default aliases must resolve to identical (prefix, command, options).
         live_aliases = self.live.ALIAS_TABLE
         self.assertEqual(len(live_aliases), 22)
         for name, alias in live_aliases.items():
-            expected = self.reference.parse_macro(alias.macro)
+            expected = self.native.parse_macro(alias.macro)
             self.assertEqual((alias.prefix, alias.command, alias.options), expected,
                              (name, alias.macro))
         # CRUD operations must behave identically (state logic unchanged).
@@ -461,24 +404,20 @@ class AliasGrammarOwned(unittest.TestCase):
     def test_candidate_uses_native_not_regex(self):
         # The live alias_table module is the always-on subject: it must be
         # native-only (no ``re`` import, no ``_MACRO_RE`` module-level name)
-        # and its parse_macro / default table must match the native host and
-        # the independent reference. This runs WITHOUT a candidate and never
-        # reads the tmp candidate path by default.
+        # and its parse_macro / default table must match the native host.
+        # This runs WITHOUT a candidate and never reads the tmp candidate
+        # path by default.
         self._assert_native_only(self.live)
         for c in ["Zoom", "'_Zoom", "_ x", "Zoom\n\n", "Zoom A\n\n", "!!", ""]:
-            self.assertEqual(self.live.parse_macro(c), self.reference.parse_macro(c), c)
             self.assertEqual(self.live.parse_macro(c), self.native.parse_macro(c), c)
-        # The live default table must equal the native + reference derivation.
+        # The live default table must equal the native derivation.
         for name, alias in self.live.ALIAS_TABLE.items():
-            expected = self.reference.parse_macro(alias.macro)
-            self.assertEqual((alias.prefix, alias.command, alias.options), expected, name)
             self.assertEqual((alias.prefix, alias.command, alias.options),
                              self.native.parse_macro(alias.macro), name)
         # When --candidate is given, the candidate must satisfy the SAME checks.
         if self.candidate:
             self._assert_native_only(self.candidate)
             for c in ["Zoom", "'_Zoom", "_ x", "Zoom\n\n", "Zoom A\n\n", "!!", ""]:
-                self.assertEqual(self.candidate.parse_macro(c), self.reference.parse_macro(c), c)
                 self.assertEqual(self.candidate.parse_macro(c), self.native.parse_macro(c), c)
             # The candidate's default table must match the live table.
             self.assertEqual(len(self.candidate.ALIAS_TABLE), len(self.live.ALIAS_TABLE))
@@ -517,7 +456,7 @@ class AliasGrammarOwned(unittest.TestCase):
 
     @classmethod
     def tearDownClass(cls):
-        print('Grammar differential comparisons:', cls.comparisons)
+        pass
 
 
 def _default_library():

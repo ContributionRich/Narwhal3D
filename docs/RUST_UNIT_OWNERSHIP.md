@@ -7,7 +7,7 @@ and error presentation. The duplicate scale-value literal, Python unit matching
 algorithm and executable conversion arithmetic are retired from the application.
 The obsolete optional unit-table reader in native_pure is also retired; there is
 one required checked table adapter. Originals are privately archived with hashes
-under ignored legacy/retired-rust16. Independent spike fixtures never call native.
+under ignored legacy/retired-rust16. Independent data fixtures and Rust tests never derive expected values from native output.
 
 ## Grammar and exact arithmetic
 

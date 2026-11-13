@@ -64,7 +64,7 @@ fn py_mod(x: f64, y: f64) -> f64 {
 
 /// CPython 3.12+'s `sum()` of floats from the int start 0: Neumaier compensated
 /// summation, the compensation added once at the end when nonzero and finite.
-fn py_sum(values: impl Iterator<Item = f64>) -> f64 {
+pub(crate) fn py_sum(values: impl Iterator<Item = f64>) -> f64 {
     let mut values = values;
     let Some(first) = values.next() else {
         return 0.0;
@@ -88,7 +88,7 @@ fn py_sum(values: impl Iterator<Item = f64>) -> f64 {
 }
 
 /// Python `max(range(len(v)), key=lambda i: v[i])`: the index of the FIRST largest.
-fn first_largest(values: impl Iterator<Item = f64>) -> usize {
+pub(crate) fn first_largest(values: impl Iterator<Item = f64>) -> usize {
     let mut best = (0, f64::NEG_INFINITY);
     for (i, v) in values.enumerate() {
         if i == 0 || v > best.1 {

@@ -42,8 +42,8 @@ in this batch. Tests compare 5,364 grammar cases and preserve all22 defaults.
 ## Retirement and qualification
 
 Old engines are privately archived under ignored legacy/retired-rust14 with hashes.
-Independent references under spike are test-only and never loaded by application
-code. Missing/stale libraries or malformed native replies fail explicitly, never
+The alias reference engine has moved to a local archive; Rust replays its captured
+golden data. Other remaining spike references are test-only, never application code. Missing/stale libraries or malformed native replies fail explicitly, never
 silently replaying Python. ABI package probes exercise actual geometry, classified
 errors and prefix/options rather than checking symbol names alone. Matching native
 artifacts must be qualified and staged before activation and isolated GUI runs.

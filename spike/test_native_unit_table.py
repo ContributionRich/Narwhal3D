@@ -1,19 +1,10 @@
 #!/usr/bin/env python3
-"""One source for the unit scales: Rust's UNIT_SYSTEM_MM, read by units.py.
+"""Required Rust unit-table/public-host contract against static BEFORE bits.
 
-Run (the library defaults to the gate's release build):
-  NARWHAL_PURE_CORE=$PWD/native/pure_core/target/x86_64-unknown-linux-gnu/release/libnarwhal_pure_core.so \
-      python3 spike/test_native_unit_table.py
-
-Compares the Rust unit table (read through the required native adapter
-``narwhal3d/native_unit_table.py``) against the independent BEFORE fixture in
-``spike/units_reference.py`` — the frozen original units.py, kept separately so
-this comparison never reads a value the code under test produced.  Fails if a
-name is missing from either table or a shared name has a different value, that
-the count is checked against the 24 fixed NAMES (not the values), and that
-units.py takes its scales from Rust (source ``'rust'``) in order.  The required
-adapter itself must RAISE when the library is missing or stale — it has no
-Python fallback to compare against.
+The 24 independent values were captured from the old Python oracle using
+bundled Python 3.13, before retiring that implementation to ignored local backup.
+Pure 576-pair numeric checks live in Rust unit_golden; this suite retains all
+12 table/metadata/admission checks and explicit live Python boundary tuples.
 """
 import importlib.util
 import os
@@ -32,16 +23,7 @@ sys.modules["narwhal3d"] = pkg
 def load(name, path=None, standalone=False):
     """Load a module by file path.
 
-    ``standalone=False`` (default): load under the ``narwhal3d`` package so
-    relative imports resolve into the package.  Used for ``native_unit_table``
-    and ``units`` (the code under test).
-
-    ``standalone=True``: load as a top-level module (no package).  The
-    module's relative imports (``from . import …``) fail with ImportError,
-    forcing any fallback logic to use its own local data.  Used for
-    ``units_reference`` so its ``_unit_scales`` falls back to its own
-    ``_PYTHON_UNIT_SCALE_MM`` literal, keeping the oracle independent of the
-    real package.
+    Package loading exercises relative adapter imports without importing Blender.
     """
     if path is None:
         path = os.path.join(ROOT, "narwhal3d", f"{name}.py")
@@ -57,15 +39,7 @@ def load(name, path=None, standalone=False):
 
 adapter = load("native_unit_table")
 units = load("units")
-# Independent BEFORE fixture: the frozen original units.py, kept OUTSIDE the
-# package so its ``_PYTHON_UNIT_SCALE_MM`` literal is an independent oracle and
-# is never read from the module under test.
-# Independent BEFORE fixture: the frozen original units.py, loaded STANDALONE
-# (top-level, no package) so its ``from . import native_pure`` fails and
-# ``_unit_scales`` falls back to its own ``_PYTHON_UNIT_SCALE_MM`` literal.
-# This keeps the oracle independent of the real ``narwhal3d`` package.
-reference = load("units_reference", os.path.join(ROOT, "spike", "units_reference.py"),
-                 standalone=True)
+# Static independently captured values; no retired Python engine is imported.
 checks = []
 
 
@@ -75,8 +49,12 @@ def check(ok, label):
 
 
 # The 24 fixed-scale names and values, read from the independent BEFORE fixture.
-BEFORE = dict(reference._PYTHON_UNIT_SCALE_MM)
-BEFORE_ORDER = list(reference._PYTHON_UNIT_SCALE_MM)
+from pathlib import Path
+import struct
+BEFORE = {name: struct.unpack('!d', bytes.fromhex(value))[0]
+          for name, value in (line.split() for line in
+          (Path(ROOT) / 'native/pure_core/tests/fixtures/unit_table.txt').read_text().splitlines())}
+BEFORE_ORDER = list(BEFORE)
 
 print("-- Rust table (via required adapter) vs independent BEFORE fixture --")
 result = adapter.unit_table()
@@ -102,9 +80,11 @@ check(units.UNIT_SCALE_MM == BEFORE and list(units.UNIT_SCALE_MM) == BEFORE_ORDE
       "every name units.py accepted still resolves to the same scale, in the same order")
 check(all(units.unit_scale_mm(name) == mm for name, mm in BEFORE.items()),
       "unit_scale_mm agrees for all 24")
-check(all(units.convert(2.5, a, b) == 2.5 * BEFORE[a] / BEFORE[b]
-          for a in BEFORE for b in BEFORE),
-      f"all {len(BEFORE) ** 2} conversions are bit-identical to the BEFORE table's")
+check(all(units.convert(v, a, b) == expected for v, a, b, expected in [
+    (2.5, 'Millimeters', 'Inches', 0.0984251968503937),
+    (2.5, 'Inches', 'Millimeters', 63.5),
+    (2.5, 'Meters', 'Millimeters', 2500.0)]),
+      'live public conversion boundary tuples (576 numeric pairs in Rust unit_golden)')
 check(len(units.UNIT_MEMBERS) == 27, "UNIT_MEMBERS still has 27 public names")
 
 print("\n-- the required adapter has no Python fallback --")

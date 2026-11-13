@@ -127,6 +127,13 @@ class PolicyTests(unittest.TestCase):
         for name in ('test_rust_history_abi', 'test_rust_history_profile', 'test_ui_core_editor'):
             assert_retired_absent(self, source('spike/' + name + '.py'))
 
+    def test_retired_public_oracles_are_data_and_rust_only(self):
+        for name in ('alias_reference', 'units_reference', 'interpolate_reference',
+                     'test_interpolate_math_owned'):
+            self.assertFalse((ROOT / 'spike' / (name + '.py')).exists(), name)
+        for suite in ('alias_golden', 'unit_golden', 'interpolate_golden'):
+            self.assertIn('native/pure_core/tests/' + suite + '.rs', public.NATIVE_FILES)
+
     def test_width_format_macro_python_engines_are_retired(self):
         forbidden = {
             'printwidths': {'math', 'sorted', 'set'},

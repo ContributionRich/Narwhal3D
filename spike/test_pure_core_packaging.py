@@ -247,6 +247,15 @@ def library(mutant=""):
         if mutant == 'unit-scale-nonfinite' and not math.isfinite(result): result = 0
         answer[0] = result
         return 1 if mutant == 'unit-scale-status' else 0
+    def interpolate(points,n,degree,style,controls,cc,knots,kc,od,on,ok):
+        assert (n,degree,style,cc,kc) == (8,5,1,24,14)
+        c.cast(od,c.POINTER(c.c_uint64))[0] = 5
+        c.cast(on,c.POINTER(c.c_uint64))[0] = 8
+        c.cast(ok,c.POINTER(c.c_uint64))[0] = 14
+        knots[6] = float.fromhex('0x1.47ae147ae147bp-2')
+        knots[7] = float.fromhex('0x1.d70a3d70a3d70p-2')
+        if mutant == 'interpolate-sum': knots[6] = float.fromhex('0x1.47ae147ae147ap-2')
+        return 1 if mutant == 'interpolate-status' else 0
     result = SimpleNamespace(
         narwhal_pure_core_abi_version=Mock(return_value=9 if mutant == "old-abi" else 1),
         narwhal_pure_core_parse_abi=Mock(return_value=1 if mutant == "parser-abi" else 2),
@@ -276,7 +285,8 @@ def library(mutant=""):
         narwhal_pure_core_unit_table=Mock(side_effect=unit_table),
         narwhal_pure_core_unit_ops_parse=Mock(side_effect=unit_parse),
         narwhal_pure_core_unit_ops_angle=Mock(side_effect=unit_angle),
-        narwhal_pure_core_unit_ops_scale=Mock(side_effect=unit_scale))
+        narwhal_pure_core_unit_ops_scale=Mock(side_effect=unit_scale),
+        narwhal_pure_core_interpolate=Mock(side_effect=interpolate))
     if mutant in gate.PURE_CORE_PARSE_EXPORTS:
         delattr(result, mutant)
     return result
@@ -345,7 +355,8 @@ class ParserProbeTests(unittest.TestCase):
                        "unit-table-count", "unit-table-query", "unit-table-name", "unit-table-order", "unit-table-nan", "unit-table-status",
                        "unit-parse-refusal-write", "unit-parse-abi", "unit-parse-mask", "unit-parse-id", "unit-parse-span", "unit-parse-raw", "unit-parse-status",
                        "unit-angle-write", "unit-angle-refusal", "unit-angle-value",
-                       "unit-scale-abi", "unit-scale-order", "unit-scale-nonfinite", "unit-scale-status", "unit-zero-write", "unit-zero-status"):
+                       "unit-scale-abi", "unit-scale-order", "unit-scale-nonfinite", "unit-scale-status", "unit-zero-write", "unit-zero-status",
+                       *(["interpolate-sum", "interpolate-status"] if sys.platform.startswith("linux") else [])):
             with self.subTest(mutant=mutant), self.assertRaises((AttributeError, RuntimeError)):
                 execute_probe(mutant)
         self.assertEqual(execute_probe(), gate.PURE_CORE_PARSE_IDENTITY)
@@ -385,6 +396,8 @@ class ParserProbeTests(unittest.TestCase):
             ('alias-prefix', 'if alias(points,len(text)'),
             ('alias-options', 'if options(points,len(text)'),
         )
+        if sys.platform.startswith("linux"):
+            guards += (('interpolate-sum', 'if status != 0 or (degree.value'),)
         for mutant, prefix in guards:
             with self.subTest(mutant=mutant):
                 line = next(line for line in gate.PURE_CORE_PARSE_PROBE.splitlines() if line.strip().startswith(prefix))

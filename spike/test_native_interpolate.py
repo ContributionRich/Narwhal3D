@@ -1,50 +1,139 @@
-"""Rust global-interpolation parity, routing and complete-call performance."""
-import importlib.util, math, os, sys, time, types
-ROOT=os.path.dirname(os.path.dirname(os.path.abspath(__file__))); LIB=os.path.join(ROOT,"native","pure_core","target","x86_64-unknown-linux-gnu","release","libnarwhal_pure_core.so"); os.environ["NARWHAL_PURE_CORE"]=LIB
-pkg=types.ModuleType("narwhal3d"); pkg.__path__=[os.path.join(ROOT,"narwhal3d")]; sys.modules["narwhal3d"]=pkg
-def load(name):
- spec=importlib.util.spec_from_file_location("narwhal3d."+name,os.path.join(ROOT,"narwhal3d",name+".py")); mod=importlib.util.module_from_spec(spec); sys.modules["narwhal3d."+name]=mod; setattr(pkg,name,mod); spec.loader.exec_module(mod); return mod
-native=load("native_interpolate"); interp=load("interpolate"); checks=[]
-def check(v,label):checks.append((bool(v),label))
-def points(n):return [(float(i),math.sin(i*.37)*3,math.cos(i*.19)) for i in range(n)]
-for style in interp.KNOT_STYLES:
- p=points(24); old_threshold=interp.NATIVE_INTERPOLATE_MIN_POINTS; interp.NATIVE_INTERPOLATE_MIN_POINTS=10**9; want=interp.interpolate_points(p,3,style); interp.NATIVE_INTERPOLATE_MIN_POINTS=old_threshold; got=native.interpolate(p,3,style)
- error=max(abs(a-b) for ra,rb in zip(want[0],got[0]) for a,b in zip(ra,rb)) if got else math.inf
- knot_error=max(abs(a-b) for a,b in zip(want[1],got[1])) if got else math.inf
- if got is not None:
-  print(f"  [parity] {style} degree={got[2]}/{want[2]} knot_error={knot_error:.3g} control_error={error:.3g}")
- check(got is not None and got[2]==want[2] and knot_error<1e-15 and error<1e-9,f"native {style} interpolation matches Python controls and knots")
-native._reset_for_tests(); interp.NATIVE_INTERPOLATE_MIN_POINTS=16; before=native._native_calls; routed=interp.interpolate_points(points(32),3,"Chord")
-check(native._native_calls==before+1 and len(routed[0])==32,"production interpolation routes through Rust above crossover")
-def best(fn,reps):
- out=float("inf")
- for _ in range(5):
-  start=time.perf_counter()
-  for _ in range(reps):fn()
-  out=min(out,time.perf_counter()-start)
- return out
-for n,reps in ((16,100),(32,40),(64,10)):
- p=points(n); interp.NATIVE_INTERPOLATE_MIN_POINTS=0; nt=best(lambda:interp.interpolate_points(p,3,"Chord"),reps); interp.NATIVE_INTERPOLATE_MIN_POINTS=10**9; pt=best(lambda:interp.interpolate_points(p,3,"Chord"),reps); ratio=nt/pt; print(f"  [perf] interpolate n={n} native={nt:.5f}s python={pt:.5f}s ratio={ratio:.3f}"); check(ratio<=.90,f"native interpolation wins by 10% at {n} points")
-interp.NATIVE_INTERPOLATE_MIN_POINTS=16
+"""Python host boundary only; numeric corpus is native/pure_core/tests/interpolate_golden.rs.
 
-def sections(k,width):
- return [[(float(i),math.sin(j*.3)+i*.01,math.cos(i*.2+j*.1)) for i in range(width)] for j in range(k)]
-for style in interp.KNOT_STYLES:
- data=sections(8,7);interp.NATIVE_SKIN_MIN_VALUES=10**9;want=interp.skin_control_net(data,3,style);got=native.skin_control_net(data,3,style);error=max(abs(a-b) for ca,cb in zip(want[0],got[0]) for pa,pb in zip(ca,cb) for a,b in zip(pa,pb));kerror=max(abs(a-b) for a,b in zip(want[1],got[1]));check(got[2]==want[2] and error<1e-9 and kerror<1e-15,f"native {style} surface skin matches Python")
-for k,width,reps in ((8,8,100),(16,16,30),(32,32,5)):
- data=sections(k,width);interp.NATIVE_SKIN_MIN_VALUES=0;nt=best(lambda:interp.skin_control_net(data,3,"Chord"),reps);interp.NATIVE_SKIN_MIN_VALUES=10**9;pt=best(lambda:interp.skin_control_net(data,3,"Chord"),reps);ratio=nt/pt;print(f"  [perf] skin values={k*width} native={nt:.5f}s python={pt:.5f}s ratio={ratio:.3f}");check(ratio<=.90,f"native skinning wins by 10% at {k*width} points")
-interp.NATIVE_SKIN_MIN_VALUES=64;native._reset_for_tests();before=native._native_skin_calls;interp.skin_control_net(sections(8,8),3,"Chord");check(native._native_skin_calls==before+1,"production skinning routes through Rust at crossover")
-# closed (periodic) interpolation, #43: Rust and Python agree, and Rust is routed
-def ring(n):return [(math.cos(2*math.pi*k/n)*(10+3*math.sin(k*1.7)),math.sin(2*math.pi*k/n)*(10+2*math.cos(k*.9)),math.sin(k*.4)) for k in range(n)]
-for style in interp.KNOT_STYLES:
- for n in (3,6,40):
-  data=ring(n);interp.NATIVE_PERIODIC_MIN_POINTS=10**9;want=interp.interpolate_points_periodic(data,style);got=native.interpolate_periodic(data,style)
-  error=max(abs(a-b) for pa,pb in zip(want[0],got[0]) for a,b in zip(pa,pb)) if got else math.inf;kerror=max(abs(a-b) for a,b in zip(want[1],got[1])) if got else math.inf
-  check(got is not None and got[2]==3 and len(got[0])==n+3 and len(got[1])==n+7 and error<1e-9 and kerror<1e-12,f"native closed {style} n={n} matches Python ({error:.1e})")
-check(native.interpolate_periodic(ring(2),"Chord") is None and native.interpolate_periodic(ring(5)+[ring(5)[0]],"Chord") is None,"native closed refuses two points and a repeated first point")
-interp.NATIVE_PERIODIC_MIN_POINTS=3;native._reset_for_tests();interp.interpolate_points_periodic(ring(4),"Chord");check(native._native_periodic_calls==1,"production closed interpolation routes through Rust from 3 points")
-for n,reps in ((4,400),(16,200),(64,50)):
- p=ring(n);interp.NATIVE_PERIODIC_MIN_POINTS=3;nt=best(lambda:interp.interpolate_points_periodic(p,"Chord"),reps);interp.NATIVE_PERIODIC_MIN_POINTS=10**9;pt=best(lambda:interp.interpolate_points_periodic(p,"Chord"),reps);ratio=nt/pt;print(f"  [perf] closed interpolate n={n} native={nt:.5f}s python={pt:.5f}s ratio={ratio:.3f}");check(ratio<=.90,f"native closed interpolation wins by 10% at {n} points")
-interp.NATIVE_PERIODIC_MIN_POINTS=3
-for ok,label in checks:print(f"[{'PASS' if ok else 'FAIL'}] {label}")
-failed=sum(not x for x,_ in checks);print(f"\n{len(checks)-failed}/{len(checks)} passed");raise SystemExit(1 if failed else 0)
+No interpolation algorithm/oracle/fallback lives here. Expected ABI framing comes
+from independently captured lossless fixtures. Original same-host 10%-win
+qualification is retained offline; see fixtures/interpolate_provenance.txt.
+"""
+import hashlib
+import importlib.util
+import os
+from pathlib import Path
+import struct
+import sys
+import types
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def load(name, path):
+    spec = importlib.util.spec_from_file_location(name, path)
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[name] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
+
+pkg = types.ModuleType("narwhal3d")
+pkg.__path__ = [str(ROOT / "narwhal3d")]
+sys.modules["narwhal3d"] = pkg
+native = load("narwhal3d.native_interpolate", ROOT / "narwhal3d/native_interpolate.py")
+pkg.native_interpolate = native
+live = load("narwhal3d.interpolate", ROOT / "narwhal3d/interpolate.py")
+pkg.interpolate = live
+raw = (ROOT / "native/pure_core/tests/fixtures/interpolate_host.txt").read_bytes()
+assert hashlib.sha256(raw).hexdigest() == "fd7e76c5d0bc5052e8ffaaaf19ba7cfb92b4e2323a4af06d1d4774cd0ef6a139"
+records = {line.split("|", 1)[0]: line.split("|") for line in raw.decode().splitlines() if not line.startswith("#")}
+assert len(records) == 39
+styles = ("Uniform", "Chord", "SqrtChrd")
+
+
+def decode(field):
+    return [] if field == "-" else [struct.unpack(">d", bytes.fromhex(v))[0] for v in field.split(",")]
+
+
+def arguments(record):
+    pts = decode(record[8])
+    pts = [tuple(pts[i:i + 3]) for i in range(0, len(pts), 3)]
+    if record[1] == "skin":
+        width = int(record[3])
+        pts = [pts[i:i + width] for i in range(0, len(pts), width)]
+    return (pts, styles[int(record[5])]) if record[1] == "periodic" else (pts, int(record[4]), styles[int(record[5])])
+
+
+def flatten(value):
+    if isinstance(value, (tuple, list)):
+        for item in value:
+            yield from flatten(item)
+    else:
+        yield float(value)
+
+
+def framed(got, record):
+    assert got is not None, record[0]
+    assert got[2] == int(record[7]), record[0]
+    rows, width = int(record[2]), int(record[3])
+    if record[1] == "skin":
+        assert len(got[0]) == width and all(len(col) == rows for col in got[0])
+        assert all(len(point) == 3 for col in got[0] for point in col)
+    else:
+        assert len(got[0]) == rows + (3 if record[1] == "periodic" else 0)
+        assert all(len(point) == 3 for point in got[0])
+    for value, field in ((got[0], record[9]), (got[1], record[10])):
+        assert [struct.pack(">d", x).hex() for x in flatten(value)] == field.split(","), record[0]
+
+
+checks = 0
+# ORIGINAL production calls at 32 open / 8x8 skin / 4 periodic: never replace
+# these with adapter calls. Counter +1 prevents a Python fallback masking drift.
+for label, fn, counter in (
+    ("host-open-32-1", live.interpolate_points, "_native_calls"),
+    ("host-skin-8-8-1", live.skin_control_net, "_native_skin_calls"),
+    ("production-periodic-4", live.interpolate_points_periodic, "_native_periodic_calls"),
+):
+    record = records[label]
+    before = getattr(native, counter)
+    framed(fn(*arguments(record)), record)
+    assert getattr(native, counter) == before + 1, (label, "production did not route through Rust")
+    checks += 1
+assert (live.NATIVE_INTERPOLATE_MIN_POINTS, live.NATIVE_SKIN_MIN_VALUES, live.NATIVE_PERIODIC_MIN_POINTS) == (16, 64, 3)
+checks += 1
+
+for label, fn, counter in (
+    ("host-open-16-1", native.interpolate, "_native_calls"),
+    ("host-skin-8-8-1", native.skin_control_net, "_native_skin_calls"),
+    ("host-periodic-6-1", native.interpolate_periodic, "_native_periodic_calls"),
+):
+    record = records[label]
+    args = arguments(record)
+    before = getattr(native, counter)
+    framed(fn(*args), record)
+    assert getattr(native, counter) == before + 1
+    checks += 1
+    # Host conversion/refusal tests, not numeric interpolation computations.
+    malformed = ([],) + args[1:]
+    assert fn(*malformed) is None
+    assert fn(*(args[:-1] + ("not-a-style",))) is None
+    bad = [[(float("nan"), 0., 0.)] for _ in range(3)] if record[1] == "skin" else [(float("nan"), 0., 0.)] * 3
+    assert fn(*((bad,) + args[1:])) is None
+    short = [[(0.,)] for _ in range(3)] if record[1] == "skin" else [(0.,)] * 3
+    assert fn(*((short,) + args[1:])) is None
+    assert getattr(native, counter) == before + 1, "refusal incremented success counter"
+    checks += 4
+
+for label in ("host-two-points", "host-repeat-first"):
+    assert native.interpolate_periodic(*arguments(records[label])) is None
+    checks += 1
+assert native.skin_control_net([[(0., 0., 0.)], []], 3, "Chord") is None
+checks += 1
+
+# Simulate malformed C framing without executing or reimplementing any math.
+# Restore bindings even on failure; the actual production routing above is unmocked.
+for label, fn, binding, counter in (
+    ("host-open-16-1", native.interpolate, "_binding", "_native_calls"),
+    ("host-skin-8-8-1", native.skin_control_net, "_skin_binding", "_native_skin_calls"),
+    ("host-periodic-6-1", native.interpolate_periodic, "_periodic_binding", "_native_periodic_calls"),
+):
+    original = getattr(native, binding)
+    before = getattr(native, counter)
+    try:
+        for code in (0, -2, -4):
+            # Return success with untouched zero counts, or explicit refusal.
+            setattr(native, binding, lambda *unused, code=code: code)
+            assert fn(*arguments(records[label])) is None, (label, "accepted malformed ABI output")
+            assert getattr(native, counter) == before
+            checks += 1
+    finally:
+        setattr(native, binding, original)
+
+active = os.environ.get("NARWHAL_PURE_CORE") or str(ROOT / "narwhal3d/native/libnarwhal_pure_core.so")
+print(f"{checks} interpolation host-boundary checks passed; active core: {active}")

@@ -19,6 +19,10 @@ Checks:
 from __future__ import annotations
 
 import importlib.util
+import ast
+import json
+from pathlib import Path
+from unittest.mock import patch
 import os
 import shutil
 import subprocess
@@ -37,6 +41,11 @@ results = []
 
 def check(name):
     def deco(fn):
+        if "--focused" in sys.argv and name in {
+            "the real gate is green on the live crate",
+            "a clippy -D warnings mutation on a copied crate fails the gate",
+        }:
+            return fn
         try:
             fn()
             results.append((name, "PASS", ""))
@@ -183,6 +192,8 @@ def _():
         return {"status": "skipped", "reason": "self-test stub"}
 
     gate.step_clippy = skipped
+    # This guard test needs no Cargo work; fmt is covered by the real gate.
+    gate.step_fmt = lambda crate: {"status": "ok"}
     try:
         try:
             gate.run_gate("native/pure_core")
@@ -194,6 +205,96 @@ def _():
                 "run_gate passed with a skipped clippy step (guard is missing)")
     finally:
         gate.step_clippy = real
+
+
+@check("Rust integration execution and public fixture closure are mandatory and mutation-sensitive")
+def _():
+    gate = _load_gate()
+    crate = Path(CRATE)
+    closure = gate.require_rust_public_closure(crate)
+    assert len(closure) == 19
+    public_source = (Path(ROOT) / "scripts/create_public_branch.py").read_text()
+    for retired in ("spike/alias_reference.py", "spike/units_reference.py", "spike/interpolate_reference.py"):
+        assert retired not in public_source, "retired Python oracle is public: " + retired
+    summary = "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out"
+
+    def runner(fault=""):
+        def run(command, cwd):
+            assert "--lib" not in command
+            if "--test" not in command:
+                return 0, summary
+            suite = command[command.index("--test") + 1]
+            assert "--message-format=json" in command
+            artifact = {"reason": "compiler-artifact", "target": {"name": suite, "kind": ["test"]},
+                        "profile": {"test": True}, "executable": "/fixture/" + suite}
+            if fault == "missing-compilation":
+                return 0, summary
+            if fault == "discovery-only":
+                return 0, json.dumps(artifact)
+            if fault == "wrong-target":
+                artifact["target"]["name"] = "unrelated"
+            if fault == "zero-tests":
+                return 0, json.dumps(artifact) + "\n" + summary.replace("2 passed", "0 passed")
+            if fault == "filtered":
+                return 0, json.dumps(artifact) + "\n" + summary.replace("0 filtered", "1 filtered")
+            if fault == "failed":
+                return 1, json.dumps(artifact) + "\n" + summary
+            return 0, json.dumps(artifact) + "\n" + summary
+        return run
+
+    def rejects(function, fault):
+        with patch.object(gate, "_run", side_effect=runner(fault)):
+            try:
+                function(crate)
+            except gate.GateError:
+                return
+        raise AssertionError("integration evidence mutant survived: " + fault)
+
+    with patch.object(gate, "_run", side_effect=runner()) as run:
+        result = gate.step_tests(crate)
+        assert set(result["integration_suites"]) == set(gate.RUST_INTEGRATION_SUITES)
+        assert all(v == {"compiled": True, "passed": 2} for v in result["integration_suites"].values())
+        assert run.call_count == 4
+    for fault in ("missing-compilation", "discovery-only", "wrong-target", "zero-tests", "filtered", "failed"):
+        rejects(gate.step_tests, fault)
+    # Disable the compiled/executed guard in a copied AST: the negative test
+    # above must itself go RED, with no source or bytecode writes.
+    tree = ast.parse(__import__("inspect").getsource(gate.step_tests))
+    guard = next(n for n in ast.walk(tree) if isinstance(n, ast.If)
+                 and "not compiled" in ast.unparse(n.test))
+    guard.test = ast.Constant(False)
+    ns = {}
+    exec(compile(ast.fix_missing_locations(tree), "<integration-evidence-mutant>", "exec"), vars(gate), ns)
+    try:
+        rejects(ns["step_tests"], "missing-compilation")
+    except AssertionError:
+        pass
+    else:
+        raise AssertionError("negative integration test did not go RED with guard disabled")
+
+    source = (Path(ROOT) / "scripts/create_public_branch.py").read_text()
+    # Remove a real fixture path from the manifest, without reading that fixture.
+    fixture = next(path for path in closure if "/fixtures/" in path)
+    broken = source.replace(repr(fixture) + ",", "")
+    assert broken != source
+    real_read = Path.read_text
+    def read(path, *args, **kwargs):
+        return broken if path == Path(ROOT) / "scripts/create_public_branch.py" else real_read(path, *args, **kwargs)
+    def closure_rejects():
+        with patch.object(Path, "read_text", read):
+            try:
+                gate.require_rust_public_closure(crate)
+            except gate.GateError:
+                return
+        raise AssertionError("missing public fixture survived")
+    closure_rejects()
+    with patch.object(gate, "require_rust_public_closure", return_value=closure):
+        try:
+            closure_rejects()
+        except AssertionError:
+            pass
+        else:
+            raise AssertionError("closure negative test did not go RED with guard disabled")
 
 
 failed = 0

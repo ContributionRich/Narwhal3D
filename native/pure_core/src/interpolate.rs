@@ -1,5 +1,20 @@
 //! Dense global point interpolation matching Narwhal's Python reference.
 
+use crate::fit::{first_largest, py_sum};
+
+extern "C" {
+    fn pow(x: f64, y: f64) -> f64;
+}
+
+// Match CPython float_pow, not a compiler-folded multiplication. As in display.rs,
+// bit parity depends on Python and this library using the same platform libm.
+fn py_square(x: f64) -> f64 {
+    if x.is_nan() || x.is_infinite() || x == 0.0 || x.abs() == 1.0 {
+        return x * x;
+    }
+    unsafe { pow(x.abs(), std::hint::black_box(2.0)) }
+}
+
 const ERR_NULL: i32 = -1;
 const ERR_INPUT: i32 = -2;
 const ERR_SIZE: i32 = -3;
@@ -17,18 +32,13 @@ fn parameters(points: &[[f64; 3]], style: u8) -> Result<Vec<f64>, i32> {
     }
     let mut deltas = Vec::with_capacity(n - 1);
     for pair in points.windows(2) {
-        let d = pair[0]
-            .iter()
-            .zip(pair[1])
-            .map(|(a, b)| (b - a) * (b - a))
-            .sum::<f64>()
-            .sqrt();
+        let d = py_sum(pair[0].iter().zip(pair[1]).map(|(a, b)| py_square(b - a))).sqrt();
         if d <= 0.0 || !d.is_finite() {
             return Err(ERR_INPUT);
         }
         deltas.push(if style == 2 { d.sqrt() } else { d });
     }
-    let total: f64 = deltas.iter().sum();
+    let total: f64 = py_sum(deltas.iter().copied());
     let mut out = vec![0.0];
     let mut acc = 0.0;
     for d in deltas {
@@ -43,7 +53,7 @@ fn knots(params: &[f64], p: usize) -> Vec<f64> {
     let n = params.len();
     let mut out = vec![0.0; p + 1];
     for j in 1..n - p {
-        out.push(params[j..j + p].iter().sum::<f64>() / p as f64);
+        out.push(py_sum(params[j..j + p].iter().copied()) / p as f64);
     }
     out.extend(std::iter::repeat_n(1.0, p + 1));
     out
@@ -111,9 +121,7 @@ fn solve(points: &[[f64; 3]], degree: usize, style: u8) -> Result<Interpolation,
     }
     let mut perm: Vec<usize> = (0..n).collect();
     for col in 0..n {
-        let pivot = (col..n)
-            .max_by(|&i, &j| a[i * n + col].abs().total_cmp(&a[j * n + col].abs()))
-            .unwrap();
+        let pivot = col + first_largest((col..n).map(|i| a[i * n + col].abs()));
         if a[pivot * n + col].abs() < 1e-14 {
             return Err(ERR_SINGULAR);
         }
@@ -138,6 +146,9 @@ fn solve(points: &[[f64; 3]], degree: usize, style: u8) -> Result<Interpolation,
     for i in 1..n {
         for q in 0..i {
             let f = a[i * n + q];
+            if f == 0.0 {
+                continue;
+            }
             for d in 0..3 {
                 y[i][d] -= f * y[q][d];
             }
@@ -146,6 +157,9 @@ fn solve(points: &[[f64; 3]], degree: usize, style: u8) -> Result<Interpolation,
     for i in (0..n).rev() {
         for q in i + 1..n {
             let f = a[i * n + q];
+            if f == 0.0 {
+                continue;
+            }
             for d in 0..3 {
                 y[i][d] -= f * y[q][d];
             }
@@ -167,12 +181,7 @@ fn closed_parameters(points: &[[f64; 3]], style: u8) -> Result<Vec<f64>, i32> {
     let mut deltas = Vec::with_capacity(n);
     for k in 0..n {
         let (a, b) = (points[k], points[(k + 1) % n]);
-        let d = a
-            .iter()
-            .zip(b)
-            .map(|(a, b)| (b - a) * (b - a))
-            .sum::<f64>()
-            .sqrt();
+        let d = py_sum(a.iter().zip(b).map(|(a, b)| py_square(b - a))).sqrt();
         if d <= 0.0 || !d.is_finite() {
             return Err(ERR_INPUT);
         }
@@ -182,7 +191,7 @@ fn closed_parameters(points: &[[f64; 3]], style: u8) -> Result<Vec<f64>, i32> {
             _ => d,
         });
     }
-    let total: f64 = deltas.iter().sum();
+    let total: f64 = py_sum(deltas.iter().copied());
     let mut out = vec![0.0];
     let mut acc = 0.0;
     for d in deltas {
@@ -325,9 +334,7 @@ fn skin(
     }
     let mut perm: Vec<usize> = (0..k).collect();
     for col in 0..k {
-        let pivot = (col..k)
-            .max_by(|&i, &j| a[i * k + col].abs().total_cmp(&a[j * k + col].abs()))
-            .unwrap();
+        let pivot = col + first_largest((col..k).map(|i| a[i * k + col].abs()));
         if a[pivot * k + col].abs() < 1e-14 {
             return Err(ERR_SINGULAR);
         }
@@ -354,6 +361,9 @@ fn skin(
         for i in 1..k {
             for p in 0..i {
                 let f = a[i * k + p];
+                if f == 0.0 {
+                    continue;
+                }
                 for d in 0..3 {
                     y[i][d] -= f * y[p][d];
                 }
@@ -362,6 +372,9 @@ fn skin(
         for i in (0..k).rev() {
             for p in i + 1..k {
                 let f = a[i * k + p];
+                if f == 0.0 {
+                    continue;
+                }
                 for d in 0..3 {
                     y[i][d] -= f * y[p][d];
                 }
@@ -579,6 +592,70 @@ pub unsafe extern "C" fn narwhal_pure_core_interpolate_periodic(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn python_knots_use_compensated_sum() {
+        let k = knots(&[0., 0.1, 0.2, 0.3, 0.4, 0.6, 0.8, 1.], 5);
+        assert_eq!(k[6].to_bits(), 0x3fd47ae147ae147b);
+        assert_eq!(k[7].to_bits(), 0x3fdd70a3d70a3d70);
+    }
+
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    #[test]
+    fn python_power_and_chord_bits() {
+        let x = 157.14081462969125;
+        assert_ne!(py_square(x).to_bits(), (x * x).to_bits());
+        assert_eq!(py_square(x).to_bits(), 24693.235622482985_f64.to_bits());
+        let p = [[0., 0., 0.], [x, 1., 0.], [158., 5., 1.], [170., 6., 2.]];
+        let actual: Vec<_> = parameters(&p, 1)
+            .unwrap()
+            .iter()
+            .map(|v| v.to_bits())
+            .collect();
+        assert_eq!(
+            actual,
+            [
+                0,
+                0x3fecfe5ab905881e,
+                0x3fedc5489cca02ae,
+                0x3ff0000000000000
+            ]
+        );
+    }
+
+    #[test]
+    fn python_pivot_keeps_first_equal_maximum() {
+        assert_eq!(
+            first_largest([0.25, 0.5, -0.5, 0.5].into_iter().map(f64::abs)),
+            1
+        );
+        assert_eq!(first_largest([-0.0, 0.0].into_iter().map(f64::abs)), 0);
+    }
+
+    #[test]
+    fn python_lu_skips_zero_factors_preserving_sign() {
+        let p: Vec<_> = (0..8).map(|i| [i as f64, -0.0, 0.0]).collect();
+        let (c, _, _) = solve(&p, 3, 0).unwrap();
+        let signs: Vec<_> = c.iter().map(|v| v[1].to_bits()).collect();
+        assert_eq!(
+            signs,
+            [
+                1_u64 << 63,
+                0,
+                1_u64 << 63,
+                0,
+                1_u64 << 63,
+                0,
+                0,
+                1_u64 << 63
+            ]
+        );
+        let (net, _, _) = skin(&p, 8, 1, 3, 0).unwrap();
+        assert_eq!(
+            net.iter().map(|v| v[1].to_bits()).collect::<Vec<_>>(),
+            signs
+        );
+    }
+
     #[test]
     fn cubic_hits_fixture() {
         let p = [[0., 0., 0.], [1., 2., 0.], [4., 1., 0.], [7., 3., 0.]];

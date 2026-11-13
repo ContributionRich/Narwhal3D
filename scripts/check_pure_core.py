@@ -29,6 +29,7 @@ never the live tree — and proves a skipped clippy step would fail the self-tes
 from __future__ import annotations
 
 import argparse
+import ast
 import array
 import ctypes
 import json
@@ -117,6 +118,31 @@ PURE_CORE_PYTESTS = (
     "spike/test_native_arclength.py",
     "spike/test_native_interpolate.py",
     "spike/test_native_tween.py",
+)
+
+
+# Explicit Rust oracle-retirement suites and their source/fixture closure.
+RUST_INTEGRATION_SUITES = ("alias_golden", "unit_golden", "interpolate_golden")
+RUST_INTEGRATION_FILES = (
+    'native/pure_core/tests/alias_golden.rs',
+    'native/pure_core/tests/fixtures/alias_golden.txt',
+    'native/pure_core/tests/fixtures/interpolate_host.txt',
+    'native/pure_core/tests/fixtures/interpolate_math.txt',
+    'native/pure_core/tests/fixtures/interpolate_performance_baseline.txt',
+    'native/pure_core/tests/fixtures/interpolate_performance_inputs.txt',
+    'native/pure_core/tests/fixtures/interpolate_provenance.txt',
+    'native/pure_core/tests/fixtures/unit_angle.txt',
+    'native/pure_core/tests/fixtures/unit_angle_grid.txt',
+    'native/pure_core/tests/fixtures/unit_host.txt',
+    'native/pure_core/tests/fixtures/unit_live_inputs.txt',
+    'native/pure_core/tests/fixtures/unit_manifest.txt',
+    'native/pure_core/tests/fixtures/unit_parse.txt',
+    'native/pure_core/tests/fixtures/unit_scale.txt',
+    'native/pure_core/tests/fixtures/unit_table.txt',
+    'native/pure_core/tests/fixtures/unit_unicode.txt',
+    'native/pure_core/tests/fixtures/unit_whitespace.txt',
+    'native/pure_core/tests/interpolate_golden.rs',
+    'native/pure_core/tests/unit_golden.rs',
 )
 
 
@@ -379,6 +405,18 @@ for zero in (0.,-0.):
         raise RuntimeError("owned unit zero division refusal differs")
 if scale(1.,2.,3.,None) != 5:
     raise RuntimeError("owned unit scalar ABI refusal differs")
+# Linux qualification only: interpolation's libm power route has not been
+# qualified on Windows. Do not turn this into a portable bit-identity claim.
+if sys.platform.startswith("linux"):
+    interpolate = lib.narwhal_pure_core_interpolate
+    interpolate.argtypes = [D,c.c_size_t,c.c_int64,c.c_ubyte,D,c.c_size_t,D,c.c_size_t,c.POINTER(c.c_uint64),c.POINTER(c.c_uint64),c.POINTER(c.c_uint64)]
+    interpolate.restype = c.c_int32
+    samples = (c.c_double*24)(*[v for x in (0.,.1,.2,.3,.4,.6,.8,1.) for v in (x,0.,0.)])
+    controls, iknots = (c.c_double*24)(), (c.c_double*14)()
+    degree, nc, nk = c.c_uint64(), c.c_uint64(), c.c_uint64()
+    status = interpolate(samples,8,5,1,controls,24,iknots,14,c.byref(degree),c.byref(nc),c.byref(nk))
+    if status != 0 or (degree.value,nc.value,nk.value) != (5,8,14) or iknots[6].hex() != "0x1.47ae147ae147bp-2" or iknots[7].hex() != "0x1.d70a3d70a3d70p-2":
+        raise RuntimeError("qualified interpolation compensated-sum witness differs")
 macro_size = lib.narwhal_pure_core_macro_size
 macro_size.argtypes = [c.c_char_p, c.c_size_t, c.c_ubyte]
 macro_size.restype = c.c_int64
@@ -723,14 +761,54 @@ def step_clippy(crate: Path) -> dict[str, object]:
     return {"status": "ok", "ran": True, "command": "cargo clippy -D warnings"}
 
 
+def require_rust_public_closure(crate: Path) -> list[str]:
+    """Check path metadata only; never load the large golden fixture contents."""
+    expected = set(RUST_INTEGRATION_FILES)
+    actual = {"native/pure_core/" + p.relative_to(crate).as_posix()
+              for p in (crate / "tests").rglob("*") if p.is_file()}
+    tree = ast.parse((ROOT / "scripts/create_public_branch.py").read_text())
+    public = next(ast.literal_eval(node.value) for node in tree.body
+                  if isinstance(node, ast.Assign)
+                  and any(isinstance(t, ast.Name) and t.id == "NATIVE_FILES" for t in node.targets))
+    if actual != expected or not expected.issubset(public):
+        raise GateError("Rust integration source/fixture public closure differs: "
+                        + repr(sorted((actual ^ expected) | (expected - set(public)))))
+    return sorted(expected)
+
+
 def step_tests(crate: Path) -> dict[str, object]:
+    closure = require_rust_public_closure(crate)
     rc, out = _run(_cargo("test", "--offline", "--locked", crate=crate), ROOT)
     if rc != 0:
         raise GateError(f"cargo test failed:\n{out.strip()}")
     match = re.search(r"test result: ok\.\s+(\d+) passed", out)
-    if match is None:
+    if match is None or int(match.group(1)) == 0:
         raise GateError("cargo test ran but reported no passing tests")
-    return {"status": "ok", "passed": int(match.group(1)), "command": "cargo test"}
+    evidence = {}
+    # Explicit targets prevent --lib/discovery-only runs from claiming ownership
+    # coverage. Cargo's artifact record proves the selected integration executable;
+    # the unfiltered harness summary proves its tests actually ran successfully.
+    for suite in RUST_INTEGRATION_SUITES:
+        rc, output = _run(_cargo("test", "--offline", "--locked", "--test", suite,
+                                 "--message-format=json", crate=crate), ROOT)
+        artifacts = []
+        for line in output.splitlines():
+            if line.startswith("{"):
+                try:
+                    artifacts.append(json.loads(line))
+                except ValueError:
+                    pass
+        compiled = any(a.get("reason") == "compiler-artifact"
+                       and a.get("target", {}).get("name") == suite
+                       and a.get("target", {}).get("kind") == ["test"]
+                       and a.get("profile", {}).get("test") is True
+                       and a.get("executable") for a in artifacts)
+        summary = re.search(r"test result: ok\.\s+(\d+) passed; 0 failed; 0 ignored; 0 measured; 0 filtered out", output)
+        if rc != 0 or not compiled or summary is None or int(summary.group(1)) == 0:
+            raise GateError(f"required Rust integration suite {suite} lacks compiled/executed evidence:\n{output.strip()}")
+        evidence[suite] = {"compiled": True, "passed": int(summary.group(1))}
+    return {"status": "ok", "passed": int(match.group(1)), "command": "cargo test",
+            "integration_suites": evidence, "public_fixture_closure": closure}
 
 
 def step_release_build(crate: Path) -> dict[str, object]:

@@ -1,0 +1,117 @@
+Interpolation retirement receipt — captured 2026-11-13
+=====================================================
+MEASURED: expected answers were evaluated ONLY by the existing independent
+spike/interpolate_reference.py, under bundled CPython 3.13 (Linux x86_64/libm).
+Native output was never used as an expected answer, including refusal records.
+The archived generator executes the original seeded input-generation loop
+verbatim (random.Random(0x1713)); fixtures freeze those generated inputs too.
+No regeneration or archived Python dependency exists in public runtime tests.
+Bit parity is qualified for this Python/libm arithmetic contract, not a claim
+that every platform's pow implementation produces identical last bits.
+
+Archived independent source SHA256:
+ed019e1d8a929cefdbff0d70a6fb0807cc907e698b6370eff74e46abf2ef38eb
+Archived standalone numeric test SHA256:
+644acce7a6b425b274b190e66dc3783cd6cf25500b91a081b08fa1414673d7bc
+Archived original host/oracle/performance test SHA256:
+79d3c166afd8152663e3d9ecb44b1569e80bb37f8d90b58e264ade5071063429
+All three exact original files are ignored local backups in legacy/retired-rust17.
+They are deliberately NOT distributed executable public oracles.
+
+Lossless, dependency-free text format v1
+--------------------------------------
+One record per line, pipe-separated eleven fields (header in each data file).
+Label, route, input rows, width (1 unless skin), requested degree, numeric style,
+allowed status, actual output degree, input floats, output controls, full knots.
+Style 0/1/2 = Uniform/Chord/SqrtChrd. Float lists use comma-separated 16-digit
+IEEE754 binary64 bit-pattern hex (big-endian notation); '-' is an empty list.
+No decimal rounding or signed-zero normalization. Input skin data is section
+major; output skin data is column major, exactly as the exported ABI specifies.
+Refused independent Python cases preserve the ORIGINAL allowed status set
+{-2,-4}: the Python exception does not independently assign a C status code.
+The fixtures therefore do not pretend to independently distinguish those two.
+Invalid-style ABI tests separately require exactly -2.
+
+Integrity and coverage
+----------------------
+interpolate_math.txt: 7,999,321 bytes, SHA256
+10b72d838dae78fc7157c0d55e53276b7cff37519f0de0dd98b23cda3b81e73a
+FNV1a64 72d3a1f43fef5688
+2025 oracle cases: 759 successful open, 249 periodic, 1005 skin, 12 refusals.
+All 80 generated random datasets, every original degree/style and all five
+adversarial datasets transfer unchanged (two-point clamp, signed zero,
+repeated points, symmetric pivots, pow rounding; degenerate skin column).
+Hard signed-zero counts: 978 negative input zeros, 606 negative output zeros,
+8499 positive output zeros (controls and knots). Counts are asserted in Rust.
+Eight additional original direct-ABI refusals transfer to Rust: three invalid
+styles, oversized open/periodic/skin, zero open output capacity, null out-degree.
+Total original direct qualification retained: 2013 successes + 20 refusals.
+Count-clearing checks are strengthened to initialize all affected counts to 99.
+
+interpolate_host.txt: 511,172 bytes, SHA256
+fd7e76c5d0bc5052e8ffaaaf19ba7cfb92b4e2323a4af06d1d4774cd0ef6a139
+FNV1a64 05e92248199ef716
+39 cases: all 36 original numeric size/style adapter cases move into Rust ABI
+replay, plus production periodic n=4 and the two original host refusals.
+Python retains real production calls at open n=32, skin 8x8, periodic n=4,
+requiring exact fixture output AND native counter +1. Actual adapter calls at
+open 16/skin 8x8/periodic 6, original thresholds 16/64/3, malformed inputs,
+nonfinite/short coordinates, ragged sections, ABI error/malformed count framing
+and refusal counter semantics remain host-only. No production threshold edits.
+Successful ABI output counts, degree, bit patterns and untouched canary tails
+are checked in Rust; Python verifies container reconstruction and host routing.
+
+Performance qualification — preserved, not replaced with a weaker claim
+----------------------------------------------------------------------
+interpolate_performance_inputs.txt: 163,177 bytes, SHA256
+c66898fd51242aa559e82ba215e336fbe9ce395d800dbc56bbd9392ceda01c6c
+FNV1a64 7cb39f7561befac0
+Nine ORIGINAL independent input datasets, expected controls, knots and degrees.
+interpolate_performance_baseline.txt: 994 bytes, SHA256
+815bf81f7e8e8476eb1794f4cf6312e333f49513af2504a8d904cd70beef090a
+FNV1a64 e8c43e57e3c0bd40
+Batch timings are lossless float.hex seconds; repetition counts are unchanged.
+Method unchanged: best of five batches for native and independent Python,
+then native_seconds / python_seconds <= 0.90 for EACH of the nine workloads.
+Open n=16/32/64 (100/40/10 repetitions); skin 8x8/16x16/32x32 (100/30/5);
+periodic n=4/16/64 (400/200/50). All captured ratios passed, 0.0814–0.4733.
+The preserved original runner also passed 54/54 after capture (all nine ratios
+0.084–0.494). Only its root/reference file paths change in the offline copy.
+
+A historical timing cannot robustly assert a 10% relative speedup on arbitrary
+hardware, interpreters or load. Therefore the relative criterion is NOT
+silently replaced by an absolute deadline or Rust-vs-Rust duplicate algorithm.
+The unchanged same-host relative qualification remains a PRIVATE OFFLINE
+release/source-qualification step, explicitly deferred from public CI, requiring
+the ignored archived reference. Run from repository root:
+NARWHAL_PURE_CORE=<absolute qualified release library> PYTHONDONTWRITEBYTECODE=1
+ tools/blender-5.2.2-linux-x64/5.2/python/bin/python3.13
+ legacy/retired-rust17/qualify_interpolate_offline.py
+The exact original source files and capture generator also remain privately
+available for audit. Do not claim the public CI alone re-establishes 10% wins.
+Main owns integration of this offline qualification into release acceptance.
+
+Public stable protections are independent: exact fixed workload/size hashes,
+actual production routing counters, ABI size/capacity bounds and count clearing,
+plus replay of all nine qualified workloads ten times with a broad 30-second
+runaway-work bound (including debug builds). That bound detects gross stalls;
+it is explicitly NOT the original 10% performance qualification. Public CI has
+no replaced Python numerical engine or executable arithmetic oracle.
+
+Mutation qualification
+----------------------
+In an ignored private source copy (production source never edited), the actual
+Rust integration tests were RED for each: naive Iterator::sum replacing py_sum;
+x*x replacing Python-compatible pow; output signed-zero canonicalization;
+uncleared output count on refusal. Exact source restoration made all 3 tests
+GREEN. Private logs: legacy/retired-rust17/mutation_results.txt.
+Python boundary test was RED against the retired-rust16 core at the original
+production open n=32 call, and GREEN against rebuilt release core (31 checks).
+Debug and release Rust integration tests both passed (3/3 each).
+
+Scope
+-----
+No production algorithm, shared manifest, shared gate, geometry or routing
+threshold edits. Main owns source qualification/staging, full gate and commit.
+The 8MB corpus is transparent fixed DATA, not encoded Python or generated Rust
+algorithm code, and is not a language-statistics exclusion or fallback engine.

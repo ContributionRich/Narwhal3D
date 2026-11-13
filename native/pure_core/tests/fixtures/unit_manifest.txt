@@ -1,0 +1,69 @@
+{
+  "unit_parse.txt": {
+    "sha256": "942646e560c91c2cbcf0a24f4815e9cc82f39ece24bd0fcee109086d823598a2",
+    "bytes": 3098071,
+    "lines": 4437
+  },
+  "unit_unicode.txt": {
+    "sha256": "c390e89fc349c0dfe171a8ac1f24560f9db9afa5c1cabe6293ca7d5a08d8fe18",
+    "bytes": 159,
+    "lines": 5
+  },
+  "unit_whitespace.txt": {
+    "sha256": "20ffa31ceb327e35cdd435fc027b8f5d044257e22982eb43aedfdb2f4911531b",
+    "bytes": 23362,
+    "lines": 58
+  },
+  "unit_scale.txt": {
+    "sha256": "bc01101420411d8975b8eb4bd7a06941ec23428e89f4261014b0c225211a9670",
+    "bytes": 1195014,
+    "lines": 15791
+  },
+  "unit_angle.txt": {
+    "sha256": "6d7d10820344f6960518aa14253ad9c03cfce204f0b7ee063a28ebbd828a2fde",
+    "bytes": 279,
+    "lines": 10
+  },
+  "unit_table.txt": {
+    "sha256": "1be9a1ca41be9b7fb7af07aa2b320423764f55caac7dd195403a4bf2699462d8",
+    "bytes": 654,
+    "lines": 24
+  },
+  "unit_angle_grid.txt": {
+    "sha256": "fe6d9aba62b1a96605e922ff4cc26ba448e14e041b99fa9381bc54c76b98f3dd",
+    "bytes": 27450,
+    "lines": 500
+  },
+  "unit_live_inputs.txt": {
+    "sha256": "5a6dbccad81eb7396cf129c91ae853467f526b8d09adf9782cfc190c2e30446d",
+    "bytes": 29685,
+    "lines": 1
+  },
+  "unit_host.txt": {
+    "sha256": "d7caee45eeb326b4b2fb5ee50cc2247cc1e4ca1330ee712067cfce8037678715",
+    "bytes": 1986530,
+    "lines": 1
+  },
+  "counts": {
+    "seeded": 6108,
+    "overflow": 1,
+    "zero": 2,
+    "fixed": 5184,
+    "factor": 576,
+    "custom": 3652,
+    "live_custom": 71,
+    "angles": 125,
+    "live_angles": 72
+  },
+  "parse_cases": 4437,
+  "unicode_non_ascii": 1113984,
+  "oracle": {
+    "sha256": "2450e7563f84dd76d1e1f5b449a0411a7d9d680a594ea660b6c67b1ae84e85b9",
+    "unicode": "15.1.0",
+    "seeds": [
+      160016,
+      16,
+      160017
+    ]
+  }
+}
