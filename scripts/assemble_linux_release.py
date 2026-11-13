@@ -107,6 +107,7 @@ REQUIRED_LICENSE_FILES = (
     "VectorCraft-Apache-2.0.txt",
     "VectorCraft-NOTICE.txt",
     "Library-Rust-Dependencies.txt",
+    "CPython-PSF-License.txt",
 )
 DISTRIBUTIONS = {
     "rhino3dm": "8.35.0",
@@ -1042,6 +1043,7 @@ def self_check() -> None:
         "VectorCraft-Apache-2.0.txt",
         "VectorCraft-NOTICE.txt",
     "Library-Rust-Dependencies.txt",
+    "CPython-PSF-License.txt",
     }
     if set(REQUIRED_LICENSE_FILES) != expected_licenses:
         raise ReleaseError("self-check found an incomplete required license set")

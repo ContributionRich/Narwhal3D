@@ -1018,17 +1018,6 @@ _jc_signature: str | None = None
 _jc_binding: Any = None  # narwhal_pure_core_joinchain or None
 _native_joinchain_calls = 0
 
-# Q117-06 crossover: the segment count at which the native route (packing + FFI
-# + conversion, measured end-to-end) is >=10% faster than the Python solver.
-# Set from the 20k-segment measurement (below): the Python route is Theta(N^2)
-# and the native route is ~O(N log N), so the win is LARGEST exactly where the
-# Python route is worst (the disjoint / ambiguous / reversed cases that take
-# 6.6-122 s in Python). Set to a value where the native route clearly wins and
-# small inputs (where FFI overhead dominates) stay on Python. See the
-# measurement note on ``_joinchain_native_active``.
-_JOINCHAIN_NATIVE_MIN_SEGMENTS = 512
-
-
 def _coords_binding():
     """Return the ``narwhal_pure_core_coords`` ctypes handle, or ``None``.
 
@@ -1694,18 +1683,10 @@ def _valid_joinchain_packed(n, n_chains, n_members, chain_off, chain_len,
 
 
 def _native_joinchain(starts, ends, tol):
-    """Native indexed Join-chain solve (Q117-06), or ``None``.
+    """Return checked native chain buffers or None for explicit host refusal.
 
-    ``None`` means "use the unchanged Python solver" -- the library is
-    unavailable, it predates the joinchain export, the input was rejected
-    (non-finite coordinates, a negative or non-finite tolerance, or a
-    coordinate too large for the index), or the packed output failed the
-    strict validator. On success returns ``(n, chain_off, chain_len,
-    chain_closed, chain_ends, member_seg, member_rev, n_chains, n_members)``
-    where ``chain_ends`` is a flat ``[sx,sy,sz,ex,ey,ez]`` per chain -- which
-    ``joinchain._chains_from_packed`` converts into the exact ``Chain``
-    contract (members as ``(index, reverse)`` pairs, the caller mapping index
-    to its own key), so a successful native route is the Python result.
+    The required host never replays a Python solver; all nonempty supported
+    inputs cross this ABI. Empty collections verify binding in the host.
     """
     global _native_joinchain_calls
     fn = _joinchain_binding()
@@ -1715,7 +1696,7 @@ def _native_joinchain(starts, ends, tol):
     if len(starts) != len(ends) or not (len(starts) % 3 == 0) or n == 0:
         return None
     if n > 1_000_000:
-        return None  # above the native ceiling -> unchanged Python solver
+        return None  # host reports the explicit one-million-segment bound
     cap = n
     starts_arr = array.array("d", [0.0]) * (3 * n)
     ends_arr = array.array("d", [0.0]) * (3 * n)
@@ -1776,35 +1757,6 @@ def _native_joinchain(starts, ends, tol):
     _native_joinchain_calls += 1
     return (n, chain_off, chain_len, chain_closed, chain_ends,
             member_seg, member_rev, n_chains, n_members)
-
-
-def _joinchain_native_active(n_segments, force=False):
-    """Whether the native Join-chain route should handle ``n_segments`` (Q117-06).
-
-    True only when the joinchain export is available AND the segment count is
-    at or above the measured crossover (where the complete native call --
-    packing + FFI + conversion -- is >=10% faster than the Python solver). Below
-    the crossover the unchanged Python solver stays active, so small workloads
-    (where the FFI overhead dominates) never regress. ``force`` (tests only)
-    runs the native route regardless of the threshold, to exercise it on small
-    inputs.
-
-    The crossover is segment-count based (not byte-based) because the Python
-    route's cost is Theta(N^2) in the *number of segments* and the win is
-    largest exactly where N is largest (the disjoint / ambiguous / reversed
-    cases). A size-based gate could not separate "large N, small coordinates"
-    (where native wins) from "small N, large coordinates" (where the FFI
-    overhead dominates).
-    """
-    if force:
-        return _joinchain_binding() is not None
-    if _joinchain_binding() is None:
-        return False
-    if not isinstance(n_segments, int) or isinstance(n_segments, bool):
-        return False
-    if n_segments <= 0:
-        return False
-    return n_segments >= _JOINCHAIN_NATIVE_MIN_SEGMENTS
 
 
 # Packed macro tokenizer output (Q117-04): the state globals are ``_macropp_*``

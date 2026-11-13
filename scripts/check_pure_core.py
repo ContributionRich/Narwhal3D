@@ -79,6 +79,8 @@ PURE_CORE_PYTESTS = (
     "spike/test_bearing_owned.py",
     "spike/test_coords.py",
     "spike/test_native_coords.py",
+    "spike/test_coords_owned.py", "spike/test_native_joinchain.py",
+    "spike/test_joinchain_owned.py", "spike/test_python_norm_owned.py",
     "spike/test_native_pickconstraint.py",
     "spike/test_native_blend.py",
     "spike/test_macro.py",
@@ -124,6 +126,8 @@ PURE_CORE_PARSE_EXPORTS = (
     "narwhal_pure_core_calc_abi2", "narwhal_pure_core_calc_v2",
     "narwhal_pure_core_bearing_abi2", "narwhal_pure_core_bearing_v2",
     "narwhal_pure_core_macro_plan_checked",
+    "narwhal_pure_core_coords_owned_abi1", "narwhal_pure_core_coords_owned_v1",
+    "narwhal_pure_core_coords_split_v1", "narwhal_pure_core_norm_v1", "narwhal_pure_core_joinchain",
 )
 PURE_CORE_PARSE_IDENTITY = {
     "abi": 1, "parse_abi": 2, "reply_bytes": 24,
@@ -199,6 +203,52 @@ for text, code, payload in ((b"'_Box", -4, b'"Box"'), (b"=value", -5, b'')):
     output, needed = c.create_string_buffer(1024), c.c_int64(-1)
     if checked_plan(text, len(text), output, len(output), c.byref(needed)) != code or needed.value != len(payload) or output.raw[:needed.value] != payload:
         raise RuntimeError("checked planner typed refusal witness differs")
+class CoordsReply(c.Structure):
+    _fields_ = [("code", c.c_uint32), ("flags", c.c_uint32), ("values", c.c_double * 3),
+                ("start", c.c_uint32), ("end", c.c_uint32), ("calc", CalcReply), ("bearing", BearingReply)]
+identity = lib.narwhal_pure_core_coords_owned_abi1
+identity.argtypes, identity.restype = [], c.c_uint32
+if identity() != 1 or c.sizeof(CoordsReply) != 104:
+    raise RuntimeError("owned coordinate ABI/layout mismatch")
+coords = lib.narwhal_pure_core_coords_owned_v1
+coords.argtypes = [c.POINTER(c.c_uint32), c.c_size_t, c.POINTER(c.c_uint32), c.c_size_t,
+                   c.c_uint32, c.c_uint32, c.c_uint32, c.POINTER(CoordsReply), c.c_size_t]
+coords.restype = c.c_uint32
+for text, code, flags, values, start, end in (("rw1,2", 0, 3, (1.,2.,0.), 0, 0), ("5", 10, 0, (0.,0.,0.), 0, 1)):
+    points = (c.c_uint32 * len(text))(*map(ord, text))
+    reply = CoordsReply()
+    reply.code = 99
+    if coords(points, len(text), None, 0, 1, 0, 151, c.byref(reply), 104) != 0 or (reply.code, reply.flags, tuple(reply.values), reply.start, reply.end) != (code, flags, values, start, end) or bytes(reply.calc) != bytes(CalcReply()) or bytes(reply.bearing) != bytes(BearingReply()):
+        raise RuntimeError("owned coordinate semantic witness differs")
+split = lib.narwhal_pure_core_coords_split_v1
+split.argtypes = [c.POINTER(c.c_uint32), c.c_size_t, c.c_uint32, c.c_uint32,
+                  c.POINTER(c.c_uint32), c.c_size_t, c.POINTER(c.c_uint32)]
+split.restype = c.c_uint32
+word = "pow(2,3),4"
+points = (c.c_uint32 * len(word))(*map(ord, word))
+spans, count = (c.c_uint32 * 4)(), c.c_uint32()
+if split(points, len(word), 44, 1, spans, 4, c.byref(count)) != 0 or count.value != 2 or list(spans) != [0, 8, 9, 10]:
+    raise RuntimeError("owned coordinate split witness differs")
+D, Q, B = c.POINTER(c.c_double), c.POINTER(c.c_int64), c.POINTER(c.c_ubyte)
+norm = lib.narwhal_pure_core_norm_v1
+norm.argtypes, norm.restype = [D, c.c_size_t, c.c_uint32, D], c.c_int32
+delta = (-.4702396670038951, -.5067449846120331, .12273626832630158)
+expected = .702125355913066
+row, answer = (c.c_double * 6)(0.,0.,0.,*delta), c.c_double()
+if norm(row, 1, 6, c.byref(answer)) != 0 or answer.value != expected:
+    raise RuntimeError("compensated norm exact witness differs")
+join = lib.narwhal_pure_core_joinchain
+join.argtypes = [c.c_int64,D,D,c.c_double,Q,Q,B,D,D,D,D,D,D,Q,B,Q,Q]
+join.restype = c.c_int32
+starts = (c.c_double * 6)(-10.,-10.,-10.,*delta)
+ends = (c.c_double * 6)(0.,0.,0.,10.,10.,10.)
+import math
+for threshold, expected_count in ((math.nextafter(expected,-math.inf),2),(expected,1),(math.nextafter(expected,math.inf),1)):
+    off, length, closed, members, reverse = (c.c_int64*2)(), (c.c_int64*2)(), (c.c_ubyte*2)(), (c.c_int64*2)(), (c.c_ubyte*2)()
+    axes = [(c.c_double*2)() for _ in range(6)]
+    chains, total = c.c_int64(), c.c_int64()
+    if join(2, starts, ends, threshold, off, length, closed, *axes, members, reverse, c.byref(chains), c.byref(total)) != 0 or chains.value != expected_count or total.value != 2 or list(members) != [0,1]:
+        raise RuntimeError("Join tolerance boundary witness differs")
 macro_size = lib.narwhal_pure_core_macro_size
 macro_size.argtypes = [c.c_char_p, c.c_size_t, c.c_ubyte]
 macro_size.restype = c.c_int64
@@ -239,7 +289,7 @@ output, needed = c.create_string_buffer(64), c.c_size_t()
 if widths(text, len(text), output, len(output), c.byref(needed)) != 0 or output.raw[:needed.value] != struct.pack("<IddI", 2, 1.0, 2.0, 0):
     raise RuntimeError("print-widths witness differs")
 print(json.dumps({"abi": 1, "parse_abi": 2, "reply_bytes": c.sizeof(Reply),
-                  "parser_exports": ["narwhal_pure_core_parse_abi", "narwhal_pure_core_parse_v2", "narwhal_pure_core_printwidths", "narwhal_pure_core_macro_size", "narwhal_pure_core_macro_encode", "narwhal_pure_core_unitformat_resolve_mode", "narwhal_pure_core_unitformat_format", "narwhal_pure_core_calc_abi2", "narwhal_pure_core_calc_v2", "narwhal_pure_core_bearing_abi2", "narwhal_pure_core_bearing_v2", "narwhal_pure_core_macro_plan_checked"]}, sort_keys=True))
+                  "parser_exports": ["narwhal_pure_core_parse_abi", "narwhal_pure_core_parse_v2", "narwhal_pure_core_printwidths", "narwhal_pure_core_macro_size", "narwhal_pure_core_macro_encode", "narwhal_pure_core_unitformat_resolve_mode", "narwhal_pure_core_unitformat_format", "narwhal_pure_core_calc_abi2", "narwhal_pure_core_calc_v2", "narwhal_pure_core_bearing_abi2", "narwhal_pure_core_bearing_v2", "narwhal_pure_core_macro_plan_checked", "narwhal_pure_core_coords_owned_abi1", "narwhal_pure_core_coords_owned_v1", "narwhal_pure_core_coords_split_v1", "narwhal_pure_core_norm_v1", "narwhal_pure_core_joinchain"]}, sort_keys=True))
 '''
 
 

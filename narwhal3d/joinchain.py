@@ -1,40 +1,38 @@
-"""End-to-end chaining for the reference CAD application's `Join`. **No `bpy`, no rhino3dm** -- pure.
+"""Native-only Join-chain solver. No Python numeric fallback.
 
-Why this module exists
-----------------------
-`Join` connects curves that touch end-to-end, producing polylines or polycurves in
-selection order. Building the result is straightforward with rhino3dm's
-`PolyCurve.Append`; the hard part is deciding **which** curves form a chain, in **what
-order**, and which must be **reversed** first. That decision is pure endpoint arithmetic,
-so it lives here without a Blender or kernel dependency.
+Replaces the retired Python Θ(N²) solver in ``narwhal3d/joinchain.py`` with the
+exact indexed Rust solver (Q117-06, ``native/pure_core/src/joinchain.rs``).
+Every valid non-empty input runs native at all sizes. Empty input returns ``[]``
+after verifying the binding exists (to detect installation problems early).
+Missing, stale, ``None``, or malformed native output raises ``RuntimeError``
+-- there is no Python replay.
 
-Why chaining is resolved before appending
------------------------------------------
-* ``PolyCurve.Append(far_away_curve)`` can return **True** while ``HasGap`` remains
-  **False** and ``IsValid`` remains **True**; it does not validate endpoint proximity.
-* ``PolyCurve.Append(backwards_curve)`` does not reverse the curve to make the joint meet,
-  and its status flags do not provide a reliable gap test.
-* ``Curve.Reverse()`` flips a curve in place once the required direction is known.
+Public API (unchanged from the retired module):
+  * ``TIE_BREAK_IS_SELECTION_ORDER``
+  * ``Chain`` (class)
+  * ``chains(segments, tolerance, _force_native=False)``
+  * ``joinable(segments, tolerance)``
 
-Append order and reversal must therefore be resolved before constructing the polycurve, or
-`Join` can silently produce disconnected geometry.
+MEASURED GAP
+------------
+The old Python solver silently accepted non-finite or negative ``tolerance``
+(``math.dist`` with NaN returns NaN; ``NaN <= tol`` is False, so nothing joins;
+a negative tolerance makes ``dist <= tol`` always False). The Rust solver
+rejects both with ``ERR_INPUT``. This candidate inherits the Rust rejection
+and raises ``RuntimeError``. That is a deliberate behavior change, not a
+regression: an invalid tolerance should be loud, not silently ignored.
 
-Tolerance
----------
-the reference CAD application joins curves whose ends *touch*, judged against the document's **absolute
-tolerance** (``units.default_tolerances()``); the help's note about "within 2x
-tolerance" is about surface edges, not curve ends. Callers pass the tolerance in;
-this module never assumes one.
-
-Ambiguous junctions
--------------------
-At a **T-junction**, three or more curve ends meet and more than one continuation is valid.
-The algorithm takes the **first candidate in the caller's order**, preserving deterministic
-selection-order behavior. See :data:`TIE_BREAK_IS_SELECTION_ORDER`.
+NUMERIC BOUNDARY
+----------------
+The native solver uses the CPython-compensated norm, not sequential hypot.
+Exact and adjacent tolerance decisions are verified on long, non-closed arms;
+no tolerance is widened and no disconnected curve is silently joined.
 """
 from __future__ import annotations
 
-import math
+import importlib.util
+import sys
+from pathlib import Path
 
 #: At an ambiguous junction, choose the earliest continuation in caller-supplied order.
 TIE_BREAK_IS_SELECTION_ORDER = True
@@ -70,50 +68,27 @@ class Chain:
         return f"Chain({parts}) {shape}"
 
 
-def _near(a, b, tol):
-    return math.dist(a, b) <= tol
-
-
-def _ends(seg, reverse):
-    """(start, end) of `seg` as it will be appended."""
-    _, s, e = seg
-    return (e, s) if reverse else (s, e)
+def _resolve_adapter():
+    if __package__:
+        from . import native_pure
+        return native_pure
+    name = "narwhal3d_native_pure"
+    if name not in sys.modules:
+        path = Path(__file__).with_name("native_pure.py")
+        spec = importlib.util.spec_from_file_location(name, path)
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[name] = module
+        try:
+            spec.loader.exec_module(module)
+        except BaseException:
+            sys.modules.pop(name, None)
+            raise
+    return sys.modules[name]
 
 
 def _native_joinchain():
-    """Lazily resolve the native pure-core adapter, or ``None``.
-
-    Identical to the ``svgpath._native_svgpath()`` / ``macro._native_macro()``
-    accessors: returns the ``native_pure`` module when it can be imported
-    (production, where this file is ``narwhal3d.joinchain``) or loaded from this
-    directory (spike tests load this module by file path, so ``narwhal3d`` is
-    not an importable package there). ``None`` means "use the unchanged Python
-    solver" -- the native library is absent, it predates the joinchain export,
-    or the adapter cannot be imported.
-    """
-    try:
-        from . import native_pure as _mod  # production package context
-        return _mod
-    except ImportError:
-        pass
-    try:
-        import importlib.util as _ilu
-        import os as _os
-        import sys as _sys
-        _canon = "narwhal3d_native_pure"
-        if _canon in _sys.modules:
-            return _sys.modules[_canon]
-        _path = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)),
-                              "native_pure.py")
-        if not _os.path.isfile(_path):
-            return None
-        _spec = _ilu.spec_from_file_location(_canon, _path)
-        _mod = _ilu.module_from_spec(_spec)
-        _sys.modules[_canon] = _mod
-        _spec.loader.exec_module(_mod)
-        return _mod
-    except Exception:  # noqa: BLE001 -- any failure degrades to the fallback
-        return None
+    """Compatibility resolver for direct native ABI tests, never a solver."""
+    return _resolve_adapter()
 
 
 def _chains_from_packed(segs, packed):
@@ -146,10 +121,12 @@ def _chains_from_packed(segs, packed):
 
 
 def chains(segments, tolerance, _force_native=False):
-    """Group `segments` into end-to-end :class:`Chain` runs.
+    """Group `segments` into end-to-end :class:`Chain` runs. **Native-only.**
 
     `segments` is an iterable of ``(key, start, end)`` where `start`/`end` are
-    3-tuples. `tolerance` is the largest gap still counted as touching.
+    3-tuples of numbers. `tolerance` is the largest gap still counted as
+    touching. `_force_native` is accepted for API compatibility but has no
+    effect: every valid non-empty input runs native at all sizes.
 
     Every input segment appears in exactly one returned chain, so a curve that
     joins to nothing comes back as a chain of length 1 -- the caller decides
@@ -157,94 +134,84 @@ def chains(segments, tolerance, _force_native=False):
     their first segment appears in `segments`, which keeps `Join`'s "the order
     the objects are selected determines the layer" rule easy to honour.
 
-    At or above the measured crossover (and for ``_force_native=True``, tests
-    only) the indexed native solver (Q117-06) runs instead -- it is >=10% faster
-    end-to-end there and a successful result is the exact Python contract. Below
-    the crossover, for a rejected input, or an unavailable library the unchanged
-    Python solver below runs in full.
+    Raises
+    ------
+    RuntimeError
+        If the native binding is unavailable, the input is rejected by the
+        Rust solver (non-finite coordinates, negative or non-finite tolerance,
+        or a coordinate too large for the index), or the packed output fails
+        the strict validator. There is no Python fallback.
     """
-    segs = [(k, tuple(s), tuple(e)) for k, s, e in segments]
-    tol = float(tolerance)
-    _np = _native_joinchain() if (segs or _force_native) else None
-    if _np is not None and _np._joinchain_native_active(len(segs), force=_force_native):
-        starts = [c for _k, s, e in segs for c in s]
-        ends = [c for _k, s, e in segs for c in e]
-        packed = _np._native_joinchain(starts, ends, tol)
-        if packed is not None:
-            return _chains_from_packed(segs, packed)
-    used = [False] * len(segs)
-    out = []
+    # --- Validate input shape (polite, with clear messages) ---
+    segs = []
+    for i, seg in enumerate(segments):
+        try:
+            key, start, end = seg
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError(
+                f"segment {i}: expected a (key, start, end) 3-tuple, "
+                f"got {seg!r}") from exc
+        try:
+            s = tuple(start)
+            e = tuple(end)
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError(
+                f"segment {i}: start/end must be 3-tuples, "
+                f"got start={start!r} end={end!r}") from exc
+        if len(s) != 3:
+            raise RuntimeError(
+                f"segment {i}: start must be a 3-tuple, got {start!r} "
+                f"({len(s)} elements)")
+        if len(e) != 3:
+            raise RuntimeError(
+                f"segment {i}: end must be a 3-tuple, got {end!r} "
+                f"({len(e)} elements)")
+        for j, c in enumerate(s):
+            if not isinstance(c, (int, float)):
+                raise RuntimeError(
+                    f"segment {i}: start[{j}] must be a number, got {c!r}")
+        for j, c in enumerate(e):
+            if not isinstance(c, (int, float)):
+                raise RuntimeError(
+                    f"segment {i}: end[{j}] must be a number, got {c!r}")
+        segs.append((key, s, e))
 
-    for seed in range(len(segs)):
-        if used[seed]:
-            continue
-        used[seed] = True
-        members = [(segs[seed][0], False)]
-        head, tail = _ends(segs[seed], False)
+    # --- Resolve adapter and verify binding (detect installation problems) ---
+    adapter = _resolve_adapter()
+    binding = adapter._joinchain_binding()
+    if binding is None:
+        raise RuntimeError(
+            "joinchain native binding unavailable: the native library is "
+            "missing, stale (ABI mismatch), or does not export "
+            "narwhal_pure_core_joinchain. No Python fallback is available "
+            "in native-only mode.")
 
-        # A seed that is ALREADY closed (a circle) is a chain on its own. Growing
-        # it would be wrong: any continuation starts at the same point the loop
-        # ends at, so we would splice a curve into a closed ring. `joinable` then
-        # drops it, because joining one curve to nothing is not a join.
-        if not _near(head, tail, tol):
-            # grow off the END, appending, until the run stops or closes
-            while not _near(tail, head, tol):
-                nxt = _find(segs, used, tail, tol)
-                if nxt is None:
-                    break
-                i, reverse = nxt
-                used[i] = True
-                members.append((segs[i][0], reverse))
-                _, tail = _ends(segs[i], reverse)
+    n = len(segs)
+    if n == 0:
+        # Empty input: binding is verified, no computation needed.
+        return []
 
-            # grow off the START, prepending -- a seed picked from the MIDDLE of a
-            # run must still produce the whole run. Skipped once the run has
-            # closed, or we would wrap back round through it.
-            while not _near(tail, head, tol):
-                prv = _find_before(segs, used, head, tol)
-                if prv is None:
-                    break
-                i, reverse = prv
-                used[i] = True
-                members.insert(0, (segs[i][0], reverse))
-                head, _ = _ends(segs[i], reverse)
+    # --- Pack and call native ---
+    try:
+        tol = float(tolerance)
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError(
+            f"tolerance must be a number, got {tolerance!r}") from exc
 
-        out.append(Chain(members, _near(head, tail, tol), head, tail))
-    return out
+    starts = [c for _k, s, e in segs for c in s]
+    ends = [c for _k, s, e in segs for c in e]
 
+    packed = adapter._native_joinchain(starts, ends, tol)
+    if packed is None:
+        raise RuntimeError(
+            "native joinchain solver rejected the input or produced a "
+            "malformed result. The Rust solver rejects: non-finite "
+            "coordinates, negative or non-finite tolerance, and coordinates "
+            "too large for the spatial index. "
+            f"Input: {n} segments, tolerance={tol!r}. "
+            "No Python fallback is available in native-only mode.")
 
-def _find(segs, used, at, tol):
-    """An unused segment with an end at `at`, and whether it needs reversing.
-
-    Prefers the orientation that needs NO reversal, so a run already drawn in
-    order keeps its direction. Returns ``(index, reverse)`` or None.
-    """
-    for i, (_, s, e) in enumerate(segs):
-        if used[i]:
-            continue
-        if _near(s, at, tol):
-            return i, False
-    for i, (_, s, e) in enumerate(segs):
-        if used[i]:
-            continue
-        if _near(e, at, tol):
-            return i, True
-    return None
-
-
-def _find_before(segs, used, at, tol):
-    """An unused segment ENDING at `at` (so it can be prepended)."""
-    for i, (_, s, e) in enumerate(segs):
-        if used[i]:
-            continue
-        if _near(e, at, tol):
-            return i, False
-    for i, (_, s, e) in enumerate(segs):
-        if used[i]:
-            continue
-        if _near(s, at, tol):
-            return i, True
-    return None
+    return _chains_from_packed(segs, packed)
 
 
 def joinable(segments, tolerance):

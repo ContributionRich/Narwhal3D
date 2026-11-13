@@ -82,3 +82,13 @@ Library native helper
 Use: user asset catalogue, validation, ZIP interchange and panel layout.
 The source-locked Rust dependency inventory and full upstream license texts are
 in licenses/Library-Rust-Dependencies.txt. Project helper code is GPL-3.0-or-later.
+
+CPython compensated norm (pure-core)
+----------------------------------
+`native/pure_core/src/python_norm.rs` ports CPython v3.13.7 Modules/mathmodule.c
+vector_norm/dl_mul/dl_fast_sum, copyright Python Software Foundation and
+contributors, under PSF License Version 2. The port uses fixed-size Rust
+storage, IEEE exponent extraction and checked caller-owned ABI spans. Source:
+https://github.com/python/cpython/blob/v3.13.7/Modules/mathmodule.c
+SHA-256 c62e150ecae146447c96964b1e4ae0226516686681af34c544abb1e2fdd62a6f
+Full terms: licenses/CPython-PSF-License.txt (includes upstream notices).

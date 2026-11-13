@@ -85,6 +85,39 @@ def library(mutant=""):
         c.memmove(output, witness, len(witness))
         c.cast(needed, c.POINTER(c.c_int64))[0] = len(witness)
         return 0 if mutant == "planner-error" else code
+    def coords(text, length, model, model_length, model_kind, mode, unicode, out, size):
+        class CReply(c.Structure):
+            _fields_ = [("code", c.c_uint32), ("aux", c.c_uint32), ("value", c.c_double), ("start", c.c_uint32), ("end", c.c_uint32), ("reserved", c.c_uint64)]
+        class BReply(c.Structure):
+            _fields_ = [("code", c.c_uint32), ("reserved", c.c_uint32), ("value", c.c_double), ("distance", c.c_double), ("start", c.c_uint32), ("end", c.c_uint32)]
+        class Reply(c.Structure):
+            _fields_ = [("code", c.c_uint32), ("flags", c.c_uint32), ("values", c.c_double*3), ("start", c.c_uint32), ("end", c.c_uint32), ("calc",CReply),("bearing",BReply)]
+        assert size == 104 and mode == 0 and unicode == 151
+        word = ''.join(chr(text[i]) for i in range(length))
+        c.memset(out,0,size)
+        result = c.cast(out,c.POINTER(Reply)).contents
+        if word == 'rw1,2': result.flags=3; result.values[:]=[1.,2.,0.]
+        else: assert word == '5'; result.code=10; result.end=1
+        if mutant == 'coords-value': result.values[0] += 1
+        if mutant == 'coords-error': result.code=0
+        return 0
+    def split(text,length,sep,kind,spans,capacity,count):
+        assert ''.join(chr(text[i]) for i in range(length)) == 'pow(2,3),4'
+        assert (sep,kind,capacity)==(44,1,4)
+        spans[:]=[0,8,9,10]
+        c.cast(count,c.POINTER(c.c_uint32))[0]=2
+        return 0
+    def norm(values,count,mode,out):
+        assert count==1 and mode==6
+        c.cast(out,c.POINTER(c.c_double))[0]=.702125355913066 + (1 if mutant=='norm-value' else 0)
+        return 0
+    def join(n,starts,ends,tol,off,length,closed,*rest):
+        axes, members, reverse, chains, total = rest[:6], rest[6], rest[7], rest[8], rest[9]
+        assert n==2
+        c.cast(chains,c.POINTER(c.c_int64))[0] = 2 if mutant=='join-boundary' or tol < .702125355913066 else 1
+        c.cast(total,c.POINTER(c.c_int64))[0]=2
+        members[:]=[0,1]
+        return 0
     def macro_payload(text, length, flag):
         assert flag == 0
         return {b"!123": b'[{"kind":"text","value":"!123"}]',
@@ -121,7 +154,12 @@ def library(mutant=""):
         narwhal_pure_core_calc_v2=Mock(side_effect=calc),
         narwhal_pure_core_bearing_abi2=Mock(return_value=1 if mutant == "bearing-abi" else 2),
         narwhal_pure_core_bearing_v2=Mock(side_effect=bearing),
-        narwhal_pure_core_macro_plan_checked=Mock(side_effect=checked_plan))
+        narwhal_pure_core_macro_plan_checked=Mock(side_effect=checked_plan),
+        narwhal_pure_core_coords_owned_abi1=Mock(return_value=1),
+        narwhal_pure_core_coords_owned_v1=Mock(side_effect=coords),
+        narwhal_pure_core_coords_split_v1=Mock(side_effect=split),
+        narwhal_pure_core_norm_v1=Mock(side_effect=norm),
+        narwhal_pure_core_joinchain=Mock(side_effect=join))
     if mutant in gate.PURE_CORE_PARSE_EXPORTS:
         delattr(result, mutant)
     return result
@@ -146,25 +184,25 @@ def pe_fixture(*, parser_abi=2, missing=""):
     struct.pack_into("<H", data, optional, 0x20b)
     struct.pack_into("<I", data, optional + 60, 0x200)
     struct.pack_into("<II", data, optional + 112, 0x1200, 0x200)
-    struct.pack_into("<II", data, optional + 120, 0x1600, 40)
+    struct.pack_into("<II", data, optional + 120, 0x1a00, 40)
     struct.pack_into("<IIII", data, optional + 240 + 8, 0xe00, 0x1000, 0xe00, 0x200)
     names = [name for name in ("narwhal_pure_core_abi_version", *gate.PURE_CORE_PARSE_EXPORTS) if name != missing]
     offset = lambda rva: rva - 0x1000 + 0x200
     struct.pack_into("<IIIII", data, offset(0x1200) + 20,
-                     len(names), len(names), 0x1240, 0x1280, 0x12c0)
-    cursor = 0x1300
+                     len(names), len(names), 0x1240, 0x12c0, 0x1340)
+    cursor = 0x1400
     for i, name in enumerate(names):
-        struct.pack_into("<I", data, offset(0x1240) + i * 4, 0x1800 + i * 16)
-        struct.pack_into("<I", data, offset(0x1280) + i * 4, cursor)
-        struct.pack_into("<H", data, offset(0x12c0) + i * 2, i)
+        struct.pack_into("<I", data, offset(0x1240) + i * 4, 0x1c00 + i * 16)
+        struct.pack_into("<I", data, offset(0x12c0) + i * 4, cursor)
+        struct.pack_into("<H", data, offset(0x1340) + i * 2, i)
         encoded = name.encode() + b"\0"
         data[offset(cursor):offset(cursor) + len(encoded)] = encoded
         cursor += len(encoded)
         value = parser_abi if name == "narwhal_pure_core_parse_abi" else (2 if name in {"narwhal_pure_core_calc_abi2", "narwhal_pure_core_bearing_abi2"} else 1)
-        data[offset(0x1800) + i * 16:offset(0x1800) + i * 16 + 6] = b"\xb8" + struct.pack("<I", value) + b"\xc3"
-    struct.pack_into("<IIIII", data, offset(0x1600), 0x1680, 0, 0, 0x1640, 0x1680)
-    data[offset(0x1640):offset(0x1640) + 13] = b"kernel32.dll\0"
-    struct.pack_into("<Q", data, offset(0x1680), (1 << 63) | 1)
+        data[offset(0x1c00) + i * 16:offset(0x1c00) + i * 16 + 6] = b"\xb8" + struct.pack("<I", value) + b"\xc3"
+    struct.pack_into("<IIIII", data, offset(0x1a00), 0x1a80, 0, 0, 0x1a40, 0x1a80)
+    data[offset(0x1a40):offset(0x1a40) + 13] = b"kernel32.dll\0"
+    struct.pack_into("<Q", data, offset(0x1a80), (1 << 63) | 1)
     return bytes(data)
 
 
@@ -177,7 +215,8 @@ class ParserProbeTests(unittest.TestCase):
         for mutant in (*gate.PURE_CORE_PARSE_EXPORTS, "parser-abi", "old-abi",
                        "wrong-value", "accept-invalid", "transport", "reserved", "no-write",
                        "calc-value", "calc-error", "bearing-value", "bearing-error",
-                       "planner-error", "calc-abi", "bearing-abi"):
+                       "planner-error", "calc-abi", "bearing-abi",
+                       "coords-value", "coords-error", "norm-value", "join-boundary"):
             with self.subTest(mutant=mutant), self.assertRaises((AttributeError, RuntimeError)):
                 execute_probe(mutant)
         self.assertEqual(execute_probe(), gate.PURE_CORE_PARSE_IDENTITY)
@@ -320,7 +359,8 @@ class PackageTests(unittest.TestCase):
                 probe.assert_not_called()
             self.assertEqual(inspect.call_args.kwargs["constant_exports"],
                              {"narwhal_pure_core_abi_version": 1, "narwhal_pure_core_parse_abi": 2,
-                                  "narwhal_pure_core_calc_abi2": 2, "narwhal_pure_core_bearing_abi2": 2})
+                                  "narwhal_pure_core_calc_abi2": 2, "narwhal_pure_core_bearing_abi2": 2,
+                                  "narwhal_pure_core_coords_owned_abi1": 1})
             with patch.object(sys, "platform", "win32"), patch.object(win_verify, "probe_pure_core_parser", side_effect=ValueError("semantic mutant")):
                 with self.assertRaisesRegex(win_verify.VerificationError, "semantic mutant"):
                     win_verify.pure_core_record(Path("core.dll"))

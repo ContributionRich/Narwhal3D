@@ -133,6 +133,8 @@ class PolicyTests(unittest.TestCase):
             'unitformat': {'Decimal', '_decimal', '_fractional', '_feet_inch', '_gcd'},
             'calc': {'re', '_tokenize', '_parse_expr', '_apply_func', '_number_token'},
             'bearing': {'re', '_ANGLE_RE', '_BEARING_RE', '_angle_degrees', '_QUADRANT_BASE'},
+            'coords': {'re', '_parse_polar', '_number', '_sibling', '_POLAR_RE'},
+            'joinchain': {'math', '_near', '_ends', '_find', '_find_before'},
             'macro': {'_split_tokens', '_classify', '_strip_flags', '_command_step',
                       'NATIVE_MACRO_MIN_BYTES', 'NATIVE_MACRO_JSON_MAX_BYTES'},
         }

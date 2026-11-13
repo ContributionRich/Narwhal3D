@@ -89,6 +89,8 @@ def _():
         "spike/portfolio_review/test_metadata.py",
         "spike/test_bearing.py", "spike/test_native_bearing.py",
         "spike/test_coords.py", "spike/test_native_coords.py",
+        "spike/test_coords_owned.py", "spike/test_native_joinchain.py",
+        "spike/test_joinchain_owned.py", "spike/test_python_norm_owned.py",
         "spike/test_native_pickconstraint.py", "spike/test_native_blend.py",
         "spike/test_macro.py", "spike/test_native_macro.py",
         "spike/test_macro_plan.py", "spike/test_native_macro_plan.py",

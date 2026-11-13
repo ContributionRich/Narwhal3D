@@ -445,7 +445,7 @@ impl Parser<'_> {
         }
     }
 }
-fn evaluate(cps: &[u32], model: &[u32], model_string: bool) -> Reply {
+pub(crate) fn evaluate(cps: &[u32], model: &[u32], model_string: bool) -> Reply {
     let tokens = match tokenize(cps, model, model_string) {
         Ok(t) => t,
         Err(e) => return e,

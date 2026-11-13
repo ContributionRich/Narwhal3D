@@ -116,6 +116,7 @@ REQUIRED = {
     "app/licenses/PictureTrace-Rust-Dependencies.txt", "app/licenses/VectorCraft-MIT.txt",
     "app/licenses/VectorCraft-Apache-2.0.txt", "app/licenses/VectorCraft-NOTICE.txt",
     "app/licenses/Library-Rust-Dependencies.txt",
+    "app/licenses/CPython-PSF-License.txt",
     "app/runtime/windows-x86_64/bin/narwhal_cdr_core.dll",
     "app/runtime/windows-x86_64/bin/narwhal-converter-supervisor.exe",
     "app/runtime/windows-x86_64/bin/narwhal-cdr-multiversion.exe",
@@ -501,6 +502,7 @@ def verify_pure_core_identity(path: Path) -> dict[str, object]:
     identity = inspect_pe_dll(path, constant_exports={
         "narwhal_pure_core_abi_version": 1, "narwhal_pure_core_parse_abi": 2,
         "narwhal_pure_core_calc_abi2": 2, "narwhal_pure_core_bearing_abi2": 2,
+        "narwhal_pure_core_coords_owned_abi1": 1,
     })
     if any(identity["exports"].count(name) != 1 for name in PURE_CORE_PARSE_EXPORTS):
         raise VerificationError("Windows pure-core lacks required parser ABI exports")

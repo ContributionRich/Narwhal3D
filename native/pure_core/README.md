@@ -15,7 +15,8 @@ Current production routing:
 | DXF decode | Rust | 3.23× faster on 20k entities |
 | length parsing | Rust | about 1.14× faster |
 | calculator | Rust only, including grammar errors and domain/overflow classification | exact owned literals; no Python expression replay; mixed corpus faster, tiny literals retain FFI overhead |
-| coordinate parsing | Rust | about 1.05× faster |
+| coordinate/scalar/angle parsing | Rust only, including all grammar failures and top-level split | exact CPython-compatible norm, finite-result safety; CPlane callbacks/presentation stay host glue |
+| Join endpoint chaining | Rust only (empty sets still check binding) | indexed search replaces Python quadratic scans; compensated distance preserves exact tolerance decisions |
 | macro tokenize | Rust only at every supported length | Python tokenizer retired; ~259-byte probe about 1.4× faster, tiny 5-byte repeated probe about 3.6× slower (~8 µs versus ~2 µs), not a universal speedup |
 | macro string plan | checked Rust at every size and semantic refusal | no tokenization/build-plan replay; separate public hand-built-token compatibility API remains |
 | print-width file parsing | Rust only | short-file Python bypass and parser retired; Python retains file decoding |
@@ -99,3 +100,9 @@ tools/blender-patched/5.2/python/bin/python3.13 spike/test_native_dxf.py
 The verified output remains ignored. A later release-integration task must
 explicitly own AppImage/Windows package copying, public allowlists, and
 native-Windows acceptance.
+
+The coordinate and Join ownership qualification includes 20,293 exact coordinate
+comparisons and 184,015 exact CPython norm/distance witnesses. Sequential hypot
+was not safe at Join thresholds: see `docs/RUST_COORDINATE_JOIN_OWNERSHIP.md`.
+The compensated norm port is under the PSF license (retained source attribution
+and packaged `licenses/CPython-PSF-License.txt`). No tolerance is widened.

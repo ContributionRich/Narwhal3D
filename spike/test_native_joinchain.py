@@ -1,100 +1,81 @@
-"""Native Join-chain solver (indexed Rust ABI): direct proof + route activation + fallbacks.
+"""Native-only Join contract, checked against an independent retired oracle.
 
-Complements the unchanged Python solver in ``narwhal3d/joinchain.py`` (which pins
-the contract: selection-order tie-break at ambiguous junctions, reversal
-preference, closed-ring detection, and "every input segment in exactly one
-chain") by proving the *indexed* native route (Q117-06) is byte-for-byte the
-Python result when called directly, that the selection-order tie-break holds
-(the mutation target), and that every fallback scenario runs the *unchanged*
-Python solver with the exact same chain list and with the native counter NOT
-incremented.
+Every nonempty valid input must call native, regardless of _force_native.
+Empty input verifies the binding but does not call the ABI (which rejects n=0).
+Missing/stale bindings, failed calls and malformed packed output fail closed.
+Policy change: nonfinite/negative tolerance, nonfinite coordinates and spatial
+index-unrepresentable coordinate/tolerance combinations are explicitly refused;
+the retired solver's odd acceptance is NOT a fallback contract.
 
-The Python solver is Theta(N^2) in the segment count (each growth step scans
-every segment); the native solver is an ordered spatial index. Measured
-end-to-end (packing + FFI + conversion), the native route wins by +428% to
-+29,153% at 512+ segments across the ordered / disjoint / ambiguous shapes, so
-the crossover sits at 512 segments -- large inputs run native, small inputs
-(sub-ms in Python) stay on the unchanged solver.
-
-* the Rust joinchain ABI is present and ``_joinchain_binding()`` is not ``None``;
-* ``chains`` at or above the crossover runs native (counter moves) and still
-  returns the exact Python chain list;
-* the native route, called directly, returns byte-for-byte the Python result
-  on the ordered, reversed, disjoint, and ambiguous (T-junction) shapes and on
-  a closed loop;
-* the selection-order tie-break holds on the native route (the mutation target:
-  at a T-junction the EARLIEST unused candidate in caller order wins -- corrupt
-  the Rust ``best.is_none_or(|b| i < b)`` lowest-index rule and this goes RED);
-* the fallback scenarios (missing library, a failed native call, a malformed
-  packed output) all run the *unchanged Python solver* with the exact same
-  chain list and with the native counter NOT incremented.
-
-The suite is green with or without a prebuilt ``.so``: if the library is not
-present it builds the crate once (offline, pinned toolchain) and rechecks.
+Defaults use production and NARWHAL_PURE_CORE. Candidate qualification:
+  python3 spike/test_native_joinchain.py --module tmp/rust13-joinchain-candidate.py
+Optional --library selects an explicit library, without building shared code.
 """
+import argparse
+import ctypes
 import importlib.util
+import math
 import os
+import random
 import subprocess
 import sys
 import tempfile
 from contextlib import contextmanager
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument("--module", default="narwhal3d/joinchain.py")
+parser.add_argument("--library")
+args = parser.parse_args()
+if args.library:
+    os.environ["NARWHAL_PURE_CORE"] = os.path.abspath(args.library)
 LIB_CANDIDATES = [
     os.environ.get("NARWHAL_PURE_CORE", ""),
-    os.path.join(ROOT, "native", "pure_core", "target",
-                 "x86_64-unknown-linux-gnu", "release",
-                 "libnarwhal_pure_core.so"),
-    os.path.join(ROOT, "native", "pure_core", "target", "release",
-                 "libnarwhal_pure_core.so"),
+    os.path.join(ROOT, "native/pure_core/target/x86_64-unknown-linux-gnu/release/libnarwhal_pure_core.so"),
+    os.path.join(ROOT, "native/pure_core/target/release/libnarwhal_pure_core.so"),
 ]
 
 
 def _locate_lib():
-    for cand in LIB_CANDIDATES:
-        if cand and os.path.isfile(cand):
-            return cand
-    return None
+    # An explicit override is authoritative, even if missing or stale.
+    explicit = os.environ.get("NARWHAL_PURE_CORE")
+    if explicit:
+        return explicit if os.path.isfile(explicit) else None
+    return next((p for p in LIB_CANDIDATES if p and os.path.isfile(p)), None)
 
 
 def _ensure_lib():
-    """Return the ``.so`` path, building the crate once if it is not present."""
     lib = _locate_lib()
-    if lib is not None:
+    if lib is not None or os.environ.get("NARWHAL_PURE_CORE"):
         return lib
-    manifest = os.path.join(ROOT, "native", "pure_core", "Cargo.toml")
-    if not os.path.isfile(manifest):
-        return None
     subprocess.run(
         ["cargo", "+1.95.0", "build", "--release", "--locked", "--offline",
-         "--manifest-path", manifest, "--target", "x86_64-unknown-linux-gnu"],
-        cwd=ROOT, check=True,
+         "--manifest-path", os.path.join(ROOT, "native/pure_core/Cargo.toml"),
+         "--target", "x86_64-unknown-linux-gnu"],
+        cwd=ROOT, check=True, timeout=120,
     )
     return _locate_lib()
 
 
-# Make the native library discoverable before the adapter is first imported.
 _LIB = _ensure_lib()
 if _LIB is not None:
     os.environ["NARWHAL_PURE_CORE"] = _LIB
 
 
-def _load(name, filename):
-    spec = importlib.util.spec_from_file_location(
-        name, os.path.join(ROOT, "narwhal3d", filename))
+def _load(name, path):
+    spec = importlib.util.spec_from_file_location(name, os.path.join(ROOT, path))
     mod = importlib.util.module_from_spec(spec)
     sys.modules[name] = mod
     spec.loader.exec_module(mod)
     return mod
 
 
-jc = _load("narwhal_native_test_joinchain", "joinchain.py")
-# Resolve the SAME native module the solver uses, so we can inspect its counter
-# and monkeypatch it in the fallback tests.
+jc = _load("narwhal_native_test_joinchain", args.module)
+reference = _load("narwhal_native_joinchain_reference", "spike/joinchain_reference.py")
+# This compatibility resolver must expose the SAME adapter the wrapper calls.
 native = jc._native_joinchain()
-
 results = []
-TMP = tempfile.mkdtemp(prefix="native_joinchain_")
+TMP = tempfile.TemporaryDirectory(prefix="native_joinchain_")
 
 
 def check(name):
@@ -102,31 +83,44 @@ def check(name):
         try:
             fn()
             results.append((name, "PASS", ""))
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             results.append((name, "FAIL", repr(e)))
     return deco
 
 
 def _reset():
-    """Forget discovery + counter state so a check can re-point the binding."""
     if native is not None:
         native._reset_for_tests()
 
 
 def norm(chains):
-    """A hashable, order-sensitive form of the Python ``Chain`` list."""
-    return [(tuple((k, r) for k, r in c.members), c.closed,
-             tuple(c.start), tuple(c.end)) for c in chains]
+    return [(tuple(c.members), c.closed, tuple(c.start), tuple(c.end))
+            for c in chains]
 
 
 def python_chains(segs, tolerance):
-    """Force the unchanged Python solver, even above the native crossover."""
-    real = jc._native_joinchain
-    jc._native_joinchain = lambda: None
+    return reference.chains(segs, tolerance)
+
+
+@contextmanager
+def patch(obj, name, value):
+    real = getattr(obj, name)
+    setattr(obj, name, value)
     try:
-        return jc.chains(segs, tolerance)
+        yield
     finally:
-        jc._native_joinchain = real
+        setattr(obj, name, real)
+
+
+def refused(segs, tolerance=1e-5):
+    before = native._native_joinchain_calls
+    try:
+        jc.chains(segs, tolerance)
+    except RuntimeError:
+        pass
+    else:
+        raise AssertionError("native-only wrapper must raise RuntimeError, never replay Python")
+    assert native._native_joinchain_calls == before
 
 
 def ordered(n):
@@ -157,44 +151,36 @@ def _():
     assert hasattr(native, "_native_joinchain_calls")
 
 
-@check("the crossover is set and the route gate respects it")
-def _():
-    # The win is measured end-to-end; the crossover is a segment count.
-    assert native._JOINCHAIN_NATIVE_MIN_SEGMENTS >= 2, \
-        "the crossover must not be below 2 (FFI overhead would dominate)"
-    assert native._joinchain_native_active(100000) is True
-    assert native._joinchain_native_active(10) is False, \
-        "small inputs must stay on the unchanged Python solver"
-    assert native._joinchain_native_active(-1) is False
-    assert native._joinchain_native_active(True) is False, \
-        "a bool is not a segment count"
-
-
-@check("at the crossover chains() runs native and returns the Python list")
+@check("all nonempty sizes use native, with either compatibility flag")
 def _():
     _reset()
-    assert native is not None and native._joinchain_binding() is not None
-    n = max(native._JOINCHAIN_NATIVE_MIN_SEGMENTS, 512)
-    segs = ordered(n)
-    baseline = python_chains(segs, 1e-5)
-    before = native._native_joinchain_calls
-    got = jc.chains(segs, 1e-5)  # production: at/above the crossover -> native
-    assert norm(got) == norm(baseline), \
-        "the native route must return the exact Python chain list"
-    assert native._native_joinchain_calls == before + 1, \
-        "a successful native call must increment the counter"
+    for n in (1, 2, 10, 511, 512, 513, 1000):
+        segs = ordered(n)
+        baseline = norm(python_chains(segs, 1e-5))
+        for flag in (False, True):
+            before = native._native_joinchain_calls
+            assert norm(jc.chains(segs, 1e-5, _force_native=flag)) == baseline
+            assert native._native_joinchain_calls == before + 1, (n, flag)
 
 
-@check("below the crossover chains() stays on the Python solver (counter unmoved)")
+@check("empty input verifies binding but never invokes the unsupported n=0 ABI")
 def _():
     _reset()
-    assert native is not None and native._joinchain_binding() is not None
-    segs = ordered(10)  # far below the crossover
+    binding = native._joinchain_binding()
+    assert binding is not None
+    seen = []
+    def resolve():
+        seen.append(True)
+        return binding
+    def forbidden(*a, **kw):
+        raise AssertionError("empty input must not call native adapter")
     before = native._native_joinchain_calls
-    got = jc.chains(segs, 1e-5)
-    assert norm(got)[0][0][0][0] == "k0"
-    assert native._native_joinchain_calls == before, \
-        "a sub-crossover input must not touch the native counter"
+    with patch(native, "_joinchain_binding", resolve), patch(native, "_native_joinchain", forbidden):
+        assert jc.chains([], 1e-5) == []
+    assert seen, "empty input must verify binding"
+    assert native._native_joinchain_calls == before
+    with patch(native, "_joinchain_binding", lambda: None):
+        refused([])
 
 
 @check("native == python on the ordered chain")
@@ -304,102 +290,97 @@ def _():
         ("c", (5.0, 5.0, 0.0), (0.0, 5.0, 0.0)),
         ("d", (0.0, 5.0, 0.0), (0.0, 0.0, 0.0)),
     ]
-    py = norm(jc.chains(segs, 1e-5, _force_native=False))
+    py = norm(python_chains(segs, 1e-5))
     na = norm(jc.chains(segs, 1e-5, _force_native=True))
     assert py == na
     assert py[0][1] is True, "a 4-segment loop must be detected closed"
 
 
-@check("a rejected input (non-finite coordinate) falls back to Python")
+@check("invalid numeric input is refused, not replayed by the retired oracle")
 def _():
     _reset()
-    assert native is not None and native._joinchain_binding() is not None
+    for tol in (-1., math.nan, math.inf, -math.inf):
+        refused(ordered(2), tol)
+    for value in (math.nan, math.inf, -math.inf):
+        refused([("a", (value, 0., 0.), (1., 0., 0.))])
+        refused([("a", (0., 0., 0.), (0., value, 0.))])
+    # Finite values can still be outside the positive-tolerance spatial index.
+    refused([("a", (1.e100, 0., 0.), (1.e100, 1., 0.))], 1e-5)
+    refused(ordered(2), math.ulp(0.))
+
+
+@check("failed ABI return and exception raise without counting or Python replay")
+def _():
+    _reset()
+    for n in (1, 10, 512):
+        with patch(native, "_joinchain_binding", lambda: (lambda *a: -1)):
+            refused(ordered(n))
+        def broken(*a):
+            raise OSError("injected native call failure")
+        with patch(native, "_joinchain_binding", lambda: broken):
+            refused(ordered(n))
+        with patch(native, "_native_joinchain", lambda *a: None):
+            refused(ordered(n))
+
+
+def packed_valid(p):
+    n, off, lengths, closed, ends, members, rev, nc, nm = p
+    return native._valid_joinchain_packed(n, nc, nm, off, lengths,
+                                         closed, ends, members, rev)
+
+
+@check("packed shape, gaps, trailing members, flags and partition stay strict")
+def _():
+    _reset()
+    p = native._native_joinchain(
+        [0., 0., 0., 5., 0., 0.], [1., 0., 0., 6., 0., 0.], 1e-5)
+    assert p is not None and len(p) == 9
+    assert packed_valid(p)
+    converted = jc._chains_from_packed(disjoint(2), p)
+    assert [c.keys for c in converted] == [("k0",), ("k1",)]
+    # All mutations are copied Python output metadata, never live Rust edits.
+    cases = [(1, [1, 1]), (1, [0, 2]), (2, [1, 0]), (2, [1, 2]),
+             (3, [0, 2]), (5, [0, 0]), (5, [0, 2]), (6, [0, 2]),
+             (7, 1), (8, 1), (4, ([0., 0.],) * 5),
+             (4, ([math.nan, 0.],) * 6), (4, ([],) * 6)]
+    for field, bad in cases:
+        malformed = list(p)
+        malformed[field] = bad
+        assert not packed_valid(malformed), (field, bad)
     before = native._native_joinchain_calls
-    # The native call must reject the non-finite coordinate; the Python solver
-    # then runs and (like the reference) still groups by _near with <=.
-    got = jc.chains([("a", (float("nan"), 0.0, 0.0), (1.0, 0.0, 0.0))],
-                    1e-5, _force_native=True)
-    assert native._native_joinchain_calls == before, \
-        "a rejected input must not count as a native success"
-    assert len(got) == 1
+    with patch(native, "_valid_joinchain_packed", lambda *a: False):
+        assert native._native_joinchain([0., 0., 0.], [1., 0., 0.], 1e-5) is None
+        refused(ordered(1))
+        refused(ordered(512))
+    assert native._native_joinchain_calls == before
 
 
-@contextmanager
-def _force_python():
-    """Temporarily make the native route report unavailable so the solver runs
-    its UNCHANGED Python path (the "native == Python" baseline)."""
-    if native is None:
-        yield
-        return
-    real = native._native_joinchain
-    native._native_joinchain = lambda *a, **k: None
-    try:
-        yield
-    finally:
-        native._native_joinchain = real
-
-
-@check("fallback: a failed native call (None) uses the Python solver")
+@check("missing, unreadable, stale ABI and missing export fail closed")
 def _():
-    _reset()
-    assert native is not None and native._joinchain_binding() is not None
-    segs = ordered(512)  # at/above the crossover, but the native call fails
-    with _force_python():
-        before = native._native_joinchain_calls
-        # Compute the baseline from the pure Python solver (threshold raised so
-        # the production gate does not itself route to native at 512).
-        real_thresh = native._JOINCHAIN_NATIVE_MIN_SEGMENTS
-        native._JOINCHAIN_NATIVE_MIN_SEGMENTS = 10 ** 15
-        baseline = jc.chains(segs, 1e-5)
-        native._JOINCHAIN_NATIVE_MIN_SEGMENTS = real_thresh
-        got = jc.chains(segs, 1e-5)  # native attempted, fails -> Python
-    assert norm(got) == norm(baseline)
-    assert native._native_joinchain_calls == before, \
-        "a failed-call fallback must not touch the native counter"
-
-
-@check("fallback: a malformed packed output falls back without counting")
-def _():
-    _reset()
-    assert native is not None and native._joinchain_binding() is not None
-    real = native._valid_joinchain_packed
-    native._valid_joinchain_packed = lambda *a, **k: False
-    try:
-        before = native._native_joinchain_calls
-        assert native._native_joinchain(
-            [0.0, 0.0, 0.0, 1.0, 0.0, 0.0], [1.0, 0.0, 0.0, 2.0, 0.0, 0.0],
-            1e-5) is None
-        assert native._native_joinchain_calls == before, \
-            "a rejected packed output must not count as a native success"
-        segs = ordered(512)
-        got = jc.chains(segs, 1e-5)  # native rejected -> Python fallback
-        assert len(got) >= 1
-    finally:
-        native._valid_joinchain_packed = real
-        _reset()
-
-
-@check("fallback: a library without the joinchain export uses Python")
-def _():
-    # A real file that is not a valid shared library models "old symbol":
-    # CDLL fails (OSError) so the joinchain binding is None and the Python
-    # solver runs with the same chain list and an unchanged counter.
-    old = os.path.join(TMP, "empty.so")
-    open(old, "wb").close()
     _reset()
     real_env = os.environ.get("NARWHAL_PURE_CORE")
-    os.environ["NARWHAL_PURE_CORE"] = old
+    unreadable = os.path.join(TMP.name, "empty.so")
+    open(unreadable, "wb").close()
     try:
-        assert native._joinchain_binding() is None, \
-            "a library without the joinchain export must make the binding None"
-        assert native._joinchain_native_active(100000) is False, \
-            "with no binding the native route must be inactive"
-        before = native._native_joinchain_calls
-        segs = ordered(10)
-        got = jc.chains(segs, 1e-5)
-        assert len(got) == 1
-        assert native._native_joinchain_calls == before, \
-            "the old-symbol fallback must not touch the native counter"
+        for path in (os.path.join(TMP.name, "missing.so"), unreadable):
+            os.environ["NARWHAL_PURE_CORE"] = path
+            _reset()
+            assert native._joinchain_binding() is None
+            refused(ordered(10))
+            refused([])
+        # Model a loadable old library independently of host compiler presence.
+        class Version:
+            def __init__(self, value): self.value = value
+            def __call__(self): return self.value
+        class Library:
+            def __init__(self, version):
+                self.narwhal_pure_core_abi_version = Version(version)
+        for version in (0, 1):  # wrong ABI; correct ABI but missing Join export
+            _reset()
+            with patch(ctypes, "CDLL", lambda *a, v=version: Library(v)):
+                assert native._joinchain_binding() is None
+                refused(ordered(10))
+                refused([])
     finally:
         if real_env is None:
             os.environ.pop("NARWHAL_PURE_CORE", None)
@@ -408,10 +389,52 @@ def _():
         _reset()
 
 
+@check("reversal differential corpus and first-appearance chain ordering")
+def _():
+    _reset()
+    rng = random.Random(42)
+    for n in (1, 2, 10, 511, 512, 513, 1000):
+        segs = ordered(n)
+        segs = [(k, e, s) if i % 2 else (k, s, e)
+                for i, (k, s, e) in enumerate(segs)]
+        assert norm(jc.chains(segs, 1e-5)) == norm(python_chains(segs, 1e-5))
+    for _ in range(100):
+        segs = ambiguous(12) + disjoint(4)
+        rng.shuffle(segs)
+        # Keys need not sort like selection order; give every input its own key.
+        segs = [(f"key-{1000-i}", s, e) for i, (_, s, e) in enumerate(segs)]
+        got = jc.chains(segs, 1e-5)
+        assert norm(got) == norm(python_chains(segs, 1e-5))
+        indices = {key: i for i, (key, _, _) in enumerate(segs)}
+        first = [min(indices[k] for k in c.keys) for c in got]
+        assert first == sorted(first)
+        assert sorted(k for c in got for k in c.keys) == sorted(indices)
+
+
+@check("CPython exact tolerance witness joins; adjacent below does not; never closed")
+def _():
+    _reset()
+    d = (-.4702396670038951, -.5067449846120331, .12273626832630158)
+    tol = math.dist((0., 0., 0.), d)
+    segs = [("a", (-10., -10., -10.), (0., 0., 0.)),
+            ("b", d, (10., 10., 10.))]
+    assert math.dist(segs[0][1], segs[0][2]) > tol
+    assert math.dist(segs[1][1], segs[1][2]) > tol
+    for threshold, count in ((math.nextafter(tol, -math.inf), 2),
+                             (tol, 1), (math.nextafter(tol, math.inf), 1)):
+        before = native._native_joinchain_calls
+        got = jc.chains(segs, threshold)
+        assert native._native_joinchain_calls == before + 1
+        assert norm(got) == norm(python_chains(segs, threshold)), threshold.hex()
+        assert len(got) == count and all(not c.closed for c in got)
+        if count == 1:
+            assert got[0].members == (("a", False), ("b", False))
+
+
 failed = 0
 for name, status, detail in results:
-    print("[%s] %s" % (status, name) + (  "  -- %s" % detail if detail else ""))
-    if status == "FAIL":
-        failed += 1
+    print("[%s] %s" % (status, name) + ("  -- %s" % detail if detail else ""))
+    failed += status == "FAIL"
 print("\n%d/%d passed" % (len(results) - failed, len(results)))
+TMP.cleanup()
 sys.exit(1 if failed else 0)

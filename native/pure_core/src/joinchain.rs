@@ -92,10 +92,7 @@ fn find_in(
         if exact {
             p == at
         } else {
-            let dx = p.0 - at.0;
-            let dy = p.1 - at.1;
-            let dz = p.2 - at.2;
-            dx.hypot(dy).hypot(dz) <= tol
+            crate::python_norm::dist3([p.0, p.1, p.2], [at.0, at.1, at.2]) <= tol
         }
     };
     let endpoint = |i: usize| {
@@ -175,10 +172,7 @@ fn solve(starts: &[f64], ends: &[f64], tol: f64) -> Option<(Vec<Chain>, Vec<Memb
         if exact {
             a == b
         } else {
-            let dx = a.0 - b.0;
-            let dy = a.1 - b.1;
-            let dz = a.2 - b.2;
-            dx.hypot(dy).hypot(dz) <= tol
+            crate::python_norm::dist3([a.0, a.1, a.2], [b.0, b.1, b.2]) <= tol
         }
     };
 

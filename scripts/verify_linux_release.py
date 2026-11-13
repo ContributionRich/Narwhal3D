@@ -111,6 +111,7 @@ REQUIRED_NOTICE_PATHS = {
     "usr/lib/narwhal3d/licenses/VectorCraft-MIT.txt",
     "usr/lib/narwhal3d/licenses/VectorCraft-Apache-2.0.txt",
     "usr/lib/narwhal3d/licenses/VectorCraft-NOTICE.txt",
+    "usr/lib/narwhal3d/licenses/CPython-PSF-License.txt",
     "usr/lib/narwhal3d/licenses/application_core-OPENNURBS.txt",
 }
 REQUIRED_PATHS = {
@@ -1033,6 +1034,7 @@ def self_check() -> None:
         "usr/lib/narwhal3d/licenses/VectorCraft-MIT.txt",
         "usr/lib/narwhal3d/licenses/VectorCraft-Apache-2.0.txt",
         "usr/lib/narwhal3d/licenses/VectorCraft-NOTICE.txt",
+    "usr/lib/narwhal3d/licenses/CPython-PSF-License.txt",
         "usr/lib/narwhal3d/licenses/application_core-OPENNURBS.txt",
     }
     if REQUIRED_NOTICE_PATHS != expected_notices or not expected_notices.issubset(REQUIRED_PATHS):
