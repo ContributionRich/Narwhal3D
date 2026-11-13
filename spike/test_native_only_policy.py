@@ -135,6 +135,8 @@ class PolicyTests(unittest.TestCase):
             'bearing': {'re', '_ANGLE_RE', '_BEARING_RE', '_angle_degrees', '_QUADRANT_BASE'},
             'coords': {'re', '_parse_polar', '_number', '_sibling', '_POLAR_RE'},
             'joinchain': {'math', '_near', '_ends', '_find', '_find_before'},
+            'svgpath': {'math', '_tokenize', '_arc_to_cubics', '_line', '_CMD_ARITY'},
+            'alias_table': {'re', '_MACRO_RE'},
             'macro': {'_split_tokens', '_classify', '_strip_flags', '_command_step',
                       'NATIVE_MACRO_MIN_BYTES', 'NATIVE_MACRO_JSON_MAX_BYTES'},
         }

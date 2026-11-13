@@ -7,6 +7,10 @@
 //! approximation (SVG spec appendix F.6), emitting the EXACT same cubic-Bézier
 //! subpath structure the Python parser produces.
 //!
+//! The owned UTF-32 ABI below transports all typed errors without replay.
+//! Its 64 MiB output budget includes coordinates, offsets and closed flags.
+//! The following JSON-route description applies only to legacy compatibility.
+//!
 //! The output is NESTED (a list of subpath dicts, each with a list of 4-point
 //! cubic Béziers and a `closed` flag), so — like the STL/OBJ/DXF/macro routes —
 //! the result is serialized to bounded JSON and handed back with the crate's
@@ -77,7 +81,7 @@ fn is_sign(b: u8) -> bool {
 /// separator, a command, nor a number is skipped (as the Python tokenizer
 /// does), and a number that fails to parse is a hard error (the Python
 /// tokenizer would raise the same `ValueError`).
-fn tokenize(b: &[u8]) -> Result<Vec<Tok>, ()> {
+fn tokenize(b: &[u8]) -> Result<Vec<Tok>, PathError> {
     let mut toks = Vec::new();
     let n = b.len();
     let mut i = 0usize;
@@ -122,8 +126,18 @@ fn tokenize(b: &[u8]) -> Result<Vec<Tok>, ()> {
                 i += 1;
                 continue;
             }
-            let s = std::str::from_utf8(&b[start..j]).map_err(|_| ())?;
-            toks.push(Tok::Num(s.parse::<f64>().map_err(|_| ())?));
+            let s = std::str::from_utf8(&b[start..j]).map_err(|_| PathError {
+                kind: 4,
+                start,
+                end: j,
+                ..PathError::default()
+            })?;
+            toks.push(Tok::Num(s.parse::<f64>().map_err(|_| PathError {
+                kind: 4,
+                start,
+                end: j,
+                ..PathError::default()
+            })?));
             i = j;
         }
     }
@@ -172,7 +186,7 @@ fn flush(subpaths: &mut Vec<Sub>, cur_sub: &mut Option<Sub>) {
     }
 }
 
-fn parse_path(toks: &[Tok]) -> Result<Vec<Sub>, ()> {
+fn parse_path(toks: &[Tok]) -> Result<Vec<Sub>, PathError> {
     let mut subpaths: Vec<Sub> = Vec::new();
     let mut cur: Option<(f64, f64)> = None;
     let mut start: Option<(f64, f64)> = None;
@@ -185,11 +199,17 @@ fn parse_path(toks: &[Tok]) -> Result<Vec<Sub>, ()> {
     while i < n {
         let cmd = match toks[i] {
             Tok::Cmd(c) => c,
-            Tok::Num(_) => return Err(()), // a number outside a command
+            Tok::Num(value) => {
+                return Err(PathError {
+                    kind: 1,
+                    value,
+                    ..PathError::default()
+                })
+            }
         };
         let eff = cmd.to_ascii_uppercase();
         let rel = cmd.is_ascii_lowercase();
-        let arity = arity(eff).ok_or(())?;
+        let arity = arity(eff).ok_or_else(PathError::default)?;
         i += 1;
 
         // --- Z / z: zero-arity -- close the current subpath --------------
@@ -209,7 +229,11 @@ fn parse_path(toks: &[Tok]) -> Result<Vec<Sub>, ()> {
 
         // --- every other command consumes one or more parameter groups ----
         if cur.is_none() && eff != b'M' {
-            return Err(()); // a command before any moveto
+            return Err(PathError {
+                kind: 2,
+                command: eff as u32,
+                ..PathError::default()
+            });
         }
 
         let mut first = true;
@@ -218,12 +242,18 @@ fn parse_path(toks: &[Tok]) -> Result<Vec<Sub>, ()> {
             while params.len() < arity && i < n && matches!(toks[i], Tok::Num(_)) {
                 params.push(match toks[i] {
                     Tok::Num(v) => v,
-                    Tok::Cmd(_) => return Err(()),
+                    Tok::Cmd(_) => unreachable!(),
                 });
                 i += 1;
             }
             if params.len() < arity {
-                return Err(()); // too few parameters
+                return Err(PathError {
+                    kind: 3,
+                    command: eff as u32,
+                    expected: arity as u32,
+                    actual: params.len() as u32,
+                    ..PathError::default()
+                });
             }
 
             if eff == b'M' && first {
@@ -405,7 +435,7 @@ fn parse_path(toks: &[Tok]) -> Result<Vec<Sub>, ()> {
                         last_c2 = None;
                         last_q = None;
                     }
-                    _ => return Err(()),
+                    _ => return Err(PathError::default()),
                 }
             }
         }
@@ -520,6 +550,16 @@ fn arc_cubic(
         dtheta += 2.0 * std::f64::consts::PI;
     }
 
+    // OURS: nonfinite intermediate geometry must not silently become an empty
+    // arc (NaN makes the loop condition false). The ABI finite check rejects
+    // this sentinel; no approximation or fallback is substituted.
+    if [phi, lam, num, den, co, cx, cy, ux, uy, vx, vy, dtheta]
+        .iter()
+        .any(|v| !v.is_finite())
+    {
+        return vec![[f64::NAN; 8]];
+    }
+
     // --- split into <= 90° segments, each -> one cubic -------------------
     let mut beziers: Vec<[f64; 8]> = Vec::new();
     let mut remaining = dtheta;
@@ -609,8 +649,8 @@ fn encode_json(subs: &[Sub]) -> String {
 /// Parse the path and emit the bounded JSON subpath list, or `Err(())` for a
 /// malformed path / a non-serializable (non-finite) coordinate.
 fn svgpath_json(s: &str) -> Result<String, ()> {
-    let toks = tokenize(s.as_bytes())?;
-    let subs = parse_path(&toks)?;
+    let toks = tokenize(s.as_bytes()).map_err(|_| ())?;
+    let subs = parse_path(&toks).map_err(|_| ())?;
     // Every coordinate must be a finite, JSON-serializable number; otherwise
     // hand the input back to the Python fallback rather than emit invalid JSON.
     for sub in &subs {
@@ -847,8 +887,8 @@ mod tests {
     use super::*;
 
     fn p(d: &str) -> Result<Vec<Sub>, ()> {
-        let toks = tokenize(d.as_bytes())?;
-        parse_path(&toks)
+        let toks = tokenize(d.as_bytes()).map_err(|_| ())?;
+        parse_path(&toks).map_err(|_| ())
     }
 
     /// Evaluate a cubic Bézier `b` at `t` (mirrors the Python `_cubic` helper).
@@ -1281,5 +1321,286 @@ mod tests {
         };
         assert_eq!(rc2, ERR_INPUT);
         assert_eq!(out[0], 0, "no count may be published");
+    }
+}
+
+// RUST-SVGPATH-14: caller-owned, UTF-32, typed-error ABI. No native ownership
+// crosses the boundary. Arc output retains the documented cubic approximation.
+#[repr(C)]
+#[derive(Debug, Default, Clone, Copy)]
+pub struct PathError {
+    pub kind: u32, // 1 number, 2 before M, 3 arity, 4 float, 5 safety
+    pub command: u32,
+    pub expected: u32,
+    pub actual: u32,
+    pub start: usize,
+    pub end: usize,
+    pub value: f64,
+}
+
+fn tokenize_owned(text: &[u32]) -> Result<Vec<Tok>, PathError> {
+    let normalized = crate::numparse_owned::normalized(text, 151);
+    let b = normalized.as_bytes();
+    let mut toks = Vec::new();
+    let mut i = 0;
+    while i < text.len() {
+        if text[i] < 128 && is_separator(b[i]) {
+            i += 1;
+            continue;
+        }
+        if text[i] < 128 && is_cmd(b[i]) {
+            toks.push(Tok::Cmd(b[i]));
+            i += 1;
+            continue;
+        }
+        let start = i;
+        let mut j = i;
+        if j < text.len() && is_sign(b[j]) {
+            j += 1;
+        }
+        while j < text.len() && crate::calc_owned::digit(text[j]) {
+            j += 1;
+        }
+        if j + 1 < text.len() && b[j] == b'.' && crate::calc_owned::digit(text[j + 1]) {
+            j += 1;
+            while j < text.len() && crate::calc_owned::digit(text[j]) {
+                j += 1;
+            }
+        }
+        if j < text.len() && matches!(b[j], b'e' | b'E') {
+            let mut k = j + 1;
+            if k < text.len() && is_sign(b[k]) {
+                k += 1;
+            }
+            if k < text.len() && crate::calc_owned::digit(text[k]) {
+                while k < text.len() && crate::calc_owned::digit(text[k]) {
+                    k += 1;
+                }
+                j = k;
+            }
+        }
+        if j == start {
+            i += 1;
+            continue;
+        }
+        let value = normalized[start..j].parse::<f64>().map_err(|_| PathError {
+            kind: 4,
+            start,
+            end: j,
+            ..PathError::default()
+        })?;
+        toks.push(Tok::Num(value));
+        i = j;
+    }
+    // Preserve float-conversion error precedence across the whole tokenizer.
+    // OURS: reject nonfinite inputs even if no emitted point uses them.
+    if toks
+        .iter()
+        .any(|t| matches!(t, Tok::Num(v) if !v.is_finite()))
+    {
+        return Err(PathError {
+            kind: 5,
+            ..PathError::default()
+        });
+    }
+    Ok(toks)
+}
+
+#[no_mangle]
+pub extern "C" fn narwhal_pure_core_svgpath_owned_version() -> u32 {
+    14
+}
+
+const SVG_MAX_OUTPUT_BYTES: usize = 64 << 20;
+
+fn owned_output_fits(points: usize, offsets: usize, flags: usize) -> bool {
+    points
+        .checked_mul(std::mem::size_of::<f64>())
+        .and_then(|n| {
+            offsets
+                .checked_mul(std::mem::size_of::<usize>())
+                .and_then(|o| n.checked_add(o))
+        })
+        .and_then(|n| n.checked_add(flags))
+        .is_some_and(|n| n <= SVG_MAX_OUTPUT_BYTES)
+}
+
+/// Report is [coordinate count, subpath count]. Query with all capacities zero.
+/// Status: 0 success, 1 capacity/query, 2 typed error, negative ABI violation.
+///
+/// # Safety
+/// All nonempty pointers must address valid, disjoint caller allocations.
+/// `report` must hold two writable usize values; `error` one writable PathError.
+/// Bounds and alignment are checked; allocation validity remains caller duty.
+#[no_mangle]
+pub unsafe extern "C" fn narwhal_pure_core_svgpath_owned(
+    text: *const u32,
+    len: usize,
+    pts: *mut f64,
+    pts_cap: usize,
+    offs: *mut usize,
+    offs_cap: usize,
+    flags: *mut u8,
+    flags_cap: usize,
+    report: *mut usize,
+    error: *mut PathError,
+) -> i32 {
+    if len > SVG_MAX_INPUT_BYTES || !owned_output_fits(pts_cap, offs_cap, flags_cap) {
+        return -2;
+    }
+    // Check pairwise overlap BEFORE creating any Rust references.
+    let spans = [
+        (text as usize, len.checked_mul(4)),
+        (pts as usize, pts_cap.checked_mul(8)),
+        (
+            offs as usize,
+            offs_cap.checked_mul(std::mem::size_of::<usize>()),
+        ),
+        (flags as usize, Some(flags_cap)),
+        (report as usize, Some(2 * std::mem::size_of::<usize>())),
+        (error as usize, Some(std::mem::size_of::<PathError>())),
+    ];
+    for (i, &(a, n)) in spans.iter().enumerate() {
+        let Some(n) = n else {
+            return -2;
+        };
+        let Some(end) = a.checked_add(n) else {
+            return -2;
+        };
+        for &(b, m) in &spans[..i] {
+            let Some(m) = m else {
+                return -2;
+            };
+            let Some(other_end) = b.checked_add(m) else {
+                return -2;
+            };
+            if n > 0 && m > 0 && a < other_end && b < end {
+                return -2;
+            }
+        }
+    }
+    let (Some(text), Some(pts), Some(offs), Some(flags), Some(report), Some(error)) = (
+        unsafe { crate::checked_slice(text, len) },
+        unsafe { crate::checked_slice_mut(pts, pts_cap) },
+        unsafe { crate::checked_slice_mut(offs, offs_cap) },
+        unsafe { crate::checked_slice_mut(flags, flags_cap) },
+        unsafe { crate::checked_slice_mut(report, 2) },
+        unsafe { crate::checked_slice_mut(error, 1) },
+    ) else {
+        return -1;
+    };
+    report.fill(0);
+    error[0] = PathError::default();
+    let subs = match tokenize_owned(text).and_then(|t| parse_path(&t)) {
+        Ok(s) => s,
+        Err(e) => {
+            error[0] = e;
+            return 2;
+        }
+    };
+    let count = subs.iter().try_fold(0usize, |n, sub| {
+        sub.beziers
+            .len()
+            .checked_mul(8)
+            .and_then(|m| n.checked_add(m))
+    });
+    let Some(count) = count else {
+        error[0].kind = 5;
+        return 2;
+    };
+    if !owned_output_fits(count, subs.len(), subs.len())
+        || subs
+            .iter()
+            .any(|s| s.beziers.iter().flatten().any(|x| !x.is_finite()))
+    {
+        error[0].kind = 5;
+        return 2;
+    }
+    report[0] = count;
+    report[1] = subs.len();
+    if pts.len() < count || offs.len() < subs.len() || flags.len() < subs.len() {
+        return 1;
+    }
+    let mut pos = 0;
+    for (i, sub) in subs.iter().enumerate() {
+        offs[i] = pos / 8;
+        flags[i] = u8::from(sub.closed);
+        for bez in &sub.beziers {
+            pts[pos..pos + 8].copy_from_slice(bez);
+            pos += 8;
+        }
+    }
+    0
+}
+
+#[cfg(test)]
+mod owned_tests {
+    use super::*;
+
+    #[test]
+    fn output_budget_is_bytes_and_combined() {
+        assert!(owned_output_fits(SVG_MAX_OUTPUT_BYTES / 8, 0, 0));
+        assert!(!owned_output_fits(SVG_MAX_OUTPUT_BYTES / 8, 1, 1));
+        assert!(!owned_output_fits(usize::MAX, 0, 0));
+        assert!(!owned_output_fits(0, usize::MAX, 0));
+        assert!(!owned_output_fits(0, 1, usize::MAX));
+        let rc = unsafe {
+            narwhal_pure_core_svgpath_owned(
+                std::ptr::null(),
+                0,
+                std::ptr::null_mut(),
+                SVG_MAX_OUTPUT_BYTES / 8,
+                std::ptr::null_mut(),
+                1,
+                std::ptr::null_mut(),
+                1,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            )
+        };
+        assert_eq!(rc, -2, "budget rejected before any pointer/slice access");
+    }
+
+    #[test]
+    fn typed_errors_publish_zero_counts_and_unused_fields() {
+        for (source, kind, command, expected, actual, start, end, value) in [
+            ("1", 1, 0, 0, 0, 0, 0, 1.0_f64),
+            ("L", 2, b'L' as u32, 0, 0, 0, 0, 0.0),
+            ("M0 0L1", 3, b'L' as u32, 2, 1, 0, 0, 0.0),
+            ("M0 0L² 1", 4, 0, 0, 0, 5, 6, 0.0),
+            ("M1e999 0", 5, 0, 0, 0, 0, 0, 0.0),
+        ] {
+            let text: Vec<u32> = source.chars().map(|c| c as u32).collect();
+            let mut report = [99usize; 2];
+            let mut error = PathError::default();
+            let rc = unsafe {
+                narwhal_pure_core_svgpath_owned(
+                    text.as_ptr(),
+                    text.len(),
+                    std::ptr::null_mut(),
+                    0,
+                    std::ptr::null_mut(),
+                    0,
+                    std::ptr::null_mut(),
+                    0,
+                    report.as_mut_ptr(),
+                    &mut error,
+                )
+            };
+            assert_eq!(rc, 2, "{source}");
+            assert_eq!(report, [0, 0]);
+            assert_eq!(
+                (
+                    error.kind,
+                    error.command,
+                    error.expected,
+                    error.actual,
+                    error.start,
+                    error.end,
+                    error.value.to_bits()
+                ),
+                (kind, command, expected, actual, start, end, value.to_bits())
+            );
+        }
     }
 }

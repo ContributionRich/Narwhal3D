@@ -100,10 +100,10 @@ fn in_ranges(cp: u32, table: &[(u32, u32)]) -> bool {
         })
         .is_ok()
 }
-fn digit(cp: u32) -> bool {
+pub(crate) fn digit(cp: u32) -> bool {
     in_ranges(cp, DIGITS)
 }
-fn alnum(cp: u32) -> bool {
+pub(crate) fn alnum(cp: u32) -> bool {
     alpha(cp) || in_ranges(cp, NUMERIC)
 }
 fn text(cps: &[u32]) -> String {

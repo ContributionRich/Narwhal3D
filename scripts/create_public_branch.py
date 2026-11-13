@@ -35,7 +35,7 @@ ROOT_FILES = (
     "docs/reviews/2026-10-31-rust-document-registry.md",
     "docs/reviews/2026-10-31-native-only.md",
     "docs/reviews/2026-11-11-rust-interaction-blend.md",
-    "docs/LIBRARY.md", "docs/FILE_IO.md", "docs/RUST_RETIREMENT_11.md", "docs/RUST_PARSER_OWNERSHIP.md", "docs/RUST_COORDINATE_JOIN_OWNERSHIP.md",
+    "docs/LIBRARY.md", "docs/FILE_IO.md", "docs/RUST_RETIREMENT_11.md", "docs/RUST_PARSER_OWNERSHIP.md", "docs/RUST_COORDINATE_JOIN_OWNERSHIP.md", "docs/RUST_SVG_ALIAS_OWNERSHIP.md",
         "docs/reviews/2026-10-30-agent-v3-integration.md",
 )
 LAUNCH_FILES = (
@@ -215,6 +215,8 @@ TEST_FILES = (
     "spike/test_coords.py", "spike/test_native_coords.py",
     "spike/test_macro.py", "spike/test_native_macro.py",
     "spike/test_macro_plan.py", "spike/test_native_macro_plan.py",
+    "spike/test_svgpath_owned.py", "spike/svgpath_reference.py",
+    "spike/test_alias_owned.py", "spike/alias_reference.py",
     "spike/test_svgpath.py", "spike/test_native_svgpath.py",
     "spike/test_curve_through_polyline.py", "spike/test_conic.py",
     "spike/test_parabola.py", "spike/test_parabola3pt.py",
@@ -409,6 +411,7 @@ NATIVE_FILES = (
     "native/pure_core/src/metadata_ffi.rs",
     "native/pure_core/src/bearing.rs", "native/pure_core/src/coords.rs",
     "native/pure_core/src/macro_parse.rs", "native/pure_core/src/macro_plan.rs",
+    "native/pure_core/src/alias_owned.rs",
     "native/pure_core/src/svgpath.rs", "native/pure_core/src/joinchain.rs",
     "native/pure_core/src/vector_export.rs", "native/pure_core/src/command_search.rs",
     "native/pure_core/src/command_search_tests_02.rs",

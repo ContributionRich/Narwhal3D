@@ -141,6 +141,32 @@ def library(mutant=""):
         c.memmove(output, witness, len(witness))
         c.cast(needed, c.POINTER(c.c_size_t))[0] = len(witness)
         return 0
+    def svg(text, length, output, capacity, offsets, ocap, flags, fcap, report, error):
+        assert (capacity, ocap, fcap) == (8,1,1)
+        word = ''.join(chr(text[i]) for i in range(length))
+        if word == 'M0 0 L3 0':
+            output[:] = [0.,0.,1.,0.,2.,0.,3.,0.]
+            report[:] = [8,1]
+            if mutant == 'svg-geometry': output[2] = 9
+            return 0
+        assert word == 'M0'
+        fields = c.cast(error,c.POINTER(c.c_uint32))
+        fields[0],fields[1],fields[2],fields[3] = 3,77,2,1
+        return 0 if mutant == 'svg-error' else 2
+    def alias(text,length,unicode,out,size,spans,capacity):
+        assert (unicode,size,capacity) == (151,28,4)
+        word = ''.join(chr(text[i]) for i in range(length))
+        reply = c.cast(out,c.POINTER(c.c_uint32))
+        values = [0,0,0,1,2,6,2] if word == "'_Zoom _Extents __" else [1,0,0,0,0,0,0]
+        if mutant == 'alias-prefix': values[3] = 0
+        if mutant == 'alias-error': values[0] = 0
+        for i,v in enumerate(values): reply[i] = v
+        return 0
+    def alias_options(text,length,count,spans,capacity):
+        assert (count,capacity) == (2,4)
+        spans[:] = [8,15,18,18]
+        if mutant == 'alias-options': spans[0] = 7
+        return 0
     result = SimpleNamespace(
         narwhal_pure_core_abi_version=Mock(return_value=9 if mutant == "old-abi" else 1),
         narwhal_pure_core_parse_abi=Mock(return_value=1 if mutant == "parser-abi" else 2),
@@ -159,7 +185,12 @@ def library(mutant=""):
         narwhal_pure_core_coords_owned_v1=Mock(side_effect=coords),
         narwhal_pure_core_coords_split_v1=Mock(side_effect=split),
         narwhal_pure_core_norm_v1=Mock(side_effect=norm),
-        narwhal_pure_core_joinchain=Mock(side_effect=join))
+        narwhal_pure_core_joinchain=Mock(side_effect=join),
+        narwhal_pure_core_svgpath_owned_version=Mock(return_value=1 if mutant == 'svg-abi' else 14),
+        narwhal_pure_core_svgpath_owned=Mock(side_effect=svg),
+        narwhal_pure_core_alias_identity=Mock(return_value=14 if mutant == 'alias-abi' else 1),
+        narwhal_pure_core_alias_parse=Mock(side_effect=alias),
+        narwhal_pure_core_alias_options=Mock(side_effect=alias_options))
     if mutant in gate.PURE_CORE_PARSE_EXPORTS:
         delattr(result, mutant)
     return result
@@ -173,7 +204,7 @@ def execute_probe(mutant="", code=None):
     return json.loads(output.getvalue())
 
 
-def pe_fixture(*, parser_abi=2, missing=""):
+def pe_fixture(*, parser_abi=2, missing="", svg_abi=14, alias_abi=1):
     """Minimal PE export/import tables; data fixture, never executable native code."""
     data = bytearray(4096)
     data[:2] = b"MZ"
@@ -187,6 +218,7 @@ def pe_fixture(*, parser_abi=2, missing=""):
     struct.pack_into("<II", data, optional + 120, 0x1a00, 40)
     struct.pack_into("<IIII", data, optional + 240 + 8, 0xe00, 0x1000, 0xe00, 0x200)
     names = [name for name in ("narwhal_pure_core_abi_version", *gate.PURE_CORE_PARSE_EXPORTS) if name != missing]
+    assert len(names) <= 32, "PE fixture export table capacity exceeded"
     offset = lambda rva: rva - 0x1000 + 0x200
     struct.pack_into("<IIIII", data, offset(0x1200) + 20,
                      len(names), len(names), 0x1240, 0x12c0, 0x1340)
@@ -199,6 +231,8 @@ def pe_fixture(*, parser_abi=2, missing=""):
         data[offset(cursor):offset(cursor) + len(encoded)] = encoded
         cursor += len(encoded)
         value = parser_abi if name == "narwhal_pure_core_parse_abi" else (2 if name in {"narwhal_pure_core_calc_abi2", "narwhal_pure_core_bearing_abi2"} else 1)
+        if name == "narwhal_pure_core_svgpath_owned_version": value = svg_abi
+        if name == "narwhal_pure_core_alias_identity": value = alias_abi
         data[offset(0x1c00) + i * 16:offset(0x1c00) + i * 16 + 6] = b"\xb8" + struct.pack("<I", value) + b"\xc3"
     struct.pack_into("<IIIII", data, offset(0x1a00), 0x1a80, 0, 0, 0x1a40, 0x1a80)
     data[offset(0x1a40):offset(0x1a40) + 13] = b"kernel32.dll\0"
@@ -216,7 +250,9 @@ class ParserProbeTests(unittest.TestCase):
                        "wrong-value", "accept-invalid", "transport", "reserved", "no-write",
                        "calc-value", "calc-error", "bearing-value", "bearing-error",
                        "planner-error", "calc-abi", "bearing-abi",
-                       "coords-value", "coords-error", "norm-value", "join-boundary"):
+                       "coords-value", "coords-error", "norm-value", "join-boundary",
+                       "svg-abi", "alias-abi", "svg-geometry", "svg-error",
+                       "alias-prefix", "alias-error", "alias-options"):
             with self.subTest(mutant=mutant), self.assertRaises((AttributeError, RuntimeError)):
                 execute_probe(mutant)
         self.assertEqual(execute_probe(), gate.PURE_CORE_PARSE_IDENTITY)
@@ -235,6 +271,25 @@ class ParserProbeTests(unittest.TestCase):
                     execute_probe(mutant, broken)
             with self.assertRaises(RuntimeError):
                 execute_probe(mutant)
+
+    def test_owned_semantic_guards_are_mutation_sensitive(self):
+        guards = (
+            ('svg-geometry', 'if status != 0 or list(report)'),
+            ('svg-error', 'elif status != 2 or (error.kind'),
+            ('alias-prefix', 'if alias(points,len(text)'),
+            ('alias-options', 'if options(points,len(text)'),
+        )
+        for mutant, prefix in guards:
+            with self.subTest(mutant=mutant):
+                line = next(line for line in gate.PURE_CORE_PARSE_PROBE.splitlines() if line.strip().startswith(prefix))
+                replacement = line[:len(line)-len(line.lstrip())] + ('elif False:' if prefix.startswith('elif') else 'if False:')
+                broken = gate.PURE_CORE_PARSE_PROBE.replace(line, replacement)
+                # The negative test itself must turn RED when its guard is removed.
+                with self.assertRaises(AssertionError):
+                    with self.assertRaises(RuntimeError):
+                        execute_probe(mutant, broken)
+                with self.assertRaises(RuntimeError):
+                    execute_probe(mutant)
 
     def test_child_is_isolated_bounded_and_bad_evidence_fails(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -360,7 +415,8 @@ class PackageTests(unittest.TestCase):
             self.assertEqual(inspect.call_args.kwargs["constant_exports"],
                              {"narwhal_pure_core_abi_version": 1, "narwhal_pure_core_parse_abi": 2,
                                   "narwhal_pure_core_calc_abi2": 2, "narwhal_pure_core_bearing_abi2": 2,
-                                  "narwhal_pure_core_coords_owned_abi1": 1})
+                                  "narwhal_pure_core_coords_owned_abi1": 1,
+                                  "narwhal_pure_core_svgpath_owned_version": 14, "narwhal_pure_core_alias_identity": 1})
             with patch.object(sys, "platform", "win32"), patch.object(win_verify, "probe_pure_core_parser", side_effect=ValueError("semantic mutant")):
                 with self.assertRaisesRegex(win_verify.VerificationError, "semantic mutant"):
                     win_verify.pure_core_record(Path("core.dll"))
@@ -374,7 +430,9 @@ class PackageTests(unittest.TestCase):
             path = Path(tmp) / "core.dll"
             path.write_bytes(pe_fixture())
             self.assertEqual(win_verify.pure_core_record(path)["parse_abi"], 2)
-            for kwargs in ({"parser_abi": 1}, {"missing": "narwhal_pure_core_parse_abi"},
+            for kwargs in ({"parser_abi": 1}, {"svg_abi": 1}, {"alias_abi": 14},
+                           *({"missing": name} for name in gate.PURE_CORE_PARSE_EXPORTS),
+                           {"missing": "narwhal_pure_core_parse_abi"},
                            {"missing": "narwhal_pure_core_parse_v2"}):
                 path.write_bytes(pe_fixture(**kwargs))
                 with self.assertRaises(win_verify.VerificationError):

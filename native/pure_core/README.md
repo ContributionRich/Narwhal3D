@@ -35,7 +35,8 @@ Current production routing:
 | curve/curve intersection recursion (`intersect.curve_curve` after its overlap test) | Rust for two valid `NurbsCurve`s on a qualified platform (Linux; `check_pure_core.py` pins the witness hits); other curves, other platforms and the overlap test stay in Python | 56-97× faster (two 20-point cubics 54.9 → 0.66 ms); bit-identical hits on Linux/glibc (`Split`, `GetBoundingBox`, `Intersection.LineLine` ported from the openNURBS rhino3dm 8.35.0 pins) |
 | DXF encode | Python | two-pass output build never reached a stable 10% win |
 | standalone number / bearing / surveyor parsing | Rust only | grammar and rejection classification owned natively; host type/error presentation only |
-| SVG path parsing | Python | JSON ABI was slower through the 1 MiB input limit |
+| SVG path parsing | required Rust owned ABI14 | tokenizer, numeric conversion, cubic construction and error identity native-only; historical elliptical-arc cubic approximation unchanged; tiny calls retain FFI overhead |
+| alias macro grammar | required Rust identity1 | prefix/command/option spans and invalid classification native-only; AliasTable state/CRUD remain host code |
 | display segment counts (`screen_segments_for`) | Python | 0.5 µs per call, below one ctypes call; not ported |
 | short convex face loops (under 64 points) | Python | the linear fan beats packing (3.4× slower at 3 points) |
 
@@ -64,8 +65,9 @@ no-library fallback, held identical by `spike/test_native_unit_table.py`.
 
 The CPython adapter is `narwhal3d/native_pure.py`. It loads the crate only from
 the `NARWHAL_PURE_CORE` environment path or an adjacent packaged slot. Every active
-native route has a complete Python fallback. The crate is an opt-in production
-dependency but is not yet bundled in an AppImage or Windows preview. The stable
+optional acceleration route may retain a complete Python fallback. Required native-only
+entry points do not replay Python on missing, stale or failed native support. Matching
+platform libraries must be staged and qualified before live entry hooks are activated. The stable
 C ABI (version 1, additive) lets Blender's CPython 3.13 and other CPython
 versions load the same platform library through `ctypes`.
 

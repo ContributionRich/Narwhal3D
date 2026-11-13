@@ -14,6 +14,7 @@
 //! under `src/`.
 
 pub mod aci_colors;
+pub mod alias_owned;
 pub mod arclength;
 pub mod bearing;
 pub mod bearing_owned;

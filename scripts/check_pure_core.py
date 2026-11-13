@@ -91,6 +91,7 @@ PURE_CORE_PYTESTS = (
     "spike/test_macro_plan_owned.py",
     "spike/test_svgpath.py",
     "spike/test_native_svgpath.py",
+    "spike/test_svgpath_owned.py", "spike/test_alias_owned.py",
     "spike/test_vector_export.py",
     "spike/test_native_vector_export.py",
     "spike/test_native_command_search.py",
@@ -127,6 +128,8 @@ PURE_CORE_PARSE_EXPORTS = (
     "narwhal_pure_core_bearing_abi2", "narwhal_pure_core_bearing_v2",
     "narwhal_pure_core_macro_plan_checked",
     "narwhal_pure_core_coords_owned_abi1", "narwhal_pure_core_coords_owned_v1",
+    "narwhal_pure_core_svgpath_owned_version", "narwhal_pure_core_svgpath_owned",
+    "narwhal_pure_core_alias_identity", "narwhal_pure_core_alias_parse", "narwhal_pure_core_alias_options",
     "narwhal_pure_core_coords_split_v1", "narwhal_pure_core_norm_v1", "narwhal_pure_core_joinchain",
 )
 PURE_CORE_PARSE_IDENTITY = {
@@ -249,6 +252,43 @@ for threshold, expected_count in ((math.nextafter(expected,-math.inf),2),(expect
     chains, total = c.c_int64(), c.c_int64()
     if join(2, starts, ends, threshold, off, length, closed, *axes, members, reverse, c.byref(chains), c.byref(total)) != 0 or chains.value != expected_count or total.value != 2 or list(members) != [0,1]:
         raise RuntimeError("Join tolerance boundary witness differs")
+# Required batch14 ownership identities and independent semantic witnesses.
+for symbol, expected in (("narwhal_pure_core_svgpath_owned_version", 14), ("narwhal_pure_core_alias_identity", 1)):
+    fn = getattr(lib, symbol)
+    fn.argtypes, fn.restype = [], c.c_uint32
+    if fn() != expected:
+        raise RuntimeError(symbol + " ABI mismatch")
+class SvgError(c.Structure):
+    _fields_ = [("kind", c.c_uint32), ("command", c.c_uint32), ("expected", c.c_uint32), ("actual", c.c_uint32), ("start", c.c_size_t), ("end", c.c_size_t), ("value", c.c_double)]
+svg = lib.narwhal_pure_core_svgpath_owned
+svg.argtypes = [c.POINTER(c.c_uint32), c.c_size_t, c.POINTER(c.c_double), c.c_size_t, c.POINTER(c.c_size_t), c.c_size_t, c.POINTER(c.c_ubyte), c.c_size_t, c.POINTER(c.c_size_t), c.POINTER(SvgError)]
+svg.restype = c.c_int32
+for text in ("M0 0 L3 0", "M0"):
+    points = (c.c_uint32 * len(text))(*map(ord, text))
+    output, offsets, flags, report, error = (c.c_double*8)(), (c.c_size_t*1)(), (c.c_ubyte*1)(), (c.c_size_t*2)(), SvgError()
+    status = svg(points, len(text), output, 8, offsets, 1, flags, 1, report, c.byref(error))
+    if text == "M0 0 L3 0":
+        if status != 0 or list(report) != [8,1] or list(output) != [0.,0.,1.,0.,2.,0.,3.,0.] or list(offsets) != [0] or list(flags) != [0] or bytes(error) != bytes(SvgError()):
+            raise RuntimeError("owned SVG geometry witness differs")
+    elif status != 2 or (error.kind, error.command, error.expected, error.actual) != (3,77,2,1) or list(report) != [0,0]:
+        raise RuntimeError("owned SVG error witness differs")
+class AliasReply(c.Structure):
+    _fields_ = [(name,c.c_uint32) for name in ("code","reserved","prefix_start","prefix_end","command_start","command_end","option_count")]
+alias = lib.narwhal_pure_core_alias_parse
+alias.argtypes = [c.POINTER(c.c_uint32),c.c_size_t,c.c_uint32,c.POINTER(AliasReply),c.c_size_t,c.POINTER(c.c_uint32),c.c_size_t]
+alias.restype = c.c_uint32
+options = lib.narwhal_pure_core_alias_options
+options.argtypes = [c.POINTER(c.c_uint32),c.c_size_t,c.c_size_t,c.POINTER(c.c_uint32),c.c_size_t]
+options.restype = c.c_uint32
+for text, expected in (("'_Zoom _Extents __", (0,0,0,1,2,6,2)), ("!!", (1,0,0,0,0,0,0))):
+    points = (c.c_uint32*len(text))(*map(ord,text))
+    reply, parsed_spans = AliasReply(), (c.c_uint32*4)()
+    if alias(points,len(text),151,c.byref(reply),28,parsed_spans,4) != 0 or tuple(getattr(reply,name) for name,_ in AliasReply._fields_) != expected:
+        raise RuntimeError("owned alias prefix/error witness differs")
+    if reply.code == 0:
+        spans = (c.c_uint32*4)()
+        if options(points,len(text),2,spans,4) != 0 or list(spans) != [8,15,18,18]:
+            raise RuntimeError("owned alias options witness differs")
 macro_size = lib.narwhal_pure_core_macro_size
 macro_size.argtypes = [c.c_char_p, c.c_size_t, c.c_ubyte]
 macro_size.restype = c.c_int64
@@ -289,7 +329,7 @@ output, needed = c.create_string_buffer(64), c.c_size_t()
 if widths(text, len(text), output, len(output), c.byref(needed)) != 0 or output.raw[:needed.value] != struct.pack("<IddI", 2, 1.0, 2.0, 0):
     raise RuntimeError("print-widths witness differs")
 print(json.dumps({"abi": 1, "parse_abi": 2, "reply_bytes": c.sizeof(Reply),
-                  "parser_exports": ["narwhal_pure_core_parse_abi", "narwhal_pure_core_parse_v2", "narwhal_pure_core_printwidths", "narwhal_pure_core_macro_size", "narwhal_pure_core_macro_encode", "narwhal_pure_core_unitformat_resolve_mode", "narwhal_pure_core_unitformat_format", "narwhal_pure_core_calc_abi2", "narwhal_pure_core_calc_v2", "narwhal_pure_core_bearing_abi2", "narwhal_pure_core_bearing_v2", "narwhal_pure_core_macro_plan_checked", "narwhal_pure_core_coords_owned_abi1", "narwhal_pure_core_coords_owned_v1", "narwhal_pure_core_coords_split_v1", "narwhal_pure_core_norm_v1", "narwhal_pure_core_joinchain"]}, sort_keys=True))
+                  "parser_exports": ["narwhal_pure_core_parse_abi", "narwhal_pure_core_parse_v2", "narwhal_pure_core_printwidths", "narwhal_pure_core_macro_size", "narwhal_pure_core_macro_encode", "narwhal_pure_core_unitformat_resolve_mode", "narwhal_pure_core_unitformat_format", "narwhal_pure_core_calc_abi2", "narwhal_pure_core_calc_v2", "narwhal_pure_core_bearing_abi2", "narwhal_pure_core_bearing_v2", "narwhal_pure_core_macro_plan_checked", "narwhal_pure_core_coords_owned_abi1", "narwhal_pure_core_coords_owned_v1", "narwhal_pure_core_svgpath_owned_version", "narwhal_pure_core_svgpath_owned", "narwhal_pure_core_alias_identity", "narwhal_pure_core_alias_parse", "narwhal_pure_core_alias_options", "narwhal_pure_core_coords_split_v1", "narwhal_pure_core_norm_v1", "narwhal_pure_core_joinchain"]}, sort_keys=True))
 '''
 
 

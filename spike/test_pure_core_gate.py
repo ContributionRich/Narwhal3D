@@ -94,6 +94,7 @@ def _():
         "spike/test_native_pickconstraint.py", "spike/test_native_blend.py",
         "spike/test_macro.py", "spike/test_native_macro.py",
         "spike/test_macro_plan.py", "spike/test_native_macro_plan.py",
+        "spike/test_svgpath_owned.py", "spike/test_alias_owned.py",
         "spike/test_svgpath.py", "spike/test_native_svgpath.py",
         "spike/test_vector_export.py", "spike/test_native_vector_export.py",
         "spike/test_native_command_search.py",

@@ -1,18 +1,34 @@
-"""Pure command-alias parsing and editable table support.
+"""Command alias state and defaults with required Rust macro grammar.
 
-The application provides a small built-in alias set. Callers can create additional
-aliases in an :class:`AliasTable`, import them from text, export them, delete them,
-and restore the table to the built-in defaults.
-
-This module has no UI or geometry dependencies so it can be used by headless
-command-resolution code and focused tests.
+Python retains AliasTable CRUD/presentation; parsing is native-only.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
-import re
 from types import MappingProxyType
 
+# The native alias-grammar host. Loaded by package name when imported as part
+# of narwhal3d, or by file path when this candidate is loaded directly (the
+# differential test loads it by file path, so the package is not importable).
+import importlib.util
+from pathlib import Path as _Path
+
+if __package__:
+    from . import native_alias as _alias_native
+else:
+    _name = 'narwhal3d_native_alias'
+    if _name not in __import__('sys').modules:
+        _parent = _Path(__file__).resolve().parent
+        _path = _parent / 'native_alias.py'
+        _spec = importlib.util.spec_from_file_location(_name, _path)
+        _mod = importlib.util.module_from_spec(_spec)
+        __import__('sys').modules[_name] = _mod
+        try:
+            _spec.loader.exec_module(_mod)
+        except BaseException:
+            __import__('sys').modules.pop(_name, None)
+            raise
+    _alias_native = __import__('sys').modules[_name]
 
 #: Supported macro prefix characters and their command-line meanings.
 PREFIX_MEANINGS = {
@@ -62,12 +78,6 @@ _KNOWN_COMMANDS = {
     "Snap",
 }
 
-# A macro is an optional supported prefix, an optional canonical-name marker,
-# a command, and zero or more whitespace-separated options.
-_MACRO_RE = re.compile(
-    r"^(?P<prefix>['!_])?\s*_?(?P<cmd>\w+)(?:\s+(?P<rest>.*))?$"
-)
-
 
 class Alias:
     """One alias and the parsed parts of its macro."""
@@ -109,16 +119,9 @@ def parse_macro(macro: str):
 
     Return ``(None, None, None)`` when the value does not follow the supported
     form, allowing callers to report invalid input instead of partially applying
-    it.
+    it. The grammar is owned by the required native host; this is a thin call.
     """
-    match = _MACRO_RE.match(macro or "")
-    if not match:
-        return None, None, None
-    prefix = match.group("prefix")
-    command = match.group("cmd")
-    rest = match.group("rest")
-    options = tuple(token.lstrip("_").strip() for token in (rest or "").split())
-    return prefix, command, options
+    return _alias_native.parse_macro(macro)
 
 
 def _build_table():

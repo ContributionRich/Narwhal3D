@@ -503,6 +503,7 @@ def verify_pure_core_identity(path: Path) -> dict[str, object]:
         "narwhal_pure_core_abi_version": 1, "narwhal_pure_core_parse_abi": 2,
         "narwhal_pure_core_calc_abi2": 2, "narwhal_pure_core_bearing_abi2": 2,
         "narwhal_pure_core_coords_owned_abi1": 1,
+        "narwhal_pure_core_svgpath_owned_version": 14, "narwhal_pure_core_alias_identity": 1,
     })
     if any(identity["exports"].count(name) != 1 for name in PURE_CORE_PARSE_EXPORTS):
         raise VerificationError("Windows pure-core lacks required parser ABI exports")
