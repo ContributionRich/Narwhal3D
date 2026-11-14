@@ -490,6 +490,7 @@ PURE_SUITES=(
     spike/test_coil_owned.py
     spike/test_native_intersect.py
     spike/test_pure_core_curve_hits_gate.py
+    spike/test_pure_core_nurbs_record_gate.py
     spike/test_native_coil_preview.py
     spike/test_preview_curve_native.py
     spike/test_preview24_boundaries.py
@@ -499,6 +500,7 @@ PURE_SUITES=(
     spike/test_native_nearest.py
     spike/test_pure_core_nearest_batch_gate.py
     spike/test_native_curve_samples.py
+    spike/test_nurbs_data.py
     spike/test_native_display_samples.py
     spike/test_native_rebuild_fit.py
     spike/test_native_arclength.py

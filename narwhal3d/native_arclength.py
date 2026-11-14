@@ -26,6 +26,14 @@ _signature = None
 _binding = None
 _native_calls = 0
 
+
+def _nurbs_data():
+    try:
+        from . import nurbs_data
+    except ImportError:          # loaded standalone (tests / probes)
+        import nurbs_data
+    return nurbs_data
+
 _D = ctypes.POINTER(ctypes.c_double)
 
 
@@ -82,18 +90,16 @@ class PackedTable:
     __slots__ = ("args", "_keep")
 
     def __init__(self, curve, table, nodes, weights):
-        cvs = []
-        for cv in curve.Points:
-            cvs.extend((cv.X, cv.Y, cv.Z, cv.W))   # homogeneous, as openNURBS stores them
-        knots, c_knots = _doubles(curve.Knots.ToList())
+        order, rational, knots, cvs = _nurbs_data().arrays(curve)   # homogeneous CVs
+        knots, c_knots = _doubles(knots)
         cvs, c_cvs = _doubles(cvs)
         table_knots, c_table = _doubles(table.knots)
         cum, c_cum = _doubles(table.cum)
         nodes, c_nodes = _doubles(nodes)
         weights, c_weights = _doubles(weights)
         self._keep = (knots, cvs, table_knots, cum, nodes, weights)
-        self.args = (int(curve.Order), c_knots, len(knots), c_cvs, len(cvs) // 4,
-                     int(bool(curve.IsRational)), float(table.t0), float(table.t1),
+        self.args = (order, c_knots, len(knots), c_cvs, len(cvs) // 4,
+                     int(rational), float(table.t0), float(table.t1),
                      c_table, len(table_knots), c_cum, float(table.total),
                      c_nodes, c_weights, len(nodes))
 

@@ -33,6 +33,14 @@ _binding = None
 _native_calls = 0
 
 
+def _nurbs_data():
+    try:
+        from . import nurbs_data
+    except ImportError:          # loaded standalone (tests / probes)
+        import nurbs_data
+    return nurbs_data
+
+
 def _library_name():
     if sys.platform == "win32":
         return "narwhal_pure_core.dll"
@@ -89,14 +97,11 @@ def display_samples(curve, tolerance):
     if fn is None or not isinstance(curve, r3.NurbsCurve):
         return None
     try:
-        cvs = array.array("d")
-        for cv in curve.Points:
-            cvs.extend((cv.X, cv.Y, cv.Z, cv.W))   # homogeneous, as openNURBS stores them
-        knots = array.array("d", curve.Knots.ToList())
+        order, rational, knots, cvs = _nurbs_data().arrays(curve)   # homogeneous CVs
         domain = curve.Domain
-        args = (int(curve.Order), (ctypes.c_double * len(knots)).from_buffer(knots), len(knots),
+        args = (order, (ctypes.c_double * len(knots)).from_buffer(knots), len(knots),
                 (ctypes.c_double * len(cvs)).from_buffer(cvs), len(cvs) // 4,
-                int(bool(curve.IsRational)), float(domain.T0), float(domain.T1),
+                int(rational), float(domain.T0), float(domain.T1),
                 float(tolerance))
         count = ctypes.c_size_t()
         capacity = _FIRST_CAPACITY

@@ -33,6 +33,14 @@ class NearestInputError(ValueError):
     """Nonfinite, malformed or resource-excessive search input."""
 
 
+def _nurbs_data():
+    try:
+        from . import nurbs_data
+    except ImportError:          # loaded standalone (tests / probes)
+        import nurbs_data
+    return nurbs_data
+
+
 def _library_name():
     if sys.platform == "win32":
         return "narwhal_pure_core.dll"
@@ -199,9 +207,8 @@ def pack(curve):
         return CallbackCurve(curve)
     if len(curve.Points) > 1 << 20:
         raise NearestInputError("nearest control-point resource limit")
-    cvs = [v for cv in curve.Points for v in (cv.X, cv.Y, cv.Z, cv.W)]
-    return PackedCurve(int(curve.Order), list(curve.Knots.ToList()), cvs,
-                       bool(curve.IsRational), bool(curve.IsClosed))
+    order, rational, knots, cvs = _nurbs_data().arrays(curve)   # homogeneous CVs
+    return PackedCurve(order, knots, cvs, rational, bool(curve.IsClosed))
 
 
 def _search_many_binding():
@@ -338,17 +345,14 @@ def sample(curve, n):
         n = int(n)
         if n < 1:
             return None
-        cvs = array.array("d")
-        for cv in curve.Points:
-            cvs.extend((cv.X, cv.Y, cv.Z, cv.W))   # homogeneous, as openNURBS stores them
-        knots = array.array("d", curve.Knots.ToList())
+        order, rational, knots, cvs = _nurbs_data().arrays(curve)   # homogeneous CVs
         domain = curve.Domain
         out = array.array("d", bytes(8 * 3 * (n + 1)))
         c_knots = (ctypes.c_double * len(knots)).from_buffer(knots)
         c_cvs = (ctypes.c_double * len(cvs)).from_buffer(cvs)
         c_out = (ctypes.c_double * len(out)).from_buffer(out)
-        code = fn(int(curve.Order), c_knots, len(knots), c_cvs, len(cvs) // 4,
-                  int(bool(curve.IsRational)), float(domain.T0), float(domain.T1), n,
+        code = fn(order, c_knots, len(knots), c_cvs, len(cvs) // 4,
+                  int(rational), float(domain.T0), float(domain.T1), n,
                   c_out, len(out))
     except Exception:  # noqa: BLE001 -- the Python sampling remains the fallback
         return None
