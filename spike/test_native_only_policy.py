@@ -129,10 +129,28 @@ class PolicyTests(unittest.TestCase):
 
     def test_retired_public_oracles_are_data_and_rust_only(self):
         for name in ('alias_reference', 'units_reference', 'interpolate_reference',
-                     'test_interpolate_math_owned'):
+                     'test_interpolate_math_owned', 'bearing_reference', 'unitformat_reference',
+                     'joinchain_reference', 'rebuild_reference'):
             self.assertFalse((ROOT / 'spike' / (name + '.py')).exists(), name)
-        for suite in ('alias_golden', 'unit_golden', 'interpolate_golden'):
+        for suite in ('alias_golden', 'unit_golden', 'interpolate_golden',
+                      'svgpath_golden', 'calc_golden', 'coords_golden', 'bearing_golden',
+                      'unitformat_golden', 'macro_golden', 'joinchain_golden', 'rebuild_golden'):
             self.assertIn('native/pure_core/tests/' + suite + '.rs', public.NATIVE_FILES)
+
+    def test_reference_decoders_cannot_restore_retired_engines(self):
+        forbidden = {'_tokenize', '_parse_expr', '_parse_atom', '_arc_to_cubics',
+                     '_split_tokens', '_classify', '_prefixes', '_command_action',
+                     'build_plan', 'evaluate', 'parse_scalar', 'parse_angle',
+                     '_parse_polar', '_bearing_angle', '_angle_degrees', '_POLAR_RE'}
+        for name in ('svgpath', 'calc', 'coords', 'macro', 'macro_plan'):
+            tree = ast.parse(source('spike/' + name + '_reference.py'))
+            definitions = {node.name for node in ast.walk(tree)
+                           if isinstance(node, (ast.FunctionDef, ast.ClassDef))}
+            self.assertFalse(definitions & forbidden, (name, definitions & forbidden))
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Import):
+                    self.assertFalse({alias.name for alias in node.names} & {'re', 'math', 'decimal'})
+            self.assertIsNone(audit.runtime_archive_problem(ast.unparse(tree).encode()))
 
     def test_width_format_macro_python_engines_are_retired(self):
         forbidden = {

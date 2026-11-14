@@ -1,154 +1,204 @@
-"""RUST-BEARING-12 real ctypes differential qualification; no skip/fallback.
+"""RUST-BEARING-GOLDEN-18 host qualification; the grammar now lives in Rust.
 
-Bundled CPython 3.13: python3.13 -B spike/test_bearing_owned.py --mutations
-Builds only an external scratch crate using exact source copies. --library PATH
-qualifies an integrated library. No live source, gate or shared lib.rs edits.
+The 28,190-case differential corpus was captured ONCE from the retired Python
+reference into `native/pure_core/tests/fixtures/bearing_golden.txt` and is
+replayed by `native/pure_core/tests/bearing_golden.rs` against the real
+`bearing_v2` ABI. No Python regex parser remains in the public host path.
+
+This file keeps ONLY the host-side contract that the ABI never sees, and a
+small LIVE sample that verifies actual errors against the CAPTURED message
+EXACTLY (the label is fixed presentation; the span is the substring the old
+reference embedded, decoded from the fixture). It does not re-derive the
+grammar, re-compute the corpus checksum, or build any scratch crate: the
+heavy integrity work (hard count, provenance, FNV-1a64 fingerprint, every-row
+replay) is enforced by the Rust golden test, and the native mutation cycle
+lives in the ignored private runner `legacy/retired-rust18/`.
+
+Host-side contract kept here:
+  * object admission — non-strings refused with 'expected a string'
+  * OURS safety      — >4096 code points and nonfinite numbers refused explicitly
+  * live wrapper     — narwhal3d/bearing.py delegates to the required adapter
+  * protocol         — missing/stale/invalid core, reply metadata, unaligned pointer
+  * no Python reference remains in the public path (no `re`, reference retired)
+  * fixture sample   — a live slice cross-checked for EXACT captured messages
+
+Default: load the PACKAGED real core (never build a scratch crate). Override
+with --library or NARWHAL_PURE_CORE to qualify a candidate build.
+
+Bundled CPython 3.13 (Unicode 15.1.0):
+    python3.13 -B spike/test_bearing_owned.py                # host checks, packaged core
+    python3.13 -B spike/test_bearing_owned.py --library PATH # host checks, candidate
 """
 import argparse
 import ast
 import ctypes
-import hashlib
 import importlib.util
-import itertools
-import json
-import math
 import os
-from pathlib import Path
-import random
-import subprocess
-import tempfile
+import struct
+import sys
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
-MODULES = ('numparse', 'numparse_owned', 'python_text', 'bearing_owned')
+FIXTURE = ROOT / 'native/pure_core/tests/fixtures/bearing_golden.txt'
+EXPECTED_COUNT = 28190
+EXPECTED_PROVENANCE = 'spike/bearing_reference.py'
+
+# Fixed host presentation for the grammar-error classes. The SPAN that follows
+# the label is what is CAPTURED per row (the substring the old reference
+# embedded in its error string); the label itself is stable presentation shared
+# by the retired reference and the host adapter.
+EXACT_LABELS = {
+    'BEARING': 'not a bearing (need N/S + angle + E/W)',
+    'SURVEYOR': 'not a surveyor coordinate (need dist<N/SangE/W)',
+    'ANGLE': 'not an angle',
+}
+# QUADRANT's offending angle is deliberately NOT captured in the fixture (the
+# old reference exposed only a lossy %g), so the sample pins the EXACT fixed
+# label prefix and leaves only the (uncaptured) %g tail open.
+QUADRANT_PREFIX = 'quadrant angle must be in [0, 90]: '
 
 
 def load(name, path):
     spec = importlib.util.spec_from_file_location(name, path)
     module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
     spec.loader.exec_module(module)
     return module
 
 
-def scratch(directory, mutation=None):
-    directory = Path(directory)
-    directory.mkdir(parents=True, exist_ok=True)
-    (directory / 'Cargo.toml').write_text(
-        '[package]\nname="rust12-bearing-qualification"\nversion="0.0.0"\nedition="2021"\n'
-        '[lib]\nname="narwhal_pure_core"\ncrate-type=["cdylib","rlib"]\npath="lib.rs"\n')
-    original = (ROOT / 'native/pure_core/src/lib.rs').read_text()
-    start = original.index('use std::mem::{align_of, size_of};')
-    helpers = original[start:original.index('\n#[cfg(test)]', start)]
-    for name in MODULES:
-        content = (ROOT / 'native/pure_core/src' / (name + '.rs')).read_text()
-        if mutation and name == 'bearing_owned':
-            old, new = mutation
-            assert content.count(old) == 1
-            content = content.replace(old, new)
-        path = directory / (name + '.rs')
-        path.write_text(content)
-        helpers += '\n#[path=%s]\npub mod %s;\n' % (json.dumps(str(path)), name)
-    (directory / 'lib.rs').write_text(helpers)
-    return directory / 'Cargo.toml'
+def read_fixture():
+    lines = FIXTURE.read_text(encoding='utf-8').split('\n')
+    header = [l for l in lines if l.startswith('#')]
+    data = [l for l in lines if l and not l.startswith('#')]
+
+    def hfield(name):
+        for l in header:
+            if l.startswith('# ' + name + '='):
+                return l.split('=', 1)[1]
+        raise AssertionError('fixture missing `# %s=' % name)
+
+    # Count + provenance are cheap host-side sanity; the fingerprint (FNV-1a64
+    # checksum) and every-row replay are enforced by the Rust golden test, not
+    # re-derived here.
+    return {
+        'count': int(hfield('count')),
+        'provenance': hfield('provenance'),
+        'data': data,
+    }
 
 
-def cargo(manifest, command):
-    return subprocess.run(['cargo', '+1.95.0', command, '--offline', '--manifest-path', str(manifest)],
-                          stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                          text=True, timeout=90)
+def decode_hexdots(field):
+    if field == '':
+        return ''
+    return ''.join(chr(int(x, 16)) for x in field.split('.'))
+
+
+def bits_of(field):
+    # The fixture stores the little-endian byte hex of the exact f64.
+    return struct.unpack('<d', bytes.fromhex(field))[0]
 
 
 class BearingOwned(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.native = load('bearing_owned_native', ROOT / 'narwhal3d/native_bearing.py')
-        cls.reference = load('bearing_owned_reference', ROOT / 'spike/bearing_reference.py')
         cls.candidate = load('bearing_owned_candidate', ROOT / 'narwhal3d/bearing.py')
-        cls.comparisons = 0
+        cls.fixture = read_fixture()
 
-    def compare(self, text, mode=0):
-        name = 'parse_surveyor' if mode else 'bearing_angle'
-        expected = getattr(self.reference, name)(text)
-        actual = getattr(self.native, name)(text)
-        type(self).comparisons += 1
-        self.assertEqual(actual[1], expected[1], (ascii(text), mode, actual, expected))
-        self.assertEqual(actual[0], expected[0], (ascii(text), mode, actual, expected))
-        if expected[0] is not None:
-            av = actual[0] if mode else (actual[0],)
-            ev = expected[0] if mode else (expected[0],)
-            for a, e in zip(av, ev):
-                self.assertEqual(a.hex(), e.hex(), (ascii(text), a, e))
-
-    def test_grid(self):
-        angles = ['0', '30', '90', '90.00000000000001', '91', '0.000000000001',
-                  '30d22\'54.43"', '30d22\'', '30d22\'"', '0d999\'999"',
-                  '1d2.5\'3.5', '1D2\'', '1d', '1d2', '1d2\'3.', '.5', '1.',
-                  '+1', '-1', '1e1', 'nan', 'inf', '', 'bad', 'E', 'W',
-                  '٣٠', '３０.５', '𝟛𝟘d٢٢\'٥٤.٤٣"', '1\n2', '\ud800']
-        for ns, ew, angle, ws in itertools.product(
-                ['N', 'n', 'S', 's', 'ſ', 'x'], ['E', 'e', 'W', 'w', 'x'],
-                angles, ['', ' ', '\t', '\u0085', '\u001c', '\u2003', '\n']):
-            text = ws + ns + ws + angle + ws + ew + ws
-            self.compare(text)
-            self.compare('-٢.٥ <' + ws + text, 1)
-
-    def test_capture_and_anchor_adversaries(self):
-        tails = ['', ' ', '\n', '\n\n', '\r\n', '\n ', ' \n', '\t\n',
-                 'N30E', 'Nbad E', 'N  E', 'N\nE', 'N \n E',
-                 'N30E\n', 'N30E\n\n', 'N30E\n ', 'N30E\r\n',
-                 'N  bad  E', 'N30 E', 'N30\nE']
-        for prefix, tail in itertools.product(
-                ['1<', ' 1 < ', '1<\n', '1<\n\n', '-1.5<', '+٣.٥<',
-                 '.5<', '1.<', '1e2<', '1 <\u001c', '1<\n '], tails):
-            self.compare(prefix + tail, 1)
-        for tail in tails:
-            self.compare(tail)
+    # ---- object admission (host-only; the ABI never sees non-strings) ----
+    def test_object_admission(self):
         for text in [None, 0, [], {}, b'N30E']:
-            self.compare(text)
-            self.compare(text, 1)
+            self.assertEqual(self.native.bearing_angle(text), (None, 'expected a string'))
+            self.assertEqual(self.native.parse_surveyor(text), (None, 'expected a string'))
+        # The public wrapper refuses identically.
+        self.assertEqual(self.candidate.bearing_angle(None), (None, 'expected a string'))
+        self.assertEqual(self.candidate.parse_surveyor(b'N30E'), (None, 'expected a string'))
 
-    def test_deterministic_adversarial(self):
-        rng = random.Random(12012)
-        alphabet = "NSnsſEWew01239dD.'\"+-< \t\n\r\x1c\u0085\u2003٣𝟙\ud800"
-        for _ in range(12000):
-            text = ''.join(rng.choice(alphabet) for _ in range(rng.randrange(0, 35)))
-            self.compare(text, rng.randrange(2))
-        for _ in range(1500):
-            angle = str(rng.randrange(0, 92)) + 'd' + str(rng.randrange(0, 200)) + "'" + str(rng.random()*100)
-            self.compare(rng.choice(['N', 'S', 'ſ']) + angle + rng.choice(['E', 'W']))
-
-    def test_unicode_decimal_and_whitespace(self):
-        # Every host-admitted Nd block, not just hand-picked Arabic/ASCII cases.
-        import unicodedata
-        for cp in range(0x110000):
-            c = chr(cp)
-            if unicodedata.category(c) == 'Nd':
-                self.compare('N' + c + 'E')
-                self.compare(c + '<ſ' + c + 'W', 1)
-            if c.isspace():
-                self.compare(c + 'N' + c + '30' + c + 'E' + c)
-                self.compare(c + '1' + c + '<' + c + 'N30E' + c, 1)
-
-    def test_safety_archive_candidate(self):
+    # ---- OURS safety (no silent fallback) ----
+    def test_ours_safety(self):
         for mode in (0, 1):
             fn = self.native.parse_surveyor if mode else self.native.bearing_angle
-            self.assertEqual(fn('x'*4097), (None, 'bearing input exceeds 4096 characters'))
-            text = ('9'*400 + '<N30E') if mode else ('N' + '9'*400 + 'E')
+            self.assertEqual(fn('x' * 4097), (None, 'bearing input exceeds 4096 characters'))
+            text = ('9' * 400 + '<N30E') if mode else ('N' + '9' * 400 + 'E')
             self.assertEqual(fn(text), (None, 'bearing number outside finite range'))
-        self.compare('N' + '0'*4093 + 'E')
-        self.compare('1<N' + '0'*4091 + 'E', 1)
-        self.assertEqual(hashlib.sha256((ROOT / 'spike/bearing_reference.py').read_bytes()).hexdigest(), 'd010960c6052050f58ed4e496f67dab2b2373c0f52dd8243d8ab996e80fb96b3')
+        # The long all-zero angle (a valid OK case in the fixture) still parses.
+        self.assertEqual(self.native.bearing_angle('N' + '0' * 4093 + 'E'), (90.0, None))
+        self.assertEqual(self.native.parse_surveyor('1<N' + '0' * 4091 + 'E'), ((1.0, 90.0), None))
+
+    # ---- live wrapper (thin required-adapter delegate) ----
+    def test_live_wrapper(self):
         self.assertEqual(self.candidate.bearing_angle('N30E'), (60.0, None))
         self.assertEqual(self.candidate.parse_surveyor('-2<S30W'), ((-2.0, 240.0), None))
-        source = (ROOT / 'narwhal3d/native_bearing.py').read_text()
+        self.assertEqual(self.candidate.bearing_angle('N95E')[1], 'quadrant angle must be in [0, 90]: 95')
+
+    # ---- fixture header sanity (cheap; the heavy integrity work is Rust's) ----
+    def test_fixture_header(self):
+        fx = self.fixture
+        self.assertEqual(fx['count'], EXPECTED_COUNT)
+        self.assertEqual(fx['provenance'], EXPECTED_PROVENANCE)
+        self.assertEqual(len(fx['data']), fx['count'])
+
+    # ---- small live sample: verifies actual errors against the CAPTURED message
+    #      EXACTLY (label + captured span), not merely a suffix. This also proves
+    #      the host frames UTF-32 correctly for a slice of the corpus. ----
+    def test_fixture_sample_crosscheck(self):
+        fx = self.fixture
+        checked = 0
+        cap = 300
+        saw_ok = saw_grammar = saw_quadrant = False
+        for line in fx['data']:
+            if checked >= cap:
+                break
+            if checked >= 60 and saw_ok and saw_grammar and saw_quadrant:
+                break
+            inp_field, mode, cls, vb, db, sh, _grp = line.split('\t')
+            mode = int(mode)
+            if cls == 'NONSTR':
+                continue
+            text = decode_hexdots(inp_field)
+            fn = self.native.parse_surveyor if mode else self.native.bearing_angle
+            actual = fn(text)
+            if cls == 'OK':
+                saw_ok = True
+                self.assertIsNone(actual[1], (text, actual))
+                if mode == 0:
+                    self.assertEqual(actual[0].hex(), bits_of(vb).hex(), (text, actual[0]))
+                else:
+                    # The host returns (distance, angle) for surveyor mode.
+                    distance, value = actual[0]
+                    self.assertEqual(value.hex(), bits_of(vb).hex(), (text, value))
+                    self.assertEqual(distance.hex(), bits_of(db).hex(), (text, distance))
+            elif cls == 'QUADRANT':
+                saw_quadrant = True
+                # Exact fixed label prefix; the offending angle (>90) tail is the
+                # deliberately-uncaptured %g value, so only the label is pinned.
+                self.assertTrue(actual[1].startswith(QUADRANT_PREFIX), (text, actual[1]))
+            else:
+                saw_grammar = True
+                span = decode_hexdots(sh)
+                expected = '%s: %r' % (EXACT_LABELS[cls], span)
+                self.assertEqual(actual[1], expected, (text, actual[1], expected))
+            checked += 1
+        self.assertGreaterEqual(checked, 60, 'sample cross-check too small')
+        self.assertTrue(saw_ok, 'no OK rows in sample')
+        self.assertTrue(saw_grammar, 'no grammar-error rows in sample')
+        self.assertTrue(saw_quadrant, 'no QUADRANT rows in sample')
+
+    # ---- no Python regex reference remains in the public host path ----
+    def test_no_python_regex_reference(self):
         for path in ['narwhal3d/native_bearing.py', 'narwhal3d/bearing.py']:
             tree = ast.parse((ROOT / path).read_text())
             for node in ast.walk(tree):
                 if isinstance(node, ast.Import):
                     self.assertNotIn('re', [n.name for n in node.names])
-        self.assertNotIn('_native_bearing', (ROOT / 'spike/bearing_reference.py').read_text())
+                elif isinstance(node, ast.ImportFrom):
+                    self.assertNotEqual(node.module, 're')
+        # The retired independent reference is gone from the public tree.
+        self.assertFalse((ROOT / 'spike/bearing_reference.py').exists())
 
+    # ---- protocol (retained from RUST-BEARING-12) ----
     def test_required_and_protocol(self):
         with patch.dict(os.environ, NARWHAL_PURE_CORE='/no/such/bearing-library.so'):
             with self.assertRaisesRegex(RuntimeError, 'unavailable'):
@@ -179,7 +229,7 @@ class BearingOwned(unittest.TestCase):
         self.assertEqual(binding(None, 0, 0, 151, ctypes.byref(reply), 31), 1)
         self.assertEqual(binding(None, 4097, 0, 151, ctypes.byref(reply), 32), 0)
         self.assertEqual(reply.code, 5)
-        unaligned = ctypes.cast(ctypes.addressof(reply)+1, ctypes.POINTER(ctypes.c_uint32))
+        unaligned = ctypes.cast(ctypes.addressof(reply) + 1, ctypes.POINTER(ctypes.c_uint32))
         self.assertEqual(binding(unaligned, 1, 0, 151, ctypes.byref(reply), 32), 2)
 
 
@@ -187,40 +237,17 @@ def qualify(library):
     os.environ['NARWHAL_PURE_CORE'] = str(library)
     result = unittest.TextTestRunner(verbosity=2).run(
         unittest.defaultTestLoader.loadTestsFromTestCase(BearingOwned))
-    print('Exact differential comparisons:', BearingOwned.comparisons)
+    print('Fixture cases (grammar, replayed by Rust):', EXPECTED_COUNT)
     return result.wasSuccessful()
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--library', type=Path, default=os.environ.get('NARWHAL_PURE_CORE'))
-    parser.add_argument('--mutations', action='store_true')
+    packaged = ROOT / 'narwhal3d/native/libnarwhal_pure_core.so'
+    parser.add_argument('--library', type=Path,
+                        default=Path(os.environ.get('NARWHAL_PURE_CORE', str(packaged))))
     args = parser.parse_args()
-    if args.library and not args.mutations:
-        return 0 if qualify(Path(args.library)) else 1
-    with tempfile.TemporaryDirectory(prefix='rust12-bearing-') as tmp:
-        tmp = Path(tmp)
-        manifest = scratch(tmp / 'green')
-        for command in ('test', 'build'):
-            result = cargo(manifest, command)
-            print(result.stdout)
-            if result.returncode: return 1
-        library = args.library or manifest.parent / 'target/debug/libnarwhal_pure_core.so'
-        if not qualify(library): return 1
-        if args.mutations:
-            for label, mutation in [('quadrant-sign', ('north == east', 'north != east')),
-                                    ('angle-classification', ('error(ANGLE, a, b)', 'error(BEARING, a, b)'))]:
-                mutant = scratch(tmp / label, mutation)
-                result = cargo(mutant, 'test')
-                if result.returncode == 0 or 'quadrant_and_classification ... FAILED' not in result.stdout:
-                    raise AssertionError('Mutation did not fail target test:\n' + result.stdout)
-                print('RED mutation:', label, '(quadrant_and_classification FAILED)')
-            # Re-run exact unmodified source after temporary-copy mutations.
-            result = cargo(manifest, 'test')
-            if result.returncode: raise AssertionError(result.stdout)
-            if not qualify(library): return 1
-            print('RESTORED GREEN (repository sources never mutated)')
-    return 0
+    return 0 if qualify(args.library) else 1
 
 
 if __name__ == '__main__':

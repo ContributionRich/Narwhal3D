@@ -1,11 +1,9 @@
 """Coordinate regression: required owned ABI, exact reference parity, no replay.
 
-All historical VALID_COORDS/COORDS_REJECTED cases are retained. The frozen
-coords_reference fixture is the baseline, never the production adapter disabled.
+All historical examples/rejections are retained as captured fixed outputs.
 --module PATH qualifies an inactive replacement; default uses live public coords.
---library PATH or NARWHAL_PURE_CORE avoids building. Otherwise an external scratch
-crate uses exact repository sources and shared pointer helpers, offline 1.95.0.
-Timing is measured independently of route counters; native rejection is required.
+--library PATH or NARWHAL_PURE_CORE selects the existing core; no test-time builds.
+The original report-only benchmark is archived privately, not timed via fixtures.
 """
 import argparse
 import ctypes
@@ -14,10 +12,8 @@ import math
 import os
 from pathlib import Path
 import struct
-import subprocess
 import sys
 import tempfile
-import time
 import unittest
 from unittest.mock import patch
 
@@ -31,38 +27,6 @@ def load(name, path):
     sys.modules[name] = module
     spec.loader.exec_module(module)
     return module
-
-
-def _polar(r, deg, z=0.0):
-    a = math.radians(deg)
-    return (r * math.cos(a), r * math.sin(a), z)
-
-
-def _spherical(d, deg_az, deg_el):
-    az = math.radians(deg_az)
-    el = math.radians(deg_el)
-    return (d * math.cos(el) * math.cos(az),
-            d * math.cos(el) * math.sin(az),
-            d * math.sin(el))
-
-
-VALID_COORDS = [
-    ("1,2", (1.0, 2.0, 0.0), False, False),
-    ("1,2,3", (1.0, 2.0, 3.0), False, False),
-    ("w1,2", (1.0, 2.0, 0.0), True, False),
-    ("r2,3", (2.0, 3.0, 0.0), False, True),
-    ("rw1,2", (1.0, 2.0, 0.0), True, True),
-    ("5/16,1-3/4", (0.3125, 1.75, 0.0), False, False),
-    ("17<45", _polar(17, 45), False, False),
-    ("5<30<45", _spherical(5, 30, 45), False, False),
-    ("5,6<15", (5.0, 6.0, math.hypot(5, 6) * math.tan(math.radians(15))),
-     False, False),
-    ("0", (0.0, 0.0, 0.0), False, False),
-    ("w0", (0.0, 0.0, 0.0), True, False),
-    ("11<N30d22'54.43\"W",
-     _polar(11, 90.0 + 30.0 + 22.0 / 60.0 + 54.43 / 3600.0), False, False),
-    ("10*sin(30d),pow(2,3)", (5.0, 8.0, 0.0), False, False),
-]
 
 
 # Existing rejected inputs retained; the frozen independent oracle pins errors.
@@ -88,7 +52,7 @@ class NativeCoordinates(unittest.TestCase):
         cls.reference = load('narwhal_native_coords_reference', ROOT/'spike/coords_reference.py')
         cls.native = cls.coords._adapter()
         cls.coords.set_model_unit('Millimeters')
-        cls.reference.set_model_unit('Millimeters')
+        cls.valid_coords=cls.reference.examples()
 
     def assertNativeCalls(self, before, count):
         self.assertEqual(self.native._native_coords_calls-before,count)
@@ -124,20 +88,20 @@ class NativeCoordinates(unittest.TestCase):
 
     def test_all_old_valid_values_flags_and_native_route(self):
         before=self.native._native_coords_calls
-        for text,want,world,relative in VALID_COORDS:
+        for text,want,world,relative in self.valid_coords:
             actual=self.coords.parse(text)
             self.assertEqual(actual[1:],(world,relative,None),(text,actual))
             # Historical expected examples retain their existing 1e-9 guard.
             # The independent oracle below additionally requires exact bits.
             for a,b in zip(actual[0],want):
                 self.assertLessEqual(abs(a-b),1e-9*max(1.0,abs(b)),(text,a,b))
-            self.assertExact(actual,self.reference.parse(text),text)
-        self.assertNativeCalls(before,len(VALID_COORDS))
+            self.assertExact(actual,self.reference.expected('parse',text,'Millimeters'),text)
+        self.assertNativeCalls(before,len(self.valid_coords))
 
     def test_all_old_rejections_are_exact_and_native(self):
         before=self.native._native_coords_calls
         for text in COORDS_REJECTED:
-            expected=self.reference.parse(text)
+            expected=self.reference.expected('parse',text,'Millimeters')
             self.assertIsNone(expected[0])
             self.assertTrue(expected[-1])
             self.assertExact(self.coords.parse(text),expected,text)
@@ -165,7 +129,7 @@ class NativeCoordinates(unittest.TestCase):
                 self.assertEqual(self.coords.parse(prefix+body),(point,world,relative,None))
         self.assertNativeCalls(before,24)
         for text in ['wr1,2','rr1,2','r@1,2','@rw1,2']:
-            self.assertExact(self.coords.parse(text),self.reference.parse(text),text)
+            self.assertExact(self.coords.parse(text),self.reference.expected('parse',text,'Millimeters'),text)
 
     def test_scalar_angle_success_and_rejection_always_native(self):
         before=self.native._native_coords_calls
@@ -174,7 +138,7 @@ class NativeCoordinates(unittest.TestCase):
                ('parse_angle','30d'),('parse_angle',"0d20'50\""),
                ('parse_angle','bad'),('parse_angle','pi'),('parse_angle','')]
         for name,text in cases:
-            self.assertExact(getattr(self.coords,name)(text),getattr(self.reference,name)(text),text)
+            self.assertExact(getattr(self.coords,name)(text),self.reference.expected(name,text,'Millimeters'),text)
         self.assertNativeCalls(before,len(cases))
 
     def test_ours_finite_manufacturing_safety(self):
@@ -245,51 +209,15 @@ class NativeCoordinates(unittest.TestCase):
 
     def test_host_cplane_resolution_and_precision_contract(self):
         cplane=load('native_coords_cplane',ROOT/'narwhal3d/cplane.py')
-        for plane in [cplane.WORLD_TOP,cplane.WORLD_FRONT,cplane.WORLD_RIGHT]:
+        for plane_name in ['WORLD_TOP','WORLD_FRONT','WORLD_RIGHT']:
+            plane=getattr(cplane,plane_name)
             for text in ['1,2','w1,2','r1,2','rw1,2','@w1,2','bad']:
                 self.assertExact(self.coords.resolve(text,plane,(4,5,6)),
-                                 self.reference.resolve(text,plane,(4,5,6)),text)
+                                 self.reference.expected('resolve',text,plane_name,(4,5,6)),text)
             point=(1/3,math.pi,-1e-200)
             self.assertExact(self.coords.resolve(self.coords.format_world(point),plane),
                              (point,None),'format_world')
         self.assertEqual(self.coords.format_world((1/3,2,3),precision=3),'w0.333,2.000,3.000')
-
-    def test_performance_explicit_consolidation_cost_report(self):
-        # OURS owner-approved consolidation: numeric grammar is native-only
-        # even when a tiny call costs more than the retired Python parser.
-        # This report is not a speed claim or a routing gate; all correctness,
-        # finite/protocol validation and native-call tripwires remain mandatory.
-        perf_inputs=[case[0] for case in VALID_COORDS]
-        count=50000
-        def best(fn):
-            timings=[]
-            for _ in range(3):
-                start=time.perf_counter()
-                for i in range(count): fn(perf_inputs[i%len(perf_inputs)])
-                timings.append(time.perf_counter()-start)
-            return min(timings)
-        native_time=best(self.coords.parse)
-        reference_time=best(self.reference.parse)
-        ratio=native_time/reference_time
-        print('  [perf] required coords.parse native=%.5fs reference=%.5fs '
-              'native_us=%.3f reference_us=%.3f ratio=%.3fx (%d calls)' %
-              (native_time,reference_time,native_time*1e6/count,
-               reference_time*1e6/count,ratio,count),flush=True)
-        # Report the newly owned cheap operations too, without conflating
-        # their ABI cost with correctness or ownership.
-        for name,inputs in [('parse_scalar',['1','1_2','bad','sqrt(-1)']),
-                            ('parse_angle',['30d',"22'",'bad','pi'])]:
-            current=getattr(self.coords,name)
-            reference=getattr(self.reference,name)
-            timings=[]
-            for fn in (current,reference):
-                start=time.perf_counter()
-                for i in range(10000): fn(inputs[i%len(inputs)])
-                timings.append(time.perf_counter()-start)
-            print('  [perf] %s native=%.5fs reference=%.5fs native_us=%.3f '
-                  'reference_us=%.3f ratio=%.3fx (10000 calls)' %
-                  (name,timings[0],timings[1],timings[0]*100,timings[1]*100,
-                   timings[0]/timings[1]),flush=True)
 
 
 def main():
@@ -299,20 +227,9 @@ def main():
     parser.add_argument('--library',type=Path,default=os.environ.get('NARWHAL_PURE_CORE'))
     args=parser.parse_args()
     if args.module: MODULE=args.module.resolve()
-    with tempfile.TemporaryDirectory(prefix='native-coords-qualified-') as temp:
-        if args.library:
-            library=Path(args.library).resolve()
-            if not library.is_file(): raise RuntimeError('Explicit native coordinate library missing')
-        else:
-            qualification=load('native_coords_qualification',ROOT/'spike/test_coords_owned.py')
-            manifest=qualification.scratch(Path(temp)/'exact')
-            subprocess.run(['cargo','+1.95.0','build','--release','--offline',
-                            '--manifest-path',str(manifest)],check=True,timeout=90,
-                           stdout=subprocess.PIPE,stderr=subprocess.STDOUT)
-            library=manifest.parent/'target/release/libnarwhal_pure_core.so'
-        os.environ['NARWHAL_PURE_CORE']=str(library)
-        result=unittest.TextTestRunner(verbosity=2).run(unittest.defaultTestLoader.loadTestsFromTestCase(NativeCoordinates))
-        return 0 if result.wasSuccessful() else 1
+    if args.library: os.environ['NARWHAL_PURE_CORE']=str(args.library.resolve())
+    result=unittest.TextTestRunner(verbosity=2).run(unittest.defaultTestLoader.loadTestsFromTestCase(NativeCoordinates))
+    return 0 if result.wasSuccessful() else 1
 
 
 if __name__=='__main__':

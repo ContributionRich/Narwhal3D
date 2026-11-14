@@ -1,0 +1,73 @@
+Both original engines captured BEFORE retirement; no native-generated expectations or production build_plan answers.
+Independent dependency chain: original macro_plan_reference loads sibling original macro_reference; both preserved together privately.
+Golden rows: id|origin|T/P|lossless 0/1|UTF8 input hex|status|complete canonical JSON payload hex|exception class|full error UTF8 hex|first-refused-name UTF8 hex.
+Host rows: T/P|lossless|S+UTF8 input hex or N+nonstring type|status|payload hex|exception class|full error hex|name hex.
+JSON framing: original dict insertion order matches fixed ABI field order; ensure_ascii=False, compact separators. Original arrays/tuples become JSON arrays only; host restores prefixes tuples.
+Checked typed errors derived from original exception type and _command_action.name frame (-4); original invalid option literal (-5). First original raised error wins.
+Limits: T/P|lossless|sample byte hex|repeat count|suffix hex|status. Explicit original 1MiB/invalid-UTF8 safety assertions; original grammar has no byte-limit policy.
+Total ABI rows: 6573
+Host anchors: 606
+Original inputs token_owned_STANDARD: 46; paired ABI rows 138
+Original inputs token_owned_ADVERSARIAL: 16; paired ABI rows 48
+Original inputs token_owned_EMPTY_NAME_OPTIONS: 4; paired ABI rows 12
+Original inputs token_owned_UNICODE_ALPHA_BOUNDARY: 4; paired ABI rows 12
+Original inputs token_owned_UNICODE_WS_BOUNDARY: 4; paired ABI rows 12
+Original inputs token_owned_TEXT_CANCEL: 4; paired ABI rows 12
+Original inputs token_owned_LONG_MACRO: 1; paired ABI rows 3
+Original inputs token_owned_BIG_MACRO: 1; paired ABI rows 3
+Original inputs token_owned_seeded: 400; paired ABI rows 1200
+Original inputs plan_owned_test_complete_independent_corpus: 100; paired ABI rows 300
+Original inputs nonstring calls: 15; paired ABI rows 0
+Original inputs plan_owned_test_seeded_and_long_macros: 1503; paired ABI rows 4509
+Original inputs test_native_macro.py_VALID_MACROS: 42; paired ABI rows 126
+Original inputs test_native_macro.py_SHORT_MACRO: 1; paired ABI rows 3
+Original inputs test_native_macro.py_LONG_MACRO: 1; paired ABI rows 3
+Original inputs test_native_macro.py_LARGE_MACRO: 1; paired ABI rows 3
+Original inputs test_native_macro.py_TEXT_CANCEL: 4; paired ABI rows 12
+Original inputs test_native_macro.py_LONG_MACROS: 4; paired ABI rows 12
+Original inputs test_native_macro.py_literal: 6; paired ABI rows 18
+Original inputs test_native_macro_plan.py_VALID_MACROS: 17; paired ABI rows 51
+Original inputs test_native_macro_plan.py_LONG_MACRO: 1; paired ABI rows 3
+Original inputs test_native_macro_plan.py_CASEFOLD_MACROS: 2; paired ABI rows 6
+Original inputs test_native_macro_plan.py_NON_NESTABLE: 3; paired ABI rows 9
+Original inputs test_native_macro_plan.py_INVALID_OPTIONS: 3; paired ABI rows 9
+Original inputs test_native_macro_plan.py_literal: 7; paired ABI rows 21
+Original inputs host_long: 4; paired ABI rows 12
+Original inputs option_cancel18: 12; paired ABI rows 36
+legacy/retired-rust18/macro_reference.py sha256 3d09d8b734357af9af6126cb7188dfa0b15ae822f7ff982d36a3e04dcb700a4a bytes 7076
+legacy/retired-rust18/macro_plan_reference.py sha256 ad5a785b3045fd2ba36686f3b5afddf6bc36e3ad59f071aae9f5497dde53e1fe bytes 5712
+legacy/retired-rust18/test_macro_owned.py sha256 2fcaa758ab9f25c49d6ef3ab6c2dd5f0d7efe7956800005963c91bad82621003 bytes 28414
+legacy/retired-rust18/test_macro_plan_owned.py sha256 6c1df1c290efde32ff435e9a14c2a31ab579706215168920ba594e2f61fe9028 bytes 9864
+legacy/retired-rust18/test_native_macro.py sha256 bf2f0897fa81e76ffcbbc82f1b5697bdace60bd236d3de6703079c7e61f5e1a7 bytes 22473
+legacy/retired-rust18/test_native_macro_plan.py sha256 6067313ff87b72c23a593cc76bd3bd5e934055bb8e1877975e2e4d710f91792f bytes 18706
+legacy/retired-rust18/capture_macro.py sha256 cef4fc1b6ab780e76ec0e39c83a05ff3083e9e92065ade82335063fa18d237b6 bytes 13184
+legacy/retired-rust18/calc-current.so sha256 05454659016e76f89bfae322423bcca99d8e9a790c137ec4aa5f237eed8d0107 bytes 951024
+macro_golden.txt sha256 b96dfb60abf3c6f4f7b494dfb5d4237f1c469d3d34bc17f97526e5c9e3c811b7 bytes 8900177
+macro_host.txt sha256 c17fdedeb53c653575dda0a34135761b00b53ed6f9d33dd63af8a577087da50a bytes 3712294
+macro_limits.txt sha256 d02d624d7f0533f4cd43e1824d39266efa2f83efb4747ba9adb6f3c368a461ce bytes 104
+ABI operation/mode/status counts: {('T', '0', '0'): 2191, ('T', '1', '0'): 2191, ('P', '0', '0'): 1118, ('P', '0', '-5'): 496, ('P', '0', '-4'): 577}
+Original tokenizer owned parity: 480 macro occurrences x 2 lossless modes = 960 checks (400 seeded plus 78 curated plus 2 long). Extended paired fixture also checks planning on each.
+Original planner owned string parity: 100 curated + 1500 seeded + 3 long = 1603 checks; 5 original nonstring inputs retained at host boundary. Paired fixture additionally checks both tokenization modes.
+Retained host coverage: JSON/prefix tuple conversion, complete error messages, nonstring/coercion, limits, missing/stale ABI, malformed size/status/schema/retry, native counters/delegation, direct JSON/packed COMPAT/converters.
+PRODUCTION build_plan(hand-built tokens) is NOT retired or edited. Its separate compatibility test remains active using fixed original tokenizer/plan anchors.
+All four unchanged original suites rerun privately after retirement, redirecting ONLY oracle imports to archived originals: macro-archived-*.txt. Old tokenizer constant-output/short-bypass mutation assertions also observed RED in those receipts.
+Original report-only benchmarks unchanged: tokenizer min of 3 at max(2000,200000/input_bytes) calls for 5B/long lossless macros; planner min of 3 at 2000 calls for each of four macros. No speed criterion added; Rust correctness guards do NOT replace relative-speed benchmarks.
+Original planner benchmark baseline retains its ORIGINAL token oracle + product hand-token build_plan; golden expectations instead use the fully independent standalone original planner + original tokenizer.
+Private native mutations: Unicode Nl classification, empty option token, reversed error precedence (valid action order unchanged), transparent refusal bypass. Each integration assertion RED then restored GREEN.
+Retirement-phase validation: Rust integration originally 3/3; Python suites 13/13, 5/5, 16/16, 18/18. No production edits were made in that phase; authorized Rust correction follows.
+FIXED RUST-MACRO-OPTION-CANCEL18: original !=-15 and !_Mode=x produce only an option. Native option branch no longer fabricates Cancel; ! remains lossless metadata. Standalone ! and flagged command/special cancellation remain unchanged. Twelve original-oracle witnesses (36 ABI rows) captured BEFORE fix; original 6537 rows byte-identical. New unit and golden witnesses observed RED on old source, then GREEN; private old-Cancel re-insertion RED, restored GREEN. Release rebuilt only in target/release, NOT staged adjacent; Main owns package qualification.
+Scoped consumers: only the owned macro suites/reference chain; public file-list manifest remains untouched. No out-of-scope caller needed adapting.
+Private mutations_macro.py sha256 383f9f5d7b3fd6e44a2b8e5e4ac029a134521e3fa4a717087b48a2f8d3724cec bytes 2554
+Private benchmark_macro.py sha256 83cc5e337f3f376c23fd3c587b6ea971222ea4038d071e08fe5be08451a20cc9 bytes 1017
+Private retire_macro_tests.py sha256 0450b73cda5195a31c7d8f8e3586bf050c681d5c911cd2f8a0e31cdf53531417 bytes 5240
+Unedited product dependency macro.py sha256 7a3293b272bdd79069d611c1c8eed01f739d8434203760ca13aa08f31a0716f5 bytes 5567
+Unedited product dependency macro_plan.py sha256 c0f5de67443040030eb7d4dddf7452b3bc4279bcac8b734b84154f81826115e8 bytes 15140
+OPTION-CANCEL18 final validation: macro_golden 4/4 over 6573 rows; macro_parse unit suite 28/28; macro_plan unit suite 26/26.
+Release wrapper/COMPAT validation: 36 primary witnesses, 24 packed-token checks, 24 legacy-planner checks; existing Python suites 13/13, 5/5, 16/16, 18/18 against rebuilt target artifact.
+Pre-fix RED receipts: option-cancel18-before-{golden,unit}.txt. Re-insertion RED receipts: option-cancel18-old-cancel-{golden,unit}-red.txt; restored GREEN receipts also archived.
+Fixture status counts: T compact 2191; T lossless 2191; checked plan success 1118, non-nestable -4 577, invalid option -5 496. Host 606 and safety 6 unchanged.
+No native-derived golden regeneration; original 6537-row byte prefix preserved, 36 original-oracle rows appended (9368 bytes). No production Python/shared edits, full gate, adjacent staging, or commit.
+Private mutate_option_cancel18.py sha256 e2add355989df1cca3ff9502884ae1bf6429025e3f9242b1d597acee6e875304 bytes 2358
+Private qualify_option_cancel18.py sha256 224b96924809fe5e9d8270f2744f8ba046d8bf44fcf3b2f52c5c959f75fd9345 bytes 2072
+OPTION-CANCEL18 native/pure_core/src/macro_parse.rs sha256 a3a205f44ee62657378b8ae1dd16600476a09a215c6593bb7d00f8f8a35cba37 bytes 54156
+OPTION-CANCEL18 native/pure_core/target/release/libnarwhal_pure_core.so sha256 ec6413e3c9978464119de8dae7864a2f1374c5c8642739c1e16596a8a73f955e bytes 950976

@@ -1,0 +1,40 @@
+Independent original Python expression oracle; no native calculator answers.
+Metadata: passive original token spans/exception frames/literal values mapped to fixed ABI 2 protocol.
+Literal dependency: original required numparse, not an independent numeric-literal engine.
+Format: id|group|input cps|repr(model) cps|model kind|model cps|answer bits or -|full error cps|code|aux|start|end|reply bits
+Differential rows: 22107
+Total string rows: 22197
+Nonstring host rows: 5
+Exact presentation anchors: 4575
+Live host boundary anchors: 203
+test_grammar_units_and_error_precedence: 880
+test_unicode_predicates_and_offsets: 5379
+test_math_specials_and_exact_errors: 846
+test_seeded_libm_exact_parity: 3000
+test_seeded_differential: 12000
+test_explicit_bounds_and_native_call_count: 2
+calc_reference.py sha256 354bae15356baaabbbaa8acfb246eeaebd64a06c512d62d248ae427a0b4ec5ed bytes 11466
+test_calc_owned.py sha256 76f719a562fb97a5471c2289854949aecc5140a3c960ec386987aa654a7d6f19 bytes 15771
+test_native_calc.py sha256 c0c43997e9aeef37fc803d467ec2e020b968ae34cf457532e772c242e338d4cd bytes 16655
+capture_calc.py sha256 4c865dff7ce18b2c279334a9723e67bd56c512afd3cc49edc1d66be6ade7f1e4 bytes 14871
+numparse.py sha256 6c309a6852aac3554358d8887d06070aa91e9f3573f423d504008b88f82793cb bytes 1608
+native_pure.py sha256 1a3095e553bbbabba546f3116e120fa5fefb976cc6ffa45128f53463c9f0e729 bytes 171225
+calc_golden.txt sha256 ffc11ce6a05e522d5369ea99a09ec82b034c0adb548df46192bccc00f814cdaa bytes 4349911
+calc_host.txt sha256 4caf8c311d0e28521690af8cb523ebdb7d004878b6c400b98d9ee3b36fd018a2 bytes 297
+calc_presentation.txt sha256 f58ed031c0ec28a4be00f80c9d2816221d2bdddbf4ef66c9be6ffa728f818a98 bytes 974772
+calc_boundary.txt sha256 124c9f90e60207d89a07c1e894ab11f1965edeefa11644396c79e6201ec6b8b2 bytes 35510
+calc_limits.txt sha256 d745b57378c4e2ef10663f4db1aa4f4788f1fbfd2e560d5269e8a2737c5942e7 bytes 58579
+Outcomes: {'success': 7071, 'error': 15126}
+Code counts: {0: 7071, 1: 694, 2: 952, 3: 1433, 4: 874, 5: 5153, 6: 2, 7: 10, 8: 3321, 9: 437, 10: 75, 11: 427, 12: 12, 13: 10, 14: 35, 15: 21, 16: 69, 17: 219, 18: 761, 19: 14, 20: 131, 21: 3, 22: 11, 23: 40, 24: 270, 25: 134, 26: 8, 27: 10}
+Every instrumented outcome was independently rechecked against the byte-for-byte original uninstrumented evaluator, including value bits.
+No active test loads legacy/retired-rust18. Public calc_reference is a static fixture decoder, not an evaluator.
+Original 22107 Python differential comparisons -> Rust calc_v2 ABI bits/code/aux/start/end/reserved/model checks.
+Retained Python: input/model type and no-coercion/order; limits; Unicode framing; complete error presentation strings; stale/missing ABI; malformed ctypes replies; counters; actual canonical public wrapper; COMPAT success/rejection/malformed-buffer checks.
+Original engine and both original qualification suites archived byte-for-byte; old scratch builder/mutation orchestration archived only.
+Original owned baseline: 8/8, 22107 comparisons with bundled CPython 3.13; calc-original-owned.txt.
+Original native baseline/benchmark: 13/13; calc-original-native-benchmark.txt. Original report uses best of 3 at 5000 calls for 4 inputs and 30000 mixed calls, no speed-ratio threshold. Rust guard does not replace that benchmark.
+Focused final guard: cargo test --manifest-path native/pure_core/Cargo.toml --test calc_golden; no full gate/production/shared-file edits/commit.
+Private native mutations: addition, sqrt domain classification, signed-zero destruction; each integration assertion RED then original restored GREEN. Receipts: calc-{addition,domain,signed-zero}*.txt.
+Scoped callers: only the two owned suites consume calc_reference; scripts/create_public_branch.py lists its existing path and is intentionally untouched.
+Private calc-current.so sha256 05454659016e76f89bfae322423bcca99d8e9a790c137ec4aa5f237eed8d0107 bytes 951024
+Private mutations_calc.py sha256 e7694656406b43d3b3dbff5a1acc88eefe67272f07189c0ce68170bbc2fc2b0c bytes 1995

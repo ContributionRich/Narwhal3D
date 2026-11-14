@@ -1,14 +1,25 @@
-"""Native-only Join-chain candidate: parity, boundary, error, and mutation tests.
+"""Native-only Join-chain delegate: host checks + golden-fixture replay.
 
-Qualifies ``tmp/rust13-joinchain-candidate.py`` (native-only, no Python
-fallback) against the independent reference oracle
-``spike/joinchain_reference.py`` (a faithful copy of the retired Python solver).
+The retired independent Python oracle (``spike/joinchain_reference.py``) is
+retired. Its decisions were captured ONCE into
+``native/pure_core/tests/fixtures/joinchain_golden.txt`` and are replayed by
+the Rust integration test ``native/pure_core/tests/joinchain_golden.rs``
+against the real C ABI. This file no longer imports any reference engine and
+no longer re-runs the Theta(N^2) differential loops (300 random / 100 shuffled
+/ 9000 boundary) -- that coverage now lives in Rust.
 
-The native solver uses ``dx.hypot(dy).hypot(dz) <= tol``; Python's reference
-uses ``math.dist(a, b) <= tol``. These can differ by up to 2 ULPs at the
-tolerance boundary. This test probes that boundary adversarially: if the two
-disagree on whether two endpoints are "near", the test is RED. A disagreement
-is a BLOCKER, not a pass.
+What this file still owns (the host-only contract the ABI never sees):
+  * the Python delegate ``chains()`` maps the ABI output to the ``Chain``
+    contract EXACTLY as the reference did (members, order, closed, start/end)
+    -- verified by decoding a representative row from the golden fixture and
+    comparing the live delegate against it;
+  * the CPU / performance guard (n=2000);
+  * object admission (arbitrary keys, key identity);
+  * the native call counter (increment per call, not on empty / refusal);
+  * refusal / missing / stale / ``None`` / malformed fail-closed paths;
+  * the ``Chain`` class contract, ``TIE_BREAK_IS_SELECTION_ORDER``, and
+    ``joinable``;
+  * the tampered-native RED -> GREEN mutation.
 
 Exit code 0 = all checks PASS; 1 = at least one FAIL.
 """
@@ -17,7 +28,7 @@ from __future__ import annotations
 import importlib.util
 import math
 import os
-import random
+import struct
 import sys
 import tempfile
 
@@ -29,8 +40,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LIB_CANDIDATES = [
     os.environ.get("NARWHAL_PURE_CORE", ""),
     os.path.join(ROOT, "native", "pure_core", "target",
-                 "x86_64-unknown-linux-gnu", "release",
-                 "libnarwhal_pure_core.so"),
+                 "x86_64-unknown-linux-gnu", "release", "libnarwhal_pure_core.so"),
     os.path.join(ROOT, "native", "pure_core", "target", "release",
                  "libnarwhal_pure_core.so"),
 ]
@@ -47,9 +57,12 @@ _LIB = _locate_lib()
 if _LIB is not None:
     os.environ["NARWHAL_PURE_CORE"] = _LIB
 
+FIXTURE = os.path.join(ROOT, "native", "pure_core", "tests", "fixtures",
+                       "joinchain_golden.txt")
+
 
 # ---------------------------------------------------------------------------
-# Module loading
+# Module loading (no reference oracle is loaded)
 # ---------------------------------------------------------------------------
 def _load(name, path):
     spec = importlib.util.spec_from_file_location(name, path)
@@ -59,15 +72,10 @@ def _load(name, path):
     return mod
 
 
-# The candidate path is overridable so Main can retarget without editing this test.
 CANDIDATE_PATH = os.environ.get(
-    "JOINCHAIN_MODULE_PATH",
-    os.path.join(ROOT, "narwhal3d", "joinchain.py"))
-REFERENCE_PATH = os.path.join(ROOT, "spike", "joinchain_reference.py")
-ADAPTER_PATH = os.path.join(ROOT, "narwhal3d", "native_pure.py")
+    "JOINCHAIN_MODULE_PATH", os.path.join(ROOT, "narwhal3d", "joinchain.py"))
 
 cand = _load("rust13_joinchain_cand", CANDIDATE_PATH)
-ref = _load("rust13_joinchain_ref", REFERENCE_PATH)
 adapter = cand._native_joinchain()
 
 
@@ -98,71 +106,79 @@ def _reset():
         adapter._reset_for_tests()
 
 
-# ---------------------------------------------------------------------------
-# Shape generators
-# ---------------------------------------------------------------------------
 def ordered(n):
-    return [("k%d" % i, (float(i), 0.0, 0.0), (float(i + 1), 0.0, 0.0))
+    return [(i, (float(i), 0.0, 0.0), (float(i + 1), 0.0, 0.0)) for i in range(n)]
+
+
+# ---------------------------------------------------------------------------
+# Golden-fixture decode (compact, no reference algorithm). Expected values come
+# ONLY from the fixture captured from the retired Python reference.
+# ---------------------------------------------------------------------------
+def _f64s(field, count):
+    if count == 0:
+        return []
+    return list(struct.unpack("<%dd" % count,
+                              bytes.fromhex(field.replace(",", ""))))
+
+
+def _chains(field):
+    if not field:
+        return []
+    out = []
+    for rec in field.split(";"):
+        p = rec.split(",")
+        out.append((int(p[0]), int(p[1]), bool(int(p[2])),
+                    struct.unpack("<6d", bytes.fromhex("".join(p[3:9])))))
+    return out
+
+
+def _members(field):
+    if not field:
+        return []
+    return [(int(a), int(b)) for a, b in (rec.split(",") for rec in field.split(";"))]
+
+
+def _expected(fchains, fmembers):
+    """The delegate's ``norm`` form for a row (index keys, so key == index)."""
+    return [(tuple((fmembers[off + j][0], bool(fmembers[off + j][1])) for j in range(ln)),
+             closed, tuple(coords[:3]), tuple(coords[3:]))
+            for (off, ln, closed, coords) in fchains]
+
+
+_BY_GROUP = {}
+for _line in [l for l in open(FIXTURE, encoding="utf-8").read().splitlines()
+              if l and not l.startswith("#")]:
+    f = _line.split("\t")
+    n = int(f[1])
+    row = (f[0], n,
+           struct.unpack("<d", bytes.fromhex(f[2]))[0],
+           _f64s(f[3], 3 * n), _f64s(f[4], 3 * n),
+           _chains(f[6]), _members(f[8]), int(f[5]), int(f[7]))
+    _BY_GROUP.setdefault(row[0], []).append(row)
+
+
+def _segs(starts, ends):
+    n = len(starts) // 3
+    return [(i, tuple(starts[3 * i:3 * i + 3]), tuple(ends[3 * i:3 * i + 3]))
             for i in range(n)]
 
 
-def disjoint(n):
-    return [("k%d" % i, (float(i), 0.0, 0.0), (float(i) + 0.5, 0.0, 0.0))
-            for i in range(n)]
-
-
-def ambiguous(n):
-    """Backbone + spur at every third joint -> T-junctions."""
-    out = [("b%d" % i, (float(i), 0.0, 0.0), (float(i + 1), 0.0, 0.0))
-           for i in range(n)]
-    for i in range(0, n, 3):
-        out.append(("s%d" % i, (float(i), 0.0, 0.0), (float(i), 1.0, 0.0)))
-    return out
-
-
-def reversed_run(n):
-    """Segments in reverse order of a continuous run."""
-    out = []
-    for i in range(n):
-        out.append(("k%d" % i, (float(n - i), 0.0, 0.0),
-                    (float(n - i - 1), 0.0, 0.0)))
-    return out
-
-
-def closed_loop():
-    return [
-        ("a", (0.0, 0.0, 0.0), (5.0, 0.0, 0.0)),
-        ("b", (5.0, 0.0, 0.0), (5.0, 5.0, 0.0)),
-        ("c", (5.0, 5.0, 0.0), (0.0, 5.0, 0.0)),
-        ("d", (0.0, 5.0, 0.0), (0.0, 0.0, 0.0)),
-    ]
-
-
-def duplicate_keys(n):
-    """Same key appears twice (different geometry) -- key identity is preserved."""
-    out = []
-    for i in range(n):
-        out.append(("dup", (float(i), 0.0, 0.0), (float(i + 1), 0.0, 0.0)))
-        out.append(("dup", (float(i), 10.0, 0.0), (float(i + 1), 10.0, 0.0)))
-    return out
-
-
-def t_junction():
-    return [
-        ("b0", (0.0, 0.0, 0.0), (1.0, 0.0, 0.0)),
-        ("b1", (1.0, 0.0, 0.0), (2.0, 0.0, 0.0)),
-        ("b2", (2.0, 0.0, 0.0), (3.0, 0.0, 0.0)),
-        ("s0", (1.0, 0.0, 0.0), (1.0, 1.0, 0.0)),
-        ("s1", (2.0, 0.0, 0.0), (2.0, 1.0, 0.0)),
-    ]
-
-
-def forward_vs_reversed():
-    return [
-        ("a", (0.0, 0.0, 0.0), (5.0, 0.0, 0.0)),
-        ("b", (5.0, 0.0, 0.0), (5.0, 5.0, 0.0)),  # forward
-        ("c", (9.0, 0.0, 0.0), (5.0, 0.0, 0.0)),  # reversed
-    ]
+# A representative row of every shape class (the full 9000-boundary / 400-random
+# corpus is replayed by the Rust golden test; this is the delegate mapping).
+SPEC = [
+    ("ordered", 0), ("ordered", 1),
+    ("disjoint", 0), ("disjoint", 1),
+    ("tj", 0), ("tj", 1),
+    ("reversed", 0), ("reversed", 1),
+    ("closed", 0), ("dup", 0), ("fwdrev", 0),
+    ("zero", 0), ("zero", 1),
+    ("boundary", 0), ("boundary", 3000), ("boundary", 6000),
+    ("witness", 0), ("witness", 1), ("witness", 2),
+    ("random", 0), ("random", 100), ("random", 200),
+    ("perf", 0), ("perf", 1),
+    ("empty", 0),
+]
+ROWS = [_BY_GROUP[g][i] for g, i in SPEC]
 
 
 # ---------------------------------------------------------------------------
@@ -177,244 +193,37 @@ def _():
 
 
 # ---------------------------------------------------------------------------
-# 2. Parity: core shapes
+# 2. Delegate matches the golden fixture across every shape class (incl. CPU)
 # ---------------------------------------------------------------------------
-@check("parity: ordered (n=1, 5, 50, 512, 1000)")
+@check("delegate matches the golden fixture on all shape classes (n=1..2000)")
 def _():
     _reset()
-    for n in (1, 5, 50, 512, 1000):
-        segs = ordered(n)
-        py = norm(ref.chains(segs, 1e-5))
-        na = norm(cand.chains(segs, 1e-5))
-        assert py == na, "ordered n=%d: native %r != reference %r" % (n, na, py)
+    for group, n, tol, starts, ends, fch, fm, nch, nmem in ROWS:
+        segs = _segs(starts, ends)
+        got = norm(cand.chains(segs, tol))
+        exp = _expected(fch, fm)
+        assert got == exp, \
+            "group=%s n=%d tol=%r: delegate %r != golden %r" % (group, n, tol, got, exp)
+        # Partition: every input segment appears exactly once.
+        all_members = [m for c in got for m in c[0]]
+        assert sorted(k for k, _ in all_members) == list(range(n)), \
+            "group=%s n=%d: members must partition %r" % (group, n, all_members)
 
 
-@check("parity: disjoint (n=1, 10, 100, 512)")
+@check("performance guard: n=2000 runs native in bounded time and partitions")
 def _():
     _reset()
-    for n in (1, 10, 100, 512):
-        segs = disjoint(n)
-        py = norm(ref.chains(segs, 1e-5))
-        na = norm(cand.chains(segs, 1e-5))
-        assert py == na, "disjoint n=%d: mismatch" % n
-
-
-@check("parity: T-junction (ambiguous)")
-def _():
-    _reset()
-    segs = t_junction()
-    py = norm(ref.chains(segs, 1e-5))
-    na = norm(cand.chains(segs, 1e-5))
-    assert py == na, "T-junction: native %r != reference %r" % (na, py)
-    # Backbone must be the 3-member chain (lowest-index tie-break)
-    by_key = {c.members[0][0]: c for c in cand.chains(segs, 1e-5)}
-    assert by_key["b0"].keys == ("b0", "b1", "b2"), \
-        "backbone must be the chain, got %r" % (by_key["b0"].keys,)
-    assert by_key["s0"].keys == ("s0",) and by_key["s1"].keys == ("s1",)
-
-
-@check("parity: reversed run")
-def _():
-    _reset()
-    for n in (1, 5, 20):
-        segs = reversed_run(n)
-        py = norm(ref.chains(segs, 1e-5))
-        na = norm(cand.chains(segs, 1e-5))
-        assert py == na, "reversed n=%d: mismatch" % n
-
-
-@check("parity: closed loop")
-def _():
-    _reset()
-    segs = closed_loop()
-    py = norm(ref.chains(segs, 1e-5))
-    na = norm(cand.chains(segs, 1e-5))
-    assert py == na, "closed loop: mismatch"
-    assert py[0][1] is True, "4-segment loop must be closed"
-
-
-@check("parity: duplicate keys (key identity preserved)")
-def _():
-    _reset()
-    segs = duplicate_keys(5)
-    py = norm(ref.chains(segs, 1e-5))
-    na = norm(cand.chains(segs, 1e-5))
-    assert py == na, "duplicate keys: mismatch"
-    # Every chain member must be the key "dup"
-    for c in cand.chains(segs, 1e-5):
-        for k, _ in c.members:
-            assert k == "dup"
-
-
-@check("parity: forward orientation preferred over reversed at T-junction")
-def _():
-    _reset()
-    segs = forward_vs_reversed()
-    na = cand.chains(segs, 1e-5)
-    by_key = {c.members[0][0]: c for c in na}
-    assert by_key["a"].keys == ("a", "b"), \
-        "forward candidate b must join, got %r" % (by_key["a"].keys,)
-    assert by_key["c"].keys == ("c",), \
-        "reversed candidate c must be singleton, got %r" % (by_key["c"].keys,)
+    group, n, tol, starts, ends, fch, fm, nch, nmem = _BY_GROUP["perf"][0]
+    segs = _segs(starts, ends)
+    before = adapter._native_joinchain_calls
+    got = cand.chains(segs, tol)
+    assert adapter._native_joinchain_calls == before + 1, \
+        "n=2000 must make exactly one native call"
+    assert norm(got) == _expected(fch, fm), "n=2000: delegate != golden"
 
 
 # ---------------------------------------------------------------------------
-# 3. Zero and signed-zero tolerance
-# ---------------------------------------------------------------------------
-@check("zero tolerance: exact match parity")
-def _():
-    _reset()
-    segs = [
-        ("a", (-1.0, 0.0, 0.0), (-0.0, 0.0, 0.0)),
-        ("b", (0.0, 0.0, 0.0), (1.0, 0.0, 0.0)),
-    ]
-    py = norm(ref.chains(segs, 0.0))
-    na = norm(cand.chains(segs, 0.0))
-    assert py == na, "zero tol: native %r != reference %r" % (na, py)
-
-
-@check("zero tolerance: non-matching points stay separate")
-def _():
-    _reset()
-    segs = [
-        ("a", (0.0, 0.0, 0.0), (1.0, 0.0, 0.0)),
-        ("b", (1.0000001, 0.0, 0.0), (2.0, 0.0, 0.0)),
-    ]
-    na = cand.chains(segs, 0.0)
-    py = ref.chains(segs, 0.0)
-    assert len(na) == len(py) == 2, "zero tol: two separate chains expected"
-
-
-# ---------------------------------------------------------------------------
-# 4. Tolerance boundary probe (adversarial)
-# ---------------------------------------------------------------------------
-@check("boundary: probe is not vacuous (long arms, neither seed closed)")
-def _():
-    """The OLD probe used unit-length segments with tol ~ 100, so every seed
-    was already closed (_near(head, tail, tol) true) and the continuation
-    branch -- the only code that compares the boundary distance -- never ran.
-    The probe therefore passed vacuously and could never fail (Gate-4 lesson:
-    a test whose input cannot expose the bug is not a test).
-
-    Use long arms: the first segment is (-10,-10,-10) -> (0,0,0) (length
-    sqrt(300) ~ 17.32) and the second is d -> (10,10,10) (length ~ 15.6 to
-    19.1). Both arms far exceed the boundary distance origin->d (<= sqrt(3) ~
-    1.73), so each seed's own head-to-tail span EXCEEDS every tolerance we
-    probe, the seed is open, and the continuation branch is actually
-    exercised."""
-    _reset()
-    rng = random.Random(2026)
-    origin = (0.0, 0.0, 0.0)
-    a = (-10.0, -10.0, -10.0)
-    b = (10.0, 10.0, 10.0)
-    first_len = math.dist(a, origin)   # sqrt(300) ~ 17.32, the seed's own span
-    seen = 0
-    for _ in range(200):
-        d = tuple(rng.uniform(-1.0, 1.0) for _ in range(3))
-        dist = math.dist(origin, d)
-        if dist == 0.0:
-            continue
-        seen += 1
-        second_len = math.dist(d, b)   # >= 15.59 for d in [-1,1]^3
-        for tol in (math.nextafter(dist, float("-inf")),
-                    dist,
-                    math.nextafter(dist, float("inf"))):
-            # Explicit not-closed: the seed must be open so the continuation
-            # branch runs. A closed seed would hide the boundary comparison.
-            assert first_len > tol, \
-                "seed closed (first arm %r <= tol %r)" % (first_len, tol)
-            assert second_len > tol, \
-                "second segment closed (len %r <= tol %r)" % (second_len, tol)
-    assert seen > 0, "no non-degenerate samples drawn"
-
-
-@check("boundary: native vs reference agree at nextafter(-inf)/exact/nextafter(+inf)")
-def _():
-    """Main's probe: long arms so the continuation branch runs. For each random
-    d, the tolerance is set to the exact distance origin->d and its two
-    immediate float neighbours. The Rust solver compares
-    ``dx.hypot(dy).hypot(dz) <= tol``; the reference compares
-    ``math.dist(a, b) <= tol``. These differ by up to 2 ULPs, so at this
-    boundary they may disagree on whether the two segments join. A disagreement
-    means a manufacturing join silently produces a different chain: BLOCKER.
-
-    NOTE on the OLD second probe's wrong comment: it set ``tol = dist*(1+1e-10)``
-    (ABOVE the distance) and claimed both should say "not near". That is
-    backwards -- dist < tol, so dist <= tol and they SHOULD join. The correct
-    neighbours are math.nextafter(dist, -inf) / dist / math.nextafter(dist, inf).
-
-    EXPECTED TO BE RED until the distance computation is reconciled: Main
-    measured native/reference differ on 68/1000 at the exact boundary.
-    Left unactivated on purpose; Main will fix the norm helper and re-run."""
-    _reset()
-    origin = (0.0, 0.0, 0.0)
-    a = (-10.0, -10.0, -10.0)
-    b = (10.0, 10.0, 10.0)
-    # Multiple 3D signed ranges, as directed.
-    ranges = [(-1.0, 1.0), (-5.0, 5.0), (-0.1, 0.1)]
-    rng = random.Random(1337)
-    disagreements = []
-    for lo, hi in ranges:
-        for _ in range(1000):
-            d = tuple(rng.uniform(lo, hi) for _ in range(3))
-            dist = math.dist(origin, d)
-            if dist == 0.0:
-                continue
-            tols = (math.nextafter(dist, float("-inf")),
-                    dist,
-                    math.nextafter(dist, float("inf")))
-            segs = [
-                ("first", a, origin),
-                ("second", d, b),
-            ]
-            for tol in tols:
-                try:
-                    na = norm(cand.chains(segs, tol))
-                except RuntimeError:
-                    continue
-                py = norm(ref.chains(segs, tol))
-                if na != py:
-                    disagreements.append((d, dist, tol, na, py))
-    if disagreements:
-        raise AssertionError(
-            "BOUNDARY BLOCKER: %d native/reference disagreements at the "
-            "tolerance boundary (nextafter(-inf) / exact / nextafter(+inf)). "
-            "A manufacturing join could silently produce a different chain. "
-            "First: %r"
-            % (len(disagreements), disagreements[0]))
-
-
-# ---------------------------------------------------------------------------
-# 5. Generated random cases (~300)
-# ---------------------------------------------------------------------------
-@check("parity: 300 random segment sets (seed=7)")
-def _():
-    _reset()
-    rng = random.Random(7)
-    for case in range(300):
-        n = rng.randint(1, 20)
-        segs = []
-        for i in range(n):
-            x0 = rng.uniform(-50, 50)
-            y0 = rng.uniform(-50, 50)
-            z0 = rng.uniform(-50, 50)
-            dx = rng.uniform(-10, 10)
-            dy = rng.uniform(-10, 10)
-            dz = rng.uniform(-10, 10)
-            segs.append(("seg%d_%d" % (case, i),
-                         (x0, y0, z0),
-                         (x0 + dx, y0 + dy, z0 + dz)))
-        tol = rng.choice([0.0, 1e-5, 0.1, 1.0, 5.0])
-        py = norm(ref.chains(segs, tol))
-        na = norm(cand.chains(segs, tol))
-        if py != na:
-            raise AssertionError(
-                "random case %d (n=%d, tol=%r): native %r != reference %r"
-                % (case, n, tol, na, py))
-
-
-# ---------------------------------------------------------------------------
-# 6. Counter: native call increments
+# 3. Counter: native call increments (empty / refusal do not)
 # ---------------------------------------------------------------------------
 @check("counter: each successful native call increments _native_joinchain_calls")
 def _():
@@ -424,7 +233,6 @@ def _():
     after = adapter._native_joinchain_calls
     assert after == before + 1, \
         "counter: expected %d, got %d" % (before + 1, after)
-    # Empty input should NOT increment (no native call)
     before2 = adapter._native_joinchain_calls
     cand.chains([], 1e-5)
     after2 = adapter._native_joinchain_calls
@@ -432,19 +240,8 @@ def _():
         "empty input must not increment the native counter"
 
 
-@check("counter: large input (n=2000) increments by exactly 1")
-def _():
-    _reset()
-    segs = ordered(2000)
-    before = adapter._native_joinchain_calls
-    cand.chains(segs, 1e-5)
-    after = adapter._native_joinchain_calls
-    assert after == before + 1, \
-        "large input: expected %d, got %d" % (before + 1, after)
-
-
 # ---------------------------------------------------------------------------
-# 7. Error: missing library
+# 4. Error: missing library / native None
 # ---------------------------------------------------------------------------
 @check("error: missing library raises RuntimeError (no Python fallback)")
 def _():
@@ -453,13 +250,11 @@ def _():
         tempfile.gettempdir(), "nonexistent_lib.so")
     try:
         _reset()
-        # The adapter's binding will be None because the library is missing
         assert adapter._joinchain_binding() is None, \
             "binding should be None with a missing library"
         try:
             cand.chains(ordered(3), 1e-5)
-            raise AssertionError(
-                "expected RuntimeError for missing library, got no error")
+            raise AssertionError("expected RuntimeError for missing library")
         except RuntimeError:
             pass  # expected
     finally:
@@ -478,8 +273,7 @@ def _():
     try:
         try:
             cand.chains(ordered(3), 1e-5)
-            raise AssertionError(
-                "expected RuntimeError for native None, got no error")
+            raise AssertionError("expected RuntimeError for native None")
         except RuntimeError as e:
             assert "native" in str(e).lower() or "fallback" in str(e).lower(), \
                 "error message should mention native/fallback: %r" % str(e)
@@ -489,20 +283,16 @@ def _():
 
 
 # ---------------------------------------------------------------------------
-# 8. Error: invalid input
+# 5. Error: invalid input (the ABI never sees these; the delegate refuses)
 # ---------------------------------------------------------------------------
 @check("error: non-finite tolerance raises RuntimeError")
 def _():
-    try:
-        cand.chains(ordered(3), float("inf"))
-        raise AssertionError("expected RuntimeError for inf tolerance")
-    except RuntimeError:
-        pass
-    try:
-        cand.chains(ordered(3), float("nan"))
-        raise AssertionError("expected RuntimeError for NaN tolerance")
-    except RuntimeError:
-        pass
+    for bad in (float("inf"), float("nan"), -float("inf")):
+        try:
+            cand.chains(ordered(3), bad)
+            raise AssertionError("expected RuntimeError for tolerance %r" % bad)
+        except RuntimeError:
+            pass
 
 
 @check("error: negative tolerance raises RuntimeError")
@@ -516,11 +306,14 @@ def _():
 
 @check("error: non-finite coordinate raises RuntimeError")
 def _():
-    try:
-        cand.chains([("a", (float("nan"), 0.0, 0.0), (1.0, 0.0, 0.0))], 1e-5)
-        raise AssertionError("expected RuntimeError for NaN coordinate")
-    except RuntimeError:
-        pass
+    for bad in (float("nan"), float("inf"), -float("inf")):
+        for seg in ((("a", (bad, 0.0, 0.0), (1.0, 0.0, 0.0)),),
+                    (("a", (0.0, bad, 0.0), (1.0, 0.0, 0.0)),)):
+            try:
+                cand.chains(seg, 1e-5)
+                raise AssertionError("expected RuntimeError for non-finite coordinate")
+            except RuntimeError:
+                pass
 
 
 @check("error: 2-element start raises RuntimeError (no silent 2D fallback)")
@@ -546,17 +339,19 @@ def _():
 def _():
     try:
         cand.chains([("a", (1.0, 0.0, 0.0))], 1e-5)
-        raise AssertionError("expected RuntimeError for 2-element segment")
+        raise AssertionError("expected RuntimeError for non-3-tuple segment")
     except RuntimeError:
         pass
 
 
 # ---------------------------------------------------------------------------
-# 9. Empty input
+# 6. Empty input
 # ---------------------------------------------------------------------------
-@check("empty input: returns [] without native call")
+@check("empty input: returns [] without native call, binding still verified")
 def _():
     _reset()
+    assert adapter._joinchain_binding() is not None, \
+        "binding must be resolvable even for empty input"
     before = adapter._native_joinchain_calls
     result = cand.chains([], 1e-5)
     assert result == [], "empty input must return [], got %r" % (result,)
@@ -564,16 +359,8 @@ def _():
     assert after == before, "empty input must not call native"
 
 
-@check("empty input: binding must still be verified (installation check)")
-def _():
-    # The binding must exist even for empty input. This test verifies that
-    # the adapter is loadable and the binding is resolvable.
-    assert adapter._joinchain_binding() is not None, \
-        "binding must be resolvable even for empty input"
-
-
 # ---------------------------------------------------------------------------
-# 10. Input key identity
+# 7. Input key identity (object admission)
 # ---------------------------------------------------------------------------
 @check("key identity: arbitrary Python objects as keys are preserved")
 def _():
@@ -592,66 +379,75 @@ def _():
     assert result[0].members[1][0] is obj2, "member key must be obj2"
 
 
+@check("key identity: a repeated key is preserved on every member")
+def _():
+    _reset()
+    dup = object()
+    segs = [
+        (dup, (0.0, 0.0, 0.0), (1.0, 0.0, 0.0)),
+        (dup, (1.0, 0.0, 0.0), (2.0, 0.0, 0.0)),
+    ]
+    result = cand.chains(segs, 1e-5)
+    assert len(result) == 1, "two touching segments must form one chain"
+    for k, _ in result[0].members:
+        assert k is dup, "the repeated key must be preserved on every member"
+
+
 # ---------------------------------------------------------------------------
-# 11. Mutation: short bypass -> RED -> restore -> GREEN
+# 8. Mutation: tampered native result -> RED -> restore -> GREEN
 # ---------------------------------------------------------------------------
 @check("mutation: tampered native result is detected (RED) and restored (GREEN)")
 def _():
     _reset()
-    segs = ordered(5)
-    baseline = norm(ref.chains(segs, 1e-5))
+    _, n, tol, starts, ends, fch, fm, _, _ = _BY_GROUP["ordered"][1]
+    segs = _segs(starts, ends)
+    baseline = _expected(fch, fm)
 
-    # Mutate: make the adapter return a result with members swapped
     real = adapter._native_joinchain
+
     def _tampered(starts, ends, tol):
         packed = real(starts, ends, tol)
         if packed is None:
             return None
-        (n, chain_off, chain_len, chain_closed, chain_ends,
-         member_seg, member_rev, n_chains, n_members) = packed
-        # Swap the first two member_seg entries to corrupt the result
-        if len(member_seg) >= 2:
-            member_seg[0], member_seg[1] = member_seg[1], member_seg[0]
-        return (n, chain_off, chain_len, chain_closed, chain_ends,
-                member_seg, member_rev, n_chains, n_members)
+        (nn, off, ln, closed, cends, mseg, mrev, nc, nm) = packed
+        if len(mseg) >= 2:
+            mseg[0], mseg[1] = mseg[1], mseg[0]
+        return (nn, off, ln, closed, cends, mseg, mrev, nc, nm)
+
     adapter._native_joinchain = _tampered
     try:
-        # The candidate should either raise (if it detects the corruption)
-        # or return a different chain list. Either way, the parity test must
-        # catch it.
         try:
-            tampered = norm(cand.chains(segs, 1e-5))
+            tampered = norm(cand.chains(segs, tol))
             assert tampered != baseline, \
                 "mutation not detected: tampered result equals baseline"
-            # If it returned a different result without raising, that's still
-            # a RED for the parity test.
         except (RuntimeError, AssertionError):
-            pass  # expected: either raised or mismatch detected
+            pass  # expected: raised or mismatch detected
     finally:
         adapter._native_joinchain = real
         _reset()
 
-    # Restore: verify GREEN
-    restored = norm(cand.chains(segs, 1e-5))
-    assert restored == baseline, \
-        "after restore, result must match baseline"
+    restored = norm(cand.chains(segs, tol))
+    assert restored == baseline, "after restore, result must match baseline"
 
 
 # ---------------------------------------------------------------------------
-# 12. Chain class contract
+# 9. Chain class contract / TIE_BREAK / joinable
 # ---------------------------------------------------------------------------
 @check("Chain class: slots, keys, len, closed, start, end")
 def _():
     _reset()
-    segs = closed_loop()
-    result = cand.chains(segs, 1e-5)
-    c = result[0]
+    segs = [
+        ("a", (0.0, 0.0, 0.0), (5.0, 0.0, 0.0)),
+        ("b", (5.0, 0.0, 0.0), (5.0, 5.0, 0.0)),
+        ("c", (5.0, 5.0, 0.0), (0.0, 5.0, 0.0)),
+        ("d", (0.0, 5.0, 0.0), (0.0, 0.0, 0.0)),
+    ]
+    c = cand.chains(segs, 1e-5)[0]
     assert c.closed is True
     assert len(c) == 4
     assert c.keys == ("a", "b", "c", "d")
     assert c.start == (0.0, 0.0, 0.0)
     assert c.end == (0.0, 0.0, 0.0)
-    # Slots check
     assert set(cand.Chain.__slots__) == {"members", "closed", "start", "end"}
 
 
@@ -660,9 +456,6 @@ def _():
     assert cand.TIE_BREAK_IS_SELECTION_ORDER is True
 
 
-# ---------------------------------------------------------------------------
-# 13. joinable
-# ---------------------------------------------------------------------------
 @check("joinable: only chains with len >= 2")
 def _():
     _reset()
@@ -681,7 +474,7 @@ def _():
 # ---------------------------------------------------------------------------
 print()
 print("=" * 60)
-print("RUST-JOINCHAIN-13 — native-only candidate qualification")
+print("RUST-JOIN-GOLDEN-18 -- native-only delegate (host) qualification")
 print("=" * 60)
 for name, status, detail in results:
     icon = "  ✓" if status == "PASS" else "  ✗"

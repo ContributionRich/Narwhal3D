@@ -1,7 +1,7 @@
 """Owned SVG qualification; defaults to live public path and configured core.
 
 python3 spike/test_svgpath_owned.py --candidate /path/to/inactive-wrapper.py --library /path/core.so
-No private archive or scratch dependency. Oracle is frozen and native-disabled.
+No private archive or scratch dependency. Expectations are fixed original-Python anchors; semantic loops live in Rust.
 """
 import argparse
 from concurrent.futures import ThreadPoolExecutor
@@ -10,9 +10,7 @@ import importlib.util
 import math
 import os
 from pathlib import Path
-import random
 import struct
-import time
 import tempfile
 import threading
 import unittest
@@ -22,7 +20,6 @@ ROOT = Path(__file__).resolve().parents[1]
 args = argparse.ArgumentParser()
 args.add_argument('--candidate', type=Path, default=ROOT / 'narwhal3d/svgpath.py')
 args.add_argument('--library', type=Path)
-args.add_argument('--benchmark', action='store_true')
 OPTIONS, REST = args.parse_known_args()
 if OPTIONS.library:
     os.environ['NARWHAL_PURE_CORE'] = str(OPTIONS.library.resolve())
@@ -62,7 +59,7 @@ def outcome(fn, text):
 
 class OwnedSVG(unittest.TestCase):
     def parity(self, text):
-        self.assertEqual(outcome(REF.parse_path, text), outcome(SUBJECT.parse_path, text), repr(text))
+        self.assertEqual(outcome(REF.expected, text), outcome(SUBJECT.parse_path, text), repr(text))
 
     def test_public_wrapper_delegates_to_one_adapter(self):
         self.assertTrue(callable(getattr(SUBJECT, '_adapter', None)),
@@ -99,33 +96,14 @@ class OwnedSVG(unittest.TestCase):
             with self.subTest(text=repr(text)):
                 self.parity(text)
 
-    def test_generated_arcs_exact_bits(self):
-        rng = random.Random(14)
-        for i in range(2000):
-            v = [rng.uniform(-100, 100) for _ in range(7)]
-            text = 'M%s %s A%s %s %s %s %s %s %s' % (*v[:5], i%2, (i//2)%2, *v[5:])
-            self.parity(text)
-
-    def test_generated_cubics_exact_bits(self):
-        rng = random.Random(1401)
-        for i in range(1000):
-            def nums(n):
-                return ' '.join(repr(rng.uniform(-1e6, 1e6)) for _ in range(n))
-            self.parity('M'+nums(2)+'c'+nums(6)+'s'+nums(4)+'q'+nums(4)+'t'+nums(2)+'Zl'+nums(2))
-
-    def test_generated_errors(self):
-        for cmd, arity in dict(L=2, H=1, V=1, C=6, S=4, Q=4, T=2, A=7).items():
-            self.parity(cmd)
-            for n in range(1, arity):
-                self.parity('M0 0'+cmd+' '.join(['1'] * n))
-        for digit in ['²', '³', '⁹', '①', '⑨', '፩', '𐩀']:
-            for token in [digit, '+'+digit, '1'+digit, '.'+digit, '1e'+digit]:
-                self.parity('M0 0L'+token+' 2')
-
-    def test_finite_extremes(self):
-        for text in ['M1e-300 2e-300L3e-300 4e-300', 'M1e150 -1e150Q0 0 -1e150 1e150',
-                     'M0 0A1e50 2e50 30 0 1 2e50 1e50', 'M-0 -0L-0 0Z']:
-            self.parity(text)
+    def test_fixed_error_presentation(self):
+        # Rust checks the error fields/spans; Python must still render every
+        # original Unicode/arity error exactly, without reparsing the input.
+        for text, (kind, message) in REF._answers().items():
+            if kind == 'ok':
+                continue
+            with self.subTest(text=repr(text)):
+                self.assertEqual(outcome(SUBJECT.parse_path, text), (kind, message))
 
     def test_ours_safety_no_fallback(self):
         for text in ['M1e999 0', 'M0 0L1e308 0L-1e308 0', 'M0 0A1e308 1e308 1e308 1 1 2 3', 'M' * ((1<<20)+1)]:
@@ -197,7 +175,7 @@ class OwnedSVG(unittest.TestCase):
             with ThreadPoolExecutor(max_workers=12) as pool:
                 results = list(pool.map(cold, range(12)))
             self.assertEqual(loader.call_count, 1)
-            self.assertTrue(all(result == REF.parse_path('M0 0L1 2') for result in results))
+            self.assertTrue(all(result == REF.expected('M0 0L1 2') for result in results))
             record = HOST._required_binding()
             with patch.object(HOST, 'Path', side_effect=AssertionError('warm Path')), patch.object(HOST, '_lock', None):
                 HOST.parse_path('')
@@ -313,11 +291,4 @@ class OwnedSVG(unittest.TestCase):
 
 
 if __name__ == '__main__':
-    if OPTIONS.benchmark:
-        for k in (1, 100, 2000):
-            text='M0 0'+'c1 2 3 4 5 6s1 2 3 4' * k
-            for module in (REF,SUBJECT):
-                start=time.perf_counter()
-                for _ in range(30): module.parse_path(text)
-                print(module.__name__,len(text),'bytes', (time.perf_counter()-start)/30, 'seconds end-to-end')
     unittest.main(argv=[__file__]+REST)

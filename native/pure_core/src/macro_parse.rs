@@ -281,7 +281,7 @@ impl Step {
 
 /// Classify one raw token into an ordered list of steps (usually one),
 /// mirroring `_classify` exactly. A leading `!` flag detaches as a `Cancel`
-/// step in front of the rest (the old `_with_cancel` behaviour).
+/// for commands/specials, not options (the old `_with_cancel` behaviour).
 fn classify_steps(token: &str, lossless: bool) -> Vec<Step> {
     // 1. a standalone `!` is a cancel (start, middle or end of a macro)
     if token == "!" {
@@ -298,9 +298,8 @@ fn classify_steps(token: &str, lossless: bool) -> Vec<Step> {
         let (flags, name) = strip_flags(&token[..i]);
         let value = clean_value(&token[i + 1..]);
         let mut out = Vec::with_capacity(2);
-        if flags.contains(&b'!') {
-            out.push(Step::Cancel);
-        }
+        // The original option branch retains ! in lossless prefixes only;
+        // unlike commands/specials it never invokes _with_cancel.
         out.push(Step::Option {
             name: name.to_string(),
             value: value.to_string(),
@@ -882,6 +881,45 @@ mod tests {
 
     fn lt(macro_str: &str) -> String {
         tokenize_json(macro_str, true)
+    }
+
+    #[test]
+    fn option_bang_prefix_is_metadata_not_cancel() {
+        // MEASURED from the archived original tokenizer in both lossless modes.
+        for (text, name, value, flags) in [
+            ("!=-15", "", "15", &b"!"[..]),
+            ("!_Mode=x", "Mode", "x", &b"!_"[..]),
+        ] {
+            for lossless in [false, true] {
+                let steps = classify_steps(text, lossless);
+                assert_eq!(steps.len(), 1, "{text}");
+                match &steps[0] {
+                    Step::Option {
+                        name: got_name,
+                        value: got_value,
+                        prefixes,
+                    } => {
+                        assert_eq!(got_name, name);
+                        assert_eq!(got_value, value);
+                        assert_eq!(
+                            prefixes.as_deref(),
+                            if lossless { Some(flags) } else { None }
+                        );
+                    }
+                    step => panic!("expected only an option for {text}, got {step:?}"),
+                }
+            }
+        }
+        assert!(matches!(
+            classify_steps("!", false).as_slice(),
+            [Step::Cancel]
+        ));
+        assert!(matches!(classify_steps("!_Zoom", true).as_slice(),
+            [Step::Cancel, Step::Command { name, .. }] if name == "Zoom"));
+        assert!(matches!(
+            classify_steps("!_Pause", true).as_slice(),
+            [Step::Cancel, Step::Pause { .. }]
+        ));
     }
 
     #[test]

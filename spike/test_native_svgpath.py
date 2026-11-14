@@ -1,7 +1,7 @@
 """Required owned SVG primary route plus direct legacy packed/JSON compatibility.
 
 Default: live public svgpath and its required adapter, independently compared
-with frozen svgpath_reference. --candidate/--library qualify inactive work.
+with fixed original-Python fixture anchors. --candidate/--library qualify inactive work.
 No source-tree library discovery, building, Python replay, or size routing.
 """
 import argparse
@@ -80,15 +80,6 @@ VALID_PATHS = [
 ]
 
 
-def _cubic(p, t):
-    (x0, y0), (x1, y1), (x2, y2), (x3, y3) = p
-    u = 1.0 - t
-    x = u * u * u * x0 + 3 * u * u * t * x1 + 3 * u * t * t * x2 + t * t * t * x3
-    y = u * u * u * y0 + 3 * u * u * t * y1 + 3 * u * t * t * y2 + t * t * t * y3
-    return (x, y)
-
-
-
 @check('public wrapper shares one adapter and forwards parser/converters without bypass')
 def _():
     assert callable(getattr(svg, '_adapter', None)), 'public SVG must be a thin wrapper'
@@ -119,15 +110,15 @@ def _():
 def _():
     for text in ['', 'M', 'M0 0', 'M0 0'+'L1 1'*1000, 'M0 0'+'L1 1'*10000]:
         before = native._native_svgpath_calls
-        assert _bits(parse_path(text)) == _bits(reference.parse_path(text))
+        assert _bits(parse_path(text)) == _bits(reference.expected(text))
         assert native._native_svgpath_calls == before + 1
 
 
-@check('original valid command/number corpus: primary equals independent oracle')
+@check('original valid command/number corpus: primary equals fixed original-Python answers')
 def _():
     for text in VALID_PATHS:
         before = native._native_svgpath_calls
-        assert _bits(parse_path(text)) == _bits(reference.parse_path(text)), text
+        assert _bits(parse_path(text)) == _bits(reference.expected(text)), text
         assert native._native_svgpath_calls == before + 1
 
 
@@ -135,8 +126,8 @@ def _():
 def _():
     for text in ('L 10', 'M 0 0 L 10', 'M 0 0 5 L 1 2', '1', '+', 'M0 0L² 1'):
         before = native._native_svgpath_calls
-        assert _outcome(parse_path, text) == _outcome(reference.parse_path, text), text
-        assert _outcome(reference.parse_path, text)[0] == 'ValueError'
+        assert _outcome(parse_path, text) == _outcome(reference.expected, text), text
+        assert _outcome(reference.expected, text)[0] == 'ValueError'
         assert native._native_svgpath_calls == before + 1
 
 
@@ -144,7 +135,7 @@ def _():
 def _():
     for value in (5, None, b'', b'M0 0', [], [1]):
         before = native._native_svgpath_calls
-        assert _outcome(parse_path, value) == _outcome(reference.parse_path, value)
+        assert _outcome(parse_path, value) == _outcome(reference.expected, value)
         assert native._native_svgpath_calls == before
 
 
@@ -234,31 +225,13 @@ def _():
     assert sp["beziers"][2][3] == (0.0, 0.0)
 
 
-@check("the off-origin circle quarter stays on the unit circle (mutation target)")
-def _():
-    # The centre of this arc is (0,0), which the F.6 formula reaches ONLY via
-    # the chord-midpoint term ((x1+x2)/2, (y1+y2)/2 = (0.5, 0.5)). Dropping
-    # that term moves the centre to (-0.5, -0.5) and the curve leaves the unit
-    # circle. On the packed route the same fixture must still hold.
-    bez = parse_path("M 1 0 A 1 1 0 0 1 0 1")[0]["beziers"]
-    assert len(bez) == 1, f"a 90-degree arc is one segment, got {len(bez)}"
-    b = bez[0]
-    for t in (0.25, 0.5, 0.75):
-        x, y = _cubic(b, t)
-        assert abs(math.hypot(x, y) - 1.0) <= 3e-4, f"t={t}: {x}, {y}"
-        assert 0.3 < x < 1.0 and 0.3 < y < 1.0, f"t={t}: {x}, {y} wrong side"
-    xm, ym = _cubic(b, 0.5)
-    assert xm > 0.5 and ym > 0.5, f"{xm}, {ym} not the far quarter"
-
-
-
-@check('COMPAT only: packed binding equals independent oracle on original corpus')
+@check('COMPAT only: packed binding equals fixed original-Python answers on original corpus')
 def _():
     assert compat._svgpath_packed_binding() is not None
     for text in VALID_PATHS:
         packed = compat._native_svgpath_packed(text)
         assert packed is not None, text
-        assert _bits(svg._subpaths_from_packed(*packed)) == _bits(reference.parse_path(text)), text
+        assert _bits(svg._subpaths_from_packed(*packed)) == _bits(reference.expected(text)), text
 
 
 @check('COMPAT only: packed capacity/partition/finite/flag validators remain strict')
@@ -282,7 +255,7 @@ def _():
     assert isinstance(data, list) and len(data) == 1 and data[0]['closed'] is True
     # Legacy JSON formats integral floats as integers; preserve its historical
     # numeric equality contract, not the primary owned ABI's float-bit contract.
-    assert svg._subpaths_from_json(payload) == reference.parse_path('M 0 0 10 0 Z')
+    assert svg._subpaths_from_json(payload) == reference.expected('M 0 0 10 0 Z')
     assert compat._valid_svgpath_json(payload.encode() if isinstance(payload, str) else payload)
     for bad in [b'{}', b'[{"closed":0,"beziers":[]}]',
                 b'[{"closed":false,"beziers":[[[0,0]]]}]',

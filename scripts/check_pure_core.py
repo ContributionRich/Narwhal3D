@@ -122,15 +122,43 @@ PURE_CORE_PYTESTS = (
 
 
 # Explicit Rust oracle-retirement suites and their source/fixture closure.
-RUST_INTEGRATION_SUITES = ("alias_golden", "unit_golden", "interpolate_golden")
+RUST_INTEGRATION_SUITES = ('alias_golden', 'unit_golden', 'interpolate_golden', 'svgpath_golden', 'bearing_golden', 'calc_golden', 'coords_golden', 'unitformat_golden', 'macro_golden', 'joinchain_golden', 'rebuild_golden')
 RUST_INTEGRATION_FILES = (
     'native/pure_core/tests/alias_golden.rs',
+    'native/pure_core/tests/bearing_golden.rs',
+    'native/pure_core/tests/calc_golden.rs',
+    'native/pure_core/tests/coords_golden.rs',
     'native/pure_core/tests/fixtures/alias_golden.txt',
+    'native/pure_core/tests/fixtures/bearing_golden.txt',
+    'native/pure_core/tests/fixtures/calc_boundary.txt',
+    'native/pure_core/tests/fixtures/calc_golden.txt',
+    'native/pure_core/tests/fixtures/calc_host.txt',
+    'native/pure_core/tests/fixtures/calc_limits.txt',
+    'native/pure_core/tests/fixtures/calc_presentation.txt',
+    'native/pure_core/tests/fixtures/calc_provenance.txt',
+    'native/pure_core/tests/fixtures/coords_examples.txt',
+    'native/pure_core/tests/fixtures/coords_golden.txt',
+    'native/pure_core/tests/fixtures/coords_host.txt',
+    'native/pure_core/tests/fixtures/coords_legacy_nonfinite.txt',
+    'native/pure_core/tests/fixtures/coords_policy.txt',
+    'native/pure_core/tests/fixtures/coords_presentation.txt',
+    'native/pure_core/tests/fixtures/coords_provenance.txt',
+    'native/pure_core/tests/fixtures/coords_split.txt',
     'native/pure_core/tests/fixtures/interpolate_host.txt',
     'native/pure_core/tests/fixtures/interpolate_math.txt',
     'native/pure_core/tests/fixtures/interpolate_performance_baseline.txt',
     'native/pure_core/tests/fixtures/interpolate_performance_inputs.txt',
     'native/pure_core/tests/fixtures/interpolate_provenance.txt',
+    'native/pure_core/tests/fixtures/joinchain_golden.txt',
+    'native/pure_core/tests/fixtures/macro_golden.txt',
+    'native/pure_core/tests/fixtures/macro_host.txt',
+    'native/pure_core/tests/fixtures/macro_limits.txt',
+    'native/pure_core/tests/fixtures/macro_provenance.txt',
+    'native/pure_core/tests/fixtures/rebuild_e2e.txt',
+    'native/pure_core/tests/fixtures/rebuild_golden.txt',
+    'native/pure_core/tests/fixtures/svgpath_golden.txt',
+    'native/pure_core/tests/fixtures/svgpath_host.txt',
+    'native/pure_core/tests/fixtures/svgpath_provenance.txt',
     'native/pure_core/tests/fixtures/unit_angle.txt',
     'native/pure_core/tests/fixtures/unit_angle_grid.txt',
     'native/pure_core/tests/fixtures/unit_host.txt',
@@ -141,8 +169,14 @@ RUST_INTEGRATION_FILES = (
     'native/pure_core/tests/fixtures/unit_table.txt',
     'native/pure_core/tests/fixtures/unit_unicode.txt',
     'native/pure_core/tests/fixtures/unit_whitespace.txt',
+    'native/pure_core/tests/fixtures/unitformat_golden.txt',
     'native/pure_core/tests/interpolate_golden.rs',
+    'native/pure_core/tests/joinchain_golden.rs',
+    'native/pure_core/tests/macro_golden.rs',
+    'native/pure_core/tests/rebuild_golden.rs',
+    'native/pure_core/tests/svgpath_golden.rs',
     'native/pure_core/tests/unit_golden.rs',
+    'native/pure_core/tests/unitformat_golden.rs',
 )
 
 
@@ -233,7 +267,10 @@ for text, code, value, start, end in (("N30E", 0, 60.0, 0, 0), ("NbadE", 3, 0.0,
 checked_plan = lib.narwhal_pure_core_macro_plan_checked
 checked_plan.argtypes = [c.c_char_p, c.c_size_t, c.c_void_p, c.c_size_t, c.POINTER(c.c_int64)]
 checked_plan.restype = c.c_int32
-for text, code, payload in ((b"'_Box", -4, b'"Box"'), (b"=value", -5, b'')):
+# MEASURED: option ! prefixes must not synthesize Cancel; command ! still must.
+for text, code, payload in ((b"'_Box", -4, b'"Box"'), (b"=value", -5, b''),
+                            (b"!=-15", -5, b''),
+                            (b"!_Mode=x", 0, b'[{"action":"option","name":"Mode","value":"x","prefixes":["!","_"]}]')):
     output, needed = c.create_string_buffer(1024), c.c_int64(-1)
     if checked_plan(text, len(text), output, len(output), c.byref(needed)) != code or needed.value != len(payload) or output.raw[:needed.value] != payload:
         raise RuntimeError("checked planner typed refusal witness differs")
@@ -423,7 +460,10 @@ macro_size.restype = c.c_int64
 macro_encode = lib.narwhal_pure_core_macro_encode
 macro_encode.argtypes = [c.c_char_p, c.c_size_t, c.c_ubyte, c.c_void_p, c.c_size_t]
 macro_encode.restype = c.c_int32
-for text, expected in ((b"!123", [{"kind": "text", "value": "!123"}]),
+for text, expected in ((b"!=-15", [{"kind": "option", "name": "", "value": "15"}]),
+                       (b"!_Mode=x", [{"kind": "option", "name": "Mode", "value": "x"}]),
+                       (b"!_Box", [{"kind": "cancel"}, {"kind": "command", "name": "Box", "dash": False, "underscore": True, "transparent": False}]),
+                       (b"!123", [{"kind": "text", "value": "!123"}]),
                        (b"a\x1cb", [{"kind": "text", "value": "a"}, {"kind": "text", "value": "b"}])):
     needed = macro_size(text, len(text), 0)
     if not 0 < needed <= 4096:

@@ -1,28 +1,24 @@
-"""RUST-COORDS-13 real-native qualification (bundled CPython 3.13).
+"""Coordinate host boundaries, fixed original outputs, required native ABI.
 
-Default: external scratch crate, exact repo sources and checked span helpers.
---library PATH / NARWHAL_PURE_CORE: integrated library, no scratch build.
---candidate PATH: optional inactive candidate; default tests public live coords.
---mutations: external source copies only; no live mutation or archive dependency.
+Computational and split corpora run in Rust coords_golden. Original compiler,
+mutation qualification tooling and unchanged benchmark are private only.
+Use bundled Python 3.13 with --library or the configured/packaged current core.
 """
 import argparse
 import ast
 import ctypes
-import hashlib
+from concurrent.futures import ThreadPoolExecutor
 import importlib.util
-import json
 import math
 import os
 from pathlib import Path
-import random
-import struct
-import subprocess
+
 import tempfile
+import threading
 import unittest
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
-MODULES = ('numparse', 'numparse_owned', 'python_text', 'calc_owned', 'bearing_owned', 'python_norm', 'coords_owned')
 CANDIDATE = ROOT / 'narwhal3d/coords.py'
 
 
@@ -33,69 +29,121 @@ def load(name, path):
     return module
 
 
-def scratch(directory, mutation=None):
-    directory = Path(directory)
-    directory.mkdir(parents=True, exist_ok=True)
-    (directory / 'Cargo.toml').write_text(
-        '[package]\nname="rust13-coords-qualification"\nversion="0.0.0"\nedition="2021"\n'
-        '[lib]\nname="narwhal_pure_core"\ncrate-type=["cdylib","rlib"]\npath="lib.rs"\n')
-    original = (ROOT / 'native/pure_core/src/lib.rs').read_text()
-    start = original.index('use std::mem::{align_of, size_of};')
-    helpers = original[start:original.index('\n#[cfg(test)]', start)]
-    for name in MODULES:
-        path = ROOT / 'native/pure_core/src' / (name + '.rs')
-        if mutation:
-            content = path.read_text()
-            if name == mutation[0]:
-                old, new = mutation[1:]
-                assert content.count(old) == 1, (name, old)
-                content = content.replace(old, new)
-            path = directory / (name + '.rs')
-            path.write_text(content)
-        helpers += '\n#[path=%s]\npub mod %s;\n' % (json.dumps(str(path)), name)
-    (directory / 'lib.rs').write_text(helpers)
-    return directory / 'Cargo.toml'
-
-
-def cargo(manifest, command):
-    result = subprocess.run(['cargo', '+1.95.0', command, '--offline', '--manifest-path', str(manifest)],
-                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=90)
-    if result.returncode:
-        raise AssertionError(result.stdout)
-    return result.stdout
-
-
 class CoordinatesOwned(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.native = load('rust13_native_coords', ROOT / 'narwhal3d/native_coords.py')
         cls.reference = load('rust13_coords_reference', ROOT / 'spike/coords_reference.py')
         cls.candidate = load('rust13_coords_candidate', CANDIDATE)
-        cls.comparisons = 0
+        cls.native = cls.candidate._adapter()
 
-    def compare(self, text, model='Millimeters', mode=0):
-        self.reference.MODEL_UNIT = model
-        name = ('parse', 'parse_scalar', 'parse_angle')[mode]
-        expected = getattr(self.reference, name)(text)
-        actual = (self.native.parse(text, model) if mode == 0 else
-                  self.native.parse_scalar(text, model) if mode == 1 else self.native.parse_angle(text))
-        type(self).comparisons += 1
-        self.assertEqual(actual[1:] if mode == 0 else actual[1],
-                         expected[1:] if mode == 0 else expected[1],
-                         (ascii(text), model, actual, expected))
-        if expected[0] is None:
-            self.assertIsNone(actual[0])
-            return
-        pairs = zip(actual[0], expected[0]) if mode == 0 else [(actual[0], expected[0])]
-        for a, b in pairs:
-            self.assertTrue(math.isfinite(a), (text, actual))
-            # CPython-compensated hypot now preserves projection bits too.
-            self.assertEqual(struct.pack('!d', a), struct.pack('!d', b),
-                             (ascii(text), model, actual, expected))
+    def test_fixed_full_error_presentations(self):
+        before=self.native._native_coords_calls
+        original_model=self.candidate.MODEL_UNIT
+        count=0
+        try:
+            for r in self.reference.rows('presentation'):
+                source=self.reference.text(r[3])
+                model=ast.literal_eval(self.reference.text(r[4]))
+                mode=int(r[2])
+                reply=self.native.CoordsReply(code=int(r[8]),flags=int(r[9]),
+                    start=int(r[11]),end=int(r[12]))
+                reply.values[:]=list(map(self.reference.number,r[10].split(',')))
+                c=r[13].split(','); b=r[14].split(',')
+                reply.calc=self.native.CalcReply(int(c[0]),int(c[1]),self.reference.number(c[2]),
+                    int(c[3]),int(c[4]),int(c[5]))
+                reply.bearing=self.native.BearingReply(int(b[0]),int(b[1]),self.reference.number(b[2]),
+                    self.reference.number(b[3]),int(b[4]),int(b[5]))
+                def fixed(*args):
+                    self.assertEqual(args[1],len(source))
+                    self.assertEqual(args[4:7],(int(isinstance(model,str)),mode,151))
+                    ctypes.memmove(args[-2],ctypes.byref(reply),ctypes.sizeof(reply))
+                    return 0
+                self.candidate.MODEL_UNIT=model
+                name=('parse','parse_scalar','parse_angle','parse_scalar')[mode]
+                admitted=source
+                if mode==3:
+                    admitted=source.encode('latin-1')
+                    if r[1]=='host_bytearray': admitted=bytearray(admitted)
+                error=self.reference.text(r[7])
+                want=(None,False,False,error) if mode==0 else (None,error)
+                with patch.object(self.native,'_required_binding',return_value=fixed):
+                    self.assertEqual(getattr(self.candidate,name)(admitted),want)
+                count+=1
+        finally:
+            self.candidate.MODEL_UNIT=original_model
+        self.assertEqual(count,2521)
+        self.assertEqual(self.native._native_coords_calls-before,count)
+
+    def test_split_host_stitching_and_protocol(self):
+        before=self.native._native_coords_calls
+        cases=0
+        for r in self.reference.rows('host'):
+            if r[0]!='split_top_level': continue
+            source,sep=ast.literal_eval(self.reference.text(r[1]))
+            self.assertEqual(self.candidate.split_top_level(source,sep),
+                             self.reference.expected('split_top_level',source,sep))
+            cases+=1
+        self.assertEqual(cases,45)
+        self.assertEqual(self.native._native_coords_calls-before,cases)
+        with self.assertRaisesRegex(ValueError,'4096'):
+            self.candidate.split_top_level('a'*4097)
+        with self.assertRaisesRegex(TypeError,'expects a string'):
+            self.candidate.split_top_level(None)
+        class Fault:
+            def __init__(self,mode): self.mode=mode
+            def split(self,source,length,sep,kind,spans,capacity,count):
+                n=ctypes.cast(count,ctypes.POINTER(ctypes.c_uint32))
+                if self.mode=='status': return 1
+                n[0]=1 if self.mode!='count' else 0
+                if spans is not None:
+                    spans[0]=1 if self.mode=='span' else 0
+                    spans[1]=length-1 if self.mode=='incomplete' else length
+                return 0
+        before=self.native._native_coords_calls
+        for mode in ['status','count','span','incomplete']:
+            with patch.object(self.native,'_required_binding',return_value=Fault(mode)):
+                with self.assertRaisesRegex(RuntimeError,'Rust coordinate split'):
+                    self.candidate.split_top_level('1,2')
+        self.assertEqual(self.native._native_coords_calls,before)
+
+    def test_binding_cache_and_live_forwarding(self):
+        marker=object()
+        for name,args,want in [('parse',('1,2',),('1,2','Millimeters')),
+                ('parse_scalar',('1',),('1','Millimeters')),('parse_angle',('30',),('30',)),
+                ('split_top_level',('a,b',','),('a,b',','))]:
+            with patch.object(self.native,name,return_value=marker) as forwarded:
+                self.assertIs(getattr(self.candidate,name)(*args),marker)
+                forwarded.assert_called_once_with(*want)
+        self.native._required_binding()
+        path=self.native._library._name
+        cdll=ctypes.CDLL
+        with patch.object(self.native,'_binding',None), patch.object(self.native,'_cache',None), \
+                patch.object(self.native,'_signature',None), patch.object(self.native,'_library',None), \
+                patch.object(self.native.ctypes,'CDLL',wraps=cdll) as loader:
+            barrier=threading.Barrier(8)
+            def cold(_):
+                barrier.wait()
+                return self.candidate.parse('1,2')
+            with ThreadPoolExecutor(max_workers=8) as pool:
+                outcomes=list(pool.map(cold,range(8)))
+            self.assertTrue(all(result==self.reference.expected('parse','1,2','Millimeters') for result in outcomes))
+            self.assertEqual(loader.call_count,1)
+            record=self.native._cache
+            with patch.object(self.native,'Path',side_effect=AssertionError('warm Path')), patch.object(self.native,'_lock',None):
+                self.assertIs(self.native._required_binding(),record[1])
+            with tempfile.TemporaryDirectory(prefix='coords-cache-') as folder:
+                other=Path(folder)/'core.so'; other.symlink_to(Path(path).resolve())
+                with patch.dict(os.environ,NARWHAL_PURE_CORE=str(other)):
+                    self.assertIsNot(self.native._required_binding(),record[1])
+                    self.assertIsNotNone(record[2])
+                self.native._required_binding()
+            self.assertEqual(loader.call_count,3)
+        self.assertLessEqual(self.native._array_type.cache_info().maxsize,128)
 
     def test_frozen_oracle_and_no_python_engine(self):
-        self.assertEqual(hashlib.sha256((ROOT/'spike/coords_reference.py').read_bytes()).hexdigest(),
-                         '06671557350df35fddfc759d35aaa46cbe27db89a6bb0f83d379b4e52880456e')
+        self.assertIn('coords_reference.py sha256 06671557350df35fddfc759d35aaa46cbe27db89a6bb0f83d379b4e52880456e',
+                      (self.reference.FIXTURES/'coords_provenance.txt').read_text())
+        self.assertFalse(hasattr(self.reference, '_parse_polar'))
         self.assertFalse(hasattr(self.reference, '_native_coords'))
         for path in [ROOT/'narwhal3d/native_coords.py', CANDIDATE]:
             tree = ast.parse(path.read_text())
@@ -108,68 +156,6 @@ class CoordinatesOwned(unittest.TestCase):
                     self.assertNotIn(node.func.id, ('eval', 'exec', '_number', '_parse_polar'))
         self.assertEqual(self.candidate.parse('rw1+2,4'), ((3.0,4.0,0.0), True,True,None))
         self.assertEqual(self.candidate.parse_scalar('1_2'), (12.0,None))
-
-    def test_contract_prefix_polar_error_precedence(self):
-        texts = ['', ' ', '0','-0','0.0','1','w','rw','@w','W0','rw0', '.5,2','.x','<30',
-                 '1,2','1,2,3','1,2,3,4',',','1,','1,,3', '1, 2', '1\t,2',
-                 '5<30', '5<30,2','5<30<45','5,6<15','1,2,3<bad','1,2,3<30',
-                 '1<2<3<4','1,2<3<4','<','1<','1<<','1<2,3,4','bad<2,3,4',
-                 '1<N30E','1<N91W','1<NbadE','1<N30EE','1<N E','1<ſ30E',
-                 '1e2<N30E', '1cm<N30E','1<N30E,2','1<N30d20\'30"W',
-                 'pow(2,3),4','atan2(2,3),sqrt(4)','pow(2,3)<30',
-                 'pow(2,3)<bad','pow(2,3)<30<20','1<pi','1<sin(1)',
-                 '1<1e2d','1<.5d2.3\'4e-1"','1<22\'','1<1d',
-                 '1/0,2','sqrt(-1),2','pow(-1,.5),2','sin(),2','(1,2',')1,2',
-                 '1_234.5_6,2e1_0','١٢,３','𝟜.٥e２,1','1\ud800,2','\udfff,1',
-                 'foo,1','1cm,2','1\'2",2','1.,2','1.e2,2','-0,0']
-        for prefix in ['', 'rw','@w','w','r','@','RW','@W','wr','rr']:
-            for text in texts:
-                self.compare(prefix+text)
-        for model in ['Millimeters','Inches','Meters','bad','',None,1,[],{},'\ud800','Kilometers']:
-            for text in ['1cm,2', '1,2','pow(2,3),1', 'bad,2','1\'2",0','1mm<30']:
-                self.compare(text,model)
-
-    def test_scalar_angle_grammars(self):
-        for text in ['', ' ','0','-0','1.','1.e2','.5','1_2','1__2','1_.2','1._2',
-                     '1e1_0','1e_2','1/0','1-3/4','2cm','sqrt(-1)','pow(2)',
-                     'sin(1,2)','1+@','²','١٢.３','\ud800','pi','1\u00a02',
-                     '\x1c2\x1f', '1e-999','-1e-999']:
-            self.compare(text,mode=1)
-        angles = ['',' ', '0','-0','+0', '1.', '.5','30d','30deg','30degree','30degrees',
-                  '2radian','2radians','2rad','20grade','20grades','20grad','100gradian',
-                  '100gradians','0d20\'50"','15.5d30.5\'2e1"','22\'','2"',
-                  '-0d0\'0"','2d','2d3"','2\'3"','2e2d3e-2\'4e+1"',
-                  '1e','1E+','pi','π','PI','1*2','(1)','1+2','bad','١٢d３\'４"',
-                  '\ud800','1_0','2\n','1\x1c','1K','1İ','1ſ', '1d2\'3"4']
-        for text in angles:
-            self.compare(text,mode=2)
-            self.compare('1<'+text)
-
-    def test_seeded_differential(self):
-        rng = random.Random(1313)
-        atoms = ['0','-0','1','2','1_2','.5','1.','1e-2','1/0','1cm','pi',
-                 'pow(2,3)','sqrt(-1)','1-3/4','bad','١٢','\ud800','(',')','']
-        for _ in range(14000):
-            a,b,c = rng.choices(atoms,k=3)
-            self.compare(rng.choice(['','w','r','rw','@w','@']) + rng.choice(
-                [a+','+b,a+','+b+','+c,a+'<'+b,a+'<'+b+','+c,a+'<'+b+'<'+c,
-                 a+','+b+'<'+c,a,a+','+b+','+c+',4']),rng.choice(['Millimeters','Meters','bad',None]))
-        for _ in range(2000):
-            x,y,a = [rng.uniform(-1e100,1e100) for _ in range(3)]
-            self.compare('%r,%r<%r' % (x,y,a))
-            self.compare('%r<%r<%r' % (x,y,a))
-        for cp in [0x85,0xa0,0x1c,0x2007,0x2028,0x3000,0xfeff]:
-            for text in [chr(cp)+'1,2'+chr(cp),'1'+chr(cp)+',2']:
-                self.compare(text)
-
-    def test_split_native_spans(self):
-        rng = random.Random(1314)
-        for text in ['','pow(2,3),4',')a,b(', '((,)),', '\ud800,٢'] + [
-                ''.join(rng.choices('(),ab<>',k=rng.randrange(80))) for _ in range(1000)]:
-            for sep in [',','(',')','a','',',,',None,60,'\ud800']:
-                self.assertEqual(self.native.split_top_level(text,sep),self.reference.split_top_level(text,sep))
-        with self.assertRaises(ValueError):
-            self.native.split_top_level('a'*4097)
 
     def test_bounds_nonfinite_types_unit_control_and_calls(self):
         for text in ['nan','NaN','-inf','+Infinity','1e999','-1e999','1_0e999']:
@@ -185,7 +171,7 @@ class CoordinatesOwned(unittest.TestCase):
                          bytearray(b'1cm'),b'\xa01\xa0',b'1_2', b'1.e2',
                          b'1__2',b'\t2\n',[1],{'x':1}]:
                 try:
-                    expected = getattr(self.reference, name)(text)
+                    expected = self.reference.expected(name,text,'Millimeters')
                 except Exception as error:
                     with self.assertRaises(type(error)) as raised:
                         getattr(self.native, name)(text)
@@ -197,17 +183,6 @@ class CoordinatesOwned(unittest.TestCase):
         self.assertEqual(self.native.parse_scalar('('*65+'1'+')'*65)[1],
                          repr('('*65+'1'+')'*65)+' is not a number (calculator nesting exceeds 64 levels)')
         self.assertEqual(self.native.parse_scalar('('*64+'1'+')'*64),(1.0,None))
-        self.compare('-'*4095+'1', mode=1)
-        self.compare('1+'*2046+'1,0')
-        self.compare('9'*2000+'/'+'8'*2000+',0')
-        # Decimal Unicode predicates are independent of the calculator's
-        # broader isdigit predicate; every 15.1 Nd code point is exercised.
-        for cp in range(0x110000):
-            ch=chr(cp)
-            if ch.isdecimal():
-                self.compare(ch+'_0,2')
-                self.compare(ch+'d', mode=2)
-
         for unit,expected in [('Inches','Inches'),(None,'Millimeters'),(0,'Millimeters'),(1,1),([], 'Millimeters')]:
             self.candidate.set_model_unit(unit)
             self.assertEqual(self.candidate.MODEL_UNIT,expected)
@@ -287,55 +262,29 @@ class CoordinatesOwned(unittest.TestCase):
             def to_world(self,u,v,w): return (u+10,-w+20,v+30)
             def vector_to_world(self,u,v,w): return (u,-w,v)
         c=self.candidate
-        self.assertEqual(c.resolve('1,2',Plane()),((11,20,32),None))
-        self.assertEqual(c.resolve('r1,2',Plane(),(4,5,6)),((5,5,8),None))
-        self.assertEqual(c.resolve('rw1,2',Plane(),(4,5,6)),((5,7,6),None))
-        self.assertEqual(c.resolve('r1,2',Plane()),(None,'there is no previous point for a relative coordinate'))
+        for source,last,callback in [('1,2',None,'to_world'),
+                ('r1,2',(4,5,6),'vector_to_world'),('rw1,2',(4,5,6),None),('r1,2',None,None)]:
+            plane=Plane()
+            with patch.object(plane,'to_world',wraps=plane.to_world) as point_call, \
+                    patch.object(plane,'vector_to_world',wraps=plane.vector_to_world) as vector_call:
+                self.assertEqual(c.resolve(source,plane,last),
+                                 self.reference.expected('resolve',source,'CUSTOM',last))
+                self.assertEqual(point_call.call_count,int(callback=='to_world'))
+                self.assertEqual(vector_call.call_count,int(callback=='vector_to_world'))
         p=(1/3,math.pi,-1e-200)
         self.assertEqual(c.resolve(c.format_world(p),Plane()),(p,None))
-
-    @classmethod
-    def tearDownClass(cls):
-        print('Real-native bit-exact comparisons:',cls.comparisons)
 
 
 def main():
     global CANDIDATE
     parser=argparse.ArgumentParser()
-    parser.add_argument('--library',type=Path,default=os.environ.get('NARWHAL_PURE_CORE'))
+    parser.add_argument('--library',type=Path)
     parser.add_argument('--candidate',type=Path)
-    parser.add_argument('--mutations',action='store_true')
-    args=parser.parse_args()
+    args,rest=parser.parse_known_args()
     if args.candidate: CANDIDATE=args.candidate.resolve()
-    with tempfile.TemporaryDirectory(prefix='rust13-coords-qualification-') as temp:
-        if args.library:
-            library=Path(args.library).resolve()
-            if not library.is_file(): raise RuntimeError('Explicit real-native library missing')
-        else:
-            manifest=scratch(Path(temp)/'exact')
-            print(cargo(manifest,'test'))
-            cargo(manifest,'build')
-            library=manifest.parent/'target/debug/libnarwhal_pure_core.so'
-        os.environ['NARWHAL_PURE_CORE']=str(library)
-        result=unittest.TextTestRunner(verbosity=2).run(unittest.defaultTestLoader.loadTestsFromTestCase(CoordinatesOwned))
-        if not result.wasSuccessful(): return 1
-        if args.mutations:
-            mutations=[('calc_owned','v + r','v - r'),
-                       ('coords_owned',
-                        '[("rw", 3), ("@w", 3), ("w", 1), ("r", 2), ("@", 2)]',
-                        '[("r", 2), ("rw", 3), ("@w", 3), ("w", 1), ("@", 2)]'),
-                       ('coords_owned','return Err(error(6, a, b));','return Err(error(7, a, b));'),
-                       ('coords_owned','crate::python_norm::hypot2(x, y)','x.hypot(y)')]
-            for i,mutation in enumerate(mutations):
-                manifest=scratch(Path(temp)/('mutant'+str(i)),mutation)
-                red=subprocess.run(['cargo','+1.95.0','test','--offline','--manifest-path',str(manifest)],
-                                   stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True,timeout=90)
-                if red.returncode!=101 or 'test result: FAILED' not in red.stdout:
-                    raise AssertionError('Mutation failed to go RED: '+str(mutation)+'\n'+red.stdout)
-                print('MUTATION RED confirmed:',mutation[:2])
-            print(cargo(scratch(Path(temp)/'restored'),'test'))
-    return 0
+    if args.library: os.environ['NARWHAL_PURE_CORE']=str(args.library.resolve())
+    unittest.main(argv=[__file__]+rest)
 
 
 if __name__=='__main__':
-    raise SystemExit(main())
+    main()

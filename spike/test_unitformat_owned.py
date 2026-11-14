@@ -1,59 +1,38 @@
-"""Tests for the RUST-UNITFORMAT-11 native port (owned by this task).
+"""Host-only tests for the unit-format display port (RUST-FORMAT-GOLDEN-18).
 
-Pure Python, no bpy, no network.  Compares the live native host
-(``narwhal3d/native_unitformat.py`` -> the Rust port in
-``native/pure_core/src/unitformat.rs``) against the UNCHANGED reference
-(``narwhal3d/unitformat.py``) and checks the candidate thin host
-(``tmp/rust11-unitformat-candidate.py``).
+The pure computation (mode normalisation, precision validation, rounding,
+fraction reduction, string rendering) is owned by the Rust engine
+(``native/pure_core/src/unitformat.rs``) and is replayed against a frozen
+golden fixture by the Rust integration test
+(``native/pure_core/tests/unitformat_golden.rs``).  No Python engine remains
+at test time.
 
-Coverage (bounded, deterministic seed):
+This host test owns the Python side only:
 
-* **differential grid** -- every (value x mode x precision) combination over a
-  curated adversarial set must return the identical result OR raise the
-  identical exception type and message;
-* **randomized adversarial** -- 6000 seeded random calls across the full
-  value/mode/precision space (big floats, denormals, NaN/inf, int/float
-  coercion, ``__int__`` precision objects, unicode whitespace, bogus modes);
-* **large-value / overflow** -- values whose ``value*denom`` coefficient
-  exceeds the default 28-digit context (``1e100``, ``1e308``, 50-digit ints)
-  must raise ``InvalidOperation`` exactly as the reference does, and values
-  under the limit must format exactly (this is the path the old ``u128`` fold
-  would have overflowed/wrapped on);
-* **default-context parity** -- the reference reads the thread's ``decimal``
-  context, so both are compared under ``prec`` = 1, 2, 3, 5, 28 and must
-  agree.  **Scope (documented, not a bug):** the reference's
-  ``Decimal(str(mag)) * denom`` **multiply** is a context operation rounded to
-  ``prec`` sig digits with the context rounding mode (default **HALF_EVEN**);
-  the subsequent ``.quantize(1, HALF_UP)`` uses an explicit HALF_UP. This port
-  emulates the DEFAULT HALF_EVEN multiply rounding. A **non-default context
-  rounding mode** is refused with ``RuntimeError`` (not silently miscomputed).
-  A *custom* context (un-trapped InvalidOperation, custom Emin/Emax) is OUT
-  OF SCOPE -- the app never customizes the decimal context.
-* **adversarial near-half-crossings** -- for every denominator in 3/7/16/128/
-  1024, every context precision 1..10, and both Fractional and Feet-Inch, a
-  dense window around each HALF_UP tie (``v*denom`` just below/above ``m + 0.5``)
-  must match the reference. This is the region where the HALF_EVEN sig-digit
-  multiply rounding and the HALF_UP integer rounding interact -- the exact
-  class of bug Main measured (``0.0936`` Fractional 16 at prec 2).
-* **non-default rounding guard** -- a context with a non-default rounding mode
-  is refused with ``RuntimeError`` (the reference would use the context
-  rounding for the multiply, which this port does not support); HALF_EVEN
-  (the default) still works and matches the reference.
-* **whitespace-padded mode names** -- a name padded within the 1 MiB bound
-  resolves (the reference ``str.strip()``s); a name beyond the bound is
-  refused (a documented explicit limit, not exact parity);
-* **no-fallback** -- a missing library or a library lacking the two exports
-  raises ``RuntimeError`` (never a silent Python fallback);
-* **fault injection** -- a native that answers with an invalid code, or with
-  an unbounded ``needed`` (10**9), or with ``UF_OK``/wrong size on the
-  1-byte probe, is refused with ``RuntimeError`` and never allocates;
-* **candidate delegation** -- the candidate's ``format_length`` is literally
-  the *qualified* adapter's ``format_length`` (one shared instance), and both
-  the standalone (file-path) and package-member (``from . import``) routes
-  delegate to the adapter, not a re-implementation.
+* **object admission / coercion order** — value → mode → precision, with the
+  reference's exact exception type and message for each failure;
+* **context guards** — non-default rounding, custom Emin/Emax/clamp/traps,
+  precision > 0xffffffff are all refused with ``RuntimeError`` (the Rust
+  engine takes ``context_precision`` as an explicit ABI param and cannot see
+  a custom context);
+* **no-fallback** — missing library, missing exports, invalid native codes,
+  unbounded ``needed``, inconsistent OK size are all ``RuntimeError`` (never
+  a silent Python fallback);
+* **fault injection** — fake native bindings that lie about codes or sizes;
+* **candidate delegation** — the candidate's ``format_length`` IS the
+  qualified adapter's ``format_length`` (one shared instance), both the
+  standalone and package-member routes;
+* **live replay** — a deterministic sample of OK and ERR fixture rows is
+  replayed through the live native host and the result (OK string or ERR
+  exception type+message) is asserted EXACT against the frozen expectation;
+  **all** HOST rows are replayed and their exact exception type, message and
+  original context asserted. This proves the live host still matches the
+  golden; it does NOT re-derive any expectation from the engine.
+* **reference absent** — the retired Python reference is gone from the
+  public tree.
 
-The live exports are mandatory: missing native qualification fails this suite,
-never skips it. The frozen reference is test-only, not a runtime fallback.
+The live exports are mandatory: missing native qualification fails this
+suite, never skips it.
 """
 from __future__ import annotations
 
@@ -62,7 +41,8 @@ import ctypes
 import decimal
 import importlib.util
 import os
-import random
+import re
+import struct
 import sys
 import types
 
@@ -70,6 +50,11 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ADAPTER_FILE = os.path.join(ROOT, "narwhal3d", "native_unitformat.py")
 NATIVE_LIB = os.path.join(ROOT, "narwhal3d", "native", "libnarwhal_pure_core.so")
 CANDIDATE = os.path.join(ROOT, "narwhal3d", "unitformat.py")
+FIXTURE = os.path.join(ROOT, "native", "pure_core", "tests", "fixtures",
+                       "unitformat_golden.txt")
+REFERENCE_PATH = os.path.join(ROOT, "spike", "unitformat_reference.py")
+
+MODE_NAMES = {0: "Decimal", 1: "Fractional", 2: "Feet & Inches"}
 
 results = []
 
@@ -79,35 +64,14 @@ def check(name):
         try:
             fn()
             results.append((name, "PASS", ""))
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             results.append((name, "FAIL", repr(e)))
     return deco
 
 
-def _outcome(fn, *a):
-    try:
-        return ("ok", fn(*a))
-    except Exception as e:  # noqa: BLE001
-        return ("err", type(e).__name__, str(e))
-
-
 # ---------------------------------------------------------------------------
-# Load the three subjects.  The reference and the qualified adapter (NAT) are
-# loaded once.  The candidate is made to delegate to THAT SAME adapter instance
-# (seeded into sys.modules) so the identity check ``CAND.format_length is
-# NAT.format_length`` is honest -- it proves delegation to the qualified
-# adapter, not a self-consistent copy.  A second, package-member load of the
-# candidate separately proves the post-activation ``from . import`` route.
+# Load the three subjects.  No reference is loaded (it is retired).
 # ---------------------------------------------------------------------------
-def _load_reference():
-    spec = importlib.util.spec_from_file_location(
-        "uf_ref", os.path.join(ROOT, "spike", "unitformat_reference.py"))
-    mod = importlib.util.module_from_spec(spec)
-    sys.modules["uf_ref"] = mod
-    spec.loader.exec_module(mod)
-    return mod
-
-
 def _load_adapter(name):
     spec = importlib.util.spec_from_file_location(name, os.path.abspath(ADAPTER_FILE))
     mod = importlib.util.module_from_spec(spec)
@@ -143,14 +107,9 @@ def _load_candidate_as_package():
     return sys.modules[cand_name]
 
 
-REF = _load_reference()
-# The qualified native host, under one stable name.
 NAT = _load_adapter("uf_nat")
-# Make the candidate delegate to that exact instance (honest identity check).
 sys.modules["narwhal3d_native_unitformat"] = NAT
-# The candidate, loaded standalone (file-path route, no parent package).
 CAND = _load_candidate("uf_cand")
-# The candidate, loaded as a package member (the post-activation route).
 CAND_PKG = _load_candidate_as_package()
 
 
@@ -160,7 +119,7 @@ def native_ready():
         return True
     except RuntimeError:
         return False
-    except Exception:  # noqa: BLE001
+    except Exception:
         return True
 
 
@@ -169,41 +128,11 @@ if not READY:
     raise RuntimeError("unitformat native exports are required for qualification")
 
 
-# --- deterministic adversarial generators (defined before use) -------------
-def _rv(rng):
-    k = rng.randint(0, 6)
-    if k == 0:
-        return rng.uniform(-300, 300)
-    if k == 1:
-        return rng.uniform(-1e6, 1e6)
-    if k == 2:
-        return rng.uniform(1e14, 1e22)
-    if k == 3:
-        return rng.uniform(1e-20, 1e-6)
-    if k == 4:
-        return rng.choice([float("nan"), float("inf"), float("-inf")])
-    if k == 5:
-        return rng.randint(-10 ** rng.randint(1, 40), 10 ** rng.randint(1, 40))
-    return rng.choice([0, -0.0, 1e308, -1e308, 5e-324])
-
-
-def _rm(rng):
-    return rng.choice(["Decimal", "Fractional", "Feet & Inches", "decimal",
-                       "FRACTIONAL", "feet_inch", "Feet-Inch", "feet and inches",
-                       "  decimal  ", "bogus", "", "x", "Fraction", "fraction"])
-
-
-def _rp(rng):
-    return rng.choice([
-        rng.randint(-2, 20), rng.randint(0, 1024), rng.randint(1025, 5000),
-        rng.choice(["x", "16", " 3 ", None, 16.0, 16.5, True, False, -1, 10 ** 9, 10 ** 18]),
-    ])
-
-
 # ---------------------------------------------------------------------------
-@check("reference, native host and candidate all expose format_length")
+# Basic exposure and delegation
+# ---------------------------------------------------------------------------
+@check("native host and candidate both expose format_length")
 def _():
-    assert callable(REF.format_length)
     assert callable(NAT.format_length)
     assert callable(CAND.format_length)
     assert callable(CAND_PKG.format_length)
@@ -211,8 +140,6 @@ def _():
 
 @check("candidate delegates to the QUALIFIED adapter's format_length (one instance)")
 def _():
-    # The candidate must delegate to the SAME adapter instance we qualified,
-    # not load a private copy.
     assert CAND.native_unitformat is NAT, \
         "standalone candidate must delegate to the qualified adapter instance"
     assert CAND.format_length is NAT.format_length, \
@@ -223,8 +150,6 @@ def _():
 
 @check("candidate (package route) delegates to a sibling native_unitformat.py")
 def _():
-    # Post-activation layout: the candidate is a package member and resolves the
-    # adapter via ``from . import`` to a sibling of the same file.
     adapter = getattr(CAND_PKG, "native_unitformat", None)
     assert adapter is not None, "package candidate must import the native host"
     assert CAND_PKG.format_length is adapter.format_length, \
@@ -233,18 +158,20 @@ def _():
         "package candidate must delegate to narwhal3d/native_unitformat.py"
 
 
+# ---------------------------------------------------------------------------
+# AST guards: no Python-side computation
+# ---------------------------------------------------------------------------
 @check("candidate is a thin alias (AST: no format_length definition of its own)")
 def _():
     tree = ast.parse(open(CANDIDATE).read())
-    bodies = tree.body
     allowed = (ast.ImportFrom, ast.Import, ast.Assign, ast.Expr,
                ast.FunctionDef, ast.ClassDef, ast.If, ast.With, ast.Try,
-               ast.Return, ast.Raise, ast.AnnAssign, ast.If)
-    for node in bodies:
+               ast.Return, ast.Raise, ast.AnnAssign)
+    for node in tree.body:
         if isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant):
-            continue  # module docstring
+            continue
         assert isinstance(node, allowed), f"unexpected top-level {type(node).__name__}"
-    defs = [n.name for n in bodies if isinstance(n, ast.FunctionDef)]
+    defs = [n.name for n in tree.body if isinstance(n, ast.FunctionDef)]
     assert "format_length" not in defs, "candidate must not define format_length"
 
 
@@ -263,348 +190,31 @@ def _():
 def _():
     src = open(ADAPTER_FILE).read()
     assert "RuntimeError" in src, "missing/failed native must raise RuntimeError"
-    assert "InvalidOperation" in src, "must raise decimal.InvalidOperation for the native code"
+    assert "InvalidOperation" in src, \
+        "must raise decimal.InvalidOperation for the native code"
 
 
-@check("differential grid: 58 values x 11 modes x 18 precisions match the reference")
-def _():
-    if not READY:
-        raise RuntimeError("SKIPPED: native exports not yet registered (pre-activation)")
-    values = [
-        0, 1, 1.25, 1.75, 30.5, 3.5, 12.0, 11.99999, 0.99999, -1.2345, -0.001,
-        1.5, 2.0, 100.0, 1e20, 9.99e15, float("nan"), float("inf"), float("-inf"),
-        1e-7, 123456789.0, 0.1, 1.2345, 0.25, 1.4, 1.6, 12.25, 1.9999999999,
-        1.23456789012345, 7.5e16, 1e16, 123456.789, -123456.789, -0.0, 1e308,
-        -1e308, 5e-324, 1000.0, 999.5, 1200.25, 24.0, 23.999,
-    ]
-    modes = ["Decimal", "Fractional", "Feet & Inches", "fractional", "feet_inches",
-             "Feet-Inch", "  DECIMAL  ", "Imperial", "", "fraction", "feet and inches"]
-    precisions = [0, 1, 2, 3, 4, 16, 128, 1024, 12, 13, -1, 4096, "x", None, "16", " 2 ", 16.0]
-    mismatches = 0
-    for v in values:
-        for m in modes:
-            for p in precisions:
-                ref = _outcome(REF.format_length, v, "mm", m, p)
-                nat = _outcome(NAT.format_length, v, "mm", m, p)
-                if ref != nat:
-                    mismatches += 1
-                    if mismatches <= 8:
-                        print(f"  grid mismatch: value={v!r} mode={m!r} prec={p!r}\n"
-                              f"    REF={ref}\n    NAT={nat}")
-    assert mismatches == 0, f"{mismatches} grid mismatches"
-
-
-@check("randomized adversarial: 6000 seeded calls match the reference")
-def _():
-    if not READY:
-        raise RuntimeError("SKIPPED: native exports not yet registered (pre-activation)")
-    rng = random.Random(11)
-    for _ in range(6000):
-        v, m, p = _rv(rng), _rm(rng), _rp(rng)
-        ref = _outcome(REF.format_length, v, "mm", m, p)
-        nat = _outcome(NAT.format_length, v, "mm", m, p)
-        assert ref == nat, f"random mismatch: value={v!r} mode={m!r} prec={p!r}\n  REF={ref}\n  NAT={nat}"
-
-
-@check("large-value / overflow: coefficient over the 28-digit limit matches the reference")
-def _():
-    if not READY:
-        raise RuntimeError("SKIPPED: native exports not yet registered (pre-activation)")
-    # The path the old u128 fold would have overflowed/wrapped on.  Under the
-    # default 28-digit context the ``value*denom`` coefficient of these exceeds
-    # the limit, so the reference raises InvalidOperation; values under the
-    # limit must format exactly.  Both must agree.
-    cases = [
-        (1e100, "Fractional", 16), (1e100, "Fractional", 1), (1e100, "Decimal", 0),
-        (1e100, "Feet & Inches", 16), (1e150, "Fractional", 1024),
-        (1e308, "Fractional", 16), (1e308, "Decimal", 0), (1e308, "Feet & Inches", 1024),
-        (10 ** 40, "Fractional", 16), (10 ** 40, "Decimal", 0), (-(10 ** 50), "Fractional", 4),
-        (2 ** 120, "Fractional", 1024), (9.99e15, "Fractional", 16), (9.99e15, "Decimal", 0),
-        (1e20, "Fractional", 16), (7.5e16, "Fractional", 1024), (1234.5, "Feet & Inches", 16),
-    ]
-    for v, m, p in cases:
-        ref = _outcome(REF.format_length, v, "mm", m, p)
-        nat = _outcome(NAT.format_length, v, "mm", m, p)
-        assert ref == nat, f"large-value mismatch: value={v!r} mode={m!r} prec={p!r}\n  REF={ref}\n  NAT={nat}"
-    # Spot-check the semantics: over the limit -> InvalidOperation, under -> exact.
-    assert _outcome(REF.format_length, 1e100, "mm", "Fractional", 16)[1] == "InvalidOperation"
-    assert _outcome(NAT.format_length, 1e100, "mm", "Fractional", 16)[1] == "InvalidOperation"
-    assert _outcome(NAT.format_length, 9.99e15, "mm", "Fractional", 16) == \
-        _outcome(REF.format_length, 9.99e15, "mm", "Fractional", 16)
-
-
-@check("default-context parity under prec = 1, 2, 3, 5, 28 (scope: default context only)")
-def _():
-    if not READY:
-        raise RuntimeError("SKIPPED: native exports not yet registered (pre-activation)")
-    # The reference passes rounding=ROUND_HALF_UP explicitly (context rounding
-    # does not change these) and its multiply is exact under the default traps;
-    # only the context PRECISION changes the result.  A custom context
-    # (un-trapped InvalidOperation / custom Emin-Emax) is out of scope.
-    cases = [(1.25, "Decimal", 2), (1.5, "Decimal", 1), (1.2345, "Decimal", 3),
-             (0.99999, "Decimal", 2), (10.5, "Decimal", 0),
-             (1.75, "Fractional", 16), (1.5, "Fractional", 2), (0.05, "Fractional", 1),
-             (1.1, "Fractional", 10), (30.5, "Feet & Inches", 16),
-             (1e20, "Decimal", 12), (9.99e15, "Fractional", 16)]
-    for prec in (1, 2, 3, 5, 28):
-        with decimal.localcontext() as c:
-            c.prec = prec
-            for v, m, p in cases:
-                ref = _outcome(REF.format_length, v, "mm", m, p)
-                nat = _outcome(NAT.format_length, v, "mm", m, p)
-                assert ref == nat, (
-                    f"default-context prec={prec}: value={v!r} mode={m!r} prec={p!r}\n"
-                    f"  REF={ref}\n  NAT={nat}")
-
-
-@check("adversarial near-half-crossings: prec 1..10 x denoms 3,7,16,128,1024")
-def _():
-    if not READY:
-        raise RuntimeError("SKIPPED: native exports not yet registered (pre-activation)")
-    # The reference computes int((Decimal(str(mag)) * denom).quantize(1, HALF_UP)):
-    # the MULTIPLY is rounded to `prec` sig digits (HALF_EVEN), THEN the quantize
-    # rounds to integer (HALF_UP). The dangerous region is where v*denom is just
-    # below/above a half-integer (m + 0.5) and the sig-digit rounding pushes it
-    # across the HALF_UP tie. Sample densely around every half-integer for every
-    # denominator and every precision 1..10.
-    denoms = (3, 7, 16, 128, 1024)
-    mismatches = 0
-    total = 0
-    for d in denoms:
-        for m in range(12):
-            boundary = m + 0.5  # v*d = boundary is a HALF_UP tie
-            for prec in range(1, 11):
-                # Window where the HALF_EVEN sig-digit rounding is active: the
-                # last kept digit is at position 10^-(prec-1), so the rounding
-                # can shift the value by at most ~10^-(prec-1).
-                half_width = 2 * (10 ** (1 - prec))
-                for t in range(-12, 13):
-                    v_times_d = boundary + half_width * (t / 12.0)
-                    if v_times_d <= 0:
-                        continue
-                    v = v_times_d / d
-                    with decimal.localcontext() as c:
-                        c.prec = prec
-                        ref = _outcome(REF.format_length, v, "mm", "Fractional", d)
-                        nat = _outcome(NAT.format_length, v, "mm", "Fractional", d)
-                    total += 1
-                    if ref != nat:
-                        mismatches += 1
-                        if mismatches <= 10:
-                            print(f"  near-half: d={d} m={m} prec={prec} v={v!r}\n"
-                                  f"    REF={ref}\n    NAT={nat}")
-    assert mismatches == 0, f"{mismatches} near-half mismatches out of {total}"
-
-
-@check("adversarial near-half-crossings (Feet-Inch): prec 1..10 x denoms 3,7,16,128,1024")
-def _():
-    if not READY:
-        raise RuntimeError("SKIPPED: native exports not yet registered (pre-activation)")
-    # Feet-Inch has the same multiply-then-quantize pattern (v*denom, then divmod
-    # by 12*denom). The HALF_UP tie is at v*denom = m + 0.5, same as Fractional.
-    denoms = (3, 7, 16, 128, 1024)
-    mismatches = 0
-    total = 0
-    for d in denoms:
-        for m in range(12):
-            boundary = m + 0.5
-            for prec in range(1, 11):
-                half_width = 2 * (10 ** (1 - prec))
-                for t in range(-12, 13):
-                    v_times_d = boundary + half_width * (t / 12.0)
-                    if v_times_d <= 0:
-                        continue
-                    v = v_times_d / d
-                    with decimal.localcontext() as c:
-                        c.prec = prec
-                        ref = _outcome(REF.format_length, v, "mm", "Feet & Inches", d)
-                        nat = _outcome(NAT.format_length, v, "mm", "Feet & Inches", d)
-                    total += 1
-                    if ref != nat:
-                        mismatches += 1
-                        if mismatches <= 10:
-                            print(f"  near-half FI: d={d} m={m} prec={prec} v={v!r}\n"
-                                  f"    REF={ref}\n    NAT={nat}")
-    assert mismatches == 0, f"{mismatches} near-half FI mismatches out of {total}"
-
-
+# ---------------------------------------------------------------------------
+# Context guards (host-only; the Rust engine takes ctx as an explicit param)
+# ---------------------------------------------------------------------------
 @check("non-default context rounding mode is refused with RuntimeError (guard)")
 def _():
-    if not READY:
-        raise RuntimeError("SKIPPED: native exports not yet registered (pre-activation)")
-    # The reference would use the context rounding for the multiply step; this port
-    # does not support it. The adapter must refuse with RuntimeError, not silently
-    # produce a wrong result.
     with decimal.localcontext() as c:
         c.prec = 2
-        c.rounding = decimal.ROUND_HALF_UP  # non-default
+        c.rounding = decimal.ROUND_HALF_UP
         try:
             NAT.format_length(0.0936, "mm", "Fractional", 16)
             raise AssertionError("expected RuntimeError for non-default rounding mode")
         except RuntimeError:
             pass
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             raise AssertionError(f"expected RuntimeError, got {type(e).__name__}")
-    # And HALF_EVEN (the default) must still work.
+    # HALF_EVEN (the default) must still work.
     with decimal.localcontext() as c:
         c.prec = 2
         c.rounding = decimal.ROUND_HALF_EVEN
-        ref = _outcome(REF.format_length, 0.0936, "mm", "Fractional", 16)
-        nat = _outcome(NAT.format_length, 0.0936, "mm", "Fractional", 16)
-        assert ref == nat, f"HALF_EVEN (default) must work: {ref} vs {nat}"
-
-
-@check("whitespace-padded mode name within the 1 MiB bound resolves; beyond it is refused")
-def _():
-    if not READY:
-        raise RuntimeError("SKIPPED: native exports not yet registered (pre-activation)")
-    # Within the bound: the reference str.strip()s, so this is valid and both agree.
-    padded = "\u2007" + " " * 1500 + "decimal" + "\u2007"
-    ref = _outcome(REF.format_length, 1.25, "mm", padded, 2)
-    nat = _outcome(NAT.format_length, 1.25, "mm", padded, 2)
-    assert ref == nat and ref[0] == "ok" and ref[1] == "1.25", (ref, nat)
-    # Beyond the 1 MiB bound: the reference would accept it, but the native
-    # refuses it (a documented explicit limit, not exact parity).  This is an
-    # accepted divergence, asserted here so it is not silently "fixed" later.
-    too_long = " " * (1024 * 1024 + 1) + "decimal"
-    nat = _outcome(NAT.format_length, 1.25, "mm", too_long, 2)
-    assert nat[0] == "err" and nat[1] == "ValueError", \
-        f"over-bound mode name must be refused as an unsupported mode, got {nat}"
-
-
-@check("no-fallback: missing library raises RuntimeError")
-def _():
-    saved = os.environ.get("NARWHAL_PURE_CORE")
-    try:
-        os.environ["NARWHAL_PURE_CORE"] = "/nonexistent/definitely_missing.so"
-        try:
-            NAT.format_length(1.0, "mm", "Decimal", 2)
-            raise AssertionError("expected RuntimeError for a missing library")
-        except RuntimeError:
-            pass
-        except Exception as e:  # noqa: BLE001
-            raise AssertionError(f"expected RuntimeError, got {type(e).__name__}")
-    finally:
-        if saved is None:
-            os.environ.pop("NARWHAL_PURE_CORE", None)
-        else:
-            os.environ["NARWHAL_PURE_CORE"] = saved
-
-
-@check("no-fallback: library lacking the unitformat exports raises RuntimeError")
-def _():
-    if READY:
-        return  # already wired; the missing-export case is covered pre-activation
-    saved = os.environ.get("NARWHAL_PURE_CORE")
-    try:
-        os.environ["NARWHAL_PURE_CORE"] = NATIVE_LIB
-        try:
-            NAT.format_length(1.0, "mm", "Decimal", 2)
-            raise AssertionError("expected RuntimeError for missing exports")
-        except RuntimeError:
-            pass
-        except Exception as e:  # noqa: BLE001
-            raise AssertionError(f"expected RuntimeError, got {type(e).__name__}")
-    finally:
-        if saved is None:
-            os.environ.pop("NARWHAL_PURE_CORE", None)
-        else:
-            os.environ["NARWHAL_PURE_CORE"] = saved
-
-
-def _with_fake_native(fake_resolve, fake_fmt, fn, *a):
-    """Run ``fn(*a)`` with the adapter's native bindings replaced by fakes."""
-    saved = NAT._require_native
-    NAT._require_native = lambda: (fake_resolve, fake_fmt)
-    try:
-        fn(*a)
-    finally:
-        NAT._require_native = saved
-
-
-def _fake_fmt(code, needed_val):
-    def fake(value, mode, prec, ctxprec, out, cap, needed_ref):
-        try:
-            ptr = ctypes.cast(needed_ref, ctypes.POINTER(ctypes.c_size_t))
-            ptr[0] = needed_val
-        except Exception:  # noqa: BLE001
-            pass
-        return code
-    return fake
-
-
-@check("fault injection: invalid resolve code raises RuntimeError (no fallback)")
-def _():
-    def fake_resolve(b, n):
-        return 99  # not one of {0,1,2,13}
-    try:
-        _with_fake_native(fake_resolve, _fake_fmt(0, 0), NAT.format_length, 1.0, "mm", "Decimal", 2)
-        raise AssertionError("expected RuntimeError for an invalid resolve code")
-    except RuntimeError:
-        pass
-    except Exception as e:  # noqa: BLE001
-        raise AssertionError(f"expected RuntimeError, got {type(e).__name__}: {e!r}")
-
-
-@check("fault injection: huge needed (10**9) is refused without a large allocation")
-def _():
-    fake = _fake_fmt(NAT.UF_SHORT_BUFFER, 10 ** 9)
-    try:
-        _with_fake_native(lambda b, n: NAT.UF_DECIMAL, fake, NAT.format_length, 1.0, "mm", "Decimal", 2)
-        raise AssertionError("expected RuntimeError for an unbounded needed")
-    except RuntimeError:
-        pass
-    except Exception as e:  # noqa: BLE001
-        raise AssertionError(f"expected RuntimeError, got {type(e).__name__}: {e!r}")
-
-
-@check("fault injection: UF_OK with a wrong size on the 1-byte probe is refused")
-def _():
-    fake = _fake_fmt(NAT.UF_OK, 500)  # OK but claims 500 bytes on a 1-byte probe
-    try:
-        _with_fake_native(lambda b, n: NAT.UF_DECIMAL, fake, NAT.format_length, 1.0, "mm", "Decimal", 2)
-        raise AssertionError("expected RuntimeError for an inconsistent OK size report")
-    except RuntimeError:
-        pass
-    except Exception as e:  # noqa: BLE001
-        raise AssertionError(f"expected RuntimeError, got {type(e).__name__}: {e!r}")
-
-
-@check("fault injection: invalid format code raises RuntimeError (no fallback)")
-def _():
-    fake = _fake_fmt(99, 0)  # not one of the documented format codes
-    try:
-        _with_fake_native(lambda b, n: NAT.UF_DECIMAL, fake, NAT.format_length, 1.0, "mm", "Decimal", 2)
-        raise AssertionError("expected RuntimeError for an invalid format code")
-    except RuntimeError:
-        pass
-    except Exception as e:  # noqa: BLE001
-        raise AssertionError(f"expected RuntimeError, got {type(e).__name__}: {e!r}")
-
-
-@check("candidate delegates: format_length matches the reference (standalone + package)")
-def _():
-    if not READY:
-        raise RuntimeError("SKIPPED: native exports not yet registered (pre-activation)")
-    for subject in (CAND, CAND_PKG):
-        for v, m, p in [(1.25, "Decimal", 2), (1.75, "Fractional", 16),
-                        (30.5, "Feet & Inches", 16), (0.99999, "Feet & Inches", 16),
-                        (1e100, "Fractional", 16)]:
-            ref = _outcome(REF.format_length, v, "mm", m, p)
-            cand = _outcome(subject.format_length, v, "mm", m, p)
-            assert ref == cand, (
-                f"candidate mismatch ({subject.__name__}): value={v!r} mode={m!r} prec={p!r}\n"
-                f"  REF={ref}\n  CAND={cand}")
-
-
-@check("candidate raises the reference's exception for a bad mode (delegation)")
-def _():
-    if not READY:
-        raise RuntimeError("SKIPPED: native exports not yet registered (pre-activation)")
-    for subject in (CAND, CAND_PKG):
-        ref = _outcome(REF.format_length, 1.0, "mm", "Imperial", 2)
-        cand = _outcome(subject.format_length, 1.0, "mm", "Imperial", 2)
-        assert ref == cand and ref[0] == "err" and ref[1] == "ValueError", (ref, cand)
+        r = NAT.format_length(0.0936, "mm", "Fractional", 16)
+        assert r is not None, "HALF_EVEN (default) must work"
 
 
 @check("custom exponent/clamp/trap contexts are explicitly refused")
@@ -629,16 +239,335 @@ def _():
 
 
 # ---------------------------------------------------------------------------
+# Whitespace-padded mode names
+# ---------------------------------------------------------------------------
+@check("whitespace-padded mode name within the 1 MiB bound resolves; beyond it is refused")
+def _():
+    padded = "\u2007" + " " * 1500 + "decimal" + "\u2007"
+    r = NAT.format_length(1.25, "mm", padded, 2)
+    assert r == "1.25", f"padded mode should resolve to '1.25', got {r!r}"
+    too_long = " " * (1024 * 1024 + 1) + "decimal"
+    try:
+        NAT.format_length(1.25, "mm", too_long, 2)
+        raise AssertionError("over-bound mode name must be refused")
+    except ValueError as e:
+        assert "unsupported display mode" in str(e), \
+            f"over-bound mode must be refused as unsupported, got {e!r}"
+
+
+# ---------------------------------------------------------------------------
+# No-fallback: missing library / missing exports
+# ---------------------------------------------------------------------------
+@check("no-fallback: missing library raises RuntimeError")
+def _():
+    saved = os.environ.get("NARWHAL_PURE_CORE")
+    try:
+        os.environ["NARWHAL_PURE_CORE"] = "/nonexistent/definitely_missing.so"
+        try:
+            NAT.format_length(1.0, "mm", "Decimal", 2)
+            raise AssertionError("expected RuntimeError for a missing library")
+        except RuntimeError:
+            pass
+        except Exception as e:
+            raise AssertionError(f"expected RuntimeError, got {type(e).__name__}")
+    finally:
+        if saved is None:
+            os.environ.pop("NARWHAL_PURE_CORE", None)
+        else:
+            os.environ["NARWHAL_PURE_CORE"] = saved
+
+
+@check("no-fallback: library lacking the unitformat exports raises RuntimeError")
+def _():
+    if READY:
+        return  # already wired; the missing-export case is covered pre-activation
+    saved = os.environ.get("NARWHAL_PURE_CORE")
+    try:
+        os.environ["NARWHAL_PURE_CORE"] = NATIVE_LIB
+        try:
+            NAT.format_length(1.0, "mm", "Decimal", 2)
+            raise AssertionError("expected RuntimeError for missing exports")
+        except RuntimeError:
+            pass
+        except Exception as e:
+            raise AssertionError(f"expected RuntimeError, got {type(e).__name__}")
+    finally:
+        if saved is None:
+            os.environ.pop("NARWHAL_PURE_CORE", None)
+        else:
+            os.environ["NARWHAL_PURE_CORE"] = saved
+
+
+# ---------------------------------------------------------------------------
+# Fault injection: fake native bindings that lie
+# ---------------------------------------------------------------------------
+def _with_fake_native(fake_resolve, fake_fmt, fn, *a):
+    saved = NAT._require_native
+    NAT._require_native = lambda: (fake_resolve, fake_fmt)
+    try:
+        fn(*a)
+    finally:
+        NAT._require_native = saved
+
+
+def _fake_fmt(code, needed_val):
+    def fake(value, mode, prec, ctxprec, out, cap, needed_ref):
+        try:
+            ptr = ctypes.cast(needed_ref, ctypes.POINTER(ctypes.c_size_t))
+            ptr[0] = needed_val
+        except Exception:
+            pass
+        return code
+    return fake
+
+
+@check("fault injection: invalid resolve code raises RuntimeError (no fallback)")
+def _():
+    def fake_resolve(b, n):
+        return 99
+    try:
+        _with_fake_native(fake_resolve, _fake_fmt(0, 0),
+                          NAT.format_length, 1.0, "mm", "Decimal", 2)
+        raise AssertionError("expected RuntimeError for an invalid resolve code")
+    except RuntimeError:
+        pass
+    except Exception as e:
+        raise AssertionError(f"expected RuntimeError, got {type(e).__name__}: {e!r}")
+
+
+@check("fault injection: huge needed (10**9) is refused without a large allocation")
+def _():
+    fake = _fake_fmt(NAT.UF_SHORT_BUFFER, 10 ** 9)
+    try:
+        _with_fake_native(lambda b, n: NAT.UF_DECIMAL, fake,
+                          NAT.format_length, 1.0, "mm", "Decimal", 2)
+        raise AssertionError("expected RuntimeError for an unbounded needed")
+    except RuntimeError:
+        pass
+    except Exception as e:
+        raise AssertionError(f"expected RuntimeError, got {type(e).__name__}: {e!r}")
+
+
+@check("fault injection: UF_OK with a wrong size on the 1-byte probe is refused")
+def _():
+    fake = _fake_fmt(NAT.UF_OK, 500)
+    try:
+        _with_fake_native(lambda b, n: NAT.UF_DECIMAL, fake,
+                          NAT.format_length, 1.0, "mm", "Decimal", 2)
+        raise AssertionError("expected RuntimeError for an inconsistent OK size report")
+    except RuntimeError:
+        pass
+    except Exception as e:
+        raise AssertionError(f"expected RuntimeError, got {type(e).__name__}: {e!r}")
+
+
+@check("fault injection: invalid format code raises RuntimeError (no fallback)")
+def _():
+    fake = _fake_fmt(99, 0)
+    try:
+        _with_fake_native(lambda b, n: NAT.UF_DECIMAL, fake,
+                          NAT.format_length, 1.0, "mm", "Decimal", 2)
+        raise AssertionError("expected RuntimeError for an invalid format code")
+    except RuntimeError:
+        pass
+    except Exception as e:
+        raise AssertionError(f"expected RuntimeError, got {type(e).__name__}: {e!r}")
+
+
+# ---------------------------------------------------------------------------
+# Live sample cross-check against the frozen golden fixture (EXACT)
+# ---------------------------------------------------------------------------
+def _decode_bits(hex_str):
+    return struct.unpack('<d', bytes.fromhex(hex_str))[0]
+
+
+def _decode_value(s):
+    # A value stored as repr() may be nan/inf (not literal_eval-able); float()
+    # handles those and every int/float in the corpus. A non-numeric (a
+    # 'must be a number' host error) falls back to a safe literal eval.
+    try:
+        return float(s)
+    except (ValueError, TypeError):
+        return ast.literal_eval(s)
+
+
+def _decode_literal(s):
+    return ast.literal_eval(s)
+
+
+def _expected_err(code, mode_code, precision):
+    if code == 10:
+        if mode_code == 0:
+            return ValueError, f"Decimal precision out of range (0..12): {precision}"
+        return ValueError, f"Fraction denominator out of range (1..1024): {precision}"
+    if code == 11:
+        return ValueError, "cannot convert NaN to integer"
+    if code == 12:
+        return decimal.InvalidOperation, "[<class 'decimal.InvalidOperation'>]"
+    raise AssertionError(f"unexpected ERR code {code}")
+
+
+def _fixture_data_lines():
+    with open(FIXTURE, encoding="utf-8") as f:
+        lines = f.read().splitlines()
+    return [l for l in lines if l and not l.startswith('#')]
+
+
+@check("live sample cross-check: OK rows match the fixture EXACTLY (≥40 rows)")
+def _():
+    rows = _fixture_data_lines()
+    ok_rows = [l for l in rows if l.split('\t')[0] == 'OK'][:40]
+    assert len(ok_rows) >= 40, f"need ≥40 OK rows in fixture, got {len(ok_rows)}"
+    for line in ok_rows:
+        fields = line.split('\t')
+        cls, bits, mode_code, precision, ctx, payload, group = fields
+        value = _decode_bits(bits)
+        mode_name = MODE_NAMES[int(mode_code)]
+        prec = int(precision)
+        with decimal.localcontext() as c:
+            c.prec = int(ctx)
+            result = NAT.format_length(value, "mm", mode_name, prec)
+        assert result == payload, \
+            f"OK mismatch: value={value!r} mode={mode_name} prec={prec} ctx={ctx}\n" \
+            f"  NAT={result!r} FIXTURE={payload!r}"
+
+
+@check("live sample cross-check: ERR rows raise the EXACT exception (≥20 rows)")
+def _():
+    rows = _fixture_data_lines()
+    err_rows = [l for l in rows if l.split('\t')[0] == 'ERR'][:20]
+    assert len(err_rows) >= 20, f"need ≥20 ERR rows in fixture, got {len(err_rows)}"
+    for line in err_rows:
+        fields = line.split('\t')
+        cls, bits, mode_code, precision, ctx, code_str, group = fields
+        value = _decode_bits(bits)
+        mode_name = MODE_NAMES[int(mode_code)]
+        prec = int(precision)
+        code = int(code_str)
+        exp_type, exp_msg = _expected_err(code, int(mode_code), prec)
+        with decimal.localcontext() as c:
+            c.prec = int(ctx)
+            try:
+                NAT.format_length(value, "mm", mode_name, prec)
+                raise AssertionError(f"expected {exp_type.__name__}, got no exception")
+            except Exception as e:
+                assert type(e) is exp_type, \
+                    f"ERR type mismatch: got {type(e).__name__}, expected {exp_type.__name__}"
+                assert str(e) == exp_msg, \
+                    f"ERR msg mismatch: got {str(e)!r}, expected {exp_msg!r}"
+
+
+def _host_value(s):
+    # Type-preserving decode of the stored repr. inf/-inf/nan are not
+    # literal_eval-able, so they are special-cased; every other token (ints,
+    # floats like -0.0 / 5e-324 / 1e+308) is a valid Python numeric literal,
+    # which keeps the int-vs-float distinction the host's value coercion relies
+    # on. Deliberately NOT float()-first: that is the lossy path the retired
+    # sample test used and it erases that distinction.
+    s = s.strip()
+    if s == "inf":
+        return float("inf")
+    if s == "-inf":
+        return float("-inf")
+    if s == "nan":
+        return float("nan")
+    return ast.literal_eval(s)
+
+
+# The host's full HOST-error vocabulary (5 unsupported-mode + 4 integer-
+# precision classes). All must survive in the fixture; this is the coverage
+# guard that a row-count check alone cannot provide (a fixture could keep its
+# count while silently dropping a whole message class).
+_HOST_MESSAGE_CLASSES = frozenset({
+    "unsupported display mode '' -- use 'Decimal', 'Fractional' or 'Feet & Inches'",
+    "unsupported display mode 'Imperial' -- use 'Decimal', 'Fractional' or 'Feet & Inches'",
+    "unsupported display mode 'feet_inch' -- use 'Decimal', 'Fractional' or 'Feet & Inches'",
+    "unsupported display mode 'x' -- use 'Decimal', 'Fractional' or 'Feet & Inches'",
+    "unsupported display mode 'bogus' -- use 'Decimal', 'Fractional' or 'Feet & Inches'",
+    "Fraction denominator must be an integer, got 'x'",
+    "Fraction denominator must be an integer, got None",
+    "Decimal precision must be an integer, got 'x'",
+    "Decimal precision must be an integer, got None",
+})
+
+
+def _fixture_host_count_declared():
+    """Parse the HOST count the fixture header declares (not a hardcoded count),
+    so a fixture that drifts from its own header fails here."""
+    with open(FIXTURE, encoding="utf-8") as f:
+        for line in f:
+            m = re.search(r"HOST:(\d+)", line)
+            if m:
+                return int(m.group(1))
+    raise AssertionError("fixture header declares no HOST count")
+
+
+@check("live replay: ALL HOST rows raise the EXACT exception (type + message + context)")
+def _():
+    rows = _fixture_data_lines()
+    host_rows = [l for l in rows if l.split('\t')[0] == 'HOST']
+    declared = _fixture_host_count_declared()
+    # Coverage guard 1: the fixture holds every HOST row it declares.
+    assert len(host_rows) == declared, \
+        f"fixture header declares {declared} HOST rows but holds {len(host_rows)}"
+    # Coverage guard 2: every host message class is represented (no silent drop).
+    seen = {l.split('\t')[5] for l in host_rows}
+    assert seen == _HOST_MESSAGE_CLASSES, \
+        f"HOST message classes drift: missing={sorted(_HOST_MESSAGE_CLASSES - seen)}, " \
+        f"extra={sorted(seen - _HOST_MESSAGE_CLASSES)}"
+    for line in host_rows:
+        fields = line.split('\t')
+        cls, value_repr, mode_repr, prec_repr, ctx, message, group = fields
+        value = _host_value(value_repr)
+        mode = _decode_literal(mode_repr)
+        prec = _decode_literal(prec_repr)
+        with decimal.localcontext() as c:
+            c.prec = int(ctx)
+            try:
+                NAT.format_length(value, "mm", mode, prec)
+                raise AssertionError(f"expected exception for HOST row, got none: {line!r}")
+            except Exception as e:
+                assert type(e) is ValueError, \
+                    f"HOST type mismatch: got {type(e).__name__}, expected ValueError ({line!r})"
+                assert str(e) == message, \
+                    f"HOST msg mismatch: got {str(e)!r}, expected {message!r} ({line!r})"
+
+
+@check("value admission: string / non-numeric object refused before mode (coercion order)")
+def _():
+    # The reference validates the VALUE first, so a bad value raises the value
+    # error even when the mode is also bad. Messages are the reference's, pinned.
+    try:
+        NAT.format_length("1.25", "mm", "bogus", 5)
+        raise AssertionError("expected ValueError for a string value")
+    except ValueError as e:
+        assert str(e) == "value must be a number, not a string '1.25'", f"got {e!r}"
+    try:
+        NAT.format_length([1, 2], "mm", "Fractional", 16)
+        raise AssertionError("expected ValueError for a non-numeric object")
+    except ValueError as e:
+        assert str(e) == "value must be a number, got [1, 2]", f"got {e!r}"
+    # A bool is coerced to its float value (not refused), per the reference.
+    assert NAT.format_length(True, "mm", "Decimal", 0) == "1"
+    assert NAT.format_length(False, "mm", "Decimal", 0) == "0"
+
+
+# ---------------------------------------------------------------------------
+# The retired reference must be absent from the public tree
+# ---------------------------------------------------------------------------
+@check("retired Python reference is absent from the public tree")
+def _():
+    assert not os.path.exists(REFERENCE_PATH), \
+        f"spike/unitformat_reference.py must be deleted (archived in legacy/retired-rust18/)"
+
+
+# ---------------------------------------------------------------------------
+# Results
+# ---------------------------------------------------------------------------
 failed = 0
-skipped = 0
 for name, status, detail in results:
-    if status == "FAIL" and "SKIPPED" in detail:
-        skipped += 1
-        print(f"[SKIP] {name}  -- exports not yet registered (pre-activation)")
-        continue
     print(f"[{status}] {name}" + (f"  -- {detail}" if detail else ""))
     if status == "FAIL":
         failed += 1
-print(f"\n{len(results) - failed - skipped}/{len(results)} passed, "
-      f"{skipped} skipped")
+print(f"\n{len(results) - failed}/{len(results)} passed")
 sys.exit(1 if failed else 0)

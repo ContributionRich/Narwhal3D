@@ -1,4 +1,9 @@
-"""Required native bearing routes, independent oracle, and compatibility ABI.
+"""Required native bearing routes, literal expected data, and compatibility ABI.
+
+The independent Python oracle (``spike/bearing_reference.py``) is retired and
+archived; the exact replies it produced are now carried as LITERAL data below
+(captured once, verified against the live native). This public test therefore
+never imports the retired grammar engine.
 
 Default: qualify live bearing.py with NARWHAL_PURE_CORE. For pre-activation
 qualification pass --module tmp/rust12-bearing-candidate.py and an external
@@ -30,7 +35,6 @@ args = argparse.ArgumentParser(description=__doc__)
 args.add_argument('--module', type=Path, default=ROOT / 'narwhal3d/bearing.py')
 options = args.parse_args()
 brg = _load('narwhal_native_test_bearing', options.module.resolve())
-reference = _load('narwhal_native_bearing_reference', ROOT / 'spike/bearing_reference.py')
 native = getattr(brg, 'native_bearing', None)
 if native is None:
     native = brg._adapter()
@@ -81,21 +85,54 @@ def _runtime_error(fn, text):
         raise AssertionError(('required RuntimeError, not Python replay', text))
 
 
+# ---- LITERAL expected replies (captured once from the retired oracle; verified
+#      against the live native). This is data, not a live grammar engine. ----
 DMS = 30.0 + 22.0 / 60.0 + 54.43 / 3600.0
 VALID_BEARING = [
     ('N0E', 90.0), ('N90E', 0.0), ('N90W', 180.0), ('S0W', 270.0),
     ('S90E', 0.0), ('n30e', 60.0), ('n30w', 120.0), ('s30e', 300.0),
     ('s30w', 240.0), ('N45W', 135.0), ('S45W', 225.0), ('S45E', 315.0),
     ('N30W', 120.0), ('N30.5E', 59.5), ('N 30 E', 60.0), ('S 45 W', 225.0),
-    ("N30d22'W", 90.0 + 30.0 + 22.0 / 60.0),
+    # exact: a hand-computed 90+30+22/60 is 1 ulp off the real value
+    ("N30d22'W", 120.36666666666667),
     ('N30d22\'54.43"W', 90.0 + DMS),
 ]
 VALID_SURVEYOR = [
     ('11<N30d22\'54.43"W', 11.0, 90.0 + DMS),
     ('5<N45E', 5.0, 45.0), ('2.5<S30W', 2.5, 240.0),
 ]
-BEARING_REJECTED = ['N95E', 'E30N', 'N30', '30W', 'N-5E', 'NabcE', 'N30wE', 'N E', '']
-SURVEYOR_REJECTED = ['5<N95E', '5<E30N', '5<N30', '5<30W', 'N30E', '11<', '']
+BEARING_REJECTED = [
+    ('N95E', 'quadrant angle must be in [0, 90]: 95'),
+    ('E30N', "not a bearing (need N/S + angle + E/W): 'E30N'"),
+    ('N30', "not a bearing (need N/S + angle + E/W): 'N30'"),
+    ('30W', "not a bearing (need N/S + angle + E/W): '30W'"),
+    ('N-5E', "not an angle: '-5'"),
+    ('NabcE', "not an angle: 'abc'"),
+    ('N30wE', "not a bearing (need N/S + angle + E/W): 'N30wE'"),
+    ('N E', "not an angle: ' '"),
+    ('', "not a bearing (need N/S + angle + E/W): ''"),
+]
+SURVEYOR_REJECTED = [
+    ('5<N95E', 'quadrant angle must be in [0, 90]: 95'),
+    ('5<E30N', "not a bearing (need N/S + angle + E/W): 'E30N'"),
+    ('5<N30', "not a bearing (need N/S + angle + E/W): 'N30'"),
+    ('5<30W', "not a bearing (need N/S + angle + E/W): '30W'"),
+    ('N30E', "not a surveyor coordinate (need dist<N/SangE/W): 'N30E'"),
+    ('11<', "not a surveyor coordinate (need dist<N/SangE/W): '11<'"),
+    ('', "not a surveyor coordinate (need dist<N/SangE/W): ''"),
+]
+EXTRA_BEARING = [
+    ('\u017f30E', (300.0, None)),
+    ('\u2003N\u0663\u0660E\u0085', (60.0, None)),
+    ("N30d22'\"W", (120.36666666666667, None)),
+    ('N\nE', (None, "not an angle: '\\n'")),
+]
+SURVEYOR_EDGE = [
+    ('1<N30E\n', ((1.0, 60.0), None)),
+    ('1<N30E\n\n', (None, "not a surveyor coordinate (need dist<N/SangE/W): '1<N30E\\n\\n'")),
+    ('1<\n ', (None, "not a bearing (need N/S + angle + E/W): ' '")),
+    ('1< N bad E  ', (None, "not an angle: 'bad '")),
+]
 LONG_BEARING = ' ' * 124 + 'N30E'
 
 
@@ -119,37 +156,28 @@ def _():
         assert brg.parse_surveyor('5<N45E') == ((5.0, 45.0), None)
 
 
-@check('native successes exactly match independent Python oracle and quadrant pins')
+@check('native successes exactly match the captured oracle values and quadrant pins')
 def _():
     with _native_calls(len(VALID_BEARING) + len(VALID_SURVEYOR)):
         for text, want in VALID_BEARING:
             actual = brg.bearing_angle(text)
-            expected = reference.bearing_angle(text)
-            assert expected[0] is not None and expected[1] is None, (text, expected)
-            assert actual == expected, (text, actual, expected)
-            assert actual[0].hex() == expected[0].hex(), (text, actual, expected)
-            # Historical hand-computed DMS pin uses a different addition order.
-            assert abs(actual[0] - want) <= 1e-12, (text, actual, want)
+            assert actual == (want, None), (text, actual, (want, None))
+            assert actual[0].hex() == want.hex(), (text, actual, want)
         for text, dist, want in VALID_SURVEYOR:
             actual = brg.parse_surveyor(text)
-            expected = reference.parse_surveyor(text)
-            assert expected[0] is not None and expected[1] is None, (text, expected)
-            assert actual == expected, (text, actual, expected)
-            assert actual[0][0].hex() == expected[0][0].hex()
-            assert actual[0][1].hex() == expected[0][1].hex()
-            assert actual[0][0] == dist and abs(actual[0][1] - want) <= 1e-12
+            assert actual == ((dist, want), None), (text, actual, ((dist, want), None))
+            assert actual[0][0].hex() == dist.hex(), (text, actual, dist)
+            assert actual[0][1].hex() == want.hex(), (text, actual, want)
 
 
-@check('all grammar rejections match independent oracle and execute native')
+@check('all grammar rejections match the captured oracle and execute native')
 def _():
     with _native_calls(len(BEARING_REJECTED) + len(SURVEYOR_REJECTED)):
-        for name, texts in [('bearing_angle', BEARING_REJECTED),
+        for name, cases in [('bearing_angle', BEARING_REJECTED),
                             ('parse_surveyor', SURVEYOR_REJECTED)]:
-            for text in texts:
-                expected = getattr(reference, name)(text)
-                assert expected[0] is None and isinstance(expected[1], str) and expected[1]
+            for text, want in cases:
                 actual = getattr(brg, name)(text)
-                assert actual == expected, (name, text, actual, expected)
+                assert actual == (None, want), (name, text, actual, (None, want))
 
 
 @check('exact error contract and Unicode/capture edge cases require native')
@@ -160,15 +188,13 @@ def _():
         ('NabcE', "not an angle: 'abc'"), ('N-5E', "not an angle: '-5'"),
         ('N  bad  E', "not an angle: 'bad  '"),
     ]
-    extra = ['ſ30E', '\u2003N٣٠E\u0085', 'N30d22\'"W', 'N\nE']
-    surveyor = ['1<N30E\n', '1<N30E\n\n', '1<\n ', '1< N bad E  ']
-    with _native_calls(len(pins) + len(extra) + len(surveyor)):
+    with _native_calls(len(pins) + len(EXTRA_BEARING) + len(SURVEYOR_EDGE)):
         for text, want in pins:
             assert brg.bearing_angle(text) == (None, want), (text, want)
-        for text in extra:
-            assert brg.bearing_angle(text) == reference.bearing_angle(text), text
-        for text in surveyor:
-            assert brg.parse_surveyor(text) == reference.parse_surveyor(text), repr(text)
+        for text, reply in EXTRA_BEARING:
+            assert brg.bearing_angle(text) == reply, (text, brg.bearing_angle(text), reply)
+        for text, reply in SURVEYOR_EDGE:
+            assert brg.parse_surveyor(text) == reply, (text, brg.parse_surveyor(text), reply)
 
 
 @check('legacy native_pure direct ABI remains compatibility-only, not public routing')
@@ -178,15 +204,15 @@ def _():
     before = compat._native_bearing_calls
     for text, want in VALID_BEARING:
         value = compat._native_bearing_angle(text)
-        assert value is not None and abs(value - want) <= 1e-12, (text, value, want)
+        assert value is not None and value == want, (text, value, want)
     for text, distance, want in VALID_SURVEYOR:
         value = compat._native_parse_surveyor(text)
-        assert value is not None and value[0] == distance and abs(value[1] - want) <= 1e-12
+        assert value is not None and value[0] == distance and value[1] == want, (text, value, (distance, want))
     assert compat._native_bearing_calls - before == len(VALID_BEARING) + len(VALID_SURVEYOR)
     before = compat._native_bearing_calls
-    for text in BEARING_REJECTED:
+    for text, _want in BEARING_REJECTED:
         assert compat._native_bearing_angle(text) is None, text
-    for text in SURVEYOR_REJECTED:
+    for text, _want in SURVEYOR_REJECTED:
         assert compat._native_parse_surveyor(text) is None, text
     assert compat._native_bearing_calls == before
     with _native_calls(2):
@@ -262,7 +288,7 @@ def _():
     assert getattr(native, '_native_bearing_calls', None) == before
 
 
-@check('measured native/reference costs; no speed threshold or routing exemption')
+@check('measured native cost; no speed threshold or routing exemption')
 def _():
     count = 3000
     for name, texts in [('bearing_angle', ['N30E', LONG_BEARING, 'S45W', 'N95E']),
@@ -282,9 +308,9 @@ def _():
         elapsed = measure(getattr(brg, name))
         if before is not None:
             assert native._native_bearing_calls - before == 3 * count
-        baseline = measure(getattr(reference, name))
-        print('  [perf] %s: required-native %.3f us/call; reference %.3f us/call; ratio %.2fx'
-              % (name, elapsed * 1e6 / count, baseline * 1e6 / count, elapsed / baseline))
+        # The independent Python oracle is retired; report native cost only.
+        print('  [perf] %s: required-native %.3f us/call (oracle retired; no baseline)'
+              % (name, elapsed * 1e6 / count))
 
 
 failed = 0

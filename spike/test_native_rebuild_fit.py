@@ -1,33 +1,34 @@
 #!/usr/bin/env python3
-"""Rebuild's least-squares fit in Rust: the same control points as `rebuild._fit`.
+"""Rebuild end-to-end qualification over the captured golden fixture.
 
-Run with the bundled runtime (it carries rhino3dm); the library defaults to the
-adjacent packaged build unless explicitly selected:
-  NARWHAL_PURE_CORE=$PWD/native/pure_core/target/x86_64-unknown-linux-gnu/release/libnarwhal_pure_core.so \\
-      tools/blender-patched/5.2/python/bin/python3.13 spike/test_native_rebuild_fit.py
-
-Parity is exact: `native_rebuild.fit` returns the control points and knots of
-`_fit_open` / `_fit_closed`, bit for bit, because Rust repeats `_basis`,
-`_least_squares` and `_solve` in their operation order with Python's float semantics
-(first-largest pivot, `if v` skipping zeros, float `%`, compensated `sum()`). The
-fit IS the rebuilt curve, so nothing weaker than equality is accepted.
+The numeric fit is owned by Rust (`narwhal_pure_core_rebuild_fit`); the expected
+rebuild_curve outputs were captured ONCE from the retired independent Python
+reference (`spike/rebuild_reference.py`) into
+``native/pure_core/tests/fixtures/rebuild_e2e.txt`` and are replayed here with
+the REAL native fit. This test retains the host-only concerns: rhino3dm curve
+construction, arc-length sampling, the 7-native-fit parameter-correction
+pipeline, the missing-library refusal, and the ctypes input-safety refusals
+(each risky call in a subprocess, so a crash fails a check). No Python fit
+engine remains at test time.
 """
 import importlib.util
+import json
 import math
 import os
-import random
+import struct
+import subprocess
 import sys
-import time
 import types
 
 import rhino3dm as r3
-import rebuild_reference as reference
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LIBRARY = os.environ.get("NARWHAL_PURE_CORE", os.path.join(
     ROOT, "narwhal3d", "native", {
         "win32": "narwhal_pure_core.dll", "darwin": "libnarwhal_pure_core.dylib"
     }.get(sys.platform, "libnarwhal_pure_core.so")))
+FIXTURE = os.path.join(ROOT, "native", "pure_core", "tests", "fixtures", "rebuild_e2e.txt")
+PROVENANCE = "spike/rebuild_reference.py"
 pkg = types.ModuleType("narwhal3d")
 pkg.__path__ = [os.path.join(ROOT, "narwhal3d")]
 sys.modules["narwhal3d"] = pkg
@@ -59,43 +60,6 @@ def cpc(points, degree=3):
     return r3.NurbsCurve.CreateControlPointCurve([r3.Point3d(*p) for p in points], degree)
 
 
-def ends_of(crv, n, p, tangent):
-    start, end = rebuild._xyz(crv.PointAtStart), rebuild._xyz(crv.PointAtEnd)
-    if tangent and p >= 2 and n >= 4:
-        return (start, end, rebuild._xyz(crv.TangentAtStart), rebuild._xyz(crv.TangentAtEnd))
-    return (start, end)
-
-
-def python_fit(pts, params, n, p, closed, ends):
-    try:
-        if closed:
-            ctrl, knots = reference._fit_closed(pts, params, n, p)
-        else:
-            ctrl, knots = reference._fit_open(pts, params, n, p, ends)
-        return [tuple(c) for c in ctrl], list(knots)
-    except ValueError as exc:
-        return ("error", str(exc))
-
-
-def native_fit(pts, params, n, p, closed, ends):
-    got = native.fit([q for _t, q in pts], params, n, p, closed, ends)
-    if got == "singular":
-        return ("error", rebuild._SINGULAR)
-    return got
-
-
-def case(crv, n, p, closed, tangent, m, jitter=None):
-    pts = rebuild._samples(crv, m, closed)
-    d = crv.Domain
-    params = [(t - d.T0) / (d.T1 - d.T0) for t, _q in pts]
-    if jitter is not None:                      # a later fit's corrected parameters
-        params = [min(1.0, max(0.0, u + jitter.uniform(-0.01, 0.01))) for u in params]
-        if not closed:
-            params[0], params[-1] = 0.0, 1.0
-    ends = () if closed else ends_of(crv, n, p, tangent)
-    return pts, params, n, p, closed, ends
-
-
 SOURCES = {
     "open cubic, 30 points": cpc([(i * 1.5, math.sin(i * 0.7) * 4, math.cos(i * 0.3)) for i in range(30)]),
     "open quadratic": cpc([(0, 0, 0), (2, 4, 0), (5, -1, 0), (8, 3, 2), (11, 0, 0)], 2),
@@ -105,74 +69,75 @@ SOURCES = {
     "degree 5": cpc([(i, math.sin(i) * 4, 0.3 * i) for i in range(9)], 5),
 }
 
-check(native.available(), f"the pure-core library loads ({LIBRARY})")
 
-print("\n-- parity: native fit == _fit_open / _fit_closed, bit for bit --")
-rng = random.Random(5)
-for name, crv in SOURCES.items():
-    closed = bool(crv.IsClosed)
-    runs = differ = 0
-    for n, p in ((4, 3), (8, 3), (12, 2), (20, 3), (7, 5), (5, 1)):
-        if (closed and n < 3) or (not closed and n < p + 1):
-            continue
-        for tangent in ((False,) if closed else (False, True)):
-            for jitter in (None, rng):
-                args = case(crv, n, p, closed, tangent, max(20 * n, 400), jitter)
-                runs += 1
-                differ += native_fit(*args) != python_fit(*args)
-    check(differ == 0, f"{name}: {runs} fits, {differ} differ")
+def f64(field):
+    """Decode one 16-hex little-endian f64 field to its exact float value."""
+    return struct.unpack('<d', bytes.fromhex(field))[0]
 
-print("\n-- random sources, counts and degrees --")
-rng = random.Random(20261108)
-runs = differ = closed_runs = tangent_runs = 0
-for _ in range(120):
-    k = rng.randint(4, 25)
-    pts = [(rng.uniform(-10, 10), rng.uniform(-10, 10), rng.uniform(-3, 3)) for _ in range(k)]
-    closed = rng.random() < 0.35
-    crv = (interp.interpolate_closed_curve(pts[:max(3, k)]) if closed
-           else cpc(pts, min(rng.randint(1, 5), k - 1)))
-    p = rng.randint(1, 5)
-    n = rng.randint(3 if closed else p + 1, 30)
-    tangent = not closed and rng.random() < 0.5
-    args = case(crv, n, p, closed, tangent, rng.choice((60, 400, 20 * n)), rng if rng.random() < 0.5 else None)
-    runs += 1
-    closed_runs += closed
-    tangent_runs += len(args[5]) == 4
-    differ += native_fit(*args) != python_fit(*args)
-check(runs == 120 and closed_runs > 25 and tangent_runs >= 15 and differ == 0,
-      f"{runs} random fits ({closed_runs} closed, {tangent_runs} with end tangents): {differ} differ")
 
-print("\n-- a singular fit raises the Python's error --")
-# Every parameter at 0: only the first basis function is nonzero, so no sample
-# constrains the free control points and their normal-equation columns are zero.
-pts = [(0.0, (float(i), 0.0, 0.0)) for i in range(50)]
-for closed, ends in ((False, ((0.0, 0.0, 0.0), (5.0, 0.0, 0.0))), (True, ())):
-    args = (pts, [0.0] * len(pts), 8, 3, closed, ends)
-    want = python_fit(*args)
-    check(want[0] == "error" and native_fit(*args) == want,
-          f"{'closed' if closed else 'open'}, all samples at one parameter: {want[1]!r}")
+def load_fixture(path):
+    """Decode the e2e fixture, re-deriving its checksum (a tampered file fails)."""
+    with open(path, encoding='utf-8') as fh:
+        lines = fh.read().splitlines()
 
-print("\n-- rebuild_curve matches the independent oracle; missing native refuses --")
+    def field(name):
+        return next(l.split('=', 1)[1] for l in lines if l.startswith(f'# {name}='))
+
+    count = int(field('count'))
+    checksum = field('checksum')
+    assert field('provenance') == PROVENANCE, "fixture must trace to the retired reference"
+    data = [l for l in lines if not l.startswith('#')]
+    assert len(data) == count, f"fixture has {len(data)} rows, header says {count}"
+    section = ('\n'.join(data) + '\n').encode('utf-8')
+    h = 0xcbf29ce484222325
+    for b in section:
+        h ^= b
+        h = (h * 0x00000100000001b3) & 0xFFFFFFFFFFFFFFFF
+    assert format(h, '016x') == checksum, "fixture checksum mismatch (tampered)"
+
+    rows = {}
+    for line in data:
+        f = line.split('\t')
+        # group, idx, src, count, tangents, point_count, degree, closed,
+        # deviation, n_ctrl, cvs, n_knots, knots, notes
+        assert f[0] == 'e2e', f"unexpected group {f[0]!r}"
+        rows[(f[2], int(f[3]), int(f[4]))] = {
+            'point_count': int(f[5]), 'degree': int(f[6]), 'closed': bool(int(f[7])),
+            'deviation': f64(f[8]),
+            'cvs': [f64(x) for x in f[10].split(',')],
+            'knots': [f64(x) for x in f[12].split(',')],
+            'notes': json.loads(f[13]),
+        }
+    assert len(rows) == count, "e2e rows must be distinct by (source, count, tangents)"
+    return rows
 
 
 def cvs(curve):
     return [(q.X, q.Y, q.Z, q.W) for q in curve.Points], list(curve.Knots)
 
 
+check(native.available(), f"the pure-core library loads ({LIBRARY})")
+expected = load_fixture(FIXTURE)
+
+print("\n-- rebuild_curve matches the captured reference, through the REAL native fit --")
 for name, crv in SOURCES.items():
     for count, tangents in ((10, False), (16, True)):
+        want = expected[(name, count, int(tangents))]
         before = native._native_calls
-        got = rebuild.rebuild_curve(crv, count, 3, preserve_tangents=tangents)
+        got_curve, got_report = rebuild.rebuild_curve(crv, count, 3, preserve_tangents=tangents)
         calls = native._native_calls - before
-        real = rebuild._native_fit
-        rebuild._native_fit = lambda pts, params, n, p, closed, ends: (reference._fit_closed(pts, params, n, p) if closed else reference._fit_open(pts, params, n, p, ends))
-        try:
-            want = rebuild.rebuild_curve(crv, count, 3, preserve_tangents=tangents)
-        finally:
-            rebuild._native_fit = real
-        check(calls == rebuild.PARAM_ITERATIONS + 1 and cvs(got[0]) == cvs(want[0]) and got[1] == want[1],
-              f"{name} -> {count} points{' (PreserveTangents)' if tangents else ''}: "
-              f"identical curve and report through {calls} native fits")
+        got_cvs, got_knots = cvs(got_curve)
+        want_report = {
+            'point_count': want['point_count'], 'degree': want['degree'],
+            'closed': want['closed'], 'deviation': want['deviation'], 'notes': want['notes']}
+        ok = (calls == rebuild.PARAM_ITERATIONS + 1
+              and [v for pt in got_cvs for v in pt] == want['cvs']
+              and got_knots == want['knots']
+              and got_report == want_report)
+        check(ok, f"{name} -> {count} points{' (PreserveTangents)' if tangents else ''}: "
+                  f"identical curve and report through {calls} native fits")
+
+print("\n-- missing library is explicitly unavailable --")
 os.environ["NARWHAL_PURE_CORE"] = os.path.join(ROOT, "no-such-library.so")
 try:
     try:
@@ -185,8 +150,6 @@ finally:
     os.environ["NARWHAL_PURE_CORE"] = LIBRARY
 
 print("\n-- input safety: each risky call runs in a subprocess, so a crash fails a check --")
-import json  # noqa: E402
-import subprocess  # noqa: E402
 
 
 def isolated(body):
@@ -263,35 +226,6 @@ except ValueError as exc:
     too_large = str(exc)
 check(too_large is not None and "too large" in too_large,
       f"a fit past the bound is refused by name, not solved in Python ({too_large!r})")
-
-if "--no-benchmark" not in sys.argv:
-    print("\n-- timing (best of 3) --")
-
-
-    def best(fn):
-        out = math.inf
-        for _ in range(3):
-            start = time.perf_counter()
-            fn()
-            out = min(out, time.perf_counter() - start)
-        return out
-
-
-    args = case(SOURCES["open cubic, 30 points"], 40, 3, False, False, 800)
-    python = best(lambda: python_fit(*args))
-    rust = best(lambda: native_fit(*args))
-    print(f"  one 40-point fit of 801 samples: python {python * 1e3:6.1f} ms, rust {rust * 1e3:5.2f} ms "
-          f"({python / rust:.0f}x)")
-    crv = SOURCES["open cubic, 30 points"]
-    fast = best(lambda: rebuild.rebuild_curve(crv, 40, 3))
-    real = rebuild._native_fit
-    rebuild._native_fit = lambda pts, params, n, p, closed, ends: (reference._fit_closed(pts, params, n, p) if closed else reference._fit_open(pts, params, n, p, ends))
-    try:
-        slow = best(lambda: rebuild.rebuild_curve(crv, 40, 3))
-    finally:
-        rebuild._native_fit = real
-    print(f"  rebuild_curve to 40 points: python fit {slow * 1e3:6.0f} ms, rust fit {fast * 1e3:6.0f} ms")
-    print("  timing is informational, not a correctness gate")
 
 passed = sum(ok for ok, _ in checks)
 print(f"\n{passed}/{len(checks)} passed")

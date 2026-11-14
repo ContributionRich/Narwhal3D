@@ -1,0 +1,26 @@
+Oracle: original independent Python only; no native answers.
+Format: id|group|hex codepoints|OK|segment offsets|closed flags|IEEE754 hex coordinates
+Errors: id|group|hex codepoints|ERR|exception type|hex message|kind,command,expected,actual,start,end,valuebits
+String differential rows: 3124
+Host rows: 6
+svgpath_reference.py sha256 ad58dd492da293745bea2f2452a6bceebf95f28fd62354e195fcdfcd3e6108b1
+test_svgpath_owned.py sha256 6607bb1041aeb49e88af16584b3bffc5c67e4ad50db53b87943ede8335be4a42
+test_native_svgpath.py sha256 4d03f8490603212dfb89b1309a7a837a79088ce220da29e3c30bc91325b19bf0
+capture.py sha256 56fbe11807bc29efaf2516355e2ecb8fe9e6c8ca6c0b458cba47a20c5f2a7762
+test_standard: 32
+test_generated_arcs_exact_bits: 2000
+test_generated_cubics_exact_bits: 1000
+test_generated_errors: 62
+test_finite_extremes: 4
+valid: 13
+anchor: 13
+svgpath_golden.txt sha256 478e23e747496f5daf1534d5b86eb4c76b7cd8ef0c3fe70850251ef89e37c7b1 bytes 5180692
+svgpath_host.txt sha256 659deb63d98f076aabbcd2c8fa54d391d69f2493effac1b3328e04d1aa83252d bytes 611
+Coverage: original standard/seeded/error/extreme parity assertions -> Rust direct owned ABI bit/error/partition tests.
+Coverage: original structure and quarter-circle polynomial/radial assertions -> Rust transferred_structure_and_off_origin_circle_assertions (structure also retained in host).
+Coverage retained in Python: coercion, exact error presentation, schema, malformed reports, metadata, missing/stale ABI, cache/concurrency, counter, real wrapper, packed/JSON COMPAT.
+Safety refusals and invalid ABI pointer/budget checks remain host tests; pointer/budget checks also run directly in Rust.
+Private unchanged originals and generator are in ignored legacy/retired-rust18; no active test imports that archive.
+Original --benchmark ran unchanged before retirement with bundled Python 3.13 and artifact dcadae316da3; private receipt original-benchmark.txt.
+Benchmark criteria preserved: 30 end-to-end calls at k=1,100,2000; report timings (no original speed threshold assertion). Rust correctness tests do NOT replace this relative-speed benchmark.
+Mutation receipts in private archive: arc-direction, reflection, typed-errors, error-span each assertion RED then restored GREEN.

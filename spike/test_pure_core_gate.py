@@ -212,13 +212,20 @@ def _():
     gate = _load_gate()
     crate = Path(CRATE)
     closure = gate.require_rust_public_closure(crate)
-    assert len(closure) == 19
+    assert len(closure) == 53
+    assert set(gate.RUST_INTEGRATION_SUITES) == {
+            "alias_golden", "unit_golden", "interpolate_golden", "svgpath_golden",
+            "bearing_golden", "calc_golden", "coords_golden", "unitformat_golden",
+            "macro_golden", "joinchain_golden", "rebuild_golden",
+        }
     public_source = (Path(ROOT) / "scripts/create_public_branch.py").read_text()
-    for retired in ("spike/alias_reference.py", "spike/units_reference.py", "spike/interpolate_reference.py"):
+    for retired in ("spike/alias_reference.py", "spike/units_reference.py", "spike/interpolate_reference.py",
+                    "spike/bearing_reference.py", "spike/unitformat_reference.py",
+                    "spike/joinchain_reference.py", "spike/rebuild_reference.py"):
         assert retired not in public_source, "retired Python oracle is public: " + retired
     summary = "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out"
 
-    def runner(fault=""):
+    def runner(fault="", selected=None):
         def run(command, cwd):
             assert "--lib" not in command
             if "--test" not in command:
@@ -227,17 +234,18 @@ def _():
             assert "--message-format=json" in command
             artifact = {"reason": "compiler-artifact", "target": {"name": suite, "kind": ["test"]},
                         "profile": {"test": True}, "executable": "/fixture/" + suite}
-            if fault == "missing-compilation":
+            active_fault = fault if selected is None or selected == suite else ""
+            if active_fault == "missing-compilation":
                 return 0, summary
-            if fault == "discovery-only":
+            if active_fault == "discovery-only":
                 return 0, json.dumps(artifact)
-            if fault == "wrong-target":
+            if active_fault == "wrong-target":
                 artifact["target"]["name"] = "unrelated"
-            if fault == "zero-tests":
+            if active_fault == "zero-tests":
                 return 0, json.dumps(artifact) + "\n" + summary.replace("2 passed", "0 passed")
-            if fault == "filtered":
+            if active_fault == "filtered":
                 return 0, json.dumps(artifact) + "\n" + summary.replace("0 filtered", "1 filtered")
-            if fault == "failed":
+            if active_fault == "failed":
                 return 1, json.dumps(artifact) + "\n" + summary
             return 0, json.dumps(artifact) + "\n" + summary
         return run
@@ -254,10 +262,20 @@ def _():
         result = gate.step_tests(crate)
         assert set(result["integration_suites"]) == set(gate.RUST_INTEGRATION_SUITES)
         assert all(v == {"compiled": True, "passed": 2} for v in result["integration_suites"].values())
-        assert run.call_count == 4
+        assert run.call_count == 12
     for fault in ("missing-compilation", "discovery-only", "wrong-target", "zero-tests", "filtered", "failed"):
         rejects(gate.step_tests, fault)
-    # Disable the compiled/executed guard in a copied AST: the negative test
+    # Each individual target must be load-bearing, not merely the first one.
+        for suite in gate.RUST_INTEGRATION_SUITES:
+            for fault in ("missing-compilation", "discovery-only", "zero-tests", "filtered"):
+                with patch.object(gate, "_run", side_effect=runner(fault, suite)):
+                    try:
+                        gate.step_tests(crate)
+                    except gate.GateError:
+                        pass
+                    else:
+                        raise AssertionError(f"integration mutant survived: {suite}: {fault}")
+        # Disable the compiled/executed guard in a copied AST: the negative test
     # above must itself go RED, with no source or bytecode writes.
     tree = ast.parse(__import__("inspect").getsource(gate.step_tests))
     guard = next(n for n in ast.walk(tree) if isinstance(n, ast.If)

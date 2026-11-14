@@ -81,7 +81,13 @@ def library(mutant=""):
         if mutant == "bearing-error": reply.code = 0
         return 0
     def checked_plan(text, length, output, capacity, needed):
-        code, witness = {b"'_Box": (-4, b'"Box"'), b"=value": (-5, b'')}[text[:length]]
+        code, witness = {b"'_Box": (-4, b'"Box"'), b"=value": (-5, b''),
+                                 b"!=-15": (-5, b''),
+                                 b"!_Mode=x": (0, b'[{"action":"option","name":"Mode","value":"x","prefixes":["!","_"]}]')}[text[:length]]
+        if mutant == 'planner-option-cancel' and text[:length] == b'!_Mode=x':
+            witness = b'[{"action":"cancel","prefixes":["!"]},' + witness[1:]
+        if mutant == 'planner-option-error' and text[:length] == b'!=-15':
+            code, witness = 0, b'[{"action":"cancel"}]'
         c.memmove(output, witness, len(witness))
         c.cast(needed, c.POINTER(c.c_int64))[0] = len(witness)
         return 0 if mutant == "planner-error" else code
@@ -120,8 +126,16 @@ def library(mutant=""):
         return 0
     def macro_payload(text, length, flag):
         assert flag == 0
-        return {b"!123": b'[{"kind":"text","value":"!123"}]',
-                b"a\x1cb": b'[{"kind":"text","value":"a"},{"kind":"text","value":"b"}]'}[text[:length]]
+        witness = {b"!123": b'[{"kind":"text","value":"!123"}]',
+                   b"!=-15": b'[{"kind":"option","name":"","value":"15"}]',
+                   b"!_Mode=x": b'[{"kind":"option","name":"Mode","value":"x"}]',
+                   b"!_Box": b'[{"kind":"cancel"},{"kind":"command","name":"Box","dash":false,"underscore":true,"transparent":false}]',
+                   b"a\x1cb": b'[{"kind":"text","value":"a"},{"kind":"text","value":"b"}]'}[text[:length]]
+        if mutant == 'token-option-cancel' and text[:length] in (b'!=-15', b'!_Mode=x'):
+            witness = b'[{"kind":"cancel"},' + witness[1:]
+        if mutant == 'token-command-no-cancel' and text[:length] == b'!_Box':
+            witness = witness.replace(b'{"kind":"cancel"},', b'')
+        return witness
     def macro_encode(text, length, flag, output, capacity):
         witness = macro_payload(text, length, flag)
         assert capacity == len(witness)
@@ -346,7 +360,8 @@ class ParserProbeTests(unittest.TestCase):
         for mutant in (*gate.PURE_CORE_PARSE_EXPORTS, "parser-abi", "old-abi",
                        "wrong-value", "accept-invalid", "transport", "reserved", "no-write",
                        "calc-value", "calc-error", "bearing-value", "bearing-error",
-                       "planner-error", "calc-abi", "bearing-abi",
+                       "planner-error", "planner-option-cancel", "planner-option-error",
+                                              "token-option-cancel", "token-command-no-cancel", "calc-abi", "bearing-abi",
                        "coords-value", "coords-error", "norm-value", "join-boundary",
                        "svg-abi", "alias-abi", "svg-geometry", "svg-error",
                        "alias-prefix", "alias-error", "alias-options",
@@ -378,6 +393,10 @@ class ParserProbeTests(unittest.TestCase):
 
     def test_owned_semantic_guards_are_mutation_sensitive(self):
         guards = (
+                    ('planner-option-cancel', 'if checked_plan(text,'),
+                    ('planner-option-error', 'if checked_plan(text,'),
+                    ('token-option-cancel', 'if macro_encode(text,'),
+                    ('token-command-no-cancel', 'if macro_encode(text,'),
             ('unit-table-query', 'if status != -3 or (name_len.value'),
             ('unit-table-order', 'if status != 0 or (name_len.value'),
             ('unit-parse-status', 'if status != expected_status'),

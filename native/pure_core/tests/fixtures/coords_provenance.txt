@@ -1,0 +1,52 @@
+Coordinate grammar independent; ORIGINAL _sibling calc/bearing already uses required production-native dependencies, not an independent numeric parser.
+All observed coordinate outcomes rechecked against unmodified original, including signed float bits and error flags.
+Metadata from original stage substrings/captured errors; nested calculator and bearing metadata independently mapped from archived original grammar stages and fixed public protocol; NEVER native coordinate/calculator/bearing reply fields.
+Golden: id|group|mode|input cps|repr(model) cps|model kind|model cps|full error cps|code|flags|3 value bits|start|end|calc(code,aux,valuebits,start,end,reserved)|bearing(code,reserved,valuebits,distancebits,start,end)
+Split: id|input cps|repr(sep) cps|sep kind|sep scalar|start,end pairs from original split-result lengths.
+Intentional original finite/size safety assertions are recorded separately in coords_policy; original nonfinite oracle observations are retained separately, never mislabeled as native accepted results.
+Host: operation|repr(arguments) cps|OK/exception type|repr(output)/full exception cps. Finite float repr round-trips signed bits.
+Original differential rows: 20293
+All ABI rows: 20402
+Split rows: 9045 (1005 texts x 9 separators)
+Host anchors: 983
+Presentation anchors: 2521
+Policy rows: 24
+Original nonfinite observations (NOT accepted native goldens): 20
+test_contract_prefix_polar_error_precedence: 796
+test_scalar_angle_grammars: 120
+test_seeded_differential: 18014
+test_bounds_nonfinite_types_unit_control_and_calls: 1363
+legacy/retired-rust18/coords_reference.py sha256 06671557350df35fddfc759d35aaa46cbe27db89a6bb0f83d379b4e52880456e bytes 17300
+legacy/retired-rust18/test_coords_owned.py sha256 417a8ab59d356efe227a1fd780b99c256e5f7b2240ba289413e8b29c58cc7010 bytes 18327
+legacy/retired-rust18/test_native_coords.py sha256 f7d579e9568049c003213b137658c997a7c581d1119f61e3efdfa03e1b480b9f bytes 15777
+legacy/retired-rust18/capture_coords.py sha256 64f5bea8e0e589584a28dd0fc41ef3138543cbe45aef2d110115da779d4d537b bytes 23071
+legacy/retired-rust18/capture_calc.py sha256 4c865dff7ce18b2c279334a9723e67bd56c512afd3cc49edc1d66be6ade7f1e4 bytes 14871
+legacy/retired-rust18/calc_reference.py sha256 354bae15356baaabbbaa8acfb246eeaebd64a06c512d62d248ae427a0b4ec5ed bytes 11466
+legacy/retired-rust18/bearing_reference.py sha256 d010960c6052050f58ed4e496f67dab2b2373c0f52dd8243d8ab996e80fb96b3 bytes 3675
+narwhal3d/calc.py sha256 6e8ffd47dc590946dd07e5c58c413cec251fbda7a9179a45854bdf1dd8b81ffd bytes 832
+narwhal3d/native_calc.py sha256 b9ce23a308a9887fc9ebcaee793f0d28f74d97d0fbaf6a293085740f7f739647 bytes 7330
+narwhal3d/bearing.py sha256 f0f163f60e940a8bc5431a1f0b4666421a3c7408593b6a34c2cbe750dfc6ed10 bytes 1207
+narwhal3d/native_bearing.py sha256 aae9c4ed6d6b7f3f048e3a1dfa3f60a1454047df8478d18c4fa8f4776e5253f4 bytes 5350
+narwhal3d/numparse.py sha256 6c309a6852aac3554358d8887d06070aa91e9f3573f423d504008b88f82793cb bytes 1608
+narwhal3d/native_pure.py sha256 1a3095e553bbbabba546f3116e120fa5fefb976cc6ffa45128f53463c9f0e729 bytes 171225
+narwhal3d/cplane.py sha256 f747271d5c73428219aeaaa147f43c7c461a49faf983ead4b5a56a50afddce14 bytes 15283
+legacy/retired-rust18/calc-current.so sha256 05454659016e76f89bfae322423bcca99d8e9a790c137ec4aa5f237eed8d0107 bytes 951024
+coords_golden.txt sha256 6e7a3fbd91efbac6c97f5cea0e9ecb1700a001e3cd1ca0228087bebb100fb25b bytes 7586085
+coords_split.txt sha256 26597c52e1589b5ec9709f1ddffb05874665f51594c948f4c3525f4a4f7e8410 bytes 1312652
+coords_host.txt sha256 0a600c8ef64571f85aafbef9fe506148fb8d3269a3637bceb1f07265fc61c844 bytes 275282
+coords_presentation.txt sha256 1ce5fb9e0697ce945e4e5a6de6665a0fdc9d8deaa41be4c158281a7c8aede78a bytes 1016469
+coords_policy.txt sha256 ca3a9480d4efb7fccb7cb0aa5b60887c4a1673f45cfca01f51af8afd7c70c2e5 bytes 45612
+coords_legacy_nonfinite.txt sha256 fff39f1c3885e4a662fd8f1476bee4685cd2cc7c1946eadb59fb8ddf9527b98e bytes 4972
+coords_examples.txt sha256 2ca74cebf79c97a2e66fb4909ff898691093c29c0afd63c5b9cc29b265aef2cb bytes 982
+ABI code counts: {0: 8099, 1: 16, 2: 37, 3: 117, 4: 54, 5: 88, 6: 1308, 7: 111, 8: 128, 9: 8, 10: 945, 12: 278, 13: 1221, 14: 1651, 15: 3, 16: 704, 20: 5395, 21: 235, 22: 4}
+ABI mode counts: {0: 19621, 1: 40, 2: 732, 3: 9}
+Original examples: 13 independent historical numeric literals/expressions; their 1e-9 tolerance remains in Rust and Python, alongside exact oracle bits.
+Complete original 20293 comparisons -> direct owned ABI 104-byte metadata/geometry bits; 9045 original split cases -> direct split query/exact-capacity/insufficient-capacity/no-write checks.
+Retained Python: callbacks/CPlane/last-point/world-relative resolution; lossless formatting; nonstring/bytes admission/full exceptions; model control; full error presentation; ABI and every unused nested-payload byte; counters/cache/canonical wrappers; missing/stale native; safety.
+Scoped callers: only the two owned suites consume coords_reference. Public manifest and gate file-list entries remain intentionally untouched; no out-of-scope caller needed adapting.
+Original baseline: 8/8 owned tests, 20293 exact comparisons; 13/13 native suite. Private receipts coords-original-owned.txt and coords-original-native-benchmark.txt.
+Unchanged archived benchmark rerun after retirement: 13/13 using original oracle (NOT fixture decoder), coords-archived-native-benchmark.txt. Original criteria: best of three x 50000 parse calls; 10000 calls each per scalar/angle route. Report-only, NO 10% speed criterion; correctness guard does not replace relative-speed measurement.
+Focused validation: cargo test --manifest-path native/pure_core/Cargo.toml --test coords_golden (6 tests), public Python owned host (7 tests), native host (12 tests). No full gate or commit.
+Private mutations: prefix, polar, arithmetic, model, error, compensated projection; each direct integration assertion RED then restored GREEN. Production code/library never mutated.
+Private mutations_coords.py sha256 15b1707307fb1f1ca1e782b85852845bf7d479d7c54ff75c7a8cc27f9b8ce827 bytes 2545
+Private benchmark_coords.py sha256 dda0866aabc8a3712367406b560d4c35f1c581d6df5f59638835562683ff30c5 bytes 1153
