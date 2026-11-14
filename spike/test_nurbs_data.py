@@ -230,6 +230,47 @@ through_archive("native_intersect.point_hits", lambda: native_intersect.point_hi
 through_archive("arclength.PreparedLength (Rust inversion)",
                 lambda: arclength.PreparedLength(curve).parameters_at([0.0, 1.5, 40.0, 100.0]))
 
+print("\n-- bridge.control_points reads NURBS grips through the archive --")
+bridge = load("bridge")
+
+
+def legacy_control_points(curve):
+    """`bridge.control_points` on a NurbsCurve before the change: five calls per point."""
+    pts = curve.Points
+    n = max(0, len(pts) - bridge._periodic_wrap(curve))
+    out = []
+    for j in range(n):
+        cp = pts[j]
+        w = getattr(cp, "W", 1.0) or 1.0
+        out.append((cp.X / w, cp.Y / w, cp.Z / w))
+    return out
+
+
+def as_bits(points):
+    return [struct.pack("<3d", *p) for p in points]
+
+
+grip_curves = [c for c in curves if c.IsValid]
+periodic = [c for c in grip_curves if c.IsPeriodic]
+before = nd._encoded_reads
+differ = sum(as_bits(bridge.control_points(c)) != as_bits(legacy_control_points(c))
+             for c in grip_curves)
+check(differ == 0 and nd._encoded_reads - before == len(grip_curves) and periodic,
+      f"{len(grip_curves)} NurbsCurves ({len(periodic)} periodic): {differ} grip lists differ "
+      f"from the per-point read, bit for bit")
+joined = r3.PolyCurve()
+for piece in (r3.NurbsCurve.Create(False, 3, [r3.Point3d(0, 0, 0), r3.Point3d(1, 2, 0),
+                                               r3.Point3d(3, 2, 0), r3.Point3d(4, 0, 0)]),
+              r3.LineCurve(r3.Point3d(4, 0, 0), r3.Point3d(6, -1, 0)),
+              r3.Arc(r3.Point3d(6, -1, 0), r3.Point3d(7, 0.5, 0), r3.Point3d(8, -1, 0)).ToNurbsCurve()):
+    joined.Append(piece)
+leaves = bridge._polycurve_leaves(joined)
+want = [legacy_control_points(leaf) if isinstance(leaf, r3.NurbsCurve)
+        else bridge._leaf_points(leaf) for leaf in leaves]
+check(leaves and [as_bits(bridge._leaf_points(leaf)) for leaf in leaves]
+      == [as_bits(points) for points in want] and len(bridge.control_points(joined)) > 0,
+      "a joined curve's NURBS leaves (one rational) give the per-point grips, bit for bit")
+
 print("\n-- cost of one read (best of 5) --")
 
 
@@ -248,6 +289,9 @@ for n in (4, 16, 67, 200):
                                         for i in range(n)])
     fast, slow = best(lambda: nd.arrays(c), 200), best(lambda: per_point(c), 50)
     print(f"  {n:3d} control points: per point {slow * 1e6:7.1f} us, archive {fast * 1e6:6.1f} us "
+          f"({slow / fast:.1f}x)")
+    fast, slow = best(lambda: bridge.control_points(c), 200), best(lambda: legacy_control_points(c), 50)
+    print(f"      bridge.control_points: per point {slow * 1e6:7.1f} us, archive {fast * 1e6:6.1f} us "
           f"({slow / fast:.1f}x)")
 
 passed = sum(ok for ok, _ in checks)
