@@ -7889,17 +7889,22 @@ def curve_snap_target(curve, name="", samples=SNAP_SAMPLES):
     joined curves, the seam point on closed curves". So a polyline contributes
     every vertex, and a smooth curve just its two ends.
     """
-    from . import osnap
+    from . import native_nearest, osnap
 
-    try:
-        # Inline `_xyz` to avoid one Python call per sample during interactive moves.
-        d = curve.Domain
-        t0, span = d.T0, d.T1 - d.T0
-        at = curve.PointAt
-        pts = [(p.X, p.Y, p.Z) for p in (at(t0 + span * i / samples)
-                                         for i in range(samples + 1))]
-    except Exception:  # noqa: BLE001
-        return None
+    # A NurbsCurve is sampled in Rust, bit-identical to the `PointAt` loop below at
+    # the same parameters. MEASURED (i7-9700K, spike/test_native_curve_samples.py): a
+    # circle's target took 0.85 ms through PointAt, 0.19 ms through Rust.
+    pts = native_nearest.sample(curve, samples)
+    if pts is None:
+        try:
+            # Inline `_xyz` to avoid one Python call per sample during interactive moves.
+            d = curve.Domain
+            t0, span = d.T0, d.T1 - d.T0
+            at = curve.PointAt
+            pts = [(p.X, p.Y, p.Z) for p in (at(t0 + span * i / samples)
+                                             for i in range(samples + 1))]
+        except Exception:  # noqa: BLE001
+            return None
     if not pts:
         return None
 

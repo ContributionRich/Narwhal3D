@@ -163,12 +163,48 @@ rows = preview.preview_interpcrv(args, (9.0, 1.0, 0.0), None)
 built = bridge.make_interpolated_curve(args + [(9.0, 1.0, 0.0)], degree=3)
 check(native._native_sample_calls == before + 1 and rows == [python_samples(built, 72)],
       "the InterpCrv preview samples its curve in Rust, the committed curve's PointAt points")
+
+
+def snap_fields(target):
+    return (target.points, target.vertices, target.knots, target.center, target.closed,
+            target.name)
+
+
+def python_snap_target(curve, samples=bridge.SNAP_SAMPLES):
+    """`curve_snap_target` with its samples forced through the `PointAt` loop."""
+    real = native.sample
+    native.sample = lambda curve, n: None
+    try:
+        return bridge.curve_snap_target(curve, name="c", samples=samples)
+    finally:
+        native.sample = real
+
+
+snap_curves = [NURBS[name] for name in sorted(NURBS)]
+snap_curves += [c for c in (random_curve(random.Random(seed)) for seed in range(40)) if c.IsValid]
+before = native._native_sample_calls
+targets = [bridge.curve_snap_target(c, name="c") for c in snap_curves]
+mismatched = sum(t is None or snap_fields(t) != snap_fields(python_snap_target(c))
+                 for c, t in zip(snap_curves, targets))
+check(native._native_sample_calls == before + len(snap_curves) and mismatched == 0,
+      f"curve_snap_target samples {len(snap_curves)} NurbsCurves in Rust: "
+      f"{mismatched} targets differ from the PointAt samples")
+line = r3.LineCurve(r3.Point3d(0, 0, 0), r3.Point3d(4, 1, 0))
+before = native._native_sample_calls
+line_target = bridge.curve_snap_target(line, name="c")
+check(native._native_sample_calls == before and line_target is not None
+      and snap_fields(line_target) == snap_fields(python_snap_target(line)),
+      "a LineCurve's snap target keeps the PointAt samples")
 os.environ["NARWHAL_PURE_CORE"] = os.path.join(ROOT, "no-such-library.so")
 try:
     before = native._native_sample_calls
     fallback = bridge.sample_curve_xyz(curve, 40)
     check(native._native_sample_calls == before and fallback == got,
           "without the library sample_curve answers, with the same points")
+    fallback_target = bridge.curve_snap_target(curve, name="c")
+    check(native._native_sample_calls == before and fallback_target is not None
+          and snap_fields(fallback_target) == snap_fields(python_snap_target(curve)),
+          "without the library curve_snap_target samples with PointAt, the same target")
 finally:
     os.environ["NARWHAL_PURE_CORE"] = LIBRARY
 
@@ -191,6 +227,13 @@ for name, n in (("InterpCrv, 3 points", 48), ("InterpCrv, 10 points", 216),
     rust = best(lambda: bridge.sample_curve_xyz(curve, n), 50)
     python = best(lambda: python_samples(curve, n), 10)
     print(f"  {name}, {n + 1} samples: python {python * 1e6:8.1f} us, rust {rust * 1e6:7.1f} us "
+          f"({python / rust:.1f}x)")
+
+for name in ("InterpCrv, 10 points", "circle"):
+    curve = NURBS[name]
+    rust = best(lambda: bridge.curve_snap_target(curve), 50)
+    python = best(lambda: python_snap_target(curve), 10)
+    print(f"  curve_snap_target, {name}: python {python * 1e6:8.1f} us, rust {rust * 1e6:7.1f} us "
           f"({python / rust:.1f}x)")
 
 passed = sum(ok for ok, _ in checks)
