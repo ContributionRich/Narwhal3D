@@ -148,42 +148,6 @@ def build_plan(tokens):
     return actions
 
 
-def _native_macro_plan():
-    """Lazily resolve the native pure-core adapter, or ``None``.
-
-    Identical to ``macro._native_macro()``: returns the ``native_pure``
-    module when it can be imported (production, where this file is
-    ``narwhal3d.macro_plan``) or loaded from this directory (spike tests load
-    this module by file path, so ``narwhal3d`` is not an importable package
-    there). ``None`` means "use the unchanged Python planner" -- the native
-    library is absent, it predates the planner export, or the adapter cannot
-    be imported.
-    """
-    try:
-        from . import native_pure as _mod  # production package context
-        return _mod
-    except ImportError:
-        pass
-    try:
-        import importlib.util as _ilu
-        import os as _os
-        import sys as _sys
-        _canon = "narwhal3d_native_pure"
-        if _canon in _sys.modules:
-            return _sys.modules[_canon]
-        _path = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)),
-                              "native_pure.py")
-        if not _os.path.isfile(_path):
-            return None
-        _spec = _ilu.spec_from_file_location(_canon, _path)
-        _mod = _ilu.module_from_spec(_spec)
-        _sys.modules[_canon] = _mod
-        _spec.loader.exec_module(_mod)
-        return _mod
-    except Exception:  # noqa: BLE001 -- any failure degrades to the fallback
-        return None
-
-
 def _actions_from_json(payload):
     """Convert the native JSON action list into the Python action contract.
 

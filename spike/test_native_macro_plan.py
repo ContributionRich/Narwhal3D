@@ -38,7 +38,7 @@ NonNestableCommandError = plan_mod.NonNestableCommandError
 if not hasattr(plan_mod, '_native_macro_plan_adapter'):
     raise RuntimeError('Required checked macro planner production candidate is not activated')
 native = plan_mod._native_macro_plan_adapter()
-compat = plan_mod._native_macro_plan()
+compat = macro.native_pure
 oracle = _load('narwhal_test_macro_reference', 'spike', 'macro_reference.py')
 assert not hasattr(oracle, '_split_tokens'), 'fixed answers must contain no tokenizer'
 results = []

@@ -130,12 +130,19 @@ class PolicyTests(unittest.TestCase):
     def test_retired_public_oracles_are_data_and_rust_only(self):
         for name in ('alias_reference', 'units_reference', 'interpolate_reference',
                      'test_interpolate_math_owned', 'bearing_reference', 'unitformat_reference',
-                     'joinchain_reference', 'rebuild_reference'):
+                     'joinchain_reference', 'rebuild_reference', 'test_python_norm_owned'):
             self.assertFalse((ROOT / 'spike' / (name + '.py')).exists(), name)
         for suite in ('alias_golden', 'unit_golden', 'interpolate_golden',
                       'svgpath_golden', 'calc_golden', 'coords_golden', 'bearing_golden',
-                      'unitformat_golden', 'macro_golden', 'joinchain_golden', 'rebuild_golden'):
+                      'unitformat_golden', 'macro_golden', 'joinchain_golden', 'rebuild_golden',
+                      'blend_golden', 'norm_golden'):
             self.assertIn('native/pure_core/tests/' + suite + '.rs', public.NATIVE_FILES)
+
+    def test_blend_host_has_no_embedded_numeric_reference(self):
+        tree = ast.parse(source('spike/test_native_blend.py'))
+        names = {node.name for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)}
+        self.assertFalse(names & {'_reference_blend', '_reference_blend_curves',
+                                 'bernstein_deriv_0', 'bernstein_deriv_1', 'rand_derivs'})
 
     def test_reference_decoders_cannot_restore_retired_engines(self):
         forbidden = {'_tokenize', '_parse_expr', '_parse_atom', '_arc_to_cubics',
@@ -178,6 +185,7 @@ class PolicyTests(unittest.TestCase):
 
     def test_string_planner_does_not_replay_public_token_builder(self):
         tree = ast.parse(source('narwhal3d/macro_plan.py'))
+        self.assertNotIn('_native_macro_plan', {node.name for node in tree.body if isinstance(node, ast.FunctionDef)})
         function = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == 'plan_macro')
         names = {node.id for node in ast.walk(function) if isinstance(node, ast.Name)}
         self.assertFalse(names & {'tokenize', 'build_plan', '_native_macro_plan'})

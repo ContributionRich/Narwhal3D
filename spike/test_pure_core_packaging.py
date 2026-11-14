@@ -408,6 +408,7 @@ class ParserProbeTests(unittest.TestCase):
             ('unit-scale-abi', 'if scale(1.,2.,3.,None)'),
             ('rebuild-value', 'if status != 0 or count.value'),
             ('rebuild-refusal', 'if status != expected or count.value'),
+            ('norm-value', 'if norm(row, 1, 6,'),
             ('blend-value', 'if status != 0 or list(output)'),
             ('blend-refusal', 'if status != expected or list(output)'),
             ('svg-geometry', 'if status != 0 or list(report)'),

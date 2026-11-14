@@ -99,7 +99,7 @@ def _():
         "spike/test_bearing.py", "spike/test_native_bearing.py",
         "spike/test_coords.py", "spike/test_native_coords.py",
         "spike/test_coords_owned.py", "spike/test_native_joinchain.py",
-        "spike/test_joinchain_owned.py", "spike/test_python_norm_owned.py",
+        "spike/test_joinchain_owned.py",
         "spike/test_native_pickconstraint.py", "spike/test_native_blend.py",
         "spike/test_macro.py", "spike/test_native_macro.py",
         "spike/test_macro_plan.py", "spike/test_native_macro_plan.py",
@@ -212,16 +212,17 @@ def _():
     gate = _load_gate()
     crate = Path(CRATE)
     closure = gate.require_rust_public_closure(crate)
-    assert len(closure) == 53
+    assert len(closure) == 63
     assert set(gate.RUST_INTEGRATION_SUITES) == {
             "alias_golden", "unit_golden", "interpolate_golden", "svgpath_golden",
             "bearing_golden", "calc_golden", "coords_golden", "unitformat_golden",
-            "macro_golden", "joinchain_golden", "rebuild_golden",
+            "macro_golden", "joinchain_golden", "rebuild_golden", "blend_golden", "norm_golden",
         }
     public_source = (Path(ROOT) / "scripts/create_public_branch.py").read_text()
     for retired in ("spike/alias_reference.py", "spike/units_reference.py", "spike/interpolate_reference.py",
                     "spike/bearing_reference.py", "spike/unitformat_reference.py",
-                    "spike/joinchain_reference.py", "spike/rebuild_reference.py"):
+                    "spike/joinchain_reference.py", "spike/rebuild_reference.py",
+                                        "spike/test_python_norm_owned.py"):
         assert retired not in public_source, "retired Python oracle is public: " + retired
     summary = "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out"
 
@@ -262,20 +263,20 @@ def _():
         result = gate.step_tests(crate)
         assert set(result["integration_suites"]) == set(gate.RUST_INTEGRATION_SUITES)
         assert all(v == {"compiled": True, "passed": 2} for v in result["integration_suites"].values())
-        assert run.call_count == 12
+        assert run.call_count == 14
     for fault in ("missing-compilation", "discovery-only", "wrong-target", "zero-tests", "filtered", "failed"):
         rejects(gate.step_tests, fault)
     # Each individual target must be load-bearing, not merely the first one.
-        for suite in gate.RUST_INTEGRATION_SUITES:
-            for fault in ("missing-compilation", "discovery-only", "zero-tests", "filtered"):
-                with patch.object(gate, "_run", side_effect=runner(fault, suite)):
-                    try:
-                        gate.step_tests(crate)
-                    except gate.GateError:
-                        pass
-                    else:
-                        raise AssertionError(f"integration mutant survived: {suite}: {fault}")
-        # Disable the compiled/executed guard in a copied AST: the negative test
+    for suite in gate.RUST_INTEGRATION_SUITES:
+        for fault in ("missing-compilation", "discovery-only", "wrong-target", "zero-tests", "filtered", "failed"):
+            with patch.object(gate, "_run", side_effect=runner(fault, suite)):
+                try:
+                    gate.step_tests(crate)
+                except gate.GateError:
+                    pass
+                else:
+                    raise AssertionError(f"integration mutant survived: {suite}: {fault}")
+    # Disable the compiled/executed guard in a copied AST: the negative test
     # above must itself go RED, with no source or bytecode writes.
     tree = ast.parse(__import__("inspect").getsource(gate.step_tests))
     guard = next(n for n in ast.walk(tree) if isinstance(n, ast.If)
@@ -296,6 +297,22 @@ def _():
     broken = source.replace(repr(fixture) + ",", "")
     assert broken != source
     real_read = Path.read_text
+    # Every round-19 path is required independently; inspect manifests, not fixtures.
+    added = [path for path in closure
+             if Path(path).name.startswith(("blend_", "norm_"))]
+    assert len(added) == 10
+    for missing in added:
+        omitted = source.replace(repr(missing) + ",", "")
+        assert omitted != source
+        def read_omitted(path, *args, **kwargs):
+            return omitted if path == Path(ROOT) / "scripts/create_public_branch.py" else real_read(path, *args, **kwargs)
+        with patch.object(Path, "read_text", read_omitted):
+            try:
+                gate.require_rust_public_closure(crate)
+            except gate.GateError:
+                pass
+            else:
+                raise AssertionError("round-19 public path omission survived: " + missing)
     def read(path, *args, **kwargs):
         return broken if path == Path(ROOT) / "scripts/create_public_branch.py" else real_read(path, *args, **kwargs)
     def closure_rejects():

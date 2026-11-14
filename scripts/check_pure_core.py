@@ -82,7 +82,7 @@ PURE_CORE_PYTESTS = (
     "spike/test_coords.py",
     "spike/test_native_coords.py",
     "spike/test_coords_owned.py", "spike/test_native_joinchain.py",
-    "spike/test_joinchain_owned.py", "spike/test_python_norm_owned.py",
+    "spike/test_joinchain_owned.py",
     "spike/test_native_pickconstraint.py",
     "spike/test_native_blend.py",
     "spike/test_macro.py",
@@ -122,8 +122,18 @@ PURE_CORE_PYTESTS = (
 
 
 # Explicit Rust oracle-retirement suites and their source/fixture closure.
-RUST_INTEGRATION_SUITES = ('alias_golden', 'unit_golden', 'interpolate_golden', 'svgpath_golden', 'bearing_golden', 'calc_golden', 'coords_golden', 'unitformat_golden', 'macro_golden', 'joinchain_golden', 'rebuild_golden')
+RUST_INTEGRATION_SUITES = ('alias_golden', 'unit_golden', 'interpolate_golden', 'svgpath_golden', 'bearing_golden', 'calc_golden', 'coords_golden', 'unitformat_golden', 'macro_golden', 'joinchain_golden', 'rebuild_golden', 'blend_golden', 'norm_golden')
 RUST_INTEGRATION_FILES = (
+    'native/pure_core/tests/blend_golden.rs',
+    'native/pure_core/tests/norm_golden.rs',
+    'native/pure_core/tests/fixtures/blend_numeric.txt',
+    'native/pure_core/tests/fixtures/blend_curves.txt',
+    'native/pure_core/tests/fixtures/blend_provenance.txt',
+    'native/pure_core/tests/fixtures/norm_rows_2.txt',
+    'native/pure_core/tests/fixtures/norm_rows_3.txt',
+    'native/pure_core/tests/fixtures/norm_rows_6.txt',
+    'native/pure_core/tests/fixtures/norm_thresholds.txt',
+    'native/pure_core/tests/fixtures/norm_witness.txt',
     'native/pure_core/tests/alias_golden.rs',
     'native/pure_core/tests/bearing_golden.rs',
     'native/pure_core/tests/calc_golden.rs',
