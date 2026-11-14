@@ -50,14 +50,15 @@ def distance_to_curve(curve, point, n: int = 256):
 
     `point` is a world (x, y, z) tuple. rhino3dm has no `NearestPoint` on
     curves, so we sample densely and take the closest point -- the same
-    sampling `sample_curve_offset` relies on. Pure, no bpy.
+    sampling `sample_curve_offset` relies on. Pure, no bpy. The samples come from
+    `sample_curve_xyz` (Rust for a NurbsCurve, the same points).
     """
     import math
 
     px, py, pz = point
     best = math.inf
-    for p in sample_curve(curve, n):
-        best = min(best, math.dist((px, py, pz), (p.X, p.Y, p.Z)))
+    for p in sample_curve_xyz(curve, n):
+        best = min(best, math.dist((px, py, pz), p))
     return best
 
 

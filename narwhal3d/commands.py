@@ -6670,10 +6670,7 @@ class OffsetCmd(Command):
         if best is None:
             return []
         curve = best[1]
-        dom = curve.Domain
-        n = 2 if curve.IsLinear() else 96
-        pts = [curve.PointAt(dom.T0 + (dom.T1 - dom.T0) * i / n) for i in range(n + 1)]
-        return [[(p.X, p.Y, p.Z) for p in pts]]
+        return [bridge.sample_curve_xyz(curve, 2 if curve.IsLinear() else 96)]
 
     def on_mode(self, name, ctx):
         """OutputLayer and SubCrv need machinery (layer management, sub-curve

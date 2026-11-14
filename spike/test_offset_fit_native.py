@@ -474,6 +474,68 @@ else:
           "a returned curve is independent: mutating it does not poison the memo")
 
 off._offset_free_form_approx = _real_free_form
+
+# ---------------------------------------------------------------------------
+# 7. the Offset preview samples in Rust (commands.OffsetCmd, preview only)
+# ---------------------------------------------------------------------------
+print("7. Offset preview samples in Rust")
+
+
+def _timed(fn, reps=20):
+    import time
+    start = time.perf_counter()
+    for _ in range(reps):
+        fn()
+    return (time.perf_counter() - start) / reps
+
+
+def legacy_distance_to_curve(curve, point, n=256):
+    """`bridge.distance_to_curve` before the change: one PointAt per sample."""
+    px, py, pz = point
+    best = math.inf
+    for p in bridge.sample_curve(curve, n):
+        best = min(best, math.dist((px, py, pz), (p.X, p.Y, p.Z)))
+    return best
+
+
+def legacy_preview(cmd, cursor):
+    """`OffsetCmd.preview_curves` before the change, on the same memoised pair."""
+    best = None
+    for curve_d in cmd._preview_offset_pair(SOURCE, float(cmd.opt.get("Distance", 1.0))):
+        if curve_d is None:
+            continue
+        gap = legacy_distance_to_curve(curve_d, tuple(cursor))
+        if best is None or gap < best[0]:
+            best = (gap, curve_d)
+    curve = best[1]
+    dom = curve.Domain
+    n = 2 if curve.IsLinear() else 96
+    pts = [curve.PointAt(dom.T0 + (dom.T1 - dom.T0) * i / n) for i in range(n + 1)]
+    return [[(p.X, p.Y, p.Z) for p in pts]]
+
+
+SOURCE = PROFILE.Duplicate()
+for distance in (0.25, -0.6, 1.5):
+    cmd = new_cmd(distance)
+    for cursor in (CURSOR_A, CURSOR_B, (0.0, 0.0, 0.0), (9.0, -1.0, 2.0)):
+        before = native_nearest._native_sample_calls
+        got = preview(cmd, cursor)
+        rust_calls = native_nearest._native_sample_calls - before
+        check(got == legacy_preview(cmd, cursor) and rust_calls == 3,
+              f"distance {distance}, cursor {cursor}: preview equals the PointAt preview bit for "
+              f"bit, sampled in Rust ({rust_calls} native calls: two distances, one polyline)")
+for curve in (PROFILE, CUSP, r3.LineCurve(r3.Point3d(0, 0, 0), r3.Point3d(3, 1, 0))):
+    for point in ((0.5, 0.5, 0.0), (7.0, -3.0, 1.0), (-2.0, 9.5, -4.0)):
+        check(bridge.distance_to_curve(curve, point) == legacy_distance_to_curve(curve, point),
+              f"distance_to_curve({type(curve).__name__}, {point}) equals the PointAt scan")
+cmd = new_cmd(0.25)
+preview(cmd)                                  # fill the memo: time the per-frame part only
+timings = {}
+for label, fn in (("PointAt", lambda: legacy_preview(cmd, CURSOR_A)),
+                  ("Rust", lambda: preview(cmd, CURSOR_A))):
+    timings[label] = min(_timed(fn) for _ in range(5))
+print(f"  per-frame Offset preview (memoised fit): PointAt {timings['PointAt'] * 1e3:.2f} ms, "
+      f"Rust {timings['Rust'] * 1e3:.2f} ms ({timings['PointAt'] / timings['Rust']:.1f}x)")
 print(f"\n{checks - len(failures)}/{checks} checks passed")
 if failures:
     print("FAILED:")
