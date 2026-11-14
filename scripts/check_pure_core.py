@@ -122,8 +122,18 @@ PURE_CORE_PYTESTS = (
 
 
 # Explicit Rust oracle-retirement suites and their source/fixture closure.
-RUST_INTEGRATION_SUITES = ('alias_golden', 'unit_golden', 'interpolate_golden', 'svgpath_golden', 'bearing_golden', 'calc_golden', 'coords_golden', 'unitformat_golden', 'macro_golden', 'joinchain_golden', 'rebuild_golden', 'blend_golden', 'norm_golden')
+RUST_INTEGRATION_SUITES = ('alias_golden', 'unit_golden', 'interpolate_golden', 'svgpath_golden', 'bearing_golden', 'calc_golden', 'coords_golden', 'unitformat_golden', 'macro_golden', 'joinchain_golden', 'rebuild_golden', 'blend_golden', 'norm_golden', 'nurbs_golden', 'arclength_golden')
 RUST_INTEGRATION_FILES = (
+    'native/pure_core/tests/nurbs_golden.rs',
+    'native/pure_core/tests/arclength_golden.rs',
+    'native/pure_core/tests/fixtures/nurbs_curves.txt',
+    'native/pure_core/tests/fixtures/nurbs_nearest.txt',
+    'native/pure_core/tests/fixtures/nurbs_sample.txt',
+    'native/pure_core/tests/fixtures/nurbs_display.txt',
+    'native/pure_core/tests/fixtures/nurbs_host.txt',
+    'native/pure_core/tests/fixtures/nurbs_provenance.txt',
+    'native/pure_core/tests/fixtures/arclength_curves.txt',
+    'native/pure_core/tests/fixtures/arclength_golden.txt',
     'native/pure_core/tests/blend_golden.rs',
     'native/pure_core/tests/norm_golden.rs',
     'native/pure_core/tests/fixtures/blend_numeric.txt',

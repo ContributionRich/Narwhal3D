@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Near snap in Rust: the same nearest point as `nearest.closest_point_on_curve`.
+"""Real-rhino3dm Near integration, fallback, packing and performance guards.
+
+The original random numeric corpus now replays directly against Rust ABIs in
+native/pure_core/tests/nurbs_golden.rs. Every original fixture host query and all
+wrapper fields are frozen in fixtures/nurbs_host.txt; no random engine lives here.
 
 Run with the bundled runtime (it carries rhino3dm); the library defaults to the
 gate's release build:
@@ -19,9 +23,10 @@ exact tie goes to the earlier candidate. The equal-minima fixtures check that bo
 pick the same one of two mirror-image minima.
 """
 import importlib.util
+import hashlib
+import json
 import math
 import os
-import random
 import sys
 import time
 import types
@@ -116,84 +121,54 @@ FIXTURES = {
 
 check(native.available(), f"the pure-core library loads ({LIBRARY})")
 
-print("\n-- parity: native near_point == closest_point_on_curve(...).point, bit for bit --")
-rng = random.Random(77)
+# Numeric search is replayed in Rust. Preserve EVERY original fixture host query,
+# including non-NURBS fallback and analytic method/ambiguity verification cases.
+with open(os.path.join(ROOT, "native/pure_core/tests/fixtures/nurbs_host.txt"), "rb") as source:
+    host_bytes = source.read()
+check(hashlib.sha256(host_bytes).hexdigest()
+      == "4cb19de12f9879bb0d63a5ee8ad1e07084961e107eb8a342733c799b691e3433",
+      "all 31 original host groups / 3096 queries have frozen byte integrity")
+HOST = {(name, count): (queries, answers)
+        for name, count, queries, answers in map(json.loads, host_bytes.splitlines())}
+
+
+def host_case(curve, count):
+    name = next(name for name, candidate in FIXTURES.items() if candidate is curve)
+    return HOST[name, count]
 
 
 def queries_for(curve, count):
-    box = curve.GetBoundingBox()
-    lo = (box.Min.X - 4, box.Min.Y - 4, box.Min.Z - 3)
-    hi = (box.Max.X + 4, box.Max.Y + 4, box.Max.Z + 3)
-    out = [tuple(rng.uniform(a, b) for a, b in zip(lo, hi)) for _ in range(count)]
-    # Queries ON the curve at its ends and knots, where span choice and the
-    # end-knot basis fix matter.
-    params = [curve.Domain.T0, curve.Domain.T1] + (nearest._knots(curve) or [])
-    out += [tuple(nearest._eval(curve, t)) for t in params]
-    return out
+    return host_case(curve, count)[0]
 
 
-def same_search(curve, cache, q):
-    """The native `_search` result equals Python's in every field."""
-    want = nearest._search(curve, q, TOL, "nurbs")
-    got = native.search(cache.packed, q)
-    return got == (want.t, want.point, want.distance, want.at_end)
-
+def frozen_fields(curve, count):
+    return [(t, tuple(point), distance, method, end, ambiguous)
+            for t, point, distance, method, end, ambiguous in host_case(curve, count)[1]]
 
 for name, curve in FIXTURES.items():
     cache = nearest.NearCache(curve)
-    is_nurbs = isinstance(curve, r3.NurbsCurve)
+    before = native._native_calls
     queries = queries_for(curve, 150)
-    differ, routed = 0, 0
-    for q in queries:
-        want = nearest.closest_point_on_curve(curve, q, TOL).point
-        got = nearest.near_point(curve, q, cache, TOL)
-        if got is not None:
-            routed += 1
-        if is_nurbs and (got != want or not same_search(curve, cache, q)):
-            differ += 1
+    got = [nearest.near_point(curve, q, cache, TOL) for q in queries]
+    is_nurbs = isinstance(curve, r3.NurbsCurve)
+    want = [answer[1] for answer in frozen_fields(curve, 150)] if is_nurbs else [None] * len(queries)
+    check((cache.packed is not None) == is_nurbs and got == want
+          and ((native._native_calls > before) if is_nurbs else native._native_calls == before),
+          f"{name}: all {len(queries)} original host queries, type packing/routing")
     if is_nurbs:
-        ok = cache.packed is not None and routed == len(queries) and differ == 0
-    else:   # not a NurbsCurve: not packed, every query stays in Python
-        ok = cache.packed is None and routed == 0
-    check(ok, f"{name}: {routed}/{len(queries)} routed natively, {differ} differ")
+        packed = cache.packed
+        check(list(packed.knots) == list(curve.Knots.ToList())
+              and list(packed.cvs) == [v for cp in curve.Points for v in (cp.X, cp.Y, cp.Z, cp.W)]
+              and packed.order == curve.Order and packed.rational == curve.IsRational
+              and packed.closed == curve.IsClosed, f"{name}: real homogeneous adapter framing")
 
-print("\n-- random curves: degrees 1-5, rational, multiple knots, bit for bit --")
-
-
-def random_curve(r):
-    degree = r.randint(1, 5)
-    count = r.randint(degree + 1, degree + 9)
-    rational = r.random() < 0.5
-    curve = r3.NurbsCurve(3, rational, degree + 1, count)
-    for i in range(count):
-        x, y, z = (r.uniform(-10, 10) for _ in range(3))
-        w = r.uniform(0.2, 4.0) if rational else 1.0
-        curve.Points[i] = r3.Point4d(x * w, y * w, z * w, w)
-    interior = sorted(r.uniform(0.5, 9.5) for _ in range(count - degree - 1))
-    for i in range(1, len(interior)):          # some knots doubled or tripled
-        if r.random() < 0.25:
-            interior[i] = interior[i - 1]
-    knots = [0.0] * degree + interior + [10.0] * degree
-    for i, k in enumerate(knots):
-        curve.Knots[i] = k
-    return curve
-
-
-rng_curves = random.Random(20261107)
-total, differ, rationals = 0, 0, 0
-for _ in range(60):
-    curve = random_curve(rng_curves)
-    if not curve.IsValid:
-        continue
-    rationals += curve.IsRational
-    cache = nearest.NearCache(curve)
-    for q in queries_for(curve, 25):
-        total += 1
-        want = nearest.closest_point_on_curve(curve, q, TOL).point
-        if nearest.near_point(curve, q, cache, TOL) != want or not same_search(curve, cache, q):
-            differ += 1
-check(total > 1000 and rationals > 10 and differ == 0,
-      f"{total} queries on random curves ({rationals} rational): {differ} differ")
+edited = FIXTURES["rational cubic"].Duplicate()
+old = native.pack(edited)
+snapshot = tuple(old.cvs)
+cp = edited.Points[1]
+edited.Points[1] = r3.Point4d(cp.X + 1, cp.Y, cp.Z, cp.W)
+check(tuple(old.cvs) == snapshot and tuple(native.pack(edited).cvs) != snapshot,
+      "packed arrays own a snapshot; repacking sees real control-point edits")
 
 print("\n-- analytic cases keep their exact answers --")
 circle = FIXTURES["circle"]
@@ -217,7 +192,6 @@ def all_fields(c):
     return (c.t, c.point, c.distance, c.method, c.at_end, c.ambiguous)
 
 
-rng_verify = random.Random(41)
 for name in ("circle", "arc", "tilted arc", "uneven linear cubic", "LineCurve"):
     curve = FIXTURES[name]
     queries = queries_for(curve, 60)
@@ -231,22 +205,13 @@ for name in ("circle", "arc", "tilted arc", "uneven linear cubic", "LineCurve"):
     finally:
         nearest._native_pack = real
     native_route = isinstance(curve, r3.NurbsCurve)
-    check(got == want and (calls >= len(queries) if native_route else calls == 0),
+    check(got == want == frozen_fields(curve, 60)
+              and (calls >= len(queries) if native_route else calls == 0),
           f"{name}: {len(queries)} answers equal the Python verification, "
           f"{calls} native searches")
 on_axis = nearest.closest_point_on_curve(FIXTURES["circle"], (1.0, 2.0, 7.0))
 check(on_axis.ambiguous and on_axis.t == FIXTURES["circle"].Domain.T0,
       "an on-axis query is still the ambiguous domain start")
-
-print("\n-- two equal minima --")
-twin = cpc([(0, 5, 0), (2, -5, 0), (5, 8, 0), (8, -5, 0), (10, 5, 0)])
-for label, q in (("mirror dips, query on the axis", (5.0, -20.0, 0.0)),
-                 ("both ends, query on the axis", (5.0, 40.0, 0.0))):
-    want = nearest.closest_point_on_curve(twin, q, TOL).point
-    got = nearest.near_point(twin, q, nearest.NearCache(twin), TOL)
-    check(got == want,
-          f"{label}: both pick the same minimum (python {tuple(round(v, 9) for v in want)}, "
-          f"native {tuple(round(v, 9) for v in got)})")
 
 print("\n-- the snap uses it, and falls back without the library --")
 target = osnap.SnapTarget(points=[(0, 0, 0), (10, 3, 0)], curve=FIXTURES["open cubic, 12 points"])
@@ -274,7 +239,6 @@ def fields(c):
     return (c.t, c.point, c.distance, c.method, c.at_end, c.ambiguous)
 
 
-rng_many = random.Random(31)
 for name, curve in FIXTURES.items():
     prepared = nearest.PreparedCurve(curve)
     queries = queries_for(curve, 40) + [(float("nan"), 0.0, 0.0)]
@@ -284,18 +248,8 @@ for name, curve in FIXTURES.items():
     want = [fields(prepared.closest(q)) for q in queries[:-1]]
     general = isinstance(curve, r3.NurbsCurve) and nearest._is_general_nurbs(curve)
     expected = int(general) if native.batch_capability() == "qualified" else 0
-    check(got == want and batched == expected,
+    check(got == want == frozen_fields(curve, 40) and batched == expected,
           f"{name}: {len(want)} answers equal closest, {'one batch' if expected else 'per point'}")
-total, differ = 0, 0
-for _ in range(40):
-    curve = random_curve(rng_many)
-    if not curve.IsValid:
-        continue
-    prepared = nearest.PreparedCurve(curve)
-    queries = queries_for(curve, 25)
-    total += len(queries)
-    differ += [fields(c) for c in prepared.closest_many(queries)] != [fields(prepared.closest(q)) for q in queries]
-check(total > 500 and differ == 0, f"{total} random queries in batches: {differ} batches differ")
 cubic = nearest.PreparedCurve(FIXTURES["open cubic, 12 points"])
 mixed = [(1.0, 2.0, 0.0), (float("nan"), 1.0, 0.0), (5.0, -1.0, 0.0)]
 
@@ -321,6 +275,29 @@ try:
           "without the library closest_many answers point by point in Python")
 finally:
     os.environ["NARWHAL_PURE_CORE"] = LIBRARY
+
+bad = native.pack(FIXTURES["open cubic, 12 points"])
+bad.order = 0
+before = (native._native_calls, native._native_many_calls)
+check(native.search(bad, (1.0, 2.0, 0.0)) is None
+      and native.search_many(bad, [(1.0, 2.0, 0.0)]) is None
+      and before == (native._native_calls, native._native_many_calls),
+      "invalid packed metadata is refused without recording native success")
+platform = sys.platform
+signature, binding = native._many_signature, native._many_binding
+try:
+    sys.platform = "win32"
+    native._many_signature = None
+    before = native._native_many_calls
+    check(native.batch_capability().startswith("not qualified")
+          and native.search_many(cubic._packed, mixed[::2]) is None
+          and [fields(c) for c in cubic.closest_many(mixed[::2])]
+              == [fields(cubic.closest(q)) for q in mixed[::2]]
+          and native._native_many_calls == before,
+          "unqualified batch platform uses real scalar routing, not a batch")
+finally:
+    sys.platform = platform
+    native._many_signature, native._many_binding = signature, binding
 
 print("\n-- per-query Near timing (best of 3, cache built once) --")
 

@@ -6,16 +6,17 @@ gate's release build:
   NARWHAL_PURE_CORE=$PWD/native/pure_core/target/x86_64-unknown-linux-gnu/release/libnarwhal_pure_core.so \\
       tools/blender-patched/5.2/python/bin/python3.13 spike/test_native_arclength.py
 
-Parity is exact: on a `NurbsCurve`, `PreparedLength.parameters_at` returns the
-parameters `_invert` returns, bit for bit. Rust repeats `_invert`, `_length_to`,
-`_gauss_span` and `_speed` on the Python-prepared span table and Gauss-Legendre rule,
-evaluating `DerivativeAt(t, 1)` with the Near snap's port of openNURBS. A length the
-Python refuses keeps the Python's error; other curves keep the Python inversion.
+Bit-parity against `_invert` (the full 5315-row golden corpus: named fixtures, 125
+random curves, rational/non-rational, shifted domains, all tolerances) is now enforced
+by the compiled Rust suite `native/pure_core/tests/arclength_golden.rs`. This host test
+keeps the host-only boundary checks Rust cannot see: the library loads, packing, the
+document tolerance, non-`NurbsCurve` fallback, refusal/error presentation, rebuild
+control-point + report parity, the explicit missing-fit refusal, and the existing
+`rust < python` timing criterion.
 """
 import importlib.util
 import math
 import os
-import random
 import sys
 import time
 import types
@@ -69,12 +70,6 @@ def outcome(fn):
         return ("error", type(exc).__name__, str(exc))
 
 
-def stations(total, count, rng):
-    out = [total * i / count for i in range(count + 1)]
-    out += [rng.uniform(0.0, total) for _ in range(count)]
-    return out
-
-
 FIXTURES = {
     "open cubic, 30 points": cpc([(i * 1.5, math.sin(i * 0.7) * 4, math.cos(i * 0.3)) for i in range(30)]),
     "open cubic, 4 points": cpc([(0, 0, 0), (3, 5, 0), (6, -2, 1), (10, 3, 0)]),
@@ -90,64 +85,10 @@ FIXTURES = {
 
 check(native.available(), f"the pure-core library loads ({LIBRARY})")
 
-print("\n-- parity: native parameters == _invert, bit for bit --")
-rng = random.Random(11)
-for name, curve in FIXTURES.items():
-    prepared = arclength.PreparedLength(curve)
-    differ = 0
-    total = prepared.total
-    for tol in (arclength.default_tolerance(), 1e-9, 0.05):
-        lengths = stations(total, 40, rng)
-        got = prepared.parameters_at(lengths, tol)
-        differ += got != python_params(prepared, lengths, tol)
-    check(prepared._packed is not None and differ == 0,
-          f"{name}: total {total:.6g}, {differ} of 3 tolerance runs differ")
-
-print("\n-- random curves: degrees 1-5, rational, multiple knots, shifted domains --")
-
-
-def random_curve(r):
-    degree = r.randint(1, 5)
-    count = r.randint(degree + 1, degree + 12)
-    rational = r.random() < 0.5
-    curve = r3.NurbsCurve(3, rational, degree + 1, count)
-    scale = r.choice((0.01, 1.0, 100.0))
-    for i in range(count):
-        x, y, z = (r.uniform(-10, 10) * scale for _ in range(3))
-        w = r.uniform(0.2, 4.0) if rational else 1.0
-        curve.Points[i] = r3.Point4d(x * w, y * w, z * w, w)
-    t0 = r.choice((0.0, -3.7, 12.25, r.uniform(-50, 50)))
-    t1 = t0 + r.choice((1.0, 10.0, r.uniform(0.01, 80)))
-    interior = sorted(r.uniform(t0, t1) for _ in range(count - degree - 1))
-    for i in range(1, len(interior)):          # some knots doubled or tripled
-        if r.random() < 0.25:
-            interior[i] = interior[i - 1]
-    knots = [t0] * degree + interior + [t1] * degree
-    for i, k in enumerate(knots):
-        curve.Knots[i] = k
-    return curve
-
-
-rng = random.Random(20261108)
-curves = queries = differ = rationals = 0
-for _ in range(150):
-    curve = random_curve(rng)
-    if not curve.IsValid:
-        continue
-    curves += 1
-    rationals += curve.IsRational
-    prepared = arclength.PreparedLength(curve)
-    tol = prepared.total * rng.choice((1e-6, 1e-9, 1e-3))
-    lengths = stations(prepared.total, 12, rng)
-    queries += len(lengths)
-    differ += sum(a != b for a, b in zip(prepared.parameters_at(lengths, tol),
-                                         python_params(prepared, lengths, tol)))
-check(curves > 100 and rationals > 40 and queries > 2500 and differ == 0,
-      f"{queries} lengths on {curves} random curves ({rationals} rational): {differ} differ")
-
-print("\n-- refusals, the default tolerance and other curves keep the Python --")
+print("\n-- packing: a NurbsCurve packs, the native table is built --")
 prepared = arclength.PreparedLength(FIXTURES["open cubic, 30 points"])
 total = prepared.total
+check(prepared._packed is not None, "a NurbsCurve packs (the native span table is built)")
 for s in (-1.0, total + 1.0, total * 2.0):
     got = outcome(lambda: prepared.parameter_at(s))
     want = outcome(lambda: arclength._invert(prepared._curve, prepared._table, s, None))

@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Curve display tessellation in Rust: the same samples as `bridge._display_samples`.
+"""Real-rhino3dm display integration, fallback, retry and performance guards.
+
+The full original random/tolerance corpus now replays against the Rust display
+ABI in native/pure_core/tests/nurbs_golden.rs (Linux/glibc bit qualification only).
+Python remains here only for actual host API integration and active-fallback timing.
 
 Run with the bundled runtime (it carries rhino3dm); the library defaults to the
 gate's release build:
@@ -93,73 +97,37 @@ NURBS = {
 }
 
 
-def compare(curve, tol):
-    return native.display_samples(curve, tol) == bridge._python_display_samples(curve, tol)
-
-
 check(native.available(), f"the pure-core library loads ({LIBRARY})")
-# Production routes only on a qualified runtime (Linux/glibc). Parity is MEASURED here on
-# whatever runtime runs this suite, so it is also how another platform gets qualified.
 QUALIFIED = native.QUALIFIED_RUNTIME
-native.QUALIFIED_RUNTIME = True
-print(f"  (this runtime: {sys.platform}, {platform.libc_ver()}; qualified for production: {QUALIFIED})")
-
-print("\n-- parity: native (params, points) == _python_display_samples, bit for bit --")
+check(QUALIFIED == (sys.platform.startswith("linux") and platform.libc_ver()[0] == "glibc"),
+      "display bit qualification is Linux/glibc only, not Windows certification")
+# Host integration keeps real r3 packing, routing and every original curve type.
+# Full tolerance/random/sample corpora live in nurbs_golden.rs.
 for name, curve in NURBS.items():
-    differ = [tol for tol in tolerances(curve) if not compare(curve, tol)]
-    got = native.display_samples(curve, bridge.display_tolerance(curve))
-    check(not differ and got is not None,
-          f"{name}: {len(got[0]) if got else 0} vertices, differing tolerances: {differ or 'none'}")
+    before = native._native_calls
+    tol = bridge.display_tolerance(curve)
+    got = native.display_samples(curve, tol)
+    if QUALIFIED:
+        check(got == bridge._python_display_samples(curve, tol)
+              and native._native_calls == before + 1, f"{name}: real host framing and routing")
+    else:
+        check(got is None and native._native_calls == before, f"{name}: platform fallback")
 line = r3.LineCurve(r3.Point3d(0, 0, 0), r3.Point3d(4, 1, 0))
 poly = r3.PolylineCurve([r3.Point3d(0, 0, 0), r3.Point3d(3, 4, 0), r3.Point3d(6, 0, 0)])
 check(native.display_samples(line, 0.01) is None and native.display_samples(poly, 0.01) is None,
       "a LineCurve and a PolylineCurve (not NurbsCurves) keep the Python route")
 
-print("\n-- random curves: degrees 1-5, rational, multiple and full knots, shifted domains --")
-
-
-def random_curve(r):
-    degree = r.randint(1, 5)
-    count = r.randint(degree + 1, degree + 14)
-    rational = r.random() < 0.5
-    curve = r3.NurbsCurve(3, rational, degree + 1, count)
-    scale = r.choice((0.01, 1.0, 10.0, 1000.0))
-    for i in range(count):
-        x, y, z = (r.uniform(-10, 10) * scale for _ in range(3))
-        w = r.uniform(0.2, 4.0) if rational else 1.0
-        curve.Points[i] = r3.Point4d(x * w, y * w, z * w, w)
-    t0 = r.choice((0.0, -3.7, 12.25, r.uniform(-50, 50)))
-    t1 = t0 + r.choice((1.0, 10.0, r.uniform(0.01, 80)))
-    interior = sorted(r.uniform(t0, t1) for _ in range(count - degree - 1))
-    i = 1
-    while i < len(interior):                 # some knots repeated, up to full multiplicity
-        if r.random() < 0.3:
-            for j in range(i, min(len(interior), i + r.randint(1, degree))):
-                interior[j] = interior[i - 1]
-            i += degree
-        i += 1
-    knots = [t0] * degree + interior + [t1] * degree
-    for i, k in enumerate(knots):
-        curve.Knots[i] = k
-    return curve
-
-
-rng = random.Random(20261108)
-curves = cases = differ = rationals = cornered = 0
-for _ in range(500):
-    curve = random_curve(rng)
-    if not curve.IsValid:
-        continue
-    curves += 1
-    rationals += curve.IsRational
-    groups, degree = bridge._knot_groups(curve, curve.Domain.T0, curve.Domain.T1)
-    cornered += any(m >= degree for _v, m in groups)
-    for tol in tolerances(curve):
-        cases += 1
-        differ += not compare(curve, tol)
-check(curves > 300 and rationals > 100 and cornered > 50 and differ == 0,
-      f"{cases} tessellations of {curves} random curves ({rationals} rational, "
-      f"{cornered} with corners): {differ} differ")
+before = native._native_calls
+check(native.display_samples(NURBS["circle"], float("nan")) is None
+      and native._native_calls == before,
+      "invalid tolerance is refused without recording native success")
+edited = NURBS["open cubic, 4 points"].Duplicate()
+original = native.display_samples(edited, 0.01)
+cp = edited.Points[1]
+edited.Points[1] = r3.Point4d(cp.X + 2, cp.Y, cp.Z, cp.W)
+changed = native.display_samples(edited, 0.01)
+check(changed != original and changed == bridge._python_display_samples(edited, 0.01),
+      "real control-point edits are repacked; previous sample arrays stay snapshots")
 
 print("\n-- the display path uses it, and falls back without the library --")
 curve = NURBS["open cubic, 40 points"]
@@ -196,7 +164,7 @@ try:
           and native._native_calls == before,
           "with QUALIFIED_RUNTIME False (Windows, macOS) the display stays in Python")
 finally:
-    native.QUALIFIED_RUNTIME = True
+    native.QUALIFIED_RUNTIME = QUALIFIED
 check(QUALIFIED == (sys.platform.startswith("linux") and platform.libc_ver()[0] == "glibc"),
       f"production routes natively only on Linux/glibc (here: {QUALIFIED})")
 

@@ -463,6 +463,25 @@ class ParserProbeTests(unittest.TestCase):
 
 
 class PackageTests(unittest.TestCase):
+    def test_round20_public_closure_retains_host_suites(self):
+        # Path/AST metadata only: never load the golden corpora into this test.
+        closure = gate.require_rust_public_closure(ROOT / "native/pure_core")
+        self.assertEqual(len(closure), 73)
+        self.assertEqual(len(gate.RUST_INTEGRATION_SUITES), 15)
+        source = ast.parse((ROOT / "scripts/create_public_branch.py").read_text())
+        public = set()
+        for node in source.body:
+            if isinstance(node, ast.Assign) and any(
+                isinstance(target, ast.Name) and target.id in {"NATIVE_FILES", "TEST_FILES"}
+                for target in node.targets
+            ):
+                public.update(ast.literal_eval(node.value))
+        for host in ("spike/test_native_nearest.py", "spike/test_native_display_samples.py",
+                     "spike/test_native_curve_samples.py", "spike/test_native_arclength.py"):
+            self.assertIn(host, gate.PURE_CORE_PYTESTS)
+            self.assertIn(host, public)
+            self.assertTrue((ROOT / host).is_file(), host)
+
     def test_linux_build_refuses_before_staging(self):
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)
@@ -634,6 +653,20 @@ class PackageTests(unittest.TestCase):
 
 
 class GuardMutationTests(unittest.TestCase):
+    def test_round20_host_retention_check_goes_red_when_manifest_is_trimmed(self):
+        method = "test_round20_public_closure_retains_host_suites"
+        for host in ("spike/test_native_nearest.py", "spike/test_native_display_samples.py",
+                     "spike/test_native_curve_samples.py", "spike/test_native_arclength.py"):
+            with self.subTest(host=host), patch.object(
+                gate, "PURE_CORE_PYTESTS", tuple(p for p in gate.PURE_CORE_PYTESTS if p != host)
+            ):
+                result = unittest.TestResult()
+                PackageTests(method).run(result)
+                self.assertFalse(result.wasSuccessful(), "host omission survived: " + host)
+        restored = unittest.TestResult()
+        PackageTests(method).run(restored)
+        self.assertTrue(restored.wasSuccessful(), restored.errors or restored.failures)
+
     def test_packaging_tests_go_red_when_parser_probes_are_bypassed(self):
         # Mutate copied function ASTs in memory: no live source/bytecode writes.
         cases = (

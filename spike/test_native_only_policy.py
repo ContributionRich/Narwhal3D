@@ -135,7 +135,7 @@ class PolicyTests(unittest.TestCase):
         for suite in ('alias_golden', 'unit_golden', 'interpolate_golden',
                       'svgpath_golden', 'calc_golden', 'coords_golden', 'bearing_golden',
                       'unitformat_golden', 'macro_golden', 'joinchain_golden', 'rebuild_golden',
-                      'blend_golden', 'norm_golden'):
+                      'blend_golden', 'norm_golden', 'nurbs_golden', 'arclength_golden'):
             self.assertIn('native/pure_core/tests/' + suite + '.rs', public.NATIVE_FILES)
 
     def test_blend_host_has_no_embedded_numeric_reference(self):

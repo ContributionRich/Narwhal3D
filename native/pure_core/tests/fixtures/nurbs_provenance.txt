@@ -1,0 +1,111 @@
+RUST-NURBS-TEST20 -- independent original Python/openNURBS capture, 2026-11-13
+
+Scope: tests only. No production code, shared gates, manifest or full gate changed.
+No production fallback retired: non-NURBS, missing-library and unqualified-platform
+Python routes remain necessary. Linux/glibc display bit qualification ONLY;
+this is NOT Windows, Wine, macOS or portable-libm bit certification.
+
+Original byte-identical files backed up locally under ignored legacy/retired-rust20/:
+spike/test_native_nearest.py (349 lines, 15179 bytes)
+ SHA256 7990eac4ffce01313167f23f7cf099dcef1436b4911c37c10853e0d35c5599ee
+spike/test_native_display_samples.py (234 lines, 9983 bytes)
+ SHA256 a3a403aa8fcc985e9ec3cc27d6013e875a0de8391a75748dfffe3e61a08a7cd5
+
+Oracle runtime: bundled CPython 3.13.13, rhino3dm 8.35.0, Linux x86_64/glibc 2.43.
+Oracle source SHA256:
+ nearest.py a272b7b7eed562fc4449d187ed5707b17eac4e4df57aa18bb17b67f99f609372
+ bridge.py 9c780919bbf42cbe9f485910713e05b9d116632c5a19eab1dbb1b68b998983f9
+Adapter source SHA256:
+ native_nearest.py 53d5012b5dd5a0f4c82ab6b1c70097d5aa50594a45bde3f3f64ccce719c7e1b6
+ native_display.py 8810ad6584a2b72153ad609ac12d90c8bbb82e5f1caa17eeed467b5d185eec8e
+Existing host artifact SHA256 (unchanged, used only as actual implementation):
+ d15208979f4659b7ce818a46e7e3d6ecc14b35e0c442104162963d177b76d330
+
+Capture: private capture.py executes original sources, intercepting queries_for
+before return and compare(curve,tolerance). All original RNG consumption, skipped
+invalid curves, knot/end queries and iteration order are retained. Expected nearest
+values are directly nearest._search(curve,q,0.01,'nurbs'), never native answers or
+closest_point_on_curve's potentially native verification search. Display expectations
+are bridge._python_display_samples; uniform expectations are openNURBS PointAt at
+T0+(T1-T0)*i/n, n=1,2,7,31 on every distinct curve. Host ClosestPoint fields are
+captured separately with nearest._native_pack forced to None (original Python route).
+Private helpers, logs, original files and full raw display answers are kept ignored.
+
+Original nearest numeric coverage:
+ - all 13 fixtures' 150 random plus ends/knots queries; 10 are NURBS
+ - seed 77 queries; seed 20261107: 60 random attempts, 1847 queries, 27 rational curves
+ - all analytic verification fixture queries (60 random plus ends/knots)
+ - both equal-minima queries, in original order
+ - all 13 PreparedCurve fixture groups (40 random plus ends/knots)
+ - seed 31 random curves: 40 attempts, 1377 random-batch queries
+New Rust: 5678 independent nearest expectations, each replayed through BOTH scalar
+and batch C ABIs (11356 answers), all five floating fields as to_bits plus at_end.
+Method/ambiguous are Python wrapper fields, NOT fields of the native ABI; all original
+fixture host groups remain: 31 groups / 3096 queries, with all six wrapper fields
+frozen. Non-NURBS cases are retained on host, not discarded from native replay.
+
+Original display coverage:
+ - all 12 fixtures x original five tolerances
+ - seed 20261108: 500 attempts, 356 valid curves, 181 rational, 95 with corners;
+   1780 tessellations at the unchanged five original tolerances
+New Rust: all 1840 original parity cases, plus the original 400-point retry curve
+and all 300 original performance-input curves at their display tolerances = 2141.
+10371637 vertices replayed, with exact output count, status, initial capacity 256,
+ERR_SIZE and retry protocol. Additional 3048 uniform PointAt sample cases.
+762 distinct input curves; degrees 1..5 counts [45,87,406,111,113], 230 rational,
+5 closed; repeated/full knots, shifted domains, tiny/large coordinate scales,
+endpoints, ties, Newton first/second derivatives and display derivative probes.
+No tolerance widened. No random corpus sampled down.
+
+Framing (whitespace separated; all floats big-endian IEEE-754 hex u64):
+ nurbs_curves.txt: id order count rational closed domain_lo domain_hi knot_count
+                  knots[knot_count] homogeneous_cvs[4*count]
+ nurbs_nearest.txt: id query_xyz[3] expected_t_xyz_distance[5] expected_at_end
+ nurbs_sample.txt: id segment_count expected_xyz[3*(segment_count+1)]
+ nurbs_display.txt: id tolerance expected_count expected_output_bitstream_FNV1a64
+ nurbs_host.txt: one JSON array per original fixture group:
+                [fixture_name,random_count,queries,all_six_ClosestPoint_fields]
+
+Display digest is over big-endian bytes of EVERY parameter followed by EVERY xyz,
+including signed zeros and vertex ordering; it is not a rounded/tolerance digest.
+The raw expected text was 705324853 bytes. Compact per-case bitstream fingerprints
+avoid checking in 705 MB and compile/include overhead, while count/status are also
+asserted independently. FNV64 is an exact-bit regression fingerprint, not a
+cryptographic proof; raw expected answers are preserved in the ignored backup.
+Fixture byte hashes and exact row counts are hardcoded in Rust; host fixture SHA256
+is hardcoded on host. Corpus changes require intentional integrity/count updates.
+
+Host-only checks retained: actual r3 types and homogeneous packing, every original
+fixture query group, analytic recognition/projection/ambiguity/all wrapper fields,
+osnap real routing/cache, non-NURBS and missing-library fallbacks, PreparedCurve
+batch-vs-scalar calls, mixed nonfinite errors/finite batch points. Added real edits
+and owned snapshots, refusal success counters, invalid metadata and unqualified
+batch-platform guard. Display retains real retry/counters, missing-library and
+unqualified-runtime fallbacks; adds real edits and invalid tolerance refusal.
+The original timing loops and comparisons remain unchanged: Near <=0.9 for each
+of its three fixtures; display batch Rust < Python, plus original individual timing
+reports. Existing active Python fallbacks are used, NOT a duplicate engine. These
+are retained end-to-end host performance guards, not replaced by a portable Rust
+microbenchmark or relaxed thresholds.
+
+Mutation qualification (private copied Rust source, no production edits):
+ - first sample tie '<' -> '<=': RED scalar curve 1 row 150 parameter bits;
+   restore GREEN
+ - actual native libm pow -> multiply: RED display case 248 output bitstream;
+   restore GREEN
+ - native uniform parameter arithmetic reassociation: RED sample 7 field 27;
+   restore GREEN
+ - actual host bridge._curve_display_points bypasses native: RED native counter
+   assertion despite equal points; restored original host suite GREEN.
+Private copies have no tools/vendor symlinks and are not git worktrees.
+
+Final host source totals: 528 lines / 23676 bytes, versus original 583 lines /
+25162 bytes: net Python reduction 55 lines / 1486 bytes. This includes new host
+framing/edit/refusal/platform coverage and retains all original host query groups.
+Final results: Rust 4/4, nearest host 62/62, display host 24/24; diff whitespace
+check clean. Near timing ratios 0.295 / 0.101 / 0.073 on the last host run (original
+<=0.9 limits unchanged). Native host artifact byte hash unchanged.
+
+Validation: cargo test --manifest-path native/pure_core/Cargo.toml --release
+--test nurbs_golden; both modified host suites with bundled Python and existing
+release artifact. Full gate and commit deliberately NOT run (owner scope).

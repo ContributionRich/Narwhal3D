@@ -212,11 +212,12 @@ def _():
     gate = _load_gate()
     crate = Path(CRATE)
     closure = gate.require_rust_public_closure(crate)
-    assert len(closure) == 63
+    assert len(closure) == 73
     assert set(gate.RUST_INTEGRATION_SUITES) == {
             "alias_golden", "unit_golden", "interpolate_golden", "svgpath_golden",
             "bearing_golden", "calc_golden", "coords_golden", "unitformat_golden",
             "macro_golden", "joinchain_golden", "rebuild_golden", "blend_golden", "norm_golden",
+                        "nurbs_golden", "arclength_golden",
         }
     public_source = (Path(ROOT) / "scripts/create_public_branch.py").read_text()
     for retired in ("spike/alias_reference.py", "spike/units_reference.py", "spike/interpolate_reference.py",
@@ -263,7 +264,7 @@ def _():
         result = gate.step_tests(crate)
         assert set(result["integration_suites"]) == set(gate.RUST_INTEGRATION_SUITES)
         assert all(v == {"compiled": True, "passed": 2} for v in result["integration_suites"].values())
-        assert run.call_count == 14
+        assert run.call_count == 16
     for fault in ("missing-compilation", "discovery-only", "wrong-target", "zero-tests", "filtered", "failed"):
         rejects(gate.step_tests, fault)
     # Each individual target must be load-bearing, not merely the first one.
@@ -297,10 +298,10 @@ def _():
     broken = source.replace(repr(fixture) + ",", "")
     assert broken != source
     real_read = Path.read_text
-    # Every round-19 path is required independently; inspect manifests, not fixtures.
+    # Every round-19/20 path is required independently; inspect manifests, not fixtures.
     added = [path for path in closure
-             if Path(path).name.startswith(("blend_", "norm_"))]
-    assert len(added) == 10
+             if Path(path).name.startswith(("blend_", "norm_", "nurbs_", "arclength_"))]
+    assert len(added) == 20
     for missing in added:
         omitted = source.replace(repr(missing) + ",", "")
         assert omitted != source
@@ -312,7 +313,7 @@ def _():
             except gate.GateError:
                 pass
             else:
-                raise AssertionError("round-19 public path omission survived: " + missing)
+                raise AssertionError("round-19/20 public path omission survived: " + missing)
     def read(path, *args, **kwargs):
         return broken if path == Path(ROOT) / "scripts/create_public_branch.py" else real_read(path, *args, **kwargs)
     def closure_rejects():

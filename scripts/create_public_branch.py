@@ -332,6 +332,16 @@ TEST_FILES = (
     "spike/test_document_compatibility.py", "spike/fixtures/document_schema1_historical.json",
 )
 NATIVE_FILES = (
+    'native/pure_core/tests/nurbs_golden.rs',
+    'native/pure_core/tests/arclength_golden.rs',
+    'native/pure_core/tests/fixtures/nurbs_curves.txt',
+    'native/pure_core/tests/fixtures/nurbs_nearest.txt',
+    'native/pure_core/tests/fixtures/nurbs_sample.txt',
+    'native/pure_core/tests/fixtures/nurbs_display.txt',
+    'native/pure_core/tests/fixtures/nurbs_host.txt',
+    'native/pure_core/tests/fixtures/nurbs_provenance.txt',
+    'native/pure_core/tests/fixtures/arclength_curves.txt',
+    'native/pure_core/tests/fixtures/arclength_golden.txt',
     'native/pure_core/tests/blend_golden.rs',
     'native/pure_core/tests/norm_golden.rs',
     'native/pure_core/tests/fixtures/blend_numeric.txt',
