@@ -35,6 +35,7 @@ pub mod fit;
 pub mod gridsnap;
 pub mod interpolate;
 pub mod joinchain;
+pub mod line_samples;
 pub mod macro_parse;
 pub mod macro_plan;
 mod metadata_ffi;

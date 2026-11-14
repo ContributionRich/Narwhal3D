@@ -112,6 +112,7 @@ PURE_CORE_PYTESTS = (
     "spike/test_catenary_owned.py",
     "spike/test_native_intersect.py",
     "spike/test_pure_core_curve_hits_gate.py",
+    "spike/test_pure_core_line_samples_gate.py",
     "spike/test_native_coil_preview.py",
     "spike/test_preview_curve_native.py",
     "spike/test_preview24_boundaries.py",
@@ -1393,6 +1394,80 @@ def probe_pure_core_curve_hits(path: Path, python: Path | str = sys.executable, 
     return identity
 
 
+# LineCurve samples (native_nearest.sample for a LineCurve): ON_LineCurve::Evaluate and
+# ON_Line::PointAt at sample_curve's parameters. A library without it loses only the Rust
+# route: lines then call PointAt.
+PURE_CORE_LINE_SAMPLES_EXPORT = "narwhal_pure_core_line_samples"
+# (sys.platform, machine) pairs; narwhal3d/native_nearest.py LINE_QUALIFIED_PLATFORMS must
+# carry the same set (spike/test_pure_core_line_samples_gate.py). Rust never fuses a
+# multiply-add, but a rhino3dm build that does (clang's default on arm64) rounds PointAt
+# differently, so a pair joins only once its artifact is qualified here. At run time the
+# route also requires the loaded rhino3dm to pass native_nearest's PointAt parity check.
+PURE_CORE_LINE_SAMPLES_QUALIFIED_PLATFORMS = frozenset({("linux", "x86_64")})
+# The digest pins the exact bits of 129 samples on each of three witness lines (-0.0 ends,
+# scales 1e-9 and 1e15, shifted domains); it is also the digest of rhino3dm 8.35.0's own
+# PointAt at the same parameters.
+PURE_CORE_LINE_SAMPLES_IDENTITY = {
+    "export": PURE_CORE_LINE_SAMPLES_EXPORT,
+    "empty_domain_status": -2, "nan_status": -2, "zero_intervals_status": -2,
+    "huge_request_status": -2, "small_buffer_status": -3, "null_line_status": -1,
+    "refusals_write": False,
+    "samples_sha256": "42e441d8a0645d7f7e5678549a3058fbc64f62dbe77325ac0f4c2f97573880ea",
+}
+PURE_CORE_LINE_SAMPLES_PROBE = r'''
+import ctypes as c, hashlib, json, struct, sys
+fn = c.CDLL(sys.argv[1]).narwhal_pure_core_line_samples
+D, Z = c.POINTER(c.c_double), c.c_size_t
+fn.argtypes = [D, c.c_double, c.c_double, Z, D, Z]
+fn.restype = c.c_int32
+h = float.fromhex
+lines = [  # from.xyz, to.xyz, T0, T1 as rhino3dm stores them
+    ["-0x0.0p+0", "0x1.999999999999ap-4", "0x1.8p+1", "0x1.cp+2", "-0x0.0p+0",
+     "0x1.5555555555555p-2", "0x0.0p+0", "0x1.df732362bf072p+2"],
+    ["0x1.c6bf52634p+49", "-0x1.c6bf52634p+47", "0x1.3e52b9abep+49", "-0x1.10d9316ecp+48",
+     "0x1.9945ca262p+49", "0x1.c6bf52634p+49", "-0x1.d99999999999ap+1", "0x1.6333333333333p+3"],
+    ["0x1.12e0be826d695p-30", "0x1.12e0be826d695p-29", "-0x0.0p+0", "0x1.12e0be826d695p-30",
+     "-0x1.80d43de9cc603p-31", "0x1.5798ee2308c3ap-28", "0x1.e848p+19", "0x1.e84809999999ap+19"],
+]
+bits = b""
+for values in lines:
+    v = [h(x) for x in values]
+    out = (c.c_double * 387)()
+    if fn((c.c_double * 6)(*v[:6]), v[6], v[7], 128, out, 387) != 0:
+        raise RuntimeError("the export refused a witness line")
+    bits += struct.pack("<387d", *out)
+line = (c.c_double * 6)(0, 0, 0, 1, 2, 3)
+out = (c.c_double * 30)(*[-9.0] * 30)
+statuses = {
+    "empty_domain_status": fn(line, 1.0, 1.0, 4, out, 30),
+    "nan_status": fn(line, float("nan"), 1.0, 4, out, 30),
+    "zero_intervals_status": fn(line, 0.0, 1.0, 0, out, 30),
+    "huge_request_status": fn(line, 0.0, 1.0, 2**20 + 1, out, 30),
+    "small_buffer_status": fn(line, 0.0, 1.0, 9, out, 29),
+    "null_line_status": fn(None, 0.0, 1.0, 4, out, 30),
+}
+print(json.dumps({"export": "narwhal_pure_core_line_samples", **statuses,
+                  "refusals_write": list(out) != [-9.0] * 30,
+                  "samples_sha256": hashlib.sha256(bits).hexdigest()}, sort_keys=True))
+'''
+
+
+def probe_pure_core_line_samples(path: Path, python: Path | str = sys.executable, *, env=None) -> dict:
+    """Require the line samples export to give the pinned witness bits and refusals."""
+    if not path.is_file() or path.is_symlink():
+        raise ValueError(f"missing regular pure-core library: {path}")
+    try:
+        completed = subprocess.run(
+            [str(python), "-I", "-B", "-c", PURE_CORE_LINE_SAMPLES_PROBE, str(path.resolve())],
+            env=env, text=True, capture_output=True, check=True, timeout=30)
+        identity = json.loads(completed.stdout)
+    except (OSError, subprocess.SubprocessError, ValueError) as error:
+        raise ValueError(f"cannot verify pure-core line samples export: {getattr(error, 'stderr', '') or error}") from error
+    if identity != PURE_CORE_LINE_SAMPLES_IDENTITY:
+        raise ValueError(f"pure-core line samples evidence differs: {identity!r}")
+    return identity
+
+
 # Additive unit-aware SVG export (vector_export.write_svg(unit=...)): ABI 1 and the legacy
 # narwhal_pure_core_svg_encode_into are unchanged, so a library without it loses only the
 # native route for unit SVGs. Formatting is IEEE division + Rust's exact decimal printing, no
@@ -1775,6 +1850,15 @@ def step_curve_hits(lib_path: Path) -> dict[str, object]:
     return {"status": "ok", "curve_hits": identity, "command": "ctypes curve/curve probe"}
 
 
+def step_line_samples(lib_path: Path) -> dict[str, object]:
+    """Qualify the line samples export; required for the library to carry it."""
+    try:
+        identity = probe_pure_core_line_samples(lib_path)
+    except ValueError as exc:
+        raise GateError(str(exc)) from exc
+    return {"status": "ok", "line_samples": identity, "command": "ctypes line samples probe"}
+
+
 def step_svg_unit(lib_path: Path) -> dict[str, object]:
     """Qualify the unit-aware SVG export; required for the library to carry it."""
     try:
@@ -1862,6 +1946,7 @@ def run_gate(crate_rel: str) -> dict[str, object]:
     steps["direct_abi"] = step_direct_abi(lib)
     steps["nearest_batch"] = step_nearest_batch(lib)
     steps["curve_hits"] = step_curve_hits(lib)
+    steps["line_samples"] = step_line_samples(lib)
     steps["svg_unit"] = step_svg_unit(lib)
     steps["adapter"] = step_adapter(crate, lib)
     steps["windows_check"] = step_windows_check(crate)
@@ -1901,7 +1986,7 @@ def main(argv: list[str]) -> int:
     else:
         print(f"pure-core source gate: OK (crate {report['crate']})")
         for name in ("fmt", "clippy", "tests", "release_build",
-                     "direct_abi", "nearest_batch", "curve_hits", "svg_unit",
+                     "direct_abi", "nearest_batch", "curve_hits", "line_samples", "svg_unit",
                      "adapter", "windows_check"):
             step = report["steps"][name]
             detail = step.get("passed", step.get("suites", step.get("reason", "")))

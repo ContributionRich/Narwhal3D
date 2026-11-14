@@ -223,6 +223,7 @@ def _():
         "spike/test_native_coil.py",
         "spike/test_native_intersect.py",
         "spike/test_pure_core_curve_hits_gate.py",
+        "spike/test_pure_core_line_samples_gate.py",
         "spike/test_native_coil_preview.py",
         "spike/test_preview_curve_native.py",
         "spike/test_native_tessellate.py",
