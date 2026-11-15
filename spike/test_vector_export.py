@@ -1,4 +1,4 @@
-"""Pure-Python tests for the PDF, SVG, and AI vector writers.
+"""Public file/host contract tests for the required Rust PDF, SVG and AI writers.
 
 The module only WRITES strokes the caller has already flattened to cubic
 Beziers; these tests pin the file-format invariants:

@@ -18,12 +18,11 @@
 //! The decoded result is a self-describing packed buffer (an entity's `layer`
 //! is a free string, NOT an index into the LAYER table).
 //!
-//! The Python binding owns the layer merge (entity-named layers added with
-//! color 7, caller order preserved) and the entity-type validation (an
-//! unknown type is rejected), and packs the result into the caller-owned
-//! arrays this module reads. This module owns only the byte building, so the
-//! two passes share one `build_bytes` and the size query can never disagree
-//! with the encode.
+//! The legacy optional ABI receives premerged layers from its old adapter.
+//! The required owned writer API also owns layer merging, unit/version metadata,
+//! finite-input validation and Latin-1 serialization. Python only snapshots host
+//! iterables, marshals opaque mapping-key identities and frames Unicode errors.
+//! Both APIs share the serializer; the original C ABI remains compatible.
 
 const ERR_NULL: i32 = -1;
 const ERR_INPUT: i32 = -2;
@@ -80,6 +79,9 @@ struct Dxf<'a> {
     nums: &'a [f64],
     point_counts: &'a [i64],
     closed_flags: &'a [i64],
+    header: Option<(i64, Option<i64>, bool)>,
+    short_polylines: bool,
+    entity_names: Option<(&'a [u8], &'a [i64])>,
 }
 
 /// The per-entity coordinate arity (the count of `f64`s this entity consumes
@@ -191,6 +193,9 @@ fn validate(r: &RawInput) -> Option<Dxf<'_>> {
         nums,
         point_counts: pc,
         closed_flags: cf,
+        header: None,
+        short_polylines: false,
+        entity_names: None,
     })
 }
 
@@ -216,8 +221,10 @@ fn capacity_bound(d: &Dxf) -> usize {
         } else {
             1
         };
-        emitted_names =
-            emitted_names.saturating_add((d.layer_name_lens[lid] as usize).saturating_mul(repeats));
+        let length = d
+            .entity_names
+            .map_or(d.layer_name_lens[lid], |(_, lengths)| lengths[e]);
+        emitted_names = emitted_names.saturating_add((length as usize).saturating_mul(repeats));
     }
     // All arithmetic saturates rather than wrapping. Valid adapter-bounded
     // inputs remain far below usize::MAX; a hostile oversized ABI call is
@@ -248,14 +255,17 @@ fn build_into(d: &Dxf, out: &mut [u8]) -> usize {
         p + src.len()
     }
     // `emit` writes one DXF group pair: the code line, then the value line.
-    fn emit(out: &mut [u8], p: usize, code: &str, value: &str) -> usize {
+    fn emit_raw(out: &mut [u8], p: usize, code: &str, value: &[u8]) -> usize {
         let mut p = put(out, p, code.as_bytes());
         out[p] = b'\n';
         p += 1;
-        p = put(out, p, value.as_bytes());
+        p = put(out, p, value);
         out[p] = b'\n';
         p += 1;
         p
+    }
+    fn emit(out: &mut [u8], p: usize, code: &str, value: &str) -> usize {
+        emit_raw(out, p, code, value.as_bytes())
     }
     // --- HEADER ---------------------------------------------------------
     p = emit(out, p, "0", "SECTION");
@@ -264,10 +274,15 @@ fn build_into(d: &Dxf, out: &mut [u8]) -> usize {
     let modern = d.entity_types.contains(&T_SPLINE)
         || d.layer_colors.iter().any(|color| *color > 0xFF_FFFF)
         || d.colors.iter().any(|color| *color > 0xFF_FFFF);
+    let (insunits, measurement, modern) = d.header.unwrap_or((4, None, modern));
     let version = if modern { "AC1027" } else { "AC1009" };
     p = emit(out, p, "1", version);
     p = emit(out, p, "9", "$INSUNITS");
-    p = emit(out, p, "70", "4");
+    p = emit(out, p, "70", &insunits.to_string());
+    if let Some(measurement) = measurement {
+        p = emit(out, p, "9", "$MEASUREMENT");
+        p = emit(out, p, "70", &measurement.to_string());
+    }
     p = emit(out, p, "0", "ENDSEC");
 
     // --- TABLES (LAYER) -------------------------------------------------
@@ -279,9 +294,14 @@ fn build_into(d: &Dxf, out: &mut [u8]) -> usize {
     let mut noff = 0usize;
     for i in 0..d.layer_name_lens.len() {
         let len = d.layer_name_lens[i] as usize;
-        let name = std::str::from_utf8(&d.layer_names[noff..noff + len]).unwrap_or("");
+        let raw = &d.layer_names[noff..noff + len];
+        let name = if d.header.is_some() {
+            raw
+        } else {
+            std::str::from_utf8(raw).unwrap_or("").as_bytes()
+        };
         p = emit(out, p, "0", "LAYER");
-        p = emit(out, p, "2", name);
+        p = emit_raw(out, p, "2", name);
         p = emit(out, p, "70", "0");
         let is_true_color = d.layer_colors[i] > 0xFF_FFFF;
         let layer_color = if is_true_color {
@@ -305,18 +325,34 @@ fn build_into(d: &Dxf, out: &mut [u8]) -> usize {
     // --- ENTITIES -------------------------------------------------------
     p = emit(out, p, "0", "SECTION");
     p = emit(out, p, "2", "ENTITIES");
+    let mut offsets = Vec::with_capacity(d.layer_name_lens.len());
+    let mut offset = 0usize;
+    for length in d.layer_name_lens {
+        offsets.push(offset);
+        offset += *length as usize;
+    }
     let mut off = 0usize;
+    let mut entity_name_offset = 0usize;
     for e in 0..d.entity_types.len() {
         let t = d.entity_types[e];
         let lid = d.layer_ids[e] as usize;
         // Recompute the layer name from the concatenated buffer (the layer
         // ids were validated in range, so this is safe).
-        let mut loff = 0usize;
-        for i in 0..lid {
-            loff += d.layer_name_lens[i] as usize;
-        }
+        let loff = offsets[lid];
         let ll = d.layer_name_lens[lid] as usize;
-        let lname = std::str::from_utf8(&d.layer_names[loff..loff + ll]).unwrap_or("");
+        let raw = if let Some((names, lengths)) = d.entity_names {
+            let end = entity_name_offset + lengths[e] as usize;
+            let name = &names[entity_name_offset..end];
+            entity_name_offset = end;
+            name
+        } else {
+            &d.layer_names[loff..loff + ll]
+        };
+        let lname = if d.header.is_some() {
+            raw
+        } else {
+            std::str::from_utf8(raw).unwrap_or("").as_bytes()
+        };
         let is_true_color = d.colors[e] > 0xFF_FFFF;
         let color = if is_true_color {
             d.colors[e] - 0x100_0000
@@ -330,7 +366,7 @@ fn build_into(d: &Dxf, out: &mut [u8]) -> usize {
 
         if t == T_LINE {
             p = emit(out, p, "0", "LINE");
-            p = emit(out, p, "8", lname);
+            p = emit_raw(out, p, "8", lname);
             p = emit(out, p, color_code, &color);
             p = emit(out, p, "10", &fmt(off));
             p = emit(out, p, "20", &fmt(off + 1));
@@ -340,7 +376,7 @@ fn build_into(d: &Dxf, out: &mut [u8]) -> usize {
             p = emit(out, p, "31", &fmt(off + 5));
         } else if t == T_CIRCLE {
             p = emit(out, p, "0", "CIRCLE");
-            p = emit(out, p, "8", lname);
+            p = emit_raw(out, p, "8", lname);
             p = emit(out, p, color_code, &color);
             p = emit(out, p, "10", &fmt(off));
             p = emit(out, p, "20", &fmt(off + 1));
@@ -348,7 +384,7 @@ fn build_into(d: &Dxf, out: &mut [u8]) -> usize {
             p = emit(out, p, "40", &fmt(off + 3));
         } else if t == T_ARC {
             p = emit(out, p, "0", "ARC");
-            p = emit(out, p, "8", lname);
+            p = emit_raw(out, p, "8", lname);
             p = emit(out, p, color_code, &color);
             p = emit(out, p, "10", &fmt(off));
             p = emit(out, p, "20", &fmt(off + 1));
@@ -359,14 +395,14 @@ fn build_into(d: &Dxf, out: &mut [u8]) -> usize {
         } else if t == T_POLYLINE {
             let pc = d.point_counts[e] as usize;
             p = emit(out, p, "0", "POLYLINE");
-            p = emit(out, p, "8", lname);
+            p = emit_raw(out, p, "8", lname);
             p = emit(out, p, color_code, &color);
             p = emit(out, p, "66", "1");
 
             p = emit(out, p, "70", if d.closed_flags[e] != 0 { "1" } else { "0" });
             for k in 0..pc {
                 p = emit(out, p, "0", "VERTEX");
-                p = emit(out, p, "8", lname);
+                p = emit_raw(out, p, "8", lname);
                 p = emit(out, p, "10", &fmt(off + 3 * k));
                 p = emit(out, p, "20", &fmt(off + 3 * k + 1));
                 p = emit(out, p, "30", &fmt(off + 3 * k + 2));
@@ -377,7 +413,7 @@ fn build_into(d: &Dxf, out: &mut [u8]) -> usize {
             let spans = (pc - 1) / 3;
             let knot_count = pc + 4;
             p = emit(out, p, "0", "SPLINE");
-            p = emit(out, p, "8", lname);
+            p = emit_raw(out, p, "8", lname);
             p = emit(out, p, color_code, &color);
             p = emit(out, p, "70", if d.closed_flags[e] != 0 { "1" } else { "0" });
             p = emit(out, p, "71", "3");
@@ -403,7 +439,11 @@ fn build_into(d: &Dxf, out: &mut [u8]) -> usize {
                 p = emit(out, p, "30", &fmt(off + 3 * k + 2));
             }
         }
-        off += entity_arity(t, d.point_counts[e]).unwrap_or(0) as usize;
+        off += if d.short_polylines && t == T_POLYLINE {
+            3 * d.point_counts[e] as usize
+        } else {
+            entity_arity(t, d.point_counts[e]).unwrap_or(0) as usize
+        };
     }
     p = emit(out, p, "0", "ENDSEC");
 
@@ -1328,6 +1368,465 @@ pub unsafe extern "C" fn narwhal_pure_core_dxf_decode(
     };
     result.write_to(out_slice);
     0
+}
+
+// Required writer API. The legacy exports above keep their original contracts;
+// this typed boundary retains source metadata needed for exact legacy headers.
+/// Owned descriptor ABI v2 distinguishes layer-key identity from entity text.
+/// Admission must check this before passing any typed descriptor to the codec.
+#[no_mangle]
+pub extern "C" fn narwhal_pure_core_dxf_owned_abi_version() -> u32 {
+    2
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct DxfOwnedLayer {
+    pub name: i64,
+    pub color: i64,
+}
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct DxfOwnedEntity {
+    pub kind: i64,
+    pub name: i64,
+    pub color: i64,
+    pub points: i64,
+    pub closed: i64,
+    pub true_color: i64,
+    pub label: i64,
+}
+#[repr(C)]
+pub struct DxfOwnedInput {
+    pub version: u64,
+    pub names: *const u8,
+    pub names_len: usize,
+    pub lengths: *const i64,
+    pub names_count: usize,
+    pub layers: *const DxfOwnedLayer,
+    pub layer_count: usize,
+    pub entities: *const DxfOwnedEntity,
+    pub entity_count: usize,
+    pub nums: *const f64,
+    pub nums_len: usize,
+    pub unit: *const u8,
+    pub unit_len: usize,
+    pub unit_mode: u8,
+}
+#[derive(Debug)]
+struct WriterError(i64, usize);
+fn writer_wtf8(mut bytes: &[u8]) -> bool {
+    while !bytes.is_empty() {
+        match std::str::from_utf8(bytes) {
+            Ok(_) => return true,
+            Err(error) => {
+                let rest = &bytes[error.valid_up_to()..];
+                if rest.len() < 3
+                    || rest[0] != 0xed
+                    || !(0xa0..=0xbf).contains(&rest[1])
+                    || !(0x80..=0xbf).contains(&rest[2])
+                {
+                    return false;
+                }
+                bytes = &rest[3..];
+            }
+        }
+    }
+    true
+}
+fn writer_color(value: i64) -> bool {
+    (0..=255).contains(&value) || (0x1000000..=0x1ffffff).contains(&value)
+}
+fn writer_units(name: &[u8], mode: u8) -> Result<(i64, Option<i64>), WriterError> {
+    if mode == 0 {
+        return Ok((4, None));
+    }
+    if mode != 1 {
+        return Err(WriterError(-2, 0));
+    }
+    let (code, english) = match name {
+        b"Inches" => (1, true),
+        b"Feet" => (2, true),
+        b"Miles" => (3, true),
+        b"Millimeters" => (4, false),
+        b"Centimeters" => (5, false),
+        b"Meters" => (6, false),
+        b"Kilometers" => (7, false),
+        b"Microinches" => (8, true),
+        b"Mils" => (9, true),
+        b"Yards" => (10, true),
+        b"Angstroms" => (11, false),
+        b"Nanometers" => (12, false),
+        b"Microns" => (13, false),
+        b"Decimeters" => (14, false),
+        b"Dekameters" => (15, false),
+        b"Hectometers" => (16, false),
+        b"Gigameters" => (17, false),
+        _ => return Ok((0, None)),
+    };
+    Ok((code, Some(if english { 0 } else { 1 })))
+}
+struct WriterPlan {
+    names: Vec<u8>,
+    lengths: Vec<i64>,
+    layer_colors: Vec<i64>,
+    kinds: Vec<i64>,
+    lids: Vec<i64>,
+    colors: Vec<i64>,
+    points: Vec<i64>,
+    closed: Vec<i64>,
+    nums: Vec<f64>,
+    units: (i64, Option<i64>),
+    modern: bool,
+    encoding: i64,
+    entity_names: Vec<u8>,
+    entity_lengths: Vec<i64>,
+}
+impl WriterPlan {
+    fn view(&self) -> Dxf<'_> {
+        Dxf {
+            layer_names: &self.names,
+            layer_name_lens: &self.lengths,
+            layer_colors: &self.layer_colors,
+            entity_types: &self.kinds,
+            layer_ids: &self.lids,
+            colors: &self.colors,
+            nums: &self.nums,
+            point_counts: &self.points,
+            closed_flags: &self.closed,
+            header: Some((self.units.0, self.units.1, self.modern)),
+            short_polylines: true,
+            entity_names: if self.entity_lengths.is_empty() {
+                None
+            } else {
+                Some((&self.entity_names, &self.entity_lengths))
+            },
+        }
+    }
+}
+unsafe fn writer_plan(input: *const DxfOwnedInput) -> Result<WriterPlan, WriterError> {
+    use std::collections::HashMap;
+    let r = unsafe { crate::checked_slice(input, 1) }.ok_or(WriterError(-1, 0))?;
+    let r = &r[0];
+    if r.version != 2 {
+        return Err(WriterError(-2, 0));
+    }
+    if r.names_count > 1_000_000
+        || r.layer_count > 1_000_000
+        || r.entity_count > 5_000_000
+        || r.nums_len > 30_000_000
+        || r.names_len > 64 * 1024 * 1024
+        || r.unit_len > 64 * 1024 * 1024
+    {
+        return Err(WriterError(-3, 0));
+    }
+    let names = unsafe { crate::checked_slice(r.names, r.names_len) }.ok_or(WriterError(-1, 0))?;
+    let lengths =
+        unsafe { crate::checked_slice(r.lengths, r.names_count) }.ok_or(WriterError(-1, 0))?;
+    let layers =
+        unsafe { crate::checked_slice(r.layers, r.layer_count) }.ok_or(WriterError(-1, 0))?;
+    let entities =
+        unsafe { crate::checked_slice(r.entities, r.entity_count) }.ok_or(WriterError(-1, 0))?;
+    let nums = unsafe { crate::checked_slice(r.nums, r.nums_len) }.ok_or(WriterError(-1, 0))?;
+    let unit = unsafe { crate::checked_slice(r.unit, r.unit_len) }.ok_or(WriterError(-1, 0))?;
+    let mut strings = Vec::with_capacity(lengths.len());
+    let mut offset = 0usize;
+    for (i, n) in lengths.iter().enumerate() {
+        let len = usize::try_from(*n).map_err(|_| WriterError(-2, i))?;
+        let end = offset
+            .checked_add(len)
+            .filter(|n| *n <= names.len())
+            .ok_or(WriterError(-2, i))?;
+        let text = &names[offset..end];
+        if !writer_wtf8(text) {
+            return Err(WriterError(-2, i));
+        }
+        if text.iter().any(|b| matches!(*b, 0 | 10 | 13)) {
+            return Err(WriterError(-45, i));
+        }
+        strings.push(text);
+        offset = end;
+    }
+    if offset != names.len() {
+        return Err(WriterError(-2, 0));
+    }
+    let mut order = Vec::new();
+    let mut colors = Vec::new();
+    let mut ids = HashMap::new();
+    for (i, layer) in layers.iter().enumerate() {
+        if !writer_color(layer.color) {
+            return Err(WriterError(-40, i));
+        }
+        if layer.name < 0 || layer.name as usize >= strings.len() {
+            return Err(WriterError(-2, i));
+        }
+        if let Some(index) = ids.get(&layer.name).copied() {
+            colors[index] = layer.color;
+        } else {
+            ids.insert(layer.name, order.len());
+            order.push(layer.name);
+            colors.push(layer.color);
+        }
+    }
+    let mut p = WriterPlan {
+        names: Vec::new(),
+        lengths: Vec::new(),
+        layer_colors: Vec::new(),
+        kinds: Vec::new(),
+        lids: Vec::new(),
+        colors: Vec::new(),
+        points: Vec::new(),
+        closed: Vec::new(),
+        nums: nums.to_vec(),
+        units: writer_units(unit, r.unit_mode)?,
+        modern: false,
+        encoding: 0,
+        entity_names: Vec::new(),
+        entity_lengths: Vec::new(),
+    };
+    let mut cursor = 0usize;
+    for (i, e) in entities.iter().enumerate() {
+        if e.name < 0
+            || e.name as usize >= strings.len()
+            || e.label < 0
+            || e.label as usize >= strings.len()
+        {
+            return Err(WriterError(-2, i));
+        }
+        if !matches!(e.closed, 0 | 1) || !matches!(e.true_color, 0 | 1) {
+            return Err(WriterError(-46, i));
+        }
+        let color = if e.true_color == 1 {
+            if !(0..=0xffffff).contains(&e.color) {
+                return Err(WriterError(-41, i));
+            }
+            p.modern = true;
+            0x1000000 + e.color
+        } else {
+            if !writer_color(e.color) {
+                return Err(WriterError(-40, i));
+            }
+            e.color
+        };
+        let arity = match e.kind {
+            T_LINE | T_ARC => 6,
+            T_CIRCLE => 4,
+            T_POLYLINE if e.points >= 0 => usize::try_from(e.points)
+                .ok()
+                .and_then(|n| n.checked_mul(3))
+                .ok_or(WriterError(-3, i))?,
+            T_SPLINE => {
+                p.modern = true;
+                usize::try_from(entity_arity(e.kind, e.points).ok_or(WriterError(-43, i))?)
+                    .map_err(|_| WriterError(-3, i))?
+            }
+            _ => return Err(WriterError(-42, i)),
+        };
+        let end = cursor
+            .checked_add(arity)
+            .filter(|n| *n <= nums.len())
+            .ok_or(WriterError(-2, i))?;
+        for (j, value) in nums[cursor..end].iter().enumerate() {
+            if !value.is_finite() {
+                return Err(WriterError(-44, cursor + j));
+            }
+        }
+        if matches!(e.kind, T_CIRCLE | T_ARC) && nums[cursor + 3] <= 0. {
+            return Err(WriterError(-47, i));
+        }
+        cursor = end;
+        let lid = if let Some(index) = ids.get(&e.name) {
+            *index
+        } else {
+            let index = order.len();
+            ids.insert(e.name, index);
+            order.push(e.name);
+            colors.push(7);
+            index
+        };
+        p.kinds.push(e.kind);
+        p.lids.push(lid as i64);
+        p.colors.push(color);
+        p.points.push(e.points);
+        p.closed.push(e.closed);
+    }
+    if cursor != nums.len() {
+        return Err(WriterError(-2, 0));
+    }
+    let is_latin1 = |name: &[u8]| {
+        std::str::from_utf8(name).is_ok_and(|text| text.chars().all(|ch| ch as u32 <= 255))
+    };
+    let latin1 = order.iter().all(|id| is_latin1(strings[*id as usize]))
+        && entities
+            .iter()
+            .all(|e| is_latin1(strings[e.label as usize]));
+    p.encoding = if latin1 { 0 } else { 1 };
+    for (id, color) in order.iter().zip(colors) {
+        let name = strings[*id as usize];
+        let start = p.names.len();
+        if latin1 {
+            // The test above guarantees valid UTF-8 with Latin-1 code points.
+            p.names.extend(
+                std::str::from_utf8(name)
+                    .map_err(|_| WriterError(-2, 0))?
+                    .chars()
+                    .map(|ch| ch as u8),
+            );
+        } else {
+            p.names.extend_from_slice(name);
+        }
+        p.lengths.push((p.names.len() - start) as i64);
+        p.layer_colors.push(color);
+        p.modern |= color > 0xffffff;
+    }
+    // Equal host mapping keys can have different serialized spellings (True
+    // and 1). Table identity controls colors/order, not per-entity label text.
+    if entities
+        .iter()
+        .any(|e| strings[e.name as usize] != strings[e.label as usize])
+    {
+        for e in entities {
+            let name = strings[e.label as usize];
+            let start = p.entity_names.len();
+            if latin1 {
+                p.entity_names.extend(
+                    std::str::from_utf8(name)
+                        .map_err(|_| WriterError(-2, 0))?
+                        .chars()
+                        .map(|ch| ch as u8),
+                );
+            } else {
+                p.entity_names.extend_from_slice(name);
+            }
+            p.entity_lengths.push((p.entity_names.len() - start) as i64);
+        }
+    }
+    if capacity_bound(&p.view()) > 512 * 1024 * 1024 {
+        return Err(WriterError(-3, 0));
+    }
+    Ok(p)
+}
+fn writer_result(result: Result<(), WriterError>, diag: &mut [i64]) -> i32 {
+    match result {
+        Ok(()) => 0,
+        Err(WriterError(code, index)) => {
+            diag.copy_from_slice(&[code, index as i64, 0]);
+            code as i32
+        }
+    }
+}
+/// Validate caller layer colors before marshaling entity point objects. This
+/// preserves the original error priority without a second Python validator.
+/// # Safety
+/// colors spans count i64s; diagnostic spans 3 exclusively writable i64s.
+#[no_mangle]
+pub unsafe extern "C" fn narwhal_pure_core_dxf_owned_colors(
+    colors: *const i64,
+    count: usize,
+    diagnostics: *mut i64,
+) -> i32 {
+    let Some(diag) = (unsafe { crate::checked_slice_mut(diagnostics, 3) }) else {
+        return -1;
+    };
+    diag.fill(0);
+    let result = (|| {
+        if count > 1_000_000 {
+            return Err(WriterError(-3, 0));
+        }
+        let colors = unsafe { crate::checked_slice(colors, count) }.ok_or(WriterError(-1, 0))?;
+        for (i, c) in colors.iter().enumerate() {
+            if !writer_color(*c) {
+                return Err(WriterError(-40, i));
+            }
+        }
+        Ok(())
+    })();
+    writer_result(result, diag)
+}
+/// Resolve explicit/default unit metadata, identically to the required writer.
+/// # Safety
+/// name spans len bytes; out spans 2 exclusively writable i64s.
+#[no_mangle]
+pub unsafe extern "C" fn narwhal_pure_core_dxf_owned_units(
+    name: *const u8,
+    len: usize,
+    mode: u8,
+    out: *mut i64,
+) -> i32 {
+    let Some(bytes) = (unsafe { crate::checked_slice(name, len) }) else {
+        return -1;
+    };
+    let Some(out) = (unsafe { crate::checked_slice_mut(out, 2) }) else {
+        return -1;
+    };
+    match writer_units(bytes, mode) {
+        Ok((code, measurement)) => {
+            out[0] = code;
+            out[1] = measurement.unwrap_or(-1);
+            0
+        }
+        Err(e) => e.0 as i32,
+    }
+}
+/// Compute a bounded capacity without formatting coordinates or publishing bytes.
+/// # Safety
+/// input points to one valid typed descriptor with valid nested spans. Output
+/// size spans one usize; diagnostics spans 3 exclusively writable i64s.
+#[no_mangle]
+pub unsafe extern "C" fn narwhal_pure_core_dxf_owned_capacity(
+    input: *const DxfOwnedInput,
+    size: *mut usize,
+    diagnostics: *mut i64,
+) -> i32 {
+    let Some(diag) = (unsafe { crate::checked_slice_mut(diagnostics, 3) }) else {
+        return -1;
+    };
+    diag.fill(0);
+    let result = (|| {
+        let out = unsafe { crate::checked_slice_mut(size, 1) }.ok_or(WriterError(-1, 0))?;
+        let plan = unsafe { writer_plan(input) }?;
+        out[0] = capacity_bound(&plan.view());
+        Ok(())
+    })();
+    writer_result(result, diag)
+}
+/// Serialize once, atomically. encoding=0 is final Latin-1 bytes. encoding=1
+/// publishes the original UTF-8 text solely for host UnicodeEncodeError framing;
+/// the host must refuse it, never write it as a DXF. No pointers are retained.
+/// # Safety
+/// input/nested spans are readable; output spans capacity bytes; written and
+/// encoding each span one i64, diagnostics 3 i64s. All regions are nonoverlapping.
+#[no_mangle]
+pub unsafe extern "C" fn narwhal_pure_core_dxf_owned_encode(
+    input: *const DxfOwnedInput,
+    out: *mut u8,
+    capacity: usize,
+    written: *mut i64,
+    encoding: *mut i64,
+    diagnostics: *mut i64,
+) -> i32 {
+    let Some(diag) = (unsafe { crate::checked_slice_mut(diagnostics, 3) }) else {
+        return -1;
+    };
+    diag.fill(0);
+    let result = (|| {
+        let n = unsafe { crate::checked_slice_mut(written, 1) }.ok_or(WriterError(-1, 0))?;
+        let enc = unsafe { crate::checked_slice_mut(encoding, 1) }.ok_or(WriterError(-1, 0))?;
+        let plan = unsafe { writer_plan(input) }?;
+        let bound = capacity_bound(&plan.view());
+        if capacity < bound {
+            return Err(WriterError(-3, 0));
+        }
+        let dest = unsafe { crate::checked_slice_mut(out, capacity) }.ok_or(WriterError(-1, 0))?;
+        // All validation and capacity checks are complete. Formatting and copy
+        // cannot report a domain failure, so publish counts only after the one
+        // serialization pass. No intermediate full-file buffer is necessary.
+        let length = build_into(&plan.view(), dest);
+        n[0] = length as i64;
+        enc[0] = plan.encoding;
+        Ok(())
+    })();
+    writer_result(result, diag)
 }
 
 #[cfg(test)]

@@ -1,4 +1,4 @@
-"""Pure-Python tests for the AutoCAD R12 ASCII DXF writer.
+"""Independent format tests for the required Rust ASCII DXF writer.
 
 Pins the invariants a laser-cutter / CNC reader depends on:
 * the file is R12 (``$ACADVER = AC1009``) with ``$INSUNITS = 4`` (millimetres);

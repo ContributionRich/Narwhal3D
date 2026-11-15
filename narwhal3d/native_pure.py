@@ -2,15 +2,14 @@
 
 This is a typed FFI adapter over the ``native/pure_core`` C ABI (see
 ``native/pure_core/README.md``). It owns no document geometry and never lets a
-Rust-owned pointer cross the call: it packs caller-owned geometry (a mesh's vertices / names / face indices) into contiguous
-``array`` spans, asks the native two-pass size query for the exact output
-length, allocates a caller-owned buffer, and hands it to the native encoder.
-Python keeps the path I/O and is the complete fallback.
+Rust-owned pointer cross the call. Python marshals caller-owned buffers and
+validates native output before returning host objects. Optional parser/decoder
+routes may decline to their existing caller fallback; required format encoders
+live in separate adapters, not here.
 
 Discovery is deliberately conservative and matches ``native_selection.py``:
 the library is loaded only from the explicit ``NARWHAL_PURE_CORE`` path, or
-from the adjacent packaged location once a future release-integration task
-populates it. There is no other auto-discovery and no binary is enabled by
+from the adjacent packaged location. There is no other auto-discovery and no binary is enabled by
 assumption. Any discovery, ABI, input, or call failure returns ``None`` so the
 caller runs the unchanged Python implementation.
 
@@ -18,9 +17,9 @@ Native and Python results are byte/structure-identical. Production modules activ
 only routes that win end-to-end after packing and conversion; slower direct APIs remain
 available for parity tests and future ABI optimization, never as user-facing regressions.
 
-STL file codecs and safe mesh import use the separate required ``native_stl``
-adapter. This module retains the independent optional OBJ/DXF routes: missing
-encode/decode exports affect only that format and operation, not other routes.
+STL codecs and OBJ/DXF/vector encoding use separate required adapters.
+This module retains optional OBJ/DXF decoding; missing exports affect only
+that format and operation.
 """
 from __future__ import annotations
 
@@ -44,12 +43,8 @@ _lock = threading.Lock()
 _signature: str | None = None
 _native_binding: Any = None
 _status = "not checked"
-_native_obj_calls = 0
 _native_decode_obj_calls = 0
-_native_dxf_calls = 0
 _native_decode_dxf_calls = 0
-_native_pdf_calls = 0
-_native_svg_vector_calls = 0
 
 # Adapter-side resource ceilings. They are intentionally below address-space
 # limits: interchange files above 512 MiB and native outputs above 512 MiB use
@@ -336,11 +331,11 @@ _PACKAGED_LIBRARY = Path(__file__).resolve().parent / "native" / _library_name()
 
 
 def _binding():
-    """Return OBJ/DXF encode/decode handles and path, or ``None``.
+    """Return optional OBJ/DXF decode handles and path, or ``None``.
 
-    The nine slots are ``(obj_size, obj_encode, obj_decode_size, obj_decode,
-    dxf_size, dxf_encode, dxf_decode_size, dxf_decode, path)``. Missing exports
-    affect only their format/operation. No retired STL export is a prerequisite.
+    The five slots are ``(obj_decode_size, obj_decode, dxf_decode_size,
+    dxf_decode, path)``. Missing exports affect only their
+    format/operation. Retired STL/OBJ/DXF/vector encoders are not prerequisites.
     """
     global _signature, _native_binding, _status
     explicit = os.environ.get(_ENV_PATH)
@@ -370,30 +365,8 @@ def _binding():
                 _status = f"native pure-core load failed: {exc}"
                 continue
             # OBJ and DXF exports are optional independently of each other.
-            _i64p = ctypes.POINTER(ctypes.c_int64)
-            _i32p = ctypes.POINTER(ctypes.c_int32)
-            obj_size = obj_enc = obj_dsize = obj_dec = None
-            try:
-                obj_size = library.narwhal_pure_core_obj_size
-                obj_size.argtypes = [
-                    _DoubleP, ctypes.c_int64, _ByteP, ctypes.c_int64,
-                    _i64p, _i64p, _i64p, _i64p, ctypes.c_int64, _i32p,
-                    ctypes.c_int64, ctypes.c_int64,
-                ]
-                obj_size.restype = ctypes.c_int64
-                obj_enc = library.narwhal_pure_core_obj_encode
-                obj_enc.argtypes = [
-                    _DoubleP, ctypes.c_int64, _ByteP, ctypes.c_int64,
-                    _i64p, _i64p, _i64p, _i64p, ctypes.c_int64, _i32p,
-                    ctypes.c_int64, ctypes.c_int64, _ByteP, ctypes.c_size_t,
-                ]
-                obj_enc.restype = ctypes.c_int32
-            except (AttributeError, OSError):
-                pass  # OBJ encode exports absent: encode falls back
-            # The OBJ decode exports are newer than the encode ones: a library
-            # may have the encode but not the decode. Resolve them as OPTIONAL
-            # (None when absent) so such a library keeps its encode route and
-            # only the decode falls back to Python.
+            obj_dsize = obj_dec = None
+            # OBJ decoding stays optional independently of the DXF routes.
             try:
                 obj_dsize = library.narwhal_pure_core_obj_decode_size
                 obj_dsize.argtypes = [_ByteP, ctypes.c_size_t]
@@ -403,32 +376,7 @@ def _binding():
                 obj_dec.restype = ctypes.c_int32
             except (AttributeError, OSError):
                 pass  # OBJ decode exports absent: decode falls back
-            # The DXF encode exports are the newest: a library may have the
-            # OBJ encode/decode but not the DXF exports. Resolve them as
-            # OPTIONAL (None when absent) so such a library keeps every
-            # existing route and only the DXF route falls back to Python.
-            dxf_size = dxf_enc = None
-            try:
-                dxf_size = library.narwhal_pure_core_dxf_size
-                dxf_size.argtypes = [
-                    _ByteP, ctypes.c_int64, _i64p, _i64p, ctypes.c_int64,
-                    _i64p, _i64p, _i64p, _DoubleP, ctypes.c_int64, _i64p,
-                    _i64p, ctypes.c_int64,
-                ]
-                dxf_size.restype = ctypes.c_int64
-                dxf_enc = library.narwhal_pure_core_dxf_encode
-                dxf_enc.argtypes = [
-                    _ByteP, ctypes.c_int64, _i64p, _i64p, ctypes.c_int64,
-                    _i64p, _i64p, _i64p, _DoubleP, ctypes.c_int64, _i64p,
-                    _i64p, ctypes.c_int64, _ByteP, ctypes.c_size_t,
-                ]
-                dxf_enc.restype = ctypes.c_int32
-            except (AttributeError, OSError):
-                pass  # DXF encode exports absent: DXF encode falls back
-            # The DXF decode exports are newer than the DXF encode ones: a
-            # library may have the encode but not the decode. Resolve them as
-            # OPTIONAL (None when absent) so such a library keeps its encode
-            # route and only the DXF decode falls back to Python.
+            # Missing DXF decoding must not disable OBJ decoding.
             dxf_dsize = dxf_dec = None
             try:
                 dxf_dsize = library.narwhal_pure_core_dxf_decode_size
@@ -440,8 +388,8 @@ def _binding():
             except (AttributeError, OSError):
                 pass  # DXF decode exports absent: DXF decode falls back
             _native_binding = (
-                obj_size, obj_enc, obj_dsize, obj_dec,
-                dxf_size, dxf_enc, dxf_dsize, dxf_dec, path)
+                obj_dsize, obj_dec,
+                dxf_dsize, dxf_dec, path)
             _status = f"ready: {path}"
             return _native_binding
         return None
@@ -1247,7 +1195,7 @@ def _native_svgpath(text):
 
 # Packed SVG path output (Q117-03): the state globals are ``_svgpp_*`` --
 # distinct from the ``_svgpath_packed_binding`` resolver (the same collision
-# trap as Q117-01's ``_objp_*`` / Q117-02's ``_dxp_*``) and from the two-pass
+# trap as Q117-02's ``_dxp_*``) and from the two-pass
 # JSON slots ``_sv_*``.
 _svgpp_signature: str | None = None
 _svgpp_binding: Any = None  # narwhal_pure_core_svgpath_packed or None
@@ -1673,7 +1621,7 @@ def _native_joinchain(starts, ends, tol):
 
 # Packed macro tokenizer output (Q117-04): the state globals are ``_macropp_*``
 # -- distinct from the ``_macropp_binding`` resolver (the same collision trap
-# as Q117-01's ``_objp_*`` / Q117-02's ``_dxp_*`` / Q117-03's ``_svgpp_*``) and
+# as Q117-02's ``_dxp_*`` / Q117-03's ``_svgpp_*``) and
 # from the two-pass JSON slots ``_m_*``.
 _macropp_signature: str | None = None
 _macropp_binding: Any = None  # narwhal_pure_core_macro_packed or None
@@ -2031,82 +1979,6 @@ def _macro_plan_packed_native_active(text):
 
 
 
-# One-pass OBJ encode (Q117-01): the state globals are ``_objp_*`` -- distinct
-# from the ``_obj_encode_into_binding`` resolver (the same collision trap) and
-# from the two-pass OBJ slots already in the nine-slot OBJ/DXF binding.
-_objp_signature: str | None = None
-_objp_binding: Any = None  # narwhal_pure_core_obj_encode_into or None
-
-# Q117-01 crossover: the one-pass native route is active for inputs at or
-# above this many TOTAL vertices (summed over all meshes); below it the
-# unchanged Python writer stays active so a sub-10%-win, sub-millisecond input
-# never regresses. Measured end-to-end (packing + FFI + file I/O, best of 5,
-# 2 meshes) against the Python writer on this box:
-#
-#   total verts    native / python    native win
-#   200 (100/mesh)  0.31 / 0.34 ms     +9.6%   (sub-ms, <10%, noise)
-#   1000 (500/mesh) 1.23 / 1.58 ms     +22.5%
-#   10000 (5k/mesh) 11.1 / 15.2 ms     +27.1%
-#   30000 (15k/mesh) 48.5 / 71.0 ms    +31.7%
-#   60000 (named)   51.3 / 68.4 ms     +25.0%   (1.333x)
-#
-# Native is >=10% faster at and above 1000 total verts and never slower below
-# it (the 200-vert case is sub-millisecond and <10%, i.e. noise), so 1024 is a
-# safe documented crossover: it is just above the smallest MEASURED >=10% point
-# (so every active case is a measured >=10% win) and keeps the tiny sub-10%
-# sub-millisecond cases on Python. The named 60k-vert workload runs native at
-# a 25% win.
-_OBJ_NATIVE_MIN_VERTS = 1024
-
-
-def _obj_encode_into_binding():
-    """Return the ``narwhal_pure_core_obj_encode_into`` ctypes handle (the
-    one-pass caller-capacity ABI, Q117-01), or ``None``.
-
-    Resolved as OPTIONAL (``None`` when absent) so a library built before the
-    one-pass export keeps working and only the faster one-pass path falls back
-    to the two-pass route (or Python). The state globals are ``_objp_*`` --
-    distinct from this resolver's name.
-    """
-    global _objp_signature, _objp_binding
-    explicit = os.environ.get(_ENV_PATH)
-    signature = explicit or "<packaged>"
-    if _objp_signature == signature:
-        return _objp_binding
-    with _lock:
-        if _objp_signature == signature:
-            return _objp_binding
-        _objp_signature = signature
-        _objp_binding = None
-        candidates = ((Path(explicit).expanduser(),) if explicit
-                      else (_PACKAGED_LIBRARY,))
-        for path in candidates:
-            if not path.is_file():
-                continue
-            try:
-                library = ctypes.CDLL(str(path))
-                version = library.narwhal_pure_core_abi_version
-                version.argtypes = []
-                version.restype = ctypes.c_uint32
-                if version() != _ABI_VERSION:
-                    continue
-                enc_into = library.narwhal_pure_core_obj_encode_into
-                _i64p = ctypes.POINTER(ctypes.c_int64)
-                _i32p = ctypes.POINTER(ctypes.c_int32)
-                enc_into.argtypes = [
-                    _DoubleP, ctypes.c_int64, _ByteP, ctypes.c_int64,
-                    _i64p, _i64p, _i64p, _i64p, ctypes.c_int64, _i32p,
-                    ctypes.c_int64, ctypes.c_int64,
-                    _ByteP, ctypes.c_size_t, _i64p,
-                ]
-                enc_into.restype = ctypes.c_int32
-            except (AttributeError, OSError):
-                continue
-            _objp_binding = enc_into
-            return _objp_binding
-        return None
-
-
 def _pack_obj_unchecked(meshes):
     """Pack *meshes* into the native OBJ layout (one contiguous array per
     parameter), in the exact layout the encoder reads. Returns a dict of the
@@ -2182,118 +2054,12 @@ def _pack_obj_unchecked(meshes):
     }
 
 
-def _pack_obj(meshes):
-    """Exception-safe wrapper: any packing failure declines to Python."""
-    try:
-        return _pack_obj_unchecked(meshes)
-    except Exception:  # noqa: BLE001 -- preserve the complete Python fallback
-        return None
-
-
-def _native_obj_encode_into(meshes):
-    """One-pass native OBJ encode into a Python-owned ``bytearray`` (Q117-01).
-
-    Returns ``(bytearray, written)`` on success, or ``None`` to fall back to
-    the unchanged Python writer (library unavailable, it predates the one-pass
-    export, the input is rejected, or the output is malformed). The
-    ``bytearray`` is caller-owned and may be written directly (``memoryview``)
-    to a file without an intermediate ``bytes`` copy. ``written`` is the exact
-    byte count the encoder published on complete success.
-    """
-    global _native_obj_calls
-    enc_into = _obj_encode_into_binding()
-    if enc_into is None:
-        return None  # library predates the one-pass export
-    packed = _pack_obj(meshes)
-    if packed is None:
-        return None
-    (vert_view, names_view, name_lens_view, vcounts_view, fcounts_view,
-     face_arity_view, face_idx_view) = packed["views"]
-    _raw = packed["raw"]  # keep the packed arrays alive for the FFI call
-    packed_total_v = packed["packed_total_v"]
-    total_name_bytes = packed["total_name_bytes"]
-    total_v = packed["total_v"]
-    total_faces = packed["total_faces"]
-    total_face_idx = packed["total_face_idx"]
-    mesh_count = packed["mesh_count"]
-    # Conservative capacity: exactly the Rust ``capacity_bound`` (verified equal
-    # to this expression), so the buffer is always large enough and the one-pass
-    # call never returns ERR_SIZE for a valid input.
-    max_index_chars = len(str(max(total_v, 1))) + 1
-    derived = (13 + total_name_bytes + 4 * mesh_count + 80 * total_v
-               + (max_index_chars + 1) * total_face_idx + 3 * total_faces)
-    if derived > _MAX_NATIVE_OUTPUT_BYTES or derived > sys.maxsize:
-        return None
-    out = bytearray(derived)
-    out_view = (ctypes.c_ubyte * derived).from_buffer(out)
-    written = ctypes.c_int64(0)
-    try:
-        rc = enc_into(
-            vert_view, packed_total_v,
-            names_view, len(names_view),
-            name_lens_view, vcounts_view, fcounts_view, face_arity_view,
-            total_faces, face_idx_view, total_face_idx, mesh_count,
-            out_view, derived, ctypes.byref(written),
-        )
-    except Exception:  # noqa: BLE001 -- any failure degrades to the fallback
-        return None
-    if rc != 0:
-        return None
-    w = written.value
-    if not (isinstance(w, int) and 0 <= w <= derived):
-        return None
-    # A fully successful native encode: record the route activation so a
-    # production caller that silently forces the Python path is detectable.
-    _native_obj_calls += 1
-    return out, w
-
-
-def _obj_native_active(meshes):
-    """Whether the one-pass native OBJ route should handle *meshes* (Q117-01).
-
-    True only when the one-pass export is available AND the input is at or
-    above the measured crossover (where native is >=10% faster than the Python
-    writer). Below the crossover the Python writer stays active, so small
-    workloads never regress.
-    """
-    if _obj_encode_into_binding() is None:
-        return False
-    if _OBJ_NATIVE_MIN_VERTS <= 0:
-        return True
-    try:
-        return sum(len(v) for _, v, _ in meshes) >= _OBJ_NATIVE_MIN_VERTS
-    except Exception:  # noqa: BLE001 -- treat as "not active"
-        return False
-
-
-def encode_obj(meshes) -> Optional[bytes]:
-    """Encode *meshes* to a complete OBJ file's bytes, or ``None``.
-
-    ``meshes`` is a sequence of ``(name, vertices, faces)`` exactly as
-    ``obj_writer.write_obj`` takes it. ``None`` means "use the unchanged
-    Python writer" -- the library is unavailable, it predates the one-pass
-    export, the ABI is wrong, the input is rejected, or the output is
-    malformed. A non-``None`` return is the exact file bytes and equals the
-    Python writer's output for the same input.
-
-    The one-pass route (Q117-01): pack once, then a single native call
-    serializes the file exactly once into a Python-owned ``bytearray`` (no
-    two-pass duplication of coordinate formatting).
-    """
-    result = _native_obj_encode_into(meshes)
-    if result is None:
-        return None
-    out, written = result
-    return bytes(out[:written])
-
-
 def _decode_obj_raw(data: bytes) -> Optional[bytes]:
     """Run the checked native OBJ decoder and return its packed bytes."""
     binding = _binding()
     if binding is None:
         return None
-    (_obj_size, _obj_enc, dec_size_fn, dec_fn,
-     _dxf_size, _dxf_enc, _dxf_dsize, _dxf_dec, _path) = binding
+    (dec_size_fn, dec_fn, _dxf_dsize, _dxf_dec, _path) = binding
     if dec_size_fn is None or dec_fn is None:
         return None
     byte_input = _byte_input(data)
@@ -2361,373 +2127,12 @@ def decode_obj_packed(data: bytes, file_base: str = None) -> Optional[tuple]:
     return packed
 
 
-# The DXF entity-type codes the Rust encoder understands (dxf.rs).
-_DXF_TYPE_CODES = {"LINE": 0, "CIRCLE": 1, "ARC": 2, "POLYLINE": 3, "SPLINE": 4}
-
-
-def _pack_dxf(entities, layers=None):
-    """Pack *entities* into the native DXF layout (one contiguous array per
-    parameter), in the exact layout the encoder reads. Returns a dict of the
-    packed views + counts, or ``None`` when the input is over the adapter caps
-    or not a valid entity list. The raw arrays are kept alive by the returned
-    ``raw`` tuple for the duration of the FFI call.
-
-    The layer merge, the non-ASCII refusal, the per-entity arity and the
-    coordinate caps all happen here so the two-pass ``encode_dxf`` and the
-    one-pass ``_native_dxf_encode_into`` share the exact same packing.
-    """
-    try:
-        entities = list(entities)
-        ec = len(entities)
-        if ec > _MAX_DXF_ENTITIES:
-            return None
-        # LAYER merge: caller's layers first (their order, their colors),
-        # then any layer an entity names (color 7). Mirrors
-        # dxf_writer._merged_layers exactly, so the LAYER table order is the
-        # same on both routes.
-        layer_map = {}
-        if layers:
-            for name, color in layers.items():
-                layer_map[name] = color
-        for e in entities:
-            name = e.get("layer", "0")
-            if name not in layer_map:
-                layer_map[name] = 7
-        layer_names = list(layer_map.items())
-        lc = len(layer_names)
-        if lc > _MAX_DXF_LAYERS:
-            return None
-        # Rust currently interprets encoder layer bytes as UTF-8 and substitutes
-        # an empty name on invalid UTF-8. Non-ASCII Latin-1 must therefore take
-        # the byte-exact Python path (not silently become an empty layer).
-        if any(not str(name).isascii() for name, _color in layer_names):
-            return None
-        expected_coords = 0
-        for entity in entities:
-            typ = _DXF_TYPE_CODES.get(entity["type"])
-            if typ is None:
-                return None
-            points = (entity.get("points") if typ == 3
-                      else entity.get("control_points") if typ == 4 else None)
-            if typ == 4 and (points is None or len(points) < 4 or (len(points) - 1) % 3):
-                return None
-            expected_coords += (6 if typ in (0, 2) else 4 if typ == 1
-                                else 3 * len(points))
-            if expected_coords > _MAX_DXF_COORDS:
-                return None
-        layer_id_of = {name: i for i, (name, _c) in enumerate(layer_names)}
-        # Per-entity packing (one slot per entity, in entity order).
-        entity_types = array.array("q")   # i64 type code
-        layer_ids = array.array("q")      # i64 layer index
-        colors = array.array("q")         # i64 ACI or 0xRRGGBB true color
-        point_counts = array.array("q")   # i64 POLYLINE/SPLINE point count
-        closed_flags = array.array("q")   # i64 POLYLINE/SPLINE closed (0/1)
-        nums = array.array("d")           # f64 flat coordinates
-        for e in entities:
-            t = _DXF_TYPE_CODES.get(e["type"])
-            if t is None:
-                return None  # unknown type: Python writer raises for these
-            layer_ids.append(layer_id_of[e.get("layer", "0")])
-            if "true_color" in e:
-                true_color = int(e["true_color"])
-                if not 0 <= true_color <= 0xFFFFFF:
-                    return None
-                colors.append(0x1000000 + true_color)
-            else:
-                color = int(e.get("color", 7))
-                if not 0 <= color <= 255:
-                    return None
-                colors.append(color)
-            entity_types.append(t)
-            if t == 0:  # LINE: p0 (3) + p1 (3)
-                p0, p1 = e["p0"], e["p1"]
-                nums.extend((p0[0], p0[1], p0[2], p1[0], p1[1], p1[2]))
-                point_counts.append(0)
-                closed_flags.append(0)
-            elif t == 1:  # CIRCLE: center (3) + radius (1)
-                c, r = e["center"], e["radius"]
-                nums.extend((c[0], c[1], c[2], r))
-                point_counts.append(0)
-                closed_flags.append(0)
-            elif t == 2:  # ARC: center (3) + radius (1) + start (1) + end (1)
-                c, r = e["center"], e["radius"]
-                nums.extend((c[0], c[1], c[2], r, e["start_deg"], e["end_deg"]))
-                point_counts.append(0)
-                closed_flags.append(0)
-            else:  # POLYLINE/SPLINE: 3 coords per point/control
-                pts = e["points"] if t == 3 else e["control_points"]
-                for p in pts:
-                    nums.extend((p[0], p[1], p[2]))
-                point_counts.append(len(pts))
-                closed_flags.append(1 if e.get("closed") else 0)
-        if len(nums) != expected_coords:
-            return None
-        # Layer name bytes (concatenated) + per-name byte lengths.
-        names_concat = bytearray()
-        name_lens = array.array("q")
-        for name, _c in layer_names:
-            nb = str(name).encode("latin-1")
-            names_concat.extend(nb)
-            name_lens.append(len(nb))
-            if len(names_concat) > _MAX_NAME_BYTES:
-                return None
-        layer_colors = array.array("q")
-        for _name, color in layer_names:
-            value = int(color)
-            if not (0 <= value <= 255 or 0x1000000 <= value <= 0x1FFFFFF):
-                return None
-            layer_colors.append(value)
-        # Names are emitted once in the table, once per entity, and once per
-        # POLYLINE vertex. This mirrors Rust's conservative capacity bound and
-        # prevents a reused long layer name from under-allocating the FFI output.
-        emitted_name_bytes = len(names_concat)
-        for e in entities:
-            name_len = len(str(e.get("layer", "0")).encode("latin-1"))
-            repeats = 1 + (len(e["points"])
-                           if e.get("type") == "POLYLINE" else 0)
-            emitted_name_bytes += name_len * repeats
-        # ctypes pointers over the packed arrays (from_buffer views, the same
-        # layout the native encoder reads).
-        views = (
-            (ctypes.c_ubyte * len(names_concat)).from_buffer(names_concat),
-            (ctypes.c_int64 * len(name_lens)).from_buffer(name_lens),
-            (ctypes.c_int64 * len(layer_colors)).from_buffer(layer_colors),
-            (ctypes.c_int64 * len(entity_types)).from_buffer(entity_types),
-            (ctypes.c_int64 * len(layer_ids)).from_buffer(layer_ids),
-            (ctypes.c_int64 * len(colors)).from_buffer(colors),
-            (ctypes.c_double * len(nums)).from_buffer(nums),
-            (ctypes.c_int64 * len(point_counts)).from_buffer(point_counts),
-            (ctypes.c_int64 * len(closed_flags)).from_buffer(closed_flags),
-        )
-        return {
-            "views": views,
-            "raw": (names_concat, name_lens, layer_colors, entity_types,
-                    layer_ids, colors, nums, point_counts, closed_flags),
-            "lc": lc,
-            "ec": ec,
-            "num_coords": len(nums),
-            "name_bytes": len(names_concat),
-            "emitted_name_bytes": emitted_name_bytes,
-        }
-    except Exception:  # noqa: BLE001 -- any failure degrades to the fallback
-        return None
-
-
-def encode_dxf(entities, layers=None) -> Optional[bytes]:
-    """Encode *entities* to complete ASCII DXF bytes, or ``None``.
-
-    ``entities`` is a sequence of dicts in the exact shape
-    ``dxf_writer.write_dxf`` takes (LINE / CIRCLE / ARC / POLYLINE / SPLINE). ``layers``
-    is an optional ``{"name": aci_color}`` map; any layer an entity names but
-    the caller did not list is added with color 7, caller order preserved.
-
-    ``None`` means "use the unchanged Python writer" -- the library is
-    unavailable, it predates the DXF exports, the ABI is wrong, an entity
-    type is not one of the four supported (the Python writer raises for
-    those), or the output is malformed. A non-``None`` return is the exact
-    file bytes and equals the Python writer's output for the same input.
-
-    The work is split into the phases the task reports separately: packing
-    (the layer bytes, the per-entity type/layer/color/point/closed arrays,
-    and the flat coordinate array), the Rust size query, the Rust encode
-    (into the caller-owned buffer), and the output copy to ``bytes``.
-
-    This is the LEGACY two-pass route (Q117-02): the Rust size query and the
-    Rust encode each format every coordinate, so it is measured *slower* than
-    the Python writer at every tested size and is kept for the direct ABI
-    proof and byte-identity, not for production. The one-pass route
-    (``_native_dxf_encode_into``) is the production fast path when it wins.
-    """
-    global _native_dxf_calls
-    binding = _binding()
-    if binding is None:
-        return None
-    (_os, _oe, _ods, _od, dxf_size_fn, dxf_enc_fn,
-     _dxf_dsize, _dxf_dec, _path) = binding
-    if dxf_size_fn is None or dxf_enc_fn is None:
-        return None  # library predates the DXF encode exports
-    packed = _pack_dxf(entities, layers)
-    if packed is None:
-        return None
-    (names_ptr, name_lens_ptr, lco_ptr, et_ptr, lid_ptr, col_ptr,
-     nums_ptr, pc_ptr, cf_ptr) = packed["views"]
-    _raw = packed["raw"]  # keep the packed arrays alive for the FFI call
-    lc = packed["lc"]
-    ec = packed["ec"]
-    try:
-        # RUST size query phase: exact output length, or a negative code.
-        nbytes = dxf_size_fn(
-            names_ptr, len(names_ptr), name_lens_ptr, lco_ptr, lc,
-            et_ptr, lid_ptr, col_ptr, nums_ptr, len(nums_ptr), pc_ptr, cf_ptr,
-            ec)
-        derived = (512 + 128 * lc + 256 * ec + 64 * len(nums_ptr)
-                   + packed["emitted_name_bytes"])
-        if not _size_is_bounded(nbytes, derived):
-            return None
-        buf = (ctypes.c_ubyte * nbytes)()
-        # RUST encode phase: fills the caller-owned buffer, 0 on success.
-        rc = dxf_enc_fn(
-            names_ptr, len(names_ptr), name_lens_ptr, lco_ptr, lc,
-            et_ptr, lid_ptr, col_ptr, nums_ptr, len(nums_ptr), pc_ptr, cf_ptr,
-            ec, buf, nbytes)
-        if rc != 0:
-            return None
-        # OUTPUT phase: copy the caller-owned buffer to a Python ``bytes``.
-        out = bytes(buf)
-    except Exception:  # noqa: BLE001 -- any failure degrades to the fallback
-        return None
-    # A fully successful native encode: record the route activation so a
-    # production caller that silently forces the Python path is detectable.
-    _native_dxf_calls += 1
-    return out
-
-
-# One-pass DXF encode (Q117-02): the state globals are ``_dxp_*`` -- distinct
-# from the ``_dxf_encode_into_binding`` resolver (the same collision trap as
-# Q117-01) and from the two-pass DXF slots already in the nine-slot OBJ/DXF binding.
-_dxp_signature: str | None = None
-_dxp_binding: Any = None  # narwhal_pure_core_dxf_encode_into or None
-
-# Q117-02 crossover: the one-pass native route is active in PRODUCTION only
-# for inputs at or above this many entities; below it the unchanged Python
-# writer stays active so a sub-10%-win input never regresses. The measured
-# end-to-end (packing + FFI + file I/O, best of 5) native/Python ratios never
-# reach a stable >=10% win at ANY tested size (the two-pass route measured
-# 1.856x slower at 1 entity up to 0.936x at 262k entities), so this threshold
-# is set ABOVE every realistic input (5M is the adapter's hard cap) to keep
-# production on the byte-exact Python writer, per the Qwen policy ("leave
-# production Python active if no winning workload is demonstrated"). The
-# one-pass route is still exercised directly (byte-identity, the mutation,
-# the fallbacks) so the ABI is proven correct and ready to activate the
-# moment a measured >=10% win appears.
-_DXF_NATIVE_MIN_ENTITIES = _MAX_DXF_ENTITIES + 1
-
-
-def _dxf_encode_into_binding():
-    """Return the ``narwhal_pure_core_dxf_encode_into`` ctypes handle (the
-    one-pass caller-capacity ABI, Q117-02), or ``None``.
-
-    Resolved as OPTIONAL (``None`` when absent) so a library built before the
-    one-pass export keeps working and only the faster one-pass path falls back
-    to the two-pass route (or Python). The state globals are ``_dxp_*`` --
-    distinct from this resolver's name.
-    """
-    global _dxp_signature, _dxp_binding
-    explicit = os.environ.get(_ENV_PATH)
-    signature = explicit or "<packaged>"
-    if _dxp_signature == signature:
-        return _dxp_binding
-    with _lock:
-        if _dxp_signature == signature:
-            return _dxp_binding
-        _dxp_signature = signature
-        _dxp_binding = None
-        candidates = ((Path(explicit).expanduser(),) if explicit
-                      else (_PACKAGED_LIBRARY,))
-        for path in candidates:
-            if not path.is_file():
-                continue
-            try:
-                library = ctypes.CDLL(str(path))
-                version = library.narwhal_pure_core_abi_version
-                version.argtypes = []
-                version.restype = ctypes.c_uint32
-                if version() != _ABI_VERSION:
-                    continue
-                enc_into = library.narwhal_pure_core_dxf_encode_into
-                _i64p = ctypes.POINTER(ctypes.c_int64)
-                enc_into.argtypes = [
-                    _ByteP, ctypes.c_int64, _i64p, _i64p, ctypes.c_int64,
-                    _i64p, _i64p, _i64p, _DoubleP, ctypes.c_int64, _i64p,
-                    _i64p, ctypes.c_int64,
-                    _ByteP, ctypes.c_size_t, _i64p,
-                ]
-                enc_into.restype = ctypes.c_int32
-            except (AttributeError, OSError):
-                continue
-            _dxp_binding = enc_into
-            return _dxp_binding
-        return None
-
-
-def _native_dxf_encode_into(entities, layers=None):
-    """One-pass native DXF encode into a Python-owned ``bytearray`` (Q117-02).
-
-    Returns ``(bytearray, written)`` on success, or ``None`` to fall back to
-    the unchanged Python writer (library unavailable, it predates the one-pass
-    export, the input is rejected, or the output is malformed). The
-    ``bytearray`` is caller-owned and may be written directly (``memoryview``)
-    to a file without an intermediate ``bytes`` copy. ``written`` is the exact
-    byte count the encoder published on complete success.
-    """
-    global _native_dxf_calls
-    enc_into = _dxf_encode_into_binding()
-    if enc_into is None:
-        return None  # library predates the one-pass export
-    packed = _pack_dxf(entities, layers)
-    if packed is None:
-        return None
-    (names_ptr, name_lens_ptr, lco_ptr, et_ptr, lid_ptr, col_ptr,
-     nums_ptr, pc_ptr, cf_ptr) = packed["views"]
-    _raw = packed["raw"]  # keep the packed arrays alive for the FFI call
-    lc = packed["lc"]
-    ec = packed["ec"]
-    # Conservative capacity: exactly the Rust ``capacity_bound`` (verified
-    # equal to this expression), so the buffer is always large enough and the
-    # one-pass call never returns ERR_SIZE for a valid input.
-    derived = (512 + 128 * lc + 256 * ec + 64 * len(nums_ptr)
-               + packed["emitted_name_bytes"])
-    if derived > _MAX_NATIVE_OUTPUT_BYTES or derived > sys.maxsize:
-        return None
-    out = bytearray(derived)
-    out_view = (ctypes.c_ubyte * derived).from_buffer(out)
-    written = ctypes.c_int64(0)
-    try:
-        rc = enc_into(
-            names_ptr, len(names_ptr), name_lens_ptr, lco_ptr, lc,
-            et_ptr, lid_ptr, col_ptr, nums_ptr, len(nums_ptr), pc_ptr, cf_ptr,
-            ec,
-            out_view, derived, ctypes.byref(written),
-        )
-    except Exception:  # noqa: BLE001 -- any failure degrades to the fallback
-        return None
-    if rc != 0:
-        return None
-    w = written.value
-    if not (isinstance(w, int) and 0 <= w <= derived):
-        return None
-    # A fully successful native encode: record the route activation so a
-    # production caller that silently forces the Python path is detectable.
-    _native_dxf_calls += 1
-    return out, w
-
-
-def _dxf_native_active(entities):
-    """Whether the one-pass native DXF route should handle *entities* (Q117-02).
-
-    True only when the one-pass export is available AND the input is at or
-    above the measured crossover (where native is >=10% faster than the Python
-    writer). Measured native is never >=10% faster, so the crossover is set
-    above every realistic input and this is False in practice -- the complete
-    Python fallback stays active, per the Qwen policy.
-    """
-    if _dxf_encode_into_binding() is None:
-        return False
-    if _DXF_NATIVE_MIN_ENTITIES <= 0:
-        return True
-    try:
-        return len(entities) >= _DXF_NATIVE_MIN_ENTITIES
-    except Exception:  # noqa: BLE001 -- treat as "not active"
-        return False
-
-
 def _decode_dxf_raw(data: bytes) -> Optional[bytes]:
     """Run the checked native DXF decoder and return its packed bytes."""
     binding = _binding()
     if binding is None:
         return None
-    (_os, _oe, _ods, _od, _dxf_size, _dxf_enc,
-     dec_size_fn, dec_fn, _path) = binding
+    (_ods, _od, dec_size_fn, dec_fn, _path) = binding
     if dec_size_fn is None or dec_fn is None:
         return None
     byte_input = _byte_input(data)
@@ -3094,8 +2499,7 @@ def _parse_obj_packed(raw: bytes, file_base: str = None, *, flat=False) -> tuple
 def _reset_for_tests() -> None:
     """Forget discovery state so tests can re-point ``NARWHAL_PURE_CORE``."""
     global _signature, _native_binding, _status
-    global _native_obj_calls
-    global _native_decode_obj_calls, _native_dxf_calls
+    global _native_decode_obj_calls
     global _native_decode_dxf_calls
     global _owned_parse_signature, _owned_parse_binding, _native_numparse_calls
     global _c_signature, _c_binding, _native_calc_calls
@@ -3106,28 +2510,16 @@ def _reset_for_tests() -> None:
     global _macropp_signature, _macropp_binding
     global _macroppp_signature, _macroppp_binding
     global _sv_signature, _sv_binding, _native_svgpath_calls
-    global _objp_signature, _objp_binding
-    global _dxp_signature, _dxp_binding
     global _svgpp_signature, _svgpp_binding
     global _jc_signature, _jc_binding, _native_joinchain_calls
-    global _pdfp_signature, _pdfp_binding, _native_pdf_calls
-    global _svgvp_signature, _svgvp_binding, _native_svg_vector_calls
-    global _svgup_signature, _svgup_binding, _native_svg_unit_calls
     global _gs_signature, _gs_binding, _native_gridsnap_calls
     global _gs3_signature, _gs3_binding, _native_gridsnap3_calls
     with _lock:
         _signature = None
         _native_binding = None
         _status = "not checked"
-        _native_obj_calls = 0
         _native_decode_obj_calls = 0
-        _native_dxf_calls = 0
         _native_decode_dxf_calls = 0
-        _native_pdf_calls = 0
-        _native_svg_vector_calls = 0
-        _native_svg_unit_calls = 0
-        _svgup_signature = None
-        _svgup_binding = None
         _gs_signature = None
         _gs_binding = None
         _native_gridsnap_calls = 0
@@ -3155,10 +2547,6 @@ def _reset_for_tests() -> None:
         _sv_signature = None
         _sv_binding = None
         _native_svgpath_calls = 0
-        _objp_signature = None
-        _objp_binding = None
-        _dxp_signature = None
-        _dxp_binding = None
         _svgpp_signature = None
         _svgpp_binding = None
         _macropp_signature = None
@@ -3171,551 +2559,3 @@ def _reset_for_tests() -> None:
         _cached_macro_json.cache_clear()
         _cached_macro_plan_json.cache_clear()
         _cached_svgpath_json.cache_clear()
-        _pdfp_signature = None
-        _pdfp_binding = None
-        _svgvp_signature = None
-        _svgvp_binding = None
-
-
-# ---------------------------------------------------------------------------
-# One-pass PDF vector serializer (Q117-07)
-#
-# The state globals are ``_pdfp_*`` -- distinct from the resolver name (the same
-# collision trap as Q117-01's ``_objp_*`` / Q117-03's ``_svgpp_*``). Serializes
-# the complete single-page PDF 1.4 EXACTLY ONCE into a Python-owned ``bytearray``
-# (byte-for-byte the ``vector_export._build_pdf`` output), eliminating the Python
-# writer's per-operator ``f"...:.4f"`` formatting -- the dominant cost at scale.
-# Python keeps the file I/O and is the complete fallback: library absent, export
-# missing, call error, or output malformed all degrade to the unchanged Python
-# serializer.
-# ---------------------------------------------------------------------------
-
-_pdfp_signature: str | None = None
-_pdfp_binding: Any = None  # narwhal_pure_core_pdf_encode_into or None
-_svgvp_signature: str | None = None
-_svgvp_binding: Any = None  # narwhal_pure_core_svg_encode_into or None
-_svgup_signature: str | None = None
-_svgup_binding: Any = None  # narwhal_pure_core_svg_encode_unit_into or None
-_native_svg_unit_calls = 0
-
-# Q117-07 crossover: the one-pass native route is active only for inputs at or
-# above this many strokes; below it the unchanged Python writer stays active so
-# a small input never regresses.
-#
-# MEASURED (best of 6, this box; packing + FFI + conversion, NOT Rust compute
-# alone) -- the native one-pass route is SLOWER than the Python writer at every
-# size, including the 50,000-stroke named workload:
-#   strokes   Python   native   native/Python
-#     1        0.01ms   0.03ms      2.18   (slower)
-#   1000       5.06ms   5.92ms      1.17   (slower)
-#   10,000    54.37ms  60.93ms      1.12   (slower)
-#   50,000   263.70ms 308.05ms      1.17   (slower)  [baseline was 197.49ms]
-#
-# Root cause (MEASURED, not a bug): the PDF content stream is ~90% per-float
-# ``:.4f`` formatting. CPython formats floats in C (David Gay's dtoa), which
-# beats Rust's ``core::fmt`` float formatter, AND the ctypes route pays an
-# extra Python-side tuple->array marshalling pass plus a ``bytes`` slice-copy
-# that the pure-Python writer never pays. So a native PDF serializer cannot be
-# >=10% faster on this workload with the current toolchain.
-#
-# DECISION (this task): no winning workload is demonstrated, so per the policy
-# ("Leave production Python active if no winning workload is demonstrated")
-# production STAYS ON PYTHON. The threshold is set to a stroke count no real
-# document reaches, disabling the native route in ``write_pdf`` while keeping
-# the verified-correct native encoder available (``encode_pdf``) and the route
-# flip-able.
-# The Rust float-formatter vs CPython gap is a toolchain-level constraint (not a code
-# bug); a win would require a faster fixed-point formatter or a different ABI
-# that avoids the Python-side marshalling (e.g. passing the stroke tuples in).
-_PDF_NATIVE_MIN_STROKES = 10_000_000  # DISABLED: native is slower at every size
-
-
-def _pdf_encode_into_binding():
-    """Return the ``narwhal_pure_core_pdf_encode_into`` ctypes handle (the
-    one-pass caller-capacity ABI, Q117-07), or ``None``.
-
-    Resolved as OPTIONAL (``None`` when absent) so a library built before the
-    one-pass export keeps working and only the PDF route falls back to Python.
-    The state globals are ``_pdfp_*`` -- distinct from this resolver's name.
-    """
-    global _pdfp_signature, _pdfp_binding
-    explicit = os.environ.get(_ENV_PATH)
-    signature = explicit or "<packaged>"
-    if _pdfp_signature == signature:
-        return _pdfp_binding
-    with _lock:
-        if _pdfp_signature == signature:
-            return _pdfp_binding
-        _pdfp_signature = signature
-        _pdfp_binding = None
-        candidates = ((Path(explicit).expanduser(),) if explicit
-                      else (_PACKAGED_LIBRARY,))
-        for path in candidates:
-            if not path.is_file():
-                continue
-            try:
-                library = ctypes.CDLL(str(path))
-                version = library.narwhal_pure_core_abi_version
-                version.argtypes = []
-                version.restype = ctypes.c_uint32
-                if version() != _ABI_VERSION:
-                    continue
-                enc_into = library.narwhal_pure_core_pdf_encode_into
-                _i64p = ctypes.POINTER(ctypes.c_int64)
-                _i32p = ctypes.POINTER(ctypes.c_int32)
-                enc_into.argtypes = [
-                    _DoubleP, ctypes.c_int64, _i64p, _i32p,
-                    _DoubleP, _DoubleP, _ByteP, _i64p,
-                    _ByteP, ctypes.c_int64, ctypes.c_double, ctypes.c_double,
-                    ctypes.c_int64, _ByteP, ctypes.c_size_t, _i64p,
-                ]
-                enc_into.restype = ctypes.c_int32
-            except (AttributeError, OSError):
-                continue
-            _pdfp_binding = enc_into
-            return _pdfp_binding
-        return None
-
-
-def _svg_encode_into_binding():
-    """Return the optional Q117-08 one-pass SVG encoder."""
-    global _svgvp_signature, _svgvp_binding
-    explicit = os.environ.get(_ENV_PATH)
-    signature = explicit or "<packaged>"
-    if _svgvp_signature == signature:
-        return _svgvp_binding
-    with _lock:
-        if _svgvp_signature == signature:
-            return _svgvp_binding
-        _svgvp_signature = signature
-        _svgvp_binding = None
-        candidates = ((Path(explicit).expanduser(),) if explicit
-                      else (_PACKAGED_LIBRARY,))
-        for path in candidates:
-            if not path.is_file():
-                continue
-            try:
-                library = ctypes.CDLL(str(path))
-                version = library.narwhal_pure_core_abi_version
-                version.argtypes = []
-                version.restype = ctypes.c_uint32
-                if version() != _ABI_VERSION:
-                    continue
-                enc_into = library.narwhal_pure_core_svg_encode_into
-                _i64p = ctypes.POINTER(ctypes.c_int64)
-                _i32p = ctypes.POINTER(ctypes.c_int32)
-                enc_into.argtypes = [
-                    _DoubleP, ctypes.c_int64, _i64p, _i32p,
-                    _DoubleP, _DoubleP, _ByteP, _i64p,
-                    ctypes.c_double, ctypes.c_double, ctypes.c_int64,
-                    _ByteP, ctypes.c_size_t, _i64p,
-                ]
-                enc_into.restype = ctypes.c_int32
-            except (AttributeError, OSError):
-                continue
-            _svgvp_binding = enc_into
-            return _svgvp_binding
-        return None
-
-
-def _svg_unit_encode_into_binding():
-    """Return the optional unit-aware one-pass SVG encoder
-    (``narwhal_pure_core_svg_encode_unit_into``, additive to ABI 1), or ``None``
-    -- a library built before it keeps the unit SVG on the Python writer."""
-    global _svgup_signature, _svgup_binding
-    explicit = os.environ.get(_ENV_PATH)
-    signature = explicit or "<packaged>"
-    if _svgup_signature == signature:
-        return _svgup_binding
-    with _lock:
-        if _svgup_signature == signature:
-            return _svgup_binding
-        _svgup_signature = signature
-        _svgup_binding = None
-        candidates = ((Path(explicit).expanduser(),) if explicit
-                      else (_PACKAGED_LIBRARY,))
-        for path in candidates:
-            if not path.is_file():
-                continue
-            try:
-                library = ctypes.CDLL(str(path))
-                version = library.narwhal_pure_core_abi_version
-                version.argtypes = []
-                version.restype = ctypes.c_uint32
-                if version() != _ABI_VERSION:
-                    continue
-                enc_into = library.narwhal_pure_core_svg_encode_unit_into
-                _i64p = ctypes.POINTER(ctypes.c_int64)
-                _i32p = ctypes.POINTER(ctypes.c_int32)
-                enc_into.argtypes = [
-                    _DoubleP, ctypes.c_int64, _i64p, _i32p,
-                    _DoubleP, _DoubleP, _ByteP, _i64p,
-                    ctypes.c_double, ctypes.c_double, ctypes.c_int64,
-                    _ByteP, ctypes.c_int64, ctypes.c_double, ctypes.c_int32,
-                    _ByteP, ctypes.c_size_t, _i64p,
-                ]
-                enc_into.restype = ctypes.c_int32
-            except (AttributeError, OSError):
-                continue
-            _svgup_binding = enc_into
-            return _svgup_binding
-        return None
-
-
-def _pack_pdf(strokes, page_w_mm, page_h_mm, title, _layer_encoding="latin-1"):
-    """Pack *strokes* (a sequence of ``vector_export.Stroke``) into the native
-    PDF layout (one contiguous array per parameter). Returns a dict of the
-    packed views + counts, or ``None`` when the input is over the adapter caps
-    or not a valid stroke list. The raw arrays are kept alive by the returned
-    ``raw`` tuple for the duration of the FFI call.
-    """
-    try:
-        strokes = list(strokes)
-    except Exception:  # noqa: BLE001 -- any failure degrades to the fallback
-        return None
-    stroke_count = len(strokes)
-    if stroke_count > _MAX_OBJ_FACES:  # reuse the 5M entity cap as a sane bound
-        return None
-    beziers = array.array("d")
-    seg_counts = array.array("q")
-    closed = array.array("i")
-    rgb = array.array("d")
-    widths = array.array("d")
-    layer_concat = bytearray()
-    layer_lens = array.array("q")
-    total_segments = 0
-    bext = beziers.extend
-    for s in strokes:
-        bz = s.beziers
-        nseg = len(bz)
-        total_segments += nseg
-        if (total_segments > _MAX_OBJ_FACE_INDICES
-                or len(layer_concat) > _MAX_NAME_BYTES):
-            return None
-        # The content stream is built from p1, p2, p3 of each cubic (p0 is only
-        # the move-to start), so the native layout is 8 floats per segment with
-        # the FIRST two (p0) unused by the serializer. Store p0,p1,p2,p3 in
-        # order so the Rust side can index ``o+2 .. o+7`` for the cubic control
-        # points and ``o+0, o+1`` for the move-to start.
-        for (x0, y0), (x1, y1), (x2, y2), (x3, y3) in bz:
-            bext((x0, y0, x1, y1, x2, y2, x3, y3))
-        seg_counts.append(nseg)
-        closed.append(1 if s.closed else 0)
-        r, g, b = s.rgb
-        rgb.extend((r, g, b))
-        widths.append(s.width_mm)
-        layer = s.layer
-        if layer:
-            layer_b = layer.encode(_layer_encoding)
-            layer_concat.extend(layer_b)
-            layer_lens.append(len(layer_b))
-        else:
-            layer_lens.append(0)
-    if len(beziers) != total_segments * 8:
-        return None
-    try:
-        title_b = str(title).encode("latin-1")
-    except Exception:  # noqa: BLE001
-        return None
-    views = (
-        (ctypes.c_double * len(beziers)).from_buffer(beziers),
-        (ctypes.c_int64 * len(seg_counts)).from_buffer(seg_counts),
-        (ctypes.c_int32 * len(closed)).from_buffer(closed),
-        (ctypes.c_double * len(rgb)).from_buffer(rgb),
-        (ctypes.c_double * len(widths)).from_buffer(widths),
-        (ctypes.c_ubyte * len(layer_concat)).from_buffer(layer_concat),
-        (ctypes.c_int64 * len(layer_lens)).from_buffer(layer_lens),
-    )
-    title_view = (ctypes.c_ubyte * len(title_b)).from_buffer(bytearray(title_b))
-    return {
-        "views": views,
-        "raw": (beziers, seg_counts, closed, rgb, widths, layer_concat,
-                layer_lens, title_b),
-        "title_view": title_view,
-        "total_segments": total_segments,
-        "stroke_count": stroke_count,
-        "title_len": len(title_b),
-        "layer_concat_len": len(layer_concat),
-    }
-
-
-def _pdf_capacity_bound(stroke_count, total_segments, title_len, layer_concat_len):
-    """The conservative capacity the Rust ``capacity_bound`` computes. Mirrored
-    exactly here so the Python-owned buffer is always large enough and the
-    one-pass call never returns ERR_SIZE for a valid input."""
-    FLOAT_MAX = 24
-    content = stroke_count * (3 * FLOAT_MAX + 8 + FLOAT_MAX + 2
-                              + 2 * FLOAT_MAX + 2 + 2 + 40)
-    content += total_segments * (6 * FLOAT_MAX + 2 + 1)
-    n_layers_upper = stroke_count + 1
-    objects = 2048 + n_layers_upper * 128 + (6 + n_layers_upper) * 32
-    strings = title_len * 2 + layer_concat_len * 2
-    return content + objects + strings
-
-
-def _valid_pdf_bytes(data) -> bool:
-    """Validate the PDF framing and every xref target before accepting native output."""
-    try:
-        raw = bytes(data)
-        if not raw.startswith(b"%PDF-1.4\n") or not raw.endswith(b"%%EOF\n"):
-            return False
-        marker = raw.rfind(b"startxref\n")
-        if marker < 0:
-            return False
-        end = raw.find(b"\n", marker + len(b"startxref\n"))
-        xref_at = int(raw[marker + len(b"startxref\n"):end])
-        if raw[xref_at:xref_at + 5] != b"xref\n":
-            return False
-        lines = raw[xref_at:].splitlines()
-        first, count = map(int, lines[1].split())
-        if first != 0 or len(lines) < 2 + count:
-            return False
-        for obj_num in range(1, count):
-            entry = lines[2 + obj_num]
-            if len(entry) != 19 or entry[17:18] != b"n":
-                return False
-            off = int(entry[:10])
-            if not raw.startswith(("%d 0 obj" % obj_num).encode("ascii"), off):
-                return False
-        return True
-    except (TypeError, ValueError, IndexError):
-        return False
-
-
-def _native_pdf_encode_into(strokes, page_w_mm, page_h_mm, title):
-    """One-pass native PDF encode into a Python-owned ``bytearray`` (Q117-07).
-
-    Returns ``(bytearray, written)`` on success, or ``None`` to fall back to
-    the unchanged Python serializer (library unavailable, it predates the
-    one-pass export, the input is rejected, or the capacity is insufficient).
-    The ``bytearray`` is caller-owned and may be written directly to a file
-    without an intermediate ``bytes`` copy. ``written`` is the exact byte count
-    the encoder published on complete success.
-    """
-    global _native_pdf_calls
-    enc_into = _pdf_encode_into_binding()
-    if enc_into is None:
-        return None  # library predates the one-pass export
-    packed = _pack_pdf(strokes, page_w_mm, page_h_mm, title)
-    if packed is None:
-        return None
-    (bez_view, seg_view, closed_view, rgb_view, widths_view,
-     layer_view, layer_lens_view) = packed["views"]
-    _raw = packed["raw"]  # keep the packed arrays alive for the FFI call
-    title_view = packed["title_view"]
-    total_segments = packed["total_segments"]
-    stroke_count = packed["stroke_count"]
-    title_len = packed["title_len"]
-    layer_concat_len = packed["layer_concat_len"]
-    derived = _pdf_capacity_bound(stroke_count, total_segments,
-                                  title_len, layer_concat_len)
-    if derived > _MAX_NATIVE_OUTPUT_BYTES or derived > sys.maxsize:
-        return None
-    out = bytearray(derived)
-    out_view = (ctypes.c_ubyte * derived).from_buffer(out)
-    written = ctypes.c_int64(0)
-    try:
-        rc = enc_into(
-            bez_view, total_segments,
-            seg_view, closed_view,
-            rgb_view, widths_view,
-            layer_view, layer_lens_view,
-            title_view, title_len,
-            page_w_mm, page_h_mm,
-            stroke_count,
-            out_view, derived, ctypes.byref(written),
-        )
-    except Exception:  # noqa: BLE001 -- any failure degrades to the fallback
-        return None
-    if rc != 0:
-        return None
-    w = written.value
-    if (not isinstance(w, int) or not (0 <= w <= derived)
-            or not _valid_pdf_bytes(memoryview(out)[:w])):
-        return None
-    # A fully successful native encode: record the route activation.
-    _native_pdf_calls += 1
-    return out, w
-
-
-def _pdf_native_active(strokes):
-    """Whether the one-pass native PDF route should handle *strokes* (Q117-07).
-
-    True only when the one-pass export is available AND the input is at or
-    above the measured crossover (where native is >=10% faster than the Python
-    writer). Below the crossover the Python writer stays active, so small
-    workloads never regress.
-    """
-    if _pdf_encode_into_binding() is None:
-        return False
-    if _PDF_NATIVE_MIN_STROKES <= 0:
-        return True
-    try:
-        return len(strokes) >= _PDF_NATIVE_MIN_STROKES
-    except Exception:  # noqa: BLE001 -- treat as "not active"
-        return False
-
-
-def encode_pdf(strokes, page_w_mm, page_h_mm, title="") -> Optional[bytes]:
-    """Encode *strokes* to a complete single-page PDF 1.4's bytes, or ``None``.
-
-    ``strokes`` is a sequence of ``vector_export.Stroke`` exactly as
-    ``vector_export.write_pdf`` takes it. ``None`` means "use the unchanged
-    Python serializer" -- the library is unavailable, it predates the one-pass
-    export, the ABI is wrong, the input is rejected, or the capacity is
-    insufficient. A non-``None`` return is the exact file bytes and equals the
-    Python serializer's output for the same input (byte-for-byte, including
-    layers, xref, and escaping).
-    """
-    result = _native_pdf_encode_into(strokes, page_w_mm, page_h_mm, title)
-    if result is None:
-        return None
-    out, written = result
-    return bytes(memoryview(out)[:written])
-
-
-# Q117-08 measured crossover (complete write including packing, FFI and I/O):
-# 1/10 strokes are slower, while 1,000 strokes is 10.7-18.7% faster and the
-# margin grows to 27.9% at 50,000. Keep small documents on Python.
-_SVG_VECTOR_NATIVE_MIN_STROKES = 1000
-
-
-def _svg_vector_capacity_bound(stroke_count, total_segments, layer_concat_len):
-    return (2048 + 256 * stroke_count + (8 * 32 + 32) * total_segments
-            + 6 * layer_concat_len)
-
-
-def _native_svg_encode_into(strokes, page_w_mm, page_h_mm):
-    """One-pass native SVG bytes in caller-owned storage, or ``None``."""
-    global _native_svg_vector_calls
-    enc_into = _svg_encode_into_binding()
-    if enc_into is None:
-        return None
-    packed = _pack_pdf(strokes, page_w_mm, page_h_mm, "",
-                       _layer_encoding="utf-8")
-    if packed is None:
-        return None
-    (bez_view, seg_view, closed_view, rgb_view, widths_view,
-     layer_view, layer_lens_view) = packed["views"]
-    _raw = packed["raw"]
-    total_segments = packed["total_segments"]
-    stroke_count = packed["stroke_count"]
-    derived = _svg_vector_capacity_bound(
-        stroke_count, total_segments, packed["layer_concat_len"])
-    if derived > _MAX_NATIVE_OUTPUT_BYTES or derived > sys.maxsize:
-        return None
-    out = bytearray(derived)
-    out_view = (ctypes.c_ubyte * derived).from_buffer(out)
-    written = ctypes.c_int64(0)
-    try:
-        rc = enc_into(
-            bez_view, total_segments, seg_view, closed_view,
-            rgb_view, widths_view, layer_view, layer_lens_view,
-            page_w_mm, page_h_mm, stroke_count,
-            out_view, derived, ctypes.byref(written),
-        )
-    except Exception:  # noqa: BLE001 -- preserve the Python fallback
-        return None
-    w = written.value
-    if rc != 0 or not isinstance(w, int) or not (0 <= w <= derived):
-        return None
-    try:
-        memoryview(out)[:w].tobytes().decode("utf-8")
-    except UnicodeDecodeError:
-        return None
-    _native_svg_vector_calls += 1
-    return out, w
-
-
-def _svg_vector_native_active(strokes):
-    if _svg_encode_into_binding() is None:
-        return False
-    try:
-        return len(strokes) >= _SVG_VECTOR_NATIVE_MIN_STROKES
-    except Exception:  # noqa: BLE001
-        return False
-
-
-def encode_svg(strokes, page_w_mm, page_h_mm) -> Optional[bytes]:
-    result = _native_svg_encode_into(strokes, page_w_mm, page_h_mm)
-    if result is None:
-        return None
-    out, written = result
-    return bytes(memoryview(out)[:written])
-
-
-def _svg_unit_capacity_bound(stroke_count, total_segments, layer_concat_len, digits):
-    """Mirror of Rust ``svg_capacity_bound_in``: 28 + digits bytes per float."""
-    return (2048 + 256 * stroke_count + (8 * (28 + digits) + 32) * total_segments
-            + 6 * layer_concat_len)
-
-
-def _native_svg_unit_encode_into(strokes, page_w_mm, page_h_mm, suffix, unit_mm, digits):
-    """Unit-aware one-pass native SVG bytes in caller-owned storage, or ``None``.
-
-    Byte-for-byte ``vector_export.write_svg(unit=(suffix, unit_mm, digits))``."""
-    global _native_svg_unit_calls
-    enc_into = _svg_unit_encode_into_binding()
-    if enc_into is None:
-        return None
-    try:
-        unit = str(suffix).encode("ascii")
-        digits = int(digits)
-        unit_mm = float(unit_mm)
-    except (UnicodeEncodeError, TypeError, ValueError):
-        return None
-    packed = _pack_pdf(strokes, page_w_mm, page_h_mm, "",
-                       _layer_encoding="utf-8")
-    if packed is None:
-        return None
-    (bez_view, seg_view, closed_view, rgb_view, widths_view,
-     layer_view, layer_lens_view) = packed["views"]
-    _raw = packed["raw"]
-    total_segments = packed["total_segments"]
-    stroke_count = packed["stroke_count"]
-    derived = _svg_unit_capacity_bound(
-        stroke_count, total_segments, packed["layer_concat_len"], max(digits, 0))
-    if derived > _MAX_NATIVE_OUTPUT_BYTES or derived > sys.maxsize:
-        return None
-    unit_buf = (ctypes.c_ubyte * max(len(unit), 1)).from_buffer_copy(unit or b"\0")
-    out = bytearray(derived)
-    out_view = (ctypes.c_ubyte * derived).from_buffer(out)
-    written = ctypes.c_int64(0)
-    try:
-        rc = enc_into(
-            bez_view, total_segments, seg_view, closed_view,
-            rgb_view, widths_view, layer_view, layer_lens_view,
-            page_w_mm, page_h_mm, stroke_count,
-            unit_buf, len(unit), unit_mm, digits,
-            out_view, derived, ctypes.byref(written),
-        )
-    except Exception:  # noqa: BLE001 -- preserve the Python fallback
-        return None
-    w = written.value
-    if rc != 0 or not isinstance(w, int) or not (0 <= w <= derived):
-        return None
-    try:
-        memoryview(out)[:w].tobytes().decode("utf-8")
-    except UnicodeDecodeError:
-        return None
-    _native_svg_unit_calls += 1
-    return out, w
-
-
-def _svg_unit_native_active(strokes):
-    """The unit SVG route uses the same measured crossover as the legacy SVG."""
-    if _svg_unit_encode_into_binding() is None:
-        return False
-    try:
-        return len(strokes) >= _SVG_VECTOR_NATIVE_MIN_STROKES
-    except Exception:  # noqa: BLE001
-        return False
-
-
-def encode_svg_unit(strokes, page_w_mm, page_h_mm, suffix, unit_mm, digits) -> Optional[bytes]:
-    result = _native_svg_unit_encode_into(strokes, page_w_mm, page_h_mm,
-                                          suffix, unit_mm, digits)
-    if result is None:
-        return None
-    out, written = result
-    return bytes(memoryview(out)[:written])

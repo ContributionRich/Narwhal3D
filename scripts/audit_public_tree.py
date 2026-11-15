@@ -808,6 +808,62 @@ def legacy_scan_bytes(path: str, blob: bytes) -> bytes:
     return folded
 
 
+# Authored pre-retirement DXF captures, never a directory/extension exemption.
+# Exact byte identity preserves incidental layer names such as Round\n70 as
+# DATA rather than development prose. Altered bytes and new paths fail closed.
+FROZEN_DXF23_FILES = {
+    'native/pure_core/tests/fixtures/dxf_writer23/all-aci.dxf': (390, '843523192f3d587d899204ceac8226c230d2e2e08839e356d0ad4bef8850d41e'),
+    'native/pure_core/tests/fixtures/dxf_writer23/capture.json': (776317, '876dcfe488123da6acf024bfe822b199f80bb0d69c38bc7c1a7490f2025cda3e'),
+    'native/pure_core/tests/fixtures/dxf_writer23/color-sentinel.dxf': (251, '3e0016963a64fdcb5ea1d90dfd2ee535d8129e237dee807b47d5b608ffc41f71'),
+    'native/pure_core/tests/fixtures/dxf_writer23/decoder-mixed.dxf': (501, '1584d536b978cad11a6b0f06584913001db8aa2c4a258ef0708dda2d3a34a053'),
+    'native/pure_core/tests/fixtures/dxf_writer23/decoder-no-layers.dxf': (501, '90c7545e49cddd8a10f34f22bf9e95ce82bde076161493c7b39a1a3c2d7968b7'),
+    'native/pure_core/tests/fixtures/dxf_writer23/empty.dxf': (159, 'cf1a7b7cde17bc93c39b01059679081a4acb43caf66230ee28064e4b57356628'),
+    'native/pure_core/tests/fixtures/dxf_writer23/key-alias.dxf': (243, '18581469c206c63ddacfba2e78832723209868488bd4ebba97f84ebf75d70ab4'),
+    'native/pure_core/tests/fixtures/dxf_writer23/latin1.dxf': (21160, '2bf91cb6c6fca7397d9cfb39736e5d7d1aab1332c1d5592b5f7d7c5dd7431849'),
+    'native/pure_core/tests/fixtures/dxf_writer23/mixed-closed.dxf': (839, '36ea3cdc540d419d586fbe5edd0e818245887eb9b8a925ff5827e33065d494f7'),
+    'native/pure_core/tests/fixtures/dxf_writer23/poly-one.dxf': (261, 'da8b696d4a2ad16f6a64046932e22ea32b1fbfafbba42afff7866b6763afef70'),
+    'native/pure_core/tests/fixtures/dxf_writer23/poly-open.dxf': (327, '9342871a2ed507354d00cd79dd92ff3cea13db2ec8cfe227e4bdd7eab7ed9fb7'),
+    'native/pure_core/tests/fixtures/dxf_writer23/poly-zero.dxf': (233, '29e051129042aa124c3963a59ce7534fffc5cc635fd5ed3c8677b03e47d07965'),
+    'native/pure_core/tests/fixtures/dxf_writer23/random-coordinates.bin': (96000, 'e8adbec63e233e6a0f4c9c565a6bc11e9bd9708223241989aba965f94486ccef'),
+    'native/pure_core/tests/fixtures/dxf_writer23/random-floats.dxf': (232384, '5a264a2353eae0548aa7f352df0e901a104a30d5c00a8b1706bb0c897ce6337b'),
+    'native/pure_core/tests/fixtures/dxf_writer23/short-poly-chain.dxf': (346, '336410586647bfd0bb908da03a999e3a374cfa5e02d9b011864db95c99d108d9'),
+    'native/pure_core/tests/fixtures/dxf_writer23/signed-exponents.dxf': (284, '6fabf605d20a1634840a64fa9fa30937b4fa6a73ae78d426035d2301265db58b'),
+    'native/pure_core/tests/fixtures/dxf_writer23/spline-closed.dxf': (413, '9b2267502fd4334293658f19f36f851b6691136e3142cafd8a4b02708b7e465d'),
+    'native/pure_core/tests/fixtures/dxf_writer23/unicode-frame.utf8': (252, 'a4723aed2947696694fc023e344512c277a150514ca0f88547a04891ddb7da46'),
+    'native/pure_core/tests/fixtures/dxf_writer23/units-Angstroms.dxf': (860, '6a9485d66dcc1ce9269e3c19f441dd71c451a82a3e7828246a6647af5215fee4'),
+    'native/pure_core/tests/fixtures/dxf_writer23/units-Centimeters.dxf': (859, 'fab67912b5afff37080ed12ab9822a40d23f86fb6c9172826f3964b8c05d1a39'),
+    'native/pure_core/tests/fixtures/dxf_writer23/units-Decimeters.dxf': (860, '64166f2719e194c823c228a3d0906833cdc711540cb8fe8229e7dde7e4b77220'),
+    'native/pure_core/tests/fixtures/dxf_writer23/units-Dekameters.dxf': (860, 'c6ad3eada2ffc6754ff7630275526e67f2f5b80bc062a826fada92c7422965de'),
+    'native/pure_core/tests/fixtures/dxf_writer23/units-Feet.dxf': (859, '259b98feb0796a84ce9dc83a6428c2a0e81ea66fc373a5808f28751c3eb20514'),
+    'native/pure_core/tests/fixtures/dxf_writer23/units-Gigameters.dxf': (860, '5efbc74dc4fb5ebddb463769f13b69fb1ecba292af439285055be99e44463cf4'),
+    'native/pure_core/tests/fixtures/dxf_writer23/units-Hectometers.dxf': (860, 'e6193b633d761fbc98de4f596e7410f1d966a0dd61ba3cd75e53dfc516f05844'),
+    'native/pure_core/tests/fixtures/dxf_writer23/units-Inches.dxf': (859, '9a878680ebb30fe99545d5107a58463a7fde480050a414e7af88c32ebb796a8b'),
+    'native/pure_core/tests/fixtures/dxf_writer23/units-Kilometers.dxf': (859, 'dee9481b21287a0596b4d94b045c677e05dc66fbf82916bada371d8644fc292c'),
+    'native/pure_core/tests/fixtures/dxf_writer23/units-Meters.dxf': (859, 'a7bc1fdb36c98eecb2da62fdc516d20df6f6d7a5159cf80699509837fcd1d616'),
+    'native/pure_core/tests/fixtures/dxf_writer23/units-Microinches.dxf': (859, 'b2221737fc356763dd60f355494dd839caa1965ca2fe2f06e7f80c9571322043'),
+    'native/pure_core/tests/fixtures/dxf_writer23/units-Microns.dxf': (860, '3ba7476912d9b9e9316e310125e7c642feda2b7109978c3e9b0cd4359d42571d'),
+    'native/pure_core/tests/fixtures/dxf_writer23/units-Miles.dxf': (859, '871b0bb13456cbcc8a6081452870bce5005e6cd51c9b3508b493b6dd34122c39'),
+    'native/pure_core/tests/fixtures/dxf_writer23/units-Millimeters.dxf': (859, 'ae645fe81d84783f2b7eb35ce39e606a02318b4f667d054cc2251e6a288ef39b'),
+    'native/pure_core/tests/fixtures/dxf_writer23/units-Mils.dxf': (859, '3a1e89a148138773ccd26f8af50af6f2c05f237b6397c17f2b5de342fa5ff8c8'),
+    'native/pure_core/tests/fixtures/dxf_writer23/units-Nanometers.dxf': (860, '8beb4a33432bac0956bee9b04cacc606c663c1cf3c7a94d98c1d329c414b8105'),
+    'native/pure_core/tests/fixtures/dxf_writer23/units-UnknownUnit.dxf': (839, 'f206e2815e4b6bdebb392118d91d83057973dbacbfc360f6c415cb3b36bed2f4'),
+    'native/pure_core/tests/fixtures/dxf_writer23/units-Yards.dxf': (860, 'b76ea24d7de97e2c30a35b9cfc8f9a13732d01b1a0f5a3ec0b8f57a3e1fd0b20'),
+    'native/pure_core/tests/fixtures/dxf_writer23/units-default.dxf': (839, '4adef1038f4e569cdbe3f6d1b20eafdb6872a28d7d35ca65fd3ce15a571bd7ba'),
+    'native/pure_core/tests/fixtures/dxf_writer23/units-empty.dxf': (839, 'f206e2815e4b6bdebb392118d91d83057973dbacbfc360f6c415cb3b36bed2f4'),
+}
+
+
+def frozen_dxf23_scan(path: str, blob: bytes) -> bytes:
+    if path not in FROZEN_DXF23_FILES:
+        return blob
+    size, digest = FROZEN_DXF23_FILES[path]
+    if len(blob) != size or hashlib.sha256(blob).hexdigest() != digest:
+        raise ValueError("DXF23 frozen capture size/provenance hash mismatch")
+    return json.dumps({"kind": "independently captured DXF writer data",
+                       "source_sha256": "6450fa373ebc366e23053a71fbd6efeb6cde94922ab9c752d926e55a10cdacbc",
+                       "size": size, "sha256": digest}, sort_keys=True).encode()
+
+
 FROZEN_JSON_FILES = {
     "spike/fixtures/numparse_golden.json": {
         "origin": "50267dd6d4504b14052d1ab7e54675f3c8750637",
@@ -1024,10 +1080,10 @@ def audit_entries(entries: dict[str, tuple[str, bytes]], require_manifest: bool 
                 compile(blob, path, "exec")
             except (SyntaxError, UnicodeError, ValueError) as exc:
                 problems.append(f"{path}: Python source does not compile: {exc}")
-        if b"\0" in blob:
+        if b"\0" in blob and path not in FROZEN_DXF23_FILES:
             continue
         try:
-            scan = frozen_data_scan(path, frozen_json_scan(path, blob))
+            scan = frozen_data_scan(path, frozen_json_scan(path, frozen_dxf23_scan(path, blob)))
         except (SyntaxError, UnicodeError, ValueError) as exc:
             problems.append(f"{path}: invalid frozen DATA fixture: {exc}")
             scan = blob
@@ -1060,7 +1116,7 @@ def audit_entries(entries: dict[str, tuple[str, bytes]], require_manifest: bool 
                     problems.append(
                         f"{path}: contains forbidden legacy product marker {match.group(0)!r}")
         for marker in SECRET_MARKERS:
-            if marker.lower() in folded:
+            if marker.lower() in (blob.lower() if path in FROZEN_DXF23_FILES else folded):
                 problems.append(f"{path}: contains possible secret marker {marker!r}")
     return problems
 

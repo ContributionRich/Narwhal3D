@@ -1,0 +1,65 @@
+Vector retirement 23 — independent original byte fixtures
+========================================================
+Original vector_export.py SHA256:
+29f4a09701480e85c56a894760901e226dc25a96c49e8ddcb38a8f15586d6df6
+Original Rust vector_export.rs SHA256:
+ef185b7b83b13df8803ab3d7850aedefe9dbae1bc75800609608f72a9ef644da
+Original Python native-host test SHA256:
+901dd0f9bb5d95f2725317224fc612b3123defa009c3226f97ab51ab9f38586e
+Original public host/format test SHA256:
+9f05e405016196a65a78d40108914b4568d371b4048e463a71dadfca36acf3e9
+
+750 fixed ORIGINAL CPython 3.13 Linux answers, captured before codec edits.
+600 from premeasurement seed2122, 100 documents x PDF/legacySVG/mm/in/cm/pt12.
+Six original non-string title-atom cases are independently frozen in
+vector23_titles.txt (SHA256
+b0e3be1f468939ef0d57a7a924f74abe8e296b679b24e3bbda69fdcfe0346f3f).
+144 additional explicit adversarial cases: 14 numeric boundary datasets plus
+empty-list/empty-stroke, each PDF plus 8 SVG units including Unicode suffixes,
+uppercase/long names, 13/25/100/4096 decimals. Half-even RGB ties, no RGB clamp,
+signed zeros, subnormals, f4 and 9g-boundary INPUTS (vector format stays fixed),
+Latin1 PDF names/title and UTF8 SVG escaping, repeated/mixed layers, multisegment
+and closed/open/empty paths. No rounding tolerances, normalized zeros or generated
+native expectations. Captured original Python with every native hook disabled.
+
+vector23_golden.txt SHA256:
+83cee4db03dec50a35f767881c399a7e917ab6e5b68b6374fdd186e001cf7e6a
+Line format, 16 pipe-separated fields:
+format(0PDF/1SVG),stroke_count,segment_count,page_w/h floatbits,unit_scale bits,
+digits,suffix UTF8 hex,title Latin1 hex,segment counts,closed flags,RGB bits,
+width bits,Bezier xy bits,layer lengths,concatenated layer bytes hex,expected hex.
+Float bits are lossless big-endian IEEE754 hex, comma-separated. Empty fields
+are empty spans. Outputs include every byte, xref offset, newline and escape.
+
+Original executable engines/generator are ONLY ignored local legacy backups.
+Public tests need neither archives nor a Python codec/oracle. Existing 28 public
+host/format checks retain fixed PDF/SVG digests and external-parser acceptance;
+old private-builder comparisons transfer into these fixed Rust data tests.
+New Python tests retain host/error/protocol/file-I/O ownership checks.
+Existing 14 Rust stable-ABI tests stay intact; no old export was removed.
+
+Compatibility/safety boundaries (intentional, no approximation):
+- NaN/Inf/overflowed conversions, non-2D/four-point controls, nonpositive unit
+  scales and resource excess refuse before opening any destination.
+- Native missing/stale/protocol = RuntimeError; input/resource = ValueError.
+- PDF text is Latin1 and retains UnicodeEncodeError and noniterable/nontext title
+  TypeError instead of str coercion. Non-string title iterables retain original
+  per-atom escaping (including multicharacter fragments), computed in Rust;
+  vector23_titles.txt pins six additional independently captured exact cases.
+  SVG metadata/suffixes are UTF8, unclamped RGB
+  uses exact Python int(round(c*255)) half-even semantics on binary64 input.
+  Arbitrary-precision SVG integer RGB is refused beyond +/-floor(2^53/255),
+  rather than silently losing Python integer-product precision during marshalling.
+- Precision is bounded 0..4096 rather than unbounded Python format allocation.
+- Native encode/copy/free buffers remain transactional. The complete encoded
+  result is validated before Python opens a destination. Invalid input/native
+  failure therefore leaves an existing target untouched.
+- File publication preserves original ordinary open(path, "wb")/write/close
+  semantics: in-place truncation/write, existing inode/hardlinks/mode, symlink
+  following, writable files in read-only parents, special files and supplied
+  file descriptors. OS open/write/close errors propagate unchanged; no temporary
+  files, replacement, synthetic directory errors, rollback or fsync guarantee.
+
+
+This is Linux independent capture/proof, not a claim of a fresh actual Windows
+MSVC/macOS run. Main owns platform qualification and packaged-native staging.

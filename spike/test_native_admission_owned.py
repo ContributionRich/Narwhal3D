@@ -1,0 +1,181 @@
+"""Narrow runtime admission / encoder-adapter-retirement source and host contracts.
+
+Python only checks ctypes/host boundaries. No numerical oracle, native build,
+GUI launch, private archive, or developer-script runtime dependency.
+"""
+import ast
+import hashlib
+import importlib.util
+import inspect
+import os
+from pathlib import Path
+import types
+import unittest
+from unittest.mock import Mock, patch
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def load(name, path):
+    spec = importlib.util.spec_from_file_location(name, path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+class OBJRetirement(unittest.TestCase):
+    def setUp(self):
+        self.native = load('admission23_required_obj', ROOT/'narwhal3d/native_obj.py')
+        self.shared = self.native._packer()
+        self.shared._reset_for_tests()
+
+    def tearDown(self):
+        self.shared._reset_for_tests()
+
+    def test_obsolete_encoder_names_absent_even_in_dead_code_and_packer_frozen(self):
+        source = (ROOT/'narwhal3d/native_pure.py').read_text()
+        tree = ast.parse(source)
+        names = {n.id for n in ast.walk(tree) if isinstance(n, ast.Name)}
+        names.update(n.name for n in ast.walk(tree) if isinstance(n, ast.FunctionDef))
+        obsolete = (
+            'encode_obj', '_pack_obj', '_native_obj_encode_into',
+            '_obj_native_active', '_obj_encode_into_binding', '_objp_signature',
+            '_objp_binding', '_OBJ_NATIVE_MIN_VERTS', '_native_obj_calls',
+            '_pack_dxf', 'encode_dxf', '_dxf_encode_into_binding',
+            '_native_dxf_encode_into', '_dxf_native_active', '_DXF_TYPE_CODES',
+            '_dxp_signature', '_dxp_binding', '_DXF_NATIVE_MIN_ENTITIES',
+            '_native_dxf_calls', '_pdf_encode_into_binding', '_svg_encode_into_binding',
+            '_svg_unit_encode_into_binding', '_pack_pdf', '_pdf_capacity_bound',
+            '_valid_pdf_bytes', '_native_pdf_encode_into', '_pdf_native_active',
+            'encode_pdf', '_svg_vector_capacity_bound', '_native_svg_encode_into',
+            '_svg_vector_native_active', 'encode_svg', '_svg_unit_capacity_bound',
+            '_native_svg_unit_encode_into', '_svg_unit_native_active', 'encode_svg_unit',
+            '_pdfp_signature', '_pdfp_binding', '_svgvp_signature',
+            '_svgvp_binding', '_svgup_signature', '_svgup_binding',
+            '_native_pdf_calls', '_native_svg_vector_calls', '_native_svg_unit_calls',
+            '_PDF_NATIVE_MIN_STROKES', '_SVG_VECTOR_NATIVE_MIN_STROKES',
+        )
+        for name in obsolete:
+            self.assertNotIn(name, names)
+            self.assertFalse(hasattr(self.shared, name), name)
+        packer = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name=='_pack_obj_unchecked')
+        self.assertEqual(hashlib.sha256(ast.get_source_segment(source, packer).encode()).hexdigest(),
+                         'f7f1796f50ff62be3ae00a154503e73b3c9bbc476f00b44e737212e2042993f5')
+
+    def test_required_obj_still_uses_stable_host_packer(self):
+        self.assertIn('_pack_obj_unchecked', inspect.getsource(self.native.encode_obj))
+        meshes = [('sample',[(0,0,0),(1,0,0),(0,1,0)],[(0,1,2)])]
+        with patch.object(self.shared,'_pack_obj_unchecked',wraps=self.shared._pack_obj_unchecked) as pack:
+            data, n = self.native.encode_obj(meshes)
+        pack.assert_called_once()
+        self.assertEqual(bytes(data[:n]),b'# Narwhal 3D\no sample\nv 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n')
+        self.assertEqual(n, len(b'# Narwhal 3D\no sample\nv 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n'))
+
+    def test_five_slot_cache_no_obj_encoder_dependency_or_cross_format_disable(self):
+        operations = ('obj_decode_size','obj_decode','dxf_decode_size','dxf_decode')
+        for missing in ((), operations[:2], operations[2:]):
+            functions = {'narwhal_pure_core_abi_version':Mock(return_value=1)}
+            functions.update({'narwhal_pure_core_'+name:Mock() for name in operations if name not in missing})
+            self.shared._reset_for_tests()
+            with self.subTest(missing=missing), patch.dict(os.environ,{'NARWHAL_PURE_CORE':__file__}), \
+                    patch.object(self.shared.ctypes,'CDLL',return_value=types.SimpleNamespace(**functions)) as loader:
+                binding = self.shared._binding()
+                self.assertIsNotNone(binding)
+                self.assertEqual(len(binding),5)
+                for i,name in enumerate(operations):
+                    self.assertIs(binding[i],functions.get('narwhal_pure_core_'+name))
+                self.assertIs(self.shared._binding(),binding)
+                self.assertEqual(loader.call_count,1)
+                self.shared._reset_for_tests()
+                self.assertIsNone(self.shared._native_binding)
+                self.assertEqual(len(self.shared._binding()),5)
+                self.assertEqual(loader.call_count,2)
+                with patch.dict(os.environ,{'NARWHAL_PURE_CORE':str(ROOT/'narwhal3d/native_pure.py')}):
+                    self.assertEqual(self.shared._binding()[-1],ROOT/'narwhal3d/native_pure.py')
+                    self.assertEqual(loader.call_count,3)
+        self.shared._reset_for_tests()
+        with patch.dict(os.environ,{'NARWHAL_PURE_CORE':__file__}), \
+                patch.object(self.shared.ctypes,'CDLL',side_effect=OSError('loader refused')):
+            self.assertIsNone(self.shared._binding())
+            self.assertIn('loader refused',self.shared.backend_status())
+
+    def test_live_obj_and_dxf_decoders_keep_results_and_counters(self):
+        source = b'o sample\nv 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n'
+        before = self.shared._native_decode_obj_calls
+        self.assertEqual(self.shared.decode_obj(source,'probe'),
+            ([('sample',[(0.,0.,0.),(1.,0.,0.),(0.,1.,0.)],[(0,1,2)])],{}))
+        self.assertEqual(self.shared._native_decode_obj_calls,before+1)
+        self.assertIsNone(self.shared.decode_obj(source.replace(b'f 1 2 3',b'f 1 2 9'),'probe'))
+        self.assertEqual(self.shared._native_decode_obj_calls,before+1)
+        dxf = b'0\nSECTION\n2\nENTITIES\n0\nLINE\n8\n0\n10\n0\n20\n0\n30\n0\n11\n1\n21\n2\n31\n0\n0\nENDSEC\n0\nEOF\n'
+        before = self.shared._native_decode_dxf_calls
+        decoded = self.shared.decode_dxf(dxf)
+        self.assertEqual(decoded,{'entities':[{'type':'LINE','p0':(0.,0.,0.),'p1':(1.,2.,0.),'layer':'0','color':7}],
+            'layers':{},'layer_true_colors':{},'insunits':None,'skipped':{}})
+        self.assertEqual(self.shared._native_decode_dxf_calls,before+1)
+        self.assertIsNone(self.shared.decode_dxf(b'invalid'))
+        self.assertEqual(self.shared._native_decode_dxf_calls,before+1)
+
+
+class AdmissionSource(unittest.TestCase):
+    def test_runtime_consumers_are_called_before_success_without_developer_scripts(self):
+        text = (ROOT/'launch/check_native.py').read_text()
+        tree = ast.parse(text)
+        check = next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='check')
+        admission = next(i for i,n in enumerate(check.body) if isinstance(n,ast.Expr)
+                         and isinstance(n.value,ast.Call) and isinstance(n.value.func,ast.Name)
+                         and n.value.func.id=='check_pure_consumers')
+        success = next(i for i,n in enumerate(check.body) if isinstance(n,ast.Expr)
+                       and isinstance(n.value,ast.Call) and isinstance(n.value.func,ast.Name)
+                       and n.value.func.id=='print')
+        self.assertLess(admission,success)
+        self.assertNotIn('check_pure_core',text)
+        for n in ast.walk(tree):
+            if isinstance(n,ast.ImportFrom):
+                self.assertFalse((n.module or '').startswith('scripts'))
+
+
+class GuardMutations(unittest.TestCase):
+    def test_source_and_shared_binding_guards_are_load_bearing(self):
+        read = Path.read_text
+        source_path = ROOT/'narwhal3d/native_pure.py'
+        source = source_path.read_text()
+        def hidden(path,*args,**kwargs):
+            return source+'\nif False:\n    def encode_obj(*args): return None\n' if path==source_path else read(path,*args,**kwargs)
+        method = 'test_obsolete_encoder_names_absent_even_in_dead_code_and_packer_frozen'
+        with patch.object(Path,'read_text',hidden):
+            broken = unittest.TestResult()
+            OBJRetirement(method).run(broken)
+            self.assertFalse(broken.wasSuccessful())
+        restored = unittest.TestResult()
+        OBJRetirement(method).run(restored)
+        self.assertTrue(restored.wasSuccessful(),restored.errors or restored.failures)
+        native = load('admission23_mutation_obj',ROOT/'narwhal3d/native_obj.py')
+        shared = native._packer()
+        original = inspect.getsource(shared._binding)
+        cases = (
+            ('if _signature == signature:', 'if False:'),
+            ('version = library.narwhal_pure_core_abi_version',
+             'unused_encoder = library.narwhal_pure_core_obj_encode\n                version = library.narwhal_pure_core_abi_version'),
+            ('obj_dsize, obj_dec,', 'obj_dec, obj_dsize,'),
+            ('dxf_dsize, dxf_dec, path)', 'dxf_dec, dxf_dsize, path)'),
+            ('version = library.narwhal_pure_core_abi_version',
+             'unused_encoder = library.narwhal_pure_core_dxf_encode\n                version = library.narwhal_pure_core_abi_version'),
+        )
+        method = 'test_five_slot_cache_no_obj_encoder_dependency_or_cross_format_disable'
+        for old,new in cases:
+            self.assertIn(old,original)
+            namespace = dict(vars(shared))
+            exec(compile(original.replace(old,new),'<admission23-binding-mutant>','exec'),namespace)
+            mutant = types.FunctionType(namespace['_binding'].__code__,vars(shared))
+            with self.subTest(mutation=old), patch.object(shared,'_binding',mutant):
+                broken = unittest.TestResult()
+                OBJRetirement(method).run(broken)
+                self.assertFalse(broken.wasSuccessful())
+            restored = unittest.TestResult()
+            OBJRetirement(method).run(restored)
+            self.assertTrue(restored.wasSuccessful(),restored.errors or restored.failures)
+
+
+if __name__=='__main__':
+    unittest.main(verbosity=2)

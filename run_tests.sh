@@ -144,6 +144,7 @@ for suite in abi model consumers stress; do
     run "Rust transcript $suite" "$PYTHON" -B "spike/test_ui_transcript_$suite.py"
 done
 run "desktop native startup/preflight" "$PYTHON" -B spike/test_desktop_native_startup.py
+run "native admission and cache ownership" "$PYTHON" -B spike/test_native_admission_owned.py
 run "AI generic exit cleanup" "$PYTHON" -B spike/test_ai_v8_exit.py
 run "Rust document-session integration" "$PYTHON" spike/test_document_session_integration.py --launch
 
@@ -448,6 +449,7 @@ PURE_SUITES=(
     spike/test_import_dialog.py
     spike/test_dxf_reader.py
     spike/test_dxf_writer.py
+    spike/test_dxf_writer_owned.py
     spike/test_native_dxf.py
     spike/test_obj_reader.py
     spike/test_obj_writer.py

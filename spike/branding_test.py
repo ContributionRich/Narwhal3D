@@ -50,6 +50,29 @@ def obj_metadata_problems(rust_source, write_obj):
     return problems
 
 
+def vector_metadata_problems(rust_source, export):
+    """Rust owns PDF metadata; all host formats must retain captured file bytes."""
+    problems = []
+    if 'v.extend_from_slice(b") /Producer (Narwhal 3D) >>\\nendobj\\n");' not in rust_source:
+        problems.append("Rust PDF/AI serializer must emit the branded Producer literal")
+    fixture = os.path.join(ROOT, "native/pure_core/tests/fixtures/vector_legacy23.txt")
+    with open(fixture, encoding="ascii") as handle:
+        expected = {name: bytes.fromhex(data) for name, data in
+                    (line.strip().split("|") for line in handle)}
+    with tempfile.TemporaryDirectory(prefix="narwhal_vector_branding_") as directory:
+        for kind in ("pdf", "ai", "svg", "unit"):
+            path = os.path.join(directory, "brand." + ("svg" if kind == "unit" else kind))
+            try:
+                written = export(kind, path)
+                with open(path, "rb") as handle:
+                    actual = handle.read()
+                if actual != expected["pdf" if kind == "ai" else kind] or written != len(actual):
+                    problems.append(f"{kind} host export must match independent captured bytes and count")
+            except Exception as error:
+                problems.append(f"{kind} host export failed: {error!r}")
+    return problems
+
+
 def desktop_values(text):
     values = {}
     for line in text.splitlines():
@@ -142,7 +165,7 @@ model_text = open(os.path.join(ROOT, "narwhal3d", "model.py")).read()
 stl_text = open(os.path.join(ROOT, "narwhal3d", "stl_writer.py")).read()
 
 native_obj_text = open(os.path.join(ROOT, "native/pure_core/src/obj.rs")).read()
-vector_text = open(os.path.join(ROOT, "narwhal3d", "vector_export.py")).read()
+vector_text = open(os.path.join(ROOT, "native/pure_core/src/vector_export.rs")).read()
 commands_text = open(os.path.join(ROOT, "narwhal3d", "commands.py")).read()
 report_text = open(os.path.join(ROOT, "spike", "public_ui_report.py")).read()
 check('"name": "Narwhal 3D"' in addon_text,
@@ -192,8 +215,37 @@ check(bool(obj_metadata_problems(native_obj_text, wrong_obj_count)),
       "OBJ metadata mutation must reject a wrong actual byte count")
 check(not obj_metadata_problems(native_obj_text, obj_writer.write_obj),
       "OBJ metadata must restore GREEN after all in-memory mutations")
-check('b"/Producer (Narwhal 3D)' in vector_text,
-      "PDF/AI export metadata must identify Narwhal 3D")
+vector_spec = importlib.util.spec_from_file_location(
+    "narwhal_branding_vector_writer", os.path.join(ROOT, "narwhal3d", "vector_export.py"))
+vector_writer = importlib.util.module_from_spec(vector_spec)
+sys.modules[vector_spec.name] = vector_writer
+vector_spec.loader.exec_module(vector_writer)
+def export_vector(kind, path):
+    stroke = vector_writer.Stroke([((1.,2.),(3.,4.),(5.,6.),(7.,8.))],
+                                  closed=False, rgb=(1.,0.,0.), width_mm=.5, layer="Startup")
+    if kind == "unit":
+        return vector_writer.write_svg(path,[stroke],100.,80.,unit=("in",25.4,4))
+    writer = getattr(vector_writer,"write_"+kind)
+    if kind in ("pdf","ai"):
+        return writer(path,[stroke],100.,80.,title="startup")
+    return writer(path,[stroke],100.,80.)
+failures.extend(vector_metadata_problems(vector_text, export_vector))
+wrong_vector_source = vector_text.replace("/Producer (Narwhal 3D)", "/Producer (Wrong Name)")
+check(wrong_vector_source != vector_text and bool(vector_metadata_problems(wrong_vector_source, export_vector)),
+      "vector metadata mutation must reject a changed Rust Producer literal")
+def wrong_vector_bytes(kind, path):
+    written = export_vector(kind,path)
+    with open(path,"r+b") as handle:
+        handle.write(b"!")
+    return written
+check(bool(vector_metadata_problems(vector_text, wrong_vector_bytes)),
+      "vector metadata mutation must reject wrong actual host file bytes")
+def wrong_vector_count(kind, path):
+    return export_vector(kind,path)+1
+check(bool(vector_metadata_problems(vector_text, wrong_vector_count)),
+      "vector metadata mutation must reject wrong actual byte counts")
+check(not vector_metadata_problems(vector_text, export_vector),
+      "vector metadata must restore GREEN after mutations")
 check("[narwhal3d]" in commands_text,
       "command import diagnostics must use [narwhal3d]")
 check('"Narwhal 3D public UI report"' in report_text,

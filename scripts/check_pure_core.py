@@ -62,6 +62,8 @@ PURE_CORE_PYTESTS = (
     "spike/test_dxf_writer.py",
     "spike/test_dxf_reader.py",
     "spike/test_native_dxf.py",
+    "spike/test_dxf_writer_owned.py",
+    "spike/test_native_admission_owned.py",
     "spike/test_numparse.py",
     "spike/test_numparse_owned.py",
     "spike/test_native_numparse.py",
@@ -128,8 +130,65 @@ PURE_CORE_PYTESTS = (
 
 
 # Explicit Rust oracle-retirement suites and their source/fixture closure.
-RUST_INTEGRATION_SUITES = ('alias_golden', 'unit_golden', 'interpolate_golden', 'svgpath_golden', 'bearing_golden', 'calc_golden', 'coords_golden', 'unitformat_golden', 'macro_golden', 'joinchain_golden', 'rebuild_golden', 'blend_golden', 'norm_golden', 'nurbs_golden', 'arclength_golden', 'coil_golden', 'interpolate_helpers_golden', 'stl_owned', 'stl_import_safety', 'catenary_boundary', 'catenary_golden', 'obj_golden', 'stl_legacy_abi', 'stl_name_prefix')
+RUST_INTEGRATION_SUITES = ('alias_golden', 'unit_golden', 'interpolate_golden', 'svgpath_golden', 'bearing_golden', 'calc_golden', 'coords_golden', 'unitformat_golden', 'macro_golden', 'joinchain_golden', 'rebuild_golden', 'blend_golden', 'norm_golden', 'nurbs_golden', 'arclength_golden', 'coil_golden', 'interpolate_helpers_golden', 'stl_owned', 'stl_import_safety', 'catenary_boundary', 'catenary_golden', 'obj_golden', 'stl_legacy_abi', 'stl_name_prefix', 'dxf_owned', 'vector23_golden', 'tween_golden', 'obj_legacy_abi', 'encoder_legacy_abi')
 RUST_INTEGRATION_FILES = (
+    'native/pure_core/tests/dxf_owned.h',
+    'native/pure_core/tests/dxf_owned.rs',
+    'native/pure_core/tests/encoder_legacy_abi.rs',
+    'native/pure_core/tests/fixtures/dxf_legacy23.txt',
+    'native/pure_core/tests/fixtures/dxf_writer23/all-aci.dxf',
+    'native/pure_core/tests/fixtures/dxf_writer23/capture.json',
+    'native/pure_core/tests/fixtures/dxf_writer23/color-sentinel.dxf',
+    'native/pure_core/tests/fixtures/dxf_writer23/decoder-mixed.dxf',
+    'native/pure_core/tests/fixtures/dxf_writer23/decoder-no-layers.dxf',
+    'native/pure_core/tests/fixtures/dxf_writer23/empty.dxf',
+    'native/pure_core/tests/fixtures/dxf_writer23/key-alias.dxf',
+    'native/pure_core/tests/fixtures/dxf_writer23/latin1.dxf',
+    'native/pure_core/tests/fixtures/dxf_writer23/.gitattributes',
+    'native/pure_core/tests/fixtures/dxf_writer23/mixed-closed.dxf',
+    'native/pure_core/tests/fixtures/dxf_writer23/poly-one.dxf',
+    'native/pure_core/tests/fixtures/dxf_writer23/poly-open.dxf',
+    'native/pure_core/tests/fixtures/dxf_writer23/poly-zero.dxf',
+    'native/pure_core/tests/fixtures/dxf_writer23/random-coordinates.bin',
+    'native/pure_core/tests/fixtures/dxf_writer23/random-floats.dxf',
+    'native/pure_core/tests/fixtures/dxf_writer23/short-poly-chain.dxf',
+    'native/pure_core/tests/fixtures/dxf_writer23/signed-exponents.dxf',
+    'native/pure_core/tests/fixtures/dxf_writer23/spline-closed.dxf',
+    'native/pure_core/tests/fixtures/dxf_writer23/unicode-frame.utf8',
+    'native/pure_core/tests/fixtures/dxf_writer23/units-Angstroms.dxf',
+    'native/pure_core/tests/fixtures/dxf_writer23/units-Centimeters.dxf',
+    'native/pure_core/tests/fixtures/dxf_writer23/units-Decimeters.dxf',
+    'native/pure_core/tests/fixtures/dxf_writer23/units-Dekameters.dxf',
+    'native/pure_core/tests/fixtures/dxf_writer23/units-Feet.dxf',
+    'native/pure_core/tests/fixtures/dxf_writer23/units-Gigameters.dxf',
+    'native/pure_core/tests/fixtures/dxf_writer23/units-Hectometers.dxf',
+    'native/pure_core/tests/fixtures/dxf_writer23/units-Inches.dxf',
+    'native/pure_core/tests/fixtures/dxf_writer23/units-Kilometers.dxf',
+    'native/pure_core/tests/fixtures/dxf_writer23/units-Meters.dxf',
+    'native/pure_core/tests/fixtures/dxf_writer23/units-Microinches.dxf',
+    'native/pure_core/tests/fixtures/dxf_writer23/units-Microns.dxf',
+    'native/pure_core/tests/fixtures/dxf_writer23/units-Miles.dxf',
+    'native/pure_core/tests/fixtures/dxf_writer23/units-Millimeters.dxf',
+    'native/pure_core/tests/fixtures/dxf_writer23/units-Mils.dxf',
+    'native/pure_core/tests/fixtures/dxf_writer23/units-Nanometers.dxf',
+    'native/pure_core/tests/fixtures/dxf_writer23/units-UnknownUnit.dxf',
+    'native/pure_core/tests/fixtures/dxf_writer23/units-Yards.dxf',
+    'native/pure_core/tests/fixtures/dxf_writer23/units-default.dxf',
+    'native/pure_core/tests/fixtures/dxf_writer23/units-empty.dxf',
+    'native/pure_core/tests/fixtures/encoder_legacy23_provenance.txt',
+    'native/pure_core/tests/fixtures/tween_host23.json',
+    'native/pure_core/tests/fixtures/tween_lengths23.txt',
+    'native/pure_core/tests/fixtures/tween_original23.txt',
+    'native/pure_core/tests/fixtures/tween_provenance23.txt',
+    'native/pure_core/tests/fixtures/vector23_golden.txt',
+    'native/pure_core/tests/fixtures/vector23_provenance.txt',
+    'native/pure_core/tests/fixtures/vector23_titles.txt',
+    'native/pure_core/tests/fixtures/vector_legacy23.txt',
+    'native/pure_core/tests/obj_legacy_abi.rs',
+    'native/pure_core/tests/tween_golden.rs',
+    'native/pure_core/tests/tween_v1.h',
+    'native/pure_core/tests/vector23_api.h',
+    'native/pure_core/tests/vector23_golden.rs',
     'native/pure_core/tests/fixtures/catenary_numeric_windows_msvc.txt',
     'native/pure_core/tests/fixtures/catenary_host_windows_msvc.txt',
     'native/pure_core/tests/fixtures/catenary_windows_msvc.provenance.json',
@@ -577,7 +636,7 @@ def probe_pure_core_parser(path: Path, python: Path | str = sys.executable, *, e
     return identity
 
 
-# Required round-22 retirement ABIs (additive to the round-21 requirements). Kept separate from the older parser
+# Required round-23 retirement ABIs (additive to the round-21/22 requirements). Kept separate from the older parser
 # identity so existing optional ABI consumers retain their compatibility contract.
 PURE_CORE_RETIREMENT_EXPORTS = (
     "narwhal_pure_core_stl_size_owned", "narwhal_pure_core_stl_encode_owned",
@@ -585,8 +644,21 @@ PURE_CORE_RETIREMENT_EXPORTS = (
     "narwhal_pure_core_stl_import_mesh_decode", "narwhal_pure_core_stl_normal",
     "narwhal_pure_core_interpolate_helper_v1",
     "narwhal_pure_core_catenary_plan_v2", "narwhal_pure_core_obj_encode_into",
+    "narwhal_pure_core_vector_encode_v1",
+    "narwhal_pure_core_vector_len_v1",
+    "narwhal_pure_core_vector_copy_v1",
+    "narwhal_pure_core_vector_free_v1",
+    "narwhal_pure_core_vector_validate_v1",
+    "narwhal_pure_core_dxf_owned_abi_version",
+    "narwhal_pure_core_dxf_owned_colors",
+    "narwhal_pure_core_dxf_owned_units",
+    "narwhal_pure_core_dxf_owned_capacity",
+    "narwhal_pure_core_dxf_owned_encode",
+    "narwhal_pure_core_tween_plan_v1",
+    "narwhal_pure_core_tween_knots_v1",
+    "narwhal_pure_core_tween_lengths_v1",
 )
-PURE_CORE_RETIREMENT_IDENTITY = {"retirement_abi": 22,
+PURE_CORE_RETIREMENT_IDENTITY = {"retirement_abi": 23,
                                  "retirement_exports": list(PURE_CORE_RETIREMENT_EXPORTS)}
 PURE_CORE_RETIREMENT_PROBE = r'''
 import ctypes as c, json, math, struct, sys
@@ -745,9 +817,186 @@ for damage in ("nonfinite","index","arity"):
     if damage == "arity": arity[0] = 2
     rc,written,output = obj_call()
     require((rc,written) == (-2,-1) and output == b"!"*1024, "required OBJ domain atomicity: " + damage)
-print(json.dumps({"retirement_abi":22,"retirement_exports":["narwhal_pure_core_"+s for s in
+# Layouts/signatures mirror vector23_api.h, dxf_owned.h, tween_v1.h. These
+# direct calls intentionally do not import adapters or a retired Python engine.
+import hashlib
+class VDouble(c.Structure):
+    _fields_ = [("data",D),("len",c.c_size_t)]
+class VInt(c.Structure):
+    _fields_ = [("data",I),("len",c.c_size_t)]
+class VFlag(c.Structure):
+    _fields_ = [("data",c.POINTER(c.c_int32)),("len",c.c_size_t)]
+class VByte(c.Structure):
+    _fields_ = [("data",c.c_void_p),("len",c.c_size_t)]
+class VectorRequest(c.Structure):
+    _fields_ = [("size",c.c_size_t),("format",c.c_uint32),("digits",c.c_int32),
+                ("page_w_mm",c.c_double),("page_h_mm",c.c_double),("unit_mm",c.c_double),
+                ("segments",c.c_size_t),("beziers",VDouble),("counts",VInt),
+                ("closed",VFlag),("rgb",VDouble),("widths",VDouble),
+                ("layers",VByte),("layer_lengths",VInt),("title",VByte),("unit",VByte),("title_parts",VInt)]
+vector_encode = bind("vector_encode_v1",[c.POINTER(VectorRequest),c.POINTER(c.c_void_p)])
+vector_len = bind("vector_len_v1",[c.c_void_p],c.c_size_t)
+vector_copy = bind("vector_copy_v1",[c.c_void_p,c.c_void_p,c.c_size_t,c.POINTER(c.c_size_t)])
+vector_free = bind("vector_free_v1",[c.c_void_p],None)
+vector_validate = bind("vector_validate_v1",[c.c_uint32,c.c_void_p,c.c_size_t])
+require(c.sizeof(VectorRequest) == 208, "vector request layout")
+bz = (c.c_double*8)(1,2,3,4,5,6,7,8)
+counts,closed,rgb,widths,lens = (c.c_int64*1)(1),(c.c_int32*1)(0),(c.c_double*3)(1,0,0),(c.c_double*1)(.5),(c.c_int64*1)(7)
+layer,title,unit = c.create_string_buffer(b"Startup"),c.create_string_buffer(b"startup"),c.create_string_buffer(b"in")
+request = VectorRequest(c.sizeof(VectorRequest),0,4,100.,80.,1.,1,
+                        VDouble(bz,8),VInt(counts,1),VFlag(closed,1),VDouble(rgb,3),VDouble(widths,1),
+                        VByte(c.addressof(layer),7),VInt(lens,1),VByte(c.addressof(title),7),VByte(None,0),VInt(None,0))
+# Independently captured original Python bytes (vector_legacy23.txt), not a
+# second serializer. Hashes pin complete metadata, operators, units and xrefs.
+for fmt,scale,suffix,length,digest in (
+    (0,1.,False,827,"65521d66a71bc1932a8aea9c251362910553c30596249f51aa92a3f55def64f6"),
+    (1,1.,False,425,"2997d78f4f626f6b3221d404906a09d98c9f479bf8d6f851cbb81399d9294949"),
+    (1,25.4,True,419,"c94568a5d99506b93520b158382b7b2af37cdb197818462087e75715eb604f11")):
+    request.format,request.unit_mm = fmt,scale
+    request.title = VByte(c.addressof(title),7) if fmt == 0 else VByte(None,0)
+    request.unit = VByte(c.addressof(unit),2) if suffix else VByte(None,0)
+    handle = c.c_void_p()
+    require(vector_encode(c.byref(request),c.byref(handle)) == 0 and handle.value, "vector owned handle")
+    try:
+        require(vector_len(handle) == length, "vector owned length")
+        output,written = c.create_string_buffer(b"!"*(length+8),length+8),c.c_size_t(777)
+        require(vector_copy(handle,output,length-1,c.byref(written)) == -3
+                and written.value == 777 and output.raw == b"!"*(length+8), "vector short-copy atomicity")
+        require(vector_copy(handle,output,length+8,c.byref(written)) == 0 and written.value == length
+                and hashlib.sha256(output.raw[:length]).hexdigest() == digest
+                and output.raw[length:] == b"!"*8, "vector complete captured bytes")
+        require(vector_validate(fmt,output,length) == 0, "vector native framing validation")
+        second = c.create_string_buffer(length)
+        written.value = 777
+        require(vector_copy(handle,second,length,c.byref(written)) == 0
+                and written.value == length and second.raw == output.raw[:length], "vector repeat owned copy")
+        sibling_request = VectorRequest.from_buffer_copy(request)
+        sibling_request.format, sibling_request.unit_mm = 1-fmt,1.
+        sibling_request.unit = VByte(None,0)
+        sibling_request.title = VByte(c.addressof(title),7) if fmt == 1 else VByte(None,0)
+        sibling = c.c_void_p()
+        require(vector_encode(c.byref(sibling_request),c.byref(sibling)) == 0
+                and sibling.value and sibling.value != handle.value, "vector simultaneous ownership")
+        try:
+            other_length = 425 if fmt == 0 else 827
+            other_digest = ("2997d78f4f626f6b3221d404906a09d98c9f479bf8d6f851cbb81399d9294949" if fmt == 0 else
+                            "65521d66a71bc1932a8aea9c251362910553c30596249f51aa92a3f55def64f6")
+            require(vector_len(sibling) == other_length, "vector sibling length")
+            other = c.create_string_buffer(other_length)
+            require(vector_copy(sibling,other,other_length,c.byref(written)) == 0
+                    and written.value == other_length and hashlib.sha256(other.raw).hexdigest() == other_digest,
+                    "vector sibling complete bytes")
+            written.value = 777
+            require(vector_copy(handle,second,length,c.byref(written)) == 0 and written.value == length
+                    and hashlib.sha256(second.raw).hexdigest() == digest, "vector first ownership survives another encode")
+        finally:
+            vector_free(sibling)
+    finally:
+        vector_free(handle)
+require(vector_len(None) == 0, "vector null length")
+vector_free(None)
+require(vector_validate(1,b"broken",6) == -6, "vector malformed framing refusal")
+for field,bad,expected in (("page_w_mm",float("nan"),-4),("unit_mm",0.,-5),("digits",4097,-3),("segments",2,-2)):
+    saved = getattr(request,field)
+    setattr(request,field,bad)
+    handle = c.c_void_p(1)
+    try:
+        require(vector_encode(c.byref(request),c.byref(handle)) == expected and handle.value is None,
+                "vector typed refusal clears ownership: " + field)
+    finally:
+        setattr(request,field,saved)
+class DXFLayer(c.Structure):
+    _fields_ = [("name",c.c_int64),("color",c.c_int64)]
+class DXFEntity(c.Structure):
+    _fields_ = [(name,c.c_int64) for name in ("kind","name","color","points","closed","true_color","label")]
+class DXFInput(c.Structure):
+    _fields_ = [("version",c.c_uint64),("names",c.c_void_p),("names_len",c.c_size_t),
+                ("lengths",I),("names_count",c.c_size_t),("layers",c.POINTER(DXFLayer)),("layer_count",c.c_size_t),
+                ("entities",c.POINTER(DXFEntity)),("entity_count",c.c_size_t),("nums",D),("nums_len",c.c_size_t),
+                ("unit",c.c_void_p),("unit_len",c.c_size_t),("unit_mode",c.c_ubyte)]
+require(c.sizeof(DXFInput) == 112 and c.sizeof(DXFEntity) == 56, "DXF typed input layout")
+require(bind("dxf_owned_abi_version",[],c.c_uint32)() == 2, "DXF owned version")
+dxf_colors = bind("dxf_owned_colors",[I,c.c_size_t,I])
+dxf_units = bind("dxf_owned_units",[c.c_void_p,c.c_size_t,c.c_ubyte,I])
+dxf_capacity = bind("dxf_owned_capacity",[c.POINTER(DXFInput),c.POINTER(c.c_size_t),I])
+dxf_encode = bind("dxf_owned_encode",[c.POINTER(DXFInput),c.c_void_p,c.c_size_t,I,I,I])
+diag = (c.c_int64*3)(99,99,99)
+require(dxf_colors((c.c_int64*2)(7,0x1000000),2,diag) == 0 and list(diag) == [0,0,0], "DXF valid colors")
+require(dxf_colors((c.c_int64*2)(7,256),2,diag) == -40 and list(diag) == [-40,1,0], "DXF color typed reason")
+for name,mode,answer in ((b"",0,[4,-1]),(b"Inches",1,[1,0]),(b"UnknownUnit",1,[0,-1])):
+    out = (c.c_int64*2)(99,99)
+    require(dxf_units(name,len(name),mode,out) == 0 and list(out) == answer, "DXF unit metadata")
+names, name_lengths = c.create_string_buffer(b"Cut"),(c.c_int64*1)(3)
+entities,nums = (DXFEntity*1)(DXFEntity(0,0,7,0,0,0,0)),(c.c_double*6)(0,0,0,1,2,3)
+dxf_request = DXFInput(2,c.addressof(names),3,name_lengths,1,None,0,entities,1,nums,6,None,0,0)
+expected_dxf = b'0\nSECTION\n2\nHEADER\n9\n$ACADVER\n1\nAC1009\n9\n$INSUNITS\n70\n4\n0\nENDSEC\n0\nSECTION\n2\nTABLES\n0\nTABLE\n2\nLAYER\n70\n1\n0\nLAYER\n2\nCut\n70\n0\n62\n7\n6\nCONTINUOUS\n0\nENDTAB\n0\nENDSEC\n0\nSECTION\n2\nENTITIES\n0\nLINE\n8\nCut\n62\n7\n10\n0\n20\n0\n30\n0\n11\n1\n21\n2\n31\n3\n0\nENDSEC\n0\nEOF\n'
+capacity = c.c_size_t(777)
+require(dxf_capacity(c.byref(dxf_request),c.byref(capacity),diag) == 0 and list(diag) == [0,0,0]
+        and len(expected_dxf) <= capacity.value <= 1024*1024, "DXF bounded capacity")
+output = c.create_string_buffer(b"!"*capacity.value,capacity.value)
+written,encoding = c.c_int64(777),c.c_int64(777)
+require(dxf_encode(c.byref(dxf_request),output,1,c.byref(written),c.byref(encoding),diag) == -3
+        and list(diag) == [-3,0,0] and (written.value,encoding.value) == (777,777)
+        and output.raw == b"!"*capacity.value, "DXF short output atomicity")
+require(dxf_encode(c.byref(dxf_request),output,capacity.value,c.byref(written),c.byref(encoding),diag) == 0
+        and list(diag) == [0,0,0] and (written.value,encoding.value) == (len(expected_dxf),0)
+        and output.raw[:written.value] == expected_dxf
+        and output.raw[written.value:] == b"!"*(capacity.value-written.value), "DXF exact file bytes")
+for damage,status,index in (("color",-40,0),("type",-42,0),("nonfinite",-44,2)):
+    entities[0].color,entities[0].kind,nums[2] = 7,0,0.
+    if damage == "color": entities[0].color = 256
+    if damage == "type": entities[0].kind = 99
+    if damage == "nonfinite": nums[2] = float("nan")
+    capacity.value = 777
+    require(dxf_capacity(c.byref(dxf_request),c.byref(capacity),diag) == status and capacity.value == 777
+            and list(diag) == [status,index,0], "DXF capacity typed refusal: " + damage)
+    c.memset(output,ord("!"),len(output))
+    written.value,encoding.value = 777,777
+    require(dxf_encode(c.byref(dxf_request),output,len(output),c.byref(written),c.byref(encoding),diag) == status
+            and list(diag) == [status,index,0] and (written.value,encoding.value) == (777,777)
+            and output.raw == b"!"*len(output), "DXF domain atomic refusal: " + damage)
+tween_plan = bind("tween_plan_v1",[D,D,c.c_size_t,c.c_size_t,c.c_uint32,c.c_uint32,D,c.c_size_t,U])
+tween_knots = bind("tween_knots_v1",[D,D,c.c_size_t])
+tween_lengths = bind("tween_lengths_v1",[c.c_double,c.c_size_t,D,c.c_size_t,U])
+a,b = (c.c_double*4)(0,2,4,1),(c.c_double*4)(2,4,6,1)
+for mode,answer in ((0,[1.,3.,5.,1.]),(1,[1.,3.,5.,1.]),(2,[1.,3.,5.])):
+    output,used = (c.c_double*8)(*[123.]*8),c.c_uint64(777)
+    require(tween_plan(a,b,1,1,mode,0,output,8,c.byref(used)) == 0
+            and used.value == len(answer) and list(output)[:used.value] == answer
+            and list(output)[used.value:] == [123.]*(8-used.value), "Tween mode semantics: " + str(mode))
+for damage,status in (("capacity",-3),("mode",-2),("nonfinite",-12),("weight",-10)):
+    a[0],a[3] = 0.,1.
+    if damage == "nonfinite": a[0] = float("nan")
+    if damage == "weight": a[3] = 0.
+    output,used = (c.c_double*8)(*[123.]*8),c.c_uint64(777)
+    require(tween_plan(a,b,1,1,99 if damage == "mode" else 0,3 if damage == "weight" else 0,
+                       output,1 if damage == "capacity" else 8,c.byref(used)) == status
+            and used.value == 777 and list(output) == [123.]*8, "Tween typed atomic refusal: " + damage)
+knots,other = (c.c_double*4)(0,0,1,1),(c.c_double*4)(0,0,.5,1)
+require(tween_knots(knots,knots,4) == 0 and tween_knots(knots,other,4) == -20, "Tween knot compatibility")
+output,used = (c.c_double*5)(*[123.]*5),c.c_uint64(777)
+require(tween_lengths(8.,3,output,5,c.byref(used)) == 0 and used.value == 3
+        and list(output) == [0.,4.,8.,123.,123.], "Tween equal-length targets")
+for total,samples,cap,status in ((8.,3,1,-3),(float("nan"),3,5,-2),(8.,1,5,-2)):
+    output,used = (c.c_double*5)(*[123.]*5),c.c_uint64(777)
+    require(tween_lengths(total,samples,output,cap,c.byref(used)) == status
+            and used.value == 777 and list(output) == [123.]*5, "Tween lengths atomic refusal")
+print(json.dumps({"retirement_abi":23,"retirement_exports":["narwhal_pure_core_"+s for s in
     ("stl_size_owned","stl_encode_owned","stl_file_size","stl_file_decode",
-     "stl_import_mesh_decode","stl_normal","interpolate_helper_v1","catenary_plan_v2","obj_encode_into")]}))
+     "stl_import_mesh_decode","stl_normal","interpolate_helper_v1","catenary_plan_v2","obj_encode_into",
+     'vector_encode_v1',
+     'vector_len_v1',
+     'vector_copy_v1',
+     'vector_free_v1',
+     'vector_validate_v1',
+     'dxf_owned_abi_version',
+     'dxf_owned_colors',
+     'dxf_owned_units',
+     'dxf_owned_capacity',
+     'dxf_owned_encode',
+     'tween_plan_v1',
+     'tween_knots_v1',
+     'tween_lengths_v1')]}))
 '''
 
 

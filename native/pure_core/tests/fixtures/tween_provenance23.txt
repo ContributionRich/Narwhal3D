@@ -1,0 +1,14 @@
+TWEEN-RETIRE-23 original forced-Python captures
+Base: 62a1abe1ea5a473d24ebc8b34519a5ae40a15e6e
+Original tween.py SHA256: f0463bbcaefcbc576615453794f7e8df67abf0138e9766a7fc7c2d748e03aa2b
+SDK: rhino3dm 8.35.0 / Linux CPython 3.13
+19 successful full-curve cases, including valid SDK Circle.ToNurbsCurve rational closed curves, domain changes, flip, and SamplePoints.
+Expected source was original Python with native threshold forced above any output cap; no candidate/reference serialization computes expectations at test time.
+Both checked-out modes use x + fraction*(y-x); no weighted-sum rewrite.
+tween_original23.txt fields: mode|number|rational flags|A raw binary64 hex|B raw binary64 hex|expected raw binary64 hex (comma-separated arrays).
+Mode 0 expected homogeneous SDK points; mode 2 expected original sample blend points captured at interpolate_curve entry.
+tween_host23.json contains original encoded SDK inputs and exact output control/weight/knot/domain/evaluation bits, valid/closed flags, and six original error messages/types.
+tween_lengths23.txt fields: total hex|sample count|original target distance bits, observed at original parameter_at_length calls (four rows).
+Public fixtures contain data only; originals and capture scripts are locally ignored in legacy/tween-retire-23.
+Safety additions: native source/result overflow, nonfinite geometry, and rehomogenization overflow refuse atomically. Old tween_controls ABI remains unchanged.
+Full SDK construction benchmark (Linux, median, original forced-Python vs required): compatible 4 controls/1 output 210.3us vs 228.9us; 32/32 14.468ms vs 13.353ms; 256/64 205.530ms vs 189.349ms. SamplePoints line inputs: 5 samples/1 output 3.945ms vs 4.061ms; 100/16 97.399ms vs 94.718ms. Not a universal 10% win: tiny compatible costs ~19us; retirement is explicitly authorized for computation ownership/removal.

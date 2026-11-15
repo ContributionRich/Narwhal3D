@@ -15,4 +15,4 @@ Measured complete catenary construction is about 3–5.6 times faster over 8–1
 
 Original engines and hashes are backed up locally under ignored legacy directories. Public tests use independent data, not executable Python reference engines or private backup paths. Exact OCCT/openNURBS geometry, historical save files and one Undo remain mandatory. macOS is unqualified and no release packages were changed.
 
-Next targets include vector export and DXF serialization; existing unconverted behavior is not removed just to change language statistics.
+Subsequent source work retires vector/DXF serialization and Tween computation; see [encoder ownership](RUST_RETIREMENT_23.md). Unconverted behavior is never removed just to change language statistics.

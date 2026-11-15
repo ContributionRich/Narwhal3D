@@ -1,19 +1,9 @@
-//! One-pass Rust PDF and SVG vector serializers (Q117-07/Q117-08).
-//!
-//! Serializes the complete single-page PDF 1.4 EXACTLY ONCE into a caller-owned
-//! buffer, byte-for-byte identical to the Python `vector_export._build_pdf`. The
-//! content stream (the dominant cost -- one formatted coordinate per cubic
-//! control point) is formatted once, not twice, which is what makes the native
-//! route faster than the Python writer. The Python layer owns file I/O and is
-//! the complete fallback: library absent, export missing, call error, or output
-//! malformed all degrade to the unchanged Python serializer.
-//!
-//! Byte-exact contract preserved: fixed-4 float formatting (ties-to-even,
-//! matching Python `f"{v:.4f}"`), Latin-1 title/layer literal-string escaping
-//! (`\` -> `\\`, `(` -> `\(`, `)` -> `\)`), object order (catalog, pages, page,
-//! contents, info, then one OCG per layer), the OCG/OCProperties wiring, the
-//! exact `stream`/`endstream` framing and `/Length`, and the xref table (true
-//! byte offsets, 20-byte entries, `startxref`, `%%EOF`).
+//! Exact PDF/AI/SVG codecs. The original encode-into exports remain stable.
+//! Required vector ownership ABI v1 validates complete requests, serializes once
+//! into a Rust-owned result, then permits transactional copy and explicit free.
+//! Python retains host encoding/marshalling and filesystem publication only.
+//! Formatting/order/escaping/xrefs are pinned by independently captured original
+//! CPython bytes in tests/vector23_golden.rs; no Python codec replay exists.
 
 const MM_TO_PT: f64 = 72.0 / 25.4;
 
@@ -192,12 +182,14 @@ struct SvgUnit<'a> {
     suffix: &'a str,
     mm_per_unit: f64,
     digits: usize,
+    unclamped_rgb: bool,
 }
 
 const SVG_LEGACY: SvgUnit<'static> = SvgUnit {
     suffix: "",
     mm_per_unit: 1.0,
     digits: 4,
+    unclamped_rgb: false,
 };
 
 /// Longest accepted unit suffix (CSS absolute units are two letters).
@@ -247,51 +239,59 @@ fn rgb_255(c: f64) -> u32 {
 /// `seg_base` is the per-stroke offset into the flat `beziers` array (each
 /// stroke occupies `seg_count * 8` floats, in the same layout the PDF
 /// serializer uses: p0, p1, p2, p3 per segment).
-fn svg_path(
+fn svg_path_into(
+    out: &mut String,
     beziers: &[f64],
     seg_base: usize,
     seg_count: usize,
     closed: bool,
     page_h_mm: f64,
     unit: &SvgUnit,
-) -> String {
+) {
+    use std::fmt::Write;
     if seg_count == 0 {
-        return String::new();
+        return;
     }
-    let h = page_h_mm;
-    let xy = |x: f64, y: f64| format!("{} {}", unit.num(x), unit.num(h - y));
-    let x0 = beziers[seg_base * 8];
-    let y0 = beziers[seg_base * 8 + 1];
-    let mut parts = Vec::with_capacity(seg_count + 2);
-    parts.push(format!("M {}", xy(x0, y0)));
+    let xy = |out: &mut String, x: f64, y: f64| {
+        let _ = write!(
+            out,
+            "{:.*} {:.*}",
+            unit.digits,
+            x / unit.mm_per_unit,
+            unit.digits,
+            (page_h_mm - y) / unit.mm_per_unit
+        );
+    };
+    out.push_str("M ");
+    xy(out, beziers[seg_base * 8], beziers[seg_base * 8 + 1]);
     for s in 0..seg_count {
         let o = (seg_base + s) * 8;
-        // beziers[o..o+2] = p0 (the segment's start, already emitted as the
-        // previous segment's p3 or the M point); [o+2..o+6] = p1, p2;
-        // [o+6..o+8] = p3.
-        let p1x = beziers[o + 2];
-        let p1y = beziers[o + 3];
-        let p2x = beziers[o + 4];
-        let p2y = beziers[o + 5];
-        let p3x = beziers[o + 6];
-        let p3y = beziers[o + 7];
-        parts.push(format!(
-            "C {} {} {}",
-            xy(p1x, p1y),
-            xy(p2x, p2y),
-            xy(p3x, p3y),
-        ));
+        out.push_str(" C ");
+        xy(out, beziers[o + 2], beziers[o + 3]);
+        out.push(' ');
+        xy(out, beziers[o + 4], beziers[o + 5]);
+        out.push(' ');
+        xy(out, beziers[o + 6], beziers[o + 7]);
     }
     if closed {
-        parts.push("Z".to_string());
+        out.push_str(" Z");
     }
-    parts.join(" ")
 }
 
-/// One `<path .../>` line for a stroke (two-space indent). Mirrors
-/// `vector_export._svg_path_element` byte-for-byte.
+// New ownership ABI preserves Python int(round(c*255)) even outside [0,1].
+// Keep old ABI clamping semantics isolated behind SvgUnit's compatibility flag.
+fn rgb_exact(c: f64) -> String {
+    let rounded = (c * 255.0).round_ties_even();
+    if rounded == 0.0 {
+        "0".to_string()
+    } else {
+        format!("{:.0}", rounded)
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
-fn svg_path_element(
+fn svg_path_element_into(
+    out: &mut String,
     beziers: &[f64],
     seg_base: usize,
     seg_count: usize,
@@ -300,16 +300,25 @@ fn svg_path_element(
     width_mm: f64,
     page_h_mm: f64,
     unit: &SvgUnit,
-) -> String {
-    let d = svg_path(beziers, seg_base, seg_count, closed, page_h_mm, unit);
-    format!(
-        "  <path d=\"{}\" stroke=\"rgb({},{},{})\" stroke-width=\"{}\" fill=\"none\"/>\n",
-        d,
-        rgb_255(rgb[0]),
-        rgb_255(rgb[1]),
-        rgb_255(rgb[2]),
-        unit.num(width_mm),
-    )
+) {
+    use std::fmt::Write;
+    out.push_str("  <path d=\"");
+    svg_path_into(out, beziers, seg_base, seg_count, closed, page_h_mm, unit);
+    let color = |v| {
+        if unit.unclamped_rgb {
+            rgb_exact(v)
+        } else {
+            rgb_255(v).to_string()
+        }
+    };
+    let _ = writeln!(
+        out,
+        "\" stroke=\"rgb({},{},{})\" stroke-width=\"{}\" fill=\"none\"/>",
+        color(rgb[0]),
+        color(rgb[1]),
+        color(rgb[2]),
+        unit.num(width_mm)
+    );
 }
 
 /// Serialize the complete SVG document byte-for-byte, mirroring
@@ -332,6 +341,10 @@ fn build_svg_in(input: &PdfInput, unit: &SvgUnit) -> Vec<u8> {
     let (layer_names, layer_idx) =
         discover_layers(stroke_count, input.layer_concat, input.layer_lens);
     let n_layers = layer_names.len();
+    let mut buckets = vec![Vec::new(); n_layers + 1];
+    for (s, layer) in layer_idx.iter().enumerate() {
+        buckets[layer.unwrap_or(n_layers)].push(s);
+    }
 
     // Per-stroke (seg_base, seg_count) so the per-layer scans don't re-derive
     // the offset.
@@ -357,10 +370,11 @@ fn build_svg_in(input: &PdfInput, unit: &SvgUnit) -> Vec<u8> {
                 i,
                 String::from_utf8_lossy(&name_escaped),
             ));
-            for s in 0..stroke_count {
-                if layer_idx[s] == Some(i) {
+            for &s in &buckets[i] {
+                {
                     let seg_count = input.seg_counts[s] as usize;
-                    out.push_str(&svg_path_element(
+                    svg_path_element_into(
+                        &mut out,
                         input.beziers,
                         seg_bases[s],
                         seg_count,
@@ -369,16 +383,17 @@ fn build_svg_in(input: &PdfInput, unit: &SvgUnit) -> Vec<u8> {
                         input.widths[s],
                         page_h_mm,
                         unit,
-                    ));
+                    );
                 }
             }
             out.push_str("  </g>\n");
         }
         // Strokes with an empty layer stay outside any group (after all <g>s).
-        for s in 0..stroke_count {
-            if layer_idx[s].is_none() {
+        for &s in &buckets[n_layers] {
+            {
                 let seg_count = input.seg_counts[s] as usize;
-                out.push_str(&svg_path_element(
+                svg_path_element_into(
+                    &mut out,
                     input.beziers,
                     seg_bases[s],
                     seg_count,
@@ -387,7 +402,7 @@ fn build_svg_in(input: &PdfInput, unit: &SvgUnit) -> Vec<u8> {
                     input.widths[s],
                     page_h_mm,
                     unit,
-                ));
+                );
             }
         }
     } else {
@@ -398,7 +413,8 @@ fn build_svg_in(input: &PdfInput, unit: &SvgUnit) -> Vec<u8> {
         ));
         for (s, &seg_base) in seg_bases.iter().enumerate() {
             let seg_count = input.seg_counts[s] as usize;
-            out.push_str(&svg_path_element(
+            svg_path_element_into(
+                &mut out,
                 input.beziers,
                 seg_base,
                 seg_count,
@@ -407,7 +423,7 @@ fn build_svg_in(input: &PdfInput, unit: &SvgUnit) -> Vec<u8> {
                 input.widths[s],
                 page_h_mm,
                 unit,
-            ));
+            );
         }
     }
     out.push_str("</svg>\n");
@@ -446,6 +462,7 @@ fn discover_layers(
     layer_lens: &[i64],
 ) -> (Vec<Vec<u8>>, Vec<Option<usize>>) {
     let mut names: Vec<Vec<u8>> = Vec::new();
+    let mut seen = std::collections::HashMap::<&[u8], usize>::new();
     let mut idx: Vec<Option<usize>> = Vec::with_capacity(stroke_count);
     let mut off = 0usize;
     for &l in layer_lens.iter() {
@@ -454,13 +471,12 @@ fn discover_layers(
             idx.push(None);
         } else {
             let name_bytes = &layer_concat[off..off + l];
-            match names.iter().position(|n| n.as_slice() == name_bytes) {
-                Some(k) => idx.push(Some(k)),
-                None => {
-                    names.push(name_bytes.to_vec());
-                    idx.push(Some(names.len() - 1));
-                }
-            }
+            let k = *seen.entry(name_bytes).or_insert_with(|| {
+                let k = names.len();
+                names.push(name_bytes.to_vec());
+                k
+            });
+            idx.push(Some(k));
         }
         off += l;
     }
@@ -470,6 +486,10 @@ fn discover_layers(
 /// Serialize the complete PDF byte-for-byte, mirroring
 /// `_base_objects` + `_finalize`. Returns the exact file bytes.
 fn build_pdf(input: &PdfInput) -> Vec<u8> {
+    build_pdf_title(input, None)
+}
+
+fn build_pdf_title(input: &PdfInput, escaped_title: Option<&[u8]>) -> Vec<u8> {
     let stroke_count = input.stroke_count;
     let (layer_names, layer_idx) =
         discover_layers(stroke_count, input.layer_concat, input.layer_lens);
@@ -544,7 +564,9 @@ fn build_pdf(input: &PdfInput) -> Vec<u8> {
         v.extend_from_slice(b"\nendstream\nendobj\n");
         v
     };
-    let title_escaped = pdf_escape(input.title);
+    let title_escaped = escaped_title
+        .map(std::borrow::Cow::Borrowed)
+        .unwrap_or_else(|| std::borrow::Cow::Owned(pdf_escape(input.title)));
     let obj5: Vec<u8> = {
         let mut v = Vec::with_capacity(32 + title_escaped.len());
         v.extend_from_slice(b"5 0 obj\n<< /Title (");
@@ -887,6 +909,7 @@ pub unsafe extern "C" fn narwhal_pure_core_svg_encode_unit_into(
         suffix,
         mm_per_unit,
         digits: digits as usize,
+        unclamped_rgb: false,
     };
     unsafe { svg_encode(&raw, &unit, out, out_capacity, out_written) }
 }
@@ -1373,6 +1396,7 @@ mod tests {
         suffix: "in",
         mm_per_unit: 25.4,
         digits: 6,
+        unclamped_rgb: false,
     };
 
     #[test]
@@ -1463,5 +1487,462 @@ mod tests {
             encode_unit(&inp, b"in", 25.4, 6, &mut small),
             (ERR_SIZE, -1)
         );
+    }
+}
+
+// Additive required ownership ABI. The original encode-into ABIs above retain
+// their signatures and legacy unit/RGB admission rules.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct VectorDoublesV1 {
+    pub data: *const f64,
+    pub len: usize,
+}
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct VectorIntsV1 {
+    pub data: *const i64,
+    pub len: usize,
+}
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct VectorFlagsV1 {
+    pub data: *const i32,
+    pub len: usize,
+}
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct VectorBytesV1 {
+    pub data: *const u8,
+    pub len: usize,
+}
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct VectorRequestV1 {
+    pub size: usize,
+    pub format: u32, // 0 PDF, 1 SVG; AI deliberately uses PDF
+    pub digits: i32,
+    pub page_w_mm: f64,
+    pub page_h_mm: f64,
+    pub unit_mm: f64,
+    pub segments: usize,
+    pub beziers: VectorDoublesV1,
+    pub counts: VectorIntsV1,
+    pub closed: VectorFlagsV1,
+    pub rgb: VectorDoublesV1,
+    pub widths: VectorDoublesV1,
+    pub layers: VectorBytesV1,
+    pub layer_lengths: VectorIntsV1,
+    pub title: VectorBytesV1,
+    pub unit: VectorBytesV1,
+    pub title_parts: VectorIntsV1, // empty for str; original iterable atom lengths
+}
+pub struct VectorEncodedV1 {
+    bytes: Vec<u8>,
+}
+const VECTOR_MAX_BYTES: usize = 512 * 1024 * 1024;
+const VECTOR_MAX_NAMES: usize = 64 * 1024 * 1024;
+const VECTOR_MAX_DIGITS: i32 = 4096;
+const VECTOR_NONFINITE: i32 = -4;
+const VECTOR_UNIT: i32 = -5;
+
+fn vector_range<T>(ptr: *const T, len: usize) -> Option<(usize, usize)> {
+    if len == 0 {
+        return Some((0, 0));
+    }
+    if ptr.is_null() || !(ptr as usize).is_multiple_of(std::mem::align_of::<T>()) {
+        return None;
+    }
+    let size = len.checked_mul(std::mem::size_of::<T>())?;
+    if size > isize::MAX as usize {
+        return None;
+    }
+    Some((ptr as usize, (ptr as usize).checked_add(size)?))
+}
+fn vector_overlap(a: (usize, usize), b: (usize, usize)) -> bool {
+    a.0 < b.1 && b.0 < a.1
+}
+
+fn vector_prepare(r: &VectorRequestV1) -> Result<PdfInput<'_>, i32> {
+    let n = r.counts.len;
+    if n > 1_000_000
+        || r.segments > 2_000_000
+        || r.layers.len > VECTOR_MAX_NAMES
+        || r.title.len > VECTOR_MAX_NAMES
+        || r.unit.len > 1_048_576
+        || r.title_parts.len > 1_000_000
+        || !(0..=VECTOR_MAX_DIGITS).contains(&r.digits)
+    {
+        return Err(ERR_SIZE);
+    }
+    if r.format > 1
+        || r.beziers.len != r.segments * 8
+        || r.closed.len != n
+        || r.rgb.len != n * 3
+        || r.widths.len != n
+        || r.layer_lengths.len != n
+    {
+        return Err(ERR_INPUT);
+    }
+    if r.format == 1 && (!r.unit_mm.is_finite() || r.unit_mm <= 0.0) {
+        return Err(VECTOR_UNIT);
+    }
+    // Budget formatting before allocation, including the full finite f64 integer
+    // range, precision, escaping and per-layer objects. Bounds are intentional,
+    // named resource limits, not a practical-coordinate approximation.
+    let floats = (320usize + r.digits as usize)
+        .checked_mul(8)
+        .ok_or(ERR_SIZE)?;
+    // Every stroke emits its width even when it contains no cubic segments.
+    let estimate = n
+        .checked_mul(2400 + r.digits as usize)
+        .and_then(|v| v.checked_add(r.segments.checked_mul(floats)?))
+        .and_then(|v| v.checked_add(r.layers.len.checked_mul(6)?))
+        .and_then(|v| v.checked_add(r.title.len.checked_mul(2)?))
+        .and_then(|v| v.checked_add(r.unit.len.checked_mul(2)?))
+        .and_then(|v| v.checked_add((320 + r.digits as usize) * 4 + 4096))
+        .ok_or(ERR_SIZE)?;
+    if estimate > VECTOR_MAX_BYTES {
+        return Err(ERR_SIZE);
+    }
+    let counts = unsafe { crate::checked_slice(r.counts.data, n) }.ok_or(ERR_NULL)?;
+    let lengths = unsafe { crate::checked_slice(r.layer_lengths.data, n) }.ok_or(ERR_NULL)?;
+    let mut seg_sum = 0usize;
+    let mut layer_sum = 0usize;
+    for (&count, &length) in counts.iter().zip(lengths) {
+        if count < 0 || length < 0 {
+            return Err(ERR_INPUT);
+        }
+        seg_sum = seg_sum.checked_add(count as usize).ok_or(ERR_SIZE)?;
+        layer_sum = layer_sum.checked_add(length as usize).ok_or(ERR_SIZE)?;
+    }
+    if seg_sum != r.segments || layer_sum != r.layers.len {
+        return Err(ERR_INPUT);
+    }
+    let bz = unsafe { crate::checked_slice(r.beziers.data, r.beziers.len) }.ok_or(ERR_NULL)?;
+    let rgb = unsafe { crate::checked_slice(r.rgb.data, r.rgb.len) }.ok_or(ERR_NULL)?;
+    let widths = unsafe { crate::checked_slice(r.widths.data, n) }.ok_or(ERR_NULL)?;
+    let closed = unsafe { crate::checked_slice(r.closed.data, n) }.ok_or(ERR_NULL)?;
+    let layers = unsafe { crate::checked_slice(r.layers.data, r.layers.len) }.ok_or(ERR_NULL)?;
+    let title = unsafe { crate::checked_slice(r.title.data, r.title.len) }.ok_or(ERR_NULL)?;
+    let unit = unsafe { crate::checked_slice(r.unit.data, r.unit.len) }.ok_or(ERR_NULL)?;
+    let title_parts =
+        unsafe { crate::checked_slice(r.title_parts.data, r.title_parts.len) }.ok_or(ERR_NULL)?;
+    if !title_parts.is_empty() {
+        let mut total = 0usize;
+        for &length in title_parts {
+            if length < 0 {
+                return Err(ERR_INPUT);
+            }
+            total = total.checked_add(length as usize).ok_or(ERR_SIZE)?;
+        }
+        if r.format != 0 || total != r.title.len {
+            return Err(ERR_INPUT);
+        }
+    }
+
+    if !r.page_w_mm.is_finite()
+        || !r.page_h_mm.is_finite()
+        || bz.iter().chain(rgb).chain(widths).any(|v| !v.is_finite())
+    {
+        return Err(VECTOR_NONFINITE);
+    }
+    if closed.iter().any(|v| *v != 0 && *v != 1) {
+        return Err(ERR_INPUT);
+    }
+    if r.format == 0 {
+        if [r.page_w_mm, r.page_h_mm]
+            .iter()
+            .chain(bz)
+            .chain(widths)
+            .any(|v| !(v * MM_TO_PT).is_finite())
+        {
+            return Err(VECTOR_NONFINITE);
+        }
+    } else {
+        if std::str::from_utf8(unit).is_err() {
+            return Err(ERR_INPUT);
+        }
+        let mut off = 0;
+        for &length in lengths {
+            let end = off + length as usize;
+            if std::str::from_utf8(&layers[off..end]).is_err() {
+                return Err(ERR_INPUT);
+            }
+            off = end;
+        }
+        if [r.page_w_mm, r.page_h_mm]
+            .iter()
+            .chain(widths)
+            .any(|v| !(v / r.unit_mm).is_finite())
+            || bz.chunks_exact(2).any(|p| {
+                !(p[0] / r.unit_mm).is_finite() || !((r.page_h_mm - p[1]) / r.unit_mm).is_finite()
+            })
+            || rgb.iter().any(|v| !(v * 255.0).is_finite())
+        {
+            return Err(VECTOR_NONFINITE);
+        }
+    }
+    Ok(PdfInput {
+        beziers: bz,
+        seg_counts: counts,
+        closed,
+        rgb,
+        widths,
+        layer_concat: layers,
+        layer_lens: lengths,
+        title,
+        page_w_mm: r.page_w_mm,
+        page_h_mm: r.page_h_mm,
+        stroke_count: n,
+    })
+}
+
+/// Encode once into a Rust-owned result. On refusal no handle is published.
+/// # Safety
+/// All nonempty spans name live allocations of their declared lengths. Request
+/// and handle slot are aligned, live and nonoverlapping; inputs cannot overlap
+/// the handle slot. Invalid address/alignment/alias metadata is left untouched.
+#[no_mangle]
+pub unsafe extern "C" fn narwhal_pure_core_vector_encode_v1(
+    request: *const VectorRequestV1,
+    result: *mut *mut VectorEncodedV1,
+) -> i32 {
+    let Some(rr) = vector_range(request, 1) else {
+        return ERR_NULL;
+    };
+    let Some(or) = vector_range(result, 1) else {
+        return ERR_NULL;
+    };
+    if vector_overlap(rr, or) {
+        return ERR_INPUT;
+    }
+    let r = &*request;
+    if r.size != std::mem::size_of::<VectorRequestV1>() {
+        return ERR_INPUT;
+    }
+    macro_rules! span {
+        ($s:expr) => {{
+            let Some(range) = vector_range($s.data, $s.len) else {
+                return ERR_NULL;
+            };
+            if vector_overlap(range, or) {
+                return ERR_INPUT;
+            }
+        }};
+    }
+    span!(r.beziers);
+    span!(r.counts);
+    span!(r.closed);
+    span!(r.rgb);
+    span!(r.widths);
+    span!(r.layers);
+    span!(r.layer_lengths);
+    span!(r.title);
+    span!(r.unit);
+    span!(r.title_parts);
+    *result = std::ptr::null_mut();
+    let input = match vector_prepare(r) {
+        Ok(v) => v,
+        Err(code) => return code,
+    };
+    let bytes = if r.format == 0 {
+        if r.title_parts.len == 0 {
+            build_pdf(&input)
+        } else {
+            let lengths = crate::checked_slice(r.title_parts.data, r.title_parts.len).unwrap();
+            let mut escaped = Vec::new();
+            let mut offset = 0;
+            for &length in lengths {
+                let atom = &input.title[offset..offset + length as usize];
+                // Original _pdf_escape iterated title atoms, not their characters.
+                // Preserve accepted non-string iterables without a Python engine.
+                if atom.len() == 1 {
+                    escaped.extend_from_slice(&pdf_escape(atom));
+                } else {
+                    escaped.extend_from_slice(atom);
+                }
+                offset += length as usize;
+            }
+            build_pdf_title(&input, Some(&escaped))
+        }
+    } else {
+        let unit = match crate::checked_slice(r.unit.data, r.unit.len)
+            .and_then(|b| std::str::from_utf8(b).ok())
+        {
+            Some(v) => v,
+            None => return ERR_INPUT,
+        };
+        build_svg_in(
+            &input,
+            &SvgUnit {
+                suffix: unit,
+                mm_per_unit: r.unit_mm,
+                digits: r.digits as usize,
+                unclamped_rgb: true,
+            },
+        )
+    };
+    if bytes.len() > VECTOR_MAX_BYTES {
+        return ERR_SIZE;
+    }
+    if !vector_valid_document(r.format, &bytes) {
+        return -6;
+    }
+    *result = Box::into_raw(Box::new(VectorEncodedV1 { bytes }));
+    0
+}
+
+/// # Safety
+/// Handle is live and was returned by vector_encode_v1; null has length zero.
+#[no_mangle]
+pub unsafe extern "C" fn narwhal_pure_core_vector_len_v1(result: *const VectorEncodedV1) -> usize {
+    if result.is_null() {
+        0
+    } else {
+        (*result).bytes.len()
+    }
+}
+
+/// Transactional copy; a short/null/aliased output never changes payload/count.
+/// # Safety
+/// Handle is live, output spans live for the declared capacity; written is live.
+#[no_mangle]
+pub unsafe extern "C" fn narwhal_pure_core_vector_copy_v1(
+    result: *const VectorEncodedV1,
+    out: *mut u8,
+    capacity: usize,
+    written: *mut usize,
+) -> i32 {
+    let Some(hr) = vector_range(result, 1) else {
+        return ERR_NULL;
+    };
+    let Some(wr) = vector_range(written, 1) else {
+        return ERR_NULL;
+    };
+    let Some(or) = vector_range(out, capacity) else {
+        return ERR_NULL;
+    };
+    let bytes = &(*result).bytes;
+    let br = vector_range(bytes.as_ptr(), bytes.len()).unwrap();
+    if [hr, br, wr].iter().any(|&r| vector_overlap(r, or))
+        || vector_overlap(wr, hr)
+        || vector_overlap(wr, br)
+    {
+        return ERR_INPUT;
+    }
+    if capacity < bytes.len() {
+        return ERR_SIZE;
+    }
+    let Some(output) = crate::checked_slice_mut(out, capacity) else {
+        return ERR_NULL;
+    };
+    output[..bytes.len()].copy_from_slice(bytes);
+    *written = bytes.len();
+    0
+}
+/// # Safety
+/// Free exactly once the handle returned by vector_encode_v1; null is allowed.
+#[no_mangle]
+pub unsafe extern "C" fn narwhal_pure_core_vector_free_v1(result: *mut VectorEncodedV1) {
+    if !result.is_null() {
+        drop(Box::from_raw(result));
+    }
+}
+
+fn vector_valid_document(format: u32, bytes: &[u8]) -> bool {
+    if format == 1 {
+        return std::str::from_utf8(bytes).is_ok()
+            && bytes.starts_with(b"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<svg ")
+            && bytes.ends_with(b"</svg>\n");
+    }
+    if format != 0 || !bytes.starts_with(b"%PDF-1.4\n") || !bytes.ends_with(b"%%EOF\n") {
+        return false;
+    }
+    let marker = b"startxref\n";
+    let Some(position) = bytes.windows(marker.len()).rposition(|w| w == marker) else {
+        return false;
+    };
+    let tail = &bytes[position + marker.len()..];
+    let Some(end) = tail.iter().position(|b| *b == b'\n') else {
+        return false;
+    };
+    let number = |b: &[u8]| {
+        std::str::from_utf8(b)
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+    };
+    let Some(xref) = number(&tail[..end]) else {
+        return false;
+    };
+    let Some(data) = bytes.get(xref..) else {
+        return false;
+    };
+    let mut lines = data.split(|b| *b == b'\n');
+    if lines.next() != Some(b"xref".as_slice()) {
+        return false;
+    }
+    let Some(counts) = lines.next() else {
+        return false;
+    };
+    let fields: Vec<_> = counts.split(|b| *b == b' ').collect();
+    if fields.len() != 2 || fields[0] != b"0" {
+        return false;
+    }
+    let Some(count) = number(fields[1]) else {
+        return false;
+    };
+    if count == 0 || count > 1_000_006 {
+        return false;
+    }
+    for object in 0..count {
+        let Some(entry) = lines.next() else {
+            return false;
+        };
+        if entry.len() != 19 {
+            return false;
+        }
+        if object == 0 {
+            if entry != b"0000000000 65535 f " {
+                return false;
+            }
+            continue;
+        }
+        if entry[17] != b'n' {
+            return false;
+        }
+        let Some(offset) = number(&entry[..10]) else {
+            return false;
+        };
+        let expected = format!("{} 0 obj", object);
+        if !bytes
+            .get(offset..)
+            .is_some_and(|v| v.starts_with(expected.as_bytes()))
+        {
+            return false;
+        }
+    }
+    true
+}
+
+/// Validate copied output before host publication; computation stays in Rust.
+/// # Safety
+/// Data names a live immutable byte span of the declared length (NULL iff zero).
+#[no_mangle]
+pub unsafe extern "C" fn narwhal_pure_core_vector_validate_v1(
+    format: u32,
+    data: *const u8,
+    len: usize,
+) -> i32 {
+    if len > VECTOR_MAX_BYTES {
+        return ERR_SIZE;
+    }
+    let Some(bytes) = crate::checked_slice(data, len) else {
+        return ERR_NULL;
+    };
+    if vector_valid_document(format, bytes) {
+        0
+    } else {
+        -6
     }
 }

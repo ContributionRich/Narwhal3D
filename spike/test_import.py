@@ -47,7 +47,7 @@ stl_writer = _load("narwhal3d.stl_writer", "narwhal3d/stl_writer.py")
 vector_export = _load("narwhal3d.vector_export", "narwhal3d/vector_export.py")
 native_pure = _load("narwhal3d.native_pure", "narwhal3d/native_pure.py")
 pkg.native_pure = native_pure
-PURE_LIB = os.path.join(ROOT, "native", "pure_core", "target",
+PURE_LIB = os.environ.get("NARWHAL_PURE_CORE") or os.path.join(ROOT, "native", "pure_core", "target",
                         "x86_64-unknown-linux-gnu", "release",
                         "libnarwhal_pure_core.so")
 native_cdr = _load("narwhal3d.native_cdr", "narwhal3d/native_cdr.py")

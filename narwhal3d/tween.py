@@ -1,20 +1,20 @@
-"""Compatible control-point interpolation for TweenCurves."""
+"""TweenCurves: required Rust plans, with rhino3dm getters/construction only.
+
+SamplePoints retains the existing equal-arc-length SDK sampling and NURBS
+interpolation semantics; no tessellated geometry or replacement kernel is used.
+"""
 from __future__ import annotations
 
-import math
 import rhino3dm as r3
 
-NATIVE_TWEEN_MIN_VALUES = 50_000_001
+from . import native_tween
 
 
 def _data(curve):
     nurbs = curve.ToNurbsCurve()
-    points = []
-    for point in nurbs.Points:
-        weight = float(point.W) if nurbs.IsRational else 1.0
-        if abs(weight) <= 1e-15:
-            raise ValueError("a control point has zero weight")
-        points.append((point.X / weight, point.Y / weight, point.Z / weight, weight))
+    # SDK Point4d values are homogeneous. Rust owns dehomogenization,
+    # weight validation, interpolation and rehomogenization in original order.
+    points = [(point.X, point.Y, point.Z, point.W) for point in nurbs.Points]
     return nurbs, points, tuple(float(value) for value in nurbs.Knots.ToList())
 
 
@@ -30,16 +30,14 @@ def sample_point_tweens(first, second, number=1, sample_number=100, flip=False):
     def samples(curve):
         total = arclength.length_of(curve)
         out=[]
-        for index in range(sample_number):
-            parameter = arclength.parameter_at_length(
-                curve, total * index / (sample_number-1))
+        for distance in native_tween.sample_lengths(total, sample_number):
+            parameter = arclength.parameter_at_length(curve, distance)
             point=curve.PointAt(parameter);out.append((point.X,point.Y,point.Z))
         return out
-    pa,pb=samples(a),samples(b);curves=[]
-    for index in range(1,number+1):
-        fraction=index/(number+1.0)
-        points=[tuple(x[k]+fraction*(y[k]-x[k]) for k in range(3)) for x,y in zip(pa,pb)]
-        curves.append(interpolate.interpolate_curve(points,degree=3,style="Chord"))
+    pa, pb = samples(a), samples(b)
+    rows = native_tween.interpolate(pa, pb, number, mode=2)
+    curves = [interpolate.interpolate_curve(points, degree=3, style="Chord")
+              for points in rows]
     return curves
 
 
@@ -58,30 +56,15 @@ def compatible_tweens(first, second, number=1, flip=False):
     b, bp, bk = _data(b)
     if a.Degree != b.Degree or len(ap) != len(bp) or len(ak) != len(bk):
         raise ValueError("ControlPoint matching requires equal degree and control-point structure")
-    if any(abs(x-y) > 1e-10 * max(1.0, abs(x), abs(y)) for x,y in zip(ak,bk)):
-        raise ValueError("ControlPoint matching requires matching knot vectors")
+    native_tween.matching_knots(ak, bk)
     rational = a.IsRational or b.IsRational
-    rows = None
-    if len(ap) * number >= NATIVE_TWEEN_MIN_VALUES:
-        try:
-            from . import native_tween
-            rows = native_tween.interpolate(ap, bp, number)
-        except Exception:  # noqa: BLE001 -- complete Python fallback
-            rows = None
-    if rows is None:
-        rows = []
-        for index in range(1, number+1):
-            fraction = index / (number+1.0)
-            rows.append([tuple(pa[k] + fraction*(pb[k]-pa[k]) for k in range(4))
-                         for pa,pb in zip(ap,bp)])
+    flags = int(a.IsRational) | (int(b.IsRational) << 1)
+    rows = native_tween.interpolate(ap, bp, number, mode=0, flags=flags)
     curves = []
     for values_row in rows:
         curve = r3.NurbsCurve(3, rational, int(a.Degree)+1, len(ap))
         for point_index, values in enumerate(values_row):
-            x,y,z,w = values
-            if not all(math.isfinite(value) for value in values) or abs(w) <= 1e-15:
-                raise ValueError("interpolated control point is invalid")
-            curve.Points[point_index] = r3.Point4d(x*w, y*w, z*w, w)
+            curve.Points[point_index] = r3.Point4d(*values)
         for knot_index, knot in enumerate(ak):
             curve.Knots[knot_index] = knot
         if not curve.IsValid:

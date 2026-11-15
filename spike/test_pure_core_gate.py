@@ -38,6 +38,66 @@ PYTHON = str(runtime_paths.python(ROOT))
 
 results = []
 
+ROUND23_FILES = {
+    'native/pure_core/tests/dxf_owned.h',
+    'native/pure_core/tests/dxf_owned.rs',
+    'native/pure_core/tests/encoder_legacy_abi.rs',
+    'native/pure_core/tests/fixtures/dxf_legacy23.txt',
+    'native/pure_core/tests/fixtures/dxf_writer23/all-aci.dxf',
+    'native/pure_core/tests/fixtures/dxf_writer23/capture.json',
+    'native/pure_core/tests/fixtures/dxf_writer23/color-sentinel.dxf',
+    'native/pure_core/tests/fixtures/dxf_writer23/decoder-mixed.dxf',
+    'native/pure_core/tests/fixtures/dxf_writer23/decoder-no-layers.dxf',
+    'native/pure_core/tests/fixtures/dxf_writer23/empty.dxf',
+    'native/pure_core/tests/fixtures/dxf_writer23/key-alias.dxf',
+    'native/pure_core/tests/fixtures/dxf_writer23/latin1.dxf',
+    'native/pure_core/tests/fixtures/dxf_writer23/mixed-closed.dxf',
+    'native/pure_core/tests/fixtures/dxf_writer23/poly-one.dxf',
+    'native/pure_core/tests/fixtures/dxf_writer23/poly-open.dxf',
+    'native/pure_core/tests/fixtures/dxf_writer23/poly-zero.dxf',
+    'native/pure_core/tests/fixtures/dxf_writer23/random-coordinates.bin',
+    'native/pure_core/tests/fixtures/dxf_writer23/random-floats.dxf',
+    'native/pure_core/tests/fixtures/dxf_writer23/short-poly-chain.dxf',
+    'native/pure_core/tests/fixtures/dxf_writer23/signed-exponents.dxf',
+    'native/pure_core/tests/fixtures/dxf_writer23/spline-closed.dxf',
+    'native/pure_core/tests/fixtures/dxf_writer23/unicode-frame.utf8',
+    'native/pure_core/tests/fixtures/dxf_writer23/units-Angstroms.dxf',
+    'native/pure_core/tests/fixtures/dxf_writer23/units-Centimeters.dxf',
+    'native/pure_core/tests/fixtures/dxf_writer23/units-Decimeters.dxf',
+    'native/pure_core/tests/fixtures/dxf_writer23/units-Dekameters.dxf',
+    'native/pure_core/tests/fixtures/dxf_writer23/units-Feet.dxf',
+    'native/pure_core/tests/fixtures/dxf_writer23/units-Gigameters.dxf',
+    'native/pure_core/tests/fixtures/dxf_writer23/units-Hectometers.dxf',
+    'native/pure_core/tests/fixtures/dxf_writer23/units-Inches.dxf',
+    'native/pure_core/tests/fixtures/dxf_writer23/units-Kilometers.dxf',
+    'native/pure_core/tests/fixtures/dxf_writer23/units-Meters.dxf',
+    'native/pure_core/tests/fixtures/dxf_writer23/units-Microinches.dxf',
+    'native/pure_core/tests/fixtures/dxf_writer23/units-Microns.dxf',
+    'native/pure_core/tests/fixtures/dxf_writer23/units-Miles.dxf',
+    'native/pure_core/tests/fixtures/dxf_writer23/units-Millimeters.dxf',
+    'native/pure_core/tests/fixtures/dxf_writer23/units-Mils.dxf',
+    'native/pure_core/tests/fixtures/dxf_writer23/units-Nanometers.dxf',
+    'native/pure_core/tests/fixtures/dxf_writer23/units-UnknownUnit.dxf',
+    'native/pure_core/tests/fixtures/dxf_writer23/units-Yards.dxf',
+    'native/pure_core/tests/fixtures/dxf_writer23/units-default.dxf',
+    'native/pure_core/tests/fixtures/dxf_writer23/units-empty.dxf',
+    'native/pure_core/tests/fixtures/encoder_legacy23_provenance.txt',
+    'native/pure_core/tests/fixtures/tween_host23.json',
+    'native/pure_core/tests/fixtures/tween_lengths23.txt',
+    'native/pure_core/tests/fixtures/tween_original23.txt',
+    'native/pure_core/tests/fixtures/tween_provenance23.txt',
+    'native/pure_core/tests/fixtures/vector23_golden.txt',
+    'native/pure_core/tests/fixtures/vector23_provenance.txt',
+    'native/pure_core/tests/fixtures/vector23_titles.txt',
+    'native/pure_core/tests/fixtures/vector_legacy23.txt',
+    'native/pure_core/tests/obj_legacy_abi.rs',
+    'native/pure_core/tests/tween_golden.rs',
+    'native/pure_core/tests/tween_v1.h',
+    'native/pure_core/tests/vector23_api.h',
+    'native/pure_core/tests/vector23_golden.rs',
+}
+
+
 
 def check(name):
     def deco(fn):
@@ -88,7 +148,8 @@ def _():
         "spike/test_catenary.py", "spike/test_catenary_owned.py",
         "spike/test_interpolate.py", "spike/test_interpolate_owned_boundary.py",
         "spike/test_obj_writer.py", "spike/test_obj_reader.py", "spike/test_native_obj.py",
-        "spike/test_dxf_writer.py", "spike/test_dxf_reader.py", "spike/test_native_dxf.py",
+        "spike/test_dxf_writer.py", "spike/test_dxf_reader.py", "spike/test_native_dxf.py", "spike/test_dxf_writer_owned.py",
+        "spike/test_native_admission_owned.py",
         "spike/test_numparse.py", "spike/test_numparse_owned.py", "spike/test_native_numparse.py",
         "spike/test_pure_core_packaging.py",
         "spike/test_calc.py", "spike/test_native_calc.py",
@@ -216,7 +277,8 @@ def _():
     gate = _load_gate()
     crate = Path(CRATE)
     closure = gate.require_rust_public_closure(crate)
-    assert len(closure) == 105
+    assert set(closure) == set(gate.RUST_INTEGRATION_FILES)
+    assert ROUND23_FILES <= set(closure)
     assert set(gate.RUST_INTEGRATION_SUITES) == {
             "alias_golden", "unit_golden", "interpolate_golden", "svgpath_golden",
             "bearing_golden", "calc_golden", "coords_golden", "unitformat_golden",
@@ -224,6 +286,7 @@ def _():
                         "nurbs_golden", "arclength_golden",
             "coil_golden", "interpolate_helpers_golden", "stl_owned", "stl_import_safety",
             "catenary_boundary", "catenary_golden", "obj_golden", "stl_legacy_abi", "stl_name_prefix",
+            "dxf_owned", "vector23_golden", "tween_golden", "obj_legacy_abi", "encoder_legacy_abi",
         }
     public_source = (Path(ROOT) / "scripts/create_public_branch.py").read_text()
     for retired in ("spike/alias_reference.py", "spike/units_reference.py", "spike/interpolate_reference.py",
@@ -270,7 +333,7 @@ def _():
         result = gate.step_tests(crate)
         assert set(result["integration_suites"]) == set(gate.RUST_INTEGRATION_SUITES)
         assert all(v == {"compiled": True, "passed": 2} for v in result["integration_suites"].values())
-        assert run.call_count == 25
+        assert run.call_count == 1 + len(gate.RUST_INTEGRATION_SUITES)
     for fault in ("missing-compilation", "discovery-only", "wrong-target", "zero-tests", "filtered", "failed"):
         rejects(gate.step_tests, fault)
     # Each individual target must be load-bearing, not merely the first one.
@@ -306,11 +369,12 @@ def _():
     real_read = Path.read_text
     # Every round-19/20/21/22 path is required independently; inspect manifests, not fixtures.
     added = [path for path in closure
-             if Path(path).name.startswith(("blend_", "norm_", "nurbs_", "arclength_",
+             if path in ROUND23_FILES or Path(path).name.startswith(("blend_", "norm_", "nurbs_", "arclength_",
                                             "coil_", "interpolate_helpers", "stl_owned", "stl_import_safety",
                                             "catenary_", "obj_golden", "obj_original22",
                                             "stl_legacy_abi", "stl_name_prefix", "stl_prefix"))]
-    assert len(added) == 46
+    assert ROUND23_FILES <= set(added)
+    assert len(set(added) - ROUND23_FILES) == 46
     for missing in added:
         omitted = source.replace(repr(missing) + ",", "")
         assert omitted != source
@@ -369,8 +433,9 @@ def _():
         'tests/fixtures/stl_prefix_headers.bin',
         'tests/fixtures/stl_prefix_headers.txt',
     }
+    required.update(path.removeprefix("native/pure_core/") for path in ROUND23_FILES)
     gate.require_rust_public_closure(crate)
-    with tempfile.TemporaryDirectory(prefix="pure-core-round21-closure-") as temporary:
+    with tempfile.TemporaryDirectory(prefix="pure-core-round23-closure-") as temporary:
         copied = Path(temporary) / "pure_core"
         # Copy metadata/payloads without reading any corpus into agent/test text.
         shutil.copytree(crate / "tests", copied / "tests")

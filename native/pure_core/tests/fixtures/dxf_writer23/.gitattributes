@@ -1,0 +1,3 @@
+# Exact golden DXF bytes contain intentional trailing name bytes.
+# Size/SHA-256 provenance guards, not source whitespace style, govern this fixture.
+latin1.dxf -whitespace
