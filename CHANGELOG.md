@@ -4,6 +4,32 @@ All notable public changes will be recorded here. Narwhal 3D is an extremely ear
 
 ## Unreleased
 
+## 0.4.13 — 2026-11-14
+
+Linux and Windows prerelease preparation. Package availability and platform acceptance are recorded on the GitHub release; macOS is not part of this release.
+
+### Library and project workflow
+
+- New **Library** tab: save selected geometry as reusable exact project assets with thumbnails, organize categories, search and tags, and click or drag assets into a viewport. Import/export `.narwhallib` collections to share libraries.
+- Native `.narwhal` Save and Open use Rust-owned background job coordination. Loads validate before replacing the scene; cancelled or superseded requests cannot publish a stale document. Foreign-format imports, thumbnail rendering and some geometry publication still run on the main thread.
+- Background AutoSave and crash-recovery prompts help recover the newest available session copy after an unclean exit. Edits made during a save keep the document marked modified.
+
+### Commands and interaction
+
+- Fixed ProjectToCPlane failures, repeated Trim operations, and copies of grouped objects, including Gumball Alt-copy creating independent groups.
+- Corrected moved-object picking, crossing selection and fillets on joined curves.
+- Print and Export follow document units; SVG dimensions and DXF unit metadata are preserved. Plot line widths remain in millimetres. Cached print geometry reduces repeated preview work.
+- Zoom 1to1 uses the parallel-view projection and display scale (96 DPI when no explicit DPI is available). Perspective 1to1 and Zoom Dynamic report their unsupported state instead of pretending to work.
+- Added the Picture EdgeMidpoint placement option. The previously released TracePicture helper remains included.
+
+### Rust implementation and regression coverage
+
+- Moved more curve sampling, preview, snapping, arc-length inversion and Rebuild/Blend calculations into Rust, preserving exact curve/solid geometry rather than replacing it with display meshes.
+- Rust now owns additional coordinate, unit, formula, bearing, SVG-path, alias and macro parsing. Replaced duplicate Python computational engines and migrated their regression corpora into Rust tests; necessary host/UI/kernel integration remains.
+- Added exact-bit regression, malformed-input, routing and mutation checks. Platform-specific sampling paths remain qualification-gated; Linux source validation alone does not certify Windows runtime behavior.
+
+This remains an early prerelease. Advanced command options and some performance problems remain open; background I/O does not promise zero pauses for every document.
+
 ## 0.4.12 — 2026-11-09
 
 Linux and Windows patch release for 0.4.11. The Linux AppImage and the Windows portable EXE are both built from the tagged v0.4.12 source. No Apple Silicon Mac build has been made for this line.

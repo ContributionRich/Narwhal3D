@@ -2,7 +2,9 @@
 
 Narwhal 3D is an extremely early public prerelease. This page records what currently works and what remains incomplete so visible UI does not imply unsupported behavior. Package versions remain on the `0.4.x` line until the project owner explicitly lifts that cap.
 
-## Current source and 0.4.12 feature set
+## Current source and 0.4.13 release preparation
+
+The 0.4.13 candidate adds the Library tab, Rust-coordinated background native-project I/O, crash recovery, command and unit fixes, and further Rust computational ownership. Package certification is pending; the published package description below remains the verified 0.4.12 record.
 
 This section describes the current source. Consult the GitHub release for published packages and their validation receipts. The Linux AppImage and the Windows portable EXE are the published 0.4.12 builds, both built from the tagged v0.4.12 source; both include the TracePicture helper, and the Windows EXE includes the qualified Windows document observer and exact-save helper. It is unsigned, and its acceptance ran in a Windows 11 virtual machine with a software OpenGL driver, not on a physical GPU. The Apple Silicon Mac build remains on the 0.4.8 release page; no Mac build has been made for this line. The Mac build has its own audited portability source revision and documented signing/Corel limitations.
 
