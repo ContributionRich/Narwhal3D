@@ -51,3 +51,14 @@ body:
           required: true
         - label: I kept an independent backup of the original file or native `.narwhal` project.
           required: true
+  - type: markdown
+    attributes:
+      value: |
+        ### Contributing to this issue
+
+        - New computation, parsing, selection, projection, and coordination, and their computational tests, must be implemented in Rust under `native/`.
+        - New Python is allowed only for necessary host/UI/ctypes integration that Rust cannot reasonably reach, with the concrete API constraint named.
+        - Do not add a duplicate Python fallback or silently replay a legacy algorithm.
+        - Full policy: [CONTRIBUTING.md](https://github.com/ContributionRich/Narwhal3D/blob/main/CONTRIBUTING.md)
+
+        Bug reporters do not need to write code or provide an implementation; a clear, reproducible description is enough.

@@ -6,6 +6,7 @@ in-memory guard mutants must be rejected. Real-library qualification is separate
 from __future__ import annotations
 
 import ast
+import hashlib
 from contextlib import redirect_stdout
 import ctypes as c
 import io
@@ -526,7 +527,54 @@ def retirement_library(mutant=""):
         for i,value in enumerate(answer): out[i] = value
         if mutant == "helper-op-" + str(req.operation): out[0] += 1
         return 0
-    calls = {"abi_version": lambda: 1,"stl_size_owned":size,"stl_encode_owned":encode,
+    def catenary(start,end,axis,through,tolerance,poles,pc,knots,kc,np,nk,ns,dev,reason):
+        u = [c.cast(ptr,c.POINTER(c.c_uint64)) for ptr in (np,nk,ns)]
+        d,r = c.cast(dev,c.POINTER(c.c_double)),c.cast(reason,c.POINTER(c.c_uint32))
+        for ptr in u: ptr[0] = 0
+        d[0],r[0] = 0.,0
+        why = 0
+        if start is None: return -1
+        if start[0] != start[0]: why = 1
+        elif axis[2] == 3.: why = 2
+        elif end[2] == 4.: why = 3
+        elif through[0] == 7.: why = 4
+        elif tolerance == 1e-30: why = 5
+        elif start[0] == 1e308: why = 6
+        if why:
+            r[0] = why + (1 if mutant == "cat-reason-"+str(why) else 0)
+            if mutant == "cat-partial": poles[0] = 0.
+            if mutant == "cat-status-"+str(why): return 0
+            return -4 if why == 5 else -2
+        assert list(start)==[1.,2.,3.] and list(end)==[11.,2.,3.]
+        if pc < 75 or kc < 27:
+            if mutant == "cat-capacity": u[0][0] = 75
+            return -3
+        for i in range(75): poles[i] = 2. if i%3==1 else 0.
+        poles[:3],poles[72:75] = [1.,2.,3.],[11.,2.,3.]
+        poles[36],poles[38] = 6.,1.
+        knots[:27] = [j/8. for j in range(9) for _ in range(3)]
+        u[0][0],u[1][0],u[2][0],d[0] = 75,27,8,.0001
+        if mutant == "cat-frame": poles[74] += 1
+        if mutant == "cat-tail": poles[75] = 0.
+        if mutant == "cat-count": u[0][0] += 1
+        if mutant == "cat-deviation": d[0] = float("nan")
+        return 0
+    def obj(vertices,nv,names,nbytes,nl,vc,fc,arity,nf,indices,ni,nm,out,capacity,written):
+        assert nv==6 and names==b"ab" and nbytes==2 and nf==2 and ni==6 and nm==2
+        assert list(nl)==[1,1] and list(vc)==[3,3] and list(fc)==[1,1]
+        bad = "nonfinite" if vertices[0]!=vertices[0] else "index" if indices[0]==3 else "arity" if arity[0]==2 else ""
+        if bad or capacity==1:
+            if mutant == "obj-partial": c.memset(out,0,1)
+            if mutant == "obj-accept-"+bad: return 0
+            return -2 if bad else -3
+        expected = b"# Narwhal 3D\no a\nv 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\no b\nv 2 0 0\nv 3 0 0\nv 2 1 0\nf 4 6 5\n"
+        if mutant == "obj-indices": expected = expected.replace(b"f 4 6 5",b"f 1 3 2")
+        c.memmove(out,expected,len(expected))
+        c.cast(written,c.POINTER(c.c_int64))[0] = len(expected) - (1 if mutant=="obj-count" else 0)
+        if mutant == "obj-tail": c.memset(c.addressof(out)+1023,0,1)
+        return 0
+    calls = {"abi_version": lambda: 1,"catenary_plan_v2":catenary,"obj_encode_into":obj,
+             "stl_size_owned":size,"stl_encode_owned":encode,
              "stl_file_size":file_size,"stl_file_decode":decode,
              "stl_import_mesh_decode":mesh,"stl_normal":normal,"interpolate_helper_v1":helper}
     functions = {}
@@ -554,11 +602,19 @@ class RetirementProbeTests(unittest.TestCase):
             with self.subTest(symbol=symbol), self.assertRaises((AttributeError,RuntimeError)):
                 execute_retirement_probe(symbol)
         for name in ("abi_version","stl_size_owned","stl_encode_owned","stl_file_size",
-                     "stl_file_decode","stl_import_mesh_decode","stl_normal","interpolate_helper_v1"):
+                     "stl_file_decode","stl_import_mesh_decode","stl_normal","interpolate_helper_v1",
+                     "catenary_plan_v2","obj_encode_into"):
             with self.subTest(wrong=name), self.assertRaises(RuntimeError):
                 execute_retirement_probe("wrong-"+name)
         for mutant in ("encode-partial","import-partial","import-accept-unsafe",
                        "helper-partial","helper-accept-invalid"):
+            with self.subTest(mutant=mutant), self.assertRaises(RuntimeError):
+                execute_retirement_probe(mutant)
+        for mutant in ("cat-frame","cat-tail","cat-count","cat-deviation","cat-partial","cat-capacity",
+                       "obj-indices","obj-count","obj-tail","obj-partial",
+                       "obj-accept-nonfinite","obj-accept-index","obj-accept-arity",
+                       *("cat-reason-"+str(i) for i in range(1,7)),
+                       *("cat-status-"+str(i) for i in range(1,7))):
             with self.subTest(mutant=mutant), self.assertRaises(RuntimeError):
                 execute_retirement_probe(mutant)
         for op in range(1,11):
@@ -572,7 +628,8 @@ class RetirementProbeTests(unittest.TestCase):
         require = next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name == "require")
         require.body = [ast.Pass()]
         code = ast.unparse(ast.fix_missing_locations(tree))
-        for mutant in ("wrong-stl_normal","helper-op-4","helper-op-10"):
+        for mutant in ("wrong-stl_normal","helper-op-4","helper-op-10",
+                       "cat-frame","cat-reason-3","obj-indices"):
             with self.subTest(mutant=mutant):
                 self.assertEqual(execute_retirement_probe(mutant,code),gate.PURE_CORE_RETIREMENT_IDENTITY)
                 with self.assertRaises(RuntimeError): execute_retirement_probe(mutant)
@@ -589,13 +646,14 @@ class RetirementProbeTests(unittest.TestCase):
                 self.assertEqual(args[0][-1],str(path.resolve()))
                 self.assertEqual(kwargs["timeout"],30)
                 self.assertTrue(kwargs["check"])
-            for packet in ({}, {**gate.PURE_CORE_RETIREMENT_IDENTITY,"retirement_exports":[]}):
+            for packet in ({}, {**gate.PURE_CORE_RETIREMENT_IDENTITY,"retirement_exports":[]},
+                           {**gate.PURE_CORE_RETIREMENT_IDENTITY,"retirement_abi":21}):
                 with patch.object(gate.subprocess,"run",return_value=SimpleNamespace(stdout=json.dumps(packet))):
                     with self.assertRaisesRegex(ValueError,"evidence differs"): gate.probe_pure_core_retirement(path)
             for error in (subprocess.CalledProcessError(-11,"probe",stderr="crashed"),
                           subprocess.TimeoutExpired("probe",30),OSError("loader refused")):
                 with patch.object(gate.subprocess,"run",side_effect=error):
-                    with self.assertRaisesRegex(ValueError,"STL/helper"): gate.probe_pure_core_retirement(path)
+                    with self.assertRaisesRegex(ValueError,"required retirement"): gate.probe_pure_core_retirement(path)
             alias = path.with_name("alias.so")
             alias.symlink_to(path)
             with self.assertRaisesRegex(ValueError,"missing regular"): gate.probe_pure_core_retirement(alias)
@@ -607,8 +665,8 @@ class PackageTests(unittest.TestCase):
     def test_round20_public_closure_retains_host_suites(self):
         # Path/AST metadata only: never load the golden corpora into this test.
         closure = gate.require_rust_public_closure(ROOT / "native/pure_core")
-        self.assertEqual(len(closure), 89)
-        self.assertEqual(len(gate.RUST_INTEGRATION_SUITES), 19)
+        self.assertEqual(len(closure), 105)
+        self.assertEqual(len(gate.RUST_INTEGRATION_SUITES), 24)
         source = ast.parse((ROOT / "scripts/create_public_branch.py").read_text())
         public = set()
         for node in source.body:
@@ -620,10 +678,54 @@ class PackageTests(unittest.TestCase):
         for host in ("spike/test_native_nearest.py", "spike/test_native_display_samples.py",
                      "spike/test_native_curve_samples.py", "spike/test_native_arclength.py",
                      "spike/test_coil_owned.py", "spike/test_interpolate.py",
-                     "spike/test_interpolate_owned_boundary.py", "spike/test_stl_import_boundary.py"):
+                     "spike/test_interpolate_owned_boundary.py", "spike/test_stl_import_boundary.py",
+                     "spike/test_catenary.py", "spike/test_catenary_owned.py",
+                     "spike/test_native_obj.py", "spike/test_obj_writer.py"):
             self.assertIn(host, gate.PURE_CORE_PYTESTS)
             self.assertIn(host, public)
             self.assertTrue((ROOT / host).is_file(), host)
+
+    def test_round22_required_obj_adapter_and_host_routes_are_public(self):
+        import create_public_branch as public
+        self.assertTrue((ROOT / "narwhal3d/native_obj.py").is_file())
+        self.assertIn("narwhal3d/native_obj.py", public.recursive_files("narwhal3d"))
+        for host in ("spike/test_catenary.py", "spike/test_catenary_owned.py",
+                     "spike/test_obj_writer.py", "spike/test_native_obj.py"):
+            self.assertIn(host, gate.PURE_CORE_PYTESTS)
+        self.assertEqual(gate.PURE_CORE_RETIREMENT_IDENTITY["retirement_abi"], 22)
+        for export in ("narwhal_pure_core_catenary_plan_v2", "narwhal_pure_core_obj_encode_into"):
+            self.assertIn(export, gate.PURE_CORE_RETIREMENT_EXPORTS)
+
+    def test_independent_binary_stl_capture_needs_no_public_audit_exception(self):
+        import audit_public_tree
+        path = "native/pure_core/tests/fixtures/stl_prefix_headers.bin"
+        self.assertEqual((ROOT / path).stat().st_size, 40960)
+        data = (ROOT / path).read_bytes()
+        self.assertEqual(len(data), 40960)
+        self.assertEqual(hashlib.sha256(data).hexdigest(),
+                         "c8ca18b3fb9048eb7a6a116e7aafdb7d36361ceded90aa2abd58de851df00b8a")
+        self.assertEqual(audit_public_tree.audit_entries({path: ("100644", data)}, require_manifest=False), [])
+        self.assertIn(path, gate.RUST_INTEGRATION_FILES)
+
+    def test_linux_build_inventory_tracks_new_header_and_capture_bytes(self):
+        paths = ("native/pure_core/tests/catenary_v2.h",
+                 "native/pure_core/tests/fixtures/stl_prefix_headers.bin",
+                 "native/pure_core/tests/fixtures/catenary_windows_msvc.provenance.json")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for name in paths:
+                file = root / name
+                file.parent.mkdir(parents=True, exist_ok=True)
+                file.write_bytes(b"fixture input")
+            before = linux_build.inventory(root, "pure_core")
+            self.assertEqual(set(before), set(paths))
+            for name in paths:
+                (root / name).write_bytes(b"changed input")
+                after = linux_build.inventory(root, "pure_core")
+                self.assertNotEqual(before[name], after[name])
+                self.assertEqual(after[name], hashlib.sha256(b"changed input").hexdigest())
+                (root / name).write_bytes(b"fixture input")
+            self.assertEqual(linux_build.inventory(root, "pure_core"), before)
 
     def test_linux_build_refuses_before_staging(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -834,7 +936,7 @@ class RetirementPackageTests(unittest.TestCase):
         for missing in gate.PURE_CORE_RETIREMENT_EXPORTS:
             with self.subTest(missing=missing), patch.object(win_verify,"inspect_pe_dll",return_value={
                     **identity,"exports":tuple(e for e in exports if e != missing)}):
-                with self.assertRaisesRegex(win_verify.VerificationError,"STL/helper"):
+                with self.assertRaisesRegex(win_verify.VerificationError,"retirement"):
                     win_verify.verify_pure_core_identity(Path("core.dll"))
         with patch.object(win_verify,"inspect_pe_dll",return_value=identity), \
                 patch.object(win_verify,"probe_pure_core_parser",return_value=gate.PURE_CORE_PARSE_IDENTITY), \
@@ -883,7 +985,9 @@ class GuardMutationTests(unittest.TestCase):
         for host in ("spike/test_native_nearest.py", "spike/test_native_display_samples.py",
                      "spike/test_native_curve_samples.py", "spike/test_native_arclength.py",
                      "spike/test_coil_owned.py", "spike/test_interpolate.py",
-                     "spike/test_interpolate_owned_boundary.py", "spike/test_stl_import_boundary.py"):
+                     "spike/test_interpolate_owned_boundary.py", "spike/test_stl_import_boundary.py",
+                     "spike/test_catenary.py", "spike/test_catenary_owned.py",
+                     "spike/test_native_obj.py", "spike/test_obj_writer.py"):
             with self.subTest(host=host), patch.object(
                 gate, "PURE_CORE_PYTESTS", tuple(p for p in gate.PURE_CORE_PYTESTS if p != host)
             ):
@@ -893,6 +997,38 @@ class GuardMutationTests(unittest.TestCase):
         restored = unittest.TestResult()
         PackageTests(method).run(restored)
         self.assertTrue(restored.wasSuccessful(), restored.errors or restored.failures)
+
+    def test_round22_required_boundary_and_fixed_capture_guards_go_red(self):
+        import create_public_branch as public
+        method = "test_round22_required_obj_adapter_and_host_routes_are_public"
+        cases = [(patch.object(gate, "PURE_CORE_RETIREMENT_EXPORTS", tuple(
+                    e for e in gate.PURE_CORE_RETIREMENT_EXPORTS if e != missing)), method)
+                 for missing in ("narwhal_pure_core_catenary_plan_v2", "narwhal_pure_core_obj_encode_into")]
+        cases.extend([
+            (patch.dict(gate.PURE_CORE_RETIREMENT_IDENTITY, {"retirement_abi":21}), method),
+            (patch.object(public,"recursive_files",return_value=[]), method),
+            (patch.object(gate,"PURE_CORE_PYTESTS",tuple(
+                f for f in gate.PURE_CORE_PYTESTS if f != "spike/test_catenary_owned.py")), method),
+        ])
+        inventory = linux_build.inventory
+        cases.append((patch.object(linux_build,"inventory",side_effect=lambda *args: {
+            k:v for k,v in inventory(*args).items() if not k.endswith(".bin")}),
+            "test_linux_build_inventory_tracks_new_header_and_capture_bytes"))
+        original_read = Path.read_bytes
+        capture = ROOT / "native/pure_core/tests/fixtures/stl_prefix_headers.bin"
+        data = capture.read_bytes()
+        def damaged(path):
+            return bytes([data[0]^1])+data[1:] if path == capture else original_read(path)
+        cases.append((patch.object(Path,"read_bytes",damaged),
+                      "test_independent_binary_stl_capture_needs_no_public_audit_exception"))
+        for mutant, method in cases:
+            with mutant:
+                result = unittest.TestResult()
+                PackageTests(method).run(result)
+                self.assertFalse(result.wasSuccessful(), "round22 qualification guard mutation survived")
+            restored = unittest.TestResult()
+            PackageTests(method).run(restored)
+            self.assertTrue(restored.wasSuccessful(), restored.errors or restored.failures)
 
     def test_packaging_tests_go_red_when_parser_probes_are_bypassed(self):
         # Mutate copied function ASTs in memory: no live source/bytecode writes.

@@ -115,3 +115,5 @@ and packaged `licenses/CPython-PSF-License.txt`). No tolerance is widened.
 ## Required round-21 owners
 
 STL codecs/safe mesh import, coil planning and public interpolation helpers require matching Rust support. The additive retirement probe21 checks six STL exports and interpolate_helper_v1, including errors, capacity and failure atomicity, separate from stable core ABI 1. Old libraries refuse explicitly. Exact independent Linux/MSVC captures and source/package checks are mandatory. See ../../docs/RUST_RETIREMENT_21.md for scope and performance tradeoffs.
+
+Catenary and OBJ ownership extend the auxiliary required-retirement probe to 22 with 9 exports, including typed catenary v2 and OBJ serialization. Stable core ABI 1 does not change. Old libraries lacking v2 refuse explicitly; Linux and actual MSVC original captures qualify the new owner. See ../../docs/RUST_RETIREMENT_22.md.

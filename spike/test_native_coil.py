@@ -115,24 +115,21 @@ check(not hasattr(coil, "_NATIVE_MIN_SPANS"),
 cat_args = ((-5.0, 0.0, 0.0), (5.0, 0.0, 0.0),
             (0.0, -1.0, 0.0), (0.0, -2.0, 0.0), 0.001)
 rust_cat = native.catenary_plan(*cat_args)
-python_cat = catenary.python_plan(*cat_args)
+from test_catenary_owned import reference as catenary_reference
+python_cat = catenary_reference("refine_0.001")
 check(rust_cat is not None and rust_cat[2:] == python_cat[2:]
       and max(abs(a-b) for a, b in zip(rust_cat[0], python_cat[0])) < 1e-11,
-      "native catenary plan matches the complete Python fallback")
+      "native catenary plan matches the frozen original")
 cat_curve = coil.curve_from_plan(rust_cat)
 mid = cat_curve.PointAt((cat_curve.Domain.T0 + cat_curve.Domain.T1) / 2)
 check(mid.DistanceTo(coil.r3.Point3d(0, -2, 0)) < 1e-9
       and cat_curve.PointAtStart.DistanceTo(coil.r3.Point3d(-5, 0, 0)) < 1e-12
       and cat_curve.PointAtEnd.DistanceTo(coil.r3.Point3d(5, 0, 0)) < 1e-12,
       "catenary NURBS has exact endpoints and midpoint sag")
-cat_native_time = best(lambda: catenary.make_curve(*cat_args, force_native=True), 200)
-cat_python_time = best(lambda: coil.curve_from_plan(catenary.python_plan(*cat_args)), 200)
-cat_ratio = cat_native_time / cat_python_time
-print("  [perf] catenary native=%.5fs python=%.5fs ratio=%.3f" %
-      (cat_native_time, cat_python_time, cat_ratio))
-check(cat_ratio <= 0.90, "native catenary planning/materialization wins by 10%")
-check(catenary._NATIVE_MIN_SPANS == 8,
-      "production catenary uses the measured-winning native planner")
+check(not hasattr(catenary, "python_plan") and not hasattr(catenary, "_NATIVE_MIN_SPANS"),
+      "production catenary requires Rust with no planner fallback or crossover")
+# Full-adapter catenary performance is qualified against a same-machine
+# pre-correction capture by test_catenary_owned --benchmark-baseline.
 
 for passed, label in checks:
     print("[%s] %s" % ("PASS" if passed else "FAIL", label))

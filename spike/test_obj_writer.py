@@ -1,4 +1,4 @@
-"""Pure-Python tests for the OBJ writer.
+"""Host file-format and round-trip integration tests for the required Rust OBJ writer.
 
 Pins the invariants a mesh reader depends on:
 * one ``o name`` per mesh, ``v`` lines then ``f`` lines, header comment

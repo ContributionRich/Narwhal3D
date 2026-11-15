@@ -1,6 +1,6 @@
 """Standalone Narwhal 3D identity, launcher, desktop, and icon checks.
 
-Pure Python (no application runtime) so it runs quickly and headlessly.
+Headless host checks (no Blender), including the required native OBJ writer.
 Run: python3 spike/branding_test.py
 """
 import importlib.util
@@ -27,6 +27,27 @@ failures = []
 def check(condition, message):
     if not condition:
         failures.append(message)
+
+
+def obj_metadata_problems(rust_source, write_obj):
+    """Rust owns serialization; verify its header and the actual host file bytes."""
+    problems = []
+    if 'const HEADER: &[u8] = b"# Narwhal 3D\\n";' not in rust_source:
+        problems.append("Rust OBJ header literal must identify Narwhal 3D")
+    if "put(out, p, HEADER)" not in rust_source:
+        problems.append("Rust OBJ serializer must emit its branded header")
+    expected = b"# Narwhal 3D\no brand\nv 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n"
+    with tempfile.TemporaryDirectory(prefix="narwhal_obj_branding_") as directory:
+        path = os.path.join(directory, "brand.obj")
+        try:
+            written = write_obj(path, [("brand", [(0, 0, 0), (1, 0, 0), (0, 1, 0)], [(0, 1, 2)])])
+            with open(path, "rb") as handle:
+                actual = handle.read()
+            if actual != expected or written != len(expected):
+                problems.append("OBJ host export must match independent branded file bytes and byte count")
+        except Exception as error:  # Any refusal is a failed test, never a fallback/skip.
+            problems.append(f"OBJ host export failed: {error!r}")
+    return problems
 
 
 def desktop_values(text):
@@ -120,7 +141,7 @@ log_text = open(os.path.join(ROOT, "narwhal3d", "sessionlog.py")).read()
 model_text = open(os.path.join(ROOT, "narwhal3d", "model.py")).read()
 stl_text = open(os.path.join(ROOT, "narwhal3d", "stl_writer.py")).read()
 
-obj_text = open(os.path.join(ROOT, "narwhal3d", "obj_writer.py")).read()
+native_obj_text = open(os.path.join(ROOT, "native/pure_core/src/obj.rs")).read()
 vector_text = open(os.path.join(ROOT, "narwhal3d", "vector_export.py")).read()
 commands_text = open(os.path.join(ROOT, "narwhal3d", "commands.py")).read()
 report_text = open(os.path.join(ROOT, "spike", "public_ui_report.py")).read()
@@ -144,8 +165,33 @@ check('name="Narwhal 3D"' in stl_text
       and "name_starts_with_solid(name_slice)" in native_stl_text,
       "STL default and native binary-header fallback must identify Narwhal 3D")
 
-check('out = ["# Narwhal 3D"]' in obj_text,
-      "OBJ export metadata must identify Narwhal 3D")
+obj_spec = importlib.util.spec_from_file_location(
+    "narwhal_branding_obj_writer", os.path.join(ROOT, "narwhal3d", "obj_writer.py"))
+obj_writer = importlib.util.module_from_spec(obj_spec)
+obj_spec.loader.exec_module(obj_writer)
+failures.extend(obj_metadata_problems(native_obj_text, obj_writer.write_obj))
+
+# Mutate source ownership and actual host output independently. These are
+# in-memory test doubles, not a second serializer or a Python codec oracle.
+wrong_source = native_obj_text.replace('b"# Narwhal 3D\\n"', 'b"# Wrong Name\\n"')
+check(wrong_source != native_obj_text and bool(obj_metadata_problems(wrong_source, obj_writer.write_obj)),
+      "OBJ metadata mutation must reject a changed Rust header literal")
+no_header = native_obj_text.replace("put(out, p, HEADER)", "put(out, p, b\"\")")
+check(no_header != native_obj_text and bool(obj_metadata_problems(no_header, obj_writer.write_obj)),
+      "OBJ metadata mutation must reject a missing Rust header write")
+def wrong_obj_bytes(path, meshes):
+    written = obj_writer.write_obj(path, meshes)
+    with open(path, "r+b") as handle:
+        handle.write(b"# Wrong Name\n")  # Same header length and byte count.
+    return written
+check(bool(obj_metadata_problems(native_obj_text, wrong_obj_bytes)),
+      "OBJ metadata mutation must reject wrong actual file bytes")
+def wrong_obj_count(path, meshes):
+    return obj_writer.write_obj(path, meshes) + 1
+check(bool(obj_metadata_problems(native_obj_text, wrong_obj_count)),
+      "OBJ metadata mutation must reject a wrong actual byte count")
+check(not obj_metadata_problems(native_obj_text, obj_writer.write_obj),
+      "OBJ metadata must restore GREEN after all in-memory mutations")
 check('b"/Producer (Narwhal 3D)' in vector_text,
       "PDF/AI export metadata must identify Narwhal 3D")
 check("[narwhal3d]" in commands_text,

@@ -1,0 +1,28 @@
+{
+  "description": "Same-machine pre-correction original Python planning plus NURBS construction; best of 5 batches of 20, seconds/call; informational, not a portable timing oracle",
+  "python": "3.13.13 (main, Apr 25 2025, 12:39:20) [GCC 14.2.1 20250110 (Red Hat 14.2.1-11)]",
+  "platform": "Linux-7.2.9-200.fc44.x86_64-x86_64-with-glibc2.43",
+  "source_sha256": "372f46731b60e2d2b73129ba74cb34cb3a94a8bcbd93a6467d32cb235dd17722",
+  "cases": {
+    "frame_0_0": {
+      "spans": 8,
+      "seconds": 0.001020970498211682
+    },
+    "refine_1e-05": {
+      "spans": 16,
+      "seconds": 0.0026795960497111083
+    },
+    "frame_0_2": {
+      "spans": 32,
+      "seconds": 0.006049137501395308
+    },
+    "refine_1e-07": {
+      "spans": 64,
+      "seconds": 0.012646034648059867
+    },
+    "refine_1e-09": {
+      "spans": 128,
+      "seconds": 0.026205537701025607
+    }
+  }
+}

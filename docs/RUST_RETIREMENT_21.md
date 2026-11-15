@@ -17,3 +17,5 @@ Strict fmt/clippy, the complete pure-core gate, semantic/capacity/atomicity prob
 Full coil construction and large STL reads/imports improve on measured workloads. Tiny calls pay FFI overhead. Interpolation beats retired Python solvers but is 6–18 percent slower than the previous optional native fast paths; small helper calls also regress. This is not a blanket speedup claim. Do not restore hidden Python replay to disguise these tradeoffs.
 
 Catenary, vector export and DXF/OBJ remain separately unconverted. macOS is unqualified for this batch. See CONTRIBUTING.md for required parity, error, mutation, performance, platform and retirement rules.
+
+Subsequent source work retired Catenary and OBJ writing plus obsolete STL adapters; see [catenary and OBJ qualification](RUST_RETIREMENT_22.md).

@@ -28,9 +28,13 @@ const ERR_INPUT: i32 = -2;
 const ERR_SIZE: i32 = -3;
 
 /// Does the name begin with the ASCII keyword `solid` (case-insensitive, after
-/// leading spaces)? Mirrors Python's `str(name).strip().lower().startswith("solid")`.
+/// Latin-1 CPython str whitespace)? Non-Latin-1 names remain the host adapter's
+/// responsibility before encoding; do not replace its Unicode str.strip guard.
 fn name_starts_with_solid(name: &[u8]) -> bool {
-    let start = name.iter().position(|b| *b != b' ').unwrap_or(name.len());
+    let start = name
+        .iter()
+        .position(|b| !python_space(*b))
+        .unwrap_or(name.len());
     let rest = &name[start..];
     let prefix = b"solid";
     rest.len() >= prefix.len() && rest[..prefix.len()].eq_ignore_ascii_case(prefix)

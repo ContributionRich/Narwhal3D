@@ -104,6 +104,8 @@ PURE_CORE_PYTESTS = (
     "spike/test_native_search02_consumers.py",
     "spike/test_native_coil.py",
     "spike/test_coil_owned.py",
+    "spike/test_catenary.py",
+    "spike/test_catenary_owned.py",
     "spike/test_native_intersect.py",
     "spike/test_pure_core_curve_hits_gate.py",
     "spike/test_native_coil_preview.py",
@@ -126,8 +128,26 @@ PURE_CORE_PYTESTS = (
 
 
 # Explicit Rust oracle-retirement suites and their source/fixture closure.
-RUST_INTEGRATION_SUITES = ('alias_golden', 'unit_golden', 'interpolate_golden', 'svgpath_golden', 'bearing_golden', 'calc_golden', 'coords_golden', 'unitformat_golden', 'macro_golden', 'joinchain_golden', 'rebuild_golden', 'blend_golden', 'norm_golden', 'nurbs_golden', 'arclength_golden', 'coil_golden', 'interpolate_helpers_golden', 'stl_owned', 'stl_import_safety')
+RUST_INTEGRATION_SUITES = ('alias_golden', 'unit_golden', 'interpolate_golden', 'svgpath_golden', 'bearing_golden', 'calc_golden', 'coords_golden', 'unitformat_golden', 'macro_golden', 'joinchain_golden', 'rebuild_golden', 'blend_golden', 'norm_golden', 'nurbs_golden', 'arclength_golden', 'coil_golden', 'interpolate_helpers_golden', 'stl_owned', 'stl_import_safety', 'catenary_boundary', 'catenary_golden', 'obj_golden', 'stl_legacy_abi', 'stl_name_prefix')
 RUST_INTEGRATION_FILES = (
+    'native/pure_core/tests/fixtures/catenary_numeric_windows_msvc.txt',
+    'native/pure_core/tests/fixtures/catenary_host_windows_msvc.txt',
+    'native/pure_core/tests/fixtures/catenary_windows_msvc.provenance.json',
+
+    'native/pure_core/tests/catenary_boundary.rs',
+    'native/pure_core/tests/catenary_golden.rs',
+    'native/pure_core/tests/catenary_v2.h',
+    'native/pure_core/tests/obj_golden.rs',
+    'native/pure_core/tests/stl_legacy_abi.rs',
+    'native/pure_core/tests/stl_name_prefix.rs',
+    'native/pure_core/tests/fixtures/catenary_baseline_linux.json',
+    'native/pure_core/tests/fixtures/catenary_host_linux.txt',
+    'native/pure_core/tests/fixtures/catenary_numeric_linux.txt',
+    'native/pure_core/tests/fixtures/obj_original22.txt',
+    'native/pure_core/tests/fixtures/obj_original22_provenance.txt',
+    'native/pure_core/tests/fixtures/stl_prefix_headers.bin',
+    'native/pure_core/tests/fixtures/stl_prefix_headers.txt',
+
     'native/pure_core/tests/coil_golden.rs',
     'native/pure_core/tests/interpolate_helpers_golden.rs',
     'native/pure_core/tests/stl_owned.rs',
@@ -557,18 +577,19 @@ def probe_pure_core_parser(path: Path, python: Path | str = sys.executable, *, e
     return identity
 
 
-# Required round-21 retirement ABIs. Kept separate from the older parser
+# Required round-22 retirement ABIs (additive to the round-21 requirements). Kept separate from the older parser
 # identity so existing optional ABI consumers retain their compatibility contract.
 PURE_CORE_RETIREMENT_EXPORTS = (
     "narwhal_pure_core_stl_size_owned", "narwhal_pure_core_stl_encode_owned",
     "narwhal_pure_core_stl_file_size", "narwhal_pure_core_stl_file_decode",
     "narwhal_pure_core_stl_import_mesh_decode", "narwhal_pure_core_stl_normal",
     "narwhal_pure_core_interpolate_helper_v1",
+    "narwhal_pure_core_catenary_plan_v2", "narwhal_pure_core_obj_encode_into",
 )
-PURE_CORE_RETIREMENT_IDENTITY = {"retirement_abi": 21,
+PURE_CORE_RETIREMENT_IDENTITY = {"retirement_abi": 22,
                                  "retirement_exports": list(PURE_CORE_RETIREMENT_EXPORTS)}
 PURE_CORE_RETIREMENT_PROBE = r'''
-import ctypes as c, json, struct, sys
+import ctypes as c, json, math, struct, sys
 lib = c.CDLL(sys.argv[1])
 def bind(name, args, result=c.c_int32):
     fn = getattr(lib, "narwhal_pure_core_" + name)
@@ -585,7 +606,7 @@ mesh = bind("stl_import_mesh_decode", [c.c_void_p,c.c_size_t,D,c.c_size_t,c.POIN
 normal = bind("stl_normal", [D,D])
 def require(ok, message):
     if not ok:
-        raise RuntimeError("required STL/helper semantics: " + message)
+        raise RuntimeError("required retirement semantics: " + message)
 xyz = (c.c_double*9)(0,0,0,1,0,0,0,1,0)
 n = (c.c_double*3)(99,99,99)
 require(normal(xyz,n) == 0 and list(n) == [0.,0.,1.], "normal")
@@ -660,14 +681,78 @@ for args, status, detail in (((1,[0,0,0,0,0,0],2,0,0,0,0.,1),-5,0),
     require((rc,used,got_detail) == (status,0,detail) and out == [123.]*32, "helper refusal")
 rc,used,detail,out = call(1,[0,0,0,1,0,0],2,capacity=1)
 require((rc,used,detail) == (-3,0,0) and out == [123.]*32, "helper capacity atomicity")
-print(json.dumps({"retirement_abi":21,"retirement_exports":["narwhal_pure_core_"+s for s in
+# Catenary/OBJ ownership: exact caller-owned catenary v2 metadata and reason enum from
+# tests/catenary_v2.h; no Python planner or production adapter is imported.
+cat = bind("catenary_plan_v2", [D,D,D,D,c.c_double,D,c.c_size_t,D,c.c_size_t,U,U,U,D,c.POINTER(c.c_uint32)])
+def catenary(points=None, tolerance=.001, pole_capacity=1155, knot_capacity=387, null_input=False):
+    points = points or ((1.,2.,3.),(11.,2.,3.),(6.,2.,2.),(6.,2.,1.))
+    inputs = [(c.c_double*3)(*point) for point in points]
+    poles, knots = (c.c_double*1155)(*[123.]*1155), (c.c_double*387)(*[456.]*387)
+    np,nk,ns,dev,reason = c.c_uint64(99),c.c_uint64(99),c.c_uint64(99),c.c_double(99.),c.c_uint32(99)
+    args = [None if null_input else inputs[0],*inputs[1:]]
+    rc = cat(*args,tolerance,poles,pole_capacity,knots,knot_capacity,
+             c.byref(np),c.byref(nk),c.byref(ns),c.byref(dev),c.byref(reason))
+    return rc,reason.value,np.value,nk.value,ns.value,dev.value,list(poles),list(knots)
+rc,reason,np,nk,ns,dev,poles,knots = catenary()
+require((rc,reason,np,nk,ns) == (0,0,75,27,8) and math.isfinite(dev) and 0 <= dev <= .001,
+        "catenary v2 counts/deviation")
+require(poles[:3] == [1.,2.,3.] and poles[np-3:np] == [11.,2.,3.]
+        and all(poles[i] == 2. for i in range(1,np,3))
+        and abs(poles[36]-6.) <= 1e-12 and abs(poles[38]-1.) <= 1e-12
+        and all(math.isfinite(x) for x in poles[:np])
+        and knots[:nk] == [j/8. for j in range(9) for _ in range(3)]
+        and poles[np:] == [123.]*(1155-np) and knots[nk:] == [456.]*(387-nk),
+        "catenary v2 world frame/knots/tail atomicity")
+base = ((1.,2.,3.),(11.,2.,3.),(6.,2.,2.),(6.,2.,1.))
+for points,tolerance,status,why in (
+    (((float("nan"),2.,3.),*base[1:]),.001,-2,1),
+    ((base[0],base[1],(6.,2.,3.),base[3]),.001,-2,2),
+    ((base[0],(11.,2.,4.),base[2],base[3]),.001,-2,3),
+    ((base[0],base[1],base[2],(7.,2.,1.)),.001,-2,4),
+    (base,1e-30,-4,5),
+    (((1e308,0.,0.),(1e308,1.,0.),(1e308,0.,1.),(0.,0.,0.)),.001,-2,6),
+):
+    rc,reason,np,nk,ns,dev,poles,knots = catenary(points,tolerance)
+    require((rc,reason,np,nk,ns,dev) == (status,why,0,0,0,0.)
+            and poles == [123.]*1155 and knots == [456.]*387,
+            "catenary v2 named reason " + str(why))
+for kwargs, status in (({"pole_capacity":74},-3),({"knot_capacity":26},-3),({"null_input":True},-1)):
+    rc,reason,np,nk,ns,dev,poles,knots = catenary(**kwargs)
+    require((rc,reason,np,nk,ns,dev) == (status,0,0,0,0,0.)
+            and poles == [123.]*1155 and knots == [456.]*387,
+            "catenary v2 infrastructure atomic refusal")
+# Existing OBJ export is now required to do actual serialization, not merely
+# exist in the DLL's export table. Match native_obj.py's exact packed signature.
+I32 = c.POINTER(c.c_int32)
+obj = bind("obj_encode_into", [D,c.c_int64,c.c_void_p,c.c_int64,I,I,I,I,c.c_int64,I32,c.c_int64,c.c_int64,c.c_void_p,c.c_size_t,I])
+vertices = (c.c_double*18)(0,0,0,1,0,0,0,1,0,2,0,0,3,0,0,2,1,0)
+names, vc, fc, arity = (c.c_int64*2)(1,1),(c.c_int64*2)(3,3),(c.c_int64*2)(1,1),(c.c_int64*2)(3,3)
+indices = (c.c_int32*6)(0,1,2,0,2,1)
+expected = b"# Narwhal 3D\no a\nv 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\no b\nv 2 0 0\nv 3 0 0\nv 2 1 0\nf 4 6 5\n"
+def obj_call(capacity=1024):
+    output,written = c.create_string_buffer(b"!"*1024,1024),c.c_int64(-1)
+    rc = obj(vertices,6,b"ab",2,names,vc,fc,arity,2,indices,6,2,output,capacity,c.byref(written))
+    return rc,written.value,output.raw
+rc,written,output = obj_call()
+require(rc == 0 and written == len(expected) and output[:written] == expected
+        and output[written:] == b"!"*(1024-written), "required OBJ serialization/global indices")
+rc,written,output = obj_call(1)
+require((rc,written) == (-3,-1) and output == b"!"*1024, "required OBJ capacity atomicity")
+for damage in ("nonfinite","index","arity"):
+    vertices[0],indices[0],arity[0] = 0.,0,3
+    if damage == "nonfinite": vertices[0] = float("nan")
+    if damage == "index": indices[0] = 3
+    if damage == "arity": arity[0] = 2
+    rc,written,output = obj_call()
+    require((rc,written) == (-2,-1) and output == b"!"*1024, "required OBJ domain atomicity: " + damage)
+print(json.dumps({"retirement_abi":22,"retirement_exports":["narwhal_pure_core_"+s for s in
     ("stl_size_owned","stl_encode_owned","stl_file_size","stl_file_decode",
-     "stl_import_mesh_decode","stl_normal","interpolate_helper_v1")]}))
+     "stl_import_mesh_decode","stl_normal","interpolate_helper_v1","catenary_plan_v2","obj_encode_into")]}))
 '''
 
 
 def probe_pure_core_retirement(path: Path, python: Path | str = sys.executable, *, env=None) -> dict:
-    """Require actual STL/helper results, diagnostics and failure atomicity."""
+    """Require actual STL/helper/catenary/OBJ results and failure atomicity."""
     if not path.is_file() or path.is_symlink():
         raise ValueError(f"missing regular pure-core retirement library: {path}")
     try:
@@ -676,7 +761,7 @@ def probe_pure_core_retirement(path: Path, python: Path | str = sys.executable, 
             env=env, text=True, capture_output=True, check=True, timeout=30)
         identity = json.loads(completed.stdout)
     except (OSError, subprocess.SubprocessError, ValueError) as error:
-        raise ValueError(f"cannot verify pure-core STL/helper ABI/semantics: {getattr(error, 'stderr', '') or error}") from error
+        raise ValueError(f"cannot verify pure-core required retirement ABI/semantics: {getattr(error, 'stderr', '') or error}") from error
     if identity != PURE_CORE_RETIREMENT_IDENTITY:
         raise ValueError(f"pure-core retirement ABI/export evidence differs: {identity!r}")
     return identity

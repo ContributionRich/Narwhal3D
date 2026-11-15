@@ -85,11 +85,14 @@ def _catenary_binding_for_library():
     explicit = os.environ.get(_ENV)
     signature = explicit or "<packaged>"
     if _catenary_signature == signature:
+        if _catenary_binding is None:
+            raise RuntimeError("required catenary native v2 library is missing or incompatible; rebuild pure_core or set NARWHAL_PURE_CORE")
         return _catenary_binding
     with _lock:
         if _catenary_signature == signature:
+            if _catenary_binding is None:
+                raise RuntimeError("required catenary native v2 library is missing or incompatible; rebuild pure_core or set NARWHAL_PURE_CORE")
             return _catenary_binding
-        _catenary_signature, _catenary_binding = signature, None
         packaged = Path(__file__).resolve().parent / "native" / _library_name()
         candidates = (Path(explicit).expanduser(),) if explicit else (packaged,)
         for path in candidates:
@@ -102,7 +105,7 @@ def _catenary_binding_for_library():
                 version.restype = ctypes.c_uint32
                 if version() != _ABI:
                     continue
-                fn = library.narwhal_pure_core_catenary_plan
+                fn = library.narwhal_pure_core_catenary_plan_v2
                 fn.argtypes = [
                     ctypes.POINTER(ctypes.c_double), ctypes.POINTER(ctypes.c_double),
                     ctypes.POINTER(ctypes.c_double), ctypes.POINTER(ctypes.c_double),
@@ -111,13 +114,15 @@ def _catenary_binding_for_library():
                     ctypes.POINTER(ctypes.c_double), ctypes.c_size_t,
                     ctypes.POINTER(ctypes.c_uint64), ctypes.POINTER(ctypes.c_uint64),
                     ctypes.POINTER(ctypes.c_uint64), ctypes.POINTER(ctypes.c_double),
+                    ctypes.POINTER(ctypes.c_uint32),
                 ]
                 fn.restype = ctypes.c_int32
             except (AttributeError, OSError):
                 continue
-            _catenary_binding = fn
+            _catenary_signature, _catenary_binding = signature, fn
             return fn
-        return None
+        _catenary_signature, _catenary_binding = signature, None
+        raise RuntimeError("required catenary native v2 library is missing or incompatible; rebuild pure_core or set NARWHAL_PURE_CORE")
 
 
 def _preview_binding_for_library():
@@ -208,43 +213,66 @@ def plan(start, end, radial, radius0, radius1, turns, reverse, tolerance, flat=F
 
 
 def catenary_plan(start, end, axis_point, through, tolerance):
-    """Return packed catenary poles/knots/deviation, or ``None``."""
+    """Required v2 plan; preserve named legacy errors, never return a fallback.
+
+    OURS safety correction: malformed/nonfinite inputs, nonpositive tolerance,
+    and nonfinite native results are refused instead of publishing Python's
+    former NaN/inf poles. All valid numerical work belongs to Rust.
+    """
     global _native_catenary_calls
     fn = _catenary_binding_for_library()
-    if fn is None:
-        return None
+    inputs = [array.array("d", point) for point in (start, end, axis_point, through)]
+    if any(len(item) != 3 for item in inputs):
+        raise ValueError("catenary points must contain three coordinates")
+    tolerance = float(tolerance)
+    # Shape validation is host ABI marshalling; finite/domain validation and
+    # the error reason live in Rust, including for direct non-Python callers.
+    views = [(ctypes.c_double * 3).from_buffer(item) for item in inputs]
+    pole_capacity, knot_capacity = 3 * (3 * 128 + 1), 3 * 128 + 3
+    poles = array.array("d", [0.0]) * pole_capacity
+    knots = array.array("d", [0.0]) * knot_capacity
+    pole_view = (ctypes.c_double * pole_capacity).from_buffer(poles)
+    knot_view = (ctypes.c_double * knot_capacity).from_buffer(knots)
+    npoles = ctypes.c_uint64(0)
+    nknots = ctypes.c_uint64(0)
+    nspans = ctypes.c_uint64(0)
+    deviation = ctypes.c_double(0.0)
+    reason = ctypes.c_uint32(0)
     try:
-        inputs = [array.array("d", (float(value) for value in point))
-                  for point in (start, end, axis_point, through)]
-        if any(len(item) != 3 or any(not math.isfinite(v) for v in item)
-               for item in inputs):
-            return None
-        tolerance = float(tolerance)
-        if not math.isfinite(tolerance) or tolerance <= 0.0:
-            return None
-        views = [(ctypes.c_double * 3).from_buffer(item) for item in inputs]
-        pole_capacity, knot_capacity = 3 * (3 * 128 + 1), 3 * 128 + 3
-        poles = array.array("d", [0.0]) * pole_capacity
-        knots = array.array("d", [0.0]) * knot_capacity
-        pole_view = (ctypes.c_double * pole_capacity).from_buffer(poles)
-        knot_view = (ctypes.c_double * knot_capacity).from_buffer(knots)
-        npoles = ctypes.c_uint64(0)
-        nknots = ctypes.c_uint64(0)
-        nspans = ctypes.c_uint64(0)
-        deviation = ctypes.c_double(0.0)
         code = fn(*views, tolerance, pole_view, pole_capacity, knot_view, knot_capacity,
                   ctypes.byref(npoles), ctypes.byref(nknots), ctypes.byref(nspans),
-                  ctypes.byref(deviation))
-    except Exception:  # noqa: BLE001
-        return None
+                  ctypes.byref(deviation), ctypes.byref(reason))
+    except (ctypes.ArgumentError, OSError) as exc:
+        raise RuntimeError("required catenary native invocation failed") from exc
+    errors = {
+        1: "catenary parameters must be finite; tolerance must be positive",
+        2: "direction must be non-zero",
+        3: "the supported catenary needs equal-height endpoints",
+        4: "ThroughPoint must be the positive midpoint sag on the catenary axis",
+        5: "requested catenary tolerance was not achieved",
+        6: "catenary arithmetic could not resolve a finite curve",
+    }
+    if code in (-2, -4) and reason.value in errors:
+        if code != (-4 if reason.value == 5 else -2):
+            raise RuntimeError("required catenary native planner returned an invalid reason")
+        raise ValueError(errors[reason.value])
     npoles, nknots, nspans = int(npoles.value), int(nknots.value), int(nspans.value)
     achieved = float(deviation.value)
-    if (code != 0 or npoles < 12 or npoles % 3
+    if (code != 0 or reason.value != 0
+            or npoles > pole_capacity or nknots > knot_capacity
+            or npoles < 12 or npoles % 3 or not 8 <= nspans <= 128
             or nknots != npoles // 3 + 2 or npoles != 3 * (3 * nspans + 1)
-            or not math.isfinite(achieved) or not 0.0 <= achieved <= tolerance):
-        return None
+            or not math.isfinite(achieved) or not 0.0 <= achieved <= tolerance
+            or any(not math.isfinite(v) for v in poles[:npoles])
+            or any(not math.isfinite(v) for v in knots[:nknots])):
+        raise RuntimeError("required catenary native planner returned an invalid plan")
+    used_knots = tuple(knots[:nknots])
+    if (used_knots != tuple(sorted(used_knots))
+            or used_knots[:3] != (0.0, 0.0, 0.0)
+            or used_knots[-3:] != (1.0, 1.0, 1.0)):
+        raise RuntimeError("required catenary native planner returned an invalid plan")
     _native_catenary_calls += 1
-    return tuple(poles[:npoles]), tuple(knots[:nknots]), nspans, achieved
+    return tuple(poles[:npoles]), used_knots, nspans, achieved
 
 
 def _reset_for_tests():

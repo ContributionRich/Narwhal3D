@@ -386,6 +386,7 @@ PURE_SUITES=(
     spike/test_parabola3pt.py
     spike/test_hyperbola.py
     spike/test_catenary.py
+    spike/test_catenary_owned.py
     spike/test_coil_preview.py
     spike/test_boolean_extrusion.py
     spike/test_boolean_delete_input.py

@@ -85,6 +85,7 @@ def _():
     expected = {
         "spike/test_stl_writer.py", "spike/test_native_stl.py",
         "spike/test_stl_import_boundary.py", "spike/test_coil_owned.py",
+        "spike/test_catenary.py", "spike/test_catenary_owned.py",
         "spike/test_interpolate.py", "spike/test_interpolate_owned_boundary.py",
         "spike/test_obj_writer.py", "spike/test_obj_reader.py", "spike/test_native_obj.py",
         "spike/test_dxf_writer.py", "spike/test_dxf_reader.py", "spike/test_native_dxf.py",
@@ -215,13 +216,14 @@ def _():
     gate = _load_gate()
     crate = Path(CRATE)
     closure = gate.require_rust_public_closure(crate)
-    assert len(closure) == 89
+    assert len(closure) == 105
     assert set(gate.RUST_INTEGRATION_SUITES) == {
             "alias_golden", "unit_golden", "interpolate_golden", "svgpath_golden",
             "bearing_golden", "calc_golden", "coords_golden", "unitformat_golden",
             "macro_golden", "joinchain_golden", "rebuild_golden", "blend_golden", "norm_golden",
                         "nurbs_golden", "arclength_golden",
             "coil_golden", "interpolate_helpers_golden", "stl_owned", "stl_import_safety",
+            "catenary_boundary", "catenary_golden", "obj_golden", "stl_legacy_abi", "stl_name_prefix",
         }
     public_source = (Path(ROOT) / "scripts/create_public_branch.py").read_text()
     for retired in ("spike/alias_reference.py", "spike/units_reference.py", "spike/interpolate_reference.py",
@@ -268,7 +270,7 @@ def _():
         result = gate.step_tests(crate)
         assert set(result["integration_suites"]) == set(gate.RUST_INTEGRATION_SUITES)
         assert all(v == {"compiled": True, "passed": 2} for v in result["integration_suites"].values())
-        assert run.call_count == 20
+        assert run.call_count == 25
     for fault in ("missing-compilation", "discovery-only", "wrong-target", "zero-tests", "filtered", "failed"):
         rejects(gate.step_tests, fault)
     # Each individual target must be load-bearing, not merely the first one.
@@ -302,11 +304,13 @@ def _():
     broken = source.replace(repr(fixture) + ",", "")
     assert broken != source
     real_read = Path.read_text
-    # Every round-19/20/21 path is required independently; inspect manifests, not fixtures.
+    # Every round-19/20/21/22 path is required independently; inspect manifests, not fixtures.
     added = [path for path in closure
              if Path(path).name.startswith(("blend_", "norm_", "nurbs_", "arclength_",
-                                            "coil_", "interpolate_helpers", "stl_owned", "stl_import_safety"))]
-    assert len(added) == 30
+                                            "coil_", "interpolate_helpers", "stl_owned", "stl_import_safety",
+                                            "catenary_", "obj_golden", "obj_original22",
+                                            "stl_legacy_abi", "stl_name_prefix", "stl_prefix"))]
+    assert len(added) == 46
     for missing in added:
         omitted = source.replace(repr(missing) + ",", "")
         assert omitted != source
@@ -318,7 +322,7 @@ def _():
             except gate.GateError:
                 pass
             else:
-                raise AssertionError("round-19/20/21 public path omission survived: " + missing)
+                raise AssertionError("round-19/20/21/22 public path omission survived: " + missing)
     def read(path, *args, **kwargs):
         return broken if path == Path(ROOT) / "scripts/create_public_branch.py" else real_read(path, *args, **kwargs)
     def closure_rejects():
@@ -338,7 +342,7 @@ def _():
             raise AssertionError("closure negative test did not go RED with guard disabled")
 
 
-@check("round-21 copied-crate and required-source omissions are independently refused")
+@check("round-21/22 copied-crate and required-source omissions are independently refused")
 def _():
     gate = _load_gate()
     crate = Path(CRATE)
@@ -348,6 +352,22 @@ def _():
         "tests/fixtures/coil_numeric.txt", "tests/fixtures/coil_baseline_linux.json",
         "tests/fixtures/coil_windows_msvc.txt", "tests/fixtures/coil_windows_msvc_provenance.txt",
         "tests/fixtures/interpolate_helpers_linux.txt",
+        'tests/catenary_boundary.rs',
+        'tests/catenary_golden.rs',
+        'tests/catenary_v2.h',
+        'tests/obj_golden.rs',
+        'tests/stl_legacy_abi.rs',
+        'tests/stl_name_prefix.rs',
+        'tests/fixtures/catenary_baseline_linux.json',
+        'tests/fixtures/catenary_numeric_windows_msvc.txt',
+        'tests/fixtures/catenary_host_windows_msvc.txt',
+        'tests/fixtures/catenary_windows_msvc.provenance.json',
+        'tests/fixtures/catenary_host_linux.txt',
+        'tests/fixtures/catenary_numeric_linux.txt',
+        'tests/fixtures/obj_original22.txt',
+        'tests/fixtures/obj_original22_provenance.txt',
+        'tests/fixtures/stl_prefix_headers.bin',
+        'tests/fixtures/stl_prefix_headers.txt',
     }
     gate.require_rust_public_closure(crate)
     with tempfile.TemporaryDirectory(prefix="pure-core-round21-closure-") as temporary:

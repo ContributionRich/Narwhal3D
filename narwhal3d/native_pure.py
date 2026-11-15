@@ -2,8 +2,7 @@
 
 This is a typed FFI adapter over the ``native/pure_core`` C ABI (see
 ``native/pure_core/README.md``). It owns no document geometry and never lets a
-Rust-owned pointer cross the call: it packs caller-owned geometry (triangle
-coordinates, or a mesh's vertices / names / face indices) into contiguous
+Rust-owned pointer cross the call: it packs caller-owned geometry (a mesh's vertices / names / face indices) into contiguous
 ``array`` spans, asks the native two-pass size query for the exact output
 length, allocates a caller-owned buffer, and hands it to the native encoder.
 Python keeps the path I/O and is the complete fallback.
@@ -19,14 +18,9 @@ Native and Python results are byte/structure-identical. Production modules activ
 only routes that win end-to-end after packing and conversion; slower direct APIs remain
 available for parity tests and future ABI optimization, never as user-facing regressions.
 
-The OBJ exports are newer than the STL ones: a library built before them has
-the STL symbols but not the OBJ symbols. The binding resolves the OBJ exports
-as OPTIONAL (``None`` when absent) so such an old library keeps its native STL
-path and only the OBJ route falls back to Python. The OBJ *decode* exports are
-newer still: a library with the OBJ encode but not the decode keeps its encode
-route and only the OBJ decode falls back to Python. The DXF exports (encode
-*and* decode) are newest of all: a library with the DXF encode but not the
-decode keeps its encode route and only the DXF decode falls back to Python.
+STL file codecs and safe mesh import use the separate required ``native_stl``
+adapter. This module retains the independent optional OBJ/DXF routes: missing
+encode/decode exports affect only that format and operation, not other routes.
 """
 from __future__ import annotations
 
@@ -50,9 +44,6 @@ _lock = threading.Lock()
 _signature: str | None = None
 _native_binding: Any = None
 _status = "not checked"
-_native_calls = 0
-_native_decode_calls = 0
-_native_stl_mesh_calls = 0
 _native_obj_calls = 0
 _native_decode_obj_calls = 0
 _native_dxf_calls = 0
@@ -70,7 +61,6 @@ _MAX_INTERCHANGE_INPUT_BYTES = 512 * 1024 * 1024
 _MAX_NATIVE_OUTPUT_BYTES = 512 * 1024 * 1024
 _MAX_STRUCTURED_INPUT_BYTES = 1 * 1024 * 1024
 _MAX_STRUCTURED_OUTPUT_BYTES = 64 * 1024 * 1024
-_MAX_STL_TRIANGLES = 2_000_000
 _MAX_OBJ_MESHES = 1_000_000
 _MAX_OBJ_VERTICES = 5_000_000
 _MAX_OBJ_FACES = 5_000_000
@@ -346,14 +336,11 @@ _PACKAGED_LIBRARY = Path(__file__).resolve().parent / "native" / _library_name()
 
 
 def _binding():
-    """Return ``(stl_size, stl_encode, stl_decode_size, stl_decode,
-    obj_size, obj_encode, obj_decode_size, obj_decode,
-    dxf_size, dxf_encode, dxf_decode_size, dxf_decode, path)`` or ``None``.
+    """Return OBJ/DXF encode/decode handles and path, or ``None``.
 
-    The STL encode pair is mandatory. The STL decode pair, four OBJ slots and
-    four DXF slots are ``None`` on a library built before they existed, so an
-    ABI-1 encode-only library retains its working encode route. ``path`` is
-    always the last element.
+    The nine slots are ``(obj_size, obj_encode, obj_decode_size, obj_decode,
+    dxf_size, dxf_encode, dxf_decode_size, dxf_decode, path)``. Missing exports
+    affect only their format/operation. No retired STL export is a prerequisite.
     """
     global _signature, _native_binding, _status
     explicit = os.environ.get(_ENV_PATH)
@@ -379,37 +366,10 @@ def _binding():
                 if version() != _ABI_VERSION:
                     _status = f"native pure-core ABI mismatch: {path}"
                     continue
-                size = library.narwhal_pure_core_stl_size
-                size.argtypes = [
-                    _DoubleP, ctypes.c_size_t, _ByteP, ctypes.c_size_t,
-                    ctypes.c_ubyte,
-                ]
-                size.restype = ctypes.c_int64
-                enc = library.narwhal_pure_core_stl_encode
-                enc.argtypes = [
-                    _DoubleP, ctypes.c_size_t, _ByteP, ctypes.c_size_t,
-                    ctypes.c_ubyte, _ByteP, ctypes.c_size_t,
-                ]
-                enc.restype = ctypes.c_int32
             except (AttributeError, OSError) as exc:
                 _status = f"native pure-core load failed: {exc}"
                 continue
-            # Decode was added after the original ABI-1 STL encoder. Keep it
-            # optional so an encode-only ABI-1 library remains useful.
-            dsize = dec = None
-            try:
-                dsize = library.narwhal_pure_core_stl_decode_size
-                dsize.argtypes = [_ByteP, ctypes.c_size_t]
-                dsize.restype = ctypes.c_int64
-                dec = library.narwhal_pure_core_stl_decode
-                dec.argtypes = [_ByteP, ctypes.c_size_t, _DoubleP, ctypes.c_size_t]
-                dec.restype = ctypes.c_int32
-            except (AttributeError, OSError):
-                pass  # STL decode exports absent: encode remains available
-            # The OBJ exports are newer than the STL ones: an old library has
-            # the STL symbols but not these. Resolve them as OPTIONAL (None when
-            # absent) so such a library keeps its native STL path and only the
-            # OBJ route falls back to Python.
+            # OBJ and DXF exports are optional independently of each other.
             _i64p = ctypes.POINTER(ctypes.c_int64)
             _i32p = ctypes.POINTER(ctypes.c_int32)
             obj_size = obj_enc = obj_dsize = obj_dec = None
@@ -429,7 +389,7 @@ def _binding():
                 ]
                 obj_enc.restype = ctypes.c_int32
             except (AttributeError, OSError):
-                pass  # OBJ encode exports absent: STL-only, encode falls back
+                pass  # OBJ encode exports absent: encode falls back
             # The OBJ decode exports are newer than the encode ones: a library
             # may have the encode but not the decode. Resolve them as OPTIONAL
             # (None when absent) so such a library keeps its encode route and
@@ -480,7 +440,6 @@ def _binding():
             except (AttributeError, OSError):
                 pass  # DXF decode exports absent: DXF decode falls back
             _native_binding = (
-                size, enc, dsize, dec,
                 obj_size, obj_enc, obj_dsize, obj_dec,
                 dxf_size, dxf_enc, dxf_dsize, dxf_dec, path)
             _status = f"ready: {path}"
@@ -489,7 +448,7 @@ def _binding():
 
 
 def available() -> bool:
-    """Whether an ABI-compatible native STL encoder/decoder is available."""
+    """Whether an ABI-compatible shared OBJ/DXF library is available."""
     return _binding() is not None
 
 
@@ -648,13 +607,6 @@ def grid_snap_3d(point, origin, x_axis, y_axis, z_axis, spacing):
     _native_gridsnap3_calls += 1
     return result
 
-
-def _name_ptr(name):
-    name_bytes = str(name).encode("latin-1")
-    if not name_bytes:
-        return (ctypes.c_ubyte * 0)(), 0
-    arr = (ctypes.c_ubyte * len(name_bytes))(*name_bytes)
-    return arr, len(name_bytes)
 
 
 # Required number/length parser is independent of the older bulk I/O bindings.
@@ -2079,233 +2031,9 @@ def _macro_plan_packed_native_active(text):
 
 
 
-def encode_stl(triangles, name, binary) -> Optional[bytes]:
-    """Encode *triangles* to a complete STL file's bytes, or ``None``.
-
-    ``None`` means "use the unchanged Python writer" -- the library is
-    unavailable, the ABI is wrong, the input is rejected, or the output is
-    malformed. A non-``None`` return is the exact file bytes (binary or ASCII)
-    and equals the Python writer's output for the same input.
-
-    The work is split into the four phases the task reports separately:
-    packing (the ``9 * N`` ``f64`` array), the Rust size query, the Rust encode
-    (into the caller-owned buffer), and the output copy to ``bytes``.
-    """
-    global _native_calls
-    binding = _binding()
-    if binding is None:
-        return None
-    (size_fn, enc_fn, _dsize, _dec, _obj_size, _obj_enc, _obj_dsize, _obj_dec,
-     _dxf_size, _dxf_enc, _dxf_dsize, _dxf_dec, _path) = binding
-    try:
-        tris = list(triangles)
-        n = len(tris)
-        if n > _MAX_STL_TRIANGLES:
-            return None
-        # PACKING phase: a contiguous 9*N f64 array, three per vertex (a, b, c).
-        # array('d') packs at C speed (measured ~36 ms vs ~67 ms for elementwise
-        # ctypes stores at 100,000 triangles); the from_buffer view is a
-        # contiguous c_double array over the same 8-byte-double memory, which
-        # is exactly the layout the native encoder reads.
-        name_text = str(name)
-        if len(name_text) > _MAX_NAME_BYTES:
-            return None
-        flat = array.array("d")
-        ext = flat.extend
-        for a, b, c in tris:
-            ext((a[0], a[1], a[2], b[0], b[1], b[2], c[0], c[1], c[2]))
-        arr = (ctypes.c_double * (9 * n)).from_buffer(flat)
-        nptr, nl = _name_ptr(name_text)
-        bflag = 1 if binary else 0
-        # RUST size query phase: exact output length, or a negative error code.
-        nbytes = size_fn(arr, n, nptr, nl, bflag)
-        derived = 84 + 50 * n if bflag else 128 + 2 * nl + 384 * n
-        if not _size_is_bounded(nbytes, derived):
-            return None
-        if bflag and nbytes != 84 + 50 * n:
-            return None
-        buf = (ctypes.c_ubyte * nbytes)()
-        # RUST encode phase: fills the caller-owned buffer, 0 on success.
-        rc = enc_fn(arr, n, nptr, nl, bflag, buf, nbytes)
-        if rc != 0:
-            return None
-        # OUTPUT phase: copy the caller-owned buffer to a Python ``bytes``.
-        out = bytes(buf)
-    except Exception:  # noqa: BLE001 -- any failure degrades to the fallback
-        return None
-    # A fully successful native encode: record the route activation so a
-    # production caller that silently forces the Python path is detectable.
-    _native_calls += 1
-    return out
-
-
-def decode_stl(data: bytes) -> Optional[list]:
-    """Decode a complete STL file's bytes into triangles, or ``None``.
-
-    ``None`` means "use the unchanged Python reader" -- the library is
-    unavailable, the ABI is wrong, or the file is rejected (truncated header,
-    facet-count mismatch, incomplete ASCII facet). A non-``None`` return is a
-    list of ``(a, b, c)`` triangles with each point a 3-tuple of floats, in
-    file order, and equals the Python reader's output for the same file.
-
-    The work is split into the two phases the task reports separately: the
-    Rust size query (the exact ``9 * count`` ``f64`` length, or an error) and
-    the Rust decode (into the caller-owned ``array('d')`` buffer), then the
-    reshape to ``(a, b, c)`` triangles.
-    """
-    global _native_decode_calls
-    binding = _binding()
-    if binding is None:
-        return None
-    # The binding is ``(stl_size, stl_encode, dec_size, dec,
-    # obj_size, obj_encode, obj_decode_size, obj_decode,
-    # dxf_size, dxf_encode, dxf_decode_size, dxf_decode, path)``.
-    (_size_fn, _enc_fn, dec_size_fn, dec_fn, _obj_size, _obj_enc,
-     _obj_dsize, _obj_dec, _dxf_size, _dxf_enc, _dxf_dsize, _dxf_dec,
-     _path) = binding
-    if dec_size_fn is None or dec_fn is None:
-        return None  # ABI-1 encode-only library
-    byte_input = _byte_input(data)
-    if byte_input is None:
-        return None
-    _owned, dbuf, n = byte_input
-    try:
-        # RUST size query phase: exact 9*N f64 length, or a negative error code.
-        coords = dec_size_fn(dbuf, n)
-        derived_bytes = 1024 + 2 * n
-        if (not isinstance(coords, int) or coords < 0 or coords % 9 != 0
-                or coords // 9 > _MAX_STL_TRIANGLES
-                or coords > sys.maxsize // 8
-                or coords * 8 > derived_bytes
-                or coords * 8 > _MAX_NATIVE_OUTPUT_BYTES):
-            return None
-        flat = array.array("d", [0.0]) * coords
-        cbuf = (ctypes.c_double * coords).from_buffer(flat)
-        # RUST decode phase: fills the caller-owned buffer, 0 on success.
-        rc = dec_fn(dbuf, n, cbuf, coords)
-        if rc != 0:
-            return None
-    except Exception:  # noqa: BLE001 -- any failure degrades to the fallback
-        return None
-    # RESHAPE phase: 9*N f64 -> (a, b, c) triangles of 3-tuples.
-    tris = [
-        ((flat[i], flat[i + 1], flat[i + 2]),
-         (flat[i + 3], flat[i + 4], flat[i + 5]),
-         (flat[i + 6], flat[i + 7], flat[i + 8]))
-        for i in range(0, len(flat), 9)
-    ]
-    # A fully successful native decode: record the route activation so a
-    # production caller that silently forces the Python path is detectable.
-    _native_decode_calls += 1
-    return tris
-
-
-# Import-specific fused STL decode+weld. The generic tuple-returning decoder
-# remains disabled in production because rebuilding triangle tuples is slower.
-_stlm_signature: str | None = None
-_stlm_binding: Any = None
-_STL_MESH_NATIVE_MIN_BYTES = 50_000
-
-
-def _stl_mesh_decode_binding():
-    global _stlm_signature, _stlm_binding
-    explicit = os.environ.get(_ENV_PATH)
-    signature = explicit or "<packaged>"
-    if _stlm_signature == signature:
-        return _stlm_binding
-    with _lock:
-        if _stlm_signature == signature:
-            return _stlm_binding
-        _stlm_signature = signature
-        _stlm_binding = None
-        candidates = ((Path(explicit).expanduser(),) if explicit
-                      else (_PACKAGED_LIBRARY,))
-        for path in candidates:
-            if not path.is_file():
-                continue
-            try:
-                library = ctypes.CDLL(str(path))
-                version = library.narwhal_pure_core_abi_version
-                version.argtypes = []
-                version.restype = ctypes.c_uint32
-                if version() != _ABI_VERSION:
-                    continue
-                fn = library.narwhal_pure_core_stl_mesh_decode
-                fn.argtypes = [
-                    _ByteP, ctypes.c_size_t,
-                    _DoubleP, ctypes.c_size_t,
-                    ctypes.POINTER(ctypes.c_uint32), ctypes.c_size_t,
-                    ctypes.POINTER(ctypes.c_int64),
-                    ctypes.POINTER(ctypes.c_int64),
-                ]
-                fn.restype = ctypes.c_int32
-            except (AttributeError, OSError):
-                continue
-            _stlm_binding = fn
-            return fn
-        return None
-
-
-def _stl_mesh_native_active(data) -> bool:
-    return (_stl_mesh_decode_binding() is not None
-            and isinstance(data, (bytes, bytearray, memoryview))
-            and len(data) >= _STL_MESH_NATIVE_MIN_BYTES)
-
-
-def decode_stl_mesh(data):
-    """Return packed welded ``(vertices, indices, nv, nf)`` or ``None``."""
-    global _native_stl_mesh_calls
-    fn = _stl_mesh_decode_binding()
-    binding = _binding()
-    if fn is None or binding is None:
-        return None
-    byte_input = _byte_input(data)
-    if byte_input is None:
-        return None
-    _owned, dbuf, nbytes = byte_input
-    dec_size = binding[2]
-    if dec_size is None:
-        return None
-    try:
-        coords = dec_size(dbuf, nbytes)
-        if (not isinstance(coords, int) or coords < 0 or coords % 9
-                or coords // 9 > _MAX_STL_TRIANGLES):
-            return None
-        triangles = coords // 9
-        vertex_cap = 3 * triangles
-        index_cap = 3 * triangles
-        if (3 * vertex_cap * 8 + index_cap * 4
-                > _MAX_NATIVE_OUTPUT_BYTES):
-            return None
-        vertices = array.array("d", [0.0]) * (3 * vertex_cap)
-        indices = array.array("I", [0]) * index_cap
-        vertex_view = (ctypes.c_double * len(vertices)).from_buffer(vertices)
-        index_view = (ctypes.c_uint32 * len(indices)).from_buffer(indices)
-        out_nv = ctypes.c_int64(-1)
-        out_nf = ctypes.c_int64(-1)
-        rc = fn(dbuf, nbytes, vertex_view, vertex_cap,
-                index_view, index_cap, ctypes.byref(out_nv),
-                ctypes.byref(out_nf))
-    except Exception:  # noqa: BLE001 -- complete Python fallback
-        return None
-    nv, nf = out_nv.value, out_nf.value
-    if (rc != 0 or not isinstance(nv, int) or not isinstance(nf, int)
-            or nv < 0 or nf < 0 or nv > vertex_cap or nf > triangles):
-        return None
-    for value in vertices[:3 * nv]:
-        if not math.isfinite(value):
-            return None
-    for i in range(nf):
-        a, b, c = indices[3 * i:3 * i + 3]
-        if a >= nv or b >= nv or c >= nv or len({a, b, c}) != 3:
-            return None
-    _native_stl_mesh_calls += 1
-    return vertices, indices, nv, nf
-
-
 # One-pass OBJ encode (Q117-01): the state globals are ``_objp_*`` -- distinct
 # from the ``_obj_encode_into_binding`` resolver (the same collision trap) and
-# from the two-pass OBJ slots already in the 13-tuple binding.
+# from the two-pass OBJ slots already in the nine-slot OBJ/DXF binding.
 _objp_signature: str | None = None
 _objp_binding: Any = None  # narwhal_pure_core_obj_encode_into or None
 
@@ -2564,9 +2292,8 @@ def _decode_obj_raw(data: bytes) -> Optional[bytes]:
     binding = _binding()
     if binding is None:
         return None
-    (_size_fn, _enc_fn, _dsize, _dec, _obj_size, _obj_enc,
-     dec_size_fn, dec_fn, _dxf_size, _dxf_enc, _dxf_dsize, _dxf_dec,
-     _path) = binding
+    (_obj_size, _obj_enc, dec_size_fn, dec_fn,
+     _dxf_size, _dxf_enc, _dxf_dsize, _dxf_dec, _path) = binding
     if dec_size_fn is None or dec_fn is None:
         return None
     byte_input = _byte_input(data)
@@ -2815,8 +2542,8 @@ def encode_dxf(entities, layers=None) -> Optional[bytes]:
     binding = _binding()
     if binding is None:
         return None
-    (_s, _e, _ds, _d, _os, _oe, _ods, _od,
-     dxf_size_fn, dxf_enc_fn, _dxf_dsize, _dxf_dec, _path) = binding
+    (_os, _oe, _ods, _od, dxf_size_fn, dxf_enc_fn,
+     _dxf_dsize, _dxf_dec, _path) = binding
     if dxf_size_fn is None or dxf_enc_fn is None:
         return None  # library predates the DXF encode exports
     packed = _pack_dxf(entities, layers)
@@ -2857,7 +2584,7 @@ def encode_dxf(entities, layers=None) -> Optional[bytes]:
 
 # One-pass DXF encode (Q117-02): the state globals are ``_dxp_*`` -- distinct
 # from the ``_dxf_encode_into_binding`` resolver (the same collision trap as
-# Q117-01) and from the two-pass DXF slots already in the 13-tuple binding.
+# Q117-01) and from the two-pass DXF slots already in the nine-slot OBJ/DXF binding.
 _dxp_signature: str | None = None
 _dxp_binding: Any = None  # narwhal_pure_core_dxf_encode_into or None
 
@@ -2999,8 +2726,8 @@ def _decode_dxf_raw(data: bytes) -> Optional[bytes]:
     binding = _binding()
     if binding is None:
         return None
-    (_s, _e, _ds, _d, _os, _oe, _ods, _od,
-     _dxf_size, _dxf_enc, dec_size_fn, dec_fn, _path) = binding
+    (_os, _oe, _ods, _od, _dxf_size, _dxf_enc,
+     dec_size_fn, dec_fn, _path) = binding
     if dec_size_fn is None or dec_fn is None:
         return None
     byte_input = _byte_input(data)
@@ -3367,7 +3094,7 @@ def _parse_obj_packed(raw: bytes, file_base: str = None, *, flat=False) -> tuple
 def _reset_for_tests() -> None:
     """Forget discovery state so tests can re-point ``NARWHAL_PURE_CORE``."""
     global _signature, _native_binding, _status
-    global _native_calls, _native_decode_calls, _native_stl_mesh_calls, _native_obj_calls
+    global _native_obj_calls
     global _native_decode_obj_calls, _native_dxf_calls
     global _native_decode_dxf_calls
     global _owned_parse_signature, _owned_parse_binding, _native_numparse_calls
@@ -3383,7 +3110,6 @@ def _reset_for_tests() -> None:
     global _dxp_signature, _dxp_binding
     global _svgpp_signature, _svgpp_binding
     global _jc_signature, _jc_binding, _native_joinchain_calls
-    global _stlm_signature, _stlm_binding
     global _pdfp_signature, _pdfp_binding, _native_pdf_calls
     global _svgvp_signature, _svgvp_binding, _native_svg_vector_calls
     global _svgup_signature, _svgup_binding, _native_svg_unit_calls
@@ -3393,9 +3119,6 @@ def _reset_for_tests() -> None:
         _signature = None
         _native_binding = None
         _status = "not checked"
-        _native_calls = 0
-        _native_decode_calls = 0
-        _native_stl_mesh_calls = 0
         _native_obj_calls = 0
         _native_decode_obj_calls = 0
         _native_dxf_calls = 0
@@ -3445,8 +3168,6 @@ def _reset_for_tests() -> None:
         _jc_signature = None
         _jc_binding = None
         _native_joinchain_calls = 0
-        _stlm_signature = None
-        _stlm_binding = None
         _cached_macro_json.cache_clear()
         _cached_macro_plan_json.cache_clear()
         _cached_svgpath_json.cache_clear()

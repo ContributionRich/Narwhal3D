@@ -4,6 +4,7 @@ All notable public changes will be recorded here. Narwhal 3D is an extremely ear
 
 ## Unreleased
 
+- Source: replaced Python catenary planning and OBJ serialization with required Rust; retired obsolete STL compatibility adapters and corrected raw binary STL name-prefix handling. [Qualification and measured performance](docs/RUST_RETIREMENT_22.md).
 - Source: replaced duplicate Python interpolation/coil math and STL codecs with required Rust implementations. STL import validates destination coordinates before geometry publication. See [qualification and tradeoffs](docs/RUST_RETIREMENT_21.md). These changes are not retroactively included in 0.4.13 downloads.
 - Updated release links and contributor/issue guidance: Rust-first computation/tests; unmaintained macOS downloads are no longer promoted.
 

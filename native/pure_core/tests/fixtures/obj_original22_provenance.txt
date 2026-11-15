@@ -1,0 +1,12 @@
+OBJ-RETIRE-22 independent CPython captures
+Base: 2ae16adcec6a588da1307aa4a9d5671deb8e8950
+Original obj_writer.py SHA256: 25c94157aae191be068ddcf3bb2d36b8a443586e30cf1dd9c6fc26f5d8ee24c3
+84 cases: 83 pre-edit cases, plus original-writer finite bit-pattern boundaries.
+Initial RNG seed 220117; finite-boundary bit-pattern seed 22022.
+Each row: coordinates|Latin1 names hex|name lengths|vertex counts|face counts|arities|local indices|original output hex.
+Empty comma-separated fields are empty arrays. Coordinates are original binary64 round-trip decimal values.
+Original optional native resolver disabled during capture; original Python serializer wrote actual files.
+Expected outputs are frozen data, not produced by Rust or a replacement serializer.
+Computational byte/ABI assertions live in obj_golden.rs and existing obj.rs tests.
+Nonfinite coordinates and floating face indices intentionally refused: legacy Python could emit invalid OBJ.
+No UV/normal features or exact manufacturing-geometry changes.

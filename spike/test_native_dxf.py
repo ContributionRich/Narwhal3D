@@ -146,10 +146,10 @@ def _():
     assert native is not None, "adapter did not resolve the native module"
     assert native.available() is True, native.backend_status()
     assert "ready" in native.backend_status(), native.backend_status()
-    # The DXF exports are resolvable through the adapter (not just STL/OBJ).
+    # The DXF exports are resolvable through the adapter (independently of OBJ).
     binding = native._binding()
     assert binding is not None
-    dxf_size, dxf_enc = binding[8], binding[9]
+    dxf_size, dxf_enc = binding[4], binding[5]
     assert callable(dxf_size), "DXF size export missing"
     assert callable(dxf_enc), "DXF encode export missing"
     assert callable(native.encode_dxf)
@@ -292,7 +292,7 @@ def _():
 
 @check("fallback: a library without the DXF exports uses Python")
 def _():
-    # Model a library that has the STL+OBJ exports but predates the DXF
+    # Model a library that has the OBJ exports but predates the DXF
     # exports: the DXF slots in the binding are None, so encode_dxf returns
     # None and the Python writer must run.
     _reset()
@@ -304,10 +304,9 @@ def _():
         b = real_binding()
         if b is None:
             return None
-        # The binding is the 13-tuple; slots 8-11 are the DXF size/encode/
-        # decode-size/decode. Null all four; keep the path (12).
-        return (b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7],
-                None, None, None, None, b[12])
+        # Nine slots: DXF size/encode/decode-size/decode occupy 4-7;
+        # null all four while retaining OBJ handles and path (8).
+        return (*b[:4], None, None, None, None, b[8])
 
     native._binding = _binding_no_dxf
     try:
@@ -594,10 +593,8 @@ def _():
         b = real_binding()
         if b is None:
             return None
-        # The binding is the 13-tuple; null the DXF decode slots (10, 11),
-        # keep the encode (8, 9) and the path (12).
-        return (b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7],
-                b[8], b[9], None, None, b[12])
+        # Null DXF decode slots (6, 7); keep encode (4, 5) and path (8).
+        return (*b[:6], None, None, b[8])
 
     native._binding = _binding_no_decode_dxf
     try:
@@ -682,7 +679,7 @@ def _():
         ctypes.memmove(out, payload, len(payload))
         return 0
 
-    native._binding = lambda: (*base[:10], size_fn, decode_fn, base[12])
+    native._binding = lambda: (*base[:6], size_fn, decode_fn, base[8])
     try:
         before = native._native_decode_dxf_calls
         assert native.decode_dxf(_py_reference(ENTITIES)) is None

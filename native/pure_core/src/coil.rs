@@ -113,11 +113,12 @@ struct Plan {
 
 fn bezier_point(control: [V3; 4], t: f64) -> V3 {
     let s = 1.0 - t;
-    control[0]
-        .scale(s * s * s)
-        .add(control[1].scale(3.0 * s * s * t))
-        .add(control[2].scale(3.0 * s * t * t))
-        .add(control[3].scale(t * t * t))
+    V3(std::array::from_fn(|i| {
+        control[0].0[i] * s.powf(3.0)
+            + control[1].0[i] * 3.0 * s * s * t
+            + control[2].0[i] * 3.0 * s * t * t
+            + control[3].0[i] * t.powf(3.0)
+    }))
 }
 
 fn controls_and_error(coil: &Coil, spans: usize) -> (Vec<V3>, f64) {
@@ -225,6 +226,47 @@ fn plan(
     }
 }
 
+/// Stable catenary v2 reasons. Status remains -2 for parameter/frame failures
+/// and -4 for unachieved tolerance; null/capacity errors carry reason zero.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u32)]
+pub enum CatenaryReason {
+    Parameters = 1,
+    Direction = 2,
+    Height = 3,
+    Through = 4,
+    Tolerance = 5,
+    Arithmetic = 6,
+}
+impl CatenaryReason {
+    fn status(self) -> i32 {
+        if self == Self::Tolerance {
+            ERR_TOLERANCE
+        } else {
+            ERR_INPUT
+        }
+    }
+}
+
+// Match the original CPython 3.13 sum and per-coordinate evaluation order.
+// Keep these catenary-specific; coil21's qualified implementation is immutable.
+fn catenary_dot(a: V3, b: V3) -> f64 {
+    crate::fit::py_sum((0..3).map(|i| a.0[i] * b.0[i]))
+}
+fn catenary_norm(v: V3) -> f64 {
+    catenary_dot(v, v).sqrt()
+}
+fn catenary_unit(v: V3) -> Result<V3, CatenaryReason> {
+    let length = catenary_norm(v);
+    if !length.is_finite() {
+        return Err(CatenaryReason::Arithmetic);
+    }
+    if length <= 1.0e-12 {
+        return Err(CatenaryReason::Direction);
+    }
+    Ok(v.scale(1.0 / length))
+}
+
 fn catenary_value(a: f64, half: f64) -> f64 {
     let z = half / a;
     if z > 700.0 {
@@ -240,7 +282,7 @@ fn catenary_plan(
     axis_point: [f64; 3],
     through: [f64; 3],
     tolerance: f64,
-) -> Result<Plan, i32> {
+) -> Result<Plan, CatenaryReason> {
     if start
         .iter()
         .chain(end.iter())
@@ -250,29 +292,36 @@ fn catenary_plan(
         || !tolerance.is_finite()
         || tolerance <= 0.0
     {
-        return Err(ERR_INPUT);
+        return Err(CatenaryReason::Parameters);
     }
     let start = V3(start);
     let end = V3(end);
     let middle = start.add(end).scale(0.5);
-    let gravity = V3(axis_point).sub(middle).unit().ok_or(ERR_INPUT)?;
+    let gravity = catenary_unit(V3(axis_point).sub(middle))?;
     let chord = end.sub(start);
-    let vertical = chord.dot(gravity);
+    let vertical = catenary_dot(chord, gravity);
     let horizontal_vector = chord.sub(gravity.scale(vertical));
-    let length = horizontal_vector.norm();
+    let length = catenary_norm(horizontal_vector);
+    if !length.is_finite() || !vertical.is_finite() {
+        return Err(CatenaryReason::Arithmetic);
+    }
     if length <= 1.0e-12 || vertical.abs() > tolerance {
-        return Err(ERR_INPUT);
+        return Err(CatenaryReason::Height);
     }
     let horizontal = horizontal_vector.scale(1.0 / length);
     let through_delta = V3(through).sub(middle);
-    let through_x = through_delta.dot(horizontal);
-    let off_plane = through_delta
-        .sub(horizontal.scale(through_x))
-        .sub(gravity.scale(through_delta.dot(gravity)))
-        .norm();
-    let sag = through_delta.dot(gravity);
+    let through_x = catenary_dot(through_delta, horizontal);
+    let off_plane = catenary_norm(
+        through_delta
+            .sub(horizontal.scale(through_x))
+            .sub(gravity.scale(catenary_dot(through_delta, gravity))),
+    );
+    let sag = catenary_dot(through_delta, gravity);
+    if !through_x.is_finite() || !off_plane.is_finite() || !sag.is_finite() {
+        return Err(CatenaryReason::Arithmetic);
+    }
     if through_x.abs() > tolerance || off_plane > tolerance || sag <= tolerance {
-        return Err(ERR_INPUT);
+        return Err(CatenaryReason::Through);
     }
     let half = length * 0.5;
     let mut low = half / 700.0;
@@ -280,7 +329,7 @@ fn catenary_plan(
     while catenary_value(high, half) > sag {
         high *= 2.0;
         if !high.is_finite() {
-            return Err(ERR_INPUT);
+            return Err(CatenaryReason::Arithmetic);
         }
     }
     for _ in 0..100 {
@@ -292,6 +341,18 @@ fn catenary_plan(
         }
     }
     let a = (low + high) * 0.5;
+    if !a.is_finite() || a <= 0.0 {
+        return Err(CatenaryReason::Arithmetic);
+    }
+    let resolved_sag = catenary_value(a, half);
+    // A fixed bisection budget must not report success after huge finite inputs
+    // lose the requested sag to cancellation or an unresolved bracket.
+    if !resolved_sag.is_finite() {
+        return Err(CatenaryReason::Arithmetic);
+    }
+    if (resolved_sag - sag).abs() > tolerance {
+        return Err(CatenaryReason::Tolerance);
+    }
     let analytic = |x: f64| {
         let point = middle
             .add(horizontal.scale(x))
@@ -306,15 +367,22 @@ fn catenary_plan(
         let mut maximum = 0.0_f64;
         for span in 0..spans {
             let x0 = -half + dx * span as f64;
-            let x1 = x0 + dx;
+            let x1 = -half + dx * (span + 1) as f64;
             let (p0, d0) = analytic(x0);
             let (p1, d1) = analytic(x1);
+            // Reject overflowing finite arithmetic before publishing a span.
+            if !p0.distance(p1).is_finite() {
+                return Err(CatenaryReason::Arithmetic);
+            }
             let control = [
                 p0,
                 p0.add(d0.scale(dx / 3.0)),
                 p1.sub(d1.scale(dx / 3.0)),
                 p1,
             ];
+            if control.iter().flat_map(|v| v.0).any(|v| !v.is_finite()) {
+                return Err(CatenaryReason::Arithmetic);
+            }
             if span == 0 {
                 poles.extend(control);
             } else {
@@ -322,7 +390,11 @@ fn catenary_plan(
             }
             for sample in 1..16 {
                 let t = sample as f64 / 16.0;
-                maximum = maximum.max(bezier_point(control, t).distance(analytic(x0 + dx * t).0));
+                let error = catenary_norm(bezier_point(control, t).sub(analytic(x0 + dx * t).0));
+                if !error.is_finite() {
+                    return Err(CatenaryReason::Arithmetic);
+                }
+                maximum = maximum.max(error);
             }
         }
         if maximum <= tolerance {
@@ -340,7 +412,7 @@ fn catenary_plan(
             });
         }
         if spans >= 128 {
-            return Err(ERR_TOLERANCE);
+            return Err(CatenaryReason::Tolerance);
         }
         spans *= 2;
     }
@@ -551,14 +623,72 @@ pub unsafe extern "C" fn narwhal_pure_core_catenary_plan(
     out_spans: *mut u64,
     out_deviation: *mut f64,
 ) -> i32 {
-    if out_poles.is_null() || out_knots.is_null() || out_spans.is_null() || out_deviation.is_null()
+    let mut reason = 0;
+    narwhal_pure_core_catenary_plan_v2(
+        start,
+        end,
+        axis_point,
+        through,
+        tolerance,
+        poles,
+        pole_capacity,
+        knots,
+        knot_capacity,
+        out_poles,
+        out_knots,
+        out_spans,
+        out_deviation,
+        &mut reason,
+    )
+}
+
+/// Required-native catenary planner with stable named error reasons.
+/// No output counts or geometry are published on failure. Finite-input and
+/// finite-result refusal intentionally fixes the original Python NaN/inf bug.
+/// # Safety
+/// Same disjoint readable/writable span contract as the legacy catenary export;
+/// out_reason additionally points to one writable u32.
+#[allow(clippy::too_many_arguments)]
+#[no_mangle]
+pub unsafe extern "C" fn narwhal_pure_core_catenary_plan_v2(
+    start: *const f64,
+    end: *const f64,
+    axis_point: *const f64,
+    through: *const f64,
+    tolerance: f64,
+    poles: *mut f64,
+    pole_capacity: usize,
+    knots: *mut f64,
+    knot_capacity: usize,
+    out_poles: *mut u64,
+    out_knots: *mut u64,
+    out_spans: *mut u64,
+    out_deviation: *mut f64,
+    out_reason: *mut u32,
+) -> i32 {
+    if !out_poles.is_null() {
+        *out_poles = 0;
+    }
+    if !out_knots.is_null() {
+        *out_knots = 0;
+    }
+    if !out_spans.is_null() {
+        *out_spans = 0;
+    }
+    if !out_deviation.is_null() {
+        *out_deviation = 0.0;
+    }
+    if !out_reason.is_null() {
+        *out_reason = 0;
+    }
+    if out_poles.is_null()
+        || out_knots.is_null()
+        || out_spans.is_null()
+        || out_deviation.is_null()
+        || out_reason.is_null()
     {
         return ERR_NULL;
     }
-    *out_poles = 0;
-    *out_knots = 0;
-    *out_spans = 0;
-    *out_deviation = 0.0;
     let triple = |ptr| match crate::checked_slice(ptr, 3) {
         Some(value) => Ok([value[0], value[1], value[2]]),
         None => Err(ERR_NULL),
@@ -583,7 +713,10 @@ pub unsafe extern "C" fn narwhal_pure_core_catenary_plan(
         tolerance,
     ) {
         Ok(value) => value,
-        Err(code) => return code,
+        Err(reason) => {
+            *out_reason = reason as u32;
+            return reason.status();
+        }
     };
     let pole_values = plan.poles.len() * 3;
     if pole_values > pole_capacity || plan.knots.len() > knot_capacity {

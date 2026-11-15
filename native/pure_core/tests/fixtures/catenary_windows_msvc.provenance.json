@@ -1,0 +1,36 @@
+{
+  "python": "3.13.13 (main, May  8 2026, 12:37:03) [MSC v.1944 64 bit (AMD64)]",
+  "platform": "Windows-11-10.0.26200-SP0",
+  "rhino3dm": "8.35.0",
+  "oracle_sha256": "372f46731b60e2d2b73129ba74cb34cb3a94a8bcbd93a6467d32cb235dd17722",
+  "python_sha256": "d6fc04d5348fdcf121d34ea3fc36221c779de9771949b68863002f7a2dc892d5",
+  "cases": 42,
+  "host_points": 578,
+  "math_module": "built-in CPython math",
+  "ucrtbase.dll": {
+    "path": "C:\\WINDOWS\\System32\\ucrtbase.dll",
+    "sha256": "a202e993ed7311aee09e980bfc24fba4024a097ae222f30ba5cee78a35d36f51"
+  },
+  "msvcrt.dll": {
+    "path": "C:\\WINDOWS\\System32\\msvcrt.dll",
+    "sha256": "d269517185ea1dfbb8b556fad07ebc28a8e6d1029d155dcc386dd9c4fc059549"
+  },
+  "capture_script_sha256": "9aa211b9ce06c095a94e13544bb721d439b05aafd86e5904f536e5b1eb22ef0a",
+  "source_oracle": "ignored legacy/retired-rust22/catenary.py; python_plan invoked directly, no native hooks",
+  "numeric_fixture_sha256": "2b973112e7deb53d211cc819bb9a2bdc102d4e3f18f7357463cc463a0c6ff7eb",
+  "host_fixture_sha256": "ba4a38eca13c313a1a4f960db63b31e8fffec314f2914035ebb0ff23007c344d",
+  "numeric_rows": 42,
+  "numeric_successes": 34,
+  "numeric_errors": 8,
+  "host_rows": 34,
+  "platform_scope": "Actual x86_64 Windows 11, MSVC CPython; not Wine or cross-compile inference",
+  "normalization": {
+    "operation": "CRLF to LF only in captured text fixtures; no numeric/error/row changes",
+    "raw_capture_sha256": {
+      "numeric": "7879e7420e18ee83a6f8ca87e6026eff1810c63e852908c4700156029858b905",
+      "host": "d52dcab25ccff44e0bf56247048e01a7ad36d431be8bef7e95a42ee6a6c39716"
+    },
+    "canonical_line_endings": "LF",
+    "parsed_lines_preserved": true
+  }
+}

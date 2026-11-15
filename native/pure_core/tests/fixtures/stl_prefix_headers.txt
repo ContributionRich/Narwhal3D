@@ -1,0 +1,5 @@
+Independent original CPython STL headers: 256 lowercase solid names, then 256 mixed-case SoLiD names.
+Original source SHA256 a7c9b4a7199a61e3488a1d78a102755b454a70692329821bfb03721d9bbe350e
+Each header is 80 bytes; each input is chr(prefix) + case + " triangle".
+Captured before Rust prefix fix; expected bytes are original Python writer output, not Rust output.
+SHA256 c8ca18b3fb9048eb7a6a116e7aafdb7d36361ceded90aa2abd58de851df00b8a

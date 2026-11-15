@@ -7,9 +7,6 @@ import types
 import rhino3dm as r3
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-LIB = os.path.join(ROOT, "native", "pure_core", "target",
-                   "x86_64-unknown-linux-gnu", "release", "libnarwhal_pure_core.so")
-os.environ["NARWHAL_PURE_CORE"] = LIB
 pkg = types.ModuleType("narwhal3d")
 pkg.__path__ = [os.path.join(ROOT, "narwhal3d")]
 sys.modules["narwhal3d"] = pkg
