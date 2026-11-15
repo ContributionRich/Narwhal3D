@@ -101,6 +101,15 @@ check("parabola3pt" in commands.COMMANDS,"Parabola3Pt is registered")
 rows=preview.segments("Parabola3Pt",[(1,-2,0),(0,0,0),(1,2,0)],(5,2,0),commands.cplane.WORLD_TOP,cmd=commands.Parabola3PtCmd())
 check(len(rows)==3 and len(rows[0])==65 and abs(rows[0][32][0])<1e-10 and rows[1]==[(5,2,0),(1.0,-2.0,0.0)],
       "live Parabola3Pt preview: the exact parabola for the cursor direction, rubber lines to the ends")
+native=sys.modules.get("narwhal3d.native_nearest") or load("native_nearest")
+for cursor in [(5,2,0),(-3,7.5,0),(8,-6,0),(12,0.5,0),(2.5,0.75,0)]:
+    before=native._native_sample_calls
+    rows=preview.segments("Parabola3Pt",[(1,-2,0),(0,0,0),(1,2,0)],cursor,commands.cplane.WORLD_TOP,cmd=commands.Parabola3PtCmd())
+    curve,_=sys.modules["narwhal3d.conics"].parabola_through_direction((1,-2,0),(0,0,0),(1,2,0),cursor)
+    d=curve.Domain
+    want=[(p.X,p.Y,p.Z) for p in (curve.PointAt(d.T0+(d.T1-d.T0)*i/64) for i in range(65))]
+    check(rows[0]==want and native._native_sample_calls==before+1,
+          f"cursor {cursor}: the preview parabola is sampled in Rust, the curve's PointAt points bit for bit")
 ctx,cmd,msg,done=run(["Mode=Vertex","1,-2,0","0,0,0","1,2,0"])
 check(done and exact(ctx.made[0][1]), "Mode=Vertex keeps the symmetric start/vertex/end route")
 for passed,label in checks: print(f"[{'PASS' if passed else 'FAIL'}] {label}")

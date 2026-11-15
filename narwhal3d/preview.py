@@ -1679,17 +1679,16 @@ def preview_parabola3pt(args, cursor, plane, cmd=None):
             else:
                 start, through, end = points[:3]
             try:
-                from . import conics
+                from . import bridge, conics
             except ImportError:          # loaded standalone (tests / probes)
+                import bridge
                 import conics
             out = [[tuple(cursor), start], [tuple(cursor), end]]
             try:
                 curve, _focus = conics.parabola_through_direction(start, through, end, cursor)
             except ValueError:
                 return out
-            d = curve.Domain
-            return [[(p.X, p.Y, p.Z) for p in (curve.PointAt(d.T0 + (d.T1 - d.T0) * i / 64)
-                                               for i in range(65))]] + out
+            return [bridge.sample_curve_xyz(curve, 64)] + out
         if order == "Default":
             # OURS: before the direction is known, the circle through the three points stands
             # in for the curve (measured: a curve from the start through the point to the cursor).
