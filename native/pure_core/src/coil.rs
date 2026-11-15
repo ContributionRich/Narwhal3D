@@ -44,6 +44,35 @@ impl V3 {
     }
 }
 
+// CPython 3.12+ float sum uses compensated addition. Keep this coil-only:
+// catenary's existing arithmetic and compatibility contract are independent.
+fn coil_dot(a: V3, b: V3) -> f64 {
+    let mut hi = 0.0_f64;
+    let mut lo = 0.0_f64;
+    for i in 0..3 {
+        let x = a.0[i] * b.0[i];
+        let t = hi + x;
+        lo += if hi.abs() >= x.abs() {
+            (hi - t) + x
+        } else {
+            (x - t) + hi
+        };
+        hi = t;
+    }
+    if lo != 0.0 && lo.is_finite() {
+        hi + lo
+    } else {
+        hi
+    }
+}
+fn coil_norm(v: V3) -> f64 {
+    coil_dot(v, v).sqrt()
+}
+fn coil_unit(v: V3) -> Option<V3> {
+    let length = coil_norm(v);
+    (length.is_finite() && length > 1.0e-12).then(|| v.scale(1.0 / length))
+}
+
 struct Coil {
     start: V3,
     axis: V3,
@@ -108,9 +137,17 @@ fn controls_and_error(coil: &Coil, spans: usize) -> (Vec<V3>, f64) {
         }
         for sample in 1..16 {
             let t = sample as f64 / 16.0;
-            let actual = bezier_point(control, t);
+            // Match the original per-coordinate multiplication order, not
+            // pre-multiplied Bernstein weights (which round differently).
+            let s = 1.0 - t;
+            let actual = V3(std::array::from_fn(|i| {
+                control[0].0[i] * s.powf(3.0)
+                    + control[1].0[i] * 3.0 * s * s * t
+                    + control[2].0[i] * 3.0 * s * t * t
+                    + control[3].0[i] * t.powf(3.0)
+            }));
             let expected = coil.point_derivative(theta0 + h * t).0;
-            maximum = maximum.max(actual.distance(expected));
+            maximum = maximum.max(coil_norm(actual.sub(expected)));
         }
     }
     (poles, maximum)
@@ -145,11 +182,11 @@ fn plan(
     }
     let start = V3(start);
     let axis_vector = V3(end).sub(start);
-    let axis_length = axis_vector.norm();
-    let axis = axis_vector.unit().ok_or(ERR_INPUT)?;
-    let radial = V3(radial).sub(axis.scale(V3(radial).dot(axis)));
-    let x = radial.unit().ok_or(ERR_INPUT)?;
-    let y = axis.cross(x).unit().ok_or(ERR_INPUT)?;
+    let axis_length = coil_norm(axis_vector);
+    let axis = coil_unit(axis_vector).ok_or(ERR_INPUT)?;
+    let radial = V3(radial).sub(axis.scale(coil_dot(V3(radial), axis)));
+    let x = coil_unit(radial).ok_or(ERR_INPUT)?;
+    let y = coil_unit(axis.cross(x)).ok_or(ERR_INPUT)?;
     let theta_total = if reverse { -TAU * turns } else { TAU * turns };
     let coil = Coil {
         start,

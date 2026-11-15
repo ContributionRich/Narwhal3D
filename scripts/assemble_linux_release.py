@@ -18,7 +18,7 @@ import tempfile
 from typing import Any
 
 from build_linux_native import probe_ui_core, verify_ui_core_source
-from check_pure_core import probe_pure_core_parser
+from check_pure_core import probe_pure_core_parser, probe_pure_core_retirement
 
 from release_policy import (
     MAX_HOST_GLIBC, format_glibc, glibc_versions, scan_runtime_glibc,
@@ -605,6 +605,7 @@ def validate_native_components(
     try:
         records["libnarwhal_pure_core.so"].update(probe_pure_core_parser(
             directory / "libnarwhal_pure_core.so"))
+        probe_pure_core_retirement(directory / "libnarwhal_pure_core.so")
     except ValueError as exc:
         raise ReleaseError(str(exc)) from exc
     try:

@@ -4,7 +4,9 @@
 //!
 //! This module turns caller-owned packed `9 * count` `f64` triangle coordinates
 //! into a complete STL file (binary or ASCII dialect). Python owns the path I/O
-//! and is the unchanged fallback. Two invariants are load-bearing:
+//! and required-native ABI orchestration. The original optional exports remain
+//! compatible; the `_owned`/`_file` exports preserve legacy file semantics without
+//! Python computation or replay. Two invariants are load-bearing:
 //!
 //! * The facet normal is the normalised cross product `(b - a) x (c - a)`, and a
 //!   degenerate (zero-area) facet is KEPT with a zero normal -- never dropped.
@@ -246,7 +248,7 @@ fn encode_binary(name: &[u8], count: usize, coords: &[f64], out: &mut [u8]) {
     }
 }
 
-fn encode_ascii(name: &[u8], count: usize, coords: &[f64], out: &mut [u8]) {
+fn ascii_bytes(name: &[u8], count: usize, coords: &[f64]) -> Vec<u8> {
     // Build the ASCII dialect byte-by-byte into a Vec, then copy into the
 
     // caller-owned buffer. The name is appended raw (byte-for-byte), never
@@ -255,7 +257,7 @@ fn encode_ascii(name: &[u8], count: usize, coords: &[f64], out: &mut [u8]) {
 
     // exactly as Python's `.encode("latin-1")` would emit it.
 
-    let mut s: Vec<u8> = Vec::with_capacity(out.len());
+    let mut s: Vec<u8> = Vec::new();
 
     s.extend_from_slice(b"solid ");
 
@@ -307,9 +309,7 @@ fn encode_ascii(name: &[u8], count: usize, coords: &[f64], out: &mut [u8]) {
 
     s.push(b'\n');
 
-    let bytes = s.as_slice();
-
-    out[..bytes.len()].copy_from_slice(bytes);
+    s
 }
 
 /// Encode a complete STL file (binary or ASCII) into a caller-owned buffer.
@@ -336,6 +336,57 @@ pub unsafe extern "C" fn narwhal_pure_core_stl_encode(
     out: *mut u8,
     out_len: usize,
 ) -> i32 {
+    unsafe {
+        narwhal_pure_core_stl_encode_impl(
+            coordinates,
+            count,
+            name,
+            name_len,
+            binary,
+            (out, out_len),
+            false,
+        )
+    }
+}
+
+/// Required file encoder: ASCII supports the entire f64 range, including
+/// nonfinite file data. Binary rejects finite float32 overflow but preserves
+/// explicit inf/nan data. This does not certify any coordinates as safe geometry.
+/// # Safety
+/// Same caller-owned span requirements as `narwhal_pure_core_stl_encode`.
+#[no_mangle]
+pub unsafe extern "C" fn narwhal_pure_core_stl_encode_owned(
+    coordinates: *const f64,
+    count: usize,
+    name: *const u8,
+    name_len: usize,
+    binary: u8,
+    out: *mut u8,
+    out_len: usize,
+) -> i32 {
+    unsafe {
+        narwhal_pure_core_stl_encode_impl(
+            coordinates,
+            count,
+            name,
+            name_len,
+            binary,
+            (out, out_len),
+            true,
+        )
+    }
+}
+
+unsafe fn narwhal_pure_core_stl_encode_impl(
+    coordinates: *const f64,
+    count: usize,
+    name: *const u8,
+    name_len: usize,
+    binary: u8,
+    output: (*mut u8, usize),
+    owned: bool,
+) -> i32 {
+    let (out, out_len) = output;
     if count > u32::MAX as usize {
         return ERR_SIZE;
     }
@@ -345,7 +396,15 @@ pub unsafe extern "C" fn narwhal_pure_core_stl_encode(
     };
 
     let coords = match coords_span(coordinates, count) {
-        Some(c) if c.iter().all(finite_f32) => c,
+        Some(c)
+            if if owned {
+                binary != 1 || c.iter().all(|x| !x.is_finite() || (*x as f32).is_finite())
+            } else {
+                c.iter().all(finite_f32)
+            } =>
+        {
+            c
+        }
         Some(_) => return ERR_INPUT,
 
         None => return ERR_NULL,
@@ -393,10 +452,11 @@ pub unsafe extern "C" fn narwhal_pure_core_stl_encode(
         name_slice
     };
 
-    let need = match ascii_size(count, name, coords) {
-        Some(n) => n,
-        None => return ERR_SIZE,
-    };
+    // The size export already formats once. Build the exact same bytes here
+    // once, rather than formatting a second size scan and then a third encode
+    // scan. All output stays local until exact capacity has been checked.
+    let bytes = ascii_bytes(name, count, coords);
+    let need = bytes.len();
     if out_len != need {
         return ERR_SIZE;
     }
@@ -407,7 +467,7 @@ pub unsafe extern "C" fn narwhal_pure_core_stl_encode(
         Some(out) => out,
         None => return ERR_SIZE,
     };
-    encode_ascii(name, count, coords, out_slice);
+    out_slice.copy_from_slice(&bytes);
 
     0
 }
@@ -427,6 +487,31 @@ pub unsafe extern "C" fn narwhal_pure_core_stl_size(
     name_len: usize,
     binary: u8,
 ) -> i64 {
+    unsafe { narwhal_pure_core_stl_size_impl(coordinates, count, name, name_len, binary, false) }
+}
+
+/// Exact required-file size query, sharing the owned encoder's validation.
+/// # Safety
+/// Same caller-owned span requirements as `narwhal_pure_core_stl_size`.
+#[no_mangle]
+pub unsafe extern "C" fn narwhal_pure_core_stl_size_owned(
+    coordinates: *const f64,
+    count: usize,
+    name: *const u8,
+    name_len: usize,
+    binary: u8,
+) -> i64 {
+    unsafe { narwhal_pure_core_stl_size_impl(coordinates, count, name, name_len, binary, true) }
+}
+
+unsafe fn narwhal_pure_core_stl_size_impl(
+    coordinates: *const f64,
+    count: usize,
+    name: *const u8,
+    name_len: usize,
+    binary: u8,
+    owned: bool,
+) -> i64 {
     if count > u32::MAX as usize {
         return ERR_SIZE as i64;
     }
@@ -436,7 +521,15 @@ pub unsafe extern "C" fn narwhal_pure_core_stl_size(
     };
 
     let coords = match coords_span(coordinates, count) {
-        Some(c) if c.iter().all(finite_f32) => c,
+        Some(c)
+            if if owned {
+                binary != 1 || c.iter().all(|x| !x.is_finite() || (*x as f32).is_finite())
+            } else {
+                c.iter().all(finite_f32)
+            } =>
+        {
+            c
+        }
         Some(_) => return ERR_INPUT as i64,
 
         None => return ERR_NULL as i64,
@@ -1412,5 +1505,321 @@ mod tests {
             ERR_SIZE
         );
         assert_eq!(out, [0xA5; 84]);
+    }
+}
+
+// Required-native legacy file API. Kept separate from the existing fused import
+// decoder: legacy files use Latin-1/Python whitespace and float grammar, while
+// the mesh import boundary must continue refusing nonfinite vertices.
+#[derive(Debug)]
+struct FileError(i64, usize, usize);
+
+fn python_space(b: u8) -> bool {
+    matches!(b, b'\t'..=b'\r' | 0x1c..=0x20 | 0x85 | 0xa0)
+}
+fn python_line(b: u8) -> bool {
+    matches!(b, b'\n' | b'\r' | 0x0b | 0x0c | 0x1c..=0x1e | 0x85)
+}
+
+// Latin-1 contains no non-ASCII decimal digits. Underscores are permitted only
+// between ASCII digits, not beside signs, decimal points, or exponent markers.
+fn python_float(token: &[u8]) -> Option<f64> {
+    if !token.contains(&b'_') {
+        return std::str::from_utf8(token).ok()?.parse().ok();
+    }
+    let mut cleaned = Vec::with_capacity(token.len());
+    for (i, &b) in token.iter().enumerate() {
+        if b == b'_' {
+            if i == 0
+                || i + 1 == token.len()
+                || !token[i - 1].is_ascii_digit()
+                || !token[i + 1].is_ascii_digit()
+            {
+                return None;
+            }
+        } else {
+            cleaned.push(b);
+        }
+    }
+    let text = std::str::from_utf8(&cleaned).ok()?;
+    // Rust's numeric parser matches the decimal/sign/exponent and inf/nan
+    // spellings accepted by float() once valid underscores are removed.
+    text.parse().ok()
+}
+
+fn file_ascii(data: &[u8], mut output: Option<&mut [f64]>) -> Result<usize, FileError> {
+    let mut open = false;
+    let mut nv = 0usize;
+    let mut written = 0usize;
+    for raw in data.split(|b| python_line(*b)) {
+        let mut words = raw.split(|b| python_space(*b)).filter(|w| !w.is_empty());
+        match words.next().unwrap_or(b"") {
+            b"facet" => {
+                if open {
+                    return Err(FileError(-10, 0, 0));
+                }
+                open = true;
+                nv = 0;
+            }
+            b"vertex" => {
+                if !open {
+                    return Err(FileError(-11, 0, 0));
+                }
+                if nv == 3 {
+                    return Err(FileError(-12, 0, 0));
+                }
+                // The legacy reader ignores additional components.
+                let tokens = [words.next(), words.next(), words.next()];
+                if tokens.iter().any(Option::is_none) {
+                    return Err(FileError(-13, 0, 0));
+                }
+                for token in tokens.into_iter().flatten() {
+                    let value = python_float(token).ok_or_else(|| {
+                        FileError(
+                            -16,
+                            token.as_ptr() as usize - data.as_ptr() as usize,
+                            token.len(),
+                        )
+                    })?;
+                    if let Some(out) = output.as_deref_mut() {
+                        *out.get_mut(written).ok_or(FileError(-3, 0, 0))? = value;
+                    }
+                    written = written.checked_add(1).ok_or(FileError(-3, 0, 0))?;
+                }
+                nv += 1;
+            }
+            b"endfacet" => {
+                if !open {
+                    return Err(FileError(-14, 0, 0));
+                }
+                if nv != 3 {
+                    return Err(FileError(-15, nv, 0));
+                }
+                open = false;
+            }
+            _ => {}
+        }
+    }
+    if open {
+        return Err(FileError(-10, 0, 0));
+    }
+    Ok(written)
+}
+
+fn file_binary(data: &[u8], output: Option<&mut [f64]>) -> Result<usize, FileError> {
+    if data.len() < 84 {
+        return Err(FileError(-20, 0, 0));
+    }
+    let count = u32::from_le_bytes(data[80..84].try_into().unwrap()) as usize;
+    let expected = count
+        .checked_mul(50)
+        .and_then(|n| n.checked_add(84))
+        .ok_or(FileError(-3, 0, 0))?;
+    if data.len() != expected {
+        return Err(FileError(-21, count, expected));
+    }
+    let n = count.checked_mul(9).ok_or(FileError(-3, 0, 0))?;
+    if let Some(out) = output {
+        if out.len() != n {
+            return Err(FileError(-3, 0, 0));
+        }
+        for (facet, dest) in data[84..].chunks_exact(50).zip(out.chunks_exact_mut(9)) {
+            for (word, value) in facet[12..48].chunks_exact(4).zip(dest) {
+                *value = f32::from_le_bytes(word.try_into().unwrap()) as f64;
+            }
+        }
+    }
+    Ok(n)
+}
+
+/// Legacy file decoding, with caller-owned diagnostics [code, argument, length].
+/// mode 0 matches read_stl's first-80-byte, case-sensitive bytes.lstrip test;
+/// 1 forces binary; 2 forces Latin-1 ASCII (the private compatibility helpers);
+/// 3 uses binary-consistency-first detection for the separate mesh import route.
+/// Nonfinite values are file data here, never a validated mesh. weld_flat still
+/// rejects them before they can become indexed import geometry.
+///
+/// # Safety
+/// Input/output spans must be valid for their lengths, diagnostics for 3 i64s.
+#[no_mangle]
+pub unsafe extern "C" fn narwhal_pure_core_stl_file_size(
+    data: *const u8,
+    len: usize,
+    mode: u8,
+    diagnostics: *mut i64,
+) -> i64 {
+    let Some(diag) = (unsafe { crate::checked_slice_mut(diagnostics, 3) }) else {
+        return -1;
+    };
+    diag.fill(0);
+    let Some(bytes) = (unsafe { crate::checked_slice(data, len) }) else {
+        return -1;
+    };
+    let result = file_decode(bytes, mode, None);
+    match result {
+        Ok(n) => i64::try_from(n).unwrap_or(-3),
+        Err(FileError(code, a, b)) => {
+            diag.copy_from_slice(&[code, a as i64, b as i64]);
+            code
+        }
+    }
+}
+
+fn file_decode(data: &[u8], mode: u8, out: Option<&mut [f64]>) -> Result<usize, FileError> {
+    let ascii = match mode {
+        0 => {
+            let header = &data[..data.len().min(80)];
+            let start = header
+                .iter()
+                .position(|b| !matches!(b, b'\t'..=b'\r' | b' '))
+                .unwrap_or(header.len());
+            header[start..].starts_with(b"solid")
+        }
+        1 => false,
+        2 => true,
+        // Import retains binary-consistency-first detection for solid-prefixed
+        // binary headers, then uses the complete legacy ASCII grammar.
+        3 => match is_binary(data) {
+            Some(binary) => !binary,
+            None => return file_decode(data, 0, out),
+        },
+        _ => return Err(FileError(-2, 0, 0)),
+    };
+    if ascii {
+        file_ascii(data, out)
+    } else {
+        file_binary(data, out)
+    }
+}
+
+/// Fill an exactly sized caller-owned buffer. No retained pointers or zero-copy
+/// Python views are used. Size validation and decoding share the same scanner.
+/// # Safety
+/// Input/output spans must be valid for their lengths.
+#[no_mangle]
+pub unsafe extern "C" fn narwhal_pure_core_stl_file_decode(
+    data: *const u8,
+    len: usize,
+    mode: u8,
+    out: *mut f64,
+    out_len: usize,
+) -> i32 {
+    let Some(bytes) = (unsafe { crate::checked_slice(data, len) }) else {
+        return -1;
+    };
+    let Some(dest) = (unsafe { crate::checked_slice_mut(out, out_len) }) else {
+        return -1;
+    };
+    match file_decode(bytes, mode, Some(dest)) {
+        Ok(n) if n == out_len => 0,
+        Ok(_) => -3,
+        Err(FileError(code, _, _)) => code as i32,
+    }
+}
+
+/// Exact f64 compatibility helper; not the float32 normal stored in binary STL.
+/// # Safety
+/// coordinates must contain 9 f64 values and out must hold 3 f64 values.
+#[no_mangle]
+pub unsafe extern "C" fn narwhal_pure_core_stl_normal(
+    coordinates: *const f64,
+    out: *mut f64,
+) -> i32 {
+    let Some(c) = (unsafe { crate::checked_slice(coordinates, 9) }) else {
+        return -1;
+    };
+    let Some(dest) = (unsafe { crate::checked_slice_mut(out, 3) }) else {
+        return -1;
+    };
+    let (a, b, c) = facet(c, 0);
+    dest.copy_from_slice(&facet_normal(a, b, c));
+    0
+}
+
+// File data and destination geometry have deliberately different numeric
+// contracts. Validate every input coordinate, including vertices belonging to
+// degenerate faces, before welding or publishing any output.
+fn import_mesh(bytes: &[u8]) -> Result<WeldedMesh, FileError> {
+    if bytes.len() > 512 * 1024 * 1024 {
+        return Err(FileError(-3, 0, 0));
+    }
+    let coords = file_decode(bytes, 3, None)?;
+    if coords % 9 != 0 || coords / 9 > 2_000_000 {
+        return Err(FileError(-3, 0, 0));
+    }
+    let mut flat = vec![0.; coords];
+    file_decode(bytes, 3, Some(&mut flat))?;
+    for (index, value) in flat.iter().enumerate() {
+        if !value.is_finite() {
+            return Err(FileError(-30, index, 1));
+        }
+        // Match the destination's ordinary IEEE rounding, not a clamp. This
+        // also accepts %.9g spellings of f32::MAX that round back to MAX.
+        if !(*value as f32).is_finite() {
+            return Err(FileError(-30, index, 2));
+        }
+    }
+    weld_flat(&flat).ok_or(FileError(-2, 0, 0))
+}
+
+/// Required STL import boundary: parse, validate destination-f32 coordinates,
+/// then weld exact equal input points in first-seen order, retaining winding.
+/// Returns -30 for unsafe numeric data (diagnostics: scalar index, reason
+/// 1=nonfinite/2=outside finite f32 range). File-only decoding remains permissive.
+/// Neither payload nor mesh counts are published on any failure.
+///
+/// # Safety
+/// Input is readable for data_len. Output buffers are exclusively writable for
+/// their capacities, counts for one i64 each, diagnostics for three i64 values.
+/// All input, output and diagnostic regions must be nonoverlapping.
+#[allow(clippy::too_many_arguments)]
+#[no_mangle]
+pub unsafe extern "C" fn narwhal_pure_core_stl_import_mesh_decode(
+    data: *const u8,
+    data_len: usize,
+    out_vertices: *mut f64,
+    vertex_capacity: usize,
+    out_indices: *mut u32,
+    index_capacity: usize,
+    out_vertex_count: *mut i64,
+    out_face_count: *mut i64,
+    diagnostics: *mut i64,
+) -> i32 {
+    let Some(diag) = (unsafe { crate::checked_slice_mut(diagnostics, 3) }) else {
+        return ERR_NULL;
+    };
+    diag.fill(0);
+    let result = (|| -> Result<(), FileError> {
+        let bytes = unsafe { crate::checked_slice(data, data_len) }.ok_or(FileError(-1, 0, 0))?;
+        let nv =
+            unsafe { crate::checked_slice_mut(out_vertex_count, 1) }.ok_or(FileError(-1, 0, 0))?;
+        let nf =
+            unsafe { crate::checked_slice_mut(out_face_count, 1) }.ok_or(FileError(-1, 0, 0))?;
+        let (vertices, faces) = import_mesh(bytes)?;
+        let vertex_values = vertices.len().checked_mul(3).ok_or(FileError(-3, 0, 0))?;
+        let index_values = faces.len().checked_mul(3).ok_or(FileError(-3, 0, 0))?;
+        if vertices.len() > vertex_capacity || index_values > index_capacity {
+            return Err(FileError(-3, 0, 0));
+        }
+        let vertex_out = unsafe { crate::checked_slice_mut(out_vertices, vertex_values) }
+            .ok_or(FileError(-1, 0, 0))?;
+        let index_out = unsafe { crate::checked_slice_mut(out_indices, index_values) }
+            .ok_or(FileError(-1, 0, 0))?;
+        for (point, dest) in vertices.iter().zip(vertex_out.chunks_exact_mut(3)) {
+            dest.copy_from_slice(point);
+        }
+        for (face, dest) in faces.iter().zip(index_out.chunks_exact_mut(3)) {
+            dest.copy_from_slice(face);
+        }
+        nv[0] = vertices.len() as i64;
+        nf[0] = faces.len() as i64;
+        Ok(())
+    })();
+    match result {
+        Ok(()) => 0,
+        Err(FileError(code, a, b)) => {
+            diag.copy_from_slice(&[code, a as i64, b as i64]);
+            code as i32
+        }
     }
 }

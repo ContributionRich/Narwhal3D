@@ -138,9 +138,11 @@ check('~/.cache/narwhal3d/embedded' in model_text
       and 're.match(r"^([A-Za-z]):' in model_text
       and 'm.group(2).replace("\\\\", "/")' in model_text,
       "embedded textures must use the Narwhal cache and retain drive-letter mapping")
+native_stl_text = open(os.path.join(ROOT, "native/pure_core/src/stl.rs")).read()
 check('name="Narwhal 3D"' in stl_text
-      and 'name = "Narwhal 3D"' in stl_text,
-      "STL default and binary-header fallback must identify Narwhal 3D")
+      and 'const DEFAULT_NAME: &[u8] = b"Narwhal 3D";' in native_stl_text
+      and "name_starts_with_solid(name_slice)" in native_stl_text,
+      "STL default and native binary-header fallback must identify Narwhal 3D")
 
 check('out = ["# Narwhal 3D"]' in obj_text,
       "OBJ export metadata must identify Narwhal 3D")

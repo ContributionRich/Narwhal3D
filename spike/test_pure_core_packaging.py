@@ -1,4 +1,4 @@
-"""Fast parser packaging contracts; no Cargo, platform builds, GUI or product imports.
+"""Fast parser/STL/helper packaging contracts; no Cargo, GUI or product imports.
 
 ctypes fixtures model only this smoke ABI, not a parser. Negative fixtures and
 in-memory guard mutants must be rejected. Real-library qualification is separate.
@@ -12,6 +12,7 @@ import io
 import inspect
 import json
 import struct
+import textwrap
 from pathlib import Path
 import subprocess
 import sys
@@ -316,7 +317,7 @@ def execute_probe(mutant="", code=None):
 
 def pe_fixture(*, parser_abi=2, missing="", svg_abi=14, alias_abi=1):
     """Minimal PE export/import tables; data fixture, never executable native code."""
-    data = bytearray(4096)
+    data = bytearray(8192)
     data[:2] = b"MZ"
     struct.pack_into("<I", data, 0x3c, 0x80)
     data[0x80:0x84] = b"PE\0\0"
@@ -324,30 +325,30 @@ def pe_fixture(*, parser_abi=2, missing="", svg_abi=14, alias_abi=1):
     optional = 0x98
     struct.pack_into("<H", data, optional, 0x20b)
     struct.pack_into("<I", data, optional + 60, 0x200)
-    struct.pack_into("<II", data, optional + 112, 0x1200, 0x200)
-    struct.pack_into("<II", data, optional + 120, 0x1a00, 40)
-    struct.pack_into("<IIII", data, optional + 240 + 8, 0xe00, 0x1000, 0xe00, 0x200)
-    names = [name for name in ("narwhal_pure_core_abi_version", *gate.PURE_CORE_PARSE_EXPORTS) if name != missing]
-    assert len(names) <= 32, "PE fixture export table capacity exceeded"
+    struct.pack_into("<II", data, optional + 112, 0x1200, 0x400)
+    struct.pack_into("<II", data, optional + 120, 0x2600, 40)
+    struct.pack_into("<IIII", data, optional + 240 + 8, 0x1e00, 0x1000, 0x1e00, 0x200)
+    names = [name for name in ("narwhal_pure_core_abi_version", *gate.PURE_CORE_PARSE_EXPORTS, *gate.PURE_CORE_RETIREMENT_EXPORTS) if name != missing]
+    assert len(names) <= 64, "PE fixture export table capacity exceeded"
     offset = lambda rva: rva - 0x1000 + 0x200
     struct.pack_into("<IIIII", data, offset(0x1200) + 20,
-                     len(names), len(names), 0x1240, 0x12c0, 0x1340)
-    cursor = 0x1400
+                     len(names), len(names), 0x1240, 0x1340, 0x1440)
+    cursor = 0x1600
     for i, name in enumerate(names):
-        struct.pack_into("<I", data, offset(0x1240) + i * 4, 0x1c00 + i * 16)
-        struct.pack_into("<I", data, offset(0x12c0) + i * 4, cursor)
-        struct.pack_into("<H", data, offset(0x1340) + i * 2, i)
+        struct.pack_into("<I", data, offset(0x1240) + i * 4, 0x2800 + i * 16)
+        struct.pack_into("<I", data, offset(0x1340) + i * 4, cursor)
+        struct.pack_into("<H", data, offset(0x1440) + i * 2, i)
         encoded = name.encode() + b"\0"
         data[offset(cursor):offset(cursor) + len(encoded)] = encoded
         cursor += len(encoded)
-        assert cursor <= 0x1a00, "PE export names overlap the import table"
+        assert cursor <= 0x2600, "PE export names overlap the import table"
         value = parser_abi if name == "narwhal_pure_core_parse_abi" else (2 if name in {"narwhal_pure_core_calc_abi2", "narwhal_pure_core_bearing_abi2"} else 1)
         if name == "narwhal_pure_core_svgpath_owned_version": value = svg_abi
         if name == "narwhal_pure_core_alias_identity": value = alias_abi
-        data[offset(0x1c00) + i * 16:offset(0x1c00) + i * 16 + 6] = b"\xb8" + struct.pack("<I", value) + b"\xc3"
-    struct.pack_into("<IIIII", data, offset(0x1a00), 0x1a80, 0, 0, 0x1a40, 0x1a80)
-    data[offset(0x1a40):offset(0x1a40) + 13] = b"kernel32.dll\0"
-    struct.pack_into("<Q", data, offset(0x1a80), (1 << 63) | 1)
+        data[offset(0x2800) + i * 16:offset(0x2800) + i * 16 + 6] = b"\xb8" + struct.pack("<I", value) + b"\xc3"
+    struct.pack_into("<IIIII", data, offset(0x2600), 0x2680, 0, 0, 0x2640, 0x2680)
+    data[offset(0x2640):offset(0x2640) + 13] = b"kernel32.dll\0"
+    struct.pack_into("<Q", data, offset(0x2680), (1 << 63) | 1)
     return bytes(data)
 
 
@@ -462,12 +463,152 @@ class ParserProbeTests(unittest.TestCase):
         self.assertTrue((ROOT / "spike/fixtures/numparse_golden.json").is_file())
 
 
+def retirement_library(mutant=""):
+    """Independent fixed ABI replies; no parser/solver/codec implementation."""
+    xyz = [0.,0.,0.,1.,0.,0.,0.,1.,0.]
+    binary = b"probe".ljust(80,b" ") + struct.pack("<I12fH",1,0,0,1,*xyz,0)
+    ascii_stl = (b"solid probe\n  facet normal 0 0 1\n  outer loop\n"
+                 b"    vertex 0 0 0\n    vertex 1 0 0\n    vertex 0 1 0\n"
+                 b"  endloop\n  endfacet\nendsolid probe\n")
+    def normal(data,out):
+        assert list(data) == xyz
+        out[:] = [0.,0.,1.]
+        return 0
+    def size(data,count,name,length,mode):
+        assert list(data) == xyz and count == 1 and name == b"probe" and length == 5
+        return len(binary if mode else ascii_stl)
+    def encode(data,count,name,length,mode,out,capacity):
+        expected = binary if mode else ascii_stl
+        if capacity < len(expected):
+            if mutant == "encode-partial": c.memset(out,0,1)
+            return -3
+        c.memmove(out,expected,len(expected))
+        return 0
+    def file_size(data,length,mode,diag):
+        assert length == len(data)
+        diag[:] = [-20,0,0] if data == b"x" else [0,0,0]
+        return -20 if data == b"x" else 9
+    def decode(data,length,mode,out,capacity):
+        assert data in (binary,ascii_stl) and capacity == 9
+        out[:] = xyz
+        return 0
+    def mesh(data,length,verts,vc,indices,ic,nv,nf,diag):
+        assert vc == ic == 3
+        if b"nan" in data or b"1e100" in data:
+            if mutant == "import-partial": verts[0] = 0.
+            if mutant == "import-accept-unsafe": return 0
+            diag[:] = [-30,0,1 if b"nan" in data else 2]
+            return -30
+        verts[:] = xyz
+        indices[:] = [0,1,2]
+        c.cast(nv,c.POINTER(c.c_int64))[0] = 3
+        c.cast(nf,c.POINTER(c.c_int64))[0] = 1
+        diag[:] = [0,0,0]
+        return 0
+    answers = {1:[0.,.25,1.],2:[0.,0.,.5,1.,1.],3:[1.],4:[.75,.25],
+               5:[1.,0.,0.,1.],6:[2.,3.,0.,1.,1.,0.],7:[1.,1.],
+               8:[0.,.25,.5,.75,1.],9:[-.5,0.,.5,1.,1.5],10:[1.,2.,3.]}
+    def helper(request,out,capacity,used,detail):
+        req = request._obj
+        u,d = c.cast(used,c.POINTER(c.c_uint64)),c.cast(detail,c.POINTER(c.c_uint64))
+        assert c.sizeof(req) == 64
+        u[0],d[0] = 0,0
+        if req.operation == 99:
+            if mutant == "helper-accept-invalid": return 0
+            return -2
+        if capacity == 1:
+            if mutant == "helper-partial": out[0] = 0.
+            return -3
+        if req.operation == 1 and req.rows == 2: return -5
+        if req.operation == 6 and req.data[0] == req.data[1] == req.data[2] == req.data[3] == 0: return -4
+        answer = answers[req.operation]
+        u[0] = len(answer)
+        for i,value in enumerate(answer): out[i] = value
+        if mutant == "helper-op-" + str(req.operation): out[0] += 1
+        return 0
+    calls = {"abi_version": lambda: 1,"stl_size_owned":size,"stl_encode_owned":encode,
+             "stl_file_size":file_size,"stl_file_decode":decode,
+             "stl_import_mesh_decode":mesh,"stl_normal":normal,"interpolate_helper_v1":helper}
+    functions = {}
+    for name,fn in calls.items():
+        full = "narwhal_pure_core_" + name
+        if mutant == full: continue
+        if mutant == "wrong-" + name:
+            fn = lambda *args: 0  # status-only/no-write implementations must fail
+        functions[full] = Mock(side_effect=fn)
+    return SimpleNamespace(**functions)
+
+
+def execute_retirement_probe(mutant="", code=None, lib=None):
+    output = io.StringIO()
+    with patch.object(c,"CDLL",return_value=lib or retirement_library(mutant)), \
+            patch.object(sys,"argv",["probe","fixture"]), redirect_stdout(output):
+        exec(compile(code or gate.PURE_CORE_RETIREMENT_PROBE,"<retirement-probe>","exec"),{})
+    return json.loads(output.getvalue())
+
+
+class RetirementProbeTests(unittest.TestCase):
+    def test_independent_fixed_abi_and_each_missing_or_incorrect_export(self):
+        self.assertEqual(execute_retirement_probe(),gate.PURE_CORE_RETIREMENT_IDENTITY)
+        for symbol in gate.PURE_CORE_RETIREMENT_EXPORTS:
+            with self.subTest(symbol=symbol), self.assertRaises((AttributeError,RuntimeError)):
+                execute_retirement_probe(symbol)
+        for name in ("abi_version","stl_size_owned","stl_encode_owned","stl_file_size",
+                     "stl_file_decode","stl_import_mesh_decode","stl_normal","interpolate_helper_v1"):
+            with self.subTest(wrong=name), self.assertRaises(RuntimeError):
+                execute_retirement_probe("wrong-"+name)
+        for mutant in ("encode-partial","import-partial","import-accept-unsafe",
+                       "helper-partial","helper-accept-invalid"):
+            with self.subTest(mutant=mutant), self.assertRaises(RuntimeError):
+                execute_retirement_probe(mutant)
+        for op in range(1,11):
+            with self.subTest(operation=op), self.assertRaises(RuntimeError):
+                execute_retirement_probe("helper-op-"+str(op))
+
+    def test_semantic_assertions_are_load_bearing(self):
+        # Re-break the guard in a copied AST, not in the live script. The
+        # incorrect-result tests above must turn RED; restoring must pass.
+        tree = ast.parse(gate.PURE_CORE_RETIREMENT_PROBE)
+        require = next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name == "require")
+        require.body = [ast.Pass()]
+        code = ast.unparse(ast.fix_missing_locations(tree))
+        for mutant in ("wrong-stl_normal","helper-op-4","helper-op-10"):
+            with self.subTest(mutant=mutant):
+                self.assertEqual(execute_retirement_probe(mutant,code),gate.PURE_CORE_RETIREMENT_IDENTITY)
+                with self.assertRaises(RuntimeError): execute_retirement_probe(mutant)
+
+    def test_child_is_bounded_and_rejects_bad_missing_stale_or_crashing_library(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp)/"core.so"
+            path.write_bytes(b"fixture")
+            with patch.object(gate.subprocess,"run",return_value=SimpleNamespace(
+                    stdout=json.dumps(gate.PURE_CORE_RETIREMENT_IDENTITY))) as run:
+                self.assertEqual(gate.probe_pure_core_retirement(path),gate.PURE_CORE_RETIREMENT_IDENTITY)
+                args,kwargs = run.call_args
+                self.assertEqual(args[0][1:4],["-I","-B","-c"])
+                self.assertEqual(args[0][-1],str(path.resolve()))
+                self.assertEqual(kwargs["timeout"],30)
+                self.assertTrue(kwargs["check"])
+            for packet in ({}, {**gate.PURE_CORE_RETIREMENT_IDENTITY,"retirement_exports":[]}):
+                with patch.object(gate.subprocess,"run",return_value=SimpleNamespace(stdout=json.dumps(packet))):
+                    with self.assertRaisesRegex(ValueError,"evidence differs"): gate.probe_pure_core_retirement(path)
+            for error in (subprocess.CalledProcessError(-11,"probe",stderr="crashed"),
+                          subprocess.TimeoutExpired("probe",30),OSError("loader refused")):
+                with patch.object(gate.subprocess,"run",side_effect=error):
+                    with self.assertRaisesRegex(ValueError,"STL/helper"): gate.probe_pure_core_retirement(path)
+            alias = path.with_name("alias.so")
+            alias.symlink_to(path)
+            with self.assertRaisesRegex(ValueError,"missing regular"): gate.probe_pure_core_retirement(alias)
+            path.unlink()
+            with self.assertRaisesRegex(ValueError,"missing regular"): gate.probe_pure_core_retirement(path)
+
+
 class PackageTests(unittest.TestCase):
     def test_round20_public_closure_retains_host_suites(self):
         # Path/AST metadata only: never load the golden corpora into this test.
         closure = gate.require_rust_public_closure(ROOT / "native/pure_core")
-        self.assertEqual(len(closure), 73)
-        self.assertEqual(len(gate.RUST_INTEGRATION_SUITES), 15)
+        self.assertEqual(len(closure), 89)
+        self.assertEqual(len(gate.RUST_INTEGRATION_SUITES), 19)
         source = ast.parse((ROOT / "scripts/create_public_branch.py").read_text())
         public = set()
         for node in source.body:
@@ -477,7 +618,9 @@ class PackageTests(unittest.TestCase):
             ):
                 public.update(ast.literal_eval(node.value))
         for host in ("spike/test_native_nearest.py", "spike/test_native_display_samples.py",
-                     "spike/test_native_curve_samples.py", "spike/test_native_arclength.py"):
+                     "spike/test_native_curve_samples.py", "spike/test_native_arclength.py",
+                     "spike/test_coil_owned.py", "spike/test_interpolate.py",
+                     "spike/test_interpolate_owned_boundary.py", "spike/test_stl_import_boundary.py"):
             self.assertIn(host, gate.PURE_CORE_PYTESTS)
             self.assertIn(host, public)
             self.assertTrue((ROOT / host).is_file(), host)
@@ -563,7 +706,7 @@ class PackageTests(unittest.TestCase):
             linux_verify.verify_native_manifest(root, records)
 
     def test_windows_static_identity_and_native_execution(self):
-        exports = ("narwhal_pure_core_abi_version", *gate.PURE_CORE_PARSE_EXPORTS)
+        exports = ("narwhal_pure_core_abi_version", *gate.PURE_CORE_PARSE_EXPORTS, *gate.PURE_CORE_RETIREMENT_EXPORTS)
         identity = {"machine": "pe32plus-x86-64", "exports": exports}
         with patch.object(win_verify, "inspect_pe_dll", return_value=identity) as inspect:
             with patch.object(sys, "platform", "linux"), patch.object(win_verify, "probe_pure_core_parser") as probe:
@@ -589,7 +732,7 @@ class PackageTests(unittest.TestCase):
             path.write_bytes(pe_fixture())
             self.assertEqual(win_verify.pure_core_record(path)["parse_abi"], 2)
             for kwargs in ({"parser_abi": 1}, {"svg_abi": 1}, {"alias_abi": 14},
-                           *({"missing": name} for name in gate.PURE_CORE_PARSE_EXPORTS),
+                           *({"missing": name} for name in (*gate.PURE_CORE_PARSE_EXPORTS,*gate.PURE_CORE_RETIREMENT_EXPORTS)),
                            {"missing": "narwhal_pure_core_parse_abi"},
                            {"missing": "narwhal_pure_core_parse_v2"}):
                 path.write_bytes(pe_fixture(**kwargs))
@@ -652,11 +795,95 @@ class PackageTests(unittest.TestCase):
         self.assertIn("narwhal_application_core.dll", win_verify.NATIVE_COMPONENT_PATHS)
 
 
+class RetirementPackageTests(unittest.TestCase):
+    def assert_entrypoint_refuses(self, module, method):
+        # Reuse the same minimal package/build inputs as the established parser
+        # refusal tests, but allow parser success and fail only the new probe.
+        original = getattr(PackageTests,method)
+        class SelectRetirement(ast.NodeTransformer):
+            def visit_Constant(self,node):
+                if node.value == "probe_pure_core_parser":
+                    return ast.copy_location(ast.Constant("probe_pure_core_retirement"),node)
+                return node
+        tree = ast.fix_missing_locations(SelectRetirement().visit(ast.parse(textwrap.dedent(inspect.getsource(original)))))
+        namespace = {}
+        exec(compile(tree,"<retirement-entrypoint-test>","exec"),globals(),namespace)
+        with patch.object(module,"probe_pure_core_parser",return_value=gate.PURE_CORE_PARSE_IDENTITY):
+            if module is linux_build:
+                with patch.object(module,"probe_pure_core_nearest_batch",return_value={}), \
+                        patch.object(module,"probe_pure_core_curve_hits",return_value={}):
+                    namespace[method](self)
+            else:
+                namespace[method](self)
+
+    def test_linux_entrypoints_and_source_gate_refuse_retirement_failure(self):
+        for module,method in (
+            (linux_build,"test_linux_build_refuses_before_staging"),
+            (linux_assemble,"test_linux_assembler_rejects_parser_failure"),
+            (linux_verify,"test_linux_verifier_executes_adjacent_parser"),
+        ):
+            with self.subTest(module=module.__name__): self.assert_entrypoint_refuses(module,method)
+        with patch.object(gate,"probe_pure_core_parser",return_value=gate.PURE_CORE_PARSE_IDENTITY), \
+                patch.object(gate,"probe_pure_core_retirement",side_effect=ValueError("retirement refused")) as probe:
+            with self.assertRaisesRegex(gate.GateError,"retirement refused"): gate.step_direct_abi(Path("core.so"))
+            probe.assert_called_once()
+
+    def test_windows_static_and_native_retirement_refusal(self):
+        exports = ("narwhal_pure_core_abi_version",*gate.PURE_CORE_PARSE_EXPORTS,*gate.PURE_CORE_RETIREMENT_EXPORTS)
+        identity = {"machine":"pe32plus-x86-64","exports":exports}
+        for missing in gate.PURE_CORE_RETIREMENT_EXPORTS:
+            with self.subTest(missing=missing), patch.object(win_verify,"inspect_pe_dll",return_value={
+                    **identity,"exports":tuple(e for e in exports if e != missing)}):
+                with self.assertRaisesRegex(win_verify.VerificationError,"STL/helper"):
+                    win_verify.verify_pure_core_identity(Path("core.dll"))
+        with patch.object(win_verify,"inspect_pe_dll",return_value=identity), \
+                patch.object(win_verify,"probe_pure_core_parser",return_value=gate.PURE_CORE_PARSE_IDENTITY), \
+                patch.object(win_verify,"probe_pure_core_retirement",side_effect=ValueError("retirement refused")) as probe:
+            with patch.object(sys,"platform","linux"):
+                win_verify.pure_core_record(Path("core.dll"))
+                probe.assert_not_called() # no fake cross-host semantic claim
+            with patch.object(sys,"platform","win32"):
+                with self.assertRaisesRegex(win_verify.VerificationError,"retirement refused"):
+                    win_verify.pure_core_record(Path("core.dll"))
+                probe.assert_called_once_with(Path("core.dll"))
+
+    def test_required_probe_bypass_mutants_turn_refusal_tests_red(self):
+        cases = ((linux_build,"main","test_linux_build_refuses_before_staging"),
+                 (linux_assemble,"validate_native_components","test_linux_assembler_rejects_parser_failure"),
+                 (linux_verify,"verify_native_library_abis","test_linux_verifier_executes_adjacent_parser"))
+        for module,function,method in cases:
+            class Bypass(ast.NodeTransformer):
+                def visit_Call(self,node):
+                    if isinstance(node.func,ast.Name) and node.func.id == "probe_pure_core_retirement":
+                        return ast.copy_location(ast.parse(repr(gate.PURE_CORE_RETIREMENT_IDENTITY),mode="eval").body,node)
+                    return self.generic_visit(node)
+            tree = ast.fix_missing_locations(Bypass().visit(ast.parse(inspect.getsource(getattr(module,function)))))
+            namespace = {}
+            exec(compile(tree,"<retirement-bypass-mutant>","exec"),vars(module),namespace)
+            with self.subTest(module=module.__name__), patch.object(module,function,namespace[function]), redirect_stdout(io.StringIO()):
+                with self.assertRaises(AssertionError): self.assert_entrypoint_refuses(module,method)
+            self.assert_entrypoint_refuses(module,method)
+        # Native Windows semantic execution is independently load-bearing too.
+        tree = ast.parse(inspect.getsource(win_verify.verify_pure_core_identity))
+        tree = ast.fix_missing_locations(Bypass().visit(tree))
+        namespace = {}
+        exec(compile(tree,"<windows-retirement-bypass>","exec"),vars(win_verify),namespace)
+        with patch.object(win_verify,"verify_pure_core_identity",namespace["verify_pure_core_identity"]):
+            result = unittest.TestResult()
+            RetirementPackageTests("test_windows_static_and_native_retirement_refusal").run(result)
+            self.assertFalse(result.wasSuccessful(),"Windows retirement bypass survived")
+        restored = unittest.TestResult()
+        RetirementPackageTests("test_windows_static_and_native_retirement_refusal").run(restored)
+        self.assertTrue(restored.wasSuccessful(),restored.errors or restored.failures)
+
+
 class GuardMutationTests(unittest.TestCase):
     def test_round20_host_retention_check_goes_red_when_manifest_is_trimmed(self):
         method = "test_round20_public_closure_retains_host_suites"
         for host in ("spike/test_native_nearest.py", "spike/test_native_display_samples.py",
-                     "spike/test_native_curve_samples.py", "spike/test_native_arclength.py"):
+                     "spike/test_native_curve_samples.py", "spike/test_native_arclength.py",
+                     "spike/test_coil_owned.py", "spike/test_interpolate.py",
+                     "spike/test_interpolate_owned_boundary.py", "spike/test_stl_import_boundary.py"):
             with self.subTest(host=host), patch.object(
                 gate, "PURE_CORE_PYTESTS", tuple(p for p in gate.PURE_CORE_PYTESTS if p != host)
             ):

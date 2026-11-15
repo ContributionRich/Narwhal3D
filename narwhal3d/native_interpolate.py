@@ -1,117 +1,222 @@
-"""Optional Rust global interpolation adapter with caller-owned output."""
+"""Caller-owned ctypes boundary for exact Rust interpolation and helper ABI v1.
+
+Python only marshals host containers. There is no numeric replay on native
+refusal. Optional legacy adapter calls still return None; production uses
+``required=True`` and receives a typed failure instead.
+"""
 from __future__ import annotations
-import array, ctypes, math, os, sys, threading
+
+import array
+import ctypes
+import math
+import os
 from pathlib import Path
-_ABI=1; _ENV="NARWHAL_PURE_CORE"; _MAX_POINTS=2048
-_lock=threading.Lock(); _signature=None; _binding=None; _skin_signature=None; _skin_binding=None; _native_calls=0; _native_skin_calls=0
-_periodic_signature=None; _periodic_binding=None; _native_periodic_calls=0
-STYLE={"Uniform":0,"Chord":1,"SqrtChrd":2}
+import sys
+import threading
+
+_ABI = 1
+_ENV = "NARWHAL_PURE_CORE"
+_MAX_POINTS = 2048
+_MAX_VALUES = 4_200_000
+STYLE = {"Uniform": 0, "Chord": 1, "SqrtChrd": 2}
+_lock = threading.RLock()
+_signature = _skin_signature = _periodic_signature = _helper_signature = None
+_binding = _skin_binding = _periodic_binding = _helper_binding = None
+_native_calls = _native_skin_calls = _native_periodic_calls = _native_helper_calls = 0
+_D = ctypes.POINTER(ctypes.c_double)
+_U = ctypes.POINTER(ctypes.c_uint64)
+
+
+class NativeInterpolationUnavailable(RuntimeError):
+    """The requested exact ABI is missing; Python replay is forbidden."""
+
+
+class NativeInterpolationFailure(ValueError):
+    """A native refusal, retaining its route, numeric status and diagnostic index."""
+    def __init__(self, route, status, detail=0):
+        self.route, self.status, self.detail = route, status, detail
+        super().__init__(f"native interpolation {route} refused (status {status}, detail {detail})")
+
+
+class HelperRequest(ctypes.Structure):
+    _fields_ = [("operation", ctypes.c_uint32), ("style", ctypes.c_uint32),
+                ("rows", ctypes.c_uint64), ("columns", ctypes.c_uint64),
+                ("degree", ctypes.c_int64), ("index", ctypes.c_int64),
+                ("parameter", ctypes.c_double), ("data", _D),
+                ("data_len", ctypes.c_size_t)]
+
+
 def _name():
-    return "narwhal_pure_core.dll" if sys.platform=="win32" else "libnarwhal_pure_core.dylib" if sys.platform=="darwin" else "libnarwhal_pure_core.so"
-def _fn():
-    global _signature,_binding
-    explicit=os.environ.get(_ENV); signature=explicit or "<packaged>"
-    if _signature==signature:return _binding
-    with _lock:
-        if _signature==signature:return _binding
-        _signature,_binding=signature,None
-        packaged=Path(__file__).resolve().parent/"native"/_name()
-        for path in ((Path(explicit).expanduser(),) if explicit else (packaged,)):
-            if not path.is_file():continue
-            try:
-                lib=ctypes.CDLL(str(path)); version=lib.narwhal_pure_core_abi_version; version.argtypes=[]; version.restype=ctypes.c_uint32
-                if version()!=_ABI:continue
-                fn=lib.narwhal_pure_core_interpolate
-                fn.argtypes=[ctypes.POINTER(ctypes.c_double),ctypes.c_size_t,ctypes.c_int64,ctypes.c_ubyte,ctypes.POINTER(ctypes.c_double),ctypes.c_size_t,ctypes.POINTER(ctypes.c_double),ctypes.c_size_t,ctypes.POINTER(ctypes.c_uint64),ctypes.POINTER(ctypes.c_uint64),ctypes.POINTER(ctypes.c_uint64)]; fn.restype=ctypes.c_int32
-            except (AttributeError,OSError):continue
-            _binding=fn;return fn
+    return "narwhal_pure_core.dll" if sys.platform == "win32" else "libnarwhal_pure_core.dylib" if sys.platform == "darwin" else "libnarwhal_pure_core.so"
+
+
+def _resolve(symbol, args):
+    explicit = os.environ.get(_ENV)
+    path = Path(explicit).expanduser() if explicit else Path(__file__).resolve().parent / "native" / _name()
+    try:
+        lib = ctypes.CDLL(str(path))
+        version = lib.narwhal_pure_core_abi_version
+        version.argtypes, version.restype = [], ctypes.c_uint32
+        if version() != _ABI:
+            return None
+        fn = getattr(lib, symbol)
+        fn.argtypes, fn.restype = args, ctypes.c_int32
+        return fn
+    except (OSError, AttributeError):
         return None
+
+
+def _cached(kind, symbol, args):
+    signature = os.environ.get(_ENV) or "<packaged>"
+    sig, binding = ("_signature", "_binding") if kind == "" else (f"_{kind}_signature", f"_{kind}_binding")
+    with _lock:
+        if globals()[sig] != signature:
+            globals()[binding] = _resolve(symbol, args)
+            globals()[sig] = signature
+        return globals()[binding]
+
+
+def _fn():
+    if _signature == (os.environ.get(_ENV) or "<packaged>"):
+        return _binding
+    return _cached("", "narwhal_pure_core_interpolate", [_D, ctypes.c_size_t, ctypes.c_int64, ctypes.c_ubyte, _D, ctypes.c_size_t, _D, ctypes.c_size_t, _U, _U, _U])
+
+
 def _skin_fn():
- global _skin_signature,_skin_binding
- explicit=os.environ.get(_ENV);signature=explicit or "<packaged>"
- if _skin_signature==signature:return _skin_binding
- with _lock:
-  if _skin_signature==signature:return _skin_binding
-  _skin_signature,_skin_binding=signature,None;packaged=Path(__file__).resolve().parent/"native"/_name()
-  for path in ((Path(explicit).expanduser(),) if explicit else (packaged,)):
-   if not path.is_file():continue
-   try:
-    lib=ctypes.CDLL(str(path));fn=lib.narwhal_pure_core_skin_control_net;fn.argtypes=[ctypes.POINTER(ctypes.c_double),ctypes.c_size_t,ctypes.c_size_t,ctypes.c_int64,ctypes.c_ubyte,ctypes.POINTER(ctypes.c_double),ctypes.c_size_t,ctypes.POINTER(ctypes.c_double),ctypes.c_size_t,ctypes.POINTER(ctypes.c_uint64),ctypes.POINTER(ctypes.c_uint64),ctypes.POINTER(ctypes.c_uint64)];fn.restype=ctypes.c_int32
-   except (AttributeError,OSError):continue
-   _skin_binding=fn;return fn
-  return None
+    if _skin_signature == (os.environ.get(_ENV) or "<packaged>"):
+        return _skin_binding
+    return _cached("skin", "narwhal_pure_core_skin_control_net", [_D, ctypes.c_size_t, ctypes.c_size_t, ctypes.c_int64, ctypes.c_ubyte, _D, ctypes.c_size_t, _D, ctypes.c_size_t, _U, _U, _U])
+
 
 def _periodic_fn():
-    global _periodic_signature,_periodic_binding
-    explicit=os.environ.get(_ENV); signature=explicit or "<packaged>"
-    if _periodic_signature==signature:return _periodic_binding
-    with _lock:
-        if _periodic_signature==signature:return _periodic_binding
-        _periodic_signature,_periodic_binding=signature,None
-        packaged=Path(__file__).resolve().parent/"native"/_name()
-        for path in ((Path(explicit).expanduser(),) if explicit else (packaged,)):
-            if not path.is_file():continue
-            try:
-                lib=ctypes.CDLL(str(path)); version=lib.narwhal_pure_core_abi_version; version.argtypes=[]; version.restype=ctypes.c_uint32
-                if version()!=_ABI:continue
-                fn=lib.narwhal_pure_core_interpolate_periodic
-                fn.argtypes=[ctypes.POINTER(ctypes.c_double),ctypes.c_size_t,ctypes.c_ubyte,ctypes.POINTER(ctypes.c_double),ctypes.c_size_t,ctypes.POINTER(ctypes.c_double),ctypes.c_size_t,ctypes.POINTER(ctypes.c_uint64),ctypes.POINTER(ctypes.c_uint64)]; fn.restype=ctypes.c_int32
-            except (AttributeError,OSError):continue
-            _periodic_binding=fn;return fn
+    if _periodic_signature == (os.environ.get(_ENV) or "<packaged>"):
+        return _periodic_binding
+    return _cached("periodic", "narwhal_pure_core_interpolate_periodic", [_D, ctypes.c_size_t, ctypes.c_ubyte, _D, ctypes.c_size_t, _D, ctypes.c_size_t, _U, _U])
+
+
+def _helper_fn():
+    if _helper_signature == (os.environ.get(_ENV) or "<packaged>"):
+        return _helper_binding
+    return _cached("helper", "narwhal_pure_core_interpolate_helper_v1", [ctypes.POINTER(HelperRequest), _D, ctypes.c_size_t, _U, _U])
+
+
+def _view(values):
+    return (ctypes.c_double * len(values)).from_buffer(values)
+
+
+def _buffer(count, limit=_MAX_VALUES):
+    if not 0 <= count <= limit:
+        raise NativeInterpolationFailure("size", -3)
+    return array.array("d", [0.0]) * count
+
+
+def _flat(points):
+    values = array.array("d", (float(c) for p in points for c in p[:3]))
+    if len(values) != 3 * len(points) or any(not math.isfinite(v) for v in values):
+        raise NativeInterpolationFailure("coordinates", -2)
+    return values
+
+
+def helper(operation, data, *, rows=0, columns=0, degree=0, index=0, parameter=0.0, style=0, capacity):
+    """Execute a bounded helper; return doubles or raise a typed native refusal."""
+    global _native_helper_calls
+    fn = _helper_fn()
+    if fn is None:
+        raise NativeInterpolationUnavailable("exact interpolation helper ABI v1 is unavailable; install the matching native core (no Python fallback)")
+    if not (0 <= rows <= _MAX_POINTS + (operation == 9) and 0 <= columns <= _MAX_POINTS and 0 <= degree <= _MAX_POINTS and -(2**63) <= index < 2**63):
+        raise NativeInterpolationFailure(operation, -3)
+    values = array.array("d", data)
+    if len(values) > _MAX_VALUES:
+        raise NativeInterpolationFailure(operation, -3)
+    out = _buffer(capacity)
+    req = HelperRequest(operation, style, rows, columns, degree, index, parameter, _view(values), len(values))
+    used, detail = ctypes.c_uint64(), ctypes.c_uint64()
+    code = fn(ctypes.byref(req), _view(out), len(out), ctypes.byref(used), ctypes.byref(detail))
+    if code != 0:
+        raise NativeInterpolationFailure(operation, code, int(detail.value))
+    if used.value != capacity or any(not math.isfinite(v) for v in out):
+        raise NativeInterpolationFailure(operation, -7)
+    _native_helper_calls += 1
+    return list(out)
+
+
+def _solve(points, degree, style, route, required):
+    global _native_calls, _native_skin_calls, _native_periodic_calls
+    try:
+        if required and _helper_fn() is None:
+            raise NativeInterpolationUnavailable("exact interpolation helper ABI v1 is unavailable; install the matching native core (no Python fallback)")
+        fn = (_skin_fn() if route == "skin" else _periodic_fn() if route == "periodic" else _fn())
+        if fn is None:
+            raise NativeInterpolationUnavailable(f"exact native {route} interpolation is unavailable (no Python fallback)")
+        if style not in STYLE:
+            raise NativeInterpolationFailure(route, -2)
+        pts = list(points)
+        n = len(pts)
+        width = len(pts[0]) if route == "skin" and pts else 1
+        if n < (3 if route == "periodic" else 2) or n > _MAX_POINTS or width < 1 or n * width > 2_000_000:
+            raise NativeInterpolationFailure(route, -3)
+        if route == "skin":
+            if any(len(row) != width for row in pts):
+                raise NativeInterpolationFailure(route, -2)
+            flat = _flat([p for row in pts for p in row])
+        else:
+            flat = _flat(pts)
+        p = int(degree)
+        if not (0 if route == "skin" else 1) <= p < 2**63:
+            raise NativeInterpolationFailure(route, -2)
+        actual = max(1, min(p, n - 1))
+        ctrl_count = n + 3 if route == "periodic" else n * width
+        knot_count = n + 7 if route == "periodic" else n + actual + 1
+        controls, knots = _buffer(3 * ctrl_count, 6_000_000), _buffer(knot_count)
+        oc, ok, od = ctypes.c_uint64(), ctypes.c_uint64(), ctypes.c_uint64()
+        fv, cv, kv = _view(flat), _view(controls), _view(knots)
+        if route == "periodic":
+            code = fn(fv, n, STYLE[style], cv, len(controls), kv, len(knots), ctypes.byref(oc), ctypes.byref(ok))
+            od.value = 3
+        elif route == "skin":
+            code = fn(fv, n, width, p, STYLE[style], cv, len(controls), kv, len(knots), ctypes.byref(od), ctypes.byref(oc), ctypes.byref(ok))
+        else:
+            code = fn(fv, n, p, STYLE[style], cv, len(controls), kv, len(knots), ctypes.byref(od), ctypes.byref(oc), ctypes.byref(ok))
+        if code != 0:
+            raise NativeInterpolationFailure(route, code)
+        expected_count = len(controls) if route == "skin" else ctrl_count
+        if oc.value != expected_count or ok.value != knot_count or od.value != (3 if route == "periodic" else actual):
+            raise NativeInterpolationFailure(route, -7)
+        if any(not math.isfinite(v) for v in controls) or any(not math.isfinite(v) for v in knots) or any(a > b for a, b in zip(knots, knots[1:])):
+            raise NativeInterpolationFailure(route, -7)
+        rows = [tuple(controls[i:i + 3]) for i in range(0, len(controls), 3)]
+        if route == "skin":
+            result = [rows[i:i + n] for i in range(0, len(rows), n)]
+            _native_skin_calls += 1
+        else:
+            result = rows
+            if route == "periodic":
+                _native_periodic_calls += 1
+            else:
+                _native_calls += 1
+        return result, list(knots), int(od.value)
+    except (NativeInterpolationFailure, NativeInterpolationUnavailable, TypeError, ValueError, OverflowError, IndexError):
+        if required:
+            raise
         return None
-def interpolate_periodic(points,style):
-    """Closed cubic through distinct points: ``(n+3 controls, n+7 knots, 3)`` or None."""
-    global _native_periodic_calls
-    fn=_periodic_fn(); points=list(points); n=len(points)
-    if fn is None or n<3 or n>_MAX_POINTS or style not in STYLE:return None
-    try:
-        flat=array.array("d",(float(c) for p in points for c in p[:3]))
-        if len(flat)!=3*n or any(not math.isfinite(v) for v in flat):return None
-        controls=array.array("d",[0.0])*(3*(n+3)); knots=array.array("d",[0.0])*(n+7)
-        fv=(ctypes.c_double*len(flat)).from_buffer(flat); cv=(ctypes.c_double*len(controls)).from_buffer(controls); kv=(ctypes.c_double*len(knots)).from_buffer(knots)
-        oc=ctypes.c_uint64(); ok=ctypes.c_uint64()
-        code=fn(fv,n,STYLE[style],cv,len(controls),kv,len(knots),ctypes.byref(oc),ctypes.byref(ok))
-    except Exception:return None
-    count,kcount=int(oc.value),int(ok.value)
-    if code!=0 or count!=n+3 or kcount!=n+7:return None
-    ctrl=[tuple(controls[3*i:3*i+3]) for i in range(count)]; full=list(knots[:kcount])
-    if any(not math.isfinite(v) for row in ctrl for v in row) or full!=sorted(full):return None
-    _native_periodic_calls+=1;return ctrl,full,3
-def interpolate(points,degree,style):
-    global _native_calls
-    fn=_fn(); points=list(points); n=len(points)
-    if fn is None or n<2 or n>_MAX_POINTS or style not in STYLE:return None
-    try:
-        flat=array.array("d",(float(c) for p in points for c in p[:3]))
-        if len(flat)!=3*n or any(not math.isfinite(v) for v in flat):return None
-        p=int(degree); controls=array.array("d",[0.0])*(3*n); knots=array.array("d",[0.0])*(n+max(1,p)+1)
-        fv=(ctypes.c_double*len(flat)).from_buffer(flat); cv=(ctypes.c_double*len(controls)).from_buffer(controls); kv=(ctypes.c_double*len(knots)).from_buffer(knots)
-        od=ctypes.c_uint64(); oc=ctypes.c_uint64(); ok=ctypes.c_uint64()
-        code=fn(fv,n,p,STYLE[style],cv,len(controls),kv,len(knots),ctypes.byref(od),ctypes.byref(oc),ctypes.byref(ok))
-    except Exception:return None
-    actual,count,kcount=int(od.value),int(oc.value),int(ok.value)
-    if code!=0 or count!=n or actual<1 or kcount!=n+actual+1:return None
-    ctrl=[tuple(controls[3*i:3*i+3]) for i in range(n)]; full=list(knots[:kcount])
-    if any(not math.isfinite(v) for row in ctrl for v in row) or full!=sorted(full):return None
-    _native_calls+=1;return ctrl,full,actual
-def skin_control_net(sections,degree,style):
- global _native_skin_calls
- fn=_skin_fn();sections=[list(row) for row in sections];k=len(sections);width=len(sections[0]) if sections else 0
- if fn is None or k<2 or width<1 or any(len(row)!=width for row in sections) or style not in STYLE:return None
- try:
-  flat=array.array("d",(float(c) for row in sections for p in row for c in p[:3]));coords=3*k*width
-  if len(flat)!=coords or any(not math.isfinite(v) for v in flat):return None
-  out=array.array("d",[0.0])*coords;knots=array.array("d",[0.0])*(k+max(1,int(degree))+1);fv=(ctypes.c_double*coords).from_buffer(flat);ov=(ctypes.c_double*coords).from_buffer(out);kv=(ctypes.c_double*len(knots)).from_buffer(knots);od=ctypes.c_uint64();used=ctypes.c_uint64();nk=ctypes.c_uint64();code=fn(fv,k,width,int(degree),STYLE[style],ov,coords,kv,len(knots),ctypes.byref(od),ctypes.byref(used),ctypes.byref(nk))
- except Exception:return None
- q,nvalues,nknots=int(od.value),int(used.value),int(nk.value)
- if code!=0 or nvalues!=coords or nknots!=k+q+1:return None
- net=[]
- for i in range(width):net.append([tuple(out[3*(i*k+j):3*(i*k+j)+3]) for j in range(k)])
- _native_skin_calls+=1;return net,list(knots[:nknots]),q
+
+
+def interpolate(points, degree, style, *, required=False):
+    return _solve(points, degree, style, "open", required)
+
+
+def interpolate_periodic(points, style, *, required=False):
+    return _solve(points, 3, style, "periodic", required)
+
+
+def skin_control_net(sections, degree, style, *, required=False):
+    return _solve(sections, degree, style, "skin", required)
+
 
 def _reset_for_tests():
-    global _signature,_binding,_skin_signature,_skin_binding,_native_calls,_native_skin_calls
-    global _periodic_signature,_periodic_binding,_native_periodic_calls
+    global _signature, _binding, _skin_signature, _skin_binding, _periodic_signature, _periodic_binding, _helper_signature, _helper_binding
+    global _native_calls, _native_skin_calls, _native_periodic_calls, _native_helper_calls
     with _lock:
-        _signature=None;_binding=None;_skin_signature=None;_skin_binding=None;_native_calls=0;_native_skin_calls=0
-        _periodic_signature=None;_periodic_binding=None;_native_periodic_calls=0
+        _signature = _skin_signature = _periodic_signature = _helper_signature = None
+        _binding = _skin_binding = _periodic_binding = _helper_binding = None
+        _native_calls = _native_skin_calls = _native_periodic_calls = _native_helper_calls = 0

@@ -203,17 +203,31 @@ class CompactOffset(unittest.TestCase):
         self.assertEqual(source.Encode(), before)
         self.assertTrue(source.IsRational)
 
-    def test_boundary_native_and_complete_existing_fallback(self):
+    def test_boundary_required_native_ownership_and_explicit_refusal(self):
         source = boundary_fixture()
+        encoded = source.Encode()
         before = native_interpolate._native_calls
         result = off.curve_offset(source, -.2)
-        if native_interpolate._fn() is not None:
-            self.assertGreater(native_interpolate._native_calls, before)
-        with patch.object(native_interpolate, 'interpolate', return_value=None):
-            fallback = off.curve_offset(source, -.2)
-        self.assertEqual(len(result.curve.Points), len(fallback.curve.Points))
-        self.assertAlmostEqual(result.max_deviation, fallback.max_deviation, delta=1e-10)
-        self.assert_boundaries(source, fallback.curve, -.2)
+        self.assertGreater(native_interpolate._native_calls, before)
+        self.assert_contract(source, result, -.2, kinked=True)
+        self.assert_boundaries(source, result.curve, -.2)
+        successful_calls = native_interpolate._native_calls
+        # A required adapter returning None is a broken protocol, not permission
+        # to invent another fit. No old control-polygon approximation may hide it.
+        with patch.object(native_interpolate, 'interpolate', return_value=None) as declined, \
+                patch.object(off, '_offset_control_polygon_approx',
+                             side_effect=AssertionError('native failure reached legacy offset')):
+            with self.assertRaisesRegex(RuntimeError, 'required native interpolation returned no result'):
+                off.curve_offset(source, -.2)
+        self.assertTrue(any(call.kwargs.get('required') is True
+                            for call in declined.call_args_list))
+        with patch.object(native_interpolate, '_fn', return_value=None), \
+                patch.object(off, '_offset_control_polygon_approx',
+                             side_effect=AssertionError('missing native reached legacy offset')):
+            with self.assertRaisesRegex(RuntimeError, 'native open interpolation is unavailable'):
+                off.curve_offset(source, -.2)
+        self.assertEqual(native_interpolate._native_calls, successful_calls)
+        self.assertEqual(source.Encode(), encoded)
 
     def test_boundary_no_compaction_and_smoothing_mutants_are_red(self):
         source = boundary_fixture()
@@ -254,17 +268,28 @@ class CompactOffset(unittest.TestCase):
         self.assertLessEqual(oracle(source, result.curve, -.2), tolerance)
         self.assert_boundaries(source, result.curve, -.2)
 
-    def test_existing_native_interpolator_and_complete_fallback(self):
+    def test_periodic_required_native_ownership_and_explicit_refusal(self):
         c = smooth_fixture()
+        encoded = c.Encode()
         before = native_interpolate._native_periodic_calls
         result = off.curve_offset(c, .25)
-        if native_interpolate._periodic_fn() is not None:
-            self.assertGreater(native_interpolate._native_periodic_calls, before)
-        with patch.object(interpolate, '_native_periodic', return_value=None):
-            fallback = off.curve_offset(c, .25)
-        self.assertEqual(len(result.curve.Points), len(fallback.curve.Points))
-        self.assertLess(abs(result.max_deviation-fallback.max_deviation), 1e-10)
-        self.assert_contract(c, fallback, .25)
+        self.assertGreater(native_interpolate._native_periodic_calls, before)
+        self.assert_contract(c, result, .25)
+        successful_calls = native_interpolate._native_periodic_calls
+        with patch.object(native_interpolate, 'interpolate_periodic', return_value=None) as declined, \
+                patch.object(off, '_offset_control_polygon_approx',
+                             side_effect=AssertionError('native failure reached legacy offset')):
+            with self.assertRaisesRegex(RuntimeError, 'required native interpolation returned no result'):
+                off.curve_offset(c, .25)
+        declined.assert_called_once()
+        self.assertIs(declined.call_args.kwargs.get('required'), True)
+        with patch.object(native_interpolate, '_periodic_fn', return_value=None), \
+                patch.object(off, '_offset_control_polygon_approx',
+                             side_effect=AssertionError('missing native reached legacy offset')):
+            with self.assertRaisesRegex(RuntimeError, 'native periodic interpolation is unavailable'):
+                off.curve_offset(c, .25)
+        self.assertEqual(native_interpolate._native_periodic_calls, successful_calls)
+        self.assertEqual(c.Encode(), encoded)
 
     def test_inner_native_validation_parity_is_separate_from_output_controls(self):
         # Old control-polygon construction is retained as the complete fallback.

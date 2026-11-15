@@ -9,7 +9,7 @@ For the Linux, Windows and Mac release pipeline, use
 hashes, commands and acceptance results below are historical baselines, not proof
 that a newly assembled package passed those gates.
 
-Narwhal 3D is a free, open-source, command-driven NURBS CAD application. Release downloads are available for Linux x86_64 (AppImage) and as an early Windows x86_64 preview (portable EXE), both for 0.4.12. No Mac build has been made for this line. It ships as one application bundle: a Narwhal launcher and interface on top of a bundled, open-source viewport runtime.
+Narwhal 3D is a free, open-source, command-driven NURBS CAD application. Release downloads are available for Linux x86_64 (AppImage) and as an early Windows x86_64 preview (portable EXE), both for 0.4.13. No Mac build has been made for this line. It ships as one application bundle: a Narwhal launcher and interface on top of a bundled, open-source viewport runtime.
 
 **Licence:** [GPL-3.0-or-later](../LICENSE). Contributions and dependencies must be GPL-compatible; see [CONTRIBUTING.md](../CONTRIBUTING.md).
 
@@ -34,6 +34,8 @@ Narwhal's active project format is `.narwhal`: a dependency-free Rust-validated 
 
 ## Install on Linux x86_64
 
+**Current release: [0.4.13](https://github.com/ContributionRich/Narwhal3D/releases/tag/v0.4.13).** Download the AppImage and checksum from that release. It includes Library, background native-project I/O, recovery and the native tracing/exact-save helpers. The qualification record below is an explicitly historical baseline, not the current asset identity.
+
 **Release: 0.4.7.** The Linux x86_64 asset is `Narwhal_3D-0.4.7-x86_64.AppImage`.
 
 The 0.4.7 AppImage has been built and its inventory verified. Final Linux source release gates, including the full suite, and AppDir/extracted-AppImage verification passed. Actual extracted-package GUI checks passed on NVIDIA/OpenGL, including Gumball extrusion then scale (24/24), rendering (47/47), preferences write/restore (183/193 checks), and window overlays (105/105). All 290 bundled ELFs were measured to require at most glibc 2.28, below the Ubuntu 22.04/glibc 2.35 compatibility ceiling enforced by the release verifier. This does not certify a pristine Ubuntu desktop or optional GPU backends; those checks remain open. The AppImage is unsigned.
@@ -41,15 +43,15 @@ The 0.4.7 AppImage has been built and its inventory verified. Final Linux source
 Make the AppImage executable and run it directly:
 
 ```bash
-chmod +x Narwhal_3D-0.4.7-x86_64.AppImage
-./Narwhal_3D-0.4.7-x86_64.AppImage
+chmod +x Narwhal_3D-0.4.13-x86_64.AppImage
+./Narwhal_3D-0.4.13-x86_64.AppImage
 ```
 
 The AppImage contains the native startup welcome window, natively branded runtime, all nine mandatory native components, locked Python dependencies, application package, icons, and license notices. It does not install a separate host application.
 
 ## Early Windows x86_64 preview
 
-**Release: 0.4.12.** The Windows asset is `Narwhal_3D-0.4.12-Windows-x86_64.exe`, a portable EXE published on the v0.4.12 release with a `.sha256` checksum. No ZIP is published for this line; 0.4.8 ZIP users download the EXE once. The EXE manages its payload in a per-user cache, so keep documents outside it. It was built from the tagged v0.4.12 source, includes the qualified document observer, the TracePicture helper `runtime/windows-x86_64/bin/narwhal-picture-trace.exe` and the exact-save helper `narwhal3d/kernel/bin/brep_writer-win32-amd64.exe`, and carries its openNURBS license at `licenses/openNURBS-LICENSE.txt`. It is unsigned. Its acceptance ran in a Windows 11 virtual machine with a software OpenGL driver, not on a physical GPU. Its byte size and SHA-256 are in the release's `.sha256` file and are not repeated here. See the [platform evidence and limitations](windows-build.md).
+**Release: 0.4.13.** The Windows asset is `Narwhal_3D-0.4.13-Windows-x86_64.exe`, a portable EXE published on the v0.4.13 release with a `.sha256` checksum. No ZIP is published for this line; 0.4.8 ZIP users download the EXE once. The EXE manages its payload in a per-user cache, so keep documents outside it. It was built from the tagged v0.4.13 source, includes the qualified document observer, the TracePicture helper `runtime/windows-x86_64/bin/narwhal-picture-trace.exe` and the exact-save helper `narwhal3d/kernel/bin/brep_writer-win32-amd64.exe`, and carries its openNURBS license at `licenses/openNURBS-LICENSE.txt`. It is unsigned. Its acceptance ran in a Windows 11 virtual machine with a software OpenGL driver, not on a physical GPU. Its byte size and SHA-256 are in the release's `.sha256` file and are not repeated here. See the [platform evidence and limitations](windows-build.md).
 
 **Historical 0.4.7 ZIP.** The Windows asset name for 0.4.7 is `Narwhal_3D-0.4.7-Windows-x86_64.zip`. Extract the complete folder and start `Narwhal3D.exe`; the native welcome window remains visible while the bundled runtime initializes. Do not move that executable away from its adjacent `app` and `runtime` folders.
 
@@ -68,7 +70,7 @@ SHA-256 checks integrity, not publisher authentication. Neither asset is cryptog
 
 ## Experimental macOS source build
 
-Narwhal does not yet publish a macOS application. Mac users on macOS 14 or newer can try the [experimental source-build guide](macos-build.md), which builds the pinned Blender runtime and Narwhal Rust helpers for the Mac's current architecture. Exact CPython 3.13 geometry wheels are available for both Apple Silicon and Intel.
+macOS is not maintained or targeted for current releases. The old 0.4.8 package remains archived; it is not a current supported download. Mac users on macOS 14 or newer can try the [experimental source-build guide](macos-build.md), which builds the pinned Blender runtime and Narwhal Rust helpers for the Mac's current architecture. Exact CPython 3.13 geometry wheels are available for both Apple Silicon and Intel.
 
 The result is an unsigned, unnotarized community build—not a supported release or universal binary—and has not yet passed Narwhal's macOS GUI/GPU, exact-geometry, save/reload, packaging, signing, or notarization gates. Reports from people who compile it are welcome.
 
@@ -85,11 +87,9 @@ Requirements: Python 3, Bash, HTTPS access, a C/C++ build toolchain, CMake, Ninj
 
 This development bootstrap downloads only SHA-256-locked artifacts and installs the locked wheels into an official development runtime. That runtime is useful for iteration but is deliberately rejected by release assembly because it is not natively branded.
 
-### Current Python layer and native destination
+### Rust-first implementation and Python retirement
 
-During the 0.x feature-development phase, command behavior, document orchestration, UI, and most tests live in Python. Exact solid operations already use the compiled Open CASCADE kernel, while a small set of Blender source patches provides native application identity and CAD-specific viewport behavior.
-
-After the command set and interaction behavior are feature-complete and stable, the production application layer is intended to move into the Blender source tree and compile as one native Narwhal 3D application. The final product should not require a separately installed or bootstrapped Python add-on. Python may remain for tests, build tooling, and prototypes. Work contributed now remains durable as the behavioral specification, regression coverage, file-format logic, and geometry contract for that native implementation.
+Native conversion is active now. New computation, parsing, iteration, coordination policy and computational regression tests belong in Rust. Python remains only for necessary Blender/UI, ctypes, rhino3dm/OCCT host integration and unconverted behavior; new Python needs a concrete host-API reason. Do not add duplicate Python algorithms or silent fallback/replay paths. Retire originals only after independent parity, error/refusal, mutation, performance and platform qualification, with local ignored backups and matching native binaries. Exact geometry and the single Undo history remain mandatory.
 
 See [CONTRIBUTING.md](../CONTRIBUTING.md) for the architecture boundaries, exact-geometry rules, and one-command contribution workflow.
 
@@ -141,9 +141,9 @@ The in-app assistant accepts four provider identifiers: `openai`, `anthropic`, `
 
 Sharing workspace metadata requires explicit consent for the configured recipient. The assistant includes bounded selected-object metadata with each message. To revoke remembered consent, open AI Settings and choose **Forget workspace-sharing permission**. See the [permission model](../SECURITY.md#ai-permissions-in-current-source) and [settings control](../narwhal3d/ai_settings_popup.py#L353).
 
-A tool-capable model can request one new world-aligned box or cube. Creating it requires a separate, one-use human approval in the app. Circle is proposal-only. Sphere, cylinder and cone are disabled, and the assistant has no executor for curve, loft, pipe or Boolean operations. It cannot edit selected objects. Logical cancellation invalidates stale responses, but physical HTTP cancellation is not guaranteed. See the [source status](../STATUS.md#current-source-and-0412-feature-set), [disabled action catalog](../native/automation_core/src/catalog.rs) and [changelog](../CHANGELOG.md).
+A tool-capable model can request one new world-aligned box or cube. Creating it requires a separate, one-use human approval in the app. Circle is proposal-only. Sphere, cylinder and cone are disabled, and the assistant has no executor for curve, loft, pipe or Boolean operations. It cannot edit selected objects. Logical cancellation invalidates stale responses, but physical HTTP cancellation is not guaranteed. See the [source status](../STATUS.md#current-source-and-0413-feature-set), [disabled action catalog](../native/automation_core/src/catalog.rs) and [changelog](../CHANGELOG.md).
 
-The external MCP launcher uses Unix stdio and requires `--read-only`. It starts one new app instance per launch and supports metadata reads only. It cannot attach to an existing app or execute modeling actions. See the [launcher](../scripts/narwhal_mcp.py) and [source status](../STATUS.md#current-source-and-0412-feature-set).
+The external MCP launcher uses Unix stdio and requires `--read-only`. It starts one new app instance per launch and supports metadata reads only. It cannot attach to an existing app or execute modeling actions. See the [launcher](../scripts/narwhal_mcp.py) and [source status](../STATUS.md#current-source-and-0413-feature-set).
 
 The [read-tool catalog](../native/automation_core/src/catalog.rs#L8-L54) defines these nine dotted MCP names:
 

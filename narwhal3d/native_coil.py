@@ -1,4 +1,4 @@
-"""Optional Rust planner for smooth axis-based Helix and Spiral NURBS curves."""
+"""Required Rust coil planner; optional independent catenary/preview adapters."""
 from __future__ import annotations
 
 import array
@@ -37,11 +37,14 @@ def _coil_binding():
     explicit = os.environ.get(_ENV)
     signature = explicit or "<packaged>"
     if _signature == signature:
+        if _binding is None:
+            raise RuntimeError("required coil native library is missing or incompatible; rebuild pure_core or set NARWHAL_PURE_CORE")
         return _binding
     with _lock:
         if _signature == signature:
+            if _binding is None:
+                raise RuntimeError("required coil native library is missing or incompatible; rebuild pure_core or set NARWHAL_PURE_CORE")
             return _binding
-        _signature, _binding = signature, None
         packaged = Path(__file__).resolve().parent / "native" / _library_name()
         candidates = (Path(explicit).expanduser(),) if explicit else (packaged,)
         for path in candidates:
@@ -71,9 +74,10 @@ def _coil_binding():
                 fn.restype = ctypes.c_int32
             except (AttributeError, OSError):
                 continue
-            _binding = fn
+            _signature, _binding = signature, fn
             return fn
-        return None
+        _signature, _binding = signature, None
+        raise RuntimeError("required coil native library is missing or incompatible; rebuild pure_core or set NARWHAL_PURE_CORE")
 
 
 def _catenary_binding_for_library():
@@ -146,24 +150,18 @@ def preview_points(start,end,radial,radius0,radius1,turns,reverse,flat,count):
 
 
 def plan(start, end, radial, radius0, radius1, turns, reverse, tolerance, flat=False):
-    """Return packed cubic poles/knots/deviation, or ``None`` for fallback."""
+    """Return packed plan; legacy parameter ValueError or required-native RuntimeError."""
     global _native_calls
     fn = _coil_binding()
-    if fn is None:
-        return None
+    start, end, radial = tuple(start), tuple(end), tuple(radial)
+    radius0, radius1 = float(radius0), float(radius1)
+    turns, tolerance = float(turns), float(tolerance)
+    values = start + end + radial + (radius0, radius1, turns, tolerance)
+    if (len(start) != 3 or len(end) != 3 or len(radial) != 3
+            or not all(math.isfinite(value) for value in values)
+            or turns <= 0.0 or turns > _MAX_TURNS or tolerance <= 0.0):
+        raise ValueError("coil parameters must be finite; turns and tolerance must be positive")
     try:
-        values = [float(value) for point in (start, end, radial) for value in point]
-        if len(values) != 9:
-            return None
-        radius0 = float(radius0)
-        radius1 = float(radius1)
-        turns = float(turns)
-        tolerance = float(tolerance)
-        if (not all(math.isfinite(value) for value in values)
-                or not all(math.isfinite(value) for value in
-                           (radius0, radius1, turns, tolerance))
-                or turns <= 0.0 or turns > _MAX_TURNS or tolerance <= 0.0):
-            return None
         maximum_spans = max(1, math.ceil(turns * _MAX_SPANS_PER_TURN))
         pole_capacity = 3 * (3 * maximum_spans + 1)
         knot_capacity = 3 * maximum_spans + 3
@@ -182,24 +180,29 @@ def plan(start, end, radial, radius0, radius1, turns, reverse, tolerance, flat=F
                   int(bool(flat)), pole_view, pole_capacity, knot_view, knot_capacity,
                   ctypes.byref(pole_count), ctypes.byref(knot_count),
                   ctypes.byref(span_count), ctypes.byref(deviation))
-    except Exception:  # noqa: BLE001 -- geometry command retains Python fallback
-        return None
+    except (ctypes.ArgumentError, OSError) as exc:
+        raise RuntimeError("required coil native invocation failed") from exc
+    if code == -2:
+        raise ValueError("axis and radial direction must be non-zero")
+    if code == -4:
+        raise ValueError("requested coil tolerance was not achieved")
     npoles = int(pole_count.value)
     nknots = int(knot_count.value)
     nspans = int(span_count.value)
     achieved = float(deviation.value)
-    if (code != 0 or npoles < 12 or npoles % 3
+    if (code != 0 or npoles > pole_capacity or nknots > knot_capacity
+            or npoles < 12 or npoles % 3
             or nknots != npoles // 3 + 2 or nspans < 1
             or npoles != 3 * (3 * nspans + 1)
             or not math.isfinite(achieved) or achieved < 0.0 or achieved > tolerance
             or any(not math.isfinite(value) for value in poles[:npoles])
             or any(not math.isfinite(value) for value in knots[:nknots])):
-        return None
+        raise RuntimeError("required coil native planner returned an invalid plan")
     used_knots = tuple(knots[:nknots])
     if (used_knots != tuple(sorted(used_knots))
             or used_knots[:3] != (0.0, 0.0, 0.0)
             or used_knots[-3:] != (1.0, 1.0, 1.0)):
-        return None
+        raise RuntimeError("required coil native planner returned an invalid plan")
     _native_calls += 1
     return tuple(poles[:npoles]), used_knots, nspans, achieved
 

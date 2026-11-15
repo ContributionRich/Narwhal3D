@@ -85,6 +85,7 @@ for label, fn, counter in (
     framed(fn(*arguments(record)), record)
     assert getattr(native, counter) == before + 1, (label, "production did not route through Rust")
     checks += 1
+# These names remain compatible; they no longer bypass native routing at small sizes.
 assert (live.NATIVE_INTERPOLATE_MIN_POINTS, live.NATIVE_SKIN_MIN_VALUES, live.NATIVE_PERIODIC_MIN_POINTS) == (16, 64, 3)
 checks += 1
 

@@ -280,8 +280,7 @@ except ImportError:
 
 # --------------------------------------------------------------------------
 print("\n-- CLOSED (periodic) interpolation (#43) --")
-# The Python solver itself: the native route is pinned against it in test_native_interpolate.
-interp.NATIVE_PERIODIC_MIN_POINTS = 10 ** 9
+# Every production size uses Rust; exact original answers are frozen in Rust golden tests.
 RING = [(0, 0, 0), (4, 1, 0), (7, 5, 1), (3, 9, 0), (-2, 6, 2), (-3, 2, 0)]
 for style in interp.KNOT_STYLES:
     us = interp.closed_parameters(RING, style)
@@ -345,7 +344,6 @@ try:
     check(miss > 0.1, f"while the old periodic control-point curve misses them by {miss:.3f}")
 except ImportError:
     print("  .. rhino3dm unavailable; closed builder checks skipped")
-interp.NATIVE_PERIODIC_MIN_POINTS = 3
 
 # --------------------------------------------------------------------------
 print("\n-- THE SWEEP REGRESSION: smooth along a CURVED rail --")

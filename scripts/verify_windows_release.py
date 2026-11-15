@@ -15,7 +15,8 @@ import zipfile
 
 from release_policy import validate_preview_version
 from build_linux_native import UI_CORE_EXPORTS, UI_CORE_IDENTITY, UI_CORE_SOURCE, verify_ui_core_source
-from check_pure_core import PURE_CORE_PARSE_EXPORTS, probe_pure_core_parser
+from check_pure_core import (PURE_CORE_PARSE_EXPORTS, PURE_CORE_RETIREMENT_EXPORTS,
+                             probe_pure_core_parser, probe_pure_core_retirement)
 
 PRODUCT = "Narwhal 3D"
 PLATFORM = "windows-x86_64"
@@ -511,9 +512,12 @@ def verify_pure_core_identity(path: Path) -> dict[str, object]:
     })
     if any(identity["exports"].count(name) != 1 for name in PURE_CORE_PARSE_EXPORTS):
         raise VerificationError("Windows pure-core lacks required parser ABI exports")
+    if any(identity["exports"].count(name) != 1 for name in PURE_CORE_RETIREMENT_EXPORTS):
+        raise VerificationError("Windows pure-core lacks required STL/helper ABI exports")
     if sys.platform == "win32":
         try:
             probe_pure_core_parser(path)
+            probe_pure_core_retirement(path)
         except ValueError as exc:
             raise VerificationError(str(exc)) from exc
     return identity

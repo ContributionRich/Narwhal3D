@@ -111,3 +111,7 @@ comparisons and 184,015 exact CPython norm/distance witnesses. Sequential hypot
 was not safe at Join thresholds: see `docs/RUST_COORDINATE_JOIN_OWNERSHIP.md`.
 The compensated norm port is under the PSF license (retained source attribution
 and packaged `licenses/CPython-PSF-License.txt`). No tolerance is widened.
+
+## Required round-21 owners
+
+STL codecs/safe mesh import, coil planning and public interpolation helpers require matching Rust support. The additive retirement probe21 checks six STL exports and interpolate_helper_v1, including errors, capacity and failure atomicity, separate from stable core ABI 1. Old libraries refuse explicitly. Exact independent Linux/MSVC captures and source/package checks are mandatory. See ../../docs/RUST_RETIREMENT_21.md for scope and performance tradeoffs.

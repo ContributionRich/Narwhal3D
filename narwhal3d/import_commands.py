@@ -1313,40 +1313,18 @@ def _read_obj(path, model):
 
 
 def _read_stl(path, model):
-    from . import bridge, native_pure, stl_writer
+    from . import bridge, native_stl, stl_writer
 
-    verts = faces = None
-    try:
-        if os.path.getsize(path) >= native_pure._STL_MESH_NATIVE_MIN_BYTES:
-            with open(path, "rb") as stream:
-                data = stream.read()
-            if native_pure._stl_mesh_native_active(data):
-                packed = native_pure.decode_stl_mesh(data)
-                if packed is not None:
-                    vertex_data, index_data, nv, nf = packed
-                    verts = [tuple(vertex_data[3 * i:3 * i + 3])
-                             for i in range(nv)]
-                    faces = [tuple(index_data[3 * i:3 * i + 3])
-                             for i in range(nf)]
-    except (OSError, ValueError):
-        verts = faces = None
-
-    if verts is None:
-        tris = stl_writer.read_stl(path)
-        index, verts, faces = {}, [], []
-        for t in tris:
-            f = []
-            for p in t:
-                key = (float(p[0]), float(p[1]), float(p[2]))
-                j = index.get(key)
-                if j is None:
-                    j = index[key] = len(verts)
-                    verts.append(key)
-                f.append(j)
-            if len(set(f)) == 3:
-                faces.append(tuple(f))
+    # File codecs may preserve nan/inf, but geometry may not. The required
+    # import ABI validates destination float32 range in Rust before welding.
+    # There is no threshold-dependent Python replay on a declined native call.
+    vertices, indices, nv, nf = native_stl.decode_stl_mesh(stl_writer._read_data(path))
     out = Imported()
-    if faces:
+    if nf:
+        values = iter(memoryview(vertices)[:3 * nv])
+        corners = iter(memoryview(indices)[:3 * nf])
+        verts = zip(values, values, values)
+        faces = zip(corners, corners, corners)
         out.items.append((bridge.mesh_from_triangles(verts, faces), "Mesh", None))
     out.notes.append("imported as a MESH object (STL carries no units: taken as model units)")
     return out

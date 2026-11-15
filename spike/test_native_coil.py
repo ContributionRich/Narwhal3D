@@ -6,30 +6,10 @@ import sys
 import time
 import types
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-LIB = os.path.join(ROOT, "native", "pure_core", "target",
-                   "x86_64-unknown-linux-gnu", "release",
-                   "libnarwhal_pure_core.so")
-if not os.path.isfile(LIB):
-    raise SystemExit("pure-core library is not built")
-os.environ["NARWHAL_PURE_CORE"] = LIB
-pkg = types.ModuleType("narwhal3d")
-pkg.__path__ = [os.path.join(ROOT, "narwhal3d")]
-sys.modules["narwhal3d"] = pkg
+from test_coil_owned import ROOT, coil, native, reference, load
+import argparse
+import json
 
-
-def load(name):
-    spec = importlib.util.spec_from_file_location(
-        "narwhal3d." + name, os.path.join(ROOT, "narwhal3d", name + ".py"))
-    mod = importlib.util.module_from_spec(spec)
-    sys.modules["narwhal3d." + name] = mod
-    setattr(pkg, name, mod)
-    spec.loader.exec_module(mod)
-    return mod
-
-
-native = load("native_coil")
-coil = load("coil")
 catenary = load("catenary")
 checks = []
 
@@ -42,11 +22,11 @@ native._reset_for_tests()
 args = ((0.0, 0.0, 0.0), (0.0, 0.0, 10.0), (1.0, 0.0, 0.0),
         2.0, 2.0, 3.0, False, 0.001)
 rust = native.plan(*args)
-python = coil.python_plan(*args)
+python = reference("helix")
 check(rust is not None and rust[2:] == python[2:]
       and max(abs(a - b) for a, b in zip(rust[0], python[0])) < 1e-12
       and rust[1] == python[1],
-      "native helix plan is structurally identical to the Python fallback")
+      "native helix preserves the original structure and legacy geometric comparison")
 curve = coil.curve_from_plan(rust)
 check(curve.IsValid and curve.Degree == 3 and not curve.IsPolyline()
       and curve.PointAtStart.DistanceTo(curve.PointAtEnd) > 9.9,
@@ -79,18 +59,22 @@ check(minimum_tangent_dot > 1.0 - 1e-8 and maximum_speed_jump < 1e-6,
 spiral_args = ((1.0, 2.0, 3.0), (1.0, 2.0, 7.0), (0.0, 1.0, 0.0),
                1.0, 4.0, 2.0, True, 0.002)
 rust_spiral = native.plan(*spiral_args)
-python_spiral = coil.python_plan(*spiral_args)
+python_spiral = reference("reverse")
 check(rust_spiral is not None
       and max(abs(a - b) for a, b in zip(rust_spiral[0], python_spiral[0])) < 1e-11
       and rust_spiral[2:] == python_spiral[2:],
-      "native variable-radius reverse spiral matches the complete fallback")
+      "native variable-radius reverse spiral matches the frozen original")
 flat = native.plan((0, 0, 0), (0, 0, 5), (1, 0, 0),
                    1, 4, 2, False, 0.01, True)
 check(flat is not None and all(abs(flat[0][index]) < 1e-12
                                for index in range(2, len(flat[0]), 3)),
       "native Flat spiral has exactly zero axial rise")
-check(native.plan((0, 0, 0), (0, 0, 0), (1, 0, 0), 1, 1, 1, False, 0.01) is None,
-      "degenerate axes are rejected without a false native success")
+try:
+    native.plan((0, 0, 0), (0, 0, 0), (1, 0, 0), 1, 1, 1, False, 0.01)
+    degenerate_rejected = False
+except ValueError as exc:
+    degenerate_rejected = str(exc) == "axis and radial direction must be non-zero"
+check(degenerate_rejected, "degenerate axes retain the named legacy parameter error")
 
 
 def best(fn, repeat=100):
@@ -103,22 +87,30 @@ def best(fn, repeat=100):
     return elapsed
 
 
-for turns, repeat in ((1.0, 200), (3.0, 100), (20.0, 40)):
-    perf_args = ((0.0, 0.0, 0.0), (0.0, 0.0, 50.0), (1.0, 0.0, 0.0),
-                 10.0, 20.0, turns, False, 0.001)
-    native_time = best(lambda: coil.make_curve(*perf_args, force_native=True), repeat)
-    python_time = best(lambda: coil.curve_from_plan(coil.python_plan(*perf_args)), repeat)
-    ratio = native_time / python_time
-    print("  [perf] coil turns=%g native=%.5fs python=%.5fs ratio=%.3f" %
-          (turns, native_time, python_time, ratio))
-    check(ratio <= 0.90,
-          "native complete planning/materialization wins by 10%% at %g turn(s)" % turns)
+parser = argparse.ArgumentParser()
+parser.add_argument("--benchmark-baseline", help="same-machine pre-correction original full-adapter timing JSON")
+options = parser.parse_args()
+if options.benchmark_baseline:
+    with open(options.benchmark_baseline) as stream:
+        baseline = json.load(stream)["seconds"]
+    for turns in (0.01, 0.1, 0.25, 0.5, 1.0, 3.0, 20.0):
+        perf_args = ((0.0, 0.0, 0.0), (0.0, 0.0, 50.0), (1.0, 0.0, 0.0),
+                     10.0, 20.0, turns, False, 0.001)
+        native_time = best(lambda: coil.make_curve(*perf_args), 10) / 10
+        python_time = baseline["turns_" + str(turns)]
+        ratio = native_time / python_time
+        print("  [perf] full adapter turns=%g native=%.9fs original=%.9fs ratio=%.6f" %
+              (turns, native_time, python_time, ratio))
+        check(ratio <= 0.90,
+              "native complete planning/materialization wins by 10%% at %g turn(s)" % turns)
+else:
+    print("  [perf] coil comparison not requested; pass --benchmark-baseline from a same-machine original capture")
 loose = native.plan((0, 0, 0), (0, 0, 10), (1, 0, 0),
                     2, 2, 3, False, 0.01)
 check(loose is not None and loose[2] == 18 and len(loose[0]) // 3 == 55,
       "ordinary tolerance uses six spans and about eighteen controls per turn")
-check(coil._NATIVE_MIN_SPANS == 6,
-      "production crossover activates native planning at one complete turn")
+check(not hasattr(coil, "_NATIVE_MIN_SPANS"),
+      "retired coil fallback has no misleading crossover threshold")
 
 cat_args = ((-5.0, 0.0, 0.0), (5.0, 0.0, 0.0),
             (0.0, -1.0, 0.0), (0.0, -2.0, 0.0), 0.001)

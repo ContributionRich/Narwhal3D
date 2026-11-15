@@ -1,4 +1,4 @@
-"""Pure-Python tests for binary and ASCII STL output.
+"""Independent file-format tests for required-native binary and ASCII STL output.
 
 Pins the file-format invariants a 3-D printer / slicer depends on:
 * the binary layout is exactly 84 + 50*n bytes (80-byte header + uint32 count +
@@ -176,7 +176,7 @@ def _():
     stl.write_stl(p, CUBE, binary=True)
     with open(p, "rb") as fh:
         full = fh.read()
-    # 80 bytes: the facet count is missing -> the Python fallback must reject.
+    # 80 bytes: the facet count is missing -> the required native file decoder must reject.
     try:
         stl._read_binary(full[:80])
         raise AssertionError("truncated header must be rejected")

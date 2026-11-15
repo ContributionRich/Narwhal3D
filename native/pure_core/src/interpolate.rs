@@ -736,3 +736,374 @@ mod tests {
         assert_eq!(solve_periodic(&q, 1).err(), Some(ERR_INPUT));
     }
 }
+
+/// Bounded helper ABI v1; layouts/statuses are specified in tests/interpolate_helpers.h.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct InterpolateHelperRequest {
+    pub operation: u32,
+    pub style: u32,
+    pub rows: u64,
+    pub columns: u64,
+    pub degree: i64,
+    pub index: i64,
+    pub parameter: f64,
+    pub data: *const f64,
+    pub data_len: usize,
+}
+const ERR_DUPLICATE: i32 = -5;
+const ERR_DIVISION: i32 = -6;
+const HELPER_MAX_VALUES: usize = 4_200_000;
+
+fn helper_lu(mut a: Vec<f64>, n: usize) -> Result<Vec<f64>, i32> {
+    let mut perm: Vec<usize> = (0..n).collect();
+    for k in 0..n {
+        let pivot = k + first_largest((k..n).map(|i| a[i * n + k].abs()));
+        if a[pivot * n + k].abs() < 1e-14 {
+            return Err(ERR_SINGULAR);
+        }
+        if pivot != k {
+            for j in 0..n {
+                a.swap(k * n + j, pivot * n + j);
+            }
+            perm.swap(k, pivot);
+        }
+        let inv = 1.0 / a[k * n + k];
+        for i in k + 1..n {
+            let f = a[i * n + k] * inv;
+            a[i * n + k] = f;
+            if f != 0.0 {
+                for j in k + 1..n {
+                    a[i * n + j] -= f * a[k * n + j];
+                }
+            }
+        }
+    }
+    a.extend(perm.into_iter().map(|i| i as f64));
+    Ok(a)
+}
+
+fn helper_lu_solve(
+    a: &[f64],
+    perm: &[f64],
+    rhs: &[f64],
+    n: usize,
+    dim: usize,
+) -> Result<Vec<f64>, i32> {
+    if perm
+        .iter()
+        .any(|&v| v < 0.0 || v >= n as f64 || v.fract() != 0.0)
+    {
+        return Err(ERR_INPUT);
+    }
+    let mut y = Vec::with_capacity(n * dim);
+    for &i in perm {
+        y.extend_from_slice(&rhs[i as usize * dim..(i as usize + 1) * dim]);
+    }
+    for i in 1..n {
+        for k in 0..i {
+            let f = a[i * n + k];
+            if f != 0.0 {
+                for d in 0..dim {
+                    y[i * dim + d] -= f * y[k * dim + d];
+                }
+            }
+        }
+    }
+    for i in (0..n).rev() {
+        for k in i + 1..n {
+            let f = a[i * n + k];
+            if f != 0.0 {
+                for d in 0..dim {
+                    y[i * dim + d] -= f * y[k * dim + d];
+                }
+            }
+        }
+        if a[i * n + i] == 0.0 {
+            return Err(ERR_DIVISION);
+        }
+        let inv = 1.0 / a[i * n + i];
+        for d in 0..dim {
+            y[i * dim + d] *= inv;
+        }
+    }
+    Ok(y)
+}
+
+fn helper_thomas(
+    sub: &[f64],
+    diag: &[f64],
+    sup: &[f64],
+    rhs: &[f64],
+    dim: usize,
+) -> Result<Vec<f64>, i32> {
+    let n = diag.len();
+    let mut cp = vec![0.0; n];
+    let mut dp = vec![0.0; n * dim];
+    for i in 0..n {
+        let den = if i == 0 {
+            diag[0]
+        } else {
+            diag[i] - sub[i] * cp[i - 1]
+        };
+        if den.abs() < 1e-14 {
+            return Err(ERR_SINGULAR);
+        }
+        cp[i] = sup[i] / den;
+        for d in 0..dim {
+            let prev = if i == 0 {
+                0.0
+            } else {
+                sub[i] * dp[(i - 1) * dim + d]
+            };
+            dp[i * dim + d] = (rhs[i * dim + d] - prev) / den;
+        }
+    }
+    for i in (0..n - 1).rev() {
+        for d in 0..dim {
+            dp[i * dim + d] -= cp[i] * dp[(i + 1) * dim + d];
+        }
+    }
+    Ok(dp)
+}
+
+fn helper_cyclic(v: &[f64], n: usize, dim: usize) -> Result<Vec<f64>, i32> {
+    let (sub, rest) = v.split_at(n);
+    let (diag, rest) = rest.split_at(n);
+    let (sup, rhs) = rest.split_at(n);
+    let (alpha, beta, gamma) = (sup[n - 1], sub[0], -diag[0]);
+    if gamma == 0.0 {
+        return Err(ERR_DIVISION);
+    }
+    let mut bb = diag.to_vec();
+    bb[0] = diag[0] - gamma;
+    bb[n - 1] = diag[n - 1] - alpha * beta / gamma;
+    let x = helper_thomas(sub, &bb, sup, rhs, dim)?;
+    let mut u = vec![0.0; n];
+    u[0] = gamma;
+    u[n - 1] = alpha;
+    let z = helper_thomas(sub, &bb, sup, &u, 1)?;
+    let den = 1.0 + z[0] + beta * z[n - 1] / gamma;
+    if den == 0.0 {
+        return Err(ERR_DIVISION);
+    }
+    let mut out = x.clone();
+    for d in 0..dim {
+        let fact = (x[d] + beta * x[(n - 1) * dim + d] / gamma) / den;
+        for i in 0..n {
+            out[i * dim + d] = x[i * dim + d] - fact * z[i];
+        }
+    }
+    Ok(out)
+}
+
+fn helper_compute(
+    r: &InterpolateHelperRequest,
+    v: &[f64],
+    detail: &mut u64,
+) -> Result<Vec<f64>, i32> {
+    let (n, dim, p) = (r.rows as usize, r.columns as usize, r.degree as usize);
+    let valid_knots = |k: &[f64]| k.windows(2).all(|w| w[0] <= w[1]);
+    match r.operation {
+        1 | 8 => {
+            let closed = r.operation == 8;
+            if n < if closed { 3 } else { 2 } || v.len() != n * 3 || r.style > 2 {
+                return Err(ERR_INPUT);
+            }
+            let pts: Vec<[f64; 3]> = v.chunks_exact(3).map(|v| [v[0], v[1], v[2]]).collect();
+            // Preserve which adjacent pair failed without replaying math in Python.
+            if closed || r.style != 0 {
+                for i in 0..if closed { n } else { n - 1 } {
+                    let d =
+                        py_sum((0..3).map(|j| py_square(pts[(i + 1) % n][j] - pts[i][j]))).sqrt();
+                    if d <= 0.0 {
+                        *detail = i as u64;
+                        return Err(ERR_DUPLICATE);
+                    }
+                }
+            }
+            if closed {
+                closed_parameters(&pts, r.style as u8)
+            } else {
+                parameters(&pts, r.style as u8)
+            }
+        }
+        2 => {
+            if v.len() != n || n < p + 1 {
+                return Err(ERR_INPUT);
+            }
+            if p == 0 && n > 1 {
+                return Err(ERR_DIVISION);
+            }
+            Ok(knots(v, p))
+        }
+        3 | 4 => {
+            if !r.parameter.is_finite() || !valid_knots(v) {
+                return Err(ERR_INPUT);
+            }
+            if r.operation == 3 {
+                if n <= p || v.len() != n + p + 1 {
+                    return Err(ERR_INPUT);
+                }
+                Ok(vec![span(n, p, r.parameter, v) as f64])
+            } else {
+                let s = usize::try_from(r.index).map_err(|_| ERR_INPUT)?;
+                if s < p || s.checked_add(p).is_none_or(|i| i >= v.len()) {
+                    return Err(ERR_INPUT);
+                }
+                Ok(basis(s, r.parameter, p, v))
+            }
+        }
+        5 => {
+            if dim <= p || v.len() != n + dim + p + 1 || !valid_knots(&v[n..]) {
+                return Err(ERR_INPUT);
+            }
+            let k = &v[n..];
+            let mut out = vec![0.0; n * dim];
+            for (row, &u) in v[..n].iter().enumerate() {
+                let s = span(dim, p, u, k);
+                for (j, b) in basis(s, u, p, k).into_iter().enumerate() {
+                    out[row * dim + s - p + j] = b;
+                }
+            }
+            Ok(out)
+        }
+        6 => {
+            if v.len() != n * n {
+                return Err(ERR_INPUT);
+            }
+            helper_lu(v.to_vec(), n)
+        }
+        7 => {
+            if n == 0 || v.len() != n * n + n + n * dim {
+                return Err(ERR_INPUT);
+            }
+            helper_lu_solve(&v[..n * n], &v[n * n..n * n + n], &v[n * n + n..], n, dim)
+        }
+        9 => {
+            if n < 2 || v.len() != n {
+                return Err(ERR_INPUT);
+            }
+            let period = n as i64 - 1;
+            Ok((-(p as i64)..period + p as i64 + 1)
+                .map(|i| v[i.rem_euclid(period) as usize] + i.div_euclid(period) as f64)
+                .collect())
+        }
+        10 => {
+            if n < 3 || v.len() != 3 * n + n * dim {
+                return Err(ERR_INPUT);
+            }
+            helper_cyclic(v, n, dim)
+        }
+        _ => Err(ERR_INPUT),
+    }
+}
+
+fn helper_range<T>(ptr: *const T, count: usize) -> Option<(usize, usize)> {
+    if ptr.is_null() || !(ptr as usize).is_multiple_of(std::mem::align_of::<T>()) {
+        return None;
+    }
+    let start = ptr as usize;
+    let bytes = count.checked_mul(std::mem::size_of::<T>())?;
+    if bytes > isize::MAX as usize {
+        return None;
+    }
+    Some((start, start.checked_add(bytes)?))
+}
+fn helper_overlap(a: (usize, usize), b: (usize, usize)) -> bool {
+    a.0 < b.1 && b.0 < a.1
+}
+
+/// Evaluate one helper transaction. Refusals never change the output payload.
+/// Counts/detail are cleared on valid, nonoverlapping metadata; duplicate detail
+/// is the zero-based first endpoint. Invalid/aliased metadata is untouched.
+/// # Safety
+/// Non-null pointers must reference live allocations of their declared size.
+/// Numeric address/alignment/alias checks cannot establish allocation validity.
+#[no_mangle]
+pub unsafe extern "C" fn narwhal_pure_core_interpolate_helper_v1(
+    request: *const InterpolateHelperRequest,
+    output: *mut f64,
+    capacity: usize,
+    used: *mut u64,
+    detail: *mut u64,
+) -> i32 {
+    let Some(rr) = helper_range(request, 1) else {
+        return ERR_NULL;
+    };
+    let Some(ur) = helper_range(used, 1) else {
+        return ERR_NULL;
+    };
+    let Some(dr) = helper_range(detail, 1) else {
+        return ERR_NULL;
+    };
+    if helper_overlap(rr, ur) || helper_overlap(rr, dr) || helper_overlap(ur, dr) {
+        return ERR_INPUT;
+    }
+    let r = *request;
+    // Validate declared spans before making any references or clearing metadata.
+    let ir = if r.data_len == 0 {
+        (0, 0)
+    } else {
+        let Some(range) = helper_range(r.data, r.data_len) else {
+            return ERR_NULL;
+        };
+        range
+    };
+    let or = if capacity == 0 {
+        (0, 0)
+    } else {
+        let Some(range) = helper_range(output, capacity) else {
+            return ERR_NULL;
+        };
+        range
+    };
+    if [ur, dr]
+        .iter()
+        .any(|&m| helper_overlap(m, ir) || helper_overlap(m, or))
+        || helper_overlap(rr, or)
+        || helper_overlap(ir, or)
+    {
+        return ERR_INPUT;
+    }
+    *used = 0;
+    *detail = 0;
+    if r.data_len > HELPER_MAX_VALUES || capacity > HELPER_MAX_VALUES {
+        return ERR_SIZE;
+    }
+    if r.rows > (MAX_POINTS + usize::from(r.operation == 9)) as u64
+        || r.columns > MAX_POINTS as u64
+        || r.degree < 0
+        || r.degree > MAX_POINTS as i64
+    {
+        return ERR_SIZE;
+    }
+    let Some(input) = crate::checked_slice(r.data, r.data_len) else {
+        return ERR_NULL;
+    };
+    if input.iter().any(|v| !v.is_finite()) {
+        return ERR_INPUT;
+    }
+    let mut diagnostic = 0;
+    let result = match helper_compute(&r, input, &mut diagnostic) {
+        Ok(v) => v,
+        Err(code) => {
+            *detail = diagnostic;
+            return code;
+        }
+    };
+    if result.len() > capacity {
+        return ERR_SIZE;
+    }
+    if result.iter().any(|v| !v.is_finite()) {
+        return ERR_INPUT;
+    }
+    if !result.is_empty() {
+        let Some(out) = crate::checked_slice_mut(output, capacity) else {
+            return ERR_NULL;
+        };
+        out[..result.len()].copy_from_slice(&result);
+    }
+    *used = result.len() as u64;
+    0
+}

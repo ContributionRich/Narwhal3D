@@ -987,40 +987,41 @@ sm = got.items[0][0] if got.items else None
 check(isinstance(sm, r3.Mesh) and len(sm.Faces) == 12 and len(sm.Vertices) == 8,
       f"an STL cube's 36 corners WELD to 8 vertices ({sm and len(sm.Vertices)})")
 
-# The import-only fused route avoids rebuilding triangle tuples and a Python
-# hash-table weld. Use enough facets to clear its measured crossover.
-old_native = os.environ.get("NARWHAL_PURE_CORE")
-if os.path.isfile(PURE_LIB):
-    os.environ["NARWHAL_PURE_CORE"] = PURE_LIB
-    native_pure._reset_for_tests()
-    big_stl = os.path.join(TMP, "cube-many.stl")
-    many = ([(V[a], V[b], V[c]) for a, b, c in T] * 84)[:1000]
-    stl_writer.write_stl(big_stl, many)
-    data = open(big_stl, "rb").read()
-    packed = native_pure.decode_stl_mesh(data)
-    calls = []
-    real_active = native_pure._stl_mesh_native_active
-    real_decode = native_pure.decode_stl_mesh
-    native_pure._stl_mesh_native_active = lambda value: True
-    native_pure.decode_stl_mesh = lambda value: (calls.append(len(value)) or packed)
-    try:
-        imported = ic.read_foreign(big_stl, doc())
-    finally:
-        native_pure._stl_mesh_native_active = real_active
-        native_pure.decode_stl_mesh = real_decode
-    big_mesh = imported.items[0][0] if imported.items else None
-    check(packed is not None and calls == [len(data)]
-          and isinstance(big_mesh, r3.Mesh)
-          and len(big_mesh.Vertices) == 8 and len(big_mesh.Faces) == 1000,
-          f"large STL Import uses fused Rust parse+weld with exact indexed output "
-          f"(calls={calls}; mesh={type(big_mesh).__name__ if big_mesh else None}; "
-          f"verts={len(big_mesh.Vertices) if big_mesh else None}; "
-          f"faces={len(big_mesh.Faces) if big_mesh else None})")
-    if old_native is None:
-        os.environ.pop("NARWHAL_PURE_CORE", None)
-    else:
-        os.environ["NARWHAL_PURE_CORE"] = old_native
-    native_pure._reset_for_tests()
+# Every STL import requires the Rust parse/validate/weld route, regardless of
+# size. Spy on the same package adapter the production importer actually uses.
+stl_native = stl_writer._native_stl()
+big_stl = os.path.join(TMP, "cube-many.stl")
+many = ([(V[a], V[b], V[c]) for a, b, c in T] * 84)[:1000]
+stl_writer.write_stl(big_stl, many)
+data = open(big_stl, "rb").read()
+packed = stl_native.decode_stl_mesh(data)
+calls = []
+real_decode = stl_native.decode_stl_mesh
+
+
+def _spy_stl_decode(value):
+    calls.append(len(value))
+    return real_decode(value)
+
+
+stl_native.decode_stl_mesh = _spy_stl_decode
+try:
+    imported = ic.read_foreign(big_stl, doc())
+finally:
+    stl_native.decode_stl_mesh = real_decode
+big_mesh = imported.items[0][0] if imported.items else None
+winding_matches = isinstance(big_mesh, r3.Mesh) and all(
+    tuple((big_mesh.Vertices[index].X, big_mesh.Vertices[index].Y,
+           big_mesh.Vertices[index].Z) for index in face[:3]) == triangle
+    for face, triangle in zip(big_mesh.Faces, many))
+check(packed is not None and calls == [len(data)]
+      and isinstance(big_mesh, r3.Mesh)
+      and len(big_mesh.Vertices) == 8 and len(big_mesh.Faces) == 1000
+      and winding_matches,
+      f"STL Import requires Rust parse+validate+weld with exact indexed output and winding "
+      f"(calls={calls}; mesh={type(big_mesh).__name__ if big_mesh else None}; "
+      f"verts={len(big_mesh.Vertices) if big_mesh else None}; "
+      f"faces={len(big_mesh.Faces) if big_mesh else None})")
 
 print("\n-- layer-index cache --")
 class _CountLayer:

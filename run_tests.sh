@@ -453,6 +453,7 @@ PURE_SUITES=(
     spike/test_native_obj.py
     spike/test_stl_writer.py
     spike/test_native_stl.py
+    spike/test_stl_import_boundary.py
     spike/test_numparse.py
     spike/test_native_numparse.py
     spike/test_calc.py
@@ -478,6 +479,7 @@ PURE_SUITES=(
     spike/test_print_export_units.py
     spike/test_native_command_search.py
     spike/test_native_coil.py
+    spike/test_coil_owned.py
     spike/test_native_intersect.py
     spike/test_pure_core_curve_hits_gate.py
     spike/test_native_coil_preview.py
@@ -493,6 +495,7 @@ PURE_SUITES=(
     spike/test_native_arclength.py
     spike/test_rebuild_performance.py
     spike/test_native_interpolate.py
+    spike/test_interpolate_owned_boundary.py
     spike/test_native_tween.py
     spike/test_tracedraw.py
     spike/test_cdr.py

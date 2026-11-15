@@ -17,7 +17,7 @@ import tempfile
 from typing import Any
 
 from build_linux_native import UI_CORE_IDENTITY, probe_ui_core, inventory as native_source_inventory
-from check_pure_core import PURE_CORE_PARSE_IDENTITY, probe_pure_core_parser
+from check_pure_core import PURE_CORE_PARSE_IDENTITY, probe_pure_core_parser, probe_pure_core_retirement
 
 from release_policy import (
     MAX_HOST_GLIBC, format_glibc, glibc_versions, scan_runtime_glibc,
@@ -579,6 +579,8 @@ def verify_native_library_abis(app_root: Path, python: Path, environment: dict[s
     try:
         probe_pure_core_parser(app_root / "narwhal3d/native/libnarwhal_pure_core.so",
                                python, env=environment)
+        probe_pure_core_retirement(app_root / "narwhal3d/native/libnarwhal_pure_core.so",
+                                   python, env=environment)
     except ValueError as exc:
         raise VerificationError(str(exc)) from exc
     abi_probe = (

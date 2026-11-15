@@ -1,0 +1,13 @@
+{
+  "description": "Pre-correction original Python planner plus host NURBS construction; best of 5 batches of 10, seconds/call; informational Linux baseline, not an exact numeric oracle",
+  "python": "3.13.13 (main, Apr 25 2025, 12:39:20) [GCC 14.2.1 20250110 (Red Hat 14.2.1-11)]",
+  "seconds": {
+    "turns_0.01": 0.00024516500416211785,
+    "turns_0.1": 0.0013262811000458897,
+    "turns_0.25": 0.0025913937017321585,
+    "turns_0.5": 0.003862588299671188,
+    "turns_1.0": 0.007690392399672419,
+    "turns_3.0": 0.02321062649716623,
+    "turns_20.0": 0.1534971360990312
+  }
+}

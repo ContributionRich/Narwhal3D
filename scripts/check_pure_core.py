@@ -55,6 +55,7 @@ LIB_FILENAME = "libnarwhal_pure_core.so"
 PURE_CORE_PYTESTS = (
     "spike/test_stl_writer.py",
     "spike/test_native_stl.py",
+    "spike/test_stl_import_boundary.py",
     "spike/test_obj_writer.py",
     "spike/test_obj_reader.py",
     "spike/test_native_obj.py",
@@ -102,6 +103,7 @@ PURE_CORE_PYTESTS = (
     "spike/test_native_search02_ffi.py",
     "spike/test_native_search02_consumers.py",
     "spike/test_native_coil.py",
+    "spike/test_coil_owned.py",
     "spike/test_native_intersect.py",
     "spike/test_pure_core_curve_hits_gate.py",
     "spike/test_native_coil_preview.py",
@@ -117,13 +119,25 @@ PURE_CORE_PYTESTS = (
     "spike/test_native_rebuild_fit.py", "spike/test_rebuild_owned.py",
     "spike/test_native_arclength.py",
     "spike/test_native_interpolate.py",
+    "spike/test_interpolate.py",
+    "spike/test_interpolate_owned_boundary.py",
     "spike/test_native_tween.py",
 )
 
 
 # Explicit Rust oracle-retirement suites and their source/fixture closure.
-RUST_INTEGRATION_SUITES = ('alias_golden', 'unit_golden', 'interpolate_golden', 'svgpath_golden', 'bearing_golden', 'calc_golden', 'coords_golden', 'unitformat_golden', 'macro_golden', 'joinchain_golden', 'rebuild_golden', 'blend_golden', 'norm_golden', 'nurbs_golden', 'arclength_golden')
+RUST_INTEGRATION_SUITES = ('alias_golden', 'unit_golden', 'interpolate_golden', 'svgpath_golden', 'bearing_golden', 'calc_golden', 'coords_golden', 'unitformat_golden', 'macro_golden', 'joinchain_golden', 'rebuild_golden', 'blend_golden', 'norm_golden', 'nurbs_golden', 'arclength_golden', 'coil_golden', 'interpolate_helpers_golden', 'stl_owned', 'stl_import_safety')
 RUST_INTEGRATION_FILES = (
+    'native/pure_core/tests/coil_golden.rs',
+    'native/pure_core/tests/interpolate_helpers_golden.rs',
+    'native/pure_core/tests/stl_owned.rs',
+    'native/pure_core/tests/stl_import_safety.rs',
+    'native/pure_core/tests/interpolate_helpers.h',
+    'native/pure_core/tests/fixtures/coil_numeric.txt',
+    'native/pure_core/tests/fixtures/coil_windows_msvc.txt',
+    'native/pure_core/tests/fixtures/coil_windows_msvc_provenance.txt',
+    'native/pure_core/tests/fixtures/coil_baseline_linux.json',
+    'native/pure_core/tests/fixtures/interpolate_helpers_linux.txt',
     'native/pure_core/tests/nurbs_golden.rs',
     'native/pure_core/tests/arclength_golden.rs',
     'native/pure_core/tests/fixtures/nurbs_curves.txt',
@@ -540,6 +554,131 @@ def probe_pure_core_parser(path: Path, python: Path | str = sys.executable, *, e
         raise ValueError(f"cannot verify pure-core parser ABI/semantics: {getattr(error, 'stderr', '') or error}") from error
     if identity != PURE_CORE_PARSE_IDENTITY:
         raise ValueError(f"pure-core parser ABI/export evidence differs: {identity!r}")
+    return identity
+
+
+# Required round-21 retirement ABIs. Kept separate from the older parser
+# identity so existing optional ABI consumers retain their compatibility contract.
+PURE_CORE_RETIREMENT_EXPORTS = (
+    "narwhal_pure_core_stl_size_owned", "narwhal_pure_core_stl_encode_owned",
+    "narwhal_pure_core_stl_file_size", "narwhal_pure_core_stl_file_decode",
+    "narwhal_pure_core_stl_import_mesh_decode", "narwhal_pure_core_stl_normal",
+    "narwhal_pure_core_interpolate_helper_v1",
+)
+PURE_CORE_RETIREMENT_IDENTITY = {"retirement_abi": 21,
+                                 "retirement_exports": list(PURE_CORE_RETIREMENT_EXPORTS)}
+PURE_CORE_RETIREMENT_PROBE = r'''
+import ctypes as c, json, struct, sys
+lib = c.CDLL(sys.argv[1])
+def bind(name, args, result=c.c_int32):
+    fn = getattr(lib, "narwhal_pure_core_" + name)
+    fn.argtypes, fn.restype = args, result
+    return fn
+if bind("abi_version", [], c.c_uint32)() != 1:
+    raise RuntimeError("retirement core ABI mismatch")
+D, I, U = c.POINTER(c.c_double), c.POINTER(c.c_int64), c.POINTER(c.c_uint64)
+size = bind("stl_size_owned", [D,c.c_size_t,c.c_void_p,c.c_size_t,c.c_ubyte], c.c_int64)
+encode = bind("stl_encode_owned", [D,c.c_size_t,c.c_void_p,c.c_size_t,c.c_ubyte,c.c_void_p,c.c_size_t])
+file_size = bind("stl_file_size", [c.c_void_p,c.c_size_t,c.c_ubyte,I], c.c_int64)
+decode = bind("stl_file_decode", [c.c_void_p,c.c_size_t,c.c_ubyte,D,c.c_size_t])
+mesh = bind("stl_import_mesh_decode", [c.c_void_p,c.c_size_t,D,c.c_size_t,c.POINTER(c.c_uint32),c.c_size_t,I,I,I])
+normal = bind("stl_normal", [D,D])
+def require(ok, message):
+    if not ok:
+        raise RuntimeError("required STL/helper semantics: " + message)
+xyz = (c.c_double*9)(0,0,0,1,0,0,0,1,0)
+n = (c.c_double*3)(99,99,99)
+require(normal(xyz,n) == 0 and list(n) == [0.,0.,1.], "normal")
+expected_binary = b"probe".ljust(80,b" ") + struct.pack("<I12fH",1,0,0,1,*xyz,0)
+expected_ascii = (b"solid probe\n  facet normal 0 0 1\n  outer loop\n"
+                  b"    vertex 0 0 0\n    vertex 1 0 0\n    vertex 0 1 0\n"
+                  b"  endloop\n  endfacet\nendsolid probe\n")
+for binary, expected in ((1,expected_binary),(0,expected_ascii)):
+    count = size(xyz,1,b"probe",5,binary)
+    require(count == len(expected), "owned size")
+    out = c.create_string_buffer(count)
+    require(encode(xyz,1,b"probe",5,binary,out,count) == 0 and out.raw == expected, "owned encoding")
+    short = c.create_string_buffer(b"!"*count, count)
+    require(encode(xyz,1,b"probe",5,binary,short,count-1) != 0 and short.raw == b"!"*count, "encode capacity atomicity")
+    diag = (c.c_int64*3)(99,99,99)
+    require(file_size(expected,len(expected),0,diag) == 9 and list(diag) == [0,0,0], "decode size")
+    coords = (c.c_double*9)(*[99.]*9)
+    require(decode(expected,len(expected),0,coords,9) == 0 and list(coords) == list(xyz), "decode coordinates")
+    verts, indices = (c.c_double*9)(), (c.c_uint32*3)()
+    nv, nf = c.c_int64(-1), c.c_int64(-1)
+    require(mesh(expected,len(expected),verts,3,indices,3,c.byref(nv),c.byref(nf),diag) == 0
+            and (nv.value,nf.value) == (3,1) and list(verts) == list(xyz)
+            and list(indices) == [0,1,2] and list(diag) == [0,0,0], "import mesh")
+# File codecs preserve explicit nonfinite data; geometry import must refuse it
+# (and values that overflow the actual destination f32) without publishing output.
+for token, reason in ((b"nan",1),(b"1e100",2)):
+    data = expected_ascii.replace(b"vertex 0 0 0", b"vertex " + token + b" 0 0")
+    diag = (c.c_int64*3)()
+    require(file_size(data,len(data),3,diag) == 9, "unsafe file size")
+    verts, indices = (c.c_double*9)(*[123.]*9), (c.c_uint32*3)(77,77,77)
+    nv, nf = c.c_int64(-1), c.c_int64(-1)
+    require(mesh(data,len(data),verts,3,indices,3,c.byref(nv),c.byref(nf),diag) == -30
+            and list(diag) == [-30,0,reason] and (nv.value,nf.value) == (-1,-1)
+            and list(verts) == [123.]*9 and list(indices) == [77]*3, "unsafe import atomic refusal")
+diag = (c.c_int64*3)()
+require(file_size(b"x",1,1,diag) == -20 and list(diag) == [-20,0,0], "truncated binary diagnostic")
+class Request(c.Structure):
+    _fields_ = [("operation",c.c_uint32),("style",c.c_uint32),
+                ("rows",c.c_uint64),("columns",c.c_uint64),
+                ("degree",c.c_int64),("index",c.c_int64),
+                ("parameter",c.c_double),("data",D),("data_len",c.c_size_t)]
+require(c.sizeof(Request) == 64, "helper request layout")
+helper = bind("interpolate_helper_v1", [c.POINTER(Request),D,c.c_size_t,U,U])
+def call(op, data, rows, columns=0, degree=0, index=0, parameter=0., style=0, capacity=32):
+    values = (c.c_double*len(data))(*data)
+    request = Request(op,style,rows,columns,degree,index,parameter,values,len(data))
+    output = (c.c_double*32)(*[123.]*32)
+    used, detail = c.c_uint64(99), c.c_uint64(99)
+    rc = helper(c.byref(request),output,capacity,c.byref(used),c.byref(detail))
+    return rc, used.value, detail.value, list(output)
+# Exact simple witnesses exercise every operation, including pivot/permutation.
+knots = [0.,0.,1.,1.]
+for op,data,rows,cols,degree,index,param,style,answer in (
+    (1,[0,0,0,1,0,0,4,0,0],3,0,0,0,0.,1,[0.,.25,1.]),
+    (2,[0,.5,1],3,0,1,0,0.,0,[0.,0.,.5,1.,1.]),
+    (3,knots,2,0,1,0,.25,0,[1.]),
+    (4,knots,2,0,1,1,.25,0,[.75,.25]),
+    (5,[0,1]+knots,2,2,1,0,0.,0,[1.,0.,0.,1.]),
+    (6,[0,1,2,3],2,0,0,0,0.,0,[2.,3.,0.,1.,1.,0.]),
+    (7,[2,3,0,1,1,0,1,5],2,1,0,0,0.,0,[1.,1.]),
+    (8,[0,0,0,1,0,0,1,1,0,0,1,0],4,0,0,0,0.,0,[0.,.25,.5,.75,1.]),
+    (9,[0,.5,1],3,0,1,0,0.,0,[-.5,0.,.5,1.,1.5]),
+    (10,[0,0,0,2,2,2,0,0,0,2,4,6],3,1,0,0,0.,0,[1.,2.,3.]),
+):
+    rc,used,detail,out = call(op,data,rows,cols,degree,index,param,style)
+    require(rc == 0 and used == len(answer) and detail == 0 and out[:used] == answer
+            and out[used:] == [123.]*(32-used), "helper operation " + str(op))
+for args, status, detail in (((1,[0,0,0,0,0,0],2,0,0,0,0.,1),-5,0),
+                              ((6,[0,0,0,0],2),-4,0),
+                              ((99,[],0),-2,0)):
+    rc,used,got_detail,out = call(*args)
+    require((rc,used,got_detail) == (status,0,detail) and out == [123.]*32, "helper refusal")
+rc,used,detail,out = call(1,[0,0,0,1,0,0],2,capacity=1)
+require((rc,used,detail) == (-3,0,0) and out == [123.]*32, "helper capacity atomicity")
+print(json.dumps({"retirement_abi":21,"retirement_exports":["narwhal_pure_core_"+s for s in
+    ("stl_size_owned","stl_encode_owned","stl_file_size","stl_file_decode",
+     "stl_import_mesh_decode","stl_normal","interpolate_helper_v1")]}))
+'''
+
+
+def probe_pure_core_retirement(path: Path, python: Path | str = sys.executable, *, env=None) -> dict:
+    """Require actual STL/helper results, diagnostics and failure atomicity."""
+    if not path.is_file() or path.is_symlink():
+        raise ValueError(f"missing regular pure-core retirement library: {path}")
+    try:
+        completed = subprocess.run(
+            [str(python), "-I", "-B", "-c", PURE_CORE_RETIREMENT_PROBE, str(path.resolve())],
+            env=env, text=True, capture_output=True, check=True, timeout=30)
+        identity = json.loads(completed.stdout)
+    except (OSError, subprocess.SubprocessError, ValueError) as error:
+        raise ValueError(f"cannot verify pure-core STL/helper ABI/semantics: {getattr(error, 'stderr', '') or error}") from error
+    if identity != PURE_CORE_RETIREMENT_IDENTITY:
+        raise ValueError(f"pure-core retirement ABI/export evidence differs: {identity!r}")
     return identity
 
 
@@ -993,6 +1132,7 @@ def step_direct_abi(lib_path: Path) -> dict[str, object]:
     """Load the built library and exercise both stable and additive C ABIs."""
     try:
         parser_identity = probe_pure_core_parser(lib_path)
+        retirement_identity = probe_pure_core_retirement(lib_path)
     except ValueError as exc:
         raise GateError(str(exc)) from exc
     try:
@@ -1047,6 +1187,7 @@ def step_direct_abi(lib_path: Path) -> dict[str, object]:
     except (AttributeError, OSError) as exc:
         raise GateError(f"cannot bind a pure-core geometry export: {exc}") from exc
     return {"status": "ok", "abi_version": ABI_VERSION, "parser": parser_identity,
+                "retirement": retirement_identity,
                 "geometry_exports": geometry, "command": "ctypes ABI probe"}
 
 

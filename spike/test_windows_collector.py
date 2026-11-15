@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from pathlib import Path
+import tomllib
 
 from test_windows_build import disk_allows
 
 ROOT = Path(__file__).resolve().parents[1]
+VERSION = tomllib.loads((ROOT / "native/welcome/Cargo.toml").read_text(encoding="utf-8"))["package"]["version"]
 SCRIPT = ROOT / "scripts" / "collect_windows_build_info.ps1"
 BUILD = ROOT / "scripts" / "build_windows_preview.ps1"
 GUIDE = ROOT / "docs" / "windows-build.md"
@@ -89,9 +91,9 @@ check("function Compiler-Info" in script and "VC\\Tools\\MSVC" in script
 
 check("C:\\Narwhal3D-build" in build and "\\s" in build
       and ".narwhal3d-windows-build-workspace" in build
-      and "[string]$Version = \"0.4.12\"" in build
+      and f"[string]$Version = \"{VERSION}\"" in build
       and 'Narwhal_3D-$Version-Windows-x86_64-Engineering' in build,
-      "engineering build owns one conservative workspace and defaults to 0.4.12")
+      f"engineering build owns one conservative workspace and defaults to {VERSION}")
 check("make_update.py" in build and '"--no-blender"' in build
       and '"update Blender libraries without changing Blender source" $BlenderSource' in build
       and "verify Blender pinned revision after libraries update" in build,

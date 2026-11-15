@@ -279,17 +279,18 @@ check("GPL-3.0-or-later" in readme, "README identifies the project GPL license")
 check(re.search(r"early\s+(?:preview|prerelease|pre-release)", readme, re.I),
       "README warns that the application is an early preview")
 check(re.search(r"View\W+Theme\b", readme), "README explains the View → Theme switch")
-for asset in ("Narwhal_3D-0.4.12-x86_64.AppImage", "Narwhal_3D-0.4.12-Windows-x86_64.exe"):
-    check(f"https://github.com/ContributionRich/Narwhal3D/releases/download/v0.4.12/{asset}"
+landing_version = tomllib.loads((ROOT / "native/welcome/Cargo.toml").read_text(encoding="utf-8"))["package"]["version"]
+for asset in (f"Narwhal_3D-{landing_version}-x86_64.AppImage", f"Narwhal_3D-{landing_version}-Windows-x86_64.exe"):
+    check(f"https://github.com/ContributionRich/Narwhal3D/releases/download/v{landing_version}/{asset}"
           in readme_links, f"README offers a direct Markdown download for {asset}")
-check("https://github.com/ContributionRich/Narwhal3D/releases/tag/v0.4.8" in readme_links
-      and "**[macOS Apple Silicon: 0.4.8 release](https://github.com/ContributionRich/Narwhal3D/releases/tag/v0.4.8)**" in readme,
-      "README points the macOS download at the published 0.4.8 release")
+check(not any("macOS Apple Silicon:" in line or "Download the **Apple Silicon" in line
+              for line in readme.splitlines()),
+      "README does not promote the unmaintained macOS package")
 check("Windows and macOS builds: 0.4.8 release" not in readme
       and "Windows and Mac packages for this line are not published yet" not in readme
       and "A Windows build for this line is not published yet" not in readme,
       "README drops the stale Windows not-published statements and 0.4.8 Windows link")
-check(not any("/releases/download/" in link and "/v0.4.12/" not in link
+check(not any("/releases/download/" in link and f"/v{landing_version}/" not in link
               for link in readme_links), "README has no stale release download targets")
 check("docs/readme-command-loft.gif" not in readme_images,
       "README uses the workspace screenshots rather than the old command GIF")
@@ -313,11 +314,11 @@ for link in ("../STATUS.md", "../COMPATIBILITY.md", "../ROADMAP.md", "gaps.md",
              "windows-build.md", "macos-build.md"):
     check(link in reference_links | reference_images, f"technical reference links {link}")
 check("**Release: 0.4.7.**" in technical_reference
-      and "chmod +x Narwhal_3D-0.4.7-x86_64.AppImage" in technical_reference
-      and "./Narwhal_3D-0.4.7-x86_64.AppImage" in technical_reference
+      and f"chmod +x Narwhal_3D-{landing_version}-x86_64.AppImage" in technical_reference
+      and f"./Narwhal_3D-{landing_version}-x86_64.AppImage" in technical_reference
       and "Narwhal_3D-0.4.7-Windows-x86_64.zip" in technical_reference
       and "native startup welcome window" in technical_reference,
-      "technical reference identifies 0.4.7 and gives matching Linux/Windows asset names")
+      "technical reference preserves the historical baseline and gives current Linux launch commands")
 check("--version 0.4.7" in technical_reference
       and "dist/Narwhal_3D-0.4.7-x86_64.AppImage" in technical_reference
       and "--expected-version 0.4.7" in technical_reference
@@ -383,11 +384,11 @@ for name, text in (("technical reference", technical_reference), ("STATUS", stat
 welcome_manifest = tomllib.loads((ROOT / "native/welcome/Cargo.toml").read_text(encoding="utf-8"))
 welcome_lock = tomllib.loads((ROOT / "native/welcome/Cargo.lock").read_text(encoding="utf-8"))
 welcome_source = (ROOT / "native/welcome/src/main.rs").read_text(encoding="utf-8")
-check(welcome_manifest["package"]["version"] == "0.4.12"
+check(welcome_manifest["package"]["version"] == landing_version
       and [package["version"] for package in welcome_lock["package"]
-           if package["name"] == "narwhal-welcome"] == ["0.4.12"]
-      and 'assert_eq!(env!("CARGO_PKG_VERSION"), "0.4.12");' in welcome_source,
-      "welcome manifest, lock and Rust version assertion agree on 0.4.12")
+           if package["name"] == "narwhal-welcome"] == [landing_version]
+      and f'assert_eq!(env!("CARGO_PKG_VERSION"), "{landing_version}");' in welcome_source,
+      "welcome manifest, lock and Rust version assertion agree on the current release")
 check("extremely early prerelease" in technical_reference
       and "frozen on the `0.4.x` line" in technical_reference,
       "technical reference pins the owner-required early-prerelease 0.4.x release line")

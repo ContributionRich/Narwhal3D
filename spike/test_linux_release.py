@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import hashlib
 import os
 from pathlib import Path
 import subprocess
@@ -138,6 +139,44 @@ check("source launcher falls back to current Rust target artifacts",
       and "NARWHAL3D_LAUNCHER_TEST:-" in launcher
       and "native-paths" in launcher)
 
+
+def source_library_resolution_matches(root, reported, targets):
+    """Honor launcher precedence, but never accept an adjacent stale build."""
+    for name, target in targets.items():
+        candidates = (root / "narwhal3d/native" / target.name,
+                      root / "runtime/linux-x86_64/bin" / target.name, target)
+        selected = next((path for path in candidates if path.is_file()), None)
+        if selected is None or Path(reported.get(name, "")).resolve() != selected.resolve():
+            return False
+        if hashlib.sha256(selected.read_bytes()).digest() != hashlib.sha256(target.read_bytes()).digest():
+            return False
+    return True
+
+
+with tempfile.TemporaryDirectory(prefix="narwhal-source-resolution-") as temporary:
+    fixture = Path(temporary)
+    target = fixture / "native/pure_core/target/release/libnarwhal_pure_core.so"
+    adjacent = fixture / "narwhal3d/native" / target.name
+    runtime = fixture / "runtime/linux-x86_64/bin" / target.name
+    for path in (target, adjacent, runtime):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"current qualified build")
+    targets = {"NARWHAL_PURE_CORE": target}
+    def matches(path):
+        return source_library_resolution_matches(fixture, {"NARWHAL_PURE_CORE": str(path)}, targets)
+    check("source native precedence accepts a matching adjacent build", matches(adjacent))
+    check("source native precedence rejects bypassing an adjacent build", not matches(target))
+    adjacent.write_bytes(b"stale build")
+    check("source native precedence rejects a stale adjacent build", not matches(adjacent))
+    adjacent.unlink()
+    check("source native precedence accepts matching runtime fallback", matches(runtime))
+    runtime.write_bytes(b"stale runtime build")
+    check("source native precedence rejects a stale runtime fallback", not matches(runtime))
+    runtime.unlink()
+    check("source native precedence accepts source-target fallback", matches(target))
+    check("source native precedence rejects missing reported slots",
+          not source_library_resolution_matches(fixture, {}, targets))
+
 source_libraries = {
     "NARWHAL_PURE_CORE": ROOT / "native/pure_core/target/x86_64-unknown-linux-gnu/release/libnarwhal_pure_core.so",
     "NARWHAL_SELECTION_CORE": ROOT / "native/selection_core/target/x86_64-unknown-linux-gnu/release/libnarwhal_selection_core.so",
@@ -155,9 +194,8 @@ if all(path.is_file() for path in source_libraries.values()):
     reported = dict(line.split("=", 1) for line in resolved.stdout.splitlines()
                     if line.startswith("NARWHAL_") and "=" in line)
     check("normal source launch resolves current pure/selection/geometry/platform cores",
-          resolved.returncode == 0 and all(
-              Path(reported.get(name, "")).resolve() == path.resolve()
-              for name, path in source_libraries.items()), resolved.stdout)
+          resolved.returncode == 0 and source_library_resolution_matches(
+              ROOT, reported, source_libraries), resolved.stdout)
 else:
     check("normal source launch resolves current pure/selection/geometry/platform cores",
           True, "source artifacts are not built in this checkout")

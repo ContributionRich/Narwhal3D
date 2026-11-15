@@ -30,6 +30,7 @@ import build_macos_native as mac_build
 import assemble_macos_release as mac
 import assemble_windows_release as windows_assemble
 import verify_windows_release as windows
+from check_pure_core import PURE_CORE_RETIREMENT_IDENTITY
 
 ROOT = Path(__file__).resolve().parents[1]
 SO = "libnarwhal_application_core.so"
@@ -246,6 +247,7 @@ class ApplicationPackaging(unittest.TestCase):
                     return types.SimpleNamespace(**{symbol: lambda: abi})
                 with self.subTest(options=options), patch.object(ctypes, "CDLL", side_effect=load) as loaded, \
                      patch.object(linux_verify, "probe_pure_core_parser", return_value=linux_verify.PURE_CORE_PARSE_IDENTITY), \
+                     patch.object(linux_verify, "probe_pure_core_retirement", return_value=PURE_CORE_RETIREMENT_IDENTITY) as retirement, \
                      patch.object(linux.subprocess, "run", side_effect=execute_probe):
                     # Run the real assembler's ABI/receipt block, without other native probes.
                     tree = ast.parse(textwrap.dedent(inspect.getsource(linux.validate_native_components)))
@@ -271,6 +273,8 @@ class ApplicationPackaging(unittest.TestCase):
                         self.assertEqual(paths, [str(root / "narwhal3d/native" / SO)] * 4)
                         self.assertEqual(library.narwhal_history_abi.argtypes, [])
                         self.assertIs(library.narwhal_history_abi.restype, ctypes.c_uint32)
+                    retirement.assert_called_once_with(
+                        root / "narwhal3d/native/libnarwhal_pure_core.so", Path("python"), env={})
 
     def test_linux_packaged_history_receipt_must_match_executed_probe(self):
         expected = {name: abi for name, (_, abi) in linux_verify.NATIVE_LIBRARY_ABIS.items()}
@@ -280,12 +284,36 @@ class ApplicationPackaging(unittest.TestCase):
             if history is not None:
                 result["application_core_history"] = history
             with patch.object(linux_verify, "probe_pure_core_parser", return_value=linux_verify.PURE_CORE_PARSE_IDENTITY), \
+                    patch.object(linux_verify, "probe_pure_core_retirement", return_value=PURE_CORE_RETIREMENT_IDENTITY) as retirement, \
                     patch.object(linux_verify.subprocess, "run", return_value=types.SimpleNamespace(stdout=json.dumps(result))):
                 if history == 1:
                     linux_verify.verify_native_library_abis(Path("app"), Path("python"), {})
                 else:
                     with self.assertRaises(linux_verify.VerificationError):
                         linux_verify.verify_native_library_abis(Path("app"), Path("python"), {})
+                retirement.assert_called_once_with(
+                    Path("app/narwhal3d/native/libnarwhal_pure_core.so"), Path("python"), env={})
+
+    def test_linux_packaged_history_requires_retirement_qualification(self):
+        # Valid history/ABI replies must not hide a missing or refused pure-core
+        # dependency. Keep the real missing-file guard for the first fixture.
+        expected = {name: abi for name, (_, abi) in linux_verify.NATIVE_LIBRARY_ABIS.items()}
+        expected.update(application_core_history=1, application_core_load_jobs=1, application_core_save_jobs=1)
+        with tempfile.TemporaryDirectory() as directory:
+            root, python, environment = Path(directory), Path("python"), {"QUALIFICATION": "fixture"}
+            with patch.object(linux_verify, "probe_pure_core_parser", return_value=linux_verify.PURE_CORE_PARSE_IDENTITY), \
+                    patch.object(linux_verify.subprocess, "run", return_value=types.SimpleNamespace(
+                        stdout=json.dumps(expected))) as history:
+                with self.assertRaisesRegex(linux_verify.VerificationError, "missing regular pure-core retirement library"):
+                    linux_verify.verify_native_library_abis(root, python, environment)
+                history.assert_not_called()
+                with patch.object(linux_verify, "probe_pure_core_retirement", side_effect=ValueError(
+                        "required STL/helper semantics refused")) as retirement:
+                    with self.assertRaisesRegex(linux_verify.VerificationError, "STL/helper semantics refused"):
+                        linux_verify.verify_native_library_abis(root, python, environment)
+                    retirement.assert_called_once_with(
+                        root / "narwhal3d/native/libnarwhal_pure_core.so", python, env=environment)
+                    history.assert_not_called()
 
     def test_mac_executed_probe_requires_metadata_and_history(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -649,6 +677,9 @@ def mutation_checks():
             '"narwhal_session_abi", APPLICATION_CORE_EXPORTS))'), "test_linux_history_probe_and_packaged_loader"),
         ("Linux packaged JSON exports unchecked", mutated_function(linux_verify, "verify_native_library_abis",
             '[getattr(lib, export) for export in exports]', '[]'), "test_linux_history_probe_and_packaged_loader"),
+        ("Linux packaged retirement qualification omitted", patch.object(
+            linux_verify, "probe_pure_core_retirement", lambda *args, **kwargs: PURE_CORE_RETIREMENT_IDENTITY),
+            "test_linux_packaged_history_requires_retirement_qualification"),
         ("Linux wrong/missing history probe result accepted", mutated_function(linux_verify, "verify_native_library_abis",
             'if actual_abis != expected_abis:', 'if False:'), "test_linux_packaged_history_receipt_must_match_executed_probe"),
         ("Linux missing history manifest evidence accepted", mutated_function(linux_verify, "verify_native_manifest",

@@ -1,0 +1,36 @@
+{
+  "actual_python": "3.13.13 (main, May  8 2026, 12:37:03) [MSC v.1944 64 bit (AMD64)]",
+  "actual_windows": "Windows11 build26200, MSVC x86_64, not Wine inference",
+  "candidate_native_coil_source_sha256": "e4db947325835d270991f24a4dc4079d3345103bb4c4eeefd39c6ab836e473f8",
+  "capture_driver_sha256": "9a5b1bc98a62aac8526bff03a3ac032c6eae8c6d86d2d4e712848d766491c4fe",
+  "case_count": 33,
+  "dirty_candidate_source_aggregate_sha256": "0de4f120415d00f036b284c407d470099526e633f1058309f0f0eadeba391844",
+  "exact_overrides": 19,
+  "full_original_windows_capture_sha256": "aad3e282ad593e5c8761ba3d24ce67d75ae966f6cf313c5fb74699cd05cf54ae",
+  "helper_companion": "2465 original helper cases independently recaptured on Windows; all match existing Linux data exactly. No helper fixture or platform-selection change is justified.",
+  "lease": "WINDOWS-NATIVE-21",
+  "linux_fixture_sha256": "87033952f8024de5e122333c010595ee0a72da1803413adc2c995da9ab103ebd",
+  "oracle": "Archived original HEAD coil.py python_plan directly; ctypes.CDLL forbidden, no native expected-answer generation.",
+  "original_oracle_sha256": "1ab01e6ccf5c7abb3bc134e25441e0fdc9948a0bb0116dbcd85229e31c03ae90",
+  "parity": "All33original Windows cases tested through both force_native values:66/66bit/error exact; numeric source unchanged.",
+  "python_executable_sha256": "d6fc04d5348fdcf121d34ea3fc36221c779de9771949b68863002f7a2dc892d5",
+  "runtime_identities": [
+    {
+      "name": "ucrtbase.dll",
+      "sha256": "a202e993ed7311aee09e980bfc24fba4024a097ae222f30ba5cee78a35d36f51"
+    },
+    {
+      "name": "vcruntime140.dll",
+      "sha256": "d5e4d9a3e835fa679450145d6a7d94e36573a509317111904d9b3712c30d9066"
+    },
+    {
+      "name": "python313.dll",
+      "sha256": "aeae90afd246a75ff9af4e8b971a2286de6320bc32e7022943017a7e483a95e8"
+    }
+  ],
+  "schema": 1,
+  "scope": "New fixture data/platform selection only; old Linux and Windows data and all original assertions remain unchanged.",
+  "source_parent": "704ee64958f358101b7997b0bd6c75a401521b70",
+  "unchanged_fields": "Names, all15input doubles, status, stored knots, spans and all7exact ValueError messages. Only poles/deviation bits vary.",
+  "windows_sparse_fixture_sha256": "2ced492206b2bc841f680aab67b5c94c4edaec6e4d09e62847048dff8cd0e6c0"
+}

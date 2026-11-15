@@ -84,12 +84,15 @@ def _():
     gate = _load_gate()
     expected = {
         "spike/test_stl_writer.py", "spike/test_native_stl.py",
+        "spike/test_stl_import_boundary.py", "spike/test_coil_owned.py",
+        "spike/test_interpolate.py", "spike/test_interpolate_owned_boundary.py",
         "spike/test_obj_writer.py", "spike/test_obj_reader.py", "spike/test_native_obj.py",
         "spike/test_dxf_writer.py", "spike/test_dxf_reader.py", "spike/test_native_dxf.py",
         "spike/test_numparse.py", "spike/test_numparse_owned.py", "spike/test_native_numparse.py",
         "spike/test_pure_core_packaging.py",
         "spike/test_calc.py", "spike/test_native_calc.py",
         "spike/test_calc_owned.py", "spike/test_bearing_owned.py",
+        "spike/test_native_math_error_format.py",
         "spike/test_native_parser_cache.py", "spike/test_macro_plan_owned.py",
         "spike/test_aci_colors.py",
         "spike/test_macro_owned.py", "spike/test_printwidths_contract.py",
@@ -212,12 +215,13 @@ def _():
     gate = _load_gate()
     crate = Path(CRATE)
     closure = gate.require_rust_public_closure(crate)
-    assert len(closure) == 73
+    assert len(closure) == 89
     assert set(gate.RUST_INTEGRATION_SUITES) == {
             "alias_golden", "unit_golden", "interpolate_golden", "svgpath_golden",
             "bearing_golden", "calc_golden", "coords_golden", "unitformat_golden",
             "macro_golden", "joinchain_golden", "rebuild_golden", "blend_golden", "norm_golden",
                         "nurbs_golden", "arclength_golden",
+            "coil_golden", "interpolate_helpers_golden", "stl_owned", "stl_import_safety",
         }
     public_source = (Path(ROOT) / "scripts/create_public_branch.py").read_text()
     for retired in ("spike/alias_reference.py", "spike/units_reference.py", "spike/interpolate_reference.py",
@@ -264,7 +268,7 @@ def _():
         result = gate.step_tests(crate)
         assert set(result["integration_suites"]) == set(gate.RUST_INTEGRATION_SUITES)
         assert all(v == {"compiled": True, "passed": 2} for v in result["integration_suites"].values())
-        assert run.call_count == 16
+        assert run.call_count == 20
     for fault in ("missing-compilation", "discovery-only", "wrong-target", "zero-tests", "filtered", "failed"):
         rejects(gate.step_tests, fault)
     # Each individual target must be load-bearing, not merely the first one.
@@ -298,10 +302,11 @@ def _():
     broken = source.replace(repr(fixture) + ",", "")
     assert broken != source
     real_read = Path.read_text
-    # Every round-19/20 path is required independently; inspect manifests, not fixtures.
+    # Every round-19/20/21 path is required independently; inspect manifests, not fixtures.
     added = [path for path in closure
-             if Path(path).name.startswith(("blend_", "norm_", "nurbs_", "arclength_"))]
-    assert len(added) == 20
+             if Path(path).name.startswith(("blend_", "norm_", "nurbs_", "arclength_",
+                                            "coil_", "interpolate_helpers", "stl_owned", "stl_import_safety"))]
+    assert len(added) == 30
     for missing in added:
         omitted = source.replace(repr(missing) + ",", "")
         assert omitted != source
@@ -313,7 +318,7 @@ def _():
             except gate.GateError:
                 pass
             else:
-                raise AssertionError("round-19/20 public path omission survived: " + missing)
+                raise AssertionError("round-19/20/21 public path omission survived: " + missing)
     def read(path, *args, **kwargs):
         return broken if path == Path(ROOT) / "scripts/create_public_branch.py" else real_read(path, *args, **kwargs)
     def closure_rejects():
@@ -331,6 +336,49 @@ def _():
             pass
         else:
             raise AssertionError("closure negative test did not go RED with guard disabled")
+
+
+@check("round-21 copied-crate and required-source omissions are independently refused")
+def _():
+    gate = _load_gate()
+    crate = Path(CRATE)
+    required = {
+        "tests/coil_golden.rs", "tests/interpolate_helpers_golden.rs",
+        "tests/stl_owned.rs", "tests/stl_import_safety.rs", "tests/interpolate_helpers.h",
+        "tests/fixtures/coil_numeric.txt", "tests/fixtures/coil_baseline_linux.json",
+        "tests/fixtures/coil_windows_msvc.txt", "tests/fixtures/coil_windows_msvc_provenance.txt",
+        "tests/fixtures/interpolate_helpers_linux.txt",
+    }
+    gate.require_rust_public_closure(crate)
+    with tempfile.TemporaryDirectory(prefix="pure-core-round21-closure-") as temporary:
+        copied = Path(temporary) / "pure_core"
+        # Copy metadata/payloads without reading any corpus into agent/test text.
+        shutil.copytree(crate / "tests", copied / "tests")
+        gate.require_rust_public_closure(copied)
+        for relative in sorted(required):
+            victim = copied / relative
+            # Keep removed data outside tests, so closure sees an actual omission.
+            held = Path(temporary) / (victim.name + ".held")
+            victim.rename(held)
+            try:
+                try:
+                    gate.require_rust_public_closure(copied)
+                except gate.GateError:
+                    pass
+                else:
+                    raise AssertionError("copied-crate omission survived: " + relative)
+            finally:
+                held.rename(victim)
+            gate.require_rust_public_closure(copied)
+            omitted = "native/pure_core/" + relative
+            with patch.object(gate, "RUST_INTEGRATION_FILES", tuple(
+                    path for path in gate.RUST_INTEGRATION_FILES if path != omitted)):
+                try:
+                    gate.require_rust_public_closure(copied)
+                except gate.GateError:
+                    pass
+                else:
+                    raise AssertionError("required-source omission survived: " + omitted)
 
 
 failed = 0
