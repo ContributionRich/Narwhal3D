@@ -8,9 +8,9 @@
 
 Draw with the mouse, type a command, or choose a tool from the sidebar. Work in four views at once, shape your model with on-screen handles, and choose a light or dark workspace.
 
-**[Download for Linux](https://github.com/ContributionRich/Narwhal3D/releases/download/v0.4.12/Narwhal_3D-0.4.12-x86_64.AppImage)** · **[Download for Windows](https://github.com/ContributionRich/Narwhal3D/releases/download/v0.4.12/Narwhal_3D-0.4.12-Windows-x86_64.exe)** · **[macOS Apple Silicon: 0.4.8 release](https://github.com/ContributionRich/Narwhal3D/releases/tag/v0.4.8)** · [What's new](CHANGELOG.md)
+**[Download for Linux](https://github.com/ContributionRich/Narwhal3D/releases/download/v0.4.13/Narwhal_3D-0.4.13-x86_64.AppImage)** · **[Download for Windows](https://github.com/ContributionRich/Narwhal3D/releases/download/v0.4.13/Narwhal_3D-0.4.13-Windows-x86_64.exe)** · [What's new](CHANGELOG.md)
 
-> **Check the release page for available builds.** The 0.4.12 Linux AppImage and Windows portable EXE are published, both built from the tagged v0.4.12 source. 0.4.12 adds **TracePicture** to both packages (in 0.4.11 its tracing helper was in source builds only). 0.4.11 made saving reliable (a `.narwhal` Save no longer refuses a document; an object it cannot prove exact is repaired or kept and named), stopped a crash when a file dialog closed, added FilletEdge ChainEdges, the curve Rebuild window and Interface Scale, made clicks select only what is visible under the cursor, and sped up snapping, picking, Open and Save; see [What's new](CHANGELOG.md). The Windows EXE is unsigned, and its acceptance ran in a Windows 11 virtual machine with a software OpenGL driver, not on a physical GPU. No Mac build has been made for this line; the 0.4.8 Apple Silicon DMG remains on the 0.4.8 release page. See [current source status](STATUS.md).
+> **Current release: [0.4.13](https://github.com/ContributionRich/Narwhal3D/releases/tag/v0.4.13).** The Linux AppImage and Windows portable EXE include the new Library tab, background native-project Save/Open, crash recovery, command and print/unit fixes, and further Rust conversions. TracePicture remains included. Both packages use the tagged release source. The Windows EXE is unsigned and was tested in a Windows 11 VM with software OpenGL, not a physical GPU. See [release notes](CHANGELOG.md) and [current status](STATUS.md).
 
 > **An early preview, built in the open.** Narwhal is still growing, and some tools are incomplete. Save important work often and verify dimensions and exported geometry before manufacturing. [See what works and what's still missing →](docs/gaps.md)
 
@@ -52,25 +52,19 @@ Switch at any time with **View → Theme**. Your choice is remembered the next t
 Download the **AppImage** above. In your file manager, open its properties, allow it to run as a program, and launch it. Or, from the folder containing the download:
 
 ```bash
-chmod +x Narwhal_3D-0.4.12-x86_64.AppImage
-./Narwhal_3D-0.4.12-x86_64.AppImage
+chmod +x Narwhal_3D-0.4.13-x86_64.AppImage
+./Narwhal_3D-0.4.13-x86_64.AppImage
 ```
 
 The application is bundled—no separate Blender installation is needed. The download is for **x86_64 Linux**; desktop and graphics-driver compatibility still varies. [Platform details](docs/technical-reference.md#install-on-linux-x86_64)
 
 ### Windows
 
-The 0.4.12 **portable EXE**, `Narwhal_3D-0.4.12-Windows-x86_64.exe`, manages its payload in a private per-user cache; no manual extraction is required. Its first launch prepares that cache. Keep user documents outside the replaceable application cache. Compare its download with the published `.sha256` checksum.
+The 0.4.13 **portable EXE**, `Narwhal_3D-0.4.13-Windows-x86_64.exe`, manages its payload in a private per-user cache; no manual extraction is required. Its first launch prepares that cache. Keep user documents outside the replaceable application cache. Compare its download with the published `.sha256` checksum.
 
-The v0.4.12 release publishes only the EXE and its checksum. The 0.4.8 portable ZIP stays on the 0.4.8 release page unchanged for compatibility; if you installed that ZIP, download the 0.4.12 EXE once. Future Windows releases will also publish only the EXE and its checksum.
+The v0.4.13 release publishes only the EXE and its checksum. The 0.4.8 portable ZIP stays on the 0.4.8 release page unchanged for compatibility; if you installed that ZIP, download the 0.4.13 EXE once. Future Windows releases will also publish only the EXE and its checksum.
 
 This is an **unsigned early preview**, so Windows may display a SmartScreen warning. The EXE was accepted in a Windows 11 virtual machine using a software OpenGL driver, not a physical GPU, and testing on physical Windows GPUs remains limited. There is no installer yet. [Windows details](docs/windows-build.md)
-
-### macOS
-
-Download the **Apple Silicon DMG** from the 0.4.8 release page (no Mac build has been made for this line yet), open it and drag **Narwhal 3D.app** to Applications. No separate Blender or Python installation is needed. The build targets **macOS14+** and was tested on macOS15; Intel Macs are not supported by this package.
-
-This preview is ad-hoc-signed, **not Developer ID-signed or notarized**. Gatekeeper requires explicit approval: follow Apple’s Privacy & Security instructions for opening an app you trust, rather than disabling Gatekeeper globally. Corel multiversion conversion remains unavailable on Mac. [Mac installation/build details](docs/macos-build.md).
 
 ### Try your first model
 
@@ -82,7 +76,7 @@ This preview is ad-hoc-signed, **not Developer ID-signed or notarized**. Gatekee
 
 ## Reuse assets with Library
 
-**Available in current source; included in the next packaged release.**
+**Included in the 0.4.13 Linux and Windows packages.**
 
 The Library tab sits between Bug Report and AI Assistant. Organize exact assets
 into categories, capture selected geometry, import files, and click or drag tiles
@@ -94,7 +88,7 @@ background, keeping the current document active until a candidate is ready.
 Rust owns the load and Save/AutoSave queues as well as native container I/O;
 exact geometry, recovery and the ordinary Undo history are preserved.
 See [background file I/O, scope and remaining host work](docs/FILE_IO.md).
-These are source changes for the next packaged release.
+Foreign-format imports and some scene/thumbnail work still use the main thread; background native-project I/O does not promise zero pauses for every asset.
 
 
 ## Save and share your work
@@ -110,6 +104,8 @@ Some solids cannot yet be exported as exact `.3dm` geometry, and the macOS packa
 **Found a bug?** Open the **Bug Report** tab inside the app, or [report an issue on GitHub](https://github.com/ContributionRich/Narwhal3D/issues/new/choose). Include what you were doing, what you expected, and a screenshot if useful. Reports and attachments are not uploaded automatically—you review what you share.
 
 **Have an idea or want to contribute?** Feedback, testing, documentation, design, and code are welcome. Start with the [contribution guide](CONTRIBUTING.md) or [support information](SUPPORT.md).
+
+**Code contributions are Rust-first.** New computation, parsing, iteration and regression engines belong in Rust. Python additions require a concrete host-API reason; do not add duplicate fallback algorithms. See [implementation and retirement policy](CONTRIBUTING.md#implementation-policy-rust-first).
 
 **Using an AI coding assistant?** Point it at this repository and at the [AI contributor guide](docs/contributing-with-ai.md). Issues labelled [`agent-ready`](https://github.com/ContributionRich/Narwhal3D/issues?q=is%3Aissue+is%3Aopen+label%3Aagent-ready) are fully specified for autonomous work.
 

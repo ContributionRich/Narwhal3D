@@ -8,16 +8,19 @@ Narwhal 3D welcomes focused fixes, tests, documentation, and one-command feature
 
 Narwhal 3D project code is **GPL-3.0-or-later**. By submitting a contribution, you agree that it may be distributed under that licence. Contributions and new dependencies must be GPL-compatible. Third-party components keep their own licences and must be recorded in `THIRD_PARTY_NOTICES` and `licenses/` when applicable.
 
-## Architecture today and the native target
+## Implementation policy: Rust first
 
-The current 0.x application deliberately uses two layers:
+**The active work is replacing Python, not expanding it.** This applies to human and AI contributors now, not only after feature completion.
 
-- **Python:** command behavior, document orchestration, application UI, import/export coordination, and most automated tests. Python keeps feature development and behavioral correction fast while the CAD workflow is still evolving.
-- **Compiled runtime:** the patched Blender viewport/application runtime and the Open CASCADE geometry kernel. Exact solid operations already run through compiled kernel code; display tessellation is kept separate from document geometry.
+- Implement new computation, parsing, iteration, selection, projection, data processing, state/queue policy and performance-sensitive logic in the closest Rust crate under `native/`.
+- Python is limited to necessary Blender/UI, ctypes, rhino3dm/OCCT host integration and orchestration that Rust cannot reasonably reach yet. Explain the concrete API constraint for every new Python implementation. Existing Python is not permission to add more computational Python.
+- Put computational regression engines and case loops in Rust tests. Keep independently captured expectations; Python host/GUI/process tests are appropriate only for the boundary they actually exercise.
+- Do not add a second Python implementation or silently replay legacy algorithms when Rust is missing, stale or refuses input. Required native paths must report actionable installation/protocol errors without partially changing the document.
+- Retire replaced code only after independent parity, refusal/error, mutation, performance and supported-platform qualification. Preserve originals in a local ignored backup, not executable public reference engines. Do not delete necessary host glue or unconverted behavior to improve language statistics.
+- Preserve exact OCCT/openNURBS manufacturing geometry, historical project compatibility and the existing single Undo history. Rust coordination/display acceleration must never substitute a tessellated proxy for exact geometry.
+- New or changed native exports must have safe metadata/capacity/error contracts and matching qualified native libraries before live callers are activated. Account for platform math and package/runtime effects; Linux tests alone do not certify Windows.
 
-After the command set and interaction behavior are feature-complete and stable, the production application layer is intended to be integrated into the Blender source tree and built as one native Narwhal 3D executable. The shipped product should no longer bootstrap as a Python add-on. Python may remain useful for tests, build tooling, and prototypes, while the application shell, command runtime, UI, and performance-sensitive bridges move into the compiled build.
-
-Work contributed now is not throwaway work: command semantics, regression tests, file-format behavior, geometry invariants, and UI contracts define the native implementation that follows.
+The current application still contains Python host integration and unconverted implementations. The goal is a native application with as little Python as possible. No blanket rewrite, relaxed test, hidden language-statistics rule or deletion of working behavior is acceptable.
 
 ## Start with one command
 

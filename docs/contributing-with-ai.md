@@ -36,15 +36,19 @@ Feature status lives in [`STATUS.md`](../STATUS.md) and [`docs/gaps.md`](gaps.md
    "<name> is not implemented yet". Never silently do something else.
 5. **One user action is one Undo step.** Commands wrap document changes in the existing undo
    boundary (`begin_undo` / `end_undo` on the command context).
-6. **Every change needs a test, and you must see it fail.** Add or extend a suite in `spike/`. Then
+6. **Every change needs a test, and you must see it fail.** Put computational tests in Rust; keep host/GUI boundary tests in `spike/`. Then
    re-break the behaviour on purpose, confirm the test goes red, and restore it. A test you have not
    seen fail is not a test.
 7. **Never weaken or delete an existing test to make something pass.** If a test blocks you, explain
    in the pull request which of the two is wrong and why.
-8. **Rust first for computation.** New parsing, picking, searching, iteration and other hot-path
-   logic belongs in a Rust crate under `native/`. Python is for Blender/UI glue and orchestration.
-   Rust may accelerate display and coordination, but never replaces exact OCCT/openNURBS geometry
-   with an approximation.
+8. **Rust first; actively replace Python.** New computation, parsing, picking, searching, iteration,
+   state policy and computational test engines belong in `native/`. New Python requires a concrete
+   Blender/UI/ctypes/kernel-host API reason. Do not add duplicate Python solvers, parsers or silent
+   fallback/replay paths. Retire old implementations only after independent exact-answer/error,
+   mutation, performance and platform qualification; retain backups locally, not public executable
+   oracles. Qualify matching native libraries before activating changed ABI consumers. Preserve
+   exact OCCT/openNURBS geometry and the single Undo history. The full policy is in
+   [CONTRIBUTING.md](../CONTRIBUTING.md#implementation-policy-rust-first).
 9. **Public text rules.** Do not name the commercial CAD product this project is modeled on (say
    "the reference CAD application" if you must). Do not commit local paths, downloaded runtimes,
    build output, private documents or third-party material without clear redistribution terms.

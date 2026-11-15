@@ -14,6 +14,10 @@ Closes #
 
 ## Impact review
 
+- [ ] New computation/parsing/state policy and computational test engines are Rust, not Python
+- [ ] Any new Python is necessary host/UI/ctypes integration, with the concrete API reason explained
+- [ ] Replaced Python is retired only after independent parity, error, mutation, performance and platform qualification; no silent fallback/replay
+- [ ] Changed native ABI callers use matching qualified libraries and package inputs
 - [ ] Unsupported behavior remains explicit and does not silently fall back
 - [ ] Manufacturing geometry remains exact; viewport tessellation is display-only
 - [ ] Save/reopen and Undo/Redo behavior are covered when document state changes
