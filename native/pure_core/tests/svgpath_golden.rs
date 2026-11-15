@@ -6,6 +6,84 @@ use narwhal_pure_core::svgpath::{
 use std::ptr::null_mut;
 
 const GOLDEN: &str = include_str!("fixtures/svgpath_golden.txt");
+
+// Captured from the original CPython implementation on actual Windows MSVC.
+// Data admission also runs on Linux; only the qualified target selects the rows.
+fn windows_capture_fingerprint(text: &str) -> u64 {
+    text.lines()
+        .flat_map(|line| line.bytes().chain(std::iter::once(b'\n')))
+        .fold(0xcbf29ce484222325, |h, b| {
+            (h ^ u64::from(b)).wrapping_mul(0x100000001b3)
+        })
+}
+fn platform_golden_rows() -> Vec<&'static str> {
+    let linux = GOLDEN;
+    let windows = include_str!("fixtures/svgpath_windows_msvc.txt");
+    let provenance = include_str!("fixtures/windows_msvc_provenance.txt");
+    assert_eq!(windows_capture_fingerprint(provenance), 0x6a2078aadd664451);
+    assert_eq!(windows_capture_fingerprint(linux), 0xc5a59725cbc18140);
+    assert_eq!(windows_capture_fingerprint(windows), 0x061091739e1e1eb8);
+    let originals: std::collections::BTreeMap<_, _> = linux
+        .lines()
+        .map(|row| (row.split('|').next().unwrap(), row))
+        .collect();
+    assert_eq!(originals.len(), 3124);
+    assert_eq!(
+        originals.len(),
+        linux.lines().count(),
+        "duplicate original ID"
+    );
+    let mut overrides = std::collections::BTreeMap::new();
+    for row in windows.lines() {
+        let id = row.split('|').next().unwrap();
+        let original = originals
+            .get(id)
+            .expect("Windows ID absent from original corpus");
+        let old: Vec<_> = original.split('|').collect();
+        let new: Vec<_> = row.split('|').collect();
+        assert_eq!(old.len(), new.len(), "Windows framing {id}");
+        for column in 0..old.len() {
+            if ![6].contains(&column) {
+                assert_eq!(
+                    old[column], new[column],
+                    "Windows input/metadata {id} column {column}"
+                );
+            }
+        }
+        assert_ne!(*original, row, "vacuous Windows override {id}");
+        assert!(
+            overrides.insert(id, row).is_none(),
+            "duplicate Windows ID {id}"
+        );
+    }
+    assert_eq!(overrides.len(), 356);
+    let windows_msvc = cfg!(all(
+        target_os = "windows",
+        target_env = "msvc",
+        target_arch = "x86_64"
+    ));
+    let selected: Vec<_> = linux
+        .lines()
+        .map(|row| {
+            let id = row.split('|').next().unwrap();
+            if windows_msvc {
+                overrides.get(id).copied().unwrap_or(row)
+            } else {
+                row
+            }
+        })
+        .collect();
+    assert_eq!(selected.len(), 3124);
+    assert!(
+        selected
+            .iter()
+            .map(|row| row.split('|').next().unwrap())
+            .eq(linux.lines().map(|row| row.split('|').next().unwrap())),
+        "selected row set/order changed"
+    );
+    selected
+}
+
 fn nums(s: &str) -> Vec<usize> {
     s.split(',')
         .filter(|s| !s.is_empty())
@@ -57,7 +135,7 @@ unsafe fn call(
 fn original_python_all_cases_bits_errors_and_capacity() {
     assert_eq!(narwhal_pure_core_svgpath_owned_version(), 14);
     let mut groups = std::collections::BTreeMap::new();
-    for line in GOLDEN.lines() {
+    for line in platform_golden_rows() {
         let row: Vec<_> = line.split('|').collect();
         assert_eq!(row.len(), 7);
         *groups.entry(row[1]).or_insert(0usize) += 1;

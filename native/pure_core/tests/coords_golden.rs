@@ -9,6 +9,84 @@ use std::{
     mem::{offset_of, size_of},
     ptr::null_mut,
 };
+
+// Captured from the original CPython implementation on actual Windows MSVC.
+// Data admission also runs on Linux; only the qualified target selects the rows.
+fn windows_capture_fingerprint(text: &str) -> u64 {
+    text.lines()
+        .flat_map(|line| line.bytes().chain(std::iter::once(b'\n')))
+        .fold(0xcbf29ce484222325, |h, b| {
+            (h ^ u64::from(b)).wrapping_mul(0x100000001b3)
+        })
+}
+fn platform_golden_rows() -> Vec<&'static str> {
+    let linux = include_str!("fixtures/coords_golden.txt");
+    let windows = include_str!("fixtures/coords_windows_msvc.txt");
+    let provenance = include_str!("fixtures/windows_msvc_provenance.txt");
+    assert_eq!(windows_capture_fingerprint(provenance), 0x6a2078aadd664451);
+    assert_eq!(windows_capture_fingerprint(linux), 0x87bd3996a5eb5229);
+    assert_eq!(windows_capture_fingerprint(windows), 0xd1a09b777401e4e9);
+    let originals: std::collections::BTreeMap<_, _> = linux
+        .lines()
+        .map(|row| (row.split('|').next().unwrap(), row))
+        .collect();
+    assert_eq!(originals.len(), 20402);
+    assert_eq!(
+        originals.len(),
+        linux.lines().count(),
+        "duplicate original ID"
+    );
+    let mut overrides = std::collections::BTreeMap::new();
+    for row in windows.lines() {
+        let id = row.split('|').next().unwrap();
+        let original = originals
+            .get(id)
+            .expect("Windows ID absent from original corpus");
+        let old: Vec<_> = original.split('|').collect();
+        let new: Vec<_> = row.split('|').collect();
+        assert_eq!(old.len(), new.len(), "Windows framing {id}");
+        for column in 0..old.len() {
+            if ![10].contains(&column) {
+                assert_eq!(
+                    old[column], new[column],
+                    "Windows input/metadata {id} column {column}"
+                );
+            }
+        }
+        assert_ne!(*original, row, "vacuous Windows override {id}");
+        assert!(
+            overrides.insert(id, row).is_none(),
+            "duplicate Windows ID {id}"
+        );
+    }
+    assert_eq!(overrides.len(), 308);
+    let windows_msvc = cfg!(all(
+        target_os = "windows",
+        target_env = "msvc",
+        target_arch = "x86_64"
+    ));
+    let selected: Vec<_> = linux
+        .lines()
+        .map(|row| {
+            let id = row.split('|').next().unwrap();
+            if windows_msvc {
+                overrides.get(id).copied().unwrap_or(row)
+            } else {
+                row
+            }
+        })
+        .collect();
+    assert_eq!(selected.len(), 20402);
+    assert!(
+        selected
+            .iter()
+            .map(|row| row.split('|').next().unwrap())
+            .eq(linux.lines().map(|row| row.split('|').next().unwrap())),
+        "selected row set/order changed"
+    );
+    selected
+}
+
 fn cps(s: &str) -> Vec<u32> {
     s.split(',')
         .filter(|s| !s.is_empty())
@@ -129,7 +207,7 @@ fn original_parse_scalar_angle_full_104_byte_metadata_and_bits() {
     let mut modes = [0; 4];
     let mut differential = 0;
     let mut projection = 0;
-    for row in include_str!("fixtures/coords_golden.txt").lines() {
+    for row in platform_golden_rows() {
         let (group, mode, code, zero) = check_row(row);
         modes[mode as usize] += 1;
         if group.starts_with("test_") {

@@ -1,0 +1,135 @@
+{
+  "actual_loaded_crt_and_python_dlls": [
+    {
+      "name": "ucrtbase.dll",
+      "sha256": "a202e993ed7311aee09e980bfc24fba4024a097ae222f30ba5cee78a35d36f51"
+    },
+    {
+      "name": "vcruntime140.dll",
+      "sha256": "d5e4d9a3e835fa679450145d6a7d94e36573a509317111904d9b3712c30d9066"
+    },
+    {
+      "name": "python313.dll",
+      "sha256": "aeae90afd246a75ff9af4e8b971a2286de6320bc32e7022943017a7e483a95e8"
+    }
+  ],
+  "capture_source_revision": "5cf1634bbb3b7f22c2c7b13857c7f1deb2c61b8e",
+  "captured_expectations": "Only original Python computation. Full calculator/coordinate replay retains its historical native numeric-literal dependency; only parse_abi and parse_v2 exports admitted. No native expression/coordinate/interpolation/SVG answer generation. Four focused cases and all40 error-format cases separately captured with ALL native-library access forbidden.",
+  "data": {
+    "calc_windows_msvc.txt": {
+      "allowed_changed_columns": [
+        6,
+        7,
+        12
+      ],
+      "full_windows_original_capture_sha256": "ae565530dda16c9960228741b70cfa7c0478a5f4a160bee81da51910e1c76682",
+      "linux_source_sha256": "ffc11ce6a05e522d5369ea99a09ec82b034c0adb548df46192bccc00f814cdaa",
+      "rows": 70,
+      "sha256": "8e8b02ead6d3c149d76034f8972da03f412d59d068d10fd704ad8d386ab32dbe"
+    },
+    "coords_windows_msvc.txt": {
+      "allowed_changed_columns": [
+        10
+      ],
+      "full_windows_original_capture_sha256": "335067c8af5885a1b7a0e090429c815403d19a1f934e814a3490d516f060443f",
+      "linux_source_sha256": "6e7a3fbd91efbac6c97f5cea0e9ecb1700a001e3cd1ca0228087bebb100fb25b",
+      "rows": 308,
+      "sha256": "6930c4500c3eea491245dab0c84a872d9e82db8fafc897da009c5bd3106845b1"
+    },
+    "interpolate_windows_msvc.txt": {
+      "allowed_changed_columns": [
+        9,
+        10
+      ],
+      "full_windows_original_capture_sha256": "7f40374d6f69b14bdf55e5026a975e9d6b7a3a410b0c6813015263d0975bbe23",
+      "linux_source_sha256": "10b72d838dae78fc7157c0d55e53276b7cff37519f0de0dd98b23cda3b81e73a",
+      "rows": 4,
+      "sha256": "0bd313861caf5fb9f3c74aecae9bd0be36786a219a6774aa486a1bbf4b220f47"
+    },
+    "math_error_windows_msvc.txt": {
+      "format": "case|source codepoints|repr(model) codepoints|original calculator error codepoints|original scalar coordinate error codepoints",
+      "original_windows_artifact_sha256": "60601538dea9ece6e023ab2eaf17613180d95ca5e07398b5f26d344fe87525c2",
+      "rows": 40,
+      "sha256": "c1d3a28fb8309c3afcbf904f1d8377fd69aef18e411aad64f3d5bd2b2f496440"
+    },
+    "svgpath_windows_msvc.txt": {
+      "allowed_changed_columns": [
+        6
+      ],
+      "full_windows_original_capture_sha256": "2dacdacc63a79417a99dc04320cdae2044865ac291fc28166c4ba2c625c8baa2",
+      "linux_source_sha256": "478e23e747496f5daf1534d5b86eb4c76b7cd8ef0c3fe70850251ef89e37c7b1",
+      "rows": 356,
+      "sha256": "1e9f8433ebcb444dfcc1bcc0e1f74f1b20a287d31ab4965f0d6e851f9873b6dd"
+    }
+  },
+  "error_metadata": "Original Windows errno34 exception text preserved. Passive stage mapper classifies its spelling under the existing protocol code23.",
+  "excluded_policy": {
+    "case": "20399",
+    "corpus": "coords_golden.txt",
+    "reason": "Preserve fixed64-level nesting refusal. Standalone older Python grammar predates safety policy; same discrepancy observed in Linux control. No override."
+  },
+  "execution": "Actual Windows 11 build26200 under QEMU/KVM; not Wine or Linux inference",
+  "host_capture_scripts": {
+    "capture_windows.py": "04bdd60b6618a6771b5a4f58e5c4270a02c150511cb0b6ec16f577953b185b21",
+    "independent_error_capture.py": "58c5a9ed7d49073c1c158eb40784599418b96849f79aff5d5f43976093fa6f95"
+  },
+  "linux_control": {
+    "libc": "glibc2.43",
+    "libm_sha256": "16a03ce6d24c8a46742206d4a9c1d35bb6577ae2384f153dc6ef4a4b62b5357f",
+    "python": "CPython3.13.13 GCC14.2.1"
+  },
+  "literal_dependency": {
+    "allowed_exports": [
+      "narwhal_pure_core_parse_abi",
+      "narwhal_pure_core_parse_v2"
+    ],
+    "original_literal_dll_sha256": "fe6cf280a2995d356dc97d5f00be24230f5491849adfabca3e7578afcc1bd294",
+    "sha256": "6c309a6852aac3554358d8887d06070aa91e9f3573f423d504008b88f82793cb",
+    "source": "narwhal3d/numparse.py"
+  },
+  "original_oracle_source_sha256": {
+    "legacy/retired-python-50267dd6/numparse/numparse.py": "898d4f45c0317eaa7d43e6d34bb067d8abb9ee0d4a61bc71626de5a57eff33a5",
+    "legacy/retired-rust17/interpolate_reference.py": "ed019e1d8a929cefdbff0d70a6fb0807cc907e698b6370eff74e46abf2ef38eb",
+    "legacy/retired-rust18/calc_reference.py": "354bae15356baaabbbaa8acfb246eeaebd64a06c512d62d248ae427a0b4ec5ed",
+    "legacy/retired-rust18/capture.py": "56fbe11807bc29efaf2516355e2ecb8fe9e6c8ca6c0b458cba47a20c5f2a7762",
+    "legacy/retired-rust18/capture_calc.py": "4c865dff7ce18b2c279334a9723e67bd56c512afd3cc49edc1d66be6ade7f1e4",
+    "legacy/retired-rust18/capture_coords.py": "64f5bea8e0e589584a28dd0fc41ef3138543cbe45aef2d110115da779d4d537b",
+    "legacy/retired-rust18/coords_reference.py": "06671557350df35fddfc759d35aaa46cbe27db89a6bb0f83d379b4e52880456e",
+    "legacy/retired-rust18/svgpath_reference.py": "ad58dd492da293745bea2f2452a6bceebf95f28fd62354e195fcdfcd3e6108b1"
+  },
+  "python": "3.13.13 (main, May  8 2026, 12:37:03) [MSC v.1944 64 bit (AMD64)]",
+  "python_executable_sha256": "d6fc04d5348fdcf121d34ea3fc36221c779de9771949b68863002f7a2dc892d5",
+  "schema": 1,
+  "scope": "Exact bits/metadata and complete original row sets. No tolerances, skips, numeric production changes or executable Python oracle distributed. These MSVC captures do not qualify Windows GNU, Wine, all CRT releases, or old-glibc Linux.",
+  "source_decoding": "Explicit UTF-8, matching Python source imports; host locale cp1252 is NOT source encoding.",
+  "system_runtime_versions": [
+    {
+      "file_version": "10.0.26100.5074 (WinBuild.160101.0800)",
+      "name": "ucrtbase.dll",
+      "product_version": "10.0.26100.5074",
+      "sha256": "a202e993ed7311aee09e980bfc24fba4024a097ae222f30ba5cee78a35d36f51"
+    },
+    {
+      "file_version": "14.44.35211.0",
+      "name": "vcruntime140.dll",
+      "product_version": "14.44.35211.0",
+      "sha256": "d5e4d9a3e835fa679450145d6a7d94e36573a509317111904d9b3712c30d9066"
+    },
+    {
+      "file_version": "3.13.13",
+      "name": "python313.dll",
+      "product_version": "3.13.13",
+      "sha256": "aeae90afd246a75ff9af4e8b971a2286de6320bc32e7022943017a7e483a95e8"
+    }
+  ],
+  "target": {
+    "arch": "x86_64",
+    "env": "msvc",
+    "os": "windows"
+  },
+  "text_line_endings": "Public text uses LF. Row fingerprints normalize CRLF/LF only; all code points, fields, IEEE bits, row IDs and assertions remain exact.",
+  "unchanged_interpolation_companions": {
+    "interpolate_host.txt": "fd7e76c5d0bc5052e8ffaaaf19ba7cfb92b4e2323a4af06d1d4774cd0ef6a139",
+    "interpolate_performance_inputs.txt": "c66898fd51242aa559e82ba215e336fbe9ce395d800dbc56bbd9392ceda01c6c"
+  }
+}

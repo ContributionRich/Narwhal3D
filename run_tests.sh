@@ -457,6 +457,7 @@ PURE_SUITES=(
     spike/test_native_numparse.py
     spike/test_calc.py
     spike/test_native_calc.py
+    spike/test_native_math_error_format.py
     spike/test_bearing.py
     spike/test_native_bearing.py
     spike/test_coords.py

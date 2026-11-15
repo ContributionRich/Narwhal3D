@@ -5,6 +5,7 @@ Unicode 15.1 is pinned to the bundled CPython 3.13 predicates in pure_core.
 Missing/stale libraries and invalid replies are installation/protocol errors.
 """
 import ctypes
+import errno
 from functools import lru_cache
 from types import MappingProxyType
 import math
@@ -32,7 +33,8 @@ _MATH_ERRORS = MappingProxyType({
     18: 'math domain error', 19: 'math range error',
     20: 'result is not a real number', 21: 'complex exponentiation',
     22: '0.0 cannot be raised to a negative power',
-    23: "(34, 'Numerical result out of range')",
+    # CPython reports the host CRT's ERANGE wording, which differs on Windows.
+    23: str((errno.ERANGE, os.strerror(errno.ERANGE))),
 })
 
 
