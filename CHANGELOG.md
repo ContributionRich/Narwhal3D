@@ -6,7 +6,7 @@ All notable public changes will be recorded here. Narwhal 3D is an extremely ear
 
 ## 0.4.13 — 2026-11-14
 
-Linux and Windows prerelease preparation. Package availability and platform acceptance are recorded on the GitHub release; macOS is not part of this release.
+Linux x86_64 AppImage and Windows x86_64 portable EXE, both published from tagged source 95b8decd45384307849add7c47ea6e57372367d4. Download packages and checksums from the [0.4.13 release](https://github.com/ContributionRich/Narwhal3D/releases/tag/v0.4.13). macOS is not part of this release.
 
 ### Library and project workflow
 
