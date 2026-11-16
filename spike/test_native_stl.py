@@ -268,9 +268,9 @@ class NativeSTLTests(unittest.TestCase):
                          "_native_stl_mesh_calls", "_MAX_STL_TRIANGLES", "_STL_MESH_NATIVE_MIN_BYTES"):
             self.assertFalse(hasattr(shared, obsolete), obsolete)
             self.assertNotIn(obsolete, identifiers)
-        for missing in ((), ("obj_decode_size", "obj_decode"), ("dxf_decode_size", "dxf_decode")):
+        for missing in ((), ("obj_decode_size", "obj_decode")):
             functions = {"narwhal_pure_core_abi_version": Mock(return_value=1)}
-            operations = ("obj_decode_size", "obj_decode", "dxf_decode_size", "dxf_decode")
+            operations = ("obj_decode_size", "obj_decode")
             for name in operations:
                 if name not in missing:
                     functions["narwhal_pure_core_" + name] = Mock()
@@ -280,7 +280,7 @@ class NativeSTLTests(unittest.TestCase):
                     patch.object(shared.ctypes, "CDLL", return_value=library) as loader:
                 binding = shared._binding()
                 self.assertIsNotNone(binding)
-                self.assertEqual(len(binding), 5)
+                self.assertEqual(len(binding), 3)
                 for index, name in enumerate(operations):
                     self.assertIs(binding[index], functions.get("narwhal_pure_core_" + name))
                 self.assertIs(shared._binding(), binding)
@@ -291,7 +291,7 @@ class NativeSTLTests(unittest.TestCase):
                 self.assertIsNone(shared._native_binding)
                 self.assertIsNone(shared._signature)
                 self.assertEqual(shared._status, "not checked")
-                self.assertEqual(len(shared._binding()), 5)
+                self.assertEqual(len(shared._binding()), 3)
                 self.assertEqual(loader.call_count, 2)
         shared._reset_for_tests()
         with tempfile.TemporaryDirectory() as directory:

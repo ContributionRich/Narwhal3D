@@ -1077,7 +1077,7 @@ class PackageTests(unittest.TestCase):
         # Path/AST metadata only: never load the golden corpora into this test.
         closure = gate.require_rust_public_closure(ROOT / "native/pure_core")
         self.assertEqual(set(closure), set(gate.RUST_INTEGRATION_FILES))
-        self.assertEqual(len(gate.RUST_INTEGRATION_SUITES), 32)
+        self.assertEqual(len(gate.RUST_INTEGRATION_SUITES), 33)
         source = ast.parse((ROOT / "scripts/create_public_branch.py").read_text())
         public = set()
         for node in source.body:
@@ -1755,6 +1755,34 @@ class Round24ClosureTests(unittest.TestCase):
         restored = unittest.TestResult()
         Round24ClosureTests(method).run(restored)
         self.assertTrue(restored.wasSuccessful(),restored.errors or restored.failures)
+
+
+class DxfLegacyClosureTests(unittest.TestCase):
+    def test_legacy_decoder_coverage_is_in_rust_and_public(self):
+        import create_public_branch as public
+        paths = {
+            "native/pure_core/tests/dxf_legacy_abi.rs",
+            "native/pure_core/tests/dxf_legacy_abi.h",
+            "native/pure_core/tests/fixtures/dxf_legacy_abi/README.md",
+            "native/pure_core/tests/fixtures/dxf_legacy_abi/analytic.dxf",
+            "native/pure_core/tests/fixtures/dxf_legacy_abi/analytic.packed",
+            "native/pure_core/tests/fixtures/dxf_legacy_abi/empty.packed",
+            "native/pure_core/tests/fixtures/dxf_legacy_abi/specification.json",
+        }
+        self.assertTrue(paths <= set(gate.require_rust_public_closure(ROOT / "native/pure_core")))
+        self.assertTrue(paths <= set(public.NATIVE_FILES))
+        self.assertIn("dxf_legacy_abi", gate.RUST_INTEGRATION_SUITES)
+
+    def test_legacy_decoder_suite_omission_is_red_then_green(self):
+        method = "test_legacy_decoder_coverage_is_in_rust_and_public"
+        with patch.object(gate, "RUST_INTEGRATION_SUITES", tuple(
+                name for name in gate.RUST_INTEGRATION_SUITES if name != "dxf_legacy_abi")):
+            broken = unittest.TestResult()
+            DxfLegacyClosureTests(method).run(broken)
+            self.assertFalse(broken.wasSuccessful(), "legacy decoder suite omission survived")
+        restored = unittest.TestResult()
+        DxfLegacyClosureTests(method).run(restored)
+        self.assertTrue(restored.wasSuccessful(), restored.errors or restored.failures)
 
 
 class GuardMutationTests(unittest.TestCase):

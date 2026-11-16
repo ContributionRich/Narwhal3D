@@ -27,3 +27,5 @@ Tiny operations retain FFI overhead: a square triangulation rises from 1.70 to 6
 The exact ordered DXF reader is not universally faster. A focused bulk LINE decoder reduces a 20,000-LINE file from 157.7 milliseconds in original Python to 87.5; the old optional native decoder took 53.0 but did not preserve original dictionary insertion order. Dense polylines and splines improve over Python, while layer-heavy data and tiny files can regress. Do not describe this as a universal speedup. Input parsing preserves legacy nonfinite file values; it does not certify those values as safe kernel geometry.
 
 Net production Python decreases by 129 lines after accounting for the new ctypes marshalling adapters, rather than counting only the deleted engines. No language-statistics exclusions are added.
+
+The subsequent [DXF adapter cleanup](RUST_RETIREMENT_25.md) removes the obsolete shared decoder and inactive import route.

@@ -4,6 +4,8 @@ All notable public changes will be recorded here. Narwhal 3D is an extremely ear
 
 ## Unreleased
 
+- Source: retired obsolete shared DXF decoder adapters and the inactive packed import branch, preserving the required analytic reader route and legacy native ABI with independent Rust coverage. [Scope and checks](docs/RUST_RETIREMENT_25.md).
+
 - Source: required Rust DXF reading, planar-loop triangulation and selected live-preview sampling; removed their Python computational copies. Exact platform-specific captures, explicit native admission and Windows-safe probe transport preserve compatibility. [Qualification and measured tradeoffs](docs/RUST_RETIREMENT_24.md).
 
 - Source: required Rust PDF/AI/SVG and DXF encoders, Tween computations and complete startup admission; removed obsolete shared encoder adapters while preserving ordinary file I/O and exact valid output. [Scope and qualification](docs/RUST_RETIREMENT_23.md).

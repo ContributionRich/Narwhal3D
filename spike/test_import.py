@@ -354,85 +354,47 @@ check(modern_curve is not None and modern_curve.IsValid and modern_curve.IsClose
       and any("5 HATCH" not in note and "1 HATCH" in note for note in modern_got.notes),
       "modern ASCII DXF SPLINE becomes an exact closed degree-3 NURBS with unit scaling")
 
-if os.path.isfile(PURE_LIB):
-    prior_pure = os.environ.get("NARWHAL_PURE_CORE")
-    os.environ["NARWHAL_PURE_CORE"] = PURE_LIB
-    native_pure._reset_for_tests()
-    dxf_bytes = open(dxf, "rb").read()
-    packed = native_pure.decode_dxf_packed(dxf_bytes)
-    direct = ic._dxf_from_packed(packed, doc()) if packed else None
-    calls = []
-    real_active = native_pure._dxf_import_native_active
-    real_decode = native_pure.decode_dxf_packed
-    real_min = native_pure._DXF_IMPORT_NATIVE_MIN_BYTES
-    native_pure._DXF_IMPORT_NATIVE_MIN_BYTES = 0
-    native_pure._dxf_import_native_active = lambda value: True
-    native_pure.decode_dxf_packed = lambda value: (calls.append(len(value)) or packed)
-    try:
-        routed = ic.read_foreign(dxf, doc())
-    finally:
-        native_pure._dxf_import_native_active = real_active
-        native_pure.decode_dxf_packed = real_decode
-        native_pure._DXF_IMPORT_NATIVE_MIN_BYTES = real_min
-    direct_types = [base for _geom, base, _layer in direct.items] if direct else []
-    check(packed is not None and direct_types == ["Circle", "Arc", "Line", "Polyline"]
-          and direct.layers.get("Cut") == (255, 0, 0)
-          and direct.items[-1][0].IsClosed
-          and calls == [len(dxf_bytes)]
-          and [base for _geom, base, _layer in routed.items] == direct_types,
-          "DXF Import consumes validated packed entities directly with order, layers and closure")
-    lw_packed = native_pure.decode_dxf_packed(open(lw, "rb").read())
-    lw_direct = ic._dxf_from_packed(lw_packed, doc()) if lw_packed else None
-    check(lw_direct is not None and len(lw_direct.items) == 1
-          and any("bulge" in note and "TEXT" in note for note in lw_direct.notes),
-          "direct packed DXF Import preserves skipped and bulge reporting")
-    spline_packed = native_pure.decode_dxf_packed(open(modern_spline_dxf, "rb").read())
-    spline_direct = ic._dxf_from_packed(spline_packed, doc()) if spline_packed else None
-    packed_curve = spline_direct.items[0][0] if spline_direct and spline_direct.items else None
-    check(packed_curve is not None and packed_curve.IsValid and packed_curve.IsClosed
-          and packed_curve.Degree == 3 and len(packed_curve.Points) == 4
-          and list(packed_curve.Knots) == [0.0, 0.0, 0.0, 1.0, 1.0, 1.0]
-          and abs(packed_curve.Points[1].X - 25.4) < 1e-12
-          and spline_direct.layers.get("Cut") == (255, 0, 0)
-          and any("1 HATCH" in note for note in spline_direct.notes),
-          "direct packed DXF SPLINE materializes the same exact openNURBS curve")
+from narwhal3d import dxf_reader
+required_dxf = dxf_reader._native_dxf()
+real_dxf_read = dxf_reader.read_dxf
+calls = []
+before_dxf_calls = required_dxf._native_decode_dxf_calls
 
-    perf_dxf = os.path.join(TMP, "packed-perf.dxf")
-    perf_entities = [
-        {"type": "LINE", "p0": (float(i), 0.0, 0.0),
-         "p1": (float(i), 1.0, 0.0), "layer": "Cut"}
-        for i in range(5000)]
-    dxf_writer.write_dxf(perf_dxf, perf_entities, layers={"Cut": 1})
-    perf_data = open(perf_dxf, "rb").read()
-    perf_model = doc()
 
-    def _best_dxf(fn):
-        elapsed = float("inf")
-        for _ in range(3):
-            start = time.perf_counter()
-            fn()
-            elapsed = min(elapsed, time.perf_counter() - start)
-        return elapsed
+def counted_dxf_read(path):
+    calls.append(os.path.getsize(path))
+    return real_dxf_read(path)
 
-    def _expanded_dxf_import():
-        return ic._dxf_from_dict(native_pure.decode_dxf(perf_data), perf_model)
 
-    def _packed_dxf_import():
-        return ic._dxf_from_packed(native_pure.decode_dxf_packed(perf_data), perf_model)
-
-    expanded_time = _best_dxf(_expanded_dxf_import)
-    packed_time = _best_dxf(_packed_dxf_import)
-    ratio = packed_time / expanded_time
-    print("  DXF packed import expanded=%.5fs direct=%.5fs ratio=%.3f" %
-          (expanded_time, packed_time, ratio))
-    check(native_pure._DXF_IMPORT_NATIVE_MIN_BYTES
-          > native_pure._MAX_INTERCHANGE_INPUT_BYTES,
-          "direct packed DXF Import stays production-inactive until a 10% win is measured")
-    if prior_pure is None:
-        os.environ.pop("NARWHAL_PURE_CORE", None)
-    else:
-        os.environ["NARWHAL_PURE_CORE"] = prior_pure
-    native_pure._reset_for_tests()
+dxf_reader.read_dxf = counted_dxf_read
+try:
+    routed = ic.read_foreign(dxf, doc())
+finally:
+    dxf_reader.read_dxf = real_dxf_read
+routed_types = [base for _geom, base, _layer in routed.items]
+check(routed_types == ["Circle", "Arc", "Line", "Polyline"]
+      and routed.layers.get("Cut") == (255, 0, 0)
+      and routed.items[-1][0].IsClosed
+      and calls == [os.path.getsize(dxf)]
+      and required_dxf._native_decode_dxf_calls == before_dxf_calls + 1,
+      "DXF Import calls the live required reader exactly once, retaining entity order, colors and closure")
+lw_direct = ic.read_foreign(lw, doc())
+check(lw_direct is not None and len(lw_direct.items) == 1
+      and any("bulge" in note and "TEXT" in note for note in lw_direct.notes),
+      "required DXF Import preserves skipped and bulge reporting")
+spline_direct = ic.read_foreign(modern_spline_dxf, doc())
+required_curve = spline_direct.items[0][0] if spline_direct.items else None
+check(required_curve is not None and required_curve.IsValid and required_curve.IsClosed
+      and required_curve.Degree == 3 and len(required_curve.Points) == 4
+      and list(required_curve.Knots) == [0.0, 0.0, 0.0, 1.0, 1.0, 1.0]
+      and abs(required_curve.Points[1].X - 25.4) < 1e-12
+      and spline_direct.layers.get("Cut") == (255, 0, 0)
+      and any("1 HATCH" in note for note in spline_direct.notes),
+      "required DXF SPLINE materializes the same exact scaled openNURBS curve")
+check(not hasattr(ic, "_dxf_from_packed")
+      and "native_pure" not in ic._read_dxf.__code__.co_names
+      and required_dxf._native_decode_dxf_calls == before_dxf_calls + 3,
+      "DXF Import has no obsolete packed route and all three imports require native reader24")
 
 print("\n-- SVG (the file Inkscape wrote) --")
 INKSCAPE = """<?xml version="1.0" encoding="UTF-8" standalone="no"?>

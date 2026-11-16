@@ -54,10 +54,16 @@ class OBJRetirement(unittest.TestCase):
             '_svgvp_binding', '_svgup_signature', '_svgup_binding',
             '_native_pdf_calls', '_native_svg_vector_calls', '_native_svg_unit_calls',
             '_PDF_NATIVE_MIN_STROKES', '_SVG_VECTOR_NATIVE_MIN_STROKES',
+            '_decode_dxf_raw', 'decode_dxf', 'decode_dxf_packed', '_parse_dxf_packed',
+            '_dxf_import_native_active', '_DXF_IMPORT_NATIVE_MIN_BYTES',
+            '_MAX_DXF_LAYERS', '_MAX_DXF_ENTITIES', '_MAX_DXF_COORDS',
+            '_native_decode_dxf_calls', 'dxf_dsize', 'dxf_dec', '_dxf_dsize', '_dxf_dec',
         )
         for name in obsolete:
             self.assertNotIn(name, names)
             self.assertFalse(hasattr(self.shared, name), name)
+        for symbol in ('narwhal_pure_core_dxf_decode_size', 'narwhal_pure_core_dxf_decode'):
+            self.assertNotIn(symbol, source)
         packer = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name=='_pack_obj_unchecked')
         self.assertEqual(hashlib.sha256(ast.get_source_segment(source, packer).encode()).hexdigest(),
                          'f7f1796f50ff62be3ae00a154503e73b3c9bbc476f00b44e737212e2042993f5')
@@ -71,9 +77,9 @@ class OBJRetirement(unittest.TestCase):
         self.assertEqual(bytes(data[:n]),b'# Narwhal 3D\no sample\nv 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n')
         self.assertEqual(n, len(b'# Narwhal 3D\no sample\nv 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n'))
 
-    def test_five_slot_cache_no_obj_encoder_dependency_or_cross_format_disable(self):
-        operations = ('obj_decode_size','obj_decode','dxf_decode_size','dxf_decode')
-        for missing in ((), operations[:2], operations[2:]):
+    def test_three_slot_cache_no_retired_format_dependency(self):
+        operations = ('obj_decode_size','obj_decode')
+        for missing in ((), operations):
             functions = {'narwhal_pure_core_abi_version':Mock(return_value=1)}
             functions.update({'narwhal_pure_core_'+name:Mock() for name in operations if name not in missing})
             self.shared._reset_for_tests()
@@ -81,14 +87,14 @@ class OBJRetirement(unittest.TestCase):
                     patch.object(self.shared.ctypes,'CDLL',return_value=types.SimpleNamespace(**functions)) as loader:
                 binding = self.shared._binding()
                 self.assertIsNotNone(binding)
-                self.assertEqual(len(binding),5)
+                self.assertEqual(len(binding),3)
                 for i,name in enumerate(operations):
                     self.assertIs(binding[i],functions.get('narwhal_pure_core_'+name))
                 self.assertIs(self.shared._binding(),binding)
                 self.assertEqual(loader.call_count,1)
                 self.shared._reset_for_tests()
                 self.assertIsNone(self.shared._native_binding)
-                self.assertEqual(len(self.shared._binding()),5)
+                self.assertEqual(len(self.shared._binding()),3)
                 self.assertEqual(loader.call_count,2)
                 with patch.dict(os.environ,{'NARWHAL_PURE_CORE':str(ROOT/'narwhal3d/native_pure.py')}):
                     self.assertEqual(self.shared._binding()[-1],ROOT/'narwhal3d/native_pure.py')
@@ -99,7 +105,7 @@ class OBJRetirement(unittest.TestCase):
             self.assertIsNone(self.shared._binding())
             self.assertIn('loader refused',self.shared.backend_status())
 
-    def test_live_obj_and_dxf_decoders_keep_results_and_counters(self):
+    def test_live_obj_decoder_keeps_results_and_counter(self):
         source = b'o sample\nv 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n'
         before = self.shared._native_decode_obj_calls
         self.assertEqual(self.shared.decode_obj(source,'probe'),
@@ -107,14 +113,7 @@ class OBJRetirement(unittest.TestCase):
         self.assertEqual(self.shared._native_decode_obj_calls,before+1)
         self.assertIsNone(self.shared.decode_obj(source.replace(b'f 1 2 3',b'f 1 2 9'),'probe'))
         self.assertEqual(self.shared._native_decode_obj_calls,before+1)
-        dxf = b'0\nSECTION\n2\nENTITIES\n0\nLINE\n8\n0\n10\n0\n20\n0\n30\n0\n11\n1\n21\n2\n31\n0\n0\nENDSEC\n0\nEOF\n'
-        before = self.shared._native_decode_dxf_calls
-        decoded = self.shared.decode_dxf(dxf)
-        self.assertEqual(decoded,{'entities':[{'type':'LINE','p0':(0.,0.,0.),'p1':(1.,2.,0.),'layer':'0','color':7}],
-            'layers':{},'layer_true_colors':{},'insunits':None,'skipped':{}})
-        self.assertEqual(self.shared._native_decode_dxf_calls,before+1)
-        self.assertIsNone(self.shared.decode_dxf(b'invalid'))
-        self.assertEqual(self.shared._native_decode_dxf_calls,before+1)
+
 
 
 class AdmissionSource(unittest.TestCase):
@@ -198,12 +197,11 @@ class GuardMutations(unittest.TestCase):
             ('if _signature == signature:', 'if False:'),
             ('version = library.narwhal_pure_core_abi_version',
              'unused_encoder = library.narwhal_pure_core_obj_encode\n                version = library.narwhal_pure_core_abi_version'),
-            ('obj_dsize, obj_dec,', 'obj_dec, obj_dsize,'),
-            ('dxf_dsize, dxf_dec, path)', 'dxf_dec, dxf_dsize, path)'),
+            ('obj_dsize, obj_dec', 'obj_dec, obj_dsize'),
             ('version = library.narwhal_pure_core_abi_version',
              'unused_encoder = library.narwhal_pure_core_dxf_encode\n                version = library.narwhal_pure_core_abi_version'),
         )
-        method = 'test_five_slot_cache_no_obj_encoder_dependency_or_cross_format_disable'
+        method = 'test_three_slot_cache_no_retired_format_dependency'
         for old,new in cases:
             self.assertIn(old,original)
             namespace = dict(vars(shared))

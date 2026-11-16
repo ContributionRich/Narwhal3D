@@ -18,7 +18,7 @@ only routes that win end-to-end after packing and conversion; slower direct APIs
 available for parity tests and future ABI optimization, never as user-facing regressions.
 
 STL codecs and OBJ/DXF/vector encoding use separate required adapters.
-This module retains optional OBJ/DXF decoding; missing exports affect only
+This module retains optional OBJ decoding; missing exports affect only
 that format and operation.
 """
 from __future__ import annotations
@@ -44,7 +44,6 @@ _signature: str | None = None
 _native_binding: Any = None
 _status = "not checked"
 _native_decode_obj_calls = 0
-_native_decode_dxf_calls = 0
 
 # Adapter-side resource ceilings. They are intentionally below address-space
 # limits: interchange files above 512 MiB and native outputs above 512 MiB use
@@ -60,24 +59,14 @@ _MAX_OBJ_MESHES = 1_000_000
 _MAX_OBJ_VERTICES = 5_000_000
 _MAX_OBJ_FACES = 5_000_000
 _MAX_OBJ_FACE_INDICES = 20_000_000
-_MAX_DXF_LAYERS = 1_000_000
-_MAX_DXF_ENTITIES = 5_000_000
-_MAX_DXF_COORDS = 30_000_000
 _MAX_NAME_BYTES = 64 * 1024 * 1024
 _OBJ_IMPORT_NATIVE_MIN_BYTES = _MAX_INTERCHANGE_INPUT_BYTES + 1
-_DXF_IMPORT_NATIVE_MIN_BYTES = _MAX_INTERCHANGE_INPUT_BYTES + 1
 
 
 def _obj_import_native_active(data, *, force=False):
     """Whether Import may consume validated OBJ buffers without tuple expansion."""
     return (isinstance(data, bytes)
             and (force or len(data) >= _OBJ_IMPORT_NATIVE_MIN_BYTES))
-
-
-def _dxf_import_native_active(data, *, force=False):
-    """Whether Import may consume validated DXF buffers without entity dicts."""
-    return (isinstance(data, bytes)
-            and (force or len(data) >= _DXF_IMPORT_NATIVE_MIN_BYTES))
 
 
 def _size_is_bounded(size: int, derived_limit: int,
@@ -331,11 +320,11 @@ _PACKAGED_LIBRARY = Path(__file__).resolve().parent / "native" / _library_name()
 
 
 def _binding():
-    """Return optional OBJ/DXF decode handles and path, or ``None``.
+    """Return optional OBJ decode handles and path, or ``None``.
 
-    The five slots are ``(obj_decode_size, obj_decode, dxf_decode_size,
-    dxf_decode, path)``. Missing exports affect only their
-    format/operation. Retired STL/OBJ/DXF/vector encoders are not prerequisites.
+    The three slots are ``(obj_decode_size, obj_decode, path)``.
+    Missing exports affect only that format/operation. Retired STL/OBJ/DXF/vector
+    encoders are not prerequisites.
     """
     global _signature, _native_binding, _status
     explicit = os.environ.get(_ENV_PATH)
@@ -364,9 +353,8 @@ def _binding():
             except (AttributeError, OSError) as exc:
                 _status = f"native pure-core load failed: {exc}"
                 continue
-            # OBJ and DXF exports are optional independently of each other.
+            # OBJ exports are optional.
             obj_dsize = obj_dec = None
-            # OBJ decoding stays optional independently of the DXF routes.
             try:
                 obj_dsize = library.narwhal_pure_core_obj_decode_size
                 obj_dsize.argtypes = [_ByteP, ctypes.c_size_t]
@@ -376,27 +364,14 @@ def _binding():
                 obj_dec.restype = ctypes.c_int32
             except (AttributeError, OSError):
                 pass  # OBJ decode exports absent: decode falls back
-            # Missing DXF decoding must not disable OBJ decoding.
-            dxf_dsize = dxf_dec = None
-            try:
-                dxf_dsize = library.narwhal_pure_core_dxf_decode_size
-                dxf_dsize.argtypes = [_ByteP, ctypes.c_size_t]
-                dxf_dsize.restype = ctypes.c_int64
-                dxf_dec = library.narwhal_pure_core_dxf_decode
-                dxf_dec.argtypes = [_ByteP, ctypes.c_size_t, _ByteP, ctypes.c_size_t]
-                dxf_dec.restype = ctypes.c_int32
-            except (AttributeError, OSError):
-                pass  # DXF decode exports absent: DXF decode falls back
-            _native_binding = (
-                obj_dsize, obj_dec,
-                dxf_dsize, dxf_dec, path)
+            _native_binding = (obj_dsize, obj_dec, path)
             _status = f"ready: {path}"
             return _native_binding
         return None
 
 
 def available() -> bool:
-    """Whether an ABI-compatible shared OBJ/DXF library is available."""
+    """Whether an ABI-compatible shared OBJ decode library is available."""
     return _binding() is not None
 
 
@@ -2059,7 +2034,7 @@ def _decode_obj_raw(data: bytes) -> Optional[bytes]:
     binding = _binding()
     if binding is None:
         return None
-    (dec_size_fn, dec_fn, _dxf_dsize, _dxf_dec, _path) = binding
+    (dec_size_fn, dec_fn, _path) = binding
     if dec_size_fn is None or dec_fn is None:
         return None
     byte_input = _byte_input(data)
@@ -2125,268 +2100,6 @@ def decode_obj_packed(data: bytes, file_base: str = None) -> Optional[tuple]:
         return None
     _native_decode_obj_calls += 1
     return packed
-
-
-def _decode_dxf_raw(data: bytes) -> Optional[bytes]:
-    """Run the checked native DXF decoder and return its packed bytes."""
-    binding = _binding()
-    if binding is None:
-        return None
-    (_ods, _od, dec_size_fn, dec_fn, _path) = binding
-    if dec_size_fn is None or dec_fn is None:
-        return None
-    byte_input = _byte_input(data)
-    if byte_input is None:
-        return None
-    _owned, dbuf, n = byte_input
-    try:
-        size = dec_size_fn(dbuf, n)
-        if not _size_is_bounded(size, 1024 * 1024 + 4 * n):
-            return None
-        cbuf = (ctypes.c_ubyte * size)()
-        if dec_fn(dbuf, n, cbuf, size) != 0:
-            return None
-        return bytes(cbuf)
-    except Exception:  # noqa: BLE001 -- any failure degrades to fallback
-        return None
-
-
-def decode_dxf(data: bytes) -> Optional[dict]:
-    """Decode a complete ASCII R12 DXF file's bytes into the reader's dict.
-
-    The return is struct-identical to ``dxf_reader.read_dxf`` for the same
-    file::
-
-        {"entities": [...], "layers": {name: aci},
-         "insunits": int or None, "skipped": {kind: count}}
-
-    ``None`` means "use the unchanged Python reader" -- the library is
-    unavailable, it predates the DXF decode exports, the ABI is wrong, the
-    file is rejected (a binary sentinel, a non-``AC1009`` ``$ACADVER``, a
-    truncated line count, or an unparseable value), or the packed output is
-    malformed. A non-``None`` return is the exact dict the Python reader
-    would produce for the same file.
-
-    The work is split into the phases the task reports separately: the Rust
-    size query (the exact packed length, or an error), the Rust decode (into
-    the caller-owned buffer), the output copy to ``bytes``, and the parse of
-    the self-describing packed buffer into the reader's dict.
-    """
-    global _native_decode_dxf_calls
-    raw = _decode_dxf_raw(data)
-    if raw is None:
-        return None
-    try:
-        out = _parse_dxf_packed(raw)
-    except Exception:  # noqa: BLE001 -- malformed output degrades to fallback
-        return None
-    # A fully successful native decode: record the route activation so a
-    # production caller that silently forces the Python path is detectable.
-    _native_decode_dxf_calls += 1
-    return out
-
-
-def decode_dxf_packed(data: bytes) -> Optional[tuple]:
-    """Decode DXF for Import without rebuilding generic entity dictionaries."""
-    global _native_decode_dxf_calls
-    raw = _decode_dxf_raw(data)
-    if raw is None:
-        return None
-    try:
-        packed = _parse_dxf_packed(raw, flat=True)
-    except Exception:  # noqa: BLE001 -- malformed output degrades to fallback
-        return None
-    _native_decode_dxf_calls += 1
-    return packed
-
-
-def _parse_dxf_packed(raw: bytes, *, flat=False):
-    """Parse and fully validate one native DXF packed result.
-
-    Every count is independently nonnegative and bounded, entity coordinate
-    arity is exact, closed fields are literal 0/1, and the final offset must
-    consume the buffer exactly. Any inconsistency declines to Python.
-    """
-    if not isinstance(raw, bytes) or len(raw) < 16 or len(raw) > _MAX_NATIVE_OUTPUT_BYTES:
-        raise ValueError("DXF packed buffer has an invalid length")
-    magic, version, insunits = struct.unpack_from("<IIq", raw, 0)
-    if magic != 0x44584631 or version != 1:
-        raise ValueError("bad DXF magic/version: %08x/%d" % (magic, version))
-    o = 16
-
-    def _read_i64(count: int) -> tuple:
-        nonlocal o
-        if count < 0 or count > (len(raw) - o) // 8:
-            raise ValueError("DXF packed buffer overruns (i64 run)")
-        vals = struct.unpack_from("<%dq" % count, raw, o) if count else ()
-        o += count * 8
-        return vals
-
-    def _read_f64(count: int) -> tuple:
-        nonlocal o
-        if count < 0 or count > (len(raw) - o) // 8:
-            raise ValueError("DXF packed buffer overruns (f64 run)")
-        vals = struct.unpack_from("<%dd" % count, raw, o) if count else ()
-        o += count * 8
-        return vals
-
-    def _read_run(lengths) -> list:
-        nonlocal o
-        if any(length < 0 for length in lengths):
-            raise ValueError("DXF packed buffer has a negative name length")
-        total = sum(lengths)
-        if total > len(raw) - o:
-            raise ValueError("DXF packed buffer overruns (name run)")
-        out = []
-        for length in lengths:
-            out.append(raw[o:o + length])
-            o += length
-        return out
-
-    (layer_count,) = _read_i64(1)
-    if not 0 <= layer_count <= _MAX_DXF_LAYERS:
-        raise ValueError("DXF packed buffer has an invalid layer count")
-    layer_name_lens = _read_i64(layer_count)
-    layer_names = _read_run(layer_name_lens)
-    packed_layer_colors = _read_i64(layer_count)
-
-    (entity_count,) = _read_i64(1)
-    if not 0 <= entity_count <= _MAX_DXF_ENTITIES:
-        raise ValueError("DXF packed buffer has an invalid entity count")
-    entity_types = _read_i64(entity_count)
-    ent_name_lens = _read_i64(entity_count)
-    ent_layer_names = _read_run(ent_name_lens)
-    packed_entity_colors = _read_i64(entity_count)
-    entity_closed = _read_i64(entity_count)
-    entity_coord_counts = _read_i64(entity_count)
-    if any(count < 0 for count in entity_coord_counts):
-        raise ValueError("DXF packed buffer has a negative coordinate count")
-    total_coords = sum(entity_coord_counts)
-    if total_coords > _MAX_DXF_COORDS:
-        raise ValueError("DXF packed buffer has too many coordinates")
-    for typ, closed, count in zip(entity_types, entity_closed,
-                                  entity_coord_counts):
-        if typ not in (0, 1, 2, 3, 4, 5):
-            raise ValueError("DXF packed buffer has unknown type %d" % typ)
-        if closed not in (0, 1):
-            raise ValueError("DXF packed buffer has a non-boolean closed field")
-        if typ == 0 and (count != 6 or closed != 0):
-            raise ValueError("DXF LINE packed arity/closed field is invalid")
-        if typ == 1 and (count != 4 or closed != 0):
-            raise ValueError("DXF CIRCLE packed arity/closed field is invalid")
-        if typ == 2 and (count != 6 or closed != 0):
-            raise ValueError("DXF ARC packed arity/closed field is invalid")
-        if typ in (3, 4) and count % 3:
-            raise ValueError("DXF polyline coordinate count is not divisible by 3")
-        if typ == 5 and count < 4:
-            raise ValueError("DXF SPLINE packed header is missing")
-    coords = _read_f64(total_coords)
-    coord_offset = 0
-    for typ, count in zip(entity_types, entity_coord_counts):
-        if typ == 5:
-            header = coords[coord_offset:coord_offset + 4]
-            values = tuple(int(value) for value in header)
-            if any(float(integer) != value for integer, value in zip(values, header)):
-                raise ValueError("DXF SPLINE packed counts are not integers")
-            degree, knot_count, point_count, weight_count = values
-            expected = 4 + knot_count + point_count * 3 + weight_count
-            segment = coords[coord_offset:coord_offset + count]
-            knot_start = 4
-            weight_start = knot_start + knot_count + point_count * 3
-            knots = segment[knot_start:knot_start + knot_count]
-            weights = segment[weight_start:]
-            if (not 1 <= degree <= 11 or point_count <= degree
-                    or knot_count != point_count + degree + 1
-                    or weight_count not in (0, point_count) or count != expected
-                    or any(not math.isfinite(value) for value in segment[4:])
-                    or any(knots[index] > knots[index + 1]
-                           for index in range(len(knots) - 1))
-                    or any(weight <= 0 for weight in weights)):
-                raise ValueError("DXF SPLINE packed arity is invalid")
-        coord_offset += count
-
-    (skipped_count,) = _read_i64(1)
-    if not 0 <= skipped_count <= _MAX_DXF_ENTITIES:
-        raise ValueError("DXF packed buffer has an invalid skipped count")
-    skipped_lens = _read_i64(skipped_count)
-    skipped_names = _read_run(skipped_lens)
-    skipped_counts = _read_i64(skipped_count)
-    if any(count < 0 for count in skipped_counts):
-        raise ValueError("DXF packed buffer has a negative skipped count")
-    if o != len(raw):
-        raise ValueError("DXF packed buffer has %d trailing bytes" % (len(raw) - o))
-
-    def _color(value):
-        if 1 << 24 <= value <= (1 << 25) - 1:
-            return 7, value - (1 << 24)
-        return value, None
-
-    decoded_layers = tuple(name.decode("latin-1") for name in layer_names)
-    decoded_entity_layers = tuple(name.decode("latin-1") for name in ent_layer_names)
-    layer_colors_and_true = tuple(_color(value) for value in packed_layer_colors)
-    entity_colors_and_true = tuple(_color(value) for value in packed_entity_colors)
-    layer_colors = tuple(value[0] for value in layer_colors_and_true)
-    layer_true_colors = {decoded_layers[i]: value[1]
-                         for i, value in enumerate(layer_colors_and_true)
-                         if value[1] is not None}
-    entity_colors = tuple(value[0] for value in entity_colors_and_true)
-    entity_true_colors = tuple(value[1] for value in entity_colors_and_true)
-    layers = {decoded_layers[i]: layer_colors[i] for i in range(layer_count)}
-    skipped = {skipped_names[i].decode("latin-1"): skipped_counts[i]
-               for i in range(skipped_count)}
-    if flat:
-        return (tuple(entity_types), decoded_entity_layers, entity_colors,
-                entity_true_colors, tuple(entity_closed), tuple(entity_coord_counts),
-                tuple(coords), layers, layer_true_colors,
-                (None if insunits == -1 else insunits), skipped)
-
-    entities = []
-    c_off = 0
-    for i in range(entity_count):
-        typ = entity_types[i]
-        count = entity_coord_counts[i]
-        c = coords[c_off:c_off + count]
-        c_off += count
-        layer = decoded_entity_layers[i]
-        color = entity_colors[i]
-        true_color = entity_true_colors[i]
-        closed = bool(entity_closed[i])
-        if typ == 0:
-            ent = {"type": "LINE", "p0": (c[0], c[1], c[2]),
-                   "p1": (c[3], c[4], c[5]), "layer": layer, "color": color}
-        elif typ == 1:
-            ent = {"type": "CIRCLE", "center": (c[0], c[1], c[2]),
-                   "radius": c[3], "layer": layer, "color": color}
-        elif typ == 2:
-            ent = {"type": "ARC", "center": (c[0], c[1], c[2]),
-                   "radius": c[3], "start_deg": c[4], "end_deg": c[5],
-                   "layer": layer, "color": color}
-        elif typ == 5:
-            degree, knot_count, point_count, weight_count = map(int, c[:4])
-            pos = 4
-            knots = list(c[pos:pos + knot_count])
-            pos += knot_count
-            points = [tuple(c[at:at + 3])
-                      for at in range(pos, pos + point_count * 3, 3)]
-            pos += point_count * 3
-            ent = {"type": "SPLINE", "degree": degree, "knots": knots,
-                   "points": points, "weights": list(c[pos:pos + weight_count]),
-                   "closed": closed, "layer": layer, "color": color}
-        else:
-            points = [(c[k], c[k + 1], c[k + 2]) for k in range(0, count, 3)]
-            ent = {"type": ("POLYLINE" if typ == 3 else "LWPOLYLINE"),
-                   "points": points, "closed": closed,
-                   "layer": layer, "color": color}
-        if true_color is not None:
-            ent["true_color"] = true_color
-        entities.append(ent)
-    if c_off != len(coords):
-        raise ValueError("DXF packed coordinate offsets do not match")
-
-    return {"entities": entities, "layers": layers,
-            "layer_true_colors": layer_true_colors,
-            "insunits": (None if insunits == -1 else insunits),
-            "skipped": skipped}
 
 
 def _parse_obj_packed(raw: bytes, file_base: str = None, *, flat=False) -> tuple:
@@ -2500,7 +2213,6 @@ def _reset_for_tests() -> None:
     """Forget discovery state so tests can re-point ``NARWHAL_PURE_CORE``."""
     global _signature, _native_binding, _status
     global _native_decode_obj_calls
-    global _native_decode_dxf_calls
     global _owned_parse_signature, _owned_parse_binding, _native_numparse_calls
     global _c_signature, _c_binding, _native_calc_calls
     global _b_signature, _b_binding, _native_bearing_calls
@@ -2519,7 +2231,6 @@ def _reset_for_tests() -> None:
         _native_binding = None
         _status = "not checked"
         _native_decode_obj_calls = 0
-        _native_decode_dxf_calls = 0
         _gs_signature = None
         _gs_binding = None
         _native_gridsnap_calls = 0

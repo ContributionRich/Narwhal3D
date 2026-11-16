@@ -217,87 +217,8 @@ def _dxf_spline(degree, knots, points, weights, scale):
     return curve
 
 
-def _dxf_from_packed(data, model):
-    """Build exact imported curves directly from validated native DXF arrays."""
-    from . import bridge
-
-    (types, entity_layers, _entity_colors, entity_true_colors, closed,
-     coord_counts, coords, layers, layer_true_colors, insunits, skipped) = data
-    file_unit = DXF_UNITS.get(insunits or 0)
-    k = _scale(file_unit, model) if file_unit else 1.0
-    out = Imported()
-    out.layers.update(_dxf_layer_colors(
-        layers, layer_true_colors, entity_layers, entity_true_colors))
-
-    offset = 0
-    for index, typ in enumerate(types):
-        count = coord_counts[index]
-        end = offset + count
-        layer = _dxf_entity_layer(
-            entity_layers[index], entity_true_colors[index], out.layers)
-        if typ == 0:
-            p0 = (coords[offset] * k, coords[offset + 1] * k,
-                  coords[offset + 2] * k)
-            p1 = (coords[offset + 3] * k, coords[offset + 4] * k,
-                  coords[offset + 5] * k)
-            out.items.append((bridge.make_line(p0, p1), "Line", layer))
-        elif typ == 1:
-            center = (coords[offset] * k, coords[offset + 1] * k,
-                      coords[offset + 2] * k)
-            out.items.append((bridge.make_circle(center, coords[offset + 3] * k),
-                              "Circle", layer))
-        elif typ == 2:
-            center = (coords[offset] * k, coords[offset + 1] * k,
-                      coords[offset + 2] * k)
-            start, middle, finish = _arc_from(
-                center, coords[offset + 3] * k, coords[offset + 4], coords[offset + 5])
-            out.items.append((bridge.make_arc(start, middle, finish), "Arc", layer))
-        elif typ == 5:
-            degree, knot_count, point_count, weight_count = (
-                int(coords[offset + slot]) for slot in range(4))
-            pos = offset + 4
-            knots = coords[pos:pos + knot_count]
-            pos += knot_count
-            points = [coords[at:at + 3]
-                      for at in range(pos, pos + point_count * 3, 3)]
-            pos += point_count * 3
-            weights = coords[pos:pos + weight_count]
-            out.items.append((_dxf_spline(degree, knots, points, weights, k),
-                              "Curve", layer))
-        else:
-            points = [r3.Point3d(coords[pos] * k, coords[pos + 1] * k,
-                                 coords[pos + 2] * k)
-                      for pos in range(offset, end, 3)]
-            if len(points) >= 2:
-                if closed[index] and points[0] != points[-1]:
-                    points.append(points[0])
-                out.items.append((r3.PolylineCurve(points), "Polyline", layer))
-        offset = end
-    if file_unit and k != 1.0:
-        out.notes.append(f"file units {file_unit} -> {_model_unit(model)} (x{k:g})")
-    elif not file_unit:
-        out.notes.append("the file declares no units; taken as model units")
-    if skipped:
-        parts = ", ".join(f"{n} {kind}" for kind, n in sorted(skipped.items()))
-        out.notes.append(f"NOT imported: {parts}" + (
-            " (polyline bulges were dropped: those segments came in STRAIGHT)"
-            if skipped.get("bulge") else ""))
-    return out
-
-
 def _read_dxf(path, model):
-    from . import bridge, dxf_reader, native_pure
-
-    try:
-        if os.path.getsize(path) >= native_pure._DXF_IMPORT_NATIVE_MIN_BYTES:
-            with open(path, "rb") as stream:
-                raw = stream.read()
-            if native_pure._dxf_import_native_active(raw):
-                packed = native_pure.decode_dxf_packed(raw)
-                if packed is not None:
-                    return _dxf_from_packed(packed, model)
-    except (OSError, ValueError, OverflowError):
-        pass
+    from . import dxf_reader
 
     data = dxf_reader.read_dxf(path)
     return _dxf_from_dict(data, model)
