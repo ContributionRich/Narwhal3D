@@ -864,6 +864,22 @@ def frozen_dxf23_scan(path: str, blob: bytes) -> bytes:
                        "size": size, "sha256": digest}, sort_keys=True).encode()
 
 
+FROZEN_PREVIEW24_FILES = {
+    'native/pure_core/tests/data/preview24_linux.tsv': (1661185, 'ce39c9964a96ab57b1dc42ef04bd697d2e38776cdc7abce2e6271cfb9a7b9049'),
+    'native/pure_core/tests/data/preview24_windows_msvc.tsv': (1661185, 'ff1fffae85ec59d0016b61eedb97cc316e3d279b4da90155195fb12815cdddbe'),
+}
+
+
+def frozen_preview24_scan(path: str, blob: bytes) -> bytes:
+    if path not in FROZEN_PREVIEW24_FILES:
+        return blob
+    size, digest = FROZEN_PREVIEW24_FILES[path]
+    if len(blob) != size or hashlib.sha256(blob).hexdigest() != digest:
+        raise ValueError("preview frozen capture size/provenance hash mismatch")
+    return json.dumps({"kind": "independent original preview float-bit data",
+                       "size": size, "sha256": digest}, sort_keys=True).encode()
+
+
 FROZEN_JSON_FILES = {
     "spike/fixtures/numparse_golden.json": {
         "origin": "50267dd6d4504b14052d1ab7e54675f3c8750637",
@@ -1083,7 +1099,7 @@ def audit_entries(entries: dict[str, tuple[str, bytes]], require_manifest: bool 
         if b"\0" in blob and path not in FROZEN_DXF23_FILES:
             continue
         try:
-            scan = frozen_data_scan(path, frozen_json_scan(path, frozen_dxf23_scan(path, blob)))
+            scan = frozen_data_scan(path, frozen_json_scan(path, frozen_dxf23_scan(path, frozen_preview24_scan(path, blob))))
         except (SyntaxError, UnicodeError, ValueError) as exc:
             problems.append(f"{path}: invalid frozen DATA fixture: {exc}")
             scan = blob
@@ -1116,7 +1132,7 @@ def audit_entries(entries: dict[str, tuple[str, bytes]], require_manifest: bool 
                     problems.append(
                         f"{path}: contains forbidden legacy product marker {match.group(0)!r}")
         for marker in SECRET_MARKERS:
-            if marker.lower() in (blob.lower() if path in FROZEN_DXF23_FILES else folded):
+            if marker.lower() in (blob.lower() if path in FROZEN_DXF23_FILES or path in FROZEN_PREVIEW24_FILES else folded):
                 problems.append(f"{path}: contains possible secret marker {marker!r}")
     return problems
 

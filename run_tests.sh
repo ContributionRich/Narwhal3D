@@ -448,6 +448,7 @@ PURE_SUITES=(
     spike/test_workspace_overlay.py
     spike/test_import_dialog.py
     spike/test_dxf_reader.py
+    spike/test_dxf_reader24_boundaries.py
     spike/test_dxf_writer.py
     spike/test_dxf_writer_owned.py
     spike/test_native_dxf.py
@@ -487,6 +488,7 @@ PURE_SUITES=(
     spike/test_pure_core_curve_hits_gate.py
     spike/test_native_coil_preview.py
     spike/test_preview_curve_native.py
+    spike/test_preview24_boundaries.py
     spike/test_preview_layer_color.py
     spike/test_native_tessellate.py
     spike/test_native_unit_table.py

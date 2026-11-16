@@ -1,93 +1,94 @@
-"""Optional Rust sampler for the Curve command's control-point preview.
-
-Display only: the samples are a preview polyline, never document geometry.
-`bridge.make_polyline` stays the only producer of committed curves.
-"""
-from __future__ import annotations
-
+"""Required Rust control-curve preview; Python owns host marshalling only."""
 import array
-import ctypes
-import math
+import ctypes as C
 import os
 from pathlib import Path
 import sys
 import threading
+from .native_preview import NativePreviewError, PreviewInputError, _point
 
-_ENV = "NARWHAL_PURE_CORE"
 _lock = threading.Lock()
-_signature = None
-_binding = None
+_cache = None
 _native_calls = 0
 
 
-def _library_name():
-    if sys.platform == "win32":
-        return "narwhal_pure_core.dll"
-    if sys.platform == "darwin":
-        return "libnarwhal_pure_core.dylib"
-    return "libnarwhal_pure_core.so"
-
-
 def _preview_binding():
-    global _signature, _binding
-    explicit = os.environ.get(_ENV)
-    signature = explicit or "<packaged>"
-    if _signature == signature:
-        return _binding
+    global _cache
+    key = os.environ.get("NARWHAL_PURE_CORE") or "<packaged>"
+    if _cache is not None and _cache[0] == key:
+        return _cache[1]
+    name = ("narwhal_pure_core.dll" if sys.platform == "win32" else
+            "libnarwhal_pure_core.dylib" if sys.platform == "darwin" else "libnarwhal_pure_core.so")
+    path = Path(key).expanduser() if key != "<packaged>" else Path(__file__).resolve().parent / "native" / name
     with _lock:
-        if _signature == signature:
-            return _binding
-        _signature, _binding = signature, None
-        packaged = Path(__file__).resolve().parent / "native" / _library_name()
-        candidates = (Path(explicit).expanduser(),) if explicit else (packaged,)
-        for path in candidates:
-            if not path.is_file():
-                continue
-            try:
-                fn = ctypes.CDLL(str(path)).narwhal_pure_core_control_point_curve_preview
-            except (AttributeError, OSError):
-                continue
-            fn.argtypes = [ctypes.POINTER(ctypes.c_double), ctypes.c_size_t,
-                           ctypes.c_uint32, ctypes.c_uint32,
-                           ctypes.POINTER(ctypes.c_double), ctypes.c_size_t,
-                           ctypes.POINTER(ctypes.c_uint64)]
-            fn.restype = ctypes.c_int32
-            _binding = fn
-            return fn
-        return None
+        if _cache is not None and _cache[0] == key:
+            return _cache[1]
+        try:
+            lib = C.CDLL(str(path))
+            version = lib.narwhal_pure_core_abi_version
+            version.argtypes, version.restype = [], C.c_uint32
+            if version() != 1:
+                raise NativePreviewError("required control preview ABI version mismatch")
+            fn = lib.narwhal_pure_core_control_point_curve_preview
+            fn.argtypes = [C.POINTER(C.c_double), C.c_size_t, C.c_uint32, C.c_uint32,
+                           C.POINTER(C.c_double), C.c_size_t, C.POINTER(C.c_uint64)]
+            fn.restype = C.c_int32
+        except (OSError, AttributeError) as exc:
+            raise NativePreviewError(f"required control preview library missing or stale: {path}: {exc}") from exc
+        _cache = key, fn
+        return fn
 
 
 def available():
-    return _preview_binding() is not None
+    try:
+        _preview_binding()
+        return True
+    except NativePreviewError:
+        return False
 
 
-def control_point_curve_polyline(control, max_degree, per_span):
-    """The samples `preview.control_point_curve_polyline` returns, or ``None`` for fallback.
+def control_point_curve_polyline(control, max_degree=3, per_span=12):
+    """Native sampling; negative degree/span retain polygon/minimum-step behavior.
 
-    Only for degree two or more: the caller keeps the control-polygon case.
+    OURS safety: at most 100000 controls, per-span at most 1024, and native
+    output/work bounds. Empty/single picks draw nothing, as before.
     """
     global _native_calls
-    fn = _preview_binding()
-    if fn is None:
-        return None
+    pts = []
+    for p in control:
+        if len(pts) >= 100000:
+            raise PreviewInputError("control preview exceeds 100000 points")
+        try:
+            point = tuple(p)
+        except TypeError as exc:
+            raise PreviewInputError("control point must contain three real coordinates") from exc
+        _point(point)  # Validate shape/conversion while retaining polygon pick types.
+        pts.append(point)
+    n = len(pts)
+    if n < 2:
+        return []
     try:
-        n = len(control)
-        degree = min(int(max_degree), n - 1)
-        if degree < 2 or int(per_span) < 0:
-            return None
-        count = max(1, int(per_span) * (n - degree)) + 1
-        values = array.array("d", [float(v) for point in control for v in point])
-        if len(values) != 3 * n:
-            return None
-        out = array.array("d", bytes(8 * 3 * count))
-        used = ctypes.c_uint64()
-        code = fn((ctypes.c_double * len(values)).from_buffer(values), n,
-                  int(max_degree), int(per_span),
-                  (ctypes.c_double * len(out)).from_buffer(out), len(out),
-                  ctypes.byref(used))
-    except Exception:  # noqa: BLE001 -- the Python sampler remains the fallback
-        return None
-    if code != 0 or used.value != len(out) or not all(map(math.isfinite, out)):
-        return None
+        degree = max(0, min(int(max_degree), n - 1))
+        span = max(0, int(per_span)) if degree > 1 else 0
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise PreviewInputError("control degree/per_span must convert to bounded integers") from exc
+    if span > 1024:
+        raise PreviewInputError("control preview per_span exceeds 1024")
+    fn = _preview_binding()
+    values = array.array("d", (v for p in pts for v in p))
+    data = (C.c_double * len(values)).from_buffer(values)
+    used = C.c_uint64()
+    code = fn(data, n, degree, span, None, 0, C.byref(used))
+    if code == -2:
+        raise PreviewInputError("native control preview refused nonfinite or excessive input")
+    if code != -3 or not 0 < used.value <= 3000000 or used.value % 3:
+        raise NativePreviewError(f"native control preview size protocol failure: {code}")
+    count = used.value
+    out = array.array("d", bytes(count * 8))
+    code = fn(data, n, degree, span, (C.c_double * count).from_buffer(out), count, C.byref(used))
+    if code == -2:
+        raise PreviewInputError("native control preview produced nonfinite output")
+    if code != 0 or used.value != count:
+        raise NativePreviewError(f"native control preview output protocol failure: {code}")
     _native_calls += 1
-    return list(zip(out[0::3], out[1::3], out[2::3]))
+    return pts if degree <= 1 else list(zip(out[0::3], out[1::3], out[2::3]))

@@ -1,0 +1,36 @@
+{
+  "python": "3.13.13 (main, May  8 2026, 12:37:03) [MSC v.1944 64 bit (AMD64)]",
+  "platform": "Windows-11-10.0.26200-SP0",
+  "python_sha256": "d6fc04d5348fdcf121d34ea3fc36221c779de9771949b68863002f7a2dc892d5",
+  "sources": {
+    "capture_preview.py": "c93392a64281aa4516073bb75344fe95dd819bbe972e61dc532d282170d2e3c6",
+    "preview.py": "2a104828ad9207367c21cff6e3e77b374f5eeca45070ae2c5e74b148d54a1296",
+    "tessellate.py": "d5b19449f846d5d4c9d11f4da9f1ee70497887d269162a70ddeb8681c3546501"
+  },
+  "independent_native_hooks": "preview imported as standalone original, no package native hook; earclip _native_ear_clip forced None",
+  "ucrtbase.dll": {
+    "path": "C:\\WINDOWS\\System32\\ucrtbase.dll",
+    "sha256": "a202e993ed7311aee09e980bfc24fba4024a097ae222f30ba5cee78a35d36f51"
+  },
+  "msvcrt.dll": {
+    "path": "C:\\WINDOWS\\System32\\msvcrt.dll",
+    "sha256": "d269517185ea1dfbb8b556fad07ebc28a8e6d1029d155dcc386dd9c4fc059549"
+  },
+  "kind": "Independent original Windows CPython capture, never native-generated expectations",
+  "capture_driver_sha256": "ef0af8870abf82463d09f81416393c698f9827680de2c3df50ecafd490495065",
+  "original_capture_script_sha256": "c93392a64281aa4516073bb75344fe95dd819bbe972e61dc532d282170d2e3c6",
+  "raw_capture_sha256": "efedf0853c277e582d2436d402cb0a580f7a1eef896151439bfed19b12c32358",
+  "fixture_sha256": "ff1fffae85ec59d0016b61eedb97cc316e3d279b4da90155195fb12815cdddbe",
+  "linux_fixture_sha256": "ce39c9964a96ab57b1dc42ef04bd697d2e38776cdc7abce2e6271cfb9a7b9049",
+  "normalization": {
+    "operation": "CRLF to LF only",
+    "raw_crlf": 978,
+    "parsed_lines_identical": true
+  },
+  "cases": 978,
+  "different_rows_from_linux": 204,
+  "exact_input_length_metadata_agreement": true,
+  "native_windows_differential_cases": 978,
+  "native_windows_discrepancies": 0,
+  "scope": "Actual x86_64 Windows 11/MSVC CPython; not Wine or cross-compilation inference"
+}

@@ -2,7 +2,7 @@
 //!
 //! Mirrors `narwhal3d/preview.py` `control_point_curve_polyline` operation for
 //! operation (same knot vector, span search, de Boor update order and parameter
-//! arithmetic), so the samples match the Python fallback. The output is a preview
+//! arithmetic), so the samples match the independently captured original. The output is a preview
 //! polyline only: it is never stored, measured or exported as document geometry.
 
 const ERR_NULL: i32 = -1;
@@ -112,6 +112,31 @@ pub unsafe extern "C" fn narwhal_pure_core_control_point_curve_preview(
     if out_values.is_null() {
         return ERR_NULL;
     }
+    let mr = out_values as usize;
+    if !mr.is_multiple_of(std::mem::align_of::<u64>()) {
+        return ERR_NULL;
+    }
+    let Some(me) = mr.checked_add(8) else {
+        return ERR_NULL;
+    };
+    let Some(ce) = point_count
+        .checked_mul(24)
+        .and_then(|v| (control as usize).checked_add(v))
+    else {
+        return ERR_INPUT;
+    };
+    let Some(oe) = output_capacity
+        .checked_mul(8)
+        .and_then(|v| (output as usize).checked_add(v))
+    else {
+        return ERR_INPUT;
+    };
+    let cr = control as usize;
+    let or = output as usize;
+    if (mr < ce && cr < me) || (mr < oe && or < me) || (output_capacity != 0 && or < ce && cr < oe)
+    {
+        return ERR_NULL;
+    }
     *out_values = 0;
     if !(2..=MAX_POINTS).contains(&point_count) || per_span > MAX_PER_SPAN {
         return ERR_INPUT;
@@ -122,16 +147,29 @@ pub unsafe extern "C" fn narwhal_pure_core_control_point_curve_preview(
     if !values.iter().all(|v| v.is_finite()) {
         return ERR_INPUT;
     }
-    let needed = sample_count(point_count, max_degree, per_span) * 3;
+    let degree = (max_degree as usize).min(point_count - 1);
+    let count = sample_count(point_count, max_degree, per_span);
+    // OURS safety bounds: at most 1M samples and 32M de Boor/span-search work units.
+    let work = count
+        .checked_mul(degree)
+        .and_then(|v| v.checked_mul(degree.saturating_add(point_count)));
+    if count > 1_000_000 || (degree > 1 && work.is_none_or(|v| v > 32_000_000)) {
+        return ERR_INPUT;
+    }
+    let needed = count * 3;
     *out_values = needed as u64;
     if output_capacity < needed {
         return ERR_SIZE;
     }
+
+    let points: Vec<[f64; 3]> = values.chunks_exact(3).map(|p| [p[0], p[1], p[2]]).collect();
+    let samples = control_point_curve_polyline(&points, max_degree, per_span);
+    if samples.iter().flatten().any(|v| !v.is_finite()) {
+        return ERR_INPUT;
+    }
     let Some(out) = crate::checked_slice_mut(output, needed) else {
         return ERR_NULL;
     };
-    let points: Vec<[f64; 3]> = values.chunks_exact(3).map(|p| [p[0], p[1], p[2]]).collect();
-    let samples = control_point_curve_polyline(&points, max_degree, per_span);
     for (slot, point) in out.chunks_exact_mut(3).zip(&samples) {
         slot.copy_from_slice(point);
     }

@@ -16,171 +16,36 @@ grids cover their exact domains.
 import math
 
 
-def signed_area(poly):
-    """Twice-halved signed area of a 2-D polygon; positive when CCW."""
-    s = 0.0
-    n = len(poly)
-    for i in range(n):
-        x0, y0 = poly[i]
-        x1, y1 = poly[(i + 1) % n]
-        s += x0 * y1 - x1 * y0
-    return 0.5 * s
-
-
-def _point_in_triangle(p, a, b, c):
-    """True if `p` lies inside or on the boundary of triangle a-b-c.
-
-    Ear clipping uses this to reject a candidate ear that would swallow another
-    (typically reflex) vertex. The test is INCLUSIVE of the boundary on purpose:
-    a reflex vertex lying exactly on the ear's diagonal must still block it,
-    otherwise the clip produces overlapping triangles (a concave polygon then
-    tessellates to too much area).
-    """
-    px, py = p
-    ax, ay = a
-    bx, by = b
-    cx, cy = c
-    d = (by - cy) * (ax - cx) + (cx - bx) * (ay - cy)
-    if abs(d) < 1e-14:
-        return False
-    l1 = ((by - cy) * (px - cx) + (cx - bx) * (py - cy)) / d
-    l2 = ((cy - ay) * (px - cx) + (ax - cx) * (py - cy)) / d
-    l3 = 1.0 - l1 - l2
-    eps = 1e-9
-    return l1 >= -eps and l2 >= -eps and l3 >= -eps
-
-
-def _convex_fan(poly, idx):
-    """Return a linear-time fan for a strictly convex loop, or ``None``.
-
-    This is deliberately a conservative recogniser, not a replacement for ear
-    clipping: holes, concavities, repeated points, and non-simple loops must
-    retain the old safe path.  ``idx`` is already CCW, so the returned triangles
-    have the same winding and original vertex indices as:func:`ear_clip`.
-    """
-    n = len(idx)
-    if n < 3:
-        return None
-    positive = False
-    for i, i1 in enumerate(idx):
-        i0, i2 = idx[i - 1], idx[(i + 1) % n]
-        a, b, c = poly[i0], poly[i1], poly[i2]
-        cross = ((b[0] - a[0]) * (c[1] - a[1])
-                 - (b[1] - a[1]) * (c[0] - a[0]))
-        # A zero corner is not safely strictly convex: leave it to the
-        # established ear clipper, which preserves its existing fallback rules.
-        if cross <= 1e-14:
-            return None
-        positive = True
-    if not positive:
-        return None
-    anchor = idx[0]
-    return [(anchor, idx[i], idx[i + 1]) for i in range(1, n - 1)]
-
-
-#: Loops at least this long go straight to the Rust ear clipper (`native_tessellate`).
-#: Measured end to end including packing: a convex 72-point loop takes 0.83x the Python
-#: fan's time and 1024 points 0.49x; below about 64 the Python fan is cheaper.
-NATIVE_EAR_CLIP_MIN_POINTS = 64
-
-#: Shorter CONCAVE loops (after the Python convex check) go to Rust from this many
-#: points: 0.70x at 6, 0.22x at 12, 0.10x at 20. Larger concave loops gain far more
-#: (0.027x at 100, 0.015x at 1000, where Python takes 0.23 s).
-NATIVE_CONCAVE_MIN_POINTS = 6
-
-
-def _native_ear_clip(poly):
-    """The Rust ear clipper's triangles, or None when the library is not available."""
-    try:
+def _triangulation_native():
+    # Python only resolves the host adapter; all planar-loop computation is Rust.
+    if __package__:
         from . import native_tessellate
-    except ImportError:  # loaded as a plain module (bridge's direct-file fallback)
-        try:
-            import native_tessellate
-        except ImportError:
-            return None
-    try:
-        return native_tessellate.ear_clip(poly)
-    except Exception:  # noqa: BLE001 -- the Python ear clipper remains the fallback
-        return None
+        return native_tessellate
+    import sys
+    key = "narwhal3d_native_tessellate"
+    if key not in sys.modules:
+        import importlib.util
+        from pathlib import Path
+        spec = importlib.util.spec_from_file_location(key, Path(__file__).with_name("native_tessellate.py"))
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        sys.modules[key] = module
+    return sys.modules[key]
+
+
+def signed_area(poly):
+    """Original planar signed area, computed by required Rust support."""
+    return _triangulation_native().signed_area(poly)
 
 
 def ear_clip(poly):
-    """Triangulate a simple 2-D polygon by ear clipping.
+    """Exact ordered planar-loop triples from required Rust support.
 
-    `poly` is a list of (x, y). Returns a list of (i, j, k) index triples into
-    `poly`. Either winding is accepted (the polygon is oriented CCW internally).
-    Strictly convex loops use a linear-time fan; concave and degenerate loops
-    use the conservative ear-clipping path. Holes are not represented by this
-    single-loop API and remain a deliberate fallback in the bridge.
-    Returns [] for fewer than 3 vertices. If the polygon is non-simple and
-    clipping stalls, the triangles found so far are returned rather than looping
-    forever -- the caller treats an incomplete result (len != n-2) as a failure
-    and falls back to the grid.
-
-    With the pure-core library loaded, long loops and short concave ones are clipped
-    in Rust (see :data:`NATIVE_EAR_CLIP_MIN_POINTS`), which repeats this algorithm
-    step for step and returns the same triangles in the same order.
+    Empty/tiny loops return []; non-simple loops retain their original partial
+    results. Existing callers still decide how to handle incomplete fills.
+    Missing/stale support and malformed replies raise, never replay Python.
     """
-    n = len(poly)
-    if n < 3:
-        return []
-    if n >= NATIVE_EAR_CLIP_MIN_POINTS:
-        native = _native_ear_clip(poly)
-        if native is not None:
-            return native
-    idx = list(range(n))
-    if signed_area(poly) < 0:
-        idx.reverse()
-
-    fast = _convex_fan(poly, idx)
-    if fast is not None:
-        return fast
-    if NATIVE_CONCAVE_MIN_POINTS <= n < NATIVE_EAR_CLIP_MIN_POINTS:
-        native = _native_ear_clip(poly)
-        if native is not None:
-            return native
-
-    triangles = []
-    guard = 0
-    limit = n * n + 1
-    while len(idx) > 3 and guard < limit:
-        guard += 1
-        m = len(idx)
-        clipped = False
-        # For a CCW simple polygon, only reflex/collinear vertices can lie
-        # inside a candidate ear. Avoid testing every convex vertex: this is
-        # still conservative for concavity and keeps non-simple loops subject
-        # to the same stalled-loop fallback below.
-        reflex = set()
-        for q in range(m):
-            q0, q1, q2 = idx[q - 1], idx[q], idx[(q + 1) % m]
-            qa, qb, qc = poly[q0], poly[q1], poly[q2]
-            qcross = ((qb[0] - qa[0]) * (qc[1] - qa[1])
-                      - (qb[1] - qa[1]) * (qc[0] - qa[0]))
-            if qcross <= 0:
-                reflex.add(q1)
-        for i in range(m):
-            i0 = idx[(i - 1) % m]
-            i1 = idx[i]
-            i2 = idx[(i + 1) % m]
-            a, b, c = poly[i0], poly[i1], poly[i2]
-            # convex corner? (cross > 0 for CCW winding)
-            cross = (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
-            if cross <= 0:
-                continue
-            # a real ear holds no other reflex/collinear vertex
-            if any(_point_in_triangle(poly[j], a, b, c)
-                   for j in reflex if j not in (i0, i1, i2)):
-                continue
-            triangles.append((i0, i1, i2))
-            del idx[i]
-            clipped = True
-            break
-        if not clipped:
-            break  # non-simple / stalled -> caller falls back to the grid
-    if len(idx) == 3:
-        triangles.append((idx[0], idx[1], idx[2]))
-    return triangles
+    return _triangulation_native().ear_clip(poly)
 
 
 def plane_basis(normal):

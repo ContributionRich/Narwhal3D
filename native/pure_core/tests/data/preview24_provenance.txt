@@ -1,0 +1,30 @@
+PREVIEW-SAMPLING-RETIRE-24 independent original capture
+
+preview24_linux.tsv: 978 cases, 82035 binary64 output values.
+Captured BEFORE source removal from published batch23 preview.py in the external
+public worktree, using bundled CPython 3.13.13 on Linux x86_64. Hex words are
+big-endian IEEE-754 encodings, not rounded decimal answers. Input words, row
+lengths, output order and all zero sign bits are retained. No tolerance.
+
+Fields (tab-separated): operation, count/degree, flags/per_span, input hex words,
+row lengths, output hex words. Operation 10 is control-curve sampling; other
+operations are specified in ../preview24_api.h. Negative degree/span cases use
+the original Python minimum-degree/minimum-step behavior. Inputs are frozen too.
+
+Original executable Python and its hashes are archived only in ignored
+legacy/retired-rust24/preview/original, never imported by public tests.
+Rust and host tests consume only this frozen data. Existing corpora unchanged.
+
+Windows qualification is pending Main's actual Windows CPython/MSVC run. Do not
+claim this Linux corpus establishes Windows trig parity. If original Windows
+results differ, capture independent original Windows bits, retain this Linux
+corpus unchanged, and select exact platform expectations without tolerance changes.
+
+Safety corrections: refuse nonfinite/malformed inputs, computed nonfinite
+coordinates, segment counts outside 1..100000, >100000 controls, per_span>1024,
+>1000000 control samples or >32000000 bounded control work units. Negative
+control degrees and spans retain their original results; large degrees clamp
+before unsigned conversion. Degree<=1 ignores per_span as before. Empty/single
+control picks remain empty; control polygon pick coordinate types are preserved.
+Missing/stale/native protocol errors are RuntimeError subclasses, not input
+refusals or fallback. Native-owned computation never mutates document geometry.

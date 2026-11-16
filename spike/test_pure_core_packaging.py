@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import ast
 import hashlib
+import functools
 import importlib.util
 import os
 from contextlib import redirect_stdout
@@ -34,6 +35,30 @@ import assemble_macos_release as mac_assemble
 import assemble_windows_release as win_assemble
 import verify_linux_release as linux_verify
 import verify_windows_release as win_verify
+
+
+ROUND23_ADDED_EXPORTS = tuple("narwhal_pure_core_"+name for name in ('vector_encode_v1', 'vector_len_v1', 'vector_copy_v1', 'vector_free_v1', 'vector_validate_v1', 'dxf_owned_abi_version', 'dxf_owned_colors', 'dxf_owned_units', 'dxf_owned_capacity', 'dxf_owned_encode', 'tween_plan_v1', 'tween_knots_v1', 'tween_lengths_v1'))
+ROUND24_ADDED_EXPORTS = tuple("narwhal_pure_core_"+name for name in ('ear_clip_display', 'earclip_signed_area_v1', 'control_point_curve_preview', 'preview_sample_v1', 'dxf_reader24_abi_version', 'dxf_reader24_decode'))
+ROUND24_NATIVE_FILES = {
+    'native/pure_core/tests/data/preview24_linux.tsv',
+    'native/pure_core/tests/data/preview24_windows_msvc.tsv',
+    'native/pure_core/tests/data/preview24_windows_msvc.provenance.json',
+    'native/pure_core/tests/data/preview24_provenance.txt',
+    'native/pure_core/tests/dxf_reader24.h',
+    'native/pure_core/tests/dxf_reader24.rs',
+    'native/pure_core/tests/earclip24_api.h',
+    'native/pure_core/tests/earclip24_golden.rs',
+    'native/pure_core/tests/fixtures/dxf_reader24/README.md',
+    'native/pure_core/tests/fixtures/dxf_reader24/capture.json',
+    'native/pure_core/tests/fixtures/dxf_reader24/corpus.bin',
+    'native/pure_core/tests/fixtures/dxf_reader24/manifest.tsv',
+    'native/pure_core/tests/fixtures/earclip24_original.txt',
+    'native/pure_core/tests/fixtures/earclip24_provenance.json',
+    'native/pure_core/tests/fixtures/earclip24_safety.json',
+    'native/pure_core/tests/preview24_api.h',
+    'native/pure_core/tests/preview24_golden.rs',
+}
+ROUND24_MODULES = {"native/pure_core/src/preview_primitives.rs"}
 
 
 class Reply(c.Structure):
@@ -318,7 +343,7 @@ def execute_probe(mutant="", code=None):
     return json.loads(output.getvalue())
 
 
-def pe_fixture(*, parser_abi=2, missing="", svg_abi=14, alias_abi=1, dxf_abi=2):
+def pe_fixture(*, parser_abi=2, missing="", svg_abi=14, alias_abi=1, dxf_abi=2, reader_abi=1):
     """Minimal PE export/import tables; data fixture, never executable native code."""
     data = bytearray(8192)
     data[:2] = b"MZ"
@@ -349,6 +374,7 @@ def pe_fixture(*, parser_abi=2, missing="", svg_abi=14, alias_abi=1, dxf_abi=2):
         if name == "narwhal_pure_core_svgpath_owned_version": value = svg_abi
         if name == "narwhal_pure_core_alias_identity": value = alias_abi
         if name == "narwhal_pure_core_dxf_owned_abi_version": value = dxf_abi
+        if name == "narwhal_pure_core_dxf_reader24_abi_version": value = reader_abi
         data[offset(0x2800) + i * 16:offset(0x2800) + i * 16 + 6] = b"\xb8" + struct.pack("<I", value) + b"\xc3"
     struct.pack_into("<IIIII", data, offset(0x2600), 0x2680, 0, 0, 0x2640, 0x2680)
     data[offset(0x2640):offset(0x2640) + 13] = b"kernel32.dll\0"
@@ -465,6 +491,30 @@ class ParserProbeTests(unittest.TestCase):
             probe.assert_called_once()
         self.assertIn("spike/test_numparse_owned.py", gate.PURE_CORE_PYTESTS)
         self.assertTrue((ROOT / "spike/fixtures/numparse_golden.json").is_file())
+
+
+ROUND24_READER_INPUT = bytes.fromhex('300a53454354494f4e0a320a454e5449544945530a300a4c494e450a380a436166e90a31300a300a32300a300a33300a300a31310a310a32310a320a33310a330a300a454e445345430a300a454f460a')
+ROUND24_READER_WIRE = bytes.fromhex('44584652323400010b0500000000000000060800000000000000656e7469746965730701000000000000000b0500000000000000060400000000000000747970650604000000000000004c494e450605000000000000006c61796572060400000000000000436166e9060500000000000000636f6c6f72030700000000000000060200000000000000703008000000000000000000000000000000000000000000000000060200000000000000703108000000000000f03f000000000000004000000000000008400606000000000000006c61796572730b00000000000000000611000000000000006c617965725f747275655f636f6c6f72730b0000000000000000060800000000000000696e73756e69747300060700000000000000736b69707065640b0000000000000000')
+
+
+@functools.lru_cache(maxsize=1)
+def round24_preview_answers():
+    # Fixed authored original data, not an implementation of any sampler.
+    wanted = {932, 940, 976, 50, 54, 55}
+    result = {}
+    name = 'preview24_windows_msvc.tsv' if sys.platform == 'win32' else 'preview24_linux.tsv'
+    with (ROOT/'native/pure_core/tests/data'/name).open() as handle:
+        for index,line in enumerate(handle):
+            if index not in wanted: continue
+            op,n,flags,bits,lengths,out = line.rstrip('\n').split('\t')
+            values = [struct.unpack('>d',bytes.fromhex(v))[0] for v in bits.split(',')]
+            lengths = tuple(int(v) for v in lengths.split(','))
+            payload = b''.join(bytes.fromhex(v)[::-1] for v in out.split(','))
+            result[int(op)] = {'segments':int(n),'flags':int(flags),'input':values,
+                'metadata':(len(payload)//8,len(lengths),*lengths,*([0]*(3-len(lengths)))),
+                'output':payload}
+    assert set(result)=={1,2,3,4,5,6}
+    return result
 
 
 def retirement_library(mutant=""):
@@ -661,6 +711,83 @@ def retirement_library(mutant=""):
         out[:3] = [0.,4.,8.]
         c.cast(used,c.POINTER(c.c_uint64))[0] = 3
         return 0
+    preview_answers = round24_preview_answers()
+    def ear_clip(points,n,out,capacity,count):
+        c.cast(count,c.POINTER(c.c_uint64))[0] = 0
+        if n > 1<<20 or points is not None and points[0]!=points[0]:
+            return -2
+        if n == 0: return 0
+        if capacity < 3*(n-2):
+            if mutant == 'ear-capacity-partial': out[0] = 0
+            return -3
+        expected = [0,1,2,0,2,3] if n==4 else [5,0,1,1,2,3]
+        out[:6] = expected
+        c.cast(count,c.POINTER(c.c_uint64))[0] = 4 if mutant=='ear-partial' else 2
+        if mutant=='ear-indices': out[2] = 99
+        return 0
+    def ear_area(points,n,out,count):
+        c.cast(count,c.POINTER(c.c_uint64))[0] = 0
+        if n > 1<<20: return -2
+        c.cast(out,c.POINTER(c.c_double))[0] = 0. if n==0 else 1.
+        c.cast(count,c.POINTER(c.c_uint64))[0] = 2 if mutant=='ear-area-count' else 1
+        return 0
+    def control_preview(points,n,degree,span,out,capacity,count):
+        assert (n,degree,span)==(3,2,2)
+        c.cast(count,c.POINTER(c.c_uint64))[0] = 0
+        if points[0]!=points[0]: return -2
+        c.cast(count,c.POINTER(c.c_uint64))[0] = 8 if mutant=='control-count' else 9
+        if capacity < 9: return -3
+        out[:9] = [0.,0.,0.,2.,2.,0.,4.,0.,0.]
+        if mutant=='control-value': out[3] = 3.
+        return 0
+    def preview_sample(op,data,length,segments,flags,out,capacity,metadata):
+        meta = metadata._obj
+        if op==99 or data[0]!=data[0]:
+            if mutant=='preview-error-partial': meta.values=0
+            return -2
+        answer = preview_answers[op]
+        assert (segments,flags,length)==(answer['segments'],answer['flags'],len(answer['input']))
+        assert list(data)==answer['input']
+        values,rows,*lengths = answer['metadata']
+        meta.values,meta.rows = values,rows
+        meta.lengths[:] = lengths
+        if mutant=='preview-metadata': meta.values += 1
+        if capacity < values:
+            if mutant=='preview-short-write' and out is not None: out[0]=0.
+            return -3
+        c.memmove(out,answer['output'],len(answer['output']))
+        if mutant=='preview-op-'+str(op):
+            byte = c.cast(out,c.POINTER(c.c_ubyte))
+            byte[0] ^= 1
+        if mutant=='preview-tail': out[values]=0.
+        return 0
+    def reader_decode(data,length,int_limit,out,capacity,written,diagnostic):
+        assert int_limit==4300
+        diag = diagnostic._obj
+        diag.code,diag.start,diag.len,diag.detail,diag.required = 0,0,0,0,0
+        status,start,n,detail = 0,0,0,0
+        errors = {b'AutoCAD Binary DXF\r\n\x1a\0':(-100,0,0,0),
+                  b'0\nSECTION\n2':(-101,0,0,0),b'bad\nvalue\n':(-110,0,3,0),
+                  ROUND24_READER_INPUT.replace(b'10\n0\n',b'10\nnope\n'):
+                      (-111,ROUND24_READER_INPUT.index(b'10\n0\n')+3,4,0),
+                  b'0\nSECTION\n2\nENTITIES\n0\nLINE\n0\nENDSEC\n0\nEOF\n':(-112,0,0,10)}
+        if length>512*1024*1024: status=-3
+        elif data in errors: status,start,n,detail=errors[data]
+        else: assert data==ROUND24_READER_INPUT and length==len(data)
+        if status:
+            diag.code,diag.start,diag.len,diag.detail = status,start,n,detail
+            if mutant=='reader-reason': diag.detail += 1
+            if mutant=='reader-partial' and out is not None: c.memset(out,0,1)
+            return 0 if mutant=='reader-status' else status
+        if capacity < len(ROUND24_READER_WIRE):
+            diag.code,diag.required = 1,len(ROUND24_READER_WIRE)
+            if mutant=='reader-retry': c.cast(written,c.POINTER(c.c_size_t))[0]=diag.required
+            return 1
+        c.memmove(out,ROUND24_READER_WIRE,len(ROUND24_READER_WIRE))
+        c.cast(written,c.POINTER(c.c_size_t))[0] = len(ROUND24_READER_WIRE)+(1 if mutant=='reader-written' else 0)
+        if mutant=='reader-bytes': c.memset(out,0,1)
+        if mutant=='reader-tail': c.memset(c.addressof(out)+len(ROUND24_READER_WIRE),0,1)
+        return 0
     calls = {"abi_version": lambda: 1,"catenary_plan_v2":catenary,"obj_encode_into":obj,
              "stl_size_owned":size,"stl_encode_owned":encode,
              "stl_file_size":file_size,"stl_file_decode":decode,
@@ -669,7 +796,10 @@ def retirement_library(mutant=""):
              "vector_free_v1":vector_free,"vector_validate_v1":vector_validate,
              "dxf_owned_abi_version":lambda:2,"dxf_owned_colors":dxf_colors,"dxf_owned_units":dxf_units,
              "dxf_owned_capacity":dxf_capacity,"dxf_owned_encode":dxf_encode,
-             "tween_plan_v1":tween_plan,"tween_knots_v1":tween_knots,"tween_lengths_v1":tween_lengths}
+             "tween_plan_v1":tween_plan,"tween_knots_v1":tween_knots,"tween_lengths_v1":tween_lengths,
+             "ear_clip_display":ear_clip,"earclip_signed_area_v1":ear_area,
+             "control_point_curve_preview":control_preview,"preview_sample_v1":preview_sample,
+             "dxf_reader24_abi_version":lambda:1,"dxf_reader24_decode":reader_decode}
     functions = {}
     for name,fn in calls.items():
         full = "narwhal_pure_core_" + name
@@ -688,6 +818,69 @@ def execute_retirement_probe(mutant="", code=None, lib=None):
     return json.loads(output.getvalue())
 
 
+class PreviewPlatformWitnessTests(unittest.TestCase):
+    def selection(self, system, code=None, machine='AMD64', compiler='MSC v.1944 64 bit (AMD64)'):
+        source = code or gate.PURE_CORE_RETIREMENT_PROBE
+        start = source.index('preview_witnesses = ')
+        end = source.index('for op,segments,flags,bits,expected,digest in preview_witnesses:')
+        def require(ok, message):
+            if not ok: raise RuntimeError(message)
+        namespace = {'sys':SimpleNamespace(platform=system,byteorder='little'), 'c':c, 'require':require}
+        platform = SimpleNamespace(system=lambda:'Windows', machine=lambda:machine,
+            python_implementation=lambda:'CPython', python_compiler=lambda:compiler)
+        with patch.dict(sys.modules, {'platform':platform}):
+            exec(compile(source[start:end], '<preview-platform-selection>', 'exec'), namespace)
+        return namespace['preview_witnesses']
+
+    def assert_matches_original(self, system, code=None):
+        rows = self.selection(system, code)
+        filename = 'preview24_windows_msvc.tsv' if system=='win32' else 'preview24_linux.tsv'
+        wanted = {row[0]:row for row in rows}
+        selected = {54,55,50,932,940,976}
+        seen = set()
+        with (ROOT/'native/pure_core/tests/data'/filename).open() as handle:
+            for index,line in enumerate(handle):
+                if index not in selected: continue
+                op,n,flags,bits,lengths,output = line.rstrip('\n').split('\t')
+                row = wanted[int(op)]
+                self.assertEqual(row[:4], (int(op),int(n),int(flags),bits))
+                sizes = tuple(map(int,lengths.split(',')))
+                payload = b''.join(bytes.fromhex(v)[::-1] for v in output.split(','))
+                self.assertEqual(row[4], (len(payload)//8,len(sizes),*sizes,*([0]*(3-len(sizes)))))
+                self.assertEqual(row[5],hashlib.sha256(payload).hexdigest())
+                seen.add(int(op))
+        self.assertEqual(seen, {1,2,3,4,5,6})
+
+    def test_each_platform_selects_exact_independent_original_bits(self):
+        for system in ('linux','win32'):
+            self.assert_matches_original(system)
+        self.assertNotEqual(self.selection('linux')[0][-1],self.selection('win32')[0][-1])
+        provenance = json.loads((ROOT/'native/pure_core/tests/data/preview24_windows_msvc.provenance.json').read_text())
+        fixture = ROOT/'native/pure_core/tests/data/preview24_windows_msvc.tsv'
+        self.assertEqual(provenance['fixture_sha256'], 'ff1fffae85ec59d0016b61eedb97cc316e3d279b4da90155195fb12815cdddbe')
+        self.assertEqual(hashlib.sha256(fixture.read_bytes()).hexdigest(),provenance['fixture_sha256'])
+        self.assertEqual(provenance['cases'],978)
+        self.assertEqual(provenance['native_windows_discrepancies'],0)
+
+    def test_unqualified_platforms_are_refused(self):
+        for system,machine,compiler in (('darwin','AMD64','MSC'),('win32','ARM64','MSC'),('win32','AMD64','GCC')):
+            with self.subTest(system=system,machine=machine,compiler=compiler), self.assertRaisesRegex(RuntimeError,'not qualified'):
+                self.selection(system,machine=machine,compiler=compiler)
+
+    def test_each_platform_hash_and_selection_mutation_is_red_then_green(self):
+        original = gate.PURE_CORE_RETIREMENT_PROBE
+        for system in ('linux','win32'):
+            for row in self.selection(system):
+                digest = row[-1]
+                mutant = original.replace(digest, '0'*64)
+                with self.subTest(system=system,op=row[0]), self.assertRaises(AssertionError):
+                    self.assert_matches_original(system,mutant)
+                self.assert_matches_original(system)
+        mutant = original.replace('if sys.platform == "win32":','if False:')
+        with self.assertRaises(RuntimeError): self.selection('win32',mutant)
+        self.assert_matches_original('win32')
+
+
 class RetirementProbeTests(unittest.TestCase):
     def test_independent_fixed_abi_and_each_missing_or_incorrect_export(self):
         self.assertEqual(execute_retirement_probe(),gate.PURE_CORE_RETIREMENT_IDENTITY)
@@ -701,14 +894,21 @@ class RetirementProbeTests(unittest.TestCase):
                      "catenary_plan_v2","obj_encode_into",
                      "vector_encode_v1","vector_len_v1","vector_copy_v1","vector_validate_v1",
                      "dxf_owned_abi_version","dxf_owned_colors","dxf_owned_units","dxf_owned_capacity","dxf_owned_encode",
-                     "tween_plan_v1","tween_knots_v1","tween_lengths_v1"):
+                     "tween_plan_v1","tween_knots_v1","tween_lengths_v1",
+                     "ear_clip_display","earclip_signed_area_v1","control_point_curve_preview",
+                     "preview_sample_v1","dxf_reader24_abi_version","dxf_reader24_decode"):
             with self.subTest(wrong=name), self.assertRaises(RuntimeError):
                 execute_retirement_probe("wrong-"+name)
         for mutant in ("encode-partial","import-partial","import-accept-unsafe",
                        "helper-partial","helper-accept-invalid",
                        "vector-copy-partial","vector-count","vector-bytes","vector-tail",
                        "vector-aliased-handle","vector-overwritten-owner",
-                       "dxf-reason","dxf-partial","dxf-encoding","tween-partial","tween-status","tween-values"):
+                       "dxf-reason","dxf-partial","dxf-encoding","tween-partial","tween-status","tween-values",
+                       "ear-capacity-partial","ear-partial","ear-indices","ear-area-count",
+                       "control-count","control-value","preview-metadata","preview-short-write",
+                       "preview-error-partial","preview-tail",*("preview-op-"+str(i) for i in range(1,7)),
+                       "reader-reason","reader-partial","reader-status","reader-retry",
+                       "reader-written","reader-bytes","reader-tail"):
             with self.subTest(mutant=mutant), self.assertRaises(RuntimeError):
                 execute_retirement_probe(mutant)
         for mutant in ("cat-frame","cat-tail","cat-count","cat-deviation","cat-partial","cat-capacity",
@@ -738,7 +938,8 @@ class RetirementProbeTests(unittest.TestCase):
         require.body = [ast.Pass()]
         code = ast.unparse(ast.fix_missing_locations(tree))
         for mutant in ("wrong-stl_normal","helper-op-4","helper-op-10",
-                       "cat-frame","cat-reason-3","obj-indices","vector-bytes","dxf-encoding","tween-values"):
+                       "cat-frame","cat-reason-3","obj-indices","vector-bytes","dxf-encoding","tween-values",
+                       "ear-indices","control-value","preview-op-4","reader-bytes"):
             with self.subTest(mutant=mutant):
                 self.assertEqual(execute_retirement_probe(mutant,code),gate.PURE_CORE_RETIREMENT_IDENTITY)
                 with self.assertRaises(RuntimeError): execute_retirement_probe(mutant)
@@ -747,16 +948,25 @@ class RetirementProbeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp)/"core.so"
             path.write_bytes(b"fixture")
-            with patch.object(gate.subprocess,"run",return_value=SimpleNamespace(
-                    stdout=json.dumps(gate.PURE_CORE_RETIREMENT_IDENTITY))) as run:
+            scripts = []
+            def child(command, **kwargs):
+                self.assertEqual(command[1:3], ["-I", "-B"])
+                self.assertEqual(len(command), 5)
+                script = Path(command[3])
+                scripts.append(script)
+                self.assertEqual(script.read_bytes(), gate.PURE_CORE_RETIREMENT_PROBE.encode("utf-8"))
+                return SimpleNamespace(stdout=json.dumps(gate.PURE_CORE_RETIREMENT_IDENTITY))
+            with patch.object(gate.subprocess,"run",side_effect=child) as run:
                 self.assertEqual(gate.probe_pure_core_retirement(path),gate.PURE_CORE_RETIREMENT_IDENTITY)
                 args,kwargs = run.call_args
-                self.assertEqual(args[0][1:4],["-I","-B","-c"])
                 self.assertEqual(args[0][-1],str(path.resolve()))
                 self.assertEqual(kwargs["timeout"],30)
                 self.assertTrue(kwargs["check"])
+            self.assertTrue(scripts)
+            self.assertTrue(all(not script.parent.exists() for script in scripts))
             for packet in ({}, {**gate.PURE_CORE_RETIREMENT_IDENTITY,"retirement_exports":[]},
-                           {**gate.PURE_CORE_RETIREMENT_IDENTITY,"retirement_abi":22}):
+                           {**gate.PURE_CORE_RETIREMENT_IDENTITY,"retirement_abi":22},
+                           {**gate.PURE_CORE_RETIREMENT_IDENTITY,"retirement_abi":23}):
                 with patch.object(gate.subprocess,"run",return_value=SimpleNamespace(stdout=json.dumps(packet))):
                     with self.assertRaisesRegex(ValueError,"evidence differs"): gate.probe_pure_core_retirement(path)
             for error in (subprocess.CalledProcessError(-11,"probe",stderr="crashed"),
@@ -770,12 +980,104 @@ class RetirementProbeTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError,"missing regular"): gate.probe_pure_core_retirement(path)
 
 
+class RetirementTransportTests(unittest.TestCase):
+    def test_long_exact_payload_uses_isolated_file_env_and_cleanup(self):
+        identity = gate.PURE_CORE_RETIREMENT_IDENTITY
+        with tempfile.TemporaryDirectory() as directory:
+            library = Path(directory)/"selected core with spaces.dll"
+            library.write_bytes(b"transport fixture, not loaded")
+            payload = ("import json, os, sys\n"
+                "assert sys.flags.isolated == 1 and sys.flags.dont_write_bytecode == 1\n"
+                "assert os.environ['NARWHAL_TRANSPORT_TEST'] == 'preserved'\n"
+                "assert sys.argv[1] == " + repr(str(library.resolve())) + "\n"
+                "print(" + repr(json.dumps(identity)) + ")\n# exact UTF-8: café\n#" + "x"*40000)
+            env = dict(os.environ, NARWHAL_TRANSPORT_TEST='preserved')
+            run = subprocess.run
+            scripts = []
+            def bounded(command, **kwargs):
+                # Deterministic Windows command-line bound on every test OS.
+                if len(subprocess.list2cmdline(command)) >= 32767:
+                    raise OSError(206, 'command line too long')
+                self.assertEqual(command[1:3], ['-I','-B'])
+                self.assertEqual(len(command), 5)
+                self.assertEqual(command[-1], str(library.resolve()))
+                script = Path(command[3])
+                scripts.append(script)
+                self.assertEqual(script.read_bytes(), payload.encode('utf-8'))
+                self.assertIs(kwargs['env'],env)
+                self.assertEqual(kwargs['timeout'],30)
+                self.assertTrue(kwargs['text'] and kwargs['capture_output'] and kwargs['check'])
+                return run(command, **kwargs)
+            with patch.object(gate,'PURE_CORE_RETIREMENT_PROBE',payload), patch.object(gate.subprocess,'run',side_effect=bounded):
+                self.assertEqual(gate.probe_pure_core_retirement(library,sys.executable,env=env),identity)
+            self.assertEqual(len(scripts),1)
+            self.assertFalse(scripts[0].parent.exists())
+
+    def test_cleanup_on_process_json_identity_and_write_failures(self):
+        with tempfile.TemporaryDirectory() as directory:
+            library = Path(directory)/'core.dll'
+            library.write_bytes(b'fixture')
+            cases = (subprocess.CalledProcessError(-11,'probe',stderr='native crash detail'),
+                     subprocess.TimeoutExpired('probe',30), OSError('loader refused'),
+                     SimpleNamespace(stdout='not JSON'), SimpleNamespace(stdout='{}'))
+            for result in cases:
+                scripts = []
+                def child(command, **kwargs):
+                    script = Path(command[3]); scripts.append(script)
+                    self.assertTrue(script.is_file())
+                    if isinstance(result,Exception): raise result
+                    return result
+                with self.subTest(result=result), patch.object(gate.subprocess,'run',side_effect=child):
+                    with self.assertRaises(ValueError) as caught:
+                        gate.probe_pure_core_retirement(library)
+                    if isinstance(result,subprocess.CalledProcessError):
+                        self.assertIn('native crash detail',str(caught.exception))
+                self.assertEqual(len(scripts),1)
+                self.assertFalse(scripts[0].parent.exists())
+            write = Path.write_bytes
+            parents = []
+            def refused(path, data):
+                if path.name=='probe.py':
+                    parents.append(path.parent)
+                    raise OSError('probe write refused')
+                return write(path,data)
+            with patch.object(Path,'write_bytes',refused), patch.object(gate.subprocess,'run') as run:
+                with self.assertRaisesRegex(ValueError,'probe write refused'):
+                    gate.probe_pure_core_retirement(library)
+                run.assert_not_called()
+            self.assertTrue(parents)
+            self.assertTrue(all(not parent.exists() for parent in parents))
+
+    def test_long_transport_and_isolation_mutations_are_red_then_green(self):
+        source = inspect.getsource(gate.probe_pure_core_retirement)
+        cases = (
+            ('[str(python), "-I", "-B", str(script), str(path.resolve())]',
+             '[str(python), "-I", "-B", "-c", PURE_CORE_RETIREMENT_PROBE, str(path.resolve())]'),
+            ('"-I", "-B", str(script)', '"-B", str(script)'),
+            ('env=env, text=True', 'env=None, text=True'),
+            ('PURE_CORE_RETIREMENT_PROBE.encode("utf-8")', 'PURE_CORE_RETIREMENT_PROBE.encode("utf-8") + b" "'),
+        )
+        method = 'test_long_exact_payload_uses_isolated_file_env_and_cleanup'
+        for old,new in cases:
+            self.assertIn(old,source)
+            namespace = dict(vars(gate))
+            exec(compile(source.replace(old,new),'<retirement-transport-mutant>','exec'),namespace)
+            mutant = type(gate.probe_pure_core_retirement)(namespace['probe_pure_core_retirement'].__code__, vars(gate))
+            with self.subTest(mutation=old), patch.object(gate,'probe_pure_core_retirement',mutant):
+                broken = unittest.TestResult()
+                RetirementTransportTests(method).run(broken)
+                self.assertFalse(broken.wasSuccessful(),'transport mutation survived')
+            restored = unittest.TestResult()
+            RetirementTransportTests(method).run(restored)
+            self.assertTrue(restored.wasSuccessful(),restored.errors or restored.failures)
+
+
 class PackageTests(unittest.TestCase):
     def test_round20_public_closure_retains_host_suites(self):
         # Path/AST metadata only: never load the golden corpora into this test.
         closure = gate.require_rust_public_closure(ROOT / "native/pure_core")
         self.assertEqual(set(closure), set(gate.RUST_INTEGRATION_FILES))
-        self.assertEqual(len(gate.RUST_INTEGRATION_SUITES), 29)
+        self.assertEqual(len(gate.RUST_INTEGRATION_SUITES), 32)
         source = ast.parse((ROOT / "scripts/create_public_branch.py").read_text())
         public = set()
         for node in source.body:
@@ -802,7 +1104,7 @@ class PackageTests(unittest.TestCase):
         for host in ("spike/test_catenary.py", "spike/test_catenary_owned.py",
                      "spike/test_obj_writer.py", "spike/test_native_obj.py"):
             self.assertIn(host, gate.PURE_CORE_PYTESTS)
-        self.assertEqual(gate.PURE_CORE_RETIREMENT_IDENTITY["retirement_abi"], 23)
+        self.assertEqual(gate.PURE_CORE_RETIREMENT_IDENTITY["retirement_abi"], 24)
         for export in ("narwhal_pure_core_catenary_plan_v2", "narwhal_pure_core_obj_encode_into"):
             self.assertIn(export, gate.PURE_CORE_RETIREMENT_EXPORTS)
 
@@ -825,7 +1127,8 @@ class PackageTests(unittest.TestCase):
                  "native/pure_core/tests/tween_v1.h",
                  "native/pure_core/tests/fixtures/dxf_writer23/capture.json",
                  "native/pure_core/tests/fixtures/dxf_writer23/units-default.dxf",
-                 "native/pure_core/tests/fixtures/dxf_writer23/random-coordinates.bin")
+                 "native/pure_core/tests/fixtures/dxf_writer23/random-coordinates.bin",
+                 *sorted(ROUND24_NATIVE_FILES | ROUND24_MODULES))
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             for name in paths:
@@ -935,7 +1238,8 @@ class PackageTests(unittest.TestCase):
                                   "narwhal_pure_core_calc_abi2": 2, "narwhal_pure_core_bearing_abi2": 2,
                                   "narwhal_pure_core_coords_owned_abi1": 1,
                                   "narwhal_pure_core_svgpath_owned_version": 14, "narwhal_pure_core_alias_identity": 1,
-                          "narwhal_pure_core_dxf_owned_abi_version": 2})
+                          "narwhal_pure_core_dxf_owned_abi_version": 2,
+                          "narwhal_pure_core_dxf_reader24_abi_version": 1})
             with patch.object(sys, "platform", "win32"), patch.object(win_verify, "probe_pure_core_parser", side_effect=ValueError("semantic mutant")):
                 with self.assertRaisesRegex(win_verify.VerificationError, "semantic mutant"):
                     win_verify.pure_core_record(Path("core.dll"))
@@ -949,7 +1253,7 @@ class PackageTests(unittest.TestCase):
             path = Path(tmp) / "core.dll"
             path.write_bytes(pe_fixture())
             self.assertEqual(win_verify.pure_core_record(path)["parse_abi"], 2)
-            for kwargs in ({"parser_abi": 1}, {"svg_abi": 1}, {"alias_abi": 14}, {"dxf_abi": 1},
+            for kwargs in ({"parser_abi": 1}, {"svg_abi": 1}, {"alias_abi": 14}, {"dxf_abi": 1}, {"reader_abi": 2},
                            *({"missing": name} for name in (*gate.PURE_CORE_PARSE_EXPORTS,*gate.PURE_CORE_RETIREMENT_EXPORTS)),
                            {"missing": "narwhal_pure_core_parse_abi"},
                            {"missing": "narwhal_pure_core_parse_v2"}):
@@ -1071,7 +1375,7 @@ class RetirementPackageTests(unittest.TestCase):
             with patch.dict(win_verify.NATIVE_COMPONENT_PATHS,{'narwhal_pure_core.dll':'core.dll'},clear=True), \
                     patch.object(win_verify,'verify_application_core_copies'), \
                     patch.object(win_verify,'verify_application_core_source'), patch.object(sys,'platform','linux'):
-                for missing in tuple(gate.PURE_CORE_RETIREMENT_EXPORTS)[-13:]:
+                for missing in ROUND23_ADDED_EXPORTS + ROUND24_ADDED_EXPORTS:
                     (root/'core.dll').write_bytes(pe_fixture(missing=missing))
                     with self.subTest(missing=missing), self.assertRaises(win_verify.VerificationError):
                         win_assemble.native_records(root)
@@ -1204,14 +1508,14 @@ class ActualRound23ProbeTests(unittest.TestCase):
     def test_matching_real_library_has_stable_parser_and_round23_semantics(self):
         self.assertEqual(gate.probe_pure_core_parser(self.library),gate.PURE_CORE_PARSE_IDENTITY)
         self.assertEqual(gate.probe_pure_core_retirement(self.library),gate.PURE_CORE_RETIREMENT_IDENTITY)
-        self.assertEqual(gate.PURE_CORE_RETIREMENT_IDENTITY['retirement_abi'],23)
-        self.assertEqual(len(gate.PURE_CORE_RETIREMENT_EXPORTS),22)
+        self.assertEqual(gate.PURE_CORE_RETIREMENT_IDENTITY['retirement_abi'],24)
+        self.assertEqual(len(gate.PURE_CORE_RETIREMENT_EXPORTS),28)
 
     def test_stale22_and_each_new_missing_export_refused_with_real_parser(self):
         old = {'stl_size_owned','stl_encode_owned','stl_file_size','stl_file_decode',
                'stl_import_mesh_decode','stl_normal','interpolate_helper_v1','catenary_plan_v2','obj_encode_into'}
-        new = [name for name in gate.PURE_CORE_RETIREMENT_EXPORTS
-               if name.removeprefix('narwhal_pure_core_') not in old]
+        new = list(ROUND23_ADDED_EXPORTS)
+        self.assertTrue(set(new) <= set(gate.PURE_CORE_RETIREMENT_EXPORTS))
         self.assertEqual(len(new),13)
         for missing in [[name] for name in new]+[new]:
             with self.subTest(missing=missing):
@@ -1222,7 +1526,7 @@ class ActualRound23ProbeTests(unittest.TestCase):
 
     def test_linux_builder_real_stale_library_refused_before_staging(self):
         data = bytearray(self.original)
-        for name in tuple(gate.PURE_CORE_RETIREMENT_EXPORTS)[-13:]:
+        for name in ROUND23_ADDED_EXPORTS:
             data[self.entries[name][0]+4] &= 0x0f
         base = Path(self.temp.name)
         source,output = base/'source',base/'output'
@@ -1279,7 +1583,7 @@ class Round23ClosureTests(unittest.TestCase):
         new = ('vector_encode_v1','vector_len_v1','vector_copy_v1','vector_free_v1','vector_validate_v1',
                'dxf_owned_abi_version','dxf_owned_colors','dxf_owned_units','dxf_owned_capacity','dxf_owned_encode',
                'tween_plan_v1','tween_knots_v1','tween_lengths_v1')
-        self.assertEqual(gate.PURE_CORE_RETIREMENT_IDENTITY['retirement_abi'],23)
+        self.assertEqual(gate.PURE_CORE_RETIREMENT_IDENTITY['retirement_abi'],24)
         for name in new:
             self.assertIn('narwhal_pure_core_'+name,gate.PURE_CORE_RETIREMENT_EXPORTS)
 
@@ -1344,13 +1648,112 @@ class Round23ClosureTests(unittest.TestCase):
                 result = unittest.TestResult()
                 Round23ClosureTests(method).run(result)
                 self.assertFalse(result.wasSuccessful())
-        for export in tuple(gate.PURE_CORE_RETIREMENT_EXPORTS)[-13:]:
+        for export in ROUND23_ADDED_EXPORTS:
             with patch.object(gate,'PURE_CORE_RETIREMENT_EXPORTS',tuple(e for e in gate.PURE_CORE_RETIREMENT_EXPORTS if e!=export)):
                 result = unittest.TestResult()
                 Round23ClosureTests(method).run(result)
                 self.assertFalse(result.wasSuccessful())
         restored = unittest.TestResult()
         Round23ClosureTests(method).run(restored)
+        self.assertTrue(restored.wasSuccessful(),restored.errors or restored.failures)
+
+
+@unittest.skipUnless(sys.platform.startswith('linux'), 'copied ELF faults; native Windows semantics run in its verifier')
+class ActualRound24ProbeTests(unittest.TestCase):
+    setUp = ActualRound23ProbeTests.setUp
+    assert_refused_with_parser_intact = ActualRound23ProbeTests.assert_refused_with_parser_intact
+
+    def test_stale23_and_each_new_required_export_refused_with_parser_working(self):
+        newly_introduced = [name for name in ROUND24_ADDED_EXPORTS if name not in (
+            'narwhal_pure_core_ear_clip_display','narwhal_pure_core_control_point_curve_preview')]
+        self.assertEqual(len(newly_introduced),4)
+        for missing in [[name] for name in ROUND24_ADDED_EXPORTS]+[newly_introduced]:
+            with self.subTest(missing=missing):
+                data = bytearray(self.original)
+                for name in missing: data[self.entries[name][0]+4] &= 0x0f
+                self.assert_refused_with_parser_intact(data)
+
+    def test_new_no_write_exports_and_wrong_reader_identity_refused(self):
+        for name in ROUND24_ADDED_EXPORTS:
+            if name.endswith('abi_version'): continue
+            with self.subTest(symbol=name):
+                data = bytearray(self.original)
+                _entry,value,size,section = self.entries[name]
+                self.assertGreaterEqual(size,3)
+                self.assertEqual(struct.unpack_from('<H',data,18)[0],62)
+                offset = section[4]+value-section[3]
+                data[offset:offset+3] = b'\x31\xc0\xc3'
+                self.assert_refused_with_parser_intact(data)
+        data = bytearray(self.original)
+        entry = self.entries['narwhal_pure_core_dxf_reader24_abi_version'][0]
+        _,value,size,_ = self.entries['narwhal_pure_core_dxf_owned_abi_version']
+        struct.pack_into('<QQ',data,entry+8,value,size)
+        self.assert_refused_with_parser_intact(data)
+
+    def test_linux_builder_refuses_real_parser_working_stale23_before_staging(self):
+        data = bytearray(self.original)
+        for name in ROUND24_ADDED_EXPORTS:
+            if name not in ('narwhal_pure_core_ear_clip_display','narwhal_pure_core_control_point_curve_preview'):
+                data[self.entries[name][0]+4] &= 0x0f
+        base = Path(self.temp.name)
+        source,output = base/'source24',base/'output24'
+        for path in (source/'native/pure_core',output/'pure_core-target/release',
+                     base/'seed24',base/'occt24',base/'libs24'):
+            path.mkdir(parents=True,exist_ok=True)
+        library = output/'pure_core-target/release/libnarwhal_pure_core.so'
+        library.write_bytes(data)
+        real_run = subprocess.run
+        def run(command,*args,**kwargs):
+            return SimpleNamespace(returncode=0) if command[0]=='podman' else real_run(command,*args,**kwargs)
+        argv = ['build','--source-root',str(source),'--output',str(output),
+                '--seed-target',str(base/'seed24'),'--occt-source',str(base/'occt24'),
+                '--occt-libs',str(base/'libs24'),'--crate','pure_core']
+        with patch.object(sys,'argv',argv), patch.object(linux_build.subprocess,'run',side_effect=run):
+            with self.assertRaisesRegex(ValueError,'required retirement'): linux_build.main()
+        self.assertFalse((output/'bin/libnarwhal_pure_core.so').exists())
+
+
+class Round24ClosureTests(unittest.TestCase):
+    def test_new_header_data_producer_and_host_closure_is_real(self):
+        import create_public_branch as public
+        self.assertTrue(ROUND24_NATIVE_FILES <= set(gate.require_rust_public_closure(ROOT/'native/pure_core')))
+        self.assertTrue(ROUND24_NATIVE_FILES | ROUND24_MODULES <= set(public.NATIVE_FILES))
+        self.assertTrue(ROUND24_MODULES <= set(gate.RUST_REQUIRED_MODULE_FILES))
+        self.assertTrue({'earclip24_golden','preview24_golden','dxf_reader24'} <= set(gate.RUST_INTEGRATION_SUITES))
+        for host in ('spike/test_preview24_boundaries.py','spike/test_dxf_reader24_boundaries.py'):
+            self.assertIn(host,gate.PURE_CORE_PYTESTS)
+            self.assertIn(host,public.TEST_FILES)
+        for support in ('spike/dxf_reader24_fixtures.py',):
+            self.assertIn(support,public.TEST_FILES)
+        for module in ('narwhal3d/native_preview.py','narwhal3d/native_dxf_reader.py','narwhal3d/dxf_reader.py'):
+            self.assertIn(module,public.recursive_files('narwhal3d'))
+        self.assertTrue(set(ROUND23_ADDED_EXPORTS + ROUND24_ADDED_EXPORTS) <= set(gate.PURE_CORE_RETIREMENT_EXPORTS))
+        self.assertEqual(gate.PURE_CORE_RETIREMENT_IDENTITY['retirement_abi'],24)
+        self.assertEqual(len(gate.PURE_CORE_RETIREMENT_EXPORTS),28)
+
+    def test_new_configuration_guards_are_load_bearing(self):
+        method = 'test_new_header_data_producer_and_host_closure_is_real'
+        mutants = [patch.object(gate,'PURE_CORE_RETIREMENT_EXPORTS',tuple(
+                       name for name in gate.PURE_CORE_RETIREMENT_EXPORTS if name!=missing))
+                   for missing in ROUND24_ADDED_EXPORTS]
+        mutants += [patch.object(gate,'PURE_CORE_PYTESTS',tuple(
+                        name for name in gate.PURE_CORE_PYTESTS if name!=missing))
+                    for missing in ('spike/test_preview24_boundaries.py','spike/test_dxf_reader24_boundaries.py')]
+        import create_public_branch as public
+        recursive = public.recursive_files
+        mutants += [patch.object(public,'TEST_FILES',tuple(
+                        name for name in public.TEST_FILES if name!='spike/dxf_reader24_fixtures.py')),
+                    patch.object(public,'recursive_files',side_effect=lambda *args: [
+                        name for name in recursive(*args) if name!='narwhal3d/dxf_reader.py']),
+                    patch.object(gate,'RUST_REQUIRED_MODULE_FILES',()),
+                    patch.dict(gate.PURE_CORE_RETIREMENT_IDENTITY,{'retirement_abi':23})]
+        for mutant in mutants:
+            with mutant:
+                broken = unittest.TestResult()
+                Round24ClosureTests(method).run(broken)
+                self.assertFalse(broken.wasSuccessful())
+        restored = unittest.TestResult()
+        Round24ClosureTests(method).run(restored)
         self.assertTrue(restored.wasSuccessful(),restored.errors or restored.failures)
 
 

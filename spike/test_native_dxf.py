@@ -1,7 +1,7 @@
 """Required DXF writer ABI proof plus preserved, independent reader checks.
 
-No writer oracle, auto-build, crossover, or Python writer replay. Decoder
-fallback checks remain unchanged in purpose; decoder retirement is not this lease.
+No runtime reference parser, auto-build, crossover, or Python replay.
+Reader expected values are independent captures of the original implementation.
 """
 import ctypes
 import importlib.util
@@ -28,7 +28,7 @@ def _load(name, filename):
 dxf = _load("narwhal_dxf_writer", "dxf_writer.py")
 rdr = _load("narwhal_dxf_reader", "dxf_reader.py")
 writer_native = dxf._native_dxf()
-native = rdr._native_dxf()  # reader-only optional adapter, not a writer dependency
+native = rdr._native_dxf()  # required reader adapter, independent of writer
 results = []
 TMP = tempfile.mkdtemp(prefix="native_dxf_")
 
@@ -44,7 +44,7 @@ def check(name):
 
 
 def _reset():
-    native._reset_for_tests()
+    native._cache = None
 
 
 def _captured_writer_bytes():
@@ -96,20 +96,14 @@ def _():
 
 def _write_text(name, text):
     p = os.path.join(TMP, name)
-    with open(p, "w", encoding="latin-1") as fh:
-        fh.write(text)
+    # Frozen input hashes identify exact LF/Latin1 bytes on every host.
+    Path(p).write_bytes(text.encode("latin-1"))
     return p
 
 
-def _py_read(path):
-    """The unchanged Python reader's output (the reference), by forcing the
-    native decode to ``None`` so ``read_dxf`` falls through to Python."""
-    real = native.decode_dxf
-    native.decode_dxf = lambda *a, **k: None
-    try:
-        return rdr.read_dxf(path)
-    finally:
-        native.decode_dxf = real
+def _captured_read(path):
+    from dxf_reader24_fixtures import expected_file
+    return expected_file(path)
 
 
 def _native_read(path):
@@ -123,14 +117,13 @@ def _native_read(path):
     return out
 
 
-@check("read_dxf activates the native decode route (dict matches the Python reader)")
+@check("read_dxf activates the native decode route (dict matches frozen original reader)")
 def _():
-    # Write the file with the PYTHON writer (isolate the decoder under test --
-    # the encoder route is a separate, already-proven accelerator).
+    # Frozen input bytes; expected reader result was independently captured.
     p = os.path.join(TMP, "rt.dxf")
     with open(p, "wb") as fh:
         fh.write(_captured_writer_bytes())
-    want = _py_read(p)          # the unchanged Python reader's dict
+    want = _captured_read(p)          # frozen original-reader dict
     got = _native_read(p)       # native route; asserts the counter moved
     assert got == want, (got, want)
     # Spot-check the key fields so a silent field-drop is not missed.
@@ -151,7 +144,7 @@ def _():
                     "10\n10.0\n20\n10.0\n30\n0.0\n"
                     "10\n0.0\n20\n10.0\n30\n0.0\n"
                     "0\nENDSEC\n")
-    want = _py_read(p)
+    want = _captured_read(p)
     got = _native_read(p)
     assert got == want, (got, want)
     e = got["entities"][0]
@@ -164,7 +157,7 @@ def _():
     assert got["layers"] == {}
 
 
-@check("native decode: modern ASCII SPLINE is structurally identical to Python")
+@check("native decode: modern ASCII SPLINE is structurally identical to frozen original")
 def _():
     p = _write_text(
         "modern_spline.dxf",
@@ -176,7 +169,7 @@ def _():
         "10\n0\n20\n0\n30\n0\n10\n1\n20\n0\n30\n0\n"
         "10\n1\n20\n1\n30\n0\n10\n0\n20\n0\n30\n0\n"
         "0\nHATCH\n8\ncut\n0\nENDSEC\n")
-    want = _py_read(p)
+    want = _captured_read(p)
     got = _native_read(p)
     assert got == want, (got, want)
     spline = got["entities"][0]
@@ -195,7 +188,7 @@ def _():
         "0\nLINE\n8\nRegister\n62\n7\n420\n0\n"
         "10\n0\n20\n0\n30\n0\n11\n1\n21\n0\n31\n0\n"
         "0\nENDSEC\n")
-    want = _py_read(p)
+    want = _captured_read(p)
     got = _native_read(p)
     assert got == want, (got, want)
     assert got["entities"][0]["color"] == 7
@@ -211,7 +204,7 @@ def _():
                     "10\n10.0\n20\n0.0\n42\n-0.25\n"
                     "10\n10.0\n20\n10.0\n"
                     "0\nENDSEC\n")
-    want = _py_read(p)
+    want = _captured_read(p)
     got = _native_read(p)
     assert got == want, (got, want)
     assert got["skipped"] == {"bulge": 2}, got
@@ -226,7 +219,7 @@ def _():
                     "0\nSECTION\n2\nENTITIES\n"
                     "0\nLINE\n10\n0.0\n20\n0.0\n30\n0.0\n11\n1.0\n21\n1.0\n31\n0.0\n"
                     "0\nENDSEC\n")
-    want = _py_read(p)
+    want = _captured_read(p)
     got = _native_read(p)
     assert got == want, (got, want)
     assert got["insunits"] is None, got
@@ -243,16 +236,15 @@ def _():
                     "0\nTEXT\n8\nl1\n10\n1.0\n20\n1.0\n1\nhi\n"
                     "0\nPOINT\n10\n2.0\n20\n2.0\n"
                     "0\nENDSEC\n")
-    want = _py_read(p)
+    want = _captured_read(p)
     got = _native_read(p)
     assert got == want, (got, want)
     assert [e["type"] for e in got["entities"]] == ["LINE"], got
     assert got["skipped"] == {"INSERT": 1, "POINT": 1, "TEXT": 1}, got
 
 
-def _assert_decode_fallback_raises(path, label, exc_substr):
-    """A rejection check: the native route refuses the file (so the counter is
-    NOT incremented) and the unchanged Python reader raises FileFormatError."""
+def _assert_decode_raises(path, label, exc_substr):
+    """Bad-file rejection is distinct from a missing required native library."""
     _reset()
     before = native._native_decode_dxf_calls
     try:
@@ -265,127 +257,61 @@ def _assert_decode_fallback_raises(path, label, exc_substr):
          before, native._native_decode_dxf_calls)
 
 
-@check("decoder fallback: a binary DXF is refused (Python raises, counter NOT moved)")
+@check("required decoder: binary DXF is refused without success counting")
 def _():
     p = os.path.join(TMP, "bin_sentinel.dxf")
     with open(p, "wb") as fh:
         fh.write(b"AutoCAD Binary DXF\r\n\x1a\0")
-    _assert_decode_fallback_raises(p, "binary", "binary")
+    _assert_decode_raises(p, "binary", "binary")
 
 
-@check("decoder fallback: a truncated file is refused (Python raises, counter NOT moved)")
+@check("required decoder: truncated DXF is refused without success counting")
 def _():
     p = _write_text("trunc.dxf", "0\nSECTION\n2\nHEADER\n9\n$ACADVER\n1\n")
-    _assert_decode_fallback_raises(p, "truncated", "truncated")
+    _assert_decode_raises(p, "truncated", "truncated")
 
 
-@check("decoder fallback: a library without the DXF decode exports -> Python reader")
+@check("required decoder missing library refuses explicitly without replay")
 def _():
-    _reset()
-    assert native.available() is True, native.backend_status()
-    p = os.path.join(TMP, "fb_nodecode.dxf")
-    with open(p, "wb") as fh:
-        fh.write(_captured_writer_bytes())
-    real_binding = native._binding
-
-    def _binding_no_decode_dxf():
-        b = real_binding()
-        if b is None:
-            return None
-        # Decode handles remain the last two slots before the library path.
-        return (*b[:-3], None, None, b[-1])
-
-    native._binding = _binding_no_decode_dxf
+    old = os.environ.get("NARWHAL_PURE_CORE")
+    before = native._native_decode_dxf_calls
     try:
-        before = native._native_decode_dxf_calls
-        got = rdr.read_dxf(p)
-        want = _py_read(p)
-        assert got == want, (got, want)
-        assert native._native_decode_dxf_calls == before, \
-            "counter must not move when the decode exports are absent"
-    finally:
-        native._binding = real_binding
-
-
-@check("decoder fallback: a malformed native output -> Python reader")
-def _():
-    _reset()
-    assert native.available() is True, native.backend_status()
-    p = os.path.join(TMP, "fb_malformed.dxf")
-    with open(p, "wb") as fh:
-        fh.write(_captured_writer_bytes())
-    real = native.decode_dxf
-    native.decode_dxf = lambda *a, **k: None  # simulate a failed decode
-    try:
-        before = native._native_decode_dxf_calls
-        got = rdr.read_dxf(p)
-        want = _py_read(p)
-        assert got == want, (got, want)
-        assert native._native_decode_dxf_calls == before, \
-            "counter must not move when the native decode fails"
-    finally:
-        native.decode_dxf = real
-
-
-def _dxf_packed(*, typ=0, closed=0, coord_count=6, coords=None,
-                entity_count=1, trailing=b""):
-    if coords is None:
-        coords = (0.0, 0.0, 0.0, 1.0, 0.0, 0.0)
-    parts = [struct.pack("<IIq", 0x44584631, 1, 4), struct.pack("<q", 0),
-             struct.pack("<q", entity_count)]
-    if entity_count == 1:
-        parts.extend([
-            struct.pack("<q", typ), struct.pack("<q", 1), b"0",
-            struct.pack("<q", 7), struct.pack("<q", closed),
-            struct.pack("<q", coord_count),
-            struct.pack("<%dd" % len(coords), *coords),
-        ])
-    parts.extend([struct.pack("<q", 0), trailing])
-    return b"".join(parts)
-
-
-@check("strict DXF packed validation rejects counts, arity, bools, and trailing bytes")
-def _():
-    assert native._parse_dxf_packed(_dxf_packed())["entities"][0]["type"] == "LINE"
-    bad_payloads = [
-        _dxf_packed(entity_count=-1),
-        _dxf_packed(typ=9),
-        _dxf_packed(closed=2),
-        _dxf_packed(coord_count=5, coords=(0, 0, 0, 1, 0)),
-        _dxf_packed(coord_count=-1, coords=()),
-        _dxf_packed(trailing=b"x"),
-    ]
-    for payload in bad_payloads:
+        os.environ["NARWHAL_PURE_CORE"] = os.path.join(TMP, "missing-library")
+        native._cache = None
         try:
-            native._parse_dxf_packed(payload)
-            raise AssertionError("malformed packed DXF was accepted: %r" % payload[:40])
-        except ValueError:
-            pass
-
-
-@check("malformed successful DXF packed output returns None without counting")
-def _():
-    _reset()
-    real_binding = native._binding
-    base = real_binding()
-    payload = _dxf_packed(closed=2)
-
-    def size_fn(_data, _length):
-        return len(payload)
-
-    def decode_fn(_data, _length, out, out_len):
-        assert out_len == len(payload)
-        ctypes.memmove(out, payload, len(payload))
-        return 0
-
-    native._binding = lambda: (*base[:-3], size_fn, decode_fn, base[-1])
-    try:
-        before = native._native_decode_dxf_calls
-        assert native.decode_dxf((FIXTURES / "decoder-no-layers.dxf").read_bytes()) is None
+            native.decode_dxf(_captured_writer_bytes())
+        except native.NativeDXFReaderError as exc:
+            assert "missing or stale" in str(exc)
+        else:
+            raise AssertionError("missing required decoder was accepted")
         assert native._native_decode_dxf_calls == before
     finally:
-        native._binding = real_binding
+        if old is None:
+            os.environ.pop("NARWHAL_PURE_CORE", None)
+        else:
+            os.environ["NARWHAL_PURE_CORE"] = old
+        native._cache = None
 
+
+@check("required decoder malformed successful output fails without counting")
+def _():
+    real = native._binding
+    before = native._native_decode_dxf_calls
+    def decode(_data, _length, _limit, out, _capacity, written, _diag):
+        ctypes.memmove(out, b"badmagic", 8)
+        ctypes.cast(written, ctypes.POINTER(ctypes.c_size_t))[0] = 8
+        return 0
+    native._binding = lambda: (None, decode)
+    try:
+        try:
+            native.decode_dxf(_captured_writer_bytes())
+        except native.NativeDXFReaderError as exc:
+            assert "magic" in str(exc)
+        else:
+            raise AssertionError("malformed output was accepted")
+        assert native._native_decode_dxf_calls == before
+    finally:
+        native._binding = real
 
 
 failed = 0

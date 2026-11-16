@@ -83,39 +83,15 @@ def points_only(args):
 # ---------------------------------------------------------------------------
 
 def circle_polyline(plane, center, radius, segments=CIRCLE_SEGMENTS):
-    """A closed circle of `radius` about `center`, lying IN `plane`.
-
-    `center` is a world point; the circle is swept in the plane's x/y axes, so it
-    is correctly oriented in every viewport. Returns [] for a non-positive radius,
-    which is what a zero-size preview should draw.
-    """
-    if radius <= 0:
-        return []
-    u, v = plane.xaxis, plane.yaxis
-    pts = []
-    for i in range(segments + 1):          # +1 closes the loop
-        a = 2.0 * math.pi * i / segments
-        cos_a, sin_a = math.cos(a) * radius, math.sin(a) * radius
-        pts.append((center[0] + u[0] * cos_a + v[0] * sin_a,
-                    center[1] + u[1] * cos_a + v[1] * sin_a,
-                    center[2] + u[2] * cos_a + v[2] * sin_a))
-    return pts
+    """Display-only circle; required Rust preserves the original sample order."""
+    from .native_preview import circle
+    return circle(plane, center, radius, segments)
 
 
 def rectangle_polyline(plane, corner, opposite):
-    """A closed rectangle with two OPPOSITE corners, lying IN `plane`.
-
-    Both corners are world points. The rectangle's sides run along the plane's
-    axes -- which is what makes a Box previewed in a Front viewport stand up in
-    the Front plane instead of lying flat.
-    """
-    u0, v0, _ = plane.from_world(corner)
-    u1, v1, w1 = plane.from_world(opposite)
-    return [plane.to_world(u0, v0, w1),
-            plane.to_world(u1, v0, w1),
-            plane.to_world(u1, v1, w1),
-            plane.to_world(u0, v1, w1),
-            plane.to_world(u0, v0, w1)]
+    """Retain arbitrary host plane callbacks; Rust owns corner ordering."""
+    from .native_preview import rectangle
+    return rectangle(plane, corner, opposite)
 
 
 # ---------------------------------------------------------------------------
@@ -233,81 +209,11 @@ def preview_srfpt(args, cursor, plane):
 CURVE_PREVIEW_PER_SPAN = 12
 
 
-def _clamped_uniform_knots(n, degree):
-    """The knot vector `CreateControlPointCurve` uses: clamped, uniform interior.
-
-    ``p+1`` zeros, the interior knots ``1 .. n-p-1``, then ``p+1`` copies of
-    ``n-p``; length ``n + p + 1``, domain ``[0, n-p]``.
-    """
-    interior = list(range(1, n - degree))
-    return ([0.0] * (degree + 1) + [float(k) for k in interior]
-            + [float(n - degree)] * (degree + 1))
-
-
-def _de_boor(control, degree, u, knots):
-    """Evaluate a B-spline at `u` by de Boor's algorithm. Returns an (x, y, z)."""
-    n = len(control)
-    # the span containing u, clamped into the valid range [degree, n-1]
-    k = degree
-    while k < n - 1 and knots[k + 1] <= u:
-        k += 1
-    d = [tuple(control[j + k - degree]) for j in range(degree + 1)]
-    for r in range(1, degree + 1):
-        for j in range(degree, r - 1, -1):
-            lo = knots[j + k - degree]
-            hi = knots[j + 1 + k - r]
-            a = 0.0 if hi == lo else (u - lo) / (hi - lo)
-            d[j] = tuple((1.0 - a) * d[j - 1][i] + a * d[j][i] for i in range(3))
-    return d[degree]
-
-
 def control_point_curve_polyline(control, max_degree=3,
                                  per_span=CURVE_PREVIEW_PER_SPAN):
-    """Sample the smooth curve those CONTROL points define, as a polyline.
-
-    MEASURED (commands/curve.htm): "The Curve command draws a curve from **control
-    point** locations. Curve control points match input." and "makes a curve of
-    degree <number of points> - 1 as long as the number of control points is less
-    than or equal to the degree setting". So the degree rule is
-    ``min(max_degree, len(control) - 1)``, which is exactly what
-    `bridge.make_polyline` applies -- two picks give a straight line, three a
-    quadratic, four or more a cubic.
-
-    This exists because drawing the control polygon for a smooth curve is misleading.
-    `Curve` commits a degree-3 NURBS while the old preview
-    showed straight chords between the picks, so the shape on screen was not the
-    shape you got -- which is the whole point of a preview.
-
-    This runs on every mouse-move frame. Its construction must remain aligned with
-    the curve that `bridge.make_polyline` builds. With the pure-core library loaded
-    the samples come from Rust (`native_bspline`), which repeats the Python
-    arithmetic below exactly; measured 3.7x faster at three points and 27x at 30,
-    so there is no size threshold. Without it, `_sample_control_point_curve` runs.
-    """
-    pts = [tuple(p) for p in control]
-    if len(pts) < 2:
-        return []
-    degree = min(int(max_degree), len(pts) - 1)
-    if degree <= 1:
-        return pts          # a degree-1 B-spline IS the control polygon
-    try:
-        from . import native_bspline
-        native = native_bspline.control_point_curve_polyline(pts, max_degree, per_span)
-    except Exception:  # noqa: BLE001 -- the Python sampler remains the fallback
-        native = None
-    if native is not None:
-        return native
-    return _sample_control_point_curve(pts, degree, per_span)
-
-
-def _sample_control_point_curve(pts, degree, per_span):
-    """The Python sampler behind `control_point_curve_polyline`, for degree >= 2."""
-    knots = _clamped_uniform_knots(len(pts), degree)
-    hi = float(len(pts) - degree)
-    steps = max(1, int(per_span) * (len(pts) - degree))
-    out = [_de_boor(pts, degree, hi * i / steps, knots) for i in range(steps)]
-    out.append(tuple(pts[-1]))   # the clamped end is exactly the last control point
-    return out
+    """Display-only control curve, sampled by the required exact Rust kernel."""
+    from .native_bspline import control_point_curve_polyline as sample
+    return sample(control, max_degree, per_span)
 
 
 def preview_curve(args, cursor, plane, cmd=None):
@@ -445,68 +351,19 @@ def preview_rectangle(args, cursor, plane):
 
 
 def preview_ellipse(args, cursor, plane):
-    """`Ellipse`: centre, then the two semi-axes as they are picked.
-
-    One point (the centre) -- show the first semi-axis rubber-banding to the
-    cursor. Two points (centre + first axis end) -- show both semi-axes: the
-    fixed one (centre->axis1) and the live one (centre->cursor). Three points --
-    show the full ellipse, sampled exactly as bridge.make_ellipse maps it
-    (centre + u*cos(t) + v*sin(t)), so the preview and the result agree.
-    """
+    """Picked ellipse preview; host filtering, native computation."""
+    from .native_preview import picked_ellipse
     pts = points_only(args)
-    if not pts:
-        return []
-    center = pts[0]
-    if len(pts) == 1:
-        # only the centre is fixed; the first semi-axis follows the cursor
-        return [[center, cursor]]
-    # MEASURED (research_preview_14 P14): at "End of second axis" the whole ellipse is live,
-    # its second semi-axis perpendicular to the first with the cursor's distance from the
-    # first axis, plus a construction line from the centre to the cursor.
-    u = _sub(pts[1], center)
-    w = _sub(pts[2] if len(pts) > 2 else cursor, center)
-    uu = dot(u, u)
-    k = dot(w, u) / uu if uu > 1e-24 else 0.0
-    v = tuple(w[i] - k * u[i] for i in range(3))
-    if len(pts) == 2 and _length(v) <= 1e-12:
-        return [[center, pts[1]], [center, cursor]]
-    out = []
-    for i in range(CIRCLE_SEGMENTS + 1):
-        a = 2.0 * math.pi * i / CIRCLE_SEGMENTS
-        c, s = math.cos(a), math.sin(a)
-        out.append((center[0] + u[0] * c + v[0] * s,
-                    center[1] + u[1] * c + v[1] * s,
-                    center[2] + u[2] * c + v[2] * s))
-    if len(pts) == 2:
-        return [out, [center, tuple(cursor)]]
-    return [out]
+    return picked_ellipse(pts, cursor, CIRCLE_SEGMENTS) if pts else []
 
 
 def polygon_polyline(plane, center, radius, sides, inscribed=True, *,
                      start_angle=0.0, direction=1.0):
-    """A regular polygon of `radius` and `sides` about `center`, in `plane`.
+    """Regular polygon preview with native phase, winding and frame math."""
+    from .native_preview import polygon
+    return polygon(plane, center, radius, sides, inscribed,
+                   start_angle=start_angle, direction=direction)
 
-    `inscribed` (the reference CAD application's default) means the corners sit on a circle of the given
-    radius; `circumscribed` means the side midpoints do (the radius is the
-    apothem), so the corner radius is `radius / cos(pi/sides)`. Returns a closed
-    polyline, or [] for a degenerate input. This mirrors bridge.make_polygon's
-    inscribed/circumscribed choice so the preview and the result agree.
-    """
-    if radius <= 0 or sides < 3:
-        return []
-    corner_radius = radius if inscribed else radius / math.cos(math.pi / sides)
-    # MEASURED: CreateCircumscribedPolygon starts at (r, r*tan(pi/n)),
-    # not on +x like CreateInscribedPolygon. Edge supplies its own start/winding.
-    start_angle += 0.0 if inscribed else math.pi / sides
-    u, v = plane.xaxis, plane.yaxis
-    pts = []
-    for i in range(sides + 1):          # +1 closes the loop
-        a = start_angle + direction * 2.0 * math.pi * i / sides
-        c, s = math.cos(a) * corner_radius, math.sin(a) * corner_radius
-        pts.append((center[0] + u[0] * c + v[0] * s,
-                    center[1] + u[1] * c + v[1] * s,
-                    center[2] + u[2] * c + v[2] * s))
-    return pts
 
 
 def _variant_preview(name, args, cursor, plane, cmd):
@@ -717,12 +574,9 @@ def preview_pyramid(args, cursor, plane, cmd=None):
 
 
 def _ring(center, u, v, radius, segments=CIRCLE_SEGMENTS):
-    """A closed circle of `radius` about `center` in the plane of unit vectors u, v."""
-    if not radius > 0:
-        return []
-    return [tuple(center[k] + radius * (math.cos(a) * u[k] + math.sin(a) * v[k])
-                  for k in range(3))
-            for a in (2.0 * math.pi * i / segments for i in range(segments + 1))]
+    """Display ring, retaining its distinct radius-first arithmetic grouping."""
+    from .native_preview import ring
+    return ring(center, u, v, radius, segments)
 
 
 def _along(point, direction, length):
@@ -826,42 +680,11 @@ def preview_truncatedcone(args, cursor, plane):
 
 
 def preview_ellipsoid(args, cursor, plane):
-    """`Ellipsoid` -- MEASURED (research_preview_14 P09): a rubber line from the centre to
-    the cursor at the first axis; a live ellipse at the second; the whole wire at the
-    third. The frame is `EllipsoidCmd._make`'s: the first axis flattened into the CPlane,
-    the second perpendicular to it in the CPlane, the third along the normal; the second
-    and third sizes are the cursor's distance from the centre, as the command measures."""
+    """Display-only ellipsoid; preserve host pick validation and native math."""
     if not args or not _is_point(args[0]):
         return []
-    center = args[0]
-    if len(args) == 1:
-        return [[center, tuple(cursor)]]
-    z = plane.zaxis
-    v = _sub(args[1], center)
-    k = sum(v[i] * z[i] for i in range(3))
-    v = tuple(v[i] - k * z[i] for i in range(3))
-    a = _length(v)
-    if not a > 0:
-        return []
-    x = tuple(c / a for c in v)
-    y = (z[1] * x[2] - z[2] * x[1], z[2] * x[0] - z[0] * x[2], z[0] * x[1] - z[1] * x[0])
-    b = float(args[2]) if len(args) >= 3 else _length(_sub(cursor, center))
-    if not b > 0:
-        return [[center, args[1]]]
-
-    def ellipse(u, ru, w, rw):
-        return [tuple(center[i] + ru * math.cos(t) * u[i] + rw * math.sin(t) * w[i]
-                      for i in range(3))
-                for t in (2.0 * math.pi * j / CIRCLE_SEGMENTS
-                          for j in range(CIRCLE_SEGMENTS + 1))]
-
-    equator = ellipse(x, a, y, b)
-    if len(args) == 2:
-        return [equator]
-    c = _length(_sub(cursor, center))
-    if not c > 0:
-        return [equator]
-    return [equator, ellipse(x, a, z, c), ellipse(y, b, z, c)]
+    from .native_preview import ellipsoid
+    return ellipsoid(args, cursor, plane, CIRCLE_SEGMENTS)
 
 
 def preview_arraypolar(args, cursor, plane):

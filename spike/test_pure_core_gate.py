@@ -36,6 +36,27 @@ GATE = os.path.join(ROOT, "scripts", "check_pure_core.py")
 CRATE = os.path.join(ROOT, "native", "pure_core")
 PYTHON = str(runtime_paths.python(ROOT))
 
+ROUND24_FILES = {
+    'native/pure_core/tests/data/preview24_linux.tsv',
+    'native/pure_core/tests/data/preview24_windows_msvc.tsv',
+    'native/pure_core/tests/data/preview24_windows_msvc.provenance.json',
+    'native/pure_core/tests/data/preview24_provenance.txt',
+    'native/pure_core/tests/dxf_reader24.h',
+    'native/pure_core/tests/dxf_reader24.rs',
+    'native/pure_core/tests/earclip24_api.h',
+    'native/pure_core/tests/earclip24_golden.rs',
+    'native/pure_core/tests/fixtures/dxf_reader24/README.md',
+    'native/pure_core/tests/fixtures/dxf_reader24/capture.json',
+    'native/pure_core/tests/fixtures/dxf_reader24/corpus.bin',
+    'native/pure_core/tests/fixtures/dxf_reader24/manifest.tsv',
+    'native/pure_core/tests/fixtures/earclip24_original.txt',
+    'native/pure_core/tests/fixtures/earclip24_provenance.json',
+    'native/pure_core/tests/fixtures/earclip24_safety.json',
+    'native/pure_core/tests/preview24_api.h',
+    'native/pure_core/tests/preview24_golden.rs',
+}
+ROUND24_MODULES = {"native/pure_core/src/preview_primitives.rs"}
+
 results = []
 
 ROUND23_FILES = {
@@ -149,6 +170,7 @@ def _():
         "spike/test_interpolate.py", "spike/test_interpolate_owned_boundary.py",
         "spike/test_obj_writer.py", "spike/test_obj_reader.py", "spike/test_native_obj.py",
         "spike/test_dxf_writer.py", "spike/test_dxf_reader.py", "spike/test_native_dxf.py", "spike/test_dxf_writer_owned.py",
+        "spike/test_dxf_reader24_boundaries.py", "spike/test_preview24_boundaries.py",
         "spike/test_native_admission_owned.py",
         "spike/test_numparse.py", "spike/test_numparse_owned.py", "spike/test_native_numparse.py",
         "spike/test_pure_core_packaging.py",
@@ -278,7 +300,8 @@ def _():
     crate = Path(CRATE)
     closure = gate.require_rust_public_closure(crate)
     assert set(closure) == set(gate.RUST_INTEGRATION_FILES)
-    assert ROUND23_FILES <= set(closure)
+    assert ROUND23_FILES | ROUND24_FILES <= set(closure)
+    assert set(gate.RUST_REQUIRED_MODULE_FILES) == ROUND24_MODULES
     assert set(gate.RUST_INTEGRATION_SUITES) == {
             "alias_golden", "unit_golden", "interpolate_golden", "svgpath_golden",
             "bearing_golden", "calc_golden", "coords_golden", "unitformat_golden",
@@ -287,6 +310,7 @@ def _():
             "coil_golden", "interpolate_helpers_golden", "stl_owned", "stl_import_safety",
             "catenary_boundary", "catenary_golden", "obj_golden", "stl_legacy_abi", "stl_name_prefix",
             "dxf_owned", "vector23_golden", "tween_golden", "obj_legacy_abi", "encoder_legacy_abi",
+            "earclip24_golden", "preview24_golden", "dxf_reader24",
         }
     public_source = (Path(ROOT) / "scripts/create_public_branch.py").read_text()
     for retired in ("spike/alias_reference.py", "spike/units_reference.py", "spike/interpolate_reference.py",
@@ -369,12 +393,13 @@ def _():
     real_read = Path.read_text
     # Every round-19/20/21/22 path is required independently; inspect manifests, not fixtures.
     added = [path for path in closure
-             if path in ROUND23_FILES or Path(path).name.startswith(("blend_", "norm_", "nurbs_", "arclength_",
+             if path in ROUND23_FILES or path in ROUND24_FILES or Path(path).name.startswith(("blend_", "norm_", "nurbs_", "arclength_",
                                             "coil_", "interpolate_helpers", "stl_owned", "stl_import_safety",
                                             "catenary_", "obj_golden", "obj_original22",
                                             "stl_legacy_abi", "stl_name_prefix", "stl_prefix"))]
-    assert ROUND23_FILES <= set(added)
-    assert len(set(added) - ROUND23_FILES) == 46
+    added = sorted(set(added) | ROUND24_MODULES)
+    assert ROUND23_FILES | ROUND24_FILES | ROUND24_MODULES <= set(added)
+    assert len(set(added) - ROUND23_FILES - ROUND24_FILES - ROUND24_MODULES) == 46
     for missing in added:
         omitted = source.replace(repr(missing) + ",", "")
         assert omitted != source
@@ -433,12 +458,13 @@ def _():
         'tests/fixtures/stl_prefix_headers.bin',
         'tests/fixtures/stl_prefix_headers.txt',
     }
-    required.update(path.removeprefix("native/pure_core/") for path in ROUND23_FILES)
+    required.update(path.removeprefix("native/pure_core/") for path in ROUND23_FILES | ROUND24_FILES | ROUND24_MODULES)
     gate.require_rust_public_closure(crate)
     with tempfile.TemporaryDirectory(prefix="pure-core-round23-closure-") as temporary:
         copied = Path(temporary) / "pure_core"
         # Copy metadata/payloads without reading any corpus into agent/test text.
         shutil.copytree(crate / "tests", copied / "tests")
+        shutil.copytree(crate / "src", copied / "src")
         gate.require_rust_public_closure(copied)
         for relative in sorted(required):
             victim = copied / relative
@@ -455,6 +481,8 @@ def _():
             finally:
                 held.rename(victim)
             gate.require_rust_public_closure(copied)
+            if relative.startswith("src/"):
+                continue  # Module-list omission has an independent package guard.
             omitted = "native/pure_core/" + relative
             with patch.object(gate, "RUST_INTEGRATION_FILES", tuple(
                     path for path in gate.RUST_INTEGRATION_FILES if path != omitted)):

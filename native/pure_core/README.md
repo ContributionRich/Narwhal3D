@@ -12,7 +12,7 @@ Current production routing:
 |---|---|---|
 | STL encode | Rust | 1.31× faster at 100k triangles |
 | OBJ decode | Rust | 1.67× faster on a 1.8 MB file |
-| DXF decode | Rust | 3.23× faster on 20k entities |
+| DXF decode | required Rust, exact ordered results and errors | 20k LINEs: 157.7 ms original Python, 87.5 ms required native; old optional native 53.0 ms but different dictionary order; layer-heavy and tiny inputs can regress |
 | length parsing | Rust | about 1.14× faster |
 | calculator | Rust only, including grammar errors and domain/overflow classification | exact owned literals; no Python expression replay; mixed corpus faster, tiny literals retain FFI overhead |
 | coordinate/scalar/angle parsing | Rust only, including all grammar failures and top-level split | exact CPython-compatible norm, finite-result safety; CPlane callbacks/presentation stay host glue |
@@ -23,8 +23,8 @@ Current production routing:
 | print-width file parsing | Rust only | short-file Python bypass and parser retired; Python retains file decoding |
 | length display formatting | Rust only | decimal/fraction/feet-inch rounding, reduction, rendering and rejection in Rust; Python retains coercion/exception mapping |
 | closed (periodic) curve interpolation | Rust from 3 points | 1.4× faster end to end at 4 points, 3.3× at 64 |
-| Curve control-point preview sampling | Rust from 3 points | 5× faster per redraw at 4 points, 23× at 30; bit-identical samples |
-| planar face ear clipping (display) | Rust for concave loops from 6 points, any loop from 64 | concave 3.6× faster at 12 points, 40× at 100; convex 1.8× at 360; identical triangles |
+| Curve control-point preview sampling | required Rust at all supported sizes | full adapter: 52.7 to 10.8 us at four controls, 1488.8 to 49.7 at thirty; exact platform captures |
+| planar-loop ear clipping and signed area | required Rust at all supported sizes | exact partial/order results; 100-point star 1752 to 45.4 us; tiny square 1.70 to 6.25 us |
 | Near snap nearest point on a curve | Rust for a `NurbsCurve` (its analytic line/arc/circle targets included); other curves stay in Python | 8× faster on a circle, 45× on a 4-point cubic, 44× at 40 points; bit-identical point (openNURBS evaluation order) |
 | uniform curve samples for previews and wireframes (`bridge.sample_curve_xyz`) | Rust for a `NurbsCurve`; other curves stay in Python | 5.7× faster at 49 samples, 11× at 217, 14× at 553 (InterpCrv preview); bit-identical to `PointAt` |
 | curve display tessellation (`bridge._display_samples`) | Rust for a `NurbsCurve` on Linux/glibc only; other curves, Windows and macOS stay in Python | 11.9× faster over 300 open cubics, 5.7× on a circle, 14.8× on a 40-point zigzag; bit-identical parameters and points on Linux/glibc (libm `pow`/`atan2` as CPython calls them); unqualified elsewhere, see below |
@@ -34,12 +34,11 @@ Current production routing:
 | STL Import parse+weld | Rust at ≥50 kB | fused indexed output measured 3.8–4.3× faster at 1k–100k triangles |
 | OBJ encode | Python | native path was 2.18× slower |
 | curve/curve intersection recursion (`intersect.curve_curve` after its overlap test) | Rust for two valid `NurbsCurve`s on a qualified platform (Linux; `check_pure_core.py` pins the witness hits); other curves, other platforms and the overlap test stay in Python | 56-97× faster (two 20-point cubics 54.9 → 0.66 ms); bit-identical hits on Linux/glibc (`Split`, `GetBoundingBox`, `Intersection.LineLine` ported from the openNURBS rhino3dm 8.35.0 pins) |
-| DXF encode | Python | two-pass output build never reached a stable 10% win |
+| DXF encode | required Rust, analytic entity dictionaries retained | exact original captures; large workloads improve, tiny calls retain explicit FFI cost |
 | standalone number / bearing / surveyor parsing | Rust only | grammar and rejection classification owned natively; host type/error presentation only |
 | SVG path parsing | required Rust owned ABI14 | tokenizer, numeric conversion, cubic construction and error identity native-only; historical elliptical-arc cubic approximation unchanged; tiny calls retain FFI overhead |
 | alias macro grammar | required Rust identity1 | prefix/command/option spans and invalid classification native-only; AliasTable state/CRUD remain host code |
 | display segment counts (`screen_segments_for`) | Python | 0.5 µs per call, below one ctypes call; not ported |
-| short convex face loops (under 64 points) | Python | the linear fan beats packing (3.4× slower at 3 points) |
 
 **Math-library parity.** Curve display tessellation (`src/display.rs`) is bit-identical
 to the Python only because both call the same platform math library. CPython's float
@@ -119,3 +118,5 @@ STL codecs/safe mesh import, coil planning and public interpolation helpers requ
 Catenary and OBJ ownership extend the auxiliary required-retirement probe to 22 with 9 exports, including typed catenary v2 and OBJ serialization. Stable core ABI 1 does not change. Old libraries lacking v2 refuse explicitly; Linux and actual MSVC original captures qualify the new owner. See ../../docs/RUST_RETIREMENT_22.md.
 
 Required vector/DXF encoders and Tween plans extend the auxiliary retirement probe to 23 with 22 exports; core ABI 1 and parser identity stay stable. Real-consumer startup admission requires 26 exports, including legacy solver/coil entry points. See ../../docs/RUST_RETIREMENT_23.md for exact outputs, ordinary file I/O, platform qualification and performance tradeoffs.
+
+Required DXF reading, triangulation and selected preview sampling extend the retirement identity to 24 with 28 semantic exports and startup admission to 32 symbols. Platform-specific exact captures preserve Linux/MSVC answers. See ../../docs/RUST_RETIREMENT_24.md for scope, host boundaries and performance costs.

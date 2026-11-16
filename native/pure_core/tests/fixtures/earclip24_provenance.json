@@ -1,0 +1,37 @@
+{
+  "kind": "MEASURED independent original Python, native hook forced None before retirement",
+  "base": "95d92d17",
+  "python": "3.13.13 (main, Apr 25 2025, 12:39:20) [GCC 14.2.1 20250110 (Red Hat 14.2.1-11)]",
+  "original_sha256": "d5b19449f846d5d4c9d11f4da9f1ee70497887d269162a70ddeb8681c3546501",
+  "fixture_generator_sha256": "cdd8ce411080671eabc95ce90d13b9d5028d8f6337151c6bab7bac989c1d2eae",
+  "original_loops": 75,
+  "adversarial_loops": 33,
+  "total_loops": 108,
+  "data_sha256": "602978c2b2c08dc56b27efe09ffb25ec7824e8cd712717b4bcec482669abab65",
+  "safety_sha256": "f2cfc291f0d1b6109061281696c6cfafcef561079ae687e9f6b5be70501b09d3",
+  "rows": "name|xy IEEE754 hex csv|signed area IEEE754 hex|triangle index csv; empty spans are empty fields",
+  "partial_rows": [
+    6,
+    7,
+    65,
+    68,
+    69,
+    70,
+    71,
+    72,
+    73,
+    74,
+    79,
+    80,
+    81,
+    94,
+    95,
+    96
+  ],
+  "notes": [
+    "Inputs are frozen binary64 bits; never regenerate trig inputs in public tests.",
+    "Triangle triples and their order are exact original outputs, including partial/stalled results.",
+    "Local archive/capture executable is not a public test/runtime dependency.",
+    "Nonfinite clip input refusal is explicit safety behavior, not a silent substitute."
+  ]
+}

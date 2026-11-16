@@ -4,6 +4,8 @@ All notable public changes will be recorded here. Narwhal 3D is an extremely ear
 
 ## Unreleased
 
+- Source: required Rust DXF reading, planar-loop triangulation and selected live-preview sampling; removed their Python computational copies. Exact platform-specific captures, explicit native admission and Windows-safe probe transport preserve compatibility. [Qualification and measured tradeoffs](docs/RUST_RETIREMENT_24.md).
+
 - Source: required Rust PDF/AI/SVG and DXF encoders, Tween computations and complete startup admission; removed obsolete shared encoder adapters while preserving ordinary file I/O and exact valid output. [Scope and qualification](docs/RUST_RETIREMENT_23.md).
 - Source: replaced Python catenary planning and OBJ serialization with required Rust; retired obsolete STL compatibility adapters and corrected raw binary STL name-prefix handling. [Qualification and measured performance](docs/RUST_RETIREMENT_22.md).
 - Source: replaced duplicate Python interpolation/coil math and STL codecs with required Rust implementations. STL import validates destination coordinates before geometry publication. See [qualification and tradeoffs](docs/RUST_RETIREMENT_21.md). These changes are not retroactively included in 0.4.13 downloads.

@@ -1370,6 +1370,743 @@ pub unsafe extern "C" fn narwhal_pure_core_dxf_decode(
     0
 }
 
+// Required reader24 ABI: file data, never a substitute for kernel geometry.
+// The old packed decoder ABI above remains byte-for-byte compatible.
+const R24_MAGIC: &[u8; 8] = b"DXFR24\0\x01";
+const R24_MAX_BYTES: usize = 512 * 1024 * 1024;
+const R24_MAX_PAIRS: usize = 4_000_000;
+const R24_MAX_DIGITS: usize = 16_384;
+
+#[repr(C)]
+#[derive(Default)]
+pub struct DxfReader24Diagnostic {
+    pub code: i64,
+    pub start: usize,
+    pub len: usize,
+    pub detail: i64,
+    pub required: usize,
+}
+#[derive(Debug)]
+struct R24Error {
+    code: i64,
+    start: usize,
+    len: usize,
+    detail: i64,
+}
+impl R24Error {
+    fn code(code: i64) -> Self {
+        Self {
+            code,
+            start: 0,
+            len: 0,
+            detail: 0,
+        }
+    }
+}
+struct R24Context<'a> {
+    data: &'a [u8],
+    int_limit: u32,
+}
+impl R24Context<'_> {
+    fn error(&self, code: i64, token: &[u8]) -> R24Error {
+        R24Error {
+            code,
+            start: token.as_ptr() as usize - self.data.as_ptr() as usize,
+            len: token.len(),
+            detail: 0,
+        }
+    }
+    fn integer(&self, raw: &[u8]) -> Result<R24Integer, R24Error> {
+        let token = r24_trim(raw);
+        let mut offset = 0;
+        let mut negative = false;
+        if matches!(token.first(), Some(b'+') | Some(b'-')) {
+            negative = token[0] == b'-';
+            offset = 1;
+        }
+        if offset == token.len() {
+            return Err(self.error(-110, raw));
+        }
+        let mut digits = 0usize;
+        for i in offset..token.len() {
+            if token[i].is_ascii_digit() {
+                digits += 1;
+            } else if token[i] != b'_'
+                || i == offset
+                || i + 1 == token.len()
+                || !token[i - 1].is_ascii_digit()
+                || !token[i + 1].is_ascii_digit()
+            {
+                return Err(self.error(-110, raw));
+            }
+        }
+        if self.int_limit != 0 && digits > self.int_limit as usize {
+            let mut e = self.error(-115, raw);
+            e.detail = digits as i64;
+            return Err(e);
+        }
+        if digits > R24_MAX_DIGITS {
+            return Err(R24Error::code(-3));
+        }
+        let mut limbs: Vec<u32> = Vec::new();
+        for digit in token[offset..].iter().filter(|b| b.is_ascii_digit()) {
+            let mut carry = (digit - b'0') as u64;
+            for word in &mut limbs {
+                let n = *word as u64 * 10 + carry;
+                *word = n as u32;
+                carry = n >> 32;
+            }
+            if carry != 0 {
+                limbs.push(carry as u32);
+            }
+        }
+        Ok(R24Integer {
+            negative: negative && !limbs.is_empty(),
+            limbs,
+        })
+    }
+    fn float(&self, raw: &[u8]) -> Result<f64, R24Error> {
+        let token = r24_trim(raw);
+        if token.len() > 1024 * 1024 {
+            return Err(R24Error::code(-3));
+        }
+        let cleaned;
+        let bytes = if token.contains(&b'_') {
+            for (i, b) in token.iter().enumerate() {
+                if *b == b'_'
+                    && (i == 0
+                        || i + 1 == token.len()
+                        || !token[i - 1].is_ascii_digit()
+                        || !token[i + 1].is_ascii_digit())
+                {
+                    return Err(self.error(-111, raw));
+                }
+            }
+            cleaned = token
+                .iter()
+                .copied()
+                .filter(|b| *b != b'_')
+                .collect::<Vec<_>>();
+            cleaned.as_slice()
+        } else {
+            token
+        };
+        std::str::from_utf8(bytes)
+            .ok()
+            .and_then(|s| s.parse::<f64>().ok())
+            .ok_or_else(|| self.error(-111, raw))
+    }
+}
+fn r24_trim(bytes: &[u8]) -> &[u8] {
+    let space = |b: u8| matches!(b, b'\t'..=b'\r' | b' ' | 0x85 | 0xa0);
+    let start = bytes.iter().position(|b| !space(*b)).unwrap_or(bytes.len());
+    let end = bytes
+        .iter()
+        .rposition(|b| !space(*b))
+        .map_or(start, |n| n + 1);
+    &bytes[start..end]
+}
+#[derive(Clone)]
+struct R24Integer {
+    negative: bool,
+    limbs: Vec<u32>,
+}
+impl R24Integer {
+    fn small(value: i64) -> Self {
+        let magnitude = value.unsigned_abs();
+        let mut limbs = Vec::new();
+        if magnitude != 0 {
+            limbs.push(magnitude as u32);
+            if magnitude >> 32 != 0 {
+                limbs.push((magnitude >> 32) as u32);
+            }
+        }
+        Self {
+            negative: value < 0,
+            limbs,
+        }
+    }
+    fn low(&self) -> u64 {
+        let value = self.limbs.first().copied().unwrap_or(0) as u64
+            | ((self.limbs.get(1).copied().unwrap_or(0) as u64) << 32);
+        if self.negative {
+            value.wrapping_neg()
+        } else {
+            value
+        }
+    }
+    fn i64(&self) -> Option<i64> {
+        if self.limbs.len() > 2 {
+            return None;
+        }
+        let n = self.limbs.first().copied().unwrap_or(0) as u64
+            | ((self.limbs.get(1).copied().unwrap_or(0) as u64) << 32);
+        if self.negative {
+            (n <= 1u64 << 63).then(|| (-(n as i128)) as i64)
+        } else {
+            (n <= i64::MAX as u64).then_some(n as i64)
+        }
+    }
+}
+enum R24Value {
+    None,
+    Bool(bool),
+    Int(R24Integer),
+    Float(f64),
+    Text(Vec<u8>),
+    Point([f64; 3]),
+    Floats(Vec<f64>),
+    Points(Vec<[f64; 3]>),
+    Dict(Vec<(Vec<u8>, R24Value)>),
+    Encoded(Vec<u8>),
+}
+impl R24Value {
+    fn text(text: &[u8]) -> Self {
+        Self::Text(text.to_vec())
+    }
+    fn int(n: i64) -> Self {
+        Self::Int(R24Integer::small(n))
+    }
+    fn dict() -> Self {
+        Self::Dict(Vec::new())
+    }
+    fn set(&mut self, key: &[u8], value: Self) {
+        if let Self::Dict(fields) = self {
+            if let Some((_, old)) = fields.iter_mut().find(|(k, _)| k == key) {
+                *old = value;
+            } else {
+                fields.push((key.to_vec(), value));
+            }
+        }
+    }
+    fn encode(&self, out: &mut Vec<u8>) -> Result<(), R24Error> {
+        if out.len() > R24_MAX_BYTES {
+            return Err(R24Error::code(-3));
+        }
+        fn count(out: &mut Vec<u8>, n: usize) {
+            out.extend_from_slice(&(n as u64).to_le_bytes());
+        }
+        match self {
+            Self::None => out.push(0),
+            Self::Bool(v) => out.push(if *v { 2 } else { 1 }),
+            Self::Int(n) => {
+                if let Some(n) = n.i64() {
+                    out.push(3);
+                    out.extend_from_slice(&n.to_le_bytes());
+                } else {
+                    out.push(4);
+                    out.push(u8::from(n.negative));
+                    let mut bytes = Vec::with_capacity(n.limbs.len() * 4);
+                    for word in &n.limbs {
+                        bytes.extend_from_slice(&word.to_le_bytes());
+                    }
+                    while bytes.last() == Some(&0) {
+                        bytes.pop();
+                    }
+                    count(out, bytes.len());
+                    out.extend_from_slice(&bytes);
+                }
+            }
+            Self::Float(n) => {
+                out.push(5);
+                out.extend_from_slice(&n.to_le_bytes());
+            }
+            Self::Text(text) => {
+                out.push(6);
+                count(out, text.len());
+                out.extend_from_slice(text);
+            }
+            Self::Point(point) => {
+                out.push(8);
+                for n in point {
+                    out.extend_from_slice(&n.to_le_bytes());
+                }
+            }
+            Self::Floats(values) => {
+                out.push(9);
+                count(out, values.len());
+                for n in values {
+                    out.extend_from_slice(&n.to_le_bytes());
+                }
+            }
+            Self::Points(values) => {
+                out.push(if values.is_empty() { 9 } else { 10 });
+                count(out, values.len());
+                for point in values {
+                    for n in point {
+                        out.extend_from_slice(&n.to_le_bytes());
+                    }
+                }
+            }
+            Self::Dict(fields) => {
+                out.push(11);
+                count(out, fields.len());
+                for (k, v) in fields {
+                    Self::text(k).encode(out)?;
+                    v.encode(out)?;
+                }
+            }
+            Self::Encoded(bytes) => out.extend_from_slice(bytes),
+        }
+        if out.len() > R24_MAX_BYTES {
+            return Err(R24Error::code(-3));
+        }
+        Ok(())
+    }
+}
+#[derive(Default)]
+struct R24Map {
+    fields: Vec<(Vec<u8>, R24Value)>,
+    positions: std::collections::HashMap<Vec<u8>, usize>,
+}
+impl R24Map {
+    fn set(&mut self, key: &[u8], value: R24Value) {
+        if let Some(i) = self.positions.get(key) {
+            self.fields[*i].1 = value;
+        } else {
+            self.positions.insert(key.to_vec(), self.fields.len());
+            self.fields.push((key.to_vec(), value));
+        }
+    }
+    fn increment(&mut self, key: &[u8]) {
+        let next = self
+            .positions
+            .get(key)
+            .and_then(|i| {
+                if let R24Value::Int(n) = &self.fields[*i].1 {
+                    n.i64()
+                } else {
+                    None
+                }
+            })
+            .unwrap_or(0)
+            + 1;
+        self.set(key, R24Value::int(next));
+    }
+}
+struct R24Pair<'a> {
+    code: Option<i64>,
+    value: &'a [u8],
+}
+fn r24_section(pairs: &[R24Pair<'_>], name: &[u8]) -> (usize, usize) {
+    for i in 0..pairs.len() {
+        if pairs[i].code == Some(0)
+            && pairs[i].value == b"SECTION"
+            && i + 1 < pairs.len()
+            && pairs[i + 1].value == name
+        {
+            let mut end = i;
+            while end < pairs.len()
+                && !(pairs[end].code == Some(0) && pairs[end].value == b"ENDSEC")
+            {
+                end += 1;
+            }
+            return (i, end);
+        }
+    }
+    (0, 0)
+}
+fn r24_next(pairs: &[R24Pair<'_>], start: usize, hi: usize) -> usize {
+    let mut i = start;
+    while i < hi && pairs[i].code != Some(0) {
+        i += 1;
+    }
+    i
+}
+fn r24_rgb(ctx: &R24Context<'_>, token: &[u8], layer: bool) -> Result<R24Integer, R24Error> {
+    let n = ctx.integer(token)?;
+    if !n.i64().is_some_and(|v| (0..=0xffffff).contains(&v)) {
+        return Err(R24Error::code(if layer { -103 } else { -104 }));
+    }
+    Ok(n)
+}
+fn r24_initial(kind: &[u8], poly: bool) -> R24Value {
+    let mut e = R24Value::dict();
+    e.set(b"type", R24Value::text(kind));
+    e.set(b"layer", R24Value::text(b"0"));
+    e.set(b"color", R24Value::int(7));
+    if poly {
+        e.set(b"closed", R24Value::Bool(false));
+    }
+    e
+}
+fn r24_float_integer(n: f64) -> Result<f64, R24Error> {
+    if n.is_nan() {
+        return Err(R24Error::code(-114));
+    }
+    if !n.is_finite() {
+        return Err(R24Error::code(-113));
+    }
+    Ok(n.trunc())
+}
+fn r24_simple(
+    ctx: &R24Context<'_>,
+    pairs: &[R24Pair<'_>],
+    a: usize,
+    b: usize,
+    kind: &[u8],
+    skipped: &mut R24Map,
+) -> Result<R24Value, R24Error> {
+    let mut e = r24_initial(kind, false);
+    let mut have: std::collections::HashMap<i64, Vec<f64>> = std::collections::HashMap::new();
+    let mut closed = false;
+    for p in &pairs[a..b] {
+        match p.code {
+            Some(8) => e.set(b"layer", R24Value::text(p.value)),
+            Some(62) => e.set(b"color", R24Value::Int(ctx.integer(p.value)?)),
+            Some(420) => {
+                let rgb = r24_rgb(ctx, p.value, false)?;
+                e.set(b"color", R24Value::int(7));
+                e.set(b"true_color", R24Value::Int(rgb));
+            }
+            Some(70) if kind == b"LWPOLYLINE" || kind == b"SPLINE" => {
+                closed = ctx.integer(p.value)?.low() & 1 != 0;
+                have.entry(70).or_default().push(ctx.float(p.value)?);
+            }
+            Some(42) if kind == b"LWPOLYLINE" => skipped.increment(b"bulge"),
+            Some(c @ (10 | 20 | 30 | 11 | 21 | 31 | 40 | 41 | 50 | 51 | 71 | 72 | 73 | 74)) => {
+                have.entry(c).or_default().push(ctx.float(p.value)?)
+            }
+            _ => {}
+        }
+    }
+    let required = |code: i64| -> Result<f64, R24Error> {
+        have.get(&code).map(|v| v[0]).ok_or_else(|| {
+            let mut e = R24Error::code(-112);
+            e.detail = code;
+            e
+        })
+    };
+    match kind {
+        b"LINE" => {
+            e.set(
+                b"p0",
+                R24Value::Point([required(10)?, required(20)?, required(30)?]),
+            );
+            e.set(
+                b"p1",
+                R24Value::Point([required(11)?, required(21)?, required(31)?]),
+            );
+        }
+        b"CIRCLE" | b"ARC" => {
+            e.set(
+                b"center",
+                R24Value::Point([required(10)?, required(20)?, required(30)?]),
+            );
+            e.set(b"radius", R24Value::Float(required(40)?));
+            if kind == b"ARC" {
+                e.set(b"start_deg", R24Value::Float(required(50)?));
+                e.set(b"end_deg", R24Value::Float(required(51)?));
+            }
+        }
+        b"LWPOLYLINE" => {
+            let (mut point, mut started) = ([0.; 3], false);
+            let mut points = Vec::new();
+            for p in &pairs[a..b] {
+                match p.code {
+                    Some(10) => {
+                        if started {
+                            points.push(point);
+                        }
+                        point = [ctx.float(p.value)?, 0., 0.];
+                        started = true;
+                    }
+                    Some(20) => point[1] = ctx.float(p.value)?,
+                    Some(30) => point[2] = ctx.float(p.value)?,
+                    _ => {}
+                }
+            }
+            if started {
+                points.push(point);
+            }
+            e.set(b"points", R24Value::Points(points));
+            e.set(b"closed", R24Value::Bool(closed));
+        }
+        b"SPLINE" => {
+            let first = |code: i64| have.get(&code).map_or(0., |v| v[0]);
+            // Conversion order is observable for NaN/inf and periodic records.
+            let flags = r24_float_integer(first(70))?;
+            let degree = r24_float_integer(first(71))?;
+            let knot_count = r24_float_integer(first(72))?;
+            let point_count = r24_float_integer(first(73))?;
+            let fit_count = r24_float_integer(first(74))?;
+            if flags.abs() < 18_014_398_509_481_984. && (flags as i64) & 2 != 0 {
+                return Err(R24Error::code(-105));
+            }
+            if !(1. ..=11.).contains(&degree) || point_count <= degree {
+                return Err(R24Error::code(-106));
+            }
+            let xs = have.remove(&10).unwrap_or_default();
+            let ys = have.remove(&20).unwrap_or_default();
+            let zs = have.remove(&30).unwrap_or_else(|| vec![0.; xs.len()]);
+            let knots = have.remove(&40).unwrap_or_default();
+            let weights = have.remove(&41).unwrap_or_default();
+            if knot_count != knots.len() as f64
+                || point_count != xs.len() as f64
+                || ys.len() != xs.len()
+                || zs.len() != xs.len()
+                || fit_count < 0.
+                || knot_count != point_count + degree + 1.
+                || (!weights.is_empty()
+                    && (weights.len() != xs.len() || weights.iter().any(|v| *v <= 0.)))
+                || knots.windows(2).any(|p| p[0] > p[1])
+            {
+                return Err(R24Error::code(-107));
+            }
+            let points = xs
+                .into_iter()
+                .zip(ys)
+                .zip(zs)
+                .map(|((x, y), z)| [x, y, z])
+                .collect();
+            e.set(b"degree", R24Value::int(degree as i64));
+            e.set(b"knots", R24Value::Floats(knots));
+            e.set(b"points", R24Value::Points(points));
+            e.set(b"weights", R24Value::Floats(weights));
+            e.set(b"closed", R24Value::Bool(closed));
+        }
+        _ => return Err(R24Error::code(-2)),
+    }
+    Ok(e)
+}
+fn r24_polyline(
+    ctx: &R24Context<'_>,
+    pairs: &[R24Pair<'_>],
+    start: usize,
+    hi: usize,
+) -> Result<(R24Value, usize), R24Error> {
+    let mut e = r24_initial(b"POLYLINE", true);
+    let mut j = r24_next(pairs, start + 1, hi);
+    for p in &pairs[start + 1..j] {
+        match p.code {
+            Some(8) => e.set(b"layer", R24Value::text(p.value)),
+            Some(62) => e.set(b"color", R24Value::Int(ctx.integer(p.value)?)),
+            Some(420) => {
+                let rgb = r24_rgb(ctx, p.value, false)?;
+                e.set(b"color", R24Value::int(7));
+                e.set(b"true_color", R24Value::Int(rgb));
+            }
+            Some(70) => e.set(
+                b"closed",
+                R24Value::Bool(ctx.integer(p.value)?.low() & 1 != 0),
+            ),
+            _ => {}
+        }
+    }
+    let mut points = Vec::new();
+    while j < hi && !(pairs[j].code == Some(0) && pairs[j].value == b"SEQEND") {
+        if pairs[j].code == Some(0) && pairs[j].value == b"VERTEX" {
+            let end = r24_next(pairs, j + 1, hi);
+            let mut point = [0.; 3];
+            for p in &pairs[j + 1..end] {
+                match p.code {
+                    Some(10) => point[0] = ctx.float(p.value)?,
+                    Some(20) => point[1] = ctx.float(p.value)?,
+                    Some(30) => point[2] = ctx.float(p.value)?,
+                    _ => {}
+                }
+            }
+            points.push(point);
+            j = end;
+        } else if pairs[j].code == Some(0) {
+            break;
+        } else {
+            j += 1;
+        }
+    }
+    e.set(b"points", R24Value::Points(points));
+    if j < hi && pairs[j].value == b"SEQEND" {
+        j += 1;
+    }
+    Ok((e, j))
+}
+fn r24_decode(data: &[u8], int_limit: u32) -> Result<Vec<u8>, R24Error> {
+    if data.len() > R24_MAX_BYTES {
+        return Err(R24Error::code(-3));
+    }
+    if data.starts_with(b"AutoCAD Binary DXF\r\n\x1a\0") {
+        return Err(R24Error::code(-100));
+    }
+    let ctx = R24Context { data, int_limit };
+    let lines = dxf_lines(data);
+    if lines.len() > 2 * R24_MAX_PAIRS {
+        return Err(R24Error::code(-3));
+    }
+    let mut pairs = Vec::with_capacity(lines.len() / 2);
+    for pair in lines.chunks(2) {
+        if pair.len() != 2 {
+            return Err(R24Error::code(-101));
+        }
+        pairs.push(R24Pair {
+            code: ctx.integer(pair[0])?.i64(),
+            value: pair[1],
+        });
+    }
+    drop(lines);
+    for i in 0..pairs.len() {
+        if pairs[i].code == Some(9)
+            && pairs[i].value == b"$ACADVER"
+            && i + 1 < pairs.len()
+            && pairs[i + 1].code == Some(1)
+        {
+            let v = pairs[i + 1].value;
+            if v.len() != 6
+                || !v.starts_with(b"AC")
+                || !v[2..]
+                    .iter()
+                    .all(|b| b.is_ascii_digit() || matches!(*b, 0xb2 | 0xb3 | 0xb9))
+            {
+                return Err(ctx.error(-102, v));
+            }
+            break;
+        }
+    }
+    let mut units = R24Value::None;
+    for i in 0..pairs.len() {
+        if pairs[i].code == Some(9)
+            && pairs[i].value == b"$INSUNITS"
+            && i + 1 < pairs.len()
+            && pairs[i + 1].code == Some(70)
+        {
+            units = R24Value::Int(ctx.integer(pairs[i + 1].value)?);
+            break;
+        }
+    }
+    let (mut layers, mut true_colors) = (R24Map::default(), R24Map::default());
+    let (lo, hi) = r24_section(&pairs, b"TABLES");
+    let mut i = lo;
+    while i < hi {
+        if pairs[i].code == Some(0) && pairs[i].value == b"LAYER" {
+            let mut name = None;
+            let mut color = R24Integer::small(7);
+            let mut rgb = None;
+            let j = r24_next(&pairs, i + 1, hi);
+            for p in &pairs[i + 1..j] {
+                match p.code {
+                    Some(2) => name = Some(p.value),
+                    Some(62) => color = ctx.integer(p.value)?,
+                    Some(420) => {
+                        rgb = Some(r24_rgb(&ctx, p.value, true)?);
+                        color = R24Integer::small(7);
+                    }
+                    _ => {}
+                }
+            }
+            if let Some(name) = name {
+                layers.set(name, R24Value::Int(color));
+                if let Some(rgb) = rgb {
+                    true_colors.set(name, R24Value::Int(rgb));
+                }
+            }
+            i = j;
+        } else {
+            i += 1;
+        }
+    }
+    let mut skipped = R24Map::default();
+    let mut entity_bytes = Vec::new();
+    let mut count = 0usize;
+    let (lo, hi) = r24_section(&pairs, b"ENTITIES");
+    i = lo;
+    while i < hi {
+        if pairs[i].code != Some(0) {
+            i += 1;
+            continue;
+        }
+        let kind = pairs[i].value;
+        if matches!(kind, b"SECTION" | b"ENDSEC" | b"TABLE" | b"ENDTAB") {
+            i += 1;
+            continue;
+        }
+        if matches!(
+            kind,
+            b"LINE" | b"CIRCLE" | b"ARC" | b"LWPOLYLINE" | b"SPLINE"
+        ) {
+            let j = r24_next(&pairs, i + 1, hi);
+            r24_simple(&ctx, &pairs, i + 1, j, kind, &mut skipped)?.encode(&mut entity_bytes)?;
+            count += 1;
+            i = j;
+        } else if kind == b"POLYLINE" {
+            let (e, j) = r24_polyline(&ctx, &pairs, i, hi)?;
+            e.encode(&mut entity_bytes)?;
+            count += 1;
+            i = j;
+        } else {
+            skipped.increment(kind);
+            i = r24_next(&pairs, i + 1, hi);
+        }
+    }
+    let mut encoded = Vec::with_capacity(entity_bytes.len() + 9);
+    encoded.push(if count == 0 { 9 } else { 7 });
+    encoded.extend_from_slice(&(count as u64).to_le_bytes());
+    encoded.extend_from_slice(&entity_bytes);
+    drop(entity_bytes);
+    let mut root = R24Value::dict();
+    root.set(b"entities", R24Value::Encoded(encoded));
+    root.set(b"layers", R24Value::Dict(layers.fields));
+    root.set(b"layer_true_colors", R24Value::Dict(true_colors.fields));
+    root.set(b"insunits", units);
+    root.set(b"skipped", R24Value::Dict(skipped.fields));
+    let mut out = R24_MAGIC.to_vec();
+    root.encode(&mut out)?;
+    Ok(out)
+}
+/// Required reader24 protocol version, distinct from the legacy packed decoder.
+#[no_mangle]
+pub extern "C" fn narwhal_pure_core_dxf_reader24_abi_version() -> u32 {
+    1
+}
+/// One exact parse with bounded diagnostic and caller-owned output. Returns 1
+/// with required capacity (and no payload/count writes) when a buffer retry is
+/// needed. Bad-file/numeric errors are distinct from -1/-2 ABI and -3 resources.
+/// # Safety
+/// data spans len bytes; out spans capacity bytes; written and diagnostics each
+/// point to one valid exclusive slot. All regions are aligned/nonoverlapping.
+#[no_mangle]
+pub unsafe extern "C" fn narwhal_pure_core_dxf_reader24_decode(
+    data: *const u8,
+    len: usize,
+    int_limit: u32,
+    out: *mut u8,
+    capacity: usize,
+    written: *mut usize,
+    diagnostics: *mut DxfReader24Diagnostic,
+) -> i32 {
+    let Some(diag) = (unsafe { crate::checked_slice_mut(diagnostics, 1) }) else {
+        return -1;
+    };
+    diag[0] = DxfReader24Diagnostic::default();
+    let result = (|| {
+        if len > R24_MAX_BYTES || capacity > R24_MAX_BYTES {
+            return Err(R24Error::code(-3));
+        }
+        let data = unsafe { crate::checked_slice(data, len) }.ok_or_else(|| R24Error::code(-1))?;
+        let slot =
+            unsafe { crate::checked_slice_mut(written, 1) }.ok_or_else(|| R24Error::code(-1))?;
+        let bytes = r24_decode(data, int_limit)?;
+        if capacity < bytes.len() {
+            diag[0].code = 1;
+            diag[0].required = bytes.len();
+            return Ok(1);
+        }
+        let dest =
+            unsafe { crate::checked_slice_mut(out, capacity) }.ok_or_else(|| R24Error::code(-1))?;
+        dest[..bytes.len()].copy_from_slice(&bytes);
+        slot[0] = bytes.len();
+        Ok(0)
+    })();
+    match result {
+        Ok(rc) => rc,
+        Err(e) => {
+            diag[0].code = e.code;
+            diag[0].start = e.start;
+            diag[0].len = e.len;
+            diag[0].detail = e.detail;
+            e.code as i32
+        }
+    }
+}
+
 // Required writer API. The legacy exports above keep their original contracts;
 // this typed boundary retains source metadata needed for exact legacy headers.
 /// Owned descriptor ABI v2 distinguishes layer-key identity from entity text.

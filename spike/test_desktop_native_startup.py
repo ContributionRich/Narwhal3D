@@ -17,7 +17,8 @@ SOURCES=('native_textfield','native_popup','command_transcript','native_transcri
          'native_document_session','native_object_registry','native_document_observer',
          'native_history','undo','numparse','native_pure',
          'native_interpolate','native_coil','native_stl','native_obj',
-         'native_vector_export','native_dxf','native_tween')
+         'native_vector_export','native_dxf','native_tween',
+         'native_tessellate','native_bspline','native_preview','native_dxf_reader')
 
 
 REQUIRED_PURE_EXPORTS = {
@@ -59,6 +60,20 @@ REQUIRED_PURE_EXPORTS.update({
 PROTOCOL_EXPORTS.update({name: owner for name, owner in REQUIRED_PURE_EXPORTS.items()
                          if name.endswith(('vector_encode_v1', 'vector_len_v1', 'vector_copy_v1',
                                            'dxf_owned_units', 'dxf_owned_capacity', 'dxf_owned_encode'))})
+
+
+REQUIRED_PURE_EXPORTS.update({
+    'narwhal_pure_core_ear_clip_display': 'earclip',
+    'narwhal_pure_core_earclip_signed_area_v1': 'earclip',
+    'narwhal_pure_core_control_point_curve_preview': 'control preview',
+    'narwhal_pure_core_preview_sample_v1': 'preview',
+    'narwhal_pure_core_dxf_reader24_abi_version': 'DXF reader',
+    'narwhal_pure_core_dxf_reader24_decode': 'DXF reader',
+})
+PROTOCOL_EXPORTS.update({name: REQUIRED_PURE_EXPORTS[name] for name in (
+    'narwhal_pure_core_ear_clip_display', 'narwhal_pure_core_earclip_signed_area_v1',
+    'narwhal_pure_core_control_point_curve_preview', 'narwhal_pure_core_preview_sample_v1',
+    'narwhal_pure_core_dxf_reader24_decode')})
 
 
 def elf_export_entries(data):
@@ -211,6 +226,19 @@ class DesktopNativeStartup(unittest.TestCase):
         self.assert_no_graphical_start(result)
         self.assertIn('required DXF', result.stderr)
 
+    def test_parser_working_wrong_reader24_version_blocks_graphical_start(self):
+        data = bytearray(self.pure_library().read_bytes())
+        entries = elf_export_entries(data)
+        entry = entries['narwhal_pure_core_dxf_reader24_abi_version'][0]
+        _source,value,size,_section = entries['narwhal_pure_core_dxf_owned_abi_version']
+        # Retarget only this dlsym leaf; do not mutate possibly aliased core-1 code.
+        struct.pack_into('<QQ',data,entry+8,value,size)
+        self.pure_library().write_bytes(data)
+        self.assert_parser_still_works()
+        result = self.run_launcher()
+        self.assert_no_graphical_start(result)
+        self.assertIn('required DXF reader',result.stderr)
+
     def test_parser_working_no_write_protocol_each_owner_is_refused(self):
         original = self.pure_library().read_bytes()
         entries = elf_export_entries(original)
@@ -235,7 +263,9 @@ class DesktopNativeStartup(unittest.TestCase):
         preflight = self.root/'launch/check_native.py'
         source = preflight.read_text()
         names = {'interpolation':'interpolation', 'coil':'coil', 'catenary':'catenary', 'STL':'stl', 'OBJ':'obj',
-                 'vector':'vector', 'DXF':'dxf', 'Tween':'tween'}
+                 'vector':'vector', 'DXF':'dxf', 'Tween':'tween',
+                 'earclip':'earclip', 'control preview':'control_preview',
+                 'preview':'preview', 'DXF reader':'dxf_reader'}
         for symbol,owner in REQUIRED_PURE_EXPORTS.items():
             with self.subTest(symbol=symbol):
                 marker = "('"+owner+"', "+names[owner]+")"

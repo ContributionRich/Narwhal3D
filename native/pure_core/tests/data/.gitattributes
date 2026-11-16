@@ -1,0 +1,4 @@
+# Frozen TSV rows retain meaningful final empty fields (a trailing tab).
+# Exact size/SHA-256 audit guards protect both independent captures.
+preview24_linux.tsv -whitespace
+preview24_windows_msvc.tsv -whitespace

@@ -39,6 +39,7 @@ import re
 import struct
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -62,6 +63,7 @@ PURE_CORE_PYTESTS = (
     "spike/test_dxf_writer.py",
     "spike/test_dxf_reader.py",
     "spike/test_native_dxf.py",
+    "spike/test_dxf_reader24_boundaries.py",
     "spike/test_dxf_writer_owned.py",
     "spike/test_native_admission_owned.py",
     "spike/test_numparse.py",
@@ -112,6 +114,7 @@ PURE_CORE_PYTESTS = (
     "spike/test_pure_core_curve_hits_gate.py",
     "spike/test_native_coil_preview.py",
     "spike/test_preview_curve_native.py",
+    "spike/test_preview24_boundaries.py",
     "spike/test_native_tessellate.py",
     "spike/test_native_unit_table.py",
     "spike/test_unit_table_owned.py", "spike/test_unit_ops_owned.py",
@@ -130,8 +133,26 @@ PURE_CORE_PYTESTS = (
 
 
 # Explicit Rust oracle-retirement suites and their source/fixture closure.
-RUST_INTEGRATION_SUITES = ('alias_golden', 'unit_golden', 'interpolate_golden', 'svgpath_golden', 'bearing_golden', 'calc_golden', 'coords_golden', 'unitformat_golden', 'macro_golden', 'joinchain_golden', 'rebuild_golden', 'blend_golden', 'norm_golden', 'nurbs_golden', 'arclength_golden', 'coil_golden', 'interpolate_helpers_golden', 'stl_owned', 'stl_import_safety', 'catenary_boundary', 'catenary_golden', 'obj_golden', 'stl_legacy_abi', 'stl_name_prefix', 'dxf_owned', 'vector23_golden', 'tween_golden', 'obj_legacy_abi', 'encoder_legacy_abi')
+RUST_INTEGRATION_SUITES = ('alias_golden', 'unit_golden', 'interpolate_golden', 'svgpath_golden', 'bearing_golden', 'calc_golden', 'coords_golden', 'unitformat_golden', 'macro_golden', 'joinchain_golden', 'rebuild_golden', 'blend_golden', 'norm_golden', 'nurbs_golden', 'arclength_golden', 'coil_golden', 'interpolate_helpers_golden', 'stl_owned', 'stl_import_safety', 'catenary_boundary', 'catenary_golden', 'obj_golden', 'stl_legacy_abi', 'stl_name_prefix', 'dxf_owned', 'vector23_golden', 'tween_golden', 'obj_legacy_abi', 'encoder_legacy_abi', 'earclip24_golden', 'preview24_golden', 'dxf_reader24')
 RUST_INTEGRATION_FILES = (
+    'native/pure_core/tests/data/.gitattributes',
+    'native/pure_core/tests/data/preview24_linux.tsv',
+    'native/pure_core/tests/data/preview24_windows_msvc.tsv',
+    'native/pure_core/tests/data/preview24_windows_msvc.provenance.json',
+    'native/pure_core/tests/data/preview24_provenance.txt',
+    'native/pure_core/tests/dxf_reader24.h',
+    'native/pure_core/tests/dxf_reader24.rs',
+    'native/pure_core/tests/earclip24_api.h',
+    'native/pure_core/tests/earclip24_golden.rs',
+    'native/pure_core/tests/fixtures/dxf_reader24/README.md',
+    'native/pure_core/tests/fixtures/dxf_reader24/capture.json',
+    'native/pure_core/tests/fixtures/dxf_reader24/corpus.bin',
+    'native/pure_core/tests/fixtures/dxf_reader24/manifest.tsv',
+    'native/pure_core/tests/fixtures/earclip24_original.txt',
+    'native/pure_core/tests/fixtures/earclip24_provenance.json',
+    'native/pure_core/tests/fixtures/earclip24_safety.json',
+    'native/pure_core/tests/preview24_api.h',
+    'native/pure_core/tests/preview24_golden.rs',
     'native/pure_core/tests/dxf_owned.h',
     'native/pure_core/tests/dxf_owned.rs',
     'native/pure_core/tests/encoder_legacy_abi.rs',
@@ -297,6 +318,10 @@ RUST_INTEGRATION_FILES = (
     'native/pure_core/tests/unit_golden.rs',
     'native/pure_core/tests/unitformat_golden.rs',
 )
+
+
+# New producer modules must survive the public source copy as well as the tests.
+RUST_REQUIRED_MODULE_FILES = ("native/pure_core/src/preview_primitives.rs",)
 
 
 # Additive parser ABI: core ABI 1 and all its existing exports remain unchanged.
@@ -636,7 +661,7 @@ def probe_pure_core_parser(path: Path, python: Path | str = sys.executable, *, e
     return identity
 
 
-# Required round-23 retirement ABIs (additive to the round-21/22 requirements). Kept separate from the older parser
+# Required round-24 retirement ABIs (additive to all prior requirements). Kept separate from the older parser
 # identity so existing optional ABI consumers retain their compatibility contract.
 PURE_CORE_RETIREMENT_EXPORTS = (
     "narwhal_pure_core_stl_size_owned", "narwhal_pure_core_stl_encode_owned",
@@ -657,8 +682,14 @@ PURE_CORE_RETIREMENT_EXPORTS = (
     "narwhal_pure_core_tween_plan_v1",
     "narwhal_pure_core_tween_knots_v1",
     "narwhal_pure_core_tween_lengths_v1",
+    "narwhal_pure_core_ear_clip_display",
+    "narwhal_pure_core_earclip_signed_area_v1",
+    "narwhal_pure_core_control_point_curve_preview",
+    "narwhal_pure_core_preview_sample_v1",
+    "narwhal_pure_core_dxf_reader24_abi_version",
+    "narwhal_pure_core_dxf_reader24_decode",
 )
-PURE_CORE_RETIREMENT_IDENTITY = {"retirement_abi": 23,
+PURE_CORE_RETIREMENT_IDENTITY = {"retirement_abi": 24,
                                  "retirement_exports": list(PURE_CORE_RETIREMENT_EXPORTS)}
 PURE_CORE_RETIREMENT_PROBE = r'''
 import ctypes as c, json, math, struct, sys
@@ -981,7 +1012,128 @@ for total,samples,cap,status in ((8.,3,1,-3),(float("nan"),3,5,-2),(8.,1,5,-2)):
     output,used = (c.c_double*5)(*[123.]*5),c.c_uint64(777)
     require(tween_lengths(total,samples,output,cap,c.byref(used)) == status
             and used.value == 777 and list(output) == [123.]*5, "Tween lengths atomic refusal")
-print(json.dumps({"retirement_abi":23,"retirement_exports":["narwhal_pure_core_"+s for s in
+# Round-24 planar-loop, preview and reader layouts mirror the qualified headers.
+ear_clip = bind("ear_clip_display",[D,c.c_size_t,U,c.c_size_t,U])
+ear_area = bind("earclip_signed_area_v1",[D,c.c_size_t,D,U])
+ear_square = (c.c_double*8)(0,0,1,0,1,1,0,1)
+ear_partial = (c.c_double*12)(0,0,2,2,4,0,4,2,2,0,0,2)
+for points,n,expected in ((ear_square,4,[0,1,2,0,2,3]),(ear_partial,6,[5,0,1,1,2,3])):
+    output,count = (c.c_uint64*16)(*[777]*16),c.c_uint64(999)
+    require(ear_clip(points,n,output,16,c.byref(count)) == 0 and count.value == 2
+            and list(output)[:6] == expected and list(output)[6:] == [777]*10,
+            "ear clip exact ordered/partial triangles")
+for points,n,capacity,status in ((ear_square,4,5,-3),((c.c_double*8)(float("nan"),0,1,0,1,1,0,1),4,16,-2),
+                                 (None,(1<<20)+1,16,-2)):
+    output,count = (c.c_uint64*16)(*[777]*16),c.c_uint64(999)
+    require(ear_clip(points,n,output,capacity,c.byref(count)) == status
+            and count.value == 0 and list(output) == [777]*16,"ear clip atomic refusal")
+count = c.c_uint64(999)
+require(ear_clip(None,0,None,0,c.byref(count)) == 0 and count.value == 0,"ear clip empty loop")
+for points,n,answer in ((ear_square,4,1.),(None,0,0.)):
+    output,count = c.c_double(123.),c.c_uint64(999)
+    require(ear_area(points,n,c.byref(output),c.byref(count)) == 0
+            and count.value == 1 and struct.pack("<d",output.value) == struct.pack("<d",answer),
+            "ear clip signed area value/count")
+output,count = c.c_double(123.),c.c_uint64(999)
+require(ear_area(None,(1<<20)+1,c.byref(output),c.byref(count)) == -2
+        and output.value == 123. and count.value == 0,"ear clip signed area resource refusal")
+control_preview = bind("control_point_curve_preview",[D,c.c_size_t,c.c_uint32,c.c_uint32,D,c.c_size_t,U])
+control = (c.c_double*9)(0,0,0,2,4,0,4,0,0)
+used = c.c_uint64(999)
+require(control_preview(control,3,2,2,None,0,c.byref(used)) == -3 and used.value == 9,
+        "control preview required size query")
+output = (c.c_double*12)(*[123.]*12)
+require(control_preview(control,3,2,2,output,9,c.byref(used)) == 0 and used.value == 9
+        and list(output) == [0.,0.,0.,2.,2.,0.,4.,0.,0.,123.,123.,123.],"control preview exact quadratic")
+output = (c.c_double*12)(*[123.]*12)
+used.value = 999
+require(control_preview(control,3,2,2,output,8,c.byref(used)) == -3 and used.value == 9
+        and list(output) == [123.]*12,"control preview capacity count/payload contract")
+control[0] = float("nan")
+require(control_preview(control,3,2,2,output,9,c.byref(used)) == -2 and used.value == 0
+        and list(output) == [123.]*12,"control preview nonfinite refusal")
+class PreviewMetadata(c.Structure):
+    _fields_ = [("values",c.c_size_t),("rows",c.c_size_t),("lengths",c.c_size_t*3)]
+require(c.sizeof(PreviewMetadata) == 40,"preview metadata layout")
+preview_sample = bind("preview_sample_v1",[c.c_uint32,D,c.c_size_t,c.c_size_t,c.c_uint32,D,c.c_size_t,c.POINTER(PreviewMetadata)])
+def preview_meta(meta):
+    return (meta.values,meta.rows,*meta.lengths)
+# Complete original bits from six nonempty authored preview24 TSV requests;
+# no tolerance widening or regenerated platform-dependent trigonometric inputs.
+preview_witnesses = ((1, 3, 0, '0000000000000000,8000000000000000,0000000000000000,3ff0000000000000,0000000000000000,0000000000000000,0000000000000000,3ff0000000000000,0000000000000000,3fc0000000000000', (12, 1, 4, 0, 0), '4bc6d766e868e962dd796bf50ecdf2aaea4b9ade0453bd06ffd515e7af88d63e'), (2, 3, 0, '0000000000000000,8000000000000000,0000000000000000,3ff0000000000000,0000000000000000,0000000000000000,0000000000000000,3ff0000000000000,0000000000000000,3fc0000000000000', (12, 1, 4, 0, 0), '4bc6d766e868e962dd796bf50ecdf2aaea4b9ade0453bd06ffd515e7af88d63e'), (3, 3, 0, '0000000000000000,8000000000000000,0000000000000000,3ff0000000000000,0000000000000000,0000000000000000,0000000000000000,3ff0000000000000,0000000000000000,3fc0000000000000,0000000000000000,3ff0000000000000', (12, 1, 4, 0, 0), 'bf7bd904d0fae8419b291727ee437a69c3e85abe861ed82a433af661cbac8f90'), (4, 64, 3, '0000000000000000,0000000000000000,0000000000000000,4008000000000000,3ff0000000000000,4000000000000000,4000000000000000,c010000000000000,4008000000000000,4010000000000000,4008000000000000,c000000000000000', (195, 1, 65, 0, 0), '1675a22df51426d453c201e3c36e1b135016c1a59a02a4568a11e63a71564e72'), (5, 64, 3, '3ff0000000000000,4000000000000000,4008000000000000,4010000000000000,4014000000000000,4018000000000000,4010000000000000,4018000000000000,4020000000000000,0000000000000000,0000000000000000,3ff0000000000000,4004000000000000', (585, 3, 65, 65, 65), '896a308f22f9f7a0fd42710fc1dc9624f4ace8208f2d9d959c98abeccaaee733'), (6, 0, 0, '0000000000000000,8000000000000000,3ff0000000000000,4008000000000000,4010000000000000,4022000000000000', (15, 1, 5, 0, 0), 'aa697d93f99ef38ac3b6597de5a1b88df75158ef3f236175075b58b5fd4c2e06'))
+# Select exactly one independently captured platform oracle, never a union.
+import platform
+if sys.platform == "win32":
+    require(platform.system() == "Windows" and platform.machine().lower() in ("amd64", "x86_64")
+            and platform.python_implementation() == "CPython"
+            and platform.python_compiler().startswith("MSC")
+            and sys.byteorder == "little" and c.sizeof(c.c_void_p) == 8,
+            "preview witness platform is not qualified Windows MSVC x64")
+    preview_digests = ('516e11b4a3ba726be50731fa16b9c77956f62b2921ff29c5dc55ea45b4b690d7', '516e11b4a3ba726be50731fa16b9c77956f62b2921ff29c5dc55ea45b4b690d7', 'd12405ae3fc0d966c0437c0084e17c5c62a22b695e5879c5675214ff3a2c5f89', '610f86cbe8d7dbf14ed21538ee0489c23a334eb3cc89c1384591c38382ab4779', '866247c56332ecac9b604b8673b8d04f032adae170010ecd4c3500abf9998c37', 'aa697d93f99ef38ac3b6597de5a1b88df75158ef3f236175075b58b5fd4c2e06')
+elif sys.platform.startswith("linux"):
+    require(sys.byteorder == "little" and c.sizeof(c.c_void_p) == 8
+            and platform.machine().lower() in ("amd64", "x86_64"),
+            "preview witness platform is not qualified Linux x64")
+    preview_digests = tuple(row[-1] for row in preview_witnesses)
+else:
+    raise RuntimeError("preview witness platform is not qualified")
+preview_witnesses = tuple((*row[:-1], digest) for row, digest in zip(preview_witnesses, preview_digests))
+for op,segments,flags,bits,expected,digest in preview_witnesses:
+    values = [struct.unpack(">d",bytes.fromhex(v))[0] for v in bits.split(",")]
+    data = (c.c_double*len(values))(*values)
+    meta = PreviewMetadata(17,19,(c.c_size_t*3)(23,23,23))
+    require(preview_sample(op,data,len(data),segments,flags,None,0,c.byref(meta)) == -3
+            and preview_meta(meta) == expected,"primitive preview size/rows " + str(op))
+    n = expected[0]
+    output = (c.c_double*(n+8))(*([123.]*(n+8)))
+    require(preview_sample(op,data,len(data),segments,flags,output,n-1,c.byref(meta)) == -3
+            and preview_meta(meta) == expected and list(output) == [123.]*(n+8),
+            "primitive preview short output atomicity " + str(op))
+    require(preview_sample(op,data,len(data),segments,flags,output,n+8,c.byref(meta)) == 0
+            and preview_meta(meta) == expected
+            and hashlib.sha256(bytes(output)[:n*8]).hexdigest() == digest
+            and list(output)[n:] == [123.]*8,"primitive preview complete original bits " + str(op))
+    data[0] = float("nan")
+    for bad_op in (op,99):
+        refused = PreviewMetadata(17,19,(c.c_size_t*3)(23,23,23))
+        untouched = (c.c_double*(n+8))(*([123.]*(n+8)))
+        require(preview_sample(bad_op,data,len(data),segments,flags,untouched,n+8,c.byref(refused)) == -2
+                and preview_meta(refused) == (17,19,23,23,23)
+                and list(untouched) == [123.]*(n+8),"primitive preview typed atomic refusal " + str(op))
+class ReaderDiagnostic(c.Structure):
+    _fields_ = [("code",c.c_int64),("start",c.c_size_t),("len",c.c_size_t),
+                ("detail",c.c_int64),("required",c.c_size_t)]
+require(c.sizeof(ReaderDiagnostic) == 40,"DXF reader diagnostic layout")
+require(bind("dxf_reader24_abi_version",[],c.c_uint32)() == 1,"DXF reader owned ABI identity")
+reader_decode = bind("dxf_reader24_decode",[c.c_void_p,c.c_size_t,c.c_uint32,c.c_void_p,c.c_size_t,
+                                         c.POINTER(c.c_size_t),c.POINTER(ReaderDiagnostic)])
+def reader_diag(diag):
+    return (diag.code,diag.start,diag.len,diag.detail,diag.required)
+reader_input = bytes.fromhex('300a53454354494f4e0a320a454e5449544945530a300a4c494e450a380a436166e90a31300a300a32300a300a33300a300a31310a310a32310a320a33310a330a300a454e445345430a300a454f460a')
+reader_expected = bytes.fromhex('44584652323400010b0500000000000000060800000000000000656e7469746965730701000000000000000b0500000000000000060400000000000000747970650604000000000000004c494e450605000000000000006c61796572060400000000000000436166e9060500000000000000636f6c6f72030700000000000000060200000000000000703008000000000000000000000000000000000000000000000000060200000000000000703108000000000000f03f000000000000004000000000000008400606000000000000006c61796572730b00000000000000000611000000000000006c617965725f747275655f636f6c6f72730b0000000000000000060800000000000000696e73756e69747300060700000000000000736b69707065640b0000000000000000')
+written,diag = c.c_size_t(777),ReaderDiagnostic()
+require(reader_decode(reader_input,len(reader_input),4300,None,0,c.byref(written),c.byref(diag)) == 1
+        and written.value == 777 and reader_diag(diag) == (1,0,0,0,len(reader_expected)),
+        "DXF reader typed capacity retry")
+output = c.create_string_buffer(b"!"*(len(reader_expected)+16),len(reader_expected)+16)
+require(reader_decode(reader_input,len(reader_input),4300,output,len(output),c.byref(written),c.byref(diag)) == 0
+        and written.value == len(reader_expected) and reader_diag(diag) == (0,0,0,0,0)
+        and output.raw == reader_expected+b"!"*16,"DXF reader complete Latin1/typed entity and order")
+for data,status,start,length,detail in (
+    (b"AutoCAD Binary DXF\r\n\x1a\0",-100,0,0,0),
+    (b"0\nSECTION\n2",-101,0,0,0),
+    (b"bad\nvalue\n",-110,0,3,0),
+    (reader_input.replace(b"10\n0\n",b"10\nnope\n"),-111,reader_input.index(b"10\n0\n")+3,4,0),
+    (b"0\nSECTION\n2\nENTITIES\n0\nLINE\n0\nENDSEC\n0\nEOF\n",-112,0,0,10)):
+    written.value = 777
+    refused = c.create_string_buffer(b"!"*1024,1024)
+    require(reader_decode(data,len(data),4300,refused,1024,c.byref(written),c.byref(diag)) == status
+            and reader_diag(diag) == (status,start,length,detail,0)
+            and written.value == 777 and refused.raw == b"!"*1024,"DXF reader typed diagnostic/payload atomicity " + str(status))
+written.value = 777
+require(reader_decode(None,512*1024*1024+1,4300,None,0,c.byref(written),c.byref(diag)) == -3
+        and reader_diag(diag) == (-3,0,0,0,0) and written.value == 777,"DXF reader bounded resource refusal")
+print(json.dumps({"retirement_abi":24,"retirement_exports":["narwhal_pure_core_"+s for s in
     ("stl_size_owned","stl_encode_owned","stl_file_size","stl_file_decode",
      "stl_import_mesh_decode","stl_normal","interpolate_helper_v1","catenary_plan_v2","obj_encode_into",
      'vector_encode_v1',
@@ -996,7 +1148,13 @@ print(json.dumps({"retirement_abi":23,"retirement_exports":["narwhal_pure_core_"
      'dxf_owned_encode',
      'tween_plan_v1',
      'tween_knots_v1',
-     'tween_lengths_v1')]}))
+     'tween_lengths_v1',
+     'ear_clip_display',
+     'earclip_signed_area_v1',
+     'control_point_curve_preview',
+     'preview_sample_v1',
+     'dxf_reader24_abi_version',
+     'dxf_reader24_decode')]}))
 '''
 
 
@@ -1005,10 +1163,15 @@ def probe_pure_core_retirement(path: Path, python: Path | str = sys.executable, 
     if not path.is_file() or path.is_symlink():
         raise ValueError(f"missing regular pure-core retirement library: {path}")
     try:
-        completed = subprocess.run(
-            [str(python), "-I", "-B", "-c", PURE_CORE_RETIREMENT_PROBE, str(path.resolve())],
-            env=env, text=True, capture_output=True, check=True, timeout=30)
-        identity = json.loads(completed.stdout)
+        # The exact probe exceeds Windows' command-line limit. Close the file
+        # before executing it so Windows can open it, and clean up on all exits.
+        with tempfile.TemporaryDirectory(prefix="narwhal-retirement-probe-") as directory:
+            script = Path(directory) / "probe.py"
+            script.write_bytes(PURE_CORE_RETIREMENT_PROBE.encode("utf-8"))
+            completed = subprocess.run(
+                [str(python), "-I", "-B", str(script), str(path.resolve())],
+                env=env, text=True, capture_output=True, check=True, timeout=30)
+            identity = json.loads(completed.stdout)
     except (OSError, subprocess.SubprocessError, ValueError) as error:
         raise ValueError(f"cannot verify pure-core required retirement ABI/semantics: {getattr(error, 'stderr', '') or error}") from error
     if identity != PURE_CORE_RETIREMENT_IDENTITY:
@@ -1309,9 +1472,13 @@ def require_rust_public_closure(crate: Path) -> list[str]:
     public = next(ast.literal_eval(node.value) for node in tree.body
                   if isinstance(node, ast.Assign)
                   and any(isinstance(t, ast.Name) and t.id == "NATIVE_FILES" for t in node.targets))
-    if actual != expected or not expected.issubset(public):
+    modules = set(RUST_REQUIRED_MODULE_FILES)
+    missing_modules = {name for name in modules
+                       if not (crate / name.removeprefix("native/pure_core/")).is_file()}
+    if actual != expected or not (expected | modules).issubset(public) or missing_modules:
         raise GateError("Rust integration source/fixture public closure differs: "
-                        + repr(sorted((actual ^ expected) | (expected - set(public)))))
+                        + repr(sorted((actual ^ expected) | ((expected | modules) - set(public))
+                                      | missing_modules)))
     return sorted(expected)
 
 

@@ -43,6 +43,7 @@ pub mod numparse;
 pub mod numparse_owned;
 pub mod obj;
 pub mod pickconstraint;
+pub mod preview_primitives;
 pub mod printwidths;
 pub mod python_norm;
 mod python_text;

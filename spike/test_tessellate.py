@@ -174,21 +174,20 @@ tris = tessellate.ear_clip(square)
 check(len(tris) == len(square) - 2, f"square: {len(tris)} tris, expected 2")
 check(abs(poly_area_from_tris(square, tris) - 1.0) < 1e-12,
       f"square area {poly_area_from_tris(square, tris)}, expected 1")
-# The fast path must not invoke the O(n^2) interior-point scan. This is also
-# a mutation gate: deleting the convex-fan return makes this fixture RED.
-_original_point_test = tessellate._point_in_triangle
-def _unexpected_point_test(*args):
-    raise AssertionError("convex fast path fell back to ear clipping")
-tessellate._point_in_triangle = _unexpected_point_test
-try:
-    check(len(tessellate.ear_clip(square)) == 2,
-          "convex square did not use the fan fast path")
-finally:
-    tessellate._point_in_triangle = _original_point_test
+# Rust owns the convex fan too, including tiny polygons. Exact ordering is a
+# deterministic fast-path guard: the general ear scanner starts at (last,0,1).
+# Removing Rust's fan return turns both this and the frozen Rust corpus RED.
+_earclip_native = tessellate._triangulation_native()
+_before_native_clip = _earclip_native._native_calls
+check(tessellate.ear_clip(square) == [(0, 1, 2), (0, 2, 3)]
+      and _earclip_native._native_calls == _before_native_clip + 1,
+      "convex square must use the required Rust fan with exact triangle order")
+check(not hasattr(tessellate, "_point_in_triangle"),
+      "the retired Python interior-point scan must not remain as a fallback")
 
 # A representative large convex cap is linear in vertex count rather than the
 # old quadratic interior scan. Keep this as a printed probe, not a wall-clock
-# assertion: the predicate guard above is the deterministic performance gate.
+# assertion: the exact fan-order guard above is deterministic.
 _perf_poly = [(math.cos(2.0 * math.pi * i / 2048),
                math.sin(2.0 * math.pi * i / 2048)) for i in range(2048)]
 _perf_t0 = time.perf_counter()

@@ -135,7 +135,48 @@ class AdmissionSource(unittest.TestCase):
                 self.assertFalse((n.module or '').startswith('scripts'))
 
 
+    def test_new_admission_uses_real_direct_consumers_without_developer_scripts(self):
+        source = (ROOT/'launch/check_native.py').read_text()
+        tree = ast.parse(source)
+        required = {
+            'native_tessellate': {'ear_clip', 'signed_area'},
+            'native_bspline': {'control_point_curve_polyline'},
+            'native_preview': {'rectangle', 'ring'},
+            'native_dxf_reader': {'decode_dxf'},
+        }
+        calls = {(n.func.value.id, n.func.attr) for n in ast.walk(tree)
+                 if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+                 and isinstance(n.func.value, ast.Name)}
+        for module, methods in required.items():
+            for method in methods:
+                self.assertIn((module, method), calls)
+        self.assertNotIn(('dxf_reader', 'read_dxf'), calls)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom):
+                self.assertFalse((node.module or '').startswith(('scripts', 'spike')))
+
 class GuardMutations(unittest.TestCase):
+    def test_round24_consumer_call_guards_go_red_and_restore(self):
+        path = ROOT/'launch/check_native.py'
+        read = Path.read_text
+        source = read(path)
+        method = 'test_new_admission_uses_real_direct_consumers_without_developer_scripts'
+        calls = ('native_tessellate.ear_clip', 'native_tessellate.signed_area',
+                 'native_bspline.control_point_curve_polyline',
+                 'native_preview.rectangle', 'native_preview.ring',
+                 'native_dxf_reader.decode_dxf')
+        for call in calls:
+            self.assertIn(call, source)
+            def changed(item, *args, **kwargs):
+                return source.replace(call, call.replace('.', '.unused_', 1)) if item == path else read(item, *args, **kwargs)
+            with self.subTest(call=call), patch.object(Path, 'read_text', changed):
+                result = unittest.TestResult()
+                AdmissionSource(method).run(result)
+                self.assertFalse(result.wasSuccessful(), 'removed runtime consumer survived')
+            restored = unittest.TestResult()
+            AdmissionSource(method).run(restored)
+            self.assertTrue(restored.wasSuccessful(), restored.errors or restored.failures)
+
     def test_source_and_shared_binding_guards_are_load_bearing(self):
         read = Path.read_text
         source_path = ROOT/'narwhal3d/native_pure.py'

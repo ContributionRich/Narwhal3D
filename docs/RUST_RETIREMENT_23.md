@@ -24,3 +24,5 @@ Linux strict source gate passes 29 Rust integration suites and 77 host suites. A
 Large DXF workloads improve; ordinary large PDF/SVG can be near parity with previous native production. Tiny exports pay tens of microseconds of boundary cost. Tiny compatible Tween measured about 19 microseconds slower; larger compatible construction about 8 percent faster, with SamplePoints near parity. No universal 10 percent win is claimed and no hidden Python fallback masks the tradeoffs.
 
 Removed originals/hashes remain locally ignored. Public tests consume independent data, never a private backup or public Python reference engine. macOS remains unqualified and published release packages are unchanged.
+
+For required native DXF reading, triangulation and selected preview sampling, see [the subsequent ownership update](RUST_RETIREMENT_24.md).

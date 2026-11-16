@@ -1,4 +1,4 @@
-r"""Pure-Python tests for the DXF reader.
+r"""Required-native tests for the DXF reader.
 
 Pins the import contract:
 * a file written by the paired writer reads back to the same entities,

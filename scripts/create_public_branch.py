@@ -35,7 +35,7 @@ ROOT_FILES = (
     "docs/reviews/2026-10-31-rust-document-registry.md",
     "docs/reviews/2026-10-31-native-only.md",
     "docs/reviews/2026-11-11-rust-interaction-blend.md",
-    "docs/LIBRARY.md", "docs/FILE_IO.md", "docs/RUST_RETIREMENT_11.md", "docs/RUST_RETIREMENT_21.md", "docs/RUST_RETIREMENT_22.md", "docs/RUST_RETIREMENT_23.md", "docs/RUST_PARSER_OWNERSHIP.md", "docs/RUST_COORDINATE_JOIN_OWNERSHIP.md", "docs/RUST_SVG_ALIAS_OWNERSHIP.md", "docs/RUST_REBUILD_BLEND_OWNERSHIP.md", "docs/RUST_UNIT_OWNERSHIP.md", "docs/RUST_TEST_RETIREMENT_17.md", "docs/RUST_TEST_RETIREMENT_18.md",
+    "docs/LIBRARY.md", "docs/FILE_IO.md", "docs/RUST_RETIREMENT_11.md", "docs/RUST_RETIREMENT_21.md", "docs/RUST_RETIREMENT_22.md", "docs/RUST_RETIREMENT_23.md", "docs/RUST_RETIREMENT_24.md", "docs/RUST_PARSER_OWNERSHIP.md", "docs/RUST_COORDINATE_JOIN_OWNERSHIP.md", "docs/RUST_SVG_ALIAS_OWNERSHIP.md", "docs/RUST_REBUILD_BLEND_OWNERSHIP.md", "docs/RUST_UNIT_OWNERSHIP.md", "docs/RUST_TEST_RETIREMENT_17.md", "docs/RUST_TEST_RETIREMENT_18.md",
         "docs/reviews/2026-10-30-agent-v3-integration.md",
 )
 LAUNCH_FILES = (
@@ -94,6 +94,10 @@ SCRIPT_FILES = (
     "scripts/ui_bundle/fonts/README.md",
 )
 TEST_FILES = (
+    'spike/test_preview24_boundaries.py',
+    'spike/test_dxf_reader24_boundaries.py',
+    'spike/dxf_reader24_fixtures.py',
+
     'spike/test_document_correspondence.py',
     'spike/test_document_native_encoding_identity.py',
     'spike/test_document_save_repair.py',
@@ -332,6 +336,27 @@ TEST_FILES = (
     "spike/test_document_compatibility.py", "spike/fixtures/document_schema1_historical.json",
 )
 NATIVE_FILES = (
+    'native/pure_core/tests/data/.gitattributes',
+    'native/pure_core/tests/data/preview24_windows_msvc.tsv',
+    'native/pure_core/tests/data/preview24_windows_msvc.provenance.json',
+
+    'native/pure_core/tests/data/preview24_linux.tsv',
+    'native/pure_core/tests/data/preview24_provenance.txt',
+    'native/pure_core/tests/dxf_reader24.h',
+    'native/pure_core/tests/dxf_reader24.rs',
+    'native/pure_core/tests/earclip24_api.h',
+    'native/pure_core/tests/earclip24_golden.rs',
+    'native/pure_core/tests/fixtures/dxf_reader24/README.md',
+    'native/pure_core/tests/fixtures/dxf_reader24/capture.json',
+    'native/pure_core/tests/fixtures/dxf_reader24/corpus.bin',
+    'native/pure_core/tests/fixtures/dxf_reader24/manifest.tsv',
+    'native/pure_core/tests/fixtures/earclip24_original.txt',
+    'native/pure_core/tests/fixtures/earclip24_provenance.json',
+    'native/pure_core/tests/fixtures/earclip24_safety.json',
+    'native/pure_core/tests/preview24_api.h',
+    'native/pure_core/tests/preview24_golden.rs',
+    'native/pure_core/src/preview_primitives.rs',
+
     'native/pure_core/tests/nurbs_golden.rs',
     'native/pure_core/tests/arclength_golden.rs',
     'native/pure_core/tests/fixtures/nurbs_curves.txt',

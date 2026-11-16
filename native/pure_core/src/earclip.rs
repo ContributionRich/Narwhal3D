@@ -1,10 +1,10 @@
-//! Display-only ear clipping for planar face fills and caps.
+//! Planar-loop ear clipping for face fills, hit tests and existing planar caps.
 //!
 //! Mirrors `narwhal3d/tessellate.py` `ear_clip` step for step: the same signed-area
 //! orientation, the strictly-convex fan shortcut, the reflex-vertex candidate set,
 //! the inclusive point-in-triangle test, the stall guard and the partial result on
-//! a non-simple loop. The triangles index a DISPLAY mesh; they are never stored,
-//! measured, booleaned or exported as document geometry.
+//! a non-simple loop. Callers own the interpretation of these planar indices;
+//! this module never approximates a curved surface or changes a bridge route.
 
 const ERR_NULL: i32 = -1;
 const ERR_INPUT: i32 = -2;
@@ -171,6 +171,39 @@ pub unsafe extern "C" fn narwhal_pure_core_ear_clip_display(
         }
     }
     *out_triangles = triangles.len() as u64;
+    0
+}
+
+/// Original planar shoelace accumulation, including IEEE overflow/NaN results.
+/// This is not an analytic manufacturing-area API. Count is zero on failure,
+/// one only after publishing the area.
+///
+/// # Safety
+/// Nonempty spans must be live/aligned/nonoverlapping. Each output spans one
+/// exclusively writable value; outputs must not overlap each other or input.
+#[no_mangle]
+pub unsafe extern "C" fn narwhal_pure_core_earclip_signed_area_v1(
+    points: *const f64,
+    point_count: usize,
+    output: *mut f64,
+    out_values: *mut u64,
+) -> i32 {
+    let Some(count) = (unsafe { crate::checked_slice_mut(out_values, 1) }) else {
+        return ERR_NULL;
+    };
+    count[0] = 0;
+    if point_count > MAX_POINTS {
+        return ERR_INPUT;
+    }
+    let Some(values) = (unsafe { crate::checked_slice(points, point_count * 2) }) else {
+        return ERR_NULL;
+    };
+    let Some(out) = (unsafe { crate::checked_slice_mut(output, 1) }) else {
+        return ERR_NULL;
+    };
+    let poly: Vec<[f64; 2]> = values.chunks_exact(2).map(|p| [p[0], p[1]]).collect();
+    out[0] = signed_area(&poly);
+    count[0] = 1;
     0
 }
 
