@@ -59,6 +59,15 @@ ROUND24_NATIVE_FILES = {
     'native/pure_core/tests/preview24_golden.rs',
 }
 ROUND24_MODULES = {"native/pure_core/src/preview_primitives.rs"}
+NEAREST25_ADDED_EXPORTS = tuple("narwhal_pure_core_"+name for name in
+    ("nearest_on_nurbs", "nearest_on_callbacks_v1"))
+NEAREST25_NATIVE_FILES = {
+    'native/pure_core/tests/nearest25_api.h',
+    'native/pure_core/tests/nearest25_golden.rs',
+    'native/pure_core/tests/fixtures/nearest25_callbacks_linux.tsv',
+    'native/pure_core/tests/fixtures/nearest25_host_linux.jsonl',
+    'native/pure_core/tests/fixtures/nearest25_provenance.json',
+}
 
 
 class Reply(c.Structure):
@@ -517,6 +526,22 @@ def round24_preview_answers():
     return result
 
 
+def _nearest_scalar_mock(args):
+    # Correct tiny-line answer; wrong- mutant swaps in a status-only impl.
+    out, at_end = args[8], args[9]
+    if args[2] != 2: return -2  # reject invalid knot_count
+    out[0], out[1], out[2], out[3], out[4] = 0.25, 0.25, 0., 0., 2.
+    at_end[0] = 0
+    return 0
+
+
+def _nearest_cb_mock(args):
+    # Correct tiny-line answer; wrong- mutant swaps in a status-only impl.
+    out, at_end = args[9], args[10]
+    if args[4] != 1: return -2  # reject invalid span_count
+    out[0], out[1], out[2], out[3], out[4] = 0.25, 0.25, 0., 0., 2.
+    at_end[0] = 0
+    return 0
 def retirement_library(mutant=""):
     """Independent fixed ABI replies; no parser/solver/codec implementation."""
     xyz = [0.,0.,0.,1.,0.,0.,0.,1.,0.]
@@ -799,7 +824,9 @@ def retirement_library(mutant=""):
              "tween_plan_v1":tween_plan,"tween_knots_v1":tween_knots,"tween_lengths_v1":tween_lengths,
              "ear_clip_display":ear_clip,"earclip_signed_area_v1":ear_area,
              "control_point_curve_preview":control_preview,"preview_sample_v1":preview_sample,
-             "dxf_reader24_abi_version":lambda:1,"dxf_reader24_decode":reader_decode}
+             "dxf_reader24_abi_version":lambda:1,"dxf_reader24_decode":reader_decode,
+             "nearest_on_nurbs":lambda *args: _nearest_scalar_mock(args),
+             "nearest_on_callbacks_v1":lambda *args: _nearest_cb_mock(args)}
     functions = {}
     for name,fn in calls.items():
         full = "narwhal_pure_core_" + name
@@ -896,7 +923,8 @@ class RetirementProbeTests(unittest.TestCase):
                      "dxf_owned_abi_version","dxf_owned_colors","dxf_owned_units","dxf_owned_capacity","dxf_owned_encode",
                      "tween_plan_v1","tween_knots_v1","tween_lengths_v1",
                      "ear_clip_display","earclip_signed_area_v1","control_point_curve_preview",
-                     "preview_sample_v1","dxf_reader24_abi_version","dxf_reader24_decode"):
+                     "preview_sample_v1","dxf_reader24_abi_version","dxf_reader24_decode",
+             "nearest_on_nurbs","nearest_on_callbacks_v1"):
             with self.subTest(wrong=name), self.assertRaises(RuntimeError):
                 execute_retirement_probe("wrong-"+name)
         for mutant in ("encode-partial","import-partial","import-accept-unsafe",
@@ -1077,7 +1105,7 @@ class PackageTests(unittest.TestCase):
         # Path/AST metadata only: never load the golden corpora into this test.
         closure = gate.require_rust_public_closure(ROOT / "native/pure_core")
         self.assertEqual(set(closure), set(gate.RUST_INTEGRATION_FILES))
-        self.assertEqual(len(gate.RUST_INTEGRATION_SUITES), 33)
+        self.assertEqual(len(gate.RUST_INTEGRATION_SUITES), 34)
         source = ast.parse((ROOT / "scripts/create_public_branch.py").read_text())
         public = set()
         for node in source.body:
@@ -1104,7 +1132,7 @@ class PackageTests(unittest.TestCase):
         for host in ("spike/test_catenary.py", "spike/test_catenary_owned.py",
                      "spike/test_obj_writer.py", "spike/test_native_obj.py"):
             self.assertIn(host, gate.PURE_CORE_PYTESTS)
-        self.assertEqual(gate.PURE_CORE_RETIREMENT_IDENTITY["retirement_abi"], 24)
+        self.assertEqual(gate.PURE_CORE_RETIREMENT_IDENTITY["retirement_abi"], 26)
         for export in ("narwhal_pure_core_catenary_plan_v2", "narwhal_pure_core_obj_encode_into"):
             self.assertIn(export, gate.PURE_CORE_RETIREMENT_EXPORTS)
 
@@ -1508,8 +1536,8 @@ class ActualRound23ProbeTests(unittest.TestCase):
     def test_matching_real_library_has_stable_parser_and_round23_semantics(self):
         self.assertEqual(gate.probe_pure_core_parser(self.library),gate.PURE_CORE_PARSE_IDENTITY)
         self.assertEqual(gate.probe_pure_core_retirement(self.library),gate.PURE_CORE_RETIREMENT_IDENTITY)
-        self.assertEqual(gate.PURE_CORE_RETIREMENT_IDENTITY['retirement_abi'],24)
-        self.assertEqual(len(gate.PURE_CORE_RETIREMENT_EXPORTS),28)
+        self.assertEqual(gate.PURE_CORE_RETIREMENT_IDENTITY['retirement_abi'],26)
+        self.assertEqual(len(gate.PURE_CORE_RETIREMENT_EXPORTS),30)
 
     def test_stale22_and_each_new_missing_export_refused_with_real_parser(self):
         old = {'stl_size_owned','stl_encode_owned','stl_file_size','stl_file_decode',
@@ -1583,7 +1611,7 @@ class Round23ClosureTests(unittest.TestCase):
         new = ('vector_encode_v1','vector_len_v1','vector_copy_v1','vector_free_v1','vector_validate_v1',
                'dxf_owned_abi_version','dxf_owned_colors','dxf_owned_units','dxf_owned_capacity','dxf_owned_encode',
                'tween_plan_v1','tween_knots_v1','tween_lengths_v1')
-        self.assertEqual(gate.PURE_CORE_RETIREMENT_IDENTITY['retirement_abi'],24)
+        self.assertEqual(gate.PURE_CORE_RETIREMENT_IDENTITY['retirement_abi'],26)
         for name in new:
             self.assertIn('narwhal_pure_core_'+name,gate.PURE_CORE_RETIREMENT_EXPORTS)
 
@@ -1728,8 +1756,8 @@ class Round24ClosureTests(unittest.TestCase):
         for module in ('narwhal3d/native_preview.py','narwhal3d/native_dxf_reader.py','narwhal3d/dxf_reader.py'):
             self.assertIn(module,public.recursive_files('narwhal3d'))
         self.assertTrue(set(ROUND23_ADDED_EXPORTS + ROUND24_ADDED_EXPORTS) <= set(gate.PURE_CORE_RETIREMENT_EXPORTS))
-        self.assertEqual(gate.PURE_CORE_RETIREMENT_IDENTITY['retirement_abi'],24)
-        self.assertEqual(len(gate.PURE_CORE_RETIREMENT_EXPORTS),28)
+        self.assertEqual(gate.PURE_CORE_RETIREMENT_IDENTITY['retirement_abi'],26)
+        self.assertEqual(len(gate.PURE_CORE_RETIREMENT_EXPORTS),30)
 
     def test_new_configuration_guards_are_load_bearing(self):
         method = 'test_new_header_data_producer_and_host_closure_is_real'

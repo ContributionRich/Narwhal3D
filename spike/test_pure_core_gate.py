@@ -170,6 +170,20 @@ def _write(path, text):
         fh.write(text)
 
 
+NEAREST25_FILES = {
+    'native/pure_core/tests/fixtures/nearest25_host_windows_msvc.jsonl',
+    'native/pure_core/tests/fixtures/nearest25_callbacks_windows_msvc.tsv',
+    'native/pure_core/tests/fixtures/nurbs_host_windows_msvc.txt',
+    'native/pure_core/tests/fixtures/nearest25_windows_msvc.provenance.json',
+    'native/pure_core/tests/fixtures/.gitattributes',
+
+    'native/pure_core/tests/nearest25_api.h',
+    'native/pure_core/tests/nearest25_golden.rs',
+    'native/pure_core/tests/fixtures/nearest25_callbacks_linux.tsv',
+    'native/pure_core/tests/fixtures/nearest25_host_linux.jsonl',
+    'native/pure_core/tests/fixtures/nearest25_provenance.json',
+}
+
 @check("the gate manifest covers every pure-core native and reference suite")
 def _():
     gate = _load_gate()
@@ -215,6 +229,7 @@ def _():
         "spike/test_native_unit_table.py",
         "spike/test_unit_ops_owned.py", "spike/test_unit_table_owned.py",
         "spike/test_native_nearest.py",
+        "spike/test_nearest25_owned.py",
         "spike/test_pure_core_nearest_batch_gate.py",
         "spike/test_rebuild_performance.py",
         "spike/test_native_curve_samples.py",
@@ -310,7 +325,7 @@ def _():
     crate = Path(CRATE)
     closure = gate.require_rust_public_closure(crate)
     assert set(closure) == set(gate.RUST_INTEGRATION_FILES)
-    assert ROUND23_FILES | ROUND24_FILES | DXF_LEGACY_FILES <= set(closure)
+    assert ROUND23_FILES | ROUND24_FILES | DXF_LEGACY_FILES | NEAREST25_FILES <= set(closure)
     assert set(gate.RUST_REQUIRED_MODULE_FILES) == ROUND24_MODULES
     assert set(gate.RUST_INTEGRATION_SUITES) == {
             "alias_golden", "unit_golden", "interpolate_golden", "svgpath_golden",
@@ -320,7 +335,7 @@ def _():
             "coil_golden", "interpolate_helpers_golden", "stl_owned", "stl_import_safety",
             "catenary_boundary", "catenary_golden", "obj_golden", "stl_legacy_abi", "stl_name_prefix",
             "dxf_owned", "vector23_golden", "tween_golden", "obj_legacy_abi", "encoder_legacy_abi",
-            "earclip24_golden", "preview24_golden", "dxf_reader24", "dxf_legacy_abi",
+            "earclip24_golden", "preview24_golden", "dxf_reader24", "dxf_legacy_abi", "nearest25_golden",
         }
     public_source = (Path(ROOT) / "scripts/create_public_branch.py").read_text()
     for retired in ("spike/alias_reference.py", "spike/units_reference.py", "spike/interpolate_reference.py",
@@ -403,13 +418,13 @@ def _():
     real_read = Path.read_text
     # Every round-19/20/21/22 path is required independently; inspect manifests, not fixtures.
     added = [path for path in closure
-             if path in ROUND23_FILES or path in ROUND24_FILES or path in DXF_LEGACY_FILES or Path(path).name.startswith(("blend_", "norm_", "nurbs_", "arclength_",
+             if path in ROUND23_FILES or path in ROUND24_FILES or path in DXF_LEGACY_FILES or path in NEAREST25_FILES or Path(path).name.startswith(("blend_", "norm_", "nurbs_", "arclength_",
                                             "coil_", "interpolate_helpers", "stl_owned", "stl_import_safety",
                                             "catenary_", "obj_golden", "obj_original22",
                                             "stl_legacy_abi", "stl_name_prefix", "stl_prefix"))]
     added = sorted(set(added) | ROUND24_MODULES)
     assert ROUND23_FILES | ROUND24_FILES | ROUND24_MODULES | DXF_LEGACY_FILES <= set(added)
-    assert len(set(added) - ROUND23_FILES - ROUND24_FILES - ROUND24_MODULES - DXF_LEGACY_FILES) == 46
+    assert len(set(added) - ROUND23_FILES - ROUND24_FILES - ROUND24_MODULES - DXF_LEGACY_FILES - NEAREST25_FILES) == 46
     for missing in added:
         omitted = source.replace(repr(missing) + ",", "")
         assert omitted != source

@@ -1,9 +1,13 @@
 #!/usr/bin/env python3
 """Rebuild performance: prepared arc-length tables and prepared NURBS closest-point queries.
 
-Every optimised result is checked against the algorithm it replaced, kept here verbatim
-(`reference_parameter_at_length`) or reached through the unchanged Python search
-(`python_only`). Comparisons are exact (`==`): no tolerance is used anywhere.
+Arc-length results retain the reference integration algorithm below. Nearest results
+compare packed-NURBS/batched evaluation with required-native scalar search using the
+ORIGINAL SDK PointAt/DerivativeAt callbacks. The Python nearest engine was retired:
+disabling packing is now a protocol error, not a reference implementation. This SDK
+baseline independently exercises evaluation/routing, not a second search algorithm;
+independent old-search answers remain pinned by nurbs_golden and nearest25_golden.
+Comparisons remain exact (`==`); no geometry or timing tolerance is relaxed.
 
 Operation-count gates fail when an optimisation is bypassed: an arc-length table is built
 once per operation, a NURBS curve is packed once per fit rather than once per sample, and
@@ -87,9 +91,14 @@ class Count(Patch):
         return self
 
 
-def python_only():
-    """The Python closest-point search, as before the native route existed."""
-    return Patch(nearest, "_native_pack", lambda curve: None)
+def sdk_callback_baseline():
+    """Required scalar Rust search on ORIGINAL SDK evaluations, never a conversion.
+
+    Returning None from _native_pack no longer selects an executable Python oracle.
+    CallbackCurve deliberately bypasses packed NURBS evaluation while retaining
+    the original SDK parameterization, derivative behavior and exact result fields.
+    """
+    return Patch(nearest, "_native_pack", native.CallbackCurve)
 
 
 def reference_parameter_at_length(curve, s, tolerance=None):
@@ -145,7 +154,7 @@ class ReferencePrepared:
         self._curve = curve
 
     def closest(self, point, tolerance=None):
-        with python_only():
+        with sdk_callback_baseline():
             return nearest.closest_point_on_curve(self._curve, point, tolerance)
 
     def closest_many(self, points, tolerance=None):
@@ -168,8 +177,9 @@ def nonuniform_open(bump=0.0):
     pts = [(0, 0, 0), (1, 3, 0), (2, -2, 1), (4, 2, 0), (5, -1, 2), (7, 3, 1), (8, 0, 0), (9, 2, -1)]
     for i, (x, y, z) in enumerate(pts):
         c.Points[i] = r3.Point4d(x, y, z + (bump if i == 3 else 0.0), 1.0)
-    for i, k in enumerate([0, 0, 0, 0, 0.4, 1.1, 3, 3, 3, 3]):
+    for i, k in enumerate([0, 0, 0, 0.2, 0.4, 1.1, 2, 3, 3, 3]):
         c.Knots[i] = float(k)
+    assert c.IsValid, "the non-uniform performance fixture must be valid SDK geometry"
     return c
 
 
@@ -307,11 +317,11 @@ for c in (zero, nonuniform_open()):
             pass
 check(not refused, "out-of-range arc lengths are refused with ValueError")
 
-print("\n-- closest point: native search against the Python search --")
+print("\n-- closest point: packed native search against original SDK callbacks --")
 native_ok = native.available()
 check(native_ok, "native core exports narwhal_pure_core_nearest_on_nurbs (set NARWHAL_PURE_CORE)")
 if not native_ok:
-    print("       the gates below need the native core; the Python fallback cannot prove them")
+    print("       the gates below require native scalar/callback exports; no Python search replay")
 for name, make in FIXTURES.items():
     curve = make()
     queries = queries_near(curve, 40, seed=len(name))
@@ -333,9 +343,11 @@ for name, make in FIXTURES.items():
     expected_native = sum(native_searches(q) for q in queries)
     with Count(native, "search") as calls:
         got = [closest_fields(nearest.closest_point_on_curve(curve, q)) for q in queries]
-    with python_only():
+    with sdk_callback_baseline(), Count(native, "_callback_search") as sdk_calls:
         want = [closest_fields(nearest.closest_point_on_curve(curve, q)) for q in queries]
-    check(got == want, f"{name}: {len(queries)} closest points bit-identical to the Python search")
+    check(got == want, f"{name}: {len(queries)} closest points bit-identical to original SDK evaluation")
+    check(sdk_calls.calls == expected_native,
+          f"{name}: reference really uses SDK callbacks ({sdk_calls.calls} searches)")
     check(calls.calls == expected_native,
           f"{name}: {calls.calls} native searches, {expected_native} expected "
           "(analytic targets are verified natively too)")
@@ -347,21 +359,21 @@ with Count(nearest, "_native_pack") as packs:
     prepared = nearest.PreparedCurve(curve)
     answers = [closest_fields(prepared.closest(q)) for q in queries]
 check(packs.calls == 1, f"a prepared curve packs once ({packs.calls} pack for {len(queries)} queries)")
-with python_only():
+with sdk_callback_baseline():
     want = [closest_fields(nearest.closest_point_on_curve(curve, q)) for q in queries]
-check(answers == want, "prepared answers bit-identical to the Python search")
+check(answers == want, "prepared answers bit-identical to original SDK callback evaluation")
 with Count(nearest, "_native_pack") as packs:
     [nearest.closest_point_on_curve(curve, q) for q in queries[:10]]
 check(packs.calls == 10, "the default call packs per query, so each answer reads the curve it is given")
 
 curve = closed_43_spans()
 q = queries_near(curve, 1, seed=3)[0]
-with python_only():
+with sdk_callback_baseline():
     before = closest_fields(nearest.closest_point_on_curve(curve, q))
 prepared = nearest.PreparedCurve(curve)
 curve.Points[10] = r3.Point4d(curve.Points[10].X, curve.Points[10].Y, curve.Points[10].Z + 2.0, 1.0)
 check(closest_fields(prepared.closest(q)) == before, "a prepared curve ignores a later control-point edit")
-with python_only():
+with sdk_callback_baseline():
     edited = closest_fields(nearest.closest_point_on_curve(curve, q))
 check(closest_fields(nearest.closest_point_on_curve(curve, q)) == edited,
       "the default call answers for the edited curve")
@@ -371,41 +383,54 @@ circle = circle_nurbs()
 off_axis = (1.0 + 9.0, 2.0, 3.0)
 analytic = nearest.PreparedCurve(circle).closest(off_axis)
 check(analytic.method == "circle", "a prepared circle keeps its analytic route")
-with python_only():
+with sdk_callback_baseline():
     check(closest_fields(analytic) == closest_fields(nearest.closest_point_on_curve(circle, off_axis)),
           "the prepared analytic answer equals the default answer")
 circle = circle_nurbs()
-with python_only():
+with sdk_callback_baseline():
     circle_before = closest_fields(nearest.closest_point_on_curve(circle, off_axis))
 prepared_circle = nearest.PreparedCurve(circle)
 circle.Points[0] = r3.Point4d(circle.Points[0].X + 3.0, circle.Points[0].Y, circle.Points[0].Z, 1.0)
 check(closest_fields(prepared_circle.closest(off_axis)) == circle_before,
       "a prepared circle ignores a later edit to its analytic form")
 
-print("\n-- native core missing: the Python search answers, bit for bit --")
+print("\n-- native core missing: explicit refusal, no Python search replay --")
+snap = nonuniform_open()
+snap_queries = queries_near(snap, 4, seed=13)
+with sdk_callback_baseline():
+    snap_before = [closest_fields(nearest.closest_point_on_curve(snap, q)) for q in snap_queries]
+snap_prepared = nearest.PreparedCurve(snap)
 saved_env = os.environ.get("NARWHAL_PURE_CORE")
 os.environ["NARWHAL_PURE_CORE"] = os.path.join(ROOT, "no-such-directory", "libnarwhal_pure_core.so")
 try:
     curve = nonuniform_open()
     queries = queries_near(curve, 10, seed=11)
+    geometry_before = curve.Encode()
     check(not native.available(), "a missing library reports the native core unavailable")
-    got = [closest_fields(nearest.closest_point_on_curve(curve, q)) for q in queries]
-    prepared = nearest.PreparedCurve(curve)
-    prepared_got = [closest_fields(prepared.closest(q)) for q in queries]
-    with python_only():
-        want = [closest_fields(nearest.closest_point_on_curve(curve, q)) for q in queries]
-    check(got == want and prepared_got == want, "fallback answers equal the Python search")
-    snap = nonuniform_open()
-    snap_queries = queries_near(snap, 4, seed=13)
-    with python_only():
-        snap_before = [closest_fields(nearest.closest_point_on_curve(snap, q)) for q in snap_queries]
-    snap_prepared = nearest.PreparedCurve(snap)
+    refused = 0
+    for q in queries:
+        try:
+            nearest.closest_point_on_curve(curve, q)
+        except native.NativeNearestError:
+            refused += 1
+    check(refused == len(queries), "all missing-core nearest queries explicitly refuse")
+    try:
+        nearest.PreparedCurve(curve)
+    except native.NativeNearestError:
+        check(True, "missing core cannot prepare a Python search fallback")
+    else:
+        check(False, "missing core must refuse preparation")
+    try:
+        snap_prepared.closest(snap_queries[0])
+    except native.NativeNearestError:
+        check(True, "an existing prepared snapshot still requires its native library")
+    else:
+        check(False, "prepared snapshot must not replay Python without native")
+    check(curve.Encode() == geometry_before, "missing-core refusal leaves input geometry unchanged")
     snap.Points[3] = r3.Point4d(4, 2, 2.5, 1.0)
-    check([closest_fields(snap_prepared.closest(q)) for q in snap_queries] == snap_before,
-          "without the native core, a prepared curve ignores later edits")
     cubic = cubic_open()
-    # Search may retain its qualified fallback, but fitting is now native-only.
-    # Complete fitted-curve parity remains checked below and by the fit oracle suite.
+    # Both search and fitting are required-native. Keep the fitter's explicit
+    # missing-core error check and complete fitted-geometry parity below.
     fit_host = load("native_rebuild")
     try:
         rebuild.rebuild_curve(cubic, 6, 3)
@@ -419,6 +444,8 @@ finally:
         os.environ.pop("NARWHAL_PURE_CORE", None)
     else:
         os.environ["NARWHAL_PURE_CORE"] = saved_env
+check([closest_fields(snap_prepared.closest(q)) for q in snap_queries] == snap_before,
+      "after native restoration, the prepared snapshot still ignores later edits")
 
 print("\n-- operation-count gate: one arc-length table per operation --")
 curve = closed_43_spans()

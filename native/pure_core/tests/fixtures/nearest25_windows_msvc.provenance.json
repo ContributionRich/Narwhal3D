@@ -1,0 +1,35 @@
+{
+  "kind": "independent original SDK host/search outputs captured with native search disabled",
+  "original_nearest_sha256": "a272b7b7eed562fc4449d187ed5707b17eac4e4df57aa18bb17b67f99f609372",
+  "platform": "Windows x86_64 MSVC CPython 3.13.13 rhino3dm 8.35.0",
+  "rows": {
+    "callback_host": 234,
+    "host_groups": 31,
+    "host_queries": 3096
+  },
+  "comparison": "3096 required native answers exactly equal original Windows engine; 176 differ from Linux-only host fixture",
+  "line_endings": "Only CRLF to LF; splitlines bytes identical; raw hashes retained",
+  "files": [
+    {
+      "path": "native/pure_core/tests/fixtures/nearest25_host_windows_msvc.jsonl",
+      "raw_sha256": "c63b0f6e8d82c72faebb46a32ba8f41002b32cd754043dc1b605fd61127f95fb",
+      "public_sha256": "1b087b9b906e21da09871a9fbc6265d5026ef567ff563f99b6b3c0c87902aeba",
+      "raw_size": 1432433,
+      "public_size": 1432199
+    },
+    {
+      "path": "native/pure_core/tests/fixtures/nearest25_callbacks_windows_msvc.tsv",
+      "raw_sha256": "08b7fc2fc62d8d894589583156fbebd910ddb80ce410396804dbaab0124d6999",
+      "public_sha256": "43bc3ab6fb1e74fd25ffa6be7ff1f41a8aa4447484cd90788a4fcede0b5b70f4",
+      "raw_size": 654641,
+      "public_size": 648806
+    },
+    {
+      "path": "native/pure_core/tests/fixtures/nurbs_host_windows_msvc.txt",
+      "raw_sha256": "228488cf7c27caf13e509f4036c40544eb478b4a710b5c83b60444bd1e47b264",
+      "public_sha256": "5681c6a1c32ef5582c3eb1064e99b6150245daa9046bdae2665a19dba6041aa8",
+      "raw_size": 468169,
+      "public_size": 468138
+    }
+  ]
+}

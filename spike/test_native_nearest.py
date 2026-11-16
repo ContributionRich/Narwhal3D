@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Real-rhino3dm Near integration, fallback, packing and performance guards.
+"""Real-rhino3dm required Near integration, refusal, packing and performance guards.
 
 The original random numeric corpus now replays directly against Rust ABIs in
 native/pure_core/tests/nurbs_golden.rs. Every original fixture host query and all
@@ -11,11 +11,11 @@ gate's release build:
       tools/blender-patched/5.2/python/bin/python3.13 spike/test_native_nearest.py
 
 Parity is exact: on a `NurbsCurve` the native search returns the same parameter,
-point, distance and end flag as `nearest._search`, bit for bit. Rust evaluates the
+point, distance and end flag as the captured original search, bit for bit. Rust evaluates the
 curve with openNURBS's own algorithms (span search, Bezier de Casteljau and Lee,
 basis functions and derivatives, quotient rule) in openNURBS's operation order, and
-mirrors every arithmetic step of the Python search. Other curves (a line, polyline
-or poly curve) are not packed and keep the Python search.
+mirrors every arithmetic step of the Python search. Other curves (a line, polyline or poly curve) retain their original SDK evaluation
+through native callback search; no Python numerical search remains.
 
 Tie rule: both scan the same candidates in the same order (samples by parameter,
 then Newton results by seed) and keep the first strictly smaller distance, so an
@@ -123,10 +123,12 @@ check(native.available(), f"the pure-core library loads ({LIBRARY})")
 
 # Numeric search is replayed in Rust. Preserve EVERY original fixture host query,
 # including non-NURBS fallback and analytic method/ambiguity verification cases.
-with open(os.path.join(ROOT, "native/pure_core/tests/fixtures/nurbs_host.txt"), "rb") as source:
+host_fixture = "nurbs_host_windows_msvc.txt" if sys.platform == "win32" else "nurbs_host.txt"
+with open(os.path.join(ROOT, "native/pure_core/tests/fixtures", host_fixture), "rb") as source:
     host_bytes = source.read()
 check(hashlib.sha256(host_bytes).hexdigest()
-      == "4cb19de12f9879bb0d63a5ee8ad1e07084961e107eb8a342733c799b691e3433",
+      == ("5681c6a1c32ef5582c3eb1064e99b6150245daa9046bdae2665a19dba6041aa8" if sys.platform == "win32" else
+          "4cb19de12f9879bb0d63a5ee8ad1e07084961e107eb8a342733c799b691e3433"),
       "all 31 original host groups / 3096 queries have frozen byte integrity")
 HOST = {(name, count): (queries, answers)
         for name, count, queries, answers in map(json.loads, host_bytes.splitlines())}
@@ -147,13 +149,13 @@ def frozen_fields(curve, count):
 
 for name, curve in FIXTURES.items():
     cache = nearest.NearCache(curve)
-    before = native._native_calls
+    before = native._native_calls + native._native_callback_calls
     queries = queries_for(curve, 150)
     got = [nearest.near_point(curve, q, cache, TOL) for q in queries]
     is_nurbs = isinstance(curve, r3.NurbsCurve)
-    want = [answer[1] for answer in frozen_fields(curve, 150)] if is_nurbs else [None] * len(queries)
-    check((cache.packed is not None) == is_nurbs and got == want
-          and ((native._native_calls > before) if is_nurbs else native._native_calls == before),
+    want = [answer[1] for answer in frozen_fields(curve, 150)]
+    check(cache.packed is not None and got == want
+          and native._native_calls + native._native_callback_calls > before,
           f"{name}: all {len(queries)} original host queries, type packing/routing")
     if is_nurbs:
         packed = cache.packed
@@ -198,37 +200,32 @@ for name in ("circle", "arc", "tilted arc", "uneven linear cubic", "LineCurve"):
     before = native._native_calls
     got = [all_fields(nearest.closest_point_on_curve(curve, q)) for q in queries]
     calls = native._native_calls - before
-    real = nearest._native_pack
-    nearest._native_pack = lambda curve: None
-    try:
-        want = [all_fields(nearest.closest_point_on_curve(curve, q)) for q in queries]
-    finally:
-        nearest._native_pack = real
-    native_route = isinstance(curve, r3.NurbsCurve)
-    check(got == want == frozen_fields(curve, 60)
-              and (calls >= len(queries) if native_route else calls == 0),
-          f"{name}: {len(queries)} answers equal the Python verification, "
-          f"{calls} native searches")
+    check(got == frozen_fields(curve, 60)
+              and (calls >= len(queries) if isinstance(curve, r3.NurbsCurve) else calls == 0),
+          f"{name}: {len(queries)} frozen full answers, {calls} packed native searches")
 on_axis = nearest.closest_point_on_curve(FIXTURES["circle"], (1.0, 2.0, 7.0))
 check(on_axis.ambiguous and on_axis.t == FIXTURES["circle"].Domain.T0,
       "an on-axis query is still the ambiguous domain start")
 
-print("\n-- the snap uses it, and falls back without the library --")
+print("\n-- the snap requires native search --")
 target = osnap.SnapTarget(points=[(0, 0, 0), (10, 3, 0)], curve=FIXTURES["open cubic, 12 points"])
 before = native._native_calls
 p1 = osnap._refine_near(target, (4.0, 1.0, 0.0))
 check(native._native_calls > before and target._near is not None, "Near takes the Rust route and caches the curve")
-check(nearest.near_point(FIXTURES["poly curve"], (5.0, 1.0, 0.0), nearest.NearCache(FIXTURES["poly curve"]), TOL) is None,
-      "a poly curve (not a NurbsCurve) keeps the Python search")
+check(nearest.near_point(FIXTURES["poly curve"], (5.0, 1.0, 0.0), nearest.NearCache(FIXTURES["poly curve"]), TOL)
+      == nearest.closest_point_on_curve(FIXTURES["poly curve"], (5.0, 1.0, 0.0), TOL).point,
+      "a poly curve uses native search with its original SDK callbacks")
 check(p1 == nearest.closest_point_on_curve(target.curve, (4.0, 1.0, 0.0)).point,
       "and returns the Python point")
 os.environ["NARWHAL_PURE_CORE"] = os.path.join(ROOT, "no-such-library.so")
 try:
-    fresh = osnap.SnapTarget(points=[(0, 0, 0), (10, 3, 0)], curve=FIXTURES["open cubic, 12 points"])
     before = native._native_calls
-    p2 = osnap._refine_near(fresh, (4.0, 1.0, 0.0))
-    check(native._native_calls == before and p2 == nearest.closest_point_on_curve(fresh.curve, (4.0, 1.0, 0.0)).point,
-          "without the library the Python search answers")
+    try:
+        nearest.closest_point_on_curve(target.curve, (4.0, 1.0, 0.0))
+    except native.NativeNearestError:
+        check(native._native_calls == before, "missing native explicitly refuses without Python replay")
+    else:
+        check(False, "missing nearest native must refuse")
 finally:
     os.environ["NARWHAL_PURE_CORE"] = LIBRARY
 
@@ -269,20 +266,31 @@ check([fields(c) for c in cubic.closest_many(mixed[::2])] == [fields(cubic.close
 os.environ["NARWHAL_PURE_CORE"] = os.path.join(ROOT, "no-such-library.so")
 try:
     before = native._native_many_calls
-    plain = nearest.PreparedCurve(FIXTURES["open cubic, 12 points"])
-    got = [fields(c) for c in plain.closest_many(mixed[::2])]
-    check(native._native_many_calls == before and got == [fields(plain.closest(q)) for q in mixed[::2]],
-          "without the library closest_many answers point by point in Python")
+    try:
+        nearest.PreparedCurve(FIXTURES["open cubic, 12 points"])
+    except native.NativeNearestError:
+        check(native._native_many_calls == before, "missing native cannot prepare a Python fallback")
+    else:
+        check(False, "missing nearest native must refuse preparation")
 finally:
     os.environ["NARWHAL_PURE_CORE"] = LIBRARY
 
 bad = native.pack(FIXTURES["open cubic, 12 points"])
 bad.order = 0
 before = (native._native_calls, native._native_many_calls)
-check(native.search(bad, (1.0, 2.0, 0.0)) is None
-      and native.search_many(bad, [(1.0, 2.0, 0.0)]) is None
-      and before == (native._native_calls, native._native_many_calls),
-      "invalid packed metadata is refused without recording native success")
+for name, call in (("scalar", lambda: native.search(bad, (1.0, 2.0, 0.0))),
+                   ("batch", lambda: native.search_many(bad, [(1.0, 2.0, 0.0)]))):
+    if name == "batch" and native.batch_capability() != "qualified":
+        check(call() is None and before == (native._native_calls, native._native_many_calls),
+              "unqualified invalid batch is not called; scalar path owns refusal")
+        continue
+    try:
+        call()
+    except native.NearestInputError:
+        check(before == (native._native_calls, native._native_many_calls),
+              f"{name}: invalid packed metadata explicitly refused without native success")
+    else:
+        check(False, f"{name}: invalid packed metadata must refuse")
 platform = sys.platform
 signature, binding = native._many_signature, native._many_binding
 try:
@@ -318,8 +326,8 @@ for name in ("circle", "open cubic, 4 points", "open cubic, 40 points"):
     cache = nearest.NearCache(curve)
     rust = best(lambda: [nearest.near_point(curve, q, cache, TOL) for q in queries], 3) / len(queries)
     python = best(lambda: [nearest.closest_point_on_curve(curve, q, TOL) for q in queries], 3) / len(queries)
-    print(f"  [perf] {name}: native {rust * 1e6:.1f} us, python {python * 1e6:.1f} us, ratio {rust / python:.3f}")
-    check(rust / python <= 0.9, f"Near wins by at least 10% on {name}")
+    print(f"  [perf] {name}: cached native {rust * 1e6:.1f} us, uncached native {python * 1e6:.1f} us, ratio {rust / python:.3f}")
+    check(rust / python <= 0.9, f"cached Near wins by at least 10% on {name}")
 
 failed = sum(not ok for ok, _ in checks)
 print(f"\n{len(checks) - failed}/{len(checks)} passed")

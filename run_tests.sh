@@ -148,6 +148,10 @@ run "native admission and cache ownership" "$PYTHON" -B spike/test_native_admiss
 run "AI generic exit cleanup" "$PYTHON" -B spike/test_ai_v8_exit.py
 run "Rust document-session integration" "$PYTHON" spike/test_document_session_integration.py --launch
 
+run "Rust selection-core tests (static, random, registration)" cargo +1.95.0 test \
+    --manifest-path native/selection_core/Cargo.toml --locked --offline --jobs 2 \
+    --test selection26_static --test selection26_random --test selection26_registration
+
 # These Blender callers can construct editors and document history during import.
 SELECTION_CORE="$ROOT/artifacts/selection-core/linux-x86_64/libnarwhal_selection_core.so"
 if [[ -f "$SELECTION_CORE" ]]; then
@@ -614,6 +618,8 @@ if [[ -n "${DISPLAY:-}" || -n "${WAYLAND_DISPLAY:-}" ]]; then
             "$PYTHON" -B spike/test_ui_core_popup_gui.py --launch
         run "Rust UI-core popup failure recovery live" env NARWHAL_UI_CORE_LIBRARY="$UI_CORE_LIBRARY" \
             "$PYTHON" -B spike/test_ui_core_popup_failure_gui.py --launch
+        run "Custom shell empty-space right-click routing live" env NARWHAL_UI_CORE_LIBRARY="$UI_CORE_LIBRARY" \
+            "$PYTHON" -B spike/test_right_dock_rmb_gui.py --launch
 
     else
         printf '\nERROR: required UI-core not source-qualified\n' >&2

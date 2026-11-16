@@ -1,0 +1,16 @@
+{
+  "source": "published f2f2b51b original narwhal3d/nearest.py, archived before removal",
+  "original_sha256": "a272b7b7eed562fc4449d187ed5707b17eac4e4df57aa18bb17b67f99f609372",
+  "runtime": "CPython 3.13.13 bundled Linux x86_64 rhino3dm SDK",
+  "cases": 234,
+  "full_result_errors": 26,
+  "public_sdk_events": 5278,
+  "direct_search_sdk_events": 5601,
+  "fixtures": {
+    "native/pure_core/tests/fixtures/nearest25_host_linux.jsonl": "573d49ff3d06ca3df75d42d385a59278d38c0366af750964a7d99887e34d1a2e",
+    "native/pure_core/tests/fixtures/nearest25_callbacks_linux.tsv": "43bc3ab6fb1e74fd25ffa6be7ff1f41a8aa4447484cd90788a4fcede0b5b70f4"
+  },
+  "capture": "All original full-result/event answers captured before deleting Python engine. Later added SDK Encode input descriptions only, asserting existing answers/events unchanged. Local platform recipe replays ORIGINAL archived engine against frozen inputs and regenerates Linux data exactly.",
+  "windows": "Actual Windows original SDK capture and native scalar/batch/callback qualification pending Main. New tests select independent Windows fixture names, never assume Linux bits or widen tolerances.",
+  "safety": "Explicit finite-input/output, alias/alignment and bounded work refusals. Original derivative exception/None/short-result stops Newton; point/derivative-conversion exceptions transported by identity. Stable old batch NaN slots preserved; required host refuses unsafe targets."
+}

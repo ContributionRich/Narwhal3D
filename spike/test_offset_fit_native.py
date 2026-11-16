@@ -4,7 +4,9 @@ The retained compatibility fitter (`offset._offset_control_polygon_approx`) keep
 48, 96, 192 ... sample schedule and 201 targets per native/legacy nearest check. Those
 INNER validation contracts are checked separately from public compact output. Public
 outputs must instead have fewer controls AND pass a dense independent true-offset oracle.
-Missing/declining nearest support still runs the legacy scan for the whole inner check.
+Missing nearest availability still selects the separate legacy offset scan. A None
+reply from an already-required native nearest search is a protocol failure, NOT
+permission to replay the retired Python nearest engine.
 
 The legacy algorithm is frozen below (`legacy_*`), copied from `offset.py` before the change,
 so parity and fallback are checked against the old code and not against the new code itself.
@@ -344,26 +346,44 @@ else:
     os.environ["NARWHAL_PURE_CORE"] = _saved_env
 check(native_nearest.available(), "the native library is available again after restoring the env")
 
-_real_search = native_nearest.search
-_calls = {"n": 0}
+def check_midrun_native_refusal():
+    """None is an invalid required-nearest reply; no geometric result may escape.
+
+    The old test expected a legacy deviation after this injected reply. That relied
+    on the retired nearest Python engine. Preserve actual offset accuracy tests
+    above/below, and demand explicit refusal plus unchanged geometry and recovery.
+    """
+    real_search = native_nearest.search
+    calls = {"n": 0}
+    geometry_before = {"profile": PROFILE.Encode(), "cusp": CUSP.Encode()}
+    control = off._offset_control_polygon_approx(CUSP, 0.2, CUSP_NORMAL, 1e-3)
+
+    def declining_search(packed, target):
+        calls["n"] += 1
+        if calls["n"] > 5:
+            return None
+        return real_search(packed, target)
+
+    native_nearest.search = declining_search
+    try:
+        off._offset_control_polygon_approx(CUSP, 0.2, CUSP_NORMAL, 1e-3)
+    except native_nearest.NativeNearestError as error:
+        check("no answer" in str(error), "mid-run None is an explicit nearest protocol error")
+    else:
+        check(False, "mid-run None must refuse, not return a fallback offset")
+    finally:
+        native_nearest.search = real_search
+    check(calls["n"] > 5, "the injected protocol failure occurs after real native work")
+    check(PROFILE.Encode() == geometry_before["profile"] and CUSP.Encode() == geometry_before["cusp"],
+          "mid-run nearest refusal leaves source geometry exactly unchanged")
+    recovered = off._offset_control_polygon_approx(CUSP, 0.2, CUSP_NORMAL, 1e-3)
+    check(cv_diff(recovered.curve, control.curve) == 0.0
+          and list(recovered.curve.Knots.ToList()) == list(control.curve.Knots.ToList())
+          and recovered.max_deviation == control.max_deviation,
+          "after native restoration, offset geometry/knots/deviation recover exactly")
 
 
-def _declining_search(packed, target):
-    _calls["n"] += 1
-    if _calls["n"] > 5:
-        return None
-    return _real_search(packed, target)
-
-
-native_nearest.search = _declining_search
-try:
-    ref_fit, ref_dev, _ = legacy_fit(CUSP, 0.2, CUSP_NORMAL)
-    # The legacy control-polygon fit (still the route for non-cusp free-form pieces).
-    res = off._offset_control_polygon_approx(CUSP, 0.2, CUSP_NORMAL, 1e-3)
-    check(abs(res.max_deviation - ref_dev) <= 1e-12,
-          f"mid-run decline, cusp: legacy deviation {ref_dev:.6e} (not the Python search's value)")
-finally:
-    native_nearest.search = _real_search
+check_midrun_native_refusal()
 
 # ---------------------------------------------------------------------------
 # 6. the Offset preview memo (commands.OffsetCmd, preview only)

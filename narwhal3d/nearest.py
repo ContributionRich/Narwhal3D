@@ -196,22 +196,25 @@ class PreparedCurve:
         return _closest(self._curve, point, tolerance, self._packed)
 
     def closest_many(self, points, tolerance=None):
-        """``[self.closest(p, tolerance) for p in points]``, in one native call when it can.
+        """Prepared queries through qualified native batch or native scalar calls.
 
-        A general NURBS curve (no circle, arc or line shortcut, so every query is the
-        native search) is searched for all points at once; each answer is the one
-        :meth:`closest` gives. Any other curve, or a point Rust cannot answer, takes
-        :meth:`closest` itself. MEASURED (i7-9700K): a 40-point cubic's query cost
-        51 us one at a time, about half of it Python and call overhead.
+        Analytic SDK routes retain their method/ambiguity semantics. Infrastructure
+        and input refusals are explicit; neither path replays Python search math.
         """
-        points = list(points)
+        bounded = []
+        for point in points:
+            if len(bounded) >= 100000:
+                raise _native_module().NearestInputError("nearest batch target limit 100000")
+            bounded.append(point)
+        points = bounded
         rows = None
         if self._packed is not None and _is_general_nurbs(self._curve):
             rows = _native_module().search_many(self._packed, [_pt(q) for q in points])
         if rows is None:
             return [self.closest(q, tolerance) for q in points]
-        return [ClosestPoint(r[0], r[1], r[2], "nurbs", r[3], False) if r is not None
-                else self.closest(q, tolerance) for q, r in zip(points, rows)]
+        if len(rows) != len(points) or any(r is None for r in rows):
+            raise _native_module().NativeNearestError("nearest batch returned incomplete results")
+        return [ClosestPoint(r[0], r[1], r[2], "nurbs", r[3], False) for r in rows]
 
 
 def _is_general_nurbs(curve):
@@ -236,65 +239,52 @@ def _closest(curve, point, tolerance, packed):
         method, target, ambiguous = exact
         if ambiguous:
             q = _eval(curve, t0)
-            return ClosestPoint(t0, q, _dist(q, p), method, False, True)
+            return ClosestPoint(t0, q, _curve_distance(q, p), method, False, True)
         if packed is _PACK_ON_DEMAND:
             packed = _native_pack(curve)
         res = _search_target(curve, target, tol, method, packed)
         # Run-time verification: the analytic point must really be ON the curve.
         # If it is not (a curve that reports IsLinear but doubles back past its
         # own chord, say) the shortcut is abandoned rather than trusted.
-        if _dist(res.point, target) <= tol:
-            return ClosestPoint(res.t, res.point, _dist(res.point, p), method,
+        if _curve_distance(res.point, target) <= tol:
+            return ClosestPoint(res.t, res.point, _curve_distance(res.point, p), method,
                                 res.at_end, False)
 
     if packed is _PACK_ON_DEMAND:
         packed = _native_pack(curve)
-    native = _native_search(packed, p)
-    if native is not None:
-        t, q, dist, at_end = native
-        return ClosestPoint(t, q, dist, "nurbs", at_end, False)
-    return _search(curve, p, tol, "nurbs")
+    t, q, dist, at_end = _native_search(packed, p)
+    return ClosestPoint(t, q, dist, "nurbs", at_end, False)
 
 
 def _search_target(curve, target, tol, method, packed):
-    """`_search(curve, target, tol, method)`, in Rust when `curve` is packed.
+    """Verify an analytic SDK target through required original-curve search."""
+    t, q, dist, at_end = _native_search(packed, target)
+    return ClosestPoint(t, q, dist, method, at_end, False)
 
-    The native search returns `_search`'s parameter, point, distance and end flag bit
-    for bit (spike/test_native_nearest.py); `method` only labels the result. This is
-    the verification search of an analytic target (circle, arc, line), which ran in
-    Python on every query. MEASURED (i7-9700K): a `closest_point_on_curve` call on a
-    circle, packing included, 0.45 ms -> 0.20 ms.
-    """
-    native = _native_search(packed, target)
-    if native is not None:
-        t, q, dist, at_end = native
-        return ClosestPoint(t, q, dist, method, at_end, False)
-    return _search(curve, target, tol, method)
+
+def _curve_distance(a, b):
+    # SDK analytic targets still use the legacy distance recipe. Translate only
+    # its numeric refusal, not exceptions raised by SDK evaluation callbacks.
+    try:
+        value = _dist(a, b)
+    except OverflowError as error:
+        raise _native_module().NearestInputError("nearest distance overflow") from error
+    if not math.isfinite(value):
+        raise _native_module().NearestInputError("nearest distance must be finite")
+    return value
 
 
 def _native_pack(curve):
-    """The curve's packing for the Rust NURBS search, or None.
-
-    None when `curve` is not a `NurbsCurve` or the native library is unavailable. The
-    control points are read here, so the packing is a snapshot of the curve as it is now.
-    """
-    if not isinstance(curve, r3.NurbsCurve):
-        return None
-    native_nearest = _native_module()
-    if not native_nearest.available():
-        return None
-    cvs = []
-    for cv in curve.Points:
-        cvs.extend((cv.X, cv.Y, cv.Z, cv.W))
-    return native_nearest.PackedCurve(int(curve.Order), list(curve.Knots.ToList()), cvs,
-                                      bool(curve.IsRational), _is_closed(curve))
+    """Snapshot NURBS data or retain the original SDK object for native callbacks."""
+    return _native_module().pack(curve)
 
 
 def _native_search(packed, p):
-    """``(t, point, distance, at_end)`` from the Rust NURBS search, or None."""
-    if packed is None:
-        return None
-    return _native_module().search(packed, p)
+    """Required native answer; a missing/protocol failure is never replayed."""
+    result = _native_module().search(packed, p)
+    if result is None:
+        raise _native_module().NativeNearestError("nearest native returned no answer")
+    return result
 
 
 def _native_module():
@@ -336,22 +326,18 @@ class NearCache:
             from . import native_nearest
         except ImportError:                   # loaded directly, without a package
             import native_nearest
-        # None unless `curve` is a NurbsCurve: see `native_nearest.pack`.
+        # NURBS snapshot or original SDK callback object, never a converted curve.
         self.packed = native_nearest.pack(curve)
 
 
 def near_point(curve, point, cache, tolerance=None):
-    """The Near snap's point: :func:`closest_point_on_curve`'s ``.point``, searched in Rust.
+    """Near snap through required native search on original curve data/SDK calls.
 
-    Follows the same route: the analytic target (line, arc, circle) comes from the
-    same primitives, an on-axis query returns the domain start, and the target is
-    verified on the curve before it is trusted. Only `_search` runs in Rust, on the
-    `NurbsCurve` packed in `cache` (a :class:`NearCache`), and its point is
-    bit-identical to the Python one. Returns None when the library is missing or the
-    curve is not a `NurbsCurve`, so the caller uses the Python search.
+    Analytic targets, ambiguity and verification retain their SDK behavior.
+    Missing/stale native libraries or invalid protocol never trigger Python math.
     """
     if cache.packed is None:
-        return None
+        raise _native_module().NativeNearestError("Near cache has no original curve packing")
     try:
         from . import native_nearest
     except ImportError:                       # loaded directly, without a package
@@ -371,12 +357,10 @@ def near_point(curve, point, cache, tolerance=None):
             if ambiguous:
                 return _eval(curve, _domain(curve)[0])
             res = native_nearest.search(cache.packed, target)
-            if res is None:
-                return None
             if _dist(res[1], target) <= tol:
                 return res[1]
     res = native_nearest.search(cache.packed, p)
-    return None if res is None else res[1]
+    return res[1]
 
 
 # ---------------------------------------------------------------------------
@@ -479,146 +463,9 @@ def _radial_length(plane, center, p):
 # ---------------------------------------------------------------------------
 
 def _search(curve, target, tol, method):
-    """Global minimum of ``|C(t) - target|`` over the whole domain.
-
-    See the module docstring for why this samples spans, seeds Newton from every
-    LOCAL minimum, and still considers the raw samples and both endpoints.
-    """
-    t0, t1 = _domain(curve)
-    span = t1 - t0
-    peps = PARAM_EPS * (abs(span) if span else 1.0)
-    closed = _is_closed(curve)
-
-    params = _seed_params(curve, t0, t1)
-    dists = [_dist(_eval(curve, t), target) for t in params]
-
-    # candidates always include every sample and both endpoints: the samples are
-    # a floor on the answer's quality, and an endpoint is the only place Newton
-    # cannot reach.
-    best_t, best_d = None, math.inf
-    for t, d in zip(params, dists):
-        if d < best_d:
-            best_t, best_d = t, d
-
-    for i in _local_minimum_seeds(dists):
-        nt = _newton(curve, target, params[i], t0, t1)
-        nd = _dist(_eval(curve, nt), target)
-        if nd < best_d:
-            best_t, best_d = nt, nd
-
-    q = _eval(curve, best_t)
-    at_end = (not closed) and (best_t <= t0 + peps or best_t >= t1 - peps)
-    return ClosestPoint(best_t, q, _dist(q, target), method, at_end, False)
-
-
-def _seed_params(curve, t0, t1):
-    """Sample parameters: `SAMPLES_PER_SPAN` per span, plus every span break.
-
-    The span breaks come from the KNOT VECTOR when the curve exposes one, so the
-    samples straddle each knot rather than stepping over it; uniform sampling of the
-    whole domain can miss a knot-localised feature that
-    gets missed. Curves with no `Knots` (MEASURED: `LineCurve`, and
-    `NurbsCurve.CreateControlPointCurve` with two points returns one) fall back
-    to `SpanCount` uniform spans.
-    """
-    breaks = _breakpoints(curve, t0, t1)
-    out = []
-    for a, b in zip(breaks, breaks[1:]):
-        for i in range(SAMPLES_PER_SPAN):
-            out.append(a + (b - a) * i / SAMPLES_PER_SPAN)
-    out.append(breaks[-1])
-    return out
-
-
-def _breakpoints(curve, t0, t1):
-    """The span boundaries inside ``[t0, t1]``, ends included, strictly sorted."""
-    span = t1 - t0
-    grain = abs(span) * 1e-12
-    vals = [t0, t1]
-
-    knots = _knots(curve)
-    if knots:
-        vals.extend(k for k in knots if t0 + grain < k < t1 - grain)
-    else:
-        n = 1
-        try:
-            n = max(1, int(curve.SpanCount))
-        except Exception:  # noqa: BLE001
-            n = 1
-        vals.extend(t0 + span * i / n for i in range(1, n))
-
-    vals.sort()
-    out = [vals[0]]
-    for v in vals[1:]:
-        if v - out[-1] > grain:          # collapse knot multiplicity
-            out.append(v)
-    if len(out) < 2:
-        out = [t0, t1]
-    return out
-
-
-def _local_minimum_seeds(dists):
-    """Indices of the sampled distances that are local minima.
-
-    The ends are treated as if their outside neighbour were at infinity, so the
-    first and last samples qualify whenever they beat their single neighbour.
-    That matters for a CLOSED curve queried at or near its SEAM, and it is worth
-    recording WHY it is written this way rather than with a wrap-around:
-
-    Wrapping the sequence for closed curves would make index 0's neighbours 1 and n-2,
-    since the first and last samples represent the same point. That wrap is unnecessary
-    because the infinity
-    sentinel is a strict SUPERSET at the ends: a minimum sitting exactly on the
-    seam has ``d[0] <= d[1]`` and is seeded either way, and a minimum just inside
-    the seam is seeded from index 1 either way. The wrap was dead weight dressed
-    up as robustness, so it is intentionally omitted.
-    """
-    n = len(dists)
-    if n == 0:
-        return []
-    if n == 1:
-        return [0]
-    seeds = []
-    for i, d in enumerate(dists):
-        lo = dists[i - 1] if i > 0 else math.inf
-        hi = dists[i + 1] if i < n - 1 else math.inf
-        if d <= lo and d <= hi:
-            seeds.append(i)
-    if not seeds:                        # monotone sampling: seed from the best
-        seeds = [min(range(n), key=lambda i: dists[i])]
-    return seeds
-
-
-def _newton(curve, target, t, lo, hi):
-    """Newton on ``g(t) = (C(t) - target) . C'(t)``, clamped to ``[lo, hi]``.
-
-    ``g'(t) = |C'(t)|^2 + (C(t) - target) . C''(t)``. `DerivativeAt(t, 2)`
-    returns ``[C, C', C'']`` in one call (MEASURED).
-    """
-    span = hi - lo
-    stop = PARAM_EPS * (abs(span) if span else 1.0)
-    for _ in range(MAX_NEWTON):
-        try:
-            d = curve.DerivativeAt(t, 2)
-        except Exception:  # noqa: BLE001
-            return t
-        if d is None or len(d) < 3:
-            return t
-        c, c1, c2 = _pt(d[0]), _pt(d[1]), _pt(d[2])
-        w = _sub(c, target)
-        g = _dot(w, c1)
-        gp = _dot(c1, c1) + _dot(w, c2)
-        if abs(gp) < 1e-300:
-            return t
-        nt = t - g / gp
-        if nt < lo:
-            nt = lo
-        elif nt > hi:
-            nt = hi
-        if abs(nt - t) <= stop:
-            return nt
-        t = nt
-    return t
+    """Compatibility entry point: native search on the original curve, no replay."""
+    t, q, distance, at_end = _native_search(_native_pack(curve), target)
+    return ClosestPoint(t, q, distance, method, at_end, False)
 
 
 # ---------------------------------------------------------------------------

@@ -35,7 +35,7 @@ ROOT_FILES = (
     "docs/reviews/2026-10-31-rust-document-registry.md",
     "docs/reviews/2026-10-31-native-only.md",
     "docs/reviews/2026-11-11-rust-interaction-blend.md",
-    "docs/LIBRARY.md", "docs/FILE_IO.md", "docs/RUST_RETIREMENT_11.md", "docs/RUST_RETIREMENT_21.md", "docs/RUST_RETIREMENT_22.md", "docs/RUST_RETIREMENT_23.md", "docs/RUST_RETIREMENT_24.md", "docs/RUST_RETIREMENT_25.md", "docs/RUST_PARSER_OWNERSHIP.md", "docs/RUST_COORDINATE_JOIN_OWNERSHIP.md", "docs/RUST_SVG_ALIAS_OWNERSHIP.md", "docs/RUST_REBUILD_BLEND_OWNERSHIP.md", "docs/RUST_UNIT_OWNERSHIP.md", "docs/RUST_TEST_RETIREMENT_17.md", "docs/RUST_TEST_RETIREMENT_18.md",
+    "docs/LIBRARY.md", "docs/FILE_IO.md", "docs/RUST_RETIREMENT_11.md", "docs/RUST_RETIREMENT_21.md", "docs/RUST_RETIREMENT_22.md", "docs/RUST_RETIREMENT_23.md", "docs/RUST_RETIREMENT_24.md", "docs/RUST_RETIREMENT_25.md", "docs/RUST_RETIREMENT_26.md", "docs/RUST_PARSER_OWNERSHIP.md", "docs/RUST_COORDINATE_JOIN_OWNERSHIP.md", "docs/RUST_SVG_ALIAS_OWNERSHIP.md", "docs/RUST_REBUILD_BLEND_OWNERSHIP.md", "docs/RUST_UNIT_OWNERSHIP.md", "docs/RUST_TEST_RETIREMENT_17.md", "docs/RUST_TEST_RETIREMENT_18.md",
         "docs/reviews/2026-10-30-agent-v3-integration.md",
 )
 LAUNCH_FILES = (
@@ -94,6 +94,7 @@ SCRIPT_FILES = (
     "scripts/ui_bundle/fonts/README.md",
 )
 TEST_FILES = (
+    "spike/test_nearest25_owned.py",
     'spike/test_preview24_boundaries.py',
     'spike/test_dxf_reader24_boundaries.py',
     'spike/dxf_reader24_fixtures.py',
@@ -336,6 +337,18 @@ TEST_FILES = (
     "spike/test_document_compatibility.py", "spike/fixtures/document_schema1_historical.json",
 )
 NATIVE_FILES = (
+    'native/pure_core/tests/fixtures/nearest25_host_windows_msvc.jsonl',
+    'native/pure_core/tests/fixtures/nearest25_callbacks_windows_msvc.tsv',
+    'native/pure_core/tests/fixtures/nurbs_host_windows_msvc.txt',
+    'native/pure_core/tests/fixtures/nearest25_windows_msvc.provenance.json',
+    'native/pure_core/tests/fixtures/.gitattributes',
+
+    'native/pure_core/tests/nearest25_api.h',
+    'native/pure_core/tests/nearest25_golden.rs',
+    'native/pure_core/tests/fixtures/nearest25_callbacks_linux.tsv',
+    'native/pure_core/tests/fixtures/nearest25_host_linux.jsonl',
+    'native/pure_core/tests/fixtures/nearest25_provenance.json',
+
     'native/pure_core/tests/dxf_legacy_abi.rs',
     'native/pure_core/tests/dxf_legacy_abi.h',
     'native/pure_core/tests/fixtures/dxf_legacy_abi/README.md',
@@ -643,6 +656,21 @@ NATIVE_FILES = (
     "native/selection_core/src/lib.rs",
     "native/selection_core/qualify_snap_activation.py",
     "native/selection_core/src/snap_clip.rs",
+    "native/selection_core/tests/selection26_static.rs",
+    "native/selection_core/tests/selection26_random.rs",
+    "native/selection_core/tests/selection26_registration.rs",
+    "native/selection_core/tests/support/selection26_fixture.rs",
+    "native/selection_core/tests/data/selection26_aabb250.bin",
+    "native/selection_core/tests/data/selection26_clip250.bin",
+    "native/selection_core/tests/data/selection26_curves100.bin",
+    "native/selection_core/tests/data/selection26_near250.bin",
+    "native/selection_core/tests/data/selection26_point200.bin",
+    "native/selection_core/tests/data/selection26_poly250.bin",
+    "native/selection_core/tests/data/selection26_screen500.bin",
+    "native/selection_core/tests/data/selection26_snap200.bin",
+    "native/selection_core/tests/data/selection26_world250.bin",
+    "native/selection_core/tests/data/selection26_worldboxes250.bin",
+    "native/selection_core/tests/data/selection26_provenance.json",
 )
 RUNTIME_FILES = ("runtime/README.md", "runtime/manifest.json")
 PACKAGE_EXCLUDES = {"narwhal3d/kernel/brep_writer.cpp"}

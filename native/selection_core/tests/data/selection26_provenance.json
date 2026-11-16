@@ -1,0 +1,145 @@
+{
+  "origin": "1fc19506a60f878cdcb1513c26db9948307d69ba",
+  "original_test_sha256": "9d90af2975e0e14cae3cd3b5517a5bf598215c88fbeaa83bd7e97a651fe29254",
+  "encoding": "tagged values:0 null,1 false,2 true,3 f64LE,4 i128LE,5 UTF8(u32LElen),6 array(u32LElen),7 map(u32LElen,key/valuepairs); all floats preservebinary64bits",
+  "round_trip": "encode(decode(bytes)) byte-identical for every capture",
+  "captures": [
+    {
+      "file": "selection26_aabb250.bin",
+      "count": 250,
+      "size": 531049,
+      "sha256": "b5a1656e3f91ce600885c21e9a5dc018b254da65b24a7dc8783639da26640978",
+      "original_json_sha256": "bade1b7bdf0659cbbfc8cf550dec59b6ce74c7d72f83d8af43a89697fc2ca532",
+      "row_fields": [
+        "matrix",
+        "lower",
+        "upper",
+        "rows"
+      ]
+    },
+    {
+      "file": "selection26_clip250.bin",
+      "count": 250,
+      "size": 793139,
+      "sha256": "50408158bfd753fd8bad78405ec9b7c197745bd0baf0fc3f76e6f344f58ae49b",
+      "original_json_sha256": "5eb4cdad038c05db7869ce8e0d2d12f9c36f12fee946845f640cd850f4d3a42e",
+      "row_fields": [
+        "clip",
+        "offsets",
+        "point_flags",
+        "boxes"
+      ]
+    },
+    {
+      "file": "selection26_curves100.bin",
+      "count": 100,
+      "size": 409495,
+      "sha256": "fa0b5b48f941af852c4f6234a6f726bf15c0bffe8a4c71b09e1366c3044469f7",
+      "original_json_sha256": "79cb7e9518d9a76e2745c89235a3f2f57b3030a15d95842cc9a814d8414ba85f",
+      "row_fields": [
+        "curves",
+        "rect",
+        "statuses"
+      ]
+    },
+    {
+      "file": "selection26_near250.bin",
+      "count": 250,
+      "size": 642771,
+      "sha256": "d4839ed1d7983ef16c2f2794b149182b5e933dd24e3b314fd52f0f1fbc60813d",
+      "original_json_sha256": "738fbb3c7bfd740b782bb8368387db6156ca98e82349040e18ca30dd875a39aa",
+      "row_fields": [
+        "matrix",
+        "polylines",
+        "mouse",
+        "rows"
+      ]
+    },
+    {
+      "file": "selection26_point200.bin",
+      "count": 200,
+      "size": 329687,
+      "sha256": "349d4122a5d84c80002e290d5b28516e1118e5cb9897a71b404d2d4f97f590b1",
+      "original_json_sha256": "82689737fb47ab2bdb179b274cfd147c16bbe8221a8f0b0f61e8bdae878403ad",
+      "row_fields": [
+        "points",
+        "cursor",
+        "limit",
+        "projected",
+        "index",
+        "distance",
+        "rect",
+        "inside"
+      ]
+    },
+    {
+      "file": "selection26_poly250.bin",
+      "count": 250,
+      "size": 629002,
+      "sha256": "765adce5170f360c4a2d4eb37c129ce36e2e73bea4b8224f658f4914ca25d59a",
+      "original_json_sha256": "3521b86afdb565a6b9555684c57f580db44bcef2ea51cbed57e56e566d540841",
+      "row_fields": [
+        "pixels",
+        "visibility",
+        "offsets",
+        "cursor",
+        "limit",
+        "index",
+        "distance"
+      ]
+    },
+    {
+      "file": "selection26_screen500.bin",
+      "count": 500,
+      "size": 351274,
+      "sha256": "19132f31470cc836f4ef84770d5fb42cbd72d01177ce7550614285d7ef055487",
+      "original_json_sha256": "0bda9c2c2674ccf03827a0a6afc0b45e15847bd8f2ec6767e05c05046b5c8802",
+      "row_fields": [
+        "segments",
+        "rect",
+        "any"
+      ]
+    },
+    {
+      "file": "selection26_snap200.bin",
+      "count": 200,
+      "size": 344349,
+      "sha256": "322dae45a2cd429be6090b31c8e4ab71bd46b0433a8fe52bc8e90e693f159f99",
+      "original_json_sha256": "a8910cd77d0e4656a8fb9f9319d1293bb25e8f8b5b35725907e8529ca81ca62b",
+      "row_fields": [
+        "points",
+        "mouse",
+        "radius",
+        "indices",
+        "distances"
+      ]
+    },
+    {
+      "file": "selection26_world250.bin",
+      "count": 250,
+      "size": 191088,
+      "sha256": "a31bddc5263593552f74e55be3c587981a4956b0c03a5c35ab518c92ad5a2631",
+      "original_json_sha256": "c8c3056059650e9e4f4a26fa49d345a0a2f2b7502aa2a1004e4aca799e1216b3",
+      "row_fields": [
+        "segments",
+        "rect",
+        "any",
+        "has_evidence"
+      ]
+    },
+    {
+      "file": "selection26_worldboxes250.bin",
+      "count": 250,
+      "size": 533858,
+      "sha256": "103ffe0f2277f901a01bb366a28c5e05679c230b33e875527ccb5b1e93dc108a",
+      "original_json_sha256": "66a625e16d8f31667da1b0bb4c758f81c9579f0c50495786d58d7b760f03efaf",
+      "row_fields": [
+        "matrix",
+        "points",
+        "offsets",
+        "flags",
+        "boxes"
+      ]
+    }
+  ]
+}

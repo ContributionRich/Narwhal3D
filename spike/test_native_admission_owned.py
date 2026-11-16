@@ -142,6 +142,7 @@ class AdmissionSource(unittest.TestCase):
             'native_bspline': {'control_point_curve_polyline'},
             'native_preview': {'rectangle', 'ring'},
             'native_dxf_reader': {'decode_dxf'},
+            'native_nearest': {'PackedCurve', 'search', 'pack'},
         }
         calls = {(n.func.value.id, n.func.attr) for n in ast.walk(tree)
                  if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
@@ -172,6 +173,31 @@ class GuardMutations(unittest.TestCase):
                 result = unittest.TestResult()
                 AdmissionSource(method).run(result)
                 self.assertFalse(result.wasSuccessful(), 'removed runtime consumer survived')
+            restored = unittest.TestResult()
+            AdmissionSource(method).run(restored)
+            self.assertTrue(restored.wasSuccessful(), restored.errors or restored.failures)
+
+    def test_nearest_consumer_call_guards_go_red_and_restore(self):
+        # The required nearest consumers are real runtime bindings, not optional.
+        # Removing any of them from the startup probe must turn the admission check
+        # red, then restore green. (CallbackCurve is a type guard, not a called
+        # binding.)
+        path = ROOT/'launch/check_native.py'
+        read = Path.read_text
+        source = read(path)
+        method = 'test_new_admission_uses_real_direct_consumers_without_developer_scripts'
+        calls = ('native_nearest.PackedCurve', 'native_nearest.search',
+                 'native_nearest.pack')
+        for call in calls:
+            self.assertIn(call, source)
+            def changed(item, *args, **kwargs):
+                # Remove every occurrence so the admission test genuinely goes red,
+                # even when the consumer appears more than once (e.g. nearest.search).
+                return source.replace(call, call.replace('.', '.unused_', 1)) if item == path else read(item, *args, **kwargs)
+            with self.subTest(call=call), patch.object(Path, 'read_text', changed):
+                result = unittest.TestResult()
+                AdmissionSource(method).run(result)
+                self.assertFalse(result.wasSuccessful(), 'removed nearest consumer survived')
             restored = unittest.TestResult()
             AdmissionSource(method).run(restored)
             self.assertTrue(restored.wasSuccessful(), restored.errors or restored.failures)

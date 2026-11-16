@@ -4,6 +4,10 @@ All notable public changes will be recorded here. Narwhal 3D is an extremely ear
 
 ## Unreleased
 
+- Fixed empty-space right-clicks on the top toolbar, command bar and left sidebar leaking into unrelated host context menus; retained layer menus, sidebar alternate actions and viewport right-click behavior.
+
+- Source: required Rust nearest-curve search for packed NURBS and original SDK callbacks; exact per-platform captures, real startup admission and bounded actual-work accounting. Moved selection numerical/ABI acceptance from Python into mandatory Rust tests while retaining real-library host checks. [Scope, measured footprint and qualification](docs/RUST_RETIREMENT_26.md).
+
 - Source: retired obsolete shared DXF decoder adapters and the inactive packed import branch, preserving the required analytic reader route and legacy native ABI with independent Rust coverage. [Scope and checks](docs/RUST_RETIREMENT_25.md).
 
 - Source: required Rust DXF reading, planar-loop triangulation and selected live-preview sampling; removed their Python computational copies. Exact platform-specific captures, explicit native admission and Windows-safe probe transport preserve compatibility. [Qualification and measured tradeoffs](docs/RUST_RETIREMENT_24.md).

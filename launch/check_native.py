@@ -19,7 +19,7 @@ def check_pure_consumers():
     """
     from narwhal3d import (native_interpolate, native_coil, native_stl, native_obj,
                           native_vector_export, native_dxf, native_tween, native_tessellate,
-                          native_bspline, native_preview, native_dxf_reader)
+                          native_bspline, native_preview, native_dxf_reader, native_nearest)
 
     def interpolation():
         points = [(0., 0., 0.), (1., 0., 0.)]
@@ -134,11 +134,36 @@ def check_pure_consumers():
         else:
             raise RuntimeError('DXF reader accepted truncated startup input')
 
+    def nearest():
+        # Scalar: a tiny caller-owned NURBS, searched through the required native
+        # scalar export (narwhal_pure_core_nearest_on_nurbs).
+        scalar = native_nearest.PackedCurve(2, [0., 1.],
+                                            [0., 0., 0., 1., 1., 0., 0., 1.],
+                                            False, False)
+        if native_nearest.search(scalar, (.25, 2., 0.)) != (0.25, (0.25, 0., 0.), 2., False):
+            raise RuntimeError('nearest scalar search returned an invalid startup result')
+        # Callback: a host-SDK stub (PointAt / DerivativeAt) retained as the ORIGINAL
+        # object and searched through the required native callback export
+        # (narwhal_pure_core_nearest_on_callbacks_v1). Python only supplies the SDK
+        # callbacks; all numerical searching stays in Rust. The stub exercises the
+        # host-callback protocol; it is not a geometry producer.
+        host = types.SimpleNamespace(
+            Domain=types.SimpleNamespace(T0=0., T1=1.),
+            Knots=None, SpanCount=1, IsClosed=False,
+            PointAt=lambda t: (t, 0., 0.),
+            DerivativeAt=lambda t, n: [(t, 0., 0.), (1., 0., 0.), (0., 0., 0.)])
+        packed = native_nearest.pack(host)
+        if not isinstance(packed, native_nearest.CallbackCurve):
+            raise RuntimeError('nearest callback probe did not retain the original SDK object')
+        if native_nearest.search(packed, (.25, 2., 0.)) != (0.25, (0.25, 0., 0.), 2., False):
+            raise RuntimeError('nearest callback search returned an invalid startup result')
+
     for owner, probe in (('interpolation', interpolation), ('coil', coil),
                          ('catenary', catenary), ('STL', stl), ('OBJ', obj),
                          ('vector', vector), ('DXF', dxf), ('Tween', tween),
                          ('earclip', earclip), ('control preview', control_preview),
-                         ('preview', preview), ('DXF reader', dxf_reader)):
+                         ('preview', preview), ('DXF reader', dxf_reader),
+                         ('nearest', nearest)):
         try:
             probe()
         except Exception as error:

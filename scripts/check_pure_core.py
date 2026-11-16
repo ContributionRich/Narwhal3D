@@ -128,13 +128,20 @@ PURE_CORE_PYTESTS = (
     "spike/test_native_interpolate.py",
     "spike/test_interpolate.py",
     "spike/test_interpolate_owned_boundary.py",
+    "spike/test_nearest25_owned.py",
     "spike/test_native_tween.py",
 )
 
 
 # Explicit Rust oracle-retirement suites and their source/fixture closure.
-RUST_INTEGRATION_SUITES = ('alias_golden', 'unit_golden', 'interpolate_golden', 'svgpath_golden', 'bearing_golden', 'calc_golden', 'coords_golden', 'unitformat_golden', 'macro_golden', 'joinchain_golden', 'rebuild_golden', 'blend_golden', 'norm_golden', 'nurbs_golden', 'arclength_golden', 'coil_golden', 'interpolate_helpers_golden', 'stl_owned', 'stl_import_safety', 'catenary_boundary', 'catenary_golden', 'obj_golden', 'stl_legacy_abi', 'stl_name_prefix', 'dxf_owned', 'vector23_golden', 'tween_golden', 'obj_legacy_abi', 'encoder_legacy_abi', 'earclip24_golden', 'preview24_golden', 'dxf_reader24', 'dxf_legacy_abi')
+RUST_INTEGRATION_SUITES = ('alias_golden', 'unit_golden', 'interpolate_golden', 'svgpath_golden', 'bearing_golden', 'calc_golden', 'coords_golden', 'unitformat_golden', 'macro_golden', 'joinchain_golden', 'rebuild_golden', 'blend_golden', 'norm_golden', 'nurbs_golden', 'arclength_golden', 'coil_golden', 'interpolate_helpers_golden', 'stl_owned', 'stl_import_safety', 'catenary_boundary', 'catenary_golden', 'obj_golden', 'stl_legacy_abi', 'stl_name_prefix', 'dxf_owned', 'vector23_golden', 'tween_golden', 'obj_legacy_abi', 'encoder_legacy_abi', 'earclip24_golden', 'preview24_golden', 'dxf_reader24', 'dxf_legacy_abi', 'nearest25_golden')
 RUST_INTEGRATION_FILES = (
+    'native/pure_core/tests/fixtures/nearest25_host_windows_msvc.jsonl',
+    'native/pure_core/tests/fixtures/nearest25_callbacks_windows_msvc.tsv',
+    'native/pure_core/tests/fixtures/nurbs_host_windows_msvc.txt',
+    'native/pure_core/tests/fixtures/nearest25_windows_msvc.provenance.json',
+    'native/pure_core/tests/fixtures/.gitattributes',
+
     'native/pure_core/tests/dxf_legacy_abi.rs',
     'native/pure_core/tests/dxf_legacy_abi.h',
     'native/pure_core/tests/fixtures/dxf_legacy_abi/README.md',
@@ -325,6 +332,11 @@ RUST_INTEGRATION_FILES = (
     'native/pure_core/tests/svgpath_golden.rs',
     'native/pure_core/tests/unit_golden.rs',
     'native/pure_core/tests/unitformat_golden.rs',
+    'native/pure_core/tests/nearest25_api.h',
+    'native/pure_core/tests/nearest25_golden.rs',
+    'native/pure_core/tests/fixtures/nearest25_callbacks_linux.tsv',
+    'native/pure_core/tests/fixtures/nearest25_host_linux.jsonl',
+    'native/pure_core/tests/fixtures/nearest25_provenance.json',
 )
 
 
@@ -696,8 +708,10 @@ PURE_CORE_RETIREMENT_EXPORTS = (
     "narwhal_pure_core_preview_sample_v1",
     "narwhal_pure_core_dxf_reader24_abi_version",
     "narwhal_pure_core_dxf_reader24_decode",
+    "narwhal_pure_core_nearest_on_nurbs",
+    "narwhal_pure_core_nearest_on_callbacks_v1",
 )
-PURE_CORE_RETIREMENT_IDENTITY = {"retirement_abi": 24,
+PURE_CORE_RETIREMENT_IDENTITY = {"retirement_abi": 26,
                                  "retirement_exports": list(PURE_CORE_RETIREMENT_EXPORTS)}
 PURE_CORE_RETIREMENT_PROBE = r'''
 import ctypes as c, json, math, struct, sys
@@ -1141,7 +1155,40 @@ for data,status,start,length,detail in (
 written.value = 777
 require(reader_decode(None,512*1024*1024+1,4300,None,0,c.byref(written),c.byref(diag)) == -3
         and reader_diag(diag) == (-3,0,0,0,0) and written.value == 777,"DXF reader bounded resource refusal")
-print(json.dumps({"retirement_abi":24,"retirement_exports":["narwhal_pure_core_"+s for s in
+# Direct semantic checks for the two new required nearest exports. Host ctypes glue
+# only: no search algorithm is reimplemented in Python. The tiny line is a degree-1
+# straight segment from (0,0,0) to (1,0,0); the target (0.25,2,0) projects to
+# t=0.25, xyz=(0.25,0,0), distance=2, not at an endpoint.
+scalar_knots = (c.c_double*2)(0.,1.)
+scalar_cvs = (c.c_double*8)(0,0,0,1,1,0,0,1)
+scalar_target = (c.c_double*3)(0.25,2.,0.)
+scalar_out = (c.c_double*5)(99.,99.,99.,99.,99.)
+scalar_end = (c.c_ubyte*1)(99)
+nearest_scalar = bind("nearest_on_nurbs",[c.c_size_t,D,c.c_size_t,D,c.c_size_t,c.c_ubyte,c.c_ubyte,D,D,c.POINTER(c.c_ubyte)])
+require(nearest_scalar(2,scalar_knots,2,scalar_cvs,2,0,0,scalar_target,scalar_out,scalar_end)==0
+        and list(scalar_out)==[0.25,0.25,0.,0.,2.] and scalar_end[0]==0,"nearest_on_nurbs scalar witness")
+scalar_out2 = (c.c_double*5)(99.,99.,99.,99.,99.)
+scalar_end2 = (c.c_ubyte*1)(99)
+require(nearest_scalar(2,scalar_knots,1,scalar_cvs,2,0,0,scalar_target,scalar_out2,scalar_end2)!=0
+        and list(scalar_out2)==[99.]*5 and scalar_end2[0]==99,"nearest_on_nurbs input-error atomicity")
+EVAL = c.CFUNCTYPE(c.c_int32,c.c_void_p,c.c_double,c.c_uint32,c.POINTER(c.c_double))
+def nearest_cb(ctx,t,order,out):
+    if order==0:
+        out[0]=t; out[1]=0.; out[2]=0.
+    else:
+        out[0]=t; out[1]=0.; out[2]=0.; out[3]=1.; out[4]=0.; out[5]=0.; out[6]=0.; out[7]=0.; out[8]=0.
+    return 0
+cb_fn = EVAL(nearest_cb)
+cb_out = (c.c_double*5)(99.,99.,99.,99.,99.)
+cb_end = (c.c_ubyte*1)(99)
+nearest_cb_fn = bind("nearest_on_callbacks_v1",[c.c_double,c.c_double,D,c.c_size_t,c.c_size_t,c.c_ubyte,c.c_void_p,c.c_void_p,D,D,c.POINTER(c.c_ubyte)])
+require(nearest_cb_fn(0.,1.,None,0,1,0,cb_fn,None,scalar_target,cb_out,cb_end)==0
+        and list(cb_out)==[0.25,0.25,0.,0.,2.] and cb_end[0]==0,"nearest_on_callbacks_v1 witness")
+cb_out2 = (c.c_double*5)(99.,99.,99.,99.,99.)
+cb_end2 = (c.c_ubyte*1)(99)
+require(nearest_cb_fn(0.,1.,None,0,0,0,cb_fn,None,scalar_target,cb_out2,cb_end2)!=0
+        and list(cb_out2)==[99.]*5 and cb_end2[0]==99,"nearest_on_callbacks_v1 input-error atomicity")
+print(json.dumps({"retirement_abi":26,"retirement_exports":["narwhal_pure_core_"+s for s in
     ("stl_size_owned","stl_encode_owned","stl_file_size","stl_file_decode",
      "stl_import_mesh_decode","stl_normal","interpolate_helper_v1","catenary_plan_v2","obj_encode_into",
      'vector_encode_v1',
@@ -1162,7 +1209,7 @@ print(json.dumps({"retirement_abi":24,"retirement_exports":["narwhal_pure_core_"
      'control_point_curve_preview',
      'preview_sample_v1',
      'dxf_reader24_abi_version',
-     'dxf_reader24_decode')]}))
+     'dxf_reader24_decode','nearest_on_nurbs','nearest_on_callbacks_v1')]}))
 '''
 
 

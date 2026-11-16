@@ -880,6 +880,49 @@ def frozen_preview24_scan(path: str, blob: bytes) -> bytes:
                        "size": size, "sha256": digest}, sort_keys=True).encode()
 
 
+FROZEN_SELECTION_FILES = {
+    'native/selection_core/tests/data/selection26_aabb250.bin': (531049, 'b5a1656e3f91ce600885c21e9a5dc018b254da65b24a7dc8783639da26640978'),
+    'native/selection_core/tests/data/selection26_clip250.bin': (793139, '50408158bfd753fd8bad78405ec9b7c197745bd0baf0fc3f76e6f344f58ae49b'),
+    'native/selection_core/tests/data/selection26_curves100.bin': (409495, 'fa0b5b48f941af852c4f6234a6f726bf15c0bffe8a4c71b09e1366c3044469f7'),
+    'native/selection_core/tests/data/selection26_near250.bin': (642771, 'd4839ed1d7983ef16c2f2794b149182b5e933dd24e3b314fd52f0f1fbc60813d'),
+    'native/selection_core/tests/data/selection26_point200.bin': (329687, '349d4122a5d84c80002e290d5b28516e1118e5cb9897a71b404d2d4f97f590b1'),
+    'native/selection_core/tests/data/selection26_poly250.bin': (629002, '765adce5170f360c4a2d4eb37c129ce36e2e73bea4b8224f658f4914ca25d59a'),
+    'native/selection_core/tests/data/selection26_screen500.bin': (351274, '19132f31470cc836f4ef84770d5fb42cbd72d01177ce7550614285d7ef055487'),
+    'native/selection_core/tests/data/selection26_snap200.bin': (344349, '322dae45a2cd429be6090b31c8e4ab71bd46b0433a8fe52bc8e90e693f159f99'),
+    'native/selection_core/tests/data/selection26_world250.bin': (191088, 'a31bddc5263593552f74e55be3c587981a4956b0c03a5c35ab518c92ad5a2631'),
+    'native/selection_core/tests/data/selection26_worldboxes250.bin': (533858, '103ffe0f2277f901a01bb366a28c5e05679c230b33e875527ccb5b1e93dc108a'),
+}
+
+
+def frozen_selection_scan(path: str, blob: bytes) -> bytes:
+    if path not in FROZEN_SELECTION_FILES:
+        return blob
+    size, digest = FROZEN_SELECTION_FILES[path]
+    if len(blob) != size or hashlib.sha256(blob).hexdigest() != digest:
+        raise ValueError("selection frozen capture size/provenance hash mismatch")
+    return json.dumps({"kind": "independent original selection input/result data",
+                       "size": size, "sha256": digest}, sort_keys=True).encode()
+
+
+FROZEN_NEAREST_FILES = {
+    'native/pure_core/tests/fixtures/nearest25_callbacks_linux.tsv': (648806, '43bc3ab6fb1e74fd25ffa6be7ff1f41a8aa4447484cd90788a4fcede0b5b70f4'),
+    'native/pure_core/tests/fixtures/nearest25_callbacks_windows_msvc.tsv': (648806, '43bc3ab6fb1e74fd25ffa6be7ff1f41a8aa4447484cd90788a4fcede0b5b70f4'),
+    'native/pure_core/tests/fixtures/nearest25_host_linux.jsonl': (1432199, '573d49ff3d06ca3df75d42d385a59278d38c0366af750964a7d99887e34d1a2e'),
+    'native/pure_core/tests/fixtures/nearest25_host_windows_msvc.jsonl': (1432199, '1b087b9b906e21da09871a9fbc6265d5026ef567ff563f99b6b3c0c87902aeba'),
+    'native/pure_core/tests/fixtures/nurbs_host_windows_msvc.txt': (468138, '5681c6a1c32ef5582c3eb1064e99b6150245daa9046bdae2665a19dba6041aa8'),
+}
+
+
+def frozen_nearest_scan(path: str, blob: bytes) -> bytes:
+    if path not in FROZEN_NEAREST_FILES:
+        return blob
+    size, digest = FROZEN_NEAREST_FILES[path]
+    if len(blob) != size or hashlib.sha256(blob).hexdigest() != digest:
+        raise ValueError("nearest frozen capture size/provenance hash mismatch")
+    return json.dumps({"kind": "independent original nearest SDK answers/transcripts",
+                       "size": size, "sha256": digest}, sort_keys=True).encode()
+
+
 FROZEN_JSON_FILES = {
     "spike/fixtures/numparse_golden.json": {
         "origin": "50267dd6d4504b14052d1ab7e54675f3c8750637",
@@ -1096,10 +1139,10 @@ def audit_entries(entries: dict[str, tuple[str, bytes]], require_manifest: bool 
                 compile(blob, path, "exec")
             except (SyntaxError, UnicodeError, ValueError) as exc:
                 problems.append(f"{path}: Python source does not compile: {exc}")
-        if b"\0" in blob and path not in FROZEN_DXF23_FILES:
+        if b"\0" in blob and path not in FROZEN_DXF23_FILES and path not in FROZEN_SELECTION_FILES:
             continue
         try:
-            scan = frozen_data_scan(path, frozen_json_scan(path, frozen_dxf23_scan(path, frozen_preview24_scan(path, blob))))
+            scan = frozen_data_scan(path, frozen_json_scan(path, frozen_dxf23_scan(path, frozen_preview24_scan(path, frozen_selection_scan(path, frozen_nearest_scan(path, blob))))))
         except (SyntaxError, UnicodeError, ValueError) as exc:
             problems.append(f"{path}: invalid frozen DATA fixture: {exc}")
             scan = blob
@@ -1132,7 +1175,7 @@ def audit_entries(entries: dict[str, tuple[str, bytes]], require_manifest: bool 
                     problems.append(
                         f"{path}: contains forbidden legacy product marker {match.group(0)!r}")
         for marker in SECRET_MARKERS:
-            if marker.lower() in (blob.lower() if path in FROZEN_DXF23_FILES or path in FROZEN_PREVIEW24_FILES else folded):
+            if marker.lower() in (blob.lower() if path in FROZEN_DXF23_FILES or path in FROZEN_PREVIEW24_FILES or path in FROZEN_SELECTION_FILES or path in FROZEN_NEAREST_FILES else folded):
                 problems.append(f"{path}: contains possible secret marker {marker!r}")
     return problems
 

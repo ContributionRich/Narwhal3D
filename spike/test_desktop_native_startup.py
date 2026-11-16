@@ -18,7 +18,8 @@ SOURCES=('native_textfield','native_popup','command_transcript','native_transcri
          'native_history','undo','numparse','native_pure',
          'native_interpolate','native_coil','native_stl','native_obj',
          'native_vector_export','native_dxf','native_tween',
-         'native_tessellate','native_bspline','native_preview','native_dxf_reader')
+         'native_tessellate','native_bspline','native_preview','native_dxf_reader',
+         'native_nearest')
 
 
 REQUIRED_PURE_EXPORTS = {
@@ -74,6 +75,18 @@ PROTOCOL_EXPORTS.update({name: REQUIRED_PURE_EXPORTS[name] for name in (
     'narwhal_pure_core_ear_clip_display', 'narwhal_pure_core_earclip_signed_area_v1',
     'narwhal_pure_core_control_point_curve_preview', 'narwhal_pure_core_preview_sample_v1',
     'narwhal_pure_core_dxf_reader24_decode')})
+
+
+# The two required native nearest exports (scalar + host-callback).
+# The batch export (narwhal_pure_core_nearest_on_nurbs_many) is optional and
+# platform-qualified, so it is not a required startup export.
+REQUIRED_PURE_EXPORTS.update({
+    'narwhal_pure_core_nearest_on_nurbs': 'nearest',
+    'narwhal_pure_core_nearest_on_callbacks_v1': 'nearest',
+})
+PROTOCOL_EXPORTS.update({name: REQUIRED_PURE_EXPORTS[name] for name in (
+    'narwhal_pure_core_nearest_on_nurbs',
+    'narwhal_pure_core_nearest_on_callbacks_v1')})
 
 
 def elf_export_entries(data):
@@ -265,7 +278,8 @@ class DesktopNativeStartup(unittest.TestCase):
         names = {'interpolation':'interpolation', 'coil':'coil', 'catenary':'catenary', 'STL':'stl', 'OBJ':'obj',
                  'vector':'vector', 'DXF':'dxf', 'Tween':'tween',
                  'earclip':'earclip', 'control preview':'control_preview',
-                 'preview':'preview', 'DXF reader':'dxf_reader'}
+                 'preview':'preview', 'DXF reader':'dxf_reader',
+                 'nearest':'nearest'}
         for symbol,owner in REQUIRED_PURE_EXPORTS.items():
             with self.subTest(symbol=symbol):
                 marker = "('"+owner+"', "+names[owner]+")"
@@ -316,6 +330,34 @@ class DesktopNativeStartup(unittest.TestCase):
         self.assertEqual(result.returncode,2,result.stdout+result.stderr)
         self.assertIn('observer',result.stderr)
         self.assertFalse(self.started.exists())
+
+    def test_stale_primary_lacking_callback_cannot_be_rescued_by_fresh_secondary(self):
+        # A stale primary library that carries the required scalar export but lacks
+        # the required host-callback export must refuse startup even when a qualified
+        # fresh secondary build sits beside it: the consumer binds the primary path
+        # and nothing may silently fall back to the secondary. Both fixtures are
+        # compiled here from the same healthy source, so the test does not depend on
+        # any particular installed build.
+        original = self.pure_library().read_bytes()
+        entries = elf_export_entries(original)
+        stale = bytearray(original)
+        stale[entries['narwhal_pure_core_nearest_on_callbacks_v1'][0] + 4] &= 0x0f
+        self.pure_library().write_bytes(bytes(stale))
+        fresh_secondary = (self.root/'native/pure_core/target/x86_64-unknown-linux-gnu/release'
+                           '/libnarwhal_pure_core.so')
+        fresh_secondary.parent.mkdir(parents=True)
+        fresh_secondary.write_bytes(original)  # The qualified build must not rescue the stale primary.
+        result = self.run_launcher()
+        self.assert_no_graphical_start(result)
+        self.assertIn('required nearest', result.stderr)
+        self.assertIn('nearest_on_callbacks_v1', result.stderr)
+        # The refusal came from the stale primary, not from any other consumer:
+        # once the primary is the qualified build again, the same launcher passes.
+        self.pure_library().write_bytes(original)
+        healthy = self.run_launcher()
+        self.assertEqual(healthy.returncode, 0, healthy.stdout+healthy.stderr)
+        self.assertIn('required native startup checks passed', healthy.stdout)
+        self.assertTrue(self.started.exists())
 
     def test_gui_core_receipt_rejects_wrong_binary_and_source(self):
         import ast

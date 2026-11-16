@@ -506,75 +506,311 @@ fn local_minimum_seeds(dists: &[f64]) -> Vec<usize> {
     seeds
 }
 
-/// `nearest._newton`.
-fn newton(curve: &Nurbs, target: [f64; 3], mut t: f64, lo: f64, hi: f64) -> f64 {
+/// Search evaluation backend. None means the SDK cannot supply derivatives;
+/// it is not a numerical fallback: Newton stops at its current seed, as before.
+fn newton_with<E>(eval: &mut E, target: [f64; 3], mut t: f64, lo: f64, hi: f64) -> Result<f64, i32>
+where
+    E: FnMut(f64, u32) -> Result<Option<[[f64; 3]; 3]>, i32>,
+{
     let span = hi - lo;
     let stop = PARAM_EPS * if span != 0.0 { span.abs() } else { 1.0 };
     for _ in 0..MAX_NEWTON {
-        let [c, c1, c2] = curve.derivatives(t);
+        let Some([c, c1, c2]) = eval(t, 2)? else {
+            return Ok(t);
+        };
         let w = [c[0] - target[0], c[1] - target[1], c[2] - target[2]];
         let g = dot(w, c1);
         let gp = dot(c1, c1) + dot(w, c2);
         if gp.abs() < 1e-300 {
-            return t;
+            return Ok(t);
         }
-        let nt = (t - g / gp).clamp(lo, hi);
+        let mut nt = t - g / gp;
+        // Preserve the original comparisons, including the first-candidate tie rule.
+        if nt < lo {
+            nt = lo
+        } else if nt > hi {
+            nt = hi
+        }
         if (nt - t).abs() <= stop {
-            return nt;
+            return Ok(nt);
         }
         t = nt;
     }
-    t
+    Ok(t)
 }
-
-/// The result of `nearest._search`: parameter, point, distance and the open-end flag.
+/// Curve-search answer; public evaluator interfaces remain unchanged.
 pub struct Closest {
     pub t: f64,
     pub point: [f64; 3],
     pub distance: f64,
     pub at_end: bool,
 }
-
-/// `nearest._search` on a NURBS curve.
-pub fn search(curve: &Nurbs, target: [f64; 3], closed: bool) -> Closest {
-    let (t0, t1) = curve.domain();
+fn evaluated_point<E>(eval: &mut E, t: f64) -> Result<[f64; 3], i32>
+where
+    E: FnMut(f64, u32) -> Result<Option<[[f64; 3]; 3]>, i32>,
+{
+    Ok(eval(t, 0)?.ok_or(-4)?[0])
+}
+fn search_with<E>(
+    eval: &mut E,
+    target: [f64; 3],
+    closed: bool,
+    t0: f64,
+    t1: f64,
+    breaks: &[f64],
+) -> Result<Closest, i32>
+where
+    E: FnMut(f64, u32) -> Result<Option<[[f64; 3]; 3]>, i32>,
+{
     let span = t1 - t0;
     let peps = PARAM_EPS * if span != 0.0 { span.abs() } else { 1.0 };
-    let breaks = curve.breakpoints(t0, t1);
     let mut params = Vec::with_capacity((breaks.len() - 1) * SAMPLES_PER_SPAN + 1);
     for pair in breaks.windows(2) {
         let (a, b) = (pair[0], pair[1]);
         for i in 0..SAMPLES_PER_SPAN {
-            params.push(a + (b - a) * i as f64 / SAMPLES_PER_SPAN as f64);
+            params.push(a + (b - a) * i as f64 / SAMPLES_PER_SPAN as f64)
         }
     }
     params.push(breaks[breaks.len() - 1]);
-    let dists: Vec<f64> = params
-        .iter()
-        .map(|&t| dist(curve.point(t), target))
-        .collect();
+    let mut dists = Vec::with_capacity(params.len());
+    for &t in &params {
+        dists.push(dist(evaluated_point(eval, t)?, target))
+    }
     let (mut best_t, mut best_d) = (f64::NAN, f64::INFINITY);
     for (&t, &d) in params.iter().zip(&dists) {
         if d < best_d {
             best_t = t;
-            best_d = d;
+            best_d = d
         }
     }
     for i in local_minimum_seeds(&dists) {
-        let nt = newton(curve, target, params[i], t0, t1);
-        let nd = dist(curve.point(nt), target);
+        let nt = newton_with(eval, target, params[i], t0, t1)?;
+        let nd = dist(evaluated_point(eval, nt)?, target);
         if nd < best_d {
             best_t = nt;
-            best_d = nd;
+            best_d = nd
         }
     }
-    let point = curve.point(best_t);
-    Closest {
+    let point = evaluated_point(eval, best_t)?;
+    Ok(Closest {
         t: best_t,
         point,
         distance: dist(point, target),
         at_end: !closed && (best_t <= t0 + peps || best_t >= t1 - peps),
+    })
+}
+/// Existing Rust API, same NURBS evaluator, operation order and result fields.
+pub fn search(curve: &Nurbs, target: [f64; 3], closed: bool) -> Closest {
+    let (t0, t1) = curve.domain();
+    let mut eval = |t, order| {
+        Ok(Some(if order == 0 {
+            [curve.point(t), [0.; 3], [0.; 3]]
+        } else {
+            curve.derivatives(t)
+        }))
+    };
+    // This backend cannot return a host callback error.
+    search_with(
+        &mut eval,
+        target,
+        closed,
+        t0,
+        t1,
+        &curve.breakpoints(t0, t1),
+    )
+    .expect("infallible NURBS evaluator")
+}
+const MAX_SEARCH_SPANS: usize = 20_000;
+const MAX_SEARCH_TARGETS: usize = 100_000;
+const MAX_SEARCH_WORK: usize = 500_000_000;
+const MAX_CALLBACKS: usize = 1_000_000;
+fn work_allowed(curve: &Nurbs, targets: usize) -> bool {
+    let (lo, hi) = curve.domain();
+    let spans = curve.breakpoints(lo, hi).len() - 1;
+    spans <= MAX_SEARCH_SPANS
+        && targets <= MAX_SEARCH_TARGETS
+        && spans
+            .checked_mul(SAMPLES_PER_SPAN)
+            .and_then(|v| v.checked_add(1))
+            .and_then(|v| v.checked_mul(curve.order * curve.order))
+            .and_then(|v| v.checked_mul(targets))
+            .is_some_and(|v| v <= MAX_SEARCH_WORK)
+}
+// Preflight above bounds mandatory samples; charge actual evaluations below so
+// a normal large Rebuild is not refused for Newton iterations it never performs.
+fn search_budgeted(
+    curve: &Nurbs,
+    target: [f64; 3],
+    closed: bool,
+    remaining: &mut usize,
+) -> Result<Closest, i32> {
+    let (t0, t1) = curve.domain();
+    let mut eval = |t, order| {
+        let weight = curve.order * curve.order * if order == 0 { 1 } else { 3 };
+        *remaining = remaining.checked_sub(weight).ok_or(ERR_INPUT)?;
+        Ok(Some(if order == 0 {
+            [curve.point(t), [0.; 3], [0.; 3]]
+        } else {
+            curve.derivatives(t)
+        }))
+    };
+    search_with(
+        &mut eval,
+        target,
+        closed,
+        t0,
+        t1,
+        &curve.breakpoints(t0, t1),
+    )
+}
+fn region<T>(p: *const T, n: usize) -> Option<(usize, usize)> {
+    if n == 0 {
+        return Some((0, 0));
     }
+    if p.is_null() || !(p as usize).is_multiple_of(std::mem::align_of::<T>()) {
+        return None;
+    }
+    let size = n.checked_mul(std::mem::size_of::<T>())?;
+    if size > isize::MAX as usize {
+        return None;
+    }
+    Some((p as usize, (p as usize).checked_add(size)?))
+}
+fn separate(inputs: &[(usize, usize)], outputs: &[(usize, usize)]) -> bool {
+    for (i, &a) in outputs.iter().enumerate() {
+        if inputs
+            .iter()
+            .chain(&outputs[..i])
+            .any(|&b| a.0 < b.1 && b.0 < a.1)
+        {
+            return false;
+        }
+    }
+    true
+}
+fn finite_result(r: &Closest) -> bool {
+    r.t.is_finite() && r.distance.is_finite() && r.point.iter().all(|v| v.is_finite())
+}
+/// Synchronous host SDK callback: order 0 writes xyz; order 2 writes C,C',C''.
+/// Return 0 success; 1 derivative unavailable (order 2 only); other status aborts.
+pub type CurveCallback = unsafe extern "C" fn(*mut std::ffi::c_void, f64, u32, *mut f64) -> i32;
+/// Required native search on the ORIGINAL host curve, never a NURBS conversion.
+/// All output is transactional. -1 pointer/overlap; -2 input/resource/nonfinite;
+/// -4 host callback failure. The host retains/rethrows its original exception.
+/// # Safety
+/// Spans must be valid/aligned, outputs disjoint from all inputs and each other.
+/// The callback/context remain alive synchronously and must not unwind through C.
+#[allow(clippy::too_many_arguments)]
+#[no_mangle]
+pub unsafe extern "C" fn narwhal_pure_core_nearest_on_callbacks_v1(
+    t0: f64,
+    t1: f64,
+    knots: *const f64,
+    knot_count: usize,
+    span_count: usize,
+    closed: u8,
+    callback: Option<CurveCallback>,
+    context: *mut std::ffi::c_void,
+    target: *const f64,
+    out_values: *mut f64,
+    out_at_end: *mut u8,
+) -> i32 {
+    if knot_count > 100_000
+        || !(1..=MAX_SEARCH_SPANS).contains(&span_count)
+        || closed > 1
+        || !t0.is_finite()
+        || !t1.is_finite()
+        || t1 <= t0
+        || !(t1 - t0).is_finite()
+    {
+        return ERR_INPUT;
+    }
+    let (Some(kr), Some(tr), Some(or), Some(er)) = (
+        region(knots, knot_count),
+        region(target, 3),
+        region(out_values, 5),
+        region(out_at_end, 1),
+    ) else {
+        return ERR_NULL;
+    };
+    if !separate(&[kr, tr], &[or, er]) {
+        return ERR_NULL;
+    }
+    let Some(callback) = callback else {
+        return ERR_NULL;
+    };
+    let ks = std::slice::from_raw_parts(
+        if knot_count == 0 {
+            std::ptr::NonNull::<f64>::dangling().as_ptr()
+        } else {
+            knots
+        },
+        knot_count,
+    );
+    let target = std::slice::from_raw_parts(target, 3);
+    let target = [target[0], target[1], target[2]];
+    if !ks.iter().chain(&target).all(|v| v.is_finite()) {
+        return ERR_INPUT;
+    }
+    let span = t1 - t0;
+    let grain = span.abs() * 1e-12;
+    let mut vals = vec![t0, t1];
+    if ks.is_empty() {
+        vals.extend((1..span_count).map(|i| t0 + span * i as f64 / span_count as f64))
+    } else {
+        vals.extend(
+            ks.iter()
+                .copied()
+                .filter(|&k| t0 + grain < k && k < t1 - grain),
+        )
+    }
+    vals.sort_by(|a, b| a.partial_cmp(b).expect("finite knot"));
+    let mut breaks = vec![vals[0]];
+    for &v in &vals[1..] {
+        if v - breaks[breaks.len() - 1] > grain {
+            breaks.push(v)
+        }
+    }
+    if breaks.len() < 2 {
+        breaks = vec![t0, t1]
+    }
+    if breaks.len() - 1 > MAX_SEARCH_SPANS {
+        return ERR_INPUT;
+    }
+    let mut calls = 0;
+    let mut eval = |t, order| {
+        calls += 1;
+        if calls > MAX_CALLBACKS {
+            return Err(ERR_INPUT);
+        }
+        let mut out = [0.; 9];
+        match callback(context, t, order, out.as_mut_ptr()) {
+            0 => {
+                let count = if order == 0 { 3 } else { 9 };
+                if !out[..count].iter().all(|v| v.is_finite()) {
+                    return Err(ERR_INPUT);
+                }
+                Ok(Some([
+                    [out[0], out[1], out[2]],
+                    [out[3], out[4], out[5]],
+                    [out[6], out[7], out[8]],
+                ]))
+            }
+            1 if order == 2 => Ok(None),
+            _ => Err(-4),
+        }
+    };
+    let r = match search_with(&mut eval, target, closed == 1, t0, t1, &breaks) {
+        Ok(r) => r,
+        Err(e) => return e,
+    };
+    if !finite_result(&r) {
+        return ERR_INPUT;
+    }
+    std::slice::from_raw_parts_mut(out_values, 5)
+        .copy_from_slice(&[r.t, r.point[0], r.point[1], r.point[2], r.distance]);
+    *out_at_end = u8::from(r.at_end);
+    0
 }
 
 /// [`narwhal_pure_core_nearest_on_nurbs`] for each of `target_count` targets.
@@ -582,7 +818,8 @@ pub fn search(curve: &Nurbs, target: [f64; 3], closed: bool) -> Closest {
 /// One call answers every closest-point query of a prepared curve (a Rebuild fit
 /// queries every sample). Each target's five values (t, x, y, z, distance) and end
 /// flag are exactly what the single-target export writes for it; a non-finite target
-/// gets NaN values, which the caller answers in Python.
+/// gets a NaN slot for legacy ABI compatibility. The required host refuses
+/// nonfinite targets rather than replaying a Python search.
 ///
 /// # Safety
 /// As for the single-target export, with `targets` readable for `target_count * 3`
@@ -603,8 +840,23 @@ pub unsafe extern "C" fn narwhal_pure_core_nearest_on_nurbs_many(
     out_values: *mut f64,
     out_at_end: *mut u8,
 ) -> i32 {
-    if cv_count > MAX_CVS || rational > 1 || closed > 1 {
+    if cv_count > MAX_CVS || knot_count > MAX_CVS + MAX_ORDER || rational > 1 || closed > 1 {
         return ERR_INPUT;
+    }
+    if target_count > MAX_SEARCH_TARGETS {
+        return ERR_INPUT;
+    }
+    let (Some(kr), Some(cr), Some(tr), Some(or), Some(er)) = (
+        region(knots, knot_count),
+        region(cvs, cv_count * 4),
+        region(targets, target_count * 3),
+        region(out_values, target_count * 5),
+        region(out_at_end, target_count),
+    ) else {
+        return ERR_NULL;
+    };
+    if !separate(&[kr, cr, tr], &[or, er]) {
+        return ERR_NULL;
     }
     let (Some(knot_values), Some(cv_values), Some(points)) = (
         crate::checked_slice(knots, knot_count),
@@ -620,7 +872,7 @@ pub unsafe extern "C" fn narwhal_pure_core_nearest_on_nurbs_many(
         return ERR_INPUT;
     };
     let (t0, t1) = curve.domain();
-    if t1 <= t0 {
+    if t1 <= t0 || !work_allowed(&curve, target_count) {
         return ERR_INPUT;
     }
     let (Some(out), Some(ends)) = (
@@ -629,19 +881,34 @@ pub unsafe extern "C" fn narwhal_pure_core_nearest_on_nurbs_many(
     ) else {
         return ERR_NULL;
     };
-    for ((point, slot), end) in points
-        .chunks_exact(3)
-        .zip(out.chunks_exact_mut(5))
-        .zip(ends)
-    {
+    // Stage the complete batch so a finite-input overflow cannot publish a prefix.
+    let mut results = Vec::with_capacity(target_count);
+    let mut remaining = MAX_SEARCH_WORK;
+    for point in points.chunks_exact(3) {
         if !point.iter().all(|v| v.is_finite()) {
-            slot.fill(f64::NAN);
-            *end = 0;
+            results.push(([f64::NAN; 5], 0)); // Stable legacy nonfinite-target slot.
             continue;
         }
-        let r = search(&curve, [point[0], point[1], point[2]], closed == 1);
-        slot.copy_from_slice(&[r.t, r.point[0], r.point[1], r.point[2], r.distance]);
-        *end = u8::from(r.at_end);
+        let r = match search_budgeted(
+            &curve,
+            [point[0], point[1], point[2]],
+            closed == 1,
+            &mut remaining,
+        ) {
+            Ok(result) => result,
+            Err(error) => return error,
+        };
+        if !finite_result(&r) {
+            return ERR_INPUT;
+        }
+        results.push((
+            [r.t, r.point[0], r.point[1], r.point[2], r.distance],
+            u8::from(r.at_end),
+        ));
+    }
+    for ((slot, end), (values, at_end)) in out.chunks_exact_mut(5).zip(ends).zip(results) {
+        slot.copy_from_slice(&values);
+        *end = at_end;
     }
     0
 }
@@ -671,8 +938,20 @@ pub unsafe extern "C" fn narwhal_pure_core_nearest_on_nurbs(
     if out_values.is_null() || out_at_end.is_null() {
         return ERR_NULL;
     }
-    if cv_count > MAX_CVS || rational > 1 || closed > 1 {
+    if cv_count > MAX_CVS || knot_count > MAX_CVS + MAX_ORDER || rational > 1 || closed > 1 {
         return ERR_INPUT;
+    }
+    let (Some(kr), Some(cr), Some(tr), Some(or), Some(er)) = (
+        region(knots, knot_count),
+        region(cvs, cv_count * 4),
+        region(target, 3),
+        region(out_values, 5),
+        region(out_at_end, 1),
+    ) else {
+        return ERR_NULL;
+    };
+    if !separate(&[kr, cr, tr], &[or, er]) {
+        return ERR_NULL;
     }
     let (Some(knot_values), Some(cv_values), Some(point)) = (
         crate::checked_slice(knots, knot_count),
@@ -693,10 +972,22 @@ pub unsafe extern "C" fn narwhal_pure_core_nearest_on_nurbs(
         return ERR_INPUT;
     };
     let (t0, t1) = curve.domain();
-    if t1 <= t0 {
+    if t1 <= t0 || !work_allowed(&curve, 1) {
         return ERR_INPUT;
     }
-    let result = search(&curve, [point[0], point[1], point[2]], closed == 1);
+    let mut remaining = MAX_SEARCH_WORK;
+    let result = match search_budgeted(
+        &curve,
+        [point[0], point[1], point[2]],
+        closed == 1,
+        &mut remaining,
+    ) {
+        Ok(result) => result,
+        Err(error) => return error,
+    };
+    if !finite_result(&result) {
+        return ERR_INPUT;
+    }
     let Some(out) = crate::checked_slice_mut(out_values, 5) else {
         return ERR_NULL;
     };
@@ -1155,5 +1446,37 @@ mod tests {
             )
         };
         assert_eq!(code, ERR_INPUT);
+    }
+}
+
+#[cfg(test)]
+mod search_budget_tests {
+    use super::*;
+
+    #[test]
+    fn actual_evaluation_budget_preserves_answers_and_refuses_exhaustion() {
+        let knots = [0., 1.];
+        let cvs = [0., 0., 0., 1., 1., 0., 0., 1.];
+        let curve = Nurbs::new(2, &knots, &cvs, false).unwrap();
+        let target = [0.2, 2., 0.];
+        let original = search(&curve, target, false);
+        let mut remaining = MAX_SEARCH_WORK;
+        let result = search_budgeted(&curve, target, false, &mut remaining).unwrap();
+        assert_eq!(result.t.to_bits(), original.t.to_bits());
+        assert_eq!(
+            result.point.map(f64::to_bits),
+            original.point.map(f64::to_bits)
+        );
+        assert_eq!(result.distance.to_bits(), original.distance.to_bits());
+        assert_eq!(result.at_end, original.at_end);
+        let used = MAX_SEARCH_WORK - remaining;
+        assert!(used > 0);
+        assert!(matches!(
+            search_budgeted(&curve, target, false, &mut (used - 1)),
+            Err(ERR_INPUT)
+        ));
+        let mut exact = used;
+        assert!(search_budgeted(&curve, target, false, &mut exact).is_ok());
+        assert_eq!(exact, 0);
     }
 }

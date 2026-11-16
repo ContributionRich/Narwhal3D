@@ -1,0 +1,4 @@
+# Exact callback transcript rows include meaningful final empty fields.
+# Public size/SHA-256 guards protect their independently captured bytes.
+nearest25_callbacks_linux.tsv -whitespace
+nearest25_callbacks_windows_msvc.tsv -whitespace

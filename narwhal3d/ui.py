@@ -3070,6 +3070,26 @@ def claim_right_dock_click(event):
     return True
 
 
+_shell_band_rmb_claims = 0
+
+
+def claim_shell_band_right_click(event):
+    # Host regions are Blender-owned; only their shell event routing lives here.
+    global _shell_band_rmb_claims
+    if event.type != "RIGHTMOUSE":
+        return False
+    for area in (_cmdbar_area(), left_band_area(), right_band_area()):
+        if area is None:
+            continue
+        for region in area.regions:
+            if (region.type in ("WINDOW", "HEADER", "TOOL_HEADER")
+                    and region.x <= event.mouse_x < region.x + region.width
+                    and region.y <= event.mouse_y < region.y + region.height):
+                _shell_band_rmb_claims += 1
+                return True
+    return False
+
+
 def right_tab_index():
     """Which of `rightpanel.TABS` is showing."""
     return _right_tab
@@ -8807,7 +8827,7 @@ class NARWHAL_OT_command_input(Operator):
                 if inside:
                     return {"RUNNING_MODAL"}
                 sidebar_flyout_close()
-        if claim_right_dock_click(event):
+        if claim_right_dock_click(event) or claim_shell_band_right_click(event):
             return {"RUNNING_MODAL"}
         # Chat/report text fields own drags and keyboard while focused; input never
         # falls through into commands or viewport interaction.
