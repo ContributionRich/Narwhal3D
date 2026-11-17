@@ -760,8 +760,9 @@ def _hydrate_load(prepared):
             # Independently reconstruct the stored proxy, never _occt_operand
             # (which resolves back to the master/recipe being checked).
             try:
+                proxy_brep = proxy.ToBrep(False) if isinstance(proxy, r3.Extrusion) else proxy
                 proxy_shape = occt_backend.shape_from_brep_data(
-                    bridge.brep_data(proxy), sew_tolerance=document_tolerance)
+                    bridge.brep_data(proxy_brep), sew_tolerance=document_tolerance)
                 if (not occt_backend.is_valid(proxy_shape)
                         or bool(occt_backend.is_airtight(proxy_shape)) != airtight):
                     raise ValueError("proxy validity/closure differs")

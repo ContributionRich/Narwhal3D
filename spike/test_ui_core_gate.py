@@ -208,7 +208,7 @@ class GateTests(unittest.TestCase):
     def test_inventory_complete_and_ignores_only_build_caches(self):
         with self.fixture() as f:
             before = f.gate.source_inventory(f.root)
-            self.assertEqual(len(before), 21)
+            self.assertEqual(len(before), 26)
             for name in ('EXTRA.md', 'EXTRA2.md', 'extra_generator.py', 'src/extra_tests.rs'):
                 (f.crate / name).write_text('input')
             after = f.gate.source_inventory(f.root)
@@ -400,7 +400,8 @@ class RegistrationTests(unittest.TestCase):
                         self.assertIn('spike/test_ui_core_' + name + '.py', output)
                     self.assertIn('scripts/check_ui_core.py --target-dir', output)
                     self.assertIn('scripts/check_ui_core.py --library', output)
-                    self.assertEqual(output.count('--launch'), 3)
+                    self.assertEqual(output.count('--launch'), 4)
+                    self.assertIn('spike/test_right_dock_rmb_gui.py --launch', output)
                     self.assertIn('spike/test_ui_core_popup_failure_gui.py --launch', output)
                     self.assertNotIn('--legacy', output)
                     self.assertNotIn('flock', output)

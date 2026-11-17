@@ -57,6 +57,11 @@ UI_CORE_REQUIRED_SOURCE = (
     "src/lib.rs", "src/editor.rs", "src/unicode16.rs", "src/allocation_tests.rs",
     "src/layout_algorithm.rs", "src/layout_contract.rs", "src/popup.rs", "src/popup_ffi.rs",
     "src/popup_tests.rs", "src/transcript.rs", "src/transcript_ffi.rs", "src/transcript_tests.rs",
+    "tests/editor27_golden.rs",
+    "tests/support/editor27_fixture.rs",
+    "tests/support/golden27_sha256.rs",
+    "tests/data/editor27_golden.bin",
+    "tests/data/editor27_golden.provenance.json",
 )
 UI_CORE_PROBE = r'''
 import ctypes as c, json, struct, sys

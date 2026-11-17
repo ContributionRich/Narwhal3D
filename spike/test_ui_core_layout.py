@@ -8,7 +8,7 @@ import unittest
 from unittest.mock import patch
 
 GOLDEN_PATH = Path(__file__).with_name('test_ui_core_golden.py')
-GOLDEN_SHA256 = 'f550df713f03547023ce80c92b0d6c6754fbad5fa521d0d726b5464adba0b26d'
+GOLDEN_SHA256 = '60fd8ae173d0af62c8ec45d8ccc147004fb70f4e1d080c176e143e3277bdd0de'
 
 
 def load_data():

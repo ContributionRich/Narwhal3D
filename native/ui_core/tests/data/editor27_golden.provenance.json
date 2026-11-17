@@ -1,0 +1,45 @@
+{
+  "lease": "UI-EDITOR-GOLDEN-27",
+  "source_commit": "50267dd6d4504b14052d1ab7e54675f3c8750637",
+  "golden_python": {
+    "path": "spike/test_ui_core_golden.py",
+    "sha256": "f550df713f03547023ce80c92b0d6c6754fbad5fa521d0d726b5464adba0b26d"
+  },
+  "semantic_payload": {
+    "description": "json.dumps(DATA['editor'], ensure_ascii=False, sort_keys=True) of the original frozen traces",
+    "sha256": "7637283e8ff89c2288d5d341935346e339f97308434f4883de0406dcb0ac0bc5"
+  },
+  "binary_payload": {
+    "editor27_golden.bin": {
+      "path": "native/ui_core/tests/data/editor27_golden.bin",
+      "sha256": "8861a5fcfd81b356095466290d8a0bca529661a0da013ebe9b7385f981751944",
+      "length": 551059
+    }
+  },
+  "counts": {
+    "traces": 12,
+    "steps_per_trace": 500,
+    "total_steps": 6000,
+    "action_counts": {
+      "_delete_selection": 518,
+      "backspace": 568,
+      "cut": 522,
+      "delete": 582,
+      "end": 545,
+      "home": 564,
+      "insert": 503,
+      "move": 568,
+      "select_all": 543,
+      "set_caret": 550,
+      "set_text": 537
+    },
+    "all_outcomes_ok": true
+  },
+  "mutation_evidence": {
+    "producer": "native/ui_core/src/editor.rs :: TextField::backspace",
+    "mutation": "removed 'self.caret -= 1;' from backspace()",
+    "red": "trace 0 step 42 (backspace) after-state mismatch: actual caret 7 vs expected 6",
+    "restored_green": "backspace restored; cargo test --test editor27_golden ok (1 passed)",
+    "truncation_guard": "count_guard_rejects_jointly_truncated_corpus: declared count and rows truncated 12->8 together; rejected with 'expected exactly 12 traces'"
+  }
+}

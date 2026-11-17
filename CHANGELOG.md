@@ -4,6 +4,9 @@ All notable public changes will be recorded here. Narwhal 3D is an extremely ear
 
 ## Unreleased
 
+- Fixed Library capture of grouped imported extrusions: independent exact snapshots preserve analytic masters and source groups without changing the working model. Fixed exact native-extrusion validation and reopening.
+- Source: moved all 6,000 captured editor acceptance transitions into mandatory Rust tests; kept thin live-adapter dispatch and necessary host-boundary coverage. Clarified the repository-wide near-zero-Python contribution requirement. [Scope and measured footprint](docs/RUST_RETIREMENT_27.md).
+
 - Fixed empty-space right-clicks on the top toolbar, command bar and left sidebar leaking into unrelated host context menus; retained layer menus, sidebar alternate actions and viewport right-click behavior.
 
 - Source: required Rust nearest-curve search for packed NURBS and original SDK callbacks; exact per-platform captures, real startup admission and bounded actual-work accounting. Moved selection numerical/ABI acceptance from Python into mandatory Rust tests while retaining real-library host checks. [Scope, measured footprint and qualification](docs/RUST_RETIREMENT_26.md).

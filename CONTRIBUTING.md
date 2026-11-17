@@ -20,7 +20,20 @@ Narwhal 3D project code is **GPL-3.0-or-later**. By submitting a contribution, y
 - Preserve exact OCCT/openNURBS manufacturing geometry, historical project compatibility and the existing single Undo history. Rust coordination/display acceleration must never substitute a tessellated proxy for exact geometry.
 - New or changed native exports must have safe metadata/capacity/error contracts and matching qualified native libraries before live callers are activated. Account for platform math and package/runtime effects; Linux tests alone do not certify Windows.
 
-The current application still contains Python host integration and unconverted implementations. The goal is a native application with as little Python as possible. No blanket rewrite, relaxed test, hidden language-statistics rule or deletion of working behavior is acceptable.
+The long-term goal is **basically zero Python throughout the public repository**:
+application code, tests, probes, build/release scripts, tooling and startup code.
+Remaining host integration is a migration constraint, not a permanent exemption.
+Do not offset application retirement with large new Python validation suites.
+
+At each published conversion checkpoint, report **whole-repository tracked Python
+bytes and net change**, separately from application-only changes. Explain any net
+increase. Include removal of superseded implementations, redundant tests and unused
+helpers once equivalent coverage and real mutation failures are proven; retain
+necessary actual-host/API coverage until its replacement is qualified.
+
+GitHub must reflect genuine source removal: never use Linguist exclusions, file
+renaming, vendoring or generated-file labels to disguise remaining Python. No
+blanket rewrite, relaxed test or deletion of working behavior is acceptable.
 
 ## Start with one command
 

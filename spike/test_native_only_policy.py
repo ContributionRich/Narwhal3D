@@ -249,7 +249,7 @@ class PolicyTests(unittest.TestCase):
         import build_linux_native as packaging
         selected = set(public.TEST_FILES + public.NATIVE_FILES + public.LAUNCH_FILES)
         self.assertEqual(len(packaging.UI_CORE_EXPORTS), 18)
-        self.assertEqual(len(packaging.UI_CORE_REQUIRED_SOURCE), 21)
+        self.assertEqual(len(packaging.UI_CORE_REQUIRED_SOURCE), 26)
         for path in ('native/ui_core/' + name for name in packaging.UI_CORE_REQUIRED_SOURCE):
             self.assertIn(path, selected)
             self.assertIn(path, audit.REQUIRED)

@@ -186,3 +186,12 @@ the source and above. Main retains responsibility for public notices/allowlists.
 The public integration review is in
 `docs/reviews/2026-10-31-ui-regressions.md`; popup qualification receipts and
 limitations are retained in [POPUP.md](POPUP.md).
+
+## Captured editor acceptance in Rust
+
+`tests/editor27_golden.rs` drives the public editor FFI through all 12 original
+500-step traces (6,000 transitions). Independently captured fixtures and exact
+count/hash guards are mandatory source inputs. The Python editor suite keeps
+59 captured steps for all 11 live adapter routes, alongside ownership/coercion/
+transport checks. Layout and popup host acceptance remain in place. See
+[the retirement scope](../../docs/RUST_RETIREMENT_27.md); no native ABI changes.

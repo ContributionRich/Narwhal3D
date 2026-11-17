@@ -129,6 +129,12 @@ REQUIRED = {
     "native/brep_writer/README.md",
     "native/ui_core/Cargo.toml", "native/ui_core/Cargo.lock", "native/ui_core/LICENSE",
     "native/ui_core/README.md", "native/ui_core/POPUP.md", "native/ui_core/gen_unicode.py",
+    "native/ui_core/tests/editor27_golden.rs",
+    "native/ui_core/tests/support/editor27_fixture.rs",
+    "native/ui_core/tests/support/golden27_sha256.rs",
+    "native/ui_core/tests/data/editor27_golden.bin",
+    "native/ui_core/tests/data/editor27_golden.provenance.json",
+
     "native/ui_core/narwhal_ui_core.h", "native/ui_core/src/lib.rs",
     "native/ui_core/src/editor.rs", "native/ui_core/src/unicode16.rs",
     "native/ui_core/src/allocation_tests.rs", "native/ui_core/src/layout_algorithm.rs",

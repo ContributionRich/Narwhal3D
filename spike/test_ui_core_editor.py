@@ -42,8 +42,15 @@ class EditorTests(unittest.TestCase):
         self.assertIsInstance(f.text, str)  # Prime the same read projection as the old pair fixture.
         return f
 
-    def test_golden_transitions(self):
-        for trace in DATA['editor']:
+    def test_adapter_method_dispatch(self):
+        # The full 6000-transition corpus is replayed by Rust; keep real ctypes
+        # dispatch coverage for every public method through the live adapter.
+        self.assertEqual(len(DATA['editor_adapter']), 1)
+        self.assertEqual(len(DATA['editor_adapter'][0]['steps']), 59)
+        self.assertEqual({step[0] for step in DATA['editor_adapter'][0]['steps']},
+                         {'insert', 'cut', 'move', 'delete', 'set_text', 'home',
+                          'select_all', 'set_caret', 'backspace', '_delete_selection', 'end'})
+        for trace in DATA['editor_adapter']:
             f = self.field(*trace['args'])
             self.assertEqual(list(state(f)), trace['initial'])
             for method, args, expected, after in trace['steps']:

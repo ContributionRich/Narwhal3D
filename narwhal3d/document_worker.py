@@ -363,8 +363,12 @@ def main():
                         if not document_proxy.matches_master(proxy, shape):
                             fail(f"master {object_id} does not match its triangulated proxy")
                     elif document_form == "exact":
+                        # Imported SDK extrusions retain their native document type.
+                        # Expand only the validation view, exactly, without replacing
+                        # the stored proxy or its master/recipe binding.
+                        proxy_brep = proxy.ToBrep(False) if isinstance(proxy, r3.Extrusion) else proxy
                         proxy_shape = occt_backend.shape_from_brep_data(
-                            bridge.brep_data(proxy), sew_tolerance=tolerance)
+                            bridge.brep_data(proxy_brep), sew_tolerance=tolerance)
                         if (not occt_backend.is_valid(proxy_shape)
                                 or bool(occt_backend.is_airtight(proxy_shape)) != airtight):
                             fail(f"master {object_id} does not match its exact proxy")

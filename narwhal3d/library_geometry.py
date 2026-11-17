@@ -83,6 +83,14 @@ def _clone_subset(source, ids=None):
             continue
         _check_geometry(item.Geometry, item.Attributes.Name or oid)
         candidate.replace_geometry(oid, _copy_geometry(item.Geometry))
+        stored = candidate.file.Objects.FindId(oid)
+        master = kernel.master_of(stored.Geometry)
+        if isinstance(stored.Geometry, r3.Extrusion) and master is not None:
+            # A library asset is an independent exact snapshot, not a replay of
+            # imported extrusion history. Use the established master/proxy pair;
+            # never ask coincident-surface Booleans to re-prove its SDK expansion.
+            narwhal_document._rebuild_proxy(candidate, stored, master)
+            narwhal_document._rebase_recipe(candidate.file.Objects.FindId(oid).Geometry, master)
     if not candidate.object_count():
         raise LibraryGeometryError('No supported objects were selected or imported')
     return candidate

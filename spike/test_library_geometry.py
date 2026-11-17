@@ -171,6 +171,75 @@ class LibraryTests(unittest.TestCase):
         ctx = self.fixture()
         return ctx, lib.capture_selection(ctx, self.store, 'Exact assembly', 'uncategorized')
 
+    def test_sdk_extrusion_exact_proxy_validates_without_repair(self):
+        # Exercise the actual SDK expansion in the isolated document validator.
+        extrusion = r3.Extrusion.Create(r3.Circle(2).ToNurbsCurve(), 3, True)
+        self.assertTrue(bridge.adopt_brep(extrusion))
+        model = NarwhalModel()
+        model.add_object(extrusion, 'Imported')
+        path = self.root / 'extrusion.narwhal'
+        staged = narwhal_document._stage(model, path)
+        try:
+            narwhal_document._validate_and_pack(staged)
+        finally:
+            staged.cleanup()
+        loaded = narwhal_document.load_model(path)
+        self.assertIsInstance(list(loaded.file.Objects)[0].Geometry, r3.Extrusion)
+        self.assertIsInstance(list(model.file.Objects)[0].Geometry, r3.Extrusion)
+
+    def test_grouped_sdk_extrusions_capture_exact_snapshot_and_single_undo(self):
+        # Actual rhino3dm/OCCT boundary: imported Extrusion is not a Brep and
+        # has no Edges collection. Rust cannot construct this SDK object here.
+        ctx = Context()
+        group = r3.Group(); group.Name = 'Imported extrusion assembly'
+        ctx.model.file.Groups.Add(group)
+        for x in (0, 6):
+            profile = r3.Circle(r3.Point3d(x, 0, 0), 2).ToNurbsCurve()
+            extrusion = r3.Extrusion.Create(profile, 3, True)
+            self.assertTrue(bridge.adopt_brep(extrusion))
+            oid, attrs = ctx.model.add_object(extrusion, 'Imported' + str(x))
+            ctx.model.file.Objects.FindId(oid).Attributes.AddToGroup(0)
+            ctx.selection.append(attrs.Name)
+        oid, attrs = ctx.model.add_object(bridge.make_line((0, 0, 0), (6, 0, 0)), 'Wire')
+        ctx.model.file.Objects.FindId(oid).Attributes.AddToGroup(0)
+        ctx.selection.append(attrs.Name)
+        before = signature(ctx.model)
+        pending = lib.prepare_capture(ctx, self.store, 'Imported group', 'uncategorized')
+        snapshots = [o.Geometry for o in pending.candidate.file.Objects
+                     if kernel.master_of(o.Geometry) is not None]
+        self.assertEqual(len(snapshots), 2)
+        for geometry in snapshots:
+            self.assertIsInstance(geometry, r3.Brep)
+            self.assertEqual(kernel.recipe_of(geometry)['kind'], 'native_master')
+        asset = pending.finish()
+        pending.admit(asset)
+        self.assertEqual(signature(ctx.model), before)
+        self.assertEqual(ctx.undo.undo_names(), [])
+        saved = narwhal_document.load_model(asset['source_file'])
+        narwhal_document.commit_masters(saved)
+        self.assertEqual(saved.object_count(), 3)
+        solids = [o.Geometry for o in saved.file.Objects if kernel.master_of(o.Geometry) is not None]
+        self.assertEqual(len(solids), 2)
+        for geometry in solids:
+            master = kernel.master_of(geometry)
+            self.assertTrue(occt.is_airtight(master))
+            self.assertEqual(occt.face_types(master), {'CYLINDER': 1, 'PLANE': 2})
+            self.assertEqual(kernel.recipe_of(geometry)['kind'], 'native_master')
+            self.assertIsNone(kernel.honesty_problem(geometry))
+        target = Context()
+        self.assertEqual(len(lib.insert_asset(target, asset)), 3)
+        self.assertEqual(saved.group_records(), ctx.model.group_records())
+        # Insertion preserves the source group and adds the library assembly group.
+        self.assertEqual(len(target.model.group_records()), 2)
+        memberships = [set(o.Attributes.GetGroupList2()) for o in target.model.file.Objects]
+        self.assertEqual(len(set.intersection(*memberships)), 2)
+        self.assertEqual(len(target.undo.undo_names()), 1)
+        self.assertEqual(target.undo_last(), 'Insert library asset')
+        self.assertEqual(target.model.object_count(), 0)
+        self.assertEqual(target.redo_last(), 'Insert library asset')
+        self.assertEqual(target.model.object_count(), 3)
+        self.assertEqual(signature(ctx.model), before)
+
     def test_material_snapshot_restore_ids_indices_and_layer_refs(self):
         ctx = self.fixture(); m = ctx.model
         before = m.snapshot(); expected = signature(m)
