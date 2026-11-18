@@ -130,6 +130,15 @@ REQUIRED = {
     "native/ui_core/Cargo.toml", "native/ui_core/Cargo.lock", "native/ui_core/LICENSE",
     "native/ui_core/README.md", "native/ui_core/POPUP.md", "native/ui_core/gen_unicode.py",
     "native/ui_core/tests/editor27_golden.rs",
+    "native/ui_core/tests/unicode28_golden.rs",
+    "native/ui_core/tests/popup28_native.rs",
+    "native/ui_core/tests/support/popup28_fixture.rs",
+    "native/ui_core/tests/data/popup28_golden.bin",
+    "native/ui_core/tests/data/popup28_golden.provenance.json",
+
+    "native/ui_core/tests/data/unicode28_golden.txt",
+    "native/ui_core/tests/data/unicode28_golden.provenance.json",
+
     "native/ui_core/tests/support/editor27_fixture.rs",
     "native/ui_core/tests/support/golden27_sha256.rs",
     "native/ui_core/tests/data/editor27_golden.bin",

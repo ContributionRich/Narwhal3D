@@ -4127,19 +4127,28 @@ def _move_modified_box_subobject(geom, shape, kind, sub_id, vector, recipe, _bas
             solid = occt.move_subobject_local(shape, kind, sub_id, vector, target)
         except _kernel().KernelError as e:
             raise ValueError(str(e)) from e
+    if result is not None and result.ok and recipe.get("kind") == "native_master":
+        # Snapshot-origin edits persist their certified result, not a new replay
+        # dependency on opaque source history (whose stored tolerances may be loose).
+        updated_recipe = occt.native_master_recipe(solid)
     out = occt_backed(solid, updated_recipe)
     _copy_geometry_user_strings(geom, out)
     return out
 
 
-def _move_extruded_cap(geom, shape, kind, sub_id, vector, occt, live=False):
+def _move_extruded_cap(geom, shape, kind, sub_id, vector, occt, live=False, recipe=None):
     """'s narrow exact case: stretch one end of a straight recipe extrusion.
 
     The construction recipe is the geometry authority.  Changing its height/direction and,
     for the base cap, its placement rebuilds the same profile with an analytically extended
     side surface.  No display-proxy vertex participates in the operation.
     """
-    recipe = _kernel().recipe_of(geom)
+    if recipe is None:
+        recipe = _kernel().recipe_of(geom)
+    if recipe is None:
+        # An imported solid's exact master is sufficient replay history; keep
+        # the source untouched and let the existing solver certify the edit.
+        recipe = occt.native_master_recipe(shape)
     base = _modifier_base(recipe) if isinstance(recipe, dict) else None
     recipe_kind = base.get("kind") if isinstance(base, dict) else None
     def general_exact_move():
@@ -4279,8 +4288,10 @@ def move_subobject(geom, kind, sub_id, vector, *, live=False):
         raise ValueError("that object has no exact BRep (no master and no recipe), so its "
                          "parts cannot be moved exactly")
     recipe = _kernel().recipe_of(geom)
+    if recipe is None:
+        recipe = occt.native_master_recipe(shape)
     base = _modifier_base(recipe) if isinstance(recipe, dict) else None
-    if isinstance(recipe, dict) and recipe.get("kind") == "local_move":
+    if isinstance(recipe, dict) and recipe.get("kind") in ("local_move", "native_master"):
         current_parts = {"face": occt.unique_faces, "edge": occt._unique_edges,
                          "vertex": occt._unique_vertices}[kind](shape)
         i = int(sub_id)
@@ -4315,7 +4326,8 @@ def move_subobject(geom, kind, sub_id, vector, *, live=False):
         verts, faces, edges = occt.planar_polyhedron(shape)
     except _kernel().KernelError as e:
         try:
-            return _move_extruded_cap(geom, shape, kind, sub_id, vector, occt, live=live)
+            return _move_extruded_cap(geom, shape, kind, sub_id, vector, occt, live=live,
+                                     recipe=recipe)
         except ValueError as cap_error:
             raise cap_error from e
     table = {"face": faces, "edge": edges, "vertex": verts}[kind]

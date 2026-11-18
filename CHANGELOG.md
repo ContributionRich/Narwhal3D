@@ -4,6 +4,9 @@ All notable public changes will be recorded here. Narwhal 3D is an extremely ear
 
 ## Unreleased
 
+- Fixed Library snapshots of edited exact solids whose construction history cannot be replayed. Fixed native Gumball editing for supported imported solids with conservative tolerance metadata, and preserved exact snapshot edits across Save/reload without a second Undo history.
+- Source: moved exhaustive Unicode and numeric popup acceptance into mandatory Rust tests while retaining actual host callbacks and metadata coverage. [Scope, qualification and Python retirement](docs/RUST_RETIREMENT_28.md).
+
 - Fixed Library capture of grouped imported extrusions: independent exact snapshots preserve analytic masters and source groups without changing the working model. Fixed exact native-extrusion validation and reopening.
 - Source: moved all 6,000 captured editor acceptance transitions into mandatory Rust tests; kept thin live-adapter dispatch and necessary host-boundary coverage. Clarified the repository-wide near-zero-Python contribution requirement. [Scope and measured footprint](docs/RUST_RETIREMENT_27.md).
 

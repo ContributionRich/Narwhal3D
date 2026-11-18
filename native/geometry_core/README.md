@@ -273,3 +273,26 @@ registers the active pinned wheel's `cadquery_ocp_novtk.libs` directory with
 `os.add_dll_directory` before loading. The Winboat acceptance build executes ABI 4
 against a real BinTools box, moves a face, decodes the result through OCCT, and requires
 one valid airtight solid before packaging succeeds.
+
+## Imported tolerance metadata qualification
+
+Over-budget imported sources are not accepted by raising the existing edit
+tolerance ceiling. A topology-isolated copy retains its exact surfaces, 3D curves,
+pcurves, ranges, locations and incidence. For supported nondegenerate edges with
+stored 3D curves and existing SameParameter/SameRange flags, OCCT full-range
+numerical curve/surface checks cover both seam branches and located endpoints.
+A measured requirement plus margin must fit inside one quarter of the unchanged
+source ceiling. Only copied tolerance metadata is reassigned; exact-method
+BRep validation and all existing output certificates remain mandatory.
+
+This is OCCT numerical qualification, not a formal interval enclosure. Degenerate
+and pcurve-only over-budget sources remain refused. Inputs already within budget
+retain the existing path. Both session and stateless editing share preparation.
+Linux development qualification includes positive located/curved fixtures, valid
+loose-metadata fixtures hiding real gaps, unsupported representations, immutable
+input and refusal output, collapse refusal and producer mutations. No new Windows
+runtime qualification or release-package acceptance is claimed by this change.
+
+Snapshot-origin native edits persist their exact certified result as a
+`native_master` recipe rather than adding a replay dependency on opaque source
+history. This does not create another Undo history or change historical readers.

@@ -1,0 +1,37 @@
+{
+  "lease": "UI-UNICODE-GOLDEN-28",
+  "source_commit": "50267dd6d4504b14052d1ab7e54675f3c8750637",
+  "golden_python": {
+    "path": "spike/test_ui_core_golden.py",
+    "sha256": "60fd8ae173d0af62c8ec45d8ccc147004fb70f4e1d080c176e143e3277bdd0de"
+  },
+  "semantic_payload": {
+    "description": "json.dumps(DATA['unicode'], ensure_ascii=False, sort_keys=True) of the original frozen chunk digests",
+    "sha256": "a8947f9fc8c2fa12a7d523a853b5386f0c16aea0ce82715b6bb2da3a93b0009b"
+  },
+  "text_payload": {
+    "path": "native/ui_core/tests/data/unicode28_golden.txt",
+    "sha256": "9a7a8a9031ab3f2f0441adbc26fe0c46c84c31a1c8714babcb0ca4b82934fbee",
+    "length": 17712
+  },
+  "counts": {
+    "versions": [
+      "15.1.0",
+      "16.0.0"
+    ],
+    "chunks_per_version": 136,
+    "total_digests": 272,
+    "chunk_size_codepoints": 8192,
+    "codepoints_total": 1114112
+  },
+  "mutation_evidence": {
+    "producer": "native/ui_core/src/lib.rs :: narwhal_editor_edit (op 0 construct)",
+    "mutation": "replaced 'field.unicode16 = flags & 8 != 0;' with 'field.unicode16 = false;'",
+    "red": "replay_all_272_unicode_classifier_digests FAILED: chunk 0 (U+0000..U+2000) for 16.0.0 produced the 15.1.0 digest 5fe5f0c20574430bef66fbc770e5a8f4ba4f740337d0ad53969f5e7d2212965e instead of the frozen 16.0.0 value b03feea5e5938f311e42a3db9b611fa6bd5eeb8ed44301145a9adef7de0a97f8",
+    "restored_green": "line restored to 'field.unicode16 = flags & 8 != 0;'; git diff -- src/ clean; cargo test --test unicode28_golden ok (2 passed)"
+  },
+  "extraction_revision": {
+    "description": "public git HEAD of the worktree from which the frozen DATA was extracted at this lease; not the original capture commit",
+    "sha": "0ecb9c8330ee8a4c3c7a5db76f8e54679c28c231"
+  }
+}

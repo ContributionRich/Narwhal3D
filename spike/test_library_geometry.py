@@ -240,6 +240,35 @@ class LibraryTests(unittest.TestCase):
         self.assertEqual(target.model.object_count(), 3)
         self.assertEqual(signature(ctx.model), before)
 
+    def test_brep_capture_preserves_master_without_replaying_source_history(self):
+        # Actual SDK/master boundary: a valid solid may have unreplayable old
+        # history. Library snapshots must keep the master, not that history.
+        master = occt.make_box(2, 3, 4)
+        geometry = bridge._proxy_from_occt(master)
+        kernel.register_master(geometry, master)
+        wrong = kernel.recipe_of(bridge.make_cylinder((0, 0, 0), 1, 2))
+        self.assertTrue(kernel.record_recipe(geometry, wrong))
+        ctx = Context()
+        oid, attrs = ctx.model.add_object(geometry, 'Edited solid')
+        ctx.selection = [attrs.Name]
+        before = signature(ctx.model)
+        pending = lib.prepare_capture(ctx, self.store, 'Exact snapshot', 'uncategorized')
+        self.addCleanup(pending.cleanup)
+        snapshot = list(pending.candidate.file.Objects)[0].Geometry
+        self.assertEqual(kernel.recipe_of(snapshot)['kind'], 'native_master')
+        asset = pending.finish()
+        self.assertEqual(signature(ctx.model), before)
+        self.assertEqual(kernel.recipe_of(ctx.model.file.Objects.FindId(oid).Geometry), wrong)
+        self.assertEqual(ctx.undo.undo_names(), [])
+        saved = narwhal_document.load_model(asset['source_file'])
+        narwhal_document.commit_masters(saved)
+        copied = list(saved.file.Objects)[0].Geometry
+        exact = kernel.master_of(copied)
+        self.assertTrue(occt.is_airtight(exact))
+        self.assertEqual(occt.face_types(exact), {'PLANE': 6})
+        self.assertEqual(occt.tight_bbox(exact), occt.tight_bbox(master))
+        self.assertEqual(kernel.recipe_of(copied)['kind'], 'native_master')
+
     def test_material_snapshot_restore_ids_indices_and_layer_refs(self):
         ctx = self.fixture(); m = ctx.model
         before = m.snapshot(); expected = signature(m)

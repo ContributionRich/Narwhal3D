@@ -96,4 +96,56 @@ before = sorted(occt._local_point(v) for v in occt._unique_vertices(shape_of(cyl
 after = sorted(occt._local_point(v) for v in occt._unique_vertices(moved_cylinder))
 assert all(occt._local_distance((a[0] + 0.2, a[1], a[2]), b) <= 1e-9 for a, b in zip(before, after))
 print("PASS: a cylinder wall move translates the whole cylinder exactly")
+# Real SDK/master boundary: imported solids can have no construction recipe.
+# A native-master parent preserves exact replay without editing the source.
+from OCP.ShapeFix import ShapeFix_ShapeTolerance
+high_master = occt.from_recipe(kernel.recipe_of(cylinder))
+ShapeFix_ShapeTolerance().SetTolerance(high_master, 0.02)
+without_history = bridge._proxy_from_occt(high_master)
+kernel.register_master(without_history, high_master)
+assert kernel.recipe_of(without_history) is None
+moved = bridge.move_subobject(without_history, "face", wall, (0.2, 0.0, 0.0))
+recipe = kernel.recipe_of(moved)
+assert kernel.recipe_of(without_history) is None
+assert occt.is_valid(shape_of(moved)) and occt.is_airtight(shape_of(moved))
+assert topology(shape_of(moved)) == topology(shape_of(without_history))
+assert len(translated_matches(without_history, moved, "face", wall, (0.2, 0.0, 0.0))) == 1
+replay = occt.from_recipe(recipe)
+assert recipe["kind"] == "native_master"
+assert occt.is_valid(replay) and occt.is_airtight(replay)
+assert abs(occt.volume(replay) - occt.volume(shape_of(moved))) <= 1e-8
+# Actual host persistence: the high-tolerance parent must not block later Save.
+import tempfile
+from pathlib import Path
+from narwhal3d.model import NarwhalModel
+from narwhal3d import narwhal_document
+with tempfile.TemporaryDirectory(prefix="master-move-roundtrip-") as directory:
+    path = Path(directory) / "moved.narwhal"
+    model = NarwhalModel()
+    object_id, _ = model.add_object(moved, "Imported edit")
+    assert narwhal_document.save_model(model, path)
+    reopened = narwhal_document.load_model(path)
+    narwhal_document.commit_masters(reopened)
+    item = reopened.file.Objects.FindId(object_id)
+    assert kernel.recipe_of(item.Geometry)["kind"] == "native_master"
+    second = bridge.move_subobject(item.Geometry, "face", wall, (0.1, 0.0, 0.0))
+    reopened.replace_geometry(object_id, second)
+    assert narwhal_document.save_model(reopened, path)
+    final = narwhal_document.load_model(path)
+    narwhal_document.commit_masters(final)
+    exact = shape_of(final.file.Objects.FindId(object_id).Geometry)
+    assert occt.is_valid(exact) and occt.is_airtight(exact)
+    assert topology(exact) == topology(shape_of(without_history))
+assert kernel.recipe_of(without_history) is None
+# A recipe-less planar master must also use native editing, not the Python
+# planar-polyhedron compatibility implementation.
+box_master = occt.make_box(2, 3, 4)
+box_proxy = bridge._proxy_from_occt(box_master)
+kernel.register_master(box_proxy, box_master)
+assert kernel.recipe_of(box_proxy) is None
+edited_box = bridge.move_subobject(box_proxy, "face", 1, (-0.1, 0.0, 0.0))
+assert kernel.recipe_of(edited_box)["kind"] == "native_master"
+assert kernel.recipe_of(box_proxy) is None
+assert occt.is_valid(shape_of(edited_box)) and occt.is_airtight(shape_of(edited_box))
+print("PASS: imported snapshot edits save, reload, move again and save exactly")
 print("BUG 105 EXACT SUBOBJECT MOVEMENT PASSED")

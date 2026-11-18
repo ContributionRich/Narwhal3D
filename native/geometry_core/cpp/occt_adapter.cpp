@@ -23,6 +23,7 @@
 #include <BRepFilletAPI_MakeFillet.hxx>
 #include <BRepGProp.hxx>
 #include <BRepGProp_Face.hxx>
+#include <BRepLib_CheckCurveOnSurface.hxx>
 #include <BRepPrimAPI_MakeBox.hxx>
 #include <BRepPrimAPI_MakeCone.hxx>
 #include <BRepPrimAPI_MakeCylinder.hxx>
@@ -57,6 +58,7 @@
 #include <Geom_TrimmedCurve.hxx>
 #include <Precision.hxx>
 #include <ShapeFix_Solid.hxx>
+#include <ShapeFix_ShapeTolerance.hxx>
 #include <Standard_Failure.hxx>
 #include <TColStd_Array1OfInteger.hxx>
 #include <TColStd_Array1OfReal.hxx>
@@ -451,7 +453,7 @@ std::int32_t copy_serialized(const std::string& bytes,
   return kOk;
 }
 
-Tolerances local_tolerances(const TopoDS_Shape& shape) {
+Tolerances local_tolerances(const TopoDS_Shape& shape, bool require_bounded = true) {
   Bnd_Box box;
   box.SetGap(0.0);
   BRepBndLib::AddOptimal(shape, box, false, false);
@@ -471,13 +473,90 @@ Tolerances local_tolerances(const TopoDS_Shape& shape) {
       BRep_Tool::MaxTolerance(shape, TopAbs_EDGE),
       BRep_Tool::MaxTolerance(shape, TopAbs_FACE)});
   const double loose_limit = std::max(1000.0 * Precision::Confusion(), extent * 1.0e-4);
-  if (input_tolerance > loose_limit) {
+  if (!std::isfinite(input_tolerance) || input_tolerance < 0.0 ||
+      (require_bounded && input_tolerance > loose_limit)) {
     refuse(kReasonTolerance);
   }
   const double comparison = std::max({Precision::PConfusion(), 64.0 * ulp,
       std::min(input_tolerance / 8.0, extent * 1.0e-10)});
   const double build = std::max({Precision::Confusion(), input_tolerance, 8.0 * comparison});
   return {build, std::min(4.0 * build, loose_limit), comparison, extent, input_tolerance};
+}
+
+
+// Imported BReps can carry conservative tolerance metadata unrelated to their
+// actual boundary gaps. Qualify a topology-isolated, metadata-only copy against
+// OCCT's full-range numerical curve/surface checks; never raise the edit budget.
+TopoDS_Shape qualified_move_input(const TopoDS_Shape& shape) {
+  const Tolerances original = local_tolerances(shape, false);
+  const double ceiling = std::max(1000.0 * Precision::Confusion(), original.extent * 1.0e-4);
+  if (original.input <= ceiling) {
+    return shape;
+  }
+  BRepBuilderAPI_Copy copier(shape, false, false);
+  if (!copier.IsDone()) {
+    refuse(kReasonTolerance);
+  }
+  const TopoDS_Shape candidate = copier.Shape();
+  double requirement = 0.0;
+  bool has_boundary = false;
+  for (TopExp_Explorer faces(candidate, TopAbs_FACE); faces.More(); faces.Next()) {
+    const TopoDS_Face face = TopoDS::Face(faces.Current());
+    for (TopExp_Explorer edges(face, TopAbs_EDGE); edges.More(); edges.Next()) {
+      const TopoDS_Edge edge = TopoDS::Edge(edges.Current());
+      // The complete-range checker requires an already parameter-consistent
+      // nondegenerate edge. Unsupported representations remain explicit refusals.
+      if (BRep_Tool::Degenerated(edge) || !BRep_Tool::SameParameter(edge) ||
+          !BRep_Tool::SameRange(edge) || !BRep_Tool::IsGeometric(edge) ||
+          !BRepAdaptor_Curve(edge).Is3DCurve()) {
+        refuse(kReasonTolerance);
+      }
+      for (const TopoDS_Edge& branch : {edge, TopoDS::Edge(edge.Reversed())}) {
+        BRepLib_CheckCurveOnSurface check(branch, face);
+        check.Perform();
+        if (!check.IsDone() || !std::isfinite(check.MaxDistance()) ||
+            check.MaxDistance() < 0.0) {
+          refuse(kReasonTolerance);
+        }
+        requirement = std::max(requirement, check.MaxDistance());
+      }
+      const BRepAdaptor_Curve curve(edge);
+      const TopoDS_Vertex first = TopExp::FirstVertex(edge, false);
+      const TopoDS_Vertex last = TopExp::LastVertex(edge, false);
+      if (first.IsNull() || last.IsNull() || !std::isfinite(curve.FirstParameter()) ||
+          !std::isfinite(curve.LastParameter())) {
+        refuse(kReasonTolerance);
+      }
+      const double first_gap = curve.Value(curve.FirstParameter()).Distance(BRep_Tool::Pnt(first));
+      const double last_gap = curve.Value(curve.LastParameter()).Distance(BRep_Tool::Pnt(last));
+      if (!std::isfinite(first_gap) || !std::isfinite(last_gap)) {
+        refuse(kReasonTolerance);
+      }
+      requirement = std::max({requirement, first_gap, last_gap});
+      has_boundary = true;
+    }
+  }
+  // Numerical qualification, not a formal interval enclosure. Keep a margin
+  // around OCCT's measured maximum and well inside the unchanged source ceiling.
+  const double assigned = std::max(Precision::Confusion(), 2.0 * requirement + 8.0 * original.compare);
+  NARWHAL_DEBUG("input %.9g ceiling %.9g measured boundary %.9g proposed %.9g\n",
+                original.input, ceiling, requirement, assigned);
+  if (!has_boundary || !std::isfinite(assigned) || assigned > ceiling / 4.0) {
+    refuse(kReasonTolerance);
+  }
+  ShapeFix_ShapeTolerance().SetTolerance(candidate, assigned);
+  if (local_tolerances(shape, false).input != original.input) {
+    refuse(kReasonTolerance);
+  }
+  if (!BRepCheck_Analyzer(candidate, true, false, true).IsValid()) {
+    refuse(kReasonTolerance);
+  }
+  // No surface, curve, pcurve, range, location or incidence was rebuilt. Only
+  // tolerance fields on copied TShapes changed; the source remains untouched.
+  (void)local_tolerances(candidate);
+  NARWHAL_DEBUG("qualified imported tolerance %.9g -> %.9g; measured gap %.9g\n",
+                original.input, assigned, requirement);
+  return candidate;
 }
 
 std::vector<int> edge_vertex_indices(const TopoDS_Edge& edge, const ShapeMap& vertices) {
@@ -2477,11 +2556,12 @@ ComponentSignature component_signature(const TopoDS_Shape& part,
   return {type, properties.Mass(), {center.X(), center.Y(), center.Z()}};
 }
 
-MoveSource prepare_move_source(const TopoDS_Shape& shape,
+MoveSource prepare_move_source(const TopoDS_Shape& input,
                                const AdapterMovePolicy& policy) {
-  if (!within_resource_caps(shape, policy.max_faces, policy.max_edges, policy.max_vertices)) {
+  if (!within_resource_caps(input, policy.max_faces, policy.max_edges, policy.max_vertices)) {
     refuse(kReasonResourceLimit, kLimitExceeded);
   }
+  const TopoDS_Shape shape = qualified_move_input(input);
   const bool airtight = is_airtight(shape);
   // MEASURED (bug #110 surfaces matrix): only solids and lone faces were accepted, so an
   // open polysurface -- a revolve that is not a full closed turn, an open extrusion, a
@@ -3606,6 +3686,43 @@ std::tuple<TopoDS_Shape, std::uint64_t, std::uint64_t,
 
 std::pair<TopoDS_Shape, std::uint64_t> make_surface_family_fixture(
     const std::uint32_t family) {
+  if (family >= 280 && family <= 285) {
+    TopoDS_Shape shape;
+    std::uint64_t selected = 1;
+    if (family == 281) {
+      auto fixture = make_cylinder_fixture();
+      shape = std::get<0>(fixture);
+      selected = std::get<2>(fixture);
+      gp_Trsf placement;
+      placement.SetTranslation(gp_Vec(20.0, -5.0, 11.0));
+      shape = shape.Moved(TopLoc_Location(placement));
+    } else {
+      shape = BRepPrimAPI_MakeBox(2.0, 3.0, 4.0).Shape();
+    }
+    ShapeFix_ShapeTolerance().SetTolerance(shape, 0.02);
+    ShapeMap edges;
+    map_shapes(shape, TopAbs_EDGE, edges);
+    const TopoDS_Edge edge = TopoDS::Edge(edges.FindKey(1));
+    BRep_Builder builder;
+    if (family == 282) {
+      // A real boundary discrepancy, hidden by the loose source metadata.
+      TopLoc_Location location;
+      double first = 0.0, last = 0.0;
+      const Handle(Geom_Curve) curve = BRep_Tool::Curve(edge, location, first, last);
+      const Handle(Geom_Curve) shifted = Handle(Geom_Curve)::DownCast(curve->Copy());
+      shifted->Translate(gp_Vec(0.002, 0.003, 0.004));
+      builder.UpdateEdge(edge, shifted, location, 0.02);
+    } else if (family == 283) {
+      builder.SameParameter(edge, false);
+    } else if (family == 284) {
+      builder.UpdateEdge(edge, Handle(Geom_Curve)(), 0.02);
+    } else if (family == 285) {
+      TopoDS_Vertex vertex = TopExp::FirstVertex(edge, false);
+      const gp_Pnt moved = BRep_Tool::Pnt(vertex).Translated(gp_Vec(0.002, 0.003, 0.004));
+      builder.UpdateVertex(vertex, moved, 0.02);
+    }
+    return {shape, selected};
+  }
   const TopoDS_Shape box = BRepPrimAPI_MakeBox(20.0, 20.0, 4.0).Shape();
   const gp_Ax2 axis(gp_Pnt(10.0, 10.0, 4.0), gp_Dir(0.0, 0.0, 1.0));
   TopoDS_Shape feature;

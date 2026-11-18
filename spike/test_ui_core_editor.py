@@ -216,13 +216,21 @@ class EditorTests(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 action()
 
-    def test_full_unicode_classifier(self):
-        # Chunked exhaustive comparison includes supplementary planes and surrogates.
-        for start in range(0, 0x110000, 8192):
-            text = "".join(map(chr, range(start, min(start + 8192, 0x110000))))
-            f = self.field(text, True)
-            digest = hashlib.sha256(f.text.encode('utf-32-le', 'surrogatepass')).hexdigest()
-            self.assertEqual(digest, DATA['unicode'][unicodedata.unidata_version][start//8192])
+    def test_adapter_boundary_smoke_chunk0(self):
+        # Adapter-boundary smoke (NOT exhaustive): one real ctypes round-trip
+        # per supported Unicode version, using the original chunk 0 (8192
+        # code points). The exhaustive 272-chunk classifier case now lives in
+        # Rust (native/ui_core/tests/unicode28_golden.rs); this retains the
+        # real Python version dispatch + UTF-32 marshalling through the live
+        # adapter.
+        text = "".join(map(chr, range(8192)))
+        for version in ("15.1.0", "16.0.0"):
+            expected = DATA['unicode_adapter'][version]
+            with patch.object(adapter.unicodedata, "unidata_version", version):
+                f = self.field(text, True)
+                digest = hashlib.sha256(f.text.encode('utf-32-le', 'surrogatepass')).hexdigest()
+                self.assertEqual(digest, expected, (version, digest))
+                self.assertEqual(bool(f._native.state.flags & 8), version == "16.0.0")
 
     def test_hostile_projection_never_replays(self):
         for corruption in ("length", "caret", "anchor", "handle", "revision", "text_revision", "flags", "change_start", "change_end", "inserted"):

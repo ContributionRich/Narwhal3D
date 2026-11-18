@@ -1847,6 +1847,102 @@ mod tests {
     }
 
     #[test]
+    fn imported_tolerance_metadata_qualifies_real_edits_without_mutating_input() {
+        let _lock = session_test_lock();
+        for (family, vector) in [(280, [-0.1, 0.0, 0.0]), (281, [0.0, 0.0, 0.1])] {
+            let (input, face) = unsafe { make_surface_family_fixture(family) };
+            let original = input.clone();
+            let before = unsafe { inspect(&input) };
+            let handle = unsafe { import_session(&input) };
+            let (moved, certificate) = unsafe { session_move_once(handle, 1, face, vector) };
+            assert_eq!(narwhal_geometry_core_edit_session_release(handle), 0);
+            assert_eq!(input, original, "caller-owned exact bytes changed");
+            assert_eq!(certificate.status, 0);
+            assert_eq!(certificate.valid, 1);
+            assert_eq!(certificate.airtight, 1);
+            assert_eq!(certificate.self_intersection_free, 1);
+            assert_eq!(certificate.topology_counts_preserved, 1);
+            assert_eq!(certificate.moved_vertex_mapping_verified, 1);
+            assert_eq!(certificate.mapped_incidence_preserved, 1);
+            assert_eq!(certificate.unchanged_geometry_preserved, 1);
+            assert_eq!(certificate.selected_match_count, 1);
+            let after = unsafe { inspect(&moved) };
+            assert_eq!(after.valid, 1);
+            assert_eq!(after.airtight, 1);
+            assert_eq!(after.face_count, before.face_count);
+            assert_eq!(after.edge_count, before.edge_count);
+            assert_eq!(after.vertex_count, before.vertex_count);
+            // The stateless path must use the same preparation and certificates.
+            let (_, direct_certificate) = unsafe { move_once(&input, 1, face, vector) };
+            assert_eq!(direct_certificate.status, 0);
+            if family == 280 {
+                let mut refusal = NarwhalLocalMoveCertificateV3::default();
+                let status = unsafe {
+                    narwhal_geometry_core_move_component_brep(
+                        input.as_ptr(),
+                        input.len(),
+                        1,
+                        face,
+                        2.0,
+                        0.0,
+                        0.0,
+                        ptr::null_mut(),
+                        0,
+                        &mut refusal,
+                    )
+                };
+                assert!(status < 0, "normalization allowed a collapsed box");
+                assert_ne!(refusal.valid, 1);
+            }
+        }
+    }
+
+    #[test]
+    fn imported_tolerance_cannot_hide_real_gaps_or_unsupported_representations() {
+        let _lock = session_test_lock();
+        for family in [282, 283, 284, 285] {
+            let (input, face) = unsafe { make_surface_family_fixture(family) };
+            let original = input.clone();
+            if matches!(family, 282 | 285) {
+                assert_eq!(
+                    unsafe { inspect(&input) }.valid,
+                    1,
+                    "real discrepancy must be hidden by valid loose metadata"
+                );
+            }
+            let mut handle = 123_u64;
+            let status = unsafe {
+                narwhal_geometry_core_edit_session_import(input.as_ptr(), input.len(), &mut handle)
+            };
+            assert_eq!(i64::from(status), ERROR_POLICY_REFUSED, "fixture {family}");
+            assert_eq!(
+                handle, 0,
+                "refusal published a session for fixture {family}"
+            );
+            let mut certificate = NarwhalLocalMoveCertificateV3::default();
+            let mut output = [0xa5_u8; 256];
+            let status = unsafe {
+                narwhal_geometry_core_move_component_brep(
+                    input.as_ptr(),
+                    input.len(),
+                    1,
+                    face,
+                    -0.1,
+                    0.0,
+                    0.0,
+                    output.as_mut_ptr(),
+                    output.len(),
+                    &mut certificate,
+                )
+            };
+            assert_eq!(output, [0xa5_u8; 256], "refusal changed caller output");
+            assert_eq!(status, ERROR_POLICY_REFUSED, "stateless fixture {family}");
+            assert_eq!(certificate.refusal_reason, REFUSAL_TOLERANCE);
+            assert_eq!(input, original);
+        }
+    }
+
+    #[test]
     fn local_move_rejects_bad_arguments_and_malformed_input() {
         let fixture = unsafe { make_fixture() };
         let mut certificate = NarwhalLocalMoveCertificateV3::default();

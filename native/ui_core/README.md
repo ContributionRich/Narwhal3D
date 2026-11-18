@@ -195,3 +195,16 @@ count/hash guards are mandatory source inputs. The Python editor suite keeps
 59 captured steps for all 11 live adapter routes, alongside ownership/coercion/
 transport checks. Layout and popup host acceptance remain in place. See
 [the retirement scope](../../docs/RUST_RETIREMENT_27.md); no native ABI changes.
+
+## Unicode and popup acceptance in Rust
+
+`tests/unicode28_golden.rs` replays all 272 independently captured classifier
+digests: both Unicode15.1/16.0 versions, all1114112codepoints each including
+surrogates. Actual Python version dispatch retains a two-version chunk0 smoke.
+`tests/popup28_native.rs` replays all900captured events, native numeric panel and
+row layout, hit/guard/state projections and action tokens. Complete actual Python
+event/callback/hit and host-owned row metadata coverage remains for all900events;
+only redundant numeric acceptance/data was retired there. Original absolute
+seven-place float criteria, source/provenance hashes and hard corpus guards remain.
+The existing source gate requires these Rust test targets and fixture inputs.
+No production UI ABI or exports change.

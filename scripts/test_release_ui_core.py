@@ -315,7 +315,7 @@ class UiPackaging(unittest.TestCase):
                 put(source / name, (ROOT / name).read_bytes())
             put(binary / SO)
             receipt = source_receipt(binary, SO, source)
-            self.assertEqual(len(common.UI_CORE_REQUIRED_SOURCE), 26)
+            self.assertEqual(len(common.UI_CORE_REQUIRED_SOURCE), 33)
             for name in common.UI_CORE_REQUIRED_SOURCE:
                 path = source / "native/ui_core" / name
                 data = path.read_bytes()

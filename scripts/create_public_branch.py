@@ -35,7 +35,7 @@ ROOT_FILES = (
     "docs/reviews/2026-10-31-rust-document-registry.md",
     "docs/reviews/2026-10-31-native-only.md",
     "docs/reviews/2026-11-11-rust-interaction-blend.md",
-    "docs/LIBRARY.md", "docs/FILE_IO.md", "docs/RUST_RETIREMENT_11.md", "docs/RUST_RETIREMENT_21.md", "docs/RUST_RETIREMENT_22.md", "docs/RUST_RETIREMENT_23.md", "docs/RUST_RETIREMENT_24.md", "docs/RUST_RETIREMENT_25.md", "docs/RUST_RETIREMENT_26.md", "docs/RUST_RETIREMENT_27.md", "docs/RUST_PARSER_OWNERSHIP.md", "docs/RUST_COORDINATE_JOIN_OWNERSHIP.md", "docs/RUST_SVG_ALIAS_OWNERSHIP.md", "docs/RUST_REBUILD_BLEND_OWNERSHIP.md", "docs/RUST_UNIT_OWNERSHIP.md", "docs/RUST_TEST_RETIREMENT_17.md", "docs/RUST_TEST_RETIREMENT_18.md",
+    "docs/LIBRARY.md", "docs/FILE_IO.md", "docs/RUST_RETIREMENT_11.md", "docs/RUST_RETIREMENT_21.md", "docs/RUST_RETIREMENT_22.md", "docs/RUST_RETIREMENT_23.md", "docs/RUST_RETIREMENT_24.md", "docs/RUST_RETIREMENT_25.md", "docs/RUST_RETIREMENT_26.md", "docs/RUST_RETIREMENT_27.md", "docs/RUST_RETIREMENT_28.md", "docs/RUST_PARSER_OWNERSHIP.md", "docs/RUST_COORDINATE_JOIN_OWNERSHIP.md", "docs/RUST_SVG_ALIAS_OWNERSHIP.md", "docs/RUST_REBUILD_BLEND_OWNERSHIP.md", "docs/RUST_UNIT_OWNERSHIP.md", "docs/RUST_TEST_RETIREMENT_17.md", "docs/RUST_TEST_RETIREMENT_18.md",
         "docs/reviews/2026-10-30-agent-v3-integration.md",
 )
 LAUNCH_FILES = (
@@ -552,6 +552,15 @@ NATIVE_FILES = (
     'native/document_observer/test_master_lifetime_product.py',
 
     "native/ui_core/tests/editor27_golden.rs",
+    "native/ui_core/tests/unicode28_golden.rs",
+    "native/ui_core/tests/popup28_native.rs",
+    "native/ui_core/tests/support/popup28_fixture.rs",
+    "native/ui_core/tests/data/popup28_golden.bin",
+    "native/ui_core/tests/data/popup28_golden.provenance.json",
+
+    "native/ui_core/tests/data/unicode28_golden.txt",
+    "native/ui_core/tests/data/unicode28_golden.provenance.json",
+
     "native/ui_core/tests/support/editor27_fixture.rs",
     "native/ui_core/tests/support/golden27_sha256.rs",
     "native/ui_core/tests/data/editor27_golden.bin",

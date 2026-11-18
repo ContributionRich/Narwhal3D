@@ -1,0 +1,176 @@
+{
+  "lease": "UI-POPUP-GOLDEN-28",
+  "source_commit": "50267dd6d4504b14052d1ab7e54675f3c8750637",
+  "golden_python": {
+    "path": "spike/test_ui_core_golden.py",
+    "sha256": "60fd8ae173d0af62c8ec45d8ccc147004fb70f4e1d080c176e143e3277bdd0de"
+  },
+  "extraction_revision": "0ecb9c8330ee8a4c3c7a5db76f8e54679c28c231",
+  "semantic_payload": {
+    "description": "json.dumps(DATA['popup'], ensure_ascii=False, sort_keys=True) of the original frozen traces (900 steps)",
+    "sha256": "d36487153565b48aaa2a325f62e4b85f81bfda643cc43db90e3110f76e6940d6"
+  },
+  "binary_payload": {
+    "popup28_golden.bin": {
+      "path": "native/ui_core/tests/data/popup28_golden.bin",
+      "sha256": "858391be1a25be7342f06df0bd06bb40d9d82db305a9b8c553f22df7e64e5259",
+      "length": 6012434
+    }
+  },
+  "schema": {
+    "format": "tagged-value binary, editor27_fixture.rs format + tag 3; multi-byte integers little-endian",
+    "tags": {
+      "0": "null",
+      "1": "false",
+      "2": "true",
+      "3": "float (IEEE-754 binary64, 8 bytes LE)",
+      "4": "utf-8 string (u32 LE byte-length + bytes)",
+      "5": "i128 (16 bytes LE)",
+      "6": "array (u32 LE count + elements)",
+      "7": "map (u32 LE pair count + key string/value; insertion order preserved)"
+    },
+    "top": "[source_commit: str, 900: int, popup: map{rows, steps}]"
+  },
+  "counts": {
+    "popup_keys": [
+      "rows",
+      "steps"
+    ],
+    "rows": 62,
+    "row_key_counts": {
+      "label": 61,
+      "enabled": 61,
+      "children": 1,
+      "separator": 1,
+      "action": 60
+    },
+    "row_shapes": {
+      "header": 1,
+      "separator": 1,
+      "item": 60
+    },
+    "steps": 900,
+    "step_key_counts": {
+      "open": 85,
+      "resize": 32,
+      "event": 900,
+      "consumed": 900,
+      "state": 900,
+      "calls": 900,
+      "hit": 900
+    },
+    "step_key_types": {
+      "event": "list[str, str, list]",
+      "consumed": "bool",
+      "state": "dict{is_open: bool, releases: list, panels: list}",
+      "calls": "list of [int, null] pairs",
+      "hit": "null | [int, int] | [int, str] | [int, null]",
+      "open": "list[float, float] (present in 85 steps)",
+      "resize": "list[int, int] (present in 32 steps)"
+    },
+    "state_key_counts": {
+      "is_open": 900,
+      "releases": 900,
+      "panels": 900
+    },
+    "releases_len_distribution": {
+      "0": 146,
+      "1": 123,
+      "2": 135,
+      "3": 75,
+      "4": 50,
+      "5": 83,
+      "6": 61,
+      "7": 76,
+      "8": 72,
+      "9": 37,
+      "10": 27,
+      "11": 15
+    },
+    "panel_counts": {
+      "0": 63,
+      "1": 834,
+      "2": 3
+    },
+    "panel_key_counts": {
+      "title": 840,
+      "parent_index": 840,
+      "selected": 840,
+      "rows": 840,
+      "offset": 840,
+      "max_scroll": 840,
+      "width": 840,
+      "rect": 840,
+      "body": 840,
+      "up": 840,
+      "down": 840,
+      "row_rects": 840
+    },
+    "event_distribution": {
+      "A": 33,
+      "BUTTON4MOUSE": 27,
+      "DOWN_ARROW": 21,
+      "END": 26,
+      "ERASER": 31,
+      "ESC": 26,
+      "HOME": 28,
+      "INBETWEEN_MOUSEMOVE": 29,
+      "LEFTMOUSE": 21,
+      "LEFT_ARROW": 30,
+      "MIDDLEMOUSE": 36,
+      "MOUSEMOVE": 37,
+      "MOUSEROTATE": 36,
+      "MOUSESMARTZOOM": 36,
+      "NUMPAD_ENTER": 37,
+      "PAGE_DOWN": 29,
+      "PAGE_UP": 29,
+      "PEN": 28,
+      "RET": 35,
+      "RIGHTMOUSE": 27,
+      "RIGHT_ARROW": 28,
+      "TIMER": 29,
+      "TIMER0": 42,
+      "TRACKPADPAN": 38,
+      "TRACKPADZOOM": 32,
+      "UP_ARROW": 35,
+      "WHEELDOWNMOUSE": 37,
+      "WHEELUPMOUSE": 33,
+      "WINDOW_DEACTIVATE": 24
+    },
+    "open_steps": 85,
+    "resize_steps": 32,
+    "consumed": {
+      "true": 753,
+      "false": 147
+    },
+    "hit_distribution": {
+      "list<int,NoneType>": 41,
+      "list<int,int>": 267,
+      "list<int,str>": 36,
+      "null": 556
+    },
+    "calls_per_step": {
+      "0": 151,
+      "1": 154,
+      "2": 541,
+      "3": 54
+    },
+    "value_type_tally": {
+      "bool": 53756,
+      "dict": 57120,
+      "float": 224838,
+      "int": 53211,
+      "list": 64974,
+      "null": 3491,
+      "str_key": 176637,
+      "str_value": 61474
+    },
+    "non_ascii_strings": 0,
+    "float_min": -1147.8625000000013,
+    "float_max": 1249.6290491144264
+  },
+  "roundtrip_check": {
+    "method": "re-decoded the written .bin with a decoder mirroring native/ui_core/tests/support/editor27_fixture.rs; asserted no trailing bytes and exact equality incl. float bit patterns, bool-vs-int types, map key insertion order and Unicode strings",
+    "result": "pass"
+  }
+}

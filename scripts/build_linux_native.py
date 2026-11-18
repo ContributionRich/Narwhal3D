@@ -58,6 +58,15 @@ UI_CORE_REQUIRED_SOURCE = (
     "src/layout_algorithm.rs", "src/layout_contract.rs", "src/popup.rs", "src/popup_ffi.rs",
     "src/popup_tests.rs", "src/transcript.rs", "src/transcript_ffi.rs", "src/transcript_tests.rs",
     "tests/editor27_golden.rs",
+    "tests/unicode28_golden.rs",
+    "tests/popup28_native.rs",
+    "tests/support/popup28_fixture.rs",
+    "tests/data/popup28_golden.bin",
+    "tests/data/popup28_golden.provenance.json",
+
+    "tests/data/unicode28_golden.txt",
+    "tests/data/unicode28_golden.provenance.json",
+
     "tests/support/editor27_fixture.rs",
     "tests/support/golden27_sha256.rs",
     "tests/data/editor27_golden.bin",
