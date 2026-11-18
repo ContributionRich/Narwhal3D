@@ -1,51 +1,93 @@
-"""the reference CAD application command-line option framework. **No `bpy`, no rhino3dm.**
+"""Command options: required Rust name/key resolution, host values and prompts.
 
-Why this module exists
----------------------
-the reference CAD application commands are not just a fixed sequence of prompts. Almost every command is
-*driven* by options shown in brackets in the prompt::
-
-    Corner of base ( Diagonal  Cube  3Point  Vertical  Center ):
-    Offset distance <1.0> ( Loose=No  Corner=Sharp  Trim=Yes  BothSides=No ):
-
-the reference CAD application documents hundreds of options across its commonly used commands. Options
-are central to the command-line workflow, so they need an explicit shared model.
-
-This module is the decidable, testable core of that: what an option *is*, how
-typed input is matched against options, and how the prompt is rendered. It is
-deliberately pure Python -- no `bpy`, no `rhino3dm`, and no package-relative
-imports, so it can be loaded directly and exercised without launching Blender. That is the same split already used by
-``cmdbar.py`` (prompt layout), ``views.py`` (view labels) and ``cplane.py``
-(picking math), and for the same reason: logic that lives inside a Blender
-callback is logic no test can reach.
-
-The four kinds of option (taken from the the reference CAD application 8 docs, not invented)
--------------------------------------------------------------------
-Verified against `commands/box.htm` and `commands/offset.htm`:
-
-``MODE``
-    Branches the command -- it changes what gets built and which prompts follow.
-    Box: ``Diagonal``, ``Cube``, ``3Point``, ``EdgeMidpoint``, ``Vertical``,
-    ``Center``. Carries no stored value; the command reacts to it.
-``TOGGLE``
-    A Yes/No flag, e.g. Offset's ``Loose``, ``Trim``, ``BothSides``, ``Cap``.
-``ENUM``
-    One of a fixed set, e.g. Offset's ``Corner`` = Sharp/Round/Smooth/Chamfer/None.
-``VALUE``
-    Prompts for a number or string, e.g. Offset's ``Distance``, ``Tolerance``.
-
-How the reference CAD application matches what you type
--------------------------------
-* **Case-insensitive.**
-* **Unique prefix wins** -- the same rule as command names, so ``Dia`` selects
-  ``Diagonal``. An ambiguous prefix is reported, not guessed at.
-* Two forms are accepted: bare (``Corner``) and inline (``Corner=Round``,
-  ``Distance=2.5``, ``BothSides=Yes``).
-* A bare TOGGLE **flips** -- that is what clicking it in the command bar does.
-* A bare ENUM or VALUE needs a value, so the command asks for one and stays on
-  the same step (``NEEDS_VALUE``).
+Rust owns ordered key assignment and exact/key/prefix/enum resolution. Python
+retains command-owned Option/Match objects, Unicode object-protocol conversion,
+value coercion and prompt presentation; these are not alternative resolvers.
 """
 from __future__ import annotations
+
+import array
+import ctypes
+from functools import lru_cache
+import os
+from pathlib import Path
+import sys
+
+
+@lru_cache(maxsize=4)
+def _resolver(path):
+    """Bind only the explicit or adjacent packaged core; no Python replay."""
+    suffix = ('narwhal_pure_core.dll' if sys.platform == 'win32' else
+              'libnarwhal_pure_core.dylib' if sys.platform == 'darwin' else
+              'libnarwhal_pure_core.so')
+    library_path = Path(path).expanduser() if path else Path(__file__).parent / 'native' / suffix
+    try:
+        library = ctypes.CDLL(str(library_path))
+        abi = library.narwhal_pure_core_options_abi
+        abi.argtypes, abi.restype = [], ctypes.c_uint32
+        core = library.narwhal_pure_core_abi_version
+        core.argtypes, core.restype = [], ctypes.c_uint32
+        if core() != 1 or abi() != 1:
+            raise RuntimeError('Required Rust option resolver ABI is stale; not replayed')
+        call = library.narwhal_pure_core_options_resolve
+        point = ctypes.POINTER(ctypes.c_uint32)
+        call.argtypes = [point, ctypes.c_size_t, ctypes.c_uint32, point,
+                         ctypes.c_size_t, ctypes.POINTER(ctypes.c_size_t)]
+        call.restype = ctypes.c_int32
+        prompt = library.narwhal_pure_core_options_prompt
+        prompt.argtypes, prompt.restype = call.argtypes, ctypes.c_int32
+        return call, prompt
+    except (OSError, AttributeError) as error:
+        raise RuntimeError('Required Rust option resolver unavailable; not replayed') from error
+
+
+def _name_words(names):
+    words = [len(names)]
+    for name in names:
+        folded = name.lower()
+        if len(name) > 4096 or len(folded) > 4096:
+            raise RuntimeError('Rust option name exceeds 4096 codepoints; not replayed')
+        words.extend((len(name), *map(ord, name), len(folded), *map(ord, folded)))
+        for ch in name:
+            folded = ch.lower()
+            words.extend((int(ch.isalpha()), len(folded), *map(ord, folded)))
+        if len(words) > 1048576:
+            raise RuntimeError('Rust option packet exceeds limit; not replayed')
+    return tuple(words)
+
+
+# Cache immutable host Unicode descriptors only, never options or mutable values.
+_cached_names = lru_cache(maxsize=32)(_name_words)
+
+
+def _resolve_names(names, text='', operation=1):
+    names = tuple(names)
+    if len(names) > 65536 or len(text) > 4096:
+        raise RuntimeError('Rust option input exceeds limit; not replayed')
+    # Keep the descriptor cache bounded independently of the transport ceiling.
+    pack = _cached_names if len(names) <= 256 and sum(map(len, names)) <= 2048 else _name_words
+    folded = text.lower()
+    words = array.array('I', pack(names))
+    words.extend((len(text), int(text.isdigit()), len(folded), *map(ord, folded)))
+    if words.itemsize != 4 or len(words) > 1048576 or len(folded) > 4096:
+        raise RuntimeError('Rust option packet exceeds limit; not replayed')
+    source = (ctypes.c_uint32 * len(words)).from_buffer(words)
+    output = (ctypes.c_uint32 * len(names))()
+    count = ctypes.c_size_t(len(names) + 1)
+    rc = _resolver(os.environ.get('NARWHAL_PURE_CORE'))[0](
+        source, len(words), operation, output, len(names), ctypes.byref(count))
+    if rc or count.value > len(names):
+        raise RuntimeError(f'Invalid Rust option reply ({rc}); not replayed')
+    result = list(output[:count.value])
+    if operation == 0:
+        if count.value != len(names) or any(
+                pos != 0xffffffff and pos >= len(name)
+                for name, pos in zip(names, result)):
+            raise RuntimeError('Invalid Rust option key positions; not replayed')
+    elif result != sorted(set(result)) or any(i >= len(names) for i in result):
+        raise RuntimeError('Invalid Rust option indices; not replayed')
+    return result
+
 
 # ---------------------------------------------------------------------------
 # option kinds
@@ -156,11 +198,8 @@ def _coerce(option, raw):
             return None, f"{option.name} expects Yes or No (got {text!r})"
         return val, None
     if option.kind == ENUM:
-        for choice in option.choices:
-            if choice.lower() == text.lower():
-                return choice, None
-        # a unique prefix is good enough for an enum value too
-        hits = [c for c in option.choices if c.lower().startswith(text.lower())]
+        indices = _resolve_names(option.choices, text, 2)
+        hits = [option.choices[i] for i in indices]
         if len(hits) == 1:
             return hits[0], None
         if len(hits) > 1:
@@ -213,21 +252,8 @@ def match(text, options, values=None):
     if not name_part:
         return Match(NONE)
 
-    # exact (case-insensitive) name beats the activation letter, which beats
-    # prefix matching
-    hits = [o for o in options if o.name.lower() == name_part.lower()]
-    if not hits and len(name_part) == 1:
-        # the auto-assigned activation letter (see assign_keys) -- the letter
-        # the command bar highlights, so the input the user sees is the input
-        # that works
-        keys = assign_keys(options)
-        hits = [o for o in options
-                if (keys.get(o.name) or "").lower() == name_part.lower()]
-    if not hits and not name_part.isdigit():
-        # a pure-digit input is NEVER an option: digits are the number path
-        # (coordinates/distances/angles at point prompts) and option letters
-        # are always alphabetic. Typing the full word "3point" still matches.
-        hits = [o for o in options if o.name.lower().startswith(name_part.lower())]
+    hits = [options[i] for i in _resolve_names(
+        (o.name for o in options), name_part)]
     if not hits:
         return Match(NONE)
     if len(hits) > 1:
@@ -278,88 +304,65 @@ def format_option(option, values=None):
     return f"{option.name}={value}"
 
 
-def format_prompt(base, options, values=None):
-    """Render a CAD-style prompt: ``Corner 1 ( Diagonal  Cube  Trim=Yes ):``
-
-    The options list goes *inside* brackets before the trailing colon, which is
-    where the reference CAD application puts it. A prompt with no options is returned untouched, so
-    adding this framework cannot change how an option-less command looks.
-    """
-    base = (base or "").strip()
-    if not options:
-        return base
-    rendered = "  ".join(format_option(o, values) for o in options)
-    if base.endswith(":"):
-        return f"{base[:-1].rstrip()} ( {rendered} ):"
-    return f"{base} ( {rendered} )"
-
-
-def prompt_segments(base, options, values=None):
-    """The same prompt as :func:`format_prompt`, split into clickable pieces.
-
-    Returns a list of ``(text, option_name_or_None)``. Segments whose second item
-    is a name are the ones the user can **click** in the command bar; the rest is
-    surrounding punctuation (``( ``, ``  ``, `` ):``) and the base prompt.
-
-    Why this exists: the reference CAD application's command-line options are buttons, not decoration --
-    you click ``2Point`` instead of typing it. To hit-test a click we need to know
-    where each option's text starts and ends, and the only safe way to know that
-    is to build the string out of labelled pieces instead of trying to re-parse
-    the finished line.
-
-    **Invariant:** ``"".join(text for text, _ in prompt_segments(...))`` equals
-    ``format_prompt(...)`` exactly. That is what guarantees the hit-boxes line up
-    with the pixels actually drawn.
-    """
-    base = (base or "").strip()
-    if not options:
-        return [(base, None)] if base else []
-    # mirror format_prompt's bracket placement exactly
-    if base.endswith(":"):
-        head, tail = f"{base[:-1].rstrip()} ( ", " ):"
-    else:
-        head, tail = f"{base} ( ", " )"
-    segments = [(head, None)]
-    for i, option in enumerate(options):
-        if i:
-            segments.append(("  ", None))      # the separator format_prompt uses
-        segments.append((format_option(option, values), option.name))
-    segments.append((tail, None))
+def _prompt_segments(base, fields, labels, mode=0):
+    # Host marshalling only: native owns whitespace, punctuation and field order.
+    base = base or ''
+    fields = tuple(fields)
+    if len(base) > 4096 or len(fields) > 65536:
+        raise RuntimeError('Rust option prompt exceeds limit; not replayed')
+    words = array.array('I', (len(base), *map(ord, base), len(fields)))
+    for field in fields:
+        if len(field) > 4096:
+            raise RuntimeError('Rust option field exceeds limit; not replayed')
+        words.extend((len(field), *map(ord, field)))
+        if len(words) > 1048576:
+            raise RuntimeError('Rust option prompt exceeds limit; not replayed')
+    source = (ctypes.c_uint32 * len(words)).from_buffer(words)
+    output = (ctypes.c_uint32 * (len(words) + 6 * len(fields) + 32))()
+    count = ctypes.c_size_t(len(output) + 1)
+    rc = _resolver(os.environ.get('NARWHAL_PURE_CORE'))[1](
+        source, len(words), mode, output, len(output), ctypes.byref(count))
+    if rc or not 1 <= count.value <= len(output) or output[0] > 2 * len(fields) + 1:
+        raise RuntimeError(f'Invalid Rust option prompt reply ({rc}); not replayed')
+    segments, seen, pos = [], [], 1
+    for _ in range(output[0]):
+        if pos + 2 > count.value:
+            raise RuntimeError('Truncated Rust option prompt; not replayed')
+        label, length = output[pos:pos + 2]
+        pos += 2
+        if pos + length > count.value or label != 0xffffffff and label >= len(labels):
+            raise RuntimeError('Invalid Rust option prompt span; not replayed')
+        codepoints = output[pos:pos + length]
+        if any(cp > 0x10ffff for cp in codepoints):
+            raise RuntimeError('Invalid Rust option text; not replayed')
+        text = ''.join(map(chr, codepoints))
+        pos += length
+        segments.append((text, None if label == 0xffffffff else labels[label]))
+        if label != 0xffffffff:
+            seen.append(label)
+    if pos != count.value or seen != list(range(len(labels))):
+        raise RuntimeError('Invalid Rust option prompt fields; not replayed')
     return segments
 
 
+def format_prompt(base, options, values=None):
+    """Native-assembled CAD prompt, including the trailing-colon convention."""
+    return ''.join(text for text, _ in prompt_segments(base, options, values))
+
+
+def prompt_segments(base, options, values=None):
+    """Native-assembled text and original clickable option names."""
+    options = tuple(options or ())
+    return _prompt_segments(base, [format_option(o, values) for o in options],
+                            [o.name for o in options])
+
+
 def assign_keys(options):
-    """Auto-assign each option its activation letter: a ``name -> letter`` map.
-
-    The options are walked in display order and each one CLAIMS the first
-    alphabetic character of its name that no earlier option has already
-    claimed. Digits are never claimed: a typed digit is a coordinate, distance
-    or angle at a point prompt, so option letters must always be letters and
-    the highlighted letter can never collide with the number path.
-
-    This is why ``2Point`` gets ``P`` and ``3Point`` gets ``O``: P is already
-    taken when 3Point is reached, so it takes the next free letter in the
-    word. The same rule gives ``Deformable`` -> D and ``Diameter`` -> I.
-
-    The map is computed PER OPTION SET, because a letter's availability
-    depends on its siblings. The matcher and the command-bar renderer both
-    derive their behaviour from this one function over the same set, so the
-    letter the bar highlights is always the letter that works.
-
-    An option whose letters are all claimed maps to ``None``: it stays
-    activatable by typing its name, it just has no highlighted letter.
-    """
-    keys = {}
-    claimed = set()
-    for opt in options or ():
-        key = None
-        for ch in opt.name:
-            if ch.isalpha() and ch.lower() not in claimed:
-                key = ch
-                claimed.add(ch.lower())
-                break
-        keys[opt.name] = key
-    return keys
+    """Required native assignment; original Option identities stay in the host."""
+    names = [o.name for o in (options or ())]
+    positions = _resolve_names(names, operation=0)
+    return {name: None if pos == 0xffffffff else name[pos]
+            for name, pos in zip(names, positions)}
 
 
 def key_split(text, key):
@@ -385,36 +388,17 @@ def key_split(text, key):
 
 
 def value_prompt(option):
-    """The sub-prompt shown when a bare ENUM/VALUE option needs a value."""
-    if option.kind == ENUM:
-        return f"{option.name} ( {'  '.join(option.choices)} ):"
-    return f"{option.name}:"
+    """Host name presentation; ENUM punctuation/order is assembled natively."""
+    return ''.join(text for text, _ in value_prompt_segments(option))
 
 
 def value_prompt_segments(option):
-    """Split :func:`value_prompt` into clickable ENUM choice segments.
-
-    Each ENUM choice is labelled with its own value so the command bar can
-    hit-test it. VALUE prompts remain one unlabelled segment. Concatenating the
-    segment text always reconstructs :func:`value_prompt` byte-for-byte.
-    """
+    """Clickable choice labels preserve their original host objects."""
     if option.kind != ENUM:
-        return [(value_prompt(option), None)]
-
-    segments = [(f"{option.name} ( ", None)]
-    for i, choice in enumerate(option.choices):
-        if i:
-            segments.append(("  ", None))
-        segments.append((choice, choice))
-    segments.append((" ):", None))
-    return segments
+        return [(f"{option.name}:", None)]
+    return _prompt_segments(option.name, option.choices, option.choices, 1)
 
 
 def defaults(options):
     """Starting value dict for a command's options (MODE options hold none)."""
     return {o.name: o.default for o in (options or ()) if o.kind != MODE}
-
-
-def names(options):
-    """Option names used by autocomplete and compatibility checks."""
-    return [o.name for o in (options or ())]

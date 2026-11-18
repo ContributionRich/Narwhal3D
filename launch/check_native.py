@@ -19,7 +19,7 @@ def check_pure_consumers():
     """
     from narwhal3d import (native_interpolate, native_coil, native_stl, native_obj,
                           native_vector_export, native_dxf, native_tween, native_tessellate,
-                          native_bspline, native_preview, native_dxf_reader, native_nearest)
+                          native_bspline, native_preview, native_dxf_reader, native_nearest, options)
 
     def interpolation():
         points = [(0., 0., 0.), (1., 0., 0.)]
@@ -158,12 +158,23 @@ def check_pure_consumers():
         if native_nearest.search(packed, (.25, 2., 0.)) != (0.25, (0.25, 0., 0.), 2., False):
             raise RuntimeError('nearest callback search returned an invalid startup result')
 
+    def option_framework():
+        descriptors = (options.Option('2Point', options.MODE),
+                       options.Option('3Point', options.MODE))
+        result = options.match('o', descriptors)
+        if result.status != options.BRANCH or result.option is not descriptors[1]:
+            raise RuntimeError('option resolver lost activation-key priority or identity')
+        if options.prompt_segments('Point:', descriptors) != [
+                ('Point ( ', None), ('2Point', '2Point'), ('  ', None),
+                ('3Point', '3Point'), (' ):', None)]:
+            raise RuntimeError('option prompt lost native text or clickable labels')
+
     for owner, probe in (('interpolation', interpolation), ('coil', coil),
                          ('catenary', catenary), ('STL', stl), ('OBJ', obj),
                          ('vector', vector), ('DXF', dxf), ('Tween', tween),
                          ('earclip', earclip), ('control preview', control_preview),
                          ('preview', preview), ('DXF reader', dxf_reader),
-                         ('nearest', nearest)):
+                         ('nearest', nearest), ('options', option_framework)):
         try:
             probe()
         except Exception as error:

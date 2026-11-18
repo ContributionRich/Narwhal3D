@@ -30,7 +30,6 @@ import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-
 def _load(name, filename):
     spec = importlib.util.spec_from_file_location(
         name, os.path.join(ROOT, "narwhal3d", filename))
@@ -39,12 +38,10 @@ def _load(name, filename):
     spec.loader.exec_module(mod)
     return mod
 
-
 cmdbar = _load("narwhal_cmdbar_test", "cmdbar.py")
 opts = _load("narwhal_options_test", "options.py")
 
 results = []
-
 
 def check(name):
     def deco(fn):
@@ -55,12 +52,10 @@ def check(name):
             results.append((name, "FAIL", repr(e)))
     return deco
 
-
 #: a deterministic stand-in for blf.dimensions: every glyph is 7px wide. The real
 #: renderer passes the measured width; the arithmetic being tested is identical.
 def measure(text):
     return 7 * len(text)
-
 
 CIRCLE_OPTS = (
     opts.Option("Deformable", opts.TOGGLE, default=False),
@@ -72,29 +67,33 @@ SCALE_OPTION = opts.Option(
     "Scale", opts.ENUM, default="No", choices=("No", "1D", "3D"))
 VALUE_OPTION = opts.Option("Distance", opts.VALUE, default=1.0)
 
-
 # ---------------------------------------------------------------------------
 # 1. the segments must reconstruct the drawn line EXACTLY
 # ---------------------------------------------------------------------------
+
 
 @check("no bpy was imported")
 def _():
     assert "bpy" not in sys.modules
 
 
-@check("segments rejoin into exactly what format_prompt renders")
+@check("prompt->host projection smoke (Unicode+labels+toggle+ENUM join)")
 def _():
-    for base in ("Radius:", "Corner of base:", "Start of line", ""):
-        segs = opts.prompt_segments(base, CIRCLE_OPTS, {"Deformable": False})
-        joined = "".join(t for t, _ in segs)
-        want = opts.format_prompt(base, CIRCLE_OPTS, {"Deformable": False})
-        assert joined == want, f"{base!r}: {joined!r} != {want!r}"
-
-
-@check("a prompt with no options yields one unlabelled segment")
-def _():
-    segs = opts.prompt_segments("Point 1:", (), None)
-    assert segs == [("Point 1:", None)], segs
+    # The native options_ffi prompt export assigns the label positions; the
+    # host adapter projects field index -> option name. Both halves must hold
+    # or a wrong native label/content would slip through this smoke.
+    segs = opts.prompt_segments("Radius:", CIRCLE_OPTS, {"Deformable": True})
+    joined = "".join(t for t, _ in segs)
+    assert "Deformable=Yes" in joined and "( " in joined and " )" in joined, joined
+    assert dict((n, t) for t, n in segs if n is not None)["Deformable"] == "Deformable=Yes"
+    labels = [n for _, n in segs if n is not None]
+    assert labels == ["Deformable", "2Point", "3Point", "Vertical"], labels
+    v = opts.value_prompt_segments(SCALE_OPTION)
+    assert "".join(t for t, _ in v) == opts.value_prompt(SCALE_OPTION) == "Scale ( No  1D  3D ):", v
+    unicode_option = opts.Option("İ", opts.MODE)
+    assert opts.prompt_segments("\x1c Start : \u2003", (unicode_option,)) == [
+        ("Start ( ", None), ("İ", "İ"), (" ):", None)]
+    assert [n for _, n in v if n is not None] == ["No", "1D", "3D"]
 
 
 @check("every declared option appears as exactly one labelled segment")
@@ -102,27 +101,6 @@ def _():
     segs = opts.prompt_segments("Radius:", CIRCLE_OPTS, {"Deformable": False})
     named = [n for _, n in segs if n is not None]
     assert named == ["Deformable", "2Point", "3Point", "Vertical"], named
-
-
-@check("a toggle's label carries its current value (so the box covers it)")
-def _():
-    segs = opts.prompt_segments("Radius:", CIRCLE_OPTS, {"Deformable": True})
-    text = dict((n, t) for t, n in segs if n is not None)["Deformable"]
-    assert text == "Deformable=Yes", text
-
-
-@check("ENUM value segments reconstruct the value prompt byte-identically")
-def _():
-    segs = opts.value_prompt_segments(SCALE_OPTION)
-    joined = "".join(text for text, _ in segs)
-    assert joined == opts.value_prompt(SCALE_OPTION) == "Scale ( No  1D  3D ):"
-
-
-@check("each ENUM choice is individually labelled with its value")
-def _():
-    segs = opts.value_prompt_segments(SCALE_OPTION)
-    labelled = [(text, name) for text, name in segs if name is not None]
-    assert labelled == [("No", "No"), ("1D", "1D"), ("3D", "3D")], labelled
 
 
 @check("Scale value choices produce pinned command-bar hit boxes")
@@ -147,6 +125,7 @@ def _():
 # ---------------------------------------------------------------------------
 # 2. option hit-boxes
 # ---------------------------------------------------------------------------
+
 
 @check("each option gets a box, in draw order")
 def _():
@@ -206,10 +185,10 @@ def _():
     assert cmdbar.hit_option(5, []) is None
     assert cmdbar.hit_option(5, None) is None
 
-
 # ---------------------------------------------------------------------------
 # 3. the autocomplete list's rows
 # ---------------------------------------------------------------------------
+
 
 @check("rows stack upward from just above the prompt")
 def _():
@@ -282,10 +261,10 @@ def _():
         hits = [n for n, ry in rows if ry <= y < ry + 16]
         assert len(hits) <= 1, (y, hits)
 
-
 # ---------------------------------------------------------------------------
 # 4. matching follows the documented compatibility behavior
 # ---------------------------------------------------------------------------
+
 
 @check("'ci' offers Circle as a unique prefix")
 def _():
@@ -300,45 +279,9 @@ def _():
     hits = cmdbar.match_commands("c", names)
     assert hits == ["Circle", "Cone", "Copy", "Cylinder"], hits
 
-
 # ---------------------------------------------------------------------------
 # 5. activation letters: auto-assigned per option set, first free letter
 # ---------------------------------------------------------------------------
-
-@check("assign_keys takes the first free alphabetic letter, in display order")
-def _():
-    # Deformable claims D; 2Point skips its digit and claims P; 3Point's P is
-    # taken, so it claims the next free letter in the word (the lowercase o).
-    keys = opts.assign_keys(CIRCLE_OPTS)
-    assert keys == {"Deformable": "D", "2Point": "P", "3Point": "o",
-                    "Vertical": "V"}, keys
-
-
-@check("digits are never keys -- they are the number path")
-def _():
-    keys = opts.assign_keys(CIRCLE_OPTS)
-    assert all(k is None or k.isalpha() for k in keys.values()), keys
-
-
-@check("assignment depends on display order")
-def _():
-    swapped = (opts.Option("3Point", opts.MODE), opts.Option("2Point", opts.MODE))
-    assert opts.assign_keys(swapped) == {"3Point": "P", "2Point": "o"}, \
-        opts.assign_keys(swapped)
-
-
-@check("an option with every letter claimed gets None (no highlighted letter)")
-def _():
-    crowded = (opts.Option("A", opts.MODE), opts.Option("B", opts.MODE),
-               opts.Option("ab", opts.MODE))
-    assert opts.assign_keys(crowded) == {"A": "A", "B": "B", "ab": None}
-
-
-@check("claiming is case-insensitive")
-def _():
-    keys = opts.assign_keys((opts.Option("Point", opts.MODE),
-                             opts.Option("3point", opts.MODE)))
-    assert keys["Point"] == "P" and keys["3point"] == "o", keys
 
 
 @check("the assigned key is exactly what match() accepts for the option")
@@ -360,12 +303,6 @@ def _():
         assert m.status == opts.NONE, (digit, m)
 
 
-@check("typing the full name of a digit-led option still works")
-def _():
-    m = opts.match("3point", CIRCLE_OPTS, {"Deformable": False})
-    assert m.option is CIRCLE_OPTS[2], m
-
-
 @check("key_split lands on the first occurrence of the key and rejoins")
 def _():
     cases = (("3Point", "o", ("3P", "o", "int")),
@@ -378,7 +315,6 @@ def _():
         assert got == want, (text, key, got)
         if got is not None:
             assert "".join(got) == text, (text, got)
-
 
 # ---------------------------------------------------------------------------
 failed = 0

@@ -237,7 +237,7 @@ def _():
         "spike/test_native_rebuild_fit.py", "spike/test_rebuild_owned.py",
         "spike/test_native_arclength.py",
         "spike/test_native_interpolate.py",
-        "spike/test_native_tween.py",
+        "spike/test_native_tween.py", "spike/test_cmdbar_hits.py",
     }
     actual = set(gate.PURE_CORE_PYTESTS)
     assert actual == expected, f"missing suites: {sorted(expected - actual)}; unexpected suites: {sorted(actual - expected)}"
@@ -326,7 +326,9 @@ def _():
     closure = gate.require_rust_public_closure(crate)
     assert set(closure) == set(gate.RUST_INTEGRATION_FILES)
     assert ROUND23_FILES | ROUND24_FILES | DXF_LEGACY_FILES | NEAREST25_FILES <= set(closure)
-    assert set(gate.RUST_REQUIRED_MODULE_FILES) == ROUND24_MODULES
+    assert set(gate.RUST_REQUIRED_MODULE_FILES) == ROUND24_MODULES | {
+        "native/pure_core/src/options_owned.rs", "native/pure_core/src/options_ffi.rs",
+        "native/pure_core/src/options_prompt.rs"}
     assert set(gate.RUST_INTEGRATION_SUITES) == {
             "alias_golden", "unit_golden", "interpolate_golden", "svgpath_golden",
             "bearing_golden", "calc_golden", "coords_golden", "unitformat_golden",
@@ -336,6 +338,8 @@ def _():
             "catenary_boundary", "catenary_golden", "obj_golden", "stl_legacy_abi", "stl_name_prefix",
             "dxf_owned", "vector23_golden", "tween_golden", "obj_legacy_abi", "encoder_legacy_abi",
             "earclip24_golden", "preview24_golden", "dxf_reader24", "dxf_legacy_abi", "nearest25_golden",
+            "options29_engine", "options29_ffi", "options29_registration",
+            "options29_prompt", "options29_prompt_ffi",
         }
     public_source = (Path(ROOT) / "scripts/create_public_branch.py").read_text()
     for retired in ("spike/alias_reference.py", "spike/units_reference.py", "spike/interpolate_reference.py",

@@ -130,11 +130,13 @@ PURE_CORE_PYTESTS = (
     "spike/test_interpolate_owned_boundary.py",
     "spike/test_nearest25_owned.py",
     "spike/test_native_tween.py",
+    "spike/test_cmdbar_hits.py",
 )
 
 
 # Explicit Rust oracle-retirement suites and their source/fixture closure.
-RUST_INTEGRATION_SUITES = ('alias_golden', 'unit_golden', 'interpolate_golden', 'svgpath_golden', 'bearing_golden', 'calc_golden', 'coords_golden', 'unitformat_golden', 'macro_golden', 'joinchain_golden', 'rebuild_golden', 'blend_golden', 'norm_golden', 'nurbs_golden', 'arclength_golden', 'coil_golden', 'interpolate_helpers_golden', 'stl_owned', 'stl_import_safety', 'catenary_boundary', 'catenary_golden', 'obj_golden', 'stl_legacy_abi', 'stl_name_prefix', 'dxf_owned', 'vector23_golden', 'tween_golden', 'obj_legacy_abi', 'encoder_legacy_abi', 'earclip24_golden', 'preview24_golden', 'dxf_reader24', 'dxf_legacy_abi', 'nearest25_golden')
+RUST_INTEGRATION_SUITES = ('alias_golden', 'unit_golden', 'interpolate_golden', 'svgpath_golden', 'bearing_golden', 'calc_golden', 'coords_golden', 'unitformat_golden', 'macro_golden', 'joinchain_golden', 'rebuild_golden', 'blend_golden', 'norm_golden', 'nurbs_golden', 'arclength_golden', 'coil_golden', 'interpolate_helpers_golden', 'stl_owned', 'stl_import_safety', 'catenary_boundary', 'catenary_golden', 'obj_golden', 'stl_legacy_abi', 'stl_name_prefix', 'dxf_owned', 'vector23_golden', 'tween_golden', 'obj_legacy_abi', 'encoder_legacy_abi', 'earclip24_golden', 'preview24_golden', 'dxf_reader24', 'dxf_legacy_abi', 'nearest25_golden', 'options29_engine',
+'options29_ffi', 'options29_prompt', 'options29_prompt_ffi', 'options29_registration')
 RUST_INTEGRATION_FILES = (
     'native/pure_core/tests/fixtures/nearest25_host_windows_msvc.jsonl',
     'native/pure_core/tests/fixtures/nearest25_callbacks_windows_msvc.tsv',
@@ -337,11 +339,19 @@ RUST_INTEGRATION_FILES = (
     'native/pure_core/tests/fixtures/nearest25_callbacks_linux.tsv',
     'native/pure_core/tests/fixtures/nearest25_host_linux.jsonl',
     'native/pure_core/tests/fixtures/nearest25_provenance.json',
+    'native/pure_core/tests/options29_engine.rs',
+    'native/pure_core/tests/options29_ffi.rs',
+    'native/pure_core/tests/options29_prompt.rs',
+    'native/pure_core/tests/options29_prompt_ffi.rs',
+    'native/pure_core/tests/options29_registration.rs',
 )
 
 
 # New producer modules must survive the public source copy as well as the tests.
-RUST_REQUIRED_MODULE_FILES = ("native/pure_core/src/preview_primitives.rs",)
+RUST_REQUIRED_MODULE_FILES = ("native/pure_core/src/preview_primitives.rs",
+                            "native/pure_core/src/options_owned.rs",
+                            "native/pure_core/src/options_ffi.rs",
+                            "native/pure_core/src/options_prompt.rs",)
 
 
 # Additive parser ABI: core ABI 1 and all its existing exports remain unchanged.
@@ -1891,8 +1901,8 @@ def main(argv: list[str]) -> int:
     else:
         print(f"pure-core source gate: OK (crate {report['crate']})")
         for name in ("fmt", "clippy", "tests", "release_build",
-                     "direct_abi", "nearest_batch", "curve_hits", "svg_unit", "adapter",
-                     "windows_check"):
+                     "direct_abi", "nearest_batch", "curve_hits", "svg_unit",
+                     "adapter", "windows_check"):
             step = report["steps"][name]
             detail = step.get("passed", step.get("suites", step.get("reason", "")))
             print(f"  [{name}] {step['status']}"

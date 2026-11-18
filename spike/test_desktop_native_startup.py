@@ -19,7 +19,7 @@ SOURCES=('native_textfield','native_popup','command_transcript','native_transcri
          'native_interpolate','native_coil','native_stl','native_obj',
          'native_vector_export','native_dxf','native_tween',
          'native_tessellate','native_bspline','native_preview','native_dxf_reader',
-         'native_nearest')
+         'native_nearest','options')
 
 
 REQUIRED_PURE_EXPORTS = {
@@ -87,6 +87,15 @@ REQUIRED_PURE_EXPORTS.update({
 PROTOCOL_EXPORTS.update({name: REQUIRED_PURE_EXPORTS[name] for name in (
     'narwhal_pure_core_nearest_on_nurbs',
     'narwhal_pure_core_nearest_on_callbacks_v1')})
+
+
+REQUIRED_PURE_EXPORTS.update({
+    'narwhal_pure_core_options_abi': 'options',
+    'narwhal_pure_core_options_resolve': 'options',
+    'narwhal_pure_core_options_prompt': 'options',
+})
+PROTOCOL_EXPORTS.update({name: owner for name, owner in REQUIRED_PURE_EXPORTS.items()
+                         if owner == 'options' and not name.endswith('_abi')})
 
 
 def elf_export_entries(data):
@@ -279,7 +288,7 @@ class DesktopNativeStartup(unittest.TestCase):
                  'vector':'vector', 'DXF':'dxf', 'Tween':'tween',
                  'earclip':'earclip', 'control preview':'control_preview',
                  'preview':'preview', 'DXF reader':'dxf_reader',
-                 'nearest':'nearest'}
+                 'nearest':'nearest', 'options':'option_framework'}
         for symbol,owner in REQUIRED_PURE_EXPORTS.items():
             with self.subTest(symbol=symbol):
                 marker = "('"+owner+"', "+names[owner]+")"
