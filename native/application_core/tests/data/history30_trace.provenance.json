@@ -1,0 +1,73 @@
+{
+  "schema": "history30.provenance/v1",
+  "task": "HISTORY-TRACE-30",
+  "data_file": "tests/data/history30_trace.json",
+  "sha256_data": "18b505bed8d133d1fd713a429c357e555b3db41eebbbc6fb5500aa6622e040c2",
+  "bytes_data": 15588,
+  "rows": 350,
+  "op_histogram": {
+    "abandon": 13,
+    "begin": 72,
+    "capture": 78,
+    "clear": 11,
+    "enable": 12,
+    "end": 86,
+    "redo": 37,
+    "undo": 41
+  },
+  "begin_arg_kinds": {
+    "str:'Move'": 14,
+    "null": 16,
+    "str:'é\\x00'": 15,
+    "str:''": 15,
+    "int:42": 12
+  },
+  "begin_args_note": "None and empty-string are coerced to the default name by the host facade (str(name or 'Change')); 42 (int) is stringified to '42'; 'Move' and 'é\\u0000' are used verbatim.",
+  "payload_index_domain": [
+    0,
+    1,
+    2,
+    3,
+    4
+  ],
+  "head_row": [
+    "capture",
+    3,
+    false,
+    [],
+    [],
+    null,
+    0,
+    1,
+    true
+  ],
+  "tail_row": [
+    "begin",
+    "Move",
+    15,
+    [
+      [
+        14,
+        "Change",
+        1,
+        0
+      ]
+    ],
+    [],
+    [
+      15,
+      "Move",
+      0,
+      0
+    ],
+    1,
+    16,
+    true
+  ],
+  "extraction": {
+    "origin_capture": "50267dd6",
+    "extracted_from_head": "60891bcf",
+    "source_path": "spike/test_rust_history_trace.py",
+    "method": "exact original JSON text between the r''' markers, written verbatim (AST-validated via json.loads); NOT derived from native output"
+  }
+}

@@ -1,15 +1,4 @@
-"""Frozen expected DATA for the pre-retirement seed-187, limit-3 lifecycle.
-
-350 transitions preserve the original comparison, including every record field.
-Captured from the archived pre-retirement reference, not from Rust. No executable
-history implementation or local archive dependency is needed to consume this data.
-Each row: op, argument (payload index for capture/navigation), return value, undo,
-redo, open record, depth, next serial, enabled. Records: serial, name, before/after
-payload indices; index zero is None. Original reference origin: 50267dd6.
-"""
-import json
-
-TRACE = json.loads(r'''[
+[
 ["capture",3,false,[],[],null,0,1,true],
 ["undo",1,null,[],[],null,0,1,true],
 ["end",null,false,[],[],null,0,1,true],
@@ -360,4 +349,4 @@ TRACE = json.loads(r'''[
 ["end",null,true,[[14,"Change",1,0]],[],null,0,15,true],
 ["capture",0,false,[[14,"Change",1,0]],[],null,0,15,true],
 ["begin","Move",15,[[14,"Change",1,0]],[],[15,"Move",0,0],1,16,true]
-]''')
+]

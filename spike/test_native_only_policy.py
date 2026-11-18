@@ -19,7 +19,7 @@ sys.path.insert(0, str(ROOT / 'scripts'))
 import audit_public_tree as audit
 import create_public_branch as public
 
-DATA_FILES = ('spike/test_ui_core_golden.py', 'spike/test_rust_history_trace.py')
+DATA_FILES = ('spike/test_ui_core_golden.py',)
 RETIRED = {'LegacyUndoStack', 'LegacyBinding', '_LegacyTextField', 'PopupModel', 'Reference', '_handover',
            '_legacy', '_LegacyCommandHistory', '_bare_value', '_NUMBER_RE', '_LENGTH_RE', '_FEET_INCH_RE'}
 PRODUCT_FILES = ('undo', 'native_history', 'document_metadata', 'native_document_session',
@@ -130,13 +130,23 @@ class PolicyTests(unittest.TestCase):
     def test_retired_public_oracles_are_data_and_rust_only(self):
         for name in ('alias_reference', 'units_reference', 'interpolate_reference',
                      'test_interpolate_math_owned', 'bearing_reference', 'unitformat_reference',
-                     'joinchain_reference', 'rebuild_reference', 'test_python_norm_owned'):
+                     'joinchain_reference', 'rebuild_reference', 'test_python_norm_owned',
+                     'test_rust_history_trace'):
             self.assertFalse((ROOT / 'spike' / (name + '.py')).exists(), name)
         for suite in ('alias_golden', 'unit_golden', 'interpolate_golden',
                       'svgpath_golden', 'calc_golden', 'coords_golden', 'bearing_golden',
                       'unitformat_golden', 'macro_golden', 'joinchain_golden', 'rebuild_golden',
                       'blend_golden', 'norm_golden', 'nurbs_golden', 'arclength_golden'):
             self.assertIn('native/pure_core/tests/' + suite + '.rs', public.NATIVE_FILES)
+
+    def test_history_acceptance_is_native_and_host_replay_is_retained(self):
+        for path in ('native/application_core/tests/history30_golden.rs',
+                     'native/application_core/tests/data/history30_trace.json',
+                     'native/application_core/tests/data/history30_trace.provenance.json'):
+            self.assertIn(path, public.NATIVE_FILES)
+            self.assertIn(path, audit.REQUIRED)
+        self.assertEqual(len(json.loads(source('native/application_core/tests/data/history30_trace.json'))), 350)
+        self.assertIn('history30_trace.json', source('spike/test_rust_history_abi.py'))
 
     def test_blend_host_has_no_embedded_numeric_reference(self):
         tree = ast.parse(source('spike/test_native_blend.py'))

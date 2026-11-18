@@ -194,7 +194,9 @@ REQUIRED = {
     "spike/test_ai_v9_lifecycle_gui.py",
     "docs/reviews/2026-10-31-ui-regressions.md",
     "docs/reviews/2026-10-31-native-only.md",
-    "spike/test_rust_history_trace.py", "spike/test_numparse_owned.py",
+    "native/application_core/tests/history30_golden.rs",
+    "native/application_core/tests/data/history30_trace.json",
+    "native/application_core/tests/data/history30_trace.provenance.json", "spike/test_numparse_owned.py",
     "native/pure_core/src/numparse_owned.rs",
     "native/application_core/Cargo.toml", "native/application_core/Cargo.lock",
     "native/application_core/README.md", "native/application_core/OPENNURBS_LICENSE",
@@ -987,14 +989,13 @@ def frozen_json_scan(path: str, blob: bytes) -> bytes:
 
 FROZEN_DATA_FILES = {
     "spike/test_ui_core_golden.py": "DATA",
-    "spike/test_rust_history_trace.py": "TRACE",
 }
 
 
 def frozen_data_scan(path: str, blob: bytes) -> bytes:
     """Scan decoder source, not incidental words in a frozen DATA literal.
 
-    Only these two reviewed fixtures may use literal decoding. Reject definitions,
+    Only reviewed Python fixtures may use literal decoding. Reject definitions,
     aliases, arbitrary calls and extra assignments rather than exempting a file.
     Raw bytes still receive the secret scan.
     """
@@ -1287,7 +1288,10 @@ def self_check() -> None:
                          "narwhal3d/native_textfield.py", "narwhal3d/native_popup.py",
                          "scripts/check_ui_core.py", "scripts/test_release_ui_core.py",
                          "spike/test_shell_popup.py", "spike/test_textfield.py",
-                         "spike/test_rust_history_trace.py", "spike/test_native_only_policy.py",
+                         "native/application_core/tests/history30_golden.rs",
+                         "native/application_core/tests/data/history30_trace.json",
+                         "native/application_core/tests/data/history30_trace.provenance.json",
+                         "spike/test_native_only_policy.py",
                          "spike/test_ai_v4_native.py", "spike/test_ai_accepted_review_native.py",
                      })
     for path in closure:

@@ -60,7 +60,7 @@ class RealHistory(unittest.TestCase):
                 None if stack._open is None else (id(stack._open), self.fields(stack._open)))
 
     def test_reference_lifecycle(self):
-        from test_rust_history_trace import TRACE
+        TRACE = json.loads((ROOT / "native/application_core/tests/data/history30_trace.json").read_bytes())
         stack = self.stack(3)
         payloads = [None, Payload(), [], {}, Payload()]
 
