@@ -19,7 +19,7 @@ sys.path.insert(0, str(ROOT / 'scripts'))
 import audit_public_tree as audit
 import create_public_branch as public
 
-DATA_FILES = ('spike/test_ui_core_golden.py',)
+DATA_FILES = ('native/ui_core/tests/data/host_ui31.json',)
 RETIRED = {'LegacyUndoStack', 'LegacyBinding', '_LegacyTextField', 'PopupModel', 'Reference', '_handover',
            '_legacy', '_LegacyCommandHistory', '_bare_value', '_NUMBER_RE', '_LENGTH_RE', '_FEET_INCH_RE'}
 PRODUCT_FILES = ('undo', 'native_history', 'document_metadata', 'native_document_session',
@@ -40,25 +40,6 @@ def assert_retired_absent(test, text):
     test.assertFalse(names & RETIRED, names & RETIRED)
     test.assertIsNone(audit.runtime_archive_problem(text.encode()))
 
-
-def assert_data_only(test, text):
-    """Permit literal DATA and its standard decoding, not an oracle hidden in a fixture."""
-    tree = ast.parse(text)
-    allowed_calls = {'json.loads', 'zlib.decompress', 'base64.b85decode'}
-    for statement in tree.body:
-        if isinstance(statement, ast.Expr) and isinstance(statement.value, ast.Constant):
-            test.assertIsInstance(statement.value.value, str)
-        elif isinstance(statement, ast.Import):
-            test.assertTrue(all(a.name in {'json', 'zlib', 'base64'} and a.asname is None
-                                for a in statement.names))
-        else:
-            test.assertIsInstance(statement, ast.Assign)
-            test.assertTrue(all(isinstance(t, ast.Name) for t in statement.targets))
-            for node in ast.walk(statement.value):
-                test.assertIsInstance(node, (ast.Call, ast.Attribute, ast.Name, ast.Load, ast.Constant))
-                if isinstance(node, ast.Call):
-                    test.assertIn(ast.unparse(node.func), allowed_calls)
-                    test.assertFalse(node.keywords)
 
 
 def prefix_namespace():
@@ -226,8 +207,12 @@ class PolicyTests(unittest.TestCase):
     def test_public_fixtures_are_data_not_reference_engines(self):
         for path in DATA_FILES:
             with self.subTest(path=path):
-                assert_data_only(self, source(path))
-                self.assertIn(path, public.TEST_FILES)
+                try:
+                    data = json.loads(source(path))
+                except ValueError as error:
+                    self.fail(f'captured data must be non-executable JSON: {error}')
+                self.assertIsInstance(data, dict)
+                self.assertIn(path, public.NATIVE_FILES)
                 self.assertIn(path, audit.REQUIRED)
         retired = 'spike/fixtures/textfield_168212d4.py'
         self.assertNotIn(retired, public.TEST_FILES)
@@ -259,7 +244,7 @@ class PolicyTests(unittest.TestCase):
         import build_linux_native as packaging
         selected = set(public.TEST_FILES + public.NATIVE_FILES + public.LAUNCH_FILES)
         self.assertEqual(len(packaging.UI_CORE_EXPORTS), 18)
-        self.assertEqual(len(packaging.UI_CORE_REQUIRED_SOURCE), 33)
+        self.assertEqual(len(packaging.UI_CORE_REQUIRED_SOURCE), 36)
         for path in ('native/ui_core/' + name for name in packaging.UI_CORE_REQUIRED_SOURCE):
             self.assertIn(path, selected)
             self.assertIn(path, audit.REQUIRED)
@@ -388,16 +373,18 @@ class PolicyTests(unittest.TestCase):
         self.assertNotIn('spike/test_ai_v8_native.py', text)
 
     def test_audit_data_literal_is_not_a_file_exemption(self):
-        path = DATA_FILES[0]
-        # A task-like token in compressed data is not provenance prose.
+        path = 'spike/ui_golden_data.py'
         token = 'g' + '-9'
-        safe = ('import json\nDATA = json.loads(' + repr(token) + ')\n').encode()
+        safe = b'import json\nDATA = json.loads("[]")\n'
+        self.assertEqual(audit.frozen_data_scan(path, safe), safe)
         self.assertEqual(audit.audit_entries({path: ('100644', safe)}, require_manifest=False), [])
-        for extra in (b'\ndef reference(): return 1\n', b'\nDATA = dangerous()\n',
-                      ('\n# ' + token + '\n').encode()):
-            self.assertTrue(audit.audit_entries({path: ('100644', safe + extra)}, require_manifest=False))
-        unsafe = b'import os\nDATA = os.system("do not execute")\n'
-        self.assertTrue(audit.audit_entries({path: ('100644', unsafe)}, require_manifest=False))
+        marked = safe + ('\n# ' + token + '\n').encode()
+        self.assertEqual(audit.frozen_data_scan(path, marked), marked)
+        self.assertTrue(audit.audit_entries({path: ('100644', marked)}, require_manifest=False))
+        for retired in ('spike/test_ui_core_golden.py', 'spike/test_rust_history_trace.py'):
+            self.assertIsNotNone(audit.retirement_path_problem(retired))
+            self.assertFalse((ROOT / retired).exists())
+            self.assertNotIn(retired, public.TEST_FILES)
 
     def test_public_selection_rejects_nested_archive_without_copying_root_archive(self):
         with tempfile.TemporaryDirectory(prefix='native-publish-') as tmp:
@@ -488,7 +475,7 @@ class MutationTests(unittest.TestCase):
              'test_runtime_archive_imports_and_artifacts_are_rejected'),
             ('root ignore removed', patch.dict(globals(), source=lambda p: original(p).replace('/legacy/\n', '') if p == '.gitignore' else original(p)),
              'test_root_archive_is_ignored'),
-            ('data fixture unregistered', patch.object(public, 'TEST_FILES', tuple(p for p in public.TEST_FILES if p != DATA_FILES[0])),
+            ('data fixture unregistered', patch.object(public, 'NATIVE_FILES', tuple(p for p in public.NATIVE_FILES if p != DATA_FILES[0])),
              'test_public_fixtures_are_data_not_reference_engines'),
             ('alternate engine restored', patch.dict(globals(), source=lambda p: original(p) + '\nclass LegacyUndoStack: pass\n' if p == 'narwhal3d/undo.py' else original(p)),
              'test_product_has_no_retired_engine_or_archive_resolver'),

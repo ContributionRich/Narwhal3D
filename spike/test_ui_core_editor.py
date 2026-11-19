@@ -9,7 +9,7 @@ import gc
 import importlib.util
 from pathlib import Path
 import hashlib
-from test_ui_core_golden import DATA
+from ui_golden_data import DATA
 import os
 import sys
 import unicodedata

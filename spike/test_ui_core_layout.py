@@ -1,26 +1,11 @@
 """Independent captured layout/callback DATA, NOT native layout acceptance."""
-import hashlib
 import importlib.util
 import os
 from pathlib import Path
-import types
 import unittest
 from unittest.mock import patch
 
-GOLDEN_PATH = Path(__file__).with_name('test_ui_core_golden.py')
-GOLDEN_SHA256 = '053c424cf92281c7ab03fd7ec0f48d01258d8c368a57c512d390b19db9ba19a0'
-
-
-def load_data():
-    source = GOLDEN_PATH.read_bytes()
-    if hashlib.sha256(source).hexdigest() != GOLDEN_SHA256:
-        raise ValueError('captured golden DATA SHA-256 mismatch')
-    module = types.ModuleType('verified_ui_data')
-    exec(compile(source, str(GOLDEN_PATH), 'exec'), module.__dict__)
-    return module.DATA
-
-
-DATA = load_data()
+from ui_golden_data import DATA, GOLDEN_PATH, load_data
 
 ROOT = Path(os.environ.get("UI_CORE_SOURCE_DIR", Path(__file__).resolve().parents[1]))
 spec = importlib.util.spec_from_file_location("ui_layout_subject", ROOT / "narwhal3d/textfield.py")
@@ -53,7 +38,7 @@ class LayoutTests(unittest.TestCase):
     def test_golden_digest_rejects_tampering_before_execution(self):
         source = GOLDEN_PATH.read_bytes()
         for changed in (source + b'\n# changed\n', source[:-1],
-                        source.replace(b'DATA', b'data'),
+                        source.replace(b'"source_commit"', b'"source_commix"', 1),
                         b"raise AssertionError('unverified data executed')\n"):
             with patch.object(Path, 'read_bytes', return_value=changed):
                 with self.assertRaisesRegex(ValueError, 'DATA SHA-256 mismatch'):

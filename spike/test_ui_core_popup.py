@@ -11,7 +11,7 @@ import io
 import math
 import os
 from pathlib import Path
-from test_ui_core_golden import DATA
+from ui_golden_data import DATA
 import sys
 from types import ModuleType, SimpleNamespace as NS
 import unittest

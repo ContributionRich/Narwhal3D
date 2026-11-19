@@ -1,0 +1,236 @@
+{
+  "description": "UI-DATA-31: pre-retirement UI acceptance DATA migrated to exact raw JSON (not native output). Pin exact bytes/SHA, source capture + extraction revision, and complete counts/shapes. Rust SHA guard rejects joint same-size data/provenance modification with a rewritten provenance hash.",
+  "extraction_revision": "3d72de5f6653d89edfd024737a3cfafa23ef5537",
+  "golden_python": {
+    "length": 75154,
+    "path": "spike/test_ui_core_golden.py",
+    "sha256": "053c424cf92281c7ab03fd7ec0f48d01258d8c368a57c512d390b19db9ba19a0"
+  },
+  "lease": "UI-DATA-31",
+  "raw_json": {
+    "length": 2542173,
+    "note": "exact decoded bytes of DATA (zlib/base64.b85/json), written byte-for-byte; not re-serialized",
+    "path": "native/ui_core/tests/data/host_ui31.json",
+    "sha256": "32c845272f9ee20e012aeaadea9ec9bc8b6e21ca8ad2e9b16a9a4afbbf37faa1"
+  },
+  "schema": {
+    "editor_adapter": {
+      "action_counts": {
+        "_delete_selection": 3,
+        "backspace": 8,
+        "cut": 5,
+        "delete": 8,
+        "end": 1,
+        "home": 5,
+        "insert": 5,
+        "move": 5,
+        "select_all": 7,
+        "set_caret": 7,
+        "set_text": 5
+      },
+      "args_len": 3,
+      "elem_keys": [
+        "args",
+        "initial",
+        "steps"
+      ],
+      "initial_len": 5,
+      "list_len": 1,
+      "step_shape": "list4:[action:str, args:list, result:list2, after:list5]",
+      "steps_len": 59
+    },
+    "layout": {
+      "calls_elem_types": [
+        "str"
+      ],
+      "count": 120,
+      "elem_key_types": {
+        "calls": [
+          "list"
+        ],
+        "fail": [
+          "int",
+          "null"
+        ],
+        "helpers": [
+          "list"
+        ],
+        "result": [
+          "list"
+        ],
+        "stateful": [
+          "bool"
+        ],
+        "text": [
+          "str"
+        ],
+        "width": [
+          "int",
+          "str"
+        ]
+      },
+      "elem_keys": [
+        "calls",
+        "fail",
+        "helpers",
+        "result",
+        "stateful",
+        "text",
+        "width"
+      ],
+      "helpers_elem_shapes": [
+        [
+          "str",
+          "list",
+          "list",
+          "list"
+        ]
+      ],
+      "result_status_values": [
+        "error",
+        "ok"
+      ]
+    },
+    "popup_adapter": {
+      "call_pair_shape": [
+        [
+          "int",
+          "null"
+        ]
+      ],
+      "call_total_pairs": 1398,
+      "consumed": {
+        "false": 147,
+        "true": 753
+      },
+      "event0_vocab": [
+        "A",
+        "BUTTON4MOUSE",
+        "DOWN_ARROW",
+        "END",
+        "ERASER",
+        "ESC",
+        "HOME",
+        "INBETWEEN_MOUSEMOVE",
+        "LEFTMOUSE",
+        "LEFT_ARROW",
+        "MIDDLEMOUSE",
+        "MOUSEMOVE",
+        "MOUSEROTATE",
+        "MOUSESMARTZOOM",
+        "NUMPAD_ENTER",
+        "PAGE_DOWN",
+        "PAGE_UP",
+        "PEN",
+        "RET",
+        "RIGHTMOUSE",
+        "RIGHT_ARROW",
+        "TIMER",
+        "TIMER0",
+        "TRACKPADPAN",
+        "TRACKPADZOOM",
+        "UP_ARROW",
+        "WHEELDOWNMOUSE",
+        "WHEELUPMOUSE",
+        "WINDOW_DEACTIVATE"
+      ],
+      "event1_vocab": [
+        "CLICK",
+        "DOUBLE_CLICK",
+        "NOTHING",
+        "PRESS",
+        "RELEASE"
+      ],
+      "event_shape": [
+        [
+          "str",
+          "str",
+          "list"
+        ]
+      ],
+      "hit_shapes": {
+        "list2:int/int": 267,
+        "list2:int/null": 41,
+        "list2:int/str": 36,
+        "null": 556
+      },
+      "is_open": {
+        "false": 63,
+        "true": 837
+      },
+      "keys": [
+        "rows",
+        "steps"
+      ],
+      "rows": 62,
+      "state_key_counts": {
+        "is_open": 900,
+        "panels": 900,
+        "releases": 900
+      },
+      "step_key_counts": {
+        "calls": 900,
+        "consumed": 900,
+        "event": 900,
+        "hit": 900,
+        "open": 85,
+        "resize": 32,
+        "state": 900
+      },
+      "steps": 900
+    },
+    "popup_metrics": {
+      "calls": 7,
+      "initial_keys": [
+        "is_open",
+        "panels",
+        "releases"
+      ],
+      "keys": [
+        "calls",
+        "initial",
+        "rows",
+        "steps"
+      ],
+      "rows": 3,
+      "steps": 4
+    },
+    "top_keys": {
+      "editor_adapter": [
+        "list",
+        1
+      ],
+      "layout": [
+        "list",
+        120
+      ],
+      "popup_adapter": [
+        "dict",
+        2
+      ],
+      "popup_metrics": [
+        "dict",
+        4
+      ],
+      "source_commit": [
+        "str",
+        null
+      ],
+      "unicode_adapter": [
+        "dict",
+        2
+      ]
+    },
+    "unicode_adapter": {
+      "each": {
+        "15.1.0": "64 hex chars",
+        "16.0.0": "64 hex chars"
+      },
+      "versions": [
+        "15.1.0",
+        "16.0.0"
+      ]
+    }
+  },
+  "source_commit": "50267dd6d4504b14052d1ab7e54675f3c8750637"
+}

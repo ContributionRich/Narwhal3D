@@ -129,6 +129,9 @@ REQUIRED = {
     "native/brep_writer/README.md",
     "native/ui_core/Cargo.toml", "native/ui_core/Cargo.lock", "native/ui_core/LICENSE",
     "native/ui_core/README.md", "native/ui_core/POPUP.md", "native/ui_core/gen_unicode.py",
+    "native/ui_core/tests/host_ui31_integrity.rs",
+    "native/ui_core/tests/data/host_ui31.json",
+    "native/ui_core/tests/data/host_ui31.provenance.json",
     "native/ui_core/tests/editor27_golden.rs",
     "native/ui_core/tests/unicode28_golden.rs",
     "native/ui_core/tests/popup28_native.rs",
@@ -165,7 +168,7 @@ REQUIRED = {
     "scripts/assemble_macos_release.py", "scripts/test_macos_runtime.py",
     "spike/test_ui_core_editor.py", "spike/test_ui_core_callers.py",
     "spike/test_ui_core_layout.py", "spike/test_ui_core_mutations.py",
-    "spike/test_ui_core_golden.py", "spike/test_native_only_policy.py",
+    "spike/ui_golden_data.py", "spike/test_native_only_policy.py",
     "spike/test_ui_transcript_abi.py", "spike/test_ui_transcript_model.py",
     "spike/test_ui_transcript_consumers.py", "spike/test_ui_transcript_stress.py",
     "spike/test_ui_transcript_gui.py", "spike/test_ui_transcript_unicode.py",
@@ -716,7 +719,7 @@ def retirement_path_problem(path: str) -> str | None:
            or part.casefold() in {"legacy.zip", "legacy.tar", "legacy.tar.gz", "legacy.tgz"}
            for part in parts):
         return "retired archive is local-only"
-    if parts and parts[-1] == "textfield_168212d4.py":
+    if parts and parts[-1] in {"textfield_168212d4.py", "test_ui_core_golden.py", "test_rust_history_trace.py"}:
         return "retired executable reference"
     return None
 
@@ -987,50 +990,12 @@ def frozen_json_scan(path: str, blob: bytes) -> bytes:
     return json.dumps(provenance, sort_keys=True).encode()
 
 
-FROZEN_DATA_FILES = {
-    "spike/test_ui_core_golden.py": "DATA",
-}
+FROZEN_DATA_FILES = {}  # No executable Python DATA fixtures remain allowlisted.
 
 
 def frozen_data_scan(path: str, blob: bytes) -> bytes:
-    """Scan decoder source, not incidental words in a frozen DATA literal.
-
-    Only reviewed Python fixtures may use literal decoding. Reject definitions,
-    aliases, arbitrary calls and extra assignments rather than exempting a file.
-    Raw bytes still receive the secret scan.
-    """
-    if path not in FROZEN_DATA_FILES:
-        return blob
-    tree = ast.parse(blob, filename=path)
-    assignments = 0
-    for statement in tree.body:
-        if isinstance(statement, ast.Expr) and isinstance(statement.value, ast.Constant) and isinstance(statement.value.value, str):
-            continue
-        if isinstance(statement, ast.Import) and all(alias.name in {"json", "base64", "zlib"}
-                                                   and alias.asname is None for alias in statement.names):
-            continue
-        if not (isinstance(statement, ast.Assign) and len(statement.targets) == 1
-                and isinstance(statement.targets[0], ast.Name)
-                and statement.targets[0].id == FROZEN_DATA_FILES[path]):
-            raise ValueError("frozen fixture must contain only DATA and standard decoding")
-        assignments += 1
-        for node in ast.walk(statement.value):
-            if not isinstance(node, (ast.Call, ast.Attribute, ast.Name, ast.Load, ast.Constant)):
-                raise ValueError("executable logic in frozen DATA fixture")
-            if isinstance(node, ast.Call) and (ast.unparse(node.func) not in {
-                    "json.loads", "zlib.decompress", "base64.b85decode"} or node.keywords or len(node.args) != 1):
-                raise ValueError("unapproved frozen DATA decoder")
-        # The large literal is inert data, not private-development prose. Keep all
-        # imports, docstrings, comments and decoder expressions in the normal scan.
-        lines = blob.splitlines(keepends=True)
-        spans = [(node.lineno, node.col_offset, node.end_lineno, node.end_col_offset)
-                 for node in ast.walk(statement.value)
-                 if isinstance(node, ast.Constant) and isinstance(node.value, str)]
-    if assignments != 1:
-        raise ValueError("frozen fixture requires exactly one DATA assignment")
-    for start, column, end, last in reversed(spans):
-        lines[start - 1:end] = [lines[start - 1][:column] + b"'<frozen DATA>'" + lines[end - 1][last:]]
-    return b"".join(lines)
+    """All Python source receives the full privacy/provenance scan, without DATA exemptions."""
+    return blob
 
 
 def _rust_code_mask(blob: bytes) -> bytes:

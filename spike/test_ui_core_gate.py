@@ -208,7 +208,7 @@ class GateTests(unittest.TestCase):
     def test_inventory_complete_and_ignores_only_build_caches(self):
         with self.fixture() as f:
             before = f.gate.source_inventory(f.root)
-            self.assertEqual(len(before), 33)
+            self.assertEqual(len(before), 36)
             for name in ('EXTRA.md', 'EXTRA2.md', 'extra_generator.py', 'src/extra_tests.rs'):
                 (f.crate / name).write_text('input')
             after = f.gate.source_inventory(f.root)

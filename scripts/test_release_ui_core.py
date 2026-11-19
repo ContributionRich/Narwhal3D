@@ -218,6 +218,31 @@ class UiPackaging(unittest.TestCase):
         for path in (windows.NATIVE_COMPONENT_PATHS[DLL], windows.UI_CORE_ADJACENT, windows.UI_CORE_SOURCE_PATH):
             self.assertIn(path, windows.REQUIRED)
 
+    def test_required_host_sources_and_retired_data_fixture(self):
+        """Hostloader + the three native host_ui31 files are required public
+        sources; the retired 75 KB Python DATA fixture is removed from the
+        public test set."""
+        import create_public_branch as public
+
+        test_files = set(public.TEST_FILES)
+        native_files = set(public.NATIVE_FILES)
+
+        # Hostloader must be registered in the public TEST_FILES.
+        self.assertIn("spike/ui_golden_data.py", test_files)
+        self.assertTrue((ROOT / "spike" / "ui_golden_data.py").is_file())
+
+        # All three native host_ui31 files must be in the public NATIVE_FILES.
+        for name in (
+            "native/ui_core/tests/host_ui31_integrity.rs",
+            "native/ui_core/tests/data/host_ui31.json",
+            "native/ui_core/tests/data/host_ui31.provenance.json",
+        ):
+            self.assertIn(name, native_files)
+            self.assertTrue((ROOT / name).is_file())
+
+        # The retired Python DATA fixture must NOT be in the public test set.
+        self.assertNotIn("spike/test_ui_core_golden.py", test_files)
+
     def test_full_source_provenance_and_existing_licenses(self):
         inputs = common.inventory(ROOT, "ui_core")
         for name in ("Cargo.toml", "Cargo.lock", "LICENSE", "narwhal_ui_core.h", "gen_unicode.py",
@@ -227,7 +252,12 @@ class UiPackaging(unittest.TestCase):
             self.assertEqual(inputs["native/ui_core/" + name], common.digest(ROOT / "native/ui_core" / name))
         self.assertFalse(any("/target/" in name or "__pycache__" in name for name in inputs))
         lock = tomllib.loads((ROOT / "native/ui_core/Cargo.lock").read_text())
-        self.assertEqual([p["name"] for p in lock["package"]], ["narwhal_ui_core"])
+        self.assertEqual({p["name"] for p in lock["package"]}, {
+            "narwhal_ui_core", "itoa", "memchr", "proc-macro2", "quote", "serde",
+            "serde_core", "serde_derive", "serde_json", "syn", "unicode-ident", "zmij"})
+        manifest = tomllib.loads((ROOT / "native/ui_core/Cargo.toml").read_text())
+        self.assertNotIn("dependencies", manifest)
+        self.assertEqual(manifest["dev-dependencies"], {"serde_json": "=1.0.154"})
         self.assertEqual((ROOT / "native/ui_core/LICENSE").read_bytes(),
                          (ROOT / "licenses/GPL-3.0-or-later.txt").read_bytes())
         self.assertIn("UNICODE LICENSE V3", (ROOT / "licenses/Native-Rust-Dependencies.txt").read_text())
@@ -315,7 +345,7 @@ class UiPackaging(unittest.TestCase):
                 put(source / name, (ROOT / name).read_bytes())
             put(binary / SO)
             receipt = source_receipt(binary, SO, source)
-            self.assertEqual(len(common.UI_CORE_REQUIRED_SOURCE), 33)
+            self.assertEqual(len(common.UI_CORE_REQUIRED_SOURCE), 36)
             for name in common.UI_CORE_REQUIRED_SOURCE:
                 path = source / "native/ui_core" / name
                 data = path.read_bytes()
@@ -698,6 +728,20 @@ def mutation_checks():
                         "test_executed_probe_rejects_old_editor_wrong_abis_and_every_missing_export"))
     mutants.append((common, "UI_CORE_REQUIRED_SOURCE", tuple(n for n in common.UI_CORE_REQUIRED_SOURCE if n != "TRANSCRIPT.md"),
                     "test_required_sources_cannot_be_omitted_from_rehashed_receipts"))
+    # Omission mutations for the new hostloader / native host_ui31 guards.
+    import create_public_branch as _pub
+    mutants.append(
+        (_pub, "TEST_FILES", tuple(n for n in _pub.TEST_FILES if n != "spike/ui_golden_data.py"),
+         "test_required_host_sources_and_retired_data_fixture"))
+    mutants.append(
+        (_pub, "NATIVE_FILES", tuple(n for n in _pub.NATIVE_FILES if n != "native/ui_core/tests/host_ui31_integrity.rs"),
+         "test_required_host_sources_and_retired_data_fixture"))
+    mutants.append(
+        (_pub, "NATIVE_FILES", tuple(n for n in _pub.NATIVE_FILES if n != "native/ui_core/tests/data/host_ui31.json"),
+         "test_required_host_sources_and_retired_data_fixture"))
+    mutants.append(
+        (_pub, "NATIVE_FILES", tuple(n for n in _pub.NATIVE_FILES if n != "native/ui_core/tests/data/host_ui31.provenance.json"),
+         "test_required_host_sources_and_retired_data_fixture"))
     for symbol in ('narwhal_transcript_abi', 'narwhal_transcript_capabilities'):
         mutants.append((windows, "verify_ui_core_identity", changed(windows.verify_ui_core_identity,
                         '"' + symbol + '": ' + ('1' if symbol.endswith('_abi') else '7') + ',', ''),
