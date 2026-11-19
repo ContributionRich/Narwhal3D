@@ -33,7 +33,9 @@ def sample_curve_xyz(curve, n: int = 64):
     With the pure-core library loaded a `NurbsCurve` is sampled in Rust
     (`native_nearest.sample`), bit-identical to `PointAt`. MEASURED (i7-9700K): one
     `PointAt` costs about 9 us, so a 10-point InterpCrv preview's 217 samples took
-    1.9 ms per redraw, 0.17 ms through Rust. Other curves keep `sample_curve`.
+    1.9 ms per redraw, 0.17 ms through Rust. So is a `LineCurve` where the loaded
+    rhino3dm passes the line parity check (`native_nearest.line_capability`). Other curves
+    keep `sample_curve`.
     """
     try:
         from . import native_nearest
@@ -7906,7 +7908,8 @@ def curve_snap_target(curve, name="", samples=SNAP_SAMPLES):
 
     # A NurbsCurve is sampled in Rust, bit-identical to the `PointAt` loop below at
     # the same parameters. MEASURED (i7-9700K, spike/test_native_curve_samples.py): a
-    # circle's target took 0.85 ms through PointAt, 0.19 ms through Rust.
+    # circle's target took 0.85 ms through PointAt, 0.19 ms through Rust. A LineCurve
+    # takes Rust too where it is qualified (0.82 ms -> 0.05 ms), equally bit-identical.
     pts = native_nearest.sample(curve, samples)
     if pts is None:
         try:
@@ -8253,19 +8256,26 @@ def _leaf_points(leaf):
             p = leaf.Point(j)               # ONE wrapper per point (it was built 3 times)
             out.append((p.X, p.Y, p.Z))
         return out
-    return _nurbs_points(leaf.Points)
+    return _nurbs_points(leaf)
 
 
-def _nurbs_points(pts, count=None):
-    """Every location of a NurbsCurve point list, weights divided out -- the same values
-    as `control_point_location(pts, j)` for each j, read in one pass. The per-index route
-    would re-fetch `leaf.Points` for every point, allocating a new wrapper each time."""
-    n = _control_point_count(pts) if count is None else count
+def _nurbs_points(curve, count=None):
+    """Every control point location of a NurbsCurve (the first `count`), weights divided
+    out -- the same values as `control_point_location(curve.Points, j)` for each j.
+
+    The homogeneous points come from ONE `nurbs_data.arrays` call. Reading them through
+    `curve.Points` costs five pybind calls per point (the point and its X, Y, Z, W).
+    MEASURED (i7-9700K): a 200-point curve 1.38 ms -> 0.17 ms, 4 points 33 -> 31 us."""
+    try:
+        from . import nurbs_data
+    except ImportError:          # loaded standalone (tests / probes)
+        import nurbs_data
+    cvs = nurbs_data.arrays(curve)[3]
+    n = len(cvs) // 4 if count is None else count
     out = []
-    for j in range(n):
-        cp = pts[j]
-        w = getattr(cp, "W", 1.0) or 1.0
-        out.append((cp.X / w, cp.Y / w, cp.Z / w))
+    for j in range(0, 4 * n, 4):
+        w = cvs[j + 3] or 1.0
+        out.append((cvs[j] / w, cvs[j + 1] / w, cvs[j + 2] / w))
     return out
 
 
@@ -8371,8 +8381,7 @@ def control_points(geom):
     if isinstance(geom, r3.NurbsCurve):
         # one pass over ONE point list (see `_nurbs_points`), minus a periodic curve's
         # wrapped copies exactly as `control_point_count` counts them
-        pts = geom.Points
-        return _nurbs_points(pts, max(0, _control_point_count(pts) - _periodic_wrap(geom)))
+        return _nurbs_points(geom, max(0, _control_point_count(geom.Points) - _periodic_wrap(geom)))
     if isinstance(geom, r3.PolylineCurve):
         return _leaf_points(geom)
     out = []

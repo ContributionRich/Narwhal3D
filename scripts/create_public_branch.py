@@ -45,7 +45,7 @@ LAUNCH_FILES = (
 )
 WELCOME_FILES = (
     "native/welcome/.gitignore", "native/welcome/Cargo.lock", "native/welcome/Cargo.toml",
-    "native/welcome/src/main.rs", "native/welcome/src/native_stacking.rs", "native/welcome/src/theme.rs",
+    "native/welcome/src/main.rs", "native/welcome/src/linux_recovery.rs", "native/welcome/src/native_stacking.rs", "native/welcome/src/theme.rs",
 )
 PATCH_FILES = (
     "blender_patches/README.md", "blender_patches/app_drawn.patch",
@@ -115,6 +115,7 @@ TEST_FILES = (
     'spike/test_project_to_cplane_delete.py',
     'spike/test_project_to_cplane_gui.py',
     'spike/test_offset_fit_native.py',
+    'spike/test_line_samples.py',
     'spike/test_offset_compact.py',
     'spike/test_offset_report127.py',
     'spike/test_trim_split_once.py',
@@ -244,6 +245,8 @@ TEST_FILES = (
     "spike/test_native_command_search.py", "spike/test_native_coil.py",
     "spike/test_native_intersect.py",
     "spike/test_pure_core_curve_hits_gate.py",
+    "spike/test_pure_core_nurbs_record_gate.py",
+    "spike/test_pure_core_line_samples_gate.py",
     "spike/test_native_search02_contract.py", "spike/test_native_search02_adapter.py",
     "spike/test_native_search02_ffi.py", "spike/test_native_search02_consumers.py",
     "spike/test_native_search02_profile.py", "spike/fixtures/native_search02.json",
@@ -253,6 +256,7 @@ TEST_FILES = (
     "spike/test_unit_ops_owned.py", "spike/test_unit_table_owned.py",
     "spike/test_native_nearest.py", "spike/test_pure_core_nearest_batch_gate.py",
     "spike/test_native_curve_samples.py",
+    "spike/test_nurbs_data.py",
     "spike/test_native_display_samples.py",
     "spike/test_native_rebuild_fit.py", "spike/test_rebuild_owned.py",
     "spike/test_native_arclength.py",
@@ -659,6 +663,8 @@ NATIVE_FILES = (
     "native/pure_core/src/interpolate.rs",
     "native/pure_core/src/tween.rs", "native/pure_core/src/surface.rs",
     "native/pure_core/src/curvex.rs",
+    "native/pure_core/src/nurbs_record.rs",
+    "native/pure_core/src/line_samples.rs",
     "native/pure_core/src/cage.rs",
     "native/pure_core/src/gridsnap.rs",
     "native/pure_core/src/pickconstraint.rs", "native/pure_core/src/blend.rs",

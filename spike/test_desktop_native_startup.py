@@ -157,7 +157,7 @@ class DesktopNativeStartup(unittest.TestCase):
             executable.write_text('#!/bin/sh\nprintf started > "'+str(self.started)+'"\n')
             executable.chmod(0o755)
         self.env={k:v for k,v in os.environ.items() if not k.startswith('NARWHAL')}
-        self.env.update(HOME=str(self.root),NARWHAL3D_APPIMAGE='1',NARWHAL3D_NO_DIALOGS='1',PYTHONDONTWRITEBYTECODE='1')
+        self.env.update(HOME=str(self.root),NARWHAL3D_APPIMAGE='0',NARWHAL3D_NO_DIALOGS='1',PYTHONDONTWRITEBYTECODE='1')
 
     def run_launcher(self):
         return subprocess.run(['bash',str(self.root/'narwhal3d.sh')],env=self.env,text=True,
@@ -305,6 +305,29 @@ class DesktopNativeStartup(unittest.TestCase):
                 self.started.unlink()
                 self.assert_no_graphical_start(self.run_launcher())
         self.pure_library().write_bytes(library)
+
+    def test_appimage_welcome_delegates_preflight_without_bypassing_admission(self):
+        # SDK fixture only: emulate the welcome child process, not its native UI.
+        welcome = self.root / "artifacts/welcome/linux-x86_64/narwhal-welcome"
+        welcome.write_text("#!" + sys.executable + "\n" +
+            "import os, pathlib, subprocess, sys\n"
+            "root = pathlib.Path(__file__).resolve().parents[3]\n"
+            "python = os.environ.get('NARWHAL3D_WELCOME_PREFLIGHT')\n"
+            "assert python, 'AppImage welcome must receive preflight interpreter'\n"
+            "status = subprocess.run([python, '-I', '-B', str(root / 'launch/check_native.py')]).returncode\n"
+            "if status:\n"
+            "    print('graphical runtime not launched', file=sys.stderr)\n"
+            "    sys.exit(2)\n"
+            "(root / 'graphical-started').write_text('started')\n")
+        welcome.chmod(0o755)
+        self.env["NARWHAL3D_APPIMAGE"] = "1"
+        original = self.pure_library().read_bytes()
+        self.hide_pure_exports(original, ["narwhal_pure_core_nearest_on_callbacks_v1"])
+        self.assert_no_graphical_start(self.run_launcher())
+        self.pure_library().write_bytes(original)
+        healthy = self.run_launcher()
+        self.assertEqual(healthy.returncode, 0, healthy.stdout + healthy.stderr)
+        self.assertTrue(self.started.exists())
 
     def test_matching_native_components_launch_direct_runtime(self):
         (self.root/'artifacts/welcome/linux-x86_64/narwhal-welcome').unlink()

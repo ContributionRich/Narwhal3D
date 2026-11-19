@@ -382,6 +382,67 @@ def run():
         file_commands.quitter = None
         os.environ.pop("NARWHAL3D_DATA_DIR", None)
 
+    # Exercise the real Blender timer callback and Exit/Save commands without
+    # quitting the test host. Only the final host quit and dialogs are scripted.
+    from pathlib import Path
+    restart = runpy.run_path(os.path.join(ROOT, "launch", "bootstrap.py"))["_update_exit_request"]
+    request = Path(TMP) / "welcome.request"
+    signal = request.with_suffix(".restart")
+    approved = request.with_suffix(".restart-approved")
+    declined = request.with_suffix(".restart-declined")
+    quits = []
+    file_commands.quitter = lambda: quits.append(approved.is_file())
+    saved_request = os.environ.get("NARWHAL3D_WELCOME_REQUEST")
+    os.environ["NARWHAL3D_WELCOME_REQUEST"] = str(request)
+    try:
+        fresh()
+        draw_line()
+        model = app_state.model
+        for label, fake in (
+            ("Cancel at exit", Fake(ask=[(CANCEL, None)])),
+            ("Cancel Save As", Fake(ask=[(OK, "yes")], save=[(CANCEL, None)])),
+            ("Save fails", Fake(ask=[(OK, "yes")], save=[(OK, str(request / "failed.narwhal"))])),
+        ):
+            filedialog.set_backend(fake)
+            signal.touch()
+            restart()
+            check(not signal.exists() and declined.is_file() and not approved.exists()
+                  and not quits and app_state.doc_modified() and app_state.model is model,
+                  f"Update restart: {label} preserves the running document and denies apply")
+            declined.unlink(missing_ok=True)
+        # -- an active command: refused WITHOUT any dialog; the document stays open --
+        # A distinct short-circuit in the bridge: with a command in progress it declines
+        # before ExitCmd is even started, so no dialog may open and the running command
+        # and its document must both survive untouched. Reuses the current model (still
+        # holding its line) so the successful-Save case below still sees that one object.
+        model = app_state.model
+        app_state.feed_line("Line")            # a two-point command: active, awaiting its first point
+        check(app_state.active_command is not None,
+              "an active command is present before the update-restart refusal is tested")
+        filedialog.set_backend(Fake())          # nothing may be asked at all
+        signal.touch()
+        restart()
+        check(not signal.exists() and declined.is_file() and not approved.exists()
+              and not quits and app_state.active_command is not None
+              and app_state.model is model,
+              "Update restart: an active command is refused without any dialog; the "
+              "command and document stay open and no approval is published")
+        declined.unlink(missing_ok=True)
+        app_state.cancel()
+        path = str(Path(TMP) / "restart-saved.narwhal")
+        filedialog.set_backend(Fake(ask=[(OK, "yes")], save=[(OK, path)]))
+        signal.touch()
+        restart()
+        check(not signal.exists() and approved.is_file() and not declined.exists()
+              and quits == [True] and not app_state.doc_modified() and objects_in(path) == 1,
+              "Update restart: successful Save publishes approval before quitting")
+    finally:
+        file_commands.quitter = None
+        if saved_request is None:
+            os.environ.pop("NARWHAL3D_WELCOME_REQUEST", None)
+        else:
+            os.environ["NARWHAL3D_WELCOME_REQUEST"] = saved_request
+
     # -- 15. Open of an interchange file -------------------------------------
     os.environ["NARWHAL3D_DATA_DIR"] = os.path.join(TMP, "data2")
     try:

@@ -78,7 +78,7 @@ EXPECTED_RUNNABLE_COUNTS = {
     "Render": 0,
     "Tools": 8,
     "Window": 0,
-    "Help": 1,
+    "Help": 2,
 }
 EXPECTED_TODO_COUNTS = {
     "File": 10,
@@ -137,14 +137,14 @@ def _():
 
 @check("live bare-package registry includes all sibling providers")
 def _():
-    assert len(registered) == 191, len(registered)
+    assert len(registered) == 192, len(registered)
     assert {
         "import", "filletedge", "saveas", "print", "export", "setdisplaymode",
         "changelayer",
     } <= registered
 
 
-@check("all 191 registered commands appear exactly once")
+@check("all 192 registered commands appear exactly once")
 def _():
     runnable = [command for _menu, _path, _label, command in leaves()
                 if command in registered]
@@ -236,6 +236,7 @@ def _():
     assert indexed[("Window", (), "Workspace Management (Not implemented)")] == "workspace"
     assert indexed[("File", (), "Recent Files")] == "__recent_files__"
     assert indexed[("Help", ("Support",), "Report a Bug (Not implemented)")] == "showbugreport"
+    assert indexed[("Help", ("Support",), "Check for Updates…")] == "checkforupdates"
 
 
 @check("File is the reference's flat grouped list, in order")
@@ -285,7 +286,7 @@ def _():
         "menus": len(EXPECTED_MENUS),
         "source": "original",
     }, (data.REPORT, counts)
-    assert counts == {"items": 555, "separators": 21, "popups": 57}, counts
+    assert counts == {"items": 556, "separators": 21, "popups": 57}, counts
 
 
 @check("resource source retains original provenance")

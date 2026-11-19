@@ -9,6 +9,9 @@ import ctypes
 import math
 import os
 from pathlib import Path
+import platform
+import random
+import struct
 import sys
 import threading
 import rhino3dm as r3
@@ -31,6 +34,14 @@ class NativeNearestError(RuntimeError):
 
 class NearestInputError(ValueError):
     """Nonfinite, malformed or resource-excessive search input."""
+
+
+def _nurbs_data():
+    try:
+        from . import nurbs_data
+    except ImportError:          # loaded standalone (tests / probes)
+        import nurbs_data
+    return nurbs_data
 
 
 def _library_name():
@@ -199,9 +210,8 @@ def pack(curve):
         return CallbackCurve(curve)
     if len(curve.Points) > 1 << 20:
         raise NearestInputError("nearest control-point resource limit")
-    cvs = [v for cv in curve.Points for v in (cv.X, cv.Y, cv.Z, cv.W)]
-    return PackedCurve(int(curve.Order), list(curve.Knots.ToList()), cvs,
-                       bool(curve.IsRational), bool(curve.IsClosed))
+    order, rational, knots, cvs = _nurbs_data().arrays(curve)   # homogeneous CVs
+    return PackedCurve(order, knots, cvs, rational, bool(curve.IsClosed))
 
 
 def _search_many_binding():
@@ -325,12 +335,15 @@ def search_many(packed, targets):
 def sample(curve, n):
     """``bridge.sample_curve(curve, n)`` as ``(x, y, z)`` tuples, or ``None``.
 
-    Only a `NurbsCurve`, evaluated from its own knots and control points: each point
-    is bit-identical to ``curve.PointAt`` at the same parameter. ``None`` (any other
-    curve, no library, or a point openNURBS could not evaluate) keeps the caller's
-    Python sampling.
+    A `NurbsCurve`, evaluated from its own knots and control points, or a `LineCurve`
+    where the line route is qualified (`line_capability`): each point is bit-identical
+    to ``curve.PointAt`` at the same parameter. ``None`` (any other curve, no library,
+    an unqualified line route, or a point openNURBS could not evaluate) keeps the
+    caller's Python sampling.
     """
     global _native_sample_calls
+    if type(curve) is r3.LineCurve:
+        return _line_samples(curve, n)
     fn = _bindings()[1]
     if fn is None or not isinstance(curve, r3.NurbsCurve):
         return None
@@ -338,17 +351,14 @@ def sample(curve, n):
         n = int(n)
         if n < 1:
             return None
-        cvs = array.array("d")
-        for cv in curve.Points:
-            cvs.extend((cv.X, cv.Y, cv.Z, cv.W))   # homogeneous, as openNURBS stores them
-        knots = array.array("d", curve.Knots.ToList())
+        order, rational, knots, cvs = _nurbs_data().arrays(curve)   # homogeneous CVs
         domain = curve.Domain
         out = array.array("d", bytes(8 * 3 * (n + 1)))
         c_knots = (ctypes.c_double * len(knots)).from_buffer(knots)
         c_cvs = (ctypes.c_double * len(cvs)).from_buffer(cvs)
         c_out = (ctypes.c_double * len(out)).from_buffer(out)
-        code = fn(int(curve.Order), c_knots, len(knots), c_cvs, len(cvs) // 4,
-                  int(bool(curve.IsRational)), float(domain.T0), float(domain.T1), n,
+        code = fn(order, c_knots, len(knots), c_cvs, len(cvs) // 4,
+                  int(rational), float(domain.T0), float(domain.T1), n,
                   c_out, len(out))
     except Exception:  # noqa: BLE001 -- the Python sampling remains the fallback
         return None
@@ -356,3 +366,148 @@ def sample(curve, n):
         return None
     _native_sample_calls += 1
     return list(zip(out[0::3], out[1::3], out[2::3]))
+
+
+# LineCurve samples (narwhal_pure_core_line_samples, native/pure_core/src/line_samples.rs):
+# openNURBS's ON_LineCurve::Evaluate and ON_Line::PointAt (eb92af3) at `sample`'s
+# parameters. Python passes only the ends, read through ``curve.Line`` (which keeps a -0.0
+# that the evaluated PointAtStart/PointAtEnd lose), and the domain. Rust never fuses a
+# multiply-add, but an SDK build that does (clang's default on arm64) rounds PointAt
+# differently. So the route needs BOTH a platform in `LINE_QUALIFIED_PLATFORMS` and the
+# loaded rhino3dm passing `_line_parity`, its own PointAt on the witness lines, bit for
+# bit. Any other SDK build, even on a qualified platform, keeps PointAt.
+LINE_QUALIFIED_PLATFORMS = frozenset({("linux", "x86_64")})
+# from.xyz, to.xyz, T0, T1, n: -0.0 ends, scales 1e-9 and 1e15, shifted domains, and a
+# span whose last parameter lands one ulp past T1, so PointAt keeps an end's -0.0.
+_LINE_WITNESSES = (
+    ("-0x0.0p+0", "0x1.999999999999ap-4", "0x1.8p+1", "0x1.cp+2", "-0x0.0p+0",
+     "0x1.5555555555555p-2", "0x0.0p+0", "0x1.df732362bf072p+2", 128),
+    ("0x1.c6bf52634p+49", "-0x1.c6bf52634p+47", "0x1.3e52b9abep+49", "-0x1.10d9316ecp+48",
+     "0x1.9945ca262p+49", "0x1.c6bf52634p+49", "-0x1.d99999999999ap+1", "0x1.6333333333333p+3", 128),
+    ("0x1.12e0be826d695p-30", "0x1.12e0be826d695p-29", "-0x0.0p+0", "0x1.12e0be826d695p-30",
+     "-0x1.80d43de9cc603p-31", "0x1.5798ee2308c3ap-28", "0x1.e848p+19", "0x1.e84809999999ap+19", 128),
+    ("0x1.4bd44241e210ap+24", "0x0.0p+0", "0x1.0eed107b52e44p+29", "0x1.c671c2188fd1ap+29",
+     "-0x0.0p+0", "0x1.be8157208e2c6p+28", "0x0.0p+0", "0x1.bea058bf8622ap+29", 3),
+)
+_LINE_RANDOM_WITNESSES = 4      # plus seeded lines of irregular doubles, where a fused
+_LINE_WITNESS_SEED = 20261119   # multiply-add would round most samples differently
+_line_state = None              # (signature, binding or None, capability text)
+_native_line_calls = 0
+
+
+def _here():
+    return sys.platform, platform.machine()
+
+
+def _point_at_samples(curve, n):
+    """``bridge.sample_curve``'s points through the SDK's own PointAt, as tuples."""
+    d = curve.Domain
+    return [(p.X, p.Y, p.Z) for p in (curve.PointAt(d.T0 + (d.T1 - d.T0) * i / n)
+                                      for i in range(n + 1))]
+
+
+def _line_witness_curves():
+    h = float.fromhex
+    out = []
+    for *values, n in _LINE_WITNESSES:
+        v = [h(x) for x in values]
+        out.append((v, n))
+    rng = random.Random(_LINE_WITNESS_SEED)
+    for _ in range(_LINE_RANDOM_WITNESSES):
+        scale = rng.choice((1e-6, 1.0, 1e4, 1e12))
+        t0 = rng.uniform(-1e3, 1e3)
+        out.append(([rng.uniform(-1, 1) * scale for _ in range(6)]
+                    + [t0, t0 + rng.uniform(1e-3, 1e3)], 128))
+    curves = []
+    for v, n in out:
+        curve = r3.LineCurve(r3.Point3d(*v[:3]), r3.Point3d(*v[3:6]))
+        curve.Domain = r3.Interval(v[6], v[7])
+        curves.append((curve, n))
+    return curves
+
+
+def _line_call(fn, curve, n):
+    """Rust's samples of one LineCurve, or None when the export refuses it."""
+    line, d = curve.Line, curve.Domain
+    a, b = line.From, line.To
+    ends = (ctypes.c_double * 6)(a.X, a.Y, a.Z, b.X, b.Y, b.Z)
+    out = array.array("d", bytes(8 * 3 * (n + 1)))
+    code = fn(ends, float(d.T0), float(d.T1), n,
+              (ctypes.c_double * len(out)).from_buffer(out), len(out))
+    if code != 0:
+        return None
+    return list(zip(out[0::3], out[1::3], out[2::3]))
+
+
+def _packed(points):
+    return b"".join(struct.pack("<3d", *p) for p in points)
+
+
+def _line_parity(fn):
+    """True when the loaded rhino3dm's PointAt gives Rust's bits on every witness line."""
+    try:
+        for curve, n in _line_witness_curves():
+            got = _line_call(fn, curve, n)
+            if got is None or _packed(got) != _packed(_point_at_samples(curve, n)):
+                return False
+    except Exception:  # noqa: BLE001 -- an SDK that cannot be checked is not qualified
+        return False
+    return True
+
+
+def _line_binding():
+    global _line_state
+    signature = (os.environ.get(_ENV) or "<packaged>", _here(), id(r3))
+    state = _line_state
+    if state is not None and state[0] == signature:
+        return state[1]
+    with _lock:
+        state = _line_state
+        if state is not None and state[0] == signature:
+            return state[1]
+        fn, text = None, "line samples export unavailable; lines use PointAt"
+        if signature[1] not in LINE_QUALIFIED_PLATFORMS:
+            text = "not qualified on {}/{}; lines use PointAt".format(*signature[1])
+        else:
+            explicit = os.environ.get(_ENV)
+            path = (Path(explicit).expanduser() if explicit else
+                    Path(__file__).resolve().parent / "native" / _library_name())
+            try:
+                fn = ctypes.CDLL(str(path)).narwhal_pure_core_line_samples
+                fn.argtypes = [_D, ctypes.c_double, ctypes.c_double, ctypes.c_size_t, _D,
+                               ctypes.c_size_t]
+                fn.restype = ctypes.c_int32
+            except (AttributeError, OSError):
+                fn = None
+            if fn is not None and not _line_parity(fn):
+                fn = None
+                text = (f"rhino3dm {getattr(r3, '__version__', '?')} PointAt differs from "
+                        "the Rust line samples on the witness lines; lines use PointAt")
+            elif fn is not None:
+                text = "qualified"
+        _line_state = signature, fn, text
+        return fn
+
+
+def line_capability():
+    """``"qualified"`` when lines are sampled in Rust, otherwise the reason they are not."""
+    _line_binding()
+    return _line_state[2]
+
+
+def _line_samples(curve, n):
+    """`sample` for a LineCurve: None (unqualified, or refused by the export) keeps PointAt."""
+    global _native_line_calls
+    fn = _line_binding()
+    if fn is None:
+        return None
+    try:
+        n = int(n)
+        if not 1 <= n <= 1 << 20:
+            return None
+        got = _line_call(fn, curve, n)
+    except Exception:  # noqa: BLE001 -- PointAt remains the route
+        return None
+    if got is not None:
+        _native_line_calls += 1
+    return got

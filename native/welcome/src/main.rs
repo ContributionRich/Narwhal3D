@@ -1,3 +1,5 @@
+#[cfg(target_os = "linux")]
+mod linux_recovery;
 mod native_stacking;
 mod theme;
 
@@ -58,6 +60,7 @@ enum Tab {
 
 enum RuntimeEvent {
     Ready,
+    StartupRejected(String),
     Exited(i32),
     Failed(String),
 }
@@ -133,7 +136,7 @@ impl UpdateStatus {
             Self::Unsafe => "Unable to check securely",
             Self::Current => "You're up to date",
             Self::Available => "Update available",
-            Self::Updating => "Installing update…",
+            Self::Updating => "Preparing update…",
         }
     }
 
@@ -148,8 +151,13 @@ struct UpdateCheck {
 }
 
 enum UpdateEvent {
+    #[cfg(target_os = "linux")]
+    Recovered(Result<(Option<LinuxImage>, Option<String>), String>),
+    #[cfg(target_os = "linux")]
+    Completed(Result<Option<String>, String>),
     Checked(Result<UpdateCheck, String>),
-    Installed(Result<String, String>),
+    DownloadProgress(u64),
+    Installed(Result<PreparedUpdate, String>),
 }
 
 struct LaunchConfig {
@@ -220,6 +228,13 @@ struct WelcomeApp {
     update_status: UpdateStatus,
     available_release: Option<AvailableRelease>,
     update_message: Option<String>,
+    restart_ready: bool,
+    #[cfg(target_os = "linux")]
+    pending_image: Option<LinuxImage>,
+    #[cfg(target_os = "linux")]
+    recovery_pending: bool,
+    restart_requested: bool,
+    pending_restart: Option<Instant>,
     logo: egui::TextureHandle,
 }
 
@@ -648,7 +663,28 @@ fn unique_stamp() -> u128 {
         .as_nanos()
 }
 
-fn download_verified(asset: &ReleaseAsset, destination: &Path) -> Result<(), String> {
+fn write_new_download(
+    destination: &Path,
+    write: impl FnOnce(&mut fs::File) -> Result<(), String>,
+) -> Result<(), String> {
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(destination)
+        .map_err(|error| format!("could not create update file: {error}"))?;
+    let result = write(&mut file);
+    drop(file);
+    if result.is_err() {
+        let _ = fs::remove_file(destination);
+    }
+    result
+}
+
+fn download_verified(
+    asset: &ReleaseAsset,
+    destination: &Path,
+    progress: &dyn Fn(u64),
+) -> Result<(), String> {
     let (_, overridden) = releases_api();
     if !trusted_asset_url(&asset.browser_download_url, overridden) {
         return Err("release asset URL is not trusted".to_owned());
@@ -662,7 +698,7 @@ fn download_verified(asset: &ReleaseAsset, destination: &Path) -> Result<(), Str
         .and_then(parse_sha256)
         .ok_or("release asset has no valid GitHub sha256 digest")?;
     let client = http_client(DOWNLOAD_TIMEOUT, overridden)?;
-    let result = (|| -> Result<(), String> {
+    write_new_download(destination, |file| {
         let mut response: Response = client
             .get(&asset.browser_download_url)
             .header("Accept", "application/octet-stream")
@@ -677,13 +713,9 @@ fn download_verified(asset: &ReleaseAsset, destination: &Path) -> Result<(), Str
         {
             return Err("asset length does not match the signed release metadata".to_owned());
         }
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(destination)
-            .map_err(|error| format!("could not create update file: {error}"))?;
         let mut hasher = Sha256::new();
         let mut total = 0_u64;
+        let mut reported = 0;
         let mut buffer = [0_u8; 64 * 1024];
         loop {
             let count = response
@@ -701,6 +733,11 @@ fn download_verified(asset: &ReleaseAsset, destination: &Path) -> Result<(), Str
             hasher.update(&buffer[..count]);
             file.write_all(&buffer[..count])
                 .map_err(|error| format!("could not write update: {error}"))?;
+            let percent = total * 100 / asset.size;
+            if percent > reported {
+                reported = percent;
+                progress(percent);
+            }
         }
         if total != asset.size {
             return Err("download was truncated".to_owned());
@@ -712,11 +749,7 @@ fn download_verified(asset: &ReleaseAsset, destination: &Path) -> Result<(), Str
         file.sync_all()
             .map_err(|error| format!("could not sync verified update: {error}"))?;
         Ok(())
-    })();
-    if result.is_err() {
-        let _ = fs::remove_file(destination);
-    }
-    result
+    })
 }
 
 fn safe_absolute_path(path: &Path) -> bool {
@@ -729,9 +762,110 @@ fn safe_absolute_path(path: &Path) -> bool {
 }
 
 #[cfg(target_os = "linux")]
-fn install_linux(release: &AvailableRelease) -> Result<String, String> {
-    use std::os::unix::fs::PermissionsExt;
+fn publish_linux_image(
+    target: &Path,
+    staged: &Path,
+    backup: &Path,
+    original: &fs::Metadata,
+) -> Result<(), String> {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
 
+    let same_image = |path: &Path| {
+        fs::symlink_metadata(path).is_ok_and(|current| {
+            current.is_file()
+                && current.dev() == original.dev()
+                && current.ino() == original.ino()
+                && current.uid() == original.uid()
+                && current.mode() == original.mode()
+                && current.len() == original.len()
+                && current.mtime() == original.mtime()
+                && current.mtime_nsec() == original.mtime_nsec()
+        })
+    };
+    if !same_image(target) {
+        return Err("AppImage changed while downloading; no replacement was made".into());
+    }
+    let staged_metadata = fs::symlink_metadata(staged)
+        .map_err(|error| format!("cannot inspect staged image: {error}"))?;
+    if !staged_metadata.is_file()
+        || staged_metadata.uid() != original.uid()
+        || staged_metadata.nlink() != 1
+    {
+        return Err("staged image must be an owned regular file with no other links".into());
+    }
+    let directory = fs::File::open(target.parent().ok_or("AppImage has no parent")?)
+        .map_err(|error| format!("could not open AppImage directory: {error}"))?;
+    fs::set_permissions(staged, fs::Permissions::from_mode(original.mode() & 0o777))
+        .and_then(|_| fs::File::open(staged)?.sync_all())
+        .map_err(|error| format!("could not preserve and sync executable permissions: {error}"))?;
+    fs::File::open(target)
+        .and_then(|file| file.sync_all())
+        .map_err(|error| format!("could not sync previous image bytes: {error}"))?;
+    if !same_image(backup) {
+        fs::hard_link(target, backup)
+            .map_err(|error| format!("could not retain the previous AppImage: {error}"))?;
+    }
+    directory
+        .sync_all()
+        .map_err(|error| format!("could not sync the AppImage backup: {error}"))?;
+    if !same_image(backup)
+        || !same_image(target)
+        || !fs::symlink_metadata(staged).is_ok_and(|m| {
+            m.is_file()
+                && m.dev() == staged_metadata.dev()
+                && m.ino() == staged_metadata.ino()
+                && m.uid() == original.uid()
+                && m.nlink() == 1
+        })
+    {
+        return Err("AppImage changed before publication; no replacement was made".into());
+    }
+    fs::rename(staged, target)
+        .map_err(|error| format!("could not atomically replace current AppImage: {error}"))?;
+    directory.sync_all().map_err(|error| {
+        format!(
+            "AppImage replaced, but directory sync failed: {error}; previous image retained at {}",
+            backup.display()
+        )
+    })
+}
+
+struct PreparedUpdate {
+    message: String,
+    #[cfg(target_os = "linux")]
+    image: LinuxImage,
+}
+
+#[cfg(target_os = "linux")]
+struct LinuxImage {
+    target: PathBuf,
+    staged: PathBuf,
+    backup: PathBuf,
+    original: fs::Metadata,
+    expected: [u8; 32],
+    version: String,
+}
+
+#[cfg(target_os = "linux")]
+impl LinuxImage {
+    fn apply(&self) -> Result<(), String> {
+        let _reservation = linux_recovery::lock_for_apply(self)?;
+        let mut file = fs::File::open(&self.staged).map_err(|e| e.to_string())?;
+        let mut hash = Sha256::new();
+        let size = std::io::copy(&mut (&mut file).take(DOWNLOAD_LIMIT + 1), &mut hash)
+            .map_err(|e| e.to_string())?;
+        if size > DOWNLOAD_LIMIT || !digest_matches(&hash.finalize().into(), &self.expected) {
+            return Err("staged AppImage changed; download it again".into());
+        }
+        publish_linux_image(&self.target, &self.staged, &self.backup, &self.original)
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn install_linux(
+    release: &AvailableRelease,
+    progress: &dyn Fn(u64),
+) -> Result<PreparedUpdate, String> {
     let raw_target = std::env::var_os("APPIMAGE")
         .or_else(|| std::env::var_os("NARWHAL3D_PACKAGE_PATH"))
         .ok_or("cannot locate the current AppImage; use the release page")?;
@@ -747,33 +881,31 @@ fn install_linux(release: &AvailableRelease) -> Result<String, String> {
     let parent = target
         .parent()
         .ok_or("current AppImage has no parent directory")?;
-    let staged = parent.join(format!(
-        ".narwhal3d-update-{}-{}.AppImage",
-        std::process::id(),
-        unique_stamp()
-    ));
-    download_verified(&release.asset, &staged)?;
-    let result = (|| -> Result<(), String> {
-        fs::set_permissions(
-            &staged,
-            fs::Permissions::from_mode(metadata.permissions().mode()),
-        )
-        .map_err(|error| format!("could not preserve executable mode: {error}"))?;
-        fs::rename(&staged, &target)
-            .map_err(|error| format!("could not atomically replace current AppImage: {error}"))?;
-        fs::File::open(parent)
-            .and_then(|directory| directory.sync_all())
-            .map_err(|error| format!("could not sync AppImage directory: {error}"))?;
-        Ok(())
-    })();
-    if result.is_err() {
-        let _ = fs::remove_file(&staged);
-    }
-    result?;
-    Ok(format!(
-        "Narwhal 3D {} is installed. Restart to use it.",
-        release.version
-    ))
+    let stamp = format!("{}-{}", std::process::id(), unique_stamp());
+    let staged = parent.join(format!(".narwhal3d-update-{stamp}.AppImage"));
+    let backup = parent.join(format!("Narwhal3D-previous-{stamp}.AppImage"));
+    download_verified(&release.asset, &staged, progress)?;
+    let image = LinuxImage {
+        version: release.version.clone(),
+        target,
+        staged,
+        backup,
+        original: metadata,
+        expected: release
+            .asset
+            .digest
+            .as_deref()
+            .and_then(parse_sha256)
+            .ok_or("missing verified digest")?,
+    };
+    linux_recovery::Journal::create(&image)?;
+    Ok(PreparedUpdate {
+        message: format!(
+            "Version {} is verified and ready to install.",
+            release.version
+        ),
+        image,
+    })
 }
 
 #[cfg(any(test, target_os = "windows"))]
@@ -887,7 +1019,10 @@ fn windows_package_root() -> Result<PathBuf, String> {
 }
 
 #[cfg(target_os = "windows")]
-fn schedule_windows_update(release: &AvailableRelease) -> Result<String, String> {
+fn schedule_windows_update(
+    release: &AvailableRelease,
+    progress: &dyn Fn(u64),
+) -> Result<String, String> {
     use std::os::windows::process::CommandExt;
 
     validate_windows_update_format(std::env::var("NARWHAL3D_PACKAGE_FORMAT").ok().as_deref())?;
@@ -904,7 +1039,7 @@ fn schedule_windows_update(release: &AvailableRelease) -> Result<String, String>
     let staging = parent.join(format!(".narwhal3d-update-{stamp}.stage"));
     let backup = parent.join(format!(".narwhal3d-update-{stamp}.backup"));
     validate_windows_update_paths([&archive, &target, &staging, &backup])?;
-    download_verified(&release.asset, &archive)?;
+    download_verified(&release.asset, &archive, progress)?;
     if let Err(error) = fs::write(&script, WINDOWS_UPDATER_SCRIPT.as_bytes()) {
         let _ = fs::remove_file(&archive);
         return Err(format!("could not write Windows updater: {error}"));
@@ -944,7 +1079,10 @@ fn schedule_windows_update(release: &AvailableRelease) -> Result<String, String>
 }
 
 #[cfg(target_os = "windows")]
-fn schedule_windows_exe_update(release: &AvailableRelease) -> Result<String, String> {
+fn schedule_windows_exe_update(
+    release: &AvailableRelease,
+    progress: &dyn Fn(u64),
+) -> Result<String, String> {
     use std::os::windows::process::CommandExt;
 
     if !asset_matches_platform(&release.asset.name, UpdatePlatform::WindowsPortableExe) {
@@ -978,7 +1116,7 @@ fn schedule_windows_exe_update(release: &AvailableRelease) -> Result<String, Str
         std::process::id(),
         unique_stamp()
     ));
-    download_verified(&release.asset, &download)?;
+    download_verified(&release.asset, &download, progress)?;
     // The outer launcher owns the private staging, lifetime wait and rollback;
     // Welcome must never replace files in its immutable runtime cache.
     let result = Command::new(&target)
@@ -996,18 +1134,22 @@ fn schedule_windows_exe_update(release: &AvailableRelease) -> Result<String, Str
             String::from_utf8_lossy(&result.stderr)
         ));
     }
-    Ok(format!("Version {} is verified. Close all Narwhal windows within five minutes to finish updating. The previous executable will be retained for recovery.", release.version))
+    Ok(format!("Version {} is verified and staged. It will apply after this session closes normally. The previous executable will be retained for recovery.", release.version))
 }
 
-fn install_update(release: &AvailableRelease) -> Result<String, String> {
+fn install_update(
+    release: &AvailableRelease,
+    progress: &dyn Fn(u64),
+) -> Result<PreparedUpdate, String> {
     #[cfg(target_os = "linux")]
-    return install_linux(release);
+    return install_linux(release, progress);
     #[cfg(target_os = "windows")]
     return if UpdatePlatform::current() == Some(UpdatePlatform::WindowsPortableExe) {
-        schedule_windows_exe_update(release)
+        schedule_windows_exe_update(release, progress)
     } else {
-        schedule_windows_update(release)
-    };
+        schedule_windows_update(release, progress)
+    }
+    .map(|message| PreparedUpdate { message });
     #[allow(unreachable_code)]
     Err("automatic updates are not available on this platform; use the release page".to_owned())
 }
@@ -1097,7 +1239,7 @@ fn supervise_child(
         }
         match child.try_wait() {
             Ok(Some(status)) => {
-                let code = status.code().unwrap_or(1);
+                let code = status.code().filter(|&code| code != 75).unwrap_or(1);
                 exit_code.store(code, Ordering::Release);
                 let _ = sender.send(RuntimeEvent::Exited(code));
                 break;
@@ -1114,6 +1256,25 @@ fn supervise_child(
             }
         }
     }
+}
+
+fn preflight(config: &LaunchConfig) -> Result<(), String> {
+    let Some(python) = std::env::var_os("NARWHAL3D_WELCOME_PREFLIGHT") else {
+        return Ok(());
+    };
+    let script = config.bootstrap.with_file_name("check_native.py");
+    let status = Command::new(python)
+        .args(["-I", "-B"])
+        .arg(script)
+        .status()
+        .map_err(|e| format!("Could not check application components: {e}"))?;
+    if !status.success() {
+        return Err(
+            "Required application components did not pass verification. Reinstall Narwhal 3D."
+                .to_owned(),
+        );
+    }
+    Ok(())
 }
 
 fn spawn_runtime(
@@ -1173,6 +1334,18 @@ impl WelcomeApp {
         let current_version = current_version().ok();
         let theme = theme::Theme::load();
         theme.apply(&cc.egui_ctx);
+        #[cfg(target_os = "linux")]
+        let recovery_pending = if let Some(target) = linux_recovery::package_target() {
+            let sender = update_sender.clone();
+            std::thread::spawn(move || {
+                let _ = sender.send(UpdateEvent::Recovered(linux_recovery::recover(&target)));
+            });
+            true
+        } else {
+            false
+        };
+        #[cfg(not(target_os = "linux"))]
+        let recovery_pending = false;
         Self {
             theme,
             tab: Tab::Recent,
@@ -1195,11 +1368,18 @@ impl WelcomeApp {
             child_exited: false,
             status: "Preparing Narwhal 3D…".to_owned(),
             current_version,
-            update_check_started: false,
-            update_busy: false,
+            update_check_started: recovery_pending,
+            update_busy: recovery_pending,
             update_status: UpdateStatus::Idle,
             available_release: None,
             update_message: None,
+            restart_ready: false,
+            #[cfg(target_os = "linux")]
+            pending_image: None,
+            #[cfg(target_os = "linux")]
+            recovery_pending,
+            restart_requested: false,
+            pending_restart: None,
             logo: load_logo(cc),
         }
     }
@@ -1279,19 +1459,78 @@ impl WelcomeApp {
     fn poll_runtime(&mut self, ctx: &egui::Context) {
         while let Ok(event) = self.events.try_recv() {
             match event {
+                RuntimeEvent::StartupRejected(error) => {
+                    self.status = error.clone();
+                    self.update_message = Some(error);
+                    self.reveal_update(ctx);
+                }
                 RuntimeEvent::Ready => {
+                    if let (Some(path), Some(version)) = (
+                        std::env::var_os("NARWHAL3D_UPDATE_READY_PATH"),
+                        self.current_version.as_deref(),
+                    ) {
+                        let result = OpenOptions::new()
+                            .write(true)
+                            .create_new(true)
+                            .open(path)
+                            .and_then(|mut file| {
+                                file.write_all(version.as_bytes())?;
+                                file.sync_all()
+                            });
+                        if let Err(error) = result {
+                            self.update_message = Some(format!("Runtime is ready, but update startup could not be acknowledged: {error}. No rollback will occur."));
+                            self.reveal_update(ctx);
+                        }
+                    }
+                    #[cfg(target_os = "linux")]
+                    if !self.recovery_pending {
+                        self.confirm_linux_update();
+                    }
                     self.status = "Ready".to_owned();
                     self.ready = true;
                 }
                 RuntimeEvent::Exited(code) => {
-                    self.child_exited = true;
+                    if code == 0
+                        && self.restart_requested
+                        && self.request.with_extension("restart-approved").is_file()
+                    {
+                        let _ = fs::remove_file(self.request.with_extension("restart-approved"));
+                        #[cfg(target_os = "linux")]
+                        if let Some(image) = self.pending_image.take() {
+                            if let Err(error) = image.apply() {
+                                self.exit_code.store(1, Ordering::Release);
+                                self.status = format!("Update did not complete: {error}");
+                                self.restart_ready = false;
+                                self.ready = false;
+                                self.update_message = Some(self.status.clone());
+                                self.tab = Tab::About;
+                                self.hidden = false;
+                                self.lifetime = WelcomeLifetime::default();
+                                ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+                                ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+                                continue;
+                            }
+                        }
+                        self.exit_code.store(75, Ordering::Release);
+                    }
+                    self.child_exited = code == 0 || self.ready;
+                    if !self.child_exited {
+                        self.reveal_update(ctx);
+                        self.update_message = Some(format!("Runtime exited before readiness (status {code}). Any update recovery journal and previous image are retained. No automatic rollback was attempted."));
+                        self.tab = Tab::About;
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+                    }
                     if self.lifetime.fade_started.is_none() {
                         self.status = format!("Narwhal closed during startup (status {code})");
                     }
                 }
                 RuntimeEvent::Failed(error) => {
-                    self.child_exited = true;
-                    self.status = error;
+                    self.status = error.clone();
+                    self.update_message = Some(error);
+                    self.reveal_update(ctx);
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
                 }
             }
         }
@@ -1335,40 +1574,169 @@ impl WelcomeApp {
         self.update_message = Some("Downloading and verifying update…".to_owned());
         let sender = self.update_sender.clone();
         std::thread::spawn(move || {
-            let result = install_update(&release);
+            let result = install_update(&release, &|percent| {
+                let _ = sender.send(UpdateEvent::DownloadProgress(percent));
+            });
             let _ = sender.send(UpdateEvent::Installed(result));
         });
     }
 
-    fn poll_updates(&mut self) {
+    #[cfg(target_os = "linux")]
+    fn confirm_linux_update(&mut self) {
+        if let Some(target) = linux_recovery::package_target() {
+            let version = self.current_version.clone();
+            let sender = self.update_sender.clone();
+            self.update_busy = true;
+            std::thread::spawn(move || {
+                let _ = sender.send(UpdateEvent::Completed(linux_recovery::complete(
+                    &target,
+                    version.as_deref(),
+                )));
+            });
+        }
+    }
+
+    fn reveal_update(&mut self, ctx: &egui::Context) {
+        self.tab = Tab::About;
+        self.hidden = false;
+        self.lifetime = WelcomeLifetime::default();
+        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+    }
+
+    fn request_restart(&mut self, ctx: &egui::Context, now: Instant) {
+        if self.restart_requested {
+            return;
+        }
+        match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(self.request.with_extension("restart-preparing"))
+        {
+            Ok(_) => {
+                self.restart_requested = true;
+                self.pending_restart = Some(now + SUBMIT_DELAY);
+                self.update_message = Some("Waiting for the application to close safely…".into());
+                // Do not mark_closed: the supervisor must keep its request channel alive.
+                // Publish only on a later UI cycle, after this hide command is dispatched.
+                self.hide_surface(ctx);
+            }
+            Err(error) => self.update_message = Some(format!("Could not request restart: {error}")),
+        }
+    }
+
+    fn poll_restart(&mut self, ctx: &egui::Context, now: Instant) {
+        if self.pending_restart.is_none_or(|due| now < due) {
+            return;
+        }
+        self.pending_restart = None;
+        let preparing = self.request.with_extension("restart-preparing");
+        // A hard link publishes without overwriting a pre-existing host request.
+        let result = fs::hard_link(&preparing, self.request.with_extension("restart"));
+        let _ = fs::remove_file(preparing);
+        if let Err(error) = result {
+            self.restart_requested = false;
+            self.update_message = Some(format!(
+                "Could not request restart: {error}. Your application was not asked to close."
+            ));
+            self.reveal_update(ctx);
+        }
+    }
+
+    fn poll_updates(&mut self, _ctx: &egui::Context) {
+        self.poll_restart(_ctx, Instant::now());
+        if self.restart_requested
+            && fs::remove_file(self.request.with_extension("restart-declined")).is_ok()
+        {
+            self.restart_requested = false;
+            self.reveal_update(_ctx);
+            self.update_message = Some(
+                "Restart canceled or Save did not complete. Your application is still open; finish the active command or save your work, then try Restart again.".into(),
+            );
+        }
         while let Ok(event) = self.update_events.try_recv() {
             match event {
+                #[cfg(target_os = "linux")]
+                UpdateEvent::Recovered(result) => {
+                    self.recovery_pending = false;
+                    self.update_busy = false;
+                    match result {
+                        Ok((image, message)) => {
+                            self.restart_ready = image.is_some();
+                            self.pending_image = image;
+                            self.update_check_started = message.is_some();
+                            if message.is_some() {
+                                self.reveal_update(_ctx);
+                            }
+                            self.update_message = message;
+                            if self.ready {
+                                self.confirm_linux_update();
+                            }
+                        }
+                        Err(error) => {
+                            self.reveal_update(_ctx);
+                            self.update_message = Some(format!("Update recovery needs attention: {error}. No image was replaced; no automatic rollback will occur."));
+                        }
+                    }
+                }
+                #[cfg(target_os = "linux")]
+                UpdateEvent::Completed(result) => {
+                    self.update_busy = false;
+                    match result {
+                        Ok(Some(message)) => {
+                            self.reveal_update(_ctx);
+                            self.update_message = Some(message);
+                        }
+                        Ok(None) => {}
+                        Err(error) => {
+                            self.reveal_update(_ctx);
+                            self.update_message = Some(format!("Update completion could not be confirmed: {error}. No rollback will occur."));
+                        }
+                    }
+                }
                 UpdateEvent::Checked(Ok(check)) => {
                     if check.release.is_some() {
                         self.lifetime.fade_started = None;
                     }
                     self.update_status = check.status;
                     self.available_release = check.release;
-                    self.update_message = None;
                 }
                 UpdateEvent::Checked(Err(error)) => {
-                    eprintln!("[narwhal-welcome] {error}");
                     self.update_status = UpdateStatus::Unsafe;
-                    self.update_message = Some("Could not check for updates safely.".to_owned());
+                    self.update_message =
+                        Some(format!("Could not check for updates safely: {error}"));
+                }
+                UpdateEvent::DownloadProgress(percent) => {
+                    self.update_message = Some(if percent == 100 {
+                        "Verifying and preparing update…".to_owned()
+                    } else {
+                        format!("Downloading update… {percent}%")
+                    });
                 }
                 UpdateEvent::Installed(result) => {
                     self.update_busy = false;
                     self.available_release = None;
                     self.update_message = Some(match result {
-                        Ok(message) => {
+                        Ok(prepared) => {
+                            #[cfg(target_os = "linux")]
+                            {
+                                self.pending_image = Some(prepared.image);
+                            }
                             // The running version has not changed; a restart/exit is still required.
                             self.update_status = UpdateStatus::Idle;
-                            message
+                            self.restart_ready = matches!(
+                                UpdatePlatform::current(),
+                                Some(
+                                    UpdatePlatform::LinuxX86_64
+                                        | UpdatePlatform::WindowsPortableExe
+                                )
+                            );
+                            prepared.message
                         }
                         Err(error) => {
                             self.update_status = UpdateStatus::Unsafe;
-                            eprintln!("[narwhal-welcome] update failed: {error}");
-                            "Update failed safely. Download it from the release page.".to_owned()
+                            format!(
+                                "Update failed safely: {error}. Download it from the release page."
+                            )
                         }
                     });
                 }
@@ -1428,6 +1796,16 @@ impl WelcomeApp {
                 .as_ref()
                 .map_or(RELEASES_PAGE, |release| &release.page_url);
             ui.hyperlink_to("View releases", url);
+        }
+        if self.restart_ready && self.ready && !self.restart_requested {
+            if ui.button("Restart and finish update").clicked() {
+                self.request_restart(ui.ctx(), Instant::now());
+            }
+            if ui.button("Later").clicked() {
+                self.update_message =
+                    Some("Update ready. You can continue working and restart when ready.".into());
+                self.hide_welcome(ui.ctx());
+            }
         }
         if let Some(message) = &self.update_message {
             ui.add(egui::Label::new(RichText::new(message).size(11.5).color(p.muted)).wrap());
@@ -1634,8 +2012,21 @@ impl eframe::App for WelcomeApp {
 
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.poll_runtime(ctx);
+        if fs::remove_file(self.request.with_extension("show-updates")).is_ok()
+            && !self.child_exited
+        {
+            self.lifetime = WelcomeLifetime::default();
+            self.lifetime.note_attention(Instant::now(), true);
+            self.tab = Tab::About;
+            self.hidden = false;
+            if !self.update_busy && !self.restart_ready && self.available_release.is_none() {
+                self.update_check_started = false;
+            }
+            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+            ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+        }
         self.poll_submission(ctx);
-        self.poll_updates();
+        self.poll_updates(ctx);
         if self.first_paint.is_some() {
             self.start_update_check();
         }
@@ -1644,20 +2035,23 @@ impl eframe::App for WelcomeApp {
             .is_some_and(|painted| painted.elapsed() >= Duration::from_millis(350))
         {
             if let Some(config) = self.launch.take() {
-                self.status = match spawn_runtime(
-                    &config,
-                    self.sender.clone(),
-                    self.native_window,
-                    Arc::clone(&self.cancel_child),
-                    Arc::clone(&self.exit_code),
-                ) {
-                    Ok(()) => "Loading application components…".to_owned(),
-                    Err(error) => {
-                        self.exit_code.store(1, Ordering::Release);
-                        self.child_exited = true;
-                        error
+                self.status = "Preparing application components…".to_owned();
+                let sender = self.sender.clone();
+                let window = self.native_window;
+                let cancel = Arc::clone(&self.cancel_child);
+                let code = Arc::clone(&self.exit_code);
+                std::thread::spawn(move || {
+                    let result = preflight(&config).and_then(|()| {
+                        if cancel.load(Ordering::Acquire) {
+                            return Ok(());
+                        }
+                        spawn_runtime(&config, sender.clone(), window, cancel, Arc::clone(&code))
+                    });
+                    if let Err(error) = result {
+                        code.store(1, Ordering::Release);
+                        let _ = sender.send(RuntimeEvent::StartupRejected(error));
                     }
-                };
+                });
             }
         }
 
@@ -1667,7 +2061,11 @@ impl eframe::App for WelcomeApp {
             .map(|painted| now.saturating_duration_since(painted))
             .unwrap_or_default();
         self.lifetime.maybe_start_auto_fade(
-            self.ready && self.available_release.is_none() && !self.update_busy,
+            self.ready
+                && self.available_release.is_none()
+                && !self.update_busy
+                && !self.restart_ready
+                && self.update_message.is_none(),
             visible_for,
             now,
         );
@@ -1782,6 +2180,37 @@ impl eframe::App for WelcomeApp {
     }
 }
 
+#[cfg(target_os = "linux")]
+fn show_update_notice(message: &str) -> eframe::Result {
+    struct Notice(String);
+    impl eframe::App for Notice {
+        fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+            egui::CentralPanel::default().show(ui, |ui| {
+                ui.heading("Narwhal 3D update recovery");
+                ui.add_space(12.0);
+                ui.label(&self.0);
+                ui.add_space(12.0);
+                if ui.button("Close").clicked() {
+                    ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+                }
+            });
+        }
+    }
+    let text = message.to_owned();
+    eframe::run_native(
+        "Narwhal 3D update recovery",
+        eframe::NativeOptions {
+            viewport: egui::ViewportBuilder::default().with_inner_size([580.0, 240.0]),
+            centered: true,
+            ..Default::default()
+        },
+        Box::new(move |cc| {
+            theme::Theme::load().apply(&cc.egui_ctx);
+            Ok(Box::new(Notice(text)))
+        }),
+    )
+}
+
 fn main() -> eframe::Result {
     #[cfg(target_os = "linux")]
     if std::env::var_os("DISPLAY").is_some() {
@@ -1791,13 +2220,26 @@ fn main() -> eframe::Result {
         std::env::remove_var("WAYLAND_DISPLAY");
         std::env::remove_var("WAYLAND_SOCKET");
     }
-    let config = match parse_args() {
+    let mut config = match parse_args() {
         Ok(config) => config,
         Err(error) => {
             eprintln!("narwhal-welcome: {error}");
             std::process::exit(2);
         }
     };
+    let session_directory = config.request.with_extension("session");
+    #[cfg_attr(not(unix), allow(unused_mut))]
+    let mut builder = fs::DirBuilder::new();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        builder.mode(0o700);
+    }
+    if let Err(error) = builder.create(&session_directory) {
+        eprintln!("narwhal-welcome: could not create a private session directory: {error}");
+        std::process::exit(2);
+    }
+    config.request = session_directory.join("welcome.request");
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("Narwhal 3D")
@@ -1827,7 +2269,71 @@ fn main() -> eframe::Result {
         }
         std::thread::sleep(Duration::from_millis(25));
     }
+    for extension in [
+        "request",
+        "tmp",
+        "closed",
+        "reading",
+        "restart",
+        "restart-approved",
+        "restart-declined",
+        "restart-preparing",
+        "show-updates",
+    ] {
+        let _ = fs::remove_file(session_directory.join("welcome").with_extension(extension));
+    }
     let code = exit_code.load(Ordering::Acquire);
+    if code != 75 || !cfg!(target_os = "linux") {
+        let _ = fs::remove_dir(&session_directory);
+    }
+    if code == EXIT_PENDING && std::env::var_os("NARWHAL3D_PORTABLE_PID").is_some() {
+        std::process::exit(1);
+    }
+    #[cfg(target_os = "linux")]
+    if code == 75 {
+        let target =
+            std::env::var_os("APPIMAGE").or_else(|| std::env::var_os("NARWHAL3D_PACKAGE_PATH"));
+        if let Some(target) = target {
+            let expected = match linux_recovery::expected_version(Path::new(&target)) {
+                Ok(version) => version,
+                Err(error) => {
+                    show_update_notice(&format!("The update image was published, but relaunch verification could not be prepared: {error}. Reopen the AppImage to resume recovery. No rollback or process termination was attempted."))?;
+                    return Ok(());
+                }
+            };
+            let mut command = Command::new(target);
+            for name in [
+                "APPDIR",
+                "APPIMAGE",
+                "NARWHAL3D_WELCOME_PREFLIGHT",
+                "NARWHAL3D_WELCOME_REQUEST",
+            ] {
+                command.env_remove(name);
+            }
+            let ready = session_directory.join("runtime-ready");
+            command.env("NARWHAL3D_UPDATE_READY_PATH", &ready);
+
+            match command.spawn() {
+                Ok(mut child) => {
+                    let deadline = Instant::now() + Duration::from_secs(180);
+                    loop {
+                        if fs::read_to_string(&ready).ok().as_deref() == Some(expected.as_str())
+                        {
+                            let _ = fs::remove_file(&ready);
+                            let _ = fs::remove_dir(&session_directory);
+                            return Ok(());
+                        }
+                        if !matches!(child.try_wait(), Ok(None)) || Instant::now() >= deadline {
+                            show_update_notice("Update applied, but the new runtime did not confirm startup. It may still be running. No application was stopped and no rollback was attempted. Reopen the AppImage to resume completion; the hash-bound journal and previous image are retained.")?;
+                            break;
+                        }
+                        std::thread::sleep(Duration::from_millis(200));
+                    }
+                }
+                Err(error) => show_update_notice(&format!("Update applied, but Narwhal could not restart: {error}. Reopen the AppImage to resume completion. The previous image and recovery journal are retained; no automatic rollback was attempted."))?,
+            }
+        }
+    }
     if code != EXIT_PENDING && code != 0 {
         std::process::exit(code);
     }
@@ -1836,6 +2342,234 @@ fn main() -> eframe::Result {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    #[test]
+    fn preflight_child_contract() {
+        let Some(root) = std::env::var_os("NARWHAL_TEST_PREFLIGHT_ROOT") else {
+            return;
+        };
+        let root = std::path::PathBuf::from(root);
+        let config = super::LaunchConfig {
+            runtime: root.join("runtime"),
+            bootstrap: root.join("bootstrap.py"),
+            forwarded: vec![],
+            request: root.join("request"),
+        };
+        let expected = std::env::var("NARWHAL_TEST_PREFLIGHT_OK").unwrap() == "1";
+        assert_eq!(super::preflight(&config).is_ok(), expected);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn welcome_preflight_requires_success_and_the_exact_script() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = temporary_dir("preflight");
+        let python = root.join("python");
+        for success in [false, true] {
+            let script = format!(
+                "#!/bin/sh\n[ \"{}1\" = -I ] && [ \"{}2\" = -B ] && [ \"{}3\" = \"{}/check_native.py\" ] || exit 99\nexit {}\n",
+                char::from(36), char::from(36), char::from(36), root.display(),
+                if success { 0 } else { 2 }
+            );
+            fs::write(&python, script).unwrap();
+            fs::set_permissions(&python, fs::Permissions::from_mode(0o700)).unwrap();
+            let result = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "tests::preflight_child_contract"])
+                .env("NARWHAL_TEST_PREFLIGHT_ROOT", &root)
+                .env("NARWHAL_TEST_PREFLIGHT_OK", if success { "1" } else { "0" })
+                .env("NARWHAL3D_WELCOME_PREFLIGHT", &python)
+                .status()
+                .unwrap();
+            assert!(result.success());
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn recovery_completion_and_restart_modal_visibility() {
+        use super::*;
+        let ctx = egui::Context::default();
+        let (sender, events) = mpsc::channel();
+        let (update_sender, update_events) = mpsc::channel();
+        let root = temporary_dir("recovery-ui");
+        let mut app = WelcomeApp {
+            theme: theme::Theme::Light,
+            tab: Tab::Recent,
+            recent: vec![],
+            request: root.join("request"),
+            events,
+            sender,
+            update_events,
+            update_sender,
+            launch: None,
+            pending_request: None,
+            native_window: None,
+            cancel_child: Arc::new(AtomicBool::new(false)),
+            exit_code: Arc::new(AtomicI32::new(EXIT_PENDING)),
+            started: Instant::now(),
+            first_paint: None,
+            lifetime: WelcomeLifetime::default(),
+            hidden: true,
+            ready: false,
+            child_exited: false,
+            status: String::new(),
+            current_version: Some("0.4.99".into()),
+            update_check_started: true,
+            update_busy: true,
+            update_status: UpdateStatus::Idle,
+            available_release: None,
+            update_message: None,
+            restart_ready: false,
+            pending_image: None,
+            recovery_pending: true,
+            restart_requested: false,
+            pending_restart: None,
+            logo: ctx.load_texture(
+                "test",
+                egui::ColorImage::new([1, 1], vec![egui::Color32::WHITE]),
+                egui::TextureOptions::LINEAR,
+            ),
+        };
+        app.lifetime.dismiss();
+        app.update_sender
+            .send(UpdateEvent::Recovered(Err("journal changed".into())))
+            .unwrap();
+        app.poll_updates(&ctx);
+        assert!(!app.hidden);
+        assert!(matches!(app.tab, Tab::About));
+        assert_eq!(app.lifetime.fade_alpha(Instant::now()), 1.0);
+        assert!(app
+            .update_message
+            .as_deref()
+            .unwrap()
+            .contains("journal changed"));
+        assert!(!app.restart_ready);
+        assert!(!app.cancel_child.load(Ordering::Acquire));
+        app.hidden = true;
+        app.lifetime.dismiss();
+        app.update_sender
+            .send(UpdateEvent::Completed(Ok(Some("Update completed".into()))))
+            .unwrap();
+        app.poll_updates(&ctx);
+        assert!(!app.hidden);
+        assert_eq!(app.update_message.as_deref(), Some("Update completed"));
+        assert_eq!(app.lifetime.fade_alpha(Instant::now()), 1.0);
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| app.version_panel(ui));
+        assert!(!output.shapes.is_empty());
+        output.textures_delta.clear();
+
+        let now = Instant::now();
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            app.request_restart(ui.ctx(), now);
+        });
+        assert!(output
+            .viewport_output
+            .values()
+            .flat_map(|v| &v.commands)
+            .any(|command| matches!(command, egui::ViewportCommand::Visible(false))));
+        output.textures_delta.clear();
+        assert!(app.hidden);
+        assert!(app.restart_requested);
+        assert!(!app.request.with_extension("closed").exists());
+        assert!(
+            !app.request.with_extension("restart").exists(),
+            "host modal must not start before the hide cycle"
+        );
+        app.poll_restart(&ctx, now);
+        assert!(!app.request.with_extension("restart").exists());
+        app.poll_restart(&ctx, now + SUBMIT_DELAY);
+        assert!(app.request.with_extension("restart").is_file());
+        assert!(!app.request.with_extension("closed").exists());
+        assert!(!app.cancel_child.load(Ordering::Acquire));
+        fs::remove_file(app.request.with_extension("restart")).unwrap();
+        fs::write(app.request.with_extension("restart-declined"), b"").unwrap();
+        app.lifetime.dismiss();
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            app.poll_updates(ui.ctx());
+        });
+        assert!(output
+            .viewport_output
+            .values()
+            .flat_map(|v| &v.commands)
+            .any(|command| matches!(command, egui::ViewportCommand::Visible(true))));
+        output.textures_delta.clear();
+        assert!(!app.hidden);
+        assert!(!app.restart_requested);
+        assert_eq!(app.lifetime.fade_alpha(Instant::now()), 1.0);
+        assert!(app
+            .update_message
+            .as_deref()
+            .unwrap()
+            .contains("Save did not complete"));
+        assert!(!app.request.with_extension("closed").exists());
+        // A genuine failure must still surface even after the welcome was hidden.
+        app.hidden = true;
+        app.lifetime.dismiss();
+        app.sender
+            .send(RuntimeEvent::Failed("startup failed".into()))
+            .unwrap();
+        app.poll_runtime(&ctx);
+        assert!(!app.child_exited);
+        assert!(!app.hidden);
+        assert_eq!(app.lifetime.fade_alpha(Instant::now()), 1.0);
+        assert_eq!(app.update_message.as_deref(), Some("startup failed"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn image_publication_retains_previous_bytes_and_refuses_stale_target() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = std::env::temp_dir().join(format!(
+            "narwhal-image-test-{}-{}",
+            std::process::id(),
+            super::unique_stamp()
+        ));
+        std::fs::create_dir(&root).unwrap();
+        let current = root.join("Narwhal 3D.AppImage");
+        let staged = root.join("staged");
+        let backup = root.join("previous.AppImage");
+        std::fs::write(&current, b"old image").unwrap();
+        std::fs::set_permissions(&current, std::fs::Permissions::from_mode(0o751)).unwrap();
+        let original = std::fs::metadata(&current).unwrap();
+        std::fs::write(&staged, b"new image").unwrap();
+        super::publish_linux_image(&current, &staged, &backup, &original).unwrap();
+        assert_eq!(std::fs::read(&current).unwrap(), b"new image");
+        assert_eq!(std::fs::read(&backup).unwrap(), b"old image");
+        assert_eq!(
+            std::fs::metadata(&current).unwrap().permissions().mode() & 0o777,
+            0o751
+        );
+        std::fs::write(&staged, b"stale attempt").unwrap();
+        assert!(
+            super::publish_linux_image(&current, &staged, &root.join("other"), &original).is_err()
+        );
+        assert_eq!(std::fs::read(&current).unwrap(), b"new image");
+        assert!(!root.join("other").exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn staging_collision_preserves_existing_download() {
+        let directory = std::env::temp_dir().join(format!(
+            "narwhal-download-test-{}-{}",
+            std::process::id(),
+            super::unique_stamp()
+        ));
+        std::fs::create_dir(&directory).unwrap();
+        let path = directory.join("staged");
+        std::fs::write(&path, b"existing").unwrap();
+        let collision = super::write_new_download(&path, |_| panic!("opened existing file"));
+        let preserved = std::fs::read(&path);
+        assert!(collision.is_err());
+        assert_eq!(preserved.unwrap(), b"existing");
+        std::fs::remove_file(&path).unwrap();
+        let failure = super::write_new_download(&path, |_| Err("interrupted".into()));
+        assert_eq!(failure.unwrap_err(), "interrupted");
+        assert!(!path.exists());
+        std::fs::remove_dir(directory).unwrap();
+    }
     use super::{
         asset_matches_platform, digest_matches, error_chain, is_ready_line, parse_args_from,
         parse_sha256, parse_version, progress_state, read_limited, recent_files_from,
@@ -2018,7 +2752,7 @@ mod tests {
             (Unsafe, "Unable to check securely", true),
             (Current, "You're up to date", false),
             (Available, "Update available", true),
-            (Updating, "Installing update…", false),
+            (Updating, "Preparing update…", false),
         ] {
             assert_eq!(state.label(), label);
             assert_eq!(state.shows_releases(), releases);

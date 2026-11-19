@@ -22,6 +22,10 @@ fn error(text: &str) -> io::Error {
 
 impl Cache {
     #[cfg(windows)]
+    pub(crate) fn root(&self) -> &std::path::Path {
+        &self.root
+    }
+    #[cfg(windows)]
     pub fn current_user() -> io::Result<Self> {
         let local = crate::windows::local_app_data()?;
         crate::payload::regular_directory(&local)?;
@@ -81,22 +85,33 @@ impl Cache {
         Ok(file)
     }
     pub fn prepare(&self, payload: &Payload, limits: Limits) -> io::Result<Lease> {
-        self.prepare_after_miss(payload, limits, || {})
+        self.prepare_with_progress(payload, limits, |_| {})
+    }
+    pub fn prepare_with_progress(
+        &self,
+        payload: &Payload,
+        limits: Limits,
+        progress: impl FnMut(&'static str),
+    ) -> io::Result<Lease> {
+        self.prepare_after_miss(payload, limits, || {}, progress)
     }
     fn prepare_after_miss(
         &self,
         payload: &Payload,
         limits: Limits,
         mut after_miss: impl FnMut(),
+        mut progress: impl FnMut(&'static str),
     ) -> io::Result<Lease> {
         let admission = payload.admission(limits, u64::MAX)?;
         let key = &admission.cache_key;
         let lock = self.lock(key)?;
+        progress("Checking for a prepared runtime…");
         let directory = self.root.join(key);
         loop {
             FileExt::lock_shared(&lock)?;
             if directory.exists() {
                 // Never repair an in-use version. Every shared lease verifies it.
+                progress("Verifying runtime files…");
                 payload.verify_tree(&directory)?;
                 return Ok(Lease {
                     directory,
@@ -128,7 +143,9 @@ impl Cache {
                 .root
                 .join(format!("{key}.stage-{}-{nonce}", std::process::id()));
             fs::create_dir(&staging)?;
+            progress("Unpacking and checking runtime files…");
             let result = payload.extract(&staging, limits).and_then(|_| {
+                progress("Publishing the prepared runtime…");
                 // The per-payload exclusive lock protects this destination check/rename.
                 if directory.exists() {
                     return Err(error("cache destination appeared while locked"));
@@ -152,6 +169,7 @@ impl Cache {
         // the shared lease: an explicit cleanup could win the transition race.
         FileExt::unlock(&lock)?;
         FileExt::lock_shared(&lock)?;
+        progress("Verifying runtime files…");
         payload.verify_tree(&directory)?;
         Ok(Lease {
             directory,
@@ -183,6 +201,41 @@ impl Cache {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn preparation_reports_cold_and_warm_stages() {
+        let temp = Temp::new();
+        let exe = temp.0.join("fixture.exe");
+        fixture(&exe, "");
+        let payload = Payload::open(&exe, Limits::default()).unwrap();
+        let cache = Cache::fixture(temp.0.join("cache")).unwrap();
+        let mut stages = Vec::new();
+        let cold = cache
+            .prepare_with_progress(&payload, Limits::default(), |stage| stages.push(stage))
+            .unwrap();
+        assert!(!cold.reused);
+        assert_eq!(
+            stages,
+            [
+                "Checking for a prepared runtime…",
+                "Unpacking and checking runtime files…",
+                "Publishing the prepared runtime…",
+                "Verifying runtime files…",
+            ]
+        );
+        stages.clear();
+        let warm = cache
+            .prepare_with_progress(&payload, Limits::default(), |stage| stages.push(stage))
+            .unwrap();
+        assert!(warm.reused);
+        assert_eq!(
+            stages,
+            [
+                "Checking for a prepared runtime…",
+                "Verifying runtime files…",
+            ]
+        );
+    }
     use crate::payload_tests::{fixture, Temp};
     use std::sync::{mpsc, Arc};
     use std::time::Duration;
@@ -245,13 +298,18 @@ mod tests {
         let p = Arc::clone(&payload);
         let thread = std::thread::spawn(move || {
             let mut first = true;
-            let lease = c.prepare_after_miss(&p, Limits::default(), || {
-                if first {
-                    first = false;
-                    missed_tx.send(()).unwrap();
-                    resume_rx.recv_timeout(Duration::from_secs(5)).unwrap();
-                }
-            });
+            let lease = c.prepare_after_miss(
+                &p,
+                Limits::default(),
+                || {
+                    if first {
+                        first = false;
+                        missed_tx.send(()).unwrap();
+                        resume_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+                    }
+                },
+                |_| {},
+            );
             done_tx.send(lease).unwrap();
         });
         missed_rx.recv_timeout(Duration::from_secs(5)).unwrap();

@@ -239,7 +239,7 @@ check('asset.digest.as_deref().and_then(parse_sha256)' in rust
             and 'self.update_status != UpdateStatus::Available' in rust,
       "installation is user-triggered and requires GitHub's exact sha256 asset digest")
 check('APPIMAGE' in rust
-      and 'fs::rename(&staged, &target)' in rust
+      and 'fs::rename(staged, target)' in rust
       and 'PermissionsExt' in rust
       and 'current AppImage must be a regular non-symlink file' in rust,
       "Linux atomically replaces only a validated AppImage and preserves executable mode")
@@ -256,7 +256,7 @@ check('WINDOWS_UPDATER_SCRIPT' in rust
       and '.arg(&target)' in rust,
       "Windows schedules a literal-argument post-exit portable-package replacement")
 check('ui.hyperlink_to("View releases"' in rust
-      and 'Update failed safely. Download it from the release page.' in rust
+      and 'Update failed safely: {error}. Download it from the release page.' in rust
       and 'self.start_install(release)' in rust
       and 'RichText::new("Version")' in rust,
       "Version shows a genuine update action and a safe manual-release fallback")

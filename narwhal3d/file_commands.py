@@ -851,8 +851,28 @@ class ExitCmd(_FileCommand):
         return self.begin(ctx)
 
 
+class CheckForUpdatesCmd(_FileCommand):
+    name = "CheckForUpdates"
+    description = "Open the installed application's update controls."
+    steps = []
+
+    def begin(self, ctx):
+        request = os.environ.get("NARWHAL3D_WELCOME_REQUEST")
+        if not request:
+            return "Updates are available from the release page for this launch mode.", True
+        try:
+            with open(os.path.splitext(request)[0] + ".show-updates", "a", encoding="ascii"):
+                pass
+        except OSError as error:
+            return f"Could not open update controls: {error}", True
+        return "Opening update controls", True
+
+    def execute(self, ctx):
+        return self.begin(ctx)
+
+
 #: the commands this module provides, keyed as the registry keys them
-PROVIDED = (SaveCmd, SaveAsCmd, NewCmd, OpenCmd, ExitCmd)
+PROVIDED = (SaveCmd, SaveAsCmd, NewCmd, OpenCmd, ExitCmd, CheckForUpdatesCmd)
 for _cls in PROVIDED:
     _inst = _cls()
     commands.COMMANDS[_inst.name.lower()] = _inst

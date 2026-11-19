@@ -215,11 +215,14 @@ if [[ ! -x "$BLENDER" ]]; then
   exit 1
 fi
 
-# Native-only owners must match the source before the welcome or graphical runtime
-# starts. Otherwise an import failure leaves a misleading default Blender window.
+# Native-only owners must match before the modeling runtime starts. AppImages let
+# the welcome supervisor show preparation/recovery while it runs the same preflight;
+# source and direct launches check here before starting either graphical executable.
 if [[ "$runtime_platform" == linux ]]; then
   native_python="$(dirname "$BLENDER")/5.2/python/bin/python3.13"
-  if [[ ! -x "$native_python" ]] || ! "$native_python" -I -B "$ROOT/launch/check_native.py"; then
+  if [[ "${NARWHAL3D_APPIMAGE:-0}" == 1 && -x "$WELCOME" ]]; then
+    export NARWHAL3D_WELCOME_PREFLIGHT="$native_python"
+  elif [[ ! -x "$native_python" ]] || ! "$native_python" -I -B "$ROOT/launch/check_native.py"; then
     echo "[narwhal3d] required native startup check failed; graphical runtime not launched" >&2
     if [[ "${NARWHAL3D_NO_DIALOGS:-0}" != 1 ]] && command -v kdialog >/dev/null 2>&1; then
       timeout 30 kdialog --error 'Narwhal 3D cannot start because required native components are missing or incompatible. Rebuild or reinstall matching components. No modeling window was opened.' || true

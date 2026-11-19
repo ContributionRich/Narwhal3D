@@ -68,7 +68,7 @@ EXPECTED_RUNNABLE_COUNTS = {
     "Render": 0,
     "Tools": 8,
     "Window": 0,
-    "Help": 1,
+    "Help": 2,
 }
 EXPECTED_SERVICE_TODOS = frozenset({
     "revert", "savesmall", "incrementalsave", "saveastemplate", "insert",
@@ -103,7 +103,7 @@ def walk_rows(rows, path=()):
 
 
 print("\n-- live registry and authored structure --")
-check(len(REGISTERED) == 191, "the bare-package live registry has 191 commands",
+check(len(REGISTERED) == 192, "the bare-package live registry has 192 commands",
       repr(len(REGISTERED)))
 check(SIBLING_PINS <= REGISTERED,
       "commands unique to every sibling provider are present",

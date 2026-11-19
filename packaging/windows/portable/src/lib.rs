@@ -11,10 +11,14 @@ use std::collections::BTreeSet;
 use std::fmt;
 
 pub mod cache;
+#[cfg(windows)]
+pub mod install;
 pub mod pack;
 pub mod payload;
 #[cfg(test)]
 mod payload_tests;
+#[cfg(any(windows, test))]
+mod shortcut;
 pub mod update;
 #[cfg(windows)]
 pub mod windows;

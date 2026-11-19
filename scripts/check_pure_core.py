@@ -112,6 +112,9 @@ PURE_CORE_PYTESTS = (
     "spike/test_catenary_owned.py",
     "spike/test_native_intersect.py",
     "spike/test_pure_core_curve_hits_gate.py",
+    "spike/test_pure_core_nurbs_record_gate.py",
+    "spike/test_pure_core_line_samples_gate.py",
+    "spike/test_line_samples.py",
     "spike/test_native_coil_preview.py",
     "spike/test_preview_curve_native.py",
     "spike/test_preview24_boundaries.py",
@@ -122,6 +125,7 @@ PURE_CORE_PYTESTS = (
     "spike/test_pure_core_nearest_batch_gate.py",
     "spike/test_rebuild_performance.py",
     "spike/test_native_curve_samples.py",
+    "spike/test_nurbs_data.py",
     "spike/test_native_display_samples.py",
     "spike/test_native_rebuild_fit.py", "spike/test_rebuild_owned.py",
     "spike/test_native_arclength.py",
@@ -1393,6 +1397,158 @@ def probe_pure_core_curve_hits(path: Path, python: Path | str = sys.executable, 
     return identity
 
 
+# NURBS record reader (nurbs_data.arrays): checks one ON_NurbsCurve record from
+# rhino3dm's curve.Encode() and copies out its knots and homogeneous control points. A
+# library without it loses only the record route: every curve is then read point by point.
+PURE_CORE_NURBS_RECORD_EXPORT = "narwhal_pure_core_nurbs_curve_record"
+# narwhal3d/nurbs_data.py must carry the same set (spike/test_pure_core_nurbs_record_gate.py).
+# The export only copies bytes, with no floating-point arithmetic; Windows joins with its
+# own record.
+PURE_CORE_NURBS_RECORD_QUALIFIED_PLATFORMS = frozenset({"linux"})
+# The digest pins the copied knots and control points of the witness record (a cubic that
+# rhino3dm 8.35.0 encoded, with -0.0 and 1e-300 coordinates); it is also the digest of
+# rhino3dm's per-point Knots/Points read of the same curve. The three malformed records are
+# the outer framing faults found on review of #158: a zeroed outer length, trailing bytes,
+# and a record missing its last four bytes.
+PURE_CORE_NURBS_RECORD_IDENTITY = {
+    "export": PURE_CORE_NURBS_RECORD_EXPORT,
+    "shape": [4, 0, 7, 5], "zero_length_status": 1, "trailing_status": 1,
+    "truncated_status": 1, "refusals_write": False, "small_buffer_status": -3,
+    "small_buffer_shape": [4, 0, 7, 5], "null_shape_status": -1,
+    "doubles_sha256": "6f3facbb9fc448fa7657373da28646026bde86931affde966ed527d9fe9e2ff1",
+}
+PURE_CORE_NURBS_RECORD_PROBE = r'''
+import ctypes as c, hashlib, json, struct, sys
+fn = c.CDLL(sys.argv[1]).narwhal_pure_core_nurbs_curve_record
+D, Z = c.POINTER(c.c_double), c.c_size_t
+fn.argtypes = [c.c_char_p, Z, D, Z, D, Z, c.POINTER(Z)]
+fn.restype = c.c_int32
+record = bytes.fromhex(
+    "fa7f02003e01000000000000fbff02001400000000000000ddd4d74e47e9d311bfe50010830122f010f27870"
+    "fcff0200060100000000000011030000000000000004000000050000000000000000000000000000000000f0"
+    "3f00000000000000000000000000000000000000000000f0bf00000000000000000000000000000000070000"
+    "00000000000000008000000000000000000000000000000000000000000000f03f0000000000000040000000"
+    "0000000040000000000000004005000000000000000000008000000000000000000000000000000000000000"
+    "000000f03f0000000000000840000000000000e03f0000000000000840000000000000f0bf59f3f8c21f6ea5"
+    "010000000000001440000000000000004000000000000000000000000000001c40555555555555d53f000000"
+    "00000000c00092372e48ff7f02800000000000000000")
+def call(data, knot_cap=7, cv_cap=20, shape=True):
+    knots, cvs = (c.c_double * 8)(*[-9.0] * 8), (c.c_double * 24)(*[-9.0] * 24)
+    out = (Z * 4)(7, 7, 7, 7)
+    code = fn(data, len(data), knots, knot_cap, cvs, cv_cap, out if shape else None)
+    return code, list(out), list(knots), list(cvs)
+def untouched(result, shape=True):
+    return ((not shape or result[1] == [7] * 4)
+            and result[2] == [-9.0] * 8 and result[3] == [-9.0] * 24)
+code, shape, knots, cvs = call(record)
+if code != 0 or knots[7:] != [-9.0] or cvs[20:] != [-9.0] * 4:
+    raise RuntimeError("the export refused the witness record or wrote past it")
+zero_length = record[:4] + bytes(8) + record[12:]
+refusals = [call(bad) for bad in (zero_length, record + b"extra", record[:-4])]
+small = call(record, knot_cap=6)
+print(json.dumps({"export": "narwhal_pure_core_nurbs_curve_record", "shape": shape,
+                  "zero_length_status": refusals[0][0], "trailing_status": refusals[1][0],
+                  "truncated_status": refusals[2][0],
+                  "refusals_write": not (all(map(untouched, refusals))
+                                         and untouched(small, shape=False)),
+                  "small_buffer_status": small[0], "small_buffer_shape": small[1],
+                  "null_shape_status": call(record, shape=False)[0],
+                  "doubles_sha256": hashlib.sha256(struct.pack("<7d", *knots[:7])
+                                                   + struct.pack("<20d", *cvs[:20])).hexdigest()},
+                 sort_keys=True))
+'''
+
+
+def probe_pure_core_nurbs_record(path: Path, python: Path | str = sys.executable, *, env=None) -> dict:
+    """Require the NURBS record export to copy the pinned witness doubles and refusals."""
+    if not path.is_file() or path.is_symlink():
+        raise ValueError(f"missing regular pure-core library: {path}")
+    try:
+        completed = subprocess.run(
+            [str(python), "-I", "-B", "-c", PURE_CORE_NURBS_RECORD_PROBE, str(path.resolve())],
+            env=env, text=True, capture_output=True, check=True, timeout=30)
+        identity = json.loads(completed.stdout)
+    except (OSError, subprocess.SubprocessError, ValueError) as error:
+        raise ValueError(f"cannot verify pure-core NURBS record export: {getattr(error, 'stderr', '') or error}") from error
+    if identity != PURE_CORE_NURBS_RECORD_IDENTITY:
+        raise ValueError(f"pure-core NURBS record evidence differs: {identity!r}")
+    return identity
+
+
+# LineCurve samples (native_nearest.sample for a LineCurve): ON_LineCurve::Evaluate and
+# ON_Line::PointAt at sample_curve's parameters. A library without it loses only the Rust
+# route: lines then call PointAt.
+PURE_CORE_LINE_SAMPLES_EXPORT = "narwhal_pure_core_line_samples"
+# (sys.platform, machine) pairs; narwhal3d/native_nearest.py LINE_QUALIFIED_PLATFORMS must
+# carry the same set (spike/test_pure_core_line_samples_gate.py). Rust never fuses a
+# multiply-add, but a rhino3dm build that does (clang's default on arm64) rounds PointAt
+# differently, so a pair joins only once its artifact is qualified here. At run time the
+# route also requires the loaded rhino3dm to pass native_nearest's PointAt parity check.
+PURE_CORE_LINE_SAMPLES_QUALIFIED_PLATFORMS = frozenset({("linux", "x86_64")})
+# The digest pins the exact bits of 129 samples on each of three witness lines (-0.0 ends,
+# scales 1e-9 and 1e15, shifted domains); it is also the digest of rhino3dm 8.35.0's own
+# PointAt at the same parameters.
+PURE_CORE_LINE_SAMPLES_IDENTITY = {
+    "export": PURE_CORE_LINE_SAMPLES_EXPORT,
+    "empty_domain_status": -2, "nan_status": -2, "zero_intervals_status": -2,
+    "huge_request_status": -2, "small_buffer_status": -3, "null_line_status": -1,
+    "refusals_write": False,
+    "samples_sha256": "42e441d8a0645d7f7e5678549a3058fbc64f62dbe77325ac0f4c2f97573880ea",
+}
+PURE_CORE_LINE_SAMPLES_PROBE = r'''
+import ctypes as c, hashlib, json, struct, sys
+fn = c.CDLL(sys.argv[1]).narwhal_pure_core_line_samples
+D, Z = c.POINTER(c.c_double), c.c_size_t
+fn.argtypes = [D, c.c_double, c.c_double, Z, D, Z]
+fn.restype = c.c_int32
+h = float.fromhex
+lines = [  # from.xyz, to.xyz, T0, T1 as rhino3dm stores them
+    ["-0x0.0p+0", "0x1.999999999999ap-4", "0x1.8p+1", "0x1.cp+2", "-0x0.0p+0",
+     "0x1.5555555555555p-2", "0x0.0p+0", "0x1.df732362bf072p+2"],
+    ["0x1.c6bf52634p+49", "-0x1.c6bf52634p+47", "0x1.3e52b9abep+49", "-0x1.10d9316ecp+48",
+     "0x1.9945ca262p+49", "0x1.c6bf52634p+49", "-0x1.d99999999999ap+1", "0x1.6333333333333p+3"],
+    ["0x1.12e0be826d695p-30", "0x1.12e0be826d695p-29", "-0x0.0p+0", "0x1.12e0be826d695p-30",
+     "-0x1.80d43de9cc603p-31", "0x1.5798ee2308c3ap-28", "0x1.e848p+19", "0x1.e84809999999ap+19"],
+]
+bits = b""
+for values in lines:
+    v = [h(x) for x in values]
+    out = (c.c_double * 387)()
+    if fn((c.c_double * 6)(*v[:6]), v[6], v[7], 128, out, 387) != 0:
+        raise RuntimeError("the export refused a witness line")
+    bits += struct.pack("<387d", *out)
+line = (c.c_double * 6)(0, 0, 0, 1, 2, 3)
+out = (c.c_double * 30)(*[-9.0] * 30)
+statuses = {
+    "empty_domain_status": fn(line, 1.0, 1.0, 4, out, 30),
+    "nan_status": fn(line, float("nan"), 1.0, 4, out, 30),
+    "zero_intervals_status": fn(line, 0.0, 1.0, 0, out, 30),
+    "huge_request_status": fn(line, 0.0, 1.0, 2**20 + 1, out, 30),
+    "small_buffer_status": fn(line, 0.0, 1.0, 9, out, 29),
+    "null_line_status": fn(None, 0.0, 1.0, 4, out, 30),
+}
+print(json.dumps({"export": "narwhal_pure_core_line_samples", **statuses,
+                  "refusals_write": list(out) != [-9.0] * 30,
+                  "samples_sha256": hashlib.sha256(bits).hexdigest()}, sort_keys=True))
+'''
+
+
+def probe_pure_core_line_samples(path: Path, python: Path | str = sys.executable, *, env=None) -> dict:
+    """Require the line samples export to give the pinned witness bits and refusals."""
+    if not path.is_file() or path.is_symlink():
+        raise ValueError(f"missing regular pure-core library: {path}")
+    try:
+        completed = subprocess.run(
+            [str(python), "-I", "-B", "-c", PURE_CORE_LINE_SAMPLES_PROBE, str(path.resolve())],
+            env=env, text=True, capture_output=True, check=True, timeout=30)
+        identity = json.loads(completed.stdout)
+    except (OSError, subprocess.SubprocessError, ValueError) as error:
+        raise ValueError(f"cannot verify pure-core line samples export: {getattr(error, 'stderr', '') or error}") from error
+    if identity != PURE_CORE_LINE_SAMPLES_IDENTITY:
+        raise ValueError(f"pure-core line samples evidence differs: {identity!r}")
+    return identity
+
+
 # Additive unit-aware SVG export (vector_export.write_svg(unit=...)): ABI 1 and the legacy
 # narwhal_pure_core_svg_encode_into are unchanged, so a library without it loses only the
 # native route for unit SVGs. Formatting is IEEE division + Rust's exact decimal printing, no
@@ -1775,6 +1931,24 @@ def step_curve_hits(lib_path: Path) -> dict[str, object]:
     return {"status": "ok", "curve_hits": identity, "command": "ctypes curve/curve probe"}
 
 
+def step_nurbs_record(lib_path: Path) -> dict[str, object]:
+    """Qualify the NURBS record export; required for the library to carry it."""
+    try:
+        identity = probe_pure_core_nurbs_record(lib_path)
+    except ValueError as exc:
+        raise GateError(str(exc)) from exc
+    return {"status": "ok", "nurbs_record": identity, "command": "ctypes NURBS record probe"}
+
+
+def step_line_samples(lib_path: Path) -> dict[str, object]:
+    """Qualify the line samples export; required for the library to carry it."""
+    try:
+        identity = probe_pure_core_line_samples(lib_path)
+    except ValueError as exc:
+        raise GateError(str(exc)) from exc
+    return {"status": "ok", "line_samples": identity, "command": "ctypes line samples probe"}
+
+
 def step_svg_unit(lib_path: Path) -> dict[str, object]:
     """Qualify the unit-aware SVG export; required for the library to carry it."""
     try:
@@ -1862,6 +2036,8 @@ def run_gate(crate_rel: str) -> dict[str, object]:
     steps["direct_abi"] = step_direct_abi(lib)
     steps["nearest_batch"] = step_nearest_batch(lib)
     steps["curve_hits"] = step_curve_hits(lib)
+    steps["nurbs_record"] = step_nurbs_record(lib)
+    steps["line_samples"] = step_line_samples(lib)
     steps["svg_unit"] = step_svg_unit(lib)
     steps["adapter"] = step_adapter(crate, lib)
     steps["windows_check"] = step_windows_check(crate)
@@ -1901,7 +2077,7 @@ def main(argv: list[str]) -> int:
     else:
         print(f"pure-core source gate: OK (crate {report['crate']})")
         for name in ("fmt", "clippy", "tests", "release_build",
-                     "direct_abi", "nearest_batch", "curve_hits", "svg_unit",
+                     "direct_abi", "nearest_batch", "curve_hits", "nurbs_record", "line_samples", "svg_unit",
                      "adapter", "windows_check"):
             step = report["steps"][name]
             detail = step.get("passed", step.get("suites", step.get("reason", "")))

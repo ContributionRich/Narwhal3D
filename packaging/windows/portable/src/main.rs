@@ -3,15 +3,36 @@ use narwhal_portable_payload::{payload::Payload, Limits};
 use std::path::Path;
 
 #[cfg(windows)]
+mod startup;
+
+#[cfg(windows)]
 fn run() -> Result<i32, String> {
     use narwhal_portable_payload::cache::Cache;
     use std::process::Command;
+    let mut arguments: Vec<_> = std::env::args_os().skip(1).collect();
+    let internal = arguments.first().is_some_and(|arg| {
+        [
+            "--portable-verify",
+            "--portable-check-cache",
+            "--portable-schedule-update",
+            "--portable-finish-update",
+        ]
+        .iter()
+        .any(|flag| arg == *flag)
+    });
+    let startup = (!internal && std::env::var_os("NARWHAL3D_LAUNCHER_TEST").is_none())
+        .then(startup::Startup::show);
+    let stage = |text| {
+        if let Some(window) = &startup {
+            window.stage(text);
+        }
+    };
     let executable = std::env::current_exe().map_err(|e| e.to_string())?;
     let payload = Payload::open(&executable, Limits::default()).map_err(|e| e.to_string())?;
     if payload.manifest().identity.version != env!("NARWHAL_PORTABLE_VERSION") {
         return Err("payload version differs from native executable resources".into());
     }
-    let arguments: Vec<_> = std::env::args_os().skip(1).collect();
+
     if arguments.len() == 4 && arguments[0] == "--portable-schedule-update" {
         let hash = arguments[2].to_str().ok_or("invalid update hash")?;
         let pid = arguments[3]
@@ -29,14 +50,16 @@ fn run() -> Result<i32, String> {
         println!("{message}");
         return Ok(0);
     }
-    if arguments.len() == 2 && arguments[0] == "--portable-finish-update" {
+    if matches!(arguments.len(), 2 | 3) && arguments[0] == "--portable-finish-update" {
         let message = narwhal_portable_payload::update::finish(
             &executable,
             &payload,
             Path::new(&arguments[1]),
+            arguments.get(2).is_some_and(|arg| arg == "--restart"),
         )
         .map_err(|e| e.to_string())?;
         println!("{message}");
+        notice("Narwhal 3D update complete", &message);
         return Ok(0);
     }
     if arguments.first().is_some_and(|s| s == "--portable-verify") {
@@ -50,8 +73,48 @@ fn run() -> Result<i32, String> {
         return Ok(0);
     }
     let cache = Cache::current_user().map_err(|e| e.to_string())?;
+    if !internal {
+        stage("Checking interrupted updates…");
+        for message in narwhal_portable_payload::update::recover_startup(
+            &executable,
+            &payload.manifest().identity.version,
+        )
+        .map_err(|e| format!("Could not safely recover an interrupted update: {e}"))?
+        {
+            notice("Narwhal 3D update recovery", &message);
+        }
+    }
+    if startup.is_some() && !arguments.first().is_some_and(|a| a == "--portable") {
+        stage("Checking the per-user installation…");
+        let installed = narwhal_portable_payload::install::managed(
+            &cache,
+            &executable,
+            &payload.manifest().identity.version,
+        )
+        .map_err(|e| format!("Could not prepare the per-user launcher: {e}"))?;
+        if std::fs::canonicalize(&executable).map_err(|e| e.to_string())?
+            != std::fs::canonicalize(&installed).map_err(|e| e.to_string())?
+        {
+            let mut child = Command::new(installed)
+                .args(&arguments)
+                .spawn()
+                .map_err(|e| e.to_string())?;
+            drop(startup);
+            return child
+                .wait()
+                .map(|s| s.code().unwrap_or(1))
+                .map_err(|e| e.to_string());
+        }
+        stage("Registering shortcuts…");
+        if let Err(error) = narwhal_portable_payload::install::migrate(&cache, &installed) {
+            notice("Narwhal 3D shortcuts", &format!("Could not register all shortcuts: {error}. Narwhal can still start; shortcut registration will retry next launch."));
+        }
+    }
+    if arguments.first().is_some_and(|a| a == "--portable") {
+        arguments.remove(0);
+    }
     let lease = cache
-        .prepare(&payload, Limits::default())
+        .prepare_with_progress(&payload, Limits::default(), stage)
         .map_err(|e| e.to_string())?;
     if arguments
         .first()
@@ -99,7 +162,8 @@ fn run() -> Result<i32, String> {
     };
     // Keep caller CWD and OS strings: relative/Unicode document arguments survive.
     // Welcome supervises the runtime; the cache lease stays held until it exits.
-    let status = command
+    stage("Starting Narwhal 3D…");
+    let mut child = command
         .env("NARWHAL3D_VERSION", &payload.manifest().identity.version)
         .env("NARWHAL3D_WINDOWS", "1")
         .env("NARWHAL3D_PACKAGE_FORMAT", "windows-portable-exe")
@@ -107,9 +171,36 @@ fn run() -> Result<i32, String> {
         .env("NARWHAL3D_PORTABLE_EXE", &executable)
         .env("NARWHAL3D_PORTABLE_PID", std::process::id().to_string())
         .env("PYTHONDONTWRITEBYTECODE", "1")
-        .status()
+        .spawn()
         .map_err(|e| format!("could not start the verified payload: {e}"))?;
-    Ok(status.code().unwrap_or(1))
+    drop(startup);
+    let status = child
+        .wait()
+        .map_err(|e| format!("could not wait for the application: {e}"))?;
+    let restart = status.code() == Some(75);
+    if status.success() || restart {
+        narwhal_portable_payload::update::apply_after_session(&executable, restart)
+            .map_err(|e| format!("Could not apply staged update: {e}"))?;
+    }
+    Ok(if restart {
+        0
+    } else {
+        status.code().unwrap_or(1)
+    })
+}
+
+#[cfg(windows)]
+fn notice(title: &str, text: &str) {
+    let title: Vec<_> = title.encode_utf16().chain(Some(0)).collect();
+    let text: Vec<_> = text.encode_utf16().chain(Some(0)).collect();
+    unsafe {
+        windows_sys::Win32::UI::WindowsAndMessaging::MessageBoxW(
+            std::ptr::null_mut(),
+            text.as_ptr(),
+            title.as_ptr(),
+            0x40,
+        );
+    }
 }
 
 fn main() {

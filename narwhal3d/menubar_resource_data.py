@@ -390,6 +390,7 @@ _SERVICE_GROUPS = {
         )),
         _popup("Support", (
             _todo("Report a Bug", "showbugreport"),
+            _item("Check for Updates…", "checkforupdates"),
             _todo("About Narwhal 3D", "aboutnarwhal3d"),
         )),
     ),

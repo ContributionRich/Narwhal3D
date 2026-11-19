@@ -52,6 +52,12 @@ def public_completeness_checks():
                           for path in (base / directory).rglob("*")
                           if path.is_file() and path.suffix in suffixes)
     native.add("native/geometry_core/build.rs")
+    # Installer crates must ship every Rust module, including cfg-gated recovery/startup.
+    for crate in ("native/welcome", "packaging/windows/portable"):
+        native.update(f"{crate}/{name}" for name in ("Cargo.toml", "Cargo.lock"))
+        native.update(path.relative_to(ROOT).as_posix()
+                      for path in (ROOT / crate / "src").rglob("*.rs") if path.is_file())
+
     focused = {
         "spike/test_ai_workflow.py", "spike/test_ai_workflow_native.py",
         "spike/test_ai_cad.py", "spike/test_ai_cad_native.py",
@@ -601,6 +607,8 @@ check({"native/pure_core/Cargo.toml", "native/pure_core/README.md",
        "native/pure_core/src/interpolate.rs",
        "native/pure_core/src/tween.rs", "native/pure_core/src/surface.rs",
        "native/pure_core/src/curvex.rs",
+       "native/pure_core/src/nurbs_record.rs",
+       "native/pure_core/src/line_samples.rs",
        "native/pure_core/src/cage.rs",
        "native/pure_core/src/gridsnap.rs",
        "scripts/check_pure_core.py", "spike/test_pure_core_gate.py",
@@ -610,11 +618,14 @@ check({"native/pure_core/Cargo.toml", "native/pure_core/README.md",
        "spike/test_native_command_search.py", "spike/test_native_coil.py",
        "spike/test_native_intersect.py",
        "spike/test_pure_core_curve_hits_gate.py",
+       "spike/test_pure_core_nurbs_record_gate.py",
+       "spike/test_pure_core_line_samples_gate.py",
        "spike/test_native_coil_preview.py", "spike/test_preview_curve_native.py",
        "spike/test_native_tessellate.py",
        "spike/test_native_unit_table.py",
        "spike/test_native_nearest.py",
        "spike/test_native_curve_samples.py",
+       "spike/test_nurbs_data.py",
        "spike/test_native_display_samples.py",
        "spike/test_native_rebuild_fit.py",
        "spike/test_native_arclength.py",

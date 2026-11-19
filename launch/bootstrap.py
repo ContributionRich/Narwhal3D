@@ -216,6 +216,38 @@ def _open_launch_file(path, tries=[0]):
     return None
 
 
+def _update_exit_request():
+    """Bridge to Blender's normal Exit command; Rust owns update policy."""
+    base = os.path.splitext(os.environ["NARWHAL3D_WELCOME_REQUEST"])[0]
+    try:
+        os.remove(base + ".restart")
+    except FileNotFoundError:
+        return 0.2
+    from narwhal3d import file_commands
+    from narwhal3d.state import app_state
+
+    quit_application = file_commands.quitter
+    if not callable(quit_application) or app_state.active_command is not None:
+        with open(base + ".restart-declined", "x", encoding="ascii"):
+            pass
+        return 0.2
+
+    def approved_quit():
+        with open(base + ".restart-approved", "x", encoding="ascii"):
+            pass
+        quit_application()
+
+    file_commands.quitter = approved_quit
+    try:
+        message, _ = file_commands.ExitCmd().begin(app_state.ctx)
+        if message != "Exiting":
+            with open(base + ".restart-declined", "x", encoding="ascii"):
+                pass
+    finally:
+        file_commands.quitter = quit_application
+    return 0.2
+
+
 def main():
     # Source-script launches use the same v4 strip as the desktop launcher. The
     # patched runtime re-evaluates global-area sizes during layout refresh.
@@ -227,6 +259,7 @@ def main():
         bpy.app.timers.register(_presentation_watchdog, first_interval=9.0)
     if os.environ.get("NARWHAL3D_WELCOME_REQUEST"):
         bpy.app.timers.register(_welcome_request, first_interval=0.1)
+        bpy.app.timers.register(_update_exit_request, first_interval=0.2)
     _session_only_preferences()
     _suppress_splash()
     _clear_default_scene()
@@ -261,4 +294,5 @@ def main():
     print("[narwhal3d] Narwhal 3D session ready")
 
 
-main()
+if __name__ == "__main__":
+    main()

@@ -34,6 +34,14 @@ _signature = None
 _binding = None
 _native_calls = 0
 
+
+def _nurbs_data():
+    try:
+        from . import nurbs_data
+    except ImportError:          # loaded standalone (tests / probes)
+        import nurbs_data
+    return nurbs_data
+
 _D = ctypes.POINTER(ctypes.c_double)
 
 
@@ -96,16 +104,13 @@ def _pack(curve):
     """
     if not isinstance(curve, r3.NurbsCurve) or not curve.IsValid:
         return None
-    cvs = array.array("d")
-    for cv in curve.Points:
-        cvs.extend((cv.X, cv.Y, cv.Z, cv.W))   # homogeneous, as openNURBS stores them
-    knots = array.array("d", curve.Knots.ToList())
-    order, count = int(curve.Order), len(cvs) // 4
+    order, rational, knots, cvs = _nurbs_data().arrays(curve)   # homogeneous CVs
+    count = len(cvs) // 4
     if order < 2 or count < order or len(knots) != order + count - 2:
         return None
     args = (order, (ctypes.c_double * len(knots)).from_buffer(knots), len(knots),
             (ctypes.c_double * len(cvs)).from_buffer(cvs), count,
-            int(bool(curve.IsRational)))
+            int(rational))
     return args, (knots, cvs)
 
 
