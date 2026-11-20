@@ -334,7 +334,7 @@ def _():
         "native/pure_core/src/options_owned.rs", "native/pure_core/src/options_ffi.rs",
         "native/pure_core/src/options_prompt.rs"}
     assert set(gate.RUST_INTEGRATION_SUITES) == {
-            "alias_golden", "unit_golden", "interpolate_golden", "svgpath_golden",
+            "alias_golden", "unit_golden", "interpolate_golden", "interpolate32_properties", "svgpath_golden",
             "bearing_golden", "calc_golden", "coords_golden", "unitformat_golden",
             "macro_golden", "joinchain_golden", "rebuild_golden", "blend_golden", "norm_golden",
                         "nurbs_golden", "arclength_golden",
@@ -470,6 +470,7 @@ def _():
     crate = Path(CRATE)
     required = {
         "tests/coil_golden.rs", "tests/interpolate_helpers_golden.rs",
+        "tests/interpolate32_properties.rs",
         "tests/stl_owned.rs", "tests/stl_import_safety.rs", "tests/interpolate_helpers.h",
         "tests/fixtures/coil_numeric.txt", "tests/fixtures/coil_baseline_linux.json",
         "tests/fixtures/coil_windows_msvc.txt", "tests/fixtures/coil_windows_msvc_provenance.txt",

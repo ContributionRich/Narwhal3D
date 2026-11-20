@@ -1105,8 +1105,8 @@ class PackageTests(unittest.TestCase):
         # Path/AST metadata only: never load the golden corpora into this test.
         closure = gate.require_rust_public_closure(ROOT / "native/pure_core")
         self.assertEqual(set(closure), set(gate.RUST_INTEGRATION_FILES))
-        self.assertEqual(len(gate.RUST_INTEGRATION_SUITES), 39)
-        for suite in ("options29_engine", "options29_ffi", "options29_prompt",
+        self.assertEqual(len(gate.RUST_INTEGRATION_SUITES), 40)
+        for suite in ("interpolate32_properties", "options29_engine", "options29_ffi", "options29_prompt",
                       "options29_prompt_ffi", "options29_registration"):
             self.assertIn(suite, gate.RUST_INTEGRATION_SUITES)
         source = ast.parse((ROOT / "scripts/create_public_branch.py").read_text())

@@ -139,7 +139,7 @@ PURE_CORE_PYTESTS = (
 
 
 # Explicit Rust oracle-retirement suites and their source/fixture closure.
-RUST_INTEGRATION_SUITES = ('alias_golden', 'unit_golden', 'interpolate_golden', 'svgpath_golden', 'bearing_golden', 'calc_golden', 'coords_golden', 'unitformat_golden', 'macro_golden', 'joinchain_golden', 'rebuild_golden', 'blend_golden', 'norm_golden', 'nurbs_golden', 'arclength_golden', 'coil_golden', 'interpolate_helpers_golden', 'stl_owned', 'stl_import_safety', 'catenary_boundary', 'catenary_golden', 'obj_golden', 'stl_legacy_abi', 'stl_name_prefix', 'dxf_owned', 'vector23_golden', 'tween_golden', 'obj_legacy_abi', 'encoder_legacy_abi', 'earclip24_golden', 'preview24_golden', 'dxf_reader24', 'dxf_legacy_abi', 'nearest25_golden', 'options29_engine',
+RUST_INTEGRATION_SUITES = ('alias_golden', 'unit_golden', 'interpolate_golden', 'interpolate32_properties', 'svgpath_golden', 'bearing_golden', 'calc_golden', 'coords_golden', 'unitformat_golden', 'macro_golden', 'joinchain_golden', 'rebuild_golden', 'blend_golden', 'norm_golden', 'nurbs_golden', 'arclength_golden', 'coil_golden', 'interpolate_helpers_golden', 'stl_owned', 'stl_import_safety', 'catenary_boundary', 'catenary_golden', 'obj_golden', 'stl_legacy_abi', 'stl_name_prefix', 'dxf_owned', 'vector23_golden', 'tween_golden', 'obj_legacy_abi', 'encoder_legacy_abi', 'earclip24_golden', 'preview24_golden', 'dxf_reader24', 'dxf_legacy_abi', 'nearest25_golden', 'options29_engine',
 'options29_ffi', 'options29_prompt', 'options29_prompt_ffi', 'options29_registration')
 RUST_INTEGRATION_FILES = (
     'native/pure_core/tests/fixtures/nearest25_host_windows_msvc.jsonl',
@@ -332,6 +332,7 @@ RUST_INTEGRATION_FILES = (
     'native/pure_core/tests/fixtures/unit_whitespace.txt',
     'native/pure_core/tests/fixtures/unitformat_golden.txt',
     'native/pure_core/tests/interpolate_golden.rs',
+    'native/pure_core/tests/interpolate32_properties.rs',
     'native/pure_core/tests/joinchain_golden.rs',
     'native/pure_core/tests/macro_golden.rs',
     'native/pure_core/tests/rebuild_golden.rs',

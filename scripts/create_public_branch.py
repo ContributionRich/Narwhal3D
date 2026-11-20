@@ -455,6 +455,7 @@ NATIVE_FILES = (
     'native/pure_core/tests/fixtures/unit_whitespace.txt',
     'native/pure_core/tests/fixtures/unitformat_golden.txt',
     'native/pure_core/tests/interpolate_golden.rs',
+    'native/pure_core/tests/interpolate32_properties.rs',
     'native/pure_core/tests/dxf_owned.h',
     'native/pure_core/tests/dxf_owned.rs',
     'native/pure_core/tests/encoder_legacy_abi.rs',

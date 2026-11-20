@@ -20,7 +20,6 @@ pkg = types.ModuleType("narwhal3d")
 pkg.__path__ = [os.path.join(ROOT, "narwhal3d")]
 sys.modules["narwhal3d"] = pkg
 
-
 def _load(name, rel):
     spec = importlib.util.spec_from_file_location(name, os.path.join(ROOT, rel))
     mod = importlib.util.module_from_spec(spec)
@@ -28,12 +27,10 @@ def _load(name, rel):
     spec.loader.exec_module(mod)
     return mod
 
-
 interp = _load("narwhal3d.interpolate", "narwhal3d/interpolate.py")
 
 checks = 0
 failures = []
-
 
 def check(cond, label):
     global checks
@@ -44,27 +41,12 @@ def check(cond, label):
         print(f"  FAIL {label}")
         failures.append(label)
 
-
 print("=" * 74)
 print("GLOBAL NURBS INTERPOLATION")
 print("=" * 74)
 
 print("\n-- parameterisation (the reference application's three knot styles) --")
 PTS = [(0, 0, 0), (1, 0, 0), (3, 0, 0), (7, 0, 0)]
-u = interp.parameters(PTS, "Uniform")
-check(u == [0.0, 1 / 3, 2 / 3, 1.0],
-      "Uniform spaces parameters equally, ignoring physical distance "
-      "(MEASURED: 'not based on the physical spacing of the points')")
-c = interp.parameters(PTS, "Chord")
-check(abs(c[1] - 1 / 7) < 1e-12 and abs(c[2] - 3 / 7) < 1e-12,
-      "Chord spaces them by distance (1,2,4 of 7 -> 1/7, 3/7, 1)")
-s = interp.parameters(PTS, "SqrtChrd")
-tot = 1 + math.sqrt(2) + 2
-check(abs(s[1] - 1 / tot) < 1e-12,
-      "SqrtChrd uses the square root of each distance")
-check(c[0] == 0.0 and c[-1] == 1.0, "and every style is normalised to [0, 1]")
-for style in interp.KNOT_STYLES:
-    check(interp.parameters(PTS, style)[-1] == 1.0, f"  {style} ends exactly at 1.0")
 
 try:
     interp.parameters(PTS, "Nonsense")
@@ -80,54 +62,9 @@ except interp.InterpolationError as e:
           "COINCIDENT consecutive points are refused by name -- they would make a "
           "zero span and a singular system, not a silently nudged curve")
 
-print("\n-- the knot vector (P&T eq. 9.8) --")
-params = interp.parameters([(0, 0, 0), (1, 1, 0), (2, 0, 0), (3, 1, 0), (4, 0, 0)],
-                           "Chord")
-kn = interp.averaged_knots(params, 3)
-check(len(kn) == 5 + 3 + 1, "full clamped vector is n + degree + 1 long")
-check(kn[:4] == [0.0] * 4 and kn[-4:] == [1.0] * 4,
-      "clamped: degree+1 zeros at the start and ones at the end")
-check(all(kn[i] <= kn[i + 1] + 1e-15 for i in range(len(kn) - 1)),
-      "and it is non-decreasing")
-
 print("\n-- INTERPOLATION: the curve passes THROUGH the points --")
 
-
-def through(points, degree=3, style=interp.DEFAULT_KNOT_STYLE):
-    """Worst distance from each data point to the curve evaluated at its parameter."""
-    ctrl, knots, p = interp.interpolate_points(points, degree, style)
-    us = interp.parameters(points, style)
-    worst = 0.0
-    for k, target in enumerate(points):
-        uu = us[k]
-        span = interp.find_span(len(ctrl), p, uu, knots)
-        vals = interp.basis_values(span, uu, p, knots)
-        pt = [0.0, 0.0, 0.0]
-        for j, w in enumerate(vals):
-            cp = ctrl[span - p + j]
-            for d in range(3):
-                pt[d] += w * cp[d]
-        worst = max(worst, math.dist(pt, target))
-    return worst, ctrl, p
-
-
 WAVE = [(0, 0, 0), (1, 2, 0), (3, -1, 0), (5, 3, 0), (8, 0, 0), (10, 2, 1)]
-for style in interp.KNOT_STYLES:
-    w, ctrl, p = through(WAVE, 3, style)
-    check(w < 1e-9,
-          f"{style}: a degree-3 curve through 6 points hits every one "
-          f"(worst error {w:.2e})")
-    check(p == 3 and len(ctrl) == 6,
-          f"  {style}: degree 3 with one control point per data point")
-
-w, ctrl, p = through([(0, 0, 0), (1, 1, 0), (2, 0, 0), (3, 1, 0)], 3)
-check(w < 1e-9, "the minimum degree-3 case (4 points) interpolates exactly")
-
-# 3-D, non-planar, unevenly spaced -- the realistic case
-HELIX = [(math.cos(t), math.sin(t), t * 0.4)
-         for t in (0.0, 0.3, 0.9, 1.1, 2.0, 2.4, 3.6, 5.0)]
-w, _, _ = through(HELIX, 3, "Chord")
-check(w < 1e-9, f"an 8-point non-planar helix sample interpolates exactly ({w:.2e})")
 
 print("\n-- degree rules (MEASURED from the reference API docs) --")
 try:
@@ -137,17 +74,6 @@ except interp.InterpolationError as e:
     check("ODD" in str(e).upper(),
           "an EVEN degree is refused BY NAME -- the reference API documents "
           "'Degree must be odd', so quietly rounding it would hide a misconception")
-w, ctrl, p = through([(0, 0, 0), (2, 1, 0)], 3)
-check(p == 1 and w < 1e-12,
-      "two points clamp down to degree 1 -- a line through 2 points IS the exact "
-      "answer, not a fallback")
-w, ctrl, p = through([(0, 0, 0), (1, 1, 0), (3, 0, 0)], 3)
-check(p == 2 and w < 1e-12,
-      "three points clamp to degree 2 -- a SMOOTH curve through three points. Clamping "
-      "to an odd degree would give degree 1, i.e. a POLYLINE, which is exactly the "
-      "'curves made of line segments' the project rule forbids")
-w5, _, p5 = through(WAVE, 5)
-check(p5 == 5 and w5 < 1e-9, f"degree 5 also interpolates exactly ({w5:.2e})")
 try:
     interp.interpolate_points([(0, 0, 0)], 3)
     check(False, "one point is refused")
@@ -159,50 +85,6 @@ print("\n-- SKINNING: the surface passes through every section --")
 def circle_net(radius, z, n=9):
     return [(radius * math.cos(2 * math.pi * i / (n - 1)),
              radius * math.sin(2 * math.pi * i / (n - 1)), z) for i in range(n)]
-
-
-SECTIONS = [circle_net(5, 0), circle_net(4, 3), circle_net(6, 7), circle_net(5, 11)]
-net, vknots, q = interp.skin_control_net(SECTIONS, 3, "Chord")
-check(len(net) == 9 and len(net[0]) == 4,
-      "the net is (U control points) x (sections)")
-check(q == 3, "V degree 3 -- SMOOTH along the sweep, which is the whole point")
-
-
-def surface_point(net, vknots, q, i, v):
-    """Evaluate control-column `i` of the net at V parameter `v`."""
-    column = net[i]
-    span = interp.find_span(len(column), q, v, vknots)
-    vals = interp.basis_values(span, v, q, vknots)
-    pt = [0.0, 0.0, 0.0]
-    for j, w in enumerate(vals):
-        cp = column[span - q + j]
-        for d in range(3):
-            pt[d] += w * cp[d]
-    return pt
-
-
-# recover the V parameters the skin used, then check each section is reproduced exactly
-acc = [0.0] * len(SECTIONS)
-used = 0
-for i in range(len(SECTIONS[0])):
-    col = [s[i] for s in SECTIONS]
-    try:
-        ps = interp.parameters(col, "Chord")
-    except interp.InterpolationError:
-        continue
-    used += 1
-    for j, pv in enumerate(ps):
-        acc[j] += pv
-vp = [a / used for a in acc]
-vp[0], vp[-1] = 0.0, 1.0
-worst = 0.0
-for j, section in enumerate(SECTIONS):
-    for i in range(len(section)):
-        got = surface_point(net, vknots, q, i, vp[j])
-        worst = max(worst, math.dist(got, section[i]))
-check(worst < 1e-9,
-      f"every section is reproduced EXACTLY by the skinned surface ({worst:.2e}) -- "
-      f"so a sweep passes through its stations instead of chording between them")
 
 try:
     interp.skin_control_net([circle_net(5, 0)], 3)
@@ -216,28 +98,8 @@ except interp.InterpolationError as e:
     check("compatible" in str(e),
           "sections with different control-point counts are refused BY NAME rather "
           "than skinned into nonsense")
-net2, vk2, q2 = interp.skin_control_net(SECTIONS[:2], 3, "Chord")
-check(q2 == 1, "two sections clamp to degree 1 -- a ruled surface, which is correct "
-               "and is what Loft's Straight style means")
-net3, vk3, q3 = interp.skin_control_net(SECTIONS[:3], 3, "Chord")
-check(q3 == 2,
-      "THREE sections skin to degree 2 -- smooth. An odd-degree clamp would give "
-      "degree 1 here, turning a three-section loft into flat strips")
 
 print("\n-- the linear algebra --")
-A = [[4.0, 1.0, 0.0], [1.0, 4.0, 1.0], [0.0, 1.0, 4.0]]
-lu, perm = interp.lu_factor(A)
-sol = interp.lu_solve(lu, perm, [(6.0,), (12.0,), (18.0,)])
-# verify by substitution rather than by a hard-coded answer
-res = 0.0
-for i in range(3):
-    acc2 = sum(A[i][j] * sol[j][0] for j in range(3))
-    res = max(res, abs(acc2 - [6.0, 12.0, 18.0][i]))
-check(res < 1e-12, f"LU solves a 3x3 system (residual {res:.2e})")
-multi = interp.lu_solve(lu, perm, [(6.0, 1.0), (12.0, 2.0), (18.0, 3.0)])
-check(abs(multi[0][0] - sol[0][0]) < 1e-12,
-      "and one factorisation serves several right-hand sides -- which is what makes "
-      "skinning O(n^3) once rather than O(n^4)")
 try:
     interp.lu_factor([[1.0, 2.0], [2.0, 4.0]])
     check(False, "a singular system is refused")
@@ -282,13 +144,6 @@ except ImportError:
 print("\n-- CLOSED (periodic) interpolation (#43) --")
 # Every production size uses Rust; exact original answers are frozen in Rust golden tests.
 RING = [(0, 0, 0), (4, 1, 0), (7, 5, 1), (3, 9, 0), (-2, 6, 2), (-3, 2, 0)]
-for style in interp.KNOT_STYLES:
-    us = interp.closed_parameters(RING, style)
-    check(len(us) == len(RING) + 1 and us[0] == 0.0 and us[-1] == 1.0,
-          f"{style}: closed parameters run once around, closing segment included")
-check(abs(interp.closed_parameters(RING, "Chord")[-2] - (1 - math.dist(RING[-1], RING[0])
-      / sum(math.dist(RING[k], RING[(k + 1) % 6]) for k in range(6)))) < 1e-15,
-      "Chord: the closing segment's share is its chord length")
 try:
     interp.closed_parameters(RING + [RING[0]])
     check(False, "a repeated first point is refused")
@@ -299,24 +154,6 @@ try:
     check(False, "two points cannot close")
 except interp.InterpolationError as e:
     check("at least 3" in str(e), f"two points are refused by name ({e})")
-
-# the cyclic solver against the dense LU on the same wrapped system
-import random
-random.seed(5)
-for n in (3, 4, 9):
-    sub = [random.uniform(0.05, 0.3) for _ in range(n)]
-    sup = [random.uniform(0.05, 0.3) for _ in range(n)]
-    diag = [1.0 - a - c for a, c in zip(sub, sup)]
-    rhs = [(random.random(), random.random(), random.random()) for _ in range(n)]
-    dense = [[0.0] * n for _ in range(n)]
-    for i in range(n):
-        dense[i][(i - 1) % n] += sub[i]
-        dense[i][i] += diag[i]
-        dense[i][(i + 1) % n] += sup[i]
-    want = interp.lu_solve(*interp.lu_factor(dense), rhs)
-    got = interp.cyclic_tridiagonal_solve(sub, diag, sup, rhs)
-    check(max(abs(a - b) for ra, rb in zip(want, got) for a, b in zip(ra, rb)) < 1e-12,
-          f"the O(n) cyclic solve equals the dense LU (n={n})")
 
 try:
     import rhino3dm

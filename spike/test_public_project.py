@@ -52,6 +52,7 @@ def public_completeness_checks():
                           for path in (base / directory).rglob("*")
                           if path.is_file() and path.suffix in suffixes)
     native.add("native/geometry_core/build.rs")
+    native.add("native/pure_core/tests/interpolate32_properties.rs")
     # Installer crates must ship every Rust module, including cfg-gated recovery/startup.
     for crate in ("native/welcome", "packaging/windows/portable"):
         native.update(f"{crate}/{name}" for name in ("Cargo.toml", "Cargo.lock"))

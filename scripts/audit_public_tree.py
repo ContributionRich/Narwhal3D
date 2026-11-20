@@ -24,6 +24,7 @@ import tokenize
 
 ROOT = Path(__file__).resolve().parents[1]
 REQUIRED = {
+    'native/pure_core/tests/interpolate32_properties.rs',
     'native/welcome/Cargo.toml',
     'native/welcome/Cargo.lock',
     'native/welcome/src/main.rs',
