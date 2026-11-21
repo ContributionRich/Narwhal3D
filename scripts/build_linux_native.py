@@ -14,7 +14,8 @@ import shutil
 import subprocess
 import sys
 
-from check_pure_core import (probe_pure_core_curve_hits, probe_pure_core_line_samples, probe_pure_core_nearest_batch,
+from check_pure_core import (probe_pure_core_curve_hits, probe_pure_core_curve_record_hits,
+                             probe_pure_core_line_samples, probe_pure_core_nearest_batch,
                              probe_pure_core_nurbs_record, probe_pure_core_parser,
                              probe_pure_core_retirement)
 
@@ -426,6 +427,7 @@ def main() -> None:
             receipt["pure_core_retirement"] = probe_pure_core_retirement(target / "release/libnarwhal_pure_core.so")
             receipt["pure_core_nearest_batch"] = probe_pure_core_nearest_batch(target / "release/libnarwhal_pure_core.so")
             receipt["pure_core_curve_hits"] = probe_pure_core_curve_hits(target / "release/libnarwhal_pure_core.so")
+            receipt["pure_core_curve_record_hits"] = probe_pure_core_curve_record_hits(target / "release/libnarwhal_pure_core.so")
             receipt["pure_core_nurbs_record"] = probe_pure_core_nurbs_record(target / "release/libnarwhal_pure_core.so")
             receipt["pure_core_line_samples"] = probe_pure_core_line_samples(target / "release/libnarwhal_pure_core.so")
             (out / f"{args.crate}-{mode}-receipt.json").write_text(json.dumps(receipt, indent=2) + "\n")

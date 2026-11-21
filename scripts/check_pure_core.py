@@ -112,6 +112,8 @@ PURE_CORE_PYTESTS = (
     "spike/test_catenary_owned.py",
     "spike/test_native_intersect.py",
     "spike/test_pure_core_curve_hits_gate.py",
+    "spike/test_pure_core_curve_record_hits_gate.py",
+    "spike/test_polyline_curve_hits.py",
     "spike/test_pure_core_nurbs_record_gate.py",
     "spike/test_pure_core_line_samples_gate.py",
     "spike/test_line_samples.py",
@@ -1398,6 +1400,112 @@ def probe_pure_core_curve_hits(path: Path, python: Path | str = sys.executable, 
     return identity
 
 
+# Curve/curve intersection with polylines (native_intersect.point_hits for a pair with a
+# PolylineCurve): each curve is read from its encoded record, and ON_PolylineCurve's
+# Evaluate, bounding box and Split are ported. A library without it loses only that route:
+# such pairs keep the Python recursion.
+PURE_CORE_CURVE_RECORD_HITS_EXPORT = "narwhal_pure_core_curve_curve_record_hits"
+# (sys.platform, machine) pairs; narwhal3d/native_intersect.py POLYLINE_QUALIFIED_PLATFORMS
+# must carry the same set (spike/test_pure_core_curve_record_hits_gate.py). Rust never fuses
+# a multiply-add, but a rhino3dm build that does rounds a polyline's PointAt and Split
+# differently, so a pair joins only once its artifact is qualified here. At run time the
+# route also requires the loaded rhino3dm to pass native_intersect's polyline parity check.
+PURE_CORE_CURVE_RECORD_HITS_QUALIFIED_PLATFORMS = frozenset({("linux", "x86_64")})
+# The digest pins the exact bits of every witness hit; it is also the digest of the Python
+# recursion's hits (`_dedupe(_subdivide(...))`) on rhino3dm 8.35.0's curves.
+PURE_CORE_CURVE_RECORD_HITS_IDENTITY = {
+    "export": PURE_CORE_CURVE_RECORD_HITS_EXPORT,
+    "hits": [3, 1, 1], "small_buffer_status": -3, "unrecognised_record_status": -2,
+    "truncated_record_status": -2, "nan_tolerance_status": -2, "deep_request_status": -2,
+    "null_count_status": -1,
+    "hits_sha256": "d17d5a65dfbac1700dbbe32e312aa1a9a1c4058364574342632663a9fe2e6ed6",
+}
+PURE_CORE_CURVE_RECORD_HITS_PROBE = r'''
+import ctypes as c, hashlib, json, struct, sys
+fn = c.CDLL(sys.argv[1]).narwhal_pure_core_curve_curve_record_hits
+D, Z = c.POINTER(c.c_double), c.c_size_t
+fn.argtypes = [c.c_char_p, Z, c.c_char_p, Z, c.c_double, Z, D, Z, c.POINTER(Z)]
+fn.restype = c.c_int32
+# native_intersect._polyline_witnesses(), as rhino3dm 8.35.0 encodes them: a zigzag
+# polyline, a cubic, a closed quadrilateral, a polyline whose halving snaps to a break,
+# and a degree-1 NURBS line.
+zig = bytes.fromhex(
+    "fa7f0200c900000000000000fbff02001400000000000000e6d4d74e47e9d311bfe50010830122f04e9c"
+    "bbdbfcff0200910000000000000010040000001baf48800ce50dc09cdd657b8324ec3f00000000000000"
+    "0048c2868c53ed03c056524350b831f9bf00000000000000003ae2059345b8ecbf1182bf7f1a68e33f00"
+    "0000000000000007e3c8f61a78e33f23edebed3cdbf2bf00000000000000000400000093e816040c9645"
+    "c0ecc2cf59da2623c03c0e5eae3d053840f7fed144f4ce4c40030000005ee85b79ff7f02800000000000"
+    "000000")
+wave = bytes.fromhex(
+    "fa7f02001e01000000000000fbff02001400000000000000ddd4d74e47e9d311bfe50010830122f010f2"
+    "7870fcff0200e60000000000000011030000000000000004000000040000000000000000000000000000"
+    "000000f03f00000000000000000000000000000000000000000000f0bf00000000000000000000000000"
+    "00000006000000000000000000000000000000000000000000000000000000000000000000f03f000000"
+    "000000f03f000000000000f03f0400000000000000000014c0d8a5c3f45a38cbbf000000000000000033"
+    "333333333303c0f81b5eb672f5d3bf0000000000000000a09999999999c93f7452ec88eba4e93f000000"
+    "000000000068666666666606408a5aba7c5055e0bf000000000000000000cf0bb5b6ff7f028000000000"
+    "00000000")
+quad = bytes.fromhex(
+    "fa7f0200e900000000000000fbff02001400000000000000e6d4d74e47e9d311bfe50010830122f04e9c"
+    "bbdbfcff0200b10000000000000010050000007c18ec63daa700c07dd3ebd4cb3f04c000000000000000"
+    "00f20d2674f19f0240eafbc458bd4307c000000000000000001ac73554ce6e054055a1005ec5f6024000"
+    "000000000000007913a645e5b800c00129c0faed2a044000000000000000007c18ec63daa700c07dd3eb"
+    "d4cb3f04c0000000000000000005000000637d0eba1407ec3fa4ef992a52d50140ee3fb026dfa80c401d"
+    "48631136be134042706e8ffc271940030000007fa507bbff7f02800000000000000000")
+near = bytes.fromhex(
+    "fa7f0200a900000000000000fbff02001400000000000000e6d4d74e47e9d311bfe50010830122f04e9c"
+    "bbdbfcff0200710000000000000010030000000000000000000000000000000000000000000000000000"
+    "00000000000000f03f239ede04c5cee03f00000000000000000000000000000040000000000000000000"
+    "00000000000000030000000000000000000000000000000000f03f411fedfeffffff3f0300000015cc3f"
+    "19ff7f02800000000000000000")
+cut = bytes.fromhex(
+    "fa7f0200ce00000000000000fbff02001400000000000000ddd4d74e47e9d311bfe50010830122f010f2"
+    "7870fcff0200960000000000000011030000000000000002000000020000000000000000000000000000"
+    "000000f03f00000000000000000000000000000000000000000000f0bf00000000000000000000000000"
+    "0000000200000000000000000000002f176c1b0d00104002000000ae47e17a14aeef3f000000000000f0"
+    "bf0000000000000000295c8fc2f528f03f0000000000000840000000000000000000fc783a64ff7f0280"
+    "0000000000000000")
+def call(a, b, tol=1e-6, depth=40, capacity=10, count=True):
+    out, n = (c.c_double * 50)(), Z()
+    code = fn(a, len(a), b, len(b), tol, depth, out, capacity, c.byref(n) if count else None)
+    return code, n.value, out
+counts, bits = [], b""
+for a, b, tol in ((zig, wave, 1e-3), (quad, zig, 1e-6), (near, cut, 1e-6)):
+    code, n, out = call(a, b, tol)
+    if code != 0:
+        raise RuntimeError("the export refused a witness pair")
+    counts.append(n)
+    bits += struct.pack("<%dd" % (5 * n), *out[:5 * n])
+small = call(zig, wave, 1e-3, capacity=1)
+if small[1] != 3:
+    raise RuntimeError("a full buffer must still report the hit count")
+print(json.dumps({"export": "narwhal_pure_core_curve_curve_record_hits", "hits": counts,
+                  "small_buffer_status": small[0],
+                  "unrecognised_record_status": call(b"not a record", wave)[0],
+                  "truncated_record_status": call(zig[:-4], wave)[0],
+                  "nan_tolerance_status": call(zig, wave, float("nan"))[0],
+                  "deep_request_status": call(zig, wave, depth=65)[0],
+                  "null_count_status": call(zig, wave, count=False)[0],
+                  "hits_sha256": hashlib.sha256(bits).hexdigest()}, sort_keys=True))
+'''
+
+
+def probe_pure_core_curve_record_hits(path: Path, python: Path | str = sys.executable, *, env=None) -> dict:
+    """Require the record curve/curve export to give the pinned witness hits, bit for bit."""
+    if not path.is_file() or path.is_symlink():
+        raise ValueError(f"missing regular pure-core library: {path}")
+    try:
+        completed = subprocess.run(
+            [str(python), "-I", "-B", "-c", PURE_CORE_CURVE_RECORD_HITS_PROBE, str(path.resolve())],
+            env=env, text=True, capture_output=True, check=True, timeout=30)
+        identity = json.loads(completed.stdout)
+    except (OSError, subprocess.SubprocessError, ValueError) as error:
+        raise ValueError(f"cannot verify pure-core record curve/curve export: {getattr(error, 'stderr', '') or error}") from error
+    if identity != PURE_CORE_CURVE_RECORD_HITS_IDENTITY:
+        raise ValueError(f"pure-core record curve/curve evidence differs: {identity!r}")
+    return identity
+
+
 # NURBS record reader (nurbs_data.arrays): checks one ON_NurbsCurve record from
 # rhino3dm's curve.Encode() and copies out its knots and homogeneous control points. A
 # library without it loses only the record route: every curve is then read point by point.
@@ -1932,6 +2040,16 @@ def step_curve_hits(lib_path: Path) -> dict[str, object]:
     return {"status": "ok", "curve_hits": identity, "command": "ctypes curve/curve probe"}
 
 
+def step_curve_record_hits(lib_path: Path) -> dict[str, object]:
+    """Qualify the record curve/curve export; required for the library to carry it."""
+    try:
+        identity = probe_pure_core_curve_record_hits(lib_path)
+    except ValueError as exc:
+        raise GateError(str(exc)) from exc
+    return {"status": "ok", "curve_record_hits": identity,
+            "command": "ctypes record curve/curve probe"}
+
+
 def step_nurbs_record(lib_path: Path) -> dict[str, object]:
     """Qualify the NURBS record export; required for the library to carry it."""
     try:
@@ -2037,6 +2155,7 @@ def run_gate(crate_rel: str) -> dict[str, object]:
     steps["direct_abi"] = step_direct_abi(lib)
     steps["nearest_batch"] = step_nearest_batch(lib)
     steps["curve_hits"] = step_curve_hits(lib)
+    steps["curve_record_hits"] = step_curve_record_hits(lib)
     steps["nurbs_record"] = step_nurbs_record(lib)
     steps["line_samples"] = step_line_samples(lib)
     steps["svg_unit"] = step_svg_unit(lib)

@@ -1365,6 +1365,7 @@ class RetirementPackageTests(unittest.TestCase):
             if module is linux_build:
                 with patch.object(module,"probe_pure_core_nearest_batch",return_value={}), \
                         patch.object(module,"probe_pure_core_curve_hits",return_value={}), \
+                        patch.object(module,"probe_pure_core_curve_record_hits",return_value={}), \
                         patch.object(module,"probe_pure_core_nurbs_record",return_value={}), \
                         patch.object(module,"probe_pure_core_line_samples",return_value={}):
                     namespace[method](self)
