@@ -17,6 +17,8 @@
 
 const ERR_NULL: i32 = -1;
 const ERR_INPUT: i32 = -2;
+/// A well-formed call whose curve record this does not read.
+const NOT_RECOGNISED: i32 = 1;
 const SAMPLES_PER_SPAN: usize = 6;
 const MAX_NEWTON: usize = 60;
 const PARAM_EPS: f64 = 1e-12;
@@ -691,6 +693,150 @@ fn separate(inputs: &[(usize, usize)], outputs: &[(usize, usize)]) -> bool {
 fn finite_result(r: &Closest) -> bool {
     r.t.is_finite() && r.distance.is_finite() && r.point.iter().all(|v| v.is_finite())
 }
+/// The callback search's spans: the domain ends and the knots inside it or, with no
+/// knots, `span_count` equal spans, merged closer than 1e-12 of the domain. None when
+/// there are more than `MAX_SEARCH_SPANS`. `t0 < t1` are finite, `ks` finite.
+fn callback_breaks(t0: f64, t1: f64, ks: &[f64], span_count: usize) -> Option<Vec<f64>> {
+    let span = t1 - t0;
+    let grain = span.abs() * 1e-12;
+    let mut vals = vec![t0, t1];
+    if ks.is_empty() {
+        vals.extend((1..span_count).map(|i| t0 + span * i as f64 / span_count as f64))
+    } else {
+        vals.extend(
+            ks.iter()
+                .copied()
+                .filter(|&k| t0 + grain < k && k < t1 - grain),
+        )
+    }
+    vals.sort_by(|a, b| a.partial_cmp(b).expect("finite knot"));
+    let mut breaks = vec![vals[0]];
+    for &v in &vals[1..] {
+        if v - breaks[breaks.len() - 1] > grain {
+            breaks.push(v)
+        }
+    }
+    if breaks.len() < 2 {
+        breaks = vec![t0, t1]
+    }
+    (breaks.len() - 1 <= MAX_SEARCH_SPANS).then_some(breaks)
+}
+
+/// [`narwhal_pure_core_nearest_on_callbacks_v1`] for an `ON_PolylineCurve`, evaluated in
+/// Rust instead of through host callbacks, for each of `target_count` targets.
+///
+/// The host passes a `PolylineCurve` to the callback export with the SDK's `Domain`, no
+/// knots, `SpanCount` and `IsClosed`, and answers order 0 with `PointAt` and order 2 with
+/// `DerivativeAt(t, 2)`. Here `record` is the curve's encoded record
+/// (`base64.b64decode(curve.Encode()["data"])`): its `m_t` ends are that domain, its
+/// segment count that span count, and `curvex::Polyline` ports `ON_PolylineCurve::Evaluate`
+/// for both orders. `closed` is the SDK's `IsClosed`. The search is the callback export's,
+/// with its per-search evaluation limit, so each target's five values (t, x, y, z,
+/// distance) and end flag are what that export writes for it.
+///
+/// Returns 0; 1, writing nothing, for a record that is not a 3-D polyline `curvex`
+/// accepts; -2, writing nothing, for a non-finite target, an over-budget batch or a
+/// non-finite evaluation; -1 for a bad pointer or overlapping buffers. The host answers
+/// any non-zero status through the callback export.
+///
+/// # Safety
+/// `record` is readable for `record_len` bytes, `targets` for `target_count * 3` values,
+/// `out_values` writable for `target_count * 5` and `out_at_end` for `target_count` bytes.
+#[allow(clippy::too_many_arguments)]
+#[no_mangle]
+pub unsafe extern "C" fn narwhal_pure_core_nearest_on_polyline(
+    record: *const u8,
+    record_len: usize,
+    closed: u8,
+    targets: *const f64,
+    target_count: usize,
+    out_values: *mut f64,
+    out_at_end: *mut u8,
+) -> i32 {
+    if closed > 1 || target_count > MAX_SEARCH_TARGETS {
+        return ERR_INPUT;
+    }
+    let (Some(tr), Some(or), Some(er)) = (
+        region(targets, target_count * 3),
+        region(out_values, target_count * 5),
+        region(out_at_end, target_count),
+    ) else {
+        return ERR_NULL;
+    };
+    let Some(rr) = region(record, record_len) else {
+        return ERR_NULL;
+    };
+    if !separate(&[rr, tr], &[or, er]) {
+        return ERR_NULL;
+    }
+    let (Some(data), Some(points)) = (
+        crate::checked_slice(record, record_len),
+        crate::checked_slice(targets, target_count * 3),
+    ) else {
+        return ERR_NULL;
+    };
+    let Some(curve) = crate::curvex::polyline_from_record(data) else {
+        return NOT_RECOGNISED;
+    };
+    let (t0, t1) = curve.ends();
+    let span_count = curve.span_count();
+    if !(1..=MAX_SEARCH_SPANS).contains(&span_count) || !(t1 - t0).is_finite() {
+        return NOT_RECOGNISED;
+    }
+    let Some(breaks) = callback_breaks(t0, t1, &[], span_count) else {
+        return NOT_RECOGNISED;
+    };
+    let samples = (breaks.len() - 1) * SAMPLES_PER_SPAN + 1;
+    if !points.iter().all(|v| v.is_finite())
+        || samples
+            .checked_mul(target_count)
+            .is_none_or(|w| w > MAX_SEARCH_WORK)
+    {
+        return ERR_INPUT;
+    }
+    // Stage the complete batch so a refusal cannot publish a prefix.
+    let mut results = Vec::with_capacity(target_count);
+    for point in points.chunks_exact(3) {
+        let mut calls = 0;
+        let mut eval = |t, order| {
+            calls += 1;
+            if calls > MAX_CALLBACKS {
+                return Err(ERR_INPUT);
+            }
+            let v = curve.derivatives(t);
+            let count = if order == 0 { 1 } else { 3 };
+            if !v[..count].iter().flatten().all(|x| x.is_finite()) {
+                return Err(ERR_INPUT);
+            }
+            Ok(Some(if order == 0 {
+                [v[0], [0.; 3], [0.; 3]]
+            } else {
+                v
+            }))
+        };
+        let target = [point[0], point[1], point[2]];
+        let r = match search_with(&mut eval, target, closed == 1, t0, t1, &breaks) {
+            Ok(r) => r,
+            Err(e) => return e,
+        };
+        if !finite_result(&r) {
+            return ERR_INPUT;
+        }
+        results.push(r);
+    }
+    let (Some(out), Some(ends)) = (
+        crate::checked_slice_mut(out_values, target_count * 5),
+        crate::checked_slice_mut(out_at_end, target_count),
+    ) else {
+        return ERR_NULL;
+    };
+    for ((slot, end), r) in out.chunks_exact_mut(5).zip(ends.iter_mut()).zip(&results) {
+        slot.copy_from_slice(&[r.t, r.point[0], r.point[1], r.point[2], r.distance]);
+        *end = u8::from(r.at_end);
+    }
+    0
+}
+
 /// Synchronous host SDK callback: order 0 writes xyz; order 2 writes C,C',C''.
 /// Return 0 success; 1 derivative unavailable (order 2 only); other status aborts.
 pub type CurveCallback = unsafe extern "C" fn(*mut std::ffi::c_void, f64, u32, *mut f64) -> i32;
@@ -752,31 +898,9 @@ pub unsafe extern "C" fn narwhal_pure_core_nearest_on_callbacks_v1(
     if !ks.iter().chain(&target).all(|v| v.is_finite()) {
         return ERR_INPUT;
     }
-    let span = t1 - t0;
-    let grain = span.abs() * 1e-12;
-    let mut vals = vec![t0, t1];
-    if ks.is_empty() {
-        vals.extend((1..span_count).map(|i| t0 + span * i as f64 / span_count as f64))
-    } else {
-        vals.extend(
-            ks.iter()
-                .copied()
-                .filter(|&k| t0 + grain < k && k < t1 - grain),
-        )
-    }
-    vals.sort_by(|a, b| a.partial_cmp(b).expect("finite knot"));
-    let mut breaks = vec![vals[0]];
-    for &v in &vals[1..] {
-        if v - breaks[breaks.len() - 1] > grain {
-            breaks.push(v)
-        }
-    }
-    if breaks.len() < 2 {
-        breaks = vec![t0, t1]
-    }
-    if breaks.len() - 1 > MAX_SEARCH_SPANS {
+    let Some(breaks) = callback_breaks(t0, t1, ks, span_count) else {
         return ERR_INPUT;
-    }
+    };
     let mut calls = 0;
     let mut eval = |t, order| {
         calls += 1;
@@ -1478,5 +1602,244 @@ mod search_budget_tests {
         let mut exact = used;
         assert!(search_budgeted(&curve, target, false, &mut exact).is_ok());
         assert_eq!(exact, 0);
+    }
+}
+
+#[cfg(test)]
+#[path = "nearest_polyline_cases.rs"]
+mod polyline_cases;
+
+#[cfg(test)]
+mod polyline_search_tests {
+    use super::*;
+    use crate::curvex::{polyline_from_record, polyline_record, tests::unhex};
+
+    unsafe fn call(
+        record: &[u8],
+        closed: u8,
+        targets: &[f64],
+        out: &mut [f64],
+        ends: &mut [u8],
+    ) -> i32 {
+        narwhal_pure_core_nearest_on_polyline(
+            record.as_ptr(),
+            record.len(),
+            closed,
+            targets.as_ptr(),
+            targets.len() / 3,
+            out.as_mut_ptr(),
+            ends.as_mut_ptr(),
+        )
+    }
+
+    #[test]
+    fn polyline_derivatives_and_searches_give_the_sdk_bits() {
+        let (mut derivatives, mut searches) = (0, 0);
+        for case in polyline_cases::CASES {
+            let record = unhex(case.record);
+            let curve = polyline_from_record(&record).expect("a valid polyline record");
+            for row in case.derivatives {
+                let [p, d1, d2] = curve.derivatives(f64::from_bits(row[0]));
+                let got: Vec<u64> = p.iter().chain(&d1).map(|v| v.to_bits()).collect();
+                assert_eq!(
+                    got,
+                    row[1..],
+                    "{}: DerivativeAt({})",
+                    case.name,
+                    f64::from_bits(row[0])
+                );
+                assert_eq!(d2, [0.0; 3]);
+                derivatives += 1;
+            }
+            // every target of the case in one call, as closest_many asks them
+            let targets: Vec<f64> = case
+                .searches
+                .iter()
+                .flat_map(|r| r[..3].iter().map(|&b| f64::from_bits(b)))
+                .collect();
+            let n = case.searches.len();
+            let (mut out, mut ends) = (vec![-9.0; 5 * n], vec![7u8; n]);
+            let code = unsafe {
+                call(
+                    &record,
+                    u8::from(case.closed),
+                    &targets,
+                    &mut out,
+                    &mut ends,
+                )
+            };
+            assert_eq!(code, 0, "{}", case.name);
+            for (i, row) in case.searches.iter().enumerate() {
+                let got: Vec<u64> = out[5 * i..5 * i + 5].iter().map(|v| v.to_bits()).collect();
+                assert_eq!(got, row[3..8], "{}: target {i}", case.name);
+                assert_eq!(
+                    u64::from(ends[i]),
+                    row[8],
+                    "{}: target {i} end flag",
+                    case.name
+                );
+                searches += 1;
+            }
+        }
+        assert_eq!((derivatives, searches), (45, 50));
+    }
+
+    #[test]
+    fn the_polyline_export_refuses_what_it_cannot_answer() {
+        let rect = polyline_record(
+            &[
+                [0.0, 0.0, 0.0],
+                [4.0, 0.0, 0.0],
+                [4.0, 2.0, 0.0],
+                [0.0, 0.0, 0.0],
+            ],
+            &[0.0, 1.0, 2.0, 3.0],
+        );
+        let target = [2.0, -1.0, 0.0, 9.0, 9.0, 0.0];
+        let (mut out, mut ends) = ([-9.0; 10], [7u8; 2]);
+        unsafe {
+            assert_eq!(call(&rect, 1, &target, &mut out, &mut ends), 0);
+            assert_eq!(&out[..5], &[0.5, 2.0, 0.0, 0.0, 1.0]);
+            assert_eq!(ends, [0, 0]);
+            let untouched = |out: &[f64], ends: &[u8]| {
+                out.iter().all(|&v| v == -9.0) && ends.iter().all(|&e| e == 7)
+            };
+            let (mut o, mut e) = ([-9.0; 10], [7u8; 2]);
+            assert_eq!(
+                call(b"not a record", 0, &target, &mut o, &mut e),
+                NOT_RECOGNISED
+            );
+            assert!(untouched(&o, &e));
+            let one_point = polyline_record(&[[0.0; 3]], &[0.0]);
+            assert_eq!(call(&one_point, 0, &target, &mut o, &mut e), NOT_RECOGNISED);
+            assert_eq!(
+                call(&rect, 2, &target, &mut o, &mut e),
+                ERR_INPUT,
+                "closed flag 2"
+            );
+            assert_eq!(
+                call(
+                    &rect,
+                    0,
+                    &[2.0, f64::NAN, 0.0, 1.0, 1.0, 1.0],
+                    &mut o,
+                    &mut e
+                ),
+                ERR_INPUT
+            );
+            assert!(untouched(&o, &e), "a refused batch writes no prefix");
+            assert_eq!(call(&rect, 0, &[], &mut [], &mut []), 0, "an empty batch");
+            let mut count_only = 0u8;
+            assert_eq!(
+                narwhal_pure_core_nearest_on_polyline(
+                    rect.as_ptr(),
+                    rect.len(),
+                    0,
+                    target.as_ptr(),
+                    MAX_SEARCH_TARGETS + 1,
+                    o.as_mut_ptr(),
+                    &mut count_only,
+                ),
+                ERR_INPUT,
+                "too many targets"
+            );
+            assert_eq!(
+                narwhal_pure_core_nearest_on_polyline(
+                    std::ptr::null(),
+                    64,
+                    0,
+                    target.as_ptr(),
+                    2,
+                    o.as_mut_ptr(),
+                    e.as_mut_ptr(),
+                ),
+                ERR_NULL
+            );
+            assert_eq!(
+                narwhal_pure_core_nearest_on_polyline(
+                    rect.as_ptr(),
+                    rect.len(),
+                    0,
+                    target.as_ptr(),
+                    2,
+                    std::ptr::null_mut(),
+                    e.as_mut_ptr(),
+                ),
+                ERR_NULL
+            );
+            let misaligned = (o.as_mut_ptr() as *mut u8).add(1).cast::<f64>();
+            assert_eq!(
+                narwhal_pure_core_nearest_on_polyline(
+                    rect.as_ptr(),
+                    rect.len(),
+                    0,
+                    target.as_ptr(),
+                    2,
+                    misaligned,
+                    e.as_mut_ptr(),
+                ),
+                ERR_NULL
+            );
+            // outputs overlapping the targets
+            let mut shared = [2.0, -1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+            let p = shared.as_mut_ptr();
+            assert_eq!(
+                narwhal_pure_core_nearest_on_polyline(
+                    rect.as_ptr(),
+                    rect.len(),
+                    0,
+                    p,
+                    1,
+                    p,
+                    e.as_mut_ptr()
+                ),
+                ERR_NULL
+            );
+        }
+    }
+
+    #[test]
+    fn malformed_polyline_searches_never_panic() {
+        let mut seed = 0x51ce_u64;
+        let mut next = move || {
+            seed = seed
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            (seed >> 11) as f64 / (1u64 << 53) as f64
+        };
+        let mut answered = 0;
+        for _ in 0..3000 {
+            let n = 2 + (next() * 6.0) as usize;
+            let mut t = (next() - 0.5) * 1e6;
+            // one scale per polyline and per batch: an extreme one about 1 time in 10
+            let point_scale =
+                [1e-300, 1e300, 1.0, 1.0, 1.0, 1e3, 1e3, 1e150, 1.0, 1.0][(next() * 10.0) as usize];
+            let target_scale =
+                [1e300, 1.0, 10.0, 1e3, 1.0, 1.0, 10.0, 1.0, 1e3, 1.0][(next() * 10.0) as usize];
+            let mut params = Vec::new();
+            let mut points = Vec::new();
+            for _ in 0..n {
+                params.push(t);
+                t += if next() < 0.1 {
+                    t.abs() * 1e-15 + 1e-300
+                } else {
+                    next() * 10.0 + 1e-9
+                };
+                let scale = point_scale;
+                points.push([
+                    (next() - 0.5) * scale,
+                    (next() - 0.5) * scale,
+                    (next() - 0.5) * scale,
+                ]);
+            }
+            let record = polyline_record(&points, &params);
+            let targets: Vec<f64> = (0..6).map(|_| (next() - 0.5) * target_scale).collect();
+            let (mut out, mut ends) = ([0.0; 10], [0u8; 2]);
+            let code =
+                unsafe { call(&record, (next() * 2.0) as u8, &targets, &mut out, &mut ends) };
+            assert!([0, ERR_INPUT, NOT_RECOGNISED].contains(&code), "{code}");
+            answered += usize::from(code == 0);
+        }
+        assert!(answered > 1000, "the sweep reaches the search: {answered}");
     }
 }

@@ -114,6 +114,8 @@ PURE_CORE_PYTESTS = (
     "spike/test_pure_core_curve_hits_gate.py",
     "spike/test_pure_core_curve_record_hits_gate.py",
     "spike/test_polyline_curve_hits.py",
+    "spike/test_pure_core_polyline_nearest_gate.py",
+    "spike/test_polyline_nearest.py",
     "spike/test_pure_core_nurbs_record_gate.py",
     "spike/test_pure_core_line_samples_gate.py",
     "spike/test_line_samples.py",
@@ -1327,6 +1329,107 @@ def probe_pure_core_nearest_batch(path: Path, python: Path | str = sys.executabl
     return identity
 
 
+# PolylineCurve closest points (native_nearest.search / search_many for a PolylineCurve): the
+# callback search with ON_PolylineCurve::Evaluate ported, for every target at once. A
+# library without it loses only that route: polylines then use SDK callbacks.
+PURE_CORE_POLYLINE_NEAREST_EXPORT = "narwhal_pure_core_nearest_on_polyline"
+# (sys.platform, machine) pairs; narwhal3d/native_nearest.py POLYLINE_QUALIFIED_PLATFORMS must
+# carry the same set (spike/test_pure_core_polyline_nearest_gate.py). Rust never fuses a
+# multiply-add, but a rhino3dm build that does rounds a polyline's PointAt differently, so a
+# pair joins only once its artifact is qualified here. At run time the route also requires
+# the loaded rhino3dm to pass native_nearest's polyline parity check.
+PURE_CORE_POLYLINE_NEAREST_QUALIFIED_PLATFORMS = frozenset({("linux", "x86_64")})
+# The digest pins the exact bits of every witness answer (t, point, distance, end flag); it
+# is also the digest of the callback search on rhino3dm 8.35.0's own PointAt/DerivativeAt.
+PURE_CORE_POLYLINE_NEAREST_IDENTITY = {
+    "export": PURE_CORE_POLYLINE_NEAREST_EXPORT,
+    "searches": 12, "unrecognised_record_status": 1, "nan_target_status": -2,
+    "refusal_writes": False, "closed_flag_2_status": -2, "empty_batch_status": 0,
+    "rows_sha256": "d04556bdc4e5b0abfb7d627f6eb853e069c0ba58db6465eef96cdb981f55a993",
+}
+PURE_CORE_POLYLINE_NEAREST_PROBE = r'''
+import ctypes as c, hashlib, json, struct, sys
+fn = c.CDLL(sys.argv[1]).narwhal_pure_core_nearest_on_polyline
+D, Z, U = c.POINTER(c.c_double), c.c_size_t, c.c_ubyte
+fn.argtypes = [c.c_char_p, Z, U, D, Z, D, c.POINTER(U)]
+fn.restype = c.c_int32
+h = float.fromhex
+# native_nearest._polyline_witnesses() as rhino3dm 8.35.0 encodes them, with their
+# IsClosed and targets near points inside their segments.
+zig = bytes.fromhex(
+    "fa7f0200e900000000000000fbff02001400000000000000e6d4d74e47e9d311bfe50010830122f04e9c"
+    "bbdbfcff0200b100000000000000100500000016e40e1dd2b70dc00dc0b6d5421ef43f00000000000000"
+    "00661ff87a04cb01c0a4f1d9f8dc09f8bf000000000000000040427359d31aecbf330529ff7912f73f00"
+    "00000000000000cf5f054c2585f43fe6d89e5c9e38e8bf000000000000000084a7d4cfd2630640e536ae"
+    "e847d0f33f00000000000000000500000078623c206f6d3cc0f7124c26006b2ec0f007fb6010d9ffbffc"
+    "500d0ebc7426407a011d144d723840030000009da679e8ff7f02800000000000000000")
+spiral = bytes.fromhex(
+    "fa7f0200e900000000000000fbff02001400000000000000e6d4d74e47e9d311bfe50010830122f04e9c"
+    "bbdbfcff0200b1000000000000001005000000000000000000f03f0000000000000000fca9f1d24d6250"
+    "3f67bae0aac504e33fee0c098f54edea3f5839b4c876bed73f06bcfd9bc7f5dfbf46b4d1eaf618ed3f83"
+    "c0caa145b6e73f2fa270158397f4bf5bd5b66d3810c23f2cb29defa7c6f13feaecb9460184f1bf5a19b0"
+    "8e99add4bf367c139e29d6f43f050000000000000000000000000000000000f03f000000000000004000"
+    "00000000000840eac4c1ebca220c4003000000ed3111ebff7f02800000000000000000")
+rect = bytes.fromhex(
+    "fa7f0200e900000000000000fbff02001400000000000000e6d4d74e47e9d311bfe50010830122f04e9c"
+    "bbdbfcff0200b10000000000000010050000000000000000000080000000000000008000000000000000"
+    "00a320b14edf85074000000000000000800000000000000000da4ccec4e2a10540a16ff1ce7347f83f00"
+    "0000000000000000000000000000801acd90627082fe3f00000000000000000000000000000080000000"
+    "00000000800000000000000000050000000000000000000000000000000000f03f000000000000004000"
+    "00000000000840000000000000104003000000e7c56aefff7f02800000000000000000")
+witnesses = [
+    (zig, 0, [[h("-0x1.8600942266331p+0"), h("-0x1.55a25b7e43390p-2"), h("0x1.eb4ef26b7b4a0p-10")],
+         [h("-0x1.6f9f31d8e6e1ap+0"), h("0x1.ceb7b55bef798p-6"), h("-0x1.c368a42e97647p-6")],
+         [h("0x1.25956dd4e1f6ep-4"), h("0x1.173fa066ff132p-2"), h("-0x1.98f43a9ac1300p-12")],
+         [h("-0x1.1e36e3e742dfdp+1"), h("-0x1.7f08f943e079cp+0"), h("-0x1.68478a5c027b5p-5")]]),
+    (spiral, 0, [[h("-0x1.fa17eaccfab42p-4"), h("0x1.839575a0b3261p-1"), h("0x1.323fd994ea97fp-1")],
+         [h("-0x1.951b8a502b988p-1"), h("0x1.7946eb6c50ed1p-2"), h("0x1.eb83a636154b3p-1")],
+         [h("0x1.77d2a50d43e60p-1"), h("0x1.099a8bad649d3p-1"), h("0x1.809b4d68ebe2dp-3")],
+         [h("0x1.ed77da2d91e38p-1"), h("0x1.30a19a33dbd95p-2"), h("0x1.02fa9e2e24cadp-3")]]),
+    (rect, 1, [[h("0x1.61d980f033dbcp+1"), h("0x1.3c38fc84bc046p+0"), h("0x1.e41d657cb97f4p-6")],
+         [h("0x1.7dd2d27e1f684p+1"), h("0x1.841bac4b219d8p-1"), h("-0x1.b2ecd438349d0p-8")],
+         [h("0x1.1b47a1ad10a40p+1"), h("-0x1.4b8e2d7ccc2d2p-3"), h("0x1.b60543b599c28p-6")],
+         [h("0x1.bf82b808e7f10p+0"), h("-0x1.3044cdeaee340p-8"), h("-0x1.62bef3d53230ap-6")]]),
+]
+def call(record, closed, targets):
+    n = len(targets)
+    flat = (c.c_double * (3 * n))(*[v for q in targets for v in q])
+    out, ends = (c.c_double * (5 * n))(*[-9.0] * (5 * n)), (U * n)(*[7] * n)
+    return fn(record, len(record), closed, flat, n, out, ends), list(out), list(ends)
+bits = b""
+for record, closed, targets in witnesses:
+    code, out, ends = call(record, closed, targets)
+    if code != 0:
+        raise RuntimeError("the export refused a witness polyline")
+    for i in range(len(targets)):
+        bits += struct.pack("<5d", *out[5 * i:5 * i + 5]) + bytes([ends[i]])
+nan = call(zig, 0, [[0.0, float("nan"), 0.0]])
+print(json.dumps({"export": "narwhal_pure_core_nearest_on_polyline",
+                  "searches": sum(len(t) for _, _, t in witnesses),
+                  "unrecognised_record_status": call(b"not a record", 0, [[0.0, 0.0, 0.0]])[0],
+                  "nan_target_status": nan[0], "refusal_writes": nan[1] != [-9.0] * 5,
+                  "closed_flag_2_status": call(zig, 2, [[0.0, 0.0, 0.0]])[0],
+                  "empty_batch_status": call(zig, 0, [])[0],
+                  "rows_sha256": hashlib.sha256(bits).hexdigest()}, sort_keys=True))
+'''
+
+
+def probe_pure_core_polyline_nearest(path: Path, python: Path | str = sys.executable, *, env=None) -> dict:
+    """Require the polyline nearest export to give the pinned witness answers, bit for bit."""
+    if not path.is_file() or path.is_symlink():
+        raise ValueError(f"missing regular pure-core library: {path}")
+    try:
+        completed = subprocess.run(
+            [str(python), "-I", "-B", "-c", PURE_CORE_POLYLINE_NEAREST_PROBE, str(path.resolve())],
+            env=env, text=True, capture_output=True, check=True, timeout=30)
+        identity = json.loads(completed.stdout)
+    except (OSError, subprocess.SubprocessError, ValueError) as error:
+        raise ValueError(f"cannot verify pure-core polyline nearest export: {getattr(error, 'stderr', '') or error}") from error
+    if identity != PURE_CORE_POLYLINE_NEAREST_IDENTITY:
+        raise ValueError(f"pure-core polyline nearest evidence differs: {identity!r}")
+    return identity
+
+
 # Additive curve/curve intersection export (intersect.curve_curve's recursion), qualified like
 # the batch export above: a library without it, or a platform not yet qualified, keeps the
 # Python recursion.
@@ -2031,6 +2134,16 @@ def step_nearest_batch(lib_path: Path) -> dict[str, object]:
     return {"status": "ok", "nearest_batch": identity, "command": "ctypes batch probe"}
 
 
+def step_polyline_nearest(lib_path: Path) -> dict[str, object]:
+    """Qualify the polyline nearest export; required for the library to carry it."""
+    try:
+        identity = probe_pure_core_polyline_nearest(lib_path)
+    except ValueError as exc:
+        raise GateError(str(exc)) from exc
+    return {"status": "ok", "polyline_nearest": identity,
+            "command": "ctypes polyline nearest probe"}
+
+
 def step_curve_hits(lib_path: Path) -> dict[str, object]:
     """Qualify the curve/curve intersection export; required for the library to carry it."""
     try:
@@ -2154,6 +2267,7 @@ def run_gate(crate_rel: str) -> dict[str, object]:
     lib = _release_lib(crate)
     steps["direct_abi"] = step_direct_abi(lib)
     steps["nearest_batch"] = step_nearest_batch(lib)
+    steps["polyline_nearest"] = step_polyline_nearest(lib)
     steps["curve_hits"] = step_curve_hits(lib)
     steps["curve_record_hits"] = step_curve_record_hits(lib)
     steps["nurbs_record"] = step_nurbs_record(lib)

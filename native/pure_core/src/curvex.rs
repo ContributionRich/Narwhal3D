@@ -592,7 +592,7 @@ fn normalized_parameter_at(d: (f64, f64), t: f64) -> f64 {
 
 /// An `ON_PolylineCurve` with `m_dim` 3: `m_pline` and `m_t`, always the same length.
 #[derive(Clone, Debug, PartialEq)]
-struct Polyline {
+pub(crate) struct Polyline {
     points: Vec<P3>,
     t: Vec<f64>,
 }
@@ -621,15 +621,40 @@ impl Polyline {
     /// `Evaluate(t, 0, 3, v, 0, nullptr)`, behind `PointAt`. The recursion never asks
     /// at a NaN parameter (`newton` hands one to the Python); answering NaN keeps the
     /// span search on the array if anything ever did.
-    fn point(&self, t: f64) -> P3 {
+    pub(crate) fn point(&self, t: f64) -> P3 {
+        self.evaluate(t)[0]
+    }
+
+    /// `Evaluate(t, 2, 3, v, 0, nullptr)`, behind `DerivativeAt(t, 2)`: the point, the
+    /// first derivative `1/(t1-t0) * (P[i+1] - P[i])` and a zero second derivative.
+    pub(crate) fn derivatives(&self, t: f64) -> [P3; 3] {
+        self.evaluate(t)
+    }
+
+    fn evaluate(&self, t: f64) -> [P3; 3] {
         if t.is_nan() {
-            return [f64::NAN; 3];
+            return [[f64::NAN; 3]; 3];
         }
         let i = span_index(2, self.points.len(), &self.t, t, 0, 0);
         let (t0, t1) = (self.t[i], self.t[i + 1]);
         let s = if t == t1 { 1.0 } else { (t - t0) / (t1 - t0) };
         let (p, q) = (self.points[i], self.points[i + 1]);
-        std::array::from_fn(|k| (1.0 - s) * p[k] + s * q[k])
+        let r = 1.0 / (t1 - t0);
+        [
+            std::array::from_fn(|k| (1.0 - s) * p[k] + s * q[k]),
+            std::array::from_fn(|k| r * (q[k] - p[k])),
+            [0.0; 3],
+        ]
+    }
+
+    /// `Domain()` as the SDK reports it, for a curve `polyline_from_record` accepted.
+    pub(crate) fn ends(&self) -> (f64, f64) {
+        self.domain()
+    }
+
+    /// `SpanCount()`: `ON_Polyline::SegmentCount`.
+    pub(crate) fn span_count(&self) -> usize {
+        self.points.len().saturating_sub(1)
     }
 
     /// `ON_Curve::ParameterSearch(t, index, true, m_t, ON_SQRT_EPSILON)`: whether `t` is,
@@ -1420,16 +1445,21 @@ fn shape_from_record(data: &[u8]) -> Result<Shape, i32> {
         r.write(&mut knots, &mut cvs);
         return curve_from(r.order, r.cv_count, r.rational, &knots, &cvs).map(Shape::Nurbs);
     }
-    let r = crate::nurbs_record::read_polyline(data).ok_or(ERR_INPUT)?;
+    polyline_from_record(data)
+        .map(Shape::Polyline)
+        .ok_or(ERR_INPUT)
+}
+
+/// A 3-D polyline from its encoded record: 2 to `MAX_CVS` points, strictly increasing
+/// parameters and every value `ON_IS_VALID`; None otherwise.
+pub(crate) fn polyline_from_record(data: &[u8]) -> Option<Polyline> {
+    let r = crate::nurbs_record::read_polyline(data)?;
     if !(2..=MAX_CVS).contains(&r.point_count) {
-        return Err(ERR_INPUT);
+        return None;
     }
     let (points, t) = r.arrays();
     let valid = points.iter().flatten().chain(&t).all(|&v| on_is_valid(v));
-    if !valid || !t.windows(2).all(|w| w[0] < w[1]) {
-        return Err(ERR_INPUT);
-    }
-    Ok(Shape::Polyline(Polyline { points, t }))
+    (valid && t.windows(2).all(|w| w[0] < w[1])).then_some(Polyline { points, t })
 }
 
 /// `narwhal_pure_core_curve_curve_hits` for two curves given as encoded records
@@ -1479,7 +1509,47 @@ pub unsafe extern "C" fn narwhal_pure_core_curve_curve_record_hits(
 mod polyline_cases;
 
 #[cfg(test)]
-mod tests {
+/// An `ON_PolylineCurve` record of `points` and `params`, as `curve.Encode()` frames it.
+pub(crate) fn polyline_record(points: &[P3], params: &[f64]) -> Vec<u8> {
+    let mut payload = vec![0x10];
+    payload.extend((points.len() as i32).to_le_bytes());
+    payload.extend(points.iter().flatten().flat_map(|v| v.to_le_bytes()));
+    payload.extend((params.len() as i32).to_le_bytes());
+    payload.extend(params.iter().flat_map(|v| v.to_le_bytes()));
+    payload.extend(3i32.to_le_bytes());
+    // the framing of a real record, around this payload (nurbs_record checks the CRCs)
+    let real = tests::unhex(polyline_cases::CASES[0].record);
+    let crc = |b: &[u8]| {
+        let mut c = !0u32;
+        for &x in b {
+            c ^= x as u32;
+            for _ in 0..8 {
+                c = if c & 1 != 0 {
+                    0xEDB8_8320 ^ (c >> 1)
+                } else {
+                    c >> 1
+                };
+            }
+        }
+        !c
+    };
+    let chunk = |tcode: u32, body: &[u8], with_crc: bool| {
+        let mut out = tcode.to_le_bytes().to_vec();
+        out.extend(((body.len() + 4 * usize::from(with_crc)) as i64).to_le_bytes());
+        out.extend(body);
+        if with_crc {
+            out.extend(crc(body).to_le_bytes());
+        }
+        out
+    };
+    let mut inner = real[12..44].to_vec(); // the class-id chunk
+    inner.extend(chunk(0x0002_FFFC, &payload, true));
+    inner.extend(real[real.len() - 12..].iter());
+    chunk(0x0002_7FFA, &inner, false)
+}
+
+#[cfg(test)]
+pub(crate) mod tests {
     use super::*;
 
     fn cubic(points: &[P3]) -> Curve {
@@ -1968,7 +2038,7 @@ mod tests {
         assert!(deepest >= 40, "{deepest} levels");
     }
 
-    fn unhex(s: &str) -> Vec<u8> {
+    pub(crate) fn unhex(s: &str) -> Vec<u8> {
         (0..s.len())
             .step_by(2)
             .map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap())
@@ -2023,45 +2093,6 @@ mod tests {
         ] {
             assert!(c.with(|n| n.get()) > 0, "no case reaches {name}");
         }
-    }
-
-    /// An `ON_PolylineCurve` record of `points` and `params`, as `curve.Encode()` frames it.
-    fn polyline_record(points: &[P3], params: &[f64]) -> Vec<u8> {
-        let mut payload = vec![0x10];
-        payload.extend((points.len() as i32).to_le_bytes());
-        payload.extend(points.iter().flatten().flat_map(|v| v.to_le_bytes()));
-        payload.extend((params.len() as i32).to_le_bytes());
-        payload.extend(params.iter().flat_map(|v| v.to_le_bytes()));
-        payload.extend(3i32.to_le_bytes());
-        // the framing of a real record, around this payload (nurbs_record checks the CRCs)
-        let real = unhex(polyline_cases::CASES[0].record);
-        let crc = |b: &[u8]| {
-            let mut c = !0u32;
-            for &x in b {
-                c ^= x as u32;
-                for _ in 0..8 {
-                    c = if c & 1 != 0 {
-                        0xEDB8_8320 ^ (c >> 1)
-                    } else {
-                        c >> 1
-                    };
-                }
-            }
-            !c
-        };
-        let chunk = |tcode: u32, body: &[u8], with_crc: bool| {
-            let mut out = tcode.to_le_bytes().to_vec();
-            out.extend(((body.len() + 4 * usize::from(with_crc)) as i64).to_le_bytes());
-            out.extend(body);
-            if with_crc {
-                out.extend(crc(body).to_le_bytes());
-            }
-            out
-        };
-        let mut inner = real[12..44].to_vec(); // the class-id chunk
-        inner.extend(chunk(0x0002_FFFC, &payload, true));
-        inner.extend(real[real.len() - 12..].iter());
-        chunk(0x0002_7FFA, &inner, false)
     }
 
     unsafe fn record_hits(

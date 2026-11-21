@@ -504,6 +504,8 @@ PURE_SUITES=(
     spike/test_pure_core_curve_hits_gate.py
     spike/test_pure_core_curve_record_hits_gate.py
     spike/test_polyline_curve_hits.py
+    spike/test_pure_core_polyline_nearest_gate.py
+    spike/test_polyline_nearest.py
     spike/test_pure_core_nurbs_record_gate.py
     spike/test_pure_core_line_samples_gate.py
     spike/test_native_coil_preview.py

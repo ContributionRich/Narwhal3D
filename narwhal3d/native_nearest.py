@@ -2,9 +2,16 @@
 
 Sampling remains the existing optional integration, unchanged below. Analytic
 SDK shortcuts remain in nearest.py. No curve is converted to a different NURBS.
+
+A `PolylineCurve` (what Polyline and Rectangle make) is searched by the callback search,
+which calls PointAt and DerivativeAt back through ctypes for every evaluation (about
+0.5 ms a query). Where qualified, ``narwhal_pure_core_nearest_on_polyline`` runs that same
+search with ``ON_PolylineCurve::Evaluate`` ported to Rust, for every target of a call at
+once, reading the curve from its ``Encode()`` record. See `POLYLINE_QUALIFIED_PLATFORMS`.
 """
 from __future__ import annotations
 import array
+import base64
 import ctypes
 import math
 import os
@@ -203,9 +210,25 @@ class CallbackCurve:
             self.closed = False
 
 
+class PolylineCallbackCurve(CallbackCurve):
+    """A `PolylineCurve` for the callback search, with its record for the Rust route."""
+    __slots__ = ("record",)
+
+    def __init__(self, curve):
+        super().__init__(curve)
+        self.record = None
+        if _polyline_binding() is not None and curve.IsValid:
+            try:
+                self.record = base64.b64decode(curve.Encode()["data"])
+            except Exception:  # noqa: BLE001 -- the callback search answers
+                self.record = None
+
+
 def pack(curve):
     """Pack original NURBS data or retain ORIGINAL SDK object for callbacks."""
     _required_bindings()
+    if isinstance(curve, r3.PolylineCurve):
+        return PolylineCallbackCurve(curve)
     if not isinstance(curve, r3.NurbsCurve) or int(curve.Order) > 32:
         return CallbackCurve(curve)
     if len(curve.Points) > 1 << 20:
@@ -280,8 +303,12 @@ def _callback_search(packed, target):
 
 def search(packed, target):
     """Required original-curve search; errors explicit, never None for replay."""
-    global _native_calls
+    global _native_calls, _native_polyline_calls
     if isinstance(packed, CallbackCurve):
+        rows = _polyline_rows(packed, [target])
+        if rows is not None:
+            _native_polyline_calls += 1
+            return rows[0]
         return _callback_search(packed, target)
     if not isinstance(packed, PackedCurve):
         raise NativeNearestError("nearest search requires packed original curve")
@@ -296,13 +323,17 @@ def search(packed, target):
 
 def search_many(packed, targets):
     """Qualified NURBS batch or required native scalar calls; no Python math."""
-    global _native_many_calls
+    global _native_many_calls, _native_polyline_calls
     if isinstance(packed, CallbackCurve):
         bounded = []
         for q in targets:
             if len(bounded) >= 100000:
                 raise NearestInputError("nearest batch target limit 100000")
             bounded.append(q)
+        rows = _polyline_rows(packed, bounded)
+        if rows is not None:
+            _native_polyline_calls += 1
+            return rows
         return [search(packed, q) for q in bounded]
     fn = _search_many_binding()
     if fn is None:
@@ -511,3 +542,137 @@ def _line_samples(curve, n):
     if got is not None:
         _native_line_calls += 1
     return got
+
+
+# PolylineCurve searches (narwhal_pure_core_nearest_on_polyline): the callback search with
+# ON_PolylineCurve::Evaluate (eb92af3) in Rust instead of PointAt and DerivativeAt(t, 2)
+# callbacks. Its point rounds (1-s)*P[i] + s*P[i+1] product by product, and an SDK build that
+# fuses a multiply-add rounds PointAt differently. So the route needs BOTH a platform in
+# POLYLINE_QUALIFIED_PLATFORMS and the loaded rhino3dm passing `_polyline_parity`: the callback
+# search on its own PointAt/DerivativeAt gives Rust's answers, bit for bit, on witness
+# polylines. Any refusal, and any other SDK build, keeps the callback search.
+POLYLINE_QUALIFIED_PLATFORMS = frozenset({("linux", "x86_64")})
+_POLYLINE_WITNESS_SEED = 20261122
+_polyline_state = None          # (signature, binding or None, capability text)
+_native_polyline_calls = 0
+
+
+def _polyline_call(fn, record, closed, points):
+    """Rust's rows for `points` (``(x, y, z)`` tuples), or None when the export refuses."""
+    n = len(points)
+    flat = array.array("d", (v for q in points for v in q))
+    out = array.array("d", bytes(40 * n))
+    ends = (ctypes.c_ubyte * n)()
+    code = fn(record, len(record), int(closed),
+              (ctypes.c_double * len(flat)).from_buffer(flat) if n else None, n,
+              (ctypes.c_double * len(out)).from_buffer(out) if n else None, ends)
+    if code != 0:
+        return None
+    return [_result(0, out[5 * i:5 * i + 5], ends[i]) for i in range(n)]
+
+
+def _polyline_rows(packed, targets):
+    """`search` of every target through Rust, or None to take the callback search."""
+    record = getattr(packed, "record", None)
+    if record is None:
+        return None
+    fn = _polyline_binding()
+    if fn is None:
+        return None
+    points = [_point(q) for q in targets]
+    if not all(math.isfinite(v) for q in points for v in q):
+        return None                 # the callback search refuses it, as before
+    return _polyline_call(fn, record, packed.closed, points)
+
+
+def _polyline_witnesses():
+    """``(curve, targets)``: irregular doubles (a fused multiply-add would round most
+    products differently) on shifted and uneven parameters, open and closed, 2-D and 3-D,
+    with targets whose closest points lie inside slanted segments."""
+    rng = random.Random(_POLYLINE_WITNESS_SEED)
+    p = r3.Point3d
+    zig = r3.PolylineCurve([p(-4.0 + 1.7 * i + rng.uniform(-0.3, 0.3),
+                              rng.uniform(0.5, 2.0) * (-1) ** i, 0.0) for i in range(5)])
+    zig.Domain = r3.Interval(rng.uniform(-60.0, -10.0), rng.uniform(5.0, 70.0))
+    spiral = r3.PolylineCurve([p(math.cos(k) * (1 + 0.1 * k), math.sin(k), 0.37 * k + 1e-3)
+                               for k in range(6)]).Split(rng.uniform(3.2, 3.8))[0]
+    corners = [p(-0.0, -0.0, 0.0), p(rng.uniform(2.0, 3.0), -0.0, 0.0),
+               p(rng.uniform(2.0, 3.0), rng.uniform(1.0, 2.0), 0.0),
+               p(-0.0, rng.uniform(1.0, 2.0), 0.0)]
+    rect = r3.PolylineCurve(corners + corners[:1])
+
+    def targets(curve):
+        # near points inside segments (not at a vertex, where the point is exact either way)
+        d = curve.Domain
+        out = []
+        for _ in range(4):
+            q = curve.PointAt(d.T0 + (d.T1 - d.T0) * rng.uniform(0.05, 0.95))
+            out.append((q.X + rng.uniform(-0.2, 0.2), q.Y + rng.uniform(-0.2, 0.2),
+                        q.Z + rng.uniform(-0.05, 0.05)))
+        return out
+    return [(zig, targets(zig)), (spiral, targets(spiral)), (rect, targets(rect))]
+
+
+def _polyline_parity(fn):
+    """True when the callback search on the loaded rhino3dm gives Rust's rows, bit for
+    bit, on every witness polyline and target."""
+    try:
+        for curve, targets in _polyline_witnesses():
+            packed = CallbackCurve(curve)
+            record = base64.b64decode(curve.Encode()["data"])
+            got = _polyline_call(fn, record, packed.closed, targets)
+            want = [_callback_search(packed, q) for q in targets]
+            if got is None or _row_bits(got) != _row_bits(want):
+                return False
+    except Exception:  # noqa: BLE001 -- an SDK that cannot be checked is not qualified
+        return False
+    return True
+
+
+def _row_bits(rows):
+    return b"".join(struct.pack("<5d?", t, *q, d, end) for t, q, d, end in rows)
+
+
+def _polyline_binding():
+    global _polyline_state
+    signature = (os.environ.get(_ENV) or "<packaged>", _here(), id(r3))
+    state = _polyline_state
+    if state is not None and state[0] == signature:
+        return state[1]
+    try:
+        _required_bindings()     # the parity check's callback search; it takes _lock itself
+    except NativeNearestError:
+        pass                     # then the parity check fails and the route stays off
+    with _lock:
+        state = _polyline_state
+        if state is not None and state[0] == signature:
+            return state[1]
+        fn, text = None, "polyline nearest export unavailable; polylines use SDK callbacks"
+        if signature[1] not in POLYLINE_QUALIFIED_PLATFORMS:
+            text = "not qualified on {}/{}; polylines use SDK callbacks".format(*signature[1])
+        else:
+            explicit = os.environ.get(_ENV)
+            path = (Path(explicit).expanduser() if explicit else
+                    Path(__file__).resolve().parent / "native" / _library_name())
+            try:
+                fn = ctypes.CDLL(str(path)).narwhal_pure_core_nearest_on_polyline
+                fn.argtypes = [ctypes.c_char_p, ctypes.c_size_t, ctypes.c_ubyte, _D,
+                               ctypes.c_size_t, _D, ctypes.POINTER(ctypes.c_ubyte)]
+                fn.restype = ctypes.c_int32
+            except (AttributeError, OSError):
+                fn = None
+            if fn is not None and not _polyline_parity(fn):
+                fn = None
+                text = (f"rhino3dm {getattr(r3, '__version__', '?')} PointAt/DerivativeAt "
+                        "differ from the Rust polyline search on the witness polylines; "
+                        "polylines use SDK callbacks")
+            elif fn is not None:
+                text = "qualified"
+        _polyline_state = signature, fn, text
+        return fn
+
+
+def polyline_capability():
+    """``"qualified"`` when polylines are searched in Rust, otherwise the reason."""
+    _polyline_binding()
+    return _polyline_state[2]
