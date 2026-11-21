@@ -55,11 +55,17 @@ def distance_to_curve(curve, point, n: int = 256):
     sampling `sample_curve_offset` relies on. Pure, no bpy. The samples come from
     `sample_curve_xyz` (Rust for a NurbsCurve, the same points).
     """
+    return distance_to_samples(sample_curve_xyz(curve, n), point)
+
+
+def distance_to_samples(samples, point):
+    """`distance_to_curve` over samples already taken (``(x, y, z)`` tuples), so a caller
+    that keeps a curve's samples gets the same answer without sampling it again."""
     import math
 
     px, py, pz = point
     best = math.inf
-    for p in sample_curve_xyz(curve, n):
+    for p in samples:
         best = min(best, math.dist((px, py, pz), p))
     return best
 
