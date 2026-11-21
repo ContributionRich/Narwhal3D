@@ -112,6 +112,9 @@ if '--read-preferences' in sys.argv:
     expected = json.loads((Path(os.environ['AI_SETTINGS_GUI_OUT'])/'saved_config.json').read_text())
     actual = preferences.load()['ai_config']
     assert actual == expected, (actual, expected)
+    reasoning_file=Path(os.environ['AI_SETTINGS_GUI_OUT'])/'saved_reasoning.json'
+    if reasoning_file.exists():
+        assert preferences.load()['ai_compatible_short_reasoning'] is json.loads(reasoning_file.read_text())
     print('AI_SETTINGS_FRESH_PROCESS_PREFS_PASS', json.dumps(actual))
     raise SystemExit(0)
 
@@ -375,9 +378,9 @@ def observed_text(*args, **kwargs):
     return ORIGINAL_TEXT(*args, **kwargs)
 
 
-def observed_apply(config):
+def observed_apply(config, **kwargs):
     SAVES.append(vars(config).copy())
-    return ORIGINAL_APPLY(config)
+    return ORIGINAL_APPLY(config, **kwargs)
 
 
 def observed_click(*args, **kwargs):
@@ -520,6 +523,27 @@ def fields_and_save():
     check(live == saved, 'live provider matches persisted config', fatal=False)
     (OUT/'saved_config.json').write_text(json.dumps(saved, indent=2, ensure_ascii=False))
     TRANSPORT['mode'] = 'models'
+
+
+def reasoning_setting_roundtrip():
+    yield from open_button()
+    yield from control('provider')
+    yield from tap('HOME')
+    yield from tap('DOWN_ARROW')
+    yield from tap('DOWN_ARROW')
+    yield from tap('RET')
+    check(model().provider_id=='openai_compatible','short-reasoning control is available only for compatible backend settings')
+    check(not model().compatible_short_reasoning,'short reasoning remains opt-in')
+    yield from control('short_reasoning')
+    check(model().compatible_short_reasoning,'actual settings checkbox enables explicit shorter-reasoning request policy')
+    yield from control('save')
+    check(not popup.is_open() and preferences.get('ai_compatible_short_reasoning') is True
+          and ui._ai['state'].extra.get('compatible_short_reasoning') is True,'actual Save persists and applies the reasoning preference')
+    (OUT/'saved_config.json').write_text(json.dumps(preferences.get('ai_config'),indent=2,ensure_ascii=False))
+    (OUT/'saved_reasoning.json').write_text(json.dumps(True))
+    yield from open_button()
+    check(model().compatible_short_reasoning,'reopened Settings restores the saved reasoning choice')
+    yield from control('cancel')
 
 
 def stale_generation():
@@ -666,11 +690,15 @@ def run():
             yield from cancelled_edits()
             yield from fields_and_save()
             yield from stale_generation()
+            yield from reasoning_setting_roundtrip()
         else:
             yield from open_button()
             yield from edit('credential_env', 'NARROW_UI_KEY')
             check(model().scroll > 0, 'narrow body scrolls to focused credential field')
             yield from tap('TAB', shift=True)
+            if model().provider_id=='openai_compatible':
+                check(model().focus=='short_reasoning','narrow Shift-Tab reveals the visible reasoning control')
+                yield from tap('TAB', shift=True)
             check(model().focus == 'model', 'narrow Shift-Tab auto-reveals Model ID')
             yield from settle()
             capture('narrow_scrolled')

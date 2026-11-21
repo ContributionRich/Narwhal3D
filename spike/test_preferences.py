@@ -56,7 +56,7 @@ class PreferencesTests(unittest.TestCase):
             "interface_scale": 0,
             "osnap_modes": ["End", "Point", "Mid", "Cen", "Quad"],
             "osnap_disabled": False, "osnap_project": False,
-            "ai_config": {}, "ai_include_selection": True, "ai_metadata_permission": {}, "print_settings": {},
+            "ai_config": {}, "ai_include_selection": True, "ai_metadata_permission": {}, "ai_build_mode": False, "ai_compatible_short_reasoning": False, "print_settings": {},
             "usage_monitor": False,
         }
         self.assertEqual(prefs.load(), expected)
@@ -64,6 +64,19 @@ class PreferencesTests(unittest.TestCase):
         self.assertFalse(self.path.parent.exists())
         prefs.update({})
         self.assertFalse(self.path.exists())
+
+    def test_ai_build_mode_is_explicit_boolean_and_survives_on_and_off_reload(self):
+        self.assertFalse(prefs.get('ai_build_mode'))
+        for enabled in (True,False):
+            prefs.update({'ai_build_mode':enabled})
+            prefs.reset_cache()
+            self.assertIs(prefs.get('ai_build_mode'),enabled)
+            self.assertIs(self.read()['ai_build_mode'],enabled)
+        for invalid in (1,0,'true','false',None):
+            with self.assertRaises(ValueError):
+                prefs.update({'ai_build_mode':invalid})
+        self.write({'ai_build_mode':'true'})
+        self.assertFalse(prefs.load()['ai_build_mode'])
 
     def test_metadata_permission_is_explicit_bounded_and_recipient_scoped(self):
         config = prefs.ai_assistant.set_provider('openai_compatible', 'model-a')

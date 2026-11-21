@@ -18,8 +18,8 @@ A visible command or control must not imply behavior that does not exist.
 | Aliases | Partial | Unify editor/import/export state with runtime resolution; persist atomically |
 | Macros | Partial | Execute the existing plan model with pauses, cancellation, Enter variants, nesting, and deterministic recovery |
 | Scripting/extension API | Deferred | Define only after native boundaries and versioning policy stabilize |
-| In-app AI assistant | Partial | A separately approved box is the only enabled modeling action. Circle is proposal-only, sphere, cylinder and cone are disabled, and curve, loft, pipe and Boolean operations have no assistant executor. Editing selected objects and physical HTTP cancellation remain unsupported. See [assistant limits](technical-reference.md#ai-assistant-and-mcp). |
-| External MCP server | Partial | Unix-only, read-only metadata access. Each launch starts one new app instance. Attachment to an existing instance remains unsupported. See [MCP launch scope](technical-reference.md#ai-assistant-and-mcp). |
+| In-app AI assistant | Partial | Bounded typed exact batches, stable-UUID edits, inspection, Review/Build and separate local image/export approval are implemented in current source. General layer/group control, broader resumability, robust whale/taco aesthetics and physical HTTP cancellation remain incomplete. See [assistant limits](technical-reference.md#ai-assistant-and-mcp). |
+| External MCP server | Partial | Unix-only; nine read-only tools by default, explicit --modeling opt-in adds reviewed modeling/inspection and locally approved export. Each launch starts a new app; existing-instance attachment and MCP screenshot-sharing parity remain unsupported. See [MCP launch scope](technical-reference.md#ai-assistant-and-mcp). |
 
 ## Files and document services
 

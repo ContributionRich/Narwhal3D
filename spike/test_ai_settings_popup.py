@@ -72,6 +72,32 @@ class PopupTests(unittest.TestCase):
         self.key("LEFTMOUSE", x=x, y=y)
         self.key("LEFTMOUSE", value="RELEASE", x=x, y=y)
 
+    def test_compatible_reasoning_checkbox_is_optional_and_connection_independent(self):
+        self.assertFalse(self.m.compatible_short_reasoning)
+        self.click('short_reasoning')
+        self.assertTrue(self.m.compatible_short_reasoning)
+        self.assertFalse(self.refreshed,'reasoning choice must not issue any request')
+        self.click('short_reasoning')
+        self.assertFalse(self.m.compatible_short_reasoning)
+        self.m.choose_provider('anthropic')
+        self.assertNotIn('short_reasoning',self.m.controls)
+        self.m=self.make(compatible_short_reasoning=True)
+        self.assertTrue(self.m.compatible_short_reasoning)
+
+    def test_optional_reasoning_and_revoke_keyboard_order(self):
+        self.m = self.make(on_revoke=lambda: None)
+        self.m.focus = 'credential_env'
+        self.key('TAB')
+        self.assertEqual(self.m.focus, 'insecure')
+        self.key('TAB')
+        self.assertEqual(self.m.focus, 'revoke')
+        self.m.choose_provider('anthropic')
+        self.m.focus = 'model'
+        self.key('TAB')
+        self.assertEqual(self.m.focus, 'credential_env')
+        self.key('TAB', shift=True)
+        self.assertEqual(self.m.focus, 'model')
+
     def test_real_providers_and_no_raw_key(self):
         self.m.activate("provider")
         self.assertEqual(self.m.choices(), ai.PROVIDERS)
@@ -174,11 +200,15 @@ class PopupTests(unittest.TestCase):
         self.assertGreater(self.m.max_scroll, 0)
         self.m.focus = "model"
         self.key("TAB")
+        self.assertEqual(self.m.focus, "short_reasoning")
+        self.key("TAB")
         self.assertEqual(self.m.focus, "credential_env")
         r = self.m.controls["credential_env"]
         self.assertGreaterEqual(r[1], self.m.body[1])
         self.assertLessEqual(r[3], self.m.body[3])
         self.assertGreater(self.m.scroll, 0)
+        self.key("TAB", shift=True)
+        self.assertEqual(self.m.focus, "short_reasoning")
         self.key("TAB", shift=True)
         self.assertEqual(self.m.focus, "model")
         self.m.scroll = 0
@@ -566,6 +596,16 @@ class AdapterTests(unittest.TestCase):
 def mutations():
     source = SOURCE.read_text()
     cases = [
+        ('reasoning toggle ignored',
+         'self.compatible_short_reasoning = not self.compatible_short_reasoning',
+         'self.compatible_short_reasoning = False',
+         'PopupTests.test_compatible_reasoning_checkbox_is_optional_and_connection_independent'),
+        ('hidden reasoning receives focus',
+         "if key != 'short_reasoning' or self.provider_id == 'openai_compatible'",
+         'if True', 'PopupTests.test_optional_reasoning_and_revoke_keyboard_order'),
+        ('revoke before security checkbox', "index = order.index('insecure') + 1",
+         "index = order.index('credential_env') + 1",
+         'PopupTests.test_optional_reasoning_and_revoke_keyboard_order'),
         ("discovery line cap removed", "enumerate(spans[:limit])", "enumerate(spans)",
          "PopupTests.test_long_status_wrap_never_squeezes_fields"),
         ("caret clipped at End", "round(r[2]-11*self.scale)-round(r[0]+11*self.scale)-1)",

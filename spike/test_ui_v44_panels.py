@@ -27,7 +27,7 @@ SOURCES = {name: (ROOT / 'narwhal3d' / (name + '.py')).read_text()
 UI_AST = ast.parse(SOURCES['ui'])
 UI_FUNCTIONS = {n.name: ast.get_source_segment(SOURCES['ui'], n) for n in UI_AST.body
                 if isinstance(n, ast.FunctionDef) and n.name in (
-                    '_draw_ai_panel', '_draw_ai_transcript', '_ai_transcript_event', '_ai_review_event',
+                    '_draw_ai_panel', '_draw_ai_transcript', '_ai_activity_projection', '_ai_transcript_event', '_ai_review_event',
                     'ai_panel_click', '_shell_chrome_event', '_draw_bug_panel',
                     '_draw_display_panel', '_show_bug_category_menu', '_draw_centered_panel_text')}
 del UI_AST
@@ -148,8 +148,9 @@ class PanelTests(unittest.TestCase):
     def test_report_preserves_categories_and_attachments(self):
         lay = self.br.layout((0, 0, 208, 700), measure=self.measure)
         self.assertNotIn('chips', lay)
-        # OURS (owner request): the opt-in local usage monitor joins the attachments.
-        self.assertEqual({c for c, _ in lay['checks']}, {'shot', 'file', 'log', 'usage'})
+        # Diagnostic attachments remain independent, explicit local choices.
+        self.assertEqual({c for c, _ in lay['checks']}, {'shot', 'file', 'log', 'ai', 'usage'})
+        self.assertFalse(self.br.ReportState().include_ai)
         self.assertEqual({b for b, _ in lay['buttons']}, {'submit'})
         rect = lay['category']
         self.assertEqual(rect[0] >= 11 and rect[2] <= 197, True)
@@ -162,7 +163,14 @@ class PanelTests(unittest.TestCase):
         for scale in (1, 2):
             for height in (100, 180, 250, 300, 700):
                 lay = self.ai.panel_layout((0, 0, 208*scale, height*scale), scale)
-                boxes = [rect for name, rect in lay.items() if name != 'buttons']
+                title, mode = lay['title'], lay['mode_toggle']
+                self.assertGreaterEqual(mode[0], title[0])
+                self.assertGreaterEqual(mode[1], title[1])
+                self.assertLessEqual(mode[2], title[2])
+                self.assertLessEqual(mode[3], title[3])
+                heading = (title[0], title[1], mode[0] if mode[2] > mode[0] else title[2], title[3])
+                boxes = [rect for name, rect in lay.items() if name not in ('buttons', 'title')]
+                boxes.append(heading)
                 boxes += [rect for _, rect in lay['buttons']]
                 for index, a in enumerate(boxes):
                     self.assertGreaterEqual(a[1], -0.001)
@@ -374,6 +382,7 @@ MUTATIONS = [
     ('rightpanel', 'columns = min(columns, max(1, len(mode_names)))', 'columns = 1'),
     ('bugreport', 'title[1] - gap - 31*s', 'title[1] - gap - 20*s'),
         ('ai_assistant', "'context': 0", "'context': 28*s"),
+    ('ai_assistant', "min(title[3], title[1] + 20*s)", "title[3] + 20*s"),
     ('ui', '_draw_shell_icon(ui_icon_data.AI_REPLY_ICON, avatar, 17 * sc)', 'pass'),
     ('ui', 'gpu.state.scissor_set(*clip)', 'pass'),
     ('ui', 'if _ai_transcript_event(event):', 'if False:'),

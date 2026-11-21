@@ -25,17 +25,27 @@ _session = None
 
 
 class _Host:
-    def __init__(self, endpoint, app_state, version, nonce, lifetime):
+    def __init__(self, endpoint, app_state, version, nonce, lifetime, *, modeling=False):
         self._lifetime = lifetime
         self._app = app_state
         self._model = app_state.model
         self._file = self._model.file
-        self._bridge = MainThreadBridge(endpoint, ApplicationReader(app_state, version), nonce)
+        self._reader = ApplicationReader(app_state, version)
+        if modeling:
+            from .ai_modeling import ModelingReader
+            self._reader = ModelingReader(app_state, version, nonce, self._modeling_scope)
+        self._bridge = MainThreadBridge(endpoint, self._reader, nonce)
         self._endpoint = endpoint
         self._ready = bytearray(READY_PREFIX + nonce.encode("ascii") + b"\n")
         self._deadline = time.monotonic() + 120.0
         # Register this wrapper, not the unguarded bridge pump.
         self._timer_callback = self.pump
+
+    def _modeling_scope(self):
+        from . import state
+        if (self.closed or state.app_state is not self._app or self._app.model is not self._model
+                or self._model.file is not self._file):
+            raise ValueError('modeling_session_closed')
 
     @property
     def closed(self):
@@ -43,6 +53,8 @@ class _Host:
 
     def _close_transport(self):
         self._bridge.close()
+        if hasattr(self._reader, 'close'):
+            self._reader.close()
         self._lifetime.close()  # EOF only: revoke MCP, never request app shutdown.
 
     def close(self):
@@ -106,7 +118,8 @@ def attach_inherited(app_state, version):
     """
     global _session
     require_main_thread()
-    if os.environ.get("NARWHAL_AUTOMATION_OPT_IN") != OPT_IN:
+    modeling = os.environ.get('NARWHAL_AUTOMATION_OPT_IN') == 'new-app-reviewed-modeling-v1'
+    if os.environ.get("NARWHAL_AUTOMATION_OPT_IN") != OPT_IN and not modeling:
         return None
     values = {key: os.environ.pop(key, "") for key in (
         "NARWHAL_AUTOMATION_OPT_IN", "NARWHAL_AUTOMATION_FD",
@@ -144,7 +157,7 @@ def attach_inherited(app_state, version):
         if _session is not None:
             raise ValueError
         _session = _Host(endpoint, app_state, version,
-                         values["NARWHAL_AUTOMATION_SESSION"], lifetime)
+                         values["NARWHAL_AUTOMATION_SESSION"], lifetime, modeling=modeling)
         register_timer(_session)
         return _session
     except Exception:

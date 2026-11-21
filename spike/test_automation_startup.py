@@ -69,62 +69,17 @@ def catalog_controls(tools):
 
 
 def expected_operations():
-    """MEASURED: actions::operations metadata; Box approval is not an MCP executor."""
-    return {
-        "operations": [
-            {"operation": "circle", "command": "Circle", "mode": "center_radius_active_cplane",
-             "arguments_schema": {"type": "object", "properties": {
-                 "center": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3},
-                 "radius": {"type": "number", "exclusiveMinimum": 0, "maximum": 1e9}},
-                 "required": ["center", "radius"], "additionalProperties": False},
-             "proposal_available": True, "execution_available": False,
-             "scope": "create_one_curve_only", "representation": "exact_rational_nurbs",
-             "blockers": ["authoritative_document_session_and_change_token",
-                          "checked_target_content_and_cplane_layer_state",
-                          "approved_main_thread_command_undo_dispatch"],
-             "evidence": {"source": "commands.CircleCmd.execute",
-                          "status": "source_inspected_not_workflow_executed"}},
-            {"operation": "box", "command": "Box", "mode": "world_xyz_append_only",
-             "arguments_schema": {"type": "object", "properties": {
-                 "origin": {"type": "array", "items": {"type": "number", "minimum": -1e6, "maximum": 1e6},
-                            "minItems": 3, "maxItems": 3},
-                 "size": {"type": "array", "items": {"type": "number", "exclusiveMinimum": 0, "maximum": 1e6},
-                          "minItems": 3, "maxItems": 3}},
-                 "required": ["origin", "size"], "additionalProperties": False},
-             "proposal_available": True, "execution_available": True,
-             "requires_explicit_ui_approval": True,
-             "scope": "in_app_assistant_only_create_one_new_solid_never_edit_targets",
-             "representation": "analytic_brep_and_occt_master",
-             "blockers": ["explicit_in_app_approval", "unchanged_document_units_and_available_layer",
-                          "idle_command_and_enabled_undo"]},
-        ],
-        "read_tools": [{"name": "narwhal." + name, "alias": "narwhal_" + name, "mutation": False}
-                       for name in ("application_info", "document_summary", "selection_summary",
-                                    "object_summary", "objects", "layers", "workspace", "components", "operations")],
-        "planning_operations": [
-            {"operation": "curve", "command": "Curve", "execution_available": False,
-             "source": "commands.CurveCmd.execute/bridge.make_polyline", "representation": "nurbs_curve",
-             "unsupported_options": [], "blockers": ["curve_executor_not_integrated"]},
-            {"operation": "loft", "command": "Loft", "execution_available": False,
-             "source": "commands.LoftCmd.execute/bridge.loft_brep", "representation": "nurbs_surface",
-             "unsupported_options": ["Closed=Yes", "Point"],
-             "blockers": ["surfacing_executor_not_integrated", "closure_and_continuity_need_verification"]},
-            {"operation": "pipe", "command": "Pipe", "execution_available": False,
-             "source": "commands.PipeCmd.execute/bridge.pipe_occt", "representation": "analytic_constant_radius_pipe",
-             "unsupported_options": ["Thick", "Cap=Round", "tapered_radius"],
-             "blockers": ["pipe_executor_not_integrated", "rail_support_requires_analytic_kernel_check"]},
-            {"operation": "boolean_difference", "command": "BooleanDifference", "execution_available": False,
-             "source": "commands.BooleanDifferenceCmd/bridge.boolean_brep",
-             "representation": "requires_analytic_operands_and_master", "unsupported_options": [],
-             "blockers": ["boolean_executor_not_integrated", "analytic_route_must_not_fall_back_to_facets"]},
-        ],
-        "disabled_prototypes": [
-            {"operation": name, "prototype_implemented": True, "execution_available": False,
-             "proposal_available": False, "scope": "new_world_aligned_analytic_solid_only",
-             "blocker": "main_geometry_approval_rollback_undo_review_and_ui_activation_required"}
-            for name in ("sphere", "cylinder", "cone")],
-        "provenance": {"source": "native_automation_catalog", "registry_membership_is_not_execution_support": True},
-    }
+    """Qualified native operations catalog from the default installed backend (no HTTP).
+
+    The expected metadata is the Rust catalog read through
+    WorkflowSession.operation_catalog(); this file no longer duplicates the literal.
+    """
+    module = runpy.run_path(str(ROOT / "spike" / "test_ai_workflow.py"), run_name="test_ai_workflow")
+    ai = module["ai"]
+    state = ai.AssistantState(provider=ai.set_provider("openai_compatible", "fixture-model",
+                                                       credential_env="TEST_KEY"))
+    with ai.WorkflowSession(state, "document-A", allow_reads=True) as session:
+        return session.operation_catalog()["operations"]
 
 
 def validate_operations(payload):
@@ -156,6 +111,8 @@ def operations_controls(payload):
         ("planning executor enabled", ("planning_operations", 0, "execution_available"), True),
         ("read tool mutates", ("read_tools", 0, "mutation"), True),
         ("provenance promises execution", ("provenance", "registry_membership_is_not_execution_support"), False),
+        ("batch local-MCP approval falsely disabled", ("batch_executor", "mcp_requires_explicit_opt_in_and_local_batch_review"), False),
+        ("batch schema admits arbitrary properties", ("batch_executor", "arguments_schema", "additionalProperties"), True),
         ("unexpected metadata", ("external_execution_available",), True),
     )
     rejected = []
@@ -217,14 +174,16 @@ def fixture(phase, case, variant):
             # defense, in this process only. Keep the stale-access assertion strong.
             from narwhal3d import automation_host as host
             source = Path(host.__file__).read_text()
-            for needle in ("state.app_state is not self._app", "self._app.model is not self._model",
-                           "self._model.file is not self._file"):
-                assert source.count(needle) == 1
-                source = source.replace(needle, "False")
+            needle = ("if (state.app_state is not self._app or self._app.model is not self._model\n"
+                      "                    or self._model.file is not self._file):\n"
+                      "                self._close_transport()")
+            assert source.count(needle) == 1, 'revocation producer mutation anchor drifted'
+            source = source.replace(needle, "if False:\n                self._close_transport()")
             source += "\n# TEST mutation: disable explicit document-switch revocation.\ndef close():\n    pass\n"
             exec(compile(source, host.__file__, "exec"), host.__dict__)
             from narwhal3d import ai_workspace
             ai_workspace.WorkspaceSnapshots.current = lambda self: True
+            record(case / 'mutation-applied.json', dict(pump_identity_check='disabled', explicit_close='noop'))
         return
 
     from narwhal3d import automation_host as host, state, model, ui, automation_tools
@@ -548,6 +507,7 @@ def run_case(output, variant, era):
             if variant in {"revoke", "disabled-revocation"}:
                 assert action(case, "replace", app["pid"])["objects"] == 0
                 if variant == "disabled-revocation":
+                    assert wait_file(case, 'mutation-applied.json')['pump_identity_check'] == 'disabled', 'mutation did not apply'
                     # This MUST violate the positive revocation assertion.
                     try:
                         assert_revoked(client)

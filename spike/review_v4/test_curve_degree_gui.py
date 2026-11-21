@@ -253,11 +253,13 @@ def evidence_case():
     yield from tap('LEFTMOUSE', ((box[0] + box[2]) / 2, (box[1] + box[3]) / 2))
     check(ui.ai_panel_open(), 'actual AI tab click opens visible transcript')
     before = ui.app_state.model.file.Encode(), ui.app_state.ctx.undo.top_serial
-    ui._ai_scope()  # Establish the actual document/config identity before injection.
+    scope = ui._ai_scope()  # Establish the actual document/config identity before injection.
     check('workflow' not in st.extra, 'no real workflow overwritten by presentation fixture')
     state = dict(known_action_results=0, approved_creation_receipts=0,
                  provider_text_is_geometry_evidence=False, current_geometry_verified=False)
+    token = dict(conversation=1, generation=1, request=1)
     workflow = types.SimpleNamespace(poll_timeout=lambda: {'status': 'idle'},
+        public_workflow_state=lambda: dict(conversation=1, generation=1, request_sequence=1),
         finish=lambda *_: {'status': 'completed', 'cad_state': state})
     original = ai_evidence.status_text
     try:
@@ -269,7 +271,9 @@ def evidence_case():
             ai_evidence.status_text = (lambda _: None) if mode == 'dropped-evidence' else original
             st.extra['workflow'] = workflow
             output = queue.Queue()
-            output.put(object())
+            output.put(types.SimpleNamespace(token=token))
+            from narwhal3d import ai_modeling
+            ui._ai['turn_modeling_context'] = ai_modeling.context(ui.app_state, scope[0])
             ui._ai['transport_output'] = output
             ui._ai_poll_transport()  # Actual hook, synthetic completion boundary, no HTTP/native claim.
             PAINTED_AI.clear()
@@ -296,6 +300,7 @@ def evidence_case():
         ui._draw_text = real_draw
         st.extra.pop('workflow', None)
         ui._ai.pop('transport_output', None)
+        ui._ai.pop('turn_modeling_context', None)
     check((ui.app_state.model.file.Encode(), ui.app_state.ctx.undo.top_serial) == before,
           'AI presentation fixtures did not change document or Undo')
 

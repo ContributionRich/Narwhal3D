@@ -3,8 +3,10 @@
 This module deliberately performs no network requests and executes no commands. It builds
 bounded provider-neutral request data and turns a narrowly-shaped JSON object into a
 reviewable :class:`ToolProposal`. Legacy string proposals are compatibility data,
-not executable commands. The chat uses WorkflowSession; only separately approved
-Box/Cube creation is enabled. Other primitive publishers remain disabled prototypes.
+not executable commands. The chat uses WorkflowSession's native typed batch policy:
+Review requires local batch approval; explicitly enabled Build executes validated
+modeling steps through ai_modeling's main-thread SDK adapter. Legacy individual
+primitive prototype routes remain disabled; they are not the batch executor.
 
 Raw API keys never enter these dataclasses. Provider adapters may read the named
 environment variable at send time, but persistent, document, report, and debug state sees
@@ -432,6 +434,9 @@ def panel_layout(body: tuple[float, float, float, float], scale: float = 1.0):
     result['buttons'] = [(name, (left + i*(button_w+button_gap), button_box[1],
                                 left + i*(button_w+button_gap)+button_w, button_box[3]))
                          for i, name in enumerate(('send', 'new', 'settings'))]
+    title = result['title']
+    result['mode_toggle'] = (right - min(68*s, width*0.42), title[1], right,
+                             min(title[3], title[1] + 20*s)) if width >= 112*s else (right, title[1], right, title[1])
     return result
 
 
@@ -445,6 +450,8 @@ def panel_hit(layout, x: float, y: float):
     for button_id, rect in layout.get("buttons", ()):
         if _inside(rect, x, y):
             return "button", button_id
+    if _inside(layout.get('mode_toggle', (0, 0, 0, 0)), x, y):
+        return 'button', 'mode'
     return None
 
 
@@ -554,6 +561,44 @@ class WorkflowUnavailable(RuntimeError):
     """New workflow fails closed when its reviewed native backend is unavailable."""
 
 
+_workflow_library_refreshes = {}
+
+
+def _refresh_workflow_library(library_path):
+    """Linux FFI glue: load a replaced native inode without unloading live sessions.
+
+    dlopen caches the original pathname even after atomic replacement. A private
+    snapshot gives the new library a distinct identity; old sessions keep their
+    own library/handle. No provider path, new ABI, or Python execution fallback.
+    """
+    import ctypes
+    import pathlib
+    import shutil
+    import sys
+    import tempfile
+    if sys.platform != 'linux':
+        raise WorkflowUnavailable('native_modeling_update_required')
+    path=pathlib.Path(library_path).resolve(strict=True)
+    info=path.stat()
+    key=(str(path),info.st_dev,info.st_ino,info.st_size,info.st_mtime_ns)
+    if key in _workflow_library_refreshes:
+        return _workflow_library_refreshes[key]
+    if len(_workflow_library_refreshes)>=4 or not 0<info.st_size<=67108864:
+        raise WorkflowUnavailable('native_modeling_update_required')
+    folder=tempfile.TemporaryDirectory(prefix='narwhal-native-refresh-')
+    try:
+        snapshot=pathlib.Path(folder.name)/path.name
+        shutil.copyfile(path,snapshot)
+        lib=ctypes.CDLL(str(snapshot))
+        lib._narwhal_snapshot_directory=folder
+        lib._narwhal_source_path=str(path)
+        _workflow_library_refreshes[key]=lib
+        return lib
+    except Exception:
+        folder.cleanup()
+        raise
+
+
 def _load_workflow_library(library_path=None):
     """Trusted installed-path resolver shared by conversation and read-only adapters."""
     import ctypes
@@ -580,6 +625,17 @@ def _load_workflow_library(library_path=None):
         lib.narwhal_workflow_abi.restype = ctypes.c_uint32
         if lib.narwhal_workflow_abi() != 1:
             raise ValueError
+        revision=getattr(lib,'narwhal_workflow_api_revision',None)
+        if revision is not None:
+            revision.restype=ctypes.c_uint32
+        if revision is None or revision()!=9:
+            lib=_refresh_workflow_library(library_path)
+            lib.narwhal_workflow_abi.restype=ctypes.c_uint32
+            revision=getattr(lib,'narwhal_workflow_api_revision',None)
+            if revision is not None:
+                revision.restype=ctypes.c_uint32
+            if lib.narwhal_workflow_abi()!=1 or revision is None or revision()!=9:
+                raise WorkflowUnavailable('native_modeling_update_required')
         call = lib.narwhal_workflow_json
         call.argtypes = [ctypes.c_uint64, ctypes.c_char_p, ctypes.c_size_t, ctypes.c_void_p, ctypes.c_size_t]
         call.restype = ctypes.c_ssize_t
@@ -677,12 +733,19 @@ class WorkflowSession:
         return result
 
     def prepare(self, document_context, *, user_text=None, context=None,
-                timeout_ms=30_000, max_tokens=4096, continuation=False):
+                timeout_ms=None, max_tokens=8192, continuation=False):
         from .ai_transport import PreparedTurn
         from dataclasses import replace
         import threading
 
         self._main_thread()
+        if timeout_ms is None:
+            # Negotiate bounded waits with the loaded backend; never infer them
+            # from the provider/model name or permit an unbounded UI wait.
+            limit = self.public_workflow_state().get('request_timeout_max_ms', 120_000)
+            if type(limit) is not int or not 1 <= limit <= 300_000:
+                raise WorkflowUnavailable('native_workflow_limits_invalid')
+            timeout_ms = limit
         context_id = self._context_id(document_context)
         if context_id != self._document_context:
             self._allow_reads = False
@@ -735,6 +798,9 @@ class WorkflowSession:
             self._state.extra['last_successful_provider'] = (
                 metadata_permission(self._state.provider), self._state.provider.model)
             self._state.error = ""
+        elif status == 'retryable_provider_limit':
+            self._state.status = 'sending'
+            self._state.error = ''
         else:
             self._state.status = "error"
             self._state.error = result.get("code", status)
@@ -754,9 +820,24 @@ class WorkflowSession:
         return self._exchange({"op": "results", "token": token,
                                "binding": self._binding(document_context), "results": results})
 
+    def diagnostics(self):
+        """Bounded native structural trace, never a dump of provider requests/history."""
+        self._main_thread()
+        return self._exchange({'op':'diagnostics'})
+
     def public_workflow_state(self):
         """Bounded Rust counters/categories, not a persistent HTTP connection claim."""
         return self._exchange({"op": "state"})
+
+    def modeling_exchange(self, op, document_context, **fields):
+        """Trusted main-thread batch authority/receipt adapter, not a model tool."""
+        self._main_thread()
+        if op not in ('modeling_mode', 'stage_modeling', 'decide_modeling',
+                      'consume_modeling', 'modeling_publication', 'modeling_result'):
+            raise WorkflowUnavailable('unsupported_modeling_exchange')
+        if op not in ('modeling_mode', 'modeling_result'):
+            fields['binding'] = self._binding(document_context)
+        return self._exchange(dict(op=op, **fields))
 
     def stage_primitive_prototype(self, owner, document_context, arguments, context):
         """Development-only gate; not registered in any live tool catalog."""
@@ -827,6 +908,41 @@ class WorkflowSession:
         from .automation_tools import ReadError, SAFE_ERRORS
         self._main_thread()
         plan = self._exchange({"op": "resolve_call", "token": token, "binding": self._binding(document_context), "call_id": call_id})
+        if plan['kind'] in ('curve_samples','curve_comparison'):
+            from .ai_modeling import sample_curve, compare_curves_approx
+            try:
+                output = (sample_curve(reader._app,**plan['arguments']) if plan['kind']=='curve_samples' else
+                          compare_curves_approx(reader._app,self,**plan['arguments']))
+                return dict(call_id=call_id,output=output,is_error=False)
+            except Exception:
+                return dict(call_id=call_id,output=dict(code='curve_inspection_unavailable',available=False),is_error=True)
+        if plan['kind'] == 'frame_objects':
+            from .ai_modeling import frame_objects
+            try:
+                return dict(call_id=call_id,output=frame_objects(reader._app,self,**plan['arguments']),is_error=False)
+            except Exception:
+                return dict(call_id=call_id,output=dict(code='view_framing_unavailable',framed=False),is_error=True)
+        if plan['kind'] == 'viewport_capture':
+            if not plan['allowed']:
+                raise WorkflowUnavailable('viewport_sharing_requires_review')
+            from .ai_modeling import capture_view
+            try:
+                output = capture_view(reader._app)
+                return dict(call_id=call_id,output=output,is_error=False)
+            except Exception:
+                return dict(call_id=call_id,output=dict(code='viewport_capture_unavailable',available=False),is_error=True)
+        if plan['kind'] in ('geometry_inspection', 'geometry_measurement'):
+            from .ai_modeling import inspect_object, measure_objects
+            try:
+                output = (inspect_object(reader._app, plan['arguments']['object_id'])
+                          if plan['kind'] == 'geometry_inspection' else
+                          measure_objects(reader._app, plan['arguments']['left'], plan['arguments']['right']))
+            except Exception:  # SDK boundary; never publish raw/private exception data
+                output = {'available': False, 'code': 'exact_measurement_unavailable'}
+            return {'call_id': call_id, 'output': output,
+                    'is_error': not output.get('valid', output.get('available', False))}
+        if plan['kind'] == 'modeling_batch':
+            raise WorkflowUnavailable('modeling_requires_review')
         if plan["kind"] == "proposal_only":
             raise WorkflowUnavailable("proposal_requires_review")
         if plan['kind'] == 'box_proposal':
@@ -836,7 +952,7 @@ class WorkflowSession:
                 output = plan["output"]
             else:
                 output = reader.read(plan["tool"], plan["arguments"])
-            return {"call_id": call_id, "output": output, "is_error": False}
+            return {"call_id": call_id, "output": output, "is_error": plan.get('is_error', False)}
         except ReadError as exc:
             code = exc.args[0] if exc.args else "read_failed"
             return {"call_id": call_id, "output": {"code": code if code in SAFE_ERRORS else "read_failed"}, "is_error": True}
@@ -887,6 +1003,10 @@ class WorkflowSession:
         self._main_thread()
         self._cancel_event.set()
         if self._handle:
+            try:
+                self._state.extra['last_diagnostics'] = self.diagnostics()
+            except WorkflowUnavailable:
+                pass
             try:
                 self._exchange({"op": "close"})
             finally:

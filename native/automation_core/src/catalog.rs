@@ -77,8 +77,133 @@ pub fn definitions() -> Vec<ToolDefinition> {
     tools.push(ToolDefinition { name:"narwhal_verify".into(),
         description:"Check a separately approved Box action's host receipt against requested dimensions and a later object-ID read. Does not execute anything. Current geometry verification remains incomplete without fresh authoritative measurements; never infer success from provider prose.".into(),
         parameters:crate::verification::schema() });
+    tools.push(crate::modeling::definition());
+    tools.push(ToolDefinition { name:"narwhal_inspect".into(), description:"Measure one current object by stable UUID: exact master bounds/volume/airtightness or curve closure/planarity/degree. Not a screenshot or design-quality judgment.".into(), parameters:schema("narwhal.object_summary") });
+    tools.push(ToolDefinition{name:"narwhal_measure".into(),description:"Measure the minimum distance between two exact analytic solid/surface objects by UUID, in document units. Zero within tolerance means overlapping/touching, not a unified watertight solid. Meshes and objects without exact shapes are refused.".into(),parameters:measurement_schema()});
+    tools.push(ToolDefinition{name:"narwhal_capture_view".into(),description:"Inspect appearance using one small JPEG of the active viewport, only after separate local image-sharing consent for this call. No desktop, other panes, paths or URLs. Use at most one capture per response; inspect and revise recognizability/features before declaring a design finished. A snapshot cannot prove exactness or manufacturability.".into(),parameters:schema("narwhal.capture_view")});
+    tools.push(ToolDefinition{name:"narwhal_export".into(),description:"Export explicit existing object UUIDs to STEP or 3dm only after a local file-picker choice. The user must choose a NEW destination on every call, even in Build mode. Paths, overwrites, shell and URLs are not accepted. Canceling applies nothing. STEP requires existing qualified exact geometry; export does not verify design quality or solid validity. Never claim a save/export without its successful tool receipt.".into(),parameters:crate::export_action::schema()});
+    tools.push(ToolDefinition{name:"narwhal_frame".into(),description:"Select and frame explicit existing object UUIDs together in the active viewport. Changes selection/view only, not document geometry. Before visual inspection frame all design components, not just the most recently created eye or marker. Hidden/unavailable objects are refused.".into(),parameters:frame_schema()});
+    tools.push(ToolDefinition{name:"narwhal_curve_samples".into(),description:"Study an existing curve's actual shape through bounded normalized-parameter point/tangent/curvature samples, degree and control-point count. Works even when full NURBS inspection exceeds its point limit. Fractions refer to curve domain, not arc length. Start with 24 or32 samples; refine interesting fractional intervals. This does not rebuild or change the curve.".into(),parameters:crate::curve_inspection::samples_schema()});
+    tools.push(ToolDefinition{name:"narwhal_compare_curves".into(),description:"Compare two existing curves by bidirectional sampled point-to-exact-curve distances and actual control-point counts. Use after synthesizing a simpler curve with curve/nurbs tools. The sampled maximum is approximate, NOT a certified global tolerance or Hausdorff bound; curves remain exact NURBS geometry. Original and candidate are not modified.".into(),parameters:crate::curve_inspection::compare_schema()});
     tools
 }
+pub fn frame_schema() -> Value {
+    json!({"type":"object","properties":{"object_ids":{"type":"array","minItems":1,"maxItems":48,"uniqueItems":true,"items":{"type":"string","format":"uuid","minLength":36,"maxLength":36}},"view_direction":{"type":"array","minItems":3,"maxItems":3,"items":{"type":"number","minimum":-1000000,"maximum":1000000},"description":"Optional nonzero direction FROM target TOWARD camera. [0,0,1] looks down from above; [1,-1,1] is an elevated oblique view. Chooses perspective inspection angle only, never rotates objects; omit to preserve current view."}},"required":["object_ids"],"additionalProperties":false})
+}
+pub fn validate_frame(args: &Map<String, Value>) -> Result<(), &'static str> {
+    let ids = args
+        .get("object_ids")
+        .and_then(Value::as_array)
+        .ok_or("invalid_frame_arguments")?;
+    let mut unique = std::collections::HashSet::new();
+    if args
+        .keys()
+        .any(|key| key != "object_ids" && key != "view_direction")
+        || !(1..=48).contains(&ids.len())
+        || ids
+            .iter()
+            .any(|id| id.as_str().is_none_or(|s| !uuid(s) || !unique.insert(s)))
+    {
+        return Err("invalid_frame_arguments");
+    }
+    if let Some(direction) = args.get("view_direction") {
+        let vector: [f64; 3] =
+            serde_json::from_value(direction.clone()).map_err(|_| "invalid_frame_arguments")?;
+        crate::modeling::view_basis(vector).map_err(|_| "invalid_frame_arguments")?;
+    }
+    Ok(())
+}
+pub fn measurement_schema() -> Value {
+    json!({"type":"object","properties":{"left":{"type":"string","format":"uuid","minLength":36,"maxLength":36},"right":{"type":"string","format":"uuid","minLength":36,"maxLength":36}},"required":["left","right"],"additionalProperties":false})
+}
+pub fn validate_measurement(args: &Map<String, Value>) -> Result<(), &'static str> {
+    if args.len() != 2
+        || !["left", "right"]
+            .iter()
+            .all(|key| args.get(*key).and_then(Value::as_str).is_some_and(uuid))
+    {
+        return Err("invalid_measurement_arguments");
+    }
+    Ok(())
+}
+/// Current agent surface. Legacy Box/proposal/plan schemas remain available to
+/// explicit compatibility callers, but must not constrain a new modeling agent.
+pub fn agent_definitions() -> Vec<ToolDefinition> {
+    definitions()
+        .into_iter()
+        .filter(|tool| {
+            canonical(&tool.name).is_some()
+                || matches!(
+                    tool.name.as_str(),
+                    "narwhal_export"
+                        | "narwhal_model"
+                        | "narwhal_inspect"
+                        | "narwhal_measure"
+                        | "narwhal_capture_view"
+                        | "narwhal_frame"
+                        | "narwhal_curve_samples"
+                        | "narwhal_compare_curves"
+                )
+        })
+        .collect()
+}
+
+#[cfg(test)]
+#[test]
+fn current_agent_uses_general_batches_not_legacy_planner_gates() {
+    let tools = agent_definitions();
+    assert_eq!(tools.len(), 17);
+    assert!(
+        tools
+            .iter()
+            .any(|t| t.name == "narwhal_export" && t.parameters == crate::export_action::schema())
+    );
+    let id = "00000000-0000-0000-0000-000000000001";
+    assert!(validate_frame(&serde_json::from_value(json!({"object_ids":[id]})).unwrap()).is_ok());
+    for bad in [
+        json!({"object_ids":[]}),
+        json!({"object_ids":[id,id]}),
+        json!({"object_ids":["selected"]}),
+        json!({"object_ids":[id],"path":"private"}),
+        json!({"object_ids":vec![id;49]}),
+    ] {
+        assert_eq!(
+            validate_frame(&serde_json::from_value(bad).unwrap()),
+            Err("invalid_frame_arguments")
+        );
+    }
+    assert!(
+        tools
+            .iter()
+            .any(|t| t.name == "narwhal_model" && t.parameters == crate::modeling::schema())
+    );
+    assert!(tools.iter().any(|t| t.name == "narwhal_inspect"));
+    assert!(tools.iter().any(|t| t.name == "narwhal_measure"));
+    let args=serde_json::from_value(json!({"left":"00000000-0000-0000-0000-000000000001","right":"00000000-0000-0000-0000-000000000002"})).unwrap();
+    assert!(validate_measurement(&args).is_ok());
+    assert!(
+        validate_measurement(
+            &serde_json::from_value(json!({"left":"selected","right":"all"})).unwrap()
+        )
+        .is_err()
+    );
+    let mut arbitrary = args;
+    arbitrary.insert("script".into(), json!("eval"));
+    assert!(validate_measurement(&arbitrary).is_err());
+    for name in [
+        "narwhal_create_box",
+        "narwhal_propose_circle",
+        "narwhal_plan",
+        "narwhal_verify",
+    ] {
+        assert!(!tools.iter().any(|t| t.name == name));
+        assert!(
+            definitions().iter().any(|t| t.name == name),
+            "compatibility schema lost"
+        );
+    }
+}
+
 pub fn schema(name: &str) -> Value {
     match name {
         "narwhal.object_summary" => {
@@ -131,6 +256,37 @@ pub fn validate_read(name: &str, args: &Map<String, Value>) -> Result<(), &'stat
     Ok(())
 }
 pub fn validate(call: &ToolCall) -> Result<(), &'static str> {
+    if call.name == "narwhal_export" {
+        return crate::export_action::validate(&call.arguments);
+    }
+    if call.name == "narwhal_measure" {
+        return validate_measurement(&call.arguments);
+    }
+    if call.name == "narwhal_model" {
+        let batch: crate::modeling::Batch =
+            serde_json::from_value(Value::Object(call.arguments.clone()))
+                .map_err(|_| "invalid_modeling_batch")?;
+        return batch.validate(0.);
+    }
+    if call.name == "narwhal_curve_samples" {
+        return crate::curve_inspection::validate_samples(&call.arguments);
+    }
+    if call.name == "narwhal_compare_curves" {
+        return crate::curve_inspection::validate_compare(&call.arguments);
+    }
+    if call.name == "narwhal_frame" {
+        return validate_frame(&call.arguments);
+    }
+    if call.name == "narwhal_capture_view" {
+        return if call.arguments.is_empty() {
+            Ok(())
+        } else {
+            Err("invalid_viewport_arguments")
+        };
+    }
+    if call.name == "narwhal_inspect" {
+        return validate_read("narwhal.object_summary", &call.arguments);
+    }
     if call.name == "narwhal_verify" {
         let request: crate::verification::Request =
             serde_json::from_value(Value::Object(call.arguments.clone()))

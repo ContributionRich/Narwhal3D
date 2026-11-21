@@ -95,7 +95,12 @@ fn call(reply: &mut Reply, id: &str, name: &str, args: &Value) -> Result<(), &'s
         return Err("invalid_tool_call");
     }
     let arguments = args.as_object().ok_or("invalid_arguments")?;
-    if reply.tool_calls.len() >= 4 || args.to_string().len() > 4096 {
+    let argument_limit = if name == "narwhal_model" {
+        24_000
+    } else {
+        4096
+    };
+    if reply.tool_calls.len() >= 4 || args.to_string().len() > argument_limit {
         return Err("tool_call_limit");
     }
     reply.tool_calls.push(ToolCall {
@@ -717,9 +722,9 @@ pub fn build_request(
     if model.trim().is_empty()
         || model.len() > 200
         || model.chars().any(char::is_control)
-        || messages.len() > 64
-        || tools.len() > 16
-        || !(1..=4096).contains(&max_tokens)
+        || messages.len() > 192
+        || tools.len() > 24
+        || !(1..=8192).contains(&max_tokens)
     {
         return Err("invalid_request_limits");
     }
@@ -1413,12 +1418,13 @@ mod responses_tests {
         assert!(build_request(P, "m", &[], &[bad], 12).is_err());
         assert!(build_request(P, "m", &[], &[tool.clone(), tool.clone()], 12).is_err());
         assert!(build_request(P, "m", &[], &vec![tool; 17], 12).is_err());
-        assert!(build_request(P, "m", &vec![json!({}); 65], &[], 12).is_err());
+        assert!(build_request(P, "m", &vec![json!({}); 192], &[], 12).is_ok());
+        assert!(build_request(P, "m", &vec![json!({}); 193], &[], 12).is_err());
         assert_eq!(
             build_request(P, "m", &[json!("x".repeat(256 * 1024))], &[], 12).unwrap_err(),
             "request_size_limit"
         );
-        for cap in [0, 4097] {
+        for cap in [0, 8193] {
             assert!(build_request(P, "m", &[], &[], cap).is_err());
         }
         for model in ["".to_string(), "m\n".into(), "m".repeat(201)] {
@@ -1731,9 +1737,10 @@ mod tests {
                 assert!(body["tools"][0]["function"].get("strict").is_none());
             }
             assert!(build_request(p, "m", &[], &vec![tools[0].clone(); 17], 12).is_err());
-            assert!(build_request(p, "m", &vec![json!({}); 65], &[], 12).is_err());
+            assert!(build_request(p, "m", &vec![json!({}); 192], &[], 12).is_ok());
+            assert!(build_request(p, "m", &vec![json!({}); 193], &[], 12).is_err());
             assert!(build_request(p, "m", &[json!("x".repeat(256 * 1024))], &[], 12).is_err());
-            for cap in [0, 4097] {
+            for cap in [0, 8193] {
                 assert!(build_request(p, "m", &[], &[], cap).is_err());
             }
             assert!(build_request(p, &"m".repeat(201), &[], &[], 12).is_err());

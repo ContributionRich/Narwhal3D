@@ -74,6 +74,17 @@ NEW_TESTS = (
     'preview_responsiveness_gui', 'trim_box_gui',
 )
 NEW_SOURCES = (
+    'narwhal3d/ai_modeling.py',
+    'narwhal3d/display_prepare.py',
+    'native/automation_core/src/curve_inspection.rs',
+    'native/automation_core/src/export_action.rs',
+    'native/automation_core/src/modeling.rs',
+    'native/automation_core/src/visual.rs',
+    'native/automation_core/tests/modeling_policy.rs',
+    'native/automation_core/tests/modeling_recovery.rs',
+    'native/automation_core/tests/provider_recovery.rs',
+    'spike/test_ai_modeling_host.py',
+    'spike/test_async_display_host.py',
     "native/document_observer/lifetime_fixture.py",
     "native/pure_core/src/nearest.rs", "narwhal3d/nearest.py", "narwhal3d/native_nearest.py",
     "narwhal3d/rebuild.py",
@@ -538,6 +549,26 @@ class HarnessTests(unittest.TestCase):
 
 
 class PublicManifestTests(unittest.TestCase):
+    def test_modeling_host_and_installed_gui_registration_mutations(self):
+        def validate(text):
+            suites = text.split("BLENDER_SUITES=(\n", 1)[1].split("\n)", 1)[0]
+            for name in ("test_ai_modeling_host.py", "test_async_display_host.py"):
+                self.assertIn("    spike/" + name, suites)
+            lines = [line for line in text.splitlines()
+                     if "spike/test_ai_ui_workflow_gui.py --launch" in line]
+            self.assertEqual(len(lines), 1)
+            self.assertIn("--launch --modeling --installed", lines[0])
+        text = (ROOT / "run_tests.sh").read_text()
+        validate(text)
+        for old, new in (("    spike/test_ai_modeling_host.py\n", ""),
+                         ("    spike/test_async_display_host.py\n", ""),
+                         ("--launch --modeling --installed", "--launch --installed"),
+                         ("--launch --modeling --installed", "--launch --modeling")):
+            self.assertEqual(text.count(old), 1)
+            with self.subTest(omission=old), self.assertRaises(AssertionError):
+                validate(text.replace(old, new, 1))
+        validate(text)
+
     def test_new_sources_tests_and_every_runner_payload_are_public(self):
         # runpy does not establish the script's sibling-import directory.
         scripts = str(ROOT / 'scripts')

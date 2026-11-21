@@ -44,7 +44,9 @@ class Eviction(long.NormalNativeLongReply):
 
     def test_draw_routes_notice_without_putting_it_in_history(self):
         source = Path(ai.__file__).with_name('ui.py')
-        node = next(n for n in ast.parse(source.read_text()).body if isinstance(n, ast.FunctionDef) and n.name == '_draw_ai_transcript')
+        functions = {n.name: n for n in ast.parse(source.read_text()).body
+                     if isinstance(n, ast.FunctionDef)}
+        node = functions['_draw_ai_transcript']
         if DRAW_MUTANT:
             node = ast.parse(ast.unparse(node).replace('if key[3]:', 'if False:')).body[0]
         seen = []
@@ -57,7 +59,8 @@ class Eviction(long.NormalNativeLongReply):
             ai_presentation=SimpleNamespace(PALETTES={'test':{'canvas':0}}, transcript_layout=layout),
             design=SimpleNamespace(THEME='test', rgb01=lambda x:x, ACCENT=0, TEXT_STRONG=0, BORDER=0),
             _draw_round_rect=lambda *_args:None, _bug_measure=lambda _size:len)
-        exec(compile(ast.Module(body=[node], type_ignores=[]), str(source), 'exec'), namespace)
+        exec(compile(ast.Module(body=[functions['_ai_activity_projection'], node],
+                                type_ignores=[]), str(source), 'exec'), namespace)
         state = ai.AssistantState()
         for index in range(101):
             state.add_message('assistant', 'row '+str(index))

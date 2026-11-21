@@ -6,6 +6,11 @@ def status_text(state):
         return None
     if not isinstance(state, dict):
         return "CAD evidence unavailable."
+    modeling = state.get('modeling', {})
+    if isinstance(modeling, dict) and modeling.get('scope') == 'publication_receipts':
+        text = modeling.get('status_text')
+        if isinstance(text, str) and len(text) <= 512:
+            return text
     known = state.get("known_action_results")
     created = state.get("approved_creation_receipts")
     if (type(known) is not int or type(created) is not int or not 0 <= created <= known <= 8

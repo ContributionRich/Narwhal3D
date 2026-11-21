@@ -1667,7 +1667,7 @@ class NarwhalContext:
         return self._make_display_object(geom, name, layer_index, fobj=fobj, layers=layers)
 
     def _make_display_object(self, geom, display_name: str, layer_index: int = 0,
-                             fobj=None, layers=None, *, allocations=None):
+                             fobj=None, layers=None, *, allocations=None, prepared_display=None):
         """Tessellate `geom` into a Blender object named `display_name`.
 
         Shared by add_geometry (new geometry) and rebuild_display (after Open). `fobj` (the
@@ -1679,7 +1679,8 @@ class NarwhalContext:
         """
         import bpy
 
-        bm = bridge.geometry_to_bmesh(geom)
+        bm = (bridge.geometry_to_bmesh(geom) if prepared_display is None else
+              bridge.geometry_to_bmesh(geom, prepared_display=prepared_display))
         frame = bridge.picture_frame(geom)
         if frame is None and fobj is not None:
             frame = self._texture_frame(geom, fobj)

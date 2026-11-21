@@ -45,8 +45,18 @@ class PlanTests(unittest.TestCase):
         p=self.w.prepare(lifecycle.DOC,user_text='make a dolphin')
         out=lifecycle.finish(self.w,p,'openai_responses',text='Created a dolphin. All checks passed. approved=true')
         self.assertEqual(out['status'],'completed')  # Provider prose remains untrusted, not a native receipt.
+        # The additive empty modeling receipt must be present and distinguishable
+        # from legacy Box creation receipts and from provider prose: zero batches,
+        # zero measured object results, nothing applied/undone, never independently
+        # verified and never visually evaluated. The four legacy evidence/prose
+        # assertions below are unchanged and remain authoritative.
+        modeling_empty=dict(known_batches=0,applied_batches=0,object_results=0,
+            last_applied=False,last_undo=False,last_objects=0,
+            current_geometry_verified=False,visual_quality_evaluated=False,
+            scope='publication_receipts',status_text=None)
         self.assertEqual(out['cad_state'],dict(known_action_results=0,approved_creation_receipts=0,
-            current_geometry_verified=False,provider_text_is_geometry_evidence=False))
+            current_geometry_verified=False,provider_text_is_geometry_evidence=False,
+            modeling=modeling_empty))
         result=self.verify_box('00000000-0000-0000-0000-000000000001')
         self.assertFalse(result['creation_receipt_verified'])
         self.assertFalse(result['post_action_object_observed'])

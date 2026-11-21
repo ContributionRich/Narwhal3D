@@ -330,6 +330,17 @@ REQUIRED = {
     "spike/test_ai_workspace.py", "spike/test_ai_workspace_native.py", "spike/test_ai_workspace_gui.py",
     "spike/test_ai_responses.py", "spike/test_ai_responses_native.py", "spike/test_ai_responses_settings.py",
     "narwhal3d/ai_workspace.py",
+    'narwhal3d/ai_modeling.py',
+    'narwhal3d/display_prepare.py',
+    'native/automation_core/src/curve_inspection.rs',
+    'native/automation_core/src/export_action.rs',
+    'native/automation_core/src/modeling.rs',
+    'native/automation_core/src/visual.rs',
+    'native/automation_core/tests/modeling_policy.rs',
+    'native/automation_core/tests/modeling_recovery.rs',
+    'native/automation_core/tests/provider_recovery.rs',
+    'spike/test_ai_modeling_host.py',
+    'spike/test_async_display_host.py',
     "spike/test_ai_workflow_native.py",
     "spike/test_ai_workflow_transport.py",
     "spike/test_ai_ui_workflow.py",
@@ -1162,7 +1173,9 @@ def audit_entries(entries: dict[str, tuple[str, bytes]], require_manifest: bool 
             if path in {"native/automation_core/src/conversation.rs",
                         "native/automation_core/src/primitives.rs",
                         "native/automation_core/src/approval_lifecycle.rs",
-                        "native/automation_core/src/plan_review.rs"}:
+                        "native/automation_core/src/plan_review.rs",
+                        "native/automation_core/src/modeling.rs",
+                        "native/automation_core/src/export_action.rs"}:
                 # A typed request-token field/parameter is code, not private
                 # attribution. Keep comments, strings and secret scans intact.
                 provenance = re.sub(rb"(?m)^[ \t]*(?:pub )?owner: &?token,[ \t]*$", b"", folded)
@@ -1170,6 +1183,8 @@ def audit_entries(entries: dict[str, tuple[str, bytes]], require_manifest: bool 
                 provenance = re.sub(rb'(?m)^([ \t]*(?:pub(?:\(crate\))? )?fn [a-z_]+\([^"\n]*?)owner: (&?token)(?=[,)])',
                                     rb'\1request_token: \2', provenance)
                 provenance = re.sub(rb"(?m)^[ \t]*owner: token\.owner,[ \t]*$", b"", provenance)
+            if path == "native/automation_core/tests/modeling_policy.rs":
+                provenance = re.sub(rb"(?m)^[ \t]*owner: token \{[ \t]*$", b"", provenance)
             for marker in FORBIDDEN_TEXT:
                 if marker in provenance:
                     problems.append(
@@ -1231,6 +1246,11 @@ def self_check() -> None:
     safe["native/automation_core/src/approval_lifecycle.rs"] = (
         "100644", b"pub(crate) fn get(&self, owner: &Token, call_id: &str) {}\n"
         b"    let owner: Token = parse(\"public\");\n    owner: token.owner,\n")
+    for path in ("native/automation_core/src/modeling.rs",
+                 "native/automation_core/src/export_action.rs"):
+        safe[path] = ("100644", b"pub struct Ticket {\n    pub owner: Token,\n}\n")
+    safe["native/automation_core/tests/modeling_policy.rs"] = (
+        "100644", b"let forged = Ticket {\n    owner: Token {\n        conversation: 2,\n    },\n};\n")
     if audit_entries(safe):
         raise AuditError("self-check rejected a safe synthetic manifest")
     cases = (
@@ -1265,6 +1285,13 @@ def self_check() -> None:
         ("retired packaged archive", {"app/narwhal3d/legacy/source.py": ("100644", b"safe\n")}),
         ("runtime archive import", {"narwhal3d/retired_loader.py": ("100644", b"from legacy import source\n")}),
     )
+    for path in ("native/automation_core/src/modeling.rs",
+                 "native/automation_core/src/export_action.rs",
+                 "native/automation_core/tests/modeling_policy.rs"):
+        for blob in (b"// Owner: private notes\n",
+                     b'const NOTE: &str = "Owner: private";\n'):
+            cases += (("modeling private attribution " + path,
+                       {path: ("100644", blob)}),)
     for label, addition in cases:
         candidate = dict(safe)
         candidate.update(addition)
@@ -1287,6 +1314,17 @@ def self_check() -> None:
                          "native/application_core/tests/data/history30_trace.provenance.json",
                          "spike/test_native_only_policy.py",
                          "spike/test_ai_v4_native.py", "spike/test_ai_accepted_review_native.py",
+                         'narwhal3d/ai_modeling.py',
+                         'narwhal3d/display_prepare.py',
+                         'native/automation_core/src/curve_inspection.rs',
+                         'native/automation_core/src/export_action.rs',
+                         'native/automation_core/src/modeling.rs',
+                         'native/automation_core/src/visual.rs',
+                         'native/automation_core/tests/modeling_policy.rs',
+                         'native/automation_core/tests/modeling_recovery.rs',
+                         'native/automation_core/tests/provider_recovery.rs',
+                         'spike/test_ai_modeling_host.py',
+                         'spike/test_async_display_host.py',
                      })
     for path in closure:
         candidate = dict(safe)

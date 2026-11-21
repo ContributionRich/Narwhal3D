@@ -1638,8 +1638,16 @@ def _tessellation_bmesh(verts, tris, edges=None):
     return bm
 
 
-def geometry_to_bmesh(geom):
-    """Dispatch any rhino3dm geometry to a bmesh (point / curve / surface / brep)."""
+def geometry_to_bmesh(geom, *, prepared_display=None):
+    """Dispatch geometry to a display bmesh; prepared data is explicit, never document geometry."""
+    if prepared_display is not None:
+        # Deliberately outside the legacy fallback handler: cancellation, stale master
+        # bindings and worker failures must never restart synchronous meshing.
+        bm = prepared_display.bmesh(_kernel().master_of(geom))
+        frame = picture_frame(geom) if isinstance(geom, r3.Brep) else None
+        if frame is not None:
+            _apply_picture_uvs(bm, frame)
+        return bm
     frame = picture_frame(geom) if isinstance(geom, r3.Brep) else None
     # a master-backed object is drawn from its MASTER. Its document form may now be
     # exact polysurface (trimmed NURBS faces the grid sampler cannot honour) or a
@@ -1657,7 +1665,13 @@ def geometry_to_bmesh(geom):
                 return cached
     if master is not None and _occt() is not None:
         try:
+            from .display_prepare import DisplayPreparationError
+        except ImportError:  # loaded standalone by actual-host probes
+            from display_prepare import DisplayPreparationError
+        try:
             bm = _master_bmesh(master)
+        except DisplayPreparationError:
+            raise
         except Exception:  # noqa: BLE001
             # Some very small clockwise trim loops produce no OCCT triangles. Fall back
             # to drawing the brep's own faces so the object remains visible.

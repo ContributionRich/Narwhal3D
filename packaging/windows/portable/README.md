@@ -68,8 +68,9 @@ preservation/device refusal, COM slot dispatch and HRESULT diagnostics. The new
 Windows-only `native_canonical_managed_target_roundtrips_through_shelllink` test
 creates disposable Unicode/space-containing targets, saves/reloads links via COM,
 checks target/working-directory and verifies nested apartment cleanup. It never
-writes Desktop/Start Menu. The owner-reported WinBoat retest passed this native
-COM test and fresh Desktop/Start Menu publication with unattended cold/warm startup.
+writes Desktop/Start Menu. An observed WinBoat retest passed this native COM
+test and fresh Desktop/Start Menu publication with unattended cold/warm startup.
+This observation is limited to that VM run, not general Windows certification.
 That receipt's two other native test failures are corrected here: absolute paths
 use platform-appropriate drive/UNC/root semantics, and pending-plan identity is
 compared after filesystem canonicalization (8.3 names are aliases, not different

@@ -15,6 +15,7 @@ struct Config {
     timeout: Duration,
     max_output: usize,
     memory_mib: Option<u64>,
+    cancel_on_stdin_close: bool,
     environment: Vec<(String, String)>,
     program: String,
     arguments: Vec<String>,
@@ -46,6 +47,7 @@ fn parse_args_from(arguments: impl IntoIterator<Item = String>) -> Result<Config
     let mut timeout_ms = None;
     let mut max_output = 8192usize;
     let mut memory_mib = None;
+    let mut cancel_on_stdin_close = false;
     let mut environment = Vec::new();
     let mut command = Vec::new();
     while let Some(arg) = args.next() {
@@ -70,6 +72,7 @@ fn parse_args_from(arguments: impl IntoIterator<Item = String>) -> Result<Config
                     &args.next().ok_or("--memory-mib needs a value")?,
                 )?);
             }
+            "--cancel-on-stdin-close" => cancel_on_stdin_close = true,
             "--env" => {
                 let item = args.next().ok_or("--env needs KEY=VALUE")?;
                 let (key, value) = item.split_once('=').ok_or("--env needs KEY=VALUE")?;
@@ -102,6 +105,7 @@ fn parse_args_from(arguments: impl IntoIterator<Item = String>) -> Result<Config
         timeout: Duration::from_millis(timeout_ms),
         max_output,
         memory_mib,
+        cancel_on_stdin_close,
         environment,
         program,
         arguments: command.into_iter().skip(1).collect(),
@@ -381,11 +385,32 @@ fn supervise(config: Config) -> Report {
     let stdout_thread = thread::spawn(move || read_tail(stdout, output_limit));
     let stderr_thread = thread::spawn(move || read_tail(stderr, output_limit));
 
+    // The owning host keeps this pipe open. EOF (including host death), a byte,
+    // or a read error all revoke the worker lease. Never kill an OCCT thread in-process.
+    let cancellation = config.cancel_on_stdin_close.then(|| {
+        let (send, receive) = std::sync::mpsc::channel();
+        thread::spawn(move || {
+            let _ = io::stdin().read(&mut [0u8; 1]);
+            let _ = send.send(());
+        });
+        receive
+    });
     let started = Instant::now();
     let mut timed_out = false;
+    let mut cancelled = false;
     let status = loop {
         match child.try_wait() {
             Ok(Some(status)) => break Ok(status),
+            Ok(None)
+                if cancellation
+                    .as_ref()
+                    .is_some_and(|rx| rx.try_recv().is_ok()) =>
+            {
+                cancelled = true;
+                guard.terminate();
+                let _ = child.kill();
+                break child.wait();
+            }
             Ok(None) if started.elapsed() < config.timeout => {
                 thread::sleep(Duration::from_millis(10));
             }
@@ -427,7 +452,7 @@ fn supervise(config: Config) -> Report {
             stdout: lossy_tail(&stdout, config.max_output),
             stderr: lossy_tail(&stderr, config.max_output),
             timed_out,
-            error: None,
+            error: cancelled.then(|| "converter cancelled by owner".to_owned()),
         },
         Err(error) => Report {
             returncode: -1,
@@ -499,6 +524,28 @@ mod tests {
         assert!(parse_memory_mib("-1").is_err());
         assert!(parse_memory_mib(&(MAX_MEMORY_MIB + 1).to_string()).is_err());
         assert!(parse_memory_mib("many").is_err());
+    }
+
+    #[test]
+    fn cancellation_is_opt_in() {
+        let args = [
+            "--timeout-ms",
+            "1000",
+            "--cancel-on-stdin-close",
+            "--",
+            "worker",
+        ];
+        assert!(
+            parse_args_from(args.map(str::to_owned))
+                .unwrap()
+                .cancel_on_stdin_close
+        );
+        let args = ["--timeout-ms", "1000", "--", "worker"];
+        assert!(
+            !parse_args_from(args.map(str::to_owned))
+                .unwrap()
+                .cancel_on_stdin_close
+        );
     }
 
     #[test]

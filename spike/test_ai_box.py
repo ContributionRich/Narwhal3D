@@ -71,10 +71,19 @@ class BoxApprovalTests(unittest.TestCase):
 
     def test_catalog_bounds_and_append_scope(self):
         ready = self.session.prepare(DOCUMENT, user_text='Describe available operations')
-        tool = next(t for t in ready.data['body']['tools'] if t['function']['name']=='narwhal_create_box')
-        self.assertFalse(tool['function']['parameters']['additionalProperties'])
-        self.assertIn('never modifies selected objects', tool['function']['description'])
-        operation = next(op for op in self.session.operation_catalog()['operations']['operations'] if op['operation']=='box')
+        ready_names = {t['function']['name'] for t in ready.data['body']['tools']}
+        # Legacy Box is no longer advertised to the provider; the current agent
+        # surface is the 9 read aliases plus narwhal_model/narwhal_inspect.
+        self.assertNotIn('narwhal_create_box', ready_names)
+        self.assertIn('narwhal_model', ready_names)
+        self.assertIn('narwhal_inspect', ready_names)
+        # The legacy Box schema and its explicit-approval gate remain available to
+        # compatibility callers through the operation_catalog, not the ready list.
+        catalog = self.session.operation_catalog()
+        tool = next(t for t in catalog['tools'] if t['name'] == 'narwhal_create_box')
+        self.assertFalse(tool['parameters']['additionalProperties'])
+        self.assertIn('never modifies selected objects', tool['description'])
+        operation = next(op for op in catalog['operations']['operations'] if op['operation']=='box')
         self.assertTrue(operation['requires_explicit_ui_approval'])
         self.assertIn('in_app_assistant_only', operation['scope'])
 

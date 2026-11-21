@@ -254,31 +254,116 @@ impl ActionGate {
     }
 }
 
+/// Compact agent inventory. The complete compatibility catalog remains available
+/// separately; schemas are already present in this turn's typed tool definitions.
+pub fn agent_operations() -> Value {
+    let full = operations();
+    let mut batch = full["batch_executor"].clone();
+    let schema = batch
+        .as_object_mut()
+        .unwrap()
+        .remove("arguments_schema")
+        .unwrap();
+    batch["schema_source"] = json!("narwhal_model tool definition parameters");
+    batch["supported_actions"] = json!(
+        schema["properties"]["steps"]["items"]["properties"]["action"]["oneOf"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v["properties"]["op"]["const"].clone())
+            .collect::<Vec<_>>()
+    );
+    json!({"batch_executor":batch,"read_tools":crate::catalog::READS.iter().map(|(name,alias,_)|json!({"name":name,"alias":alias})).collect::<Vec<_>>(),
+        "operations":[{"command":"Circle","proposal_available":true,"execution_available":false,"scope":"legacy_individual_proposal_only_not_batch_circle"}],
+        "inspection_tools":["narwhal_inspect","narwhal_measure","narwhal_frame","narwhal_capture_view","narwhal_curve_samples","narwhal_compare_curves"],
+        "provenance":{"source":"native_current_agent_catalog","schemas":"current tool definitions; full compatibility catalog remains separate"}})
+}
+
+#[cfg(test)]
+#[test]
+fn current_inventory_fits_results_without_duplicating_schemas_or_removing_compatibility() {
+    let current = agent_operations();
+    assert!(serde_json::to_vec(&current).unwrap().len() < 6000);
+    assert!(current["batch_executor"].get("arguments_schema").is_none());
+    assert!(
+        current["batch_executor"]["supported_actions"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("nurbs"))
+    );
+    assert!(
+        current["batch_executor"]["supported_actions"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("attributes"))
+    );
+    assert!(operations()["batch_executor"]["arguments_schema"].is_object());
+    assert!(current.get("disabled_prototypes").is_none());
+}
+
 pub fn operations() -> Value {
     let disabled_prototypes = ["sphere", "cylinder", "cone"]
         .iter()
         .map(|operation| {
             json!({
         "operation":operation,"prototype_implemented":true,"execution_available":false,
-        "proposal_available":false,"scope":"new_world_aligned_analytic_solid_only",
+        "proposal_available":false,"implementation_status":"prototype_only",
+        "channels":{"assistant":false,"mcp":false},"scope":"new_world_aligned_analytic_solid_only",
         "blocker":"main_geometry_approval_rollback_undo_review_and_ui_activation_required"})
         })
         .collect::<Vec<_>>();
-    json!({"operations":[{"operation":"circle","command":"Circle","mode":"center_radius_active_cplane",
+    json!({"route_scopes":{"operations":"legacy individual proposal/Box routes only; NOT narwhal_model availability","disabled_prototypes":"legacy individual primitive routes only; batch_executor supports its schema actions","planning_operations":"legacy proposal-only planner; NOT a prerequisite for batch execution","batch_executor":"current generalized exact modeling execution; use its schema and authority preconditions"},"operations":[{"operation":"circle","command":"Circle","mode":"center_radius_active_cplane",
         "arguments_schema":circle_schema(),"proposal_available":true,"execution_available":false,
+        "implementation_status":"proposal_only","channels":{"assistant":false,"mcp":false},
+        "units":"document_units","side_effects":[],"result_type":"unexecuted_circle_proposal",
         "scope":"create_one_curve_only","representation":"exact_rational_nurbs",
         "blockers":["authoritative_document_session_and_change_token","checked_target_content_and_cplane_layer_state","approved_main_thread_command_undo_dispatch"],
         "evidence":{"source":"commands.CircleCmd.execute","status":"source_inspected_not_workflow_executed"}},
         {"operation":"box","command":"Box","mode":"world_xyz_append_only",
          "arguments_schema":crate::box_action::schema(),"proposal_available":true,
          "execution_available":true,"requires_explicit_ui_approval":true,
+         "implementation_status":"implemented","channels":{"assistant":true,"mcp":false},
+         "units":"document_units","side_effects":["append_one_object","add_one_undo_record"],
+         "result_type":"box_publication_receipt",
          "scope":"in_app_assistant_only_create_one_new_solid_never_edit_targets",
          "representation":"analytic_brep_and_occt_master",
          "blockers":["explicit_in_app_approval","unchanged_document_units_and_available_layer","idle_command_and_enabled_undo"]}],
-        "read_tools":crate::catalog::READS.iter().map(|(name,alias,_)|json!({"name":name,"alias":alias,"mutation":false})).collect::<Vec<_>>(),
+        "read_tools":crate::catalog::READS.iter().map(|(name,alias,description)|json!({
+            "name":name,"alias":alias,"description":description,"mutation":false,
+            "arguments_schema":crate::catalog::schema(name),"side_effects":[]})).collect::<Vec<_>>(),
+        "batch_executor":{"tool":"narwhal_model","mcp_tool":"narwhal.model",
+            "execution_available":true,"units":"document_units","arguments_schema":crate::modeling::schema(),
+            "preconditions":["explicit_review_or_build_authority","unchanged_local_document_fingerprint","idle_command","writable_layer","enabled_undo","existing_unlocked_target_UUIDs"],
+            "side_effects":["append_or_replace_explicit_UUIDs","one_undo_record","select_results","frame_active_view"],
+            "result_type":"native_canonical_modeling_receipt","mcp_requires_explicit_opt_in_and_local_batch_review":true,
+            "scope":"bounded_exact_geometry_batches_not_arbitrary_commands",
+            "limits":{"steps_per_batch":crate::modeling::MAX_STEPS,"provider_turns":crate::conversation::MAX_TURNS,"provider_tool_calls":crate::conversation::MAX_ACTIONS},
+            "unsupported":["arbitrary_scripts","external_file_writes","general_brep_silhouette","arbitrary_solid_thickness_edit","automatic_visual_quality_evaluation"]},
         "planning_operations":planning_operations(),
         "disabled_prototypes":disabled_prototypes,
         "provenance":{"source":"native_automation_catalog","registry_membership_is_not_execution_support":true}})
+}
+
+#[cfg(test)]
+#[test]
+fn operation_inventory_distinguishes_publication_from_proposals() {
+    let registry = operations();
+    let operations = registry["operations"].as_array().unwrap();
+    let circle = operations
+        .iter()
+        .find(|v| v["operation"] == "circle")
+        .unwrap();
+    let solid = operations.iter().find(|v| v["operation"] == "box").unwrap();
+    assert_eq!(circle["implementation_status"], "proposal_only");
+    assert_eq!(circle["channels"]["assistant"], false);
+    assert_eq!(solid["channels"], json!({"assistant":true,"mcp":false}));
+    assert_eq!(solid["units"], "document_units");
+    assert_eq!(solid["requires_explicit_ui_approval"], true);
+    for read in registry["read_tools"].as_array().unwrap() {
+        let name = read["name"].as_str().unwrap();
+        assert_eq!(read["arguments_schema"], crate::catalog::schema(name));
+        assert_eq!(read["side_effects"], json!([]));
+    }
 }
 
 /// Source-inspected command implementations, not callable executors or promises

@@ -204,7 +204,9 @@ class ResponsesTests(unittest.TestCase):
 
     def test_reply_reserves_space_for_correlated_tool_results(self):
         with workflow.workflow(PROVIDER) as (_state, session):
-            items = [message("x", f"msg_{n}") for n in range(58)] + [function()]
+            for turn in range(3):
+                self.assertEqual(self.finish(session, response(*[message('x', f'prior_{turn}_{n}') for n in range(48)]))['status'], 'completed')
+            items = [message("x", f"msg_{n}") for n in range(43)] + [function()]
             result = self.finish(session, response(*items))
             self.assertEqual(result["status"], "failed")
             self.assertEqual(result["code"], "context_budget")
@@ -438,9 +440,14 @@ class ResponsesTests(unittest.TestCase):
                 self.rejected(session, state, self.finish(session, data))
 
     def test_flat_read_catalog_consent_and_circle_remain_proposal_only(self):
+        # The provider-facing (ready) surface is the 9 read aliases plus
+        # narwhal_model and narwhal_inspect. Legacy proposal/box/plan/verify tools
+        # are no longer advertised here; the explicit proposal-refusal check below
+        # still exercises narwhal_propose_circle by name, so that legacy route
+        # stays callable even while unadvertised.
         expected = {"narwhal_application_info", "narwhal_document_summary", "narwhal_selection_summary",
                     "narwhal_object_summary", "narwhal_objects", "narwhal_layers", "narwhal_workspace",
-                    "narwhal_components", "narwhal_operations", "narwhal_propose_circle", "narwhal_create_box", "narwhal_plan", "narwhal_verify"}
+                    "narwhal_components", "narwhal_operations", "narwhal_model", "narwhal_inspect", "narwhal_measure", "narwhal_capture_view", "narwhal_export", "narwhal_frame", "narwhal_curve_samples", "narwhal_compare_curves"}
         with workflow.workflow(PROVIDER) as (_state, session):
             prepared = session.prepare(DOC, user_text="Discover operations.")
             tools = prepared.data["body"]["tools"]
@@ -484,12 +491,12 @@ class ResponsesTests(unittest.TestCase):
             self.rejected(session, state, self.finish(session, response(function(name="shell"))),
                           "unsupported_tool")
 
-    def test_four_calls_per_reply_and_eight_total_actions(self):
+    def test_four_calls_per_reply_and_sixty_four_total_actions(self):
         with workflow.workflow(PROVIDER) as (state, session):
             data = response(*(function(f"call_{i}", f"fc_{i}") for i in range(5)))
             self.rejected(session, state, self.finish(session, data), "tool_call_limit")
         with workflow.workflow(PROVIDER) as (state, session):
-            for turn in range(2):
+            for turn in range(16):
                 calls = [function(f"call_{turn}_{i}", f"fc_{turn}_{i}") for i in range(4)]
                 outcome = self.finish(session, response(*calls))
                 self.assertEqual(outcome["status"], "tool_calls")
@@ -500,22 +507,22 @@ class ResponsesTests(unittest.TestCase):
             self.rejected(session, state, self.finish(session, response(function("ninth", "fc_ninth"))),
                           "action_budget")
 
-    def test_turn_and_total_token_budgets_and_4096_request_cap(self):
+    def test_turn_and_total_token_budgets_and_8192_request_cap(self):
         with workflow.workflow(PROVIDER) as (_state, session):
             with self.assertRaises(ai.WorkflowUnavailable):
-                session.prepare(DOC, user_text="Ask.", max_tokens=4097)
-            for _ in range(8):
+                session.prepare(DOC, user_text="Ask.", max_tokens=8193)
+            for _ in range(24):
                 data = response(message())
                 del data["usage"]
                 self.assertEqual(self.finish(session, data)["status"], "completed")
             with self.assertRaisesRegex(ai.WorkflowUnavailable, "turn_budget"):
                 session.prepare(DOC, user_text="Ninth.")
         with workflow.workflow(PROVIDER) as (_state, session):
-            for turn in range(5):
+            for turn in range(9):
                 data = response(message())
                 data["usage"]["output_tokens"] = 4096
                 outcome = self.finish(session, data, max_tokens=4096)
-                self.assertEqual(outcome["status"], "completed" if turn < 4 else "failed")
+                self.assertEqual(outcome["status"], "completed" if turn < 8 else "failed")
             self.assertEqual(outcome["code"], "token_budget")
 
     def test_opaque_replay_counts_toward_individual_and_total_output_bytes(self):

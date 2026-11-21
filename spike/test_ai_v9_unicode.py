@@ -41,6 +41,28 @@ class UnicodeRouting(unittest.TestCase):
         self.assertIsNone(namespace['route'](event, context))
         self.assertEqual(len(calls), before)
 
+        for key in ('RET', 'NUMPAD_ENTER'):
+            event.type = key
+            event.unicode = '\r'
+            for ctrl, shift, alt, oskey, repeat, expected in (
+                (False, False, False, False, False, 'submit'),
+                (False, True, False, False, False, 'enter'),
+                (True, False, False, False, False, 'submit'),
+                (True, True, False, False, False, None),
+                (False, False, True, False, False, None),
+                (False, False, False, True, False, None),
+                (False, False, False, False, True, None),
+                (False, True, False, False, True, 'enter'),
+            ):
+                with self.subTest(key=key, ctrl=ctrl, shift=shift, alt=alt,
+                                  oskey=oskey, repeat=repeat):
+                    event.ctrl, event.shift, event.alt, event.oskey = ctrl, shift, alt, oskey
+                    event.is_repeat = repeat
+                    before = len(calls)
+                    self.assertEqual(namespace['route'](event, context), {'RUNNING_MODAL'})
+                    self.assertEqual(calls[before:], [] if expected is None else
+                                     [((expected, ''), {'shift': shift})])
+
 
 if __name__ == '__main__':
     MUTANT = True

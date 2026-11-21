@@ -284,7 +284,7 @@ def send_turn(prepared: PreparedTurn, environ, opener=_provider_open) -> TurnTra
                 or not isinstance(data.get("body"), dict)):
             return TurnTransportResult(token, failure="invalid_ready")
         timeout_ms = data.get("timeout_ms")
-        if type(timeout_ms) is not int or not 1 <= timeout_ms <= 30000:
+        if type(timeout_ms) is not int or not 1 <= timeout_ms <= 300000:
             return TurnTransportResult(token, failure="invalid_timeout")
         deadline = started + timeout_ms / 1000.0
         if data["body"].get("stream", False) is not False:

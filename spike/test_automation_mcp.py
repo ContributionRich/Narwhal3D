@@ -30,10 +30,12 @@ TOOLS = {"narwhal.application_info", "narwhal.document_summary",
 
 
 class Client:
-    def __init__(self, server, endpoint, session=SESSION, *, modern=False):
+    def __init__(self, server, endpoint, session=SESSION, *, modern=False, modeling=False):
         self.modern = modern
         env = {"PATH": os.defpath, "NARWHAL_AUTOMATION_FD": str(endpoint.fileno()),
                "NARWHAL_AUTOMATION_SESSION": session}
+        if modeling:
+            env['NARWHAL_AUTOMATION_MODELING'] = 'reviewed-v1'
         self.process = subprocess.Popen([str(server)], stdin=subprocess.PIPE,
                                         stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                         pass_fds=(endpoint.fileno(),), env=env, bufsize=0)

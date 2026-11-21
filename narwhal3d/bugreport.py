@@ -34,6 +34,8 @@ class ReportState:
     #: Window capture is enabled by default; session logs remain opt-in.
     include_shot: bool = True
     include_log: bool = False
+    #: Opt-in structural native AI trace; never raw chat, images or credentials.
+    include_ai: bool = False
     #: Document copies are opt-in because model files can be large.
     include_file: bool = False
     #: OURS: local usage monitoring is opt-in and persists as a preference.
@@ -192,6 +194,7 @@ def chip_rows(width, labels, measure, gap, label_pad):
 
 #: (id, label) for the optional attachments above the buttons.
 CHECKS = (("shot", "Include screenshot"), ("log", "Include session log"),
+          ("ai", "Include AI diagnostics"),
           ("file", "Include current file"), ("usage", "Monitor usage (local)"))
 
 
@@ -308,6 +311,8 @@ def click(state, lay, x, y, view=None, measure=None, shift=False, log_ok=True):
             state.include_shot = not state.include_shot
         elif ident == "file":
             state.include_file = not state.include_file
+        elif ident == "ai":
+            state.include_ai = not state.include_ai
         elif ident == "usage":
             state.monitor_usage = not state.monitor_usage
         elif log_ok:
@@ -359,7 +364,7 @@ def file_rel(number):
 
 
 def format_report(number, when, category, text, context, shot_rel=None, log_lines=None,
-                  doc_rel=None, doc_error=None):
+                  doc_rel=None, doc_error=None, ai_diagnostics=None):
     """Format one report as Markdown.
 
     `context` is ``[(label, value)]``; list values become indented blocks. Optional
@@ -386,6 +391,9 @@ def format_report(number, when, category, text, context, shot_rel=None, log_line
         lines += ["", f"**Session log (last {len(log_lines)} lines):**", "", "```"]
         lines += [ln.replace("```", "'''") for ln in log_lines]
         lines.append("```")
+    if ai_diagnostics is not None:
+        lines += ["", "**AI diagnostics (structural metadata; no chat text, images or credentials):**", "", "```json",
+                  ai_diagnostics.replace("```", "'''"), "```"]
     lines += ["", "**Status:** open", "", "---", ""]
     return "\n".join(lines)
 

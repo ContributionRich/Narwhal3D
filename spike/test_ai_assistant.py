@@ -139,7 +139,7 @@ check(not empty.messages and empty.pending_proposal is None and empty.status == 
 # The visible right-dock shell has real hit targets and a multiline editor.
 layout = ai.panel_layout((0, 0, 179, 700))
 check(set(layout) == {"title", "connection", "context", "transcript",
-                       "input", "status", "buttons"},
+                       "input", "status", "buttons", "mode_toggle"},
       "the chat body contains connection status, context, transcript, input, and controls")
 connection = layout["connection"]
 check(ai.panel_hit(layout, (connection[0] + connection[2]) / 2,
@@ -151,7 +151,13 @@ check(context[1] == context[3] and ai.panel_hit(
       "automatic selected-object context has no visible or clickable opt-out")
 check([button_id for button_id, _rect in layout["buttons"]] ==
       ["send", "new", "settings"],
-      "Send, New Chat, and Settings are three distinct controls")
+      "the bottom row contains only Send, New Chat, and Settings")
+mode = layout.get('mode_toggle', (0, 0, 0, 0))
+title = layout['title']
+check(title[0] < mode[0] < mode[2] <= title[2]
+      and title[1] <= mode[1] < mode[3] <= title[3]
+      and ai.panel_hit(layout, (mode[0]+mode[2])/2, (mode[1]+mode[3])/2) == ('button', 'mode'),
+      "Build authority has a separate clickable toggle inside the title row")
 for button_id, rect in layout["buttons"]:
     check(ai.panel_hit(layout, (rect[0] + rect[2]) / 2, (rect[1] + rect[3]) / 2)
           == ("button", button_id), f"the {button_id} chat control is clickable")

@@ -271,6 +271,21 @@ check(len(long_query["body"][0]) < len(long_body)
       and "full sanitized report is in your clipboard" in long_query["body"][0],
       "an oversized URL body is bounded and directs the user to the complete clipboard copy")
 
+ai_state = br.ReportState()
+ai_check = dict(br.layout((0,0,240,600))['checks'])['ai']
+ai_lay = br.layout((0,0,240,600))
+check(not ai_state.include_ai, 'AI diagnostic attachment is opt-in')
+br.click(ai_state,ai_lay,ai_check[0]+5,(ai_check[1]+ai_check[3])/2,log_ok=False)
+check(ai_state.include_ai and not ai_state.include_log, 'AI checkbox works independently of session-log availability')
+br.click(ai_state,ai_lay,ai_check[0]+5,(ai_check[1]+ai_check[3])/2,log_ok=False)
+check(not ai_state.include_ai, 'AI checkbox can be unticked without changing log consent')
+ai_entry = br.format_report(10,'t','bug','AI stopped',[],ai_diagnostics='{"events":[],"status":"no_ai_session"}')
+check('**AI diagnostics' in ai_entry and '```json' in ai_entry and 'no_ai_session' in ai_entry,
+      'explicit AI attachment is visible in the saved report')
+check('**AI diagnostics' not in br.format_report(11,'t','bug','AI stopped',[]),
+      'ordinary reports contain no AI trace when not opted in')
+check('AI diagnostics' in br.github_body(ai_entry),'native structural AI diagnostics survive user-reviewed GitHub formatting')
+
 failed = [r for r in results if not r[0]]
 for ok, label, detail in results:
     print(f"  {'PASS' if ok else 'FAIL'}  {label}" + (f"  -- {detail}" if not ok else ""))

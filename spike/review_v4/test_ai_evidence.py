@@ -34,11 +34,17 @@ class EvidenceTests(unittest.TestCase):
         tree.body = [n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "_ai_poll_transport"]
         messages = []
         state = types.SimpleNamespace(extra={}, error="", add_message=lambda role, text: messages.append((role, text)))
-        workflow = types.SimpleNamespace(poll_timeout=lambda: {"status": "idle"}, finish=lambda *_: {"status": "completed", "cad_state": self.state()})
+        token = dict(conversation=1, generation=1, request=1)
+        context = object()
+        workflow = types.SimpleNamespace(poll_timeout=lambda: {"status": "idle"},
+            public_workflow_state=lambda: dict(conversation=1, generation=1, request_sequence=1),
+            finish=lambda *_: {"status": "completed", "cad_state": self.state()})
         state.extra["workflow"] = workflow
-        output = queue.Queue(); output.put(object())
+        output = queue.Queue(); output.put(types.SimpleNamespace(token=token))
         package = types.ModuleType("evidence_test_package"); package.ai_evidence = evidence
-        ns = dict(__package__=package.__name__, _ai={"state": state, "transport_output": output},
+        package.ai_modeling = types.SimpleNamespace(context=lambda *_: context)
+        ns = dict(__package__=package.__name__, _ai={"state": state, "transport_output": output,
+                      "turn_modeling_context": context}, app_state=object(),
                   _ai_scope=lambda: ("doc",), _tag_redraw_bands=lambda: None,
                   _ai_invalidate=lambda *_: self.fail("unexpected invalidation"))
         with patch.dict(sys.modules, {package.__name__: package}):
@@ -51,6 +57,7 @@ class EvidenceTests(unittest.TestCase):
     def test_dropped_evidence_cannot_pass_the_ui_test(self):
         with patch.object(evidence, "status_text", return_value=None):
             result = unittest.TestResult(); EvidenceTests("test_actual_completion_hook_adds_a_separate_status").run(result)
-            self.assertFalse(result.wasSuccessful())
+            self.assertTrue(result.failures)
+            self.assertFalse(result.errors)
 
 if __name__ == "__main__": unittest.main()

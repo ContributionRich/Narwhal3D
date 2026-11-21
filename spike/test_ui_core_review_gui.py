@@ -279,8 +279,10 @@ def run():
         event("LEFTMOUSE", "RELEASE"); yield .2
         check(field.selection() == (2, 5), label + " actual drag selects cde")
         capture(label + "_selection")
-        yield from tap("RET")
-        check(field.text == getattr(state, textkey) == "ab\nf", label + " Enter edits, does not submit")
+        yield from tap("RET", shift=label == "chat")
+        newline_key = "Shift+Enter" if label == "chat" else "Enter"
+        check(field.text == getattr(state, textkey) == "ab\nf",
+              label + " " + newline_key + " edits, does not submit")
         check(ui.app_state.input_buffer == "", label + " keys do not leak to console")
         yield from tap("ESC")
         check(not state.focus, label + " Escape blurs")

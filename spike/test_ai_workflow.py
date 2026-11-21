@@ -61,6 +61,43 @@ def workflow(provider="openai_compatible", allow=True):
 
 
 class WorkflowTests(unittest.TestCase):
+    @unittest.skipUnless(sys.platform=='linux','qualified dlopen replacement recovery is Linux-only')
+    def test_atomic_backend_update_loads_new_inode_without_unloading_old_handle(self):
+        import ctypes
+        import os
+        import shutil
+        import subprocess
+        import tempfile
+        with tempfile.TemporaryDirectory(prefix='native-update-qualification-') as folder:
+            folder=Path(folder)
+            fixture=folder/'old.rs'
+            fixture.write_text('#[unsafe(no_mangle)] pub extern "C" fn narwhal_workflow_abi()->u32{1}\n'
+                               '#[unsafe(no_mangle)] pub extern "C" fn narwhal_workflow_api_revision()->u32{8}\n')
+            installed=folder/'libnarwhal_automation.so'
+            subprocess.run(['rustc','--crate-type','cdylib','--edition','2024',str(fixture),'-o',str(installed)],check=True,capture_output=True)
+            old=ctypes.CDLL(str(installed))
+            self.assertEqual(old.narwhal_workflow_api_revision(),8)
+            with self.assertRaises(ai.WorkflowUnavailable):
+                ai._load_workflow_library(installed)  # old on disk must remain refused
+            candidate=folder/'candidate.so'
+            shutil.copyfile(LIBRARY,candidate)
+            os.replace(candidate,installed)
+            self.assertEqual(ctypes.CDLL(str(installed)).narwhal_workflow_api_revision(),8,
+                             'reproduce the OS loader pathname cache before testing recovery')
+            failure=None
+            try:
+                refreshed=ai._load_workflow_library(installed)
+            except ai.WorkflowUnavailable as exc:
+                failure=str(exc)
+            self.assertIsNone(failure,'updated library on disk must be usable without unsafe dlclose or process restart')
+            self.assertEqual(refreshed.narwhal_workflow_api_revision(),9)
+            self.assertEqual(old.narwhal_workflow_api_revision(),8,'old native handles remain mapped and callable')
+            self.assertIs(ai._load_workflow_library(installed),refreshed,'same installed inode reuses bounded refreshed handle')
+            with ai.WorkflowSession(ai.AssistantState(provider=ai.set_provider('openai_compatible','fixture',credential_env='TEST_KEY')),
+                                   'new-document',allow_reads=True,library_path=installed) as session:
+                request=session.prepare('new-document',user_text='Inspect')
+                self.assertIn('narwhal_export',[t['function']['name'] for t in request.data['body']['tools']])
+
     def test_text_preserves_provider_apis_and_secret_boundaries(self):
         for provider in ("openai", "openai_compatible", "anthropic"):
             with self.subTest(provider=provider), workflow(provider) as (state, session):
@@ -153,7 +190,7 @@ class WorkflowTests(unittest.TestCase):
 
     def test_budgets_truncation_malformed_and_unsupported_calls(self):
         with workflow() as (_state, session):
-            for kwargs in ({"context": "x" * 32769}, {"max_tokens": 4097}, {"user_text": "x" * 8001}):
+            for kwargs in ({"context": "x" * 32769}, {"max_tokens": 8193}, {"user_text": "x" * 8001}):
                 with self.assertRaises(ai.WorkflowUnavailable):
                     session.prepare("document-A", **({"user_text": "ask"} | kwargs))
         for data, code in ((payload("openai_compatible", "partial", reason="length"), "truncated_response"),
@@ -197,25 +234,25 @@ class WorkflowTests(unittest.TestCase):
 
     def test_turn_action_and_total_token_budgets(self):
         with workflow() as (_state, session):
-            for _ in range(8):
+            for _ in range(24):
                 p = session.prepare("document-A", user_text="ask")
                 self.assertEqual(session.finish(send(p, payload("openai_compatible")), "document-A")["status"], "completed")
             with self.assertRaisesRegex(ai.WorkflowUnavailable, "turn_budget"):
                 session.prepare("document-A", user_text="ninth")
         with workflow() as (_state, session):
-            for turn in range(5):
+            for turn in range(9):
                 p = session.prepare("document-A", user_text="ask")
                 data = payload("openai_compatible")
                 data["usage"]["completion_tokens"] = 4096
                 result = session.finish(send(p, data), "document-A")
-                self.assertEqual(result["status"], "completed" if turn < 4 else "failed")
+                self.assertEqual(result["status"], "completed" if turn < 8 else "failed")
             self.assertEqual(result["code"], "token_budget")
         with workflow() as (_state, session):
-            for turn in range(5):
+            for turn in range(17):
                 p = session.prepare("document-A", user_text="ask")
-                calls = [(f"{turn}-{i}", "narwhal_document_summary", {}) for i in range(2)]
+                calls = [(f"{turn}-{i}", "narwhal_document_summary", {}) for i in range(4)]
                 outcome = session.finish(send(p, payload("openai_compatible", "", calls)), "document-A")
-                if turn == 4:
+                if turn == 16:
                     self.assertEqual(outcome["code"], "action_budget")
                 else:
                     session.record_results(outcome["token"], [{"call_id": c[0], "output": {}, "is_error": False} for c in calls], "document-A")

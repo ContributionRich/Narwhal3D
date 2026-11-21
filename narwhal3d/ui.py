@@ -5638,20 +5638,27 @@ class NARWHAL_OT_ai_refresh_models(Operator):
         return {"FINISHED"}
 
 
-def _apply_ai_settings(config):
+def _apply_ai_settings(config, *, short_reasoning=None):
     """Persist the validated draft before publishing it to the live assistant."""
     values = {'provider_id': config.provider_id, 'model': config.model,
               'endpoint': config.endpoint, 'credential_env': config.credential_env,
               'allow_insecure_remote': config.allow_insecure_remote}
+    changes={'ai_config':values}
+    if short_reasoning is not None:
+        if type(short_reasoning) is not bool:
+            return 'Invalid reasoning preference.'
+        changes['ai_compatible_short_reasoning']=short_reasoning
     if _preferences_ready and not bpy.app.background:
         try:
-            saved = preferences.update({'ai_config': values})
+            saved = preferences.update(changes)
             config = ai_assistant.set_provider(**saved['ai_config'])
         except (OSError, ValueError):
             return 'Could not save AI settings. Check configuration-file permissions.'
     st = _ai["state"]
     _ai_invalidate("configuration_changed")
     st.provider = ai_assistant.credential_status(config, os.environ)
+    if short_reasoning is not None:
+        st.extra['compatible_short_reasoning']=short_reasoning
     st.status = "configured" if config.model else "disconnected"
     st.error = ("Settings applied." if config.model else "Choose a model in Settings.")
     _ai.pop("settings_draft", None)
@@ -5704,8 +5711,9 @@ class NARWHAL_OT_ai_settings(Operator):
         popup = ai_settings_popup.open(
             config, anchor=_ai_settings_anchor(context),
             window_size=(context.window.width, context.window.height), scale=_ui_scale(),
-            on_save=_apply_ai_settings, on_refresh=_ai_start_model_discovery,
-            on_revoke=_ai_forget_metadata_permission)
+            on_save=lambda config: _apply_ai_settings(config,short_reasoning=popup.compatible_short_reasoning),
+            on_refresh=_ai_start_model_discovery, on_revoke=_ai_forget_metadata_permission,
+            compatible_short_reasoning=_ai['state'].extra.get('compatible_short_reasoning',False))
         popup.refresh()
         return {"FINISHED"}
 
@@ -5833,10 +5841,36 @@ def _ai_transcript_event(event):
     return True
 
 
+def _ai_activity_projection(st):
+    workflow = st.extra.get('workflow')
+    if workflow is None or st.status not in ('sending','awaiting_approval','awaiting_review'):
+        return None
+    import time
+    started = _ai.get('activity_started',time.monotonic())
+    pending = _ai.get('modeling_pending')
+    try:
+        return workflow._exchange(dict(op='activity',status=st.status,
+            modeling=bool(pending and pending.get('job')),visual=bool(_ai.get('visual_pending')),
+            elapsed_ms=max(0,int((time.monotonic()-started)*1000))))
+    except ai_assistant.WorkflowUnavailable:
+        return None
+
+
 def _draw_ai_transcript(shader, rect, st, sc):
     """Role-aware literal text, cached BLF wrapping and clipped scrolling."""
     import gpu
 
+    activity = _ai_activity_projection(st)
+    activity_message = None
+    if activity and activity['active']:
+        text = activity['label']+'\n… … …'
+        activity_message = _ai.get('activity_message')
+        if activity_message is None or activity_message.text != text:
+            activity_message = ai_assistant.ChatMessage('assistant',text)
+            _ai['activity_message'] = activity_message
+    else:
+        _ai.pop('activity_message',None)
+    _ai['activity_view'] = dict(activity,rect=None) if activity_message else None
     palette = {key: design.rgb01(value)
                for key, value in ai_presentation.PALETTES[design.THEME].items()}
     blue = design.rgb01(design.ACCENT)
@@ -5846,12 +5880,14 @@ def _draw_ai_transcript(shader, rect, st, sc):
     _draw_round_rect(shader, *rect, 8 * sc, palette['canvas'],
                      blue if _ai.get('chat_focus') else design.rgb01(design.BORDER))
     key = (tuple(id(message) for message in st.messages), max(1, rect[2] - rect[0]), sc,
-           bool(st.extra.get('messages_omitted')))
+           bool(st.extra.get('messages_omitted')), activity_message)
     if _ai.get('chat_cache') != key:
         old = _ai.get('chat_layout')
         messages = st.messages
         if key[3]:
             messages = [*messages, ai_assistant.ChatMessage('status', ai_assistant.OMITTED_MESSAGES_NOTICE)]
+        if activity_message is not None:
+            messages = [*messages,activity_message]
         layout = ai_presentation.transcript_layout(messages, key[1],
                                                     _bug_measure(fs), sc)
         if old:
@@ -5871,7 +5907,7 @@ def _draw_ai_transcript(shader, rect, st, sc):
     try:
         if not st.messages:
             for index, line in enumerate(bugreport.wrap(
-                    'Ask about selected objects, CAD workflows, or future actions.',
+                    'Describe a design to build, or ask about selected objects.',
                     max(1, rect[2] - rect[0] - 20 * sc), _bug_measure(fs))):
                 _draw_text(rect[0] + 10 * sc, rect[3] - (25 + 17 * index) * sc,
                            line, fs, design.rgb01(design.TEXT_MUTED))
@@ -5896,8 +5932,23 @@ def _draw_ai_transcript(shader, rect, st, sc):
                                      palette['user_border'])
                     _draw_text(avatar_x + 6 * sc, top - 14 * sc, 'Y', 10 * sc, blue)
                     label_x = avatar_x - 6 * sc - _text_width(item['label'], 10 * sc)
-                _draw_text(label_x, top - 14 * sc, item['label'], 10 * sc, palette['meta'])
+                _draw_text(label_x, top - 14 * sc, 'AI' if item['message'] is activity_message else item['label'], 10 * sc, palette['meta'])
             padding = item['padding']
+            if item['message'] is activity_message:
+                _ai['activity_view']['rect'] = bubble
+                _ai['activity_view']['inline'] = True
+                baseline = bubble[3]-padding-item['line_h']+3*sc
+                for index,line in enumerate(item['lines'][:-1]):
+                    _draw_text(bubble[0]+padding,baseline-index*item['line_h'],line,fs,ink)
+                cy = bubble[1]+padding+5*sc
+                shader.bind()
+                for dot in range(3):
+                    cx = bubble[0]+padding+(4+11*dot)*sc
+                    bright = activity['animated'] and dot == activity['frame']%3
+                    _draw_round_rect(shader,cx-2*sc,cy-2*sc,cx+2*sc,cy+2*sc,2*sc,
+                                     blue if bright else palette['meta'])
+                _draw_text(bubble[0]+padding+41*sc,cy-3*sc,activity['elapsed'],9*sc,palette['meta'])
+                continue
             for index, line in enumerate(item['lines']):
                 baseline = bubble[3] - padding - (index + 1) * item['line_h'] + 3 * sc
                 if baseline + item['line_h'] < rect[1] or baseline > rect[3]:
@@ -5913,6 +5964,7 @@ def _draw_ai_transcript(shader, rect, st, sc):
         shader.bind()
         _draw_round_rect(shader, rect[2] - 5 * sc, thumb_y, rect[2] - 2 * sc,
                          thumb_y + thumb_h, 1.5 * sc, design.rgb01(design.BORDER_STRONG))
+
 
 
 def _ai_draw_action_review(shader, rect, sc):
@@ -5975,11 +6027,23 @@ def _draw_ai_panel(shader, region, box):
     try:
         title = lay["title"]
         if title[3] > title[1]:
-            _draw_text(title[0], title[1] + 2 * sc, "AI Assistant", fs + 1, ink)
-            subtitle = "Workspace chat"
-            sw = _text_width(subtitle, fs - 1)
-            if title[2] - title[0] > _text_width("AI Assistant", fs + 1) + sw + 6*sc:
-                _draw_text(title[2] - sw, title[1] + 2*sc, subtitle, fs - 1, muted)
+            mode = lay['mode_toggle']
+            mode_visible = mode[2] > mode[0] and mode[3] > mode[1]
+            heading_width = (mode[0] - 6*sc if mode_visible else title[2]) - title[0]
+            _draw_text(title[0], title[1] + 2 * sc,
+                       _fit_panel_text('AI Assistant', heading_width, fs + 1), fs + 1, ink)
+            if mode_visible:
+                building = st.extra.get('modeling_mode') == 'build'
+                switch_left = mode[2] - 26*sc
+                cy = (mode[1] + mode[3]) / 2
+                _draw_centered_panel_text((mode[0], mode[1], switch_left - 4*sc, mode[3]),
+                                          'Build', fs - 1, ink if building else muted)
+                shader.bind()
+                _draw_round_rect(shader, switch_left, cy - 5*sc, mode[2], cy + 5*sc,
+                                 5*sc, blue if building else design.rgb01(design.BORDER))
+                thumb_x = mode[2] - 9*sc if building else switch_left + sc
+                _draw_round_rect(shader, thumb_x, cy - 4*sc, thumb_x + 8*sc, cy + 4*sc,
+                                 4*sc, design.rgb01(design.BAR_TEXT_STRONG))
         connection = lay["connection"]
         connection_text = ai_assistant.connection_label(st)
         if connection[3] > connection[1]:
@@ -6053,10 +6117,11 @@ def _draw_ai_panel(shader, region, box):
 
         status = lay["status"]
         status_text = (st.error or {
-            "connected": "Selection included automatically · Box creation needs approval",
+            "connected": ('Build on · requested modeling steps run automatically' if st.extra.get('modeling_mode') == 'build'
+                          else 'Review mode · approve each modeling batch before it runs'),
             "sending": "Waiting for the provider...",
             "awaiting_review": "Review one action above. Esc rejects; Cancel abandons the request.",
-        }.get(st.status, "Box creation needs approval · Other edits unavailable"))
+        }.get(st.status, "Describe a design · Build off means review before applying"))
         for index, line in enumerate(bugreport.wrap(
                 status_text, status[2] - status[0],
                 lambda value: _text_width(value, fs - 1))[:max(0, int((status[3]-status[1]) // (12*sc)))]):
@@ -6081,6 +6146,10 @@ def _ai_invalidate(reason="cancelled"):
         # Do not let that failure preserve a grant/worker queue during teardown.
         pass
     finally:
+        _ai.pop('visual_pending', None)
+        modeling_pending = _ai.pop('modeling_pending', None)
+        if modeling_pending is not None and modeling_pending.get('job') is not None:
+            modeling_pending['job'].close()
         for key in ("transport_output", "transport_thread", "read_grant", "consent_scope", "box_pending",
                             "action_pending", "review_batch", "review_view", "review_drawn_pending", "review_layout_key"):
             _ai.pop(key, None)
@@ -6123,8 +6192,8 @@ class NARWHAL_OT_ai_read_consent(bpy.types.Operator):
         layout = self.layout
         layout.label(text="Send bounded object/layer names, IDs, workspace and selection metadata.")
         layout.label(text="No geometry/file upload. Reads may include unselected objects.")
-        layout.label(text="Up to 8 model turns / 8 calls per chat; provider charges may apply.")
-        layout.label(text="Box creation requires a separate approval. Other CAD edits are unavailable.")
+        layout.label(text="Up to 24 model turns / 64 calls per chat; provider charges may apply.")
+        layout.label(text="Typed modeling batches use Review by default; Build requires explicit authorization.")
         layout.label(text="Selected-object context is included automatically with each message.")
         layout.label(text="Remembered for this provider and endpoint across chats and launches.")
         layout.label(text="Revoke this permission in AI Settings at any time.")
@@ -6167,6 +6236,10 @@ def _ai_start_turn(prepared):
     import threading
     output = queue.Queue(maxsize=1)
     worker = threading.Thread(target=_ai_transport_worker, args=(prepared, output), daemon=True)
+    from . import ai_modeling
+    _ai['turn_modeling_context'] = ai_modeling.context(app_state, _ai_scope()[0])
+    import time
+    _ai['activity_started'] = time.monotonic()
     _ai["transport_output"] = output
     _ai["transport_thread"] = worker
     _ai["state"].error = ""
@@ -6211,6 +6284,55 @@ def _ai_advance_review_batch(batch):
     box_count = sum(call['name'] == 'narwhal_create_box' for call in batch['calls'])
     while batch['next'] < len(batch['calls']):
         call = batch['calls'][batch['next']]
+        if call['name'] == 'narwhal_export':
+            plan=workflow._exchange(dict(op='resolve_call',token=batch['token'],binding=workflow._binding(scope[0]),call_id=call['id']))
+            if plan['kind']=='result':
+                result=dict(call_id=call['id'],output=plan['output'],is_error=True)
+            else:
+                from . import ai_modeling
+                _ai['state'].status='awaiting_approval'
+                _ai['state'].add_message('status','Export requires a local NEW destination. Existing files will not be overwritten; Cancel skips export.')
+                result=ai_modeling.export_with_local_destination(app_state,workflow,batch['token'],call['id'],scope[0],
+                    lambda:_ai_check_review_batch(batch))
+                _ai['state'].add_message('status','Export completed.' if not result['is_error'] else 'Export not completed: '+result['output']['outcome'])
+            batch['results'].append(result)
+            batch['next']+=1
+            continue
+        if call['name'] == 'narwhal_capture_view':
+            plan = workflow._exchange(dict(op='resolve_call',token=batch['token'],binding=workflow._binding(scope[0]),call_id=call['id']))
+            if plan['kind'] == 'result':
+                batch['results'].append(dict(call_id=call['id'],output=plan['output'],is_error=True))
+                batch['next'] += 1
+                continue
+            from . import ai_modeling
+            _ai['visual_pending'] = dict(batch=batch,call_id=call['id'],index=len(batch['results']),
+                                         context=ai_modeling.context(app_state,scope[0]))
+            batch['results'].append(None)
+            batch['next'] += 1
+            _ai['state'].status = 'awaiting_approval'
+            _ai['state'].focus = False
+            bpy.ops.narwhal.ai_visual_consent('INVOKE_DEFAULT')
+            return False
+        if call['name'] == 'narwhal_model':
+            from . import ai_modeling
+            descriptor = workflow.modeling_exchange('stage_modeling', scope[0],
+                owner=batch['token'], call_id=call['id'], context=ai_modeling.context(app_state, scope[0]))
+            if descriptor['status'] == 'modeling_rejected':
+                batch['results'].append(descriptor['result'])
+                batch['next'] += 1
+                _ai['state'].add_message('status', 'Batch refused: ' + descriptor['result']['output']['code'])
+                continue
+            pending = {'batch': batch, 'descriptor': descriptor, 'scope': scope, 'index': len(batch['results'])}
+            batch['results'].append(None)
+            batch['next'] += 1
+            _ai['modeling_pending'] = pending
+            if descriptor['status'] == 'modeling_approved':
+                _ai_apply_modeling(True, pending)
+                return False
+            _ai['state'].status = 'awaiting_approval'
+            _ai['state'].focus = False
+            bpy.ops.narwhal.ai_modeling_approval('INVOKE_DEFAULT')
+            return False
         if call['name'] in ('narwhal_create_sphere','narwhal_create_cylinder','narwhal_create_cone'):
             try:
                 review = workflow.stage_accepted_review(batch['token'], call['id'], scope[0],
@@ -6334,7 +6456,7 @@ def _ai_poll_action_review(pending):
 
 
 def _ai_read_results(workflow, outcome, document_context):
-    if any(call['name'] in ('narwhal_create_sphere','narwhal_create_cylinder','narwhal_create_cone')
+    if any(call['name'] in ('narwhal_model','narwhal_export','narwhal_capture_view','narwhal_create_sphere','narwhal_create_cylinder','narwhal_create_cone')
            for call in outcome['response']['tool_calls']):
         return _ai_begin_review_batch(workflow, outcome, document_context)
     from .automation_tools import ApplicationReader
@@ -6425,6 +6547,218 @@ def _ai_complete_box(accepted, pending):
     return True
 
 
+def _ai_decide_visual(allow, pending):
+    if pending is not _ai.get('visual_pending'):
+        return False
+    batch = pending['batch']
+    scope = _ai_check_review_batch(batch)
+    from . import ai_modeling
+    if ai_modeling.context(app_state,scope[0]) != pending['context']:
+        _ai_invalidate('document_changed_during_visual_review')
+        _ai['state'].status = 'error'
+        _ai['state'].error = 'Document changed; no viewport image was shared.'
+        return False
+    workflow = batch['workflow']
+    workflow._exchange(dict(op='decide_visual',token=batch['token'],binding=workflow._binding(scope[0]),
+                            call_id=pending['call_id'],allow=allow))
+    _ai['state'].status = 'sending'
+    if not bpy.app.timers.is_registered(_ai_finish_visual_capture):
+        bpy.app.timers.register(_ai_finish_visual_capture,first_interval=0.15)
+    return True
+
+
+def _ai_finish_visual_capture():
+    pending = _ai.get('visual_pending')
+    if pending is None:
+        return None
+    try:
+        batch = pending['batch']
+        scope = _ai_check_review_batch(batch)
+        from . import ai_modeling
+        from .automation_tools import ApplicationReader
+        if ai_modeling.context(app_state,scope[0]) != pending['context']:
+            raise ai_assistant.WorkflowUnavailable('visual_context_changed')
+        result = batch['workflow'].read_tool_result(batch['token'],pending['call_id'],
+                    ApplicationReader(app_state,'unknown'),scope[0])
+        batch['results'][pending['index']] = result
+        _ai.pop('visual_pending', None)
+        _ai['state'].add_message('status','Shared a small active-viewport image.' if not result['is_error'] else 'No viewport image shared; continuing geometric inspection.')
+        _ai_resume_review_batch(batch)
+    except Exception:
+        _ai_invalidate('visual_capture_stopped')
+        _ai['state'].status = 'error'
+        _ai['state'].error = 'Viewport inspection stopped; no automatic retry.'
+    return None
+
+
+class NARWHAL_OT_ai_visual_consent(bpy.types.Operator):
+    bl_idname = 'narwhal.ai_visual_consent'
+    bl_label = 'Share active viewport image?'
+    def invoke(self, context, event):
+        self._pending = _ai.get('visual_pending')
+        if self._pending is None:
+            return {'CANCELLED'}
+        return context.window_manager.invoke_props_dialog(self,width=410)
+    def draw(self, context):
+        self.layout.label(text='Send a small JPEG of the active viewport to your provider.')
+        self.layout.label(text='Visible document objects are included; other panes are not.')
+        self.layout.label(text='This is separate from Build authority and applies once.')
+    def execute(self, context):
+        return {'FINISHED'} if _ai_decide_visual(True,self._pending) else {'CANCELLED'}
+    def cancel(self, context):
+        _ai_decide_visual(False,self._pending)
+
+
+def _ai_apply_modeling(accepted, pending):
+    from . import ai_modeling
+    if pending is not _ai.get('modeling_pending') or pending.get('job') is not None:
+        return False
+    descriptor = pending['descriptor']
+    if pending.get('external'):
+        workflow, doc = pending['workflow'], pending['document_session']
+        check = pending['scope_check']
+    else:
+        batch = pending['batch']
+        doc = _ai_check_review_batch(batch)[0]
+        workflow = batch['workflow']
+        def check():
+            _ai_check_review_batch(batch)
+            if pending is not _ai.get('modeling_pending'):
+                raise ai_assistant.WorkflowUnavailable('modeling_cancelled')
+    check()
+    ticket = descriptor['ticket']
+    if descriptor['status'] == 'modeling_review_required':
+        workflow.modeling_exchange('decide_modeling', doc, ticket=ticket,
+            current=ai_modeling.context(app_state, doc), allow=accepted)
+    if not accepted:
+        _ai_finish_modeling(pending, workflow.modeling_exchange('modeling_result', doc, ticket=ticket)['result'])
+        return True
+    _ai['state'].status = 'sending'
+    _ai['state'].add_message('status', 'Preparing: ' + descriptor['batch']['label'])
+    pending['job'] = ai_modeling.publish_steps(app_state, workflow, descriptor, doc, check)
+    if not bpy.app.timers.is_registered(_ai_poll_modeling):
+        bpy.app.timers.register(_ai_poll_modeling, first_interval=0.02)
+    return True
+
+
+def _ai_poll_modeling():
+    pending = _ai.get('modeling_pending')
+    if pending is None or pending.get('job') is None:
+        return None
+    try:
+        progress = next(pending['job'])
+        _ai['state'].error = 'Preparing ' + progress['step'] + ' — Cancel remains available.'
+        _tag_redraw_bands()
+        return 0.02
+    except StopIteration as done:
+        _ai['state'].error = ''
+        _ai_finish_modeling(pending, done.value)
+    except Exception:
+        pending['job'].close()
+        _ai_invalidate('modeling_failed')
+        _ai['state'].status = 'error'
+        _ai['state'].error = 'Modeling stopped; inspect the document. No automatic replay.'
+    return None
+
+
+def _ai_finish_modeling(pending, result):
+    if pending is not _ai.get('modeling_pending'):
+        return
+    _ai.pop('modeling_pending', None)
+    output = result['output']
+    if output.get('undo_performed'):
+        # A consumed native history action changed the backing SDK file, not the
+        # active document. Other file changes still invalidate pending requests.
+        _ai['document_identity'] = (app_state, app_state.model, app_state.model.file)
+    text = ('Built ' + output['label'] + ' — ' + str(len(output['objects'])) + ' objects; one Undo step.'
+            if not result['is_error'] else 'Modeling stopped: ' + output.get('code', 'unknown outcome'))
+    if output.get('undo_performed'):
+        text = output['label'] + ' — restored the preceding document state.'
+    _ai['state'].add_message('status', text)
+    if not result['is_error']:
+        if output.get('objects'):
+            from . import ai_modeling
+            workflow = pending['workflow'] if pending.get('external') else pending['batch']['workflow']
+            try:
+                ai_modeling.frame_objects(app_state,workflow,[row['object_id'] for row in output['objects']])
+            except Exception:
+                _ai['state'].add_message('status','Modeling applied; some results could not be framed in the active view.')
+        else:
+            from .commands import ZoomCmd
+            ZoomCmd()._zoom(selected=True)
+    _tag_redraw_viewports()
+    if pending.get('external'):
+        _ai['state'].status = 'connected'
+    else:
+        batch = pending['batch']
+        batch['results'][pending['index']] = result
+        _ai_resume_review_batch(batch)
+    _tag_redraw_bands()
+
+
+class NARWHAL_OT_ai_modeling_approval(bpy.types.Operator):
+    bl_idname = 'narwhal.ai_modeling_approval'
+    bl_label = 'Apply modeling batch?'
+    def invoke(self, context, event):
+        self._pending = _ai.get('modeling_pending')
+        if self._pending is None:
+            return {'CANCELLED'}
+        return context.window_manager.invoke_props_dialog(self, width=620)
+    def draw(self, context):
+        descriptor = self._pending['descriptor']
+        self.layout.label(text=descriptor['batch']['label'] + ' — ' + descriptor['context']['units'])
+        self.layout.label(text='One transaction / Undo step. Cancel applies nothing.')
+        for step in descriptor['batch']['steps']:
+            action = step['action']
+            self.layout.label(text=step['name'] + ': ' + str(action))
+        self.layout.label(text='Replaces only explicitly listed UUIDs; other results are new objects.')
+    def execute(self, context):
+        try:
+            return {'FINISHED'} if _ai_apply_modeling(True, self._pending) else {'CANCELLED'}
+        except Exception:
+            _ai_invalidate('modeling_review_stale')
+            _ai['state'].error = 'Modeling review expired or document changed. No automatic retry.'
+            return {'CANCELLED'}
+    def cancel(self, context):
+        if self._pending is _ai.get('modeling_pending'):
+            _ai_apply_modeling(False, self._pending)
+
+
+class NARWHAL_OT_ai_modeling_mode(bpy.types.Operator):
+    bl_idname = 'narwhal.ai_modeling_mode'
+    bl_label = 'AI modeling authority for this chat'
+    bl_description = 'Toggle Build for this chat: on executes requested modeling batches; off reviews them first. No shell, scripts or file writes'
+    def invoke(self, context, event):
+        self._scope = _ai_scope()
+        self._target_mode = 'review' if _ai['state'].extra.get('modeling_mode') == 'build' else 'build'
+        return self.execute(context)
+    def execute(self, context):
+        st = _ai['state']
+        if getattr(self, '_scope', None) != _ai_scope():
+            return {'CANCELLED'}
+        if st.status in ('sending', 'awaiting_approval', 'awaiting_review'):
+            return {'CANCELLED'}
+        mode = self._target_mode
+        workflow = st.extra.get('workflow')
+        if workflow is not None:
+            workflow.modeling_exchange('modeling_mode', _ai_scope()[0], mode=mode)
+        try:
+            preferences.update({'ai_build_mode': mode == 'build'})
+        except (OSError, ValueError):
+            if workflow is not None:
+                workflow.modeling_exchange('modeling_mode', _ai_scope()[0], mode='review')
+            st.extra['modeling_mode'] = 'review'
+            st.error = 'Build is off for this session; the preference could not be saved. Check settings-file permissions before restarting.'
+            st.add_message('status',st.error)
+            _tag_redraw_bands()
+            return {'CANCELLED'}
+        st.extra['modeling_mode'] = mode
+        st.error = ''
+        st.add_message('status', 'Build ' + ('on' if mode == 'build' else 'off') + ' — saved for new chats and future startups.')
+        _tag_redraw_bands()
+        return {'FINISHED'}
+
+
 class NARWHAL_OT_ai_box_approval(bpy.types.Operator):
     bl_idname = 'narwhal.ai_box_approval'
     bl_label = 'Create this box?'
@@ -6476,15 +6810,32 @@ def _ai_poll_transport():
             _tag_redraw_bands()
         output = _ai.get("transport_output")
         if output is None:
+            if st.status == 'sending':
+                _tag_redraw_bands()
             return 0.1  # Also guard idle conversations against document replacement.
         try:
             receipt = output.get_nowait()
         except queue.Empty:
+            if st.status == 'sending':
+                _tag_redraw_bands()
             return 0.1
         _ai.pop("transport_output", None)
         _ai.pop("transport_thread", None)
+        from . import ai_modeling
+        native_state = workflow.public_workflow_state()
+        current_token = {'conversation':native_state['conversation'],
+                         'generation':native_state['generation'], 'request':native_state['request_sequence']}
+        # A stale worker must reach Rust's stale gate without revoking newer work.
+        if receipt.token == current_token and _ai.get('turn_modeling_context') != ai_modeling.context(app_state, scope[0]):
+            _ai_invalidate('document_changed_during_request')
+            st.status = 'error'
+            st.error = 'Document changed while the provider was working. Response ignored; nothing applied.'
+            return None
         outcome = workflow.finish(receipt, scope[0])
-        if outcome["status"] == "tool_calls":
+        if outcome['status'] == 'retryable_provider_limit':
+            st.add_message('status','The provider hit its response limit before applying this reply. Continuing once with a smaller step; confirmed work is preserved.')
+            _ai_start_turn(workflow.prepare(scope[0],continuation=True))
+        elif outcome["status"] == "tool_calls":
             if _ai_read_results(workflow, outcome, scope[0]):
                 _ai_start_turn(workflow.prepare(scope[0], continuation=True))
         elif outcome["status"] == "completed":
@@ -6536,6 +6887,10 @@ def _ai_selection_context(scope):
 def _ai_send():
     st = _ai["state"]
     scope = _ai_scope()
+    if _ai.get('visual_pending') is not None:
+        return 'AI Assistant: approve or decline viewport sharing first'
+    if _ai.get('modeling_pending') is not None:
+        return 'AI Assistant: approve or cancel the modeling batch first'
     if _ai.get('action_pending') is not None:
         return 'AI Assistant: approve, reject or cancel the pending review first'
     if _ai.get('box_pending') is not None:
@@ -6560,19 +6915,26 @@ def _ai_send():
         workflow = st.extra.get("workflow")
         if workflow is None:
             workflow = ai_assistant.WorkflowSession(st, scope[0], allow_reads=_ai.get("read_grant") == scope)
+            workflow.modeling_exchange('modeling_mode', scope[0], mode=st.extra.get('modeling_mode', 'review'))
+            workflow._exchange(dict(op='provider_limit_recovery',enabled=True))
+            workflow._exchange(dict(op='compatible_short_reasoning',enabled=(st.provider.provider_id=='openai_compatible' and st.extra.get('compatible_short_reasoning',False))))
         _ai_start_turn(workflow.prepare(scope[0], context=_ai_selection_context(scope)))
         _ai['chat_offset'] = 0
     except Exception as exc:  # noqa: BLE001 -- fail closed; never use legacy send_chat
         _ai_invalidate("workflow_failed")
         st.status = "error"
-        st.error = "AI workflow unavailable (" + type(exc).__name__ + "). Check native installation or start New Chat."
+        if isinstance(exc, ai_assistant.WorkflowUnavailable) and str(exc) in (
+                'native_modeling_update_required', 'invalid_request', 'invalid_budget'):
+            st.error = 'AI native backend is older than this UI. Update the native automation build, then choose New Chat to retry. If Narwhal was already open during an application-code update, save your work and reopen it.'
+        else:
+            st.error = "AI workflow unavailable (" + type(exc).__name__ + "). Check native installation or start New Chat."
         return st.error
     return "AI Assistant: sending request"
 
 
 def _ai_shutdown():
     _ai_invalidate("unregister")
-    for callback in (_ai_poll_transport, _ai_poll_model_discovery):
+    for callback in (_ai_poll_transport, _ai_poll_model_discovery, _ai_poll_modeling, _ai_finish_visual_capture):
         if bpy.app.timers.is_registered(callback):
             bpy.app.timers.unregister(callback)
     for key in ("model_output", "model_thread", "document_identity", "document_context", "workflow_scope"):
@@ -6613,6 +6975,8 @@ def ai_panel_click(win_x, win_y, shift=False):
         _ai_invalidate("new_chat")
         st.new_chat()
         _ai['chat_offset'] = 0
+    elif ident == "mode":
+        bpy.ops.narwhal.ai_modeling_mode('INVOKE_DEFAULT')
     elif ident == "settings":
         bpy.ops.narwhal.ai_settings("INVOKE_DEFAULT")
     elif ident == 'send' and (st.status == 'sending' or _ai.get('action_pending') is not None):
@@ -6733,7 +7097,7 @@ def _draw_bug_panel(shader, region, box):
         # the screenshot, the session log and the file are optional
         log_ok = sessionlog.available()
         for cid, r in lay.get("checks", ()):
-            on = {"shot": st.include_shot, "file": st.include_file,
+            on = {"shot": st.include_shot, "file": st.include_file, "ai": st.include_ai,
                   "usage": st.monitor_usage}.get(cid, st.include_log and log_ok)
             enabled = cid != "log" or log_ok
             sq = 12 * sc
@@ -6958,9 +7322,19 @@ def submit_bug_report():
     if st.include_file:                  # optional
         doc_rel, doc_error = _bug_save_document(folder, num)
     ctx, when = _bug_context()
+    ai_diagnostics = None
+    if st.include_ai:
+        import json
+        state = _ai['state']
+        workflow = state.extra.get('workflow')
+        try:
+            snapshot = workflow.diagnostics() if workflow is not None else state.extra.get('last_diagnostics',{'status':'no_ai_session'})
+        except ai_assistant.WorkflowUnavailable:
+            snapshot = {'status':'native_ai_diagnostics_unavailable'}
+        ai_diagnostics = json.dumps(snapshot,ensure_ascii=False,indent=2)
     entry = bugreport.format_report(
         num, when, st.category, st.text, ctx, shot_rel, log_lines=log_lines,
-        doc_rel=doc_rel, doc_error=doc_error)
+        doc_rel=doc_rel, doc_error=doc_error, ai_diagnostics=ai_diagnostics)
     path = bugreport.write_report(folder, entry)
     public_body = bugreport.github_body(entry)
     issue_url = bugreport.github_issue_url(st.category, st.text, public_body)
@@ -8843,7 +9217,13 @@ class NARWHAL_OT_command_input(Operator):
             motion = {"LEFT_ARROW": "left", "RIGHT_ARROW": "right", "UP_ARROW": "up",
                       "DOWN_ARROW": "down", "HOME": "home", "END": "end"}
             if event.type in ("RET", "NUMPAD_ENTER"):
-                kind = "submit" if event.ctrl else "enter"
+                if not (event.alt or event.oskey or (event.ctrl and event.shift)):
+                    if event.shift:
+                        kind = "enter"
+                    elif event.value == "PRESS" and not event.is_repeat:
+                        kind = "submit"
+                if kind is None:
+                    return {"RUNNING_MODAL"}
             elif event.type == "ESC":
                 kind = "esc"
             elif event.type == "BACK_SPACE":
@@ -10590,7 +10970,9 @@ def user_preference_snapshot():
             'gumball': gumball_enabled(), 'gumball_alignment': gumball_alignment(),
             'viewport_tabs': viewport_tabs_visible(),
             'osnap_modes': sorted(settings.enabled), 'osnap_disabled': settings.disabled,
-            'osnap_project': settings.project, 'ai_include_selection': _ai['state'].include_selection}
+            'osnap_project': settings.project, 'ai_include_selection': _ai['state'].include_selection,
+                        'ai_build_mode': _ai['state'].extra.get('modeling_mode') == 'build',
+                                    'ai_compatible_short_reasoning': _ai['state'].extra.get('compatible_short_reasoning',False)}
 
 
 def _restore_user_preferences():
@@ -10614,6 +10996,8 @@ def _restore_user_preferences():
     settings.enabled = set(stored['osnap_modes'])
     settings.disabled, settings.project = stored['osnap_disabled'], stored['osnap_project']
     _ai['state'].include_selection = True  # Automatic, including old settings with False.
+    _ai['state'].extra['modeling_mode'] = 'build' if stored['ai_build_mode'] else 'review'
+    _ai['state'].extra['compatible_short_reasoning'] = stored['ai_compatible_short_reasoning']
     if stored['ai_config']:
         _ai['state'].provider = ai_assistant.credential_status(
             ai_assistant.set_provider(**stored['ai_config']), os.environ)
@@ -13190,6 +13574,9 @@ CLASSES = (
     NARWHAL_OT_ai_settings,
     NARWHAL_OT_ai_read_consent,
     NARWHAL_OT_ai_box_approval,
+    NARWHAL_OT_ai_modeling_approval,
+    NARWHAL_OT_ai_visual_consent,
+    NARWHAL_OT_ai_modeling_mode,
     NARWHAL_OT_track_mouse,
     NARWHAL_OT_osnap_toggle,
     NARWHAL_OT_osnap_flag,

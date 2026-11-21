@@ -5137,6 +5137,16 @@ def split_piece(base_face, curves, signature):
     return best
 
 
+def minimum_distance(left, right):
+    """Exact shape-to-shape distance through the OCP SDK; no proxy geometry."""
+    _need()
+    from OCP.BRepExtrema import BRepExtrema_DistShapeShape
+
+    query = BRepExtrema_DistShapeShape(left, right)
+    query.Perform()
+    return query.Value() if query.IsDone() else float("inf")
+
+
 def distance_to_shape(shape, point):
     """The distance from `point` to `shape`."""
     _need()

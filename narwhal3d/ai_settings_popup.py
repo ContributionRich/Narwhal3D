@@ -29,7 +29,7 @@ PALETTES = {
                  muted="#aaaaaa", input="#2c2c2c", accent="#65aaff", badge="#263c54",
                  hover="#424242", error="#f1b878", warning="#453a2e"),
 }
-ORDER = ("provider", "endpoint", "refresh", "available", "model", "credential_env",
+ORDER = ("provider", "endpoint", "refresh", "available", "model", "short_reasoning", "credential_env",
          "insecure", "cancel", "save", "close")
 LABELS = {"endpoint": "API endpoint", "model": "Model ID",
           "credential_env": "API key environment variable"}
@@ -71,7 +71,8 @@ class PopupModel:
                  scale: float, on_save: Callable[[ai.ProviderConfig], str | None],
                  on_refresh: Callable[[ai.ProviderConfig], bool],
                  measure: Callable[[str, float], float] | None = None,
-                 on_revoke: Callable[[], str | None] | None = None):
+                 on_revoke: Callable[[], str | None] | None = None,
+                 compatible_short_reasoning: bool = False):
         values = (*anchor, *window_size, scale)
         if not all(isfinite(v) for v in values) or min(*window_size, scale) <= 0:
             raise ValueError("anchor/size/scale must be finite; size and scale positive")
@@ -88,6 +89,7 @@ class PopupModel:
                        for key, limit in (("endpoint", 2048), ("model", 200),
                                           ("credential_env", 200))}
         self.allow_insecure_remote = config.allow_insecure_remote
+        self.compatible_short_reasoning = compatible_short_reasoning
         self.is_open = True
         self.focus = "provider"
         self.scroll = 0
@@ -336,6 +338,10 @@ class PopupModel:
         field("available", "Available models", "button",
               "Choose a discovered model" if self.models else "No models discovered — enter an ID below")
         field("model", LABELS["model"], help_text="Manual entry is always available, even if discovery fails.")
+        if self.provider_id == 'openai_compatible':
+            add('short_reasoning','button',cursor,35,'Prefer shorter reasoning')
+            cursor += 43
+            lines('reasoning_help','Optional reasoning_effort=low; enable only if your compatible backend supports it. Geometry checks stay unchanged.','muted')
         end_card(card)
         card = start_card("security", "Credentials & security", "Authentication and connection security")
         field("credential_env", LABELS["credential_env"],
@@ -427,6 +433,9 @@ class PopupModel:
             self.layout()
         elif key == "refresh":
             self.refresh()
+        elif key == 'short_reasoning':
+            self.compatible_short_reasoning = not self.compatible_short_reasoning
+            self._changed()
         elif key == "insecure":
             self.allow_insecure_remote = not self.allow_insecure_remote
             self._changed()
@@ -526,7 +535,11 @@ class PopupModel:
             return True
         if kind == "TAB":
             self.dropdown = None
-            order = ORDER[:7] + ('revoke',) + ORDER[7:] if self.on_revoke is not None else ORDER
+            order = tuple(key for key in ORDER
+                          if key != 'short_reasoning' or self.provider_id == 'openai_compatible')
+            if self.on_revoke is not None:
+                index = order.index('insecure') + 1
+                order = order[:index] + ('revoke',) + order[index:]
             self.focus = order[(order.index(self.focus) + (-1 if shift else 1)) % len(order)]
             self.ensure_visible(self.focus)
             return True
@@ -596,7 +609,8 @@ def _redraw():
 def open(config: ai.ProviderConfig, *, anchor: Point, window_size: Point, scale: float,
          on_save: Callable[[ai.ProviderConfig], str | None],
          on_refresh: Callable[[ai.ProviderConfig], bool],
-         on_revoke: Callable[[], str | None] | None = None) -> PopupModel:
+         on_revoke: Callable[[], str | None] | None = None,
+         compatible_short_reasoning: bool = False) -> PopupModel:
     """Open only in the current window; returns the inspectable PopupModel.
 
     No discovery is started implicitly. Requires the native Window POST_PIXEL API.
@@ -610,7 +624,7 @@ def open(config: ai.ProviderConfig, *, anchor: Point, window_size: Point, scale:
         raise RuntimeError("AI settings requires Window POST_PIXEL draw handlers; update the Narwhal runtime.")
     model = PopupModel(config, anchor=anchor, window_size=window_size, scale=scale,
                        on_save=on_save, on_refresh=on_refresh, measure=ui._text_width,
-                       on_revoke=on_revoke)
+                       on_revoke=on_revoke,compatible_short_reasoning=compatible_short_reasoning)
     if bpy.context.window is None:
         raise RuntimeError("AI settings requires an active application window.")
     close()
@@ -774,9 +788,9 @@ def draw_model(model: PopupModel, theme="light"):
                     rect((caret, r[1]+round(8*s), caret+1, r[3]-round(8*s)), p["accent"])
             else:
                 label = item.text
-                if key == "insecure":
+                if key in ('insecure','short_reasoning'):
                     cx, cy = round(inner[0]+7*s), round((r[1]+r[3])/2)
-                    if model.allow_insecure_remote:
+                    if (model.allow_insecure_remote if key=='insecure' else model.compatible_short_reasoning):
                         glyph(glyphs.tick(cx, cy, round(12*s)), p["accent"])
                     else:
                         box((cx-round(6*s), cy-round(6*s), cx+round(6*s), cy+round(6*s)), p["input"], p["border"], 2)

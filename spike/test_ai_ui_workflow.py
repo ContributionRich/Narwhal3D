@@ -113,7 +113,7 @@ class UIWorkflowTests(unittest.TestCase):
             self.assertEqual(text.count(old), 1, "mutation anchor")
             text = text.replace(old, new, 1)
         names = {"_ai_invalidate", "_ai_scope", "NARWHAL_OT_ai_read_consent", "_ai_transport_worker",
-                 "_ai_start_turn", "_ai_show_plan_result", "_ai_read_results", "_ai_poll_transport", "_ai_send", "_ai_shutdown", "_ai_selection_context",
+                 "_ai_start_turn", "_ai_poll_modeling", "_ai_finish_visual_capture", "_ai_show_plan_result", "_ai_read_results", "_ai_poll_transport", "_ai_send", "_ai_shutdown", "_ai_selection_context",
                  "_ai_poll_model_discovery", "_apply_ai_settings", "ai_panel_click", "_ai_forget_metadata_permission"}
         tree = ast.parse(text)
         nodes = [n for n in tree.body if isinstance(n, (ast.FunctionDef, ast.ClassDef)) and n.name in names]
@@ -126,6 +126,12 @@ class UIWorkflowTests(unittest.TestCase):
         self.original_init = ai.WorkflowSession.__init__
         def native(session, state, context, **kwargs):
             return self.original_init(session, state, context, library_path=LIBRARY, **kwargs)
+        # This read-only timer unit fixture has no SDK document. Actual SDK
+        # fingerprint and mutation coverage lives in modeling_host + visible GUI.
+        modeling = importlib.import_module('narwhal3d.ai_modeling')
+        context_patch = patch.object(modeling, 'context', lambda app, doc: {'doc':doc, 'file':id(app.model.file)})
+        context_patch.start()
+        self.addCleanup(context_patch.stop)
         self.native_patch = patch.object(ai.WorkflowSession, "__init__", native)
         self.native_patch.start()
         self.addCleanup(self.native_patch.stop)
@@ -189,7 +195,7 @@ class UIWorkflowTests(unittest.TestCase):
         operator.layout = types.SimpleNamespace(label=lambda **kw: labels.append(kw["text"]))
         operator.draw(context)
         self.assertTrue(any("unselected" in s for s in labels))
-        self.assertTrue(any("8 model turns" in s for s in labels))
+        self.assertTrue(any("24 model turns" in s for s in labels))
         with patch.dict(self.g, _ai_send=lambda: None):
             self.assertEqual(operator.execute(context), {"FINISHED"})
         self.assertEqual(self.g["_ai"]["read_grant"], self.g["_ai_scope"]())
@@ -353,14 +359,17 @@ class UIWorkflowTests(unittest.TestCase):
         self.assertEqual(model.file.Objects[0].Geometry.Degree, 2)
 
     def test_read_loop_stops_at_native_turn_budget(self):
-        replies = [base.payload("openai_compatible", "", [(f"read{i}", "narwhal_operations", {})]) for i in range(8)]
+        # A repeated full capability schema exhausts the independent byte budget
+        # first. Small real native verification reads expose the turn limit itself.
+        replies = [base.payload("openai_compatible", "", [(f"read{i}", "narwhal_verify",
+            {'call_id':'unknown', 'object_id':'00000000-0000-0000-0000-000000000001'})]) for i in range(24)]
         with provider(replies) as (endpoint, seen, errors):
             self.st.provider = ai.set_provider("openai_compatible", "fixture", endpoint)
             self.session(True)
             self.st.input_text = "inspect operations"
             self.g["_ai_send"]()
             self.drive()
-            self.assertEqual(len(seen), 8)
+            self.assertEqual(len(seen), 24)
             self.assertFalse(errors)
             self.assertEqual(self.st.status, "error")
             self.assertNotIn("workflow", self.st.extra)

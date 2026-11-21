@@ -20,8 +20,8 @@ def resolver():
     path = ROOT / "narwhal3d/ai_assistant.py"
     tree = ast.parse(path.read_text())
     nodes = [node for node in tree.body if isinstance(node, (ast.FunctionDef, ast.ClassDef))
-             and node.name in ("WorkflowUnavailable", "_load_workflow_library")]
-    namespace = {"__file__": str(path)}
+             and node.name in ("WorkflowUnavailable", "_refresh_workflow_library", "_load_workflow_library")]
+    namespace = {"__file__": str(path), "_workflow_library_refreshes": {}}
     exec(compile(ast.Module(body=nodes, type_ignores=[]), str(path), "exec"), namespace)
     return namespace["_load_workflow_library"]
 
@@ -67,7 +67,8 @@ class AutomationPackaging(unittest.TestCase):
             expected = ROOT / "runtime" / f"{system}-{arch}" / "bin" / name
             abi = lambda: 1
             exchange = lambda: None
-            library = types.SimpleNamespace(narwhal_workflow_abi=abi, narwhal_workflow_json=exchange)
+            revision = lambda: 9
+            library = types.SimpleNamespace(narwhal_workflow_abi=abi, narwhal_workflow_json=exchange, narwhal_workflow_api_revision=revision)
             with self.subTest(platform=platform), patch.object(sys, "platform", platform), \
                  patch("platform.machine", return_value=machine), \
                  patch.object(Path, "is_file", lambda p: p == expected), \
@@ -75,6 +76,17 @@ class AutomationPackaging(unittest.TestCase):
                 self.assertIs(load(), library)
                 cdll.assert_called_once_with(str(expected))
                 self.assertIs(abi.restype, ctypes.c_uint32)
+
+    def test_missing_or_old_json_contract_requires_update(self):
+        load = resolver()
+        for version in (None, 8):
+            library = types.SimpleNamespace(narwhal_workflow_abi=lambda: 1)
+            if version is not None:
+                library.narwhal_workflow_api_revision = lambda: version
+            with self.subTest(version=version), patch.object(sys, "platform", "win32"), \
+                 patch.object(ctypes, "CDLL", return_value=library):
+                with self.assertRaisesRegex(RuntimeError, "native_modeling_update_required"):
+                    load("explicit-test-library")
 
     def test_bad_abi_remains_unavailable(self):
         load = resolver()

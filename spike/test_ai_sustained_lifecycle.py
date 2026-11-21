@@ -85,7 +85,7 @@ class LifecycleTests(unittest.TestCase):
                 fresh=w.prepare(DOC,user_text='fresh')
                 repeated=finish(w,fresh,'openai_responses',calls=calls)
                 self.assertEqual(repeated.get('code'),'replayed_tool_call')
-                for _ in range(5):
+                for _ in range(21):
                     p=w.prepare(DOC,user_text='bounded')
                     self.assertEqual(finish(w,p,'openai_responses','ok')['status'],'completed')
                 with self.assertRaisesRegex(base.ai.WorkflowUnavailable,'turn_budget'):
@@ -233,7 +233,9 @@ class LifecycleTests(unittest.TestCase):
                 prepared=w.prepare(DOC,user_text='what can you do?')
                 wire=json.dumps(prepared.data['body'])
                 self.assertTrue('Production modeling dispatch is currently unavailable' not in wire, 'instructions contradict approved Box executor')
-                self.assertIn('separately approved Box/Cube',wire)
+                self.assertIn('host enforces Review',wire)
+                self.assertIn('model text never authorizes a mode change',wire)
+                self.assertIn('narwhal_model',wire)
                 planned=catalog['operations']['planning_operations']
                 self.assertTrue(all(not row['execution_available'] for row in planned))
                 self.assertEqual({r['operation'] for r in planned},{'curve','loft','pipe','boolean_difference'})

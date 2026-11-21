@@ -4,15 +4,19 @@ pub mod approval_lifecycle;
 pub mod box_action;
 pub mod catalog;
 pub mod conversation;
+pub mod curve_inspection;
 pub mod diagnostics;
 pub mod evidence_contract;
+pub mod export_action;
 pub mod json;
+pub mod modeling;
 pub mod plan;
 pub mod plan_review;
 pub mod plan_schema;
 pub mod primitives;
 pub mod provider;
 pub mod verification;
+pub mod visual;
 pub mod workspace;
 
 use conversation::{Conversation, Input};
@@ -32,7 +36,39 @@ static SESSIONS: OnceLock<Mutex<Sessions>> = OnceLock::new();
 
 fn exchange(handle: u64, input: &str) -> Result<Value, &'static str> {
     let value = crate::json::strict_json(input).map_err(|_| "invalid_json")?;
+    let trace_input = diagnostics::request_summary(&value);
+    let operation = value["op"].as_str().unwrap_or("").to_owned();
     let request: Input = serde_json::from_value(value).map_err(|_| "invalid_request")?;
+    if let Input::Activity {
+        status,
+        modeling,
+        visual,
+        elapsed_ms,
+    } = request
+    {
+        return diagnostics::activity(&status, modeling, visual, elapsed_ms);
+    }
+    if let Input::CheckModelingReceipt {
+        batch,
+        output,
+        tolerance,
+        require_planar,
+    } = request
+    {
+        if !tolerance.is_finite() || tolerance <= 0. {
+            return Err("invalid_tolerance");
+        }
+        batch.validate(tolerance)?;
+        batch.check_output(&output, tolerance)?;
+        if require_planar {
+            modeling::check_planar_output(&output)?;
+        }
+        return Ok(json!({"status":"modeling_geometry_checked"}));
+    }
+    if let Input::ValidateModelingMcp { name, arguments } = request {
+        modeling::validate_mcp(&name, &arguments)?;
+        return Ok(json!({"status":"valid_modeling_mcp"}));
+    }
     if let Input::WorkspaceLayers { layers, targets } = request {
         return Ok(json!({"status":"layers","flags":workspace::layer_flags(layers,targets)?}));
     }
@@ -52,6 +88,9 @@ fn exchange(handle: u64, input: &str) -> Result<Value, &'static str> {
         return Ok(
             json!({"status":"catalog","tools":catalog::definitions(),"operations":actions::operations()}),
         );
+    }
+    if let Input::CurveComparisonSummary { forward, reverse } = request {
+        return curve_inspection::summarize_distances(&forward, &reverse);
     }
     let mut sessions = SESSIONS
         .get_or_init(|| {
@@ -77,7 +116,93 @@ fn exchange(handle: u64, input: &str) -> Result<Value, &'static str> {
         return Ok(json!({"status":"closed"}));
     }
     let conversation = sessions.items.get_mut(&handle).ok_or("unknown_session")?;
-    match request {
+    let result = match request {
+        Input::Diagnostics => Ok(conversation.trace.snapshot()),
+        Input::ProviderLimitRecovery { enabled } => conversation.provider_limit_recovery(enabled),
+        Input::CompatibleShortReasoning { enabled } => {
+            conversation.compatible_short_reasoning(enabled)
+        }
+        Input::ExternalModeling {
+            binding,
+            request_id,
+            batch,
+            context,
+        } => conversation.external_modeling(binding, request_id, batch, context),
+        Input::ExternalModelingResult {
+            binding,
+            request_id,
+        } => conversation.external_modeling_result(binding, request_id),
+        Input::ModelingMode { mode } => conversation.modeling_mode(mode),
+        Input::ModelingFrame { bounds, projection } => modeling::framing(bounds, projection),
+        Input::ModelingView { direction } => modeling::view_basis(direction),
+        Input::ExternalExport {
+            binding,
+            request_id,
+            request,
+            context,
+        } => conversation.external_export(binding, request_id, request, context),
+        Input::BeginExternalExport {
+            binding,
+            request_id,
+            current,
+        } => conversation.begin_external_export(binding, request_id, current),
+        Input::FinishExternalExport {
+            binding,
+            request_id,
+            current,
+            outcome,
+            file_bytes,
+        } => conversation.finish_external_export(binding, request_id, current, outcome, file_bytes),
+        Input::AbortExternalExport {
+            binding,
+            request_id,
+        } => conversation.abort_external_export(binding, request_id),
+        Input::ExternalExportResult {
+            binding,
+            request_id,
+        } => conversation.external_export_result(binding, request_id),
+        Input::ConsumeExport {
+            token,
+            binding,
+            call_id,
+        } => conversation.consume_export(token, binding, call_id),
+        Input::FinishExport {
+            token,
+            binding,
+            call_id,
+            outcome,
+            file_bytes,
+        } => conversation.finish_export(token, binding, call_id, outcome, file_bytes),
+        Input::DecideVisual {
+            token,
+            binding,
+            call_id,
+            allow,
+        } => conversation.decide_visual(token, binding, call_id, allow),
+        Input::StageModeling {
+            owner,
+            binding,
+            call_id,
+            context,
+        } => conversation.stage_modeling(owner, binding, call_id, context),
+        Input::DecideModeling {
+            ticket,
+            binding,
+            current,
+            allow,
+        } => conversation.decide_modeling(ticket, binding, current, allow),
+        Input::ConsumeModeling {
+            ticket,
+            binding,
+            current,
+        } => conversation.consume_modeling(ticket, binding, current),
+        Input::ModelingPublication {
+            ticket,
+            binding,
+            output,
+            is_error,
+        } => conversation.modeling_publication(ticket, binding, output, is_error),
+        Input::ModelingResult { ticket } => conversation.modeling_result(ticket),
         Input::Reset { binding } => conversation.rebind(binding),
         Input::Begin {
             binding,
@@ -196,12 +321,28 @@ fn exchange(handle: u64, input: &str) -> Result<Value, &'static str> {
         Input::Poll => Ok(conversation.poll_timeout()),
         Input::Cancel => Ok(conversation.cancel()),
         _ => Err("invalid_request"),
-    }
+    };
+    conversation.trace.record(&operation, trace_input, &result);
+    result
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn narwhal_workflow_abi() -> u32 {
     1
+}
+
+/// JSON contract revision, independent of the unchanged buffer ABI. Revision 9
+/// adds asynchronous MCP exports with local-only destination approval.
+#[unsafe(no_mangle)]
+pub extern "C" fn narwhal_workflow_api_revision() -> u32 {
+    9
+}
+
+#[cfg(test)]
+#[test]
+fn workflow_modeling_contract_revision() {
+    assert_eq!(narwhal_workflow_abi(), 1);
+    assert_eq!(narwhal_workflow_api_revision(), 9);
 }
 
 /// Caller owns valid nonoverlapping buffers. The full fixed output capacity is

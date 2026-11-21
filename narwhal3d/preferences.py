@@ -49,6 +49,8 @@ DEFAULTS = {
     "ai_config": {},
     "ai_include_selection": True,
     "ai_metadata_permission": {},
+    "ai_build_mode": False,
+    "ai_compatible_short_reasoning": False,
     "print_settings": {},
     # OURS: opt-in local diagnostics from the Bug Report panel; never uploaded.
     "usage_monitor": False,

@@ -527,6 +527,8 @@ PURE_SUITES=(
 )
 
 BLENDER_SUITES=(
+    spike/test_ai_modeling_host.py
+    spike/test_async_display_host.py
     spike/test_library_geometry.py
     spike/audit_representation.py
     spike/test_boolean.py
@@ -636,7 +638,7 @@ if [[ -n "${DISPLAY:-}" || -n "${WAYLAND_DISPLAY:-}" ]]; then
     run "Rust transcript actual startup/recall live" "$PYTHON" -B spike/test_ui_transcript_gui.py --launch
     run "AI settings popup live" "$PYTHON" spike/test_ai_settings_popup_gui.py --launch
     if [[ -f "$ROOT/artifacts/automation/linux-x86_64/libnarwhal_automation.so" && -f "$ROOT/artifacts/automation/linux-x86_64/narwhal-automation" ]]; then
-        run "installed AI workflow live" "$PYTHON" spike/test_ai_ui_workflow_gui.py --launch
+        run "installed AI workflow live" "$PYTHON" spike/test_ai_ui_workflow_gui.py --launch --modeling --installed
     else
         printf '\nSKIP: installed AI GUI acceptance (stage reviewed automation executable/library first)\n'
     fi

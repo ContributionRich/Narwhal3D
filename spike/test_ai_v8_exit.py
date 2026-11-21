@@ -37,8 +37,12 @@ class ExitCleanup(unittest.TestCase):
                     'action_pending', 'review_batch', 'review_view', 'review_drawn_pending', 'review_layout_key',
                     'model_output', 'model_thread', 'document_identity', 'document_context', 'workflow_scope'):
             self.state[key] = object()
-        self.poll, self.models = object(), object()
-        self.timers = {self.poll, self.models}
+        self.job_closed = []
+        self.state['modeling_pending'] = {'job': SimpleNamespace(
+            close=lambda: self.job_closed.append(True))}
+        self.state['visual_pending'] = object()
+        self.poll, self.models, self.modeling, self.visual = (object() for _ in range(4))
+        self.timers = {self.poll, self.models, self.modeling, self.visual}
         self.package = ModuleType('exit_fixture')
         self.package.file_commands = SimpleNamespace(write_recovery=self.recover)
         self.g = dict(__name__='exit_fixture.ui', __package__='exit_fixture', _ai=self.state,
@@ -47,6 +51,7 @@ class ExitCleanup(unittest.TestCase):
                       bpy=SimpleNamespace(app=SimpleNamespace(timers=SimpleNamespace(
                           is_registered=self.timers.__contains__, unregister=self.timers.remove))),
                       _ai_poll_transport=self.poll, _ai_poll_model_discovery=self.models,
+                      _ai_poll_modeling=self.modeling, _ai_finish_visual_capture=self.visual,
                       user_preference_snapshot=lambda: {'theme': 'dark'},
                       _remember_preferences=lambda snapshot: self.events.append(('preferences', snapshot)))
         exec(compile(source, str(SOURCE), 'exec'), self.g)
@@ -70,6 +75,7 @@ class ExitCleanup(unittest.TestCase):
         self.assertEqual(self.state, {'state': self.state['state']})
         self.assertEqual(self.extra, {})
         self.assertEqual(self.timers, set())
+        self.assertEqual(self.job_closed, [True])
         self.assertIn('unsaved changes kept in /disposable/recovery.narwhal', output)
 
     def test_cleanup_exception_cannot_suppress_preferences_or_recovery(self):
@@ -118,6 +124,8 @@ def mutations():
         ('suppressed_recovery', "    except Exception as exc:\n", "    except Exception as exc:\n        return\n",
          'test_cleanup_exception_cannot_suppress_preferences_or_recovery'),
         ('missing_timer_removal', '            bpy.app.timers.unregister(callback)', '            pass',
+         'test_generic_exit_retires_assistant_before_preferences_and_recovery'),
+        ('missing_modeling_job_cancellation', "            modeling_pending['job'].close()", '            pass',
          'test_generic_exit_retires_assistant_before_preferences_and_recovery'),
     ]
     for label, old, new, test in variants:

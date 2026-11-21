@@ -415,10 +415,10 @@ class Controls(unittest.TestCase):
             self.assertEqual(self.send(dataclasses.replace(self.prepared(), data=data)).failure,
                              'invalid_ready')
             self.assertEqual(self.opened, [])
-        for timeout in (None, True, 0, -1, 30001, 1.5, '1000'):
+        for timeout in (None, True, 0, -1, 300001, 1.5, '1000'):
             self.assertEqual(self.send(self.prepared(timeout_ms=timeout)).failure, 'invalid_timeout')
             self.assertEqual(self.opened, [])
-        for timeout in (1, 30000):
+        for timeout in (1, 30000, 120000, 300000):
             self.assertIsNone(self.send(self.prepared(timeout_ms=timeout)).failure)
             self.assertGreater(self.opened[0][1], 0)
             self.assertLessEqual(self.opened[0][1], timeout / 1000)

@@ -178,14 +178,18 @@ class MainThreadBridge:
             if type(seq) is not int or seq <= self._last_seq:
                 return False
             tool, arguments = request["tool"], request["arguments"]
-            if type(tool) is not str or tool not in TOOLS or type(arguments) is not dict:
+            modeling_tools = getattr(self._reader, 'modeling_tools', ())
+            if type(tool) is not str or (tool not in TOOLS and tool not in modeling_tools) or type(arguments) is not dict:
                 return False
         except Exception:
             return False
         self._last_seq = seq
         reply = {"session": self._session, "seq": seq}
         try:
-            validate_arguments(tool, arguments)
+            if tool in getattr(self._reader, 'modeling_tools', ()):
+                self._reader.validate(tool, arguments)
+            else:
+                validate_arguments(tool, arguments)
             result = self._reader.read(tool, arguments)
             if type(result) is not dict:
                 raise ReadError("read_failed")

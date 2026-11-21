@@ -262,7 +262,7 @@ class PrivateConfig:
 
 
 def supervise(runtime: Runtime, config: PrivateConfig, input_stream: BinaryIO,
-              output_stream: BinaryIO, errors: TextIO, startup_timeout: float = 60.0):
+              output_stream: BinaryIO, errors: TextIO, startup_timeout: float = 60.0, *, modeling=False):
     """Byte relay + process lifecycle only, not a Python implementation of MCP.
 
     Rust inherits client stdout directly. App stdout/stderr are DEVNULL, safe
@@ -295,6 +295,8 @@ def supervise(runtime: Runtime, config: PrivateConfig, input_stream: BinaryIO,
         life_parent.setblocking(False)
         env = application_environment(runtime, config.path, app_end.fileno(), nonce, os.environ)
         env["NARWHAL_AUTOMATION_LIFETIME_FD"] = str(life_app.fileno())
+        if modeling:
+            env['NARWHAL_AUTOMATION_OPT_IN'] = 'new-app-reviewed-modeling-v1'
         config.launch_attempted = True
         app = config.app = subprocess.Popen(
             [str(runtime.app), "--factory-startup", "--disable-autoexec", "--python", str(runtime.bootstrap)],
@@ -353,7 +355,8 @@ def supervise(runtime: Runtime, config: PrivateConfig, input_stream: BinaryIO,
                             server = subprocess.Popen(
                                 [str(runtime.server)], cwd=runtime.root,
                                 env={"NARWHAL_AUTOMATION_FD": str(server_end.fileno()),
-                                     "NARWHAL_AUTOMATION_SESSION": nonce},
+                                     "NARWHAL_AUTOMATION_SESSION": nonce,
+                                     **({'NARWHAL_AUTOMATION_MODELING': 'reviewed-v1'} if modeling else {})},
                                 stdin=subprocess.PIPE, stdout=output_stream, stderr=subprocess.PIPE,
                                 pass_fds=(server_end.fileno(),), close_fds=True, start_new_session=True,
                             )
@@ -423,8 +426,11 @@ def _timeout(value: str) -> float:
 
 def main(argv: Sequence[str] | None = None):
     parser = argparse.ArgumentParser(description=CONSENT)
-    parser.add_argument("--read-only", action="store_true", required=True,
+    authority = parser.add_mutually_exclusive_group(required=True)
+    authority.add_argument("--read-only", action="store_true",
                         help="explicit consent to the read-only disclosure and private app lifetime above")
+    authority.add_argument('--modeling', action='store_true',
+                        help='Additionally expose exact-CAD batches; every batch requires local GUI review. No shell, scripts or file writes.')
     parser.add_argument("--startup-timeout", type=_timeout, default=60.0,
                         help="app readiness deadline, 1..120 seconds (default: 60)")
     args = parser.parse_args(argv)
@@ -434,7 +440,7 @@ def main(argv: Sequence[str] | None = None):
         print(CONSENT, file=sys.stderr, flush=True)
         with PrivateConfig() as config:
             return supervise(runtime, config, sys.stdin.buffer, sys.stdout.buffer,
-                             sys.stderr, args.startup_timeout)
+                             sys.stderr, args.startup_timeout, modeling=args.modeling)
     except LaunchError as exc:
         print("narwhal automation: " + str(exc), file=sys.stderr, flush=True)
         return 1
