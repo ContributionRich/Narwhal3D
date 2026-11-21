@@ -17,7 +17,7 @@ import sys
 import tempfile
 from typing import Any
 
-from build_linux_native import probe_ui_core, verify_ui_core_source
+from build_linux_native import probe_ui_core, verify_ui_core_source, probe_geometry_core_join, verify_geometry_core_source
 from check_pure_core import probe_pure_core_parser, probe_pure_core_retirement
 
 from release_policy import (
@@ -820,6 +820,18 @@ def assemble(args: argparse.Namespace) -> tuple[Path, Path, Path]:
         native_records["libnarwhal_ui_core.so"]["source_inputs"] = ui_source["inputs"]
         native_records["libnarwhal_ui_core.so"].update(
             probe_ui_core(native_components_dir / "libnarwhal_ui_core.so"))
+    except ValueError as error:
+        raise ReleaseError(str(error)) from error
+
+    try:
+        geometry_source = verify_geometry_core_source(native_components_dir, source_root)
+        native_records["libnarwhal_geometry_core.so"]["source_inputs"] = geometry_source["inputs"]
+        native_records["libnarwhal_geometry_core.so"]["geometry_core"] = probe_geometry_core_join(
+            native_components_dir / "libnarwhal_geometry_core.so", source_root,
+            runtime_dir / "5.2/python/bin/python3.13", env=dict(os.environ,
+                LD_LIBRARY_PATH=str(runtime_dir / OCCT_LIB_RELATIVE),
+                NARWHAL3D_BREP_WRITER=str(exact_save_dir / EXACT_SAVE_HELPER),
+                PYTHONDONTWRITEBYTECODE="1"))
     except ValueError as error:
         raise ReleaseError(str(error)) from error
 

@@ -19,7 +19,7 @@ SOURCES=('native_textfield','native_popup','command_transcript','native_transcri
          'native_interpolate','native_coil','native_stl','native_obj',
          'native_vector_export','native_dxf','native_tween',
          'native_tessellate','native_bspline','native_preview','native_dxf_reader',
-         'native_nearest','options')
+         'native_nearest','options','bridge','native_geometry')
 
 
 REQUIRED_PURE_EXPORTS = {
@@ -139,8 +139,14 @@ class DesktopNativeStartup(unittest.TestCase):
         shutil.copy2(ROOT/'launch/check_native.py',self.root/'launch/check_native.py')
         for name in SOURCES:
             shutil.copy2(ROOT/'narwhal3d'/(name+'.py'),self.root/'narwhal3d'/(name+'.py'))
+        shutil.copytree(ROOT / "narwhal3d/kernel", self.root / "narwhal3d/kernel",
+                        ignore=shutil.ignore_patterns("__pycache__", "bin"))
+        writer = self.root / "narwhal3d/kernel/bin/brep_writer-linux-x86_64"
+        writer.parent.mkdir(parents=True)
+        shutil.copy2(ROOT / "narwhal3d/kernel/bin/brep_writer-linux-x86_64", writer)
         libraries={
             'libnarwhal_ui_core.so':Path(os.environ.get('NARWHAL_UI_CORE_LIBRARY',ROOT/'artifacts/ui-core/linux-x86_64/libnarwhal_ui_core.so')),
+            "libnarwhal_geometry_core.so": Path(os.environ.get("NARWHAL_GEOMETRY_CORE", ROOT / "native/geometry_core/target/release/libnarwhal_geometry_core.so")),
             'libnarwhal_application_core.so':Path(os.environ.get('NARWHAL_APPLICATION_CORE',ROOT/'artifacts/application-core/linux-x86_64/libnarwhal_application_core.so')),
             'libnarwhal_pure_core.so':Path(os.environ.get('NARWHAL_PURE_CORE',ROOT/'native/pure_core/target/x86_64-unknown-linux-gnu/release/libnarwhal_pure_core.so')),
         }
@@ -327,6 +333,35 @@ class DesktopNativeStartup(unittest.TestCase):
         self.pure_library().write_bytes(original)
         healthy = self.run_launcher()
         self.assertEqual(healthy.returncode, 0, healthy.stdout + healthy.stderr)
+        self.assertTrue(self.started.exists())
+
+    def test_exact_join_capability_exports_and_verifier_are_required(self):
+        path = self.root / "narwhal3d/native/libnarwhal_geometry_core.so"
+        original = path.read_bytes()
+        entries = elf_export_entries(original)
+        for symbol in ("narwhal_geometry_core_join_mapped_v1", "narwhal_geometry_core_verify_join_v1"):
+            data = bytearray(original)
+            data[entries[symbol][0] + 4] &= 0x0f
+            path.write_bytes(data)
+            result = self.run_launcher()
+            self.assert_no_graphical_start(result)
+            self.assertIn("exact Join unavailable", result.stderr)
+        for symbol, value in (("narwhal_geometry_core_capabilities", 511),
+                              ("narwhal_geometry_core_verify_join_v1", 0)):
+            data = bytearray(original)
+            _entry, address, size, section = entries[symbol]
+            self.assertEqual(struct.unpack_from("<H", data, 18)[0], 62)
+            self.assertGreaterEqual(size, 6)
+            offset = section[4] + address - section[3]
+            data[offset:offset+6] = bytes([0xb8]) + struct.pack("<I", value) + bytes([0xc3])
+            path.write_bytes(data)
+            result = self.run_launcher()
+            self.assert_no_graphical_start(result)
+            expected = "exact Join unavailable" if value else "verifier accepted changed frozen geometry"
+            self.assertIn(expected, result.stderr)
+        path.write_bytes(original)
+        restored = self.run_launcher()
+        self.assertEqual(restored.returncode, 0, restored.stdout + restored.stderr)
         self.assertTrue(self.started.exists())
 
     def test_matching_native_components_launch_direct_runtime(self):

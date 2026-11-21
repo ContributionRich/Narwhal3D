@@ -77,11 +77,14 @@ GEOMETRY_CORE_EXPORTS = (
     "narwhal_geometry_core_edit_session_move_mode",
     "narwhal_geometry_core_edit_session_release",
     "narwhal_geometry_core_inspect_brep",
+    "narwhal_geometry_core_join_exact_v1",
+    "narwhal_geometry_core_join_mapped_v1",
     "narwhal_geometry_core_make_box_brep",
     "narwhal_geometry_core_move_component_brep",
     "narwhal_geometry_core_prepare_freeform_v1",
     "narwhal_geometry_core_sweep1_freeform_approx_v1",
     "narwhal_geometry_core_sweep1_parallel_v1",
+    "narwhal_geometry_core_verify_join_v1",
 )
 GEOMETRY_REQUIRED_OCCT_IMPORT_PREFIXES = (
     "tkbo-", "tkbrep-", "tkernel-", "tkg3d-", "tkgeomalgo-", "tkgeombase-",

@@ -1186,7 +1186,9 @@ if not moved.ok or not moved.data or moved.data == source:
 shape = occt_backend.shape_from_bytes(moved.data)
 if not occt_backend.is_airtight(shape):
     raise SystemExit("packaged geometry-core move is not airtight")
-print(json.dumps({"geometry_abi": 4, "geometry_move": "airtight",
+import runpy
+join_probe = runpy.run_path(str(app / "launch/check_native.py"), run_name="join_build_probe")["check_geometry_consumers"]()
+print(json.dumps({"geometry_abi": 4, "geometry_move": "airtight", "exact_join": join_probe,
                   "application_abi": 1, "platform_abi": 1, "grid_snap": list(result)}, sort_keys=True))
 '@ | Set-Content -LiteralPath $NativeProbePath -Encoding UTF8
 Run-Native (Join-Path $RuntimeDirectory "blender.exe") @(

@@ -8671,24 +8671,48 @@ class JoinCmd(Command):
     """`Join` -- the command behavior. Keyboard shortcut **Ctrl+J**.
 
         "The Join command connects objects together to form a single object. Join
-        turns lines into polylines, curves into polycurves"... "You can join
-        curves that touch end-to-end."... "The order the objects are selected
-        determines the layer of the new joined object."
+        turns lines into polylines, curves into polycurves, surfaces and
+        polysurfaces into polysurfaces or solids."... "You can join surfaces and
+        polysurfaces that touch at naked edges."... "The order the objects are
+        selected determines the layer of the new joined object."
 
-    Only **curves** are joined. the reference CAD application also joins surfaces, polysurfaces, meshes
-    and SubDs; those need a kernel we do not have, so they are REPORTED as not
-    joined rather than quietly ignored (the explicit-refusal policy). The documented options
-    (`Undo`, `JoinDisjointMeshes`, `SubDJoinedEdges`, `SelChain`, `JoinCopy`) are
-    likewise not declared, because declaring an option we cannot honour would make
-    it look implemented. The separate `JoinCopy` command keeps the inputs.
+    Two families are joined, each with its own documented policy:
+
+    * **Curves** -- unchanged from before: ends within **1x the document
+      absolute tolerance** (`bridge.join_curves`), the existing behavior.
+    * **Surfaces / polysurfaces** -- the exact native path (`bridge.join_breps`,
+      the geometry worker's contract). The documented join threshold is
+      **2x the document absolute tolerance** (commands/join.htm: "edges are
+      within 2x tolerance"); the bridge takes the qualified sewing distance, so
+      the 2x is applied HERE, once, and never repeated. `KernelError` is an
+      explicit refusal -- unsupported input, unavailable capability, or a group
+      the native kernel will not bind -- and it is reported, never faked.
+    * **Meshes and SubDs** are not joined yet; they are REPORTED as not joined
+      (the explicit-refusal policy), never mixed into a curve or surface result.
+
+    Native admission checks source feature scale and tolerance metadata; the
+    default document tolerance (0.01, qualified distance 0.02) is supported.
+    Unsafe or unsupported joins refuse without approximating the source faces.
+
+    Both families are preflighted **before** any undo capture or deletion, so a
+    failed exact join leaves every input in place (no partial success). Results
+    are added to the document before their consumed inputs are removed, and a
+    failed publication removes only this command's allocations and retains inputs.
+    One Undo step per command (the existing framework:
+    `note_change` before the first mutation; `add_geometry`'s own capture is
+    coalesced by the history backend, exactly as the curve path already relies
+    on). The result inherits the layer of its FIRST selected member (the
+    documented selection-order rule, approximated as the active object leads).
+    The separate `JoinCopy` command keeps the inputs.
     """
 
-    #: JoinCopy sets this: add the joined result and leave every input in place.
+    #: JoinCopy sets this: add the joined results and leave every input in place.
     _keep_inputs = False
 
     name = "Join"
-    description = ("Join selected curves that touch end-to-end into a polyline "
-                   "or polycurve.")
+    description = ("Join curves that touch end-to-end into a polyline or "
+                   "polycurve, and surfaces/polysurfaces that share edges into "
+                   "a polysurface or solid.")
     # (the command behavior) "Select the objects... to join...
     # press Enter." Ask for the selection (a set-step) instead of refusing when
     # it is empty; a pre-selection fills it and runs immediately, an empty
@@ -8699,11 +8723,19 @@ class JoinCmd(Command):
     cancel_on_empty_set = True
 
     def _tolerance(self, ctx=None):
-        """The gap still counted as touching.
+        """The document's absolute tolerance -- the shared base for both families.
 
         the reference CAD application judges curve ends against the document's **absolute tolerance** -- `ctx.model`'s (`_document_tolerance`), no longer the 0.01 default.
+        The surface family doubles it: commands/join.htm is MEASURED -- "Join
+        does not change the surfaces. It is merely a test to see if the surfaces
+        edges are within **2x tolerance**." The bridge receives the qualified
+        sewing distance and does not apply any document policy of its own.
         """
         return _document_tolerance(ctx)
+
+    def _surface_tolerance(self, ctx=None):
+        """The qualified surface join distance: 2x the document absolute tolerance."""
+        return 2 * self._tolerance(ctx)
 
     def _ordered_selection(self, ctx):
         """Selected object names, the ACTIVE one first.
@@ -8725,69 +8757,279 @@ class JoinCmd(Command):
             names.insert(0, active)
         return names
 
+    @staticmethod
+    def _join_refusal(geom):
+        """An honest refusal for the one family we cannot join yet, or None.
+
+        Meshes and SubDs are the documented input families this command does not
+        join yet (no native exact path for them); anything else -- points,
+        text, planes, lights -- is not a joinable input at all.
+        """
+        if isinstance(geom, r3.Mesh):
+            return "meshes"
+        if isinstance(geom, r3.SubD):
+            return "SubDs"
+        if isinstance(geom, (r3.Point, r3.PointCloud)):
+            return "points"
+        return "other objects"
+
+    def _join_surface_groups(self, items, tol):
+        """The exact surface join, preflighted: results before any state change.
+
+        Returns ``[(names, exact_brep, closed), ...]``. On refusal the native
+        ``KernelError`` (unsupported input, unavailable capability, a group the
+        kernel will not bind) propagates to the caller, which then does nothing
+        -- no undo capture, no deletion, no partial success. No faceted
+        fallback exists by design; this is the only surface path.
+        """
+        return bridge.join_breps(list(items), tol)
+
+    def _add_and_consume(self, ctx, keys, geom, closed, *, check):
+        """Stage a result; consumption happens only after ALL additions succeed."""
+        layer_index = _layer_index_of(ctx, keys[0])
+        if isinstance(geom, r3.Brep):
+            base = "Solid" if closed else "Polysurface"
+        else:
+            base = "Polyline" if isinstance(geom, r3.PolylineCurve) else "Curve"
+        # Own UUIDs and allocation-time Blender handles, never a table delta or
+        # all objects sharing a master key: callbacks may legitimately copy a
+        # result or edit an unrelated object while display construction runs.
+        model, file = ctx.model, ctx.model.file
+        original_add, previous_hook = model.add_object, model.before_change
+        allocated, allocations = [], {"objects": [], "meshes": []}
+        counter = ctx.counters.get(base, 0)
+        name = f"{base}{counter + 1}"
+        if any((o.Attributes.Name or "").lower() == name.lower() for o in file.Objects) or ctx.object_by_name(name) is not None:
+            raise RuntimeError("Join publication display name already exists")
+        created_before = selection_state.last_created(model)
+
+        def before_insert():
+            check()
+            if previous_hook is not None:
+                previous_hook()
+            check()
+
+        def add_result(value, *args, **kwargs):
+            result = original_add(value, *args, **kwargs)
+            if value is geom:
+                allocated.append(result[0])
+            return result
+
+        model.add_object, model.before_change = add_result, before_insert
+        try:
+            check()
+            result = ctx._add_geometry(geom, base, layer_index,
+                                       {"check": check, "allocations": allocations})
+            check()
+            published = file.Objects.FindId(str(result[0]))
+            if (str(result[0]) not in {str(oid) for oid in allocated}
+                    or published is None or published.Attributes.Name != result[1]):
+                raise RuntimeError("Join addition did not publish its result")
+            return result
+        except Exception:
+            for oid in allocated:
+                file.Objects.Delete(oid)
+            ctx._remove_publication_allocations(allocations)
+            if ctx.counters.get(base) == counter + 1:
+                if counter:
+                    ctx.counters[base] = counter
+                else:
+                    ctx.counters.pop(base, None)
+            entry = selection_state._state.get(model)
+            if entry is not None and name not in created_before:
+                entry["created"][:] = [n for n in entry["created"] if n != name]
+                if name in entry.get("batch", []):
+                    entry["batch"].remove(name)
+            raise
+        finally:
+            if model.add_object is add_result:
+                model.add_object = original_add
+            if model.before_change is before_insert:
+                model.before_change = previous_hook
+
     def execute(self, ctx: NarwhalContext):
         names = self._ordered_selection(ctx)
         if len(names) < 2:
             return f"{self.name}: select at least two objects to join", True
 
-        items, non_curves = [], []
+        items, non_curves, unsupported = [], [], []
         for name in names:
             geom = ctx.geom_by_name(name)
             if geom is not None and bridge.curve_ends(geom) is not None:
                 items.append((name, geom))
+            elif isinstance(geom, r3.Brep):
+                non_curves.append((name, geom))
             else:
-                non_curves.append(name)
+                unsupported.append(self._join_refusal(geom))
 
-        if len(items) < 2:
-            if non_curves:
-                return (f"{self.name}: only curves can be joined yet -- joining "
-                        "surfaces, polysurfaces and meshes is not implemented"), True
-            return f"{self.name}: select at least two curves", True
+        if len(items) < 2 and len(non_curves) < 2:
+            if unsupported:
+                return (f"{self.name}: nothing can be joined here -- "
+                        f"{' and '.join(sorted(set(unsupported)))} "
+                        "are not joined yet"), True
+            return f"{self.name}: select at least two objects to join", True
 
-        tol = self._tolerance(ctx)
-        chains = bridge.join_curves(items, tol)
-        if not chains:
-            return (f"{self.name}: those curves do not touch end-to-end "
-                    f"(within {tol:g})"), True
+        # Preflight BOTH families before ANY state change (no undo capture, no
+        # deletion): a refused exact join must leave every input in place.
+        curve_chains = []
+        if len(items) >= 2:
+            curve_chains = bridge.join_curves(items, self._tolerance(ctx))
+        surface_groups = []
+        from . import kernel
 
+        surface_refusal = None
+        if len(non_curves) >= 2:
+            try:
+                surface_groups = self._join_surface_groups(
+                    non_curves, self._surface_tolerance(ctx))
+            except kernel.KernelError as e:
+                surface_refusal = str(e)
+
+        # A native refusal is a FULL refusal: every input is retained, nothing
+        # is deleted, no undo step is opened -- not even the curve family joins
+        # (no partial success), per the explicit-refusal policy.
+        if surface_refusal is not None:
+            return (f"{self.name}: the surfaces could not be joined exactly "
+                    f"within {self._surface_tolerance(ctx):g} ({surface_refusal}); "
+                    "all inputs kept"), True
+
+        # Surfaces that no native group consumed (a lone face, or a face with no
+        # shared edge) are neither joined nor faked: they stay in the document
+        # and are named in the report, as the curve path names its leftovers.
+        surface_consumed = {n for keys, _, _ in surface_groups for n in keys}
+        surface_leftover = [n for n, _ in non_curves if n not in surface_consumed]
+
+        if not curve_chains and not surface_groups:
+            if len(items) >= 2 and not non_curves:
+                return (f"{self.name}: those curves do not touch end-to-end "
+                        f"(within {self._tolerance(ctx):g})"), True
+            if len(non_curves) >= 2:
+                return (f"{self.name}: those surfaces do not share edges within "
+                        f"{self._surface_tolerance(ctx):g}"), True
+            if len(non_curves) == 1 and len(items) < 2:
+                return (f"{self.name}: a single surface joins nothing "
+                        "(select at least two objects that touch)"), True
+            return f"{self.name}: nothing could be joined", True
+
+        # Host transaction only: exact geometry is already computed natively.
+        # Do not restore a global snapshot on failure: callbacks may have made
+        # legitimate unrelated edits. Stage all outputs before consuming sources.
+        model, file = ctx.model, ctx.model.file
+        baseline = model.snapshot()
+        record = ctx.undo._open
+        previous_before = record.before if record is not None else None
+        source_displays = {name: ctx.object_by_name(name) for name in names}
+        source_meshes = {name: ob.data for name, ob in source_displays.items() if ob is not None}
+        sources = {str(o.Attributes.Id): (o.Geometry.Encode(), o.Attributes.Encode())
+                   for o in file.Objects if o.Attributes.Name in names}
+
+        def check_sources():
+            if ctx.model is not model or model.file is not file:
+                raise RuntimeError("Join document changed during publication")
+            current = {str(o.Attributes.Id): (o.Geometry.Encode(), o.Attributes.Encode())
+                       for o in file.Objects if str(o.Attributes.Id) in sources}
+            if current != sources:
+                raise RuntimeError("Join inputs changed during publication; inputs kept")
+            for name, ob in source_displays.items():
+                if ctx.object_by_name(name) != ob or (ob is not None and ob.data != source_meshes[name]):
+                    raise RuntimeError("Join input display changed during publication; inputs kept")
+
+        staged, parts = [], []
+        counters_before = dict(ctx.counters)
+        created_before = selection_state.last_created(model)
         ctx.note_change(self.name)
-        made = []
-        for keys, geom, closed in chains:
-            # The FIRST key of the chain is the earliest selected member, so its
-            # layer is the one the help says the result inherits.
-            layer_index = _layer_index_of(ctx, keys[0])
-            for name in ([] if self._keep_inputs else keys):
-                ob = ctx.object_by_name(name)
+        try:
+            for groups, family in ((curve_chains, "curves"), (surface_groups, "surfaces")):
+                for keys, geom, closed in groups:
+                    check_sources()
+                    oid, display = self._add_and_consume(
+                        ctx, list(keys), geom, closed, check=check_sources)
+                    ob = ctx.object_by_name(display)
+                    mesh = ob.data if ob is not None else None
+                    staged.append((oid, display, ob, mesh))
+                    check_sources()
+                    detail = (f", {'closed' if closed else 'open'}" if family == "surfaces"
+                              else ", closed" if closed else "")
+                    parts.append(f"{display} ({len(keys)} {family}{detail})")
+            check_sources()
+            # Run document mutation hooks while every original and its display
+            # still exists. A callback must not first run halfway through input
+            # consumption. File3dm's existing native observer journals the batch
+            # below; note_change has already captured its single Undo boundary.
+            for keys, _, _ in ([] if self._keep_inputs else curve_chains + surface_groups):
+                for _ in keys:
+                    model._will_change()
+                    check_sources()
+        except Exception as exc:
+            for oid, display, ob, mesh in reversed(staged):
+                if ob is not None:
+                    ctx._remove_publication_allocations({"objects": [ob], "meshes": [mesh] if mesh is not None else []})
+                file.Objects.Delete(oid)
+                for base in ("Solid", "Polysurface", "Polyline", "Curve"):
+                    if display == f"{base}{ctx.counters.get(base, 0)}":
+                        count = ctx.counters[base] - 1
+                        if count or base in counters_before:
+                            ctx.counters[base] = count
+                        else:
+                            ctx.counters.pop(base, None)
+                entry = selection_state._state.get(model)
+                if entry is not None and display not in created_before:
+                    entry["created"][:] = [n for n in entry["created"] if n != display]
+                    if display in entry.get("batch", []):
+                        entry["batch"].remove(display)
+            if record is not None and ctx.undo._open is record:
+                if previous_before is not None:
+                    record.before = previous_before
+                elif model.file is file and not ctx._same_publication_document(baseline, model.snapshot()):
+                    record.before = baseline
+                    record.name = "External change during Join"
+                else:
+                    record.before = None
+            return f"{self.name}: publication failed ({exc}); inputs kept", True
+
+        for keys, _, _ in ([] if self._keep_inputs else curve_chains + surface_groups):
+            for name in keys:
+                oid = model.object_id_by_name(name)
+                ob = source_displays[name]
                 if ob is not None:
                     _remove_object_from_scene(ob)
-                oid = ctx.model.object_id_by_name(name)
                 if oid is not None:
-                    ctx.model.remove_object(oid)
-            base = "Polyline" if isinstance(geom, r3.PolylineCurve) else "Curve"
-            _, display = ctx.add_geometry(geom, base, layer_index)
-            made.append((display, len(keys), closed))
+                    file.Objects.Delete(oid)
 
-        left = sum(len(keys) for keys, _, _ in chains)
-        parts = [f"{d} ({n} curves{', closed' if c else ''})" for d, n, c in made]
+        joined_curves = sum(len(keys) for keys, _, _ in curve_chains)
+        joined_surfaces = sum(len(keys) for keys, _, _ in surface_groups)
+        # The pure-curve message keeps the exact historic wording ("... curves
+        # into ..."); mixed or surface-only selections are reported as objects.
         verb = "Joined copies of" if self._keep_inputs else "Joined"   # OURS: JoinCopy wording
-        msg = f"{verb} {left} curves into {len(made)}: " + "; ".join(parts)
-        if non_curves:
-            msg += (f". Not joined ({len(non_curves)}): only curves can be joined "
-                    f"yet -- surfaces, polysurfaces and meshes are not implemented")
+        noun = "curves" if joined_surfaces == 0 else "objects"
+        msg = (f"{verb} {joined_curves + joined_surfaces} {noun} into "
+               f"{len(parts)}: " + "; ".join(parts))
+        if unsupported:
+            msg += (f". Not joined: {' and '.join(sorted(set(unsupported)))} "
+                    "are not joined yet")
+        if surface_leftover:
+            names = ", ".join(f"'{n}'" for n in surface_leftover)
+            tail = (f"no shared edges within {self._surface_tolerance(ctx):g}"
+                    if len(non_curves) >= 2
+                    else "no second surface to join to")
+            msg += f". Not joined: {names} ({tail}), kept in the document"
         return msg, True
 
 
 class JoinCopyCmd(JoinCmd):
     """`JoinCopy` -- `Join`, keeping the inputs.
 
-    Same selection order, document tolerance, chains, result type and layer rule as
-    `Join` (`bridge.join_curves` duplicates its members, so the inputs are only read);
-    the joined result is added and no input is deleted or changed. One Undo step
-    removes only the result.
+    (commands/join.htm: "JoinCopy and Join commands are technically identical.
+    The only difference is JoinCopy does not delete input objects.")
+
+    Same selection order, per-family tolerance (1x document for curves, 2x for
+    surfaces), chains and groups, result type and layer rule as `Join`; the
+    joined results are added and no input is deleted or changed. One Undo step
+    removes only the results.
     """
 
     name = "JoinCopy"
-    description = "Join copies of curves that touch end-to-end, keeping the originals."
+    description = ("Join copies of curves and surfaces, keeping the originals.")
     steps = [("Select objects to join:", OBJECTS_MULTI)]
     _keep_inputs = True
 

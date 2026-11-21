@@ -181,6 +181,49 @@ def check_pure_consumers():
             raise RuntimeError(f'required {owner} native startup support failed: {error}') from error
 
 
+def check_geometry_consumers():
+    """Qualify exact SDK Join and recipe replay on disposable startup geometry."""
+    import math
+    from narwhal3d import bridge, kernel, native_geometry
+
+    if not native_geometry.join_exact_available():
+        raise RuntimeError("exact Join unavailable: geometry capability bit9 and mapped/verify exports required")
+    backend = bridge._occt()
+    if backend is None:
+        raise RuntimeError("exact Join SDK unavailable")
+    recipe = {"kind": "cylinder", "radius": 2.0, "height": 3.0}
+    source = backend.from_recipe(recipe)
+    operands = [("startup_join_" + str(index), bridge.occt_backed(face,
+                 {"kind": "face", "index": index, "a": recipe}))
+                for index, face in enumerate(backend.unique_faces(source), 1)]
+    groups = bridge.join_breps(operands, 0.02)
+    if len(groups) != 1 or groups[0][0] != [name for name, _ in operands] or not groups[0][2]:
+        raise RuntimeError("exact Join lost source membership or closure")
+    geometry = groups[0][1]
+    if (len(geometry.Faces) != 3 or not geometry.IsSolid
+            or geometry.GetUserString(kernel.DOCUMENT_FORM_KEY) != "exact"):
+        raise RuntimeError("exact Join did not publish three exact SDK faces")
+    tree = kernel.recipe_of(geometry)
+    if tree.get("kind") != "join_exact" or len(tree.get("operands", [])) != 3:
+        raise RuntimeError("exact Join lost its operand recipe tree")
+    for shape in (kernel.master_of(geometry), backend.from_recipe(tree)):
+        if (not backend.is_airtight(shape)
+                or backend.face_types(shape) != {"PLANE": 2, "CYLINDER": 1}
+                or not math.isclose(backend.volume(shape), 12 * math.pi, rel_tol=1e-10)):
+            raise RuntimeError("exact Join SDK/recipe semantics differ")
+    import copy
+    changed = copy.deepcopy(tree)
+    changed["result"] = backend.native_master_recipe(backend.make_box(1, 1, 1))
+    try:
+        backend.from_recipe(changed)
+    except kernel.KernelError:
+        pass
+    else:
+        raise RuntimeError("exact Join verifier accepted changed frozen geometry")
+    return {"suite": "exact Join startup", "exact_faces": 3, "closed": True,
+            "operand_count": 3, "recipe_verified": True}
+
+
 def check():
     package = types.ModuleType('narwhal3d')
     package.__path__ = [str(ROOT / 'narwhal3d')]
@@ -236,6 +279,7 @@ def check():
     if parse_length('27cm', 'Meters') != (0.27, None):
         raise RuntimeError('native numeric parser returned an invalid startup result')
     check_pure_consumers()
+    check_geometry_consumers()
     print('[narwhal3d] required native startup checks passed', flush=True)
 
 

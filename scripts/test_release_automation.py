@@ -2,6 +2,8 @@
 """Packaging/loader contract tests. Native execution is qualified separately."""
 import ast
 import ctypes
+import json
+import tempfile
 from pathlib import Path
 import sys
 import types
@@ -36,7 +38,82 @@ class AutomationPackaging(unittest.TestCase):
                          "narwhal_geometry_core_sweep1_freeform_approx_v1",
                          "narwhal_geometry_core_sweep1_parallel_v1"}
                         <= set(windows.GEOMETRY_CORE_EXPORTS))
-        self.assertEqual(len(windows.GEOMETRY_CORE_EXPORTS), 12)
+        self.assertEqual(len(windows.GEOMETRY_CORE_EXPORTS), 15)
+        self.assertEqual(tuple(windows.GEOMETRY_CORE_EXPORTS), builder.GEOMETRY_CORE_EXPORTS)
+        self.assertTrue({"narwhal_geometry_core_join_exact_v1",
+                         "narwhal_geometry_core_join_mapped_v1",
+                         "narwhal_geometry_core_verify_join_v1"} <= set(windows.GEOMETRY_CORE_EXPORTS))
+
+    def test_geometry_join_probe_refuses_missing_capability_exports_and_semantics(self):
+        semantics = dict(suite="exact Join startup", exact_faces=3, closed=True,
+                         operand_count=3, recipe_verified=True)
+        good = dict(abi=4, capabilities=1023, exports=list(builder.GEOMETRY_CORE_EXPORTS),
+                    join_semantics=semantics)
+        with patch.object(builder.subprocess, "run", return_value=types.SimpleNamespace(stdout=json.dumps(good))) as run:
+            self.assertEqual(builder.probe_geometry_core_join(Path("candidate.so"), ROOT), good)
+            self.assertIn("check_geometry_consumers", run.call_args.args[0][3])
+        variants = [dict(good, capabilities=511), dict(good, exports=good["exports"][:-1]),
+                    dict(good, join_semantics=None),
+                    dict(good, join_semantics=dict(semantics, exact_faces=4)),
+                    dict(good, join_semantics=dict(semantics, closed=False)),
+                    dict(good, join_semantics=dict(semantics, recipe_verified=False))]
+        for invalid in variants:
+            with self.subTest(invalid=invalid), patch.object(builder.subprocess, "run",
+                    return_value=types.SimpleNamespace(stdout=json.dumps(invalid))):
+                with self.assertRaises(ValueError):
+                    builder.probe_geometry_core_join(Path("candidate.so"), ROOT)
+        with patch.object(builder.subprocess, "run", return_value=types.SimpleNamespace(stdout=json.dumps(good))):
+            self.assertEqual(builder.probe_geometry_core_join(Path("candidate.so"), ROOT), good)
+
+    def test_geometry_source_receipt_binds_native_include_and_join_probe(self):
+        with tempfile.TemporaryDirectory(prefix="geometry-source-receipt-") as folder:
+            root = Path(folder)
+            crate = root / "native/geometry_core"
+            (crate / "src").mkdir(parents=True)
+            (crate / "cpp").mkdir()
+            for name in builder.GEOMETRY_CORE_REQUIRED_SOURCE:
+                path = crate / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("source closure fixture")
+            source, include = crate / "src/join.rs", crate / "cpp/join_adapter.inc"
+            source.write_text("exact join source")
+            include.write_text("exact join adapter")
+            binary = root / "libnarwhal_geometry_core.so"
+            binary.write_bytes(b"qualified synthetic identity")
+            probe = dict(abi=4, capabilities=1023, exports=list(builder.GEOMETRY_CORE_EXPORTS),
+                join_semantics=dict(suite="exact Join startup", exact_faces=3, closed=True,
+                                    operand_count=3, recipe_verified=True))
+            record = dict(inputs=builder.inventory(root, "geometry_core"),
+                          sha256=builder.digest(binary), geometry_core=probe)
+            receipt = root / builder.GEOMETRY_CORE_SOURCE
+            receipt.write_text(json.dumps(record))
+            self.assertEqual(builder.verify_geometry_core_source(root, root), record)
+            source.write_text("changed producer")
+            with self.assertRaisesRegex(ValueError, "source/binary"):
+                builder.verify_geometry_core_source(root, root)
+            source.write_text("exact join source")
+            include.unlink()
+            with self.assertRaisesRegex(ValueError, "missing geometry-core source"):
+                builder.verify_geometry_core_source(root, root)
+            include.write_text("exact join adapter")
+            receipt.write_text(json.dumps(dict(record, geometry_core=dict(probe, capabilities=511))))
+            with self.assertRaisesRegex(ValueError, "Join qualification"):
+                builder.verify_geometry_core_source(root, root)
+            receipt.write_text(json.dumps(record))
+            self.assertEqual(builder.verify_geometry_core_source(root, root), record)
+
+    def test_geometry_manifest_requires_current_sources_and_join_semantics(self):
+        record = dict(source_inputs=builder.geometry_source_inventory(ROOT),
+            geometry_core=dict(abi=4, capabilities=1023, exports=list(builder.GEOMETRY_CORE_EXPORTS),
+                join_semantics=dict(suite="exact Join startup", exact_faces=3, closed=True,
+                                    operand_count=3, recipe_verified=True)))
+        linux_verify.verify_geometry_core_manifest({"libnarwhal_geometry_core.so": record})
+        for key in ("source_inputs", "geometry_core"):
+            damaged = dict(record)
+            del damaged[key]
+            with self.assertRaises(linux_verify.VerificationError):
+                linux_verify.verify_geometry_core_manifest({"libnarwhal_geometry_core.so": damaged})
+        linux_verify.verify_geometry_core_manifest({"libnarwhal_geometry_core.so": record})
 
     def test_windows_automation_exports_are_required(self):
         good = {"machine": 0x8664, "exports": ["narwhal_workflow_abi", "narwhal_workflow_json"]}

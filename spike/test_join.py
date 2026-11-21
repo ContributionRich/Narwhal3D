@@ -456,12 +456,12 @@ pt = r3.Point(P(9, 9, 9))
 ctx = join_ctx(touching()[:2] + [("Pt", pt)])
 before = doc(ctx)
 msg, done = run_cmd("joincopy", ctx)
-check("Not joined (1): only curves can be joined yet" in msg
+check("Not joined: points are not joined yet" in msg
       and all(doc(ctx).get(k) == v for k, v in before.items()) and len(doc(ctx)) == 4,
       f"mixed input: the curves are joined, the point is reported and kept ({msg!r})")
 ctx = join_ctx([("A", line((0, 0, 0), (1, 0, 0))), ("Pt", pt)])
 msg, done = run_cmd("joincopy", ctx)
-check(msg.startswith("JoinCopy: only curves can be joined yet"),
+check(msg.startswith("JoinCopy: nothing can be joined here -- points are not joined yet"),
       f"one curve and a point: refused by name ({msg!r})")
 ctx = join_ctx(touching()[:2])
 msg, done = run_cmd("join", ctx)

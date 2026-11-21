@@ -225,6 +225,7 @@ RECIPE_KINDS = {
     # when an older construction recipe can no longer be PROVEN identical to the master the
     # user is looking at; the master is the geometry, so it becomes the recipe. Exact.
     "native_master": ("data",),
+    "join_exact": ("version", "operands", "tolerance", "result"),
     # A shape extruded straight (ExtrudeSrf): `a` is the operand's recipe, `dir` the
     # full extrusion vector; `both` = BothSides, `solid` = Solid (a face -> a closed solid).
     "prism": ("a", "dir"),
@@ -1693,6 +1694,20 @@ def from_recipe(recipe, _depth=0):
         elif kind == "brep_data":
             shape = shape_from_brep_data(recipe["data"],
                                          sew_tolerance=recipe.get("tolerance", 1e-6))
+        elif kind == "join_exact":
+            if (recipe.get("version") != 1 or not isinstance(recipe.get("operands"), list)
+                    or not 2 <= len(recipe["operands"]) <= 256
+                    or not isinstance(recipe.get("result"), dict)
+                    or recipe["result"].get("kind") != "native_master"
+                    or recipe["result"].get("xform") is not None):
+                raise KernelError("unsupported/malformed exact Join recipe version/tree/snapshot")
+            operands = [from_recipe(operand, _depth + 1) for operand in recipe["operands"]]
+            from .. import native_geometry
+            target = native_master_bytes(recipe["result"])
+            checked = native_geometry.verify_join(join_pack(operands), target, recipe["tolerance"])
+            if not checked.ok:
+                raise KernelError(checked.detail)
+            shape = shape_from_bytes(target)
         elif kind == "native_master":
             shape = shape_from_bytes(native_master_bytes(recipe),
                                      recipe.get("wrapper_type") or "TopoDS_Shape")
@@ -6161,3 +6176,32 @@ def export_step(shape, path, unit="MM"):
     if not os.path.exists(path) or os.path.getsize(path) == 0:
         raise KernelError(f"STEP export wrote nothing to {path}")
     return os.path.getsize(path)
+
+
+def join_pack(shapes):
+    """SDK-only exact compound packing; provenance and grouping live in native OCCT."""
+    _need()
+    from OCP.BRep import BRep_Builder
+    from OCP.TopoDS import TopoDS_Compound
+    builder = BRep_Builder()
+    compound = TopoDS_Compound()
+    builder.MakeCompound(compound)
+    for shape in shapes:
+        builder.Add(compound, shape)
+    return shape_to_bytes(compound, triangles=False)
+
+
+def join_unpack(data):
+    """SDK-only direct result extraction, in native report order; no face matching."""
+    _need()
+    from OCP.TopoDS import TopoDS_Iterator
+    from OCP.TopAbs import TopAbs_COMPOUND
+    shape = shape_from_bytes(data)
+    if shape.ShapeType() != TopAbs_COMPOUND:
+        raise KernelError("exact Join output is not a group compound")
+    groups = []
+    iterator = TopoDS_Iterator(shape)
+    while iterator.More():
+        groups.append(iterator.Value())
+        iterator.Next()
+    return groups

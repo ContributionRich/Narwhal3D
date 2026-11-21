@@ -61,7 +61,7 @@ Remaining work includes:
 
 | Family | Status | Remaining work |
 |---|---|---|
-| Join/explode/close | Partial | Broader geometry types, selection-order fidelity, copy variants |
+| Join/explode/close | Partial | Join/JoinCopy support curves and conservative exact Brep sewing with twice-document surface tolerance, mapped source groups and one Undo history. Mesh/SubD and unsafe surface/trim changes refuse; singletons/existing solids stay separate. Broader geometry/compatibility coverage remains incomplete. |
 | Offset | Partial | Corner modes, self-intersection cleanup, caps, loose mode, through-point, output layer, subcurve |
 | Extend | Partial | Boundary-object, start/end picking, smooth/curvature extension, surface/edge variants |
 | Fillet/chamfer/blend | Partial | Arbitrary picked locations, complex topology, richer continuity and interactive handles |

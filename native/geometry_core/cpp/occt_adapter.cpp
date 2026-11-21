@@ -4196,3 +4196,5 @@ extern "C" std::int32_t narwhal_occt_adapter_make_local_move_fixture(
 #include "sweep_adapter.inc"
 #include "freeform_adapter.inc"
 #include "preparation_adapter.inc"
+
+#include "join_adapter.inc"

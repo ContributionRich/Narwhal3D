@@ -248,6 +248,7 @@ class ApplicationPackaging(unittest.TestCase):
                 with self.subTest(options=options), patch.object(ctypes, "CDLL", side_effect=load) as loaded, \
                      patch.object(linux_verify, "probe_pure_core_parser", return_value=linux_verify.PURE_CORE_PARSE_IDENTITY), \
                      patch.object(linux_verify, "probe_pure_core_retirement", return_value=PURE_CORE_RETIREMENT_IDENTITY) as retirement, \
+                     patch.object(linux_verify, "probe_geometry_core_join", return_value={"qualified_separately": True}) as join, \
                      patch.object(linux.subprocess, "run", side_effect=execute_probe):
                     # Run the real assembler's ABI/receipt block, without other native probes.
                     tree = ast.parse(textwrap.dedent(inspect.getsource(linux.validate_native_components)))
@@ -273,6 +274,8 @@ class ApplicationPackaging(unittest.TestCase):
                         self.assertEqual(paths, [str(root / "narwhal3d/native" / SO)] * 4)
                         self.assertEqual(library.narwhal_history_abi.argtypes, [])
                         self.assertIs(library.narwhal_history_abi.restype, ctypes.c_uint32)
+                        join.assert_called_once_with(root / "narwhal3d/native/libnarwhal_geometry_core.so",
+                                                     root, Path("python"), env={})
                     retirement.assert_called_once_with(
                         root / "narwhal3d/native/libnarwhal_pure_core.so", Path("python"), env={})
 
@@ -285,9 +288,12 @@ class ApplicationPackaging(unittest.TestCase):
                 result["application_core_history"] = history
             with patch.object(linux_verify, "probe_pure_core_parser", return_value=linux_verify.PURE_CORE_PARSE_IDENTITY), \
                     patch.object(linux_verify, "probe_pure_core_retirement", return_value=PURE_CORE_RETIREMENT_IDENTITY) as retirement, \
+                    patch.object(linux_verify, "probe_geometry_core_join", return_value={"qualified_separately": True}) as join, \
                     patch.object(linux_verify.subprocess, "run", return_value=types.SimpleNamespace(stdout=json.dumps(result))):
                 if history == 1:
                     linux_verify.verify_native_library_abis(Path("app"), Path("python"), {})
+                    join.assert_called_once_with(Path("app/narwhal3d/native/libnarwhal_geometry_core.so"),
+                                                 Path("app"), Path("python"), env={})
                 else:
                     with self.assertRaises(linux_verify.VerificationError):
                         linux_verify.verify_native_library_abis(Path("app"), Path("python"), {})
@@ -654,6 +660,9 @@ def mutation_checks():
                             source.replace(old, new) if self == path else original(self, *args, **kwargs))
 
     mutants = [
+        ("Linux exact Join qualification omitted", mutated_function(linux_verify, "verify_native_library_abis",
+            "probe_geometry_core_join(", "(lambda *args, **kwargs: None)("),
+            "test_linux_history_probe_and_packaged_loader"),
         ("Linux component omitted", patch.object(linux, "NATIVE_COMPONENTS", tuple(n for n in linux.NATIVE_COMPONENTS if n != SO)), "test_mandatory_build_and_package_contracts"),
         ("Linux wrong ABI accepted", mutated_function(linux, "probe_native_library_abi", "if actual != expected:", "if False:"), "test_linux_abi_probe_rejects_actual_wrong_result"),
         ("Linux adjacent omitted", patch.object(linux_verify, "PACKAGED_ACCELERATORS", tuple(n for n in linux_verify.PACKAGED_ACCELERATORS if n != SO)), "test_linux_missing_copy_manifest_and_wrong_abi_rejected"),

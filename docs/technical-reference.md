@@ -21,6 +21,12 @@ Narwhal 3D is a free, open-source, command-driven NURBS CAD application. Release
 
 The command line, viewport picks, menus, and toolbars all enter the same command system. The [archived Loft demonstration](readme-command-loft.gif) shows this workflow in an older UI; it is not a screenshot of the current release. Current Loft styles and multi-curve support are described in the [changelog](../CHANGELOG.md).
 
+## Exact surface Join
+
+Current-source Join and JoinCopy accept exact Brep surface groups and keep the existing curve route. Surface sewing uses twice the document absolute tolerance exactly once; a default 0.01 document supplies 0.02. Connected groups must consume at least two inputs; singletons and existing solids stay separate. Mesh/SubD and unsupported, invalid, duplicate, nonmanifold or surface/trim-changing cases refuse explicitly. The source-feature/tolerance guard is unit-covariant, not a fixed 0.01 ceiling. This is conservative exact sewing, not a boolean, cap or general healing operation.
+
+Native-traced group membership and nested operand recipes bind the exact result. Open groups stay open; valid closed oriented shells become checked solids with unchanged analytic faces. Join consumes only joined groups, JoinCopy preserves originals, and staged multiresult publication retains one Undo history and scoped rollback without overwriting unrelated callback edits. An older core, missing verifier or missing exact writer cannot silently select a mesh/Python fallback. Linux source qualification does not certify a new package, Windows/macOS execution or complete reference-application parity. No AI modeling Join tool is added by this command checkpoint.
+
 ## Geometry model
 
 Narwhal keeps document geometry separate from viewport tessellation:

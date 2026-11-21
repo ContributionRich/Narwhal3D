@@ -296,3 +296,33 @@ runtime qualification or release-package acceptance is claimed by this change.
 Snapshot-origin native edits persist their exact certified result as a
 `native_master` recipe rather than adding a replay dependency on opaque source
 history. This does not create another Undo history or change historical readers.
+
+## Exact surface Join
+
+ABI4 capability bit9 provides bounded exact sewing, not a boolean, mesh join,
+healing or general compatibility claim. The mapped and verification exports are
+required together; older cores refuse this route explicitly. At most 256 direct
+inputs and 256 non-solid faces are admitted. Connected groups consuming at least
+two source inputs are returned; singletons and existing solids stay separate.
+Surfaces, locations, trim domains/coefficient representations and orientation
+must remain unchanged. Valid closed oriented shells become checked solids; open
+groups remain open. Duplicate/nonmanifold/invalid/unsupported results refuse.
+
+The command supplies twice the document absolute tolerance; the backend uses the
+supplied distance exactly once. Values must be finite, at least 1e-9, square-safe,
+consistent with source metadata and no larger than one quarter of the largest finite bounding
+span of each source face and each nondegenerate edge arc length. This unit-covariant source-feature guard
+is not a fixed 0.01 ceiling; default 0.01 document tolerance supplies 0.02.
+OCCT numerical validity/length checks are not interval proofs for arbitrary
+self-intersecting freeform surfaces. Topology admission is resource-bounded.
+
+Mapped native membership, not spatial heuristics, records a recipe tree with
+nested operands and a frozen exact result. Reload rebuilds the operands and
+requires native reproduction of the bound result. Equivalent reordering or a
+changed kernel representation can conservatively refuse; kernel migration must
+be qualified rather than bypassing that binding. The outer transform applies
+after verification, so composed/moved solids retain exact manufacturing geometry.
+
+Current qualification is Linux source/native/SDK only. New Windows/macOS runtime
+and release-package qualification is not implied. The Join command does not add
+an AI modeling action.

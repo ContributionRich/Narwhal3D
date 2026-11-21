@@ -21,6 +21,12 @@ macOS is not targeted for this release; the historical Apple Silicon 0.4.8 packa
 - New surface publication and failure paths preserve existing documents/displays/history; exact project round trips and imported STEP geometry are tested. This is source validation, not a newly certified release package.
 - A source check is not package certification: published assets require the frozen-source and extracted-package gates documented in `packaging/RELEASING.md`. CageEdit remains an explicitly limited mode, not full deformation parity. The Mac document worker has final-image memory containment and forbids fork/exec before parsing. The separate Corel multiversion helper remains unavailable on Mac.
 
+## Exact surface Join in current source
+
+Join and JoinCopy now support conservative exact Brep surface sewing alongside the existing curve path. Surface sewing uses twice the document absolute tolerance (the default 0.01 supplies 0.02); curves retain their existing tolerance policy. Native membership preserves selected-input provenance, singletons and existing solids stay separate, and meshes/SubD or unsafe surface/trim changes refuse explicitly. This is not a boolean, cap, healing pass or unrestricted compatibility claim. Open connected groups remain open; checked closed shells become exact solids with unchanged faces.
+
+All result geometry is prepared before inputs are consumed. Join replaces only joined source groups; JoinCopy keeps originals, with one ordinary Undo history and scoped rollback that preserves unrelated callback edits. Recipes retain nested operands and a verified exact result for reload/downstream operations. Tested analytic fixtures retain that tree and exact geometry through native-project and 3dm round trips, without a save-time recipe rebase. Missing native capability, verifier or exact document writer refuses by name. Current qualification is Linux source/native/SDK/command coverage, not a new release or Windows/macOS runtime certification. This command does not add an AI Join action.
+
 ## Command compatibility
 
 Narwhal 3D is **not yet at full command parity with established NURBS CAD workflows**. It has a substantial working command set, but many commands, advanced options, selection routes, dialogs, and viewport tools remain missing or incomplete. A registered command name means that command is runnable; it does not guarantee every advanced option or interaction path is complete.

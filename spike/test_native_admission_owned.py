@@ -117,6 +117,21 @@ class OBJRetirement(unittest.TestCase):
 
 
 class AdmissionSource(unittest.TestCase):
+    def test_exact_join_is_required_before_startup_success(self):
+        text = (ROOT / "launch/check_native.py").read_text()
+        tree = ast.parse(text)
+        check = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "check")
+        calls = [n.value.func.id for n in check.body if isinstance(n, ast.Expr)
+                 and isinstance(n.value, ast.Call) and isinstance(n.value.func, ast.Name)]
+        self.assertIn("check_geometry_consumers", calls)
+        self.assertLess(calls.index("check_geometry_consumers"), calls.index("print"))
+        consumer = next(n for n in tree.body if isinstance(n, ast.FunctionDef)
+                        and n.name == "check_geometry_consumers")
+        source = ast.unparse(consumer)
+        for call in ("join_exact_available", "join_breps", "from_recipe", "is_airtight", "face_types", "volume"):
+            self.assertIn(call, source)
+        self.assertNotIn("test_join", source)
+
     def test_runtime_consumers_are_called_before_success_without_developer_scripts(self):
         text = (ROOT/'launch/check_native.py').read_text()
         tree = ast.parse(text)
@@ -156,6 +171,23 @@ class AdmissionSource(unittest.TestCase):
                 self.assertFalse((node.module or '').startswith(('scripts', 'spike')))
 
 class GuardMutations(unittest.TestCase):
+    def test_exact_join_startup_omission_is_red_and_restored(self):
+        path = ROOT / "launch/check_native.py"
+        original = path.read_text()
+        read = Path.read_text
+        anchor = "    check_geometry_consumers()\n"
+        self.assertEqual(original.count(anchor), 1)
+        def omitted(item, *args, **kwargs):
+            return original.replace(anchor, "    pass\n", 1) if item == path else read(item, *args, **kwargs)
+        with patch.object(Path, "read_text", omitted):
+            result = unittest.TestResult()
+            AdmissionSource("test_exact_join_is_required_before_startup_success").run(result)
+            self.assertTrue(result.failures)
+            self.assertFalse(result.errors)
+        restored = unittest.TestResult()
+        AdmissionSource("test_exact_join_is_required_before_startup_success").run(restored)
+        self.assertTrue(restored.wasSuccessful(), restored.errors or restored.failures)
+
     def test_round24_consumer_call_guards_go_red_and_restore(self):
         path = ROOT/'launch/check_native.py'
         read = Path.read_text

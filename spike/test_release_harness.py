@@ -74,6 +74,11 @@ NEW_TESTS = (
     'preview_responsiveness_gui', 'trim_box_gui',
 )
 NEW_SOURCES = (
+    'native/geometry_core/src/join.rs',
+    'native/geometry_core/cpp/join_adapter.inc',
+    'spike/test_join_surfaces.py',
+    'spike/test_join_surface_command.py',
+    'spike/test_join_surface_command_mutation.py',
     'narwhal3d/ai_modeling.py',
     'narwhal3d/display_prepare.py',
     'native/automation_core/src/curve_inspection.rs',
@@ -549,6 +554,24 @@ class HarnessTests(unittest.TestCase):
 
 
 class PublicManifestTests(unittest.TestCase):
+    def test_exact_join_sdk_host_and_mutations_cannot_be_omitted(self):
+        def validate(text):
+            self.assertIn("Rust geometry-core exact Join SDK admission", text)
+            self.assertIn("from test_join_surfaces import run_admission_probe", text)
+            suites = text.split("BLENDER_SUITES=(\n", 1)[1].split("\n)", 1)[0]
+            self.assertIn("    spike/test_join_surface_command.py", suites)
+            self.assertIn("spike/test_join_surface_command_mutation.py --blender", text)
+        text = (ROOT / "run_tests.sh").read_text()
+        validate(text)
+        for marker in ("Rust geometry-core exact Join SDK admission",
+                       "from test_join_surfaces import run_admission_probe",
+                       "    spike/test_join_surface_command.py\n",
+                       "spike/test_join_surface_command_mutation.py --blender"):
+            self.assertEqual(text.count(marker), 1)
+            with self.subTest(omission=marker), self.assertRaises(AssertionError):
+                validate(text.replace(marker, "", 1))
+        validate(text)
+
     def test_modeling_host_and_installed_gui_registration_mutations(self):
         def validate(text):
             suites = text.split("BLENDER_SUITES=(\n", 1)[1].split("\n)", 1)[0]

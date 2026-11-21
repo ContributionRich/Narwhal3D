@@ -16,7 +16,7 @@ import sys
 import tempfile
 from typing import Any
 
-from build_linux_native import UI_CORE_IDENTITY, probe_ui_core, inventory as native_source_inventory
+from build_linux_native import UI_CORE_IDENTITY, probe_ui_core, inventory as native_source_inventory, probe_geometry_core_join, geometry_source_inventory, GEOMETRY_CORE_EXPORTS, GEOMETRY_CORE_REQUIRED_CAPABILITIES
 from check_pure_core import PURE_CORE_PARSE_IDENTITY, probe_pure_core_parser, probe_pure_core_retirement
 
 from release_policy import (
@@ -573,6 +573,22 @@ def verify_ui_core_manifest(native_components: dict) -> None:
         raise VerificationError(str(error)) from error
 
 
+def verify_geometry_core_manifest(native_components):
+    record = native_components.get("libnarwhal_geometry_core.so", {})
+    probe = record.get("geometry_core", {})
+    try:
+        if record.get("source_inputs") != geometry_source_inventory(Path(__file__).resolve().parents[1]):
+            raise ValueError("geometry-core manifest source inputs differ")
+        if (probe.get("abi") != 4
+                or probe.get("capabilities", 0) & GEOMETRY_CORE_REQUIRED_CAPABILITIES != GEOMETRY_CORE_REQUIRED_CAPABILITIES
+                or probe.get("exports") != list(GEOMETRY_CORE_EXPORTS)
+                or probe.get("join_semantics") != {"suite": "exact Join startup", "exact_faces": 3,
+                    "closed": True, "operand_count": 3, "recipe_verified": True}):
+            raise ValueError("geometry-core manifest lacks exact Join evidence")
+    except (OSError, ValueError) as error:
+        raise VerificationError(str(error)) from error
+
+
 def verify_native_library_abis(app_root: Path, python: Path, environment: dict[str, str]) -> None:
     """Execute ABI/export probes against the actual loader slots in the package."""
     native_dir = app_root / NATIVE_COMPONENT_RELATIVE
@@ -621,6 +637,13 @@ def verify_native_library_abis(app_root: Path, python: Path, environment: dict[s
     if actual_abis != expected_abis:
         raise VerificationError(
             f"packaged native accelerator ABIs: expected {expected_abis}, got {actual_abis}")
+
+
+    try:
+        probe_geometry_core_join(app_root / "narwhal3d/native/libnarwhal_geometry_core.so",
+                                 app_root, python, env=environment)
+    except ValueError as error:
+        raise VerificationError(str(error)) from error
 
 
 def verify_executables_and_imports(appdir: Path) -> None:
@@ -795,6 +818,7 @@ def verify_appdir(appdir: Path, args: argparse.Namespace) -> None:
     native_components = manifest.get("native_components")
     verify_native_manifest(appdir, native_components)
     verify_ui_core_manifest(native_components)
+    verify_geometry_core_manifest(native_components)
     if native_components.get("required_glibc") is None:
         raise VerificationError("release manifest lacks native component provenance")
     supervisor_record = native_components.get("narwhal-converter-supervisor")

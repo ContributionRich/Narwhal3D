@@ -31,7 +31,8 @@ enum NarwhalGeometryCapability {
   NARWHAL_GEOMETRY_CAP_EDIT_SESSIONS = UINT64_C(1) << 5,
   NARWHAL_GEOMETRY_CAP_SWEEP1_PARALLEL = UINT64_C(1) << 6,
   NARWHAL_GEOMETRY_CAP_SWEEP1_FREEFORM = UINT64_C(1) << 7,
-  NARWHAL_GEOMETRY_CAP_PREPARE_FREEFORM = UINT64_C(1) << 8
+  NARWHAL_GEOMETRY_CAP_PREPARE_FREEFORM = UINT64_C(1) << 8,
+  NARWHAL_GEOMETRY_CAP_JOIN_EXACT = UINT64_C(1) << 9
 };
 
 enum NarwhalGeometryComponentKind {
@@ -82,6 +83,52 @@ enum NarwhalGeometryQualityScope {
   NARWHAL_GEOMETRY_QUALITY_MAPPED_INCIDENCE = 1U << 4,
   NARWHAL_GEOMETRY_QUALITY_UNCHANGED_GEOMETRY = 1U << 5
 };
+
+/* Additive ABI-4 exact sewing candidate. Input: BinTools compound containing
+ * faces, shells, or solids; output: compound with one child per connected result.
+ * Existing solids pass through, never fuse. Closed valid oriented shells become
+ * solids; open groups are never capped. No approximation/healing fallback.
+ * Tolerance is the caller-qualified sewing distance >=1e-9, finite with a
+ * representable square; no document-unit/global modeling-distance ceiling.
+ * It must not exceed 1/4 of any source face's largest bounding span or any
+ * nondegenerate edge's OCCT arc length. Source tolerance metadata must fit too.
+ * This is OURS conservative unit-covariant feature admission, not tolerance
+ * clipping. Surface/trim identity and validity checks remain mandatory.
+ * At most 4096 edge / 8192 vertex / 4096 face occurrences across direct inputs
+ * are admitted before copying/analysis. The document 2x policy is NOT applied here.
+ * At most 256 input children / 256 non-solid faces. Ambiguous, nonmanifold,
+ * orientation-changing or surface/domain-changing sewing is refused (-7).
+ * Returns byte count; NULL output with zero capacity queries required bytes.
+ * No input/output overlap; refusal/short buffer leaves output untouched.
+ */
+int64_t narwhal_geometry_core_join_exact_v1(
+    const uint8_t *input, size_t length, double tolerance,
+    uint8_t *output, size_t capacity);
+
+/* Mapped exact Join: offsets delimit native input indices for each direct output
+ * child. Members in each group are in input order; every input occurs once.
+ * Singleton results are included here (bridge consumers omit them). A shell input
+ * that would split across groups is refused. Report resets to counts=0 on error;
+ * it must be disjoint from input/output. Query and write reports are identical.
+ */
+typedef struct NarwhalJoinReportV1 {
+  uint32_t struct_size, version;
+  int32_t status;
+  uint32_t input_count, group_count;
+  uint32_t offsets[257], members[256], closed[256];
+} NarwhalJoinReportV1;
+int64_t narwhal_geometry_core_join_mapped_v1(
+    const uint8_t *input, size_t length, double tolerance,
+    uint8_t *output, size_t capacity, NarwhalJoinReportV1 *report);
+/* Verify one frozen result against its rebuilt operand group. Matching uses exact
+ * canonical BinTools bytes, not a group ordinal or geometric proximity. Only
+ * Free/Checked/Modified bookkeeping flags are excluded. Changed geometry, trims,
+ * tolerances or topology refuse; independently ordered equivalent results may
+ * conservatively refuse too. Returns 0 or a negative core error.
+ */
+int32_t narwhal_geometry_core_verify_join_v1(
+    const uint8_t *input, size_t length, const uint8_t *target,
+    size_t target_length, double tolerance);
 
 /* Additive ABI-4 capability. This is OURS parallel-section interpolation, NOT
  * Freeform. Packed doubles: tolerance, section_count (2..4), middle_weight

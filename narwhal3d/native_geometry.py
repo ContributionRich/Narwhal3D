@@ -584,3 +584,88 @@ def _reset_for_tests(cdll_factory=None):
         _binding_cache = None
         _backend_detail = "not checked"
         _cdll_factory = ctypes.CDLL if cdll_factory is None else cdll_factory
+
+
+# Exact Join is an additive ABI-4 candidate. Python only transports SDK bytes and
+# native provenance; it never infers adjacency or substitutes Python sewing.
+CAP_JOIN_EXACT = 1 << 9
+
+
+class JoinReport(ctypes.Structure):
+    _fields_ = [("struct_size", ctypes.c_uint32), ("version", ctypes.c_uint32),
+                ("status", ctypes.c_int32), ("input_count", ctypes.c_uint32),
+                ("group_count", ctypes.c_uint32),
+                ("offsets", ctypes.c_uint32 * 257),
+                ("members", ctypes.c_uint32 * 256),
+                ("closed", ctypes.c_uint32 * 256)]
+
+
+def join_exact_available():
+    with _lock:
+        binding = _load_locked()
+        return (binding is not None
+                and bool(int(binding.library.narwhal_geometry_core_capabilities()) & CAP_JOIN_EXACT)
+                and hasattr(binding.library, "narwhal_geometry_core_join_mapped_v1")
+                and hasattr(binding.library, "narwhal_geometry_core_verify_join_v1"))
+
+
+def _join_failure(status):
+    return MoveResult("refused" if status == STATUS_POLICY_REFUSED else "error",
+                      status=status, detail=(
+                          "exact Join refused unsafe/unsupported topology, orientation, trim change, "
+                          "source tolerance/feature-scale budget, resource limits, disconnected input shell, or snapshot binding"
+                          if status == STATUS_POLICY_REFUSED else
+                          f"exact Join native transport/input failure ({status})"))
+
+
+def join_exact(data, tolerance):
+    """Return (outcome, [(input_indices, closed)]); membership is native, not spatial."""
+    with _lock:
+        if not join_exact_available():
+            return MoveResult("unavailable", detail="native exact Join mapped/verification capability unavailable"), ()
+        try:
+            data = bytes(data)
+            if not data or len(data) > MAX_BUFFER_BYTES:
+                return _join_failure(-2), ()
+            fn = _load_locked().library.narwhal_geometry_core_join_mapped_v1
+            fn.argtypes = [_ByteP, ctypes.c_size_t, ctypes.c_double,
+                           _ByteP, ctypes.c_size_t, ctypes.POINTER(JoinReport)]
+            fn.restype = ctypes.c_int64
+            source = (ctypes.c_ubyte * len(data)).from_buffer_copy(data)
+            info = JoinReport()
+            required = int(fn(source, len(data), tolerance, None, 0, ctypes.byref(info)))
+            if required <= 0 or required > MAX_BUFFER_BYTES:
+                return _join_failure(required), ()
+            if (info.struct_size != ctypes.sizeof(JoinReport) or info.version != 1
+                    or info.status != 0 or not 1 <= info.group_count <= info.input_count <= 256):
+                return MoveResult("error", detail="exact Join report layout/count mismatch"), ()
+            queried = bytes(info)
+            output = (ctypes.c_ubyte * required)()
+            written = int(fn(source, len(data), tolerance, output, required, ctypes.byref(info)))
+            if written != required or bytes(info) != queried:
+                return MoveResult("error", status=written, detail="exact Join output/provenance changed between passes"), ()
+            groups = tuple((tuple(info.members[info.offsets[i]:info.offsets[i + 1]]),
+                            bool(info.closed[i])) for i in range(info.group_count))
+            return MoveResult("ok", data=bytes(output), status=0), groups
+        except (TypeError, ValueError, OverflowError, OSError) as exc:
+            return MoveResult("error", detail=f"exact Join transport failed: {exc}"), ()
+
+
+def verify_join(data, target, tolerance):
+    """Native exact frozen-result/operand binding check; no Python geometry math."""
+    with _lock:
+        if not join_exact_available():
+            return MoveResult("unavailable", detail="native exact Join verification capability unavailable")
+        try:
+            data, target = bytes(data), bytes(target)
+            if not data or not target or max(len(data), len(target)) > MAX_BUFFER_BYTES:
+                return _join_failure(-2)
+            source = (ctypes.c_ubyte * len(data)).from_buffer_copy(data)
+            frozen = (ctypes.c_ubyte * len(target)).from_buffer_copy(target)
+            fn = _load_locked().library.narwhal_geometry_core_verify_join_v1
+            fn.argtypes = [_ByteP, ctypes.c_size_t, _ByteP, ctypes.c_size_t, ctypes.c_double]
+            fn.restype = ctypes.c_int32
+            status = int(fn(source, len(data), frozen, len(target), tolerance))
+            return MoveResult("ok", status=0) if status == 0 else _join_failure(status)
+        except (TypeError, ValueError, OverflowError, OSError) as exc:
+            return MoveResult("error", detail=f"exact Join verification transport failed: {exc}")

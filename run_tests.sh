@@ -249,6 +249,8 @@ if command -v cargo >/dev/null 2>&1; then
     OCCT_SOURCE="$ROOT/vendor/occt-src"
     OCCT_LIBS="$RUNTIME_ROOT/5.2/python/lib/python3.13/site-packages/cadquery_ocp_novtk.libs"
     if [[ -d "$OCCT_SOURCE/src" && -d "$OCCT_LIBS" ]]; then
+        run "Rust geometry-core required source closure" "$PYTHON" -B -c \
+            "import sys; from pathlib import Path; sys.path.insert(0, \"scripts\"); from build_linux_native import geometry_source_inventory; print(geometry_source_inventory(Path.cwd()))"
         run "Rust geometry-core format" cargo +1.95.0 fmt --manifest-path native/geometry_core/Cargo.toml --check
         mkdir -p "$ROOT/tmp"
         GEOMETRY_BUILD_TEST="$ROOT/tmp/geometry-core-build-tests-$$"
@@ -268,6 +270,13 @@ if command -v cargo >/dev/null 2>&1; then
         run "Rust geometry-core Python boundary" env \
             NARWHAL_GEOMETRY_CORE="$ROOT/native/geometry_core/target/release/libnarwhal_geometry_core.so" \
             LD_LIBRARY_PATH="$OCCT_LIBS" "$PYTHON" spike/test_native_geometry.py
+        run "Rust geometry-core exact Join SDK admission" env \
+            NARWHAL_GEOMETRY_CORE="$ROOT/native/geometry_core/target/release/libnarwhal_geometry_core.so" \
+            LD_LIBRARY_PATH="$OCCT_LIBS" "$PYTHON" -B -c \
+            "import sys,json; sys.path.insert(0, \"spike\"); from test_join_surfaces import run_admission_probe; print(json.dumps(run_admission_probe()))"
+        run "exact Join command SDK compatibility" env \
+            NARWHAL_GEOMETRY_CORE="$ROOT/native/geometry_core/target/release/libnarwhal_geometry_core.so" \
+            LD_LIBRARY_PATH="$OCCT_LIBS" "$PYTHON" -B spike/test_join_surface_command.py
         run "Rust geometry-core local-move scale" env \
             NARWHAL_GEOMETRY_CORE="$ROOT/native/geometry_core/target/release/libnarwhal_geometry_core.so" \
             LD_LIBRARY_PATH="$OCCT_LIBS" "$PYTHON" spike/test_local_move_scale.py
@@ -527,6 +536,7 @@ PURE_SUITES=(
 )
 
 BLENDER_SUITES=(
+    spike/test_join_surface_command.py
     spike/test_ai_modeling_host.py
     spike/test_async_display_host.py
     spike/test_library_geometry.py
@@ -614,6 +624,7 @@ done
 
 if [[ -n "${DISPLAY:-}" || -n "${WAYLAND_DISPLAY:-}" ]]; then
     run "UI screenshot suite" ./uishot.sh
+    run "exact Join command publication mutations" "$PYTHON" -B spike/test_join_surface_command_mutation.py --blender "$BLENDER"
     run "v4 real UI interactions" bash spike/v4_live_gui.sh
     # These drivers acquire their own GUI (and sometimes heavy-build) locks.
     # Never invoke them inside v4's lock or as Blender --python payloads.

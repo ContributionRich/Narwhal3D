@@ -37,6 +37,46 @@ COMPONENTS = {
 }
 
 
+GEOMETRY_CORE_EXPORTS = (
+    "narwhal_geometry_core_abi_version",
+    "narwhal_geometry_core_capabilities",
+    "narwhal_geometry_core_edit_session_import",
+    "narwhal_geometry_core_edit_session_move",
+    "narwhal_geometry_core_edit_session_move_mode",
+    "narwhal_geometry_core_edit_session_release",
+    "narwhal_geometry_core_inspect_brep",
+    "narwhal_geometry_core_join_exact_v1",
+    "narwhal_geometry_core_join_mapped_v1",
+    "narwhal_geometry_core_make_box_brep",
+    "narwhal_geometry_core_move_component_brep",
+    "narwhal_geometry_core_prepare_freeform_v1",
+    "narwhal_geometry_core_sweep1_freeform_approx_v1",
+    "narwhal_geometry_core_sweep1_parallel_v1",
+    "narwhal_geometry_core_verify_join_v1",
+)
+GEOMETRY_CORE_REQUIRED_CAPABILITIES = (1 << 10) - 1
+GEOMETRY_CORE_SOURCE = "geometry-core-source.json"
+GEOMETRY_CORE_REQUIRED_SOURCE = (
+    '.gitignore',
+    'Cargo.lock',
+    'Cargo.toml',
+    'README.md',
+    'build.rs',
+    'cpp/freeform_adapter.inc',
+    'cpp/join_adapter.inc',
+    'cpp/occt_adapter.cpp',
+    'cpp/preparation_adapter.inc',
+    'cpp/sweep_adapter.inc',
+    'include/narwhal_geometry_core.h',
+    'src/freeform.rs',
+    'src/freeform_math.rs',
+    'src/height_field.rs',
+    'src/join.rs',
+    'src/lib.rs',
+    'src/preparation.rs',
+    'src/surfacing.rs',
+)
+
 # Packaging contract from native/ui_core/narwhal_ui_core.h. Python only loads the
 # C ABI and checks receipts; all editor and popup behavior remains in Rust.
 UI_CORE_EXPORTS = (
@@ -245,6 +285,55 @@ def digest(path: Path) -> str:
         return hashlib.file_digest(f, "sha256").hexdigest()
 
 
+def geometry_source_inventory(root):
+    root = Path(root)
+    for name in GEOMETRY_CORE_REQUIRED_SOURCE:
+        path = root / "native/geometry_core" / name
+        if not path.is_file() or path.is_symlink():
+            raise ValueError("missing geometry-core source: " + name)
+    return inventory(root, "geometry_core")
+
+
+def verify_geometry_core_source(directory, root, library_name="libnarwhal_geometry_core.so"):
+    receipt, binary = Path(directory) / GEOMETRY_CORE_SOURCE, Path(directory) / library_name
+    if any(not path.is_file() or path.is_symlink() for path in (receipt, binary)):
+        raise ValueError("missing regular geometry-core source receipt/library")
+    record = json.loads(receipt.read_text())
+    if record.get("inputs") != geometry_source_inventory(root) or record.get("sha256") != digest(binary):
+        raise ValueError("geometry-core source/binary receipt differs")
+    probe = record.get("geometry_core", {})
+    if (probe.get("abi") != 4
+            or probe.get("capabilities", 0) & GEOMETRY_CORE_REQUIRED_CAPABILITIES != GEOMETRY_CORE_REQUIRED_CAPABILITIES
+            or probe.get("exports") != list(GEOMETRY_CORE_EXPORTS)
+            or probe.get("join_semantics") != {"suite": "exact Join startup", "exact_faces": 3,
+                "closed": True, "operand_count": 3, "recipe_verified": True}):
+        raise ValueError("geometry-core source receipt lacks exact Join qualification")
+    return record
+
+
+def probe_geometry_core_join(library, root=None, python=None, *, env=None):
+    """Check all existing exports/capabilities and, with a root, actual SDK semantics."""
+    code = 'import ctypes,json,os,sys,types,runpy\nfrom pathlib import Path\npath,root,exports,required=sys.argv[1:]\nlib=ctypes.CDLL(path)\nfor name in json.loads(exports): getattr(lib,name)\nlib.narwhal_geometry_core_abi_version.restype=ctypes.c_uint32\nlib.narwhal_geometry_core_capabilities.restype=ctypes.c_uint64\nabi=int(lib.narwhal_geometry_core_abi_version()); caps=int(lib.narwhal_geometry_core_capabilities())\nassert abi==4 and caps & int(required)==int(required),(abi,caps)\nresult=dict(abi=abi,capabilities=caps,exports=json.loads(exports))\nif root:\n    os.environ["NARWHAL_GEOMETRY_CORE"]=path\n    package=types.ModuleType("narwhal3d"); package.__path__=[str(Path(root)/"narwhal3d")]\n    sys.modules["narwhal3d"]=package\n    namespace=runpy.run_path(str(Path(root)/"launch/check_native.py"),run_name="geometry_join_admission")\n    result["join_semantics"]=namespace["check_geometry_consumers"]()\nprint(json.dumps(result,sort_keys=True))\n'
+    try:
+        completed = subprocess.run(
+            [str(python or sys.executable), "-I", "-c", code, str(Path(library).resolve()),
+             str(Path(root).resolve()) if root else "", json.dumps(GEOMETRY_CORE_EXPORTS),
+             str(GEOMETRY_CORE_REQUIRED_CAPABILITIES)],
+            env=env, text=True, capture_output=True, timeout=60, check=True)
+        result = json.loads(completed.stdout.strip())
+        if (result.get("abi") != 4 or result.get("capabilities", 0) & GEOMETRY_CORE_REQUIRED_CAPABILITIES
+                != GEOMETRY_CORE_REQUIRED_CAPABILITIES
+                or result.get("exports") != list(GEOMETRY_CORE_EXPORTS)):
+            raise ValueError("geometry ABI/export/capability admission differs")
+        if root and result.get("join_semantics") != {
+                "suite": "exact Join startup", "exact_faces": 3, "closed": True,
+                "operand_count": 3, "recipe_verified": True}:
+            raise ValueError("exact Join SDK admission differs")
+        return result
+    except (OSError, subprocess.SubprocessError, ValueError) as error:
+        raise ValueError("exact Join geometry admission failed: " + str(error)) from error
+
+
 def inventory(root: Path, crate: str) -> dict[str, str]:
     roots = [root / "native" / crate]
     if crate == "welcome":
@@ -288,7 +377,7 @@ def main() -> None:
     target = out / (args.crate + "-target")
     if not target.exists():
         subprocess.run(["cp", "-a", "--reflink=auto", str(args.seed_target), str(target)], check=True)
-    before = inventory(root, args.crate)
+    before = geometry_source_inventory(root) if args.crate == "geometry_core" else inventory(root, args.crate)
     home = Path.home()
     mode = "test" if args.test else "build"
     command = ["podman", "run", "--rm", "--name", f"narwhal048-native-{args.crate}",
@@ -318,13 +407,20 @@ def main() -> None:
     log = out / f"{args.crate}-{mode}.log"
     with log.open("w") as stream:
         completed = subprocess.run(command, stdout=stream, stderr=subprocess.STDOUT, timeout=1830)
-    after = inventory(root, args.crate)
+    after = geometry_source_inventory(root) if args.crate == "geometry_core" else inventory(root, args.crate)
     receipt = {"command": command, "inputs": before, "source_unchanged": before == after,
                "returncode": completed.returncode, "log_sha256": digest(log)}
     (out / f"{args.crate}-{mode}-receipt.json").write_text(json.dumps(receipt, indent=2) + "\n")
     if completed.returncode or before != after:
         raise SystemExit(f"{args.crate}: failed or source changed; inspect {log}")
     if not args.test:
+        if args.crate == "geometry_core":
+            interpreter = args.occt_libs.resolve().parents[3] / "bin/python3.13"
+            environment = dict(os.environ, LD_LIBRARY_PATH=str(args.occt_libs.resolve()),
+                               PYTHONDONTWRITEBYTECODE="1")
+            receipt["geometry_core"] = probe_geometry_core_join(
+                target / "release/libnarwhal_geometry_core.so", root, interpreter, env=environment)
+            (out / f"{args.crate}-{mode}-receipt.json").write_text(json.dumps(receipt, indent=2) + "\n")
         if args.crate == "pure_core":
             receipt["pure_core_parser"] = probe_pure_core_parser(target / "release/libnarwhal_pure_core.so")
             receipt["pure_core_retirement"] = probe_pure_core_retirement(target / "release/libnarwhal_pure_core.so")
@@ -339,6 +435,10 @@ def main() -> None:
             if destination.exists() and digest(destination) != digest(source):
                 raise SystemExit(f"refusing to overwrite previously staged {destination}")
             shutil.copy2(source, destination)
+        if args.crate == "geometry_core":
+            (out / "bin" / GEOMETRY_CORE_SOURCE).write_text(json.dumps(
+                {"inputs": before, "sha256": digest(out / "bin/libnarwhal_geometry_core.so"),
+                 "geometry_core": receipt["geometry_core"]}, sort_keys=True) + "\n")
         if args.crate == "ui_core":
             (out / "bin" / UI_CORE_SOURCE).write_text(json.dumps(
                 {"inputs": before, "sha256": digest(out / "bin/libnarwhal_ui_core.so")},

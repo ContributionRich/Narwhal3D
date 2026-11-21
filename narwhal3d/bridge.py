@@ -9164,6 +9164,87 @@ def _build_polycurve_chain(members, geoms, tolerance=None):
     return out
 
 
+def join_breps(items, tolerance):
+    """Exact Join candidate: [(name, Brep)] -> [(names, new Brep, closed)].
+
+    Only native connected groups consuming at least two distinct inputs are
+    returned. Singletons/solids are omitted and caller inputs are never modified.
+    Names in each group retain selection order. ``tolerance`` is the already
+    qualified sewing distance; the command's 2x-document policy is NOT repeated.
+    Raise KernelError by name on unsupported input/capability/geometry or missing
+    exact document writer. No mesh/proxy or Python sewing fallback is permitted.
+    Python is unavoidable rhino3dm/OCP handle and persistence glue only.
+    """
+    from copy import deepcopy
+    k, occt, native = _kernel(), _occt(), _native_geometry()
+    if occt is None or native is None or not native.join_exact_available():
+        raise k.KernelError("native exact Join mapped/verification capability unavailable")
+    items = list(items)
+    if not 2 <= len(items) <= 256:
+        raise k.KernelError("exact Join requires two to 256 surface/polysurface inputs")
+    names, shapes, recipes = [], [], []
+    for name, geom in items:
+        if name in names:
+            raise k.KernelError(f"exact Join duplicate input name: {name!r}")
+        if not isinstance(geom, r3.Brep) or not geom.IsValid:
+            raise k.KernelError(f"exact Join {name!r}: expected a valid Brep")
+        if k.representation_of(geom) == k.MESH_DERIVED:
+            raise k.KernelError(f"exact Join {name!r}: faceted/mesh-derived input is unsupported")
+        # Convert a private SDK copy when a plain exact Brep has no recipe. Never
+        # attach recipes/tags to caller inputs merely to attempt a join.
+        operand = geom.Duplicate()
+        shape, recipe = _occt_operand(geom), k.recipe_of(geom)
+        if shape is not None and recipe is None:
+            recipe = occt.native_master_recipe(shape)
+        if shape is None or recipe is None:
+            if k.representation_of(geom) == k.ANALYTIC_MASTER:
+                raise k.KernelError(f"exact Join {name!r}: analytic master/recipe is unavailable")
+            if not record_exact_recipe(operand, tolerance=tolerance):
+                raise k.KernelError(f"exact Join {name!r}: no exact rebuildable operand: {last_occt_decline()}")
+            shape, recipe = k.master_of(operand), k.recipe_of(operand)
+        # Keep nested construction history; native replay below refuses a stale
+        # operand recipe instead of silently binding the wrong geometry.
+        names.append(name)
+        shapes.append(shape)
+        recipes.append(deepcopy(recipe))
+    outcome, mapping = native.join_exact(occt.join_pack(shapes), tolerance)
+    if not outcome.ok:
+        raise k.KernelError(outcome.detail)
+    groups = occt.join_unpack(outcome.data)
+    if len(groups) != len(mapping):
+        raise k.KernelError("exact Join group/provenance count mismatch")
+    results = []
+    for shape, (indices, closed) in zip(groups, mapping):
+        if len(indices) < 2:
+            continue
+        # Rebuild this natively traced subset in isolation: unrelated groups can
+        # change OCCT traversal/serialization order, which must not become part of
+        # a group's persistent binding. Membership is never rediscovered spatially.
+        isolated, isolated_map = native.join_exact(occt.join_pack([shapes[i] for i in indices]), tolerance)
+        if (not isolated.ok or len(isolated_map) != 1
+                or isolated_map[0] != (tuple(range(len(indices))), closed)):
+            raise k.KernelError("exact Join group isolation/provenance failed: " + isolated.detail)
+        isolated_groups = occt.join_unpack(isolated.data)
+        if len(isolated_groups) != 1:
+            raise k.KernelError("exact Join isolated result count mismatch")
+        shape = isolated_groups[0]
+        recipe = {"kind": "join_exact", "version": 1,
+                  "operands": [recipes[i] for i in indices],
+                  "tolerance": tolerance, "result": occt.native_master_recipe(shape)}
+        # Binding is native and exact, not a nearest group index or sampled test.
+        occt.from_recipe(recipe)
+        brep = _onbrep().exact_brep(shape, occt)
+        if brep is None or not brep.IsValid or brep.IsSolid != closed:
+            raise k.KernelError("exact Join exact document conversion failed: "
+                                f"{_onbrep().last_error()}; no faceted fallback")
+        if (not brep.SetUserString(k.DOCUMENT_FORM_KEY, "exact")
+                or not k.record_recipe(brep, recipe)):
+            raise k.KernelError("exact Join could not persist its recipe tree")
+        k.register_master(brep, shape)
+        results.append(([names[i] for i in indices], brep, closed))
+    return results
+
+
 def join_curves(items, tolerance):
     """Join what can be joined among `items`.
 
