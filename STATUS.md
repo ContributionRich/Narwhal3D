@@ -10,10 +10,10 @@ Linux acceptance covers extracted-package integrity, exact torus/project round t
 
 macOS is not targeted for this release; the historical Apple Silicon 0.4.8 package is unchanged. Consult the release notes for checksums and detailed validation limitations.
 
-- **Current source AI (not the published 0.4.13 binaries):** Rust validates bounded typed modeling batches, dependencies, Review/Build authority, inspection and stable-object edits; the existing exact geometry kernel remains authoritative. Review requires approval; Build is a persistent local opt-in, not permission for arbitrary commands. Exact primitives, curves, extrusion, booleans, loft, open-rail pipe and revolve have focused host coverage, including Undo/Redo and project reload. General layer/group control and unrestricted command execution are not implemented.
+- **Current source AI (not the published 0.4.13 binaries):** Rust validates bounded typed modeling batches, dependencies, Review/Build authority, inspection and stable-object edits; the existing exact geometry kernel remains authoritative. Review requires approval; Build is a persistent local opt-in, not permission for arbitrary commands. Exact primitives, curves, extrusion, booleans, loft, open-rail pipe, revolve and bounded Join/Cap have focused host coverage, including Undo/Redo and project reload. General layer/group control and unrestricted command execution are not implemented.
 - Viewport sharing requires separate one-shot local consent. Export is STEP or selected-object 3dm, requires a new local destination on every call, refuses overwrites, and never accepts a provider path. AI diagnostics in Bug Report are separately opt-in and contain structural metadata, not chat/images/credentials.
 - Modeling display preparation uses bounded disposable workers before publication. Prepared display data is bound to the exact prelaunch master serialization (SHA-256, without triangulation), rechecked on collection and every use; identity alone is insufficient for mutable SDK handles. Failure/cancellation refuses publication, never replacing analytic geometry or retrying meshing synchronously. Display meshing can be canceled while running; construction cancellation is checked between SDK steps. Final publication remains synchronous (about 2.5 seconds in a recorded case, not a maximum-time guarantee).
-- **Platform qualification is component-specific:** a separate Windows VM run passed the supervisor executable's 5 unit tests plus 1 worker-policy test and the automation **library's 125 unit tests**. Supervisor process-tree EOF/byte cancellation, no-opt-in behavior, timeout and a 96MiB memory guard were exercised. This is not all 149 Linux automation tests, Windows modeling/OCP display-job qualification, or a new release. The external automation/MCP **server is currently Unix-only**; its Windows build fails on Unix socket/FD/signal APIs already present in the source baseline. The Windows in-app library is a distinct component. macOS display-worker containment is unqualified and this display route explicitly refuses there.
+- **Platform qualification is component-specific:** a separate Windows VM run passed the supervisor executable's 5 unit tests plus 1 worker-policy test and the automation **library's 125 unit tests**. Supervisor process-tree EOF/byte cancellation, no-opt-in behavior, timeout and a 96MiB memory guard were exercised. This is not the complete current Linux automation suite, Windows modeling/OCP display-job qualification, or a new release. The external automation/MCP **server is currently Unix-only**; its Windows build fails on Unix socket/FD/signal APIs already present in the source baseline. The Windows in-app library is a distinct component. macOS display-worker containment is unqualified and this display route explicitly refuses there.
 - **Design quality remains limited:** measured exact clock features and follow-up edits do not establish robust whale/taco aesthetics. Reviewed real-provider outputs remain crude assemblies; successful tool completion is not visual acceptance. Broader resumability, general layer/group controls and separately approved MCP screenshot sharing remain incomplete. Real-provider tests are explicit opt-ins, never default network-dependent gates.
 - The revised welcome window shows installed version and actual update status. The AI panel uses role-aware messages, truthful request status and centered action labels; Bug Report uses a category dropdown and one full-width Submit report action.
 - The read-only MCP entrypoint supports both protocol eras (2025-11-25 and 2026-07-28) and nine bounded metadata tools. Build/stage matching native automation components for source use; old 0.4.7 binaries do not gain these features automatically. The Windows package includes the in-app automation library, not the Unix-only external MCP transport.
@@ -25,7 +25,7 @@ macOS is not targeted for this release; the historical Apple Silicon 0.4.8 packa
 
 Join and JoinCopy now support conservative exact Brep surface sewing alongside the existing curve path. Surface sewing uses twice the document absolute tolerance (the default 0.01 supplies 0.02); curves retain their existing tolerance policy. Native membership preserves selected-input provenance, singletons and existing solids stay separate, and meshes/SubD or unsafe surface/trim changes refuse explicitly. This is not a boolean, cap, healing pass or unrestricted compatibility claim. Open connected groups remain open; checked closed shells become exact solids with unchanged faces.
 
-All result geometry is prepared before inputs are consumed. Join replaces only joined source groups; JoinCopy keeps originals, with one ordinary Undo history and scoped rollback that preserves unrelated callback edits. Recipes retain nested operands and a verified exact result for reload/downstream operations. Tested analytic fixtures retain that tree and exact geometry through native-project and 3dm round trips, without a save-time recipe rebase. Missing native capability, verifier or exact document writer refuses by name. Current qualification is Linux source/native/SDK/command coverage, not a new release or Windows/macOS runtime certification. This command does not add an AI Join action.
+All result geometry is prepared before inputs are consumed. Join replaces only joined source groups; JoinCopy keeps originals, with one ordinary Undo history and scoped rollback that preserves unrelated callback edits. Recipes retain nested operands and a verified exact result for reload/downstream operations. Tested analytic fixtures retain that tree and exact geometry through native-project and 3dm round trips, without a save-time recipe rebase. Missing native capability, verifier or exact document writer refuses by name. Current qualification is Linux source/native/SDK/command coverage, not a new release or Windows/macOS runtime certification. The current typed AI catalog additionally exposes bounded Join/Cap; see the technical reference for scope and containment.
 
 ## Command compatibility
 
@@ -115,3 +115,33 @@ Whole-repository tracked Python is now **13,496,048 bytes**, **15,016 bytes remo
 The remaining compressed Python UI DATA module has been removed. Its exact 2,542,173-byte original capture is now non-executable JSON, verified by independent Rust SHA-256/schema guards and a minimal hash-checked host loader. All 120 actual font-layout/callback cases, 900 actual popup events, editor adapter steps and Unicode adapter checks remain. The obsolete Python-DATA privacy exception is gone: Python source receives the full source scan, and restoring retired fixture modules is rejected. Existing native numerical acceptance is unchanged. This is fixture packaging/security and Rust validation retirement, **not a new production UI/layout implementation**.
 
 Whole-repository tracked Python is **13,420,854 bytes**, **75,194 bytes removed** at this checkpoint. The full public test run completed uninterrupted with exit 0 and no source drift, including the UI screenshot suite (36/36) and normal X11 welcome startup (5/5). UI source qualification includes 36 required inputs; JSON schema parsing is a pinned development-only Rust dependency, not a runtime dependency. The native UI ABI and library bytes are unchanged. No new Windows runtime or release-package acceptance is claimed; downloaded 0.4.13 packages remain unchanged.
+
+## Exact planar Cap checkpoint
+
+Current source adds native exact planar Cap with unchanged curved surfaces,
+verified nested recipe replay, document-tolerance command plumbing and mandatory
+Rust-supervised hostile-input decoding. Typed AI Join (one connected 2–16-source
+group) and Cap support dependent Normal-loft→Cap and exact shared-trim Join→Cap
+batches. No general hole filling, unsafe trim repair or faceted fallback is added.
+The [technical reference](docs/technical-reference.md#exact-planar-cap-and-typed-ai-joincap)
+states resource, platform, reference-research and aesthetic limits. Existing
+Windows unit-test results do not qualify these new OCP jobs. This is not a release.
+
+### Shifted-seam conversion qualification
+
+The conical Straight-loft Cap regression now uses a native seam-safe exact NURBS
+conversion. For bounded full-period cone/cylinder/sphere/torus faces with shifted
+angular U seams, it constructs the rational surface at the actual angular bounds,
+not by segmenting rational U as if it were angle U. The analytic master remains
+unchanged; trim/iso flags are not forced and geometry is not approximated. Startup
+and package admission require the converter export and a three-face conical Cap
+with volume 98π, alongside the cylinder and tamper-rejection checks. Source checks
+are not certification of Windows/macOS jobs or a new release.
+
+## Curve-query integration
+
+Current source adds command-local Offset preview sample memoization, qualified
+Polyline/Rectangle record intersection and nearest-point routes, and batched
+overlap queries. Existing parameter/bit semantics and refusal fallbacks remain;
+new direct polyline routes are Linux x86_64 plus loaded-SDK-witness gated, not
+Windows/macOS-qualified. No new approximate document geometry is introduced.

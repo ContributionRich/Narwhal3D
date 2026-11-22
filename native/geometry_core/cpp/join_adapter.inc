@@ -17,6 +17,7 @@ struct JoinReport {
   std::uint32_t offsets[257],members[256],closed[256];
 };
 std::string join_binding_bytes(TopoDS_Shape shape) {
+  exact_shape_budget(shape,4096);
   // BinTools includes non-geometric ownership and analysis cache flags. Clear
   // only these on private decoded/rebuilt shapes; retain closure/orientation,
   // incidence, tolerances, geometry and every numeric coefficient exactly.
@@ -78,6 +79,7 @@ void join_check_feature_budget(const TopoDS_Shape& part,double tolerance) {
   }
 }
 TopoDS_Shape join_exact_candidate(const TopoDS_Shape& input, double tolerance, JoinTrace& trace) {
+  exact_shape_budget(input,4096);
   if (input.ShapeType()!=TopAbs_COMPOUND) throw JoinRefusal{};
   BRep_Builder builder;
   TopoDS_Compound output; builder.MakeCompound(output);
@@ -139,6 +141,7 @@ TopoDS_Shape join_exact_candidate(const TopoDS_Shape& input, double tolerance, J
   if (sewing.NbMultipleEdges()!=0 || sewing.NbDeletedFaces()!=0) throw JoinRefusal{};
   const auto result=sewing.SewedShape();
   if (result.IsNull()) throw JoinRefusal{};
+  exact_shape_budget(result,4096);
   std::vector<TopoDS_Face> faces;
   for (TopExp_Explorer ex(result,TopAbs_FACE);ex.More();ex.Next()) faces.push_back(TopoDS::Face(ex.Current()));
   if (faces.size()!=source.size()) throw JoinRefusal{};
@@ -204,6 +207,7 @@ extern "C" std::int32_t narwhal_occt_adapter_join_exact(
     JoinTrace trace;
     const auto result=join_exact_candidate(shape,tolerance,trace);
     return copy_serialized(serialize_shape(result),output,capacity,required);
+  } catch (const ExactBudgetExceeded&) { return kPolicyRefused;
   } catch (const JoinRefusal&) { return kPolicyRefused;
   } catch (const std::invalid_argument&) { return kMalformedBrep;
   } catch (const Standard_Failure&) { return kKernelFailure;
@@ -329,6 +333,7 @@ extern "C" std::int32_t narwhal_occt_adapter_join_mapped(
     if (n!=trace.input_count) throw JoinRefusal{};
     const auto status=copy_serialized(serialize_shape(result),output,capacity,required);
     *report=info; return status;
+  } catch (const ExactBudgetExceeded&) { return kPolicyRefused;
   } catch (const JoinRefusal&) { return kPolicyRefused;
   } catch (const std::invalid_argument&) { return kMalformedBrep;
   } catch (const Standard_Failure&) { return kKernelFailure;
@@ -347,6 +352,7 @@ extern "C" std::int32_t narwhal_occt_adapter_verify_join(
     // exactly its canonical BinTools payload. No nearest face/group ordinal matching.
     if (join_binding_bytes(it.Value())!=join_binding_bytes(expected)) throw JoinRefusal{};
     return kOk;
+  } catch (const ExactBudgetExceeded&) { return kPolicyRefused;
   } catch (const JoinRefusal&) { return kPolicyRefused;
   } catch (const std::invalid_argument&) { return kMalformedBrep;
   } catch (const Standard_Failure&) { return kKernelFailure;

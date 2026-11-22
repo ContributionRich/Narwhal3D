@@ -55,11 +55,17 @@ def distance_to_curve(curve, point, n: int = 256):
     sampling `sample_curve_offset` relies on. Pure, no bpy. The samples come from
     `sample_curve_xyz` (Rust for a NurbsCurve, the same points).
     """
+    return distance_to_samples(sample_curve_xyz(curve, n), point)
+
+
+def distance_to_samples(samples, point):
+    """`distance_to_curve` over samples already taken (``(x, y, z)`` tuples), so a caller
+    that keeps a curve's samples gets the same answer without sampling it again."""
     import math
 
     px, py, pz = point
     best = math.inf
-    for p in sample_curve_xyz(curve, n):
+    for p in samples:
         best = min(best, math.dist((px, py, pz), p))
     return best
 
@@ -7293,32 +7299,41 @@ def offset_surface_solid(geom, distance):
     return occt_backed(out, rec)
 
 
-def cap_planar_holes_occt(geom):
-    """Close `geom`'s planar ends ANALYTICALLY, or None if it has no master/recipe.
+def cap_planar_holes_occt(geom, tolerance=1e-6):
+    """Exact planar lids at document absolute `tolerance`, or None with a reason.
 
-    The mesh version rebuilds the WHOLE brep, so capping a 1-curved-face open cylinder gave
-    212 facet-like faces -- it destroyed the curved wall to add two lids. This touches only the
-    lids: a pipe caps to `{TORUS: 1, PLANE: 2}`.
+    Callers should pass document tolerance explicitly; 1e-6 is the historical
+    compatibility default. No mesh fallback is performed by this entry point.
+    Source geometry/master/history are unchanged. Success has one exact airtight
+    solid master and a verified nested source/snapshot/result recipe tree.
     """
     occt = _occt()
     if occt is None:
+        _decline("OCCT unavailable for exact Cap")
         return None
-    operand = _occt_operand(geom)
-    if operand is None:
+    k = _kernel()
+    # Never rebuild a recipe in the app while preparing Cap: its BinTools may
+    # carry hostile counts. Only live process-local masters are serialized here.
+    operand, base = k.master_of(geom), k.recipe_of(geom)
+    if operand is None and not base:
         _decline("the shape has no registered master and no rebuildable recipe")
         return None
     try:
-        shape = occt.cap_planar_holes(operand)
-        proxy = _proxy_from_occt(shape)
+        from . import cap_worker
+        data = occt.shape_to_bytes(operand, triangles=False) if operand is not None else None
+        shape, rec = cap_worker.submit('create', source=data, recipe=base, tolerance=tolerance)
+        proxy = _onbrep().exact_brep(shape, occt)
+        if proxy is None or not proxy.IsValid or not proxy.IsSolid:
+            raise k.KernelError("exact Cap document conversion failed: "
+                                f"{_onbrep().last_error()}; no faceted fallback")
+        if (not proxy.SetUserString(k.DOCUMENT_FORM_KEY, "exact")
+                or not k.record_recipe(proxy, rec)):
+            raise k.KernelError("exact Cap could not persist its recipe tree")
     except Exception as e:  # noqa: BLE001
         _decline(f"{type(e).__name__}: {e}")
         return None
-    _decline(None)
-    k = _kernel()
     k.register_master(proxy, shape)
-    base = k.recipe_of(geom)
-    if base:
-        k.record_recipe(proxy, {"kind": "cap", "a": base})
+    _decline(None)
     return proxy
 
 
@@ -7701,9 +7716,12 @@ def cap_planar_holes(geom, tolerance: float = 1e-6):
 
     if bool(getattr(geom, "IsSolid", False)):
         return CapResult(geom, capped=0, warning="already a closed solid; unchanged")
-    analytic = cap_planar_holes_occt(geom)
+    analytic = cap_planar_holes_occt(geom, tolerance=tolerance)
     if analytic is not None:
         return CapResult(analytic, capped=1, warning="")
+    k = _kernel()
+    if k.master_of(geom) is not None or k.recipe_of(geom):
+        raise ValueError("cap: exact closure refused; no faceted fallback: " + str(last_occt_decline()))
     try:
         from . import tessellate
     except ImportError:  # support direct-file loading outside the package

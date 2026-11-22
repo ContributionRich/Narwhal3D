@@ -93,7 +93,7 @@ Remaining work includes:
 |---|---|---|
 | Analytic primitives | Partial | Remaining construction modes and editable parameters |
 | Booleans | Partial | Multi-result transactions, Boolean split, merge-face behavior, history/edit workflows |
-| Shell/cap | Partial | Existing-feature editing, broader B-rep adoption, non-planar filling as fitted surface |
+| Shell/cap | Partial | Exact planar Cap preserves analytic/NURBS walls with supervised native admission and verified recipes. Nonplanar filling, general healing and broader B-rep adoption remain unsupported. |
 | Edge fillet/chamfer | Partial | Variable/asymmetric values, chains, setback/corner controls, exact preview and editing |
 | Move face/edge | Partial | More analytic/topological cases, multiple compatible faces, boundary constraints |
 | Push/pull | Partial | Inner loops, holes, curved faces, robust topology remapping |

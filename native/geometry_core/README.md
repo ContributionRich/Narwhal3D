@@ -326,3 +326,140 @@ after verification, so composed/moved solids retain exact manufacturing geometry
 Current qualification is Linux source/native/SDK only. New Windows/macOS runtime
 and release-package qualification is not implied. The Join command does not add
 an AI modeling action.
+
+## Exact planar Cap candidate
+
+ABI4 additive capability bit10 requires both `narwhal_geometry_core_cap_exact_v1`
+and `narwhal_geometry_core_verify_cap_v1`; no old symbol is renamed. The first
+accepts one exact BinTools face/shell (or an already valid outward solid), an
+explicit absolute document tolerance, and caller-owned output storage. Query/fill
+semantics and negative errors match the existing ABI. The tolerance is **not**
+Join's command-layer 2x tolerance. It must be finite, square-safe and >=1e-9,
+cover source face/edge/vertex metadata, and satisfy the existing unit-covariant
+quarter-feature guard. There is no fixed document-unit ceiling.
+
+Only planar free boundaries are closed, and only one valid outward airtight
+solid is published. Strictly separated coplanar simple loops form a containment
+forest; odd-depth loops remain holes in their enclosing even-depth planar lid.
+Touching/crossing/ambiguous loops, nonplanar/open wires, changed source surfaces,
+locations, UV bounds or trim coefficients, nonmanifold/invalid/self-intersecting
+results and unsupported topology refuse. No healing, surface fitting, boundary
+extension, geometry triangulation or partial cap result is available. OCCT's
+numerical validity/interference checks are not a formal mathematical proof for
+arbitrary pathological NURBS.
+
+Admission bounds are 256 faces, 4096 edges, 8192 vertices, 64 free closed wires,
+512 MiB transport spans, 65536 aggregate direct BSpline/Bezier surface and edge
+poles, 16384 direct surface knots, and spline degree <=25. Resource exhaustion
+returns -2, not a partially constructed result. Shape decoding has the existing
+core limits before these stricter operation limits. Operations use private
+copied topology/geometry; source masters and document objects are untouched.
+
+The bridge entry point is `cap_planar_holes_occt(geom, tolerance=1e-6)`: pass the
+actual document tolerance explicitly. Success returns an exact document Brep with
+a registered master and verified `kind=cap, version=1` recipe; refusal returns
+None and `last_occt_decline()` explains why. An unavailable native capability or
+exact document writer refuses rather than falling back to facets. New recipes
+nest `a` plus explicit `tolerance`, a frozen native `source`, and frozen `result`.
+Replay must prove both source/tree correspondence and exact reproduced result.
+Outer transforms apply after this proof. Historical unversioned cap trees still
+read with their legacy default 1e-6. Existing closed-solid command behavior and
+Join's contract are unchanged.
+
+MEASURED: a Normal loft through four closed circles of varying radii already
+registers an exact one-face degree-(2,3) rational BSpline master at the base
+revision; no producer-registration repair was needed. It caps to one unchanged
+BSpline wall plus two planes. Exact trimmed patches of that loft also Join then
+Cap successfully. Independently interpolated quarter-curve lofts were refused by
+the preexisting strict Join contract; this candidate does not loosen Join.
+
+Qualification entry point: `spike/test_cap_surfaces.py:run_admission_probe()`.
+Startup/build/package qualification must run it against the candidate before activation. The minimal
+actual-SDK suite covers smooth rational lofts, joined loft patches, cylinders,
+annular bore preservation, refusal/tolerance/source immutability, old/new/tampered
+recipe trees, and fresh-process .3dm reload after transform followed by exact
+booleans and analytic/NURBS STEP export. Native `cap::` tests cover ABI metadata,
+untouched short output buffers, limits, planar/nonplanar/self-crossing inputs,
+exact cylinder/annular volumes and byte-exact snapshot binding. Deliberate native
+and producer/glue mutations were observed red and restored. This is Linux source
+qualification only, not Windows/macOS or portable release-binary admission.
+
+### Cap hostile-input containment (source review follow-up)
+
+The native post-decode geometry budget is **not** an allocation bound on
+`BinTools::Read`. Direct C ABI callers MUST isolate untrusted decoding. Production
+Cap now always uses `narwhal3d/cap_worker.py` behind the existing Rust converter
+supervisor, including bridge creation without a live master, old/new cap recipe
+replay, source-tree rebuilds, and three-operand snapshot verification. The app
+never decodes the supplied cap source/snapshot/result bytes itself. Private local
+ABI helpers fail closed unless executing in the canonical worker entry. Nested
+cap recipes stay in that same process; no document/environment flag can opt into
+local decoding. No Python supervisor fallback is reachable.
+
+The worker has a 30-second Rust deadline and 4096 MiB memory ceiling (Linux address
+space / Windows job memory), bounded output draining, and process-tree teardown.
+macOS fails closed pending containment qualification. Requests are limited to
+32 MiB aggregate JSON/binary inputs; freshly generated binary output to 32 MiB,
+recipe/report output to 64 MiB. Writes are fixed-name files in a private temporary
+directory; it is removed after success/refusal. Parent-side decoding is restricted
+to the freshly serialized output of a successful supervised operation: native
+admission, exact cap validity and source/snapshot/result correspondence completed
+before emission. This provenance is not a hash-based permission to decode an
+arbitrary input file. Source-only checks do not certify a release/package.
+
+`cpp/exact_budget.inc` is shared with Join, without changing Join's policy-refusal
+status. Before validity, FreeBounds, sewing or trim conversion it counts topology
+**occurrences**, not just unique TShapes: 32768 total nodes, 16384 edge occurrences,
+4096 wire occurrences, depth 32, 256 cap face occurrences (4096 for Join's aggregate
+admission), and the existing unique edge/vertex limits. It checks raw surface/3-D
+curve handles without transformed copies, both stored seam pcurves and vertex
+pcurve representations, regularity surfaces, spline basis wrappers (depth 8),
+degree <=25, <=4096 poles per curve / surface direction, <=65536 aggregate geometry
+poles and <=16384 aggregate knots. Edge/vertex representation lists together are
+limited to 16384 entries. Unsupported geometry representations refuse. All three
+Cap binding operands and the sewn result are admitted before canonical encoding
+or trim conversion; source geometry and exact trim checks remain unchanged.
+
+Qualification adds native first/second seam and vertex pcurves, aggregate 2-D
+knots, occurrence DAGs and all binding slots. Actual-SDK faults run malformed
+BinTools counts only inside the supervised child, including a tiny stream asking
+for >32 GiB before reading pole data. Parent decoder spies prove no attempted
+source/replay decode in the app; injected worker sleep and allocation failures
+prove timed/memory-limited named refusal. Source bytes/objects remain unchanged.
+New pcurve, occurrence, binding-slot and parent-route mutations were seen red,
+restored, then rerun green. The supervisor implementation and conservative Join command policy are unchanged;
+source inventories, startup and package admission require the new Cap contract.
+
+### Shifted-seam exact document conversion
+
+`narwhal_geometry_core_nurbs_convert_seam_safe_v1` is an additive ABI4 export,
+used by `occt_backend._nurbs_convert` for the exact document conversion boundary.
+An old binary lacking it fails closed; activation/package symbol admission must
+include it. The Rust module is `src/exact_conversion.rs`, the OCCT-only boundary
+`cpp/exact_conversion.inc`. No capability bit or existing export was renamed.
+
+MEASURED OCCT 8.0.1 defect: `GeomConvert_1.cxx` creates a periodic rational
+cone/cylinder/sphere support, then calls `CheckAndSegment` with angular UV bounds.
+Rational U is not angle U. On the two-circle Straight loft (radii 5 and 3,
+height 6), this displaces the support's seam locus by up to 0.192343275 units;
+subsequent stock pcurve projection moves the seam 0.0375927 UV units off the
+surface boundary, so openNURBS correctly refuses its seam classification.
+
+The boundary overrides only elementary full-U-period support construction at
+nonzero U origins, using OCCT's explicit bounded cone/cylinder/sphere/torus
+constructors. These construct the exact rational net at the actual angular
+endpoints; no guessed affine angular-to-rational map, projection-based repair,
+seam flag forcing, tolerance widening, faceting or analytic-master change is
+introduced. The existing OCCT edge/pcurve conversion runs against that coherent
+support. The private geometry copy has no display mesh; stored recipes, native
+Cap, the analytic manufacturing master and the exact writer are unchanged.
+
+Qualification: the conical regression was red at both 1e-6 and .01, then green;
+17-point seam-coordinate and 3-D seam-curve checks pass at 1e-11 (not document
+tolerance). Native regressions cover shifted cone/cylinder/sphere/torus endpoint
+loci and transport admission. Re-enabling stock periodic segmentation was seen
+red in both native and actual SDK tests, then restored. The unchanged manufacturing
+audit passes Gate 6's fresh-process conical loft+cap round trip. Capped cone
+volume, face counts, exact document validity, transformed fresh .3dm replay,
+booleans and CONICAL_SURFACE STEP output are also checked. No writer rebuild or
+binary activation is part of this source qualification.

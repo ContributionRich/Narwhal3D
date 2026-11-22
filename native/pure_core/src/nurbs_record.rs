@@ -23,6 +23,14 @@
 //! trailing or missing bytes) is not recognised, and Python reads the curve point by
 //! point instead. The doubles are copied bit for bit, so they are the same bits
 //! `Knots.ToList()` and `Points` return.
+//!
+//! `read_polyline` reads an `ON_PolylineCurve` record in the same framing, for the
+//! curve/curve intersection (`curvex`), which needs the curve's parameters `m_t`:
+//! rhino3dm exposes the points but not the parameters. Its payload
+//! (opennurbs_polylinecurve.cpp, `ON_PolylineCurve::Write`) is chunk version 1.0, the
+//! point array (an int count and 3 doubles per point), the parameter array (an int count
+//! and the doubles) and `m_dim`. Only a 3-D curve with as many parameters as points is
+//! recognised.
 
 use std::mem::align_of;
 
@@ -38,6 +46,10 @@ const TCODE_CLASS_END: u32 = 0x8002_7FFF;
 /// 4ED7D4DD-E947-11d3-BFE5-0010830122F0, as the archive stores it.
 const NURBS_CURVE_UUID: [u8; 16] = [
     0xdd, 0xd4, 0xd7, 0x4e, 0x47, 0xe9, 0xd3, 0x11, 0xbf, 0xe5, 0x00, 0x10, 0x83, 0x01, 0x22, 0xf0,
+];
+/// 4ED7D4E6-E947-11d3-BFE5-0010830122F0, as the archive stores it.
+const POLYLINE_CURVE_UUID: [u8; 16] = [
+    0xe6, 0xd4, 0xd7, 0x4e, 0x47, 0xe9, 0xd3, 0x11, 0xbf, 0xe5, 0x00, 0x10, 0x83, 0x01, 0x22, 0xf0,
 ];
 const HEADER: usize = 12; // uint32 typecode + int64 length
 
@@ -58,7 +70,9 @@ impl Record<'_> {
         4 * self.cv_count
     }
 
-    fn write(&self, knots: &mut [f64], cvs: &mut [f64]) {
+    /// Copy the knots to `knots[..knot_count]` and the homogeneous control points to
+    /// `cvs[..cv_doubles()]`.
+    pub(crate) fn write(&self, knots: &mut [f64], cvs: &mut [f64]) {
         for (k, b) in knots.iter_mut().zip(self.knots.chunks_exact(8)) {
             *k = f64::from_le_bytes(b.try_into().unwrap());
         }
@@ -158,12 +172,17 @@ impl<'a> Cursor<'a> {
 
 /// The curve in one encoded record, or None for anything this does not recognise.
 pub fn read(data: &[u8]) -> Option<Record<'_>> {
+    read_payload(class_payload(data, &NURBS_CURVE_UUID)?)
+}
+
+/// The checked `TCODE_OPENNURBS_CLASS_DATA` payload of a whole record of class `uuid`.
+fn class_payload<'a>(data: &'a [u8], uuid: &[u8; 16]) -> Option<&'a [u8]> {
     let mut r = Cursor { data, at: 0 };
     if r.chunk(TCODE_CLASS)? != data.len().checked_sub(HEADER)? {
         return None;
     }
     let length = r.chunk(TCODE_CLASS_UUID)?;
-    if length != 20 || r.crc_body(length)? != NURBS_CURVE_UUID {
+    if length != 20 || r.crc_body(length)? != uuid {
         return None;
     }
     let length = r.chunk(TCODE_CLASS_DATA)?;
@@ -171,7 +190,55 @@ pub fn read(data: &[u8]) -> Option<Record<'_>> {
     if r.chunk(TCODE_CLASS_END)? != 0 || !r.done() {
         return None;
     }
-    read_payload(payload)
+    Some(payload)
+}
+
+/// A recognised `ON_PolylineCurve` record: its points and parameters, raw little-endian.
+#[derive(Debug, PartialEq)]
+pub struct PolylineRecord<'a> {
+    pub point_count: usize,
+    points: &'a [u8],
+    params: &'a [u8],
+}
+
+impl PolylineRecord<'_> {
+    /// `m_pline` as `[x, y, z]` and `m_t`, bit for bit.
+    pub(crate) fn arrays(&self) -> (Vec<[f64; 3]>, Vec<f64>) {
+        let double = |b: &[u8]| f64::from_le_bytes(b.try_into().unwrap());
+        let points = self
+            .points
+            .chunks_exact(24)
+            .map(|p| [double(&p[..8]), double(&p[8..16]), double(&p[16..])])
+            .collect();
+        let params = self.params.chunks_exact(8).map(double).collect();
+        (points, params)
+    }
+}
+
+/// The polyline in one encoded `ON_PolylineCurve` record, or None for anything this does
+/// not recognise.
+pub fn read_polyline(data: &[u8]) -> Option<PolylineRecord<'_>> {
+    let mut p = Cursor {
+        data: class_payload(data, &POLYLINE_CURVE_UUID)?,
+        at: 0,
+    };
+    if p.u8()? != 0x10 {
+        return None;
+    }
+    let point_count = p.count()?;
+    let points = p.bytes(point_count.checked_mul(24)?)?;
+    if p.count()? != point_count {
+        return None;
+    }
+    let params = p.bytes(point_count.checked_mul(8)?)?;
+    if p.i32()? != 3 || !p.done() {
+        return None;
+    }
+    Some(PolylineRecord {
+        point_count,
+        points,
+        params,
+    })
 }
 
 /// `ON_NurbsCurve::Write`'s payload, every byte of it.
@@ -617,6 +684,102 @@ mod tests {
         );
     }
 
+    // POLYLINE: rhino3dm 8.35.0's `PolylineCurve([(0,0,0), (1,2,3), (-0.0,5,1e-300)])
+    // .Encode()`, 181 bytes; its parameters are 0, 1, 2.
+    const POLYLINE_RECORD: &str = "fa7f0200a900000000000000fbff02001400000000000000e6d4d74e47e9d311bfe50010830122f04e9cbbdbfcff020071000000000000001003000000000000000000000000000000000000000000000000000000000000000000f03f000000000000004000000000000008400000000000000080000000000000144059f3f8c21f6ea501030000000000000000000000000000000000f03f000000000000004003000000731184daff7f02800000000000000000";
+    const POLYLINE_POINTS: [[u64; 3]; 3] = [
+        [0, 0, 0],
+        [0x3ff0000000000000, 0x4000000000000000, 0x4008000000000000],
+        [0x8000000000000000, 0x4014000000000000, 0x01a56e1fc2f8f359],
+    ];
+    const POLYLINE_PARAMS: [u64; 3] = [0, 0x3ff0000000000000, 0x4000000000000000];
+
+    fn build_class(uuid: &[u8; 16], payload: &[u8]) -> Vec<u8> {
+        let mut inner = chunk(TCODE_CLASS_UUID, uuid, true);
+        inner.extend(chunk(TCODE_CLASS_DATA, payload, true));
+        inner.extend(TCODE_CLASS_END.to_le_bytes());
+        inner.extend(0i64.to_le_bytes());
+        chunk(TCODE_CLASS, &inner, false)
+    }
+
+    fn polyline_bits(data: &[u8]) -> Option<(Vec<[u64; 3]>, Vec<u64>)> {
+        let (points, params) = read_polyline(data)?.arrays();
+        Some((
+            points.iter().map(|p| p.map(f64::to_bits)).collect(),
+            params.iter().map(|t| t.to_bits()).collect(),
+        ))
+    }
+
+    #[test]
+    fn a_polyline_record_gives_its_points_and_parameters() {
+        let record = unhex(POLYLINE_RECORD);
+        assert_eq!(read_polyline(&record).unwrap().point_count, 3);
+        assert_eq!(
+            polyline_bits(&record),
+            Some((POLYLINE_POINTS.to_vec(), POLYLINE_PARAMS.to_vec()))
+        );
+        assert_eq!(build_class(&POLYLINE_CURVE_UUID, &payload(&record)), record);
+        // each class is read only by its own reader
+        assert_eq!(read(&record), None);
+        for (nurbs, _, _) in fixtures() {
+            assert_eq!(read_polyline(&nurbs), None);
+        }
+    }
+
+    #[test]
+    fn a_polyline_record_that_differs_is_refused() {
+        let record = unhex(POLYLINE_RECORD);
+        for n in 0..record.len() {
+            assert_eq!(read_polyline(&record[..n]), None, "prefix {n}");
+        }
+        for i in 0..record.len() {
+            for flip in [0x01u8, 0x80, 0xFF] {
+                let mut bad = record.clone();
+                bad[i] ^= flip;
+                assert_eq!(read_polyline(&bad), None, "byte {i} ^ {flip:#x}");
+            }
+        }
+        let base = payload(&record);
+        let set = |at: usize, bytes: &[u8]| {
+            let mut p = base.clone();
+            p[at..at + bytes.len()].copy_from_slice(bytes);
+            p
+        };
+        let int = |v: i32| v.to_le_bytes();
+        let params_at = 5 + 24 * 3;
+        let mut trailing = base.clone();
+        trailing.push(0);
+        let cases = [
+            ("chunk version 1.1", set(0, &[0x11])),
+            ("chunk version 2.0", set(0, &[0x20])),
+            ("a point count off by one", set(1, &int(2))),
+            ("a negative point count", set(1, &int(-3))),
+            ("a point count of i32::MAX", set(1, &int(i32::MAX))),
+            ("fewer parameters than points", set(params_at, &int(2))),
+            ("more parameters than points", set(params_at, &int(4))),
+            ("dimension 2", set(base.len() - 4, &int(2))),
+            ("a trailing payload byte", trailing),
+            ("no dimension", base[..base.len() - 4].to_vec()),
+        ];
+        for (name, p) in cases {
+            assert_eq!(
+                read_polyline(&build_class(&POLYLINE_CURVE_UUID, &p)),
+                None,
+                "{name}"
+            );
+        }
+        assert!(read_polyline(&build_class(&POLYLINE_CURVE_UUID, &base)).is_some());
+        // An empty polyline frames correctly and reads; `curvex` refuses fewer than 2 points.
+        let mut empty = vec![0x10];
+        empty.extend(int(0));
+        empty.extend(int(0));
+        empty.extend(int(3));
+        assert_eq!(
+            read_polyline(&build_class(&POLYLINE_CURVE_UUID, &empty)).map(|r| r.point_count),
+            Some(0)
+        );
+    }
+
     /// A small deterministic generator for the malformed-record sweep.
     struct Lcg(u64);
 
@@ -679,6 +842,30 @@ mod tests {
                 }
                 NOT_RECOGNISED => assert!(untouched(&got)),
                 status => panic!("status {status} for a {}-byte record", data.len()),
+            }
+        }
+        assert!(answered > 0, "the sweep reaches an accepted record");
+    }
+
+    #[test]
+    fn malformed_polyline_records_are_refused_without_a_panic() {
+        let record = unhex(POLYLINE_RECORD);
+        let mut rng = Lcg(20261121);
+        let mut answered = 0;
+        for _ in 0..20000 {
+            let mut p = payload(&record);
+            let at = [1, 5 + 24 * 3, p.len() - 4][rng.below(3)];
+            let v = [0, 1, 2, 3, 4, -1, i32::MAX, i32::MIN, rng.next() as i32][rng.below(9)];
+            p[at..at + 4].copy_from_slice(&v.to_le_bytes());
+            match rng.below(4) {
+                0 => p.truncate(rng.below(p.len() + 1)),
+                1 => p.extend((0..rng.below(64)).map(|_| rng.next() as u8)),
+                _ => {}
+            }
+            if let Some(r) = read_polyline(&build_class(&POLYLINE_CURVE_UUID, &p)) {
+                let (points, params) = r.arrays();
+                assert_eq!((points.len(), params.len()), (r.point_count, r.point_count));
+                answered += 1;
             }
         }
         assert!(answered > 0, "the sweep reaches an accepted record");

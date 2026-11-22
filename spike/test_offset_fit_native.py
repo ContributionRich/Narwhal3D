@@ -44,7 +44,7 @@ bridge = _load("narwhal3d.bridge", "narwhal3d/bridge.py")
 model = _load("narwhal3d.model", "narwhal3d/model.py")
 _load("narwhal3d.options", "narwhal3d/options.py")
 commands = _load("narwhal3d.commands", "narwhal3d/commands.py")
-from narwhal3d import nearest, native_nearest  # noqa: E402
+from narwhal3d import nearest, native_nearest, nurbs_data  # noqa: E402
 
 checks = 0
 failures = []
@@ -537,13 +537,64 @@ def legacy_preview(cmd, cursor):
 SOURCE = PROFILE.Duplicate()
 for distance in (0.25, -0.6, 1.5):
     cmd = new_cmd(distance)
-    for cursor in (CURSOR_A, CURSOR_B, (0.0, 0.0, 0.0), (9.0, -1.0, 2.0)):
+    for frame, cursor in enumerate((CURSOR_A, CURSOR_B, (0.0, 0.0, 0.0), (9.0, -1.0, 2.0))):
         before = native_nearest._native_sample_calls
         got = preview(cmd, cursor)
         rust_calls = native_nearest._native_sample_calls - before
-        check(got == legacy_preview(cmd, cursor) and rust_calls == 3,
-              f"distance {distance}, cursor {cursor}: preview equals the PointAt preview bit for "
-              f"bit, sampled in Rust ({rust_calls} native calls: two distances, one polyline)")
+        if frame == 0:
+            check(got == legacy_preview(cmd, cursor) and rust_calls == 4,
+                  f"distance {distance}, cursor {cursor}: the first frame equals the PointAt preview "
+                  f"bit for bit, sampled in Rust ({rust_calls} native calls: both sides' distance "
+                  f"samples and polylines)")
+        else:
+            check(got == legacy_preview(cmd, cursor) and rust_calls == 0,
+                  f"distance {distance}, cursor {cursor}: a later frame equals the PointAt preview "
+                  f"bit for bit from the memo's samples ({rust_calls} native calls)")
+cmd = new_cmd(0.25)
+drawn = preview(cmd, CURSOR_A)
+drawn[0].clear()
+check(preview(cmd, CURSOR_A) == legacy_preview(cmd, CURSOR_A),
+      "clearing a returned polyline does not change the next frame")
+encoded, by_point = nurbs_data._encoded_reads, nurbs_data._point_reads
+preview(cmd, CURSOR_B)
+encoded = nurbs_data._encoded_reads - encoded
+check(nurbs_data.available() and encoded == 1 and nurbs_data._point_reads == by_point,
+      f"a memoised frame reads the source once, in one Encode call ({encoded} encoded reads)")
+
+key = commands._offset_input_key
+check(key(PROFILE) is not None and key(PROFILE) == key(PROFILE.Duplicate()),
+      "equal curves give equal memo keys")
+check(key(r3.LineCurve(r3.Point3d(0, 0, 0), r3.Point3d(3, 1, 0))) is not None,
+      "a LineCurve source has a memo key")
+
+
+def _edited(edit):
+    curve = PROFILE.Duplicate()
+    edit(curve)
+    return curve
+
+
+def _set_weight(c):
+    p = c.Points[3]
+    c.Points[3] = r3.Point4d(p.X * 1.5, p.Y * 1.5, p.Z * 1.5, 1.5)
+
+
+def _nudge_knot(c):
+    c.Knots[5] = c.Knots[5] + 1e-3
+
+
+def _set_domain(c):
+    c.Domain = r3.Interval(0.0, 1.0)
+
+
+def _one_ulp(c):
+    p = c.Points[2]
+    c.Points[2] = r3.Point4d(math.nextafter(p.X, math.inf), p.Y, p.Z, p.W)
+
+
+for label, edit in (("a weight", _set_weight), ("a knot", _nudge_knot),
+                    ("the domain", _set_domain), ("one control-point ULP", _one_ulp)):
+    check(key(_edited(edit)) != key(PROFILE), f"{label} changes the memo key")
 for curve in (PROFILE, CUSP, r3.LineCurve(r3.Point3d(0, 0, 0), r3.Point3d(3, 1, 0))):
     for point in ((0.5, 0.5, 0.0), (7.0, -3.0, 1.0), (-2.0, 9.5, -4.0)):
         check(bridge.distance_to_curve(curve, point) == legacy_distance_to_curve(curve, point),
@@ -552,10 +603,11 @@ cmd = new_cmd(0.25)
 preview(cmd)                                  # fill the memo: time the per-frame part only
 timings = {}
 for label, fn in (("PointAt", lambda: legacy_preview(cmd, CURSOR_A)),
-                  ("Rust", lambda: preview(cmd, CURSOR_A))):
+                  ("memo", lambda: preview(cmd, CURSOR_A))):
     timings[label] = min(_timed(fn) for _ in range(5))
 print(f"  per-frame Offset preview (memoised fit): PointAt {timings['PointAt'] * 1e3:.2f} ms, "
-      f"Rust {timings['Rust'] * 1e3:.2f} ms ({timings['PointAt'] / timings['Rust']:.1f}x)")
+      f"memoised samples {timings['memo'] * 1e3:.3f} ms "
+      f"({timings['PointAt'] / timings['memo']:.1f}x)")
 print(f"\n{checks - len(failures)}/{checks} checks passed")
 if failures:
     print("FAILED:")

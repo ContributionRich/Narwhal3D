@@ -211,7 +211,7 @@ def reference_newton(ca, cb, t_a, t_b, iters=20):
 
 counts = {"velocity": 0, "dist": 0}
 real_velocity = intersect._velocity
-real_dist = intersect._dist_point_to_curve
+real_distances = intersect._distances
 real_beyond = intersect._beyond_box
 
 
@@ -220,9 +220,9 @@ def counting_velocity(c, t):
     return real_velocity(c, t)
 
 
-def counting_dist(curve, p, *args, **kwargs):
-    counts["dist"] += 1
-    return real_dist(curve, p, *args, **kwargs)
+def counting_distances(curve, points, prepared):
+    counts["dist"] += len(points)          # one closest-point solve per queried sample
+    return real_distances(curve, points, prepared)
 
 
 # Newton: a skew pair of lines never meets. Its iterate settles at a clamp after one step,
@@ -260,7 +260,7 @@ check(not mismatch, "the fixed-point exit returns exactly the original Newton an
 # Overlap prune: a far pair is never solved, and a near pair keeps every hit it had before.
 far = wave_a.Duplicate()
 far.Translate(r3.Vector3d(0, 40, 0))
-intersect._dist_point_to_curve = counting_dist
+intersect._distances = counting_distances
 try:
     counts["dist"] = 0
     far_hits = intersect.curve_curve(wave_a, far)
@@ -274,13 +274,130 @@ try:
     finally:
         intersect._beyond_box = real_beyond
 finally:
-    intersect._dist_point_to_curve = real_dist
+    intersect._distances = real_distances
 check(far_hits == [] and far_solves == 0,
       "a pair whose boxes are 40 units apart is never solved sample by sample",
       f"{far_solves} solve(s)")
 check(pruned_hits == unpruned_hits and pruned_solves > 0,
       "the overlap prune keeps every hit the unpruned search reports",
       f"pruned solves {pruned_solves}, hits equal={pruned_hits == unpruned_hits}")
+
+
+# The overlap test samples `a` in Rust and asks the closest points in one batch: the same
+# answer as the per-sample loop it replaced (frozen here), on every kind of target.
+def legacy_detect_overlap(a, b, tol, samples=120, run=3):
+    da = a.Domain
+    prepared = intersect._prepared(b)
+    box = b.GetBoundingBox()
+    lo, hi = box.Min, box.Max
+    on = []
+    for i in range(samples + 1):
+        t = da.T0 + (da.T1 - da.T0) * i / samples
+        p = a.PointAt(t)
+        if (p.X < lo.X - tol or p.X > hi.X + tol or p.Y < lo.Y - tol or p.Y > hi.Y + tol
+                or p.Z < lo.Z - tol or p.Z > hi.Z + tol):
+            on.append(False)
+            continue
+        on.append(intersect._dist_point_to_curve(b, (p.X, p.Y, p.Z), prepared=prepared) <= tol)
+    best_i = best_len = cur_i = cur_len = 0
+    for i, flag in enumerate(on):
+        if flag:
+            if cur_len == 0:
+                cur_i = i
+            cur_len += 1
+            if cur_len > best_len:
+                best_len, best_i = cur_len, cur_i
+        else:
+            cur_len = 0
+    if best_len < run:
+        return None
+    t0 = da.T0 + (da.T1 - da.T0) * best_i / samples
+    t1 = da.T0 + (da.T1 - da.T0) * (best_i + best_len - 1) / samples
+    pa0, pa1 = a.PointAt(t0), a.PointAt(t1)
+    tb0 = intersect._closest_param(b, (pa0.X, pa0.Y, pa0.Z), prepared=prepared)
+    tb1 = intersect._closest_param(b, (pa1.X, pa1.Y, pa1.Z), prepared=prepared)
+    return intersect.CurveX((pa0.X, pa0.Y, pa0.Z), t0, tb0, overlap=True,
+                            t_a_end=t1, t_b_end=tb1)
+
+
+def overlap_fields(x):
+    return None if x is None else (x.point, x.t_a, x.t_b, x.overlap, x.t_a_end, x.t_b_end)
+
+
+def pts(*ps):
+    return [r3.Point3d(*p) for p in ps]
+
+
+long_wave = r3.NurbsCurve.Create(False, 3, pts(*[(i, math.sin(0.9 * i) * 2, 0) for i in range(12)]))
+part = long_wave.Trim(2.0, 5.5)            # lies on long_wave: an overlap
+rect = r3.PolylineCurve(pts((2, -1, 0), (9, -1, 0), (9, 1.5, 0), (2, 1.5, 0), (2, -1, 0)))
+circle = r3.NurbsCurve.CreateFromCircle(r3.Circle(r3.Point3d(5, 0, 0), 2))
+arc_part = circle.Trim(0.5, 2.0)
+edge = r3.LineCurve(r3.Point3d(3, -1, 0), r3.Point3d(8, -1, 0))
+overlap_pairs = [("a cubic piece on its cubic", part, long_wave),
+                 ("a cubic on a piece of itself", long_wave, part),
+                 ("a crossing pair", wave_a, wave_b),
+                 ("a Rectangle on a cubic", rect, long_wave),
+                 ("a line on a Rectangle edge", edge, rect),
+                 ("a Rectangle on its edge line", rect, edge),
+                 ("an arc on its circle", arc_part, circle),
+                 ("a cubic on a circle", long_wave, circle)]
+native_nearest = intersect._native_nearest()
+for label, a, b in overlap_pairs:
+    before = native_nearest._native_many_calls
+    got = intersect._detect_overlap(a, b, 1e-6)
+    batched = native_nearest._native_many_calls - before
+    want = legacy_detect_overlap(a, b, 1e-6)
+    general = b.TryGetCircle() is None and b.TryGetArc() is None and not b.IsLinear()
+    check(overlap_fields(got) == overlap_fields(want)
+          and (batched == 1 or not general or isinstance(b, r3.PolylineCurve)),
+          f"overlap test, {label}: the per-sample loop's answer "
+          f"({'overlap' if want else 'none'}; {batched} batch call(s))")
+# The batch answers only where the per-sample solve would: not on a degenerate domain
+# (which that solve refuses), and a refused batch falls back to it.
+class StubPrepared:
+    def __init__(self, refuse=False):
+        self.many = self.one = 0
+        self.refuse = refuse
+
+    def closest_many(self, points, tolerance=None):
+        self.many += 1
+        if self.refuse:
+            raise RuntimeError("refused")
+        return [types.SimpleNamespace(distance=5.0, t=0.0) for _ in points]
+
+    def closest(self, p, tolerance=None):
+        self.one += 1
+        return types.SimpleNamespace(distance=7.0, t=0.0)
+
+
+class Degenerate:
+    Domain = r3.Interval(1.0, 1.0)
+
+
+stub = StubPrepared()
+answer = intersect._distances(Degenerate(), [(0.0, 0.0, 0.0), (1.0, 0.0, 0.0)], stub)
+check(answer == [7.0, 7.0] and (stub.many, stub.one) == (0, 2),
+      "a degenerate domain takes the per-sample route, not the batch")
+stub = StubPrepared(refuse=True)
+answer = intersect._distances(long_wave, [(0.0, 0.0, 0.0), (1.0, 0.0, 0.0)], stub)
+check(answer == [7.0, 7.0] and (stub.many, stub.one) == (1, 2),
+      "a refused batch falls back to the per-sample route")
+stub = StubPrepared()
+check(intersect._distances(long_wave, [], stub) == [] and stub.many == 0,
+      "no batch is asked for an empty query list")
+
+# Boundary samples remain inside the box at EXACTLY tolerance; one ULP farther
+# is outside. Batching must not change the strict prune inequalities.
+for axis in range(3):
+    for boundary,direction in [(-.125,-math.inf),(1.125,math.inf)]:
+        point=[.5,.5,.5]; point[axis]=boundary
+        box=((0.,0.,0.),(1.,1.,1.))
+        check(not intersect._beyond_box(point,box,.125),
+              f"overlap prune includes axis {axis} at tolerance boundary {boundary}")
+        point[axis]=math.nextafter(boundary,direction)
+        check(intersect._beyond_box(point,box,.125),
+              f"overlap prune excludes axis {axis} one ULP outside {boundary}")
 
 # The pick threshold: decided from bounds, it must equal the tight-box test on every side.
 pick_curve = wave_a

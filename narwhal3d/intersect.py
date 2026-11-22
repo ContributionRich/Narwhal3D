@@ -263,15 +263,64 @@ def _velocity(c, t):
 # ---------------------------------------------------------------------------
 
 def _beyond_box(p, box, tol):
-    """True when `p` lies more than `tol` outside `box` along some axis.
+    """True when `p` (``(x, y, z)``) lies more than `tol` outside `box` along some axis.
 
-    `box` is rhino3dm's ``GetBoundingBox`` of a curve, which contains the whole curve (for a
-    NURBS curve it is the control hull). Such a point is therefore more than `tol` from the
-    curve, and the closest-point solve would also answer "not on it".
+    `box` is the ``(min, max)`` corners of rhino3dm's ``GetBoundingBox`` of a curve, which
+    contains the whole curve (for a NURBS curve it is the control hull). Such a point is
+    therefore more than `tol` from the curve, and the closest-point solve would also answer
+    "not on it".
     """
-    lo, hi = box.Min, box.Max
-    return (p.X < lo.X - tol or p.X > hi.X + tol or p.Y < lo.Y - tol or p.Y > hi.Y + tol
-            or p.Z < lo.Z - tol or p.Z > hi.Z + tol)
+    lo, hi = box
+    return (p[0] < lo[0] - tol or p[0] > hi[0] + tol or p[1] < lo[1] - tol
+            or p[1] > hi[1] + tol or p[2] < lo[2] - tol or p[2] > hi[2] + tol)
+
+
+def _native_nearest():
+    """`native_nearest` (Rust sampling), or None if it cannot be loaded."""
+    try:
+        from . import native_nearest
+    except ImportError:
+        try:
+            import native_nearest
+        except ImportError:
+            return None
+    return native_nearest
+
+
+def _samples(curve, n):
+    """``curve.PointAt(T0 + (T1 - T0) * i / n)`` for i = 0..n, as ``(x, y, z)``.
+
+    Rust answers where `native_nearest.sample` does (a NurbsCurve, a qualified LineCurve),
+    with the same bits; any other curve calls PointAt.
+    """
+    native = _native_nearest()
+    if native is not None:
+        try:
+            got = native.sample(curve, n)
+        except Exception:  # noqa: BLE001 -- PointAt remains the route
+            got = None
+        if got is not None:
+            return got
+    d = curve.Domain
+    return [_pt(curve.PointAt(d.T0 + (d.T1 - d.T0) * i / n)) for i in range(n + 1)]
+
+
+def _distances(curve, points, prepared):
+    """``_dist_point_to_curve(curve, p, prepared=prepared)`` for each of `points`.
+
+    One `PreparedCurve.closest_many` call answers them where it can: a single native call
+    for a general NURBS curve, with the bits of the per-point solve. A degenerate domain
+    (which the per-point solve refuses) or any refusal takes the per-point route, which
+    keeps its own fallback.
+    """
+    if prepared is not None and points:
+        d = curve.Domain
+        if d.T1 > d.T0:
+            try:
+                return [r.distance for r in prepared.closest_many(points)]
+            except Exception:  # noqa: BLE001
+                pass
+    return [_dist_point_to_curve(curve, p, prepared=prepared) for p in points]
 
 
 def _prepared(curve):
@@ -301,15 +350,14 @@ def _detect_overlap(a, b, tol, samples=_OVERLAP_SAMPLES, run=3):
     """
     da = a.Domain
     prepared = _prepared(b)
-    box = b.GetBoundingBox()
-    on = []
-    for i in range(samples + 1):
-        t = da.T0 + (da.T1 - da.T0) * i / samples
-        p = a.PointAt(t)
-        if _beyond_box(p, box, tol):
-            on.append(False)            # too far from b to lie on it: no closest-point solve
-            continue
-        on.append(_dist_point_to_curve(b, (p.X, p.Y, p.Z), prepared=prepared) <= tol)
+    bb = b.GetBoundingBox()
+    box = (_pt(bb.Min), _pt(bb.Max))
+    points = _samples(a, samples)
+    # a sample too far from b to lie on it needs no closest-point solve
+    near = [i for i, p in enumerate(points) if not _beyond_box(p, box, tol)]
+    on = [False] * (samples + 1)
+    for i, dist in zip(near, _distances(b, [points[i] for i in near], prepared)):
+        on[i] = dist <= tol
     # longest contiguous run of True
     best_i = best_len = cur_i = cur_len = 0
     for i, flag in enumerate(on):

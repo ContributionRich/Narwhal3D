@@ -186,6 +186,10 @@ def check_geometry_consumers():
     import math
     from narwhal3d import bridge, kernel, native_geometry
 
+    with native_geometry._lock:
+        binding = native_geometry._load_locked()
+        if binding is None or not hasattr(binding.library, "narwhal_geometry_core_nurbs_convert_seam_safe_v1"):
+            raise RuntimeError("native seam-safe exact NURBS conversion unavailable")
     if not native_geometry.join_exact_available():
         raise RuntimeError("exact Join unavailable: geometry capability bit9 and mapped/verify exports required")
     backend = bridge._occt()
@@ -222,6 +226,55 @@ def check_geometry_consumers():
         raise RuntimeError("exact Join verifier accepted changed frozen geometry")
     return {"suite": "exact Join startup", "exact_faces": 3, "closed": True,
             "operand_count": 3, "recipe_verified": True}
+
+
+def check_cap_consumers():
+    """Require supervised exact Cap, nested replay and tamper rejection."""
+    import copy
+    import math
+    from narwhal3d import bridge, kernel, native_geometry
+    if not native_geometry.cap_exact_available():
+        raise RuntimeError("exact Cap unavailable: geometry capability bit10 and cap/verify exports required")
+    backend = bridge._occt()
+    recipe = {"kind": "cylinder", "radius": 2.0, "height": 3.0}
+    wall = next((index, face) for index, face in enumerate(
+        backend.unique_faces(backend.from_recipe(recipe)), 1)
+        if backend.face_types(face) == {"CYLINDER": 1})
+    source = bridge.occt_backed(wall[1], {"kind": "face", "index": wall[0], "a": recipe})
+    capped = bridge.cap_planar_holes_occt(source, tolerance=0.01)
+    if capped is None:
+        raise RuntimeError("exact Cap startup refused: " + str(bridge.last_occt_decline()))
+    tree = kernel.recipe_of(capped)
+    if (tree.get("kind") != "cap" or tree.get("version") != 1
+            or tree.get("tolerance") != .01 or len(capped.Faces) != 3 or not capped.IsSolid):
+        raise RuntimeError("exact Cap document/recipe contract differs")
+    for shape in (kernel.master_of(capped), backend.from_recipe(tree)):
+        if (not backend.is_airtight(shape)
+                or backend.face_types(shape) != {"CYLINDER": 1, "PLANE": 2}
+                or not math.isclose(backend.volume(shape), 12 * math.pi, rel_tol=1e-10)):
+            raise RuntimeError("exact Cap SDK/recipe semantics differ")
+    changed = copy.deepcopy(tree)
+    changed["result"] = backend.native_master_recipe(backend.make_box(1, 1, 1))
+    try:
+        backend.from_recipe(changed)
+    except kernel.KernelError:
+        pass
+    else:
+        raise RuntimeError("exact Cap verifier accepted changed frozen geometry")
+    # Shifted elementary seams must survive exact document conversion too: the
+    # cylinder alone cannot expose OCCT's periodic rational-U segmentation bug.
+    loft = bridge.loft_brep([bridge.make_circle((20, 0, 0), 5.0),
+                             bridge.make_circle((20, 0, 6), 3.0)], style="Straight")
+    cone = bridge.cap_planar_holes_occt(loft, tolerance=.01)
+    if cone is None:
+        raise RuntimeError("shifted conical Cap conversion refused: " + str(bridge.last_occt_decline()))
+    for shape in (kernel.master_of(cone), backend.from_recipe(kernel.recipe_of(cone))):
+        if (not cone.IsValid or len(cone.Faces) != 3 or not backend.is_airtight(shape)
+                or backend.face_types(shape) != {"CONE": 1, "PLANE": 2}
+                or not math.isclose(backend.volume(shape), 98 * math.pi, rel_tol=1e-10)):
+            raise RuntimeError("shifted conical Cap document/recipe geometry differs")
+    return {"suite": "exact Cap startup", "exact_faces": 3, "closed": True,
+            "recipe_verified": True, "supervised": True, "shifted_cone": True}
 
 
 def check():
@@ -280,6 +333,7 @@ def check():
         raise RuntimeError('native numeric parser returned an invalid startup result')
     check_pure_consumers()
     check_geometry_consumers()
+    check_cap_consumers()
     print('[narwhal3d] required native startup checks passed', flush=True)
 
 

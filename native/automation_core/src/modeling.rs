@@ -177,6 +177,12 @@ pub enum Action {
     Loft {
         sections: Vec<String>,
     },
+    Join {
+        sources: Vec<String>,
+    },
+    Cap {
+        source: String,
+    },
     Bevel {
         source: String,
         size: f64,
@@ -251,6 +257,8 @@ impl Action {
             Self::Pipe { source, .. } | Self::Revolve { source, .. } => vec![source],
             Self::Boolean { left, right, .. } => vec![left, right],
             Self::Loft { sections } => sections.iter().map(String::as_str).collect(),
+            Self::Join { sources } => sources.iter().map(String::as_str).collect(),
+            Self::Cap { source } => vec![source],
             _ => vec![],
         }
     }
@@ -353,6 +361,16 @@ impl Action {
             } => positive(distance.abs(), tol) && direction(v),
             Self::Boolean { left, right, .. } => left != right,
             Self::Loft { sections } => (2..=16).contains(&sections.len()),
+            Self::Join { sources } => {
+                (2..=16).contains(&sources.len())
+                    && sources.iter().all(|r| !r.is_empty() && r.len() <= 48)
+                    && sources.len()
+                        == sources
+                            .iter()
+                            .collect::<std::collections::HashSet<_>>()
+                            .len()
+            }
+            Self::Cap { .. } => true,
         }
     }
 }
@@ -510,6 +528,12 @@ impl Batch {
                 && (fact["degree"].as_u64().is_none_or(|d| d < 3))
             {
                 return Err("modeling_curve_unverified");
+            }
+            if matches!(step.action, Action::Cap { .. }) && fact["solid"] != true {
+                return Err("modeling_cap_solid_unverified");
+            }
+            if matches!(step.action, Action::Cap { .. }) && fact["airtight"] != true {
+                return Err("modeling_cap_solid_unverified");
             }
         }
         Ok(())
@@ -1040,6 +1064,11 @@ pub fn schema() -> Value {
             json!({"sections":{"type":"array","items":reference,"minItems":2,"maxItems":16}}),
         ),
         (
+            "join",
+            json!({"sources":{"type":"array","items":reference,"minItems":2,"maxItems":16}}),
+        ),
+        ("cap", json!({"source":reference})),
+        (
             "bevel",
             json!({"source":reference,"size":length,"chamfer":{"type":"boolean"}}),
         ),
@@ -1085,6 +1114,16 @@ pub fn schema() -> Value {
                 "Both operands must already be exact airtight solids. Open loft surfaces/skins and curves are not solid boolean operands."
             );
         }
+        if op == "join" {
+            variant["description"] = json!(
+                "Exact Join (not a boolean): unifies exactly ONE connected group of 2-16 exact Brep sources. A connected group may remain an OPEN surface and can be capped later; the result is published only when it consumes every requested source. Disconnected sources, duplicates or a source consumed partially are REFUSED, not silently dropped. No faceted fallback."
+            );
+        }
+        if op == "cap" {
+            variant["description"] = json!(
+                "Cap a single exact Brep's planar boundaries with analytic planar faces, yielding one airtight solid. Nonplanar boundaries cannot be capped and are refused with the kernel reason; there is no faceted fallback. The source is unchanged. For a closed-section Normal loft with planar ends, create the loft surface with publish=false, then cap that earlier step ID; do not boolean an open loft."
+            );
+        }
         variants.push(variant);
     }
     obj(
@@ -1096,7 +1135,7 @@ pub fn schema() -> Value {
     )
 }
 pub fn definition() -> crate::provider::ToolDefinition {
-    crate::provider::ToolDefinition{name:"narwhal_model".into(),parameters:schema(),description:"Construct or edit an exact-CAD design in one bounded transaction. Use smooth cubic interpolated curves, explicit rational NURBS (degree2-7, up to64 homogeneous control points and exact knot vector), exact primitives, transforms, extrusion, constant-radius pipe along a curve (cap=true requires verified solidity), exact profile revolve about a specified axis (solid=true requires verified solidity), smooth loft, analytic booleans and all-edge fillet/chamfer (bevel). Attributes edits rename, RGB object color, visibility or placement on an existing unlocked layer UUID; source and replace must be the same existing UUID and publish=true. Null attribute fields preserve their values. Thickness edits untransformed extrusion recipes only. Outline recovers/projects a curve or an extrusion's exact profile to World XY; it is not a general Brep silhouette. Earlier step IDs are dependencies; UUIDs refer to existing inspected objects. Set publish=false for construction intermediates; replace=null appends, replace=UUID edits that identity. Review mode requires approval of the batch; Build mode is separately user-authorized. No file or shell actions. Choose coherent defaults in document units for unspecified cosmetic dimensions and state them. Tool receipts, not prose, establish what was built; inspect results and revise across rounds. Assemblies are not unified solids.".into()}
+    crate::provider::ToolDefinition{name:"narwhal_model".into(),parameters:schema(),description:"Construct or edit an exact-CAD design in one bounded transaction. Use smooth cubic interpolated curves, explicit rational NURBS (degree2-7, up to64 homogeneous control points and exact knot vector), exact primitives, transforms, extrusion, constant-radius pipe along a curve (cap=true requires verified solidity), exact profile revolve about a specified axis (solid=true requires verified solidity), smooth loft, analytic booleans, exact Join of connected exact Breps (not a boolean), analytic Cap of planar boundaries to an airtight solid, and all-edge fillet/chamfer (bevel). Attributes edits rename, RGB object color, visibility or placement on an existing unlocked layer UUID; source and replace must be the same existing UUID and publish=true. Null attribute fields preserve their values. Thickness edits untransformed extrusion recipes only. Outline recovers/projects a curve or an extrusion's exact profile to World XY; it is not a general Brep silhouette. Earlier step IDs are dependencies; UUIDs refer to existing inspected objects. Set publish=false for construction intermediates; replace=null appends, replace=UUID edits that identity. Review mode requires approval of the batch; Build mode is separately user-authorized. No file or shell actions. Choose coherent defaults in document units for unspecified cosmetic dimensions and state them. Tool receipts, not prose, establish what was built; inspect results and revise across rounds. Assemblies are not unified solids.".into()}
 }
 
 #[cfg(test)]

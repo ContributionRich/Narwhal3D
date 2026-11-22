@@ -149,13 +149,14 @@ def frozen_fields(curve, count):
 
 for name, curve in FIXTURES.items():
     cache = nearest.NearCache(curve)
-    before = native._native_calls + native._native_callback_calls
+    before = native._native_calls + native._native_callback_calls + native._native_polyline_calls
     queries = queries_for(curve, 150)
     got = [nearest.near_point(curve, q, cache, TOL) for q in queries]
     is_nurbs = isinstance(curve, r3.NurbsCurve)
     want = [answer[1] for answer in frozen_fields(curve, 150)]
     check(cache.packed is not None and got == want
-          and native._native_calls + native._native_callback_calls > before,
+          and native._native_calls + native._native_callback_calls
+          + native._native_polyline_calls > before,
           f"{name}: all {len(queries)} original host queries, type packing/routing")
     if is_nurbs:
         packed = cache.packed

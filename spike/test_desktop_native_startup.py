@@ -137,9 +137,14 @@ class DesktopNativeStartup(unittest.TestCase):
         (self.root/'narwhal3d/native').mkdir(parents=True)
         shutil.copy2(ROOT/'narwhal3d.sh',self.root/'narwhal3d.sh')
         shutil.copy2(ROOT/'launch/check_native.py',self.root/'launch/check_native.py')
+        shutil.copytree(ROOT / "narwhal3d", self.root / "narwhal3d", dirs_exist_ok=True,
+                        ignore=shutil.ignore_patterns("__pycache__", "native", "bin"))
+        supervisor = self.root / "artifacts/converter-supervisor/linux-x86_64/narwhal-converter-supervisor"
+        supervisor.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(ROOT / "native/converter_supervisor/target/release/narwhal-converter-supervisor", supervisor)
         for name in SOURCES:
             shutil.copy2(ROOT/'narwhal3d'/(name+'.py'),self.root/'narwhal3d'/(name+'.py'))
-        shutil.copytree(ROOT / "narwhal3d/kernel", self.root / "narwhal3d/kernel",
+        shutil.copytree(ROOT / "narwhal3d/kernel", self.root / "narwhal3d/kernel", dirs_exist_ok=True,
                         ignore=shutil.ignore_patterns("__pycache__", "bin"))
         writer = self.root / "narwhal3d/kernel/bin/brep_writer-linux-x86_64"
         writer.parent.mkdir(parents=True)
@@ -363,6 +368,61 @@ class DesktopNativeStartup(unittest.TestCase):
         restored = self.run_launcher()
         self.assertEqual(restored.returncode, 0, restored.stdout + restored.stderr)
         self.assertTrue(self.started.exists())
+
+    def test_exact_cap_exports_and_verifier_are_required(self):
+        path = self.root / "narwhal3d/native/libnarwhal_geometry_core.so"
+        original = path.read_bytes()
+        entries = elf_export_entries(original)
+        for symbol in ("narwhal_geometry_core_cap_exact_v1", "narwhal_geometry_core_verify_cap_v1"):
+            data = bytearray(original)
+            data[entries[symbol][0] + 4] &= 0x0f
+            path.write_bytes(data)
+            result = self.run_launcher()
+            self.assert_no_graphical_start(result)
+            self.assertIn("exact Cap unavailable", result.stderr)
+        data = bytearray(original)
+        _, address, size, section = entries["narwhal_geometry_core_capabilities"]
+        self.assertGreaterEqual(size, 6)
+        offset = section[4] + address - section[3]
+        data[offset:offset+6] = bytes([0xb8]) + struct.pack("<I", 1023) + bytes([0xc3])
+        path.write_bytes(data)
+        result = self.run_launcher()
+        self.assert_no_graphical_start(result)
+        self.assertIn("exact Cap unavailable", result.stderr)
+        symbol = "narwhal_geometry_core_verify_cap_v1"
+        data = bytearray(original)
+        _, address, size, section = entries[symbol]
+        self.assertGreaterEqual(size, 6)
+        offset = section[4] + address - section[3]
+        data[offset:offset+6] = bytes([0xb8,0,0,0,0,0xc3])
+        path.write_bytes(data)
+        result = self.run_launcher()
+        self.assert_no_graphical_start(result)
+        self.assertIn("exact Cap verifier accepted changed frozen geometry", result.stderr)
+        path.write_bytes(original)
+        restored = self.run_launcher()
+        self.assertEqual(restored.returncode, 0, restored.stdout + restored.stderr)
+
+    def test_seam_safe_converter_is_required(self):
+        path=self.root / "narwhal3d/native/libnarwhal_geometry_core.so"
+        original=path.read_bytes()
+        entries=elf_export_entries(original)
+        data=bytearray(original)
+        data[entries["narwhal_geometry_core_nurbs_convert_seam_safe_v1"][0]+4] &= 0x0f
+        path.write_bytes(data)
+        result=self.run_launcher()
+        self.assert_no_graphical_start(result)
+        self.assertIn("seam-safe exact NURBS conversion unavailable",result.stderr)
+        path.write_bytes(original)
+        restored=self.run_launcher()
+        self.assertEqual(restored.returncode,0,restored.stdout+restored.stderr)
+
+    def test_exact_cap_requires_rust_supervisor(self):
+        supervisor = self.root / "artifacts/converter-supervisor/linux-x86_64/narwhal-converter-supervisor"
+        supervisor.unlink()
+        result = self.run_launcher()
+        self.assert_no_graphical_start(result)
+        self.assertIn("cap_supervisor_unavailable", result.stderr)
 
     def test_matching_native_components_launch_direct_runtime(self):
         (self.root/'artifacts/welcome/linux-x86_64/narwhal-welcome').unlink()

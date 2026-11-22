@@ -757,6 +757,70 @@ def _count_msg(n, one, many):
     return one if n == 1 else many.replace("%d", str(n))
 
 
+def _replace_cap(ctx, name, geom):
+    """Stage the exact result before consumption; rollback only owned allocations."""
+    from . import selection_state
+    model, file = ctx.model, ctx.model.file
+    source_id = model.object_id_by_name(name)
+    source = file.Objects.FindId(source_id)
+    witness = source.Geometry.Encode(), source.Attributes.Encode()
+    display = ctx.object_by_name(name)
+    display_mesh = display.data if display is not None else None
+    baseline = model.snapshot()
+    record = ctx.undo._open
+    before = record.before if record is not None else None
+    counter = ctx.counters.get("Capped", 0)
+    created_before = selection_state.last_created(model)
+    staged = None
+    staged_display = staged_mesh = None
+
+    def check():
+        current = file.Objects.FindId(source_id)
+        if (ctx.model is not model or model.file is not file or current is None
+                or (current.Geometry.Encode(), current.Attributes.Encode()) != witness
+                or ctx.object_by_name(name) != display
+                or (display is not None and display.data != display_mesh)):
+            raise RuntimeError("Cap input/document changed during publication; input kept")
+
+    try:
+        staged = commands.JoinCmd()._add_and_consume(
+            ctx, [name], geom, True, check=check, base_name="Capped")
+        staged_display = ctx.object_by_name(staged[1])
+        staged_mesh = staged_display.data if staged_display is not None else None
+        check()
+        # Trigger fallible document hooks while the input still exists.
+        model._will_change()
+        check()
+    except Exception:
+        if staged is not None:
+            if staged_display is not None:
+                ctx._remove_publication_allocations({"objects": [staged_display],
+                                                     "meshes": [staged_mesh] if staged_mesh is not None else []})
+            file.Objects.Delete(staged[0])
+            if ctx.counters.get("Capped") == counter + 1:
+                if counter:
+                    ctx.counters["Capped"] = counter
+                else:
+                    ctx.counters.pop("Capped", None)
+            entry = selection_state._state.get(model)
+            if entry is not None and staged[1] not in created_before:
+                entry["created"][:] = [n for n in entry["created"] if n != staged[1]]
+                if staged[1] in entry.get("batch", []):
+                    entry["batch"].remove(staged[1])
+        if record is not None and ctx.undo._open is record:
+            if before is not None:
+                record.before = before
+            elif model.file is file and not ctx._same_publication_document(baseline, model.snapshot()):
+                record.before, record.name = baseline, "External change during Cap"
+            else:
+                record.before = None
+        raise
+    if display is not None:
+        commands._remove_object_from_scene(display)
+    file.Objects.Delete(source_id)
+    return staged[1]
+
+
 class CapCmd(Command):
     """Fill planar openings with exact planar faces.
 
@@ -789,7 +853,7 @@ class CapCmd(Command):
                 unable += 1
                 why.append(f"{name}: not a surface or polysurface")
                 continue
-            operand = bridge._occt_operand(geom) if occt is not None else None
+            operand = kernel.master_of(geom) if occt is not None and kernel is not None else None
             if operand is not None:
                 was_closed = occt.is_airtight(operand)
             else:
@@ -797,12 +861,16 @@ class CapCmd(Command):
             if was_closed:
                 closed += 1
                 continue
-            out = _exact_or_none(bridge.cap_planar_holes_occt(geom))
+            out = _exact_or_none(bridge.cap_planar_holes_occt(geom, tolerance=commands._document_tolerance(ctx)))
             if out is None:
                 unable += 1
                 why.append(f"{name}: {bridge.last_occt_decline() or 'the result was not closed'}")
                 continue
-            capped.append(_replace(ctx, name, out, "Capped"))
+            try:
+                capped.append(_replace_cap(ctx, name, out))
+            except Exception as exc:
+                unable += 1
+                why.append(f"{name}: publication failed ({exc}); input kept")
         lines = []
         if capped:
             lines.append(f"Capped {len(capped)} object(s): {', '.join(capped)}")

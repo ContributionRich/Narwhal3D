@@ -32,7 +32,8 @@ enum NarwhalGeometryCapability {
   NARWHAL_GEOMETRY_CAP_SWEEP1_PARALLEL = UINT64_C(1) << 6,
   NARWHAL_GEOMETRY_CAP_SWEEP1_FREEFORM = UINT64_C(1) << 7,
   NARWHAL_GEOMETRY_CAP_PREPARE_FREEFORM = UINT64_C(1) << 8,
-  NARWHAL_GEOMETRY_CAP_JOIN_EXACT = UINT64_C(1) << 9
+  NARWHAL_GEOMETRY_CAP_JOIN_EXACT = UINT64_C(1) << 9,
+  NARWHAL_GEOMETRY_CAP_CAP_EXACT = UINT64_C(1) << 10
 };
 
 enum NarwhalGeometryComponentKind {
@@ -101,6 +102,20 @@ enum NarwhalGeometryQualityScope {
  * Returns byte count; NULL output with zero capacity queries required bytes.
  * No input/output overlap; refusal/short buffer leaves output untouched.
  */
+/* Live-shape NURBS conversion with exact angular endpoint support construction.
+ * Raw untrusted BinTools decoding requires the same supervised boundary. */
+int64_t narwhal_geometry_core_nurbs_convert_seam_safe_v1(const uint8_t*, size_t, uint8_t*, size_t);
+
+/* Exact planar closure: explicit document tolerance, one airtight solid or refusal.
+ * No partial result. Query with NULL output/capacity 0, then fill caller storage.
+ * IMPORTANT: post-decode budgets do not bound BinTools::Read allocations. All
+ * untrusted C ABI decode/verification calls require a hard memory/time supervisor;
+ * the application's cap_worker.py provides that boundary. */
+int64_t narwhal_geometry_core_cap_exact_v1(const uint8_t*, size_t, double, uint8_t*, size_t);
+/* Rebuilt source must match snapshot, and closure must reproduce frozen result. */
+int32_t narwhal_geometry_core_verify_cap_v1(const uint8_t*, size_t, const uint8_t*, size_t,
+                                          const uint8_t*, size_t, double);
+
 int64_t narwhal_geometry_core_join_exact_v1(
     const uint8_t *input, size_t length, double tolerance,
     uint8_t *output, size_t capacity);

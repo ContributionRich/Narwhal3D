@@ -72,6 +72,9 @@ GEOMETRY_CORE_ABI = 4
 GEOMETRY_CORE_EXPORTS = (
     "narwhal_geometry_core_abi_version",
     "narwhal_geometry_core_capabilities",
+    "narwhal_geometry_core_cap_exact_v1",
+    "narwhal_geometry_core_verify_cap_v1",
+    "narwhal_geometry_core_nurbs_convert_seam_safe_v1",
     "narwhal_geometry_core_edit_session_import",
     "narwhal_geometry_core_edit_session_move",
     "narwhal_geometry_core_edit_session_move_mode",
@@ -519,6 +522,9 @@ def verify_pure_core_identity(path: Path) -> dict[str, object]:
         raise VerificationError("Windows pure-core lacks required parser ABI exports")
     if any(identity["exports"].count(name) != 1 for name in PURE_CORE_RETIREMENT_EXPORTS):
         raise VerificationError("Windows pure-core lacks required retirement ABI exports")
+    for name in ("narwhal_pure_core_curve_curve_record_hits", "narwhal_pure_core_nearest_on_polyline"):
+        if identity["exports"].count(name) != 1:
+            raise VerificationError("Windows pure-core lacks additive curve record/nearest export: " + name)
     if sys.platform == "win32":
         try:
             probe_pure_core_parser(path)

@@ -589,6 +589,7 @@ def _reset_for_tests(cdll_factory=None):
 # Exact Join is an additive ABI-4 candidate. Python only transports SDK bytes and
 # native provenance; it never infers adjacency or substitutes Python sewing.
 CAP_JOIN_EXACT = 1 << 9
+CAP_CAP_EXACT = 1 << 10
 
 
 class JoinReport(ctypes.Structure):
@@ -598,6 +599,16 @@ class JoinReport(ctypes.Structure):
                 ("offsets", ctypes.c_uint32 * 257),
                 ("members", ctypes.c_uint32 * 256),
                 ("closed", ctypes.c_uint32 * 256)]
+
+
+def cap_exact_available():
+    with _lock:
+        binding = _load_locked()
+        return (binding is not None
+                and bool(int(binding.library.narwhal_geometry_core_capabilities()) & CAP_CAP_EXACT)
+                and hasattr(binding.library, "narwhal_geometry_core_cap_exact_v1")
+                and hasattr(binding.library, "narwhal_geometry_core_verify_cap_v1")
+                and hasattr(binding.library, "narwhal_geometry_core_nurbs_convert_seam_safe_v1"))
 
 
 def join_exact_available():

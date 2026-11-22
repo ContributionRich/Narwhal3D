@@ -352,6 +352,9 @@ def execute_probe(mutant="", code=None):
     return json.loads(output.getvalue())
 
 
+POLYLINE_EXPORTS = ("narwhal_pure_core_curve_curve_record_hits", "narwhal_pure_core_nearest_on_polyline")
+
+
 def pe_fixture(*, parser_abi=2, missing="", svg_abi=14, alias_abi=1, dxf_abi=2, reader_abi=1):
     """Minimal PE export/import tables; data fixture, never executable native code."""
     data = bytearray(8192)
@@ -365,7 +368,7 @@ def pe_fixture(*, parser_abi=2, missing="", svg_abi=14, alias_abi=1, dxf_abi=2, 
     struct.pack_into("<II", data, optional + 112, 0x1200, 0x400)
     struct.pack_into("<II", data, optional + 120, 0x2600, 40)
     struct.pack_into("<IIII", data, optional + 240 + 8, 0x1e00, 0x1000, 0x1e00, 0x200)
-    names = [name for name in ("narwhal_pure_core_abi_version", *gate.PURE_CORE_PARSE_EXPORTS, *gate.PURE_CORE_RETIREMENT_EXPORTS) if name != missing]
+    names = [name for name in ("narwhal_pure_core_abi_version", *gate.PURE_CORE_PARSE_EXPORTS, *gate.PURE_CORE_RETIREMENT_EXPORTS, *POLYLINE_EXPORTS) if name != missing]
     assert len(names) <= 64, "PE fixture export table capacity exceeded"
     offset = lambda rva: rva - 0x1000 + 0x200
     struct.pack_into("<IIIII", data, offset(0x1200) + 20,
@@ -1257,7 +1260,7 @@ class PackageTests(unittest.TestCase):
             linux_verify.verify_native_manifest(root, records)
 
     def test_windows_static_identity_and_native_execution(self):
-        exports = ("narwhal_pure_core_abi_version", *gate.PURE_CORE_PARSE_EXPORTS, *gate.PURE_CORE_RETIREMENT_EXPORTS)
+        exports = ("narwhal_pure_core_abi_version", *gate.PURE_CORE_PARSE_EXPORTS, *gate.PURE_CORE_RETIREMENT_EXPORTS, *POLYLINE_EXPORTS)
         identity = {"machine": "pe32plus-x86-64", "exports": exports}
         with patch.object(win_verify, "inspect_pe_dll", return_value=identity) as inspect:
             with patch.object(sys, "platform", "linux"), patch.object(win_verify, "probe_pure_core_parser") as probe:
@@ -1285,7 +1288,7 @@ class PackageTests(unittest.TestCase):
             path.write_bytes(pe_fixture())
             self.assertEqual(win_verify.pure_core_record(path)["parse_abi"], 2)
             for kwargs in ({"parser_abi": 1}, {"svg_abi": 1}, {"alias_abi": 14}, {"dxf_abi": 1}, {"reader_abi": 2},
-                           *({"missing": name} for name in (*gate.PURE_CORE_PARSE_EXPORTS,*gate.PURE_CORE_RETIREMENT_EXPORTS)),
+                           *({"missing": name} for name in (*gate.PURE_CORE_PARSE_EXPORTS,*gate.PURE_CORE_RETIREMENT_EXPORTS, *POLYLINE_EXPORTS)),
                            {"missing": "narwhal_pure_core_parse_abi"},
                            {"missing": "narwhal_pure_core_parse_v2"}):
                 path.write_bytes(pe_fixture(**kwargs))
@@ -1365,6 +1368,8 @@ class RetirementPackageTests(unittest.TestCase):
             if module is linux_build:
                 with patch.object(module,"probe_pure_core_nearest_batch",return_value={}), \
                         patch.object(module,"probe_pure_core_curve_hits",return_value={}), \
+                        patch.object(module,"probe_pure_core_curve_record_hits",return_value={}), \
+                        patch.object(module,"probe_pure_core_polyline_nearest",return_value={}), \
                         patch.object(module,"probe_pure_core_nurbs_record",return_value={}), \
                         patch.object(module,"probe_pure_core_line_samples",return_value={}):
                     namespace[method](self)
@@ -1384,7 +1389,7 @@ class RetirementPackageTests(unittest.TestCase):
             probe.assert_called_once()
 
     def test_windows_static_and_native_retirement_refusal(self):
-        exports = ("narwhal_pure_core_abi_version",*gate.PURE_CORE_PARSE_EXPORTS,*gate.PURE_CORE_RETIREMENT_EXPORTS)
+        exports = ("narwhal_pure_core_abi_version",*gate.PURE_CORE_PARSE_EXPORTS,*gate.PURE_CORE_RETIREMENT_EXPORTS, *POLYLINE_EXPORTS)
         identity = {"machine":"pe32plus-x86-64","exports":exports}
         for missing in gate.PURE_CORE_RETIREMENT_EXPORTS:
             with self.subTest(missing=missing), patch.object(win_verify,"inspect_pe_dll",return_value={
@@ -1869,6 +1874,23 @@ class GuardMutationTests(unittest.TestCase):
             restored = unittest.TestResult()
             PackageTests(method).run(restored)
             self.assertTrue(restored.wasSuccessful(), restored.errors or restored.failures)
+
+    def test_windows_additive_export_admission_is_load_bearing(self):
+        original=win_verify.verify_pure_core_identity
+        source=inspect.getsource(original)
+        old='        if identity["exports"].count(name) != 1:'
+        self.assertEqual(source.count(old),1)
+        namespace={}
+        exec(compile(source.replace(old,'        if False:',1),'<windows-additive-export-mutant>','exec'),
+             vars(win_verify),namespace)
+        with patch.object(win_verify,'verify_pure_core_identity',namespace['verify_pure_core_identity']):
+            red=unittest.TestResult()
+            PackageTests('test_windows_pe_missing_exports_and_wrong_parser_abi').run(red)
+            self.assertTrue(red.failures,'omitted additive export admission must fail the actual PE refusal test')
+            self.assertFalse(red.errors)
+        green=unittest.TestResult()
+        PackageTests('test_windows_pe_missing_exports_and_wrong_parser_abi').run(green)
+        self.assertTrue(green.wasSuccessful(),green.errors or green.failures)
 
     def test_packaging_tests_go_red_when_parser_probes_are_bypassed(self):
         # Mutate copied function ASTs in memory: no live source/bytecode writes.

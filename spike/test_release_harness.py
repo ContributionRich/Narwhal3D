@@ -74,6 +74,24 @@ NEW_TESTS = (
     'preview_responsiveness_gui', 'trim_box_gui',
 )
 NEW_SOURCES = (
+    'native/pure_core/src/curvex.rs',
+    'native/pure_core/src/nurbs_record.rs',
+    'native/pure_core/src/curvex_polyline_cases.rs',
+    'native/pure_core/src/nearest_polyline_cases.rs',
+    'spike/test_polyline_curve_hits.py',
+    'spike/test_polyline_nearest.py',
+    'spike/test_pure_core_curve_record_hits_gate.py',
+    'spike/test_pure_core_polyline_nearest_gate.py',
+    'native/geometry_core/src/exact_conversion.rs',
+    'native/geometry_core/cpp/exact_conversion.inc',
+    'native/geometry_core/src/cap.rs',
+    'native/geometry_core/cpp/cap_adapter.inc',
+    'native/geometry_core/cpp/exact_budget.inc',
+    'native/automation_core/tests/join_cap_policy.rs',
+    'narwhal3d/cap_worker.py',
+    'spike/test_cap_surfaces.py',
+    'spike/test_ai_join_cap_host.py',
+    'spike/test_cap_command.py',
     'native/geometry_core/src/join.rs',
     'native/geometry_core/cpp/join_adapter.inc',
     'spike/test_join_surfaces.py',
@@ -571,6 +589,20 @@ class PublicManifestTests(unittest.TestCase):
             with self.subTest(omission=marker), self.assertRaises(AssertionError):
                 validate(text.replace(marker, "", 1))
         validate(text)
+
+    def test_cap_admission_and_ai_join_cap_registration_mutations(self):
+        markers = ("Rust geometry-core exact Cap SDK admission",
+                   "from test_cap_surfaces import run_admission_probe; assert run_admission_probe()",
+                   "    spike/test_ai_join_cap_host.py\n",
+                   "    spike/test_cap_command.py\n")
+        text = (ROOT / "run_tests.sh").read_text()
+        def validate(value):
+            for marker in markers:
+                self.assertEqual(value.count(marker), 1)
+        validate(text)
+        for marker in markers:
+            with self.subTest(omission=marker), self.assertRaises(AssertionError):
+                validate(text.replace(marker, "", 1))
 
     def test_modeling_host_and_installed_gui_registration_mutations(self):
         def validate(text):

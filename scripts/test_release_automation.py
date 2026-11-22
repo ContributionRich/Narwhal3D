@@ -29,6 +29,11 @@ def resolver():
 
 
 class AutomationPackaging(unittest.TestCase):
+    @staticmethod
+    def cap_semantics():
+        return dict(suite="exact Cap startup", exact_faces=3, closed=True,
+                    recipe_verified=True, supervised=True, shifted_cone=True)
+
     def test_builder_produces_every_required_native_component(self):
         self.assertEqual(set(linux.NATIVE_COMPONENTS),
                          {name for names in builder.COMPONENTS.values() for name in names})
@@ -38,8 +43,10 @@ class AutomationPackaging(unittest.TestCase):
                          "narwhal_geometry_core_sweep1_freeform_approx_v1",
                          "narwhal_geometry_core_sweep1_parallel_v1"}
                         <= set(windows.GEOMETRY_CORE_EXPORTS))
-        self.assertEqual(len(windows.GEOMETRY_CORE_EXPORTS), 15)
+        self.assertEqual(len(windows.GEOMETRY_CORE_EXPORTS), 18)
         self.assertEqual(tuple(windows.GEOMETRY_CORE_EXPORTS), builder.GEOMETRY_CORE_EXPORTS)
+        self.assertTrue({"narwhal_geometry_core_cap_exact_v1", "narwhal_geometry_core_verify_cap_v1"}
+                        <= set(windows.GEOMETRY_CORE_EXPORTS))
         self.assertTrue({"narwhal_geometry_core_join_exact_v1",
                          "narwhal_geometry_core_join_mapped_v1",
                          "narwhal_geometry_core_verify_join_v1"} <= set(windows.GEOMETRY_CORE_EXPORTS))
@@ -47,12 +54,16 @@ class AutomationPackaging(unittest.TestCase):
     def test_geometry_join_probe_refuses_missing_capability_exports_and_semantics(self):
         semantics = dict(suite="exact Join startup", exact_faces=3, closed=True,
                          operand_count=3, recipe_verified=True)
-        good = dict(abi=4, capabilities=1023, exports=list(builder.GEOMETRY_CORE_EXPORTS),
-                    join_semantics=semantics)
+        good = dict(abi=4, capabilities=2047, exports=list(builder.GEOMETRY_CORE_EXPORTS),
+                    join_semantics=semantics, cap_semantics=self.cap_semantics())
         with patch.object(builder.subprocess, "run", return_value=types.SimpleNamespace(stdout=json.dumps(good))) as run:
             self.assertEqual(builder.probe_geometry_core_join(Path("candidate.so"), ROOT), good)
             self.assertIn("check_geometry_consumers", run.call_args.args[0][3])
-        variants = [dict(good, capabilities=511), dict(good, exports=good["exports"][:-1]),
+        variants = [dict(good, capabilities=1023),
+                    dict(good, cap_semantics=None),
+                    dict(good, cap_semantics=dict(self.cap_semantics(), supervised=False)),
+                    dict(good, cap_semantics=dict(self.cap_semantics(), recipe_verified=False)),
+                    dict(good, capabilities=511), dict(good, exports=good["exports"][:-1]),
                     dict(good, join_semantics=None),
                     dict(good, join_semantics=dict(semantics, exact_faces=4)),
                     dict(good, join_semantics=dict(semantics, closed=False)),
@@ -80,9 +91,9 @@ class AutomationPackaging(unittest.TestCase):
             include.write_text("exact join adapter")
             binary = root / "libnarwhal_geometry_core.so"
             binary.write_bytes(b"qualified synthetic identity")
-            probe = dict(abi=4, capabilities=1023, exports=list(builder.GEOMETRY_CORE_EXPORTS),
+            probe = dict(abi=4, capabilities=2047, exports=list(builder.GEOMETRY_CORE_EXPORTS),
                 join_semantics=dict(suite="exact Join startup", exact_faces=3, closed=True,
-                                    operand_count=3, recipe_verified=True))
+                                    operand_count=3, recipe_verified=True), cap_semantics=self.cap_semantics())
             record = dict(inputs=builder.inventory(root, "geometry_core"),
                           sha256=builder.digest(binary), geometry_core=probe)
             receipt = root / builder.GEOMETRY_CORE_SOURCE
@@ -104,9 +115,9 @@ class AutomationPackaging(unittest.TestCase):
 
     def test_geometry_manifest_requires_current_sources_and_join_semantics(self):
         record = dict(source_inputs=builder.geometry_source_inventory(ROOT),
-            geometry_core=dict(abi=4, capabilities=1023, exports=list(builder.GEOMETRY_CORE_EXPORTS),
+            geometry_core=dict(abi=4, capabilities=2047, exports=list(builder.GEOMETRY_CORE_EXPORTS),
                 join_semantics=dict(suite="exact Join startup", exact_faces=3, closed=True,
-                                    operand_count=3, recipe_verified=True)))
+                                    operand_count=3, recipe_verified=True), cap_semantics=self.cap_semantics()))
         linux_verify.verify_geometry_core_manifest({"libnarwhal_geometry_core.so": record})
         for key in ("source_inputs", "geometry_core"):
             damaged = dict(record)

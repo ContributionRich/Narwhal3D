@@ -450,7 +450,7 @@ def measure_objects(app, left, right):
                 method='occt_exact_shape_distance', unified_solid_verified=False)
 
 
-def _construct(action, resolve):
+def _construct(action, resolve, tolerance=1e-6):
     from . import bridge, cplane, kernel
     import rhino3dm as r3
     import math
@@ -559,6 +559,34 @@ def _construct(action, resolve):
         translate = r3.Transform.Translation(*action['translation'])
         moved = bridge.transform_geometry(geom, r3.Transform.Multiply(translate, r3.Transform.Multiply(rotate, scale)))
         return moved if moved is not None else geom
+    if op == 'join':
+        # Exact Join is NOT a boolean: one connected group that consumes every
+        # requested source. A group may remain an OPEN surface (cap it later);
+        # disconnected or partially-consumed sources are refused, never dropped.
+        # Stable canonical code (no raw kernel detail / path reaches the provider).
+        sources = [resolve(sr) for sr in action['sources']]
+        items = [(str(action['sources'][i]), sources[i]) for i in range(len(sources))]
+        result = bridge.join_breps(items, 2 * tolerance)
+        if len(result) != 1 or len(result[0][0]) != len(sources):
+            raise ValueError('join_connected_group_required')
+        return result[0][1]
+    if op == 'cap':
+        # Exact planar cap to one airtight solid. Declines are surfaced as a
+        # stable canonical code -- the native reason stays local (actionable for
+        # operators) but its raw text (which may embed paths) never crosses the SDK.
+        geom = resolve(action['source'])
+        out = bridge.cap_planar_holes_occt(geom, tolerance=tolerance)
+        if out is None:
+            reason = bridge.last_occt_decline()
+            if reason:
+                # Keep the actionable detail local-only; log where operators can read it.
+                try:
+                    import logging
+                    logging.getLogger('narwhal3d.cap').warning('cap refused locally: %s', reason)
+                except Exception:
+                    pass
+            raise ValueError('cap_planar_closure_refused')
+        return out
     raise ValueError('unsupported_modeling_operation')
 
 
@@ -691,12 +719,12 @@ def publish_steps(app, workflow, descriptor, document_session, scope_check):
                 if action.get('visible') is not None:
                     changes.append(('Visible', action['visible']))
                 attribute_changes[step['id']] = changes
-            geom = _construct(action, resolve)
+            geom = _construct(action, resolve, expected['tolerance'])
             facts[step['id']] = inspect_geometry(geom, expected['tolerance'])
             if step['action']['op'] in ('circle', 'curve', 'nurbs') and step['action'].get('closed', True):
                 if not facts[step['id']].get('closed'):
                     raise ValueError('closed_curve_required')
-            if step['action']['op'] in ('box', 'sphere', 'cylinder', 'cone', 'boolean', 'bevel', 'thickness') or (
+            if step['action']['op'] in ('box', 'sphere', 'cylinder', 'cone', 'boolean', 'bevel', 'thickness', 'cap') or (
                     step['action']['op'] == 'extrude' and step['action']['solid']) or (
                     step['action']['op'] == 'pipe' and step['action']['cap']) or (
                     step['action']['op'] == 'revolve' and step['action']['solid']):
@@ -818,7 +846,8 @@ def publish_steps(app, workflow, descriptor, document_session, scope_check):
                         'outline_requires_curve_or_extrusion_recipe', 'thickness_requires_untransformed_extrusion_recipe',
                         'replacement_unavailable', 'replacement_changed', 'target_layer_unavailable', 'object_name_collision',
                         'modeling_context_stale', 'modeling_context_changed', 'modeling_document_changed',
-            'solid_validation_failed', 'exact_geometry_required') else 'exact_operation_or_publication_failed'
+            'solid_validation_failed', 'exact_geometry_required',
+            'join_connected_group_required', 'cap_planar_closure_refused') else 'exact_operation_or_publication_failed'
         from .display_prepare import DisplayPreparationError
         if isinstance(failure, DisplayPreparationError):
             # Stable refusal codes, not worker stderr/paths, may reach the provider.

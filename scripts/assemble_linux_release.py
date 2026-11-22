@@ -18,7 +18,7 @@ import tempfile
 from typing import Any
 
 from build_linux_native import probe_ui_core, verify_ui_core_source, probe_geometry_core_join, verify_geometry_core_source
-from check_pure_core import probe_pure_core_parser, probe_pure_core_retirement
+from check_pure_core import probe_pure_core_parser, probe_pure_core_retirement, probe_pure_core_curve_record_hits, probe_pure_core_polyline_nearest
 
 from release_policy import (
     MAX_HOST_GLIBC, format_glibc, glibc_versions, scan_runtime_glibc,
@@ -606,6 +606,8 @@ def validate_native_components(
         records["libnarwhal_pure_core.so"].update(probe_pure_core_parser(
             directory / "libnarwhal_pure_core.so"))
         probe_pure_core_retirement(directory / "libnarwhal_pure_core.so")
+        probe_pure_core_curve_record_hits(directory / "libnarwhal_pure_core.so")
+        probe_pure_core_polyline_nearest(directory / "libnarwhal_pure_core.so")
     except ValueError as exc:
         raise ReleaseError(str(exc)) from exc
     try:
@@ -831,6 +833,7 @@ def assemble(args: argparse.Namespace) -> tuple[Path, Path, Path]:
             runtime_dir / "5.2/python/bin/python3.13", env=dict(os.environ,
                 LD_LIBRARY_PATH=str(runtime_dir / OCCT_LIB_RELATIVE),
                 NARWHAL3D_BREP_WRITER=str(exact_save_dir / EXACT_SAVE_HELPER),
+                NARWHAL_CONVERTER_SUPERVISOR=str(native_components_dir / "narwhal-converter-supervisor"),
                 PYTHONDONTWRITEBYTECODE="1"))
     except ValueError as error:
         raise ReleaseError(str(error)) from error

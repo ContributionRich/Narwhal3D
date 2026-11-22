@@ -17,7 +17,7 @@ import tempfile
 from typing import Any
 
 from build_linux_native import UI_CORE_IDENTITY, probe_ui_core, inventory as native_source_inventory, probe_geometry_core_join, geometry_source_inventory, GEOMETRY_CORE_EXPORTS, GEOMETRY_CORE_REQUIRED_CAPABILITIES
-from check_pure_core import PURE_CORE_PARSE_IDENTITY, probe_pure_core_parser, probe_pure_core_retirement
+from check_pure_core import PURE_CORE_PARSE_IDENTITY, probe_pure_core_parser, probe_pure_core_retirement, probe_pure_core_curve_record_hits, probe_pure_core_polyline_nearest
 
 from release_policy import (
     MAX_HOST_GLIBC, format_glibc, glibc_versions, scan_runtime_glibc,
@@ -585,6 +585,9 @@ def verify_geometry_core_manifest(native_components):
                 or probe.get("join_semantics") != {"suite": "exact Join startup", "exact_faces": 3,
                     "closed": True, "operand_count": 3, "recipe_verified": True}):
             raise ValueError("geometry-core manifest lacks exact Join evidence")
+        if probe.get("cap_semantics") != {"suite": "exact Cap startup", "exact_faces": 3,
+                "closed": True, "recipe_verified": True, "supervised": True, "shifted_cone": True}:
+            raise ValueError("geometry-core manifest lacks supervised exact Cap evidence")
     except (OSError, ValueError) as error:
         raise VerificationError(str(error)) from error
 
@@ -597,6 +600,10 @@ def verify_native_library_abis(app_root: Path, python: Path, environment: dict[s
                                python, env=environment)
         probe_pure_core_retirement(app_root / "narwhal3d/native/libnarwhal_pure_core.so",
                                    python, env=environment)
+        probe_pure_core_curve_record_hits(app_root / "narwhal3d/native/libnarwhal_pure_core.so",
+                                          python, env=environment)
+        probe_pure_core_polyline_nearest(app_root / "narwhal3d/native/libnarwhal_pure_core.so",
+                                        python, env=environment)
     except ValueError as exc:
         raise VerificationError(str(exc)) from exc
     abi_probe = (

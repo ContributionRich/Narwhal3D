@@ -14,9 +14,10 @@ import shutil
 import subprocess
 import sys
 
-from check_pure_core import (probe_pure_core_curve_hits, probe_pure_core_line_samples, probe_pure_core_nearest_batch,
+from check_pure_core import (probe_pure_core_curve_hits, probe_pure_core_curve_record_hits,
+                             probe_pure_core_line_samples, probe_pure_core_nearest_batch,
                              probe_pure_core_nurbs_record, probe_pure_core_parser,
-                             probe_pure_core_retirement)
+                             probe_pure_core_polyline_nearest, probe_pure_core_retirement)
 
 IMAGE = "quay.io/pypa/manylinux_2_28_x86_64@sha256:1e7b8460ad8fb3fb0fbe1cd818845159ac896b4fd17452d56e892c291f3b97a8"
 COMPONENTS = {
@@ -40,6 +41,9 @@ COMPONENTS = {
 GEOMETRY_CORE_EXPORTS = (
     "narwhal_geometry_core_abi_version",
     "narwhal_geometry_core_capabilities",
+    "narwhal_geometry_core_cap_exact_v1",
+    "narwhal_geometry_core_verify_cap_v1",
+    "narwhal_geometry_core_nurbs_convert_seam_safe_v1",
     "narwhal_geometry_core_edit_session_import",
     "narwhal_geometry_core_edit_session_move",
     "narwhal_geometry_core_edit_session_move_mode",
@@ -54,7 +58,7 @@ GEOMETRY_CORE_EXPORTS = (
     "narwhal_geometry_core_sweep1_parallel_v1",
     "narwhal_geometry_core_verify_join_v1",
 )
-GEOMETRY_CORE_REQUIRED_CAPABILITIES = (1 << 10) - 1
+GEOMETRY_CORE_REQUIRED_CAPABILITIES = (1 << 11) - 1
 GEOMETRY_CORE_SOURCE = "geometry-core-source.json"
 GEOMETRY_CORE_REQUIRED_SOURCE = (
     '.gitignore',
@@ -62,12 +66,17 @@ GEOMETRY_CORE_REQUIRED_SOURCE = (
     'Cargo.toml',
     'README.md',
     'build.rs',
+    'cpp/cap_adapter.inc',
+    'cpp/exact_budget.inc',
+    'cpp/exact_conversion.inc',
     'cpp/freeform_adapter.inc',
     'cpp/join_adapter.inc',
     'cpp/occt_adapter.cpp',
     'cpp/preparation_adapter.inc',
     'cpp/sweep_adapter.inc',
     'include/narwhal_geometry_core.h',
+    'src/cap.rs',
+    'src/exact_conversion.rs',
     'src/freeform.rs',
     'src/freeform_math.rs',
     'src/height_field.rs',
@@ -308,12 +317,15 @@ def verify_geometry_core_source(directory, root, library_name="libnarwhal_geomet
             or probe.get("join_semantics") != {"suite": "exact Join startup", "exact_faces": 3,
                 "closed": True, "operand_count": 3, "recipe_verified": True}):
         raise ValueError("geometry-core source receipt lacks exact Join qualification")
+    if probe.get("cap_semantics") != {"suite": "exact Cap startup", "exact_faces": 3,
+            "closed": True, "recipe_verified": True, "supervised": True, "shifted_cone": True}:
+        raise ValueError("geometry-core source receipt lacks supervised exact Cap qualification")
     return record
 
 
 def probe_geometry_core_join(library, root=None, python=None, *, env=None):
     """Check all existing exports/capabilities and, with a root, actual SDK semantics."""
-    code = 'import ctypes,json,os,sys,types,runpy\nfrom pathlib import Path\npath,root,exports,required=sys.argv[1:]\nlib=ctypes.CDLL(path)\nfor name in json.loads(exports): getattr(lib,name)\nlib.narwhal_geometry_core_abi_version.restype=ctypes.c_uint32\nlib.narwhal_geometry_core_capabilities.restype=ctypes.c_uint64\nabi=int(lib.narwhal_geometry_core_abi_version()); caps=int(lib.narwhal_geometry_core_capabilities())\nassert abi==4 and caps & int(required)==int(required),(abi,caps)\nresult=dict(abi=abi,capabilities=caps,exports=json.loads(exports))\nif root:\n    os.environ["NARWHAL_GEOMETRY_CORE"]=path\n    package=types.ModuleType("narwhal3d"); package.__path__=[str(Path(root)/"narwhal3d")]\n    sys.modules["narwhal3d"]=package\n    namespace=runpy.run_path(str(Path(root)/"launch/check_native.py"),run_name="geometry_join_admission")\n    result["join_semantics"]=namespace["check_geometry_consumers"]()\nprint(json.dumps(result,sort_keys=True))\n'
+    code = 'import ctypes,json,os,sys,types,runpy\nfrom pathlib import Path\npath,root,exports,required=sys.argv[1:]\nlib=ctypes.CDLL(path)\nfor name in json.loads(exports): getattr(lib,name)\nlib.narwhal_geometry_core_abi_version.restype=ctypes.c_uint32\nlib.narwhal_geometry_core_capabilities.restype=ctypes.c_uint64\nabi=int(lib.narwhal_geometry_core_abi_version()); caps=int(lib.narwhal_geometry_core_capabilities())\nassert abi==4 and caps & int(required)==int(required),(abi,caps)\nresult=dict(abi=abi,capabilities=caps,exports=json.loads(exports))\nif root:\n    os.environ["NARWHAL_GEOMETRY_CORE"]=path\n    package=types.ModuleType("narwhal3d"); package.__path__=[str(Path(root)/"narwhal3d")]\n    sys.modules["narwhal3d"]=package\n    namespace=runpy.run_path(str(Path(root)/"launch/check_native.py"),run_name="geometry_join_admission")\n    result["join_semantics"]=namespace["check_geometry_consumers"]()\n    result["cap_semantics"]=namespace["check_cap_consumers"]()\nprint(json.dumps(result,sort_keys=True))\n'
     try:
         completed = subprocess.run(
             [str(python or sys.executable), "-I", "-c", code, str(Path(library).resolve()),
@@ -329,9 +341,12 @@ def probe_geometry_core_join(library, root=None, python=None, *, env=None):
                 "suite": "exact Join startup", "exact_faces": 3, "closed": True,
                 "operand_count": 3, "recipe_verified": True}:
             raise ValueError("exact Join SDK admission differs")
+        if root and result.get("cap_semantics") != {"suite": "exact Cap startup",
+                "exact_faces": 3, "closed": True, "recipe_verified": True, "supervised": True, "shifted_cone": True}:
+            raise ValueError("exact Cap SDK admission differs")
         return result
     except (OSError, subprocess.SubprocessError, ValueError) as error:
-        raise ValueError("exact Join geometry admission failed: " + str(error)) from error
+        raise ValueError("exact Join/Cap geometry admission failed: " + str(error)) from error
 
 
 def inventory(root: Path, crate: str) -> dict[str, str]:
@@ -426,6 +441,8 @@ def main() -> None:
             receipt["pure_core_retirement"] = probe_pure_core_retirement(target / "release/libnarwhal_pure_core.so")
             receipt["pure_core_nearest_batch"] = probe_pure_core_nearest_batch(target / "release/libnarwhal_pure_core.so")
             receipt["pure_core_curve_hits"] = probe_pure_core_curve_hits(target / "release/libnarwhal_pure_core.so")
+            receipt["pure_core_curve_record_hits"] = probe_pure_core_curve_record_hits(target / "release/libnarwhal_pure_core.so")
+            receipt["pure_core_polyline_nearest"] = probe_pure_core_polyline_nearest(target / "release/libnarwhal_pure_core.so")
             receipt["pure_core_nurbs_record"] = probe_pure_core_nurbs_record(target / "release/libnarwhal_pure_core.so")
             receipt["pure_core_line_samples"] = probe_pure_core_line_samples(target / "release/libnarwhal_pure_core.so")
             (out / f"{args.crate}-{mode}-receipt.json").write_text(json.dumps(receipt, indent=2) + "\n")

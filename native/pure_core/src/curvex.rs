@@ -16,6 +16,20 @@
 //! * `Intersection.LineLine` is `ON_Intersect(ON_Line, ON_Line)` with its 2x2
 //!   `ON_Matrix::RowReduce` / `BackSolve` and near-singular check.
 //!
+//! Either curve may instead be an `ON_PolylineCurve` (what Polyline and Rectangle
+//! make), read from its encoded record (`narwhal_pure_core_curve_curve_record_hits`):
+//!
+//! * `PointAt` is `ON_PolylineCurve::Evaluate` (`ON_NurbsSpanIndex` over `m_t`, then
+//!   `(1-s)*P[i] + s*P[i+1]`);
+//! * `GetBoundingBox` is `ON_GetPointListBoundingBox` over the points;
+//! * `Split` is `ON_PolylineCurve::Split`: `ON_Curve::ParameterSearch` (which snaps a
+//!   parameter within `ON_SQRT_EPSILON` of a break to it) and `ON_PolylineCurve::Trim`
+//!   on each side, including its micro-segment removal.
+//!
+//! A polyline's `PointAt` and `Split` round each product separately; an SDK build that
+//! fuses a multiply-add rounds them differently, so `narwhal3d/native_intersect.py`
+//! routes polylines here only where the loaded rhino3dm matches on witness pairs.
+//!
 //! The Python helpers keep Python's semantics: `math.dist` is CPython's `vector_norm`,
 //! `sum()` is its compensated sum, `min`/`max` keep the first argument on ties and
 //! `sorted` is stable. So every hit is bit-identical to the Python's. The parameters
@@ -43,6 +57,9 @@ const ON_SQRT_EPSILON: f64 = 1.490116119385000000e-8;
 const ON_ZERO_TOLERANCE: f64 = 2.3283064365386962890625e-10;
 #[allow(clippy::excessive_precision)]
 const ON_DBL_MIN: f64 = 2.22507385850720200e-308;
+#[allow(clippy::excessive_precision)]
+const ON_UNSET_POSITIVE_VALUE: f64 = 1.23432101234321e+308;
+const ON_UNSET_VALUE: f64 = -ON_UNSET_POSITIVE_VALUE;
 
 type P3 = [f64; 3];
 
@@ -334,12 +351,49 @@ struct Curve {
     knots: Vec<f64>,
 }
 
-/// A curve with its evaluator, its domain and its bounding box.
+/// A curve's evaluator and its domain.
 struct Piece<'a> {
-    curve: &'a Curve,
-    eval: Nurbs<'a>,
+    eval: Eval<'a>,
     t0: f64,
     t1: f64,
+}
+
+enum Eval<'a> {
+    Nurbs(Nurbs<'a>),
+    Polyline(&'a Polyline),
+}
+
+/// A curve the recursion splits: a NURBS curve or a polyline, each split into its own kind
+/// as openNURBS does.
+#[derive(Clone)]
+enum Shape {
+    Nurbs(Curve),
+    Polyline(Polyline),
+}
+
+impl Shape {
+    fn piece(&self) -> Option<Piece<'_>> {
+        match self {
+            Shape::Nurbs(c) => c.piece(),
+            Shape::Polyline(p) => p.piece(),
+        }
+    }
+
+    fn bbox(&self) -> Option<(P3, P3)> {
+        match self {
+            Shape::Nurbs(c) => c.bbox(),
+            Shape::Polyline(p) => point_list_bbox(p.points.iter().map(|&q| Some(q))),
+        }
+    }
+
+    fn split(&self, t: f64) -> Option<(Shape, Shape)> {
+        match self {
+            Shape::Nurbs(c) => c.split(t).map(|(l, r)| (Shape::Nurbs(l), Shape::Nurbs(r))),
+            Shape::Polyline(p) => p
+                .split(t)
+                .map(|(l, r)| (Shape::Polyline(l), Shape::Polyline(r))),
+        }
+    }
 }
 
 impl Curve {
@@ -354,8 +408,7 @@ impl Curve {
     fn piece(&self) -> Option<Piece<'_>> {
         let eval = Nurbs::new(self.order, &self.knots, &self.cvs, self.rational)?;
         Some(Piece {
-            curve: self,
-            eval,
+            eval: Eval::Nurbs(eval),
             t0: self.knots[self.order - 2],
             t1: self.knots[self.cv_count - 1],
         })
@@ -451,8 +504,7 @@ impl Curve {
 
     /// `ON_NurbsCurve::GetBBox` (`ON_GetPointListBoundingBox` over the control points).
     fn bbox(&self) -> Option<(P3, P3)> {
-        let mut points = self.cvs.chunks_exact(S);
-        let euclid = |cv: &[f64]| -> Option<P3> {
+        point_list_bbox(self.cvs.chunks_exact(S).map(|cv| {
             if self.rational {
                 if cv[3] == 0.0 {
                     return None;
@@ -462,26 +514,354 @@ impl Curve {
             } else {
                 Some([cv[0], cv[1], cv[2]])
             }
-        };
-        let first = euclid(points.next()?)?;
-        let (mut lo, mut hi) = (first, first);
-        for cv in points {
-            let p = euclid(cv)?;
-            for j in 0..3 {
-                if lo[j] > p[j] {
-                    lo[j] = p[j];
-                } else if hi[j] < p[j] {
-                    hi[j] = p[j];
-                }
+        }))
+    }
+}
+
+/// `ON_GetPointListBoundingBox` over Euclidean points; None for an empty list or a point
+/// that has none (a zero weight).
+fn point_list_bbox(mut points: impl Iterator<Item = Option<P3>>) -> Option<(P3, P3)> {
+    let first = points.next()??;
+    let (mut lo, mut hi) = (first, first);
+    for p in points {
+        let p = p?;
+        for j in 0..3 {
+            if lo[j] > p[j] {
+                lo[j] = p[j];
+            } else if hi[j] < p[j] {
+                hi[j] = p[j];
             }
         }
-        Some((lo, hi))
+    }
+    Some((lo, hi))
+}
+
+// ---------------------------------------------------------------------------
+// openNURBS: ON_PolylineCurve
+// ---------------------------------------------------------------------------
+
+/// `ON_IS_VALID`: strictly between the unset values (so never NaN).
+fn on_is_valid(x: f64) -> bool {
+    x > ON_UNSET_VALUE && x < ON_UNSET_POSITIVE_VALUE
+}
+
+/// `ON_Interval::IsIncreasing`.
+fn is_increasing(d: (f64, f64)) -> bool {
+    ON_UNSET_VALUE < d.0 && d.0 < d.1 && d.1 < ON_UNSET_POSITIVE_VALUE
+}
+
+/// `ON_Interval::Min`, `Max` (NaN when the ends do not compare).
+fn interval_min_max(d: (f64, f64)) -> (f64, f64) {
+    if d.0 <= d.1 {
+        (d.0, d.1)
+    } else if d.1 <= d.0 {
+        (d.1, d.0)
+    } else {
+        (f64::NAN, f64::NAN)
+    }
+}
+
+/// `ON_Interval::Intersection(other)` on `a`: the intersection, or None (openNURBS then
+/// leaves the empty interval, which no caller here reads).
+fn interval_intersection(a: (f64, f64), b: (f64, f64)) -> Option<(f64, f64)> {
+    let empty = |d: (f64, f64)| d.0 == ON_UNSET_VALUE && d.1 == ON_UNSET_VALUE;
+    if empty(a) && empty(b) {
+        return None;
+    }
+    let ((a0, a1), (b0, b1)) = (interval_min_max(a), interval_min_max(b));
+    let mn = if a0 >= b0 { a0 } else { b0 };
+    let mx = if a1 <= b1 { a1 } else { b1 };
+    (mn <= mx).then_some((mn, mx))
+}
+
+/// `ON_Interval::NormalizedParameterAt(t)`.
+fn normalized_parameter_at(d: (f64, f64), t: f64) -> f64 {
+    if !on_is_valid(t) {
+        return ON_UNSET_VALUE;
+    }
+    if d.0 != d.1 {
+        if t == d.1 {
+            1.0
+        } else {
+            (t - d.0) / (d.1 - d.0)
+        }
+    } else {
+        0.0
+    }
+}
+
+/// An `ON_PolylineCurve` with `m_dim` 3: `m_pline` and `m_t`, always the same length.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct Polyline {
+    points: Vec<P3>,
+    t: Vec<f64>,
+}
+
+impl Polyline {
+    /// `Domain()`: `(m_t[0], m_t[count-1])`, or openNURBS's unset interval.
+    fn domain(&self) -> (f64, f64) {
+        let count = self.points.len();
+        if self.t.len() >= count && count >= 2 && self.t[0] < self.t[count - 1] {
+            (self.t[0], self.t[count - 1])
+        } else {
+            (ON_UNSET_VALUE, ON_UNSET_VALUE)
+        }
+    }
+
+    /// A piece only on an increasing domain; the Python answers any other.
+    fn piece(&self) -> Option<Piece<'_>> {
+        let (t0, t1) = self.domain();
+        is_increasing((t0, t1)).then_some(Piece {
+            eval: Eval::Polyline(self),
+            t0,
+            t1,
+        })
+    }
+
+    /// `Evaluate(t, 0, 3, v, 0, nullptr)`, behind `PointAt`. The recursion never asks
+    /// at a NaN parameter (`newton` hands one to the Python); answering NaN keeps the
+    /// span search on the array if anything ever did.
+    pub(crate) fn point(&self, t: f64) -> P3 {
+        self.evaluate(t)[0]
+    }
+
+    /// `Evaluate(t, 2, 3, v, 0, nullptr)`, behind `DerivativeAt(t, 2)`: the point, the
+    /// first derivative `1/(t1-t0) * (P[i+1] - P[i])` and a zero second derivative.
+    pub(crate) fn derivatives(&self, t: f64) -> [P3; 3] {
+        self.evaluate(t)
+    }
+
+    fn evaluate(&self, t: f64) -> [P3; 3] {
+        if t.is_nan() {
+            return [[f64::NAN; 3]; 3];
+        }
+        let i = span_index(2, self.points.len(), &self.t, t, 0, 0);
+        let (t0, t1) = (self.t[i], self.t[i + 1]);
+        let s = if t == t1 { 1.0 } else { (t - t0) / (t1 - t0) };
+        let (p, q) = (self.points[i], self.points[i + 1]);
+        let r = 1.0 / (t1 - t0);
+        [
+            std::array::from_fn(|k| (1.0 - s) * p[k] + s * q[k]),
+            std::array::from_fn(|k| r * (q[k] - p[k])),
+            [0.0; 3],
+        ]
+    }
+
+    /// `Domain()` as the SDK reports it, for a curve `polyline_from_record` accepted.
+    pub(crate) fn ends(&self) -> (f64, f64) {
+        self.domain()
+    }
+
+    /// `SpanCount()`: `ON_Polyline::SegmentCount`.
+    pub(crate) fn span_count(&self) -> usize {
+        self.points.len().saturating_sub(1)
+    }
+
+    /// `ON_Curve::ParameterSearch(t, index, true, m_t, ON_SQRT_EPSILON)`: whether `t` is,
+    /// or snaps to, `m_t[index]`.
+    fn parameter_search(&self, t: f64) -> (bool, isize) {
+        let count = self.t.len();
+        let c_dom = self.domain();
+        if count <= 1 || !on_is_valid(t) {
+            return (false, -1);
+        }
+        let mut index = search_monotone(&self.t, t);
+        let last = count as isize - 1;
+        let mut rc = index >= 0 && index <= last && t == self.t[index as usize];
+        if !rc {
+            let (a, b) = (c_dom.0.abs(), c_dom.1.abs());
+            let ktol = ON_SQRT_EPSILON * if a < b { b } else { a };
+            if index >= 0 && index < last {
+                let i = index as usize;
+                let middle_t = 0.5 * (self.t[i] + self.t[i + 1]);
+                if t < middle_t && t - self.t[i] <= ktol {
+                    rc = true;
+                } else if t > middle_t && self.t[i + 1] - t <= ktol {
+                    rc = true;
+                    index += 1;
+                }
+            } else if index == count as isize {
+                if t - self.t[count - 1] <= ktol {
+                    rc = true;
+                    index = last;
+                }
+            } else if index < 0 && self.t[0] - t <= ktol {
+                rc = true;
+                index = 0;
+            }
+        }
+        (rc, index)
+    }
+
+    /// `Trim(domain)`. On false the curve is left as openNURBS leaves it, which may be
+    /// partly trimmed.
+    fn trim(&mut self, domain: (f64, f64)) -> bool {
+        let mut segment_count = self.t.len() as isize - 1;
+        if segment_count < 1 || self.t.len() != self.points.len() || !is_increasing(domain) {
+            return false;
+        }
+        let original = self.domain();
+        if !is_increasing(original) {
+            return false;
+        }
+        let Some(output) = interval_intersection(domain, original) else {
+            return false;
+        };
+        if !is_increasing(output) {
+            return false;
+        }
+        let mut actual = output;
+        let (found, mut s0) = self.parameter_search(output.0);
+        if found && s0 >= 0 && s0 <= segment_count {
+            actual.0 = self.t[s0 as usize];
+        }
+        let (found, mut s1) = self.parameter_search(output.1);
+        if found && s1 >= 0 && s1 <= segment_count {
+            actual.1 = self.t[s1 as usize];
+            s1 -= 1;
+        }
+        if !is_increasing(actual) {
+            return false;
+        }
+        if s0 < 0 || s0 > s1 || s1 >= segment_count {
+            return false;
+        }
+        if actual == original {
+            #[cfg(test)]
+            tests::bump(&tests::TRIM_WHOLE);
+            self.t[0] = output.0;
+            self.t[segment_count as usize] = output.1;
+            return true;
+        }
+        if s1 < segment_count - 1 {
+            self.t.truncate(s1 as usize + 2);
+            self.points.truncate(s1 as usize + 2);
+            segment_count = s1 + 1;
+        }
+        if s0 > 0 {
+            let (from, end) = (s0 as usize, segment_count as usize);
+            self.t.copy_within(from..=end, 0);
+            self.points.copy_within(from..=end, 0);
+            s1 -= s0;
+            s0 = 0;
+            self.t.truncate(s1 as usize + 2);
+            self.points.truncate(s1 as usize + 2);
+        }
+        let trim_first = self.t[0] < actual.0 || (s1 == 0 && actual.1 < self.t[1]);
+        let trim_last =
+            s1 > s0 && self.t[s1 as usize] < actual.1 && actual.1 < self.t[s1 as usize + 1];
+        if trim_first {
+            let seg = (self.t[0], self.t[1]);
+            let (chord0, chord1) = (self.points[0], self.points[1]);
+            let (mut q0, mut q1) = (chord0, chord1);
+            let (mut np0, mut np1) = (0.0, 1.0);
+            let (mut set0, mut set1) = (false, false);
+            if self.t[0] < actual.0 && actual.0 < self.t[1] {
+                np0 = normalized_parameter_at(seg, actual.0);
+                q0 = line_point_at(chord0, chord1, np0);
+                set0 = true;
+            }
+            if s1 == 0 && self.t[0] < actual.1 && actual.1 < self.t[1] {
+                np1 = normalized_parameter_at(seg, actual.1);
+                q1 = line_point_at(chord0, chord1, np1);
+                set1 = true;
+            }
+            if np0 >= np1 {
+                return false; // trim is not viable
+            }
+            if set0 {
+                if np0 >= 1.0 - ON_SQRT_EPSILON
+                    && on_distance(q0, q1) <= ON_ZERO_TOLERANCE
+                    && s1 > 0
+                    && self.t[1] < actual.1
+                {
+                    // a micro segment would be left at the start: drop the first segment
+                    #[cfg(test)]
+                    tests::bump(&tests::MICRO_START);
+                    self.t.remove(0);
+                    self.points.remove(0);
+                    s1 -= 1;
+                    actual.0 = self.t[0];
+                }
+                self.t[0] = actual.0;
+                self.points[0] = q0;
+            }
+            if set1 {
+                self.t[1] = actual.1;
+                self.points[1] = q1;
+            }
+        }
+        if trim_last {
+            let i = s1 as usize;
+            let seg = (self.t[i], self.t[i + 1]);
+            let q0 = self.points[i];
+            let np = normalized_parameter_at(seg, actual.1);
+            let q1 = line_point_at(q0, self.points[i + 1], np);
+            let mut i = i;
+            if np <= ON_SQRT_EPSILON && on_distance(q1, q0) <= ON_ZERO_TOLERANCE && s1 > 0 {
+                // a micro segment would be left at the end: drop the last segment
+                #[cfg(test)]
+                tests::bump(&tests::MICRO_END);
+                self.t.truncate(i + 1);
+                self.points.truncate(i + 1);
+                i -= 1;
+                actual.1 = self.t[i + 1];
+            }
+            self.t[i + 1] = actual.1;
+            self.points[i + 1] = q1;
+        }
+        self.t[0] = output.0;
+        let last = self.t.len() - 1;
+        self.t[last] = output.1;
+        true
+    }
+
+    /// `Split(t)`: both sides, or None where openNURBS returns false.
+    fn split(&self, t: f64) -> Option<(Polyline, Polyline)> {
+        let n = self.t.len();
+        let count = n as isize - 1; // segments
+        if !(count >= 1 && self.t[0] < t && t < self.t[n - 1]) {
+            return None;
+        }
+        let (at_break, segment_index) = self.parameter_search(t);
+        if !((segment_index >= 1 || (!at_break && segment_index == 0)) && segment_index < count) {
+            return None;
+        }
+        let i = segment_index as usize;
+        #[cfg(test)]
+        if at_break && !self.t.contains(&t) {
+            tests::bump(&tests::SNAPPED);
+        }
+        let left_count = if at_break { i + 1 } else { i + 2 };
+        let right_count = n - i;
+        let mut left = Polyline {
+            points: self.points[..left_count].to_vec(),
+            t: self.t[..left_count].to_vec(),
+        };
+        if at_break {
+            left.t[left_count - 1] = t; // reparameterize the last segment
+        }
+        let mut right = Polyline {
+            points: self.points[n - right_count..].to_vec(),
+            t: self.t[n - right_count..].to_vec(),
+        };
+        if at_break {
+            right.t[0] = t; // reparameterize the first segment
+        }
+        let left_domain = (left.t[0], t);
+        left.trim(left_domain);
+        let right_domain = (t, right.t[right_count - 1]);
+        right.trim(right_domain);
+        Some((left, right))
     }
 }
 
 impl Piece<'_> {
     fn point(&self, t: f64) -> P3 {
-        self.eval.point(t)
+        match &self.eval {
+            Eval::Nurbs(n) => n.point(t),
+            Eval::Polyline(p) => p.point(t),
+        }
     }
 
     /// `_is_linear_enough`.
@@ -828,8 +1208,8 @@ fn boxes_overlap(a: (P3, P3), b: (P3, P3), tol: f64) -> bool {
 /// `_subdivide`; `None` where the Python would reach an operation this port does not
 /// cover (an invalid sub-curve), so the caller runs the Python.
 fn subdivide(
-    ca: &Curve,
-    cb: &Curve,
+    ca: &Shape,
+    cb: &Shape,
     tol: f64,
     depth: usize,
     max_depth: usize,
@@ -862,13 +1242,13 @@ fn subdivide(
         out.extend(base_case(&pa, &pb, tol)?);
         return Some(());
     }
-    let xs: Vec<&Curve> = match &a_parts {
+    let xs: Vec<&Shape> = match &a_parts {
         Some((l, r)) => vec![l, r],
-        None => vec![pa.curve],
+        None => vec![ca],
     };
-    let ys: Vec<&Curve> = match &b_parts {
+    let ys: Vec<&Shape> = match &b_parts {
         Some((l, r)) => vec![l, r],
-        None => vec![pb.curve],
+        None => vec![cb],
     };
     for x in &xs {
         for y in &ys {
@@ -895,8 +1275,8 @@ fn dedupe(mut hits: Vec<Hit>, tol: f64) -> Vec<Hit> {
     kept
 }
 
-/// `curve_curve`'s point hits for two NURBS curves: `_subdivide` then `_dedupe`.
-fn point_hits(a: &Curve, b: &Curve, tol: f64, max_depth: usize) -> Option<Vec<Hit>> {
+/// `curve_curve`'s point hits: `_subdivide` then `_dedupe`.
+fn point_hits(a: &Shape, b: &Shape, tol: f64, max_depth: usize) -> Option<Vec<Hit>> {
     let mut hits = Vec::new();
     subdivide(a, b, tol, 0, max_depth, &mut hits)?;
     Some(dedupe(hits, tol))
@@ -928,13 +1308,24 @@ unsafe fn read_curve(
     ) else {
         return Err(ERR_NULL);
     };
+    curve_from(order, cv_count, rational == 1, k, c)
+}
+
+/// A NURBS curve from arrays of settled lengths: finite, with an evaluator and a domain.
+fn curve_from(
+    order: usize,
+    cv_count: usize,
+    rational: bool,
+    k: &[f64],
+    c: &[f64],
+) -> Result<Curve, i32> {
     if !k.iter().chain(c).all(|v| v.is_finite()) {
         return Err(ERR_INPUT);
     }
     let curve = Curve {
         order,
         cv_count,
-        rational: rational == 1,
+        rational,
         cvs: c.to_vec(),
         knots: k.to_vec(),
     };
@@ -1005,7 +1396,28 @@ pub unsafe extern "C" fn narwhal_pure_core_curve_curve_hits(
         Ok(c) => c,
         Err(code) => return code,
     };
-    let Some(hits) = point_hits(&a, &b, tol, max_depth) else {
+    write_hits(
+        &Shape::Nurbs(a),
+        &Shape::Nurbs(b),
+        tol,
+        max_depth,
+        out_hits,
+        capacity,
+        out_count,
+    )
+}
+
+/// Run the recursion and write its hits as `narwhal_pure_core_curve_curve_hits` does.
+unsafe fn write_hits(
+    a: &Shape,
+    b: &Shape,
+    tol: f64,
+    max_depth: usize,
+    out_hits: *mut f64,
+    capacity: usize,
+    out_count: *mut usize,
+) -> i32 {
+    let Some(hits) = point_hits(a, b, tol, max_depth) else {
         return ERR_INPUT;
     };
     *out_count = hits.len();
@@ -1021,8 +1433,158 @@ pub unsafe extern "C" fn narwhal_pure_core_curve_curve_hits(
     0
 }
 
+/// One curve from its encoded record: a NURBS curve (checked as `read_curve` checks the
+/// arrays) or a 3-D polyline with 2 to `MAX_CVS` points, strictly increasing parameters
+/// and every value `ON_IS_VALID`. Anything else is `ERR_INPUT`, for the Python.
+fn shape_from_record(data: &[u8]) -> Result<Shape, i32> {
+    if let Some(r) = crate::nurbs_record::read(data) {
+        if !(2..=MAX_ORDER).contains(&r.order) || r.cv_count > MAX_CVS {
+            return Err(ERR_INPUT);
+        }
+        let (mut knots, mut cvs) = (vec![0.0; r.knot_count], vec![0.0; r.cv_doubles()]);
+        r.write(&mut knots, &mut cvs);
+        return curve_from(r.order, r.cv_count, r.rational, &knots, &cvs).map(Shape::Nurbs);
+    }
+    polyline_from_record(data)
+        .map(Shape::Polyline)
+        .ok_or(ERR_INPUT)
+}
+
+/// A 3-D polyline from its encoded record: 2 to `MAX_CVS` points, strictly increasing
+/// parameters and every value `ON_IS_VALID`; None otherwise.
+pub(crate) fn polyline_from_record(data: &[u8]) -> Option<Polyline> {
+    let r = crate::nurbs_record::read_polyline(data)?;
+    if !(2..=MAX_CVS).contains(&r.point_count) {
+        return None;
+    }
+    let (points, t) = r.arrays();
+    let valid = points.iter().flatten().chain(&t).all(|&v| on_is_valid(v));
+    (valid && t.windows(2).all(|w| w[0] < w[1])).then_some(Polyline { points, t })
+}
+
+/// `narwhal_pure_core_curve_curve_hits` for two curves given as encoded records
+/// (`base64.b64decode(curve.Encode()["data"])`), each an `ON_NurbsCurve` or an
+/// `ON_PolylineCurve`: the only way to hand Rust a polyline's parameters, which rhino3dm
+/// does not expose. A record of any other class, or one `shape_from_record` refuses, is
+/// `ERR_INPUT`, and so is anything the recursion cannot answer: the Python then answers.
+///
+/// # Safety
+/// `a`/`b` reference `a_len`/`b_len` readable bytes, `out_hits` `capacity * 5` writable
+/// values and `out_count` one writable `usize`.
+#[allow(clippy::too_many_arguments)]
+#[no_mangle]
+pub unsafe extern "C" fn narwhal_pure_core_curve_curve_record_hits(
+    a: *const u8,
+    a_len: usize,
+    b: *const u8,
+    b_len: usize,
+    tol: f64,
+    max_depth: usize,
+    out_hits: *mut f64,
+    capacity: usize,
+    out_count: *mut usize,
+) -> i32 {
+    if out_count.is_null() || !(out_count as usize).is_multiple_of(std::mem::align_of::<usize>()) {
+        return ERR_NULL;
+    }
+    // Validate every region before touching even the count. Encoded inputs may
+    // overlap each other, but no writable span may alias either input or count.
+    fn region<T>(pointer: *const T, count: usize) -> Option<(usize, usize)> {
+        let bytes = count.checked_mul(std::mem::size_of::<T>())?;
+        if bytes == 0 {
+            return Some((0, 0));
+        }
+        let first = pointer as usize;
+        // Raw ranges detect aliases before writes. Existing typed-span checks
+        // below retain the ABI's zero-count/null-input and size-query behavior.
+        if bytes > isize::MAX as usize {
+            return None;
+        }
+        Some((first, first.checked_add(bytes)?))
+    }
+    let Some(values) = capacity.checked_mul(5) else {
+        return ERR_INPUT;
+    };
+    let (Some(ar), Some(br), Some(out), Some(count)) = (
+        region(a, a_len),
+        region(b, b_len),
+        region(out_hits, values),
+        region(out_count, 1),
+    ) else {
+        return ERR_NULL;
+    };
+    let overlap = |x: (usize, usize), y: (usize, usize)| x.0 < y.1 && y.0 < x.1;
+    if overlap(ar, out)
+        || overlap(br, out)
+        || overlap(ar, count)
+        || overlap(br, count)
+        || overlap(out, count)
+    {
+        return ERR_NULL;
+    }
+    *out_count = 0;
+    if !tol.is_finite() || max_depth > MAX_DEPTH {
+        return ERR_INPUT;
+    }
+    let (Some(a), Some(b)) = (
+        crate::checked_slice(a, a_len),
+        crate::checked_slice(b, b_len),
+    ) else {
+        return ERR_NULL;
+    };
+    let (a, b) = match (shape_from_record(a), shape_from_record(b)) {
+        (Ok(a), Ok(b)) => (a, b),
+        (Err(code), _) | (_, Err(code)) => return code,
+    };
+    write_hits(&a, &b, tol, max_depth, out_hits, capacity, out_count)
+}
+
 #[cfg(test)]
-mod tests {
+#[path = "curvex_polyline_cases.rs"]
+mod polyline_cases;
+
+#[cfg(test)]
+/// An `ON_PolylineCurve` record of `points` and `params`, as `curve.Encode()` frames it.
+pub(crate) fn polyline_record(points: &[P3], params: &[f64]) -> Vec<u8> {
+    let mut payload = vec![0x10];
+    payload.extend((points.len() as i32).to_le_bytes());
+    payload.extend(points.iter().flatten().flat_map(|v| v.to_le_bytes()));
+    payload.extend((params.len() as i32).to_le_bytes());
+    payload.extend(params.iter().flat_map(|v| v.to_le_bytes()));
+    payload.extend(3i32.to_le_bytes());
+    // the framing of a real record, around this payload (nurbs_record checks the CRCs)
+    let real = tests::unhex(polyline_cases::CASES[0].record);
+    let crc = |b: &[u8]| {
+        let mut c = !0u32;
+        for &x in b {
+            c ^= x as u32;
+            for _ in 0..8 {
+                c = if c & 1 != 0 {
+                    0xEDB8_8320 ^ (c >> 1)
+                } else {
+                    c >> 1
+                };
+            }
+        }
+        !c
+    };
+    let chunk = |tcode: u32, body: &[u8], with_crc: bool| {
+        let mut out = tcode.to_le_bytes().to_vec();
+        out.extend(((body.len() + 4 * usize::from(with_crc)) as i64).to_le_bytes());
+        out.extend(body);
+        if with_crc {
+            out.extend(crc(body).to_le_bytes());
+        }
+        out
+    };
+    let mut inner = real[12..44].to_vec(); // the class-id chunk
+    inner.extend(chunk(0x0002_FFFC, &payload, true));
+    inner.extend(real[real.len() - 12..].iter());
+    chunk(0x0002_7FFA, &inner, false)
+}
+
+#[cfg(test)]
+pub(crate) mod tests {
     use super::*;
 
     fn cubic(points: &[P3]) -> Curve {
@@ -1109,7 +1671,7 @@ mod tests {
             [12.0, 0.5, 0.0],
             [18.0, 0.5, 0.0],
         ]);
-        let hits = point_hits(&a, &b, 1e-6, 40).unwrap();
+        let hits = point_hits(&Shape::Nurbs(a), &Shape::Nurbs(b), 1e-6, 40).unwrap();
         // y = 12 t (1 - t) (1 - 2 t) meets y = 0.5 twice
         assert_eq!(hits.len(), 2, "{hits:?}");
         for h in &hits {
@@ -1225,6 +1787,15 @@ mod tests {
     thread_local! {
         pub(super) static VELOCITY_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
         pub(super) static DEEPEST: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+        // polyline Split/Trim branches the SDK-captured cases reach
+        pub(super) static TRIM_WHOLE: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+        pub(super) static MICRO_START: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+        pub(super) static MICRO_END: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+        pub(super) static SNAPPED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    }
+
+    pub(super) fn bump(counter: &'static std::thread::LocalKey<std::cell::Cell<usize>>) {
+        counter.with(|n| n.set(n.get() + 1));
     }
 
     fn line(a: P3, b: P3) -> Curve {
@@ -1502,6 +2073,265 @@ mod tests {
         assert!(deepest >= 40, "{deepest} levels");
     }
 
+    pub(crate) fn unhex(s: &str) -> Vec<u8> {
+        (0..s.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap())
+            .collect()
+    }
+
+    fn rows_of(p: &Polyline) -> Vec<[u64; 4]> {
+        p.t.iter()
+            .zip(&p.points)
+            .map(|(t, q)| [t.to_bits(), q[0].to_bits(), q[1].to_bits(), q[2].to_bits()])
+            .collect()
+    }
+
+    #[test]
+    fn polyline_point_and_split_give_the_sdk_bits() {
+        for c in [&TRIM_WHOLE, &MICRO_START, &MICRO_END, &SNAPPED] {
+            c.with(|n| n.set(0));
+        }
+        let (mut points, mut splits, mut refused) = (0, 0, 0);
+        for case in polyline_cases::CASES {
+            let data = unhex(case.record);
+            let Ok(Shape::Polyline(p)) = shape_from_record(&data) else {
+                panic!("{}: the record is a valid polyline", case.name);
+            };
+            for &[t, x, y, z] in case.points {
+                let q = p.point(f64::from_bits(t));
+                assert_eq!(
+                    q.map(f64::to_bits),
+                    [x, y, z],
+                    "{}: PointAt({})",
+                    case.name,
+                    f64::from_bits(t)
+                );
+                points += 1;
+            }
+            for (t, want) in case.splits {
+                let got = p.split(f64::from_bits(*t));
+                let got = got.as_ref().map(|(l, r)| (rows_of(l), rows_of(r)));
+                let want = want.map(|(l, r)| (l.to_vec(), r.to_vec()));
+                assert_eq!(got, want, "{}: Split({})", case.name, f64::from_bits(*t));
+                splits += 1;
+                refused += usize::from(want.is_none());
+            }
+        }
+        assert_eq!((points, splits, refused), (177, 300, 98));
+        // every Split/Trim branch the SDK cases were built to reach
+        for (name, c) in [
+            ("a whole-domain trim", &TRIM_WHOLE),
+            ("a micro segment at the start", &MICRO_START),
+            ("a micro segment at the end", &MICRO_END),
+            ("a parameter snapped to a break", &SNAPPED),
+        ] {
+            assert!(c.with(|n| n.get()) > 0, "no case reaches {name}");
+        }
+    }
+
+    unsafe fn record_hits(
+        a: &[u8],
+        b: &[u8],
+        tol: f64,
+        depth: usize,
+        out: &mut [f64],
+    ) -> (i32, usize) {
+        let mut count = 0;
+        let code = narwhal_pure_core_curve_curve_record_hits(
+            a.as_ptr(),
+            a.len(),
+            b.as_ptr(),
+            b.len(),
+            tol,
+            depth,
+            out.as_mut_ptr(),
+            out.len() / 5,
+            &mut count,
+        );
+        (code, count)
+    }
+
+    #[test]
+    fn the_record_export_answers_a_polyline_and_refuses_what_it_cannot() {
+        let rect = polyline_record(
+            &[
+                [0.0, 0.0, 0.0],
+                [4.0, 0.0, 0.0],
+                [4.0, 2.0, 0.0],
+                [0.0, 2.0, 0.0],
+                [0.0, 0.0, 0.0],
+            ],
+            &[0.0, 1.0, 2.0, 3.0, 4.0],
+        );
+        let cross = polyline_record(&[[2.0, -1.0, 0.0], [2.0, 3.0, 0.0]], &[0.0, 1.0]);
+        let mut out = [0.0; 5 * 4];
+        unsafe {
+            assert_eq!(record_hits(&rect, &cross, 1e-6, 40, &mut out), (0, 2));
+            assert_eq!(&out[..5], &[2.0, 0.0, 0.0, 0.5, 0.25]);
+            assert_eq!(&out[5..10], &[2.0, 2.0, 0.0, 2.5, 0.75]);
+            assert_eq!(record_hits(&rect, &cross, 1e-6, 40, &mut []), (ERR_SIZE, 2));
+            assert_eq!(
+                record_hits(&rect, &cross, f64::NAN, 40, &mut out).0,
+                ERR_INPUT
+            );
+            assert_eq!(
+                record_hits(&rect, &cross, 1e-6, MAX_DEPTH + 1, &mut out).0,
+                ERR_INPUT
+            );
+            let refused = |points: &[P3], params: &[f64]| {
+                let bad = polyline_record(points, params);
+                let mut out = [0.0; 5];
+                record_hits(&bad, &cross, 1e-6, 40, &mut out).0
+            };
+            let (a, b) = ([0.0, 0.0, 0.0], [1.0, 0.0, 0.0]);
+            assert_eq!(refused(&[a], &[0.0]), ERR_INPUT, "one point");
+            assert_eq!(refused(&[a, b], &[1.0, 1.0]), ERR_INPUT, "equal parameters");
+            assert_eq!(
+                refused(&[a, b], &[1.0, 0.0]),
+                ERR_INPUT,
+                "decreasing parameters"
+            );
+            assert_eq!(
+                refused(&[a, b], &[0.0, f64::NAN]),
+                ERR_INPUT,
+                "a NaN parameter"
+            );
+            assert_eq!(
+                refused(&[[f64::INFINITY, 0.0, 0.0], b], &[0.0, 1.0]),
+                ERR_INPUT,
+                "infinite"
+            );
+            assert_eq!(
+                refused(&[[ON_UNSET_VALUE, 0.0, 0.0], b], &[0.0, 1.0]),
+                ERR_INPUT,
+                "the unset value"
+            );
+            assert_eq!(
+                refused(&[a, b], &[ON_UNSET_VALUE, 0.0]),
+                ERR_INPUT,
+                "an unset parameter"
+            );
+            let many: Vec<P3> = (0..=MAX_CVS).map(|i| [i as f64, 0.0, 0.0]).collect();
+            let params: Vec<f64> = (0..=MAX_CVS).map(|i| i as f64).collect();
+            assert_eq!(
+                refused(&many, &params),
+                ERR_INPUT,
+                "more than MAX_CVS points"
+            );
+            assert_eq!(
+                record_hits(b"not a record", &cross, 1e-6, 40, &mut out).0,
+                ERR_INPUT
+            );
+            assert_eq!(record_hits(&[], &cross, 1e-6, 40, &mut out).0, ERR_INPUT);
+            let mut count = 7;
+            let nulls = narwhal_pure_core_curve_curve_record_hits(
+                std::ptr::null(),
+                rect.len(),
+                cross.as_ptr(),
+                cross.len(),
+                1e-6,
+                40,
+                out.as_mut_ptr(),
+                4,
+                &mut count,
+            );
+            assert_eq!((nulls, count), (ERR_NULL, 0));
+            let mut counts = [0usize; 2];
+            let misaligned = (counts.as_mut_ptr() as *mut u8).add(1).cast::<usize>();
+            let code = narwhal_pure_core_curve_curve_record_hits(
+                rect.as_ptr(),
+                rect.len(),
+                cross.as_ptr(),
+                cross.len(),
+                1e-6,
+                40,
+                out.as_mut_ptr(),
+                4,
+                misaligned,
+            );
+            assert_eq!((code, counts), (ERR_NULL, [0, 0]));
+            let no_out = narwhal_pure_core_curve_curve_record_hits(
+                rect.as_ptr(),
+                rect.len(),
+                cross.as_ptr(),
+                cross.len(),
+                1e-6,
+                40,
+                std::ptr::null_mut(),
+                4,
+                &mut count,
+            );
+            assert_eq!(no_out, ERR_NULL);
+        }
+    }
+
+    #[test]
+    fn malformed_polylines_and_splits_never_panic() {
+        // Release builds abort on a panic, so every index in Split and Trim must hold for
+        // any accepted polyline and any parameter.
+        let mut rng = Lcg(0x9017);
+        let mut out = vec![0.0; 5 * 64];
+        let mut answered = 0;
+        for round in 0..20000 {
+            let n = 2 + rng.below(6);
+            let mut params = Vec::with_capacity(n);
+            let mut t = rng.awkward();
+            for _ in 0..n {
+                params.push(t);
+                t = match rng.below(4) {
+                    0 => t.next_up(),
+                    1 => t + 1e-9 * (1.0 + t.abs()),
+                    _ => t + 1.0 + rng.unit() * 10.0,
+                };
+            }
+            let points: Vec<P3> = (0..n)
+                .map(|_| [rng.awkward(), rng.awkward(), rng.awkward()])
+                .collect();
+            let p = Polyline {
+                points: points.clone(),
+                t: params.clone(),
+            };
+            let (lo, hi) = (params[0], params[n - 1]);
+            for _ in 0..8 {
+                let s = match rng.below(6) {
+                    0 => params[rng.below(n as u64)],
+                    1 => params[rng.below(n as u64)].next_up(),
+                    2 => params[rng.below(n as u64)].next_down(),
+                    3 => [f64::NAN, f64::INFINITY, lo - 1.0, hi + 1.0][rng.below(4)],
+                    _ => lo + (hi - lo) * rng.unit(),
+                };
+                if let Some((l, r)) = p.split(s) {
+                    for side in [&l, &r] {
+                        assert_eq!(side.t.len(), side.points.len());
+                        assert!(side.t.len() >= 2);
+                    }
+                }
+                let _ = p.point(s);
+            }
+            let other = if round % 2 == 0 {
+                polyline_record(&[[0.0, -1.0, 0.0], [0.5, 1.0, 0.25]], &[0.0, 1.0])
+            } else {
+                polyline_record(&points, &params)
+            };
+            let (code, _) = unsafe {
+                record_hits(
+                    &polyline_record(&points, &params),
+                    &other,
+                    1e-6,
+                    rng.below(12),
+                    &mut out,
+                )
+            };
+            assert!([0, ERR_INPUT, ERR_SIZE].contains(&code), "{code}");
+            answered += usize::from(code == 0);
+        }
+        assert!(
+            answered > 5000,
+            "the sweep reaches the recursion: {answered}"
+        );
+    }
+
     #[test]
     fn python_helpers() {
         assert_eq!(py_sum3([1e100, 1.0, -1e100]), 1.0);
@@ -1511,5 +2341,86 @@ mod tests {
             (0.5, 0.0)
         );
         assert_eq!(on_length3d(3.0, 4.0, 0.0), 5.0);
+    }
+}
+
+#[cfg(test)]
+mod record_region_tests {
+    use super::*;
+
+    #[test]
+    fn record_hit_aliases_refuse_before_any_write() {
+        let record = polyline_record(&[[0., 0., 0.], [1., 1., 0.]], &[0., 1.]);
+        let mut input = vec![0x5a5a5a5a5a5a5a5au64; record.len().div_ceil(8)];
+        unsafe {
+            std::ptr::copy_nonoverlapping(record.as_ptr(), input.as_mut_ptr().cast(), record.len());
+        }
+        let saved = input.clone();
+        let source = input.as_ptr().cast::<u8>();
+        let mut output = [123.25f64; 10];
+        let mut count = 73usize;
+        unsafe {
+            assert_eq!(
+                narwhal_pure_core_curve_curve_record_hits(
+                    source,
+                    record.len(),
+                    source,
+                    record.len(),
+                    1e-6,
+                    40,
+                    output.as_mut_ptr(),
+                    2,
+                    input.as_mut_ptr().cast()
+                ),
+                ERR_NULL
+            );
+            assert_eq!(input, saved);
+            assert_eq!(
+                narwhal_pure_core_curve_curve_record_hits(
+                    source,
+                    record.len(),
+                    source,
+                    record.len(),
+                    1e-6,
+                    40,
+                    input.as_mut_ptr().cast(),
+                    2,
+                    &mut count
+                ),
+                ERR_NULL
+            );
+            assert_eq!(count, 73);
+            assert_eq!(input, saved);
+            assert_eq!(
+                narwhal_pure_core_curve_curve_record_hits(
+                    source,
+                    record.len(),
+                    source,
+                    record.len(),
+                    1e-6,
+                    40,
+                    output.as_mut_ptr(),
+                    2,
+                    output.as_mut_ptr().cast()
+                ),
+                ERR_NULL
+            );
+            assert_eq!(output, [123.25; 10]);
+            assert_eq!(
+                narwhal_pure_core_curve_curve_record_hits(
+                    source,
+                    record.len(),
+                    source,
+                    record.len(),
+                    1e-6,
+                    40,
+                    output.as_mut_ptr(),
+                    usize::MAX,
+                    &mut count
+                ),
+                ERR_INPUT
+            );
+            assert_eq!(count, 73);
+        }
     }
 }

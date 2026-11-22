@@ -453,6 +453,8 @@ int main(void) {
   NarwhalJoinReportV1 join_report = {0};
   unsigned char buffer[8] = {0};
 #endif
+  (void)narwhal_geometry_core_cap_exact_v1(buffer, sizeof(buffer), 1e-6, buffer, sizeof(buffer));
+  (void)narwhal_geometry_core_verify_cap_v1(buffer, sizeof(buffer), buffer, sizeof(buffer), buffer, sizeof(buffer), 1e-6);
   const uint32_t abi = narwhal_geometry_core_abi_version();
   const uint64_t caps = narwhal_geometry_core_capabilities();
   (void)narwhal_geometry_core_make_box_brep(1.0, 2.0, 3.0, buffer, sizeof(buffer));
@@ -473,13 +475,14 @@ int main(void) {
   (void)narwhal_geometry_core_join_mapped_v1(buffer, sizeof(buffer), 0.02, buffer, sizeof(buffer), &join_report);
   (void)narwhal_geometry_core_verify_join_v1(buffer, sizeof(buffer), buffer, sizeof(buffer), 0.02);
   if (sizeof(join_report) != 3096 || offsetof(NarwhalJoinReportV1, closed) != 2072
-      || NARWHAL_GEOMETRY_CAP_JOIN_EXACT != (UINT64_C(1) << 9)) return 2;
+      || NARWHAL_GEOMETRY_CAP_JOIN_EXACT != (UINT64_C(1) << 9)
+      || NARWHAL_GEOMETRY_CAP_CAP_EXACT != (UINT64_C(1) << 10)) return 2;
   return (abi == NARWHAL_GEOMETRY_CORE_ABI_VERSION && caps != 0) ? 0 : 1;
 }
 "#;
     const PROVIDER: &str = r#"#include <narwhal_geometry_core.h>
 uint32_t narwhal_geometry_core_abi_version(void) { return NARWHAL_GEOMETRY_CORE_ABI_VERSION; }
-uint64_t narwhal_geometry_core_capabilities(void) { return NARWHAL_GEOMETRY_CAP_TOPOLOGY_LOCAL_MOVE | NARWHAL_GEOMETRY_CAP_JOIN_EXACT; }
+uint64_t narwhal_geometry_core_capabilities(void) { return NARWHAL_GEOMETRY_CAP_TOPOLOGY_LOCAL_MOVE | NARWHAL_GEOMETRY_CAP_JOIN_EXACT | NARWHAL_GEOMETRY_CAP_CAP_EXACT; }
 int64_t narwhal_geometry_core_make_box_brep(double a, double b, double c, uint8_t *o, size_t n) {
   (void)a; (void)b; (void)c; (void)o; (void)n; return NARWHAL_GEOMETRY_ERROR_BUFFER_TOO_SMALL;
 }
@@ -512,6 +515,12 @@ int64_t narwhal_geometry_core_edit_session_move(
 }
 int32_t narwhal_geometry_core_edit_session_release(NarwhalEditSessionHandle h) {
   (void)h; return NARWHAL_GEOMETRY_OK;
+}
+int64_t narwhal_geometry_core_cap_exact_v1(const uint8_t *i, size_t n, double t, uint8_t *o, size_t c) {
+  (void)i; (void)n; (void)t; (void)o; (void)c; return NARWHAL_GEOMETRY_ERROR_POLICY_REFUSED;
+}
+int32_t narwhal_geometry_core_verify_cap_v1(const uint8_t *i, size_t n, const uint8_t *s, size_t m, const uint8_t *o, size_t c, double t) {
+  (void)i; (void)n; (void)s; (void)m; (void)o; (void)c; (void)t; return NARWHAL_GEOMETRY_ERROR_POLICY_REFUSED;
 }
 int64_t narwhal_geometry_core_join_exact_v1(const uint8_t *i, size_t n, double t, uint8_t *o, size_t c) {
   (void)i; (void)n; (void)t; (void)o; (void)c; return NARWHAL_GEOMETRY_ERROR_POLICY_REFUSED;
@@ -725,6 +734,8 @@ int main(void) {
   NarwhalJoinReportV1 join_report = {0};
   unsigned char buffer[8] = {0};
 #endif
+  (void)narwhal_geometry_core_cap_exact_v1(buffer, sizeof(buffer), 1e-6, buffer, sizeof(buffer));
+  (void)narwhal_geometry_core_verify_cap_v1(buffer, sizeof(buffer), buffer, sizeof(buffer), buffer, sizeof(buffer), 1e-6);
   const uint32_t abi = narwhal_geometry_core_abi_version();
   const uint64_t caps = narwhal_geometry_core_capabilities();
   (void)narwhal_geometry_core_make_box_brep(1.0, 2.0, 3.0, buffer, sizeof(buffer));
@@ -744,13 +755,14 @@ int main(void) {
   (void)narwhal_geometry_core_join_mapped_v1(buffer, sizeof(buffer), 0.02, buffer, sizeof(buffer), &join_report);
   (void)narwhal_geometry_core_verify_join_v1(buffer, sizeof(buffer), buffer, sizeof(buffer), 0.02);
   if (sizeof(join_report) != 3096 || offsetof(NarwhalJoinReportV1, closed) != 2072
-      || NARWHAL_GEOMETRY_CAP_JOIN_EXACT != (UINT64_C(1) << 9)) return 2;
+      || NARWHAL_GEOMETRY_CAP_JOIN_EXACT != (UINT64_C(1) << 9)
+      || NARWHAL_GEOMETRY_CAP_CAP_EXACT != (UINT64_C(1) << 10)) return 2;
   return (abi == NARWHAL_GEOMETRY_CORE_ABI_VERSION && caps != 0) ? 0 : 1;
 }
 "#;
     const PROVIDER: &str = r#"#include <narwhal_geometry_core.h>
 uint32_t narwhal_geometry_core_abi_version(void) { return NARWHAL_GEOMETRY_CORE_ABI_VERSION; }
-uint64_t narwhal_geometry_core_capabilities(void) { return NARWHAL_GEOMETRY_CAP_TOPOLOGY_LOCAL_MOVE | NARWHAL_GEOMETRY_CAP_JOIN_EXACT; }
+uint64_t narwhal_geometry_core_capabilities(void) { return NARWHAL_GEOMETRY_CAP_TOPOLOGY_LOCAL_MOVE | NARWHAL_GEOMETRY_CAP_JOIN_EXACT | NARWHAL_GEOMETRY_CAP_CAP_EXACT; }
 int64_t narwhal_geometry_core_make_box_brep(double a, double b, double c, uint8_t *o, size_t n) {
   (void)a; (void)b; (void)c; (void)o; (void)n; return NARWHAL_GEOMETRY_ERROR_BUFFER_TOO_SMALL;
 }
@@ -781,6 +793,12 @@ int64_t narwhal_geometry_core_edit_session_move(NarwhalEditSessionHandle h, uint
 }
 int32_t narwhal_geometry_core_edit_session_release(NarwhalEditSessionHandle h) {
   (void)h; return NARWHAL_GEOMETRY_OK;
+}
+int64_t narwhal_geometry_core_cap_exact_v1(const uint8_t *i, size_t n, double t, uint8_t *o, size_t c) {
+  (void)i; (void)n; (void)t; (void)o; (void)c; return NARWHAL_GEOMETRY_ERROR_POLICY_REFUSED;
+}
+int32_t narwhal_geometry_core_verify_cap_v1(const uint8_t *i, size_t n, const uint8_t *s, size_t m, const uint8_t *o, size_t c, double t) {
+  (void)i; (void)n; (void)s; (void)m; (void)o; (void)c; (void)t; return NARWHAL_GEOMETRY_ERROR_POLICY_REFUSED;
 }
 int64_t narwhal_geometry_core_join_exact_v1(const uint8_t *i, size_t n, double t, uint8_t *o, size_t c) {
   (void)i; (void)n; (void)t; (void)o; (void)c; return NARWHAL_GEOMETRY_ERROR_POLICY_REFUSED;
@@ -903,6 +921,9 @@ fn main() {
     println!("cargo:rerun-if-changed=cpp/freeform_adapter.inc");
     println!("cargo:rerun-if-changed=cpp/preparation_adapter.inc");
     println!("cargo:rerun-if-changed=cpp/join_adapter.inc");
+    println!("cargo:rerun-if-changed=cpp/cap_adapter.inc");
+    println!("cargo:rerun-if-changed=cpp/exact_budget.inc");
+    println!("cargo:rerun-if-changed=cpp/exact_conversion.inc");
     println!("cargo:rerun-if-changed=include/narwhal_geometry_core.h");
     println!("cargo:rerun-if-env-changed=NARWHAL_OCCT_SOURCE_DIR");
     println!("cargo:rerun-if-env-changed=NARWHAL_OCCT_LIB_DIR");

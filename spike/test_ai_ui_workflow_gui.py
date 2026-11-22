@@ -55,6 +55,9 @@ def launch():
         env['AI_MODELING_CANDIDATE'] = str(ROOT / 'native/automation_core/target/debug/libnarwhal_automation.so')
         if '--installed' in sys.argv:
             env['AI_MODELING_INSTALLED'] = '1'
+    # Match the real launcher's bounded wheel-library path. Native exact Cap/Join
+    # must not depend on a host-global LD_LIBRARY_PATH or vendor-wheel side effect.
+    env['LD_LIBRARY_PATH'] = str(runtime_paths.occt_libs(ROOT))
     env.update(AI_WORKFLOW_GUI_OUT=str(out), AI_WORKFLOW_GUI_MUTATIONS=str("--mutations" in sys.argv),
         NARWHAL3D_SETTINGS_FILE=str(out / "preferences.json"), NARWHAL3D_REPORT_DIR=str(out / 'reports'), PYTHONDONTWRITEBYTECODE="1",
         NARWHAL3D_NO_DIALOGS="1", NARWHAL3D_DEFER_FIRST_PRESENT="1", NARWHAL3D_STATUSBAR_HEIGHT="37",
@@ -62,7 +65,14 @@ def launch():
     sources = ("narwhal3d/ui.py", "narwhal3d/ai_assistant.py", "narwhal3d/ai_transport.py",
                "narwhal3d/automation_tools.py", "narwhal3d/bugreport.py", "narwhal3d/preferences.py", "spike/test_ai_ui_workflow_gui.py",
                "artifacts/automation/linux-x86_64/libnarwhal_automation.so",
-               "artifacts/automation/linux-x86_64/narwhal-automation")
+               "artifacts/automation/linux-x86_64/narwhal-automation",
+               "narwhal3d/native/libnarwhal_geometry_core.so",
+               "artifacts/converter-supervisor/linux-x86_64/narwhal-converter-supervisor",
+               "narwhal3d/ai_modeling.py", "narwhal3d/cap_worker.py",
+               "narwhal3d/bridge.py", "narwhal3d/kernel/occt_backend.py",
+               "narwhal3d/native_geometry.py", "narwhal3d/native/libnarwhal_pure_core.so",
+               "narwhal3d/native_intersect.py", "narwhal3d/native_nearest.py",
+               "narwhal3d/intersect.py", "narwhal3d/commands.py", "narwhal3d/solid_commands.py")
     before = {p: hashlib.sha256((ROOT / p).read_bytes()).hexdigest() for p in sources}
     # Bring up only the new namespace's loopback. No route to paid/remote providers.
     loopback = ('import socket,fcntl,struct,os,sys; s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM); '
@@ -208,6 +218,10 @@ class Provider(BaseHTTPRequestHandler):
                     receipts=[json.loads(m['content'])['output'] for m in reversed(messages) if m['role']=='tool']
                     oid=next(o['object_id'] for r in receipts for o in r.get('objects',[]) if o.get('airtight'))
                     reply=payload('',[('export-'+str(len(RESULT['requests'])),'narwhal_export',{'object_ids':[oid],'format':'step'})])
+            elif prompt in JOIN_CAP_BATCHES:
+                reply = (payload('Deterministic exact Join/Cap completed; no aesthetic claim.')
+                         if messages[-1]['role'] == 'tool' else payload('', [
+                             ('typed-'+prompt, 'narwhal_model', JOIN_CAP_BATCHES[prompt])]))
             elif prompt == 'modeling':
                 if messages[-1]['role'] == 'tool':
                     output = json.loads(messages[-1]['content'])['output']
@@ -431,6 +445,70 @@ def mutations():
     yield .1
 
 
+JOIN_CAP_BATCHES = {}
+
+
+def join_cap_fixtures():
+    """Disposable SDK fixtures; providers receive only typed IDs/actions."""
+    from narwhal3d import bridge, kernel
+    from narwhal3d.kernel import occt_backend as backend
+    import rhino3dm as r3
+    from OCP.BRep import BRep_Tool
+    from OCP.BRepTools import BRepTools
+    from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeFace
+    def step(key, action, publish=False):
+        return dict(id=key, name=key, publish=publish, replace=None, action=action)
+    circles = [step('section'+str(i), dict(op='circle', center=[120,0,z], radius=rad))
+               for i,(z,rad) in enumerate([(0,2),(3,3),(7,2.5),(10,2)])]
+    loft = dict(label='Typed Normal loft then Cap', steps=circles+[
+        step('loft',dict(op='loft',sections=[row['id'] for row in circles])),
+        step('capped',dict(op='cap',source='loft'),True)])
+    curves = [r3.Circle(r3.Point3d(150,0,z),rad).ToNurbsCurve()
+              for z,rad in [(0,2),(3,3),(7,2.5),(10,2)]]
+    geometry = bridge.loft_brep(curves,style='Normal')
+    face = backend.unique_faces(kernel.master_of(geometry))[0]
+    surface = BRep_Tool.Surface_s(face)
+    u0,u1,v0,v1 = BRepTools.UVBounds_s(face)
+    ids=[]
+    for i in range(4):
+        patch = BRepBuilderAPI_MakeFace(surface,u0+(u1-u0)*i/4,u0+(u1-u0)*(i+1)/4,v0,v1,1e-7).Face()
+        geom=bridge.occt_backed(patch,backend.native_master_recipe(patch))
+        oid,_=ui.app_state.ctx.add_geometry(geom,'JoinCapFixture')
+        ids.append(str(oid))
+    joined=dict(label='Typed exact patches Join then Cap',steps=[
+        step('joined',dict(op='join',sources=ids)),
+        step('capped',dict(op='cap',source='joined'),True)])
+    return {'joincap_loft':loft,'joincap_patches':joined}
+
+
+def provider_join_cap_rounds():
+    global JOIN_CAP_BATCHES
+    from narwhal3d import native_geometry
+    available = native_geometry.cap_exact_available()
+    print('AI_CAP_NATIVE_ADMISSION', native_geometry._backend_detail, flush=True)
+    check(available, 'installed geometry core admits exact Cap before provider calls')
+    JOIN_CAP_BATCHES=join_cap_fixtures()
+    from narwhal3d import ai_modeling
+    st=ui.ai_assistant_state()
+    for prompt,batch in JOIN_CAP_BATCHES.items():
+        count=ui.app_state.model.object_count()
+        yield from send(prompt)
+        try:
+            yield from wait(lambda:st.status in ('connected','error'),
+                            'deterministic provider Join/Cap completion',90)
+        except AssertionError:
+            print('JOIN_CAP_GUI_STATE',st.status,st.error,ui._ai.get('modeling_pending'),flush=True)
+            raise
+        check(st.status=='connected','provider Join/Cap completes without error: '+str(st.error))
+        check(ui.app_state.model.object_count()==count+1,'provider dependent Join/Cap publishes only its final solid')
+        obj=list(ui.app_state.model.file.Objects)[-1]
+        facts=ai_modeling.inspect_object(ui.app_state,str(obj.Attributes.Id))
+        expected={'BSPLINE':1 if prompt=='joincap_loft' else 4,'PLANE':2}
+        check(facts['airtight'] and facts['face_types']==expected and facts['volume']>0,
+              'provider typed '+prompt+' produces measured exact capped geometry')
+    capture('provider_join_cap_result')
+
+
 def modeling_rounds():
     st = ui.ai_assistant_state()
     mode_invoke = ui.NARWHAL_OT_ai_modeling_mode.invoke
@@ -651,6 +729,7 @@ def modeling_rounds():
           'provider receives canonical successful export evidence without a destination path')
     ui.NARWHAL_OT_ai_modeling_mode.invoke = mode_invoke
     yield from mcp_modeling_round()
+    yield from provider_join_cap_rounds()
 
 
 def mcp_modeling_round():
@@ -663,7 +742,11 @@ def mcp_modeling_round():
     reader = ModelingReader(ui.app_state, 'test', nonce, lambda: check(not host.closed, 'MCP host scope current'))
     host = MainThreadBridge(left, reader, nonce)
     register_timer(host)
-    client = mcp.Client(ROOT / 'native/automation_core/target/debug/narwhal-automation', right, nonce, modeling=True)
+    server = ROOT / ('artifacts/automation/linux-x86_64/narwhal-automation'
+                     if os.environ.get('AI_MODELING_INSTALLED') else
+                     'native/automation_core/target/debug/narwhal-automation')
+    RESULT['selected_mcp_server'] = dict(path=str(server),sha256=hashlib.sha256(server.read_bytes()).hexdigest())
+    client = mcp.Client(server, right, nonce, modeling=True)
     right.close()
     def receive():
         yield from wait(lambda: bool(select.select([client.process.stdout], [], [], 0)[0]), 'official MCP reply ready')
@@ -800,6 +883,29 @@ def mcp_modeling_round():
             canceled=reply['result']['structuredContent']
             check(canceled['status']=='finished' and canceled['result']['output']['outcome']=='declined'
                   and destination.read_bytes()==saved,'local picker cancellation produces a canonical nonexported MCP result')
+        # Both dependency graphs traverse the real MCP server and local Review.
+        from narwhal3d import ai_modeling
+        for key,batch in join_cap_fixtures().items():
+            request='mcp_'+key
+            count=ui.app_state.model.object_count()
+            client.call(request,'narwhal.model',dict(request_id=request,batch=batch))
+            reply=yield from receive()
+            check(reply['result']['structuredContent']['status']=='awaiting_local_review',
+                  'MCP '+key+' requires local review')
+            yield from wait(lambda:ui._ai.get('modeling_pending') is not None,'MCP Join/Cap review visible')
+            check(ui.app_state.model.object_count()==count,'MCP Join/Cap stages without publication')
+            yield from tap('RET')
+            yield from wait(lambda:ui._ai.get('modeling_pending') is None,'MCP Join/Cap finished',90)
+            client.call(request+'_result','narwhal.model_result',dict(request_id=request))
+            reply=yield from receive()
+            result=reply['result']['structuredContent']
+            check(result['status']=='finished' and not result['result']['is_error'],
+                  'MCP '+key+' canonical completion')
+            rows=result['result']['output']['objects']
+            expected={'BSPLINE':1 if key=='joincap_loft' else 4,'PLANE':2}
+            check(len(rows)==1 and rows[0]['airtight'] and rows[0]['face_types']==expected
+                  and rows[0]['volume']>0 and ui.app_state.model.object_count()==count+1,
+                  'MCP '+key+' publishes one exact solid, not its construction steps')
         capture('mcp_modeling_result')
     finally:
         client.close()

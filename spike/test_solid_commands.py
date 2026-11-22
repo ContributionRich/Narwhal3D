@@ -123,8 +123,48 @@ class Ctx:
         self.snapshots.append(self.names())
 
 
+class CapCtx(commands.NarwhalContext):
+    """Real document/history; SDK-only runs stub only viewport allocation."""
+    names = Ctx.names
+
+    def __init__(self, named):
+        try:
+            import bpy
+            host = hasattr(bpy, "app")
+        except ImportError:
+            host = False
+            bpy = types.ModuleType("bpy")
+            bpy.context = types.SimpleNamespace(view_layer=types.SimpleNamespace(objects=types.SimpleNamespace(active=None)))
+            bpy.data = types.SimpleNamespace(objects=types.SimpleNamespace(get=lambda name: None))
+            sys.modules["bpy"] = bpy
+        if host:
+            bpy.data.batch_remove(list(bpy.data.objects))
+        super().__init__(model.NarwhalModel())
+        if not host:
+            self._make_display_object = lambda *args, **kwargs: object()
+            self.object_by_name = lambda name: None
+            self.rebuild_display = lambda: None
+            self.select_by_names = lambda names: None
+        self.added, self.snapshots = [], []
+        for name, geometry in named:
+            self.model.add_object(geometry, name, 0)
+        self.rebuild_display()
+        self.select_by_names([])
+
+    def note_change(self, label=None):
+        self.snapshots.append(self.names())
+        return super().note_change(label)
+
+    def _add_geometry(self, geom, base_name, layer_index, publication=None):
+        result = super()._add_geometry(geom, base_name, layer_index, publication)
+        self.added.append(geom)
+        return result
+
+
 def run(key, named, lines):
-    ctx = Ctx(named)
+    ctx = CapCtx(named) if key == "cap" else Ctx(named)
+    if key == "cap":
+        ctx.undo.begin("Cap")
     c = type(commands.COMMANDS[key])()
     msg, done = c.begin(ctx)
     last = msg
@@ -133,6 +173,8 @@ def run(key, named, lines):
             break
         msg, done = c.feed(line, ctx)
         last = msg or last
+    if key == "cap":
+        ctx.undo.end()
     g = ctx.added[0] if ctx.added else None
     return g, (kernel.master_of(g) if g is not None else None), last, ctx, c, done
 

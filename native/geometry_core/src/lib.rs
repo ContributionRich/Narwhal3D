@@ -10,6 +10,8 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::ptr;
 use std::sync::{Arc, Mutex, OnceLock};
 
+pub mod cap;
+pub mod exact_conversion;
 pub mod freeform;
 pub mod freeform_math;
 pub mod height_field;
@@ -453,6 +455,7 @@ pub extern "C" fn narwhal_geometry_core_capabilities() -> u64 {
         | freeform::CAPABILITY
         | preparation::CAPABILITY
         | join::CAPABILITY
+        | cap::CAPABILITY
 }
 
 fn session_import_impl(input: *const u8, input_length: usize, output_handle: *mut u64) -> i32 {
@@ -1225,7 +1228,7 @@ mod tests {
     #[test]
     fn reports_version_capabilities_and_layouts() {
         assert_eq!(narwhal_geometry_core_abi_version(), 4);
-        assert_eq!(narwhal_geometry_core_capabilities(), 0b11_1111_1111);
+        assert_eq!(narwhal_geometry_core_capabilities(), 0b111_1111_1111);
         assert_eq!(size_of::<surfacing::SweepReport>(), 48);
         assert_eq!(size_of::<NarwhalBrepInspectionV1>(), 136);
         assert_eq!(size_of::<NarwhalLocalMoveCertificateV3>(), 248);

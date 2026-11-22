@@ -25,7 +25,7 @@ The command line, viewport picks, menus, and toolbars all enter the same command
 
 Current-source Join and JoinCopy accept exact Brep surface groups and keep the existing curve route. Surface sewing uses twice the document absolute tolerance exactly once; a default 0.01 document supplies 0.02. Connected groups must consume at least two inputs; singletons and existing solids stay separate. Mesh/SubD and unsupported, invalid, duplicate, nonmanifold or surface/trim-changing cases refuse explicitly. The source-feature/tolerance guard is unit-covariant, not a fixed 0.01 ceiling. This is conservative exact sewing, not a boolean, cap or general healing operation.
 
-Native-traced group membership and nested operand recipes bind the exact result. Open groups stay open; valid closed oriented shells become checked solids with unchanged analytic faces. Join consumes only joined groups, JoinCopy preserves originals, and staged multiresult publication retains one Undo history and scoped rollback without overwriting unrelated callback edits. An older core, missing verifier or missing exact writer cannot silently select a mesh/Python fallback. Linux source qualification does not certify a new package, Windows/macOS execution or complete reference-application parity. No AI modeling Join tool is added by this command checkpoint.
+Native-traced group membership and nested operand recipes bind the exact result. Open groups stay open; valid closed oriented shells become checked solids with unchanged analytic faces. Join consumes only joined groups, JoinCopy preserves originals, and staged multiresult publication retains one Undo history and scoped rollback without overwriting unrelated callback edits. An older core, missing verifier or missing exact writer cannot silently select a mesh/Python fallback. Linux source qualification does not certify a new package, Windows/macOS execution or complete reference-application parity. The current typed AI catalog also exposes bounded Join/Cap as described below.
 
 ## Geometry model
 
@@ -147,13 +147,13 @@ The in-app assistant accepts four provider identifiers: `openai`, `anthropic`, `
 
 Sharing workspace metadata requires explicit consent for the configured recipient. The assistant includes bounded selected-object metadata with each message. To revoke remembered consent, open AI Settings and choose **Forget workspace-sharing permission**. See the [permission model](../SECURITY.md#ai-permissions-in-current-source) and [settings control](../narwhal3d/ai_settings_popup.py#L353).
 
-Current source supports bounded exact modeling batches through `narwhal_model`: analytic primitives, smooth curves/NURBS, transforms, extrusion, loft surfaces, booleans, open-rail pipes and revolutions. Rust validates dependencies, arguments, one-use authority and canonical receipts; the existing geometry kernel produces the geometry. Stable-UUID edits, exact inspection, follow-up edits and Undo/Redo are covered by actual-host tests. **Review** requests approval per batch. **Build** is a persistent local opt-in; it does not grant arbitrary command execution or authorize external files/images. Legacy proposal-only catalogs describe their own compatibility routes, not the generalized batch executor. See [current capabilities and limitations](../STATUS.md#current-source-and-0413-feature-set).
+Current source supports bounded exact modeling batches through `narwhal_model`: analytic primitives, smooth curves/NURBS, transforms, extrusion, loft surfaces, booleans, open-rail pipes, revolutions, connected exact Join and planar Cap. Rust validates dependencies, arguments, one-use authority and canonical receipts; the existing geometry kernel produces the geometry. Stable-UUID edits, exact inspection, follow-up edits and Undo/Redo are covered by actual-host tests. **Review** requests approval per batch. **Build** is a persistent local opt-in; it does not grant arbitrary command execution or authorize external files/images. Legacy proposal-only catalogs describe their own compatibility routes, not the generalized batch executor. See [current capabilities and limitations](../STATUS.md#current-source-and-0413-feature-set).
 
 Viewport image sharing needs separate one-shot approval. STEP/selected-object 3dm export always needs a local new-destination choice, refuses overwrites and does not expose provider-selected filesystem paths. Display preparation is cancellable before document publication; stale exact-master content, failures and budget overruns refuse rather than approximating geometry. A prelaunch SHA-256 over exact master serialization without triangulation is checked when collecting and using prepared display data, not merely object identity. Current display budgets are 30 seconds per worker, 4096MiB address space (not resident memory), 32MiB serialized input, 64MiB output per worker and 128MiB batch output. Display meshing can be stopped while it runs; exact construction cancellation is cooperative between SDK steps. Final publication is synchronous and cannot process a Cancel click mid-transaction: a recorded case took about 2.5 seconds, not a guaranteed upper bound. Physical HTTP cancellation is not guaranteed. Robust whale/taco aesthetic acceptance, general layer/group control, broader resumability and MCP screenshot-sharing parity remain incomplete.
 
 The external MCP launcher uses Unix stdio and starts one new app per launch; attachment to an existing app remains unsupported. Default `--read-only` exposes exactly nine metadata tools. Explicit `--modeling` adds reviewed typed modeling, inspection/framing and locally approved export; external modeling never inherits in-app Build authority. Matching native API9 library/server and rebuilt converter supervisor are required. This is current-source scope, not an update to the published 0.4.13 packages. See the [launcher](../scripts/narwhal_mcp.py).
 
-**Platform limits:** the external automation/MCP server and inherited-FD launcher are currently Unix-only. A Windows server build reports seven errors involving `UnixStream`, `std::os::fd` and `tokio::signal::unix`; these unguarded Unix APIs also exist in the committed source baseline. This is not repaired by the separate Windows in-app automation library. Actual Windows VM qualification passed 125 library unit tests and the converter supervisor's five executable unit tests plus one worker-policy test, including child/grandchild cleanup on EOF/byte cancellation, no-opt-in behavior, timeout and a 96MiB memory guard. Those tests do **not** qualify a Windows OCP display job, the Unix server, all 149 Linux automation tests or a new package. macOS display-worker containment remains unqualified and this modeling-display route explicitly refuses.
+**Platform limits:** the external automation/MCP server and inherited-FD launcher are currently Unix-only. A Windows server build reports seven errors involving `UnixStream`, `std::os::fd` and `tokio::signal::unix`; these unguarded Unix APIs also exist in the committed source baseline. This is not repaired by the separate Windows in-app automation library. Earlier Windows VM qualification passed 125 library unit tests and the converter supervisor's five executable unit tests plus one worker-policy test, including child/grandchild cleanup on EOF/byte cancellation, no-opt-in behavior, timeout and a 96MiB memory guard. Those tests do **not** qualify a Windows OCP display job, the Unix server, the complete current Linux automation suite or a new package. macOS display-worker containment remains unqualified and this modeling-display route explicitly refuses.
 
 The [read-tool catalog](../native/automation_core/src/catalog.rs#L8-L54) defines these nine dotted MCP names:
 
@@ -341,3 +341,73 @@ Narwhal 3D is an independent project and is not affiliated with the vendors of t
 ## Security and provenance
 
 Release artifacts are built from audited public source revisions. Before publishing, run `scripts/audit_public_tree.py` and verify that each package's recorded source revision matches its release tag. Keep private development history and local research material out of public source exports.
+
+## Exact planar Cap and typed AI Join/Cap
+
+Current source Cap adds planar lids without changing the existing analytic/NURBS
+surfaces. The normal command passes document absolute tolerance once; new recipes
+record that tolerance and a verified source/operand/result tree. Historical
+unversioned Cap recipes retain their 1e-6 compatibility tolerance. Nonplanar,
+invalid, oversized or ambiguous topology refuses explicitly; this is not a fitted
+hole-fill, general healing operation or mesh/SubD conversion. A refused exact
+master/recipe never falls through to faceted capping.
+
+Every application Cap creation and recipe replay/verification uses the existing
+Rust converter supervisor: 30-second deadline, 4096MiB memory ceiling, 32MiB
+aggregate serialized request inputs and binary output, and 64MiB recipe/report
+output. Fixed files live in a disposable private directory. Untrusted BinTools
+source/snapshot/result decoding occurs in that worker, not in the app parent;
+only freshly admitted and verified output is decoded by the parent. The raw C ABI
+is not itself an allocation sandbox: direct callers must isolate untrusted decode.
+macOS Cap containment explicitly refuses pending qualification. Windows header and
+packaging contracts do not establish actual Windows OCP Cap-job qualification.
+
+The typed AI batch catalog now includes `join` (2–16 exact Breps, exactly one
+connected group consuming every source) and `cap` (one verified airtight result).
+Join is not a boolean and may produce an open surface. For closed-section Normal
+lofts with planar ends, use an unpublished `loft` step followed by `cap`; exact
+shared-trim patches may likewise use unpublished `join` then `cap`. Independently
+lofted quarter curves can fail the conservative unchanged-trim contract; those
+refusals are not weakened. General loft/trim/Join equivalence is not established.
+Review/Build authority, local external-MCP review and one Undo history remain in
+force. Matching new native components are required; API9 is additive, not evidence
+that an older API9 library contains the new actions. No arbitrary script tool is
+exposed, and successful exact geometry is not robust whale-design aesthetic
+acceptance. This is a source checkpoint, not a new release.
+
+Reference-application research is offline/source-derived where stated. A separate
+reference-application VM research attempt reached SDK assembly version
+8.35.26251.13001 but did not reach an active document within
+120 seconds (empty title); initialization/first-run/license state remains
+unresolved. That observation neither proves a license failure nor qualifies
+actual application parity.
+
+### Shifted-seam conversion qualification
+
+The conical Straight-loft Cap regression now uses a native seam-safe exact NURBS
+conversion. For bounded full-period cone/cylinder/sphere/torus faces with shifted
+angular U seams, it constructs the rational surface at the actual angular bounds,
+not by segmenting rational U as if it were angle U. The analytic master remains
+unchanged; trim/iso flags are not forced and geometry is not approximated. Startup
+and package admission require the converter export and a three-face conical Cap
+with volume 98π, alongside the cylinder and tamper-rejection checks. Source checks
+are not certification of Windows/macOS jobs or a new release.
+
+## Qualification-gated curve-query acceleration
+
+Current source memoizes Offset preview samples per command using the source's
+encoded knot/control-point bits, domain and offset options. The existing sampled
+distance loop is reused; preview polylines remain display-only, not document
+geometry. Returned display lists cannot mutate the cached samples.
+
+Polyline/Rectangle curve intersections and closest-point searches have additive
+native record routes. They preserve the loaded SDK's parameter domains, Split/Trim
+behavior, discontinuities, operation order and refusal semantics; ordinary NURBS
+routes retain their existing golden answers. These routes require both a qualified
+Linux x86_64 platform and bit-identical runtime SDK witnesses. Failure or an older
+library retains the existing recursion/callback route. Windows/macOS execution of
+these new direct polyline routes is not qualified and remains disabled, even when
+the exports are compiled. Bit parity on the recorded witnesses is not a claim of
+complete CAD-command equivalence or certified global intersection/distance error.
+The overlap test batches existing nearest-point queries, preserving strict box
+pruning at tolerance, boundary samples and the per-query fallback on refusal.

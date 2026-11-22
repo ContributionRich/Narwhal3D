@@ -1331,69 +1331,81 @@ def make_pipe_tapered(rail, radius, end_radius, blend="Global"):
         raise KernelError(f"tapered pipe failed: {e}") from e
 
 
-def cap_planar_holes(shape):
-    """Close a shape's PLANAR free boundaries and return a solid. ANALYTIC.
+def _cap_native_binding():
+    """Minimal SDK/ctypes glue: Rust owns admission and OCCT owns exact geometry.
 
-    This is what `bridge.cap_planar_holes` could never be: that one rebuilds the WHOLE brep
-    through a mesh, so capping a 1-curved-face open cylinder returned 212 facet-like faces --
-    it destroyed the curved wall to add two lids. MEASURED here, a pipe along an arc caps to
-    `{TORUS: 1, PLANE: 2}`: the curved surface is untouched and the lids are real planes.
-
-    A NON-planar boundary is left open rather than closed with something approximate, exactly
-    as the mesh version promised and for the same reason -- `BRepBuilderAPI_MakeFace(wire,
-    onlyPlane=True)` simply declines, so the refusal is the kernel's own rather than a
-    separate application-level judgement.
+    Kept here because this operation transports OCP BinTools handles, not Python
+    geometry algorithms.
+    An old core is an explicit refusal, never the former Python loop fallback.
     """
-    _need()
-    from OCP.BRepBuilderAPI import (BRepBuilderAPI_MakeFace, BRepBuilderAPI_MakeSolid,
-                                    BRepBuilderAPI_Sewing)
-    from OCP.ShapeAnalysis import ShapeAnalysis_FreeBounds
-    from OCP.TopAbs import TopAbs_ShapeEnum
-    from OCP.TopExp import TopExp_Explorer
-    from OCP.TopoDS import TopoDS
+    from .. import native_geometry
+    with native_geometry._lock:
+        binding = native_geometry._load_locked()
+        if (binding is None
+                or not int(binding.library.narwhal_geometry_core_capabilities()) & (1 << 10)
+                or not hasattr(binding.library, "narwhal_geometry_core_cap_exact_v1")
+                or not hasattr(binding.library, "narwhal_geometry_core_verify_cap_v1")):
+            raise KernelError("native exact Cap capability/verification unavailable")
+        return binding.library
 
-    try:
-        bounds = ShapeAnalysis_FreeBounds(shape)
-        caps = []
-        left_open = 0
-        exp = TopExp_Explorer(bounds.GetClosedWires(), TopAbs_ShapeEnum.TopAbs_WIRE)
-        while exp.More():
-            wire = TopoDS.Wire(exp.Current())
-            exp.Next()
-            try:
-                maker = BRepBuilderAPI_MakeFace(wire, True)
-                if maker.IsDone():
-                    caps.append(maker.Face())
-                else:
-                    left_open += 1
-            except Exception:  # noqa: BLE001
-                left_open += 1
-        if not caps:
-            raise KernelError(
-                f"nothing to cap: the shape has no PLANAR free boundary "
-                f"({left_open} non-planar boundary/ies were left open)")
-        sew = BRepBuilderAPI_Sewing(1e-6)
-        sew.Add(shape)
-        for face in caps:
-            sew.Add(face)
-        sew.Perform()
-        sewed = sew.SewedShape()
-        if sewed.ShapeType() != TopAbs_ShapeEnum.TopAbs_SHELL:
-            raise KernelError("the capped faces did not sew into a single shell")
-        solid = BRepBuilderAPI_MakeSolid(TopoDS.Shell(sewed)).Solid()
-        if not is_airtight(solid):
-            raise KernelError("the capped result is not airtight")
-        # An OCCT sweep (MakePipeShell) capped here can come back inside-out --
-        # volume -49.348 for a quarter torus of +49.348 -- yet `is_airtight` passed. A
-        # solid's shell must face outward, or every boolean on it inverts. MakeSolid takes
-        # the shell's orientation as given, so the sign of the volume decides.
-        if volume(solid) < 0:
-            solid = TopoDS.Solid(solid.Reversed())
-        return solid
-    except KernelError:
-        raise
-    except Exception as e:  # noqa: BLE001
-        raise KernelError(f"cap failed: {e}") from e
+
+def cap_planar_holes(shape, tolerance=1e-6):
+    """Exact closure; all untrusted decode/native work is Rust-supervised."""
+    from .. import cap_worker
+    data = shape_to_bytes(shape, triangles=False)
+    if cap_worker._ACTIVE:
+        return shape_from_bytes(_cap_native_bytes(data, tolerance))
+    return cap_worker.submit('cap', source=data, tolerance=tolerance)[0]
+
+
+def _cap_native_bytes(data, tolerance):
+    """Worker-only byte ABI: no OCP decode before native occurrence admission."""
+    from .. import cap_worker
+    if not cap_worker._ACTIVE:
+        raise KernelError('cap_native_requires_supervised_worker')
+    import ctypes
+    library = _cap_native_binding()
+    bytep = ctypes.POINTER(ctypes.c_ubyte)
+    fn = library.narwhal_geometry_core_cap_exact_v1
+    fn.argtypes = [bytep, ctypes.c_size_t, ctypes.c_double, bytep, ctypes.c_size_t]
+    fn.restype = ctypes.c_int64
+    source = (ctypes.c_ubyte * len(data)).from_buffer_copy(data)
+    required = int(fn(source, len(data), tolerance, None, 0))
+    if not 0 < required <= 512 * 1024 * 1024:
+        raise KernelError(f"exact Cap refused unsafe/non-planar/ambiguous topology, tolerance or resource budget ({required})")
+    output = (ctypes.c_ubyte * required)()
+    written = int(fn(source, len(data), tolerance, output, required))
+    if written != required:
+        raise KernelError(f"exact Cap output changed between passes ({written})")
+    return bytes(output)
+
+
+def verify_cap_recipe(source, snapshot, result, tolerance):
+    """Source, snapshot and target decode/binding all execute under Rust limits."""
+    from .. import cap_worker
+    data = shape_to_bytes(source, triangles=False)
+    if not cap_worker._ACTIVE:
+        cap_worker.submit('verify', source=data, snapshot=snapshot, target=result, tolerance=tolerance)
+        return
+    _verify_cap_native_bytes(data, snapshot, result, tolerance)
+
+
+def _verify_cap_native_bytes(data, snapshot, result, tolerance):
+    from .. import cap_worker
+    if not cap_worker._ACTIVE:
+        raise KernelError('cap_native_requires_supervised_worker')
+    import ctypes
+    fn = _cap_native_binding().narwhal_geometry_core_verify_cap_v1
+    bytep = ctypes.POINTER(ctypes.c_ubyte)
+    fn.argtypes = [bytep, ctypes.c_size_t, bytep, ctypes.c_size_t,
+                   bytep, ctypes.c_size_t, ctypes.c_double]
+    fn.restype = ctypes.c_int32
+    buffers = [(ctypes.c_ubyte * len(b)).from_buffer_copy(b)
+               for b in (data, snapshot, result)]
+    status = int(fn(buffers[0], len(data), buffers[1], len(snapshot),
+                    buffers[2], len(result), tolerance))
+    if status != 0:
+        raise KernelError(f"exact Cap source snapshot/result binding refused ({status})")
 
 
 def transform(shape, matrix, *, recognise=True):
@@ -1627,7 +1639,24 @@ def from_recipe(recipe, _depth=0):
             else:
                 shape = make_pipe(recipe["rail"], recipe["radius"])
         elif kind == "cap":
-            shape = cap_planar_holes(from_recipe(recipe["a"], _depth + 1))
+            from .. import cap_worker
+            if not cap_worker._ACTIVE:
+                # Return early: the worker applies the outer transform exactly once.
+                return cap_worker.submit('replay', recipe=recipe)[0]
+            source = from_recipe(recipe["a"], _depth + 1)
+            if "version" in recipe:
+                if (recipe["version"] != 1 or "tolerance" not in recipe
+                        or any(not isinstance(recipe.get(k), dict)
+                               or recipe[k].get("kind") != "native_master"
+                               or recipe[k].get("xform") is not None
+                               for k in ("source", "result"))):
+                    raise KernelError("unsupported/incomplete exact Cap recipe")
+                result = native_master_bytes(recipe["result"])
+                verify_cap_recipe(source, native_master_bytes(recipe["source"]), result, recipe["tolerance"])
+                shape = shape_from_bytes(result)
+            else:
+                # Historical kind=cap trees had no explicit tolerance/snapshot.
+                shape = cap_planar_holes(source, recipe.get("tolerance", 1e-6))
         elif kind == "face":
             shape = face_at(from_recipe(recipe["a"], _depth + 1), recipe["index"])
         elif kind == "planar_face":
@@ -4522,19 +4551,37 @@ MASS_ERR_FLOOR = 1e-12
 
 
 def _nurbs_convert(shape):
-    """`BRepBuilderAPI_NurbsConvert` of an UNTRIANGULATED copy of `shape`. Exact either way.
+    """Convert a private untriangulated copy, preserving shifted elementary seams.
 
-    NurbsConvert can segfault (in `BRepTools_NurbsConvertModification::
-    NewCurve2d`) on a solid made by `_general_transform` (a non-uniform Gumball scale) once
-    that solid has been TESSELLATED for display. That covers a scaled cylinder and a scaled
-    drilled box; a scaled box does not crash. A clean copy converts fine. So saving or
-    booleaning a non-uniformly scaled solid after it was drawn could kill the app. The copy
-    is taken without its mesh (`copyMesh=False`); the display mesh is never geometry.
+    OCCT 8.0.1 segments periodic rational supports at angular U bounds, although
+    rational U is not angle U. The native boundary uses exact bounded elementary
+    constructors at those endpoints instead, then the existing OCCT edge/pcurve
+    conversion. No surface/trim fitting, tolerance widening or iso-flag forcing
+    is introduced. The live master remains unchanged, including its render mesh.
     """
-    from OCP.BRepBuilderAPI import BRepBuilderAPI_Copy, BRepBuilderAPI_NurbsConvert
+    import ctypes
+    from .. import native_geometry
 
-    clean = BRepBuilderAPI_Copy(shape, True, False).Shape()
-    return BRepBuilderAPI_NurbsConvert(clean, True).Shape()
+    data = shape_to_bytes(shape, triangles=False)
+    if not 0 < len(data) <= native_geometry.MAX_BUFFER_BYTES:
+        raise KernelError("exact NURBS conversion input exceeds transport budget")
+    with native_geometry._lock:
+        binding = native_geometry._load_locked()
+        if binding is None or not hasattr(binding.library, "narwhal_geometry_core_nurbs_convert_seam_safe_v1"):
+            raise KernelError("native seam-safe exact NURBS conversion unavailable")
+        fn = binding.library.narwhal_geometry_core_nurbs_convert_seam_safe_v1
+        bytep = ctypes.POINTER(ctypes.c_ubyte)
+        fn.argtypes = [bytep, ctypes.c_size_t, bytep, ctypes.c_size_t]
+        fn.restype = ctypes.c_int64
+        source = (ctypes.c_ubyte * len(data)).from_buffer_copy(data)
+        required = int(fn(source, len(data), None, 0))
+        if not 0 < required <= native_geometry.MAX_BUFFER_BYTES:
+            raise KernelError(f"exact NURBS conversion refused ({required})")
+        output = (ctypes.c_ubyte * required)()
+        written = int(fn(source, len(data), output, required))
+        if written != required:
+            raise KernelError(f"exact NURBS conversion output changed ({written})")
+    return shape_from_bytes(bytes(output))
 
 
 def _nurbs_where_needed(shape):

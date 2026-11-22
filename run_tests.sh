@@ -274,6 +274,10 @@ if command -v cargo >/dev/null 2>&1; then
             NARWHAL_GEOMETRY_CORE="$ROOT/native/geometry_core/target/release/libnarwhal_geometry_core.so" \
             LD_LIBRARY_PATH="$OCCT_LIBS" "$PYTHON" -B -c \
             "import sys,json; sys.path.insert(0, \"spike\"); from test_join_surfaces import run_admission_probe; print(json.dumps(run_admission_probe()))"
+        run "Rust geometry-core exact Cap SDK admission" env \
+            NARWHAL_GEOMETRY_CORE="$ROOT/native/geometry_core/target/release/libnarwhal_geometry_core.so" \
+            LD_LIBRARY_PATH="$OCCT_LIBS" "$PYTHON" -B -c \
+            "import sys; sys.path.insert(0, \"spike\"); from test_cap_surfaces import run_admission_probe; assert run_admission_probe()"
         run "exact Join command SDK compatibility" env \
             NARWHAL_GEOMETRY_CORE="$ROOT/native/geometry_core/target/release/libnarwhal_geometry_core.so" \
             LD_LIBRARY_PATH="$OCCT_LIBS" "$PYTHON" -B spike/test_join_surface_command.py
@@ -502,6 +506,10 @@ PURE_SUITES=(
     spike/test_coil_owned.py
     spike/test_native_intersect.py
     spike/test_pure_core_curve_hits_gate.py
+    spike/test_pure_core_curve_record_hits_gate.py
+    spike/test_polyline_curve_hits.py
+    spike/test_pure_core_polyline_nearest_gate.py
+    spike/test_polyline_nearest.py
     spike/test_pure_core_nurbs_record_gate.py
     spike/test_pure_core_line_samples_gate.py
     spike/test_native_coil_preview.py
@@ -536,6 +544,8 @@ PURE_SUITES=(
 )
 
 BLENDER_SUITES=(
+    spike/test_cap_command.py
+    spike/test_ai_join_cap_host.py
     spike/test_join_surface_command.py
     spike/test_ai_modeling_host.py
     spike/test_async_display_host.py

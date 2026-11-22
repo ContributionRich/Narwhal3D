@@ -3,7 +3,8 @@
 Run with bundled Python -B and an explicit NARWHAL_GEOMETRY_CORE candidate.
 This minimal Python suite is required to exercise rhino3dm/OCP handles, exact
 writer, recipe/.3dm persistence and bridge glue that native tests cannot call.
-All application source is copied to private temporary storage before import.
+Bridge/kernel source is copied to private temporary storage before import;
+worker/runtime helpers retain their source-package path for isolated execution.
 The source runner requires run_admission_probe() before binary activation.
 """
 import copy
@@ -37,7 +38,9 @@ class PrivateHost:
             shutil.copy2(ROOT / "narwhal3d" / name, path / name)
         self.name = "_join_surface_qualification"
         package = types.ModuleType(self.name)
-        package.__path__ = [str(path)]
+        # Workers must launch from their real package path; copying their script
+        # alone would lose the canonical narwhal3d import root in the child.
+        package.__path__ = [str(path), str(ROOT / "narwhal3d")]
         sys.modules[self.name] = package
         self.bridge = importlib.import_module(self.name + ".bridge")
         self.kernel = importlib.import_module(self.name + ".kernel")
