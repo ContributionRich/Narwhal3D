@@ -28,6 +28,15 @@ use crate::json::strict_json;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
+// OURS: per-RESPONSE ceilings, kept distinct from the conversation-level
+// MAX_ACTIONS / MAX_TURNS budgets in conversation.rs. These are the limits the
+// provider adapter enforces on a single parsed reply; they must fail closed with
+// DIFFERENT codes so an operator can tell "too many calls in one reply" from
+// "one call's arguments too large".
+pub const MAX_TOOL_CALLS_PER_REPLY: usize = 16;
+pub const MAX_TOOL_ARGUMENT_BYTES: usize = 4096;
+pub const MAX_MODELING_TOOL_ARGUMENT_BYTES: usize = 24_000;
+
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum Provider {
@@ -96,12 +105,18 @@ fn call(reply: &mut Reply, id: &str, name: &str, args: &Value) -> Result<(), &'s
     }
     let arguments = args.as_object().ok_or("invalid_arguments")?;
     let argument_limit = if name == "narwhal_model" {
-        24_000
+        MAX_MODELING_TOOL_ARGUMENT_BYTES
     } else {
-        4096
+        MAX_TOOL_ARGUMENT_BYTES
     };
-    if reply.tool_calls.len() >= 4 || args.to_string().len() > argument_limit {
+    // Count and size are separate, recoverable limits: a reply with too many
+    // calls and a single oversized argument must be diagnosed differently so the
+    // model can split the batch or shrink the arguments instead of retrying blind.
+    if reply.tool_calls.len() >= MAX_TOOL_CALLS_PER_REPLY {
         return Err("tool_call_limit");
+    }
+    if args.to_string().len() > argument_limit {
+        return Err("tool_argument_limit");
     }
     reply.tool_calls.push(ToolCall {
         id: id.into(),
@@ -1249,15 +1264,20 @@ mod responses_tests {
     }
 
     #[test]
-    fn four_calls_arguments_raw_and_hidden_replay_limits() {
+    fn sixteen_calls_arguments_raw_and_hidden_replay_limits() {
         let mut v = fixture(TOOLS);
-        for (id, call_id) in [("fc_3", "call_3"), ("fc_4", "call_4")] {
-            v["output"].as_array_mut().unwrap().push(json!({"type":"function_call",
-                "id":id,"call_id":call_id,"name":"cad_list","arguments":"{}","status":"completed"}));
+        // 2 calls already in the fixture; add up to the 16-call ceiling.
+        for n in 0..14 {
+            v["output"]
+                .as_array_mut()
+                .unwrap()
+                .push(json!({"type":"function_call",
+                "id":format!("fc_extra_{n}"),"call_id":format!("call_extra_{n}"),
+                "name":"cad_list","arguments":"{}","status":"completed"}));
         }
-        assert_eq!(parse(P, &v.to_string(), 12).unwrap().tool_calls.len(), 4);
+        assert_eq!(parse(P, &v.to_string(), 12).unwrap().tool_calls.len(), 16);
         v["output"].as_array_mut().unwrap().push(json!({"type":"function_call",
-            "id":"fc_5","call_id":"call_5","name":"cad_list","arguments":"{}","status":"completed"}));
+            "id":"fc_over","call_id":"call_over","name":"cad_list","arguments":"{}","status":"completed"}));
         assert_eq!(parse(P, &v.to_string(), 12).unwrap_err(), "tool_call_limit");
         let mut args = fixture(TOOLS);
         args["output"][0]["arguments"] = json!({"x":"a".repeat(4088)}).to_string().into();
@@ -1265,7 +1285,7 @@ mod responses_tests {
         args["output"][0]["arguments"] = json!({"x":"a".repeat(4089)}).to_string().into();
         assert_eq!(
             parse(P, &args.to_string(), 12).unwrap_err(),
-            "tool_call_limit"
+            "tool_argument_limit"
         );
         args["output"][0]["arguments"] = format!("{{}}{}", " ".repeat(32 * 1024)).into();
         assert_eq!(
@@ -1543,9 +1563,10 @@ mod tests {
         let calls = v["choices"][0]["message"]["tool_calls"]
             .as_array_mut()
             .unwrap();
-        for id in ["c3", "c4"] {
+        // 2 calls already in the fixture; add up to the 16-call ceiling.
+        for n in 0..14 {
             let mut c = calls[1].clone();
-            c["id"] = id.into();
+            c["id"] = format!("c_extra_{n}").into();
             calls.push(c);
         }
         assert_eq!(
@@ -1553,16 +1574,19 @@ mod tests {
                 .unwrap()
                 .tool_calls
                 .len(),
-            4
+            16
         );
         let mut bad = v.clone();
         let calls = bad["choices"][0]["message"]["tool_calls"]
             .as_array_mut()
             .unwrap();
         let mut c = calls[0].clone();
-        c["id"] = "c5".into();
+        c["id"] = "c_over".into();
         calls.push(c);
-        assert!(parse(Provider::Openai, &bad.to_string(), 12).is_err());
+        assert_eq!(
+            parse(Provider::Openai, &bad.to_string(), 12).unwrap_err(),
+            "tool_call_limit"
+        );
         v["choices"][0]["message"]["tool_calls"][0]["function"]["arguments"] =
             json!({"x":"a".repeat(4090)}).to_string().into();
         assert!(parse(Provider::Openai, &v.to_string(), 12).is_err());

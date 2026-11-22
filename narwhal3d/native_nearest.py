@@ -366,15 +366,18 @@ def search_many(packed, targets):
 def sample(curve, n):
     """``bridge.sample_curve(curve, n)`` as ``(x, y, z)`` tuples, or ``None``.
 
-    A `NurbsCurve`, evaluated from its own knots and control points, or a `LineCurve`
-    where the line route is qualified (`line_capability`): each point is bit-identical
-    to ``curve.PointAt`` at the same parameter. ``None`` (any other curve, no library,
-    an unqualified line route, or a point openNURBS could not evaluate) keeps the
+    A `NurbsCurve`, evaluated from its own knots and control points, a `LineCurve`
+    where the line route is qualified (`line_capability`), or a `PolylineCurve` where
+    the polyline sample route is (`polyline_sample_capability`): each point is
+    bit-identical to ``curve.PointAt`` at the same parameter. ``None`` (any other curve,
+    no library, an unqualified route, or a point openNURBS could not evaluate) keeps the
     caller's Python sampling.
     """
     global _native_sample_calls
     if type(curve) is r3.LineCurve:
         return _line_samples(curve, n)
+    if type(curve) is r3.PolylineCurve:
+        return _polyline_samples(curve, n)
     fn = _bindings()[1]
     if fn is None or not isinstance(curve, r3.NurbsCurve):
         return None
@@ -676,3 +679,114 @@ def polyline_capability():
     """``"qualified"`` when polylines are searched in Rust, otherwise the reason."""
     _polyline_binding()
     return _polyline_state[2]
+
+
+# PolylineCurve samples (narwhal_pure_core_polyline_samples, native/pure_core/src/line_samples.rs):
+# ON_PolylineCurve::Evaluate (eb92af3) at `sample`'s parameters, read from the curve's Encode()
+# record, the only place rhino3dm exposes its parameters. Like a line's, the point rounds
+# (1-s)*P[i] + s*P[i+1] product by product, and an SDK build that fuses a multiply-add rounds
+# PointAt differently. So the route needs BOTH a platform in POLYLINE_SAMPLES_QUALIFIED_PLATFORMS
+# and the loaded rhino3dm passing `_polyline_sample_parity`: its own PointAt on the witness
+# polylines, bit for bit. Any refusal, and any other SDK build, keeps PointAt.
+POLYLINE_SAMPLES_QUALIFIED_PLATFORMS = frozenset({("linux", "x86_64")})
+# MEASURED (i7-9700K): Encode() costs ~0.36 us a point and PointAt ~6.4 us a sample, so
+# reading the record of a polyline over ~18 points per sample costs more than PointAt
+# saves. Longer polylines keep PointAt (a snap target's 129 samples route up to 1032 points).
+POLYLINE_SAMPLES_POINTS_PER_SAMPLE = 8
+_POLYLINE_SAMPLE_WITNESS_N = (128, 7)
+_polyline_sample_state = None   # (signature, binding or None, capability text)
+_native_polyline_sample_calls = 0
+
+
+def _polyline_sample_call(fn, record, n):
+    """Rust's samples of one PolylineCurve record, or None when the export refuses it."""
+    out = array.array("d", bytes(8 * 3 * (n + 1)))
+    code = fn(record, len(record), n, (ctypes.c_double * len(out)).from_buffer(out), len(out))
+    if code != 0:
+        return None
+    return list(zip(out[0::3], out[1::3], out[2::3]))
+
+
+def _polyline_sample_witnesses():
+    """`_polyline_witnesses`' polylines (irregular doubles on shifted and uneven parameters,
+    open and closed, -0.0), and one whose last sample parameter lands one ulp past T1."""
+    curves = [curve for curve, _ in _polyline_witnesses()]
+    h = float.fromhex
+    past = r3.PolylineCurve([r3.Point3d(h(x), h(y), -0.0) for x, y in (
+        ("0x1.3a1f8e0c6b1d2p+2", "-0x1.f02a7c3b1e5d4p+1"), ("-0x1.6c0d2e9a4f3b8p+0", "0x1.2b7e1c5a9d3f6p+3"),
+        ("0x1.d4e6a2b8c0f17p+1", "0x1.0c3a5e7f9b2d4p-2"), ("-0x1.84b2d6f0a3c5ep+2", "-0x0.0p+0"))])
+    past.Domain = r3.Interval(h("-0x1.f0e85cf904712p+5"), h("0x1.c4aaeac932a47p+8"))
+    return curves + [past]
+
+
+def _polyline_sample_parity(fn):
+    """True when the loaded rhino3dm's PointAt gives Rust's bits on every witness polyline."""
+    try:
+        for curve in _polyline_sample_witnesses():
+            record = base64.b64decode(curve.Encode()["data"])
+            for n in _POLYLINE_SAMPLE_WITNESS_N:
+                got = _polyline_sample_call(fn, record, n)
+                if got is None or _packed(got) != _packed(_point_at_samples(curve, n)):
+                    return False
+    except Exception:  # noqa: BLE001 -- an SDK that cannot be checked is not qualified
+        return False
+    return True
+
+
+def _polyline_sample_binding():
+    global _polyline_sample_state
+    signature = (os.environ.get(_ENV) or "<packaged>", _here(), id(r3))
+    state = _polyline_sample_state
+    if state is not None and state[0] == signature:
+        return state[1]
+    with _lock:
+        state = _polyline_sample_state
+        if state is not None and state[0] == signature:
+            return state[1]
+        fn, text = None, "polyline samples export unavailable; polylines use PointAt"
+        if signature[1] not in POLYLINE_SAMPLES_QUALIFIED_PLATFORMS:
+            text = "not qualified on {}/{}; polylines use PointAt".format(*signature[1])
+        else:
+            explicit = os.environ.get(_ENV)
+            path = (Path(explicit).expanduser() if explicit else
+                    Path(__file__).resolve().parent / "native" / _library_name())
+            try:
+                fn = ctypes.CDLL(str(path)).narwhal_pure_core_polyline_samples
+                fn.argtypes = [ctypes.c_char_p, ctypes.c_size_t, ctypes.c_size_t, _D,
+                               ctypes.c_size_t]
+                fn.restype = ctypes.c_int32
+            except (AttributeError, OSError):
+                fn = None
+            if fn is not None and not _polyline_sample_parity(fn):
+                fn = None
+                text = (f"rhino3dm {getattr(r3, '__version__', '?')} PointAt differs from "
+                        "the Rust polyline samples on the witness polylines; polylines use PointAt")
+            elif fn is not None:
+                text = "qualified"
+        _polyline_sample_state = signature, fn, text
+        return fn
+
+
+def polyline_sample_capability():
+    """``"qualified"`` when polylines are sampled in Rust, otherwise the reason they are not."""
+    _polyline_sample_binding()
+    return _polyline_sample_state[2]
+
+
+def _polyline_samples(curve, n):
+    """`sample` for a PolylineCurve: None (unqualified, a polyline too long for its record to
+    pay, or refused by the export) keeps PointAt."""
+    global _native_polyline_sample_calls
+    fn = _polyline_sample_binding()
+    if fn is None:
+        return None
+    try:
+        n = int(n)
+        if not 1 <= n <= 1 << 20 or curve.PointCount > POLYLINE_SAMPLES_POINTS_PER_SAMPLE * (n + 1):
+            return None
+        got = _polyline_sample_call(fn, base64.b64decode(curve.Encode()["data"]), n)
+    except Exception:  # noqa: BLE001 -- PointAt remains the route
+        return None
+    if got is not None:
+        _native_polyline_sample_calls += 1
+    return got

@@ -522,7 +522,7 @@ def verify_pure_core_identity(path: Path) -> dict[str, object]:
         raise VerificationError("Windows pure-core lacks required parser ABI exports")
     if any(identity["exports"].count(name) != 1 for name in PURE_CORE_RETIREMENT_EXPORTS):
         raise VerificationError("Windows pure-core lacks required retirement ABI exports")
-    for name in ("narwhal_pure_core_curve_curve_record_hits", "narwhal_pure_core_nearest_on_polyline"):
+    for name in ("narwhal_pure_core_curve_curve_record_hits", "narwhal_pure_core_nearest_on_polyline", "narwhal_pure_core_polyline_samples"):
         if identity["exports"].count(name) != 1:
             raise VerificationError("Windows pure-core lacks additive curve record/nearest export: " + name)
     if sys.platform == "win32":

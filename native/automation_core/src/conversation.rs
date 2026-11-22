@@ -417,12 +417,19 @@ impl Conversation {
             return json!({"status":status,"code":code,"token":token,"physical_http_cancelled":false});
         }
         let raw_bytes = raw.as_ref().map_or(0, String::len);
-        let result = raw
-            .ok_or("missing_response")
-            .and_then(|raw| {
-                provider::parse(self.binding.config.provider_id, &raw, pending.max_tokens)
-            })
-            .and_then(|reply| self.accept_reply(&token, reply));
+        // Parse and acceptance are separate: the two parser-level limits
+        // (tool_call_limit / tool_argument_limit) are diagnosable as parse-origin
+        // before any call is accepted, while accept_reply errors
+        // (action_budget / output_budget / token_budget / replayed_tool_call)
+        // always fail closed with no retry.
+        let parsed = raw.ok_or("missing_response").and_then(|raw| {
+            provider::parse(self.binding.config.provider_id, &raw, pending.max_tokens)
+        });
+        let parser_limit = matches!(&parsed, Err("tool_call_limit" | "tool_argument_limit"));
+        let result = match parsed {
+            Ok(reply) => self.accept_reply(&token, reply),
+            Err(code) => Err(code),
+        };
         match result {
             Ok(reply) => {
                 json!({"status":if reply.tool_calls.is_empty(){"completed"}else{"tool_calls"},"token":token,"response":reply,"cad_state":self.cad_state(),"presentation":display_projection(&reply.text)})
@@ -436,6 +443,43 @@ impl Conversation {
                     && self.turns < MAX_TURNS
                 {
                     let hint = json!({"role":"user","content":"Native execution feedback: your previous response exceeded the output limit and was rejected before any of its calls were accepted or executed. Previously confirmed work, if any, is still present. Continue from actual document/tool results; do not repeat already-applied mutations. Use a small tool call immediately and split the design into small batches instead of planning the whole design in one response."});
+                    if self.history.len() < 192
+                        && serde_json::to_vec(&self.history).unwrap().len() + hint.to_string().len()
+                            <= MAX_CONTEXT
+                    {
+                        // Charge the rejected response conservatively; retrying cannot refund budgets.
+                        self.output_bytes += raw_bytes;
+                        self.reported_tokens += pending.max_tokens;
+                        self.provider_retries_spent = 1;
+                        self.history.push(hint);
+                        return json!({"status":"retryable_provider_limit","code":code,"token":token,
+                            "automatic_retry":true,"retry":1,"current_reply_calls_accepted":false,
+                            "previous_confirmed_work_preserved":true});
+                    }
+                }
+                // The two PARSER-level limits are the only codes eligible for the
+                // single bounded retry. This is AUTOMATIC (not opt-in) because the
+                // parser rejected the reply before any call was accepted — no
+                // permission, authority, or mutation state changed — so one
+                // corrective retry is safe. accept_reply errors
+                // (action_budget / output_budget / token_budget /
+                // replayed_tool_call) are never retried here, and malformed
+                // payloads or duplicate call IDs stay fail-closed.
+                if parser_limit
+                    && matches!(code, "tool_call_limit" | "tool_argument_limit")
+                    && self.provider_retries_spent == 0
+                    && self.output_bytes.saturating_add(raw_bytes) <= MAX_OUTPUT
+                    && self.reported_tokens.saturating_add(pending.max_tokens) <= MAX_TOTAL_TOKENS
+                    && self.turns < MAX_TURNS
+                {
+                    let hint = match code {
+                        "tool_call_limit" => format!(
+                            "Native execution feedback: your previous response was rejected at the parser because it contained more than {} tool calls in one reply. No call was accepted or executed. Previously confirmed work is still present; do not repeat already-applied mutations. Split the parallel calls into smaller batches across replies and continue.",
+                            provider::MAX_TOOL_CALLS_PER_REPLY
+                        ),
+                        _ => "Native execution feedback: your previous response was rejected at the parser because one tool call's arguments exceeded the size limit. No call was accepted or executed. Previously confirmed work is still present; do not repeat already-applied mutations. Reduce the argument size (smaller batch) and continue.".to_string(),
+                    };
+                    let hint = json!({"role":"user","content":hint});
                     if self.history.len() < 192
                         && serde_json::to_vec(&self.history).unwrap().len() + hint.to_string().len()
                             <= MAX_CONTEXT

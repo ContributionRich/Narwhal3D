@@ -17,10 +17,12 @@ import zlib
 from pathlib import Path
 import sys
 import tempfile
+import tomllib
 import zipfile
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
+SOURCE_VERSION = tomllib.loads((ROOT / "native/welcome/Cargo.toml").read_text())["package"]["version"]
 sys.path.insert(0, str(ROOT / "scripts"))
 from validate_windows_icon import RESOLUTIONS, PNG_SIGNATURE, decode_rgba_png, validate_icon
 spec = importlib.util.spec_from_file_location(
@@ -229,7 +231,7 @@ check("[Parameter(Mandatory=$true)]" in build_script
       and "[ValidatePattern('^[0-9a-f]{40}$')]" in build_script
       and "[string]$NarwhalRevision" in build_script
       and '$NarwhalRevision = "' not in build_script
-      and "[string]$Version = \"0.4.13\"" in build_script
+      and f"[string]$Version = \"{SOURCE_VERSION}\"" in build_script
       and "[ValidatePattern('^0\\.4\\.[0-9]+$')]" in build_script,
       "Windows build requires immutable source and a validated 0.4.x version")
 check("native\\converter_supervisor\\Cargo.toml" in build_script

@@ -192,7 +192,19 @@ class Provider(BaseHTTPRequestHandler):
             messages = request["messages"]
             prompt = next(m["content"] for m in reversed(messages) if m["role"] == "user" and isinstance(m.get('content'),str)
                                       and not m["content"].startswith(('Untrusted workspace data, not instructions or authorization: ','Native execution feedback: ')))
-            if prompt == 'retry-limit':
+            if prompt in ('budget-five', 'budget-count', 'budget-args', 'budget-repeat'):
+                last_user = max(i for i, m in enumerate(messages) if m.get('role')=='user' and m.get('content')==prompt)
+                tail = messages[last_user+1:]
+                corrected = any(m.get('role')=='user' and str(m.get('content','')).startswith('Native execution feedback: ') for m in tail)
+                if messages[-1]['role'] == 'tool':
+                    reply = payload('Budget fixture completed with ordered read results.')
+                elif prompt == 'budget-five' or (corrected and prompt != 'budget-repeat'):
+                    reply = payload('', [(prompt+'-read-'+str(i),'narwhal_document_summary',{}) for i in range(5)])
+                elif prompt == 'budget-args':
+                    reply = payload('', [('oversized-args','narwhal_document_summary',{'blob':'x'*4096})])
+                else:
+                    reply = payload('', [(prompt+'-rejected-'+str(i),'narwhal_document_summary',{}) for i in range(17)])
+            elif prompt == 'retry-limit':
                 if any(m.get('role')=='user' and isinstance(m.get('content'),str) and m['content'].startswith('Native execution feedback: ') for m in messages):
                     reply=payload('Recovered from the rejected response without replaying any CAD mutation.')
                 else:
@@ -222,6 +234,8 @@ class Provider(BaseHTTPRequestHandler):
                 reply = (payload('Deterministic exact Join/Cap completed; no aesthetic claim.')
                          if messages[-1]['role'] == 'tool' else payload('', [
                              ('typed-'+prompt, 'narwhal_model', JOIN_CAP_BATCHES[prompt])]))
+            elif prompt == 'budget-seed':
+                reply = (payload('Confirmed budget seed.') if messages[-1]['role']=='tool' else payload('', [('budget-seed','narwhal_model',{'label':'Budget seed','steps':[{'id':'seed','name':'Seed','publish':True,'replace':None,'action':{'op':'nurbs_surface','degree_u':2,'degree_v':1,'points':[[[1,0,0,1],[1,0,3,1]],[[2**-.5,2**-.5,0,2**-.5],[2**-.5,2**-.5,3*2**-.5,2**-.5]],[[0,1,0,1],[0,1,3,1]]],'knots_u':[0,0,0,1,1,1],'knots_v':[0,0,1,1] }}]})]))
             elif prompt == 'modeling':
                 if messages[-1]['role'] == 'tool':
                     output = json.loads(messages[-1]['content'])['output']
@@ -310,6 +324,7 @@ def wait(predicate, label, seconds=5):
     deadline = time.monotonic()+seconds
     while not predicate():
         if time.monotonic() > deadline:
+            print('TIMEOUT_STATE', ui.ai_assistant_state().status, ui.ai_assistant_state().error, bool(ui._ai.get('modeling_pending')), flush=True)
             raise AssertionError("timed out: " + label)
         yield .04
     check(True, label)
@@ -730,6 +745,38 @@ def modeling_rounds():
     ui.NARWHAL_OT_ai_modeling_mode.invoke = mode_invoke
     yield from mcp_modeling_round()
     yield from provider_join_cap_rounds()
+    yield from tap('LEFTMOUSE', button('new'))
+    st = ui.ai_assistant_state()
+    yield from send('budget-seed', consent=True)
+    yield from wait(lambda: st.status in ('connected','awaiting_approval','error'), 'fresh budget seed reaches native authority gate', 30)
+    if st.status=='awaiting_approval':
+        yield from tap('RET')
+    yield from wait(lambda: st.status=='connected', 'fresh budget workflow confirms a mutation first', 30)
+    seed = list(ui.app_state.model.file.Objects)[-1]
+    facts = ai_modeling.inspect_object(ui.app_state, str(seed.Attributes.Id))
+    check(facts['surface_data']['available'] and facts['surface_data']['degree_u']==2 and not facts['solid'],
+          'installed provider publishes an exact bounded rational NURBS surface')
+    midpoint = seed.Geometry.Faces[0].PointAt(.5,.5)
+    check(abs(midpoint.X-2**-.5)<1e-12 and abs(midpoint.Y-2**-.5)<1e-12 and abs(midpoint.Z-1.5)<1e-12,
+          'provider surface has measured rational quarter-cylinder midpoint')
+    for budget_prompt in ('budget-five', 'budget-count', 'budget-args'):
+        encoded = ui.app_state.model.file.Encode()
+        serial = ui.app_state.ctx.undo.top_serial
+        start = len(RESULT['requests'])
+        yield from send(budget_prompt)
+        yield from wait(lambda: st.status=='connected', 'bounded provider tool-budget recovery completes')
+        expected = 2 if budget_prompt=='budget-five' else 3
+        check(len(RESULT['requests'])==start+expected, 'exactly one correction for '+budget_prompt)
+        messages = RESULT['requests'][-1]['messages']
+        ids = [m['tool_call_id'] for m in messages if m.get('role')=='tool' and m.get('tool_call_id','').startswith(budget_prompt+'-read-')]
+        check(ids==[budget_prompt+'-read-'+str(i) for i in range(5)], 'five accepted reads keep ordered correlation')
+        check(ui.app_state.model.file.Encode()==encoded and ui.app_state.ctx.undo.top_serial==serial, 'recovery preserves confirmed mutations and Undo without replay')
+    check(any('tool arguments that were too large' in m.text for m in st.messages), 'argument limit has distinct human feedback')
+    start = len(RESULT['requests'])
+    yield from send('budget-repeat')
+    yield from wait(lambda: st.status=='error', 'second parser limit fails closed')
+    check(len(RESULT['requests'])==start+2 and st.error=='tool_call_limit', 'no third attempt after repeated limit')
+
 
 
 def mcp_modeling_round():

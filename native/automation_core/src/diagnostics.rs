@@ -34,6 +34,9 @@ pub fn classify(code: &str) -> (&'static str, &'static str) {
         | "normalized_output_limit"
         | "response_size_limit"
         | "tool_call_limit" => ("policy_limit", "reduce_scope"),
+        // Distinct from tool_call_limit: too many calls in ONE reply (split the
+        // batch across replies) vs. one call's arguments too large (shrink them).
+        "tool_argument_limit" => ("policy_limit", "reduce_arguments"),
         "tool_result_correlation" => ("result_correlation", "correct_result_ids"),
         "replayed_tool_call"
         | "proposal_call_replay"

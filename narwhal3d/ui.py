@@ -6833,7 +6833,11 @@ def _ai_poll_transport():
             return None
         outcome = workflow.finish(receipt, scope[0])
         if outcome['status'] == 'retryable_provider_limit':
-            st.add_message('status','The provider hit its response limit before applying this reply. Continuing once with a smaller step; confirmed work is preserved.')
+            limit = {'tool_call_limit': 'too many tool calls in one reply',
+                     'tool_argument_limit': 'tool arguments that were too large'}.get(
+                         outcome.get('code'), 'its response limit')
+            st.add_message('status', 'The provider returned ' + limit +
+                           ' before applying this reply. Continuing once with a smaller step; confirmed work is preserved.')
             _ai_start_turn(workflow.prepare(scope[0],continuation=True))
         elif outcome["status"] == "tool_calls":
             if _ai_read_results(workflow, outcome, scope[0]):

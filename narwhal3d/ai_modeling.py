@@ -151,7 +151,7 @@ def context(app, document_session):
                 layer_available=append['layer_available'], undo_top_serial=app.ctx.undo.top_serial)
 
 
-def inspect_geometry(geom, tolerance, *, probe_profile=False):
+def inspect_geometry(geom, tolerance, *, probe_profile=False, surface_net=True):
     from . import bridge, kernel
     from .kernel import occt_backend as occt
     import rhino3dm as r3
@@ -191,6 +191,24 @@ def inspect_geometry(geom, tolerance, *, probe_profile=False):
                     key, master = kernel.master_key_of(probe), kernel.master_of(probe)
                     if key and master is not None:
                         kernel.discard_master_binding(key, master)
+    if isinstance(geom, r3.Brep):
+        facts['surface_data'] = dict(available=False, code='requires_single_untrimmed_surface')
+        # Never expose a trimmed face's underlying net as a reconstructable equivalent.
+        if len(geom.Faces) == 1 and geom.IsSurface:
+            surface = geom.Faces[0].ToNurbsSurface()
+            if surface is None:
+                raise ValueError('surface_conversion_unavailable')
+            nu, nv = surface.Points.CountU, surface.Points.CountV
+            data = dict(count_u=nu, count_v=nv, degree_u=surface.Degree(0), degree_v=surface.Degree(1))
+            facts['surface_data'] = dict(available=False, code='surface_detail_limit', **data)
+            if nu <= 32 and nv <= 32 and nu*nv <= 256 and 1 <= surface.Degree(0) <= 7 and 1 <= surface.Degree(1) <= 7:
+                ku, kv = list(surface.KnotsU), list(surface.KnotsV)
+                facts['surface_data'] = dict(available=True, **data)
+                if probe_profile and surface_net:
+                    facts['surface_data'].update(
+                        points=[[[p.X,p.Y,p.Z,p.W] for p in [surface.Points[u,v] for v in range(nv)]] for u in range(nu)],
+                        knots_u=[ku[0], *ku, ku[-1]], knots_v=[kv[0], *kv, kv[-1]],
+                        coordinates='homogeneous_xw_yw_zw_w', knot_convention='full_including_two_superfluous_end_knots')
     recipe = kernel.recipe_of(geom)
     if isinstance(geom, (r3.Brep, r3.Extrusion)):
         if recipe is None or kernel.honesty_problem(geom):
@@ -205,7 +223,7 @@ def inspect_geometry(geom, tolerance, *, probe_profile=False):
     return facts
 
 
-def inspect_object(app, object_id):
+def inspect_object(app, object_id, *, surface_net=True):
     ai_assistant.WorkflowSession._main_thread()
     obj = app.model.file.Objects.FindId(object_id)
     if obj is None:
@@ -214,7 +232,7 @@ def inspect_object(app, object_id):
     return dict(object_id=object_id, name=obj.Attributes.Name,
                 attributes=dict(layer_id=str(layer.Id), color=list(obj.Attributes.ObjectColor),
                                 color_source=str(obj.Attributes.ColorSource), visible=bool(obj.Attributes.Visible)),
-                **inspect_geometry(obj.Geometry, app.model.absolute_tolerance(), probe_profile=True))
+                **inspect_geometry(obj.Geometry, app.model.absolute_tolerance(), probe_profile=True, surface_net=surface_net))
 
 
 def _inspection_curve(app, object_id):
@@ -472,6 +490,23 @@ def _construct(action, resolve, tolerance=1e-6):
         if bool(curve.IsClosed) != action['closed']:
             raise ValueError('modeling_curve_unverified')
         return curve
+    if op == 'nurbs_surface':
+        # Blender/SDK glue only: Rust validates the net; the SDK constructs exact geometry.
+        rows = action['points']
+        surface = r3.NurbsSurface.Create(3, True, action['degree_u']+1,
+            action['degree_v']+1, len(rows), len(rows[0]))
+        for u, row in enumerate(rows):
+            for v, point in enumerate(row):
+                surface.Points[u, v] = r3.Point4d(*point)
+        for target, values in ((surface.KnotsU, action['knots_u']), (surface.KnotsV, action['knots_v'])):
+            for i, knot in enumerate(values[1:-1]):
+                target[i] = knot
+        if not surface.IsValid:
+            raise ValueError('invalid_nurbs_surface_sdk')
+        brep = r3.Brep.CreateFromSurface(surface)
+        if brep is None or not brep.IsValid or not bridge.record_exact_recipe(brep, tolerance):
+            raise ValueError('exact_nurbs_surface_required')
+        return brep
     if op == 'box':
         x, y, z = action['origin']
         dx, dy, dz = action['size']
@@ -816,7 +851,7 @@ def publish_steps(app, workflow, descriptor, document_session, scope_check):
         check()
         # Inspect persisted geometry, not merely successful producer return values.
         for row in output_objects:
-            row.update(inspect_object(app, row['object_id']))
+            row.update(inspect_object(app, row['object_id'], surface_net=False))
         # SDK writes must be read back before history is finalized. The native
         # general receipt preflight checks geometry, while its attribute policy
         # is enforced again only when the canonical receipt is recorded.

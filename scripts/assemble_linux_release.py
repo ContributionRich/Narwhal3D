@@ -18,7 +18,7 @@ import tempfile
 from typing import Any
 
 from build_linux_native import probe_ui_core, verify_ui_core_source, probe_geometry_core_join, verify_geometry_core_source
-from check_pure_core import probe_pure_core_parser, probe_pure_core_retirement, probe_pure_core_curve_record_hits, probe_pure_core_polyline_nearest
+from check_pure_core import probe_pure_core_parser, probe_pure_core_retirement, probe_pure_core_curve_record_hits, probe_pure_core_polyline_nearest, probe_pure_core_polyline_samples
 
 from release_policy import (
     MAX_HOST_GLIBC, format_glibc, glibc_versions, scan_runtime_glibc,
@@ -608,6 +608,7 @@ def validate_native_components(
         probe_pure_core_retirement(directory / "libnarwhal_pure_core.so")
         probe_pure_core_curve_record_hits(directory / "libnarwhal_pure_core.so")
         probe_pure_core_polyline_nearest(directory / "libnarwhal_pure_core.so")
+        probe_pure_core_polyline_samples(directory / "libnarwhal_pure_core.so")
     except ValueError as exc:
         raise ReleaseError(str(exc)) from exc
     try:

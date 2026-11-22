@@ -1,4 +1,5 @@
-//! Uniform samples of a `LineCurve`: the `PointAt` loop of `bridge.sample_curve`.
+//! Uniform samples of a `LineCurve` or a `PolylineCurve`: the `PointAt` loop of
+//! `bridge.sample_curve`.
 //!
 //! `bridge.sample_curve` and `curve_snap_target` sample a curve at `T0 + span * i / n`
 //! for `i` in `0..=n`. For a rhino3dm `LineCurve` each `PointAt` is `ON_LineCurve::Evaluate` followed by
@@ -9,16 +10,22 @@
 //! * `PointAt(s)`: `from + s * (to - from)` below 0.5, else `to + (1 - s) * (from - to)`,
 //!   one coordinate at a time.
 //!
+//! For a `PolylineCurve` each `PointAt` is `ON_PolylineCurve::Evaluate` (opennurbs_polylinecurve.cpp
+//! at eb92af3), which `curvex::Polyline` already ports for the curve/curve recursion and
+//! the closest-point search: the segment from `ON_NurbsSpanIndex`, then
+//! `(1 - s) * P[i] + s * P[i+1]`.
+//!
 //! Every operation is one IEEE-754 multiply, add, subtract or divide; Rust never fuses
 //! them. So the samples are bit-identical to rhino3dm's wherever rhino3dm does not fuse
 //! them either. The Python adapter (`native_nearest.sample`) admits only a qualified
-//! platform whose loaded rhino3dm also reproduces these bits on its witness lines. The
+//! platform whose loaded rhino3dm also reproduces these bits on its witness curves. The
 //! parameters are `bridge.sample_curve`'s own, computed with Python's float semantics
 //! (`span * i` then `/ n`).
 
 const ERR_NULL: i32 = -1;
 const ERR_INPUT: i32 = -2;
 const ERR_SIZE: i32 = -3;
+const NOT_RECOGNISED: i32 = 1;
 /// The snap target asks for 128 intervals; a larger request is refused by name.
 pub const MAX_INTERVALS: usize = 1 << 20;
 
@@ -93,6 +100,67 @@ pub unsafe extern "C" fn narwhal_pure_core_line_samples(
         return ERR_NULL;
     };
     samples(line, t0, t1, n, out);
+    0
+}
+
+/// Write `curve_snap_target`'s `n + 1` samples of the `PolylineCurve` whose encoded record
+/// (`base64.b64decode(curve.Encode()["data"])`) is `record[..record_len]` to
+/// `out[..3 * (n + 1)]`. The domain is the record's `m_t` ends, which are the SDK's `Domain`.
+///
+/// Returns 0; 1, writing nothing, for a record that is not a 3-D polyline `curvex` accepts
+/// (the host then calls `PointAt`); -2, writing nothing, for `n` of 0 or above
+/// [`MAX_INTERVALS`], a domain whose parameter construction overflows, or a non-finite
+/// sample; -3, writing nothing, when `capacity < 3 * (n + 1)`; -1 for an invalid pointer
+/// or an `out` that overlaps `record`.
+///
+/// # Safety
+///
+/// `record` must reference `record_len` readable bytes and `out` `capacity` writable doubles.
+#[no_mangle]
+pub unsafe extern "C" fn narwhal_pure_core_polyline_samples(
+    record: *const u8,
+    record_len: usize,
+    n: usize,
+    out: *mut f64,
+    capacity: usize,
+) -> i32 {
+    if n == 0 || n > MAX_INTERVALS {
+        return ERR_INPUT;
+    }
+    let len = 3 * (n + 1);
+    if capacity < len {
+        return ERR_SIZE;
+    }
+    let (start, end) = (out as usize, (out as usize).wrapping_add(8 * len));
+    let first = record as usize;
+    if first < end && start < first.saturating_add(record_len) {
+        return ERR_NULL;
+    }
+    let Some(data) = (unsafe { crate::checked_slice(record, record_len) }) else {
+        return ERR_NULL;
+    };
+    let Some(curve) = crate::curvex::polyline_from_record(data) else {
+        return NOT_RECOGNISED;
+    };
+    // `polyline_from_record` admits only strictly increasing finite parameters.
+    let (t0, t1) = curve.ends();
+    let span = t1 - t0;
+    if !span.is_finite() || !(span * n as f64).is_finite() || !(t0.abs() + span).is_finite() {
+        return ERR_INPUT;
+    }
+    // Stage every sample so a refusal cannot publish a prefix.
+    let mut staged = Vec::with_capacity(len);
+    for i in 0..=n {
+        let p = curve.point(t0 + span * i as f64 / n as f64);
+        if !p.iter().all(|v| v.is_finite()) {
+            return ERR_INPUT;
+        }
+        staged.extend(p);
+    }
+    let Some(out) = (unsafe { crate::checked_slice_mut(out, len) }) else {
+        return ERR_NULL;
+    };
+    out.copy_from_slice(&staged);
     0
 }
 
@@ -357,6 +425,269 @@ mod tests {
                     answered += 1;
                 }
                 ERR_INPUT | ERR_SIZE => assert!(out.iter().all(|&v| v == -9.0)),
+                other => panic!("status {other}"),
+            }
+        }
+        assert!(answered > 0);
+    }
+}
+
+#[cfg(test)]
+mod polyline_tests {
+    use super::*;
+    use crate::curvex::{polyline_record, tests::unhex};
+
+    struct Case {
+        name: &'static str,
+        record: &'static str,
+        n: usize,
+        samples: &'static [[u64; 3]],
+    }
+
+    // rhino3dm 8.35.0 PolylineCurve records and PointAt(T0 + span * i / n) for i in 0..=n,
+    // captured with the SDK (the PR's scratch generator).
+    const POLYLINES: [Case; 4] = [
+        Case {
+            name: "an irregular 3-D zigzag on a shifted domain",
+            record: "fa7f02000901000000000000fbff02001400000000000000e6d4d74e47e9d311bfe50010830122f04e9cbbdbfcff0200d10000000000000010060000001baf48800ce50dc0c37faf433b62e83f88e75ea35e63d3bf29fa8c0a47e001c035a53808a919f0bf6a9d50e0debdefbfcde903d6b154e9bf512e0d1f89adf03f0ab5afa65913e5bf303dd6c89683f23f74a80d79b772f1bff81b5eb672f5d3bfc81f78ddc4520840183c74a203c0eb3f1e3c9fe02cc1ea3f27da5273dcec1140ae53e4b8a8bfefbf4edf27c6ea1deabf06000000a0e3af71760b3ac0ac2c6444ef092ec06048a295c6f30fc0f41026f317201c40885147cc840e3240d11ec59b03153d40030000003eac34aaff7f02800000000000000000",
+            n: 7,
+            samples: &[
+                [0xc00de50c8048af1b, 0x3fe8623b43af7fc3, 0xbfd3635ea35ee788],
+                [0xc0054f5ae30bc025, 0xbfe00897661ec780, 0xbfe9713f00b4daa8],
+                [0xbff9db9bde7d624a, 0xbfc06b77bb1ee6c6, 0xbfeb2ba5c79df0b0],
+                [0xbfe06c2434eab6f2, 0x3fe79affc9806871, 0xbfe37d8be50b0ae4],
+                [0x3fec1e9ff093477f, 0xbfe9255c7d815cb0, 0xbfd7210e39a77045],
+                [0x4001ddc7a9971f45, 0x3f9cda50eb691940, 0x3fd605dd8dfb5d45],
+                [0x400b9de604a9b7ec, 0x3fd5803710b5dcfc, 0x3fd74c0318ccb1cc],
+                [0x4011ecdc7352da26, 0xbfefbfa8b8e453a8, 0xbfea1deac627df49],
+            ],
+        },
+        Case {
+            name: "a closed rectangle with -0.0 coordinates",
+            record: "fa7f0200e900000000000000fbff02001400000000000000e6d4d74e47e9d311bfe50010830122f04e9cbbdbfcff0200b100000000000000100500000000000000000000800000000000000080000000000000000087ec59ba1a470740000000000000008000000000000000000129c0faed2a04403729cf830bcbfd3f0000000000000080000000000000008084e0dc1ef94ffa3f0000000000000000000000000000008000000000000000800000000000000000050000000000000000000000000000000000f03f00000000000000400000000000000840000000000000104003000000e819359fff7f02800000000000000000",
+            n: 10,
+            samples: &[
+                [0x0000000000000000, 0x8000000000000000, 0x0000000000000000],
+                [0x3ff29f489514bd39, 0x8000000000000000, 0x0000000000000000],
+                [0x40029f489514bd39, 0x8000000000000000, 0x0000000000000000],
+                [0x4006a7de9407f89f, 0x3fd7d5a2cfd8edc4, 0x0000000000000000],
+                [0x40056966476410d0, 0x3ff1e03a1be2b255, 0x0000000000000000],
+                [0x40042aedfac02901, 0x3ffdcb0b83cf2937, 0x0000000000000000],
+                [0x3ff83383f9b36469, 0x3ffc669dc1d4a5bc, 0x0000000000000000],
+                [0x3fe02257fbcced9e, 0x3ffb022fffda2242, 0x0000000000000000],
+                [0x8000000000000000, 0x3ff50cc74be3e6cf, 0x0000000000000000],
+                [0x8000000000000000, 0x3fe50cc74be3e6cf, 0x0000000000000000],
+                [0x8000000000000000, 0x0000000000000000, 0x0000000000000000],
+            ],
+        },
+        Case {
+            name: "a repeated point (IsValid false)",
+            record: "fa7f0200c900000000000000fbff02001400000000000000e6d4d74e47e9d311bfe50010830122f04e9cbbdbfcff0200910000000000000010040000009a9999999999b93f9a9999999999c93f333333333333d33f9a9999999999b93f9a9999999999c93f333333333333d33f333333333333fb3f33333333333307c0333333333333d33f66666666666610403333333333331540666666666666e6bf040000000000000000000000000000000000f03f0000000000000040000000000000084003000000839306d8ff7f02800000000000000000",
+            n: 9,
+            samples: &[
+                [0x3fb999999999999a, 0x3fc999999999999a, 0x3fd3333333333333],
+                [0x3fb999999999999a, 0x3fc999999999999a, 0x3fd3333333333333],
+                [0x3fb999999999999a, 0x3fc999999999999a, 0x3fd3333333333333],
+                [0x3fb999999999999a, 0x3fc999999999999a, 0x3fd3333333333333],
+                [0x3fe4444444444443, 0xbfeaaaaaaaaaaaa8, 0x3fd3333333333333],
+                [0x3ff2aaaaaaaaaaac, 0xbffddddddddddddf, 0x3fd3333333333333],
+                [0x3ffb333333333333, 0xc007333333333333, 0x3fd3333333333333],
+                [0x4004000000000000, 0xbfc5555555555528, 0xbfa1111111111124],
+                [0x400a666666666665, 0x4004888888888885, 0xbfd7777777777774],
+                [0x4010666666666666, 0x4015333333333333, 0xbfe6666666666666],
+            ],
+        },
+        Case {
+            name: "a last parameter one ulp past T1",
+            record: "fa7f0200c900000000000000fbff02001400000000000000e6d4d74e47e9d311bfe50010830122f04e9cbbdbfcff020091000000000000001004000000a2b4722b4f2b1240b6335d5e75701940000000000000008010b1e14377da1fc09d6c5f7a35f320c0000000000000008080da73126168d03f8894083748e21240000000000000008020f13071ff24f4bf0000000000000080000000000000008004000000a4e10b34700e76c0ebb80259d8c971c06220f3fb800a6bc0efcee045518162c00300000049d52549ff7f02800000000000000000",
+            n: 5,
+            samples: &[
+                [0x40122b4f2b72b4a2, 0x401970755e5d33b6, 0x8000000000000000],
+                [0xc007b04fc84caa68, 0xc004542273cda825, 0x8000000000000000],
+                [0xc019471166131ae7, 0xc01757e0b8ca29a6, 0x8000000000000000],
+                [0xbff6337f329d61e5, 0x4000a77bf627ca01, 0x8000000000000000],
+                [0xbfd662f8106f31e4, 0x4006a923753d7f0b, 0x8000000000000000],
+                [0xbff424ff7130f124, 0xbce2e24837089488, 0x0000000000000000],
+            ],
+        },
+    ];
+
+    fn call(record: &[u8], n: usize, capacity: usize) -> (i32, Vec<f64>) {
+        let mut out = vec![-9.0; capacity];
+        let status = unsafe {
+            narwhal_pure_core_polyline_samples(
+                record.as_ptr(),
+                record.len(),
+                n,
+                out.as_mut_ptr(),
+                capacity,
+            )
+        };
+        (status, out)
+    }
+
+    #[test]
+    fn samples_are_point_at_bit_for_bit() {
+        for case in &POLYLINES {
+            let record = unhex(case.record);
+            let len = 3 * (case.n + 1);
+            let (status, out) = call(&record, case.n, len + 2);
+            assert_eq!(status, 0, "{}", case.name);
+            let got: Vec<[u64; 3]> = out[..len]
+                .chunks_exact(3)
+                .map(|p| [p[0].to_bits(), p[1].to_bits(), p[2].to_bits()])
+                .collect();
+            assert_eq!(got, case.samples, "{}", case.name);
+            assert_eq!(out[len..], [-9.0, -9.0], "{}", case.name);
+        }
+    }
+
+    #[test]
+    fn the_witness_detects_a_fused_multiply_add() {
+        // `(1 - s) * P[i] + s * P[i+1]` with one fused multiply-add, as an FMA-contracting
+        // SDK build computes it, misses the SDK's bits on the irregular witness: so the
+        // witness (also the Python parity check's first curve) tells the two apart.
+        let case = &POLYLINES[0];
+        let record = unhex(case.record);
+        let polyline = crate::nurbs_record::read_polyline(&record).unwrap();
+        let (points, t) = polyline.arrays();
+        let (t0, t1) = (t[0], t[t.len() - 1]);
+        let differ = (0..=case.n)
+            .filter(|&i| {
+                let u = t0 + (t1 - t0) * i as f64 / case.n as f64;
+                let k = t[..t.len() - 1].iter().rposition(|&x| x <= u).unwrap_or(0);
+                let k = k.min(t.len() - 2);
+                let s = if u == t[k + 1] {
+                    1.0
+                } else {
+                    (u - t[k]) / (t[k + 1] - t[k])
+                };
+                let fused: [u64; 3] = std::array::from_fn(|j| {
+                    (1.0 - s)
+                        .mul_add(points[k][j], s * points[k + 1][j])
+                        .to_bits()
+                });
+                fused != case.samples[i]
+            })
+            .count();
+        assert!(differ > 0, "a fused blend matched every SDK sample");
+    }
+
+    #[test]
+    fn refusals_write_nothing() {
+        let record = unhex(POLYLINES[1].record);
+        for n in [0, MAX_INTERVALS + 1, usize::MAX] {
+            let (status, out) = call(&record, n, 30);
+            assert_eq!(status, ERR_INPUT, "{n}");
+            assert!(out.iter().all(|&v| v == -9.0));
+        }
+        let (status, out) = call(&record, 4, 14);
+        assert_eq!(status, ERR_SIZE);
+        assert!(out.iter().all(|&v| v == -9.0));
+        for bad in [&b"not a record"[..], &record[..record.len() - 1], &[]] {
+            let (status, out) = call(bad, 4, 15);
+            assert_eq!(status, NOT_RECOGNISED);
+            assert!(out.iter().all(|&v| v == -9.0));
+        }
+        // one point, and parameters that do not increase, are not polylines curvex accepts
+        let one = polyline_record(&[[0.0; 3]], &[0.0]);
+        let flat = polyline_record(&[[0.0; 3], [1.0, 0.0, 0.0]], &[1.0, 1.0]);
+        for record in [one, flat] {
+            assert_eq!(call(&record, 4, 15).0, NOT_RECOGNISED);
+        }
+        // finite (ON_IS_VALID) domains whose span, or span * n, overflows
+        for params in [[-1e308, 1e308], [0.0, 1e308]] {
+            let wide = polyline_record(&[[0.0; 3], [1.0, 2.0, 3.0]], &params);
+            let (status, out) = call(&wide, 4, 15);
+            assert_eq!(status, ERR_INPUT, "{params:?}");
+            assert!(out.iter().all(|&v| v == -9.0));
+        }
+        let mut out = [0.0; 16];
+        unsafe {
+            assert_eq!(
+                narwhal_pure_core_polyline_samples(std::ptr::null(), 5, 4, out.as_mut_ptr(), 15),
+                ERR_NULL
+            );
+            assert_eq!(
+                narwhal_pure_core_polyline_samples(
+                    record.as_ptr(),
+                    record.len(),
+                    4,
+                    std::ptr::null_mut(),
+                    15
+                ),
+                ERR_NULL
+            );
+            let misaligned = (out.as_mut_ptr() as *mut u8).add(1).cast::<f64>();
+            assert_eq!(
+                narwhal_pure_core_polyline_samples(
+                    record.as_ptr(),
+                    record.len(),
+                    4,
+                    misaligned,
+                    15
+                ),
+                ERR_NULL
+            );
+            // an output that overlaps the record it reads
+            let mut shared = vec![0.0f64; record.len().div_ceil(8) + 15];
+            let bytes = shared.as_mut_ptr().cast::<u8>();
+            std::ptr::copy_nonoverlapping(record.as_ptr(), bytes, record.len());
+            assert_eq!(
+                narwhal_pure_core_polyline_samples(bytes, record.len(), 4, shared.as_mut_ptr(), 15),
+                ERR_NULL
+            );
+        }
+        assert_eq!(call(&record, MAX_INTERVALS, 3 * (MAX_INTERVALS + 1)).0, 0);
+    }
+
+    #[test]
+    fn malformed_records_are_refused_without_a_panic() {
+        let mut state = 20261121u64;
+        let mut next = || {
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            state >> 11
+        };
+        let awkward = [
+            0.0,
+            -0.0,
+            1.0,
+            -1.0,
+            1e300,
+            -1e300,
+            5e-324,
+            f64::NAN,
+            f64::INFINITY,
+        ];
+        let mut answered = 0;
+        for k in 0..20000 {
+            let mut record = if k % 2 == 0 {
+                let count = (next() % 6) as usize;
+                let mut pick = || awkward[(next() % awkward.len() as u64) as usize];
+                let points: Vec<[f64; 3]> = (0..count).map(|_| [pick(), pick(), pick()]).collect();
+                let params: Vec<f64> = (0..count).map(|_| pick()).collect();
+                polyline_record(&points, &params)
+            } else {
+                unhex(POLYLINES[(next() % 4) as usize].record)
+            };
+            if next() % 3 == 0 && !record.is_empty() {
+                let at = (next() % record.len() as u64) as usize;
+                record[at] ^= 1 << (next() % 8);
+            }
+            if next() % 5 == 0 {
+                record.truncate((next() % (record.len() as u64 + 1)) as usize);
+            }
+            let n = [0, 1, 2, 7, 128, usize::MAX, MAX_INTERVALS + 1][(next() % 7) as usize];
+            let capacity = (next() % 400) as usize;
+            let (status, out) = call(&record, n, capacity);
+            match status {
+                0 => {
+                    assert!(capacity >= 3 * (n + 1));
+                    answered += 1;
+                }
+                NOT_RECOGNISED | ERR_INPUT | ERR_SIZE => assert!(out.iter().all(|&v| v == -9.0)),
                 other => panic!("status {other}"),
             }
         }

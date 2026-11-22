@@ -249,6 +249,7 @@ class ApplicationPackaging(unittest.TestCase):
                      patch.object(linux_verify, "probe_pure_core_parser", return_value=linux_verify.PURE_CORE_PARSE_IDENTITY), \
                      patch.object(linux_verify, "probe_pure_core_retirement", return_value=PURE_CORE_RETIREMENT_IDENTITY) as retirement, \
                      patch.object(linux_verify, "probe_pure_core_curve_record_hits", return_value={"qualified_separately": True}) as curve_records, \
+                     patch.object(linux_verify, "probe_pure_core_polyline_samples", return_value={"qualified_separately": True}) as polyline_samples, \
                      patch.object(linux_verify, "probe_pure_core_polyline_nearest", return_value={"qualified_separately": True}) as polyline_nearest, \
                      patch.object(linux_verify, "probe_geometry_core_join", return_value={"qualified_separately": True}) as join, \
                      patch.object(linux.subprocess, "run", side_effect=execute_probe):
@@ -284,6 +285,8 @@ class ApplicationPackaging(unittest.TestCase):
                         root / "narwhal3d/native/libnarwhal_pure_core.so", Path("python"), env={})
                     polyline_nearest.assert_called_once_with(
                         root / "narwhal3d/native/libnarwhal_pure_core.so", Path("python"), env={})
+                    polyline_samples.assert_called_once_with(
+                        root / "narwhal3d/native/libnarwhal_pure_core.so", Path("python"), env={})
 
     def test_linux_packaged_history_receipt_must_match_executed_probe(self):
         expected = {name: abi for name, (_, abi) in linux_verify.NATIVE_LIBRARY_ABIS.items()}
@@ -295,6 +298,7 @@ class ApplicationPackaging(unittest.TestCase):
             with patch.object(linux_verify, "probe_pure_core_parser", return_value=linux_verify.PURE_CORE_PARSE_IDENTITY), \
                     patch.object(linux_verify, "probe_pure_core_retirement", return_value=PURE_CORE_RETIREMENT_IDENTITY) as retirement, \
                     patch.object(linux_verify, "probe_pure_core_curve_record_hits", return_value={"qualified_separately": True}) as curve_records, \
+                     patch.object(linux_verify, "probe_pure_core_polyline_samples", return_value={"qualified_separately": True}) as polyline_samples, \
                      patch.object(linux_verify, "probe_pure_core_polyline_nearest", return_value={"qualified_separately": True}) as polyline_nearest, \
                      patch.object(linux_verify, "probe_geometry_core_join", return_value={"qualified_separately": True}) as join, \
                     patch.object(linux_verify.subprocess, "run", return_value=types.SimpleNamespace(stdout=json.dumps(result))):
@@ -310,6 +314,8 @@ class ApplicationPackaging(unittest.TestCase):
                 curve_records.assert_called_once_with(
                     Path("app/narwhal3d/native/libnarwhal_pure_core.so"), Path("python"), env={})
                 polyline_nearest.assert_called_once_with(
+                    Path("app/narwhal3d/native/libnarwhal_pure_core.so"), Path("python"), env={})
+                polyline_samples.assert_called_once_with(
                     Path("app/narwhal3d/native/libnarwhal_pure_core.so"), Path("python"), env={})
 
     def test_linux_packaged_history_requires_retirement_qualification(self):
@@ -672,6 +678,9 @@ def mutation_checks():
                             source.replace(old, new) if self == path else original(self, *args, **kwargs))
 
     mutants = [
+        ("Linux polyline sample qualification omitted", mutated_function(linux_verify, "verify_native_library_abis",
+            "probe_pure_core_polyline_samples(", "(lambda *args, **kwargs: None)("),
+            "test_linux_history_probe_and_packaged_loader"),
         ("Linux curve record qualification omitted", mutated_function(linux_verify, "verify_native_library_abis",
             "probe_pure_core_curve_record_hits(", "(lambda *args, **kwargs: None)("),
             "test_linux_history_probe_and_packaged_loader"),

@@ -14,6 +14,8 @@ Draw with the mouse, type a command, or choose a tool from the sidebar. Work in 
 
 > **An early preview, built in the open.** Narwhal is still growing, and some tools are incomplete. Save important work often and verify dimensions and exported geometry before manufacturing. [See what works and what's still missing →](docs/gaps.md)
 
+**Pending source: 0.4.14.** [Candidate changes and current limitations](CHANGELOG.md#0414--source-candidate-not-yet-published). Downloads above remain the published 0.4.13 packages until the new release is qualified and published.
+
 ## Your workspace, light or dark
 
 The same model in **Narwhal 3D 0.4.7**.

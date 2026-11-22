@@ -491,10 +491,27 @@ class ResponsesTests(unittest.TestCase):
             self.rejected(session, state, self.finish(session, response(function(name="shell"))),
                           "unsupported_tool")
 
-    def test_four_calls_per_reply_and_sixty_four_total_actions(self):
+    def test_sixteen_calls_per_reply_and_sixty_four_total_actions(self):
         with workflow.workflow(PROVIDER) as (state, session):
-            data = response(*(function(f"call_{i}", f"fc_{i}") for i in range(5)))
-            self.rejected(session, state, self.finish(session, data), "tool_call_limit")
+            # Per-reply ceiling is 16: sixteen read calls in one reply are accepted.
+            outcome = self.finish(session, response(*(function(f"call_{i}", f"fc_{i}") for i in range(16))))
+            self.assertEqual(outcome["status"], "tool_calls")
+            self.assertEqual(len(outcome["response"]["tool_calls"]), 16)
+        with workflow.workflow(PROVIDER) as (state, session):
+            # The ceiling holds: seventeen calls in one reply is rejected at the
+            # parser and automatically retried once (no opt-in needed; zero calls
+            # were accepted so no authority changed). The retry is bounded: a
+            # second oversized reply fails closed.
+            outcome = self.finish(session, response(*(function(f"call_{i}", f"fc_{i}") for i in range(17))))
+            self.assertEqual(outcome["status"], "retryable_provider_limit")
+            self.assertEqual(outcome["code"], "tool_call_limit")
+            self.assertEqual(outcome["automatic_retry"], True)
+            self.assertEqual(outcome["current_reply_calls_accepted"], False)
+            # Second 17 → failed (bounded: the one retry is spent).
+            following = session.prepare(DOC, continuation=True)
+            outcome2 = session.finish(workflow.send(following, response(*(function(f"call_{i}", f"fc_{i}") for i in range(17)))), DOC)
+            self.assertEqual(outcome2["status"], "failed")
+            self.assertEqual(outcome2["code"], "tool_call_limit")
         with workflow.workflow(PROVIDER) as (state, session):
             for turn in range(16):
                 calls = [function(f"call_{turn}_{i}", f"fc_{turn}_{i}") for i in range(4)]

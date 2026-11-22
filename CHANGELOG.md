@@ -4,6 +4,20 @@ All notable public changes will be recorded here. Narwhal 3D is an extremely ear
 
 ## Unreleased
 
+## 0.4.14 — source candidate (not yet published)
+
+Compared with the published 0.4.13 packages:
+
+- Added bounded exact-CAD AI modeling with local Review/Build authority, measured receipts, stable-object edits, Undo/Redo, save/reload, local export and separately consented viewport inspection. Supported actions include exact primitives, curves, loft, extrusion, pipe, revolve, booleans and conservative Join/Cap. Join is not a boolean; disconnected singletons remain separate, and Cap requires planar boundaries and verified airtight output.
+- Added explicit rational tensor-product NURBS surface patches: degrees 1–7, at most 32 controls per axis and 256 total, positive homogeneous weights and full knot vectors. Inspection can return bounded nets for single untrimmed surfaces; replacement preserves the object UUID. A patch is not automatically a solid.
+- Provider replies now allow up to 16 tool calls. Excess call counts and oversized arguments have distinct diagnostics, with one bounded parser-only corrective retry that preserves confirmed work. Conversation budgets and approval boundaries are unchanged. This addresses the diagnosed limit handling, not a verified reconstruction of any particular reported provider trace.
+- Accelerated qualified curve sampling, intersections, closest-point batches and memoized Offset previews in Rust, including Polyline/Rectangle sampling where the loaded SDK passes bit-exact parity. Unqualified platforms/SDKs keep their compatibility routes.
+- Improved exact imported-solid edits and Library snapshots, installation/update handling and shell context menus. Continued Rust ownership and retirement of superseded Python computational and acceptance code. The Library tab itself was already included in 0.4.13.
+
+Limits: bounded supported geometry is not general trimmed-surface modeling or full reference-application equivalence. Meshes/SubD are not accepted by exact surface Join. General layer/group automation, unrestricted commands and robust aesthetic design quality remain unqualified. The reference-application VM exposed SDK assembly 8.35.26251.13001 but did not reach an active document; initialization/licensing remains unresolved, not a proven license failure.
+
+Linux source acceptance is separate from package acceptance. New 0.4.14 assets are not available yet; the README continues to link to published 0.4.13 downloads. Windows needs newly source-qualified MSVC geometry and automation libraries and actual package acceptance; prior Windows supervisor/library checks do not qualify the new geometry jobs. The external MCP server is currently Unix-only, distinct from Windows in-app automation. The supervised display path explicitly refuses macOS. No new release or cross-platform numerical qualification is claimed here.
+
 - Fixed Library snapshots of edited exact solids whose construction history cannot be replayed. Fixed native Gumball editing for supported imported solids with conservative tolerance metadata, and preserved exact snapshot edits across Save/reload without a second Undo history.
 - Source: moved exhaustive Unicode and numeric popup acceptance into mandatory Rust tests while retaining actual host callbacks and metadata coverage. [Scope, qualification and Python retirement](docs/RUST_RETIREMENT_28.md).
 

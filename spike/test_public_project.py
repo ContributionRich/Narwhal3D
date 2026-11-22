@@ -286,7 +286,9 @@ check("GPL-3.0-or-later" in readme, "README identifies the project GPL license")
 check(re.search(r"early\s+(?:preview|prerelease|pre-release)", readme, re.I),
       "README warns that the application is an early preview")
 check(re.search(r"View\W+Theme\b", readme), "README explains the View → Theme switch")
-landing_version = tomllib.loads((ROOT / "native/welcome/Cargo.toml").read_text(encoding="utf-8"))["package"]["version"]
+source_version = tomllib.loads((ROOT / "native/welcome/Cargo.toml").read_text(encoding="utf-8"))["package"]["version"]
+# Published downloads may lag a pending source candidate; never invent unavailable assets.
+landing_version = re.search(r"Current release: \[([0-9]+\.[0-9]+\.[0-9]+)\]", readme).group(1)
 for asset in (f"Narwhal_3D-{landing_version}-x86_64.AppImage", f"Narwhal_3D-{landing_version}-Windows-x86_64.exe"):
     check(f"https://github.com/ContributionRich/Narwhal3D/releases/download/v{landing_version}/{asset}"
           in readme_links, f"README offers a direct Markdown download for {asset}")
@@ -391,10 +393,10 @@ for name, text in (("technical reference", technical_reference), ("STATUS", stat
 welcome_manifest = tomllib.loads((ROOT / "native/welcome/Cargo.toml").read_text(encoding="utf-8"))
 welcome_lock = tomllib.loads((ROOT / "native/welcome/Cargo.lock").read_text(encoding="utf-8"))
 welcome_source = (ROOT / "native/welcome/src/main.rs").read_text(encoding="utf-8")
-check(welcome_manifest["package"]["version"] == landing_version
+check(welcome_manifest["package"]["version"] == source_version
       and [package["version"] for package in welcome_lock["package"]
-           if package["name"] == "narwhal-welcome"] == [landing_version]
-      and f'assert_eq!(env!("CARGO_PKG_VERSION"), "{landing_version}");' in welcome_source,
+           if package["name"] == "narwhal-welcome"] == [source_version]
+      and f'assert_eq!(env!("CARGO_PKG_VERSION"), "{source_version}");' in welcome_source,
       "welcome manifest, lock and Rust version assertion agree on the current release")
 check("extremely early prerelease" in technical_reference
       and "frozen on the `0.4.x` line" in technical_reference,
@@ -627,6 +629,7 @@ check({"native/pure_core/Cargo.toml", "native/pure_core/README.md",
        "spike/test_polyline_nearest.py",
        "spike/test_pure_core_nurbs_record_gate.py",
        "spike/test_pure_core_line_samples_gate.py",
+       "spike/test_pure_core_polyline_samples_gate.py",
        "spike/test_native_coil_preview.py", "spike/test_preview_curve_native.py",
        "spike/test_native_tessellate.py",
        "spike/test_native_unit_table.py",

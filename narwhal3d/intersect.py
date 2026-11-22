@@ -290,7 +290,8 @@ def _native_nearest():
 def _samples(curve, n):
     """``curve.PointAt(T0 + (T1 - T0) * i / n)`` for i = 0..n, as ``(x, y, z)``.
 
-    Rust answers where `native_nearest.sample` does (a NurbsCurve, a qualified LineCurve),
+    Rust answers where `native_nearest.sample` does (a NurbsCurve, a qualified LineCurve
+    or PolylineCurve),
     with the same bits; any other curve calls PointAt.
     """
     native = _native_nearest()

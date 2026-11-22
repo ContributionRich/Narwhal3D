@@ -135,6 +135,12 @@ def check_pure_consumers():
             raise RuntimeError('DXF reader accepted truncated startup input')
 
     def nearest():
+        import ctypes
+        import os
+        library = Path(os.environ.get('NARWHAL_PURE_CORE') or
+                       ROOT / 'narwhal3d/native' / native_nearest._library_name())
+        # Presence is mandatory on every package; numerical activation still needs SDK parity.
+        getattr(ctypes.CDLL(str(library)), 'narwhal_pure_core_polyline_samples')
         # Scalar: a tiny caller-owned NURBS, searched through the required native
         # scalar export (narwhal_pure_core_nearest_on_nurbs).
         scalar = native_nearest.PackedCurve(2, [0., 1.],

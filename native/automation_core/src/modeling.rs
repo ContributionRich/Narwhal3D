@@ -124,6 +124,13 @@ pub enum Action {
         knots: Vec<f64>,
         closed: bool,
     },
+    NurbsSurface {
+        degree_u: usize,
+        degree_v: usize,
+        points: Vec<Vec<[f64; 4]>>,
+        knots_u: Vec<f64>,
+        knots_v: Vec<f64>,
+    },
     Box {
         origin: [f64; 3],
         size: [f64; 3],
@@ -334,6 +341,42 @@ impl Action {
                             && p[..3].iter().all(|x| bounded(x / p[3]))
                     })
             }
+            Self::NurbsSurface {
+                degree_u,
+                degree_v,
+                points,
+                knots_u,
+                knots_v,
+            } => {
+                // OURS: provider budget, not SDK degree/count limits. Rows are U, columns V.
+                let nu = points.len();
+                let nv = points.first().map_or(0, Vec::len);
+                let knots_valid = |degree: usize, count: usize, knots: &[f64]| {
+                    (1..=7).contains(&degree)
+                        && count > degree
+                        && count <= 32
+                        && knots.len() == count + degree + 1
+                        && knots.iter().all(|k| bounded(*k))
+                        && knots.windows(2).all(|k| k[0] <= k[1])
+                        && knots[degree] < knots[count]
+                        && knots
+                            .iter()
+                            .enumerate()
+                            .all(|(i, k)| i < degree + 1 || *k != knots[i - degree - 1])
+                };
+                nu * nv <= 256
+                    && knots_valid(*degree_u, nu, knots_u)
+                    && knots_valid(*degree_v, nv, knots_v)
+                    && points.iter().all(|row| {
+                        row.len() == nv
+                            && row.iter().all(|p| {
+                                p.iter().all(|x| bounded(*x))
+                                    && p[3] >= 1e-9
+                                    && p[3] <= 1e9
+                                    && p[..3].iter().all(|x| bounded(x / p[3]))
+                            })
+                    })
+            }
             Self::Curve { points, closed } => {
                 (4..=256).contains(&points.len())
                     && points.iter().all(vector)
@@ -517,6 +560,24 @@ impl Batch {
                     || volume.is_some_and(|v| fact["volume"].as_f64().is_none_or(|n| !near(n, v)))
                 {
                     return Err("modeling_dimensions_unverified");
+                }
+            }
+            if let Action::NurbsSurface {
+                degree_u,
+                degree_v,
+                points,
+                ..
+            } = &step.action
+            {
+                let surface = &fact["surface_data"];
+                if fact["type"] != "Brep"
+                    || surface["available"] != true
+                    || surface["degree_u"] != *degree_u
+                    || surface["degree_v"] != *degree_v
+                    || surface["count_u"] != points.len()
+                    || surface["count_v"] != points[0].len()
+                {
+                    return Err("modeling_surface_unverified");
                 }
             }
             if let Action::Nurbs { degree, closed, .. } = &step.action {
@@ -1075,6 +1136,16 @@ pub fn schema() -> Value {
         ("thickness", json!({"source":reference,"distance":length})),
         ("outline", json!({"source":reference})),
         (
+            "nurbs_surface",
+            json!({"degree_u":{"type":"integer","minimum":1,"maximum":7},
+                "degree_v":{"type":"integer","minimum":1,"maximum":7},
+                "points":{"type":"array","minItems":2,"maxItems":32,
+                    "description":"Rectangular U rows of V control points, at most 256 total. Each point is homogeneous [x*w,y*w,z*w,w], positive weights. Not interpolation samples.",
+                    "items":{"type":"array","minItems":2,"maxItems":32,"items":{"type":"array","minItems":4,"maxItems":4,"items":{"type":"number"}}}},
+                "knots_u":{"type":"array","maxItems":40,"items":{"type":"number"},"description":"Full nondecreasing knot vector: count_u+degree_u+1 entries, including BOTH superfluous end knots. Positive active domain; multiplicity at most degree+1."},
+                "knots_v":{"type":"array","maxItems":40,"items":{"type":"number"},"description":"Full knot vector: count_v+degree_v+1 entries, including both end knots. No fitting or automatic knot generation."}}),
+        ),
+        (
             "nurbs",
             json!({"degree":{"type":"integer","minimum":2,"maximum":7},
             "points":{"type":"array","minItems":3,"maxItems":64,"description":"Homogeneous weighted control points [x*w,y*w,z*w,w], not interpolation points. Positive weights; degree+1 or more points.","items":{"type":"array","minItems":4,"maxItems":4,"items":{"type":"number"}}},
@@ -1135,7 +1206,7 @@ pub fn schema() -> Value {
     )
 }
 pub fn definition() -> crate::provider::ToolDefinition {
-    crate::provider::ToolDefinition{name:"narwhal_model".into(),parameters:schema(),description:"Construct or edit an exact-CAD design in one bounded transaction. Use smooth cubic interpolated curves, explicit rational NURBS (degree2-7, up to64 homogeneous control points and exact knot vector), exact primitives, transforms, extrusion, constant-radius pipe along a curve (cap=true requires verified solidity), exact profile revolve about a specified axis (solid=true requires verified solidity), smooth loft, analytic booleans, exact Join of connected exact Breps (not a boolean), analytic Cap of planar boundaries to an airtight solid, and all-edge fillet/chamfer (bevel). Attributes edits rename, RGB object color, visibility or placement on an existing unlocked layer UUID; source and replace must be the same existing UUID and publish=true. Null attribute fields preserve their values. Thickness edits untransformed extrusion recipes only. Outline recovers/projects a curve or an extrusion's exact profile to World XY; it is not a general Brep silhouette. Earlier step IDs are dependencies; UUIDs refer to existing inspected objects. Set publish=false for construction intermediates; replace=null appends, replace=UUID edits that identity. Review mode requires approval of the batch; Build mode is separately user-authorized. No file or shell actions. Choose coherent defaults in document units for unspecified cosmetic dimensions and state them. Tool receipts, not prose, establish what was built; inspect results and revise across rounds. Assemblies are not unified solids.".into()}
+    crate::provider::ToolDefinition{name:"narwhal_model".into(),parameters:schema(),description:"Construct or edit an exact-CAD design in one bounded transaction. Use nurbs_surface for general exact rational tensor-product patches (degrees U/V 1-7, at most32 controls per axis and256 total; homogeneous U rows/V columns; FULL knot vectors). Inspect existing surface_data before editing; reconstruct its full net with replace=UUID to preserve identity. This creates a surface, not a guaranteed solid. Use smooth cubic interpolated curves, explicit rational NURBS (degree2-7, up to64 homogeneous control points and exact knot vector), exact primitives, transforms, extrusion, constant-radius pipe along a curve (cap=true requires verified solidity), exact profile revolve about a specified axis (solid=true requires verified solidity), smooth loft, analytic booleans, exact Join of connected exact Breps (not a boolean), analytic Cap of planar boundaries to an airtight solid, and all-edge fillet/chamfer (bevel). Attributes edits rename, RGB object color, visibility or placement on an existing unlocked layer UUID; source and replace must be the same existing UUID and publish=true. Null attribute fields preserve their values. Thickness edits untransformed extrusion recipes only. Outline recovers/projects a curve or an extrusion's exact profile to World XY; it is not a general Brep silhouette. Earlier step IDs are dependencies; UUIDs refer to existing inspected objects. Set publish=false for construction intermediates; replace=null appends, replace=UUID edits that identity. Review mode requires approval of the batch; Build mode is separately user-authorized. No file or shell actions. Choose coherent defaults in document units for unspecified cosmetic dimensions and state them. Tool receipts, not prose, establish what was built; inspect results and revise across rounds. Assemblies are not unified solids.".into()}
 }
 
 #[cfg(test)]
@@ -1163,6 +1234,51 @@ mod tests {
             request: 1,
         }
     }
+    #[test]
+    fn surface_net_validation_and_schema() {
+        let action = json!({"op":"nurbs_surface","degree_u":2,"degree_v":1,
+            "points":[[[1,0,0,1],[1,0,3,1]],[[1,1,0,1],[1,1,3,1]],[[0,1,0,1],[0,1,3,1]]],
+            "knots_u":[0,0,0,1,1,1],"knots_v":[0,0,1,1]});
+        let valid = |v: Value| serde_json::from_value::<Action>(v).unwrap().validate(0.001);
+        assert!(valid(action.clone()));
+        for (field, value) in [
+            ("degree_u", json!(0)),
+            ("degree_v", json!(8)),
+            ("knots_u", json!([0, 0, 0, 0, 0, 0])),
+            ("knots_u", json!([0, 0, 0, 1, 0, 1])),
+            ("knots_v", json!([0, 1])),
+            (
+                "points",
+                json!([[[0, 0, 0, 1]], [[0, 0, 0, 1], [0, 0, 0, 1]]]),
+            ),
+        ] {
+            let mut bad = action.clone();
+            bad[field] = value;
+            assert!(!valid(bad), "{field}");
+        }
+        for weight in [0.0, -1.0, 1e-10] {
+            let mut bad = action.clone();
+            bad["points"][1][1][3] = json!(weight);
+            assert!(!valid(bad));
+        }
+        let mut bad = action.clone();
+        bad["points"] = json!(vec![vec![[0., 0., 0., 1.]; 17]; 16]);
+        bad["knots_u"] = json!((0..19).map(|i| i as f64).collect::<Vec<_>>());
+        bad["knots_v"] = json!((0..19).map(|i| i as f64).collect::<Vec<_>>());
+        assert!(!valid(bad));
+        assert!(schema().to_string().contains("nurbs_surface"));
+        let mut typed: Action = serde_json::from_value(action).unwrap();
+        if let Action::NurbsSurface {
+            points, knots_u, ..
+        } = &mut typed
+        {
+            points[0][0][0] = f64::NAN;
+            assert!(!points[0][0][0].is_finite());
+            knots_u[0] = f64::INFINITY;
+        }
+        assert!(!typed.validate(0.001));
+    }
+
     #[test]
     fn explicit_nurbs_requires_smooth_degree_positive_weights_and_valid_knot_domain() {
         let value = json!({"op":"nurbs","degree":3,"closed":false,"points":[[0,0,0,1],[1,2,0,1],[3,2,0,1],[4,0,0,1]],"knots":[0,0,0,1,1,1]});
