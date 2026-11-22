@@ -754,9 +754,17 @@ int main(void) {
   (void)narwhal_geometry_core_join_exact_v1(buffer, sizeof(buffer), 0.02, buffer, sizeof(buffer));
   (void)narwhal_geometry_core_join_mapped_v1(buffer, sizeof(buffer), 0.02, buffer, sizeof(buffer), &join_report);
   (void)narwhal_geometry_core_verify_join_v1(buffer, sizeof(buffer), buffer, sizeof(buffer), 0.02);
-  if (sizeof(join_report) != 3096 || offsetof(NarwhalJoinReportV1, closed) != 2072
-      || NARWHAL_GEOMETRY_CAP_JOIN_EXACT != (UINT64_C(1) << 9)
-      || NARWHAL_GEOMETRY_CAP_CAP_EXACT != (UINT64_C(1) << 10)) return 2;
+#ifdef __cplusplus
+  static_assert(sizeof(join_report) == 3096, "join report size");
+  static_assert(offsetof(NarwhalJoinReportV1, closed) == 2072, "join closed offset");
+  static_assert(NARWHAL_GEOMETRY_CAP_JOIN_EXACT == (UINT64_C(1) << 9), "join capability");
+  static_assert(NARWHAL_GEOMETRY_CAP_CAP_EXACT == (UINT64_C(1) << 10), "cap capability");
+#else
+  _Static_assert(sizeof(join_report) == 3096, "join report size");
+  _Static_assert(offsetof(NarwhalJoinReportV1, closed) == 2072, "join closed offset");
+  _Static_assert(NARWHAL_GEOMETRY_CAP_JOIN_EXACT == (UINT64_C(1) << 9), "join capability");
+  _Static_assert(NARWHAL_GEOMETRY_CAP_CAP_EXACT == (UINT64_C(1) << 10), "cap capability");
+#endif
   return (abi == NARWHAL_GEOMETRY_CORE_ABI_VERSION && caps != 0) ? 0 : 1;
 }
 "#;
@@ -878,6 +886,11 @@ int32_t narwhal_geometry_core_verify_join_v1(const uint8_t *i, size_t n, const u
         "narwhal_geometry_core_edit_session_move_mode",
         "narwhal_geometry_core_edit_session_move",
         "narwhal_geometry_core_edit_session_release",
+        "narwhal_geometry_core_cap_exact_v1",
+        "narwhal_geometry_core_verify_cap_v1",
+        "narwhal_geometry_core_join_exact_v1",
+        "narwhal_geometry_core_join_mapped_v1",
+        "narwhal_geometry_core_verify_join_v1",
     ] {
         shared.arg(format!("/EXPORT:{symbol}"));
     }
