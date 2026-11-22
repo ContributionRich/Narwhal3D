@@ -230,6 +230,8 @@ def _():
         "spike/test_pure_core_nurbs_record_gate.py",
         "spike/test_pure_core_line_samples_gate.py",
         "spike/test_line_samples.py",
+        "spike/test_pure_core_polyline_samples_gate.py",
+        "spike/test_polyline_samples.py",
         "spike/test_native_coil_preview.py",
         "spike/test_preview_curve_native.py",
         "spike/test_native_tessellate.py",

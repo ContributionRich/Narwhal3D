@@ -119,6 +119,8 @@ PURE_CORE_PYTESTS = (
     "spike/test_pure_core_nurbs_record_gate.py",
     "spike/test_pure_core_line_samples_gate.py",
     "spike/test_line_samples.py",
+    "spike/test_pure_core_polyline_samples_gate.py",
+    "spike/test_polyline_samples.py",
     "spike/test_native_coil_preview.py",
     "spike/test_preview_curve_native.py",
     "spike/test_preview24_boundaries.py",
@@ -1761,6 +1763,98 @@ def probe_pure_core_line_samples(path: Path, python: Path | str = sys.executable
     return identity
 
 
+# PolylineCurve samples (native_nearest.sample for a PolylineCurve): ON_PolylineCurve::Evaluate
+# at sample_curve's parameters, read from the curve's Encode() record. A library without it
+# loses only the Rust route: polylines then call PointAt.
+PURE_CORE_POLYLINE_SAMPLES_EXPORT = "narwhal_pure_core_polyline_samples"
+# (sys.platform, machine) pairs; narwhal3d/native_nearest.py POLYLINE_SAMPLES_QUALIFIED_PLATFORMS
+# must carry the same set (spike/test_pure_core_polyline_samples_gate.py). Rust never fuses a
+# multiply-add, but a rhino3dm build that does rounds a polyline's PointAt differently, so a
+# pair joins only once its artifact is qualified here. At run time the route also requires
+# the loaded rhino3dm to pass native_nearest's polyline sample parity check.
+PURE_CORE_POLYLINE_SAMPLES_QUALIFIED_PLATFORMS = frozenset({("linux", "x86_64")})
+# The digest pins the exact bits of 129 and 8 samples on each of native_nearest's four witness
+# polylines (irregular doubles, shifted and uneven parameters, a closed Rectangle with -0.0,
+# a last parameter one ulp past T1); it is also the digest of rhino3dm 8.35.0's own PointAt
+# at the same parameters.
+PURE_CORE_POLYLINE_SAMPLES_IDENTITY = {
+    "export": PURE_CORE_POLYLINE_SAMPLES_EXPORT,
+    "unrecognised_record_status": 1, "zero_intervals_status": -2, "huge_request_status": -2,
+    "small_buffer_status": -3, "null_record_status": -1, "refusals_write": False,
+    "samples_sha256": "a25e9b1a93ca29dad896070a792adb6be8a68c3d138f058e9e47cb9df8585580",
+}
+PURE_CORE_POLYLINE_SAMPLES_PROBE = r'''
+import ctypes as c, hashlib, json, struct, sys
+fn = c.CDLL(sys.argv[1]).narwhal_pure_core_polyline_samples
+D, Z = c.POINTER(c.c_double), c.c_size_t
+fn.argtypes = [c.c_char_p, Z, Z, D, Z]
+fn.restype = c.c_int32
+# native_nearest._polyline_sample_witnesses() as rhino3dm 8.35.0 encodes them.
+zig = bytes.fromhex(
+    "fa7f0200e900000000000000fbff02001400000000000000e6d4d74e47e9d311bfe50010830122f04e9c"
+    "bbdbfcff0200b100000000000000100500000016e40e1dd2b70dc00dc0b6d5421ef43f00000000000000"
+    "00661ff87a04cb01c0a4f1d9f8dc09f8bf000000000000000040427359d31aecbf330529ff7912f73f00"
+    "00000000000000cf5f054c2585f43fe6d89e5c9e38e8bf000000000000000084a7d4cfd2630640e536ae"
+    "e847d0f33f00000000000000000500000078623c206f6d3cc0f7124c26006b2ec0f007fb6010d9ffbffc"
+    "500d0ebc7426407a011d144d723840030000009da679e8ff7f02800000000000000000")
+spiral = bytes.fromhex(
+    "fa7f0200e900000000000000fbff02001400000000000000e6d4d74e47e9d311bfe50010830122f04e9c"
+    "bbdbfcff0200b1000000000000001005000000000000000000f03f0000000000000000fca9f1d24d6250"
+    "3f67bae0aac504e33fee0c098f54edea3f5839b4c876bed73f06bcfd9bc7f5dfbf46b4d1eaf618ed3f83"
+    "c0caa145b6e73f2fa270158397f4bf5bd5b66d3810c23f2cb29defa7c6f13feaecb9460184f1bf5a19b0"
+    "8e99add4bf367c139e29d6f43f050000000000000000000000000000000000f03f000000000000004000"
+    "00000000000840eac4c1ebca220c4003000000ed3111ebff7f02800000000000000000")
+rect = bytes.fromhex(
+    "fa7f0200e900000000000000fbff02001400000000000000e6d4d74e47e9d311bfe50010830122f04e9c"
+    "bbdbfcff0200b10000000000000010050000000000000000000080000000000000008000000000000000"
+    "00a320b14edf85074000000000000000800000000000000000da4ccec4e2a10540a16ff1ce7347f83f00"
+    "0000000000000000000000000000801acd90627082fe3f00000000000000000000000000000080000000"
+    "00000000800000000000000000050000000000000000000000000000000000f03f000000000000004000"
+    "00000000000840000000000000104003000000e7c56aefff7f02800000000000000000")
+past = bytes.fromhex(
+    "fa7f0200c900000000000000fbff02001400000000000000e6d4d74e47e9d311bfe50010830122f04e9c"
+    "bbdbfcff020091000000000000001004000000d2b1c6e0f8a11340d4e5b1c3a7020fc000000000000000"
+    "80b8f3a4e9d2c0f6bff6d3a9c5e1b722400000000000000080170f8c2b6a4e0d40d4b2f9e7a5c3d03f00"
+    "000000000000805e3c0a6f2d4b18c00000000000000080000000000000008004000000124790cf850e4f"
+    "c0ae20944bbc5e5b403919bcdf2e917140472a93acae4a7c4003000000ec6f6a1eff7f02800000000000"
+    "000000")
+bits = b""
+for record in (zig, spiral, rect, past):
+    for n in (128, 7):
+        out = (c.c_double * (3 * (n + 1)))()
+        if fn(record, len(record), n, out, len(out)) != 0:
+            raise RuntimeError("the export refused a witness polyline")
+        bits += struct.pack(f"<{len(out)}d", *out)
+out = (c.c_double * 30)(*[-9.0] * 30)
+statuses = {
+    "unrecognised_record_status": fn(b"not a record", 12, 4, out, 30),
+    "zero_intervals_status": fn(rect, len(rect), 0, out, 30),
+    "huge_request_status": fn(rect, len(rect), 2**20 + 1, out, 30),
+    "small_buffer_status": fn(rect, len(rect), 9, out, 29),
+    "null_record_status": fn(None, len(rect), 4, out, 30),
+}
+print(json.dumps({"export": "narwhal_pure_core_polyline_samples", **statuses,
+                  "refusals_write": list(out) != [-9.0] * 30,
+                  "samples_sha256": hashlib.sha256(bits).hexdigest()}, sort_keys=True))
+'''
+
+
+def probe_pure_core_polyline_samples(path: Path, python: Path | str = sys.executable, *, env=None) -> dict:
+    """Require the polyline samples export to give the pinned witness bits and refusals."""
+    if not path.is_file() or path.is_symlink():
+        raise ValueError(f"missing regular pure-core library: {path}")
+    try:
+        completed = subprocess.run(
+            [str(python), "-I", "-B", "-c", PURE_CORE_POLYLINE_SAMPLES_PROBE, str(path.resolve())],
+            env=env, text=True, capture_output=True, check=True, timeout=30)
+        identity = json.loads(completed.stdout)
+    except (OSError, subprocess.SubprocessError, ValueError) as error:
+        raise ValueError(f"cannot verify pure-core polyline samples export: {getattr(error, 'stderr', '') or error}") from error
+    if identity != PURE_CORE_POLYLINE_SAMPLES_IDENTITY:
+        raise ValueError(f"pure-core polyline samples evidence differs: {identity!r}")
+    return identity
+
+
 # Additive unit-aware SVG export (vector_export.write_svg(unit=...)): ABI 1 and the legacy
 # narwhal_pure_core_svg_encode_into are unchanged, so a library without it loses only the
 # native route for unit SVGs. Formatting is IEEE division + Rust's exact decimal printing, no
@@ -2181,6 +2275,16 @@ def step_line_samples(lib_path: Path) -> dict[str, object]:
     return {"status": "ok", "line_samples": identity, "command": "ctypes line samples probe"}
 
 
+def step_polyline_samples(lib_path: Path) -> dict[str, object]:
+    """Qualify the polyline samples export; required for the library to carry it."""
+    try:
+        identity = probe_pure_core_polyline_samples(lib_path)
+    except ValueError as exc:
+        raise GateError(str(exc)) from exc
+    return {"status": "ok", "polyline_samples": identity,
+            "command": "ctypes polyline samples probe"}
+
+
 def step_svg_unit(lib_path: Path) -> dict[str, object]:
     """Qualify the unit-aware SVG export; required for the library to carry it."""
     try:
@@ -2272,6 +2376,7 @@ def run_gate(crate_rel: str) -> dict[str, object]:
     steps["curve_record_hits"] = step_curve_record_hits(lib)
     steps["nurbs_record"] = step_nurbs_record(lib)
     steps["line_samples"] = step_line_samples(lib)
+    steps["polyline_samples"] = step_polyline_samples(lib)
     steps["svg_unit"] = step_svg_unit(lib)
     steps["adapter"] = step_adapter(crate, lib)
     steps["windows_check"] = step_windows_check(crate)

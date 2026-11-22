@@ -367,6 +367,7 @@ PURE_SUITES=(
     spike/test_project_to_cplane_delete.py
     spike/test_offset_fit_native.py
     spike/test_line_samples.py
+    spike/test_polyline_samples.py
     spike/test_offset_compact.py
     spike/test_offset_report127.py
     spike/test_report121_124.py
@@ -512,6 +513,7 @@ PURE_SUITES=(
     spike/test_polyline_nearest.py
     spike/test_pure_core_nurbs_record_gate.py
     spike/test_pure_core_line_samples_gate.py
+    spike/test_pure_core_polyline_samples_gate.py
     spike/test_native_coil_preview.py
     spike/test_preview_curve_native.py
     spike/test_preview24_boundaries.py

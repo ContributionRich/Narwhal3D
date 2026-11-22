@@ -95,8 +95,10 @@ NURBS = {
         [(5 * math.cos(k), 4 * math.sin(k), 0.0) for k in (0.0, 1.1, 2.0, 3.3, 4.1, 5.2)]),
 }
 OTHERS = {
-    "polyline curve": r3.PolylineCurve([r3.Point3d(0, 0, 0), r3.Point3d(3, 4, 0), r3.Point3d(6, 0, 0)]),
     "poly curve": polycurve(),
+}
+POLYLINES = {
+    "polyline curve": r3.PolylineCurve([r3.Point3d(0, 0, 0), r3.Point3d(3, 4, 0), r3.Point3d(6, 0, 0)]),
     "degree-1 control curve (a PolylineCurve)": cpc([(0, 0, 0), (2, 4, 0), (5, -1, 0)], 1),
 }
 
@@ -111,6 +113,13 @@ for name, curve in OTHERS.items():
     got = bridge.sample_curve_xyz(curve, 12)
     check(native.sample(curve, 12) is None and got == python_samples(curve, 12),
           f"{name} (not a NurbsCurve) keeps sample_curve")
+for name, curve in POLYLINES.items():
+    check(type(curve) is r3.PolylineCurve
+          and bridge.sample_curve_xyz(curve, 12) == python_samples(curve, 12)
+          and (native.sample(curve, 12) is not None)
+          == (native.polyline_sample_capability() == "qualified"),
+          f"{name}: sample_curve's bits, through Rust only where qualified "
+          f"({native.polyline_sample_capability()})")
 seg = r3.LineCurve(r3.Point3d(0, 0, 0), r3.Point3d(10, 3, 1))
 check(bridge.sample_curve_xyz(seg, 12) == python_samples(seg, 12)
       and (native.sample(seg, 12) is not None) == (native.line_capability() == "qualified"),
