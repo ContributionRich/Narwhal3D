@@ -208,6 +208,24 @@ if command -v cargo >/dev/null 2>&1; then
     run "AI Responses normalization and replay" "$PYTHON" spike/test_ai_responses.py --library "$AUTOMATION_LIBRARY"
     run "AI workspace snapshots" "$PYTHON" spike/test_ai_workspace.py --library "$AUTOMATION_LIBRARY"
     run "AI native CAD reads and proposal policy" "$PYTHON" spike/test_ai_cad.py --library "$AUTOMATION_LIBRARY"
+    # The driver owns the shared heavy lock; never wrap these calls in another flock.
+    AUTOMATION_DRIVER_TARGET="$(mktemp -d "/var/tmp/narwhal-automation-driver-XXXXXX")"
+    run "Rust automation test-driver format" cargo +1.95.0 fmt \
+        --manifest-path native/automation_test_driver/Cargo.toml --check
+    run "Rust automation test-driver Clippy" cargo +1.95.0 clippy \
+        --manifest-path native/automation_test_driver/Cargo.toml --target-dir "$AUTOMATION_DRIVER_TARGET" \
+        --all-targets --locked --offline -j 1 -- -D warnings
+    run "Rust automation test-driver tests and source registration" cargo +1.95.0 test \
+        --manifest-path native/automation_test_driver/Cargo.toml --target-dir "$AUTOMATION_DRIVER_TARGET" \
+        --locked --offline -j 1
+    run "Rust automation test-driver build" cargo +1.95.0 build \
+        --manifest-path native/automation_test_driver/Cargo.toml --target-dir "$AUTOMATION_DRIVER_TARGET" \
+        --locked --offline -j 1
+    for suite in box plan v4 v6 v7 v8; do
+        run "Rust automation mutation driver: $suite" \
+            "$AUTOMATION_DRIVER_TARGET/debug/automation-test-driver" --suite "$suite" --mutations \
+            --target-dir "$AUTOMATION_DRIVER_TARGET/runs" --python "$PYTHON"
+    done
     run "AI approved additive box policy" "$PYTHON" spike/test_ai_box.py --library "$AUTOMATION_LIBRARY"
     run "AI plans and truthful verification" "$PYTHON" spike/test_ai_plan.py --library "$AUTOMATION_LIBRARY"
     run "AI disabled primitive prototype policy" "$PYTHON" spike/test_ai_primitives.py --library "$AUTOMATION_LIBRARY"

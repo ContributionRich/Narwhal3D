@@ -81,3 +81,16 @@ git diff --check
 ```
 
 Do not commit downloaded runtimes, build trees, private documents, generated test artifacts, or third-party material without verified redistribution terms.
+
+## Native automation mutation tooling
+
+The Linux-only Rust `native/automation_test_driver` replaces six retired Python
+orchestration drivers. `./run_tests.sh` requires format, strict Clippy,
+Rust/CLI/source-registration tests and all 71 actual mutations across box, plan,
+V4, V6, V7 and V8. Actual SDK clients remain Python and remain required.
+
+For focused invocations, external targets, explicit SDK interpreter, resource/lock
+admission, immutable catalogs and optional legacy-fixture limits, see
+[the driver guide](native/automation_test_driver/README.md). Never put mutation
+targets or scratch worktrees inside the repository. This is source-test tooling,
+not a Windows/macOS application capability or a published-release change.

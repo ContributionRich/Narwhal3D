@@ -24,6 +24,22 @@ import tokenize
 
 ROOT = Path(__file__).resolve().parents[1]
 REQUIRED = {
+    "native/automation_test_driver/Cargo.lock",
+    "native/automation_test_driver/Cargo.toml",
+    "native/automation_test_driver/README.md",
+    "native/automation_test_driver/src/additional.rs",
+    "native/automation_test_driver/src/additional_catalog_provenance_v1.json",
+    "native/automation_test_driver/src/additional_catalog_v1.json",
+    "native/automation_test_driver/src/anchor_overrides_v1.json",
+    "native/automation_test_driver/src/catalog.json",
+    "native/automation_test_driver/src/catalog.rs",
+    "native/automation_test_driver/src/discovery.rs",
+    "native/automation_test_driver/src/fixtures.rs",
+    "native/automation_test_driver/src/lib.rs",
+    "native/automation_test_driver/src/main.rs",
+    "native/automation_test_driver/src/overrides.rs",
+    "native/automation_test_driver/tests/cli.rs",
+    "native/automation_test_driver/tests/registration.rs",
     'native/pure_core/tests/interpolate32_properties.rs',
     'native/welcome/Cargo.toml',
     'native/welcome/Cargo.lock',
@@ -209,15 +225,14 @@ REQUIRED = {
     "narwhal3d/workspace_overlay.py", "spike/test_workspace_overlay.py", "spike/test_workspace_dialogs_gui.py",
     "spike/test_selection_visibility_07.py", "spike/test_gumball_release_profile_07.py",
     "spike/test_move_regression_07.py",
-    "spike/test_ai_accepted_review_native.py", "spike/test_ai_v4_native.py",
+    "spike/test_ai_accepted_review_native.py",
     "spike/test_ai_v7_visible.py", "spike/test_ai_v7_roundtrip.py",
     "spike/test_ai_v7_presentation.py", "spike/test_ai_v7_resources.py",
-    "spike/test_ai_v7_native.py",
     "spike/test_ai_v8_exit.py", "spike/test_ai_v8_reachability.py",
     "spike/test_ai_v8_presentation.py", "spike/test_ai_v8_long_session.py",
     "spike/test_ai_v8_plans.py", "spike/test_ai_v8_lifetime.py",
     "spike/test_ai_v8_lifetime_gui.py", "spike/test_ai_v8_settings.py",
-    "spike/test_ai_v8_visible.py", "spike/test_ai_v8_x11.py", "spike/test_ai_v8_native.py",
+    "spike/test_ai_v8_visible.py", "spike/test_ai_v8_x11.py",
     "spike/test_ai_v9_lifecycle_gui.py",
     "docs/reviews/2026-10-31-ui-regressions.md",
     "docs/reviews/2026-10-31-native-only.md",
@@ -366,7 +381,7 @@ REQUIRED = {
     "spike/test_ai_ui_workflow.py",
     "spike/test_ai_cad.py",
     "spike/test_purge.py",
-    "spike/test_ai_box.py", "spike/test_ai_box_native.py", "narwhal3d/ai_box.py",
+    "spike/test_ai_box.py", "narwhal3d/ai_box.py",
     "spike/test_ai_cad_native.py",
     "native/automation_core/Cargo.toml",
     "native/automation_core/Cargo.lock",
@@ -784,7 +799,8 @@ def retirement_path_problem(path: str) -> str | None:
            or part.casefold() in {"legacy.zip", "legacy.tar", "legacy.tar.gz", "legacy.tgz"}
            for part in parts):
         return "retired archive is local-only"
-    if parts and parts[-1] in {"textfield_168212d4.py", "test_ui_core_golden.py", "test_rust_history_trace.py"}:
+    if parts and parts[-1] in {"textfield_168212d4.py", "test_ui_core_golden.py", "test_rust_history_trace.py",
+                                  "test_ai_box_native.py", "test_ai_plan_native.py", "test_ai_v4_native.py", "test_ai_v6_review.py", "test_ai_v7_native.py", "test_ai_v8_native.py"}:
         return "retired executable reference"
     return None
 
@@ -1317,6 +1333,10 @@ def self_check() -> None:
                      b'const NOTE: &str = "Owner: private";\n'):
             cases += (("modeling private attribution " + path,
                        {path: ("100644", blob)}),)
+    for retired in ('test_ai_box_native.py', 'test_ai_plan_native.py', 'test_ai_v4_native.py', 'test_ai_v6_review.py', 'test_ai_v7_native.py', 'test_ai_v8_native.py'):
+        for prefix in ("spike/", "app/spike/"):
+            cases += (("retired automation orchestration " + prefix + retired,
+                       {prefix + retired: ("100644", b"pass\n")}),)
     for label, addition in cases:
         candidate = dict(safe)
         candidate.update(addition)
@@ -1326,6 +1346,7 @@ def self_check() -> None:
     # Delete each input independently: an omitted license/test-only module is just
     # as incomplete as an omitted production module or ctypes adapter.
     closure = sorted(path for path in REQUIRED if path.startswith("native/ui_core/")
+                     or path.startswith("native/automation_test_driver/")
                      or path.startswith("spike/test_ui_core_")
                      or path.startswith("spike/test_ui_transcript_")
                      or path.startswith("spike/test_ai_v8_") or path in {
@@ -1338,7 +1359,7 @@ def self_check() -> None:
                          "native/application_core/tests/data/history30_trace.json",
                          "native/application_core/tests/data/history30_trace.provenance.json",
                          "spike/test_native_only_policy.py",
-                         "spike/test_ai_v4_native.py", "spike/test_ai_accepted_review_native.py",
+                         "spike/test_ai_accepted_review_native.py",
                          'native/geometry_core/src/exact_conversion.rs',
                          'native/geometry_core/cpp/exact_conversion.inc',
                          'native/geometry_core/src/cap.rs',

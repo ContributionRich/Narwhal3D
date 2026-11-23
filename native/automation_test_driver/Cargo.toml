@@ -1,0 +1,12 @@
+[package]
+name = "automation-test-driver"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+publish = false
+license = "GPL-3.0-or-later"
+description = "Bounded Linux mutation orchestration for native automation policies"
+
+[dependencies]
+serde_json = "=1.0.154"
+sha2 = "=0.10.9"

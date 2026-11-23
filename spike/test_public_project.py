@@ -41,16 +41,19 @@ def public_completeness_checks():
 
     public = set(builder.public_files())
     native = set()
-    for crate in ("automation_core", "geometry_core"):
+    for crate in ("automation_core", "geometry_core", "automation_test_driver"):
         base = ROOT / "native" / crate
         native.update(f"native/{crate}/{name}" for name in ("Cargo.toml", "Cargo.lock"))
         # Discovery is a completeness assertion, NOT a publication glob. New source
         # files still require an explicit reviewed addition to both manifests.
-        for directory, suffixes in (("src", {".rs"}), ("cpp", {".cpp", ".inc"}),
+        for directory, suffixes in (("src", {".rs", ".json"}), ("cpp", {".cpp", ".inc"}),
                                     ("include", {".h"})):
             native.update(path.relative_to(ROOT).as_posix()
                           for path in (base / directory).rglob("*")
                           if path.is_file() and path.suffix in suffixes)
+    native.update({"native/automation_test_driver/README.md",
+                   "native/automation_test_driver/tests/cli.rs",
+                   "native/automation_test_driver/tests/registration.rs"})
     native.add("native/geometry_core/build.rs")
     native.add("native/pure_core/tests/interpolate32_properties.rs")
     # Installer crates must ship every Rust module, including cfg-gated recovery/startup.
@@ -62,7 +65,7 @@ def public_completeness_checks():
     focused = {
         "spike/test_ai_workflow.py", "spike/test_ai_workflow_native.py",
         "spike/test_ai_cad.py", "spike/test_ai_cad_native.py",
-        "spike/test_ai_box.py", "spike/test_ai_box_native.py",
+        "spike/test_ai_box.py",
         "spike/test_ai_ui_workflow.py", "spike/test_ai_workflow_transport.py",
         "spike/test_ai_ui_workflow_gui.py",
         "spike/test_ai_workspace.py", "spike/test_ai_workspace_native.py", "spike/test_ai_workspace_gui.py",

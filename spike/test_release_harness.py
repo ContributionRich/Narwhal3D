@@ -124,6 +124,24 @@ NEW_SOURCES = (
     'narwhal3d/automation_host.py', 'narwhal3d/ai_settings_popup.py',
     'narwhal3d/extrude_preview.py', 'narwhal3d/surfacing_backend.py', 'scripts/narwhal_mcp.py',
 )
+NEW_SOURCES += (
+    'native/automation_test_driver/Cargo.lock',
+    'native/automation_test_driver/Cargo.toml',
+    'native/automation_test_driver/README.md',
+    'native/automation_test_driver/src/additional.rs',
+    'native/automation_test_driver/src/additional_catalog_provenance_v1.json',
+    'native/automation_test_driver/src/additional_catalog_v1.json',
+    'native/automation_test_driver/src/anchor_overrides_v1.json',
+    'native/automation_test_driver/src/catalog.json',
+    'native/automation_test_driver/src/catalog.rs',
+    'native/automation_test_driver/src/discovery.rs',
+    'native/automation_test_driver/src/fixtures.rs',
+    'native/automation_test_driver/src/lib.rs',
+    'native/automation_test_driver/src/main.rs',
+    'native/automation_test_driver/src/overrides.rs',
+    'native/automation_test_driver/tests/cli.rs',
+    'native/automation_test_driver/tests/registration.rs',
+)
 CORES = {
     'NARWHAL_PURE_CORE': 'native/pure_core/target/x86_64-unknown-linux-gnu/release/libnarwhal_pure_core.so',
     'NARWHAL_GEOMETRY_CORE': 'native/geometry_core/target/release/libnarwhal_geometry_core.so',
@@ -207,6 +225,15 @@ if live or gpu:
     sys.exit(7 if mode == 'exit-error' else 0)
 if env.get('HARNESS_FAIL_SUITE') in args:
     sys.exit(7)
+if Path(sys.argv[0]).name == 'cargo' and 'build' in args and 'native/automation_test_driver/Cargo.toml' in args:
+    target = Path(args[args.index('--target-dir') + 1])
+    output = target / 'debug/automation-test-driver'
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(Path(sys.argv[0]).read_text())
+    output.chmod(0o755)
+if Path(sys.argv[0]).name == 'automation-test-driver':
+    if env.get('HARNESS_FAIL_DRIVER_SUITE') == args[args.index('--suite') + 1]:
+        sys.exit(7)
 if Path(sys.argv[0]).name == 'rustc' and '-o' in args:
     output = Path(args[args.index('-o') + 1])
     output.write_text(Path(sys.argv[0]).read_text())
@@ -360,6 +387,17 @@ class HarnessTests(unittest.TestCase):
         forbidden = {'--timings', 'spike/test_automation_native.py',
                      'spike/test_automation_startup.py', 'spike/test_automation_live.py'}
         self.assertFalse(any(forbidden.intersection(args) for args in commands))
+        drivers = [row for row in rows if Path(row['executable']).name == 'automation-test-driver']
+        self.assertEqual([row['args'][1] for row in drivers], ['box', 'plan', 'v4', 'v6', 'v7', 'v8'])
+        driver_commands = set()
+        for row in drivers:
+            args = row['args']
+            target = Path(args[args.index('--target-dir') + 1])
+            self.assertTrue(target.is_absolute())
+            self.assertFalse(target.is_relative_to(self.root))
+            self.assertEqual(args, ['--suite', args[1], '--mutations', '--target-dir', str(target),
+                                    '--python', str(self.root / 'tools/blender-patched/5.2/python/bin/python3.13')])
+            driver_commands.add(tuple(args))
         isolated_mutations = {
             ('-B', 'scripts/check_document_observer.py', '--stage-dev', '--mutations'),
             ('-B', 'spike/test_document_registry_model.py', '--mutations'),
@@ -367,7 +405,7 @@ class HarnessTests(unittest.TestCase):
         }
         for args in commands:
             if '--mutations' in args:
-                self.assertIn(tuple(args), isolated_mutations)
+                self.assertIn(tuple(args), isolated_mutations | driver_commands)
         self.assertEqual(self.staged.read_text(), 'preserve the staged product server')
         source = (self.root / 'run_tests.sh').read_text()
         self.assertIn('timeout --kill-after=5s 180s cargo', source)
@@ -401,6 +439,14 @@ class HarnessTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 7)
                 self.assertNotIn('All public tests passed.', result.stdout)
                 self.assertNotIn(['spike/test_trim_box_gui.py', '--launch', '--baseline'], [r['args'] for r in rows])
+
+    def test_automation_driver_failures_are_required(self):
+        for suite in ('box', 'plan', 'v4', 'v6', 'v7', 'v8'):
+            with self.subTest(suite=suite):
+                result, rows = self.execute('run_tests.sh', HARNESS_FAIL_DRIVER_SUITE=suite)
+                self.assertEqual(result.returncode, 7, result.stdout + result.stderr)
+                self.assertIn('FAIL: Rust automation mutation driver: ' + suite, result.stdout + result.stderr)
+                self.assertNotIn('All public tests passed.', result.stdout)
 
     def test_missing_cargo_is_explicit_refusal(self):
         self.mutate('run_tests.sh', 'command -v cargo >/dev/null 2>&1 ||', 'false ||')

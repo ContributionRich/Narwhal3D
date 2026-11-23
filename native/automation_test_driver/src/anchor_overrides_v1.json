@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "base": "bb17715d",
+  "authorization": "Main explicit authorization: frame_schema adjacency and historical review-result context only",
+  "original_catalog_sha256": "17e701223652104d639fa219305d415eac6bebd4e3aa8286b6efa67734b44845",
+  "overrides": [
+    {
+      "label": "production_catalog",
+      "file": "catalog.rs",
+      "test": "v4_a14",
+      "original_old": "    tools\n}\npub fn schema",
+      "original_new": "    tools.push(ToolDefinition {name:\"narwhal_create_sphere\".into(),description:\"BAD LIVE TOOL\".into(),parameters:crate::actions::circle_schema()});\n    tools\n}\npub fn schema",
+      "applied_old": "    tools\n}\npub fn frame_schema",
+      "applied_new": "    tools.push(ToolDefinition {name:\"narwhal_create_sphere\".into(),description:\"BAD LIVE TOOL\".into(),parameters:crate::actions::circle_schema()});\n    tools\n}\npub fn frame_schema",
+      "original_count": 0,
+      "applied_count": 1,
+      "reason": "Main-authorized historical anchor repair; preserve mutation semantics and original test filter"
+    },
+    {
+      "label": "canonical_result",
+      "file": "conversation.rs",
+      "test": "v4_a12",
+      "original_old": "if result.output != expected.output || result.is_error != expected.is_error {",
+      "original_new": "if false {",
+      "applied_old": ".result(&token, &call.id, self.review_clock.now_ms())?;\n                if result.output != expected.output || result.is_error != expected.is_error {",
+      "applied_new": ".result(&token, &call.id, self.review_clock.now_ms())?;\n                if false {",
+      "original_count": 2,
+      "applied_count": 1,
+      "reason": "Main-authorized historical anchor repair; preserve mutation semantics and original test filter"
+    }
+  ]
+}

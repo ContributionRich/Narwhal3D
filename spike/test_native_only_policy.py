@@ -253,8 +253,28 @@ class PolicyTests(unittest.TestCase):
             self.assertIn(path, selected)
             self.assertIn(path, audit.REQUIRED)
         for stem in ('exit', 'reachability', 'presentation', 'long_session', 'plans', 'lifetime',
-                     'lifetime_gui', 'settings', 'visible', 'x11', 'native'):
+                     'lifetime_gui', 'settings', 'visible', 'x11'):
             path = 'spike/test_ai_v8_' + stem + '.py'
+            self.assertIn(path, selected)
+            self.assertIn(path, audit.REQUIRED)
+        for path in (
+            'native/automation_test_driver/Cargo.lock',
+            'native/automation_test_driver/Cargo.toml',
+            'native/automation_test_driver/README.md',
+            'native/automation_test_driver/src/additional.rs',
+            'native/automation_test_driver/src/additional_catalog_provenance_v1.json',
+            'native/automation_test_driver/src/additional_catalog_v1.json',
+            'native/automation_test_driver/src/anchor_overrides_v1.json',
+            'native/automation_test_driver/src/catalog.json',
+            'native/automation_test_driver/src/catalog.rs',
+            'native/automation_test_driver/src/discovery.rs',
+            'native/automation_test_driver/src/fixtures.rs',
+            'native/automation_test_driver/src/lib.rs',
+            'native/automation_test_driver/src/main.rs',
+            'native/automation_test_driver/src/overrides.rs',
+            'native/automation_test_driver/tests/cli.rs',
+            'native/automation_test_driver/tests/registration.rs',
+        ):
             self.assertIn(path, selected)
             self.assertIn(path, audit.REQUIRED)
         for path in ('launch/check_native.py', 'spike/test_desktop_native_startup.py',
@@ -351,10 +371,12 @@ class PolicyTests(unittest.TestCase):
             'run "live document registry mutations" "$PYTHON" -B spike/test_document_registry_model.py --mutations',
             'run "AI canonical publisher races and mutations" "$PYTHON" -B spike/test_ai_v9_races.py --mutations',
             '--python spike/test_pick_click_local.py -- --mutations',
+            '"$AUTOMATION_DRIVER_TARGET/debug/automation-test-driver" --suite "$suite" --mutations \\',
         }
         for line in text.splitlines():
             if '--mutations' in line:
                 self.assertIn(line.strip(), allowed_mutations)
+        self.assertIn('for suite in box plan v4 v6 v7 v8; do', text)
         self.assertIn('for suite in abi model consumers stress;', text)
         self.assertIn('spike/test_desktop_native_startup.py', text)
         self.assertIn('spike/test_ai_v8_exit.py', text)
@@ -462,6 +484,8 @@ class MutationTests(unittest.TestCase):
             ('transcript fallback restored', patch.dict(globals(), source=lambda p: original(p) + '\n_legacy = []\n' if p == 'narwhal3d/command_transcript.py' else original(p)),
              'test_product_has_no_retired_engine_or_archive_resolver'),
             ('close-request coverage omitted', patch.dict(globals(), source=lambda p: original(p).replace('for close_case in close_review close_request;', 'for close_case in close_review;') if p == 'run_tests.sh' else original(p)),
+             'test_finished_lane_harness_order_and_modes'),
+            ('automation suite omitted', patch.dict(globals(), source=lambda p: original(p).replace('for suite in box plan v4 v6 v7 v8; do', 'for suite in box plan v4 v6 v7; do') if p == 'run_tests.sh' else original(p)),
              'test_finished_lane_harness_order_and_modes'),
             ('global mutation mode restored', patch.dict(globals(), source=lambda p: original(p) + '\nrun "bad" "$PYTHON" test.py --mutations\n' if p == 'run_tests.sh' else original(p)),
              'test_finished_lane_harness_order_and_modes'),

@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "base": "bb17715d",
+  "authorization": "Main-expanded lease V6/V7/V8 drivers only",
+  "frozen_original_catalog_sha256": "17e701223652104d639fa219305d415eac6bebd4e3aa8286b6efa67734b44845",
+  "source_evidence": {
+    "test_ai_v6_review.py": {
+      "sha256": "34ad8032c599efbfa62f82505fe5f84b322260ad38b85dcf2a7a472b4953c5a7",
+      "bytes": 3661
+    },
+    "test_ai_v7_native.py": {
+      "sha256": "7cec88d53b18774001c0f62d3ef313df7234ec04e1b1583a66dc6a1fb1e92692",
+      "bytes": 465
+    },
+    "test_ai_v8_native.py": {
+      "sha256": "7e01f9d55e51b4e2e4b557256d64b7fe8553ef83e6d32018e6bdfb9b8e9f0bed",
+      "bytes": 661
+    }
+  },
+  "defaults": {
+    "v6": {
+      "filter": "v6_",
+      "mutations": false,
+      "memory_mib": 1024,
+      "target": "/tmp/narwhal3d-ai-sustained-v4",
+      "fixtures": true
+    },
+    "v7": {
+      "filter": "v7_review_clock",
+      "mutations": true,
+      "memory_mib": 1024,
+      "target": "/tmp/narwhal3d-ai-sustained-v4"
+    },
+    "v8": {
+      "filter": "v8_display_projection",
+      "mutations": true,
+      "memory_mib": 1024,
+      "target": "/tmp/narwhal3d-ai-sustained-v4"
+    }
+  }
+}
