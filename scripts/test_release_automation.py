@@ -51,6 +51,26 @@ class AutomationPackaging(unittest.TestCase):
                          "narwhal_geometry_core_join_mapped_v1",
                          "narwhal_geometry_core_verify_join_v1"} <= set(windows.GEOMETRY_CORE_EXPORTS))
 
+    def test_windows_geometry_canonical_exports_remain_exact(self):
+        required = tuple(sorted(windows.GEOMETRY_CORE_EXPORTS))
+        good = {'machine': 'pe32plus-x86-64', 'exports': required,
+                'dependencies': tuple(prefix + 'fixture.dll'
+                                      for prefix in windows.GEOMETRY_REQUIRED_OCCT_IMPORT_PREFIXES)}
+        with patch.object(windows, 'inspect_pe_dll', return_value=good):
+            try:
+                actual = windows.verify_geometry_core_identity(Path('fixture.dll'))
+            except windows.VerificationError as error:
+                self.fail(f'valid canonical PE export order refused: {error}')
+            self.assertEqual(actual, good)
+        bad = [required[:i] + required[i + 1:] for i in range(len(required))]
+        bad += [required + (required[0],),
+                required + ('narwhal_geometry_core_unexpected_v1',)]
+        for exports in bad:
+            with self.subTest(exports=exports), patch.object(
+                    windows, 'inspect_pe_dll', return_value=dict(good, exports=exports)):
+                with self.assertRaises(windows.VerificationError):
+                    windows.verify_geometry_core_identity(Path('fixture.dll'))
+
     def test_geometry_join_probe_refuses_missing_capability_exports_and_semantics(self):
         semantics = dict(suite="exact Join startup", exact_faces=3, closed=True,
                          operand_count=3, recipe_verified=True)
@@ -127,10 +147,12 @@ class AutomationPackaging(unittest.TestCase):
         linux_verify.verify_geometry_core_manifest({"libnarwhal_geometry_core.so": record})
 
     def test_windows_automation_exports_are_required(self):
-        good = {"machine": 0x8664, "exports": ["narwhal_workflow_abi", "narwhal_workflow_json"]}
+        required = ["narwhal_workflow_abi", "narwhal_workflow_api_revision", "narwhal_workflow_json"]
+        good = {"machine": 0x8664, "exports": required}
         with patch.object(windows, "inspect_pe_dll", return_value=good):
             self.assertEqual(windows.verify_automation_core_identity(Path("fixture.dll")), good)
-        for exports in (["narwhal_workflow_abi"], ["narwhal_workflow_json"], []):
+        for exports in ([required[:i] + required[i + 1:] for i in range(len(required))]
+                        + [[], required + ["unexpected_workflow_export"]]):
             with patch.object(windows, "inspect_pe_dll", return_value=dict(good, exports=exports)):
                 with self.assertRaises(windows.VerificationError):
                     windows.verify_automation_core_identity(Path("fixture.dll"))

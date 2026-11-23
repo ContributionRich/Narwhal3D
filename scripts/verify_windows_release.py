@@ -371,7 +371,7 @@ def verify_geometry_core_identity(path: Path) -> dict[str, object]:
                            if name.startswith("narwhal_geometry_core_"))
     generated_exports = tuple(name for name in exports
                               if not name.startswith("narwhal_geometry_core_"))
-    if public_exports != GEOMETRY_CORE_EXPORTS:
+    if tuple(sorted(public_exports)) != tuple(sorted(GEOMETRY_CORE_EXPORTS)):
         raise VerificationError(f"Windows geometry-core public exports differ: {public_exports}")
     if not all(GEOMETRY_ALLOWED_MSVC_EXPORT.fullmatch(name) for name in generated_exports):
         raise VerificationError(
@@ -543,7 +543,7 @@ def pure_core_record(path: Path) -> dict:
 
 def verify_automation_core_identity(path: Path) -> dict[str, object]:
     identity = inspect_pe_dll(path)
-    if set(identity["exports"]) != {"narwhal_workflow_abi", "narwhal_workflow_json"}:
+    if set(identity["exports"]) != {"narwhal_workflow_abi", "narwhal_workflow_api_revision", "narwhal_workflow_json"}:
         raise VerificationError("Windows automation library lacks the exact workflow ABI")
     return identity
 
