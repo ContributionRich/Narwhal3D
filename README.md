@@ -8,13 +8,11 @@
 
 Draw with the mouse, type a command, or choose a tool from the sidebar. Work in four views at once, shape your model with on-screen handles, and choose a light or dark workspace.
 
-**[Download for Linux](https://github.com/ContributionRich/Narwhal3D/releases/download/v0.4.13/Narwhal_3D-0.4.13-x86_64.AppImage)** · **[Download for Windows](https://github.com/ContributionRich/Narwhal3D/releases/download/v0.4.13/Narwhal_3D-0.4.13-Windows-x86_64.exe)** · [What's new](CHANGELOG.md)
+**[Download for Linux](https://github.com/ContributionRich/Narwhal3D/releases/download/v0.4.14/Narwhal_3D-0.4.14-x86_64.AppImage)** · **[Download for Windows](https://github.com/ContributionRich/Narwhal3D/releases/download/v0.4.14/Narwhal_3D-0.4.14-Windows-x86_64.exe)** · [What's new](CHANGELOG.md)
 
-> **Current release: [0.4.13](https://github.com/ContributionRich/Narwhal3D/releases/tag/v0.4.13).** The Linux AppImage and Windows portable EXE include the new Library tab, background native-project Save/Open, crash recovery, command and print/unit fixes, and further Rust conversions. TracePicture remains included. Both packages use the tagged release source. The Windows EXE is unsigned and was tested in a Windows 11 VM with software OpenGL, not a physical GPU. See [release notes](CHANGELOG.md) and [current status](STATUS.md).
+> **Current release: [0.4.14](https://github.com/ContributionRich/Narwhal3D/releases/tag/v0.4.14).** The Linux AppImage and Windows portable EXE add supported multi-step AI modeling, exact freeform surface patches, surface Join/Cap, bounded AI tool-limit recovery, faster curve work, and smoother startup/update handling. Library and TracePicture remain included. Both packages use tagged source `58b24e8d4e82380bcb34eca596133c9d6e7b0579`. The Windows EXE is unsigned and was tested in a Windows 11 VM with software OpenGL, not a physical GPU. See [what changed since 0.4.13](CHANGELOG.md#0414--2026-11-23) and [current limitations](STATUS.md).
 
 > **An early preview, built in the open.** Narwhal is still growing, and some tools are incomplete. Save important work often and verify dimensions and exported geometry before manufacturing. [See what works and what's still missing →](docs/gaps.md)
-
-**Pending source: 0.4.14.** [Candidate changes and current limitations](CHANGELOG.md#0414--source-candidate-not-yet-published). Downloads above remain the published 0.4.13 packages until the new release is qualified and published.
 
 ## Your workspace, light or dark
 

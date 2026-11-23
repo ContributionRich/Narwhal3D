@@ -4,7 +4,9 @@ All notable public changes will be recorded here. Narwhal 3D is an extremely ear
 
 ## Unreleased
 
-## 0.4.14 — source candidate (not yet published)
+## 0.4.14 — 2026-11-23
+
+Linux x86-64 AppImage and Windows x86-64 portable EXE, both published from tagged source `58b24e8d4e82380bcb34eca596133c9d6e7b0579`. Download packages and SHA-256 checksums from the [0.4.14 release](https://github.com/ContributionRich/Narwhal3D/releases/tag/v0.4.14). No macOS build is provided.
 
 Compared with the published 0.4.13 packages:
 
@@ -16,7 +18,7 @@ Compared with the published 0.4.13 packages:
 
 Limits: bounded supported geometry is not general trimmed-surface modeling or full reference-application equivalence. Meshes/SubD are not accepted by exact surface Join. General layer/group automation, unrestricted commands and robust aesthetic design quality remain unqualified. The reference-application VM exposed SDK assembly 8.35.26251.13001 but did not reach an active document; initialization/licensing remains unresolved, not a proven license failure.
 
-Linux source acceptance is separate from package acceptance. New 0.4.14 assets are not available yet; the README continues to link to published 0.4.13 downloads. Windows needs newly source-qualified MSVC geometry and automation libraries and actual package acceptance; prior Windows supervisor/library checks do not qualify the new geometry jobs. The external MCP server is currently Unix-only, distinct from Windows in-app automation. The supervised display path explicitly refuses macOS. No new release or cross-platform numerical qualification is claimed here.
+Both final packages passed source/version/inventory and native admission, exact geometry and save/reload, Library, TracePicture, and AI integration acceptance. Windows additionally passed cold/warm startup, shortcuts and real 0.4.13-to-0.4.14 upgrade/recovery checks with source-qualified MSVC geometry and automation libraries. Windows graphics acceptance used a software-OpenGL VM, not a physical GPU. The external MCP server is currently Unix-only, distinct from Windows in-app AI. Unqualified numerical platforms retain SDK fallbacks. The supervised Cap/display paths refuse unqualified macOS containment. Two known portable-container libm unit-test differences remain; final packaged SDK/runtime parity and admission checks passed. This is an early prerelease, not general cross-platform or design-quality certification.
 
 - Fixed Library snapshots of edited exact solids whose construction history cannot be replayed. Fixed native Gumball editing for supported imported solids with conservative tolerance metadata, and preserved exact snapshot edits across Save/reload without a second Undo history.
 - Source: moved exhaustive Unicode and numeric popup acceptance into mandatory Rust tests while retaining actual host callbacks and metadata coverage. [Scope, qualification and Python retirement](docs/RUST_RETIREMENT_28.md).

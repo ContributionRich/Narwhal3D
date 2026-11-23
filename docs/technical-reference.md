@@ -9,7 +9,7 @@ For the Linux, Windows and Mac release pipeline, use
 hashes, commands and acceptance results below are historical baselines, not proof
 that a newly assembled package passed those gates.
 
-Narwhal 3D is a free, open-source, command-driven NURBS CAD application. Release downloads are available for Linux x86_64 (AppImage) and as an early Windows x86_64 preview (portable EXE), both for 0.4.13. No Mac build has been made for this line. It ships as one application bundle: a Narwhal launcher and interface on top of a bundled, open-source viewport runtime.
+Narwhal 3D is a free, open-source, command-driven NURBS CAD application. Release downloads are available for Linux x86_64 (AppImage) and as an early Windows x86_64 preview (portable EXE), both for 0.4.14. No Mac build has been made for this line. It ships as one application bundle: a Narwhal launcher and interface on top of a bundled, open-source viewport runtime.
 
 **Licence:** [GPL-3.0-or-later](../LICENSE). Contributions and dependencies must be GPL-compatible; see [CONTRIBUTING.md](../CONTRIBUTING.md).
 
@@ -40,7 +40,7 @@ Narwhal's active project format is `.narwhal`: a dependency-free Rust-validated 
 
 ## Install on Linux x86_64
 
-**Current release: [0.4.13](https://github.com/ContributionRich/Narwhal3D/releases/tag/v0.4.13).** Download the AppImage and checksum from that release. It includes Library, background native-project I/O, recovery and the native tracing/exact-save helpers. The qualification record below is an explicitly historical baseline, not the current asset identity.
+**Current release: [0.4.14](https://github.com/ContributionRich/Narwhal3D/releases/tag/v0.4.14).** Download the AppImage and checksum from that release. It includes Library, background native-project I/O, recovery and the native tracing/exact-save helpers. The qualification record below is an explicitly historical baseline, not the current asset identity.
 
 **Release: 0.4.7.** The Linux x86_64 asset is `Narwhal_3D-0.4.7-x86_64.AppImage`.
 
@@ -49,15 +49,15 @@ The 0.4.7 AppImage has been built and its inventory verified. Final Linux source
 Make the AppImage executable and run it directly:
 
 ```bash
-chmod +x Narwhal_3D-0.4.13-x86_64.AppImage
-./Narwhal_3D-0.4.13-x86_64.AppImage
+chmod +x Narwhal_3D-0.4.14-x86_64.AppImage
+./Narwhal_3D-0.4.14-x86_64.AppImage
 ```
 
 The AppImage contains the native startup welcome window, natively branded runtime, all nine mandatory native components, locked Python dependencies, application package, icons, and license notices. It does not install a separate host application.
 
 ## Early Windows x86_64 preview
 
-**Release: 0.4.13.** The Windows asset is `Narwhal_3D-0.4.13-Windows-x86_64.exe`, a portable EXE published on the v0.4.13 release with a `.sha256` checksum. No ZIP is published for this line; 0.4.8 ZIP users download the EXE once. The EXE manages its payload in a per-user cache, so keep documents outside it. It was built from the tagged v0.4.13 source, includes the qualified document observer, the TracePicture helper `runtime/windows-x86_64/bin/narwhal-picture-trace.exe` and the exact-save helper `narwhal3d/kernel/bin/brep_writer-win32-amd64.exe`, and carries its openNURBS license at `licenses/openNURBS-LICENSE.txt`. It is unsigned. Its acceptance ran in a Windows 11 virtual machine with a software OpenGL driver, not on a physical GPU. Its byte size and SHA-256 are in the release's `.sha256` file and are not repeated here. See the [platform evidence and limitations](windows-build.md).
+**Release: 0.4.14.** The Windows asset is `Narwhal_3D-0.4.14-Windows-x86_64.exe`, a portable EXE published on the v0.4.14 release with a `.sha256` checksum. No ZIP is published for this line; 0.4.8 ZIP users download the EXE once. The EXE manages its payload in a per-user cache, so keep documents outside it. It was built from the tagged v0.4.14 source, includes the qualified document observer, the TracePicture helper `runtime/windows-x86_64/bin/narwhal-picture-trace.exe` and the exact-save helper `narwhal3d/kernel/bin/brep_writer-win32-amd64.exe`, and carries its openNURBS license at `licenses/openNURBS-LICENSE.txt`. It is unsigned. Its acceptance ran in a Windows 11 virtual machine with a software OpenGL driver, not on a physical GPU. Its byte size and SHA-256 are in the release's `.sha256` file and are not repeated here. See the [platform evidence and limitations](windows-build.md).
 
 **Historical 0.4.7 ZIP.** The Windows asset name for 0.4.7 is `Narwhal_3D-0.4.7-Windows-x86_64.zip`. Extract the complete folder and start `Narwhal3D.exe`; the native welcome window remains visible while the bundled runtime initializes. Do not move that executable away from its adjacent `app` and `runtime` folders.
 
@@ -147,13 +147,13 @@ The in-app assistant accepts four provider identifiers: `openai`, `anthropic`, `
 
 Sharing workspace metadata requires explicit consent for the configured recipient. The assistant includes bounded selected-object metadata with each message. To revoke remembered consent, open AI Settings and choose **Forget workspace-sharing permission**. See the [permission model](../SECURITY.md#ai-permissions-in-current-source) and [settings control](../narwhal3d/ai_settings_popup.py#L353).
 
-Current source supports bounded exact modeling batches through `narwhal_model`: analytic primitives, smooth curves/NURBS, transforms, extrusion, loft surfaces, booleans, open-rail pipes, revolutions, connected exact Join and planar Cap. Rust validates dependencies, arguments, one-use authority and canonical receipts; the existing geometry kernel produces the geometry. Stable-UUID edits, exact inspection, follow-up edits and Undo/Redo are covered by actual-host tests. **Review** requests approval per batch. **Build** is a persistent local opt-in; it does not grant arbitrary command execution or authorize external files/images. Legacy proposal-only catalogs describe their own compatibility routes, not the generalized batch executor. See [current capabilities and limitations](../STATUS.md#current-source-and-0413-feature-set).
+Current source supports bounded exact modeling batches through `narwhal_model`: analytic primitives, smooth curves/NURBS, transforms, extrusion, loft surfaces, booleans, open-rail pipes, revolutions, connected exact Join and planar Cap. Rust validates dependencies, arguments, one-use authority and canonical receipts; the existing geometry kernel produces the geometry. Stable-UUID edits, exact inspection, follow-up edits and Undo/Redo are covered by actual-host tests. **Review** requests approval per batch. **Build** is a persistent local opt-in; it does not grant arbitrary command execution or authorize external files/images. Legacy proposal-only catalogs describe their own compatibility routes, not the generalized batch executor. See [current capabilities and limitations](../STATUS.md#current-source-and-0414-feature-set).
 
 Viewport image sharing needs separate one-shot approval. STEP/selected-object 3dm export always needs a local new-destination choice, refuses overwrites and does not expose provider-selected filesystem paths. Display preparation is cancellable before document publication; stale exact-master content, failures and budget overruns refuse rather than approximating geometry. A prelaunch SHA-256 over exact master serialization without triangulation is checked when collecting and using prepared display data, not merely object identity. Current display budgets are 30 seconds per worker, 4096MiB address space (not resident memory), 32MiB serialized input, 64MiB output per worker and 128MiB batch output. Display meshing can be stopped while it runs; exact construction cancellation is cooperative between SDK steps. Final publication is synchronous and cannot process a Cancel click mid-transaction: a recorded case took about 2.5 seconds, not a guaranteed upper bound. Physical HTTP cancellation is not guaranteed. Robust whale/taco aesthetic acceptance, general layer/group control, broader resumability and MCP screenshot-sharing parity remain incomplete.
 
-The external MCP launcher uses Unix stdio and starts one new app per launch; attachment to an existing app remains unsupported. Default `--read-only` exposes exactly nine metadata tools. Explicit `--modeling` adds reviewed typed modeling, inspection/framing and locally approved export; external modeling never inherits in-app Build authority. Matching native API9 library/server and rebuilt converter supervisor are required. This is current-source scope, not an update to the published 0.4.13 packages. See the [launcher](../scripts/narwhal_mcp.py).
+The external MCP launcher uses Unix stdio and starts one new app per launch; attachment to an existing app remains unsupported. Default `--read-only` exposes exactly nine metadata tools. Explicit `--modeling` adds reviewed typed modeling, inspection/framing and locally approved export; external modeling never inherits in-app Build authority. Matching native API9 library/server and rebuilt converter supervisor are required. This workflow is included in 0.4.14; older 0.4.13 downloads are unchanged. See the [launcher](../scripts/narwhal_mcp.py).
 
-**Platform limits:** the external automation/MCP server and inherited-FD launcher are currently Unix-only. A Windows server build reports seven errors involving `UnixStream`, `std::os::fd` and `tokio::signal::unix`; these unguarded Unix APIs also exist in the committed source baseline. This is not repaired by the separate Windows in-app automation library. Earlier Windows VM qualification passed 125 library unit tests and the converter supervisor's five executable unit tests plus one worker-policy test, including child/grandchild cleanup on EOF/byte cancellation, no-opt-in behavior, timeout and a 96MiB memory guard. Those tests do **not** qualify a Windows OCP display job, the Unix server, the complete current Linux automation suite or a new package. macOS display-worker containment remains unqualified and this modeling-display route explicitly refuses.
+**Platform limits:** the external automation/MCP server and inherited-FD launcher remain Unix-only; Windows in-app AI uses the separate native library. Final 0.4.14 Windows acceptance covered the source-qualified MSVC libraries, closed-default startup, exact Join/Cap, 49 actual-host AI tests, save/reload, TracePicture and real portable upgrade/recovery. Earlier supervisor tests separately exercised child/grandchild cancellation, timeout and memory guards. These are scoped Windows 11 software-OpenGL VM results, not physical-GPU certification or every possible geometry job. macOS worker containment remains unqualified and refuses explicitly.
 
 The [read-tool catalog](../native/automation_core/src/catalog.rs#L8-L54) defines these nine dotted MCP names:
 
@@ -359,8 +359,7 @@ output. Fixed files live in a disposable private directory. Untrusted BinTools
 source/snapshot/result decoding occurs in that worker, not in the app parent;
 only freshly admitted and verified output is decoded by the parent. The raw C ABI
 is not itself an allocation sandbox: direct callers must isolate untrusted decode.
-macOS Cap containment explicitly refuses pending qualification. Windows header and
-packaging contracts do not establish actual Windows OCP Cap-job qualification.
+macOS Cap containment explicitly refuses pending qualification. Final 0.4.14 Windows package acceptance additionally qualified actual OCP Cap jobs, including conical save/reload, using the shipped MSVC library; it does not certify every possible input.
 
 The typed AI batch catalog now includes `join` (2–16 exact Breps, exactly one
 connected group consuming every source) and `cap` (one verified airtight result).
