@@ -123,6 +123,8 @@ PURE_CORE_PYTESTS = (
     "spike/test_polyline_samples.py",
     "spike/test_pure_core_polycurve_samples_gate.py",
     "spike/test_polycurve_samples.py",
+    "spike/test_pure_core_offset_fit_gate.py",
+    "spike/test_offset_fit.py",
     "spike/test_native_coil_preview.py",
     "spike/test_preview_curve_native.py",
     "spike/test_preview24_boundaries.py",
@@ -1987,6 +1989,115 @@ def probe_pure_core_polycurve_samples(path: Path, python: Path | str = sys.execu
         raise ValueError(f"pure-core polycurve samples evidence differs: {identity!r}")
     return identity
 
+
+# Smooth free-form offsets (offset._compact_offset through native_nearest.offset_fit): the
+# interpolate-and-check loop with openNURBS's Evaluate, EvTangent, EvCurvature, SetDomain,
+# IsValid and IsClosed ported, read from the curve's Encode() record. A library without it
+# loses only the Rust route: offsets then run the Python route.
+PURE_CORE_OFFSET_FIT_EXPORT = "narwhal_pure_core_offset_fit"
+# (sys.platform, machine) pairs; narwhal3d/native_nearest.py OFFSET_QUALIFIED_PLATFORMS must
+# carry the same set (spike/test_pure_core_offset_fit_gate.py). Rust never fuses a
+# multiply-add, but a rhino3dm build that does evaluates the source differently, so a pair
+# joins only once its artifact is qualified here. At run time the route also requires the
+# loaded rhino3dm to pass native_nearest's offset parity check. The fit uses only IEEE
+# arithmetic and square roots, no libm.
+PURE_CORE_OFFSET_FIT_QUALIFIED_PLATFORMS = frozenset({("linux", "x86_64")})
+# The digest pins the exact control points, knots and deviation of the fits on
+# native_nearest's two witness curves (an open rational cubic on a shifted domain in a tilted
+# plane; a closed periodic cubic); it is also the digest of the Python route
+# (offset._python_compact_offset) on rhino3dm 8.35.0.
+PURE_CORE_OFFSET_FIT_IDENTITY = {
+    "export": PURE_CORE_OFFSET_FIT_EXPORT,
+    "unrecognised_record_status": 1, "no_fit_status": 2, "zero_distance_status": -2,
+    "nan_normal_status": -2, "small_buffer_status": -3, "null_record_status": -1,
+    "refusals_write": False,
+    "fits_sha256": "139127e150e738e810c691f1f238d86940374bf866de414606c9ec1e99c03e66",
+}
+PURE_CORE_OFFSET_FIT_PROBE = r'''
+import ctypes as c, hashlib, json, struct, sys
+fn = c.CDLL(sys.argv[1]).narwhal_pure_core_offset_fit
+D, Z = c.POINTER(c.c_double), c.c_size_t
+fn.argtypes = [c.c_char_p, Z, c.c_double, D, c.c_double, D, Z, D, Z, c.POINTER(c.c_uint64), D]
+fn.restype = c.c_int32
+# native_nearest._offset_witnesses() as rhino3dm 8.35.0 encodes them.
+wave = bytes.fromhex(
+    "fa7f02003e01000000000000fbff02001400000000000000ddd4d74e47e9d311bfe50010830122f010f2"
+    "7870fcff0200060100000000000011030000000000000004000000050000000000000000000000000000"
+    "000000f03f00000000000000000000000000000000000000000000f0bf00000000000000000000000000"
+    "00000007000000c4fb7bd01aac1ac0c4fb7bd01aac1ac0c4fb7bd01aac1ac0b33e7571facd05c044f41a"
+    "7c8178f33f44f41a7c8178f33f44f41a7c8178f33f05000000d480431b09e0c83f6044fd58ddf3d13f67"
+    "3eea92c06cb9bf485e7aff80d308400cff01b3fc9cd33fc71b2fc7708bb2bf4186f0752c411840ff8de1"
+    "0b840891bfe02e239b0245b1bf521a9d1d0ded214091d6b80af751dc3f31b835a69a138c3f39e49176af"
+    "7d274070d469e62f03d73fc83d610ee71a913f003c5ae4d0ff7f02800000000000000000")
+loop = bytes.fromhex(
+    "fa7f0200de01000000000000fbff02001400000000000000ddd4d74e47e9d311bfe50010830122f010f2"
+    "7870fcff0200a601000000000000110300000000000000040000000a0000000000000000000000000000"
+    "000000f03f00000000000000000000000000000000000000000000f0bf00000000000000000000000000"
+    "0000000c00000000000000000000c0000000000000f0bf0000000000000000000000000000f03f000000"
+    "000000004000000000000008400000000000001040000000000000144000000000000018400000000000"
+    "001c40000000000000204000000000000022400a0000004b0b748cf82b24400000000000000000000000"
+    "00000000006c6c0dd42f631940538f11558c991c400000000000000000adeaf0d16ae701c0417ef3a4d8"
+    "c72440000000000000000014328b87b8ce20c038557ec6528611400000000000000000cc18954d846121"
+    "c05b5ae13be05d12c000000000000000002be846c2e81e02c065cd24b9999422c000000000000000006e"
+    "c48706a8421840a1864871ddbe1fc000000000000000004b0b748cf82b24400000000000000000000000"
+    "00000000006c6c0dd42f631940538f11558c991c400000000000000000adeaf0d16ae701c0417ef3a4d8"
+    "c72440000000000000000000047ee99aff7f02800000000000000000")
+h = float.fromhex
+witnesses = (
+    (wave, h("-0x1.98bff91104b91p-2"),
+     (h("0x1.7da869f9397c9p-7"), h("0x1.3c30396f4ae0ep-6"), h("0x1.ffdeb27e6455dp-1")), 0.05),
+    (loop, h("0x1.9cb3ce2a417e0p-1"), (0.0, 0.0, 1.0), 0.05),
+)
+
+
+def call(record, distance, normal, tolerance, cvs=375, knots=127, fill=0.0, size=None):
+    out_cvs, out_knots = (c.c_double * cvs)(*[fill] * cvs), (c.c_double * knots)(*[fill] * knots)
+    counts, dev = (c.c_uint64 * 2)(7, 7), c.c_double(fill)
+    code = fn(record, len(record) if size is None else size, distance, (c.c_double * 3)(*normal),
+              tolerance, out_cvs, cvs, out_knots, knots, counts, c.byref(dev))
+    return code, list(out_cvs), list(out_knots), list(counts), dev.value
+
+
+bits = b""
+for record, distance, normal, tolerance in witnesses:
+    code, cvs, knots, (m, k), dev = call(record, distance, normal, tolerance)
+    if code != 0:
+        raise RuntimeError("the export refused a witness curve")
+    bits += struct.pack(f"<{3 * m}d", *cvs[:3 * m]) + struct.pack(f"<{k}d", *knots[:k])
+    bits += struct.pack("<d", dev)
+wave_args = witnesses[0][1:]
+refusals = {
+    "unrecognised_record_status": call(b"not a record", *wave_args, fill=-9.0),
+    "no_fit_status": call(wave, wave_args[0], wave_args[1], 1e-300, fill=-9.0),
+    "zero_distance_status": call(wave, 0.0, wave_args[1], 0.05, fill=-9.0),
+    "nan_normal_status": call(wave, wave_args[0], (float("nan"), 0.0, 1.0), 0.05, fill=-9.0),
+    "small_buffer_status": call(wave, *wave_args, cvs=374, fill=-9.0),
+    "null_record_status": call(None, *wave_args, fill=-9.0, size=len(wave)),
+}
+untouched = all(set(r[1]) == set(r[2]) == {-9.0} and r[3] == [7, 7] and r[4] == -9.0
+                for r in refusals.values())
+print(json.dumps({"export": "narwhal_pure_core_offset_fit",
+                  **{name: r[0] for name, r in refusals.items()},
+                  "refusals_write": not untouched,
+                  "fits_sha256": hashlib.sha256(bits).hexdigest()}, sort_keys=True))
+'''
+
+
+def probe_pure_core_offset_fit(path: Path, python: Path | str = sys.executable, *, env=None) -> dict:
+    """Require the offset fit export to give the pinned witness fits and refusals."""
+    if not path.is_file() or path.is_symlink():
+        raise ValueError(f"missing regular pure-core library: {path}")
+    try:
+        completed = subprocess.run(
+            [str(python), "-I", "-B", "-c", PURE_CORE_OFFSET_FIT_PROBE, str(path.resolve())],
+            env=env, text=True, capture_output=True, check=True, timeout=30)
+        identity = json.loads(completed.stdout)
+    except (OSError, subprocess.SubprocessError, ValueError) as error:
+        raise ValueError(f"cannot verify pure-core offset fit export: {getattr(error, 'stderr', '') or error}") from error
+    if identity != PURE_CORE_OFFSET_FIT_IDENTITY:
+        raise ValueError(f"pure-core offset fit evidence differs: {identity!r}")
+    return identity
+
 # Additive unit-aware SVG export (vector_export.write_svg(unit=...)): ABI 1 and the legacy
 # narwhal_pure_core_svg_encode_into are unchanged, so a library without it loses only the
 # native route for unit SVGs. Formatting is IEEE division + Rust's exact decimal printing, no
@@ -2446,6 +2557,16 @@ def step_polycurve_samples(lib_path: Path) -> dict[str, object]:
             "command": "ctypes polycurve samples probe"}
 
 
+def step_offset_fit(lib_path: Path) -> dict[str, object]:
+    """Qualify the offset fit export; required for the library to carry it."""
+    try:
+        identity = probe_pure_core_offset_fit(lib_path)
+    except ValueError as exc:
+        raise GateError(str(exc)) from exc
+    return {"status": "ok", "offset_fit": identity,
+            "command": "ctypes offset fit probe"}
+
+
 def step_svg_unit(lib_path: Path) -> dict[str, object]:
     """Qualify the unit-aware SVG export; required for the library to carry it."""
     try:
@@ -2540,6 +2661,7 @@ def run_gate(crate_rel: str) -> dict[str, object]:
     steps["polyline_samples"] = step_polyline_samples(lib)
     steps["polycurve_samples"] = step_polycurve_samples(lib)
     steps["remove_join_cv"] = probe_pure_core_remove_join_cv(lib)
+    steps["offset_fit"] = step_offset_fit(lib)
     steps["svg_unit"] = step_svg_unit(lib)
     steps["adapter"] = step_adapter(crate, lib)
     steps["windows_check"] = step_windows_check(crate)

@@ -55,8 +55,9 @@ pub(crate) const ON_EPSILON: f64 = 2.2204460492503131e-16;
 const ON_SQRT_EPSILON: f64 = 1.490116119385000000e-8;
 #[allow(clippy::excessive_precision)]
 pub(crate) const ON_ZERO_TOLERANCE: f64 = 2.3283064365386962890625e-10;
-#[allow(clippy::excessive_precision)]
-const ON_DBL_MIN: f64 = 2.22507385850720200e-308;
+/// `ON_DBL_MIN` is `DBL_MIN` wherever float.h defines it (opennurbs_defines.h); its
+/// fallback literal 2.22507385850720200e-308 is one ulp larger.
+const ON_DBL_MIN: f64 = f64::MIN_POSITIVE;
 #[allow(clippy::excessive_precision)]
 const ON_UNSET_POSITIVE_VALUE: f64 = 1.23432101234321e+308;
 const ON_UNSET_VALUE: f64 = -ON_UNSET_POSITIVE_VALUE;
@@ -980,7 +981,7 @@ fn dot(a: P3, b: P3) -> f64 {
 }
 
 /// `ON_Length3d`, behind `ON_3dPoint::DistanceTo`.
-fn on_length3d(x: f64, y: f64, z: f64) -> f64 {
+pub(crate) fn on_length3d(x: f64, y: f64, z: f64) -> f64 {
     let (mut x, mut y, mut z) = (x.abs(), y.abs(), z.abs());
     if y >= x && y >= z {
         std::mem::swap(&mut x, &mut y);

@@ -487,6 +487,27 @@ pub(crate) fn line_record(line: &[f64; 6], domain: (f64, f64)) -> Vec<u8> {
     framed(&LINE_CURVE_UUID, &body)
 }
 
+/// A non-rational 3-D `ON_NurbsCurve` record (chunk version 1.0) as `ON_NurbsCurve::Write`
+/// and `WriteObject` frame it.
+#[cfg(test)]
+pub(crate) fn nurbs_record(order: usize, knots: &[f64], cvs: &[[f64; 3]]) -> Vec<u8> {
+    let mut body = vec![0x10];
+    for v in [3, 0, order as i32, cvs.len() as i32, 0, 0] {
+        body.extend(v.to_le_bytes());
+    }
+    body.extend(
+        [1.0f64, 0.0, 0.0, -1.0, 0.0, 0.0]
+            .iter()
+            .flat_map(|v| v.to_le_bytes()),
+    );
+    body.extend((knots.len() as i32).to_le_bytes());
+    body.extend(knots.iter().flat_map(|v| v.to_le_bytes()));
+    body.extend((cvs.len() as i32).to_le_bytes());
+    body.extend(cvs.iter().flatten().flat_map(|v| v.to_le_bytes()));
+    body.extend(crc32(&body).to_le_bytes());
+    framed(&NURBS_CURVE_UUID, &body)
+}
+
 /// An `ON_PolyCurve` record of `segments` (whole records) on `m_t` `params`, as
 /// `ON_PolyCurve::Write` and `WriteObject` frame it: the stored CRC-32 covers the bytes
 /// before the segment records.

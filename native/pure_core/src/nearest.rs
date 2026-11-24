@@ -665,7 +665,8 @@ fn search_budgeted(
         &curve.breakpoints(t0, t1),
     )
 }
-fn region<T>(p: *const T, n: usize) -> Option<(usize, usize)> {
+/// The byte range of `n` values at `p`; None for a null or misaligned pointer.
+pub(crate) fn region<T>(p: *const T, n: usize) -> Option<(usize, usize)> {
     if n == 0 {
         return Some((0, 0));
     }
@@ -678,7 +679,8 @@ fn region<T>(p: *const T, n: usize) -> Option<(usize, usize)> {
     }
     Some((p as usize, (p as usize).checked_add(size)?))
 }
-fn separate(inputs: &[(usize, usize)], outputs: &[(usize, usize)]) -> bool {
+/// True when no output range overlaps an input or an earlier output.
+pub(crate) fn separate(inputs: &[(usize, usize)], outputs: &[(usize, usize)]) -> bool {
     for (i, &a) in outputs.iter().enumerate() {
         if inputs
             .iter()

@@ -44,6 +44,7 @@ pub mod numparse;
 pub mod numparse_owned;
 pub mod nurbs_record;
 pub mod obj;
+pub mod offset;
 pub mod options_ffi;
 pub mod options_owned;
 pub mod options_prompt;

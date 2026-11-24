@@ -215,6 +215,21 @@ def _offset_control_polygon_approx(curve, distance, n, tolerance, max_samples=51
 
 
 def _compact_offset(curve, distance, n, tolerance):
+    """`_python_compact_offset` through Rust where qualified (`native_nearest.offset_fit`):
+    the same fit, bit for bit, or the Python route where Rust leaves the decision to it."""
+    if not isinstance(curve, r3.NurbsCurve) or curve.Degree < 2:
+        return None
+    try:
+        from . import native_nearest
+    except ImportError:  # support direct-file loading outside the package
+        import native_nearest
+    native = native_nearest.offset_fit(curve, distance, n, tolerance, _python_compact_offset)
+    if native is not None:
+        return OffsetResult(native[0], False, native[1], "") if native else None
+    return _python_compact_offset(curve, distance, n, tolerance)
+
+
+def _python_compact_offset(curve, distance, n, tolerance):
     """OURS: refine a Rust-backed cubic interpolant of TRUE offset targets.
 
     This is not Rebuild of an already approximate offset. Uniform interpolation

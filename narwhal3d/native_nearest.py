@@ -945,3 +945,156 @@ def _polycurve_samples(curve, n):
     if got is not None:
         _native_polycurve_sample_calls += 1
     return got
+
+
+# Smooth free-form offsets (narwhal_pure_core_offset_fit, native/pure_core/src/offset.rs):
+# `offset._compact_offset`'s interpolate-and-check loop for a NurbsCurve with no boundary, no
+# cusp and no kinked seam, read from its Encode() record. The loop's ~13,000 PointAt /
+# TangentAt calls are openNURBS's Evaluate, EvTangent and EvCurvature (eb92af3) in Rust, and
+# the fit's SetDomain, IsValid and IsClosed too; an SDK build that fuses a multiply-add in any
+# of them rounds differently. So the route needs BOTH a platform in OFFSET_QUALIFIED_PLATFORMS
+# and the loaded rhino3dm passing `_offset_parity`: the Python route on its own SDK gives
+# Rust's fit, bit for bit, on the witness curves. Rust refuses whatever it does not decide
+# exactly (a boundary, a cusp, a degenerate tangent, ...), and the Python route runs.
+OFFSET_QUALIFIED_PLATFORMS = frozenset({("linux", "x86_64")})
+OFFSET_MAX_FIT_CVS = 125        # a closed cubic through 122 points; offset.rs MAX_FIT_CVS
+OFFSET_MAX_FIT_KNOTS = 127
+_OFFSET_FIT, _OFFSET_NO_FIT = 0, 2
+_OFFSET_WITNESS_SEED = 20261124
+_offset_state = None            # (signature, binding or None, capability text)
+_native_offset_calls = 0
+
+
+def _offset_call(fn, curve, distance, n, tolerance):
+    """``(fit, deviation)``, ``()`` when no smooth fit meets the tolerance, or None when the
+    export leaves the decision to Python."""
+    distance, tolerance = float(distance), float(tolerance)
+    n = tuple(float(c) for c in n)
+    if (len(n) != 3 or not all(math.isfinite(c) for c in n) or not math.isfinite(distance)
+            or abs(distance) < 1e-15 or math.isnan(tolerance)):
+        return None
+    record = base64.b64decode(curve.Encode()["data"])
+    cvs = array.array("d", bytes(8 * 3 * OFFSET_MAX_FIT_CVS))
+    knots = array.array("d", bytes(8 * OFFSET_MAX_FIT_KNOTS))
+    counts = (ctypes.c_uint64 * 2)()
+    deviation = ctypes.c_double()
+    code = fn(record, len(record), distance, (ctypes.c_double * 3)(*n), tolerance,
+              (ctypes.c_double * len(cvs)).from_buffer(cvs), len(cvs),
+              (ctypes.c_double * len(knots)).from_buffer(knots), len(knots),
+              counts, ctypes.byref(deviation))
+    if code == _OFFSET_NO_FIT:
+        return ()
+    m, k = counts[0], counts[1]
+    if code != _OFFSET_FIT or not 4 <= m <= OFFSET_MAX_FIT_CVS or k != m + 2:
+        return None
+    # As `interpolate.interpolate_curve` builds it; the knots are already in the source domain.
+    fit = r3.NurbsCurve(3, False, 4, m)
+    for i in range(m):
+        fit.Points[i] = r3.Point4d(cvs[3 * i], cvs[3 * i + 1], cvs[3 * i + 2], 1.0)
+    for i in range(k):
+        fit.Knots[i] = knots[i]
+    return fit, deviation.value
+
+
+def _offset_witnesses():
+    """``(curve, distance, n, tolerance)``: irregular doubles, where a fused multiply-add would
+    round most products differently. An open rational cubic on a shifted domain in a tilted
+    plane, and a closed periodic cubic, each offset without a cusp."""
+    rng = random.Random(_OFFSET_WITNESS_SEED)
+    p = r3.Point3d
+    wave = r3.NurbsCurve.CreateControlPointCurve(
+        [p(i * 3.0 + rng.uniform(-0.3, 0.3), rng.uniform(-0.8, 0.8), rng.uniform(-0.1, 0.1))
+         for i in range(5)], 3)
+    for i in range(1, 4):
+        q = wave.Points[i]
+        w = rng.uniform(0.6, 1.6)
+        wave.Points[i] = r3.Point4d(q.X * w, q.Y * w, q.Z * w, w)
+    wave.Domain = r3.Interval(rng.uniform(-9.0, -1.0), rng.uniform(1.0, 9.0))
+    tilt = (rng.uniform(-0.02, 0.02), rng.uniform(-0.02, 0.02), 1.0)
+    m = math.sqrt(tilt[0] * tilt[0] + tilt[1] * tilt[1] + tilt[2] * tilt[2])
+    loop = r3.NurbsCurve.Create(True, 3, [
+        p(math.cos(2 * math.pi * i / 7) * rng.uniform(9.0, 11.0),
+          math.sin(2 * math.pi * i / 7) * rng.uniform(9.0, 11.0), 0.0) for i in range(7)])
+    return [(wave, rng.uniform(-0.5, -0.3), tuple(c / m for c in tilt), 0.05),
+            (loop, rng.uniform(0.8, 1.0), (0.0, 0.0, 1.0), 0.05)]
+
+
+def _offset_bits(curve, deviation):
+    return (b"".join(struct.pack("<3d", p.X, p.Y, p.Z) for p in curve.Points)
+            + struct.pack(f"<{len(curve.Knots)}d", *curve.Knots)
+            + struct.pack("<d", deviation))
+
+
+def _offset_parity(fn, reference):
+    """True when `reference` (the Python route) on the loaded rhino3dm gives Rust's fit, bit
+    for bit, on every witness curve."""
+    try:
+        for curve, distance, n, tolerance in _offset_witnesses():
+            got = _offset_call(fn, curve, distance, n, tolerance)
+            want = reference(curve, distance, n, tolerance)
+            if (not got or want is None or want.curve is None
+                    or _offset_bits(*got) != _offset_bits(want.curve, want.max_deviation)):
+                return False
+    except Exception:  # noqa: BLE001 -- an SDK that cannot be checked is not qualified
+        return False
+    return True
+
+
+def _offset_binding(reference):
+    global _offset_state
+    signature = (os.environ.get(_ENV) or "<packaged>", _here(), id(r3))
+    state = _offset_state
+    if state is not None and state[0] == signature:
+        return state[1]
+    with _lock:
+        state = _offset_state
+        if state is not None and state[0] == signature:
+            return state[1]
+        fn, text = None, "offset fit export unavailable; offsets use the Python route"
+        if signature[1] not in OFFSET_QUALIFIED_PLATFORMS:
+            text = "not qualified on {}/{}; offsets use the Python route".format(*signature[1])
+        else:
+            explicit = os.environ.get(_ENV)
+            path = (Path(explicit).expanduser() if explicit else
+                    Path(__file__).resolve().parent / "native" / _library_name())
+            try:
+                fn = ctypes.CDLL(str(path)).narwhal_pure_core_offset_fit
+                fn.argtypes = [ctypes.c_char_p, ctypes.c_size_t, ctypes.c_double, _D,
+                               ctypes.c_double, _D, ctypes.c_size_t, _D, ctypes.c_size_t,
+                               ctypes.POINTER(ctypes.c_uint64), _D]
+                fn.restype = ctypes.c_int32
+            except (AttributeError, OSError):
+                fn = None
+            if fn is not None and not _offset_parity(fn, reference):
+                fn = None
+                text = (f"rhino3dm {getattr(r3, '__version__', '?')} differs from the Rust "
+                        "offset fit on the witness curves; offsets use the Python route")
+            elif fn is not None:
+                text = "qualified"
+        _offset_state = signature, fn, text
+        return fn
+
+
+def offset_capability(reference):
+    """``"qualified"`` when smooth offsets are fitted in Rust, otherwise the reason.
+    `reference` is the Python route the one-time parity check compares with."""
+    _offset_binding(reference)
+    return _offset_state[2]
+
+
+def offset_fit(curve, distance, n, tolerance, reference):
+    """`offset._compact_offset` for a smooth `NurbsCurve` through Rust: ``(fit, deviation)``,
+    ``()`` where it returns None, or None where `reference` (the Python route) must decide."""
+    global _native_offset_calls
+    if not isinstance(curve, r3.NurbsCurve):
+        return None
+    fn = _offset_binding(reference)
+    if fn is None:
+        return None
+    try:
+        got = _offset_call(fn, curve, distance, n, tolerance)
+    except Exception:  # noqa: BLE001 -- the Python route decides
+        return None
+    if got is not None:
+        _native_offset_calls += 1
+    return got
