@@ -141,6 +141,7 @@ def check_pure_consumers():
                        ROOT / 'narwhal3d/native' / native_nearest._library_name())
         # Presence is mandatory on every package; numerical activation still needs SDK parity.
         getattr(ctypes.CDLL(str(library)), 'narwhal_pure_core_polyline_samples')
+        getattr(ctypes.CDLL(str(library)), 'narwhal_pure_core_polycurve_samples')
         # Scalar: a tiny caller-owned NURBS, searched through the required native
         # scalar export (narwhal_pure_core_nearest_on_nurbs).
         scalar = native_nearest.PackedCurve(2, [0., 1.],

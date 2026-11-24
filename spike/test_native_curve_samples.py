@@ -11,7 +11,8 @@ Parity is exact: on a `NurbsCurve`, `bridge.sample_curve_xyz` returns the points
 of openNURBS's `ON_NurbsCurve::Evaluate` (`native/pure_core/src/nearest.rs`) at the
 parameters Python computes, `T0 + (T1 - T0) * i / n`, on the curve's own `Domain`.
 A `LineCurve` takes the Rust line route where it is qualified (spike/test_line_samples.py),
-with the same bits. Other curves (a polyline, arc or poly curve) keep `sample_curve`.
+with the same bits, and so do a `PolylineCurve` (spike/test_polyline_samples.py) and a
+`PolyCurve` (spike/test_polycurve_samples.py). Other curves keep `sample_curve`.
 """
 import importlib.util
 import math
@@ -94,9 +95,6 @@ NURBS = {
     "closed InterpCrv": interp.interpolate_closed_curve(
         [(5 * math.cos(k), 4 * math.sin(k), 0.0) for k in (0.0, 1.1, 2.0, 3.3, 4.1, 5.2)]),
 }
-OTHERS = {
-    "poly curve": polycurve(),
-}
 POLYLINES = {
     "polyline curve": r3.PolylineCurve([r3.Point3d(0, 0, 0), r3.Point3d(3, 4, 0), r3.Point3d(6, 0, 0)]),
     "degree-1 control curve (a PolylineCurve)": cpc([(0, 0, 0), (2, 4, 0), (5, -1, 0)], 1),
@@ -109,10 +107,12 @@ for name, curve in NURBS.items():
     results = [(n, native.sample(curve, n), python_samples(curve, n)) for n in (1, 2, 7, 48, 217)]
     differ = [n for n, got, want in results if got != want]
     check(not differ, f"{name}: {len(results)} sample counts, differing at {differ or 'none'}")
-for name, curve in OTHERS.items():
-    got = bridge.sample_curve_xyz(curve, 12)
-    check(native.sample(curve, 12) is None and got == python_samples(curve, 12),
-          f"{name} (not a NurbsCurve) keeps sample_curve")
+joined = polycurve()
+check(bridge.sample_curve_xyz(joined, 12) == python_samples(joined, 12)
+      and (native.sample(joined, 12) is not None)
+      == (native.polycurve_sample_capability() == "qualified"),
+      f"poly curve: sample_curve's bits, through Rust only where qualified "
+      f"({native.polycurve_sample_capability()})")
 for name, curve in POLYLINES.items():
     check(type(curve) is r3.PolylineCurve
           and bridge.sample_curve_xyz(curve, 12) == python_samples(curve, 12)

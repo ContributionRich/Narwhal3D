@@ -232,6 +232,8 @@ def _():
         "spike/test_line_samples.py",
         "spike/test_pure_core_polyline_samples_gate.py",
         "spike/test_polyline_samples.py",
+        "spike/test_pure_core_polycurve_samples_gate.py",
+        "spike/test_polycurve_samples.py",
         "spike/test_native_coil_preview.py",
         "spike/test_preview_curve_native.py",
         "spike/test_native_tessellate.py",

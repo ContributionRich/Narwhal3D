@@ -352,7 +352,8 @@ def execute_probe(mutant="", code=None):
     return json.loads(output.getvalue())
 
 
-POLYLINE_EXPORTS = ("narwhal_pure_core_curve_curve_record_hits", "narwhal_pure_core_nearest_on_polyline", "narwhal_pure_core_polyline_samples")
+POLYLINE_EXPORTS = ("narwhal_pure_core_curve_curve_record_hits", "narwhal_pure_core_nearest_on_polyline", "narwhal_pure_core_polyline_samples",
+                    "narwhal_pure_core_polycurve_samples")
 
 
 def pe_fixture(*, parser_abi=2, missing="", svg_abi=14, alias_abi=1, dxf_abi=2, reader_abi=1):
@@ -1372,7 +1373,8 @@ class RetirementPackageTests(unittest.TestCase):
                         patch.object(module,"probe_pure_core_polyline_nearest",return_value={}), \
                         patch.object(module,"probe_pure_core_nurbs_record",return_value={}), \
                         patch.object(module,"probe_pure_core_line_samples",return_value={}), \
-                        patch.object(module,"probe_pure_core_polyline_samples",return_value={}):
+                        patch.object(module,"probe_pure_core_polyline_samples",return_value={}), \
+                        patch.object(module,"probe_pure_core_polycurve_samples",return_value={}):
                     namespace[method](self)
             else:
                 namespace[method](self)

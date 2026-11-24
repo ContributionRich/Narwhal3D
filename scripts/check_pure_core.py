@@ -121,6 +121,8 @@ PURE_CORE_PYTESTS = (
     "spike/test_line_samples.py",
     "spike/test_pure_core_polyline_samples_gate.py",
     "spike/test_polyline_samples.py",
+    "spike/test_pure_core_polycurve_samples_gate.py",
+    "spike/test_polycurve_samples.py",
     "spike/test_native_coil_preview.py",
     "spike/test_preview_curve_native.py",
     "spike/test_preview24_boundaries.py",
@@ -1855,6 +1857,137 @@ def probe_pure_core_polyline_samples(path: Path, python: Path | str = sys.execut
     return identity
 
 
+
+# PolyCurve samples (native_nearest.sample for a PolyCurve): ON_PolyCurve::Evaluate over its
+# line, polyline, NURBS and nested polycurve segments at sample_curve's parameters, read from
+# the curve's Encode() record. A library without it loses only the Rust route: polycurves
+# then call PointAt.
+PURE_CORE_POLYCURVE_SAMPLES_EXPORT = "narwhal_pure_core_polycurve_samples"
+# (sys.platform, machine) pairs; narwhal3d/native_nearest.py
+# POLYCURVE_SAMPLES_QUALIFIED_PLATFORMS must carry the same set
+# (spike/test_pure_core_polycurve_samples_gate.py). Rust never fuses a multiply-add, but a
+# rhino3dm build that does rounds a polycurve's PointAt differently, so a pair joins only once
+# its artifact is qualified here. At run time the route also requires the loaded rhino3dm to
+# pass native_nearest's polycurve sample parity check.
+PURE_CORE_POLYCURVE_SAMPLES_QUALIFIED_PLATFORMS = frozenset({("linux", "x86_64")})
+# The digest pins the exact bits of 129 and 8 samples on native_nearest's first two witness
+# polycurves (a line, a polyline, a cubic and a rational quadratic on a shifted domain; a
+# reversed polycurve nesting it); it is also the digest of rhino3dm 8.35.0's own PointAt at
+# the same parameters.
+PURE_CORE_POLYCURVE_SAMPLES_IDENTITY = {
+    "export": PURE_CORE_POLYCURVE_SAMPLES_EXPORT,
+    "unrecognised_record_status": 1, "zero_intervals_status": -2, "huge_request_status": -2,
+    "small_buffer_status": -3, "null_record_status": -1, "refusals_write": False,
+    "samples_sha256": "78a35f571627aefe38991bba4f30944ea537f9b58dac1b04f4caad5d1be8a819",
+}
+PURE_CORE_POLYCURVE_SAMPLES_PROBE = r'''
+import ctypes as c, hashlib, json, struct, sys
+fn = c.CDLL(sys.argv[1]).narwhal_pure_core_polycurve_samples
+D, Z = c.POINTER(c.c_double), c.c_size_t
+fn.argtypes = [c.c_char_p, Z, Z, D, Z]
+fn.restype = c.c_int32
+# native_nearest._polycurve_sample_witnesses()[:2] as rhino3dm 8.35.0 encodes them.
+joined = bytes.fromhex(
+    "fa7f02006b04000000000000fbff02001400000000000000e0d4d74e47e9d311bfe50010830122f0aaf5"
+    "2a88fcff0200330400000000000010040000000000000000000000000000000000f03f00000000000000"
+    "000000000000000000000000000000f0bf00000000000000000000000000000000050000001e12839b7e"
+    "7448c02af0bd7b2f3732c0c87a4c915b7e0cc0ea4e21511fd73d4098b77effca5c4140fa7f0200810000"
+    "0000000000fbff02001400000000000000dbd4d74e47e9d311bfe50010830122f0f49be923fcff020049"
+    "000000000000001086dcc1bd43630440bccca5976ccc0f40ccdde69773d6d33fab1c4496fe340bc0a0d2"
+    "9a41c70609402473af33fa50eabfce0dfb1c186601c0ea9ef1dead6f10400300000039765c61ff7f0280"
+    "0000000000000000fa7f0200c900000000000000fbff02001400000000000000e6d4d74e47e9d311bfe5"
+    "0010830122f04e9cbbdbfcff020091000000000000001004000000ab1c4496fe340bc0a0d29a41c70609"
+    "402473af33fa50eabf78b2b4e11f2109c00c04962f73b7f83fcc5631272c46ebbfb01de5f5e127e8bf4f"
+    "35ba5c404402c010889b829de9e8bf18eb87008f4e0840821d942c247201c0d069b3952f11b1bf040000"
+    "000000000000000000000000000000f03f0000000000000040000000000000084003000000dc462096ff"
+    "7f02800000000000000000fa7f02003e01000000000000fbff02001400000000000000ddd4d74e47e9d3"
+    "11bfe50010830122f010f27870fcff020006010000000000001103000000000000000400000005000000"
+    "0000000000000000000000000000f03f00000000000000000000000000000000000000000000f0bf0000"
+    "000000000000000000000000000007000000b8d3b8fc52d304c0b8d3b8fc52d304c0b8d3b8fc52d304c0"
+    "14a4dadef51bea3fe11213f6a6f01040e11213f6a6f01040e11213f6a6f010400500000018eb87008f4e"
+    "0840821d942c247201c0d069b3952f11b1bf54f3193746bbfbbf64b44d2e6cf41140b4602d0a6f83e03f"
+    "7af3a47f98fb11c0ccd4a3c640c909400ca085bc0273e03f70262d652f3b134038feb65fdb5308c0ce45"
+    "ce8db51be93f8077a921d62ccdbfe4aca81ad5df0ec06ca52585a187d13f0000cc5219ff7f0280000000"
+    "0000000000fa7f02000e01000000000000fbff02001400000000000000ddd4d74e47e9d311bfe5001083"
+    "0122f010f27870fcff0200d6000000000000001103000000010000000300000003000000000000000000"
+    "0000000000000000f03f00000000000000000000000000000000000000000000f0bf0000000000000000"
+    "00000000000000000400000000000000000000000000000000000000000000000000f03f000000000000"
+    "f03f030000008077a921d62ccdbfe4aca81ad5df0ec06ca52585a187d13f000000000000f03f3852ca46"
+    "5ccc01c09b9dbd7c3b5a1a40a636b964df9ce03f2aa192fbd758fb3f800f43a8abe1e9bf149879d23ae6"
+    "014010a4c8607026b33f000000000000f03f00f21abdefff7f028000000000000000002614626aff7f02"
+    "800000000000000000")
+nested = bytes.fromhex(
+    "fa7f02009905000000000000fbff02001400000000000000e0d4d74e47e9d311bfe50010830122f0aaf5"
+    "2a88fcff0200610500000000000010020000000000000000000000000000000000f03f00000000000000"
+    "000000000000000000000000000000f0bf000000000000000000000000000000000300000068479a1368"
+    "0757c06914cb301af620c00000000000000080fa7f02006b04000000000000fbff020014000000000000"
+    "00e0d4d74e47e9d311bfe50010830122f0aaf52a88fcff02003304000000000000100400000000000000"
+    "00000000000000000000f03f00000000000000000000000000000000000000000000f0bf000000000000"
+    "000000000000000000000500000098b77effca5c41c0ea4e21511fd73dc0c87a4c915b7e0c402af0bd7b"
+    "2f3732401e12839b7e744840fa7f02000e01000000000000fbff02001400000000000000ddd4d74e47e9"
+    "d311bfe50010830122f010f27870fcff0200d60000000000000011030000000100000003000000030000"
+    "000000000000000000000000000000f03f00000000000000000000000000000000000000000000f0bf00"
+    "00000000000000000000000000000004000000000000000000f0bf000000000000f0bf00000000000000"
+    "80000000000000008003000000800f43a8abe1e9bf149879d23ae6014010a4c8607026b33f0000000000"
+    "00f03f3852ca465ccc01c09b9dbd7c3b5a1a40a636b964df9ce03f2aa192fbd758fb3f8077a921d62ccd"
+    "bfe4aca81ad5df0ec06ca52585a187d13f000000000000f03f0069e007e2ff7f02800000000000000000"
+    "fa7f02003e01000000000000fbff02001400000000000000ddd4d74e47e9d311bfe50010830122f010f2"
+    "7870fcff0200060100000000000011030000000000000004000000050000000000000000000000000000"
+    "000000f03f00000000000000000000000000000000000000000000f0bf00000000000000000000000000"
+    "00000007000000e11213f6a6f010c0e11213f6a6f010c0e11213f6a6f010c014a4dadef51beabfb8d3b8"
+    "fc52d30440b8d3b8fc52d30440b8d3b8fc52d30440050000008077a921d62ccdbfe4aca81ad5df0ec06c"
+    "a52585a187d13f70262d652f3b134038feb65fdb5308c0ce45ce8db51be93f7af3a47f98fb11c0ccd4a3"
+    "c640c909400ca085bc0273e03f54f3193746bbfbbf64b44d2e6cf41140b4602d0a6f83e03f18eb87008f"
+    "4e0840821d942c247201c0d069b3952f11b1bf008b5652a7ff7f02800000000000000000fa7f0200c900"
+    "000000000000fbff02001400000000000000e6d4d74e47e9d311bfe50010830122f04e9cbbdbfcff0200"
+    "9100000000000000100400000018eb87008f4e0840821d942c247201c0d069b3952f11b1bfb01de5f5e1"
+    "27e8bf4f35ba5c404402c010889b829de9e8bf78b2b4e11f2109c00c04962f73b7f83fcc5631272c46eb"
+    "bfab1c4496fe340bc0a0d29a41c70609402473af33fa50eabf0400000000000000000008c00000000000"
+    "0000c0000000000000f0bf000000000000008003000000a16e9e80ff7f02800000000000000000fa7f02"
+    "008100000000000000fbff02001400000000000000dbd4d74e47e9d311bfe50010830122f0f49be923fc"
+    "ff0200490000000000000010ab1c4496fe340bc0a0d29a41c70609402473af33fa50eabf86dcc1bd4363"
+    "0440bccca5976ccc0f40ccdde69773d6d33fea9ef1dead6f10c0ce0dfb1c1866014003000000e4712bd2"
+    "ff7f028000000000000000004c1754e5ff7f02800000000000000000fa7f02008100000000000000fbff"
+    "02001400000000000000dbd4d74e47e9d311bfe50010830122f0f49be923fcff02004900000000000000"
+    "1086dcc1bd43630440bccca5976ccc0f40ccdde69773d6d33f0cb871ad07dc0dc030a8841a7132fbbf18"
+    "812c3056e6cabf6914cb301af620c00000000000000080030000001cfa6e9bff7f028000000000000000"
+    "00b3616b42ff7f02800000000000000000")
+bits = b""
+for record in (joined, nested):
+    for n in (128, 7):
+        out = (c.c_double * (3 * (n + 1)))()
+        if fn(record, len(record), n, out, len(out)) != 0:
+            raise RuntimeError("the export refused a witness polycurve")
+        bits += struct.pack(f"<{len(out)}d", *out)
+out = (c.c_double * 30)(*[-9.0] * 30)
+statuses = {
+    "unrecognised_record_status": fn(b"not a record", 12, 4, out, 30),
+    "zero_intervals_status": fn(joined, len(joined), 0, out, 30),
+    "huge_request_status": fn(joined, len(joined), 2**20 + 1, out, 30),
+    "small_buffer_status": fn(joined, len(joined), 9, out, 29),
+    "null_record_status": fn(None, len(joined), 4, out, 30),
+}
+print(json.dumps({"export": "narwhal_pure_core_polycurve_samples", **statuses,
+                  "refusals_write": list(out) != [-9.0] * 30,
+                  "samples_sha256": hashlib.sha256(bits).hexdigest()}, sort_keys=True))
+'''
+
+
+def probe_pure_core_polycurve_samples(path: Path, python: Path | str = sys.executable, *, env=None) -> dict:
+    """Require the polycurve samples export to give the pinned witness bits and refusals."""
+    if not path.is_file() or path.is_symlink():
+        raise ValueError(f"missing regular pure-core library: {path}")
+    try:
+        completed = subprocess.run(
+            [str(python), "-I", "-B", "-c", PURE_CORE_POLYCURVE_SAMPLES_PROBE, str(path.resolve())],
+            env=env, text=True, capture_output=True, check=True, timeout=30)
+        identity = json.loads(completed.stdout)
+    except (OSError, subprocess.SubprocessError, ValueError) as error:
+        raise ValueError(f"cannot verify pure-core polycurve samples export: {getattr(error, 'stderr', '') or error}") from error
+    if identity != PURE_CORE_POLYCURVE_SAMPLES_IDENTITY:
+        raise ValueError(f"pure-core polycurve samples evidence differs: {identity!r}")
+    return identity
+
 # Additive unit-aware SVG export (vector_export.write_svg(unit=...)): ABI 1 and the legacy
 # narwhal_pure_core_svg_encode_into are unchanged, so a library without it loses only the
 # native route for unit SVGs. Formatting is IEEE division + Rust's exact decimal printing, no
@@ -2285,6 +2418,16 @@ def step_polyline_samples(lib_path: Path) -> dict[str, object]:
             "command": "ctypes polyline samples probe"}
 
 
+def step_polycurve_samples(lib_path: Path) -> dict[str, object]:
+    """Qualify the polycurve samples export; required for the library to carry it."""
+    try:
+        identity = probe_pure_core_polycurve_samples(lib_path)
+    except ValueError as exc:
+        raise GateError(str(exc)) from exc
+    return {"status": "ok", "polycurve_samples": identity,
+            "command": "ctypes polycurve samples probe"}
+
+
 def step_svg_unit(lib_path: Path) -> dict[str, object]:
     """Qualify the unit-aware SVG export; required for the library to carry it."""
     try:
@@ -2377,6 +2520,7 @@ def run_gate(crate_rel: str) -> dict[str, object]:
     steps["nurbs_record"] = step_nurbs_record(lib)
     steps["line_samples"] = step_line_samples(lib)
     steps["polyline_samples"] = step_polyline_samples(lib)
+    steps["polycurve_samples"] = step_polycurve_samples(lib)
     steps["svg_unit"] = step_svg_unit(lib)
     steps["adapter"] = step_adapter(crate, lib)
     steps["windows_check"] = step_windows_check(crate)

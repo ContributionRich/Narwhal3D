@@ -34,8 +34,9 @@ def sample_curve_xyz(curve, n: int = 64):
     (`native_nearest.sample`), bit-identical to `PointAt`. MEASURED (i7-9700K): one
     `PointAt` costs about 9 us, so a 10-point InterpCrv preview's 217 samples took
     1.9 ms per redraw, 0.17 ms through Rust. So is a `LineCurve` where the loaded
-    rhino3dm passes the line parity check (`native_nearest.line_capability`), and a
-    `PolylineCurve` where it passes the polyline one (`polyline_sample_capability`). Other
+    rhino3dm passes the line parity check (`native_nearest.line_capability`), a
+    `PolylineCurve` where it passes the polyline one (`polyline_sample_capability`), and a
+    `PolyCurve` where it passes the polycurve one (`polycurve_sample_capability`). Other
     curves keep `sample_curve`.
     """
     try:
@@ -7943,7 +7944,8 @@ def curve_snap_target(curve, name="", samples=SNAP_SAMPLES):
     # the same parameters. MEASURED (i7-9700K, spike/test_native_curve_samples.py): a
     # circle's target took 0.85 ms through PointAt, 0.19 ms through Rust. A LineCurve
     # takes Rust too where it is qualified (0.82 ms -> 0.05 ms), equally bit-identical,
-    # and so does a PolylineCurve (a Rectangle's whole target 0.89 ms -> 0.11 ms).
+    # and so does a PolylineCurve (a Rectangle's whole target 0.89 ms -> 0.11 ms) and a
+    # PolyCurve (a joined line, polyline and cubic 0.86 ms -> 0.09 ms).
     pts = native_nearest.sample(curve, samples)
     if pts is None:
         try:
