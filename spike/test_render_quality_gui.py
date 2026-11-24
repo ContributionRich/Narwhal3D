@@ -11,7 +11,9 @@ Mutation proof, same command with one environment variable prepended:
   NARWHAL_RENDER_QUALITY_MUTATION=flat-preview
 Each must exit 1 with failing PIXEL checks, then the normal run must exit 0.
 flat-preview changes only the actual preview callback's submission path; completed
-line AA stays enabled. Expected normal count: 19 grid + 19 line + 9 preview = 47.
+line AA stays enabled. Expected normal count: 32 grid + 19 line + 9 preview = 60.
+Input calibration proof: NARWHAL_RENDER_QUALITY_MUTATION=saturated-witness must
+fail the raw-witness prerequisites; it changes only input pitches, not rendering.
 Mutations are process-local patches restored in finally; no production file edits.
 
 Artifacts: render_quality_verdict.txt, render_quality.json, render_quality_grid.png.
@@ -410,7 +412,21 @@ def run_checks():
 
     try:
         yy, xx = np.mgrid[:H, :W] + 0.5
-        for pitch in (0.30, 0.57, 0.73, 0.89):
+        dense_pitches = (0.30, 0.57, 0.73, 0.89)
+        # DERIVED: GPU_line_width scales its nominal-one request by PIXELSIZE.
+        # On measured two-pixel contexts the old pitches fill even the neutral
+        # major gaps. Keep those four suppression cases and add fixed 1<pitch<2
+        # witnesses: adjacent minors leave gaps at the neutral majors, while
+        # densityFade stays exactly zero (footprint/period >= 0.5). The existing
+        # eighth-pixel pans cross the gaps; require mixed pixels in EVERY phase.
+        alias_pitches = (9 / 8, 11 / 8, 7 / 4)
+        if MODE == "saturated-witness":
+            alias_pitches = (0.57, 0.73, 0.89)  # Input mutant, never a renderer patch.
+        check(len(dense_pitches) == 4 and len(alias_pitches) == 3,
+              "grid controls retain four original dense cases and three alias witnesses")
+        RESULT["measurements"]["grid_controls"] = []
+        for pitch, alias_witness in ([(p, False) for p in dense_pitches]
+                                     + [(p, True) for p in alias_pitches]):
             # Neutral majors isolate the vanished subpixel minor lattice. Unlike
             # a blank-render test, independent coarse/major fixtures MUST draw ink.
             raw = np.stack([render_grid(raw_grid, pitch, p, major=WHITE) for p in PHASES])
@@ -424,17 +440,27 @@ def run_checks():
             mean_drift = float(np.ptp(f.mean(axis=1)))
             check(raw_mean > 0.1, f'{pitch}: raw dense-grid control actually inks pixels',
                   raw_mean=raw_mean)
-            # At .30 every raster row/column may be covered; do not pretend that
-            # saturated control measures temporal aliasing. The other pitches must.
-            if pitch > 0.5:
+            if alias_witness:
+                check(bool(np.all((r == 1.0).any(axis=1))
+                           and np.all((r == 0.0).any(axis=1))),
+                      f"{pitch}: raw alias witness contains ink and gaps in every phase",
+                      black_pixels=(r == 1.0).sum(axis=1).tolist(),
+                      white_pixels=(r == 0.0).sum(axis=1).tolist())
                 check(raw_var > 0.001, f'{pitch}: raw control has measurable temporal aliasing',
                       raw_variance=raw_var)
+            if pitch > 0.5:
+                # Retain the original strict comparison for all old dense cases,
+                # including zero-variance controls; add it for the new witnesses.
                 check(filtered_var <= 0.20 * raw_var + 1e-7,
                       f'{pitch}: filtered temporal variance <= 20% of raw',
                       filtered_variance=filtered_var, raw_variance=raw_var)
             check(filtered_mean < 0.002 and mean_drift < 0.001,
                   f'{pitch}: subpixel minors suppressed with stable coverage',
                   filtered_mean=filtered_mean, mean_drift=mean_drift)
+            RESULT["measurements"]["grid_controls"].append(dict(
+                pitch=pitch, alias_witness=alias_witness, raw_mean=raw_mean,
+                raw_variance=raw_var, filtered_variance=filtered_var,
+                filtered_mean=filtered_mean, mean_drift=mean_drift))
             rows.append([raw[0], filtered[0], raw.std(axis=0) * 4, filtered.std(axis=0) * 4])
             yield 0.01
         save_grid_png(rows)
@@ -569,7 +595,7 @@ if __name__ == '__main__':
     (OUT / 'render_quality.json').write_text(json.dumps(RESULT), encoding='utf-8')
     if bpy.app.background or '--enable-event-simulate' not in sys.argv:
         finish(1, 'real Blender GUI with bootstrap and --enable-event-simulate required')
-    if MODE not in ('', 'raw-grid', 'flat-lines', 'flat-preview'):
+    if MODE not in ('', 'raw-grid', 'flat-lines', 'flat-preview', 'saturated-witness'):
         finish(1, f'unknown mutation mode: {MODE!r}')
     threading.Thread(target=watchdog, daemon=True).start()
     RUNNER = run()

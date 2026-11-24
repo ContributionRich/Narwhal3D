@@ -11,7 +11,7 @@ policies, and the AppState integration. Historical fallback/handover receipts in
 those documents do not override the current mandatory-native application policy.
 Editor ABI 1 / State88 and the unqualified editor-layout paths below are unchanged.
 
-The source/package contract requires all 18 editor/popup/transcript exports.
+The source/package contract requires all 20 editor/popup/transcript/content exports.
 Source integration, ABI checks and focused receipts are not final installed-runtime,
 cross-platform GUI or release acceptance. Those require matching source inventories
 and their own qualification. Editing this README changes the source inventory and
@@ -208,3 +208,21 @@ only redundant numeric acceptance/data was retired there. Original absolute
 seven-place float criteria, source/provenance hashes and hard corpus guards remain.
 The existing source gate requires these Rust test targets and fixture inputs.
 No production UI ABI or exports change.
+
+## Required authored UI content
+
+Content/menu ownership adds `narwhal_ui_content_abi` and
+`narwhal_ui_content_read` (content ABI1): **20 total exports**, retaining all
+18 editor/popup/transcript exports and their existing ABI/lifetime contracts.
+Four data facades now transport Rust-owned authored DATA and menu expansion with
+minimal ctypes glue. Independently frozen typed pre-conversion fixtures preserve
+macro/icon variants, ordering, casefold behavior and six registry cases. Missing
+or old libraries fail closed; no Python content/formula fallback exists. Startup
+probes require content ABI and actual bounded typed projection.
+
+This is not per-frame numeric shell transport. Numeric shell changes and unrelated
+source tooling are not active. Interleaved NVIDIA frame-time ranges overlapped
+(original mean 8.802 ms, candidate 8.956 ms); no startup speedup or broad performance
+parity is claimed. Safety admission remains required. Linux host and portable
+qualification are separate; no new actual Windows/MSVC or macOS qualification is
+implied by source/package contract checks.

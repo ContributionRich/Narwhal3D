@@ -3,7 +3,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Prefer the patched runtime; a source checkout uses the bootstrapped official runtime.
-RUNTIME_ROOT="$ROOT/tools/blender-patched"
+RUNTIME_ROOT="${NARWHAL_RUNTIME_ROOT:-$ROOT/tools/blender-patched}"
 if [[ ! -x "$RUNTIME_ROOT/blender" || ! -x "$RUNTIME_ROOT/5.2/python/bin/python3.13" ]]; then
     RUNTIME_ROOT="$ROOT/tools/blender-5.2.2-linux-x64"
 fi
@@ -73,6 +73,17 @@ run "packaging: bootstrap" scripts/bootstrap_dev_linux.sh --self-check
 run "development setup: runtime, headers and pinned inputs" "$PYTHON" -B spike/test_dev_setup.py
 run "memory bound: systemd user scope or RLIMIT_AS" "$PYTHON" -B spike/test_memory_bound.py
 run "packaging: Blender build" scripts/build_blender_linux.sh --self-check
+PRECLOSE_TEST_DIR="${TMPDIR:-/var/tmp}/narwhal-preclose-$$"
+mkdir -p "$PRECLOSE_TEST_DIR"
+run "Rust preclose patcher compilation" rustc +1.95.0 --edition=2021 --test \
+    blender_patches/apply_preclose.rs -o "$PRECLOSE_TEST_DIR/patcher"
+run "Rust preclose patcher tests" "$PRECLOSE_TEST_DIR/patcher"
+if [[ -n "${NARWHAL_BLENDER_SOURCE:-}" ]]; then
+    run "Rust actual native preclose contract compilation" rustc +1.95.0 --edition=2021 --test \
+        spike/test_preclose.rs -o "$PRECLOSE_TEST_DIR/native-contract"
+    run "Native preclose default/approval and mutation contracts" env \
+        NARWHAL_SHUTDOWN_ARTIFACTS="$PRECLOSE_TEST_DIR/native-results" "$PRECLOSE_TEST_DIR/native-contract"
+fi
 run "packaging: macOS source build" "$PYTHON" spike/test_macos_source.py
 run "packaging: macOS native build contracts" "$PYTHON" scripts/test_macos_runtime.py
 run "native presentation: OpenGL and Metal-only guards" "$PYTHON" scripts/test_present_backends.py
@@ -143,6 +154,12 @@ fi
 for suite in abi model consumers stress; do
     run "Rust transcript $suite" "$PYTHON" -B "spike/test_ui_transcript_$suite.py"
 done
+run "Rust UI authored content and registry equivalence" cargo +1.95.0 test \
+    --manifest-path native/ui_core/Cargo.toml --target-dir "$UI_CORE_TARGET" --locked --offline \
+    --test content13_host -- --ignored --nocapture
+run "Rust UI content producer mutations" cargo +1.95.0 test \
+    --manifest-path native/ui_core/Cargo.toml --target-dir "$UI_CORE_TARGET" --locked --offline \
+    --test content13_mutations -- --ignored --nocapture
 run "desktop native startup/preflight" "$PYTHON" -B spike/test_desktop_native_startup.py
 run "native admission and cache ownership" "$PYTHON" -B spike/test_native_admission_owned.py
 run "AI generic exit cleanup" "$PYTHON" -B spike/test_ai_v8_exit.py
@@ -386,6 +403,7 @@ PURE_SUITES=(
     spike/test_offset_fit_native.py
     spike/test_line_samples.py
     spike/test_polyline_samples.py
+    spike/test_polycurve_samples.py
     spike/test_offset_compact.py
     spike/test_offset_report127.py
     spike/test_report121_124.py
@@ -532,6 +550,7 @@ PURE_SUITES=(
     spike/test_pure_core_nurbs_record_gate.py
     spike/test_pure_core_line_samples_gate.py
     spike/test_pure_core_polyline_samples_gate.py
+    spike/test_pure_core_polycurve_samples_gate.py
     spike/test_native_coil_preview.py
     spike/test_preview_curve_native.py
     spike/test_preview24_boundaries.py
@@ -573,6 +592,13 @@ BLENDER_SUITES=(
     spike/test_library_geometry.py
     spike/audit_representation.py
     spike/test_boolean.py
+    spike/test_boolean_multiple.py
+    spike/test_report141_snap.py
+    spike/test_curve_display_copy_explode.py
+    spike/test_brep_picker_source_cache.py
+    spike/test_properties_source_cache.py
+    spike/test_polycurve_joint_delete.py
+    spike/test_responsive_exit.py
     spike/test_tessellate.py
     spike/test_extrusion_display_mesh.py
     spike/test_trim.py
@@ -602,6 +628,7 @@ BLENDER_SUITES=(
     spike/test_file_commands.py
     spike/test_background_load.py
     spike/test_import.py
+    spike/test_import_narwhal.py
     spike/test_export_cmd.py
     spike/test_print_cmd.py
     spike/test_print_active_view.py
@@ -655,6 +682,15 @@ done
 
 if [[ -n "${DISPLAY:-}" || -n "${WAYLAND_DISPLAY:-}" ]]; then
     run "UI screenshot suite" ./uishot.sh
+    if [[ -n "${NARWHAL_GUI_CANDIDATE:-}" ]]; then
+        run "Rust isolated native-close GUI qualifier build" cargo +1.95.0 build \
+            --manifest-path native/application_core/Cargo.toml --release --locked --offline \
+            --example qualify_preclose_gui --target-dir "$PRECLOSE_TEST_DIR/application"
+        run "Actual native-close Save/Cancel/updater and restored mutations" env \
+            NARWHAL_APPLICATION_CORE="${NARWHAL_GUI_APPLICATION_CORE:-$NARWHAL_APPLICATION_CORE}" \
+            NARWHAL_HISTORY_CORE="${NARWHAL_GUI_APPLICATION_CORE:-$NARWHAL_APPLICATION_CORE}" \
+            "$PRECLOSE_TEST_DIR/application/release/examples/qualify_preclose_gui"
+    fi
     run "exact Join command publication mutations" "$PYTHON" -B spike/test_join_surface_command_mutation.py --blender "$BLENDER"
     run "v4 real UI interactions" bash spike/v4_live_gui.sh
     # These drivers acquire their own GUI (and sometimes heavy-build) locks.

@@ -31,6 +31,10 @@
 //! point array (an int count and 3 doubles per point), the parameter array (an int count
 //! and the doubles) and `m_dim`. Only a 3-D curve with as many parameters as points is
 //! recognised.
+//!
+//! `read_line` and `read_polycurve` read an `ON_LineCurve` and an `ON_PolyCurve` record in
+//! the same framing, for the PolyCurve sampler (`line_samples`). A polycurve record holds
+//! each segment as a whole nested record, which the segment's own reader checks.
 
 use std::mem::align_of;
 
@@ -50,6 +54,14 @@ const NURBS_CURVE_UUID: [u8; 16] = [
 /// 4ED7D4E6-E947-11d3-BFE5-0010830122F0, as the archive stores it.
 const POLYLINE_CURVE_UUID: [u8; 16] = [
     0xe6, 0xd4, 0xd7, 0x4e, 0x47, 0xe9, 0xd3, 0x11, 0xbf, 0xe5, 0x00, 0x10, 0x83, 0x01, 0x22, 0xf0,
+];
+/// 4ED7D4DB-E947-11d3-BFE5-0010830122F0, as the archive stores it.
+const LINE_CURVE_UUID: [u8; 16] = [
+    0xdb, 0xd4, 0xd7, 0x4e, 0x47, 0xe9, 0xd3, 0x11, 0xbf, 0xe5, 0x00, 0x10, 0x83, 0x01, 0x22, 0xf0,
+];
+/// 4ED7D4E0-E947-11d3-BFE5-0010830122F0, as the archive stores it.
+const POLY_CURVE_UUID: [u8; 16] = [
+    0xe0, 0xd4, 0xd7, 0x4e, 0x47, 0xe9, 0xd3, 0x11, 0xbf, 0xe5, 0x00, 0x10, 0x83, 0x01, 0x22, 0xf0,
 ];
 const HEADER: usize = 12; // uint32 typecode + int64 length
 
@@ -109,7 +121,7 @@ const CRC_TABLE: [u32; 256] = {
 };
 
 /// `ON_CRC32(0, ...)`: zlib's CRC-32.
-fn crc32(data: &[u8]) -> u32 {
+pub(crate) fn crc32(data: &[u8]) -> u32 {
     !data.iter().fold(!0u32, |c, &b| {
         CRC_TABLE[((c ^ b as u32) & 0xFF) as usize] ^ (c >> 8)
     })
@@ -160,9 +172,16 @@ impl<'a> Cursor<'a> {
 
     /// The body of a CRC chunk, `length` bytes ending in the CRC-32 of the rest.
     fn crc_body(&mut self, length: usize) -> Option<&'a [u8]> {
+        let (data, crc) = self.body_and_crc(length)?;
+        (crc32(data) == crc).then_some(data)
+    }
+
+    /// A CRC chunk's body, `length` bytes, split into the data and its stored CRC-32,
+    /// unchecked.
+    fn body_and_crc(&mut self, length: usize) -> Option<(&'a [u8], u32)> {
         let body = self.bytes(length)?;
         let (data, crc) = body.split_at(body.len().checked_sub(4)?);
-        (crc32(data) == u32::from_le_bytes(crc.try_into().ok()?)).then_some(data)
+        Some((data, u32::from_le_bytes(crc.try_into().ok()?)))
     }
 
     fn done(&self) -> bool {
@@ -177,6 +196,13 @@ pub fn read(data: &[u8]) -> Option<Record<'_>> {
 
 /// The checked `TCODE_OPENNURBS_CLASS_DATA` payload of a whole record of class `uuid`.
 fn class_payload<'a>(data: &'a [u8], uuid: &[u8; 16]) -> Option<&'a [u8]> {
+    let (payload, crc) = class_payload_and_crc(data, uuid)?;
+    (crc32(payload) == crc).then_some(payload)
+}
+
+/// The `TCODE_OPENNURBS_CLASS_DATA` payload of a whole record of class `uuid` and the CRC-32
+/// stored after it, which the caller checks.
+fn class_payload_and_crc<'a>(data: &'a [u8], uuid: &[u8; 16]) -> Option<(&'a [u8], u32)> {
     let mut r = Cursor { data, at: 0 };
     if r.chunk(TCODE_CLASS)? != data.len().checked_sub(HEADER)? {
         return None;
@@ -186,7 +212,7 @@ fn class_payload<'a>(data: &'a [u8], uuid: &[u8; 16]) -> Option<&'a [u8]> {
         return None;
     }
     let length = r.chunk(TCODE_CLASS_DATA)?;
-    let payload = r.crc_body(length)?;
+    let payload = r.body_and_crc(length)?;
     if r.chunk(TCODE_CLASS_END)? != 0 || !r.done() {
         return None;
     }
@@ -239,6 +265,100 @@ pub fn read_polyline(data: &[u8]) -> Option<PolylineRecord<'_>> {
         points,
         params,
     })
+}
+
+/// A recognised `ON_LineCurve` record: `m_line` (`from`, then `to`) and `m_t`, bit for bit.
+#[derive(Debug, PartialEq)]
+pub struct LineRecord {
+    pub line: [f64; 6],
+    pub domain: (f64, f64),
+}
+
+/// The line in one encoded `ON_LineCurve` record, or None for anything this does not
+/// recognise. The payload (opennurbs_linecurve.cpp, `ON_LineCurve::Write`) is chunk
+/// version 1.0, `m_line` (6 doubles), `m_t` (2 doubles) and `m_dim`, which must be 3.
+pub fn read_line(data: &[u8]) -> Option<LineRecord> {
+    let mut p = Cursor {
+        data: class_payload(data, &LINE_CURVE_UUID)?,
+        at: 0,
+    };
+    if p.u8()? != 0x10 {
+        return None;
+    }
+    let mut values = [0.0; 8];
+    for v in &mut values {
+        *v = f64::from_le_bytes(p.bytes(8)?.try_into().ok()?);
+    }
+    if p.i32()? != 3 || !p.done() {
+        return None;
+    }
+    Some(LineRecord {
+        line: values[..6].try_into().unwrap(),
+        domain: (values[6], values[7]),
+    })
+}
+
+/// A recognised `ON_PolyCurve` record: `m_t` and each segment's own encoded record.
+#[derive(Debug, PartialEq)]
+pub struct PolyCurveRecord<'a> {
+    params: &'a [u8],
+    pub segments: Vec<&'a [u8]>,
+}
+
+impl PolyCurveRecord<'_> {
+    /// `m_t`, bit for bit: one more value than there are segments.
+    pub(crate) fn params(&self) -> Vec<f64> {
+        self.params
+            .chunks_exact(8)
+            .map(|b| f64::from_le_bytes(b.try_into().unwrap()))
+            .collect()
+    }
+}
+
+/// The polycurve in one encoded `ON_PolyCurve` record, or None for anything this does not
+/// recognise. The payload (opennurbs_polycurve.cpp, `ON_PolyCurve::Write`) is chunk version
+/// 1.0, the segment count, two reserved zeros, a placeholder bounding box, `m_t` (an int
+/// count, one more than the segments, and the doubles) and then each segment as a whole
+/// `WriteObject` record, framed as the outer one. The payload's CRC-32 covers only the bytes
+/// before the segment records. Only the segments' outer chunk headers are checked here; each
+/// segment record goes to its own class's reader.
+pub fn read_polycurve(data: &[u8]) -> Option<PolyCurveRecord<'_>> {
+    let (payload, crc) = class_payload_and_crc(data, &POLY_CURVE_UUID)?;
+    let mut p = Cursor {
+        data: payload,
+        at: 0,
+    };
+    if p.u8()? != 0x10 {
+        return None;
+    }
+    let count = p.count()?;
+    if count == 0 || p.i32()? != 0 || p.i32()? != 0 {
+        return None;
+    }
+    p.bytes(48)?; // the placeholder bounding box
+    if p.count()? != count.checked_add(1)? {
+        return None;
+    }
+    let params = p.bytes((count + 1).checked_mul(8)?)?;
+    // Every segment record takes at least a chunk header, so this bounds the allocation
+    // by the payload rather than by the count it claims.
+    if count > (payload.len() - p.at) / HEADER {
+        return None;
+    }
+    // `UpdateCRC` adds a byte only to the innermost open chunk's CRC, and chunk headers to
+    // none (opennurbs_archive.cpp), so the stored CRC covers the bytes before the segment
+    // records; each segment record carries its own CRCs.
+    if crc32(&payload[..p.at]) != crc {
+        return None;
+    }
+    let mut segments = Vec::with_capacity(count);
+    for _ in 0..count {
+        let start = p.at;
+        let length = p.chunk(TCODE_CLASS)?;
+        p.bytes(length)?;
+        segments.push(&payload[start..p.at]);
+    }
+    p.done().then_some(PolyCurveRecord { params, segments })
 }
 
 /// `ON_NurbsCurve::Write`'s payload, every byte of it.
@@ -333,6 +453,60 @@ pub unsafe extern "C" fn narwhal_pure_core_nurbs_curve_record(
     record.write(out_knots, out_cvs);
     unsafe { std::ptr::copy_nonoverlapping(values.as_ptr(), shape, 4) };
     0
+}
+
+/// A whole `WriteObject` record of class `uuid` around `body`, the class data chunk's bytes
+/// with its CRC-32 already at the end.
+#[cfg(test)]
+pub(crate) fn framed(uuid: &[u8; 16], body: &[u8]) -> Vec<u8> {
+    let chunk = |tcode: u32, bytes: &[u8]| {
+        let mut out = tcode.to_le_bytes().to_vec();
+        out.extend((bytes.len() as i64).to_le_bytes());
+        out.extend(bytes);
+        out
+    };
+    let mut id = uuid.to_vec();
+    id.extend(crc32(uuid).to_le_bytes());
+    let mut inner = chunk(TCODE_CLASS_UUID, &id);
+    inner.extend(chunk(TCODE_CLASS_DATA, body));
+    inner.extend(chunk(TCODE_CLASS_END, &[]));
+    chunk(TCODE_CLASS, &inner)
+}
+
+/// An `ON_LineCurve` record as `ON_LineCurve::Write` and `WriteObject` frame it.
+#[cfg(test)]
+pub(crate) fn line_record(line: &[f64; 6], domain: (f64, f64)) -> Vec<u8> {
+    let mut body = vec![0x10];
+    body.extend(
+        line.iter()
+            .chain([&domain.0, &domain.1])
+            .flat_map(|v| v.to_le_bytes()),
+    );
+    body.extend(3i32.to_le_bytes());
+    body.extend(crc32(&body).to_le_bytes());
+    framed(&LINE_CURVE_UUID, &body)
+}
+
+/// An `ON_PolyCurve` record of `segments` (whole records) on `m_t` `params`, as
+/// `ON_PolyCurve::Write` and `WriteObject` frame it: the stored CRC-32 covers the bytes
+/// before the segment records.
+#[cfg(test)]
+pub(crate) fn polycurve_record(params: &[f64], segments: &[Vec<u8>]) -> Vec<u8> {
+    let mut direct = vec![0x10];
+    direct.extend((segments.len() as i32).to_le_bytes());
+    direct.extend([0u8; 8]); // the reserved ints
+                             // `ON_BoundingBox()`'s placeholder: min (1, 0, 0), max (-1, 0, 0)
+    direct.extend(
+        [1.0f64, 0.0, 0.0, -1.0, 0.0, 0.0]
+            .iter()
+            .flat_map(|v| v.to_le_bytes()),
+    );
+    direct.extend((params.len() as i32).to_le_bytes());
+    direct.extend(params.iter().flat_map(|v| v.to_le_bytes()));
+    let mut body = direct.clone();
+    body.extend(segments.concat());
+    body.extend(crc32(&direct).to_le_bytes());
+    framed(&POLY_CURVE_UUID, &body)
 }
 
 #[cfg(test)]
@@ -869,5 +1043,162 @@ mod tests {
             }
         }
         assert!(answered > 0, "the sweep reaches an accepted record");
+    }
+
+    // rhino3dm 8.35.0: a LineCurve from (0.1, -0.0, 3) to (7, 0.25, -1) on [-2.5, 4.75], then a
+    // PolylineCurve (7, 0.25, -1), (9.5, 2, -0.0), (12, -1, 0.5), appended to a PolyCurve.
+    // `LINE_SEGMENT` and `POLYLINE_SEGMENT` are the segments' own `Encode()` records.
+    const LINE_SEGMENT: &str = "fa7f02008100000000000000fbff02001400000000000000dbd4d74e47e9d311bfe50010830122f0f49be923fcff02004900000000000000109a9999999999b93f000000000000008000000000000008400000000000001c40000000000000d03f000000000000f0bf00000000000004c00000000000001340030000006df2a0abff7f02800000000000000000";
+    const POLYLINE_SEGMENT: &str = "fa7f0200a900000000000000fbff02001400000000000000e6d4d74e47e9d311bfe50010830122f04e9cbbdbfcff0200710000000000000010030000000000000000001c40000000000000d03f000000000000f0bf0000000000002340000000000000004000000000000000800000000000002840000000000000f0bf000000000000e03f030000000000000000000000000000000000f03f0000000000000040030000002ff72955ff7f02800000000000000000";
+    const POLYCURVE_RECORD: &str = "fa7f0200d701000000000000fbff02001400000000000000e0d4d74e47e9d311bfe50010830122f0aaf52a88fcff02009f0100000000000010020000000000000000000000000000000000f03f00000000000000000000000000000000000000000000f0bf000000000000000000000000000000000300000000000000000004c000000000000013400000000000001b40fa7f02008100000000000000fbff02001400000000000000dbd4d74e47e9d311bfe50010830122f0f49be923fcff02004900000000000000109a9999999999b93f000000000000008000000000000008400000000000001c40000000000000d03f000000000000f0bf00000000000004c00000000000001340030000006df2a0abff7f02800000000000000000fa7f0200a900000000000000fbff02001400000000000000e6d4d74e47e9d311bfe50010830122f04e9cbbdbfcff0200710000000000000010030000000000000000001c40000000000000d03f000000000000f0bf0000000000002340000000000000004000000000000000800000000000002840000000000000f0bf000000000000e03f030000000000000000000000000000000000f03f0000000000000040030000002ff72955ff7f02800000000000000000ebdf900cff7f02800000000000000000";
+    const LINE_BITS: [u64; 6] = [
+        0x3fb999999999999a,
+        0x8000000000000000,
+        0x4008000000000000,
+        0x401c000000000000,
+        0x3fd0000000000000,
+        0xbff0000000000000,
+    ];
+    const POLYCURVE_PARAMS: [u64; 3] = [0xc004000000000000, 0x4013000000000000, 0x401b000000000000];
+
+    #[test]
+    fn a_line_record_gives_its_line_and_domain() {
+        let record = unhex(LINE_SEGMENT);
+        let line = read_line(&record).unwrap();
+        assert_eq!(line.line.map(f64::to_bits), LINE_BITS);
+        assert_eq!(line.domain, (-2.5, 4.75));
+        let built = line_record(&line.line, line.domain);
+        assert_eq!(built, record, "the builder frames a line as rhino3dm does");
+        assert_eq!(read(&record), None);
+        assert_eq!(read_polyline(&record), None);
+        assert_eq!(read_polycurve(&record), None);
+        for n in 0..record.len() {
+            assert_eq!(read_line(&record[..n]), None, "prefix {n}");
+        }
+        for i in 0..record.len() {
+            let mut bad = record.clone();
+            bad[i] ^= 0x01;
+            assert_eq!(read_line(&bad), None, "byte {i}");
+        }
+        // dimension 2, and a trailing payload byte
+        let p = payload(&record);
+        let mut flat = p.clone();
+        flat[p.len() - 4] = 2;
+        let mut trailing = p.clone();
+        trailing.push(0);
+        for bad in [flat, trailing] {
+            let mut body = bad.clone();
+            body.extend(crc32(&bad).to_le_bytes());
+            assert_eq!(read_line(&framed(&LINE_CURVE_UUID, &body)), None);
+        }
+    }
+
+    #[test]
+    fn a_polycurve_record_gives_its_parameters_and_segment_records() {
+        let record = unhex(POLYCURVE_RECORD);
+        let segments = [unhex(LINE_SEGMENT), unhex(POLYLINE_SEGMENT)];
+        let r = read_polycurve(&record).unwrap();
+        assert_eq!(
+            r.params().iter().map(|t| t.to_bits()).collect::<Vec<_>>(),
+            POLYCURVE_PARAMS
+        );
+        assert_eq!(r.segments, [&segments[0][..], &segments[1][..]]);
+        let params = r.params();
+        assert_eq!(
+            polycurve_record(&params, &segments),
+            record,
+            "the builder frames it as rhino3dm does"
+        );
+        for (nurbs, _, _) in fixtures() {
+            assert_eq!(read_polycurve(&nurbs), None);
+        }
+    }
+
+    #[test]
+    fn the_polycurve_crc_covers_only_the_bytes_before_the_segments() {
+        // `UpdateCRC` adds bytes to the innermost open chunk only: a CRC over the whole
+        // payload, segments included, is not the one rhino3dm writes.
+        let record = unhex(POLYCURVE_RECORD);
+        let body_len = i64::from_le_bytes(record[48..56].try_into().unwrap()) as usize;
+        let mut body = record[56..56 + body_len - 4].to_vec();
+        body.extend(crc32(&body.clone()).to_le_bytes());
+        assert_eq!(read_polycurve(&framed(&POLY_CURVE_UUID, &body)), None);
+        for n in 0..record.len() {
+            assert_eq!(read_polycurve(&record[..n]), None, "prefix {n}");
+        }
+        // every byte before the segment records, and every chunk header, is checked here;
+        // the segments' own bytes are their readers' to check
+        let first_segment = 56 + 1 + 12 + 48 + 4 + 8 * 3;
+        for i in (0..first_segment).chain(record.len() - 16..record.len()) {
+            for flip in [0x01u8, 0x80] {
+                let mut bad = record.clone();
+                bad[i] ^= flip;
+                assert_eq!(read_polycurve(&bad), None, "byte {i} ^ {flip:#x}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_polycurve_record_that_differs_is_refused() {
+        let segments = vec![unhex(LINE_SEGMENT), unhex(POLYLINE_SEGMENT)];
+        let params = [-2.5, 4.75, 6.75];
+        let base = polycurve_record(&params, &segments);
+        assert!(read_polycurve(&base).is_some());
+        // (byte offset in the payload, replacement)
+        let int = |v: i32| v.to_le_bytes().to_vec();
+        let cases: [(&str, usize, Vec<u8>); 7] = [
+            ("chunk version 1.1", 0, vec![0x11]),
+            ("one segment fewer", 1, int(1)),
+            ("one segment more", 1, int(3)),
+            ("a negative count", 1, int(-1)),
+            ("reserved1 set", 5, int(1)),
+            ("reserved2 set", 9, int(1)),
+            ("m_t one short", 61, int(2)),
+        ];
+        for (name, at, bytes) in cases {
+            let mut direct = payload_direct(&base);
+            direct[at..at + bytes.len()].copy_from_slice(&bytes);
+            assert_eq!(read_polycurve(&reframe(&direct, &segments)), None, "{name}");
+        }
+        assert_eq!(
+            read_polycurve(&polycurve_record(&[0.0], &[])),
+            None,
+            "no segments"
+        );
+        let mut extra = segments.clone();
+        extra.push(vec![0; 4]);
+        assert_eq!(
+            read_polycurve(&reframe(&payload_direct(&base), &extra)),
+            None,
+            "trailing bytes"
+        );
+        let mut short = segments.clone();
+        short[1].pop();
+        assert_eq!(
+            read_polycurve(&reframe(&payload_direct(&base), &short)),
+            None,
+            "a cut segment"
+        );
+        // a count that claims more segments than the payload can hold allocates nothing
+        let mut huge = payload_direct(&base);
+        huge[1..5].copy_from_slice(&int(i32::MAX));
+        let len_at = 61;
+        let mut params_huge = huge[..len_at].to_vec();
+        params_huge.extend(int(i32::MAX)); // m_t count, never reached
+        assert_eq!(read_polycurve(&reframe(&params_huge, &[])), None);
+    }
+
+    /// The bytes a polycurve record's CRC covers (version through `m_t`).
+    fn payload_direct(record: &[u8]) -> Vec<u8> {
+        let count = i32::from_le_bytes(record[57..61].try_into().unwrap()) as usize;
+        record[56..56 + 1 + 12 + 48 + 4 + 8 * (count + 1)].to_vec()
+    }
+
+    /// A polycurve record of `direct` bytes and `segments`, with a CRC over `direct`.
+    fn reframe(direct: &[u8], segments: &[Vec<u8>]) -> Vec<u8> {
+        let mut body = direct.to_vec();
+        body.extend(segments.concat());
+        body.extend(crc32(direct).to_le_bytes());
+        framed(&POLY_CURVE_UUID, &body)
     }
 }

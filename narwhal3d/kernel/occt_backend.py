@@ -2225,7 +2225,7 @@ def unify(shape):
     return out
 
 
-def boolean(shape_a, shape_b, operation):
+def boolean(shape_a, shape_b, operation, *, merge_coplanar=True):
     """`shape_a` OP `shape_b`, keeping analytic faces. Raises KernelError on failure.
 
     `BRepAlgoAPI_*` requires an explicit `Build()`/`IsDone()` check before `Shape()`. A
@@ -2255,13 +2255,17 @@ def boolean(shape_a, shape_b, operation):
         raise KernelError(
             f"the {operation.lower()} produced no solid -- the inputs may not "
             f"overlap")
+    if not merge_coplanar:
+        return result
     # MERGE same-surface faces before handing the result back. OCCT leaves a boolean's
     # coplanar pieces split, which the user SEES as seams on a flat top (see `unify`). A
     # unification failure must not lose the boolean, so the raw result is kept on error --
     # worse topology is still correct geometry, and silently returning nothing would not be.
     try:
         unified = unify(result)
-        return unified if solid_count(unified) >= 1 else result
+        # A sphere cut by a central slab exposes a seam-unification defect in OCCT:
+        # valid caps can become invalid and lose volume. Keep the exact raw result.
+        return unified if is_valid(unified) and solid_count(unified) >= 1 else result
     except KernelError:
         return result
 
@@ -2295,6 +2299,31 @@ def _count(shape, kind):
         n += 1
         exp.Next()
     return n
+
+
+def solid_components(shape):
+    """Extract exact OCCT solids, validating every connected result before publication.
+
+    Python is SDK glue here: TopExp owns topology traversal, not a Python geometry engine.
+    """
+    _need()
+    from OCP.TopAbs import TopAbs_SOLID
+    from OCP.TopExp import TopExp_Explorer
+    from OCP.TopoDS import TopoDS
+
+    if not is_valid(shape):
+        raise KernelError("boolean result is not valid")
+    explorer = TopExp_Explorer(shape, TopAbs_SOLID)
+    solids = []
+    while explorer.More():
+        solid = TopoDS.Solid(explorer.Current())
+        if not is_airtight(solid) or not volume(solid) > 0:
+            raise KernelError("boolean component is not airtight with positive volume")
+        solids.append(solid)
+        explorer.Next()
+    if not solids:
+        raise KernelError("boolean produced no solid -- the inputs may not overlap")
+    return solids
 
 
 def solid_count(shape):

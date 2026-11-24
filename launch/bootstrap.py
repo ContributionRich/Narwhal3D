@@ -232,19 +232,28 @@ def _update_exit_request():
             pass
         return 0.2
 
+    def declined():
+        # Completion notification, not the return string of a pending command.
+        with open(base + ".restart-declined", "x", encoding="ascii"):
+            pass
+
     def approved_quit():
         with open(base + ".restart-approved", "x", encoding="ascii"):
             pass
-        quit_application()
+        try:
+            quit_application()
+        except Exception:
+            os.remove(base + ".restart-approved")
+            raise
 
-    file_commands.quitter = approved_quit
     try:
-        message, _ = file_commands.ExitCmd().begin(app_state.ctx)
-        if message != "Exiting":
-            with open(base + ".restart-declined", "x", encoding="ascii"):
-                pass
-    finally:
-        file_commands.quitter = quit_application
+        message = file_commands.request_exit(on_ready=approved_quit, on_cancel=declined)
+        app_state.log(message)
+    except Exception as exc:
+        # No queued callback can claim approval after a failed request.
+        if not os.path.exists(base + ".restart-declined"):
+            declined()
+        app_state.log(f"Update restart cancelled: {exc}")
     return 0.2
 
 

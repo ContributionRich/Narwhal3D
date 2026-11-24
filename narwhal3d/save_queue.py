@@ -21,8 +21,9 @@ Rust application-core owns request order: one active save and one newest pending
 user save. Busy AutoSave declines natively. Python retains only opaque host payloads,
 Blender scheduling and exact-kernel repair callbacks. There is no Python queue policy.
 The original Python coordinator is backed up outside application imports.
-AutoSave never queues behind a user save (the caller retries later). EXIT stays
-synchronous: `drain` finishes the in-flight save (bounded) on the calling thread.
+AutoSave never queues behind a user save (the caller retries later). Application Exit
+polls the native shutdown policy without joining workers. Native exit_pre remains
+a synchronous last resort: that host callback cannot defer or cancel shutdown.
 
 Headless (no `install`) nothing here runs: `file_commands` saves synchronously.
 No `bpy`: the UI passes a scheduler (`bpy.app.timers.register`), tests pass their own.
@@ -48,6 +49,26 @@ _coordinator = None
 _payloads = {}
 #: optional UI hook (redraw the command line) after a save starts or finishes
 on_change = None
+# Host completion evidence only; scheduling/approval decisions remain in Rust.
+_failure_serial = 0
+_recovery_state = None
+
+
+def shutdown_request(operation, **arguments):
+    return _coordinator.request(operation, **arguments)['action']
+
+
+def failure_serial():
+    return _failure_serial
+
+
+def recovery_for_current_state():
+    if _recovery_state is not None:
+        model, snapshot, path = _recovery_state
+        if (model is _app().model and snapshot is not None
+                and snapshot == _snapshot(_app()) and os.path.isfile(path)):
+            return path
+    return None
 
 
 def _app():
@@ -306,6 +327,7 @@ def _complete(job):
 
 
 def _succeed(job):
+    global _recovery_state
     from . import file_commands
 
     app = _app()
@@ -324,6 +346,7 @@ def _succeed(job):
             _log(job, "Changes made while saving are not in that file yet -- Save again "
                       "to keep them.")
     else:
+        _recovery_state = (job.model, job.snapshot, job.target)
         folder = os.path.dirname(job.target)
         try:
             from . import autosave
@@ -336,6 +359,8 @@ def _succeed(job):
 
 
 def _fail(job, exc):
+    global _failure_serial
+    _failure_serial += 1
     if job.staged is not None:
         job.staged.cleanup()
         job.staged = None

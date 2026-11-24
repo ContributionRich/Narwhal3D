@@ -17,8 +17,9 @@ import sys
 from check_pure_core import (probe_pure_core_curve_hits, probe_pure_core_curve_record_hits,
                              probe_pure_core_line_samples, probe_pure_core_nearest_batch,
                              probe_pure_core_nurbs_record, probe_pure_core_parser,
-                             probe_pure_core_polyline_nearest, probe_pure_core_polyline_samples,
-                             probe_pure_core_retirement)
+                             probe_pure_core_polycurve_samples, probe_pure_core_polyline_nearest,
+                             probe_pure_core_polyline_samples,
+                             probe_pure_core_retirement, probe_pure_core_remove_join_cv)
 
 IMAGE = "quay.io/pypa/manylinux_2_28_x86_64@sha256:1e7b8460ad8fb3fb0fbe1cd818845159ac896b4fd17452d56e892c291f3b97a8"
 COMPONENTS = {
@@ -96,8 +97,9 @@ UI_CORE_EXPORTS = (
     "narwhal_transcript_abi", "narwhal_transcript_apply", "narwhal_transcript_capabilities",
     "narwhal_transcript_close", "narwhal_transcript_read", "narwhal_transcript_release",
     "narwhal_transcript_stats",
+    "narwhal_ui_content_abi", "narwhal_ui_content_read",
 )
-UI_CORE_IDENTITY = {"editor_abi": 1, "popup_abi": 1, "state_bytes": 88,
+UI_CORE_IDENTITY = {"content_abi": 1, "editor_abi": 1, "popup_abi": 1, "state_bytes": 88,
                     "transcript_abi": 1, "transcript_capabilities": 7,
                     "transcript_request_bytes": 40, "transcript_reply_bytes": 56,
                     "exports": list(UI_CORE_EXPORTS)}
@@ -108,6 +110,13 @@ UI_CORE_REQUIRED_SOURCE = (
     "src/lib.rs", "src/editor.rs", "src/unicode16.rs", "src/allocation_tests.rs",
     "src/layout_algorithm.rs", "src/layout_contract.rs", "src/popup.rs", "src/popup_ffi.rs",
     "src/popup_tests.rs", "src/transcript.rs", "src/transcript_ffi.rs", "src/transcript_tests.rs",
+    'src/content.rs',
+    'src/content_data/content.json',
+    'tests/content13.rs',
+    'tests/content13_host.rs',
+    'tests/content13_mutations.rs',
+    'tests/data/content13_golden.json',
+    'tests/data/content13_provenance.json',
     "tests/host_ui31_integrity.rs",
     "tests/data/host_ui31.json",
     "tests/data/host_ui31.provenance.json",
@@ -246,6 +255,24 @@ finally:
     if lib.narwhal_transcript_close(owner) != 0:
         raise RuntimeError("ui-core transcript owner close failed")
 transcript_stats((0, 0, 0, 0))
+lib.narwhal_ui_content_abi.argtypes = []
+lib.narwhal_ui_content_abi.restype = c.c_uint32
+result["content_abi"] = int(lib.narwhal_ui_content_abi())
+if result["content_abi"] != 1:
+    raise RuntimeError("ui-core content ABI mismatch")
+lib.narwhal_ui_content_read.argtypes = [c.c_uint32, c.c_void_p, c.c_size_t, c.c_void_p, c.c_size_t, c.POINTER(c.c_size_t)]
+lib.narwhal_ui_content_read.restype = c.c_uint32
+content_input = b'{"rows":{"t":"tuple","v":[]}}'
+content_expected = b'{"t":"tuple","v":[]}'
+source = c.create_string_buffer(content_input)
+needed = c.c_size_t()
+if lib.narwhal_ui_content_read(4, source, len(content_input), None, 0, c.byref(needed)) != 0 or needed.value != len(content_expected):
+    raise RuntimeError("ui-core content sizing differs")
+output = c.create_string_buffer(len(content_expected))
+if lib.narwhal_ui_content_read(4, source, len(content_input), output, len(output), c.byref(needed)) != 0 or needed.value != len(content_expected) or output.raw != content_expected:
+    raise RuntimeError("ui-core content projection differs")
+if lib.narwhal_ui_content_read(99, source, len(content_input), None, 0, c.byref(needed)) == 0:
+    raise RuntimeError("ui-core content accepted an unknown operation")
 print(json.dumps(result, sort_keys=True))
 '''
 
@@ -447,6 +474,8 @@ def main() -> None:
             receipt["pure_core_nurbs_record"] = probe_pure_core_nurbs_record(target / "release/libnarwhal_pure_core.so")
             receipt["pure_core_line_samples"] = probe_pure_core_line_samples(target / "release/libnarwhal_pure_core.so")
             receipt["pure_core_polyline_samples"] = probe_pure_core_polyline_samples(target / "release/libnarwhal_pure_core.so")
+            receipt["pure_core_polycurve_samples"] = probe_pure_core_polycurve_samples(target / "release/libnarwhal_pure_core.so")
+            receipt["pure_core_remove_join_cv"] = probe_pure_core_remove_join_cv(target / "release/libnarwhal_pure_core.so")
             (out / f"{args.crate}-{mode}-receipt.json").write_text(json.dumps(receipt, indent=2) + "\n")
         (out / "bin").mkdir(exist_ok=True)
         for name in COMPONENTS[args.crate]:

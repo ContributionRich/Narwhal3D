@@ -34,8 +34,9 @@ def sample_curve_xyz(curve, n: int = 64):
     (`native_nearest.sample`), bit-identical to `PointAt`. MEASURED (i7-9700K): one
     `PointAt` costs about 9 us, so a 10-point InterpCrv preview's 217 samples took
     1.9 ms per redraw, 0.17 ms through Rust. So is a `LineCurve` where the loaded
-    rhino3dm passes the line parity check (`native_nearest.line_capability`), and a
-    `PolylineCurve` where it passes the polyline one (`polyline_sample_capability`). Other
+    rhino3dm passes the line parity check (`native_nearest.line_capability`), a
+    `PolylineCurve` where it passes the polyline one (`polyline_sample_capability`), and a
+    `PolyCurve` where it passes the polycurve one (`polycurve_sample_capability`). Other
     curves keep `sample_curve`.
     """
     try:
@@ -160,6 +161,8 @@ def curve_to_bmesh(curve, n: int = 64):
 # gives roughly 50 segments around a radius-5 circle, scales with object size, and
 # remains bounded by ``curve_segments_for``.
 CURVE_CHORD_TOL = 0.01
+# Display-only mesh metadata; never stored on authoritative document geometry.
+CURVE_DISPLAY_TOL_KEY = "narwhal_curve_display_tolerance"
 
 #: - the per-direction ceiling on an ADAPTIVE surface grid. A
 #: degenerate (near-zero) tolerance would otherwise drive `curve_segments_for` to
@@ -2036,6 +2039,8 @@ def rebuild_object_mesh(obj_name: str, geom) -> bool:
         bm = geometry_to_bmesh(geom)
     bm.to_mesh(ob.data)
     bm.free()
+    if isinstance(geom, r3.Curve):
+        ob.data[CURVE_DISPLAY_TOL_KEY] = display_tolerance(geom)
     ob.data.update()
     note_display_changed(ob.name)
     return True
@@ -2160,6 +2165,7 @@ def retessellate_curve_for_view(obj_name, curve, pixels_per_unit,
     # makes the next dependency-graph evaluation unnecessarily expensive on each zoom step.
     bm.to_mesh(ob.data)
     bm.free()
+    ob.data[CURVE_DISPLAY_TOL_KEY] = float(world_tol)
     note_display_changed(ob.name)
     return True
 
@@ -3826,6 +3832,39 @@ class SubObjectError(ValueError):
 SUBOBJECT_KINDS = ("face", "edge", "vertex")
 
 
+def subobject_source_fingerprint(geom, *, source=None):
+    """Value identity without replaying or validating exact geometry.
+
+    A previously extracted source may certify which representation is authoritative:
+    a recipe's proxy is NOT its topology, nor is a master's display proxy. Compare
+    that actual recipe/master value, not expensive irrelevant proxy serialization.
+    Unknown and native-BRep sources retain full SDK serialization. Host/SDK glue;
+    None declines reuse, and master keys alone never certify mutable native shapes.
+    """
+    if not isinstance(geom, (r3.Brep, r3.Extrusion, r3.Surface)):
+        return None
+    try:
+        kernel = _kernel()
+        master = kernel.master_of(geom)
+        if source == "recipe" and master is None and _occt() is not None:
+            recipe = geom.GetUserString(kernel.RECIPE_KEY)
+            if recipe:
+                return ("recipe", recipe)
+        document = None if source == "master" and master is not None else curve_fingerprint(geom)
+        if document is None and not (source == "master" and master is not None):
+            return None
+        if master is None:
+            return ("document", document)
+        import hashlib
+        data = _occt().shape_to_bytes(master, triangles=False)
+        if not data:
+            return None
+        return ("master", document, type(master).__name__, len(data),
+                hashlib.blake2b(data, digest_size=16).digest())
+    except Exception:  # noqa: BLE001 -- an uncheckable source is never a cache hit
+        return None
+
+
 def _subobject_source(geom):
     """``(source, topology)`` for `geom`'s parts -- ``("master"|"recipe", occt_shape)`` or
     ``("brep", r3.Brep)`` -- or ``(None, None)`` when `geom` has no faces (a curve, a
@@ -4495,6 +4534,20 @@ def _curve_details(geom, measure=True):
 #: Measurement rows omitted by ``object_details(..., measure=False)`` because tight
 #: bounding boxes and mass properties can dominate the cost for complex solids.
 MEASURE_ROWS = ("Length", "Area", "Volume", "Bounding box", "Size")
+
+
+def object_details_fingerprint(geom, *, source=None):
+    """Properties value identity, including representation wording, not display IDs.
+
+    Existing SDK/native serialization supplies the value; no geometry is computed.
+    Extrusion rows also describe their document-side path/profile, so they require
+    the full document value even when topology came from a recipe/master.
+    """
+    if isinstance(geom, (r3.Brep, r3.Extrusion, r3.Surface)):
+        hint = None if isinstance(geom, r3.Extrusion) else source
+        value = subobject_source_fingerprint(geom, source=hint)
+        return (value, _kernel().describe(geom)) if value is not None else None
+    return curve_fingerprint(geom)
 
 
 def object_details(geom, measure=True):
@@ -7565,6 +7618,54 @@ def boolean_occt(geom_a, geom_b, operation):
     return proxy
 
 
+def boolean_breps(geom_a, geom_b, operation):
+    """Exact plural boolean; never approximate or discard disconnected components.
+
+    Each component owns an exact native_master recipe snapshot, not a transient
+    index into a replayed boolean. Single-result callers retain boolean_brep.
+    Python only adapts OCCT and document-proxy APIs.
+    """
+    occt = _occt()
+    if occt is None:
+        raise RuntimeError("analytic boolean kernel is unavailable")
+    op = _OCCT_OPS.get(operation)
+    if op is None:
+        raise RuntimeError(f"unknown boolean operation {operation!r}")
+
+    def operand(geometry):
+        if isinstance(geometry, (list, tuple)):
+            shapes = [_occt_operand(g) for g in geometry]
+            if not shapes or any(s is None for s in shapes):
+                return None
+            return occt.compound(shapes)
+        return _occt_operand(geometry)
+
+    a, b = operand(geom_a), operand(geom_b)
+    if a is None or b is None:
+        raise RuntimeError("analytic boolean requires exact masters or rebuildable recipes")
+    k = _kernel()
+    proxies = []
+    try:
+        # Preserve the exact builder topology. Same-domain unification is not
+        # a command option here and can change trimmed surfaces in valid shapes.
+        solids = occt.solid_components(occt.boolean(a, b, op, merge_coplanar=False))
+        for solid in solids:
+            # Snapshot BEFORE tessellating the display; no ordinal replay or shared compound.
+            recipe = occt.native_master_recipe(solid)
+            proxy = _proxy_from_occt(solid)
+            if not k.record_recipe(proxy, recipe):
+                raise RuntimeError("could not persist the exact boolean component recipe")
+            k.register_master(proxy, solid)
+            proxies.append(proxy)
+    except Exception as exc:
+        for proxy in proxies:
+            k.discard_master_binding(k.master_key_of(proxy), k.master_of(proxy))
+        _decline(f"{type(exc).__name__}: {exc}")
+        raise RuntimeError(f"exact boolean refused: {exc}") from exc
+    _decline(None)
+    return proxies
+
+
 def boolean_brep(geom_a, geom_b, operation: str, nu: int = BOOLEAN_NU) -> r3.Brep:
     """Boolean of two solids. ANALYTIC via OpenCASCADE when it can be; mesh otherwise.
 
@@ -7943,7 +8044,8 @@ def curve_snap_target(curve, name="", samples=SNAP_SAMPLES):
     # the same parameters. MEASURED (i7-9700K, spike/test_native_curve_samples.py): a
     # circle's target took 0.85 ms through PointAt, 0.19 ms through Rust. A LineCurve
     # takes Rust too where it is qualified (0.82 ms -> 0.05 ms), equally bit-identical,
-    # and so does a PolylineCurve (a Rectangle's whole target 0.89 ms -> 0.11 ms).
+    # and so does a PolylineCurve (a Rectangle's whole target 0.89 ms -> 0.11 ms) and a
+    # PolyCurve (a joined line, polyline and cubic 0.86 ms -> 0.09 ms).
     pts = native_nearest.sample(curve, samples)
     if pts is None:
         try:
@@ -8659,10 +8761,11 @@ def _knots(nc):
     return [float(nc.Knots[i]) for i in range(len(nc.Knots))]
 
 
-def _build_nurbs(cvs4, degree, knots):
+def _build_nurbs(cvs4, degree, knots, *, rational=None):
     """A NurbsCurve from WEIGHTED control points (`Point4d`s, as `Points[i]` holds them),
     a degree and rhino3dm's stored knot list (n + d - 1 values)."""
-    rational = any(abs(float(p.W) - 1.0) > 1e-15 for p in cvs4)
+    if rational is None:
+        rational = any(abs(float(p.W) - 1.0) > 1e-15 for p in cvs4)
     nc = r3.NurbsCurve(3, rational, int(degree) + 1, len(cvs4))
     for i, p in enumerate(cvs4):
         nc.Points[i] = r3.Point4d(p.X, p.Y, p.Z, p.W)
@@ -8782,6 +8885,36 @@ def _without_end(leaf, at_start):
     return r3.PolylineCurve(v) if len(v) >= 2 else None
 
 
+def _join_without_shared_cv(a, b):
+    """MEASURED reference CAD application 8.35 grip Delete: exact SDK concatenation, Rust CV/knot policy.
+
+    Native List evidence: bug145 owned synthetic cubic, mixed-degree, rational arc
+    and closed-seam probes, 2026-11-24. Degree elevation is exact native openNURBS;
+    the remaining homogeneous CVs/knots are copied, never fitted or sampled.
+    """
+    from . import native_pure, nurbs_data
+    left, right = a.ToNurbsCurve(), b.ToNurbsCurve()
+    if left is None or right is None or not (_clamped(left) and _clamped(right)):
+        raise _Refuse("curved-joint deletion needs two clamped NURBS segments")
+    degree = max(left.Degree, right.Degree)
+    if not left.IncreaseDegree(degree) or not right.IncreaseDegree(degree):
+        raise _Refuse("the SDK could not exactly elevate this joint's segments")
+    pair = r3.PolyCurve()
+    if not pair.Append(left) or not pair.Append(right):
+        raise _Refuse("the exact segments do not join")
+    joined = pair.ToNurbsCurve()
+    if joined is None or len(joined.Points) != len(left.Points) + len(right.Points) - 1:
+        raise _Refuse("the SDK did not preserve this joint's control-point structure")
+    order, _rational, knots, cvs = nurbs_data.arrays(joined)
+    result = native_pure.remove_join_cv(order, knots, cvs, len(left.Points)-1)
+    if result is None:
+        raise _Refuse("native exact curved-joint deletion is unavailable or refused this data")
+    knots, cvs = result
+    points = [r3.Point4d(*cvs[i:i+4]) for i in range(0, len(cvs), 4)]
+    # Actual grip Delete retains homogeneous storage even when all weights are one.
+    return _build_nurbs(points, degree, knots, rational=True)
+
+
 def _remove_from_polycurve_once(pc, index):
     got = _polycurve_grips(pc)
     if got is None:
@@ -8789,9 +8922,12 @@ def _remove_from_polycurve_once(pc, index):
     leaves, grips = got
     leaves = [lf.Duplicate() for lf in leaves]
     owners = grips[index]
+    joined_slot = None
     closed = len(owners) == 2 and owners[0] == (0, 0) and owners[1][0] == len(leaves) - 1 \
         and len(leaves) > 1
-    if len(owners) == 1:
+    if len(owners) == 1 or (len(owners) == 2 and owners[0][0] == owners[1][0]):
+        # A one-segment closed PolyCurve has two endpoint handles on ONE leaf,
+        # not two neighbours to concatenate. Use its existing NURBS seam policy.
         k, j = owners[0]
         new = _remove_leaf_point(leaves[k], j)
         if new is None:
@@ -8805,28 +8941,33 @@ def _remove_from_polycurve_once(pc, index):
         (ka, ja), (kb, jb) = (owners[1], owners[0]) if closed else (owners[0], owners[1])
         a, b = leaves[ka], leaves[kb]
         if not (_straight_leaf(a) and _straight_leaf(b)):
-            raise _Refuse("that point is the JOINT between a curved segment and its "
-                          "neighbour -- removing it would have to reshape both, which is "
-                          "not implemented yet (remove a point inside one segment, or "
-                          "Explode first)")
-        # straight on both sides: the joint vertex goes, a straight bridge spans the gap --
-        # exactly what removing a polyline vertex does
-        p, q = _leaf_vertices(a)[-2], _leaf_vertices(b)[1]
-        a2, b2 = _without_end(a, at_start=False), _without_end(b, at_start=True)
-        bridge_seg = r3.LineCurve(p, q)
-        if closed:
-            leaves = ([b2] if b2 else []) + leaves[1:-1] + ([a2] if a2 else []) + [bridge_seg]
+            merged = _join_without_shared_cv(a, b)
+            joined_slot = r3.Interval(a.Domain.T0, a.Domain.T1)
+            leaves = (leaves[1:-1] + [merged] if closed else
+                      leaves[:ka] + [merged] + leaves[kb + 1:])
         else:
-            leaves = (leaves[:ka] + ([a2] if a2 else []) + [bridge_seg]
-                      + ([b2] if b2 else []) + leaves[kb + 1:])
+            # Straight leaves retain the established polyline-vertex behavior.
+            p, q = _leaf_vertices(a)[-2], _leaf_vertices(b)[1]
+            a2, b2 = _without_end(a, at_start=False), _without_end(b, at_start=True)
+            bridge_seg = r3.LineCurve(p, q)
+            if closed:
+                leaves = ([b2] if b2 else []) + leaves[1:-1] + ([a2] if a2 else []) + [bridge_seg]
+            else:
+                leaves = (leaves[:ka] + ([a2] if a2 else []) + [bridge_seg]
+                          + ([b2] if b2 else []) + leaves[kb + 1:])
     if not leaves:
         raise _Refuse("nothing would be left of the curve")
-    if len(leaves) == 1:
+    if len(leaves) == 1 and joined_slot is None:
         return leaves[0]
     out = r3.PolyCurve()
     for lf in leaves:
-        if not out.Append(lf):
+        # Append matches neighbouring endpoints; AppendSegment preserves untouched
+        # native leaves byte-for-byte, including tiny existing trim/domain values.
+        append = out.AppendSegment if joined_slot is not None else out.Append
+        if not append(lf):
             raise _Refuse("the segments no longer join after that removal")
+    if len(leaves) == 1 and joined_slot is not None:
+        out.Domain = joined_slot  # native one-segment PolyCurve retains the former slot
     return out
 
 
@@ -8858,8 +8999,10 @@ def remove_control_points(geom, indices):
       turns a curve into a point, and a line has only its ends.
     * PolyCurve: only the segment that owns the point changes. A 2-point segment at an
       open END drops off. A JOINT between two STRAIGHT segments goes, and a straight
-      segment bridges the gap (polyline behaviour). A joint touching a CURVED segment is
-      REFUSED by name: removing it would have to reshape both segments.
+      segment bridges the gap (polyline behaviour). A curved joint exactly elevates and
+      concatenates its neighbours, then Rust deletes the shared CV and one join knot.
+      Closed seam removal rotates to the next segment and stays closed. Batch edits
+      containing a curved joint are refused until their mixed-degree mapping is qualified.
 
     Refused, by name: too few points (an open curve needs 2, a closed one 3 distinct), an
     index out of range, no indices, and any non-curve.
@@ -8877,6 +9020,13 @@ def remove_control_points(geom, indices):
     if bad:
         return None, (f"control point {bad[0]} does not exist (this curve has {count}, "
                       f"numbered 0..{count - 1})")
+    if isinstance(geom, r3.PolyCurve) and len(idx) > 1:
+        table = _polycurve_grips(geom)
+        if table is not None:
+            leaves, grips = table
+            if any(len(grips[i]) == 2 and any(not _straight_leaf(leaves[k]) for k, _j in grips[i])
+                   for i in idx):
+                return None, "delete curved joints one at a time; mixed-degree batch grip mapping is not qualified"
     try:
         if isinstance(geom, r3.LineCurve):
             raise _Refuse("a line has only its two end points -- removing one would leave "

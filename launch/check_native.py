@@ -134,6 +134,15 @@ def check_pure_consumers():
         else:
             raise RuntimeError('DXF reader accepted truncated startup input')
 
+    def joint():
+        from narwhal3d import native_pure
+        joint = native_pure.remove_join_cv(4, [0.,0.,0.,3.,3.,3.,6.,6.,6.],
+            [0.,0.,0.,1., 1.,0.,0.,1., 1.,1.,0.,1., 2.,1.,0.,1.,
+             3.,1.,0.,1., 3.,0.,0.,1., 4.,0.,0.,1.], 3)
+        if joint is None or list(joint[0]) != [0.,0.,0.,3.,3.,6.,6.,6.]:
+            raise RuntimeError('required joint native deletion policy unavailable or invalid')
+
+
     def nearest():
         import ctypes
         import os
@@ -141,6 +150,7 @@ def check_pure_consumers():
                        ROOT / 'narwhal3d/native' / native_nearest._library_name())
         # Presence is mandatory on every package; numerical activation still needs SDK parity.
         getattr(ctypes.CDLL(str(library)), 'narwhal_pure_core_polyline_samples')
+        getattr(ctypes.CDLL(str(library)), 'narwhal_pure_core_polycurve_samples')
         # Scalar: a tiny caller-owned NURBS, searched through the required native
         # scalar export (narwhal_pure_core_nearest_on_nurbs).
         scalar = native_nearest.PackedCurve(2, [0., 1.],
@@ -180,7 +190,7 @@ def check_pure_consumers():
                          ('vector', vector), ('DXF', dxf), ('Tween', tween),
                          ('earclip', earclip), ('control preview', control_preview),
                          ('preview', preview), ('DXF reader', dxf_reader),
-                         ('nearest', nearest), ('options', option_framework)):
+                         ('joint', joint), ('nearest', nearest), ('options', option_framework)):
         try:
             probe()
         except Exception as error:
@@ -287,6 +297,9 @@ def check():
     package = types.ModuleType('narwhal3d')
     package.__path__ = [str(ROOT / 'narwhal3d')]
     sys.modules['narwhal3d'] = package
+    from narwhal3d import native_ui_content
+    if native_ui_content.read(4, rows={"t": "tuple", "v": []}) != ():
+        raise RuntimeError('required native UI content projection differs')
     from narwhal3d.native_textfield import TextField
     from narwhal3d.native_popup import NativePopup
     from narwhal3d.command_transcript import Transcript

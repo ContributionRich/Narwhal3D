@@ -89,6 +89,19 @@ uint32_t narwhal_transcript_close(uint64_t handle);
 /* owners, snapshot tokens, live code points, retained snapshot bytes */
 uint32_t narwhal_transcript_stats(uint64_t *output, size_t count);
 
+/* Content ABI 1: stateless typed UTF-8 JSON reads. Independent of editor ABI.
+ * op 0 resource {name}; 1 toolbar groups {registered,tabs?};
+ * 2 expanded menus {registered,tabs?}; 3 counts {menus}; 4 commands {rows}.
+ * Tagged tuple/list/frozenset/dict trees preserve Python types and dict order.
+ * Buffers valid/nonaliasing, caller-owned; input UTF-8 JSON, maximum 8 MiB each.
+ * required is mandatory and set to 0 before validation (except bad descriptors).
+ * output=NULL,capacity=0 queries size. No partial writes. Status 0 OK,
+ * 1 descriptor/op, 2 schema, 3 budget/capacity, 4 embedded-content failure.
+ */
+uint32_t narwhal_ui_content_abi(void);
+uint32_t narwhal_ui_content_read(uint32_t op, const uint8_t *input,
+    size_t input_len, uint8_t *output, size_t capacity, size_t *required);
+
 #ifdef __cplusplus
 }
 #endif

@@ -54,7 +54,7 @@ class AbiTests(unittest.TestCase):
         self.assertEqual((identity['editor_abi'], identity['popup_abi'], identity['transcript_abi']), (1, 1, 1))
         self.assertEqual(identity['state_bytes'], 88)
         self.assertEqual(set(identity['exports']), set(packaging.UI_CORE_EXPORTS) | set(EXPORTS))
-        self.assertEqual(len(identity['exports']), 18)
+        self.assertEqual(len(identity['exports']), 20)
 
     def test_main_additive_packaging_identity_is_not_duplicated(self):
         library = native.library()._name

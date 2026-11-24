@@ -40,8 +40,9 @@ EXPORTS = (
     "narwhal_transcript_abi", "narwhal_transcript_apply", "narwhal_transcript_capabilities",
     "narwhal_transcript_close", "narwhal_transcript_read", "narwhal_transcript_release",
     "narwhal_transcript_stats",
+    "narwhal_ui_content_abi", "narwhal_ui_content_read",
 )
-IDENTITY = {"editor_abi": 1, "popup_abi": 1, "state_bytes": 88,
+IDENTITY = {"content_abi": 1, "editor_abi": 1, "popup_abi": 1, "state_bytes": 88,
             "transcript_abi": 1, "transcript_capabilities": 7,
             "transcript_request_bytes": 40, "transcript_reply_bytes": 56, "exports": list(EXPORTS)}
 
@@ -111,6 +112,22 @@ def add_transcript_fixture(lib, transcript=1, capabilities=7, request_bytes=40, 
     return lib
 
 
+def add_content_fixture(lib, abi=1, fault=""):
+    lib.narwhal_ui_content_abi = lambda: abi
+    def read(op, source, length, output, capacity, needed):
+        if op != 4:
+            return 0 if fault == "unknown-op" else 1
+        assert ctypes.string_at(source, length) == b'{"rows":{"t":"tuple","v":[]}}'
+        expected = b'{"t":"tuple","v":[]}'
+        needed._obj.value = len(expected) + (1 if fault == "size" else 0)
+        if output is not None:
+            ctypes.memmove(output, expected, len(expected))
+            if fault == "bytes": output[0] = b'X'
+        return 1 if fault == "status" else 0
+    lib.narwhal_ui_content_read = read
+    return lib
+
+
 def fake_library(editor=1, popup=1, missing=(), state_bytes=88, edit_status=0, read=0, close=0,
                  transcript=1, capabilities=7, request_bytes=40, reply_bytes=56, transcript_fault=""):
     lib = types.SimpleNamespace(**{name: lambda *args: 0 for name in EXPORTS})
@@ -131,6 +148,7 @@ def fake_library(editor=1, popup=1, missing=(), state_bytes=88, edit_status=0, r
     lib.narwhal_editor_read = read_text
     lib.narwhal_editor_close = lambda handle: close
     add_transcript_fixture(lib, transcript, capabilities, request_bytes, reply_bytes, transcript_fault)
+    add_content_fixture(lib)
     for name in missing:
         delattr(lib, name)
     return lib
@@ -148,7 +166,7 @@ def execute_probe(command, **kwargs):
     return types.SimpleNamespace(stdout=output.getvalue())
 
 
-def pe_fixture(editor=1, popup=1, missing=(), unknown=False, transcript=1, capabilities=7):
+def pe_fixture(editor=1, popup=1, missing=(), unknown=False, transcript=1, capabilities=7, content=1):
     """Synthetic mapped PE32+ with distinct, nonoverlapping export tables/code."""
     data = bytearray(0x2200)
     data[:2] = b"MZ"
@@ -171,7 +189,7 @@ def pe_fixture(editor=1, popup=1, missing=(), unknown=False, transcript=1, capab
         name = symbol.encode() + b"\0"
         data[at(name_rva):at(name_rva) + len(name)] = name
         value = {"narwhal_popup_abi": popup, "narwhal_transcript_abi": transcript,
-                 "narwhal_transcript_capabilities": capabilities}.get(symbol, editor)
+                 "narwhal_transcript_capabilities": capabilities, "narwhal_ui_content_abi": content}.get(symbol, editor)
         data[at(function_rva):at(function_rva) + 6] = b"\xb8" + struct.pack("<I", value) + b"\xc3"
         if unknown and symbol == "narwhal_popup_abi":
             data[at(function_rva)] = 0x90
@@ -243,6 +261,18 @@ class UiPackaging(unittest.TestCase):
         # The retired Python DATA fixture must NOT be in the public test set.
         self.assertNotIn("spike/test_ui_core_golden.py", test_files)
 
+    def test_content_probe_rejects_wrong_abi_projection_and_unknown_ops(self):
+        with patch.object(ctypes, "CDLL", return_value=add_content_fixture(fake_library(), 2)):
+            with self.assertRaises(subprocess.CalledProcessError):
+                execute_probe(["python", "-c", common.UI_CORE_PROBE, "candidate.so", json.dumps(EXPORTS)])
+        for abi, fault in ((2, ""), (1, "size"), (1, "bytes"), (1, "status"), (1, "unknown-op")):
+            with self.subTest(abi=abi, fault=fault):
+                lib = add_content_fixture(fake_library(), abi, fault)
+                with patch.object(ctypes, "CDLL", return_value=lib), patch.object(
+                        common.subprocess, "run", side_effect=execute_probe):
+                    with self.assertRaises(ValueError):
+                        common.probe_ui_core(Path("candidate.so"))
+
     def test_full_source_provenance_and_existing_licenses(self):
         inputs = common.inventory(ROOT, "ui_core")
         for name in ("Cargo.toml", "Cargo.lock", "LICENSE", "narwhal_ui_core.h", "gen_unicode.py",
@@ -256,8 +286,8 @@ class UiPackaging(unittest.TestCase):
             "narwhal_ui_core", "itoa", "memchr", "proc-macro2", "quote", "serde",
             "serde_core", "serde_derive", "serde_json", "syn", "unicode-ident", "zmij"})
         manifest = tomllib.loads((ROOT / "native/ui_core/Cargo.toml").read_text())
-        self.assertNotIn("dependencies", manifest)
-        self.assertEqual(manifest["dev-dependencies"], {"serde_json": "=1.0.154"})
+        self.assertEqual(manifest.get("dependencies"), {"serde_json": "=1.0.154"})
+        self.assertNotIn("dev-dependencies", manifest)
         self.assertEqual((ROOT / "native/ui_core/LICENSE").read_bytes(),
                          (ROOT / "licenses/GPL-3.0-or-later.txt").read_bytes())
         self.assertIn("UNICODE LICENSE V3", (ROOT / "licenses/Native-Rust-Dependencies.txt").read_text())
@@ -345,7 +375,7 @@ class UiPackaging(unittest.TestCase):
                 put(source / name, (ROOT / name).read_bytes())
             put(binary / SO)
             receipt = source_receipt(binary, SO, source)
-            self.assertEqual(len(common.UI_CORE_REQUIRED_SOURCE), 36)
+            self.assertEqual(len(common.UI_CORE_REQUIRED_SOURCE), 43)
             for name in common.UI_CORE_REQUIRED_SOURCE:
                 path = source / "native/ui_core" / name
                 data = path.read_bytes()
@@ -546,7 +576,7 @@ class UiPackaging(unittest.TestCase):
                 self.assertFalse(mac_build.reuse_output(source, output))
 
     def test_windows_static_abi_old_editor_missing_exports_and_unknown_codegen(self):
-        cases = [{}, {"editor": 2}, {"popup": 2}, {"transcript": 2}, {"capabilities": 3}, {"unknown": True},
+        cases = [{}, {"editor": 2}, {"popup": 2}, {"transcript": 2}, {"capabilities": 3}, {"content": 2}, {"unknown": True},
                  {"missing": tuple(n for n in EXPORTS if n.startswith("narwhal_popup"))}]
         cases += [{"missing": (name,)} for name in EXPORTS]
         with tempfile.TemporaryDirectory() as directory:
@@ -726,6 +756,14 @@ def mutation_checks():
             raise AssertionError("missing transcript probe mutation anchor: " + old)
         mutants.append((common, "UI_CORE_PROBE", common.UI_CORE_PROBE.replace(old, new, 1),
                         "test_executed_probe_rejects_old_editor_wrong_abis_and_every_missing_export"))
+    for old in ('result["content_abi"] != 1',
+                'needed.value != len(content_expected)',
+                'output.raw != content_expected',
+                'lib.narwhal_ui_content_read(99, source, len(content_input), None, 0, c.byref(needed)) == 0'):
+        if old not in common.UI_CORE_PROBE:
+            raise AssertionError("missing content probe mutation anchor: " + old)
+        mutants.append((common, "UI_CORE_PROBE", common.UI_CORE_PROBE.replace(old, "False"),
+                        "test_content_probe_rejects_wrong_abi_projection_and_unknown_ops"))
     mutants.append((common, "UI_CORE_REQUIRED_SOURCE", tuple(n for n in common.UI_CORE_REQUIRED_SOURCE if n != "TRANSCRIPT.md"),
                     "test_required_sources_cannot_be_omitted_from_rehashed_receipts"))
     # Omission mutations for the new hostloader / native host_ui31 guards.
@@ -742,7 +780,7 @@ def mutation_checks():
     mutants.append(
         (_pub, "NATIVE_FILES", tuple(n for n in _pub.NATIVE_FILES if n != "native/ui_core/tests/data/host_ui31.provenance.json"),
          "test_required_host_sources_and_retired_data_fixture"))
-    for symbol in ('narwhal_transcript_abi', 'narwhal_transcript_capabilities'):
+    for symbol in ('narwhal_transcript_abi', 'narwhal_transcript_capabilities', 'narwhal_ui_content_abi'):
         mutants.append((windows, "verify_ui_core_identity", changed(windows.verify_ui_core_identity,
                         '"' + symbol + '": ' + ('1' if symbol.endswith('_abi') else '7') + ',', ''),
                         "test_windows_static_abi_old_editor_missing_exports_and_unknown_codegen"))

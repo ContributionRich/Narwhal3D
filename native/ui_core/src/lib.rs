@@ -1,6 +1,7 @@
 //! Persistent code-point editor. See ../README.md for the ABI and ownership contract.
 #[cfg(test)]
 mod allocation_tests;
+mod content;
 mod editor;
 #[cfg(test)]
 mod layout_algorithm;

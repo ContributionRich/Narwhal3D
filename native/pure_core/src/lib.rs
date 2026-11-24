@@ -52,6 +52,7 @@ pub mod preview_primitives;
 pub mod printwidths;
 pub mod python_norm;
 mod python_text;
+pub mod remove_join_cv;
 pub mod stl;
 pub mod surface;
 pub mod svgpath;

@@ -91,6 +91,35 @@ def doc(unit="Millimeters"):
     return m
 
 
+# Native projects use the same canonical decoder as Open, not the 3dm reader.
+from narwhal3d import narwhal_document
+check(".narwhal" in ic.FORMATS and ic.READERS.get(".narwhal") is ic._read_narwhal,
+      "native project Import has a real canonical reader")
+check("*.narwhal" in ic.IMPORT_FILTERS[0][1]
+      and any(label == "Native projects" and "*.narwhal" in masks
+              for label, masks in ic.IMPORT_FILTERS),
+      "native projects are visible in All supported and their own filter")
+native_source = doc("Inches")
+native_source.add_object(bridge.make_line((1, 2, 3), (2, 2, 3)), "NativeCurve", 0)
+native_solid = bridge.make_cylinder((7, -4, 3), 1, 2)
+kernel.register_master(native_solid, bridge._occt_operand(native_solid))
+native_source.add_object(native_solid, "NativeSolid", 0)
+native_path = os.path.join(TMP, "native-import.NARWHAL")
+check(narwhal_document.save_model(native_source, native_path), "write a real native Import fixture")
+native_got = ic.read_foreign(native_path, doc())
+check(len(native_got.items) == 2 and native_got.native_fragment is not None,
+      "case-insensitive native Import reads every supported source object")
+native_geoms = {name: geom for geom, name, _ in native_got.items}
+native_start = native_geoms["NativeCurve"].PointAtStart
+check(math.dist((native_start.X, native_start.Y, native_start.Z), (25.4, 50.8, 76.2)) < 1e-8,
+      "native source units scale exact curves into destination units")
+native_master = kernel.master_of(native_geoms["NativeSolid"])
+check(native_master is not None and ob.is_airtight(native_master)
+      and abs(ob.volume(native_master) - 2 * math.pi * 25.4**3) < 1e-6
+      and abs(ob.tight_bbox(native_master)[0][0] - 6 * 25.4) < 1e-7,
+      "native unit conversion moves/scales the analytic master, not just its display")
+
+
 class Ctx:
     def __init__(self, m):
         self.model = m

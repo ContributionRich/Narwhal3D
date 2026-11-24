@@ -367,17 +367,20 @@ def sample(curve, n):
     """``bridge.sample_curve(curve, n)`` as ``(x, y, z)`` tuples, or ``None``.
 
     A `NurbsCurve`, evaluated from its own knots and control points, a `LineCurve`
-    where the line route is qualified (`line_capability`), or a `PolylineCurve` where
-    the polyline sample route is (`polyline_sample_capability`): each point is
-    bit-identical to ``curve.PointAt`` at the same parameter. ``None`` (any other curve,
-    no library, an unqualified route, or a point openNURBS could not evaluate) keeps the
-    caller's Python sampling.
+    where the line route is qualified (`line_capability`), a `PolylineCurve` where
+    the polyline sample route is (`polyline_sample_capability`), or a `PolyCurve` where
+    the polycurve one is (`polycurve_sample_capability`): each point is bit-identical to
+    ``curve.PointAt`` at the same parameter. ``None`` (any other curve, no library, an
+    unqualified route, or a point openNURBS could not evaluate) keeps the caller's Python
+    sampling.
     """
     global _native_sample_calls
     if type(curve) is r3.LineCurve:
         return _line_samples(curve, n)
     if type(curve) is r3.PolylineCurve:
         return _polyline_samples(curve, n)
+    if type(curve) is r3.PolyCurve:
+        return _polycurve_samples(curve, n)
     fn = _bindings()[1]
     if fn is None or not isinstance(curve, r3.NurbsCurve):
         return None
@@ -789,4 +792,156 @@ def _polyline_samples(curve, n):
         return None
     if got is not None:
         _native_polyline_sample_calls += 1
+    return got
+
+
+# PolyCurve samples (narwhal_pure_core_polycurve_samples, native/pure_core/src/line_samples.rs):
+# ON_PolyCurve::Evaluate (eb92af3) at `sample`'s parameters, read from the curve's Encode()
+# record, which holds every segment's record. Its LineCurve, PolylineCurve, NurbsCurve and
+# nested PolyCurve segments are evaluated in Rust; a record with any other segment class (an
+# ArcCurve read from a file) is refused and keeps PointAt. The segment parameter is mapped as
+# b*s0 + a*s1, and an SDK build that fuses that multiply-add (or a line's or a polyline's)
+# rounds PointAt differently. So the route needs BOTH a platform in
+# POLYCURVE_SAMPLES_QUALIFIED_PLATFORMS and the loaded rhino3dm passing
+# `_polycurve_sample_parity`: its own PointAt on the witness polycurves, bit for bit.
+POLYCURVE_SAMPLES_QUALIFIED_PLATFORMS = frozenset({("linux", "x86_64")})
+# MEASURED (i7-9700K): Encode() costs ~4.8 us a cubic segment (one span) and ~0.36 us a
+# polyline point (one span), and a PolyCurve's PointAt ~3.8 us a sample. So the route takes
+# at most one span per 2 samples (64 for a snap target), where even a polycurve of cubics
+# pays; one with more spans keeps PointAt.
+POLYCURVE_SAMPLES_PER_SPAN = 2
+_POLYCURVE_SAMPLE_WITNESS_N = (128, 7)
+_POLYCURVE_SAMPLE_WITNESS_SEED = 20261123
+_polycurve_sample_state = None  # (signature, binding or None, capability text)
+_native_polycurve_sample_calls = 0
+
+
+def _polycurve_sample_call(fn, record, n):
+    """Rust's samples of one PolyCurve record, or None when the export refuses it."""
+    out = array.array("d", bytes(8 * 3 * (n + 1)))
+    code = fn(record, len(record), n, (ctypes.c_double * len(out)).from_buffer(out), len(out))
+    if code != 0:
+        return None
+    return list(zip(out[0::3], out[1::3], out[2::3]))
+
+
+def _polycurve_sample_witnesses():
+    """Polycurves of irregular doubles, where a fused multiply-add would round most samples
+    differently: a line, a polyline, a cubic and a rational quadratic joined on a shifted
+    domain, so every segment's parameter is remapped; a polycurve nesting another, reversed;
+    and a Trace Picture loop of cubic Beziers."""
+    rng = random.Random(_POLYCURVE_SAMPLE_WITNESS_SEED)
+    p = r3.Point3d
+
+    def q():
+        return p(rng.uniform(-5.0, 5.0), rng.uniform(-5.0, 5.0), rng.uniform(-1.0, 1.0))
+
+    def interval():
+        return r3.Interval(rng.uniform(-9.0, -1.0), rng.uniform(1.0, 9.0))
+
+    joined = r3.PolyCurve()
+    line = r3.LineCurve(q(), q())
+    line.Domain = interval()
+    joined.Append(line)
+    joined.Append(r3.PolylineCurve([joined.PointAtEnd, q(), q(), q()]))
+    cubic = r3.NurbsCurve.CreateControlPointCurve([joined.PointAtEnd, q(), q(), q(), q()], 3)
+    cubic.Domain = interval()
+    joined.Append(cubic)
+    conic = r3.NurbsCurve(3, True, 3, 3)
+    for i, a in enumerate((joined.PointAtEnd, q(), q())):
+        w = rng.uniform(0.3, 2.0) if i == 1 else 1.0
+        conic.Points[i] = r3.Point4d(a.X * w, a.Y * w, a.Z * w, w)
+    for i, k in enumerate((0.0, 0.0, 1.0, 1.0)):
+        conic.Knots[i] = k
+    joined.Append(conic)
+    joined.Domain = r3.Interval(rng.uniform(-80.0, -20.0), rng.uniform(10.0, 90.0))
+
+    nested = r3.PolyCurve()
+    nested.Append(r3.LineCurve(q(), joined.PointAtStart))
+    nested.Append(joined)
+    nested.Reverse()
+
+    loop = r3.PolyCurve()
+    start = q()
+    for _ in range(4):
+        bezier = r3.NurbsCurve(3, False, 4, 4)
+        for i, a in enumerate((loop.PointAtEnd if loop.SegmentCount else start, q(), q(), q())):
+            bezier.Points[i] = r3.Point4d(a.X, a.Y, a.Z, 1.0)
+        for i, k in enumerate((0.0, 0.0, 0.0, 1.0, 1.0, 1.0)):
+            bezier.Knots[i] = k
+        loop.Append(bezier)
+    return [joined, nested, loop]
+
+
+def _polycurve_sample_parity(fn):
+    """True when the loaded rhino3dm's PointAt gives Rust's bits on every witness polycurve."""
+    try:
+        for curve in _polycurve_sample_witnesses():
+            record = base64.b64decode(curve.Encode()["data"])
+            for n in _POLYCURVE_SAMPLE_WITNESS_N:
+                got = _polycurve_sample_call(fn, record, n)
+                if got is None or _packed(got) != _packed(_point_at_samples(curve, n)):
+                    return False
+    except Exception:  # noqa: BLE001 -- an SDK that cannot be checked is not qualified
+        return False
+    return True
+
+
+def _polycurve_sample_binding():
+    global _polycurve_sample_state
+    signature = (os.environ.get(_ENV) or "<packaged>", _here(), id(r3))
+    state = _polycurve_sample_state
+    if state is not None and state[0] == signature:
+        return state[1]
+    with _lock:
+        state = _polycurve_sample_state
+        if state is not None and state[0] == signature:
+            return state[1]
+        fn, text = None, "polycurve samples export unavailable; polycurves use PointAt"
+        if signature[1] not in POLYCURVE_SAMPLES_QUALIFIED_PLATFORMS:
+            text = "not qualified on {}/{}; polycurves use PointAt".format(*signature[1])
+        else:
+            explicit = os.environ.get(_ENV)
+            path = (Path(explicit).expanduser() if explicit else
+                    Path(__file__).resolve().parent / "native" / _library_name())
+            try:
+                fn = ctypes.CDLL(str(path)).narwhal_pure_core_polycurve_samples
+                fn.argtypes = [ctypes.c_char_p, ctypes.c_size_t, ctypes.c_size_t, _D,
+                               ctypes.c_size_t]
+                fn.restype = ctypes.c_int32
+            except (AttributeError, OSError):
+                fn = None
+            if fn is not None and not _polycurve_sample_parity(fn):
+                fn = None
+                text = (f"rhino3dm {getattr(r3, '__version__', '?')} PointAt differs from "
+                        "the Rust polycurve samples on the witness polycurves; polycurves "
+                        "use PointAt")
+            elif fn is not None:
+                text = "qualified"
+        _polycurve_sample_state = signature, fn, text
+        return fn
+
+
+def polycurve_sample_capability():
+    """``"qualified"`` when polycurves are sampled in Rust, otherwise the reason they are not."""
+    _polycurve_sample_binding()
+    return _polycurve_sample_state[2]
+
+
+def _polycurve_samples(curve, n):
+    """`sample` for a PolyCurve: None (unqualified, too many spans for its record to pay, or
+    refused by the export) keeps PointAt."""
+    global _native_polycurve_sample_calls
+    fn = _polycurve_sample_binding()
+    if fn is None:
+        return None
+    try:
+        n = int(n)
+        if not 1 <= n <= 1 << 20 or POLYCURVE_SAMPLES_PER_SPAN * curve.SpanCount > n + 1:
+            return None
+        got = _polycurve_sample_call(fn, base64.b64decode(curve.Encode()["data"]), n)
+    except Exception:  # noqa: BLE001 -- PointAt remains the route
+        return None
+    if got is not None:
+        _native_polycurve_sample_calls += 1
     return got

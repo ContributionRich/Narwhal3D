@@ -8304,7 +8304,8 @@ class _BooleanCmd(Command):
 
     ``BooleanUnion`` consumes one complete selection set. ``BooleanDifference`` and
     ``BooleanIntersection`` consume two ordered sets. Subclasses declare those steps, and
-    execution folds all operands from left to right. Preselection fills the first set
+    union/intersection fold left while difference applies cutters to each target.
+    Preselection fills the first set
     without any special case for operand count.
 
     ``DeleteInput`` is shared by all three commands and defaults to preserving the prior
@@ -8354,84 +8355,24 @@ class _BooleanCmd(Command):
     def execute(self, ctx: NarwhalContext):
         names = self._operand_names()
         sets = self._difference_sets()
-        if sets is not None and len(sets[0]) > 1:
+        if sets is not None:
             return self._execute_multi_difference(ctx, *sets)
         if len(names) < 2:
-            # the reference CAD application needs at least two operands. Report the count rather than
-            # failing obscurely inside the solver.
-            return (f"{self.name} needs at least two objects "
-                    f"({len(names)} given)"), True
-
+            return f"{self.name} needs at least two objects ({len(names)} given)", True
         geoms = []
         for name in names:
-            geom = _world_geom(ctx, name)
-            if geom is None:
-                return f"No solid named {name!r}", True
-            if isinstance(geom, r3.Extrusion):
-                # A capped extrusion is a solid; the previous
-                # isinstance-Brep gate rejected it before the kernel ever ran
-                # ("Extrusion1 is not a solid (brep)"), even though the kernel
-                # booleans it exactly. An OPEN extrusion (uncapped) is a surface,
-                # not a solid, and is refused by name.
-                if not (geom.IsCappedAtTop and geom.IsCappedAtBottom):
-                    return f"{name} is not a solid (an uncapped extrusion)", True
-                geom = _solid_brep_from_extrusion(geom)
-                if geom is None:
-                    return f"{name} could not be used as a solid", True
-            elif not isinstance(geom, r3.Brep):
-                return f"{name} is not a solid (brep)", True
+            geom, refusal = self._solid(ctx, name)
+            if refusal:
+                return refusal, True
             geoms.append(geom)
-
-        # inherit the FIRST operand's layer for the result
-        layer_index = 0
-        first = names[0]
-        for fobj in ctx.model.file.Objects:
-            if (fobj.Attributes.Name or "").lower() == first.lower():
-                layer_index = int(fobj.Attributes.LayerIndex)
-                break
-
-        # Fold left: (((A op B) op C) op D). For UNION and INTERSECTION this is the
-        # whole story. For DIFFERENCE the first set is subtracted FROM, so every
-        # later operand is subtracted from the accumulating result -- which is what
-        # folding left already does, and why the set ORDER is preserved above.
         try:
-            result = geoms[0]
+            results = [geoms[0]]
             for other in geoms[1:]:
-                result = bridge.boolean_brep(result, other, self.operation)
-        except RuntimeError as e:
-            return f"Boolean failed: {e}", True
-
-        # Capture once before the first document mutation. Command.feed brackets
-        # the whole operation, so all removals and the result insertion remain one
-        # undo record even when there are many operands.
-        note_change = getattr(ctx, "note_change", None)
-        if callable(note_change):
-            note_change(self.name)
-
-        # the pre-existing command deleted every operand by default. the reference CAD application's
-        # retained help does not state the default, so DeleteInput defaults to Yes
-        # here to preserve that behavior. With DeleteInput=No every input remains.
-        delete_input = bool(self.opt.get("DeleteInput", True))
-        if self.operation == "DIFFERENCE":
-            # DeleteCutters is meaningful only when DeleteInput=Yes. The option
-            # hook refuses the contradictory setting, and this guard also keeps a
-            # direct execute caller from silently deleting cutters.
-            delete_names = names if delete_input else []
-            if delete_input and not bool(self.opt.get("DeleteCutters", False)):
-                delete_names = names[:1]
-        else:
-            delete_names = names if delete_input else []
-
-        for name in delete_names:
-            ob = ctx.object_by_name(name)
-            if ob is not None:
-                _remove_object_from_scene(ob)
-            oid = ctx.model.object_id_by_name(name)
-            if oid is not None:
-                ctx.model.remove_object(oid)
-
-        _, display_name = ctx.add_geometry(result, "Boolean", layer_index)
-        return f"Created {display_name}{self._faceted_note(result)}", True
+                results = bridge.boolean_breps(results, other, self.operation)
+        except RuntimeError as exc:
+            return f"Boolean failed: {exc} -- nothing changed", True
+        delete = names if self.opt.get("DeleteInput", True) else []
+        return self._publish_results(ctx, [(names[0], g) for g in results], delete)
 
     def _solid(self, ctx, name):
         """(brep, None) for a usable solid operand, or (None, refusal message)."""
@@ -8449,16 +8390,9 @@ class _BooleanCmd(Command):
         return geom, None
 
     def _execute_multi_difference(self, ctx, targets, cutters):
-        """Subtract the SAME cutters from EACH target: one result per target.
-
-        Report #132: two solids and one cutter used to fold left as (A1 - A2) - C,
-        subtracting the second target from the first. Each target now gets its own
-        exact result, A1 - C and A2 - C. Every result is computed before the document
-        changes, so a failure leaves everything untouched; it is one undo step.
-        """
-        if not cutters:
-            return (f"{self.name} needs at least one object to subtract with "
-                    f"(0 given)"), True
+        """Subtract the same cutters from each target, retaining every exact component."""
+        if not targets or not cutters:
+            return f"{self.name} needs target and cutter sets -- nothing changed", True
         cutter_geoms = []
         for name in cutters:
             geom, refusal = self._solid(ctx, name)
@@ -8471,34 +8405,129 @@ class _BooleanCmd(Command):
             if refusal:
                 return refusal, True
             try:
-                result = geom
+                pieces = [geom]
                 for cutter in cutter_geoms:
-                    result = bridge.boolean_brep(result, cutter, self.operation)
-            except RuntimeError as e:
-                return f"Boolean failed on {name}: {e} -- nothing changed", True
-            results.append((name, result, _layer_index_of(ctx, name)))
+                    pieces = bridge.boolean_breps(pieces, cutter, self.operation)
+            except RuntimeError as exc:
+                return f"Boolean failed on {name}: {exc} -- nothing changed", True
+            results.extend((name, piece) for piece in pieces)
+        delete = list(targets) if self.opt.get("DeleteInput", True) else []
+        if delete and self.opt.get("DeleteCutters", False):
+            delete += cutters
+        return self._publish_results(ctx, results, delete)
 
-        note_change = getattr(ctx, "note_change", None)
-        if callable(note_change):
-            note_change(self.name)
-        delete_input = bool(self.opt.get("DeleteInput", True))
-        delete_names = list(targets) if delete_input else []
-        if delete_input and bool(self.opt.get("DeleteCutters", False)):
-            delete_names += cutters
+    def _publish_results(self, ctx, results, delete_names):
+        """Host-only publication: stage all outputs before consuming any input.
+
+        Rollback owns allocation handles/UUIDs, never a whole-document restore that
+        could overwrite callback edits. The existing native Undo owner groups this.
+        """
+        from . import kernel
+
+        model, file = ctx.model, ctx.model.file
+        baseline = model.snapshot()
+        stack = getattr(ctx, "undo", None)
+        record = getattr(stack, "_open", None)
+        previous_before = record.before if record is not None else None
+        counters = dict(getattr(ctx, "counters", {}))
+        sources = {name: model.object_id_by_name(name) for name in self._operand_names()}
+        made = []
+
+        def check():
+            if ctx.model is not model or model.file is not file:
+                raise RuntimeError("document changed during boolean publication")
+            current = model.snapshot()
+            for oid in sources.values():
+                old, new = baseline.by_id.get(str(oid)), current.by_id.get(str(oid))
+                if old is None or new is None:
+                    raise RuntimeError("boolean source removed during publication")
+                if (old["geometry"].Encode() != new["geometry"].Encode()
+                        or old["_attributes"].Encode() != new["_attributes"].Encode()):
+                    raise RuntimeError("boolean source edited during publication")
+
+        try:
+            check()
+            note_change = getattr(ctx, "note_change", None)
+            if callable(note_change):
+                note_change(self.name)
+            for source, geom in results:
+                # Actual-host guarded add tracks even allocations made by a raising writer.
+                if isinstance(ctx, NarwhalContext):
+                    oid, name = ctx.add_geometry(geom, "Boolean", _layer_index_of(ctx, source),
+                                                 publication_check=check)
+                else:
+                    oid, name = ctx.add_geometry(geom, "Boolean", _layer_index_of(ctx, source))
+                ob = ctx.object_by_name(name)
+                mesh = getattr(ob, "data", None) if ob is not None else None
+                made.append((str(oid), name, ob, mesh, geom))
+                check()
+                # Copy complete source attributes through the qualified SDK boundary,
+                # retaining the newly allocated UUID/name and exact component recipe.
+                if isinstance(ctx, NarwhalContext):
+                    holder = r3.File3dm()
+                    attrs = model._object_registry.observer.copy_attributes(
+                        file, sources[source], holder)
+                    added = file.Objects.FindId(str(oid))
+                    attrs.Id, attrs.Name = added.Attributes.Id, name
+                    file.Objects.Delete(str(oid))
+                    file.Objects.Add(geom, attrs)
+                    model.register_blender_object(str(oid), name)
+            check()
+            # Run the ordinary mutation callback BEFORE any input deletion; recheck
+            # afterwards so reentrant source edits cannot select stale operands.
+            hook = model.before_change
+            if hook is not None:
+                hook()
+            check()
+        except Exception as exc:
+            # An add wrapper can raise AFTER the guarded add returned. Recover only
+            # our exact component bindings, never unrelated callback allocations.
+            published = {oid for oid, _, _, _, _ in made}
+            bindings = {kernel.master_key_of(g): g for _, g in results}
+            for obj in list(file.Objects):
+                oid = str(obj.Attributes.Id)
+                geom = bindings.get(kernel.master_key_of(obj.Geometry))
+                if geom is not None and oid not in published:
+                    name = model.blender_name_for(oid) or obj.Attributes.Name
+                    ob = ctx.object_by_name(name) if model.file is file else None
+                    made.append((oid, name, ob, getattr(ob, "data", None), geom))
+            for oid, name, ob, mesh, geom in reversed(made):
+                file.Objects.Delete(oid)
+                if ob is not None:
+                    ctx._remove_publication_allocations({
+                        "objects": [ob], "meshes": [mesh] if mesh is not None else []})
+            for _, geom in results:
+                master = kernel.master_of(geom)
+                if master is not None:
+                    kernel.discard_master_binding(kernel.master_key_of(geom), master)
+            entry = selection_state._state.get(model)
+            if entry is not None:
+                owned_names = {name for _, name, _, _, _ in made}
+                entry["created"][:] = [n for n in entry["created"] if n not in owned_names]
+                if "batch" in entry:
+                    entry["batch"][:] = [n for n in entry["batch"] if n not in owned_names]
+            if (hasattr(ctx, "counters") and ctx.counters.get("Boolean", 0)
+                    == counters.get("Boolean", 0) + len(made)):
+                if "Boolean" in counters:
+                    ctx.counters["Boolean"] = counters["Boolean"]
+                else:
+                    ctx.counters.pop("Boolean", None)
+            if record is not None and stack._open is record:
+                if model.file is not file or ctx._same_publication_document(baseline, model.snapshot()):
+                    record.before = previous_before
+                elif previous_before is None:
+                    record.before = baseline
+                    record.name = f"External change during {self.name}"
+            return f"Boolean failed: {exc} -- inputs retained", True
+
+        # No callbacks between validation and consumption. All results already exist.
         for name in delete_names:
+            oid = sources[name]
+            file.Objects.Delete(str(oid))
             ob = ctx.object_by_name(name)
             if ob is not None:
                 _remove_object_from_scene(ob)
-            oid = ctx.model.object_id_by_name(name)
-            if oid is not None:
-                ctx.model.remove_object(oid)
-        made = []
-        notes = ""
-        for _name, result, layer in results:
-            _, display = ctx.add_geometry(result, "Boolean", layer)
-            made.append(display)
-            notes += self._faceted_note(result)
-        return f"Created {', '.join(made)}{notes}", True
+        return f"Created {', '.join(name for _, name, _, _, _ in made)}", True
 
     @staticmethod
     def _faceted_note(result):

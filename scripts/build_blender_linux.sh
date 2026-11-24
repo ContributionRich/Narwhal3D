@@ -9,6 +9,7 @@ APP_DRAWN_PATCH="$PATCH_DIR/apply_app_drawn.py"
 BOUNDARY_PATCH="$PATCH_DIR/apply_cad_boundary_wires.py"
 DEFERRED_PRESENT_PATCH="$PATCH_DIR/apply_deferred_first_present.py"
 STATUSBAR_HEIGHT_PATCH="$PATCH_DIR/apply_statusbar_height.py"
+PRECLOSE_PATCH="$PATCH_DIR/apply_preclose.rs"
 ICON_SOURCE="$PATCH_DIR/narwhal3d_app_icon.svg"
 WINDOW_ICON_BUNDLE="$PATCH_DIR/narwhal3d_window_icons.json"
 WINDOW_OVERLAY_PATCH="$PATCH_DIR/apply_window_overlay.py"
@@ -86,12 +87,12 @@ done
 
 [[ "$(uname -s)" == "Linux" ]] || { echo "native build requires Linux" >&2; exit 2; }
 [[ "$(uname -m)" == "x86_64" ]] || { echo "native build requires x86_64" >&2; exit 2; }
-for patch_input in "$BRANDING_PATCH" "$APP_DRAWN_PATCH" "$BOUNDARY_PATCH" "$DEFERRED_PRESENT_PATCH" "$STATUSBAR_HEIGHT_PATCH" "$ICON_SOURCE" "$WINDOW_OVERLAY_PATCH" "$WINDOW_ICON_BUNDLE"; do
+for patch_input in "$BRANDING_PATCH" "$APP_DRAWN_PATCH" "$BOUNDARY_PATCH" "$DEFERRED_PRESENT_PATCH" "$STATUSBAR_HEIGHT_PATCH" "$ICON_SOURCE" "$WINDOW_OVERLAY_PATCH" "$WINDOW_ICON_BUNDLE" "$PRECLOSE_PATCH"; do
   [[ -f "$patch_input" && ! -L "$patch_input" ]] || { echo "required native patch input is missing or symlinked: $patch_input" >&2; exit 2; }
 done
 
 if ((SELF_CHECK)); then
-  python3 - "$REQUIRED_COMMIT" "$BRANDING_PATCH" "$APP_DRAWN_PATCH" "$BOUNDARY_PATCH" "$DEFERRED_PRESENT_PATCH" "$STATUSBAR_HEIGHT_PATCH" "$ICON_SOURCE" "$WINDOW_OVERLAY_PATCH" "$WINDOW_ICON_BUNDLE" <<'PY'
+  python3 - "$REQUIRED_COMMIT" "$BRANDING_PATCH" "$APP_DRAWN_PATCH" "$BOUNDARY_PATCH" "$DEFERRED_PRESENT_PATCH" "$STATUSBAR_HEIGHT_PATCH" "$ICON_SOURCE" "$WINDOW_OVERLAY_PATCH" "$WINDOW_ICON_BUNDLE" "$PRECLOSE_PATCH" <<'PY'
 import ast
 import hashlib
 from pathlib import Path
@@ -114,7 +115,7 @@ PY
   exit 0
 fi
 
-for command_name in git python3; do
+for command_name in git python3 rustc; do
   command -v "$command_name" >/dev/null || { echo "required command is missing: $command_name" >&2; exit 2; }
 done
 [[ -n "$SOURCE_DIR" && -n "$INSTALL_DIR" ]] && { ((RECORD_INSTALLED)) || [[ -n "$BUILD_DIR" ]]; } || {
@@ -154,6 +155,10 @@ ACTUAL_COMMIT="$(git --no-pager -C "$SOURCE_DIR" rev-parse HEAD)"
   echo "source commit mismatch: required $REQUIRED_COMMIT, got $ACTUAL_COMMIT" >&2
   exit 2
 }
+PRECLOSE_TOOL_DIR="$(mktemp -d)"
+trap 'rm -rf -- "$PRECLOSE_TOOL_DIR"' EXIT
+rustc --edition 2024 "$PRECLOSE_PATCH" -o "$PRECLOSE_TOOL_DIR/apply_preclose"
+
 build_native() {
 [[ -z "$(git --no-pager --no-optional-locks -C "$SOURCE_DIR" status --porcelain --untracked-files=no)" ]] || {
   echo "source checkout has tracked modifications; refusing a non-reproducible patch/build" >&2
@@ -201,6 +206,8 @@ changed = overlay.apply(source / "source" / "blender")
 print(f"window-overlay patch applied ({len(changed)} changed paths)")
 PY
 
+"$PRECLOSE_TOOL_DIR/apply_preclose" "$SOURCE_DIR/source/blender"
+
 if [[ -n "$SOURCE_DATE_EPOCH" ]]; then
   export SOURCE_DATE_EPOCH
 fi
@@ -238,6 +245,7 @@ for name, patch_path in (("statusbar", sys.argv[2]), ("window-overlay", sys.argv
         if not header.is_file() or header.read_text(encoding="utf-8") != module.HEADER_TEXT:
             raise SystemExit(f"installed provenance requires the current window-overlay header: {module.HEADER}")
 PY
+  "$PRECLOSE_TOOL_DIR/apply_preclose" "$SOURCE_DIR/source/blender" --check
 else
   build_native
 fi
@@ -261,7 +269,7 @@ LC_ALL=C grep -aFq "Narwhal 3D quit" "$BRANDED_BINARY" || {
   exit 2
 }
 
-for native_marker in NARWHAL3D_DEFER_FIRST_PRESENT NARWHAL3D_STATUSBAR_HEIGHT RNA_WINDOW_DRAW_HANDLE; do
+for native_marker in NARWHAL3D_DEFER_FIRST_PRESENT NARWHAL3D_STATUSBAR_HEIGHT RNA_WINDOW_DRAW_HANDLE narwhal_defer_close; do
   LC_ALL=C grep -aFq "$native_marker" "$BRANDED_BINARY" || {
     echo "installed executable lacks the native patch marker: $native_marker" >&2
     exit 2
@@ -280,7 +288,7 @@ python3 - \
   "$DEFERRED_PRESENT_PATCH" \
   "$STATUSBAR_HEIGHT_PATCH" \
   "$ICON_SOURCE" \
-  "$WINDOW_OVERLAY_PATCH" <<'PY'
+  "$WINDOW_OVERLAY_PATCH" "$PRECLOSE_PATCH" <<'PY'
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -301,6 +309,7 @@ logical_inputs = (
     ("blender_patches/narwhal3d_app_icon.svg", Path(sys.argv[11])),
     ("blender_patches/narwhal3d_window_icons.json", Path(sys.argv[11]).with_name("narwhal3d_window_icons.json")),
     ("blender_patches/apply_window_overlay.py", Path(sys.argv[12])),
+    ("blender_patches/apply_preclose.rs", Path(sys.argv[13])),
 )
 records = []
 aggregate = hashlib.sha256()

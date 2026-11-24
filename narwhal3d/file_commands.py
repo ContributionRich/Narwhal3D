@@ -510,6 +510,139 @@ class OpenCmd(_FileCommand):
 #: set by the app: actually quit. None headless (the command then says so).
 quitter = None
 
+# Minimal host glue: timers/dialogs must run on Blender's main thread. Rust owns
+# wait/approval/cancel/readiness policy; no worker is detached from the live host.
+_exit_scheduler = None
+_exit_ready_callback = None
+_exit_cancel_callback = None
+_exit_polling = False
+_exit_guard = None
+_exit_failures = None
+_exit_phase = None
+
+
+def request_exit(*, on_ready=None, on_cancel=None):
+    global _exit_polling, _exit_guard, _exit_failures, _exit_phase
+    global _exit_ready_callback, _exit_cancel_callback
+    from . import save_queue
+    if _exit_polling:
+        if on_cancel is not None:
+            on_cancel()
+        return "Exit is pending -- Esc cancels Exit without interrupting Save"
+    if _exit_scheduler is None or not save_queue.enabled():
+        raise RuntimeError("Responsive shutdown is not installed")
+    save_queue.shutdown_request('begin_shutdown')
+    _exit_ready_callback = on_ready or quitter
+    _exit_cancel_callback = on_cancel
+    _exit_guard = None
+    _exit_failures = save_queue.failure_serial()
+    _exit_phase = None
+    _exit_polling = True
+    try:
+        _exit_scheduler(_exit_tick)
+    except Exception:
+        cancel_exit()
+        raise
+    return "Preparing to exit -- Esc cancels Exit without interrupting Save"
+
+
+def cancel_exit():
+    global _exit_polling, _exit_guard, _exit_ready_callback, _exit_cancel_callback
+    if not _exit_polling:
+        return False
+    from . import save_queue
+    save_queue.shutdown_request('cancel_shutdown')
+    _exit_polling = False
+    _exit_guard = None
+    callback = _exit_cancel_callback
+    _exit_ready_callback = _exit_cancel_callback = None
+    if callback is not None:
+        try:
+            callback()
+        except Exception as exc:
+            _app().log(f"Exit cancellation notification failed: {exc}")
+    _app().log("Exit cancelled; any Save in progress continues")
+    return True
+
+
+def _exit_tick():
+    global _exit_polling, _exit_guard, _exit_phase
+    global _exit_ready_callback, _exit_cancel_callback
+    from . import save_queue
+    if not _exit_polling:
+        return None
+    app = _app()
+    try:
+        if _exit_guard is not None and save_queue._snapshot(app) != _exit_guard:
+            cancel_exit()
+            app.log("The document changed after Exit approval -- review the latest edits before exiting")
+            return None
+        protected = not app.doc_modified() or bool(save_queue.recovery_for_current_state())
+        action = save_queue.shutdown_request('shutdown_tick', modified=bool(app.doc_modified()), protected=protected,
+            failed=save_queue.failure_serial() != _exit_failures)
+        if action != _exit_phase:
+            if action == 'wait':
+                app.log("Finishing Save before Exit -- UI remains available; Esc cancels Exit")
+            _exit_phase = action
+        if action == 'declined':
+            status, answer = filedialog.ask_yes_no_cancel(
+                "Narwhal 3D", f"Save changes to {app.doc_title()}?")
+            if status != filedialog.OK or answer not in ('yes', 'no'):
+                cancel_exit()
+                return None
+            _exit_guard = save_queue._snapshot(app)
+            if _exit_guard is None:
+                cancel_exit()
+                app.log("Exit cancelled: cannot certify the current document state")
+                return None
+            if answer == 'yes':
+                path = app.doc_path
+                if not path:
+                    status, path = ExitCmd()._ask_save_path("Save")
+                    if status != filedialog.OK:
+                        cancel_exit()
+                        return None
+                # Interchange export does not settle the native document.
+                if _export_route(path):
+                    cancel_exit()
+                    app.log("Exit cancelled: Save a native .narwhal project first")
+                    return None
+                ok, message = write_document(path, background=True)
+                app.log(message)
+                if not ok:
+                    cancel_exit()
+                    return None
+            save_queue.shutdown_request('approve_shutdown')
+        elif action == 'start':
+            app.log("Keeping unsaved work in a validated recovery copy -- Esc cancels Exit")
+            if not write_recovery(background=True):
+                cancel_exit()
+                app.log("Exit cancelled: recovery could not be started; unsaved work remains open")
+                return None
+        elif action == 'commit':
+            # No main-thread event can edit between this check and the quit call.
+            # exit_pre reuses successful recovery evidence instead of saving twice.
+            _exit_ready_callback()
+            _exit_polling = False
+            _exit_ready_callback = _exit_cancel_callback = None
+            return None
+        elif action in ('error', 'idle'):
+            cancel_exit()
+            app.log("Exit cancelled: Save/recovery did not complete; unsaved work remains open")
+            return None
+    except Exception as exc:
+        cancel_exit()
+        app.log(f"Exit cancelled: {exc}; unsaved work remains open")
+        return None
+    return save_queue.POLL_INTERVAL
+
+
+def end_session_if_protected(path):
+    """Never describe failed recovery as a clean session."""
+    from . import save_queue
+    if not save_queue.busy() and (path or not _app().doc_modified()):
+        end_session()
+
 
 # ---------------------------------------------------------------------------
 # File > Recent
@@ -589,14 +722,20 @@ def write_recovery(background=False):
 
     ``background=True`` (AutoSave) starts the copy in `save_queue` when the app
     installed it and returns its path at once (the result is logged when it finishes),
-    or False when a save is already running (try again later). Exit always writes
-    synchronously."""
+    or False when a save is already running (try again later). Application Exit uses
+    that same validated queue. Native exit_pre writes synchronously only when no
+    completed recovery matches the latest document state."""
     from . import autosave
 
     app = _app()
     try:
         if not app.doc_modified():
             return None
+        if not background:
+            from . import save_queue
+            protected = save_queue.recovery_for_current_state()
+            if protected:
+                return protected
         folder = recovery_dir()
         os.makedirs(folder, exist_ok=True)
         path = os.path.splitext(autosave.autosave_path(folder, app.doc_path))[0] + EXT
@@ -838,6 +977,9 @@ class ExitCmd(_FileCommand):
     steps = []
 
     def begin(self, ctx):
+        from . import save_queue
+        if _exit_scheduler is not None and save_queue.enabled() and quitter is not None:
+            return request_exit(), True
         stop = self._settle_unsaved("Exit")
         if stop is not None:
             return stop

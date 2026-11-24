@@ -428,9 +428,10 @@ def verify_ui_core_identity(path: Path) -> dict[str, object]:
     identity = inspect_pe_dll(path, constant_exports={
         "narwhal_editor_abi": 1, "narwhal_popup_abi": 1,
         "narwhal_transcript_abi": 1, "narwhal_transcript_capabilities": 7,
+        "narwhal_ui_content_abi": 1,
     })
     if identity["exports"] != UI_CORE_EXPORTS:
-        raise VerificationError("Windows ui-core lacks the exact editor/popup/transcript ABI exports")
+        raise VerificationError("Windows ui-core lacks the exact editor/popup/transcript/content ABI exports")
     return identity
 
 
@@ -522,7 +523,7 @@ def verify_pure_core_identity(path: Path) -> dict[str, object]:
         raise VerificationError("Windows pure-core lacks required parser ABI exports")
     if any(identity["exports"].count(name) != 1 for name in PURE_CORE_RETIREMENT_EXPORTS):
         raise VerificationError("Windows pure-core lacks required retirement ABI exports")
-    for name in ("narwhal_pure_core_curve_curve_record_hits", "narwhal_pure_core_nearest_on_polyline", "narwhal_pure_core_polyline_samples"):
+    for name in ("narwhal_pure_core_curve_curve_record_hits", "narwhal_pure_core_nearest_on_polyline", "narwhal_pure_core_polyline_samples", "narwhal_pure_core_polycurve_samples", "narwhal_pure_core_remove_join_cv_v1"):
         if identity["exports"].count(name) != 1:
             raise VerificationError("Windows pure-core lacks additive curve record/nearest export: " + name)
     if sys.platform == "win32":

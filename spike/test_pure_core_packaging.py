@@ -352,7 +352,7 @@ def execute_probe(mutant="", code=None):
     return json.loads(output.getvalue())
 
 
-POLYLINE_EXPORTS = ("narwhal_pure_core_curve_curve_record_hits", "narwhal_pure_core_nearest_on_polyline", "narwhal_pure_core_polyline_samples")
+POLYLINE_EXPORTS = ("narwhal_pure_core_curve_curve_record_hits", "narwhal_pure_core_nearest_on_polyline", "narwhal_pure_core_polyline_samples", "narwhal_pure_core_polycurve_samples", "narwhal_pure_core_remove_join_cv_v1")
 
 
 def pe_fixture(*, parser_abi=2, missing="", svg_abi=14, alias_abi=1, dxf_abi=2, reader_abi=1):
@@ -1372,7 +1372,9 @@ class RetirementPackageTests(unittest.TestCase):
                         patch.object(module,"probe_pure_core_polyline_nearest",return_value={}), \
                         patch.object(module,"probe_pure_core_nurbs_record",return_value={}), \
                         patch.object(module,"probe_pure_core_line_samples",return_value={}), \
-                        patch.object(module,"probe_pure_core_polyline_samples",return_value={}):
+                        patch.object(module,"probe_pure_core_polyline_samples",return_value={}), \
+                        patch.object(module,"probe_pure_core_polycurve_samples",return_value={}), \
+                        patch.object(module,"probe_pure_core_remove_join_cv",return_value={}):
                     namespace[method](self)
             else:
                 namespace[method](self)
@@ -1920,6 +1922,36 @@ class GuardMutationTests(unittest.TestCase):
                 restored = unittest.TestResult()
                 case(method).run(restored)
                 self.assertTrue(restored.wasSuccessful(), restored.errors or restored.failures)
+
+
+class JointAdmissionTests(unittest.TestCase):
+    def test_source_closure_and_all_package_entrypoints_require_joint(self):
+        name = "native/pure_core/src/remove_join_cv.rs"
+        self.assertIn(name, gate.RUST_REQUIRED_MODULE_FILES)
+        for relative in ("scripts/create_public_branch.py", "scripts/audit_public_tree.py"):
+            tree = ast.parse((ROOT / relative).read_text())
+            literals = [node.value for node in ast.walk(tree) if isinstance(node, ast.Constant)]
+            self.assertIn(name, literals)
+        for module, function in ((linux_build, "main"),
+                                 (linux_assemble, "validate_native_components"),
+                                 (linux_verify, "verify_native_library_abis")):
+            tree = ast.parse(inspect.getsource(getattr(module, function)))
+            calls = [node.func.id for node in ast.walk(tree)
+                     if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)]
+            self.assertIn("probe_pure_core_remove_join_cv", calls)
+            self.assertIn("probe_pure_core_polycurve_samples", calls)
+
+    def test_actual_joint_probe_and_assertion_red_restored_green(self):
+        library = Path(os.environ.get("NARWHAL_PURE_CORE") or
+                       ROOT / "narwhal3d/native/libnarwhal_pure_core.so")
+        self.assertTrue(gate.probe_pure_core_remove_join_cv(library)["retained_data"])
+        original = gate.PURE_CORE_REMOVE_JOIN_PROBE
+        broken = original.replace("fn(cvs,28,knots,9,3,3", "fn(cvs,28,knots,9,3,0", 1)
+        self.assertNotEqual(original, broken)
+        with patch.object(gate, "PURE_CORE_REMOVE_JOIN_PROBE", broken):
+            with self.assertRaisesRegex(ValueError, "certified fixture"):
+                gate.probe_pure_core_remove_join_cv(library)
+        self.assertTrue(gate.probe_pure_core_remove_join_cv(library)["refusals_no_write"])
 
 
 if __name__ == "__main__":

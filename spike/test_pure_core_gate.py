@@ -232,6 +232,8 @@ def _():
         "spike/test_line_samples.py",
         "spike/test_pure_core_polyline_samples_gate.py",
         "spike/test_polyline_samples.py",
+        "spike/test_pure_core_polycurve_samples_gate.py",
+        "spike/test_polycurve_samples.py",
         "spike/test_native_coil_preview.py",
         "spike/test_preview_curve_native.py",
         "spike/test_native_tessellate.py",
@@ -338,7 +340,7 @@ def _():
     assert ROUND23_FILES | ROUND24_FILES | DXF_LEGACY_FILES | NEAREST25_FILES <= set(closure)
     assert set(gate.RUST_REQUIRED_MODULE_FILES) == ROUND24_MODULES | {
         "native/pure_core/src/options_owned.rs", "native/pure_core/src/options_ffi.rs",
-        "native/pure_core/src/options_prompt.rs"}
+        "native/pure_core/src/options_prompt.rs", "native/pure_core/src/remove_join_cv.rs"}
     assert set(gate.RUST_INTEGRATION_SUITES) == {
             "alias_golden", "unit_golden", "interpolate_golden", "interpolate32_properties", "svgpath_golden",
             "bearing_golden", "calc_golden", "coords_golden", "unitformat_golden",

@@ -4,7 +4,7 @@
 Python orchestrates Cargo, filesystem provenance and the existing isolated ctypes
 packaging probe; editor/popup/transcript algorithms remain Rust-owned. Default:
 fmt, strict Clippy, Rust tests, release build, editor ABI1/State88, popup ABI1,
-transcript ABI1/Request40/Reply56/capabilities7 and all 18 exports.
+transcript ABI1/Request40/Reply56/capabilities7 content ABI1 and all 20 exports.
 The adjacent ui-core-source.json uses the packaging format {inputs, sha256}.
 
 --library verifies an existing binary AND its receipt against the current source;

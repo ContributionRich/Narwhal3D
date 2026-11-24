@@ -243,8 +243,8 @@ class PolicyTests(unittest.TestCase):
     def test_finished_lane_public_dependencies(self):
         import build_linux_native as packaging
         selected = set(public.TEST_FILES + public.NATIVE_FILES + public.LAUNCH_FILES)
-        self.assertEqual(len(packaging.UI_CORE_EXPORTS), 18)
-        self.assertEqual(len(packaging.UI_CORE_REQUIRED_SOURCE), 36)
+        self.assertEqual(len(packaging.UI_CORE_EXPORTS), 20)
+        self.assertEqual(len(packaging.UI_CORE_REQUIRED_SOURCE), 43)
         for path in ('native/ui_core/' + name for name in packaging.UI_CORE_REQUIRED_SOURCE):
             self.assertIn(path, selected)
             self.assertIn(path, audit.REQUIRED)
@@ -342,7 +342,7 @@ class PolicyTests(unittest.TestCase):
     def test_ui_documentation_describes_mandatory_native_policy(self):
         text = source('native/ui_core/README.md')
         self.assertIn('Editor, popup and transcript require native support', text)
-        self.assertIn('all 18 editor/popup/transcript exports', text)
+        self.assertIn('all 20 editor/popup/transcript/content exports', text)
         self.assertIn('invalidates an older source-pinned receipt', text)
         for retired_claim in ('complete original Python implementation remains the default',
                               'use one-way atomic legacy handover', 'Other Unicode versions use a named complete legacy path',

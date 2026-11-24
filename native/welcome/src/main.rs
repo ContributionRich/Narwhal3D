@@ -1,6 +1,7 @@
 #[cfg(target_os = "linux")]
 mod linux_recovery;
 mod native_stacking;
+mod shutdown_approval;
 mod theme;
 
 use eframe::egui::{self, Color32, RichText, Stroke, Vec2};
@@ -1490,9 +1491,12 @@ impl WelcomeApp {
                     self.ready = true;
                 }
                 RuntimeEvent::Exited(code) => {
-                    if code == 0
-                        && self.restart_requested
-                        && self.request.with_extension("restart-approved").is_file()
+                    if shutdown_approval::observe(
+                        self.restart_requested,
+                        self.request.with_extension("restart-approved").is_file(),
+                        self.request.with_extension("restart-declined").is_file(),
+                        Some(code),
+                    ) == shutdown_approval::Decision::Apply
                     {
                         let _ = fs::remove_file(self.request.with_extension("restart-approved"));
                         #[cfg(target_os = "linux")]
@@ -1644,9 +1648,15 @@ impl WelcomeApp {
 
     fn poll_updates(&mut self, _ctx: &egui::Context) {
         self.poll_restart(_ctx, Instant::now());
-        if self.restart_requested
-            && fs::remove_file(self.request.with_extension("restart-declined")).is_ok()
+        if shutdown_approval::observe(
+            self.restart_requested,
+            self.request.with_extension("restart-approved").is_file(),
+            self.request.with_extension("restart-declined").is_file(),
+            None,
+        ) == shutdown_approval::Decision::Declined
         {
+            let _ = fs::remove_file(self.request.with_extension("restart-declined"));
+            let _ = fs::remove_file(self.request.with_extension("restart-approved"));
             self.restart_requested = false;
             self.reveal_update(_ctx);
             self.update_message = Some(
@@ -2514,6 +2524,30 @@ mod tests {
         assert!(!app.hidden);
         assert_eq!(app.lifetime.fade_alpha(Instant::now()), 1.0);
         assert_eq!(app.update_message.as_deref(), Some("startup failed"));
+        // Exercise the actual runtime-exit consumer, not only the pure policy.
+        for (requested, approved, declined, code, apply) in [
+            (true, true, false, 0, true),
+            (true, false, false, 0, false),
+            (true, true, true, 0, false),
+            (true, true, false, 1, false),
+            (false, true, false, 0, false),
+        ] {
+            for (suffix, present) in [
+                ("restart-approved", approved),
+                ("restart-declined", declined),
+            ] {
+                let path = app.request.with_extension(suffix);
+                let _ = fs::remove_file(&path);
+                if present {
+                    fs::write(path, b"").unwrap();
+                }
+            }
+            app.restart_requested = requested;
+            app.exit_code.store(EXIT_PENDING, Ordering::Release);
+            app.sender.send(RuntimeEvent::Exited(code)).unwrap();
+            app.poll_runtime(&ctx);
+            assert_eq!(app.exit_code.load(Ordering::Acquire) == 75, apply);
+        }
         fs::remove_dir_all(root).unwrap();
     }
 

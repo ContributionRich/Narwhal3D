@@ -98,6 +98,10 @@ PROTOCOL_EXPORTS.update({name: owner for name, owner in REQUIRED_PURE_EXPORTS.it
                          if owner == 'options' and not name.endswith('_abi')})
 
 
+REQUIRED_PURE_EXPORTS['narwhal_pure_core_remove_join_cv_v1'] = 'joint'
+PROTOCOL_EXPORTS['narwhal_pure_core_remove_join_cv_v1'] = 'joint'
+
+
 def elf_export_entries(data):
     """Test-only ELF64 metadata, not a loader; modify only temporary copied SOs.
 
@@ -299,7 +303,7 @@ class DesktopNativeStartup(unittest.TestCase):
                  'vector':'vector', 'DXF':'dxf', 'Tween':'tween',
                  'earclip':'earclip', 'control preview':'control_preview',
                  'preview':'preview', 'DXF reader':'dxf_reader',
-                 'nearest':'nearest', 'options':'option_framework'}
+                 'nearest':'nearest', 'options':'option_framework', 'joint':'joint'}
         for symbol,owner in REQUIRED_PURE_EXPORTS.items():
             with self.subTest(symbol=symbol):
                 marker = "('"+owner+"', "+names[owner]+")"
@@ -402,6 +406,23 @@ class DesktopNativeStartup(unittest.TestCase):
         path.write_bytes(original)
         restored = self.run_launcher()
         self.assertEqual(restored.returncode, 0, restored.stdout + restored.stderr)
+
+    def test_content_exports_are_required_before_graphical_launch(self):
+        path = self.root / 'narwhal3d/native/libnarwhal_ui_core.so'
+        original = path.read_bytes()
+        entries = elf_export_entries(original)
+        for symbol in ('narwhal_ui_content_abi', 'narwhal_ui_content_read'):
+            with self.subTest(symbol=symbol):
+                self.started.unlink(missing_ok=True)
+                data = bytearray(original)
+                data[entries[symbol][0] + 4] &= 0x0f
+                path.write_bytes(data)
+                result = self.run_launcher()
+                self.assert_no_graphical_start(result)
+                self.assertIn('required native UI content ABI 1 is unavailable', result.stderr)
+                path.write_bytes(original)
+                restored = self.run_launcher()
+                self.assertEqual(restored.returncode, 0, restored.stdout + restored.stderr)
 
     def test_seam_safe_converter_is_required(self):
         path=self.root / "narwhal3d/native/libnarwhal_geometry_core.so"

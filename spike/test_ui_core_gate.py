@@ -23,14 +23,14 @@ ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / 'scripts/check_ui_core.py'
 SOURCE = SCRIPT.read_text()
 sys.path.insert(0, str(ROOT / 'scripts'))
-from test_release_ui_core import add_transcript_fixture
+from test_release_ui_core import add_transcript_fixture, add_content_fixture
 
 EXPORTS = ('narwhal_editor_abi', 'narwhal_editor_close', 'narwhal_editor_edit', 'narwhal_editor_read',
            'narwhal_popup_abi', 'narwhal_popup_apply', 'narwhal_popup_destroy', 'narwhal_popup_guards',
            'narwhal_popup_hit', 'narwhal_popup_panel', 'narwhal_popup_rows',
            'narwhal_transcript_abi', 'narwhal_transcript_apply', 'narwhal_transcript_capabilities',
            'narwhal_transcript_close', 'narwhal_transcript_read', 'narwhal_transcript_release',
-           'narwhal_transcript_stats')
+           'narwhal_transcript_stats', 'narwhal_ui_content_abi', 'narwhal_ui_content_read')
 
 
 def load(source=SOURCE):
@@ -58,6 +58,7 @@ def fake_library(editor=1, popup=1, size=88, missing=(), read_status=0, close_st
     lib.narwhal_editor_read = read
     lib.narwhal_editor_close = lambda handle: close_status
     add_transcript_fixture(lib, transcript, capabilities, request_bytes, reply_bytes, transcript_fault)
+    add_content_fixture(lib)
     for name in missing:
         delattr(lib, name)
     return lib
@@ -137,7 +138,7 @@ class GateTests(unittest.TestCase):
         with self.fixture() as f:
             library, identity = f.build()
             self.assertEqual([x[0] for x in f.calls], ['fmt', 'clippy', 'test', 'build', 'abi'])
-            self.assertEqual(identity, dict(editor_abi=1, popup_abi=1, state_bytes=88,
+            self.assertEqual(identity, dict(content_abi=1, editor_abi=1, popup_abi=1, state_bytes=88,
                                             transcript_abi=1, transcript_capabilities=7,
                                             transcript_request_bytes=40, transcript_reply_bytes=56,
                                             exports=list(EXPORTS)))
@@ -208,7 +209,7 @@ class GateTests(unittest.TestCase):
     def test_inventory_complete_and_ignores_only_build_caches(self):
         with self.fixture() as f:
             before = f.gate.source_inventory(f.root)
-            self.assertEqual(len(before), 36)
+            self.assertEqual(len(before), 43)
             for name in ('EXTRA.md', 'EXTRA2.md', 'extra_generator.py', 'src/extra_tests.rs'):
                 (f.crate / name).write_text('input')
             after = f.gate.source_inventory(f.root)

@@ -17,7 +17,7 @@ import tempfile
 from typing import Any
 
 from build_linux_native import UI_CORE_IDENTITY, probe_ui_core, inventory as native_source_inventory, probe_geometry_core_join, geometry_source_inventory, GEOMETRY_CORE_EXPORTS, GEOMETRY_CORE_REQUIRED_CAPABILITIES
-from check_pure_core import PURE_CORE_PARSE_IDENTITY, probe_pure_core_parser, probe_pure_core_retirement, probe_pure_core_curve_record_hits, probe_pure_core_polyline_nearest, probe_pure_core_polyline_samples
+from check_pure_core import PURE_CORE_PARSE_IDENTITY, probe_pure_core_parser, probe_pure_core_retirement, probe_pure_core_curve_record_hits, probe_pure_core_polyline_nearest, probe_pure_core_polyline_samples, probe_pure_core_remove_join_cv, probe_pure_core_polycurve_samples
 
 from release_policy import (
     MAX_HOST_GLIBC, format_glibc, glibc_versions, scan_runtime_glibc,
@@ -429,6 +429,7 @@ def verify_lock_and_markers(appdir: Path, identity: JsonObject) -> None:
         "blender_patches/apply_cad_boundary_wires.py",
         "blender_patches/apply_deferred_first_present.py",
         "blender_patches/apply_narwhal3d_branding.py",
+        "blender_patches/apply_preclose.rs",
         "blender_patches/apply_statusbar_height.py",
         "blender_patches/apply_window_overlay.py",
         "blender_patches/narwhal3d_app_icon.svg",
@@ -606,6 +607,10 @@ def verify_native_library_abis(app_root: Path, python: Path, environment: dict[s
                                         python, env=environment)
         probe_pure_core_polyline_samples(app_root / "narwhal3d/native/libnarwhal_pure_core.so",
                                         python, env=environment)
+        probe_pure_core_polycurve_samples(app_root / "narwhal3d/native/libnarwhal_pure_core.so",
+                                         python, env=environment)
+        probe_pure_core_remove_join_cv(app_root / "narwhal3d/native/libnarwhal_pure_core.so",
+                                       python, env=environment)
     except ValueError as exc:
         raise VerificationError(str(exc)) from exc
     abi_probe = (

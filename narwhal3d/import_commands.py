@@ -1,4 +1,4 @@
-"""`Import` -- foreign CAD, vector, and mesh files.
+"""`Import` -- native projects, foreign CAD, vector, and mesh files.
 
 MEASURED (commands/import.htm): Import "imports objects from a file into the current
 model"; (fileio/*): "When you open a non-3dm file and save the model, its filename will be
@@ -7,6 +7,10 @@ the default 3dm filename." `open_foreign(path)` provides that Open route for
 
 Formats, and how exact each is:
 
+* **.narwhal** -- canonical Rust-validated native project loading, then an object merge
+  into the active document, with exact master-aware unit conversion and independent
+  group/material/object identities. Unsupported table/instance resources refuse before
+  publication instead of silently omitting objects.
 * **.3dm** -- loaded through ``NarwhalModel.load`` so analytic recipes/masters are
   rehydrated exactly, then merged into the current model on their source layers. Geometry
   is uniformly scaled when source and destination model units differ.
@@ -59,12 +63,13 @@ from . import filedialog
 
 TEXT = commands.TEXT
 
-IMPORT_FILTERS = (("All supported", "*.3dm *.step *.stp *.dxf *.svg *.cdr *.pdf *.ai *.obj *.stl"),
+IMPORT_FILTERS = (("All supported", "*.narwhal *.NARWHAL *.3dm *.step *.stp *.dxf *.svg *.cdr *.pdf *.ai *.obj *.stl"),
+                  ("Native projects", "*.narwhal *.NARWHAL"),
                   ("3D model", "*.3dm"), ("CorelDRAW", "*.cdr"),
                   ("STEP", "*.step *.stp"), ("AutoCAD DXF", "*.dxf"), ("SVG", "*.svg"),
                   ("PDF / Adobe Illustrator", "*.pdf *.ai"),
                   ("Wavefront OBJ", "*.obj"), ("STL", "*.stl"))
-FORMATS = (".3dm", ".step", ".stp", ".dxf", ".svg", ".cdr", ".pdf", ".ai", ".obj", ".stl")
+FORMATS = (".narwhal", ".3dm", ".step", ".stp", ".dxf", ".svg", ".cdr", ".pdf", ".ai", ".obj", ".stl")
 
 #: DXF `$INSUNITS` codes -> document unit names (the AutoCAD table; 0 = unitless).
 DXF_UNITS = {1: "Inches", 2: "Feet", 3: "Miles", 4: "Millimeters", 5: "Centimeters",
@@ -93,6 +98,7 @@ class Imported:
         self.plot_widths: dict[int, float] = {}
         # (width, height) in model units, used only for PDF page stacking.
         self.page_size: tuple[float, float] | None = None
+        self.native_fragment = None
 
 
 def _units():
@@ -1114,6 +1120,115 @@ def _import_native_v15_drawing(drawing, model):
     return out
 
 
+# --------------------------------------------------------------------------- native project
+
+
+def _read_narwhal(path, model):
+    """Canonical native admission, followed by existing SDK/fragment host adaptation.
+
+    No archive decoder lives here. The candidate stays separate from the active
+    model, and its prepared exact bindings never replace the active registry.
+    """
+    from . import bridge, document_clipboard as fragments, kernel, library_geometry
+    from . import narwhal_document
+    from .kernel import occt_backend
+
+    source = narwhal_document.load_model(path)
+    # The existing single-history snapshot cannot restore definition/linetype
+    # tables. Refuse the whole import, never the old 3dm route's skipped instances.
+    if len(source.file.InstanceDefinitions):
+        raise ValueError("native Import: block definition/instance mapping is not supported "
+                         "by the current Undo snapshot; nothing was imported")
+    for obj in source.file.Objects:
+        if isinstance(obj.Geometry, r3.InstanceReference):
+            raise ValueError(f"{obj.Attributes.Name}: native block instance import is not supported")
+    library_geometry._admit_table_resources(source)
+    factor = float(r3.UnitSystem.UnitScale(source.file.Settings.ModelUnitSystem,
+                                           model.file.Settings.ModelUnitSystem))
+    if not math.isfinite(factor) or factor <= 0:
+        raise ValueError("native Import: cannot convert the source document units")
+    # Existing resource handling embeds verified image bytes and uses persistent
+    # content-addressed resources, not a native-load temporary or the source file.
+    library_geometry._pictures(source)
+    prepared = {kernel.master_key_of(g): shape
+                for g, shape in source._native_master_bindings}
+    scale = r3.Transform.Scale(r3.Point3d(0, 0, 0), factor)
+    out = Imported()
+    materials = {str(i): r3.CommonObject.Decode(m.Encode())
+                 for i, m in enumerate(source.file.Materials)}
+    groups = {str(i): r3.CommonObject.Decode(g.Encode())
+              for i, g in enumerate(source.file.Groups)}
+    layers = {}
+    for i, layer in enumerate(source.file.Layers):
+        material = str(layer.RenderMaterialIndex)
+        layers[str(i)] = fragments.DecodedLayer(
+            r3.CommonObject.Decode(layer.Encode()), None,
+            material if material in materials else None)
+        out.layers[layer.Name] = tuple(layer.Color)[:3]
+    holder = r3.File3dm()
+    objects = []
+    for obj in source.file.Objects:
+        geometry = obj.Geometry.Duplicate()
+        if geometry is None:
+            raise ValueError(f"{obj.Attributes.Name}: geometry could not be duplicated")
+        master = prepared.get(kernel.master_key_of(obj.Geometry))
+        if master is not None:
+            # The canonical loader's validated payload is authoritative, including
+            # projects whose exact geometry has no replayable construction history.
+            if not kernel.record_recipe(geometry, occt_backend.native_master_recipe(master)):
+                raise ValueError(f"{obj.Attributes.Name}: exact import recipe could not be stored")
+            kernel.register_master(geometry, master)
+        geometry = bridge.transform_geometry(geometry, scale)
+        library_geometry._check_geometry(geometry, obj.Attributes.Name)
+        attrs = source._object_registry.observer.copy_attributes(
+            source.file, str(obj.Attributes.Id), holder)
+        layer = str(attrs.LayerIndex)
+        if layer not in layers:
+            raise ValueError(f"{attrs.Name}: source layer is missing")
+        memberships = tuple(str(index) for index in (attrs.GetGroupList2() or ()))
+        if any(group not in groups for group in memberships):
+            raise ValueError(f"{attrs.Name}: source group is missing")
+        material = str(attrs.MaterialIndex)
+        objects.append(fragments.DecodedObject(
+            geometry, attrs, layer, material if material in materials else None, memberships))
+        out.items.append((geometry, attrs.Name or type(geometry).__name__, layers[layer].layer.Name))
+    out.native_fragment = fragments.DecodedFragment(tuple(objects), layers, materials, groups)
+    if abs(factor - 1.0) > 1e-15:
+        out.notes.append(f"scaled from {source.unit_system()} to {model.unit_system()} by {factor:g}")
+    return out
+
+
+def _merge_narwhal(ctx, path, got):
+    """Use the existing fragment transaction and ordinary Import Undo record."""
+    from . import library_geometry
+
+    try:
+        library_geometry._admit_table_resources(ctx.model)
+    except (ValueError, RuntimeError) as exc:
+        return False, f"Import: {exc}"
+    ctx.begin_undo("Import")
+    record = ctx.undo._open
+    previous_before = record.before if record is not None else None
+    try:
+        names = commands._apply_document_fragment(ctx, got.native_fragment)
+    except Exception as exc:
+        # The fragment transaction already restored the model; restore its display
+        # and remove only this failed operation's lazy capture, not an outer record.
+        ctx.rebuild_display()
+        if record is not None and ctx.undo._open is record:
+            record.before = previous_before
+        return False, f"Import: native project publication failed: {exc}"
+    finally:
+        ctx.end_undo()
+    try:
+        from .state import app_state
+        if app_state.ctx is ctx and app_state.model is ctx.model:
+            app_state._rebuild_layers()
+    except Exception:  # noqa: BLE001 -- independent command contexts have no app state
+        pass
+    return True, _summary(path, got, len(names))
+
+
 # --------------------------------------------------------------------------- 3DM
 
 
@@ -1251,7 +1366,7 @@ def _read_stl(path, model):
     return out
 
 
-READERS = {".3dm": _read_3dm, ".step": _read_step, ".stp": _read_step,
+READERS = {".narwhal": _read_narwhal, ".3dm": _read_3dm, ".step": _read_step, ".stp": _read_step,
            ".dxf": _read_dxf, ".svg": _read_svg, ".cdr": _read_cdr,
            ".pdf": _read_pdf_ai, ".ai": _read_pdf_ai, ".obj": _read_obj,
            ".stl": _read_stl}
@@ -1343,6 +1458,8 @@ def import_into(ctx, path):
     if not got.items:
         return False, f"Import: nothing in {os.path.basename(path)} could be imported" + (
             ". " + "; ".join(got.notes) if got.notes else "")
+    if got.native_fragment is not None:
+        return _merge_narwhal(ctx, path, got)
     undo = getattr(ctx, "undo", None)
     undo_was_enabled = bool(getattr(undo, "enabled", False))
     already_captured = bool(getattr(undo, "captured", False))
@@ -1400,17 +1517,23 @@ def import_into(ctx, path):
 
 
 def open_foreign(path):
-    """Open a whole .3dm document, or import another format into a new model.
+    """Open a whole .narwhal/.3dm document, or another format into a new model.
 
-    Whole-document .3dm adoption retains metadata, units and tables. Object Import
+    Whole-document native/3dm adoption retains metadata, units and tables. Object Import
     remains a separate merge route and never replaces destination document strings.
     Other formats retain their existing default-unit conversion behavior.
     """
     from .model import NarwhalModel
 
-    if os.path.splitext(str(path))[1].lower() == '.3dm':
+    extension = os.path.splitext(str(path))[1].lower()
+    if extension in ('.3dm', '.narwhal'):
         try:
-            model = NarwhalModel.load(path)
+            if extension == '.narwhal':
+                from . import narwhal_document
+                model = narwhal_document.load_model(path)
+                narwhal_document.commit_masters(model)
+            else:
+                model = NarwhalModel.load(path)
         except (OSError, ValueError, RuntimeError) as exc:
             return None, f"Open: {exc}"
         return model, f"Opened {path} ({model.object_count()} objects)"
@@ -1430,7 +1553,7 @@ def open_foreign(path):
 
 class ImportCmd(commands.Command):
     name = "Import"
-    description = ("Import objects from a .3dm, .step, .dxf, .svg, .cdr, .pdf, .ai, .obj or .stl "
+    description = ("Import objects from a .narwhal, .3dm, .step, .dxf, .svg, .cdr, .pdf, .ai, .obj or .stl "
                    "file into the current model.")
     steps = [("File name to import:", TEXT)]
 

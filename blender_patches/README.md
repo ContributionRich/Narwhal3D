@@ -79,10 +79,44 @@ fallback.
 ## Rebuilding
 
 Use `scripts/build_blender_linux.sh` with the exact source commit and build inputs pinned
-in `packaging/linux-x86_64.lock.json`. The build script applies all four patches,
+in `packaging/linux-x86_64.lock.json`. The build script applies all required patches, including pre-close approval,
 validates their anchors, compiles the runtime, and writes the native-runtime provenance
 marker required by release assembly. Downloaded source, build trees, installed runtimes,
 and wheel caches remain ignored build artifacts.
 
 See `packaging/README.md` for required arguments, dependency installation, resource
 requirements, and release-verification steps.
+
+## `apply_preclose.rs` — opt-in cancellable application close
+
+Rust tooling applies a small C++/RNA patch before exit scheduling. The default is
+unchanged Blender behavior. `WindowManager.narwhal_defer_close` opts into a
+process-local mailbox; native last-main-window close, native QuitRequest, and the
+interactive quit operator then coalesce into `narwhal_close_requested` instead of
+scheduling `WM_exit`. Neither property is serialized into a .blend.
+
+The application installs its main-thread coordinator timer before opting in.
+Save, repair/revalidation, Cancel, latest-edit protection and updater completion
+all use the existing save coordinator. Only completed protection permits the app
+to disable the guard briefly and request native quit. No host handles are handed
+to a detached process, and no window is hidden during saving. Unregister removes
+the timer/guard. Older runtimes retain synchronous exit_pre recovery and log that
+native close deferral is unavailable.
+
+`scripts/build_blender_linux.sh` compiles/applies/checks this Rust patch tool and
+includes its hash in native-runtime provenance. Release assembly/verification
+require the new input. The tool can also run independently:
+
+```sh
+rustc --edition 2024 blender_patches/apply_preclose.rs -o /tmp/apply_preclose
+/tmp/apply_preclose /absolute/blender-source/source/blender
+/tmp/apply_preclose /absolute/blender-source/source/blender --check
+```
+
+Tests: `rustc --test` on the patch tool, `spike/test_preclose.rs` against a patched
+source tree (exact C++ function assertions and deliberate native-guard mutation),
+`spike/test_responsive_exit.py` for actual Blender save/callback integration, and
+`spike/test_native_runtime_provenance.py` for build/record/package checks.
+Source-level tests do not replace the required owned-candidate GUI qualification.
+Do not publish or attest a runtime before its executable is rebuilt and that
+qualification passes.

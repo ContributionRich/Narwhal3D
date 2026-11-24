@@ -2,6 +2,27 @@
 
 Narwhal 3D is an extremely early public prerelease. This page records what currently works and what remains incomplete so visible UI does not imply unsupported behavior. Package versions remain on the `0.4.x` line until the project owner explicitly lifts that cap.
 
+## Unreleased source integration
+
+The content-only UI conversion moves authored toolbar/menu DATA and registry expansion
+into Rust, preserving typed frozen-content and real-host coverage. It is not a
+startup-speed claim. Source fixes also cover exact Near snapping, independent
+multi-result booleans, native-project Import, copied/exploded curve display and
+picker/Properties source caches.
+
+The new single curved PolyCurve-joint deletion policy retains exact degree-elevated
+homogeneous coefficients and knots, with native SDK construction and Rust validation.
+Curved multi-joint batches remain explicitly refused; generalized external
+multi-segment parameter-domain parity is not exhaustively qualified.
+
+Exit coordinates pending Save and validated recovery before approving native close;
+Escape/Cancel retains the open document, and edits after approval require review.
+Native title-bar deferral is default-off in the patched host and currently qualified
+on Linux only. Main-thread staging/repair can still take time on large documents;
+small deterministic responsiveness fixtures are not a large-document guarantee.
+Other platforms have not been qualified for the new UI-content ABI or native-close
+hook. These are source changes, not replacements for published 0.4.14 packages.
+
 ## Current source and 0.4.14 feature set
 
 The Linux AppImage and Windows portable EXE for [0.4.14](https://github.com/ContributionRich/Narwhal3D/releases/tag/v0.4.14) are published from tagged source `58b24e8d4e82380bcb34eca596133c9d6e7b0579`. Compared with 0.4.13, this release adds supported multi-step AI modeling, rational NURBS surface patches, exact surface Join/Cap, bounded parser-limit recovery, faster curve work, and smoother installation/updating. Library, TracePicture, native project I/O and the exact-save helper remain included. See the [release differences](CHANGELOG.md#0414--2026-11-23).
@@ -145,3 +166,14 @@ Polyline/Rectangle record intersection and nearest-point routes, and batched
 overlap queries. Existing parameter/bit semantics and refusal fallbacks remain;
 new direct polyline routes are Linux x86_64 plus loaded-SDK-witness gated, not
 Windows/macOS-qualified. No new approximate document geometry is introduced.
+
+## Current source after v0.4.14
+
+The pending source checkpoint moves authored toolbar/macro/icon DATA and menu
+expansion into required Rust UI content ABI1 (20 UI exports total), without
+activating numeric shell transport. It also retains disconnected exact boolean
+results, prefers a near-cursor curve snap over a distant bounding-box point,
+and supports canonical native-project Import with conservative unsupported-resource
+refusal. Later Copy/Explode display and picker/Properties cache fixes are source
+changes, not replacement v0.4.14 binaries. Published v0.4.14 assets/tag remain
+unchanged. This does not claim a startup speedup or new Windows/macOS qualification.

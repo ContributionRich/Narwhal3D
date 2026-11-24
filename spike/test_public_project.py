@@ -54,6 +54,7 @@ def public_completeness_checks():
     native.update({"native/automation_test_driver/README.md",
                    "native/automation_test_driver/tests/cli.rs",
                    "native/automation_test_driver/tests/registration.rs"})
+    native.update({'native/ui_core/tests/content13_host.rs', 'native/ui_core/src/content_data/content.json', 'native/ui_core/tests/data/content13_golden.json', 'native/ui_core/tests/data/content13_provenance.json', 'native/ui_core/tests/content13_mutations.rs', 'native/ui_core/tests/content13.rs', 'native/ui_core/src/content.rs'})
     native.add("native/geometry_core/build.rs")
     native.add("native/pure_core/tests/interpolate32_properties.rs")
     # Installer crates must ship every Rust module, including cfg-gated recovery/startup.
@@ -63,6 +64,15 @@ def public_completeness_checks():
                       for path in (ROOT / crate / "src").rglob("*.rs") if path.is_file())
 
     focused = {
+        'spike/test_curve_display_copy_explode.py',
+        'spike/test_brep_picker_source_cache.py',
+        'spike/test_properties_source_cache.py',
+
+        'spike/test_boolean_multiple.py',
+        'spike/test_report141_snap.py',
+        'spike/test_import_narwhal.py',
+        'narwhal3d/native_ui_content.py',
+
         "spike/test_ai_workflow.py", "spike/test_ai_workflow_native.py",
         "spike/test_ai_cad.py", "spike/test_ai_cad_native.py",
         "spike/test_ai_box.py",
@@ -633,6 +643,7 @@ check({"native/pure_core/Cargo.toml", "native/pure_core/README.md",
        "spike/test_pure_core_nurbs_record_gate.py",
        "spike/test_pure_core_line_samples_gate.py",
        "spike/test_pure_core_polyline_samples_gate.py",
+       "spike/test_pure_core_polycurve_samples_gate.py",
        "spike/test_native_coil_preview.py", "spike/test_preview_curve_native.py",
        "spike/test_native_tessellate.py",
        "spike/test_native_unit_table.py",

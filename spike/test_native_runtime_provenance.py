@@ -26,6 +26,7 @@ INPUTS = (
     "blender_patches/apply_cad_boundary_wires.py",
     "blender_patches/apply_deferred_first_present.py",
     "blender_patches/apply_narwhal3d_branding.py",
+    "blender_patches/apply_preclose.rs",
     "blender_patches/apply_statusbar_height.py",
     "blender_patches/apply_window_overlay.py",
     "blender_patches/narwhal3d_app_icon.svg",
@@ -37,6 +38,7 @@ BINARY = """#!/bin/sh
 # NARWHAL3D_DEFER_FIRST_PRESENT
 # NARWHAL3D_STATUSBAR_HEIGHT
 # RNA_WINDOW_DRAW_HANDLE
+# narwhal_defer_close
 printf 'Narwhal 3D 5.2.2 fixture\\n'
 """
 
@@ -50,8 +52,8 @@ def load(name, path):
 
 assemble = load("provenance_assemble", ROOT / "scripts/assemble_linux_release.py")
 verify = load("provenance_verify", ROOT / "scripts/verify_linux_release.py")
-statusbar = load("provenance_statusbar", ROOT / INPUTS[4])
-overlay = load("provenance_overlay", ROOT / INPUTS[5])
+statusbar = load("provenance_statusbar", ROOT / "blender_patches/apply_statusbar_height.py")
+overlay = load("provenance_overlay", ROOT / "blender_patches/apply_window_overlay.py")
 
 
 def write(path, text, executable=False):
@@ -98,6 +100,21 @@ def main():
             self.overlay_originals[relative] = self.overlay_originals.get(relative, "") + old + "\n"
         for relative, text in self.overlay_originals.items():
             write(self.native_source / relative, text)
+        # Existing shell/packaging fixtures exercise the real Rust patch tool.
+        self.preclose_originals = {}
+        fixtures = {
+            "windowmanager/intern/wm_window.cc": '#include "WM_api.hh"\nvoid wm_quit_with_optional_confirmation_prompt(bContext *C, wmWindow *win)\n{\n}\n',
+            "makesrna/intern/rna_wm.cc": '#ifdef RNA_RUNTIME\nnamespace blender {\n\nstatic wmOperator *rna_OperatorProperties_find_operator\n  prop = RNA_def_property(srna, "operators", PROP_COLLECTION, PROP_NONE);\n',
+        }
+        for name, anchors in fixtures.items():
+            path = self.native_source / name
+            text = (path.read_text() if path.exists() else '') + anchors
+            write(path, text)
+            self.preclose_originals[name] = text
+        self.preclose_tool = self.root / 'apply_preclose'
+        subprocess.run(['rustc', '--edition', '2024', str(ROOT / 'blender_patches/apply_preclose.rs'),
+                        '-o', str(self.preclose_tool)], check=True, capture_output=True)
+        subprocess.run([str(self.preclose_tool), str(self.native_source)], check=True, capture_output=True)
         self.overlay_header = self.native_source / overlay.HEADER
         self.install = self.root / "installed fixture"
         self.binary = self.install / "blender"
@@ -167,7 +184,7 @@ grep -q 'BPY_callback_window_draw' "$FIXTURE_OVERLAY_HEADER" || exit 93
 
     def test_self_check_requires_regular_parseable_statusbar_and_overlay_patches(self):
         self.run_builder("--self-check")
-        for name in INPUTS[4:6]:
+        for name in ("blender_patches/apply_statusbar_height.py", "blender_patches/apply_window_overlay.py"):
             with self.subTest(patch=name):
                 path = self.root / name
                 original = path.read_text()
@@ -182,7 +199,11 @@ grep -q 'BPY_callback_window_draw' "$FIXTURE_OVERLAY_HEADER" || exit 93
                 self.run_builder("--self-check")
 
     def test_clean_build_applies_explicit_source_and_records_all_inputs(self):
+        for name, text in self.preclose_originals.items():
+            write(self.native_source / name, text)
+        (self.native_source / 'windowmanager/WM_narwhal_close.hh').unlink()
         self.build()
+        self.assertIn('NARWHAL_PRECLOSE_V1', (self.native_source / 'windowmanager/intern/wm_window.cc').read_text())
         for module in (statusbar, overlay):
             for relative, _, new in module.EDITS:
                 self.assertIn(new, (self.native_source / relative).read_text())
@@ -192,6 +213,21 @@ grep -q 'BPY_callback_window_draw' "$FIXTURE_OVERLAY_HEADER" || exit 93
         self.assertEqual(len(commands), 3)
         self.assertIn("--parallel 1", commands[1])
         self.assertTrue(commands[2].startswith("--install "))
+
+    def test_preclose_source_is_required_before_build_admission(self):
+        (self.root / 'blender_patches/apply_preclose.rs').unlink()
+        self.assertIn('required native patch input', self.run_builder('--self-check', ok=False))
+        self.assertFalse(self.marker.exists())
+        self.assertFalse(self.log.exists())
+
+    def test_record_requires_preclose_header_without_repairing_it(self):
+        self.build()
+        before = self.marker.read_bytes()
+        header = self.native_source / 'windowmanager/WM_narwhal_close.hh'
+        header.unlink()
+        self.assertIn('missing preclose header', self.record(ok=False))
+        self.assertFalse(header.exists())
+        self.assertEqual(self.marker.read_bytes(), before)
 
     def test_clean_build_still_refuses_dirty_source(self):
         self.env["FIXTURE_DIRTY"] = " M source/blender/editors/screen/screen_edit.cc\n"

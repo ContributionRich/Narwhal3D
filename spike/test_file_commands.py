@@ -393,6 +393,13 @@ def run():
     quits = []
     file_commands.quitter = lambda: quits.append(approved.is_file())
     saved_request = os.environ.get("NARWHAL3D_WELCOME_REQUEST")
+    from narwhal3d import save_queue
+    Pump = runpy.run_path(os.path.join(ROOT, "spike", "test_save_queue.py"))["Pump"]
+    pump = Pump()
+    saved_exit_scheduler = file_commands._exit_scheduler
+    saved_queue_scheduler = save_queue._scheduler
+    save_queue.install(pump.schedule)
+    file_commands._exit_scheduler = pump.schedule
     os.environ["NARWHAL3D_WELCOME_REQUEST"] = str(request)
     try:
         fresh()
@@ -406,6 +413,7 @@ def run():
             filedialog.set_backend(fake)
             signal.touch()
             restart()
+            pump.run(lambda: not file_commands._exit_polling)
             check(not signal.exists() and declined.is_file() and not approved.exists()
                   and not quits and app_state.doc_modified() and app_state.model is model,
                   f"Update restart: {label} preserves the running document and denies apply")
@@ -433,10 +441,20 @@ def run():
         filedialog.set_backend(Fake(ask=[(OK, "yes")], save=[(OK, path)]))
         signal.touch()
         restart()
+        check(not approved.exists() and not quits,
+              "Update restart: pending Save never approves before validated completion")
+        pump.run(lambda: not file_commands._exit_polling)
         check(not signal.exists() and approved.is_file() and not declined.exists()
               and quits == [True] and not app_state.doc_modified() and objects_in(path) == 1,
               "Update restart: successful Save publishes approval before quitting")
     finally:
+        file_commands.cancel_exit()
+        save_queue.drain()
+        file_commands._exit_scheduler = saved_exit_scheduler
+        if saved_queue_scheduler is None:
+            save_queue.uninstall()
+        else:
+            save_queue.install(saved_queue_scheduler)
         file_commands.quitter = None
         if saved_request is None:
             os.environ.pop("NARWHAL3D_WELCOME_REQUEST", None)

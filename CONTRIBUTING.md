@@ -94,3 +94,29 @@ admission, immutable catalogs and optional legacy-fixture limits, see
 [the driver guide](native/automation_test_driver/README.md). Never put mutation
 targets or scratch worktrees inside the repository. This is source-test tooling,
 not a Windows/macOS application capability or a published-release change.
+
+### Authored UI content qualification
+
+Rust UI content/menu changes require the independent content13 typed corpus,
+source/provenance guards, actual-host facade tests and eight producer mutations,
+as well as all existing editor/popup/transcript checks. `run_tests.sh` registers
+the explicit host and mutation targets. Do not replace frozen expected content
+with output recaptured from the new implementation. The mandatory UI ABI now
+contains 20 exports; old content-less libraries must fail closed.
+
+### Exact joint editing and native close qualification
+
+`narwhal_pure_core_remove_join_cv_v1` is a required additive ABI-1 export. Source,
+portable-builder and startup probes must preserve retained coefficients and reject
+invalid joints/short outputs without writes. The actual-host regression is
+`spike/test_polycurve_joint_delete.py`; it also exercises Delete, Undo and reload.
+
+The Linux close hook is patched by `blender_patches/apply_preclose.rs`. Its Rust
+patcher tests are mandatory; an explicitly supplied `NARWHAL_BLENDER_SOURCE` also
+runs `spike/test_preclose.rs` against the actual patched C++. A qualified candidate
+can be tested without replacing the installed runtime using `NARWHAL_RUNTIME_ROOT`.
+The isolated GUI qualifier requires the explicit `NARWHAL_GUI_*` inputs described
+by `native/application_core/examples/qualify_preclose_gui.rs`, including exact
+application/binary hashes. It creates its own display and processes; never point it
+at an owner session. Keep the original candidate-build provenance and record new
+integrated-source/release-core qualification separately.

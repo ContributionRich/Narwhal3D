@@ -9,7 +9,7 @@ The expected overlay is owner-requested, NOT a claim of measured reference-appli
 semantics. Existing motion-time Trim semantics must remain unchanged. A failed
 visual check does not stop later cases. Actual GPU submissions are forwarded and
 observed, not substituted; saved screen pixels independently check all four edges.
-Optional TRIM_BOX_MUTATION=hide|style|fallback|empty_redraw|escape_reset installs
+Optional TRIM_BOX_MUTATION=hide|style|fallback|empty_redraw|escape_reset|width installs
 one process-local negative control. --baseline explicitly clears that override.
 Reports/screenshots are kept in the printed unique /tmp directory, not shared artifacts.
 """
@@ -96,6 +96,7 @@ OUT = Path(os.environ['TRIM_BOX_OUTPUT'])
 RESULT = {'status': 'running', 'checks': [], 'states': [], 'events': [],
           'input': 'actual Window.event_simulate', 'owned_pid': os.getpid(),
           'mutation': os.environ.get('TRIM_BOX_MUTATION', '')}
+RESULT['test_sha256'] = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
 POSITION = (0, 0)
 PAINT = []
 REDRAWS = []
@@ -274,7 +275,7 @@ def visual(label, a, b, direction, visible):
     def submitted(kind, vertices, rgba):
         return any(r['kind'] == kind and r['vertices'] == vertices and r['pane'] == ui._pane_key(AREA)
                    and np.allclose(r['color'], rgba) and r['blend'] == 'ALPHA'
-                   and (kind != 'LINES' or abs(r['line_width'] - ui.SELECTION_RECT_STROKE_PX) < .01)
+                   and (kind != 'LINES' or abs(r['line_width'] - max(1.0, ui.SELECTION_RECT_STROKE_PX * RESULT['width_calibration']['scale'])) < .01)
                    for r in paint)
     # Blender can incidentally repaint on cursor motion even without our redraw tag.
     # Keep the visual oracle AND require this gesture to schedule its own repaint.
@@ -381,6 +382,23 @@ def run():
         if time.monotonic() > deadline:
             raise RuntimeError('Bootstrap not ready in 45s')
         yield .15
+    # GPU_line_width applies max(1, nominal*PIXELSIZE); the getter is physical.
+    # Probe independently of the production stroke, then restore its physical state.
+    previous_width = gpu.state.line_width_get()
+    widths = []
+    scale = 0.0
+    try:
+        for nominal in (1.0, 2.0, 3.0):
+            gpu.state.line_width_set(nominal)
+            widths.append(gpu.state.line_width_get())
+        scale = (widths[2] - widths[0]) / 2.0
+        check(scale > 0 and all(abs(actual - max(1.0, nominal * scale)) < .01
+                               for nominal, actual in zip((1.0, 2.0, 3.0), widths)),
+              "independent GPU width probes certify nominal-to-physical scaling", fatal=True)
+    finally:
+        if scale > 0:
+            gpu.state.line_width_set(previous_width / scale)
+    RESULT["width_calibration"] = dict(nominal=[1.0, 2.0, 3.0], physical=widths, scale=scale)
     st = ui.app_state
     check(not list(st.model.file.Objects), 'refuse nonempty startup document', fatal=True)
     AREA = ui._pane_by_label('Top')
@@ -426,9 +444,13 @@ def install_mutation():
     import textwrap
 
     mode = os.environ.get('TRIM_BOX_MUTATION', '')
-    if mode not in ('fallback', 'empty_redraw', 'escape_reset'):
+    if mode not in ('fallback', 'empty_redraw', 'escape_reset', 'width'):
         return
-    if mode == 'fallback':
+    if mode == "width":
+        owner, name = ui, "draw_point_markers"
+        old = "gpu.state.line_width_set(SELECTION_RECT_STROKE_PX)"
+        new = "gpu.state.line_width_set(SELECTION_RECT_STROKE_PX + 1.0)"
+    elif mode == 'fallback':
         owner, name = ui, 'draw_point_markers'
         old = 'drag = selection_drag_rect() or _trim_drag_rect()'
         new = 'drag = selection_drag_rect()'
@@ -443,10 +465,8 @@ def install_mutation():
                    '                self._redraw()')
         else:
             old = ('    if event.type == "ESC" and event.value == "PRESS":\n'
-                   '        globals()["_sel_drag"] = None\n'
-                   '        if _trim_drag is not None:')
-            new = ('    if event.type == "ESC" and event.value == "PRESS":\n'
-                   '        if _trim_drag is not None:')
+                   '        globals()["_sel_drag"] = None\n')
+            new = '    if event.type == "ESC" and event.value == "PRESS":\n'
     source = textwrap.dedent(inspect.getsource(getattr(owner, name)))
     if source.count(old) != 1:
         raise AssertionError('Mutation anchor missing/ambiguous: ' + mode)
@@ -475,7 +495,7 @@ try:
     check('narwhal3d' not in sys.modules and not os.environ.get('NARWHAL3D_UI_READY'),
           'test precedes bootstrap', fatal=True)
     check(os.environ.get('TRIM_BOX_MUTATION', '') in
-          ('', 'hide', 'style', 'fallback', 'empty_redraw', 'escape_reset'),
+          ('', 'hide', 'style', 'fallback', 'empty_redraw', 'escape_reset', 'width'),
           'known mutation', fatal=True)
     sys.dont_write_bytecode = True
     sys.path.insert(0, str(ROOT))

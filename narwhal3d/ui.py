@@ -7495,14 +7495,14 @@ def _draw_right_band_text(box):
 # Linetype, print color/width, and render settings remain unimplemented.
 # ---------------------------------------------------------------------------
 
-#: (selection, undo serial) -> rows; `object_details` can walk an OCCT shape, so it is
-#: computed once per document state, not every frame
+#: Last rendered rows; attributes/layers are read live, not frozen by Undo serial.
 _props_cache = {"key": None, "rows": []}
 
-#: The Details button defers expensive geometry inspection until clicked. `key` is
-#: the selection and undo serial for which measurements were requested;
-#: `btn` the button's window rectangle, recorded by the draw. The label row value is
-#: `DETAILS_BUTTON` so the draw knows where to put it.
+#: Geometry rows outlive selection and unrelated Undo records, but never their
+#: document or authoritative source value. Pruned to current document membership.
+_props_geometry_cache = {"model": None, "file": None, "entries": {}}
+
+#: Explicit measurements are shown only for the certified source requested.
 _props_details = {"key": None, "rows": [], "btn": None}
 DETAILS_BUTTON = "\x00details-button"
 
@@ -7568,9 +7568,76 @@ def _color_value(value):
         return None
 
 
-def _object_properties(name):
+def _properties_object(name):
+    """Resolve a current table wrapper, including Undo back to an earlier serial."""
+    model = getattr(app_state, "model", None)
+    if model is None:
+        return None
+    identity = model.object_id_by_name(name)
+    return model.file.Objects.FindId(identity) if identity is not None else None
+
+
+def _properties_geometry_entries():
+    model = getattr(app_state, "model", None)
+    document = getattr(model, "file", None)
+    cache = _props_geometry_cache
+    if cache["model"] is not model or cache["file"] is not document:
+        cache.update(model=model, file=document, entries={})
+        _props_details["key"] = None
+    return cache["entries"]
+
+
+def _properties_geometry_rows(fobj, *, measure=False):
+    """Certified geometry rows; host memoization, never a second geometry engine."""
+    if fobj is None:
+        return [], None
+    geom = fobj.Geometry
+    identity = str(fobj.Attributes.Id)
+    entries = _properties_geometry_entries()
+    known = entries.get(identity)
+    source = known["source"] if known else None
+    fingerprint = bridge.object_details_fingerprint(geom, source=source)
+    key = (identity, fingerprint) if fingerprint is not None else None
+    field = "full" if measure else "rows"
+    if known is not None and key is not None and known["key"] == key:
+        if known[field] is not None:
+            return list(known[field]), key
+    else:
+        known = None
+    # Failure or a changing source must not retain earlier successful rows.
+    entries.pop(identity, None)
+    for _attempt in range(2):
+        try:
+            rows = list(bridge.object_details(geom, measure=measure))
+        except Exception:
+            # A failed explicit measurement need not discard certified cheap rows.
+            # Recheck first: never restore them after a source-changing callback.
+            if (known is not None and key is not None and known["key"] == key
+                    and bridge.object_details_fingerprint(geom, source=source) == fingerprint):
+                entries[identity] = known
+            raise
+        after = bridge.object_details_fingerprint(geom, source=source)
+        if fingerprint is None or after == fingerprint:
+            label = dict(rows).get("Source")
+            certified_source = {"analytic master (OCCT)": "master",
+                                "rebuilt from its recipe (OCCT)": "recipe",
+                                "its own faces (no master, no recipe)": "brep"}.get(label)
+            certified = bridge.object_details_fingerprint(geom, source=certified_source)
+            key = (identity, certified) if after is not None and certified is not None else None
+            cheap = [row for row in rows if row[0] not in bridge.MEASURE_ROWS]
+            entry = {"key": key, "source": certified_source, "rows": cheap,
+                     "full": rows if measure else None}
+            if known is not None and known["key"] == key and not measure:
+                entry["full"] = known["full"]
+            entries[identity] = entry
+            return list(rows), key
+        fingerprint = after
+    raise RuntimeError("geometry changed during Properties inspection; retry")
+
+
+def _object_properties(name, *, details=None):
     """Build only values actually available from this File3dm object/document."""
-    fobj = _document_object(name)
+    fobj = _properties_object(name)
     if fobj is None:
         return ObjectProperties(name=name)
     attrs = getattr(fobj, "Attributes", None)
@@ -7586,7 +7653,9 @@ def _object_properties(name):
     geom = getattr(fobj, "Geometry", None)
     obj_type = None
     try:
-        obj_type = dict(bridge.object_details(geom, measure=False)).get("Type")
+        if details is None:
+            details, _key = _properties_geometry_rows(fobj)
+        obj_type = dict(details).get("Type")
     except Exception:  # noqa: BLE001
         pass
     color_source = _enum_name(getattr(attrs, "ColorSource", None))
@@ -7619,55 +7688,60 @@ def _object_properties(name):
 
 
 def properties_rows():
-    """``[(label, value), ...]`` for the Properties panel and the current selection."""
+    """Properties for current geometry AND live object/layer attributes."""
     names = sorted(selection_names())
-    key = (tuple(names), _undo_serial())
-    if _props_cache["key"] == key:
-        return list(_props_cache["rows"])
-    rows = []
+    entries = _properties_geometry_entries()
+    model = getattr(app_state, "model", None)
+    document = getattr(model, "file", None)
+    live = {str(obj.Attributes.Id) for obj in document.Objects} if document is not None else set()
+    for identity in list(entries):
+        if identity not in live:
+            del entries[identity]
     if not names:
         rows = [("", "No object selected")]
     elif len(names) > 1:
         rows = rightpanel.property_rows([_object_properties(n) for n in names])
     else:
         name = names[0]
-        prop_rows = rightpanel.property_rows([_object_properties(name)])
-        fobj = _document_object(name)
-        geom = fobj.Geometry if fobj is not None else geom_by_name_in_document(name)
+        fobj = _properties_object(name)
         try:
-            details = (list(bridge.object_details(geom, measure=False))
-                       if geom is not None else [])
+            details, key = _properties_geometry_rows(fobj)
         except Exception as e:  # noqa: BLE001
-            details = [("Details", f"unavailable: {e}")]
-        # Keep the existing cheap geometry rows (including Face types) after the
-        # aggregate-backed Object page values.
+            details, key = [("Details", f"unavailable: {e}")], None
+        # Type and topology share ONE inspection; metadata is independently live.
+        prop_rows = rightpanel.property_rows([_object_properties(name, details=details)])
         rows = prop_rows + [("", "")]
         rows += [(k, v) for k, v in details if k not in {"Type", "Name", "Layer"}]
-        if geom is not None and not any(k == "Details" for k, _v in details):
-            if _props_details["key"] == key:
+        if fobj is not None and not any(k == "Details" for k, _v in details):
+            if key is not None and _props_details["key"] == key:
                 rows += [("", "")] + list(_props_details["rows"])
             else:
                 rows += [("", ""), ("", DETAILS_BUTTON)]
-    _props_cache["key"], _props_cache["rows"] = key, rows
+    _props_cache.update(key=(tuple(names), _undo_serial()), rows=rows)
     return list(rows)
 
 
 def properties_details():
-    """The Details button: measure the ONE selected object (bounding box, size, length,
-    area, volume -- `bridge.MEASURE_ROWS`) and show the rows under the panel. Returns a
-    message for the command line."""
+    """Measure the selected exact source once; changed sources must be remeasured."""
     names = sorted(selection_names())
     if len(names) != 1:
         return "Details: select one object"
-    geom = geom_by_name_in_document(names[0])
-    if geom is None:
+    fobj = _properties_object(names[0])
+    if fobj is None:
         return "Details: no geometry"
+    _props_details["key"] = None
     try:
-        full = bridge.object_details(geom)
+        full, key = _properties_geometry_rows(fobj, measure=True)
     except Exception as e:  # noqa: BLE001
-        full = [("Details", f"unavailable: {e}")]
+        full, key = [("Details", f"unavailable: {e}")], None
+        entry = _properties_geometry_entries().get(str(fobj.Attributes.Id))
+        if entry is not None:
+            fingerprint = bridge.object_details_fingerprint(fobj.Geometry, source=entry["source"])
+            current = (str(fobj.Attributes.Id), fingerprint) if fingerprint is not None else None
+            if current == entry["key"]:
+                key = current
     measured = [(k, v) for k, v in full if k in bridge.MEASURE_ROWS or k == "Details"]
-    _props_details["key"] = (tuple(names), _undo_serial())
+    _props_details["key"] = key
     _props_details["rows"] = measured or [("", "no measurements for this object")]
     _props_cache["key"] = None
     return None
@@ -9114,6 +9188,11 @@ class NARWHAL_OT_command_input(Operator):
 
     def modal(self, context, event):
         st = app_state
+        if event.type == "ESC" and event.value == "PRESS":
+            from . import file_commands
+            if file_commands.cancel_exit():
+                self._redraw()
+                return {"RUNNING_MODAL"}
         import sys
         from . import rebuild_popup
         if rebuild_popup.handle_event(sys.modules[__name__], event, context):
@@ -15845,17 +15924,9 @@ def _pixels_per_unit(region, rv3d, depth_point):
 #  added next.
 # ---------------------------------------------------------------------------
 
-#: ``{display object name: (segment count, mesh vertex count)}``. The hysteresis in
-#: `tessellate.should_retessellate` is measured against the segment count, so it must
-#: record what was actually DRAWN and not what was requested.
-#:
-#: The vertex count is how this detects its own staleness. `rebuild_display` (in
-#: `commands.py`) deletes and recreates every display object at
-#: the WORLD tolerance, which would leave this dict describing meshes that no longer
-#: exist -- and the hysteresis would then suppress the first legitimate rebuild and
-#: leave the curve coarse. Asking Blender how many vertices the mesh actually has is a
-#: MEASUREMENT of the live state; requiring `rebuild_display` to call an invalidation
-#: hook would create unnecessary coupling between display rebuilding and this cache.
+#: Display-only zoom hysteresis, bound to object/mesh session UUIDs, vertex count
+#: and the writer's requested chord tolerance. A copied or restored mesh cannot
+#: inherit a finer mesh's density merely because it reuses its name/vertex count.
 _curve_display_density = {}
 
 #: True while a re-tessellation timer is armed, so a burst of draw passes during a
@@ -16054,7 +16125,7 @@ def _retess_tick():
                 objects = {ob.name: ob for ob in bpy.data.objects}
             _prio, name, geom, want = job["queue"].pop()
             if bridge.retessellate_curve_for_view(name, geom, job["ppu"]):
-                _curve_display_density[name] = (want, _mesh_vertex_count(name, objects))
+                _curve_display_density[name] = (want, _mesh_density_state(name, objects))
         if job["queue"]:
             return RETESS_SLICE_GAP_S                  # more slices to come
         _retess_done.update(doc=doc, ppu=job["ppu"], deferred=job.get("deferred", 0),
@@ -16120,13 +16191,15 @@ def _retess_queue(pixels_per_unit, visible=None, deferred=None):
         want = tessellate.screen_segments_for(length, pixels_per_unit)
         have = _recorded_density(name, objects)
         if have is None:
-            # Never drawn at a zoom yet (just opened / rebuilt): keep the mesh it HAS
-            # unless it is too COARSE for this zoom. Rebuilding every unknown curve on
-            # first draw can spend substantial time coarsening meshes that are already
-            # visually sufficient.
-            verts = _mesh_vertex_count(name, objects)
-            if verts and want < verts * tessellate.RETESSELLATE_FACTOR:
-                _curve_display_density[name] = (want, verts)
+            # Total vertex count cannot bound local chord error: a mixed PolyCurve
+            # may contain many large-arc vertices and still draw a tiny arc as a V.
+            # Fresh meshes use the world tolerance; in-place writers record their
+            # requested tolerance on the display mesh, never on document geometry.
+            ob = objects.get(name)
+            tolerance = (ob.data.get(bridge.CURVE_DISPLAY_TOL_KEY, bridge.display_tolerance(geom))
+                         if ob is not None and ob.data is not None else bridge.display_tolerance(geom))
+            if tolerance * pixels_per_unit <= tessellate.SCREEN_PIXEL_TOL:
+                _curve_display_density[name] = (want, _mesh_density_state(name, objects))
                 continue
             finer = True
         elif not tessellate.should_retessellate(have, want):
@@ -16175,7 +16248,7 @@ def retessellate_curves_for_zoom(pixels_per_unit):
     while queue:
         _prio, name, geom, want = queue.pop()
         if bridge.retessellate_curve_for_view(name, geom, pixels_per_unit):
-            _curve_display_density[name] = (want, _mesh_vertex_count(name, objects))
+            _curve_display_density[name] = (want, _mesh_density_state(name, objects))
             rebuilt.append(name)
     return rebuilt
 
@@ -16257,18 +16330,30 @@ def _mesh_vertex_count(name, objects=None):
         return None
 
 
-def _recorded_density(name, objects=None):
-    """The segment count this curve was last drawn at, or None if that is unknown.
+def _mesh_density_state(name, objects=None):
+    """Host mesh identity and requested tolerance; equal counts are not equal meshes."""
+    try:
+        ob = objects.get(name) if objects is not None else bpy.data.objects.get(name)
+        if ob is None or ob.data is None:
+            return None
+        return (ob.session_uid, ob.data.session_uid, len(ob.data.vertices),
+                ob.data.get(bridge.CURVE_DISPLAY_TOL_KEY))
+    except (AttributeError, ReferenceError):
+        return None
 
-    Returns None -- i.e. "rebuild it" -- when the live mesh's vertex count no longer
-    matches what was recorded, which is how a `rebuild_display` behind our back is
-    detected without `commands.py` having to tell us. See `_curve_display_density`.
+
+def _recorded_density(name, objects=None):
+    """Last zoom-density signal, only for this unchanged display mesh/tolerance.
+
+    Copy, Explode and Undo can replace a mesh with the SAME vertex count. An
+    in-place rebuild can also restore world tolerance without replacing its UUID.
+    Neither may inherit a previous finer tessellation's hysteresis certificate.
     """
     rec = _curve_display_density.get(name)
     if rec is None:
         return None
-    count, verts = rec
-    if verts is not None and _mesh_vertex_count(name, objects) != verts:
+    count, state = rec
+    if state != _mesh_density_state(name, objects):
         _curve_display_density.pop(name, None)
         return None
     return count
@@ -18252,53 +18337,82 @@ def clear_subobject_selection():
 # from exact topology (`bridge.subobject_parts` -- the master's, never the display
 # proxy's triangles). Keys are (object name, "Face" | "Edge" | "Vertex", id).
 _BREP_KINDS = (subobject.FACE, subobject.EDGE, subobject.VERTEX)
-_brep_parts_cache = {"serial": object(), "parts": {}}
+_brep_parts_cache = {"serial": object(), "parts": {}, "model": None, "file": None}
 
 
 def _brep_parts_all():
-    """``{name: parts}`` for every visible solid / polysurface, re-read when the
-    document changes -- and, then, brep sub-objects already selected are dropped:
-    ids are only valid for an UNCHANGED object.
+    """Exact visible parts, reusing only equal per-object source values.
 
-    An analytic master's parts depend only on its master id (`kernel.master_key_of`), which
-    names one immutable shape, so they are kept across edits to OTHER objects. Dropping every
-    object's parts on each undo serial made each click after an edit re-tessellate every brep
-    (about 0.4 s on a 44-object document, the stall after Delete / Move / Boolean)."""
-    from .kernel import master_key_of, master_of
-    serial = _undo_serial()
-    cache = _brep_parts_cache
-    if cache["serial"] != serial:
-        cache["serial"] = serial
-        stale = {k for k in _selected_subobjects if k[1] in _BREP_KINDS}
-        _selected_subobjects.difference_update(stale)
+    The global Undo serial controls selection lifetime, NOT geometry cache validity.
+    Unchanged recipe-only solids must not replay expensive construction after an
+    unrelated edit. UUID plus authoritative document/recipe/master value detects replacement,
+    recipe edits and in-place native mutations even inside an open Undo record.
+    """
+    import rhino3dm as r3
+
     model = getattr(app_state, "model", None)
     file3dm = getattr(model, "file", None)
+    serial = _undo_serial()
+    cache = _brep_parts_cache
+    if cache.get("model") is not model:
+        cache["parts"] = {}
+    if cache["serial"] != serial or cache.get("file") is not file3dm:
+        stale = {k for k in _selected_subobjects if k[1] in _BREP_KINDS}
+        _selected_subobjects.difference_update(stale)
+    cache.update(serial=serial, model=model, file=file3dm)
     if file3dm is None:
+        cache["parts"] = {}
         return {}
-    previous, current = cache["parts"], {}
-    out = {}
+    previous, current, out = cache["parts"], {}, {}
     for fobj in file3dm.Objects:
-        name = fobj.Attributes.Name or ""
-        ob = bpy.data.objects.get(name)
-        if not name or ob is None:
-            continue
-        try:
-            if not ob.visible_get():
-                continue
-        except Exception:  # noqa: BLE001
+        attrs = fobj.Attributes
+        name = attrs.Name or ""
+        if not name:
             continue
         geom = fobj.Geometry
-        key = master_key_of(geom) if master_of(geom) is not None else None
+        if not isinstance(geom, (r3.Brep, r3.Extrusion, r3.Surface)):
+            continue
         known = previous.get(name)
+        # Keep hidden current-document entries bounded by membership, but do not
+        # evaluate them. A reveal always rechecks their source before reuse.
+        ob = bpy.data.objects.get(name)
+        try:
+            visible = ob is not None and ob.visible_get()
+        except Exception:  # noqa: BLE001
+            visible = False
+        if not visible:
+            if known is not None:
+                current[name] = known
+            continue
+        identity = str(attrs.Id)
+        source = known[2].get("source") if known is not None and known[2] else None
+        fingerprint = bridge.subobject_source_fingerprint(geom, source=source)
+        key = (identity, fingerprint) if fingerprint is not None else None
         if known is not None and key is not None and known[0] == key:
             parts = known[2]
-        elif known is not None and key is None and known[1] == serial:
-            parts = known[2]
         else:
-            try:
-                parts = bridge.subobject_parts(geom)
-            except Exception:  # noqa: BLE001
-                parts = None
+            stale = {k for k in _selected_subobjects if k[0] == name and k[1] in _BREP_KINDS}
+            _selected_subobjects.difference_update(stale)
+            parts = None
+            for _attempt in range(2):
+                try:
+                    candidate = bridge.subobject_parts(geom)
+                    after = bridge.subobject_source_fingerprint(geom, source=source)
+                except Exception:  # noqa: BLE001 -- failed extraction must not retain old parts
+                    key = None
+                    break
+                if fingerprint is None or after == fingerprint:
+                    parts = candidate
+                    # Only extraction can certify which representation supplied parts.
+                    certified = bridge.subobject_source_fingerprint(
+                        geom, source=candidate.get("source")) if candidate and after is not None else None
+                    key = (identity, certified) if certified is not None else None
+                    break
+                # Native meshing can change nongeometric flags, or a callback can
+                # change geometry. Retry from the new value once; never publish
+                # parts certified against an earlier source or spin indefinitely.
+                fingerprint = after
+                key = None
         current[name] = (key, serial, parts)
         if parts:
             out[name] = parts
@@ -20172,9 +20286,53 @@ def draw_print_dialog():
 _exit_installed = False
 
 
+def _quit_after_approval():
+    """Bypass the native opt-in mailbox only after coordinator completion."""
+    wm = bpy.context.window_manager
+    guarded = getattr(wm, "narwhal_defer_close", False)
+    if guarded:
+        wm.narwhal_defer_close = False
+    try:
+        result = bpy.ops.wm.quit_blender()
+        if result != {"FINISHED"}:
+            raise RuntimeError("Native quit was not scheduled")
+    finally:
+        if guarded:
+            wm.narwhal_defer_close = True
+
+
+def _uninstall_preclose():
+    global _exit_installed
+    from . import file_commands
+    file_commands.cancel_exit()
+    if bpy.app.timers.is_registered(_preclose_tick):
+        bpy.app.timers.unregister(_preclose_tick)
+    wm = bpy.context.window_manager
+    if hasattr(wm, "narwhal_defer_close"):
+        wm.narwhal_defer_close = False
+    _exit_installed = False
+
+
+def _preclose_tick():
+    """Native close requests arrive before exit scheduling, not in exit_pre."""
+    from . import file_commands
+    wm = bpy.context.window_manager
+    if getattr(wm, "narwhal_close_requested", False):
+        wm.narwhal_close_requested = False
+        if app_state.active_command is not None:
+            app_state.log("Exit cancelled: finish or cancel the active command first")
+        else:
+            try:
+                app_state.log(file_commands.request_exit())
+            except Exception as exc:
+                app_state.log(f"Exit cancelled: {exc}; unsaved work remains open")
+        redraw_cmdbar()
+    return .1
+
+
 def _exit_handler(*_args):
-    """bpy exit_pre: on ANY exit (even the window's close button, which Python cannot
-    intercept) keep unsaved work in a recovery copy. Never raises."""
+    """Last-resort recovery for unguarded/native exits, including older runtimes.
+    The opt-in pre-close mailbox runs earlier; exit_pre itself cannot defer exit."""
     try:
         _ai_shutdown()
     except Exception as exc:  # noqa: BLE001 -- cleanup must not suppress document recovery
@@ -20186,10 +20344,12 @@ def _exit_handler(*_args):
         print(f"[narwhal3d] load cancellation failed: {exc}")
 
     _remember_preferences(user_preference_snapshot())
+    saves_finished = False
     try:
         # A background save in progress may hold the latest work: let it finish (bounded)
         # rather than start a second one. If it cannot, the recovery copy below keeps it.
-        if not file_commands.finish_saves(_EXIT_SAVE_WAIT):
+        saves_finished = file_commands.finish_saves(_EXIT_SAVE_WAIT)
+        if not saves_finished:
             print("[narwhal3d] a save was still running at exit; writing a recovery copy")
     except Exception as failure:  # noqa: BLE001 -- never stops the recovery copy
         print("[narwhal3d] could not finish the save in progress ("
@@ -20198,7 +20358,8 @@ def _exit_handler(*_args):
     if path:
         print(f"[narwhal3d] unsaved changes kept in {path}")
     try:
-        file_commands.end_session()   # a clean exit: the next start offers no crash recovery
+        if saves_finished:
+            file_commands.end_session_if_protected(path)
     except Exception:  # noqa: BLE001
         pass
 
@@ -20251,7 +20412,9 @@ def _install_exit_handling():
 
     # keep this session's output, so a report can attach it
     sessionlog.install()
-    file_commands.quitter = lambda: bpy.ops.wm.quit_blender()
+    file_commands.quitter = _quit_after_approval
+    file_commands._exit_scheduler = lambda poll: bpy.app.timers.register(
+        poll, first_interval=.1, persistent=True)
     try:
         bpy.context.preferences.view.use_save_prompt = False
     except Exception:  # noqa: BLE001
@@ -20264,6 +20427,14 @@ def _install_exit_handling():
     save_queue.install(lambda poll: bpy.app.timers.register(
         poll, first_interval=save_queue.POLL_INTERVAL, persistent=True))
     save_queue.on_change = redraw_cmdbar
+    wm = bpy.context.window_manager
+    if hasattr(wm, "narwhal_defer_close"):
+        # Opt in only after the scheduler and save coordinator are installed.
+        if not bpy.app.timers.is_registered(_preclose_tick):
+            bpy.app.timers.register(_preclose_tick, first_interval=.1, persistent=True)
+        wm.narwhal_defer_close = True
+    else:
+        app_state.log("Native close deferral is unavailable in this runtime; title-bar close uses synchronous recovery")
     file_commands.install_background_loading(
         lambda poll: bpy.app.timers.register(poll, first_interval=.05, persistent=True),
         lambda: (redraw_cmdbar(), _tag_redraw_bands(), _tag_redraw_viewports()),
@@ -25238,6 +25409,7 @@ def register():
 
 def unregister():
     global _window_chrome_handle
+    _uninstall_preclose()
     library_panel.close()
     _ai_shutdown()
     ai_settings_popup.close()

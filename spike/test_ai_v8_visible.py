@@ -44,6 +44,7 @@ def launch():
     parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--launch',action='store_true')
     parser.add_argument('--case',choices=('visual','keyboard','settings','document','stress','provenance','long_reply','regression','close_review','close_request','close_replaced_review','close_replaced_request','open_pending','units_pending','unsaved_no_dialog','resized_focus','eviction_visible','editor_after_replies','invalid_settings','sustained_eviction','invalid_dimension','open_request','long_settings_error','long_plan_review','normal_box_invalid'),default='visual')
     parser.add_argument('--scale',type=float,default=1.0)
+    parser.add_argument('--close-mutation', choices=('premature-final-commit',), help='Owned test-process production guard mutation only')
     parser.add_argument('--ui-library',type=Path,help='Explicit other-lane development artifact; never installed/staged')
     parser.add_argument('--ui-sha256',help='Required content pin for --ui-library')
     args=parser.parse_args();executable=discover_executable()
@@ -66,6 +67,7 @@ def launch():
         NARWHAL3D_UI_SCALE=str(args.scale),PYTHONPATH=str(ROOT/'vendor/occt'),GHOST_BACKEND='X11',
         WAYLAND_DISPLAY='review07-no-wayland',OMP_NUM_THREADS='1',OPENBLAS_NUM_THREADS='1',NARWHAL3D_OPEN_WORKERS='0')
     if ui_library is not None:env['NARWHAL_UI_CORE_LIBRARY']=str(ui_library)
+    if args.close_mutation:env['AI_REVIEW07_CLOSE_MUTATION']=args.close_mutation
     loopback=('import socket,fcntl,struct,os,sys; s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM); '
         'fcntl.ioctl(s,0x8914,struct.pack("16sh",b"lo",0x49)); s.close(); os.execv(sys.argv[1],sys.argv[1:])')
     command=[*memory_bound.prefix('2048M'),
@@ -101,8 +103,16 @@ def launch():
                            'assistant_shutdown_called','logical_cancelled','workflow_detached','transport_detached')
             report['assistant_cleanup_qualified']=all(exited.get(key) is True for key in cleanup_flags) and exited.get('pending_review') is False
             report['exit_persistence_qualified']=bool(exited.get('preferences_saved') and exited.get('recovery_files'))
+            report["guard_recovery_qualified"]=('recover' in report.get('guard_dialog_choices', [])
+                and exited.get('background_recovery_requested') is True)
+            report["guard_flow_qualified"]=all(report.get(key) is True for key in (
+                "close_cancel_qualified", "close_save_escape_qualified", "close_saved_roundtrip_qualified"))
             report['status']='passed' if (report['os_close_delivered'] and result.returncode==0
-                and report['assistant_cleanup_qualified'] and report['exit_persistence_qualified']) else 'blocked'
+                and report['assistant_cleanup_qualified'] and report['exit_persistence_qualified']
+                and report["guard_flow_qualified"] and report["guard_recovery_qualified"]
+                and exited.get("latest_recovery_reloaded") is True
+                and exited.get("latest_document_still_dirty") is True
+                and exited.get("named_save_not_overwritten") is True) else 'blocked'
             (out/'result.json').write_text(json.dumps(report,indent=2))
         print('REVIEW07_COMPLETE',report.get('status'),'source_stable',stable,flush=True)
         return result.returncode or int(not stable or report.get('status')!='passed' or 'Error in draw callback' in text
@@ -198,6 +208,58 @@ def capture_review(label):
         f.check(view['approve'] is None and view['reject'] is None,label+': no concealed decision target')
         count=int(np.count_nonzero(near(crop,ink,.18)));f.check(count>10,label+': visible enlargement refusal')
     f.REPORT.setdefault('framebuffer_inspection',[]).append(observed)
+
+
+
+def guarded_close_preflight(ui, owned):
+    # Actual WM requests and Escape drive the production coordinator. Only dialog
+    # choices/path and a slow validation worker are scripted; no quit/approval hook.
+    from narwhal3d import file_commands as fc, filedialog, save_queue, narwhal_document as doc
+    app = ui.app_state
+    original_ask, original_path = filedialog.ask_yes_no_cancel, filedialog.ask_save_path
+    original_validate = doc._validate_in_worker
+    phase = ["cancel"]
+    target = OUT / "guarded-close-save.narwhal"
+    ids = [str(obj.Attributes.Id) for obj in app.model.file.Objects]
+    choices = f.REPORT.setdefault("guard_dialog_choices", [])
+    def ask(*args, **kwargs):
+        choices.append(phase[0])
+        return (filedialog.CANCEL, None) if phase[0] == "cancel" else (filedialog.OK, "yes")
+    def slow_validate(*args, **kwargs):
+        time.sleep(2.0)
+        return original_validate(*args, **kwargs)
+    filedialog.ask_yes_no_cancel = ask
+    filedialog.ask_save_path = lambda *args, **kwargs: (filedialog.OK, str(target))
+    doc._validate_in_worker = slow_validate
+    try:
+        owned.request_close()
+        yield from f.wait(lambda: "cancel" in choices and not fc._exit_polling,
+                          "real WM close reached Cancel and retained the application", 15)
+        f.check(app.doc_modified() and [str(obj.Attributes.Id) for obj in app.model.file.Objects] == ids
+                and bpy.context.window_manager.narwhal_defer_close,
+                "Cancel preserves dirty geometry, stable UUIDs and native close protection")
+        f.REPORT["close_cancel_qualified"] = True
+        phase[0] = "save"
+        owned.request_close()
+        yield from f.wait(lambda: "save" in choices and fc._exit_polling and save_queue.busy(),
+                          "real WM close starts background Save before approval", 15)
+        f.check(app.doc_modified() and not target.exists(), "pending Save is not falsely complete")
+        yield from f.tap("ESC")
+        yield from f.wait(lambda: not fc._exit_polling and save_queue.busy(),
+                          "actual Escape cancels Exit without interrupting Save", 10)
+        f.REPORT["close_save_escape_qualified"] = True
+        yield from f.wait(lambda: not save_queue.busy(), "canceled Exit leaves Save to finish", 30)
+        reopened = doc.load_model(str(target))
+        f.check(not app.doc_modified() and app.doc_path == str(target)
+                and [str(obj.Attributes.Id) for obj in reopened.file.Objects] == ids,
+                "actual Save reopens with original UUIDs and settles only its saved state")
+        f.REPORT["close_saved_roundtrip_qualified"] = True
+        app.ctx.note_change("Close fixture latest metadata")
+        app.model.add_layer("Close fixture unsaved after Save")
+        f.check(app.doc_modified(), "latest metadata edit requires its own validated recovery")
+    finally:
+        filedialog.ask_yes_no_cancel, filedialog.ask_save_path = original_ask, original_path
+        doc._validate_in_worker = original_validate
 
 
 def run():
@@ -374,6 +436,8 @@ def run():
         yield from f.send('ordinary',consent=True);yield from f.tap('LEFTMOUSE',f.review_button('approve'))
         yield from f.wait(lambda:ui.ai_assistant_state().status=='connected','first real publication settled')
         f.check(ui.app_state.model.object_count()==1 and ui.app_state.doc_modified(),'owned document has unsaved geometry')
+        window=bpy.context.window_manager.windows[0];owned=OwnedWindow(window.width,window.height)
+        yield from guarded_close_preflight(ui, owned)
         yield from f.fresh()
         if CASE=='close_replaced_review':
             from test_ai_v9_lifecycle_gui import replaced_review
@@ -388,13 +452,22 @@ def run():
         session=ui.ai_assistant_state().extra['workflow'];handle=session._handle
         cancel_event=session._cancel_event
         worker=ui._ai.get('transport_thread')
-        from narwhal3d import file_commands
+        from narwhal3d import file_commands, filedialog, save_queue, narwhal_document
+        def keep_latest(*args, **kwargs):
+            f.REPORT['guard_dialog_choices'].append('recover')
+            return filedialog.OK, 'no'
+        filedialog.ask_yes_no_cancel = keep_latest
         recovery_folder=Path(file_commands.recovery_dir())
         f.REPORT['close_precondition']={'native_handle':handle,'pending_review':ui._ai.get('action_pending') is not None,
             'transport_alive':bool(worker and worker.is_alive()),'logical_cancelled':cancel_event.is_set()}
         f.check(handle != 0 and not cancel_event.is_set(),'close starts with live native owner and uncancelled turn')
         f.check((ui._ai.get('action_pending') is not None) if CASE in ('close_review','close_replaced_review') else bool(worker and worker.is_alive()),
                 'requested close scenario is outstanding before WM_DELETE')
+        f.check(ui.app_state.doc_modified() and not file_commands._exit_polling
+                and bpy.context.window_manager.narwhal_defer_close,
+                "final WM close begins dirty, idle and natively guarded")
+        f.check(file_commands._exit_tick.__globals__["filedialog"] is filedialog,
+                "final close observes the actual coordinator dialog adapter")
         original_preferences=ui._remember_preferences
         original_recovery=file_commands.write_recovery
         exit_writes={}
@@ -402,10 +475,12 @@ def run():
             result=original_preferences(snapshot)
             exit_writes['preferences_called']=True
             return result
-        def observed_recovery():
-            path=original_recovery()
-            exit_writes['recovery_path']=path
-            return path
+        def observed_recovery(*args, **kwargs):
+            result=original_recovery(*args, **kwargs)
+            exit_writes['recovery_requested']=True
+            exit_writes['background_recovery_requested']=(
+                exit_writes.get('background_recovery_requested', False) or kwargs.get('background') is True)
+            return result
         ui._remember_preferences=observed_preferences
         file_commands.write_recovery=observed_recovery
         original_shutdown=ui._ai_shutdown
@@ -414,6 +489,9 @@ def run():
             return original_shutdown()
         ui._ai_shutdown=observed_shutdown
         def at_exit(*_args):
+            path=save_queue.recovery_for_current_state()
+            if exit_writes.get('recovery_requested') and path:
+                exit_writes['recovery_path']=path
             record={'native_handle_closed':session._handle==0,'timer_removed':not bpy.app.timers.is_registered(ui._ai_poll_transport),
                 'assistant_shutdown_called':f.REPORT.get('assistant_shutdown_called',False),'pending_review':ui._ai.get('action_pending') is not None,
                 'transport_alive':bool(worker and worker.is_alive()),'handle_before':handle,
@@ -424,9 +502,32 @@ def run():
                 'preferences_saved':bool(exit_writes.get('preferences_called') and (OUT/'preferences.json').is_file()),
                 'recovery_files':[str(p) for p in recovery_folder.glob('*.narwhal')
                                   if str(p)==exit_writes.get('recovery_path') and p.stat().st_size>0]}
+            record['background_recovery_requested']=exit_writes.get('background_recovery_requested', False)
+            record["latest_document_still_dirty"] = bool(ui.app_state.doc_modified())
+            if record["recovery_files"]:
+                recovered=narwhal_document.load_model(record["recovery_files"][0])
+                record["latest_recovery_reloaded"]=(
+                    [str(obj.Attributes.Id) for obj in recovered.file.Objects]
+                    == [str(obj.Attributes.Id) for obj in ui.app_state.model.file.Objects]
+                    and any(layer.Name == "Close fixture unsaved after Save" for layer in recovered.file.Layers))
+                saved=narwhal_document.load_model(str(OUT / "guarded-close-save.narwhal"))
+                record["named_save_not_overwritten"]=not any(
+                    layer.Name == "Close fixture unsaved after Save" for layer in saved.file.Layers)
             (OUT/'exit.json').write_text(json.dumps(record,indent=2))
+            # Final dialog choices arrive AFTER the pre-close report snapshot.
+            (OUT/'result.json').write_text(json.dumps(f.REPORT,indent=2))
         bpy.app.handlers.exit_pre.append(at_exit)
-        window=bpy.context.window_manager.windows[0];owned=OwnedWindow(window.width,window.height)
+        if os.environ.get("AI_REVIEW07_CLOSE_MUTATION") == "premature-final-commit":
+            import inspect
+            source=inspect.getsource(file_commands._exit_tick)
+            old=("action = save_queue.shutdown_request('shutdown_tick', modified=bool(app.doc_modified()), protected=protected,\n"
+                 "            failed=save_queue.failure_serial() != _exit_failures)")
+            f.check(source.count(old) == 1, "unique actual shutdown guard mutation anchor")
+            namespace={}
+            exec(compile(source.replace(old, 'action = "commit"', 1),
+                         "<owned-close-guard-mutation>", "exec"), file_commands.__dict__, namespace)
+            file_commands._exit_tick=namespace["_exit_tick"]
+            f.REPORT["close_production_mutation"]="premature-final-commit"
         f.REPORT.update(close_request_sent=True,os_window={'pid':owned.pid,'window':owned.window},status='closing')
         (OUT/'result.json').write_text(json.dumps(f.REPORT,indent=2))
         owned.request_close()

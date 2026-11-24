@@ -74,6 +74,29 @@ NEW_TESTS = (
     'preview_responsiveness_gui', 'trim_box_gui',
 )
 NEW_SOURCES = (
+    'blender_patches/apply_preclose.rs',
+    'spike/test_preclose.rs',
+    'spike/test_responsive_exit.py',
+    'spike/preclose_gui_probe.py',
+    'native/application_core/examples/qualify_preclose_gui.rs',
+    'native/welcome/src/shutdown_approval.rs',
+    'native/pure_core/src/remove_join_cv.rs',
+    'spike/test_polycurve_joint_delete.py',
+    'native/ui_core/src/content.rs',
+    'native/ui_core/src/content_data/content.json',
+    'native/ui_core/tests/content13.rs',
+    'native/ui_core/tests/content13_host.rs',
+    'native/ui_core/tests/content13_mutations.rs',
+    'native/ui_core/tests/data/content13_golden.json',
+    'native/ui_core/tests/data/content13_provenance.json',
+    'narwhal3d/native_ui_content.py',
+    'spike/test_report141_snap.py',
+    'spike/test_boolean_multiple.py',
+    'spike/test_import_narwhal.py',
+    'spike/test_curve_display_copy_explode.py',
+    'spike/test_brep_picker_source_cache.py',
+    'spike/test_properties_source_cache.py',
+
     'native/pure_core/src/curvex.rs',
     'native/pure_core/src/nurbs_record.rs',
     'native/pure_core/src/curvex_polyline_cases.rs',
@@ -447,6 +470,24 @@ class HarnessTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 7, result.stdout + result.stderr)
                 self.assertIn('FAIL: Rust automation mutation driver: ' + suite, result.stdout + result.stderr)
                 self.assertNotIn('All public tests passed.', result.stdout)
+
+    def test_content_and_bug_host_dispatch_are_mandatory(self):
+        result, rows = self.execute('run_tests.sh')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        commands = [row['args'] for row in rows]
+        for target in ('content13_host', 'content13_mutations'):
+            found = [args for args in commands if target in args]
+            self.assertEqual(len(found), 1, target)
+            self.assertIn('--ignored', found[0])
+            self.assertIn('--locked', found[0])
+        for name in ('test_report141_snap', 'test_boolean_multiple', 'test_import_narwhal',
+                     'test_curve_display_copy_explode', 'test_brep_picker_source_cache',
+                     'test_properties_source_cache', 'test_responsive_exit',
+                     'test_polycurve_joint_delete'):
+            found = [args for args in commands if 'spike/' + name + '.py' in args]
+            self.assertEqual(len(found), 1, name)
+            self.assertIn('--python-exit-code', found[0])
+            self.assertIn('-b', found[0])
 
     def test_missing_cargo_is_explicit_refusal(self):
         self.mutate('run_tests.sh', 'command -v cargo >/dev/null 2>&1 ||', 'false ||')

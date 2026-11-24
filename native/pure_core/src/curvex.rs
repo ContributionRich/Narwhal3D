@@ -50,11 +50,11 @@ const S: usize = 4; // homogeneous stride of every stored control point
 
 // openNURBS's literals, kept verbatim
 #[allow(clippy::excessive_precision)]
-const ON_EPSILON: f64 = 2.2204460492503131e-16;
+pub(crate) const ON_EPSILON: f64 = 2.2204460492503131e-16;
 #[allow(clippy::excessive_precision)]
 const ON_SQRT_EPSILON: f64 = 1.490116119385000000e-8;
 #[allow(clippy::excessive_precision)]
-const ON_ZERO_TOLERANCE: f64 = 2.3283064365386962890625e-10;
+pub(crate) const ON_ZERO_TOLERANCE: f64 = 2.3283064365386962890625e-10;
 #[allow(clippy::excessive_precision)]
 const ON_DBL_MIN: f64 = 2.22507385850720200e-308;
 #[allow(clippy::excessive_precision)]
@@ -195,7 +195,7 @@ fn clamp(x: f64, lo: f64, hi: f64) -> f64 {
 // ---------------------------------------------------------------------------
 
 /// `ON_NurbsSpanIndex(order, cv_count, knot, t, side, hint)`.
-fn span_index(
+pub(crate) fn span_index(
     order: usize,
     cv_count: usize,
     knot: &[f64],

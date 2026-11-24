@@ -2270,3 +2270,28 @@ def _reset_for_tests() -> None:
         _cached_macro_json.cache_clear()
         _cached_macro_plan_json.cache_clear()
         _cached_svgpath_json.cache_clear()
+
+
+def remove_join_cv(order, knots, cvs, joint):
+    """Marshal exact degree-elevated SDK data to the required Rust joint policy.
+
+    None explicitly declines: callers must not substitute a Python reshape engine.
+    """
+    binding = _binding()
+    if binding is None or len(cvs) < 8 or len(cvs) > 4 * 65_536 or len(knots) > 65_567:
+        return None
+    try:
+        fn = ctypes.CDLL(str(binding[2])).narwhal_pure_core_remove_join_cv_v1
+        fn.argtypes = [_DoubleP, ctypes.c_size_t, _DoubleP, ctypes.c_size_t,
+                       ctypes.c_size_t, ctypes.c_size_t, _DoubleP, ctypes.c_size_t,
+                       _DoubleP, ctypes.c_size_t]
+        fn.restype = ctypes.c_int32
+        c, k = array.array('d', cvs), array.array('d', knots)
+        out_c = array.array('d', [0.0]) * (len(c)-4)
+        out_k = array.array('d', [0.0]) * (len(k)-1)
+        view = lambda a: (ctypes.c_double * len(a)).from_buffer(a)
+        code = fn(view(c), len(c), view(k), len(k), int(order)-1, int(joint),
+                  view(out_c), len(out_c), view(out_k), len(out_k))
+        return (out_k, out_c) if code == 0 else None
+    except (AttributeError, OSError, TypeError, ValueError, OverflowError):
+        return None

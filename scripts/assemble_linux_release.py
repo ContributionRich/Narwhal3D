@@ -18,7 +18,7 @@ import tempfile
 from typing import Any
 
 from build_linux_native import probe_ui_core, verify_ui_core_source, probe_geometry_core_join, verify_geometry_core_source
-from check_pure_core import probe_pure_core_parser, probe_pure_core_retirement, probe_pure_core_curve_record_hits, probe_pure_core_polyline_nearest, probe_pure_core_polyline_samples
+from check_pure_core import probe_pure_core_parser, probe_pure_core_retirement, probe_pure_core_curve_record_hits, probe_pure_core_polyline_nearest, probe_pure_core_polyline_samples, probe_pure_core_remove_join_cv, probe_pure_core_polycurve_samples
 
 from release_policy import (
     MAX_HOST_GLIBC, format_glibc, glibc_versions, scan_runtime_glibc,
@@ -129,6 +129,7 @@ PATCH_INPUTS = (
     "blender_patches/narwhal3d_app_icon.svg",
     "blender_patches/narwhal3d_window_icons.json",
     "blender_patches/apply_window_overlay.py",
+    "blender_patches/apply_preclose.rs",
 )
 VERSION_RE = re.compile(r"[0-9A-Za-z][0-9A-Za-z._-]*\Z")
 REVISION_RE = re.compile(r"[0-9a-fA-F]{40}\Z")
@@ -609,6 +610,8 @@ def validate_native_components(
         probe_pure_core_curve_record_hits(directory / "libnarwhal_pure_core.so")
         probe_pure_core_polyline_nearest(directory / "libnarwhal_pure_core.so")
         probe_pure_core_polyline_samples(directory / "libnarwhal_pure_core.so")
+        probe_pure_core_polycurve_samples(directory / "libnarwhal_pure_core.so")
+        probe_pure_core_remove_join_cv(directory / "libnarwhal_pure_core.so")
     except ValueError as exc:
         raise ReleaseError(str(exc)) from exc
     try:

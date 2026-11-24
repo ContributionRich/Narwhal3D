@@ -1212,6 +1212,15 @@ def best_on_screen(targets, cursor, modes, project, radius_px, plane=None, *,
             near_points = [(None if point is None else _refine_near(target, point), target)
                            for point, target in zip(coarse, near_targets)]
         for point, target in near_points:
+            # A coarse chord can be far from a detailed imported curve. Refining
+            # toward that chord, rather than the cursor, can miss even a cursor
+            # exactly ON the curve. Keep the projected candidate for off-plane
+            # views, but also score the Rust-backed exact cursor query. Python
+            # only coordinates the SDK target and the viewport projection here.
+            if getattr(target, "curve", None) is not None:
+                exact = _nearest_on_target(target, cursor)
+                if exact is not None:
+                    found.append(Snap(exact, NEAR, 0.0, target))
             if point is not None:
                 found.append(Snap(point, NEAR, 0.0, target))
     scored = found if native_static else None

@@ -24,6 +24,30 @@ import tokenize
 
 ROOT = Path(__file__).resolve().parents[1]
 REQUIRED = {
+    'blender_patches/apply_preclose.rs',
+    'spike/test_preclose.rs',
+    'spike/test_responsive_exit.py',
+    'spike/preclose_gui_probe.py',
+    'native/application_core/examples/qualify_preclose_gui.rs',
+    'native/welcome/src/shutdown_approval.rs',
+    'native/pure_core/src/remove_join_cv.rs',
+    'spike/test_polycurve_joint_delete.py',
+    'spike/test_curve_display_copy_explode.py',
+    'spike/test_brep_picker_source_cache.py',
+    'spike/test_properties_source_cache.py',
+
+    'narwhal3d/native_ui_content.py',
+    'native/ui_core/src/content.rs',
+    'native/ui_core/src/content_data/content.json',
+    'native/ui_core/tests/content13.rs',
+    'native/ui_core/tests/content13_host.rs',
+    'native/ui_core/tests/content13_mutations.rs',
+    'native/ui_core/tests/data/content13_golden.json',
+    'native/ui_core/tests/data/content13_provenance.json',
+    'spike/test_boolean_multiple.py',
+    'spike/test_report141_snap.py',
+    'spike/test_import_narwhal.py',
+
     "native/automation_test_driver/Cargo.lock",
     "native/automation_test_driver/Cargo.toml",
     "native/automation_test_driver/README.md",
@@ -85,6 +109,7 @@ REQUIRED = {
     'spike/test_offset_fit_native.py',
     'spike/test_line_samples.py',
     'spike/test_polyline_samples.py',
+    'spike/test_polycurve_samples.py',
     'spike/test_offset_compact.py',
     'spike/test_offset_report127.py',
     'spike/test_trim_split_once.py',
@@ -446,6 +471,7 @@ REQUIRED = {
     "spike/test_pure_core_nurbs_record_gate.py",
     "spike/test_pure_core_line_samples_gate.py",
     "spike/test_pure_core_polyline_samples_gate.py",
+    "spike/test_pure_core_polycurve_samples_gate.py",
     "spike/test_native_coil_preview.py",
     "spike/test_preview_curve_native.py",
     "spike/test_native_tessellate.py",
@@ -1346,6 +1372,7 @@ def self_check() -> None:
     # Delete each input independently: an omitted license/test-only module is just
     # as incomplete as an omitted production module or ctypes adapter.
     closure = sorted(path for path in REQUIRED if path.startswith("native/ui_core/")
+                     or path in {'spike/test_boolean_multiple.py', 'spike/test_report141_snap.py', 'narwhal3d/native_ui_content.py', 'spike/test_import_narwhal.py', 'spike/test_properties_source_cache.py', 'spike/test_curve_display_copy_explode.py', 'spike/test_brep_picker_source_cache.py'}
                      or path.startswith("native/automation_test_driver/")
                      or path.startswith("spike/test_ui_core_")
                      or path.startswith("spike/test_ui_transcript_")
@@ -1379,6 +1406,8 @@ def self_check() -> None:
                          'spike/test_polyline_nearest.py',
                          'spike/test_polyline_samples.py',
                          'spike/test_pure_core_polyline_samples_gate.py',
+                         'spike/test_polycurve_samples.py',
+                         'spike/test_pure_core_polycurve_samples_gate.py',
                          'spike/test_pure_core_curve_record_hits_gate.py',
                          'spike/test_pure_core_polyline_nearest_gate.py',
                          'native/geometry_core/src/join.rs',
