@@ -120,6 +120,7 @@ TEST_FILES = (
     'spike/test_polycurve_samples.py',
     'spike/test_offset_fit.py',
     'spike/test_surface_offset.py',
+    'spike/test_surface_grid.py',
     'spike/test_offset_compact.py',
     'spike/test_offset_report127.py',
     'spike/test_trim_split_once.py',

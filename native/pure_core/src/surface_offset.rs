@@ -37,6 +37,7 @@ use crate::python_norm::dist3;
 
 const ERR_NULL: i32 = -1;
 const ERR_INPUT: i32 = -2;
+const ERR_SIZE: i32 = -3;
 /// Python runs `surface_offset` itself.
 const NOT_RECOGNISED: i32 = 1;
 /// The offset turns the surface inside out: refused.
@@ -717,6 +718,97 @@ pub unsafe extern "C" fn narwhal_pure_core_surface_offset(
     }
 }
 
+/// The most grid nodes one call evaluates.
+pub const MAX_GRID_NODES: usize = 1 << 20;
+
+/// `surface.PointAt(u, v)` and `surface.NormalAt(u, v)` at every node of `us` x `vs` for the
+/// `NurbsSurface` encoded in `record`: the display grid of `bridge._build_grid`.
+///
+/// Returns 0 with the points and normals (`x, y, z` each, node `(i, j)` at `i * nv + j`) in
+/// `out_points` / `out_normals`; NOT_RECOGNISED (1) when Python must evaluate it; -2 for a
+/// non-finite parameter, -3 for more than `MAX_GRID_NODES` nodes or a short buffer, or -1
+/// for a null, misaligned or overlapping pointer. Nothing is written unless it returns 0.
+///
+/// # Safety
+///
+/// `record` must reference `record_len` readable bytes, `us` `nu` and `vs` `nv` readable
+/// doubles, and `out_points` / `out_normals` `capacity` writable doubles each.
+#[allow(clippy::too_many_arguments)]
+#[no_mangle]
+pub unsafe extern "C" fn narwhal_pure_core_surface_grid(
+    record: *const u8,
+    record_len: usize,
+    us: *const f64,
+    nu: usize,
+    vs: *const f64,
+    nv: usize,
+    out_points: *mut f64,
+    out_normals: *mut f64,
+    capacity: usize,
+) -> i32 {
+    let Some(nodes) = nu.checked_mul(nv) else {
+        return ERR_SIZE;
+    };
+    if nodes > MAX_GRID_NODES || capacity < 3 * nodes {
+        return ERR_SIZE;
+    }
+    let ranges = (
+        region(record, record_len),
+        region(us, nu),
+        region(vs, nv),
+        region(out_points.cast_const(), capacity),
+        region(out_normals.cast_const(), capacity),
+    );
+    let (Some(rr), Some(ur), Some(vr), Some(pr), Some(qr)) = ranges else {
+        return ERR_NULL;
+    };
+    if !separate(&[rr, ur, vr], &[pr, qr]) {
+        return ERR_NULL;
+    }
+    let (Some(data), Some(us), Some(vs)) = (
+        (unsafe { crate::checked_slice(record, record_len) }),
+        (unsafe { crate::checked_slice(us, nu) }),
+        (unsafe { crate::checked_slice(vs, nv) }),
+    ) else {
+        return ERR_NULL;
+    };
+    if !us.iter().chain(vs).all(|x| x.is_finite()) {
+        return ERR_INPUT;
+    }
+    let Some(srf) = read_surface(data) else {
+        return NOT_RECOGNISED;
+    };
+    if !srf
+        .knots
+        .iter()
+        .flatten()
+        .chain(&srf.cvs)
+        .all(|v| v.is_finite())
+    {
+        return NOT_RECOGNISED;
+    }
+    let mut points = Vec::with_capacity(3 * nodes);
+    let mut normals = Vec::with_capacity(3 * nodes);
+    for &u in us {
+        for &v in vs {
+            let (Ok(p), Ok(n)) = (point_at(&srf, u, v), normal_at(&srf, u, v)) else {
+                return NOT_RECOGNISED;
+            };
+            points.extend(p);
+            normals.extend(n);
+        }
+    }
+    let (Some(po), Some(no)) = (
+        (unsafe { crate::checked_slice_mut(out_points, 3 * nodes) }),
+        (unsafe { crate::checked_slice_mut(out_normals, 3 * nodes) }),
+    ) else {
+        return ERR_NULL;
+    };
+    po.copy_from_slice(&points);
+    no.copy_from_slice(&normals);
+    0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -940,6 +1032,54 @@ mod tests {
         };
         assert_eq!(code, ERR_NULL);
         assert!(shared == record && l == 7 && d == -9.0);
+    }
+
+    #[test]
+    fn the_grid_export_gives_point_at_and_normal_at() {
+        let s = bump(1.0);
+        let record = surface_record(&s);
+        let us = [0.0, 0.7, 1.5, 3.0];
+        let vs = [0.0, 1.1, 3.0];
+        let grid = |us: &[f64], vs: &[f64], cap: usize, rec: &[u8]| {
+            let mut p = vec![-9.0; cap.max(1)];
+            let mut n = vec![-9.0; cap.max(1)];
+            let code = unsafe {
+                narwhal_pure_core_surface_grid(
+                    rec.as_ptr(),
+                    rec.len(),
+                    us.as_ptr(),
+                    us.len(),
+                    vs.as_ptr(),
+                    vs.len(),
+                    p.as_mut_ptr(),
+                    n.as_mut_ptr(),
+                    cap,
+                )
+            };
+            (code, p, n)
+        };
+        let (code, p, n) = grid(&us, &vs, 36, &record);
+        assert_eq!(code, 0);
+        for (i, &u) in us.iter().enumerate() {
+            for (j, &v) in vs.iter().enumerate() {
+                let at = 3 * (i * vs.len() + j);
+                assert_eq!(p[at..at + 3], point_at(&s, u, v).unwrap());
+                assert_eq!(n[at..at + 3], normal_at(&s, u, v).unwrap());
+            }
+        }
+        let untouched = |r: &(i32, Vec<f64>, Vec<f64>)| r.1.iter().chain(&r.2).all(|&x| x == -9.0);
+        for (r, want) in [
+            (grid(&us, &vs, 35, &record), ERR_SIZE),
+            (grid(&us, &[0.0, f64::NAN, 1.0], 36, &record), ERR_INPUT),
+            (grid(&us, &vs, 36, b"not a record"), NOT_RECOGNISED),
+            (
+                grid(&us, &vs, 36, &record[..record.len() - 1]),
+                NOT_RECOGNISED,
+            ),
+        ] {
+            assert_eq!(r.0, want);
+            assert!(untouched(&r));
+        }
     }
 
     #[test]

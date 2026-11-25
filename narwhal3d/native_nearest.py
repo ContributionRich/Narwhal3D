@@ -1303,3 +1303,143 @@ def surface_offset_fit(surface, distance, tolerance, max_refine, reference):
     if got is not None:
         _native_surface_offset_calls += 1
     return got
+
+
+# Surface display grids (narwhal_pure_core_surface_grid, native/pure_core/src/surface_offset.rs):
+# `bridge._build_grid`'s PointAt / NormalAt at every node of a NurbsSurface's display grid, read
+# from its Encode() record with the same openNURBS ports as the surface offset. A BrepFace is
+# evaluated through its UnderlyingSurface only where the face itself gives the same bits at a
+# few nodes (openNURBS may hold a face's surface transposed, which rhino3dm does not expose).
+# Gated by SURFACE_GRID_QUALIFIED_PLATFORMS and the loaded rhino3dm passing
+# `_surface_grid_parity` on the surface offset witnesses.
+SURFACE_GRID_QUALIFIED_PLATFORMS = frozenset({("linux", "x86_64")})
+_SURFACE_GRID_MAX_NODES = 1 << 20
+_surface_grid_state = None          # (signature, binding or None, capability text)
+_native_surface_grid_calls = 0
+
+
+def _point_normal_grid(surface, us, vs):
+    """The Python route: rhino3dm's PointAt / NormalAt at `us` x `vs`, as tuples."""
+    points, normals = [], []
+    for u in us:
+        prow, nrow = [], []
+        for v in vs:
+            p, n = surface.PointAt(u, v), surface.NormalAt(u, v)
+            prow.append((p.X, p.Y, p.Z))
+            nrow.append((n.X, n.Y, n.Z))
+        points.append(prow)
+        normals.append(nrow)
+    return points, normals
+
+
+def _surface_grid_call(fn, surface, us, vs):
+    """``(points, normals)`` rows of ``(x, y, z)`` for `surface` when its record is an
+    ON_NurbsSurface, or None."""
+    us, vs = [float(u) for u in us], [float(v) for v in vs]
+    nu, nv = len(us), len(vs)
+    if not nu or not nv or nu * nv > _SURFACE_GRID_MAX_NODES:
+        return None
+    record = base64.b64decode(surface.Encode()["data"])
+    points = array.array("d", bytes(24 * nu * nv))
+    normals = array.array("d", bytes(24 * nu * nv))
+    code = fn(record, len(record), (ctypes.c_double * nu)(*us), nu, (ctypes.c_double * nv)(*vs),
+              nv, (ctypes.c_double * len(points)).from_buffer(points),
+              (ctypes.c_double * len(normals)).from_buffer(normals), len(points))
+    if code != 0:
+        return None
+    rows = lambda flat: [[tuple(flat[3 * (i * nv + j):3 * (i * nv + j) + 3]) for j in range(nv)]
+                         for i in range(nu)]
+    return rows(points), rows(normals)
+
+
+def _surface_grid_parity(fn):
+    """True when the loaded rhino3dm's PointAt / NormalAt give Rust's bits on the surface offset
+    witnesses, over grids that include their edges (the sphere's poles)."""
+    try:
+        for surface, *_ in _surface_offset_witnesses():
+            du, dv = surface.Domain(0), surface.Domain(1)
+            us = [du.T0 + (du.T1 - du.T0) * i / 7 for i in range(8)]
+            vs = [dv.T0 + (dv.T1 - dv.T0) * j / 5 for j in range(6)]
+            if _surface_grid_call(fn, surface, us, vs) != _point_normal_grid(surface, us, vs):
+                return False
+    except Exception:  # noqa: BLE001 -- an SDK that cannot be checked is not qualified
+        return False
+    return True
+
+
+def _surface_grid_binding():
+    global _surface_grid_state
+    signature = (os.environ.get(_ENV) or "<packaged>", _here(), id(r3))
+    state = _surface_grid_state
+    if state is not None and state[0] == signature:
+        return state[1]
+    with _lock:
+        state = _surface_grid_state
+        if state is not None and state[0] == signature:
+            return state[1]
+        fn, text = None, "surface grid export unavailable; surface display uses PointAt"
+        if signature[1] not in SURFACE_GRID_QUALIFIED_PLATFORMS:
+            text = "not qualified on {}/{}; surface display uses PointAt".format(*signature[1])
+        else:
+            explicit = os.environ.get(_ENV)
+            path = (Path(explicit).expanduser() if explicit else
+                    Path(__file__).resolve().parent / "native" / _library_name())
+            try:
+                fn = ctypes.CDLL(str(path)).narwhal_pure_core_surface_grid
+                fn.argtypes = [ctypes.c_char_p, ctypes.c_size_t, _D, ctypes.c_size_t, _D,
+                               ctypes.c_size_t, _D, _D, ctypes.c_size_t]
+                fn.restype = ctypes.c_int32
+            except (AttributeError, OSError):
+                fn = None
+            if fn is not None and not _surface_grid_parity(fn):
+                fn = None
+                text = (f"rhino3dm {getattr(r3, '__version__', '?')} differs from the Rust "
+                        "surface grid on the witness surfaces; surface display uses PointAt")
+            elif fn is not None:
+                text = "qualified"
+        _surface_grid_state = signature, fn, text
+        return fn
+
+
+def surface_grid_capability():
+    """``"qualified"`` when surface display grids are evaluated in Rust, otherwise the reason."""
+    _surface_grid_binding()
+    return _surface_grid_state[2]
+
+
+def surface_grid(surface, us, vs):
+    """`_point_normal_grid(surface, us, vs)` through Rust for a NurbsSurface, or a BrepFace whose
+    underlying NurbsSurface gives the face's own bits; None where PointAt must run."""
+    global _native_surface_grid_calls
+    fn = _surface_grid_binding()
+    if fn is None:
+        return None
+    try:
+        face = isinstance(surface, r3.BrepFace)
+        # rhino3dm hands a face's surface back as a plain Surface; its record still names
+        # its class, and the export reads only ON_NurbsSurface records.
+        source = surface.UnderlyingSurface() if face else surface
+        if not isinstance(source, r3.Surface):
+            return None
+        got = _surface_grid_call(fn, source, us, vs)
+        if got is None:
+            return None
+        if face:
+            # The face must evaluate as its surface: at an off-diagonal interior node and at
+            # the grid's corners and middle.
+            du, dv = surface.Domain(0), surface.Domain(1)
+            if (du.T0, du.T1, dv.T0, dv.T1) != tuple(
+                    x for d in (source.Domain(0), source.Domain(1)) for x in (d.T0, d.T1)):
+                return None
+            probe = ([du.T0 + (du.T1 - du.T0) * 0.3], [dv.T0 + (dv.T1 - dv.T0) * 0.7])
+            if _surface_grid_call(fn, source, *probe) != _point_normal_grid(surface, *probe):
+                return None
+            nu, nv = len(us), len(vs)
+            for i, j in {(0, 0), (nu - 1, nv - 1), (nu // 2, nv // 3), (nu // 3, nv - 1)}:
+                p, n = surface.PointAt(us[i], vs[j]), surface.NormalAt(us[i], vs[j])
+                if (got[0][i][j], got[1][i][j]) != ((p.X, p.Y, p.Z), (n.X, n.Y, n.Z)):
+                    return None
+    except Exception:  # noqa: BLE001 -- PointAt decides
+        return None
+    _native_surface_grid_calls += 1
+    return got

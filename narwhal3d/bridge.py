@@ -736,6 +736,14 @@ def trim_split_pieces(curve, pieces, keep_point):
     return [joined], [removed]
 
 
+def _native_nearest():
+    try:
+        from . import native_nearest
+    except ImportError:  # support direct-file loading outside the package
+        import native_nearest
+    return native_nearest
+
+
 def _intersect():
     try:
         from . import intersect
@@ -916,8 +924,11 @@ def _build_grid(bm, surface, us, vs):
         us = _uniform_params(surface.Domain(0), us)
     if isinstance(vs, int):
         vs = _uniform_params(surface.Domain(1), vs)
-    grid_pts = _grid_points(surface, us, vs)
-    grid_nrm = _grid_normals(surface, us, vs)
+    grid = _native_nearest().surface_grid(surface, us, vs)
+    if grid is None:
+        grid = ([[(p.X, p.Y, p.Z) for p in row] for row in _grid_points(surface, us, vs)],
+                [[(n.X, n.Y, n.Z) for n in row] for row in _grid_normals(surface, us, vs)])
+    grid_pts, grid_nrm = grid
     nu, nv = len(us) - 1, len(vs) - 1
     closed_u = _surface_closed(surface, 0)
     closed_v = _surface_closed(surface, 1)
@@ -930,10 +941,8 @@ def _build_grid(bm, surface, us, vs):
             elif closed_v and j == nv:
                 v = row[0]                 # seam in v: reuse the first row
             else:
-                p = grid_pts[i][j]
-                nrm = grid_nrm[i][j]
-                v = bm.verts.new((p.X, p.Y, p.Z))
-                v.normal = (nrm.X, nrm.Y, nrm.Z)
+                v = bm.verts.new(grid_pts[i][j])
+                v.normal = grid_nrm[i][j]
             row.append(v)
         vgrid.append(row)
     for i in range(nu):
