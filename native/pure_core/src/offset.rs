@@ -268,7 +268,7 @@ pub(crate) fn on_is_valid(x: f64) -> bool {
 }
 
 /// `ON_PointsAreCoincident(dim, is_rat, a, b)`.
-fn points_are_coincident(dim: usize, rational: bool, a: &[f64], b: &[f64]) -> bool {
+pub(crate) fn points_are_coincident(dim: usize, rational: bool, a: &[f64], b: &[f64]) -> bool {
     if rational {
         let (wa, wb) = (a[dim], b[dim]);
         if wa == 0.0 || wb == 0.0 {

@@ -26,9 +26,18 @@
 //!   parameter within `ON_SQRT_EPSILON` of a break to it) and `ON_PolylineCurve::Trim`
 //!   on each side, including its micro-segment removal.
 //!
-//! A polyline's `PointAt` and `Split` round each product separately; an SDK build that
-//! fuses a multiply-add rounds them differently, so `narwhal3d/native_intersect.py`
-//! routes polylines here only where the loaded rhino3dm matches on witness pairs.
+//! Or an `ON_LineCurve` (what Line makes, the usual Trim and Split cutter), from its record:
+//!
+//! * `PointAt` is `ON_LineCurve::Evaluate`: `ON_Line::PointAt` at `(t - m_t[0]) / (m_t[1] -
+//!   m_t[0])`, 1 exactly at `m_t[1]`;
+//! * `GetBoundingBox` is `ON_GetPointListBoundingBox` over `from` and `to`;
+//! * `Split` is `ON_LineCurve::Split`: `t` inside the open domain, the cut at
+//!   `ON_Line::PointAt(NormalizedParameterAt(t))`, refused where a side's ends coincide.
+//!
+//! A polyline's or line's `PointAt` and `Split` round each product separately; an SDK
+//! build that fuses a multiply-add rounds them differently, so
+//! `narwhal3d/native_intersect.py` routes them here only where the loaded rhino3dm
+//! matches on witness pairs.
 //!
 //! The Python helpers keep Python's semantics: `math.dist` is CPython's `vector_norm`,
 //! `sum()` is its compensated sum, `min`/`max` keep the first argument on ties and
@@ -362,14 +371,16 @@ struct Piece<'a> {
 enum Eval<'a> {
     Nurbs(Nurbs<'a>),
     Polyline(&'a Polyline),
+    Line(&'a Line),
 }
 
-/// A curve the recursion splits: a NURBS curve or a polyline, each split into its own kind
-/// as openNURBS does.
+/// A curve the recursion splits: a NURBS curve, a polyline or a line, each split into its
+/// own kind as openNURBS does.
 #[derive(Clone)]
 enum Shape {
     Nurbs(Curve),
     Polyline(Polyline),
+    Line(Line),
 }
 
 impl Shape {
@@ -377,6 +388,7 @@ impl Shape {
         match self {
             Shape::Nurbs(c) => c.piece(),
             Shape::Polyline(p) => p.piece(),
+            Shape::Line(l) => l.piece(),
         }
     }
 
@@ -384,6 +396,8 @@ impl Shape {
         match self {
             Shape::Nurbs(c) => c.bbox(),
             Shape::Polyline(p) => point_list_bbox(p.points.iter().map(|&q| Some(q))),
+            // `ON_LineCurve::GetBBox`: `ON_GetPointListBoundingBox` over `from` and `to`.
+            Shape::Line(l) => point_list_bbox([Some(l.from), Some(l.to)].into_iter()),
         }
     }
 
@@ -393,6 +407,7 @@ impl Shape {
             Shape::Polyline(p) => p
                 .split(t)
                 .map(|(l, r)| (Shape::Polyline(l), Shape::Polyline(r))),
+            Shape::Line(line) => line.split(t).map(|(l, r)| (Shape::Line(l), Shape::Line(r))),
         }
     }
 }
@@ -857,11 +872,82 @@ impl Polyline {
     }
 }
 
+/// An `ON_LineCurve`: `m_line` (`from`, `to`) and `m_t`, increasing.
+#[derive(Clone, Debug)]
+pub(crate) struct Line {
+    from: P3,
+    to: P3,
+    t0: f64,
+    t1: f64,
+}
+
+impl Line {
+    fn piece(&self) -> Option<Piece<'_>> {
+        is_increasing((self.t0, self.t1)).then_some(Piece {
+            eval: Eval::Line(self),
+            t0: self.t0,
+            t1: self.t1,
+        })
+    }
+
+    /// `ON_LineCurve::Evaluate(t, 0, ...)`, behind `PointAt`: `ON_Line::PointAt` at the
+    /// normalised parameter (1 exactly at `m_t[1]`).
+    fn point(&self, t: f64) -> P3 {
+        let s = if t == self.t1 {
+            1.0
+        } else {
+            (t - self.t0) / (self.t1 - self.t0)
+        };
+        line_point_at(self.from, self.to, s)
+    }
+
+    /// `ON_LineCurve::Split(t, left, right)`: None where it returns false (`t` not inside
+    /// the open domain, or a side whose ends coincide).
+    fn split(&self, t: f64) -> Option<(Line, Line)> {
+        let inside = on_is_valid(t) && on_is_valid(self.t0) && on_is_valid(self.t1) && {
+            let (lo, hi) = if self.t0 <= self.t1 {
+                (self.t0, self.t1)
+            } else {
+                (self.t1, self.t0)
+            };
+            lo < t && t < hi
+        };
+        if !inside {
+            return None;
+        }
+        let mid = line_point_at(
+            self.from,
+            self.to,
+            normalized_parameter_at((self.t0, self.t1), t),
+        );
+        if crate::offset::points_are_coincident(3, false, &self.from, &mid)
+            || crate::offset::points_are_coincident(3, false, &mid, &self.to)
+        {
+            return None;
+        }
+        Some((
+            Line {
+                from: self.from,
+                to: mid,
+                t0: self.t0,
+                t1: t,
+            },
+            Line {
+                from: mid,
+                to: self.to,
+                t0: t,
+                t1: self.t1,
+            },
+        ))
+    }
+}
+
 impl Piece<'_> {
     fn point(&self, t: f64) -> P3 {
         match &self.eval {
             Eval::Nurbs(n) => n.point(t),
             Eval::Polyline(p) => p.point(t),
+            Eval::Line(l) => l.point(t),
         }
     }
 
@@ -1445,6 +1531,20 @@ fn shape_from_record(data: &[u8]) -> Result<Shape, i32> {
         let (mut knots, mut cvs) = (vec![0.0; r.knot_count], vec![0.0; r.cv_doubles()]);
         r.write(&mut knots, &mut cvs);
         return curve_from(r.order, r.cv_count, r.rational, &knots, &cvs).map(Shape::Nurbs);
+    }
+    if let Some(r) = crate::nurbs_record::read_line(data) {
+        let (t0, t1) = r.domain;
+        let finite = r.line.iter().chain([&t0, &t1]).all(|&v| on_is_valid(v));
+        if !(finite && t0 < t1) {
+            return Err(ERR_INPUT);
+        }
+        let l = r.line;
+        return Ok(Shape::Line(Line {
+            from: [l[0], l[1], l[2]],
+            to: [l[3], l[4], l[5]],
+            t0,
+            t1,
+        }));
     }
     polyline_from_record(data)
         .map(Shape::Polyline)
@@ -2151,6 +2251,56 @@ pub(crate) mod tests {
             &mut count,
         );
         (code, count)
+    }
+
+    #[test]
+    fn a_line_curve_splits_and_intersects_through_its_record() {
+        use crate::nurbs_record::line_record;
+        let line = Line {
+            from: [0.0, -1.0, 0.0],
+            to: [3.0, 5.0, 0.0],
+            t0: 2.0,
+            t1: 6.0,
+        };
+        // `Split` at a parameter inside the open domain halves the line at that point.
+        let (l, r) = line.split(3.0).unwrap();
+        assert_eq!((l.t0, l.t1, r.t0, r.t1), (2.0, 3.0, 3.0, 6.0));
+        assert_eq!(l.to, r.from);
+        assert_eq!(l.to, line.point(3.0));
+        assert_eq!((l.from, r.to), (line.from, line.to));
+        // ... and refuses the domain's ends, a parameter outside it, and NaN.
+        for t in [2.0, 6.0, 7.0, f64::NAN] {
+            assert!(line.split(t).is_none(), "{t}");
+        }
+        assert_eq!(line.point(6.0), line.to);
+        assert_eq!(line.point(2.0), line.from);
+        // A record crosses a rectangle twice, as the polyline cutter does.
+        let rect = polyline_record(
+            &[
+                [0.0, 0.0, 0.0],
+                [4.0, 0.0, 0.0],
+                [4.0, 2.0, 0.0],
+                [0.0, 2.0, 0.0],
+                [0.0, 0.0, 0.0],
+            ],
+            &[0.0, 1.0, 2.0, 3.0, 4.0],
+        );
+        let cross = line_record(&[2.0, -1.0, 0.0, 2.0, 3.0, 0.0], (10.0, 14.0));
+        let mut out = [0.0; 5 * 4];
+        unsafe {
+            assert_eq!(record_hits(&rect, &cross, 1e-6, 40, &mut out), (0, 2));
+            assert_eq!(&out[..5], &[2.0, 0.0, 0.0, 0.5, 11.0]);
+            assert_eq!(&out[5..10], &[2.0, 2.0, 0.0, 2.5, 13.0]);
+            // A line whose domain does not increase, or with a non-finite end, is refused.
+            for (line, domain) in [
+                ([2.0, -1.0, 0.0, 2.0, 3.0, 0.0], (14.0, 10.0)),
+                ([2.0, -1.0, 0.0, 2.0, 3.0, 0.0], (10.0, 10.0)),
+                ([2.0, f64::NAN, 0.0, 2.0, 3.0, 0.0], (10.0, 14.0)),
+            ] {
+                let bad = line_record(&line, domain);
+                assert_eq!(record_hits(&rect, &bad, 1e-6, 40, &mut out).0, ERR_INPUT);
+            }
+        }
     }
 
     #[test]

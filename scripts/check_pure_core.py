@@ -1512,9 +1512,9 @@ def probe_pure_core_curve_hits(path: Path, python: Path | str = sys.executable, 
     return identity
 
 
-# Curve/curve intersection with polylines (native_intersect.point_hits for a pair with a
-# PolylineCurve): each curve is read from its encoded record, and ON_PolylineCurve's
-# Evaluate, bounding box and Split are ported. A library without it loses only that route:
+# Curve/curve intersection with polylines and lines (native_intersect.point_hits for a pair
+# with a PolylineCurve or a LineCurve): each curve is read from its encoded record, and
+# ON_PolylineCurve's and ON_LineCurve's Evaluate, bounding box and Split are ported. A library without it loses only that route:
 # such pairs keep the Python recursion.
 PURE_CORE_CURVE_RECORD_HITS_EXPORT = "narwhal_pure_core_curve_curve_record_hits"
 # (sys.platform, machine) pairs; narwhal3d/native_intersect.py POLYLINE_QUALIFIED_PLATFORMS
@@ -1527,10 +1527,11 @@ PURE_CORE_CURVE_RECORD_HITS_QUALIFIED_PLATFORMS = frozenset({("linux", "x86_64")
 # recursion's hits (`_dedupe(_subdivide(...))`) on rhino3dm 8.35.0's curves.
 PURE_CORE_CURVE_RECORD_HITS_IDENTITY = {
     "export": PURE_CORE_CURVE_RECORD_HITS_EXPORT,
-    "hits": [3, 1, 1], "small_buffer_status": -3, "unrecognised_record_status": -2,
+    "hits": [3, 1, 1, 1, 1, 1, 1, 1, 1, 1], "small_buffer_status": -3,
+    "unrecognised_record_status": -2,
     "truncated_record_status": -2, "nan_tolerance_status": -2, "deep_request_status": -2,
     "null_count_status": -1,
-    "hits_sha256": "d17d5a65dfbac1700dbbe32e312aa1a9a1c4058364574342632663a9fe2e6ed6",
+    "hits_sha256": "6ad23e9cfc4f6f30cb48d6373041d5ab17487359935cc04a760ce24815886126",
 }
 PURE_CORE_CURVE_RECORD_HITS_PROBE = r'''
 import ctypes as c, hashlib, json, struct, sys
@@ -1540,7 +1541,7 @@ fn.argtypes = [c.c_char_p, Z, c.c_char_p, Z, c.c_double, Z, D, Z, c.POINTER(Z)]
 fn.restype = c.c_int32
 # native_intersect._polyline_witnesses(), as rhino3dm 8.35.0 encodes them: a zigzag
 # polyline, a cubic, a closed quadrilateral, a polyline whose halving snaps to a break,
-# and a degree-1 NURBS line.
+# a degree-1 NURBS line, and LineCurves (two crossing the others, and four crossing pairs).
 zig = bytes.fromhex(
     "fa7f0200c900000000000000fbff02001400000000000000e6d4d74e47e9d311bfe50010830122f04e9c"
     "bbdbfcff0200910000000000000010040000001baf48800ce50dc09cdd657b8324ec3f00000000000000"
@@ -1577,12 +1578,62 @@ cut = bytes.fromhex(
     "0000000200000000000000000000002f176c1b0d00104002000000ae47e17a14aeef3f000000000000f0"
     "bf0000000000000000295c8fc2f528f03f0000000000000840000000000000000000fc783a64ff7f0280"
     "0000000000000000")
+slash = bytes.fromhex(
+    "fa7f02008100000000000000fbff02001400000000000000dbd4d74e47e9d311bfe50010830122f0f49b"
+    "e923fcff0200490000000000000010ece421b8ab6f12c05b55a60f4122f6bf000000000000000098a186"
+    "f2521e0a40cc016ced04ecf93f00000000000000000a3b0933e75e02c0c6851bdcdb60124003000000ba"
+    "1f65b8ff7f02800000000000000000")
+rise = bytes.fromhex(
+    "fa7f02008100000000000000fbff02001400000000000000dbd4d74e47e9d311bfe50010830122f0f49b"
+    "e923fcff0200490000000000000010d040d8a9b129d0bf6077112b9c860cc00000000000000000a81a26"
+    "f5f045c53f7b927598ce190f40000000000000000000000000000000000d2dbf823edc1d400300000032"
+    "a3f0c9ff7f02800000000000000000")
+x0a = bytes.fromhex(
+    "fa7f02008100000000000000fbff02001400000000000000dbd4d74e47e9d311bfe50010830122f0f49b"
+    "e923fcff0200490000000000000010e3e6051c4c01f6bf113d94535dded5bf00000000000000005a163e"
+    "977f72fd3f6555b49d96d3f23f00000000000000001840b18ccf7c0ac036f7e47245010b40030000003c"
+    "b4e134ff7f02800000000000000000")
+x0b = bytes.fromhex(
+    "fa7f02008100000000000000fbff02001400000000000000dbd4d74e47e9d311bfe50010830122f0f49b"
+    "e923fcff0200490000000000000010d66f42a0f6e1e93fb3de67dd79fee5bf0000000000000000aa7b33"
+    "86aacf06c02f8c55cbb687fb3f0000000000000000cedce27025040cc0ee3a167db4c915400300000033"
+    "92ce2bff7f02800000000000000000")
+x1a = bytes.fromhex(
+    "fa7f02008100000000000000fbff02001400000000000000dbd4d74e47e9d311bfe50010830122f0f49b"
+    "e923fcff020049000000000000001058132af30d56e23f2064135479a3cc3f0000000000000000bd8e9a"
+    "e21a4814400e27f29f3e1c0c400000000000000000db0ade23bf4f19c096fceba321d31a40030000004c"
+    "82fa6dff7f02800000000000000000")
+x1b = bytes.fromhex(
+    "fa7f02008100000000000000fbff02001400000000000000dbd4d74e47e9d311bfe50010830122f0f49b"
+    "e923fcff020049000000000000001022353022ce7c03408628f7a9fbace03f0000000000000000c4c1e2"
+    "cbc65fe7bf78101f30810c10400000000000000000bcac3d9adfb207c0ce6bdee834f70940030000007e"
+    "28979aff7f02800000000000000000")
+x2a = bytes.fromhex(
+    "fa7f02008100000000000000fbff02001400000000000000dbd4d74e47e9d311bfe50010830122f0f49b"
+    "e923fcff0200490000000000000010478d3648a02ff23f3c822f3b7629f5bf00000000000000003cfb13"
+    "22a0391640c07830d08f55d1bf00000000000000005caf5a257d78fabf71ea1daf3ab911400300000011"
+    "3450c8ff7f02800000000000000000")
+x2b = bytes.fromhex(
+    "fa7f02008100000000000000fbff02001400000000000000dbd4d74e47e9d311bfe50010830122f0f49b"
+    "e923fcff020049000000000000001008644c0bda5007409f018c6f2205f8bf00000000000000008800cb"
+    "cae8b7f1bff0749018743cc7bf000000000000000036235391b38801c0deaa8ab5dad9104003000000ce"
+    "7eceadff7f02800000000000000000")
+x3a = bytes.fromhex(
+    "fa7f02008100000000000000fbff02001400000000000000dbd4d74e47e9d311bfe50010830122f0f49b"
+    "e923fcff0200490000000000000010faae09ac9523f0bf4b8213c90410fb3f000000000000000094f161"
+    "b2c10efe3fa2d312ffb4ef04400000000000000000e874d4912eb5fcbf33c5e5239208044003000000a8"
+    "408a09ff7f02800000000000000000")
+x3b = bytes.fromhex(
+    "fa7f02008100000000000000fbff02001400000000000000dbd4d74e47e9d311bfe50010830122f0f49b"
+    "e923fcff02004900000000000000100476e937e173da3f548b960e8185fa3f0000000000000000cbfc74"
+    "a24207ffbfd60bdfb59fa90740000000000000000098975b16ba8206c0c0d1c455573000400300000087"
+    "0799f8ff7f02800000000000000000")
 def call(a, b, tol=1e-6, depth=40, capacity=10, count=True):
     out, n = (c.c_double * 50)(), Z()
     code = fn(a, len(a), b, len(b), tol, depth, out, capacity, c.byref(n) if count else None)
     return code, n.value, out
 counts, bits = [], b""
-for a, b, tol in ((zig, wave, 1e-3), (quad, zig, 1e-6), (near, cut, 1e-6)):
+for a, b, tol in ((zig, wave, 0.001), (quad, zig, 1e-06), (near, cut, 1e-06), (slash, wave, 1e-06), (zig, rise, 1e-06), (slash, rise, 1e-06), (x0a, x0b, 1e-06), (x1a, x1b, 1e-06), (x2a, x2b, 1e-06), (x3a, x3b, 1e-06)):
     code, n, out = call(a, b, tol)
     if code != 0:
         raise RuntimeError("the export refused a witness pair")

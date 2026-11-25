@@ -193,10 +193,60 @@ check(len(kept) == len(reference) >= 1
               for p, q in zip(kept, reference)),
       f"Trim of a Rectangle by a cubic: the same {len(kept)} surviving pieces")
 
-print("\n-- routing: only valid NURBS and polyline curves take the route --")
-line_curve = r3.LineCurve(P(0, -5, 0), P(6, 5, 0))
-check(native.point_hits(rect, line_curve, 1e-6, 40) is None,
-      "a LineCurve beside a polyline keeps the Python recursion")
+print("\n-- LineCurves (what Line makes, the usual Trim and Split cutter) --")
+lrng = random.Random(20261128)
+
+
+def random_line():
+    line = r3.LineCurve(P(lrng.uniform(-6, 6), lrng.uniform(-6, 6), 0),
+                        P(lrng.uniform(-6, 6), lrng.uniform(-6, 6), 0))
+    if lrng.random() < 0.4:
+        line.Domain = r3.Interval(lrng.uniform(-9, 0), lrng.uniform(1, 9))
+    return line
+
+
+lequal = lpairs = lhits = lcalls = 0
+lines_python_s = lines_rust_s = 0.0
+for trial in range(120):
+    other = (random_line, random_polyline, random_nurbs)[trial % 3]()
+    a, b = (random_line(), other) if trial % 2 else (other, random_line())
+    if not (a.IsValid and b.IsValid):
+        continue
+    lpairs += 1
+    t = time.perf_counter()
+    want = native._python_hits(a, b, 1e-6, 40)
+    lines_python_s += time.perf_counter() - t
+    before = native._native_record_calls
+    t = time.perf_counter()
+    got = native.point_hits(a, b, 1e-6, 40)
+    lines_rust_s += time.perf_counter() - t
+    lcalls += native._native_record_calls - before
+    lhits += len(want)
+    lequal += got is not None and native._hit_bits(got) == native._hit_bits(want)
+check(lequal == lpairs == lcalls and lhits >= 40,
+      f"{lequal}/{lpairs} pairs of a LineCurve with a line, a polyline or a NURBS curve "
+      f"bit-identical through Rust ({lhits} hits, {lcalls} native calls); Python "
+      f"{lines_python_s:.1f} s, Rust {lines_rust_s * 1e3:.0f} ms")
+cutters = [r3.LineCurve(P(x, -5, 0), P(x + 0.5, 5, 0)) for x in (1.3, 4.1, 7.7, 10.2)]
+pieces = ix.split_curve_by(wave, cutters)
+reference = python_only(ix.split_curve_by, wave, cutters)
+check(len(pieces) == len(reference) == 5
+      and all(xyz(p.PointAtStart) == xyz(q.PointAtStart) and p.Domain.T1 == q.Domain.T1
+              for p, q in zip(pieces, reference)),
+      f"Split of a cubic by four lines: the same {len(pieces)} pieces")
+kept = ix.trim_curve_by(cutters[1], [wave], (4.1, -4, 0))
+reference = python_only(ix.trim_curve_by, cutters[1], [wave], (4.1, -4, 0))
+check(len(kept) == len(reference) >= 1
+      and all(p.Domain.T0 == q.Domain.T0 and p.Domain.T1 == q.Domain.T1
+              for p, q in zip(kept, reference)),
+      f"Trim of a line by a cubic: the same {len(kept)} surviving pieces")
+
+print("\n-- routing: only valid NURBS, polyline and line curves take the route --")
+joined = r3.PolyCurve()
+joined.Append(r3.LineCurve(P(0, -5, 0), P(3, 0, 0)))
+joined.Append(r3.LineCurve(P(3, 0, 0), P(6, 5, 0)))
+check(native.point_hits(rect, joined, 1e-6, 40) is None,
+      "another curve class (a PolyCurve) beside a polyline keeps the Python recursion")
 check(native.point_hits(rect, rect.Duplicate(), 1e-6, float("nan")) is None
       and native.point_hits(rect, zig, float("inf"), 40) is None
       and native.point_hits(rect, zig, 1e-6, 65) is None,
@@ -219,11 +269,16 @@ def best(fn, reps=3):
     return out
 
 
-for label, a, b in (("Rectangle x cubic", rect, wave), ("Polyline x cubic", zig, wave)):
+for label, a, b in (("Rectangle x cubic", rect, wave), ("Polyline x cubic", zig, wave),
+                    ("Line x cubic", cutters[0], wave)):
     slow = best(lambda: python_only(ix.curve_curve, a, b))
     fast = best(lambda: ix.curve_curve(a, b))
     print(f"  {label}: Python {slow * 1e3:.1f} ms, Rust {fast * 1e3:.2f} ms "
           f"({slow / fast:.0f}x)")
+slow = best(lambda: python_only(ix.split_curve_by, wave, cutters))
+fast = best(lambda: ix.split_curve_by(wave, cutters))
+print(f"  Split of a cubic by four lines: Python {slow * 1e3:.1f} ms, Rust {fast * 1e3:.2f} ms "
+      f"({slow / fast:.0f}x)")
 
 print("\n-- input safety: the record export runs in a subprocess, so a crash fails a check --")
 script = r'''
