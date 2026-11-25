@@ -352,7 +352,9 @@ def execute_probe(mutant="", code=None):
     return json.loads(output.getvalue())
 
 
-POLYLINE_EXPORTS = ("narwhal_pure_core_curve_curve_record_hits", "narwhal_pure_core_nearest_on_polyline", "narwhal_pure_core_polyline_samples", "narwhal_pure_core_polycurve_samples", "narwhal_pure_core_remove_join_cv_v1")
+POLYLINE_EXPORTS = ("narwhal_pure_core_curve_curve_record_hits", "narwhal_pure_core_nearest_on_polyline", "narwhal_pure_core_polyline_samples", "narwhal_pure_core_polycurve_samples", "narwhal_pure_core_remove_join_cv_v1",
+                    "narwhal_pure_core_offset_fit", "narwhal_pure_core_surface_offset",
+                    "narwhal_pure_core_surface_grid")
 
 
 def pe_fixture(*, parser_abi=2, missing="", svg_abi=14, alias_abi=1, dxf_abi=2, reader_abi=1):
@@ -365,19 +367,19 @@ def pe_fixture(*, parser_abi=2, missing="", svg_abi=14, alias_abi=1, dxf_abi=2, 
     optional = 0x98
     struct.pack_into("<H", data, optional, 0x20b)
     struct.pack_into("<I", data, optional + 60, 0x200)
-    struct.pack_into("<II", data, optional + 112, 0x1200, 0x400)
+    struct.pack_into("<II", data, optional + 112, 0x1200, 0x600)
     struct.pack_into("<II", data, optional + 120, 0x2600, 40)
     struct.pack_into("<IIII", data, optional + 240 + 8, 0x1e00, 0x1000, 0x1e00, 0x200)
     names = [name for name in ("narwhal_pure_core_abi_version", *gate.PURE_CORE_PARSE_EXPORTS, *gate.PURE_CORE_RETIREMENT_EXPORTS, *POLYLINE_EXPORTS) if name != missing]
-    assert len(names) <= 64, "PE fixture export table capacity exceeded"
+    assert len(names) <= 128, "PE fixture export table capacity exceeded"
     offset = lambda rva: rva - 0x1000 + 0x200
     struct.pack_into("<IIIII", data, offset(0x1200) + 20,
-                     len(names), len(names), 0x1240, 0x1340, 0x1440)
-    cursor = 0x1600
+                     len(names), len(names), 0x1240, 0x1440, 0x1640)
+    cursor = 0x1800
     for i, name in enumerate(names):
         struct.pack_into("<I", data, offset(0x1240) + i * 4, 0x2800 + i * 16)
-        struct.pack_into("<I", data, offset(0x1340) + i * 4, cursor)
-        struct.pack_into("<H", data, offset(0x1440) + i * 2, i)
+        struct.pack_into("<I", data, offset(0x1440) + i * 4, cursor)
+        struct.pack_into("<H", data, offset(0x1640) + i * 2, i)
         encoded = name.encode() + b"\0"
         data[offset(cursor):offset(cursor) + len(encoded)] = encoded
         cursor += len(encoded)
@@ -1374,6 +1376,9 @@ class RetirementPackageTests(unittest.TestCase):
                         patch.object(module,"probe_pure_core_line_samples",return_value={}), \
                         patch.object(module,"probe_pure_core_polyline_samples",return_value={}), \
                         patch.object(module,"probe_pure_core_polycurve_samples",return_value={}), \
+                        patch.object(module,"probe_pure_core_offset_fit",return_value={}), \
+                        patch.object(module,"probe_pure_core_surface_offset",return_value={}), \
+                        patch.object(module,"probe_pure_core_surface_grid",return_value={}), \
                         patch.object(module,"probe_pure_core_remove_join_cv",return_value={}):
                     namespace[method](self)
             else:
@@ -1940,6 +1945,9 @@ class JointAdmissionTests(unittest.TestCase):
                      if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)]
             self.assertIn("probe_pure_core_remove_join_cv", calls)
             self.assertIn("probe_pure_core_polycurve_samples", calls)
+            for probe in ("probe_pure_core_offset_fit", "probe_pure_core_surface_offset",
+                          "probe_pure_core_surface_grid"):
+                self.assertIn(probe, calls)
 
     def test_actual_joint_probe_and_assertion_red_restored_green(self):
         library = Path(os.environ.get("NARWHAL_PURE_CORE") or

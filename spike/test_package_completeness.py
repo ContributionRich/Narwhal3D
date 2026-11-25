@@ -28,7 +28,7 @@ linux_native = {
     "libnarwhal_selection_core.so", "narwhal-converter-supervisor",
     "narwhal-cdr-multiversion", "narwhal-document-core", "narwhal-welcome",
     "libnarwhal_automation.so", "narwhal-automation", "libnarwhal_application_core.so",
-    "libnarwhal_ui_core.so", "narwhal-picture-trace", "narwhal-library-core",
+    "libnarwhal_ui_core.so", "narwhal-picture-trace", "narwhal-picture-pdf", "narwhal-library-core",
 }
 windows_native = {
     "narwhal_cdr_core.dll", "narwhal_geometry_core.dll",

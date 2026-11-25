@@ -214,7 +214,31 @@ def _offset_control_polygon_approx(curve, distance, n, tolerance, max_samples=51
                         f"offset approximated to {dev:.3e} > tolerance {tolerance}")
 
 
+_BOUNDARY_REFUSAL = ("boundary-preserving free-form offset could not meet tolerance; "
+                     "larger sharp-corner treatment is not implemented yet")
+
+
 def _compact_offset(curve, distance, n, tolerance):
+    """`_python_compact_offset` through Rust where qualified (`native_nearest.offset_fit`):
+    the same fit, bit for bit, or the Python route where Rust leaves the decision to it."""
+    if not isinstance(curve, r3.NurbsCurve) or curve.Degree < 2:
+        return None
+    try:
+        from . import native_nearest
+    except ImportError:  # support direct-file loading outside the package
+        import native_nearest
+    native = native_nearest.offset_fit(curve, distance, n, tolerance, _python_compact_offset)
+    if native is None:
+        return _python_compact_offset(curve, distance, n, tolerance)
+    if not native:
+        return None
+    fit, dev = native
+    if fit is None:
+        return OffsetResult(None, False, 0.0, _BOUNDARY_REFUSAL)
+    return OffsetResult(fit, False, dev, "")
+
+
+def _python_compact_offset(curve, distance, n, tolerance):
     """OURS: refine a Rust-backed cubic interpolant of TRUE offset targets.
 
     This is not Rebuild of an already approximate offset. Uniform interpolation
@@ -247,9 +271,7 @@ def _compact_offset(curve, distance, n, tolerance):
             return compact
         # The legacy whole-curve fit would erase these known tangent boundaries.
         # Refuse explicitly rather than make an unqualified smooth replacement.
-        return OffsetResult(None, False, 0.0,
-                            "boundary-preserving free-form offset could not meet tolerance; "
-                            "larger sharp-corner treatment is not implemented yet")
+        return OffsetResult(None, False, 0.0, _BOUNDARY_REFUSAL)
     try:
         from . import interpolate
     except ImportError:
@@ -751,22 +773,42 @@ def surface_offset(surface, distance, tolerance=1e-2, max_refine=6):
     except Exception:  # noqa: BLE001
         pass
 
+    try:
+        from . import native_nearest
+    except ImportError:  # support direct-file loading outside the package
+        import native_nearest
+    outcome = native_nearest.surface_offset_fit(ns, distance, tolerance, max_refine,
+                                                _python_surface_offset)
+    if outcome is None:
+        outcome = _python_surface_offset(ns, distance, tolerance, max_refine)
+    off, dev, within = outcome
+    if off is None:
+        return OffsetResult(None, False, 0.0,
+                            "offset inverts the surface (|distance| exceeds "
+                            "the radius of curvature); refused")
+    if within:
+        return OffsetResult(off, planar, dev, "")
+    return OffsetResult(off, planar, dev,
+                        f"surface offset approximated to {dev:.3e} > "
+                        f"tolerance {tolerance}")
+
+
+def _python_surface_offset(ns, distance, tolerance, max_refine):
+    """The refinement loop: ``(offset surface, deviation, within tolerance)``, or
+    ``(None, 0.0, False)`` when the offset inverts the surface. Rust runs the same loop
+    (native_nearest.surface_offset_fit) where qualified."""
     best = None
     for level in range(max_refine + 1):
         work = _refine_surface(ns, level)
         off = _offset_control_net(work, distance)
         dev, folded = _offset_surface_quality(ns, off, distance)
         if folded:
-            return OffsetResult(None, False, 0.0,
-                                "offset inverts the surface (|distance| exceeds "
-                                "the radius of curvature); refused")
+            return None, 0.0, False
         best = (off, dev)
         if dev <= tolerance:
-            return OffsetResult(off, planar, dev, "")
+            return off, dev, True
     off, dev = best
-    return OffsetResult(off, planar, dev,
-                        f"surface offset approximated to {dev:.3e} > "
-                        f"tolerance {tolerance}")
+    return off, dev, False
 
 
 def _refine_surface(ns, level):

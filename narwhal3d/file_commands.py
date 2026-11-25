@@ -519,10 +519,13 @@ _exit_polling = False
 _exit_guard = None
 _exit_failures = None
 _exit_phase = None
+_exit_wait_started = None
+_exit_commit = None
 
 
 def request_exit(*, on_ready=None, on_cancel=None):
     global _exit_polling, _exit_guard, _exit_failures, _exit_phase
+    global _exit_wait_started, _exit_commit
     global _exit_ready_callback, _exit_cancel_callback
     from . import save_queue
     if _exit_polling:
@@ -537,9 +540,13 @@ def request_exit(*, on_ready=None, on_cancel=None):
     _exit_guard = None
     _exit_failures = save_queue.failure_serial()
     _exit_phase = None
+    _exit_wait_started = None
+    _exit_commit = None
     _exit_polling = True
     try:
-        _exit_scheduler(_exit_tick)
+        # Clean/No requires no staging: schedule native quit in this same turn.
+        if _exit_tick() is not None and _exit_polling:
+            _exit_scheduler(_exit_tick)
     except Exception:
         cancel_exit()
         raise
@@ -548,12 +555,14 @@ def request_exit(*, on_ready=None, on_cancel=None):
 
 def cancel_exit():
     global _exit_polling, _exit_guard, _exit_ready_callback, _exit_cancel_callback
+    global _exit_commit
     if not _exit_polling:
         return False
     from . import save_queue
     save_queue.shutdown_request('cancel_shutdown')
     _exit_polling = False
     _exit_guard = None
+    _exit_commit = None
     callback = _exit_cancel_callback
     _exit_ready_callback = _exit_cancel_callback = None
     if callback is not None:
@@ -567,7 +576,7 @@ def cancel_exit():
 
 def _exit_tick():
     global _exit_polling, _exit_guard, _exit_phase
-    global _exit_ready_callback, _exit_cancel_callback
+    global _exit_ready_callback, _exit_cancel_callback, _exit_wait_started, _exit_commit
     from . import save_queue
     if not _exit_polling:
         return None
@@ -577,9 +586,14 @@ def _exit_tick():
             cancel_exit()
             app.log("The document changed after Exit approval -- review the latest edits before exiting")
             return None
-        protected = not app.doc_modified() or bool(save_queue.recovery_for_current_state())
+        import time
+        busy = save_queue.busy()
+        if busy and _exit_wait_started is None:
+            _exit_wait_started = time.monotonic()
+        wait_ms = int(1000 * (time.monotonic() - _exit_wait_started)) if busy else 0
+        protected = not app.doc_modified()
         action = save_queue.shutdown_request('shutdown_tick', modified=bool(app.doc_modified()), protected=protected,
-            failed=save_queue.failure_serial() != _exit_failures)
+            failed=save_queue.failure_serial() != _exit_failures, wait_ms=wait_ms)
         if action != _exit_phase:
             if action == 'wait':
                 app.log("Finishing Save before Exit -- UI remains available; Esc cancels Exit")
@@ -612,35 +626,49 @@ def _exit_tick():
                 if not ok:
                     cancel_exit()
                     return None
-            save_queue.shutdown_request('approve_shutdown')
-        elif action == 'start':
-            app.log("Keeping unsaved work in a validated recovery copy -- Esc cancels Exit")
-            if not write_recovery(background=True):
-                cancel_exit()
-                app.log("Exit cancelled: recovery could not be started; unsaved work remains open")
-                return None
+            save_queue.shutdown_request('approve_shutdown', discard=answer == 'no')
+            return _exit_tick()
         elif action == 'commit':
-            # No main-thread event can edit between this check and the quit call.
-            # exit_pre reuses successful recovery evidence instead of saving twice.
+            # One-shot, state-bound intent; do not lie by marking discarded work saved.
+            snapshot = save_queue._snapshot(app)
+            if snapshot is None:
+                raise RuntimeError("Cannot certify the document state for Exit")
+            _exit_commit = (app.model, snapshot)
             _exit_ready_callback()
             _exit_polling = False
             _exit_ready_callback = _exit_cancel_callback = None
+            return None
+        elif action == 'cancel':
+            cancel_exit()
+            app.log("Exit cancelled: Save is still running after 30 seconds; it was not interrupted. Retry Exit after Save completes.")
             return None
         elif action in ('error', 'idle'):
             cancel_exit()
             app.log("Exit cancelled: Save/recovery did not complete; unsaved work remains open")
             return None
     except Exception as exc:
+        _exit_commit = None
         cancel_exit()
         app.log(f"Exit cancelled: {exc}; unsaved work remains open")
         return None
     return save_queue.POLL_INTERVAL
 
 
+def intentional_exit_ready():
+    """Saved or explicitly discarded *this* state; never authorizes a forced exit."""
+    if _exit_commit is None:
+        return False
+    from . import save_queue
+    app = _app()
+    model, snapshot = _exit_commit
+    return (app.model is model and snapshot == save_queue._snapshot(app)
+            and not save_queue.busy())
+
+
 def end_session_if_protected(path):
     """Never describe failed recovery as a clean session."""
     from . import save_queue
-    if not save_queue.busy() and (path or not _app().doc_modified()):
+    if not save_queue.busy() and (path or not _app().doc_modified() or intentional_exit_ready()):
         end_session()
 
 
@@ -722,9 +750,9 @@ def write_recovery(background=False):
 
     ``background=True`` (AutoSave) starts the copy in `save_queue` when the app
     installed it and returns its path at once (the result is logged when it finishes),
-    or False when a save is already running (try again later). Application Exit uses
-    that same validated queue. Native exit_pre writes synchronously only when no
-    completed recovery matches the latest document state."""
+    or False when a save is already running (try again later). Approved intentional
+    Exit never calls this: Yes uses normal Save, No discards. Unapproved native
+    exit_pre retains synchronous recovery for the latest document state."""
     from . import autosave
 
     app = _app()
@@ -980,13 +1008,23 @@ class ExitCmd(_FileCommand):
         from . import save_queue
         if _exit_scheduler is not None and save_queue.enabled() and quitter is not None:
             return request_exit(), True
+        if save_queue.busy():
+            return "Exit cancelled: a Save is in progress; finish it before exiting", True
         stop = self._settle_unsaved("Exit")
         if stop is not None:
             return stop
         if quitter is None:
             return "Exit: nothing to close (headless)", True
-        _app().mark_saved()            # settled: the exit handler must not re-save
-        quitter()
+        global _exit_commit
+        snapshot = save_queue._snapshot(_app())
+        if snapshot is None:
+            return "Exit cancelled: cannot certify the document state", True
+        _exit_commit = (_app().model, snapshot)
+        try:
+            quitter()
+        except Exception:
+            _exit_commit = None
+            raise
         return "Exiting", True
 
     def execute(self, ctx):          # pragma: no cover - begin() always finishes

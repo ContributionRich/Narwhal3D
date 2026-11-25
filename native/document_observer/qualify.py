@@ -28,9 +28,9 @@ WINDOWS = sys.platform == 'win32'
 LINUX_LIBRARY = '_narwhal_document_observer.so'
 WINDOWS_LIBRARY = '_narwhal_document_observer.pyd'
 MUTATIONS = (
-    ('omit-geometry', 'archive(output, *geometry, raw);', 'u32(output, 0);',
+    ('omit-geometry', 'archive(output, *geometry, raw, fast_crc);', 'u32(output, 0);',
      'test_same_uuid_same_count_raw_replacement_detected'),
-    ('omit-attributes', 'archive(output, *attributes, raw);', 'u32(output, 0);',
+    ('omit-attributes', 'archive(output, *attributes, raw, fast_crc);', 'u32(output, 0);',
      'test_attributes_user_text_groups_and_plot_weight_roundtrip'),
     ('omit-name', 'blob(output, name.Array(), name_length);', 'u32(output, 0);',
      'test_unicode_name'),

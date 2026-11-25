@@ -20,7 +20,7 @@ const ERR_INPUT: i32 = -2;
 const ERR_SIZE: i32 = -3;
 const ERR_SINGULAR: i32 = -4;
 const MAX_POINTS: usize = 2048;
-type Interpolation = (Vec<[f64; 3]>, Vec<f64>, usize);
+pub(crate) type Interpolation = (Vec<[f64; 3]>, Vec<f64>, usize);
 
 fn parameters(points: &[[f64; 3]], style: u8) -> Result<Vec<f64>, i32> {
     let n = points.len();
@@ -98,7 +98,7 @@ fn basis(s: usize, u: f64, p: usize, k: &[f64]) -> Vec<f64> {
     n
 }
 #[allow(clippy::needless_range_loop)]
-fn solve(points: &[[f64; 3]], degree: usize, style: u8) -> Result<Interpolation, i32> {
+pub(crate) fn solve(points: &[[f64; 3]], degree: usize, style: u8) -> Result<Interpolation, i32> {
     let n = points.len();
     if !(2..=MAX_POINTS).contains(&n) || degree < 1 || degree.is_multiple_of(2) {
         return Err(ERR_INPUT);
@@ -233,7 +233,7 @@ fn thomas(sub: &[f64], diag: &[f64], sup: &[f64], rhs: &[[f64; 3]]) -> Option<Ve
 
 /// The periodic cubic through `points`, as in `interpolate_points_periodic`:
 /// `n + 3` wrapped controls and the full unclamped knot vector (`n + 7`).
-fn solve_periodic(points: &[[f64; 3]], style: u8) -> Result<Interpolation, i32> {
+pub(crate) fn solve_periodic(points: &[[f64; 3]], style: u8) -> Result<Interpolation, i32> {
     let n = points.len();
     if !(3..=MAX_POINTS).contains(&n) {
         return Err(ERR_INPUT);

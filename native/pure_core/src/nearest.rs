@@ -22,7 +22,7 @@ const NOT_RECOGNISED: i32 = 1;
 const SAMPLES_PER_SPAN: usize = 6;
 const MAX_NEWTON: usize = 60;
 const PARAM_EPS: f64 = 1e-12;
-const MAX_ORDER: usize = 32;
+pub(crate) const MAX_ORDER: usize = 32;
 const MAX_CVS: usize = 1 << 20;
 
 /// openNURBS `ON_SQRT_EPSILON`, used by the end-knot fix in `ON_EvaluateNurbsBasis`.
@@ -209,7 +209,7 @@ pub(crate) fn search_monotone(a: &[f64], t: f64) -> isize {
 /// `ON_EvaluateNurbsBasis`: the degree-d basis lands in `n[0..order]`, lower degrees
 /// in the triangle above it (row `d - j`, from column `d - j`), which
 /// `basis_derivatives` reads.
-fn basis(order: usize, knot: &[f64], t: f64, n: &mut [f64]) {
+pub(crate) fn basis(order: usize, knot: &[f64], t: f64, n: &mut [f64]) {
     let d = order - 1;
     if knot[d - 1] == knot[d] {
         n[..order * order].fill(0.0);
@@ -250,7 +250,7 @@ fn basis(order: usize, knot: &[f64], t: f64, n: &mut [f64]) {
 }
 
 /// `ON_EvaluateNurbsBasisDerivatives`: derivative `k` of the basis into row `k`.
-fn basis_derivatives(order: usize, knot: &[f64], der_count: usize, n: &mut [f64]) {
+pub(crate) fn basis_derivatives(order: usize, knot: &[f64], der_count: usize, n: &mut [f64]) {
     let d = order - 1;
     // dk[k][i] = 1 / (knot[d + i] - knot[k - 1 + i])
     let mut dk = [[0.0_f64; MAX_ORDER]; 3];
@@ -665,7 +665,8 @@ fn search_budgeted(
         &curve.breakpoints(t0, t1),
     )
 }
-fn region<T>(p: *const T, n: usize) -> Option<(usize, usize)> {
+/// The byte range of `n` values at `p`; None for a null or misaligned pointer.
+pub(crate) fn region<T>(p: *const T, n: usize) -> Option<(usize, usize)> {
     if n == 0 {
         return Some((0, 0));
     }
@@ -678,7 +679,8 @@ fn region<T>(p: *const T, n: usize) -> Option<(usize, usize)> {
     }
     Some((p as usize, (p as usize).checked_add(size)?))
 }
-fn separate(inputs: &[(usize, usize)], outputs: &[(usize, usize)]) -> bool {
+/// True when no output range overlaps an input or an earlier output.
+pub(crate) fn separate(inputs: &[(usize, usize)], outputs: &[(usize, usize)]) -> bool {
     for (i, &a) in outputs.iter().enumerate() {
         if inputs
             .iter()

@@ -37,13 +37,14 @@ DEFAULT_DPI = 72.0
 SUPPORTED = ("PNG", "JPEG")
 
 #: the file-dialog filter (`filedialog.ask_open_path(..., filters)` shape)
-FILTERS = (("Images (PNG, JPEG)", "*.png *.jpg *.jpeg"),)
+FILTERS = (("Images and PDF (PNG, JPEG, PDF)", "*.png *.jpg *.jpeg *.pdf *.PDF"),)
 
 
 class ImageInfo:
-    __slots__ = ("format", "width", "height", "dpi_x", "dpi_y", "dpi_declared")
+    __slots__ = ("format", "width", "height", "dpi_x", "dpi_y", "dpi_declared", "page_inches")
 
     def __init__(self, fmt, width, height, dpi_x=None, dpi_y=None):
+        self.page_inches = None
         self.format = fmt
         self.width = int(width)
         self.height = int(height)
@@ -54,11 +55,12 @@ class ImageInfo:
     @property
     def aspect(self):
         """width / height."""
-        return self.width / self.height
+        return (self.page_inches[0] / self.page_inches[1] if self.page_inches
+                else self.width / self.height)
 
     def print_size_inches(self):
         """``(width, height)`` in inches -- `1to1`'s pixel dimension / dpi."""
-        return self.width / self.dpi_x, self.height / self.dpi_y
+        return self.page_inches or (self.width / self.dpi_x, self.height / self.dpi_y)
 
     def __repr__(self):  # pragma: no cover - debugging aid
         return (f"ImageInfo({self.format} {self.width}x{self.height} "
@@ -94,6 +96,60 @@ def read_image_info(path):
     name = fmt or (os.path.splitext(path)[1].lstrip(".").upper() or "this")
     raise ValueError(f"{name} images are not supported yet -- Picture reads "
                      f"{' and '.join(SUPPORTED)}")
+
+
+def prepare_image(path):
+    """Return (persistent image, info, notice); only PDF invokes native rendering.
+
+    OURS: PDF page 1 at <=144dpi/4096px, explicitly announced; never vector import.
+    Python only bridges file-dialog/SDK metadata to the Rust rasterization policy.
+    """
+    from pathlib import Path
+
+    if Path(path).suffix.lower() != ".pdf":
+        return path, read_image_info(path), None
+    from . import converter_process, runtime_tools
+
+    if not converter_process._supervisor():
+        raise ValueError("PDF Picture needs the native converter supervisor")
+    root = Path(__file__).resolve().parents[1]
+    key = f"{runtime_tools.platform_name()}-{runtime_tools.arch_name()}"
+    helper = next((path for path in (
+        root / "runtime" / key / "bin" / "narwhal-picture-pdf",
+        root / "native" / "picture_pdf" / "target" / "release" / "narwhal-picture-pdf",
+    ) if path.is_file()), None)
+    if helper is None:
+        raise ValueError("PDF Picture rasterizer is not installed for this platform yet")
+    # Persistent user DATA, not the temporary directory or an evictable render cache.
+    data = Path(os.environ.get("XDG_DATA_HOME", str(Path.home() / ".local/share")))
+    cache = data / "narwhal3d" / "picture-assets" / "pdf"
+    result = converter_process.run([str(helper), path, str(cache)], timeout=20,
+                                   memory_mib=512, max_output=8192)
+    if result.returncode or result.error or result.timed_out:
+        raise ValueError("PDF Picture: " + (result.error or result.stderr.strip() or
+                                          "rasterization refused"))
+    try:
+        packet = json.loads(result.stdout)
+        image = Path(packet["image"])
+        if (image.parent.resolve() != cache.resolve() or image.suffix != ".png"
+                or packet["page"] != 1 or not 1 <= packet["pages"] <= 10000):
+            raise ValueError("invalid native PDF raster result")
+        info = read_image_info(str(image))
+        if not (0 < info.width <= 4096 and 0 < info.height <= 4096):
+            raise ValueError("native PDF raster exceeds pixel limit")
+        import math
+        inches = (float(packet["width_inches"]), float(packet["height_inches"]))
+        if not all(math.isfinite(v) and 0 < v <= 200 for v in inches):
+            raise ValueError("invalid native PDF page dimensions")
+        info.page_inches = inches
+        info.format = "PDF"
+        info.dpi_declared = True
+        notice = (f"PDF: using page 1 of {packet['pages']} as a raster reference picture"
+                  + (f"; {packet['pages'] - 1} other page(s) not imported"
+                     if packet['pages'] > 1 else ""))
+        return str(image), info, notice
+    except (KeyError, TypeError, ValueError, OSError) as exc:
+        raise ValueError(f"invalid PDF Picture raster result: {exc}") from exc
 
 
 def _png(data, path):

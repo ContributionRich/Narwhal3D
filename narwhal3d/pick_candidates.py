@@ -46,9 +46,9 @@ def _candidate(key, label, lines=(), triangles=(), points=()):
 
 
 _cache = {}
-#: ``{(name, mode, blocked): (parts, candidates)}``: an object's candidates built from ITS parts.
-#: Reused while `ui._brep_parts_all` returns the same parts object, which it does for an
-#: analytic master until that master changes. `clear` leaves it alone for that reason.
+#: Exact subobject entries reuse the per-object parts value. Object/occluder
+#: entries reuse display identity, world matrix and the existing display-change stamp.
+#: `clear` leaves these per-object entries available across unrelated edits.
 #: Curve/point entries are ``(geometry, candidates, display stamp)``: a document row keeps
 #: its LIVE rhino3dm wrapper across an in-place transform (Gumball, grip drag), so identity
 #: alone cannot tell a moved curve from an unchanged one.
@@ -92,8 +92,20 @@ def _mesh_display(ob):
     mesh = ob.data
     mesh.calc_loop_triangles()
     vertices = [tuple(ob.matrix_world @ v.co) for v in mesh.vertices]
-    return ([tuple(vertices[i] for i in e.vertices) for e in mesh.edges],
-            [tuple(vertices[i] for i in t.vertices) for t in mesh.loop_triangles])
+    if getattr(mesh, 'narwhal_boundary_wires', False):
+        # Match patched Blender's CAD wire display: face-internal triangulation
+        # is hidden. BMesh supplies native topology flags, not an analytic rebuild.
+        import bmesh
+        bm = bmesh.new()
+        try:
+            bm.from_mesh(mesh)
+            edges = [tuple(vertices[v.index] for v in e.verts)
+                     for e in bm.edges if e.is_boundary or e.is_wire]
+        finally:
+            bm.free()
+    else:
+        edges = [tuple(vertices[i] for i in e.vertices) for e in mesh.edges]
+    return (edges, [tuple(vertices[i] for i in t.vertices) for t in mesh.loop_triangles])
 
 
 def collect(ui, mode):
@@ -111,8 +123,19 @@ def collect(ui, mode):
                     if (ob := bpy.data.objects.get(row[0])) is not None
                     and ui.bridge.display_visible(ob))
     # Read on every call: Hide reports only the Scene, so no serial stands for the visible set.
+    # Mesh replacement and object transforms are cheap display identities. Geometry
+    # buffer edits are observed by the existing per-object display/depsgraph stamp.
+    # No document encoding, recipe replay or OCCT master serialization is needed.
+    display_keys = {}
+    for name, _state, _layer, geom, _attrs in visible:
+        if not isinstance(geom, (r3.Curve, r3.Point)):
+            ob = bpy.data.objects.get(name)
+            mesh = getattr(ob, 'data', None)
+            display_keys[name] = (ob.as_pointer(), mesh.as_pointer() if mesh else None,
+                                  tuple(tuple(row) for row in ob.matrix_world),
+                                  getattr(mesh, 'narwhal_boundary_wires', False))
     signature = (ui._doc_key(), tuple((row[0], str(row[4].Id)) for row in visible),
-                 frozenset(blocked), mode)
+                 frozenset(blocked), mode, tuple(display_keys.items()))
     # Geometry and visibility serials, NOT `dg['serial']`: every depsgraph update moves that, and
     # a click's own selection change is one, so it forced a full rebuild on the next click.
     revision = ((id(rows), dg.get('vis', 0), max(dg.get('changed', {}).values(), default=0),
@@ -151,6 +174,24 @@ def collect(ui, mode):
                                       points=((geom.Location.X, geom.Location.Y, geom.Location.Z),)))
             current[key] = (geom, out[start:], stamp)
             continue
+        if mode == 'object' or name in blocked:
+            # Object picking/occlusion consumes ONLY the already-drawn display.
+            # Exact topology belongs to explicit subobject queries, not a cold click.
+            key = (name, mode, 'display', name in blocked)
+            stamp = (display_keys[name], changed.get(name, 0))
+            known = previous.get(key)
+            if known is not None and known[0] == stamp:
+                out.extend(known[1])
+                current[key] = known
+                continue
+            lines, triangles = _mesh_display(bpy.data.objects.get(name))
+            start = len(out)
+            if lines or triangles:
+                kind = 'Occluder' if name in blocked else 'Object'
+                out.append(_candidate((name, kind, 0), name + ' — ' + type(geom).__name__,
+                                      lines, triangles))
+            current[key] = (stamp, out[start:])
+            continue
         if parts_by_name is None:
             parts_by_name = ui._brep_parts_all()
         parts = parts_by_name.get(name) or {}
@@ -161,39 +202,26 @@ def collect(ui, mode):
             current[key] = known
             continue
         start, mesh_used = len(out), False
-        if mode == 'object' or name in blocked:
-            lines = [points for _index, points in parts.get('edges', ())]
+        if not parts.get('faces'):
+            # Pictures/meshes still obscure curve segments and BRep parts,
+            # even when they expose no selectable exact subobjects.
+            mesh_used = True
+            _lines, triangles = _mesh_display(bpy.data.objects.get(name))
+            if triangles:
+                out.append(_candidate((name, 'Occluder', 0), '', triangles=triangles))
+        if mode == 'edge':
+            # Edge commands still obey shaded occlusion, but must not offer
+            # faces as selectable rows. Keep their display BVH only.
             triangles = [t for _index, ts in parts.get('faces', ()) for t in ts]
-            if not lines and not triangles:
-                # Mesh/Picture display data are already Blender-native. They do
-                # not imply analytic geometry or editable BRep subobjects.
-                mesh_used = True
-                lines, triangles = _mesh_display(bpy.data.objects.get(name))
-            if lines or triangles:
-                kind = 'Occluder' if name in blocked else 'Object'
-                out.append(_candidate((name, kind, 0), name + ' — ' + type(geom).__name__,
-                                      lines, triangles))
-        else:
-            if not parts.get('faces'):
-                # Pictures/meshes still obscure curve segments and BRep parts,
-                # even when they expose no selectable exact subobjects.
-                mesh_used = True
-                _lines, triangles = _mesh_display(bpy.data.objects.get(name))
-                if triangles:
-                    out.append(_candidate((name, 'Occluder', 0), '', triangles=triangles))
-            if mode == 'edge':
-                # Edge commands still obey shaded occlusion, but must not offer
-                # faces as selectable rows. Keep their display BVH only.
-                triangles = [t for _index, ts in parts.get('faces', ()) for t in ts]
-                if triangles:
-                    out.append(_candidate((name, 'Occluder', 0), '', triangles=triangles))
-            for index, points in parts.get('edges', ()):
-                out.append(_candidate((name, 'Edge', index), f'{name} — Edge {index + 1}', lines=(points,)))
-            if mode == 'part':
-                for index, ts in parts.get('faces', ()):
-                    out.append(_candidate((name, 'Face', index), f'{name} — Face {index + 1}', triangles=ts))
-                for index, point in parts.get('vertices', ()):
-                    out.append(_candidate((name, 'Vertex', index), f'{name} — Vertex {index + 1}', points=(point,)))
+            if triangles:
+                out.append(_candidate((name, 'Occluder', 0), '', triangles=triangles))
+        for index, points in parts.get('edges', ()):
+            out.append(_candidate((name, 'Edge', index), f'{name} — Edge {index + 1}', lines=(points,)))
+        if mode == 'part':
+            for index, ts in parts.get('faces', ()):
+                out.append(_candidate((name, 'Face', index), f'{name} — Face {index + 1}', triangles=ts))
+            for index, point in parts.get('vertices', ()):
+                out.append(_candidate((name, 'Vertex', index), f'{name} — Vertex {index + 1}', points=(point,)))
         if parts and not mesh_used:
             current[key] = (parts, out[start:])
     _objects.clear()
@@ -346,6 +374,13 @@ def at(ui, area, space, region, x, y, mode='object'):
         if depth_tree is not None:
             xy = projected[:2]
             origin, direction, limit = ray_at(xy)
+            if not rv.is_perspective:
+                # Orthographic rays are parallel. Anchor the Blender BVH ray to
+                # its known world hit, avoiding the binary32 screen/unprojection
+                # round-trip that can put an edge behind its own face. Preserve
+                # the near plane, direction, far limit and occlusion tolerance.
+                target = Vector(point)
+                origin += target - (origin + direction * (target - origin).dot(direction))
             front = depth_tree.ray_cast(origin, direction, limit)[0]
             if front is not None:
                 front_depth = ui._view_depth(rv, front)

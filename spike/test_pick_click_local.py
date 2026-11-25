@@ -21,6 +21,34 @@ from mathutils import Matrix
 
 
 class ClickLocalTests(base.PickCandidateTests):
+    def _perspective_projection(self):
+        self.rv.is_perspective = True
+        self.rv.view_perspective = 'PERSP'
+        projection = Matrix(((1, 0, 0, 0), (0, 1, 0, 0),
+                             (0, 0, -1.002002, -.2002002), (0, 0, -1, 0)))
+        self.rv.perspective_matrix = projection @ self.rv.view_matrix
+
+    def test_translated_orthographic_edge_does_not_occlude_itself(self):
+        from mathutils import Euler
+        box = self.ui.box('translated', low=(300, 300, 0), high=(320, 320, 10))
+        self.region.width, self.region.height = 1330, 692
+        self.rv.view_matrix = (Euler((.35, .25, 0)).to_matrix().to_4x4().inverted()
+                               @ Matrix.Translation((-310, -310, 0)))
+        # MEASURED real deferred-startup viewport, 37px status strip. This input
+        # exposed self-occlusion in BOTH original and current picker paths.
+        self.rv.perspective_matrix = Matrix((
+            (.02242852747440338, -6.315729623312949e-12, -.0057269432581961155, -6.95284366607666),
+            (.0037742711137980223, .04179263114929199, .014781244099140167, -14.125739097595215),
+            (-.00031849442166276276, .00046991786803118885, -.001247325330041349, -.04694126546382904),
+            (0, 0, 0, 1)))
+        self.space.shading.type = 'SOLID'
+        xy = (477.7658996582031, 384.08416748046875)
+        edge = (box.name, 'Edge', 7)
+        self.assertIn(edge, self.keys('edge', xy))
+        self.ui.box('real_foreground', low=(299.8, 309.8, 10.05), high=(300.2, 310.2, 10.2))
+        self.assertNotIn(edge, self.keys('edge', xy),
+                         'a genuine foreground face still hides the same exact edge')
+
     def test_sparse_large_bounds_are_not_geometry(self):
         points = [base.r3.Point3d(*p) for p in
                   ((-.8, -.8, 0), (-.8, .8, 0), (.8, .8, 0), (.8, -.8, 0))]
@@ -64,6 +92,11 @@ class ClickLocalTests(base.PickCandidateTests):
         self.assertNotIn((hidden.name, 'Object', 0), keys)
         self.assertNotIn((curve.name, 'Object', 0), keys)
         self.assertNotIn((curve.name, 'Segment', 0), self.keys('part'))
+        self._perspective_projection()
+        keys = self.keys()
+        self.assertIn((visible.name, 'Object', 0), keys)
+        self.assertNotIn((hidden.name, 'Object', 0), keys)
+        self.assertNotIn((curve.name, 'Object', 0), keys)
 
     def test_offset_hit_visible_while_center_ray_is_occluded(self):
         self.ui.box('thin_front', low=(-.01, -.4, -.4), high=(.01, .4, 0))
@@ -71,6 +104,8 @@ class ClickLocalTests(base.PickCandidateTests):
         self.space.shading.type = 'SOLID'
         self.assertIn((point.name, 'Object', 0), self.keys(),
                       'center depth must not suppress visible geometry six pixels away')
+        self._perspective_projection()
+        self.assertIn((point.name, 'Object', 0), self.keys())
 
     def test_visible_branch_survives_occluded_nearest_branch(self):
         points = ((.005, -.02, -1), (.005, .02, -1),
@@ -200,6 +235,8 @@ def mutations():
     original = base.picker
     source = base.SOURCES['pick_candidates']
     probes = (
+        ('origin += target - (origin + direction * (target - origin).dot(direction))',
+         'pass', 'test_translated_orthographic_edge_does_not_occlude_itself'),
         ("depth_tree = _cache['depth_tree'] if space.shading.type != 'WIREFRAME' else None",
          'depth_tree = None', 'test_rear_visible_far_left_is_not_visible_at_center'),
         ('xy = projected[:2]', 'xy = (x, y)',

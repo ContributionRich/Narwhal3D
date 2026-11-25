@@ -1,6 +1,6 @@
 //! Save/AutoSave scheduling only. Exact serialization/recovery remains host/kernel work.
 //! Shutdown uses the existing file-job wire vocabulary: wait (saves pending),
-//! declined (approval needed), start (recovery needed), commit (safe to quit),
+//! declined (approval needed), commit (saved/explicit discard), cancel (wait expired),
 //! error (save failed). This keeps the ABI1 adapter unchanged.
 //! An active save is never cancelled or replaced. Busy AutoSave declines; newest
 //! queued user Save wins. A repair/retry retains the same active native job.
@@ -42,12 +42,16 @@ enum Request {
     },
     ApproveShutdown {
         queue: u64,
+        #[serde(default)]
+        discard: bool,
     },
     ShutdownTick {
         queue: u64,
         modified: bool,
         protected: bool,
         failed: bool,
+        #[serde(default)]
+        wait_ms: u64,
     },
 }
 #[derive(Default, Serialize)]
@@ -68,6 +72,7 @@ struct Queue {
     pending: Option<Job>,
     closing: bool,
     approved: bool,
+    discard: bool,
 }
 #[derive(Default)]
 struct Registry {
@@ -99,7 +104,7 @@ impl Registry {
             | Request::Close { queue }
             | Request::BeginShutdown { queue }
             | Request::CancelShutdown { queue }
-            | Request::ApproveShutdown { queue }
+            | Request::ApproveShutdown { queue, .. }
             | Request::ShutdownTick { queue, .. } => *queue,
         };
         let queue = self.queues.get_mut(&id).ok_or("invalid_save_queue")?;
@@ -166,28 +171,32 @@ impl Registry {
                     .map(|j| j.id);
             }
             Request::BeginShutdown { .. } => {
-                if !queue.closing {
-                    queue.closing = true;
-                    queue.approved = false;
-                }
+                // The host coalesces an already-pending request. A new request
+                // must never inherit an earlier completed No/Save approval.
+                queue.closing = true;
+                queue.approved = false;
+                queue.discard = false;
                 reply.action = "wait";
             }
             Request::CancelShutdown { .. } => {
                 queue.closing = false;
                 queue.approved = false;
+                queue.discard = false;
                 reply.action = "cancelled";
             }
-            Request::ApproveShutdown { .. } => {
+            Request::ApproveShutdown { discard, .. } => {
                 if !queue.closing {
                     return Err("shutdown_not_requested");
                 }
                 queue.approved = true;
+                queue.discard = discard;
                 reply.action = "completed";
             }
             Request::ShutdownTick {
                 modified,
                 protected,
                 failed,
+                wait_ms,
                 ..
             } => {
                 reply.action = if !queue.closing {
@@ -195,15 +204,28 @@ impl Registry {
                 } else if failed {
                     queue.closing = false;
                     queue.approved = false;
+                    queue.discard = false;
                     "error"
                 } else if queue.active.is_some() || queue.pending.is_some() {
-                    "wait"
+                    if wait_ms >= 30_000 {
+                        // OURS: bound Exit's wait, never cancel the user's Save.
+                        queue.closing = false;
+                        queue.approved = false;
+                        queue.discard = false;
+                        "cancel"
+                    } else {
+                        "wait"
+                    }
                 } else if modified && !queue.approved {
                     "declined"
-                } else if protected {
+                } else if protected || queue.discard {
                     "commit"
                 } else {
-                    "start"
+                    // A requested Save did not make this state clean. Never
+                    // substitute an unsolicited recovery write for Yes or No.
+                    queue.closing = false;
+                    queue.approved = false;
+                    "error"
                 };
             }
             Request::Close { .. } => {
@@ -311,6 +333,7 @@ mod tests {
                 modified: false,
                 protected: true,
                 failed: false,
+                wait_ms: 0,
             })
             .unwrap()
             .action
@@ -331,7 +354,7 @@ mod tests {
         assert_eq!(tick(&mut r), "commit");
     }
     #[test]
-    fn shutdown_requires_approval_and_durable_recovery_and_cancel_never_cancels_save() {
+    fn shutdown_requires_save_or_explicit_discard_and_cancel_never_cancels_save() {
         let mut r = Registry::default();
         let q = create(&mut r);
         r.execute(Request::BeginShutdown { queue: q }).unwrap();
@@ -341,6 +364,7 @@ mod tests {
                 modified: true,
                 protected,
                 failed,
+                wait_ms: 0,
             })
             .unwrap()
             .action
@@ -348,8 +372,18 @@ mod tests {
         assert_eq!(tick(&mut r, false, false), "declined");
         // An autosave is protection, not the caller's approval to exit.
         assert_eq!(tick(&mut r, true, false), "declined");
-        r.execute(Request::ApproveShutdown { queue: q }).unwrap();
-        assert_eq!(tick(&mut r, false, false), "start");
+        r.execute(Request::ApproveShutdown {
+            queue: q,
+            discard: false,
+        })
+        .unwrap();
+        assert_eq!(tick(&mut r, false, false), "error");
+        r.execute(Request::BeginShutdown { queue: q }).unwrap();
+        r.execute(Request::ApproveShutdown {
+            queue: q,
+            discard: false,
+        })
+        .unwrap();
         assert_eq!(tick(&mut r, true, false), "commit");
         let job = enqueue(&mut r, q, false).job.unwrap();
         r.execute(Request::CancelShutdown { queue: q }).unwrap();
@@ -361,6 +395,65 @@ mod tests {
         r.execute(Request::BeginShutdown { queue: q }).unwrap();
         assert_eq!(tick(&mut r, true, true), "error");
         assert_eq!(tick(&mut r, true, false), "idle");
+    }
+    #[test]
+    fn explicit_discard_commits_without_recovery_but_not_over_a_user_save() {
+        let mut r = Registry::default();
+        let q = create(&mut r);
+        r.execute(Request::BeginShutdown { queue: q }).unwrap();
+        r.execute(Request::ApproveShutdown {
+            queue: q,
+            discard: true,
+        })
+        .unwrap();
+        let job = enqueue(&mut r, q, false).job.unwrap();
+        let tick = |r: &mut Registry| {
+            r.execute(Request::ShutdownTick {
+                queue: q,
+                modified: true,
+                protected: false,
+                failed: false,
+                wait_ms: 0,
+            })
+            .unwrap()
+            .action
+        };
+        assert_eq!(tick(&mut r), "wait");
+        r.execute(Request::Finish { queue: q, job }).unwrap();
+        assert_eq!(tick(&mut r), "commit");
+        // A fresh request must reset approval even after a completed request,
+        // without relying on an intervening Cancel.
+        r.execute(Request::BeginShutdown { queue: q }).unwrap();
+        assert_eq!(
+            tick(&mut r),
+            "declined",
+            "old No must not authorize another Exit"
+        );
+    }
+    #[test]
+    fn exit_wait_is_bounded_without_cancelling_active_or_queued_saves() {
+        let mut r = Registry::default();
+        let q = create(&mut r);
+        let first = enqueue(&mut r, q, false).job.unwrap();
+        let second = enqueue(&mut r, q, false).job.unwrap();
+        r.execute(Request::BeginShutdown { queue: q }).unwrap();
+        let tick = |r: &mut Registry, wait_ms| {
+            r.execute(Request::ShutdownTick {
+                queue: q,
+                modified: false,
+                protected: true,
+                failed: false,
+                wait_ms,
+            })
+            .unwrap()
+            .action
+        };
+        assert_eq!(tick(&mut r, 29_999), "wait");
+        assert_eq!(tick(&mut r, 30_000), "cancel");
+        let info = r.execute(Request::Info { queue: q }).unwrap();
+        assert_eq!(info.job, Some(first));
+        assert_eq!(info.replaced, Some(second));
+        assert_eq!(tick(&mut r, 30_001), "idle");
     }
     fn create(r: &mut Registry) -> u64 {
         r.execute(Request::Create).unwrap().queue

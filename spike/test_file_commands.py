@@ -350,9 +350,10 @@ def run():
         draw_line("w0,3,0", "w4,3,0")
         filedialog.set_backend(Fake(ask=[(OK, "no")]))
         app_state.feed_line("Exit")
-        check(quits == [1, 1] and file_commands.write_recovery() is None,
-              "Exit, No: quits, and the exit handler then writes NO recovery copy "
-              "(the user chose to discard)", f"quits={quits}")
+        check(quits == [1, 1] and app_state.doc_modified()
+              and file_commands.intentional_exit_ready() and objects_in(p7) == 1,
+              "Exit, No: commits explicit discard without pretending the document "
+              "was saved or overwriting the earlier Save", f"quits={quits}")
         fresh()
         filedialog.set_backend(Fake())                 # nothing may be asked
         app_state.feed_line("Exit")

@@ -19,7 +19,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 pkg = types.ModuleType('narwhal3d')
 pkg.__path__ = [os.path.join(ROOT, 'narwhal3d')]
 sys.modules['narwhal3d'] = pkg
-from narwhal3d import offset as off, interpolate, native_interpolate
+from narwhal3d import offset as off, interpolate, native_interpolate, native_nearest
 
 NORMAL = (0.0, 0.0, 1.0)
 TOL = 0.001
@@ -269,6 +269,11 @@ class CompactOffset(unittest.TestCase):
         self.assert_boundaries(source, result.curve, -.2)
 
     def test_periodic_required_native_ownership_and_explicit_refusal(self):
+        # The Python route's own contract; spike/test_offset_fit.py checks the Rust route.
+        with patch.object(native_nearest, 'offset_fit', return_value=None):
+            self.check_periodic_required_native_ownership_and_explicit_refusal()
+
+    def check_periodic_required_native_ownership_and_explicit_refusal(self):
         c = smooth_fixture()
         encoded = c.Encode()
         before = native_interpolate._native_periodic_calls
@@ -315,7 +320,9 @@ class CompactOffset(unittest.TestCase):
 
     def test_mutation_weakened_accuracy_is_red(self):
         c = smooth_fixture()
-        with patch.object(off, '_offset_correspondence_error', return_value=0.0):
+        # A mutation of the Python route's acceptance; offset.rs tests mutate Rust's.
+        with patch.object(native_nearest, 'offset_fit', return_value=None), \
+                patch.object(off, '_offset_correspondence_error', return_value=0.0):
             broken = off.curve_offset(c, .25)
         with self.assertRaises(AssertionError):
             self.assert_contract(c, broken, .25)

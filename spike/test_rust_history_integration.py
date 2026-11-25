@@ -677,7 +677,7 @@ class BlenderTests(unittest.TestCase):
         self.assert_acknowledged_but_blocked()
         self.assert_clear_requires_fresh_acknowledgement()
 
-    def test_settled_exit_acknowledges_unknown_contents_without_unlocking_history(self):
+    def test_discard_exit_keeps_unknown_contents_dirty_and_history_locked(self):
         self.unknown_restore_fixture()
         # Exercise the registered Exit, but replace only the OS quit callback.
         observed = []
@@ -689,9 +689,11 @@ class BlenderTests(unittest.TestCase):
         self.assertTrue(done)
         self.assertEqual(message, 'Exiting')
         ask.assert_called_once()
-        self.assertEqual(observed, [(False, True, self.s.generation)],
-                         'settled Exit did not acknowledge before invoking quit')
-        self.assert_acknowledged_but_blocked()
+        self.assertEqual(observed, [(True, True, None)],
+                         'discard Exit must not acknowledge unsaved contents')
+        self.assertTrue(app.doc_modified())
+        self.assertTrue(self.s.uncertain)
+        self.assertIsNone(app._saved_uncertain_generation)
 
     def acknowledged_replacement_failure(self, direction):
         source = self.unknown_restore_fixture()

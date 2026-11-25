@@ -53,10 +53,18 @@ void blob(Bytes& out, const void* data, size_t size) {
 
 class WitnessArchive : public ON_Write3dmBufferArchive {
 public:
-    WitnessArchive() : ON_Write3dmBufferArchive(0, max_object, 80, ON::Version()) {}
+    WitnessArchive(bool canonical, bool fast_crc)
+        : ON_Write3dmBufferArchive(0, max_object, 80, ON::Version()),
+          skip_crc(canonical && fast_crc) {}
     std::vector<std::pair<size_t, size_t>> bookkeeping;
+    const bool skip_crc;
 protected:
     size_t Internal_WriteOverride(size_t count, const void* data) override {
+        // Pinned SDK WriteBuffer calls UpdateCRC AFTER this virtual write. A
+        // witness already zeroes those words below, so avoid computing them.
+        // Chunk framing/limits and every payload byte remain unchanged; raw
+        // archives and the test reference path retain normal SDK checksums.
+        if (skip_crc) EnableCRCCalculation(false);
         ON_3DM_BIG_CHUNK chunk;
         const auto position = CurrentPosition();
         if (count == 8 && GetCurrentChunk(chunk) > 0 && chunk.m_bLongChunk
@@ -74,7 +82,7 @@ protected:
     }
 };
 
-void archive(Bytes& out, const ON_Object& object, bool raw) {
+void archive(Bytes& out, const ON_Object& object, bool raw, bool fast_crc) {
     // Userdata may request DeleteAfterWrite. Serialize a private native duplicate,
     // never the document object. Virtual duplication stays in the original runtime.
     std::unique_ptr<ON_Object> copy(object.Duplicate());
@@ -91,7 +99,7 @@ void archive(Bytes& out, const ON_Object& object, bool raw) {
         if (!copied) throw std::runtime_error("native userdata cannot be copied for observation");
         copied->m_userdata_copycount = item->m_userdata_copycount;
     }
-    WitnessArchive buffer;
+    WitnessArchive buffer(!raw, fast_crc);
     if (!buffer.WriteObject(*copy))
         throw std::runtime_error("native observation serialization failed or exceeded limit");
     if (raw) {
@@ -112,7 +120,7 @@ void archive(Bytes& out, const ON_Object& object, bool raw) {
     }
 }
 
-PyObject* observe_impl(PyObject* obj, bool full, bool raw = false) {
+PyObject* observe_impl(PyObject* obj, bool full, bool raw = false, bool fast_crc = true) {
     try {
         // The GIL stays held. The borrowed pointer never escapes this call and no
         // geometry or attributes are changed. The loader must additionally pin the
@@ -151,8 +159,8 @@ PyObject* observe_impl(PyObject* obj, bool full, bool raw = false) {
             if (name_length > max_name) throw std::runtime_error("observation name limit");
             blob(output, name.Array(), name_length);
             if (full) {
-                archive(output, *geometry, raw);
-                archive(output, *attributes, raw);
+                archive(output, *geometry, raw, fast_crc);
+                archive(output, *attributes, raw, fast_crc);
             }
         }
         if (seen != count) throw std::runtime_error("observation membership changed");
@@ -172,6 +180,7 @@ PyObject* observe_impl(PyObject* obj, bool full, bool raw = false) {
 PyObject* observe(PyObject*, PyObject* obj) { return observe_impl(obj, true); }
 PyObject* index(PyObject*, PyObject* obj) { return observe_impl(obj, false); }
 PyObject* raw_observe(PyObject*, PyObject* obj) { return observe_impl(obj, true, true); }
+PyObject* observe_reference(PyObject*, PyObject* obj) { return observe_impl(obj, true, false, false); }
 
 PyObject* copy_attributes(PyObject*, PyObject* args) {
     PyObject *source_obj, *holder_obj;
@@ -517,6 +526,7 @@ PyMethodDef methods[] = {
     {"lease_count", lease_count, METH_O, "Qualified lifetime: native ownership count."},
     {"lease_drain", lease_drain, METH_NOARGS, "Qualified lifetime: drain native releases."},
     {"raw_observe", raw_observe, METH_O, "Test-only raw native archives, not registry witnesses."},
+    {"observe_reference", observe_reference, METH_O, "Test-only original CRC-enabled witness writer; byte parity oracle."},
     {"index", index, METH_O, "Read UUID/name index only; does not serialize geometry."},
     {"copy_attributes", copy_attributes, METH_VARARGS, "Copy complete attributes into a private native holder."},
     {"observe", observe, METH_O, "Read a bounded NWOBS01 host observation; does not certify registry authority."},

@@ -14755,6 +14755,7 @@ class PictureCmd(Command):
         super().__init__()
         self._info = None
         self._flow = None
+        self._source_notice = None
 
     def begin(self, ctx):
         from . import filedialog, picture
@@ -14769,7 +14770,7 @@ class PictureCmd(Command):
             except ValueError as e:
                 return f"Picture: {e}", True
             self.step_index = 1
-            return None, False
+            return self._source_notice, False
         return ("No file dialog is available (kdialog / zenity) -- type the image file "
                 "name."), False
 
@@ -14778,8 +14779,9 @@ class PictureCmd(Command):
             from . import picture
 
             path = os.path.abspath(os.path.expanduser(text.strip().strip('"')))
-            self._info = picture.read_image_info(path)    # ValueError -> re-prompt
-            return path
+            image, info, notice = picture.prepare_image(path)  # refusal before any document edit
+            self._info, self._source_notice = info, notice
+            return image
         return super()._parse(kind, text, ctx)
 
     def _parse_distance(self, text, ctx):
@@ -14923,6 +14925,8 @@ class PictureCmd(Command):
         if self._flow == "1to1" and not info.dpi_declared:
             msg += (f" -- the image declares no resolution, so {picture.DEFAULT_DPI:g} dpi "
                     f"was assumed")
+        if self._source_notice:
+            msg += " -- " + self._source_notice
         return msg, True
 
 

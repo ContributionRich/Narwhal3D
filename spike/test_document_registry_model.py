@@ -126,6 +126,80 @@ class ModelRegistryTests(unittest.TestCase):
         self.assertEqual(after.by_id[oid]['attrs']['Name'], 'new backing')
         self.assertEqual(before.by_id[oid]['attrs']['Name'], 'same')
 
+    def test_snapshot_second_observation_rejects_late_callback_write(self):
+        oid = self.add('callback')
+        for field in ('geometry','attributes'):
+            before = self.m.snapshot()
+            build = self.m._snapshot_document
+            def callback(entries, names):
+                out = build(entries,names)
+                # Explicit unmediated write: marks/UUID/count stay unchanged.
+                model._SUSPEND[0] += 1
+                try:
+                    obj = self.m.file.Objects.FindId(oid)
+                    if field=='geometry':
+                        obj.Geometry.Transform(r3.Transform.Translation(5,0,0))
+                    else:
+                        obj.Attributes.PlotWeight=4.5
+                finally:
+                    model._SUSPEND[0] -= 1
+                return out
+            with patch.object(self.m,'_snapshot_document',callback):
+                with self.assertRaises(model._registry_api().native.RegistryError):
+                    self.m.snapshot()
+            obj = self.m.file.Objects.FindId(oid)
+            if field=='geometry':
+                self.assertEqual(obj.Geometry.Location.X,6.,'failed capture preserves callback edit')
+                self.assertEqual(before.by_id[oid]['geometry'].Location.X,1.,'prior payload stays immutable')
+            else:
+                self.assertEqual(obj.Attributes.PlotWeight,4.5,'failed capture preserves callback attributes')
+                self.assertNotEqual(before.by_id[oid]['_attributes'].PlotWeight,4.5,'prior attributes stay immutable')
+            rebuilt = self.m.rebuild_object_registry()
+            self.assertEqual(rebuilt.by_id[oid]['geometry'].Location.X,6.,'rebuild retains actual live value')
+
+    def test_payload_callback_metadata_is_captured_fresh_not_shared_from_old_snapshot(self):
+        oid = self.add('metadata callback')
+        material = r3.Material();material.Name='callback material'
+        index = self.m.file.Materials.Add(material)
+        self.m.snapshot()
+        self.m.replace_geometry(oid,r3.Point(r3.Point3d(2,0,0)))
+        entry = self.m._entry
+        def callback(obj,names):
+            value = entry(obj,names)
+            self.m.set_document_user_text('callback','retained')
+            model._SUSPEND[0] += 1
+            try:
+                self.m.file.Materials[index].DiffuseColor=(30,60,90,255)
+                self.m.file.Layers[0].Color=(90,60,30,255)
+            finally:
+                model._SUSPEND[0] -= 1
+            return value
+        with patch.object(self.m,'_entry',callback):
+            captured = self.m.snapshot()
+        self.m.set_document_user_text('callback','later')
+        self.m.file.Materials[index].DiffuseColor=(1,2,3,255)
+        self.m.file.Layers[0].Color=(3,2,1,255)
+        self.m.restore(captured)
+        self.assertEqual(self.m.document_user_text('callback'),'retained')
+        self.assertEqual(self.m.material_records(),captured.materials)
+        self.assertEqual(self.m.layer_records(),captured.layers)
+
+    def test_warm_snapshot_materials_and_layers_are_not_cached_by_object_identity(self):
+        oid = self.add('metadata')
+        material = r3.Material();material.Name='reference'
+        material.DiffuseColor=(100,50,25,255)
+        index = self.m.file.Materials.Add(material)
+        before = self.m.snapshot()
+        self.m.file.Materials[index].DiffuseColor=(10,20,30,255)
+        self.m.file.Layers[0].Color=(44,55,66,255)
+        after = self.m.snapshot()
+        self.assertNotEqual(before.materials,after.materials,'unchanged geometry must not hide edited materials')
+        self.assertNotEqual(before.layers,after.layers,'unchanged geometry must not hide edited layers')
+        self.assertEqual(before.by_id[oid]['geometry'].Encode(),after.by_id[oid]['geometry'].Encode())
+        self.m.restore(before)
+        self.assertEqual(self.m.material_records(),before.materials,'restore preserves all material payloads')
+        self.assertEqual(self.m.layer_records(),before.layers,'restore preserves layer values')
+
     def test_missing_observer_is_native_required_before_model_activation(self):
         api = model._registry_api()
         with patch.object(api.observer_api, 'load_observer', side_effect=RuntimeError('native required')):
@@ -165,7 +239,19 @@ def mutations():
         original_swap(owner, file)
         owner._object_registry.file = old
 
+    import inspect
+    import textwrap
+    source = textwrap.dedent(inspect.getsource(binding.snapshot))
+    anchor = 'ticket.commit_observed(self.observer.observe(self.file))'
+    assert source.count(anchor)==1
+    namespace = {}
+    exec(compile(source.replace(anchor,'ticket.commit_observed(data)'),'<snapshot-second-scan-mutant>','exec'),
+         binding.snapshot.__globals__,namespace)
+    stale_snapshot = namespace['snapshot']
+
     variants = (
+        ('reuse-initial-observation', binding, 'snapshot', stale_snapshot,
+         'test_snapshot_second_observation_rejects_late_callback_write'),
         ('hot-full-scan', binding, 'count', lambda self: self.sync()['count'],
          'test_count_and_display_hot_reads_do_not_scan_or_serialize_document'),
         ('missing-native-mark', binding, 'mark', lambda *a, **k: None,

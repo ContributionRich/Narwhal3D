@@ -151,6 +151,11 @@ OCCT_LIBS="$PATCHED/5.2/python/lib/python3.13/site-packages/cadquery_ocp_novtk.l
 NARWHAL_OCCT_SOURCE_DIR="$OCCT_SOURCE" NARWHAL_OCCT_LIB_DIR="$OCCT_LIBS" LD_LIBRARY_PATH="$OCCT_LIBS" \
   cargo +"$TOOLCHAIN" build --release --locked --manifest-path "$ROOT/native/geometry_core/Cargo.toml"
 
+step "PDF Picture rasterizer (staged in runtime/linux-x86_64/bin)"
+cargo +"$TOOLCHAIN" build --release --locked --manifest-path "$ROOT/native/picture_pdf/Cargo.toml"
+mkdir -p "$ROOT/runtime/linux-x86_64/bin"
+cp "$ROOT/native/picture_pdf/target/release/narwhal-picture-pdf" "$ROOT/runtime/linux-x86_64/bin/"
+
 step "Picture tracer (staged in artifacts/picture-trace)"
 cargo +"$TOOLCHAIN" build --release --locked --manifest-path "$ROOT/native/picture_trace/Cargo.toml"
 mkdir -p "$ROOT/artifacts/picture-trace/linux-x86_64"

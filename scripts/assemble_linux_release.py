@@ -18,7 +18,7 @@ import tempfile
 from typing import Any
 
 from build_linux_native import probe_ui_core, verify_ui_core_source, probe_geometry_core_join, verify_geometry_core_source
-from check_pure_core import probe_pure_core_parser, probe_pure_core_retirement, probe_pure_core_curve_record_hits, probe_pure_core_polyline_nearest, probe_pure_core_polyline_samples, probe_pure_core_remove_join_cv, probe_pure_core_polycurve_samples
+from check_pure_core import probe_pure_core_parser, probe_pure_core_retirement, probe_pure_core_curve_record_hits, probe_pure_core_polyline_nearest, probe_pure_core_polyline_samples, probe_pure_core_remove_join_cv, probe_pure_core_polycurve_samples, probe_pure_core_offset_fit, probe_pure_core_surface_offset, probe_pure_core_surface_grid
 
 from release_policy import (
     MAX_HOST_GLIBC, format_glibc, glibc_versions, scan_runtime_glibc,
@@ -59,7 +59,7 @@ NATIVE_COMPONENTS = (
     "narwhal-cdr-multiversion", "narwhal-document-core", "narwhal-welcome",
     "libnarwhal_automation.so", "narwhal-automation",
     "libnarwhal_application_core.so", "libnarwhal_ui_core.so",
-    "narwhal-picture-trace", "narwhal-library-core",
+    "narwhal-picture-trace", "narwhal-picture-pdf", "narwhal-library-core",
 )
 PACKAGED_ACCELERATORS = (
     "libnarwhal_geometry_core.so", "libnarwhal_platform_core.so",
@@ -612,6 +612,9 @@ def validate_native_components(
         probe_pure_core_polyline_samples(directory / "libnarwhal_pure_core.so")
         probe_pure_core_polycurve_samples(directory / "libnarwhal_pure_core.so")
         probe_pure_core_remove_join_cv(directory / "libnarwhal_pure_core.so")
+        probe_pure_core_offset_fit(directory / "libnarwhal_pure_core.so")
+        probe_pure_core_surface_offset(directory / "libnarwhal_pure_core.so")
+        probe_pure_core_surface_grid(directory / "libnarwhal_pure_core.so")
     except ValueError as exc:
         raise ReleaseError(str(exc)) from exc
     try:
@@ -1123,7 +1126,7 @@ def self_check() -> None:
             "narwhal-cdr-multiversion", "narwhal-document-core", "narwhal-welcome",
             "libnarwhal_automation.so", "narwhal-automation",
             "libnarwhal_application_core.so", "libnarwhal_ui_core.so",
-            "narwhal-picture-trace", "narwhal-library-core",
+            "narwhal-picture-trace", "narwhal-picture-pdf", "narwhal-library-core",
         ):
             raise ReleaseError("self-check found an incomplete native component set")
         if PACKAGED_ACCELERATORS != (

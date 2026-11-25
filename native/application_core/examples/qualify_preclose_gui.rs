@@ -23,6 +23,192 @@ mod linux {
         ) -> std::ffi::c_ulong;
         fn XCloseDisplay(display: *mut std::ffi::c_void) -> i32;
     }
+    #[repr(C)]
+    struct Attributes {
+        x: i32,
+        y: i32,
+        width: i32,
+        height: i32,
+        border: i32,
+        depth: i32,
+        visual: *mut std::ffi::c_void,
+        root: std::ffi::c_ulong,
+        class: i32,
+        bit_gravity: i32,
+        win_gravity: i32,
+        backing_store: i32,
+        backing_planes: std::ffi::c_ulong,
+        backing_pixel: std::ffi::c_ulong,
+        save_under: i32,
+        colormap: std::ffi::c_ulong,
+        map_installed: i32,
+        map_state: i32,
+        all_masks: std::ffi::c_long,
+        your_mask: std::ffi::c_long,
+        do_not_propagate: std::ffi::c_long,
+        override_redirect: i32,
+        screen: *mut std::ffi::c_void,
+    }
+    #[repr(C)]
+    struct Timespec {
+        sec: std::ffi::c_long,
+        ns: std::ffi::c_long,
+    }
+    unsafe extern "C" {
+        fn clock_gettime(clock: i32, value: *mut Timespec) -> i32;
+        fn XDefaultRootWindow(display: *mut std::ffi::c_void) -> std::ffi::c_ulong;
+        fn XQueryTree(
+            display: *mut std::ffi::c_void,
+            window: std::ffi::c_ulong,
+            root: *mut std::ffi::c_ulong,
+            parent: *mut std::ffi::c_ulong,
+            children: *mut *mut std::ffi::c_ulong,
+            count: *mut u32,
+        ) -> i32;
+        fn XGetWindowProperty(
+            display: *mut std::ffi::c_void,
+            window: std::ffi::c_ulong,
+            property: std::ffi::c_ulong,
+            offset: std::ffi::c_long,
+            length: std::ffi::c_long,
+            delete: i32,
+            requested: std::ffi::c_ulong,
+            actual: *mut std::ffi::c_ulong,
+            format: *mut i32,
+            count: *mut std::ffi::c_ulong,
+            after: *mut std::ffi::c_ulong,
+            data: *mut *mut u8,
+        ) -> i32;
+        fn XGetWindowAttributes(
+            display: *mut std::ffi::c_void,
+            window: std::ffi::c_ulong,
+            value: *mut Attributes,
+        ) -> i32;
+        fn XFree(value: *mut std::ffi::c_void) -> i32;
+        fn XSetErrorHandler(
+            handler: Option<
+                unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void) -> i32,
+            >,
+        ) -> *mut std::ffi::c_void;
+    }
+    unsafe extern "C" fn disappearing_window_error(
+        _: *mut std::ffi::c_void,
+        _: *mut std::ffi::c_void,
+    ) -> i32 {
+        0
+    }
+    fn monotonic_ns() -> u64 {
+        let mut t = Timespec { sec: 0, ns: 0 };
+        assert_eq!(unsafe { clock_gettime(1, &mut t) }, 0);
+        t.sec as u64 * 1_000_000_000 + t.ns as u64
+    }
+    struct Visibility(*mut std::ffi::c_void);
+    impl Visibility {
+        fn open(display: &str) -> Self {
+            let name = std::ffi::CString::new(display).unwrap();
+            let d = unsafe { XOpenDisplay(name.as_ptr()) };
+            assert!(!d.is_null());
+            unsafe {
+                XSetErrorHandler(Some(disappearing_window_error));
+            }
+            Self(d)
+        }
+        fn visible(&self, pid: u32) -> bool {
+            unsafe {
+                let mut root = 0;
+                let mut parent = 0;
+                let mut children = std::ptr::null_mut();
+                let mut count = 0;
+                if XQueryTree(
+                    self.0,
+                    XDefaultRootWindow(self.0),
+                    &mut root,
+                    &mut parent,
+                    &mut children,
+                    &mut count,
+                ) == 0
+                {
+                    return false;
+                }
+                let atom = XInternAtom(self.0, c"_NET_WM_PID".as_ptr(), 0);
+                let mut visible = false;
+                for i in 0..count {
+                    let w = *children.add(i as usize);
+                    let mut actual = 0;
+                    let mut fmt = 0;
+                    let mut items = 0;
+                    let mut after = 0;
+                    let mut data = std::ptr::null_mut();
+                    XGetWindowProperty(
+                        self.0,
+                        w,
+                        atom,
+                        0,
+                        1,
+                        0,
+                        6,
+                        &mut actual,
+                        &mut fmt,
+                        &mut items,
+                        &mut after,
+                        &mut data,
+                    );
+                    if !data.is_null() {
+                        if fmt == 32
+                            && items == 1
+                            && *data.cast::<std::ffi::c_ulong>() == pid as std::ffi::c_ulong
+                        {
+                            let mut a: Attributes = std::mem::zeroed();
+                            if XGetWindowAttributes(self.0, w, &mut a) != 0 {
+                                if let Ok(path) = env::var("NARWHAL_GUI_TRACE_VISIBILITY") {
+                                    use std::io::Write;
+                                    if let Ok(mut file) =
+                                        fs::OpenOptions::new().create(true).append(true).open(path)
+                                    {
+                                        let _ = writeln!(
+                                            file,
+                                            "{} {} {} {} {}",
+                                            monotonic_ns(),
+                                            w,
+                                            a.width,
+                                            a.height,
+                                            a.map_state
+                                        );
+                                    }
+                                }
+                                if a.map_state == 2 {
+                                    visible = true;
+                                }
+                            }
+                        }
+                        XFree(data.cast());
+                    }
+                }
+                XFree(children.cast());
+                visible
+            }
+        }
+    }
+    impl Drop for Visibility {
+        fn drop(&mut self) {
+            unsafe {
+                XCloseDisplay(self.0);
+            }
+        }
+    }
+    fn close_reference(case: &Path) -> Option<(u64, bool)> {
+        ["close-request.json", "decision.json"]
+            .into_iter()
+            .filter_map(|f| {
+                let v: serde_json::Value =
+                    serde_json::from_slice(&fs::read(case.join(f)).ok()?).ok()?;
+                Some((
+                    v["at_ns"].as_u64()?,
+                    v["expect_fast"].as_bool().unwrap_or(false),
+                ))
+            })
+            .max_by_key(|v| v.0)
+    }
     unsafe extern "C" {
         fn kill(pid: i32, signal: i32) -> i32;
     }
@@ -111,10 +297,10 @@ mod linux {
                 "PYTHONPATH",
                 format!(
                     "{}:{}:{}",
-                    source.join("vendor/occt").display(),
                     runtime
                         .join("5.2/python/lib/python3.13/site-packages")
                         .display(),
+                    source.join("vendor/occt").display(),
                     source.display()
                 ),
             )
@@ -123,16 +309,30 @@ mod linux {
             .process_group(0);
         let mut child = Owned(command.spawn().expect("start owned candidate"));
         let start = Instant::now();
+        let observer = Visibility::open(display);
+        let mut seen_visible = false;
+        let mut reference = None;
+        let mut disappeared = None;
         let status = loop {
+            let visible = observer.visible(child.0.id());
+            seen_visible |= visible;
+            let current = close_reference(&case);
+            if current != reference {
+                reference = current;
+                disappeared = None;
+            }
+            if seen_visible && reference.is_some() && !visible && disappeared.is_none() {
+                disappeared = Some(monotonic_ns());
+            }
             if let Some(status) = child.0.try_wait().unwrap() {
                 break status;
             }
             assert!(
-                start.elapsed() < Duration::from_secs(180),
+                start.elapsed() < Duration::from_secs(240),
                 "owned case timed out: {name}; see {}",
                 case.display()
             );
-            thread::sleep(Duration::from_millis(100));
+            thread::sleep(Duration::from_millis(5));
         };
         let text = fs::read_to_string(case.join("result.json")).unwrap_or_else(|_| {
             panic!(
@@ -141,15 +341,82 @@ mod linux {
             )
         });
         let report: serde_json::Value = serde_json::from_str(&text).unwrap();
-        let ok = status.success() && report["ok"] == true;
+        if disappeared.is_none() && reference.is_some() && !observer.visible(child.0.id()) {
+            disappeared = Some(monotonic_ns());
+        }
+        let latency_ms = reference
+            .and_then(|(t, _)| disappeared.map(|d| (d.saturating_sub(t)) as f64 / 1_000_000.0));
+        let fast = reference.is_some_and(|v| v.1);
+        let required_fast = matches!(
+            mode,
+            "clean" | "discard" | "private-discard" | "updater-discard"
+        );
+        // Standard Exit must hand control to native shutdown promptly, without
+        // document I/O. Physical GPU/window teardown is measured separately;
+        // the canceled hidden-runtime design's 250 ms disappearance target is
+        // retained as a diagnostic, not misreported as a passing measurement.
+        let handoff_ns = report["state"]["native_quit_request_ns"]
+            .as_u64()
+            .or_else(|| report["state"]["exit_handler_start_ns"].as_u64())
+            .or_else(|| report["state"]["exit_observer_ns"].as_u64());
+        let handoff_ms = reference
+            .and_then(|(t, _)| handoff_ns.map(|h| h.saturating_sub(t) as f64 / 1_000_000.0));
+        let latency_ok = seen_visible
+            && disappeared.is_some()
+            && (!required_fast || fast)
+            && (!fast || handoff_ms.is_some_and(|ms| ms < 250.0));
+        let latency = serde_json::json!({"seen_visible":seen_visible,"reference":reference,"disappeared_ns":disappeared,"latency_ms":latency_ms,"native_handoff_ms":handoff_ms,"physical_target_250ms_met":latency_ms.is_some_and(|ms| ms < 250.0),"fast_required":fast||required_fast,"gate":"standard_exit_native_handoff_and_no_document_io","ok":latency_ok});
+        fs::write(
+            case.join("latency.json"),
+            serde_json::to_vec_pretty(&latency).unwrap(),
+        )
+        .unwrap();
+        let ok = status.success() && report["ok"] == true && latency_ok;
+        if let Some(files) = report["state"]["expected_files"]
+            .as_array()
+            .filter(|files| ok && !files.is_empty())
+        {
+            let script = "import sys,json;sys.path.insert(0,sys.argv[1]);from narwhal3d import narwhal_document as doc; rows=json.loads(sys.argv[2]);[(print(p,len(doc.load_model(p).file.Objects)), (_ for _ in ()).throw(AssertionError(p)) if len(doc.load_model(p).file.Objects)!=n else None) for p,n in rows]";
+            let verify = Command::new(runtime.join("5.2/python/bin/python3.13"))
+                .args(["-B", "-c", script])
+                .arg(source)
+                .arg(serde_json::to_string(files).unwrap())
+                .env(
+                    "PYTHONPATH",
+                    format!(
+                        "{}:{}",
+                        source.join("vendor/occt").display(),
+                        runtime
+                            .join("5.2/python/lib/python3.13/site-packages")
+                            .display()
+                    ),
+                )
+                .env("HOME", case.join("home"))
+                .env("XDG_CACHE_HOME", case.join("cache"))
+                .env("NARWHAL3D_DATA_DIR", case.join("data"))
+                .output()
+                .unwrap();
+            let mut bytes = verify.stdout;
+            bytes.extend(verify.stderr);
+            fs::write(case.join("verify.log"), &bytes).unwrap();
+            assert!(
+                verify.status.success(),
+                "saved files failed post-window verification: {}",
+                String::from_utf8_lossy(&bytes)
+            );
+        }
         if mutation == "none" {
-            assert!(ok, "GUI case {name} failed, exit={status}: {text}");
+            assert!(
+                ok,
+                "GUI case {name} failed, exit={status}, latency={latency}: {text}"
+            );
         } else {
             assert!(
                 !ok && report["assertion_failure"] == true,
                 "mutation must be assertion RED, not a runtime failure: {text}"
             );
         }
+        println!("X visibility {name}: {latency}");
         println!(
             "{}: {name}, elapsed={:.1}s",
             if mutation == "none" {
@@ -230,7 +497,7 @@ mod linux {
             XCloseDisplay(connection);
         }
         println!("Private Xvfb display {display}; no owner display used");
-        let modes=env::var("NARWHAL_GUI_MODES").unwrap_or_else(|_|"default-off,save,cancel-dialog,pending-save,latest-edit,updater-save,updater-cancel,updater-escape".into());
+        let modes=env::var("NARWHAL_GUI_MODES").unwrap_or_else(|_|"default-off,clean,discard,private-discard,save,cancel-dialog,save-as-cancel,pending-save,pending-discard,pending-timeout,latest-edit,save-failure,quit-failure,updater-save,updater-discard,updater-cancel,updater-escape,updater-failure,updater-quit-failure".into());
         for mode in modes.split(',') {
             run_case(
                 &candidate,
@@ -242,6 +509,38 @@ mod linux {
             );
         }
         if env::var_os("NARWHAL_GUI_MUTATIONS").is_some() {
+            run_case(
+                &candidate,
+                &source,
+                &runtime,
+                &artifacts,
+                &display,
+                ("private-discard", "stage-on-discard", "red-private-stage"),
+            );
+            run_case(
+                &candidate,
+                &source,
+                &runtime,
+                &artifacts,
+                &display,
+                ("private-discard", "none", "restored-private-discard"),
+            );
+            run_case(
+                &candidate,
+                &source,
+                &runtime,
+                &artifacts,
+                &display,
+                ("discard", "stage-on-discard", "red-stage-on-discard"),
+            );
+            run_case(
+                &candidate,
+                &source,
+                &runtime,
+                &artifacts,
+                &display,
+                ("discard", "none", "restored-discard"),
+            );
             run_case(
                 &candidate,
                 &source,

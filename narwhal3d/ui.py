@@ -20345,16 +20345,23 @@ def _exit_handler(*_args):
 
     _remember_preferences(user_preference_snapshot())
     saves_finished = False
+    path = None
     try:
-        # A background save in progress may hold the latest work: let it finish (bounded)
-        # rather than start a second one. If it cannot, the recovery copy below keeps it.
-        saves_finished = file_commands.finish_saves(_EXIT_SAVE_WAIT)
-        if not saves_finished:
-            print("[narwhal3d] a save was still running at exit; writing a recovery copy")
-    except Exception as failure:  # noqa: BLE001 -- never stops the recovery copy
-        print("[narwhal3d] could not finish the save in progress ("
-              + type(failure).__name__ + ")")
-    path = file_commands.write_recovery()
+        intentional = file_commands.intentional_exit_ready()
+    except Exception:
+        intentional = False
+    if intentional:
+        # Clean or explicit No: no Save, recovery, staging, measurement or drain.
+        saves_finished = True
+    else:
+        try:
+            saves_finished = file_commands.finish_saves(_EXIT_SAVE_WAIT)
+            if not saves_finished:
+                print("[narwhal3d] a save was still running at exit; writing a recovery copy")
+        except Exception as failure:  # noqa: BLE001 -- forced-exit fallback stays intact
+            print("[narwhal3d] could not finish the save in progress ("
+                  + type(failure).__name__ + ")")
+        path = file_commands.write_recovery()
     if path:
         print(f"[narwhal3d] unsaved changes kept in {path}")
     try:
@@ -20380,6 +20387,8 @@ def _autosave_tick():
     from . import autosave, file_commands, save_queue
 
     try:
+        if file_commands.intentional_exit_ready():
+            return 60.0
         minutes = float(os.environ.get("NARWHAL3D_AUTOSAVE_MINUTES", "20"))
         # `autosave.due` takes DATETIMES. This passed time.time floats, so every tick
         # raised "'float' object has no attribute 'total_seconds'" and prevented autosave.

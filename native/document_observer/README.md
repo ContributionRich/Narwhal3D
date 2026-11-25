@@ -128,3 +128,26 @@ is an absolute workload measurement, NOT an advertised speedup or whole-frame re
 Full observation remains O(document size) at explicit snapshot boundaries, never
 per-frame geometry serialization. Final integrated product/publication evidence is
 recorded separately by Main.
+
+
+## Snapshot CRC work elision (pinned SDK only)
+
+Both complete object observations remain mandatory: before planning payloads and
+again before publication. No pointer cache, cheap index or marked-path assumption
+replaces either scan. Material/layer/document-metadata capture is unchanged.
+
+Witness archives already normalize chunk checksum words. The pinned SDK's
+`ON_BinaryArchive::WriteBuffer` calls `UpdateCRC` after `Internal_WriteOverride`.
+For comparison witnesses only, that override suppresses the redundant calculation
+via the public `EnableCRCCalculation` API. Chunk framing, limits and every
+state-bearing payload byte remain unchanged. Raw archives retain valid SDK CRCs;
+real save/archive serialization is not changed. This is unavoidable SDK/C++ glue,
+not a new serialization or geometry engine.
+
+`observe_reference` is a test-only original CRC-enabled witness path. Fast and
+reference witnesses must be byte-identical, including nested geometry, userdata,
+attribute edits and copy counters. Keep the reference path and existing CRC
+canonicalization mutation: removing normalization must still fail. Requalify the
+observer/host/core pair and lifetime proof before staging, including after a
+change to the paired application-core binary. This optimization does not make
+full snapshots constant-time or eliminate all interactive release latency.

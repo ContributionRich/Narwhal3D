@@ -303,20 +303,20 @@ class PickCandidateTests(unittest.TestCase):
         for i in range(12):
             self.ui.box(f'edit{i}', low=(i * 1.5 - 9, -.4, -.4), high=(i * 1.5 - 8.2, .4, 0.0))
         started = time.perf_counter()
-        picker.collect(self.ui, 'object')
+        picker.collect(self.ui, 'part')
         cold = time.perf_counter() - started
         self.ui.key += 1                    # a recorded document change...
         self.ui.line('edit_added')          # ...that adds one unrelated object
         with patch.object(picker, '_candidate', wraps=picker._candidate) as built:
             started = time.perf_counter()
-            warm = picker.collect(self.ui, 'object')
+            warm = picker.collect(self.ui, 'part')
             warm_seconds = time.perf_counter() - started
         self.assertEqual(built.call_count, 1, 'only the added line may be rebuilt')
         self.assertLessEqual(warm_seconds, 0.5 * cold + 0.002,
                              f'warm {warm_seconds * 1e3:.2f} ms vs cold {cold * 1e3:.2f} ms')
         picker.clear()
         picker._objects.clear()
-        self.assertEqual(self._signature(warm), self._signature(picker.collect(self.ui, 'object')))
+        self.assertEqual(self._signature(warm), self._signature(picker.collect(self.ui, 'part')))
 
     def _move_in_place(self, ob, dx):
         """What a Gumball commit does: the SAME live wrapper now holds moved geometry."""
@@ -374,10 +374,121 @@ class PickCandidateTests(unittest.TestCase):
             self.assertEqual(self.crossing(names, (390, 290, 410, 310)), names,
                              'an unavailable native query keeps the broad-phase result')
 
+    def test_cold_objects_and_locked_occluders_never_request_exact_parts(self):
+        box = self.ui.box('cold')
+        locked = self.ui.box('locked_cold', low=(-.4,-.4,.2), high=(.4,.4,.3))
+        locked.hide_select = True
+        self.space.shading.type = 'SOLID'
+        with patch.object(self.ui, '_brep_parts_all', side_effect=AssertionError('exact cold rebuild')):
+            self.assertEqual(self.keys(), [])
+            locked.hide_viewport = True
+            self.assertEqual(self.keys(), [(box.name, 'Object', 0)])
+            with patch.object(picker, '_mesh_display', wraps=picker._mesh_display) as mesh:
+                self.ui.key += 1
+                self.ui.line('unrelated_cold', y=.9)
+                self.keys()
+                self.assertEqual(mesh.call_count, 0, 'unrelated edit reuses unchanged display buffers')
+
+    def test_display_world_transform_and_buffer_revision_match_fresh(self):
+        box = self.ui.box('display_move')
+        self.ui._curve_dg = {'serial':0, 'vis':0, 'changed':{}}
+        self.assertIn((box.name,'Object',0), self.keys())
+        box.matrix_world = Matrix.Translation((1.2,0,0))
+        self.assertNotIn((box.name,'Object',0), self.keys())
+        self.assertIn((box.name,'Object',0), self.keys(xy=(780,300)))
+        for vertex in box.data.vertices:
+            vertex.co.x -= 1.2
+        box.data.update()
+        self.ui._curve_dg['changed'][box.name] = 1
+        self.assertIn((box.name,'Object',0), self.keys())
+        warm = picker.collect(self.ui,'object')
+        picker.clear();picker._objects.clear()
+        self.assertEqual(self._signature(warm), self._signature(picker.collect(self.ui,'object')))
+
+    def test_cad_display_wires_hide_interior_tessellation_edges(self):
+        box = self.ui.box('boundary')
+        if not hasattr(box.data, 'narwhal_boundary_wires'):
+            self.fail('qualification requires patched Blender CAD boundary-wire flag')
+        # A welded closed display has no visible boundary wires in the renderer.
+        box.data.narwhal_boundary_wires = True
+        lines, triangles = picker._mesh_display(box)
+        self.assertEqual(lines, [])
+        self.assertEqual(len(triangles), 12, 'shaded surface/occlusion remains intact')
+
+    def test_real_recipe_solid_object_pick_edit_undo_redo_without_topology(self):
+        # Python orchestrates the actual SDK/Blender document lifecycle only.
+        # Existing Rust queries and Blender BVHs still perform all hit math.
+        if 'narwhal3d' not in sys.modules:
+            pkg = ModuleType('narwhal3d'); pkg.__path__ = [str(ROOT)]
+            sys.modules['narwhal3d'] = pkg
+        from narwhal3d import bridge, kernel, ui
+        from narwhal3d.model import NarwhalModel
+        from narwhal3d.state import app_state
+        from narwhal3d.kernel import occt_backend as occt
+        bpy.data.batch_remove(list(bpy.data.objects))
+        app_state.set_model(NarwhalModel())
+        ctx = app_state.ctx
+        ui._attach_curve_depsgraph_handler()
+        self.addCleanup(ui._detach_curve_depsgraph_handler)
+        profile = r3.Circle(r3.Point3d(0,0,0), .25).ToNurbsCurve()
+        _, name = ctx.add_geometry(bridge.extrude_curve(profile,.3), 'LatencyExtrusion', 0)
+        ctx.undo.clear()
+        kernel.forget_masters()  # simulate a cold recipe-only process, AFTER display creation
+        self.assertIsNone(kernel.master_of(ctx.model.file.Objects.FindId(ctx.model.object_id_by_name(name)).Geometry))
+        self.space.shading.type = 'SOLID'
+        def hits():
+            return [c.key for c in picker.at(ui,None,self.space,self.region,400,300)]
+        def assert_display_only(expected):
+            with patch.object(ui,'_brep_parts_all', wraps=ui._brep_parts_all) as parts, \
+                 patch.object(bridge,'subobject_parts', wraps=bridge.subobject_parts) as sub, \
+                 patch.object(occt,'from_recipe', wraps=occt.from_recipe) as replay, \
+                 patch.object(occt,'make_prism', wraps=occt.make_prism) as prism:
+                keys = hits()
+                self.assertEqual((name,'Object',0) in keys, expected)
+                self.assertEqual((parts.call_count,sub.call_count,replay.call_count,prism.call_count),
+                                 (0,0,0,0), 'cold/warm ordinary picks must never construct exact geometry')
+        picker.clear();picker._objects.clear()
+        assert_display_only(True)
+        assert_display_only(True)
+        ctx.begin_undo('unrelated line')
+        ctx.add_geometry(bridge.make_line((2,2,0),(3,2,0)), 'LatencyLine', 0)
+        ctx.end_undo()
+        assert_display_only(True)
+        for change in (ctx.undo_last,ctx.redo_last):
+            change();assert_display_only(True)
+        ctx.begin_undo('move exact source')
+        ctx.note_change()
+        source = ctx.model.file.Objects.FindId(ctx.model.object_id_by_name(name))
+        moved = bridge.transform_geometry(source.Geometry, r3.Transform.Translation(1.5,0,0))
+        ctx.model.replace_geometry(source.Attributes.Id,moved)
+        ctx.rebuild_display()
+        ctx.end_undo()
+        assert_display_only(False)
+        ctx.undo_last();assert_display_only(True)
+        ctx.redo_last();assert_display_only(False)
+        # Replacement is tested under the SAME name with a changed display buffer.
+        ctx.undo_last()
+        ctx.begin_undo('replace source')
+        ctx.note_change()
+        source = ctx.model.file.Objects.FindId(ctx.model.object_id_by_name(name))
+        ctx.model.replace_geometry(source.Attributes.Id,bridge.make_box((1,1,0),(2,2,0),.3))
+        ctx.rebuild_display();ctx.end_undo()
+        assert_display_only(False)
+        ctx.undo_last();assert_display_only(True)
+        # Geometry/recipe bytes remain authoritative and untouched by selection.
+        source = ctx.model.file.Objects.FindId(ctx.model.object_id_by_name(name)).Geometry
+        before = source.Encode()
+        assert_display_only(True)
+        self.assertEqual(source.Encode(),before)
+        with patch.object(bridge,'subobject_parts', wraps=bridge.subobject_parts) as exact:
+            parts = picker.collect(ui,'part')[0]
+            self.assertGreater(exact.call_count,0,'explicit subobject queries still request exact topology')
+            self.assertTrue(any(c.key[0]==name and c.key[1]=='Face' for c in parts))
+
     def test_changed_parts_are_rebuilt_and_match_fresh(self):
         boxes = [self.ui.box(f'chg{i}', low=(i * 1.5 - 9, -.4, -.4), high=(i * 1.5 - 8.2, .4, 0.0))
                  for i in range(4)]
-        before = picker.collect(self.ui, 'object')
+        before = picker.collect(self.ui, 'part')
         old = self.ui.parts[boxes[1].name]
         shift = lambda p: (p[0] + 3.0, p[1], p[2])  # noqa: E731
         self.ui.parts[boxes[1].name] = {
@@ -386,10 +497,10 @@ class PickCandidateTests(unittest.TestCase):
             'vertices': [(i, shift(p)) for i, p in old['vertices']],
         }
         self.ui.key += 1
-        after = picker.collect(self.ui, 'object')
+        after = picker.collect(self.ui, 'part')
         picker.clear()
         picker._objects.clear()
-        fresh = picker.collect(self.ui, 'object')
+        fresh = picker.collect(self.ui, 'part')
         self.assertEqual(self._signature(after), self._signature(fresh))
         self.assertNotEqual(self._signature(after), self._signature(before))
 
@@ -398,6 +509,14 @@ def mutations():
     global picker, native
     original_picker, original_native = picker, native
     probes = [
+        ('pick_candidates', "        if mode == 'object' or name in blocked:\n", "        if mode == 'object' or name in blocked:\n            ui._brep_parts_all()\n",
+         'test_real_recipe_solid_object_pick_edit_undo_redo_without_topology'),
+        ('pick_candidates', 'tuple(ob.matrix_world @ v.co)', 'tuple(v.co)',
+         'test_display_world_transform_and_buffer_revision_match_fresh'),
+        ('pick_candidates', "stamp = (display_keys[name], changed.get(name, 0))", "stamp = (display_keys[name], 0)",
+         'test_display_world_transform_and_buffer_revision_match_fresh'),
+        ('pick_candidates', "getattr(mesh, 'narwhal_boundary_wires', False):", 'False:',
+         'test_cad_display_wires_hide_interior_tessellation_edges'),
         ('pick_candidates', "hasattr(point, 'X')", 'False',
          'test_component_samples_accept_native_point3d'),
         ('pick_candidates', 'blocked = ui._unpickable_names_cached()', 'blocked = set()',

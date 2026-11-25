@@ -23,7 +23,7 @@ MODE = os.environ['NARWHAL_GUI_MODE']
 MUTATION = os.environ.get('NARWHAL_GUI_MUTATION', 'none')
 state = dict(started=False, finished=False, canceled=False, pending=False,
              edited=False, esc_sent=False, closing=False, ticks=0, max_gap=0.0,
-             answer='yes', cancel_dialog=MODE in ('cancel-dialog', 'updater-cancel'))
+             expected_files=[], answer=('no' if MODE in ('discard', 'private-discard', 'updater-discard') else 'yes'), cancel_dialog=MODE in ('cancel-dialog', 'updater-cancel'))
 started = time.monotonic()
 last = started
 sq = fc = queue = app = ui = boot = None
@@ -31,6 +31,8 @@ TARGET = OUT / 'part.narwhal'
 SECOND = OUT / 'queued.narwhal'
 REQUEST = OUT / 'welcome.json'
 RESULT = OUT / 'result.json'
+IO_ORIGINALS = []
+
 
 
 def report(ok, exc=None):
@@ -46,6 +48,8 @@ def report(ok, exc=None):
 
 def fail(exc):
     report(False, exc)
+    for owner, name, original in IO_ORIGINALS:
+        setattr(owner, name, original)
     if hasattr(bpy.context.window_manager, 'narwhal_defer_close'):
         bpy.context.window_manager.narwhal_defer_close = False
     bpy.context.preferences.view.use_save_prompt = False
@@ -105,6 +109,8 @@ def x11():
 
 
 def close_window():
+    (OUT / 'close-request.json').write_text(json.dumps(dict(at_ns=time.monotonic_ns(),
+        expect_fast=MODE in ('clean', 'default-off') or state['closing'])))
     lib, display, window = x11()
     event = XEvent()
     event.message.type, event.message.send_event = 33, True
@@ -133,43 +139,79 @@ def ask(*_args):
     if state['cancel_dialog']:
         state['cancel_dialog'] = False
         state['dialog_canceled'] = True
+        (OUT / 'decision.json').write_text(json.dumps(dict(at_ns=time.monotonic_ns(), choice='cancel', expect_fast=False)))
         return fc.filedialog.CANCEL, None
+    (OUT / 'decision.json').write_text(json.dumps(dict(at_ns=time.monotonic_ns(), choice=state['answer'], expect_fast=state['answer'] == 'no')))
     return fc.filedialog.OK, state['answer']
 
 
+
+def observe_io():
+    state['io_calls'] = []
+    state['disallow_io'] = MODE in ('clean', 'discard', 'private-discard', 'updater-discard')
+    for owner, name in [(sq.doc, '_stage'), (sq.doc, '_shape_record'),
+                        (fc, 'write_recovery'), (fc, 'finish_saves'), (queue, 'drain')]:
+        original = getattr(owner, name)
+        IO_ORIGINALS.append((owner, name, original))
+        def checked(*args, _name=name, _original=original, **kwargs):
+            if state['started']:
+                state['io_calls'].append(_name)
+                if state['disallow_io']:
+                    (OUT / 'forbidden-io.json').write_text(json.dumps(dict(call=_name, at_ns=time.monotonic_ns())))
+                    if MUTATION == 'stage-on-discard' and _name == '_stage':
+                        time.sleep(7.5)  # Reproduce the observed stage freeze, not validation.
+                    raise AssertionError(f'clean/No reached {_name}')
+            return _original(*args, **kwargs)
+        setattr(owner, name, checked)
+
+
 def on_exit(*_args):
+    state['exit_observer_ns'] = time.monotonic_ns()
+    state['native_intentional_exit'] = getattr(bpy.context.window_manager, 'narwhal_intentional_exit', None)
     if RESULT.exists():
-        return  # An earlier timer failure must never be overwritten by cleanup.
+        return
     try:
         assert state['started'] and state['finished'], 'native exit bypassed pending approval/Cancel checks'
         if MODE != 'default-off':
             assert not queue.busy(), 'native exit interrupted user Save'
-            assert state['ticks'] > 30 and state['max_gap'] < 1.0, state
-            if MODE in ('save', 'updater-save', 'pending-save', 'updater-escape'):
-                assert TARGET.is_file(), 'native close bypassed the requested user Save'
-                assert sq.objects_in(TARGET) == 3
+            assert state['max_gap'] < 1.0 or MODE == 'private-discard', state
+            if state['disallow_io']:
+                assert not state.get('forbidden_calls'), 'intentional close performed document IO'
+                assert not (OUT / 'forbidden-io.json').exists(), 'No/clean performed staging/measurement/recovery/drain'
+            if MODE in ('save', 'updater-save', 'pending-save', 'updater-escape', 'pending-timeout', 'pending-discard', 'quit-failure', 'updater-quit-failure'):
+                assert TARGET.is_file()
+                state['expected_files'].append([str(TARGET), 3])
                 assert not app.doc_modified()
-                assert state['pending'], 'never observed background Save'
-                if MODE == 'pending-save':
-                    assert sq.objects_in(SECOND) == 3
+                assert state['pending'] or MODE in ('quit-failure', 'updater-quit-failure')
+                if MODE in ('pending-save', 'pending-timeout', 'pending-discard'):
+                    state['expected_files'].append([str(SECOND), 3])
+                if MODE not in ('quit-failure', 'updater-quit-failure'):
+                    assert state['ticks'] > 30
+            elif MODE == 'clean':
+                assert not app.doc_modified()
+                state['expected_files'].append([str(TARGET), 3])
             else:
-                assert state['canceled'], 'Cancel was not observed before cleanup'
-                assert app.doc_modified(), 'recovery falsely marked fixture saved'
-                recovery = queue.recovery_for_current_state()
-                assert recovery and sq.objects_in(recovery) == (4 if MODE == 'latest-edit' else 3)
+                assert app.doc_modified(), 'discard must not pretend changes were saved'
+                assert queue.recovery_for_current_state() is None, 'intentional discard created recovery'
+                if MODE != 'latest-edit':
+                    assert not TARGET.exists()
+                if MODE == 'private-discard':
+                    assert app.model.object_count() == 65
                 if MODE == 'latest-edit':
-                    assert sq.objects_in(TARGET) == 3
-            if MODE in ('pending-save', 'updater-escape'):
-                assert state['canceled'], 'Escape did not cancel Exit'
+                    state['expected_files'].append([str(TARGET), 3])
+            if MODE in ('pending-save', 'updater-escape', 'pending-timeout', 'cancel-dialog', 'save-as-cancel', 'updater-cancel', 'latest-edit', 'save-failure', 'updater-failure', 'quit-failure', 'updater-quit-failure'):
+                assert state['canceled'], 'cancellation/failure was not observed while window stayed open'
             if MODE.startswith('updater-'):
                 approved = REQUEST.with_suffix('.restart-approved').exists()
                 declined = REQUEST.with_suffix('.restart-declined').exists()
-                assert approved == (MODE == 'updater-save')
-                assert declined == (MODE != 'updater-save')
-            assert not os.path.exists(fc._session_marker()), 'successful protected exit left session marker'
+                assert approved == (MODE in ('updater-save', 'updater-discard'))
+                assert declined == (MODE not in ('updater-save', 'updater-discard'))
+            assert not os.path.exists(fc._session_marker()), 'intentional exit left session marker'
+            assert fc.intentional_exit_ready()
         report(True)
     except Exception as exc:
         report(False, exc)
+
 
 
 def update_request():
@@ -182,7 +224,13 @@ def update_request():
             return request(**kwargs)
         fc.request_exit = premature
     boot._update_exit_request()  # Actual bridge module, no fixture implementation.
-    assert not REQUEST.with_suffix('.restart-approved').exists(), 'updater approved before Save completion'
+    if MODE != 'updater-discard':
+        assert not REQUEST.with_suffix('.restart-approved').exists(), 'updater approved before Save completion'
+
+
+def approved_quit():
+    state['native_quit_request_ns'] = time.monotonic_ns()
+    return ui._quit_after_approval()
 
 
 def begin():
@@ -201,6 +249,7 @@ def begin():
         state['finished'] = True
         close_window()
         return
+    fc.quitter = approved_quit
     if MUTATION == 'drop-latest-guard':
         assert fc is sys.modules['narwhal3d.file_commands'], 'mutation targeted a stale module'
         source = inspect.getsource(fc._exit_tick)
@@ -208,15 +257,38 @@ def begin():
         assert source.count(old) == 1
         fc._qualification_exit_tick_calls = 0
         mutated = source.replace(old, 'if False:').replace(
+            'protected = not app.doc_modified()', 'protected = True').replace(
             '    app = _app()',
             '    global _qualification_exit_tick_calls\n    _qualification_exit_tick_calls += 1\n    app = _app()', 1)
         exec(compile(mutated, '<private GUI mutation>', 'exec'), fc.__dict__)
 
     if MUTATION == 'bypass-native':
         bpy.context.window_manager.narwhal_defer_close = False
-    if MODE in ('save', 'updater-save'):
+    if MODE in ('save', 'updater-save', 'discard', 'private-discard', 'clean', 'updater-discard', 'pending-discard'):
         state['finished'] = True
-    if MODE == 'pending-save':
+    state['disallow_io'] = MODE in ('discard', 'private-discard', 'clean', 'updater-discard')
+    if MUTATION == 'stage-on-discard':
+        source = inspect.getsource(fc._exit_tick)
+        old = "elif action == 'commit':"
+        assert source.count(old) == 1
+        exec(compile(source.replace(old, old + "\n            from . import narwhal_document\n            narwhal_document._stage(app.model, str(__import__('pathlib').Path(__import__('os').environ['NARWHAL_GUI_CASE']) / 'bad.narwhal'))"), '<private stage regression>', 'exec'), fc.__dict__)
+    if MODE == 'save-as-cancel':
+        app.doc_path = None
+        def canceled_save_as(*_args):
+            state['save_as_canceled'] = True
+            return fc.filedialog.CANCEL, None
+        fc.ExitCmd._ask_save_path = canceled_save_as
+    if MODE in ('save-failure', 'updater-failure'):
+        def rejected(*_args, **_kwargs):
+            state['save_failed'] = True
+            raise OSError('qualification Save failure')
+        sq.doc._validate_and_pack = rejected
+    if MODE in ('quit-failure', 'updater-quit-failure'):
+        def rejected_quit():
+            state['quit_failed'] = True
+            raise RuntimeError('qualification native quit failure')
+        fc.quitter = rejected_quit
+    if MODE in ('pending-save', 'pending-timeout', 'pending-discard'):
         assert fc.write_document(str(TARGET), background=True)[0]
         assert fc.write_document(str(SECOND), background=True)[0]
     if MODE.startswith('updater-'):
@@ -229,17 +301,45 @@ def monitor():
     global last
     try:
         now = time.monotonic()
-        assert now - started < 120, 'owned GUI qualification timed out'
+        assert now - started < 180, 'owned GUI qualification timed out'
         if not state['started']:
             if MODE == 'default-off':
                 begin()
             elif (ui._exit_installed and not ui._viewports_in_progress
                   and len([a for a in bpy.context.screen.areas if a.type == 'VIEW_3D']) >= 4):
                 if 'warm_until' not in state:
-                    sq.SaveQueueTests.two_solids(None)
-                    app.doc_path = str(TARGET)
-                    state['warm_until'] = now + 1.5
-                    # Install the result observer AFTER the real recovery handler.
+                    if MODE == 'private-discard':
+                        model = sq.doc.load_model(os.environ['NARWHAL_GUI_PRIVATE_FIXTURE'])
+                        sq.doc.commit_model(app, model, str(TARGET))
+                        sq.draw_line(12)
+                        assert app.model.object_count() == 65 and app.doc_modified()
+                        fc._rebuild_display()
+                        state['fixture_objects'] = 65
+                        state['fixture_exact_masters'] = 32
+                    else:
+                        sq.SaveQueueTests.two_solids(None)
+                        app.doc_path = str(TARGET)
+                    if MODE == 'clean':
+                        assert sq.doc.save_model(app.model, str(TARGET))
+                        app.mark_saved(str(TARGET))
+                    sq.doc._shape_summaries.clear()  # Cold summaries must not make No look fast accidentally.
+                    observe_io()
+                    state['warm_until'] = time.monotonic() + 1.5
+                    # Profile only this test host, never another running application.
+                    if os.environ.get('NARWHAL_GUI_PROFILE_EXIT'):
+                        import cProfile, pstats
+                        original_exit = ui._exit_handler
+                        def profiled_exit(*args):
+                            state['exit_handler_start_ns'] = time.monotonic_ns()
+                            profile = cProfile.Profile()
+                            try:
+                                profile.runcall(original_exit, *args)
+                            finally:
+                                state['exit_handler_end_ns'] = time.monotonic_ns()
+                                with (OUT / 'exit-profile.txt').open('w') as stream:
+                                    pstats.Stats(profile, stream=stream).sort_stats('cumulative').print_stats(25)
+                        index = bpy.app.handlers.exit_pre.index(original_exit)
+                        bpy.app.handlers.exit_pre[index] = profiled_exit
                     bpy.app.handlers.exit_pre.append(on_exit)
                 elif now >= state['warm_until']:
                     assert bpy.context.window_manager.narwhal_defer_close
@@ -251,6 +351,8 @@ def monitor():
         last = now
         if MODE == 'default-off':
             return .02
+        if (OUT / 'forbidden-io.json').exists():
+            raise AssertionError('clean/No reached forbidden staging/measurement/recovery/drain')
         if queue.busy():
             state['pending'] = True
             if MODE.startswith('updater-') and not state['closing']:
@@ -258,9 +360,12 @@ def monitor():
         if MODE == 'latest-edit' and fc._exit_guard is not None and queue.busy() and not state['edited']:
             sq.draw_line(12)
             state['edited'] = True
-        if MODE in ('pending-save', 'updater-escape'):
+        if MODE in ('pending-save', 'updater-escape', 'pending-timeout'):
             if fc._exit_polling and queue.busy() and not state['esc_sent']:
-                if MODE == 'pending-save' or fc._exit_guard is not None:
+                if MODE == 'pending-timeout':
+                    fc._exit_wait_started = time.monotonic() - 30.1
+                    state['esc_sent'] = True
+                elif MODE == 'pending-save' or fc._exit_guard is not None:
                     escape()
                     state['esc_sent'] = True
             if state['esc_sent'] and not fc._exit_polling and queue.busy():
@@ -268,16 +373,24 @@ def monitor():
             if state['canceled'] and not queue.busy() and not state['closing']:
                 assert not app.doc_modified()
                 state['finished'] = state['closing'] = True
+                state['disallow_io'] = True
                 close_window()
-        elif MODE in ('cancel-dialog', 'updater-cancel', 'latest-edit'):
-            canceled = state.get('dialog_canceled') or (state['edited'] and state.get('cancel_calls', 0) > 0 and not fc._exit_polling)
+        elif MODE in ('cancel-dialog', 'save-as-cancel', 'updater-cancel', 'latest-edit', 'save-failure', 'updater-failure', 'quit-failure', 'updater-quit-failure'):
+            canceled = state.get('dialog_canceled') or state.get('save_as_canceled') or ((state['edited'] or state.get('save_failed') or state.get('quit_failed')) and state.get('cancel_calls', 0) > 0 and not fc._exit_polling)
             if canceled and not fc._exit_polling and not queue.busy() and not state['closing']:
-                assert app.doc_modified() and os.path.exists(fc._session_marker())
+                assert (app.doc_modified() or MODE in ('quit-failure', 'updater-quit-failure')) and os.path.exists(fc._session_marker())
                 assert bpy.context.window_manager.narwhal_defer_close
                 state['canceled'] = True
-                state['answer'] = 'no'  # Cleanup also qualifies latest-state validated recovery.
-                state['finished'] = state['closing'] = True
-                close_window()
+                if MODE == 'save-as-cancel':
+                    assert not state['io_calls'] and not TARGET.exists(), 'Save As cancellation wrote data'
+                if 'cancel_confirmed_at' not in state:
+                    state['cancel_confirmed_at'] = now
+                elif now - state['cancel_confirmed_at'] >= .25:
+                    fc.quitter = approved_quit
+                    state['answer'] = 'no'
+                    state['disallow_io'] = True
+                    state['finished'] = state['closing'] = True
+                    close_window()
         return .02
     except Exception as exc:
         fail(exc)

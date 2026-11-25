@@ -404,6 +404,9 @@ PURE_SUITES=(
     spike/test_line_samples.py
     spike/test_polyline_samples.py
     spike/test_polycurve_samples.py
+    spike/test_offset_fit.py
+    spike/test_surface_offset.py
+    spike/test_surface_grid.py
     spike/test_offset_compact.py
     spike/test_offset_report127.py
     spike/test_report121_124.py
@@ -551,6 +554,8 @@ PURE_SUITES=(
     spike/test_pure_core_line_samples_gate.py
     spike/test_pure_core_polyline_samples_gate.py
     spike/test_pure_core_polycurve_samples_gate.py
+    spike/test_pure_core_offset_fit_gate.py
+    spike/test_pure_core_surface_offset_gate.py
     spike/test_native_coil_preview.py
     spike/test_preview_curve_native.py
     spike/test_preview24_boundaries.py
@@ -606,6 +611,7 @@ BLENDER_SUITES=(
     spike/test_trim_split_once.py
     spike/test_trim_report128.py
     spike/test_picture.py
+    spike/test_picture_pdf.py
     spike/test_picture_display.py
     spike/test_rebuild_dialog.py
     spike/test_rebuild_popup.py
@@ -648,6 +654,13 @@ run "native CDR core build" cargo +1.95.0 build --release --locked \
     --manifest-path native/cdr_core/Cargo.toml
 run "native CDR multiversion build" cargo +1.95.0 build --release --locked \
     --manifest-path native/cdr_multiversion/Cargo.toml
+run "native PDF Picture format" cargo +1.95.0 fmt --manifest-path native/picture_pdf/Cargo.toml --check
+run "native PDF Picture Clippy" cargo +1.95.0 clippy --locked --offline \
+    --all-targets --manifest-path native/picture_pdf/Cargo.toml -- -D warnings
+run "native PDF Picture build" cargo +1.95.0 build --release --locked \
+    --manifest-path native/picture_pdf/Cargo.toml
+run "native PDF Picture tests" cargo +1.95.0 test --locked \
+    --manifest-path native/picture_pdf/Cargo.toml
 run "native converter supervisor build" cargo +1.95.0 build --release --locked \
     --manifest-path native/converter_supervisor/Cargo.toml
 export NARWHAL_CDR_CORE="$ROOT/native/cdr_core/target/release/libnarwhal_cdr_core.so"

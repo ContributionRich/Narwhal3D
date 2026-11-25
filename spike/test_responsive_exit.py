@@ -79,31 +79,74 @@ class ResponsiveExit(unittest.TestCase):
         self.assertTrue(os.path.isfile(self.target) and os.path.isfile(second))
         self.assertEqual(app.doc_path, second)
 
-    def test_no_approval_keeps_latest_in_validated_recovery_without_marking_saved(self):
-        with patch.object(fc.filedialog, 'ask_yes_no_cancel', return_value=(fc.filedialog.OK, 'no')):
-            with patch.object(doc, '_validate_in_worker', side_effect=sq.slow_validate([])):
-                self.start()
-                self.finish()
-        recovery = queue.recovery_for_current_state()
-        self.assertTrue(recovery)
-        self.assertEqual(sq.objects_in(recovery), 3)
-        self.assertTrue(app.doc_modified())
+    def test_explicit_no_has_no_save_recovery_measurement_or_drain(self):
+        handler = sq.SaveQueueTests.exit_handler(self)
+        with patch.object(fc.filedialog, 'ask_yes_no_cancel', return_value=(fc.filedialog.OK, 'no')), \
+                patch.object(doc, '_stage', side_effect=AssertionError('No reached staging')), \
+                patch.object(doc, '_shape_record', side_effect=AssertionError('No measured geometry')), \
+                patch.object(fc, 'write_recovery', side_effect=AssertionError('No wrote recovery')), \
+                patch.object(fc, 'finish_saves', side_effect=AssertionError('No drained Save')), \
+                patch.object(queue, 'drain', side_effect=AssertionError('No joined worker')):
+            self.start()
+            self.assertFalse(fc._exit_polling, 'No should commit in the same event turn')
+            handler()
+        self.assertEqual(self.quits, [True])
+        self.assertTrue(app.doc_modified(), 'discard must not pretend the document was saved')
         self.assertFalse(os.path.exists(self.target))
-        with patch.object(doc, 'save_model', side_effect=AssertionError('duplicate synchronous recovery')):
-            self.assertEqual(fc.write_recovery(), recovery)
+        self.assertFalse(os.path.exists(fc._session_marker()))
+        self.assertIsNone(queue.recovery_for_current_state())
+
+
+    def test_clean_exit_does_not_prompt_stage_recover_or_drain(self):
+        app.mark_saved()
+        handler = sq.SaveQueueTests.exit_handler(self)
+        with patch.object(fc.filedialog, 'ask_yes_no_cancel', side_effect=AssertionError('clean Exit prompted')), \
+                patch.object(doc, '_stage', side_effect=AssertionError('clean Exit staged')), \
+                patch.object(doc, '_shape_record', side_effect=AssertionError('clean Exit measured')), \
+                patch.object(fc, 'write_recovery', side_effect=AssertionError('clean Exit recovered')), \
+                patch.object(fc, 'finish_saves', side_effect=AssertionError('clean Exit drained')):
+            self.start()
+            handler()
+        self.assertEqual(self.quits, [True])
+        self.assertFalse(os.path.exists(fc._session_marker()))
+
+    def test_pending_save_deadline_cancels_only_exit_responsively(self):
+        with patch.object(doc, '_validate_in_worker', side_effect=sq.slow_validate([])):
+            fc.write_document(self.target, background=True)
+            self.start()
+            fc._exit_wait_started = time.monotonic() - 30.1
+            started = time.monotonic()
+            fc._exit_tick()
+            self.assertLess(time.monotonic() - started, .2)
+            self.assertFalse(fc._exit_polling)
+            self.assertTrue(queue.busy(), 'Exit deadline must not interrupt user Save')
+            self.assertEqual(self.quits, [])
+            self.pump.run(self.idle)
+        self.assertEqual(sq.objects_in(self.target), 3)
+        self.assertTrue(os.path.exists(fc._session_marker()))
+
+    def test_updater_no_approves_discard_without_saving_or_recovery(self):
+        with patch.object(fc.filedialog, 'ask_yes_no_cancel', return_value=(fc.filedialog.OK, 'no')), \
+                patch.object(doc, '_stage', side_effect=AssertionError('updater No staged')), \
+                patch.object(fc, 'write_recovery', side_effect=AssertionError('updater No recovered')):
+            request = self.updater()
+        self.assertTrue(request.with_suffix('.restart-approved').exists())
+        self.assertFalse(request.with_suffix('.restart-declined').exists())
+        self.assertTrue(app.doc_modified())
         self.assertEqual(self.quits, [True])
 
     def native_ui(self):
         from types import SimpleNamespace
         tree = ast.parse((sq.ROOT / 'narwhal3d/ui.py').read_text())
-        names = {'_preclose_tick', '_quit_after_approval', '_uninstall_preclose'}
+        names = {'_preclose_tick', '_quit_after_approval', '_uninstall_preclose', '_autosave_tick'}
         nodes = [n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name in names]
         wm = SimpleNamespace(narwhal_defer_close=True, narwhal_close_requested=True)
         timers = set()
         bpy = SimpleNamespace(context=SimpleNamespace(window_manager=wm),
             ops=SimpleNamespace(wm=SimpleNamespace(quit_blender=self.host_quit)),
             app=SimpleNamespace(timers=SimpleNamespace(is_registered=timers.__contains__, unregister=timers.remove)))
-        ns = dict(__package__='narwhal3d', bpy=bpy, app_state=app, redraw_cmdbar=lambda: None)
+        ns = dict(__package__='narwhal3d', bpy=bpy, app_state=app, os=os,
+                  _autosave_last=[__import__('datetime').datetime.now()], redraw_cmdbar=lambda: None)
         source = ast.unparse(ast.Module(body=nodes, type_ignores=[]))
         if NATIVE_UI_MUTATION:
             old, new = NATIVE_UI_MUTATION
@@ -111,6 +154,18 @@ class ResponsiveExit(unittest.TestCase):
             source = source.replace(old, new)
         exec(compile(source, '<actual preclose host>', 'exec'), ns)
         return ns, wm, timers
+
+    def test_autosave_cannot_write_after_intentional_discard(self):
+        from narwhal3d import autosave
+        ns, _, _ = self.native_ui()
+        fc._exit_commit = (app.model, queue._snapshot(app))
+        with patch.object(autosave, 'due', return_value=True), \
+                patch.object(fc, 'write_recovery', return_value=False) as recover:
+            self.assertEqual(ns['_autosave_tick'](), 60.0)
+            recover.assert_not_called()
+            fc._exit_commit = None
+            ns['_autosave_tick']()
+            recover.assert_called_once_with(background=True)
 
     def test_native_mailbox_routes_to_coordinator_and_cancel_retains_guard(self):
         ns, wm, _ = self.native_ui()
@@ -129,6 +184,7 @@ class ResponsiveExit(unittest.TestCase):
             calls.append(wm.narwhal_defer_close)
             raise RuntimeError('deliberate native quit failure')
         ns['bpy'].ops.wm.quit_blender = quit_native
+        fc._exit_commit = (app.model, queue._snapshot(app))
         with self.assertRaises(RuntimeError):
             ns['_quit_after_approval']()
         self.assertEqual(calls, [False])
@@ -228,28 +284,36 @@ class ResponsiveExit(unittest.TestCase):
         self.assertEqual(sq.objects_in(self.target), 4)
         self.assertFalse(app.doc_modified())
 
-    def test_recovery_failure_keeps_dirty_document_open(self):
-        with patch.object(fc.filedialog, 'ask_yes_no_cancel', return_value=(fc.filedialog.OK, 'no')), \
-                patch.object(doc, '_validate_and_pack', side_effect=OSError('recovery failed')):
+    def test_existing_save_finishes_before_no_without_an_additional_write(self):
+        with patch.object(doc, '_stage', wraps=doc._stage) as stage, \
+                patch.object(doc, '_validate_in_worker', side_effect=sq.slow_validate([])), \
+                patch.object(fc.filedialog, 'ask_yes_no_cancel', return_value=(fc.filedialog.OK, 'no')), \
+                patch.object(fc, 'write_recovery', side_effect=AssertionError('No wrote recovery')):
+            fc.write_document(self.target, background=True)
+            sq.draw_line(18)
             self.start()
+            self.assertEqual(self.quits, [])
             self.finish()
-        self.assertEqual(self.quits, [])
+        self.assertEqual(stage.call_count, 1, 'Exit must not start a second Save/recovery')
+        self.assertEqual(sq.objects_in(self.target), 3)
+        self.assertEqual(app.model.object_count(), 4)
         self.assertTrue(app.doc_modified())
-        self.assertIsNone(queue.recovery_for_current_state())
-        self.assertTrue(os.path.isfile(fc._session_marker()))
+        self.assertEqual(self.quits, [True])
 
-    def test_cancel_during_recovery_finishes_copy_without_exiting(self):
-        with patch.object(fc.filedialog, 'ask_yes_no_cancel', return_value=(fc.filedialog.OK, 'no')), \
-                patch.object(doc, '_validate_in_worker', side_effect=sq.slow_validate([])):
+
+    def test_stale_discard_never_authorizes_later_edits_or_forced_exit(self):
+        with patch.object(fc.filedialog, 'ask_yes_no_cancel', return_value=(fc.filedialog.OK, 'no')):
             self.start()
-            fc._exit_tick()  # approval
-            fc._exit_tick()  # recovery starts
-            self.assertTrue(queue.busy())
-            self.assertTrue(fc.cancel_exit())
-            self.pump.run(self.idle)
-        self.assertEqual(self.quits, [])
+        self.assertTrue(fc.intentional_exit_ready())
+        sq.draw_line(18)
+        self.assertFalse(fc.intentional_exit_ready())
+        handler = sq.SaveQueueTests.exit_handler(self)
+        with patch.object(fc, 'write_recovery', return_value=None) as recovery:
+            handler()
+        recovery.assert_called_once()
+        self.assertTrue(os.path.exists(fc._session_marker()))
         self.assertTrue(app.doc_modified())
-        self.assertEqual(sq.objects_in(queue.recovery_for_current_state()), 3)
+
 
     def test_escape_cancels_exit_not_user_save(self):
         with patch.object(doc, '_validate_in_worker', side_effect=sq.slow_validate([])):
@@ -286,6 +350,19 @@ class ResponsiveExit(unittest.TestCase):
         self.assertEqual(sq.objects_in(self.target), 3)
         self.assertEqual(app.model.object_count(), 4)
         self.assertTrue(os.path.isfile(fc._session_marker()))
+
+    def test_discard_approval_does_not_authorize_a_new_edit(self):
+        # Isolate the post-dialog guard: native policy cannot inspect host history.
+        self.start_policy = queue.shutdown_request('begin_shutdown')
+        queue.shutdown_request('approve_shutdown', discard=True)
+        fc._exit_polling = True
+        fc._exit_guard = queue._snapshot(app)
+        fc._exit_ready_callback = lambda: self.quits.append(True)
+        sq.draw_line(12)
+        fc._exit_tick()
+        self.assertEqual(self.quits, [])
+        self.assertTrue(app.doc_modified())
+        self.assertFalse(fc.intentional_exit_ready())
 
     def test_failure_prevents_quit_and_clean_session_even_if_recovery_also_fails(self):
         with patch.object(doc, '_validate_and_pack', side_effect=OSError('deliberate refusal')):
@@ -390,9 +467,16 @@ def mutations():
          'test_save_exit_pumps_real_validation_and_skips_duplicate_exit_recovery'),
         ('latest-edit guard removed', '_exit_tick',
          'if _exit_guard is not None and save_queue._snapshot(app) != _exit_guard:',
-         'if False:', 'test_edit_after_approval_cancels_and_never_claims_latest_saved'),
+         'if False:', 'test_discard_approval_does_not_authorize_a_new_edit'),
+        ('discard performs recovery again', '_exit_tick',
+         "elif action == 'commit':", "elif action == 'commit':\n            if app.doc_modified():\n                write_recovery()",
+         'test_explicit_no_has_no_save_recovery_measurement_or_drain'),
+        ('discard masquerades as saved', '_exit_tick',
+         "save_queue.shutdown_request('approve_shutdown', discard=answer == 'no')",
+         "save_queue.shutdown_request('approve_shutdown', discard=answer == 'no')\n            if answer == 'no':\n                app.mark_saved()",
+         'test_explicit_no_has_no_save_recovery_measurement_or_drain'),
         ('failed recovery falsely clean', 'end_session_if_protected',
-         "if not save_queue.busy() and (path or not _app().doc_modified()):",
+         "if not save_queue.busy() and (path or not _app().doc_modified() or intentional_exit_ready()):",
          'if True:', 'test_exit_pre_failed_recovery_retains_crash_marker'),
     ]
     for label, name, old, new, test in plans:
@@ -414,6 +498,9 @@ def mutations():
         ('native approval does not bypass mailbox',
          'if guarded:\n        wm.narwhal_defer_close = False', 'if guarded:\n        pass',
          'test_native_approval_bypasses_guard_only_during_native_quit'),
+        ('autosave ignores intentional discard',
+         'if file_commands.intentional_exit_ready():', 'if False:',
+         'test_autosave_cannot_write_after_intentional_discard'),
         ('native mailbox request dropped',
          'app_state.log(file_commands.request_exit())', 'app_state.log("dropped")',
          'test_native_mailbox_routes_to_coordinator_and_cancel_retains_guard'),

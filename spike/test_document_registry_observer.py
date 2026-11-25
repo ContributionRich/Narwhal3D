@@ -118,6 +118,7 @@ class ObserverTests(unittest.TestCase):
         obj.Geometry.SetUserString('geometry', 'retained')
         obj.Attributes.SetUserString('attribute', 'retained')
         before = observer.observe(self.file)
+        self.assertEqual(before, observer.observe_reference(self.file), 'original CRC-enabled writer must be byte-identical')
         raw_before = observer.raw_observe(self.file)
         geometry = obj.Geometry.Duplicate()
         holder = r3.File3dm()
@@ -126,8 +127,36 @@ class ObserverTests(unittest.TestCase):
         self.file.Objects.Add(geometry, attributes)
         self.assertNotEqual(raw_before, observer.raw_observe(self.file))
         self.assertEqual(before, observer.observe(self.file))
+        self.assertEqual(before, observer.observe_reference(self.file), 'copy-count normalization remains identical with real CRCs')
         self.assertEqual(self.file.Objects.FindId(oid).Geometry.GetUserString('geometry'), 'retained')
         self.assertEqual(self.file.Objects.FindId(oid).Attributes.GetUserString('attribute'), 'retained')
+
+    def test_crc_elision_preserves_every_witness_payload_byte(self):
+        geometries = [r3.Point(r3.Point3d(1, 2, 3)),
+            r3.LineCurve(r3.Point3d(0, 0, 0),r3.Point3d(1, 2, 3)),
+            r3.Circle(r3.Point3d(2,3,4),5).ToNurbsCurve(),
+            r3.NurbsCurve.Create(False,3,[r3.Point3d(0,0,0),r3.Point3d(1,2,0),
+                r3.Point3d(2,-1,3),r3.Point3d(4,0,0)]),
+            r3.Sphere(r3.Point3d(2,3,4),5).ToBrep(),
+            r3.Brep.CreateFromSurface(r3.PlaneSurface(r3.Plane.WorldXY(),r3.Interval(0,5),r3.Interval(0,8))),
+            r3.Extrusion.Create(r3.Circle(3).ToNurbsCurve(),7,True)]
+        mesh = r3.Mesh()
+        for point in ((0,0,0),(1,0,0),(1,1,0),(0,1,0)):mesh.Vertices.Add(*point)
+        mesh.Faces.AddFace(0,1,2,3);geometries.append(mesh)
+        for index, geometry in enumerate(geometries):
+            oid = self.add(geometry,name=f'payload {index} 海')
+            obj = self.file.Objects.FindId(oid)
+            obj.Geometry.SetUserString('.hidden','geometry Unicode 🐋')
+            obj.Attributes.SetUserString('.hidden','attribute Unicode 🐋')
+            obj.Attributes.PlotWeight = .75
+            obj.Attributes.AddToGroup(index)
+            self.assertEqual(observer.observe(self.file),observer.observe_reference(self.file))
+            geometry = obj.Geometry.Duplicate()
+            geometry.Transform(r3.Transform.Translation(3,4,5))
+            holder = r3.File3dm()
+            attributes = observer.copy_attributes(self.file,oid,holder)
+            self.file.Objects.Delete(oid);self.file.Objects.Add(geometry,attributes)
+            self.assertEqual(observer.observe(self.file),observer.observe_reference(self.file))
 
     def test_empty_and_repeat_are_stable(self):
         self.assertEqual(decode(observer.observe(self.file)), [])

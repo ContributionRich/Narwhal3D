@@ -102,15 +102,19 @@ def launch():
             cleanup_flags=('native_handle_closed','native_handle_absent','timer_removed','model_timer_removed',
                            'assistant_shutdown_called','logical_cancelled','workflow_detached','transport_detached')
             report['assistant_cleanup_qualified']=all(exited.get(key) is True for key in cleanup_flags) and exited.get('pending_review') is False
-            report['exit_persistence_qualified']=bool(exited.get('preferences_saved') and exited.get('recovery_files'))
-            report["guard_recovery_qualified"]=('recover' in report.get('guard_dialog_choices', [])
-                and exited.get('background_recovery_requested') is True)
+            report['exit_persistence_qualified']=bool(exited.get('preferences_saved')
+                and report.get('close_saved_roundtrip_qualified'))
+            report["guard_discard_qualified"]=(
+                'discard' in report.get('guard_dialog_choices', [])
+                and exited.get('intentional_exit_ready') is True
+                and exited.get('exit_document_io') == []
+                and not exited.get('recovery_files'))
             report["guard_flow_qualified"]=all(report.get(key) is True for key in (
                 "close_cancel_qualified", "close_save_escape_qualified", "close_saved_roundtrip_qualified"))
             report['status']='passed' if (report['os_close_delivered'] and result.returncode==0
                 and report['assistant_cleanup_qualified'] and report['exit_persistence_qualified']
-                and report["guard_flow_qualified"] and report["guard_recovery_qualified"]
-                and exited.get("latest_recovery_reloaded") is True
+                and report["guard_flow_qualified"] and report["guard_discard_qualified"]
+                and exited.get("discarded_metadata_still_present") is True
                 and exited.get("latest_document_still_dirty") is True
                 and exited.get("named_save_not_overwritten") is True) else 'blocked'
             (out/'result.json').write_text(json.dumps(report,indent=2))
@@ -256,7 +260,7 @@ def guarded_close_preflight(ui, owned):
         f.REPORT["close_saved_roundtrip_qualified"] = True
         app.ctx.note_change("Close fixture latest metadata")
         app.model.add_layer("Close fixture unsaved after Save")
-        f.check(app.doc_modified(), "latest metadata edit requires its own validated recovery")
+        f.check(app.doc_modified(), "latest metadata edit requires a new explicit Exit decision")
     finally:
         filedialog.ask_yes_no_cancel, filedialog.ask_save_path = original_ask, original_path
         doc._validate_in_worker = original_validate
@@ -454,7 +458,7 @@ def run():
         worker=ui._ai.get('transport_thread')
         from narwhal3d import file_commands, filedialog, save_queue, narwhal_document
         def keep_latest(*args, **kwargs):
-            f.REPORT['guard_dialog_choices'].append('recover')
+            f.REPORT['guard_dialog_choices'].append('discard')
             return filedialog.OK, 'no'
         filedialog.ask_yes_no_cancel = keep_latest
         recovery_folder=Path(file_commands.recovery_dir())
@@ -470,12 +474,22 @@ def run():
                 "final close observes the actual coordinator dialog adapter")
         original_preferences=ui._remember_preferences
         original_recovery=file_commands.write_recovery
-        exit_writes={}
+        exit_writes={"io_calls": []}
+        # Actual host call witnesses: explicit No must not stage or serialize a
+        # document, write recovery, or join pending workers during final close.
+        for module, name in ((narwhal_document, "_stage"), (narwhal_document, "_shape_record"),
+                             (file_commands, "finish_saves"), (save_queue, "drain")):
+            original = getattr(module, name)
+            def observed(*args, _original=original, _name=name, **kwargs):
+                exit_writes["io_calls"].append(_name)
+                return _original(*args, **kwargs)
+            setattr(module, name, observed)
         def observed_preferences(snapshot):
             result=original_preferences(snapshot)
             exit_writes['preferences_called']=True
             return result
         def observed_recovery(*args, **kwargs):
+            exit_writes["io_calls"].append("write_recovery")
             result=original_recovery(*args, **kwargs)
             exit_writes['recovery_requested']=True
             exit_writes['background_recovery_requested']=(
@@ -504,15 +518,14 @@ def run():
                                   if str(p)==exit_writes.get('recovery_path') and p.stat().st_size>0]}
             record['background_recovery_requested']=exit_writes.get('background_recovery_requested', False)
             record["latest_document_still_dirty"] = bool(ui.app_state.doc_modified())
-            if record["recovery_files"]:
-                recovered=narwhal_document.load_model(record["recovery_files"][0])
-                record["latest_recovery_reloaded"]=(
-                    [str(obj.Attributes.Id) for obj in recovered.file.Objects]
-                    == [str(obj.Attributes.Id) for obj in ui.app_state.model.file.Objects]
-                    and any(layer.Name == "Close fixture unsaved after Save" for layer in recovered.file.Layers))
-                saved=narwhal_document.load_model(str(OUT / "guarded-close-save.narwhal"))
-                record["named_save_not_overwritten"]=not any(
-                    layer.Name == "Close fixture unsaved after Save" for layer in saved.file.Layers)
+            record["intentional_exit_ready"] = file_commands.intentional_exit_ready()
+            record["exit_document_io"] = list(exit_writes["io_calls"])
+            record["discarded_metadata_still_present"] = any(
+                layer.Name == "Close fixture unsaved after Save"
+                for layer in ui.app_state.model.file.Layers)
+            saved=narwhal_document.load_model(str(OUT / "guarded-close-save.narwhal"))
+            record["named_save_not_overwritten"]=not any(
+                layer.Name == "Close fixture unsaved after Save" for layer in saved.file.Layers)
             (OUT/'exit.json').write_text(json.dumps(record,indent=2))
             # Final dialog choices arrive AFTER the pre-close report snapshot.
             (OUT/'result.json').write_text(json.dumps(f.REPORT,indent=2))
@@ -521,7 +534,7 @@ def run():
             import inspect
             source=inspect.getsource(file_commands._exit_tick)
             old=("action = save_queue.shutdown_request('shutdown_tick', modified=bool(app.doc_modified()), protected=protected,\n"
-                 "            failed=save_queue.failure_serial() != _exit_failures)")
+                 "            failed=save_queue.failure_serial() != _exit_failures, wait_ms=wait_ms)")
             f.check(source.count(old) == 1, "unique actual shutdown guard mutation anchor")
             namespace={}
             exec(compile(source.replace(old, 'action = "commit"', 1),

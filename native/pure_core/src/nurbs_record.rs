@@ -63,6 +63,12 @@ const LINE_CURVE_UUID: [u8; 16] = [
 const POLY_CURVE_UUID: [u8; 16] = [
     0xe0, 0xd4, 0xd7, 0x4e, 0x47, 0xe9, 0xd3, 0x11, 0xbf, 0xe5, 0x00, 0x10, 0x83, 0x01, 0x22, 0xf0,
 ];
+/// 4ED7D4DE-E947-11d3-BFE5-0010830122F0, as the archive stores it.
+const NURBS_SURFACE_UUID: [u8; 16] = [
+    0xde, 0xd4, 0xd7, 0x4e, 0x47, 0xe9, 0xd3, 0x11, 0xbf, 0xe5, 0x00, 0x10, 0x83, 0x01, 0x22, 0xf0,
+];
+/// The largest surface record read: control points in all.
+pub const MAX_SURFACE_CVS: usize = 1 << 20;
 const HEADER: usize = 12; // uint32 typecode + int64 length
 
 /// A recognised record: the curve's shape and the raw little-endian doubles.
@@ -404,6 +410,111 @@ fn read_payload(payload: &[u8]) -> Option<Record<'_>> {
     })
 }
 
+/// A recognised 3-D `ON_NurbsSurface` record, as `ON_NurbsSurface::Write` (chunk version
+/// 1.0) stores it.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct SurfaceRecord {
+    pub rational: bool,
+    pub order: [usize; 2],
+    pub count: [usize; 2],
+    /// openNURBS knots in each direction: `count + order - 2`.
+    pub knots: [Vec<f64>; 2],
+    /// Control points `(i, j)` at `(i * count[1] + j) * size`, `size` 4 (homogeneous) when
+    /// rational and 3 otherwise.
+    pub cvs: Vec<f64>,
+}
+
+/// The surface in one encoded `ON_NurbsSurface` record, or None for anything this does not
+/// recognise.
+pub(crate) fn read_surface(data: &[u8]) -> Option<SurfaceRecord> {
+    let payload = class_payload(data, &NURBS_SURFACE_UUID)?;
+    let mut p = Cursor {
+        data: payload,
+        at: 0,
+    };
+    if p.u8()? != 0x10 {
+        return None;
+    }
+    let (dim, is_rat) = (p.i32()?, p.i32()?);
+    let order = [p.count()?, p.count()?];
+    let count = [p.count()?, p.count()?];
+    if dim != 3 || !(is_rat == 0 || is_rat == 1) {
+        return None;
+    }
+    if (0..2).any(|d| !(2..=crate::nearest::MAX_ORDER).contains(&order[d]) || count[d] < order[d]) {
+        return None;
+    }
+    let total = count[0].checked_mul(count[1])?;
+    if total > MAX_SURFACE_CVS {
+        return None;
+    }
+    if p.i32()? != 0 || p.i32()? != 0 {
+        return None; // the reserved fields
+    }
+    p.bytes(48)?; // the placeholder bounding box
+    let mut knots: [Vec<f64>; 2] = [Vec::new(), Vec::new()];
+    for d in 0..2 {
+        let n = p.count()?;
+        if n != count[d] + order[d] - 2 {
+            return None;
+        }
+        let raw = p.bytes(n.checked_mul(8)?)?;
+        knots[d] = raw
+            .chunks_exact(8)
+            .map(|b| f64::from_le_bytes(b.try_into().unwrap()))
+            .collect();
+    }
+    if p.count()? != total {
+        return None;
+    }
+    let rational = is_rat == 1;
+    let size = if rational { 4 } else { 3 };
+    let raw = p.bytes(total.checked_mul(8 * size)?)?;
+    let cvs = raw
+        .chunks_exact(8)
+        .map(|b| f64::from_le_bytes(b.try_into().unwrap()))
+        .collect();
+    p.done().then_some(SurfaceRecord {
+        rational,
+        order,
+        count,
+        knots,
+        cvs,
+    })
+}
+
+/// A 3-D `ON_NurbsSurface` record as `ON_NurbsSurface::Write` and `WriteObject` frame it:
+/// what `CommonObject.Decode` reads back as a `NurbsSurface`.
+pub(crate) fn surface_record(surface: &SurfaceRecord) -> Vec<u8> {
+    let mut body = vec![0x10];
+    let s = surface;
+    for v in [
+        3,
+        i32::from(s.rational),
+        s.order[0] as i32,
+        s.order[1] as i32,
+        s.count[0] as i32,
+        s.count[1] as i32,
+        0,
+        0,
+    ] {
+        body.extend(v.to_le_bytes());
+    }
+    body.extend(
+        [1.0f64, 0.0, 0.0, -1.0, 0.0, 0.0]
+            .iter()
+            .flat_map(|v| v.to_le_bytes()),
+    );
+    for k in &s.knots {
+        body.extend((k.len() as i32).to_le_bytes());
+        body.extend(k.iter().flat_map(|v| v.to_le_bytes()));
+    }
+    body.extend(((s.count[0] * s.count[1]) as i32).to_le_bytes());
+    body.extend(s.cvs.iter().flat_map(|v| v.to_le_bytes()));
+    body.extend(crc32(&body).to_le_bytes());
+    framed(&NURBS_SURFACE_UUID, &body)
+}
+
 /// Read one encoded `ON_NurbsCurve` record into caller buffers.
 ///
 /// `data`/`len` is the record (`base64.b64decode(curve.Encode()["data"])`). On success
@@ -457,7 +568,6 @@ pub unsafe extern "C" fn narwhal_pure_core_nurbs_curve_record(
 
 /// A whole `WriteObject` record of class `uuid` around `body`, the class data chunk's bytes
 /// with its CRC-32 already at the end.
-#[cfg(test)]
 pub(crate) fn framed(uuid: &[u8; 16], body: &[u8]) -> Vec<u8> {
     let chunk = |tcode: u32, bytes: &[u8]| {
         let mut out = tcode.to_le_bytes().to_vec();
@@ -485,6 +595,27 @@ pub(crate) fn line_record(line: &[f64; 6], domain: (f64, f64)) -> Vec<u8> {
     body.extend(3i32.to_le_bytes());
     body.extend(crc32(&body).to_le_bytes());
     framed(&LINE_CURVE_UUID, &body)
+}
+
+/// A non-rational 3-D `ON_NurbsCurve` record (chunk version 1.0) as `ON_NurbsCurve::Write`
+/// and `WriteObject` frame it.
+#[cfg(test)]
+pub(crate) fn nurbs_record(order: usize, knots: &[f64], cvs: &[[f64; 3]]) -> Vec<u8> {
+    let mut body = vec![0x10];
+    for v in [3, 0, order as i32, cvs.len() as i32, 0, 0] {
+        body.extend(v.to_le_bytes());
+    }
+    body.extend(
+        [1.0f64, 0.0, 0.0, -1.0, 0.0, 0.0]
+            .iter()
+            .flat_map(|v| v.to_le_bytes()),
+    );
+    body.extend((knots.len() as i32).to_le_bytes());
+    body.extend(knots.iter().flat_map(|v| v.to_le_bytes()));
+    body.extend((cvs.len() as i32).to_le_bytes());
+    body.extend(cvs.iter().flatten().flat_map(|v| v.to_le_bytes()));
+    body.extend(crc32(&body).to_le_bytes());
+    framed(&NURBS_CURVE_UUID, &body)
 }
 
 /// An `ON_PolyCurve` record of `segments` (whole records) on `m_t` `params`, as
