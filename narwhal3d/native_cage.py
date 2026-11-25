@@ -68,6 +68,12 @@ def _frame(origin, axes, degrees, counts):
             s, (ctypes.c_uint64 * 6).from_buffer(s))
 
 
+def _triples(flat):
+    """``(x, y, z)`` tuples of a flat array, in order."""
+    it = iter(flat)
+    return list(zip(it, it, it))
+
+
 def rest_points(origin, axes, degrees, counts):
     """The undeformed lattice as a list of xyz tuples, or None when unavailable/invalid."""
     bound = _bind()
@@ -82,7 +88,7 @@ def rest_points(origin, axes, degrees, counts):
     n = bound[0](f, s, (ctypes.c_double * len(out)).from_buffer(out), len(out))
     if n != total:
         return None
-    return [tuple(out[3 * i:3 * i + 3]) for i in range(total)]
+    return _triples(out)
 
 
 def deform(origin, axes, degrees, counts, lattice, points):
@@ -113,4 +119,4 @@ def deform(origin, axes, degrees, counts, lattice, points):
                       (ctypes.c_double * len(out)).from_buffer(out))
     if inside < 0:
         return None
-    return [tuple(out[3 * i:3 * i + 3]) for i in range(count)]
+    return _triples(out)
