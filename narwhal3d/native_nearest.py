@@ -947,45 +947,59 @@ def _polycurve_samples(curve, n):
     return got
 
 
-# Smooth free-form offsets (narwhal_pure_core_offset_fit, native/pure_core/src/offset.rs):
-# `offset._compact_offset`'s interpolate-and-check loop for a NurbsCurve with no boundary, no
-# cusp and no kinked seam, read from its Encode() record. The loop's ~13,000 PointAt /
-# TangentAt calls are openNURBS's Evaluate, EvTangent and EvCurvature (eb92af3) in Rust, and
-# the fit's SetDomain, IsValid and IsClosed too; an SDK build that fuses a multiply-add in any
-# of them rounds differently. So the route needs BOTH a platform in OFFSET_QUALIFIED_PLATFORMS
-# and the loaded rhino3dm passing `_offset_parity`: the Python route on its own SDK gives
-# Rust's fit, bit for bit, on the witness curves. Rust refuses whatever it does not decide
-# exactly (a boundary, a cusp, a degenerate tangent, ...), and the Python route runs.
+# Free-form offsets (narwhal_pure_core_offset_fit, native/pure_core/src/offset.rs and
+# offset_boundary.rs): `offset._compact_offset` for a NurbsCurve read from its Encode() record,
+# both the smooth interpolate-and-check loop and the boundary-preserving fit for a C0 corner,
+# an offset cusp or a kinked closed seam. The loops' PointAt / TangentAt / CurvatureAt calls
+# are openNURBS's Evaluate, EvTangent and EvCurvature (eb92af3) in Rust, and so are Trim, the
+# Sharp apex's line-line intersection, and the fit's SetDomain, IsValid and IsClosed; an SDK
+# build that fuses a multiply-add in any of them rounds differently. So the route needs BOTH a
+# platform in OFFSET_QUALIFIED_PLATFORMS and the loaded rhino3dm passing `_offset_parity`: the
+# Python route on its own SDK gives Rust's answer, bit for bit, on the witness curves. Rust
+# refuses whatever it does not decide exactly (a degenerate tangent, a near-singular apex,
+# ...), and the Python route runs.
 OFFSET_QUALIFIED_PLATFORMS = frozenset({("linux", "x86_64")})
 OFFSET_MAX_FIT_CVS = 125        # a closed cubic through 122 points; offset.rs MAX_FIT_CVS
 OFFSET_MAX_FIT_KNOTS = 127
-_OFFSET_FIT, _OFFSET_NO_FIT = 0, 2
+_OFFSET_ROOM_LIMIT = 1 << 22    # control points of the largest fit taken from the export
+_OFFSET_FIT, _OFFSET_NO_FIT, _OFFSET_REFUSED, _OFFSET_ROOM = 0, 2, 3, 4
 _OFFSET_WITNESS_SEED = 20261124
 _offset_state = None            # (signature, binding or None, capability text)
 _native_offset_calls = 0
 
 
 def _offset_call(fn, curve, distance, n, tolerance):
-    """``(fit, deviation)``, ``()`` when no smooth fit meets the tolerance, or None when the
-    export leaves the decision to Python."""
+    """``(fit, deviation)``; ``()`` when no smooth fit meets the tolerance; ``(None, 0.0)``
+    when the boundary-preserving fit refuses; or None when the export leaves the decision to
+    Python."""
     distance, tolerance = float(distance), float(tolerance)
     n = tuple(float(c) for c in n)
     if (len(n) != 3 or not all(math.isfinite(c) for c in n) or not math.isfinite(distance)
             or abs(distance) < 1e-15 or math.isnan(tolerance)):
         return None
     record = base64.b64decode(curve.Encode()["data"])
-    cvs = array.array("d", bytes(8 * 3 * OFFSET_MAX_FIT_CVS))
-    knots = array.array("d", bytes(8 * OFFSET_MAX_FIT_KNOTS))
-    counts = (ctypes.c_uint64 * 2)()
-    deviation = ctypes.c_double()
-    code = fn(record, len(record), distance, (ctypes.c_double * 3)(*n), tolerance,
-              (ctypes.c_double * len(cvs)).from_buffer(cvs), len(cvs),
-              (ctypes.c_double * len(knots)).from_buffer(knots), len(knots),
-              counts, ctypes.byref(deviation))
+    room = (OFFSET_MAX_FIT_CVS, OFFSET_MAX_FIT_KNOTS)
+    for _ in range(2):
+        cvs = array.array("d", bytes(8 * 3 * room[0]))
+        knots = array.array("d", bytes(8 * room[1]))
+        counts = (ctypes.c_uint64 * 2)()
+        deviation = ctypes.c_double()
+        code = fn(record, len(record), distance, (ctypes.c_double * 3)(*n), tolerance,
+                  (ctypes.c_double * len(cvs)).from_buffer(cvs), len(cvs),
+                  (ctypes.c_double * len(knots)).from_buffer(knots), len(knots),
+                  counts, ctypes.byref(deviation))
+        if code != _OFFSET_ROOM:
+            break
+        m, k = counts[0], counts[1]
+        if not room[0] < m <= _OFFSET_ROOM_LIMIT or k != m + 2:
+            return None
+        room = (m, k)
     if code == _OFFSET_NO_FIT:
         return ()
+    if code == _OFFSET_REFUSED:
+        return None, 0.0
     m, k = counts[0], counts[1]
-    if code != _OFFSET_FIT or not 4 <= m <= OFFSET_MAX_FIT_CVS or k != m + 2:
+    if code != _OFFSET_FIT or not 4 <= m <= room[0] or k != m + 2:
         return None
     # As `interpolate.interpolate_curve` builds it; the knots are already in the source domain.
     fit = r3.NurbsCurve(3, False, 4, m)
@@ -998,8 +1012,12 @@ def _offset_call(fn, curve, distance, n, tolerance):
 
 def _offset_witnesses():
     """``(curve, distance, n, tolerance)``: irregular doubles, where a fused multiply-add would
-    round most products differently. An open rational cubic on a shifted domain in a tilted
-    plane, and a closed periodic cubic, each offset without a cusp."""
+    round most products differently. An open cubic on a shifted domain in a tilted plane (its
+    weighted points are divided out, as it is not rational), and a closed periodic cubic, each
+    offset without a cusp; a rational cubic of three
+    pieces whose C0 corners turn a few degrees left then right, so the offset trims two pieces
+    back to one Sharp apex and adds two straight segments to the other; and a wave offset
+    past its radius of curvature, which cusps twice."""
     rng = random.Random(_OFFSET_WITNESS_SEED)
     p = r3.Point3d
     wave = r3.NurbsCurve.CreateControlPointCurve(
@@ -1015,8 +1033,30 @@ def _offset_witnesses():
     loop = r3.NurbsCurve.Create(True, 3, [
         p(math.cos(2 * math.pi * i / 7) * rng.uniform(9.0, 11.0),
           math.sin(2 * math.pi * i / 7) * rng.uniform(9.0, 11.0), 0.0) for i in range(7)])
-    return [(wave, rng.uniform(-0.5, -0.3), tuple(c / m for c in tilt), 0.05),
-            (loop, rng.uniform(0.8, 1.0), (0.0, 0.0, 1.0), 0.05)]
+    witnesses = [(wave, rng.uniform(-0.5, -0.3), tuple(c / m for c in tilt), 0.05),
+                 (loop, rng.uniform(0.8, 1.0), (0.0, 0.0, 1.0), 0.05)]
+    corners = [(0.0, 0.0)]
+    heading = 0.0
+    for turn in (0.0, rng.uniform(5.0, 7.0), -rng.uniform(5.0, 7.0)):
+        heading += math.radians(turn)
+        for k in range(3):
+            step = rng.uniform(2.5, 3.5)
+            bend = math.radians(rng.uniform(-0.3, 0.3)) if k == 1 else 0.0
+            x, y = corners[-1]
+            corners.append((x + step * math.cos(heading + bend),
+                            y + step * math.sin(heading + bend)))
+    zigzag = r3.NurbsCurve(3, True, 4, len(corners))
+    for i, (x, y) in enumerate(corners):
+        w = 1.0 if i % 3 == 0 else rng.uniform(0.8, 1.25)
+        zigzag.Points[i] = r3.Point4d(x * w, y * w, 0.0, w)
+    for i, k in enumerate((0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 2.0, 2.0, 2.0, 3.0, 3.0, 3.0)):
+        zigzag.Knots[i] = k
+    zigzag.Domain = r3.Interval(rng.uniform(-5.0, -1.0), rng.uniform(2.0, 6.0))
+    crests = r3.NurbsCurve.CreateControlPointCurve(
+        [p(i * 10.0 + rng.uniform(-1.0, 1.0), math.sin(i * 0.7) * rng.uniform(6.0, 8.0), 0.0)
+         for i in range(6)], 3)
+    return witnesses + [(zigzag, rng.uniform(0.6, 0.9), (0.0, 0.0, 1.0), 0.05),
+                        (crests, -rng.uniform(40.0, 50.0), (0.0, 0.0, 1.0), 0.05)]
 
 
 def _offset_bits(curve, deviation):
@@ -1032,7 +1072,7 @@ def _offset_parity(fn, reference):
         for curve, distance, n, tolerance in _offset_witnesses():
             got = _offset_call(fn, curve, distance, n, tolerance)
             want = reference(curve, distance, n, tolerance)
-            if (not got or want is None or want.curve is None
+            if (not got or got[0] is None or want is None or want.curve is None
                     or _offset_bits(*got) != _offset_bits(want.curve, want.max_deviation)):
                 return False
     except Exception:  # noqa: BLE001 -- an SDK that cannot be checked is not qualified
@@ -1076,15 +1116,16 @@ def _offset_binding(reference):
 
 
 def offset_capability(reference):
-    """``"qualified"`` when smooth offsets are fitted in Rust, otherwise the reason.
+    """``"qualified"`` when free-form offsets are fitted in Rust, otherwise the reason.
     `reference` is the Python route the one-time parity check compares with."""
     _offset_binding(reference)
     return _offset_state[2]
 
 
 def offset_fit(curve, distance, n, tolerance, reference):
-    """`offset._compact_offset` for a smooth `NurbsCurve` through Rust: ``(fit, deviation)``,
-    ``()`` where it returns None, or None where `reference` (the Python route) must decide."""
+    """`offset._compact_offset` for a free-form `NurbsCurve` through Rust: ``(fit, deviation)``,
+    ``()`` where it returns None, ``(None, 0.0)`` where it returns the boundary-preserving
+    fit's refusal, or None where `reference` (the Python route) must decide."""
     global _native_offset_calls
     if not isinstance(curve, r3.NurbsCurve):
         return None

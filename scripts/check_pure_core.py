@@ -1990,10 +1990,11 @@ def probe_pure_core_polycurve_samples(path: Path, python: Path | str = sys.execu
     return identity
 
 
-# Smooth free-form offsets (offset._compact_offset through native_nearest.offset_fit): the
-# interpolate-and-check loop with openNURBS's Evaluate, EvTangent, EvCurvature, SetDomain,
-# IsValid and IsClosed ported, read from the curve's Encode() record. A library without it
-# loses only the Rust route: offsets then run the Python route.
+# Free-form offsets (offset._compact_offset through native_nearest.offset_fit): the smooth
+# interpolate-and-check loop and the boundary-preserving fit, with openNURBS's Evaluate,
+# EvTangent, EvCurvature, Trim, line-line intersection, SetDomain, IsValid and IsClosed
+# ported, read from the curve's Encode() record. A library without it loses only the Rust
+# route: offsets then run the Python route.
 PURE_CORE_OFFSET_FIT_EXPORT = "narwhal_pure_core_offset_fit"
 # (sys.platform, machine) pairs; narwhal3d/native_nearest.py OFFSET_QUALIFIED_PLATFORMS must
 # carry the same set (spike/test_pure_core_offset_fit_gate.py). Rust never fuses a
@@ -2003,15 +2004,17 @@ PURE_CORE_OFFSET_FIT_EXPORT = "narwhal_pure_core_offset_fit"
 # arithmetic and square roots, no libm.
 PURE_CORE_OFFSET_FIT_QUALIFIED_PLATFORMS = frozenset({("linux", "x86_64")})
 # The digest pins the exact control points, knots and deviation of the fits on
-# native_nearest's two witness curves (an open rational cubic on a shifted domain in a tilted
-# plane; a closed periodic cubic); it is also the digest of the Python route
-# (offset._python_compact_offset) on rhino3dm 8.35.0.
+# native_nearest's four witness curves (an open cubic on a shifted domain in a tilted plane; a
+# closed periodic cubic; a rational cubic with two C0 corners, one trimmed back to its Sharp
+# apex and one filled with straight segments; a wave offset through two cusps); it is also
+# the digest of the Python route (offset._python_compact_offset) on rhino3dm 8.35.0.
 PURE_CORE_OFFSET_FIT_IDENTITY = {
     "export": PURE_CORE_OFFSET_FIT_EXPORT,
-    "unrecognised_record_status": 1, "no_fit_status": 2, "zero_distance_status": -2,
+    "unrecognised_record_status": 1, "no_fit_status": 2, "refused_status": 3,
+    "zero_distance_status": -2,
     "nan_normal_status": -2, "small_buffer_status": -3, "null_record_status": -1,
     "refusals_write": False,
-    "fits_sha256": "139127e150e738e810c691f1f238d86940374bf866de414606c9ec1e99c03e66",
+    "fits_sha256": "547ef461308f11b3af3535e52025b6f2a8db303a8dd1730e132b9b8baa9e2ac6",
 }
 PURE_CORE_OFFSET_FIT_PROBE = r'''
 import ctypes as c, hashlib, json, struct, sys
@@ -2042,11 +2045,38 @@ loop = bytes.fromhex(
     "c48706a8421840a1864871ddbe1fc000000000000000004b0b748cf82b24400000000000000000000000"
     "00000000006c6c0dd42f631940538f11558c991c400000000000000000adeaf0d16ae701c0417ef3a4d8"
     "c72440000000000000000000047ee99aff7f02800000000000000000")
+zigzag = bytes.fromhex(
+    "fa7f02002e02000000000000fbff02001400000000000000ddd4d74e47e9d311bfe50010830122f010f2"
+    "7870fcff0200f601000000000000110300000001000000040000000a0000000000000000000000000000"
+    "000000f03f00000000000000000000000000000000000000000000f0bf00000000000000000000000000"
+    "0000000c000000ac108deccb34f4bfac108deccb34f4bfac108deccb34f4bf707cbc0328f5d53f707cbc"
+    "0328f5d53f707cbc0328f5d53fe64e6bee5f2fff3fe64e6bee5f2fff3fe64e6bee5f2fff3f57bff3edba"
+    "700c4057bff3edba700c4057bff3edba700c400a00000000000000000000000000000000000000000000"
+    "0000000000000000000000f03f23b93a0f985f1040000000000000000000000000000000009403be6fd2"
+    "e0f23f1fd91b5fbe3e1c40948d2999e9ae52bf00000000000000005eb60e41206bf13f96bd4833b1c622"
+    "40b7dd0f4e6b2951bf0000000000000000000000000000f03fc79a857fb5c82540de35f38cd61ccd3f00"
+    "00000000000000b38d88ec2862ec3f5e0298143c5b32403ca39b247085e43f000000000000000027fd77"
+    "4c1b1af33f7b0d67850e13324092b24c27e3e0e83f0000000000000000000000000000f03f005c3273ed"
+    "2a35404a7c094daa4de53f000000000000000082c44c0ec298ef3fa63b562123c03d40fd5aeef00fa3e5"
+    "3f0000000000000000d0053c352c3ff33fc0f10d8b1c6e3b409119fad593acde3f000000000000000000"
+    "0000000000f03f00b0d808d5ff7f02800000000000000000")
+crests = bytes.fromhex(
+    "fa7f02005e01000000000000fbff02001400000000000000ddd4d74e47e9d311bfe50010830122f010f2"
+    "7870fcff0200260100000000000011030000000000000004000000060000000000000000000000000000"
+    "000000f03f00000000000000000000000000000000000000000000f0bf00000000000000000000000000"
+    "00000008000000000000000000000000000000000000000000000000000000000000000000f03f000000"
+    "000000004000000000000008400000000000000840000000000000084006000000cc594f44f700e9bf00"
+    "000000000000000000000000000000e35ef7d129072540b31f55cb59981140000000000000000040c2be"
+    "dc5082344031fffa5e97831e40000000000000000004bf77ad51113d4008af5cec061c18400000000000"
+    "000000c2a40b809a0e44409ea2b421e8ba02400000000000000000d2912482c72b4940eaf55db0357106"
+    "c00000000000000000005980bd86ff7f02800000000000000000")
 h = float.fromhex
 witnesses = (
     (wave, h("-0x1.98bff91104b91p-2"),
      (h("0x1.7da869f9397c9p-7"), h("0x1.3c30396f4ae0ep-6"), h("0x1.ffdeb27e6455dp-1")), 0.05),
     (loop, h("0x1.9cb3ce2a417e0p-1"), (0.0, 0.0, 1.0), 0.05),
+    (zigzag, h("0x1.7b0f1675df85ap-1"), (0.0, 0.0, 1.0), 0.05),
+    (crests, h("-0x1.76af50773cd40p+5"), (0.0, 0.0, 1.0), 0.05),
 )
 
 
@@ -2069,6 +2099,8 @@ wave_args = witnesses[0][1:]
 refusals = {
     "unrecognised_record_status": call(b"not a record", *wave_args, fill=-9.0),
     "no_fit_status": call(wave, wave_args[0], wave_args[1], 1e-300, fill=-9.0),
+    # The zigzag's apex misses the true corner offset by more than 20% of 1e-4.
+    "refused_status": call(zigzag, witnesses[2][1], witnesses[2][2], 1e-4, fill=-9.0),
     "zero_distance_status": call(wave, 0.0, wave_args[1], 0.05, fill=-9.0),
     "nan_normal_status": call(wave, wave_args[0], (float("nan"), 0.0, 1.0), 0.05, fill=-9.0),
     "small_buffer_status": call(wave, *wave_args, cvs=374, fill=-9.0),

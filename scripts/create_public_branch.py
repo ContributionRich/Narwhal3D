@@ -731,6 +731,8 @@ NATIVE_FILES = (
     "native/pure_core/src/nurbs_record.rs",
     "native/pure_core/src/line_samples.rs",
     "native/pure_core/src/offset.rs",
+    "native/pure_core/src/offset_boundary.rs",
+    "native/pure_core/src/nurbs_trim.rs",
     "native/pure_core/src/cage.rs",
     "native/pure_core/src/gridsnap.rs",
     "native/pure_core/src/pickconstraint.rs", "native/pure_core/src/blend.rs",
