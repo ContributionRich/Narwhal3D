@@ -37,7 +37,7 @@ const PROBE_MAX: usize = 512;
 const REFINE_ROUNDS: usize = 4;
 /// `tessellate.CURVE_MAX_ANGLE_DEG` and `tessellate.CURVE_ANGLE_MIN_CHORD`.
 const CURVE_MAX_ANGLE_DEG: f64 = 5.0;
-const CURVE_ANGLE_MIN_CHORD: f64 = 4.0;
+pub(crate) const CURVE_ANGLE_MIN_CHORD: f64 = 4.0;
 /// `piece_segments_for`'s and `need_positions`' default `maximum`.
 const PIECE_MAXIMUM: f64 = 1024.0;
 const NEED_MAXIMUM: f64 = 4096.0;
@@ -51,7 +51,7 @@ extern "C" {
 
 /// CPython `x ** 2` for a float `x`: `float_pow` takes `|x|` (2 is even) and calls
 /// libm `pow`. The exponent is opaque so the compiler cannot fold the call to `x * x`.
-fn py_square(x: f64) -> f64 {
+pub(crate) fn py_square(x: f64) -> f64 {
     if x.is_nan() || x.is_infinite() || x == 0.0 || x.abs() == 1.0 {
         return x * x; // float_pow's special cases, all exact
     }
@@ -59,7 +59,7 @@ fn py_square(x: f64) -> f64 {
 }
 
 /// CPython `math.atan2` (`m_atan2`): its special cases, then libm `atan2`.
-fn py_atan2(y: f64, x: f64) -> f64 {
+pub(crate) fn py_atan2(y: f64, x: f64) -> f64 {
     if x.is_nan() || y.is_nan() {
         return f64::NAN;
     }
@@ -86,7 +86,7 @@ fn py_atan2(y: f64, x: f64) -> f64 {
 }
 
 /// Python `max(a, b)`: `a` unless `b > a`.
-fn py_max(a: f64, b: f64) -> f64 {
+pub(crate) fn py_max(a: f64, b: f64) -> f64 {
     if b > a {
         b
     } else {
@@ -95,7 +95,7 @@ fn py_max(a: f64, b: f64) -> f64 {
 }
 
 /// Python `min(a, b)`: `a` unless `b < a`.
-fn py_min(a: f64, b: f64) -> f64 {
+pub(crate) fn py_min(a: f64, b: f64) -> f64 {
     if b < a {
         b
     } else {
@@ -105,7 +105,7 @@ fn py_min(a: f64, b: f64) -> f64 {
 
 /// CPython 3.12+'s `sum()` of floats from the int start 0: Neumaier compensated
 /// summation, the compensation added once at the end when nonzero and finite.
-fn py_sum(values: &[f64]) -> f64 {
+pub(crate) fn py_sum(values: &[f64]) -> f64 {
     let Some((&first, rest)) = values.split_first() else {
         return 0.0;
     };
@@ -150,7 +150,12 @@ fn turn(a: P3, b: P3) -> f64 {
 }
 
 /// `tessellate.piece_needs` with the default `max_angle_deg`.
-fn piece_needs(points: &[P3], tangents: &[P3], tolerance: f64, min_chord_factor: f64) -> Vec<f64> {
+pub(crate) fn piece_needs(
+    points: &[P3],
+    tangents: &[P3],
+    tolerance: f64,
+    min_chord_factor: f64,
+) -> Vec<f64> {
     // `math.radians`: x * (pi / 180)
     let max_angle = CURVE_MAX_ANGLE_DEG * (std::f64::consts::PI / 180.0);
     let k = points.len() - 1;
@@ -192,10 +197,10 @@ fn piece_segments_for(points: &[P3], tangents: &[P3], tolerance: f64) -> Option<
     clamped_ceil(needs.len() as f64 * worst - 1e-9, PIECE_MAXIMUM)
 }
 
-/// `tessellate.need_positions`.
-fn need_positions(needs: &[f64]) -> Option<Vec<f64>> {
+/// `tessellate.need_positions(needs, maximum)`.
+pub(crate) fn need_positions(needs: &[f64], maximum: f64) -> Option<Vec<f64>> {
     let total = py_sum(needs);
-    let n = clamped_ceil(total - 1e-9, NEED_MAXIMUM)?;
+    let n = clamped_ceil(total - 1e-9, maximum)?;
     if n == 1 || total <= 0.0 {
         return Some(Vec::new());
     }
@@ -283,7 +288,7 @@ impl Display<'_, '_> {
         tolerance: f64,
     ) -> Option<(Vec<f64>, Vec<P3>)> {
         let needs = piece_needs(pts, tans, tolerance, 0.0);
-        let us = need_positions(&needs)?;
+        let us = need_positions(&needs, NEED_MAXIMUM)?;
         let mut ts = Vec::with_capacity(us.len() + 2);
         ts.push(a);
         ts.extend(us.iter().map(|&u| a + (b - a) * u / k as f64));
@@ -517,10 +522,18 @@ mod tests {
 
     #[test]
     fn need_positions_space_vertices_evenly_in_need() {
-        assert!(need_positions(&[0.0, 0.0]).unwrap().is_empty());
-        assert_eq!(need_positions(&[1.0, 1.0]).unwrap(), vec![1.0]);
-        assert_eq!(need_positions(&[2.0, 0.0]).unwrap(), vec![0.5]);
-        assert!(need_positions(&[f64::INFINITY]).is_none());
+        assert!(need_positions(&[0.0, 0.0], NEED_MAXIMUM)
+            .unwrap()
+            .is_empty());
+        assert_eq!(
+            need_positions(&[1.0, 1.0], NEED_MAXIMUM).unwrap(),
+            vec![1.0]
+        );
+        assert_eq!(
+            need_positions(&[2.0, 0.0], NEED_MAXIMUM).unwrap(),
+            vec![0.5]
+        );
+        assert!(need_positions(&[f64::INFINITY], NEED_MAXIMUM).is_none());
     }
 
     #[test]

@@ -407,6 +407,7 @@ PURE_SUITES=(
     spike/test_offset_fit.py
     spike/test_surface_offset.py
     spike/test_surface_grid.py
+    spike/test_surface_display_params.py
     spike/test_offset_compact.py
     spike/test_offset_report127.py
     spike/test_report121_124.py

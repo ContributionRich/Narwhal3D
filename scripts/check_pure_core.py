@@ -128,6 +128,7 @@ PURE_CORE_PYTESTS = (
     "spike/test_offset_fit.py",
     "spike/test_surface_offset.py",
     "spike/test_surface_grid.py",
+    "spike/test_surface_display_params.py",
     "spike/test_native_coil_preview.py",
     "spike/test_preview_curve_native.py",
     "spike/test_preview24_boundaries.py",
@@ -2158,14 +2159,9 @@ PURE_CORE_SURFACE_OFFSET_IDENTITY = {
     "room_writes_length_only": True,
     "surfaces_sha256": "6205d0311b01f7a5934e798d06f7d62426ccba18dcaf472c6d26820f785b52e3",
 }
-PURE_CORE_SURFACE_OFFSET_PROBE = r'''
-import ctypes as c, hashlib, json, struct, sys
-fn = c.CDLL(sys.argv[1]).narwhal_pure_core_surface_offset
-D, Z = c.POINTER(c.c_double), c.c_size_t
-fn.argtypes = [c.c_char_p, Z, c.c_double, c.c_double, c.c_uint32, c.POINTER(c.c_ubyte), Z,
-               c.POINTER(c.c_uint64), c.POINTER(c.c_double)]
-fn.restype = c.c_int32
-# native_nearest._surface_offset_witnesses() as rhino3dm 8.35.0 encodes them.
+# native_nearest._surface_offset_witnesses() as rhino3dm 8.35.0 encodes them, shared by the
+# surface offset, surface grid and surface display probes.
+_SURFACE_WITNESS_RECORDS = r'''
 sphere = bytes.fromhex(
     "fa7f0200b906000000000000fbff02001400000000000000ded4d74e47e9d311bfe50010830122f0e246"
     "b059fcff0200810600000000000010030000000100000003000000030000000900000005000000000000"
@@ -2234,6 +2230,15 @@ bump = bytes.fromhex(
     "77dcbf4c3181e736682240565f391ee857ff3f1dc5cceb3ec6dbbfdb90f136986e2440d0b7261102d710"
     "406b0f251f963db6bf1c9a50ce63ce2540e2159813ef171840037d3cffbf03cb3f2ce1d80855952340d1"
     "bd2bf37db71d408e797fcacee5dc3ffec1cbe9ff7f02800000000000000000")
+'''
+PURE_CORE_SURFACE_OFFSET_PROBE = r'''
+import ctypes as c, hashlib, json, struct, sys
+fn = c.CDLL(sys.argv[1]).narwhal_pure_core_surface_offset
+D, Z = c.POINTER(c.c_double), c.c_size_t
+fn.argtypes = [c.c_char_p, Z, c.c_double, c.c_double, c.c_uint32, c.POINTER(c.c_ubyte), Z,
+               c.POINTER(c.c_uint64), c.POINTER(c.c_double)]
+fn.restype = c.c_int32
+''' + _SURFACE_WITNESS_RECORDS + r'''
 h = float.fromhex
 witnesses = ((sphere, h("0x1.79d560afa75d7p-1"), 0.03, 6), (bump, h("-0x1.f9ad99f91c6d3p-2"), 0.06, 6))
 
@@ -2311,75 +2316,7 @@ fn = c.CDLL(sys.argv[1]).narwhal_pure_core_surface_grid
 D, Z = c.POINTER(c.c_double), c.c_size_t
 fn.argtypes = [c.c_char_p, Z, D, Z, D, Z, D, D, Z]
 fn.restype = c.c_int32
-# native_nearest._surface_offset_witnesses() as rhino3dm 8.35.0 encodes them.
-sphere = bytes.fromhex(
-    "fa7f0200b906000000000000fbff02001400000000000000ded4d74e47e9d311bfe50010830122f0e246"
-    "b059fcff0200810600000000000010030000000100000003000000030000000900000005000000000000"
-    "0000000000000000000000f03f00000000000000000000000000000000000000000000f0bf0000000000"
-    "00000000000000000000000a00000000000000000000000000000000000000182d4454fb21f93f182d44"
-    "54fb21f93f182d4454fb210940182d4454fb210940d221337f7cd91240d221337f7cd91240182d4454fb"
-    "211940182d4454fb21194006000000182d4454fb21f9bf182d4454fb21f9bf0000000000000000000000"
-    "0000000000182d4454fb21f93f182d4454fb21f93f2d000000b0144bf50572c3bfc2a84190b07a06c0e4"
-    "3ff9cf965e15c0000000000000f03fe36591e9945c0d409f508d375ccaffbf2eaa0cd194380ec0cc3b7f"
-    "669ea0e63f3ee74ea006c31440c2a84190b07a06c00000000000000000000000000000f03fe36591e994"
-    "5c0d409f508d375ccaffbf2eaa0cd194380e40cc3b7f669ea0e63fb0144bf50572c3bfc2a84190b07a06"
-    "c0e43ff9cf965e1540000000000000f03f3e8968effc7fbbbf9f508d375ccaffbf2eaa0cd194380ec0cc"
-    "3b7f669ea0e63f3ee74ea006c3044006d7b00f7d42f43fe43ff9cf965e05c0000000000000e03fe36591"
-    "e9945c0d40bd038c6acda6fc3f0000000000000000cc3b7f669ea0e63f3ee74ea006c3044006d7b00f7d"
-    "42f43fe43ff9cf965e0540000000000000e03f3e8968effc7fbbbf9f508d375ccaffbf2eaa0cd194380e"
-    "40cc3b7f669ea0e63fb0144bf50572c3bfc2a84190b07a06c0e43ff9cf965e15c0000000000000f03f3e"
-    "8968effc7fbbbfbd038c6acda6fc3f2eaa0cd194380ec0cc3b7f669ea0e63fb0144bf50572c3bf06d7b0"
-    "0f7d4204400000000000000000000000000000f03f3e8968effc7fbbbfbd038c6acda6fc3f2eaa0cd194"
-    "380e40cc3b7f669ea0e63fb0144bf50572c3bfc2a84190b07a06c0e43ff9cf965e1540000000000000f0"
-    "3f3e8968effc7fbbbf9f508d375ccaffbf2eaa0cd194380ec0cc3b7f669ea0e63f8a98a3ff26fa05c006"
-    "d7b00f7d42f43fe43ff9cf965e05c0000000000000e03f79ee87b894140fc0bd038c6acda6fc3f000000"
-    "0000000000cc3b7f669ea0e63f8a98a3ff26fa05c006d7b00f7d42f43fe43ff9cf965e05400000000000"
-    "00e03f3e8968effc7fbbbf9f508d375ccaffbf2eaa0cd194380e40cc3b7f669ea0e63fb0144bf50572c3"
-    "bfc2a84190b07a06c0e43ff9cf965e15c0000000000000f03f79ee87b894140fc09f508d375ccaffbf2e"
-    "aa0cd194380ec0cc3b7f669ea0e63f8a98a3ff26fa15c0c2a84190b07a06c00000000000000000000000"
-    "000000f03f79ee87b894140fc09f508d375ccaffbf2eaa0cd194380e40cc3b7f669ea0e63fb0144bf505"
-    "72c3bfc2a84190b07a06c0e43ff9cf965e1540000000000000f03f3e8968effc7fbbbf9f508d375ccaff"
-    "bf2eaa0cd194380ec0cc3b7f669ea0e63f8a98a3ff26fa05c0220a0d8cf74d10c0e43ff9cf965e05c000"
-    "0000000000e03f79ee87b894140fc03ea96976e10e17c00000000000000000cc3b7f669ea0e63f8a98a3"
-    "ff26fa05c0220a0d8cf74d10c0e43ff9cf965e0540000000000000e03f3e8968effc7fbbbf9f508d375c"
-    "caffbf2eaa0cd194380e40cc3b7f669ea0e63fb0144bf50572c3bfc2a84190b07a06c0e43ff9cf965e15"
-    "c0000000000000f03f3e8968effc7fbbbf3ea96976e10e17c02eaa0cd194380ec0cc3b7f669ea0e63fb0"
-    "144bf50572c3bf220a0d8cf74d20c00000000000000000000000000000f03f3e8968effc7fbbbf3ea969"
-    "76e10e17c02eaa0cd194380e40cc3b7f669ea0e63fb0144bf50572c3bfc2a84190b07a06c0e43ff9cf96"
-    "5e1540000000000000f03f3e8968effc7fbbbf9f508d375ccaffbf2eaa0cd194380ec0cc3b7f669ea0e6"
-    "3f3ee74ea006c30440220a0d8cf74d10c0e43ff9cf965e05c0000000000000e03fe36591e9945c0d403e"
-    "a96976e10e17c00000000000000000cc3b7f669ea0e63f3ee74ea006c30440220a0d8cf74d10c0e43ff9"
-    "cf965e0540000000000000e03f3e8968effc7fbbbf9f508d375ccaffbf2eaa0cd194380e40cc3b7f669e"
-    "a0e63fb0144bf50572c3bfc2a84190b07a06c0e43ff9cf965e15c0000000000000f03fe36591e9945c0d"
-    "409f508d375ccaffbf2eaa0cd194380ec0cc3b7f669ea0e63f3ee74ea006c31440c2a84190b07a06c000"
-    "00000000000000000000000000f03fe36591e9945c0d409f508d375ccaffbf2eaa0cd194380e40cc3b7f"
-    "669ea0e63fb0144bf50572c3bfc2a84190b07a06c0e43ff9cf965e1540000000000000f03f4366f514ff"
-    "7f02800000000000000000")
-bump = bytes.fromhex(
-    "fa7f0200d903000000000000fbff02001400000000000000ded4d74e47e9d311bfe50010830122f0e246"
-    "b059fcff0200a10300000000000010030000000000000004000000030000000600000005000000000000"
-    "0000000000000000000000f03f00000000000000000000000000000000000000000000f0bf0000000000"
-    "0000000000000000000000080000004c6dce137110ffbf4c6dce137110ffbf4c6dce137110ffbf98e3e5"
-    "d6839be5bf1288f266416ee2bf453a73e234751e40453a73e234751e40453a73e234751e400600000068"
-    "63b1d75aca0fc06863b1d75aca0fc0e3993657f3ea07c0f25942367d8b1540663da3ebb80d1f40663da3"
-    "ebb80d1f401e000000000000000000000000000000000000000000000000000000000000000000000078"
-    "1ee25475affe3f00000000000000000000000000000000eebea61930ec10400000000000000000000000"
-    "0000000000aab0a46969b21940000000000000008000000000000000009e3d90e62d2d1f400000000000"
-    "0000806a7ea8c3a047fd3f00000000000000008d9b3d331c31db3fbe3771f8c9ee0040ed8993cd110dff"
-    "3f0903f454e5f4d33f5ea8676b2759ff3f81da8bc024151040512a7405b0d0ae3f4f72091d2677ff3f37"
-    "321bbb2abc15406bdd23abe0e4c8bf1ed0b4e5cbf5fd3f57e9c439c0aa1d40f5990ffba9c0dbbf9682d5"
-    "ebcffc0e400000000000000000a239b60bb653e13f6cb4e891be621040e215ec8de2f6fe3f4fed5bf1a2"
-    "d6d83f89ba3a363f931140c0c194ee26e710408561e945f998b43fb631930406111140e36aeae1d10019"
-    "40506f3e8fec2dc9bffe4513aaacab0d400cc670ff8e772040a872315807f6d7bf1a1d2001ae90164000"
-    "00000000000000243b629bbfccc63f77bc42f350ae184076298f8cae95fe3f80db07b980aec53fbd1db3"
-    "47c78b1940c941618ccf8a0d409bee302f7ecaa33f9822cbea8655184014f5c877a18217400e371c516a"
-    "51bcbf7631aa57721e1940be0bd0252c761d40da2ffb80b0a4c7bffac0ddb1e1ed1d4000000000000000"
-    "00678f447a9084c9bf652163808f42204046ec0a69f4ab0040f3f1090abbc5c2bfb85f232236932140e4"
-    "8f7144bf270e40778cecf58d29a4bf7af915a8f5512140fab9c5a2bb721740b8e9752b0929b73fda445b"
-    "384fc71d40d49d58e829191f40d32351d743e0cd3fe3545043c235244000000000000000002d91fd6c8b"
-    "77dcbf4c3181e736682240565f391ee857ff3f1dc5cceb3ec6dbbfdb90f136986e2440d0b7261102d710"
-    "406b0f251f963db6bf1c9a50ce63ce2540e2159813ef171840037d3cffbf03cb3f2ce1d80855952340d1"
-    "bd2bf37db71d408e797fcacee5dc3ffec1cbe9ff7f02800000000000000000")
+''' + _SURFACE_WITNESS_RECORDS + r'''
 h = float.fromhex
 witnesses = ((sphere, (h("0x0.0p+0"), h("0x1.cb91f3bbba140p-1"), h("0x1.cb91f3bbba140p+0"), h("0x1.58ad76cccb8f0p+1"), h("0x1.cb91f3bbba140p+1"), h("0x1.1f3b3855544c8p+2"), h("0x1.58ad76cccb8f0p+2"), h("0x1.921fb54442d18p+2")), (h("-0x1.921fb54442d18p+0"), h("-0x1.e28c731eb6950p-1"), h("-0x1.41b2f769cf0e0p-2"), h("0x1.41b2f769cf0e0p-2"), h("0x1.e28c731eb6950p-1"), h("0x1.921fb54442d18p+0"))), (bump, (h("-0x1.f107113ce6d4cp+0"), h("-0x1.271a9fa950b0ep-1"), h("0x1.93d8e3272c47cp-1"), h("0x1.13b3197dea500p+1"), h("0x1.c26ffa32098e4p+1"), h("0x1.38966d7314663p+2"), h("0x1.8ff4ddcd24053p+2"), h("0x1.e7534e2733a43p+2")), (h("-0x1.fca5ad7b16368p+1"), h("-0x1.a059702ffa122p+0"), h("0x1.7130f52c70918p-1"), h("0x1.88c532ae3551ep+1"), h("0x1.5a9f1408a73fap+2"), h("0x1.f0db8eba33d66p+2"))))
 
@@ -2426,6 +2363,118 @@ def probe_pure_core_surface_grid(path: Path, python: Path | str = sys.executable
         raise ValueError(f"cannot verify pure-core surface grid export: {getattr(error, 'stderr', '') or error}") from error
     if identity != PURE_CORE_SURFACE_GRID_IDENTITY:
         raise ValueError(f"pure-core surface grid evidence differs: {identity!r}")
+    return identity
+
+# Surface display grid lines (bridge._surface_axis_params through
+# native_nearest.surface_display_params): the parameters of a NurbsSurface's display grid along
+# one direction, with ON_NurbsSurface::IsoCurve / IsClosed ported. A library without it loses
+# only the Rust route: grid lines are then placed by the Python route.
+PURE_CORE_SURFACE_DISPLAY_EXPORT = "narwhal_pure_core_surface_display_params"
+# (sys.platform, machine) pairs; narwhal3d/native_nearest.py SURFACE_DISPLAY_QUALIFIED_PLATFORMS
+# must carry the same set (spike/test_surface_display_params.py checks the route there).
+PURE_CORE_SURFACE_DISPLAY_QUALIFIED_PLATFORMS = frozenset({("linux", "x86_64")})
+# The digest pins the parameters in both directions of the surface offset's two witness
+# surfaces and of native_nearest._surface_display_wave(), with its knots shown and hidden (as a
+# BrepFace shows it), at the display chord tolerance 0.01; it is also the digest of
+# bridge._python_surface_axis_params on rhino3dm 8.35.0.
+PURE_CORE_SURFACE_DISPLAY_IDENTITY = {
+    "export": PURE_CORE_SURFACE_DISPLAY_EXPORT,
+    "unrecognised_record_status": 1, "bad_direction_status": -2, "nan_tolerance_status": -2,
+    "null_count_status": -1, "room_status": 4, "room_writes_count_only": True,
+    "refusals_write": False,
+    "params_sha256": "315d311aca437b472434dc1a0b7bac5f06f2241938488a66b5c9f3a79c3dfeb9",
+}
+PURE_CORE_SURFACE_DISPLAY_PROBE = r'''
+import ctypes as c, hashlib, json, struct, sys
+fn = c.CDLL(sys.argv[1]).narwhal_pure_core_surface_display_params
+D, Z = c.POINTER(c.c_double), c.c_size_t
+fn.argtypes = [c.c_char_p, Z, c.c_uint32, c.c_double, c.c_uint8, D, Z, c.POINTER(Z)]
+fn.restype = c.c_int32
+''' + _SURFACE_WITNESS_RECORDS + r'''
+# native_nearest._surface_display_wave() as rhino3dm 8.35.0 encodes it.
+wave = bytes.fromhex(
+    "fa7f02007105000000000000fbff02001400000000000000ded4d74e47e9d311bfe50010830122f0e246"
+    "b059fcff0200390500000000000010030000000100000003000000040000000500000007000000000000"
+    "0000000000000000000000f03f00000000000000000000000000000000000000000000f0bf0000000000"
+    "0000000000000000000000060000000edc7e891293febf0edc7e891293febf76da553f1238ebbf76da55"
+    "3f1238ebbfffafe2db89dc0040ffafe2db89dc004009000000d56c7917767900c0d56c7917767900c0d5"
+    "6c7917767900c0ea9f444a29cff2bf3816e5d62bfff73f77ab2d2f8e2f0340cf020022a8eb0940cf0200"
+    "22a8eb0940cf020022a8eb09402300000000000000000000000000000000000000834e3901170de93f34"
+    "e44b98b94ae93f0000000000000000193aca9f395cfc3f54a23cc9420cea3f8eb7bad5f59bf13f000000"
+    "0000000000c88773ff5bf60e40f45db7a6f37fdcbf4f9a2908e7d6e93f00000000000000001b5267a7c5"
+    "1320400029989f5fdff8bf9aba7a52844ef43f00000000000000006ae1bf36fde3214067ead8122cb5a1"
+    "bf5cb4d751e9b9f13f00000000000000001930537d7a1729407b5f74f9442dea3fc3270b5eae31f23f00"
+    "00000000000000c94e6ebdb022274084d38df64ef0e53f183db27596e9ea3f22fb20cb56a60540000000"
+    "0000000000698d9dfb1c9a0d40d04bdfcf0acdf23f44a31ad8656b0040661236356aa9fc3f94114ef097"
+    "84f83f48ae87d5a14fed3fdd3e213e0a7e0140ae515ea344d011404b549d8496af03c0b6eac86378d9f4"
+    "3fe397518fbe65054005af35b68a4d21404330006461c20fc03adeac0a49f5f53fb5c2f59e4eb7fe3f07"
+    "87cdaf19441e40fa088ddac33ee8bf02feeedabb17f03f6879f3e7f4d60340f129d84ceae62640e255a4"
+    "6faf2b0440e395c5861314f13f3e961a02a79908409e13a6905b7a304066163dcd9a2f074092f5d876da"
+    "8ff43f3e7b380c9f72184000000000000000004c03faba4658ffbf80b085b0bc9df43f3beace63629210"
+    "40da043367e03805403662e58c4843e8bfbae572b7a2bcf23fe76d12d254de05405d00129bf83e0e4026"
+    "bb4eb176e1f23facbc327db27eea3fd6ffede70e0c084044bcb77fbe0b0f40041574555432ea3f7278b3"
+    "ea4f77e53f8f975351cb980d408734256e52b51e40952fedac4bf69b3f511d91e43eb9ea3f3d2efd56d5"
+    "920c40940069517bbd27403a9918a77da0f6bf2bf737d94c77f13f85b5fe2096e318402eef1a2c9b612f"
+    "4001a20b6bb61ff5bfc400e08726e0f43f9777f21427e7104000000000000000001be152848ae602c036"
+    "536c56a720eb3fc90e2ecf1a85114040c6e3bc2053f93ff7b2eeffc5ebf0bfc0318209c840e83fa1659b"
+    "39fa731140eaf1bbc292c6024081b8dd50a47df23f0bb922b34e49e43fb26d6d2a02121e40626fe5327d"
+    "1d1f40061c49525756084090f46039c613f53fa6e07bf95ec91b40077ba4aec3432240c3359a48ebb5ed"
+    "3f94a7fc9a7ed7f13f94ce698b8c4620407236f6f1304e2a4062e8b2eaebc8febf003219e6d3a3f53ffd"
+    "b3ced22e74114065bdb00b339626409616a22ee594fbbf70ba989c9148e93ffa6dab7d83be1a40000000"
+    "0000000000337bc66a6dd602404904be6bb29ef03f770006b45fa0144066d435cc71c1f43fb95295bd00"
+    "c4d53f0b3e015e9eb6e33fee0622cc5764214091aa42f9ede412400e151894ed49f9bf6692ee7645a1f1"
+    "3fa852779ab26c2440ceb315b480a0164031edb72ede3b08c08b72a57322a6f23fd9008d05c1a225401b"
+    "8e40499a6f2040376a75ad8521eabf184ea289c840f23f46964f26dfe51f40e5e167ce4e50244039ae52"
+    "37656af73fe427c3cdaa2ff13f4cc2ac7905bf1d4092579c6cafc5234099961ecb4e02fc3fdfdf4ccc7c"
+    "a6ec3fa9fe5c36ff7f02800000000000000000")
+
+
+def call(record, direction, visible=1, tolerance=0.01, cap=1024, count=True):
+    out = (c.c_double * max(cap, 1))(*[-9.0] * max(cap, 1))
+    n = Z(7)
+    code = fn(record, 0 if record is None else len(record), direction, tolerance, visible, out,
+              cap, c.byref(n) if count else None)
+    return code, list(out), n.value
+
+
+bits = b""
+for record, visible in ((sphere, 1), (bump, 1), (wave, 1), (wave, 0)):
+    for direction in (0, 1):
+        code, out, n = call(record, direction, visible)
+        if code != 0:
+            raise RuntimeError("the export refused a witness surface")
+        bits += struct.pack(f"<Q{n}d", n, *out[:n])
+need = call(sphere, 0)[2]
+room = call(sphere, 0, cap=need - 1)
+refusals = {
+    "unrecognised_record_status": call(b"not a record", 0),
+    "bad_direction_status": call(bump, 2),
+    "nan_tolerance_status": call(bump, 0, tolerance=float("nan")),
+    "null_count_status": call(bump, 0, count=False),
+}
+untouched = all(set(r[1]) == {-9.0} and r[2] == 7 for r in refusals.values())
+print(json.dumps({"export": "narwhal_pure_core_surface_display_params",
+                  **{name: r[0] for name, r in refusals.items()},
+                  "room_status": room[0],
+                  "room_writes_count_only": set(room[1]) == {-9.0} and room[2] == need,
+                  "refusals_write": not untouched,
+                  "params_sha256": hashlib.sha256(bits).hexdigest()}, sort_keys=True))
+'''
+
+
+def probe_pure_core_surface_display(path: Path, python: Path | str = sys.executable, *, env=None) -> dict:
+    """Require the surface display export to give the pinned witness parameters and refusals."""
+    if not path.is_file() or path.is_symlink():
+        raise ValueError(f"missing regular pure-core library: {path}")
+    try:
+        completed = subprocess.run(
+            [str(python), "-I", "-B", "-c", PURE_CORE_SURFACE_DISPLAY_PROBE, str(path.resolve())],
+            env=env, text=True, capture_output=True, check=True, timeout=60)
+        identity = json.loads(completed.stdout)
+    except (OSError, subprocess.SubprocessError, ValueError) as error:
+        raise ValueError(f"cannot verify pure-core surface display export: {getattr(error, 'stderr', '') or error}") from error
+    if identity != PURE_CORE_SURFACE_DISPLAY_IDENTITY:
+        raise ValueError(f"pure-core surface display evidence differs: {identity!r}")
     return identity
 
 # Additive unit-aware SVG export (vector_export.write_svg(unit=...)): ABI 1 and the legacy
@@ -2917,6 +2966,16 @@ def step_surface_grid(lib_path: Path) -> dict[str, object]:
             "command": "ctypes surface grid probe"}
 
 
+def step_surface_display(lib_path: Path) -> dict[str, object]:
+    """Qualify the surface display export; required for the library to carry it."""
+    try:
+        identity = probe_pure_core_surface_display(lib_path)
+    except ValueError as exc:
+        raise GateError(str(exc)) from exc
+    return {"status": "ok", "surface_display": identity,
+            "command": "ctypes surface display probe"}
+
+
 def step_svg_unit(lib_path: Path) -> dict[str, object]:
     """Qualify the unit-aware SVG export; required for the library to carry it."""
     try:
@@ -3014,6 +3073,7 @@ def run_gate(crate_rel: str) -> dict[str, object]:
     steps["offset_fit"] = step_offset_fit(lib)
     steps["surface_offset"] = step_surface_offset(lib)
     steps["surface_grid"] = step_surface_grid(lib)
+    steps["surface_display"] = step_surface_display(lib)
     steps["svg_unit"] = step_svg_unit(lib)
     steps["adapter"] = step_adapter(crate, lib)
     steps["windows_check"] = step_windows_check(crate)

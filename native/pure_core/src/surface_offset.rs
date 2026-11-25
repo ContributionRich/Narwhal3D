@@ -61,7 +61,7 @@ type P3 = [f64; 3];
 
 /// A refusal that sends the whole offset to Python.
 #[derive(Debug, PartialEq)]
-struct Declined;
+pub(crate) struct Declined;
 
 fn cross(a: P3, b: P3) -> P3 {
     // `ON_CrossProduct`.
@@ -153,9 +153,9 @@ fn ev_normal(limit_dir: i32, du: P3, dv: P3, duu: P3, duv: P3, dvv: P3) -> Optio
 }
 
 /// The surface as `ON_NurbsSurface` holds it.
-type Surface = SurfaceRecord;
+pub(crate) type Surface = SurfaceRecord;
 
-fn size(s: &Surface) -> usize {
+pub(crate) fn size(s: &Surface) -> usize {
     if s.rational {
         4
     } else {
@@ -163,14 +163,14 @@ fn size(s: &Surface) -> usize {
     }
 }
 
-fn cv(s: &Surface, i: usize, j: usize) -> &[f64] {
+pub(crate) fn cv(s: &Surface, i: usize, j: usize) -> &[f64] {
     let n = size(s);
     let at = (i * s.count[1] + j) * n;
     &s.cvs[at..at + n]
 }
 
 /// `ON_NurbsSurface::Domain(dir)`.
-fn domain(s: &Surface, dir: usize) -> (f64, f64) {
+pub(crate) fn domain(s: &Surface, dir: usize) -> (f64, f64) {
     (
         s.knots[dir][s.order[dir] - 2],
         s.knots[dir][s.count[dir] - 1],
@@ -178,7 +178,7 @@ fn domain(s: &Surface, dir: usize) -> (f64, f64) {
 }
 
 /// `ON_NurbsSurface::IsValid` of a 3-D surface.
-fn surface_is_valid(s: &Surface) -> bool {
+pub(crate) fn surface_is_valid(s: &Surface) -> bool {
     (0..2).all(|d| knot_vector_is_valid(s.order[d], s.count[d], &s.knots[d]))
         && s.cvs.iter().all(|&x| -1.0e307 < x && x < 1.0e307)
 }
@@ -312,7 +312,7 @@ fn quotient_rule(v: &mut [[f64; 4]; 6], der_count: usize) -> bool {
 }
 
 /// `surface.PointAt(s, t)`.
-fn point_at(srf: &Surface, s: f64, t: f64) -> Result<P3, Declined> {
+pub(crate) fn point_at(srf: &Surface, s: f64, t: f64) -> Result<P3, Declined> {
     Ok(evaluate(srf, s, t, 0, 0)?[0])
 }
 

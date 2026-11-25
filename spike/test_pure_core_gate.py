@@ -239,6 +239,7 @@ def _():
         "spike/test_offset_fit.py",
         "spike/test_surface_offset.py",
         "spike/test_surface_grid.py",
+        "spike/test_surface_display_params.py",
         "spike/test_native_coil_preview.py",
         "spike/test_preview_curve_native.py",
         "spike/test_native_tessellate.py",

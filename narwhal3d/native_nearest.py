@@ -1451,3 +1451,179 @@ def surface_grid(surface, us, vs):
         return None
     _native_surface_grid_calls += 1
     return got
+
+
+# Surface display parameters (narwhal_pure_core_surface_display_params,
+# native/pure_core/src/surface_display.rs): `bridge._surface_axis_params`, the display grid
+# lines of a NurbsSurface along one direction, read from its Encode() record with openNURBS's
+# IsoCurve / IsClosed / Evaluate ported. A BrepFace goes through its UnderlyingSurface only
+# where the face evaluates and closes as that surface (openNURBS may hold it transposed).
+# Gated by SURFACE_DISPLAY_QUALIFIED_PLATFORMS and the loaded rhino3dm passing
+# `_surface_display_parity` against the Python route on the surface offset witnesses.
+SURFACE_DISPLAY_QUALIFIED_PLATFORMS = frozenset({("linux", "x86_64")})
+_SURFACE_DISPLAY_ROOM = 4
+_SURFACE_DISPLAY_WITNESS_SEED = 3
+_surface_display_state = None       # (signature, binding or None, capability text)
+_native_surface_display_calls = 0
+
+
+def _surface_display_call(fn, surface, direction, tolerance, knots_visible):
+    """The parameters for `surface` (whose record must be an ON_NurbsSurface) along
+    `direction`, or None."""
+    record = base64.b64decode(surface.Encode()["data"])
+    capacity = 1024
+    for _attempt in range(2):
+        out = (ctypes.c_double * capacity)()
+        count = ctypes.c_size_t(0)
+        code = fn(record, len(record), int(direction), float(tolerance), int(knots_visible),
+                  out, capacity, ctypes.byref(count))
+        if code == 0:
+            return list(out[:count.value])
+        if code != _SURFACE_DISPLAY_ROOM:
+            return None
+        capacity = count.value
+    return None
+
+
+def _surface_display_wave():
+    """A rational quadratic-by-cubic wave on irregular doubles, steep enough that both
+    directions take the turn route. Its u knots are two Bezier spans and its v knots single,
+    with no knot at either domain's middle, so the middle iso-curves come from openNURBS's
+    de Casteljau and NURBS span evaluations rather than copied control points."""
+    rng = random.Random(_SURFACE_DISPLAY_WITNESS_SEED)
+    wave = r3.NurbsSurface.Create(3, True, 3, 4, 5, 7)
+    for i in range(5):
+        for j in range(7):
+            w = rng.uniform(0.6, 1.4)
+            x, y = i * rng.uniform(1.6, 2.4), j * rng.uniform(1.6, 2.4)
+            z = 3.0 * math.sin(i * 1.7 + 0.3) * math.cos(j * 1.1) + rng.uniform(-0.5, 0.5)
+            wave.Points[i, j] = r3.Point4d(x * w, y * w, z * w, w)
+    a, b, br = rng.uniform(-5.0, -1.0), rng.uniform(2.0, 6.0), rng.uniform(0.15, 0.35)
+    for i, k in enumerate((0.0, 0.0, br, br, 1.0, 1.0)):
+        wave.KnotsU[i] = a + (b - a) * k
+    a, b = rng.uniform(-5.0, -1.0), rng.uniform(2.0, 6.0)
+    inner = sorted([rng.uniform(0.1, 0.4)] + [rng.uniform(0.6, 0.9) for _ in range(2)])
+    for i, k in enumerate([0.0] * 3 + inner + [1.0] * 3):
+        wave.KnotsV[i] = a + (b - a) * k
+    return wave
+
+
+def _surface_display_witnesses():
+    """``(object, underlying surface, knots visible)``: the surface offset witnesses (a
+    rational sphere whose poles give point iso-curves and whose rows are closed circles, and a
+    cubic-by-quadratic bump on non-uniform knots in shifted domains), the wave, and the wave as
+    a BrepFace, which shows Python no knots."""
+    sphere, bump = (w[0] for w in _surface_offset_witnesses())
+    wave = _surface_display_wave()
+    face = r3.Brep.CreateFromSurface(wave).Faces[0]
+    return [(sphere, sphere, True), (bump, bump, True), (wave, wave, True),
+            (face, face.UnderlyingSurface(), False)]
+
+
+def _surface_display_parity(fn, reference, tolerance):
+    """True when `reference` (the Python route) on the loaded rhino3dm gives Rust's parameters,
+    bit for bit, in both directions of every witness."""
+    try:
+        for obj, source, visible in _surface_display_witnesses():
+            for direction in (0, 1):
+                got = _surface_display_call(fn, source, direction, tolerance, visible)
+                want = reference(obj, direction, tolerance)
+                if got is None or _packed_floats(got) != _packed_floats(want):
+                    return False
+    except Exception:  # noqa: BLE001 -- an SDK that cannot be checked is not qualified
+        return False
+    return True
+
+
+def _packed_floats(values):
+    return struct.pack(f"<{len(values)}d", *values)
+
+
+def _surface_display_binding(reference, tolerance):
+    global _surface_display_state
+    signature = (os.environ.get(_ENV) or "<packaged>", _here(), id(r3))
+    state = _surface_display_state
+    if state is not None and state[0] == signature:
+        return state[1]
+    with _lock:
+        state = _surface_display_state
+        if state is not None and state[0] == signature:
+            return state[1]
+        fn = None
+        text = "surface display export unavailable; surface grid lines use the Python route"
+        if signature[1] not in SURFACE_DISPLAY_QUALIFIED_PLATFORMS:
+            text = ("not qualified on {}/{}; surface grid lines use the Python route"
+                    .format(*signature[1]))
+        else:
+            explicit = os.environ.get(_ENV)
+            path = (Path(explicit).expanduser() if explicit else
+                    Path(__file__).resolve().parent / "native" / _library_name())
+            try:
+                fn = ctypes.CDLL(str(path)).narwhal_pure_core_surface_display_params
+                fn.argtypes = [ctypes.c_char_p, ctypes.c_size_t, ctypes.c_uint32,
+                               ctypes.c_double, ctypes.c_uint8, _D, ctypes.c_size_t,
+                               ctypes.POINTER(ctypes.c_size_t)]
+                fn.restype = ctypes.c_int32
+            except (AttributeError, OSError):
+                fn = None
+            if fn is not None and not _surface_display_parity(fn, reference, tolerance):
+                fn = None
+                text = (f"rhino3dm {getattr(r3, '__version__', '?')} differs from the Rust "
+                        "surface grid lines on the witness surfaces; surface grid lines use "
+                        "the Python route")
+            elif fn is not None:
+                text = "qualified"
+        _surface_display_state = signature, fn, text
+        return fn
+
+
+def surface_display_capability(reference, tolerance):
+    """``"qualified"`` when surface display grid lines are placed in Rust, otherwise the
+    reason. `reference` is the Python route the one-time parity check compares with, at
+    `tolerance`."""
+    _surface_display_binding(reference, tolerance)
+    return _surface_display_state[2]
+
+
+def _face_is_its_surface(face, source):
+    """Whether `face` has `source`'s domains and closure and evaluates as `source` at two
+    off-diagonal points, so that it is not held transposed."""
+    domains = [(face.Domain(d), source.Domain(d)) for d in (0, 1)]
+    if any((a.T0, a.T1) != (b.T0, b.T1) for a, b in domains):
+        return False
+    if any(face.IsClosed(d) != source.IsClosed(d) for d in (0, 1)):
+        return False
+    (du, _), (dv, _) = domains
+    for fu, fv in ((0.3, 0.7), (0.6, 0.15)):
+        u, v = du.T0 + (du.T1 - du.T0) * fu, dv.T0 + (dv.T1 - dv.T0) * fv
+        p, q = face.PointAt(u, v), source.PointAt(u, v)
+        if _packed(((p.X, p.Y, p.Z),)) != _packed(((q.X, q.Y, q.Z),)):
+            return False
+    return True
+
+
+def surface_display_params(surface, direction, tolerance, reference):
+    """`reference(surface, direction, tolerance)` (`bridge._python_surface_axis_params`)
+    through Rust for a NurbsSurface, or a BrepFace that evaluates as its underlying
+    NurbsSurface; None where the Python route must run."""
+    global _native_surface_display_calls
+    fn = _surface_display_binding(reference, tolerance)
+    if fn is None:
+        return None
+    try:
+        face = isinstance(surface, r3.BrepFace)
+        # rhino3dm hands a face's surface back as a plain Surface; its record still names its
+        # class, and the export reads only ON_NurbsSurface records.
+        source = surface.UnderlyingSurface() if face else surface
+        if not isinstance(source, r3.Surface):
+            return None
+        if face and not _face_is_its_surface(surface, source):
+            return None
+        # Python places a line on every knot only where the object exposes KnotsU / KnotsV.
+        got = _surface_display_call(fn, source, direction, tolerance,
+                                    isinstance(surface, r3.NurbsSurface))
+    except Exception:  # noqa: BLE001 -- the Python route decides
+        return None
+    if got is not None:
+        _native_surface_display_calls += 1
+    return got

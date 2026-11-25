@@ -154,6 +154,7 @@ def check_pure_consumers():
         getattr(ctypes.CDLL(str(library)), 'narwhal_pure_core_offset_fit')
         getattr(ctypes.CDLL(str(library)), 'narwhal_pure_core_surface_offset')
         getattr(ctypes.CDLL(str(library)), 'narwhal_pure_core_surface_grid')
+        getattr(ctypes.CDLL(str(library)), 'narwhal_pure_core_surface_display_params')
         # Scalar: a tiny caller-owned NURBS, searched through the required native
         # scalar export (narwhal_pure_core_nearest_on_nurbs).
         scalar = native_nearest.PackedCurve(2, [0., 1.],

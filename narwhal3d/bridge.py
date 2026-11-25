@@ -973,6 +973,17 @@ def _surface_interior_knots(surface, direction):
 
 
 def _surface_axis_params(surface, direction, tolerance):
+    """Adaptive, KNOT-AWARE sample parameters along a surface direction: Rust
+    (`native_nearest.surface_display_params`) where qualified, otherwise
+    `_python_surface_axis_params`, with the same bits."""
+    got = _native_nearest().surface_display_params(surface, direction, tolerance,
+                                                   _python_surface_axis_params)
+    if got is not None:
+        return got
+    return _python_surface_axis_params(surface, direction, tolerance)
+
+
+def _python_surface_axis_params(surface, direction, tolerance):
     """Adaptive, KNOT-AWARE sample parameters along a surface direction.
 
     The count comes from `_iso_segments` (chord tolerance; a straight direction

@@ -58,6 +58,7 @@ mod python_text;
 pub mod remove_join_cv;
 pub mod stl;
 pub mod surface;
+pub mod surface_display;
 pub mod surface_offset;
 pub mod svgpath;
 pub mod tween;
