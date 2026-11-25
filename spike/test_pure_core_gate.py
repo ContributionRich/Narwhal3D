@@ -237,6 +237,7 @@ def _():
         "spike/test_pure_core_offset_fit_gate.py",
         "spike/test_pure_core_surface_offset_gate.py",
         "spike/test_offset_fit.py",
+        "spike/test_dxf_approx.py",
         "spike/test_surface_offset.py",
         "spike/test_surface_grid.py",
         "spike/test_native_coil_preview.py",

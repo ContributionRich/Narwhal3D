@@ -253,6 +253,7 @@ class ApplicationPackaging(unittest.TestCase):
                 patch.object(linux_verify, "probe_pure_core_remove_join_cv", return_value={"qualified_separately": True}) as joint, \
                 patch.object(linux_verify, "probe_pure_core_polycurve_samples", return_value={"qualified_separately": True}) as polycurve_samples, \
                 patch.object(linux_verify, "probe_pure_core_offset_fit", return_value={"qualified_separately": True}) as offset_fit, \
+                patch.object(linux_verify, "probe_pure_core_dxf_approx", return_value={"qualified_separately": True}) as dxf_approx, \
                 patch.object(linux_verify, "probe_pure_core_surface_offset", return_value={"qualified_separately": True}) as surface_offset, \
                 patch.object(linux_verify, "probe_pure_core_surface_grid", return_value={"qualified_separately": True}) as surface_grid, \
                      patch.object(linux_verify, "probe_pure_core_polyline_nearest", return_value={"qualified_separately": True}) as polyline_nearest, \
@@ -296,7 +297,7 @@ class ApplicationPackaging(unittest.TestCase):
                         root / "narwhal3d/native/libnarwhal_pure_core.so", Path("python"), env={})
                     polyline_samples.assert_called_once_with(
                         root / "narwhal3d/native/libnarwhal_pure_core.so", Path("python"), env={})
-                    for probe in (offset_fit, surface_offset, surface_grid):
+                    for probe in (offset_fit, dxf_approx, surface_offset, surface_grid):
                         probe.assert_called_once_with(
                             root / "narwhal3d/native/libnarwhal_pure_core.so", Path("python"), env={})
 
@@ -314,6 +315,7 @@ class ApplicationPackaging(unittest.TestCase):
                 patch.object(linux_verify, "probe_pure_core_remove_join_cv", return_value={"qualified_separately": True}) as joint, \
                 patch.object(linux_verify, "probe_pure_core_polycurve_samples", return_value={"qualified_separately": True}) as polycurve_samples, \
                 patch.object(linux_verify, "probe_pure_core_offset_fit", return_value={"qualified_separately": True}) as offset_fit, \
+                patch.object(linux_verify, "probe_pure_core_dxf_approx", return_value={"qualified_separately": True}) as dxf_approx, \
                 patch.object(linux_verify, "probe_pure_core_surface_offset", return_value={"qualified_separately": True}) as surface_offset, \
                 patch.object(linux_verify, "probe_pure_core_surface_grid", return_value={"qualified_separately": True}) as surface_grid, \
                      patch.object(linux_verify, "probe_pure_core_polyline_nearest", return_value={"qualified_separately": True}) as polyline_nearest, \
@@ -328,7 +330,7 @@ class ApplicationPackaging(unittest.TestCase):
                         linux_verify.verify_native_library_abis(Path("app"), Path("python"), {})
                 retirement.assert_called_once_with(
                     Path("app/narwhal3d/native/libnarwhal_pure_core.so"), Path("python"), env={})
-                for probe in (offset_fit, surface_offset, surface_grid):
+                for probe in (offset_fit, dxf_approx, surface_offset, surface_grid):
                     probe.assert_called_once_with(
                         Path("app/narwhal3d/native/libnarwhal_pure_core.so"), Path("python"), env={})
                 curve_records.assert_called_once_with(

@@ -125,3 +125,18 @@ pub unsafe extern "C" fn narwhal_pure_core_norm_v1(
     }
     0
 }
+
+extern "C" {
+    // The platform libm `pow`, which CPython's `float_pow` calls.
+    fn pow(x: f64, y: f64) -> f64;
+}
+
+/// CPython `x ** 2` for a float `x`: `float_pow` keeps its exact special cases, then takes
+/// `|x|` (2 is even) and calls libm `pow`, which is not always the rounded `x * x`. The
+/// exponent is opaque so the compiler cannot fold the call to `x * x`.
+pub(crate) fn py_square(x: f64) -> f64 {
+    if x.is_nan() || x.is_infinite() || x == 0.0 || x.abs() == 1.0 {
+        return x * x;
+    }
+    unsafe { pow(x.abs(), std::hint::black_box(2.0)) }
+}

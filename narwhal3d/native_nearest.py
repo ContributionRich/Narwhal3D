@@ -1451,3 +1451,139 @@ def surface_grid(surface, us, vs):
         return None
     _native_surface_grid_calls += 1
     return got
+
+
+# DXF curve approximation (narwhal_pure_core_dxf_approx_points, native/pure_core/src/dxf_approx.rs):
+# `export_commands._approx_points`, the POLYLINE Export writes for a free-form curve, read from a
+# NurbsCurve's Encode() record with `nearest::Nurbs` as its PointAt. Gated by
+# DXF_APPROX_QUALIFIED_PLATFORMS and the loaded rhino3dm passing `_dxf_approx_parity` against the
+# Python route on witness curves.
+DXF_APPROX_QUALIFIED_PLATFORMS = frozenset({("linux", "x86_64")})
+_DXF_APPROX_ROOM = 4
+_DXF_APPROX_WITNESS_SEED = 20261125
+_dxf_approx_state = None            # (signature, binding or None, capability text)
+_native_dxf_approx_calls = 0
+
+
+def _dxf_approx_call(fn, curve, tol, t0, t1):
+    """The points for `curve` (whose record must be an ON_NurbsCurve) as ``(x, y, z)``, or
+    None."""
+    record = base64.b64decode(curve.Encode()["data"])
+    capacity = 4096
+    for _attempt in range(2):
+        out = array.array("d", bytes(24 * capacity))
+        count = ctypes.c_size_t(0)
+        code = fn(record, len(record), float(tol), float(t0), float(t1),
+                  (ctypes.c_double * len(out)).from_buffer(out), capacity, ctypes.byref(count))
+        if code == 0:
+            it = iter(out[:3 * count.value])
+            return list(zip(it, it, it))
+        if code != _DXF_APPROX_ROOM:
+            return None
+        capacity = count.value
+    return None
+
+
+def _dxf_approx_witnesses():
+    """``(curve, tol, t0, t1)`` on irregular doubles, where a fused multiply-add in PointAt
+    would round most points differently: a cubic wave on non-uniform knots in a shifted
+    domain, over its whole domain and over an inner interval, a rational quadratic, and a
+    circle off the origin (rational Bezier spans), each at a tolerance that halves its
+    intervals several times."""
+    rng = random.Random(_DXF_APPROX_WITNESS_SEED)
+    wave = r3.NurbsCurve.Create(False, 3, [
+        r3.Point3d(i * rng.uniform(1.6, 2.4), math.sin(i * 0.9) * rng.uniform(2.0, 4.0),
+                   rng.uniform(-1.0, 1.0)) for i in range(11)])
+    inner = sorted(rng.uniform(0.05, 0.95) for _ in range(len(wave.Knots) - 6))
+    a, b = rng.uniform(-7.0, -1.0), rng.uniform(2.0, 9.0)
+    for i, k in enumerate([0.0] * 3 + inner + [1.0] * 3):
+        wave.Knots[i] = a + (b - a) * k
+    arc = r3.NurbsCurve(3, True, 3, 7)
+    for i in range(7):
+        w = rng.uniform(0.5, 1.5)
+        arc.Points[i] = r3.Point4d(math.cos(i * 0.8) * 5.0 * w, math.sin(i * 0.8) * 4.0 * w,
+                                   rng.uniform(-0.5, 0.5) * w, w)
+    inner = sorted(rng.uniform(0.1, 0.9) for _ in range(4))
+    for i, k in enumerate([0.0] * 2 + inner + [1.0] * 2):
+        arc.Knots[i] = 3.0 * k - 1.0
+    circle = r3.Circle(r3.Point3d(rng.uniform(-9.0, 9.0), rng.uniform(-9.0, 9.0),
+                                  rng.uniform(-3.0, 3.0)), rng.uniform(2.0, 7.0)).ToNurbsCurve()
+    d, e, f = wave.Domain, arc.Domain, circle.Domain
+    return [(wave, 1e-3, d.T0, d.T1),
+            (wave, 3e-4, d.T0 + (d.T1 - d.T0) * 0.3, d.T0 + (d.T1 - d.T0) * 0.8),
+            (arc, 1e-3, e.T0, e.T1), (circle, 1e-3, f.T0, f.T1)]
+
+
+def _dxf_approx_parity(fn, reference):
+    """True when `reference` (the Python route) on the loaded rhino3dm gives Rust's points,
+    bit for bit, on every witness."""
+    try:
+        for curve, tol, t0, t1 in _dxf_approx_witnesses():
+            got = _dxf_approx_call(fn, curve, tol, t0, t1)
+            if got is None or _packed(got) != _packed(reference(curve, tol, t0, t1)):
+                return False
+    except Exception:  # noqa: BLE001 -- an SDK that cannot be checked is not qualified
+        return False
+    return True
+
+
+def _dxf_approx_binding(reference):
+    global _dxf_approx_state
+    signature = (os.environ.get(_ENV) or "<packaged>", _here(), id(r3))
+    state = _dxf_approx_state
+    if state is not None and state[0] == signature:
+        return state[1]
+    with _lock:
+        state = _dxf_approx_state
+        if state is not None and state[0] == signature:
+            return state[1]
+        fn, text = None, "DXF approximation export unavailable; DXF curves use the Python route"
+        if signature[1] not in DXF_APPROX_QUALIFIED_PLATFORMS:
+            text = ("not qualified on {}/{}; DXF curves use the Python route"
+                    .format(*signature[1]))
+        else:
+            explicit = os.environ.get(_ENV)
+            path = (Path(explicit).expanduser() if explicit else
+                    Path(__file__).resolve().parent / "native" / _library_name())
+            try:
+                fn = ctypes.CDLL(str(path)).narwhal_pure_core_dxf_approx_points
+                fn.argtypes = [ctypes.c_char_p, ctypes.c_size_t, ctypes.c_double,
+                               ctypes.c_double, ctypes.c_double, _D, ctypes.c_size_t,
+                               ctypes.POINTER(ctypes.c_size_t)]
+                fn.restype = ctypes.c_int32
+            except (AttributeError, OSError):
+                fn = None
+            if fn is not None and not _dxf_approx_parity(fn, reference):
+                fn = None
+                text = (f"rhino3dm {getattr(r3, '__version__', '?')} differs from the Rust "
+                        "DXF approximation on the witness curves; DXF curves use the Python "
+                        "route")
+            elif fn is not None:
+                text = "qualified"
+        _dxf_approx_state = signature, fn, text
+        return fn
+
+
+def dxf_approx_capability(reference):
+    """``"qualified"`` when DXF curve approximation runs in Rust, otherwise the reason.
+    `reference` is the Python route the one-time parity check compares with."""
+    _dxf_approx_binding(reference)
+    return _dxf_approx_state[2]
+
+
+def dxf_approx_points(curve, tol, t0, t1, reference):
+    """`reference(curve, tol, t0, t1)` (`export_commands._python_approx_points`) through Rust
+    for a curve whose record is an ON_NurbsCurve; None where the Python route must run."""
+    global _native_dxf_approx_calls
+    if not isinstance(curve, r3.Curve):
+        return None
+    fn = _dxf_approx_binding(reference)
+    if fn is None:
+        return None
+    try:
+        got = _dxf_approx_call(fn, curve, tol, t0, t1)
+    except Exception:  # noqa: BLE001 -- the Python route decides
+        return None
+    if got is not None:
+        _native_dxf_approx_calls += 1
+    return got

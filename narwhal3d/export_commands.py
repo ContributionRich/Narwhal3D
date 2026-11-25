@@ -205,7 +205,19 @@ def _mesh_message(kind, path, n, ntri, tolerance, angle_deg, model, skipped):
     return msg
 
 
-def _approx_points(curve, tol, t0, t1, depth=0):
+def _approx_points(curve, tol, t0, t1):
+    """Points along `curve` from t0 to t1 whose chords stay within `tol`: Rust
+    (`native_nearest.dxf_approx_points`) where qualified, otherwise `_python_approx_points`,
+    with the same bits."""
+    from . import native_nearest
+
+    got = native_nearest.dxf_approx_points(curve, tol, t0, t1, _python_approx_points)
+    if got is not None:
+        return got
+    return _python_approx_points(curve, tol, t0, t1)
+
+
+def _python_approx_points(curve, tol, t0, t1, depth=0):
     """Points along `curve` from t0 to t1 whose chords stay within `tol` (checked at the
     quarter, half and three-quarter points of every chord)."""
     a, b = curve.PointAt(t0), curve.PointAt(t1)
@@ -222,8 +234,8 @@ def _approx_points(curve, tol, t0, t1, depth=0):
     if worst <= tol or depth >= 18:
         return [(a.X, a.Y, a.Z), (b.X, b.Y, b.Z)]
     tm = (t0 + t1) / 2.0
-    left = _approx_points(curve, tol, t0, tm, depth + 1)
-    return left[:-1] + _approx_points(curve, tol, tm, t1, depth + 1)
+    left = _python_approx_points(curve, tol, t0, tm, depth + 1)
+    return left[:-1] + _python_approx_points(curve, tol, tm, t1, depth + 1)
 
 
 def _dxf_entities(curve, tol, k):

@@ -30,6 +30,7 @@ pub mod coords_owned;
 pub mod curvex;
 pub mod display;
 pub mod dxf;
+pub mod dxf_approx;
 pub mod earclip;
 pub mod fit;
 pub mod gridsnap;

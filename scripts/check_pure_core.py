@@ -127,6 +127,7 @@ PURE_CORE_PYTESTS = (
     "spike/test_pure_core_surface_offset_gate.py",
     "spike/test_offset_fit.py",
     "spike/test_surface_offset.py",
+    "spike/test_dxf_approx.py",
     "spike/test_surface_grid.py",
     "spike/test_native_coil_preview.py",
     "spike/test_preview_curve_native.py",
@@ -2133,6 +2134,120 @@ def probe_pure_core_offset_fit(path: Path, python: Path | str = sys.executable, 
         raise ValueError(f"pure-core offset fit evidence differs: {identity!r}")
     return identity
 
+# DXF curve approximation (export_commands._approx_points through
+# native_nearest.dxf_approx_points): the POLYLINE Export writes for a free-form curve, from a
+# NurbsCurve's Encode() record with nearest::Nurbs as its PointAt. A library without it loses
+# only the Rust route: DXF curves are then approximated by the Python route.
+PURE_CORE_DXF_APPROX_EXPORT = "narwhal_pure_core_dxf_approx_points"
+# (sys.platform, machine) pairs; narwhal3d/native_nearest.py DXF_APPROX_QUALIFIED_PLATFORMS
+# must carry the same set (spike/test_dxf_approx.py checks the route there).
+PURE_CORE_DXF_APPROX_QUALIFIED_PLATFORMS = frozenset({("linux", "x86_64")})
+# The digest pins the points on native_nearest._dxf_approx_witnesses(); it is also the digest of
+# export_commands._python_approx_points on rhino3dm 8.35.0.
+PURE_CORE_DXF_APPROX_IDENTITY = {
+    "export": PURE_CORE_DXF_APPROX_EXPORT,
+    "unrecognised_record_status": 1, "nan_tolerance_status": -2, "null_count_status": -1,
+    "room_status": 4, "room_writes_count_only": True, "refusals_write": False,
+    "points_sha256": "f1136a3e3db82f990e0abc2d2aae955fe14d167a0fb8930021ab6fbb7802fce3",
+}
+PURE_CORE_DXF_APPROX_PROBE = r'''
+import ctypes as c, hashlib, json, struct, sys
+fn = c.CDLL(sys.argv[1]).narwhal_pure_core_dxf_approx_points
+D, Z = c.POINTER(c.c_double), c.c_size_t
+fn.argtypes = [c.c_char_p, Z, c.c_double, c.c_double, c.c_double, D, Z, c.POINTER(Z)]
+fn.restype = c.c_int32
+h = float.fromhex
+# native_nearest._dxf_approx_witnesses() as rhino3dm 8.35.0 encodes them.
+wave = bytes.fromhex(
+    "fa7f0200fe01000000000000fbff02001400000000000000ddd4d74e47e9d311bfe50010830122f010f2"
+    "7870fcff0200c601000000000000110300000000000000040000000b0000000000000000000000000000"
+    "000000f03f00000000000000000000000000000000000000000000f0bf00000000000000000000000000"
+    "0000000d00000050b23756c73c17c050b23756c73c17c050b23756c73c17c0206b9dc2d8550ec08348ec"
+    "eda6b500c00c291fb9e468f3bfb0f6dc53bb78eebf78cae7ec3191e7bfb8cee1d371c4e83f807ed72104"
+    "12fa3fa8582cc265421440a8582cc265421440a8582cc2654214400b0000000000000000000000000000"
+    "0000000000d0871c9c5f3cb8bf75cc81b137bcfc3f2f6194ff59fef93f28a830fa0c71cabf20a9c8bac0"
+    "14114052fdd3a76e7f0b401e159fbd8219e8bfdad6bf100e3e1c40b84f510b7dddf33f18b56e487d16e0"
+    "3f859ee30af15f2240fc7f3a92bbeffabf0cce1aac4e39d13f851cdd86497d22406471aba534a109c078"
+    "f3b1707903df3fc6ebf0652971234029f36ac4d2c5ffbfec3d7e7a0acddc3f7794725b44bc2c40b3012b"
+    "d2ede6ab3f3471c9c5cb8ae0bf3e6b4444912b2f405258a10f3c340940702aefe1dbe0e13ffc6522e3ec"
+    "113140ab453655d4560a4064ecba9ca72ee03f0ac7530a61493640ad7ea39685e3ea3fd8810fe61b17e0"
+    "3f004f2c430bff7f02800000000000000000")
+arc = bytes.fromhex(
+    "fa7f0200ae01000000000000fbff02001400000000000000ddd4d74e47e9d311bfe50010830122f010f2"
+    "7870fcff0200760100000000000011030000000100000003000000070000000000000000000000000000"
+    "000000f03f00000000000000000000000000000000000000000000f0bf00000000000000000000000000"
+    "00000008000000000000000000f0bf000000000000f0bfcc93cfa3e711d73f907c2018cbcbda3fe26c41"
+    "d6c41cef3f2af6901cc51ff83f0000000000000040000000000000004007000000fb06c806cf31164000"
+    "00000000000000e76b6dd1a621de3fc938d36b72c1f13f8f614647463f114066afa8abd1690c40bef51e"
+    "c84a44e33fd8324a5be1cdf33fc2cfdb752308bebf2dd58d809cb309400be70f7923ffd5bf9b87f4056b"
+    "b6e93f07ca12cba64702c0db7e63b29acafa3f5a932397cb93bb3f356c27bef6d4e33f8ff4fea1dccd1b"
+    "c007b9c70d79cfd4bf62a114e9f91ede3f9c35611f0448f63fd78e9123cd290bc02dd591e0012909c0f2"
+    "cfa2a43bf5b43fb0465f8a689ff03f29e5db74b1d2d63fa150bba3d4fb09c08aaa5595f512da3fe3b1f3"
+    "f37015ea3f000f39e443ff7f02800000000000000000")
+circle = bytes.fromhex(
+    "fa7f0200fe01000000000000fbff02001400000000000000ddd4d74e47e9d311bfe50010830122f010f2"
+    "7870fcff0200c60100000000000011030000000100000003000000090000000000000000000000000000"
+    "000000f03f00000000000000000000000000000000000000000000f0bf00000000000000000000000000"
+    "0000000a00000000000000000000000000000000000000182d4454fb21f93f182d4454fb21f93f182d44"
+    "54fb210940182d4454fb210940d221337f7cd91240d221337f7cd91240182d4454fb211940182d4454fb"
+    "211940090000007f966ce10b9613c0f021326e274f21c03296356ce97404c0000000000000f03fce2af1"
+    "b3eeb20bc09f176c4407ca0cc076cf90981ceefcbfcc3b7f669ea0e63f890e5b8c7aec20c04dbd1aa565"
+    "5b14c03296356ce97404c0000000000000f03f68c32029510221c09f176c4407ca0cc076cf90981ceefc"
+    "bfcc3b7f669ea0e63fd2d1ff27ef0d28c0f021326e274f21c03296356ce97404c0000000000000f03f68"
+    "c32029510221c09d7e3f4d174821c076cf90981ceefcbfcc3b7f669ea0e63f890e5b8c7aec20c03ae5d6"
+    "099c7028c03296356ce97404c0000000000000f03fce2af1b3eeb20bc09d7e3f4d174821c076cf90981c"
+    "eefcbfcc3b7f669ea0e63f7f966ce10b9613c0f021326e274f21c03296356ce97404c0000000000000f0"
+    "3f00a8fca415ff7f02800000000000000000")
+witnesses = ((wave, h("0x1.0624dd2f1a9fcp-10"), h("-0x1.73cc75637b250p+2"), h("0x1.44265c22c58a8p+2")), (wave, h("0x1.3a92a30553261p-12"), h("-0x1.460739dccf7a5p+1"), h("0x1.71eb97a971354p+1")), (arc, h("0x1.0624dd2f1a9fcp-10"), h("-0x1.0000000000000p+0"), h("0x1.0000000000000p+1")), (circle, h("0x1.0624dd2f1a9fcp-10"), h("0x0.0p+0"), h("0x1.921fb54442d18p+2")))
+
+
+def call(record, tol, t0, t1, cap=4096, count=True):
+    out = (c.c_double * (3 * max(cap, 1)))(*[-9.0] * (3 * max(cap, 1)))
+    n = Z(7)
+    code = fn(record, 0 if record is None else len(record), tol, t0, t1, out, cap,
+              c.byref(n) if count else None)
+    return code, list(out), n.value
+
+
+bits = b""
+for record, tol, t0, t1 in witnesses:
+    code, out, n = call(record, tol, t0, t1)
+    if code != 0:
+        raise RuntimeError("the export refused a witness curve")
+    bits += struct.pack(f"<Q{3 * n}d", n, *out[:3 * n])
+record, tol, t0, t1 = witnesses[0]
+need = call(record, tol, t0, t1)[2]
+room = call(record, tol, t0, t1, cap=need - 1)
+refusals = {
+    "unrecognised_record_status": call(b"not a record", tol, t0, t1),
+    "nan_tolerance_status": call(record, float("nan"), t0, t1),
+    "null_count_status": call(record, tol, t0, t1, count=False),
+}
+untouched = all(set(r[1]) == {-9.0} and r[2] == 7 for r in refusals.values())
+print(json.dumps({"export": "narwhal_pure_core_dxf_approx_points",
+                  **{name: r[0] for name, r in refusals.items()},
+                  "room_status": room[0],
+                  "room_writes_count_only": set(room[1]) == {-9.0} and room[2] == need,
+                  "refusals_write": not untouched,
+                  "points_sha256": hashlib.sha256(bits).hexdigest()}, sort_keys=True))
+'''
+
+
+def probe_pure_core_dxf_approx(path: Path, python: Path | str = sys.executable, *, env=None) -> dict:
+    """Require the DXF approximation export to give the pinned witness points and refusals."""
+    if not path.is_file() or path.is_symlink():
+        raise ValueError(f"missing regular pure-core library: {path}")
+    try:
+        completed = subprocess.run(
+            [str(python), "-I", "-B", "-c", PURE_CORE_DXF_APPROX_PROBE, str(path.resolve())],
+            env=env, text=True, capture_output=True, check=True, timeout=60)
+        identity = json.loads(completed.stdout)
+    except (OSError, subprocess.SubprocessError, ValueError) as error:
+        raise ValueError(f"cannot verify pure-core DXF approximation export: {getattr(error, 'stderr', '') or error}") from error
+    if identity != PURE_CORE_DXF_APPROX_IDENTITY:
+        raise ValueError(f"pure-core DXF approximation evidence differs: {identity!r}")
+    return identity
+
 # Surface offsets (offset.surface_offset through native_nearest.surface_offset_fit): the
 # refinement loop with openNURBS's ON_NurbsSurface::Evaluate, ON_Surface::EvNormal (with its
 # singular-point branch) and ON_NurbsSurface::InsertKnot ported, read from the surface's
@@ -2897,6 +3012,16 @@ def step_offset_fit(lib_path: Path) -> dict[str, object]:
             "command": "ctypes offset fit probe"}
 
 
+def step_dxf_approx(lib_path: Path) -> dict[str, object]:
+    """Qualify the DXF approximation export; required for the library to carry it."""
+    try:
+        identity = probe_pure_core_dxf_approx(lib_path)
+    except ValueError as exc:
+        raise GateError(str(exc)) from exc
+    return {"status": "ok", "dxf_approx": identity,
+            "command": "ctypes DXF approximation probe"}
+
+
 def step_surface_offset(lib_path: Path) -> dict[str, object]:
     """Qualify the surface offset export; required for the library to carry it."""
     try:
@@ -3012,6 +3137,7 @@ def run_gate(crate_rel: str) -> dict[str, object]:
     steps["polycurve_samples"] = step_polycurve_samples(lib)
     steps["remove_join_cv"] = probe_pure_core_remove_join_cv(lib)
     steps["offset_fit"] = step_offset_fit(lib)
+    steps["dxf_approx"] = step_dxf_approx(lib)
     steps["surface_offset"] = step_surface_offset(lib)
     steps["surface_grid"] = step_surface_grid(lib)
     steps["svg_unit"] = step_svg_unit(lib)
