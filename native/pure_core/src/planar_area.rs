@@ -20,6 +20,8 @@
 //! admits only a qualified platform whose loaded rhino3dm reproduces the Python route on its
 //! witness curves. Anything else is NOT_RECOGNISED and Python runs its own route.
 
+use crate::curvex::{polyline_from_record, Polyline};
+use crate::line_samples::{polycurve_from_record, PolyEval};
 use crate::nearest::{region, separate, Nurbs};
 use crate::nurbs_record;
 use crate::offset::knot_vector_is_valid;
@@ -112,8 +114,36 @@ fn gauss_legendre(n: usize) -> (Vec<f64>, Vec<f64>) {
     (nodes, weights)
 }
 
+/// The curve `curve_plane` samples: the Python object itself, whose `PointAt` is its own
+/// class's `Evaluate`.
+enum PlaneCurve<'a> {
+    Nurbs(&'a Nurbs<'a>),
+    Poly(PolyEval<'a>, (f64, f64)),
+    Polyline(&'a Polyline),
+}
+
+impl PlaneCurve<'_> {
+    /// `Domain()`.
+    fn domain(&self) -> (f64, f64) {
+        match self {
+            PlaneCurve::Nurbs(c) => c.domain(),
+            PlaneCurve::Poly(_, ends) => *ends,
+            PlaneCurve::Polyline(p) => p.ends(),
+        }
+    }
+
+    /// `PointAt(t)`.
+    fn point(&self, t: f64) -> P3 {
+        match self {
+            PlaneCurve::Nurbs(c) => c.point(t),
+            PlaneCurve::Poly(p, _) => p.point(t),
+            PlaneCurve::Polyline(p) => p.point(t),
+        }
+    }
+}
+
 /// `analysis.curve_plane(curve)` after `IsPlanar`: `(origin, unit normal)`, or None.
-fn curve_plane(curve: &Nurbs) -> Result<Option<(P3, P3)>, Declined> {
+fn curve_plane(curve: &PlaneCurve) -> Result<Option<(P3, P3)>, Declined> {
     let (t0, t1) = curve.domain();
     let mut pts = Vec::with_capacity(PLANE_SAMPLES);
     for i in 0..PLANE_SAMPLES {
@@ -182,9 +212,13 @@ fn green_moments(
 }
 
 /// `planar_curve_area_centroid` after `IsClosed` and `IsPlanar`: `(area, area_err,
-/// centroid, centroid_err)`, or None where Python returns None.
-fn area_centroid(curve: &Nurbs) -> Result<Option<(f64, f64, P3, P3)>, Declined> {
-    let Some((origin, nrm)) = curve_plane(curve)? else {
+/// centroid, centroid_err)`, or None where Python returns None. `shape` is the curve the plane
+/// is sampled on, `curve` its NURBS form (`curve.ToNurbsCurve()` unless it is a NurbsCurve).
+fn area_centroid(
+    shape: &PlaneCurve,
+    curve: &Nurbs,
+) -> Result<Option<(f64, f64, P3, P3)>, Declined> {
+    let Some((origin, nrm)) = curve_plane(shape)? else {
         return Ok(None);
     };
     let seed = if nrm[0].abs() < 0.9 {
@@ -218,7 +252,7 @@ fn area_centroid(curve: &Nurbs) -> Result<Option<(f64, f64, P3, P3)>, Declined> 
     Ok(Some((hi.0, area_err, hi.1, c_err)))
 }
 
-fn decide(record: &[u8]) -> Result<Option<[f64; RESULT_LEN]>, Declined> {
+fn decide(shape_record: &[u8], record: &[u8]) -> Result<Option<[f64; RESULT_LEN]>, Declined> {
     let rec = nurbs_record::read(record).ok_or(Declined)?;
     if rec.knot_count > MAX_KNOTS {
         return Err(Declined);
@@ -232,7 +266,22 @@ fn decide(record: &[u8]) -> Result<Option<[f64; RESULT_LEN]>, Declined> {
         return Err(Declined);
     }
     let curve = Nurbs::new(rec.order, &knots, &cvs, rec.rational).ok_or(Declined)?;
-    let Some((area, area_err, c, c_err)) = area_centroid(&curve)? else {
+    // The curve itself: the NURBS record when no other is given, else a PolyCurve or a
+    // PolylineCurve.
+    let poly;
+    let polyline;
+    let shape = if shape_record.is_empty() {
+        PlaneCurve::Nurbs(&curve)
+    } else if let Some(p) = polycurve_from_record(shape_record) {
+        poly = p;
+        PlaneCurve::Poly(poly.eval().ok_or(Declined)?, poly.ends())
+    } else if let Some(p) = polyline_from_record(shape_record) {
+        polyline = p;
+        PlaneCurve::Polyline(&polyline)
+    } else {
+        return Err(Declined);
+    };
+    let Some((area, area_err, c, c_err)) = area_centroid(&shape, &curve)? else {
         return Ok(None);
     };
     let out = [
@@ -245,37 +294,47 @@ fn decide(record: &[u8]) -> Result<Option<[f64; RESULT_LEN]>, Declined> {
     }
 }
 
-/// `analysis.planar_curve_area_centroid(curve)` for a closed, planar `NurbsCurve` whose
-/// `Encode()` record is `record` (the caller checks `IsClosed` and `IsPlanar`).
+/// `analysis.planar_curve_area_centroid(curve)` for a closed, planar curve (the caller checks
+/// `IsClosed` and `IsPlanar`). `record` is the `Encode()` record of its NURBS form: the curve
+/// itself when it is a `NurbsCurve`, with `shape_len` 0, else `curve.ToNurbsCurve()`, with the
+/// curve's own `PolyCurve` or `PolylineCurve` record in `shape`, on which the plane is
+/// sampled.
 ///
 /// Returns 0 with `area, area_err, cx, cy, cz, cx_err, cy_err, cz_err` in `out`; NO_REGION (3)
 /// where Python returns None (no plane, or no area); NOT_RECOGNISED (1) when the record is not
-/// a valid 3-D `ON_NurbsCurve`, has more than 2^16 knots, or a value is not finite, so Python
-/// runs; ERR_NULL (-1) for a null, misaligned or overlapping pointer. `out` is written only on
+/// a valid 3-D `ON_NurbsCurve`, `shape` is not a polycurve or polyline this crate evaluates,
+/// there are more than 2^16 knots, or a value is not finite, so Python runs; ERR_NULL (-1) for a null, misaligned or overlapping pointer. `out` is written only on
 /// 0.
 ///
 /// # Safety
-/// `record` is readable for `record_len` bytes and `out` writable for 8 doubles.
+/// `shape` is readable for `shape_len` bytes, `record` for `record_len` bytes and `out`
+/// writable for 8 doubles.
 #[no_mangle]
 pub unsafe extern "C" fn narwhal_pure_core_planar_area_centroid(
+    shape: *const u8,
+    shape_len: usize,
     record: *const u8,
     record_len: usize,
     out: *mut f64,
 ) -> i32 {
     let ranges = (
+        region(shape, shape_len),
         region(record, record_len),
         region(out.cast_const(), RESULT_LEN),
     );
-    let (Some(rr), Some(or)) = ranges else {
+    let (Some(sr), Some(rr), Some(or)) = ranges else {
         return ERR_NULL;
     };
-    if out.is_null() || !separate(&[rr], &[or]) {
+    if out.is_null() || !separate(&[sr, rr], &[or]) {
         return ERR_NULL;
     }
-    let Some(data) = (unsafe { crate::checked_slice(record, record_len) }) else {
+    let (Some(shape_data), Some(data)) = (
+        (unsafe { crate::checked_slice(shape, shape_len) }),
+        (unsafe { crate::checked_slice(record, record_len) }),
+    ) else {
         return ERR_NULL;
     };
-    match decide(data) {
+    match decide(shape_data, data) {
         Ok(Some(values)) => {
             let Some(slot) = (unsafe { crate::checked_slice_mut(out, RESULT_LEN) }) else {
                 return ERR_NULL;
@@ -308,7 +367,13 @@ mod tests {
     unsafe fn call(record: &[u8]) -> (i32, [f64; RESULT_LEN]) {
         let mut out = [-7.0; RESULT_LEN];
         let code = unsafe {
-            narwhal_pure_core_planar_area_centroid(record.as_ptr(), record.len(), out.as_mut_ptr())
+            narwhal_pure_core_planar_area_centroid(
+                std::ptr::null(),
+                0,
+                record.as_ptr(),
+                record.len(),
+                out.as_mut_ptr(),
+            )
         };
         (code, out)
     }
@@ -335,6 +400,56 @@ mod tests {
         assert!(out[1] < 1e-9 && out[5..].iter().all(|&e| e < 1e-9));
     }
 
+    unsafe fn call_shape(shape: &[u8], record: &[u8]) -> (i32, [f64; RESULT_LEN]) {
+        let mut out = [-7.0; RESULT_LEN];
+        let code = unsafe {
+            narwhal_pure_core_planar_area_centroid(
+                shape.as_ptr(),
+                shape.len(),
+                record.as_ptr(),
+                record.len(),
+                out.as_mut_ptr(),
+            )
+        };
+        (code, out)
+    }
+
+    #[test]
+    fn a_polyline_or_polycurve_samples_its_plane_on_itself() {
+        let corners = [
+            [0.0, 0.0, 1.0],
+            [2.0, 0.0, 1.0],
+            [2.0, 3.0, 1.0],
+            [0.0, 3.0, 1.0],
+            [0.0, 0.0, 1.0],
+        ];
+        let polyline = crate::curvex::polyline_record(&corners, &[0.0, 1.0, 2.0, 3.0, 4.0]);
+        let lines: Vec<Vec<u8>> = corners
+            .windows(2)
+            .enumerate()
+            .map(|(i, w)| {
+                let line = [w[0][0], w[0][1], w[0][2], w[1][0], w[1][1], w[1][2]];
+                crate::nurbs_record::line_record(&line, (i as f64, i as f64 + 1.0))
+            })
+            .collect();
+        let joined = crate::nurbs_record::polycurve_record(&[0.0, 1.0, 2.0, 3.0, 4.0], &lines);
+        let nurbs = rectangle();
+        let (code, alone) = unsafe { call(&nurbs) };
+        assert_eq!(code, 0);
+        for shape in [&polyline, &joined] {
+            let (code, out) = unsafe { call_shape(shape, &nurbs) };
+            assert_eq!(code, 0);
+            for (a, b) in out.iter().zip(&alone).take(5) {
+                assert!((a - b).abs() < 1e-12, "{out:?} {alone:?}");
+            }
+        }
+        // A shape that is neither is not recognised; the NURBS record must be a NURBS curve.
+        let (code, out) = unsafe { call_shape(b"not a record", &nurbs) };
+        assert_eq!((code, out), (NOT_RECOGNISED, [-7.0; RESULT_LEN]));
+        let (code, _) = unsafe { call_shape(&polyline, &polyline) };
+        assert_eq!(code, NOT_RECOGNISED);
+    }
+
     #[test]
     fn a_rational_circle_has_area_pi_r_squared() {
         let s = std::f64::consts::FRAC_1_SQRT_2;
@@ -356,7 +471,9 @@ mod tests {
         }
         let knots = [0.0, 0.0, 1.0, 1.0, 2.0, 2.0, 3.0, 3.0, 4.0, 4.0];
         let curve = Nurbs::new(3, &knots, &body, true).unwrap();
-        let (area, _, c, _) = area_centroid(&curve).unwrap().unwrap();
+        let (area, _, c, _) = area_centroid(&PlaneCurve::Nurbs(&curve), &curve)
+            .unwrap()
+            .unwrap();
         assert!(
             (area - std::f64::consts::PI * r * r).abs() < 1e-12,
             "{area}"
@@ -376,6 +493,8 @@ mod tests {
         let record = rectangle();
         let code = unsafe {
             narwhal_pure_core_planar_area_centroid(
+                std::ptr::null(),
+                0,
                 record.as_ptr(),
                 record.len(),
                 std::ptr::null_mut(),
@@ -386,8 +505,15 @@ mod tests {
         buf.resize(record.len() + 128, 0);
         let base = buf.as_mut_ptr();
         let aligned = unsafe { base.add(base.align_offset(8)) };
-        let code =
-            unsafe { narwhal_pure_core_planar_area_centroid(base, buf.len(), aligned.cast()) };
+        let code = unsafe {
+            narwhal_pure_core_planar_area_centroid(
+                std::ptr::null(),
+                0,
+                base,
+                buf.len(),
+                aligned.cast(),
+            )
+        };
         assert_eq!(code, ERR_NULL);
     }
 

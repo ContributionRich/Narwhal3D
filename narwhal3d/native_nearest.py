@@ -1470,10 +1470,15 @@ _native_planar_area_calls = 0
 
 def _planar_area_call(fn, curve):
     """``(area, area_err, centroid, centroid_err)``, NO_REGION, or None for a closed planar
-    curve whose record must be an ON_NurbsCurve."""
-    record = base64.b64decode(curve.Encode()["data"])
+    NurbsCurve, PolyCurve or PolylineCurve. As in the Python route, the plane is sampled on the
+    curve itself and Green's theorem runs on its NURBS form."""
+    if isinstance(curve, r3.NurbsCurve):
+        shape, record = b"", base64.b64decode(curve.Encode()["data"])
+    else:
+        shape = base64.b64decode(curve.Encode()["data"])
+        record = base64.b64decode(curve.ToNurbsCurve().Encode()["data"])
     out = (ctypes.c_double * 8)()
-    code = fn(record, len(record), out)
+    code = fn(shape, len(shape), record, len(record), out)
     if code == _PLANAR_AREA_NO_REGION:
         return NO_REGION
     if code != 0:
@@ -1484,8 +1489,10 @@ def _planar_area_call(fn, curve):
 def _planar_area_witnesses():
     """Closed planar NurbsCurves on irregular doubles in tilted planes, where a fused
     multiply-add would round most products differently: a periodic cubic blob, a rational
-    circle (Bezier spans), a degree-5 wave loop on non-uniform knots in a shifted domain, and
-    periodic blobs of degrees 2-5 (a fused Green sum changes about a quarter of all areas)."""
+    circle (Bezier spans), a degree-5 wave loop on non-uniform knots in a shifted domain,
+    periodic blobs of degrees 2-5 (a fused Green sum changes about a quarter of all areas), a
+    closed PolylineCurve, and a closed PolyCurve of a line, a cubic on a shifted domain and a
+    polyline."""
     rng = random.Random(_PLANAR_AREA_WITNESS_SEED)
     origin = r3.Point3d(rng.uniform(-9.0, 9.0), rng.uniform(-9.0, 9.0), rng.uniform(-9.0, 9.0))
     plane = r3.Plane(origin, r3.Vector3d(rng.uniform(0.2, 1.0), rng.uniform(-1.0, 1.0),
@@ -1509,7 +1516,24 @@ def _planar_area_witnesses():
         on_plane(math.cos(k * 0.6981) * rng.uniform(2.0, 6.0),
                  math.sin(k * 0.6981) * rng.uniform(2.0, 6.0)) for k in range(9)])
         for degree in (2, 3, 4, 5)]
-    return [blob, circle, wave, *blobs]
+    corners = [on_plane(math.cos(k * 1.0472) * rng.uniform(2.0, 6.0),
+                        math.sin(k * 1.0472) * rng.uniform(2.0, 6.0)) for k in range(6)]
+    polygon = r3.PolylineCurve(corners + [corners[0]])
+    a, b, c = (on_plane(rng.uniform(-6.0, -2.0), rng.uniform(-3.0, 3.0)),
+               on_plane(rng.uniform(2.0, 6.0), rng.uniform(-5.0, -1.0)),
+               on_plane(rng.uniform(1.0, 5.0), rng.uniform(2.0, 6.0)))
+    joined = r3.PolyCurve()
+    joined.Append(r3.LineCurve(a, b))
+    cubic = r3.NurbsCurve.Create(False, 3, [
+        b, on_plane(rng.uniform(6.0, 9.0), rng.uniform(-1.0, 1.0)),
+        on_plane(rng.uniform(5.0, 8.0), rng.uniform(3.0, 6.0)), c])
+    # A segment domain apart from its polycurve span, as a file can hold, so PointAt maps
+    # the parameter.
+    cubic.Domain = r3.Interval(rng.uniform(1.0, 3.0), rng.uniform(5.0, 9.0))
+    joined.Append(cubic)
+    joined.Append(r3.PolylineCurve([c, on_plane(rng.uniform(-2.0, 0.0), rng.uniform(4.0, 7.0)),
+                                    a]))
+    return [blob, circle, wave, *blobs, polygon, joined]
 
 
 def _planar_area_parity(fn, reference):
@@ -1553,7 +1577,8 @@ def _planar_area_binding(reference):
                     Path(__file__).resolve().parent / "native" / _library_name())
             try:
                 fn = ctypes.CDLL(str(path)).narwhal_pure_core_planar_area_centroid
-                fn.argtypes = [ctypes.c_char_p, ctypes.c_size_t, _D]
+                fn.argtypes = [ctypes.c_char_p, ctypes.c_size_t, ctypes.c_char_p,
+                               ctypes.c_size_t, _D]
                 fn.restype = ctypes.c_int32
             except (AttributeError, OSError):
                 fn = None
@@ -1576,10 +1601,10 @@ def planar_area_capability(reference):
 
 def planar_area_centroid(curve, reference):
     """`reference(curve)` (`analysis._python_planar_curve_area_centroid`) through Rust for a
-    NurbsCurve: its result, NO_REGION where it returns None, or None where the Python route
-    must run."""
+    NurbsCurve, PolyCurve or PolylineCurve: its result, NO_REGION where it returns None, or
+    None where the Python route must run."""
     global _native_planar_area_calls
-    if not isinstance(curve, r3.NurbsCurve):
+    if not isinstance(curve, (r3.NurbsCurve, r3.PolyCurve, r3.PolylineCurve)):
         return None
     fn = _planar_area_binding(reference)
     if fn is None:

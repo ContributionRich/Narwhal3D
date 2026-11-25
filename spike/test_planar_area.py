@@ -8,8 +8,10 @@ Area, AreaCentroid and the object details measure a closed planar curve with
 `analysis.planar_curve_area_centroid`: Newell's normal of 64 points on the curve, then Green's
 theorem at 12- and 24-point Gauss-Legendre per knot span, the answer the 24-point one and the
 error the difference. Rust (narwhal_pure_core_planar_area_centroid,
-native/pure_core/src/planar_area.rs) runs it on a NurbsCurve's Encode() record with
-`nearest::Nurbs` as PointAt / DerivativeAt; IsClosed and IsPlanar stay rhino3dm queries. The
+native/pure_core/src/planar_area.rs) runs it on Encode() records: the plane on the curve itself
+(a NurbsCurve, PolyCurve or PolylineCurve) and Green's theorem on its NURBS form, with
+`nearest::Nurbs` and the polycurve / polyline evaluators as PointAt / DerivativeAt; IsClosed and
+IsPlanar stay rhino3dm queries. The
 route needs a platform in `native_nearest.PLANAR_AREA_QUALIFIED_PLATFORMS` AND the loaded
 rhino3dm passing the parity check against `analysis._python_planar_curve_area_centroid` on its
 witness curves. Malformed calls go to the export in a child process.
@@ -97,6 +99,18 @@ def random_curve(rng, kind):
         return r3.NurbsCurve.Create(True, rng.randint(2, 5), pts)
     if kind == "polygon":
         return r3.NurbsCurve.Create(False, 1, pts + [pts[0]])
+    if kind == "polyline":
+        return r3.PolylineCurve(pts + [pts[0]])
+    if kind == "joined":
+        joined, m = r3.PolyCurve(), len(pts) // 3
+        first = (r3.NurbsCurve.Create(False, 3, pts[:m + 1]) if m >= 3
+                 else r3.LineCurve(pts[0], pts[m]))
+        first.Domain = r3.Interval(rng.uniform(-5, 5), rng.uniform(6, 20))
+        joined.Append(first)
+        joined.Append(r3.PolylineCurve(pts[m:2 * m + 1]))
+        for p, q in zip(pts[2 * m:], pts[2 * m + 1:] + [pts[0]]):
+            joined.Append(r3.LineCurve(p, q))
+        return joined
     if kind == "rational":
         pts.append(pts[0])
         curve = r3.NurbsCurve(3, True, 3, len(pts))
@@ -126,10 +140,11 @@ else:
 
 print("\n-- random curves: Rust's results are the Python route's, bit for bit --")
 rng = random.Random(20261127)
-KINDS = ("periodic", "clamped", "rational", "circle", "polygon", "open", "non-planar")
+KINDS = ("periodic", "clamped", "rational", "circle", "polygon", "polyline", "joined", "open",
+         "non-planar")
 mismatches, by_rust, answered, nones = [], 0, 0, 0
 rust_s = python_s = 0.0
-for trial in range(140):
+for trial in range(180):
     curve = None
     while curve is None or not curve.IsValid:
         curve = random_curve(rng, KINDS[trial % len(KINDS)])
@@ -144,23 +159,19 @@ for trial in range(140):
     by_rust += used
     answered += want is not None
     nones += want is None
-check(not mismatches, f"140 curves (periodic of degrees 2-5, clamped, rational, circles, "
-      f"polygons in tilted planes; open and non-planar ones answer None: {answered} areas, "
-      f"{nones} None) give the Python route's bits (mismatches: {mismatches})")
-check(not qualified or by_rust == 140, f"Rust answered every one ({by_rust} of 140)")
+check(not mismatches, f"180 curves (periodic of degrees 2-5, clamped, rational, circles, "
+      f"polygons, closed PolylineCurves and PolyCurves with a shifted segment domain, in tilted "
+      f"planes; open and non-planar ones answer None: {answered} areas, {nones} None) give the "
+      f"Python route's bits (mismatches: {mismatches})")
+check(not qualified or by_rust == 180, f"Rust answered every one ({by_rust} of 180)")
 print(f"  Rust route {rust_s * 1e3:.0f} ms, Python route {python_s * 1e3:.0f} ms in total")
 
 print("\n-- what keeps the Python route --")
-square = r3.PolylineCurve([r3.Point3d(0, 0, 0), r3.Point3d(2, 0, 0), r3.Point3d(2, 2, 0),
-                           r3.Point3d(0, 2, 0), r3.Point3d(0, 0, 0)])
-joined = r3.PolyCurve()
-for a, b in (((0, 0), (3, 0)), ((3, 0), (3, 2)), ((3, 2), (0, 0))):
-    joined.Append(r3.LineCurve(r3.Point3d(*a, 0), r3.Point3d(*b, 0)))
-for label, curve in (("a PolylineCurve", square), ("a PolyCurve", joined)):
-    before = native._native_planar_area_calls
-    got = analysis.planar_curve_area_centroid(curve)
-    check(native._native_planar_area_calls == before and bits(got) == bits(reference(curve)),
-          f"{label} is measured by the Python route")
+line = r3.LineCurve(r3.Point3d(0, 0, 0), r3.Point3d(2, 1, 0))
+before = native._native_planar_area_calls
+got = analysis.planar_curve_area_centroid(line)
+check(native._native_planar_area_calls == before and got is None and reference(line) is None,
+      "a LineCurve (another class) is measured by the Python route")
 check(native.planar_area_centroid((0, 0, 0), reference) is None,
       "something that is not a curve is left to the Python route")
 
@@ -179,10 +190,12 @@ witness_bits = b"".join(bits(reference(c)) for c in native._planar_area_witnesse
 check(hashlib.sha256(witness_bits).hexdigest()
       == gate.PURE_CORE_PLANAR_AREA_IDENTITY["results_sha256"],
       "the pinned digest is the Python route's on the loaded rhino3dm")
-probe_text = gate.PURE_CORE_PLANAR_AREA_PROBE.replace('"\n        "', "")
-check(all(base64.b64decode(c.Encode()["data"]).hex() in probe_text
-          for c in native._planar_area_witnesses()),
-      "the probe's records are the runtime witnesses as rhino3dm encodes them")
+probe_text = gate.PURE_CORE_PLANAR_AREA_PROBE.replace('"\n            "', "")
+records = [base64.b64decode(c.Encode()["data"]).hex() for c in native._planar_area_witnesses()]
+records += [base64.b64decode(c.ToNurbsCurve().Encode()["data"]).hex()
+            for c in native._planar_area_witnesses() if not isinstance(c, r3.NurbsCurve)]
+check(all(r in probe_text for r in records),
+      "the probe's records are the runtime witnesses (and NURBS forms) as rhino3dm encodes them")
 libm = next((q for q in ("/lib64/libm.so.6", "/usr/lib64/libm.so.6",
                          "/usr/lib/x86_64-linux-gnu/libm.so.6") if os.path.isfile(q)), None)
 if libm:
@@ -227,7 +240,7 @@ print("\n-- malformed calls to the export are refused, writing nothing (child pr
 PROBE = r"""
 import ctypes as c, json, sys
 fn = c.CDLL(sys.argv[1]).narwhal_pure_core_planar_area_centroid
-fn.argtypes = [c.c_void_p, c.c_size_t, c.c_void_p]
+fn.argtypes = [c.c_void_p, c.c_size_t, c.c_void_p, c.c_size_t, c.c_void_p]
 fn.restype = c.c_int32
 rec = bytes.fromhex(sys.argv[2])
 buf = c.create_string_buffer(rec, len(rec))
@@ -235,12 +248,15 @@ out = (c.c_double * 16)(*[-9.0] * 16)
 od = c.cast(out, c.c_void_p)
 
 
-def call(record=buf, size=len(rec), result=od):
-    return fn(record, size, result)
+def call(record=buf, size=len(rec), result=od, shape=None, shape_size=0):
+    return fn(shape, shape_size, record, size, result)
 
 
 got = {
     "not a record": call(record=b"not a record", size=12),
+    "a shape that is not a record": call(shape=b"not a record", shape_size=12),
+    "a null shape with a length": call(shape_size=8),
+    "result over the shape": call(shape=c.cast(out, c.c_void_p), shape_size=64),
     "truncated record": call(size=len(rec) - 1),
     "null record": call(record=None),
     "null result": call(result=None),
@@ -256,8 +272,9 @@ record = base64.b64decode(blob.Encode()["data"])
 child = subprocess.run([sys.executable, "-I", "-c", PROBE, os.environ["NARWHAL_PURE_CORE"],
                         record.hex()], capture_output=True, text=True, timeout=60)
 result = json.loads(child.stdout or "{}")
-want = {"not a record": 1, "truncated record": 1, "null record": -1, "null result": -1,
-        "misaligned result": -1, "result over the record": -1}
+want = {"not a record": 1, "a shape that is not a record": 1, "a null shape with a length": -1,
+        "result over the shape": -1, "truncated record": 1, "null record": -1,
+        "null result": -1, "misaligned result": -1, "result over the record": -1}
 check(child.returncode == 0 and result.get("statuses") == want and result.get("untouched")
       and result.get("good") == 0 and result.get("written"),
       f"{len(want)} malformed calls refused with their statuses, nothing written; a good call "
