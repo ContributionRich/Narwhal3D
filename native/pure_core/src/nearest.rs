@@ -209,7 +209,7 @@ pub(crate) fn search_monotone(a: &[f64], t: f64) -> isize {
 /// `ON_EvaluateNurbsBasis`: the degree-d basis lands in `n[0..order]`, lower degrees
 /// in the triangle above it (row `d - j`, from column `d - j`), which
 /// `basis_derivatives` reads.
-fn basis(order: usize, knot: &[f64], t: f64, n: &mut [f64]) {
+pub(crate) fn basis(order: usize, knot: &[f64], t: f64, n: &mut [f64]) {
     let d = order - 1;
     if knot[d - 1] == knot[d] {
         n[..order * order].fill(0.0);
@@ -250,7 +250,7 @@ fn basis(order: usize, knot: &[f64], t: f64, n: &mut [f64]) {
 }
 
 /// `ON_EvaluateNurbsBasisDerivatives`: derivative `k` of the basis into row `k`.
-fn basis_derivatives(order: usize, knot: &[f64], der_count: usize, n: &mut [f64]) {
+pub(crate) fn basis_derivatives(order: usize, knot: &[f64], der_count: usize, n: &mut [f64]) {
     let d = order - 1;
     // dk[k][i] = 1 / (knot[d + i] - knot[k - 1 + i])
     let mut dk = [[0.0_f64; MAX_ORDER]; 3];

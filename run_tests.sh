@@ -405,6 +405,7 @@ PURE_SUITES=(
     spike/test_polyline_samples.py
     spike/test_polycurve_samples.py
     spike/test_offset_fit.py
+    spike/test_surface_offset.py
     spike/test_offset_compact.py
     spike/test_offset_report127.py
     spike/test_report121_124.py
@@ -553,6 +554,7 @@ PURE_SUITES=(
     spike/test_pure_core_polyline_samples_gate.py
     spike/test_pure_core_polycurve_samples_gate.py
     spike/test_pure_core_offset_fit_gate.py
+    spike/test_pure_core_surface_offset_gate.py
     spike/test_native_coil_preview.py
     spike/test_preview_curve_native.py
     spike/test_preview24_boundaries.py

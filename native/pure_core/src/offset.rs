@@ -90,7 +90,7 @@ pub(crate) type P3 = [f64; 3];
 pub(crate) struct Declined;
 
 /// `ON_3dVector::Unitize`; None where it returns false (and zeroes the vector).
-fn on_unitize(v: P3) -> Option<P3> {
+pub(crate) fn on_unitize(v: P3) -> Option<P3> {
     let d = on_length3d(v[0], v[1], v[2]);
     if d.is_finite() {
         if d > ON_DBL_MIN {
@@ -263,7 +263,7 @@ pub(crate) fn breaks(knots: &[f64], t0: f64, t1: f64) -> Vec<f64> {
 }
 
 /// `ON_IS_VALID`.
-fn on_is_valid(x: f64) -> bool {
+pub(crate) fn on_is_valid(x: f64) -> bool {
     x > -ON_UNSET_POSITIVE_VALUE && x < ON_UNSET_POSITIVE_VALUE
 }
 
@@ -286,7 +286,7 @@ fn close(a: f64, b: f64) -> bool {
 }
 
 /// `ON_IsKnotVectorPeriodic` on openNURBS knots (`cv_count + order - 2`).
-fn knots_are_periodic(order: usize, cv_count: usize, knot: &[f64]) -> bool {
+pub(crate) fn knots_are_periodic(order: usize, cv_count: usize, knot: &[f64]) -> bool {
     if order < 2 || cv_count < order || order == 2 {
         return false;
     }
@@ -355,10 +355,17 @@ pub(crate) fn is_closed(c: &Nurbs, cvs: &[f64], rational: bool) -> Result<bool, 
 
 /// `ON_NurbsCurve::IsValid` of a non-rational 3-D curve.
 pub(crate) fn is_valid(order: usize, cv_count: usize, knot: &[f64], cvs: &[P3]) -> bool {
+    // `ON_ControlPointsAreValid`.
+    knot_vector_is_valid(order, cv_count, knot)
+        && cv_count >= 2
+        && cvs.iter().flatten().all(|&v| on_is_valid(v))
+}
+
+/// `ON_IsValidKnotVector(order, cv_count, knot)` on openNURBS knots.
+pub(crate) fn knot_vector_is_valid(order: usize, cv_count: usize, knot: &[f64]) -> bool {
     if order < 2 || cv_count < order || knot.len() != cv_count + order - 2 {
         return false;
     }
-    // `ON_IsValidKnotVector`.
     if !knot.iter().all(|&k| on_is_valid(k))
         || knot[order - 2] >= knot[order - 1]
         || knot[cv_count - 2] >= knot[cv_count - 1]
@@ -367,8 +374,7 @@ pub(crate) fn is_valid(order: usize, cv_count: usize, knot: &[f64], cvs: &[P3]) 
     {
         return false;
     }
-    // `ON_ControlPointsAreValid`.
-    cv_count >= 2 && cvs.iter().flatten().all(|&v| on_is_valid(v))
+    true
 }
 
 /// `ON_NurbsCurve::SetDomain(t0, t1)` on openNURBS knots; false leaves them unchanged.

@@ -353,7 +353,7 @@ def execute_probe(mutant="", code=None):
 
 
 POLYLINE_EXPORTS = ("narwhal_pure_core_curve_curve_record_hits", "narwhal_pure_core_nearest_on_polyline", "narwhal_pure_core_polyline_samples", "narwhal_pure_core_polycurve_samples", "narwhal_pure_core_remove_join_cv_v1",
-                    "narwhal_pure_core_offset_fit")
+                    "narwhal_pure_core_offset_fit", "narwhal_pure_core_surface_offset")
 
 
 def pe_fixture(*, parser_abi=2, missing="", svg_abi=14, alias_abi=1, dxf_abi=2, reader_abi=1):
@@ -1376,6 +1376,7 @@ class RetirementPackageTests(unittest.TestCase):
                         patch.object(module,"probe_pure_core_polyline_samples",return_value={}), \
                         patch.object(module,"probe_pure_core_polycurve_samples",return_value={}), \
                         patch.object(module,"probe_pure_core_offset_fit",return_value={}), \
+                        patch.object(module,"probe_pure_core_surface_offset",return_value={}), \
                         patch.object(module,"probe_pure_core_remove_join_cv",return_value={}):
                     namespace[method](self)
             else:

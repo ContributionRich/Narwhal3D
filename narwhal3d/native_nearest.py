@@ -1139,3 +1139,167 @@ def offset_fit(curve, distance, n, tolerance, reference):
     if got is not None:
         _native_offset_calls += 1
     return got
+
+
+# Surface offsets (narwhal_pure_core_surface_offset, native/pure_core/src/surface_offset.rs):
+# `offset.surface_offset`'s refinement loop for a NurbsSurface read from its Encode() record.
+# The loop's PointAt / NormalAt / InsertKnot calls are openNURBS's ON_NurbsSurface::Evaluate,
+# ON_Surface::EvNormal (with its singular-point branch) and ON_NurbsSurface::InsertKnot
+# (eb92af3) in Rust; an SDK build that fuses a multiply-add in any of them rounds
+# differently. So the route needs BOTH a platform in SURFACE_OFFSET_QUALIFIED_PLATFORMS and
+# the loaded rhino3dm passing `_surface_offset_parity`: the Python route on its own SDK gives
+# Rust's surface, bit for bit, on the witness surfaces. Rust refuses whatever it does not
+# decide exactly (a periodic knot vector, a zero weight, ...), and the Python route runs.
+SURFACE_OFFSET_QUALIFIED_PLATFORMS = frozenset({("linux", "x86_64")})
+_SURFACE_OFFSET_ROOM = 1 << 19     # bytes of the first record buffer
+_SURFACE_OFFSET_LIMIT = 1 << 27    # bytes of the largest record taken from the export
+_SURFACE_FIT, _SURFACE_FOLDED, _SURFACE_ROOM, _SURFACE_APPROXIMATE = 0, 3, 4, 5
+_SURFACE_WITNESS_SEED = 20261126
+_surface_offset_state = None       # (signature, binding or None, capability text)
+_native_surface_offset_calls = 0
+
+
+def _surface_offset_call(fn, surface, distance, tolerance, max_refine):
+    """``(offset surface, deviation, within tolerance)``, ``(None, 0.0, False)`` when the
+    offset inverts the surface, or None when the export leaves the decision to Python. The
+    export writes the offset surface as an archive record, which `CommonObject.Decode` reads
+    in one call."""
+    distance, tolerance, max_refine = float(distance), float(tolerance), int(max_refine)
+    if (not math.isfinite(distance) or abs(distance) < 1e-15 or math.isnan(tolerance)
+            or not 0 <= max_refine <= 10):
+        return None
+    encoded = surface.Encode()
+    record = base64.b64decode(encoded["data"])
+    room = _SURFACE_OFFSET_ROOM
+    for _ in range(2):
+        out = ctypes.create_string_buffer(room)
+        length = ctypes.c_uint64()
+        deviation = ctypes.c_double()
+        code = fn(record, len(record), distance, tolerance, max_refine, out, room,
+                  ctypes.byref(length), ctypes.byref(deviation))
+        if code != _SURFACE_ROOM:
+            break
+        if not room < length.value <= _SURFACE_OFFSET_LIMIT:
+            return None
+        room = length.value
+    if code == _SURFACE_FOLDED:
+        return None, 0.0, False
+    if code not in (_SURFACE_FIT, _SURFACE_APPROXIMATE) or not 0 < length.value <= room:
+        return None
+    result = r3.CommonObject.Decode({**encoded, "data": base64.b64encode(
+        out.raw[:length.value]).decode("ascii")})
+    if not isinstance(result, r3.NurbsSurface):
+        return None
+    return result, deviation.value, code == _SURFACE_FIT
+
+
+def _surface_offset_witnesses():
+    """``(surface, distance, tolerance, max_refine)``: irregular doubles, where a fused
+    multiply-add would round most products differently. A rational sphere off the origin,
+    whose poles take EvNormal's singular-point branch, and a non-rational cubic-by-quadratic
+    bump on non-uniform knots in shifted domains, each refined at least once."""
+    rng = random.Random(_SURFACE_WITNESS_SEED)
+    sphere = r3.Sphere(r3.Point3d(rng.uniform(-3.0, 3.0), rng.uniform(-3.0, 3.0), 0.0),
+                       rng.uniform(4.0, 6.0)).ToNurbsSurface()
+    bump = r3.NurbsSurface.Create(3, False, 4, 3, 6, 5)
+    for i in range(6):
+        for j in range(5):
+            bump.Points[i, j] = r3.Point4d(i * rng.uniform(1.8, 2.2), j * rng.uniform(1.8, 2.2),
+                                           math.sin(i * 0.9) * math.cos(j * 0.7)
+                                           * rng.uniform(0.4, 0.6), 1.0)
+    for knots, order, count in ((bump.KnotsU, 4, 6), (bump.KnotsV, 3, 5)):
+        inner = sorted(rng.uniform(0.5, 9.5) for _ in range(count - order))
+        a, b = rng.uniform(-9.0, -1.0), rng.uniform(2.0, 9.0)
+        for i, k in enumerate([0.0] * (order - 1) + inner + [10.0] * (order - 1)):
+            knots[i] = a + (b - a) * k / 10.0
+    return [(sphere, rng.uniform(0.6, 0.9), 3e-2, 6),
+            (bump, -rng.uniform(0.3, 0.5), 6e-2, 6)]
+
+
+def _surface_bits(surface, deviation):
+    size = 4 if surface.IsRational else 3
+    out = []
+    for i in range(surface.Points.CountU):
+        for j in range(surface.Points.CountV):
+            p = surface.Points[i, j]
+            out += (p.X, p.Y, p.Z, p.W)[:size]
+    out += list(surface.KnotsU.ToList()) + list(surface.KnotsV.ToList()) + [deviation]
+    return struct.pack(f"<{len(out)}d", *out)
+
+
+def _surface_offset_parity(fn, reference):
+    """True when `reference` (the Python route) on the loaded rhino3dm gives Rust's surface,
+    bit for bit, on every witness surface."""
+    try:
+        for surface, distance, tolerance, max_refine in _surface_offset_witnesses():
+            got = _surface_offset_call(fn, surface, distance, tolerance, max_refine)
+            want = reference(surface, distance, tolerance, max_refine)
+            if (got is None or got[0] is None or want[0] is None or got[2] != want[2]
+                    or _surface_bits(got[0], got[1]) != _surface_bits(want[0], want[1])):
+                return False
+    except Exception:  # noqa: BLE001 -- an SDK that cannot be checked is not qualified
+        return False
+    return True
+
+
+def _surface_offset_binding(reference):
+    global _surface_offset_state
+    signature = (os.environ.get(_ENV) or "<packaged>", _here(), id(r3))
+    state = _surface_offset_state
+    if state is not None and state[0] == signature:
+        return state[1]
+    with _lock:
+        state = _surface_offset_state
+        if state is not None and state[0] == signature:
+            return state[1]
+        fn, text = None, "surface offset export unavailable; surface offsets use the Python route"
+        if signature[1] not in SURFACE_OFFSET_QUALIFIED_PLATFORMS:
+            text = ("not qualified on {}/{}; surface offsets use the Python route"
+                    .format(*signature[1]))
+        else:
+            explicit = os.environ.get(_ENV)
+            path = (Path(explicit).expanduser() if explicit else
+                    Path(__file__).resolve().parent / "native" / _library_name())
+            try:
+                fn = ctypes.CDLL(str(path)).narwhal_pure_core_surface_offset
+                fn.argtypes = [ctypes.c_char_p, ctypes.c_size_t, ctypes.c_double,
+                               ctypes.c_double, ctypes.c_uint32, ctypes.c_char_p,
+                               ctypes.c_size_t, ctypes.POINTER(ctypes.c_uint64), _D]
+                fn.restype = ctypes.c_int32
+            except (AttributeError, OSError):
+                fn = None
+            if fn is not None and not _surface_offset_parity(fn, reference):
+                fn = None
+                text = (f"rhino3dm {getattr(r3, '__version__', '?')} differs from the Rust "
+                        "surface offset on the witness surfaces; surface offsets use the "
+                        "Python route")
+            elif fn is not None:
+                text = "qualified"
+        _surface_offset_state = signature, fn, text
+        return fn
+
+
+def surface_offset_capability(reference):
+    """``"qualified"`` when surface offsets run in Rust, otherwise the reason. `reference` is
+    the Python route the one-time parity check compares with."""
+    _surface_offset_binding(reference)
+    return _surface_offset_state[2]
+
+
+def surface_offset_fit(surface, distance, tolerance, max_refine, reference):
+    """`offset._python_surface_offset` for a `NurbsSurface` through Rust: ``(offset surface,
+    deviation, within tolerance)``, ``(None, 0.0, False)`` where the offset inverts the
+    surface, or None where `reference` (the Python route) must decide."""
+    global _native_surface_offset_calls
+    if not isinstance(surface, r3.NurbsSurface):
+        return None
+    fn = _surface_offset_binding(reference)
+    if fn is None:
+        return None
+    try:
+        got = _surface_offset_call(fn, surface, distance, tolerance, max_refine)
+    except Exception:  # noqa: BLE001 -- the Python route decides
+        return None
+    if got is not None:
+        _native_surface_offset_calls += 1
+    return got
