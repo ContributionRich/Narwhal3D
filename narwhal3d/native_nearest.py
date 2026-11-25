@@ -1347,8 +1347,10 @@ def _surface_grid_call(fn, surface, us, vs):
               (ctypes.c_double * len(normals)).from_buffer(normals), len(points))
     if code != 0:
         return None
-    rows = lambda flat: [[tuple(flat[3 * (i * nv + j):3 * (i * nv + j) + 3]) for j in range(nv)]
-                         for i in range(nu)]
+    def rows(flat):
+        it = iter(flat)
+        nodes = list(zip(it, it, it))
+        return [nodes[i * nv:(i + 1) * nv] for i in range(nu)]
     return rows(points), rows(normals)
 
 
