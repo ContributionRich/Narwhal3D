@@ -354,6 +354,7 @@ def execute_probe(mutant="", code=None):
 
 POLYLINE_EXPORTS = ("narwhal_pure_core_curve_curve_record_hits", "narwhal_pure_core_nearest_on_polyline", "narwhal_pure_core_polyline_samples", "narwhal_pure_core_polycurve_samples", "narwhal_pure_core_remove_join_cv_v1",
                     "narwhal_pure_core_offset_fit", "narwhal_pure_core_surface_offset",
+                    "narwhal_pure_core_planar_area_centroid",
                     "narwhal_pure_core_surface_grid")
 
 
@@ -1378,6 +1379,7 @@ class RetirementPackageTests(unittest.TestCase):
                         patch.object(module,"probe_pure_core_polycurve_samples",return_value={}), \
                         patch.object(module,"probe_pure_core_offset_fit",return_value={}), \
                         patch.object(module,"probe_pure_core_surface_offset",return_value={}), \
+                        patch.object(module,"probe_pure_core_planar_area",return_value={}), \
                         patch.object(module,"probe_pure_core_surface_grid",return_value={}), \
                         patch.object(module,"probe_pure_core_remove_join_cv",return_value={}):
                     namespace[method](self)
@@ -1946,6 +1948,7 @@ class JointAdmissionTests(unittest.TestCase):
             self.assertIn("probe_pure_core_remove_join_cv", calls)
             self.assertIn("probe_pure_core_polycurve_samples", calls)
             for probe in ("probe_pure_core_offset_fit", "probe_pure_core_surface_offset",
+                          "probe_pure_core_planar_area",
                           "probe_pure_core_surface_grid"):
                 self.assertIn(probe, calls)
 

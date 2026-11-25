@@ -51,6 +51,7 @@ pub mod options_ffi;
 pub mod options_owned;
 pub mod options_prompt;
 pub mod pickconstraint;
+pub mod planar_area;
 pub mod preview_primitives;
 pub mod printwidths;
 pub mod python_norm;

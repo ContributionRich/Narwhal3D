@@ -1451,3 +1451,150 @@ def surface_grid(surface, us, vs):
         return None
     _native_surface_grid_calls += 1
     return got
+
+
+# Planar curve area and centroid (narwhal_pure_core_planar_area_centroid,
+# native/pure_core/src/planar_area.rs): `analysis.planar_curve_area_centroid` for a closed planar
+# NurbsCurve, read from its Encode() record: Newell's plane normal and Green's theorem at 12- and
+# 24-point Gauss-Legendre per knot span, with `nearest::Nurbs` as PointAt / DerivativeAt.
+# IsClosed and IsPlanar stay rhino3dm queries here. Gated by PLANAR_AREA_QUALIFIED_PLATFORMS and
+# the loaded rhino3dm passing `_planar_area_parity` against the Python route on witness curves.
+PLANAR_AREA_QUALIFIED_PLATFORMS = frozenset({("linux", "x86_64")})
+_PLANAR_AREA_NO_REGION = 3
+_PLANAR_AREA_WITNESS_SEED = 20261127
+#: `planar_area_centroid`'s answer where the Python route returns None.
+NO_REGION = object()
+_planar_area_state = None           # (signature, binding or None, capability text)
+_native_planar_area_calls = 0
+
+
+def _planar_area_call(fn, curve):
+    """``(area, area_err, centroid, centroid_err)``, NO_REGION, or None for a closed planar
+    curve whose record must be an ON_NurbsCurve."""
+    record = base64.b64decode(curve.Encode()["data"])
+    out = (ctypes.c_double * 8)()
+    code = fn(record, len(record), out)
+    if code == _PLANAR_AREA_NO_REGION:
+        return NO_REGION
+    if code != 0:
+        return None
+    return out[0], out[1], (out[2], out[3], out[4]), (out[5], out[6], out[7])
+
+
+def _planar_area_witnesses():
+    """Closed planar NurbsCurves on irregular doubles in tilted planes, where a fused
+    multiply-add would round most products differently: a periodic cubic blob, a rational
+    circle (Bezier spans), a degree-5 wave loop on non-uniform knots in a shifted domain, and
+    periodic blobs of degrees 2-5 (a fused Green sum changes about a quarter of all areas)."""
+    rng = random.Random(_PLANAR_AREA_WITNESS_SEED)
+    origin = r3.Point3d(rng.uniform(-9.0, 9.0), rng.uniform(-9.0, 9.0), rng.uniform(-9.0, 9.0))
+    plane = r3.Plane(origin, r3.Vector3d(rng.uniform(0.2, 1.0), rng.uniform(-1.0, 1.0),
+                                         rng.uniform(0.3, 1.0)))
+    def on_plane(u, v):
+        return plane.PointAt(u, v)
+    blob = r3.NurbsCurve.Create(True, 3, [
+        on_plane(math.cos(k * 0.785) * rng.uniform(3.0, 5.0),
+                 math.sin(k * 0.785) * rng.uniform(2.0, 4.0)) for k in range(8)])
+    circle = r3.Circle(origin, rng.uniform(1.5, 6.0)).ToNurbsCurve()
+    circle.Rotate(rng.uniform(0.3, 1.2), r3.Vector3d(rng.uniform(-1.0, 1.0), 1.0, 0.0), origin)
+    points = [on_plane(math.cos(k * 0.5236) * (4.0 + math.sin(k * 1.9)),
+                       math.sin(k * 0.5236) * (3.0 + rng.uniform(-0.5, 0.5))) for k in range(12)]
+    points.append(points[0])
+    wave = r3.NurbsCurve.Create(False, 5, points)
+    inner = sorted(rng.uniform(0.05, 0.95) for _ in range(len(wave.Knots) - 10))
+    a, b = rng.uniform(-6.0, -1.0), rng.uniform(2.0, 8.0)
+    for i, k in enumerate([0.0] * 5 + inner + [1.0] * 5):
+        wave.Knots[i] = a + (b - a) * k
+    blobs = [r3.NurbsCurve.Create(True, degree, [
+        on_plane(math.cos(k * 0.6981) * rng.uniform(2.0, 6.0),
+                 math.sin(k * 0.6981) * rng.uniform(2.0, 6.0)) for k in range(9)])
+        for degree in (2, 3, 4, 5)]
+    return [blob, circle, wave, *blobs]
+
+
+def _planar_area_parity(fn, reference):
+    """True when `reference` (the Python route) on the loaded rhino3dm gives Rust's area,
+    centroid and errors, bit for bit, on every witness."""
+    try:
+        for curve in _planar_area_witnesses():
+            got, want = _planar_area_call(fn, curve), reference(curve)
+            if got is None or got is NO_REGION or want is None:
+                return False
+            flat = lambda r: (r[0], r[1], *r[2], *r[3])
+            if _packed_values(flat(got)) != _packed_values(flat(want)):
+                return False
+    except Exception:  # noqa: BLE001 -- an SDK that cannot be checked is not qualified
+        return False
+    return True
+
+
+def _packed_values(values):
+    return struct.pack(f"<{len(values)}d", *values)
+
+
+def _planar_area_binding(reference):
+    global _planar_area_state
+    signature = (os.environ.get(_ENV) or "<packaged>", _here(), id(r3))
+    state = _planar_area_state
+    if state is not None and state[0] == signature:
+        return state[1]
+    with _lock:
+        state = _planar_area_state
+        if state is not None and state[0] == signature:
+            return state[1]
+        fn = None
+        text = "planar area export unavailable; curve areas use the Python route"
+        if signature[1] not in PLANAR_AREA_QUALIFIED_PLATFORMS:
+            text = ("not qualified on {}/{}; curve areas use the Python route"
+                    .format(*signature[1]))
+        else:
+            explicit = os.environ.get(_ENV)
+            path = (Path(explicit).expanduser() if explicit else
+                    Path(__file__).resolve().parent / "native" / _library_name())
+            try:
+                fn = ctypes.CDLL(str(path)).narwhal_pure_core_planar_area_centroid
+                fn.argtypes = [ctypes.c_char_p, ctypes.c_size_t, _D]
+                fn.restype = ctypes.c_int32
+            except (AttributeError, OSError):
+                fn = None
+            if fn is not None and not _planar_area_parity(fn, reference):
+                fn = None
+                text = (f"rhino3dm {getattr(r3, '__version__', '?')} differs from the Rust "
+                        "planar area on the witness curves; curve areas use the Python route")
+            elif fn is not None:
+                text = "qualified"
+        _planar_area_state = signature, fn, text
+        return fn
+
+
+def planar_area_capability(reference):
+    """``"qualified"`` when closed planar curve areas run in Rust, otherwise the reason.
+    `reference` is the Python route the one-time parity check compares with."""
+    _planar_area_binding(reference)
+    return _planar_area_state[2]
+
+
+def planar_area_centroid(curve, reference):
+    """`reference(curve)` (`analysis._python_planar_curve_area_centroid`) through Rust for a
+    NurbsCurve: its result, NO_REGION where it returns None, or None where the Python route
+    must run."""
+    global _native_planar_area_calls
+    if not isinstance(curve, r3.NurbsCurve):
+        return None
+    fn = _planar_area_binding(reference)
+    if fn is None:
+        return None
+    try:
+        if not curve.IsClosed:
+            got = NO_REGION
+        else:
+            try:
+                planar = curve.IsPlanar()
+            except Exception:  # noqa: BLE001 -- as curve_plane: the plane decides
+                planar = True
+            got = _planar_area_call(fn, curve) if planar else NO_REGION
+    except Exception:  # noqa: BLE001 -- the Python route decides
+        return None
+    if got is not None:
+        _native_planar_area_calls += 1
+    return got

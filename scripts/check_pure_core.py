@@ -126,6 +126,7 @@ PURE_CORE_PYTESTS = (
     "spike/test_pure_core_offset_fit_gate.py",
     "spike/test_pure_core_surface_offset_gate.py",
     "spike/test_offset_fit.py",
+    "spike/test_planar_area.py",
     "spike/test_surface_offset.py",
     "spike/test_surface_grid.py",
     "spike/test_native_coil_preview.py",
@@ -2133,6 +2134,188 @@ def probe_pure_core_offset_fit(path: Path, python: Path | str = sys.executable, 
         raise ValueError(f"pure-core offset fit evidence differs: {identity!r}")
     return identity
 
+# Planar curve area and centroid (analysis.planar_curve_area_centroid through
+# native_nearest.planar_area_centroid): Newell's plane and Green's theorem at two
+# Gauss-Legendre orders on a closed planar NurbsCurve's Encode() record. A library without it
+# loses only the Rust route: curve areas are then measured by the Python route.
+PURE_CORE_PLANAR_AREA_EXPORT = "narwhal_pure_core_planar_area_centroid"
+# (sys.platform, machine) pairs; narwhal3d/native_nearest.py PLANAR_AREA_QUALIFIED_PLATFORMS
+# must carry the same set (spike/test_planar_area.py checks the route there).
+PURE_CORE_PLANAR_AREA_QUALIFIED_PLATFORMS = frozenset({("linux", "x86_64")})
+# The digest pins the area, centroid and errors of native_nearest._planar_area_witnesses(); it is
+# also the digest of analysis._python_planar_curve_area_centroid on rhino3dm 8.35.0.
+PURE_CORE_PLANAR_AREA_IDENTITY = {
+    "export": PURE_CORE_PLANAR_AREA_EXPORT,
+    "unrecognised_record_status": 1, "no_region_status": 3, "null_out_status": -1,
+    "refusals_write": False,
+    "results_sha256": "a6d6eeb1b1ae7de4eaa8f014ea84d93acb3e1652d9cd30c8f80a2643b3603a41",
+}
+PURE_CORE_PLANAR_AREA_PROBE = r'''
+import ctypes as c, hashlib, json, struct, sys
+fn = c.CDLL(sys.argv[1]).narwhal_pure_core_planar_area_centroid
+fn.argtypes = [c.c_char_p, c.c_size_t, c.POINTER(c.c_double)]
+fn.restype = c.c_int32
+# native_nearest._planar_area_witnesses() as rhino3dm 8.35.0 encodes them.
+witnesses = (
+    bytes.fromhex(
+        "fa7f0200fe01000000000000fbff02001400000000000000ddd4d74e47e9d311bfe50010830122f0"
+        "10f27870fcff0200c601000000000000110300000000000000040000000b00000000000000000000"
+        "00000000000000f03f00000000000000000000000000000000000000000000f0bf00000000000000"
+        "0000000000000000000d00000000000000000000c0000000000000f0bf0000000000000000000000"
+        "000000f03f0000000000000040000000000000084000000000000010400000000000001440000000"
+        "00000018400000000000001c400000000000002040000000000000224000000000000024400b0000"
+        "00815b3dc9f26a15c06875f36ec052d9bf50c8422c8a770cc0823887cad84f1ec07c267869325b00"
+        "c055ec5323c6d500c08e64a1c3128023c03ad669d1dba409c0f0d16294f3e8c4bf88f5024e969d25"
+        "c0cbf3877aa19219c0f73d60ae680702c002ed99cf32bd26c06ed5e8c92b8020c02256637b036e0c"
+        "c0e7ac9311c6ba21c0980aca70d4531bc0ba9f813066cc16c042c64f65a0411ec02c2aaa476d9513"
+        "c0979bee00ffb315c02022b964530e16c074524d1fc9fe01c074c26da3d5d915c0815b3dc9f26a15"
+        "c06875f36ec052d9bf50c8422c8a770cc0823887cad84f1ec07c267869325b00c055ec5323c6d500"
+        "c08e64a1c3128023c03ad669d1dba409c0f0d16294f3e8c4bf0030cf065bff7f0280000000000000"
+        "0000"),
+    bytes.fromhex(
+        "fa7f0200fe01000000000000fbff02001400000000000000ddd4d74e47e9d311bfe50010830122f0"
+        "10f27870fcff0200c601000000000000110300000001000000030000000900000000000000000000"
+        "00000000000000f03f00000000000000000000000000000000000000000000f0bf00000000000000"
+        "0000000000000000000a00000000000000000000000000000000000000182d4454fb21f93f182d44"
+        "54fb21f93f182d4454fb210940182d4454fb210940d221337f7cd91240d221337f7cd91240182d44"
+        "54fb211940182d4454fb211940090000008e685b72514016c0fe833d58dc8e0ec03311e6cbb1241a"
+        "c0000000000000f03fe8c209a25ecd0cc0ffef8cdff8a0b33f12664cdcf0f80ec0cc3b7f669ea0e6"
+        "3f10a7245575751fc050a584e85638d7bfe878aecc5dfb03c0000000000000f03f7691ce0aa0161e"
+        "c0f26ae47e67dfe2bfe06ff034c3b5d53fcc3b7f669ea0e63ff1117d93db3726c04e002b1b8c0c13"
+        "c0e0b8e502c396e2bf000000000000f03f4ba9146f886020c050457dc48d9418c0b8dc35b26492f2"
+        "bfcc3b7f669ea0e63fb07218a2499d21c0fcbb606c3a7020c0db8beb45db7912c0000000000000f0"
+        "3f92a25f24201111c0318422f11cea15c034b102ce6d7c15c0cc3b7f669ea0e63f8e685b72514016"
+        "c0fe833d58dc8e0ec03311e6cbb1241ac0000000000000f03f00653f5907ff7f0280000000000000"
+        "0000"),
+    bytes.fromhex(
+        "fa7f02004e02000000000000fbff02001400000000000000ddd4d74e47e9d311bfe50010830122f0"
+        "10f27870fcff02001602000000000000110300000000000000060000000d00000000000000000000"
+        "00000000000000f03f00000000000000000000000000000000000000000000f0bf00000000000000"
+        "00000000000000000011000000c86dc261bbab12c0c86dc261bbab12c0c86dc261bbab12c0c86dc2"
+        "61bbab12c0c86dc261bbab12c03e29c232abecf0bff8b06b1bbec9e93f6c71653f6faaf83f96d26c"
+        "06fb5108401269af9a5d741540ce0c942592ba154010f82deeccbe194030ef69a35ab71c4030ef69"
+        "a35ab71c4030ef69a35ab71c4030ef69a35ab71c4030ef69a35ab71c400d000000d4d0e45e769e17"
+        "c0fe7a467a99d5f1bf50c8422c8a770cc0e96cc4d6262019c09c7d73414e07debfde085d9b00ef01"
+        "c03489c688b53b20c002010e13b69a02c0419e4b636dd7f9bff604fb9c7c8a22c06860cb66169b0c"
+        "c0001eb0686c13f5bf8bcb63f2e0ca25c0af6345e473d615c000775269e99ff0bf185f03e0550426"
+        "c0da6c10bf7a1a1ac0120e5e2f60d400c037fe512db16a24c0c48dcbb308f31ac0c4fa374693770c"
+        "c0ba08c0b7795124c0d9ba392acef31fc0f5bd4629815214c0d1cb915c954521c0a47eb24e838b1b"
+        "c00441824f496f18c085b89af05f6c1dc0712bddff232a14c0ba103da19ca217c0bcbc4a35fd2f18"
+        "c0043927a2c0700bc04b819811071818c08d98889b8fd414c02f563d3e5fb0f5bfd20ac64fe39013"
+        "c0d4d0e45e769e17c0fe7a467a99d5f1bf50c8422c8a770cc0005499ccd2ff7f0280000000000000"
+        "0000"),
+    bytes.fromhex(
+        "fa7f0200f601000000000000fbff02001400000000000000ddd4d74e47e9d311bfe50010830122f0"
+        "10f27870fcff0200be01000000000000110300000000000000030000000b00000000000000000000"
+        "00000000000000f03f00000000000000000000000000000000000000000000f0bf00000000000000"
+        "0000000000000000000c000000000000000000f0bf0000000000000000000000000000f03f000000"
+        "00000000400000000000000840000000000000104000000000000014400000000000001840000000"
+        "0000001c400000000000002040000000000000224000000000000024400b0000002ec78a705c6e19"
+        "c0ce88cd7eec4dfbbf50c8422c8a770cc0a3f9154c12941ec091facb144dee01c00d03940903da01"
+        "c05ea3026d48a223c00f783d6b4f9605c000919961d3c9e03fea55d6f45bba24c0f099d5fefd0716"
+        "c0b1ef19452866febf37f8bb550d1925c03afcde602b7919c02b20618828ee04c04aa4c734563924"
+        "c0ab6da12d13991dc046dc6cccdee111c0dc0d44bca32a1ec0a39333ab6fc118c0c6b4ba2a41d31b"
+        "c03a62f345bee618c0f80a7c99107d15c0a4bd6178c00020c097935812e58e11c01788a62b8874fa"
+        "bfcaaba957b3e419c02ec78a705c6e19c0ce88cd7eec4dfbbf50c8422c8a770cc0a3f9154c12941e"
+        "c091facb144dee01c00d03940903da01c00000efd907ff7f02800000000000000000"),
+    bytes.fromhex(
+        "fa7f02001e02000000000000fbff02001400000000000000ddd4d74e47e9d311bfe50010830122f0"
+        "10f27870fcff0200e601000000000000110300000000000000040000000c00000000000000000000"
+        "00000000000000f03f00000000000000000000000000000000000000000000f0bf00000000000000"
+        "0000000000000000000e00000000000000000000c0000000000000f0bf0000000000000000000000"
+        "000000f03f0000000000000040000000000000084000000000000010400000000000001440000000"
+        "00000018400000000000001c40000000000000204000000000000022400000000000002440000000"
+        "00000026400c0000000667375e147a17c0de392bb57617f1bf50c8422c8a770cc0934b9f5a7ced1e"
+        "c0ee37d35135e1fabfb200fc8cb131f7bf5f63ce12abb521c068a7e025d28105c0d8a121536966ed"
+        "bf7dbb7685a28223c054bf282484da12c0498ea1350c6bfebf22cd8cfdf03e27c028bc55d482ae1d"
+        "c09d8bfcdde8ad01c0c0bc73aa9b9022c0170b5cffd98518c03a2586d0a10611c062ec57c28e5220"
+        "c074afcfc1045a1dc0508051eaa3651dc081122333ce9f18c0d07194896eb112c0bcb82db674301d"
+        "c0f577a5e9e09b18c090c5f2f82f0008c0e4b51e17437715c00667375e147a17c0de392bb57617f1"
+        "bf50c8422c8a770cc0934b9f5a7ced1ec0ee37d35135e1fabfb200fc8cb131f7bf5f63ce12abb521"
+        "c068a7e025d28105c0d8a121536966edbf0054422ceeff7f02800000000000000000"),
+    bytes.fromhex(
+        "fa7f02004602000000000000fbff02001400000000000000ddd4d74e47e9d311bfe50010830122f0"
+        "10f27870fcff02000e02000000000000110300000000000000050000000d00000000000000000000"
+        "00000000000000f03f00000000000000000000000000000000000000000000f0bf00000000000000"
+        "0000000000000000001000000000000000000008c000000000000000c0000000000000f0bf000000"
+        "0000000000000000000000f03f000000000000004000000000000008400000000000001040000000"
+        "000000144000000000000018400000000000001c4000000000000020400000000000002240000000"
+        "0000002440000000000000264000000000000028400d0000005189a3af15fa1bc0ae3a1490e84d04"
+        "c050c8422c8a770cc00949475d6f4320c03e92e77bb149f7bfacf12be61fbae2bfb76351ff523323"
+        "c0b597cc52fa3505c0b8b258093e16d03f565e169795df24c03af3744236ab13c026749450c3b3f1"
+        "bfcb53b12ae03926c0b0ee795047551cc0cab173f5e0b904c056d0cf74970a25c08b31b2d263ce1e"
+        "c0a8d93cfc02cf10c007c0cb31e70a20c06f7313322e2b18c028a9d0a1953e18c0378c02cc95ba17"
+        "c0411e14b2917513c06c85d4621c6e1fc06c69a7daa68414c0be90898986cffcbf624a1cdc491916"
+        "c05189a3af15fa1bc0ae3a1490e84d04c050c8422c8a770cc00949475d6f4320c03e92e77bb149f7"
+        "bfacf12be61fbae2bfb76351ff523323c0b597cc52fa3505c0b8b258093e16d03f565e169795df24"
+        "c03af3744236ab13c026749450c3b3f1bf00ce66c44bff7f02800000000000000000"),
+    bytes.fromhex(
+        "fa7f02006e02000000000000fbff02001400000000000000ddd4d74e47e9d311bfe50010830122f0"
+        "10f27870fcff02003602000000000000110300000000000000060000000e00000000000000000000"
+        "00000000000000f03f00000000000000000000000000000000000000000000f0bf00000000000000"
+        "0000000000000000001200000000000000000010c000000000000008c000000000000000c0000000"
+        "000000f0bf0000000000000000000000000000f03f00000000000000400000000000000840000000"
+        "0000001040000000000000144000000000000018400000000000001c400000000000002040000000"
+        "00000022400000000000002440000000000000264000000000000028400000000000002a400e0000"
+        "00488333c18c2215c0a89c17b25669d3bf50c8422c8a770cc082e14c106e0f1fc0864dfb554f32f1"
+        "bf9ca04e6d405ee6bff1564db2143b23c082b36e53fc4203c040f9d2b910cde13f3dc12080b3de24"
+        "c0784d60042edb12c01c9d7e4892f6ebbfb941e5156a1824c03126fce41df415c0a245e6e1a7d802"
+        "c0976b16c18a6226c09612afb3cf2d22c04d353d0dc82b13c0314708e5e87920c00e4d997e27a31e"
+        "c02232c8ea956b1ec07df863632b7a16c0b189437cd6ad14c0a22560c20b5e21c024408fa9f2ec17"
+        "c042d6a37f27fa02c0c88caeaa869713c0488333c18c2215c0a89c17b25669d3bf50c8422c8a770c"
+        "c082e14c106e0f1fc0864dfb554f32f1bf9ca04e6d405ee6bff1564db2143b23c082b36e53fc4203"
+        "c040f9d2b910cde13f3dc12080b3de24c0784d60042edb12c01c9d7e4892f6ebbfb941e5156a1824"
+        "c03126fce41df415c0a245e6e1a7d802c0001b937e41ff7f02800000000000000000"),
+)
+# A straight two-point NurbsCurve: Newell's normal is zero, so there is no plane.
+line = bytes.fromhex(
+    "fa7f0200ce00000000000000fbff02001400000000000000ddd4d74e47e9d311bfe50010830122f0"
+    "10f27870fcff02009600000000000000110300000000000000020000000200000000000000000000"
+    "00000000000000f03f00000000000000000000000000000000000000000000f0bf00000000000000"
+    "000000000000000000020000000000000000000000000000000000f03f0200000000000000000000"
+    "0000000000000000000000000000000000000000000000f03f000000000000004000000000000008"
+    "40004050448cff7f02800000000000000000")
+
+
+def call(record, out=True):
+    buf = (c.c_double * 8)(*[-9.0] * 8)
+    code = fn(record, 0 if record is None else len(record), buf if out else None)
+    return code, list(buf)
+
+
+bits = b""
+for record in witnesses:
+    code, values = call(record)
+    if code != 0:
+        raise RuntimeError("the export refused a witness curve")
+    bits += struct.pack("<8d", *values)
+refusals = {
+    "unrecognised_record_status": call(b"not a record"),
+    "no_region_status": call(line),
+    "null_out_status": call(witnesses[0], out=False),
+}
+print(json.dumps({"export": "narwhal_pure_core_planar_area_centroid",
+                  **{name: r[0] for name, r in refusals.items()},
+                  "refusals_write": any(set(r[1]) != {-9.0} for r in refusals.values()),
+                  "results_sha256": hashlib.sha256(bits).hexdigest()}, sort_keys=True))
+'''
+
+
+def probe_pure_core_planar_area(path: Path, python: Path | str = sys.executable, *, env=None) -> dict:
+    """Require the planar area export to give the pinned witness results and refusals."""
+    if not path.is_file() or path.is_symlink():
+        raise ValueError(f"missing regular pure-core library: {path}")
+    try:
+        completed = subprocess.run(
+            [str(python), "-I", "-B", "-c", PURE_CORE_PLANAR_AREA_PROBE, str(path.resolve())],
+            env=env, text=True, capture_output=True, check=True, timeout=60)
+        identity = json.loads(completed.stdout)
+    except (OSError, subprocess.SubprocessError, ValueError) as error:
+        raise ValueError(f"cannot verify pure-core planar area export: {getattr(error, 'stderr', '') or error}") from error
+    if identity != PURE_CORE_PLANAR_AREA_IDENTITY:
+        raise ValueError(f"pure-core planar area evidence differs: {identity!r}")
+    return identity
+
 # Surface offsets (offset.surface_offset through native_nearest.surface_offset_fit): the
 # refinement loop with openNURBS's ON_NurbsSurface::Evaluate, ON_Surface::EvNormal (with its
 # singular-point branch) and ON_NurbsSurface::InsertKnot ported, read from the surface's
@@ -2897,6 +3080,16 @@ def step_offset_fit(lib_path: Path) -> dict[str, object]:
             "command": "ctypes offset fit probe"}
 
 
+def step_planar_area(lib_path: Path) -> dict[str, object]:
+    """Qualify the planar area export; required for the library to carry it."""
+    try:
+        identity = probe_pure_core_planar_area(lib_path)
+    except ValueError as exc:
+        raise GateError(str(exc)) from exc
+    return {"status": "ok", "planar_area": identity,
+            "command": "ctypes planar area probe"}
+
+
 def step_surface_offset(lib_path: Path) -> dict[str, object]:
     """Qualify the surface offset export; required for the library to carry it."""
     try:
@@ -3012,6 +3205,7 @@ def run_gate(crate_rel: str) -> dict[str, object]:
     steps["polycurve_samples"] = step_polycurve_samples(lib)
     steps["remove_join_cv"] = probe_pure_core_remove_join_cv(lib)
     steps["offset_fit"] = step_offset_fit(lib)
+    steps["planar_area"] = step_planar_area(lib)
     steps["surface_offset"] = step_surface_offset(lib)
     steps["surface_grid"] = step_surface_grid(lib)
     steps["svg_unit"] = step_svg_unit(lib)
