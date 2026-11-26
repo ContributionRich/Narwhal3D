@@ -223,6 +223,19 @@ try:
 finally:
     sys.platform, platform.machine = real_platform, real_machine
     native._dxf_approx_state = None
+huge = r3.NurbsCurve.Create(False, 2, [r3.Point3d(-1e200, 0, 0), r3.Point3d(0, 1, 0),
+                                      r3.Point3d(1e200, 0, 0)])
+hd = huge.Domain
+raised = []
+for route in (reference, export._approx_points):
+    try:
+        route(huge, 0.01, hd.T0, hd.T1)
+    except OverflowError as exc:
+        raised.append(str(exc))
+check(native.dxf_approx_points(huge, 0.01, hd.T0, hd.T1, reference) is None
+      and len(raised) == 2 and raised[0] == raised[1],
+      "a chord whose `** 2` overflows goes to the Python route, which raises OverflowError")
+native._dxf_approx_state = None
 
 
 def nudged(curve, tol, t0, t1):

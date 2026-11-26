@@ -70,6 +70,17 @@ fn point(curve: &Nurbs, t: f64) -> Result<P3, Declined> {
     }
 }
 
+/// Python's `x ** 2`, which raises OverflowError where a finite `x` squares past the
+/// largest double; the export declines there so that the Python route raises it.
+fn square(x: f64) -> Result<f64, Declined> {
+    let s = py_square(x);
+    if x.is_finite() && !s.is_finite() {
+        Err(Declined)
+    } else {
+        Ok(s)
+    }
+}
+
 /// `_approx_points(curve, tol, t0, t1, depth)`. Python returns `[a, b]` at a leaf and joins
 /// `left[:-1] + right`; the dropped point and the kept one are both `PointAt(tm)`, so the
 /// list is each leaf's start in order and then the last leaf's end, `PointAt(t1)`. Only the
@@ -89,7 +100,7 @@ fn approx(
         let p = point(curve, t0 + (t1 - t0) * f)?;
         let ab = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
         let ap = [p[0] - a[0], p[1] - a[1], p[2] - a[2]];
-        let l2 = py_square(ab[0]) + py_square(ab[1]) + py_square(ab[2]);
+        let l2 = square(ab[0])? + square(ab[1])? + square(ab[2])?;
         let s = if l2 == 0.0 {
             0.0
         } else {
@@ -304,6 +315,21 @@ mod tests {
         reversed[at] ^= 0x10;
         let (code, _, count) = unsafe { call(&reversed, 0.01, 0.0, 1.0, 64) };
         assert_eq!((code, count), (NOT_RECOGNISED, 99));
+    }
+
+    #[test]
+    fn a_chord_whose_square_overflows_is_declined() {
+        // Python's `ab[0] ** 2` raises OverflowError for a chord about 2e200 long; a chord
+        // whose components square to infinity from infinity itself does not raise.
+        let cvs = [[-1e200, 0.0, 0.0], [0.0, 1.0, 0.0], [1e200, 0.0, 0.0]];
+        let record = nurbs_record(3, &[0.0, 0.0, 1.0, 1.0], &cvs);
+        let (code, out, count) = unsafe { call(&record, 0.01, 0.0, 1.0, 64) };
+        assert_eq!((code, count), (NOT_RECOGNISED, 99));
+        assert!(out.iter().all(|&v| v == -7.0));
+        assert_eq!(square(1e154), Ok(1e154 * 1e154));
+        assert_eq!(square(1e155), Err(Declined));
+        assert_eq!(square(f64::INFINITY), Ok(f64::INFINITY));
+        assert!(square(f64::NAN).unwrap().is_nan());
     }
 
     #[test]
