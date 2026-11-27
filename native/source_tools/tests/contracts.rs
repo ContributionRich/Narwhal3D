@@ -539,3 +539,265 @@ fn native_driver_harness_registration_is_mandatory() {
     assert_ne!(source, changed);
     assert!(policy::check(&r, &c, case, &json!({"run_tests.sh":changed})).is_err());
 }
+
+#[test]
+fn transient_path_scope_is_narrow_and_audit_never_echoes_payloads() {
+    let c = config();
+    let roots = [
+        "narwhal3d",
+        "packaging",
+        "licenses",
+        ".github",
+        "artwork",
+        "native/vendor/tracedraw",
+        "native/picture_trace",
+    ];
+    let names = [
+        ".na.owned.tmp",
+        "draft.tmp",
+        "DRAFT.TMP",
+        ".draft.swp",
+        ".draft.swo",
+        "draft.bak",
+        "draft.py~",
+        "#draft.py#",
+        ".#draft.py",
+    ];
+    for directory in roots {
+        for name in names {
+            let path = format!("{directory}/nested/{name}");
+            assert!(transient_publication_problem(&path).is_some(), "{path}");
+            assert!(path_problem(&path, &c)
+                .unwrap()
+                .contains("unreviewed transient"));
+            let errors = audit_entries(&root(), &one(&path, b"return 1\n"), false, &c);
+            assert_eq!(
+                errors,
+                vec![format!(
+                    "{path}: unreviewed transient file in recursive publication directory"
+                )]
+            );
+        }
+    }
+    for path in [
+        "spike/fixtures/input.tmp",
+        "native/pure_core/tests/fixtures/input.bak",
+        "native/source_tools/fixtures/input.swp",
+        "narwhal3d_extra/file.tmp",
+        "licenses_extra/file.tmp",
+        "narwhal3d/file.tmp.txt",
+        "narwhal3d/bitmap.py",
+        "narwhal3d/#literal.py",
+        "narwhal3d/.#",
+    ] {
+        assert!(
+            transient_publication_problem(path).is_none(),
+            "overbroad guard: {path}"
+        );
+    }
+    for path in [
+        "spike/fixtures/input.tmp",
+        "native/pure_core/tests/fixtures/input.bak",
+    ] {
+        assert!(audit_entries(&root(), &one(path, b"synthetic data\n"), false, &c).is_empty());
+    }
+}
+
+#[test]
+fn transient_payload_blocks_selection_audit_and_export_before_git_writes() {
+    let c = config();
+    let original = root();
+    let tmp = Scratch::new();
+    // Actual approved PUBLIC files only: no private working tree or private payload is read.
+    let selected = public_files(&original, &c).unwrap();
+    for name in &selected {
+        let path = tmp.0.join(name);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::copy(original.join(name), path).unwrap();
+    }
+    assert_eq!(public_files(&tmp.0, &c).unwrap(), selected);
+    git(&tmp.0, &["init", "--quiet"]);
+    tmp.put("baseline.txt", b"fixture baseline\n");
+    git(&tmp.0, &["add", "baseline.txt"]);
+    git(
+        &tmp.0,
+        &[
+            "-c",
+            "user.name=Source tools test",
+            "-c",
+            "user.email=test@localhost",
+            "commit",
+            "--quiet",
+            "-m",
+            "fixture baseline",
+        ],
+    );
+    tmp.put("staged.txt", b"preserve staged work\n");
+    git(&tmp.0, &["add", "staged.txt"]);
+    let snapshot = || {
+        (
+            git(&tmp.0, &["rev-parse", "HEAD"]),
+            fs::read(tmp.0.join(".git/index")).unwrap(),
+            git(
+                &tmp.0,
+                &["for-each-ref", "--format=%(refname) %(objectname)"],
+            ),
+            git(&tmp.0, &["count-objects", "-v"]),
+        )
+    };
+    let before = snapshot();
+    let roots = [
+        "narwhal3d",
+        "packaging",
+        "licenses",
+        ".github",
+        "artwork",
+        "native/vendor/tracedraw",
+        "native/picture_trace",
+    ];
+    let names = [
+        ".na.owned.tmp",
+        "draft.tmp",
+        "DRAFT.TMP",
+        ".draft.swp",
+        ".draft.swo",
+        "draft.bak",
+        "draft.py~",
+        "#draft.py#",
+        ".#draft.py",
+    ];
+    let refuse = |error: String, path: &str| {
+        assert!(error.contains(path), "missing path: {error}");
+        assert!(
+            error.contains("unreviewed transient"),
+            "wrong refusal: {error}"
+        );
+        assert!(!error.contains("SYNTHETIC_PAYLOAD"), "payload echoed");
+    };
+    for directory in roots {
+        for name in names {
+            let relative = format!("{directory}/{name}");
+            let path = tmp.0.join(&relative);
+            tmp.put(&relative, b"SYNTHETIC_PAYLOAD\0");
+            refuse(public_files(&tmp.0, &c).unwrap_err(), &relative);
+            refuse(selected_entries(&tmp.0, &c).unwrap_err(), &relative);
+            refuse(filesystem_entries(&tmp.0).unwrap_err(), &relative);
+            // An old source list must not let a new transient file bypass selection.
+            refuse(
+                commit_root(
+                    &tmp.0,
+                    &selected,
+                    "must not create a public commit",
+                    1790000000,
+                    &c,
+                )
+                .unwrap_err(),
+                &relative,
+            );
+            let mut explicit = selected.clone();
+            explicit.push(relative.clone());
+            refuse(
+                commit_root(
+                    &tmp.0,
+                    &explicit,
+                    "must not stage a transient",
+                    1790000000,
+                    &c,
+                )
+                .unwrap_err(),
+                &relative,
+            );
+            assert_eq!(
+                snapshot(),
+                before,
+                "HEAD/index/refs/object database changed on refusal: {relative}"
+            );
+            if name == ".na.owned.tmp" {
+                // Read permission is unnecessary: all CLI paths refuse before payload I/O.
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    fs::set_permissions(&path, fs::Permissions::from_mode(0o0)).unwrap();
+                }
+                for args in [
+                    vec!["list"],
+                    vec!["audit"],
+                    vec!["create", "--timestamp", "1790000000"],
+                ] {
+                    let result = Command::new(env!("CARGO_BIN_EXE_narwhal-source-tools"))
+                        .args(args)
+                        .arg("--root")
+                        .arg(&tmp.0)
+                        .output()
+                        .unwrap();
+                    assert!(!result.status.success());
+                    let output = String::from_utf8_lossy(&result.stderr);
+                    refuse(output.into_owned(), &relative);
+                    assert_eq!(snapshot(), before, "CLI changed Git state on refusal");
+                }
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+                }
+            }
+            fs::remove_file(path).unwrap();
+            assert_eq!(public_files(&tmp.0, &c).unwrap(), selected);
+        }
+    }
+}
+
+#[test]
+fn transient_guard_cannot_be_hidden_by_package_exclusions() {
+    let tmp = Scratch::new();
+    let mut c = config();
+    for directory in [
+        "narwhal3d",
+        "packaging",
+        "licenses",
+        ".github",
+        "artwork",
+        "native/vendor/tracedraw",
+        "native/picture_trace",
+    ] {
+        fs::create_dir_all(tmp.0.join(directory)).unwrap();
+    }
+    for key in [
+        "ROOT_FILES",
+        "LAUNCH_FILES",
+        "WELCOME_FILES",
+        "NATIVE_FILES",
+        "RUNTIME_FILES",
+        "PATCH_FILES",
+        "SCRIPT_FILES",
+        "TEST_FILES",
+    ] {
+        c[key] = json!([]);
+    }
+    let path = "narwhal3d/.na.owned.tmp";
+    tmp.put(path, b"synthetic\n");
+    c["PACKAGE_EXCLUDES"] = json!([path]);
+    assert!(public_files(&tmp.0, &c).unwrap_err().contains(path));
+    fs::remove_file(tmp.0.join(path)).unwrap();
+    for ignored in [
+        "narwhal3d/target/build.tmp",
+        "narwhal3d/__pycache__/cache.tmp",
+        "narwhal3d/native/staging.tmp",
+        "narwhal3d/kernel/bin/staging.tmp",
+    ] {
+        tmp.put(ignored, b"build/cache artifact\n");
+    }
+    assert!(
+        public_files(&tmp.0, &c).unwrap().is_empty(),
+        "existing recursive build/cache exclusions changed"
+    );
+    tmp.put(
+        "spike/fixtures/input.tmp",
+        b"intentional explicit fixture\n",
+    );
+    c["TEST_FILES"] = json!(["spike/fixtures/input.tmp"]);
+    assert_eq!(
+        public_files(&tmp.0, &c).unwrap(),
+        ["spike/fixtures/input.tmp"]
+    );
+}

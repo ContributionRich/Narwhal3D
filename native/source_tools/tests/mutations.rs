@@ -1,6 +1,7 @@
 //! Recompile actual producer faults in an isolated crate; live sources never change.
 use std::{
     fs,
+    io::Read,
     path::{Path, PathBuf},
     process::Command,
     time::{Duration, Instant},
@@ -70,6 +71,16 @@ fn run(crate_: &Path, target: &Path, root: &Path, test: &str) -> (bool, String) 
         .stderr(std::process::Stdio::piped())
         .spawn()
         .unwrap();
+    // Drain while running: a caught inventory mutant can print more than a pipe buffer.
+    let drain = |mut pipe: Box<dyn Read + Send>| {
+        std::thread::spawn(move || {
+            let mut bytes = Vec::new();
+            pipe.read_to_end(&mut bytes).unwrap();
+            bytes
+        })
+    };
+    let stdout = drain(Box::new(child.stdout.take().unwrap()));
+    let stderr = drain(Box::new(child.stderr.take().unwrap()));
     let started = Instant::now();
     loop {
         if child.try_wait().unwrap().is_some() {
@@ -81,9 +92,10 @@ fn run(crate_: &Path, target: &Path, root: &Path, test: &str) -> (bool, String) 
         }
         std::thread::sleep(Duration::from_millis(50))
     }
-    let o = child.wait_with_output().unwrap();
-    let text = String::from_utf8_lossy(&[o.stdout, o.stderr].concat()).into_owned();
-    (o.status.success(), text)
+    let status = child.wait().unwrap();
+    let text = String::from_utf8_lossy(&[stdout.join().unwrap(), stderr.join().unwrap()].concat())
+        .into_owned();
+    (status.success(), text)
 }
 #[test]
 fn producer_faults_are_assertion_red_restored_green() {
@@ -97,6 +109,16 @@ fn producer_faults_are_assertion_red_restored_green() {
     let file = crate_.join("src/lib.rs");
     let before = fs::read_to_string(&file).unwrap();
     let cases = [
+        (
+            "transient publication classification removed",
+            "transient_payload_blocks_selection_audit_and_export_before_git_writes",
+            replace_body(&before, "transient_publication_problem", "None"),
+        ),
+        (
+            "early export refusal removed",
+            "transient_payload_blocks_selection_audit_and_export_before_git_writes",
+            replace_body(&before, "require_no_transient_export", "Ok(())"),
+        ),
         (
             "numeric fixture sizes lost during configuration export",
             "wire_preserves_numeric_fixture_sizes_and_byte_payloads",

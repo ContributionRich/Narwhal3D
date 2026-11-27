@@ -41,3 +41,22 @@ The retired Python engines and fake semantic libraries are not shipped. Necessar
 Python packaging/AST tests and real SDK/Blender integration remain. Whole-repository
 Python bytes, including all new compatibility glue and production growth, are
 measured against the integration baseline rather than counted by production lines.
+
+## Transient-file publication boundary (OURS)
+
+Recursive selection covers `narwhal3d`, `packaging`, `licenses`, `.github`,
+`artwork`, `native/vendor/tracedraw` and `native/picture_trace`. In these source
+payloads, `.tmp` (including `.na.*.tmp` atomic-writer files), Vim `.swp`/`.swo`,
+`.bak` backups, trailing `~`, Emacs `#name#` autosaves and `.#name` locks are
+refused by path, not silently excluded. Suffix matching is ASCII case-insensitive.
+No currently registered PUBLIC path uses these conventions. Explicit fixtures
+outside the recursively selected directories are not banned by this rule.
+Existing build/cache/native-binary selection exclusions remain unchanged, but
+`PACKAGE_EXCLUDES` cannot hide a transient source payload from this guard.
+
+This is a deliberate strengthening of the old exporter, not a parity exception.
+Selection, audit and direct export reject these paths without reading their
+contents. Direct export checks before staging an index, creating a commit object,
+or updating a public ref, even when given an older preselected file list. A
+private working tree containing such a file is not a valid export source: its
+refusal is expected and does not authorize deleting or quarantining local work.

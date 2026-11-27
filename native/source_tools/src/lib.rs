@@ -17,6 +17,39 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 pub type Entries = BTreeMap<String, (String, Vec<u8>)>;
+const RECURSIVE_PUBLIC_DIRS: [&str; 7] = [
+    "narwhal3d",
+    "packaging",
+    "licenses",
+    ".github",
+    "artwork",
+    "native/vendor/tracedraw",
+    "native/picture_trace",
+];
+/// OURS: fail closed on transient editor/atomic-writer payloads in recursively
+/// selected source directories. Explicit fixtures elsewhere retain their policy.
+pub fn transient_publication_problem(path: &str) -> Option<String> {
+    if !RECURSIVE_PUBLIC_DIRS.iter().any(|dir| {
+        path.strip_prefix(dir)
+            .is_some_and(|tail| tail.starts_with('/'))
+    }) {
+        return None;
+    }
+    let name = path.rsplit('/').next().unwrap_or("");
+    let folded = name.to_ascii_lowercase();
+    if [".tmp", ".swp", ".swo", ".bak"]
+        .iter()
+        .any(|suffix| folded.ends_with(suffix))
+        || name.ends_with('~')
+        || (name.starts_with('#') && name.ends_with('#') && name.len() > 2)
+        || (name.starts_with(".#") && name.len() > 2)
+    {
+        Some("unreviewed transient file in recursive publication directory".into())
+    } else {
+        None
+    }
+}
+
 pub fn config() -> Value {
     let mut p: Value =
         serde_json::from_str(include_str!("publication.json")).expect("publication policy");
@@ -234,6 +267,9 @@ fn legacy_match(data: &[u8], word: bool) -> Option<Vec<u8>> {
     None
 }
 pub fn path_problem(path: &str, c: &Value) -> Option<String> {
+    if let Some(problem) = transient_publication_problem(path) {
+        return Some(problem);
+    }
     if let Some(p) = retirement_path_problem(path) {
         return Some(p);
     }
@@ -332,6 +368,9 @@ pub fn required_public_paths(root: &Path, entries: &Entries, c: &Value) -> BTree
         Regex::new(r"\b(?:spike|scripts|native|launch)/[\w./-]+\.(?:py|sh|rs|toml)").unwrap();
     let word = Regex::new(r"^[\w.]").unwrap();
     while let Some(path) = pending.pop() {
+        if transient_publication_problem(&path).is_some() {
+            continue;
+        }
         if !visited.insert(path.clone()) {
             continue;
         }
@@ -770,6 +809,10 @@ pub fn audit_entries(
         }
     }
     for (path, (mode, blob)) in entries {
+        if let Some(problem) = transient_publication_problem(path) {
+            errors.push(format!("{path}: {problem}"));
+            continue;
+        }
         if let Some(p) = path_problem(path, c) {
             errors.push(format!("{path}: {p}"));
         }
@@ -994,13 +1037,18 @@ pub fn recursive_files(root: &Path, directory: &str, c: &Value) -> Result<Vec<St
             .iter()
             .any(|s| *s == "target" || *s == "__pycache__")
             || [".pyc", ".pyo"].contains(&suffix(&rel).as_str())
-            || strings(&c["PACKAGE_EXCLUDES"]).contains(&rel)
             || rel.starts_with("narwhal3d/kernel/bin/")
             || (rel.starts_with("narwhal3d/native/") && rel != "narwhal3d/native/.gitignore")
             || [".so", ".dll", ".dylib", ".pyd", ".receipt.json"]
                 .iter()
                 .any(|s| rel.ends_with(s))
         {
+            continue;
+        }
+        if let Some(problem) = transient_publication_problem(&rel) {
+            return Err(format!("{rel}: {problem}"));
+        }
+        if strings(&c["PACKAGE_EXCLUDES"]).contains(&rel) {
             continue;
         }
         out.push(rel);
@@ -1021,16 +1069,13 @@ pub fn public_files(root: &Path, c: &Value) -> Result<Vec<String>, String> {
     ] {
         paths.extend(strings(&c[k]));
     }
-    for dir in [
-        "narwhal3d",
-        "packaging",
-        "licenses",
-        ".github",
-        "artwork",
-        "native/vendor/tracedraw",
-        "native/picture_trace",
-    ] {
+    for dir in RECURSIVE_PUBLIC_DIRS {
         paths.extend(recursive_files(root, dir, c)?);
+    }
+    for path in &paths {
+        if let Some(problem) = transient_publication_problem(path) {
+            return Err(format!("{path}: {problem}"));
+        }
     }
     let rejected: Vec<_> = paths
         .iter()
@@ -1096,6 +1141,9 @@ pub fn git_entries(root: &Path, reference: &str) -> Result<Entries, String> {
             continue;
         }
         let path = String::from_utf8(rec[at + 1..].to_vec()).map_err(|_| "non-UTF8 source path")?;
+        if let Some(problem) = transient_publication_problem(&path) {
+            return Err(format!("{path}: {problem}"));
+        }
         let spec = format!("{reference}:{path}");
         let blob = run(
             root,
@@ -1118,6 +1166,9 @@ pub fn filesystem_entries(root: &Path) -> Result<Entries, String> {
             .unwrap()
             .to_string_lossy()
             .replace('\\', "/");
+        if let Some(problem) = transient_publication_problem(&rel) {
+            return Err(format!("{rel}: {problem}"));
+        }
         if p.is_symlink() {
             out.insert(
                 rel,
@@ -1226,6 +1277,20 @@ fn utc(timestamp: i64) -> String {
         sec % 60
     )
 }
+/// Reject a stale or explicitly supplied export list before any Git write.
+pub fn require_no_transient_export(root: &Path, paths: &[String], c: &Value) -> Result<(), String> {
+    for path in paths {
+        if let Some(problem) = transient_publication_problem(path) {
+            return Err(format!("{path}: {problem}"));
+        }
+    }
+    for dir in RECURSIVE_PUBLIC_DIRS {
+        if root.join(dir).is_dir() {
+            recursive_files(root, dir, c)?;
+        }
+    }
+    Ok(())
+}
 pub fn commit_root(
     root: &Path,
     paths: &[String],
@@ -1236,6 +1301,7 @@ pub fn commit_root(
     if timestamp < 0 {
         return Err("timestamp must be non-negative".into());
     }
+    require_no_transient_export(root, paths, c)?;
     let branch = c["BRANCH"].as_str().ok_or("branch policy missing")?;
     let reference = format!("refs/heads/{branch}");
     let exists = Command::new("git")
