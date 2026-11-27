@@ -9,8 +9,8 @@ SCRIPT = ROOT / "scripts" / "build_macos_source.sh"
 COLLECTOR = ROOT / "Build-Narwhal3D-macOS.command"
 GUIDE = ROOT / "docs" / "macos-build.md"
 LAUNCHER = ROOT / "narwhal3d.sh"
-PUBLIC = ROOT / "scripts" / "create_public_branch.py"
-AUDIT = ROOT / "scripts" / "audit_public_tree.py"
+PUBLIC = ROOT / "native/source_tools/src/publication.json"
+AUDIT = ROOT / "native/source_tools/src/audit.json"
 
 results = []
 

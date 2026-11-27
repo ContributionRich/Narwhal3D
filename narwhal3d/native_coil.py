@@ -151,7 +151,7 @@ def preview_points(start,end,radial,radius0,radius1,turns,reverse,flat,count):
         code=fn(*views,float(radius0),float(radius1),float(turns),int(bool(reverse)),int(bool(flat)),count,ov,len(out),ctypes.byref(used))
     except Exception:return None
     if code!=0 or int(used.value)!=3*count or any(not math.isfinite(v) for v in out):return None
-    return [tuple(out[3*i:3*i+3]) for i in range(count)]
+    it=iter(out);return list(zip(it,it,it))
 
 
 def plan(start, end, radial, radius0, radius1, turns, reverse, tolerance, flat=False):

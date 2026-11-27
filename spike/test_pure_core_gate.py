@@ -1,28 +1,14 @@
-"""Self-test for the mandatory ``native/pure_core`` source gate.
+"""Actual Cargo integration tests for the mandatory pure-core source gate.
 
-The gate (``scripts/check_pure_core.py``) must be *load-bearing*: a mutation of
-the crate source must make it fail, and a skipped clippy step must fail it.
-This suite proves both, but on a **temporary copied crate** -- the live
-``native/pure_core`` tree is never modified, and the copy is removed after the
-run. It also confirms the live gate is green and that the live source is byte
-identical before and after.
-
-Checks:
-* the real gate is green (exit 0);
-* a clippy ``-D warnings`` violation injected into a copied crate makes the
-  gate fail (a mutation is caught by the lint step, which runs before the
-  build/tests);
-* the live crate source is unchanged by the mutation test;
-* a skipped clippy step (stubbed to return ``"skipped"``) makes ``run_gate``
-  raise, so the gate cannot pass with clippy silently absent.
+The native driver must pass on the live crate, refuse a copied crate with a
+clippy violation, and leave live source bytes unchanged. Native source_tools
+contracts separately prove skipped-step, evidence, source-omission and process
+controls. This retained suite runs the actual driver through its compatibility
+CLI; it is not a fake Cargo or SDK test.
 """
 from __future__ import annotations
 
 import importlib.util
-import ast
-import json
-from pathlib import Path
-from unittest.mock import patch
 import os
 import shutil
 import subprocess
@@ -32,6 +18,7 @@ import tempfile
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import runtime_paths
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(ROOT, "scripts"))
 GATE = os.path.join(ROOT, "scripts", "check_pure_core.py")
 CRATE = os.path.join(ROOT, "native", "pure_core")
 PYTHON = str(runtime_paths.python(ROOT))
@@ -237,8 +224,11 @@ def _():
         "spike/test_pure_core_offset_fit_gate.py",
         "spike/test_pure_core_surface_offset_gate.py",
         "spike/test_offset_fit.py",
+        "spike/test_dxf_approx.py",
         "spike/test_surface_offset.py",
+        "spike/test_planar_area.py",
         "spike/test_surface_grid.py",
+        "spike/test_surface_display_params.py",
         "spike/test_native_coil_preview.py",
         "spike/test_preview_curve_native.py",
         "spike/test_native_tessellate.py",
@@ -312,233 +302,10 @@ def _():
         "the live pure_core source was modified by the mutation test"
 
 
-@check("a skipped clippy step fails the gate (self-test of the guard)")
-def _():
-    gate = _load_gate()
-    real = gate.step_clippy
-
-    def skipped(crate):
-        return {"status": "skipped", "reason": "self-test stub"}
-
-    gate.step_clippy = skipped
-    # This guard test needs no Cargo work; fmt is covered by the real gate.
-    gate.step_fmt = lambda crate: {"status": "ok"}
-    try:
-        try:
-            gate.run_gate("native/pure_core")
-        except gate.GateError as exc:
-            assert "clippy" in str(exc).lower(), \
-                "skip-clippy guard did not name clippy: %r" % exc
-        else:
-            raise AssertionError(
-                "run_gate passed with a skipped clippy step (guard is missing)")
-    finally:
-        gate.step_clippy = real
 
 
-@check("Rust integration execution and public fixture closure are mandatory and mutation-sensitive")
-def _():
-    gate = _load_gate()
-    crate = Path(CRATE)
-    closure = gate.require_rust_public_closure(crate)
-    assert set(closure) == set(gate.RUST_INTEGRATION_FILES)
-    assert ROUND23_FILES | ROUND24_FILES | DXF_LEGACY_FILES | NEAREST25_FILES <= set(closure)
-    assert set(gate.RUST_REQUIRED_MODULE_FILES) == ROUND24_MODULES | {
-        "native/pure_core/src/options_owned.rs", "native/pure_core/src/options_ffi.rs",
-        "native/pure_core/src/options_prompt.rs", "native/pure_core/src/remove_join_cv.rs"}
-    assert set(gate.RUST_INTEGRATION_SUITES) == {
-            "alias_golden", "unit_golden", "interpolate_golden", "interpolate32_properties", "svgpath_golden",
-            "bearing_golden", "calc_golden", "coords_golden", "unitformat_golden",
-            "macro_golden", "joinchain_golden", "rebuild_golden", "blend_golden", "norm_golden",
-                        "nurbs_golden", "arclength_golden",
-            "coil_golden", "interpolate_helpers_golden", "stl_owned", "stl_import_safety",
-            "catenary_boundary", "catenary_golden", "obj_golden", "stl_legacy_abi", "stl_name_prefix",
-            "dxf_owned", "vector23_golden", "tween_golden", "obj_legacy_abi", "encoder_legacy_abi",
-            "earclip24_golden", "preview24_golden", "dxf_reader24", "dxf_legacy_abi", "nearest25_golden",
-            "options29_engine", "options29_ffi", "options29_registration",
-            "options29_prompt", "options29_prompt_ffi",
-        }
-    public_source = (Path(ROOT) / "scripts/create_public_branch.py").read_text()
-    for retired in ("spike/alias_reference.py", "spike/units_reference.py", "spike/interpolate_reference.py",
-                    "spike/bearing_reference.py", "spike/unitformat_reference.py",
-                    "spike/joinchain_reference.py", "spike/rebuild_reference.py",
-                                        "spike/test_python_norm_owned.py"):
-        assert retired not in public_source, "retired Python oracle is public: " + retired
-    summary = "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out"
-
-    def runner(fault="", selected=None):
-        def run(command, cwd):
-            assert "--lib" not in command
-            if "--test" not in command:
-                return 0, summary
-            suite = command[command.index("--test") + 1]
-            assert "--message-format=json" in command
-            artifact = {"reason": "compiler-artifact", "target": {"name": suite, "kind": ["test"]},
-                        "profile": {"test": True}, "executable": "/fixture/" + suite}
-            active_fault = fault if selected is None or selected == suite else ""
-            if active_fault == "missing-compilation":
-                return 0, summary
-            if active_fault == "discovery-only":
-                return 0, json.dumps(artifact)
-            if active_fault == "wrong-target":
-                artifact["target"]["name"] = "unrelated"
-            if active_fault == "zero-tests":
-                return 0, json.dumps(artifact) + "\n" + summary.replace("2 passed", "0 passed")
-            if active_fault == "filtered":
-                return 0, json.dumps(artifact) + "\n" + summary.replace("0 filtered", "1 filtered")
-            if active_fault == "failed":
-                return 1, json.dumps(artifact) + "\n" + summary
-            return 0, json.dumps(artifact) + "\n" + summary
-        return run
-
-    def rejects(function, fault):
-        with patch.object(gate, "_run", side_effect=runner(fault)):
-            try:
-                function(crate)
-            except gate.GateError:
-                return
-        raise AssertionError("integration evidence mutant survived: " + fault)
-
-    with patch.object(gate, "_run", side_effect=runner()) as run:
-        result = gate.step_tests(crate)
-        assert set(result["integration_suites"]) == set(gate.RUST_INTEGRATION_SUITES)
-        assert all(v == {"compiled": True, "passed": 2} for v in result["integration_suites"].values())
-        assert run.call_count == 1 + len(gate.RUST_INTEGRATION_SUITES)
-    for fault in ("missing-compilation", "discovery-only", "wrong-target", "zero-tests", "filtered", "failed"):
-        rejects(gate.step_tests, fault)
-    # Each individual target must be load-bearing, not merely the first one.
-    for suite in gate.RUST_INTEGRATION_SUITES:
-        for fault in ("missing-compilation", "discovery-only", "wrong-target", "zero-tests", "filtered", "failed"):
-            with patch.object(gate, "_run", side_effect=runner(fault, suite)):
-                try:
-                    gate.step_tests(crate)
-                except gate.GateError:
-                    pass
-                else:
-                    raise AssertionError(f"integration mutant survived: {suite}: {fault}")
-    # Disable the compiled/executed guard in a copied AST: the negative test
-    # above must itself go RED, with no source or bytecode writes.
-    tree = ast.parse(__import__("inspect").getsource(gate.step_tests))
-    guard = next(n for n in ast.walk(tree) if isinstance(n, ast.If)
-                 and "not compiled" in ast.unparse(n.test))
-    guard.test = ast.Constant(False)
-    ns = {}
-    exec(compile(ast.fix_missing_locations(tree), "<integration-evidence-mutant>", "exec"), vars(gate), ns)
-    try:
-        rejects(ns["step_tests"], "missing-compilation")
-    except AssertionError:
-        pass
-    else:
-        raise AssertionError("negative integration test did not go RED with guard disabled")
-
-    source = (Path(ROOT) / "scripts/create_public_branch.py").read_text()
-    # Remove a real fixture path from the manifest, without reading that fixture.
-    fixture = next(path for path in closure if "/fixtures/" in path)
-    broken = source.replace(repr(fixture) + ",", "")
-    assert broken != source
-    real_read = Path.read_text
-    # Every round-19/20/21/22 path is required independently; inspect manifests, not fixtures.
-    added = [path for path in closure
-             if path in ROUND23_FILES or path in ROUND24_FILES or path in DXF_LEGACY_FILES or path in NEAREST25_FILES or Path(path).name.startswith(("blend_", "norm_", "nurbs_", "arclength_",
-                                            "coil_", "interpolate_helpers", "stl_owned", "stl_import_safety",
-                                            "catenary_", "obj_golden", "obj_original22",
-                                            "stl_legacy_abi", "stl_name_prefix", "stl_prefix"))]
-    added = sorted(set(added) | ROUND24_MODULES)
-    assert ROUND23_FILES | ROUND24_FILES | ROUND24_MODULES | DXF_LEGACY_FILES <= set(added)
-    assert len(set(added) - ROUND23_FILES - ROUND24_FILES - ROUND24_MODULES - DXF_LEGACY_FILES - NEAREST25_FILES) == 46
-    for missing in added:
-        omitted = source.replace(repr(missing) + ",", "")
-        assert omitted != source
-        def read_omitted(path, *args, **kwargs):
-            return omitted if path == Path(ROOT) / "scripts/create_public_branch.py" else real_read(path, *args, **kwargs)
-        with patch.object(Path, "read_text", read_omitted):
-            try:
-                gate.require_rust_public_closure(crate)
-            except gate.GateError:
-                pass
-            else:
-                raise AssertionError("round-19/20/21/22 public path omission survived: " + missing)
-    def read(path, *args, **kwargs):
-        return broken if path == Path(ROOT) / "scripts/create_public_branch.py" else real_read(path, *args, **kwargs)
-    def closure_rejects():
-        with patch.object(Path, "read_text", read):
-            try:
-                gate.require_rust_public_closure(crate)
-            except gate.GateError:
-                return
-        raise AssertionError("missing public fixture survived")
-    closure_rejects()
-    with patch.object(gate, "require_rust_public_closure", return_value=closure):
-        try:
-            closure_rejects()
-        except AssertionError:
-            pass
-        else:
-            raise AssertionError("closure negative test did not go RED with guard disabled")
 
 
-@check("round-21/22 copied-crate and required-source omissions are independently refused")
-def _():
-    gate = _load_gate()
-    crate = Path(CRATE)
-    required = {
-        "tests/coil_golden.rs", "tests/interpolate_helpers_golden.rs",
-        "tests/interpolate32_properties.rs",
-        "tests/stl_owned.rs", "tests/stl_import_safety.rs", "tests/interpolate_helpers.h",
-        "tests/fixtures/coil_numeric.txt", "tests/fixtures/coil_baseline_linux.json",
-        "tests/fixtures/coil_windows_msvc.txt", "tests/fixtures/coil_windows_msvc_provenance.txt",
-        "tests/fixtures/interpolate_helpers_linux.txt",
-        'tests/catenary_boundary.rs',
-        'tests/catenary_golden.rs',
-        'tests/catenary_v2.h',
-        'tests/obj_golden.rs',
-        'tests/stl_legacy_abi.rs',
-        'tests/stl_name_prefix.rs',
-        'tests/fixtures/catenary_baseline_linux.json',
-        'tests/fixtures/catenary_numeric_windows_msvc.txt',
-        'tests/fixtures/catenary_host_windows_msvc.txt',
-        'tests/fixtures/catenary_windows_msvc.provenance.json',
-        'tests/fixtures/catenary_host_linux.txt',
-        'tests/fixtures/catenary_numeric_linux.txt',
-        'tests/fixtures/obj_original22.txt',
-        'tests/fixtures/obj_original22_provenance.txt',
-        'tests/fixtures/stl_prefix_headers.bin',
-        'tests/fixtures/stl_prefix_headers.txt',
-    }
-    required.update(path.removeprefix("native/pure_core/") for path in ROUND23_FILES | ROUND24_FILES | ROUND24_MODULES)
-    gate.require_rust_public_closure(crate)
-    with tempfile.TemporaryDirectory(prefix="pure-core-round23-closure-") as temporary:
-        copied = Path(temporary) / "pure_core"
-        # Copy metadata/payloads without reading any corpus into agent/test text.
-        shutil.copytree(crate / "tests", copied / "tests")
-        shutil.copytree(crate / "src", copied / "src")
-        gate.require_rust_public_closure(copied)
-        for relative in sorted(required):
-            victim = copied / relative
-            # Keep removed data outside tests, so closure sees an actual omission.
-            held = Path(temporary) / (victim.name + ".held")
-            victim.rename(held)
-            try:
-                try:
-                    gate.require_rust_public_closure(copied)
-                except gate.GateError:
-                    pass
-                else:
-                    raise AssertionError("copied-crate omission survived: " + relative)
-            finally:
-                held.rename(victim)
-            gate.require_rust_public_closure(copied)
-            if relative.startswith("src/"):
-                continue  # Module-list omission has an independent package guard.
-            omitted = "native/pure_core/" + relative
-            with patch.object(gate, "RUST_INTEGRATION_FILES", tuple(
-                    path for path in gate.RUST_INTEGRATION_FILES if path != omitted)):
-                try:
-                    gate.require_rust_public_closure(copied)
-                except gate.GateError:
-                    pass
-                else:
-                    raise AssertionError("required-source omission survived: " + omitted)
 
 
 failed = 0

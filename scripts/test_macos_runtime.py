@@ -50,7 +50,7 @@ class RuntimeTests(unittest.TestCase):
     def test_public_source_keeps_worker_policy_and_mac_qualification_tools(self):
         import sys
         with patch.object(sys, "path", [str(Path(__file__).parent), *sys.path]):
-            import create_public_branch as public
+            import source_tools as public
         required = {"native/converter_supervisor/src/lib.rs", "scripts/accept_macos_release.py",
                     "scripts/smoke_macos_launcher.py", "scripts/repack_macos_bytecode.py",
                     "spike/macos_containment/test_bytecode.py"}

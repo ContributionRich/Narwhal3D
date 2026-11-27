@@ -8,7 +8,7 @@
 //!     `run_tests.sh` selection gate — the one that links the Rust core and
 //!     must not be gated on a built artifact being present.
 //!  2. Every test helper and fixture the round owns is listed, explicitly, in
-//!     the public branch manifest (`scripts/create_public_branch.py`), so the
+//!     the public branch manifest (`native/source_tools/src/publication.json`), so the
 //!     public root cannot silently drop any of the 4 `.rs` files, the 10 binary
 //!     corpora, or the provenance capture.
 //!
@@ -71,7 +71,7 @@ const MANDATORY_PUBLIC_MANIFEST_PATHS: [&str; 15] = [
 ];
 
 const RUN_TESTS_SH: &str = include_str!("../../../run_tests.sh");
-const CREATE_PUBLIC_BRANCH_PY: &str = include_str!("../../../scripts/create_public_branch.py");
+const PUBLICATION_JSON: &str = include_str!("../../../native/source_tools/src/publication.json");
 
 /// A pure guard over the two embedded root files. Returns true only when every
 /// required target, flag, run label, and manifest path is present. No I/O, no
@@ -106,10 +106,10 @@ fn selection26_registered(text_run: &str, text_manifest: &str) -> bool {
 #[test]
 fn selection26_mandatory_gate_and_manifest_are_registered() {
     assert!(
-        selection26_registered(RUN_TESTS_SH, CREATE_PUBLIC_BRANCH_PY),
+        selection26_registered(RUN_TESTS_SH, PUBLICATION_JSON),
         "the selection26 round is not fully registered in the public branch:\n\
          run_tests.sh must carry the mandatory selection gate (label + all three \
-         `--test` targets) and scripts/create_public_branch.py must list every \
+         `--test` targets) and native/source_tools/src/publication.json must list every \
          owned test/fixture path. See MANDATORY_*_targets/flags/paths above."
     );
 }
@@ -127,13 +127,13 @@ fn selection26_guard_accepts_a_complete_registration() {
         run.push_str(flag);
         run.push(' ');
     }
-    let mut manifest = String::from("NATIVE_FILES = (\n");
+    let mut manifest = String::from("{\"NATIVE_FILES\":{\"$tuple\":[\n");
     for path in MANDATORY_PUBLIC_MANIFEST_PATHS {
         manifest.push_str("    \"");
         manifest.push_str(path);
         manifest.push_str("\",\n");
     }
-    manifest.push_str(")\n");
+    manifest.push_str("]}}\n");
     assert!(
         selection26_registered(&run, &manifest),
         "guard rejected a text that contains every required target, flag, label and path"
@@ -150,7 +150,7 @@ fn selection26_gate_red_when_run_label_is_omitted() {
         "mutation had no effect: run label not present to strip"
     );
     assert!(
-        !selection26_registered(&stripped_run, CREATE_PUBLIC_BRANCH_PY),
+        !selection26_registered(&stripped_run, PUBLICATION_JSON),
         "guard did not fail when the mandatory selection run label was removed"
     );
 }
@@ -167,7 +167,7 @@ fn selection26_gate_red_when_any_test_target_is_omitted() {
             "mutation had no effect for {flag}"
         );
         assert!(
-            !selection26_registered(&stripped_run, CREATE_PUBLIC_BRANCH_PY),
+            !selection26_registered(&stripped_run, PUBLICATION_JSON),
             "guard did not fail when the `--test` target {flag} was removed"
         );
     }
@@ -179,9 +179,9 @@ fn selection26_gate_red_when_any_test_target_is_omitted() {
 #[test]
 fn selection26_manifest_red_when_any_path_is_omitted() {
     for path in MANDATORY_PUBLIC_MANIFEST_PATHS {
-        let stripped_manifest = CREATE_PUBLIC_BRANCH_PY.replace(path, "__OMITTED__");
+        let stripped_manifest = PUBLICATION_JSON.replace(path, "__OMITTED__");
         assert_ne!(
-            CREATE_PUBLIC_BRANCH_PY, stripped_manifest,
+            PUBLICATION_JSON, stripped_manifest,
             "mutation had no effect for {path}"
         );
         assert!(
@@ -197,7 +197,7 @@ fn selection26_manifest_red_when_any_path_is_omitted() {
 #[test]
 fn selection26_registration_is_stable_when_restored() {
     assert!(
-        selection26_registered(RUN_TESTS_SH, CREATE_PUBLIC_BRANCH_PY),
+        selection26_registered(RUN_TESTS_SH, PUBLICATION_JSON),
         "restored (original) files must satisfy the guard"
     );
 }

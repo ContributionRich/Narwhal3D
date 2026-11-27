@@ -9,10 +9,11 @@ The route is live only on a platform in `QUALIFIED_PLATFORMS` (measured: Linux/g
 It reaches libm only through `sqrt` and `fma`, but another platform joins only once
 scripts/check_pure_core.py has qualified its artifact against the pinned witness hits.
 
-A pair with a `PolylineCurve` (what Polyline and Rectangle make) goes to
-``narwhal_pure_core_curve_curve_record_hits``, which reads each curve from its
-``Encode()`` record (rhino3dm does not expose a polyline's parameters) and also ports
-``ON_PolylineCurve``'s Evaluate, bounding box and Split. Those round each product on its
+A pair with a `PolylineCurve` (what Polyline and Rectangle make), a `LineCurve` (what Line
+makes) or a `PolyCurve` of those (what Join makes) goes to
+``narwhal_pure_core_curve_curve_record_hits``, which reads each curve from its ``Encode()``
+record (rhino3dm does not expose a polyline's parameters) and also ports those classes'
+Evaluate, bounding box and Split. Those round each product on its
 own, and an SDK build that fuses a multiply-add rounds them differently. So that route
 needs a platform in `POLYLINE_QUALIFIED_PLATFORMS` AND the loaded rhino3dm passing
 `_polyline_parity`: the Python recursion, on the SDK's own Split and PointAt, gives
@@ -50,6 +51,9 @@ _native_calls = 0
 # check on the loaded SDK.
 POLYLINE_QUALIFIED_PLATFORMS = frozenset({("linux", "x86_64")})
 _record_state = None    # (signature, binding or None, capability text)
+# Classes only the record export reads (rhino3dm hides a polyline's parameters, and a
+# LineCurve or PolyCurve is no NurbsCurve): a pair with one of them goes there.
+_RECORD_CLASSES = (r3.PolylineCurve, r3.LineCurve, r3.PolyCurve)
 _native_record_calls = 0
 
 
@@ -148,7 +152,7 @@ def point_hits(a, b, tol, max_depth):
         return None
     if not (0 <= depth <= _MAX_DEPTH and math.isfinite(tol)):
         return None
-    if isinstance(a, r3.PolylineCurve) or isinstance(b, r3.PolylineCurve):
+    if isinstance(a, _RECORD_CLASSES) or isinstance(b, _RECORD_CLASSES):
         fn = _record_binding()
         if fn is None:
             return None
@@ -199,8 +203,9 @@ def _here():
 
 
 def _encoded(curve):
-    """The record of a valid `NurbsCurve` or `PolylineCurve`, as bytes, or None."""
-    if not isinstance(curve, (r3.NurbsCurve, r3.PolylineCurve)) or not curve.IsValid:
+    """The record of a valid `NurbsCurve`, `PolylineCurve`, `LineCurve` or `PolyCurve`, as
+    bytes, or None."""
+    if not isinstance(curve, (r3.NurbsCurve, *_RECORD_CLASSES)) or not curve.IsValid:
         return None
     return base64.b64decode(curve.Encode()["data"])
 
@@ -247,7 +252,10 @@ def _polyline_witnesses():
     Irregular doubles (so a fused multiply-add would round most products differently) on
     shifted domains: a zigzag crossing a cubic, a closed quadrilateral crossing the zigzag, and a
     polyline whose recursion halves land a hair short of a break, so `Split` snaps there
-    (`ParameterSearch`) and `Trim` reparameterises.
+    (`ParameterSearch`) and `Trim` reparameterises; then LineCurves crossing the cubic (on a
+    shifted domain), the zigzag and each other, four line pairs on shifted domains that
+    cross between a fifth and two fifths along each line, and two PolyCurves of mixed
+    segments (some on shifted domains) crossing the cubic, a line and each other.
     """
     rng = random.Random(_POLYLINE_WITNESS_SEED)
     p = r3.Point3d
@@ -266,7 +274,51 @@ def _polyline_witnesses():
     near = r3.PolylineCurve([p(0.0, 0.0, 0.0), p(1.0, rng.uniform(0.5, 1.5), 0.0),
                              p(2.0, 0.0, 0.0), p(3.0, 1.0, 0.0)]).Split(1.999999996)[0]
     cut = r3.LineCurve(p(0.99, -1.0, 0.0), p(1.01, 3.0, 0.0)).ToNurbsCurve()
-    return [(zig, wave, 1e-3), (quad, zig, 1e-6), (near, cut, 1e-6)]
+    # LineCurves (what Line makes, the usual Trim and Split cutter), one on a shifted domain.
+    slash = r3.LineCurve(p(rng.uniform(-5.0, -3.0), rng.uniform(-2.0, -1.0), 0.0),
+                         p(rng.uniform(3.0, 5.0), rng.uniform(1.0, 2.0), 0.0))
+    slash.Domain = r3.Interval(rng.uniform(-9.0, -1.0), rng.uniform(2.0, 9.0))
+    rise = r3.LineCurve(p(rng.uniform(-1.0, 1.0), rng.uniform(-4.0, -3.0), 0.0),
+                        p(rng.uniform(-1.0, 1.0), rng.uniform(3.0, 4.0), 0.0))
+    # Line pairs crossing at irregular points a fifth to two fifths along each, where
+    # ON_Line::PointAt takes its from-side branch.
+    crossings = []
+    for _ in range(4):
+        x, y = rng.uniform(-3.0, 3.0), rng.uniform(-3.0, 3.0)
+        lines = []
+        for angle in (rng.uniform(0.2, 1.3), rng.uniform(1.8, 2.9)):
+            u, v = math.cos(angle), math.sin(angle)
+            ahead, back = rng.uniform(2.0, 4.0), rng.uniform(0.6, 1.6)
+            line = r3.LineCurve(p(x - back * u, y - back * v, 0.0),
+                                p(x + ahead * u, y + ahead * v, 0.0))
+            line.Domain = r3.Interval(rng.uniform(-7.0, 0.0), rng.uniform(1.0, 7.0))
+            lines.append(line)
+        crossings.append((lines[0], lines[1], 1e-6))
+    # PolyCurves (what Join makes) of lines, cubics and polylines, some segments on domains
+    # apart from their polycurve spans, so PointAt maps parameters and Split goes through
+    # TransformParameterTo, splitting inside segments and at breaks.
+    joined = []
+    for _ in range(2):
+        corners = [p(-6.0 + 2.0 * k + rng.uniform(-0.4, 0.4), rng.uniform(-3.0, 3.0), 0.0)
+                   for k in range(7)]
+        chain = r3.PolyCurve()
+        for k in range(6):
+            a, b = corners[k], corners[k + 1]
+            if k % 3 == 0:
+                segment = r3.LineCurve(a, b)
+            elif k % 3 == 1:
+                segment = r3.NurbsCurve.Create(False, 3, [
+                    a, p(a.X + 0.6, a.Y + rng.uniform(-2.0, 2.0), 0.0),
+                    p(b.X - 0.6, b.Y + rng.uniform(-2.0, 2.0), 0.0), b])
+            else:
+                segment = r3.PolylineCurve([a, p(a.X + 1.0, rng.uniform(-3.0, 3.0), 0.0), b])
+            if k % 2:
+                segment.Domain = r3.Interval(rng.uniform(-5.0, 2.0), rng.uniform(3.0, 9.0))
+            chain.Append(segment)
+        joined.append(chain)
+    return [(zig, wave, 1e-3), (quad, zig, 1e-6), (near, cut, 1e-6),
+            (slash, wave, 1e-6), (zig, rise, 1e-6), (slash, rise, 1e-6), *crossings,
+            (joined[0], wave, 1e-6), (joined[1], slash, 1e-6), (joined[0], joined[1], 1e-6)]
 
 
 def _polyline_parity(fn):

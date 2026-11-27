@@ -193,10 +193,114 @@ check(len(kept) == len(reference) >= 1
               for p, q in zip(kept, reference)),
       f"Trim of a Rectangle by a cubic: the same {len(kept)} surviving pieces")
 
-print("\n-- routing: only valid NURBS and polyline curves take the route --")
-line_curve = r3.LineCurve(P(0, -5, 0), P(6, 5, 0))
-check(native.point_hits(rect, line_curve, 1e-6, 40) is None,
-      "a LineCurve beside a polyline keeps the Python recursion")
+print("\n-- LineCurves (what Line makes, the usual Trim and Split cutter) --")
+lrng = random.Random(20261128)
+
+
+def random_line():
+    line = r3.LineCurve(P(lrng.uniform(-6, 6), lrng.uniform(-6, 6), 0),
+                        P(lrng.uniform(-6, 6), lrng.uniform(-6, 6), 0))
+    if lrng.random() < 0.4:
+        line.Domain = r3.Interval(lrng.uniform(-9, 0), lrng.uniform(1, 9))
+    return line
+
+
+lequal = lpairs = lhits = lcalls = 0
+lines_python_s = lines_rust_s = 0.0
+for trial in range(120):
+    other = (random_line, random_polyline, random_nurbs)[trial % 3]()
+    a, b = (random_line(), other) if trial % 2 else (other, random_line())
+    if not (a.IsValid and b.IsValid):
+        continue
+    lpairs += 1
+    t = time.perf_counter()
+    want = native._python_hits(a, b, 1e-6, 40)
+    lines_python_s += time.perf_counter() - t
+    before = native._native_record_calls
+    t = time.perf_counter()
+    got = native.point_hits(a, b, 1e-6, 40)
+    lines_rust_s += time.perf_counter() - t
+    lcalls += native._native_record_calls - before
+    lhits += len(want)
+    lequal += got is not None and native._hit_bits(got) == native._hit_bits(want)
+check(lequal == lpairs == lcalls and lhits >= 40,
+      f"{lequal}/{lpairs} pairs of a LineCurve with a line, a polyline or a NURBS curve "
+      f"bit-identical through Rust ({lhits} hits, {lcalls} native calls); Python "
+      f"{lines_python_s:.1f} s, Rust {lines_rust_s * 1e3:.0f} ms")
+cutters = [r3.LineCurve(P(x, -5, 0), P(x + 0.5, 5, 0)) for x in (1.3, 4.1, 7.7, 10.2)]
+pieces = ix.split_curve_by(wave, cutters)
+reference = python_only(ix.split_curve_by, wave, cutters)
+check(len(pieces) == len(reference) == 5
+      and all(xyz(p.PointAtStart) == xyz(q.PointAtStart) and p.Domain.T1 == q.Domain.T1
+              for p, q in zip(pieces, reference)),
+      f"Split of a cubic by four lines: the same {len(pieces)} pieces")
+kept = ix.trim_curve_by(cutters[1], [wave], (4.1, -4, 0))
+reference = python_only(ix.trim_curve_by, cutters[1], [wave], (4.1, -4, 0))
+check(len(kept) == len(reference) >= 1
+      and all(p.Domain.T0 == q.Domain.T0 and p.Domain.T1 == q.Domain.T1
+              for p, q in zip(kept, reference)),
+      f"Trim of a line by a cubic: the same {len(kept)} surviving pieces")
+
+print("\n-- PolyCurves (what Join makes) of lines, cubics and polylines --")
+prng = random.Random(20261129)
+
+
+def random_joined():
+    corners = [P(-6 + 2.0 * k, prng.uniform(-4, 4), 0) for k in range(7)]
+    chain = r3.PolyCurve()
+    for k in range(6):
+        a, b = corners[k], corners[k + 1]
+        kind = prng.random()
+        if kind < 0.4:
+            segment = r3.LineCurve(a, b)
+        elif kind < 0.7:
+            segment = r3.NurbsCurve.Create(False, 3, [
+                a, P(a.X + 0.6, a.Y + prng.uniform(-2, 2), 0),
+                P(b.X - 0.6, b.Y + prng.uniform(-2, 2), 0), b])
+        else:
+            segment = r3.PolylineCurve([a, P(a.X + 1, prng.uniform(-4, 4), 0), b])
+        if prng.random() < 0.4:
+            segment.Domain = r3.Interval(prng.uniform(-5, 2), prng.uniform(3, 9))
+        chain.Append(segment)
+    return chain
+
+
+jequal = jpairs = jhits = jcalls = 0
+joined_python_s = joined_rust_s = 0.0
+for trial in range(60):
+    other = (random_joined, random_line, random_polyline, random_nurbs)[trial % 4]()
+    a, b = (random_joined(), other) if trial % 2 else (other, random_joined())
+    if not (a.IsValid and b.IsValid):
+        continue
+    jpairs += 1
+    t = time.perf_counter()
+    want = native._python_hits(a, b, 1e-6, 40)
+    joined_python_s += time.perf_counter() - t
+    before = native._native_record_calls
+    t = time.perf_counter()
+    got = native.point_hits(a, b, 1e-6, 40)
+    joined_rust_s += time.perf_counter() - t
+    jcalls += native._native_record_calls - before
+    jhits += len(want)
+    jequal += got is not None and native._hit_bits(got) == native._hit_bits(want)
+check(jequal == jpairs == jcalls and jhits >= 60,
+      f"{jequal}/{jpairs} pairs of a PolyCurve (some segments on shifted domains) with a "
+      f"PolyCurve, a line, a polyline or a NURBS curve bit-identical through Rust ({jhits} "
+      f"hits, {jcalls} native calls); Python {joined_python_s:.1f} s, Rust "
+      f"{joined_rust_s * 1e3:.0f} ms")
+cutter = random_joined()
+pieces = ix.split_curve_by(wave, [cutter])
+reference = python_only(ix.split_curve_by, wave, [cutter])
+check(len(pieces) == len(reference) > 1
+      and all(xyz(p.PointAtStart) == xyz(q.PointAtStart) and p.Domain.T1 == q.Domain.T1
+              for p, q in zip(pieces, reference)),
+      f"Split of a cubic by a PolyCurve: the same {len(pieces)} pieces")
+
+print("\n-- routing: only valid NURBS, polyline, line and polycurve curves take the route --")
+edge = r3.Brep.CreateFromCylinder(r3.Cylinder(r3.Circle(P(1, 0, 0), 3.0), 2.0),
+                                  True, True).Edges[0]
+check(native.point_hits(rect, edge, 1e-6, 40) is None,
+      "another curve class (a BrepEdge) beside a polyline keeps the Python recursion")
 check(native.point_hits(rect, rect.Duplicate(), 1e-6, float("nan")) is None
       and native.point_hits(rect, zig, float("inf"), 40) is None
       and native.point_hits(rect, zig, 1e-6, 65) is None,
@@ -219,11 +323,20 @@ def best(fn, reps=3):
     return out
 
 
-for label, a, b in (("Rectangle x cubic", rect, wave), ("Polyline x cubic", zig, wave)):
+for label, a, b in (("Rectangle x cubic", rect, wave), ("Polyline x cubic", zig, wave),
+                    ("Line x cubic", cutters[0], wave)):
     slow = best(lambda: python_only(ix.curve_curve, a, b))
     fast = best(lambda: ix.curve_curve(a, b))
     print(f"  {label}: Python {slow * 1e3:.1f} ms, Rust {fast * 1e3:.2f} ms "
           f"({slow / fast:.0f}x)")
+slow = best(lambda: python_only(ix.split_curve_by, wave, cutters))
+fast = best(lambda: ix.split_curve_by(wave, cutters))
+print(f"  Split of a cubic by four lines: Python {slow * 1e3:.1f} ms, Rust {fast * 1e3:.2f} ms "
+      f"({slow / fast:.0f}x)")
+slow = best(lambda: python_only(ix.split_curve_by, wave, [cutter]))
+fast = best(lambda: ix.split_curve_by(wave, [cutter]))
+print(f"  Split of a cubic by a 6-segment PolyCurve: Python {slow * 1e3:.1f} ms, Rust "
+      f"{fast * 1e3:.2f} ms ({slow / fast:.0f}x)")
 
 print("\n-- input safety: the record export runs in a subprocess, so a crash fails a check --")
 script = r'''

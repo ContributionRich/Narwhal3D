@@ -21,7 +21,7 @@ import textwrap
 import tomllib
 import types
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import assemble_linux_release as linux
 import verify_linux_release as linux_verify
@@ -253,8 +253,11 @@ class ApplicationPackaging(unittest.TestCase):
                 patch.object(linux_verify, "probe_pure_core_remove_join_cv", return_value={"qualified_separately": True}) as joint, \
                 patch.object(linux_verify, "probe_pure_core_polycurve_samples", return_value={"qualified_separately": True}) as polycurve_samples, \
                 patch.object(linux_verify, "probe_pure_core_offset_fit", return_value={"qualified_separately": True}) as offset_fit, \
+                patch.object(linux_verify, "probe_pure_core_dxf_approx", return_value={"qualified_separately": True}) as dxf_approx, \
                 patch.object(linux_verify, "probe_pure_core_surface_offset", return_value={"qualified_separately": True}) as surface_offset, \
+                patch.object(linux_verify, "probe_pure_core_planar_area", return_value={"qualified_separately": True}) as planar_area, \
                 patch.object(linux_verify, "probe_pure_core_surface_grid", return_value={"qualified_separately": True}) as surface_grid, \
+                patch.object(linux_verify, "probe_pure_core_surface_display", return_value={"qualified_separately": True}) as surface_display, \
                      patch.object(linux_verify, "probe_pure_core_polyline_nearest", return_value={"qualified_separately": True}) as polyline_nearest, \
                      patch.object(linux_verify, "probe_geometry_core_join", return_value={"qualified_separately": True}) as join, \
                      patch.object(linux.subprocess, "run", side_effect=execute_probe):
@@ -296,7 +299,7 @@ class ApplicationPackaging(unittest.TestCase):
                         root / "narwhal3d/native/libnarwhal_pure_core.so", Path("python"), env={})
                     polyline_samples.assert_called_once_with(
                         root / "narwhal3d/native/libnarwhal_pure_core.so", Path("python"), env={})
-                    for probe in (offset_fit, surface_offset, surface_grid):
+                    for probe in (offset_fit, surface_offset, surface_grid, surface_display, dxf_approx, planar_area):
                         probe.assert_called_once_with(
                             root / "narwhal3d/native/libnarwhal_pure_core.so", Path("python"), env={})
 
@@ -314,8 +317,11 @@ class ApplicationPackaging(unittest.TestCase):
                 patch.object(linux_verify, "probe_pure_core_remove_join_cv", return_value={"qualified_separately": True}) as joint, \
                 patch.object(linux_verify, "probe_pure_core_polycurve_samples", return_value={"qualified_separately": True}) as polycurve_samples, \
                 patch.object(linux_verify, "probe_pure_core_offset_fit", return_value={"qualified_separately": True}) as offset_fit, \
+                patch.object(linux_verify, "probe_pure_core_dxf_approx", return_value={"qualified_separately": True}) as dxf_approx, \
                 patch.object(linux_verify, "probe_pure_core_surface_offset", return_value={"qualified_separately": True}) as surface_offset, \
+                patch.object(linux_verify, "probe_pure_core_planar_area", return_value={"qualified_separately": True}) as planar_area, \
                 patch.object(linux_verify, "probe_pure_core_surface_grid", return_value={"qualified_separately": True}) as surface_grid, \
+                patch.object(linux_verify, "probe_pure_core_surface_display", return_value={"qualified_separately": True}) as surface_display, \
                      patch.object(linux_verify, "probe_pure_core_polyline_nearest", return_value={"qualified_separately": True}) as polyline_nearest, \
                      patch.object(linux_verify, "probe_geometry_core_join", return_value={"qualified_separately": True}) as join, \
                     patch.object(linux_verify.subprocess, "run", return_value=types.SimpleNamespace(stdout=json.dumps(result))):
@@ -328,7 +334,7 @@ class ApplicationPackaging(unittest.TestCase):
                         linux_verify.verify_native_library_abis(Path("app"), Path("python"), {})
                 retirement.assert_called_once_with(
                     Path("app/narwhal3d/native/libnarwhal_pure_core.so"), Path("python"), env={})
-                for probe in (offset_fit, surface_offset, surface_grid):
+                for probe in (offset_fit, surface_offset, surface_grid, surface_display, dxf_approx, planar_area):
                     probe.assert_called_once_with(
                         Path("app/narwhal3d/native/libnarwhal_pure_core.so"), Path("python"), env={})
                 curve_records.assert_called_once_with(
@@ -345,9 +351,12 @@ class ApplicationPackaging(unittest.TestCase):
         expected.update(application_core_history=1, application_core_load_jobs=1, application_core_save_jobs=1)
         with tempfile.TemporaryDirectory() as directory:
             root, python, environment = Path(directory), Path("python"), {"QUALIFICATION": "fixture"}
+            history_process = types.SimpleNamespace(**vars(subprocess))
+            history_process.run = Mock(
+                return_value=types.SimpleNamespace(stdout=json.dumps(expected)))
             with patch.object(linux_verify, "probe_pure_core_parser", return_value=linux_verify.PURE_CORE_PARSE_IDENTITY), \
-                    patch.object(linux_verify.subprocess, "run", return_value=types.SimpleNamespace(
-                        stdout=json.dumps(expected))) as history:
+                    patch.object(linux_verify, "subprocess", history_process):
+                history = history_process.run
                 with self.assertRaisesRegex(linux_verify.VerificationError, "missing regular pure-core retirement library"):
                     linux_verify.verify_native_library_abis(root, python, environment)
                 history.assert_not_called()

@@ -340,7 +340,7 @@ Narwhal 3D is an independent project and is not affiliated with the vendors of t
 
 ## Security and provenance
 
-Release artifacts are built from audited public source revisions. Before publishing, run `scripts/audit_public_tree.py` and verify that each package's recorded source revision matches its release tag. Keep private development history and local research material out of public source exports.
+Release artifacts are built from audited public source revisions. Before publishing, run `./scripts/source_tools.sh audit` and verify that each package's recorded source revision matches its release tag. Keep private development history and local research material out of public source exports.
 
 ## Exact planar Cap and typed AI Join/Cap
 

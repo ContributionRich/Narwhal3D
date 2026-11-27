@@ -14,14 +14,7 @@ import shutil
 import subprocess
 import sys
 
-from check_pure_core import (probe_pure_core_curve_hits, probe_pure_core_curve_record_hits,
-                             probe_pure_core_line_samples, probe_pure_core_nearest_batch,
-                             probe_pure_core_nurbs_record, probe_pure_core_offset_fit,
-                             probe_pure_core_surface_offset, probe_pure_core_surface_grid,
-                             probe_pure_core_parser,
-                             probe_pure_core_polycurve_samples, probe_pure_core_polyline_nearest,
-                             probe_pure_core_polyline_samples,
-                             probe_pure_core_retirement, probe_pure_core_remove_join_cv)
+from check_pure_core import probe_pure_core_curve_hits, probe_pure_core_curve_record_hits, probe_pure_core_line_samples, probe_pure_core_nearest_batch, probe_pure_core_nurbs_record, probe_pure_core_offset_fit, probe_pure_core_surface_offset, probe_pure_core_surface_grid, probe_pure_core_surface_display, probe_pure_core_parser, probe_pure_core_polycurve_samples, probe_pure_core_polyline_nearest, probe_pure_core_polyline_samples, probe_pure_core_retirement, probe_pure_core_remove_join_cv, probe_pure_core_dxf_approx, probe_pure_core_planar_area
 
 IMAGE = "quay.io/pypa/manylinux_2_28_x86_64@sha256:1e7b8460ad8fb3fb0fbe1cd818845159ac896b4fd17452d56e892c291f3b97a8"
 COMPONENTS = {
@@ -480,8 +473,11 @@ def main() -> None:
             receipt["pure_core_polycurve_samples"] = probe_pure_core_polycurve_samples(target / "release/libnarwhal_pure_core.so")
             receipt["pure_core_remove_join_cv"] = probe_pure_core_remove_join_cv(target / "release/libnarwhal_pure_core.so")
             receipt["pure_core_offset_fit"] = probe_pure_core_offset_fit(target / "release/libnarwhal_pure_core.so")
+            receipt["pure_core_dxf_approx"] = probe_pure_core_dxf_approx(target / "release/libnarwhal_pure_core.so")
             receipt["pure_core_surface_offset"] = probe_pure_core_surface_offset(target / "release/libnarwhal_pure_core.so")
+            receipt["pure_core_planar_area"] = probe_pure_core_planar_area(target / "release/libnarwhal_pure_core.so")
             receipt["pure_core_surface_grid"] = probe_pure_core_surface_grid(target / "release/libnarwhal_pure_core.so")
+            receipt["pure_core_surface_display"] = probe_pure_core_surface_display(target / "release/libnarwhal_pure_core.so")
             (out / f"{args.crate}-{mode}-receipt.json").write_text(json.dumps(receipt, indent=2) + "\n")
         (out / "bin").mkdir(exist_ok=True)
         for name in COMPONENTS[args.crate]:

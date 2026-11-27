@@ -1,33 +1,52 @@
 use std::{fs, path::PathBuf};
+const REQUIRED_DRIVER_PATHS: &[&str] = &[
+    "native/automation_test_driver/Cargo.lock",
+    "native/automation_test_driver/Cargo.toml",
+    "native/automation_test_driver/README.md",
+    "native/automation_test_driver/src/additional.rs",
+    "native/automation_test_driver/src/additional_catalog_provenance_v1.json",
+    "native/automation_test_driver/src/additional_catalog_v1.json",
+    "native/automation_test_driver/src/anchor_overrides_v1.json",
+    "native/automation_test_driver/src/catalog.json",
+    "native/automation_test_driver/src/catalog.rs",
+    "native/automation_test_driver/src/discovery.rs",
+    "native/automation_test_driver/src/fixtures.rs",
+    "native/automation_test_driver/src/lib.rs",
+    "native/automation_test_driver/src/main.rs",
+    "native/automation_test_driver/src/overrides.rs",
+    "native/automation_test_driver/tests/cli.rs",
+    "native/automation_test_driver/tests/registration.rs",
+];
 fn root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
 }
 #[test]
 fn complete_driver_source_is_registered() {
     let root = root();
-    let builder = fs::read_to_string(root.join("scripts/create_public_branch.py")).unwrap();
-    let audit = fs::read_to_string(root.join("scripts/audit_public_tree.py")).unwrap();
-    for name in [
-        "native/automation_test_driver/Cargo.lock",
-        "native/automation_test_driver/Cargo.toml",
-        "native/automation_test_driver/README.md",
-        "native/automation_test_driver/src/additional.rs",
-        "native/automation_test_driver/src/additional_catalog_provenance_v1.json",
-        "native/automation_test_driver/src/additional_catalog_v1.json",
-        "native/automation_test_driver/src/anchor_overrides_v1.json",
-        "native/automation_test_driver/src/catalog.json",
-        "native/automation_test_driver/src/catalog.rs",
-        "native/automation_test_driver/src/discovery.rs",
-        "native/automation_test_driver/src/fixtures.rs",
-        "native/automation_test_driver/src/lib.rs",
-        "native/automation_test_driver/src/main.rs",
-        "native/automation_test_driver/src/overrides.rs",
-        "native/automation_test_driver/tests/cli.rs",
-        "native/automation_test_driver/tests/registration.rs",
-    ] {
+    let builder: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(root.join("native/source_tools/src/publication.json")).unwrap(),
+    )
+    .unwrap();
+    let audit: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(root.join("native/source_tools/src/audit.json")).unwrap(),
+    )
+    .unwrap();
+    for name in REQUIRED_DRIVER_PATHS {
         assert!(root.join(name).is_file(), "missing {name}");
-        assert!(builder.contains(name), "builder omitted {name}");
-        assert!(audit.contains(name), "audit omitted {name}");
+        assert!(
+            builder["NATIVE_FILES"]["$tuple"]
+                .as_array()
+                .unwrap()
+                .contains(&serde_json::json!(name)),
+            "builder omitted {name}"
+        );
+        assert!(
+            audit["REQUIRED"]["$set"]
+                .as_array()
+                .unwrap()
+                .contains(&serde_json::json!(name)),
+            "audit omitted {name}"
+        );
     }
 }
 #[test]
@@ -129,4 +148,36 @@ fn documentation_and_license_preserve_tooling_boundary() {
     }
     let contributing = fs::read_to_string(root.join("CONTRIBUTING.md")).unwrap();
     assert!(contributing.contains("native/automation_test_driver/README.md"));
+}
+
+#[test]
+fn every_source_omission_in_both_native_inventories_is_rejected() {
+    let root = root();
+    for (file, key, tag) in [
+        ("publication.json", "NATIVE_FILES", "$tuple"),
+        ("audit.json", "REQUIRED", "$set"),
+    ] {
+        let original: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(root.join("native/source_tools/src").join(file)).unwrap(),
+        )
+        .unwrap();
+        let complete = |value: &serde_json::Value| {
+            REQUIRED_DRIVER_PATHS.iter().all(|p| {
+                value[key][tag]
+                    .as_array()
+                    .unwrap()
+                    .contains(&serde_json::json!(p))
+            })
+        };
+        assert!(complete(&original));
+        for path in REQUIRED_DRIVER_PATHS {
+            let mut mutant = original.clone();
+            mutant[key][tag]
+                .as_array_mut()
+                .unwrap()
+                .retain(|v| v != path);
+            assert!(!complete(&mutant), "{file} omission survived: {path}");
+            assert!(complete(&original));
+        }
+    }
 }

@@ -52,7 +52,7 @@ Feature status lives in [`STATUS.md`](../STATUS.md) and [`docs/gaps.md`](gaps.md
 9. **Public text rules.** Do not name the commercial CAD product this project is modeled on (say
    "the reference CAD application" if you must). Do not commit local paths, downloaded runtimes,
    build output, private documents or third-party material without clear redistribution terms.
-   `python3 scripts/audit_public_tree.py --root . --git-ref HEAD` checks a commit.
+   `./scripts/source_tools.sh audit --root . --git-ref HEAD` checks a commit.
 10. **Clear stale bytecode** before trusting a result after edits:
     `find . -name __pycache__ -type d -not -path './.git/*' -not -path './tools/*' -exec rm -rf {} +`
 
@@ -159,7 +159,7 @@ Run the narrowest suite first.
 |---|---|
 | Rust crate tests | `cargo +1.95.0 test --manifest-path native/<crate>/Cargo.toml --locked` |
 | One suite (Python or Blender-backed) | `scripts/run_suite.sh spike/<suite>.py` |
-| Public-tree and docs checks | `tools/blender-patched/5.2/python/bin/python3.13 spike/test_public_project.py` |
+| Public-tree and docs checks | `./scripts/source_tools.sh project` |
 | Fast checks (bootstrap only) | `./scripts/fast_checks.sh` |
 | Full gate | `./run_tests.sh` (stops at the first failing suite) |
 

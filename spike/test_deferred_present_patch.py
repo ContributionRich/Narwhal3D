@@ -107,7 +107,7 @@ check(marker_args[-7:] == ["BRANDING_PATCH", "APP_DRAWN_PATCH", "BOUNDARY_PATCH"
       "runtime provenance arguments and path-to-index mappings are exact")
 
 public_spec = importlib.util.spec_from_file_location(
-    "narwhal_public_branch", ROOT / "scripts" / "create_public_branch.py")
+    "narwhal_public_branch", ROOT / "scripts" / "source_tools.py")
 assert public_spec is not None and public_spec.loader is not None
 public_module = importlib.util.module_from_spec(public_spec)
 public_spec.loader.exec_module(public_module)

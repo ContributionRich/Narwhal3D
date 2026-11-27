@@ -48,7 +48,7 @@ EXTRA_SOURCE = (
     "blender_patches/apply_statusbar_height.py",
     "blender_patches/apply_deferred_first_present.py",
     "blender_patches/apply_narwhal3d_branding.py",
-    "scripts/build_ui_bundle.py", "scripts/ui_bundle_export.py", "scripts/create_public_branch.py",
+    "scripts/build_ui_bundle.py", "scripts/ui_bundle_export.py", "native/source_tools/src/publication.json",
     "scripts/ui_bundle_shots.py", "scripts/ui_bundle/test_preview.cjs",
 )
 ASSET_ROOTS = ("narwhal3d/icons", "artwork/icons", "artwork/Logo")
@@ -165,11 +165,8 @@ def source_inventory(root=ROOT):
         sources[rel] = read_input(root, rel)
     # Export only reviewed native sources, never another agent's unregistered
     # experiments merely because they exist beside a compiled module.
-    public_tree = ast.parse(sources["scripts/create_public_branch.py"])
-    native_public = set()
-    for node in public_tree.body:
-        if isinstance(node, ast.Assign) and any(isinstance(t, ast.Name) and t.id in {"NATIVE_FILES", "WELCOME_FILES"} for t in node.targets):
-            native_public.update(ast.literal_eval(node.value))
+    policy = json.loads(sources["native/source_tools/src/publication.json"])
+    native_public = set(policy["NATIVE_FILES"]["$tuple"]) | set(policy["WELCOME_FILES"]["$tuple"])
     for base in NATIVE_ROOTS:
         directory = root / base
         if not directory.is_dir():

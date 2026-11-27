@@ -82,7 +82,7 @@ done. Main owns harness/public manifests and should include the new focused test
 and retain the existing platform scripts. In particular, Windows source-inventory
 orchestration imports the existing `scripts/build_linux_native.py` helper; it does
 not invoke its Linux build entry point. No changes were made to
-`create_public_branch.py`, `audit_public_tree.py`, `run_tests.sh`, `narwhal3d/`,
+`native/source_tools/src/publication.json`, `native/source_tools/src/audit.json`, `run_tests.sh`, `narwhal3d/`,
 `native/` or other agents' task entries.
 
 ## Validation — host only, 2026-10-30

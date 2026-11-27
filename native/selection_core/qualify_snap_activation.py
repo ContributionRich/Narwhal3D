@@ -7,7 +7,6 @@ Builds are isolated, locked/offline, source-accounted, and repeated for both OSe
 """
 from __future__ import annotations
 import argparse
-import ast
 import fcntl
 import hashlib
 import json
@@ -110,11 +109,8 @@ def atomic_copy(source, destination):
 
 def publication_inventory():
     """Read the harness-owned source list without importing or editing it."""
-    manifest = ROOT / 'scripts/create_public_branch.py'
-    tree = ast.parse(manifest.read_text())
-    native = next(ast.literal_eval(node.value) for node in tree.body
-                  if isinstance(node, ast.Assign)
-                  and any(isinstance(t, ast.Name) and t.id == 'NATIVE_FILES' for t in node.targets))
+    manifest = ROOT / 'native/source_tools/src/publication.json'
+    native = json.loads(manifest.read_text())['NATIVE_FILES']['$tuple']
     return {'manifest': str(manifest.relative_to(ROOT)), 'manifest_sha256': sha(manifest),
             'required_paths': list(PUBLIC_SOURCE_PATHS),
             'missing': [p for p in PUBLIC_SOURCE_PATHS if p not in native]}

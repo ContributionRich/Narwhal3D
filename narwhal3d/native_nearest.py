@@ -1347,8 +1347,10 @@ def _surface_grid_call(fn, surface, us, vs):
               (ctypes.c_double * len(normals)).from_buffer(normals), len(points))
     if code != 0:
         return None
-    rows = lambda flat: [[tuple(flat[3 * (i * nv + j):3 * (i * nv + j) + 3]) for j in range(nv)]
-                         for i in range(nu)]
+    def rows(flat):
+        it = iter(flat)
+        nodes = list(zip(it, it, it))
+        return [nodes[i * nv:(i + 1) * nv] for i in range(nu)]
     return rows(points), rows(normals)
 
 
@@ -1450,4 +1452,511 @@ def surface_grid(surface, us, vs):
     except Exception:  # noqa: BLE001 -- PointAt decides
         return None
     _native_surface_grid_calls += 1
+    return got
+
+
+# Surface display parameters (narwhal_pure_core_surface_display_params,
+# native/pure_core/src/surface_display.rs): `bridge._surface_axis_params`, the display grid
+# lines of a NurbsSurface along one direction, read from its Encode() record with openNURBS's
+# IsoCurve / IsClosed / Evaluate ported. A BrepFace goes through its UnderlyingSurface only
+# where the face evaluates and closes as that surface (openNURBS may hold it transposed).
+# Gated by SURFACE_DISPLAY_QUALIFIED_PLATFORMS and the loaded rhino3dm passing
+# `_surface_display_parity` against the Python route on the surface offset witnesses.
+SURFACE_DISPLAY_QUALIFIED_PLATFORMS = frozenset({("linux", "x86_64")})
+_SURFACE_DISPLAY_ROOM = 4
+# Host allocation bound: source CVs/knots are bounded at 2**20, with at most
+# one rounded segment count per span plus the existing 200 turn samples.
+_SURFACE_DISPLAY_MAX_PARAMS = (3 << 20) + 1024
+_SURFACE_DISPLAY_WITNESS_TOLERANCE = 0.01
+_SURFACE_DISPLAY_WITNESS_SEED = 3
+_surface_display_state = None       # (signature, binding or None, capability text)
+_native_surface_display_calls = 0
+
+
+def _surface_display_call(fn, surface, direction, tolerance, knots_visible):
+    """The parameters for `surface` (whose record must be an ON_NurbsSurface) along
+    `direction`, or None."""
+    # ctypes allocation/response validation must remain on the host side.
+    tolerance = float(tolerance)
+    if direction not in (0, 1) or knots_visible not in (0, 1) or not math.isfinite(tolerance):
+        return None
+    record = base64.b64decode(surface.Encode()["data"])
+    capacity = 1024
+    for _attempt in range(2):
+        out = (ctypes.c_double * capacity)()
+        count = ctypes.c_size_t(0)
+        code = fn(record, len(record), int(direction), float(tolerance), int(knots_visible),
+                  out, capacity, ctypes.byref(count))
+        if code == 0:
+            if not 2 <= count.value <= capacity:
+                return None
+            values = list(out[:count.value])
+            return values if all(math.isfinite(t) for t in values) else None
+        if code != _SURFACE_DISPLAY_ROOM:
+            return None
+        if not capacity < count.value <= _SURFACE_DISPLAY_MAX_PARAMS:
+            return None
+        capacity = count.value
+    return None
+
+
+def _surface_display_wave():
+    """A rational quadratic-by-cubic wave on irregular doubles, steep enough that both
+    directions take the turn route. Its u knots are two Bezier spans and its v knots single,
+    with no knot at either domain's middle, so the middle iso-curves come from openNURBS's
+    de Casteljau and NURBS span evaluations rather than copied control points."""
+    rng = random.Random(_SURFACE_DISPLAY_WITNESS_SEED)
+    wave = r3.NurbsSurface.Create(3, True, 3, 4, 5, 7)
+    for i in range(5):
+        for j in range(7):
+            w = rng.uniform(0.6, 1.4)
+            x, y = i * rng.uniform(1.6, 2.4), j * rng.uniform(1.6, 2.4)
+            z = 3.0 * math.sin(i * 1.7 + 0.3) * math.cos(j * 1.1) + rng.uniform(-0.5, 0.5)
+            wave.Points[i, j] = r3.Point4d(x * w, y * w, z * w, w)
+    a, b, br = rng.uniform(-5.0, -1.0), rng.uniform(2.0, 6.0), rng.uniform(0.15, 0.35)
+    for i, k in enumerate((0.0, 0.0, br, br, 1.0, 1.0)):
+        wave.KnotsU[i] = a + (b - a) * k
+    a, b = rng.uniform(-5.0, -1.0), rng.uniform(2.0, 6.0)
+    inner = sorted([rng.uniform(0.1, 0.4)] + [rng.uniform(0.6, 0.9) for _ in range(2)])
+    for i, k in enumerate([0.0] * 3 + inner + [1.0] * 3):
+        wave.KnotsV[i] = a + (b - a) * k
+    return wave
+
+
+def _surface_display_witnesses():
+    """``(object, underlying surface, knots visible)``: the surface offset witnesses (a
+    rational sphere whose poles give point iso-curves and whose rows are closed circles, and a
+    cubic-by-quadratic bump on non-uniform knots in shifted domains), the wave, and the wave as
+    a BrepFace, which shows Python no knots."""
+    sphere, bump = (w[0] for w in _surface_offset_witnesses())
+    wave = _surface_display_wave()
+    face = r3.Brep.CreateFromSurface(wave).Faces[0]
+    return [(sphere, sphere, True), (bump, bump, True), (wave, wave, True),
+            (face, face.UnderlyingSurface(), False)]
+
+
+def _surface_display_parity(fn, reference, tolerance):
+    """True when `reference` (the Python route) on the loaded rhino3dm gives Rust's parameters,
+    bit for bit, in both directions of every witness."""
+    try:
+        for obj, source, visible in _surface_display_witnesses():
+            for direction in (0, 1):
+                got = _surface_display_call(fn, source, direction, tolerance, visible)
+                want = reference(obj, direction, tolerance)
+                if got is None or _packed_floats(got) != _packed_floats(want):
+                    return False
+    except Exception:  # noqa: BLE001 -- an SDK that cannot be checked is not qualified
+        return False
+    return True
+
+
+def _packed_floats(values):
+    return struct.pack(f"<{len(values)}d", *values)
+
+
+def _surface_display_binding(reference, tolerance):
+    global _surface_display_state
+    signature = (os.environ.get(_ENV) or "<packaged>", _here(), id(r3))
+    state = _surface_display_state
+    if state is not None and state[0] == signature:
+        return state[1]
+    with _lock:
+        state = _surface_display_state
+        if state is not None and state[0] == signature:
+            return state[1]
+        fn = None
+        text = "surface display export unavailable; surface grid lines use the Python route"
+        if signature[1] not in SURFACE_DISPLAY_QUALIFIED_PLATFORMS:
+            text = ("not qualified on {}/{}; surface grid lines use the Python route"
+                    .format(*signature[1]))
+        else:
+            explicit = os.environ.get(_ENV)
+            path = (Path(explicit).expanduser() if explicit else
+                    Path(__file__).resolve().parent / "native" / _library_name())
+            try:
+                fn = ctypes.CDLL(str(path)).narwhal_pure_core_surface_display_params
+                fn.argtypes = [ctypes.c_char_p, ctypes.c_size_t, ctypes.c_uint32,
+                               ctypes.c_double, ctypes.c_uint8, _D, ctypes.c_size_t,
+                               ctypes.POINTER(ctypes.c_size_t)]
+                fn.restype = ctypes.c_int32
+            except (AttributeError, OSError):
+                fn = None
+            if fn is not None and not _surface_display_parity(
+                    fn, reference, _SURFACE_DISPLAY_WITNESS_TOLERANCE):
+                fn = None
+                text = (f"rhino3dm {getattr(r3, '__version__', '?')} differs from the Rust "
+                        "surface grid lines on the witness surfaces; surface grid lines use "
+                        "the Python route")
+            elif fn is not None:
+                text = "qualified"
+        _surface_display_state = signature, fn, text
+        return fn
+
+
+def surface_display_capability(reference, tolerance):
+    """``"qualified"`` when surface display grid lines are placed in Rust, otherwise the
+    reason. `reference` is the Python route the one-time parity check compares with, at
+    the fixed witness tolerance; caller tolerances cannot poison admission."""
+    _surface_display_binding(reference, tolerance)
+    return _surface_display_state[2]
+
+
+def _face_is_its_surface(face, source):
+    """Whether `face` has `source`'s domains and closure and evaluates as `source` at two
+    off-diagonal points, so that it is not held transposed."""
+    domains = [(face.Domain(d), source.Domain(d)) for d in (0, 1)]
+    if any(_packed_floats((a.T0, a.T1)) != _packed_floats((b.T0, b.T1))
+           for a, b in domains):
+        return False
+    if any(face.IsClosed(d) != source.IsClosed(d) for d in (0, 1)):
+        return False
+    (du, _), (dv, _) = domains
+    for fu, fv in ((0.3, 0.7), (0.6, 0.15)):
+        u, v = du.T0 + (du.T1 - du.T0) * fu, dv.T0 + (dv.T1 - dv.T0) * fv
+        p, q = face.PointAt(u, v), source.PointAt(u, v)
+        if _packed(((p.X, p.Y, p.Z),)) != _packed(((q.X, q.Y, q.Z),)):
+            return False
+    return True
+
+
+def surface_display_params(surface, direction, tolerance, reference):
+    """`reference(surface, direction, tolerance)` (`bridge._python_surface_axis_params`)
+    through Rust for a NurbsSurface, or a BrepFace that evaluates as its underlying
+    NurbsSurface; None where the Python route must run."""
+    global _native_surface_display_calls
+    fn = _surface_display_binding(reference, tolerance)
+    if fn is None:
+        return None
+    try:
+        face = isinstance(surface, r3.BrepFace)
+        # rhino3dm hands a face's surface back as a plain Surface; its record still names its
+        # class, and the export reads only ON_NurbsSurface records.
+        source = surface.UnderlyingSurface() if face else surface
+        if not isinstance(source, r3.Surface):
+            return None
+        if face and not _face_is_its_surface(surface, source):
+            return None
+        # Python places a line on every knot only where the object exposes KnotsU / KnotsV.
+        got = _surface_display_call(fn, source, direction, tolerance,
+                                    isinstance(surface, r3.NurbsSurface))
+    except Exception:  # noqa: BLE001 -- the Python route decides
+        return None
+    if got is not None:
+        _native_surface_display_calls += 1
+    return got
+
+
+DXF_APPROX_QUALIFIED_PLATFORMS = frozenset({("linux", "x86_64")})
+
+
+_DXF_APPROX_ROOM = 4
+
+
+_DXF_APPROX_WITNESS_SEED = 20261125
+
+
+_dxf_approx_state = None            # (signature, binding or None, capability text)
+
+
+_native_dxf_approx_calls = 0
+
+
+def _dxf_approx_call(fn, curve, tol, t0, t1):
+    """The points for `curve` (whose record must be an ON_NurbsCurve) as ``(x, y, z)``, or
+    None."""
+    record = base64.b64decode(curve.Encode()["data"])
+    capacity = 4096
+    for _attempt in range(2):
+        out = array.array("d", bytes(24 * capacity))
+        count = ctypes.c_size_t(0)
+        code = fn(record, len(record), float(tol), float(t0), float(t1),
+                  (ctypes.c_double * len(out)).from_buffer(out), capacity, ctypes.byref(count))
+        if code == 0:
+            it = iter(out[:3 * count.value])
+            return list(zip(it, it, it))
+        if code != _DXF_APPROX_ROOM:
+            return None
+        capacity = count.value
+    return None
+
+
+def _dxf_approx_witnesses():
+    """``(curve, tol, t0, t1)`` on irregular doubles, where a fused multiply-add in PointAt
+    would round most points differently: a cubic wave on non-uniform knots in a shifted
+    domain, over its whole domain and over an inner interval, a rational quadratic, and a
+    circle off the origin (rational Bezier spans), each at a tolerance that halves its
+    intervals several times."""
+    rng = random.Random(_DXF_APPROX_WITNESS_SEED)
+    wave = r3.NurbsCurve.Create(False, 3, [
+        r3.Point3d(i * rng.uniform(1.6, 2.4), math.sin(i * 0.9) * rng.uniform(2.0, 4.0),
+                   rng.uniform(-1.0, 1.0)) for i in range(11)])
+    inner = sorted(rng.uniform(0.05, 0.95) for _ in range(len(wave.Knots) - 6))
+    a, b = rng.uniform(-7.0, -1.0), rng.uniform(2.0, 9.0)
+    for i, k in enumerate([0.0] * 3 + inner + [1.0] * 3):
+        wave.Knots[i] = a + (b - a) * k
+    arc = r3.NurbsCurve(3, True, 3, 7)
+    for i in range(7):
+        w = rng.uniform(0.5, 1.5)
+        arc.Points[i] = r3.Point4d(math.cos(i * 0.8) * 5.0 * w, math.sin(i * 0.8) * 4.0 * w,
+                                   rng.uniform(-0.5, 0.5) * w, w)
+    inner = sorted(rng.uniform(0.1, 0.9) for _ in range(4))
+    for i, k in enumerate([0.0] * 2 + inner + [1.0] * 2):
+        arc.Knots[i] = 3.0 * k - 1.0
+    circle = r3.Circle(r3.Point3d(rng.uniform(-9.0, 9.0), rng.uniform(-9.0, 9.0),
+                                  rng.uniform(-3.0, 3.0)), rng.uniform(2.0, 7.0)).ToNurbsCurve()
+    d, e, f = wave.Domain, arc.Domain, circle.Domain
+    return [(wave, 1e-3, d.T0, d.T1),
+            (wave, 3e-4, d.T0 + (d.T1 - d.T0) * 0.3, d.T0 + (d.T1 - d.T0) * 0.8),
+            (arc, 1e-3, e.T0, e.T1), (circle, 1e-3, f.T0, f.T1)]
+
+
+def _dxf_approx_parity(fn, reference):
+    """True when `reference` (the Python route) on the loaded rhino3dm gives Rust's points,
+    bit for bit, on every witness."""
+    try:
+        for curve, tol, t0, t1 in _dxf_approx_witnesses():
+            got = _dxf_approx_call(fn, curve, tol, t0, t1)
+            if got is None or _packed(got) != _packed(reference(curve, tol, t0, t1)):
+                return False
+    except Exception:  # noqa: BLE001 -- an SDK that cannot be checked is not qualified
+        return False
+    return True
+
+
+def _dxf_approx_binding(reference):
+    global _dxf_approx_state
+    signature = (os.environ.get(_ENV) or "<packaged>", _here(), id(r3))
+    state = _dxf_approx_state
+    if state is not None and state[0] == signature:
+        return state[1]
+    with _lock:
+        state = _dxf_approx_state
+        if state is not None and state[0] == signature:
+            return state[1]
+        fn, text = None, "DXF approximation export unavailable; DXF curves use the Python route"
+        if signature[1] not in DXF_APPROX_QUALIFIED_PLATFORMS:
+            text = ("not qualified on {}/{}; DXF curves use the Python route"
+                    .format(*signature[1]))
+        else:
+            explicit = os.environ.get(_ENV)
+            path = (Path(explicit).expanduser() if explicit else
+                    Path(__file__).resolve().parent / "native" / _library_name())
+            try:
+                fn = ctypes.CDLL(str(path)).narwhal_pure_core_dxf_approx_points
+                fn.argtypes = [ctypes.c_char_p, ctypes.c_size_t, ctypes.c_double,
+                               ctypes.c_double, ctypes.c_double, _D, ctypes.c_size_t,
+                               ctypes.POINTER(ctypes.c_size_t)]
+                fn.restype = ctypes.c_int32
+            except (AttributeError, OSError):
+                fn = None
+            if fn is not None and not _dxf_approx_parity(fn, reference):
+                fn = None
+                text = (f"rhino3dm {getattr(r3, '__version__', '?')} differs from the Rust "
+                        "DXF approximation on the witness curves; DXF curves use the Python "
+                        "route")
+            elif fn is not None:
+                text = "qualified"
+        _dxf_approx_state = signature, fn, text
+        return fn
+
+
+def dxf_approx_capability(reference):
+    """``"qualified"`` when DXF curve approximation runs in Rust, otherwise the reason.
+    `reference` is the Python route the one-time parity check compares with."""
+    _dxf_approx_binding(reference)
+    return _dxf_approx_state[2]
+
+
+def dxf_approx_points(curve, tol, t0, t1, reference):
+    """`reference(curve, tol, t0, t1)` (`export_commands._python_approx_points`) through Rust
+    for a curve whose record is an ON_NurbsCurve; None where the Python route must run."""
+    global _native_dxf_approx_calls
+    if not isinstance(curve, r3.Curve):
+        return None
+    fn = _dxf_approx_binding(reference)
+    if fn is None:
+        return None
+    try:
+        got = _dxf_approx_call(fn, curve, tol, t0, t1)
+    except Exception:  # noqa: BLE001 -- the Python route decides
+        return None
+    if got is not None:
+        _native_dxf_approx_calls += 1
+    return got
+
+
+
+
+PLANAR_AREA_QUALIFIED_PLATFORMS = frozenset({("linux", "x86_64")})
+
+
+_PLANAR_AREA_NO_REGION = 3
+
+
+_PLANAR_AREA_WITNESS_SEED = 20261127
+
+
+NO_REGION = object()
+
+
+_planar_area_state = None           # (signature, binding or None, capability text)
+
+
+_native_planar_area_calls = 0
+
+
+def _planar_area_call(fn, curve):
+    """``(area, area_err, centroid, centroid_err)``, NO_REGION, or None for a closed planar
+    NurbsCurve, PolyCurve or PolylineCurve. As in the Python route, the plane is sampled on the
+    curve itself and Green's theorem runs on its NURBS form."""
+    if isinstance(curve, r3.NurbsCurve):
+        shape, record = b"", base64.b64decode(curve.Encode()["data"])
+    else:
+        shape = base64.b64decode(curve.Encode()["data"])
+        record = base64.b64decode(curve.ToNurbsCurve().Encode()["data"])
+    out = (ctypes.c_double * 8)()
+    code = fn(shape, len(shape), record, len(record), out)
+    if code == _PLANAR_AREA_NO_REGION:
+        return NO_REGION
+    if code != 0:
+        return None
+    return out[0], out[1], (out[2], out[3], out[4]), (out[5], out[6], out[7])
+
+
+def _planar_area_witnesses():
+    """Closed planar NurbsCurves on irregular doubles in tilted planes, where a fused
+    multiply-add would round most products differently: a periodic cubic blob, a rational
+    circle (Bezier spans), a degree-5 wave loop on non-uniform knots in a shifted domain,
+    periodic blobs of degrees 2-5 (a fused Green sum changes about a quarter of all areas), a
+    closed PolylineCurve, and a closed PolyCurve of a line, a cubic on a shifted domain and a
+    polyline."""
+    rng = random.Random(_PLANAR_AREA_WITNESS_SEED)
+    origin = r3.Point3d(rng.uniform(-9.0, 9.0), rng.uniform(-9.0, 9.0), rng.uniform(-9.0, 9.0))
+    plane = r3.Plane(origin, r3.Vector3d(rng.uniform(0.2, 1.0), rng.uniform(-1.0, 1.0),
+                                         rng.uniform(0.3, 1.0)))
+    def on_plane(u, v):
+        return plane.PointAt(u, v)
+    blob = r3.NurbsCurve.Create(True, 3, [
+        on_plane(math.cos(k * 0.785) * rng.uniform(3.0, 5.0),
+                 math.sin(k * 0.785) * rng.uniform(2.0, 4.0)) for k in range(8)])
+    circle = r3.Circle(origin, rng.uniform(1.5, 6.0)).ToNurbsCurve()
+    circle.Rotate(rng.uniform(0.3, 1.2), r3.Vector3d(rng.uniform(-1.0, 1.0), 1.0, 0.0), origin)
+    points = [on_plane(math.cos(k * 0.5236) * (4.0 + math.sin(k * 1.9)),
+                       math.sin(k * 0.5236) * (3.0 + rng.uniform(-0.5, 0.5))) for k in range(12)]
+    points.append(points[0])
+    wave = r3.NurbsCurve.Create(False, 5, points)
+    inner = sorted(rng.uniform(0.05, 0.95) for _ in range(len(wave.Knots) - 10))
+    a, b = rng.uniform(-6.0, -1.0), rng.uniform(2.0, 8.0)
+    for i, k in enumerate([0.0] * 5 + inner + [1.0] * 5):
+        wave.Knots[i] = a + (b - a) * k
+    blobs = [r3.NurbsCurve.Create(True, degree, [
+        on_plane(math.cos(k * 0.6981) * rng.uniform(2.0, 6.0),
+                 math.sin(k * 0.6981) * rng.uniform(2.0, 6.0)) for k in range(9)])
+        for degree in (2, 3, 4, 5)]
+    corners = [on_plane(math.cos(k * 1.0472) * rng.uniform(2.0, 6.0),
+                        math.sin(k * 1.0472) * rng.uniform(2.0, 6.0)) for k in range(6)]
+    polygon = r3.PolylineCurve(corners + [corners[0]])
+    a, b, c = (on_plane(rng.uniform(-6.0, -2.0), rng.uniform(-3.0, 3.0)),
+               on_plane(rng.uniform(2.0, 6.0), rng.uniform(-5.0, -1.0)),
+               on_plane(rng.uniform(1.0, 5.0), rng.uniform(2.0, 6.0)))
+    joined = r3.PolyCurve()
+    joined.Append(r3.LineCurve(a, b))
+    cubic = r3.NurbsCurve.Create(False, 3, [
+        b, on_plane(rng.uniform(6.0, 9.0), rng.uniform(-1.0, 1.0)),
+        on_plane(rng.uniform(5.0, 8.0), rng.uniform(3.0, 6.0)), c])
+    # A segment domain apart from its polycurve span, as a file can hold, so PointAt maps
+    # the parameter.
+    cubic.Domain = r3.Interval(rng.uniform(1.0, 3.0), rng.uniform(5.0, 9.0))
+    joined.Append(cubic)
+    joined.Append(r3.PolylineCurve([c, on_plane(rng.uniform(-2.0, 0.0), rng.uniform(4.0, 7.0)),
+                                    a]))
+    return [blob, circle, wave, *blobs, polygon, joined]
+
+
+def _planar_area_parity(fn, reference):
+    """True when `reference` (the Python route) on the loaded rhino3dm gives Rust's area,
+    centroid and errors, bit for bit, on every witness."""
+    try:
+        for curve in _planar_area_witnesses():
+            got, want = _planar_area_call(fn, curve), reference(curve)
+            if got is None or got is NO_REGION or want is None:
+                return False
+            flat = lambda r: (r[0], r[1], *r[2], *r[3])
+            if _packed_values(flat(got)) != _packed_values(flat(want)):
+                return False
+    except Exception:  # noqa: BLE001 -- an SDK that cannot be checked is not qualified
+        return False
+    return True
+
+
+def _packed_values(values):
+    return struct.pack(f"<{len(values)}d", *values)
+
+
+def _planar_area_binding(reference):
+    global _planar_area_state
+    signature = (os.environ.get(_ENV) or "<packaged>", _here(), id(r3))
+    state = _planar_area_state
+    if state is not None and state[0] == signature:
+        return state[1]
+    with _lock:
+        state = _planar_area_state
+        if state is not None and state[0] == signature:
+            return state[1]
+        fn = None
+        text = "planar area export unavailable; curve areas use the Python route"
+        if signature[1] not in PLANAR_AREA_QUALIFIED_PLATFORMS:
+            text = ("not qualified on {}/{}; curve areas use the Python route"
+                    .format(*signature[1]))
+        else:
+            explicit = os.environ.get(_ENV)
+            path = (Path(explicit).expanduser() if explicit else
+                    Path(__file__).resolve().parent / "native" / _library_name())
+            try:
+                fn = ctypes.CDLL(str(path)).narwhal_pure_core_planar_area_centroid
+                fn.argtypes = [ctypes.c_char_p, ctypes.c_size_t, ctypes.c_char_p,
+                               ctypes.c_size_t, _D]
+                fn.restype = ctypes.c_int32
+            except (AttributeError, OSError):
+                fn = None
+            if fn is not None and not _planar_area_parity(fn, reference):
+                fn = None
+                text = (f"rhino3dm {getattr(r3, '__version__', '?')} differs from the Rust "
+                        "planar area on the witness curves; curve areas use the Python route")
+            elif fn is not None:
+                text = "qualified"
+        _planar_area_state = signature, fn, text
+        return fn
+
+
+def planar_area_capability(reference):
+    """``"qualified"`` when closed planar curve areas run in Rust, otherwise the reason.
+    `reference` is the Python route the one-time parity check compares with."""
+    _planar_area_binding(reference)
+    return _planar_area_state[2]
+
+
+def planar_area_centroid(curve, reference):
+    """`reference(curve)` (`analysis._python_planar_curve_area_centroid`) through Rust for a
+    NurbsCurve, PolyCurve or PolylineCurve: its result, NO_REGION where it returns None, or
+    None where the Python route must run."""
+    global _native_planar_area_calls
+    if not isinstance(curve, (r3.NurbsCurve, r3.PolyCurve, r3.PolylineCurve)):
+        return None
+    fn = _planar_area_binding(reference)
+    if fn is None:
+        return None
+    try:
+        if not curve.IsClosed:
+            got = NO_REGION
+        else:
+            try:
+                planar = curve.IsPlanar()
+            except Exception:  # noqa: BLE001 -- as curve_plane: the plane decides
+                planar = True
+            got = _planar_area_call(fn, curve) if planar else NO_REGION
+    except Exception:  # noqa: BLE001 -- the Python route decides
+        return None
+    if got is not None:
+        _native_planar_area_calls += 1
     return got

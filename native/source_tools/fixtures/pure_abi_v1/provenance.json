@@ -1,0 +1,10 @@
+{
+  "format": "fixed-typed-C-ABI-input-output-witnesses-v1",
+  "original_python_source_sha256": "da2a323827b7fc7b8c8a069f54c318616f9f8d30f3df82fe5dc1d32b4b0ff5fa",
+  "reference_binary_sha256": "c827f8018f7844291a399ba433b198ff3b91aea089d918bae5c19fe82d7fd618",
+  "catalog_sha256": "ab415dcd7cabb340a34ced3b0cb4d16dcbff660fa3a787f64904eef4518d9adc",
+  "groups": 19,
+  "calls": 411,
+  "blobs": 608,
+  "python_programs_serialized": 0
+}

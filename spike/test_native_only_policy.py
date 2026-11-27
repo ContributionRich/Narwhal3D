@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Native-only closure policy. Python tests the existing Python publication boundary.
+"""Retained visibility/host checks and mutation injection transport.
 
-No Blender, native build, archive import or executable reference engine. Mutations
-use in-memory source/subjects or small disposable source trees, never live files.
+Rust owns migrated source assertions and publication/audit policy. The source-pinned
+CLI builds offline when needed. No Blender phase or retired engine is imported.
 """
 import ast
 import hashlib
@@ -16,8 +16,8 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'scripts'))
-import audit_public_tree as audit
-import create_public_branch as public
+import source_tools as audit
+import source_tools as public
 
 DATA_FILES = ('native/ui_core/tests/data/host_ui31.json',)
 RETIRED = {'LegacyUndoStack', 'LegacyBinding', '_LegacyTextField', 'PopupModel', 'Reference', '_handover',
@@ -52,6 +52,15 @@ def prefix_namespace():
 
 
 class PolicyTests(unittest.TestCase):
+    def native_case(self, name):
+        # Transport existing source-injection controls to native assertions; no policy here.
+        paths = audit._rpc('policy_inputs', name=name)
+        try:
+            result = audit._rpc('policy_check', name=name, sources={p: source(p) for p in paths})
+        except audit.AuditError as error:
+            self.fail(str(error))
+        self.assertTrue(result['ok'], result['failures'])
+
     def test_archive_and_build_scratch_are_not_python_analysis_inputs(self):
         import json
         excluded = json.loads(source('pyrightconfig.json'))['exclude']
@@ -96,113 +105,28 @@ class PolicyTests(unittest.TestCase):
         self.assertIsNone(audit.runtime_archive_problem(b'\x7fELF\0normal artifact\0'))
 
     def test_product_has_no_retired_engine_or_archive_resolver(self):
-        for name in PRODUCT_FILES:
-            with self.subTest(module=name):
-                assert_retired_absent(self, source('narwhal3d/' + name + '.py'))
-        # Include every live module, not just the retired ownership seams.
-        for path in (ROOT / 'narwhal3d').rglob('*'):
-            self.assertIsNone(audit.retirement_path_problem(path.relative_to(ROOT).as_posix()), str(path))
-            if path.suffix == '.py':
-                self.assertIsNone(audit.runtime_archive_problem(path.read_bytes()), str(path))
-        self.assertFalse((ROOT / 'spike/fixtures/textfield_168212d4.py').exists())
-        for name in ('test_rust_history_abi', 'test_rust_history_profile', 'test_ui_core_editor'):
-            assert_retired_absent(self, source('spike/' + name + '.py'))
+        self.native_case('product_has_no_retired_engine_or_archive_resolver')
 
     def test_retired_public_oracles_are_data_and_rust_only(self):
-        for name in ('alias_reference', 'units_reference', 'interpolate_reference',
-                     'test_interpolate_math_owned', 'bearing_reference', 'unitformat_reference',
-                     'joinchain_reference', 'rebuild_reference', 'test_python_norm_owned',
-                     'test_rust_history_trace'):
-            self.assertFalse((ROOT / 'spike' / (name + '.py')).exists(), name)
-        for suite in ('alias_golden', 'unit_golden', 'interpolate_golden',
-                      'svgpath_golden', 'calc_golden', 'coords_golden', 'bearing_golden',
-                      'unitformat_golden', 'macro_golden', 'joinchain_golden', 'rebuild_golden',
-                      'blend_golden', 'norm_golden', 'nurbs_golden', 'arclength_golden'):
-            self.assertIn('native/pure_core/tests/' + suite + '.rs', public.NATIVE_FILES)
+        self.native_case('retired_public_oracles_are_data_and_rust_only')
 
     def test_history_acceptance_is_native_and_host_replay_is_retained(self):
-        for path in ('native/application_core/tests/history30_golden.rs',
-                     'native/application_core/tests/data/history30_trace.json',
-                     'native/application_core/tests/data/history30_trace.provenance.json'):
-            self.assertIn(path, public.NATIVE_FILES)
-            self.assertIn(path, audit.REQUIRED)
-        self.assertEqual(len(json.loads(source('native/application_core/tests/data/history30_trace.json'))), 350)
-        self.assertIn('history30_trace.json', source('spike/test_rust_history_abi.py'))
+        self.native_case('history_acceptance_is_native_and_host_replay_is_retained')
 
     def test_blend_host_has_no_embedded_numeric_reference(self):
-        tree = ast.parse(source('spike/test_native_blend.py'))
-        names = {node.name for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)}
-        self.assertFalse(names & {'_reference_blend', '_reference_blend_curves',
-                                 'bernstein_deriv_0', 'bernstein_deriv_1', 'rand_derivs'})
+        self.native_case('blend_host_has_no_embedded_numeric_reference')
 
     def test_reference_decoders_cannot_restore_retired_engines(self):
-        forbidden = {'_tokenize', '_parse_expr', '_parse_atom', '_arc_to_cubics',
-                     '_split_tokens', '_classify', '_prefixes', '_command_action',
-                     'build_plan', 'evaluate', 'parse_scalar', 'parse_angle',
-                     '_parse_polar', '_bearing_angle', '_angle_degrees', '_POLAR_RE'}
-        for name in ('svgpath', 'calc', 'coords', 'macro', 'macro_plan'):
-            tree = ast.parse(source('spike/' + name + '_reference.py'))
-            definitions = {node.name for node in ast.walk(tree)
-                           if isinstance(node, (ast.FunctionDef, ast.ClassDef))}
-            self.assertFalse(definitions & forbidden, (name, definitions & forbidden))
-            for node in ast.walk(tree):
-                if isinstance(node, ast.Import):
-                    self.assertFalse({alias.name for alias in node.names} & {'re', 'math', 'decimal'})
-            self.assertIsNone(audit.runtime_archive_problem(ast.unparse(tree).encode()))
+        self.native_case('reference_decoders_cannot_restore_retired_engines')
 
     def test_width_format_macro_python_engines_are_retired(self):
-        forbidden = {
-            'printwidths': {'math', 'sorted', 'set'},
-            'unitformat': {'Decimal', '_decimal', '_fractional', '_feet_inch', '_gcd'},
-            'calc': {'re', '_tokenize', '_parse_expr', '_apply_func', '_number_token'},
-            'bearing': {'re', '_ANGLE_RE', '_BEARING_RE', '_angle_degrees', '_QUADRANT_BASE'},
-            'coords': {'re', '_parse_polar', '_number', '_sibling', '_POLAR_RE'},
-            'joinchain': {'math', '_near', '_ends', '_find', '_find_before'},
-            'svgpath': {'math', '_tokenize', '_arc_to_cubics', '_line', '_CMD_ARITY'},
-            'alias_table': {'re', '_MACRO_RE'},
-            'rebuild': {'_basis', '_solve', '_least_squares', '_fit_open', '_fit_closed'},
-            'blend': {'_blend_native', '_NATIVE_MIN_ORDER', '_add'},
-            'units': {'_PYTHON_UNIT_SCALE_MM', 'squashed', 'hits'},
-            'macro': {'_split_tokens', '_classify', '_strip_flags', '_command_step',
-                      'NATIVE_MACRO_MIN_BYTES', 'NATIVE_MACRO_JSON_MAX_BYTES'},
-        }
-        for module, names in forbidden.items():
-            text = source('narwhal3d/' + module + '.py')
-            tree = ast.parse(text)
-            used = {node.id for node in ast.walk(tree) if isinstance(node, ast.Name)}
-            used.update(node.name for node in ast.walk(tree) if isinstance(node, ast.FunctionDef))
-            self.assertFalse(used & names, (module, used & names))
-            self.assertNotIn('legacy/', text)
+        self.native_case('width_format_macro_python_engines_are_retired')
 
     def test_string_planner_does_not_replay_public_token_builder(self):
-        tree = ast.parse(source('narwhal3d/macro_plan.py'))
-        self.assertNotIn('_native_macro_plan', {node.name for node in tree.body if isinstance(node, ast.FunctionDef)})
-        function = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == 'plan_macro')
-        names = {node.id for node in ast.walk(function) if isinstance(node, ast.Name)}
-        self.assertFalse(names & {'tokenize', 'build_plan', '_native_macro_plan'})
-        for statement in tree.body:
-            if isinstance(statement, ast.Assign):
-                self.assertFalse(any(isinstance(target, ast.Name) and target.id.startswith('NATIVE_MACRO_PLAN_') for target in statement.targets))
+        self.native_case('string_planner_does_not_replay_public_token_builder')
 
     def test_admission_cannot_return_optional_backend(self):
-        for name, functions in (
-            ('native_document_session', ('load_library',)),
-            ('native_history', ('try_create', '_configure')),
-            ('native_textfield', ('library',)), ('native_popup', ('library', 'model')),
-            ('native_transcript', ('library',)), ('native_pure', ('_required_parse_binding',)),
-        ):
-            tree = ast.parse(source('narwhal3d/' + name + '.py'))
-            for function in functions:
-                node = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == function)
-                for ret in (n for n in ast.walk(node) if isinstance(n, ast.Return)):
-                    self.assertFalse(ret.value is None or isinstance(ret.value, ast.Constant)
-                                     and ret.value.value is None, (name, function, 'optional backend'))
-        tree = ast.parse(source('narwhal3d/undo.py'))
-        facade = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == 'UndoStack')
-        init = next(n for n in facade.body if isinstance(n, ast.FunctionDef) and n.name == '__init__')
-        assignment = next(n for n in init.body if isinstance(n, ast.Assign)
-                          and any(isinstance(t, ast.Attribute) and t.attr == '_backend' for t in n.targets))
-        self.assertEqual(ast.unparse(assignment.value), '_native_backend(limit)')
+        self.native_case('admission_cannot_return_optional_backend')
 
     def test_public_fixtures_are_data_not_reference_engines(self):
         for path in DATA_FILES:
@@ -241,46 +165,7 @@ class PolicyTests(unittest.TestCase):
                 audit.frozen_json_scan(path, wrong)
 
     def test_finished_lane_public_dependencies(self):
-        import build_linux_native as packaging
-        selected = set(public.TEST_FILES + public.NATIVE_FILES + public.LAUNCH_FILES)
-        self.assertEqual(len(packaging.UI_CORE_EXPORTS), 20)
-        self.assertEqual(len(packaging.UI_CORE_REQUIRED_SOURCE), 43)
-        for path in ('native/ui_core/' + name for name in packaging.UI_CORE_REQUIRED_SOURCE):
-            self.assertIn(path, selected)
-            self.assertIn(path, audit.REQUIRED)
-        for stem in ('abi', 'model', 'consumers', 'stress', 'gui', 'unicode', 'mutations', 'benchmark'):
-            path = 'spike/test_ui_transcript_' + stem + '.py'
-            self.assertIn(path, selected)
-            self.assertIn(path, audit.REQUIRED)
-        for stem in ('exit', 'reachability', 'presentation', 'long_session', 'plans', 'lifetime',
-                     'lifetime_gui', 'settings', 'visible', 'x11'):
-            path = 'spike/test_ai_v8_' + stem + '.py'
-            self.assertIn(path, selected)
-            self.assertIn(path, audit.REQUIRED)
-        for path in (
-            'native/automation_test_driver/Cargo.lock',
-            'native/automation_test_driver/Cargo.toml',
-            'native/automation_test_driver/README.md',
-            'native/automation_test_driver/src/additional.rs',
-            'native/automation_test_driver/src/additional_catalog_provenance_v1.json',
-            'native/automation_test_driver/src/additional_catalog_v1.json',
-            'native/automation_test_driver/src/anchor_overrides_v1.json',
-            'native/automation_test_driver/src/catalog.json',
-            'native/automation_test_driver/src/catalog.rs',
-            'native/automation_test_driver/src/discovery.rs',
-            'native/automation_test_driver/src/fixtures.rs',
-            'native/automation_test_driver/src/lib.rs',
-            'native/automation_test_driver/src/main.rs',
-            'native/automation_test_driver/src/overrides.rs',
-            'native/automation_test_driver/tests/cli.rs',
-            'native/automation_test_driver/tests/registration.rs',
-        ):
-            self.assertIn(path, selected)
-            self.assertIn(path, audit.REQUIRED)
-        for path in ('launch/check_native.py', 'spike/test_desktop_native_startup.py',
-                     'spike/test_numparse_owned.py', 'spike/test_pure_core_packaging.py'):
-            self.assertIn(path, selected)
-            self.assertIn(path, audit.REQUIRED)
+        self.native_case('finished_lane_public_dependencies')
 
     def test_owner_code_normalization_is_syntactic_and_file_scoped(self):
         # Construct policy-negative tokens so this test source receives the same audit.
@@ -340,14 +225,7 @@ class PolicyTests(unittest.TestCase):
                     self.assertTrue(any('private/legacy marker' in p for p in problems), problems)
 
     def test_ui_documentation_describes_mandatory_native_policy(self):
-        text = source('native/ui_core/README.md')
-        self.assertIn('Editor, popup and transcript require native support', text)
-        self.assertIn('all 20 editor/popup/transcript/content exports', text)
-        self.assertIn('invalidates an older source-pinned receipt', text)
-        for retired_claim in ('complete original Python implementation remains the default',
-                              'use one-way atomic legacy handover', 'Other Unicode versions use a named complete legacy path',
-                              'Python hands over oversized text operations'):
-            self.assertNotIn(retired_claim, text)
+        self.native_case('ui_documentation_describes_mandatory_native_policy')
 
     def test_script_helper_import_closure_is_not_a_phantom_spike_file(self):
         entries = {'spike/test_ui_core_gate.py': (
@@ -359,40 +237,7 @@ class PolicyTests(unittest.TestCase):
         self.assertIn('missing required public file: scripts/test_release_ui_core.py', problems)
 
     def test_finished_lane_harness_order_and_modes(self):
-        text = source('run_tests.sh')
-        ui = text.index('# UI core source qualification')
-        for marker in ('scripts/check_pure_core.py', 'scripts/check_application_core.py --stage-dev',
-                       'export NARWHAL_PURE_CORE=', 'export NARWHAL_APPLICATION_CORE='):
-            self.assertLess(text.index(marker), ui)
-        # Only reviewed isolated drivers may select mutation mode. Do not pass
-        # the flag through generic caller loops or arbitrary harness commands.
-        allowed_mutations = {
-            'run "document observer source gate" "$PYTHON" -B scripts/check_document_observer.py --stage-dev --mutations',
-            'run "live document registry mutations" "$PYTHON" -B spike/test_document_registry_model.py --mutations',
-            'run "AI canonical publisher races and mutations" "$PYTHON" -B spike/test_ai_v9_races.py --mutations',
-            '--python spike/test_pick_click_local.py -- --mutations',
-            '"$AUTOMATION_DRIVER_TARGET/debug/automation-test-driver" --suite "$suite" --mutations \\',
-        }
-        for line in text.splitlines():
-            if '--mutations' in line:
-                self.assertIn(line.strip(), allowed_mutations)
-        self.assertIn('for suite in box plan v4 v6 v7 v8; do', text)
-        self.assertIn('for suite in abi model consumers stress;', text)
-        self.assertIn('spike/test_desktop_native_startup.py', text)
-        self.assertIn('spike/test_ai_v8_exit.py', text)
-        self.assertIn('spike/test_ai_v8_long_session.py', text)
-        gui = text.index('# End UI core GUI drivers.')
-        self.assertGreater(text.index('spike/test_ui_transcript_gui.py --launch'), gui)
-        self.assertIn('for close_case in close_review close_request;', text)
-        self.assertIn('--case "$close_case" --ui-library "$UI_CORE_LIBRARY" --ui-sha256 "$UI_CORE_SHA256"', text)
-        self.assertLess(text.index('scripts/check_ui_core.py --library', gui), text.index('for close_case'))
-        # New drivers use the same actual receipt target as the fixture builder.
-        helper = ast.parse(source('spike/test_ai_accepted_review_native.py'))
-        target = next(n.value.args[0].value for n in helper.body if isinstance(n, ast.Assign)
-                      and any(isinstance(t, ast.Name) and t.id == 'TARGET' for t in n.targets))
-        self.assertIn('AI_REVIEW_TARGET="' + target + '"', text)
-        self.assertNotIn('test_ui_transcript_mutations.py', text)
-        self.assertNotIn('spike/test_ai_v8_native.py', text)
+        self.native_case('finished_lane_harness_order_and_modes')
 
     def test_audit_data_literal_is_not_a_file_exemption(self):
         path = 'spike/ui_golden_data.py'
@@ -443,13 +288,7 @@ class PolicyTests(unittest.TestCase):
         self.assertEqual(digest, '330c7606fc7e1eb6e058fd3b2473a12a6074ca6f78da40fdba247506e75694fa')
 
     def test_required_cores_precede_blender_callers(self):
-        text = source('run_tests.sh')
-        first = text.index('run "Rust selection adapter/UI"')
-        for marker in ('export NARWHAL_UI_CORE_LIBRARY=', 'export NARWHAL_APPLICATION_CORE=',
-                       'export NARWHAL_HISTORY_CORE='):
-            self.assertLess(text.index(marker), first)
-        self.assertEqual(text.count('scripts/check_application_core.py --stage-dev'), 1)
-        self.assertEqual(text.count('spike/test_native_only_policy.py'), 1)
+        self.native_case('required_cores_precede_blender_callers')
 
     def test_retired_scroll_mutation_refuses_before_launch_or_import(self):
         ns = prefix_namespace()
@@ -468,11 +307,8 @@ class PolicyTests(unittest.TestCase):
 
 class MutationTests(unittest.TestCase):
     def test_policy_mutants_are_assertion_red_and_restored_green(self):
+        # Three native producer controls now live in source_tools/tests/mutations.rs.
         cases = (
-            ('syntactic identifier recognition removed', patch.object(audit, 'code_provenance_scan', side_effect=lambda p, b: b),
-             'test_owner_code_normalization_is_syntactic_and_file_scoped'),
-            ('whole-file privacy exemption', patch.object(audit, 'code_provenance_scan', return_value=b''),
-             'test_owner_comments_strings_and_unapproved_syntax_remain_private'),
             ('optional fallback documentation restored', patch.dict(globals(), source=lambda p: original(p) + '\ncomplete original Python implementation remains the default\n' if p == 'native/ui_core/README.md' else original(p)),
              'test_ui_documentation_describes_mandatory_native_policy'),
             ('script helper resolved to wrong subtree', patch.object(audit, 'TEST_SUPPORT_IMPORTS', {}),
@@ -493,8 +329,6 @@ class MutationTests(unittest.TestCase):
              'test_source_and_app_payload_paths_are_rejected'),
             ('DATA exemption hides code', patch.object(audit, 'frozen_data_scan', return_value=b''),
              'test_audit_data_literal_is_not_a_file_exemption'),
-            ('publisher archive admitted', patch.object(audit, 'retirement_path_problem', return_value=None),
-             'test_public_selection_rejects_nested_archive_without_copying_root_archive'),
             ('runtime archive admitted', patch.object(audit, 'runtime_archive_problem', return_value=None),
              'test_runtime_archive_imports_and_artifacts_are_rejected'),
             ('root ignore removed', patch.dict(globals(), source=lambda p: original(p).replace('/legacy/\n', '') if p == '.gitignore' else original(p)),

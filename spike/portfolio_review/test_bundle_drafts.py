@@ -17,7 +17,7 @@ class BundleTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             for name, text in {
-                "scripts/create_public_branch.py": 'NATIVE_FILES=("native/pure_core/Cargo.toml","native/pure_core/src/lib.rs")\nWELCOME_FILES=()\n',
+                "native/source_tools/src/publication.json": '{"NATIVE_FILES": {"$tuple": ["native/pure_core/Cargo.toml", "native/pure_core/src/lib.rs"]}, "WELCOME_FILES": {"$tuple": []}}',
                 "native/pure_core/Cargo.toml": "[package]\n",
                 "native/pure_core/src/lib.rs": "// reviewed source\n",
                 "native/pure_core/src/draft.rs": "// not registered, not reviewed\n",
@@ -26,7 +26,7 @@ class BundleTests(unittest.TestCase):
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text(text)
             with patch.object(bundle, "ENTRY_POINTS", ()), patch.object(bundle, "SURFACES", {}), \
-                 patch.object(bundle, "EXTRA_SOURCE", ("scripts/create_public_branch.py",)), \
+                 patch.object(bundle, "EXTRA_SOURCE", ("native/source_tools/src/publication.json",)), \
                  patch.object(bundle, "NATIVE_ROOTS", ("native/pure_core",)):
                 sources = bundle.source_inventory(root)
             self.assertIn("native/pure_core/src/lib.rs", sources)

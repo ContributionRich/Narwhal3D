@@ -8,8 +8,8 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'scripts'))
-import audit_public_tree as audit
-import create_public_branch as public
+import source_tools as audit
+import source_tools as public
 
 
 class SourceTests(unittest.TestCase):

@@ -26,9 +26,27 @@
 //!   parameter within `ON_SQRT_EPSILON` of a break to it) and `ON_PolylineCurve::Trim`
 //!   on each side, including its micro-segment removal.
 //!
-//! A polyline's `PointAt` and `Split` round each product separately; an SDK build that
-//! fuses a multiply-add rounds them differently, so `narwhal3d/native_intersect.py`
-//! routes polylines here only where the loaded rhino3dm matches on witness pairs.
+//! Or an `ON_LineCurve` (what Line makes, the usual Trim and Split cutter), from its record:
+//!
+//! * `PointAt` is `ON_LineCurve::Evaluate`: `ON_Line::PointAt` at `(t - m_t[0]) / (m_t[1] -
+//!   m_t[0])`, 1 exactly at `m_t[1]`;
+//! * `GetBoundingBox` is `ON_GetPointListBoundingBox` over `from` and `to`;
+//! * `Split` is `ON_LineCurve::Split`: `t` inside the open domain, the cut at
+//!   `ON_Line::PointAt(NormalizedParameterAt(t))`, refused where a side's ends coincide.
+//!
+//! Or an `ON_PolyCurve` (what Join makes) of such curves, nested up to 8 deep:
+//!
+//! * `PointAt` is `ON_PolyCurve::Evaluate`: the segment from `ON_NurbsSpanIndex` over `m_t`,
+//!   the parameter mapped onto the segment's own domain as openNURBS maps it;
+//! * `GetBoundingBox` is `ON_PolyCurve::GetBBox`, the segments' boxes grown into one;
+//! * `Split` is `ON_PolyCurve::Split`: `ParameterSearch` snapping to a break, else the
+//!   segment split at `TransformParameterTo`, with its fuzz for a segment that will not
+//!   split near an end.
+//!
+//! A polyline's or line's `PointAt` and `Split` round each product separately; an SDK
+//! build that fuses a multiply-add rounds them differently, so
+//! `narwhal3d/native_intersect.py` routes them here only where the loaded rhino3dm
+//! matches on witness pairs.
 //!
 //! The Python helpers keep Python's semantics: `math.dist` is CPython's `vector_norm`,
 //! `sum()` is its compensated sum, `min`/`max` keep the first argument on ties and
@@ -362,14 +380,18 @@ struct Piece<'a> {
 enum Eval<'a> {
     Nurbs(Nurbs<'a>),
     Polyline(&'a Polyline),
+    Line(&'a Line),
+    Poly(PolyEval<'a>),
 }
 
-/// A curve the recursion splits: a NURBS curve or a polyline, each split into its own kind
-/// as openNURBS does.
+/// A curve the recursion splits: a NURBS curve, a polyline or a line, each split into its
+/// own kind as openNURBS does.
 #[derive(Clone)]
 enum Shape {
     Nurbs(Curve),
     Polyline(Polyline),
+    Line(Line),
+    Poly(Poly),
 }
 
 impl Shape {
@@ -377,6 +399,8 @@ impl Shape {
         match self {
             Shape::Nurbs(c) => c.piece(),
             Shape::Polyline(p) => p.piece(),
+            Shape::Line(l) => l.piece(),
+            Shape::Poly(p) => p.piece(),
         }
     }
 
@@ -384,6 +408,9 @@ impl Shape {
         match self {
             Shape::Nurbs(c) => c.bbox(),
             Shape::Polyline(p) => point_list_bbox(p.points.iter().map(|&q| Some(q))),
+            // `ON_LineCurve::GetBBox`: `ON_GetPointListBoundingBox` over `from` and `to`.
+            Shape::Line(l) => point_list_bbox([Some(l.from), Some(l.to)].into_iter()),
+            Shape::Poly(p) => p.bbox(),
         }
     }
 
@@ -393,6 +420,8 @@ impl Shape {
             Shape::Polyline(p) => p
                 .split(t)
                 .map(|(l, r)| (Shape::Polyline(l), Shape::Polyline(r))),
+            Shape::Line(line) => line.split(t).map(|(l, r)| (Shape::Line(l), Shape::Line(r))),
+            Shape::Poly(p) => p.split(t).map(|(l, r)| (Shape::Poly(l), Shape::Poly(r))),
         }
     }
 }
@@ -857,11 +886,348 @@ impl Polyline {
     }
 }
 
+/// An `ON_LineCurve`: `m_line` (`from`, `to`) and `m_t`, increasing.
+#[derive(Clone, Debug)]
+pub(crate) struct Line {
+    from: P3,
+    to: P3,
+    t0: f64,
+    t1: f64,
+}
+
+impl Line {
+    fn piece(&self) -> Option<Piece<'_>> {
+        is_increasing((self.t0, self.t1)).then_some(Piece {
+            eval: Eval::Line(self),
+            t0: self.t0,
+            t1: self.t1,
+        })
+    }
+
+    /// `ON_LineCurve::Evaluate(t, 0, ...)`, behind `PointAt`: `ON_Line::PointAt` at the
+    /// normalised parameter (1 exactly at `m_t[1]`).
+    fn point(&self, t: f64) -> P3 {
+        let s = if t == self.t1 {
+            1.0
+        } else {
+            (t - self.t0) / (self.t1 - self.t0)
+        };
+        line_point_at(self.from, self.to, s)
+    }
+
+    /// `ON_LineCurve::Split(t, left, right)`: None where it returns false (`t` not inside
+    /// the open domain, or a side whose ends coincide).
+    fn split(&self, t: f64) -> Option<(Line, Line)> {
+        let inside = on_is_valid(t) && on_is_valid(self.t0) && on_is_valid(self.t1) && {
+            let (lo, hi) = if self.t0 <= self.t1 {
+                (self.t0, self.t1)
+            } else {
+                (self.t1, self.t0)
+            };
+            lo < t && t < hi
+        };
+        if !inside {
+            return None;
+        }
+        let mid = line_point_at(
+            self.from,
+            self.to,
+            normalized_parameter_at((self.t0, self.t1), t),
+        );
+        if crate::offset::points_are_coincident(3, false, &self.from, &mid)
+            || crate::offset::points_are_coincident(3, false, &mid, &self.to)
+        {
+            return None;
+        }
+        Some((
+            Line {
+                from: self.from,
+                to: mid,
+                t0: self.t0,
+                t1: t,
+            },
+            Line {
+                from: mid,
+                to: self.to,
+                t0: t,
+                t1: self.t1,
+            },
+        ))
+    }
+}
+
+/// An `ON_PolyCurve` (what Join makes): `m_t` (strictly increasing, one more than the
+/// segments) and its segments, each a curve this module reads.
+#[derive(Clone)]
+pub(crate) struct Poly {
+    t: Vec<f64>,
+    segments: Vec<Shape>,
+}
+
+/// A [`Poly`] ready to evaluate: its segments' evaluators and domains.
+struct PolyEval<'a> {
+    t: &'a [f64],
+    segments: Vec<Piece<'a>>,
+}
+
+impl PolyEval<'_> {
+    /// `ON_PolyCurve::Evaluate(t, 0, 3, v, 0, nullptr)`: the segment from
+    /// `ON_NurbsSpanIndex(2, count + 1, m_t, t, 0, 0)`, `t` mapped from `[m_t[i], m_t[i+1]]`
+    /// onto the segment's domain as openNURBS maps it, then the segment's own `Evaluate`.
+    fn point(&self, t: f64) -> P3 {
+        let i = span_index(2, self.segments.len() + 1, self.t, t, 0, 0);
+        let segment = &self.segments[i];
+        let (s0, s1) = (segment.t0, segment.t1);
+        let (t0, t1) = (self.t[i], self.t[i + 1]);
+        let s = if s0 == t0 && s1 == t1 {
+            t
+        } else if (t1 - t0).abs() < ON_ZERO_TOLERANCE + ON_EPSILON * t0.abs() {
+            if (t - t0).abs() < (t - t1).abs() {
+                s0
+            } else {
+                s1
+            }
+        } else {
+            let d = t1 - t0;
+            let mut a = (t - t0) / d;
+            let mut b = (t1 - t) / d;
+            if 0.0 == b {
+                a = 1.0;
+            } else if 1.0 == b {
+                a = 0.0;
+            } else if 0.0 == a {
+                b = 1.0;
+            } else if 1.0 == a {
+                b = 0.0;
+            }
+            b * s0 + a * s1
+        };
+        segment.point(s)
+    }
+}
+
+/// `ON_Interval::IsValid`: both ends `ON_IS_VALID`.
+fn interval_is_valid(d: (f64, f64)) -> bool {
+    on_is_valid(d.0) && on_is_valid(d.1)
+}
+
+/// `ON_Interval::ParameterAt(x)`.
+fn parameter_at(d: (f64, f64), x: f64) -> f64 {
+    let x = if d.0 == d.1 { 0.0 } else { x };
+    if on_is_valid(x) {
+        (1.0 - x) * d.0 + x * d.1
+    } else {
+        ON_UNSET_VALUE
+    }
+}
+
+/// `ON_Interval::TransformParameterTo(target, t)`.
+fn transform_parameter_to(from: (f64, f64), target: (f64, f64), t: f64) -> f64 {
+    if !interval_is_valid(from) || !interval_is_valid(target) {
+        return f64::NAN;
+    }
+    if from == target {
+        return t;
+    }
+    let mut s = normalized_parameter_at(from, t);
+    let l1 = target.0.abs().max(target.1.abs());
+    let l2 = from.0.abs().max(from.1.abs());
+    let l = l1.max(l2);
+    if (s / l).abs() < ON_EPSILON {
+        s = 0.0;
+    } else if ((s - 1.0) / l).abs() < ON_EPSILON {
+        s = 1.0;
+    }
+    parameter_at(target, s)
+}
+
+/// `ON_Curve::ParameterSearch(t, index, true, m_t, ON_SQRT_EPSILON)` on an increasing `m_t`:
+/// whether `t` is (within the snap of) a break, and the index.
+fn parameter_search(m_t: &[f64], t: f64) -> (bool, isize) {
+    let count = m_t.len();
+    if count <= 1 || !on_is_valid(t) {
+        return (false, -1);
+    }
+    let c_dom = (m_t[0], m_t[count - 1]);
+    let mut index = search_monotone(m_t, t);
+    let last = count as isize - 1;
+    let mut rc = index >= 0 && index <= last && t == m_t[index as usize];
+    if !rc {
+        let (a, b) = (c_dom.0.abs(), c_dom.1.abs());
+        let ktol = ON_SQRT_EPSILON * if a < b { b } else { a };
+        if index >= 0 && index < last {
+            let i = index as usize;
+            let middle_t = 0.5 * (m_t[i] + m_t[i + 1]);
+            if t < middle_t && t - m_t[i] <= ktol {
+                rc = true;
+            } else if t > middle_t && m_t[i + 1] - t <= ktol {
+                rc = true;
+                index += 1;
+            }
+        } else if index == count as isize {
+            if t - m_t[count - 1] <= ktol {
+                rc = true;
+                index = last;
+            }
+        } else if index < 0 && m_t[0] - t <= ktol {
+            rc = true;
+            index = 0;
+        }
+    }
+    (rc, index)
+}
+
+impl Poly {
+    /// `Domain()`: `(m_t[0], m_t[count])`.
+    fn domain(&self) -> (f64, f64) {
+        (self.t[0], self.t[self.t.len() - 1])
+    }
+
+    /// A piece only where every segment has one (an increasing domain) and the domain
+    /// increases; the Python answers any other.
+    fn piece(&self) -> Option<Piece<'_>> {
+        let segments = self
+            .segments
+            .iter()
+            .map(Shape::piece)
+            .collect::<Option<Vec<_>>>()?;
+        let (t0, t1) = self.domain();
+        is_increasing((t0, t1)).then_some(Piece {
+            eval: Eval::Poly(PolyEval {
+                t: &self.t,
+                segments,
+            }),
+            t0,
+            t1,
+        })
+    }
+
+    /// `ON_PolyCurve::GetBBox`: each segment's box, grown into one (the same minima and
+    /// maxima as `ON_GetPointListBoundingBox` growing the box segment by segment).
+    fn bbox(&self) -> Option<(P3, P3)> {
+        let mut out: Option<(P3, P3)> = None;
+        for segment in &self.segments {
+            let (lo, hi) = segment.bbox()?;
+            out = Some(match out {
+                None => (lo, hi),
+                Some((mut a, mut b)) => {
+                    for j in 0..3 {
+                        for x in [lo[j], hi[j]] {
+                            if a[j] > x {
+                                a[j] = x;
+                            } else if b[j] < x {
+                                b[j] = x;
+                            }
+                        }
+                    }
+                    (a, b)
+                }
+            });
+        }
+        out
+    }
+
+    /// `ON_PolyCurve::Split(t, left, right)` into two new polycurves; None where it returns
+    /// false.
+    fn split(&self, t: f64) -> Option<(Poly, Poly)> {
+        let dom = self.domain();
+        let count = self.segments.len();
+        if !(on_is_valid(t) && dom.0 < t && t < dom.1) {
+            return None; // not an interior parameter (`dom.Includes(t, true)`)
+        }
+        let (split_at_break, si) = parameter_search(&self.t, t);
+        if split_at_break && (si <= 0 || si >= count as isize) {
+            return None;
+        }
+        if si < 0 || si >= count as isize {
+            return None;
+        }
+        let mut si = si as usize;
+        let s_dom = (self.t[si], self.t[si + 1]);
+        let seg = &self.segments[si];
+        let c_dom = seg.piece().map(|p| (p.t0, p.t1))?;
+        let mut c = if split_at_break {
+            c_dom.0
+        } else {
+            transform_parameter_to(s_dom, c_dom, t)
+        };
+        let mut halves = None;
+        let inside = on_is_valid(c) && c_dom.0 < c && c < c_dom.1;
+        if !split_at_break && inside {
+            match seg.split(c) {
+                Some(pair) => halves = Some(pair),
+                None => {
+                    let fuzz = 0.001;
+                    let x = normalized_parameter_at(c_dom, c);
+                    if x <= fuzz {
+                        c = c_dom.0;
+                    } else if x >= 1.0 - fuzz {
+                        c = c_dom.1;
+                    } else {
+                        return None; // unable to split this segment
+                    }
+                }
+            }
+        } else if c <= parameter_at(c_dom, 0.5) {
+            c = c_dom.0;
+        } else {
+            c = c_dom.1;
+        }
+        let (mut left_segments, mut right_segments) = (Vec::new(), Vec::new());
+        let (mut left_t, mut right_t) = (Vec::new(), Vec::new());
+        if let Some((seg_left, seg_right)) = halves {
+            for i in 0..si {
+                left_segments.push(self.segments[i].clone());
+                left_t.push(self.t[i]);
+            }
+            left_segments.push(seg_left);
+            left_t.push(self.t[si]);
+            left_t.push(t);
+            right_segments.push(seg_right);
+            right_t.push(t);
+            for i in si + 1..count {
+                right_segments.push(self.segments[i].clone());
+                right_t.push(self.t[i]);
+            }
+            right_t.push(self.t[count]);
+        } else {
+            if c == c_dom.1 {
+                si += 1;
+            }
+            if (c == c_dom.0 && si == 0) || (c == c_dom.1 && si == count) {
+                return None; // a split at the curve's start or end
+            }
+            for i in 0..si {
+                left_segments.push(self.segments[i].clone());
+                left_t.push(self.t[i]);
+            }
+            left_t.push(t);
+            for i in si..count {
+                right_segments.push(self.segments[i].clone());
+                right_t.push(if i == si { t } else { self.t[i] });
+            }
+            right_t.push(self.t[count]);
+        }
+        Some((
+            Poly {
+                t: left_t,
+                segments: left_segments,
+            },
+            Poly {
+                t: right_t,
+                segments: right_segments,
+            },
+        ))
+    }
+}
+
 impl Piece<'_> {
     fn point(&self, t: f64) -> P3 {
         match &self.eval {
             Eval::Nurbs(n) => n.point(t),
             Eval::Polyline(p) => p.point(t),
+            Eval::Line(l) => l.point(t),
+            Eval::Poly(p) => p.point(t),
         }
     }
 
@@ -1438,6 +1804,31 @@ unsafe fn write_hits(
 /// arrays) or a 3-D polyline with 2 to `MAX_CVS` points, strictly increasing parameters
 /// and every value `ON_IS_VALID`. Anything else is `ERR_INPUT`, for the Python.
 fn shape_from_record(data: &[u8]) -> Result<Shape, i32> {
+    shape_at_depth(data, 0)
+}
+
+/// The deepest polycurve nesting read (a segment that is itself a polycurve).
+const MAX_NESTING: usize = 8;
+
+fn shape_at_depth(data: &[u8], depth: usize) -> Result<Shape, i32> {
+    if let Some(r) = crate::nurbs_record::read_polycurve(data) {
+        let t = r.params();
+        if depth >= MAX_NESTING
+            || r.segments.is_empty()
+            || r.segments.len() > MAX_CVS
+            || t.len() != r.segments.len() + 1
+            || !t.iter().all(|&v| on_is_valid(v))
+            || !t.windows(2).all(|w| w[0] < w[1])
+        {
+            return Err(ERR_INPUT);
+        }
+        let segments = r
+            .segments
+            .iter()
+            .map(|s| shape_at_depth(s, depth + 1))
+            .collect::<Result<Vec<_>, _>>()?;
+        return Ok(Shape::Poly(Poly { t, segments }));
+    }
     if let Some(r) = crate::nurbs_record::read(data) {
         if !(2..=MAX_ORDER).contains(&r.order) || r.cv_count > MAX_CVS {
             return Err(ERR_INPUT);
@@ -1445,6 +1836,23 @@ fn shape_from_record(data: &[u8]) -> Result<Shape, i32> {
         let (mut knots, mut cvs) = (vec![0.0; r.knot_count], vec![0.0; r.cv_doubles()]);
         r.write(&mut knots, &mut cvs);
         return curve_from(r.order, r.cv_count, r.rational, &knots, &cvs).map(Shape::Nurbs);
+    }
+    if let Some(r) = crate::nurbs_record::read_line(data) {
+        let (t0, t1) = r.domain;
+        let finite = r.line.iter().chain([&t0, &t1]).all(|&v| on_is_valid(v));
+        if !(finite && t0 < t1) {
+            return Err(ERR_INPUT);
+        }
+        let l = r.line;
+        if crate::offset::points_are_coincident(3, false, &l[..3], &l[3..]) {
+            return Err(ERR_INPUT);
+        }
+        return Ok(Shape::Line(Line {
+            from: [l[0], l[1], l[2]],
+            to: [l[3], l[4], l[5]],
+            t0,
+            t1,
+        }));
     }
     polyline_from_record(data)
         .map(Shape::Polyline)
@@ -2154,6 +2562,112 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn a_line_curve_splits_and_intersects_through_its_record() {
+        use crate::nurbs_record::line_record;
+        let line = Line {
+            from: [0.0, -1.0, 0.0],
+            to: [3.0, 5.0, 0.0],
+            t0: 2.0,
+            t1: 6.0,
+        };
+        // `Split` at a parameter inside the open domain halves the line at that point.
+        let (l, r) = line.split(3.0).unwrap();
+        assert_eq!((l.t0, l.t1, r.t0, r.t1), (2.0, 3.0, 3.0, 6.0));
+        assert_eq!(l.to, r.from);
+        assert_eq!(l.to, line.point(3.0));
+        assert_eq!((l.from, r.to), (line.from, line.to));
+        // ... and refuses the domain's ends, a parameter outside it, and NaN.
+        for t in [2.0, 6.0, 7.0, f64::NAN] {
+            assert!(line.split(t).is_none(), "{t}");
+        }
+        assert_eq!(line.point(6.0), line.to);
+        assert_eq!(line.point(2.0), line.from);
+        // A record crosses a rectangle twice, as the polyline cutter does.
+        let rect = polyline_record(
+            &[
+                [0.0, 0.0, 0.0],
+                [4.0, 0.0, 0.0],
+                [4.0, 2.0, 0.0],
+                [0.0, 2.0, 0.0],
+                [0.0, 0.0, 0.0],
+            ],
+            &[0.0, 1.0, 2.0, 3.0, 4.0],
+        );
+        let cross = line_record(&[2.0, -1.0, 0.0, 2.0, 3.0, 0.0], (10.0, 14.0));
+        let mut out = [0.0; 5 * 4];
+        unsafe {
+            assert_eq!(record_hits(&rect, &cross, 1e-6, 40, &mut out), (0, 2));
+            assert_eq!(&out[..5], &[2.0, 0.0, 0.0, 0.5, 11.0]);
+            assert_eq!(&out[5..10], &[2.0, 2.0, 0.0, 2.5, 13.0]);
+            // A line whose domain does not increase, or with a non-finite end, is refused.
+            for (line, domain) in [
+                ([2.0, -1.0, 0.0, 2.0, 3.0, 0.0], (14.0, 10.0)),
+                ([2.0, -1.0, 0.0, 2.0, 3.0, 0.0], (10.0, 10.0)),
+                ([2.0, f64::NAN, 0.0, 2.0, 3.0, 0.0], (10.0, 14.0)),
+            ] {
+                let bad = line_record(&line, domain);
+                assert_eq!(record_hits(&rect, &bad, 1e-6, 40, &mut out).0, ERR_INPUT);
+            }
+        }
+    }
+
+    #[test]
+    fn a_polycurve_splits_inside_a_segment_and_at_a_break() {
+        use crate::nurbs_record::{line_record, polycurve_record};
+        let line = |a: P3, b: P3, d: (f64, f64)| Line {
+            from: a,
+            to: b,
+            t0: d.0,
+            t1: d.1,
+        };
+        // Two lines; the second holds its own domain [5, 9] for the span [1, 2].
+        let poly = Poly {
+            t: vec![0.0, 1.0, 2.0],
+            segments: vec![
+                Shape::Line(line([0.0, 0.0, 0.0], [1.0, 0.0, 0.0], (0.0, 1.0))),
+                Shape::Line(line([1.0, 0.0, 0.0], [1.0, 2.0, 0.0], (5.0, 9.0))),
+            ],
+        };
+        let piece = poly.piece().unwrap();
+        assert_eq!(piece.point(1.5), [1.0, 1.0, 0.0]);
+        // Inside the second segment: it is split at the mapped parameter 7.
+        let (l, r) = poly.split(1.5).unwrap();
+        assert_eq!(
+            (l.t.clone(), r.t.clone()),
+            (vec![0.0, 1.0, 1.5], vec![1.5, 2.0])
+        );
+        let Shape::Line(cut) = &l.segments[1] else {
+            panic!("a line segment splits into lines")
+        };
+        assert_eq!((cut.t0, cut.t1, cut.to), (5.0, 7.0, [1.0, 1.0, 0.0]));
+        // At the break (and within ParameterSearch's snap of it): whole segments either side.
+        for t in [1.0, 1.0 + 1e-9] {
+            let (l, r) = poly.split(t).unwrap();
+            assert_eq!((l.segments.len(), r.segments.len()), (1, 1));
+            assert_eq!((l.t[1], r.t[0]), (t, t));
+        }
+        // Not at the ends, or outside.
+        for t in [0.0, 2.0, 3.0, f64::NAN] {
+            assert!(poly.split(t).is_none(), "{t}");
+        }
+        assert_eq!(poly.bbox(), Some(([0.0, 0.0, 0.0], [1.0, 2.0, 0.0])));
+        // Through a record: a polycurve crossing a line.
+        let joined = polycurve_record(
+            &[0.0, 1.0, 2.0],
+            &[
+                line_record(&[0.0, 0.0, 0.0, 1.0, 0.0, 0.0], (0.0, 1.0)),
+                line_record(&[1.0, 0.0, 0.0, 1.0, 2.0, 0.0], (5.0, 9.0)),
+            ],
+        );
+        let cross = line_record(&[0.0, 1.0, 0.0, 2.0, 1.0, 0.0], (0.0, 1.0));
+        let mut out = [0.0; 10];
+        unsafe {
+            assert_eq!(record_hits(&joined, &cross, 1e-6, 40, &mut out), (0, 1));
+        }
+        assert_eq!(&out[..5], &[1.0, 1.0, 0.0, 1.5, 0.5]);
+    }
+
+    #[test]
     fn the_record_export_answers_a_polyline_and_refuses_what_it_cannot() {
         let rect = polyline_record(
             &[
@@ -2423,5 +2937,28 @@ mod record_region_tests {
             );
             assert_eq!(count, 73);
         }
+    }
+    #[test]
+    fn coincident_line_record_is_refused_like_sdk_is_valid() {
+        use crate::nurbs_record::line_record;
+        let invalid = line_record(&[0.0, 0.0, 0.0, 0.0, 0.0, 0.0], (0.0, 1.0));
+        let valid = line_record(&[-1.0, 0.0, 0.0, 1.0, 0.0, 0.0], (0.0, 1.0));
+        let mut out = [123.0; 10];
+        let mut count = 73;
+        let code = unsafe {
+            narwhal_pure_core_curve_curve_record_hits(
+                invalid.as_ptr(),
+                invalid.len(),
+                valid.as_ptr(),
+                valid.len(),
+                1e-6,
+                40,
+                out.as_mut_ptr(),
+                2,
+                &mut count,
+            )
+        };
+        assert_eq!((code, count), (ERR_INPUT, 0));
+        assert_eq!(out, [123.0; 10]);
     }
 }

@@ -240,7 +240,7 @@ class UiPackaging(unittest.TestCase):
         """Hostloader + the three native host_ui31 files are required public
         sources; the retired 75 KB Python DATA fixture is removed from the
         public test set."""
-        import create_public_branch as public
+        import source_tools as public
 
         test_files = set(public.TEST_FILES)
         native_files = set(public.NATIVE_FILES)
@@ -767,7 +767,7 @@ def mutation_checks():
     mutants.append((common, "UI_CORE_REQUIRED_SOURCE", tuple(n for n in common.UI_CORE_REQUIRED_SOURCE if n != "TRANSCRIPT.md"),
                     "test_required_sources_cannot_be_omitted_from_rehashed_receipts"))
     # Omission mutations for the new hostloader / native host_ui31 guards.
-    import create_public_branch as _pub
+    import source_tools as _pub
     mutants.append(
         (_pub, "TEST_FILES", tuple(n for n in _pub.TEST_FILES if n != "spike/ui_golden_data.py"),
          "test_required_host_sources_and_retired_data_fixture"))

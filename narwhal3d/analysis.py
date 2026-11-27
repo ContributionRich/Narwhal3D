@@ -413,6 +413,21 @@ def _green_moments(curve, origin, ex, ey, order):
 
 
 def planar_curve_area_centroid(curve):
+    """`_python_planar_curve_area_centroid` through Rust
+    (`native_nearest.planar_area_centroid`) where qualified, with the same bits."""
+    try:
+        from . import native_nearest
+    except ImportError:  # loaded standalone, without the package
+        return _python_planar_curve_area_centroid(curve)
+    got = native_nearest.planar_area_centroid(curve, _python_planar_curve_area_centroid)
+    if got is native_nearest.NO_REGION:
+        return None
+    if got is not None:
+        return got
+    return _python_planar_curve_area_centroid(curve)
+
+
+def _python_planar_curve_area_centroid(curve):
     """Exact area centroid of the region a closed planar curve bounds, or None.
 
     Returns ``(area, area_err, centroid_xyz, centroid_err_xyz)``. Green's theorem on the

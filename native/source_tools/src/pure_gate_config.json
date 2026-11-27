@@ -1,0 +1,836 @@
+{
+  "DEFAULT_CRATE": "native/pure_core",
+  "ABI_VERSION": 1,
+  "RUST_TOOLCHAIN": "1.95.0",
+  "LINUX_TARGET": "x86_64-unknown-linux-gnu",
+  "WINDOWS_TARGET": "x86_64-pc-windows-gnu",
+  "LIB_FILENAME": "libnarwhal_pure_core.so",
+  "PURE_CORE_PYTESTS": {
+    "$tuple": [
+      "spike/test_stl_writer.py",
+      "spike/test_native_stl.py",
+      "spike/test_stl_import_boundary.py",
+      "spike/test_obj_writer.py",
+      "spike/test_obj_reader.py",
+      "spike/test_native_obj.py",
+      "spike/test_dxf_writer.py",
+      "spike/test_dxf_reader.py",
+      "spike/test_native_dxf.py",
+      "spike/test_dxf_reader24_boundaries.py",
+      "spike/test_dxf_writer_owned.py",
+      "spike/test_native_admission_owned.py",
+      "spike/test_numparse.py",
+      "spike/test_numparse_owned.py",
+      "spike/test_native_numparse.py",
+      "spike/test_pure_core_packaging.py",
+      "spike/test_calc.py",
+      "spike/test_native_calc.py",
+      "spike/test_calc_owned.py",
+      "spike/test_native_math_error_format.py",
+      "spike/test_native_parser_cache.py",
+      "spike/test_aci_colors.py",
+      "spike/test_printwidths_contract.py",
+      "spike/test_printwidths_owned.py",
+      "spike/test_unitformat_contract.py",
+      "spike/test_unitformat_owned.py",
+      "spike/portfolio_review/test_metadata.py",
+      "spike/test_bearing.py",
+      "spike/test_native_bearing.py",
+      "spike/test_bearing_owned.py",
+      "spike/test_coords.py",
+      "spike/test_native_coords.py",
+      "spike/test_coords_owned.py",
+      "spike/test_native_joinchain.py",
+      "spike/test_joinchain_owned.py",
+      "spike/test_native_pickconstraint.py",
+      "spike/test_native_blend.py",
+      "spike/test_macro.py",
+      "spike/test_native_macro.py",
+      "spike/test_macro_owned.py",
+      "spike/test_macro_plan.py",
+      "spike/test_native_macro_plan.py",
+      "spike/test_macro_plan_owned.py",
+      "spike/test_svgpath.py",
+      "spike/test_native_svgpath.py",
+      "spike/test_svgpath_owned.py",
+      "spike/test_alias_owned.py",
+      "spike/test_vector_export.py",
+      "spike/test_native_vector_export.py",
+      "spike/test_native_command_search.py",
+      "spike/test_native_search02_contract.py",
+      "spike/test_native_search02_adapter.py",
+      "spike/test_native_search02_ffi.py",
+      "spike/test_native_search02_consumers.py",
+      "spike/test_native_coil.py",
+      "spike/test_coil_owned.py",
+      "spike/test_catenary.py",
+      "spike/test_catenary_owned.py",
+      "spike/test_native_intersect.py",
+      "spike/test_pure_core_curve_hits_gate.py",
+      "spike/test_pure_core_curve_record_hits_gate.py",
+      "spike/test_polyline_curve_hits.py",
+      "spike/test_pure_core_polyline_nearest_gate.py",
+      "spike/test_polyline_nearest.py",
+      "spike/test_pure_core_nurbs_record_gate.py",
+      "spike/test_pure_core_line_samples_gate.py",
+      "spike/test_line_samples.py",
+      "spike/test_pure_core_polyline_samples_gate.py",
+      "spike/test_polyline_samples.py",
+      "spike/test_pure_core_polycurve_samples_gate.py",
+      "spike/test_polycurve_samples.py",
+      "spike/test_pure_core_offset_fit_gate.py",
+      "spike/test_pure_core_surface_offset_gate.py",
+      "spike/test_offset_fit.py",
+      "spike/test_planar_area.py",
+      "spike/test_surface_offset.py",
+      "spike/test_dxf_approx.py",
+      "spike/test_surface_grid.py",
+      "spike/test_surface_display_params.py",
+      "spike/test_native_coil_preview.py",
+      "spike/test_preview_curve_native.py",
+      "spike/test_preview24_boundaries.py",
+      "spike/test_native_tessellate.py",
+      "spike/test_native_unit_table.py",
+      "spike/test_unit_table_owned.py",
+      "spike/test_unit_ops_owned.py",
+      "spike/test_native_nearest.py",
+      "spike/test_pure_core_nearest_batch_gate.py",
+      "spike/test_rebuild_performance.py",
+      "spike/test_native_curve_samples.py",
+      "spike/test_nurbs_data.py",
+      "spike/test_native_display_samples.py",
+      "spike/test_native_rebuild_fit.py",
+      "spike/test_rebuild_owned.py",
+      "spike/test_native_arclength.py",
+      "spike/test_native_interpolate.py",
+      "spike/test_interpolate.py",
+      "spike/test_interpolate_owned_boundary.py",
+      "spike/test_nearest25_owned.py",
+      "spike/test_native_tween.py",
+      "spike/test_cmdbar_hits.py"
+    ]
+  },
+  "RUST_INTEGRATION_SUITES": {
+    "$tuple": [
+      "alias_golden",
+      "unit_golden",
+      "interpolate_golden",
+      "interpolate32_properties",
+      "svgpath_golden",
+      "bearing_golden",
+      "calc_golden",
+      "coords_golden",
+      "unitformat_golden",
+      "macro_golden",
+      "joinchain_golden",
+      "rebuild_golden",
+      "blend_golden",
+      "norm_golden",
+      "nurbs_golden",
+      "arclength_golden",
+      "coil_golden",
+      "interpolate_helpers_golden",
+      "stl_owned",
+      "stl_import_safety",
+      "catenary_boundary",
+      "catenary_golden",
+      "obj_golden",
+      "stl_legacy_abi",
+      "stl_name_prefix",
+      "dxf_owned",
+      "vector23_golden",
+      "tween_golden",
+      "obj_legacy_abi",
+      "encoder_legacy_abi",
+      "earclip24_golden",
+      "preview24_golden",
+      "dxf_reader24",
+      "dxf_legacy_abi",
+      "nearest25_golden",
+      "options29_engine",
+      "options29_ffi",
+      "options29_prompt",
+      "options29_prompt_ffi",
+      "options29_registration"
+    ]
+  },
+  "RUST_INTEGRATION_FILES": {
+    "$tuple": [
+      "native/pure_core/tests/fixtures/nearest25_host_windows_msvc.jsonl",
+      "native/pure_core/tests/fixtures/nearest25_callbacks_windows_msvc.tsv",
+      "native/pure_core/tests/fixtures/nurbs_host_windows_msvc.txt",
+      "native/pure_core/tests/fixtures/nearest25_windows_msvc.provenance.json",
+      "native/pure_core/tests/fixtures/.gitattributes",
+      "native/pure_core/tests/dxf_legacy_abi.rs",
+      "native/pure_core/tests/dxf_legacy_abi.h",
+      "native/pure_core/tests/fixtures/dxf_legacy_abi/README.md",
+      "native/pure_core/tests/fixtures/dxf_legacy_abi/analytic.dxf",
+      "native/pure_core/tests/fixtures/dxf_legacy_abi/analytic.packed",
+      "native/pure_core/tests/fixtures/dxf_legacy_abi/empty.packed",
+      "native/pure_core/tests/fixtures/dxf_legacy_abi/specification.json",
+      "native/pure_core/tests/data/.gitattributes",
+      "native/pure_core/tests/data/preview24_linux.tsv",
+      "native/pure_core/tests/data/preview24_windows_msvc.tsv",
+      "native/pure_core/tests/data/preview24_windows_msvc.provenance.json",
+      "native/pure_core/tests/data/preview24_provenance.txt",
+      "native/pure_core/tests/dxf_reader24.h",
+      "native/pure_core/tests/dxf_reader24.rs",
+      "native/pure_core/tests/earclip24_api.h",
+      "native/pure_core/tests/earclip24_golden.rs",
+      "native/pure_core/tests/fixtures/dxf_reader24/README.md",
+      "native/pure_core/tests/fixtures/dxf_reader24/capture.json",
+      "native/pure_core/tests/fixtures/dxf_reader24/corpus.bin",
+      "native/pure_core/tests/fixtures/dxf_reader24/manifest.tsv",
+      "native/pure_core/tests/fixtures/earclip24_original.txt",
+      "native/pure_core/tests/fixtures/earclip24_provenance.json",
+      "native/pure_core/tests/fixtures/earclip24_safety.json",
+      "native/pure_core/tests/preview24_api.h",
+      "native/pure_core/tests/preview24_golden.rs",
+      "native/pure_core/tests/dxf_owned.h",
+      "native/pure_core/tests/dxf_owned.rs",
+      "native/pure_core/tests/encoder_legacy_abi.rs",
+      "native/pure_core/tests/fixtures/dxf_legacy23.txt",
+      "native/pure_core/tests/fixtures/dxf_writer23/all-aci.dxf",
+      "native/pure_core/tests/fixtures/dxf_writer23/capture.json",
+      "native/pure_core/tests/fixtures/dxf_writer23/color-sentinel.dxf",
+      "native/pure_core/tests/fixtures/dxf_writer23/decoder-mixed.dxf",
+      "native/pure_core/tests/fixtures/dxf_writer23/decoder-no-layers.dxf",
+      "native/pure_core/tests/fixtures/dxf_writer23/empty.dxf",
+      "native/pure_core/tests/fixtures/dxf_writer23/key-alias.dxf",
+      "native/pure_core/tests/fixtures/dxf_writer23/latin1.dxf",
+      "native/pure_core/tests/fixtures/dxf_writer23/.gitattributes",
+      "native/pure_core/tests/fixtures/dxf_writer23/mixed-closed.dxf",
+      "native/pure_core/tests/fixtures/dxf_writer23/poly-one.dxf",
+      "native/pure_core/tests/fixtures/dxf_writer23/poly-open.dxf",
+      "native/pure_core/tests/fixtures/dxf_writer23/poly-zero.dxf",
+      "native/pure_core/tests/fixtures/dxf_writer23/random-coordinates.bin",
+      "native/pure_core/tests/fixtures/dxf_writer23/random-floats.dxf",
+      "native/pure_core/tests/fixtures/dxf_writer23/short-poly-chain.dxf",
+      "native/pure_core/tests/fixtures/dxf_writer23/signed-exponents.dxf",
+      "native/pure_core/tests/fixtures/dxf_writer23/spline-closed.dxf",
+      "native/pure_core/tests/fixtures/dxf_writer23/unicode-frame.utf8",
+      "native/pure_core/tests/fixtures/dxf_writer23/units-Angstroms.dxf",
+      "native/pure_core/tests/fixtures/dxf_writer23/units-Centimeters.dxf",
+      "native/pure_core/tests/fixtures/dxf_writer23/units-Decimeters.dxf",
+      "native/pure_core/tests/fixtures/dxf_writer23/units-Dekameters.dxf",
+      "native/pure_core/tests/fixtures/dxf_writer23/units-Feet.dxf",
+      "native/pure_core/tests/fixtures/dxf_writer23/units-Gigameters.dxf",
+      "native/pure_core/tests/fixtures/dxf_writer23/units-Hectometers.dxf",
+      "native/pure_core/tests/fixtures/dxf_writer23/units-Inches.dxf",
+      "native/pure_core/tests/fixtures/dxf_writer23/units-Kilometers.dxf",
+      "native/pure_core/tests/fixtures/dxf_writer23/units-Meters.dxf",
+      "native/pure_core/tests/fixtures/dxf_writer23/units-Microinches.dxf",
+      "native/pure_core/tests/fixtures/dxf_writer23/units-Microns.dxf",
+      "native/pure_core/tests/fixtures/dxf_writer23/units-Miles.dxf",
+      "native/pure_core/tests/fixtures/dxf_writer23/units-Millimeters.dxf",
+      "native/pure_core/tests/fixtures/dxf_writer23/units-Mils.dxf",
+      "native/pure_core/tests/fixtures/dxf_writer23/units-Nanometers.dxf",
+      "native/pure_core/tests/fixtures/dxf_writer23/units-UnknownUnit.dxf",
+      "native/pure_core/tests/fixtures/dxf_writer23/units-Yards.dxf",
+      "native/pure_core/tests/fixtures/dxf_writer23/units-default.dxf",
+      "native/pure_core/tests/fixtures/dxf_writer23/units-empty.dxf",
+      "native/pure_core/tests/fixtures/encoder_legacy23_provenance.txt",
+      "native/pure_core/tests/fixtures/tween_host23.json",
+      "native/pure_core/tests/fixtures/tween_lengths23.txt",
+      "native/pure_core/tests/fixtures/tween_original23.txt",
+      "native/pure_core/tests/fixtures/tween_provenance23.txt",
+      "native/pure_core/tests/fixtures/vector23_golden.txt",
+      "native/pure_core/tests/fixtures/vector23_provenance.txt",
+      "native/pure_core/tests/fixtures/vector23_titles.txt",
+      "native/pure_core/tests/fixtures/vector_legacy23.txt",
+      "native/pure_core/tests/obj_legacy_abi.rs",
+      "native/pure_core/tests/tween_golden.rs",
+      "native/pure_core/tests/tween_v1.h",
+      "native/pure_core/tests/vector23_api.h",
+      "native/pure_core/tests/vector23_golden.rs",
+      "native/pure_core/tests/fixtures/catenary_numeric_windows_msvc.txt",
+      "native/pure_core/tests/fixtures/catenary_host_windows_msvc.txt",
+      "native/pure_core/tests/fixtures/catenary_windows_msvc.provenance.json",
+      "native/pure_core/tests/catenary_boundary.rs",
+      "native/pure_core/tests/catenary_golden.rs",
+      "native/pure_core/tests/catenary_v2.h",
+      "native/pure_core/tests/obj_golden.rs",
+      "native/pure_core/tests/stl_legacy_abi.rs",
+      "native/pure_core/tests/stl_name_prefix.rs",
+      "native/pure_core/tests/fixtures/catenary_baseline_linux.json",
+      "native/pure_core/tests/fixtures/catenary_host_linux.txt",
+      "native/pure_core/tests/fixtures/catenary_numeric_linux.txt",
+      "native/pure_core/tests/fixtures/obj_original22.txt",
+      "native/pure_core/tests/fixtures/obj_original22_provenance.txt",
+      "native/pure_core/tests/fixtures/stl_prefix_headers.bin",
+      "native/pure_core/tests/fixtures/stl_prefix_headers.txt",
+      "native/pure_core/tests/coil_golden.rs",
+      "native/pure_core/tests/interpolate_helpers_golden.rs",
+      "native/pure_core/tests/stl_owned.rs",
+      "native/pure_core/tests/stl_import_safety.rs",
+      "native/pure_core/tests/interpolate_helpers.h",
+      "native/pure_core/tests/fixtures/coil_numeric.txt",
+      "native/pure_core/tests/fixtures/coil_windows_msvc.txt",
+      "native/pure_core/tests/fixtures/coil_windows_msvc_provenance.txt",
+      "native/pure_core/tests/fixtures/coil_baseline_linux.json",
+      "native/pure_core/tests/fixtures/interpolate_helpers_linux.txt",
+      "native/pure_core/tests/nurbs_golden.rs",
+      "native/pure_core/tests/arclength_golden.rs",
+      "native/pure_core/tests/fixtures/nurbs_curves.txt",
+      "native/pure_core/tests/fixtures/nurbs_nearest.txt",
+      "native/pure_core/tests/fixtures/nurbs_sample.txt",
+      "native/pure_core/tests/fixtures/nurbs_display.txt",
+      "native/pure_core/tests/fixtures/nurbs_host.txt",
+      "native/pure_core/tests/fixtures/nurbs_provenance.txt",
+      "native/pure_core/tests/fixtures/arclength_curves.txt",
+      "native/pure_core/tests/fixtures/arclength_golden.txt",
+      "native/pure_core/tests/blend_golden.rs",
+      "native/pure_core/tests/norm_golden.rs",
+      "native/pure_core/tests/fixtures/blend_numeric.txt",
+      "native/pure_core/tests/fixtures/blend_curves.txt",
+      "native/pure_core/tests/fixtures/blend_provenance.txt",
+      "native/pure_core/tests/fixtures/norm_rows_2.txt",
+      "native/pure_core/tests/fixtures/norm_rows_3.txt",
+      "native/pure_core/tests/fixtures/norm_rows_6.txt",
+      "native/pure_core/tests/fixtures/norm_thresholds.txt",
+      "native/pure_core/tests/fixtures/norm_witness.txt",
+      "native/pure_core/tests/alias_golden.rs",
+      "native/pure_core/tests/bearing_golden.rs",
+      "native/pure_core/tests/calc_golden.rs",
+      "native/pure_core/tests/fixtures/calc_windows_msvc.txt",
+      "native/pure_core/tests/fixtures/coords_windows_msvc.txt",
+      "native/pure_core/tests/fixtures/interpolate_windows_msvc.txt",
+      "native/pure_core/tests/fixtures/svgpath_windows_msvc.txt",
+      "native/pure_core/tests/fixtures/math_error_windows_msvc.txt",
+      "native/pure_core/tests/fixtures/windows_msvc_provenance.txt",
+      "native/pure_core/tests/coords_golden.rs",
+      "native/pure_core/tests/fixtures/alias_golden.txt",
+      "native/pure_core/tests/fixtures/bearing_golden.txt",
+      "native/pure_core/tests/fixtures/calc_boundary.txt",
+      "native/pure_core/tests/fixtures/calc_golden.txt",
+      "native/pure_core/tests/fixtures/calc_host.txt",
+      "native/pure_core/tests/fixtures/calc_limits.txt",
+      "native/pure_core/tests/fixtures/calc_presentation.txt",
+      "native/pure_core/tests/fixtures/calc_provenance.txt",
+      "native/pure_core/tests/fixtures/coords_examples.txt",
+      "native/pure_core/tests/fixtures/coords_golden.txt",
+      "native/pure_core/tests/fixtures/coords_host.txt",
+      "native/pure_core/tests/fixtures/coords_legacy_nonfinite.txt",
+      "native/pure_core/tests/fixtures/coords_policy.txt",
+      "native/pure_core/tests/fixtures/coords_presentation.txt",
+      "native/pure_core/tests/fixtures/coords_provenance.txt",
+      "native/pure_core/tests/fixtures/coords_split.txt",
+      "native/pure_core/tests/fixtures/interpolate_host.txt",
+      "native/pure_core/tests/fixtures/interpolate_math.txt",
+      "native/pure_core/tests/fixtures/interpolate_performance_baseline.txt",
+      "native/pure_core/tests/fixtures/interpolate_performance_inputs.txt",
+      "native/pure_core/tests/fixtures/interpolate_provenance.txt",
+      "native/pure_core/tests/fixtures/joinchain_golden.txt",
+      "native/pure_core/tests/fixtures/macro_golden.txt",
+      "native/pure_core/tests/fixtures/macro_host.txt",
+      "native/pure_core/tests/fixtures/macro_limits.txt",
+      "native/pure_core/tests/fixtures/macro_provenance.txt",
+      "native/pure_core/tests/fixtures/rebuild_e2e.txt",
+      "native/pure_core/tests/fixtures/rebuild_golden.txt",
+      "native/pure_core/tests/fixtures/svgpath_golden.txt",
+      "native/pure_core/tests/fixtures/svgpath_host.txt",
+      "native/pure_core/tests/fixtures/svgpath_provenance.txt",
+      "native/pure_core/tests/fixtures/unit_angle.txt",
+      "native/pure_core/tests/fixtures/unit_angle_grid.txt",
+      "native/pure_core/tests/fixtures/unit_host.txt",
+      "native/pure_core/tests/fixtures/unit_live_inputs.txt",
+      "native/pure_core/tests/fixtures/unit_manifest.txt",
+      "native/pure_core/tests/fixtures/unit_parse.txt",
+      "native/pure_core/tests/fixtures/unit_scale.txt",
+      "native/pure_core/tests/fixtures/unit_table.txt",
+      "native/pure_core/tests/fixtures/unit_unicode.txt",
+      "native/pure_core/tests/fixtures/unit_whitespace.txt",
+      "native/pure_core/tests/fixtures/unitformat_golden.txt",
+      "native/pure_core/tests/interpolate_golden.rs",
+      "native/pure_core/tests/interpolate32_properties.rs",
+      "native/pure_core/tests/joinchain_golden.rs",
+      "native/pure_core/tests/macro_golden.rs",
+      "native/pure_core/tests/rebuild_golden.rs",
+      "native/pure_core/tests/svgpath_golden.rs",
+      "native/pure_core/tests/unit_golden.rs",
+      "native/pure_core/tests/unitformat_golden.rs",
+      "native/pure_core/tests/nearest25_api.h",
+      "native/pure_core/tests/nearest25_golden.rs",
+      "native/pure_core/tests/fixtures/nearest25_callbacks_linux.tsv",
+      "native/pure_core/tests/fixtures/nearest25_host_linux.jsonl",
+      "native/pure_core/tests/fixtures/nearest25_provenance.json",
+      "native/pure_core/tests/options29_engine.rs",
+      "native/pure_core/tests/options29_ffi.rs",
+      "native/pure_core/tests/options29_prompt.rs",
+      "native/pure_core/tests/options29_prompt_ffi.rs",
+      "native/pure_core/tests/options29_registration.rs"
+    ]
+  },
+  "RUST_REQUIRED_MODULE_FILES": {
+    "$tuple": [
+      "native/pure_core/src/remove_join_cv.rs",
+      "native/pure_core/src/preview_primitives.rs",
+      "native/pure_core/src/options_owned.rs",
+      "native/pure_core/src/options_ffi.rs",
+      "native/pure_core/src/options_prompt.rs"
+    ]
+  },
+  "PURE_CORE_PARSE_EXPORTS": {
+    "$tuple": [
+      "narwhal_pure_core_parse_abi",
+      "narwhal_pure_core_parse_v2",
+      "narwhal_pure_core_printwidths",
+      "narwhal_pure_core_macro_size",
+      "narwhal_pure_core_macro_encode",
+      "narwhal_pure_core_unitformat_resolve_mode",
+      "narwhal_pure_core_unitformat_format",
+      "narwhal_pure_core_calc_abi2",
+      "narwhal_pure_core_calc_v2",
+      "narwhal_pure_core_bearing_abi2",
+      "narwhal_pure_core_bearing_v2",
+      "narwhal_pure_core_macro_plan_checked",
+      "narwhal_pure_core_coords_owned_abi1",
+      "narwhal_pure_core_coords_owned_v1",
+      "narwhal_pure_core_svgpath_owned_version",
+      "narwhal_pure_core_svgpath_owned",
+      "narwhal_pure_core_alias_identity",
+      "narwhal_pure_core_alias_parse",
+      "narwhal_pure_core_alias_options",
+      "narwhal_pure_core_unit_table",
+      "narwhal_pure_core_unit_ops_parse",
+      "narwhal_pure_core_unit_ops_angle",
+      "narwhal_pure_core_unit_ops_scale",
+      "narwhal_pure_core_rebuild_fit",
+      "narwhal_pure_core_blend_bezier_points",
+      "narwhal_pure_core_coords_split_v1",
+      "narwhal_pure_core_norm_v1",
+      "narwhal_pure_core_joinchain"
+    ]
+  },
+  "PURE_CORE_PARSE_IDENTITY": {
+    "abi": 1,
+    "parse_abi": 2,
+    "reply_bytes": 24,
+    "parser_exports": [
+      "narwhal_pure_core_parse_abi",
+      "narwhal_pure_core_parse_v2",
+      "narwhal_pure_core_printwidths",
+      "narwhal_pure_core_macro_size",
+      "narwhal_pure_core_macro_encode",
+      "narwhal_pure_core_unitformat_resolve_mode",
+      "narwhal_pure_core_unitformat_format",
+      "narwhal_pure_core_calc_abi2",
+      "narwhal_pure_core_calc_v2",
+      "narwhal_pure_core_bearing_abi2",
+      "narwhal_pure_core_bearing_v2",
+      "narwhal_pure_core_macro_plan_checked",
+      "narwhal_pure_core_coords_owned_abi1",
+      "narwhal_pure_core_coords_owned_v1",
+      "narwhal_pure_core_svgpath_owned_version",
+      "narwhal_pure_core_svgpath_owned",
+      "narwhal_pure_core_alias_identity",
+      "narwhal_pure_core_alias_parse",
+      "narwhal_pure_core_alias_options",
+      "narwhal_pure_core_unit_table",
+      "narwhal_pure_core_unit_ops_parse",
+      "narwhal_pure_core_unit_ops_angle",
+      "narwhal_pure_core_unit_ops_scale",
+      "narwhal_pure_core_rebuild_fit",
+      "narwhal_pure_core_blend_bezier_points",
+      "narwhal_pure_core_coords_split_v1",
+      "narwhal_pure_core_norm_v1",
+      "narwhal_pure_core_joinchain"
+    ]
+  },
+  "PURE_CORE_RETIREMENT_EXPORTS": {
+    "$tuple": [
+      "narwhal_pure_core_stl_size_owned",
+      "narwhal_pure_core_stl_encode_owned",
+      "narwhal_pure_core_stl_file_size",
+      "narwhal_pure_core_stl_file_decode",
+      "narwhal_pure_core_stl_import_mesh_decode",
+      "narwhal_pure_core_stl_normal",
+      "narwhal_pure_core_interpolate_helper_v1",
+      "narwhal_pure_core_catenary_plan_v2",
+      "narwhal_pure_core_obj_encode_into",
+      "narwhal_pure_core_vector_encode_v1",
+      "narwhal_pure_core_vector_len_v1",
+      "narwhal_pure_core_vector_copy_v1",
+      "narwhal_pure_core_vector_free_v1",
+      "narwhal_pure_core_vector_validate_v1",
+      "narwhal_pure_core_dxf_owned_abi_version",
+      "narwhal_pure_core_dxf_owned_colors",
+      "narwhal_pure_core_dxf_owned_units",
+      "narwhal_pure_core_dxf_owned_capacity",
+      "narwhal_pure_core_dxf_owned_encode",
+      "narwhal_pure_core_tween_plan_v1",
+      "narwhal_pure_core_tween_knots_v1",
+      "narwhal_pure_core_tween_lengths_v1",
+      "narwhal_pure_core_ear_clip_display",
+      "narwhal_pure_core_earclip_signed_area_v1",
+      "narwhal_pure_core_control_point_curve_preview",
+      "narwhal_pure_core_preview_sample_v1",
+      "narwhal_pure_core_dxf_reader24_abi_version",
+      "narwhal_pure_core_dxf_reader24_decode",
+      "narwhal_pure_core_nearest_on_nurbs",
+      "narwhal_pure_core_nearest_on_callbacks_v1"
+    ]
+  },
+  "PURE_CORE_RETIREMENT_IDENTITY": {
+    "retirement_abi": 26,
+    "retirement_exports": [
+      "narwhal_pure_core_stl_size_owned",
+      "narwhal_pure_core_stl_encode_owned",
+      "narwhal_pure_core_stl_file_size",
+      "narwhal_pure_core_stl_file_decode",
+      "narwhal_pure_core_stl_import_mesh_decode",
+      "narwhal_pure_core_stl_normal",
+      "narwhal_pure_core_interpolate_helper_v1",
+      "narwhal_pure_core_catenary_plan_v2",
+      "narwhal_pure_core_obj_encode_into",
+      "narwhal_pure_core_vector_encode_v1",
+      "narwhal_pure_core_vector_len_v1",
+      "narwhal_pure_core_vector_copy_v1",
+      "narwhal_pure_core_vector_free_v1",
+      "narwhal_pure_core_vector_validate_v1",
+      "narwhal_pure_core_dxf_owned_abi_version",
+      "narwhal_pure_core_dxf_owned_colors",
+      "narwhal_pure_core_dxf_owned_units",
+      "narwhal_pure_core_dxf_owned_capacity",
+      "narwhal_pure_core_dxf_owned_encode",
+      "narwhal_pure_core_tween_plan_v1",
+      "narwhal_pure_core_tween_knots_v1",
+      "narwhal_pure_core_tween_lengths_v1",
+      "narwhal_pure_core_ear_clip_display",
+      "narwhal_pure_core_earclip_signed_area_v1",
+      "narwhal_pure_core_control_point_curve_preview",
+      "narwhal_pure_core_preview_sample_v1",
+      "narwhal_pure_core_dxf_reader24_abi_version",
+      "narwhal_pure_core_dxf_reader24_decode",
+      "narwhal_pure_core_nearest_on_nurbs",
+      "narwhal_pure_core_nearest_on_callbacks_v1"
+    ]
+  },
+  "PURE_CORE_NEAREST_BATCH_EXPORT": "narwhal_pure_core_nearest_on_nurbs_many",
+  "PURE_CORE_BATCH_QUALIFIED_PLATFORMS": {
+    "$set": [
+      "linux"
+    ]
+  },
+  "PURE_CORE_NEAREST_BATCH_IDENTITY": {
+    "single_export": "narwhal_pure_core_nearest_on_nurbs",
+    "batch_export": "narwhal_pure_core_nearest_on_nurbs_many",
+    "targets": 5,
+    "matches_single": true,
+    "non_finite_target": "nan_filled",
+    "null_out_status": -1,
+    "bad_order_status": -2,
+    "answers_sha256": "e03299994401c7cb1e53f9dd071c429b470c34aed4b7493f405922c67cb2a35b"
+  },
+  "PURE_CORE_POLYLINE_NEAREST_EXPORT": "narwhal_pure_core_nearest_on_polyline",
+  "PURE_CORE_POLYLINE_NEAREST_QUALIFIED_PLATFORMS": {
+    "$set": [
+      {
+        "$tuple": [
+          "linux",
+          "x86_64"
+        ]
+      }
+    ]
+  },
+  "PURE_CORE_POLYLINE_NEAREST_IDENTITY": {
+    "export": "narwhal_pure_core_nearest_on_polyline",
+    "searches": 12,
+    "unrecognised_record_status": 1,
+    "nan_target_status": -2,
+    "refusal_writes": false,
+    "closed_flag_2_status": -2,
+    "empty_batch_status": 0,
+    "rows_sha256": "d04556bdc4e5b0abfb7d627f6eb853e069c0ba58db6465eef96cdb981f55a993"
+  },
+  "PURE_CORE_CURVE_HITS_EXPORT": "narwhal_pure_core_curve_curve_hits",
+  "PURE_CORE_CURVE_HITS_QUALIFIED_PLATFORMS": {
+    "$set": [
+      "linux"
+    ]
+  },
+  "PURE_CORE_CURVE_HITS_IDENTITY": {
+    "export": "narwhal_pure_core_curve_curve_hits",
+    "hits": [
+      1,
+      2,
+      1
+    ],
+    "small_buffer_status": -3,
+    "empty_domain_status": -2,
+    "deep_request_status": -2,
+    "null_count_status": -1,
+    "hits_sha256": "2026c8b8c27d50195edbca80fdcf337725e50254662e0dd219112c0add05c8c0"
+  },
+  "PURE_CORE_CURVE_RECORD_HITS_EXPORT": "narwhal_pure_core_curve_curve_record_hits",
+  "PURE_CORE_CURVE_RECORD_HITS_QUALIFIED_PLATFORMS": {
+    "$set": [
+      {
+        "$tuple": [
+          "linux",
+          "x86_64"
+        ]
+      }
+    ]
+  },
+  "PURE_CORE_CURVE_RECORD_HITS_IDENTITY": {
+    "export": "narwhal_pure_core_curve_curve_record_hits",
+    "hits": [
+      3,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      0,
+      1,
+      5
+    ],
+    "small_buffer_status": -3,
+    "unrecognised_record_status": -2,
+    "truncated_record_status": -2,
+    "nan_tolerance_status": -2,
+    "deep_request_status": -2,
+    "null_count_status": -1,
+    "hits_sha256": "d3fb7dfe24f4e4844077085b07edbb08cdf9a067727a1376918ab563e49eecce"
+  },
+  "PURE_CORE_NURBS_RECORD_EXPORT": "narwhal_pure_core_nurbs_curve_record",
+  "PURE_CORE_NURBS_RECORD_QUALIFIED_PLATFORMS": {
+    "$set": [
+      "linux"
+    ]
+  },
+  "PURE_CORE_NURBS_RECORD_IDENTITY": {
+    "export": "narwhal_pure_core_nurbs_curve_record",
+    "shape": [
+      4,
+      0,
+      7,
+      5
+    ],
+    "zero_length_status": 1,
+    "trailing_status": 1,
+    "truncated_status": 1,
+    "refusals_write": false,
+    "small_buffer_status": -3,
+    "small_buffer_shape": [
+      4,
+      0,
+      7,
+      5
+    ],
+    "null_shape_status": -1,
+    "doubles_sha256": "6f3facbb9fc448fa7657373da28646026bde86931affde966ed527d9fe9e2ff1"
+  },
+  "PURE_CORE_LINE_SAMPLES_EXPORT": "narwhal_pure_core_line_samples",
+  "PURE_CORE_LINE_SAMPLES_QUALIFIED_PLATFORMS": {
+    "$set": [
+      {
+        "$tuple": [
+          "linux",
+          "x86_64"
+        ]
+      }
+    ]
+  },
+  "PURE_CORE_LINE_SAMPLES_IDENTITY": {
+    "export": "narwhal_pure_core_line_samples",
+    "empty_domain_status": -2,
+    "nan_status": -2,
+    "zero_intervals_status": -2,
+    "huge_request_status": -2,
+    "small_buffer_status": -3,
+    "null_line_status": -1,
+    "refusals_write": false,
+    "samples_sha256": "42e441d8a0645d7f7e5678549a3058fbc64f62dbe77325ac0f4c2f97573880ea"
+  },
+  "PURE_CORE_POLYLINE_SAMPLES_EXPORT": "narwhal_pure_core_polyline_samples",
+  "PURE_CORE_POLYLINE_SAMPLES_QUALIFIED_PLATFORMS": {
+    "$set": [
+      {
+        "$tuple": [
+          "linux",
+          "x86_64"
+        ]
+      }
+    ]
+  },
+  "PURE_CORE_POLYLINE_SAMPLES_IDENTITY": {
+    "export": "narwhal_pure_core_polyline_samples",
+    "unrecognised_record_status": 1,
+    "zero_intervals_status": -2,
+    "huge_request_status": -2,
+    "small_buffer_status": -3,
+    "null_record_status": -1,
+    "refusals_write": false,
+    "samples_sha256": "a25e9b1a93ca29dad896070a792adb6be8a68c3d138f058e9e47cb9df8585580"
+  },
+  "PURE_CORE_POLYCURVE_SAMPLES_EXPORT": "narwhal_pure_core_polycurve_samples",
+  "PURE_CORE_POLYCURVE_SAMPLES_QUALIFIED_PLATFORMS": {
+    "$set": [
+      {
+        "$tuple": [
+          "linux",
+          "x86_64"
+        ]
+      }
+    ]
+  },
+  "PURE_CORE_POLYCURVE_SAMPLES_IDENTITY": {
+    "export": "narwhal_pure_core_polycurve_samples",
+    "unrecognised_record_status": 1,
+    "zero_intervals_status": -2,
+    "huge_request_status": -2,
+    "small_buffer_status": -3,
+    "null_record_status": -1,
+    "refusals_write": false,
+    "samples_sha256": "78a35f571627aefe38991bba4f30944ea537f9b58dac1b04f4caad5d1be8a819"
+  },
+  "PURE_CORE_OFFSET_FIT_EXPORT": "narwhal_pure_core_offset_fit",
+  "PURE_CORE_OFFSET_FIT_QUALIFIED_PLATFORMS": {
+    "$set": [
+      {
+        "$tuple": [
+          "linux",
+          "x86_64"
+        ]
+      }
+    ]
+  },
+  "PURE_CORE_OFFSET_FIT_IDENTITY": {
+    "export": "narwhal_pure_core_offset_fit",
+    "unrecognised_record_status": 1,
+    "no_fit_status": 2,
+    "refused_status": 3,
+    "zero_distance_status": -2,
+    "nan_normal_status": -2,
+    "small_buffer_status": -3,
+    "null_record_status": -1,
+    "refusals_write": false,
+    "fits_sha256": "547ef461308f11b3af3535e52025b6f2a8db303a8dd1730e132b9b8baa9e2ac6"
+  },
+  "PURE_CORE_SURFACE_OFFSET_EXPORT": "narwhal_pure_core_surface_offset",
+  "PURE_CORE_SURFACE_OFFSET_QUALIFIED_PLATFORMS": {
+    "$set": [
+      {
+        "$tuple": [
+          "linux",
+          "x86_64"
+        ]
+      }
+    ]
+  },
+  "PURE_CORE_SURFACE_OFFSET_IDENTITY": {
+    "export": "narwhal_pure_core_surface_offset",
+    "unrecognised_record_status": 1,
+    "folded_status": 3,
+    "room_status": 4,
+    "approximate_status": 5,
+    "zero_distance_status": -2,
+    "nan_tolerance_status": -2,
+    "refine_limit_status": -2,
+    "null_record_status": -1,
+    "refusals_write": false,
+    "room_writes_length_only": true,
+    "surfaces_sha256": "6205d0311b01f7a5934e798d06f7d62426ccba18dcaf472c6d26820f785b52e3"
+  },
+  "PURE_CORE_SURFACE_GRID_EXPORT": "narwhal_pure_core_surface_grid",
+  "PURE_CORE_SURFACE_GRID_QUALIFIED_PLATFORMS": {
+    "$set": [
+      {
+        "$tuple": [
+          "linux",
+          "x86_64"
+        ]
+      }
+    ]
+  },
+  "PURE_CORE_SURFACE_GRID_IDENTITY": {
+    "export": "narwhal_pure_core_surface_grid",
+    "unrecognised_record_status": 1,
+    "nan_parameter_status": -2,
+    "short_buffer_status": -3,
+    "null_record_status": -1,
+    "refusals_write": false,
+    "grids_sha256": "0e1e3b8f2c40e1a0ad460abbc5f5719d53c438fc57c45489d37740d2a1b65b02"
+  },
+  "PURE_CORE_SURFACE_DISPLAY_EXPORT": "narwhal_pure_core_surface_display_params",
+  "PURE_CORE_SURFACE_DISPLAY_QUALIFIED_PLATFORMS": {
+    "$set": [
+      {
+        "$tuple": [
+          "linux",
+          "x86_64"
+        ]
+      }
+    ]
+  },
+  "PURE_CORE_SURFACE_DISPLAY_IDENTITY": {
+    "export": "narwhal_pure_core_surface_display_params",
+    "unrecognised_record_status": 1,
+    "bad_direction_status": -2,
+    "nan_tolerance_status": -2,
+    "null_count_status": -1,
+    "room_status": 4,
+    "room_writes_count_only": true,
+    "refusals_write": false,
+    "params_sha256": "315d311aca437b472434dc1a0b7bac5f06f2241938488a66b5c9f3a79c3dfeb9"
+  },
+  "PURE_CORE_SVG_UNIT_EXPORT": "narwhal_pure_core_svg_encode_unit_into",
+  "PURE_CORE_SVG_UNIT_IDENTITY": {
+    "export": "narwhal_pure_core_svg_encode_unit_into",
+    "legacy_identical": true,
+    "inch_header": true,
+    "bad_suffix_status": -2,
+    "bad_digits_status": -2,
+    "bad_scale_status": -2,
+    "small_buffer_status": -3,
+    "null_written_status": -1,
+    "documents_sha256": "4e117558b35790976103f235f7c5d12a141b1c4e190ee12f45001f283f250c97"
+  },
+  "PURE_CORE_DXF_APPROX_EXPORT": "narwhal_pure_core_dxf_approx_points",
+  "PURE_CORE_DXF_APPROX_QUALIFIED_PLATFORMS": {
+    "$set": [
+      {
+        "$tuple": [
+          "linux",
+          "x86_64"
+        ]
+      }
+    ]
+  },
+  "PURE_CORE_DXF_APPROX_IDENTITY": {
+    "export": "narwhal_pure_core_dxf_approx_points",
+    "unrecognised_record_status": 1,
+    "nan_tolerance_status": -2,
+    "null_count_status": -1,
+    "room_status": 4,
+    "room_writes_count_only": true,
+    "refusals_write": false,
+    "points_sha256": "f1136a3e3db82f990e0abc2d2aae955fe14d167a0fb8930021ab6fbb7802fce3"
+  },
+  "PURE_CORE_PLANAR_AREA_EXPORT": "narwhal_pure_core_planar_area_centroid",
+  "PURE_CORE_PLANAR_AREA_QUALIFIED_PLATFORMS": {
+    "$set": [
+      {
+        "$tuple": [
+          "linux",
+          "x86_64"
+        ]
+      }
+    ]
+  },
+  "PURE_CORE_PLANAR_AREA_IDENTITY": {
+    "export": "narwhal_pure_core_planar_area_centroid",
+    "unrecognised_record_status": 1,
+    "unrecognised_shape_status": 1,
+    "no_region_status": 3,
+    "null_out_status": -1,
+    "refusals_write": false,
+    "results_sha256": "6ebb1c8fba48c260fbfcbfc35e931b628c414064f2503ad8ee5dce91f58c553b"
+  }
+}

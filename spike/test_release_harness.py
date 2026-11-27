@@ -278,7 +278,7 @@ class HarnessTests(unittest.TestCase):
         for rel in ('tools/blender-patched/blender',
                     'tools/blender-patched/5.2/python/bin/python3.13',
                     'bin/cargo', 'bin/rustc', 'scripts/bootstrap_dev_linux.sh',
-                    'scripts/build_blender_linux.sh', 'uishot.sh', 'spike/startup_layout_gui.sh'):
+                    'scripts/build_blender_linux.sh', 'scripts/source_tools.sh', 'uishot.sh', 'spike/startup_layout_gui.sh'):
             path = self.root / rel
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(fake)
@@ -369,6 +369,11 @@ class HarnessTests(unittest.TestCase):
     def assert_source_contract(self, result, rows):
         self.assert_pure_contract(result, rows)
         commands = [row['args'] for row in rows]
+        for command in (['audit', '--self-check'], ['project'], ['test'], ['pure-gate']):
+            matching = [row for row in rows if row['args'] == command
+                        and Path(row['executable']).name == 'source_tools.sh']
+            self.assertEqual(len(matching), 1, command)
+        self.assertEqual(commands.count(['scripts/test_source_tools_host.py']), 1)
         target = str(self.root / 'native/automation_core/target')
         server = target + '/debug/narwhal-automation'
         native = [args for args in commands if 'native/automation_core/Cargo.toml' in args]
@@ -377,8 +382,8 @@ class HarnessTests(unittest.TestCase):
         ui_library = ui_target + '/release/libnarwhal_ui_core.so'
         gate = ['scripts/check_ui_core.py', '--target-dir', ui_target]
         self.assertEqual(commands.count(gate), 1)
-        self.assertEqual(commands.count(['scripts/check_pure_core.py']), 1)
-        self.assertLess(commands.index(['scripts/check_pure_core.py']), commands.index(gate))
+        self.assertEqual(commands.count(['pure-gate']), 1)
+        self.assertLess(commands.index(['pure-gate']), commands.index(gate))
         self.assertLess(commands.index(['scripts/check_application_core.py', '--stage-dev']), commands.index(gate))
         consumers = [row for row in rows if any(arg.startswith(('spike/test_ui_core_', 'spike/test_ui_transcript_',
                                                               'spike/test_desktop_native_startup.py'))
@@ -454,7 +459,7 @@ class HarnessTests(unittest.TestCase):
         self.assert_host_contract(*self.execute('run_tests.sh', CARGO_BUILD_JOBS='2'))
 
     def test_source_failures_do_not_claim_success(self):
-        for name in ('scripts/check_pure_core.py', 'scripts/check_application_core.py', 'scripts/check_ui_core.py',
+        for name in ('pure-gate', 'scripts/check_application_core.py', 'scripts/check_ui_core.py',
                      'native/automation_core/Cargo.toml', 'spike/test_automation_mcp.py',
                      'spike/test_surfacing_integration.py'):
             with self.subTest(name=name):
@@ -495,7 +500,7 @@ class HarnessTests(unittest.TestCase):
         self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
         self.assertIn('ERROR: required native source compiler unavailable', result.stderr)
         self.assertNotIn('All public tests passed.', result.stdout)
-        for name in ('scripts/check_pure_core.py', 'scripts/check_ui_core.py',
+        for name in ('pure-gate', 'scripts/check_ui_core.py',
                      'spike/test_automation_mcp.py', 'spike/test_desktop_native_startup.py'):
             self.assertFalse(any(name in row['args'] for row in rows), name)
 
@@ -509,6 +514,11 @@ class HarnessTests(unittest.TestCase):
 
     def test_new_dispatch_mutations_go_red_then_restore(self):
         mutations = (
+            ('run "source-tools Rust contracts" scripts/source_tools.sh test', ':'),
+            ('run "Rust pure-core source gate" scripts/source_tools.sh pure-gate', ':'),
+            ('run "packaging: public-tree audit" scripts/source_tools.sh audit --self-check', ':'),
+            ('run "public project organization" scripts/source_tools.sh project', ':'),
+            ('run "public preview and document producer qualification" "$PYTHON" scripts/test_source_tools_host.py', ':'),
             ('export NARWHAL_UI_CORE_LIBRARY="$UI_CORE_LIBRARY"', 'export NARWHAL_UI_CORE_LIBRARY=/wrong/core.so'),
             ('run "Rust UI-core source gate" "$PYTHON" scripts/check_ui_core.py --target-dir "$UI_CORE_TARGET"', ':'),
             ('    spike/test_extrude_preview.py\n', ''),
@@ -716,8 +726,8 @@ class PublicManifestTests(unittest.TestCase):
         scripts = str(ROOT / 'scripts')
         sys.path.insert(0, scripts)
         self.addCleanup(sys.path.remove, scripts)
-        public = runpy.run_path(str(ROOT / 'scripts/create_public_branch.py'))
-        audit = runpy.run_path(str(ROOT / 'scripts/audit_public_tree.py'))
+        public = runpy.run_path(str(ROOT / 'scripts/source_tools.py'))
+        audit = runpy.run_path(str(ROOT / 'scripts/source_tools.py'))
         paths = set(public['public_files']())
         expected = {*NEW_SOURCES, *('spike/test_' + name + '.py' for name in NEW_TESTS)}
         self.assertTrue(expected <= paths, sorted(expected - paths))

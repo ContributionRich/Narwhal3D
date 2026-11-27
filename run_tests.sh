@@ -66,9 +66,11 @@ run "UI-core source gate contracts + mutations" env TMPDIR="${TMPDIR:-/var/tmp}"
     "$PYTHON" spike/test_ui_core_gate.py
 run "packaging: verify release" "$PYTHON" scripts/verify_linux_release.py --self-check
 run "packaging: cross-platform completeness" "$PYTHON" spike/test_package_completeness.py
-run "packaging: public-tree audit" "$PYTHON" scripts/audit_public_tree.py --self-check
+run "packaging: public-tree audit" scripts/source_tools.sh audit --self-check
 run "native-only retirement policy + mutations" "$PYTHON" -B spike/test_native_only_policy.py
-run "public project organization" "$PYTHON" spike/test_public_project.py
+run "public project organization" scripts/source_tools.sh project
+run "source-tools Rust contracts" scripts/source_tools.sh test
+run "public preview and document producer qualification" "$PYTHON" scripts/test_source_tools_host.py
 run "packaging: bootstrap" scripts/bootstrap_dev_linux.sh --self-check
 run "development setup: runtime, headers and pinned inputs" "$PYTHON" -B spike/test_dev_setup.py
 run "memory bound: systemd user scope or RLIMIT_AS" "$PYTHON" -B spike/test_memory_bound.py
@@ -95,7 +97,7 @@ run "Rust library-core Clippy" cargo +1.95.0 clippy --manifest-path native/libra
 run "Rust library-core tests" cargo +1.95.0 test --manifest-path native/library_core/Cargo.toml --offline --locked
 run "Rust library-core build" cargo +1.95.0 build --release --manifest-path native/library_core/Cargo.toml --offline --locked
 export NARWHAL_LIBRARY_CORE="$ROOT/native/library_core/target/release/narwhal-library-core"
-run "Rust pure-core source gate" "$PYTHON" scripts/check_pure_core.py
+run "Rust pure-core source gate" scripts/source_tools.sh pure-gate
 PURE_CORE="$ROOT/native/pure_core/target/x86_64-unknown-linux-gnu/release/libnarwhal_pure_core.so"
 export NARWHAL_PURE_CORE="$PURE_CORE"
 run "Rust application-core source gate" "$PYTHON" scripts/check_application_core.py --stage-dev
@@ -405,8 +407,11 @@ PURE_SUITES=(
     spike/test_polyline_samples.py
     spike/test_polycurve_samples.py
     spike/test_offset_fit.py
+    spike/test_dxf_approx.py
     spike/test_surface_offset.py
+    spike/test_planar_area.py
     spike/test_surface_grid.py
+    spike/test_surface_display_params.py
     spike/test_offset_compact.py
     spike/test_offset_report127.py
     spike/test_report121_124.py

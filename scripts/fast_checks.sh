@@ -55,15 +55,18 @@ step "pure-core release build" cargo "+$TOOLCHAIN" build --release --locked \
 export NARWHAL_PURE_CORE="$ROOT/native/pure_core/target/x86_64-unknown-linux-gnu/release/libnarwhal_pure_core.so"
 
 step "bootstrap self-check" scripts/bootstrap_dev_linux.sh --self-check
-step "public-tree audit self-check" "$PYTHON" scripts/audit_public_tree.py --self-check
+step "public-tree audit self-check" scripts/source_tools.sh audit --self-check
 step "verify release self-check" "$PYTHON" scripts/verify_linux_release.py --self-check
 step "assemble release self-check" "$PYTHON" scripts/assemble_linux_release.py --self-check
-step "Rust pure-core source gate" "$PYTHON" scripts/check_pure_core.py
+step "Rust pure-core source gate" scripts/source_tools.sh pure-gate
+
+step "public project organization" scripts/source_tools.sh project
+step "public source closure" scripts/source_tools.sh completeness
+step "public preview/document producers" "$PYTHON" scripts/test_source_tools_host.py
 
 # Each of these runs without the document observer or the patched runtime;
 # spike/test_fast_checks.py keeps it that way.
 FAST_SUITES=(
-    spike/test_public_project.py
     spike/test_macro.py
     spike/test_coords.py
     spike/test_numparse.py
